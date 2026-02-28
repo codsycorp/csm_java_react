@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Socket.IO Chat Test</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/2.3.0/socket.io.js"></script>
+  <style>
+    body { font-family: Arial; }
+    #chat { height: 300px; overflow-y: auto; border: 1px solid #ccc; padding: 10px; margin-bottom: 10px; }
+    .message { margin-bottom: 5px; }
+  </style>
+</head>
+<body>
+
+<h2>Socket.IO Chat Test</h2>
+
+<div>
+  <label>Username: <input id="username" type="text" /></label><br/>
+  <label>Room: <input id="room" type="text" value="room1" /></label><br/>
+  <button onclick="joinRoom()">Join Room</button>
+</div>
+
+<div id="chat"></div>
+
+<input id="msgInput" type="text" placeholder="Type a message..." />
+<button onclick="sendMessage()">Send</button>
+
+<script>
+  const socket = io("http://localhost:15301", {
+    transports: ["websocket"],
+    withCredentials: false // ✅ Hoặc đừng đặt thuộc tính này
+  });
+  // const socket = io("https://realtime.phanmemmottrieu.net", {
+  //   transports: ["websocket"],
+  //   withCredentials: true // ✅ Hoặc đừng đặt thuộc tính này
+  // });
+
+  function joinRoom() {
+    const username = document.getElementById('username').value;
+    const room = document.getElementById('room').value;
+
+    socket.emit("join", { username, room });
+
+    appendMessage(`You joined room "${room}" as ${username}`);
+  }
+
+  socket.on("user_joined", (user) => {
+    appendMessage(`🔔 ${user} joined`);
+  });
+
+  socket.on("user_left", (user) => {
+    appendMessage(`❌ ${user} left`);
+  });
+
+  socket.on("message", (msg) => {
+    appendMessage(`<b>${msg.username}:</b> ${msg.message}`);
+  });
+
+  function sendMessage() {
+    const username = document.getElementById('username').value;
+    const room = document.getElementById('room').value;
+    const message = document.getElementById('msgInput').value;
+
+    socket.emit("chat", { username, room, message });
+    appendMessage(`<b>You:</b> ${message}`);
+    document.getElementById('msgInput').value = '';
+  }
+
+  function appendMessage(msg) {
+    const div = document.createElement('div');
+    div.classList.add('message');
+    div.innerHTML = msg;
+    document.getElementById('chat').appendChild(div);
+  }
+</script>
+
+</body>
+</html>

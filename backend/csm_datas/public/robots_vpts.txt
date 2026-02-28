@@ -1,0 +1,7 @@
+User-agent: *
+
+Allow: /
+
+Disallow: /quantri.shtml
+
+Sitemap: http://cloud.thayphongthuy.vn/sitemap_index.xml

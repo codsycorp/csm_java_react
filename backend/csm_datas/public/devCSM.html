@@ -1,0 +1,4351 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>{{params.f_title}}
+    </title>
+    <meta name="google-site-verification" content="5iEVklAuqiTZVifEKkf8sqQuyXDMDg37cuBAd7PHqS8" />
+    <meta name="alexaVerifyID" content="9NHyKN0eDMMHliY05g02Kf0-RX4" />
+    <meta name="description" content="{{params.f_keyword}}" />
+    <meta name="keywords" content="{{params.f_keyword}}" />
+    <META NAME="ROBOTS" CONTENT="ALL" />
+    <META NAME="GOOGLEBOT" CONTENT="NOARCHIVE" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+    <link rel="icon" href="{{params.f_logo}}">
+    <link rel="apple-touch-icon" href="{{params.f_logo}}">
+    <link rel="apple-touch-icon" sizes="72x72" href="{{params.f_logo}}">
+    <link rel="apple-touch-icon" sizes="114x114" href="{{params.f_logo}}">
+    <script src="assets/js/jquery-3.6.3.js"></script>
+<!--     <script src="assets/js/shim.min.js"></script> -->
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="assets/adminltev3/plugins/fontawesome-free/css/all.min.css">
+    <!-- daterange picker -->
+    <link rel="stylesheet" href="assets/adminltev3/plugins/daterangepicker/daterangepicker.css">
+    <!-- iCheck for checkboxes and radio inputs -->
+    <link rel="stylesheet" href="assets/adminltev3/plugins/icheck-bootstrap/icheck-bootstrap.min.css">
+    <!-- Bootstrap Color Picker -->
+    <link rel="stylesheet" href="assets/adminltev3/plugins/bootstrap-colorpicker/css/bootstrap-colorpicker.min.css">
+    <!-- Tempusdominus Bootstrap 4 -->
+    <link rel="stylesheet" href="assets/adminltev3/plugins/tempusdominus-bootstrap-4/css/tempusdominus-bootstrap-4.min.css">
+    <!-- Select2 -->
+    <link rel="stylesheet" href="assets/adminltev3/plugins/select2/css/select2.min.css">
+    <link rel="stylesheet" href="assets/adminltev3/plugins/select2-bootstrap4-theme/select2-bootstrap4.min.css">
+    <!-- Bootstrap4 Duallistbox -->
+    <link rel="stylesheet" href="assets/adminltev3/plugins/bootstrap4-duallistbox/bootstrap-duallistbox.min.css">
+    <!-- Ionicons -->
+    <link rel="stylesheet" href="https://code.ionicframework.com/ionicons/2.0.1/css/ionicons.min.css">
+    <!-- JQVMap -->
+    <link rel="stylesheet" href="assets/adminltev3/plugins/jqvmap/jqvmap.min.css">
+    <!-- overlayScrollbars -->
+    <link rel="stylesheet" href="assets/adminltev3/plugins/overlayScrollbars/css/OverlayScrollbars.min.css">
+    <!-- summernote -->
+    <link rel="stylesheet" href="assets/adminltev3/plugins/summernote/summernote-bs4.css">
+    <!-- Theme style -->
+    <link rel="stylesheet" href="assets/adminltev3/dist/css/adminlte.min.css">
+    <!-- Bootstrap 4 -->
+    <script src="assets/adminltev3/plugins/bootstrap/js/bootstrap.bundle.min.js"></script>
+    <!-- ChartJS -->
+    <script src="assets/adminltev3/plugins/chart.js/Chart.min.js"></script>
+    <!-- Sparkline -->
+    <script src="assets/adminltev3/plugins/sparklines/sparkline.js"></script>
+    <!-- jQuery Knob Chart -->
+    <script src="assets/adminltev3/plugins/jquery-knob/jquery.knob.min.js"></script>
+    <!-- Select2 -->
+    <script src="assets/adminltev3/plugins/select2/js/select2.full.min.js"></script>
+    <!-- Bootstrap4 Duallistbox -->
+    <script src="assets/adminltev3/plugins/bootstrap4-duallistbox/jquery.bootstrap-duallistbox.min.js"></script>
+    <!-- daterangepicker -->
+    <script src="assets/adminltev3/plugins/moment/moment.min.js"></script>
+    <script src="assets/adminltev3/plugins/daterangepicker/daterangepicker.js"></script>
+    <!-- Tempusdominus Bootstrap 4 -->
+    <script src="assets/adminltev3/plugins/tempusdominus-bootstrap-4/js/tempusdominus-bootstrap-4.min.js"></script>
+    <!-- Summernote -->
+    <script src="assets/adminltev3/plugins/summernote/summernote-bs4.min.js"></script>
+    <!-- overlayScrollbars -->
+    <script src="assets/adminltev3/plugins/overlayScrollbars/js/jquery.overlayScrollbars.min.js"></script>
+    <!-- Bootstrap WYSIHTML5 -->
+    <link rel="stylesheet" href="assets/adminltev3/plugins/bootstrap-wysihtml5/bootstrap3-wysihtml5.min.css">
+    <script src="assets/adminltev3/plugins/bootstrap-wysihtml5/bootstrap3-wysihtml5.all.min.js"></script>
+    <!-- AdminLTE App -->
+    <script src="assets/adminltev3/dist/js/adminlte.js"></script>
+    <script src="assets/decode_captcha/ocrad.js"></script>
+    <script src="assets/datatable/js/jszip.js"></script>
+    <script src="assets/jszip/file-saver.min.js"></script>
+    <script src="assets/jszip/jszip-utils.js"></script>
+    <script src="assets/xlsx.js"></script>
+    <!-- <script type="text/javascript" src="assets/jszip/socket.io.js"></script> -->
+    <script type="text/javascript" src="assets/jszip/dexie.js"></script>
+    <script src="assets/sweetalert.js"></script>
+    <link rel="stylesheet" href="assets/sweetalert.css" />
+    <link rel="stylesheet" href="assets/font-awesome/4.2.0/css/font-awesome.min.css" />
+    <!--     <link rel="stylesheet" href="assets/datatable/css/bootstrap.css"> -->
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="assets/font-awesome/css/font-awesome.min.css">
+    <!--     <link rel="stylesheet" href="assets/fontawesome-free/css/all.min.css"> -->
+    <!--     <script src='assets/datatable/js/bootstrap-select.js'></script>
+<link rel="stylesheet" href="assets/datatable/css/bootstrap-select.css" /> -->
+    <link rel="stylesheet" href="assets/flag-icon.css" />
+    <!-- Add IntroJs styles -->
+    <link href="assets/introjs.css" rel="stylesheet"/>
+    <script src='assets/intro.js'></script>
+    <link href="assets/css/bootstrap-responsive.min.css" rel="stylesheet"/>
+    <script src="assets/vue.js"></script>
+    <script src='assets/vue-head.js'></script>
+    <script src='assets/vue-router.js'></script>
+    <script src='assets/vue-translate.js'></script>
+    <!-- CK Editor -->
+    <script type="text/javascript" src="assets/ckeditor/ckeditor.js" charset="utf-8"></script>
+    <script src="assets/js/dropzone.min.js"></script>
+    <script src="assets/js/qrcode.js"></script>
+    <link rel="stylesheet" href="assets/css/dropzone.min.css"/>
+    <!-- DataGrid by DevExpress-->
+    <script src="assets/dxdatagrid/js/dx.all.js"></script>
+    <script src="assets/dxdatagrid/js/exceljs.min.js"></script>
+    <link rel="stylesheet" href="assets/dxdatagrid/css/dx.light.css"/>
+    <script src="assets/jarty_smarty/jarty.js"></script>
+    <script src="assets/docxtemplater.js"></script>
+    <script src="assets/imagemodule.js"></script>
+    <script src="assets/docxjs/js/DocxJS.bundle.min.js"></script>
+    <script src="assets/docxjs/js/CellJS.bundle.min.js"></script>
+    <script src="assets/docxjs/js/SlideJS.bundle.min.js"></script>
+    <script src="assets/docxjs/js/PdfJS.bundle.min.js"></script>
+    <script src="assets/docxjs/js/PdfUiLoader.js"></script>
+    <script src="assets/docxjs/js/print.js"></script>
+    <link rel="stylesheet" href="assets/docxjs/css/print.min.css">
+    <script src="assets/datatable/js/jquery-ui.js"></script>
+    <script src="assets/jquery.easypiechart.js"></script>
+    <script src="assets/jquery.justifiedgallery.js"></script>
+    <link rel="stylesheet" href="assets/jquery.justifiedgallery.css">
+    <!--     <script src="assets/jquery-jvectormap-2.0.2.min.js"></script>
+<link rel="stylesheet" href="assets/jquery-jvectormap-2.0.2.css"> -->
+    <script src="assets/jquery.inputpicker.js"></script>
+    <script src="assets/purify.js"></script>
+    <script src="assets/jspdf.umd.min.js"></script>
+    <script src="assets/html2pdf.bundle.js"></script>
+    <script src="assets/html2canvas.min.js"></script>
+    <link rel="stylesheet" href="assets/jquery.inputpicker.css">
+    <script src='assets/bootstrap-multiselect.js'></script>
+    <link rel="stylesheet" href="assets/bootstrap-multiselect.css" />
+    <script src='assets/bootstrap-datepicker.js'></script>
+    <link rel="stylesheet" href="assets/bootstrap-datepicker.css" />
+    <script src="assets/jquery.barcode_scan_pos.js"></script>
+    <script src="assets/jquery.dateentry.js"></script>
+    <script src="assets/jquery.datetimeentry.js"></script>
+    <script src="assets/jquery.timeentry.js"></script>
+    <script src="assets/jquery.metadata.js"></script>
+    <script src="assets/hashtable.js"></script>
+    <script src="assets/hashset.js"></script>
+    <script src="assets/autoNumeric-1.7.5.js"></script>
+    <script src="assets/jquery.numberformatter.js"></script>
+    <script type="text/javascript" src="assets/MotionDetector/WebCamCapture.js"></script>
+    <script type="text/javascript" src="assets/MotionDetector/ImageCompare.js"></script>
+    <script type="text/javascript" src="assets/MotionDetector/Core.js"></script>
+    <!-- End DataTables -->
+    <script src="assets/vue-bootstrap-table.js"></script>
+    <script src="assets/javascript_obfuscator.js"></script>
+    <script src="assets/hmac-sha256.js"></script>
+    <script src="assets/aes.js"></script>
+    <script src="assets/eruda.js"></script>
+    <!-- Begin Codemirror -->
+    <link rel="stylesheet" href="assets/codemirror/lib/codemirror.css">
+    <link rel="stylesheet" href="aassets/codemirror/addon/fold/foldgutter.css">
+    <link rel="stylesheet" href="assets/codemirror/addon/dialog/dialog.css">
+    <link rel="stylesheet" href="assets/codemirror/theme/monokai.css">
+    <link rel="stylesheet" href="assets/codemirror/addon/dialog/dialog.css">
+    <script src="assets/codemirror/lib/codemirror.js"></script>
+    <script src="assets/codemirror/lib/formatting.js"></script>
+    <script src="assets/codemirror/addon/search/searchcursor.js"></script>
+    <script src="assets/codemirror/addon/search/search.js"></script>
+    <script src="assets/codemirror/addon/dialog/dialog.js"></script>
+    <script src="assets/codemirror/addon/edit/matchbrackets.js"></script>
+    <script src="assets/codemirror/addon/edit/closebrackets.js"></script>
+    <script src="assets/codemirror/addon/comment/comment.js"></script>
+    <script src="assets/codemirror/addon/comment/continuecomment.js"></script>
+    <script src="assets/codemirror/addon/display/fullscreen.js"></script>
+    <script src="assets/codemirror/addon/hint/show-hint.js"></script>
+    <script src="assets/codemirror/addon/hint/anyword-hint.js"></script>
+    <script src="assets/codemirror/addon/search/jump-to-line.js"></script>
+    <script src="assets/codemirror/addon/edit/trailingspace.js"></script>
+    <script src="assets/codemirror/addon/wrap/hardwrap.js"></script>
+    <script src="assets/codemirror/addon/fold/foldcode.js"></script>
+    <script src="assets/codemirror/addon/fold/brace-fold.js"></script>
+    <script src="assets/codemirror/mode/htmlmixed/htmlmixed.js"></script>
+    <script src="assets/codemirror/mode/xml/xml.js"></script>
+    <script src="assets/codemirror/mode/javascript/javascript.js"></script>
+    <script src="assets/codemirror/mode/css/css.js"></script>
+    <script src="assets/codemirror/mode/clike/clike.js"></script>
+    <script src="assets/codemirror/mode/php/php.js"></script>
+    <script src="assets/codemirror/keymap/sublime.js"></script>
+
+    <!-- Don't use this in production: -->
+    <script src="assets/babel.min.js"></script>
+    <style>
+      body, html {
+        margin: 0;
+        font-family: "Source Sans Pro",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif,"Apple Color Emoji","Segoe UI Emoji","Segoe UI Symbol";
+        font-size: 1rem;
+        font-weight: 400;
+        line-height: 1.5;
+        text-align: left;
+        background-color: black;
+        padding-right: 0px;
+        padding-left: 0px;
+      }
+      .web_terminal{
+        display:none;
+      }
+      #msg{
+        position: fixed;
+        bottom: 25px;
+        left:2%;
+        width: 96%;
+      }
+      /*       .aLoading{background-color: white;} */
+      .skin-blue-light .main-header .navbar {
+        background-color: #001c52;
+      }
+      .skin-blue-light .main-header .logo {
+        background-color: #001c52;
+      }
+      .skin-blue-light .main-header li.user-header {
+        background-color: #001c52;
+      }
+      .bg-blue{
+        background-color: #001c52 !important;
+      }
+      .CodeMirror {
+        font-family: Monaco, Menlo, "Ubuntu Mono", Consolas;
+        font-size: 12pt;
+      }
+      .btn-circle {
+        width: 50px;
+        height: 50px;
+        padding: 6px 0px;
+        border-radius: 25px;
+        text-align: center;
+        font-size: 12px;
+        line-height: 1.42857;
+      }
+      .dropdown-menu {
+        -webkit-touch-callout: none;
+        -webkit-user-select: none;
+        -khtml-user-select: none;
+        -moz-user-select: none;
+        -ms-user-select: none;
+        user-select: none;
+      }
+      .dropdown-menu a {
+        overflow: hidden;
+        outline: none;
+      }
+      .bss-input
+      {
+        border:0;
+        margin:-3px;
+        padding:3px;
+        outline: none;
+        color: #000;
+        width: 99%;
+      }
+      .bss-input:hover
+      {
+        background-color: #f5f5f5;
+      }
+      .additem .check-mark
+      {
+        opacity: 0;
+        z-index: -1000;
+      }
+      .addnewicon {
+        position: relative;
+        padding: 4px;
+        margin: -8px;
+        padding-right: 50px;
+        margin-right: -50px;
+        color: #aaa;
+      }
+      .addnewicon:hover {
+        color: #222;
+      }
+      .select2-container--open{
+        z-index: 99999;
+      }
+      body, html{
+      overflow: hidden !important;
+      }
+      .modal-header{
+      display: block !important;
+      }
+      .btn-toolbar{
+      padding: 3px;
+      background-color: #343a40;
+      border-bottom: 1px solid #fff;
+      }
+      .btn-toolbar input{
+      margin-left: 3px;
+      border-radius: 5px 5px 5px 5px!important;
+      }
+      .btn-toolbar button{
+      border-radius: 0.25rem !important;
+      margin-left: 3px !important;
+      }
+      .btn-toolbar .btn-primary{
+      background-color: #3276b1;
+      border-color: #2c699d;
+      }
+      .btn-toolbar .btn-primary:hover{
+      background-color: #072d57;
+      border-color: #072d57;
+      }
+      ul.sidebar-menu>li.treeview {
+      border-bottom: solid 1px #33b5e5;
+      border-top: solid 1px #33b5e5;
+      line-height: 0px;
+      }
+      .treeview-menu > li {
+      margin: 0;
+      height: 41px;
+      line-height: 0px;
+      }
+      .sidebar-menu > li > .treeview-menu {
+      background: #efefef;
+      border-top: solid 1px #33b5e5;
+      padding-top: 20px;
+      }
+      /* .sidebar-menu .treeview-menu {
+      display: none; 
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      padding-left: 5px;
+      } */
+      .fixed .sidebar-menu > li > .treeview-menu {
+      background: white;
+      }
+      .fixed .sidebar-menu > li:hover > a, .fixed .sidebar-menu > li.active > a {
+      background: #001c52;
+      color: white !important;
+      top: -3px;
+      }
+      .with-border {
+      border-bottom: solid 2px #33b5e5 !important;
+      border-top: solid 1px #33b5e5 !important;
+      height: 43px;
+      }
+      .aloading,.backhome{
+      display: none;
+      }
+      .swal_login .aloading{
+      display: block;
+      }
+      .modal-open .backhome{
+      display: block;
+      }
+      .content-loading>:not(.pace),
+      .content-loading:before,
+      .content-loading:after {
+      -webkit-transition: opacity .4s ease-in-out;
+      -moz-transition: opacity .4s ease-in-out;
+      -o-transition: opacity .4s ease-in-out;
+      -ms-transition: opacity .4s ease-in-out;
+      transition: opacity .4s ease-in-out
+      }
+      .content-loading:not(.pace-done)>:not(.pace),
+      .content-loading:not(.pace-done):before,
+      .content-loading:not(.pace-done):after {
+      opacity: 0
+      }
+      .content-loading .pace.pace-inactive {
+      display: none;
+      }
+      .content-loading .pace {
+      -webkit-pointer-events: none;
+      pointer-events: none;
+      -webkit-user-select: none;
+      -moz-user-select: none;
+      user-select: none;
+      z-index: 2000;
+      position: fixed;
+      height: 60px;
+      width: 100px;
+      margin: auto;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      }
+      .content-loading .pace .pace-progress {
+      z-index: 2000;
+      position: absolute;
+      height: 60px;
+      width: 100px;
+      -webkit-transform: translate3d(0, 0, 0) !important;
+      -ms-transform: translate3d(0, 0, 0) !important;
+      transform: translate3d(0, 0, 0) !important;
+      }
+      .content-loading .pace .pace-progress:before {
+      content: attr(data-progress-text);
+      text-align: center;
+      color: #fff;
+      background: #29d;
+      border-radius: 50%;
+      font-family: "Helvetica Neue", sans-serif;
+      font-size: 14px;
+      font-weight: 100;
+      line-height: 1;
+      padding: 20% 0 7px;
+      width: 50%;
+      height: 40%;
+      margin: 10px 0 0 30px;
+      display: block;
+      z-index: 999;
+      position: absolute;
+      }
+      .content-loading .pace .pace-activity {
+      font-size: 15px;
+      line-height: 1;
+      z-index: 2000;
+      position: absolute;
+      height: 60px;
+      width: 100px;
+      display: block;
+      -webkit-animation: pace-theme-center-atom-spin 2s linear infinite;
+      -moz-animation: pace-theme-center-atom-spin 2s linear infinite;
+      -o-animation: pace-theme-center-atom-spin 2s linear infinite;
+      animation: pace-theme-center-atom-spin 2s linear infinite;
+      }
+      .content-loading .pace .pace-activity {
+      border-radius: 50%;
+      border: 5px solid #29d;
+      content: ' ';
+      display: block;
+      position: absolute;
+      top: 0;
+      left: 0;
+      height: 60px;
+      width: 100px;
+      }
+      .content-loading .pace .pace-activity:after {
+      border-radius: 50%;
+      border: 5px solid #29d;
+      content: ' ';
+      display: block;
+      position: absolute;
+      top: -5px;
+      left: -5px;
+      height: 60px;
+      width: 100px;
+      -webkit-transform: rotate(60deg);
+      -moz-transform: rotate(60deg);
+      -o-transform: rotate(60deg);
+      transform: rotate(60deg);
+      }
+      tr.child div.dataTables_sizing{
+      height: 30px !important;
+      }
+      .dataTables_scrollHeadInner , .dataTables_scrollHeadInner .dataTable{
+      width: inherit !important;
+      }
+      .content-loading .pace .pace-activity:before {
+      border-radius: 50%;
+      border: 5px solid #29d;
+      content: ' ';
+      display: block;
+      position: absolute;
+      top: -5px;
+      left: -5px;
+      height: 60px;
+      width: 100px;
+      -webkit-transform: rotate(120deg);
+      -moz-transform: rotate(120deg);
+      -o-transform: rotate(120deg);
+      transform: rotate(120deg);
+      }
+      @-webkit-keyframes pace-theme-center-atom-spin {
+      0% {
+      -webkit-transform: rotate(0deg);
+      }
+      100% {
+      -webkit-transform: rotate(359deg);
+      }
+      }
+      @-moz-keyframes pace-theme-center-atom-spin {
+      0% {
+      -moz-transform: rotate(0deg);
+      }
+      100% {
+      -moz-transform: rotate(359deg);
+      }
+      }
+      @-o-keyframes pace-theme-center-atom-spin {
+      0% {
+      -o-transform: rotate(0deg);
+      }
+      100% {
+      -o-transform: rotate(359deg);
+      }
+      }
+      @keyframes pace-theme-center-atom-spin {
+      0% {
+      transform: rotate(0deg);
+      }
+      100% {
+      transform: rotate(359deg);
+      }
+      }
+      .content-loaded .pace {
+      -webkit-pointer-events: none;
+      pointer-events: none;
+      -webkit-user-select: none;
+      -moz-user-select: none;
+      user-select: none;
+      }
+      .content-loaded .pace-inactive {
+      display: none;
+      }
+      .content-loaded .pace .pace-progress {
+      background: #29d;
+      position: fixed;
+      z-index: 2000;
+      top: 0;
+      right: 100%;
+      width: 100%;
+      height: 2px;
+      }
+      div.sa-icon.sa-success.animate{
+      height: 85px;
+      }
+      /*.mdl-data-table thead tr th {
+      border: solid 1px gray;
+      }*/
+      .mdl-data-table tbody tr {
+      height: 33px;
+      }
+      .mdl-data-table td {
+      height: 36px !important;
+      padding: 3px;
+      border: solid 1px gray;
+      }
+      table.dataTable.dtr-inline.collapsed > tbody > tr.parent > td:first-child:before, table.dataTable.dtr-inline.collapsed > tbody > tr.parent > th:first-child:before{
+      content: '\f106';
+      font-family: FontAwesome;
+      background-color: transparent;
+      color: black;
+      border: none;
+      border-radius: inherit;
+      box-shadow: none;
+      box-sizing: content-box;
+      }
+      table.dataTable.dtr-inline.collapsed > tbody > tr > td:first-child:before, table.dataTable.dtr-inline.collapsed > tbody > tr > th:first-child:before{
+      content: '\f107';
+      font-family: FontAwesome;
+      background-color: transparent;
+      color: black;
+      border: none;
+      border-radius: inherit;
+      box-shadow: none;
+      box-sizing: content-box;
+      }
+      body{
+      font-family: "Helvetica Neue",Helvetica,Arial,sans-serif !important;
+      }
+      .dhxtoolbar_text .btn{
+      margin-top: -10px;
+      }
+      .dhxtoolbar_text i{
+      padding-right: 5px;
+      }
+      @media (min-width: 768px){
+      .sidebar-mini.sidebar-collapse .main-header .navbar{
+      margin-left: 50px;
+      }
+      }
+      .main-header .logo {
+      line-height: 43px;
+      }
+      .main-header .navbar-brand,.main-header .navbar .nav > li > a{
+      line-height: 9px;
+      }
+      .main-header .sidebar-toggle:before{
+      content:'\f015';
+      padding: 10px 5px !important;
+      font-size: 20px;
+      cursor: pointer;
+      }
+      .main-header .sidebar-toggle {
+      padding: 0px;
+      padding-top: 10px;
+      padding-left: 5px;
+      height: 43px;
+      }
+      .main-header,.main-header .logo{
+      max-height: 43px;
+      }
+      .main-header .app_name{
+      text-transform: uppercase;
+      padding-left: 9px;
+      font-weight: bold;
+      }
+      .navbar .sidebar-toggle {
+      margin-left: 0px !important;
+      }
+      .main-header .navbar {
+      min-height: 43px;
+      }
+      .modal-backdrop.in {
+      opacity: 0;
+      }
+      .modal.in .modal-dialog {
+      -webkit-transform: translate(0, 0);
+      -ms-transform: translate(0, 0);
+      -o-transform: translate(0, 0);
+      transform: translate(0, 0);
+      z-index: 9999;
+      }
+      @media (max-width: 767px){
+      .main-header .logo{
+      display: none;
+      }
+      body {
+      padding-right: 0px;
+      padding-left: 0px;
+      }
+      }
+      #tab-list a{
+      cursor: pointer;
+      font-weight: bold;
+      color: #1578c9;
+      font-size: 12pt;
+      }
+      #tab-list button.close {
+      float: left!important;
+      padding-right: 15px!important;
+      margin-top: -2px !important;
+      }
+      .tab-pane {
+      display: block;
+      height: inherit;
+      }
+      .tab-content {
+      overflow: visible;
+      padding:0px;
+      border:1px solid;
+      }
+      .dhtmlx_message_area{
+      z-index:9999;
+      }
+      .hideWPrint {
+      position: fixed;
+      border: 1px solid #929292;
+      padding: 0px;
+      border-radius: 4px;
+      background: #fff;
+      padding: 5px;
+      padding-bottom:0px;
+      z-index: 899;
+      }
+      .hideWPrint img {
+      cursor: pointer;
+      display: block;
+      padding: 7px;
+      margin-bottom: 5px;
+      }
+      .hideWPrint img:hover{
+      border:1px solid #bebebe;
+      padding: 6px;
+      border-radius:3px;
+      }
+      .element {
+      width: 120px;
+      height: 160px;
+      box-shadow: 0px 0px 12px rgba(0,255,255,0.5);
+      border: 1px solid rgba(127,255,255,0.25);
+      text-align: center;
+      cursor: default;
+      }
+      .element:hover {
+      box-shadow: 0px 0px 12px rgba(0,255,255,0.75);
+      border: 1px solid rgba(127,255,255,0.75);
+      }
+      .element .number {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      font-size: 12px;
+      color: rgba(127,255,255,0.75);
+      }
+      .element .symbol {
+      position: absolute;
+      top: 40px;
+      left: 0px;
+      right: 0px;
+      font-size: 60px;
+      font-weight: bold;
+      color: rgba(255,255,255,0.75);
+      text-shadow: 0 0 10px rgba(0,255,255,0.95);
+      }
+      .element .details {
+      position: absolute;
+      bottom: 15px;
+      left: 0px;
+      right: 0px;
+      font-size: 12px;
+      color: rgba(127,255,255,0.75);
+      }
+      button {
+      color: rgba(127,255,255,0.75);
+      background: transparent;
+      outline: 1px solid rgba(127,255,255,0.75);
+      border: 0px;
+      padding: 5px 10px;
+      cursor: pointer;
+      }
+      button:hover {
+      background-color: rgba(0,255,255,0.5);
+      }
+      button:active {
+      color: #000000;
+      background-color: rgba(0,255,255,0.75);
+      }
+      .content-wrapper{
+      padding-top: 39px !important;
+      }
+      .web_terminal{
+      display:none;
+      width: 100vw;
+      height: 100vh;
+      padding: 5px;
+      background-color: #000;
+      font-family: 'Andale Mono';
+      font-size: 14px;
+      color: #29fe13;
+      box-sizing: border-box;
+      -webkit-box-sizing: border-box;
+      }
+      .web_terminal *{
+      margin: 0;
+      padding: 0;
+      }
+      #developer .bootstrap-select{
+      width: 160px;
+      }
+      .web_terminal .output{
+      width: 100vw;
+      line-height: 18px;
+      }
+      .web_terminal .input{
+      position: relative;
+      width: 100vw;
+      height: 18px;
+      line-height: 18px;
+      }
+      .web_terminal .input .indicator{
+      width: 20px;
+      line-height: 18px;
+      }
+      .web_terminal .input input{
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 100vw;
+      height: 100%;
+      text-indent: 16px;
+      line-height: 18px;
+      border: none;
+      outline: none;
+      background: none;
+      font-family: 'Andale Mono', 'Courier New';
+      font-size: 14px;
+      color: #29fe13;
+      }
+      .camera_move {
+      border: 1px solid #000;
+      width: 640px;
+      height:  480px;
+      position: absolute;
+      top: 0;
+      opacity: 1;
+      left: 0;
+      }
+      .canvas_draw {
+      position: absolute;
+      opacity: 1;
+      top: 0;
+      left: 0;
+      width: 640px;
+      height:  480px;
+      }
+      .movement {
+      position: absolute;
+      top: 0;
+      left: 0;
+      border: 1px solid red;
+      background: rgba(255,0,0,0.3);
+      }
+      /* CSS từ codsycorp */
+      body,html{
+      font-family: "Helvetica Neue",Helvetica,Arial,sans-serif !important;
+      background-color: #021d2d;
+      overflow: hidden;
+      }
+      .with-border{
+      border-bottom: solid 2px #001c52!important;
+      border-top: solid 1px #001c52!important;
+      }
+      .swal-content button,.nav button{
+      outline: none !important;
+      }
+      .dhxtoolbar_text .btn{
+      margin-top: -10px;
+      }
+      .dhxtoolbar_text i{
+      padding-right: 5px;
+      }
+      @media (min-width: 768px){
+      .sidebar-mini.sidebar-collapse .main-header .navbar{
+      margin-left: 50px;
+      }
+      }
+      .dhxtabbar_base_dhx_web div.dhxtabbar_tabs,.gridbox_dhx_web .form_cell{
+      background-color: #001c52  !important;
+      }
+      .gridbox_dhx_web .form_cell>strong{
+      color: white !important;
+      }
+      .dhxtabbar_base_dhx_web div.dhxtabbar_tabs div.dhxtabbar_tab.dhxtabbar_tab_actv div.dhxtabbar_tab_text {
+      color: #001c52;
+      }
+      ul.sidebar-menu>li.treeview {
+      border-bottom: solid 1px #001c52;
+      border-top: solid 1px #001c52;
+      line-height: 0px;
+      }
+      li.treeview>a,#tab-list a{
+      color:#001c52 !important;
+      }
+      .sidebar-menu .treeview-menu > li > a{
+      padding-bottom: 15px !important;
+      }
+      .sidebar-menu > li > .treeview-menu {
+      padding-top: 5px !important;
+      }
+      .treeview >.treeview-menu {
+      padding-top: 15px;
+      }
+      .treeview-menu > li {
+      margin: 0;
+      height: 41px;
+      line-height: 0px;
+      }
+      .treeview >.treeview-menu{
+      border-bottom: solid 1px #001c52;
+      border-top: solid 1px #001c52;
+      }
+      .sidebar-menu li
+      {
+      padding-top: 5px;
+      }
+      .treeview-menu >li{
+      height: auto;
+      }
+      .sidebar-menu > li > .treeview-menu {
+      background: #efefef;
+      border-top: solid 1px #001c52;
+      padding-top: 20px;
+      }
+      .with-border {
+      border-bottom: solid 2px #001c52 !important;
+      border-top: solid 1px #001c52 !important;
+      height: 45px;
+      }
+      .main-header .logo {
+      line-height: 43px;
+      }
+      .main-header .navbar-brand,.main-header .navbar .nav > li > a{
+      line-height: 9px;
+      }
+      .main-header .sidebar-toggle:before{
+      content:'\f015';
+      padding: 10px 5px !important;
+      font-size: 20px;
+      cursor: pointer;
+      }
+      .navbar-nav > .user-menu .user-image{
+      margin-top: -7px !important;
+      }
+      .navbar-nav > .user-menu > .dropdown-menu > .user-body {
+      padding: 0px;
+      padding-left: 15px;
+      }
+      .navbar-nav > .user-menu > .dropdown-menu > li.user-header {
+      height: 185px;
+      }
+      #tab-content .content-wrapper{
+      margin-top: 1px;
+      }
+      .main-header .navbar{
+      margin-left: 0px;
+      }
+      .form-module .toggle{
+      background:#001c52 !important;
+      }
+      div.cta
+      {
+      border-top: solid;
+      }
+      .bg-white{
+      background:white !important;
+      }
+      button{
+      outline: none !important;
+      }
+      .tab-pane button:hover{
+      outline: none !important;
+      border: 1px solid #001c52;
+      background: transparent !important;
+      }
+      .form-module button{
+      background: white !important;
+      outline: 1px solid #001c52 !important;
+      color: #001c52;
+      }
+      .form-module button:hover{
+      background: #001c52 !important;
+      outline: 1px solid #001c52 !important;
+      color: white;
+      }
+      .form-module {
+      border: 1px solid #001c52;
+      border-top: 9px solid #001c52;
+      }
+      .social-btn .btn {
+      padding: 6px 10px;
+      }
+      .main-header .sidebar-toggle {
+      padding: 9px 15px;
+      }
+      .main-header,.main-header .logo{
+      max-height: 43px;
+      }
+      .main-header .app_name{
+      text-transform: uppercase;
+      padding-left: 9px;
+      font-weight: bold;
+      }
+      .navbar .sidebar-toggle {
+      margin-left: -15px !important;
+      }
+      .main-header .navbar {
+      min-height: 43px;
+      }
+      .modal-backdrop.in {
+      opacity: 0;
+      }
+      .modal.in .modal-dialog {
+      -webkit-transform: translate(0, 0);
+      -ms-transform: translate(0, 0);
+      -o-transform: translate(0, 0);
+      transform: translate(0, 0);
+      z-index: 9999;
+      }
+      @media (max-width: 767px){
+      .main-header .logo{
+      display: none;
+      }
+      body {
+      padding-right: 0px;
+      padding-left: 0px;
+      }
+      }
+      #tab-list a{
+      cursor: pointer;
+      font-weight: bold;
+      color: #1578c9;
+      font-size: 12pt;
+      }
+      #tab-list button.close {
+      float: left!important;
+      padding-right: 15px!important;
+      margin-top: -2px !important;
+      }
+      .tab-pane {
+      display: block;
+      height: inherit;
+      }
+      .tab-content {
+      overflow: visible;
+      padding:0px;
+      border:1px solid;
+      }
+      .dhtmlx_message_area{
+      z-index:9999;
+      }
+      .hideWPrint {
+      position: fixed;
+      border: 1px solid #929292;
+      padding: 0px;
+      border-radius: 4px;
+      background: #fff;
+      padding: 5px;
+      padding-bottom:0px;
+      z-index: 899;
+      }
+      .hideWPrint img {
+      cursor: pointer;
+      display: block;
+      padding: 7px;
+      margin-bottom: 5px;
+      }
+      .hideWPrint img:hover{
+      border:1px solid #bebebe;
+      padding: 6px;
+      border-radius:3px;
+      }
+      .element {
+      width: 120px;
+      height: 160px;
+      box-shadow: 0px 0px 12px rgba(0,255,255,0.5);
+      border: 1px solid rgba(127,255,255,0.25);
+      text-align: center;
+      cursor: default;
+      }
+      .element:hover {
+      box-shadow: 0px 0px 12px rgba(0,255,255,0.75);
+      border: 1px solid rgba(127,255,255,0.75);
+      }
+      .element .number {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      font-size: 12px;
+      color: rgba(127,255,255,0.75);
+      }
+      .element .symbol {
+      position: absolute;
+      top: 40px;
+      left: 0px;
+      right: 0px;
+      font-size: 60px;
+      font-weight: bold;
+      color: rgba(255,255,255,0.75);
+      text-shadow: 0 0 10px rgba(0,255,255,0.95);
+      }
+      .element .details {
+      position: absolute;
+      bottom: 15px;
+      left: 0px;
+      right: 0px;
+      font-size: 12px;
+      color: rgba(127,255,255,0.75);
+      }
+      button {
+      color: rgba(127,255,255,0.75);
+      background: transparent;
+      outline: 1px solid rgba(127,255,255,0.75);
+      border: 0px;
+      padding: 5px 10px;
+      cursor: pointer;
+      }
+      button:hover {
+      background-color: rgba(0,255,255,0.5);
+      }
+      button:active {
+      color: #000000;
+      background-color: rgba(0,255,255,0.75);
+      }
+      .fa-zalo:before {
+      content: "Z";
+      }
+      .or-seperator {
+      margin: 20px 0 0px;
+      text-align: center;
+      border-top: 1px solid #001c52;
+      }
+      .or-seperator i {
+      padding: 0 10px;
+      background: white;
+      position: relative;
+      top: -11px;
+      z-index: 1;
+      }
+      .social-btn .btn {
+      font-size: 15px;
+      text-align: left;
+      line-height: 24px;
+      }
+      .social-btn .btn i {
+      float: left;
+      margin: 4px 5px 0 -5px;
+      min-width: 15px;
+      }
+      .swal_login{
+      width: 375px;
+      }
+      div.gridbox_dhx_web.gridbox table.obj tr td {
+      color: #000 !important;
+      }
+      .tab-pane>div.gridbox_dhx_web.gridbox {
+      height: -webkit-calc(100vh - 87px) !important;
+      width: inherit !important;
+      }
+      .tab-content>section{
+      margin-top: 3px;
+      }
+      .tab-content > .tab-pane>.box-header
+      {
+      padding-top: 5px !important;
+      height: 45px;
+      }
+      /* .dhxtabbar_base_dhx_web div.dhxtabbar_tabs div.dhxtabbar_tabs_ar_left div.dhxtabbar_arrow_img{
+      background-image:url('assets/imgs/ar_left_abs_dis.gif') !important;
+      background-position: unset;
+      top: 7px;
+      left: -1px;
+      }
+      .dhxtabbar_base_dhx_web div.dhxtabbar_tabs div.dhxtabbar_tabs_ar_right div.dhxtabbar_arrow_img{
+      background-image:url('assets/imgs/ar_right_abs_dis.gif') !important;
+      background-position: unset;
+      left: -9px;
+      top: 5px;
+      } */
+      .dhxlayout_cont
+      {
+      overflow: hidden;
+      height: 100% !important;
+      width: 100% !important;
+      }
+      .dhxtabbar_base_dhx_web div.dhxtabbar_tabs 
+      {
+      width: 100% !important;
+      }
+      .dhx_cell_cont_tabbar
+      {
+      /*display:flex;*/
+      /*flex-direction:column;*/
+      width: 100% !important;
+      /*height: 100% !important;*/
+      overflow: hidden;
+      }
+      .dhxtabbar_base_dhx_web div.dhxtabbar_tabs div.dhxtabbar_tabs_base
+      {
+      width: 100% !important;
+      }
+      .dhx_cell_tabbar
+      {
+      width: 100% !important;
+      /*height: 100% !important;*/
+      }
+      .dhxlayout_base_dhx_web div.dhx_cell_layout div.dhx_cell_cont_layout
+      {
+      top: 40px!important;
+      bottom: 50px;
+      position: absolute !important;
+      overflow-x: auto !important;
+      width: 100% !important;
+      height: auto !important;
+      }
+      .dhxcelltop_statusbar
+      {
+      width: 100%!important;
+      left: 0px!important;
+      bottom: 10px!important;
+      position: absolute!important;
+      border-top: 2px solid #53abe6;
+      padding: 5px;
+      background-color: #ededed;
+      }
+      .dhxlayout_base_dhx_web
+      {
+      position: absolute !important;
+      }
+      .dhxlayout_base_dhx_web div.dhx_cell_layout
+      {
+      /*top: 30px !important;*/
+      width: 100% !important;
+      /*bottom: 30px !important;*/
+      /*height: 100% !important;*/
+      }
+      /*.dhx_cell_layout*/
+      /*{*/
+      /*    display: table-row;*/
+      /*    width: 100% !important; */
+      /*     height: 300px !important; */
+      /*    position: relative !important;*/
+      /*}*/
+      /*.dhx_cell_layout:nth-of-type(1)*/
+      /*{*/
+      /* height: auto !important;   */
+      /*}*/
+      .dhx_cell_cont_layout
+      {
+      /*position: relative !important;*/
+      width: inherit !important;
+      /*height: inherit !important;*/
+      }
+      .layout_master_detail {
+      height:inherit !important;
+      width:100% !important;
+      display:flex;
+      flex-direction:column;
+      }
+      .layout_master_detail > * {
+      width:100% !important;
+      flex-shrink: 0;
+      }
+      .layout_cell_master_details {
+      position: relative !important;
+      flex-grow: 1;
+      }
+      .dhxtabbar_base_dhx_web div.dhx_cell_tabbar div.dhx_cell_toolbar_def div.dhx_toolbar_dhx_web {
+      background-color: white!important;
+      height: 100% !important;
+      color: black;
+      }
+      div.dhx_cell_progress_img:before{
+      background-image:url("assets/loading.gif")  !important;
+      }
+      .dhxtabbar_tabs_ar_left .dhxtabbar_arrow_img {
+      background-image:none  !important;
+      }
+      .dhxtabbar_tabs_ar_left .dhxtabbar_arrow_img:before {
+      background-image:none  !important;
+      content: "\f104";
+      font-family: FontAwesome;
+      font-style: normal;
+      font-weight: normal;
+      text-decoration: inherit;
+      /*--adjust as necessary--*/
+      color: white;
+      font-size: 25px;
+      padding-right: 0.5em;
+      position: absolute;
+      top: 7px;
+      left: 2px;
+      }
+      .dhxtabbar_tabs_ar_right .dhxtabbar_arrow_img {
+      background-image:none  !important;
+      }
+      .dhxtabbar_tabs_ar_right .dhxtabbar_arrow_img:before {
+      background-image:none  !important;
+      content: "\f105";
+      font-family: FontAwesome;
+      font-style: normal;
+      font-weight: normal;
+      text-decoration: inherit;
+      /*--adjust as necessary--*/
+      color: white;
+      font-size: 25px;
+      padding-right: 0.5em;
+      position: absolute;
+      top: 7px;
+      left: 2px;
+      }
+      div.dhxcombo_dhx_web
+      {
+      width: 25px !important;
+      }
+      div.dhxcombo_dhx_web div.dhxcombo_select_button,div.dhxcombo_dhx_web div.dhxcombo_top_image {
+      top: 0px;
+      left: 3px;
+      width: 10px;
+      height: 17px;
+      border-top: 2px solid transparent;
+      border-left: 2px solid transparent;
+      border-right: 2px solid #001c52;
+      border-bottom: 2px solid #001c52;
+      -webkit-transform: rotate(40deg);
+      -ms-transform: rotate(40deg);
+      transform: rotate(40deg);
+      -webkit-backface-visibility: hidden;
+      backface-visibility: hidden;
+      -webkit-transform-origin: 100% 100%;
+      -ms-transform-origin: 100% 100%;
+      transform-origin: 100% 100%;
+      background: none !important;
+      }
+      div.dhxcombo_dhx_web div.dhxcombo_top_image:before {
+      background: white;
+      content: "\f000";
+      font-family: FontAwesome;
+      font-style: normal;
+      font-weight: normal;
+      text-decoration: inherit;
+      color: green;
+      font-size: 18px;
+      padding-right: 0.5em;
+      position: absolute;
+      top: 10px;
+      left: 0;
+      }
+      div.dhxcombo_dhx_web{
+      border: none;
+      }
+      .dhtmlxcalendar_container.dhtmlxcalendar_skin_dhx_web {
+      z-index: 99999;
+      }
+      .dhxcombo_select_img ,.dhx_cell_progress_img
+      {
+      background-image: none !important;
+      background: none !important;
+      }
+      div.dhxcombolist_dhx_web div.dhxcombo_option div.dhxcombo_checkbox.dhxcombo_chbx_1 {
+      top: 2px;
+      left: 3px;
+      width: 9px;
+      height: 16px;
+      border-top: 2px solid transparent;
+      border-left: 2px solid transparent;
+      border-right: 2px solid #001c52;
+      border-bottom: 2px solid #001c52;
+      -webkit-transform: rotate(40deg);
+      -ms-transform: rotate(40deg);
+      transform: rotate(40deg);
+      -webkit-backface-visibility: hidden;
+      backface-visibility: hidden;
+      -webkit-transform-origin: 100% 100%;
+      -ms-transform-origin: 100% 100%;
+      transform-origin: 100% 100%;
+      }
+      div.dhxcombolist_dhx_web div.dhxcombo_option div.dhxcombo_checkbox.dhxcombo_chbx_0{
+      content: '';
+      position: absolute;
+      top: 1px;
+      left: 5px;
+      width: 15px;
+      height: 15px;
+      z-index: 0;
+      border: 2px solid #001c52;
+      -webkit-border-radius: 1px;
+      border-radius: 1px;
+      margin-top: 3px;
+      -webkit-transition: .2s;
+      -o-transition: .2s;
+      transition: .2s;
+      }
+      @media (min-width: 768px)
+      {
+      .sidebar-mini.sidebar-collapse .main-header .logo > .logo-mini {
+      display: block;
+      margin-left: -33px;
+      margin-top: -22px;
+      font-size: 18px;
+      height: 80px;
+      padding: 0px;
+      }
+      .fixed .main-header .navbar .sidebar-toggle {
+      display: none;
+      }
+      .navbar-form
+      {
+      margin-top: 4px;
+      margin-left: 46px;
+      }
+      }
+      /* .img-circle,.user-image,#imgUser{
+      transform: rotate(90deg);
+      }
+      @media only screen 
+      and (min-width: 800px) 
+      and (max-height: 1366px) 
+      and (-webkit-min-device-pixel-ratio: 1.5) {
+      body.mobile .img-circle,.user-image,#imgUser{
+      transform: rotate(0deg);
+      }
+      } */
+      /* Portrait */
+      /* @media only screen 
+      and (min-width: 800px) 
+      and (max-height: 1366px) 
+      and (orientation: portrait) 
+      and (-webkit-min-device-pixel-ratio: 1.5) {
+      body.mobile .img-circle,.user-image,#imgUser{
+      transform: rotate(0deg);
+      }
+      } */
+      /* Landscape */
+      /* @media only screen 
+      and (min-width: 800px) 
+      and (max-height: 1366px) 
+      and (orientation: landscape) 
+      and (-webkit-min-device-pixel-ratio: 1.5) {
+      body.mobile .img-circle,.user-image,#imgUser{
+      transform: rotate(0deg);
+      }
+      } */
+      @media (max-width: 767px)
+      {
+      /*   body.mobile .img-circle,.user-image,#imgUser{
+      transform: rotate(0deg);
+      } */
+      /*   .img-circle,.user-image,#imgUser{
+      transform: rotate(90deg);
+      } */
+      .swal_login {
+      width: 100vw;
+      height: 100vh;
+      margin: 0px;
+      overflow: scroll;
+      }
+      .navbar-form {
+      width: 135px;
+      margin-left: 37px;
+      position: absolute;
+      padding: 0px;
+      margin-top: -45px !important;
+      }
+      .navbar-form .form-group:last-child {
+      margin-bottom: 0;
+      }
+      .btn-group.open .dropdown-toggle,.bootstrap-select.btn-group:not(.input-group-btn), .bootstrap-select.btn-group[class*="col-"]{
+      width: 135px !important;
+      background: white;
+      }
+      .fixed .main-header .navbar .dropdown-menu li a {
+      color: black;
+      }
+      .fixed .main-header .navbar .sidebar-toggle {
+      margin-left: 5px !important;
+      }
+      .sidebar{
+      display: none;
+      }
+      body.sidebar-open .sidebar{
+      display: block !important;
+      }
+      }
+      .skin-black .wrapper, .skin-black .main-sidebar, .skin-black .left-side {
+      background-color: white;
+      }
+      .sidebar-mini.sidebar-collapse .content-wrapper, .sidebar-mini.sidebar-collapse .right-side, .sidebar-mini.sidebar-collapse .main-footer
+      {
+      background: white !important;
+      border: 1px solid #efefef !important;
+      }
+      .content {
+      height: -webkit-calc(100vh - 90px) !important;
+      overflow: scroll;
+      background: white;
+      }
+      .sidebar .list-group i
+      {
+      width: 25px;
+      }
+      .navbar-header{
+      width: 25px;
+      display: inline-block;
+      }
+      .apps_pages
+      {
+      background: rgba(0, 0, 0, 0.3);
+      top: 51px;
+      right: 0;
+      bottom: 0;
+      left: 0;
+      }
+      .main-sidebar{
+      margin-top: -7px;
+      }
+      body.sidebar-open .apps_pages .main-sidebar {
+      top: -49px;
+      width: 100%;
+      }
+      /* .modal-open .sidebar{
+      display: block;
+      } */
+      body.sidebar-open .tab-pane,.main-footer{
+      display:none;
+      }
+      .stepwizard-step p {
+      margin-top: 10px;
+      }
+      .stepwizard-row {
+      display: table-row;
+      }
+      .stepwizard {
+      display: table;
+      width: 50%;
+      position: relative;
+      margin: 0 25%;
+      padding-bottom: 3px;
+      }
+      .stepwizard-step button[disabled] {
+      opacity: 1 !important;
+      filter: alpha(opacity=100) !important;
+      }
+      .stepwizard-row:before {
+      top: 14px;
+      bottom: 0;
+      position: absolute;
+      content: " ";
+      width: 100%;
+      height: 1px;
+      background-color: #ccc;
+      z-order: 0;
+      }
+      .stepwizard-step {
+      display: table-cell;
+      text-align: center;
+      position: relative;
+      }
+      .btn-circle {
+      width: 30px;
+      height: 30px;
+      text-align: center;
+      padding: 6px 0;
+      font-size: 12px;
+      line-height: 1.428571429;
+      border-radius: 15px;
+      }
+      .switch {
+      position: relative;
+      display: inline-block;
+      width: 60px;
+      height: 34px;
+      }
+      .switch input {
+      display:none;
+      }
+      .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-color: #ccc;
+      -webkit-transition: .4s;
+      transition: .4s;
+      }
+      .slider:before {
+      position: absolute;
+      content: "";
+      height: 26px;
+      width: 26px;
+      left: 4px;
+      bottom: 4px;
+      background-color: white;
+      -webkit-transition: .4s;
+      transition: .4s;
+      }
+      input:checked + .slider {
+      background-color: #2196F3;
+      }
+      input:focus + .slider {
+      box-shadow: 0 0 1px #2196F3;
+      }
+      input:checked + .slider:before {
+      -webkit-transform: translateX(26px);
+      -ms-transform: translateX(26px);
+      transform: translateX(26px);
+      }
+      .slider.round {
+      border-radius: 34px;
+      }
+      .slider.round:before {
+      border-radius: 50%;
+      }
+      .switch-label {
+      position: relative;
+      cursor: pointer;
+      font-size: 16px;
+      line-height: 24px;
+      margin: 0;
+      left: 15px;
+      top: -15px;
+      }
+      .top-100 {
+      margin-top: 100px;
+      text-align: center;
+      }
+      .modal-backdrop {
+      z-index: -1;
+      }
+      .gridcelltype .bs-searchbox {
+      padding: 0px !important;
+      margin-top: -38px;
+      }
+      .container-fluid{
+        padding-right: 0px;
+        padding-left: 0px;
+        margin-right: 0px;
+        margin-left: 0px;
+        height: 100vh;
+      }
+      .dx-dropdownlist-popup-wrapper{
+        z-index:99999 !important;
+      }
+    </style>
+  </head>
+  <body class="layout-fixed text-sm layout-navbar-fixed layout-footer-fixed"  data-panel-auto-height-mode="height">
+    <div id='csm_apps'>
+    </div>
+    <script type="text/javascript">
+      function thongbao(msg)
+      {
+        DevExpress.ui.notify(`Thông Báo "${msg}"`, 'success', 3000);
+      }
+      function canhbao(msg)
+      {
+        DevExpress.ui.notify(`Thông báo lỗi: "${msg}"`, 'warning', 3000);
+      }
+      /*
+      const socket=io(location.origin,{
+        transports: ["polling"]  // use WebSocket first, if available
+      });
+      */
+      new Vue({
+          name:"csm_dev",
+          props: ['Uinfos','base','database','real'],
+          data:function(){
+            /*// Tao bang moi trong database
+            var apiUrl = 'http://localhost:15300/api/create-table';
+            var apiUrl = 'https://api.phanmemmottrieu.net/create-table';
+            var requestBody = {
+              "id": "csm_accounts",
+              "struct": {
+                  "defaultValue": {
+                      "id": "",
+                      "email": "",
+                      "username": "",
+                      "phoneNumber": "",
+                      "full_name": "",
+                      "password": "",
+                      "hashed_id_type": "",
+                      "user_address": "",
+                      "picture": "",
+                      "app_token": "",
+                      "app_id": "",
+                      "actived": false,
+                      "permissions": [],
+                      "menusPermissions": [],
+                      "group_rights": [],
+                      "source_app_token": ""
+                  },
+                  "fieldsPK": ["email", "username", "phoneNumber", "app_id","app_token", "id"],
+                  "fields": {
+                      "0": "id",
+                      "1": "email",
+                      "2": "username",
+                      "3": "phoneNumber",
+                      "4": "full_name",
+                      "5": "password",
+                      "6": "hashed_id_type",
+                      "7": "user_address",
+                      "8": "picture",
+                      "9": "app_token",
+                      "10": "app_id",
+                      "11": "actived",
+                      "12": "permissions",
+                      "13": "menusPermissions",
+                      "14": "group_rights",
+                      "15": "source_app_token"
+                  }
+              }
+            };
+
+            fetch(apiUrl, {
+              method: 'POST', // Assuming your API expects a POST request for this data
+              headers: {
+                'Content-Type': 'application/json',
+                // You might need to add other headers here, like authorization tokens, if your API requires them.
+              },
+              body: JSON.stringify({"app_id":"csm","obj_table":requestBody})
+            })
+            .then(response => {
+              if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+              }
+              return response.json(); // Or response.text() if the response is not JSON
+            })
+            .then(data => {
+              console.log('Success:', data);
+              // Here you can process the data received from the API
+            })
+            .catch(error => {
+              console.error('Error fetching data:', error);
+              // Handle any errors that occurred during the fetch operation
+            });
+
+
+            var apiUrl = 'http://localhost:15300/api/create-table';
+            var apiUrl = 'https://api.phanmemmottrieu.net/create-table';
+            var requestBody = {
+                "id": "csm_group_members",
+                "struct": {
+                    "defaultValue": {
+                        "id": "",
+                        "parent_account_id": "",
+                        "login_identifier": "",
+                        "pass": "",
+                        "actived": false,
+                        "group_id": "",
+                        "permissions": [],
+                        "menusPermissions": []
+                    },
+                    "fieldsPK": ["id", "login_identifier"],
+                    "fields": {
+                        "0": "id",
+                        "1": "parent_account_id",
+                        "2": "login_identifier",
+                        "3": "pass",
+                        "4": "actived",
+                        "5": "group_id",
+                        "6": "permissions",
+                        "7": "menusPermissions"
+                    }
+                }
+            };
+
+            fetch(apiUrl, {
+              method: 'POST', // Assuming your API expects a POST request for this data
+              headers: {
+                'Content-Type': 'application/json',
+                // You might need to add other headers here, like authorization tokens, if your API requires them.
+              },
+              body: JSON.stringify({"app_id":"csm","obj_table":requestBody})
+            })
+            .then(response => {
+              if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+              }
+              return response.json(); // Or response.text() if the response is not JSON
+            })
+            .then(data => {
+              console.log('Success:', data);
+              // Here you can process the data received from the API
+            })
+            .catch(error => {
+              console.error('Error fetching data:', error);
+              // Handle any errors that occurred during the fetch operation
+            });
+            */
+            return {
+              sources:[],
+              // domain_api_url:"https://api.phanmemmottrieu.net",
+              domain_api_url:"http://localhost:15300/api",
+              fb_app_token:"",
+              cSource_type:false,
+              cSource:false,
+              s_type:0,
+              s_code:false,
+              phone:"0937.528.839",
+              writeby:"base._co.osa",
+              Base64:(function() {
+                "use strict";
+                var _keyStr = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=";
+                var _utf8_encode = function (string) {
+                  var utftext = "", c, n;
+                  string = string.replace(new RegExp('\r\n', 'g'),"\n");
+                  for (n = 0; n < string.length; n++) {
+                    c = string.charCodeAt(n);
+                    if (c < 128) {
+                      utftext += String.fromCharCode(c);
+                    }
+                    else if((c > 127) && (c < 2048)) {
+                      utftext += String.fromCharCode((c >> 6) | 192);
+                      utftext += String.fromCharCode((c & 63) | 128);
+                    }
+                    else {
+                      utftext += String.fromCharCode((c >> 12) | 224);
+                      utftext += String.fromCharCode(((c >> 6) & 63) | 128);
+                      utftext += String.fromCharCode((c & 63) | 128);
+                    }
+                  }
+                  return utftext;
+                };
+                var _utf8_decode = function (utftext) {
+                  var string = "", i = 0, c = 0, c1 = 0, c2 = 0;
+                  while ( i < utftext.length ) {
+                    c = utftext.charCodeAt(i);
+                    if (c < 128) {
+                      string += String.fromCharCode(c);
+                      i++;
+                    }
+                    else if((c > 191) && (c < 224)) {
+                      c1 = utftext.charCodeAt(i+1);
+                      string += String.fromCharCode(((c & 31) << 6) | (c1 & 63));
+                      i += 2;
+                    }
+                    else {
+                      c1 = utftext.charCodeAt(i+1);
+                      c2 = utftext.charCodeAt(i+2);
+                      string += String.fromCharCode(((c & 15) << 12) | ((c1 & 63) << 6) | (c2 & 63));
+                      i += 3;
+                    }
+                  }
+                  return string;
+                };
+                var _hexEncode = function(input) {
+                  var output = '', i;
+                  for(i = 0; i < input.length; i++) {
+                    output += input.charCodeAt(i).toString(16);
+                  }
+                  return output;
+                };
+                var _hexDecode = function(input) {
+                  var output = '', i;
+                  if(input.length % 2 > 0) {
+                    input = '0' + input;
+                  }
+                  for(i = 0; i < input.length; i = i + 2) {
+                    output += String.fromCharCode(parseInt(input.charAt(i) + input.charAt(i + 1), 16));
+                  }
+                  return output;
+                };
+                var encode = function (input) {
+                  var output = "", chr1, chr2, chr3, enc1, enc2, enc3, enc4, i = 0;
+                  input = _utf8_encode(input);
+                  while (i < input.length) {
+                    chr1 = input.charCodeAt(i++);
+                    chr2 = input.charCodeAt(i++);
+                    chr3 = input.charCodeAt(i++);
+                    enc1 = chr1 >> 2;
+                    enc2 = ((chr1 & 3) << 4) | (chr2 >> 4);
+                    enc3 = ((chr2 & 15) << 2) | (chr3 >> 6);
+                    enc4 = chr3 & 63;
+                    if (isNaN(chr2)) {
+                      enc3 = enc4 = 64;
+                    }
+                    else if (isNaN(chr3)) {
+                      enc4 = 64;
+                    }
+                    output += _keyStr.charAt(enc1);
+                    output += _keyStr.charAt(enc2);
+                    output += _keyStr.charAt(enc3);
+                    output += _keyStr.charAt(enc4);
+                  }
+                  return output;
+                };
+                var decode = function (input) {
+                  var output = "", chr1, chr2, chr3, enc1, enc2, enc3, enc4, i = 0;
+                  input = input.replace(/[^A-Za-z0-9\+\/\=]/g, "");
+                  while (i < input.length) {
+                    enc1 = _keyStr.indexOf(input.charAt(i++));
+                    enc2 = _keyStr.indexOf(input.charAt(i++));
+                    enc3 = _keyStr.indexOf(input.charAt(i++));
+                    enc4 = _keyStr.indexOf(input.charAt(i++));
+                    chr1 = (enc1 << 2) | (enc2 >> 4);
+                    chr2 = ((enc2 & 15) << 4) | (enc3 >> 2);
+                    chr3 = ((enc3 & 3) << 6) | enc4;
+                    output += String.fromCharCode(chr1);
+                    if (enc3 !== 64) {
+                      output += String.fromCharCode(chr2);
+                    }
+                    if (enc4 !== 64) {
+                      output += String.fromCharCode(chr3);
+                    }
+                  }
+                  return _utf8_decode(output);
+                };
+                var decodeToHex = function(input) {
+                  return _hexEncode(decode(input));
+                };
+                var encodeFromHex = function(input) {
+                  return encode(_hexDecode(input));
+                };
+                return {
+                  'encode': encode,
+                  'decode': decode,
+                  'decodeToHex': decodeToHex,
+                  'encodeFromHex': encodeFromHex
+                };
+              }()),
+              editor:false,
+              lastPos:false,
+              lastQuery:false,
+              marked:[]
+            }
+          },
+          created:function(){
+            var seft=this;
+            if(seft.real)
+              seft.real.$on('updatedb',function(nDB){
+                if(nDB.obj_name==='sys_autos' && 1*nDB.data.p_type===1*seft.s_type)
+                {
+                  seft.sources=seft.database["sys_autos"].rows.filter(o=>1*o.p_type===1*seft.s_type).sort((a,b) => (a.p_name > b.p_name) ? 1 : ((b.p_name > a.p_name) ? -1 : 0));
+                  // var idxRowSV=seft.sources.findIndex((obj) => {
+                  //   return obj.id === nDB.data.id && 1*obj.p_type===1*nDB.data.p_type;
+                  // });
+                  // if(nDB.cmd==="create" && idxRowSV===-1)
+                  //   seft.sources.push(nDB.data);
+                  // else if(nDB.cmd==="update")
+                  // {
+                  //   console.log(nDB.cmd,idxRowSV,seft.sources);
+                  //   if(idxRowSV!==-1)
+                  //     seft.sources[idxRowSV]=nDB.data;
+                  //   else
+                  //     seft.sources.push(nDB.data);
+                  // }
+                  // else if(nDB.cmd==="delete")
+                  // {
+                  //   if(idxRowSV!==-1)
+                  //     seft.sources.splice(idxRowSV, 1);
+                  // }
+                  seft.cSource.option('dataSource',new DevExpress.data.DataSource({
+                    store: seft.sources,
+                    paginate: true,
+                    pageSize: 10
+                  }));
+                }
+              });
+            $(window).resize(this.sizing);
+          },
+          methods:{
+            csm_obj_tables:function (obj, fn) {
+              fetch(this.domain_api_url+"/get-table-data", {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    "csm-token": "4d543bb4-714c-4bb1-952f-a2e0bf8b24a3"
+                  },
+                  body: JSON.stringify(obj),
+              })
+              .then(response => response.json())
+              .then(data => fn(data))
+              .catch(error => fn({ status: false, error: error.message,obj:obj}));
+            },
+            csm_obj_updates: function (obj, fn) {
+                fetch(this.domain_api_url+"/update-table-data", {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    "csm-token": "4d543bb4-714c-4bb1-952f-a2e0bf8b24a3"
+                  },
+                  body: JSON.stringify(obj),
+                })
+                .then(response => response.json())
+                .then(data => fn(data))
+                .catch(error => fn({ status: false, error: error.message,obj:obj}));
+            },
+            thongbao:function(msg)
+            {
+              swal({
+                tilte:"Thông Báo",text:msg,icon: "success",buttons: false});
+            },
+            csm_encrypt:function(d_code)
+            {
+              var seft=this;
+              return seft.strtr(seft.Base64.encode(d_code),seft.phone+seft.writeby,seft.writeby+seft.phone);
+            },
+            csm_decrypt:function(e_code)
+            {
+              var seft=this;
+              return seft.Base64.decode(seft.strtr(e_code,seft.phone+seft.writeby,seft.writeby+seft.phone));
+            },
+            strtr:function(str, from, to) {
+              var fr = '',
+                  i = 0,
+                  j = 0,
+                  lenStr = 0,
+                  lenFrom = 0,
+                  tmpStrictForIn = false,
+                  fromTypeStr = '',
+                  toTypeStr = '',
+                  istr = '';
+              var tmpFrom = [];
+              var tmpTo = [];
+              var ret = '';
+              var match = false;
+              // Received replace_pairs?
+              // Convert to normal from->to chars
+              if (typeof from === 'object') {
+                // Not thread-safe; temporarily set to true
+                tmpStrictForIn = this.ini_set('phpjs.strictForIn', false);
+                from = this.krsort(from);
+                this.ini_set('phpjs.strictForIn', tmpStrictForIn);
+                for (fr in from) {
+                  if (from.hasOwnProperty(fr)) {
+                    tmpFrom.push(fr);
+                    tmpTo.push(from[fr]);
+                  }
+                }
+                from = tmpFrom;
+                to = tmpTo;
+              }
+              // Walk through subject and replace chars when needed
+              lenStr = str.length;
+              lenFrom = from.length;
+              fromTypeStr = typeof from === 'string';
+              toTypeStr = typeof to === 'string';
+              for (i = 0; i < lenStr; i++) {
+                match = false;
+                if (fromTypeStr) {
+                  istr = str.charAt(i);
+                  for (j = 0; j < lenFrom; j++) {
+                    if (istr == from.charAt(j)) {
+                      match = true;
+                      break;
+                    }
+                  }
+                }
+                else {
+                  for (j = 0; j < lenFrom; j++) {
+                    if (str.substr(i, from[j].length) == from[j]) {
+                      match = true;
+                      // Fast forward
+                      i = (i + from[j].length) - 1;
+                      break;
+                    }
+                  }
+                }
+                if (match) {
+                  ret += toTypeStr ? to.charAt(j) : to[j];
+                }
+                else {
+                  ret += str.charAt(i);
+                }
+              }
+              return ret;
+            },
+            signOut:function(){
+              that=this;
+              swal({
+                title: "Có chắc bạn là kết thúc phiên làm việc không?",
+                text: "Nếu có bạn đăng xuất ra khỏi chương trình!",
+                type: "warning",
+                showCancelButton: true,
+                allowOutsideClick: false,
+                showCancelButton: true,
+                closeOnConfirm: false,
+                buttons: {
+                  cancel: {
+                    text: "Không, Hủy lệnh thoát!",
+                    value: null,
+                    visible: true,
+                    className: "",
+                    closeModal: true,
+                  },
+                  confirm: {
+                    text: "Vâng, Tôi muốn kết thúc phiên!",
+                    value: true,
+                    visible: true,
+                    className: "bg-green",
+                    closeModal: true
+                  }
+                }
+              }).then((Confirm) => {
+                if(Confirm)
+                {
+                  that.csm_dbs.delete().then(() => {
+                    location.reload();
+                  }).catch((err) => {
+                    thongbao("Could not delete database");
+                  }).finally(() => {
+                    // Do what should be done next...
+                  });
+                }
+              });
+            },
+            sizing:function(){
+              if(this.editor)
+                this.editor.setSize(null, $(window).height()-($(".btn-toolbar").height()+$(".main-header").height()+30));
+            },
+            Command_Editor:function(id)
+            {
+              // var id=$(window.event.target).attr("id");
+              var that=this;
+              if(id=="SelectALL")
+              {
+                this.editor.execCommand("selectAll");
+              }
+              else if(id=="Begin")
+              {
+                this.editor.execCommand("goDocStart");
+                // document.execCommand("Copy");
+                // editor.execCommand("copy");
+              }
+              else if(id=="TAG_JS")
+              {
+                swal({
+                  title: "Có chắc bạn là bạn muốn tạo mã hóa script cho trang?",
+                  text: "Nếu có hệ thống sẽ tạo mã hóa script cho trang!",
+                  type: "warning",
+                  showCancelButton: true,
+                  allowOutsideClick: false,
+                  showCancelButton: true,
+                  closeOnConfirm: false,
+                  buttons: {
+                    cancel: {
+                      text: "Không",
+                      value: null,
+                      visible: true,
+                      className: "",
+                      closeModal: true,
+                    },
+                    confirm: {
+                      text: "Có",
+                      value: true,
+                      visible: true,
+                      className: "bg-green",
+                      closeModal: true
+                    }
+                  }
+                }).then((Confirm) => {
+                  if(Confirm && that.s_code)
+                  {
+                    that.csm_obj_tables({app_id:"csm",obj_name:"sys_autos",e_where:{field: "p_name",type: "like",value:that.s_code}},function(objDBA){
+                      console.log(objDBA,{app_id:"csm",obj_name:"sys_autos",e_where:{field: "p_name",type: "like",value:that.s_code}});
+                      if(objDBA.success)
+                      {
+                        if(objDBA.hasOwnProperty("rows"))
+                        {
+                          that.createStructVuejs(that.s_code,that.s_code,objDBA.rows);
+                        }
+                      }
+                    });
+                  }
+                });
+              }
+              else if(id=="RN")
+              {
+//                 return $("#popForm").dxPopup({  
+//                   visible: true,  
+//                   title: 'Tạo cấu trúc chương trình',  
+//                   minwidth: 500,  
+//                   minheight: 500,  
+//                   position: {  
+//                     my: 'center',  
+//                     at: 'center',  
+//                     of: window  
+//                   },  
+//                   dragEnabled: true,  
+//                   contentTemplate: function(e) {  
+//                     var formContainer = $("<div id='subForm'>");  
+//                     myNewCustomerForm = formContainer.dxForm({  
+//                       readOnly: false,  
+//                       showColonAfterLabel: false,  
+//                       labelLocation: "top",  
+//                       minColWidth: 300,  
+//                       showValidationSummary: true,  
+//                       items: [  
+//                         {
+//                           name: 'kieu_xuat',
+//                           label: {
+//                             text: 'Chọn kiểu xuất cấu trúc',
+//                           },
+//                           editorType: 'dxSelectBox',
+//                           editorOptions: {
+//                             items: [{ma:'vue',ten:'VueJS'},{ma:'react',ten:'React'}],
+//                             displayExpr: 'ma',
+//                             valueExpr: 'ten',
+//                             searchEnabled: true,
+//                             value: '',
+//                           }
+//                         },{
+//                           name: 'app_token',
+//                           label: {
+//                             text: 'Mã giới thiệu',
+//                           },
+//                           editorType: 'dxTextBox',
+//                           cssClass: 'form-control',
+//                           editorOptions: {
+//                             mode: 'text',
+//                             buttons: [{
+//                               location: 'after',
+//                               options: {
+//                                 icon: 'fa fa-user',
+//                                 type: 'normal',
+//                                 onClick(e) {
+//                                 }
+//                               },
+//                             }],
+//                           },
+//                         },{
+//                           name: 'app_id',
+//                           label: {
+//                             text: 'Mã chương trình',
+//                           },
+//                           editorType: 'dxTextBox',
+//                           cssClass: 'form-control',
+//                           editorOptions: {
+//                             mode: 'text',
+//                             buttons: [{
+//                               location: 'after',
+//                               options: {
+//                                 icon: 'fa fa-database',
+//                                 type: 'normal',
+//                                 onClick(e) {
+//                                 }
+//                               },
+//                             }],
+//                           },
+//                         },{  
+//                           itemType: "button",  
+//                           horizontalAlignment: "left",  
+//                           colSpan: 2,  
+//                           buttonOptions: {  
+//                             text: "Save",  
+//                             type: "success",  
+//                             useSubmitBehavior: true,  
+//                             onClick: function() {  
+
+//                             }  
+//                           },  
+//                         }  
+//                       ]  
+//                     }).dxForm("instance");  
+//                     e.append(formContainer);  
+//                   }  
+//                 });
+                window.ma_gioi_thoi=function(){
+                  // console.log(that.csm_decrypt("Zmlk0sZu2cVvMVafX1afZmlk0sZuNzg_"));
+                  // return;
+                  // console.log(that.csm_decrypt("ZGJz7XNfX1afXcNvZHN_Ycay2EBn0WFp0C_j0c1fX1afXcNvZHN_Ycay2EBn0WFp0C_j0c1fX1afXzE="));
+                  // var newToken=that.csm_encrypt("csm_____phanmemmottrieu@gmail.com_____phanmemmottrieu@gmail.com_____1");
+                  // var newPass=that.csm_encrypt("phanmemmottrieu@gmail.com_____AaBb@7579")
+                  // var newRootUser={
+                  //   "actived": true,
+                  //   "app_id": "csm",
+                  //   "app_token": newToken,
+                  //   "email": "phanmemmottrieu@gmail.com",
+                  //   "full_name": "Lập trình viên",
+                  //   "id": "MjQyNWRmMGE2M2M0Njk2ZGEyMzYyMzE1ZTA3YmY0NGE=",
+                  //   "pass": newPass,
+                  //   "picture": "",
+                  //   "user_address": "",
+                  //   "userid": ""
+                  // };
+                  // console.log(newRootUser);
+                  // var url = 'https://api.phanmemmottrieu.net/update-table-data';
+                  // var data = {
+                  //     "app_id": "csm",
+                  //     "obj_name": "csm_accounts",
+                  //     "command": "create",
+                  //     "obj_update": newRootUser,
+                  //     "e_where": {
+                  //         "operator": "AND",
+                  //         "conditions": []
+                  //     }
+                  // };
+
+                  // fetch(url, {
+                  //   method: 'POST', // Phương thức HTTP là POST để gửi dữ liệu
+                  //   headers: {
+                  //     'Content-Type': 'application/json', // Đặt tiêu đề để báo server biết bạn đang gửi JSON
+                  //   },
+                  //   body: JSON.stringify(data), // Chuyển đổi đối tượng JavaScript thành chuỗi JSON
+                  // })
+                  // .then(response => {
+                  //   // Kiểm tra xem phản hồi có thành công không (mã trạng thái 200-299)
+                  //   if (!response.ok) {
+                  //     // Nếu không thành công, ném lỗi để bắt ở khối .catch
+                  //     throw new Error(`HTTP error! status: ${response.status}`);
+                  //   }
+                  //   return response.json(); // Phân tích phản hồi JSON từ server
+                  // })
+                  // .then(result => {
+                  //   console.log('Yêu cầu đã được gửi thành công!', result); // In kết quả nếu thành công
+                  // })
+                  // .catch(error => {
+                  //   console.error('Có lỗi xảy ra khi gửi yêu cầu:', error); // Xử lý lỗi nếu có
+                  // });
+                  // Your existing addAccount function (no changes needed from Option 1)
+                  // function addAccount(newRootUser) {
+                  //     var url = 'https://api.phanmemmottrieu.net/update-table-data';
+                  //     var data = {
+                  //         "app_id": "csm",
+                  //         "obj_name": "csm_accounts",
+                  //         "command": "create",
+                  //         "obj_update": newRootUser,
+                  //         "e_where": {
+                  //             "operator": "AND",
+                  //             "conditions": []
+                  //         }
+                  //     };
+
+                  //     return fetch(url, {
+                  //             method: 'POST',
+                  //             headers: {
+                  //                 'Content-Type': 'application/json',
+                  //             },
+                  //             body: JSON.stringify(data),
+                  //         })
+                  //         .then(response => {
+                  //             if (!response.ok) {
+                  //                 throw new Error(`HTTP error! status: ${response.status}`);
+                  //             }
+                  //             return response.json();
+                  //         })
+                  //         .then(result => {
+                  //             console.log('Yêu cầu đã được gửi thành công!', result);
+                  //             return result;
+                  //         })
+                  //         .catch(error => {
+                  //             console.error('Có lỗi xảy ra khi gửi yêu cầu:', error);
+                  //             throw error;
+                  //         });
+                  // }
+
+                  // const apiUrl = 'http://localhost:15300/api/get-table-data';
+
+                  // const requestBody = {
+                  //     "app_id": "csm",
+                  //     "obj_name": "csm_accounts",
+                  //     "e_where": {
+                  //         "field": "id",
+                  //         "type": "like",
+                  //         "value": ""
+                  //     }
+                  // };
+
+                  // fetch(apiUrl, {
+                  //         method: 'POST',
+                  //         headers: {
+                  //             'Content-Type': 'application/json',
+                  //         },
+                  //         body: JSON.stringify(requestBody)
+                  //     })
+                  //     .then(response => {
+                  //         if (!response.ok) {
+                  //             throw new Error(`HTTP error! status: ${response.status}`);
+                  //         }
+                  //         return response.json();
+                  //     })
+                  //     .then(data => {
+                  //         const delayBetweenRequestsMs = 500; // Set your desired delay in milliseconds
+
+                  //         // Use reduce to sequentially process promises with a delay
+                  //         return data.rows.reduce((promiseChain, objAc) => {
+                  //             delete objAc["_id"];
+                  //             return promiseChain.then(() => new Promise(resolve => {
+                  //                 addAccount(objAc)
+                  //                     .then(() => setTimeout(resolve, delayBetweenRequestsMs)) // Resolve after delay
+                  //                     .catch(error => {
+                  //                         console.error(`Error processing account:`, objAc, error);
+                  //                         setTimeout(resolve, delayBetweenRequestsMs); // Even on error, wait before next
+                  //                     });
+                  //             }));
+                  //         }, Promise.resolve()); // Initial promise to start the chain
+                  //     })
+                  //     .then(() => {
+                  //         console.log('All accounts processed with delay.');
+                  //     })
+                  //     .catch(error => {
+                  //         console.error('Error fetching data or during processing:', error);
+                  //     });
+                  if(!that.fb_app_token)
+                  return alert("Vui lòng điền Mã chương trình");
+                    /*====== app_id + _____ + Email người dùng + _____ + Email giới thiệu  + _____ + Mức Quyền quản trị ======*/
+                  document.querySelector('.swal-modal #fb_uroot_token').value=that.csm_encrypt(that.fb_app_token+"_____codsycorp@gmail.com_____codsycorp@gmail.com_____0");
+                }
+                var template=`
+                  <div class="input-group mb-3">
+                    <div class="input-group-append"> 
+                      <div class="input-group-text">Chọn kiểu xuất cấu trúc</div>
+                    </div>
+                    <select id="tagetSource" class="select2 form-control">
+                      <option value="vue">VueJS</option>
+                      <option value="react">React</option>
+                    </select>
+                  </div>
+                    <div class="input-group mb-3">
+                      <input type="text" placeholder="Tạo mã người dùng đầu giới thiệu"  id="fb_uroot_token" name="fb_uroot_token" class="form-control" value=""/>
+                      <div class="input-group-append"> <div class="input-group-text btn btn-success" onclick="ma_gioi_thoi()"><span class="fa fa-user"></span></div></div> 
+                    </div>
+                    <div class="input-group mb-3">
+                      <div placeholder="Mã chương trình"  id="fb_app_token" name="app_token" class="form-control"></div>
+                      <div class="input-group-append"> <div class="input-group-text"><span class="fa fa-database"></span></div></div> 
+                </div>`;
+                swal({
+                  closeOnClickOutside:false,
+                  closeOnEsc: false,
+                  content: {
+                    element: 'div',
+                    attributes: {
+                      innerHTML: `${template}`,
+                    },
+                  },
+                  buttons: {
+                    cancel: {
+                      text: "Thoát",
+                      value: false,
+                      visible: true,
+                      className: "",
+                      closeModal: true,
+                    },
+                    taocautruc: {
+                      text: "Vâng, Tôi tạo cấu trúc!",
+                      value: "taocautruc",
+                      visible: true,
+                      className: "bg-green",
+                      closeModal: true
+                    }
+                  }
+                }).then((xacnhan) => {
+                  if(xacnhan==="taocautruc")
+                  {
+                    if(!that.fb_app_token)
+                      alert("Vui lòng điền Mã chương trình");
+                    else
+                      that.saveStructCode(that.fb_app_token,document.querySelector(".swal-modal #tagetSource").value);
+                  }
+                });
+                setTimeout(function(){
+                  that.csm_obj_tables({app_id:"csm",obj_name:"sys_apps",e_where:{
+                    operator: "AND",
+                    conditions: [{
+                      field: "app_id",
+                      type: "like",
+                      value: ""
+                    }]
+                  }
+                },function(objDB){
+                    if(objDB.hasOwnProperty("rows"))
+                      $('#fb_app_token').dxSelectBox({
+                        displayExpr: 'app_name',
+                        valueExpr: 'app_id',
+                        onValueChanged: function(e) {
+                          that.fb_app_token=e.value;
+                        },
+                        items: objDB.rows.filter(ap=>ap.app_id!=="csm" && ap.app_id!=="web"),
+                        placeholder: 'Mã chương trình',
+                        showClearButton: true,
+                      });
+                  });
+                },50);
+              }
+              else if(id=="End")
+              {
+                this.editor.execCommand("goDocEnd");
+                // editor.insert(editor.getCopyText());
+              }
+              if(id=="Delete")
+              {
+                swal({
+                  title: "Bạn có chắc muốn xóa tệp mã này không?",
+                  text: "Sau khi xóa, bạn sẽ không thể khôi phục tệp tệp mã này!",
+                  icon: "warning",
+                  buttons: {
+                    cancel: {
+                      text: "Không, Hủy lệnh xóa!",
+                      value: null,
+                      visible: true,
+                      className: "",
+                      closeModal: true,
+                    },
+                    confirm: {
+                      text: "Vâng, Tôi muốn xóa nó!",
+                      value: true,
+                      visible: true,
+                      className: "",
+                      closeModal: true
+                    }
+                  }
+                }).then((willDelete) => {
+                  if (willDelete) {
+                    that.fnDelete();
+                  }
+                });
+              }
+              else if(id=="Save")
+              {
+                this.fnSave();
+              }
+              else if(id=="CommentLines")
+              {
+                this.editor.toggleComment();
+              }
+              else if(id=="Undo")
+              {
+                this.editor.execCommand("undo");
+              }
+              else if(id=="Redo")
+              {
+                this.editor.execCommand("redo");
+              }
+              else if(id=="refresh")
+              {
+                this.location.reload();
+              }
+              else if(id=="gotoLine")
+              {
+                this.editor.execCommand("jumpToLine");
+              }
+              else if(id=="find")
+              {
+                this.editor.execCommand("find");
+              }
+              else if(id=="replace")
+              {
+                this.editor.execCommand("replace");
+              }
+              // obj.selectedIndex = 0;
+            },
+            guid:function(){
+              function s4() {
+                return Math.floor((1 + Math.random()) * 0x10000)
+                  .toString(16)
+                  .substring(1);
+              }
+              return s4()+s4()+ s4()+ s4()+ s4();
+            },
+            unmark:function() {
+              for (var i = 0; i < this.marked.length; ++i) this.marked[i].clear();
+              this.marked.length = 0;
+            },
+            search:function() {
+              this.unmark();
+              var text = document.getElementById("query").value;
+              if (!text) return;
+              for (var cursor = this.editor.getSearchCursor(text); cursor.findNext();)
+                this.marked.push(this.editor.markText(cursor.from(), cursor.to(), "searched"));
+              if (this.lastQuery != text) this.lastPos = null;
+              var cursor = this.editor.getSearchCursor(text, this.lastPos || this.editor.getCursor());
+              if (!cursor.findNext()) {
+                cursor = this.editor.getSearchCursor(text);
+                if (!cursor.findNext()) return;
+              }
+              this.editor.setSelection(cursor.from(), cursor.to());
+              this.lastQuery = text;
+              this.lastPos = cursor.to();
+            },
+            replace:function() {
+              this.unmark();
+              var text = document.getElementById("query").value,
+                  replace = document.getElementById("replace").value;
+              if (!text) return;
+              for (var cursor = this.editor.getSearchCursor(text); cursor.findNext();)
+                cursor.replace(replace);
+            },
+            autoFormatSelection:function() {
+              that=this;
+              CodeMirror.commands["selectAll"](that.editor);
+              function getSelectedRange() {
+                return {
+                  from: that.editor.getCursor(true), to: that.editor.getCursor(false) };
+              }
+              var range = getSelectedRange();
+              that.editor.autoFormatRange(range.from, range.to);
+              function commentSelection(isComment) {
+                var range = getSelectedRange();
+                that.editor.commentRange(isComment, range.from, range.to);
+              }
+              that.editor.execCommand("goDocStart");
+              var gtm=that.editor.getValue();
+              that.editor.setValue(gtm.replace(/\}\n(?: )( +)\,/g, "},").replace(/\}\n(?: )( +)\)/g, "})"));
+              setTimeout(that.sizing,300);
+            },
+            CheckRouterName:function(strCode)
+            {
+              var r_name=false;
+              var truong_tim=strCode.match(/\/\*\*\*\*\*\((.*?)\)\*\*\*\*\*\//g);
+              if(truong_tim!=null)
+                for(const [key,value] of Object.entries( truong_tim ) )
+                  r_name=value.replace('/*****(',"").replace(')*****/',"");
+              if(r_name)
+                if(r_name.indexOf(".")!==-1)
+                  r_name=false;
+              return r_name;
+            },
+            CheckRouterPops:function(strCode)
+            {
+              var r_name=false;
+              var truong_tim=strCode.match(/\/\*\*\*\((.*?)\)\*\*\*\//g);
+              if(truong_tim!=null)
+                for(const [key,value] of Object.entries( truong_tim ) )
+                  r_name=value.replace('/***(',"").replace(')***/',"");
+              if(r_name)
+                if(r_name.indexOf(".")!==-1)
+                  r_name=false;
+              return r_name;
+            },
+            findLevel_Component:function(V_Codes,strComCode,arrLevelCom,lvl,isVue)
+            {
+              if(isVue)
+              {
+                lvl++;
+                that=this;
+                var findCom=strComCode.replace(/\n/g,"").replace(/ /g,"").match(/components:\{(.*?)\}/g);
+                if(findCom)
+                  if(findCom.length>0)
+                  {
+                    var strCom=[];
+                    strCom=findCom[0].replace("components:{","").replace("}","").split(/\,/g).filter((o)=>o!=="");
+                    strCom.forEach(function(v){
+                      var aCom=v.split(":");
+                      if(aCom.length===2)
+                      {
+                        var comV=V_Codes.find(function(c){
+                          return c.p_name.toLowerCase()===aCom[1].toLowerCase()});
+                        if(comV)
+                        {
+                          var idx=arrLevelCom.findIndex(function(c){
+                            return c.p_name.toLowerCase()===aCom[1].toLowerCase()});
+                          if(idx!==-1)
+                            arrLevelCom[idx]=Object.assign({
+                              lvl:arrLevelCom[idx].lvl+1},comV);
+                          else
+                            arrLevelCom.push(Object.assign({lvl:1},comV));
+                          arrLevelCom=that.findLevel_Component(V_Codes,comV.p_code,arrLevelCom,lvl,isVue);
+                        }
+                      }
+                    });
+                  }
+              }
+              else
+              {
+                V_Codes.forEach(function(v){
+                  if(strComCode.match(new RegExp('<'+v.p_name,'g'))||strComCode.match(new RegExp('{'+v.p_name,'g')))
+                  {
+                    var idx=arrLevelCom.findIndex(c=>c.p_name===v.p_name);
+                    if(idx!==-1)
+                      arrLevelCom[idx]=Object.assign({
+                        lvl:arrLevelCom[idx].lvl+1},v);
+                    else
+                      arrLevelCom.push(Object.assign({
+                        lvl:1},v));
+                    arrLevelCom=that.findLevel_Component(V_Codes,v.p_code,arrLevelCom,lvl,isVue);
+                  }
+                });
+              }
+              return arrLevelCom;
+            },
+            createStructVuejs:function(app_token,app_token_base,data_codes)
+            {
+              var that=this;
+              var objDB=data_codes.filter(function(p){
+                return 1*p.p_type===0&&(p.p_name.toLowerCase().startsWith(app_token.toLowerCase()+'_')||p.p_name.toLowerCase()===app_token.toLowerCase());
+              });
+              objDB=JSON.parse(JSON.stringify(objDB));
+              var C_Codes=[],R_Codes=[],arrLevelCom=[],strCode;
+              var routerV=[],MainPage='';
+              var jsCodeIndex=objDB.find(function(p){
+                return p.p_name.toLowerCase()===app_token.toLowerCase();
+              });
+              if(jsCodeIndex)
+                jsCodeIndex=that.csm_decrypt(jsCodeIndex.p_code);
+              objDB.filter(function(p){
+                return p.p_name.toLowerCase()!==app_token.toLowerCase();
+              }).forEach((comp) => {
+                // console.log(comp);
+                var component_code=that.csm_decrypt(comp.p_code);
+                comp.p_code=component_code;
+                var r_name=that.CheckRouterName(component_code);
+                if(r_name && !R_Codes.find(c=>c.p_name===comp.p_name))
+                {
+                  if(r_name.toLowerCase()==="login")
+                    MainPage=component_code;
+                  if(r_name.toLowerCase()==="main")
+                  {
+                    MainPage=component_code;
+                    routerV.push({path: '*',name: "main",component:component_code,id:comp.p_name.toLowerCase(), props: true, props: true});
+                  }
+                  else if(r_name.toLowerCase()==="home")
+                      routerV.push({path: '',name: "home",component:component_code,id:comp.p_name.toLowerCase(), props: true, props: true});
+                  else
+                      routerV.push({path: '/'+r_name.toLowerCase(),name: r_name.toLowerCase(), component:component_code,id:comp.p_name.toLowerCase(), props: true}); 
+                  R_Codes.push(comp);
+                }
+                else if(!C_Codes.find(c=>c.p_name===comp.p_name))
+                  C_Codes.push(comp);
+              });
+              var A_Code=R_Codes.concat(C_Codes);
+              A_Code.forEach((comp) => {
+                arrLevelCom=that.findLevel_Component(A_Code,comp.p_code,arrLevelCom,0,true);
+              });
+              C_Codes=arrLevelCom.sort((a, b) => parseFloat(b.lvl) - parseFloat(a.lvl));
+              var strVCom='';
+              C_Codes.forEach((comp) => {
+                strVCom+='const '+comp.p_name.toLowerCase()+'='+comp.p_code+';\n';
+              });
+              var R_routerV="";
+              // console.log(routerV,C_Codes)
+              routerV.forEach((router) => {
+                R_routerV+='{path:"'+router.path.toLowerCase()+'",name:"'+router.name.toLowerCase()+'",component:'+router.component+', props: true},';
+                if(router.path.toLowerCase()!=="*")
+                  strVCom+='const '+router.name.toLowerCase()+'='+router.component+';\n';
+              });
+              // console.log(strVCom);
+              if(R_routerV!=="" && MainPage!=="" && jsCodeIndex)
+              {
+                strVCom=jsCodeIndex+strVCom;
+                strVCom+='\n const router = new VueRouter({mode:"abstract",routes: ['+R_routerV+']}); \n new Vue(Object.assign('+MainPage+',{router:router})).$mount("#csm_apps");\n';
+                // console.log(strVCom);
+                var obfuscationResult = JavaScriptObfuscator.obfuscate(strVCom);
+                strVCom=that.Base64.encode(obfuscationResult.getObfuscatedCode());
+                var idStruct="web";
+                if(app_token.toLowerCase()!==app_token_base.toLowerCase()||(app_token.toLowerCase()==="csm" && app_token_base.toLowerCase()==="csm"))
+                  idStruct="app";
+                console.log({app_id:app_token_base.toLowerCase(),obj_name:"index",e_where:{
+                  field: "id",
+                  type: "eq",
+                  value: idStruct
+                }});
+                that.csm_obj_tables({app_id:app_token_base.toLowerCase(),obj_name:"index",e_where:{
+                  field: "id",
+                  type: "eq",
+                  value: idStruct
+                }},function(msgF){
+                  console.log(msgF);
+                    if(!msgF.success)
+                    {
+                      return console.log({app_id:app_token_base.toLowerCase(),obj_name:"index",e_where:{
+                          field: "id",
+                          type: "eq",
+                          value: idStruct
+                        }},msgF);
+                    }
+                    var cmd="create";
+                    if(msgF.rows.length>0)
+                      cmd="update";
+                    // console.log(msgF);
+                    that.csm_obj_updates({app_id:app_token_base.toLowerCase(),obj_name:"index",command:cmd,obj_update:{id:idStruct,struct:strVCom},e_where:{
+                      field: "id",
+                      type: "eq",
+                      value: idStruct
+                    }},function(msg){
+                      if(msg.success)
+                      {
+                        if(msg.command==="create")
+                          that.thongbao("Đã thêm xong");
+                        else if(msg.command==="update")
+                          that.thongbao("Đã lưu thành công");
+                      }
+                    });
+                });
+              }
+            },
+            saveStructCode:function(app_token,typeStruct)
+            {
+              that=this;
+              try{
+                if(typeStruct==="react")
+                {
+                  var fb_database="";
+                  var structs=that.db.collection("/csm_sys/csm_manager/structs");
+                  structs.where("c_name", ">=",app_token+"_").where("c_name", '<=', app_token+'_\uf8ff').get().then(function(rsS) {
+                    if(!rsS.empty) {
+                      var C_Codes=[],R_Codes=[],arrLevelCom=[],strCode;
+                      rsS.forEach((doc) => {
+                        var comp=doc.data();
+                        var component_code=that.csm_decrypt(comp.component_code);
+                        comp.component_code=component_code;
+                        var r_name=that.CheckRouterName(comp.component_code);
+                        if(r_name)
+                          R_Codes.push(comp);
+                        else
+                          C_Codes.push(comp);
+                      });
+                      R_Codes.forEach((comp) => {
+                        arrLevelCom=that.findLevel_Component(R_Codes.concat(C_Codes),comp.component_code,arrLevelCom,0,false);
+                      });
+                      C_Codes=arrLevelCom.sort((a, b) => parseFloat(b.lvl) - parseFloat(a.lvl))      
+                      //Add code to HTML by <script src="https://unpkg.com/@babel/standalone/babel.min.js"/>
+                      var rsRouter='';
+                      var strCode=`function AppPage(){const {React,createContext,useContext,VibrationIOS,Component,DarkTheme,DefaultTheme,TextInput,Appbar,Picker,DateTimePicker,RNPickerSelect,Linking,TouchableHighlight,PermissionsAndroid,Platform,Animated,RN_Animated,useSharedValue,useAnimatedStyle,withTiming,useAnimatedReaction,AnimatedM,BottomSheet,Easing,NativeEventEmitter,ViewStyle,NativeModules,KeyboardAvoidingView,Dimensions,ToastAndroid,InteractionManager,RefreshControl,Video,AdMobBanner,AdMobInterstitial,PublisherBanner,AdMobRewarded,ImagePicker,AssetsSelector,MediaLibrary,MediaType,ImageManipulator,Calendar,Network,MapView,Marker,AnimatedRegion,Callout,UrlTile,LocalTile,MarkerAnimated,PROVIDER_GOOGLE,Location,openMap,createOpenLink,useState,useEffect,StyleSheet,Appearance,AntDesign,Entypo,EvilIcons,Feather,FontAwesome,FontAwesome5,Fontisto,Foundation,Ionicons,MaterialIcons,MaterialCommunityIcons,Octicons,Zocial,SimpleLineIcons,RectButton, BorderlessButton,NumberFormat,ScrollableTabView,Autocomplete,FlatDropdown,ModalDropdown,AutocompleteProps,FlatList,SafeAreaView,createBottomTabNavigator,isIphoneX,View,images,SIZES,COLORS,FONTS,HelperText,Avatar,AvatarE,IconE,ButtonE,ImageE,TabE,CardE,FABE,DividerE,BottomSheetE,SearchBarE,Tooltip,CheckBox,ButtonGroup,Badge,withBadge,Input,Header,PricingCard,Overlay,LinearProgress,Searchbar, ListItem,Button,Card,Title,Checkbox,Chip,Dialog,Portal,IconButton,Colors,Modal,Menu,Divider,Provider,List,useMemo,FormBuilder,SvgQRCode,BarCodeScanner,RadioButton,Snackbar,Surface,Switch,ToggleButton,TouchableRipple,Subheading,Headline,Paragraph,Caption,FAB,useController,useForm,Intro,intro,BottomTabBar,Svg,LineChart,BarChart,PieChart,ProgressChart,ContributionGraph,StackedBarChart,TouchableOpacity,TouchableNativeFeedback,ImageBackground,Path,logo,loc,Image,Text,useTheme,withTheme,icons,NetInfo,Permissions,Device,Camera,Firebase,mainContext,io,GiftedChat,Actions,Composer,Send,InputToolbar,AvatarC, Bubble, SystemMessage, Message, MessageText,Day,Time,utils,FaceDetector,Audio,Smartconfig,SecureStore,CryptoJS,CountdownTimer, FlipNumber,DynamicForm,GiftedForm, GiftedFormManager,GooglePlacesAutocomplete,phone,writeby,base64url,strtr,rawurlencode,CongGio,chuyenNgayGio,dateFormat,chuyenNgay,CongNgay,TruNgayRaSoNgay,validateEmail,validatePhone,ScrollView,ListView,StatusBar,Pressable,useColorScheme,UIManager,ActivityIndicator,LayoutAnimation,Alert,Base64,csm_encrypt,csm_decrypt,GOOGLE_API_KEY,MapViewDirections,signOutUser,inHome,isDarkTheme,Rating, AirbnbRating,styled,Constants ,PropTypes,createDrawerNavigator,useDrawerStatus,DrawerContentScrollView,DrawerItemList,DrawerItem} = csm_struct;`;
+                      C_Codes.forEach((comp) => {
+                        strCode+=comp.component_code;
+                      });
+                      R_Codes.forEach((comp) => {
+                        strCode+=comp.component_code;
+                        var r_name=that.CheckRouterName(comp.component_code);
+                        if(r_name.indexOf("Home")!==-1)
+                          r_name="Home";
+                        rsRouter+=(rsRouter!==""?",":"")+"{c_name:'"+r_name+"',component:"+comp.c_name+"}";
+                      });
+                      strCode+=`
+                        return [`+rsRouter+`];
+                      }`;
+                      var babelCodeT = Babel.transform(strCode, {
+                        presets: ['es2015', 'env', 'react'] }).code;
+                      var RN_Code = babelCodeT.replace('"use strict";', "").trim();
+                      var pathDB='/csm_sys/'+fb_database+'/config/';
+                      var structsUp=that.db.collection(pathDB);
+                      var batch = that.db.batch();
+                      structsUp.where("app_token", "==", app_token).get().then(function(rsSUp) {
+                        if(!rsSUp.empty) {
+                          var batch = that.db.batch();
+                          rsSUp.forEach((doc) => {
+                            batch.update(structsUp.doc(doc.id), {
+                              rn_code:that.csm_encrypt(RN_Code)});
+                          });
+                          batch.commit().then(() => {
+                            that.thongbao("Đã lưu thành công");
+                          });
+                        }
+                        else
+                          structsUp.add({
+                            app_token:app_token,rn_code:that.csm_encrypt(RN_Code)}).then(an => {
+                            that.thongbao("Đã thêm xong")});
+                      });
+                    }
+                  }).catch(function(error) {
+                    that.thongbao(error.code+":"+error.message);
+                  });
+                }
+                else if(typeStruct==="vue")
+                {
+                  // console.log("Thực hiện",{app_id:"csm",obj_name:"sys_autos",e_where:{field: "p_name",type: "like",value:""}});
+                  that.csm_obj_tables({app_id:"csm",obj_name:"sys_autos",e_where:{field: "p_name",type: "like",value:""}},function(objDBA){
+                    // console.log(objDBA);
+                    if(objDBA.success)
+                    {
+                      if(objDBA.hasOwnProperty("rows"))
+                      {
+                        that.createStructVuejs("csm","csm",objDBA.rows);
+                        that.createStructVuejs(app_token,app_token,objDBA.rows);
+                      }
+                    }
+                  });
+                }
+              }
+              catch(ex){
+                console.log(ex)
+                // that.thongbao(ex.message);
+              }
+            },
+            fnSave:function()
+            {
+              that=this;
+              try{
+                var f=that.cSource.option('value');
+                that.csm_obj_updates({
+                    app_id:"csm",obj_name:"sys_autos",command:"update",obj_update:{
+                      p_name:f,p_type:1*that.s_type,p_code:that.csm_encrypt(that.editor.getValue())},e_where:{
+                        "operator": "AND",
+                        "conditions": [
+                          {
+                            "field": "p_name",
+                            "type": "eq",
+                            "value": f
+                          },
+                          {
+                            "field": "p_type",
+                            "type": "eq",
+                            "value": that.s_type
+                          }
+                        ]
+                      }                      
+                  },function(msg){
+                    if(msg.success)
+                      thongbao("Đã lưu thành công");
+                  });
+              }
+              catch(ex){
+                canhbao(ex.message);
+              }
+            },
+            fnDelete:function()
+            {
+              that=this;
+              try{
+                var f=that.cSource.option('value');
+                if(f!==null)
+                {
+                  var delObj={p_name:f,p_type:1*that.s_type};
+                  that.csm_obj_updates({
+                    app_id:"csm",obj_name:"sys_autos",command:"delete",data_row:delObj,obj:delObj,e_where:{
+                      "operator": "AND",
+                      "conditions": [
+                        {
+                          "field": "p_name",
+                          "type": "eq",
+                          "value": f
+                        },
+                        {
+                          "field": "p_type",
+                          "type": "eq",
+                          "value": that.s_type
+                        }
+                      ]
+                    }
+                  },function(msg){
+                    if(msg.success)
+                    {
+                      thongbao("Đã xóa xong");
+                      // var idx=that.database["sys_autos"].rows.findIndex(function(c){
+                      //     return c.id.toLowerCase()===f;
+                      // });
+                      // if(idx!==-1)
+                      //   that.database[msg.obj_name].rows.splice(idx, 1);
+                      that.change_types();
+                    }
+                  });
+                }
+              }
+              catch(ex){
+                thongbao(ex.message);
+              }
+            },
+            fnLoadFile:function()
+            {
+              that=this;
+              if(!that.s_code)
+                return true;
+              try{
+                var ty=that.s_type==0?"javascript":"text/html";
+                var p_code="File không tồn tại";
+                var comp=that.sources.find(function(p){
+                  return p.p_name===that.s_code && 1*p.p_type===1*that.s_type;
+                });
+                if(comp)
+                {
+                  p_code=that.csm_decrypt(comp.p_code);
+                  if(document.querySelector(".CodeMirror"))
+                    document.querySelector(".CodeMirror").remove();
+                  var isMacLike = navigator.platform.match(/(Mac|iPhone|iPod|iPad)/i)?true:false;
+                  var m_extraKeys={
+                  };
+                  m_extraKeys[(isMacLike?"Cmd":"Ctrl")+ "-Space"]="autocomplete";
+                  m_extraKeys[(isMacLike?"Cmd":"Ctrl")+ "-S"]=function(cm) {
+                    that.fnSave();
+                  };
+                  m_extraKeys[(isMacLike?"Cmd":"Ctrl")+ "-H"]=function(cm) {
+                    that.editor.execCommand('replace');
+                  };
+                  that.editor = CodeMirror.fromTextArea(document.getElementById("editor"), {
+                    lineNumbers: true,
+                    mode: ty,
+                    keyMap: "sublime",
+                    extraKeys:m_extraKeys,
+                    autoCloseBrackets: true,
+                    matchBrackets: true,
+                    showCursorWhenSelecting: true,
+                    theme: "monokai",
+                    tabSize: 2
+                  });
+                  that.editor.setSize(null, $(window).height()-$(".btn-toolbar").height());
+                }
+                that.editor.setValue(p_code);
+              }
+              catch(ex){
+                that.thongbao(ex.message);
+              }
+            },
+            generateUuidV4:function() {
+              if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+                return crypto.randomUUID();
+              } else {
+                // Fallback cho môi trường không hỗ trợ crypto.randomUUID (ví dụ: Node.js cũ)
+                // hoặc cho các trình duyệt rất cũ. Cách này không nên dùng cho môi trường production.
+                return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                  var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+                  return v.toString(16);
+                });
+              }
+            },
+            change_types:function(){
+              var seft=this;
+              seft.csm_obj_tables({app_id:"csm",obj_name:"sys_autos",e_where:{field: "p_type",type: "eq",value: 1*seft.s_type}},function(objDB){
+                if(objDB.hasOwnProperty("rows"))
+                {
+                  seft.sources=objDB.rows.filter((o)=>1*o.p_type==1*seft.s_type).sort((a,b) => (a.p_name > b.p_name) ? 1 : ((b.p_name > a.p_name) ? -1 : 0));
+                  seft.cSource=$("#source").dxSelectBox({
+                  dataSource: new DevExpress.data.DataSource({
+                    store: seft.sources,
+                    paginate: true,
+                    pageSize: 10
+                  }),
+                  placeholder: 'Chọn kiểu code',
+                  searchEnabled: true,
+                  acceptCustomValue: true,
+                  onCustomItemCreating: function(data) {
+                    var d = $.Deferred();
+                    var f=data.text;
+                    var newItem={id:seft.generateUuidV4(),p_name:f,p_type:1*seft.s_type,p_code:seft.csm_encrypt(seft.editor.getValue())};
+                    seft.csm_obj_updates({app_id:"csm",obj_name:"sys_autos",command:"create",obj_update:newItem,e_where:{
+                      operator: "AND",
+                      conditions: []
+                    }},function(msg){
+                      if(msg.success)
+                      {
+                        thongbao("Đã thêm xong");
+                        seft.cSource.getDataSource().store().push([{ type: "insert",data:newItem}]);
+                        d.resolve(newItem);
+                      }
+                    });
+                    return d;
+                  },
+                  searchExpr: ['p_name'],
+                  displayExpr: 'p_name',
+                  valueExpr: 'p_name',
+                  onValueChanged(e) {
+                    seft.s_code=e.value;
+                    seft.fnLoadFile();
+                  },
+                }).dxSelectBox("instance");
+                if(seft.sources.length>0)
+                  setTimeout(function(){
+                    seft.cSource.option('value',seft.sources[0].p_name);
+                  },10);
+                }
+              });
+            }
+          },
+          mounted() {
+            var seft=this;
+            seft.cSource_type=$("#source_type").dxSelectBox({
+              dataSource: new DevExpress.data.DataSource({
+                store: [{ma:0,ten:'JS'},{ma:1,ten:'HTML'}],
+                paginate: true,
+                pageSize: 10
+              }),
+              placeholder: 'Chọn kiểu code',
+              searchExpr: ['ma','ten'],
+              displayExpr: 'ten',
+              valueExpr: 'ma',
+              onValueChanged(e) {
+                seft.s_type=e.value;
+                seft.change_types();
+              },
+            }).dxSelectBox("instance");
+            setTimeout(function(){
+              seft.cSource_type.option('value', 0);
+            },10);
+          },
+          template:`
+            <div class="container-fluid">
+                <div class="card card-primary" style="padding: 0px;height: inherit;">
+                <div class="btn-toolbar">
+                <div class="btn-group" role="group">
+                  <div id="source_type" class="mr-1"></div>
+                  <div id="source" class="mr-1"></div>
+                </div>
+                <div class="btn-group" role="group" v-if="1*s_type===1">
+                <button id="TAG_JS" class="btn btn-primary" data-original-title="Add Code JS mã hóa" @click="Command_Editor('TAG_JS')"><i class="fa fa-tag" aria-hidden="true"></i></button>
+                </div>
+                <div class="btn-group" role="group">
+                <button id="RN" class="btn btn-primary" data-original-title="Tạo React Native Code" @click="Command_Editor('RN')"><i class="fa  fa-bolt fa-lg" aria-hidden="true">
+                  </i></button>
+                  </div>
+                <div class="btn-group" role="group">
+                <button class="btn btn-primary" data-original-title="Lưu" @click="Command_Editor('Save')"><i class="fa fa-save fa-lg" aria-hidden="true">
+                  </i></button>
+                  </div>
+                <div class="input-group" style="width: 271px;">
+                <input type="text" id="query" value="" placeholder="Tên code / Nội dung tìm" class="form-control">
+                <span class="input-group-btn">
+                <button type="button" class="btn btn-warning" data-original-title="Tìm" @click="search()"><i class="fa fa-search fa-lg" aria-hidden="true">
+                  </i></button>
+                  </span>
+                  </div>
+                <div class="input-group" style="width: 227px;">
+                <input type="text" id="replace" value="" placeholder="Thay thế bởi" class="form-control">
+                <span class="input-group-btn">
+                <button type="button" class="btn btn-warning" data-original-title="Thay thế" @click="replace()"><i class="fab fa-stack-overflow fa-lg" aria-hidden="true">
+                  </i></button>
+                  </span>
+                  </div>
+                <div class="input-group" style="width: 160px;">
+                <input type="number" id="gline" value=""  placeholder="Tới dòng" class="form-control">
+                <span class="input-group-btn">
+                <button type="button" class="btn btn-primary" data-original-title="Nhảy tới dòng" @click="Command_Editor('gotoLine')"><i class="fa fa-eye fa-lg" aria-hidden="true">
+                  </i></button>
+                  </span>
+                  </div>
+                <div role="group" class="btn-group">
+                <button data-original-title="Khóa/Mở khóa dòng" @click="Command_Editor('CommentLines')" class="btn btn-warning"><i aria-hidden="true" class="fa fa-key fa-lg"></i></button>
+                <button @click="Command_Editor('SelectALL')" data-original-title="Chọn tất cả" class="btn btn-primary"><i aria-hidden="true" class="fa fa-square fa-lg"></i></button>
+                <button @click="Command_Editor('Begin')" data-original-title="Lưu" class="btn btn-primary"><i aria-hidden="true" class="fas fa-level-up-alt fa-lg"></i></button>
+                <button @click="Command_Editor('End')" data-original-title="Password Reset" class="btn btn-primary"><i aria-hidden="true" class="fas fa-level-down-alt fa-lg"></i></button>
+                <button @click="Command_Editor('Undo')" data-original-title="Deactivate" class="btn btn-primary"><i aria-hidden="true" class="fa fa-reply fa-lg"></i></button>
+                <button @click="Command_Editor('Redo')" data-original-title="Delete" class="btn btn-primary"><i aria-hidden="true" class="fas fa-share fa-lg"></i></button>
+                <button data-original-title="Delete" @click="Command_Editor('Delete')" class="btn btn-danger"><i aria-hidden="true" class="fas fa-trash fa-lg"></i></button>
+                  </div>
+                  </div>
+                <div id="popForm"></div>
+                <textarea id="editor" name="editor"></textarea>
+                </div>
+        </div>`
+          ,style:`
+      body, html{
+      overflow: hidden !important;
+      }
+      .dx-dropdownlist-popup-wrapper{
+        z-index:99999 !important;
+      }
+      .modal-header{
+      display: block !important;
+      }
+      .btn-toolbar{
+      padding: 3px;
+      background-color: #343a40;
+      border-bottom: 1px solid #fff;
+      }
+      .btn-toolbar input{
+      margin-left: 3px;
+      border-radius: 5px 5px 5px 5px!important;
+      }
+      .btn-toolbar button{
+      border-radius: 0.25rem !important;
+      margin-left: 3px !important;
+      }
+      .btn-toolbar .btn-primary{
+      background-color: #3276b1;
+      border-color: #2c699d;
+      }
+      .btn-toolbar .btn-primary:hover{
+      background-color: #072d57;
+      border-color: #072d57;
+      }
+      ul.sidebar-menu>li.treeview {
+      border-bottom: solid 1px #33b5e5;
+      border-top: solid 1px #33b5e5;
+      line-height: 0px;
+      }
+      .treeview-menu > li {
+      margin: 0;
+      height: 41px;
+      line-height: 0px;
+      }
+      .sidebar-menu > li > .treeview-menu {
+      background: #efefef;
+      border-top: solid 1px #33b5e5;
+      padding-top: 20px;
+      }
+      /* .sidebar-menu .treeview-menu {
+      display: none; 
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      padding-left: 5px;
+      } */
+      .fixed .sidebar-menu > li > .treeview-menu {
+      background: white;
+      }
+      .fixed .sidebar-menu > li:hover > a, .fixed .sidebar-menu > li.active > a {
+      background: #001c52;
+      color: white !important;
+      top: -3px;
+      }
+      .CodeMirror {
+        height: inherit !important;
+      }
+      .with-border {
+      border-bottom: solid 2px #33b5e5 !important;
+      border-top: solid 1px #33b5e5 !important;
+      height: 43px;
+      }
+      .aloading,.backhome{
+      display: none;
+      }
+      .swal_login .aloading{
+      display: block;
+      }
+      .modal-open .backhome{
+      display: block;
+      }
+      .content-loading>:not(.pace),
+      .content-loading:before,
+      .content-loading:after {
+      -webkit-transition: opacity .4s ease-in-out;
+      -moz-transition: opacity .4s ease-in-out;
+      -o-transition: opacity .4s ease-in-out;
+      -ms-transition: opacity .4s ease-in-out;
+      transition: opacity .4s ease-in-out
+      }
+      .content-loading:not(.pace-done)>:not(.pace),
+      .content-loading:not(.pace-done):before,
+      .content-loading:not(.pace-done):after {
+      opacity: 0
+      }
+      .content-loading .pace.pace-inactive {
+      display: none;
+      }
+      .content-loading .pace {
+      -webkit-pointer-events: none;
+      pointer-events: none;
+      -webkit-user-select: none;
+      -moz-user-select: none;
+      user-select: none;
+      z-index: 2000;
+      position: fixed;
+      height: 60px;
+      width: 100px;
+      margin: auto;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      }
+      .content-loading .pace .pace-progress {
+      z-index: 2000;
+      position: absolute;
+      height: 60px;
+      width: 100px;
+      -webkit-transform: translate3d(0, 0, 0) !important;
+      -ms-transform: translate3d(0, 0, 0) !important;
+      transform: translate3d(0, 0, 0) !important;
+      }
+      .content-loading .pace .pace-progress:before {
+      content: attr(data-progress-text);
+      text-align: center;
+      color: #fff;
+      background: #29d;
+      border-radius: 50%;
+      font-family: "Helvetica Neue", sans-serif;
+      font-size: 14px;
+      font-weight: 100;
+      line-height: 1;
+      padding: 20% 0 7px;
+      width: 50%;
+      height: 40%;
+      margin: 10px 0 0 30px;
+      display: block;
+      z-index: 999;
+      position: absolute;
+      }
+      .content-loading .pace .pace-activity {
+      font-size: 15px;
+      line-height: 1;
+      z-index: 2000;
+      position: absolute;
+      height: 60px;
+      width: 100px;
+      display: block;
+      -webkit-animation: pace-theme-center-atom-spin 2s linear infinite;
+      -moz-animation: pace-theme-center-atom-spin 2s linear infinite;
+      -o-animation: pace-theme-center-atom-spin 2s linear infinite;
+      animation: pace-theme-center-atom-spin 2s linear infinite;
+      }
+      .content-loading .pace .pace-activity {
+      border-radius: 50%;
+      border: 5px solid #29d;
+      content: ' ';
+      display: block;
+      position: absolute;
+      top: 0;
+      left: 0;
+      height: 60px;
+      width: 100px;
+      }
+      .content-loading .pace .pace-activity:after {
+      border-radius: 50%;
+      border: 5px solid #29d;
+      content: ' ';
+      display: block;
+      position: absolute;
+      top: -5px;
+      left: -5px;
+      height: 60px;
+      width: 100px;
+      -webkit-transform: rotate(60deg);
+      -moz-transform: rotate(60deg);
+      -o-transform: rotate(60deg);
+      transform: rotate(60deg);
+      }
+      tr.child div.dataTables_sizing{
+      height: 30px !important;
+      }
+      .dataTables_scrollHeadInner , .dataTables_scrollHeadInner .dataTable{
+      width: inherit !important;
+      }
+      .content-loading .pace .pace-activity:before {
+      border-radius: 50%;
+      border: 5px solid #29d;
+      content: ' ';
+      display: block;
+      position: absolute;
+      top: -5px;
+      left: -5px;
+      height: 60px;
+      width: 100px;
+      -webkit-transform: rotate(120deg);
+      -moz-transform: rotate(120deg);
+      -o-transform: rotate(120deg);
+      transform: rotate(120deg);
+      }
+      @-webkit-keyframes pace-theme-center-atom-spin {
+      0% {
+      -webkit-transform: rotate(0deg);
+      }
+      100% {
+      -webkit-transform: rotate(359deg);
+      }
+      }
+      @-moz-keyframes pace-theme-center-atom-spin {
+      0% {
+      -moz-transform: rotate(0deg);
+      }
+      100% {
+      -moz-transform: rotate(359deg);
+      }
+      }
+      @-o-keyframes pace-theme-center-atom-spin {
+      0% {
+      -o-transform: rotate(0deg);
+      }
+      100% {
+      -o-transform: rotate(359deg);
+      }
+      }
+      @keyframes pace-theme-center-atom-spin {
+      0% {
+      transform: rotate(0deg);
+      }
+      100% {
+      transform: rotate(359deg);
+      }
+      }
+      .content-loaded .pace {
+      -webkit-pointer-events: none;
+      pointer-events: none;
+      -webkit-user-select: none;
+      -moz-user-select: none;
+      user-select: none;
+      }
+      .content-loaded .pace-inactive {
+      display: none;
+      }
+      .content-loaded .pace .pace-progress {
+      background: #29d;
+      position: fixed;
+      z-index: 2000;
+      top: 0;
+      right: 100%;
+      width: 100%;
+      height: 2px;
+      }
+      div.sa-icon.sa-success.animate{
+      height: 85px;
+      }
+      /*.mdl-data-table thead tr th {
+      border: solid 1px gray;
+      }*/
+      .mdl-data-table tbody tr {
+      height: 33px;
+      }
+      .mdl-data-table td {
+      height: 36px !important;
+      padding: 3px;
+      border: solid 1px gray;
+      }
+      table.dataTable.dtr-inline.collapsed > tbody > tr.parent > td:first-child:before, table.dataTable.dtr-inline.collapsed > tbody > tr.parent > th:first-child:before{
+      content: '\f106';
+      font-family: FontAwesome;
+      background-color: transparent;
+      color: black;
+      border: none;
+      border-radius: inherit;
+      box-shadow: none;
+      box-sizing: content-box;
+      }
+      table.dataTable.dtr-inline.collapsed > tbody > tr > td:first-child:before, table.dataTable.dtr-inline.collapsed > tbody > tr > th:first-child:before{
+      content: '\f107';
+      font-family: FontAwesome;
+      background-color: transparent;
+      color: black;
+      border: none;
+      border-radius: inherit;
+      box-shadow: none;
+      box-sizing: content-box;
+      }
+      body{
+      font-family: "Helvetica Neue",Helvetica,Arial,sans-serif !important;
+      }
+      .dhxtoolbar_text .btn{
+      margin-top: -10px;
+      }
+      .dhxtoolbar_text i{
+      padding-right: 5px;
+      }
+      @media (min-width: 768px){
+      .sidebar-mini.sidebar-collapse .main-header .navbar{
+      margin-left: 50px;
+      }
+      }
+      .main-header .logo {
+      line-height: 43px;
+      }
+      .main-header .navbar-brand,.main-header .navbar .nav > li > a{
+      line-height: 9px;
+      }
+      .main-header .sidebar-toggle:before{
+      content:'\f015';
+      padding: 10px 5px !important;
+      font-size: 20px;
+      cursor: pointer;
+      }
+      .main-header .sidebar-toggle {
+      padding: 0px;
+      padding-top: 10px;
+      padding-left: 5px;
+      height: 43px;
+      }
+      .main-header,.main-header .logo{
+      max-height: 43px;
+      }
+      .main-header .app_name{
+      text-transform: uppercase;
+      padding-left: 9px;
+      font-weight: bold;
+      }
+      .navbar .sidebar-toggle {
+      margin-left: 0px !important;
+      }
+      .main-header .navbar {
+      min-height: 43px;
+      }
+      .modal-backdrop.in {
+      opacity: 0;
+      }
+      .modal.in .modal-dialog {
+      -webkit-transform: translate(0, 0);
+      -ms-transform: translate(0, 0);
+      -o-transform: translate(0, 0);
+      transform: translate(0, 0);
+      z-index: 9999;
+      }
+      @media (max-width: 767px){
+      .main-header .logo{
+      display: none;
+      }
+      body {
+      padding-right: 0px;
+      padding-left: 0px;
+      }
+      }
+      #tab-list a{
+      cursor: pointer;
+      font-weight: bold;
+      color: #1578c9;
+      font-size: 12pt;
+      }
+      #tab-list button.close {
+      float: left!important;
+      padding-right: 15px!important;
+      margin-top: -2px !important;
+      }
+      .tab-pane {
+      display: block;
+      height: inherit;
+      }
+      .tab-content {
+      overflow: visible;
+      padding:0px;
+      border:1px solid;
+      }
+      .dhtmlx_message_area{
+      z-index:9999;
+      }
+      .hideWPrint {
+      position: fixed;
+      border: 1px solid #929292;
+      padding: 0px;
+      border-radius: 4px;
+      background: #fff;
+      padding: 5px;
+      padding-bottom:0px;
+      z-index: 899;
+      }
+      .hideWPrint img {
+      cursor: pointer;
+      display: block;
+      padding: 7px;
+      margin-bottom: 5px;
+      }
+      .hideWPrint img:hover{
+      border:1px solid #bebebe;
+      padding: 6px;
+      border-radius:3px;
+      }
+      .element {
+      width: 120px;
+      height: 160px;
+      box-shadow: 0px 0px 12px rgba(0,255,255,0.5);
+      border: 1px solid rgba(127,255,255,0.25);
+      text-align: center;
+      cursor: default;
+      }
+      .element:hover {
+      box-shadow: 0px 0px 12px rgba(0,255,255,0.75);
+      border: 1px solid rgba(127,255,255,0.75);
+      }
+      .element .number {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      font-size: 12px;
+      color: rgba(127,255,255,0.75);
+      }
+      .element .symbol {
+      position: absolute;
+      top: 40px;
+      left: 0px;
+      right: 0px;
+      font-size: 60px;
+      font-weight: bold;
+      color: rgba(255,255,255,0.75);
+      text-shadow: 0 0 10px rgba(0,255,255,0.95);
+      }
+      .element .details {
+      position: absolute;
+      bottom: 15px;
+      left: 0px;
+      right: 0px;
+      font-size: 12px;
+      color: rgba(127,255,255,0.75);
+      }
+      button {
+      color: rgba(127,255,255,0.75);
+      background: transparent;
+      outline: 1px solid rgba(127,255,255,0.75);
+      border: 0px;
+      padding: 5px 10px;
+      cursor: pointer;
+      }
+      button:hover {
+      background-color: rgba(0,255,255,0.5);
+      }
+      button:active {
+      color: #000000;
+      background-color: rgba(0,255,255,0.75);
+      }
+      .web_terminal{
+      display:none;
+      width: 100vw;
+      height: 100vh;
+      padding: 5px;
+      background-color: #000;
+      font-family: 'Andale Mono';
+      font-size: 14px;
+      color: #29fe13;
+      box-sizing: border-box;
+      -webkit-box-sizing: border-box;
+      }
+      .web_terminal *{
+      margin: 0;
+      padding: 0;
+      }
+      #developer .bootstrap-select{
+      width: 160px;
+      }
+      .web_terminal .output{
+      width: 100vw;
+      line-height: 18px;
+      }
+      .web_terminal .input{
+      position: relative;
+      width: 100vw;
+      height: 18px;
+      line-height: 18px;
+      }
+      .web_terminal .input .indicator{
+      width: 20px;
+      line-height: 18px;
+      }
+      .web_terminal .input input{
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 100vw;
+      height: 100%;
+      text-indent: 16px;
+      line-height: 18px;
+      border: none;
+      outline: none;
+      background: none;
+      font-family: 'Andale Mono', 'Courier New';
+      font-size: 14px;
+      color: #29fe13;
+      }
+      .camera_move {
+      border: 1px solid #000;
+      width: 640px;
+      height:  480px;
+      position: absolute;
+      top: 0;
+      opacity: 1;
+      left: 0;
+      }
+      .canvas_draw {
+      position: absolute;
+      opacity: 1;
+      top: 0;
+      left: 0;
+      width: 640px;
+      height:  480px;
+      }
+      .movement {
+      position: absolute;
+      top: 0;
+      left: 0;
+      border: 1px solid red;
+      background: rgba(255,0,0,0.3);
+      }
+      /* CSS từ codsycorp */
+      body,html{
+      font-family: "Helvetica Neue",Helvetica,Arial,sans-serif !important;
+      background-color: #021d2d;
+      overflow: hidden;
+      }
+      .with-border{
+      border-bottom: solid 2px #001c52!important;
+      border-top: solid 1px #001c52!important;
+      }
+      .swal-content button,.nav button{
+      outline: none !important;
+      }
+      .dhxtoolbar_text .btn{
+      margin-top: -10px;
+      }
+      .dhxtoolbar_text i{
+      padding-right: 5px;
+      }
+      @media (min-width: 768px){
+      .sidebar-mini.sidebar-collapse .main-header .navbar{
+      margin-left: 50px;
+      }
+      }
+      .dhxtabbar_base_dhx_web div.dhxtabbar_tabs,.gridbox_dhx_web .form_cell{
+      background-color: #001c52  !important;
+      }
+      .gridbox_dhx_web .form_cell>strong{
+      color: white !important;
+      }
+      .dhxtabbar_base_dhx_web div.dhxtabbar_tabs div.dhxtabbar_tab.dhxtabbar_tab_actv div.dhxtabbar_tab_text {
+      color: #001c52;
+      }
+      ul.sidebar-menu>li.treeview {
+      border-bottom: solid 1px #001c52;
+      border-top: solid 1px #001c52;
+      line-height: 0px;
+      }
+      li.treeview>a,#tab-list a{
+      color:#001c52 !important;
+      }
+      .sidebar-menu .treeview-menu > li > a{
+      padding-bottom: 15px !important;
+      }
+      .sidebar-menu > li > .treeview-menu {
+      padding-top: 5px !important;
+      }
+      .treeview >.treeview-menu {
+      padding-top: 15px;
+      }
+      .treeview-menu > li {
+      margin: 0;
+      height: 41px;
+      line-height: 0px;
+      }
+      .treeview >.treeview-menu{
+      border-bottom: solid 1px #001c52;
+      border-top: solid 1px #001c52;
+      }
+      .sidebar-menu li
+      {
+      padding-top: 5px;
+      }
+      .treeview-menu >li{
+      height: auto;
+      }
+      .sidebar-menu > li > .treeview-menu {
+      background: #efefef;
+      border-top: solid 1px #001c52;
+      padding-top: 20px;
+      }
+      .with-border {
+      border-bottom: solid 2px #001c52 !important;
+      border-top: solid 1px #001c52 !important;
+      height: 45px;
+      }
+      .main-header .logo {
+      line-height: 43px;
+      }
+      .main-header .navbar-brand,.main-header .navbar .nav > li > a{
+      line-height: 9px;
+      }
+      .main-header .sidebar-toggle:before{
+      content:'\f015';
+      padding: 10px 5px !important;
+      font-size: 20px;
+      cursor: pointer;
+      }
+      .navbar-nav > .user-menu .user-image{
+      margin-top: -7px !important;
+      }
+      .navbar-nav > .user-menu > .dropdown-menu > .user-body {
+      padding: 0px;
+      padding-left: 15px;
+      }
+      .navbar-nav > .user-menu > .dropdown-menu > li.user-header {
+      height: 185px;
+      }
+      #tab-content .content-wrapper{
+      margin-top: 1px;
+      }
+      .main-header .navbar{
+      margin-left: 0px;
+      }
+      .form-module .toggle{
+      background:#001c52 !important;
+      }
+      div.cta
+      {
+      border-top: solid;
+      }
+      .bg-white{
+      background:white !important;
+      }
+      button{
+      outline: none !important;
+      }
+      .tab-pane button:hover{
+      outline: none !important;
+      border: 1px solid #001c52;
+      background: transparent !important;
+      }
+      .form-module button{
+      background: white !important;
+      outline: 1px solid #001c52 !important;
+      color: #001c52;
+      }
+      .form-module button:hover{
+      background: #001c52 !important;
+      outline: 1px solid #001c52 !important;
+      color: white;
+      }
+      .form-module {
+      border: 1px solid #001c52;
+      border-top: 9px solid #001c52;
+      }
+      .social-btn .btn {
+      padding: 6px 10px;
+      }
+      .main-header .sidebar-toggle {
+      padding: 9px 15px;
+      }
+      .main-header,.main-header .logo{
+      max-height: 43px;
+      }
+      .main-header .app_name{
+      text-transform: uppercase;
+      padding-left: 9px;
+      font-weight: bold;
+      }
+      .navbar .sidebar-toggle {
+      margin-left: -15px !important;
+      }
+      .main-header .navbar {
+      min-height: 43px;
+      }
+      .modal-backdrop.in {
+      opacity: 0;
+      }
+      .modal.in .modal-dialog {
+      -webkit-transform: translate(0, 0);
+      -ms-transform: translate(0, 0);
+      -o-transform: translate(0, 0);
+      transform: translate(0, 0);
+      z-index: 9999;
+      }
+      @media (max-width: 767px){
+      .main-header .logo{
+      display: none;
+      }
+      body {
+      padding-right: 0px;
+      padding-left: 0px;
+      }
+      }
+      #tab-list a{
+      cursor: pointer;
+      font-weight: bold;
+      color: #1578c9;
+      font-size: 12pt;
+      }
+      #tab-list button.close {
+      float: left!important;
+      padding-right: 15px!important;
+      margin-top: -2px !important;
+      }
+      .tab-pane {
+      display: block;
+      height: inherit;
+      }
+      .tab-content {
+      overflow: visible;
+      padding:0px;
+      border:1px solid;
+      }
+      .dhtmlx_message_area{
+      z-index:9999;
+      }
+      .hideWPrint {
+      position: fixed;
+      border: 1px solid #929292;
+      padding: 0px;
+      border-radius: 4px;
+      background: #fff;
+      padding: 5px;
+      padding-bottom:0px;
+      z-index: 899;
+      }
+      .hideWPrint img {
+      cursor: pointer;
+      display: block;
+      padding: 7px;
+      margin-bottom: 5px;
+      }
+      .hideWPrint img:hover{
+      border:1px solid #bebebe;
+      padding: 6px;
+      border-radius:3px;
+      }
+      .element {
+      width: 120px;
+      height: 160px;
+      box-shadow: 0px 0px 12px rgba(0,255,255,0.5);
+      border: 1px solid rgba(127,255,255,0.25);
+      text-align: center;
+      cursor: default;
+      }
+      .element:hover {
+      box-shadow: 0px 0px 12px rgba(0,255,255,0.75);
+      border: 1px solid rgba(127,255,255,0.75);
+      }
+      .element .number {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      font-size: 12px;
+      color: rgba(127,255,255,0.75);
+      }
+      .element .symbol {
+      position: absolute;
+      top: 40px;
+      left: 0px;
+      right: 0px;
+      font-size: 60px;
+      font-weight: bold;
+      color: rgba(255,255,255,0.75);
+      text-shadow: 0 0 10px rgba(0,255,255,0.95);
+      }
+      .element .details {
+      position: absolute;
+      bottom: 15px;
+      left: 0px;
+      right: 0px;
+      font-size: 12px;
+      color: rgba(127,255,255,0.75);
+      }
+      button {
+      color: rgba(127,255,255,0.75);
+      background: transparent;
+      outline: 1px solid rgba(127,255,255,0.75);
+      border: 0px;
+      padding: 5px 10px;
+      cursor: pointer;
+      }
+      button:hover {
+      background-color: rgba(0,255,255,0.5);
+      }
+      button:active {
+      color: #000000;
+      background-color: rgba(0,255,255,0.75);
+      }
+      .fa-zalo:before {
+      content: "Z";
+      }
+      .or-seperator {
+      margin: 20px 0 0px;
+      text-align: center;
+      border-top: 1px solid #001c52;
+      }
+      .or-seperator i {
+      padding: 0 10px;
+      background: white;
+      position: relative;
+      top: -11px;
+      z-index: 1;
+      }
+      .social-btn .btn {
+      font-size: 15px;
+      text-align: left;
+      line-height: 24px;
+      }
+      .social-btn .btn i {
+      float: left;
+      margin: 4px 5px 0 -5px;
+      min-width: 15px;
+      }
+      .swal_login{
+      width: 375px;
+      }
+      div.gridbox_dhx_web.gridbox table.obj tr td {
+      color: #000 !important;
+      }
+      .tab-pane>div.gridbox_dhx_web.gridbox {
+      height: -webkit-calc(100vh - 87px) !important;
+      width: inherit !important;
+      }
+      .tab-content>section{
+      margin-top: 3px;
+      }
+      .tab-content > .tab-pane>.box-header
+      {
+      padding-top: 5px !important;
+      height: 45px;
+      }
+      /* .dhxtabbar_base_dhx_web div.dhxtabbar_tabs div.dhxtabbar_tabs_ar_left div.dhxtabbar_arrow_img{
+      background-image:url('assets/imgs/ar_left_abs_dis.gif') !important;
+      background-position: unset;
+      top: 7px;
+      left: -1px;
+      }
+      .dhxtabbar_base_dhx_web div.dhxtabbar_tabs div.dhxtabbar_tabs_ar_right div.dhxtabbar_arrow_img{
+      background-image:url('assets/imgs/ar_right_abs_dis.gif') !important;
+      background-position: unset;
+      left: -9px;
+      top: 5px;
+      } */
+      .dhxlayout_cont
+      {
+      overflow: hidden;
+      height: 100% !important;
+      width: 100% !important;
+      }
+      .dhxtabbar_base_dhx_web div.dhxtabbar_tabs 
+      {
+      width: 100% !important;
+      }
+      .dhx_cell_cont_tabbar
+      {
+      /*display:flex;*/
+      /*flex-direction:column;*/
+      width: 100% !important;
+      /*height: 100% !important;*/
+      overflow: hidden;
+      }
+      .dhxtabbar_base_dhx_web div.dhxtabbar_tabs div.dhxtabbar_tabs_base
+      {
+      width: 100% !important;
+      }
+      .dhx_cell_tabbar
+      {
+      width: 100% !important;
+      /*height: 100% !important;*/
+      }
+      .dhxlayout_base_dhx_web div.dhx_cell_layout div.dhx_cell_cont_layout
+      {
+      top: 40px!important;
+      bottom: 50px;
+      position: absolute !important;
+      overflow-x: auto !important;
+      width: 100% !important;
+      height: auto !important;
+      }
+      .dhxcelltop_statusbar
+      {
+      width: 100%!important;
+      left: 0px!important;
+      bottom: 10px!important;
+      position: absolute!important;
+      border-top: 2px solid #53abe6;
+      padding: 5px;
+      background-color: #ededed;
+      }
+      .dhxlayout_base_dhx_web
+      {
+      position: absolute !important;
+      }
+      .dhxlayout_base_dhx_web div.dhx_cell_layout
+      {
+      /*top: 30px !important;*/
+      width: 100% !important;
+      /*bottom: 30px !important;*/
+      /*height: 100% !important;*/
+      }
+      /*.dhx_cell_layout*/
+      /*{*/
+      /*    display: table-row;*/
+      /*    width: 100% !important; */
+      /*     height: 300px !important; */
+      /*    position: relative !important;*/
+      /*}*/
+      /*.dhx_cell_layout:nth-of-type(1)*/
+      /*{*/
+      /* height: auto !important;   */
+      /*}*/
+      .dhx_cell_cont_layout
+      {
+      /*position: relative !important;*/
+      width: inherit !important;
+      /*height: inherit !important;*/
+      }
+      .layout_master_detail {
+      height:inherit !important;
+      width:100% !important;
+      display:flex;
+      flex-direction:column;
+      }
+      .layout_master_detail > * {
+      width:100% !important;
+      flex-shrink: 0;
+      }
+      .layout_cell_master_details {
+      position: relative !important;
+      flex-grow: 1;
+      }
+      .dhxtabbar_base_dhx_web div.dhx_cell_tabbar div.dhx_cell_toolbar_def div.dhx_toolbar_dhx_web {
+      background-color: white!important;
+      height: 100% !important;
+      color: black;
+      }
+      div.dhx_cell_progress_img:before{
+      background-image:url("assets/loading.gif")  !important;
+      }
+      .dhxtabbar_tabs_ar_left .dhxtabbar_arrow_img {
+      background-image:none  !important;
+      }
+      .dhxtabbar_tabs_ar_left .dhxtabbar_arrow_img:before {
+      background-image:none  !important;
+      content: "\f104";
+      font-family: FontAwesome;
+      font-style: normal;
+      font-weight: normal;
+      text-decoration: inherit;
+      /*--adjust as necessary--*/
+      color: white;
+      font-size: 25px;
+      padding-right: 0.5em;
+      position: absolute;
+      top: 7px;
+      left: 2px;
+      }
+      .dhxtabbar_tabs_ar_right .dhxtabbar_arrow_img {
+      background-image:none  !important;
+      }
+      .dhxtabbar_tabs_ar_right .dhxtabbar_arrow_img:before {
+      background-image:none  !important;
+      content: "\f105";
+      font-family: FontAwesome;
+      font-style: normal;
+      font-weight: normal;
+      text-decoration: inherit;
+      /*--adjust as necessary--*/
+      color: white;
+      font-size: 25px;
+      padding-right: 0.5em;
+      position: absolute;
+      top: 7px;
+      left: 2px;
+      }
+      div.dhxcombo_dhx_web
+      {
+      width: 25px !important;
+      }
+      div.dhxcombo_dhx_web div.dhxcombo_select_button,div.dhxcombo_dhx_web div.dhxcombo_top_image {
+      top: 0px;
+      left: 3px;
+      width: 10px;
+      height: 17px;
+      border-top: 2px solid transparent;
+      border-left: 2px solid transparent;
+      border-right: 2px solid #001c52;
+      border-bottom: 2px solid #001c52;
+      -webkit-transform: rotate(40deg);
+      -ms-transform: rotate(40deg);
+      transform: rotate(40deg);
+      -webkit-backface-visibility: hidden;
+      backface-visibility: hidden;
+      -webkit-transform-origin: 100% 100%;
+      -ms-transform-origin: 100% 100%;
+      transform-origin: 100% 100%;
+      background: none !important;
+      }
+      div.dhxcombo_dhx_web div.dhxcombo_top_image:before {
+      background: white;
+      content: "\f000";
+      font-family: FontAwesome;
+      font-style: normal;
+      font-weight: normal;
+      text-decoration: inherit;
+      color: green;
+      font-size: 18px;
+      padding-right: 0.5em;
+      position: absolute;
+      top: 10px;
+      left: 0;
+      }
+      div.dhxcombo_dhx_web{
+      border: none;
+      }
+      .dhtmlxcalendar_container.dhtmlxcalendar_skin_dhx_web {
+      z-index: 99999;
+      }
+      .dhxcombo_select_img ,.dhx_cell_progress_img
+      {
+      background-image: none !important;
+      background: none !important;
+      }
+      div.dhxcombolist_dhx_web div.dhxcombo_option div.dhxcombo_checkbox.dhxcombo_chbx_1 {
+      top: 2px;
+      left: 3px;
+      width: 9px;
+      height: 16px;
+      border-top: 2px solid transparent;
+      border-left: 2px solid transparent;
+      border-right: 2px solid #001c52;
+      border-bottom: 2px solid #001c52;
+      -webkit-transform: rotate(40deg);
+      -ms-transform: rotate(40deg);
+      transform: rotate(40deg);
+      -webkit-backface-visibility: hidden;
+      backface-visibility: hidden;
+      -webkit-transform-origin: 100% 100%;
+      -ms-transform-origin: 100% 100%;
+      transform-origin: 100% 100%;
+      }
+      div.dhxcombolist_dhx_web div.dhxcombo_option div.dhxcombo_checkbox.dhxcombo_chbx_0{
+      content: '';
+      position: absolute;
+      top: 1px;
+      left: 5px;
+      width: 15px;
+      height: 15px;
+      z-index: 0;
+      border: 2px solid #001c52;
+      -webkit-border-radius: 1px;
+      border-radius: 1px;
+      margin-top: 3px;
+      -webkit-transition: .2s;
+      -o-transition: .2s;
+      transition: .2s;
+      }
+      @media (min-width: 768px)
+      {
+      .sidebar-mini.sidebar-collapse .main-header .logo > .logo-mini {
+      display: block;
+      margin-left: -33px;
+      margin-top: -22px;
+      font-size: 18px;
+      height: 80px;
+      padding: 0px;
+      }
+      .fixed .main-header .navbar .sidebar-toggle {
+      display: none;
+      }
+      .navbar-form
+      {
+      margin-top: 4px;
+      margin-left: 46px;
+      }
+      }
+      /* .img-circle,.user-image,#imgUser{
+      transform: rotate(90deg);
+      }
+      @media only screen 
+      and (min-width: 800px) 
+      and (max-height: 1366px) 
+      and (-webkit-min-device-pixel-ratio: 1.5) {
+      body.mobile .img-circle,.user-image,#imgUser{
+      transform: rotate(0deg);
+      }
+      } */
+      /* Portrait */
+      /* @media only screen 
+      and (min-width: 800px) 
+      and (max-height: 1366px) 
+      and (orientation: portrait) 
+      and (-webkit-min-device-pixel-ratio: 1.5) {
+      body.mobile .img-circle,.user-image,#imgUser{
+      transform: rotate(0deg);
+      }
+      } */
+      /* Landscape */
+      /* @media only screen 
+      and (min-width: 800px) 
+      and (max-height: 1366px) 
+      and (orientation: landscape) 
+      and (-webkit-min-device-pixel-ratio: 1.5) {
+      body.mobile .img-circle,.user-image,#imgUser{
+      transform: rotate(0deg);
+      }
+      } */
+      @media (max-width: 767px)
+      {
+      /*   body.mobile .img-circle,.user-image,#imgUser{
+      transform: rotate(0deg);
+      } */
+      /*   .img-circle,.user-image,#imgUser{
+      transform: rotate(90deg);
+      } */
+      .swal_login {
+      width: 100vw;
+      height: 100vh;
+      margin: 0px;
+      overflow: scroll;
+      }
+      .navbar-form {
+      width: 135px;
+      margin-left: 37px;
+      position: absolute;
+      padding: 0px;
+      margin-top: -45px !important;
+      }
+      .navbar-form .form-group:last-child {
+      margin-bottom: 0;
+      }
+      .btn-group.open .dropdown-toggle,.bootstrap-select.btn-group:not(.input-group-btn), .bootstrap-select.btn-group[class*="col-"]{
+      width: 135px !important;
+      background: white;
+      }
+      .fixed .main-header .navbar .dropdown-menu li a {
+      color: black;
+      }
+      .fixed .main-header .navbar .sidebar-toggle {
+      margin-left: 5px !important;
+      }
+      .sidebar{
+      display: none;
+      }
+      body.sidebar-open .sidebar{
+      display: block !important;
+      }
+      }
+      .skin-black .wrapper, .skin-black .main-sidebar, .skin-black .left-side {
+      background-color: white;
+      }
+      .sidebar-mini.sidebar-collapse .content-wrapper, .sidebar-mini.sidebar-collapse .right-side, .sidebar-mini.sidebar-collapse .main-footer
+      {
+      background: white !important;
+      border: 1px solid #efefef !important;
+      }
+      .content {
+      height: -webkit-calc(100vh - 90px) !important;
+      overflow: scroll;
+      background: white;
+      }
+      .sidebar .list-group i
+      {
+      width: 25px;
+      }
+      .navbar-header{
+      width: 25px;
+      display: inline-block;
+      }
+      .apps_pages
+      {
+      background: rgba(0, 0, 0, 0.3);
+      top: 51px;
+      right: 0;
+      bottom: 0;
+      left: 0;
+      }
+      .main-sidebar{
+      margin-top: -7px;
+      }
+      body.sidebar-open .apps_pages .main-sidebar {
+      top: -49px;
+      width: 100%;
+      }
+      /* .modal-open .sidebar{
+      display: block;
+      } */
+      body.sidebar-open .tab-pane,.main-footer{
+      display:none;
+      }
+      .stepwizard-step p {
+      margin-top: 10px;
+      }
+      .stepwizard-row {
+      display: table-row;
+      }
+      .stepwizard {
+      display: table;
+      width: 50%;
+      position: relative;
+      margin: 0 25%;
+      padding-bottom: 3px;
+      }
+      .stepwizard-step button[disabled] {
+      opacity: 1 !important;
+      filter: alpha(opacity=100) !important;
+      }
+      .stepwizard-row:before {
+      top: 14px;
+      bottom: 0;
+      position: absolute;
+      content: " ";
+      width: 100%;
+      height: 1px;
+      background-color: #ccc;
+      z-order: 0;
+      }
+      .stepwizard-step {
+      display: table-cell;
+      text-align: center;
+      position: relative;
+      }
+      .btn-circle {
+      width: 30px;
+      height: 30px;
+      text-align: center;
+      padding: 6px 0;
+      font-size: 12px;
+      line-height: 1.428571429;
+      border-radius: 15px;
+      }
+      .switch {
+      position: relative;
+      display: inline-block;
+      width: 60px;
+      height: 34px;
+      }
+      .switch input {
+      display:none;
+      }
+      .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-color: #ccc;
+      -webkit-transition: .4s;
+      transition: .4s;
+      }
+      .slider:before {
+      position: absolute;
+      content: "";
+      height: 26px;
+      width: 26px;
+      left: 4px;
+      bottom: 4px;
+      background-color: white;
+      -webkit-transition: .4s;
+      transition: .4s;
+      }
+      input:checked + .slider {
+      background-color: #2196F3;
+      }
+      input:focus + .slider {
+      box-shadow: 0 0 1px #2196F3;
+      }
+      input:checked + .slider:before {
+      -webkit-transform: translateX(26px);
+      -ms-transform: translateX(26px);
+      transform: translateX(26px);
+      }
+      .slider.round {
+      border-radius: 34px;
+      }
+      .slider.round:before {
+      border-radius: 50%;
+      }
+      .switch-label {
+      position: relative;
+      cursor: pointer;
+      font-size: 16px;
+      line-height: 24px;
+      margin: 0;
+      left: 15px;
+      top: -15px;
+      }
+      .top-100 {
+      margin-top: 100px;
+      text-align: center;
+      }
+      .modal-backdrop {
+      z-index: -1;
+      }
+      .gridcelltype .bs-searchbox {
+      padding: 0px !important;
+      margin-top: -38px;
+      }
+      `}).$mount("#csm_apps");
+    </script>
+  </body>
+</html>

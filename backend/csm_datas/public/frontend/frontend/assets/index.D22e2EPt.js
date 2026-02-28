@@ -1,0 +1,1 @@
+import{j as o}from"./index.DtMulOe_.js";import r from"./index.gn7ckw9Y.js";import"./react.DVuwCT6o.js";import"./antd.Cqk3zFLl.js";import"./CsmMasterDetail.Btti4MfS.js";function n(){return o.jsx(r,{})}export{n as default};

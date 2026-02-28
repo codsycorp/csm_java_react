@@ -1,0 +1,20 @@
+ROSTemplateFormatVersion: '2015-09-01'
+Transform: 'Aliyun::Serverless-2018-04-03'  # Phiên bản được hỗ trợ
+Resources:
+  BackendService:
+    Type: 'Aliyun::Serverless::Service'
+    Properties:
+      InternetAccess: true  # Cho phép truy cập từ internet nếu cần
+    BackendFunction:
+      Type: 'Aliyun::Serverless::Function'
+      Properties:
+        Handler: net.phongthuyphattam.Main::handleRequest
+        Runtime: java11
+        CodeUri: ./backend/target/
+        Timeout: 60
+      Events:
+        HttpTrigger:
+          Type: HTTP
+          Properties:
+            AuthType: ANONYMOUS  # Không yêu cầu xác thực
+            Methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]  # Hỗ trợ tất cả phương thức HTTP

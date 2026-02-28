@@ -1,0 +1,27 @@
+edition: 1.0.0
+name: alifc-jbackend
+access: default
+
+services:
+  alifc-jbackend:
+    component: devsapp/fc
+    props:
+      region: cn-hangzhou # Thay đổi theo khu vực của bạn
+      service:
+        name: alifc-jbackend-service
+        description: "Java backend service"
+      function:
+        name: alifc-jbackend-function
+        description: "Java backend function"
+        runtime: custom-container
+        handler: not-used
+        memorySize: 512
+        timeout: 60
+        customContainerConfig:
+          image: <your-docker-image> # Thay bằng tên image Docker của bạn
+      triggers:
+        - name: httpTrigger
+          type: http
+          config:
+            authType: anonymous
+            methods: ["GET", "POST", "PUT", "DELETE"]

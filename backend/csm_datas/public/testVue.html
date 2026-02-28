@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Vue 3 + mitt (EventBus)</title>
+  <!-- Vue 3 -->
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <!-- mitt -->
+  <script src="https://unpkg.com/mitt/dist/mitt.umd.js"></script>
+</head>
+<body>
+  <div id="app"></div>
+
+  <script>
+    // Khởi tạo EventBus
+    const EventBus = mitt();
+
+    // Component phát sự kiện
+    const ComponentA = {
+      template: `
+        <div style="border:1px solid #ccc; padding:10px; margin-bottom:10px">
+          <h2>Component A</h2>
+          <button @click="send">Gửi sự kiện updatedb</button>
+        </div>
+      `,
+      methods: {
+        send() {
+          console.log('📤 Emit updatedb');
+          EventBus.emit('updatedb', {
+            cmd: 'update',
+            obj_name: 'users',
+            data: { id: 1, name: 'Nguyễn Văn A' }
+          });
+        }
+      }
+    };
+
+    // Component lắng nghe sự kiện
+    const ComponentB = {
+      data() {
+        return {
+          received: '⏳ Chưa nhận được dữ liệu'
+        };
+      },
+      template: `
+        <div style="border:1px solid #ccc; padding:10px">
+          <h2>Component B</h2>
+          <pre>{{ received }}</pre>
+        </div>
+      `,
+      mounted() {
+        console.log('📥 Component B đăng ký lắng nghe updatedb');
+        EventBus.on('updatedb', (payload) => {
+          console.log('📥 Nhận được updatedb:', payload);
+          this.received = JSON.stringify(payload, null, 2);
+        });
+      },
+      beforeUnmount() {
+        EventBus.off('updatedb');
+      }
+    };
+
+    // Tạo Vue App
+    const app = Vue.createApp({
+      components: {
+        ComponentA,
+        ComponentB
+      },
+      template: `
+        <component-a></component-a>
+        <component-b></component-b>
+      `
+    });
+
+    app.mount('#app');
+  </script>
+</body>
+</html>

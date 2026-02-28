@@ -1,0 +1,80 @@
+{
+	"title": "Tùy chọn",
+	"copyPreferences": "Sao chép tùy chọn",
+	"copyPreferencesSuccessTitle": "Sao chép thành công",
+	"copyPreferencesSuccess": "Sao chép thành công, vui lòng ghi đè trong `src/store/preferences.ts`",
+	"clearAndLogout": "Xóa bộ nhớ đệm & Đăng xuất",
+	"theme": {
+		"title": "Chủ đề",
+		"followSystem": "Theo hệ thống",
+		"light": "Sáng",
+		"dark": "Tối",
+		"colorBlindMode": "Chế độ mù màu",
+		"grayMode": "Chế độ xám",
+		"radius": "Bán kính",
+		"builtin": {
+			"title": "Tích hợp sẵn",
+			"red": "Đỏ bụi",
+			"volcano": "Núi lửa",
+			"orange": "Cam hoàng hôn",
+			"gold": "Vàng cúc",
+			"yellow": "Vàng bình minh",
+			"lime": "Chanh",
+			"green": "Xanh cực",
+			"cyan": "Xanh lơ",
+			"blue": "Xanh bình minh",
+			"geekblue": "Xanh geek",
+			"purple": "Tím hoàng kim",
+			"magenta": "Đỏ tươi",
+			"gray": "Xám",
+			"custom": "Tùy chỉnh"
+		}
+	},
+	"layout": {
+		"title": "Bố cục",
+		"topNavigation": "Điều hướng trên cùng",
+		"topNavigationTip": "Menu ở vị trí trên cùng",
+		"sideNavigation": "Điều hướng bên",
+		"sideNavigationTip": "Menu ở vị trí bên",
+		"twoColumnNavigation": "Điều hướng hai cột",
+		"twoColumnNavigationTip": "Menu hai cột dọc ở vị trí bên",
+		"mixedNavigation": "Điều hướng hỗn hợp",
+		"mixedNavigationTip": "Điều hướng chính ở trên cùng, điều hướng phụ ở bên",
+		"sidebarWidth": "Chiều rộng thanh bên"
+	},
+	"tabbar": {
+		"title": "Thanh tab",
+		"enable": "Bật thanh tab",
+		"icon": "Hiển thị biểu tượng thanh tab",
+		"showMore": "Hiển thị nút thêm",
+		"showMaximize": "Hiển thị nút phóng to",
+		"persist": "Giữ lại các tab",
+		"draggable": "Bật kéo thả sắp xếp",
+		"styleType": {
+			"title": "Kiểu tab",
+			"chrome": "Chrome",
+			"card": "Thẻ",
+			"plain": "Đơn giản",
+			"brisk": "Nhanh"
+		},
+		"contextMenu": {
+			"refresh": "Làm mới",
+			"close": "Đóng",
+			"pin": "Ghim",
+			"unpin": "Bỏ ghim",
+			"closeLeft": "Đóng các tab bên trái",
+			"closeRight": "Đóng các tab bên phải",
+			"closeOthers": "Đóng các tab khác",
+			"closeAll": "Đóng tất cả các tab",
+			"openInNewWindow": "Mở trong cửa sổ mới",
+			"maximize": "Phóng to",
+			"restoreMaximize": "Khôi phục"
+		}
+	},
+	"animation": {
+		"title": "Hoạt ảnh",
+		"loading": "Đang tải trang",
+		"transition": "Chuyển trang",
+		"progress": "Tiến độ trang"
+	}
+}

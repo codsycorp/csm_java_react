@@ -1,0 +1,1809 @@
+
+<!DOCTYPE html>
+<!-- saved from url=(0067)file:///C:/Users/T%C3%B4%CC%81ngYang/Desktop/Baccarat/Baccarat.html -->
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=windows-1258">
+	<title>GAME CARD</title>
+	<!-- bootstrap & fontawesome -->
+		<link rel="stylesheet" href="baccarat/assets/css/bootstrap.min.css">
+		<link rel="stylesheet" href="baccarat/assets/css/font-awesome.min.css">
+		<link rel="icon" href="baccarat/logo.ico" type="image/x-icon" />
+		<link rel="shortcut icon" href="baccarat/logo.ico" type="image/x-icon" />
+		<!-- page specific plugin styles -->
+
+
+		<!-- ace styles -->
+		<link rel="stylesheet" href="baccarat/assets/css/ace.min.css" class="ace-main-stylesheet" id="main-ace-style">
+
+		<!--[if lte IE 9]>
+			<link rel="stylesheet" href="assets/css/ace-part2.min.css" class="ace-main-stylesheet" />
+		<![endif]-->
+		<link rel="stylesheet" href="baccarat/assets/css/ace-skins.min.css">
+		<link rel="stylesheet" href="baccarat/assets/css/ace-rtl.min.css">
+		<link href="baccarat/example.css" rel="stylesheet">
+
+		<!--[if lte IE 9]>
+		  <link rel="stylesheet" href="assets/css/ace-ie.min.css" />
+		<![endif]-->
+
+		<!-- inline styles related to this page -->
+
+		<!-- ace settings handler -->
+		<script src="baccarat/assets/js/ace-extra.min.js"></script><style>@keyframes nodeInserted{from{outline-color:#fff}to{outline-color:#000}}@-moz-keyframes nodeInserted{from{outline-color:#fff}to{outline-color:#000}}@-webkit-keyframes nodeInserted{from{outline-color:#fff}to{outline-color:#000}}@-ms-keyframes nodeInserted{from{outline-color:#fff}to{outline-color:#000}}@-o-keyframes nodeInserted{from{outline-color:#fff}to{outline-color:#000}}.ace-save-state{animation-duration:10ms;-o-animation-duration:10ms;-ms-animation-duration:10ms;-moz-animation-duration:10ms;-webkit-animation-duration:10ms;animation-delay:0s;-o-animation-delay:0s;-ms-animation-delay:0s;-moz-animation-delay:0s;-webkit-animation-delay:0s;animation-name:nodeInserted;-o-animation-name:nodeInserted;-ms-animation-name:nodeInserted;-moz-animation-name:nodeInserted;-webkit-animation-name:nodeInserted}</style><style>@keyframes nodeInserted{from{outline-color:#fff}to{outline-color:#000}}@-moz-keyframes nodeInserted{from{outline-color:#fff}to{outline-color:#000}}@-webkit-keyframes nodeInserted{from{outline-color:#fff}to{outline-color:#000}}@-ms-keyframes nodeInserted{from{outline-color:#fff}to{outline-color:#000}}@-o-keyframes nodeInserted{from{outline-color:#fff}to{outline-color:#000}}.ace-save-state{animation-duration:10ms;-o-animation-duration:10ms;-ms-animation-duration:10ms;-moz-animation-duration:10ms;-webkit-animation-duration:10ms;animation-delay:0s;-o-animation-delay:0s;-ms-animation-delay:0s;-moz-animation-delay:0s;-webkit-animation-delay:0s;animation-name:nodeInserted;-o-animation-name:nodeInserted;-ms-animation-name:nodeInserted;-moz-animation-name:nodeInserted;-webkit-animation-name:nodeInserted}</style><style>@keyframes nodeInserted{from{outline-color:#fff}to{outline-color:#000}}@-moz-keyframes nodeInserted{from{outline-color:#fff}to{outline-color:#000}}@-webkit-keyframes nodeInserted{from{outline-color:#fff}to{outline-color:#000}}@-ms-keyframes nodeInserted{from{outline-color:#fff}to{outline-color:#000}}@-o-keyframes nodeInserted{from{outline-color:#fff}to{outline-color:#000}}.ace-save-state{animation-duration:10ms;-o-animation-duration:10ms;-ms-animation-duration:10ms;-moz-animation-duration:10ms;-webkit-animation-duration:10ms;animation-delay:0s;-o-animation-delay:0s;-ms-animation-delay:0s;-moz-animation-delay:0s;-webkit-animation-delay:0s;animation-name:nodeInserted;-o-animation-name:nodeInserted;-ms-animation-name:nodeInserted;-moz-animation-name:nodeInserted;-webkit-animation-name:nodeInserted}</style>
+
+		<!-- HTML5shiv and Respond.js for IE8 to support HTML5 elements and media queries -->
+
+		<!--[if lte IE 8]>
+		<script src="assets/js/html5shiv.min.js"></script>
+		<script src="assets/js/respond.min.js"></script>
+		<![endif]-->
+		<script src="baccarat/Scripts/jquery-1.10.2.js"></script>
+</head>
+<body>
+<div class="row">
+	<div class="col-sm-12" style="border: 1px">
+			<div class="col-sm-8">
+					<div class="col-sm-10">
+						<div class="col-sm-6" style="height:150px;"><center><img height="150" width="150" src="baccarat/logo.png"></center></div>
+						<div class="col-sm-6" style="border:1px solid;height:80px;"><center><textarea rows="3" cols="45"></textarea></center></div>
+						<div class="col-sm-6" style="border: 1px solid;height: 30px;">
+						  <center>
+									<button id="L" onclick="btn_click(this.id)" type="button" class="badge badge-danger">B</button>	
+									<button id="T" onclick="btn_click(this.id)" type="button" class="badge badge-success">T</button>
+									<button id="H" onclick="btn_click(this.id)" type="button" class="badge badge-info">P</button>	
+									<button id="LHBP" onclick="btn_click(this.id)" type="button" class="label label-warning">LH</button>							
+									<button id="R" onclick="xoaNho()" type="button" class="btn btn-minier btn-blue">Reset</button>								
+									<button id="X" onclick="btn_click(this.id)" type="button" class="badge badge-purple">Delete</button><br>
+									
+									
+								</center>
+						</div>
+						<div class="col-sm-6" style="border: 1px solid;height: 40px;"><center>
+	<input type="text" style="
+	    width: 100%;
+	">
+	</center></div>
+	  
+					</div>	
+					<div class="col-sm-2">
+						<div id="la_bai_gi" class="card clubs rank1" style="top: 20px;/* left: -38px; */margin: auto 50%;"><div id="up_mo_bai" class="face"></div></div>
+					    <!-- <div class="card" style="transform: translate(245.75px, 137.75px); cursor: move; z-index: 87;"><div class="back"></div></div> -->
+					</div>
+			</div>
+			<div class="col-sm-4" style="border: 1px solid black;width: 32%;left: 6px;">
+					<div class="col-sm-8" style="height:150px">
+	<table>
+	    <tbody><tr><td>Bet</td><td><input type="text" style="color:red"></td></tr>
+	    <tr><td>Tier</td><td><input type="text" style="color:red"></td></tr>
+	    <tr><td>Pair</td><td><input type="text" style="color:red"></td></tr>
+	  </tbody></table>
+	</div>		
+					<div class="col-sm-4" style="border-left: 1px solid black;height:150px;">
+	  <table style="
+	    height: 95%;
+	">
+	    <tbody><tr><td><div style="color:red">Banker</div></td><td><div style="color:blue;width: 20px;margin-left: 10px;">Player</div></td></tr>      
+	      <tr><td><div id="B_X" class="x_xanh" style="
+	    width: 20px;
+	    margin-left: 10px;
+	"></div></td><td><div id="P_X"  class="x_do" style="
+	    width: 20px;
+	    margin-left: 10px;
+	"></div></td></tr>
+	      <tr><td><div  id="B_R"  class="hat_rong_do" style="
+	    position: relative;
+	    margin-left: 5px;
+	"></div></td><td><div id="P_R" class="hat_rong_xanh" style="
+	    position: relative;
+	"></div></td></tr>
+	      <tr><td><div id="B_D" class="hat_dac_do" style="
+	    margin-left: 10px;
+	    position: relative;
+	"></div></td><td><div id="P_D"  class="hat_dac_xanh" style="
+	    position: relative;
+	    left: 5px;
+	"></div></td></tr>
+	      <tr><td><div id="B_P" class="phay_mua_do" style="
+	    width: 20px;
+	    margin-left: 15px;
+	"></div></td><td><div id="P_P" class="phay_mua_xanh" style="
+	    width: 20px;
+	    margin-left: 10px;
+	"></div></td></tr>
+	</tbody></table></div>
+			</div>
+		</div>
+	<div class="col-sm-12" style="border: 1px ridge;">
+		<div class="col-sm-5">		
+				<div class="col-sm-12" style="overflow-x: scroll;overflow-y: hidden;border: 1px solid black;"><table id="tbl4" border="1" cellspacing="0"></table>
+				</div>
+				<div class="col-sm-12" style="overflow-x: scroll;overflow-y: hidden;border: 1px solid black;"><table id="tbl5" border="1" cellspacing="0"></table>
+				</div>		
+				<div class="col-sm-12" style="overflow-x: scroll;overflow-y: hidden;border: 1px solid black;"><table id="tbl6" border="1" cellspacing="0"></table>
+				</div>
+		</div>
+		<div class="col-sm-7" style="height:100%; display:block;">
+				<div class="col-sm-12" style="overflow-x: scroll;overflow-y: hidden;border: 1px solid black;"><table id="tbl1" border="1" cellspacing="0"></table>
+				</div>		
+				<div class="col-sm-12" style="overflow-x: scroll;overflow-y: hidden;border: 1px solid black;"><table id="tbl2" border="1" cellspacing="0"></table>
+				</div>
+				<div class="col-sm-12" style="overflow-x: scroll;overflow-y: hidden;border: 1px solid black;"><table id="tbl3" border="1" cellspacing="0"></table>
+				</div>
+		</div>
+	</div>
+</div>
+<style type="text/css">
+body {
+    background-color: none !important;
+}
+
+.card {
+    border: 1px solid black;
+}
+/*.col-sm-1, .col-sm-10, .col-sm-11, .col-sm-12, .col-sm-2, .col-sm-3, .col-sm-4, .col-sm-5, .col-sm-6, .col-sm-7, .col-sm-8, .col-sm-9 {
+    padding: 0px !important;
+}*/
+.btn-blue, .btn-blue.focus, .btn-blue:focus {
+    background-color: #0F00F7!important;
+    border-color: #0F00F7;
+}
+.btn-red, .btn-red.focus, .btn-red:focus {
+    background-color: #E80F0F!important;
+    border-color: #E80A0A;
+}
+.badge-success, .badge.badge-success, .label-success, .label.label-success {
+    background-color: #19C126;
+}
+	.badge-danger, .badge-important, .badge.badge-danger, .badge.badge-important, .label-danger, .label-important, .label.label-danger, .label.label-important {
+    background-color: #F32300;
+}
+	.badge-info, .badge.badge-info, .label-info, .label.label-info {
+    background-color: #0F00F7;
+}
+.badge-purple, .badge.badge-purple, .label-purple, .label.label-purple {
+    background-color: #AE0BB9;
+}
+.badge {
+    padding-top: 5px;
+    padding-bottom: 3px;
+    line-height: 15px;
+}
+
+.badge, .label {
+    background-color: #ABBAC3;
+    text-shadow: none;
+}
+.hat_rong_xanh {
+	margin: auto;
+    width: 20px;
+    height: 20px;
+    border: 5px solid #0E17E4;
+    border-radius: 50%;
+    box-sizing: border-box;
+    position: absolute;
+    top: 2px;
+    left: 5px;
+}
+.hat_rong_xanh_la {
+    margin: auto;
+    width: 20px;
+    height: 20px;
+    border: 5px solid #11E40E;
+    border-radius: 50%;
+    box-sizing: border-box;
+    position: absolute;
+    top: 2px;
+    left: 5px;
+}
+.hat_rong_do {
+	margin: auto;
+    width: 20px;
+    height: 20px;
+    border: 5px solid #F32300;
+    border-radius: 50%;
+    box-sizing: border-box;
+    position: absolute;
+    top: 2px;
+    left: 5px;
+}
+.hat_dac_xanh {
+    margin: auto;
+    width: 15px;
+    height: 15px;
+    border: 10px solid #0E17E4;
+    border-radius: 50%;
+    box-sizing: border-box;
+}
+.hat_dac_do {
+    margin: auto;
+    width: 15px;
+    height: 15px;
+    border: 10px solid #F32300;
+    border-radius: 50%;
+    box-sizing: border-box;
+}
+.phay_mua_do{
+	border-top: 5px solid red; 
+	-moz-transform: rotate(-45deg);  
+   -o-transform: rotate(-45deg);  
+ -webkit-transform: rotate(-45deg);  
+  -ms-transform: rotate(-45deg);  
+      transform: rotate(-45deg); 
+	  height: 20px;
+    width: 20px;
+    top: 5px;
+    left: 5px;
+    margin: auto;
+}
+.phay_mua_xanh{
+	border-top: 5px solid blue; 
+	-moz-transform: rotate(-45deg);  
+   -o-transform: rotate(-45deg);  
+ -webkit-transform: rotate(-45deg);  
+  -ms-transform: rotate(-45deg);  
+      transform: rotate(-45deg); 
+    height: 20px;
+    width: 20px;
+    top: 5px;
+    left: 5px;
+    margin: auto;
+}
+.hat_dac_xanh_la {
+    margin: auto;
+    width: 10px;
+    height: 10px;
+    border: 5px solid #11E40E;
+    border-radius: 50%;
+    box-sizing: border-box;
+}
+
+.xanh_doi {
+    margin: auto;
+    width: 10px;
+    height: 10px;
+    border: 5px solid #0E17E4;
+    border-radius: 50%;
+    box-sizing: border-box;
+    position: absolute;
+    bottom: 0px;
+    right: 0px;
+}
+.do_doi {
+    margin: auto;
+    width: 10px;
+    height: 10px;
+    border: 5px solid #F32300;
+    border-radius: 50%;
+    box-sizing: border-box;
+    position: absolute;
+    bottom: 0px;
+    right: 0px;
+}
+.hoa_xanh_la {
+    margin: auto;
+    width: 10px;
+    height: 10px;
+    border: 5px solid #11E40E;
+    border-radius: 50%;
+    box-sizing: border-box;
+    position: absolute;
+    bottom: 0px;
+    right: 0px;
+}
+.cham_do {
+    margin: auto;
+    width: 5px;
+    height: 5px;
+    border: 3px solid #f21b05;
+    border-radius: 50%;
+    box-sizing: border-box;
+    position: absolute;
+    top: 1px;
+    left: 2px;
+}
+.cham_xanh {
+    margin: auto;
+    width: 5px;
+    height: 5px;
+    border: 3px solid #1D05E2;
+    border-radius: 50%;
+    box-sizing: border-box;
+    z-index: 999;
+    position: absolute;
+    bottom: 0px;
+    left: 20px;
+}
+table span{
+	position: absolute;
+    top: 10%;
+    left: 10%;
+}
+#tbl3 div{
+	position: absolute;
+	top: 20%;
+    left: 20%;
+}
+div.row{
+	overflow:auto !important;
+}
+.x_xanh {
+   color: #0E17E4 !important;
+    font-size: 20pt;
+    font-weight: bold;
+    line-height: 10px;
+    top: 10px;
+    left: 5px;
+    content: "X";
+}
+.x_do {
+    color: #F32300 !important;
+    font-size: 20pt;
+    font-weight: bold;
+    line-height: 10px;
+    top: 10px;
+    left: 5px;
+    content: "X";
+}
+.x_xanh:after{
+    content: "X";
+}
+.x_do:after{
+    content: "X";
+}
+.boardCol {
+    width: 6.66667%;
+    height: 100%;
+    background-color: #34495e;
+    float: left;
+    border-radius: 3px;
+    border-left: 1px solid #2c3e50;
+    box-sizing: border-box;
+}
+.col-sm-12 {
+    margin-bottom: 10px;
+}
+#tbl2  .badge-danger, #tbl2 .badge-important, #tbl2 .badge.badge-danger, #tbl2 .badge.badge-important, #tbl2 .label-danger, #tbl2 .label-important, #tbl2 .label.label-danger, #tbl2 .label.label-important{
+			    background-color: transparent !important;
+			    border: 1px solid red !important;
+			    color: red !important;
+			    font-weight: bold !important;
+		        font-size: 20pt;
+			    line-height: 18px;
+			    width: 27px;
+			    left: 1px;
+			    top: 1px;
+			    bottom: 1px;
+			    /* font-size: 11pt; */
+			}
+			#tbl2 >.badge-info, #tbl2 .badge.badge-info, #tbl2 .label-info, #tbl2 .label.label-info
+			{
+				background-color: transparent !important;
+			    border: 1px solid #0F00F7 !important;
+			    color: #0F00F7 !important;
+			    font-weight: bold !important;
+		        font-size: 20pt;
+			    line-height: 18px;
+			    width: 27px;
+			    left: 1px;
+			    top: 1px;
+			    bottom: 1px;
+			}
+			#tbl2 >.badge-success, #tbl2 .badge.badge-success, #tbl2 .label-success, #tbl2 .label.label-success
+			{
+				background-color: transparent !important;
+			    border: 1px solid #19C126 !important;
+			    color: #19C126 !important;
+			    font-weight: bold;
+		        font-size: 20pt;
+			    line-height: 18px;
+			    width: 27px;
+			    left: 1px;
+			    top: 1px;
+			    bottom: 1px;
+			}
+</style>
+<script type="text/javascript">
+	var donght=0,cotht=0;
+	function btn_click(id,doi_mau)
+	{
+		switch(id) {
+			case "L":
+				var loai=($("#L").text()=="L"?"L":"B");
+				check(id,"tbl1",'badge badge-danger',loai,doi_mau);
+				break;
+			case "LHBP":
+				if($("#LHBP").text()=="LH")
+				{
+					$("#LHBP").text("BP");
+					$("#H").text("H");
+					$("#L").text("L");
+				}
+				else
+				{
+					$("#LHBP").text("LH");
+					$("#L").text("B");
+					$("#H").text("P");
+				}
+				createCookie("LHBP",$("#LHBP").text(),1);
+				location.href=location.href;
+		        break;
+			case "T":
+		        check(id,"tbl1",'badge badge-success','T',doi_mau);
+		        break;
+			case "H":
+				var loai=($("#H").text()=="H"?"H":"P");
+				check(id,"tbl1",'badge badge-info',loai,doi_mau);
+				break;
+		    default:
+		        Xoacheck("tbl1");
+		}	
+	}
+	function TaoBang(idtable,so_dong,so_cot,dai_cot,cao_dong)
+	{
+		var table = document.getElementById(idtable);
+		table.style.height=(so_dong*cao_dong)+"px";
+		table.style.width=(so_cot*dai_cot)+"px";
+		for(var d=0; d<so_dong; d++)
+		{
+	        var row = table.insertRow(d);
+	        for(var c=0; c<so_cot; c++)
+		    {
+		        var cell1 = row.insertCell(c);
+		        cell1.setAttribute('style',"height:"+cao_dong+"px");
+		        var cells = row.getElementsByTagName('td');
+		        cells[c].setAttribute('id',idtable+"_"+d+"_"+c);
+		        cells[c].setAttribute('style',"width:"+dai_cot+"px;position: relative;");
+		        if(idtable=="tbl3")
+			        bang_x[d+"_"+c]="";
+			    if(idtable=="tbl4")
+			        bang_dulieu[d+"_"+c]="";
+			}
+	    }
+	}
+	var bang_x={};	
+	var bang_dulieu={};	
+	var bang_dulieu_rong={};	
+	var bang_dulieu_dac={};
+	var bang_dulieu_phaymua={};
+	TaoBang('tbl1',6,72,30,30);
+	TaoBang('tbl2',6,72,30,30);
+	TaoBang('tbl3',6,72,25,25);
+	TaoBang('tbl4',6,72,30,30);
+	TaoBang('tbl5',6,72,30,30);
+	TaoBang('tbl6',6,72,25,25);
+	
+	var mang_giatri =new Array();	
+	var mang_diem =new Array();
+	var mang_doi =new Array();	
+	var mang_x =new Array();
+	
+	var lan_enter=0;
+	var lenh="";
+	var lenh_luu_tru=new Array();
+	function xoaNho()
+	{
+		createCookie("lenh",null,1);
+		createCookie("LHBP",null,1);	
+		location.href=location.href;	
+	}
+	$( document ).ready(function() {
+		labai("","",true);
+		if(readCookie("LHBP")!=null)
+		{
+			if(readCookie("LHBP")=="BP")
+			{					
+				$("#H").text("H");
+				$("#L").text("L");
+			}
+			else
+			{
+				$("#H").text("P");
+				$("#L").text("B");
+			}
+			$("#LHBP").text(readCookie("LHBP"));
+		}
+		if(readCookie("lenh")!=null)
+		{
+			var chay_lai_lenh=readCookie("lenh");
+			for(var c=0;c<chay_lai_lenh.length;c++)
+				LenhGoi(chay_lai_lenh[c],false);
+		}
+	});
+	function LenhGoi(lenh,luu)
+	{
+		var lenh1=lenh;
+		if(lenh1.indexOf("++")!=-1)
+    	{
+
+			console.log(lenh1);
+    		var la=lenh1.split("++");
+    		if(1*la[1]<=4&&1*la[1]>0)
+				labai(la[0],la[1],false);
+			else
+				labai("","",true);
+				lenh_luu_tru[lenh_luu_tru.length]=lenh1;	
+			if(luu==true)
+	    	{
+				createCookie("lenh",lenh_luu_tru,1);
+	    	}
+	    	return;
+    	}
+    	var thaotac=lenh1.split('+');
+		if((1*thaotac[1]>0&&1*thaotac[1]<10)&&(1*thaotac[0]>0&&1*thaotac[0]<4))
+				mang_diem[mang_giatri.length]=thaotac[1];
+		else
+		{
+			lenh="";
+			lan_enter=0;
+			return;	
+		}
+		mang_doi[mang_doi.length]=0;
+		if(thaotac.length>2)
+    		if(1*thaotac[2]>3&&1*thaotac[2]<7)
+				mang_doi[mang_doi.length]=thaotac[2];
+		switch(thaotac[0])
+    	{
+    		case "1":
+				btn_click('L',thaotac[2]);
+        		break;//1.B(1-13) quan bai + (1->4)chat = La bai
+        	case "2":
+				btn_click('T',thaotac[2]);
+        		break;//2.T
+        	case "3":
+				btn_click('H',thaotac[2]);
+        		break;//3.P
+    		case "":break;//1 B(Do)+so=do so
+    		case "":break;//1 P(Do)+so=Xanh so
+    	}
+    	lenh_luu_tru[lenh_luu_tru.length]=lenh1;
+    	if(luu==true)
+    	{
+			createCookie("lenh",lenh_luu_tru,1);
+    	}
+	}
+	$(document).keydown(function(e) {
+		e = e || event;
+	    if(e.keyCode == 0||e.keyCode == 13) {
+	    	// console.log(lenh.split("+").length);
+	        if(lenh.split("+").length>=2)
+	        {
+	        	// console.log(lenh);
+	        	LenhGoi(lenh,true);
+	        	lan_enter=0;
+	        	lenh="";
+	        }
+	        if(lenh.length>5)
+	    	{
+	    		lenh="";
+	    	}
+	        return true;
+	    }
+	    else if(e.keyCode==8||e.keyCode==46)//Delete
+	    {
+	    	lenh="";
+        	lan_enter=0;
+			btn_click('',"");
+			lenh_luu_tru.pop();
+			createCookie("lenh",lenh_luu_tru,1)
+	    }
+	    else if(e.keyCode==187)//Dau =
+	    {
+				lenh+="+";
+	    }
+	    else if(e.keyCode==107)//Dau +
+	    {
+				lenh+="+";
+	    }
+	    else
+	    {
+	    	switch(e.keyCode)
+	    	{
+	    		case 49:lenh+="1";break;
+	    		case 50:lenh+="2";break;
+	    		case 51:lenh+="3";break;
+	    		case 52:lenh+="4";break;
+	    		case 53:lenh+="5";break;
+	    		case 54:lenh+="6";break;
+	    		case 55:lenh+="7";break;
+	    		case 56:lenh+="8";break;
+	    		case 57:lenh+="9";break;
+	    		case 49:lenh+="0";break;
+	    		default:lenh="";
+	    	}
+	    	// lenh+=""+String.fromCharCode(e.keyCode-48);
+	    }
+	    // $("#msg").text(lenh+":"+e.keyCode);
+	});
+	function labai(cay,chat,up_bai)
+	{
+		if(up_bai==true)
+		{
+			$("#la_bai_gi").attr('class',"card");
+			$("#up_mo_bai").attr('class',"back");
+		}
+		else
+		{
+			var nuoc="";
+			switch(1*chat)
+			{
+				case 1:nuoc="spades";break;//bich
+				case 2:nuoc="hearts";break;//Co
+				case 3:nuoc="clubs";break;//Chuon
+				case 4:nuoc="diamonds";break;//Ro
+			}
+			$("#la_bai_gi").attr('class',"card "+nuoc+" rank"+cay);
+			$("#up_mo_bai").attr('class',"face");
+		}
+	}
+	function check(id,idtable,giatri,element_value)
+	{
+		var table = document.getElementById(idtable), 
+	    rows = table.getElementsByTagName('tr');
+	    var dong=donght,cot=cotht;
+       for (var i = 0; i < rows.length;i++)
+	    {
+	    	if (i==dong)
+	    	{
+	    		cells = rows[i].getElementsByTagName('td');
+	    		for (var j = 0; j < cells.length;j++)
+	    		{
+	    			if (j==cot)
+	    			{
+	    				// console.log(dong+":"+cot);
+	    				var newNode = document.createElement((element_value!=""?"span":"div"));
+			            newNode.className =giatri;
+			            if(element_value!="")
+							newNode.textContent ? newNode.textContent = element_value : newNode.innerText = element_value;
+	    				cells[j].appendChild(newNode); 
+	    				document.getElementById('tbl1_'+dong+'_'+cot).scrollIntoView();
+	    				if(mang_doi[mang_doi.length-1]==5)
+	    				{
+	    					var hat_do = document.createElement("div");
+				            hat_do.className ="cham_do";
+		    				cells[j].appendChild(hat_do); 
+		    				var hat_xanh = document.createElement("div");
+				            hat_xanh.className ="cham_xanh";
+		    				cells[j].appendChild(hat_xanh); 
+	    				} 
+	    				else if(mang_doi[mang_doi.length-1]==4)
+	    				{
+		    				var hat_xanh = document.createElement("div");
+				            hat_xanh.className ="cham_xanh";
+		    				cells[j].appendChild(hat_xanh); 
+	    				} 
+	    				else if(mang_doi[mang_doi.length-1]==6)
+	    				{
+	    					var hat_do = document.createElement("div");
+				            hat_do.className ="cham_do";
+		    				cells[j].appendChild(hat_do); 
+	    				} 
+	    				mang_giatri[mang_giatri.length]=(giatri=="badge badge-danger"?1:(giatri=="badge badge-info"?0:"-"));
+	    				if(giatri=="badge badge-danger")
+	    					mang_x[mang_x.length]=1;
+	    				else if(giatri=="badge badge-info")
+	    					mang_x[mang_x.length]=0;
+	    			}
+	    				
+	    		}
+	    	}
+	    
+	    }
+		if (donght<rows.length-1)
+	    {
+	    	donght++;		
+	    }
+	    else
+	     {
+	     	donght=0;
+	     	cotht++;
+	     }
+	    check1();
+	    vebang_x();
+	    // check2(phantu);
+
+	}
+	function max_dong_of_cot(bang,dongx,cotj)
+	{
+		var tableA = document.getElementById(bang), 
+	    rowsA = tableA.getElementsByTagName('tr');
+	    var flag=false;
+	    for (var a = 0; a < rowsA.length;a++)
+	    {
+	    	if(a==dongx)
+	    	{
+		    	var cellsA = rowsA[a].getElementsByTagName('td');
+		    	for (var b = 0; b < cellsA.length;b++)
+	    		{
+	    			if (b==cotj)
+	    			{
+	    				if(cellsA[b].firstChild)
+						  flag=true;
+	    			}
+	    				
+	    		}
+	    	}
+	    
+	    }
+	    return flag;
+	}
+	function kt_dong_chat(bang,dongx,cotj,ten_lop)
+	{
+		var tableA = document.getElementById(bang), 
+	    rowsA = tableA.getElementsByTagName('tr');
+	    var flag=false;
+	    for (var a = 0; a < rowsA.length;a++)
+	    {
+	    	if(a==dongx)
+	    	{
+		    	var cellsA = rowsA[a].getElementsByTagName('td');
+		    	for (var b = 0; b < cellsA.length;b++)
+	    		{
+	    			if (b==cotj)
+	    			{
+	    				if(cellsA[b].firstChild)
+	    					if(cellsA[b].firstChild.className==ten_lop)
+								  flag=true;
+	    			}
+	    				
+	    		}
+	    	}
+	    
+	    }
+	    return flag;
+	}
+	function XoaBangKQ(id_bang)
+	{
+		var table = document.getElementById(id_bang), 
+	    rows = table.getElementsByTagName('tr');
+	    for (var i = 0; i < rows.length;i++)
+	    {
+	    	cells = rows[i].getElementsByTagName('td');
+	    	for (var j = 0; j < cells.length;j++)
+    		{
+    			while (cells[j].firstChild)
+					  cells[j].removeChild(cells[j].firstChild);
+				if(id_bang=="tbl3")
+					bang_x[i+"_"+j]=""; 
+				// if(id_bang=="tbl4")
+				// 	bang_dulieu_rong[i+"_"+j]="";    
+				if(id_bang=="tbl2")
+				{
+					bang_dulieu_rong[i+"_"+j]=""; 
+					bang_dulieu[i+"_"+j]="";					
+					bang_dulieu_dac[i+"_"+j]=""; 
+					bang_dulieu_phaymua[i+"_"+j]=""; 
+				}	
+    		}
+	    
+	    }
+	}
+	var bang_dulieu_01=new Array();
+	function check1()
+	{
+		var table = document.getElementById('tbl2'), 
+	    rows = table.getElementsByTagName('tr');
+	    var dong=0,cot=0;
+	    XoaBangKQ('tbl2');
+	    XoaBangKQ('tbl4');
+	    XoaBangKQ('tbl5');
+	    XoaBangKQ('tbl6');
+	    var max_dong=5;
+	    var max_cot=-1;
+	    var max_xp=0;
+	    var gia_tri_cu=-1;
+	    var hat_truoc="-";
+		bang_dulieu_01=new Array();
+		dong_ht_hatrong=0;
+		cot_ht_hatrong=0;
+		gia_tri_ht_rong="";
+		var den_dong=-1;
+		var den_cot=-1;
+		dong_ht_dac=0;
+		cot_ht_dac=0;
+		gia_tri_ht_dac="";
+		dong_ht_phaymua=0;
+		cot_ht_phaymua=0;
+		gia_tri_ht_phaymua="";
+	    for(var m=0;m<mang_giatri.length;m++)
+	    {
+	    	var gia_tri='';
+	    	var gt_hoa="badge badge-success";
+	    	if(m==0)
+	    	{
+	    		bang_dulieu_01[0]=new Array();
+	    		dong=0;
+	    		cot=0;
+	    		gia_tri=(mang_giatri[m]=="-"?"badge badge-success":(mang_giatri[m]==0?"badge badge-info":"badge badge-danger"));
+	    	}
+	    	else
+	    	{
+	    		if(mang_giatri[m]=="-"&&mang_giatri[m-1]!="-")
+	    			hat_truoc=mang_giatri[m-1];
+	    		// if((hat_truoc!=mang_giatri[m]&&mang_giatri[m]!="-"&&hat_truoc!="-")||(mang_giatri[m]!=mang_giatri[m-1]&&mang_giatri[m]!="-"&&mang_giatri[m-1]!="-"))
+	    		// 	if(da_chuyen_hat==fa)
+		    	// 		da_chuyen_hat="";
+	    		if(mang_giatri[m]==mang_giatri[m-1]||(mang_giatri[m]=="-"&&mang_giatri[m-1]=="-")||(mang_giatri[m]=="-"&&mang_giatri[m-1]!="-")||hat_truoc==mang_giatri[m])
+	    		{
+	    			if(gia_tri_cu==-1&&mang_giatri[m]=="-"||mang_giatri[m-1]!="-")
+	    				gia_tri_cu=mang_giatri[m-1];
+	    			gia_tri=(mang_giatri[m]=="-"?"badge badge-success":(mang_giatri[m]==0?"badge badge-info":"badge badge-danger"));
+	    			var xuongdong=false;
+	    			var objDuoi=$("#tbl2_"+(dong+1)+"_"+cot);
+	    			if(objDuoi.length>0)
+	    			{
+						if(objDuoi.children().length==0)
+						{
+							xuongdong=true;
+							// console.log("Ko co");
+						}
+						else
+						{
+							if(objDuoi.children().attr("class")==gia_tri)
+							{	
+								// console.log(1);
+								xuongdong=true;
+							}
+						}
+	    			}
+	    			if(xuongdong==false)
+	    			{
+	    				cot++;	    				
+	    			}
+	    			else
+	    			{
+	    				dong++;
+	    			}
+	    		}
+	    		else
+	    		{
+	    			gia_tri_cu=-1;
+	    			hat_truoc="-";
+					if(dong==max_dong)
+	    			{
+	    				max_dong=dong-1;
+	    				max_cot=cot+1;
+	    			}
+	    			cot=max_xp+1;
+	    			dong=0;
+		    		max_xp++;
+	    			gia_tri=(mang_giatri[m]=="-"?"badge badge-success":(mang_giatri[m]==0?"badge badge-info":"badge badge-danger"));
+	    			bang_dulieu_01[bang_dulieu_01.length]=new Array();
+	    		}
+	    	}	    	
+	        var cells = rows[dong].getElementsByTagName('td');
+			var objTruocno=$("#tbl2_"+(dong+1)+"_"+(cot-1));
+			var co_truoc=false;
+			if(objTruocno.length>0)
+			{
+				if(objTruocno.children().length>0)
+				{
+					if(objTruocno.children().attr("class")==gia_tri||objTruocno.children().attr("class")==gt_hoa)
+					{									
+						co_truoc=true;
+					}
+				}
+			}	
+			var objCungTruocno=$("#tbl2_"+dong+"_"+(cot-1));
+			var co_cungtruoc=false;
+			if(objCungTruocno.length>0)
+			{
+				if(objCungTruocno.children().length>0)
+				{
+					if(objCungTruocno.children().attr("class")==gia_tri)
+					{									
+						co_cungtruoc=true;
+					}
+				}
+			}	    			
+			var co_duoi=false;
+			var objDuoino=$("#tbl2_"+(dong+1)+"_"+cot);
+			if(objDuoino.length>0)
+			{
+				if(objDuoino.children().length>0)
+				{
+					if(objDuoino.children().attr("class")==gia_tri||objDuoino.children().attr("class")==gt_hoa)
+					{	
+						if(objDuoino.children().attr("class")==gia_tri)
+							co_duoi=true;
+					}
+				}
+			}
+			var co_tren=false;
+			var objTrenno=$("#tbl2_"+(dong-1)+"_"+cot);
+			if(objTrenno.length>0)
+			{
+				if(objTrenno.children().length>0)
+				{
+					if(objTrenno.children().attr("class")==gia_tri||objTrenno.children().attr("class")==gt_hoa)
+					{	
+						co_tren=true;
+					}
+				}
+			}
+			if((co_cungtruoc==true&&co_tren==true)||co_duoi==true||(co_truoc==true&&co_duoi==true))
+			{
+				dong--;
+				cot++;
+				cells = rows[dong].getElementsByTagName('td');
+			}
+			var objHientai=$("#tbl2_"+dong+"_"+cot);
+			if(objHientai.length>0)
+			{
+				if(objHientai.children().length>0)
+				{
+					cot++;
+				}
+			}
+			if(mang_giatri[m]!="-")
+				bang_dulieu[dong+"_"+cot]=mang_giatri[m];
+			if(mang_giatri[m]!="-")
+				bang_dulieu_01[bang_dulieu_01.length-1].push(mang_giatri[m]);
+			var cells = rows[dong].getElementsByTagName('td');
+			while (cells[cot].firstChild)
+			  cells[cot].removeChild(cells[cot].firstChild);
+			var newNode = document.createElement("span");
+            newNode.className =gia_tri;
+            newNode.textContent=(mang_diem[m]?mang_diem[m]:"0");
+			cells[cot].appendChild(newNode);
+			document.getElementById('tbl2_'+dong+'_'+cot).scrollIntoView();
+			if(mang_giatri[m]!="-")
+			{
+				vebang_hatrong();
+				vebang_hatdac();
+				vebang_phaymua();
+			}
+		    if(max_dong_of_cot('tbl2',dong,cot)==false)
+    		{
+				max_dong++;
+    		}
+    		// console.log(cot+":"+dong);
+		 }
+		// vebang_hatdac(dong,cot);
+		// vebang_phaymua(dong,cot);
+	}
+	function vebang_x()
+	{
+		// return;
+		XoaBangKQ('tbl3');
+		var table = document.getElementById('tbl3'), 
+	    rows = table.getElementsByTagName('tr');
+	    var dong=0,cot=0;
+	    var max_dong=5;
+	    var max_cot=-1;
+	    var max_xp=0;
+	    var hat_truoc="-";
+	    for(var m=6;m<mang_x.length;m++)
+	    {
+	    	var gia_tri='';
+	    	if(mang_x[m]==mang_x[m-6])
+	    		gia_tri="x_do";
+	    	else
+	    		gia_tri="x_xanh";
+	    	// console.log(mang_x[m]+"-"+mang_x[m-6]);
+	    	
+    		if(gia_tri==hat_truoc||hat_truoc=="-")
+    		{
+    			// console.log(bang_x[(dong+1)+"_"+cot]);
+    			var xuongdong=false;
+    			if(bang_x[(dong+1)+"_"+cot]!=""&&bang_x[(dong+1)+"_"+cot])
+    			{
+    				if(bang_x[(dong+1)+"_"+cot]==gia_tri)
+					{	
+						xuongdong=true;
+					}
+    			}
+    			else
+	    			xuongdong=true;	
+    			if(xuongdong==false)
+    			{
+    				if(cot!=71)
+	    				cot++;   				  
+    			}
+    			else
+    			{
+    				if(m!=6&&dong!=5)
+	    				dong++;
+    			}
+    		}
+    		else
+    		{
+				if(dong==max_dong)
+    			{
+    				max_dong=dong-1;
+    				max_cot=cot+1;
+    			}
+    			cot=max_xp+1;
+    			dong=0;
+	    		max_xp++;
+    			// gia_tri="x_xanh";
+    		}
+    		hat_truoc=gia_tri;
+    		// console.log("Truoc ->"+dong+":"+cot+" =>"+bang_x[dong+"_"+cot]);
+			var co_truoc=false;
+			if(bang_x[(dong+1)+"_"+(cot-1)]==gia_tri)
+			{	
+				co_truoc=true;
+			}	
+    		var co_cungtruoc=false;
+			if(bang_x[dong+"_"+(cot-1)]==gia_tri)
+			{	
+				co_cungtruoc=true;
+			}
+			var co_duoi=false;
+			if(bang_x[(dong+1)+"_"+cot]==gia_tri)
+			{	
+				co_duoi=true;
+			}
+			var co_tren=false;
+			if(bang_x[(dong-1)+"_"+cot]==gia_tri)
+			{	
+				co_tren=true;
+			}
+    		if((co_cungtruoc==true&&co_tren==true)||co_duoi==true||(co_truoc==true&&co_duoi==true))
+			{
+				// console.log("vao");
+				if(dong!=0)
+				{
+    				dong=dong-1;
+				}
+				cot=cot+1;
+				// cells = rows[dong].getElementsByTagName('td');
+			}
+			var cells = rows[dong].getElementsByTagName('td');
+			if(bang_x[dong+"_"+cot]!="")
+			{
+				if(cot!=cells.length-1)
+					cot++;
+			}
+			// console.log("Sau ->"+dong+":"+cot+" =>"+bang_x[dong+"_"+cot]);
+    		while (cells[cot].firstChild)
+			{
+			  cells[cot].removeChild(cells[cot].firstChild);
+			}
+			var newNode = document.createElement("span");
+            newNode.className =gia_tri;
+			cells[cot].appendChild(newNode);
+			document.getElementById('tbl3_'+dong+'_'+cot).scrollIntoView();
+			bang_x[dong+"_"+cot]=gia_tri;
+		    if(max_dong_of_cot('tbl3',dong,cot)==false)
+    		{
+				max_dong++;
+	    	}
+    	}
+
+	}
+	var dong_ht_hatrong=-1,cot_ht_hatrong=-1,gia_tri_ht_rong="";
+	$("#B_X").hide();
+	$("#P_X").hide();
+	$("#B_R").hide();
+	$("#P_R").hide();
+	$("#B_D").hide();
+	$("#P_D").hide();
+	$("#B_P").hide();
+	$("#P_P").hide();
+	function vebang_hatrong()
+	{
+		// XoaBangKQ('tbl4');
+		var table = document.getElementById('tbl4'), 
+	    rows = table.getElementsByTagName('tr');
+	    var dong=dong_ht_hatrong,cot=cot_ht_hatrong;
+	    var max_dong=5;
+	    var max_cot=-1;
+	    var max_xp=0;
+	    var d_c=bang_dulieu_01.length-1;
+	    var d_d=bang_dulieu_01[d_c].length-1;
+	    //Du doan
+	    if(bang_dulieu_01.length>1)
+	    {
+	    	$("#B_R").show();
+	    	$("#P_R").show();
+		    var add_new=false;
+		    if(bang_dulieu_01[bang_dulieu_01.length-1][bang_dulieu_01[bang_dulieu_01.length-1].length-1]==0)
+		    {
+		    	bang_dulieu_01[bang_dulieu_01.length-1].push(0);
+		    }
+		    else
+		    {
+		    	bang_dulieu_01[bang_dulieu_01.length]=new Array();
+			    bang_dulieu_01[bang_dulieu_01.length-1].push(0);
+			    add_new=true;
+		    }		    
+			d_c=bang_dulieu_01.length-1;
+		    d_d=bang_dulieu_01[d_c].length-1;
+		    if(d_c>=2&&bang_dulieu_01[d_c].length<=bang_dulieu_01[d_c-1].length)
+	    	{
+				if((bang_dulieu_01[d_c-1].length==bang_dulieu_01[d_c-2].length))
+		    		$("#P_R").attr("class","hat_rong_do");
+		    	else if(((bang_dulieu_01[d_c][d_d]==bang_dulieu_01[d_c][d_d-1])&&(bang_dulieu_01[d_c-1][d_d]==bang_dulieu_01[d_c-1][d_d-1])))
+		    		$("#P_R").attr("class","hat_rong_do");
+		    	else
+		    		$("#P_R").attr("class","hat_rong_xanh");
+		    	// console.log(gia_tri)
+	    	}
+	    	else
+	    	{
+		    	if(((bang_dulieu_01[d_c][d_d]==bang_dulieu_01[d_c][d_d-1])&&(bang_dulieu_01[d_c-1][d_d]==bang_dulieu_01[d_c-1][d_d-1])))
+		    		$("#P_R").attr("class","hat_rong_do");
+		    	else
+		    		$("#P_R").attr("class","hat_rong_xanh");
+		    }
+		    if($("#P_R").attr("class")=="hat_rong_do")
+		    {
+		    	$("#B_R").attr("class","hat_rong_xanh");
+		    }
+		    else
+		    {
+		    	$("#B_R").attr("class","hat_rong_do");		    
+		    }
+
+		    //Du doan hat dac
+		    if(bang_dulieu_01.length>2)
+		    {
+		    	$("#B_D").show();
+		    	$("#P_D").show();
+				if(d_c>=4&&bang_dulieu_01[d_c].length<=bang_dulieu_01[d_c-2].length)
+		    	{
+					if((bang_dulieu_01[d_c-1].length==bang_dulieu_01[d_c-3].length&&d_d==0))
+			    		$("#P_D").attr("class","hat_dac_do");
+			    	else if(((bang_dulieu_01[d_c][d_d]==bang_dulieu_01[d_c][d_d-1])&&(bang_dulieu_01[d_c-2][d_d]==bang_dulieu_01[d_c-2][d_d-1])))
+			    		$("#P_D").attr("class","hat_dac_do");
+			    	else
+			    		$("#P_D").attr("class","hat_dac_xanh");
+			    	// console.log(gia_tri)
+		    	}
+		    	else
+		    	{
+			    	if(((bang_dulieu_01[d_c][d_d]==bang_dulieu_01[d_c][d_d-1])&&(bang_dulieu_01[d_c-2][d_d]==bang_dulieu_01[d_c-2][d_d-1]))||bang_dulieu_01.length==so_hat())
+			    		$("#P_D").attr("class","hat_dac_do");
+			    	else
+			    		$("#P_D").attr("class","hat_dac_xanh");
+			    }
+			    if($("#P_D").attr("class")=="hat_dac_do")
+			    {
+			    	$("#B_D").attr("class","hat_dac_xanh");
+			    }
+			    else
+			    {
+			    	$("#B_D").attr("class","hat_dac_do");		    
+			    }
+		    }
+		    else
+		    {
+		    	$("#B_D").hide();
+		    	$("#P_D").hide();
+		    }
+		    //Xong hat dac
+		    //Du doan phay mua
+		    if(bang_dulieu_01.length>4)
+		    {
+		    	$("#B_P").show();
+		    	$("#P_P").show();
+				if(d_c>=6&&bang_dulieu_01[d_c].length<=bang_dulieu_01[d_c-3].length)
+		    	{
+					if((bang_dulieu_01[d_c-1].length==bang_dulieu_01[d_c-4].length))
+			    		$("#P_P").attr("class","phay_mua_do");
+			    	else if(((bang_dulieu_01[d_c][d_d]==bang_dulieu_01[d_c][d_d-1])&&(bang_dulieu_01[d_c-3][d_d]==bang_dulieu_01[d_c-3][d_d-1])))
+			    		$("#P_P").attr("class","phay_mua_do");
+			    	else
+			    		$("#P_P").attr("class","phay_mua_xanh");
+			    	// console.log(gia_tri)
+		    	}
+		    	else
+		    	{
+			    	if(((bang_dulieu_01[d_c][d_d]==bang_dulieu_01[d_c][d_d-1])&&(bang_dulieu_01[d_c-3][d_d]==bang_dulieu_01[d_c-3][d_d-1]))||bang_dulieu_01.length==so_hat())
+			    		$("#P_P").attr("class","phay_mua_do");
+			    	else
+			    		$("#P_P").attr("class","phay_mua_xanh");
+			    }
+			    if($("#P_P").attr("class")=="phay_mua_do")
+			    {
+			    	$("#B_P").attr("class","phay_mua_xanh");
+			    }
+			    else
+			    {
+			    	$("#B_P").attr("class","phay_mua_do");		    
+			    }
+		    }
+		    else
+		    {
+		    	$("#B_P").hide();
+		    	$("#P_P").hide();
+		    }
+		    //Xong phay mua
+		    if(add_new==true)
+		    {
+		    	bang_dulieu_01.pop();
+		    }
+		    else
+		    	bang_dulieu_01[bang_dulieu_01.length-1].pop();
+		    //Du doan bang X
+		    if(mang_x.length>5)
+		    {
+		    	$("#B_X").show();
+		    	$("#P_X").show();
+				mang_x[mang_x.length]=0;
+				var m=mang_x.length-1;
+				if(mang_x[m]==mang_x[m-6])
+		    	{
+		    		$("#B_X").attr("class","x_xanh");
+		    		$("#P_X").attr("class","x_do");
+				}
+		    	else
+	    		{
+	    			$("#B_X").attr("class","x_do");
+		    		$("#P_X").attr("class","x_xanh");
+				}
+				mang_x.pop();
+		    }
+		    else
+		    {
+		    	$("#B_X").hide();
+		    	$("#P_X").hide();
+		    }	
+		    d_c=bang_dulieu_01.length-1;
+		    d_d=bang_dulieu_01[d_c].length-1;
+		}
+		else
+		{
+			$("#B_R").hide();
+	    	$("#P_R").hide();
+			$("#B_D").hide();
+	    	$("#P_D").hide();
+		}
+	    //Xong du doan
+	    if(bang_dulieu_01.length<=1)
+			return;
+	    if(!(d_d==0&&d_c==1))
+		{
+	    	var gia_tri='';
+	    	if(d_c>=2&&bang_dulieu_01[d_c].length<=bang_dulieu_01[d_c-1].length)
+	    	{
+				if((bang_dulieu_01[d_c-1].length==bang_dulieu_01[d_c-2].length))
+		    		gia_tri="hat_rong_do";
+		    	else if(((bang_dulieu_01[d_c][d_d]==bang_dulieu_01[d_c][d_d-1])&&(bang_dulieu_01[d_c-1][d_d]==bang_dulieu_01[d_c-1][d_d-1])))
+		    		gia_tri="hat_rong_do";
+		    	else
+		    		gia_tri="hat_rong_xanh";
+		    	// console.log(gia_tri)
+	    	}
+	    	else
+	    	{
+		    	if(((bang_dulieu_01[d_c][d_d]==bang_dulieu_01[d_c][d_d-1])&&(bang_dulieu_01[d_c-1][d_d]==bang_dulieu_01[d_c-1][d_d-1])))
+		    		gia_tri="hat_rong_do";
+		    	else
+		    		gia_tri="hat_rong_xanh";
+		    }
+	    	// console.log(gia_tri);
+    	
+    		if(gia_tri==gia_tri_ht_rong||gia_tri_ht_rong=="-")
+    		{
+    			// console.log(bang_x[(dong+1)+"_"+cot]);
+    			var xuongdong=false;
+    			if(bang_dulieu_rong[(dong+1)+"_"+cot]!=""&&bang_dulieu_rong[(dong+1)+"_"+cot])
+    			{
+    				if(bang_dulieu_rong[(dong+1)+"_"+cot]==gia_tri)
+					{	
+						xuongdong=true;
+					}
+    			}
+    			else
+	    			xuongdong=true;	
+    			if(xuongdong==false)
+    			{
+    				if(cot!=71)
+	    				cot++;   				  
+    			}
+    			else
+    			{
+    				if(dong!=5)
+	    				dong++;
+    			}
+    		}
+    		else
+    		{
+				if(dong==max_dong)
+    			{
+    				max_dong=dong-1;
+    				max_cot=cot+1;
+    			}
+    			// cot=max_xp+1;
+    			dong=0;
+	    		max_xp++;
+    			// gia_tri="x_xanh";
+    		}	    	
+			var co_truoc=false;
+			if(bang_dulieu_rong[(dong+1)+"_"+(cot-1)]==gia_tri)
+			{	
+				co_truoc=true;
+			}	
+    		var co_cungtruoc=false;
+			if(bang_dulieu_rong[dong+"_"+(cot-1)]==gia_tri)
+			{	
+				co_cungtruoc=true;
+			}
+			var co_duoi=false;
+			if(bang_dulieu_rong[(dong+1)+"_"+cot]==gia_tri)
+			{	
+				co_duoi=true;
+			}
+			var co_tren=false;
+			if(bang_dulieu_rong[(dong-1)+"_"+cot]==gia_tri)
+			{	
+				co_tren=true;
+			}
+			// console.log(co_cungtruoc+":"+co_tren+":"+co_duoi+":"+co_truoc)
+    		if((co_cungtruoc==true&&co_tren==true)||co_duoi==true||(co_truoc==true&&co_duoi==true))
+			{
+				// console.log("vao");
+				if(dong!=0)
+				{
+    				dong=dong-1;
+				}
+				cot=cot+1;
+				// cells = rows[dong].getElementsByTagName('td');
+			}
+			if(bang_dulieu_rong[dong+"_"+cot]!="")
+			{
+				if(cot!=71)
+					cot++;
+			}
+			var cells = rows[dong].getElementsByTagName('td');
+			gia_tri_ht_rong=gia_tri;
+			// console.log("Sau ->"+dong+":"+cot+" =>"+bang_x[dong+"_"+cot]);
+    		while (cells[cot].firstChild)
+			{
+			  cells[cot].removeChild(cells[cot].firstChild);
+			}
+			// console.log(dong+"-"+cot);
+			dong_ht_hatrong=dong;
+			cot_ht_hatrong=cot;
+			// console.log(cot);
+			var newNode = document.createElement("span");
+            newNode.className =gia_tri;
+			cells[cot].appendChild(newNode);
+			document.getElementById('tbl4_'+dong+'_'+cot).scrollIntoView();
+			bang_dulieu_rong[dong+"_"+cot]=gia_tri;
+		    if(max_dong_of_cot('tbl4',dong,cot)==false)
+    		{
+				max_dong++;
+	    	}
+	    }
+	}
+	var dong_ht_dac=0,cot_ht_dac=0,gia_tri_ht_dac="";
+	function so_hat(){
+	    var d_c=bang_dulieu_01.length-1;
+	    var dem=0;
+	    for(var i=0;i<bang_dulieu_01.length;i++)
+	    {
+	    	for(var j=0;j<bang_dulieu_01[i].length;j++)
+	    		dem++;
+	    }
+	    return dem;
+	}
+	function vebang_hatdac()
+	{
+		var table = document.getElementById('tbl5'), 
+	    rows = table.getElementsByTagName('tr');
+	    var dong=dong_ht_dac,cot=cot_ht_dac;
+	    var max_dong=5;
+	    var max_cot=-1;
+	    var max_xp=0;
+	    var d_c=bang_dulieu_01.length-1;
+	    var d_d=bang_dulieu_01[d_c].length-1;
+	    if(bang_dulieu_01.length<=2||so_hat()<4)
+			return;
+	    if(so_hat()==4&&bang_dulieu_01.length!=so_hat())
+	    	return;
+    	else
+	    {
+	    	var gia_tri='';
+	    	if(d_c>=4&&bang_dulieu_01[d_c].length<=bang_dulieu_01[d_c-2].length)
+	    	{
+				if((bang_dulieu_01[d_c-1].length==bang_dulieu_01[d_c-3].length&&d_d==0))
+		    		gia_tri="hat_dac_do";
+		    	else if(((bang_dulieu_01[d_c][d_d]==bang_dulieu_01[d_c][d_d-1])&&(bang_dulieu_01[d_c-2][d_d]==bang_dulieu_01[d_c-2][d_d-1])))
+		    		gia_tri="hat_dac_do";
+		    	else
+		    		gia_tri="hat_dac_xanh";
+		    	// console.log(gia_tri)
+	    	}
+	    	else
+	    	{
+		    	if(((bang_dulieu_01[d_c][d_d]==bang_dulieu_01[d_c][d_d-1])&&(bang_dulieu_01[d_c-2][d_d]==bang_dulieu_01[d_c-2][d_d-1]))||bang_dulieu_01.length==so_hat())
+		    		gia_tri="hat_dac_do";
+		    	else
+		    		gia_tri="hat_dac_xanh";
+		    }
+
+	    	if(gia_tri_ht_dac!="")
+	    	{
+	    		if(gia_tri==gia_tri_ht_dac)
+	    		{
+	    			// console.log(bang_x[(dong+1)+"_"+cot]);
+	    			var xuongdong=false;
+	    			if(bang_dulieu_dac[(dong+1)+"_"+cot]!=""&&bang_dulieu_dac[(dong+1)+"_"+cot])
+	    			{
+	    				if(bang_dulieu_dac[(dong+1)+"_"+cot]==gia_tri)
+						{	
+							xuongdong=true;
+						}
+	    			}
+	    			else
+		    			xuongdong=true;	
+	    			if(xuongdong==false)
+	    			{
+	    				if(cot!=71)
+		    				cot++;   				  
+	    			}
+	    			else
+	    			{
+	    				if(dong!=5)
+		    				dong++;
+	    			}
+	    		}
+	    		else
+	    		{
+					if(dong==max_dong)
+	    			{
+	    				max_dong=dong-1;
+	    				max_cot=cot+1;
+	    			}
+	    			// cot=max_xp+1;
+	    			dong=0;
+		    		max_xp++;
+	    			// gia_tri="x_xanh";
+	    		}	    	
+				var co_truoc=false;
+				if(bang_dulieu_dac[(dong+1)+"_"+(cot-1)]==gia_tri)
+				{	
+					co_truoc=true;
+				}	
+	    		var co_cungtruoc=false;
+				if(bang_dulieu_dac[dong+"_"+(cot-1)]==gia_tri)
+				{	
+					co_cungtruoc=true;
+				}
+				var co_duoi=false;
+				if(bang_dulieu_dac[(dong+1)+"_"+cot]==gia_tri)
+				{	
+					co_duoi=true;
+				}
+				var co_tren=false;
+				if(bang_dulieu_dac[(dong-1)+"_"+cot]==gia_tri)
+				{	
+					co_tren=true;
+				}
+	    		if((co_cungtruoc==true&&co_tren==true)||co_duoi==true||(co_truoc==true&&co_duoi==true))
+				{
+					// console.log("vao");
+					if(dong!=0)
+					{
+	    				dong=dong-1;
+					}
+					cot=cot+1;
+					// cells = rows[dong].getElementsByTagName('td');
+				}
+				if(bang_dulieu_dac[dong+"_"+cot]!="")
+				{
+					if(cot!=71)
+						cot++;
+				}
+			}
+			var cells = rows[dong].getElementsByTagName('td');
+			gia_tri_ht_dac=gia_tri;
+			// console.log("Sau ->"+dong+":"+cot+" =>"+bang_x[dong+"_"+cot]);
+    		while (cells[cot].firstChild)
+			{
+			  cells[cot].removeChild(cells[cot].firstChild);
+			}
+			var newNode = document.createElement("span");
+            newNode.className =gia_tri;
+			cells[cot].appendChild(newNode);
+			document.getElementById('tbl5_'+dong+'_'+cot).scrollIntoView();
+			bang_dulieu_dac[dong+"_"+cot]=gia_tri;
+			dong_ht_dac=dong;
+			cot_ht_dac=cot;
+		    if(max_dong_of_cot('tbl5',dong,cot)==false)
+    		{
+				max_dong++;
+	    	}
+    	}
+	}
+	var dong_ht_phaymua=0,cot_ht_phaymua=0,gia_tri_ht_phaymua="";
+	function vebang_phaymua()
+	{
+		var table = document.getElementById('tbl6'), 
+	    rows = table.getElementsByTagName('tr');
+	    var dong=dong_ht_phaymua,cot=cot_ht_phaymua;
+	    var max_dong=5;
+	    var max_cot=-1;
+	    var max_xp=0;
+	    var d_c=bang_dulieu_01.length-1;
+	    var d_d=bang_dulieu_01[d_c].length-1;
+	    if(bang_dulieu_01.length<4||so_hat()<5)
+			return;
+		if(d_d==0&&bang_dulieu_01.length==4)
+	    	return;
+    	else
+	    {
+	    	var gia_tri='';
+	    	if(d_c>=6&&bang_dulieu_01[d_c].length<=bang_dulieu_01[d_c-3].length)
+	    	{
+				if((bang_dulieu_01[d_c-1].length==bang_dulieu_01[d_c-4].length))
+		    		gia_tri="phay_mua_do";
+		    	else if(((bang_dulieu_01[d_c][d_d]==bang_dulieu_01[d_c][d_d-1])&&(bang_dulieu_01[d_c-3][d_d]==bang_dulieu_01[d_c-3][d_d-1])))
+		    		gia_tri="phay_mua_do";
+		    	else
+		    		gia_tri="phay_mua_xanh";
+		    	// console.log(gia_tri)
+	    	}
+	    	else
+	    	{
+		    	if(((bang_dulieu_01[d_c][d_d]==bang_dulieu_01[d_c][d_d-1])&&(bang_dulieu_01[d_c-3][d_d]==bang_dulieu_01[d_c-3][d_d-1]))||bang_dulieu_01.length==so_hat())
+		    		gia_tri="phay_mua_do";
+		    	else
+		    		gia_tri="phay_mua_xanh";
+		    }
+	    	if(gia_tri_ht_phaymua!="")
+	    	{
+	    		if(gia_tri==gia_tri_ht_phaymua)
+	    		{
+	    			// console.log(bang_x[(dong+1)+"_"+cot]);
+	    			var xuongdong=false;
+	    			if(bang_dulieu_phaymua[(dong+1)+"_"+cot]!=""&&bang_dulieu_phaymua[(dong+1)+"_"+cot])
+	    			{
+	    				if(bang_dulieu_phaymua[(dong+1)+"_"+cot]==gia_tri)
+						{	
+							xuongdong=true;
+						}
+	    			}
+	    			else
+		    			xuongdong=true;	
+	    			if(xuongdong==false)
+	    			{
+	    				if(cot!=71)
+		    				cot++;   				  
+	    			}
+	    			else
+	    			{
+	    				if(dong!=5)
+		    				dong++;
+	    			}
+	    		}
+	    		else
+	    		{
+					if(dong==max_dong)
+	    			{
+	    				max_dong=dong-1;
+	    				max_cot=cot+1;
+	    			}
+	    			// cot=max_xp+1;
+	    			dong=0;
+		    		max_xp++;
+	    			// gia_tri="x_xanh";
+	    		}	    	
+				var co_truoc=false;
+				if(bang_dulieu_phaymua[(dong+1)+"_"+(cot-1)]==gia_tri)
+				{	
+					co_truoc=true;
+				}	
+	    		var co_cungtruoc=false;
+				if(bang_dulieu_phaymua[dong+"_"+(cot-1)]==gia_tri)
+				{	
+					co_cungtruoc=true;
+				}
+				var co_duoi=false;
+				if(bang_dulieu_phaymua[(dong+1)+"_"+cot]==gia_tri)
+				{	
+					co_duoi=true;
+				}
+				var co_tren=false;
+				if(bang_dulieu_phaymua[(dong-1)+"_"+cot]==gia_tri)
+				{	
+					co_tren=true;
+				}
+	    		if((co_cungtruoc==true&&co_tren==true)||co_duoi==true||(co_truoc==true&&co_duoi==true))
+				{
+					// console.log("vao");
+					if(dong!=0)
+					{
+	    				dong=dong-1;
+					}
+					cot=cot+1;
+					// cells = rows[dong].getElementsByTagName('td');
+				}
+				if(bang_dulieu_phaymua[dong+"_"+cot]!="")
+				{
+					if(cot!=71)
+						cot++;
+				}
+			}
+			var cells = rows[dong].getElementsByTagName('td');
+			gia_tri_ht_phaymua=gia_tri;
+			// console.log("Sau ->"+dong+":"+cot+" =>"+bang_x[dong+"_"+cot]);
+    		while (cells[cot].firstChild)
+			{
+			  cells[cot].removeChild(cells[cot].firstChild);
+			}
+			var newNode = document.createElement("span");
+            newNode.className =gia_tri;
+			cells[cot].appendChild(newNode);
+			document.getElementById('tbl6_'+dong+'_'+cot).scrollIntoView();
+			bang_dulieu_phaymua[dong+"_"+cot]=gia_tri;
+			dong_ht_phaymua=dong;
+			cot_ht_phaymua=cot;
+		    if(max_dong_of_cot('tbl6',dong,cot)==false)
+    		{
+				max_dong++;
+	    	}
+    	}
+
+	}
+	function check2(phan_tu_html)
+	{
+		var table = document.getElementById('tbl3'), 
+	    rows = table.getElementsByTagName('tr');
+	    var dong=0,cot=0;
+	    XoaBangKQ('tbl3');
+	    var max_dong=5;
+	    var max_cot=-1;
+	    var max_xp=0;
+	    var gia_tri_cu=-1;
+	    for(var m=0;m<mang_giatri.length;m++)
+	    {
+	    	var gia_tri='';
+	    	if(m==0)
+	    	{
+	    		dong=0;
+	    		cot=0;
+	    		gia_tri=(mang_giatri[m]=="-"?"hat_rong_xanh_la":(mang_giatri[m]==0?"hat_rong_xanh":"hat_rong_do"));
+	    	}
+	    	else
+	    	{
+	    		if((mang_giatri[m]==mang_giatri[m-1]||mang_giatri[m]=="-"||mang_giatri[m-1]=="-"))
+	    		{
+	    			if(gia_tri_cu==-1&&mang_giatri[m]=="-"||mang_giatri[m-1]!="-")
+	    				gia_tri_cu=mang_giatri[m-1];
+	    			gia_tri=(mang_giatri[m]=="-"?"hat_rong_xanh_la":(mang_giatri[m]==0?"hat_rong_xanh":"hat_rong_do"));
+	    			var xuongdong=false;
+	    			var truocno=false;
+	    			var objDuoi=$("#tbl2_"+(dong+1)+"_"+cot);
+	    			var objTruocno=$("#tbl2_"+dong+"_"+(cot-1));
+	    			if(objTruocno.length>0)
+	    			{
+
+	    			}
+	    			// console.log(objDuoi.length);
+	    			if(objDuoi.length>0)
+	    			{
+						if(objDuoi.children().length==0)
+						{
+							xuongdong=true;
+							// console.log("Ko co");
+						}
+						else
+						{
+							if(objDuoi.children().attr("class")==gia_tri)
+							{	
+								// console.log(1);
+								xuongdong=true;
+							}
+						}
+	    			}
+	    			else
+	    			{
+
+	    			}
+	    			if(xuongdong==false)
+	    			{
+	    				cot++;	    				
+	    			}
+	    			else
+	    			{
+	    				dong++;
+	    			}
+	    		}
+	    		else
+	    		{
+	    			gia_tri_cu=-1;
+					if(dong==max_dong)
+	    			{
+	    				max_dong=dong-1;
+	    				max_cot=cot+1;
+	    			}
+	    			cot=max_xp+1;
+	    			dong=0;
+		    		max_xp++;
+	    			gia_tri=(mang_giatri[m]=="-"?"hat_rong_xanh_la":(mang_giatri[m]==0?"hat_rong_xanh":"hat_rong_do"));
+	    		}
+	    	}	 
+	       for (var i = 0; i < rows.length;i++)
+		    {
+		    	if (i==dong)
+		    	{
+		    		cells = rows[i].getElementsByTagName('td');
+		    		for (var j = 0; j < cells.length;j++)
+		    		{
+		    			if (j==cot)
+		    			{
+		    				while (cells[j].firstChild)
+							  cells[j].removeChild(cells[j].firstChild);
+		    				var newNode = document.createElement("div");
+				            newNode.className =gia_tri;
+		    				cells[j].appendChild(newNode);
+		    			}
+		    				
+		    		}
+		    	}
+		    
+		    }
+		    if(max_dong_of_cot('tbl2',dong,cot)==false)
+    		{
+				max_dong++;
+    		}
+    		// console.log(cot+":"+dong);
+		 }
+
+	}
+	function Xoacheck(idtable)
+	{
+		var table = document.getElementById(idtable), 
+	    rows = table.getElementsByTagName('tr');
+	    if (donght>0)
+	    {
+	    	donght--;		
+	    }
+	    else
+	     {
+	     	if(cotht>0)
+		    {
+		     	cotht--;
+		     	donght=rows.length-1;
+		    }
+	     }
+	    var dong=donght,cot=cotht;
+       for (var i = 0; i < rows.length;i++)
+	    {
+	    	if (i==dong)
+	    	{
+	    		cells = rows[i].getElementsByTagName('td');
+	    		for (var j = 0; j < cells.length;j++)
+	    		{
+	    			if (j==cot)
+	    			{
+	    				while (cells[j].firstChild) 
+						  cells[j].removeChild(cells[j].firstChild);
+						  if(mang_giatri[mang_giatri.length]!="-")
+							  	mang_x.pop();
+						  mang_giatri.pop();	
+						  mang_diem.pop();		
+	    			}
+	    				
+	    		}
+	    	}
+	    
+	    }
+	    XoaBangKQ('tbl2');
+	    XoaBangKQ('tbl3');
+	    XoaBangKQ('tbl4');
+	    XoaBangKQ('tbl5');
+	    XoaBangKQ('tbl6');
+		check1();
+		vebang_x();
+	}
+	function readCookie(name) 
+	{
+		return JSON.parse(window.localStorage.getItem(name));
+	}
+	function createCookie(name,value,days) {
+		window.localStorage.setItem(name, JSON.stringify(value));
+		return true;
+	}
+	function DeleteCookie(name) {
+		window.localStorage.removeItem(name);
+		return true;
+	}
+
+</script>
+</body>
+
+</html>

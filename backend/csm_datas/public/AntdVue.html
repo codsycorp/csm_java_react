@@ -1,0 +1,850 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Enhanced Table with All Data Types</title>
+  <!-- Ant Design CSS -->
+  <link rel="stylesheet" href="assets/antd/antd.css">
+  <!-- Day.js -->
+  <script src="assets/antd/dayjs.min.js"></script>
+  <script src="assets/antd/customParseFormat.js"></script>
+  <!-- Vue.js -->
+  <script src="assets/antd/vue.global.prod.js"></script>
+  <!-- Ant Design Vue JS -->
+  <script src="assets/antd/antd.min.js"></script>
+   <!-- DataGrid by DevExpress-->
+<!--   <script src="assets/dxdatagrid/js/dx.all.js"></script>
+  <link rel="stylesheet" href="assets/dxdatagrid/css/dx.light.css"/> -->
+  <!-- DevExtreme CSS -->
+  <link rel="stylesheet" href="https://cdn3.devexpress.com/jslib/22.2.5/css/dx.light.css">
+
+  <!-- jQuery & DevExtreme Scripts -->
+  <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+  <script src="https://cdn3.devexpress.com/jslib/22.2.5/js/dx.all.js"></script>
+</head>
+<body>
+  <h1>Enhanced Table with All Data Types</h1>
+  <div id="app"></div>
+  <h1>Gọi API Alibaba Cloud từ HTML</h1>
+  <button id="callApiJobButton">Gọi Job API</button>
+  <button id="callApiHouseButton">Gọi House API</button>
+  <button id="callMyApi">Gọi My API</button>
+  <button id="openAI">Hỏi AI</button>
+  <input id="duong_dan" type="text" value="184"/>
+  <button id="checkSEO">CHECK WEB SEO</button>
+  
+  <button id="checkLang">Kiểm trùng khai báo ngôn ngữ</button>
+  <textarea id="lang" rows="4" cols="50"></textarea>
+  <pre id="response"></pre>
+  <h2>Project Management Scheduler</h2>
+  <div class="scheduler-container">
+    <div id="scheduler"></div>
+  </div>
+  <script>
+    window.domain_api_url='api'
+    // window.domain_api_url='https://api.phanmemmottrieu.net'
+    window.la_obj_tables=function (obj, fn) {
+        fetch(domain_api_url+"/get-table-data", {
+            method: "POST",
+            headers: {
+            "Content-Type": "application/json",
+            "csm-token": "4d543bb4-714c-4bb1-952f-a2e0bf8b24a3"
+            },
+            body: JSON.stringify(obj),
+        })
+        .then(response => response.json())
+        .then(data => fn(data))
+        .catch(error => fn({ status: false, error: error.message }));
+    };
+    window.la_obj_updates=function (obj, fn) {
+        fetch(domain_api_url+"/update-table-data", {
+            method: "POST",
+            headers: {
+            "Content-Type": "application/json",
+            "csm-token": "4d543bb4-714c-4bb1-952f-a2e0bf8b24a3"
+            },
+            body: JSON.stringify(obj),
+        })
+        .then(response => response.json())
+        .then(data => fn(data))
+        .catch(error => fn({ status: false, error: error.message }));
+    }
+    function TạoIndexTimKiemChoBang(app_id,obj_name){
+      var payload = {
+        app_id: app_id,
+        obj_name: obj_name,
+      };
+      fetch(domain_api_url+"/update-table-data-index", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
+      })
+        .then(response => response.json())
+        .then(data => {
+          console.log("✅ Kết quả:", data);
+        })
+        .catch(error => {
+          console.error("❌ Lỗi:", error);
+        });
+    }
+    // Khai báo CustomStore
+    // Lưu cursor tương ứng với từng trang
+    window.cursorMap = {
+      0: null // Trang 0 không cần cursor
+    };
+
+    var dataGrd = new DevExpress.data.CustomStore({
+      key: "id",
+      loadMode: "processed", // server xử lý phân trang
+      load: function(loadOptions) {
+        const take = loadOptions.take || 50;
+        const pageIndex = (loadOptions.skip || 0) / take;
+
+        // Lấy cursor tương ứng với trang hiện tại
+        const cursor = window.cursorMap[pageIndex] || null;
+
+        // const params = {
+        //   app_id: "fidovnemail",
+        //   obj_name: "fid_doanhnghiep",
+        //   e_where: {
+        //     operator: "AND",
+        //     conditions: []
+        //   },
+        //   take: take,
+        //   lastkey: cursor
+        // };
+        const params = {
+          app_id: "fidovnemail",
+          obj_name: "fid_doanhnghiep",
+          e_where: {
+            operator: "AND",
+            conditions: [
+              {
+                field: "company_name",
+                type: "like",
+                value: "du lịch"
+              }
+            ]
+          },
+          take: take,
+          lastkey: cursor
+        };
+        return new Promise((resolve, reject) => {
+          la_obj_tables(params, function(rs) {
+            if (rs && Array.isArray(rs.rows)) {
+              // Lưu nextCursor cho trang kế tiếp
+              window.cursorMap[pageIndex + 1] = rs.nextCursor;
+
+              resolve({
+                data: rs.rows,
+                totalCount: rs.totalCount // bạn đã có từ backend
+              });
+            } else {
+              reject("Lỗi dữ liệu từ backend");
+            }
+          });
+        });
+      }
+    });
+
+    $("#scheduler").dxDataGrid({
+      dataSource: dataGrd,
+      key: "id",
+      height: 600,
+      columns: [
+        { dataField: "id", caption: "ID" },
+        { dataField: "company_name", caption: "Tên Công Ty" },
+        { dataField: "tax_code", caption: "MST" },
+        { dataField: "phone_number", caption: "Điện Thoại" },
+        { dataField: "email", caption: "Email" }
+      ],
+      paging: {
+        enabled: true,
+        pageSize: 50
+      },
+      pager: {
+        visible: true,
+        showPageSizeSelector: true,
+        allowedPageSizes: [50, 100, 200],
+        showInfo: true,
+        showNavigationButtons: true,
+        infoText: 'Trang {0} / {1} (Tổng: {2} dòng)'
+      },
+      remoteOperations: {
+        paging: true,
+        filtering: true,
+        sorting: true
+      },
+      onContentReady: function(e) {
+        const grid = e.component;
+        const totalCount = grid.totalCount();
+
+        if (!document.getElementById("custom-total-footer")) {
+          const footer = document.createElement("div");
+          footer.id = "custom-total-footer";
+          footer.style.padding = "10px";
+          footer.style.textAlign = "right";
+          footer.innerText = `Tổng số bản ghi: ${totalCount.toLocaleString()}`;
+          grid.element().append(footer);
+        }
+      }
+    });
+
+//     dayjs.extend(dayjs_plugin_customParseFormat);
+//     const { createApp, reactive, ref, h } = Vue;
+//     const { Table, Space, Input, InputNumber, Button, DatePicker, Tag, Select, Checkbox, Upload, Image, UploadOutlined, DeleteOutlined, EditOutlined } = antd;
+
+//     const data = reactive([
+//       {
+//         key: '1',
+//         name: 'John Doe',
+//         age: 32,
+//         date: '01/03/1990',
+//         score: 95,
+//         status: 'active',
+//         tags: ['developer', 'team lead'],
+//         checkbox: true,
+//         file: null,
+//         image: null,
+//         isEditing: false,
+//         isNew: false,
+//       },
+//       {
+//         key: '2',
+//         name: 'Jane Smith',
+//         age: 28,
+//         date: '15/10/1995',
+//         score: 80,
+//         status: 'inactive',
+//         tags: ['designer'],
+//         checkbox: false,
+//         file: null,
+//         image: null,
+//         isEditing: false,
+//         isNew: false,
+//       },
+//     ]);
+
+//     const filteredData = ref([...data]);
+//     const filters = reactive({
+//       name: '',
+//       age: null,
+//       date: '',
+//       score: null,
+//       status: '',
+//       tags: [],
+//       checkbox: null,
+//     });
+
+//     const filterData = () => {
+//       filteredData.value = data.filter(row => {
+//         return (!filters.name || row.name.toLowerCase().includes(filters.name.toLowerCase())) &&
+//                (filters.age === null || row.age === filters.age) &&
+//                (!filters.date || row.date === filters.date) &&
+//                (filters.score === null || row.score === filters.score) &&
+//                (!filters.status || row.status === filters.status) &&
+//                (filters.tags.length === 0 || filters.tags.every(tag => row.tags.includes(tag))) &&
+//                (filters.checkbox === null || row.checkbox === filters.checkbox);
+//       });
+//     };
+
+//     const addRow = () => {
+//       const newRow = {
+//         key: (data.length + 1).toString(),
+//         name: '',
+//         age: null,
+//         date: '',
+//         score: null,
+//         status: '',
+//         tags: [],
+//         checkbox: false,
+//         file: null,
+//         image: null,
+//         isEditing: true,
+//         isNew: true,
+//         originalData: { name: '', age: null, date: '', score: null, status: '', tags: [], checkbox: false, file: null, image: null },
+//       };
+//       data.push(newRow);
+//       filteredData.value = [...data];
+//     };
+
+//     const toggleEditing = (record) => {
+//       record.isEditing = !record.isEditing;
+//       if (!record.isEditing) {
+//         Object.assign(record, record.originalData);
+//       }
+//     };
+
+//     const saveRecord = (record) => {
+//       record.isEditing = false;
+//       record.originalData = { ...record };
+//       record.isNew = false;
+//     };
+
+//     const cancelEdit = (record) => {
+//       record.isEditing = false;
+//       if (record.isNew) {
+//         data.splice(data.indexOf(record), 1);
+//       } else {
+//         Object.assign(record, record.originalData);
+//       }
+//       filteredData.value = [...data];
+//     };
+
+//     const columns = [
+//       {
+//         title: 'Name',
+//         dataIndex: 'name',
+//         key: 'name',
+//         sorter: (a, b) => a.name.localeCompare(b.name),
+//         customRender: ({ value, record }) => {
+//           return record.isEditing
+//             ? h(Input, {
+//                 value,
+//                 onInput: (e) => (record.name = e.target.value),
+//               })
+//             : value;
+//         },
+//         filterDropdown: () => h(Input, {
+//           value: filters.name,
+//           onInput: (e) => {
+//             filters.name = e.target.value;
+//             filterData();
+//           },
+//           placeholder: 'Search Name',
+//         }),
+//       },
+//       {
+//         title: 'Age',
+//         dataIndex: 'age',
+//         key: 'age',
+//         sorter: (a, b) => a.age - b.age,
+//         customRender: ({ value, record }) => {
+//           return record.isEditing
+//             ? h(InputNumber, {
+//                 value,
+//                 min: 0,
+//                 onChange: (val) => (record.age = val),
+//               })
+//             : value;
+//         },
+//         filterDropdown: () => h(InputNumber, {
+//           value: filters.age,
+//           onChange: (val) => {
+//             filters.age = val;
+//             filterData();
+//           },
+//           placeholder: 'Filter Age',
+//         }),
+//       },
+//       {
+//         title: 'Date of Birth',
+//         dataIndex: 'date',
+//         key: 'date',
+//         sorter: (a, b) => dayjs(a.date, 'DD/MM/YYYY').isBefore(dayjs(b.date, 'DD/MM/YYYY')) ? -1 : 1,
+//         customRender: ({ value, record }) => {
+//           return record.isEditing
+//             ? h(DatePicker, {
+//                 value: value ? dayjs(value, 'DD/MM/YYYY') : null,
+//                 format: 'DD/MM/YYYY',
+//                 onChange: (_, dateString) => (record.date = dateString),
+//               })
+//             : dayjs(value, 'DD/MM/YYYY').isValid() ? dayjs(value, 'DD/MM/YYYY').format('DD/MM/YYYY') : 'No Date';
+//         },
+//         filterDropdown: () => h(DatePicker, {
+//           value: filters.date ? dayjs(filters.date, 'DD/MM/YYYY') : null,
+//           format: 'DD/MM/YYYY',
+//           onChange: (_, dateString) => {
+//             filters.date = dateString;
+//             filterData();
+//           },
+//           placeholder: 'Filter Date',
+//         }),
+//       },
+//       {
+//         title: 'Score',
+//         dataIndex: 'score',
+//         key: 'score',
+//         sorter: (a, b) => a.score - b.score,
+//         customRender: ({ value, record }) => {
+//           return record.isEditing
+//             ? h(InputNumber, {
+//                 value,
+//                 min: 0,
+//                 max: 100,
+//                 onChange: (val) => (record.score = val),
+//               })
+//             : value;
+//         },
+//         filterDropdown: () => h(InputNumber, {
+//           value: filters.score,
+//           onChange: (val) => {
+//             filters.score = val;
+//             filterData();
+//           },
+//           placeholder: 'Filter Score',
+//         }),
+//       },
+//       {
+//         title: 'Tags',
+//         dataIndex: 'tags',
+//         key: 'tags',
+//         customRender: ({ value, record }) => {
+//           return record.isEditing
+//             ? h(Select, {
+//                 mode: 'tags',
+//                 value,
+//                 onChange: (val) => (record.tags = val),
+//               })
+//             : value.map((tag) =>
+//                 h(Tag, { color: 'blue', style: { margin: '2px' } }, tag)
+//               );
+//         },
+//         filterDropdown: () => h(Select, {
+//           mode: 'tags',
+//           value: filters.tags,
+//           onChange: (val) => {
+//             filters.tags = val;
+//             filterData();
+//           },
+//           placeholder: 'Filter Tags',
+//         }),
+//       },
+//       {
+//         title: 'Status',
+//         dataIndex: 'status',
+//         key: 'status',
+//         customRender: ({ value, record }) => {
+//           return record.isEditing
+//             ? h(Select, {
+//                 value,
+//                 onChange: (val) => (record.status = val),
+//               }, [
+//                 h(Select.Option, { value: 'active' }, 'Active'),
+//                 h(Select.Option, { value: 'inactive' }, 'Inactive'),
+//               ])
+//             : value;
+//         },
+//         filterDropdown: () => h(Select, {
+//           value: filters.status,
+//           onChange: (val) => {
+//             filters.status = val;
+//             filterData();
+//           },
+//           placeholder: 'Filter Status',
+//         }, [
+//           h(Select.Option, { value: 'active' }, 'Active'),
+//           h(Select.Option, { value: 'inactive' }, 'Inactive'),
+//         ]),
+//       },
+//       {
+//         title: 'Checkbox',
+//         dataIndex: 'checkbox',
+//         key: 'checkbox',
+//         customRender: ({ value, record }) => {
+//           return record.isEditing
+//             ? h(Checkbox, {
+//                 checked: value,
+//                 onChange: (e) => (record.checkbox = e.target.checked),
+//               })
+//             : value
+//             ? 'Yes'
+//             : 'No';
+//         },
+//         filterDropdown: () => h(Select, {
+//           value: filters.checkbox,
+//           onChange: (val) => {
+//             filters.checkbox = val;
+//             filterData();
+//           },
+//           placeholder: 'Filter Checkbox',
+//         }, [
+//           h(Select.Option, { value: true }, 'Yes'),
+//           h(Select.Option, { value: false }, 'No'),
+//         ]),
+//       },
+//       {
+//         title: 'File',
+//         dataIndex: 'file',
+//         key: 'file',
+//         customRender: ({ value, record }) => {
+//           return record.isEditing
+//             ? h(Upload, {
+//                 onChange: ({ file }) => (record.file = file.name),
+//                 showUploadList: false,
+//               }, [
+//                 h(Button, { icon: h(UploadOutlined) }, 'Upload File'),
+//               ])
+//             : value
+//             ? h('a', { href: '#', download: value }, value)
+//             : 'No File';
+//         },
+//       },
+//       {
+//         title: 'Image',
+//         dataIndex: 'image',
+//         key: 'image',
+//         customRender: ({ value, record }) => {
+//           return record.isEditing
+//             ? h(Upload, {
+//                 onChange: ({ file }) => (record.image = URL.createObjectURL(file.originFileObj)),
+//                 showUploadList: false,
+//               }, [
+//                 h(Button, { icon: h(UploadOutlined) }, 'Upload Image'),
+//               ])
+//             : value
+//             ? h(Image, { src: value, width: 50 })
+//             : 'No Image';
+//         },
+//       },
+//       {
+//         title: 'Actions',
+//         key: 'action',
+//         customRender: ({ _, record }) => {
+//           return record.isEditing
+//             ? h(Space, {}, [
+//                 h(Button, { icon: h(EditOutlined), onClick: () => saveRecord(record) }, 'Save'),
+//                 h(Button, { icon: h(DeleteOutlined), danger: true, onClick: () => cancelEdit(record) }, 'Cancel'),
+//               ])
+//             : h(Space, {}, [
+//                 h(Button, { icon: h(EditOutlined), onClick: () => toggleEditing(record) }, 'Edit'),
+//                 h(Button, { icon: h(DeleteOutlined), danger: true, onClick: () => data.splice(data.indexOf(record), 1) }, 'Delete'),
+//               ]);
+//         },
+//       },
+//     ];
+
+//     createApp({
+//       setup() {
+//         return {
+//           columns,
+//           data,
+//           addRow,
+//           filters,
+//           filteredData,
+//           filterData,
+//         };
+//       },
+//       render() {
+//         return h('div', [
+//           h('div', [
+//             h('input', {
+//               value: this.filters.name,
+//               onInput: (e) => (this.filters.name = e.target.value),
+//               placeholder: 'Search by Name',
+//             }),
+//             h(Button, { type: 'primary', onClick: this.filterData }, 'Search'),
+//           ]),
+//           h(Button, { type: 'primary', onClick: this.addRow }, 'Add Row'),
+//           h(Table, {
+//             columns: this.columns,
+//             dataSource: this.filteredData,
+//             pagination: true,
+//             rowKey: 'key',
+//           }),
+//         ]);
+//       },
+//     })
+//     .mount('#app');
+    
+    
+//     function checkDuplicateKeysAndValues(obj) {
+//       const keys = Object.keys(obj);      // Lấy danh sách các khóa
+//       const values = Object.values(obj); // Lấy danh sách các giá trị
+
+//       // Kiểm tra trùng lặp trong khóa
+//       const duplicateKeys = keys.filter((key, index, arr) => arr.indexOf(key) !== index);
+
+//       // Kiểm tra trùng lặp trong giá trị
+//       const duplicateValues = values.filter((value, index, arr) => arr.indexOf(value) !== index);
+
+//       return {
+//           hasDuplicateKeys: duplicateKeys.length > 0,     // Có khóa trùng lặp không?
+//           duplicateKeys: [...new Set(duplicateKeys)],    // Danh sách khóa trùng lặp (loại bỏ trùng lặp trong kết quả)
+//           hasDuplicateValues: duplicateValues.length > 0, // Có giá trị trùng lặp không?
+//           duplicateValues: [...new Set(duplicateValues)]  // Danh sách giá trị trùng lặp (loại bỏ trùng lặp trong kết quả)
+//       };
+//     }
+//     document.getElementById('checkLang').addEventListener('click', () => {
+//       var kiemtrung=checkDuplicateKeysAndValues(JSON.parse(document.getElementById('lang').value));
+//       document.getElementById('response').innerText ="Từ khóa trùng:\n"+kiemtrung.duplicateKeys.join('\n')+ "\n khai báo trùng:\n "+kiemtrung.duplicateValues.join('\n');
+//     });
+//     async function API_POST(){
+//       const apiEndpoint = 'https://api.phanmemmottrieu.net/login';
+//       const payload = {
+//         username: 'admin',
+//         password: 'admin',
+//         type: 'account'
+//       };
+
+//       try {
+//           const response = await fetch(apiEndpoint, {
+//               method: 'POST',
+//               headers: {
+//                   'Content-Type': 'application/json',
+//                   'x-fc-invocation-type': 'Sync', // Bắt buộc
+//                   'x-fc-log-type': 'None', // Để giảm thiểu log
+//               },
+//               body: JSON.stringify(payload) // Gửi payload với action bên trong
+//           });
+
+//           const data = await response.json();
+//           document.getElementById('response').innerText = JSON.stringify(data, null, 2);
+//       } catch (error) {
+//           console.error('Error:', error);
+//           document.getElementById('response').innerText = 'Lỗi: ' + error.message;
+//       }
+//     }
+//     async function API_GET() {
+//       const apiEndpoint = 'https://api.phanmemmottrieu.net/login';
+//       const params = new URLSearchParams({
+//           username: 'admin',
+//           password: 'admin',
+//           type: 'account'
+//       });
+
+//       try {
+//           const response = await fetch(`${apiEndpoint}?${params.toString()}`, {
+//               method: 'GET',
+//               headers: {
+//                   'x-fc-invocation-type': 'Sync', // Bắt buộc
+//                   'x-fc-log-type': 'None' // Để giảm thiểu log
+//               }
+//           });
+
+//           if (!response.ok) {
+//               throw new Error(`HTTP error! status: ${response.status}`);
+//           }
+
+//           const data = await response.json();
+//           document.getElementById('response').innerText = JSON.stringify(data, null, 2);
+//       } catch (error) {
+//           console.error('Error:', error);
+//           document.getElementById('response').innerText = 'Lỗi: ' + error.message;
+//       }
+//     }
+// //     Vào https://platform.openai.com/ . Đăng nhập bằng tài khoản gmail lleducanh@gmail.com Để có OpenAI Api Key
+//     document.getElementById('openAI').addEventListener('click', async () => {
+//       await fetchOpenAI('Viết nội dung chuẩn hóa seo cho viết phần mềm theo yêu cầu có thể thu hút khách và đứng bền vững trên google');
+//     });
+    document.getElementById('checkSEO').addEventListener('click', async () => {
+      const apiEndpoint = '/api/seo';
+      const payload = {
+          url:document.getElementById('duong_dan').value
+      };
+
+      try {
+          const response = await fetch(apiEndpoint, {
+              method: 'POST',
+              headers: {
+                  'Content-Type': 'application/json',
+                  'x-fc-invocation-type': 'Sync', // Bắt buộc
+                  'x-fc-log-type': 'None', // Để giảm thiểu log
+              },
+              body: JSON.stringify(payload) // Gửi payload với action bên trong
+          });
+
+          const data = await response.json();
+          document.getElementById('response').innerText = JSON.stringify(data, null, 2);
+      } catch (error) {
+          console.error('Error:', error);
+          document.getElementById('response').innerText = 'Lỗi: ' + error.message;
+      }
+    });
+//     const fetchOpenAI = async (noi_dung) => {
+//       var openApiKey='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';
+//       const response = await fetch("https://api.openai.com/v1/chat/completions", {
+//         method: "POST",
+//         headers: {
+//           "Content-Type": "application/json",
+//           "Authorization": "Bearer "+openApiKey
+//         },
+//         body: JSON.stringify({
+//           model: "gpt-4o-mini",
+//           store: true,
+//           messages: [
+//             { role: "user", content: noi_dung }
+//           ]
+//         })
+//       });
+
+//       const data = await response.json();
+//       console.log(data);
+//     };
+
+// //     function openApp() {
+// //       const urlScheme = 'fidovn://';
+// //       const fallbackUrl = 'https://www.fidovn.com';
+// //       let opened = false;
+
+// //       // Mở app
+// //       window.location.href = urlScheme;
+
+// //       // Lắng nghe sự kiện từ ứng dụng
+// //       window.addEventListener('visibilitychange', () => {
+// //           if (document.visibilityState === 'hidden') {
+// //               opened = true; // App đã mở
+// //           }
+// //       });
+
+// //       // Chuyển hướng fallback nếu không mở được app
+// //       setTimeout(() => {
+// //           if (!opened) {
+// //               window.location.href = fallbackUrl;
+// //           }
+// //       }, 1500);
+// //     }
+// //     // setTimeout(function(){
+// //     //   document.getElementById('openApp').click();
+// //     // },500);
+// //     function isAppInstalled(urlScheme, fallbackUrl) {
+// //         const now = new Date().getTime();
+
+// //         // Mở ứng dụng qua scheme
+// //         window.location.href = urlScheme;
+
+// //         // Kiểm tra sau 2 giây xem ứng dụng có được mở không
+// //         setTimeout(() => {
+// //             const later = new Date().getTime();
+// //             if (later - now < 2000) {
+// //                 // Nếu thời gian trễ nhỏ hơn 2 giây, tức là không mở được app
+// //                 window.location.href = fallbackUrl; // Chuyển đến fallback URL
+// //             }
+// //         }, 1500); // Thời gian chờ tối đa
+// //     }
+// //     document.getElementById('openApp').addEventListener('click', openApp);
+//     document.getElementById('callMyApi').addEventListener('click', async () => {
+//       const apiEndpoint = 'https://api.phanmemmottrieu.net/login';
+//       const payload = {username: "admin", password: "admin"};
+
+//       try {
+//           const response = await fetch(apiEndpoint, {
+//               method: 'POST',
+//               headers: {
+//                   'Content-Type': 'application/json',
+//                   'x-fc-invocation-type': 'Sync', // Bắt buộc
+//                   'x-fc-log-type': 'None', // Để giảm thiểu log
+//               },
+//               body: JSON.stringify(payload) // Gửi payload với action bên trong
+//           });
+
+//           const data = await response.json();
+//           document.getElementById('response').innerText = JSON.stringify(data, null, 2);
+//       } catch (error) {
+//           console.error('Error:', error);
+//           document.getElementById('response').innerText = 'Lỗi: ' + error.message;
+//       }
+//     });
+//     document.getElementById('callApiJobButton').addEventListener('click', async () => {
+//       const apiEndpoint = 'https://api-dev.fidovn.com/fidovn-user/share/getJobSharePosterImage';
+//       const payload = {
+//          "recruitmentJobId": document.querySelector('#duong_dan').value
+//       };
+
+//       try {
+//           const response = await fetch(apiEndpoint, {
+//               method: 'POST',
+//               headers: {
+//                   'Content-Type': 'application/json',
+//                   'x-fc-invocation-type': 'Sync', // Bắt buộc
+//                   'x-fc-log-type': 'None', // Để giảm thiểu log
+//               },
+//               body: JSON.stringify(payload) // Gửi payload với action bên trong
+//           });
+
+//           const data = await response.json();
+//           document.getElementById('response').innerText = JSON.stringify(data, null, 2);
+//       } catch (error) {
+//           console.error('Error:', error);
+//           document.getElementById('response').innerText = 'Lỗi: ' + error.message;
+//       }
+//     });
+//     document.getElementById('callApiHouseButton').addEventListener('click', async () => {
+//       const apiEndpoint = 'https://api-dev.fidovn.com/fidovn-user/share/getHouseSharePosterImage';
+//       const payload = {
+//          "houseId": document.querySelector('#duong_dan').value
+//       };
+
+//       try {
+//           const response = await fetch(apiEndpoint, {
+//               method: 'POST',
+//               headers: {
+//                   'Content-Type': 'application/json',
+//                   'x-fc-invocation-type': 'Sync', // Bắt buộc
+//                   'x-fc-log-type': 'None', // Để giảm thiểu log
+//               },
+//               body: JSON.stringify(payload) // Gửi payload với action bên trong
+//           });
+
+//           const data = await response.json();
+//           document.getElementById('response').innerText = JSON.stringify(data, null, 2);
+//       } catch (error) {
+//           console.error('Error:', error);
+//           document.getElementById('response').innerText = 'Lỗi: ' + error.message;
+//       }
+//     });
+//     // Dùng toàn bộ Ant Design Vue
+//     // Định nghĩa Vue App
+//     const App = {
+//       data() {
+//           return {
+//               text: 'Xin chao',
+//               projects: [],
+//               selectedDate: null,
+//               editingIndex: -1,
+//           };
+//       },
+//       methods: {
+//           addProject() {
+//               if (!this.selectedDate) {
+//                   alert("Vui lòng chọn ngày trước khi thêm dự án!");
+//                   return;
+//               }
+
+//               const newProject = {
+//                   name: this.text,
+//                   date: this.selectedDate.format('YYYY-MM-DD'),
+//                   progress: 0
+//               };
+
+//               if (this.editingIndex === -1) {
+//                   this.projects.push(newProject);
+//               } else {
+//                   this.projects[this.editingIndex] = newProject;
+//                   this.editingIndex = -1;
+//               }
+
+//               this.text = '';
+//               this.selectedDate = null;
+//           },
+//           editProject(index) {
+//               this.text = this.projects[index].name;
+//               this.selectedDate = dayjs(this.projects[index].date);
+//               this.editingIndex = index;
+//           },
+//           deleteProject(index) {
+//               this.projects.splice(index, 1);
+//           },
+//           updateProgress(index, progress) {
+//               this.projects[index].progress = progress;
+//           },
+//           handleDateChange(date) {
+//               this.selectedDate = date ? dayjs(date) : null;
+//           },
+//           getSubmitButtonText() {
+//               return this.editingIndex === -1 ? 'Thêm Dự Án' : 'Cập Nhật Dự Án';
+//           }
+//       },
+//       template: `
+          
+//       `
+//     };
+
+//     createApp(App).use(antd).mount("#scheduler");
+  </script>
+<!-- <iframe src="https://devil.ai/api-personality-test/73bf4798e8f594f8f3dfdafe44a6aa8c67a5b4e2da772794820611" title="Personality Test" allow="payment" style="width: 100%; height: 80vh; border: none; border-radius: 8px; overflow-x: hidden; scroll-behavior: smooth;"></iframe> -->
+  </body>
+</html>

@@ -1,0 +1,679 @@
+import { request } from "#src/utils";
+import { AI_TIMEOUT_MS } from "#src/api/ai/index";
+
+// Định nghĩa kiểu GoogleIndexResponse cho các API Google Index
+export type GoogleIndexResponse = {
+	success: boolean;
+	message?: string;
+	data?: any;
+	[key: string]: any;
+};
+
+/**
+ * Gửi 1 hoặc nhiều URLs lên Google Indexing API (publish/remove)
+ * Có thể truyền timeout (ms), mặc định dùng AI_TIMEOUT_MS
+ * @param urls URL hoặc mảng URLs
+ * @param action "publish" (mặc định) hoặc "remove"
+ * @param timeoutMs Thời gian timeout (ms), mặc định AI_TIMEOUT_MS
+ * @returns Promise<GoogleIndexResponse>
+ */
+export async function googleIndexUrl(
+	urls: string | string[],
+	action: "publish" | "remove" = "publish",
+	timeoutMs?: number
+): Promise<any> {
+	const payload: any = Array.isArray(urls)
+		? { urls, action }
+		: { url: urls, action };
+	let response;
+	try {
+		response = await request
+			.post("indexgoogle", {
+				json: payload,
+				ignoreLoading: false,
+				timeout: timeoutMs ?? AI_TIMEOUT_MS,
+			})
+			.json();
+	} catch (error: any) {
+		response = {
+			success: false,
+			message: error?.message || "Google Index API error",
+			error,
+		};
+	}
+	return response;
+}
+
+/**
+ * Kiểm tra quota Google Index API
+ * @returns Promise<GoogleIndexResponse>
+ */
+export async function checkGoogleIndexQuota(): Promise<GoogleIndexResponse> {
+	let response: any;
+	try {
+		response = await request
+			.post("indexgoogle", {
+				json: { operation: "quota" },
+				ignoreLoading: true,
+			})
+			.json();
+	} catch (error: any) {
+		response = {
+			success: false,
+			message: error?.message || "Quota check error",
+			error,
+		};
+	}
+	return response as GoogleIndexResponse;
+}
+
+/**
+ * Kiểm tra indexing status của URL
+ * @param url URL cần kiểm tra
+ * @returns Promise<GoogleIndexResponse>
+ */
+export async function checkGoogleIndexStatus(url: string): Promise<GoogleIndexResponse> {
+	let response: any;
+	try {
+		response = await request
+			.post("indexgoogle", {
+				json: { operation: "check", url },
+				ignoreLoading: true,
+			})
+			.json();
+	} catch (error: any) {
+		response = {
+			success: false,
+			message: error?.message || "Status check error",
+			error,
+		};
+	}
+	return response as GoogleIndexResponse;
+}
+
+/**
+ * Lấy danh sách verified sites từ Google Search Console
+ * @returns Promise<GoogleIndexResponse>
+ */
+export async function getGoogleSearchConsoleSites(): Promise<GoogleIndexResponse> {
+	let response: any;
+	try {
+		response = await request
+			.post("indexgoogle", {
+				json: { operation: "sites" },
+				ignoreLoading: true,
+			})
+			.json();
+	} catch (error: any) {
+		response = {
+			success: false,
+			message: error?.message || "Sites list error",
+			error,
+		};
+	}
+	return response as GoogleIndexResponse;
+}
+
+/**
+ * Kiểm tra indexing status và tự động publish nếu NEUTRAL
+ * @param url URL cần kiểm tra và auto-publish
+ * @returns Promise<GoogleIndexResponse>
+ */
+export async function checkAndAutoPublish(url: string): Promise<GoogleIndexResponse> {
+	let response: any;
+	try {
+		response = await request
+			.post("indexgoogle", {
+				json: { operation: "check-auto", url },
+				ignoreLoading: true,
+			})
+			.json();
+	} catch (error: any) {
+		response = {
+			success: false,
+			message: error?.message || "Auto-publish error",
+			error,
+		};
+	}
+	return response as GoogleIndexResponse;
+}
+
+// ========== QUEUE MANAGEMENT APIs ==========
+
+/**
+ * Thêm URL vào queue để gửi sau
+ * @param url URL cần gửi
+ * @param action "publish" hoặc "remove"
+ * @param priority 1 (cao nhất) - 10 (thấp nhất), mặc định 5
+ * @returns Promise<GoogleIndexResponse>
+ */
+export async function addToQueue(
+	url: string,
+	action: "publish" | "remove" = "publish",
+	priority: number = 5
+): Promise<GoogleIndexResponse> {
+	let response: any;
+	try {
+		response = await request
+			.post("indexgoogle", {
+				json: { operation: "add-to-queue", url, action, priority },
+				ignoreLoading: false,
+			})
+			.json();
+	} catch (error: any) {
+		response = {
+			success: false,
+			message: error?.message || "Add to queue error",
+			error,
+		};
+	}
+	return response as GoogleIndexResponse;
+}
+
+/**
+ * Thêm nhiều URLs vào queue cùng lúc (RECOMMENDED cho bulk URLs)
+ * @param urls Mảng URLs cần gửi
+ * @param action "publish" hoặc "remove"
+ * @param priority 1 (cao nhất) - 10 (thấp nhất), mặc định 5
+ * @returns Promise<GoogleIndexResponse>
+ */
+export async function addBatchToQueue(
+	urls: string[],
+	action: "publish" | "remove" = "publish",
+	priority: number = 5
+): Promise<GoogleIndexResponse> {
+	let response: any;
+	try {
+		response = await request
+			.post("indexgoogle", {
+				json: { operation: "add-batch-to-queue", urls, action, priority },
+				ignoreLoading: false,
+			})
+			.json();
+	} catch (error: any) {
+		response = {
+			success: false,
+			message: error?.message || "Add batch to queue error",
+			error,
+		};
+	}
+	return response as GoogleIndexResponse;
+}
+
+/**
+ * Lấy thông tin queue và quota
+ * @returns Promise<GoogleIndexResponse>
+ */
+export async function getQueueInfo(): Promise<GoogleIndexResponse> {
+	let response: any;
+	try {
+		response = await request
+			.post("indexgoogle", {
+				json: { operation: "queue-info" },
+				ignoreLoading: true,
+			})
+			.json();
+	} catch (error: any) {
+		response = {
+			success: false,
+			message: error?.message || "Queue info error",
+			error,
+		};
+	}
+	return response as GoogleIndexResponse;
+}
+
+/**
+ * Lấy danh sách URLs trong queue
+ * @param page Trang (0-based)
+ * @param pageSize Số items mỗi trang
+ * @returns Promise<GoogleIndexResponse>
+ */
+export async function getQueueItems(
+	page: number = 0,
+	pageSize: number = 20
+): Promise<GoogleIndexResponse> {
+	let response: any;
+	try {
+		response = await request
+			.post("indexgoogle", {
+				json: { operation: "queue-items", page, pageSize },
+				ignoreLoading: true,
+			})
+			.json();
+	} catch (error: any) {
+		response = {
+			success: false,
+			message: error?.message || "Queue items error",
+			error,
+		};
+	}
+	return response as GoogleIndexResponse;
+}
+
+/**
+ * Trigger xử lý queue thủ công
+ * @param batchSize Số URLs tối đa để xử lý (mặc định 10)
+ * @returns Promise<GoogleIndexResponse>
+ */
+export async function processQueue(batchSize: number = 10): Promise<GoogleIndexResponse> {
+	let response: any;
+	try {
+		response = await request
+			.post("indexgoogle", {
+				json: { operation: "process-queue", batchSize },
+				ignoreLoading: false,
+			})
+			.json();
+	} catch (error: any) {
+		response = {
+			success: false,
+			message: error?.message || "Process queue error",
+			error,
+		};
+	}
+	return response as GoogleIndexResponse;
+}
+
+/**
+ * Xóa URL khỏi queue
+ * @param url URL cần xóa
+ * @returns Promise<GoogleIndexResponse>
+ */
+export async function removeFromQueue(url: string): Promise<GoogleIndexResponse> {
+	let response: any;
+	try {
+		response = await request
+			.post("indexgoogle", {
+				json: { operation: "remove-from-queue", url },
+				ignoreLoading: true,
+			})
+			.json();
+	} catch (error: any) {
+		response = {
+			success: false,
+			message: error?.message || "Remove from queue error",
+			error,
+		};
+	}
+	return response as GoogleIndexResponse;
+}
+
+/**
+ * Lấy lịch sử submission của 1 URL
+ * @param url URL cần kiểm tra lịch sử
+ * @returns Promise<GoogleIndexResponse>
+ */
+export async function getUrlHistory(url: string): Promise<GoogleIndexResponse> {
+	let response: any;
+	try {
+		response = await request
+			.post("indexgoogle", {
+				json: { operation: "history", url },
+				ignoreLoading: true,
+			})
+			.json();
+	} catch (error: any) {
+		response = {
+			success: false,
+			message: error?.message || "History error",
+			error,
+		};
+	}
+	return response as GoogleIndexResponse;
+}
+
+/**
+ * Lấy lịch sử submission gần đây (tất cả URLs)
+ * @param limit Số lượng entries tối đa (mặc định 50)
+ * @returns Promise<GoogleIndexResponse>
+ */
+export async function getRecentHistory(limit: number = 50): Promise<GoogleIndexResponse> {
+	let response: any;
+	try {
+		response = await request
+			.post("indexgoogle", {
+				json: { operation: "recent-history", limit },
+				ignoreLoading: true,
+			})
+			.json();
+	} catch (error: any) {
+		response = {
+			success: false,
+			message: error?.message || "Recent history error",
+			error,
+		};
+	}
+	return response as GoogleIndexResponse;
+}
+
+// ==================== CHAT API ====================
+
+/**
+ * Lấy lịch sử chat theo room
+ * @param room Room name
+ * @param limit Số lượng messages tối đa (mặc định 50)
+ * @returns Promise<GoogleIndexResponse>
+ */
+export async function getChatHistory(room: string, limit: number = 50): Promise<GoogleIndexResponse> {
+	let response: any;
+	try {
+		response = await request
+			.post("chat-history", {
+				json: { room, limit },
+				ignoreLoading: true,
+			})
+			.json();
+	} catch (error: any) {
+		response = {
+			success: false,
+			message: error?.message || "Chat history error",
+			error,
+		};
+	}
+	return response as GoogleIndexResponse;
+}
+
+/**
+ * Lấy lịch sử chat của guest user (không cần authentication)
+ * @param appId Application ID
+ * @param guestPhone Guest phone number
+ * @param limit Số lượng messages tối đa (mặc định 50)
+ * @returns Promise<GoogleIndexResponse>
+ */
+export async function getChatHistoryGuest(
+	appId: string,
+	guestPhone: string,
+	limit: number = 50
+): Promise<GoogleIndexResponse> {
+	let response: any;
+	try {
+		response = await request
+			.post("chat-history-guest", {
+				json: { appId, guestPhone, limit },
+				ignoreLoading: true,
+			})
+			.json();
+	} catch (error: any) {
+		response = {
+			success: false,
+			message: error?.message || "Guest chat history error",
+			error,
+		};
+	}
+	return response as GoogleIndexResponse;
+}
+
+/**
+ * Lấy lịch sử chat của app (cho admin)
+ * @param appId Application ID
+ * @param limit Số lượng messages tối đa (mặc định 200)
+ * @returns Promise<GoogleIndexResponse>
+ */
+export async function getChatHistoryApp(appId: string, limit: number = 200): Promise<GoogleIndexResponse> {
+	let response: any;
+	try {
+		response = await request
+			.post("chat-history-app", {
+				json: { appId, limit },
+				ignoreLoading: true,
+			})
+			.json();
+	} catch (error: any) {
+		response = {
+			success: false,
+			message: error?.message || "App chat history error",
+			error,
+		};
+	}
+	return response as GoogleIndexResponse;
+}
+
+/**
+ * Lấy danh sách guest phones đã chat trong app
+ * @param appId Application ID
+ * @returns Promise<GoogleIndexResponse>
+ */
+export async function getChatGuestsList(appId: string): Promise<GoogleIndexResponse> {
+	let response: any;
+	try {
+		response = await request
+			.post("chat-guests-list", {
+				json: { appId },
+				ignoreLoading: true,
+			})
+			.json();
+	} catch (error: any) {
+		response = {
+			success: false,
+			message: error?.message || "Guests list error",
+			error,
+		};
+	}
+	return response as GoogleIndexResponse;
+}
+
+/**
+ * Đánh dấu messages của guest là đã đọc (không cần authentication)
+ * @param appId Application ID
+ * @param guestPhone Guest phone number
+ * @returns Promise<GoogleIndexResponse>
+ */
+export async function markChatAsReadGuest(appId: string, guestPhone: string): Promise<GoogleIndexResponse> {
+	let response: any;
+	try {
+		response = await request
+			.post("chat-mark-read", {
+				json: { appId, guestPhone },
+				ignoreLoading: true,
+			})
+			.json();
+	} catch (error: any) {
+		response = {
+			success: false,
+			message: error?.message || "Mark as read error",
+			error,
+		};
+	}
+	return response as GoogleIndexResponse;
+}
+
+/**
+ * Đánh dấu tất cả messages trong room là đã đọc
+ * @param room Room name
+ * @param userId User ID
+ * @returns Promise<GoogleIndexResponse>
+ */
+export async function markChatAsReadAll(room: string, userId: string): Promise<GoogleIndexResponse> {
+	let response: any;
+	try {
+		response = await request
+			.post("chat-mark-all-read", {
+				json: { room, userId },
+				ignoreLoading: true,
+			})
+			.json();
+	} catch (error: any) {
+		response = {
+			success: false,
+			message: error?.message || "Mark all as read error",
+			error,
+		};
+	}
+	return response as GoogleIndexResponse;
+}
+
+/**
+ * Xóa một message theo timestamp
+ * @param timestamp Message timestamp
+ * @param appId Application ID (default csm)
+ * @returns Promise<GoogleIndexResponse>
+ */
+export async function deleteChatMessage(timestamp: number, appId: string = "csm"): Promise<GoogleIndexResponse> {
+	let response: any;
+	try {
+		response = await request
+			.post("chat-delete-message", {
+				json: { timestamp, appId },
+				ignoreLoading: true,
+			})
+			.json();
+	} catch (error: any) {
+		response = {
+			success: false,
+			message: error?.message || "Delete message error",
+			error,
+		};
+	}
+	return response as GoogleIndexResponse;
+}
+
+export interface ApiListResponse<T> {
+	data: T[]
+	total?: number
+	[key: string]: any
+}
+
+export interface ApiResponse<T> {
+	data: T
+	[key: string]: any
+}
+
+export interface Condition {
+	field: string
+	type: string
+	value: any
+}
+
+export type Where = Condition | { operator: "AND" | "OR"; conditions: Condition[] };
+
+export function buildDomainCondition() {
+	try {
+		const host = window?.location?.hostname;
+		// Localhost: không lọc domain, lấy hết tất cả dữ liệu
+		if (!host || host === "localhost" || host === "127.0.0.1") {
+			return undefined;
+		}
+		// Production: chuẩn hóa domain và lọc theo domain
+		// Loại bỏ www. và lấy apex domain (2 phần cuối)
+		// VD: www.phanmemmottrieu.net hoặc dev.phanmemmottrieu.net -> phanmemmottrieu.net
+		const noWww = host.replace(/^www\./i, "");
+		const parts = noWww.split(".");
+		const apex = parts.length >= 3 ? parts.slice(-2).join(".") : noWww;
+		return { field: "domain", type: "eq", value: apex } as Condition;
+	}
+	catch {}
+	return undefined;
+}
+
+export function andWhere(conditions: Array<Condition | undefined>): Where | undefined {
+	const conds = conditions.filter(Boolean) as Condition[];
+	if (conds.length === 0)
+		return undefined;
+	if (conds.length === 1)
+		return conds[0];
+	return { operator: "AND", conditions: conds };
+}
+
+export async function getTableData<T>(params: {
+	app_id: string
+	obj_name: string
+	where?: Where
+	take?: number
+	lastkey?: any
+}) {
+	// In-memory cache to avoid repeated identical requests
+	const cacheKey = (() => {
+		let whereKey = "";
+		try { whereKey = params.where ? JSON.stringify(params.where) : ""; } catch { whereKey = String(params.where); }
+		return `${params.app_id}::${params.obj_name}::${whereKey}::${params.take ?? ''}::${params.lastkey ?? ''}`;
+	})();
+	const globalAny = window as any;
+	if (!globalAny.__csm_getTableDataCache) {
+		globalAny.__csm_getTableDataCache = new Map<string, Promise<ApiListResponse<T>>>();
+	}
+	const cache: Map<string, Promise<ApiListResponse<T>>> = globalAny.__csm_getTableDataCache;
+
+	if (cache.has(cacheKey)) {
+		return cache.get(cacheKey) as Promise<ApiListResponse<T>>;
+	}
+
+	const payload: any = {
+		app_id: params.app_id,
+		obj_name: params.obj_name,
+		...(params.where ? { e_where: params.where } : {}),
+		...(params.take ? { take: params.take } : {}),
+		...(params.lastkey ? { lastkey: params.lastkey } : {}),
+	};
+	const promise = request
+		.post<ApiListResponse<T>>("get-table-data", { json: payload, ignoreLoading: true })
+		.json<ApiListResponse<T>>()
+		.then((res) => {
+			return res;
+		})
+		.catch((err) => {
+			// On error, ensure we don't keep a failed promise in cache
+			try { cache.delete(cacheKey); } catch {}
+			throw err;
+		});
+	cache.set(cacheKey, promise);
+	return promise;
+}
+
+export async function updateTableData<T extends Record<string, any>>(params: {
+	app_id: string
+	obj_name: string
+	command: "create" | "update" | "delete"
+	obj_update: T
+	pk_fields?: string[] // Primary key field names
+	where?: Record<string, any> // Giá trị PK cũ (nếu cần)
+}) {
+	const payload: any = {
+		app_id: params.app_id,
+		obj_name: params.obj_name,
+		command: params.command,
+		obj_update: params.obj_update,
+	};
+	
+	// Always add e_where with primary key conditions for all commands
+	// Backend uses e_where to check existing records and determine action
+	const pkSource: Record<string, any> = params.where ? params.where : params.obj_update;
+	if (params.pk_fields && params.pk_fields.length > 0) {
+		const conditions: any[] = [];
+		for (const pkField of params.pk_fields) {
+			if (pkSource[pkField] !== undefined) {
+				conditions.push({
+					field: pkField,
+					type: "eq",
+					value: pkSource[pkField]
+				});
+			}
+		}
+		// Always include id if available (stable unique key)
+		if (pkSource.id !== undefined && !conditions.some(c => c.field === "id")) {
+			conditions.push({
+				field: "id",
+				type: "eq",
+				value: pkSource.id
+			});
+		}
+		// Build e_where with correct format: operator (uppercase) + conditions
+		if (conditions.length > 0) {
+			payload.e_where = conditions.length === 1 
+				? conditions[0]
+				: { operator: "AND", conditions };
+		}
+	}
+	
+	console.log("📤 updateTableData request:", {
+		command: params.command,
+		pk_fields: params.pk_fields,
+		e_where: payload.e_where,
+		obj_update: params.obj_update,
+		full_payload: payload
+	});
+	
+	return request
+		.post<ApiResponse<string>>("update-table-data", { json: payload, ignoreLoading: true })
+		.json<ApiResponse<string>>();
+}

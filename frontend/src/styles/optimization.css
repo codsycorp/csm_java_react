@@ -1,0 +1,60 @@
+/* Optimization tips:
+ * 1. Cgroup related styles
+ * 2. Remove unused styles
+ * 3. Use CSS variables for reusable values
+ */
+
+/* Prevent CLS (Cumulative Layout Shift) */
+img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+/* Optimize font loading */
+@font-face {
+  font-display: swap;
+}
+
+/* Critical render path optimization */
+:root {
+  --transition-fast: 150ms ease-in-out;
+  --transition-normal: 300ms ease-in-out;
+}
+
+/* Avoid unnecessary reflows */
+* {
+  box-sizing: border-box;
+}
+
+/* Optimize animations */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Network optimization - only download necessary resources */
+@media (prefers-color-scheme: dark) {
+  /* Dark mode styles */
+}
+
+@media (prefers-color-scheme: light) {
+  /* Light mode styles */
+}
+
+/* Reduce repaints - batch animations */
+.fade-in {
+  animation: fadeIn var(--transition-normal);
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}

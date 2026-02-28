@@ -1,0 +1,358 @@
+/* KQXS Component Styles - Based on Vue implementation */
+
+/* Lottery Results Layout */
+.lottery-results {
+  min-height: 200px;
+  padding: 16px;
+}
+
+/* Control Panel Styling */
+.csm_border {
+  border: 1px solid #e8e8e8;
+  border-radius: 6px;
+  padding: 16px;
+  background-color: #fafafa;
+  margin-bottom: 16px;
+}
+
+/* Lottery Card Styling */
+.lottery-card {
+  border: 1px solid #d9d9d9;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.lottery-card .ant-card-head {
+  background: linear-gradient(135deg, #1890ff, #40a9ff);
+  color: white;
+  border-bottom: 2px solid #096dd9;
+}
+
+.lottery-card .ant-card-head .ant-card-head-title {
+  color: white;
+  font-weight: bold;
+  font-size: 14px;
+}
+
+.lottery-card .ant-card-body {
+  padding: 0;
+  background-color: white;
+}
+
+/* Lottery Content Grid */
+.lottery-content .giai-row {
+  border-bottom: 1px solid #e8e8e8;
+  min-height: 36px;
+  display: flex;
+  align-items: stretch;
+  margin: 0;
+}
+
+.lottery-content .giai-row:last-child {
+  border-bottom: none;
+}
+
+.lottery-content .giai-row.bg-gray {
+  background-color: #f8f8f8;
+}
+
+/* Prize Labels */
+.giai-label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  font-weight: 600;
+  background-color: #f0f0f0;
+  border-right: 2px solid #d9d9d9;
+  font-size: 11px;
+  color: #333;
+  text-transform: uppercase;
+  min-height: 36px;
+}
+
+.bkqtinhmienbac .giai-label,
+.bkqtinhmiennam .giai-label {
+  font-size: 10px;
+  background: linear-gradient(135deg, #f0f0f0, #e6e6e6);
+}
+
+/* Prize Content */
+.giai-content {
+  padding: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  align-items: center;
+  flex: 1;
+  min-height: 36px;
+}
+
+/* Individual Numbers */
+.giai-so {
+  padding: 3px 8px;
+  background-color: white;
+  border: 1px solid #d9d9d9;
+  border-radius: 3px;
+  font-family: 'Courier New', Consolas, monospace;
+  font-weight: 600;
+  min-width: 45px;
+  text-align: center;
+  display: inline-block;
+  font-size: 12px;
+  color: #333;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+  transition: all 0.2s ease;
+}
+
+.giai-so:hover {
+  background-color: #f0f8ff;
+  border-color: #40a9ff;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(0,0,0,0.15);
+}
+
+/* Special Prize Styling */
+.giaidb .giai-content {
+  justify-content: center;
+  background: linear-gradient(135deg, #fff2f0, #ffe7e6);
+}
+
+.giaidb .giai-content .giai-so {
+  background: linear-gradient(135deg, #ff4d4f, #cf1322);
+  border-color: #cf1322;
+  color: white;
+  font-size: 18px;
+  font-weight: bold;
+  min-width: 80px;
+  padding: 8px 12px;
+  text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
+  box-shadow: 0 4px 8px rgba(207, 19, 34, 0.3);
+}
+
+.giaidb .giai-content .giai-so:hover {
+  background: linear-gradient(135deg, #ff7875, #ff4d4f);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 12px rgba(207, 19, 34, 0.4);
+}
+
+/* First Prize Styling */
+.giai1 .giai-content .giai-so {
+  background: linear-gradient(135deg, #52c41a, #389e0d);
+  border-color: #389e0d;
+  color: white;
+  font-size: 16px;
+  font-weight: bold;
+  min-width: 70px;
+  padding: 6px 10px;
+}
+
+/* Second Prize Styling */
+.giai2 .giai-content .giai-so {
+  background: linear-gradient(135deg, #1890ff, #096dd9);
+  border-color: #096dd9;
+  color: white;
+  font-weight: bold;
+  min-width: 60px;
+}
+
+/* Table row highlighting based on KXH values */
+.row-high-kxh {
+  background-color: #fff2f0;
+}
+
+.row-high-kxh:hover {
+  background-color: #ffe7e7 !important;
+}
+
+.row-medium-kxh {
+  background-color: #fff7e6;
+}
+
+.row-medium-kxh:hover {
+  background-color: #ffeecc !important;
+}
+
+/* Miền Bắc specific styles */
+.bkqtinhmienbac .giai-label {
+  font-size: 11px;
+}
+
+/* Miền Nam specific styles */
+.bkqtinhmiennam .giai-label {
+  font-size: 11px;
+}
+
+/* Control panel styles */
+.csm_border {
+  border: 1px solid #e8e8e8;
+  border-radius: 6px;
+  padding: 16px;
+  background-color: #fafafa;
+}
+
+.dx-field {
+  margin-bottom: 12px;
+}
+
+.dx-field .ant-typography {
+  margin-bottom: 4px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+/* Advanced settings green border */
+.advanced-settings {
+  border: 1px solid #52c41a;
+  padding: 8px;
+  border-radius: 4px;
+  background-color: #f6ffed;
+}
+
+/* Statistics table enhancements */
+.kqxs-table .ant-table-thead > tr > th {
+  background-color: #fafafa;
+  font-weight: 600;
+  font-size: 12px;
+  padding: 8px 4px;
+  text-align: center;
+}
+
+.kqxs-table .ant-table-tbody > tr > td {
+  padding: 4px;
+  text-align: center;
+  font-size: 11px;
+}
+
+/* KXH color coding in table */
+.kqxs-table .ant-tag {
+  margin: 0;
+  font-size: 10px;
+}
+
+/* Progress bar styling */
+.ant-progress-line {
+  margin: 8px 0;
+}
+
+/* Button group styling */
+.action-buttons .ant-btn {
+  margin: 0 4px;
+}
+
+.action-buttons .ant-btn:first-child {
+  margin-left: 0;
+}
+
+.action-buttons .ant-btn:last-child {
+  margin-right: 0;
+}
+
+/* Tab enhancements */
+.ant-tabs-tab.ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: #1890ff;
+  font-weight: 600;
+}
+
+/* Card title enhancements */
+.ant-card-head-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* Form field spacing */
+.form-row {
+  margin-bottom: 8px;
+}
+
+.form-row:last-child {
+  margin-bottom: 0;
+}
+
+/* Select and input styling */
+.w-100 {
+  width: 100% !important;
+}
+
+/* Tooltip styling */
+.ant-tooltip-inner {
+  font-size: 11px;
+}
+
+/* Message and notification positioning */
+.ant-message {
+  z-index: 2000;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .lottery-card {
+    margin-bottom: 16px;
+  }
+
+  .giai-label {
+    font-size: 10px;
+    min-width: 60px;
+  }
+
+  .giai-content .giai-so {
+    font-size: 11px;
+    min-width: 40px;
+    padding: 1px 4px;
+  }
+
+  .kqxs-table .ant-table-thead > tr > th,
+  .kqxs-table .ant-table-tbody > tr > td {
+    padding: 2px;
+    font-size: 10px;
+  }
+}
+
+/* Animation for lottery numbers */
+@keyframes highlightNumber {
+  0% {
+    background-color: #fff7e6;
+    transform: scale(1);
+  }
+  50% {
+    background-color: #ffd666;
+    transform: scale(1.05);
+  }
+  100% {
+    background-color: #fff7e6;
+    transform: scale(1);
+  }
+}
+
+.kqxs-container .giai-so.highlight {
+  animation: highlightNumber 0.8s ease-in-out;
+}
+
+/* Print styles */
+@media print {
+  .kqxs-container {
+    .csm_border {
+      border: none !important;
+      box-shadow: none !important;
+    }
+
+    .ant-btn,
+    .ant-pagination {
+      display: none !important;
+    }
+
+    .lottery-results {
+      page-break-inside: avoid;
+    }
+
+    .ant-table {
+      font-size: 8px !important;
+
+      .ant-table-thead > tr > th,
+      .ant-table-tbody > tr > td {
+        padding: 1px !important;
+        border: 1px solid #000 !important;
+      }
+    }
+  }
+}

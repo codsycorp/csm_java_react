@@ -1,0 +1,7 @@
+User-agent: *
+
+Allow: /
+
+Disallow: /quantri.shtml
+
+Sitemap: https://www.vn369.net/sitemap_index.xml

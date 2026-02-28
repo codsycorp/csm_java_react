@@ -1,0 +1,30 @@
+.container {
+  padding: 16px;
+  height: 100%;
+  overflow-y: auto;
+}
+
+.editor {
+  border: 1px solid #d9d9d9;
+  border-radius: 2px;
+  margin-top: 8px;
+}
+
+.toolbar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.toolbarGroup {
+  display: flex;
+  gap: 8px;
+  border-right: 1px solid #d9d9d9;
+  padding-right: 8px;
+}
+
+.toolbarGroup:last-child {
+  border-right: none;
+  padding-right: 0;
+}

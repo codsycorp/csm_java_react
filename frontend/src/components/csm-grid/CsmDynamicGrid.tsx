@@ -1,0 +1,2198 @@
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { BasicTable } from "#src/components/basic-table";
+import { updateTableData } from "./CsmApi";
+import CsmEditModal, { DetailGridTab } from "./CsmEditModal";
+import { csmDecrypt } from "./CsmCrypto";
+import { INT, jdFromDate, jdToDate, NewMoon, KinhDoMatTroi, SunLongitude, getSunLongitude, getNewMoonDay, getLunarMonth11, getLeapMonthOffset, duong_qua_am, am_qua_duong, LunarCalendar } from "#src/utils/lunarCalendar";
+import { dateFormat, chuyenNgay, TruNgayRaSoNgay, CongNgay, CongGio, validateEmail, validatePhone, DateUtils } from "#src/utils/dateUtils";
+import { useSocket } from "#src/hooks/useSocket";
+import type { ActionType, ProColumns } from "@ant-design/pro-components";
+import { Button, Input, Space, Tooltip, message, Modal, Tabs, Divider } from "antd";
+import { PlusOutlined, ImportOutlined, ExportOutlined, SearchOutlined } from "@ant-design/icons";
+import { read, utils } from "xlsx";
+import { useAppStore } from "#src/store/app";
+
+// Minimal types (kept local to avoid wider type churn)
+type Row = Record<string, any>;
+type Database = Record<string, { rows: Row[] }>;
+
+export interface TableField {
+	f_name: string;
+	f_header: string;
+	f_header_vi?: string;
+	f_header_en?: string;
+	f_header_zh?: string;
+	f_show: number | string;
+	f_stt?: number | string;
+	f_types?: string;
+	f_report?: number | string;
+	f_cbo_query?: string;
+	f_format?: string;
+	f_search?: number | string;
+	f_fixcol?: number | string;
+	f_pkid?: number | string;
+	f_align?: "left" | "right" | "center" | string;
+	width?: number | string;
+	// Grouping / template
+	f_group_header_template?: string;
+	f_group_footer_template?: string;
+	f_group_index?: number | string;
+}
+
+export interface TriggerConfig {
+	filter?: string;
+	load_db?: string;
+	datacolumntemplate?: string;
+	datarowtemplate?: string;
+	update?: string; // Vue compatibility: tính toán fields TRƯỚC KHI save - Function("seft", "data", "bang")
+	barcode?: string;
+	update_db?: string;
+	delete_db?: string;
+	report_db?: string;
+	beforeSave?: string;
+	beforeImport?: string; // Hàm xử lý tùy chỉnh trước khi import: (items: Row[], seft: any) => Row[] | Promise<Row[]>
+	afterImport?: string; // Hàm xử lý sau khi import: (items: Row[], seft: any) => any
+	afterAdd?: string; // Hàm xử lý sau khi thêm dòng: (allData: Row[], seft: any, data: Database) => any
+	afterEdit?: string; // Hàm xử lý sau khi sửa dòng: (allData: Row[], seft: any, data: Database) => any
+	afterDelete?: string; // Hàm xử lý sau khi xóa dòng: (allData: Row[], seft: any, data: Database) => any
+}
+
+export interface MConfig {
+	id: string;
+	label: string;
+	table_name: string;
+	table: TableField[];
+	trigger: TriggerConfig;
+	g_readonly?: boolean;
+	table_pagesize?: number | string;
+	struct?: {
+		fieldsPK?: string[];
+		[key: string]: any;
+	};
+	// Bổ sung các thuộc tính thường dùng trong codebase
+	nodes?: any[];
+	type_form?: number | string;
+	row_type_edit?: number | string;
+	selectEnumsOverride?: Record<string, any>; // For detail grid: override selectEnums from trigger
+}
+
+function safeEval<TArgs extends any[], TReturn>(args: string[], body: string): ((...a: TArgs) => TReturn) | null {
+	try {
+		// Ensure a return if missing - but don't wrap if it's already a function call or has return
+		const trimmed = body.trim();
+		const isIIFE = trimmed.startsWith('(function') || trimmed.startsWith('(() =>') || trimmed.startsWith('(async') || trimmed.startsWith('(async () =>');
+		const isFuncDecl = trimmed.startsWith('function ');
+		const hasReturn = trimmed.includes('return ');
+		const hasSideEffects = /\b(alert|console\.|debugger|throw|window\.)/.test(trimmed);
+		
+		const code = (isIIFE || isFuncDecl || hasReturn || hasSideEffects) ? body : `return (${body})`;
+		return new Function(...args, code) as any;
+	} catch (err) {
+		// If it's a SyntaxError, check if it looks like encrypted code that wasn't decrypted
+		if (err instanceof SyntaxError) {
+			const hasJSSyntax = /[{}()\[\];:,.\s]|return|function|const|let|var|if|for|while|=>|alert|console/.test(body);
+			const hasBase64Pattern = /[A-Za-z0-9_\-\/]{50,}/.test(body);
+			
+			if (!hasJSSyntax && hasBase64Pattern) {
+				console.warn("[safeEval] Code looks encrypted but not decrypted - skipping execution:", body.substring(0, 100));
+				return null;
+			}
+		}
+		
+		console.error("[safeEval] Error creating function:", err);
+		console.error("[safeEval] Args:", args);
+		console.error("[safeEval] Body (first 500 chars):", body.substring(0, 500));
+		return null;
+	}
+}
+
+export function CsmDynamicGrid({
+	m_configs,
+	database: _unusedDatabaseProp, // DEPRECATED: Now using global store database
+	appId,
+	permissions,
+	menusPermissions,
+	menuId,
+	decrypt,
+	onAdd,
+	onEdit,
+	onDelete,
+	onSelectRow,
+	onDataChange,
+	context,
+  enableSearch = true,
+  searchFields,
+  isDetailGrid = false,
+}: {
+	m_configs: MConfig
+	database?: Database // DEPRECATED: Kept for backward compatibility, not used
+	appId?: string
+	permissions?: number
+	menusPermissions?: Record<string | number, number>
+	menuId?: string | number
+	decrypt?: (s: string) => string
+	onAdd?: () => void
+	onEdit?: (row: Row) => void
+	onDelete?: (row: Row) => void
+	onSelectRow?: (row: Row | null) => void
+	onDataChange?: () => void
+	context?: { select_row?: Row }
+  enableSearch?: boolean
+  searchFields?: string[]
+  isDetailGrid?: boolean
+}) {
+	const { t, i18n } = useTranslation();
+	const actionRef = useRef<ActionType>();
+	const [data, setData] = useState<Row[]>([]);
+	const [selectedKeys, setSelectedKeys] = useState<React.Key[]>([]);
+	const [editableKeys, setEditableKeys] = useState<React.Key[]>([]);
+	const [pendingEditableRowId, setPendingEditableRowId] = useState<string | null>(null);
+	const [_selectedRow, setSelectedRow] = useState<Row | null>(null);
+	const [selectedDetailRow, setSelectedDetailRow] = useState<Row | null>(null); // For detail tabs panel
+	const [editorOpen, setEditorOpen] = useState(false);
+	const [editingRecord, setEditingRecord] = useState<Row | null>(null);
+	const [searchTerm, setSearchTerm] = useState("");
+	const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+	
+	// State để prevent trigger update recursion khi inline edit
+	const [isUpdatingFromTrigger, setIsUpdatingFromTrigger] = useState(false);
+	const updateTriggerTimeoutRef = useRef<NodeJS.Timeout>();
+
+	// SINGLE SOURCE OF TRUTH: Use global database from store for ALL data
+	// - Loaded initially from menus (permission.ts)
+	// - Updated in real-time via socket (useSocket hook)
+	// - Shared across ALL components
+	const database = useAppStore(state => state.database);
+	const [, setUpdateTrigger] = useState(0);
+
+	// Enable socket for real-time database updates
+	useSocket({ enabled: true });
+
+	// Helper: Create seft context with all utility functions
+	const createSeftContext = useCallback(() => ({
+		m_configs,
+		context,
+		database,
+		// Lunar calendar utilities
+		INT,
+		jdFromDate,
+		jdToDate,
+		NewMoon,
+		KinhDoMatTroi,
+		SunLongitude,
+		getSunLongitude,
+		getNewMoonDay,
+		getLunarMonth11,
+		getLeapMonthOffset,
+		duong_qua_am,
+		am_qua_duong,
+		LunarCalendar,
+		// Date utilities
+		dateFormat,
+		chuyenNgay,
+		TruNgayRaSoNgay,
+		CongNgay,
+		CongGio,
+		validateEmail,
+		validatePhone,
+		DateUtils,
+	}), [m_configs, context, database]);
+
+	useEffect(() => {
+		const handleResize = () => {
+			setIsMobile(window.innerWidth < 768);
+		};
+		window.addEventListener('resize', handleResize);
+		return () => window.removeEventListener('resize', handleResize);
+	}, []);
+
+	const canAll = permissions === -1;
+	const mask = menusPermissions && menuId != null ? menusPermissions[menuId] ?? 0 : 0;
+	const isReadonly = !!m_configs.g_readonly;
+	const canAdd = !isReadonly && (canAll || ((mask & 2) !== 0));
+	const canEdit = !isReadonly && (canAll || ((mask & 4) !== 0));
+	const canDelete = !isReadonly && (canAll || ((mask & 8) !== 0));
+
+	// type_form: "" (không chọn), 1 (dạng bảng), 2 (dạng Master-Detail)
+	// row_type_edit: 0 (dạng Form popup), 1 (chỉnh sửa trên dòng)
+	const typeForm = m_configs.type_form || "";
+	const rowTypeEdit = m_configs.row_type_edit || 0;
+
+	// Enable inline cell editing when row_type_edit = 1 (regardless of type_form)
+	// This allows inline editing in both table and master-detail views
+	const enableInlineCellEdit = Number(rowTypeEdit) === 1;
+	
+	// Debug log
+	// console.log('[CsmDynamicGrid] Edit mode config:', {
+	// 	typeForm,
+	// 	rowTypeEdit,
+	// 	enableInlineCellEdit,
+	// 	canEdit
+	// });
+
+	// Helpers
+	const tableName = (m_configs.table_name || "").split(",")[0];
+
+	// Kiểm tra có table_name hay không
+	const hasTableName = Boolean(tableName);
+
+	// Subscribe to database changes to force re-render when socket updates nested data
+	useEffect(() => {
+		console.log(`[CsmDynamicGrid] 🎬 Component rendered (tableName: ${tableName})`);
+		console.log(`[CsmDynamicGrid] 🔔 Subscription useEffect triggered for table: ${tableName}`);
+		const unsubscribe = useAppStore.subscribe(
+			() => {
+				console.log(`[CsmDynamicGrid] 📢 Store subscription fired, incrementing trigger for ${tableName}`);
+				setUpdateTrigger(prev => prev + 1);
+			}
+		);
+		console.log(`[CsmDynamicGrid] ✅ Subscription registered`);
+		return () => {
+			console.log(`[CsmDynamicGrid] 🗑️ Subscription cleanup for ${tableName}`);
+			unsubscribe();
+		};
+	}, [tableName, setUpdateTrigger]);
+
+	// Helper: Run UPDATE trigger (Vue compatibility)
+	// Chạy TRƯỚC KHI save để tính toán các field tự động
+	// Signature: Function("seft", "data", "bang", code)
+	// Returns: updated row data
+	const runRowTrigger = (triggerName: string, rowData: Row, merge: boolean = true): Row => {
+		let code = (m_configs.trigger as any)?.[triggerName];
+		if (!code) return rowData;
+		
+		// Use provided decrypt OR fall back to csmDecrypt
+		const effectiveDecrypt = decrypt || csmDecrypt;
+		try {
+			code = effectiveDecrypt(code);
+		} catch (err) {
+			console.error(`Decrypt error for ${triggerName} trigger:`, err);
+			return rowData;
+		}
+		const fn = safeEval(["seft", "data", "bang"], code) as ((seft: any, data: Row, bang: Database) => any) | null;
+		if (!fn) return rowData;
+		try {
+			const seftContext = createSeftContext();
+			const updatedData = fn(seftContext, JSON.parse(JSON.stringify(rowData)), database);
+			if (!merge) return rowData;
+			if (updatedData && typeof updatedData === 'object') {
+				return { ...rowData, ...updatedData };
+			}
+			return rowData;
+		} catch (err) {
+			console.error(`${triggerName} trigger error:`, err);
+			return rowData;
+		}
+	};
+
+	const runSideEffectTrigger = (triggerName: string, rowData: Row) => {
+		let code = (m_configs.trigger as any)?.[triggerName];
+		if (!code) return;
+		
+		// Use provided decrypt OR fall back to csmDecrypt
+		const effectiveDecrypt = decrypt || csmDecrypt;
+		try {
+			code = effectiveDecrypt(code);
+		} catch (err) {
+			console.error(`Decrypt error for ${triggerName} trigger:`, err);
+			return;
+		}
+		const fn = safeEval(["seft", "data", "bang"], code) as ((seft: any, data: Row, bang: Database) => any) | null;
+		if (!fn) return;
+		try {
+			fn({ m_configs, context, database }, JSON.parse(JSON.stringify(rowData)), database);
+		} catch (err) {
+			console.error(`${triggerName} trigger error:`, err);
+		}
+	};
+
+	const runUpdateTrigger = (rowData: Row): Row => {
+		let next = rowData;
+		next = runRowTrigger("update", next, true);
+		next = runRowTrigger("barcode", next, true);
+		return next;
+	};
+
+	// Helper: Run after trigger (afterAdd, afterEdit, afterDelete)
+	// Truyền toàn bộ mảng dữ liệu sau khi thay đổi để trigger có thể sync
+	const runAfterTrigger = async (triggerName: 'afterAdd' | 'afterEdit' | 'afterDelete', allData: Row[]) => {
+		let code = m_configs.trigger?.[triggerName];
+		if (!code) return;
+		
+		if (decrypt) {
+			try {
+				code = decrypt(code);
+			} catch (err) {
+				console.error(`Decrypt error for ${triggerName}:`, err);
+				return;
+			}
+		}
+		
+		const fn = safeEval(["allData", "seft", "data"], code) as ((allData: Row[], seft: any, data: Database) => any) | null;
+		if (fn) {
+			try {
+				await fn(allData, { m_configs, context }, database);
+			} catch (err) {
+				console.error(`${triggerName} trigger error:`, err);
+			}
+		}
+	};
+
+	// Build valueEnum for select fields via f_cbo_query (Vue parity: getOptionsSelect)
+	const selectEnums = useMemo(() => {
+		console.log('[selectEnums] useMemo triggered');
+		console.log('[selectEnums] m_configs.table:', m_configs.table);
+		console.log('[selectEnums] database keys:', Object.keys(database || {}));
+		console.log('[selectEnums] decrypt available:', !!decrypt);
+		
+		const map: Record<string, Record<string, { text: string }>> = {};
+		
+		// Start with override if provided (for detail grid)
+		if (m_configs.selectEnumsOverride) {
+			console.log('[selectEnums] Using selectEnumsOverride:', Object.keys(m_configs.selectEnumsOverride));
+			Object.assign(map, m_configs.selectEnumsOverride);
+		}
+		
+		const coFields = (m_configs.table || [])
+			.filter((f) => Number(f.f_show) === 1 && (f.f_types || "").toLowerCase().indexOf('co') !== -1);
+		
+		console.log(`[selectEnums] Found ${coFields.length} fields with 'co' type:`, 
+			coFields.map(f => ({ name: f.f_name, types: f.f_types, has_query: !!f.f_cbo_query }))
+		);
+		
+		coFields.forEach((f) => {
+			let q = f.f_cbo_query || "";
+			if (!q) {
+				console.warn(`[selectEnums] Field ${f.f_name} has 'co' type but no f_cbo_query`);
+				return;
+			}
+			
+			console.log(`[selectEnums] Processing field ${f.f_name}, query (first 100 chars):`, q.substring(0, 100));
+			
+			// Try decrypt first if available - f_cbo_query might be encrypted!
+			if (decrypt) {
+				try {
+					const decrypted = decrypt(q);
+					console.log(`[selectEnums] Successfully decrypted f_cbo_query for ${f.f_name}`);
+					q = decrypted;
+				} catch (err) {
+					// Not encrypted or decrypt failed, use original
+					console.log(`[selectEnums] f_cbo_query for ${f.f_name} not encrypted or decrypt failed`);
+				}
+			}
+				
+				// Check if it's static JSON (starts with { or [)
+				const trimmedQ = q.trim();
+				if (trimmedQ.startsWith('{') || trimmedQ.startsWith('[')) {
+					// Static JSON - parse directly without decrypt
+					try {
+						let parsed = JSON.parse(trimmedQ);
+						console.log(`[selectEnums] Parsed static JSON for ${f.f_name}:`, parsed);
+						
+						// Check if this has a query array (hybrid format: {query: [...], options: [...]})
+						// If query exists and is non-empty, we need to process it dynamically
+						console.log(`[selectEnums] Checking query for ${f.f_name}:`, {
+							hasQuery: parsed && typeof parsed === 'object' && Array.isArray(parsed.query),
+							queryLength: Array.isArray(parsed.query) ? parsed.query.length : 0,
+							hasDatabase: !!database
+						});
+						
+						if (parsed && typeof parsed === 'object' && 
+						    Array.isArray(parsed.query) && parsed.query.length > 0) {
+							console.log(`[selectEnums] Detected query array for ${f.f_name}, processing dynamically...`);
+							
+							// Process each query specification
+							const allOptions: any[] = [];
+							parsed.query.forEach((querySpec: any) => {
+						if (!querySpec.obj_name || !database) {
+									return;
+								}
+								
+								const tableName = querySpec.obj_name;
+								const fields = querySpec.fields || [];
+								const whereClause = querySpec.obj_where || '';
+								
+								console.log(`[selectEnums] Querying table: ${tableName}, fields:`, fields, 'where:', whereClause);
+								
+								// Get data from database table
+						const tableData = database[tableName];
+						if (!tableData) {
+							console.warn(`[selectEnums] Table ${tableName} not found in database. Available tables:`, Object.keys(database));
+								}
+								
+								// Database tables have structure: { rows: Row[] }
+								const rows = Array.isArray(tableData) ? tableData : (tableData as any).rows || [];
+								if (!Array.isArray(rows)) {
+									console.warn(`[selectEnums] Table ${tableName} has no valid rows array`);
+									return;
+								}
+								
+								// Filter data if where clause exists
+								let filteredData = rows;
+								if (whereClause) {
+									// Simple where clause evaluation (you may need to enhance this)
+									try {
+										const whereFn = safeEval(['row'], `return ${whereClause}`);
+										if (whereFn) {
+											filteredData = rows.filter((row: any) => whereFn(row));
+										}
+									} catch (err) {
+										console.warn(`[selectEnums] Where clause evaluation failed for ${f.f_name}:`, err);
+									}
+								}
+								
+								// Map to options format
+								filteredData.forEach((row: any, idx: number) => {
+									if (idx === 0) {
+										// Log first row to debug field mapping
+										console.log(`[selectEnums] Sample row from ${tableName}:`, row);
+										console.log(`[selectEnums] Fields mapping:`, {
+											fields,
+											field0: fields[0],
+											field1: fields[1],
+											value: row[fields[0]],
+											label: row[fields[1]],
+											allKeys: Object.keys(row)
+										});
+									}
+									
+									if (fields.length >= 2) {
+										// First field is value (ma), second is label (ten)
+										allOptions.push({
+											ma: row[fields[0]],
+											ten: row[fields[1]]
+										});
+									} else if (fields.length === 1) {
+										// Single field: use as both value and label
+										allOptions.push({
+											ma: row[fields[0]],
+											ten: row[fields[0]]
+										});
+									}
+								});
+							});
+							
+							// Vue parity: Sort by 'ten' field alphabetically
+							allOptions.sort((a, b) => String(a.ten || '').localeCompare(String(b.ten || '')));
+							
+							console.log(`[selectEnums] Query result for ${f.f_name}: ${allOptions.length} options`, allOptions);
+							
+							// Now process allOptions as normal
+							const enumObj: Record<string, { text: string }> = {};
+							allOptions.forEach((opt: any) => {
+								if (opt && typeof opt === 'object' && 'ma' in opt && 'ten' in opt) {
+									const value = opt.ma;
+									const label = opt.ten;
+									console.log(`[selectEnums] Processing option:`, { opt, value, label });
+									if (value !== undefined && value !== null) {
+										enumObj[String(value)] = { text: String(label) };
+									}
+								}
+							});
+							
+							if (Object.keys(enumObj).length > 0) {
+								console.log(`[selectEnums] ✅ Query result for ${f.f_name}:`, enumObj);
+								map[f.f_name] = enumObj;
+							} else {
+								console.warn(`[selectEnums] No options from query for ${f.f_name}`);
+							}
+							return; // Done with query processing
+						}
+						
+						// Handle multiple formats:
+						// 1. Direct array: ["opt1", "opt2"] or [[val1, label1], [val2, label2]]
+						// 2. Object with options key: { options: [...] }
+						let options: any[] = [];
+						if (Array.isArray(parsed)) {
+							options = parsed;
+						} else if (parsed && typeof parsed === 'object' && Array.isArray(parsed.options)) {
+							options = parsed.options;
+						} else {
+							console.warn(`[selectEnums] Invalid static JSON format for ${f.f_name}:`, parsed);
+							return;
+						}
+						
+						// Vue parity: Sort by label alphabetically
+						options.sort((a, b) => {
+							let aLabel: string;
+							let bLabel: string;
+							if (Array.isArray(a)) {
+								aLabel = String(a[1] ?? a[0] ?? '');
+							} else if (a && typeof a === 'object') {
+								aLabel = String(a.ten ?? a.label ?? a.text ?? a.ma ?? a.value ?? a.id ?? '');
+							} else {
+								aLabel = String(a);
+							}
+							if (Array.isArray(b)) {
+								bLabel = String(b[1] ?? b[0] ?? '');
+							} else if (b && typeof b === 'object') {
+								bLabel = String(b.ten ?? b.label ?? b.text ?? b.ma ?? b.value ?? b.id ?? '');
+							} else {
+								bLabel = String(b);
+							}
+							return aLabel.localeCompare(bLabel);
+						});
+						
+						const enumObj: Record<string, { text: string }> = {};
+						options.forEach((opt: any) => {
+							let value: any;
+							let label: any;
+							if (Array.isArray(opt)) {
+								// Format: [value, label]
+								value = opt[0];
+								label = opt[1] ?? opt[0];
+							} else if (opt && typeof opt === "object") {
+								// Format: { ma, ten } (Vue format) or { value, label }
+								if ('ma' in opt && 'ten' in opt) {
+									value = opt.ma;
+									label = opt.ten;
+								} else {
+									value = opt.value ?? opt[0];
+									label = opt.label ?? opt.text ?? opt[1] ?? value;
+								}
+							} else {
+								// Primitive value: use as both value and label
+								value = opt;
+								label = String(opt);
+							}
+							
+							// Add to enumObj
+							if (value !== undefined && value !== null) {
+								enumObj[String(value)] = { text: String(label) };
+							}
+						});
+						
+						if (Object.keys(enumObj).length > 0) {
+							console.log(`[selectEnums] ✅ Static JSON for ${f.f_name}:`, enumObj);
+							map[f.f_name] = enumObj;
+						} else {
+							console.warn(`[selectEnums] No valid options extracted from static JSON for ${f.f_name}`);
+						}
+					} catch (e) {
+						console.error(`[selectEnums] Failed to parse static JSON for ${f.f_name}:`, e, 'Query:', trimmedQ);
+					}
+					return;
+				}
+				
+				// Dynamic code - needs evaluation and possibly decryption
+				// IMPORTANT: Check if raw q is encrypted BEFORE wrapping with "return "
+				// Because if we wrap encrypted string as "return (encrypted...)", it looks like JS!
+				let rawCode = q;
+				
+				// Try to detect if it's encrypted (Base64-like pattern, long, no JS keywords)
+				const hasJSSyntax = /[{}()\[\];:,.\s]|return|function|const|let|var|if|for|while|=>|alert|console/.test(rawCode);
+				const hasBase64Pattern = /[A-Za-z0-9_\-\/]{50,}/.test(rawCode);
+				const looksEncrypted = !hasJSSyntax && hasBase64Pattern;
+				
+				if (looksEncrypted) {
+					// Try decrypt prop first, fall back to csmDecrypt
+					if (decrypt) {
+						try {
+							const decrypted = decrypt(rawCode);
+							const before = rawCode.substring(0, 20);
+							const after = decrypted.substring(0, 20);
+							if (before !== after) {
+								rawCode = decrypted;
+								console.log(`[selectEnums] decrypt prop worked for ${f.f_name}`);
+							} else {
+								console.log(`[selectEnums] decrypt prop didn't change code for ${f.f_name}, using csmDecrypt`);
+								rawCode = csmDecrypt(rawCode);
+							}
+						} catch (err) {
+							console.warn(`[selectEnums] decrypt prop failed for ${f.f_name}, using csmDecrypt:`, err);
+							try {
+								rawCode = csmDecrypt(rawCode);
+							} catch (decryptErr) {
+								console.error(`[selectEnums] csmDecrypt also failed for ${f.f_name}:`, decryptErr);
+								return;
+							}
+						}
+					} else {
+						try {
+							rawCode = csmDecrypt(rawCode);
+						} catch (err) {
+							console.error(`[selectEnums] csmDecrypt failed for ${f.f_name}:`, err);
+							return;
+						}
+					}
+				}
+				
+				// Now add return prefix if needed
+				const body = (rawCode.includes("return ") ? "" : "return ") + rawCode;
+				
+				const fn = safeEval(["seft", "data"], body) as ((seft: any, data: Database) => any) | null;
+				if (!fn) {
+					console.error(`[selectEnums] Failed to create function for ${f.f_name}. Code (first 200 chars):`, body.substring(0, 200));
+					return;
+				}
+				
+				try {
+					const seftContext = createSeftContext();
+					const objQa = fn(seftContext, database);
+					if (!objQa) {
+						console.warn(`[selectEnums] Dynamic code returned null/undefined for ${f.f_name}`);
+						return;
+					}
+					
+					console.log(`[selectEnums] Dynamic code result for ${f.f_name}:`, objQa);
+					
+					// Vue logic: check if has f_grid (special grid combo)
+					// f_grid format still has options array - process it!
+					if (objQa.hasOwnProperty('f_grid') && objQa.hasOwnProperty('f_grid_fields')) {
+						console.log(`[selectEnums] Field ${f.f_name} has f_grid format`);
+						// Fall through to process options array below
+					}
+					
+					// Vue logic: must have options property
+					if (!objQa.hasOwnProperty('options')) {
+						console.warn(`[selectEnums] Result missing 'options' property for ${f.f_name}:`, objQa);
+						return;
+					}
+					
+					const options: any[] = Array.isArray(objQa.options) ? objQa.options : [];
+					if (options.length === 0) {
+						console.warn(`[selectEnums] Empty options array for ${f.f_name}`);
+						return;
+					}
+					
+					// Vue parity: Sort by 'ten' field alphabetically (before building enumObj)
+					options.sort((a, b) => {
+						const aLabel = a?.ten ?? a?.label ?? a?.text ?? String(a);
+						const bLabel = b?.ten ?? b?.label ?? b?.text ?? String(b);
+						return String(aLabel).localeCompare(String(bLabel));
+					});
+					
+					const enumObj: Record<string, { text: string }> = {};
+					options.forEach((opt: any) => {
+						// Vue format: {ma, ten} or array [value, label]
+						let value: any;
+						let label: any;
+						if (Array.isArray(opt)) {
+							// Format: [value, label]
+							value = opt[0];
+							label = opt[1] ?? opt[0];
+						} else if (opt && typeof opt === "object") {
+							// Format: { ma, ten } (Vue format) - prioritize ma/ten first!
+							value = opt.ma ?? opt.value ?? opt.id ?? opt.key;
+							label = opt.ten ?? opt.label ?? opt.text ?? String(value);
+						} else {
+							// Simple value: "option"
+							value = String(opt);
+							label = String(opt);
+						}
+						if (value != null && value !== "") {
+							enumObj[String(value)] = { text: String(label) };
+						}
+					});
+					
+					if (Object.keys(enumObj).length > 0) {
+						console.log(`[selectEnums] ✅ Dynamic code for ${f.f_name}:`, enumObj);
+						map[f.f_name] = enumObj;
+					} else {
+						console.warn(`[selectEnums] No valid options extracted from dynamic code for ${f.f_name}`);
+					}
+				} catch (err) {
+					console.error(`[selectEnums] Dynamic code execution error for ${f.f_name}:`, err);
+				}
+			});
+		console.log('[selectEnums] Final map:', map);
+		return map;
+	}, [m_configs.table, database, decrypt, context, m_configs, m_configs.selectEnumsOverride]);
+
+	// Map backend fields to ProColumns with f_types rules
+	const baseColumns: ProColumns<Row>[] = useMemo(() => {
+		const shown = (m_configs.table || [])
+			.filter((f) => Number(f.f_show) === 1 && f.f_name !== 'id')
+			.sort((a, b) => Number(a.f_stt || 0) - Number(b.f_stt || 0));
+
+		const cols: ProColumns<Row>[] = shown.map((f) => {
+			// Resolve header following current language
+			const lang = (i18n.language || "").toLowerCase();
+			const candidates: (string | undefined)[] = [];
+			if (lang.startsWith("vi")) {
+				candidates.push(f.f_header_vi, f.f_header_en, f.f_header_zh, f.f_header);
+			} else if (lang.startsWith("en")) {
+				candidates.push(f.f_header_en, f.f_header_vi, f.f_header_zh, f.f_header);
+			} else if (lang.startsWith("zh")) {
+				candidates.push(f.f_header_zh, f.f_header_vi, f.f_header_en, f.f_header);
+			} else {
+				candidates.push(f.f_header, f.f_header_vi, f.f_header_en, f.f_header_zh);
+			}
+			const headerText = candidates.find((h) => typeof h === "string" && h.trim() !== "") || f.f_name;
+
+			const types = (f.f_types || "").toLowerCase();
+			const typeTokens = types.split(/[,\s;|]+/).filter(Boolean);
+			const key = f.f_name;
+			const isNumber = /number|int|float|double|money|currency/.test(types);
+			const isDate = /\bdate\b/.test(types) && !/datetime/.test(types);
+			const isDateTime = /datetime/.test(types);
+			const isTime = /\btime\b/.test(types) && !/datetime/.test(types);
+			const isSelect = typeTokens.includes('co') || /cbo|select/.test(types);
+			const isSwitch = /bool|switch|checkbox/.test(types);
+			const isTextArea = /textarea|memo/.test(types);
+			const isRichText = /richtext|html/.test(types);
+			const isPassword = /password/.test(types);
+			const isFile = /^file$/.test(types);
+			// Kiểu ảnh inline: image_inline, album_inline (cho phép upload trực tiếp trong cell)
+			const isImageInline = /image_inline|album_inline/.test(types);
+			// Check both f_types and field name for image detection
+			const isImage = (/img|image|avatar|photo|picture|album|gallery/.test(types)
+				|| /^(thumbnail|cover|images|avatar|photo)$/i.test(key)) && !isImageInline;
+			// Determine if album (multiple images)
+			const isAlbum = /album|album_inline/.test(types);
+
+			const resolvedAlign =
+				typeof f.f_align === "string" && ["left", "right", "center"].includes(f.f_align)
+					? (f.f_align as "left" | "right" | "center")
+					: undefined;
+
+			const col: ProColumns<Row> = {
+				title: headerText,
+				dataIndex: f.f_name,
+				key: f.f_name,
+				width: f.width,
+				align: resolvedAlign ?? (isNumber ? "right" : "left"),
+				// Add responsive property to hide less important columns on mobile
+				responsive: isImage ? ['lg'] : isRichText ? ['md'] : isTextArea ? ['md'] : undefined,
+			};
+
+			if (isNumber) col.valueType = "digit";
+			else if (isDateTime) col.valueType = "dateTime";
+			else if (isDate) col.valueType = "date";
+			else if (isTime) col.valueType = "time";
+			else if (isTextArea) col.valueType = "textarea";
+			else if (isRichText) col.valueType = "text"; // plain text for grid, editor in modal
+			else if (isSwitch) col.valueType = "switch";
+			else if (isSelect) {
+				col.valueType = "select";
+				const ve = selectEnums[f.f_name];
+				if (ve) col.valueEnum = ve as any;
+			}
+
+			if (isFile) {
+				// Hiển thị link download cho file
+				col.render = (dom, entity) => {
+					const value = entity[f.f_name];
+					if (!value) return null;
+					const fileName = typeof value === 'string' && value.includes('/')
+						? value.split('/').pop()
+						: 'Download';
+					return React.createElement("a", {
+						href: String(value),
+						target: "_blank",
+						rel: "noopener noreferrer",
+						style: { color: '#1890ff' }
+					}, "📎 " + fileName);
+				};
+			} else if (isPassword) {
+				col.render = () => "••••••";
+			} else if (isImage) {
+				col.render = (dom, entity) => {
+					let value = entity[f.f_name];
+					if (!value) return null;
+
+					// Handle JSON string (e.g., '["url1", "url2"]')
+					if (typeof value === 'string' && value.trim().startsWith('[')) {
+						try {
+							value = JSON.parse(value);
+						} catch {
+							// Not valid JSON, treat as single URL
+						}
+					}
+
+					const renderThumb = (url: string, extra?: number) => (
+						React.createElement("a", {
+							href: url,
+							target: "_blank",
+							rel: "noopener noreferrer",
+							style: { position: "relative", display: "inline-block" }
+						},
+							React.createElement("img", {
+								src: url,
+								alt: f.f_header,
+								style: { maxWidth: 64, maxHeight: 64, objectFit: "cover", borderRadius: 4, border: "1px solid #eee" }
+							}),
+							extra && extra > 0 ? React.createElement("span", {
+								style: {
+									position: "absolute",
+									bottom: 4,
+									right: 4,
+									background: "rgba(0,0,0,0.65)",
+									color: "white",
+									padding: "1px 5px",
+									borderRadius: 6,
+									fontSize: 11,
+									fontWeight: 600
+								}
+							}, `+${extra}`) : null
+						)
+					);
+
+					// Handle array of URLs (show first image with count badge)
+					if (Array.isArray(value)) {
+						const urls = value.filter(u => u && typeof u === 'string');
+						if (urls.length === 0) return null;
+						return renderThumb(urls[0], urls.length - 1);
+					}
+
+					// Handle single URL string
+					return renderThumb(String(value));
+				};
+			} else if (isImageInline) {
+				// Inline image upload in table cell
+				col.render = (dom, entity) => {
+					const value = entity[f.f_name];
+
+					// Handle JSON string (e.g., '["url1", "url2"]')
+					let parsedValue = value;
+					if (typeof value === 'string' && value && value.trim().startsWith('[')) {
+						try {
+							parsedValue = JSON.parse(value);
+						} catch {
+							// Not valid JSON, treat as single URL
+						}
+					}
+
+					// Display thumbnail preview
+					let urls: string[] = [];
+					if (Array.isArray(parsedValue)) {
+						urls = parsedValue.filter(u => u && typeof u === 'string');
+					} else if (parsedValue && typeof parsedValue === 'string') {
+						urls = [parsedValue];
+					}
+
+					if (urls.length === 0) {
+						return React.createElement("span", { style: { color: '#999', fontSize: 12 } }, "Chưa có ảnh");
+					}
+
+					// Show first image with count if album
+					const renderThumb = (url: string, extra?: number) => (
+						React.createElement("div", { style: { position: "relative", display: "inline-block", width: 48, height: 48 } },
+							React.createElement("img", {
+								src: url,
+								alt: f.f_header,
+								style: { maxWidth: 48, maxHeight: 48, objectFit: "cover", borderRadius: 4, border: "1px solid #ddd" }
+							}),
+							extra && extra > 0 ? React.createElement("span", {
+								style: {
+									position: "absolute",
+									bottom: -4,
+									right: -4,
+									background: "#1890ff",
+									color: "white",
+									padding: "1px 4px",
+									borderRadius: 3,
+									fontSize: 10,
+									fontWeight: 600
+								}
+							}, `+${extra}`) : null
+						)
+					);
+
+					if (isAlbum) {
+						return renderThumb(urls[0], urls.length - 1);
+					} else {
+						return renderThumb(urls[0], 0);
+					}
+				};
+			} else if (isRichText) {
+				// Strip HTML tags for grid preview, show ellipsis
+				col.render = (dom, entity) => {
+					const html = entity[f.f_name];
+					if (!html) return "";
+					const text = String(html).replace(/<[^>]+>/g, "").trim();
+					const preview = text.length > 120 ? text.slice(0, 120) + "…" : text;
+					return React.createElement("span", { title: text, style: { fontSize: 12, color: "#666" } }, preview);
+				};
+			}
+
+			if (f.f_format && !isImage && !isPassword && !isRichText) {
+				const fmt = f.f_format;
+				col.render = (dom, entity) => {
+					const val = entity[f.f_name];
+					if (val == null) return "";
+					try {
+						// simple replace: e.g. "{0}" templates
+						return String(fmt).replace(/\{0\}/g, String(val));
+					} catch {
+						return String(val);
+					}
+				};
+			}
+
+			return col;
+		});
+		return cols;
+	}, [m_configs.table, selectEnums, i18n.language]);
+
+  // Apply datacolumntemplate trigger (mutates columns)
+	const columns = useMemo<ProColumns<Row>[]>(() => {
+		const cols = [...baseColumns];
+		
+		// Add inline cell editing support when enableInlineCellEdit is true
+		if (enableInlineCellEdit && canEdit) {
+			cols.forEach((col) => {
+				// Skip id column
+				if (col.key === 'id' || col.dataIndex === 'id') {
+					return;
+				}
+
+				// Make column editable
+				const field = m_configs.table.find(f => f.f_name === col.dataIndex);
+				if (!field) return;
+
+				const types = (field.f_types || "ed").toLowerCase();
+				const isReadonly = types.indexOf('ro') !== -1;
+				const isRichText = /richtext|html/.test(types);
+				const isCodeEditor = /code/.test(types);
+				const isFile = /^file$/.test(types);
+				const isImageInline = /image_inline|album_inline/.test(types);
+				const isImage = (/img|image|avatar|photo|picture|album|gallery/.test(types)
+					|| /^(thumbnail|cover|images|avatar|photo)$/i.test(String(col.dataIndex))) && !isImageInline;
+				const isPassword = /password/.test(types);
+
+				// Skip readonly, complex types, and non-editable types
+				// Allow image_inline and album_inline to be edited
+				if (isReadonly || isRichText || isCodeEditor || isFile || isImage || isPassword) {
+					return;
+				}
+
+				// Enable editing for this column
+				col.editable = () => true;
+			});
+		}
+		
+		let code = m_configs.trigger?.datacolumntemplate;
+		if (code && decrypt) {
+			try { code = decrypt(code); } catch {}
+		}
+		if (code) {
+			const fn = safeEval(["columns", "seft", "React"], code) as ((columns: ProColumns<Row>[], seft: any, React: any) => ProColumns<Row>[]) | null;
+			if (fn) {
+				try {
+					const next = fn(cols, { m_configs, database, context }, React);
+					if (Array.isArray(next)) return next;
+				} catch {}
+			}
+		}
+
+		if (canEdit || canDelete) {
+			cols.push({
+				title: "Hành động",
+				key: "action",
+				valueType: "option",
+				width: 160,
+				fixed: "right",
+				render: (_, record) => {
+					const children: React.ReactNode[] = [];
+					// Show Edit button for both inline and modal editing
+					if (canEdit) {
+						children.push(React.createElement(Button, { type: "link", style: { padding: 0, marginRight: 8 }, onClick: () => {
+							handleEdit(record);
+						}, key: "edit" }, "Sửa"));
+					}
+					if (canDelete) {
+						children.push(React.createElement(Button, { type: "link", danger: true, style: { padding: 0 }, onClick: () => {
+							Modal.confirm({
+								title: "Xác nhận xóa",
+								content: "Bạn có chắc muốn xóa bản ghi này?",
+								okText: "Xóa",
+								okType: "danger",
+								cancelText: "Hủy",
+								onOk: async () => {
+									// Detail grid: chỉ xóa local, không gọi API
+									// Giống Vue: chỉ lưu khi master save
+									if (isDetailGrid || !hasTableName) {
+										setData(prev => {
+											const next = prev.filter(row => row.id !== record.id);
+											runAfterTrigger('afterDelete', next);
+											return next;
+										});
+										message.success("Đã xóa thành công");
+										onDelete?.(record);
+										if (isDetailGrid) {
+											onDataChange?.();
+										}
+										return;
+									}
+									
+									if (!appId) {
+										message.error("Thiếu app_id");
+										return;
+									}
+									
+									try {
+										const pkFields = m_configs.struct?.fieldsPK || ["id"];
+										const obj_update: any = {};
+										const missingKeys: string[] = [];
+										
+										for (const pkField of pkFields) {
+											if (record[pkField] !== undefined && record[pkField] !== null) {
+												obj_update[pkField] = record[pkField];
+											} else {
+												missingKeys.push(pkField);
+											}
+										}
+										
+										// Check if all primary keys are present
+										if (missingKeys.length > 0) {
+											console.error("❌ Missing primary key values:", missingKeys);
+											message.error(`Thiếu giá trị khóa chính: ${missingKeys.join(", ")}`);
+											return;
+										}
+										
+										await updateTableData<Row>({ 
+											app_id: appId, 
+											obj_name: tableName, 
+											command: "delete", 
+											obj_update,
+											pk_fields: pkFields,
+											where: record?.id ? { id: record.id } : undefined
+										});
+										
+										// Update local state immediately
+										setData(prev => {
+											const next = prev.filter(row => {
+												const pkValue = pkFields.length === 1 ? row[pkFields[0]] : String(row.id);
+												const recordPkValue = pkFields.length === 1 ? record[pkFields[0]] : record.id;
+												return pkValue !== recordPkValue;
+											});
+											runAfterTrigger('afterDelete', next);
+											return next;
+										});
+										
+										message.success("Đã xóa thành công");
+										onDelete?.(record);
+										// Notify parent to reload database from server
+										onDataChange?.();
+									} catch (err) {
+										console.error("❌ Delete error:", err);
+										message.error("Xóa thất bại: " + (err as Error).message);
+									}
+								}
+							});
+						}, key: "del" }, "Xóa"));
+					}
+					return React.createElement("span", null, ...children);
+				},
+			});
+		}
+		return cols;
+	}, [baseColumns, m_configs, database, context, canEdit, canDelete, onEdit, onDelete, decrypt, appId, tableName, enableInlineCellEdit]);
+
+	// Apply datarowtemplate trigger (Vue parity: Function("container", "item", code))
+	const rowTemplateFn = useMemo(() => {
+		let code = m_configs.trigger?.datarowtemplate;
+		if (!code) return null;
+		
+		// Use provided decrypt OR fall back to csmDecrypt
+		const effectiveDecrypt = decrypt || csmDecrypt;
+		try {
+			code = effectiveDecrypt(code);
+		} catch {
+			// ignore decrypt errors
+		}
+		if (!code) return null;
+		return safeEval(["container", "item", "React"], code) as ((container: any, item: Row, React: any) => any) | null;
+	}, [m_configs.trigger, decrypt]);
+
+	const useRowTemplate = !!rowTemplateFn;
+
+	// load_db trigger or default database lookup
+	// Nếu không có table_name: áp dụng load_db trigger từ field tables để đưa dữ liệu lên trang
+	// Nếu có table_name: lấy từ API hoặc fullDatabase[tableName]
+	useEffect(() => {
+		// For detail grids, skip trigger and use database directly
+		if (isDetailGrid) {
+			const fallback = database[tableName]?.rows || [];
+			setData(fallback);
+			return;
+		}
+		
+		let loadCode = m_configs.trigger?.load_db;
+		if (loadCode && decrypt) {
+			try {
+				loadCode = decrypt(loadCode);
+			} catch {
+				// ignore
+			}
+		}
+		
+		// Nếu có load_db trigger, luôn chạy trigger trước
+		if (loadCode) {
+			const fn = safeEval(["seft", "db"], loadCode) as ((seft: any, db: Database) => Row[]) | null;
+			if (fn) {
+				try {
+					const rows = fn({ m_configs, context }, database) || [];
+					setData(Array.isArray(rows) ? rows : []);
+					return;
+				} catch (err) {
+					console.warn("load_db trigger error:", err);
+					// Fall back to default behavior
+				}
+			}
+		}
+		
+		// Nếu không có load_db trigger hoặc trigger lỗi:
+		// - Nếu có table_name: lấy từ database[tableName]
+		// - Nếu không có table_name: dữ liệu sẽ được xử lý thông qua trigger và field tables
+		if (hasTableName) {
+			const fallback = database[tableName]?.rows || [];
+			setData(fallback);
+		} else {
+			// Không có table_name: khởi tạo dữ liệu trống, chỉ cập nhật khi có trigger hoặc user nhập liệu
+			setData([]);
+		}
+	}, [m_configs, database, context, isDetailGrid, tableName, hasTableName]);
+
+	// Auto-reload data when global database changes (e.g., from socket updates)
+	// This makes the component reactive to real-time updates without manual socket handling
+	useEffect(() => {
+		console.log(`[CsmDynamicGrid] 🔄 Data loading useEffect triggered (tableName: ${tableName}, hasTableName: ${hasTableName})`);
+		console.log(`[CsmDynamicGrid] decrypt function available: ${!!decrypt}`);
+		console.log(`[CsmDynamicGrid] decrypt function name: ${decrypt?.name || 'anonymous'}`);
+		
+		if (!hasTableName) return;
+		
+		const globalTableData = database[tableName];
+		if (!globalTableData) {
+			console.log(`[CsmDynamicGrid] ⚠️ No table data found for '${tableName}'`);
+			return;
+		}
+		
+		// Check if global data has changed
+		const globalRows = globalTableData.rows || [];
+		console.log(`[CsmDynamicGrid] 📊 Global rows for '${tableName}': ${globalRows.length} rows`);
+		
+		// Nếu có load_db trigger, luôn ưu tiên trigger
+		let loadCode = m_configs.trigger?.load_db;
+		if (loadCode) {
+			console.log(`[CsmDynamicGrid] load_db trigger found, length: ${loadCode.length}`);
+			console.log(`[CsmDynamicGrid] load_db trigger (first 100 chars): ${loadCode.substring(0, 100)}`);
+			try {
+				let resolvedCode = loadCode;
+				
+				// Try provided decrypt first
+				if (decrypt) {
+					try {
+						const beforeDecrypt = resolvedCode.substring(0, 50);
+						const decrypted = decrypt(loadCode);
+						const afterDecrypt = decrypted.substring(0, 50);
+						console.log("[CsmDynamicGrid] Decrypt attempt:", { before: beforeDecrypt, after: afterDecrypt });
+						
+						// Check if decrypt actually changed the code
+						if (beforeDecrypt === afterDecrypt) {
+							console.warn("[CsmDynamicGrid] ⚠️ decrypt prop did not change code - trying csmDecrypt fallback");
+							resolvedCode = csmDecrypt(loadCode);
+						} else {
+							resolvedCode = decrypted;
+							console.log("[CsmDynamicGrid] ✅ decrypt prop worked");
+						}
+					} catch (decryptErr) {
+						console.warn("[CsmDynamicGrid] decrypt prop failed, trying csmDecrypt fallback:", decryptErr);
+						resolvedCode = csmDecrypt(loadCode);
+					}
+				} else {
+					console.log("[CsmDynamicGrid] No decrypt prop, using csmDecrypt");
+					resolvedCode = csmDecrypt(loadCode);
+				}
+				
+				console.log(`[CsmDynamicGrid] Final code (first 100 chars): ${resolvedCode.substring(0, 100)}`);
+				const fn = safeEval(["seft", "db"], resolvedCode) as ((seft: any, db: Database) => Row[]) | null;
+				if (fn) {
+					const seftContext = createSeftContext();
+					const rows = fn(seftContext, database) || [];
+					setData(Array.isArray(rows) ? rows : []);
+					console.log(`[CsmDynamicGrid] ✅ Data reloaded via trigger from global database (${rows.length} rows)`);
+					return;
+				}
+			} catch (err) {
+				console.warn("[CsmDynamicGrid] load_db trigger error:", err);
+			}
+		}
+		
+		// Fallback: load directly from global database
+		setData(globalRows);
+		console.log(`[CsmDynamicGrid] ✅ Data synced from global database (${globalRows.length} rows)`);
+	}, [database, tableName, hasTableName, m_configs, context, decrypt]);
+
+  // filter trigger (runs on data)
+	const filtered = useMemo(() => {
+		let code = m_configs.trigger?.filter;
+		
+		if (code) {
+			try {
+				// Try provided decrypt first, fall back to csmDecrypt if it doesn't work
+				if (decrypt) {
+					const before = code.substring(0, 20);
+					const decrypted = decrypt(code);
+					const after = decrypted.substring(0, 20);
+					if (before === after) {
+						console.log("[selectEnums.filter] decrypt prop didn't change code, using csmDecrypt");
+						code = csmDecrypt(code);
+					} else {
+						code = decrypted;
+					}
+				} else {
+					code = csmDecrypt(code);
+				}
+			} catch {
+				// Try csmDecrypt as fallback
+				try {
+					code = csmDecrypt(code);
+				} catch {
+					// ignore
+				}
+			}
+		}
+		if (!code) return data;
+		const fn = safeEval(["obj"], code) as ((obj: Row) => boolean) | null;
+		if (!fn) return data;
+		try {
+			return data.filter((r) => !!fn(r));
+		} catch {
+			return data;
+		}
+	}, [data, m_configs.trigger]);
+
+	// Derived searchable fields
+	const derivedSearchFields = useMemo(() => {
+		if (Array.isArray(searchFields) && searchFields.length) return searchFields;
+		return (m_configs.table || [])
+			.filter(f => Number(f.f_show) === 1)
+			.map(f => f.f_name)
+			.filter(name => {
+				// Heuristic: only simple text-like fields
+				const tf = (m_configs.table.find(f => f.f_name === name)?.f_types || "").toLowerCase();
+				return /ed|text|textarea|html|slug|name|title|excerpt|code|status/.test(tf);
+			});
+	}, [searchFields, m_configs.table]);
+
+	const searchedData = useMemo(() => {
+		if (!enableSearch || !searchTerm.trim()) return filtered;
+		const term = searchTerm.trim().toLowerCase();
+		return filtered.filter(row => {
+			return derivedSearchFields.some(field => {
+				const val = row[field];
+				if (val == null) return false;
+				return String(val).toLowerCase().includes(term);
+			});
+		});
+	}, [filtered, enableSearch, searchTerm, derivedSearchFields]);
+
+	// Auto-enable edit mode for newly added rows
+	useEffect(() => {
+		if (pendingEditableRowId && searchedData.some(row => row.id === pendingEditableRowId)) {
+			setEditableKeys([pendingEditableRowId]);
+			setPendingEditableRowId(null);
+		}
+	}, [pendingEditableRowId, searchedData]);
+
+	// Phím tắt cơ bản tương tự Vue: Ctrl+S (save), F4 (add), F3 (edit), F8 (delete)
+	useEffect(() => {
+		const onKey = (e: KeyboardEvent) => {
+			if (e.ctrlKey && e.key.toLowerCase() === "s") {
+				e.preventDefault();
+				return;
+			}
+			if (e.key === "F4" && canAdd) {
+				e.preventDefault();
+				onAdd?.();
+			}
+			if (e.key === "F3" && canEdit && _selectedRow) {
+				e.preventDefault();
+				setEditingRecord(_selectedRow);
+				setEditorOpen(true);
+				onEdit?.(_selectedRow);
+			}
+			if (e.key === "F8" && canDelete && _selectedRow) {
+				e.preventDefault();
+				// eslint-disable-next-line no-alert
+				const ok = window.confirm("Bạn có chắc muốn xóa bản ghi này?");
+				if (ok && appId) {
+					const pkFields = m_configs.struct?.fieldsPK || ["id"];
+					const obj_update: any = {};
+					const missingKeys: string[] = [];
+					
+					for (const pkField of pkFields) {
+						if ((_selectedRow as any)[pkField] !== undefined && (_selectedRow as any)[pkField] !== null) {
+							obj_update[pkField] = (_selectedRow as any)[pkField];
+						} else {
+							missingKeys.push(pkField);
+						}
+					}
+					
+					// Check if all primary keys are present
+					if (missingKeys.length > 0) {
+						console.error("❌ Missing primary key values:", missingKeys);
+						message.error(`Thiếu giá trị khóa chính: ${missingKeys.join(", ")}`);
+						return;
+					}
+					
+					updateTableData<Row>({ 
+						app_id: appId, 
+						obj_name: tableName, 
+						command: "delete", 
+						obj_update,
+						pk_fields: pkFields,
+						where: _selectedRow?.id ? { id: _selectedRow.id } : undefined
+					})
+						.then(() => {
+							// Update local state immediately
+							setData(prev => prev.filter(row => {
+								const pkValue = pkFields.length === 1 ? row[pkFields[0]] : String(row.id);
+								const selectedPkValue = pkFields.length === 1 ? _selectedRow[pkFields[0]] : _selectedRow.id;
+								return pkValue !== selectedPkValue;
+							}));
+							message.success("Đã xóa thành công");
+							onDelete?.(_selectedRow);
+							// Notify parent to reload database from server
+							onDataChange?.();
+						})
+						.catch((err) => {
+							console.error("Delete error:", err);
+							message.error("Xóa thất bại: " + (err as Error)?.message);
+						});
+				}
+			}
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [canAdd, canEdit, canDelete, onAdd, onEdit, onDelete, _selectedRow, appId, tableName]);
+
+	// Export CSV
+	const handleExport = () => {
+		const headers = baseColumns.map((c) => (typeof c.title === "string" ? c.title : String(c.key || c.dataIndex || "")));
+		const fields = baseColumns.map((c) => String(c.dataIndex ?? c.key ?? ""));
+		const rows = [headers.join(",")].concat(
+			searchedData.map((r) => fields.map((f) => JSON.stringify(r[f] ?? "")).join(",")),
+		);
+		const blob = new Blob([rows.join("\n")], { type: "text/csv;charset=utf-8;" });
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement("a");
+		a.href = url;
+		a.download = `${m_configs.label || "export"}.csv`;
+		a.click();
+		URL.revokeObjectURL(url);
+	};
+
+	// Import CSV, Excel (.xls, .xlsx) with trigger support
+	const handleImport = async () => {
+		const input = document.createElement("input");
+		input.type = "file";
+		input.accept = ".csv,text/csv,.xls,.xlsx,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+		input.onchange = async () => {
+			const file = (input.files && input.files[0]) as File | undefined;
+			if (!file) return;
+
+			try {
+				const fileExt = file.name.split(".").pop()?.toLowerCase();
+				let items: Row[] = [];
+
+				if (fileExt === "csv") {
+					// Handle CSV file
+					const text = await file.text();
+					const lines = text.split(/\r?\n/).filter(Boolean);
+					if (lines.length < 2) {
+						message.error("File CSV rỗng");
+						return;
+					}
+					const header = lines[0].split(",").map((h) => h.trim().replace(/^\"|\"$/g, ""));
+					items = lines.slice(1).map((line) => {
+						const cols = line.match(/\"(?:[^\"]|\\\")*\"|[^,]+/g) || [];
+						const obj: Row = {};
+						header.forEach((h, i) => {
+							let v = cols[i] ?? "";
+							v = v.replace(/^\"|\"$/g, "").replace(/\\\"/g, '"').trim();
+							obj[h] = v;
+						});
+						return obj;
+					});
+				} else if (["xls", "xlsx"].includes(fileExt || "")) {
+					// Handle Excel file (.xls or .xlsx)
+					const arrayBuffer = await file.arrayBuffer();
+					const workbook = read(arrayBuffer, { type: "array" });
+					const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+					if (!worksheet) {
+						message.error("Sheet trống");
+						return;
+					}
+					// Convert sheet to JSON with trimmed header names
+					const rawItems = utils.sheet_to_json<Row>(worksheet, {
+						defval: "",
+						header: 1
+					}) as unknown as Row[];
+
+					// First row is header
+					if (rawItems.length < 2) {
+						message.error("File Excel rỗng");
+						return;
+					}
+
+					const header = (rawItems[0] as string[]).map((h) =>
+						String(h).trim().replace(/^\"|\"$/g, "")
+					);
+
+					items = rawItems.slice(1).map((row) => {
+						const obj: Row = {};
+						const rowArray = Array.isArray(row) ? row : Object.values(row as object);
+						header.forEach((h, i) => {
+							let v = (rowArray[i] ?? "");
+							obj[h] = String(v).trim();
+						});
+						return obj;
+					});
+				} else {
+					message.error("Định dạng file không hỗ trợ (CSV, XLS, XLSX)");
+					return;
+				}
+
+				if (items.length === 0) {
+					message.warning("Không có dữ liệu để import");
+					return;
+				}
+
+				// Check if custom beforeImport trigger exists
+console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.keys(m_configs.trigger || {}));
+			console.log("[CsmDynamicGrid] IMPORT START - trigger.beforeImport exists?", !!m_configs.trigger?.beforeImport);
+			console.log("[CsmDynamicGrid] IMPORT START - trigger.afterImport exists?", !!m_configs.trigger?.afterImport);
+			
+			let finalItems = items;
+				if (m_configs.trigger?.beforeImport) {
+					let code = m_configs.trigger.beforeImport;
+					
+					// Use provided decrypt OR fall back to csmDecrypt
+					const effectiveDecrypt = decrypt || csmDecrypt;
+					try {
+						code = effectiveDecrypt(code);
+					} catch (err) {
+						console.error("Decrypt error for beforeImport:", err);
+					}
+
+					const fn = safeEval(["items", "seft", "data"], code) as ((items: Row[], seft: any, data: Database) => Row[] | Promise<Row[]>) | null;
+					if (fn) {
+						try {
+							const result = await fn(items, { m_configs, context }, database);
+							if (Array.isArray(result)) {
+								finalItems = result;
+							}
+						} catch (err) {
+							console.error("beforeImport trigger error:", err);
+							message.error("Lỗi xử lý beforeImport: " + (err as Error).message);
+							return;
+						}
+					}
+				}
+
+				if (finalItems.length === 0) {
+					message.warning("Không có dữ liệu sau xử lý beforeImport");
+					return;
+				}
+
+				// Run custom afterImport trigger if provided (for side effects like syncing storage/backend)
+				console.log("[CsmDynamicGrid] AFTER beforeImport - checking afterImport trigger...");
+				if (m_configs.trigger?.afterImport) {
+					console.log("[CsmDynamicGrid] ✅ afterImport trigger found, executing...");
+					let code = m_configs.trigger.afterImport;
+					
+					// Use provided decrypt OR fall back to csmDecrypt
+					const effectiveDecrypt = decrypt || csmDecrypt;
+					try {
+						code = effectiveDecrypt(code);
+					} catch (err) {
+						console.error("Decrypt error for afterImport:", err);
+					}
+					const fn = safeEval(["items", "seft", "data"], code) as ((items: Row[], seft: any, data: Database) => any) | null;
+					if (fn) {
+						try {
+							console.log("[CsmDynamicGrid] Calling afterImport with finalItems.length:", finalItems.length);
+							await fn(finalItems, { m_configs, context }, database);
+							console.log("[CsmDynamicGrid] ✅ afterImport completed successfully");
+						} catch (err) {
+							console.error("afterImport trigger error:", err);
+						}
+					} else {
+						console.warn("[CsmDynamicGrid] ⚠️ afterImport safeEval returned null");
+					}
+				} else {
+					console.warn("[CsmDynamicGrid] ⚠️ afterImport trigger NOT FOUND in m_configs.trigger");
+				}
+
+				// Merge imported data with current data
+				setData((prev) => [...prev, ...finalItems]);
+				message.success(`Đã import ${finalItems.length} bản ghi`);
+			} catch (error) {
+				console.error("Import error:", error);
+				message.error("Lỗi import: " + (error as Error).message);
+			}
+		};
+		input.click();
+	};
+
+	// Default handlers if not provided
+	const handleAdd = () => {
+		// If inline editing, add new empty row to table
+		if (enableInlineCellEdit) {
+			// Generate unique ID: appId_timestamp_randomString to avoid collisions
+			const randomSuffix = Math.random().toString(36).substring(2, 9);
+			const newRowId = `${appId}_${Date.now()}_${randomSuffix}`;
+			const newRow: Row = { id: newRowId };
+			const fields = (m_configs.table || []).filter(f => Number(f.f_show) === 1);
+			
+			// Initialize fields with default values based on field type
+			fields.forEach(f => {
+				const types = (f.f_types || "").toLowerCase();
+				if (/number|int|float|double|money|currency|digit/.test(types)) {
+					newRow[f.f_name] = 0;
+				} else if (/bool|switch|checkbox/.test(types)) {
+					newRow[f.f_name] = false;
+				} else if (/date|time|datetime/.test(types)) {
+					newRow[f.f_name] = '';
+				} else {
+					newRow[f.f_name] = '';
+				}
+			});
+			
+			// Check if master-detail nodes exist
+			const hasMasterDetail = m_configs.nodes && m_configs.nodes.length > 0;
+			
+			if (hasMasterDetail) {
+				// If has master-detail nodes, open form modal for complete data entry
+				setEditingRecord(newRow);
+				setEditorOpen(true);
+				onAdd?.();
+			} else {
+				// Add to beginning of data array for inline editing
+				setData((prev) => {
+					const next = [newRow, ...prev];
+					// Run afterAdd trigger với toàn bộ mảng mới
+					runAfterTrigger('afterAdd', next);
+					return next;
+				});
+				// Select the new row
+				setSelectedKeys([newRowId]);
+				setSelectedRow(newRow);
+				// Mark this row to be editable once it appears in the table
+				setPendingEditableRowId(newRowId);
+				onAdd?.();
+			}
+		} else {
+			// Modal-based add
+			setEditingRecord(null);
+			setEditorOpen(true);
+			onAdd?.();
+		}
+	};
+	const handleEdit = (record: Row) => {
+		// If inline editing is enabled, activate inline edit mode for the row
+		if (enableInlineCellEdit) {
+			const pkFields = m_configs.struct?.fieldsPK || ['id'];
+			const rowKey = String(pkFields.length === 1 ? record[pkFields[0]] : record.id);
+			
+			console.log('[CsmDynamicGrid] Activating inline edit:', {
+				record,
+				pkFields,
+				rowKey,
+				currentEditableKeys: editableKeys,
+				columnsWithEditable: columns.filter(c => c.editable).map(c => c.dataIndex)
+			});
+			
+			setEditableKeys([rowKey]);
+			setSelectedKeys([rowKey]);
+			setSelectedRow(record);
+			onEdit?.(record);
+		} else {
+			// Modal-based editing for standard form or master-detail
+			console.log('[CsmDynamicGrid] Opening modal editor');
+			setEditingRecord(record);
+			setEditorOpen(true);
+			onEdit?.(record);
+		}
+	};
+	const handleDelete = async (record: Row) => {
+		try {
+			// Detail grid hoặc không có table_name: chỉ xóa từ state local, KHÔNG gọi API
+			// Giống Vue: detail grid chỉ update khi master save
+			if (isDetailGrid || !hasTableName) {
+				setData((prev) => {
+					const next = prev.filter(row => row.id !== record.id);
+					// Run afterDelete trigger với toàn bộ mảng còn lại
+					runAfterTrigger('afterDelete', next);
+					return next;
+				});
+				message.success("Đã xóa thành công");
+				onDelete?.(record);
+				runSideEffectTrigger("delete_db", record);
+				// Notify parent để sync vào form (nếu là detail grid)
+				if (isDetailGrid) {
+					onDataChange?.();
+				}
+				return;
+			}
+			
+			if (!appId) {
+				message.error("Thiếu app_id");
+				return;
+			}
+			
+			const pkFields = m_configs.struct?.fieldsPK || ["id"];
+			
+			// Build obj_update with ALL primary key fields
+			const obj_update: any = {};
+			const missingKeys: string[] = [];
+			
+			for (const pkField of pkFields) {
+				if (record[pkField] !== undefined && record[pkField] !== null) {
+					obj_update[pkField] = record[pkField];
+				} else {
+					missingKeys.push(pkField);
+				}
+			}
+			
+			// Check if all primary keys are present
+			if (missingKeys.length > 0) {
+				console.error("❌ Missing primary key values:", missingKeys);
+				message.error(`Thiếu giá trị khóa chính: ${missingKeys.join(", ")}`);
+				return;
+			}
+			
+			await updateTableData<Row>({ 
+				app_id: appId, 
+				obj_name: tableName, 
+				command: "delete", 
+				obj_update,
+				pk_fields: pkFields,
+				where: record?.id ? { id: record.id } : undefined
+			});
+			
+			// Update local state và run afterDelete trigger
+			setData((prev) => {
+				const next = prev.filter(row => {
+					const pkValue = pkFields.length === 1 ? row[pkFields[0]] : String(row.id);
+					const recordPkValue = pkFields.length === 1 ? record[pkFields[0]] : record.id;
+					return pkValue !== recordPkValue;
+				});
+				// Run afterDelete trigger với toàn bộ mảng còn lại
+				runAfterTrigger('afterDelete', next);
+				return next;
+			});
+			
+			message.success("Đã xóa thành công");
+			onDelete?.(record);
+			runSideEffectTrigger("delete_db", record);
+			// Notify parent to reload database from server
+			onDataChange?.();
+		} catch (err) {
+			console.error("Delete error:", err);
+			message.error("Xóa thất bại: " + (err as Error).message);
+		}
+	};
+
+	const tableProps: any = {
+		rowKey: (record: Row) => {
+			const pkFields = m_configs.struct?.fieldsPK || ['id'];
+			return pkFields.length === 1 ? String(record[pkFields[0]]) : String(record.id);
+		},
+		actionRef,
+		columns,
+		dataSource: searchedData,
+		pagination: { pageSize: Number(m_configs.table_pagesize) || 10 },
+		// Responsive scroll: on mobile, use auto; on desktop, use max-content for horizontal scroll
+		scroll: isMobile ? { x: 'auto', y: 'calc(100vh - 400px)' } : { x: 'max-content', y: 'calc(100vh - 400px)' },
+		...(enableInlineCellEdit && canEdit ? {
+			editable: {
+				type: 'multiple' as const,
+				editableKeys: editableKeys,
+				onChange: setEditableKeys,
+				// Realtime trigger update khi nhập liệu inline (Vue compatibility)
+				onValuesChange: (record: Row, originRow: Row) => {
+					// Prevent recursion: nếu đang update từ trigger thì skip
+					if (isUpdatingFromTrigger) return;
+					
+					// Clear timeout cũ nếu có
+					if (updateTriggerTimeoutRef.current) {
+						clearTimeout(updateTriggerTimeoutRef.current);
+					}
+					
+					// Debounce 300ms: đợi user nhập xong mới chạy trigger
+					updateTriggerTimeoutRef.current = setTimeout(() => {
+						if (!m_configs.trigger?.update) return;
+						
+						try {
+							setIsUpdatingFromTrigger(true);
+							const processedData = runUpdateTrigger(record);
+							
+							// Update lại data nếu trigger thay đổi giá trị
+							const pkFields = m_configs.struct?.fieldsPK || ['id'];
+							const rowKey = pkFields.length === 1 ? processedData[pkFields[0]] : processedData.id;
+							
+							setData((prev) => prev.map(row => {
+								const isTarget = pkFields.length === 1 
+									? row[pkFields[0]] === rowKey
+									: row.id === rowKey;
+								return isTarget ? { ...row, ...processedData } : row;
+							}));
+							
+							// Reset flag sau khi update xong
+							setTimeout(() => setIsUpdatingFromTrigger(false), 100);
+						} catch (err) {
+							console.error('Realtime trigger error:', err);
+							setIsUpdatingFromTrigger(false);
+						}
+					}, 300);
+				},
+				onSave: async (rowKey: React.Key, newData: Row) => {
+					const pkFields = m_configs.struct?.fieldsPK || ['id'];
+					// Find old row data
+					let oldRow: Row | undefined = undefined;
+					if (pkFields.length === 1) {
+						oldRow = data.find((row: Row) => row[pkFields[0]] === rowKey);
+					} else {
+						oldRow = data.find((row: Row) => String(row.id) === String(rowKey));
+					}
+					
+					const safeNewData = oldRow?.id && newData.id == null ? { ...newData, id: oldRow.id } : newData;
+					
+					// Detail grid: chỉ update local state, KHÔNG gọi API
+					// Giống Vue: detail grid chỉ lưu khi master save
+					if (isDetailGrid) {
+						// Run UPDATE trigger TRƯỚC KHI save (Vue compatibility)
+						const processedData = runUpdateTrigger(safeNewData);
+						
+						// Update local state AND database object
+						let updatedData: Row[] = [];
+						setData((prev) => {
+							const next = prev.map(row => {
+								const isUpdatedRow = pkFields.length === 1 
+									? String(row[pkFields[0]]) === String(rowKey)
+									: String(row.id) === String(rowKey);
+								
+								if (isUpdatedRow) {
+									return { ...row, ...processedData };
+								}
+								return row;
+							});
+							// Run afterEdit trigger
+							runAfterTrigger('afterEdit', next);
+							updatedData = next;
+							return next;
+						});
+						
+						// CRITICAL: Update database object BEFORE calling onDataChange
+						if (tableName && database[tableName]) {
+							database[tableName].rows = updatedData;
+							console.log(`[CsmDynamicGrid] Detail grid updated database[${tableName}]:`, {
+								rowCount: updatedData.length,
+								data: updatedData
+							});
+						} else {
+							console.warn(`[CsmDynamicGrid] Cannot update database[${tableName}] - not found`, { tableName, hasDatabase: !!database });
+						}
+						
+						message.success('Đã lưu thay đổi');
+						runSideEffectTrigger("update_db", processedData);
+						// Notify parent để sync vào form (sẽ đọc database[tableName])
+						console.log(`[CsmDynamicGrid] Calling onDataChange for ${tableName}`);
+						onDataChange?.();
+						return;
+					}
+					
+					// Master grid: gọi API để lưu ngay
+					if (!appId) {
+						message.error("Thiếu app_id");
+						return;
+					}
+					
+					try {
+						// Run UPDATE trigger TRƯỚC KHI save (Vue compatibility)
+						const processedData = runUpdateTrigger(safeNewData);
+						
+						await updateTableData<Row>({
+							app_id: appId,
+							obj_name: tableName,
+							command: 'update',
+							obj_update: processedData,
+							pk_fields: pkFields,
+							where: oldRow?.id ? { id: oldRow.id } : undefined,
+						});
+						
+						// Update local state immediately with merged data
+						setData((prev) => {
+							const next = prev.map(row => {
+								const isUpdatedRow = pkFields.length === 1 
+									? String(row[pkFields[0]]) === String(rowKey)
+									: String(row.id) === String(rowKey);
+								
+								if (isUpdatedRow) {
+									return { ...row, ...processedData };
+								}
+								return row;
+							});
+							// Run afterEdit trigger
+							runAfterTrigger('afterEdit', next);
+							return next;
+						});
+						
+						message.success('Đã lưu thay đổi');
+						runSideEffectTrigger("update_db", processedData);
+					} catch (error) {
+						message.error('Lưu thất bại: ' + (error as Error).message);
+					}
+				},
+				actionRender: (row: any, config: any, defaultDom: any) => [defaultDom.save, defaultDom.cancel],
+			},
+		} : {}),
+		rowSelection: {
+			type: "checkbox",
+			selectedRowKeys: selectedKeys,
+			onChange: (keys: React.Key[], rows: Row[]) => {
+				setSelectedKeys(keys);
+				const r = rows[0] ?? null;
+				setSelectedRow(r);
+				setSelectedDetailRow(r); // Update detail panel
+				onSelectRow?.(r);
+			},
+		},
+		onRow: (record: Row) => ({
+			onClick: () => {
+				// Always select row on click for master-detail and inline edit
+				const pkFields = m_configs.struct?.fieldsPK || ['id'];
+				const rowKey = String(pkFields.length === 1 ? record[pkFields[0]] : record.id);
+				setSelectedKeys([rowKey]);
+				setSelectedRow(record);
+				setSelectedDetailRow(record); // Update detail panel immediately
+				onSelectRow?.(record);
+			},
+			onDoubleClick: () => canEdit && handleEdit(record),
+			...(useRowTemplate ? ({ record } as any) : {}),
+		}),
+		...(useRowTemplate ? {
+			components: {
+				body: {
+					row: (rowProps: any) => {
+						const record = rowProps?.record as Row | undefined;
+						if (!record) {
+							return React.createElement("tr", rowProps, rowProps.children);
+						}
+						let tplResult: any = null;
+						try {
+							tplResult = rowTemplateFn ? rowTemplateFn(null, record, React) : null;
+						} catch (err) {
+							console.error("[CsmDynamicGrid] datarowtemplate error:", err);
+						}
+						if (tplResult == null || tplResult === false) {
+							return React.createElement("tr", rowProps, rowProps.children);
+						}
+						let content: React.ReactNode = tplResult;
+						let cellStyle: React.CSSProperties | undefined;
+						let className: string | undefined;
+						if (tplResult && typeof tplResult === "object" && !React.isValidElement(tplResult)) {
+							if ("content" in tplResult) content = tplResult.content;
+							if (tplResult.className) className = tplResult.className;
+							if (tplResult.style) cellStyle = tplResult.style;
+						}
+						if (typeof content === "string") {
+							content = React.createElement("div", { dangerouslySetInnerHTML: { __html: content } });
+						}
+						return React.createElement(
+							"tr",
+							{ ...rowProps, className: [rowProps.className, className].filter(Boolean).join(" ") },
+							React.createElement(
+								"td",
+								{ colSpan: columns.length, style: { padding: 0, ...(cellStyle || {}) } },
+								content
+							)
+						);
+					},
+				},
+			},
+		} : {}),
+		toolBarRender: () => {
+			const items: React.ReactNode[] = [];
+			if (enableSearch) {
+				items.push(
+					React.createElement(Input, {
+						key: "search",
+						placeholder: `Tìm kiếm trong ${derivedSearchFields.length} trường...`,
+						prefix: React.createElement(SearchOutlined, { style: { color: "#bfbfbf" } }),
+						value: searchTerm,
+						onChange: (e: any) => setSearchTerm(e.target.value),
+						allowClear: true,
+						style: { width: 280, marginRight: 12 },
+					})
+				);
+			}
+			const buttons = [];
+			if (canAdd) {
+				buttons.push(
+					React.createElement(Tooltip, { key: "add-tooltip", title: "Phím tắt: F4" },
+						React.createElement(Button, { 
+							key: "add", 
+							type: "primary", 
+							icon: React.createElement(PlusOutlined),
+							onClick: handleAdd
+						}, "Thêm mới")
+					)
+				);
+			}
+			// Add batch delete button when rows are selected
+			if (canDelete && selectedKeys.length > 0 && !enableInlineCellEdit) {
+				buttons.push(
+					React.createElement(Button, { 
+						key: "batch-delete",
+						danger: true,
+						onClick: () => {
+							const selectedRows = searchedData.filter(row => selectedKeys.includes(row.id));
+							if (selectedRows.length === 0) return;
+							
+							Modal.confirm({
+								title: "Xác nhận xóa",
+								content: `Bạn có chắc muốn xóa ${selectedRows.length} bản ghi đã chọn?`,
+								okText: "Xóa",
+								okType: "danger",
+								cancelText: "Hủy",
+								onOk: async () => {
+									if (!appId) {
+										message.error("Thiếu app_id");
+										return;
+									}
+									
+									const pkFields = m_configs.struct?.fieldsPK || ["id"];
+									let deleteCount = 0;
+									let deleteError = false;
+									
+									// Delete rows one by one
+									for (const row of selectedRows) {
+										try {
+											const obj_update: any = {};
+											const missingKeys: string[] = [];
+											
+											for (const pkField of pkFields) {
+												if (row[pkField] !== undefined && row[pkField] !== null) {
+													obj_update[pkField] = row[pkField];
+												} else {
+													missingKeys.push(pkField);
+												}
+											}
+											
+											if (missingKeys.length > 0) {
+												console.error("❌ Missing primary key values:", missingKeys);
+												deleteError = true;
+												continue;
+											}
+											
+											await updateTableData<Row>({
+												app_id: appId,
+												obj_name: tableName,
+												command: "delete",
+												obj_update,
+												pk_fields: pkFields,
+												where: row?.id ? { id: row.id } : undefined
+											});
+											deleteCount++;
+										} catch (err) {
+											console.error("❌ Delete error:", err);
+											deleteError = true;
+										}
+									}
+									
+									if (deleteCount > 0) {
+										// Update local state immediately
+										const deletedIds = selectedRows.map(r => pkFields.length === 1 ? r[pkFields[0]] : r.id);
+										setData(prev => prev.filter(row => {
+											const pkValue = pkFields.length === 1 ? row[pkFields[0]] : String(row.id);
+											return !deletedIds.includes(pkValue);
+										}));
+										message.success(`Đã xóa ${deleteCount} bản ghi`);
+										setSelectedKeys([]);
+										// Notify parent to reload database from server
+										onDataChange?.();
+									}
+									if (deleteError) {
+										message.warning(`Xóa ${deleteCount} bản ghi thành công, nhưng một số bản ghi thất bại`);
+									}
+								}
+							});
+						}
+					}, `Xóa ${selectedKeys.length} dòng`)
+				);
+			}
+			if (!isReadonly) {
+				buttons.push(
+					React.createElement(Button, { 
+						key: "import",
+						icon: React.createElement(ImportOutlined),
+						onClick: handleImport 
+					}, "Import")
+				);
+				buttons.push(
+					React.createElement(Button, { 
+						key: "export",
+						icon: React.createElement(ExportOutlined),
+						onClick: handleExport 
+					}, "Export")
+				);
+			}
+			items.push(
+				React.createElement(Space, { key: "button-group", size: "small" }, buttons)
+			);
+			return items;
+		},
+		options: { reload: true, density: true, setting: true },
+		cardProps: {
+			bodyStyle: { padding: 0 }
+		},
+		search: false,
+		dateFormatter: "string",
+		headerTitle: false,
+	};
+
+	const children: React.ReactNode[] = [React.createElement(BasicTable as any, { key: "table", ...tableProps })];
+	
+	// Add detail panel when a master row is selected and it has detail nodes (Master-Detail structure)
+	const isMasterDetail = !isDetailGrid && Number(m_configs.type_form) === 2;
+	const detailNodes = (m_configs as any).nodes || [];
+	const hasDetailNodes = Array.isArray(detailNodes) && detailNodes.length > 0;
+	
+	// Sync detail data to store when selectedDetailRow changes (must be at component level, not inside conditions)
+	React.useEffect(() => {
+		if (!isMasterDetail || !hasDetailNodes || !selectedDetailRow || !appId) return;
+		
+		detailNodes.forEach((node: any) => {
+			const detailFieldName = node.table_name;
+			let detailData = selectedDetailRow[detailFieldName];
+			
+			// Parse JSON string to array
+			if (typeof detailData === 'string' && detailData.trim()) {
+				try {
+					detailData = JSON.parse(detailData);
+				} catch {
+					detailData = [];
+				}
+			}
+			const rows = Array.isArray(detailData) ? detailData : [];
+			
+			// Sync to database store so detail grid can read it
+			const setTableData = useAppStore.getState().setTableData;
+			setTableData(detailFieldName, { 
+				id: detailFieldName, 
+				rows,
+				app_id: appId
+			});
+		});
+	}, [selectedDetailRow?.id, appId]); // Remove detailNodes to prevent duplicate renders
+	
+	// Detail panel rendering is now only in CsmEditModal, not here
+	// Keep children array with just the table
+	
+	// Show edit modal unless we're doing inline cell editing
+	const shouldShowEditModal = !enableInlineCellEdit;
+	
+	if (appId && (canAdd || canEdit) && shouldShowEditModal) {
+		children.push(
+			React.createElement(CsmEditModal as any, {
+				key: "editor",
+				open: editorOpen,
+				onOpenChange: setEditorOpen,
+				title: editingRecord ? "Chỉnh sửa" : "Thêm mới",
+				m_configs,
+				fields: m_configs.table,
+				record: editingRecord,
+				selectEnums,
+				database,
+				appId,
+				permissions,
+				menusPermissions,
+				decrypt,
+				onSubmit: async (values: Row) => {
+					// Nếu không có table_name: chỉ lưu vào state local
+					if (!hasTableName) {
+						const cmd = editingRecord ? "update" : "create";
+						// Auto-generate ID cho bản ghi mới
+						if (cmd === "create" && !values.id) {
+							values.id = `_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+						}
+						
+						setData((prev) => {
+							if (cmd === "create") {
+								const next = [...prev, values];
+								// Run afterAdd trigger với toàn bộ mảng mới
+								runAfterTrigger('afterAdd', next);
+								return next;
+							} else if (editingRecord) {
+								// Update: tìm và thay thế bản ghi cũ
+								const idx = prev.findIndex(row => row.id === editingRecord.id);
+								if (idx >= 0) {
+									const next = [...prev];
+									next[idx] = { ...next[idx], ...values };
+									// Run afterEdit trigger với toàn bộ mảng đã sửa
+									runAfterTrigger('afterEdit', next);
+									return next;
+								}
+								return prev;
+							}
+							return prev;
+						});
+						
+						setEditorOpen(false);
+						message.success(cmd === "create" ? "Đã thêm mới" : "Đã cập nhật");
+						runSideEffectTrigger("update_db", values);
+						onAdd?.();
+						return;
+					}
+					
+					if (!appId) return;
+					const cmd = editingRecord ? "update" : "create";
+					
+					// Get primary key fields from m_configs.struct
+					const pkFields = m_configs.struct?.fieldsPK || ["id"];
+					
+					const payloadValues = cmd === "update" && editingRecord?.id ? { ...values, id: editingRecord.id } : values;
+					await updateTableData<Row>({ 
+						app_id: appId, 
+						obj_name: tableName, 
+						command: cmd as any, 
+						obj_update: payloadValues,
+						pk_fields: pkFields,
+						where: cmd === "update" && editingRecord?.id ? { id: editingRecord.id } : undefined
+					});
+					
+					// Update local state và run after trigger
+					setData((prev) => {
+						if (cmd === "create") {
+							const next = [...prev, payloadValues];
+							// Run afterAdd trigger với toàn bộ mảng mới
+							runAfterTrigger('afterAdd', next);
+							return next;
+						} else if (editingRecord) {
+							const idx = prev.findIndex(row => {
+								const pkValue = pkFields.length === 1 ? row[pkFields[0]] : row.id;
+								const editPkValue = pkFields.length === 1 ? editingRecord[pkFields[0]] : editingRecord.id;
+								return pkValue === editPkValue;
+							});
+							if (idx >= 0) {
+								const next = [...prev];
+								next[idx] = { ...next[idx], ...payloadValues };
+								// Run afterEdit trigger với toàn bộ mảng đã sửa
+								runAfterTrigger('afterEdit', next);
+								return next;
+							}
+							return prev;
+						}
+						return prev;
+					});
+					
+					setEditorOpen(false);
+					runSideEffectTrigger("update_db", payloadValues);
+					// Notify parent to reload database from server
+					onDataChange?.();
+				},
+			})
+		);
+	}
+
+	return React.createElement(React.Fragment, null, ...children);
+}
+
+export default CsmDynamicGrid;

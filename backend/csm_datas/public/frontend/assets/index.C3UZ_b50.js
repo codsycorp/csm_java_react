@@ -1,0 +1,59 @@
+import{j as t,i as B,k as F,u as L,l as W,T as D,L as k,m as A,n as V}from"./index.DtMulOe_.js";import{a as i}from"./react.DVuwCT6o.js";import{M as H,u as z,P as O,a as G,b as U,L as _,m as u,F as K,c as Y}from"./code-login.Cm7fPwsh.js";import{bs as R,V as q,W as E,z as J}from"./antd.Cqk3zFLl.js";class Q extends i.Component{getSnapshotBeforeUpdate(a){const r=this.props.childRef.current;if(r&&a.isPresent&&!this.props.isPresent){const n=this.props.sizeRef.current;n.height=r.offsetHeight||0,n.width=r.offsetWidth||0,n.top=r.offsetTop,n.left=r.offsetLeft}return null}componentDidUpdate(){}render(){return this.props.children}}function X({children:e,isPresent:a}){const r=i.useId(),n=i.useRef(null),p=i.useRef({width:0,height:0,top:0,left:0}),{nonce:m}=i.useContext(H);return i.useInsertionEffect(()=>{const{width:o,height:l,top:x,left:s}=p.current;if(a||!n.current||!o||!l)return;n.current.dataset.motionPopId=r;const d=document.createElement("style");return m&&(d.nonce=m),document.head.appendChild(d),d.sheet&&d.sheet.insertRule(`
+          [data-motion-pop-id="${r}"] {
+            position: absolute !important;
+            width: ${o}px !important;
+            height: ${l}px !important;
+            top: ${x}px !important;
+            left: ${s}px !important;
+          }
+        `),()=>{document.head.removeChild(d)}},[a]),t.jsx(Q,{isPresent:a,childRef:n,sizeRef:p,children:i.cloneElement(e,{ref:n})})}const Z=({children:e,initial:a,isPresent:r,onExitComplete:n,custom:p,presenceAffectsLayout:m,mode:o})=>{const l=z(ee),x=i.useId(),s=i.useCallback(g=>{l.set(g,!0);for(const y of l.values())if(!y)return;n&&n()},[l,n]),d=i.useMemo(()=>({id:x,initial:a,isPresent:r,custom:p,onExitComplete:s,register:g=>(l.set(g,!1),()=>l.delete(g))}),m?[Math.random(),s]:[r,s]);return i.useMemo(()=>{l.forEach((g,y)=>l.set(y,!1))},[r]),i.useEffect(()=>{!r&&!l.size&&n&&n()},[r]),o==="popLayout"&&(e=t.jsx(X,{isPresent:r,children:e})),t.jsx(O.Provider,{value:d,children:e})};function ee(){return new Map}const j=e=>e.key||"";function S(e){const a=[];return i.Children.forEach(e,r=>{i.isValidElement(r)&&a.push(r)}),a}const te=({children:e,custom:a,initial:r=!0,onExitComplete:n,presenceAffectsLayout:p=!0,mode:m="sync",propagate:o=!1})=>{const[l,x]=G(o),s=i.useMemo(()=>S(e),[e]),d=o&&!l?[]:s.map(j),g=i.useRef(!0),y=i.useRef(s),v=z(()=>new Map),[I,M]=i.useState(s),[h,N]=i.useState(s);U(()=>{g.current=!1,y.current=s;for(let f=0;f<h.length;f++){const c=j(h[f]);d.includes(c)?v.delete(c):v.get(c)!==!0&&v.set(c,!1)}},[h,d.length,d.join("-")]);const C=[];if(s!==I){let f=[...s];for(let c=0;c<h.length;c++){const b=h[c],$=j(b);d.includes($)||(f.splice(c,0,b),C.push(b))}m==="wait"&&C.length&&(f=C),N(S(f)),M(s);return}const{forceRender:P}=i.useContext(_);return t.jsx(t.Fragment,{children:h.map(f=>{const c=j(f),b=o&&!l?!1:s===h||d.includes(c),$=()=>{if(v.has(c))v.set(c,!0);else return;let w=!0;v.forEach(T=>{T||(w=!1)}),w&&(P==null||P(),N(y.current),o&&(x==null||x()),n&&n())};return t.jsx(Z,{isPresent:b,initial:!g.current||r?void 0:!1,custom:b?void 0:a,presenceAffectsLayout:p,mode:m,onExitComplete:b?void 0:$,children:f},c)})})},{Title:le}=J,re=B(({token:e})=>({loginWrapper:{display:"flex",minWidth:"440px",maxWidth:"520px",width:"100%",justifyContent:"center",alignItems:"center",flexDirection:"column",backgroundColor:e.colorBgContainer,borderRadius:"20px",border:`1px solid ${e.colorBorderSecondary}`,boxShadow:`
+				0 24px 48px -12px rgba(0, 0, 0, 0.18),
+				0 20px 40px -12px rgba(0, 0, 0, 0.12),
+				0 8px 16px -8px rgba(0, 0, 0, 0.1),
+				inset 0 1px 0 rgba(255, 255, 255, 0.1)
+			`,backdropFilter:"blur(24px)",position:"relative",overflow:"hidden",transition:"all 0.4s cubic-bezier(0.4, 0, 0.2, 1)","&::before":{content:'""',position:"absolute",top:0,left:0,right:0,bottom:0,background:e.colorPrimary?`linear-gradient(145deg, ${e.colorPrimary}08, ${e.colorPrimaryBg}15, transparent)`:"linear-gradient(145deg, #1677ff08, #e6f4ff15, transparent)",zIndex:-1},"&::after":{content:'""',position:"absolute",top:0,left:0,right:0,bottom:0,background:`
+					radial-gradient(circle at 20% 20%, rgba(22, 119, 255, 0.08) 0%, transparent 50%),
+					radial-gradient(circle at 80% 80%, rgba(82, 196, 26, 0.06) 0%, transparent 50%)
+				`,zIndex:-1}},logo:{width:"5rem",height:"5rem",filter:"drop-shadow(0 8px 16px rgba(22, 119, 255, 0.2))",transition:"all 0.4s cubic-bezier(0.4, 0, 0.2, 1)"},section:{minHeight:"100vh",display:"flex",flexDirection:"column",background:e.colorBgLayout?`
+					linear-gradient(135deg, ${e.colorBgLayout} 0%, ${e.colorBgContainer} 100%),
+					radial-gradient(circle at 25% 25%, rgba(22, 119, 255, 0.05) 0%, transparent 50%),
+					radial-gradient(circle at 75% 75%, rgba(82, 196, 26, 0.03) 0%, transparent 50%)
+				`:`
+					linear-gradient(135deg, #f5f5f5 0%, #ffffff 100%),
+					radial-gradient(circle at 25% 25%, rgba(22, 119, 255, 0.05) 0%, transparent 50%),
+					radial-gradient(circle at 75% 75%, rgba(82, 196, 26, 0.03) 0%, transparent 50%)
+				`,position:"relative",overflow:"hidden","&::before":{content:'""',position:"absolute",top:0,left:0,right:0,bottom:0,background:`
+					repeating-linear-gradient(
+						90deg,
+						transparent,
+						transparent 100px,
+						rgba(255, 255, 255, 0.03) 100px,
+						rgba(255, 255, 255, 0.03) 101px
+					)
+				`,zIndex:1,pointerEvents:"none"}},logoContainer:{display:"flex",alignItems:"center",justifyContent:"center",marginBottom:"2rem",padding:"1.5rem",background:e.colorPrimary?`radial-gradient(circle, ${e.colorPrimary}10 0%, transparent 70%)`:"radial-gradient(circle, #1677ff10 0%, transparent 70%)",borderRadius:"50%",position:"relative","&::before":{content:'""',position:"absolute",top:"50%",left:"50%",width:"120%",height:"120%",transform:"translate(-50%, -50%)",background:`conic-gradient(from 0deg, transparent, ${e.colorPrimary||"#1677ff"}20, transparent)`,borderRadius:"50%",animation:"rotate 8s linear infinite",zIndex:-1}},brandSection:{display:"flex",flexDirection:"column",alignItems:"flex-start",justifyContent:"center",height:"100%",padding:"2.5rem 1.5rem",position:"relative","&::before":{content:'""',position:"absolute",top:"15%",left:"-8%",width:"110%",height:"70%",background:`
+					linear-gradient(
+						135deg,
+						${e.colorPrimary||"#1677ff"}04 0%,
+						transparent 25%,
+						${e.colorSuccess||"#52c41a"}02 75%,
+						transparent 100%
+					)
+				`,borderRadius:"24px",transform:"rotate(-3deg)",zIndex:-1}},brandTitle:{fontSize:"3.2rem",fontWeight:"800",background:e.colorPrimary?`linear-gradient(135deg, ${e.colorPrimary}, ${e.colorPrimaryActive||e.colorPrimary}, #52c41a)`:"linear-gradient(135deg, #1677ff, #4096ff, #52c41a)",backgroundClip:"text",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent",marginBottom:"1.25rem",textAlign:"left",backgroundSize:"300% 300%",animation:"loginGradientShift 4s ease infinite",lineHeight:"1.1",letterSpacing:"-0.025em"},brandSubtitle:{fontSize:"1.1rem",color:e.colorTextSecondary,textAlign:"left",maxWidth:"480px",lineHeight:"1.7",fontWeight:"400",marginBottom:"1.75rem",opacity:.9},brandFeatures:{display:"flex",flexDirection:"column",gap:"0.875rem",marginTop:"1.5rem"},featureItem:{display:"flex",alignItems:"center",gap:"0.875rem",padding:"0.625rem 0",color:e.colorTextSecondary,fontSize:"0.9rem","& .feature-icon":{width:"22px",height:"22px",borderRadius:"5px",background:e.colorPrimary?`linear-gradient(45deg, ${e.colorPrimary}18, ${e.colorPrimary}08)`:"linear-gradient(45deg, #1677ff18, #1677ff08)",display:"flex",alignItems:"center",justifyContent:"center",color:e.colorPrimary||"#1677ff",fontSize:"13px"}},decorativeElement:{position:"absolute",borderRadius:"50%",background:e.colorPrimary?`linear-gradient(45deg, ${e.colorPrimary}12, ${e.colorPrimaryBg||e.colorPrimary+"20"})`:"linear-gradient(45deg, #1677ff12, #e6f4ff20)",filter:"blur(60px)",animation:"loginPulse 6s ease-in-out infinite"},decorativeElement1:{width:"300px",height:"300px",top:"5%",right:"5%",animationDelay:"0s"},decorativeElement2:{width:"250px",height:"250px",bottom:"10%",left:"5%",animationDelay:"3s"},decorativeElement3:{width:"200px",height:"200px",top:"50%",left:"50%",transform:"translate(-50%, -50%)",animationDelay:"1.5s"},headerControls:{position:"absolute",top:"1.5rem",right:"1.5rem",zIndex:20,display:"flex",gap:"0.5rem",background:"rgba(255, 255, 255, 0.1)",backdropFilter:"blur(20px)",borderRadius:"16px",padding:"0.5rem",border:"1px solid rgba(255, 255, 255, 0.1)"},formContainer:{position:"relative",zIndex:10,width:"100%",maxWidth:"420px"}})),{Content:ie}=R;function ce(){const e=re();F();const{t:a}=L(),[r,n]=i.useState("login");W();const p=i.useMemo(()=>({formMode:r,setFormMode:n}),[r,n]),m={hidden:{opacity:0},visible:{opacity:1,transition:{duration:.6,staggerChildren:.2}}},o={hidden:{y:20,opacity:0},visible:{y:0,opacity:1,transition:{duration:.5}}};return t.jsxs(t.Fragment,{children:[t.jsx("style",{children:`
+				@keyframes loginFloat {
+					0%, 100% { transform: translateY(0px) rotate(0deg); }
+					50% { transform: translateY(-20px) rotate(180deg); }
+				}
+				@keyframes loginPulse {
+					0%, 100% { transform: scale(1); opacity: 0.4; }
+					50% { transform: scale(1.1); opacity: 0.7; }
+				}
+				@keyframes loginGradientShift {
+					0% { background-position: 0% 50%; }
+					50% { background-position: 100% 50%; }
+					100% { background-position: 0% 50%; }
+				}
+				@keyframes rotate {
+					from { transform: translate(-50%, -50%) rotate(0deg); }
+					to { transform: translate(-50%, -50%) rotate(360deg); }
+				}
+			`}),t.jsxs(R,{className:`${e.section} login-page-container`,children:[t.jsx("div",{className:`${e.decorativeElement} ${e.decorativeElement1}`}),t.jsx("div",{className:`${e.decorativeElement} ${e.decorativeElement2}`}),t.jsx("div",{className:`${e.decorativeElement} ${e.decorativeElement3}`}),t.jsxs("div",{className:`${e.headerControls} login-header-controls`,children:[t.jsx(D,{size:"large"}),t.jsx(k,{size:"large"})]}),t.jsx(ie,{className:"flex items-center justify-center min-h-screen p-6 relative z-5",children:t.jsx(u.div,{variants:m,initial:"hidden",animate:"visible",className:"w-full max-w-7xl mx-auto",children:t.jsxs(q,{gutter:[{xs:0,sm:0,lg:60,xl:80},0],align:"middle",className:"min-h-screen",children:[t.jsx(E,{xs:0,sm:0,lg:13,xl:12,children:t.jsxs(u.div,{variants:o,className:`${e.brandSection} login-brand-section`,children:[t.jsx(u.div,{variants:o,className:e.logoContainer,children:t.jsx("img",{src:A,alt:"logo",className:`${e.logo} login-logo`})}),t.jsx(u.h1,{variants:o,className:`${e.brandTitle} login-brand-title`,children:a("login.brandTitle")||"CSM"}),t.jsx(u.p,{variants:o,className:e.brandSubtitle,children:a("login.brandSubtitle")}),t.jsxs(u.div,{variants:o,className:e.brandFeatures,children:[t.jsxs("div",{className:e.featureItem,children:[t.jsx("div",{className:"feature-icon",children:t.jsx("i",{className:"ri-shield-check-line"})}),t.jsx("span",{children:a("login.features.security")})]}),t.jsxs("div",{className:e.featureItem,children:[t.jsx("div",{className:"feature-icon",children:t.jsx("i",{className:"ri-speed-line"})}),t.jsx("span",{children:a("login.features.performance")})]}),t.jsxs("div",{className:e.featureItem,children:[t.jsx("div",{className:"feature-icon",children:t.jsx("i",{className:"ri-smartphone-line"})}),t.jsx("span",{children:a("login.features.responsive")})]})]})]})}),t.jsx(E,{xs:24,sm:24,lg:11,xl:12,children:t.jsx(u.div,{variants:o,className:"flex justify-center items-center h-full",children:t.jsx("div",{className:`${e.loginWrapper} ${e.formContainer} login-form-container`,children:t.jsx("div",{className:"w-full px-8 py-8",children:t.jsx(K.Provider,{value:p,children:t.jsx(te,{mode:"wait",initial:!1,children:t.jsx(u.div,{initial:{x:40,opacity:0,scale:.95},animate:{x:0,opacity:1,scale:1},exit:{x:-40,opacity:0,scale:.95},transition:{duration:.5,type:"spring",stiffness:120,damping:25},children:Y[r]},r)})})})})})})]})})}),t.jsx(V,{})]})]})}export{ce as default};

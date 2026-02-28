@@ -1,0 +1,31 @@
+/* Website Button - Theme Adaptive */
+.websiteButton {
+  background: var(--brand-gradient);
+  color: #fff;
+  border: none;
+  font-weight: 700;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px var(--shadow-light);
+  padding: 10px 24px;
+  font-size: 16px;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.websiteButton:hover {
+  background: var(--brand-secondary);
+  color: #fff;
+  box-shadow: 0 8px 24px var(--shadow-medium);
+  transform: translateY(-2px) scale(1.04);
+}
+
+[data-theme="dark"] .websiteButton {
+  background: var(--brand-gradient);
+  color: #fff;
+  box-shadow: 0 2px 8px var(--shadow-heavy);
+}
+
+[data-theme="dark"] .websiteButton:hover {
+  background: var(--brand-secondary);
+  color: #fff;
+  box-shadow: 0 8px 24px var(--shadow-heavy);
+}

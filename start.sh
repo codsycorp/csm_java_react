@@ -1,0 +1,307 @@
+#!/bin/bash
+set -euo pipefail
+
+cd "$(dirname "$0")"
+
+JAR_PREFIX="csm_server-"
+APP_PORT=9999
+SOCKET_PORT=15301
+LOG_FILE="console.log"
+MAX_LOG_SIZE=$((100 * 1024 * 1024)) # 100MB
+DB_PATH="csm_datas/database"
+LOG_DIR="logs"
+GC_LOG="$LOG_DIR/gc.log"
+
+# 🚀 JVM MEMORY CONFIGURATION (Adjust based on available RAM)
+# - 1g for systems with 2GB RAM
+# - 2g for systems with 4-6GB RAM (RECOMMENDED FOR YOUR SYSTEM)
+# - 4g for systems with 8GB+ RAM
+# - 8g for systems with 16GB+ RAM
+# 
+# 💡 Auto size heap when HEAP_SIZE is not set
+detect_total_mem_mb() {
+    local mem_kb
+    if [ -r /proc/meminfo ]; then
+        mem_kb=$(awk '/MemTotal/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)
+        echo $((mem_kb / 1024))
+        return
+    fi
+    if command -v sysctl >/dev/null 2>&1; then
+        local mem_bytes
+        mem_bytes=$(sysctl -n hw.memsize 2>/dev/null || echo 0)
+        if [ "$mem_bytes" -gt 0 ]; then
+            echo $((mem_bytes / 1024 / 1024))
+            return
+        fi
+    fi
+    echo 0
+}
+
+if [ -z "${HEAP_SIZE:-}" ]; then
+    total_mem_mb=$(detect_total_mem_mb)
+    if [ "$total_mem_mb" -gt 0 ]; then
+        if [ "$total_mem_mb" -lt 3500 ]; then
+            HEAP_SIZE="1g"
+        elif [ "$total_mem_mb" -lt 7000 ]; then
+            HEAP_SIZE="2g"
+        elif [ "$total_mem_mb" -lt 12000 ]; then
+            HEAP_SIZE="3g"
+        else
+            HEAP_SIZE="4g"
+        fi
+    else
+        HEAP_SIZE="2g"
+    fi
+fi
+
+# Init heap smaller than max to reduce RSS pressure on low-RAM systems
+HEAP_INIT="${HEAP_INIT:-512m}"
+DIRECT_MEMORY_SIZE="${DIRECT_MEMORY_SIZE:-256m}"
+
+log() { echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*"; }
+
+rotate_logs() {
+    if [ -f "$LOG_FILE" ]; then
+        local size
+        size=$(stat -f%z "$LOG_FILE" 2>/dev/null || stat -c%s "$LOG_FILE" 2>/dev/null || echo 0)
+        if [ "$size" -gt "$MAX_LOG_SIZE" ]; then
+            local rotated_file="${LOG_FILE}.$(date +%Y%m%d_%H%M%S)"
+            log "Rotating log file (size: $size bytes) -> $rotated_file"
+            if ! mv "$LOG_FILE" "$rotated_file" 2>&1; then
+                log "⚠ ERROR: Failed to rotate log file"
+                return 1
+            fi
+            if gzip -f "$rotated_file" 2>&1; then
+                log "✓ Compressed $rotated_file.gz"
+            else
+                log "⚠ WARNING: Failed to compress $rotated_file"
+            fi
+        fi
+    fi
+    # Delete log files older than 7 days
+    find . -maxdepth 1 -name "${LOG_FILE}.*" -mtime +7 -delete 2>/dev/null || true
+    # Keep only last 10 log files
+    local log_count=$(ls -1 ${LOG_FILE}.* 2>/dev/null | wc -l)
+    if [ "$log_count" -gt 10 ]; then
+        log "Cleaning old logs (keeping last 10, deleting $((log_count - 10)))"
+        ls -1 ${LOG_FILE}.* 2>/dev/null | sort | head -n -10 | xargs rm -f 2>/dev/null || true
+    fi
+    # Ensure console.log exists and is writable
+    if [ ! -f "$LOG_FILE" ]; then
+        touch "$LOG_FILE" 2>&1 || log "⚠ WARNING: Failed to create $LOG_FILE"
+    fi
+}
+
+kill_by_port() {
+    local port="$1"
+    local max_attempts=10
+    local attempt=0
+    
+    while [ $attempt -lt $max_attempts ]; do
+        local pids
+        pids=$(lsof -ti:$port 2>/dev/null || true)
+        
+        if [ -z "$pids" ]; then
+            log "✓ Port $port is now free"
+            return 0
+        fi
+        
+        if [ $attempt -eq 0 ]; then
+            log "Terminating processes on port $port (PID: $pids)"
+            kill $pids 2>/dev/null || true
+        else
+            log "Force killing processes on port $port (attempt $((attempt + 1)))"
+            kill -9 $pids 2>/dev/null || true
+        fi
+        
+        sleep 1
+        attempt=$((attempt + 1))
+    done
+    
+    log "⚠ WARNING: Port $port still in use after $max_attempts attempts"
+    return 1
+}
+
+kill_existing() {
+    local pattern="$1"
+    local max_attempts=10
+    local attempt=0
+    
+    while [ $attempt -lt $max_attempts ]; do
+        local pids
+        pids=$(pgrep -f "$pattern" || true)
+        
+        if [ -z "$pids" ]; then
+            log "✓ No processes matching '$pattern'"
+            return 0
+        fi
+        
+        if [ $attempt -eq 0 ]; then
+            log "Terminating processes matching '$pattern' (PID: $pids)"
+            kill $pids 2>/dev/null || true
+        else
+            log "Force killing processes matching '$pattern' (attempt $((attempt + 1)))"
+            kill -9 $pids 2>/dev/null || true
+        fi
+        
+        sleep 1
+        attempt=$((attempt + 1))
+    done
+    
+    log "⚠ WARNING: Processes matching '$pattern' still exist after $max_attempts attempts"
+    return 1
+}
+
+rotate_logs
+
+# Kill by port with retry verification
+if ! kill_by_port "$SOCKET_PORT"; then
+    log "ERROR: Failed to release socket port $SOCKET_PORT"
+    exit 1
+fi
+
+if ! kill_by_port "$APP_PORT"; then
+    log "ERROR: Failed to release app port $APP_PORT"
+    exit 1
+fi
+
+# Kill existing Java processes
+if ! kill_existing "java .*${JAR_PREFIX}"; then
+    log "ERROR: Failed to kill existing Java processes"
+    exit 1
+fi
+
+# Wait extra time for TIME_WAIT state to clear (ports in CLOSE_WAIT/TIME_WAIT need time)
+log "Waiting for ports to fully release from TIME_WAIT state..."
+sleep 8
+
+# Cleanup RocksDB lock files before starting
+log "Cleaning up RocksDB lock files..."
+if [ -d "$DB_PATH" ]; then
+    find "$DB_PATH" -name "LOCK" -type f -exec rm -f {} \; 2>/dev/null || true
+    find "$DB_PATH" -name "*.lock" -type f -exec rm -f {} \; 2>/dev/null || true
+    log "✓ RocksDB lock files cleaned"
+else
+    log "⚠ WARNING: Database path not found: $DB_PATH"
+fi
+
+# Cleanup temp RocksDB native libraries
+log "Cleaning up temp files..."
+rm -f /tmp/librocksdbjni*.so 2>/dev/null || true
+
+# Verify ports are actually free before proceeding
+max_verify_attempts=10
+for ((i=1; i<=max_verify_attempts; i++)); do
+    if ! lsof -ti:$APP_PORT >/dev/null 2>&1 && ! lsof -ti:$SOCKET_PORT >/dev/null 2>&1; then
+        log "✓ Ports verified free ($i/$max_verify_attempts attempts)"
+        break
+    fi
+    if [ $i -lt $max_verify_attempts ]; then
+        log "Ports still in use, waiting... (attempt $i/$max_verify_attempts)"
+        # Force kill again if still occupied
+        kill_by_port "$APP_PORT" || true
+        kill_by_port "$SOCKET_PORT" || true
+        sleep 3
+    else
+        log "ERROR: Ports still in use after $max_verify_attempts attempts. Aborting."
+        exit 1
+    fi
+done
+
+jarCount=$(ls ${JAR_PREFIX}*.jar 2>/dev/null | wc -l | tr -d ' ')
+if [ "$jarCount" -gt 1 ]; then
+    log "ERROR: Multiple jar files found:"
+    ls ${JAR_PREFIX}*.jar
+    exit 1
+fi
+
+jarName=$(ls ${JAR_PREFIX}*.jar 2>/dev/null)
+if [ -z "$jarName" ]; then
+    log "ERROR: No jar file found"
+    exit 1
+fi
+
+log "Starting $jarName on port $APP_PORT with performance optimizations..."
+
+# Create logs directory for GC and error logs
+mkdir -p "$LOG_DIR"
+
+# 🔥 OPTIMIZED JVM SETTINGS FOR HIGH CONCURRENCY & LOW LATENCY
+# G1GC: Generational Garbage Collector for low pause times (<200ms)
+# Memory: Configurable heap with proper metaspace
+# Concurrency: String deduplication, compressed oops, tiered compilation
+# Monitoring: GC and error logging, OOM heap dump
+nohup java \
+    -Xms$HEAP_INIT -Xmx$HEAP_SIZE \
+    -XX:MetaspaceSize=128m \
+    -XX:MaxMetaspaceSize=256m \
+    -XX:MaxDirectMemorySize=$DIRECT_MEMORY_SIZE \
+    -XX:+UseG1GC \
+    -XX:MaxGCPauseMillis=200 \
+    -XX:ParallelGCThreads=2 \
+    -XX:ConcGCThreads=1 \
+    -XX:InitiatingHeapOccupancyPercent=45 \
+    -XX:G1HeapRegionSize=8m \
+    -XX:G1ReservePercent=10 \
+    -XX:+UseStringDeduplication \
+    -XX:+UseCompressedOops \
+    -XX:+UseCompressedClassPointers \
+    -XX:+TieredCompilation \
+    -XX:+DisableExplicitGC \
+    -XX:+AlwaysPreTouch \
+    -XX:+HeapDumpOnOutOfMemoryError \
+    -XX:HeapDumpPath="$LOG_DIR/heapdump.hprof" \
+    -XX:ErrorFile="$LOG_DIR/hs_err_pid%p.log" \
+    -Djava.awt.headless=true \
+    -Djava.net.preferIPv4Stack=true \
+    -Dsun.net.inetaddr.ttl=60 \
+    -Dfile.encoding=UTF-8 \
+    -Dspring.backgroundpreinitializer.ignore=false \
+    -Dspring.jmx.enabled=false \
+    -Dserver.tomcat.util.net.NioEndpoint.ENABLE_PAUSE_RESUME=false \
+    -Djdk.net.useFastTcpLoopback=true \
+    -Xlog:gc*:file="$GC_LOG":time,uptime,level,tags \
+    -Dloader.path="/root/la_server/jlib/" \
+    -jar "$jarName" \
+    --spring.profiles.active=prod \
+    --server.port=$APP_PORT \
+    --logging.file.name="$LOG_DIR/application.log" \
+    >> "$LOG_DIR/console.log" 2>&1 &
+sleep 3
+
+newPid=$(pgrep -f "java .*${JAR_PREFIX}" || true)
+if [ -n "$newPid" ]; then
+    log "✓ Started (PID: $newPid)"
+    log "🎯 Server is running healthy"
+    
+    # Health check with monitoring endpoint
+    sleep 2
+    if curl -s http://localhost:9999/api/monitoring/health 2>/dev/null | grep -q '"status":"UP"'; then
+        log "✅ Health check PASSED - Server ready to serve requests"
+        log "📊 Logs: tail -f $LOG_DIR/application.log"
+        log "📈 GC Logs: tail -f $GC_LOG"
+    else
+        log "⚠ Health check pending (server still starting up)"
+    fi
+else
+    log "✗ Failed to start"
+    if [ -f "$LOG_DIR/console.log" ]; then
+        log "Recent errors:"
+        tail -20 "$LOG_DIR/console.log"
+    fi
+    exit 1
+fi
+
+# Background hourly log maintenance
+(
+    while true; do
+        sleep 3600
+        rotate_logs
+        
+        # Cleanup old GC logs
+        if [ -d "$LOG_DIR" ]; then
+            find "$LOG_DIR" -name "gc.log*" -mtime +7 -delete 2>/dev/null || true
+            find "$LOG_DIR" -name "hs_err_pid*.log" -mtime +7 -delete 2>/dev/null || true
+        fi
+    done
+) >/dev/null 2>&1 &

@@ -1,0 +1,115 @@
+# Performance optimization configuration for CSM Server
+# This file contains settings to improve response times and reduce bandwidth
+
+spring:
+  # Configure response compression
+  compression:
+    enabled: true
+    # Compress responses if they are larger than 1KB
+    min-response-size: 1024
+    # MIME types to compress (text, JSON, XML, SVG, fonts)
+    mime-types:
+      - text/html
+      - text/xml
+      - text/plain
+      - text/css
+      - text/javascript
+      - application/javascript
+      - application/json
+      - application/xml
+      - application/xml+rss
+      - application/rss+xml
+      - application/atom+xml
+      - image/svg+xml
+      - font/ttf
+      - font/otf
+      - font/eot
+      - application/x-font-woff
+      - application/x-font-woff2
+    
+  # HTTP encoding (for older versions)
+  http:
+    encoding:
+      enabled: true
+      charset: UTF-8
+      force: true
+  
+  # JPA/Hibernate optimization
+  jpa:
+    # Batch inserts and updates
+    properties:
+      hibernate:
+        jdbc:
+          batch_size: 20
+          fetch_size: 50
+        order_inserts: true
+        order_updates: true
+        # Enable second-level caching
+        cache:
+          use_second_level_cache: true
+          region:
+            factory_class: org.hibernate.cache.jcache.JCacheRegionFactory
+
+server:
+  # Tomcat optimization
+  tomcat:
+    # Connection pool settings
+    max-threads: 200
+    min-spare-threads: 10
+    # Accept queue size
+    accept-count: 100
+    # Keep-alive timeout (in milliseconds)
+    keep-alive-timeout: 60000
+    # Max connections per IP for DDoS protection
+    max-connections: 10000
+    # Connection timeout
+    connection-timeout: 20000ms
+    # Max HTTP header size
+    max-http-header-size: 8KB
+    # URI encoding
+    uri-encoding: UTF-8
+    # Access log optimization
+    access-log-enabled: false  # Disable in production for performance
+  
+  # HTTP/2 support
+  http2:
+    enabled: true
+  
+  # Compression at server level (Undertow)
+  compression:
+    enabled: true
+
+# Cache control headers
+server:
+  servlet:
+    session:
+      # Cookie settings for performance
+      cookie:
+        secure: true
+        http-only: true
+        same-site: lax
+
+# Logging optimization (reduce I/O)
+logging:
+  level:
+    root: INFO
+    com.csmsoft: INFO
+    org.springframework: WARN
+    org.hibernate: WARN
+  # Async logging for better performance
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+
+# Monitoring and metrics (if using Actuator)
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics
+  metrics:
+    # Enable caching of metric calculations
+    enable:
+      jvm: true
+      process: true
+      system: true

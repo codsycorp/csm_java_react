@@ -1,0 +1,459 @@
+import type { MenuProps } from "antd";
+
+import { useCurrentRoute } from "#src/hooks";
+import { removeTrailingSlash } from "#src/router/utils";
+import { usePermissionStore, useUserStore, useAppStore } from "#src/store";
+import { resolveDevFlag } from "#src/utils/dev-flag";
+
+import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { useNavigate } from "react-router";
+
+import { useLayout } from "../hooks";
+import { findDeepestFirstItem, findRootMenuByPath, translateMenus, processMenuChildrenVisibility } from "./utils";
+
+/**
+ * Logic để xử lý hiển thị menu dựa trên type_menu, type_form, m_show, dev
+ * Nếu type_form = 2 (Master-Detail), ẩn menu con (sẽ hiện thành tabs trong grid)
+ * Nếu type_menu = 1 (dòng), nhóm 3 menu lại
+ */
+function autoFixMenu(menus: any[], isDev: boolean = false): any[] {
+	// Bước 1: Sắp xếp menu theo tên (DISABLED - giữ order gốc từ API)
+	let sorted = [...menus]; // Không sort, giữ order gốc
+	// .sort((a, b) => {
+	// 	const aLabel = (typeof a.label === 'string' ? a.label : a.name) || "";
+	// 	const bLabel = (typeof b.label === 'string' ? b.label : b.name) || "";
+	// 	return String(aLabel).localeCompare(String(bLabel));
+	// });
+
+	       // Bước 2: Lọc menu dựa vào m_show (nếu không phải dev) và loại bỏ Dynamic Grid
+	       if (!isDev) {
+		       sorted = sorted.filter(m => m.m_show !== false);
+	       }
+	       // Loại bỏ menu Dynamic Grid nếu có (theo label hoặc name)
+	       sorted = sorted.filter(m => {
+		       const label = (typeof m.label === 'string' ? m.label : m.name) || '';
+		       return !/dynamic grid/i.test(label);
+	       });
+
+	// Bước 3: Xử lý menu con
+	const processed = sorted.map(menu => {
+		const newMenu = { ...menu };
+		
+		// Nếu menu không có children, khởi tạo mảng rỗng
+		if (!newMenu.children) {
+			newMenu.children = [];
+		}
+
+		// Xử lý menu con một cách đệ quy
+		if (newMenu.children && newMenu.children.length > 0) {
+			// Lọc và xử lý menu con
+			if (!isDev) {
+				newMenu.children = autoFixMenu(
+					newMenu.children.filter((m: any) => m.m_show !== false),
+					isDev
+				);
+			} else {
+				newMenu.children = autoFixMenu(newMenu.children, isDev);
+			}
+
+			// 💡 NOTE: Không xoá children ở đây - để processMenuChildrenVisibility xử lý
+			// Vì processMenuChildrenVisibility cần check table_name để quyết định có giữ hay xoá
+			// if (Number(newMenu.type_form) === 2) {
+			//	 newMenu.children = [];
+			// }
+		}
+
+		return newMenu;
+	});
+
+	// Bước 4: Nhóm menu có type_menu = 1 (kiểu dòng) thành 3 cái một nhóm
+	const result: any[] = [];
+	let currentGroupId: string | false = false;
+	let itemsInGroup = 0;
+
+	processed.forEach((menu) => {
+		// Nếu menu có type_menu = 1 (kiểu dòng), thêm vào group
+		if (Number(menu.type_menu) === 1) {
+			// Nếu chưa có group hoặc group đã có 3 items, tạo group mới
+			if (!currentGroupId || itemsInGroup === 3) {
+				itemsInGroup = 0;
+				const newGroup = {
+					...menu,
+					id: `${menu.id}_group`,
+					children: [menu],
+				};
+				currentGroupId = newGroup.id;
+				result.push(newGroup);
+			} else {
+				// Thêm vào group hiện tại
+				const groupIndex = result.findIndex(item => item.id === currentGroupId);
+				if (groupIndex !== -1) {
+					result[groupIndex].children.push(menu);
+				}
+			}
+			itemsInGroup++;
+		} else {
+			// Menu không phải kiểu dòng, thêm bình thường
+			currentGroupId = false;
+			result.push(menu);
+		}
+	});
+
+	return result;
+}
+
+export function useMenu() {
+	const wholeMenus = usePermissionStore(state => state.wholeMenus);
+	const apiWholeMenus = usePermissionStore(state => state.apiWholeMenus);
+	const { isMixedNav, isTwoColumnNav } = useLayout();
+	const [rootMenuKey, setRootMenuKey] = useState("");
+	const navigate = useNavigate();
+	const { t, i18n } = useTranslation();
+	const appId = useAppStore(state => state.currentAppId);
+	
+	// Get current language: prefer user preference from backend, fallback to i18n
+	// This ensures menu displays in the language selected by the user in system settings
+	const currentLanguage = useMemo(() => {
+		// Try to get user's language preference from localStorage (set by language selector)
+		const savedLanguage = localStorage.getItem('selectedLanguage') as any;
+		if (savedLanguage && ['vi', 'en', 'zh'].includes(savedLanguage)) {
+			return savedLanguage;
+		}
+		
+		// Fallback to i18n language
+		const i18nLang = i18n?.language || 'vi';
+		return i18nLang.toLowerCase().startsWith('en') ? 'en' : 
+		       i18nLang.toLowerCase().startsWith('zh') ? 'zh' : 'vi';
+	}, [i18n?.language]);
+	
+	// Dùng apiWholeMenus nếu có (chứa toàn bộ data từ API bao gồm table_name)
+	// Cần thêm `key` field để compatible với Ant Design Menu
+	// ONLY keep fields that Ant Design Menu or app logic needs
+	const menusForTranslation = useMemo(() => {
+		if (apiWholeMenus && apiWholeMenus.length > 0) {
+			// Thêm key field, nhưng xoá tất cả fields không cần thiết để không render
+			const addKeysAndClean = (menus: any[]): any[] => {
+				return menus.map(menu => {
+					// Preserve ONLY these fields:
+					// - key, path, id: for routing
+					// - label, label_en, label_zh, name: for translation
+					// - children: for tree structure
+					// - icon, disabled: for Ant Design Menu
+					// - table_name, report_name, type_form: for app logic
+					// - auto_code: for auto-setup menu execution
+					const cleaned: any = {
+						key: menu.path || menu.id || "",
+						path: menu.path,
+						id: menu.id,
+						label: menu.label,
+						label_en: menu.label_en,
+						label_zh: menu.label_zh,
+						icon: menu.icon,
+						disabled: menu.disabled,
+						children: menu.children,
+						// Preserve these for app logic
+						table_name: menu.table_name,
+						report_name: menu.report_name,
+						type_form: menu.type_form,
+						auto_code: menu.auto_code,
+					};
+					
+					// Recursively clean children
+					if (cleaned.children && cleaned.children.length > 0) {
+						cleaned.children = addKeysAndClean(cleaned.children);
+					}
+					
+					return cleaned;
+				});
+			};
+			// Chuẩn hoá menus từ API
+			const cleanedMenus = addKeysAndClean(apiWholeMenus);
+
+			// Đảm bảo luôn có menu "Developer" dưới System cho mọi app (frontend-only)
+			const ensureSystemDeveloper = (menus: any[]): any[] => {
+				const cloned = menus.map(m => ({ ...m }));
+				const userState = useUserStore.getState();
+				const isDevUser = resolveDevFlag(userState.dev, userState.roles);
+				const findByKeyOrId = (items: any[], matcher: (m: any) => boolean): any | null => {
+					for (const it of items) {
+						if (matcher(it)) return it;
+						if (it.children && it.children.length) {
+							const found = findByKeyOrId(it.children, matcher);
+							if (found) return found;
+						}
+					}
+					return null;
+				};
+
+				const systemMenu = findByKeyOrId(cloned, (m) => m.key === '/system' || m.path === '/system' || m.id === 'system');
+				// Nếu backend không trả về system menu, nhưng user là dev, chèn system từ wholeMenus
+				if (!systemMenu && isDevUser) {
+					const fallbackSystem = (wholeMenus || []).find(m => m.key === '/system' || (m as any).path === '/system' || (m as any).id === 'system');
+					if (fallbackSystem) {
+						cloned.push({ ...fallbackSystem });
+					}
+				}
+				const systemMenuResolved = findByKeyOrId(cloned, (m) => m.key === '/system' || m.path === '/system' || m.id === 'system');
+				const targetSystem = systemMenuResolved || systemMenu;
+				// Sau khi chắc chắn có system, thêm Developer cho dev user
+				if (targetSystem && isDevUser) {
+					const hasDeveloper = (targetSystem.children || []).some((c: any) => c.key === '/system/developer' || c.path === '/system/developer');
+					if (!hasDeveloper) {
+						if (!targetSystem.children) targetSystem.children = [];
+						targetSystem.children.push({
+							key: '/system/developer',
+							path: '/system/developer',
+							id: 'system_developer',
+							label: 'common.menu.developer',
+							icon: undefined,
+							children: [],
+							// App logic fields (kept for consistency)
+							table_name: undefined,
+							report_name: undefined,
+							type_form: undefined,
+						});
+					}
+				}
+				return cloned;
+			};
+
+			return ensureSystemDeveloper(cleanedMenus);
+		}
+		return wholeMenus;
+	}, [apiWholeMenus, wholeMenus]);
+	
+	const translatedMenus = useMemo(() => {
+		return translateMenus(menusForTranslation, t, currentLanguage);
+	}, [menusForTranslation, t, currentLanguage]);
+
+		// Xác định user có phải dev không từ user store
+		const isDev = useUserStore(state => resolveDevFlag(state.dev, state.roles));
+
+	const { pathname } = useCurrentRoute();
+	/**
+	 * 混合菜单模式下需要拆分 menu 的 items
+	 */
+	const shouldSplitMenuItems = useMemo(
+		() => isMixedNav || isTwoColumnNav,
+		[isMixedNav, isTwoColumnNav],
+	);
+
+	// Áp dụng logic autoFixMenu vào translatedMenus
+	const processedMenus = useMemo(() => {
+		// Ẩn hoàn toàn menu hệ thống (/system) với user không có quyền dev
+		const filteredForDev = !isDev
+			? translatedMenus.filter(item => item?.key !== '/system' && item?.path !== '/system' && item?.id !== 'system')
+			: translatedMenus;
+
+		const result = autoFixMenu(filteredForDev, isDev);
+		const preserveMenuIds = (items: any[]): any[] => {
+			return items.map(item => {
+				const processed = { ...item };
+				if (!processed.menuId && item.id) {
+					processed.menuId = item.id;
+				}
+				if (processed.children && processed.children.length > 0) {
+					processed.children = preserveMenuIds(processed.children);
+				}
+				return processed;
+			});
+		};
+		const withPreservedIds = preserveMenuIds(result);
+		const finalResult = processMenuChildrenVisibility(withPreservedIds);
+		const menuDataMap = new Map<string, any>();
+		const cleanupMenuItems = (items: any[]): any[] => {
+			return items.map(item => {
+				menuDataMap.set(item.key, item);
+				const cleaned: any = {
+					key: item.key,
+					label: item.label,
+				};
+				if (item.icon && typeof item.icon !== 'string') {
+					cleaned.icon = item.icon;
+				}
+				if (item.disabled === true) {
+					cleaned.disabled = item.disabled;
+				}
+				if (item.children && item.children.length > 0) {
+					cleaned.children = cleanupMenuItems(item.children);
+				}
+				return cleaned;
+			});
+		};
+		const cleanedMenus = cleanupMenuItems(finalResult);
+		return cleanedMenus;
+	}, [translatedMenus, isDev, currentLanguage]);
+
+	/* 混合菜单模式下需要拆分 menu 的 items */
+	const splitSideNavItems = useMemo(
+		() => {
+			const foundMenu = processedMenus.find(item => item?.key === rootMenuKey);
+			if (!foundMenu) {
+				return [];
+			}
+			return foundMenu?.children ?? [foundMenu];
+		},
+		[rootMenuKey, processedMenus],
+	);
+
+	/**
+	 * 头部菜单
+	 */
+	const topNavItems = useMemo(() => {
+		if (!shouldSplitMenuItems) {
+			return processedMenus;
+		}
+		return processedMenus.map((item) => {
+			return {
+				...item,
+				/* children 为空数组，无法触发 menu 的 onSelect 事件 */
+				children: undefined,
+			};
+		});
+	}, [shouldSplitMenuItems, processedMenus]);
+
+	/**
+	 * 侧边菜单
+	 */
+	const sideNavItems = useMemo(() => {
+		return shouldSplitMenuItems ? splitSideNavItems : processedMenus;
+	}, [shouldSplitMenuItems, splitSideNavItems, processedMenus]);
+
+	// Admin auto-runtime removed (lmkt doesn't run admin)
+
+	/**
+	 * 菜单点击事件处理
+	 */
+	const handleMenuSelect = (key: string, mode: MenuProps["mode"]) => {
+		// Normalize home: if backend menu points to "/", route to configured admin home instead of public website
+		const normalizedKey = key === "/" ? (import.meta.env.VITE_BASE_HOME_PATH || "/home") : key;
+		
+		// 💡 Find menu in processedMenus first to get menuId (original ID before autoFixMenu transform)
+		const findMenuInProcessedMenus = (menus: any[], targetKey: string): any => {
+			for (const menu of menus) {
+				if (menu.key === targetKey) {
+					return menu;
+				}
+				if (menu.children && menu.children.length > 0) {
+					const found = findMenuInProcessedMenus(menu.children, targetKey);
+					if (found) return found;
+				}
+			}
+			return null;
+		};
+		
+		const selectedProcessedMenu = findMenuInProcessedMenus(processedMenus, normalizedKey);
+		const menuIdToSearch = selectedProcessedMenu?.menuId || normalizedKey;
+		
+		// Find the menu in API menus (which have table_name, report_name fields)
+		const findMenuInTree = (menus: any[], targetId: string, targetKey?: string): any => {
+			for (const menu of menus) {
+				if (menu.id === targetId || menu.key === targetKey) {
+					return menu;
+				}
+				if (menu.children && menu.children.length > 0) {
+					const found = findMenuInTree(menu.children, targetId, targetKey);
+					if (found) return found;
+				}
+			}
+			return null;
+		};
+		
+		const selectedApiMenu = findMenuInTree(apiWholeMenus, menuIdToSearch, normalizedKey) as any;
+
+		// If menu is marked as auto setup (sys_autos), navigate to dedicated runner page
+		if (selectedApiMenu?.auto_code) {
+			const rawLabel = selectedApiMenu.label || selectedApiMenu.title || 'Auto Setup';
+			const menuLabel = String(rawLabel).replace(/^.*?\.\s+/, '').trim();
+			console.log('[AUTO_SETUP] Menu selected:', { menuIdToSearch, selectedApiMenu, autoCode: selectedApiMenu.auto_code });
+			// Save to sessionStorage to preserve across navigation
+			sessionStorage.setItem('auto_setup_code', String(selectedApiMenu.auto_code));
+			sessionStorage.setItem('auto_setup_label', menuLabel);
+			navigate('/auto-setup', { state: { autoCode: String(selectedApiMenu.auto_code), menuLabel } });
+			return;
+		} else if (selectedApiMenu?.id === "auto" || selectedApiMenu?.path === "/auto-setup") {
+			console.warn('[AUTO_SETUP] Auto menu selected but NO auto_code found:', selectedApiMenu);
+		}
+		
+		// Check if menu has table_name or report_name (grid/report) - navigate to dynamic route
+		if (selectedApiMenu && (selectedApiMenu.table_name || selectedApiMenu.report_name)) {
+
+			   // Removed invalid object literal, as it is not assigned or used.
+			// Use menu.id for route parameter
+			const menuId = String(selectedApiMenu.id || selectedApiMenu.key);
+			
+			// Navigate to dynamic grid route with menu label in state
+			const rawLabel = selectedApiMenu.label || selectedApiMenu.title || 'Dynamic Grid';
+			// Strip menu prefix: "A.01. Quản Lý" → "Quản Lý"
+			const menuLabel = rawLabel.replace(/^.*?\.\s+/, '').trim();
+			
+			// Update store BEFORE navigation so tab can use it
+			useUserStore.getState().setSelectedMenuIdForTab(menuId);
+			
+			navigate(`/system/grid/${menuId}`, { 
+				state: { 
+					menuLabel,
+					menuData: selectedApiMenu 
+				} 
+			});
+			return; // Don't navigate for grid/report menus
+		}
+		
+		/* 1. 非混合导航模式 2. 混合导航模式下的侧边导航 */
+		if (!shouldSplitMenuItems || mode !== "horizontal") {
+			// eslint-disable-next-line regexp/no-unused-capturing-group
+			if (/http(s)?:/.test(normalizedKey)) {
+				window.open(normalizedKey);
+			}
+			else {
+				navigate(normalizedKey);
+			}
+		}
+		else {
+			/* 混合导航模式下的顶部导航 */
+			const rootMenu = translatedMenus.find(item => item?.key === normalizedKey);
+			const targetMenu = findDeepestFirstItem(rootMenu?.children ?? []);
+			/* 点击顶部的导航默认跳转到菜单下的第一个子项 */
+			if (!targetMenu || !targetMenu.key) {
+				navigate(normalizedKey);
+			}
+			else {
+				navigate(targetMenu.key);
+			}
+		}
+	};
+
+	/**
+	 * 混合导航模式下，侧边导航的展示
+	 */
+	useEffect(() => {
+		if (shouldSplitMenuItems) {
+			const { rootMenuPath } = findRootMenuByPath(processedMenus, removeTrailingSlash(pathname));
+			if (rootMenuPath) {
+				setRootMenuKey(rootMenuPath);
+			}
+		}
+	}, [shouldSplitMenuItems, pathname, processedMenus]);
+
+	/**
+	 * Sync language to localStorage when i18n language changes
+	 * This ensures menu will display in the correct language after navigation or page refresh
+	 */
+	useEffect(() => {
+		if (i18n?.language) {
+			// Only save if it's a supported language
+			const lang = i18n.language.toLowerCase().startsWith("en") ? "en" : 
+			             i18n.language.toLowerCase().startsWith("zh") ? "zh" : "vi";
+			if (lang !== localStorage.getItem('selectedLanguage')) {
+				localStorage.setItem('selectedLanguage', lang);
+			}
+		}
+	}, [i18n?.language]);
+
+	return {
+		handleMenuSelect,
+		topNavItems,
+		sideNavItems,
+	};
+}

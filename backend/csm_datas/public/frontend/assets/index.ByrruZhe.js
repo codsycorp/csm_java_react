@@ -1,0 +1,1 @@
+import{j as e}from"./index.DtMulOe_.js";import o from"./CodeEditor.BJr7agdL.js";import"./react.DVuwCT6o.js";import"./antd.Cqk3zFLl.js";import"./dark.n2slwO18.js";function l(){return e.jsx("div",{style:{height:"100%",display:"flex",flexDirection:"column"},children:e.jsx(o,{})})}export{l as default};

@@ -1,0 +1,16 @@
+{
+   "name": "SCA4U Push notification",
+   "short_name": "Push notification",
+   "icons": [{
+         "src": "/assets/sanketnoi.png",
+         "sizes": "128x128",
+         "type": "image/png"
+       }],
+   "start_url": "/",
+   "display": "standalone",
+   "gcm_sender_id": "70710046348",
+   "serviceworker": {
+       "src": "firebase-messaging-sw.js",
+       "scope": "/"
+   }
+ }

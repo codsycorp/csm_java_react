@@ -1,0 +1,1 @@
+import{j as r}from"./index.GLCnxDGq.js";import"./vendor-antd.Cc6gAqJ2.js";import{B as e}from"./index.DabIbVx9.js";import"./vendor-react.Cfs_Iq82.js";function n(){return r.jsx(e,{children:"menu1-2"})}export{n as default};

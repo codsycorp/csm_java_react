@@ -1,0 +1,69 @@
+# OS Files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Build outputs
+target/
+dist/
+build/
+*.jar
+*.war
+*.class
+
+# Frontend build
+frontend/dist/
+lmkt/dist/
+
+# Database & Data files
+backend/csm_datas/database/
+backend/csm_datas/lucene_index/
+
+# Logs
+*.log
+logs/
+*.log.*
+
+# Environment & Config files with sensitive data
+config.env
+*.pem
+*.key
+*.crt
+private.key
+rsa_private_key.pem
+certificate.crt
+certificate_chain.crt
+fullchain.pem
+
+# OSS & Cloud configs
+ossutilconfig
+ossutilconfig.bak
+
+# API State files (may contain sensitive data)
+backend/apikeys-state.json
+backend/auto-index-state.json
+backend/google-index-quota-state.json
+backend/x-twitter-state.json
+
+# Lock files (optional - uncomment if you want to ignore them)
+# pnpm-lock.yaml
+# package-lock.json
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# Test coverage
+coverage/
+.nyc_output/
