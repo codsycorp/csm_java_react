@@ -33,6 +33,12 @@ logs/
 *.log.*
 
 # Environment & Config files with sensitive data
+.env
+.env.*
+.env.local
+.env.development
+.env.production
+.env.test
 config.env
 *.pem
 *.key
