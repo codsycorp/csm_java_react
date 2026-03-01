@@ -8707,7 +8707,13 @@ function ensureZaloMultiGroupUI(container) {
       fanpage_tokens: selectedFanpages.map(f => f.access_token),
       fanpage_token: selectedFanpages[0]?.access_token || null,
       zalo_groups: groupList,
-      config_for_zalo: true
+      config_for_zalo: true,
+      // ✅ CRITICAL FIX: Lưu array fanpage để processContent có thể đăng lên TẤT CẢ
+      zalo_fanpages: selectedFanpages.map(f => ({
+        id: f.id,
+        name: f.name,
+        access_token: f.access_token
+      }))
     };
     
     // Uniqueness validation: domain + service_type + project
