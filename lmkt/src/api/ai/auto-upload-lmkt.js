@@ -255,6 +255,134 @@ const DEFAULT_UPLOAD_ENDPOINT = "/upload.shtml";
 const UPLOAD_ENDPOINT_COOLDOWN_MS = 2 * 60 * 1000;
 const uploadEndpointHealth = {};
 
+// ===== SAFE LOCALSTORAGE HELPERS =====
+/**
+ * Safely set item to localStorage with quota handling
+ * @param {string} key - localStorage key
+ * @param {any} value - value to store (will be JSON.stringified if not string)
+ * @param {Object} options - cleanup options
+ * @returns {boolean} - true if successful, false otherwise
+ */
+function safeLocalStorageSet(key, value, options = {}) {
+  try {
+    const stringValue = typeof value === 'string' ? value : JSON.stringify(value);
+    localStorage.setItem(key, stringValue);
+    return true;
+  } catch (error) {
+    if (error.name === 'QuotaExceededError' || error.message.includes('quota')) {
+      console.warn(`⚠️ localStorage quota exceeded for key "${key}". Attempting cleanup...`);
+      
+      // Strategy 1: Remove old/large items
+      const itemsToCleanup = options.cleanupKeys || [
+        'zalo_posted_messages',
+        'dataOptionUser',
+        'user_address',
+        ARTICLE_HISTORY_KEY,
+        FEATURED_IMAGE_HISTORY_KEY
+      ];
+      
+      let cleaned = false;
+      for (const cleanupKey of itemsToCleanup) {
+        if (cleanupKey === key) continue; // Don't remove the key we're trying to set
+        try {
+          const existing = localStorage.getItem(cleanupKey);
+          if (existing && existing.length > 100000) { // > 100KB
+            console.log(`🗑️ Removing large item: ${cleanupKey} (${(existing.length/1024).toFixed(1)}KB)`);
+            localStorage.removeItem(cleanupKey);
+            cleaned = true;
+          }
+        } catch (e) {
+          // Ignore
+        }
+      }
+      
+      // Strategy 2: Try again after cleanup
+      if (cleaned) {
+        try {
+          const stringValue = typeof value === 'string' ? value : JSON.stringify(value);
+          localStorage.setItem(key, stringValue);
+          console.log(`✅ Successfully stored "${key}" after cleanup`);
+          return true;
+        } catch (retryError) {
+          console.error(`❌ Still failed after cleanup for "${key}":`, retryError.message);
+        }
+      }
+      
+      // Strategy 3: Truncate the value if it's an array
+      if (Array.isArray(value)) {
+        const maxItems = options.maxItems || 100;
+        if (value.length > maxItems) {
+          console.warn(`⚠️ Truncating array from ${value.length} to ${maxItems} items`);
+          const truncated = value.slice(-maxItems); // Keep latest items
+          try {
+            localStorage.setItem(key, JSON.stringify(truncated));
+            console.log(`✅ Successfully stored truncated "${key}"`);
+            return true;
+          } catch (truncError) {
+            console.error(`❌ Failed even with truncation for "${key}":`, truncError.message);
+          }
+        }
+      }
+      
+      return false;
+    } else {
+      console.error(`❌ localStorage error for "${key}":`, error.message);
+      return false;
+    }
+  }
+}
+
+/**
+ * Clean up old localStorage items to free up space
+ */
+function cleanupLocalStorage() {
+  const keysToCheck = [
+    'zalo_posted_messages',
+    'dataOptionUser',
+    'user_address',
+    ARTICLE_HISTORY_KEY,
+    FEATURED_IMAGE_HISTORY_KEY,
+    'facebook_post_state'
+  ];
+  
+  let totalCleaned = 0;
+  for (const key of keysToCheck) {
+    try {
+      const item = localStorage.getItem(key);
+      if (!item) continue;
+      
+      const sizeKB = item.length / 1024;
+      
+      // Remove if > 1MB
+      if (sizeKB > 1024) {
+        console.log(`🗑️ Removing large item: ${key} (${sizeKB.toFixed(1)}KB)`);
+        localStorage.removeItem(key);
+        totalCleaned++;
+        continue;
+      }
+      
+      // Try to parse as array and truncate
+      try {
+        const parsed = JSON.parse(item);
+        if (Array.isArray(parsed) && parsed.length > 200) {
+          const truncated = parsed.slice(-200);
+          localStorage.setItem(key, JSON.stringify(truncated));
+          console.log(`✂️ Truncated ${key}: ${parsed.length} → ${truncated.length} items`);
+          totalCleaned++;
+        }
+      } catch (e) {
+        // Not JSON or not array, ignore
+      }
+    } catch (error) {
+      console.warn(`⚠️ Error checking ${key}:`, error.message);
+    }
+  }
+  
+  if (totalCleaned > 0) {
+    console.log(`✅ Cleanup completed: ${totalCleaned} items cleaned`);
+  }
+}
+
 function markUploadEndpointFailure(endpoint, status = 0) {
   if (!endpoint) return;
   uploadEndpointHealth[endpoint] = {
@@ -2753,10 +2881,21 @@ function resolvePublicImageUrl(ctx, url) {
   if (/^https?:\/\//i.test(url)) return url;
 
   const protocol = (typeof window !== 'undefined' && window.location?.protocol) ? window.location.protocol : "https:";
-  const domain = (ctx?.domain || "").split(",")[0].trim();
+  const candidates = String(ctx?.domain || "")
+    .split(",")
+    .map(d => d.trim())
+    .filter(Boolean);
+
+  const nonLocalCandidates = candidates.filter(d => !/^localhost(?::\d+)?$/i.test(d) && !/^127\.0\.0\.1(?::\d+)?$/i.test(d));
+  const preferredDomain =
+    nonLocalCandidates.find(d => /phanmemmottrieu\.net$/i.test(d) || /h-holding\.vn$/i.test(d) || /h-holding\.com\.vn$/i.test(d))
+    || nonLocalCandidates.find(d => !/csmbridge\.net$/i.test(d))
+    || nonLocalCandidates[0]
+    || candidates[0]
+    || "";
 
   if (url.startsWith("//")) return `${protocol}${url}`;
-  if (url.startsWith("/")) return domain ? `${protocol}//${domain}${url}` : `${protocol}${url}`;
+  if (url.startsWith("/")) return preferredDomain ? `${protocol}//${preferredDomain}${url}` : `${protocol}${url}`;
   return url;
 }
 
@@ -3344,9 +3483,7 @@ async function processContent(item, opts = {}) {
       return img;
     }
     // Relative path - convert to absolute
-    const domainList = ctx.domain.split(',').map(d => d.trim()).filter(d => d && !d.includes('localhost'));
-    const primaryDomain = ctx.primary_domain || (domainList.length > 0 ? domainList[0] : ctx.domain.split(',')[0].trim());
-    const absoluteUrl = `https://www.${primaryDomain}${img.startsWith('/') ? img : '/' + img}`;
+    const absoluteUrl = resolvePublicImageUrl(ctx, img.startsWith('/') ? img : '/' + img);
     console.log(`   [${idx}] 🔗 Converted: ${img} → ${absoluteUrl}`);
     return absoluteUrl;
   }).filter(img => img && img.trim());
@@ -7235,7 +7372,9 @@ async function postToSelectedFanpages(messages, postUrl, selectedPages = null, o
     : [];
   const rawImagesFromOptions = Array.isArray(options.images) ? options.images : [];
   const validFbImages = Array.from(new Set([...rawImagesFromOptions, ...rawImagesFromMessages]))
-    .filter(img => typeof img === 'string' && (img.startsWith('http://') || img.startsWith('https://') || img.startsWith('data:')));
+    .filter(img => typeof img === 'string')
+    .map(img => img.trim())
+    .filter(img => img && (img.startsWith('http://') || img.startsWith('https://')));
 
   console.log(`🖼️ [PostToFanpages] Valid images for post: ${validFbImages.length}`);
 
@@ -12736,8 +12875,11 @@ async function postToFacebookPageWithImages(pageId, pageAccessToken, message, im
     }
     
     // Filter và validate images
-    const validImages = Array.isArray(images) 
-      ? images.filter(img => typeof img === 'string' && img.trim())
+    const validImages = Array.isArray(images)
+      ? images
+        .filter(img => typeof img === 'string')
+        .map(img => img.trim())
+        .filter(img => img && (img.startsWith('http://') || img.startsWith('https://')))
       : [];
     
     console.log(`🚀 [postToFacebookPageWithImages] After validation: ${validImages.length} images (before: ${images.length})`);

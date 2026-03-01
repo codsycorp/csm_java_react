@@ -2127,61 +2127,166 @@ public class ApiSpringController {
                 images = imagesList;
             }
 
+            // Chấp nhận cả URLs và base64
+            java.util.List<String> sanitizedImages = new java.util.ArrayList<>();
+            for (String image : images) {
+                if (image == null) continue;
+                String normalized = image.trim();
+                if (normalized.isEmpty()) continue;
+                // Chấp nhận: http://, https://, hoặc data:image/...
+                boolean isUrl = normalized.startsWith("http://") || normalized.startsWith("https://");
+                boolean isBase64 = normalized.startsWith("data:image/");
+                if (!(isUrl || isBase64)) continue;
+                if (!sanitizedImages.contains(normalized)) {
+                    sanitizedImages.add(normalized);
+                }
+            }
+
             org.springframework.web.client.RestTemplate restTemplate = new org.springframework.web.client.RestTemplate();
             final int[] imagesPosted = {0};
             String mainPostId = null;
 
             // Nếu có images, upload từng ảnh ở chế độ unpublished rồi attach vào /feed
-            if (!images.isEmpty()) {
+            if (!sanitizedImages.isEmpty()) {
                 try {
                     java.util.List<String> mediaFbIds = new java.util.ArrayList<>();
                     String photoUploadUrl = "https://graph.facebook.com/v18.0/" + pageId + "/photos";
 
-                    for (String imageUrl : images) {
+                    for (String imageUrl : sanitizedImages) {
                         if (imageUrl == null || imageUrl.isEmpty()) continue;
-                        Map<String, Object> payload = new java.util.HashMap<>();
-                        payload.put("url", imageUrl);
-                        payload.put("published", false);
-                        payload.put("access_token", pageAccessToken);
-
-                        org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
-                        headers.setContentType(org.springframework.http.MediaType.APPLICATION_JSON);
-                        org.springframework.http.HttpEntity<Map<String, Object>> entity = new org.springframework.http.HttpEntity<>(payload, headers);
-
-                        @SuppressWarnings({"unchecked", "rawtypes"})
-                        ResponseEntity<Map<String, Object>> uploadResp = (ResponseEntity) restTemplate.postForEntity(photoUploadUrl, entity, Map.class);
-                        if (uploadResp.getStatusCode().is2xxSuccessful()) {
-                            Map<String, Object> respBody = uploadResp.getBody();
-                            String mediaId = respBody != null ? (String) respBody.get("id") : null;
-                            if (mediaId != null && !mediaId.isEmpty()) {
-                                mediaFbIds.add(mediaId);
+                        try {
+                            logger.info("📤 Processing image for Facebook: {}", 
+                                imageUrl.length() > 100 ? imageUrl.substring(0, 100) + "..." : imageUrl);
+                            
+                            byte[] imageBytes = null;
+                            
+                            // STRATEGY 1: Nếu là base64, decode trực tiếp
+                            if (imageUrl.startsWith("data:image/")) {
+                                try {
+                                    // Format: data:image/png;base64,iVBORw0KGgoAAAANS...
+                                    int commaIndex = imageUrl.indexOf(',');
+                                    if (commaIndex > 0) {
+                                        String base64Data = imageUrl.substring(commaIndex + 1);
+                                        imageBytes = java.util.Base64.getDecoder().decode(base64Data);
+                                        logger.info("✅ Decoded base64 image: {} bytes", imageBytes.length);
+                                    } else {
+                                        logger.warn("⚠️ Invalid base64 format (no comma): {}", imageUrl.substring(0, 50));
+                                        continue;
+                                    }
+                                } catch (Exception decodeError) {
+                                    logger.warn("❌ Failed to decode base64: {}", decodeError.getMessage());
+                                    continue;
+                                }
                             }
-                        } else {
-                            logger.warn("❌ Upload image failed: {}", uploadResp.getBody());
+                            // STRATEGY 2: Nếu là URL từ server này, đọc file trực tiếp từ disk
+                            else if (imageUrl.startsWith("http://") || imageUrl.startsWith("https://")) {
+                                String relativePath = null;
+                                
+                                // Parse URL để lấy relative path (vd: app_images/wuweb/upload123.png)
+                                try {
+                                    java.net.URI uri = new java.net.URI(imageUrl);
+                                    String path = uri.getPath();
+                                    if (path != null && path.startsWith("/")) {
+                                        relativePath = path.substring(1); // Bỏ "/" đầu tiên
+                                    }
+                                } catch (Exception e) {
+                                    logger.warn("Cannot parse URL {}: {}", imageUrl, e.getMessage());
+                                }
+                                
+                                // Thử đọc file từ disk trước (nhanh hơn và đáng tin cậy hơn)
+                                if (relativePath != null && relativePath.startsWith("app_images/")) {
+                                    try {
+                                        java.io.File imageFile = recordManager.getStaticFile(relativePath);
+                                        if (imageFile != null && imageFile.exists() && imageFile.isFile()) {
+                                            imageBytes = java.nio.file.Files.readAllBytes(imageFile.toPath());
+                                            logger.info("✅ Read image from disk: {} bytes from {}", imageBytes.length, relativePath);
+                                        } else {
+                                            logger.warn("⚠️ Image file not found on disk: {}", relativePath);
+                                        }
+                                    } catch (Exception diskError) {
+                                        logger.warn("⚠️ Cannot read from disk {}: {}", relativePath, diskError.getMessage());
+                                    }
+                                }
+                                
+                                // STRATEGY 3: Fallback - download qua HTTP nếu không đọc được từ disk
+                                if (imageBytes == null || imageBytes.length == 0) {
+                                    try {
+                                        java.net.URL url = new java.net.URL(imageUrl);
+                                        java.io.InputStream inputStream = url.openStream();
+                                        imageBytes = inputStream.readAllBytes();
+                                        inputStream.close();
+                                        logger.info("✅ Downloaded image via HTTP: {} bytes", imageBytes.length);
+                                    } catch (Exception downloadError) {
+                                        logger.warn("❌ Failed to download image from {}: {}", imageUrl, downloadError.getMessage());
+                                        continue;
+                                    }
+                                }
+                            }
+
+                            if (imageBytes == null || imageBytes.length == 0) {
+                                logger.warn("❌ Empty image data from {}", imageUrl);
+                                continue;
+                            }
+
+                            // Upload binary trực tiếp lên Facebook (multipart/form-data)
+                            org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
+                            headers.setContentType(org.springframework.http.MediaType.MULTIPART_FORM_DATA);
+
+                            org.springframework.util.LinkedMultiValueMap<String, Object> form = new org.springframework.util.LinkedMultiValueMap<>();
+                            
+                            // Tạo ByteArrayResource với filename
+                            final byte[] finalImageBytes = imageBytes;
+                            org.springframework.core.io.ByteArrayResource imageResource = new org.springframework.core.io.ByteArrayResource(finalImageBytes) {
+                                @Override
+                                public String getFilename() {
+                                    return "image.jpg"; // Facebook yêu cầu filename
+                                }
+                            };
+                            
+                            form.add("source", imageResource);
+                            form.add("published", "false");
+                            form.add("access_token", pageAccessToken);
+
+                            org.springframework.http.HttpEntity<org.springframework.util.LinkedMultiValueMap<String, Object>> entity =
+                                new org.springframework.http.HttpEntity<>(form, headers);
+
+                            @SuppressWarnings({"unchecked", "rawtypes"})
+                            ResponseEntity<Map<String, Object>> uploadResp = (ResponseEntity) restTemplate.postForEntity(photoUploadUrl, entity, Map.class);
+                            if (uploadResp.getStatusCode().is2xxSuccessful()) {
+                                Map<String, Object> respBody = uploadResp.getBody();
+                                String mediaId = respBody != null ? (String) respBody.get("id") : null;
+                                if (mediaId != null && !mediaId.isEmpty()) {
+                                    mediaFbIds.add(mediaId);
+                                    logger.info("✅ Uploaded to Facebook, media_id: {}", mediaId);
+                                } else {
+                                    logger.warn("⚠️ Facebook returned success but no media_id");
+                                }
+                            } else {
+                                logger.warn("❌ Upload image failed: {}", uploadResp.getBody());
+                            }
+                        } catch (Exception perImageError) {
+                            logger.warn("❌ Upload image failed for URL {}: {}", imageUrl, perImageError.getMessage());
                         }
                     }
 
                     if (!mediaFbIds.isEmpty()) {
                         String fbUrl = "https://graph.facebook.com/v18.0/" + pageId + "/feed";
-                        java.util.List<Map<String, Object>> attachedMediaList = new java.util.ArrayList<>();
-                        for (String mediaId : mediaFbIds) {
-                            Map<String, Object> mediaItem = new java.util.HashMap<>();
-                            mediaItem.put("media_fbid", mediaId);
-                            attachedMediaList.add(mediaItem);
-                        }
-
-                        Map<String, Object> payload = new java.util.HashMap<>();
-                        payload.put("message", message);
-                        payload.put("access_token", pageAccessToken);
-                        payload.put("attached_media", attachedMediaList);
-
-                        if (link != null && !link.isEmpty()) {
-                            payload.put("link", link);
-                        }
-
                         org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
-                        headers.setContentType(org.springframework.http.MediaType.APPLICATION_JSON);
-                        org.springframework.http.HttpEntity<Map<String, Object>> entity = new org.springframework.http.HttpEntity<>(payload, headers);
+                        headers.setContentType(org.springframework.http.MediaType.APPLICATION_FORM_URLENCODED);
+
+                        org.springframework.util.LinkedMultiValueMap<String, String> payload = new org.springframework.util.LinkedMultiValueMap<>();
+                        payload.add("message", message);
+                        payload.add("access_token", pageAccessToken);
+
+                        for (int i = 0; i < mediaFbIds.size(); i++) {
+                            String mediaId = mediaFbIds.get(i);
+                            payload.add("attached_media[" + i + "]", "{\"media_fbid\":\"" + mediaId + "\"}");
+                        }
+
+                        // Không gửi link cùng attached_media vì Graph API có thể từ chối hoặc bỏ ảnh.
+
+                        org.springframework.http.HttpEntity<org.springframework.util.LinkedMultiValueMap<String, String>> entity =
+                            new org.springframework.http.HttpEntity<>(payload, headers);
 
                         @SuppressWarnings({"unchecked", "rawtypes"})
                         ResponseEntity<Map<String, Object>> fbResponse = (ResponseEntity) restTemplate.postForEntity(fbUrl, entity, Map.class);
@@ -2204,9 +2309,9 @@ public class ApiSpringController {
 
             // Fallback: Nếu không có images hoặc album fail, post text bình thường
             if (mainPostId == null) {
-                if (!images.isEmpty()) {
+                if (!sanitizedImages.isEmpty()) {
                     // Retry with single image
-                    String imageUrl = images.get(0);
+                    String imageUrl = sanitizedImages.get(0);
                     if (imageUrl != null && !imageUrl.isEmpty()) {
                         String fbUrl = "https://graph.facebook.com/v18.0/" + pageId + "/photos";
                         Map<String, String> payload = new java.util.HashMap<>();

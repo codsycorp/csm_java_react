@@ -2146,10 +2146,21 @@ function resolvePublicImageUrl(ctx, url) {
   if (/^https?:\/\//i.test(url)) return url;
 
   const protocol = (typeof window !== 'undefined' && window.location?.protocol) ? window.location.protocol : "https:";
-  const domain = (ctx?.domain || "").split(",")[0].trim();
+  const candidates = String(ctx?.domain || "")
+    .split(",")
+    .map(d => d.trim())
+    .filter(Boolean);
+
+  const nonLocalCandidates = candidates.filter(d => !/^localhost(?::\d+)?$/i.test(d) && !/^127\.0\.0\.1(?::\d+)?$/i.test(d));
+  const preferredDomain =
+    nonLocalCandidates.find(d => /phanmemmottrieu\.net$/i.test(d) || /h-holding\.vn$/i.test(d) || /h-holding\.com\.vn$/i.test(d))
+    || nonLocalCandidates.find(d => !/csmbridge\.net$/i.test(d))
+    || nonLocalCandidates[0]
+    || candidates[0]
+    || "";
 
   if (url.startsWith("//")) return `${protocol}${url}`;
-  if (url.startsWith("/")) return domain ? `${protocol}//${domain}${url}` : `${protocol}${url}`;
+  if (url.startsWith("/")) return preferredDomain ? `${protocol}//${preferredDomain}${url}` : `${protocol}${url}`;
   return url;
 }
 
@@ -5249,8 +5260,11 @@ async function postToFacebookPage(pageId, pageAccessToken, message, imageUrl = n
 async function postToFacebookPageWithImages(pageId, pageAccessToken, message, images = [], link = null, seft = {}) {
   try {
     // Filter và validate images
-    const validImages = Array.isArray(images) 
-      ? images.filter(img => typeof img === 'string' && img.trim())
+    const validImages = Array.isArray(images)
+      ? images
+        .filter(img => typeof img === 'string')
+        .map(img => img.trim())
+        .filter(img => img && (img.startsWith('http://') || img.startsWith('https://')))
       : [];
     
     console.log(`🚀 Posting to Facebook with ${validImages.length} image(s)...`);
