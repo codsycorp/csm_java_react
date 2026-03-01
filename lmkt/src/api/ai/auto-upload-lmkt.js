@@ -5925,6 +5925,91 @@ if (typeof window !== 'undefined') {
 }
 
 /**
+ * ✅ MIGRATE CONFIGS: Thêm zalo_fanpages field cho config cũ
+ * Gọi từ console: window.migrateZaloConfigs()
+ */
+function migrateZaloConfigs() {
+  try {
+    console.log('🚀 [Migrate] BẮT ĐẦU MIGRATE CONFIGS...');
+    
+    const allConfigs = loadDataOptionUser();
+    console.log(`📦 [Migrate] Đã load ${allConfigs.length} configs`);
+    
+    let migratedCount = 0;
+    let alreadyHaveCount = 0;
+    
+    allConfigs.forEach((config, idx) => {
+      if (!config.config_for_zalo) {
+        console.log(`   ⏭️  [${idx}] Skip non-Zalo config: ${config.id}`);
+        return;
+      }
+      
+      // Check xem đã có zalo_fanpages chưa
+      if (Array.isArray(config.zalo_fanpages) && config.zalo_fanpages.length > 0) {
+        console.log(`   ✅ [${idx}] Config ${config.id} đã có zalo_fanpages (${config.zalo_fanpages.length} fanpages)`);
+        alreadyHaveCount++;
+        return;
+      }
+      
+      // Tạo zalo_fanpages từ fanpage_ids/names/tokens
+      if (Array.isArray(config.fanpage_ids) && config.fanpage_ids.length > 0) {
+        config.zalo_fanpages = config.fanpage_ids.map((id, i) => ({
+          id,
+          name: config.fanpage_names?.[i] || 'Unknown',
+          access_token: config.fanpage_tokens?.[i] || ''
+        }));
+        console.log(`   🔄 [${idx}] Migrated config ${config.id}: ${config.zalo_fanpages.length} fanpages`);
+        migratedCount++;
+      } else if (config.fanpage_id && config.fanpage_token) {
+        // Fallback: tạo array với 1 fanpage từ fanpage_id/token cũ
+        config.zalo_fanpages = [{
+          id: config.fanpage_id,
+          name: config.fanpage_name || 'Unknown',
+          access_token: config.fanpage_token
+        }];
+        console.log(`   ✨ [${idx}] Created zalo_fanpages for config ${config.id}: 1 fanpage`);
+        migratedCount++;
+      } else {
+        console.warn(`   ⚠️  [${idx}] Config ${config.id} không có fanpage data để migrate`);
+      }
+    });
+    
+    console.log(`\n📊 [Migrate] Kết quả:`);
+    console.log(`   - Đã migrate: ${migratedCount} configs`);
+    console.log(`   - Đã có sẵn: ${alreadyHaveCount} configs`);
+    
+    if (migratedCount > 0) {
+      // Lưu lên server
+      console.log(`\n💾 [Migrate] Đang lưu ${allConfigs.length} configs lên server...`);
+      saveDataOptionUser(allConfigs, (success, error) => {
+        if (success) {
+          console.log(`✅ [Migrate] Lưu THÀNH CÔNG! Reload page để áp dụng:`);
+          console.log(`   location.reload()`);
+          thongbao(`✅ Đã migrate ${migratedCount} configs! Vui lòng reload page.`);
+        } else {
+          console.error(`❌ [Migrate] Lưu THẤT BẠI: ${error}`);
+          canhbao(`❌ Không thể lưu: ${error}`);
+        }
+      });
+    } else {
+      console.log(`\n✅ [Migrate] Không có config nào cần migrate`);
+      thongbao('✅ Tất cả config đã cập nhật!');
+    }
+    
+    return { migratedCount, alreadyHaveCount };
+  } catch (e) {
+    console.error('❌ [Migrate] Error:', e);
+    canhbao(`❌ Lỗi migrate: ${e.message}`);
+    return null;
+  }
+}
+
+// ✅ Expose globally
+if (typeof window !== 'undefined') {
+  window.migrateZaloConfigs = migrateZaloConfigs;
+}
+
+/**
  * Lưu danh sách tin Zalo đã đăng vào SERVER (via csmUserData.set())
  * Giống như saveDataOptionUser() - lưu qua server, backup vào localStorage
  * ✅ CLEANUP: Chỉ giữ 1000 posted messages mới nhất để tránh vượt quá storage quota
@@ -11763,6 +11848,50 @@ async function updateAllConfigsWithNewFanpageToken(newPageAccessToken, userAcces
           config.fanpage_token_user_token = userAccessToken;
           config.fanpage_token_timestamp = Date.now();
           config.fanpage_token_expires_at = Date.now() + (60 * 24 * 60 * 60 * 1000); // 60 ngày
+          
+          // ✅ CRITICAL FIX: Tạo/update zalo_fanpages array để processContent có thể đăng lên ALL fanpages
+          // Nếu chưa có zalo_fanpages hoặc không phải array, TẠO MỚI từ fanpage_ids
+          if (!Array.isArray(config.zalo_fanpages)) {
+            if (Array.isArray(config.fanpage_ids) && config.fanpage_ids.length > 0) {
+              // Migrate từ fanpage_ids/names/tokens arrays
+              config.zalo_fanpages = config.fanpage_ids.map((id, idx) => ({
+                id,
+                name: config.fanpage_names?.[idx] || fanpageName,
+                access_token: config.fanpage_tokens?.[idx] || newPageAccessToken
+              }));
+              console.log(`   🔄 Migrated zalo_fanpages from fanpage_ids: ${config.zalo_fanpages.length} fanpages`);
+            } else {
+              // Fallback: tạo array với 1 fanpage từ config hiện tại
+              config.zalo_fanpages = [{
+                id: fanpageId,
+                name: fanpageName,
+                access_token: newPageAccessToken
+              }];
+              console.log(`   ✨ Created zalo_fanpages with 1 fanpage`);
+            }
+          } else {
+            // Đã có zalo_fanpages array - UPDATE TOKEN cho tất cả fanpage có cùng ID
+            let tokenUpdated = false;
+            config.zalo_fanpages.forEach(fp => {
+              if (fp.id === fanpageId) {
+                fp.access_token = newPageAccessToken;
+                fp.name = fanpageName;
+                tokenUpdated = true;
+              }
+            });
+            if (tokenUpdated) {
+              console.log(`   🔄 Updated token in zalo_fanpages for fanpage ${fanpageId}`);
+            } else {
+              // Fanpage ID không khớp - thêm mới vào array
+              config.zalo_fanpages.push({
+                id: fanpageId,
+                name: fanpageName,
+                access_token: newPageAccessToken
+              });
+              console.log(`   ➕ Added new fanpage to zalo_fanpages array`);
+            }
+          }
+          
           updated = true;
           updatedCount++;
           updatedConfigIds.push(config.id);
