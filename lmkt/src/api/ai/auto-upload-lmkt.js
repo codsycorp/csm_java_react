@@ -3256,10 +3256,12 @@ async function processContent(item, opts = {}) {
       || item.message 
       || item.body 
       || item.caption 
+      || item.title
+      || item.description
       || "";
   } catch (e) {
     console.warn(`⚠️ [extractMessageText Error] Falling back:`, e.message);
-    content = item.content || item.text || item.message || item.body || item.caption || "";
+    content = item.content || item.text || item.message || item.body || item.caption || item.title || item.description || "";
   }
   
   // ✅ DEBUG: log chi tiết về content trước khi check
@@ -3272,11 +3274,19 @@ async function processContent(item, opts = {}) {
       has_caption: !!item.caption,
       has_title: !!item.title,
       has_description: !!item.description,
+      has_images: !!(item.images && item.images.length > 0),
       content_length: item.content?.length || 0,
       text_length: item.text?.length || 0,
       item_keys: Object.keys(item || {}).join(', ')
     });
-    throw new Error(`Nội dung trống - không tìm thấy trường text/content/message/body trong tin nhắn`);
+    
+    // ✅ FALLBACK: Nếu có ảnh nhưng không có text, dùng một default message
+    if (item.images && item.images.length > 0) {
+      content = "Xem hình ảnh bên dưới để biết chi tiết";
+      console.log(`⚠️ [processContent] Using fallback content for image-only message`);
+    } else {
+      throw new Error(`Nội dung trống - không tìm thấy trường text/content/message/body trong tin nhắn`);
+    }
   }
   
   const essentials = getMessageEssentials(item);
@@ -5777,8 +5787,8 @@ function buildMessageHash(msg = {}) {
 // ========== QUẢN LÝ TIN ZALO ĐÃ ĐĂNG (LƯU VÀO dataOptionUser) ==========
 
 // Constants cho Zalo posted messages
-const ZALO_POSTED_LIMIT = 1000; // Giới hạn tối đa 1000 tin đã đăng
-const ZALO_POSTED_CLEANUP_DAYS = 30; // Tự động xóa tin cũ hơn 30 ngày
+const ZALO_POSTED_LIMIT = 200; // Giới hạn tối đa 200 tin (giảm từ 1000 để tránh quota)
+const ZALO_POSTED_CLEANUP_DAYS = 7; // Tự động xóa tin cũ hơn 7 ngày (giảm từ 30)
 
 // ✅ TIMING CONSTANTS - Tuỳ chỉnh delays để tránh hang
 // ========== GLOBAL POSTING QUEUE ==========
@@ -5869,6 +5879,52 @@ function loadPostedZaloMessages() {
 }
 
 /**
+ * ✅ CLEAR POSTED MESSAGES CACHE
+ * Dùng để xóa toàn bộ localStorage cache khi bị quota exceeded
+ * Gọi từ console: window.clearPostedZaloCache()
+ */
+function clearPostedZaloCache() {
+  try {
+    // 1. Clear localStorage
+    localStorage.removeItem('zalo_posted_messages');
+    console.log(`✅ [ClearCache] Removed zalo_posted_messages from localStorage`);
+    
+    // 2. Clear from server (csmUserData)
+    if (window.csmUserData && typeof window.csmUserData.set === 'function') {
+      try {
+        const allData = loadDataOptionUser();
+        const otherData = allData.filter(item => {
+          if (item.type === 'posted_zalo_message') return false;
+          if (item.id && item.id.toString().startsWith('posted_zalo_')) return false;
+          return true;
+        });
+        
+        window.csmUserData.set(otherData, function(success, error) {
+          if (success) {
+            console.log(`✅ [ClearCache] Removed ${allData.length - otherData.length} posted messages from SERVER`);
+          } else {
+            console.warn(`⚠️ [ClearCache] Failed to clear server:`, error);
+          }
+        });
+      } catch (e) {
+        console.warn(`⚠️ [ClearCache] Error with csmUserData:`, e.message);
+      }
+    }
+    
+    console.log(`🎉 [ClearCache] Cache cleared successfully! Reload page to start fresh.`);
+    return true;
+  } catch (e) {
+    console.error(`❌ [ClearCache] Error:`, e);
+    return false;
+  }
+}
+
+// ✅ Expose globally
+if (typeof window !== 'undefined') {
+  window.clearPostedZaloCache = clearPostedZaloCache;
+}
+
+/**
  * Lưu danh sách tin Zalo đã đăng vào SERVER (via csmUserData.set())
  * Giống như saveDataOptionUser() - lưu qua server, backup vào localStorage
  * ✅ CLEANUP: Chỉ giữ 1000 posted messages mới nhất để tránh vượt quá storage quota
@@ -5876,16 +5932,35 @@ function loadPostedZaloMessages() {
  */
 function savePostedZaloMessages(postedMessages) {
   try {
-    // ✅ CLEANUP: Trim to max 1000 newest messages (sort by timestamp descending)
-    const maxMessages = 1000;
+    // ✅ CLEANUP: Trim to max 200 newest messages (giảm từ 1000 để tránh quota)
+    const maxMessages = 200;
     let messagesToSave = Array.isArray(postedMessages) ? postedMessages : [];
     
     if (messagesToSave.length > maxMessages) {
-      // Sort by timestamp descending (newest first), keep first 1000
+      // Sort by timestamp descending (newest first), keep first 200
       messagesToSave = messagesToSave
         .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
         .slice(0, maxMessages);
       console.log(`🧹 [SavePostedZalo] Trimmed to ${maxMessages} newest messages (deleted ${postedMessages.length - maxMessages} old)`);  
+    }
+    
+    // ✅ SANITIZE: Remove problematic characters from content_preview
+    messagesToSave = messagesToSave.map(msg => {
+      if (msg.content_preview) {
+        // Remove control characters and non-printable chars
+        msg.content_preview = msg.content_preview
+          .replace(/[\x00-\x1F\x7F-\x9F]/g, '') // Remove control chars
+          .substring(0, 50); // Giảm từ 100 xuống 50 chars
+      }
+      return msg;
+    });
+    
+    // ✅ VALIDATE JSON before saving
+    try {
+      JSON.stringify(messagesToSave);
+    } catch (jsonError) {
+      console.error(`❌ [SavePostedZalo] Invalid JSON detected, cannot save:`, jsonError);
+      return;
     }
     
     // ✅ PRIORITY 1: Save to server via csmUserData.set()
@@ -7233,8 +7308,81 @@ function addToPostingQueue(messages, groupName, configId, config) {
 }
 
 /**
+ * ✅ GỘP TIN ZALO LIÊN TIẾP CÙNG SENDER/TOPIC
+ * Merge nhiều tin từ cùng sender trong khoảng 30s thành 1 message group
+ * Gộp content + images để tạo 1 bài Facebook duy nhất với nhiều ảnh
+ */
+function mergeConsecutiveMessages(messages) {
+  if (!Array.isArray(messages) || messages.length <= 1) return messages;
+  
+  const MERGE_TIME_WINDOW = 30000; // 30 seconds
+  const merged = [];
+  let currentGroup = null;
+  
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    const msgTime = msg.timestamp || Date.now();
+    const msgSender = msg.sender || 'Unknown';
+    
+    // Nếu chưa có group hoặc khác sender/topic, tạo group mới
+    if (!currentGroup || 
+        currentGroup.sender !== msgSender || 
+        (msgTime - currentGroup.lastTime) > MERGE_TIME_WINDOW) {
+      
+      // Push group cũ vào merged (nếu có)
+      if (currentGroup) {
+        merged.push(currentGroup.mergedMessage);
+      }
+      
+      // Tạo group mới
+      currentGroup = {
+        sender: msgSender,
+        lastTime: msgTime,
+        mergedMessage: {
+          ...msg, // Clone tin đầu tiên
+          images: msg.images || [],
+          content: msg.content || '',
+          _merged_count: 1
+        }
+      };
+    } else {
+      // Gộp vào group hiện tại
+      currentGroup.lastTime = msgTime;
+      currentGroup.mergedMessage._merged_count++;
+      
+      // Gộp content (thêm xuống dòng)
+      if (msg.content && msg.content.trim()) {
+        currentGroup.mergedMessage.content += '\n\n' + msg.content;
+      }
+      
+      // Gộp images
+      if (Array.isArray(msg.images) && msg.images.length > 0) {
+        currentGroup.mergedMessage.images = [
+          ...currentGroup.mergedMessage.images,
+          ...msg.images
+        ];
+      }
+    }
+  }
+  
+  // Push group cuối cùng
+  if (currentGroup) {
+    merged.push(currentGroup.mergedMessage);
+  }
+  
+  console.log(`🔗 [Merge Messages] ${messages.length} messages → ${merged.length} merged groups`);
+  merged.forEach((msg, idx) => {
+    const count = msg._merged_count || 1;
+    const imgCount = msg.images?.length || 0;
+    console.log(`   [${idx}] ${msg.sender}: ${count} tin, ${imgCount} ảnh`);
+  });
+  
+  return merged;
+}
+
+/**
  * ✅ POSTING WORKER - Xử lý queue độc lập
- * Lấy tin từ queue → đăng tuần tự → đợi xong → lấy tin tiếp
+ * Lấy tin từ queue → GỘP TIN LIÊN TIẾP → đăng tuần tự → đợi xong → lấy tin tiếp
  */
 async function processPostingQueue() {
   // Nếu queue rỗng, skip
@@ -7255,10 +7403,15 @@ async function processPostingQueue() {
   console.log(`   📊 Queue remaining: ${zaloPostingQueue.length} items`);
   
   try {
-    // Đăng TẤT CẢ tin trong item này (tuần tự)
-    for (let i = 0; i < item.messages.length; i++) {
-      const message = item.messages[i];
-      console.log(`\n   📤 [${i + 1}/${item.messages.length}] Đăng tin từ ${message.sender}...`);
+    // ✅ GỘP TIN LIÊN TIẾP trước khi đăng
+    const mergedMessages = mergeConsecutiveMessages(item.messages);
+    
+    // Đăng TẤT CẢ tin đã merge (tuần tự)
+    for (let i = 0; i < mergedMessages.length; i++) {
+      const message = mergedMessages[i];
+      const mergedCount = message._merged_count || 1;
+      const imageCount = message.images?.length || 0;
+      console.log(`\n   📤 [${i + 1}/${mergedMessages.length}] Đăng tin từ ${message.sender} (gộp ${mergedCount} tin, ${imageCount} ảnh)...`);
       
       // Set global context cho processContent
       window.__currentZaloGroupName = item.groupName;
@@ -7268,13 +7421,13 @@ async function processPostingQueue() {
       const success = await pushSingleMessageToWeb(message, item.groupName, item.configId, item.config);
       
       if (success) {
-        console.log(`   ✅ [${i + 1}/${item.messages.length}] Đăng thành công`);
+        console.log(`   ✅ [${i + 1}/${mergedMessages.length}] Đăng thành công`);
       } else {
-        console.warn(`   ⚠️ [${i + 1}/${item.messages.length}] Đăng thất bại`);
+        console.warn(`   ⚠️ [${i + 1}/${mergedMessages.length}] Đăng thất bại`);
       }
       
       // Chờ giữa các bài đăng
-      if (i < item.messages.length - 1) {
+      if (i < mergedMessages.length - 1) {
         const waitTime = ZALO_TIMING.WAIT_BETWEEN_POSTS;
         console.log(`   ⏸️  Chờ ${waitTime}ms trước bài tiếp theo...`);
         await new Promise(resolve => setTimeout(resolve, waitTime));
@@ -7283,7 +7436,7 @@ async function processPostingQueue() {
     
     item.status = 'done';
     postingWorkerStats.totalSuccess++;
-    console.log(`\n✅ [Posting Worker] Hoàn tất queue item ${item.id} (${item.messages.length} messages)`);
+    console.log(`\n✅ [Posting Worker] Hoàn tất queue item ${item.id} (${mergedMessages.length} bài từ ${item.messages.length} tin gốc)`);
   } catch (e) {
     item.status = 'error';
     postingWorkerStats.totalError++;
