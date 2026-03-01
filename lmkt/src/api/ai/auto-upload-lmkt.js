@@ -252,6 +252,69 @@ const decryptHtmlContent = (data) => {
  *   Phanmemmottrieu → phanmemmottrieu.net → app_id: "wuweb" → Lấy data từ app Phanmemmottrieu
  */
 const DEFAULT_UPLOAD_ENDPOINT = "/upload.shtml";
+const UPLOAD_ENDPOINT_COOLDOWN_MS = 2 * 60 * 1000;
+const uploadEndpointHealth = {};
+
+function markUploadEndpointFailure(endpoint, status = 0) {
+  if (!endpoint) return;
+  uploadEndpointHealth[endpoint] = {
+    failedAt: Date.now(),
+    status
+  };
+}
+
+function isUploadEndpointCoolingDown(endpoint) {
+  if (!endpoint) return false;
+  const info = uploadEndpointHealth[endpoint];
+  if (!info || !info.failedAt) return false;
+  return (Date.now() - info.failedAt) < UPLOAD_ENDPOINT_COOLDOWN_MS;
+}
+
+function clearUploadEndpointHealth(endpoint) {
+  if (!endpoint) return;
+  delete uploadEndpointHealth[endpoint];
+}
+
+function getCandidateUploadEndpoints(ctx = {}) {
+  const candidates = [];
+
+  // 1) Relative endpoint (same origin)
+  candidates.push(DEFAULT_UPLOAD_ENDPOINT);
+
+  // 2) From current origin
+  try {
+    if (typeof window !== 'undefined' && window.location?.origin) {
+      candidates.push(`${window.location.origin}${DEFAULT_UPLOAD_ENDPOINT}`);
+    }
+  } catch (e) {
+    // ignore
+  }
+
+  // 3) From apiBase origin
+  try {
+    if (ctx.apiBase && /^https?:\/\//i.test(ctx.apiBase)) {
+      const apiOrigin = new URL(ctx.apiBase).origin;
+      candidates.push(`${apiOrigin}${DEFAULT_UPLOAD_ENDPOINT}`);
+    }
+  } catch (e) {
+    // ignore invalid apiBase URL
+  }
+
+  // 4) From configured business domains
+  const domains = (ctx.domain || "")
+    .split(",")
+    .map(d => (d || "").trim())
+    .filter(d => d && !d.includes("localhost") && !d.includes("127.0.0.1"));
+
+  domains.forEach(domain => {
+    candidates.push(`https://${domain}${DEFAULT_UPLOAD_ENDPOINT}`);
+    if (!domain.startsWith("www.")) {
+      candidates.push(`https://www.${domain}${DEFAULT_UPLOAD_ENDPOINT}`);
+    }
+  });
+
+  return Array.from(new Set(candidates));
+}
 
 // Domain Options
 const DOMAIN_OPTIONS = {
@@ -1666,6 +1729,29 @@ function buildApiHeaders(ctx = {}) {
   return headers;
 }
 
+const backendGuardState = {
+  pausedUntil: 0,
+  reason: ""
+};
+
+function extractHttpStatusFromError(error) {
+  const text = `${error?.message || ""}`;
+  const match = text.match(/\b(400|401|403|404|429|500|502|503|504)\b/);
+  return match ? Number(match[1]) : 0;
+}
+
+function activateBackendGuard(reason, ms = 2 * 60 * 1000) {
+  backendGuardState.pausedUntil = Date.now() + ms;
+  backendGuardState.reason = reason || "Backend unavailable";
+  console.warn(`⛔ [BackendGuard] Paused ${Math.round(ms / 1000)}s: ${backendGuardState.reason}`);
+}
+
+function getBackendGuardMessage() {
+  if (Date.now() >= backendGuardState.pausedUntil) return "";
+  const remainSec = Math.ceil((backendGuardState.pausedUntil - Date.now()) / 1000);
+  return `Backend đang tạm dừng (${remainSec}s): ${backendGuardState.reason}`;
+}
+
 function generateSlug(text, projectName = "") {
   let normalized = text || "";
   
@@ -2251,32 +2337,83 @@ function extractBase64ImagesFromText(text = "") {
   return matches ? Array.from(new Set(matches)) : [];
 }
 
+function normalizeImageCandidates(value) {
+  if (!value) return [];
+
+  if (Array.isArray(value)) {
+    return value.filter(v => typeof v === "string" && v.trim());
+  }
+
+  if (typeof value === "string") {
+    const raw = value.trim();
+    if (!raw) return [];
+
+    if (/^https?:\/\//i.test(raw) || /^data:image\//i.test(raw) || raw.startsWith("/")) {
+      return [raw];
+    }
+
+    if ((raw.startsWith("[") && raw.endsWith("]")) || (raw.startsWith("{") && raw.endsWith("}"))) {
+      try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          return parsed.filter(v => typeof v === "string" && v.trim());
+        }
+      } catch (e) {
+        // ignore invalid json string
+      }
+    }
+  }
+
+  return [];
+}
+
 function extractImagesFromMessage(item = {}) {
+  console.log(`\n📋 [extractImagesFromMessage] === START EXTRACTION DEBUG ===`);
+  console.log(`   Item keys:`, Object.keys(item || {}).join(', '));
+  console.log(`   Item structure:`, {
+    has_images: !!item.images,
+    images_len: Array.isArray(item.images) ? item.images.length : 'N/A',
+    has_imageUrls: !!item.imageUrls,
+    imageUrls_len: Array.isArray(item.imageUrls) ? item.imageUrls.length : 'N/A',
+    has_image_urls: !!item.image_urls,
+    image_urls_len: Array.isArray(item.image_urls) ? item.image_urls.length : 'N/A',
+    has_photos: !!item.photos,
+    photos_len: Array.isArray(item.photos) ? item.photos.length : 'N/A',
+    has_attachments: !!item.attachments,
+    attachments_len: Array.isArray(item.attachments) ? item.attachments.length : 'N/A',
+    has_attachments_data: !!item.attachments?.data,
+    attachments_data_len: Array.isArray(item.attachments?.data) ? item.attachments.data.length : 'N/A'
+  });
+  
   const images = [];
   let debugInfo = [];
 
-  if (Array.isArray(item.images)) {
-    images.push(...item.images);
-    debugInfo.push(`item.images: ${item.images.length}`);
-  }
-  if (Array.isArray(item.imageUrls)) {
-    images.push(...item.imageUrls);
-    debugInfo.push(`item.imageUrls: ${item.imageUrls.length}`);
-  }
-  if (Array.isArray(item.image_urls)) {
-    images.push(...item.image_urls);
-    debugInfo.push(`item.image_urls: ${item.image_urls.length}`);
-  }
-  if (Array.isArray(item.photos)) {
-    images.push(...item.photos);
-    debugInfo.push(`item.photos: ${item.photos.length}`);
-  }
+  const imageCandidates = [
+    ["images", item.images],
+    ["imageUrls", item.imageUrls],
+    ["image_urls", item.image_urls],
+    ["photos", item.photos],
+    ["media", item.media],
+    ["photo", item.photo],
+    ["picture", item.picture]
+  ];
+
+  imageCandidates.forEach(([key, value]) => {
+    const normalized = normalizeImageCandidates(value);
+    if (normalized.length > 0) {
+      console.log(`   ✅ Found item.${key}: ${normalized.length} items`);
+      images.push(...normalized);
+      debugInfo.push(`item.${key}: ${normalized.length}`);
+    }
+  });
 
   if (typeof item.image === "string") {
+    console.log(`   ✅ Found item.image: 1 item`);
     images.push(item.image);
     debugInfo.push('item.image: 1');
   }
   if (typeof item.imageUrl === "string") {
+    console.log(`   ✅ Found item.imageUrl: 1 item`);
     images.push(item.imageUrl);
     debugInfo.push('item.imageUrl: 1');
   }
@@ -2284,9 +2421,10 @@ function extractImagesFromMessage(item = {}) {
   // Facebook-style attachments
   if (Array.isArray(item.attachments)) {
     let count = 0;
-    item.attachments.forEach(att => {
+    item.attachments.forEach((att, idx) => {
       const src = att?.media?.image?.src || att?.media?.image || att?.url;
       if (typeof src === "string") {
+        console.log(`   ✅ Found attachment[${idx}].media.image.src: ${src.substring(0, 80)}`);
         images.push(src);
         count++;
       }
@@ -2296,9 +2434,10 @@ function extractImagesFromMessage(item = {}) {
 
   if (Array.isArray(item.attachments?.data)) {
     let count = 0;
-    item.attachments.data.forEach(att => {
+    item.attachments.data.forEach((att, idx) => {
       const src = att?.media?.image?.src || att?.media?.image || att?.url;
       if (typeof src === "string") {
+        console.log(`   ✅ Found attachments.data[${idx}].media.image.src: ${src.substring(0, 80)}`);
         images.push(src);
         count++;
       }
@@ -2309,29 +2448,45 @@ function extractImagesFromMessage(item = {}) {
   const text = item.content || item.text || "";
   const base64Images = extractBase64ImagesFromText(text);
   if (base64Images.length > 0) {
+    console.log(`   ✅ Found ${base64Images.length} base64 images from text`);
     images.push(...base64Images);
     debugInfo.push(`base64 from text: ${base64Images.length}`);
   }
 
+  console.log(`\n   📊 [BEFORE FILTER] Total raw images collected: ${images.length}`);
+  images.slice(0, 5).forEach((img, idx) => {
+    console.log(`     [${idx}] ${typeof img === 'string' ? img.substring(0, 100) : String(img).substring(0, 100)}...`);
+  });
+
   // Validate URLs before returning
   const validImages = Array.from(new Set(
-    images.filter(img => {
-      if (typeof img !== 'string' || !img.trim()) return false;
-      try {
-        // Check if it's a valid URL or data URI
-        return img.startsWith('http://') || img.startsWith('https://') || img.startsWith('data:');
-      } catch (e) {
+    images.filter((img, idx) => {
+      if (typeof img !== 'string' || !img.trim()) {
+        console.log(`   ❌ [Filter ${idx}] Not string or empty`);
         return false;
       }
+      const isValid = img.startsWith('http://') || img.startsWith('https://') || img.startsWith('data:');
+      if (!isValid) {
+        console.log(`   ❌ [Filter ${idx}] Invalid format (doesn't start with http/https/data): ${img.substring(0, 80)}`);
+      } else {
+        console.log(`   ✅ [Filter ${idx}] Valid URL: ${img.substring(0, 100)}`);
+      }
+      return isValid;
     })
   ));
   
+  console.log(`\n   📊 [AFTER FILTER] Valid images: ${validImages.length}/${images.length}`);
   if (validImages.length > 0) {
     console.log(`✅ extractImagesFromMessage: Found ${validImages.length} valid image(s) [${debugInfo.join(', ')}]`);
-    console.log(`   First 3 URLs:`, validImages.slice(0, 3));
+    validImages.slice(0, 3).forEach((url, idx) => {
+      console.log(`   [${idx}] ${url}`);
+    });
   } else if (debugInfo.length > 0) {
     console.warn(`⚠️ extractImagesFromMessage: Found ${images.length} raw images but 0 valid after filter. Sources: [${debugInfo.join(', ')}]`);
+  } else {
+    console.warn(`⚠️ extractImagesFromMessage: No images found in any field!`);
   }
+  console.log(`📋 [extractImagesFromMessage] === END EXTRACTION DEBUG ===\n`);
   
   return validImages;
 }
@@ -2349,6 +2504,18 @@ function extractMessageText(item = {}) {
 
   const firstText = candidates.find(v => typeof v === "string" && v.trim().length > 0) || "";
   return normalizeZaloText(firstText);
+}
+
+function getMessageEssentials(item = {}) {
+  const text = extractMessageText(item);
+  const images = extractImagesFromMessage(item);
+  return {
+    text,
+    images,
+    hasText: text.length > 0,
+    hasImages: images.length > 0,
+    isEligible: text.length > 0 && images.length > 0
+  };
 }
 
 function getFirstImageFromJsonInput() {
@@ -2408,20 +2575,28 @@ function getFirstTextFromJsonInput() {
 function parseZaloJson(jsonArray) {
   if (!Array.isArray(jsonArray)) throw new Error("JSON phải là mảng");
   
-  return jsonArray.filter(msg => {
-    const hasContent = extractMessageText(msg).length > 0;
-    const hasImages = extractImagesFromMessage(msg).length > 0;
-    return hasContent && hasImages;
+  return jsonArray.filter((msg, idx) => {
+    const essentials = getMessageEssentials(msg);
+    if (!essentials.hasText || !essentials.hasImages) {
+      console.warn(`⚠️ [parseZaloJson] Skip message #${idx + 1}: hasText=${essentials.hasText}, hasImages=${essentials.hasImages}`);
+      return false;
+    }
+    return true;
   });
 }
 
 function parseFacebookJson(jsonArray) {
   if (!Array.isArray(jsonArray)) throw new Error("JSON phải là mảng");
   
-  return jsonArray.filter(item => {
-    const imgCount = parseInt(item.imageCount) || extractImagesFromMessage(item).length || 0;
-    const hasText = extractMessageText(item).length > 0;
-    return imgCount > 0 && hasText;
+  return jsonArray.filter((item, idx) => {
+    const essentials = getMessageEssentials(item);
+    const declaredImgCount = parseInt(item.imageCount, 10) || 0;
+    const hasImages = essentials.images.length > 0 || declaredImgCount > 0;
+    if (!essentials.hasText || !hasImages) {
+      console.warn(`⚠️ [parseFacebookJson] Skip post #${idx + 1}: hasText=${essentials.hasText}, hasImages=${hasImages}`);
+      return false;
+    }
+    return true;
   });
 }
 
@@ -2465,41 +2640,110 @@ async function uploadBase64Image(base64, filename, ctx) {
   // ✅ GHÉP LẠI TÊN FILE VỚI EXTENSION
   const finalFileName = sanitizedName + fileExtension;
   
-  const res = await fetch(DEFAULT_UPLOAD_ENDPOINT, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ app_id: ctx.app_id, name: finalFileName, src: base64 })
-  });
+  const uploadPayload = JSON.stringify({ app_id: ctx.app_id, name: finalFileName, src: base64 });
+  const candidates = getCandidateUploadEndpoints(ctx);
+  const availableCandidates = candidates.filter(ep => !isUploadEndpointCoolingDown(ep));
+  const endpoints = availableCandidates.length > 0 ? availableCandidates : candidates;
+  let lastError = null;
 
-  if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
-  const path = await res.text();
-  return path.startsWith("/") ? path : `/${path}`;
+  for (const endpoint of endpoints) {
+    try {
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: uploadPayload
+      });
+
+      if (!res.ok) {
+        markUploadEndpointFailure(endpoint, res.status);
+        lastError = new Error(`Upload failed: ${res.status} @ ${endpoint}`);
+        continue;
+      }
+
+      const path = await res.text();
+      clearUploadEndpointHealth(endpoint);
+      const cleanedPath = (path || "").trim();
+      if (!cleanedPath) {
+        lastError = new Error(`Upload empty response @ ${endpoint}`);
+        continue;
+      }
+      return cleanedPath.startsWith("/") ? cleanedPath : `/${cleanedPath}`;
+    } catch (error) {
+      markUploadEndpointFailure(endpoint, 0);
+      lastError = error;
+    }
+  }
+
+  throw lastError || new Error("Upload failed: không tìm thấy endpoint upload khả dụng");
 }
 
 async function uploadImages(ctx, images) {
   const arr = Array.isArray(images) ? images : [];
   const isBase64 = (s = "") => /^data:image\//i.test(s);
   
+  console.log(`\n[uploadImages] === START UPLOAD DEBUG ===`);
   console.log(`[uploadImages] Bắt đầu upload ${arr.length} ảnh - ${new Date().toLocaleTimeString()}`);
   
-  const tasks = arr.map((img, i) => {
-    if (!img) return Promise.resolve("");
-    if (!isBase64(img)) return Promise.resolve(img);
-    return uploadBase64Image(img, `upload-${Date.now()}-${i}.png`, ctx);
+  arr.forEach((img, i) => {
+    const isB64 = isBase64(img);
+    const preview = img ? img.substring(0, 100) : '(empty)';
+    console.log(`   [${i}] ${isB64 ? '📤 BASE64' : '🔗 URL'}: ${preview}...`);
   });
   
-  const results = await Promise.all(tasks);
-  const validResults = results.filter(r => {
+  const results = [];
+  for (let i = 0; i < arr.length; i += 1) {
+    const img = arr[i];
+    if (!img) {
+      console.log(`   [${i}] ⏭️  Skipped (empty)`);
+      results.push("");
+      continue;
+    }
+
+    if (!isBase64(img)) {
+      console.log(`   [${i}] ✅ URL pass-through: ${img.substring(0, 100)}`);
+      results.push(img);
+      continue;
+    }
+
+    console.log(`   [${i}] 📤 Uploading base64 image...`);
+    try {
+      const result = await uploadBase64Image(img, `upload-${Date.now()}-${i}.png`, ctx);
+      console.log(`   [${i}] ✅ Base64 upload result: ${result}`);
+      results.push(result);
+    } catch (err) {
+      console.error(`   [${i}] ❌ Base64 upload error:`, err.message);
+      results.push("");
+    }
+  }
+  
+  console.log(`\n[uploadImages] === RESULTS BEFORE FILTER ===`);
+  results.forEach((r, i) => {
+    console.log(`   [${i}] ${r ? r.substring(0, 100) : '(empty)'}...`);
+  });
+  
+  const validResults = results.filter((r, idx) => {
     // ✅ LỌC HTML KHỎI RESULTS
-    if (!r || typeof r !== 'string') return false;
+    if (!r || typeof r !== 'string') {
+      console.log(`   ❌ [${idx}] Filtered: not string or empty`);
+      return false;
+    }
     if (r.includes('<!') || r.includes('<html') || r.includes('<?')) {
-      console.warn(`⚠️ [uploadImages] LỌC BỎHTML: ${r.substring(0, 50)}...`);
+      console.log(`   ❌ [${idx}] Filtered: is HTML - ${r.substring(0, 50)}`);
       return false;
     }
     // ✅ CHỈ GIỮ URL HỢP LỆ (full URL hoặc relative path)
-    return /^https?:\/\/|^\/|^app_images\//.test(r);
+    const isValid = /^https?:\/\/|^\/|^app_images\//.test(r);
+    if (!isValid) {
+      console.log(`   ❌ [${idx}] Filtered: invalid URL format - ${r.substring(0, 50)}`);
+    } else {
+      console.log(`   ✅ [${idx}] Valid: ${r}`);
+    }
+    return isValid;
   });
+  
+  console.log(`\n[uploadImages] === FINAL ===`);
   console.log(`[uploadImages] Hoàn tất upload ${validResults.length}/${arr.length} ảnh hợp lệ - ${new Date().toLocaleTimeString()}`);
+  console.log(`[uploadImages] === END UPLOAD DEBUG ===\n`);
   
   return validResults;
 }
@@ -2559,19 +2803,59 @@ function buildDetail(ctx, seo, imgs, opts = {}) {
   
   
   // ✅ VALIDATE IMAGES: Lọc bỏ HTML, chỉ giữ URL hợp lệ
-  const validImages = (Array.isArray(imgs) ? imgs : []).filter(img => {
-    if (!img || typeof img !== 'string') return false;
+  console.log(`\n🖼️ [buildDetail] === IMAGE DEBUG START ===`);
+  console.log(`   Input images (imgs param): ${Array.isArray(imgs) ? imgs.length : 'not-array'} items`);
+  if (Array.isArray(imgs) && imgs.length > 0) {
+    console.log(`   First 3 input images:`);
+    imgs.slice(0, 3).forEach((img, i) => {
+      const preview = img?.substring ? img.substring(0, 80) : String(img).substring(0, 80);
+      console.log(`     [${i}] ${preview}...`);
+    });
+  }
+  
+  const validImages = (Array.isArray(imgs) ? imgs : []).filter((img, idx) => {
+    if (!img || typeof img !== 'string') {
+      console.warn(`   ❌ [Filter] [${idx}] Not string or empty`);
+      return false;
+    }
     // Lọc bỏ HTML
     if (img.includes('<!') || img.includes('<html') || img.includes('<?')) {
-      console.warn(`⚠️ [buildDetail] LỌC BỎHTML IMAGE: ${img.substring(0, 50)}...`);
+      console.warn(`   ❌ [Filter] [${idx}] Is HTML: ${img.substring(0, 50)}...`);
       return false;
     }
     // Chỉ giữ URL hợp lệ (full URL, relative path, hoặc data URL)
-    return /^https?:\/\/|^\/|^app_images\/|^data:/.test(img);
+    const isValid = /^https?:\/\/|^\/|^app_images\/|^data:/.test(img);
+    if (!isValid) {
+      console.warn(`   ❌ [Filter] [${idx}] Invalid format: ${img.substring(0, 50)}...`);
+      return false;
+    }
+    console.log(`   ✅ [Filter] [${idx}] VALID: ${img.substring(0, 80)}...`);
+    return true;
   });
+  
+  console.log(`   📊 Result: ${validImages.length}/${Array.isArray(imgs) ? imgs.length : '?'} images passed filter`);
   
   // Ảnh đại diện phải trùng với ảnh đầu tiên trong chi tiết bài viết
   const featuredImage = validImages.length > 0 ? validImages[0] : "";
+  console.log(`   🎬 Featured image: ${featuredImage ? '✅ ' + featuredImage.substring(0, 80) : '❌ NONE'}...`);
+  
+  // ✅ VALIDATE images array trước khi stringify
+  let imagesJsonString = "[]";
+  try {
+    // Ensure validImages is a flat array of strings
+    const flatImages = validImages.filter(img => typeof img === 'string');
+    if (flatImages.length !== validImages.length) {
+      console.warn(`   ⚠️ [buildDetail] Filtered out ${validImages.length - flatImages.length} non-string images`);
+    }
+    imagesJsonString = JSON.stringify(flatImages);
+    console.log(`   ✅ [buildDetail] JSON.stringify successful, length: ${imagesJsonString.length} chars`);
+  } catch (stringifyError) {
+    console.error(`   ❌ [buildDetail] JSON.stringify FAILED:`, stringifyError);
+    console.error(`   Using empty array as fallback`);
+    imagesJsonString = "[]";
+  }
+  
+  console.log(`🖼️ [buildDetail] === IMAGE DEBUG END ===\n`);
   
   // ✅ SERVER DATABASE USES service_type FIELD ONLY
   // service_code is always same as serviceType (no separate project field)
@@ -2613,7 +2897,7 @@ function buildDetail(ctx, seo, imgs, opts = {}) {
     views: 0,
     tags: Array.isArray(tags) ? tags : [serviceType],
     thumbnail: featuredImage,
-    images: JSON.stringify(validImages), // ✅ SỬ DỤNG validImages ĐÃ LỌC HTML
+    images: imagesJsonString, // ✅ SỬ DỤNG STRING ĐÃ VALIDATE
     activeHome: opts.activeHome !== false,
     featured: opts.featured || false,
     priority: opts.priority || 10,
@@ -2686,22 +2970,66 @@ async function upsertDetail(ctx, detail) {
   
   console.log(`[upsertDetail] Đang ${command} bài viết "${detail.title}" với app_id="${finalAppId}" - ${new Date().toLocaleTimeString()}`);
   
-  const result = await ctx.helperApi.updateTableData({
-    app_id: finalAppId,
-    obj_name: "web_service_detail",
-    command,
-    obj_update: objUpdate,
-    pk_fields: ["slug", "domain", "status"]
-  });
+  // ✅ Validate objUpdate trước khi gửi
+  console.log(`[upsertDetail] === OBJECT UPDATE DEBUG ===`);
+  console.log(`   Keys count: ${Object.keys(objUpdate).length}`);
+  console.log(`   Has images: ${!!objUpdate.images}`);
+  console.log(`   Images type: ${typeof objUpdate.images}`);
+  console.log(`   Images length: ${objUpdate.images?.length || 0} chars`);
+  if (objUpdate.images) {
+    try {
+      const parsed = JSON.parse(objUpdate.images);
+      console.log(`   ✅ Images is valid JSON array with ${parsed.length} items`);
+    } catch (e) {
+      console.error(`   ❌ Images is NOT valid JSON: ${e.message}`);
+      console.error(`   Images value: ${objUpdate.images?.substring(0, 200)}`);
+    }
+  }
+  console.log(`   Has content: ${!!objUpdate.content}`);
+  console.log(`   Content length: ${objUpdate.content?.length || 0} chars`);
+  console.log(`[upsertDetail] === END DEBUG ===`);
   
-  console.log(`[upsertDetail] ${command} thành công - ${new Date().toLocaleTimeString()}`);
-  
-  // ✅ Lưu detail vào window.cparams để có thể lấy URL sau này
-  if (!window.cparams) window.cparams = {};
-  window.cparams.lastDetail = detail;
-  console.log(`[upsertDetail] Đã lưu detail vào window.cparams.lastDetail`);
-  
-  return result;
+  try {
+    const result = await ctx.helperApi.updateTableData({
+      app_id: finalAppId,
+      obj_name: "web_service_detail",
+      command,
+      obj_update: objUpdate,
+      pk_fields: ["slug", "domain", "status"]
+    });
+    
+    console.log(`[upsertDetail] ✅ ${command} thành công - ${new Date().toLocaleTimeString()}`);
+    
+    // ✅ Lưu detail vào window.cparams để có thể lấy URL sau này
+    if (!window.cparams) window.cparams = {};
+    window.cparams.lastDetail = detail;
+    console.log(`[upsertDetail] Đã lưu detail vào window.cparams.lastDetail`);
+    
+    return result;
+  } catch (apiError) {
+    console.error(`❌ [upsertDetail] API updateTableData FAILED:`, apiError);
+    console.error(`   Command: ${command}`);
+    console.error(`   Table: web_service_detail`);
+    console.error(`   App ID: ${finalAppId}`);
+    console.error(`   PK fields: ["slug", "domain", "status"]`);
+    console.error(`   Object update keys:`, Object.keys(objUpdate));
+    console.error(`   Detail snapshot:`, {
+      slug: detail.slug,
+      domain: detail.domain,
+      title: detail.title?.substring(0, 50),
+      images_field_type: typeof objUpdate.images,
+      images_length: objUpdate.images?.length || 0,
+      content_length: objUpdate.content?.length || 0
+    });
+    
+    // Kiểm tra xem có phải lỗi do images field không?
+    if (apiError.message?.includes('images') || apiError.message?.includes('JSON')) {
+      console.error(`   ⚠️ CÓ THỂ LỖI DO IMAGES FIELD!`);
+      console.error(`   Images field value:`, objUpdate.images?.substring(0, 200));
+    }
+    
+    throw apiError;
+  }
 }
 
 // ===== HELPER: Get app_id từ DOMAIN_OPTIONS =====
@@ -2795,6 +3123,11 @@ function parseSeoJsonString(seoString) {
 }
 
 async function processContent(item, opts = {}) {
+  const backendGuardMsg = getBackendGuardMessage();
+  if (backendGuardMsg) {
+    throw new Error(backendGuardMsg);
+  }
+
   // 1️⃣ Lấy config ĐÚNG theo config_id (quan trọng để không nhầm fanpage!)
   let latestConfig = null;
   
@@ -2946,7 +3279,12 @@ async function processContent(item, opts = {}) {
     throw new Error(`Nội dung trống - không tìm thấy trường text/content/message/body trong tin nhắn`);
   }
   
-  const images = extractImagesFromMessage(item);
+  const essentials = getMessageEssentials(item);
+  const images = essentials.images;
+
+  if (!essentials.isEligible) {
+    throw new Error(`Tin nhắn không đủ điều kiện (cần đủ nội dung + hình ảnh): hasContent=${essentials.hasText}, hasImages=${essentials.hasImages}`);
+  }
   
   console.log(`[processContent] Bắt đầu xử lý - Domain: ${ctx.domain}, Service: ${industry}, Project: ${ctx.project}`);
   console.log(`[processContent] Bắt đầu xử lý - ${new Date().toLocaleTimeString()}`);
@@ -2963,17 +3301,60 @@ async function processContent(item, opts = {}) {
     console.log(`   Sample uploaded paths: ${uploadedImages.slice(0, 2).join(', ')}${uploadedImages.length > 2 ? ` (+${uploadedImages.length - 2} more)` : ''}`);
   } catch (e) {
     console.error(`❌ [processContent] Lỗi upload ảnh:`, e.message);
-    canhbao(`⚠️ Không upload được ảnh, tiếp tục với nội dung không ảnh`);
+    canhbao(`⚠️ Không upload được ảnh, bỏ qua tin nhắn này`);
     uploadedImages = [];
   }
+
+  if (!uploadedImages || uploadedImages.length === 0) {
+    throw new Error(`Không upload được ảnh hợp lệ, bỏ qua tin nhắn để đảm bảo đủ dữ liệu cho web/fanpage`);
+  }
   console.log(`[processContent] Upload ảnh xong - ${uploadedImages.length} ảnh - ${new Date().toLocaleTimeString()}`);
+  
+  // ✅ CONVERT RELATIVE PATHS TO FULL URLs for Facebook
+  // Facebook Graph API requires absolute URLs for images
+  console.log(`\n🔗 [URL Conversion] === START CONVERSION DEBUG ===`);
+  console.log(`   Input images (uploadedImages): ${uploadedImages.length} items`);
+  uploadedImages.slice(0, 5).forEach((img, i) => {
+    console.log(`     [${i}] ${img}`);
+  });
+  
+  const fullUrlImages = uploadedImages.map((img, idx) => {
+    if (!img) {
+      console.log(`   [${idx}] ⏭️  Empty, skipping`);
+      return '';
+    }
+    // Already full URL
+    if (img.startsWith('http://') || img.startsWith('https://')) {
+      console.log(`   [${idx}] ✅ Already full URL: ${img}`);
+      return img;
+    }
+    // Data URL - keep as is (will be uploaded by backend)
+    if (img.startsWith('data:')) {
+      console.log(`   [${idx}] ✅ Data URL, keeping: ${img.substring(0, 80)}...`);
+      return img;
+    }
+    // Relative path - convert to absolute
+    const domainList = ctx.domain.split(',').map(d => d.trim()).filter(d => d && !d.includes('localhost'));
+    const primaryDomain = ctx.primary_domain || (domainList.length > 0 ? domainList[0] : ctx.domain.split(',')[0].trim());
+    const absoluteUrl = `https://www.${primaryDomain}${img.startsWith('/') ? img : '/' + img}`;
+    console.log(`   [${idx}] 🔗 Converted: ${img} → ${absoluteUrl}`);
+    return absoluteUrl;
+  }).filter(img => img && img.trim());
+  
+  console.log(`\n   📊 Result: ${fullUrlImages.length}/${uploadedImages.length} images have full URLs`);
+  fullUrlImages.slice(0, 3).forEach((url, i) => {
+    console.log(`     [${i}] ${url}`);
+  });
+  console.log(`🔗 [URL Conversion] === END CONVERSION DEBUG ===\n`);
+  
+  console.log(`✅ [processContent] Converted ${fullUrlImages.length} images to full URLs for Facebook`);
   
   thongbao("🤖 Đang tạo nội dung (Chống Chất AI)...");
   const domainKey = opts.domainKey || "lmkt"; // For LMKT
   const articleHistory = getArticleHistory(domainKey, industry);
   
   // Lấy ĐÚNG PATH từ backend (lọc bỏ base64 nếu có), chỉ lấy 2-3 hình để bài cân đối
-  const imagesToPrompt = uploadedImages
+  const imagesToPrompt = fullUrlImages
     .filter(img => img && !img.startsWith('data:')) // Chỉ lấy path, bỏ base64
     .slice(0, 3);
   
@@ -3027,6 +3408,10 @@ async function processContent(item, opts = {}) {
     console.log(`[DEBUG] result.result:`, result?.result);
     console.log(`[DEBUG] result.data:`, result?.data);
   } catch (aiError) {
+    const aiStatus = extractHttpStatusFromError(aiError);
+    if ([401, 403, 404, 429, 500, 502, 503, 504].includes(aiStatus)) {
+      activateBackendGuard(`AI API lỗi ${aiStatus}`, 2 * 60 * 1000);
+    }
     console.error(`❌ [processContent] Lỗi gọi AI:`, aiError.message);
     throw new Error(`Lỗi gọi AI: ${aiError.message}`);
   }
@@ -3067,196 +3452,271 @@ async function processContent(item, opts = {}) {
   if (!ctx || !ctx.helperApi) {
     throw new Error(`❌ [CRITICAL] ctx.helperApi không tồn tại - không thể lưu database`);
   }
-  const detail = buildDetail(ctx, seo, uploadedImages, { 
+  const detail = buildDetail(ctx, seo, fullUrlImages, { 
     author: opts.author,
     avatar: opts.avatar,
     activeHome: opts.activeHome,
     featured: opts.featured,
     priority: opts.priority
   });
-  console.log(`[processContent] Built detail object - title: ${detail.title}, slug: ${detail.slug}`);
+  console.log(`[processContent] Built detail object - title: ${detail.title}, slug: ${detail.slug}, images: ${fullUrlImages.length}`);
   
   thongbao("💾 Đang lưu dữ liệu...");
   console.log(`[processContent] Lưu DB - ${new Date().toLocaleTimeString()}`);
-  await upsertDetail(ctx, detail);
-  console.log(`[processContent] Lưu DB xong - ${new Date().toLocaleTimeString()}`);
+  
+  try {
+    await upsertDetail(ctx, detail);
+    console.log(`[processContent] ✅ Lưu DB thành công - ${new Date().toLocaleTimeString()}`);
+  } catch (dbError) {
+    const dbStatus = extractHttpStatusFromError(dbError);
+    if ([401, 403, 404, 429, 500, 502, 503, 504].includes(dbStatus)) {
+      activateBackendGuard(`Database API lỗi ${dbStatus}`, 90 * 1000);
+    }
+    console.error(`❌ [processContent] LỖI KHI LƯU DATABASE:`, dbError);
+    console.error(`   Error message: ${dbError.message}`);
+    console.error(`   Error stack:`, dbError.stack);
+    console.error(`   Detail object snapshot:`, {
+      title: detail.title,
+      slug: detail.slug,
+      domain: detail.domain,
+      service_type: detail.service_type,
+      images_count: detail.images ? JSON.parse(detail.images).length : 0,
+      content_length: detail.content ? detail.content.length : 0
+    });
+    throw new Error(`Lỗi lưu database: ${dbError.message}`);
+  }
   
   saveArticleToHistory(domainKey, industry, detail.title, detail.slug);
   
-  // 🎯 TỰ ĐỘNG POST LÊN FACEBOOK NẾU CÓ FANPAGE
-  if (ctx.fanpage_id) {
+  // 🎯 TỰ ĐỘNG POST LÊN TẤT CẢ FACEBOOK FANPAGES TRONG CONFIG
+  // ✅ FIX: Lấy danh sách fanpages từ config (zalo_fanpages array)
+  let fanpagesToPost = [];
+  
+  console.log(`
+📱 [Facebook Config] === CHECKING FANPAGES CONFIG ===`);
+  console.log(`   latestConfig exists: ${!!latestConfig}`);
+  console.log(`   latestConfig.zalo_fanpages exists: ${!!latestConfig?.zalo_fanpages}`);
+  console.log(`   latestConfig.zalo_fanpages isArray: ${Array.isArray(latestConfig?.zalo_fanpages)}`);
+  console.log(`   latestConfig.zalo_fanpages length: ${latestConfig?.zalo_fanpages?.length || 0}`);
+  
+  if (latestConfig && Array.isArray(latestConfig.zalo_fanpages) && latestConfig.zalo_fanpages.length > 0) {
+    // ✅ Config có nhiều fanpages - POST LÊN TẤT CẢ
+    fanpagesToPost = latestConfig.zalo_fanpages;
+    console.log(`✅ [Facebook] Config có ${fanpagesToPost.length} fanpages:`);
+    fanpagesToPost.forEach((fp, idx) => {
+      const hasToken = !!(fp.access_token && fp.access_token.length > 0);
+      console.log(`   [${idx}] Name: "${fp.name}", ID: ${fp.id}, Has Token: ${hasToken ? '✅' : '❌ MISSING'} (${fp.access_token?.length || 0} chars)`);
+    });
+  } else if (ctx.fanpage_id) {
+    // ✅ Fallback: Dùng fanpage đơn lẻ từ ctx
+    fanpagesToPost = [{
+      id: ctx.fanpage_id,
+      access_token: ctx.fanpage_token || facebookState.selectedPageToken,
+      name: ctx.fanpage_name || facebookState.selectedPageName || "Unknown"
+    }];
+    console.log(`📱 [Facebook] Fallback: Dùng 1 fanpage từ ctx: ${fanpagesToPost[0].name}`);
+  } else {
+    console.warn(`⚠️ [Facebook] KHÔNG CÓ FANPAGE NÀO TRONG CONFIG!`);
+  }
+  console.log(`📱 [Facebook Config] === END CONFIG CHECK ===\n`);
+  
+  if (fanpagesToPost.length > 0) {
     try {
-      thongbao("📱 Đang post lên Facebook...");
-      console.log(`[processContent] Đang post lên fanpage: ${ctx.fanpage_id}`);
+      thongbao(`📱 Đang post lên ${fanpagesToPost.length} Facebook fanpage(s)...`);
+      console.log(`[processContent] Chuẩn bị post lên ${fanpagesToPost.length} fanpage(s)`);
       
-      // ✅ PRIORITY: Lấy token và name từ ctx (đã enrich từ config)
-      const fanpageToken = ctx.fanpage_token || facebookState.selectedPageToken;
-      const fanpageName = ctx.fanpage_name || facebookState.selectedPageName || "Unknown";
-      
-      console.log(`🔑 [Facebook Token Source] ${ctx.fanpage_token ? '✅ From Config' : '⚠️ From facebookState'}`);
-      console.log(`📛 [Facebook Page Name] ${fanpageName} (from ${ctx.fanpage_name ? 'config' : 'facebookState'})`);
-      
-      if (fanpageToken) {
-        // ✅ VALIDATE TOKEN trước post (nếu cần)
-        console.log(`[processContent] Kiểm tra xem token có cần validate không...`);
-        if (facebookState._needsValidation) {
-          console.log(`[processContent] Token cần validate, đang validate...`);
-          const isValid = await validateSavedTokenIfNeeded();
-          if (!isValid) {
-            throw new Error('Token không hợp lệ - vui lòng nhập lại');
-          }
+      // ✅ VALIDATE TOKEN trước post (nếu cần) - chỉ validate 1 lần
+      if (facebookState._needsValidation) {
+        console.log(`[processContent] Token cần validate, đang validate...`);
+        const isValid = await validateSavedTokenIfNeeded();
+        if (!isValid) {
+          throw new Error('Token không hợp lệ - vui lòng nhập lại');
         }
-        
-        // ✅ Lấy domain NGẪU NHIÊN (bỏ localhost) - random để phân tán traffic/SEO
-        const domainList = ctx.domain.split(',').map(d => d.trim()).filter(d => d && !d.includes('localhost'));
-        const primaryDomain = ctx.primary_domain // Ưu tiên field primary_domain nếu có
-          || (domainList.length > 0 ? domainList[Math.floor(Math.random() * domainList.length)] : ctx.domain.split(',')[0].trim());
-        const protocol = "https://";
-        
-        console.log(`🌐 [Domain Selection] Config domains: ${ctx.domain}`);
-        console.log(`🌐 [Domain Selection] Primary domain: ${primaryDomain}${ctx.primary_domain ? ' (from primary_domain field)' : ' (random from list)'}`);
-        
-        // Tạo URL bài viết theo format đúng - sử dụng service_code từ detail
-        // service_code đã được set = project slug (hoặc service_type nếu không có project)
-        let articleUrl;
-        console.log(`🔍 [URL Debug] detail.service_code="${detail.service_code}", detail.service_type="${detail.service_type}"`);
-        articleUrl = `${protocol}www.${primaryDomain}/${detail.service_code}/${detail.slug}`;
-        
-        console.log(`📱 [Facebook] Article URL: ${articleUrl}`);
-        
-        // ✅ GỌI AI SINH FACEBOOK POST CONTENT
-        // AI sẽ tạo nội dung hấp dẫn từ góc độ độc lập (không copy web article)
-        console.log(`📤 [Facebook] Gọi AI tạo Facebook post content...`);
-        thongbao("🤖 Đang AI tạo nội dung Facebook...");
-        
-        let facebookContent = null;
+      }
+      
+      // ✅ Lấy domain NGẪU NHIÊN (bỏ localhost) - random để phân tán traffic/SEO
+      const domainList = ctx.domain.split(',').map(d => d.trim()).filter(d => d && !d.includes('localhost'));
+      const primaryDomain = ctx.primary_domain // Ưu tiên field primary_domain nếu có
+        || (domainList.length > 0 ? domainList[Math.floor(Math.random() * domainList.length)] : ctx.domain.split(',')[0].trim());
+      const protocol = "https://";
+      
+      console.log(`🌐 [Domain Selection] Config domains: ${ctx.domain}`);
+      console.log(`🌐 [Domain Selection] Primary domain: ${primaryDomain}${ctx.primary_domain ? ' (from primary_domain field)' : ' (random from list)'}`);
+      
+      // Tạo URL bài viết theo format đúng - sử dụng service_code từ detail
+      // service_code đã được set = project slug (hoặc service_type nếu không có project)
+      let articleUrl;
+      console.log(`🔍 [URL Debug] detail.service_code="${detail.service_code}", detail.service_type="${detail.service_type}"`);
+      articleUrl = `${protocol}www.${primaryDomain}/${detail.service_code}/${detail.slug}`;
+      
+      console.log(`📱 [Facebook] Article URL: ${articleUrl}`);
+      
+      // ✅ MỖI FANPAGE SẼ SINH NỘI DUNG AI RIÊNG (khác nhau) nhưng cùng link web
+      const effectiveIndustry = ctx.service_type || detail.service_type || 'bat-dong-san';
+      const industryPersonaMap = {
+        'bat-dong-san': ['investor', 'homebuyer', 'business_owner'],
+        'phan-mem': ['business_owner', 'tech_savvy', 'startup'],
+        'dich-vu': ['business_owner', 'professional', 'startup'],
+        'booking-online': ['service_user', 'busy_professional', 'health_conscious'],
+        'cho-thue-xe': ['traveler', 'business_owner', 'family'],
+        'lam-dep-my-pham': ['beauty_lover', 'skincare_enthusiast', 'wellness_seeker']
+      };
+      const availablePersonas = industryPersonaMap[effectiveIndustry] || ['investor', 'business_owner'];
+
+      const buildFacebookContentForFanpage = async (fanpageName, index) => {
+        let pageContent = null;
+        const personaFromPool = availablePersonas[index % availablePersonas.length];
+        const effectivePersona = opts.personaKey || personaFromPool;
+
+        console.log(`📤 [Facebook AI] Fanpage="${fanpageName}" - persona="${effectivePersona}"`);
         try {
-          // ✅ PASS INDUSTRY CONTEXT TO AI
-          // Industrial mapping helps AI understand domain-specific language & engagement
-          const effectiveIndustry = ctx.service_type || detail.service_type || 'bat-dong-san';
-          const effectivePersona = opts.personaKey || 'investor';
-          
-          console.log(`🎯 [Facebook AI] Industry: "${effectiveIndustry}", Persona: "${effectivePersona}"`);
-          
           const fbPostData = await generateFacebookPostContent(
             {
               title: detail.title,
-              description: detail.description || detail.excerpt,
+              description: `${detail.description || detail.excerpt || ''}\n[PAGE:${fanpageName}|${index + 1}]`,
               content: detail.content || uploadedImages.join(' '),
               keywords: detail.keywords,
-              industry: effectiveIndustry, // ✅ SEND CORRECT INDUSTRY
+              industry: effectiveIndustry,
               personaKey: effectivePersona
             },
             ctx.helperAi,
             { domain: ctx.domain }
           );
-          
+
           if (fbPostData) {
-            // AI generated multiple hooks, lấy main post content
-            facebookContent = fbPostData.facebook_post || '';
-            
-            console.log(`📝 [Facebook AI] Generated post (${facebookContent.length} chars)`);
-            console.log(`   Industry detected: ${fbPostData.industry}`);
-            console.log(`   Persona used: ${fbPostData.persona}`);
-            
-            // Thêm CTA và hashtags
-            if (facebookContent) {
-              const cta = fbPostData.cta || 'Xem chi tiết đầy đủ';
-              const seoHashtags = generateSeoHashtags(
-                detail.title,
-                detail.description || '',
-                detail.tags || [],
-                6,
-                effectiveIndustry // ✅ PASS INDUSTRY FOR APPROPRIATE HASHTAGS
-              );
-              
-              facebookContent = [
-                facebookContent, // AI-generated post
-                '',
-                `👉 ${cta}: ${articleUrl}`,
-                '',
-                `📌 #${seoHashtags.slice(0, 4).join(' #')}`, // SEO hashtags
-                '',
-                `📍 ${primaryDomain}`
-              ]
-                .filter(line => line !== '')
-                .join('\n');
-            }
-            
-            console.log(`✅ [Facebook] AI sinh nội dung thành công`);
-            console.log(`📝 Post preview:\n${facebookContent.substring(0, 200)}...`);
-          } else {
-            console.warn(`⚠️ [Facebook] AI sinh content thất bại, dùng fallback`);
-            facebookContent = null;
+            pageContent = fbPostData.facebook_post || '';
+            const seoHashtags = generateSeoHashtags(
+              detail.title,
+              detail.description || '',
+              detail.tags || [],
+              6,
+              effectiveIndustry
+            );
+
+            const postFormats = [
+              () => [pageContent, '', `👉 ${fbPostData.cta || 'Xem chi tiết'}: ${articleUrl}`, `📌 #${seoHashtags.slice(0, 4).join(' #')}`, `📍 ${primaryDomain}`],
+              () => [pageContent, '', fbPostData.cta || 'Xem chi tiết đầy đủ', articleUrl, `📌 #${seoHashtags.slice(0, 4).join(' #')}`],
+              () => [pageContent, `📌 #${seoHashtags.slice(0, 2).join(' #')}`, '', fbPostData.cta || 'Xem chi tiết tại đây', articleUrl, `📌 #${seoHashtags.slice(2, 4).join(' #')}`],
+              () => [pageContent, '', `💬 ${fbPostData.cta || 'Bình luận đề xuất của bạn dưới bài'}`, `🔗 ${articleUrl}`, `📌 #${seoHashtags.slice(0, 4).join(' #')}`],
+              () => [pageContent, '', `👉 ${articleUrl}`, `📌 #${seoHashtags.slice(0, 5).join(' #')}`],
+              () => [pageContent, '', `↪️ ${fbPostData.cta || 'Đừng bỏ lỡ'}`, articleUrl, '', `📌 #${seoHashtags.slice(0, 4).join(' #')}`]
+            ];
+
+            const randomFormat = postFormats[Math.floor(Math.random() * postFormats.length)];
+            pageContent = randomFormat().filter(line => line !== '').join('\n');
+            console.log(`✅ [Facebook AI] Fanpage="${fanpageName}" generated (${pageContent.length} chars)`);
           }
         } catch (e) {
-          console.warn(`⚠️ [Facebook] Error generating post: ${e.message}`);
-          facebookContent = null;
+          console.warn(`⚠️ [Facebook AI] Fanpage="${fanpageName}" failed: ${e.message}`);
         }
-        
-        // Fallback: Nếu AI không sinh được, dùng nội dung chuẩn bị sẵn
-        if (!facebookContent) {
-          console.log(`📋 [Facebook] Dùng fallback content template`);
+
+        if (!pageContent) {
           const seoHashtags = generateSeoHashtags(
             detail.title || '',
             detail.description || detail.excerpt || '',
             detail.tags || [],
             6,
-            effectiveIndustry // ✅ PASS INDUSTRY FOR APPROPRIATE HASHTAGS
+            effectiveIndustry
           );
-          
-          facebookContent = [
-            '🎯 ' + detail.title,
-            '',
-            detail.description || detail.excerpt || detail.content?.substring(0, 500) || '',
-            '',
-            '👉 Xem chi tiết:',
-            articleUrl,
-            '',
-            `📌 #${seoHashtags.slice(0, 4).join(' #')}`,
-            '',
-            `📍 ${primaryDomain}`
-          ]
-            .filter(line => line !== '')
-            .join('\n');
+          const fallbackFormats = [
+            () => [detail.description || detail.excerpt || detail.content?.substring(0, 300) || '', '', `👉 Xem chi tiết: ${articleUrl}`, `📌 #${seoHashtags.slice(0, 4).join(' #')}`],
+            () => [`Bạn có biết? ${detail.title}?`, '', detail.description || detail.excerpt || '', '', articleUrl, `📌 #${seoHashtags.slice(0, 4).join(' #')}`],
+            () => [detail.title, '', detail.description || detail.excerpt || '', articleUrl]
+          ];
+          const randomFallback = fallbackFormats[Math.floor(Math.random() * fallbackFormats.length)];
+          pageContent = randomFallback().filter(line => line !== '').join('\n');
         }
-        
-        console.log(`📱 [Facebook] Final message length: ${facebookContent.length} chars`);
-        
-        // Post lên facebook - SỬ DỤNG TẤT CẢ IMAGES ĐỂ TẠO ALBUM
-        // Backend sẽ tự động tạo unpublished photo album và post lên feed
-        console.log(`📸 [Facebook] Posting ${uploadedImages.length} images as album...`);
-        const fbResult = await postToFacebookPageWithImages(
-          ctx.fanpage_id,
-          fanpageToken,
-          facebookContent,
-          uploadedImages, // ✅ POST ALL IMAGES - Backend handles album creation
-          articleUrl,
-          seft || {}
-        );
-        
-        if (fbResult?.success) {
-          // ✅ CRITICAL: Record posted Zalo message SAU KHI post FB thành công (tránh duplicate)
-          if (opts.groupName && opts.config_id && opts.isZaloMessage) {
-            console.log(`💾 [processContent] Recording posted Zalo message: group=${opts.groupName}, config=${opts.config_id}`);
-            recordPostedZaloMessage(item, opts.groupName, opts.config_id);
-          }
-          
-          // ✅ Set flag để posting worker biết bài viết đã hoàn tất
-          window.__lastPostCompleted = true;
-          
-          thongbao(`✅ Đã post lên ${fanpageName}!`);
-          console.log(`✅ [Facebook] Post thành công lên ${fanpageName}, post_id=${fbResult.post_id}`);
-        } else {
-          console.warn(`⚠️ [Facebook] Post lỗi: ${fbResult?.message}`);
-        }
+
+        return pageContent;
+      };
+      console.log(`\n🖼️ [Facebook Images] === IMAGE DEBUG BEFORE POST ===`);
+      console.log(`   Total images (fullUrlImages): ${fullUrlImages.length}`);
+      if (fullUrlImages.length > 0) {
+        console.log(`   Full image list:`);
+        fullUrlImages.forEach((img, idx) => {
+          const isValid = img && typeof img === 'string' && (img.startsWith('http://') || img.startsWith('https://') || img.startsWith('data:'));
+          const prefix = img && typeof img === 'string' ? img.substring(0, 10) : 'INVALID';
+          console.log(`     [${idx}] ${isValid ? '✅ VALID' : '❌ INVALID'} Type: ${typeof img}, Starts: "${prefix}"${img && img.length > 10 ? `...(${img.length} chars)` : ''}`);
+        });
       } else {
-        console.warn("⚠️ [Facebook] Không có fanpage token để post");
+        console.error(`   ❌ NO IMAGES - Facebook post sẽ không có hình!`);
+        console.error(`   ❌ BUG: fullUrlImages array EMPTY - kiểm tra lại uploadedImages hoặc URL conversion`);
+      }
+      console.log(`🖼️ [Facebook Images] === END IMAGE DEBUG ===\n`);
+      
+      // ✅ VALIDATE và LỌC images một lần cuối trước khi post
+      console.log(`🔍 [Image Filter] Starting validation...`);
+      const validFbImages = fullUrlImages.filter((img, idx) => {
+        if (!img) {
+          console.log(`  [${idx}] ❌ REJECT: null/undefined`);
+          return false;
+        }
+        if (typeof img !== 'string') {
+          console.log(`  [${idx}] ❌ REJECT: Not string (type: ${typeof img})`);
+          return false;
+        }
+        const isHttp = img.startsWith('http://') || img.startsWith('https://');
+        const isData = img.startsWith('data:');
+        if (!isHttp && !isData) {
+          console.log(`  [${idx}] ❌ REJECT: Invalid protocol (starts: "${img.substring(0, 20)}")`);
+          return false;
+        }
+        console.log(`  [${idx}] ✅ ACCEPT: ${isHttp ? 'HTTP(S)' : 'DATA'} URL`);
+        return true;
+      });
+      
+      console.log(`\n📊 [Image Filter] Result: ${validFbImages.length}/${fullUrlImages.length} images passed validation`);
+      
+      if (validFbImages.length !== fullUrlImages.length) {
+        console.warn(`⚠️ [Facebook] Lọc bỏ ${fullUrlImages.length - validFbImages.length} hình không hợp lệ`);
+      }
+      
+      console.log(`✅ [Facebook] Sẽ post ${validFbImages.length} hình hợp lệ`);
+      
+      // ✅ DÙNG CHUNG NHÁNH CHUẨN postToSelectedFanpages (worker cũ)
+      // đảm bảo auto-flow và worker-flow đồng nhất: nội dung + ảnh + tuần tự từng fanpage
+      const postSummary = await postToSelectedFanpages(
+        [{
+          sender: item?.sender || 'Zalo',
+          content: extractMessageText(item) || detail.title || '',
+          images: validFbImages
+        }],
+        articleUrl,
+        fanpagesToPost,
+        {
+          images: validFbImages,
+          helperAi: ctx.helperAi,
+          seft: seft || {},
+          industry: effectiveIndustry,
+          skipRecord: true
+        }
+      );
+
+      const successCount = Number(postSummary?.successCount || 0);
+      const failCount = Number(postSummary?.failCount || 0);
+
+      // ✅ CRITICAL: Record posted Zalo message SAU KHI post FB thành công (tránh duplicate)
+      if (successCount > 0) {
+        if (opts.groupName && opts.config_id && opts.isZaloMessage) {
+          console.log(`💾 [processContent] Recording posted Zalo message: group=${opts.groupName}, config=${opts.config_id}`);
+          recordPostedZaloMessage(item, opts.groupName, opts.config_id);
+        }
+        
+        // ✅ Set flag để posting worker biết bài viết đã hoàn tất
+        window.__lastPostCompleted = true;
+        
+        thongbao(`✅ Hoàn tất: ${successCount}/${fanpagesToPost.length} fanpage(s) thành công${failCount > 0 ? `, ${failCount} lỗi` : ''}!`);
+        console.log(`\n🎉 [Facebook] Kết quả: ${successCount}/${fanpagesToPost.length} fanpage(s) thành công, ${failCount} lỗi`);
+      } else {
+        console.warn(`⚠️ [Facebook] Không post được fanpage nào`);
+        thongbao(`⚠️ Không post được fanpage nào`);
       }
     } catch (fbError) {
       console.error(`❌ [Facebook] Lỗi post:`, fbError.message);
       // Không throw error, vì post FB là optional
     }
+  } else {
+    console.log(`ℹ️ [Facebook] Không có fanpage nào để post`);
   }
   
   console.log(`[processContent] Hoàn tất - ${new Date().toLocaleTimeString()}`);
@@ -3361,6 +3821,13 @@ async function runMessages(messages, configIdOverride = null) {
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
     try {
+      const essentials = getMessageEssentials(msg);
+      if (!essentials.isEligible) {
+        console.warn(`⚠️ [runMessages] Skip message ${i + 1}/${messages.length}: hasText=${essentials.hasText}, hasImages=${essentials.hasImages}`);
+        fail++;
+        continue;
+      }
+
       thongbao(`🔄 Đang xử lý tin ${i + 1}/${messages.length}...`);
       
       // ✅ Get app_id from DOMAIN_OPTIONS lookup (exact match)
@@ -3843,7 +4310,7 @@ async function ensureUI() {
       
       const arr = Array.isArray(items) ? items : [items];
       
-      // ✅ NORMALIZE messages: ensure all have required fields
+      // ✅ NORMALIZE messages: preserve original structure (attachments/imageUrls...)
       const normalizedArr = arr.map((item, idx) => {
         if (!item || typeof item !== 'object') {
           console.warn(`[parseMessages] Item ${idx} is not an object:`, typeof item);
@@ -3851,10 +4318,8 @@ async function ensureUI() {
         }
         return {
           ...item,
-          // Ensure content field is a string
+          // Ensure content fallback is a string
           content: (item.content || item.text || item.message || item.body || '').toString().trim(),
-          // Ensure images field is an array
-          images: Array.isArray(item.images) ? item.images : (item.images ? [item.images] : []),
           // Add sender if missing
           sender: item.sender || item.author || item.name || 'Unknown',
           // Add date if missing
@@ -3866,8 +4331,9 @@ async function ensureUI() {
       
       // ✅ LỌC CHỈ LẤY TIN CÓ HÌNH ẢNH VÀ CONTENT
       const arrWithImages = normalizedArr.filter(item => {
-        const hasImages = item.images && item.images.length > 0;
-        const hasContent = item.content && item.content.length > 0;
+        const essentials = getMessageEssentials(item);
+        const hasImages = essentials.hasImages;
+        const hasContent = essentials.hasText;
         
         if (!hasImages) {
           console.warn(`⚠️ Bỏ qua tin không có hình:`, item.content?.substring(0, 50) || 'No content');
@@ -4981,6 +5447,7 @@ function saveGroupState(state) {
  * Tạo prompt để AI sinh facebook post content từ bài viết web
  * AI sẽ tạo nhiều góc độ khác nhau, tránh trùng lặp, hấp dẫn đúng đối tượng
  * SUPPORT ĐA DẠNG LĨNH VỰC (real estate, software, service, etc.)
+ * ✅ ENHANCED với CREATIVE RANDOMIZATION để tránh nội dung rập khuôn
  */
 function createFacebookPostPrompt(webArticle = {}, targetAudience = '', opts = {}) {
   const {
@@ -4991,6 +5458,52 @@ function createFacebookPostPrompt(webArticle = {}, targetAudience = '', opts = {
     industry = 'bat-dong-san',
     personaKey = 'investor'
   } = webArticle;
+  
+  // ✅ CREATIVE ANGLES - Random góc độ để tạo đa dạng
+  const creativeAngles = [
+    'Kể chuyện từ trải nghiệm thực tế',
+    'Đặt câu hỏi thu hút suy nghĩ',
+    'So sánh trước/sau hoặc có/không',
+    'Chia sẻ insight độc quyền',
+    'Case study ngắn gọn',
+    'Thống kê hoặc con số gây tò mò',
+    'Đảo ngược quan điểm phổ biến',
+    'Kết nối với xu hướng hiện tại',
+    'Giải quyết pain point cụ thể',
+    'Tạo FOMO (Fear of Missing Out)'
+  ];
+  
+  const randomAngle = creativeAngles[Math.floor(Math.random() * creativeAngles.length)];
+  
+  // ✅ WRITING STYLES - Đa dạng phong cách
+  const writingStyles = [
+    'Chuyên nghiệp nhưng gần gũi',
+    'Nhiệt huyết và truyền cảm hứng',
+    'Thông minh và sắc sảo',
+    'Thẳng thắn và minh bạch',
+    'Sáng tạo và độc đáo',
+    'Đơn giản và dễ hiểu',
+    'Tự nhiên như trò chuyện'
+  ];
+  
+  const randomStyle = writingStyles[Math.floor(Math.random() * writingStyles.length)];
+  
+  // ✅ EMOTIONAL HOOKS - Random cảm xúc để kết nối
+  const emotionalHooks = [
+    'Tò mò và khám phá',
+    'Tự hào và khẳng định',
+    'An tâm và tin tưởng',
+    'Hào hứng và háo hức',
+    'Thông minh và sáng suốt',
+    'Thuận tiện và tiết kiệm',
+    'Thành công và đẳng cấp'
+  ];
+  
+  const randomEmotion = emotionalHooks[Math.floor(Math.random() * emotionalHooks.length)];
+  
+  // ✅ UNIQUE SEED để tránh cache hit
+  const uniqueSeed = `UNIQUE_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  const creativityBoost = Math.floor(Math.random() * 1000); // Random number để force AI khác biệt
   
   // ✅ INDUSTRY CONTEXT - 6 lĩnh vực chính của hệ thống
   const industryContextMap = {
@@ -5082,6 +5595,9 @@ function createFacebookPostPrompt(webArticle = {}, targetAudience = '', opts = {
   return `
 ========== FACEBOOK POST GENERATION (FROM WEB ARTICLE) ==========
 🎯 LĨNH VỰC: ${industryCtx.name.toUpperCase()}
+🎨 GÓC ĐỘ SÁNG TẠO: ${randomAngle}
+✍️ PHONG CÁCH: ${randomStyle}
+💫 CẢM XÚC MỤC TIÊU: ${randomEmotion}
 
 [CONTEXT - Bài viết web đã được viết]
 Tiêu đề web: ${title}
@@ -5095,47 +5611,100 @@ Lĩnh vực: ${industryCtx.name}
 👥 Đối tượng mục tiêu: ${industryCtx.audience}
 💡 Mẹo engagement: ${industryCtx.engagement_tips}
 
-[NHIỆM VỤ]
-Hãy tạo FACEBOOK POST độc đáo dựa trên bài viết web về ${industryCtx.name}. Bài post phải:
-1. ✅ MỘT GÓAC KHÁC VỚI BÀI VIẾT WEB (không copy-paste từ web article)
-2. ✅ HƯỚNG ĐẾN ĐỐI TƯỢNG: ${audienceDesc}
-3. ✅ NGÔN NGỮ FACEBOOK: Ngắn gọn, hấp dẫn, dễ scroll, có CTA rõ ràng
-4. ✅ PHẢN ÁNH CHUẨN NGÀNH ${industryCtx.name}: Dùng terminology phù hợp, context đúng lĩnh vực
-5. ✅ TRÁ NH TRÙNG LẶP: Nội dung khác hoàn toàn với bài viết web
-6. ✅ ENGAGEMENT: Có emotional hook, CTA (share, comment, click link), question, curiosity
+[NHIỆM VỤ - FACEBOOK POST ĐỘC ĐÁO]
+Hãy tạo FACEBOOK POST theo phong cách "${randomStyle}", góc độ "${randomAngle}", kết nối cảm xúc "${randomEmotion}".
 
-[STYLE GUIDE - FACEBOOK]
-- Độ dài: 200-400 ký tự (80-100 từ)
-- Tone: Tự nhiên, thân thiện, hấp dẫn - phù hợp với ${industryCtx.name}
-- Structure: Hook (lý do click) → Core message → CTA (read more link)
-- Emojis: 3-5 emojis hợp lý (không quá)
-- Hashtags: Thêm industry hashtags liên quan
+✅ YÊU CẦU QUAN TRỌNG:
+1. MỘT GÓC KHÁC HOÀN TOÀN VỚI BÀI VIẾT WEB (không copy-paste)
+2. PHONG CÁCH "${randomStyle}" - Tự nhiên, không sáo rỗng
+3. GÓC ĐỘ "${randomAngle}" - Sáng tạo, thu hút
+4. CẢM XÚC "${randomEmotion}" - Kết nối với ${audienceDesc}
+5. NGÔN NGỮ FACEBOOK: Ngắn gọn, dễ scroll, có CTA rõ ràng
+6. PHẢN ÁNH ${industryCtx.name}: Terminology đúng, context phù hợp
+7. ĐA DẠNG CẤU TRÚC: Không theo template cố định
+8. TỰ NHIÊN: Viết như người thật chia sẻ, không như quảng cáo
 
-[VÍ DỤ - ${industryCtx.name}]
-Nếu web article nói về "${title}":
-  ❌ SAI: Copy description từ web article lên Facebook
-  ✅ ĐÚNG: Post từ góc độ mới, khác lĩnh vực, hấp dẫn ${audienceDesc.split(',')[0]}
+[GỢI Ý ĐA DẠNG HÓA]
+- Đầu bài: Có thể là câu hỏi, con số, câu chuyện ngắn, hoặc insight bất ngờ
+- Giữa bài: Giá trị cốt lõi, lợi ích thực tế, hoặc góc nhìn độc đáo
+- Cuối bài: CTA tự nhiên (không cứng nhắc), khuyến khích tương tác
+
+[TRÁNH TUYỆT ĐỐI - EXAMPLES CỤ THỂ]
+❌ Các cụm từ rập khuôn: "nâng tầm", "đẳng cấp", "vị thế", "bàn đạp", "'nóng' hơn bao giờ hết", "ROI tiềm năng", "chỉ dành cho nhà đầu tư nhạy bén"
+❌ Cấu trúc cố định: emoji → tiêu đề → mô tả → CTA → hashtag → domain
+❌ Giọng văn quảng cáo sáo: "khẳng định vị thế", "gia tăng tài sản", "bùng nổ", "không dành cho tất cả"
+❌ Hashtags nhồi nhét: Chỉ 4-6 hashtags liên quan thật sự
+❌ Nội dung giống web article: Phải viết lại hoàn toàn
+❌ Opening giống nhau: "[Địa điểm] đang 'nóng' hơn bao giờ hết", "Bạn đã sẵn sàng chưa?"
+❌ Pattern "Nhưng cơ hội này không dành cho tất cả. Chỉ những [người] mới..."
+
+[VÍ DỤ TỪ CHỐI - KHÔNG BAO GIỜ VIẾT NHƯ NÀY]
+❌ "Quận 1 & 3 đang 'nóng' hơn bao giờ hết. 25 BĐS đỉnh cao, ROI tiềm năng..."
+❌ "Nhưng cơ hội này không dành cho tất cả. Chỉ những nhà đầu tư 'nhạy bén'..."
+❌ "Bạn đã sẵn sàng sàng lọc và chốt deal chưa? 🧐"
+❌ "Anh bạn đầu tư bất động sản mới hỏi: [Nơi] giá X có 'ngon' không?"
+❌ Bất kỳ pattern nào lặp lại từ prompt trước
+
+[VÍ DỤ TỐT - ĐA DẠNG]
+• Góc "Câu hỏi": "Bạn từng tự hỏi tại sao [insight]? Đây là câu trả lời..."
+• Góc "Câu chuyện": "Tuần trước, một khách hàng chia sẻ với tôi..."  
+• Góc "Con số": "87% [nhóm người] không biết rằng [insight]..."
+• Góc "So sánh": "Trước đây [X], bây giờ [Y]. Sự khác biệt là..."
+• Góc "Đảo ngược": "Ngược với suy nghĩ thông thường, [insight]..."
+
+[VÍ DỤ CONTENT TỰ NHIÊN - SÁ TẠO]
+✅ BĐS Example 1 (Storytelling):
+"Một người bạn vừa mua nhà ở Thủ Đức, giá tốt lắm. Nhưng khi tôi hỏi anh ấy về tiềm năng thanh khoản, anh im lặng. 
+Đầu tư BĐS không chỉ là tìm giá rẻ. 3 yếu tố này quan trọng hơn nhiều. Ai đang tìm hiểu BĐS, đọc kỹ nhé."
+
+✅ Software Example 2 (Problem-Solution):
+"Team bạn mất bao nhiêu giờ mỗi tuần để quản lý đơn hàng thủ công? Khách của tôi nói trung bình 15 giờ.
+Sau khi tự động hóa: Giảm còn 2 giờ. Tăng doanh thu 40% vì team tập trung bán hàng.
+Bạn thử chưa?"
+
+✅ Service Example 3 (Insightful):
+"Hầu hết doanh nghiệp nghĩ marketing = quảng cáo. Sai rồi.
+Marketing thực sự = Hiểu khách hàng sâu sắc + Giải quyết vấn đề họ chưa nói ra.
+5 câu hỏi này giúp bạn hiểu khách hàng hơn."
+
+✅ Real Estate Example 4 (Data-Driven):
+"Q1 2024: Giá đất Bình Dương tăng 12%, nhưng thanh khoản giảm 30%.
+Điều này nói lên gì? Thị trường đang cooling down, nhà đầu tư cần thận trọng hơn.
+Phân tích chi tiết ở đây."
+
+✅ Beauty Example 5 (Personal):
+"Làn da tôi từng rất xấu. Mụn, thâm, dầu nhờn.
+Thử đủ thứ không hiệu quả. Cho đến khi hiểu rõ 3 nguyên tắc này.
+6 tháng sau: Da khỏe, tự tin hơn. Chia sẻ cho ai đang gặp vấn đề."
 
 [HƯỚNG DẪN OUTPUT - JSON]
 {
-  "facebook_post": "Nội dung post (200-400 chars, hấp dẫn, có CTA rõ ràng)",
-  "hooks": ["Hook 1 - góc độ 1", "Hook 2 - góc độ 2", "Hook 3 - góc độ 3"], 
-  "cta": "Clear call-to-action phù hợp ${industryCtx.name}",
-  "target_mindset": "Tâm lý người dùng khi đọc post này",
-  "reason_engagement": "Tại sao Facebook post này sẽ được engage từ góc độ ${industryCtx.name}",
+  "facebook_post": "Nội dung post (200-400 chars, ${randomStyle}, ${randomAngle}, ${randomEmotion})",
+  "hooks": ["Hook 1", "Hook 2", "Hook 3"], 
+  "cta": "CTA TỰ NHIÊN phù hợp ${industryCtx.name}",
+  "target_mindset": "Tâm lý người dùng khi đọc",
+  "reason_engagement": "Vì sao post này khác biệt và hấp dẫn",
   "industry": "${industryCtx.name}",
-  "persona": "${personaKey}"
+  "persona": "${personaKey}",
+  "creative_angle": "${randomAngle}",
+  "style": "${randomStyle}",
+  "emotion": "${randomEmotion}"
 }
 
-========== LƯU Ý QUAN TRỌNG ==========
-✅ KHÔNG COPY từ web article - Tạo nội dung ĐỘC LẬP, khác góc độ
-✅ FACEBOOK LANGUAGE - Ngắn, hấp dẫn, có CTA
-✅ TARGET AUDIENCE - Viết cho người dùng cụ thể (${audienceDesc})
-✅ INDUSTRY CONTEXT - Hiểu đúng lĩnh vực ${industryCtx.name}, terminology, best practices
-✅ TRUYỀN TẢI ĐÚNG Ý - Lấy ý chính từ web article, viết lại cho Facebook + ${industryCtx.name}
-✅ ENGAGEMENT FIRST - Hook → Core → CTA (giống báo chí)
+========== CREATIVITY IS KEY ==========
+✅ MỖI BÀI POST PHẢI KHÁC NHAU - Tránh lặp lại cấu trúc
+✅ TỰ NHIÊN NHƯ NGƯỜI THẬT - Không giống AI hay quảng cáo
+✅ GIÁ TRỊ TRƯỚC, QUẢNG CÁO SAU - Chia sẻ insight thật
+✅ KẾT NỐI CẢM XÚC - ${randomEmotion}
+✅ PHONG CÁCH ${randomStyle.toUpperCase()} 
+✅ GÓC ĐỘ ${randomAngle.toUpperCase()}
 
-Bắt đầu tạo Facebook post cho lĩnh vực ${industryCtx.name}!
+[UNIQUE REQUEST ID: ${uniqueSeed}]
+[CREATIVITY BOOST: ${creativityBoost}]
+⚠️ ĐÂY LÀ REQUEST MỚI - TUYỆT ĐỐI KHÔNG DÙNG CACHE!
+⚠️ PHẢI TẠO NỘI DUNG HOÀN TOÀN MỚI, KHÁC VỚI MỌI BÀI TRƯỚC!
+
+Hãy sáng tạo và tạo ra Facebook post THẬT SỰ ĐỘC ĐÁO cho ${industryCtx.name}!
 `;
 }
 
@@ -6218,13 +6787,13 @@ async function pushMessagesToContentInput(messages, groupName = 'Unknown', confi
   const input = document.getElementById("content-input");
   if (!input) return false;
 
-  // ✅ BƯỚC 1: LỌC CHỈ LẤY TIN CÓ HÌNH ẢNH
+  // ✅ BƯỚC 1: LỌC CHỈ LẤY TIN CÓ ĐỦ NỘI DUNG + HÌNH ẢNH
   const messagesWithImages = messages.filter(msg => {
-    const hasImages = msg.images && Array.isArray(msg.images) && msg.images.length > 0;
-    if (!hasImages) {
-      console.warn(`⏭️ Bỏ qua tin không có hình:`, msg.content?.substring(0, 50) || 'No content');
+    const essentials = getMessageEssentials(msg);
+    if (!essentials.hasImages || !essentials.hasText) {
+      console.warn(`⏭️ Bỏ qua tin không đủ điều kiện (cần content + image): hasText=${essentials.hasText}, hasImages=${essentials.hasImages}`);
     }
-    return hasImages;
+    return essentials.isEligible;
   });
   
   const skippedCount = messages.length - messagesWithImages.length;
@@ -6233,7 +6802,7 @@ async function pushMessagesToContentInput(messages, groupName = 'Unknown', confi
   }
   
   if (messagesWithImages.length === 0) {
-    console.warn(`❌ Không có tin nhắn nào có hình ảnh để đăng!`);
+    console.warn(`❌ Không có tin nhắn nào đủ điều kiện (nội dung + hình ảnh) để đăng!`);
     return false;
   }
   
@@ -6346,7 +6915,10 @@ async function postSingleMessageWithFanpages(message, groupName, config_id, sele
       console.warn(`    ⚠️ Input vẫn chưa clear, force continue...`);
     }
     
-    // ✅ Prepare message data (strip base64)
+    // ✅ Giữ full message trong window để create flow luôn lấy đủ base64 + nội dung
+    window.__pendingZaloMessages = [message];
+
+    // ✅ Prepare message data for textarea (nhẹ hơn, không phải nguồn chính)
     const messageForInput = { ...message };
     if (messageForInput.images && Array.isArray(messageForInput.images)) {
       const base64Images = messageForInput.images.filter(img => img && img.startsWith('data:'));
@@ -6472,7 +7044,7 @@ async function getLastCreatedPostUrl(maxRetries = 5, retryDelayMs = 1000) {
   return fullUrl;
 }
 
-async function postToSelectedFanpages(messages, postUrl, selectedPages = null) {
+async function postToSelectedFanpages(messages, postUrl, selectedPages = null, options = {}) {
   // Nếu không pass selectedPages, load từ toàn cục (fallback)
   if (!selectedPages || selectedPages.length === 0) {
     selectedPages = getSelectedFacebookPages();
@@ -6480,17 +7052,65 @@ async function postToSelectedFanpages(messages, postUrl, selectedPages = null) {
   
   if (!selectedPages || selectedPages.length === 0) {
     console.warn("⚠️ Không có Fanpage được chọn để đăng.");
-    return;
+    return { successCount: 0, failCount: 0 };
   }
 
   console.log(`🚀 [PostToFanpages] Bắt đầu đăng lên ${selectedPages.length} Fanpage với link: ${postUrl}`);
   
-  // Tạo content cho Facebook
+  // Tạo base content cho Facebook
   const messageContent = messages
     .map(m => `📌 ${m.sender}: ${m.content}`)
     .join('\n\n');
-  
-  const facebookContent = `${messageContent}\n\n🔗 Xem chi tiết: ${postUrl}`;
+
+  const defaultFacebookContent = `${messageContent}\n\n🔗 Xem chi tiết: ${postUrl}`;
+
+  const helperAi = options.helperAi || window.csmAI || resolveContext().helperAi;
+  const seftObj = options.seft || {};
+  const fallbackIndustry = options.industry || 'bat-dong-san';
+  const skipRecord = !!options.skipRecord;
+  const personaPool = ['investor', 'business_owner', 'professional', 'startup', 'tech_savvy'];
+
+  const rawImagesFromMessages = Array.isArray(messages)
+    ? messages.flatMap(m => Array.isArray(m?.images) ? m.images : [])
+    : [];
+  const rawImagesFromOptions = Array.isArray(options.images) ? options.images : [];
+  const validFbImages = Array.from(new Set([...rawImagesFromOptions, ...rawImagesFromMessages]))
+    .filter(img => typeof img === 'string' && (img.startsWith('http://') || img.startsWith('https://') || img.startsWith('data:')));
+
+  console.log(`🖼️ [PostToFanpages] Valid images for post: ${validFbImages.length}`);
+
+  const buildUniqueFanpageContent = async (pageName, index) => {
+    try {
+      if (!helperAi?.generateSeoContentWithPrompt) {
+        return defaultFacebookContent;
+      }
+
+      const firstMsg = Array.isArray(messages) && messages.length > 0 ? messages[0] : {};
+      const personaKey = personaPool[index % personaPool.length];
+      const fbPostData = await generateFacebookPostContent(
+        {
+          title: firstMsg?.content?.substring(0, 80) || 'Nội dung mới từ Zalo',
+          description: `${messageContent.substring(0, 300)}\n[PAGE:${pageName}|${index + 1}]`,
+          content: messageContent,
+          keywords: 'zalo, fanpage, auto-post',
+          industry: fallbackIndustry,
+          personaKey
+        },
+        helperAi,
+        { domain: (resolveContext()?.domain || '') }
+      );
+
+      if (fbPostData?.facebook_post) {
+        const cta = fbPostData.cta || 'Xem chi tiết';
+        return `${fbPostData.facebook_post}\n\n👉 ${cta}: ${postUrl}`;
+      }
+
+      return defaultFacebookContent;
+    } catch (e) {
+      console.warn(`⚠️ [PostToFanpages] AI content failed for ${pageName}: ${e.message}`);
+      return defaultFacebookContent;
+    }
+  };
   
   // Tracking số fanpage đăng thành công
   let successCount = 0;
@@ -6499,46 +7119,6 @@ async function postToSelectedFanpages(messages, postUrl, selectedPages = null) {
   // ✅ CONSTANTS cho retry logic
   const MAX_RETRIES_PER_PAGE = ZALO_TIMING.MAX_FACEBOOK_RETRIES;
   const RETRY_DELAY_MS = ZALO_TIMING.FACEBOOK_RETRY_DELAY;
-  const FETCH_TIMEOUT_MS = ZALO_TIMING.FACEBOOK_API_TIMEOUT;
-
-  // Hàm helper: Gọi Facebook API với timeout
-  async function postToFacebookWithTimeout(pageId, accessToken, content, timeoutMs = 15000) {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-    
-    try {
-      const response = await fetch(
-        `https://graph.facebook.com/v18.0/${pageId}/feed`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: new URLSearchParams({
-            message: content,
-            access_token: accessToken
-          }),
-          signal: controller.signal
-        }
-      );
-
-      clearTimeout(timeoutId);
-      
-      if (response.ok) {
-        const result = await response.json();
-        return { success: true, data: result };
-      } else {
-        const error = await response.json();
-        return { success: false, error: error.message || 'Unknown API error', httpStatus: response.status };
-      }
-    } catch (e) {
-      clearTimeout(timeoutId);
-      
-      if (e.name === 'AbortError') {
-        return { success: false, error: `Timeout sau ${timeoutMs}ms`, isTimeout: true };
-      }
-      
-      return { success: false, error: e.message, isNetworkError: true };
-    }
-  }
 
   // Đăng lên từng Fanpage VỚI RETRY LOGIC
   for (let i = 0; i < selectedPages.length; i++) {
@@ -6549,20 +7129,31 @@ async function postToSelectedFanpages(messages, postUrl, selectedPages = null) {
       try {
         console.log(`📱 [Fanpage ${i + 1}/${selectedPages.length}] Đăng lên: ${page.name} (lần thử ${attempt}/${MAX_RETRIES_PER_PAGE})`);
         
-        // Gọi Facebook API với timeout
-        const result = await postToFacebookWithTimeout(page.id, page.access_token, facebookContent, FETCH_TIMEOUT_MS);
+        // Tạo nội dung RIÊNG cho từng fanpage (AI)
+        const pageFacebookContent = await buildUniqueFanpageContent(page.name || `Fanpage-${i + 1}`, i);
+
+        // Gọi luồng chuẩn: post có nội dung + album ảnh
+        const result = await postToFacebookPageWithImages(
+          page.id,
+          page.access_token,
+          pageFacebookContent,
+          validFbImages,
+          postUrl,
+          seftObj
+        );
         
-        if (result.success) {
-          console.log(`✅ [Fanpage ${i + 1}] Đã đăng lên ${page.name} thành công! (Post ID: ${result.data.id})`);
+        if (result?.success) {
+          console.log(`✅ [Fanpage ${i + 1}] Đã đăng lên ${page.name} thành công! (Post ID: ${result.post_id || 'N/A'})`);
           successCount++;
           posted = true;
           break; // Thành công, thoát loop retry
         } else {
           // Lỗi API
-          const isRetryable = result.isTimeout || result.httpStatus === 429 || result.httpStatus >= 500;
+          const status = Number(result?.httpStatus || 0);
+          const isRetryable = status === 429 || status >= 500;
           const retryMsg = isRetryable ? 'sẽ thử lại' : 'không thể thử lại';
           
-          console.warn(`⚠️ [Fanpage ${i + 1}] Lỗi đăng lên ${page.name} (lần ${attempt}): ${result.error} (${retryMsg})`);
+          console.warn(`⚠️ [Fanpage ${i + 1}] Lỗi đăng lên ${page.name} (lần ${attempt}): ${result?.error || 'Unknown error'} (${retryMsg})`);
           
           if (!isRetryable || attempt === MAX_RETRIES_PER_PAGE) {
             // Không thể retry hoặc hết số lần retry
@@ -6584,8 +7175,8 @@ async function postToSelectedFanpages(messages, postUrl, selectedPages = null) {
     }
     
     // Nếu không upload được trang này, log warning
-    if (!posted && attempt === MAX_RETRIES_PER_PAGE) {
-      console.warn(`⚠️ [Fanpage ${i + 1}] Không thể đăng lên ${page.name} sau https://graph.facebook.com/v18.0/${MAX_RETRIES_PER_PAGE} lần thử (config_id: ${window.__currentZaloConfigId || 'default'})`);
+    if (!posted) {
+      console.warn(`⚠️ [Fanpage ${i + 1}] Không thể đăng lên ${page.name} sau ${MAX_RETRIES_PER_PAGE} lần thử (config_id: ${window.__currentZaloConfigId || 'default'})`);
     }
     
     // Chờ trước khi đăng fanpage tiếp theo
@@ -6597,7 +7188,7 @@ async function postToSelectedFanpages(messages, postUrl, selectedPages = null) {
   console.log(`🎉 [PostToFanpages] Hoàn tất: ${successCount}/${selectedPages.length} Fanpage thành công, ${failCount} lỗi`);
   
   // ✅ QUAN TRỌNG: Record tất cả tin Zalo đã đăng THÀNH CÔNG vào dataOptionUser (với config_id)
-  if (successCount > 0) {
+  if (successCount > 0 && !skipRecord) {
     const groupName = window.__currentZaloGroupName || 'Unknown';
     const config_id = window.__currentZaloConfigId || null;
     console.log(`💾 [Record] Recording ${messages.length} posted Zalo messages from group: ${groupName} (config: ${config_id || 'default'})`);
@@ -6612,9 +7203,11 @@ async function postToSelectedFanpages(messages, postUrl, selectedPages = null) {
     if (typeof window.updateZaloPostedStats === 'function') {
       window.updateZaloPostedStats();
     }
-  } else {
+  } else if (successCount <= 0) {
     console.warn('⚠️ Không có fanpage nào đăng thành công, không lưu tin Zalo vào dataOptionUser');
   }
+
+  return { successCount, failCount };
 }
 
 /**
@@ -11845,17 +12438,36 @@ async function postToFacebookPage(pageId, pageAccessToken, message, imageUrl = n
  */
 async function postToFacebookPageWithImages(pageId, pageAccessToken, message, images = [], link = null, seft = {}) {
   try {
+    // ===== DEBUG: Log images received =====
+    console.log(`📸 [postToFacebookPageWithImages] RECEIVED images (raw):`, images);
+    console.log(`📸 [postToFacebookPageWithImages] Images type: ${typeof images}, isArray: ${Array.isArray(images)}, count: ${images.length}`);
+    if (Array.isArray(images) && images.length > 0) {
+      images.forEach((img, idx) => {
+        console.log(`  [${idx}] Type: ${typeof img}, Length: ${img?.length || 'N/A'}, Starts: ${img?.substring(0, 80) || 'EMPTY'}`);
+      });
+    }
+    
     // Filter và validate images
     const validImages = Array.isArray(images) 
       ? images.filter(img => typeof img === 'string' && img.trim())
       : [];
     
-    console.log(`🚀 Posting to Facebook with ${validImages.length} image(s)...`);
-    console.log(`📝 Message length: ${message.length} characters`);
+    console.log(`🚀 [postToFacebookPageWithImages] After validation: ${validImages.length} images (before: ${images.length})`);
+    console.log(`📝 [postToFacebookPageWithImages] Message length: ${message.length} characters`);
+    
+    // ===== DEBUG: Log valid images =====
+    if (validImages.length > 0) {
+      validImages.forEach((img, idx) => {
+        console.log(`  ✅ [${idx}] Valid URL: ${img.substring(0, 80)}...`);
+      });
+    }
     
     // Ưu tiên sử dụng helper từ seft (thông qua AutoSetup.tsx)
     if (seft && typeof seft.postToFacebookWithImages === 'function') {
-      return await seft.postToFacebookWithImages(pageId, pageAccessToken, message, validImages, link);
+      console.log(`🔄 [postToFacebookPageWithImages] Calling seft.postToFacebookWithImages with ${validImages.length} images`);
+      const result = await seft.postToFacebookWithImages(pageId, pageAccessToken, message, validImages, link);
+      console.log(`📤 [postToFacebookPageWithImages] seft.postToFacebookWithImages returned:`, result);
+      return result;
     }
     
     // Fallback: gọi API trực tiếp (không nên dùng)
