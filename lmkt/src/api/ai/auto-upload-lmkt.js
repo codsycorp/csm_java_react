@@ -6114,67 +6114,84 @@ function cleanupOldPostedZaloMessages(posted) {
  * Ngăn user click nhầm vào các controls không liên quan
  * NHƯNG cho phép click nút Dừng Scanner
  */
+/**
+ * ✅ SELECTIVE LOCK - Chỉ disable controls liên quan đến scanner
+ * Không lock toàn UI, user có thể dùng theme, menu, v.v.
+ */
 function createScannerLockOverlay() {
-  // Xóa overlay cũ nếu có
-  removeScannerLockOverlay();
+  // Mark as scanning
+  window._scannerIsRunning = true;
   
-  const overlay = document.createElement('div');
-  overlay.id = 'zalo-scanner-lock-overlay';
-  overlay.style.cssText = `
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(0, 0, 0, 0.3);
-    backdrop-filter: blur(2px);
-    z-index: 999999;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    pointer-events: none;
-  `;
+  // Disable ONLY scanner-related controls
+  const startBtn = document.querySelector('[data-zalo-start-scan]');
+  const stopBtn = document.querySelector('[data-zalo-stop-scan]');
+  const configSelect = document.querySelector('[data-zalo-config-select]');
+  const resetBtn = document.querySelector('[data-zalo-reset-groups]');
   
-  const message = document.createElement('div');
-  message.style.cssText = `
-    background: white;
-    padding: 24px 32px;
-    border-radius: 8px;
-    box-shadow: 0 4px 20px rgba(0,0,0,0.2);
-    text-align: center;
-    max-width: 400px;
-    pointer-events: auto;
-  `;
+  if (startBtn) {
+    startBtn.disabled = true;
+    startBtn.style.opacity = '0.5';
+    startBtn.style.cursor = 'not-allowed';
+  }
   
-  message.innerHTML = `
-    <div style="font-size: 48px; margin-bottom: 16px;">🔒</div>
-    <div style="font-size: 18px; font-weight: 600; margin-bottom: 8px; color: #333;">
-      Scanner Đang Hoạt Động
-    </div>
-    <div style="font-size: 14px; color: #666; margin-bottom: 16px;">
-      Hệ thống đang tự động quét và đăng bài.<br>
-      Vui lòng không thao tác để tránh gián đoạn.
-    </div>
-    <div style="font-size: 12px; color: #ff4d4f; font-weight: 600;">
-      ⚠️ Bấm nút "⏸ Dừng quét" bên trái để dừng và mở khóa UI
-    </div>
-  `;
+  if (configSelect) {
+    configSelect.disabled = true;
+    configSelect.style.opacity = '0.5';
+  }
   
-  overlay.appendChild(message);
-  document.body.appendChild(overlay);
+  if (resetBtn) {
+    resetBtn.disabled = true;
+    resetBtn.style.opacity = '0.5';
+    resetBtn.style.cursor = 'not-allowed';
+  }
   
-  console.log('🔒 [UI Lock] Overlay created - UI locked');
+  // Show stop button if exists
+  if (stopBtn) {
+    stopBtn.disabled = false;
+    stopBtn.style.opacity = '1';
+    stopBtn.style.cursor = 'pointer';
+  }
+  
+  console.log('🔒 [UI Lock] Scanner controls disabled');
 }
 
 /**
- * ✅ XÓA OVERLAY KHÓA UI
+ * ✅ UNLOCK - Restore scanner controls
  */
 function removeScannerLockOverlay() {
-  const overlay = document.getElementById('zalo-scanner-lock-overlay');
-  if (overlay) {
-    overlay.remove();
-    console.log('🔓 [UI Lock] Overlay removed - UI unlocked');
+  window._scannerIsRunning = false;
+  
+  // Re-enable ONLY scanner-related controls
+  const startBtn = document.querySelector('[data-zalo-start-scan]');
+  const stopBtn = document.querySelector('[data-zalo-stop-scan]');
+  const configSelect = document.querySelector('[data-zalo-config-select]');
+  const resetBtn = document.querySelector('[data-zalo-reset-groups]');
+  
+  if (startBtn) {
+    startBtn.disabled = false;
+    startBtn.style.opacity = '1';
+    startBtn.style.cursor = 'pointer';
   }
+  
+  if (configSelect) {
+    configSelect.disabled = false;
+    configSelect.style.opacity = '1';
+  }
+  
+  if (resetBtn) {
+    resetBtn.disabled = false;
+    resetBtn.style.opacity = '1';
+    resetBtn.style.cursor = 'pointer';
+  }
+  
+  // Disable stop button
+  if (stopBtn) {
+    stopBtn.disabled = true;
+    stopBtn.style.opacity = '0.5';
+    stopBtn.style.cursor = 'not-allowed';
+  }
+  
+  console.log('🔓 [UI Lock] Scanner controls unlocked');
 }
 
 /**
@@ -7916,6 +7933,7 @@ function createZaloResetButtonsUI() {
   
   // Button 1: Reset Groups State
   const btnResetGroups = document.createElement('button');
+  btnResetGroups.setAttribute('data-zalo-reset-groups', 'true'); // Mark for selective lock
   btnResetGroups.textContent = '🔄 Reset Groups';
   btnResetGroups.style.cssText = `
     padding: 6px 12px;
@@ -8917,6 +8935,7 @@ ${JSON.stringify(zaloConfigs, null, 2)}`;
   
   const input = document.createElement("textarea");
   input.id = "zalo-group-list";
+  input.setAttribute('data-zalo-config-select', 'true'); // Mark for selective lock
   input.placeholder = "Mỗi nhóm 1 dòng:\nNhóm A\nQ1,3 50T\nNhóm BĐS HCM";
   input.style.cssText = `width:100%;min-height:80px;font-size:12px;color:${theme.text};background:${theme.bg};border:1px solid ${theme.border};margin-bottom:8px;flex:1;`;
   input.value = loadGroupList().join("\n");
@@ -8932,7 +8951,10 @@ ${JSON.stringify(zaloConfigs, null, 2)}`;
   btnRow.style.cssText = "display:flex;gap:8px;flex-wrap:wrap";
 
   const startBtn = createButton("▶️ Bắt đầu quét", "#13c2c2");
+  startBtn.setAttribute('data-zalo-start-scan', 'true');
+  
   const stopBtn = createButton("⏸ Dừng quét", "#faad14");
+  stopBtn.setAttribute('data-zalo-stop-scan', 'true');
   
   // ✅ Đảm bảo stopBtn luôn click được (cao hơn overlay)
   stopBtn.id = "zalo-stop-btn";
@@ -8940,48 +8962,16 @@ ${JSON.stringify(zaloConfigs, null, 2)}`;
   stopBtn.style.zIndex = "9999999";  // Cao hơn overlay (999999)
   stopBtn.style.pointerEvents = "auto";
   
-  // Hàm quản lý trạng thái ẩn/hiện các nút
+  // ✅ Hàm quản lý trạng thái ẩn/hiện các nút (disable logic now handled by selective lock)
   const setButtonsState = (isScanning) => {
     if (isScanning) {
-      // Đang quét: Ẩn start, hiện stop, disable input và các nút quản lý
+      // Đang quét: Ẩn start, hiện stop
       startBtn.style.display = 'none';
       stopBtn.style.display = 'inline-block';
-      input.disabled = true;
-      input.style.opacity = '0.6';
-      input.style.cursor = 'not-allowed';
-      
-      // Disable các nút quản lý grid
-      saveConfigBtn.disabled = true;
-      saveConfigBtn.style.opacity = '0.6';
-      saveConfigBtn.style.cursor = 'not-allowed';
-      
-      newConfigBtn.disabled = true;
-      newConfigBtn.style.opacity = '0.6';
-      newConfigBtn.style.cursor = 'not-allowed';
-      
-      autoLoadBtn.disabled = true;
-      autoLoadBtn.style.opacity = '0.6';
-      autoLoadBtn.style.cursor = 'not-allowed';
     } else {
-      // Không quét: Hiện start, ẩn stop, enable lại
+      // Không quét: Hiện start, ẩn stop
       startBtn.style.display = 'inline-block';
       stopBtn.style.display = 'none';
-      input.disabled = false;
-      input.style.opacity = '1';
-      input.style.cursor = 'text';
-      
-      // Enable lại các nút quản lý grid
-      saveConfigBtn.disabled = false;
-      saveConfigBtn.style.opacity = '1';
-      saveConfigBtn.style.cursor = 'pointer';
-      
-      newConfigBtn.disabled = false;
-      newConfigBtn.style.opacity = '1';
-      newConfigBtn.style.cursor = 'pointer';
-      
-      autoLoadBtn.disabled = false;
-      autoLoadBtn.style.opacity = '1';
-      autoLoadBtn.style.cursor = 'pointer';
     }
   };
   
