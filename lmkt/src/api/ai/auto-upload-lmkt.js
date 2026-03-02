@@ -3011,8 +3011,7 @@ function normalizeImageCandidates(value) {
 }
 
 function extractImagesFromMessage(item = {}) {
-  console.log(`\n📋 [extractImagesFromMessage] === START EXTRACTION DEBUG ===`);
-  console.log(`   Item keys:`, Object.keys(item || {}).join(', '));
+  console.log(`\n📋 [extractImagesFromMessage] START`);
   console.log(`   Item structure:`, {
     has_images: !!item.images,
     images_len: Array.isArray(item.images) ? item.images.length : 'N/A',
@@ -3097,8 +3096,9 @@ function extractImagesFromMessage(item = {}) {
   }
 
   console.log(`\n   📊 [BEFORE FILTER] Total raw images collected: ${images.length}`);
-  images.slice(0, 5).forEach((img, idx) => {
-    console.log(`     [${idx}] ${typeof img === 'string' ? img.substring(0, 100) : String(img).substring(0, 100)}...`);
+  images.slice(0, 2).forEach((img, idx) => {
+    const preview = typeof img === 'string' ? img.substring(0, 80) : String(img).substring(0, 80);
+    console.log(`     [${idx}] ${preview}...`);
   });
 
   // Validate URLs before returning
@@ -3118,10 +3118,13 @@ function extractImagesFromMessage(item = {}) {
     })
   ));
   
-  console.log(`\n   📊 [AFTER FILTER] Valid images: ${validImages.length}/${images.length}`);
+  const selectedImages = (ZALO_MEMORY.MAX_IMAGES_PER_POST && ZALO_MEMORY.MAX_IMAGES_PER_POST > 0)
+    ? validImages.slice(0, ZALO_MEMORY.MAX_IMAGES_PER_POST)
+    : validImages;
+  console.log(`\n   📊 [AFTER FILTER] Valid images: ${validImages.length}/${images.length} | dùng ${selectedImages.length}`);
   if (validImages.length > 0) {
     console.log(`✅ extractImagesFromMessage: Found ${validImages.length} valid image(s) [${debugInfo.join(', ')}]`);
-    validImages.slice(0, 3).forEach((url, idx) => {
+    selectedImages.slice(0, 2).forEach((url, idx) => {
       console.log(`   [${idx}] ${url}`);
     });
   } else if (debugInfo.length > 0) {
@@ -3129,9 +3132,9 @@ function extractImagesFromMessage(item = {}) {
   } else {
     console.warn(`⚠️ extractImagesFromMessage: No images found in any field!`);
   }
-  console.log(`📋 [extractImagesFromMessage] === END EXTRACTION DEBUG ===\n`);
+  console.log(`📋 [extractImagesFromMessage] END\n`);
   
-  return validImages;
+  return selectedImages;
 }
 
 function extractMessageText(item = {}) {
@@ -3327,11 +3330,8 @@ async function uploadImages(ctx, images) {
   console.log(`\n[uploadImages] === START UPLOAD DEBUG ===`);
   console.log(`[uploadImages] Bắt đầu upload ${arr.length} ảnh - ${new Date().toLocaleTimeString()}`);
   
-  arr.forEach((img, i) => {
-    const isB64 = isBase64(img);
-    const preview = img ? img.substring(0, 100) : '(empty)';
-    console.log(`   [${i}] ${isB64 ? '📤 BASE64' : '🔗 URL'}: ${preview}...`);
-  });
+  const base64Count = arr.filter(img => isBase64(img)).length;
+  console.log(`[uploadImages] Ảnh base64: ${base64Count}, URL thường: ${arr.length - base64Count}`);
   
   const results = [];
   for (let i = 0; i < arr.length; i += 1) {
@@ -3359,10 +3359,7 @@ async function uploadImages(ctx, images) {
     }
   }
   
-  console.log(`\n[uploadImages] === RESULTS BEFORE FILTER ===`);
-  results.forEach((r, i) => {
-    console.log(`   [${i}] ${r ? r.substring(0, 100) : '(empty)'}...`);
-  });
+  console.log(`\n[uploadImages] === RESULTS BEFORE FILTER === ${results.length} items`);
   
   const validResults = results.filter((r, idx) => {
     // ✅ LỌC HTML KHỎI RESULTS
@@ -6754,6 +6751,7 @@ const ZALO_POSTED_CLEANUP_DAYS = 7; // Tự động xóa tin cũ hơn 7 ngày (g
 // Queue để lưu tin Zalo cần đăng (tách biệt khỏi scanning)
 const zaloPostingQueue = [];
 let isPostingWorkerRunning = false;
+let postingWorkerCooldownUntil = 0;
 let postingWorkerStats = {
   totalProcessed: 0,
   totalSuccess: 0,
@@ -6767,14 +6765,16 @@ const ZALO_TIMING = {
   // Delays trong quét nhóm
   WAIT_AFTER_WEBVIEW_CLICK: 2000,        // Chờ sau khi click nhóm (để conversation load)
   WAIT_AFTER_SCAN_COMPLETE: 1000,        // Chờ sau quét xong trước khi lấy tin (giảm từ 2s → 1s vì không đăng ngay)
-  WAIT_BETWEEN_GROUPS: 500,              // Chờ giữa các nhóm (giảm từ 1s → 0.5s vì chỉ quét, không đăng)
+  WAIT_BETWEEN_GROUPS: 60000,            // 1 phút quét 1 nhóm rồi qua nhóm kế tiếp
+  WAIT_GROUP_COOLDOWN_IF_HAS_NEW: 0,     // Không cộng thêm để giữ đúng nhịp 1 phút/nhóm
   
   // Delays trong posting (worker)
   WAIT_BEFORE_CLICK_CREATE_BTN: 300,     // Chờ trước khi click "Tạo Bài"
   WAIT_FOR_CREATE_BTN_TIMEOUT: 10000,    // Timeout chờ button xuất hiện
   WAIT_FOR_POST_CREATED: 30000,          // Timeout chờ post được tạo (input cleared)
   WAIT_BETWEEN_FANPAGES: 2000,           // Chờ giữa các fanpage post
-  WAIT_BETWEEN_POSTS: 3000,              // Chờ giữa các bài đăng (trong posting worker)
+  WAIT_BETWEEN_POSTS: 60000,             // 1 phút giữa mỗi tin đăng (trong posting worker)
+  WAIT_AFTER_QUEUE_ITEM: 8000,           // Nghỉ sau khi xử lý xong 1 queue item
   
   // Delays trong scheduling
   SCANNER_LOOP_INTERVAL: 2000,           // Scanner kiểm tra mỗi 2s
@@ -6787,6 +6787,204 @@ const ZALO_TIMING = {
   FACEBOOK_RETRY_DELAY: 2000,            // Delay trước khi retry Facebook
   MAX_FACEBOOK_RETRIES: 3                // Số lần retry cho Facebook API
 };
+
+const ZALO_MEMORY = {
+  MAX_IMAGES_PER_POST: 0, // 0 = không giới hạn, đăng bao nhiêu ảnh thì giữ nguyên bấy nhiêu
+  HEAP_SOFT_LIMIT_MB: 1500,
+  HEAP_RECOVERY_TARGET_MB: 1250,
+  HEAP_RECOVERY_WAIT_MS: 5000,
+  MAX_HEAP_WAIT_CYCLES: 6,
+  FORCE_RELEASE_DELAY_MS: 1200
+};
+
+function getHeapUsedMB() {
+  try {
+    if (typeof performance !== 'undefined' && performance.memory && performance.memory.usedJSHeapSize) {
+      return Math.round(performance.memory.usedJSHeapSize / 1024 / 1024);
+    }
+  } catch (e) {
+    // ignore
+  }
+  return null;
+}
+
+async function waitForHeapRecovery(stage = '') {
+  const usedMb = getHeapUsedMB();
+  if (!usedMb) return;
+  if (usedMb < ZALO_MEMORY.HEAP_SOFT_LIMIT_MB) return;
+
+  console.warn(`⚠️ [HeapGuard] ${stage} - heap cao: ${usedMb}MB. Bắt đầu cooldown...`);
+
+  for (let i = 0; i < ZALO_MEMORY.MAX_HEAP_WAIT_CYCLES; i++) {
+    try {
+      if (typeof MemoryOptimizer !== 'undefined' && typeof MemoryOptimizer.performEmergencyCleanup === 'function') {
+        MemoryOptimizer.performEmergencyCleanup();
+      }
+      if (typeof window !== 'undefined' && typeof window.gc === 'function') {
+        window.gc();
+      }
+    } catch (e) {
+      // ignore
+    }
+
+    await new Promise(resolve => setTimeout(resolve, ZALO_MEMORY.HEAP_RECOVERY_WAIT_MS));
+
+    const currentMb = getHeapUsedMB();
+    if (!currentMb) return;
+    if (currentMb <= ZALO_MEMORY.HEAP_RECOVERY_TARGET_MB) {
+      console.log(`✅ [HeapGuard] ${stage} - heap đã hạ còn ${currentMb}MB`);
+      return;
+    }
+  }
+
+  const finalMb = getHeapUsedMB();
+  console.warn(`⚠️ [HeapGuard] ${stage} - heap vẫn cao (${finalMb || 'N/A'}MB), tiếp tục với nhịp chậm`);
+}
+
+async function flushMemoryBeforeNextPost(stage = '') {
+  try {
+    if (typeof window !== 'undefined') {
+      window.__pendingZaloMessages = null;
+    }
+    if (typeof MemoryOptimizer !== 'undefined' && typeof MemoryOptimizer.performEmergencyCleanup === 'function') {
+      MemoryOptimizer.performEmergencyCleanup();
+    }
+    if (typeof window !== 'undefined' && typeof window.gc === 'function') {
+      window.gc();
+      window.gc();
+    }
+  } catch (e) {
+    // ignore
+  }
+
+  await new Promise(resolve => setTimeout(resolve, ZALO_MEMORY.FORCE_RELEASE_DELAY_MS || 1200));
+  await waitForHeapRecovery(stage || 'flush_before_next_post');
+}
+
+/**
+ * Cleanup webview state để tránh memory leak giữa các lần quét nhóm
+ * - Remove conversations khỏi DOM webview
+ * - Clear event listeners
+ * - Release base64 data
+ */
+async function cleanupWebviewAfterScan(webviewId = null) {
+  const id = webviewId || window.zaloScannerWebviewId;
+  if (!id) return;
+
+  const wv = document.getElementById(id);
+  if (!wv || !wv.executeScript) {
+    console.log('⏩ [cleanupWebviewAfterScan] Webview không sẵn sàng, skip cleanup');
+    return;
+  }
+
+  console.log('🧹 [cleanupWebviewAfterScan] Bắt đầu cleanup webview...');
+
+  try {
+    // Cleanup code chạy TRONG webview context
+    wv.executeScript({
+      code: `
+        (function() {
+          try {
+            // 1. Clear conversations từ DOM (để webview reload khi cần)
+            const convList = document.querySelector('[data-testid="conversation-list"], .conversation-list, [role="list"]');
+            if (convList) {
+              convList.innerHTML = '';
+            }
+
+            // 2. Clear current message input
+            const msgInput = document.querySelector('input[placeholder*="Nhập tin"]');
+            if (msgInput) {
+              msgInput.value = '';
+            }
+
+            // 3. Clear any pending base64 data trong memory
+            window.__zaloScannedData = null;
+            window.__zaloMessages = null;
+            window.__pendingImages = null;
+
+            // 4. Remove all event listeners từ custom objects
+            if (window.__zaloEventListeners) {
+              Object.values(window.__zaloEventListeners).forEach(listener => {
+                try { listener.remove ? listener.remove() : null; } catch (e) {}
+              });
+              window.__zaloEventListeners = {};
+            }
+
+            // 5. Force cleanup
+            if (window.gc) window.gc();
+
+            console.log('✅ Webview cleanup hoàn tất');
+          } catch (e) {
+            console.error('❌ Webview cleanup error:', e.message);
+          }
+        })();
+      `
+    }, (results) => {
+      // Ignore results
+    });
+  } catch (e) {
+    console.warn('⚠️ [cleanupWebviewAfterScan] Error during cleanup:', e);
+  }
+
+  // Sau khi cleanup trong webview, flush memory bên ngoài
+  try {
+    if (typeof MemoryOptimizer !== 'undefined' && typeof MemoryOptimizer.performEmergencyCleanup === 'function') {
+      MemoryOptimizer.performEmergencyCleanup();
+    }
+    if (typeof window !== 'undefined' && typeof window.gc === 'function') {
+      window.gc();
+    }
+  } catch (e) {
+    // ignore
+  }
+
+  console.log('✅ [cleanupWebviewAfterScan] Cleanup xong');
+}
+
+/**
+ * Memory flush giữa các nhóm quét (khác với flush giữa posts)
+ * - Gọi GC nhiều lần
+ * - Clear pending data
+ * - Log heap status
+ */
+async function flushMemoryBetweenGroups(groupIdx = 0) {
+  try {
+    // Xóa pending messages
+    if (typeof window !== 'undefined') {
+      window.__pendingZaloMessages = null;
+      window.__currentScanData = null;
+    }
+
+    // Emergency cleanup
+    if (typeof MemoryOptimizer !== 'undefined' && typeof MemoryOptimizer.performEmergencyCleanup === 'function') {
+      MemoryOptimizer.performEmergencyCleanup();
+    }
+
+    // Multiple GC calls
+    if (typeof window !== 'undefined' && typeof window.gc === 'function') {
+      window.gc();
+      window.gc();
+      window.gc();
+    }
+
+    // Wait thêm để GC finish
+    await new Promise(resolve => setTimeout(resolve, 800));
+
+    // Log heap status
+    const heapMb = getHeapUsedMB();
+    if (heapMb) {
+      console.log(`📊 [flushMemoryBetweenGroups] Group ${groupIdx}: heap = ${heapMb}MB`);
+      
+      // Nếu heap vẫn cao, trigger recovery
+      if (heapMb > ZALO_MEMORY.HEAP_SOFT_LIMIT_MB) {
+        console.warn(`⚠️ [flushMemoryBetweenGroups] Heap cao, trigger waitForHeapRecovery...`);
+        await waitForHeapRecovery(`between_groups_${groupIdx}`);
+      }
+    }
+  } catch (e) {
+    console.warn('⚠️ [flushMemoryBetweenGroups] Error:', e);
+  }
+}
 
 /**
  * Load danh sách tin Zalo đã đăng từ SERVER (csmUserData)
@@ -7867,7 +8065,86 @@ async function clickZaloGroup(webviewId, groupName) {
   });
 }
 
+/**
+ * Hàm kiểm tra và phục hồi webview nếu bị mất
+ * @returns {Promise<boolean>} true nếu webview sẵn sàng, false nếu không thể phục hồi
+ */
+async function ensureWebviewReady() {
+  const webviewId = window.zaloScannerWebviewId;
+  if (!webviewId) {
+    console.warn('⚠️ [ensureWebviewReady] Webview ID chưa được set');
+    return false;
+  }
+
+  // Bước 1: Kiểm tra webview có tồn tại trong DOM không
+  let webview = document.getElementById(webviewId);
+  if (webview && webview.executeScript) {
+    // console.log(`✅ [ensureWebviewReady] Webview ${webviewId} sẵn sàng`);
+    return true;
+  }
+
+  // Bước 2: Webview không tồn tại hoặc mất chức năng
+  console.warn(`⚠️ [ensureWebviewReady] Webview ${webviewId} không tồn tại trong DOM, cố gắng khôi phục...`);
+  
+  // Cố gắng tìm container
+  const container = document.getElementById("zalo-webview-panel");
+  if (!container) {
+    console.error('❌ [ensureWebviewReady] Không tìm thấy container "zalo-webview-panel"');
+    return false;
+  }
+
+  // Bước 3: Thử tạo lại webview
+  try {
+    console.log(`🔄 [ensureWebviewReady] Tạo lại webview ${webviewId}...`);
+    const zaloWebview = createZaloWebview(webviewId, "https://chat.zalo.me/", container);
+    
+    if (!zaloWebview) {
+      console.error('❌ [ensureWebviewReady] Không thể tạo webview');
+      return false;
+    }
+
+    // Chờ webview tải xong trước khi tiếp tục
+    return await new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        console.warn('⏱️ [ensureWebviewReady] Timeout chờ webview ready');
+        resolve(false);
+      }, 8000);
+
+      const checkReady = () => {
+        const wv = document.getElementById(webviewId);
+        if (wv && wv.executeScript) {
+          clearTimeout(timeout);
+          console.log(`✅ [ensureWebviewReady] Webview đã khôi phục thành công`);
+          resolve(true);
+        }
+      };
+
+      // Kiểm tra liên tục
+      const checkInterval = setInterval(() => {
+        checkReady();
+      }, 500);
+
+      zaloWebview.addEventListener('dom-ready', () => {
+        clearInterval(checkInterval);
+        checkReady();
+      });
+
+      // Kiểm tra ngay
+      checkReady();
+    });
+  } catch (e) {
+    console.error('❌ [ensureWebviewReady] Lỗi khi tạo lại webview:', e);
+    return false;
+  }
+}
+
 async function scanZaloGroup(groupName) {
+  // ✅ Bước 0: Kiểm tra webview sẵn sàng (nếu không thì thử phục hồi)
+  const webviewReady = await ensureWebviewReady();
+  if (!webviewReady) {
+    console.warn(`⚠️ [scanZaloGroup] Webview không sẵn sàng, sẽ thử phương pháp khác`);
+  }
+
   // Ưu tiên 1: Click vào nhóm trước, sau đó quét
   const webviewId = window.zaloScannerWebviewId;
   
@@ -8590,6 +8867,16 @@ async function processPostingQueue() {
       return;
     }
     
+    // Cooldown giữa 2 queue items để hạ RAM
+    const now = Date.now();
+    if (postingWorkerCooldownUntil > now) {
+      const remaining = Math.ceil((postingWorkerCooldownUntil - now) / 1000);
+      if (remaining % 2 === 0) {
+        console.log(`⏸️ [Posting Worker] Cooldown còn ${remaining}s trước item tiếp theo...`);
+      }
+      return;
+    }
+
     // Nếu queue rỗng, skip
     if (zaloPostingQueue.length === 0) return;
     
@@ -8619,6 +8906,8 @@ async function processPostingQueue() {
         console.log(`⏹️ [Posting Worker] Bị dừng giữa chừng, dừng xử lý tin còn lại (${mergedMessages.length - i} tin)`);
         break;
       }
+
+      await waitForHeapRecovery('before_post');
       
       const message = mergedMessages[i];
       const mergedCount = message._merged_count || 1;
@@ -8644,6 +8933,22 @@ async function processPostingQueue() {
       } else {
         console.warn(`   ⚠️ [${i + 1}/${mergedMessages.length}] Đăng thất bại`);
       }
+
+      // Giải phóng tham chiếu dữ liệu lớn của tin vừa xử lý
+      try {
+        if (message && Array.isArray(message.images)) {
+          message.images.length = 0;
+          message.images = [];
+        }
+        if (message && typeof message.content === 'string' && message.content.length > 2000) {
+          message.content = message.content.slice(0, 1000);
+        }
+      } catch (e) {
+        // ignore cleanup errors
+      }
+
+      await waitForHeapRecovery('after_post');
+      await flushMemoryBeforeNextPost('after_post_flush');
       
       // Chờ giữa các bài đăng
       if (i < mergedMessages.length - 1) {
@@ -8666,8 +8971,26 @@ async function processPostingQueue() {
     console.error('   Error object:', e);
     console.error('   Stack:', e?.stack || 'No stack');
   } finally {
+    try {
+      if (item && Array.isArray(item.messages)) {
+        item.messages.length = 0;
+      }
+      if (item) {
+        item.config = null;
+      }
+      if (window.__pendingZaloMessages) {
+        window.__pendingZaloMessages = null;
+      }
+      await flushMemoryBeforeNextPost('after_queue_item_flush');
+    } catch (e) {
+      // ignore
+    }
+
     postingWorkerStats.currentlyProcessing = null;
     postingWorkerStats.lastProcessedAt = Date.now();
+    const cooldownMs = ZALO_TIMING.WAIT_AFTER_QUEUE_ITEM || 8000;
+    postingWorkerCooldownUntil = Date.now() + cooldownMs;
+    console.log(`   💤 [Posting Worker] Cooldown ${cooldownMs}ms để ổn định RAM`);
     console.log(`   🏁 [Posting Worker] Finished processing (success or error). Scanner still running: ${isZaloScanning}`);
   }
   
@@ -8834,16 +9157,18 @@ async function scanAllGroupsForConfig(config, statusEl) {
         console.log(`    ⏳ Chờ ${waitTime}ms để tin được load hoàn toàn...`);
         await new Promise(resolve => setTimeout(resolve, waitTime));
       }
+
+      // ✅ CLEANUP: Xóa conversations từ webview để giảm memory leak
+      console.log(`    🧹 Cleanup webview sau scan...`);
+      await cleanupWebviewAfterScan();
       
       // DEBUG: Dump first message structure
       if (messages.length > 0) {
-        console.log(`    [DEBUG] First message structure:`, JSON.stringify(messages[0], null, 2).substring(0, 200));
-        console.log(`    [DEBUG] Message keys: ${Object.keys(messages[0]).join(', ')}`);
-        if (messages[0].images) {
-          console.log(`    [DEBUG] First message images count: ${messages[0].images.length}`);
-        } else {
-          console.log(`    [DEBUG] ⚠️ First message MISSING 'images' property!`);
-        }
+        const first = messages[0] || {};
+        const keys = Object.keys(first);
+        const imgCount = Array.isArray(first.images) ? first.images.length : 0;
+        const contentLen = typeof first.content === 'string' ? first.content.length : 0;
+        console.log(`    [DEBUG] First message meta: keys=${keys.length}, images=${imgCount}, contentLen=${contentLen}`);
       }
       
       // Lọc tin mới (per-config per-group state)
@@ -8876,18 +9201,44 @@ async function scanAllGroupsForConfig(config, statusEl) {
           console.warn(`    ⚠️ Không thêm được tin vào queue`);
           totalErrors++;
         }
+
+        // Nghỉ thêm nếu nhóm này có tin mới để giảm peak RAM
+        const groupCooldown = ZALO_TIMING.WAIT_GROUP_COOLDOWN_IF_HAS_NEW || 4000;
+        console.log(`    💤 Nghỉ ${groupCooldown}ms sau nhóm có tin mới để hạ RAM...`);
+        await new Promise(resolve => setTimeout(resolve, groupCooldown));
       }
       
       // ✅ Chờ ngắn giữa các nhóm (chỉ quét, không đăng)
       if (groupIdx < groupList.length - 1) {
         const waitTime = ZALO_TIMING.WAIT_BETWEEN_GROUPS;
         await new Promise(resolve => setTimeout(resolve, waitTime));
+        
+        // ✅ FLUSH MEMORY BETWEEN GROUPS: Gọi GC, clear pending data
+        console.log(`    💾 Flush memory trước nhóm tiếp theo...`);
+        await flushMemoryBetweenGroups(groupPos);
       }
       
     } catch (e) {
       console.error(`    ❌ Lỗi quét nhóm ${groupName}:`, e);
       totalErrors++;
+      
+      // ✅ Cleanup even on error
+      try {
+        console.log(`    🧹 Cleanup webview sau lỗi...`);
+        await cleanupWebviewAfterScan();
+      } catch (cleanupErr) {
+        console.warn('⚠️ Error during cleanup:', cleanupErr);
+      }
     }
+  }
+
+  // ✅ FINAL CLEANUP after all groups scanned
+  console.log(`\n✅ [Config ${configId}] Quét xong ${groupList.length} nhóm, bắt đầu final cleanup...`);
+  try {
+    await cleanupWebviewAfterScan();
+    await flushMemoryBetweenGroups(groupList.length);
+  } catch (cleanupErr) {
+    console.warn('⚠️ Final cleanup error:', cleanupErr);
   }
 
   // Hoàn tất quét tất cả nhóm của config này
