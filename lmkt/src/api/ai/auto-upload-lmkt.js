@@ -5282,14 +5282,6 @@ function loadGroupList() {
   }
 }
 
-function saveGroupList(list) {
-  try {
-    localStorage.setItem(ZALO_GROUP_LIST_KEY, JSON.stringify(list || []));
-  } catch (e) {
-    // ignore
-  }
-}
-
 /**
  * Load state (lastHash) cho một config + group cụ thể
  * @param {string} config_id - ID của config
@@ -5589,10 +5581,12 @@ Thử đủ thứ không hiệu quả. Cho đến khi hiểu rõ 3 nguyên tắc
 }
 
 ✅ HASHTAG CONVENTION (để trong facebook_post ở cuối):
-- Dùng hyphens thay vì underscores: #can-ho-cao-cap (không #can_ho_cao_cap)
-- 4-6 hashtags SEO liên quan
+- Chuẩn Facebook: hashtag phải liền mạch, KHÔNG dùng dấu gạch ngang (-), KHÔNG dùng underscore (_), KHÔNG dấu tiếng Việt
+- Ưu tiên CamelCase để dễ đọc: #BatDongSan; chấp nhận lowercase liền: #batdongsan
+- Linh động theo intent tìm kiếm: có thể trộn broad + long-tail + local + brand (nếu liên quan thật)
+- 4-6 hashtags SEO liên quan thực tế, không nhồi nhét, tránh hashtag quá dài khó đọc
 - Ưu tiên: Main keyword (từ title) → Long-tail → Industry → Local → CTA
-- Ví dụ: "#can-ho-cao-cap #nha-dat-tphcm #dau-tu #viet-nam"
+- Ví dụ chuẩn: "#BatDongSan #ToaNhaNguyenCan #BinhThanh #DauTuBatDongSan #NguyenHuuCanh #SunwahPearl"
 
 ========== CREATIVITY IS KEY ==========
 ✅ MỖI BÀI POST PHẢI KHÁC NHAU - Tránh lặp lại cấu trúc
@@ -5930,16 +5924,6 @@ function savePostedZaloMessages(postedMessages) {
   } catch (e) {
     console.warn('⚠️ [SavePostedZalo] Unexpected error:', e);
   }
-}
-
-/**
- * Kiểm tra tin nhắn đã được đăng chưa (theo hash)
- * @param {string} messageHash - Hash của tin nhắn
- * @returns {boolean} true nếu đã đăng, false nếu chưa
- */
-function isZaloMessagePosted(messageHash) {
-  const posted = loadPostedZaloMessages();
-  return posted.some(p => p.hash === messageHash);
 }
 
 /**
@@ -6450,52 +6434,6 @@ async function checkZaloLogin(webviewId) {
 }
 //Q-GV > 20 Tỷ;Hàng Thuê;Q Bình Thạnh- Đất;Q1,3 50T;300-1000T;Q2-TML-Đất;Thao Dien 300
 /**
- * Bắt đầu kiểm tra đăng nhập định kỳ
- * Khi đã đăng nhập → tự động bắt đầu quét
- */
-function startLoginCheck(statusEl) {
-  if (zaloLoginCheckTimer) {
-    clearInterval(zaloLoginCheckTimer);
-  }
-
-  zaloLoginCheckTimer = setInterval(async () => {
-    const loggedIn = await checkZaloLogin(window.zaloScannerWebviewId);
-    
-    if (loggedIn && !isZaloLoggedIn) {
-      // Vừa đăng nhập thành công
-      isZaloLoggedIn = true;
-      if (statusEl) statusEl.textContent = '✅ Đã đăng nhập Zalo. Bắt đầu quét...';
-      
-      // Clear timer kiểm tra đăng nhập
-      clearInterval(zaloLoginCheckTimer);
-      zaloLoginCheckTimer = null;
-      
-      // Tự động bắt đầu quét
-      startZaloScanner(statusEl);
-    } else if (!loggedIn && isZaloLoggedIn) {
-      // Đã đăng xuất
-      isZaloLoggedIn = false;
-      if (statusEl) statusEl.textContent = '⚠️ Đã đăng xuất Zalo. Dừng quét.';
-      stopZaloScanner(statusEl);
-    } else if (!loggedIn) {
-      // Chưa đăng nhập
-      if (statusEl) statusEl.textContent = '⏳ Đang chờ đăng nhập Zalo...';
-    }
-  }, 5000); // Kiểm tra mỗi 5 giây
-}
-
-/**
- * Dừng kiểm tra đăng nhập
- */
-function stopLoginCheck() {
-  if (zaloLoginCheckTimer) {
-    clearInterval(zaloLoginCheckTimer);
-    zaloLoginCheckTimer = null;
-  }
-  isZaloLoggedIn = false;
-}
-
-/**
  * Helper: Normalize text để so sánh chính xác (remove extra spaces, lowercase, etc)
  * @param {string} text - Text cần normalize
  * @returns {string} - Normalized text
@@ -6757,59 +6695,6 @@ async function waitForPostCreatedAndGetUrl(input, messages, selectedPages) {
       }
     }, checkInterval);
   });
-}
-
-async function pushMessagesToContentInput(messages, groupName = 'Unknown', config_id = null) {
-  const input = document.getElementById("content-input");
-  if (!input) return false;
-
-  // ✅ BƯỚC 1: LỌC CHỈ LẤY TIN CÓ ĐỦ NỘI DUNG + HÌNH ẢNH
-  const messagesWithImages = messages.filter(msg => {
-    const essentials = getMessageEssentials(msg);
-    if (!essentials.hasImages || !essentials.hasText) {
-      console.warn(`⏭️ Bỏ qua tin không đủ điều kiện (cần content + image): hasText=${essentials.hasText}, hasImages=${essentials.hasImages}`);
-    }
-    return essentials.isEligible;
-  });
-  
-  const skippedCount = messages.length - messagesWithImages.length;
-  if (skippedCount > 0) {
-    console.warn(`⚠️ Đã lọc bỏ ${skippedCount}/${messages.length} tin không có hình ảnh`);
-  }
-  
-  if (messagesWithImages.length === 0) {
-    console.warn(`❌ Không có tin nhắn nào đủ điều kiện (nội dung + hình ảnh) để đăng!`);
-    return false;
-  }
-  
-  // ✅ BƯỚC 2: LỌC BỎ TIN ĐÃ ĐƯỢC ĐĂNG TRƯỚC ĐÓ (cho config này)
-  const notPostedMessages = filterNotPostedMessages(messagesWithImages, config_id);
-  
-  if (notPostedMessages.length === 0) {
-    const alreadyPosted = messagesWithImages.length;
-    console.warn(`⚠️ Tất cả ${alreadyPosted} tin nhắn đã được đăng trong config này. Bỏ qua.`);
-    return false;
-  }
-  
-  const duplicates = messagesWithImages.length - notPostedMessages.length;
-  if (duplicates > 0) {
-    console.log(`🔍 Lọc bỏ ${duplicates} tin đã đăng, còn ${notPostedMessages.length} tin mới`);
-  }
-  
-  // Lưu context để dùng sau khi đăng thành công
-  window.__currentZaloGroupName = groupName;
-  window.__currentZaloConfigId = config_id;
-  
-  console.log(`✅ Có ${notPostedMessages.length} tin mới (chưa đăng) sẽ được đăng lên web (config: ${config_id || 'default'})`);
-  
-  // ✅ POST MESSAGES SEQUENTIALLY (1 tin/lần, chờ xong rồi mới tiếp)
-  const selectedPages = config_id 
-    ? getSelectedFacebookPagesForConfig(config_id)
-    : getSelectedFacebookPages();
-  
-  const result = await postMessagesSequentially(notPostedMessages, groupName, config_id, selectedPages);
-  
-  return result.success > 0;
 }
 
 /**
@@ -7256,7 +7141,13 @@ async function processPostingQueue() {
         await new Promise(resolve => setTimeout(resolve, waitTime));
       }
     }
-    
+  } catch (e) {
+    console.error(`❌ [Posting Worker] Error processing queue item:`, e);
+    item.status = 'error';
+    item.error = e.message;
+  } finally {
+    postingWorkerStats.currentlyProcessing = null;
+  }
 }
 
 /**
@@ -7447,150 +7338,6 @@ async function scanAndPostConfig(config, statusEl) {
   }
   
   console.log(`\n✅ [Config ${configId}] Hoàn tất: ${totalNew} tin mới, ${totalPosted} tin đăng`);
-}
-
-
-async function scanAllGroupsForConfig(config, statusEl) {
-  // ✅ WRAP with try-catch to prevent crash
-  try {
-    if (!isZaloScanning) return;
-    
-    // ✅ Check login status BEFORE scanning (passive check, don't interrupt)
-    if (!isZaloLoggedIn) {
-      console.warn(`⚠️ [Config] Zalo chưa đăng nhập, skip config này`);
-      if (statusEl) {
-        statusEl.textContent = `⏳ Zalo chưa đăng nhập - chờ đăng nhập...`;
-      }
-      return; // Skip this config, continue with next
-    }
-    
-    if (!config || !config.zalo_groups || config.zalo_groups.length === 0) {
-      console.log(`⚠️ [Config ${config?.config_id}] Không có nhóm để quét`);
-      return;
-    }
-
-    const configId = config.config_id || config.id;
-    const groupList = config.zalo_groups;
-    const configInterval = (config.zalo_scan_interval_minutes || 5) * 60 * 1000;
-    
-    console.log(`🔄 [Config ${configId}] Bắt đầu quét ${groupList.length} nhóm tuần tự (interval: ${config.zalo_scan_interval_minutes || 5} phút)...`);
-    
-    if (statusEl) {
-      statusEl.textContent = `🔍 [Config ${configId}] Quét tuần tự ${groupList.length} nhóm...`;
-    }
-
-    let totalNew = 0;
-    let totalPosted = 0;
-    let totalErrors = 0;
-    let scannedGroups = []; // ✅ VERIFICATION: Track groups scanned
-
-    // Quét TẬT CẢ nhóm TUẦN TỰ (1 cái rồi đến cái tiếp)
-    for (let groupIdx = 0; groupIdx < groupList.length; groupIdx++) {
-      if (!isZaloScanning) break; // Dừng nếu user stop quét
-      
-      const groupName = groupList[groupIdx].trim();
-      const groupPos = groupIdx + 1;
-    
-    try {
-      console.log(`\n  📍 [${configId}] [${groupPos}/${groupList.length}] Quét nhóm: ${groupName}`);
-      
-      if (statusEl) {
-        statusEl.textContent = `🔍 [Config ${configId}] [${groupPos}/${groupList.length}] Quét: ${groupName}...`;
-      }
-      
-      // ✅ VERIFICATION: Track this group is being scanned
-      scannedGroups.push({ name: groupName, status: 'scanning', startTime: Date.now() });
-      const rawMessages = await scanZaloGroup(groupName);
-      const messages = Array.isArray(rawMessages) ? rawMessages : [];
-      
-      console.log(`    📊 Quét được ${messages.length} tin nhắn`);
-      
-      // ⏳ Đợi thêm để đảm bảo tất cả tin đã load xong từ webview
-      if (messages.length > 0) {
-        const waitTime = ZALO_TIMING.WAIT_AFTER_SCAN_COMPLETE;
-        console.log(`    ⏳ Chờ ${waitTime}ms để tin được load hoàn toàn...`);
-        await new Promise(resolve => setTimeout(resolve, waitTime));
-      }
-      
-      // DEBUG: Dump first message structure
-      if (messages.length > 0) {
-        console.log(`    [DEBUG] First message structure:`, JSON.stringify(messages[0], null, 2).substring(0, 200));
-        console.log(`    [DEBUG] Message keys: ${Object.keys(messages[0]).join(', ')}`);
-        if (messages[0].images) {
-          console.log(`    [DEBUG] First message images count: ${messages[0].images.length}`);
-        } else {
-          console.log(`    [DEBUG] ⚠️ First message MISSING 'images' property!`);
-        }
-      }
-      
-      // Lọc tin mới (per-config per-group state)
-      const newMessages = filterNewMessagesForConfig(configId, groupName, messages);
-      
-      if (newMessages.length === 0) {
-        console.log(`    ⏭️ Không có tin mới`);
-        continue;
-      }
-      
-      console.log(`    ✅ Có ${newMessages.length} tin mới`);
-      totalNew += newMessages.length;
-      
-      // Đếm tin có hình
-      const messagesWithImages = newMessages.filter(msg => 
-        msg.images && Array.isArray(msg.images) && msg.images.length > 0
-      );
-      
-      console.log(`    🖼️  ${messagesWithImages.length}/${newMessages.length} tin có hình`);
-      
-      // ✅ THÊM TIN VÀO QUEUE thay vì đăng ngay
-      if (messagesWithImages.length > 0) {
-        console.log(`    📥 Thêm ${messagesWithImages.length} tin vào posting queue...`);
-        
-        const added = addToPostingQueue(messagesWithImages, groupName, configId, config);
-        if (added > 0) {
-          console.log(`    ✅ Đã thêm ${added} tin vào queue`);
-          totalPosted += added;
-        } else {
-          console.warn(`    ⚠️ Không thêm được tin vào queue`);
-          totalErrors++;
-        }
-      }
-      
-      // ✅ Chờ ngắn giữa các nhóm (chỉ quét, không đăng)
-      if (groupIdx < groupList.length - 1) {
-        const waitTime = ZALO_TIMING.WAIT_BETWEEN_GROUPS;
-        await new Promise(resolve => setTimeout(resolve, waitTime));
-      }
-      
-    } catch (e) {
-      console.error(`    ❌ Lỗi quét nhóm ${groupName}:`, e);
-      totalErrors++;
-    }
-  }
-
-  // Hoàn tất quét tất cả nhóm của config này
-  console.log(`\n✅ [Config ${configId}] Quét xong ${groupList.length} nhóm:`);
-  console.log(`   📊 ${totalNew} tin mới, ${totalPosted} tin thêm vào queue, ${totalErrors} lỗi`);
-  console.log(`   📋 Nhóm đã quét: ${scannedGroups.map(g => g.name).join(', ')}`);
-  console.log(`   📥 Posting queue hiện tại: ${zaloPostingQueue.length} items chờ xử lý`);
-  console.log(`   ⏳ Chuyển sang config tiếp theo...`);
-  
-  // ✅ VERIFICATION: Check nếu có nhóm nào bị missed
-  if (scannedGroups.length < groupList.length) {
-    console.warn(`⚠️ [VERIFY] Chi tiết: ${groupList.length} nhóm expected, ${scannedGroups.length} nhóm scanned`);
-    const missedGroups = groupList.filter(g => !scannedGroups.find(s => s.name === g.trim()));
-    if (missedGroups.length > 0) {
-      console.error(`❌ [VERIFY] Missed groups: ${missedGroups.join(', ')}`);
-    }
-  }
-  
-  } catch (err) {
-    // ✅ CATCH: Prevent crash from entire config scan
-    console.error(`❌ [Config ${config?.config_id || 'UNKNOWN'}] Unexpected error:`, err);
-    if (statusEl) {
-      statusEl.textContent = `❌ Error scanning config. Continue with next...`;
-    }
-    // Don't rethrow - let scanner continue
-  }
 }
 
 /**
@@ -11033,16 +10780,6 @@ function facebookFetch(url, options = {}) {
   return fetchFn(url, options);
 }
 
-async function facebookBackendPost(path, payload = {}) {
-  const res = await fetch(`/api${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload || {})
-  });
-  const data = await res.json();
-  return data;
-}
-
 // Flag để tracking FB SDK loaded
 let fbSDKLoaded = false;
 
@@ -11342,16 +11079,6 @@ function setFacebookNextAllowedPostAt() {
   return next;
 }
 
-function setFacebookNextAllowedPostAtWithConfig(minMs, maxMs) {
-  const min = Math.max(0, Number(minMs) || 0);
-  const max = Math.max(min, Number(maxMs) || min);
-  const now = Date.now();
-  const jitter = Math.floor(Math.random() * (max - min + 1)) + min;
-  const next = now + jitter;
-  localStorage.setItem('facebook_next_post_at', String(next));
-  return next;
-}
-
 function formatDurationMs(ms) {
   const totalSeconds = Math.ceil(ms / 1000);
   const minutes = Math.floor(totalSeconds / 60);
@@ -11472,41 +11199,6 @@ function recordFacebookPost(content = "") {
  * @param {string} pageAccessToken - Token để post (page-specific)
  * @param {string} userAccessToken - User token (để có thể re-exchange sau 60 ngày)
  */
-async function saveFanpageTokenToServer(configId, fanpageId, fanpageName, pageAccessToken, userAccessToken) {
-  try {
-    const allConfigs = loadDataOptionUser();
-    const config = allConfigs.find(c => c.id === configId);
-    
-    if (!config) {
-      console.warn(`⚠️ [SaveFBToken] Config ${configId} không tìm thấy`);
-      return false;
-    }
-    
-    // Update token trong config
-    config.fanpage_id = fanpageId;
-    config.fanpage_name = fanpageName;
-    config.fanpage_token = pageAccessToken;
-    config.fanpage_token_user_token = userAccessToken; // Lưu user token để re-exchange sau
-    config.fanpage_token_timestamp = Date.now();
-    config.fanpage_token_expires_at = Date.now() + (60 * 24 * 60 * 60 * 1000); // 60 ngày
-    
-    // Lưu lên server
-    return new Promise((resolve) => {
-      saveDataOptionUser(allConfigs, (success, error) => {
-        if (success) {
-          console.log(`✅ [SaveFBToken] Đã lưu fanpage token lên server cho config ${configId}`);
-          resolve(true);
-        } else {
-          console.error(`❌ [SaveFBToken] Lỗi lưu:', ${error}`);
-          resolve(false);
-        }
-      });
-    });
-  } catch (e) {
-    console.error('❌ [SaveFBToken] Lỗi:', e);
-    return false;
-  }
-}
 
 /**
  * ✅ Cập nhật token cho TẤT CẢ config có fanpage khi nhập token mới
@@ -11572,11 +11264,12 @@ async function updateAllConfigsWithNewFanpageToken(newPageAccessToken, userAcces
       console.log(`   window.csmUserData available?`, !!window.csmUserData);
       console.log(`   window.csmUserData.set available?`, typeof window.csmUserData?.set);
       
-      // ⏱️ TIMEOUT: Nếu callback không return trong 10 giây, force reject
+      // ⏱️ TIMEOUT: Chờ 30 giây cho backend (có thể network slow, server busy)
+      // Việc làm: Nếu callback không return trong 30 giây, force reject
       const timeoutId = setTimeout(() => {
-        console.error('❌ [UpdateAllConfigs] TIMEOUT: Callback chưa được gọi sau 10s');
-        reject(new Error('Lưu lên server timeout - có thể mạng bị gián đoạn'));
-      }, 10000);
+        console.error('❌ [UpdateAllConfigs] TIMEOUT: Callback chưa được gọi sau 30s');
+        reject(new Error('Lưu lên server timeout - có thể backend đang xử lý chậm hoặc mạng bị gián đoạn'));
+      }, 30000); // Tăng từ 10s lên 30s
       
       saveDataOptionUser(allConfigs, (success, error) => {
         clearTimeout(timeoutId); // ✅ Clear timeout ngay khi callback được gọi
@@ -11806,67 +11499,6 @@ async function loadAndValidateFanpageTokens() {
   }
 }
 
-function loadFacebookState() {
-  try {
-    // 1️⃣ TRY: Lấy từ database trước (nếu khả dụng)
-    if (window.csmApi?.getTableData && typeof loadZaloGroupsAndFbTokenFromDB === 'function') {
-      loadZaloGroupsAndFbTokenFromDB({
-        domain: 'h-holding.vn',
-        service_type: 'bat-dong-san'
-      }).then(data => {
-        if (data?.fbToken) {
-          console.log('✅ [LoadFacebookState] Tải token từ database');
-          // Nếu có token trong DB, update state
-          if (data.fbToken && !facebookState.userAccessToken) {
-            facebookState.userAccessToken = data.fbToken;
-            console.log('📝 [LoadFacebookState] Cập nhật userAccessToken từ DB');
-          }
-        }
-      }).catch(err => {
-        console.warn('⚠️ [LoadFacebookState] Lỗi khi load từ DB, báygiờ dùng localStorage:', err?.message || err);
-      });
-    }
-    
-    // 2️⃣ FALLBACK: Lấy từ localStorage (luôn chạy để load UI fast)
-    const saved = localStorage.getItem('facebook_post_state');
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      facebookState = { ...facebookState, ...parsed };
-      if (!Array.isArray(facebookState.selectedPageIds)) {
-        facebookState.selectedPageIds = facebookState.selectedPageId ? [facebookState.selectedPageId] : [];
-      }
-      console.log('📝 [LoadFacebookState] Tải từ localStorage');
-      
-      // 3️⃣ IMPORTANT: Mark token as needing validation
-      // Khi load từ localStorage, token cần được validate lại trước sử dụng
-      if (facebookState.selectedPageToken || facebookState.userAccessToken) {
-        facebookState._needsValidation = true;
-        console.log('⚠️ [LoadFacebookState] Token cần được validate trước sử dụng');
-      }
-    }
-    
-    // 4️⃣ LOAD FROM SERVER: Lấy fanpage token từ server (dataOptionUser)
-    // Điều này cho phép load token đã lưu ở nhiều device
-    try {
-      const allConfigs = loadDataOptionUser();
-      // Tìm config đầu tiên có fanpage token
-      const configWithToken = allConfigs.find(c => c.fanpage_token);
-      if (configWithToken) {
-        console.log(`📝 [LoadFacebookState] Tải fanpage token từ server config: ${configWithToken.id}`);
-        facebookState.selectedPageId = configWithToken.fanpage_id;
-        facebookState.selectedPageName = configWithToken.fanpage_name;
-        facebookState.selectedPageToken = configWithToken.fanpage_token;
-        facebookState.userAccessToken = configWithToken.fanpage_token_user_token || configWithToken.fanpage_token;
-        facebookState._needsValidation = true; // Mark để validate (có thể hết hạn)
-      }
-    } catch (e) {
-      console.warn('⚠️ [LoadFacebookState] Lỗi load từ server:', e);
-    }
-  } catch (e) {
-    console.warn('⚠️ [LoadFacebookState] Không thể load Facebook state:', e);
-  }
-}
-
 function saveFacebookState() {
   try {
     const toSave = {
@@ -11924,14 +11556,6 @@ function saveFacebookAutoSettings(settings) {
   } catch (e) {
     console.warn('Không thể save facebook_auto_settings:', e);
   }
-}
-
-function getFacebookAutoIntervalMs() {
-  const settings = loadFacebookAutoSettings();
-  const minMs = settings.minIntervalMin * 60 * 1000;
-  const maxMs = settings.maxIntervalMin * 60 * 1000;
-  const jitter = Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs;
-  return { minMs, maxMs, jitterMs: jitter };
 }
 
 function extractLinkFromMessage(item = {}) {
