@@ -7357,17 +7357,6 @@ async function processPostingQueue() {
       }
     }
     
-    item.status = 'done';
-    postingWorkerStats.totalSuccess++;
-    console.log(`\n✅ [Posting Worker] Hoàn tất queue item ${item.id} (${item.messages.length} messages)`);
-  } catch (e) {
-    item.status = 'error';
-    postingWorkerStats.totalError++;
-    console.error(`\n❌ [Posting Worker] Lỗi xử lý queue item ${item.id}:`, e);
-  } finally {
-    postingWorkerStats.currentlyProcessing = null;
-    postingWorkerStats.lastProcessedAt = Date.now();
-  }
 }
 
 /**
