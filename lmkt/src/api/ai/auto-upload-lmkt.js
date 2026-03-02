@@ -16137,6 +16137,83 @@ function saveDataOptionUser(data, callback, retryCount = 0) {
   console.log('====== 💾 [SaveDataOptionUser] BẮT ĐẦU LƯU DỮ LIỆU ======');
   console.log('📊 Số items được truyền vào:', dataToSave.length);
   
+  // ✅ VALIDATE & SANITIZE: Loại bỏ functions, circular refs, non-serializable
+  function sanitizeForJSON(obj, depth = 0) {
+    if (depth > 10) return null; // Prevent infinite recursion
+    if (obj === null || obj === undefined) return obj;
+    if (typeof obj === 'string' || typeof obj === 'number' || typeof obj === 'boolean') return obj;
+    if (typeof obj === 'bigint') return obj.toString(); // Convert BigInt to string
+    if (typeof obj === 'function') return undefined; // Remove functions
+    
+    if (Array.isArray(obj)) {
+      return obj.map(item => sanitizeForJSON(item, depth + 1)).filter(x => x !== undefined);
+    }
+    
+    if (typeof obj === 'object') {
+      const result = {};
+      for (const [key, value] of Object.entries(obj)) {
+        // Skip problematic keys
+        if (key.startsWith('__') || key === 'callback' || key === 'config_object') {
+          continue;
+        }
+        const sanitized = sanitizeForJSON(value, depth + 1);
+        if (sanitized !== undefined) {
+          result[key] = sanitized;
+        }
+      }
+      return result;
+    }
+    
+    return undefined;
+  }
+  
+  const sanitizedData = dataToSave.map(item => sanitizeForJSON(item)).filter(x => x);
+  console.log('✅ [Sanitize] Cleaned data:', sanitizedData.length, 'items (removed functions, circular refs)');
+  
+  // ✅ TEST JSON STRINGIFY before sending
+  let jsonStr = '';
+  try {
+    jsonStr = JSON.stringify(sanitizedData);
+    console.log(`✅ [JSON Test] Serializable - size: ${(jsonStr.length / 1024).toFixed(2)}KB`);
+    
+    if (jsonStr.length > 5 * 1024 * 1024) { // 5MB limit
+      console.error('❌ [JSON Test] Data too large:', (jsonStr.length / 1024 / 1024).toFixed(2), 'MB');
+      safeCallback(false, 'Data too large (>5MB)');
+      return;
+    }
+  } catch (e) {
+    console.error('❌ [JSON Test] SERIALIZE ERROR:', e.message);
+    console.log('   Trying with extra sanitization...');
+    
+    // Ultra sanitize mode: keep only safe fields
+    const ultraSanitized = sanitizedData.map(item => {
+      const safe = {};
+      const safeKeys = ['id', 'config_id', 'domain', 'service_type', 'project', 'fanpage_id', 
+                         'fanpage_token', 'fanpage_name', 'fanpage_token_expires_at',
+                         'zalo_groups', 'config_for_zalo', 'ai_prompt_id', 'type', 'timestamp',
+                         'config_for_facebook', 'service_code'];
+      safeKeys.forEach(key => {
+        if (key in item) {
+          const val = item[key];
+          // Extra check: no functions, no circular
+          if (typeof val !== 'function' && val !== item) {
+            safe[key] = val;
+          }
+        }
+      });
+      return safe;
+    });
+    
+    try {
+      jsonStr = JSON.stringify(ultraSanitized);
+      console.log(`✅ [Ultra Sanitize] Success - size: ${(jsonStr.length / 1024).toFixed(2)}KB`);
+    } catch (e2) {
+      console.error('❌ [Ultra Sanitize] Still failed:', e2.message);
+      safeCallback(false, 'Data not JSON serializable even after sanitization');
+      return;
+    }
+  }
+  
   // Ensure callback always exists
   const safeCallback = (success, error) => {
     try {
@@ -16182,12 +16259,12 @@ function saveDataOptionUser(data, callback, retryCount = 0) {
     console.warn('⚠️ [SaveDataOptionUser] Error loading posted messages:', e);
   }
   
-  // Merge: configs + posted messages
-  const finalData = [...dataToSave, ...postedMessages];
-  console.log('📊 Final data to save:', finalData.length, 'items (', dataToSave.length, 'configs +', postedMessages.length, 'posted messages)');
+  // Merge: sanitized configs + posted messages
+  const finalData = [...sanitizedData, ...postedMessages];
+  console.log('📊 Final data to save:', finalData.length, 'items (', sanitizedData.length, 'configs +', postedMessages.length, 'posted messages)');
   
   // Log chi tiết từng config
-  dataToSave.forEach((cfg, i) => {
+  sanitizedData.forEach((cfg, i) => {
     console.log(`   [${i}] Config:
       - id: ${cfg.id}
       - domain: ${cfg.domain}
@@ -16248,6 +16325,7 @@ function saveDataOptionUser(data, callback, retryCount = 0) {
         
         console.log('🔔 CALLBACK từ window.csmUserData.set() được gọi');
         console.log('   ✅ success =', success);
+
         console.log('   ❌ error =', error);
         
         if (success) {
