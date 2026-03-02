@@ -5587,6 +5587,9 @@ Thử đủ thứ không hiệu quả. Cho đến khi hiểu rõ 3 nguyên tắc
 - 4-6 hashtags SEO liên quan thực tế, không nhồi nhét, tránh hashtag quá dài khó đọc
 - Ưu tiên: Main keyword (từ title) → Long-tail → Industry → Local → CTA
 - Ví dụ chuẩn: "#BatDongSan #ToaNhaNguyenCan #BinhThanh #DauTuBatDongSan #NguyenHuuCanh #SunwahPearl"
+- BẮT BUỘC: field "hashtags" phải có 4-6 phần tử
+- BẮT BUỘC: "facebook_post" PHẢI kết thúc bằng chính các hashtag đó (mỗi hashtag bắt đầu bằng #)
+- Nếu thiếu hashtag, coi output KHÔNG HỢP LỆ và phải tự sửa lại trước khi trả JSON
 
 ========== CREATIVITY IS KEY ==========
 ✅ MỖI BÀI POST PHẢI KHÁC NHAU - Tránh lặp lại cấu trúc
@@ -5629,37 +5632,59 @@ async function createFacebookPostPromptWithCreative(industry, productInfo, custo
  */
 async function generateFacebookPostContent(webArticle = {}, helperAi, opts = {}) {
   try {
-    const prompt = createFacebookPostPrompt(webArticle, '', opts);
+    const basePrompt = createFacebookPostPrompt(webArticle, '', opts);
     
     if (!helperAi?.generateSeoContentWithPrompt) {
       console.warn('⚠️ [GenerateFBPost] helperAi.generateSeoContentWithPrompt not available');
       return null;
     }
     
-    console.log('🤖 [GenerateFBPost] Gọi AI sinh Facebook post...');
-    const result = await helperAi.generateSeoContentWithPrompt(prompt);
-    
-    if (!result?.success) {
-      console.warn('⚠️ [GenerateFBPost] AI failed:', result?.message);
-      return null;
-    }
-    
-    let fbPostData = result.data?.result || result.result || result.data;
-    
-    // Parse if string
-    if (typeof fbPostData === 'string') {
-      try {
-        fbPostData = parseSeoJsonString(fbPostData);
-      } catch (e) {
-        console.warn('⚠️ [GenerateFBPost] Failed to parse FB post data:', e.message);
-        return null;
+    const hasMandatoryHashtags = (data) => {
+      if (!data || typeof data !== 'object') return false;
+      const list = Array.isArray(data.hashtags) ? data.hashtags.filter(Boolean) : [];
+      if (list.length < 4 || list.length > 6) return false;
+      const post = String(data.facebook_post || '');
+      if (!post.trim()) return false;
+      const inPost = post.match(/#[^\s#]+/g) || [];
+      return inPost.length >= 4;
+    };
+
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const prompt = attempt === 1
+        ? basePrompt
+        : `${basePrompt}\n\n[HARD RETRY]\nOutput trước chưa hợp lệ vì thiếu hashtag bắt buộc. Hãy trả JSON hợp lệ với 4-6 hashtags và facebook_post có hashtag ở CUỐI bài.`;
+
+      console.log(`🤖 [GenerateFBPost] Gọi AI sinh Facebook post... (attempt ${attempt}/2)`);
+      const result = await helperAi.generateSeoContentWithPrompt(prompt);
+
+      if (!result?.success) {
+        console.warn('⚠️ [GenerateFBPost] AI failed:', result?.message);
+        continue;
       }
+
+      let fbPostData = result.data?.result || result.result || result.data;
+
+      if (typeof fbPostData === 'string') {
+        try {
+          fbPostData = parseSeoJsonString(fbPostData);
+        } catch (e) {
+          console.warn('⚠️ [GenerateFBPost] Failed to parse FB post data:', e.message);
+          continue;
+        }
+      }
+
+      if (!hasMandatoryHashtags(fbPostData)) {
+        console.warn(`⚠️ [GenerateFBPost] Attempt ${attempt}: thiếu hashtag bắt buộc, sẽ retry`);
+        continue;
+      }
+
+      console.log('✅ [GenerateFBPost] AI đã sinh Facebook post content hợp lệ');
+      console.log('📝 Post content:', fbPostData.facebook_post?.substring(0, 100));
+      return fbPostData;
     }
-    
-    console.log('✅ [GenerateFBPost] AI đã sinh Facebook post content thành công');
-    console.log('📝 Post content:', fbPostData.facebook_post?.substring(0, 100));
-    
-    return fbPostData;
+
+    console.warn('⚠️ [GenerateFBPost] Không thể tạo nội dung có hashtag hợp lệ sau 2 lần thử');
+    return null;
   } catch (e) {
     console.error('❌ [GenerateFBPost] Error:', e.message);
     return null;
