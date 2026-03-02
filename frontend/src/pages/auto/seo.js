@@ -1,5 +1,72 @@
 // Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/55.0.2883.87 Safari/537.36 OPR/42.0.2393.517
 // Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/40.0.2214.115 Safari/537.36
+
+// ========== SHUTDOWN DETECTION HELPERS - Ng\u0103n Memory Leak ==========
+/**
+ * Ki\u1ec3m tra xem AutoSetup component \u0111\u00e3 unmount ch\u01b0a
+ * N\u1ebfu unmount r\u1ed3i, c\u00e1c timer/async operations ph\u1ea3i d\u1eebng l\u1ea1i
+ */
+const isShuttingDown = () => {
+  if (typeof window !== 'undefined' && typeof window.__isAutoShuttingDown === 'function') {
+    return window.__isAutoShuttingDown();
+  }
+  return false;
+};
+
+/**
+ * Safe setInterval - T\u1ef1 \u0111\u1ed9ng ki\u1ec3m tra shutdown
+ * @param {Function} callback 
+ * @param {number} interval 
+ * @returns {number|null} interval ID ho\u1eb7c null n\u1ebfu shutdown
+ */
+const safeSetInterval = (callback, interval) => {
+  if (isShuttingDown()) {
+    console.warn('\u26a0\ufe0f [SHUTDOWN] B\u1ecf qua setInterval v\u00ec \u0111ang shutdown');
+    return null;
+  }
+  
+  const wrappedCallback = () => {
+    if (isShuttingDown()) {
+      console.log('\ud83d\uded1 [SHUTDOWN] D\u1eebng interval v\u00ec shutdown detected');
+      return;
+    }
+    try {
+      callback();
+    } catch (e) {
+      console.error('\u274c [INTERVAL ERROR]', e);
+    }
+  };
+  
+  return setInterval(wrappedCallback, interval);
+};
+
+/**
+ * Safe setTimeout - T\u1ef1 \u0111\u1ed9ng ki\u1ec3m tra shutdown
+ * @param {Function} callback 
+ * @param {number} delay 
+ * @returns {number|null} timeout ID ho\u1eb7c null n\u1ebfu shutdown
+ */
+const safeSetTimeout = (callback, delay) => {
+  if (isShuttingDown()) {
+    console.warn('\u26a0\ufe0f [SHUTDOWN] B\u1ecf qua setTimeout v\u00ec \u0111ang shutdown');
+    return null;
+  }
+  
+  const wrappedCallback = () => {
+    if (isShuttingDown()) {
+      console.log('\ud83d\uded1 [SHUTDOWN] B\u1ecf qua timeout v\u00ec shutdown detected');
+      return;
+    }
+    try {
+      callback();
+    } catch (e) {
+      console.error('\u274c [TIMEOUT ERROR]', e);
+    }
+  };
+  
+  return setTimeout(wrappedCallback, delay);
+};
+
 window.fnBililiteRange = function () {
   let bililiteRange; // create one global variable
   (function () {
@@ -2582,7 +2649,12 @@ window.TabManager = {
     return new Promise((resolve, reject) => {
       const startTime = Date.now();
       let lastWarnTime = 0;
-      const checkInterval = setInterval(() => {
+      const checkInterval = safeSetInterval(() => {
+        if (isShuttingDown()) {
+          if (checkInterval) clearInterval(checkInterval);
+          reject(new Error('Shutdown detected'));
+          return;
+        }
         const elapsed = Date.now() - startTime;
         const elapsedSecs = Math.round(elapsed / 1000);
         
@@ -3179,7 +3251,13 @@ const runParallelProcessing = async () => {
   
   const waitForAllTabsClose = () => {
     return new Promise((resolve) => {
-      const checkInterval = setInterval(() => {
+      const checkInterval = safeSetInterval(() => {
+        if (isShuttingDown()) {
+          if (checkInterval) clearInterval(checkInterval);
+          console.warn('[Parallel] 🛑 Shutdown detected, stopping batch wait');
+          resolve(false);
+          return;
+        }
         const activeCount = window.TabManager.getActiveTabCount();
         const elapsedMs = Date.now() - batchStartTime;
         const elapsedSecs = Math.round(elapsedMs / 1000);

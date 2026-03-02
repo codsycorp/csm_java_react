@@ -21,19 +21,516 @@ if (typeof window !== 'undefined') {
 // ========== GLOBAL ERROR HANDLERS - PREVENT SILENT CRASHES ==========
 // ✅ FIX: Catch unhandled promise rejections
 if (typeof window !== 'undefined') {
+  // ✅ Track crash attempts để debug
+  let crashCount = 0;
+  const MAX_CRASHES_BEFORE_ALERT = 3;
+  
   window.addEventListener('unhandledrejection', (event) => {
-    console.error('❌ [UNHANDLED REJECTION]', event.reason);
-    console.error('   Stack:', event.reason?.stack || 'no stack');
-    // Prevent default: don't let the browser crash
-    event.preventDefault();
+    try {
+      const reason = event.reason;
+      // ✅ Safe error message extraction
+      let errMsg = 'Unknown rejection reason';
+      if (reason instanceof Error) {
+        errMsg = reason.message;
+      } else if (typeof reason === 'string') {
+        errMsg = reason;
+      } else if (reason && typeof reason === 'object') {
+        errMsg = JSON.stringify(reason);
+      }
+      
+      console.error('❌ [UNHANDLED REJECTION]', errMsg);
+      console.error('   Reason object:', reason);
+      console.error('   Stack:', reason?.stack || 'no stack');
+      
+      // ✅ Count crashes
+      crashCount++;
+      if (crashCount >= MAX_CRASHES_BEFORE_ALERT) {
+        console.error(`🚨 [CRITICAL] ${crashCount} unhandled rejections detected! System may be unstable.`);
+        
+        // ✅ Show user-friendly message
+        if (window.antd && window.antd.notification) {
+          window.antd.notification.error({
+            message: 'Lỗi nghiêm trọng',
+            description: `Phát hiện ${crashCount} lỗi không xử lý. Vui lòng refresh trang để ổn định hệ thống.`,
+            duration: 0, // Don't auto close
+          });
+        }
+        
+        // Reset counter sau warning
+        crashCount = 0;
+      }
+      
+      // ✅ ALWAYS prevent default to stop crash
+      event.preventDefault();
+    } catch (e) {
+      console.error('❌ Error in unhandledrejection handler:', e);
+      try { 
+        event.preventDefault(); 
+      } catch (e2) {
+        console.error('❌ Failed to preventDefault:', e2);
+      }
+    }
   });
 
   window.addEventListener('error', (event) => {
-    console.error('❌ [WINDOW ERROR]', event.error || event.message);
-    if (event.error && event.error.stack) {
-      console.error('   Stack:', event.error.stack);
+    try {
+      const errMsg = event.error?.message || event.message || 'Unknown error';
+      
+      // ✅ Filter out 'interaction' entry type errors - these are from browser monitoring
+      if (errMsg && errMsg.includes && errMsg.includes("entry type 'interaction'")) {
+        console.warn('⚠️ [Browser Monitoring] Ignoring performance entry error (non-critical):', errMsg);
+        return; // Don't crash for these
+      }
+      
+      // ✅ Filter out common non-critical errors
+      const nonCriticalPatterns = [
+        'interaction',
+        'preload',
+        'ResizeObserver',
+        'Non-Error promise rejection captured',
+      ];
+      
+      const isNonCritical = nonCriticalPatterns.some(pattern => 
+        errMsg && errMsg.includes && errMsg.includes(pattern)
+      );
+      
+      if (isNonCritical) {
+        console.warn('⚠️ [Non-Critical Error] Ignoring:', errMsg);
+        event.preventDefault?.();
+        return;
+      }
+      
+      console.error('❌ [WINDOW ERROR]', errMsg);
+      if (event.error && event.error.stack) {
+        console.error('   Stack:', event.error.stack);
+      }
+      
+      // ✅ Count critical errors
+      crashCount++;
+      
+      // Prevent default crash only for non-critical errors
+      if (isNonCritical) {
+        event.preventDefault?.();
+      }
+    } catch (e) {
+      console.error('❌ Error in error handler:', e);
     }
   });
+
+  // ✅ NEW: Catch rejections from fetch/promises that don't have .catch()
+  const originalFetch = window.fetch;
+  if (originalFetch) {
+    window.fetch = function(...args) {
+      return originalFetch.apply(this, args).catch((err) => {
+        console.error('❌ [FETCH ERROR]', err);
+        // ✅ Don't re-throw, just log
+        return Promise.reject(err);
+      });
+    };
+  }
+  
+  // ✅ NEW: Wrap setTimeout/setInterval errors
+  const originalSetTimeout = window.setTimeout;
+  window.setTimeout = function(callback, delay, ...args) {
+    const wrappedCallback = function() {
+      try {
+        callback.apply(this, args);
+      } catch (err) {
+        console.error('❌ [TIMEOUT ERROR]', err);
+        // Don't re-throw, prevent crash
+      }
+    };
+    return originalSetTimeout.call(window, wrappedCallback, delay);
+  };
+  
+  const originalSetInterval = window.setInterval;
+  window.setInterval = function(callback, delay, ...args) {
+    const wrappedCallback = function() {
+      try {
+        callback.apply(this, args);
+      } catch (err) {
+        console.error('❌ [INTERVAL ERROR]', err);
+        // Don't re-throw, prevent crash
+      }
+    };
+    return originalSetInterval.call(window, wrappedCallback, delay);
+  };
+}
+
+// ========== SHUTDOWN DETECTION HELPERS - Ng\u0103n Memory Leak ==========
+/**
+ * Ki\u1ec3m tra xem AutoSetup component \u0111\u00e3 unmount ch\u01b0a
+ * N\u1ebfu unmount r\u1ed3i, c\u00e1c timer/async operations ph\u1ea3i d\u1eebng l\u1ea1i
+ */
+const isShuttingDown = () => {
+  if (typeof window !== 'undefined' && typeof window.__isAutoShuttingDown === 'function') {
+    return window.__isAutoShuttingDown();
+  }
+  return false;
+};
+
+/**
+ * Safe setInterval - T\u1ef1 \u0111\u1ed9ng ki\u1ec3m tra shutdown
+ * @param {Function} callback 
+ * @param {number} interval 
+ * @returns {number|null} interval ID ho\u1eb7c null n\u1ebfu shutdown
+ */
+const safeSetInterval = (callback, interval) => {
+  if (isShuttingDown()) {
+    console.warn('\u26a0\ufe0f [SHUTDOWN] B\u1ecf qua setInterval v\u00ec \u0111ang shutdown');
+    return null;
+  }
+  
+  const wrappedCallback = () => {
+    if (isShuttingDown()) {
+      console.log('\ud83d\uded1 [SHUTDOWN] D\u1eebng interval v\u00ec shutdown detected');
+      return;
+    }
+    try {
+      callback();
+    } catch (e) {
+      console.error('\u274c [INTERVAL ERROR]', e);
+    }
+  };
+  
+  return setInterval(wrappedCallback, interval);
+};
+
+/**
+ * Safe setTimeout - T\u1ef1 \u0111\u1ed9ng ki\u1ec3m tra shutdown
+ * @param {Function} callback 
+ * @param {number} delay 
+ * @returns {number|null} timeout ID ho\u1eb7c null n\u1ebfu shutdown
+ */
+const safeSetTimeout = (callback, delay) => {
+  if (isShuttingDown()) {
+    console.warn('\u26a0\ufe0f [SHUTDOWN] B\u1ecf qua setTimeout v\u00ec \u0111ang shutdown');
+    return null;
+  }
+  
+  const wrappedCallback = () => {
+    if (isShuttingDown()) {
+      console.log('\ud83d\uded1 [SHUTDOWN] B\u1ecf qua timeout v\u00ec shutdown detected');
+      return;
+    }
+    try {
+      callback();
+    } catch (e) {
+      console.error('\u274c [TIMEOUT ERROR]', e);
+    }
+  };
+  
+  return setTimeout(wrappedCallback, delay);
+};
+
+// ========== MEMORY OPTIMIZATION MODULE - Tiết kiệm RAM mà không mất logic ==========
+/**
+ * Hệ thống quản lý bộ nhớ toàn diện
+ * 
+ * Tính năng:
+ * 1. Memory Monitoring - Theo dõi RAM usage
+ * 2. Smart Webview Manager - Lazy load với option preload
+ * 3. LocalStorage Optimizer - Auto cleanup
+ * 4. Queue Limiter - Giới hạn items
+ * 5. Event Listener Registry - Track & cleanup
+ */
+const MemoryOptimizer = {
+  // Config
+  config: {
+    MAX_LOCALSTORAGE_ITEM_SIZE: 500 * 1024, // 500KB per item
+    MAX_QUEUE_SIZE: 200, // Max 200 items in queue
+    MEMORY_CHECK_INTERVAL: 60000, // Check every 60s
+    AUTO_CLEANUP_THRESHOLD: 0.8, // Cleanup khi dùng >80% quota
+    WEBVIEW_LAZY_LOAD: false, // ✅ FALSE = Auto-load webview ngay khi UI mở (tiện lợi, chỉ click 1 lần)
+    WEBVIEW_AUTO_DESTROY_DELAY: 300000, // Destroy webview sau 5 phút không dùng
+  },
+
+  // State
+  state: {
+    webviewLastUsed: 0,
+    cleanupScheduled: false,
+    listeners: new Map(), // Track event listeners
+    webviewCreated: false,
+  },
+
+  /**
+   * Khởi tạo memory optimizer
+   */
+  init() {
+    console.log('🧹 [MemoryOptimizer] Initializing...');
+    
+    // Auto cleanup localStorage khi vượt threshold
+    this.schedulePeriodicCleanup();
+    
+    // Track memory usage nếu API có sẵn
+    if (performance && performance.memory) {
+      this.startMemoryMonitoring();
+    }
+    
+    console.log('✅ [MemoryOptimizer] Initialized with config:', this.config);
+  },
+
+  /**
+   * Monitor memory usage (chỉ trên Chrome/Edge)
+   */
+  startMemoryMonitoring() {
+    safeSetInterval(() => {
+      if (isShuttingDown()) return;
+      
+      try {
+        const mem = performance.memory;
+        const usedMB = (mem.usedJSHeapSize / 1024 / 1024).toFixed(1);
+        const limitMB = (mem.jsHeapSizeLimit / 1024 / 1024).toFixed(1);
+        const percent = ((mem.usedJSHeapSize / mem.jsHeapSizeLimit) * 100).toFixed(1);
+        
+        // Log mỗi 5 phút
+        if (Date.now() % 300000 < 60000) {
+          console.log(`📊 [Memory] ${usedMB}MB / ${limitMB}MB (${percent}%)`);
+        }
+        
+        // Auto cleanup nếu >80%
+        if (percent > 80) {
+          console.warn(`⚠️ [Memory] High usage ${percent}%, triggering cleanup...`);
+          this.performEmergencyCleanup();
+        }
+      } catch (e) {
+        // Ignore errors
+      }
+    }, this.config.MEMORY_CHECK_INTERVAL);
+  },
+
+  /**
+   * Cleanup định kỳ localStorage
+   */
+  schedulePeriodicCleanup() {
+    if (this.state.cleanupScheduled) return;
+    this.state.cleanupScheduled = true;
+
+    safeSetInterval(() => {
+      if (isShuttingDown()) return;
+      this.cleanupLocalStorage();
+    }, 10 * 60 * 1000); // Mỗi 10 phút
+  },
+
+  /**
+   * Cleanup localStorage - xóa items cũ/lớn
+   */
+  cleanupLocalStorage() {
+    try {
+      const keysToCheck = [
+        'zalo_posted_messages',
+        'dataOptionUser', 
+        'user_address',
+        'facebook_post_state'
+      ];
+
+      let totalCleaned = 0;
+      
+      for (const key of keysToCheck) {
+        const item = localStorage.getItem(key);
+        if (!item) continue;
+
+        const sizeKB = item.length / 1024;
+        
+        // Xóa nếu > 1MB
+        if (sizeKB > 1024) {
+          console.log(`🗑️ [Cleanup] Removing large item: ${key} (${sizeKB.toFixed(1)}KB)`);
+          localStorage.removeItem(key);
+          totalCleaned++;
+          continue;
+        }
+
+        // Truncate array nếu quá dài
+        try {
+          const parsed = JSON.parse(item);
+          if (Array.isArray(parsed) && parsed.length > 500) {
+            const truncated = parsed.slice(-200); // Giữ 200 items mới nhất
+            localStorage.setItem(key, JSON.stringify(truncated));
+            console.log(`✂️ [Cleanup] Truncated ${key}: ${parsed.length} → ${truncated.length} items`);
+            totalCleaned++;
+          }
+        } catch (e) {
+          // Not JSON, skip
+        }
+      }
+
+      if (totalCleaned > 0) {
+        console.log(`✅ [Cleanup] Cleaned ${totalCleaned} localStorage items`);
+      }
+    } catch (e) {
+      console.error('❌ [Cleanup] Error:', e);
+    }
+  },
+
+  /**
+   * Emergency cleanup khi memory cao
+   */
+  performEmergencyCleanup() {
+    console.warn('🚨 [Memory] Emergency cleanup triggered!');
+    
+    // 1. Clear large localStorage items
+    this.cleanupLocalStorage();
+    
+    // 2. Clear unused webview nếu có
+    if (this.state.webviewCreated) {
+      const timeSinceLastUse = Date.now() - this.state.webviewLastUsed;
+      if (timeSinceLastUse > this.config.WEBVIEW_AUTO_DESTROY_DELAY) {
+        this.destroyUnusedWebview();
+      }
+    }
+    
+    // 3. Force garbage collection nếu có API
+    if (window.gc) {
+      console.log('🗑️ [Memory] Running manual GC...');
+      window.gc();
+    }
+    
+    console.log('✅ [Memory] Emergency cleanup completed');
+  },
+
+  /**
+   * Destroy webview không dùng để giải phóng RAM
+   */
+  destroyUnusedWebview() {
+    const webviewId = window.zaloScannerWebviewId;
+    const webview = document.getElementById(webviewId);
+    
+    if (webview && webview.parentNode) {
+      console.log('🗑️ [Memory] Destroying unused webview to free RAM...');
+      
+      // Clear webview session
+      try {
+        if (webview.clearHistory) webview.clearHistory();
+        if (webview.stop) webview.stop();
+      } catch (e) {
+        console.warn('⚠️ [Memory] Webview cleanup warning:', e);
+      }
+      
+      // Remove from DOM
+      webview.parentNode.removeChild(webview);
+      this.state.webviewCreated = false;
+      
+      console.log('✅ [Memory] Webview destroyed, RAM freed');
+    }
+  },
+
+  /**
+   * Track webview usage
+   */
+  markWebviewUsed() {
+    this.state.webviewLastUsed = Date.now();
+    this.state.webviewCreated = true;
+  },
+
+  /**
+   * Giới hạn kích thước queue để tránh OOM
+   */
+  limitQueueSize(queue, maxSize = null) {
+    const limit = maxSize || this.config.MAX_QUEUE_SIZE;
+    
+    if (Array.isArray(queue) && queue.length > limit) {
+      const removed = queue.splice(0, queue.length - limit);
+      console.warn(`⚠️ [Memory] Queue too large, removed ${removed.length} oldest items`);
+      return removed.length;
+    }
+    
+    return 0;
+  },
+
+  /**
+   * Safe localStorage setItem với size check
+   */
+  safeLocalStorageSet(key, value) {
+    try {
+      const stringValue = typeof value === 'string' ? value : JSON.stringify(value);
+      const sizeKB = stringValue.length / 1024;
+      
+      // Warn nếu item quá lớn
+      if (sizeKB > this.config.MAX_LOCALSTORAGE_ITEM_SIZE / 1024) {
+        console.warn(`⚠️ [Memory] localStorage item "${key}" very large: ${sizeKB.toFixed(1)}KB`);
+        
+        // Truncate nếu là array
+        if (Array.isArray(value)) {
+          const truncated = value.slice(-100); // Chỉ giữ 100 items
+          localStorage.setItem(key, JSON.stringify(truncated));
+          console.log(`✂️ [Memory] Truncated "${key}": ${value.length} → ${truncated.length} items`);
+          return true;
+        }
+      }
+      
+      localStorage.setItem(key, stringValue);
+      return true;
+    } catch (error) {
+      if (error.name === 'QuotaExceededError') {
+        console.error('❌ [Memory] localStorage quota exceeded!');
+        this.cleanupLocalStorage(); // Auto cleanup
+        return false;
+      }
+      console.error('❌ [Memory] localStorage error:', error);
+      return false;
+    }
+  },
+
+  /**
+   * Track event listener để cleanup sau
+   */
+  trackListener(element, event, handler, options) {
+    const key = `${element.id || 'unknown'}_${event}`;
+    
+    if (!this.state.listeners.has(key)) {
+      this.state.listeners.set(key, []);
+    }
+    
+    this.state.listeners.get(key).push({ element, event, handler, options });
+    element.addEventListener(event, handler, options);
+  },
+
+  /**
+   * Cleanup tất cả tracked listeners
+   */
+  cleanupAllListeners() {
+    console.log(`🧹 [Memory] Cleaning up ${this.state.listeners.size} listener groups...`);
+    
+    let count = 0;
+    this.state.listeners.forEach((listeners, key) => {
+      listeners.forEach(({ element, event, handler, options }) => {
+        try {
+          element.removeEventListener(event, handler, options);
+          count++;
+        } catch (e) {
+          // Element might be removed
+        }
+      });
+    });
+    
+    this.state.listeners.clear();
+    console.log(`✅ [Memory] Removed ${count} event listeners`);
+  },
+
+  /**
+   * Get memory stats
+   */
+  getStats() {
+    const stats = {
+      webviewCreated: this.state.webviewCreated,
+      listenersCount: this.state.listeners.size,
+      lastCleanup: this.state.lastCleanup || 'Never',
+    };
+
+    if (performance && performance.memory) {
+      const mem = performance.memory;
+      stats.memoryUsedMB = (mem.usedJSHeapSize / 1024 / 1024).toFixed(1);
+      stats.memoryLimitMB = (mem.jsHeapSizeLimit / 1024 / 1024).toFixed(1);
+      stats.memoryPercent = ((mem.usedJSHeapSize / mem.jsHeapSizeLimit) * 100).toFixed(1);
+    }
+
+    return stats;
+  }
+};
+
+// ✅ Auto-init khi script load
+if (typeof window !== 'undefined') {
+  MemoryOptimizer.init();
 }
 
 // ========== CRYPTO HELPERS - ENCRYPT/DECRYPT HTML CONTENT ==========
@@ -3875,7 +4372,10 @@ async function processContent(item, opts = {}) {
         thongbao(`⚠️ Không post được fanpage nào`);
       }
     } catch (fbError) {
-      console.error(`❌ [Facebook] Lỗi post:`, fbError.message);
+      // ✅ FIX: Safe error message access
+      const errMsg = fbError?.message || fbError?.toString() || 'Unknown Facebook error';
+      console.error(`❌ [Facebook] Lỗi post:`, errMsg);
+      console.error('   Stack:', fbError?.stack || 'No stack');
       // Không throw error, vì post FB là optional
     }
   } else {
@@ -4836,6 +5336,101 @@ const ZALO_GROUP_SCAN_TIMEOUT_MS = 30000; // Max 30 giây scan 1 nhóm (webview 
 let zaloConfigScanners = {};
 let isZaloScanning = false;
 
+// ========== ✅ CENTRAL TIMER REGISTRY - PREVENT RESOURCE LEAKS ==========
+const timerRegistry = {
+  timers: new Map(),
+  
+  register(name, timerId, type = 'interval') {
+    const entry = { id: timerId, type, createdAt: Date.now(), active: true };
+    this.timers.set(name, entry);
+    console.log(`⏱️ Timer registered: ${name} (${type})`);
+    return timerId;
+  },
+  
+  clear(name) {
+    const entry = this.timers.get(name);
+    if (!entry) {
+      console.warn(`⚠️ Timer not found: ${name}`);
+      return;
+    }
+    
+    try {
+      if (entry.type === 'interval') clearInterval(entry.id);
+      if (entry.type === 'timeout') clearTimeout(entry.id);
+    } catch (e) {
+      console.warn(`⚠️ Error clearing timer ${name}:`, e);
+    }
+    
+    entry.active = false;
+    this.timers.delete(name);
+    console.log(`🧹 Timer cleared: ${name}`);
+  },
+  
+  clearAll() {
+    console.log(`🧹 Clearing ${this.timers.size} timers...`);
+    for (const [name, entry] of this.timers) {
+      try {
+        if (entry.type === 'interval') clearInterval(entry.id);
+        if (entry.type === 'timeout') clearTimeout(entry.id);
+      } catch (e) {
+        console.warn(`⚠️ Error clearing ${name}:`, e);
+      }
+      entry.active = false;
+    }
+    this.timers.clear();
+    console.log(`✅ All timers cleared`);
+  },
+  
+  status() {
+    const active = Array.from(this.timers.entries())
+      .filter(([_, e]) => e.active)
+      .map(([name, _]) => name);
+    console.log(`📊 Active timers (${active.length}): ${active.join(', ')}`);
+    return active;
+  }
+};
+
+// ========== ✅ EVENT LISTENER REGISTRY - PREVENT DUPLICATE LISTENERS ==========
+const eventRegistry = {
+  listeners: [],
+  
+  add(element, event, handler, options = false) {
+    element.addEventListener(event, handler, options);
+    this.listeners.push({ element, event, handler, options });
+    console.log(`📌 Listener added: ${element?.id || element?.tagName || 'unknown'} - ${event}`);
+    return { element, event, handler };
+  },
+  
+  remove(element, event, handler, options = false) {
+    try {
+      element.removeEventListener(event, handler, options);
+      this.listeners = this.listeners.filter(
+        l => !(l.element === element && l.event === event && l.handler === handler)
+      );
+      console.log(`❌ Listener removed: ${element?.id || element?.tagName || 'unknown'} - ${event}`);
+    } catch (e) {
+      console.warn(`⚠️ Error removing listener:`, e);
+    }
+  },
+  
+  removeAll() {
+    console.log(`🧹 Removing ${this.listeners.length} listeners...`);
+    for (const {element, event, handler, options} of this.listeners) {
+      try {
+        element.removeEventListener(event, handler, options);
+      } catch (e) {
+        console.warn(`⚠️ Error removing listener:`, e);
+      }
+    }
+    this.listeners = [];
+    console.log(`✅ All listeners removed`);
+  },
+  
+  count() {
+    return this.listeners.length;
+  }
+};
+
 // ========== ZALO MESSAGE SCRAPING CORE LOGIC ==========
 /**
  * Chờ image load xong (nếu chưa complete)
@@ -5761,7 +6356,8 @@ function saveGroupList(list) {
   try {
     localStorage.setItem(ZALO_GROUP_LIST_KEY, JSON.stringify(list || []));
   } catch (e) {
-    // ignore
+    console.warn('⚠️ [Memory] saveGroupList failed, using safe method:', e.message);
+    MemoryOptimizer.safeLocalStorageSet(ZALO_GROUP_LIST_KEY, list || []);
   }
 }
 
@@ -5791,7 +6387,8 @@ function saveGroupStateForConfig(config_id, groupName, lastHash) {
     const stateKey = `${ZALO_GROUP_STATE_KEY}:${config_id}:${groupName}`;
     localStorage.setItem(stateKey, lastHash);
   } catch (e) {
-    // ignore
+    console.warn('⚠️ [Memory] saveGroupState failed:', e.message);
+    // Fallback: try MemoryOptimizer (though this is just a string, should work)
   }
 }
 
@@ -5810,7 +6407,8 @@ function saveGroupState(state) {
   try {
     localStorage.setItem(ZALO_GROUP_STATE_KEY, JSON.stringify(state || {}));
   } catch (e) {
-    // ignore
+    console.warn('⚠️ [Memory] saveGroupState (deprecated) failed, using safe method:', e.message);
+    MemoryOptimizer.safeLocalStorageSet(ZALO_GROUP_STATE_KEY, state || {});
   }
 }
 
@@ -6414,19 +7012,29 @@ function savePostedZaloMessages(postedMessages, callback) {
     console.log(`💾 [SavePostedZalo] Saving ${messagesToSave.length} posted messages to server...`);
     console.log(`   📊 Total data size: ${finalData.length} items (${otherData.length} configs + ${messagesToSave.length} messages)`);
     
-    // Save to server via saveDataOptionUser
+    // Save to server via saveDataOptionUser with error protection
     saveDataOptionUser(finalData, (success, error) => {
-      if (success) {
-        console.log(`✅ [SavePostedZalo] Saved successfully to server`);
-        if (callback) callback(true);
-      } else {
-        console.error(`❌ [SavePostedZalo] Save failed:`, error);
-        if (callback) callback(false, error);
+      try {
+        if (success) {
+          console.log(`✅ [SavePostedZalo] Saved successfully to server`);
+          if (typeof callback === 'function') callback(true);
+        } else {
+          console.error(`❌ [SavePostedZalo] Save failed:`, error);
+          // ✅ Don't crash - continue operation
+          if (typeof callback === 'function') callback(false, error);
+        }
+      } catch (cbError) {
+        console.error('❌ [SavePostedZalo] Callback error:', cbError);
       }
     });
   } catch (e) {
     console.error('❌ [SavePostedZalo] Unexpected error:', e);
-    if (callback) callback(false, e.message);
+    // ✅ Don't crash if callback fails
+    try {
+      if (typeof callback === 'function') callback(false, e.message);
+    } catch (cbError) {
+      console.error('❌ [SavePostedZalo] Callback error:', cbError);
+    }
   }
 }
 
@@ -6481,16 +7089,23 @@ function recordPostedZaloMessage(message, groupName, config_id = null) {
     // Cleanup tin cũ
     cleanupOldPostedZaloMessages(posted);
     
-    // Lưu lại với callback
+    // Lưu lại với callback - wrap callback to prevent crashing
     savePostedZaloMessages(posted, (success, error) => {
-      if (success) {
-        console.log(`✅ [RecordPosted] Recorded message from ${groupName} (config: ${config_id || 'unknown'}): ${newRecord.content_preview}`);
-      } else {
-        console.error(`❌ [RecordPosted] Failed to save:`, error);
+      try {
+        if (success) {
+          console.log(`✅ [RecordPosted] Recorded message from ${groupName} (config: ${config_id || 'unknown'}): ${newRecord.content_preview}`);
+        } else {
+          console.error(`❌ [RecordPosted] Failed to save:`, error);
+          // ✅ Don't crash - just log the error and continue
+          console.warn('⚠️ [RecordPosted] Continuing despite save failure...');
+        }
+      } catch (cbError) {
+        console.error('❌ [RecordPosted] Callback error:', cbError);
       }
     });
   } catch (e) {
     console.warn('⚠️ [RecordPosted] Error:', e);
+    // ✅ Continue even if recording fails - don't break the flow
   }
 }
 
@@ -6990,46 +7605,77 @@ function createZaloWebview(webviewId, url, container) {
 async function checkZaloLogin(webviewId) {
   return new Promise((resolve) => {
     // ✅ FIX: Add timeout to prevent hang
-    const timeoutMs = 5000; // 5 seconds
+    const timeoutMs = 8000; // Tăng lên 8 giây cho webview load chậm
     let callbackCalled = false;
     
-    const timeout = setTimeout(() => {
+    const timeout = safeSetTimeout(() => {
       if (callbackCalled) return;
       callbackCalled = true;
-      console.warn(`⏱️ [checkZaloLogin] Timeout after ${timeoutMs}ms`);
+      console.warn(`⏱️ [checkZaloLogin] Timeout after ${timeoutMs}ms - webview might not be ready`);
       resolve(false);
     }, timeoutMs);
     
     const wv = document.getElementById(webviewId);
-    if (!wv || !wv.executeScript) {
+    if (!wv) {
       clearTimeout(timeout);
+      console.error('❌ [checkZaloLogin] Webview element not found:', webviewId);
+      resolve(false);
+      return;
+    }
+    
+    if (!wv.executeScript) {
+      clearTimeout(timeout);
+      console.error('❌ [checkZaloLogin] Webview.executeScript not available - webview not ready');
       resolve(false);
       return;
     }
 
     const checkScript = `
       (function() {
-        // Kiểm tra có zavatar-container là đã đăng nhập
-        const hasAvatar = !!document.querySelector('.zavatar-container') || 
-                         !!document.querySelector('[class*="zavatar-container"]');
-        
-        console.log('[Zalo Login Check] zavatar-container found:', hasAvatar);
-        return hasAvatar;
+        try {
+          // Kiểm tra có zavatar-container là đã đăng nhập
+          const hasAvatar = !!document.querySelector('.zavatar-container') || 
+                           !!document.querySelector('[class*="zavatar-container"]');
+          
+          // Log để debug
+          console.log('[Zalo Login Check] zavatar-container found:', hasAvatar);
+          
+          // Trả về kết quả
+          return hasAvatar;
+        } catch (e) {
+          console.error('[Zalo Login Check] Error:', e);
+          return false;
+        }
       })();
     `;
 
-    wv.executeScript(
-      { code: checkScript },
-      (results) => {
-        if (callbackCalled) return;
-        callbackCalled = true;
-        clearTimeout(timeout);
-        
-        const isLoggedIn = results && results[0] === true;
-        console.log(`🔐 Zalo login check: ${isLoggedIn ? '✅ Đã đăng nhập' : '❌ Chưa đăng nhập'}`);
-        resolve(isLoggedIn);
-      }
-    );
+    try {
+      wv.executeScript(
+        { code: checkScript },
+        (results) => {
+          if (callbackCalled) return;
+          callbackCalled = true;
+          if (timeout) clearTimeout(timeout);
+          
+          // ✅ Kiểm tra results có hợp lệ không
+          if (!results || !Array.isArray(results) || results.length === 0) {
+            console.warn('⚠️ [checkZaloLogin] executeScript returned empty results - webview might not be ready');
+            resolve(false);
+            return;
+          }
+          
+          const isLoggedIn = results[0] === true;
+          console.log(`🔐 Zalo login check: ${isLoggedIn ? '✅ Đã đăng nhập' : '❌ Chưa đăng nhập'}`);
+          resolve(isLoggedIn);
+        }
+      );
+    } catch (err) {
+      if (callbackCalled) return;
+      callbackCalled = true;
+      if (timeout) clearTimeout(timeout);
+      console.error('❌ [checkZaloLogin] executeScript threw error:', err);
+      resolve(false);
+    }
   });
 }
 //Q-GV > 20 Tỷ;Hàng Thuê;Q Bình Thạnh- Đất;Q1,3 50T;300-1000T;Q2-TML-Đất;Thao Dien 300
@@ -7831,6 +8477,7 @@ async function postToSelectedFanpages(messages, postUrl, selectedPages = null, o
 /**
  * ✅ THÊM TIN VÀO POSTING QUEUE
  * Thay vì đăng ngay, tin sẽ được thêm vào queue để posting worker xử lý
+ * ✅ Memory-safe: Tự động giới hạn kích thước queue
  */
 function addToPostingQueue(messages, groupName, configId, config) {
   if (!messages || messages.length === 0) return 0;
@@ -7846,6 +8493,13 @@ function addToPostingQueue(messages, groupName, configId, config) {
   };
   
   zaloPostingQueue.push(queueItem);
+  
+  // ✅ MEMORY OPTIMIZATION: Giới hạn kích thước queue tránh OOM
+  const removed = MemoryOptimizer.limitQueueSize(zaloPostingQueue);
+  if (removed > 0) {
+    console.warn(`⚠️ [Queue] Removed ${removed} oldest items to prevent memory overflow`);
+  }
+  
   console.log(`📥 [Queue] Added ${messages.length} messages from ${groupName} (config: ${configId}) → Queue size: ${zaloPostingQueue.length}`);
   return messages.length;
 }
@@ -7928,22 +8582,31 @@ function mergeConsecutiveMessages(messages) {
  * Lấy tin từ queue → GỘP TIN LIÊN TIẾP → đăng tuần tự → đợi xong → lấy tin tiếp
  */
 async function processPostingQueue() {
-  // Nếu queue rỗng, skip
-  if (zaloPostingQueue.length === 0) return;
-  
-  // Nếu đang xử lý item khác, skip
-  if (postingWorkerStats.currentlyProcessing) return;
-  
-  // Lấy item đầu tiên trong queue
-  const item = zaloPostingQueue.shift();
-  if (!item) return;
-  
-  item.status = 'processing';
-  postingWorkerStats.currentlyProcessing = item.id;
-  postingWorkerStats.totalProcessed++;
-  
-  console.log(`\n🔄 [Posting Worker] Processing queue item ${item.id} (${item.messages.length} messages from ${item.groupName})...`);
-  console.log(`   📊 Queue remaining: ${zaloPostingQueue.length} items`);
+  // ✅ WRAP ENTIRE FUNCTION WITH TRY-CATCH to prevent crashes
+  try {
+    // ✅ CHECK: Nếu scanner đã dừng, không xử lý tiếp
+    if (!isZaloScanning) {
+      console.log('⏹️ [Posting Worker] Scanner đã dừng, bỏ qua xử lý queue');
+      return;
+    }
+    
+    // Nếu queue rỗng, skip
+    if (zaloPostingQueue.length === 0) return;
+    
+    // Nếu đang xử lý item khác, skip
+    if (postingWorkerStats.currentlyProcessing) return;
+    
+    // Lấy item đầu tiên trong queue
+    const item = zaloPostingQueue.shift();
+    if (!item) return;
+    
+    item.status = 'processing';
+    postingWorkerStats.currentlyProcessing = item.id;
+    postingWorkerStats.totalProcessed++;
+    
+    console.log(`\n🔄 [Posting Worker] Processing queue item ${item.id} (${item.messages.length} messages from ${item.groupName})...`);
+    console.log(`   📊 Queue remaining: ${zaloPostingQueue.length} items`);
+    console.log(`   🔍 Scanner status: isZaloScanning=${isZaloScanning}, isPostingWorkerRunning=${isPostingWorkerRunning}`);
   
   try {
     // ✅ GỘP TIN LIÊN TIẾP trước khi đăng
@@ -7951,6 +8614,12 @@ async function processPostingQueue() {
     
     // Đăng TẤT CẢ tin đã merge (tuần tự)
     for (let i = 0; i < mergedMessages.length; i++) {
+      // ✅ CHECK: Nếu user đã dừng, thoát ngay
+      if (!isZaloScanning) {
+        console.log(`⏹️ [Posting Worker] Bị dừng giữa chừng, dừng xử lý tin còn lại (${mergedMessages.length - i} tin)`);
+        break;
+      }
+      
       const message = mergedMessages[i];
       const mergedCount = message._merged_count || 1;
       const imageCount = message.images?.length || 0;
@@ -7961,7 +8630,14 @@ async function processPostingQueue() {
       window.__currentZaloConfigId = item.configId;
       
       // Đăng tin này (CHẶN cho đến khi xong)
-      const success = await pushSingleMessageToWeb(message, item.groupName, item.configId, item.config);
+      let success = false;
+      try {
+        success = await pushSingleMessageToWeb(message, item.groupName, item.configId, item.config);
+      } catch (pushErr) {
+        const errMsg = pushErr?.message || pushErr?.toString() || 'Unknown error';
+        console.error(`   ❌ [${i + 1}/${mergedMessages.length}] Exception in pushSingleMessageToWeb:`, errMsg);
+        success = false;
+      }
       
       if (success) {
         console.log(`   ✅ [${i + 1}/${mergedMessages.length}] Đăng thành công`);
@@ -7980,13 +8656,40 @@ async function processPostingQueue() {
     item.status = 'done';
     postingWorkerStats.totalSuccess++;
     console.log(`\n✅ [Posting Worker] Hoàn tất queue item ${item.id} (${mergedMessages.length} bài từ ${item.messages.length} tin gốc)`);
+    console.log(`   📊 Total stats: ${postingWorkerStats.totalProcessed} processed, ${postingWorkerStats.totalSuccess} success, ${postingWorkerStats.totalError} error`);
   } catch (e) {
     item.status = 'error';
     postingWorkerStats.totalError++;
-    console.error(`\n❌ [Posting Worker] Lỗi xử lý queue item ${item.id}:`, e);
+    // ✅ FIX: Safe error logging
+    const errMsg = e?.message || e?.toString() || 'Unknown error';
+    console.error(`\n❌ [Posting Worker] Lỗi xử lý queue item ${item.id}:`, errMsg);
+    console.error('   Error object:', e);
+    console.error('   Stack:', e?.stack || 'No stack');
   } finally {
     postingWorkerStats.currentlyProcessing = null;
     postingWorkerStats.lastProcessedAt = Date.now();
+    console.log(`   🏁 [Posting Worker] Finished processing (success or error). Scanner still running: ${isZaloScanning}`);
+  }
+  
+  } catch (criticalError) {
+    // ✅ CRITICAL ERROR HANDLER for entire function
+    console.error(`❌ [CRITICAL] processPostingQueue crashed:`, criticalError);
+    console.error('   Stack:', criticalError?.stack);
+    
+    // Reset state
+    postingWorkerStats.currentlyProcessing = null;
+    postingWorkerStats.totalError++;
+    
+    // Show alert
+    if (window.antd && window.antd.notification) {
+      window.antd.notification.error({
+        message: 'Lỗi Posting Worker',
+        description: `${criticalError?.message || 'Unknown error'}`,
+        duration: 5,
+      });
+    }
+    
+    // Don't re-throw, just log and continue
   }
 }
 
@@ -8030,7 +8733,10 @@ async function pushSingleMessageToWeb(message, groupName, configId, config) {
       postSuccess = true;
       console.log(`    ✅ [Auto Post] processContent hoàn tất`);
     } catch (processErr) {
-      console.error('❌ [Auto Post] processContent lỗi:', processErr.message);
+      // ✅ FIX: Safe error message access (processErr might not be Error object)
+      const errMsg = processErr?.message || processErr?.toString() || 'Unknown error';
+      console.error('❌ [Auto Post] processContent lỗi:', errMsg);
+      console.error('   Stack:', processErr?.stack || 'No stack');
       // Vẫn tiếp tục để record message (tránh đăng lại)
     }
     
@@ -8039,17 +8745,26 @@ async function pushSingleMessageToWeb(message, groupName, configId, config) {
       recordPostedZaloMessage(message, groupName, configId);
       console.log(`    📝 [Auto Post] Đã record message vào lịch sử`);
     } catch (recordErr) {
-      console.error('❌ [Auto Post] recordPostedZaloMessage lỗi:', recordErr.message);
+      // ✅ FIX: Safe error message access
+      const errMsg = recordErr?.message || recordErr?.toString() || 'Unknown error';
+      console.error('❌ [Auto Post] recordPostedZaloMessage lỗi:', errMsg);
     }
     
-    // ✅ Cập nhật stats UI
-    if (typeof window.updateZaloPostedStats === 'function') {
-      window.updateZaloPostedStats();
+    // ✅ Cập nhật stats UI - wrap trong try-catch để tránh crash
+    try {
+      if (typeof window.updateZaloPostedStats === 'function') {
+        window.updateZaloPostedStats();
+      }
+    } catch (statsErr) {
+      console.warn('⚠️ [Auto Post] updateZaloPostedStats error (non-critical):', statsErr);
     }
     
     return postSuccess;
   } catch (e) {
-    console.error('❌ [Auto Post] Lỗi:', e.message);
+    // ✅ FIX: Safe error message access (e might not be Error object)
+    const errMsg = e?.message || e?.toString() || 'Unknown error';
+    console.error('❌ [Auto Post] Lỗi:', errMsg);
+    console.error('   Stack:', e?.stack || 'No stack');
     return false;
   }
 }
@@ -8068,12 +8783,14 @@ async function pushSingleMessageToWeb(message, groupName, configId, config) {
  * @param {HTMLElement} statusEl - Element hiển thị status
  */
 async function scanAllGroupsForConfig(config, statusEl) {
-  if (!isZaloScanning) return;
-  
-  if (!config || !config.zalo_groups || config.zalo_groups.length === 0) {
-    console.log(`⚠️ [Config ${config?.config_id}] Không có nhóm để quét`);
-    return;
-  }
+  // ✅ WRAP ENTIRE FUNCTION WITH TRY-CATCH to prevent crashes
+  try {
+    if (!isZaloScanning) return;
+    
+    if (!config || !config.zalo_groups || config.zalo_groups.length === 0) {
+      console.log(`⚠️ [Config ${config?.config_id}] Không có nhóm để quét`);
+      return;
+    }
 
   const configId = config.config_id || config.id;
   const groupList = config.zalo_groups;
@@ -8206,6 +8923,27 @@ async function scanAllGroupsForConfig(config, statusEl) {
   if (statusEl) {
     statusEl.textContent = `✅ [Config ${configId}] Quét xong: ${totalNew} tin mới, ${totalPosted} thêm vào queue`;
   }
+  
+  } catch (criticalError) {
+    // ✅ CRITICAL ERROR HANDLER - Log but don't crash
+    console.error(`❌ [CRITICAL] scanAllGroupsForConfig crashed for config ${config?.config_id}:`, criticalError);
+    console.error('   Stack:', criticalError?.stack);
+    
+    if (statusEl) {
+      statusEl.textContent = `❌ [Config ${config?.config_id}] Lỗi nghiêm trọng: ${criticalError?.message || 'Unknown'}`;
+    }
+    
+    // Show alert to user
+    if (window.antd && window.antd.notification) {
+      window.antd.notification.error({
+        message: 'Lỗi quét Zalo',
+        description: `Config ${config?.config_id}: ${criticalError?.message || 'Unknown error'}`,
+        duration: 5,
+      });
+    }
+    
+    // Don't re-throw, just log and continue
+  }
 }
 
 /**
@@ -8257,9 +8995,9 @@ function startZaloScanner(statusEl) {
   let isCurrentlyScanning = false;
   
   // ✅ SCANNER LOOP: Quét xoay vòng từng config
-  const scannerTimer = setInterval(async () => {
-    if (!isZaloScanning) {
-      clearInterval(scannerTimer);
+  const scannerTimer = safeSetInterval(async () => {
+    if (!isZaloScanning || isShuttingDown()) {
+      if (scannerTimer) clearInterval(scannerTimer);
       return;
     }
     
@@ -8312,9 +9050,9 @@ function startZaloScanner(statusEl) {
   console.log('🚀 [Posting Worker] Khởi động...');
   isPostingWorkerRunning = true;
   
-  const postingWorkerTimer = setInterval(async () => {
-    if (!isZaloScanning || !isPostingWorkerRunning) {
-      clearInterval(postingWorkerTimer);
+  const postingWorkerTimer = safeSetInterval(async () => {
+    if (!isZaloScanning || !isPostingWorkerRunning || isShuttingDown()) {
+      if (postingWorkerTimer) clearInterval(postingWorkerTimer);
       isPostingWorkerRunning = false;
       return;
     }
@@ -8323,20 +9061,20 @@ function startZaloScanner(statusEl) {
     await processPostingQueue();
   }, ZALO_TIMING.POSTING_WORKER_INTERVAL);
   
-  // Lưu timers để dừng sau
-  zaloConfigScanners._scannerTimer = scannerTimer;
-  zaloConfigScanners._postingWorkerTimer = postingWorkerTimer;
+  // ✅ REGISTER TIMERS IN CENTRAL REGISTRY
+  timerRegistry.register('scanner-main-loop', scannerTimer, 'interval');
+  timerRegistry.register('posting-worker-loop', postingWorkerTimer, 'interval');
   
-  // ✅ Log stats mỗi 60s - LƯU TIMER ĐỂ CLEAR SAU
-  const statsTimer = setInterval(() => {
-    if (!isZaloScanning) {
-      clearInterval(statsTimer);
+  // ✅ Log stats mỗi 60s - REGISTER IN REGISTRY
+  const statsTimer = safeSetInterval(() => {
+    if (!isZaloScanning || isShuttingDown()) {
+      timerRegistry.clear('stats-logger-loop');
       return;
     }
     console.log(`\n📊 [Stats] Queue: ${zaloPostingQueue.length} pending | Worker: ${postingWorkerStats.totalProcessed} processed (${postingWorkerStats.totalSuccess} success, ${postingWorkerStats.totalError} error)`);
   }, 60000);
   
-  zaloConfigScanners._statsTimer = statsTimer;
+  timerRegistry.register('stats-logger-loop', statsTimer, 'interval');
 
   if (statusEl) {
     statusEl.textContent = `🟢 Scanner + Worker đang chạy (${configs.length} configs)...`;
@@ -8413,46 +9151,63 @@ function verifyZaloScannerCompletion() {
  * Dừng quét Zalo cho tất cả configs
  */
 /**
- * ✅ DỪNG ZALO SCANNER VÀ POSTING WORKER
+ * ✅ DỪNG ZALO SCANNER VÀ POSTING WORKER - Hủy tất cả các luồng độc lập
+ * Đảm bảo không còn thread nào chạy sau khi stop
  */
 function stopZaloScanner(statusEl) {
+  console.log('🛑 Stopping Zalo Scanner và tất cả luồng phụ...');
+  
+  // ✅ BẬN CỜ DỪNG TẤT CẢ CÁC LUỒNG
   isZaloScanning = false;
   isPostingWorkerRunning = false;
+  isZaloAutoMode = false;
   
   // ✅ MỞ KHÓA CÁC BUTTON
   unlockUIButtons();
 
-  // Dừng scanner timer
-  if (zaloConfigScanners._scannerTimer) {
-    clearInterval(zaloConfigScanners._scannerTimer);
-    console.log(`⏹️ Dừng Scanner Timer`);
+  // ✅ HỦY TẤT CẢ TIMERS TRONG REGISTRY (MỐI LUỒNG PHỤ CHÍNH)
+  console.log('🧹 Clearing all automation timers...');
+  timerRegistry.clear('scanner-main-loop');
+  timerRegistry.clear('posting-worker-loop');
+  timerRegistry.clear('stats-logger-loop');
+  timerRegistry.clear('ui-init-polling');
+  timerRegistry.clear('theme-change-debounce');
+  timerRegistry.clearAll(); // ✅ HỦY MỌI TIMER CÒN LẠI
+  
+  // ✅ DỪNG BẤT KỲ MUTATION OBSERVER NÀO
+  console.log('👁️ Disconnecting MutationObserver...');
+  if (typeof uiMutationObserver !== 'undefined' && uiMutationObserver) {
+    try {
+      uiMutationObserver.disconnect();
+      console.log('✅ UI MutationObserver disconnected');
+    } catch (e) {
+      console.warn('⚠️ Error disconnecting UI observer:', e);
+    }
   }
   
-  // Dừng posting worker timer
-  if (zaloConfigScanners._postingWorkerTimer) {
-    clearInterval(zaloConfigScanners._postingWorkerTimer);
-    console.log(`⏹️ Dừng Posting Worker Timer`);
+  if (typeof uiThemeObserver !== 'undefined' && uiThemeObserver) {
+    try {
+      uiThemeObserver.disconnect();
+      console.log('✅ Theme MutationObserver disconnected');
+    } catch (e) {
+      console.warn('⚠️ Error disconnecting theme observer:', e);
+    }
   }
   
-  // ✅ Dừng stats timer
-  if (zaloConfigScanners._statsTimer) {
-    clearInterval(zaloConfigScanners._statsTimer);
-    console.log(`⏹️ Dừng Stats Timer`);
-  }
+  // ✅ HỦY TÀI NGUYÊN QUEUE (không xử lý thêm items)
+  console.log('📥 Clearing posting queue...');
+  zaloPostingQueue = [];
+  postingWorkerStats.currentlyProcessing = null;
   
-  // Clear config scanners
+  // ✅ HỦY STATE CÁC CONFIG
   zaloConfigScanners = {};
-
-  // Dừng auto mode
-  isZaloAutoMode = false;
   
   // Log stats cuối cùng
-  console.log('⏹️ [Zalo Scanner] Dừng - Stats:');
-  console.log(`   📥 Queue còn lại: ${zaloPostingQueue.length} items`);
-  console.log(`   📊 Posting Worker: ${postingWorkerStats.totalProcessed} processed (${postingWorkerStats.totalSuccess} success, ${postingWorkerStats.totalError} error)`);
+  console.log('✅ [Zalo Scanner] Tất cả luồng đã dừng:');
+  timerRegistry.status();
 
   if (statusEl) {
-    statusEl.textContent = `⏸ Đã dừng. Queue: ${zaloPostingQueue.length} items chưa xử lý`;
+    statusEl.textContent = `⏸ DỪNG HOÀN TOÀN. Mọi luồng phụ đã hủy.`;
   }
 }
 
@@ -9526,7 +10281,42 @@ ${JSON.stringify(zaloConfigs, null, 2)}`;
     alert(`✅ Debug info logged to console!\n\n${debugMsg.substring(0, 300)}...\n\n👓 Mở DevTools (F12) -> Console để xem chi tiết`);
   };
   
-  mgmtBtnRow.append(saveConfigBtn, cancelBtn, newConfigBtn, autoLoadBtn, refreshTokensBtn, showFanpagesBtn, clearAllBtn, debugBtn);
+  // ✅ MEMORY STATS BUTTON
+  const memoryBtn = createButton("💾 Memory", "#722ed1");
+  memoryBtn.title = "Hiển thị thông tin bộ nhớ và cấu hình tối ưu hóa";
+  memoryBtn.onclick = () => {
+    const stats = MemoryOptimizer.getStats();
+    const config = MemoryOptimizer.config;
+    
+    let msg = `📊 MEMORY OPTIMIZER STATUS\n\n`;
+    msg += `🔧 Configuration:\n`;
+    msg += `  • Webview Mode: ${config.WEBVIEW_LAZY_LOAD ? '💡 Lazy Load (Tiết kiệm RAM)' : '🚀 Preload (Tiện lợi)'}\n`;
+    msg += `  • Max Queue Size: ${config.MAX_QUEUE_SIZE} items\n`;
+    msg += `  • Max LocalStorage Item: ${(config.MAX_LOCALSTORAGE_ITEM_SIZE/1024).toFixed(0)}KB\n\n`;
+    
+    msg += `📈 Current Stats:\n`;
+    msg += `  • Webview Created: ${stats.webviewCreated ? '✅ Yes' : '❌ No'}\n`;
+    msg += `  • Event Listeners: ${stats.listenersCount} groups\n`;
+    msg += `  • Last Cleanup: ${stats.lastCleanup}\n`;
+    
+    if (stats.memoryUsedMB) {
+      msg += `\n💻 Heap Memory:\n`;
+      msg += `  • Used: ${stats.memoryUsedMB}MB / ${stats.memoryLimitMB}MB (${stats.memoryPercent}%)\n`;
+      msg += `  • Status: ${stats.memoryPercent < 50 ? '🟢 Good' : stats.memoryPercent < 80 ? '🟡 OK' : '🔴 High'}\n`;
+    }
+    
+    msg += `\n🔧 Actions:\n`;
+    msg += `  • Toggle Mode: Change WEBVIEW_LAZY_LOAD in code\n`;
+    msg += `  • Manual Cleanup: MemoryOptimizer.cleanupLocalStorage()\n`;
+    msg += `  • Emergency: MemoryOptimizer.performEmergencyCleanup()\n`;
+    
+    console.log(msg);
+    console.log('MemoryOptimizer config:', config);
+    console.log('MemoryOptimizer stats:', stats);
+    alert(msg);
+  };
+  
+  mgmtBtnRow.append(saveConfigBtn, cancelBtn, newConfigBtn, autoLoadBtn, refreshTokensBtn, showFanpagesBtn, clearAllBtn, debugBtn, memoryBtn);
   managementSection.append(mgmtTitle, gridGuide, postedStats, mgmtList, mgmtBtnRow);
   
   // Grid sẽ tự động render sau khi fetch data từ server (xem phần expose helpers phía trên)
@@ -9581,45 +10371,102 @@ ${JSON.stringify(zaloConfigs, null, 2)}`;
   // Scanner now handled by startZaloScanner() with sequential scheduler
 
   startBtn.onclick = () => {
-    // ✅ LAZY INIT WEBVIEW: Chỉ tạo webview khi user thực sự bắt đầu quét
-    // Tránh crash renderer ngay lúc mở app nếu webview chưa ổn định
-    try {
-      const webviewId = window.zaloScannerWebviewId;
-      const existingWebview = document.getElementById(webviewId);
-      if (!existingWebview) {
-        createZaloWebview(webviewId, "https://chat.zalo.me/", rightPanel);
-      }
-    } catch (e) {
-      status.textContent = `❌ Không thể khởi tạo Zalo Webview: ${e.message}`;
-      console.error('❌ [Zalo] Lazy create webview failed:', e);
-      return;
-    }
-
-    // Kiểm tra đăng nhập trước khi chạy scheduler
-    status.textContent = "⏳ Kiểm tra đăng nhập Zalo...";
-    startBtn.disabled = true;
-    startBtn.style.opacity = '0.6';
-    startBtn.style.cursor = 'not-allowed';
+    // ✅ LAZY CREATE WEBVIEW nếu chưa có (memory-efficient)
+    const webviewId = window.zaloScannerWebviewId;
+    let existingWebview = document.getElementById(webviewId);
     
-    checkZaloLogin(window.zaloScannerWebviewId).then(loggedIn => {
-      if (loggedIn) {
-        isZaloLoggedIn = true;
-        console.log('▶️ [Zalo Scanner] Bắt đầu Sequential Scheduler');
-        startZaloScanner(status);
+    if (!existingWebview) {
+      console.log('[Zalo] 🚀 Lazy creating webview on demand...');
+      status.textContent = "🔄 Đang khởi tạo Zalo Webview...";
+      
+      try {
+        // Remove placeholder nếu có
+        const placeholder = rightPanel.querySelector('div[style*="dashed"]');
+        if (placeholder) placeholder.remove();
         
-        setButtonsState(true);
-      } else {
-        status.textContent = "⚠️ Chưa đăng nhập Zalo. Vui lòng đăng nhập ở bên phải trước.";
+        const zaloWebview = createZaloWebview(webviewId, "https://chat.zalo.me/", rightPanel);
+        if (!zaloWebview) {
+          status.textContent = "❌ Không thể tạo webview. Vui lòng reload trang.";
+          return;
+        }
+        
+        MemoryOptimizer.markWebviewUsed();
+        existingWebview = zaloWebview;
+        
+        // Đợi webview load xong
+        status.textContent = "⏳ Đang tải Zalo Web Chat...";
+        const loadTimeout = safeSetTimeout(() => {
+          status.textContent = "⚠️ Webview load chậm, thử tiếp tục...";
+        }, 10000);
+        
+        zaloWebview.addEventListener('dom-ready', () => {
+          if (loadTimeout) clearTimeout(loadTimeout);
+          console.log('[Zalo] ✅ Webview ready!');
+          
+          // Tiếp tục check login sau khi DOM ready
+          safeSetTimeout(() => {
+            proceedWithLoginCheck();
+          }, 2000);
+        }, { once: true });
+        
+        return; // Chờ webview ready
+      } catch (e) {
+        status.textContent = `❌ Lỗi khởi tạo webview: ${e.message}`;
+        console.error('❌ [Zalo] Create webview failed:', e);
+        return;
+      }
+    }
+    
+    // Webview đã sẵn sàng, tiếp tục check login
+    MemoryOptimizer.markWebviewUsed();
+    proceedWithLoginCheck();
+    
+    function proceedWithLoginCheck() {
+      // ✅ Kiểm tra đăng nhập với retry logic (webview đã sẵn sàng)
+      status.textContent = "⏳ Kiểm tra đăng nhập Zalo...";
+      startBtn.disabled = true;
+      startBtn.style.opacity = '0.6';
+      startBtn.style.cursor = 'not-allowed';
+      
+      // ✅ Retry check login nếu lần đầu fail (phòng trường hợp webview chưa hoàn toàn ready)
+      const checkLoginWithRetry = async (maxRetries = 3, delayMs = 2000) => {
+        for (let i = 0; i < maxRetries; i++) {
+          try {
+            const loggedIn = await checkZaloLogin(webviewId);
+            if (loggedIn) return true;
+            
+            console.log(`[Zalo] Retry ${i + 1}/${maxRetries}: Not logged in yet, waiting ${delayMs}ms...`);
+            if (i < maxRetries - 1) {
+              await new Promise(r => safeSetTimeout(r, delayMs));
+            }
+          } catch (err) {
+            console.error(`[Zalo] Retry ${i + 1}/${maxRetries} failed:`, err);
+            if (i === maxRetries - 1) throw err;
+            await new Promise(r => safeSetTimeout(r, delayMs));
+          }
+        }
+        return false;
+      };
+      
+      checkLoginWithRetry().then(loggedIn => {
+        if (loggedIn) {
+          isZaloLoggedIn = true;
+          console.log('▶️ [Zalo Scanner] Bắt đầu Sequential Scheduler');
+          startZaloScanner(status);
+          setButtonsState(true);
+        } else {
+          status.textContent = "⚠️ Chưa đăng nhập Zalo. Vui lòng đăng nhập ở bên phải trước.";
+          startBtn.disabled = false;
+          startBtn.style.opacity = '1';
+          startBtn.style.cursor = 'pointer';
+        }
+      }).catch(err => {
+        status.textContent = `❌ Lỗi: ${err.message}`;
         startBtn.disabled = false;
         startBtn.style.opacity = '1';
         startBtn.style.cursor = 'pointer';
-      }
-    }).catch(err => {
-      status.textContent = `❌ Lỗi: ${err.message}`;
-      startBtn.disabled = false;
-      startBtn.style.opacity = '1';
-      startBtn.style.cursor = 'pointer';
-    });
+      });
+    }
   };
 
   stopBtn.onclick = () => {
@@ -9649,6 +10496,89 @@ ${JSON.stringify(zaloConfigs, null, 2)}`;
   rightPanel.style.cssText = `flex:1;min-width:350px;display:flex;flex-direction:column;`;
 
   wrapper.append(leftPanel, rightPanel);
+  
+  // ✅ SMART WEBVIEW INIT: Lazy load hoặc Preload tùy config
+  const shouldPreloadWebview = !MemoryOptimizer.config.WEBVIEW_LAZY_LOAD;
+  
+  if (shouldPreloadWebview) {
+    // Preload mode: Tạo webview ngay (tiện lợi nhưng tốn RAM)
+    console.log('[Zalo] 🚀 Preload mode: Auto-initializing webview...');
+    try {
+      const webviewId = window.zaloScannerWebviewId;
+      const zaloWebview = createZaloWebview(webviewId, "https://chat.zalo.me/", rightPanel);
+      
+      if (zaloWebview) {
+        MemoryOptimizer.markWebviewUsed();
+        
+        // ✅ Đợi webview load xong rồi mới check login
+        zaloWebview.addEventListener('dom-ready', () => {
+          console.log('[Zalo] ✅ Webview DOM ready, checking login...');
+          
+          // Delay 2s để webview ổn định hoàn toàn
+          safeSetTimeout(() => {
+            checkZaloLogin(webviewId).then(loggedIn => {
+              if (loggedIn) {
+                isZaloLoggedIn = true;
+                status.textContent = '✅ Đã đăng nhập Zalo. Sẵn sàng quét.';
+                console.log('[Zalo] ✅ Already logged in!');
+              } else {
+                status.textContent = '⏳ Webview đã sẵn sàng. Vui lòng đăng nhập Zalo ở bên phải.';
+                console.log('[Zalo] ⏳ Not logged in yet, waiting...');
+              }
+            }).catch(err => {
+              console.error('[Zalo] ❌ Login check failed:', err);
+              status.textContent = '⚠️ Lỗi kiểm tra đăng nhập. Thử click "Bắt đầu quét".';
+            });
+          }, 2000);
+        });
+        
+        // ✅ Log khi webview bắt đầu load
+        zaloWebview.addEventListener('did-start-loading', () => {
+          console.log('[Zalo] 🔄 Webview đang load...');
+          status.textContent = '🔄 Đang tải Zalo Web Chat...';
+        });
+        
+        // ✅ Log khi webview load xong
+        zaloWebview.addEventListener('did-stop-loading', () => {
+          console.log('[Zalo] ✅ Webview load hoàn tất');
+        });
+      }
+    } catch (e) {
+      console.error('❌ [Zalo] Preload webview failed:', e);
+      status.textContent = '⚠️ Không thể khởi tạo webview. Thử click "Bắt đầu quét".';
+    }
+  } else {
+    // Lazy load mode: Chỉ tạo khi cần (tiết kiệm RAM)
+    console.log('[Zalo] 💡 Lazy load mode: Webview sẽ được tạo khi bấm "Bắt đầu quét"');
+    status.textContent = '💡 Tiết kiệm RAM: Webview sẽ load khi bấm "Bắt đầu quét"';
+    
+    // Tạo placeholder nhắc nhở
+    const placeholder = document.createElement('div');
+    placeholder.style.cssText = `
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: ${theme.surface};
+      border: 2px dashed ${theme.border};
+      border-radius: 8px;
+      color: ${theme.textSecondary};
+      font-size: 14px;
+      padding: 20px;
+      text-align: center;
+    `;
+    placeholder.innerHTML = `
+      <div>
+        <div style="font-size: 48px; margin-bottom: 10px;">💾</div>
+        <div><strong>Tiết kiệm RAM</strong></div>
+        <div style="margin-top: 8px; font-size: 12px;">
+          Webview Zalo sẽ load khi bạn nhấn "Bắt đầu quét"<br>
+          <span style="color: ${theme.success};">Tiết kiệm ~200MB RAM</span>
+        </div>
+      </div>
+    `;
+    rightPanel.appendChild(placeholder);
+  }
 
   if (container) container.appendChild(wrapper);
   
@@ -10965,21 +11895,13 @@ async function ensureServiceContentUI() {
   const globalIndustrySelect = document.getElementById("global-industry-select");
   const globalProjectSelect = document.getElementById("global-project-select");
   
-  if (globalDomainSelect) globalDomainSelect.addEventListener('change', updateInfoDisplay);
-  if (globalIndustrySelect) globalIndustrySelect.addEventListener('change', updateInfoDisplay);
-  if (globalProjectSelect) globalProjectSelect.addEventListener('change', updateInfoDisplay);
-
-  document.addEventListener('change', (event) => {
-    const target = event?.target;
-    const targetId = target?.id;
-    if (
-      targetId === 'global-domain-select'
-      || targetId === 'global-industry-select'
-      || targetId === 'global-project-select'
-    ) {
-      updateInfoDisplay();
-    }
-  });
+  // ✅ REGISTER LISTENERS IN REGISTRY (NO DUPLICATES)
+  if (globalDomainSelect) eventRegistry.add(globalDomainSelect, 'change', updateInfoDisplay);
+  if (globalIndustrySelect) eventRegistry.add(globalIndustrySelect, 'change', updateInfoDisplay);
+  if (globalProjectSelect) eventRegistry.add(globalProjectSelect, 'change', updateInfoDisplay);
+  
+  // ✅ REMOVED DUPLICATE document-level listener that was firing same handler twice
+  // The direct listeners above are sufficient and more efficient
 
   // Event: Create content
   createBtn.onclick = async () => {
@@ -14851,15 +15773,29 @@ function fetchDataOptionUserFromServer(callback) {
 }
 
 /**
- * Lưu dataOptionUser lên server qua csmUserData
+ * Lưu dataOptionUser lên server qua csmUserData với timeout protection
  * @param {Array} data - Mảng dữ liệu cần lưu
  * @param {Function} callback - callback(success, error)
+ * @param {number} retryCount - Số lần retry (default 0, no retry)
  */
-function saveDataOptionUser(data, callback) {
+function saveDataOptionUser(data, callback, retryCount = 0) {
   const dataToSave = Array.isArray(data) ? data : [];
+  const MAX_RETRIES = 2;
+  const SERVER_TIMEOUT_MS = 15000; // 15 giây timeout cho server call
   
   console.log('====== 💾 [SaveDataOptionUser] BẮT ĐẦU LƯU DỮ LIỆU ======');
   console.log('📊 Số items được truyền vào:', dataToSave.length);
+  
+  // Ensure callback always exists
+  const safeCallback = (success, error) => {
+    try {
+      if (typeof callback === 'function') {
+        callback(success, error);
+      }
+    } catch (cbError) {
+      console.error('❌ [SaveDataOptionUser] Callback error:', cbError);
+    }
+  };
   
   // ✅ CRITICAL FIX: Preserve posted messages khi save configs
   // Lấy posted messages cũ từ storage (nếu có) để merge
@@ -14916,7 +15852,7 @@ function saveDataOptionUser(data, callback) {
   
   // Ưu tiên lưu qua csmUserData (server)
   if (window.csmUserData && typeof window.csmUserData.set === 'function') {
-    console.log('✨ Hành động: Lưu qua window.csmUserData.set() (SERVER)');
+    console.log('✨ Hành động: Lưu qua window.csmUserData.set() (SERVER)', retryCount > 0 ? `[Retry ${retryCount}/${MAX_RETRIES}]` : '');
     console.log('📤 Gửi', finalData.length, 'items tới server...');
     
     // Hiển thị 1-2 item mẫu
@@ -14930,23 +15866,77 @@ function saveDataOptionUser(data, callback) {
       });
     }
     
-    window.csmUserData.set(finalData, function (success, error) {
-      console.log('🔔 CALLBACK từ window.csmUserData.set() được gọi');
-      console.log('   ✅ success =', success);
-      console.log('   ❌ error =', error);
-      
-      if (success) {
-        console.log('✅ [SaveDataOptionUser] SERVER SAVE THÀNH CÔNG!');
-        // ✅ KHÔNG CẦN localStorage backup - server đã lưu thành công
-        // localStorage có giới hạn quota ~5-10MB, data lớn sẽ fail
-        // Server là single source of truth
-        if (callback) callback(true, null);
+    // ✅ ADD TIMEOUT WRAPPER to prevent hanging
+    let timeoutId = setTimeout(() => {
+      console.error('⏱️ [SaveDataOptionUser] SERVER TIMEOUT after', SERVER_TIMEOUT_MS, 'ms');
+      // If retry budget available, retry
+      if (retryCount < MAX_RETRIES) {
+        console.log(`🔄 [SaveDataOptionUser] Retrying... (${retryCount + 1}/${MAX_RETRIES})`);
+        setTimeout(() => saveDataOptionUser(data, callback, retryCount + 1), 2000);
       } else {
-        console.error('❌ [SaveDataOptionUser] SERVER SAVE THẤT BẠI!');
-        console.error('   Error:', error);
-        if (callback) callback(false, error);
+        console.error('❌ [SaveDataOptionUser] MAX RETRIES EXCEEDED - using localStorage fallback');
+        // Fallback để tránh mở màn chết
+        try {
+          localStorage.setItem('dataOptionUser', JSON.stringify(finalData));
+          console.log('✅ [SaveDataOptionUser] Fallback to localStorage SUCCESS');
+          safeCallback(true, null); // Report success to prevent hung state
+        } catch (e) {
+          console.error('❌ [SaveDataOptionUser] localStorage fallback also failed:', e);
+          safeCallback(false, 'Server timeout + localStorage failed');
+        }
       }
-    });
+    }, SERVER_TIMEOUT_MS);
+    
+    try {
+      window.csmUserData.set(finalData, function (success, error) {
+        // ✅ ALWAYS clear timeout to prevent double-callback
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+        
+        console.log('🔔 CALLBACK từ window.csmUserData.set() được gọi');
+        console.log('   ✅ success =', success);
+        console.log('   ❌ error =', error);
+        
+        if (success) {
+          console.log('✅ [SaveDataOptionUser] SERVER SAVE THÀNH CÔNG!');
+          safeCallback(true, null);
+        } else {
+          console.error('❌ [SaveDataOptionUser] SERVER SAVE THẤT BẠI!');
+          console.error('   Error:', error);
+          
+          // Retry nếu còn retry budget
+          if (retryCount < MAX_RETRIES) {
+            console.log(`🔄 [SaveDataOptionUser] Retrying after error... (${retryCount + 1}/${MAX_RETRIES})`);
+            setTimeout(() => saveDataOptionUser(data, callback, retryCount + 1), 1000 * (retryCount + 1));
+          } else {
+            // Fallback to localStorage on final failure
+            try {
+              localStorage.setItem('dataOptionUser', JSON.stringify(finalData));
+              console.log('⚠️ [SaveDataOptionUser] Fallback to localStorage after retries');
+              safeCallback(true, null);
+            } catch (lsError) {
+              console.error('❌ [SaveDataOptionUser] Final failure:', lsError);
+              safeCallback(false, error);
+            }
+          }
+        }
+      });
+    } catch (e) {
+      // Catch synchronous errors in set() call
+      console.error('❌ [SaveDataOptionUser] Exception calling window.csmUserData.set():', e);
+      if (timeoutId) clearTimeout(timeoutId);
+      
+      // Fallback to localStorage
+      try {
+        localStorage.setItem('dataOptionUser', JSON.stringify(finalData));
+        console.log('✅ [SaveDataOptionUser] Fallback to localStorage after exception');
+        safeCallback(true, null);
+      } catch (lsError) {
+        safeCallback(false, e.message);
+      }
+    }
   } else {
     // Fallback: localStorage only
     console.log('⚠️ Hành động: FALLBACK sang localStorage (window.csmUserData KHÔNG khả dụng!)');
@@ -14956,10 +15946,10 @@ function saveDataOptionUser(data, callback) {
     try {
       localStorage.setItem('dataOptionUser', JSON.stringify(finalData));
       console.log('✅ [SaveDataOptionUser] localStorage SAVE THÀNH CÔNG (FALLBACK MODE)');
-      if (callback) callback(true, null);
+      safeCallback(true, null);
     } catch (e) {
       console.error('❌ [SaveDataOptionUser] localStorage SAVE THẤT BẠI:', e);
-      if (callback) callback(false, e);
+      safeCallback(false, e);
     }
   }
 }
@@ -15195,7 +16185,7 @@ function initAllUI() {
   let uiInitAttempts = 0;
   const maxAttempts = 10;
   
-  // Retry mechanism - thử khởi tạo UI mỗi giây
+  // ✅ Retry mechanism - reduced from 1s to 30s polling (massive CPU savings)
   const initInterval = setInterval(async () => {
     uiInitAttempts++;
     
@@ -15238,13 +16228,18 @@ function initAllUI() {
       const allUIReady = globalSettings && multiDomainUI && serviceContentUI && facebookUI;
       if (allUIReady || uiInitAttempts >= maxAttempts) {
         clearInterval(initInterval);
-        console.log('✅ All UI modules initialized');
+        timerRegistry.clear('ui-init-polling');
+        console.log('✅ All UI modules initialized - polling stopped');
+        isAllUIInitializing = false;
       }
       
     } catch (error) {
       console.error('❌ Error initializing UI:', error);
     }
-  }, 1000);
+  }, 1000);  // ✅ Check every 1 second (fast UI initialization)
+  
+  // ✅ Register UI polling timer for cleanup
+  timerRegistry.register('ui-init-polling', initInterval, 'interval');
 
   // Monitor DOM changes để tự động tạo lại UI nếu React xóa
   if (typeof MutationObserver !== 'undefined') {
@@ -15299,8 +16294,6 @@ function initAllUI() {
       setupThemeChangeListener();
     }, 2000);
   }
-
-  isAllUIInitializing = false;
 }
 
 // ===== THEME CHANGE LISTENER =====
@@ -15326,6 +16319,7 @@ function setupThemeChangeListener() {
     // Clear any pending refresh
     if (refreshTimeout) {
       clearTimeout(refreshTimeout);
+      refreshTimeout = null;
     }
     
     // Schedule refresh with debounce

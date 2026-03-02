@@ -344,6 +344,85 @@ export default function AutoSetup() {
     return String(t("common.menu.auto_setup", fallback));
   }, [t, location?.state?.menuLabel]);
 
+  // ============================================
+  // GLOBAL TIMER CLEANUP SYSTEM - Ngăn Memory Leak & Crash
+  // ============================================
+  useEffect(() => {
+    // Create global timer registry
+    const globalTimers = {
+      intervals: new Set<number>(),
+      timeouts: new Set<number>(),
+      isShuttingDown: false,
+    };
+
+    // Override setInterval to auto-register
+    const originalSetInterval = window.setInterval;
+    (window as any).setInterval = function(...args: any[]) {
+      const id = originalSetInterval.apply(window, args as any);
+      if (!globalTimers.isShuttingDown) {
+        globalTimers.intervals.add(id as number);
+      }
+      return id;
+    };
+
+    // Override setTimeout to auto-register (chỉ cho long-running ones > 10s)
+    const originalSetTimeout = window.setTimeout;
+    (window as any).setTimeout = function(...args: any[]) {
+      const id = originalSetTimeout.apply(window, args as any);
+      const delay = typeof args[1] === 'number' ? args[1] : 0;
+      if (!globalTimers.isShuttingDown && delay > 10000) { // Only track long timeouts
+        globalTimers.timeouts.add(id as number);
+      }
+      return id;
+    };
+
+    // Expose global cleanup function
+    (window as any).__cleanupAllTimers = () => {
+      console.log('🧹 [CLEANUP] Clearing all timers...');
+      globalTimers.isShuttingDown = true;
+      
+      let cleared = 0;
+      globalTimers.intervals.forEach(id => {
+        try {
+          clearInterval(id);
+          cleared++;
+        } catch (e) {
+          console.warn('Failed to clear interval:', id);
+        }
+      });
+      
+      globalTimers.timeouts.forEach(id => {
+        try {
+          clearTimeout(id);
+          cleared++;
+        } catch (e) {
+          console.warn('Failed to clear timeout:', id);
+        }
+      });
+      
+      globalTimers.intervals.clear();
+      globalTimers.timeouts.clear();
+      
+      console.log(`✅ [CLEANUP] Cleared ${cleared} timers`);
+    };
+
+    // Expose isShuttingDown flag for scripts to check
+    (window as any).__isAutoShuttingDown = () => globalTimers.isShuttingDown;
+
+    // Cleanup function when component unmounts
+    return () => {
+      console.log('🛑 [AutoSetup] Component unmounting, cleaning up...');
+      (window as any).__cleanupAllTimers();
+      
+      // Restore original functions
+      window.setInterval = originalSetInterval;
+      window.setTimeout = originalSetTimeout;
+      
+      delete (window as any).__cleanupAllTimers;
+      delete (window as any).__isAutoShuttingDown;
+    };
+  }, []);
+
   // lightweight global notifications for legacy scripts
   useEffect(() => {
     (window as any).thongbao = (msg: string) => notification.success({ message: msg });
