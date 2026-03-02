@@ -4236,6 +4236,82 @@ async function ensureGlobalSettingsPanel() {
   };
   domainSelect.onchange(); // Init
 
+  // ✅ New entry UI - Input + Add button
+  const newEntryWrapper = document.createElement('div');
+  newEntryWrapper.style.cssText = `display:flex;gap:6px;margin:6px 0`;
+  
+  const newEntryInput = document.createElement('input');
+  newEntryInput.type = 'text';
+  newEntryInput.id = 'global-new-entry-input';
+  newEntryInput.placeholder = 'Nhập tên dự án/lĩnh vực mới...';
+  newEntryInput.style.cssText = `flex:1;padding:6px 8px;border:1px solid ${theme.border};border-radius:4px;background:${theme.inputBg};color:${theme.text};font-size:12px`;
+  
+  const addNewBtn = document.createElement('button');
+  addNewBtn.textContent = "➕ Thêm mới";
+  addNewBtn.style.cssText = `padding:6px 12px;border:1px solid ${theme.border};border-radius:4px;background:${theme.bg};color:${theme.text};font-size:12px;cursor:pointer;white-space:nowrap`;
+  
+  addNewBtn.onclick = async () => {
+    const name = newEntryInput.value?.trim();
+    if (!name) {
+      alert('Vui lòng nhập tên dự án/lĩnh vực');
+      newEntryInput.focus();
+      return;
+    }
+    
+    const domainKey = domainSelect.value || 'phanmemmottrieu';
+    addNewBtn.disabled = true;
+    addNewBtn.textContent = "⏳ Đang lưu...";
+    
+    try {
+      const result = await upsertServiceToWebServices(name, domainKey);
+      
+      if (result.success) {
+        const actionText = result.command === 'create' ? 'Thêm mới' : 'Cập nhật';
+        const message = `✅ ${actionText} thành công: ${result.name}`;
+        if (window.showNotification) {
+          window.showNotification({ type: 'success', message, duration: 3 });
+        } else {
+          alert(message);
+        }
+        
+        // Reload categories to update dropdown
+        await loadCategoriesFromWebServices(domainKey);
+        
+        // Select newly added item
+        const targetSelect = domainKey === 'lmkt' ? projectSelect : industrySelect;
+        if (targetSelect) {
+          targetSelect.value = result.slug;
+          targetSelect.dispatchEvent(new Event('change'));
+        }
+        
+        // Clear input
+        newEntryInput.value = '';
+      } else {
+        throw new Error('Lưu không thành công');
+      }
+    } catch (error) {
+      console.error('[AddNewService] Error:', error);
+      const message = `❌ Lỗi: ${error.message || 'Không thể lưu'}`;
+      if (window.showNotification) {
+        window.showNotification({ type: 'error', message, duration: 5 });
+      } else {
+        alert(message);
+      }
+    } finally {
+      addNewBtn.disabled = false;
+      addNewBtn.textContent = "➕ Thêm mới";
+    }
+  };
+  
+  // Enter key support
+  newEntryInput.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter' && !addNewBtn.disabled) {
+      addNewBtn.click();
+    }
+  });
+  
+  newEntryWrapper.append(newEntryInput, addNewBtn);
+
   // Load categories from web_services button
   const loadBtn = document.createElement('button');
   loadBtn.textContent = "⬇️ Tải danh mục từ web_services";
@@ -4255,7 +4331,7 @@ async function ensureGlobalSettingsPanel() {
 
   // Append rows to grid container
   settingsContainer.append(domainRow, industryRow, projectRow);
-  settingsContainer.append(loadBtn);
+  settingsContainer.append(newEntryWrapper, loadBtn);
   
   // Append title and container to wrapper
   wrapper.append(title, settingsContainer);
@@ -4272,6 +4348,127 @@ async function ensureGlobalSettingsPanel() {
   }
 
   return wrapper;
+}
+
+/**
+ * ✅ Upsert dự án/lĩnh vực mới vào web_services table
+ * @param {string} name - Tên dự án/lĩnh vực
+ * @param {string} domainKey - 'lmkt' hoặc 'phanmemmottrieu'
+ * @returns {Promise<Object>} - Kết quả upsert
+ */
+async function upsertServiceToWebServices(name, domainKey) {
+  if (!name || typeof name !== 'string') {
+    throw new Error('Tên không được rỗng');
+  }
+  
+  const trimmedName = name.trim();
+  if (!trimmedName) {
+    throw new Error('Tên không được rỗng');
+  }
+  
+  const domainConfig = DOMAIN_OPTIONS[domainKey];
+  if (!domainConfig) {
+    throw new Error('Domain key không hợp lệ');
+  }
+  
+  const appId = domainConfig.app_id;
+  const domainValue = domainConfig.value; // ✅ Lấy TOÀN BỘ danh sách domain (csmbridge.net,phanmemmottrieu.net hoặc h-holding.vn,h-holding.com.vn)
+  
+  if (!window.csmApi?.updateTableData || !window.csmApi?.getTableData) {
+    throw new Error('API không khả dụng');
+  }
+  
+  // Tạo slug từ tên (lowercase, replace spaces with hyphens, remove special chars)
+  const slug = trimmedName
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '') // Remove diacritics
+    .replace(/đ/g, 'd')
+    .replace(/[^a-z0-9\s-]/g, '')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .trim();
+  
+  // Check xem đã tồn tại chưa
+  const checkResult = await window.csmApi.getTableData({
+    app_id: appId,
+    obj_name: "web_services",
+    where: {
+      operator: "OR",
+      conditions: [
+        { field: "slug", type: "eq", value: slug },
+        { field: "service_code", type: "eq", value: slug }
+      ]
+    },
+    take: 1
+  }).catch(() => ({ rows: [] }));
+  
+  const existing = (checkResult.rows || checkResult.data || [])[0];
+  const command = existing ? "update" : "create";
+  
+  // ✅ Dùng domain đầu tiên cho URL image
+  const primaryDomain = domainValue.split(',')[0].trim();
+  
+  // ✅ Xác định group_slug dựa trên domainKey
+  const groupSlug = domainKey === 'lmkt' ? 'du-an' : 'dich-vu';
+  
+  // Tạo service object
+  const serviceObj = {
+    slug: slug,
+    service_code: slug,
+    group_slug: groupSlug, // ✅ "du-an" cho LMKT, "dich-vu" cho phanmemmottrieu
+    is_service: true, // ✅ Đây là service entry (không phải group)
+    is_group_slug: false, // ✅ Không phải là group slug entry
+    is_group_slug_default: false, // ✅ Không phải default group
+    name: trimmedName,
+    name_en: trimmedName,
+    name_zh: trimmedName,
+    category: trimmedName,
+    category_en: trimmedName,
+    category_zh: trimmedName,
+    domain: domainValue, // ✅ Lưu TOÀN BỘ danh sách domain
+    app_id: appId,
+    status: 1,
+    image: `https://www.${primaryDomain}/app_images/services/${slug}-og.jpg`, // ✅ URL dùng domain đầu tiên
+    attributes_icon: "StarOutlined",
+    attributes_color: "#1890ff",
+    attributes_priority: 999,
+    attributes_title: trimmedName,
+    attributes_title_en: trimmedName,
+    attributes_title_zh: trimmedName,
+    attributes_description: trimmedName,
+    attributes_description_en: trimmedName,
+    attributes_description_zh: trimmedName,
+    attributes_keywords: slug.replace(/-/g, ', '),
+    attributes_keywords_en: slug.replace(/-/g, ', '),
+    attributes_keywords_zh: slug.replace(/-/g, ', ')
+  };
+  
+  if (existing) {
+    // Merge với dữ liệu cũ
+    Object.assign(serviceObj, existing, {
+      name: trimmedName,
+      category: trimmedName,
+      updated_at: new Date().toISOString()
+    });
+  }
+  
+  console.log(`[UpsertService] ${command.toUpperCase()} service "${trimmedName}" (slug: ${slug}) to ${appId}/${domainValue}`);
+  
+  const result = await window.csmApi.updateTableData({
+    app_id: appId,
+    obj_name: "web_services",
+    command: command,
+    obj_update: serviceObj,
+    pk_fields: ["slug", "domain"]
+  });
+  
+  return {
+    success: result.data === "success" || result?.success === true || result.code === 200,
+    command: command,
+    slug: slug,
+    name: trimmedName
+  };
 }
 
 async function loadCategoriesFromWebServices(domainKey) {
@@ -8072,16 +8269,21 @@ function startZaloScanner(statusEl) {
   // Lưu timers để dừng sau
   zaloConfigScanners._scannerTimer = scannerTimer;
   zaloConfigScanners._postingWorkerTimer = postingWorkerTimer;
+  
+  // ✅ Log stats mỗi 60s - LƯU TIMER ĐỂ CLEAR SAU
+  const statsTimer = setInterval(() => {
+    if (!isZaloScanning) {
+      clearInterval(statsTimer);
+      return;
+    }
+    console.log(`\n📊 [Stats] Queue: ${zaloPostingQueue.length} pending | Worker: ${postingWorkerStats.totalProcessed} processed (${postingWorkerStats.totalSuccess} success, ${postingWorkerStats.totalError} error)`);
+  }, 60000);
+  
+  zaloConfigScanners._statsTimer = statsTimer;
 
   if (statusEl) {
     statusEl.textContent = `🟢 Scanner + Worker đang chạy (${configs.length} configs)...`;
   }
-  
-  // Log stats mỗi 60s
-  setInterval(() => {
-    if (!isZaloScanning) return;
-    console.log(`\n📊 [Stats] Queue: ${zaloPostingQueue.length} pending | Worker: ${postingWorkerStats.totalProcessed} processed (${postingWorkerStats.totalSuccess} success, ${postingWorkerStats.totalError} error)`);
-  }, 60000);
 }
 
 /**
@@ -8173,6 +8375,12 @@ function stopZaloScanner(statusEl) {
   if (zaloConfigScanners._postingWorkerTimer) {
     clearInterval(zaloConfigScanners._postingWorkerTimer);
     console.log(`⏹️ Dừng Posting Worker Timer`);
+  }
+  
+  // ✅ Dừng stats timer
+  if (zaloConfigScanners._statsTimer) {
+    clearInterval(zaloConfigScanners._statsTimer);
+    console.log(`⏹️ Dừng Stats Timer`);
   }
   
   // Clear config scanners
@@ -12061,9 +12269,9 @@ async function updateAllConfigsWithNewFanpageToken(newPageAccessToken, userAcces
       console.log(`   window.csmUserData.set available?`, typeof window.csmUserData?.set);
       console.log(`   📊 Kích thước data: ~${JSON.stringify(allConfigs).length} bytes`);
       
-      // ⏱️ TIMEOUT: Nếu callback không return trong 15 giây, force reject
-      // ✅ Giảm từ 30s xuống 15s - nếu API chậm quá là có vấn đề
-      const SAVE_TIMEOUT_MS = 15000;
+      // ⏱️ TIMEOUT: Tăng lên 60s cho data lớn hoặc mạng chậm
+      // Server cần thời gian xử lý data khoảng 18KB+
+      const SAVE_TIMEOUT_MS = 60000; // ✅ 60s thay vì 15s
       let callbackInvoked = false;
       const timeoutId = setTimeout(() => {
         if (!callbackInvoked) {
@@ -12075,12 +12283,13 @@ async function updateAllConfigsWithNewFanpageToken(newPageAccessToken, userAcces
       
       console.log(`⏰ [UpdateAllConfigs] Timeout được set: ${SAVE_TIMEOUT_MS / 1000}s (chờ API callback thực tế, không phải đợi timeout)`);
       
-      // ✅ Progress indicator mỗi 2 giây
+      // ✅ Progress indicator mỗi 5 giây (thay vì 2s để giảm spam log)
       const progressInterval = setInterval(() => {
         if (!callbackInvoked) {
-          console.log(`⏳ [UpdateAllConfigs] Đang chờ API response...`);
+          const elapsed = Math.floor((Date.now() - Date.now()) / 1000);
+          console.log(`⏳ [UpdateAllConfigs] Đang chờ API response... (data: ${JSON.stringify(allConfigs).length} bytes)`);
         }
-      }, 2000);
+      }, 5000);
       
       saveDataOptionUser(allConfigs, (success, error) => {
         callbackInvoked = true; // ✅ Đánh dấu callback đã được gọi
@@ -14344,14 +14553,9 @@ function saveDataOptionUser(data, callback) {
       
       if (success) {
         console.log('✅ [SaveDataOptionUser] SERVER SAVE THÀNH CÔNG!');
-        console.log('📍 Backup vào localStorage...');
-        // Optional: also sync to localStorage as backup
-        try {
-          localStorage.setItem('dataOptionUser', JSON.stringify(finalData));
-          console.log('✅ localStorage backup THÀNH CÔNG');
-        } catch (e) {
-          console.warn('⚠️ localStorage backup THẤT BẠI:', e);
-        }
+        // ✅ KHÔNG CẦN localStorage backup - server đã lưu thành công
+        // localStorage có giới hạn quota ~5-10MB, data lớn sẽ fail
+        // Server là single source of truth
         if (callback) callback(true, null);
       } else {
         console.error('❌ [SaveDataOptionUser] SERVER SAVE THẤT BẠI!');
@@ -14506,6 +14710,48 @@ const ZaloDebugHelpers = {
     } catch (err) {
       console.error('❌ Scan test failed:', err);
     }
+  },
+  
+  /**
+   * ✅ Clear localStorage để giải phóng quota
+   * Sử dụng khi gặp lỗi "exceeded the quota"
+   */
+  clearLocalStorageCache: () => {
+    console.log('🧹 [ClearCache] Bắt đầu clear localStorage cache...');
+    
+    const itemsToRemove = [
+      'dataOptionUser',
+      'user_address', // Item gây quota exceeded
+      'zalo_posted_messages',
+      'facebookState',
+      'facebookPages',
+      'facebookAutoSettings'
+    ];
+    
+    let removedCount = 0;
+    let freedBytes = 0;
+    
+    itemsToRemove.forEach(key => {
+      try {
+        const value = localStorage.getItem(key);
+        if (value) {
+          const bytes = new Blob([value]).size;
+          localStorage.removeItem(key);
+          removedCount++;
+          freedBytes += bytes;
+          console.log(`   ✅ Removed "${key}" (${(bytes/1024).toFixed(1)} KB)`);
+        }
+      } catch (e) {
+        console.warn(`   ⚠️ Could not remove "${key}":`, e.message);
+      }
+    });
+    
+    console.log(`✅ [ClearCache] Completed:`);
+    console.log(`   - Removed ${removedCount} items`);
+    console.log(`   - Freed ~${(freedBytes/1024).toFixed(1)} KB`);
+    console.log(`   💡 Server data is safe - localStorage was just a backup`);
+    
+    return { removedCount, freedBytes };
   }
 };
 
@@ -14531,7 +14777,7 @@ console.log('   window.ZaloDebug.enableWebviewDevTools()');
 console.log('   window.ZaloDebug.dumpImages()');
 console.log('   window.ZaloDebug.dumpChatItemStructure()');
 console.log('   window.ZaloDebug.testScanMessage()');
-
+console.log('   window.ZaloDebug.clearLocalStorageCache() - Clear localStorage quota');
 
 // ===== AUTO INIT ALL UI =====
 /**
