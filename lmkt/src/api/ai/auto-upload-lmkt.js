@@ -12300,111 +12300,6 @@ async function startFacebookAutoPosting() {
   }
 }
 
-// ===== FACEBOOK SDK INITIALIZATION =====
-
-/**
- * Load Facebook JavaScript SDK
- */
-function loadFacebookSDK() {
-  return new Promise((resolve, reject) => {
-    if (fbSDKLoaded) {
-      resolve();
-      return;
-    }
-    
-    // Check if SDK already exists
-    if (window.FB) {
-      fbSDKLoaded = true;
-      resolve();
-      return;
-    }
-    
-    window.fbAsyncInit = function() {
-      FB.init({
-        appId: FACEBOOK_CONFIG.APP_ID,
-        cookie: true,
-        xfbml: true,
-        version: FACEBOOK_CONFIG.GRAPH_API_VERSION
-      });
-      
-      fbSDKLoaded = true;
-      console.log('✅ Facebook SDK initialized');
-      resolve();
-    };
-    
-    // Load SDK script
-    (function(d, s, id) {
-      var js, fjs = d.getElementsByTagName(s)[0];
-      if (d.getElementById(id)) { return; }
-      js = d.createElement(s); js.id = id;
-      js.src = "https://connect.facebook.net/vi_VN/sdk.js";
-      js.onerror = () => reject(new Error('Failed to load Facebook SDK'));
-      fjs.parentNode.insertBefore(js, fjs);
-    }(document, 'script', 'facebook-jssdk'));
-  });
-}
-
-/**
- * Facebook Login với SDK (thay thế OAuth redirect)
- */
-function loginWithFacebookSDK() {
-  return new Promise((resolve, reject) => {
-    if (!window.FB) {
-      reject(new Error('Facebook SDK chưa được load'));
-      return;
-    }
-    
-    FB.login(function(response) {
-      if (response.authResponse) {
-        console.log('✅ Login thành công:', response.authResponse);
-        resolve(response.authResponse);
-      } else {
-        reject(new Error('User đã hủy login'));
-      }
-    }, {
-      scope: 'pages_show_list,pages_read_engagement,pages_manage_posts,pages_manage_engagement',
-      return_scopes: true
-    });
-  });
-}
-
-/**
- * Kiểm tra login status
- */
-function checkFacebookLoginStatus() {
-  return new Promise((resolve) => {
-    if (!window.FB) {
-      resolve(null);
-      return;
-    }
-    
-    FB.getLoginStatus(function(response) {
-      if (response.status === 'connected') {
-        resolve(response.authResponse);
-      } else {
-        resolve(null);
-      }
-    });
-  });
-}
-
-/**
- * Logout Facebook
- */
-function logoutFacebook() {
-  return new Promise((resolve) => {
-    if (!window.FB) {
-      resolve();
-      return;
-    }
-    
-    FB.logout(function(response) {
-      console.log('✅ Đã logout Facebook');
-      resolve();
-    });
-  });
-}
-
 /**
  * Lấy danh sách Pages của user
  */
@@ -12938,25 +12833,6 @@ function setupFacebookEventListeners() {
   
 }
 
-function buildTokenBUrl(appSecret, tokenA) {
-  const base = `https://graph.facebook.com/${FACEBOOK_CONFIG.GRAPH_API_VERSION}/oauth/access_token`;
-  const params = new URLSearchParams({
-    grant_type: 'fb_exchange_token',
-    client_id: FACEBOOK_CONFIG.APP_ID,
-    client_secret: appSecret,
-    fb_exchange_token: tokenA
-  });
-  return `${base}?${params.toString()}`;
-}
-
-function buildPageTokenUrl(tokenB) {
-  const base = `https://graph.facebook.com/${FACEBOOK_CONFIG.GRAPH_API_VERSION}/me/accounts`;
-  const params = new URLSearchParams({
-    access_token: tokenB
-  });
-  return `${base}?${params.toString()}`;
-}
-
 /**
  * Validate saved token trước sử dụng
  * Nếu token không hợp lệ, sẽ xóa và yêu cầu nhập lại
@@ -13136,83 +13012,6 @@ async function handleManualToken() {
     console.error('❌ [HandleManualToken] Lỗi:', error);
     console.error('   Stack:', error.stack);
     showFacebookMessage('Token không hợp lệ: ' + error.message, 'error');
-  }
-}
-
-/**
- * Kiểm tra xem user đã login chưa
- */
-async function checkExistingLogin() {
-  try {
-    const authResponse = await checkFacebookLoginStatus();
-    if (authResponse) {
-      console.log('✅ User đã login Facebook');
-      facebookState.userAccessToken = authResponse.accessToken;
-      saveFacebookState();
-      await loadFacebookPages();
-      updateFacebookAuthUI(true);
-    }
-  } catch (error) {
-    console.error('Lỗi check login status:', error);
-  }
-}
-
-/**
- * Handle Facebook connect (dùng FB SDK)
- */
-async function handleFacebookConnect() {
-  try {
-    showFacebookMessage('Đang kết nối với Facebook...', 'info');
-    
-    // Kiểm tra SDK đã load chưa
-    if (!window.FB) {
-      throw new Error('Facebook SDK chưa sẵn sàng. Vui lòng thử lại sau vài giây hoặc sử dụng tùy chọn "Nhập Token thủ công".');
-    }
-    
-    // Login với Facebook SDK
-    const authResponse = await loginWithFacebookSDK();
-    
-    if (!authResponse || !authResponse.accessToken) {
-      throw new Error('Không nhận được access token từ Facebook');
-    }
-    
-    facebookState.userAccessToken = authResponse.accessToken;
-    saveFacebookState();
-    
-    await loadFacebookPages();
-    
-    showFacebookMessage('✅ Kết nối thành công!', 'success');
-    
-  } catch (error) {
-    console.error('❌ Lỗi kết nối Facebook:', error);
-    
-    let errorMessage = error.message;
-    
-    // Phân tích lỗi cụ thể
-    if (error.message.includes('User đã hủy login')) {
-      errorMessage = 'Bạn đã hủy đăng nhập Facebook';
-    } else if (error.message.includes('password')) {
-      errorMessage = `
-        <strong>Lỗi đăng nhập Facebook</strong><br>
-        <br>
-        <strong>Nguyên nhân:</strong> Facebook App chưa được cấu hình đúng hoặc tài khoản của bạn chưa được thêm vào app.<br>
-        <br>
-        <strong>Giải pháp:</strong><br>
-        1. Sử dụng tùy chọn "Nhập Token thủ công" bên dưới<br>
-        2. Hoặc liên hệ admin để cấu hình Facebook App<br>
-        <br>
-        <strong>Hướng dẫn lấy token:</strong><br>
-        - Truy cập: <a href="https://developers.facebook.com/tools/explorer/${FACEBOOK_CONFIG.APP_ID}/" target="_blank">Graph API Explorer</a><br>
-        - Chọn Page → Generate Access Token<br>
-        - Copy token và paste vào ô "Nhập Token thủ công"
-      `;
-      
-      // Hiển thị nút nhập token thủ công
-      const btnManual = document.getElementById('btn-fb-manual-token');
-      if (btnManual) btnManual.style.display = 'inline-block';
-    }
-    
-    showFacebookMessage(errorMessage, 'error');
   }
 }
 
@@ -13930,34 +13729,6 @@ function addToDataOptionUser(item, callback) {
   data.push(newItem);
   saveDataOptionUser(data, callback);
   return newItem;
-}
-
-/**
- * Xóa item từ dataOptionUser
- * @param {String} itemId - ID của item cần xóa
- * @param {Function} callback - callback(success, error)
- */
-function removeFromDataOptionUser(itemId, callback) {
-  const data = loadDataOptionUser();
-  const filtered = data.filter(item => item.id !== itemId);
-  saveDataOptionUser(filtered, callback);
-}
-
-/**
- * Update item trong dataOptionUser
- * @param {String} itemId - ID của item cần update
- * @param {Object} updates - Updates cần áp dụng
- * @param {Function} callback - callback(success, error)
- */
-function updateDataOptionUser(itemId, updates, callback) {
-  const data = loadDataOptionUser();
-  const idx = data.findIndex(item => item.id === itemId);
-  if (idx >= 0) {
-    data[idx] = { ...data[idx], ...updates, updated_at: Date.now() };
-    saveDataOptionUser(data, callback);
-  } else {
-    if (callback) callback(false, 'Item not found');
-  }
 }
 
 // ===== LƯỚI TRỮ THÔNG TIN LỰA CHỌN CHẠY ZALO =====
