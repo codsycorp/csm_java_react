@@ -18,521 +18,6 @@ if (typeof window !== 'undefined') {
   window.__AUTO_UPLOAD_LMKT_LOADED__ = true;
 }
 
-// ========== GLOBAL ERROR HANDLERS - PREVENT SILENT CRASHES ==========
-// ✅ FIX: Catch unhandled promise rejections
-if (typeof window !== 'undefined') {
-  // ✅ Track crash attempts để debug
-  let crashCount = 0;
-  const MAX_CRASHES_BEFORE_ALERT = 3;
-  
-  window.addEventListener('unhandledrejection', (event) => {
-    try {
-      const reason = event.reason;
-      // ✅ Safe error message extraction
-      let errMsg = 'Unknown rejection reason';
-      if (reason instanceof Error) {
-        errMsg = reason.message;
-      } else if (typeof reason === 'string') {
-        errMsg = reason;
-      } else if (reason && typeof reason === 'object') {
-        errMsg = JSON.stringify(reason);
-      }
-      
-      console.error('❌ [UNHANDLED REJECTION]', errMsg);
-      console.error('   Reason object:', reason);
-      console.error('   Stack:', reason?.stack || 'no stack');
-      
-      // ✅ Count crashes
-      crashCount++;
-      if (crashCount >= MAX_CRASHES_BEFORE_ALERT) {
-        console.error(`🚨 [CRITICAL] ${crashCount} unhandled rejections detected! System may be unstable.`);
-        
-        // ✅ Show user-friendly message
-        if (window.antd && window.antd.notification) {
-          window.antd.notification.error({
-            message: 'Lỗi nghiêm trọng',
-            description: `Phát hiện ${crashCount} lỗi không xử lý. Vui lòng refresh trang để ổn định hệ thống.`,
-            duration: 0, // Don't auto close
-          });
-        }
-        
-        // Reset counter sau warning
-        crashCount = 0;
-      }
-      
-      // ✅ ALWAYS prevent default to stop crash
-      event.preventDefault();
-    } catch (e) {
-      console.error('❌ Error in unhandledrejection handler:', e);
-      try { 
-        event.preventDefault(); 
-      } catch (e2) {
-        console.error('❌ Failed to preventDefault:', e2);
-      }
-    }
-  });
-
-  window.addEventListener('error', (event) => {
-    try {
-      const errMsg = event.error?.message || event.message || 'Unknown error';
-      
-      // ✅ Filter out 'interaction' entry type errors - these are from browser monitoring
-      if (errMsg && errMsg.includes && errMsg.includes("entry type 'interaction'")) {
-        console.warn('⚠️ [Browser Monitoring] Ignoring performance entry error (non-critical):', errMsg);
-        return; // Don't crash for these
-      }
-      
-      // ✅ Filter out common non-critical errors
-      const nonCriticalPatterns = [
-        'interaction',
-        'preload',
-        'ResizeObserver',
-        'Non-Error promise rejection captured',
-      ];
-      
-      const isNonCritical = nonCriticalPatterns.some(pattern => 
-        errMsg && errMsg.includes && errMsg.includes(pattern)
-      );
-      
-      if (isNonCritical) {
-        console.warn('⚠️ [Non-Critical Error] Ignoring:', errMsg);
-        event.preventDefault?.();
-        return;
-      }
-      
-      console.error('❌ [WINDOW ERROR]', errMsg);
-      if (event.error && event.error.stack) {
-        console.error('   Stack:', event.error.stack);
-      }
-      
-      // ✅ Count critical errors
-      crashCount++;
-      
-      // Prevent default crash only for non-critical errors
-      if (isNonCritical) {
-        event.preventDefault?.();
-      }
-    } catch (e) {
-      console.error('❌ Error in error handler:', e);
-    }
-  });
-
-  // ✅ NEW: Catch rejections from fetch/promises that don't have .catch()
-  const originalFetch = window.fetch;
-  if (originalFetch) {
-    window.fetch = function(...args) {
-      return originalFetch.apply(this, args).catch((err) => {
-        console.error('❌ [FETCH ERROR]', err);
-        // ✅ Don't re-throw, just log
-        return Promise.reject(err);
-      });
-    };
-  }
-  
-  // ✅ NEW: Wrap setTimeout/setInterval errors
-  const originalSetTimeout = window.setTimeout;
-  window.setTimeout = function(callback, delay, ...args) {
-    const wrappedCallback = function() {
-      try {
-        callback.apply(this, args);
-      } catch (err) {
-        console.error('❌ [TIMEOUT ERROR]', err);
-        // Don't re-throw, prevent crash
-      }
-    };
-    return originalSetTimeout.call(window, wrappedCallback, delay);
-  };
-  
-  const originalSetInterval = window.setInterval;
-  window.setInterval = function(callback, delay, ...args) {
-    const wrappedCallback = function() {
-      try {
-        callback.apply(this, args);
-      } catch (err) {
-        console.error('❌ [INTERVAL ERROR]', err);
-        // Don't re-throw, prevent crash
-      }
-    };
-    return originalSetInterval.call(window, wrappedCallback, delay);
-  };
-}
-
-// ========== SHUTDOWN DETECTION HELPERS - Ng\u0103n Memory Leak ==========
-/**
- * Ki\u1ec3m tra xem AutoSetup component \u0111\u00e3 unmount ch\u01b0a
- * N\u1ebfu unmount r\u1ed3i, c\u00e1c timer/async operations ph\u1ea3i d\u1eebng l\u1ea1i
- */
-const isShuttingDown = () => {
-  if (typeof window !== 'undefined' && typeof window.__isAutoShuttingDown === 'function') {
-    return window.__isAutoShuttingDown();
-  }
-  return false;
-};
-
-/**
- * Safe setInterval - T\u1ef1 \u0111\u1ed9ng ki\u1ec3m tra shutdown
- * @param {Function} callback 
- * @param {number} interval 
- * @returns {number|null} interval ID ho\u1eb7c null n\u1ebfu shutdown
- */
-const safeSetInterval = (callback, interval) => {
-  if (isShuttingDown()) {
-    console.warn('\u26a0\ufe0f [SHUTDOWN] B\u1ecf qua setInterval v\u00ec \u0111ang shutdown');
-    return null;
-  }
-  
-  const wrappedCallback = () => {
-    if (isShuttingDown()) {
-      console.log('\ud83d\uded1 [SHUTDOWN] D\u1eebng interval v\u00ec shutdown detected');
-      return;
-    }
-    try {
-      callback();
-    } catch (e) {
-      console.error('\u274c [INTERVAL ERROR]', e);
-    }
-  };
-  
-  return setInterval(wrappedCallback, interval);
-};
-
-/**
- * Safe setTimeout - T\u1ef1 \u0111\u1ed9ng ki\u1ec3m tra shutdown
- * @param {Function} callback 
- * @param {number} delay 
- * @returns {number|null} timeout ID ho\u1eb7c null n\u1ebfu shutdown
- */
-const safeSetTimeout = (callback, delay) => {
-  if (isShuttingDown()) {
-    console.warn('\u26a0\ufe0f [SHUTDOWN] B\u1ecf qua setTimeout v\u00ec \u0111ang shutdown');
-    return null;
-  }
-  
-  const wrappedCallback = () => {
-    if (isShuttingDown()) {
-      console.log('\ud83d\uded1 [SHUTDOWN] B\u1ecf qua timeout v\u00ec shutdown detected');
-      return;
-    }
-    try {
-      callback();
-    } catch (e) {
-      console.error('\u274c [TIMEOUT ERROR]', e);
-    }
-  };
-  
-  return setTimeout(wrappedCallback, delay);
-};
-
-// ========== MEMORY OPTIMIZATION MODULE - Tiết kiệm RAM mà không mất logic ==========
-/**
- * Hệ thống quản lý bộ nhớ toàn diện
- * 
- * Tính năng:
- * 1. Memory Monitoring - Theo dõi RAM usage
- * 2. Smart Webview Manager - Lazy load với option preload
- * 3. LocalStorage Optimizer - Auto cleanup
- * 4. Queue Limiter - Giới hạn items
- * 5. Event Listener Registry - Track & cleanup
- */
-const MemoryOptimizer = {
-  // Config
-  config: {
-    MAX_LOCALSTORAGE_ITEM_SIZE: 500 * 1024, // 500KB per item
-    MAX_QUEUE_SIZE: 200, // Max 200 items in queue
-    MEMORY_CHECK_INTERVAL: 60000, // Check every 60s
-    AUTO_CLEANUP_THRESHOLD: 0.8, // Cleanup khi dùng >80% quota
-    WEBVIEW_LAZY_LOAD: false, // ✅ FALSE = Auto-load webview ngay khi UI mở (tiện lợi, chỉ click 1 lần)
-    WEBVIEW_AUTO_DESTROY_DELAY: 300000, // Destroy webview sau 5 phút không dùng
-  },
-
-  // State
-  state: {
-    webviewLastUsed: 0,
-    cleanupScheduled: false,
-    listeners: new Map(), // Track event listeners
-    webviewCreated: false,
-  },
-
-  /**
-   * Khởi tạo memory optimizer
-   */
-  init() {
-    console.log('🧹 [MemoryOptimizer] Initializing...');
-    
-    // Auto cleanup localStorage khi vượt threshold
-    this.schedulePeriodicCleanup();
-    
-    // Track memory usage nếu API có sẵn
-    if (performance && performance.memory) {
-      this.startMemoryMonitoring();
-    }
-    
-    console.log('✅ [MemoryOptimizer] Initialized with config:', this.config);
-  },
-
-  /**
-   * Monitor memory usage (chỉ trên Chrome/Edge)
-   */
-  startMemoryMonitoring() {
-    safeSetInterval(() => {
-      if (isShuttingDown()) return;
-      
-      try {
-        const mem = performance.memory;
-        const usedMB = (mem.usedJSHeapSize / 1024 / 1024).toFixed(1);
-        const limitMB = (mem.jsHeapSizeLimit / 1024 / 1024).toFixed(1);
-        const percent = ((mem.usedJSHeapSize / mem.jsHeapSizeLimit) * 100).toFixed(1);
-        
-        // Log mỗi 5 phút
-        if (Date.now() % 300000 < 60000) {
-          console.log(`📊 [Memory] ${usedMB}MB / ${limitMB}MB (${percent}%)`);
-        }
-        
-        // Auto cleanup nếu >80%
-        if (percent > 80) {
-          console.warn(`⚠️ [Memory] High usage ${percent}%, triggering cleanup...`);
-          this.performEmergencyCleanup();
-        }
-      } catch (e) {
-        // Ignore errors
-      }
-    }, this.config.MEMORY_CHECK_INTERVAL);
-  },
-
-  /**
-   * Cleanup định kỳ localStorage
-   */
-  schedulePeriodicCleanup() {
-    if (this.state.cleanupScheduled) return;
-    this.state.cleanupScheduled = true;
-
-    safeSetInterval(() => {
-      if (isShuttingDown()) return;
-      this.cleanupLocalStorage();
-    }, 10 * 60 * 1000); // Mỗi 10 phút
-  },
-
-  /**
-   * Cleanup localStorage - xóa items cũ/lớn
-   */
-  cleanupLocalStorage() {
-    try {
-      const keysToCheck = [
-        'zalo_posted_messages',
-        'dataOptionUser', 
-        'user_address',
-        'facebook_post_state'
-      ];
-
-      let totalCleaned = 0;
-      
-      for (const key of keysToCheck) {
-        const item = localStorage.getItem(key);
-        if (!item) continue;
-
-        const sizeKB = item.length / 1024;
-        
-        // Xóa nếu > 1MB
-        if (sizeKB > 1024) {
-          console.log(`🗑️ [Cleanup] Removing large item: ${key} (${sizeKB.toFixed(1)}KB)`);
-          localStorage.removeItem(key);
-          totalCleaned++;
-          continue;
-        }
-
-        // Truncate array nếu quá dài
-        try {
-          const parsed = JSON.parse(item);
-          if (Array.isArray(parsed) && parsed.length > 500) {
-            const truncated = parsed.slice(-200); // Giữ 200 items mới nhất
-            localStorage.setItem(key, JSON.stringify(truncated));
-            console.log(`✂️ [Cleanup] Truncated ${key}: ${parsed.length} → ${truncated.length} items`);
-            totalCleaned++;
-          }
-        } catch (e) {
-          // Not JSON, skip
-        }
-      }
-
-      if (totalCleaned > 0) {
-        console.log(`✅ [Cleanup] Cleaned ${totalCleaned} localStorage items`);
-      }
-    } catch (e) {
-      console.error('❌ [Cleanup] Error:', e);
-    }
-  },
-
-  /**
-   * Emergency cleanup khi memory cao
-   */
-  performEmergencyCleanup() {
-    console.warn('🚨 [Memory] Emergency cleanup triggered!');
-    
-    // 1. Clear large localStorage items
-    this.cleanupLocalStorage();
-    
-    // 2. Clear unused webview nếu có
-    if (this.state.webviewCreated) {
-      const timeSinceLastUse = Date.now() - this.state.webviewLastUsed;
-      if (timeSinceLastUse > this.config.WEBVIEW_AUTO_DESTROY_DELAY) {
-        this.destroyUnusedWebview();
-      }
-    }
-    
-    // 3. Force garbage collection nếu có API
-    if (window.gc) {
-      console.log('🗑️ [Memory] Running manual GC...');
-      window.gc();
-    }
-    
-    console.log('✅ [Memory] Emergency cleanup completed');
-  },
-
-  /**
-   * Destroy webview không dùng để giải phóng RAM
-   */
-  destroyUnusedWebview() {
-    const webviewId = window.zaloScannerWebviewId;
-    const webview = document.getElementById(webviewId);
-    
-    if (webview && webview.parentNode) {
-      console.log('🗑️ [Memory] Destroying unused webview to free RAM...');
-      
-      // Clear webview session
-      try {
-        if (webview.clearHistory) webview.clearHistory();
-        if (webview.stop) webview.stop();
-      } catch (e) {
-        console.warn('⚠️ [Memory] Webview cleanup warning:', e);
-      }
-      
-      // Remove from DOM
-      webview.parentNode.removeChild(webview);
-      this.state.webviewCreated = false;
-      
-      console.log('✅ [Memory] Webview destroyed, RAM freed');
-    }
-  },
-
-  /**
-   * Track webview usage
-   */
-  markWebviewUsed() {
-    this.state.webviewLastUsed = Date.now();
-    this.state.webviewCreated = true;
-  },
-
-  /**
-   * Giới hạn kích thước queue để tránh OOM
-   */
-  limitQueueSize(queue, maxSize = null) {
-    const limit = maxSize || this.config.MAX_QUEUE_SIZE;
-    
-    if (Array.isArray(queue) && queue.length > limit) {
-      const removed = queue.splice(0, queue.length - limit);
-      console.warn(`⚠️ [Memory] Queue too large, removed ${removed.length} oldest items`);
-      return removed.length;
-    }
-    
-    return 0;
-  },
-
-  /**
-   * Safe localStorage setItem với size check
-   */
-  safeLocalStorageSet(key, value) {
-    try {
-      const stringValue = typeof value === 'string' ? value : JSON.stringify(value);
-      const sizeKB = stringValue.length / 1024;
-      
-      // Warn nếu item quá lớn
-      if (sizeKB > this.config.MAX_LOCALSTORAGE_ITEM_SIZE / 1024) {
-        console.warn(`⚠️ [Memory] localStorage item "${key}" very large: ${sizeKB.toFixed(1)}KB`);
-        
-        // Truncate nếu là array
-        if (Array.isArray(value)) {
-          const truncated = value.slice(-100); // Chỉ giữ 100 items
-          localStorage.setItem(key, JSON.stringify(truncated));
-          console.log(`✂️ [Memory] Truncated "${key}": ${value.length} → ${truncated.length} items`);
-          return true;
-        }
-      }
-      
-      localStorage.setItem(key, stringValue);
-      return true;
-    } catch (error) {
-      if (error.name === 'QuotaExceededError') {
-        console.error('❌ [Memory] localStorage quota exceeded!');
-        this.cleanupLocalStorage(); // Auto cleanup
-        return false;
-      }
-      console.error('❌ [Memory] localStorage error:', error);
-      return false;
-    }
-  },
-
-  /**
-   * Track event listener để cleanup sau
-   */
-  trackListener(element, event, handler, options) {
-    const key = `${element.id || 'unknown'}_${event}`;
-    
-    if (!this.state.listeners.has(key)) {
-      this.state.listeners.set(key, []);
-    }
-    
-    this.state.listeners.get(key).push({ element, event, handler, options });
-    element.addEventListener(event, handler, options);
-  },
-
-  /**
-   * Cleanup tất cả tracked listeners
-   */
-  cleanupAllListeners() {
-    console.log(`🧹 [Memory] Cleaning up ${this.state.listeners.size} listener groups...`);
-    
-    let count = 0;
-    this.state.listeners.forEach((listeners, key) => {
-      listeners.forEach(({ element, event, handler, options }) => {
-        try {
-          element.removeEventListener(event, handler, options);
-          count++;
-        } catch (e) {
-          // Element might be removed
-        }
-      });
-    });
-    
-    this.state.listeners.clear();
-    console.log(`✅ [Memory] Removed ${count} event listeners`);
-  },
-
-  /**
-   * Get memory stats
-   */
-  getStats() {
-    const stats = {
-      webviewCreated: this.state.webviewCreated,
-      listenersCount: this.state.listeners.size,
-      lastCleanup: this.state.lastCleanup || 'Never',
-    };
-
-    if (performance && performance.memory) {
-      const mem = performance.memory;
-      stats.memoryUsedMB = (mem.usedJSHeapSize / 1024 / 1024).toFixed(1);
-      stats.memoryLimitMB = (mem.jsHeapSizeLimit / 1024 / 1024).toFixed(1);
-      stats.memoryPercent = ((mem.usedJSHeapSize / mem.jsHeapSizeLimit) * 100).toFixed(1);
-    }
-
-    return stats;
-  }
-};
-
-// ✅ Auto-init khi script load
-if (typeof window !== 'undefined') {
-  MemoryOptimizer.init();
-}
-
 // ========== CRYPTO HELPERS - ENCRYPT/DECRYPT HTML CONTENT ==========
 /**
  * Lấy crypto functions từ window (exposed bởi AutoSetup.tsx)
@@ -769,134 +254,6 @@ const decryptHtmlContent = (data) => {
 const DEFAULT_UPLOAD_ENDPOINT = "/upload.shtml";
 const UPLOAD_ENDPOINT_COOLDOWN_MS = 2 * 60 * 1000;
 const uploadEndpointHealth = {};
-
-// ===== SAFE LOCALSTORAGE HELPERS =====
-/**
- * Safely set item to localStorage with quota handling
- * @param {string} key - localStorage key
- * @param {any} value - value to store (will be JSON.stringified if not string)
- * @param {Object} options - cleanup options
- * @returns {boolean} - true if successful, false otherwise
- */
-function safeLocalStorageSet(key, value, options = {}) {
-  try {
-    const stringValue = typeof value === 'string' ? value : JSON.stringify(value);
-    localStorage.setItem(key, stringValue);
-    return true;
-  } catch (error) {
-    if (error.name === 'QuotaExceededError' || error.message.includes('quota')) {
-      console.warn(`⚠️ localStorage quota exceeded for key "${key}". Attempting cleanup...`);
-      
-      // Strategy 1: Remove old/large items
-      const itemsToCleanup = options.cleanupKeys || [
-        'zalo_posted_messages',
-        'dataOptionUser',
-        'user_address',
-        ARTICLE_HISTORY_KEY,
-        FEATURED_IMAGE_HISTORY_KEY
-      ];
-      
-      let cleaned = false;
-      for (const cleanupKey of itemsToCleanup) {
-        if (cleanupKey === key) continue; // Don't remove the key we're trying to set
-        try {
-          const existing = localStorage.getItem(cleanupKey);
-          if (existing && existing.length > 100000) { // > 100KB
-            console.log(`🗑️ Removing large item: ${cleanupKey} (${(existing.length/1024).toFixed(1)}KB)`);
-            localStorage.removeItem(cleanupKey);
-            cleaned = true;
-          }
-        } catch (e) {
-          // Ignore
-        }
-      }
-      
-      // Strategy 2: Try again after cleanup
-      if (cleaned) {
-        try {
-          const stringValue = typeof value === 'string' ? value : JSON.stringify(value);
-          localStorage.setItem(key, stringValue);
-          console.log(`✅ Successfully stored "${key}" after cleanup`);
-          return true;
-        } catch (retryError) {
-          console.error(`❌ Still failed after cleanup for "${key}":`, retryError.message);
-        }
-      }
-      
-      // Strategy 3: Truncate the value if it's an array
-      if (Array.isArray(value)) {
-        const maxItems = options.maxItems || 100;
-        if (value.length > maxItems) {
-          console.warn(`⚠️ Truncating array from ${value.length} to ${maxItems} items`);
-          const truncated = value.slice(-maxItems); // Keep latest items
-          try {
-            localStorage.setItem(key, JSON.stringify(truncated));
-            console.log(`✅ Successfully stored truncated "${key}"`);
-            return true;
-          } catch (truncError) {
-            console.error(`❌ Failed even with truncation for "${key}":`, truncError.message);
-          }
-        }
-      }
-      
-      return false;
-    } else {
-      console.error(`❌ localStorage error for "${key}":`, error.message);
-      return false;
-    }
-  }
-}
-
-/**
- * Clean up old localStorage items to free up space
- */
-function cleanupLocalStorage() {
-  const keysToCheck = [
-    'zalo_posted_messages',
-    'dataOptionUser',
-    'user_address',
-    ARTICLE_HISTORY_KEY,
-    FEATURED_IMAGE_HISTORY_KEY,
-    'facebook_post_state'
-  ];
-  
-  let totalCleaned = 0;
-  for (const key of keysToCheck) {
-    try {
-      const item = localStorage.getItem(key);
-      if (!item) continue;
-      
-      const sizeKB = item.length / 1024;
-      
-      // Remove if > 1MB
-      if (sizeKB > 1024) {
-        console.log(`🗑️ Removing large item: ${key} (${sizeKB.toFixed(1)}KB)`);
-        localStorage.removeItem(key);
-        totalCleaned++;
-        continue;
-      }
-      
-      // Try to parse as array and truncate
-      try {
-        const parsed = JSON.parse(item);
-        if (Array.isArray(parsed) && parsed.length > 200) {
-          const truncated = parsed.slice(-200);
-          localStorage.setItem(key, JSON.stringify(truncated));
-          console.log(`✂️ Truncated ${key}: ${parsed.length} → ${truncated.length} items`);
-          totalCleaned++;
-        }
-      } catch (e) {
-        // Not JSON or not array, ignore
-      }
-    } catch (error) {
-      console.warn(`⚠️ Error checking ${key}:`, error.message);
-    }
-  }
-  
-  if (totalCleaned > 0) {
-    console.log(`✅ Cleanup completed: ${totalCleaned} items cleaned`);
-  }
-}
 
 function markUploadEndpointFailure(endpoint, status = 0) {
   if (!endpoint) return;
@@ -1921,72 +1278,6 @@ function extractKeywordsForHashtags(text = '', limit = 5) {
     .map(([word]) => word);
 }
 
-/**
- * Tạo hashtags SEO tiếng Việt (không dấu) từ keywords
- * ✅ SUPPORT ĐA NGÀNH: Bất động sản, phần mềm, dịch vụ, giáo dục, etc.
- * VD: "Căn hộ cao cấp" → "#Can_ho_cao_cap #Can_ho #Cao_cap"
- */
-function generateSeoHashtags(title = '', description = '', tags = [], limit = 6, industry = '') {
-  const hashtagsSet = new Set();
-  
-  // 1. Từ title (quan trọng nhất)
-  if (title) {
-    const titleKeywords = extractKeywordsForHashtags(title, 3);
-    titleKeywords.forEach(kw => {
-      const normalized = removeVietnameseTones(kw);
-      if (normalized.length > 0) {
-        hashtagsSet.add(normalized.replace(/\s+/g, '_'));
-      }
-    });
-  }
-  
-  // 2. Từ description
-  if (description) {
-    const descKeywords = extractKeywordsForHashtags(description, 3);
-    descKeywords.forEach(kw => {
-      const normalized = removeVietnameseTones(kw);
-      if (normalized.length > 0) {
-        hashtagsSet.add(normalized.replace(/\s+/g, '_'));
-      }
-    });
-  }
-  
-  // 3. Từ tags array
-  if (Array.isArray(tags)) {
-    tags.slice(0, 3).forEach(tag => {
-      const normalized = removeVietnameseTones(tag);
-      if (normalized.length > 0) {
-        hashtagsSet.add(normalized.replace(/\s+/g, '_'));
-      }
-    });
-  }
-  
-  // 4. ✅ INDUSTRY-SPECIFIC HASHTAGS (đa ngành)
-  // Thêm hashtags phổ biến dựa trên lĩnh vực
-  const commonHashtagsByIndustry = {
-    'dich-vu': ['dichvu', 'chuyennghiep', 'giaiphap', 'tuvan', 'toiuu', 'doanhnghiep'],
-    'phan-mem': ['phanmem', 'tudونghoa', 'quanly', 'congnge', 'tangहieuqua', 'startup'],
-    'booking-online': ['datlichonline', 'booking', 'tietkiemthoigian', 'dедang', 'uytin', 'chatluong'],
-    'cho-thue-xe': ['thuexe', 'chothueхе', 'xesachse', 'taixechuyennghiep', 'antoan', 'tphcm'],
-    'lam-dep-my-pham': ['lamdep', 'mypham', 'skincare', 'beautytips', 'chamsocda', 'spa'],
-    'bat-dong-san': ['batdongsan', 'nhadat', 'dautubds', 'minhbachphaply', 'thanhkhoan', 'chuyennghiep']
-  };
-  
-  // Thêm industry-specific hashtags
-  const industryHashtags = commonHashtagsByIndustry[industry] || [
-    'chitietbaiviet', 'thongtin', 'khoahoc', 'dulinhoc', 'viet_nam'
-  ];
-  
-  industryHashtags.forEach(ht => hashtagsSet.add(ht));
-  
-  // 5. ✅ UNIVERSAL HASHTAGS - Hoạt động với tất cả ngành
-  const universalHashtags = ['viet_nam', 'thongtin', 'tilam'];
-  universalHashtags.forEach(ht => hashtagsSet.add(ht));
-  
-  // Lấy top hashtags
-  return Array.from(hashtagsSet).slice(0, limit);
-}
-
 // ===== ARTICLE HISTORY =====
 function saveArticleToHistory(domainKey, industryOrProject, title, slug) {
   try {
@@ -2114,28 +1405,6 @@ function selectSmartFeaturedImage(images) {
   // Lưu vào lịch sử
   saveImageToHistory(selectedImage);
   return selectedImage;
-}
-
-// ===== HELPER FUNCTIONS =====
-function replaceContactInfo(text, opts = {}) {
-  if (!text) return text;
-  
-  const phone = opts.phone || LMKT_CONTACT_PHONE;
-  const name = opts.name || LMKT_CONTACT_NAME;
-  
-  let result = String(text);
-  
-  // Thay thế số điện thoại
-  // Patterns: 0xxx xxx xxxx, (+84)9xx xxx xxxx, 09xxxxxxxx, etc.
-  result = result.replace(/\b0\d{9,10}\b/g, phone);
-  result = result.replace(/\(\+84\)\s*\d{1,2}\s*\d{3,4}\s*\d{3,4}/g, phone);
-  result = result.replace(/\+84\s*\d{1,2}\s*\d{3,4}\s*\d{3,4}/g, phone);
-  
-  // Thay thế tên liên hệ
-  // Patterns: Liên hệ: XXX, Mr/Mrs XXX, Anh/Chị XXX
-  result = result.replace(/(?:Liên hệ|Contact|Ms|Mr|Mrs|Anh|Chị|Bà|Ông)\s+[A-ỦZÀÁẢÃẠĂẰẮẲẴẶÂẦẤẨẪẬÈÉẺẼẸÊỀẾỂỄỆÌÍỈĨỊÒÓỎÕỌÔỒỐỔỖỘƠỜỚỞỠỢÙÚỦŨỤƯỪỨỬỮỰỲÝỶỸỴĐ][a-ủzàáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ\s]*/gi, `${name}`);
-  
-  return result;
 }
 
 /**
@@ -3011,7 +2280,8 @@ function normalizeImageCandidates(value) {
 }
 
 function extractImagesFromMessage(item = {}) {
-  console.log(`\n📋 [extractImagesFromMessage] START`);
+  console.log(`\n📋 [extractImagesFromMessage] === START EXTRACTION DEBUG ===`);
+  console.log(`   Item keys:`, Object.keys(item || {}).join(', '));
   console.log(`   Item structure:`, {
     has_images: !!item.images,
     images_len: Array.isArray(item.images) ? item.images.length : 'N/A',
@@ -3096,9 +2366,8 @@ function extractImagesFromMessage(item = {}) {
   }
 
   console.log(`\n   📊 [BEFORE FILTER] Total raw images collected: ${images.length}`);
-  images.slice(0, 2).forEach((img, idx) => {
-    const preview = typeof img === 'string' ? img.substring(0, 80) : String(img).substring(0, 80);
-    console.log(`     [${idx}] ${preview}...`);
+  images.slice(0, 5).forEach((img, idx) => {
+    console.log(`     [${idx}] ${typeof img === 'string' ? img.substring(0, 100) : String(img).substring(0, 100)}...`);
   });
 
   // Validate URLs before returning
@@ -3118,13 +2387,10 @@ function extractImagesFromMessage(item = {}) {
     })
   ));
   
-  const selectedImages = (ZALO_MEMORY.MAX_IMAGES_PER_POST && ZALO_MEMORY.MAX_IMAGES_PER_POST > 0)
-    ? validImages.slice(0, ZALO_MEMORY.MAX_IMAGES_PER_POST)
-    : validImages;
-  console.log(`\n   📊 [AFTER FILTER] Valid images: ${validImages.length}/${images.length} | dùng ${selectedImages.length}`);
+  console.log(`\n   📊 [AFTER FILTER] Valid images: ${validImages.length}/${images.length}`);
   if (validImages.length > 0) {
     console.log(`✅ extractImagesFromMessage: Found ${validImages.length} valid image(s) [${debugInfo.join(', ')}]`);
-    selectedImages.slice(0, 2).forEach((url, idx) => {
+    validImages.slice(0, 3).forEach((url, idx) => {
       console.log(`   [${idx}] ${url}`);
     });
   } else if (debugInfo.length > 0) {
@@ -3132,9 +2398,9 @@ function extractImagesFromMessage(item = {}) {
   } else {
     console.warn(`⚠️ extractImagesFromMessage: No images found in any field!`);
   }
-  console.log(`📋 [extractImagesFromMessage] END\n`);
+  console.log(`📋 [extractImagesFromMessage] === END EXTRACTION DEBUG ===\n`);
   
-  return selectedImages;
+  return validImages;
 }
 
 function extractMessageText(item = {}) {
@@ -3330,8 +2596,11 @@ async function uploadImages(ctx, images) {
   console.log(`\n[uploadImages] === START UPLOAD DEBUG ===`);
   console.log(`[uploadImages] Bắt đầu upload ${arr.length} ảnh - ${new Date().toLocaleTimeString()}`);
   
-  const base64Count = arr.filter(img => isBase64(img)).length;
-  console.log(`[uploadImages] Ảnh base64: ${base64Count}, URL thường: ${arr.length - base64Count}`);
+  arr.forEach((img, i) => {
+    const isB64 = isBase64(img);
+    const preview = img ? img.substring(0, 100) : '(empty)';
+    console.log(`   [${i}] ${isB64 ? '📤 BASE64' : '🔗 URL'}: ${preview}...`);
+  });
   
   const results = [];
   for (let i = 0; i < arr.length; i += 1) {
@@ -3359,7 +2628,10 @@ async function uploadImages(ctx, images) {
     }
   }
   
-  console.log(`\n[uploadImages] === RESULTS BEFORE FILTER === ${results.length} items`);
+  console.log(`\n[uploadImages] === RESULTS BEFORE FILTER ===`);
+  results.forEach((r, i) => {
+    console.log(`   [${i}] ${r ? r.substring(0, 100) : '(empty)'}...`);
+  });
   
   const validResults = results.filter((r, idx) => {
     // ✅ LỌC HTML KHỎI RESULTS
@@ -3770,21 +3042,15 @@ async function processContent(item, opts = {}) {
 
   // 1️⃣ Lấy config ĐÚNG theo config_id (quan trọng để không nhầm fanpage!)
   let latestConfig = null;
-
-  // ✅ PRIORITY 0: Dùng config object truyền từ queue (chính xác nhất)
-  if (opts.config_object && typeof opts.config_object === 'object') {
-    latestConfig = opts.config_object;
-    console.log(`✅ [Config from Queue Object] config_id=${latestConfig.id || latestConfig.config_id}, domain=${latestConfig.domain}, fanpage=${latestConfig.fanpage_name}`);
-  }
   
   // ✅ PRIORITY 1: Load config by specific config_id (from Zalo auto-post)
-  if (!latestConfig && opts.config_id) {
+  if (opts.config_id) {
     try {
       const allConfigs = loadDataOptionUser && typeof loadDataOptionUser === 'function' ? loadDataOptionUser() : [];
       if (!Array.isArray(allConfigs)) {
         throw new Error("loadDataOptionUser không trả về array");
       }
-      latestConfig = allConfigs.find(x => x && (x.id === opts.config_id || x.config_id === opts.config_id) && x.config_for_zalo);
+      latestConfig = allConfigs.find(x => x && x.id === opts.config_id && x.config_for_zalo);
       if (latestConfig) {
         console.log(`✅ [Config Loaded by ID] config_id=${opts.config_id}, domain=${latestConfig.domain}, fanpage=${latestConfig.fanpage_name}`);
       } else {
@@ -3902,12 +3168,10 @@ async function processContent(item, opts = {}) {
       || item.message 
       || item.body 
       || item.caption 
-      || item.title
-      || item.description
       || "";
   } catch (e) {
     console.warn(`⚠️ [extractMessageText Error] Falling back:`, e.message);
-    content = item.content || item.text || item.message || item.body || item.caption || item.title || item.description || "";
+    content = item.content || item.text || item.message || item.body || item.caption || "";
   }
   
   // ✅ DEBUG: log chi tiết về content trước khi check
@@ -3920,19 +3184,11 @@ async function processContent(item, opts = {}) {
       has_caption: !!item.caption,
       has_title: !!item.title,
       has_description: !!item.description,
-      has_images: !!(item.images && item.images.length > 0),
       content_length: item.content?.length || 0,
       text_length: item.text?.length || 0,
       item_keys: Object.keys(item || {}).join(', ')
     });
-    
-    // ✅ FALLBACK: Nếu có ảnh nhưng không có text, dùng một default message
-    if (item.images && item.images.length > 0) {
-      content = "Xem hình ảnh bên dưới để biết chi tiết";
-      console.log(`⚠️ [processContent] Using fallback content for image-only message`);
-    } else {
-      throw new Error(`Nội dung trống - không tìm thấy trường text/content/message/body trong tin nhắn`);
-    }
+    throw new Error(`Nội dung trống - không tìm thấy trường text/content/message/body trong tin nhắn`);
   }
   
   const essentials = getMessageEssentials(item);
@@ -3990,7 +3246,9 @@ async function processContent(item, opts = {}) {
       return img;
     }
     // Relative path - convert to absolute
-    const absoluteUrl = resolvePublicImageUrl(ctx, img.startsWith('/') ? img : '/' + img);
+    const domainList = ctx.domain.split(',').map(d => d.trim()).filter(d => d && !d.includes('localhost'));
+    const primaryDomain = ctx.primary_domain || (domainList.length > 0 ? domainList[0] : ctx.domain.split(',')[0].trim());
+    const absoluteUrl = `https://www.${primaryDomain}${img.startsWith('/') ? img : '/' + img}`;
     console.log(`   [${idx}] 🔗 Converted: ${img} → ${absoluteUrl}`);
     return absoluteUrl;
   }).filter(img => img && img.trim());
@@ -4238,26 +3496,15 @@ async function processContent(item, opts = {}) {
           );
 
           if (fbPostData) {
-            pageContent = fbPostData.facebook_post || '';
-            const seoHashtags = generateSeoHashtags(
-              detail.title,
-              detail.description || '',
-              detail.tags || [],
-              6,
-              effectiveIndustry
-            );
-
-            const postFormats = [
-              () => [pageContent, '', `👉 ${fbPostData.cta || 'Xem chi tiết'}: ${articleUrl}`, `📌 #${seoHashtags.slice(0, 4).join(' #')}`, `📍 ${primaryDomain}`],
-              () => [pageContent, '', fbPostData.cta || 'Xem chi tiết đầy đủ', articleUrl, `📌 #${seoHashtags.slice(0, 4).join(' #')}`],
-              () => [pageContent, `📌 #${seoHashtags.slice(0, 2).join(' #')}`, '', fbPostData.cta || 'Xem chi tiết tại đây', articleUrl, `📌 #${seoHashtags.slice(2, 4).join(' #')}`],
-              () => [pageContent, '', `💬 ${fbPostData.cta || 'Bình luận đề xuất của bạn dưới bài'}`, `🔗 ${articleUrl}`, `📌 #${seoHashtags.slice(0, 4).join(' #')}`],
-              () => [pageContent, '', `👉 ${articleUrl}`, `📌 #${seoHashtags.slice(0, 5).join(' #')}`],
-              () => [pageContent, '', `↪️ ${fbPostData.cta || 'Đừng bỏ lỡ'}`, articleUrl, '', `📌 #${seoHashtags.slice(0, 4).join(' #')}`]
-            ];
-
-            const randomFormat = postFormats[Math.floor(Math.random() * postFormats.length)];
-            pageContent = randomFormat().filter(line => line !== '').join('\n');
+            // ✅ Use AI-generated content as-is (AI should include hashtags if needed)
+            const finalContent = [
+              fbPostData.facebook_post || '',
+              '',
+              fbPostData.cta || 'Xem chi tiết',
+              articleUrl
+            ].filter(line => line !== '').join('\n');
+            
+            pageContent = finalContent;
             console.log(`✅ [Facebook AI] Fanpage="${fanpageName}" generated (${pageContent.length} chars)`);
           }
         } catch (e) {
@@ -4265,20 +3512,15 @@ async function processContent(item, opts = {}) {
         }
 
         if (!pageContent) {
-          const seoHashtags = generateSeoHashtags(
-            detail.title || '',
-            detail.description || detail.excerpt || '',
-            detail.tags || [],
-            6,
-            effectiveIndustry
-          );
-          const fallbackFormats = [
-            () => [detail.description || detail.excerpt || detail.content?.substring(0, 300) || '', '', `👉 Xem chi tiết: ${articleUrl}`, `📌 #${seoHashtags.slice(0, 4).join(' #')}`],
-            () => [`Bạn có biết? ${detail.title}?`, '', detail.description || detail.excerpt || '', '', articleUrl, `📌 #${seoHashtags.slice(0, 4).join(' #')}`],
-            () => [detail.title, '', detail.description || detail.excerpt || '', articleUrl]
-          ];
-          const randomFallback = fallbackFormats[Math.floor(Math.random() * fallbackFormats.length)];
-          pageContent = randomFallback().filter(line => line !== '').join('\n');
+          // ✅ FALLBACK ONLY: When AI fails, use simple format without additional hashtags
+          const fallbackContent = [
+            detail.description || detail.excerpt || detail.content?.substring(0, 300) || '',
+            '',
+            `👉 Xem chi tiết: ${articleUrl}`
+          ].filter(line => line !== '').join('\n');
+          
+          pageContent = fallbackContent;
+          console.log(`⚠️ [Facebook Fallback] Using simple format (${pageContent.length} chars)`);
         }
 
         return pageContent;
@@ -4329,7 +3571,6 @@ async function processContent(item, opts = {}) {
       
       // ✅ DÙNG CHUNG NHÁNH CHUẨN postToSelectedFanpages (worker cũ)
       // đảm bảo auto-flow và worker-flow đồng nhất: nội dung + ảnh + tuần tự từng fanpage
-      // ✅ CẢI TIẾN: Thêm useEnhancedFormat=true để dùng 8 hashtags trending + CTA + URL + domain + 6 formats
       const postSummary = await postToSelectedFanpages(
         [{
           sender: item?.sender || 'Zalo',
@@ -4343,8 +3584,6 @@ async function processContent(item, opts = {}) {
           helperAi: ctx.helperAi,
           seft: seft || {},
           industry: effectiveIndustry,
-          domain: primaryDomain,
-          useEnhancedFormat: true,  // ✅ Enable 8 hashtags + CTA + URL + domain + 6 formats
           skipRecord: true
         }
       );
@@ -4369,10 +3608,7 @@ async function processContent(item, opts = {}) {
         thongbao(`⚠️ Không post được fanpage nào`);
       }
     } catch (fbError) {
-      // ✅ FIX: Safe error message access
-      const errMsg = fbError?.message || fbError?.toString() || 'Unknown Facebook error';
-      console.error(`❌ [Facebook] Lỗi post:`, errMsg);
-      console.error('   Stack:', fbError?.stack || 'No stack');
+      console.error(`❌ [Facebook] Lỗi post:`, fbError.message);
       // Không throw error, vì post FB là optional
     }
   } else {
@@ -4746,82 +3982,6 @@ async function ensureGlobalSettingsPanel() {
   };
   domainSelect.onchange(); // Init
 
-  // ✅ New entry UI - Input + Add button
-  const newEntryWrapper = document.createElement('div');
-  newEntryWrapper.style.cssText = `display:flex;gap:6px;margin:6px 0`;
-  
-  const newEntryInput = document.createElement('input');
-  newEntryInput.type = 'text';
-  newEntryInput.id = 'global-new-entry-input';
-  newEntryInput.placeholder = 'Nhập tên dự án/lĩnh vực mới...';
-  newEntryInput.style.cssText = `flex:1;padding:6px 8px;border:1px solid ${theme.border};border-radius:4px;background:${theme.inputBg};color:${theme.text};font-size:12px`;
-  
-  const addNewBtn = document.createElement('button');
-  addNewBtn.textContent = "➕ Thêm mới";
-  addNewBtn.style.cssText = `padding:6px 12px;border:1px solid ${theme.border};border-radius:4px;background:${theme.bg};color:${theme.text};font-size:12px;cursor:pointer;white-space:nowrap`;
-  
-  addNewBtn.onclick = async () => {
-    const name = newEntryInput.value?.trim();
-    if (!name) {
-      alert('Vui lòng nhập tên dự án/lĩnh vực');
-      newEntryInput.focus();
-      return;
-    }
-    
-    const domainKey = domainSelect.value || 'phanmemmottrieu';
-    addNewBtn.disabled = true;
-    addNewBtn.textContent = "⏳ Đang lưu...";
-    
-    try {
-      const result = await upsertServiceToWebServices(name, domainKey);
-      
-      if (result.success) {
-        const actionText = result.command === 'create' ? 'Thêm mới' : 'Cập nhật';
-        const message = `✅ ${actionText} thành công: ${result.name}`;
-        if (window.showNotification) {
-          window.showNotification({ type: 'success', message, duration: 3 });
-        } else {
-          alert(message);
-        }
-        
-        // Reload categories to update dropdown
-        await loadCategoriesFromWebServices(domainKey);
-        
-        // Select newly added item
-        const targetSelect = domainKey === 'lmkt' ? projectSelect : industrySelect;
-        if (targetSelect) {
-          targetSelect.value = result.slug;
-          targetSelect.dispatchEvent(new Event('change'));
-        }
-        
-        // Clear input
-        newEntryInput.value = '';
-      } else {
-        throw new Error('Lưu không thành công');
-      }
-    } catch (error) {
-      console.error('[AddNewService] Error:', error);
-      const message = `❌ Lỗi: ${error.message || 'Không thể lưu'}`;
-      if (window.showNotification) {
-        window.showNotification({ type: 'error', message, duration: 5 });
-      } else {
-        alert(message);
-      }
-    } finally {
-      addNewBtn.disabled = false;
-      addNewBtn.textContent = "➕ Thêm mới";
-    }
-  };
-  
-  // Enter key support
-  newEntryInput.addEventListener('keypress', (e) => {
-    if (e.key === 'Enter' && !addNewBtn.disabled) {
-      addNewBtn.click();
-    }
-  });
-  
-  newEntryWrapper.append(newEntryInput, addNewBtn);
-
   // Load categories from web_services button
   const loadBtn = document.createElement('button');
   loadBtn.textContent = "⬇️ Tải danh mục từ web_services";
@@ -4841,7 +4001,7 @@ async function ensureGlobalSettingsPanel() {
 
   // Append rows to grid container
   settingsContainer.append(domainRow, industryRow, projectRow);
-  settingsContainer.append(newEntryWrapper, loadBtn);
+  settingsContainer.append(loadBtn);
   
   // Append title and container to wrapper
   wrapper.append(title, settingsContainer);
@@ -4858,127 +4018,6 @@ async function ensureGlobalSettingsPanel() {
   }
 
   return wrapper;
-}
-
-/**
- * ✅ Upsert dự án/lĩnh vực mới vào web_services table
- * @param {string} name - Tên dự án/lĩnh vực
- * @param {string} domainKey - 'lmkt' hoặc 'phanmemmottrieu'
- * @returns {Promise<Object>} - Kết quả upsert
- */
-async function upsertServiceToWebServices(name, domainKey) {
-  if (!name || typeof name !== 'string') {
-    throw new Error('Tên không được rỗng');
-  }
-  
-  const trimmedName = name.trim();
-  if (!trimmedName) {
-    throw new Error('Tên không được rỗng');
-  }
-  
-  const domainConfig = DOMAIN_OPTIONS[domainKey];
-  if (!domainConfig) {
-    throw new Error('Domain key không hợp lệ');
-  }
-  
-  const appId = domainConfig.app_id;
-  const domainValue = domainConfig.value; // ✅ Lấy TOÀN BỘ danh sách domain (csmbridge.net,phanmemmottrieu.net hoặc h-holding.vn,h-holding.com.vn)
-  
-  if (!window.csmApi?.updateTableData || !window.csmApi?.getTableData) {
-    throw new Error('API không khả dụng');
-  }
-  
-  // Tạo slug từ tên (lowercase, replace spaces with hyphens, remove special chars)
-  const slug = trimmedName
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '') // Remove diacritics
-    .replace(/đ/g, 'd')
-    .replace(/[^a-z0-9\s-]/g, '')
-    .replace(/\s+/g, '-')
-    .replace(/-+/g, '-')
-    .trim();
-  
-  // Check xem đã tồn tại chưa
-  const checkResult = await window.csmApi.getTableData({
-    app_id: appId,
-    obj_name: "web_services",
-    where: {
-      operator: "OR",
-      conditions: [
-        { field: "slug", type: "eq", value: slug },
-        { field: "service_code", type: "eq", value: slug }
-      ]
-    },
-    take: 1
-  }).catch(() => ({ rows: [] }));
-  
-  const existing = (checkResult.rows || checkResult.data || [])[0];
-  const command = existing ? "update" : "create";
-  
-  // ✅ Dùng domain đầu tiên cho URL image
-  const primaryDomain = domainValue.split(',')[0].trim();
-  
-  // ✅ Xác định group_slug dựa trên domainKey
-  const groupSlug = domainKey === 'lmkt' ? 'du-an' : 'dich-vu';
-  
-  // Tạo service object
-  const serviceObj = {
-    slug: slug,
-    service_code: slug,
-    group_slug: groupSlug, // ✅ "du-an" cho LMKT, "dich-vu" cho phanmemmottrieu
-    is_service: true, // ✅ Đây là service entry (không phải group)
-    is_group_slug: false, // ✅ Không phải là group slug entry
-    is_group_slug_default: false, // ✅ Không phải default group
-    name: trimmedName,
-    name_en: trimmedName,
-    name_zh: trimmedName,
-    category: trimmedName,
-    category_en: trimmedName,
-    category_zh: trimmedName,
-    domain: domainValue, // ✅ Lưu TOÀN BỘ danh sách domain
-    app_id: appId,
-    status: 1,
-    image: `https://www.${primaryDomain}/app_images/services/${slug}-og.jpg`, // ✅ URL dùng domain đầu tiên
-    attributes_icon: "StarOutlined",
-    attributes_color: "#1890ff",
-    attributes_priority: 999,
-    attributes_title: trimmedName,
-    attributes_title_en: trimmedName,
-    attributes_title_zh: trimmedName,
-    attributes_description: trimmedName,
-    attributes_description_en: trimmedName,
-    attributes_description_zh: trimmedName,
-    attributes_keywords: slug.replace(/-/g, ', '),
-    attributes_keywords_en: slug.replace(/-/g, ', '),
-    attributes_keywords_zh: slug.replace(/-/g, ', ')
-  };
-  
-  if (existing) {
-    // Merge với dữ liệu cũ
-    Object.assign(serviceObj, existing, {
-      name: trimmedName,
-      category: trimmedName,
-      updated_at: new Date().toISOString()
-    });
-  }
-  
-  console.log(`[UpsertService] ${command.toUpperCase()} service "${trimmedName}" (slug: ${slug}) to ${appId}/${domainValue}`);
-  
-  const result = await window.csmApi.updateTableData({
-    app_id: appId,
-    obj_name: "web_services",
-    command: command,
-    obj_update: serviceObj,
-    pk_fields: ["slug", "domain"]
-  });
-  
-  return {
-    success: result.data === "success" || result?.success === true || result.code === 200,
-    command: command,
-    slug: slug,
-    name: trimmedName
-  };
 }
 
 async function loadCategoriesFromWebServices(domainKey) {
@@ -5332,101 +4371,6 @@ const ZALO_GROUP_SCAN_TIMEOUT_MS = 30000; // Max 30 giây scan 1 nhóm (webview 
 // { config_id: { timer, status, lastScanTime, groupIndex, isScanning, scanStartTime } }
 let zaloConfigScanners = {};
 let isZaloScanning = false;
-
-// ========== ✅ CENTRAL TIMER REGISTRY - PREVENT RESOURCE LEAKS ==========
-const timerRegistry = {
-  timers: new Map(),
-  
-  register(name, timerId, type = 'interval') {
-    const entry = { id: timerId, type, createdAt: Date.now(), active: true };
-    this.timers.set(name, entry);
-    console.log(`⏱️ Timer registered: ${name} (${type})`);
-    return timerId;
-  },
-  
-  clear(name) {
-    const entry = this.timers.get(name);
-    if (!entry) {
-      console.warn(`⚠️ Timer not found: ${name}`);
-      return;
-    }
-    
-    try {
-      if (entry.type === 'interval') clearInterval(entry.id);
-      if (entry.type === 'timeout') clearTimeout(entry.id);
-    } catch (e) {
-      console.warn(`⚠️ Error clearing timer ${name}:`, e);
-    }
-    
-    entry.active = false;
-    this.timers.delete(name);
-    console.log(`🧹 Timer cleared: ${name}`);
-  },
-  
-  clearAll() {
-    console.log(`🧹 Clearing ${this.timers.size} timers...`);
-    for (const [name, entry] of this.timers) {
-      try {
-        if (entry.type === 'interval') clearInterval(entry.id);
-        if (entry.type === 'timeout') clearTimeout(entry.id);
-      } catch (e) {
-        console.warn(`⚠️ Error clearing ${name}:`, e);
-      }
-      entry.active = false;
-    }
-    this.timers.clear();
-    console.log(`✅ All timers cleared`);
-  },
-  
-  status() {
-    const active = Array.from(this.timers.entries())
-      .filter(([_, e]) => e.active)
-      .map(([name, _]) => name);
-    console.log(`📊 Active timers (${active.length}): ${active.join(', ')}`);
-    return active;
-  }
-};
-
-// ========== ✅ EVENT LISTENER REGISTRY - PREVENT DUPLICATE LISTENERS ==========
-const eventRegistry = {
-  listeners: [],
-  
-  add(element, event, handler, options = false) {
-    element.addEventListener(event, handler, options);
-    this.listeners.push({ element, event, handler, options });
-    console.log(`📌 Listener added: ${element?.id || element?.tagName || 'unknown'} - ${event}`);
-    return { element, event, handler };
-  },
-  
-  remove(element, event, handler, options = false) {
-    try {
-      element.removeEventListener(event, handler, options);
-      this.listeners = this.listeners.filter(
-        l => !(l.element === element && l.event === event && l.handler === handler)
-      );
-      console.log(`❌ Listener removed: ${element?.id || element?.tagName || 'unknown'} - ${event}`);
-    } catch (e) {
-      console.warn(`⚠️ Error removing listener:`, e);
-    }
-  },
-  
-  removeAll() {
-    console.log(`🧹 Removing ${this.listeners.length} listeners...`);
-    for (const {element, event, handler, options} of this.listeners) {
-      try {
-        element.removeEventListener(event, handler, options);
-      } catch (e) {
-        console.warn(`⚠️ Error removing listener:`, e);
-      }
-    }
-    this.listeners = [];
-    console.log(`✅ All listeners removed`);
-  },
-  
-  count() {
-    return this.listeners.length;
-  }
-};
 
 // ========== ZALO MESSAGE SCRAPING CORE LOGIC ==========
 /**
@@ -6296,19 +5240,8 @@ function getConfigsWithZaloGroups() {
   const configs = loadDataOptionUser().filter(x => x.config_for_zalo && Array.isArray(x.zalo_groups) && x.zalo_groups.length > 0);
   
   return configs.map(cfg => ({
-    // ✅ CRITICAL: BẢO TOÀN TẤT CẢ TRƯỜNG CẦN THIẾT cho processContent
     id: cfg.id || ('auto_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8)),
     config_id: cfg.id,
-    domain: cfg.domain, // ✅ QUAN TRỌNG: Dùng cho resolvePublicImageUrl()
-    app_id: cfg.app_id,
-    service_type: cfg.service_type,
-    project: cfg.project,
-    fanpage_id: cfg.fanpage_id,
-    fanpage_token: cfg.fanpage_token,
-    fanpage_name: cfg.fanpage_name,
-    primary_domain: cfg.primary_domain,
-    fanpage_token_timestamp: cfg.fanpage_token_timestamp,
-    fanpage_token_expires_at: cfg.fanpage_token_expires_at,
     zalo_groups: cfg.zalo_groups || [],
     zalo_scan_interval_minutes: cfg.zalo_scan_interval_minutes || 5, // Default 5 phút
     zalo_fanpages: cfg.zalo_fanpages || [] // Fanpage riêng cho config này
@@ -6349,15 +5282,6 @@ function loadGroupList() {
   }
 }
 
-function saveGroupList(list) {
-  try {
-    localStorage.setItem(ZALO_GROUP_LIST_KEY, JSON.stringify(list || []));
-  } catch (e) {
-    console.warn('⚠️ [Memory] saveGroupList failed, using safe method:', e.message);
-    MemoryOptimizer.safeLocalStorageSet(ZALO_GROUP_LIST_KEY, list || []);
-  }
-}
-
 /**
  * Load state (lastHash) cho một config + group cụ thể
  * @param {string} config_id - ID của config
@@ -6384,8 +5308,7 @@ function saveGroupStateForConfig(config_id, groupName, lastHash) {
     const stateKey = `${ZALO_GROUP_STATE_KEY}:${config_id}:${groupName}`;
     localStorage.setItem(stateKey, lastHash);
   } catch (e) {
-    console.warn('⚠️ [Memory] saveGroupState failed:', e.message);
-    // Fallback: try MemoryOptimizer (though this is just a string, should work)
+    // ignore
   }
 }
 
@@ -6404,8 +5327,7 @@ function saveGroupState(state) {
   try {
     localStorage.setItem(ZALO_GROUP_STATE_KEY, JSON.stringify(state || {}));
   } catch (e) {
-    console.warn('⚠️ [Memory] saveGroupState (deprecated) failed, using safe method:', e.message);
-    MemoryOptimizer.safeLocalStorageSet(ZALO_GROUP_STATE_KEY, state || {});
+    // ignore
   }
 }
 
@@ -6645,7 +5567,8 @@ Thử đủ thứ không hiệu quả. Cho đến khi hiểu rõ 3 nguyên tắc
 
 [HƯỚNG DẪN OUTPUT - JSON]
 {
-  "facebook_post": "Nội dung post (200-400 chars, ${randomStyle}, ${randomAngle}, ${randomEmotion})",
+  "facebook_post": "Nội dung post (200-400 chars) + HASHTAGS SEO cuối (4-6 hashtags liên quan)",
+  "hashtags": ["hashtag1", "hashtag2", "hashtag3", "hashtag4"],
   "hooks": ["Hook 1", "Hook 2", "Hook 3"], 
   "cta": "CTA TỰ NHIÊN phù hợp ${industryCtx.name}",
   "target_mindset": "Tâm lý người dùng khi đọc",
@@ -6656,6 +5579,14 @@ Thử đủ thứ không hiệu quả. Cho đến khi hiểu rõ 3 nguyên tắc
   "style": "${randomStyle}",
   "emotion": "${randomEmotion}"
 }
+
+✅ HASHTAG CONVENTION (để trong facebook_post ở cuối):
+- Chuẩn Facebook: hashtag phải liền mạch, KHÔNG dùng dấu gạch ngang (-), KHÔNG dùng underscore (_), KHÔNG dấu tiếng Việt
+- Ưu tiên CamelCase để dễ đọc: #BatDongSan; chấp nhận lowercase liền: #batdongsan
+- Linh động theo intent tìm kiếm: có thể trộn broad + long-tail + local + brand (nếu liên quan thật)
+- 4-6 hashtags SEO liên quan thực tế, không nhồi nhét, tránh hashtag quá dài khó đọc
+- Ưu tiên: Main keyword (từ title) → Long-tail → Industry → Local → CTA
+- Ví dụ chuẩn: "#BatDongSan #ToaNhaNguyenCan #BinhThanh #DauTuBatDongSan #NguyenHuuCanh #SunwahPearl"
 
 ========== CREATIVITY IS KEY ==========
 ✅ MỖI BÀI POST PHẢI KHÁC NHAU - Tránh lặp lại cấu trúc
@@ -6743,96 +5674,14 @@ function buildMessageHash(msg = {}) {
 // ========== QUẢN LÝ TIN ZALO ĐÃ ĐĂNG (LƯU VÀO dataOptionUser) ==========
 
 // Constants cho Zalo posted messages
-const ZALO_POSTED_LIMIT = 200; // Giới hạn tối đa 200 tin (giảm từ 1000 để tránh quota)
-const ZALO_POSTED_CLEANUP_DAYS = 7; // Tự động xóa tin cũ hơn 7 ngày (giảm từ 30)
-
-// ✅ DEBOUNCE QUEUE for posted messages - batch saves to reduce server calls
-const POSTED_MESSAGES_DEBOUNCE = {
-  queue: [],           // Queue tin chờ lưu
-  saveTimer: null,     // Timer id
-  FLUSH_INTERVAL: 30000,  // Flush every 30 seconds
-  BATCH_SIZE: 10,      // Or flush when 10+ messages collected
-  lastFlushTime: Date.now()
-};
-
-/**
- * Add posted message to debounce queue
- * Flush when: batch size reaches BATCH_SIZE OR timer expires
- */
-function queuePostedMessageToSave(newRecord) {
-  POSTED_MESSAGES_DEBOUNCE.queue.push(newRecord);
-  
-  // If batch size reached, flush immediately
-  if (POSTED_MESSAGES_DEBOUNCE.queue.length >= POSTED_MESSAGES_DEBOUNCE.BATCH_SIZE) {
-    console.log(`🔥 [SaveQueue] Batch size ${POSTED_MESSAGES_DEBOUNCE.BATCH_SIZE} reached, flushing now...`);
-    flushPostedMessagesSave();
-    return;
-  }
-  
-  // If timer not set, set it
-  if (!POSTED_MESSAGES_DEBOUNCE.saveTimer) {
-    POSTED_MESSAGES_DEBOUNCE.saveTimer = setTimeout(() => {
-      console.log(`⏰ [SaveQueue] Timer expired, flushing...`);
-      flushPostedMessagesSave();
-    }, POSTED_MESSAGES_DEBOUNCE.FLUSH_INTERVAL);
-  }
-}
-
-/**
- * Flush queued posted messages to server
- */
-function flushPostedMessagesSave() {
-  // Clear timer
-  if (POSTED_MESSAGES_DEBOUNCE.saveTimer) {
-    clearTimeout(POSTED_MESSAGES_DEBOUNCE.saveTimer);
-    POSTED_MESSAGES_DEBOUNCE.saveTimer = null;
-  }
-  
-  // Nothing to save
-  if (POSTED_MESSAGES_DEBOUNCE.queue.length === 0) {
-    return;
-  }
-  
-  const queuedMessages = POSTED_MESSAGES_DEBOUNCE.queue.splice(0); // Take all
-  console.log(`💾 [SaveQueue] Flushing ${queuedMessages.length} messages to server...`);
-  
-  try {
-    // Load existing posted messages from storage
-    const existing = loadPostedZaloMessages();
-    
-    // Merge: new queued messages + existing
-    const merged = [...queuedMessages, ...existing];
-    
-    // Trim to limit
-    if (merged.length > ZALO_POSTED_LIMIT) {
-      merged.splice(ZALO_POSTED_LIMIT);
-    }
-    
-    // Save via saveDataOptionUser (will be debounced at that level too)
-    savePostedZaloMessagesOnly(merged, (success, error) => {
-      if (success) {
-        console.log(`✅ [SaveQueue] Flush successful`);
-        POSTED_MESSAGES_DEBOUNCE.lastFlushTime = Date.now();
-      } else {
-        console.error(`❌ [SaveQueue] Flush failed:`, error);
-        // Retry: put messages back in queue
-        console.log(`🔄 [SaveQueue] Re-queueing failed messages...`);
-        POSTED_MESSAGES_DEBOUNCE.queue.unshift(...queuedMessages);
-      }
-    });
-  } catch (e) {
-    console.error(`❌ [SaveQueue] Error during flush:`, e);
-    // Put messages back in queue
-    POSTED_MESSAGES_DEBOUNCE.queue.unshift(...queuedMessages);
-  }
-}
+const ZALO_POSTED_LIMIT = 1000; // Giới hạn tối đa 1000 tin đã đăng
+const ZALO_POSTED_CLEANUP_DAYS = 30; // Tự động xóa tin cũ hơn 30 ngày
 
 // ✅ TIMING CONSTANTS - Tuỳ chỉnh delays để tránh hang
 // ========== GLOBAL POSTING QUEUE ==========
 // Queue để lưu tin Zalo cần đăng (tách biệt khỏi scanning)
 const zaloPostingQueue = [];
 let isPostingWorkerRunning = false;
-let postingWorkerCooldownUntil = 0;
 let postingWorkerStats = {
   totalProcessed: 0,
   totalSuccess: 0,
@@ -6846,16 +5695,14 @@ const ZALO_TIMING = {
   // Delays trong quét nhóm
   WAIT_AFTER_WEBVIEW_CLICK: 2000,        // Chờ sau khi click nhóm (để conversation load)
   WAIT_AFTER_SCAN_COMPLETE: 1000,        // Chờ sau quét xong trước khi lấy tin (giảm từ 2s → 1s vì không đăng ngay)
-  WAIT_BETWEEN_GROUPS: 60000,            // 1 phút quét 1 nhóm rồi qua nhóm kế tiếp
-  WAIT_GROUP_COOLDOWN_IF_HAS_NEW: 0,     // Không cộng thêm để giữ đúng nhịp 1 phút/nhóm
+  WAIT_BETWEEN_GROUPS: 500,              // Chờ giữa các nhóm (giảm từ 1s → 0.5s vì chỉ quét, không đăng)
   
   // Delays trong posting (worker)
   WAIT_BEFORE_CLICK_CREATE_BTN: 300,     // Chờ trước khi click "Tạo Bài"
   WAIT_FOR_CREATE_BTN_TIMEOUT: 10000,    // Timeout chờ button xuất hiện
   WAIT_FOR_POST_CREATED: 30000,          // Timeout chờ post được tạo (input cleared)
   WAIT_BETWEEN_FANPAGES: 2000,           // Chờ giữa các fanpage post
-  WAIT_BETWEEN_POSTS: 60000,             // 1 phút giữa mỗi tin đăng (trong posting worker)
-  WAIT_AFTER_QUEUE_ITEM: 8000,           // Nghỉ sau khi xử lý xong 1 queue item
+  WAIT_BETWEEN_POSTS: 3000,              // Chờ giữa các bài đăng (trong posting worker)
   
   // Delays trong scheduling
   SCANNER_LOOP_INTERVAL: 2000,           // Scanner kiểm tra mỗi 2s
@@ -6869,212 +5716,92 @@ const ZALO_TIMING = {
   MAX_FACEBOOK_RETRIES: 3                // Số lần retry cho Facebook API
 };
 
-const ZALO_MEMORY = {
-  MAX_IMAGES_PER_POST: 0, // 0 = không giới hạn, đăng bao nhiêu ảnh thì giữ nguyên bấy nhiêu
-  HEAP_SOFT_LIMIT_MB: 1500,
-  HEAP_RECOVERY_TARGET_MB: 1250,
-  HEAP_RECOVERY_WAIT_MS: 5000,
-  MAX_HEAP_WAIT_CYCLES: 6,
-  FORCE_RELEASE_DELAY_MS: 1200
+/**
+ * ✅ PASSIVE MEMORY MONITOR (v2 - non-aggressive)
+ * Chỉ log, không cleanup aggressive
+ */
+const MEMORY_MONITOR = {
+  // Passive constants - just for logging
+  CHECK_INTERVAL_MS: 30000,              // Check mỗi 30s
+  LOG_THRESHOLD_MB: 300,                 // Log nếu heap > 300MB
+  WARNING_THRESHOLD_MB: 800,             // Warning nếu > 800MB
+  ERROR_THRESHOLD_MB: 1200,              // Error nếu > 1200MB (app vẫn chạy)
+  
+  // State
+  lastHeapValue: 0,
+  monitoringActive: false,
+  errorCount: 0,
+  maxConsecutiveErrors: 5
 };
 
-function getHeapUsedMB() {
+/**
+ * Lấy heap usage hiện tại (MB)
+ */
+function getHeapUsageMB() {
   try {
-    if (typeof performance !== 'undefined' && performance.memory && performance.memory.usedJSHeapSize) {
+    if (performance && performance.memory) {
       return Math.round(performance.memory.usedJSHeapSize / 1024 / 1024);
     }
   } catch (e) {
     // ignore
   }
-  return null;
+  return 0;
 }
 
-async function waitForHeapRecovery(stage = '') {
-  const usedMb = getHeapUsedMB();
-  if (!usedMb) return;
-  if (usedMb < ZALO_MEMORY.HEAP_SOFT_LIMIT_MB) return;
-
-  console.warn(`⚠️ [HeapGuard] ${stage} - heap cao: ${usedMb}MB. Bắt đầu cooldown...`);
-
-  for (let i = 0; i < ZALO_MEMORY.MAX_HEAP_WAIT_CYCLES; i++) {
-    try {
-      if (typeof MemoryOptimizer !== 'undefined' && typeof MemoryOptimizer.performEmergencyCleanup === 'function') {
-        MemoryOptimizer.performEmergencyCleanup();
-      }
-      if (typeof window !== 'undefined' && typeof window.gc === 'function') {
-        window.gc();
-      }
-    } catch (e) {
-      // ignore
-    }
-
-    await new Promise(resolve => setTimeout(resolve, ZALO_MEMORY.HEAP_RECOVERY_WAIT_MS));
-
-    const currentMb = getHeapUsedMB();
-    if (!currentMb) return;
-    if (currentMb <= ZALO_MEMORY.HEAP_RECOVERY_TARGET_MB) {
-      console.log(`✅ [HeapGuard] ${stage} - heap đã hạ còn ${currentMb}MB`);
+/**
+ * ✅ Start Passive Memory Monitor (chỉ logging)
+ */
+function startMemoryMonitor() {
+  if (MEMORY_MONITOR.monitoringActive) return;
+  
+  MEMORY_MONITOR.monitoringActive = true;
+  console.log('🔍 [Memory Monitor] Bắt đầu (passive mode - chỉ log, không cleanup)');
+  
+  const monitorInterval = setInterval(() => {
+    if (!MEMORY_MONITOR.monitoringActive) {
+      clearInterval(monitorInterval);
       return;
     }
-  }
-
-  const finalMb = getHeapUsedMB();
-  console.warn(`⚠️ [HeapGuard] ${stage} - heap vẫn cao (${finalMb || 'N/A'}MB), tiếp tục với nhịp chậm`);
-}
-
-async function flushMemoryBeforeNextPost(stage = '') {
-  try {
-    if (typeof window !== 'undefined') {
-      window.__pendingZaloMessages = null;
+    
+    const heapMB = getHeapUsageMB();
+    MEMORY_MONITOR.lastHeapValue = heapMB;
+    
+    if (heapMB > MEMORY_MONITOR.WARNING_THRESHOLD_MB) {
+      console.warn(`⚠️ [Memory] HEAP CAO: ${heapMB}MB (warning: ${MEMORY_MONITOR.WARNING_THRESHOLD_MB}MB)`);
+      MEMORY_MONITOR.errorCount++;
+    } else if (heapMB > MEMORY_MONITOR.LOG_THRESHOLD_MB) {
+      console.log(`💾 [Memory] Heap usage: ${heapMB}MB`);
+      MEMORY_MONITOR.errorCount = 0; // Reset error count
     }
-    if (typeof MemoryOptimizer !== 'undefined' && typeof MemoryOptimizer.performEmergencyCleanup === 'function') {
-      MemoryOptimizer.performEmergencyCleanup();
-    }
-    if (typeof window !== 'undefined' && typeof window.gc === 'function') {
-      window.gc();
-      window.gc();
-    }
-  } catch (e) {
-    // ignore
-  }
-
-  await new Promise(resolve => setTimeout(resolve, ZALO_MEMORY.FORCE_RELEASE_DELAY_MS || 1200));
-  await waitForHeapRecovery(stage || 'flush_before_next_post');
-}
-
-/**
- * Cleanup webview state để tránh memory leak giữa các lần quét nhóm
- * - Remove conversations khỏi DOM webview
- * - Clear event listeners
- * - Release base64 data
- */
-async function cleanupWebviewAfterScan(webviewId = null) {
-  const id = webviewId || window.zaloScannerWebviewId;
-  if (!id) return;
-
-  const wv = document.getElementById(id);
-  if (!wv || !wv.executeScript) {
-    console.log('⏩ [cleanupWebviewAfterScan] Webview không sẵn sàng, skip cleanup');
-    return;
-  }
-
-  console.log('🧹 [cleanupWebviewAfterScan] Bắt đầu cleanup webview...');
-
-  try {
-    // Cleanup code chạy TRONG webview context
-    wv.executeScript({
-      code: `
-        (function() {
-          try {
-            // ❌ DISABLED: Không xóa conversations vì gây Zalo reload và logout
-            // const convList = document.querySelector('[data-testid="conversation-list"], .conversation-list, [role="list"]');
-            // if (convList) {
-            //   convList.innerHTML = '';  // ← GÂY LOGOUT!
-            // }
-
-            // ✅ 1. Chỉ clear message input (an toàn)
-            const msgInput = document.querySelector('input[placeholder*="Nhập tin"]');
-            if (msgInput) {
-              msgInput.value = '';
-            }
-
-            // ✅ 2. Clear any pending base64 data trong memory (không ảnh hưởng session)
-            window.__zaloScannedData = null;
-            window.__zaloMessages = null;
-            window.__pendingImages = null;
-
-            // ✅ 3. Remove all event listeners từ custom objects
-            if (window.__zaloEventListeners) {
-              Object.values(window.__zaloEventListeners).forEach(listener => {
-                try { listener.remove ? listener.remove() : null; } catch (e) {}
-              });
-              window.__zaloEventListeners = {};
-            }
-
-            // ✅ 4. Force cleanup (chỉ memory, không DOM)
-            if (window.gc) window.gc();
-
-            console.log('✅ Webview cleanup hoàn tất (giữ conversations để tránh logout)');
-          } catch (e) {
-            console.error('❌ Webview cleanup error:', e.message);
-          }
-        })();
-      `
-    }, (results) => {
-      // Ignore results
-    });
-  } catch (e) {
-    console.warn('⚠️ [cleanupWebviewAfterScan] Error during cleanup:', e);
-  }
-
-  // Sau khi cleanup trong webview, flush memory bên ngoài
-  try {
-    if (typeof MemoryOptimizer !== 'undefined' && typeof MemoryOptimizer.performEmergencyCleanup === 'function') {
-      MemoryOptimizer.performEmergencyCleanup();
-    }
-    if (typeof window !== 'undefined' && typeof window.gc === 'function') {
-      window.gc();
-    }
-  } catch (e) {
-    // ignore
-  }
-
-  console.log('✅ [cleanupWebviewAfterScan] Cleanup xong');
-}
-
-/**
- * Memory flush giữa các nhóm quét (khác với flush giữa posts)
- * - Gọi GC nhiều lần
- * - Clear pending data
- * - Log heap status
- */
-async function flushMemoryBetweenGroups(groupIdx = 0) {
-  try {
-    // Xóa pending messages
-    if (typeof window !== 'undefined') {
-      window.__pendingZaloMessages = null;
-      window.__currentScanData = null;
-    }
-
-    // Emergency cleanup
-    if (typeof MemoryOptimizer !== 'undefined' && typeof MemoryOptimizer.performEmergencyCleanup === 'function') {
-      MemoryOptimizer.performEmergencyCleanup();
-    }
-
-    // Multiple GC calls
-    if (typeof window !== 'undefined' && typeof window.gc === 'function') {
-      window.gc();
-      window.gc();
-      window.gc();
-    }
-
-    // Wait thêm để GC finish
-    await new Promise(resolve => setTimeout(resolve, 800));
-
-    // Log heap status
-    const heapMb = getHeapUsedMB();
-    if (heapMb) {
-      console.log(`📊 [flushMemoryBetweenGroups] Group ${groupIdx}: heap = ${heapMb}MB`);
+    
+    if (heapMB > MEMORY_MONITOR.ERROR_THRESHOLD_MB) {
+      console.error(`❌ [Memory] HEAP CRITICAL: ${heapMB}MB (error: ${MEMORY_MONITOR.ERROR_THRESHOLD_MB}MB)`);
+      MEMORY_MONITOR.errorCount++;
       
-      // Nếu heap vẫn cao, trigger recovery
-      if (heapMb > ZALO_MEMORY.HEAP_SOFT_LIMIT_MB) {
-        console.warn(`⚠️ [flushMemoryBetweenGroups] Heap cao, trigger waitForHeapRecovery...`);
-        await waitForHeapRecovery(`between_groups_${groupIdx}`);
+      if (MEMORY_MONITOR.errorCount >= MEMORY_MONITOR.maxConsecutiveErrors) {
+        console.error(`❌ [Memory] Liên tục cao 5 lần - app có vấn đề memory leak!`);
+        MEMORY_MONITOR.errorCount = 0;
       }
     }
-  } catch (e) {
-    console.warn('⚠️ [flushMemoryBetweenGroups] Error:', e);
-  }
+  }, MEMORY_MONITOR.CHECK_INTERVAL_MS);
+}
+
+/**
+ * Stop Memory Monitor
+ */
+function stopMemoryMonitor() {
+  MEMORY_MONITOR.monitoringActive = false;
+  console.log('🛑 [Memory Monitor] Đã dừng');
 }
 
 /**
  * Load danh sách tin Zalo đã đăng từ SERVER (csmUserData)
- * CHỈ dùng server storage - KHÔNG còn localStorage fallback
+ * Tương tự như loadDataOptionUser() - load from server, fallback localStorage
  * @returns {Array} Mảng {hash, timestamp, groupName, content_preview, config_id}
  */
 function loadPostedZaloMessages() {
   try {
-    // ✅ Load from server (csmUserData)
+    // ✅ PRIORITY 1: Load from server (csmUserData)
     if (window.csmUserData && typeof window.csmUserData.get === 'function') {
       try {
         const allData = window.csmUserData.get();
@@ -7086,7 +5813,7 @@ function loadPostedZaloMessages() {
           });
           
           if (posted.length > 0) {
-            console.log(`📊 [LoadPostedZalo] Loaded ${posted.length} posted messages from SERVER`);
+            console.log(`📊 [LoadPostedZalo] Loaded ${posted.length} posted messages from SERVER (csmUserData)`);
             if (posted.length > 0) {
               console.log(`   📌 Latest: ${posted[0]?.content_preview?.substring(0, 50)}... (${new Date(posted[0]?.timestamp).toLocaleString()})`);
             }
@@ -7098,7 +5825,17 @@ function loadPostedZaloMessages() {
       }
     }
     
-    console.log(`📊 [LoadPostedZalo] No posted messages found on server`);
+    // ✅ PRIORITY 2: Fallback to localStorage
+    const raw = localStorage.getItem('zalo_posted_messages');
+    if (raw) {
+      const posted = JSON.parse(raw);
+      if (Array.isArray(posted) && posted.length > 0) {
+        console.log(`📊 [LoadPostedZalo] Loaded ${posted.length} posted messages from localStorage (FALLBACK)`);
+        return posted;
+      }
+    }
+    
+    console.log(`📊 [LoadPostedZalo] No posted messages found`);
     return [];
   } catch (e) {
     console.error('❌ [LoadPostedZalo] Error:', e);
@@ -7107,285 +5844,86 @@ function loadPostedZaloMessages() {
 }
 
 /**
- * ✅ CLEAR POSTED MESSAGES CACHE
- * Xóa toàn bộ tin Zalo đã đăng từ server (không còn dùng localStorage)
- * Gọi từ console: window.clearPostedZaloCache()
- */
-function clearPostedZaloCache() {
-  return new Promise((resolve, reject) => {
-    try {
-      const allData = loadDataOptionUser();
-      const otherData = allData.filter(item => {
-        if (item.type === 'posted_zalo_message') return false;
-        if (item.id && item.id.toString().startsWith('posted_zalo_')) return false;
-        return true;
-      });
-      
-      const removedCount = allData.length - otherData.length;
-      console.log(`🗑️ [ClearCache] Removing ${removedCount} posted messages from server...`);
-      
-      saveDataOptionUser(otherData, (success, error) => {
-        if (success) {
-          console.log(`✅ [ClearCache] Removed ${removedCount} posted messages from SERVER`);
-          thongbao(`✅ Đã xóa ${removedCount} tin nhắn Zalo đã đăng`);
-          resolve(true);
-        } else {
-          console.error(`❌ [ClearCache] Failed to clear server:`, error);
-          canhbao(`❌ Không thể xóa: ${error}`);
-          resolve(false);
-        }
-      });
-    } catch (e) {
-      console.error(`❌ [ClearCache] Error:`, e);
-      reject(e);
-    }
-  });
-}
-
-// ✅ Expose globally
-if (typeof window !== 'undefined') {
-  window.clearPostedZaloCache = clearPostedZaloCache;
-}
-
-/**
- * ✅ MIGRATE CONFIGS: Thêm zalo_fanpages field cho config cũ
- * Gọi từ console: window.migrateZaloConfigs()
- */
-function migrateZaloConfigs() {
-  try {
-    console.log('🚀 [Migrate] BẮT ĐẦU MIGRATE CONFIGS...');
-    
-    const allConfigs = loadDataOptionUser();
-    console.log(`📦 [Migrate] Đã load ${allConfigs.length} configs`);
-    
-    let migratedCount = 0;
-    let alreadyHaveCount = 0;
-    
-    allConfigs.forEach((config, idx) => {
-      if (!config.config_for_zalo) {
-        console.log(`   ⏭️  [${idx}] Skip non-Zalo config: ${config.id}`);
-        return;
-      }
-      
-      // Check xem đã có zalo_fanpages chưa
-      if (Array.isArray(config.zalo_fanpages) && config.zalo_fanpages.length > 0) {
-        console.log(`   ✅ [${idx}] Config ${config.id} đã có zalo_fanpages (${config.zalo_fanpages.length} fanpages)`);
-        alreadyHaveCount++;
-        return;
-      }
-      
-      // Tạo zalo_fanpages từ fanpage_ids/names/tokens
-      if (Array.isArray(config.fanpage_ids) && config.fanpage_ids.length > 0) {
-        config.zalo_fanpages = config.fanpage_ids.map((id, i) => ({
-          id,
-          name: config.fanpage_names?.[i] || 'Unknown',
-          access_token: config.fanpage_tokens?.[i] || ''
-        }));
-        console.log(`   🔄 [${idx}] Migrated config ${config.id}: ${config.zalo_fanpages.length} fanpages`);
-        migratedCount++;
-      } else if (config.fanpage_id && config.fanpage_token) {
-        // Fallback: tạo array với 1 fanpage từ fanpage_id/token cũ
-        config.zalo_fanpages = [{
-          id: config.fanpage_id,
-          name: config.fanpage_name || 'Unknown',
-          access_token: config.fanpage_token
-        }];
-        console.log(`   ✨ [${idx}] Created zalo_fanpages for config ${config.id}: 1 fanpage`);
-        migratedCount++;
-      } else {
-        console.warn(`   ⚠️  [${idx}] Config ${config.id} không có fanpage data để migrate`);
-      }
-    });
-    
-    console.log(`\n📊 [Migrate] Kết quả:`);
-    console.log(`   - Đã migrate: ${migratedCount} configs`);
-    console.log(`   - Đã có sẵn: ${alreadyHaveCount} configs`);
-    
-    if (migratedCount > 0) {
-      // Lưu lên server
-      console.log(`\n💾 [Migrate] Đang lưu ${allConfigs.length} configs lên server...`);
-      saveDataOptionUser(allConfigs, (success, error) => {
-        if (success) {
-          console.log(`✅ [Migrate] Lưu THÀNH CÔNG! Reload page để áp dụng:`);
-          console.log(`   location.reload()`);
-          thongbao(`✅ Đã migrate ${migratedCount} configs! Vui lòng reload page.`);
-        } else {
-          console.error(`❌ [Migrate] Lưu THẤT BẠI: ${error}`);
-          canhbao(`❌ Không thể lưu: ${error}`);
-        }
-      });
-    } else {
-      console.log(`\n✅ [Migrate] Không có config nào cần migrate`);
-      thongbao('✅ Tất cả config đã cập nhật!');
-    }
-    
-    return { migratedCount, alreadyHaveCount };
-  } catch (e) {
-    console.error('❌ [Migrate] Error:', e);
-    canhbao(`❌ Lỗi migrate: ${e.message}`);
-    return null;
-  }
-}
-
-// ✅ Expose globally
-if (typeof window !== 'undefined') {
-  window.migrateZaloConfigs = migrateZaloConfigs;
-}
-
-/**
- * ✅ Lưu danh sách tin Zalo đã đăng lên SERVER qua saveDataOptionUser()
- * Hoàn toàn dùng server storage - không còn localStorage fallback
+ * Lưu danh sách tin Zalo đã đăng vào SERVER (via csmUserData.set())
+ * Giống như saveDataOptionUser() - lưu qua server, backup vào localStorage
+ * ✅ CLEANUP: Chỉ giữ 1000 posted messages mới nhất để tránh vượt quá storage quota
  * @param {Array} postedMessages - Mảng tin đã đăng
- * @param {Function} callback - Callback(success, error) sau khi lưu xong
  */
-/**
- * ✅ LIGHTWEIGHT: Save ONLY posted messages (no configs)
- * Used by debounce queue - much smaller payload
- * @param {Array} postedMessages - Only posted messages to save
- * @param {Function} callback - callback(success, error)
- */
-function savePostedZaloMessagesOnly(postedMessages, callback) {
+function savePostedZaloMessages(postedMessages) {
   try {
-    // ✅ SANITIZE: Remove any non-essential data
-    const messagesToSave = (Array.isArray(postedMessages) ? postedMessages : [])
-      .map(msg => ({
-        id: msg.id,
-        type: msg.type,
-        hash: msg.hash,
-        config_id: msg.config_id,
-        timestamp: msg.timestamp,
-        groupName: msg.groupName
-      }))
-      .filter(msg => msg.type === 'posted_zalo_message');
-
-    console.log(`💾 [SavePostedOnly] Saving ${messagesToSave.length} posted messages (lightweight, no configs)...`);
-
-    const allData = loadDataOptionUser();
-    if (!Array.isArray(allData)) {
-      console.error('❌ [SavePostedOnly] loadDataOptionUser failed');
-      if (callback) callback(false, 'loadDataOptionUser failed');
-      return;
-    }
-
-    // Filter out old posted messages, keep configs
-    const configs = allData.filter(item => item.type !== 'posted_zalo_message' && !item.id?.toString().startsWith('posted_zalo_'));
-
-    // Merge: configs + new posted messages (configs stay unchanged)
-    const finalData = [...configs, ...messagesToSave];
-
-    console.log(`   📊 Final: ${configs.length} configs + ${messagesToSave.length} messages = ${finalData.length} total`);
-
-    // Save to server
-    saveDataOptionUser(finalData, (success, error) => {
-      try {
-        if (success) {
-          console.log(`✅ [SavePostedOnly] Saved successfully`);
-          if (typeof callback === 'function') callback(true);
-        } else {
-          console.error(`❌ [SavePostedOnly] Save failed:`, error);
-          if (typeof callback === 'function') callback(false, error);
-        }
-      } catch (cbError) {
-        console.error('❌ [SavePostedOnly] Callback error:', cbError);
-      }
-    });
-  } catch (e) {
-    console.error('❌ [SavePostedOnly] Unexpected error:', e);
-    try {
-      if (typeof callback === 'function') callback(false, e.message);
-    } catch (cbError) {
-      console.error('❌ [SavePostedOnly] Callback error:', cbError);
-    }
-  }
-}
-
-function savePostedZaloMessages(postedMessages, callback) {
-  try {
-    // ✅ CLEANUP: Trim to max 200 newest messages
-    const maxMessages = 200;
+    // ✅ CLEANUP: Trim to max 1000 newest messages (sort by timestamp descending)
+    const maxMessages = 1000;
     let messagesToSave = Array.isArray(postedMessages) ? postedMessages : [];
     
     if (messagesToSave.length > maxMessages) {
+      // Sort by timestamp descending (newest first), keep first 1000
       messagesToSave = messagesToSave
         .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
         .slice(0, maxMessages);
-      console.log(`🧹 [SavePostedZalo] Trimmed to ${maxMessages} newest messages (deleted ${postedMessages.length - maxMessages} old)`);
+      console.log(`🧹 [SavePostedZalo] Trimmed to ${maxMessages} newest messages (deleted ${postedMessages.length - maxMessages} old)`);  
     }
     
-    // ✅ SANITIZE: Remove problematic characters from content_preview
-    messagesToSave = messagesToSave.map(msg => {
-      if (msg.content_preview) {
-        msg.content_preview = msg.content_preview
-          .replace(/[\x00-\x1F\x7F-\x9F]/g, '')
-          .substring(0, 50);
-      }
-      return msg;
-    });
-    
-    // ✅ VALIDATE JSON before saving
-    try {
-      JSON.stringify(messagesToSave);
-    } catch (jsonError) {
-      console.error(`❌ [SavePostedZalo] Invalid JSON detected:`, jsonError);
-      if (callback) callback(false, `Invalid JSON: ${jsonError.message}`);
-      return;
-    }
-    
-    // Load existing data
-    const allData = loadDataOptionUser();
-    if (!Array.isArray(allData)) {
-      console.error('❌ [SavePostedZalo] loadDataOptionUser không trả về array');
-      if (callback) callback(false, 'loadDataOptionUser failed');
-      return;
-    }
-    
-    // Filter out old posted messages
-    const otherData = allData.filter(item => {
-      if (item.type === 'posted_zalo_message') return false;
-      if (item.id && item.id.toString().startsWith('posted_zalo_')) return false;
-      return true;
-    });
-    
-    // Merge: configs + new posted messages
-    const finalData = [...otherData, ...messagesToSave];
-    
-    console.log(`💾 [SavePostedZalo] Saving ${messagesToSave.length} posted messages to server...`);
-    console.log(`   📊 Total data size: ${finalData.length} items (${otherData.length} configs + ${messagesToSave.length} messages)`);
-    
-    // Save to server via saveDataOptionUser with error protection
-    saveDataOptionUser(finalData, (success, error) => {
+    // ✅ PRIORITY 1: Save to server via csmUserData.set()
+    if (window.csmUserData && typeof window.csmUserData.set === 'function') {
       try {
-        if (success) {
-          console.log(`✅ [SavePostedZalo] Saved successfully to server`);
-          if (typeof callback === 'function') callback(true);
-        } else {
-          console.error(`❌ [SavePostedZalo] Save failed:`, error);
-          // ✅ Don't crash - continue operation
-          if (typeof callback === 'function') callback(false, error);
+        // Get ALL existing data
+        const allData = loadDataOptionUser();
+        
+        // Filter out old posted messages
+        const otherData = allData.filter(item => {
+          if (item.type === 'posted_zalo_message') return false;
+          if (item.id && item.id.toString().startsWith('posted_zalo_')) return false;
+          return true;
+        });
+        
+        // Merge: configs + new posted messages
+        const finalData = [...otherData, ...messagesToSave];
+        
+        console.log(`💾 [SavePostedZalo] Saving ${messagesToSave.length} posted messages to SERVER via csmUserData...`);
+        
+        window.csmUserData.set(finalData, function(success, error) {
+          if (success) {
+            console.log(`✅ [SavePostedZalo] SERVER save successful!`);
+            // Backup to localStorage as well
+            try {
+              localStorage.setItem('zalo_posted_messages', JSON.stringify(messagesToSave));
+            } catch (e) {
+              console.warn(`⚠️ [SavePostedZalo] localStorage backup failed:`, e.message);
+            }
+          } else {
+            console.warn(`⚠️ [SavePostedZalo] SERVER save failed:`, error);
+            // Fallback: save to localStorage only
+            try {
+              localStorage.setItem('zalo_posted_messages', JSON.stringify(messagesToSave));
+              console.log(`💾 [SavePostedZalo] Saved to localStorage as fallback`);
+            } catch (e) {
+              console.warn(`⚠️ [SavePostedZalo] localStorage fallback also failed:`, e.message);
+            }
+          }
+        });
+      } catch (e) {
+        console.warn(`⚠️ [SavePostedZalo] Error with csmUserData:`, e.message);
+        // Fallback: localStorage
+        try {
+          localStorage.setItem('zalo_posted_messages', JSON.stringify(messagesToSave));
+          console.log(`💾 [SavePostedZalo] Saved to localStorage (csmUserData error)`);
+        } catch (e2) {
+          console.warn(`⚠️ [SavePostedZalo] localStorage also failed:`, e2.message);
         }
-      } catch (cbError) {
-        console.error('❌ [SavePostedZalo] Callback error:', cbError);
       }
-    });
-  } catch (e) {
-    console.error('❌ [SavePostedZalo] Unexpected error:', e);
-    // ✅ Don't crash if callback fails
-    try {
-      if (typeof callback === 'function') callback(false, e.message);
-    } catch (cbError) {
-      console.error('❌ [SavePostedZalo] Callback error:', cbError);
+    } else {
+      // csmUserData not available, fallback to localStorage
+      console.log(`⚠️ [SavePostedZalo] csmUserData not available, using localStorage only`);
+      try {
+        localStorage.setItem('zalo_posted_messages', JSON.stringify(messagesToSave));
+        console.log(`💾 [SavePostedZalo] Saved to localStorage`);
+      } catch (e) {
+        console.warn(`⚠️ [SavePostedZalo] localStorage save failed:`, e.message);
+      }
     }
+  } catch (e) {
+    console.warn('⚠️ [SavePostedZalo] Unexpected error:', e);
   }
-}
-
-/**
- * Kiểm tra tin nhắn đã được đăng chưa (theo hash)
- * @param {string} messageHash - Hash của tin nhắn
- * @returns {boolean} true nếu đã đăng, false nếu chưa
- */
-function isZaloMessagePosted(messageHash) {
-  const posted = loadPostedZaloMessages();
-  return posted.some(p => p.hash === messageHash);
 }
 
 /**
@@ -7405,15 +5943,17 @@ function recordPostedZaloMessage(message, groupName, config_id = null) {
       return;
     }
     
-    // ✅ SIMPLIFIED: Thêm tin mới với chỉ những field cần thiết (cho deduplication)
+    // Thêm tin mới
     const newRecord = {
       id: 'posted_zalo_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
       type: 'posted_zalo_message',
-      hash: hash,               // ✅ Để check duplicate
-      config_id: config_id,     // ✅ Để check duplicate per config
-      timestamp: Date.now(),    // ✅ Để cleanup old messages
-      groupName: groupName || 'Unknown'  // ✅ Để track source nhóm
-      // ❌ REMOVED: content_preview, sender, has_images (không cần cho dedup)
+      hash: hash,
+      timestamp: Date.now(),
+      config_id: config_id, // NEW: Track config nào đăng (null = legacy/unknown)
+      groupName: groupName || 'Unknown',
+      content_preview: (message.content || '').substring(0, 100),
+      sender: message.sender || 'Unknown',
+      has_images: message.images && message.images.length > 0
     };
     
     posted.unshift(newRecord);
@@ -7427,16 +5967,13 @@ function recordPostedZaloMessage(message, groupName, config_id = null) {
     // Cleanup tin cũ
     cleanupOldPostedZaloMessages(posted);
     
-    // ✅ QUEUE instead of save immediately - reduce server calls
-    console.log(`📥 [RecordPosted] Queueing message for batch save (queue: ${POSTED_MESSAGES_DEBOUNCE.queue.length + 1})`);
-    queuePostedMessageToSave(newRecord);
-    
+    // Lưu lại
+    savePostedZaloMessages(posted);
+    console.log(`✅ [RecordPosted] Recorded message from ${groupName} (config: ${config_id || 'unknown'}): ${newRecord.content_preview}`);
   } catch (e) {
     console.warn('⚠️ [RecordPosted] Error:', e);
-    // ✅ Continue even if recording fails - don't break the flow
   }
 }
-
 
 /**
  * Dọn dẹp tin Zalo cũ hơn ZALO_POSTED_CLEANUP_DAYS ngày
@@ -7460,131 +5997,88 @@ function cleanupOldPostedZaloMessages(posted) {
 }
 
 /**
- * ✅ KHÓA CÁC BUTTON KHI SCANNER ĐANG CHẠY
- * Disable các button không cần thiết để tránh user thao tác nhầm
+ * ✅ TẠO OVERLAY KHÓA UI KHI SCANNER ĐANG CHẠY
+ * Ngăn user click nhầm vào các controls không liên quan
  * NHƯNG cho phép click nút Dừng Scanner
  */
-function lockUIButtons() {
-  console.log('🔒 [UI Lock] Disabling buttons...');
+/**
+ * ✅ SELECTIVE LOCK - Chỉ disable controls liên quan đến scanner
+ * Không lock toàn UI, user có thể dùng theme, menu, v.v.
+ */
+function createScannerLockOverlay() {
+  // Mark as scanning
+  window._scannerIsRunning = true;
   
-  // Disable textarea nhập nhóm
-  const input = document.getElementById('zalo-group-list');
-  if (input) {
-    input.disabled = true;
-    input.style.opacity = '0.6';
-    input.style.cursor = 'not-allowed';
+  // Disable ONLY scanner-related controls
+  const startBtn = document.querySelector('[data-zalo-start-scan]');
+  const stopBtn = document.querySelector('[data-zalo-stop-scan]');
+  const configSelect = document.querySelector('[data-zalo-config-select]');
+  const resetBtn = document.querySelector('[data-zalo-reset-groups]');
+  
+  if (startBtn) {
+    startBtn.disabled = true;
+    startBtn.style.opacity = '0.5';
+    startBtn.style.cursor = 'not-allowed';
   }
   
-  // Disable các button quản lý config
-  const buttonIds = [
-    { selector: 'button', text: '💾 Lưu', prefix: true },
-    { selector: 'button', text: '➕ Thêm mới', exact: true },
-    { selector: 'button', text: '⚡ Dùng config', prefix: true },
-    { selector: 'button', text: '🔄 Refresh', prefix: true },
-    { selector: 'button', text: '� Tải lại', prefix: true },
-    { selector: 'button', text: '🔄 Cập nhật tokens', exact: true },
-    { selector: 'button', text: '📱 Xem fanpages', exact: true },
-    { selector: 'button', text: '🗑️ Xoá hết', exact: true },
-    { selector: 'button', text: '✖️ Huỷ', prefix: true },
-    { selector: 'button', text: '✏️', exact: true }, // Edit buttons in grid
-    { selector: 'button', text: '🗑️', exact: true, skip: '🗑️ Xoá hết' } // Delete buttons in grid
-  ];
+  if (configSelect) {
+    configSelect.disabled = true;
+    configSelect.style.opacity = '0.5';
+  }
   
-  buttonIds.forEach(({ selector, text, prefix, exact, skip }) => {
-    const buttons = Array.from(document.querySelectorAll(selector));
-    buttons.forEach(btn => {
-      const btnText = btn.textContent?.trim() || '';
-      const shouldDisable = exact 
-        ? btnText === text && (!skip || btnText !== skip)
-        : prefix 
-          ? btnText.startsWith(text)
-          : btnText.includes(text);
-      
-      if (shouldDisable && !btn.disabled) {
-        btn.disabled = true;
-        btn.style.opacity = '0.6';
-        btn.style.cursor = 'not-allowed';
-        btn.setAttribute('data-locked-by-scanner', 'true');
-      }
-    });
-  });
+  if (resetBtn) {
+    resetBtn.disabled = true;
+    resetBtn.style.opacity = '0.5';
+    resetBtn.style.cursor = 'not-allowed';
+  }
   
-  // ✅ Thêm disable cho reset buttons (dùng textContent contains)
-  const resetButtons = Array.from(document.querySelectorAll('button')).filter(btn => {
-    const text = btn.textContent?.trim() || '';
-    return text.includes('Reset') || text.includes('reset');
-  });
-  resetButtons.forEach(btn => {
-    if (!btn.disabled) {
-      btn.disabled = true;
-      btn.style.opacity = '0.6';
-      btn.style.cursor = 'not-allowed';
-      btn.setAttribute('data-locked-by-scanner', 'true');
-    }
-  });
+  // Show stop button if exists
+  if (stopBtn) {
+    stopBtn.disabled = false;
+    stopBtn.style.opacity = '1';
+    stopBtn.style.cursor = 'pointer';
+  }
   
-  // Disable global setting selects
-  const selects = ['global-domain-select', 'global-industry-select', 'global-project-select'];
-  selects.forEach(id => {
-    const select = document.getElementById(id);
-    if (select) {
-      select.disabled = true;
-      select.style.opacity = '0.6';
-      select.style.cursor = 'not-allowed';
-    }
-  });
-  
-  // Disable Facebook checkboxes
-  const checkboxes = document.querySelectorAll('input[name="fb-page-checkbox"]');
-  checkboxes.forEach(cb => {
-    cb.disabled = true;
-    cb.style.opacity = '0.6';
-    cb.style.cursor = 'not-allowed';
-  });
+  console.log('🔒 [UI Lock] Scanner controls disabled');
 }
 
 /**
- * ✅ MỞ KHÓA CÁC BUTTON KHI SCANNER DỪNG
- * Enable lại các button đã bị disable, nhưng tuân theo logic riêng của chúng
+ * ✅ UNLOCK - Restore scanner controls
  */
-function unlockUIButtons() {
-  console.log('🔓 [UI Lock] Enabling buttons...');
+function removeScannerLockOverlay() {
+  window._scannerIsRunning = false;
   
-  // Enable textarea nhập nhóm
-  const input = document.getElementById('zalo-group-list');
-  if (input) {
-    input.disabled = false;
-    input.style.opacity = '1';
-    input.style.cursor = 'text';
+  // Re-enable ONLY scanner-related controls
+  const startBtn = document.querySelector('[data-zalo-start-scan]');
+  const stopBtn = document.querySelector('[data-zalo-stop-scan]');
+  const configSelect = document.querySelector('[data-zalo-config-select]');
+  const resetBtn = document.querySelector('[data-zalo-reset-groups]');
+  
+  if (startBtn) {
+    startBtn.disabled = false;
+    startBtn.style.opacity = '1';
+    startBtn.style.cursor = 'pointer';
   }
   
-  // Enable lại các button đã bị lock bởi scanner
-  const lockedButtons = document.querySelectorAll('button[data-locked-by-scanner="true"]');
-  lockedButtons.forEach(btn => {
-    btn.disabled = false;
-    btn.style.opacity = '1';
-    btn.style.cursor = 'pointer';
-    btn.removeAttribute('data-locked-by-scanner');
-  });
+  if (configSelect) {
+    configSelect.disabled = false;
+    configSelect.style.opacity = '1';
+  }
   
-  // Enable global setting selects
-  const selects = ['global-domain-select', 'global-industry-select', 'global-project-select'];
-  selects.forEach(id => {
-    const select = document.getElementById(id);
-    if (select) {
-      select.disabled = false;
-      select.style.opacity = '1';
-      select.style.cursor = 'pointer';
-    }
-  });
+  if (resetBtn) {
+    resetBtn.disabled = false;
+    resetBtn.style.opacity = '1';
+    resetBtn.style.cursor = 'pointer';
+  }
   
-  // Enable Facebook checkboxes
-  const checkboxes = document.querySelectorAll('input[name="fb-page-checkbox"]');
-  checkboxes.forEach(cb => {
-    cb.disabled = false;
-    cb.style.opacity = '1';
-    cb.style.cursor = 'pointer';
-  });
+  // Disable stop button
+  if (stopBtn) {
+    stopBtn.disabled = true;
+    stopBtn.style.opacity = '0.5';
+    stopBtn.style.cursor = 'not-allowed';
+  }
+  
+  console.log('🔓 [UI Lock] Scanner controls unlocked');
 }
 
 /**
@@ -7651,28 +6145,6 @@ function filterNewMessagesForConfig(config_id, groupName, messages) {
     saveGroupStateForConfig(config_id, groupName, hashes[hashes.length - 1]);
   }
   
-  return newItems;
-}
-
-// ⚠️ DEPRECATED: Hàm cũ để backward compatibility
-function filterNewMessages(groupName, messages) {
-  const state = loadGroupState();
-  const lastHash = state[groupName] || "";
-  if (!Array.isArray(messages) || messages.length === 0) {
-    return [];
-  }
-
-  const hashes = messages.map(buildMessageHash);
-  if (!lastHash) {
-    state[groupName] = hashes[hashes.length - 1];
-    saveGroupState(state);
-    return messages;
-  }
-
-  const lastIndex = hashes.lastIndexOf(lastHash);
-  const newItems = lastIndex >= 0 ? messages.slice(lastIndex + 1) : messages;
-  state[groupName] = hashes[hashes.length - 1];
-  saveGroupState(state);
   return newItems;
 }
 
@@ -7933,127 +6405,34 @@ function createZaloWebview(webviewId, url, container) {
  */
 async function checkZaloLogin(webviewId) {
   return new Promise((resolve) => {
-    // ✅ FIX: Add timeout to prevent hang
-    const timeoutMs = 8000; // Tăng lên 8 giây cho webview load chậm
-    let callbackCalled = false;
-    
-    const timeout = safeSetTimeout(() => {
-      if (callbackCalled) return;
-      callbackCalled = true;
-      console.warn(`⏱️ [checkZaloLogin] Timeout after ${timeoutMs}ms - webview might not be ready`);
-      resolve(false);
-    }, timeoutMs);
-    
     const wv = document.getElementById(webviewId);
-    if (!wv) {
-      clearTimeout(timeout);
-      console.error('❌ [checkZaloLogin] Webview element not found:', webviewId);
-      resolve(false);
-      return;
-    }
-    
-    if (!wv.executeScript) {
-      clearTimeout(timeout);
-      console.error('❌ [checkZaloLogin] Webview.executeScript not available - webview not ready');
+    if (!wv || !wv.executeScript) {
       resolve(false);
       return;
     }
 
     const checkScript = `
       (function() {
-        try {
-          // Kiểm tra có zavatar-container là đã đăng nhập
-          const hasAvatar = !!document.querySelector('.zavatar-container') || 
-                           !!document.querySelector('[class*="zavatar-container"]');
-          
-          // Log để debug
-          console.log('[Zalo Login Check] zavatar-container found:', hasAvatar);
-          
-          // Trả về kết quả
-          return hasAvatar;
-        } catch (e) {
-          console.error('[Zalo Login Check] Error:', e);
-          return false;
-        }
+        // Kiểm tra có zavatar-container là đã đăng nhập
+        const hasAvatar = !!document.querySelector('.zavatar-container') || 
+                         !!document.querySelector('[class*="zavatar-container"]');
+        
+        console.log('[Zalo Login Check] zavatar-container found:', hasAvatar);
+        return hasAvatar;
       })();
     `;
 
-    try {
-      wv.executeScript(
-        { code: checkScript },
-        (results) => {
-          if (callbackCalled) return;
-          callbackCalled = true;
-          if (timeout) clearTimeout(timeout);
-          
-          // ✅ Kiểm tra results có hợp lệ không
-          if (!results || !Array.isArray(results) || results.length === 0) {
-            console.warn('⚠️ [checkZaloLogin] executeScript returned empty results - webview might not be ready');
-            resolve(false);
-            return;
-          }
-          
-          const isLoggedIn = results[0] === true;
-          console.log(`🔐 Zalo login check: ${isLoggedIn ? '✅ Đã đăng nhập' : '❌ Chưa đăng nhập'}`);
-          resolve(isLoggedIn);
-        }
-      );
-    } catch (err) {
-      if (callbackCalled) return;
-      callbackCalled = true;
-      if (timeout) clearTimeout(timeout);
-      console.error('❌ [checkZaloLogin] executeScript threw error:', err);
-      resolve(false);
-    }
+    wv.executeScript(
+      { code: checkScript },
+      (results) => {
+        const isLoggedIn = results && results[0] === true;
+        console.log(`🔐 Zalo login check: ${isLoggedIn ? '✅ Đã đăng nhập' : '❌ Chưa đăng nhập'}`);
+        resolve(isLoggedIn);
+      }
+    );
   });
 }
 //Q-GV > 20 Tỷ;Hàng Thuê;Q Bình Thạnh- Đất;Q1,3 50T;300-1000T;Q2-TML-Đất;Thao Dien 300
-/**
- * Bắt đầu kiểm tra đăng nhập định kỳ
- * Khi đã đăng nhập → tự động bắt đầu quét
- */
-function startLoginCheck(statusEl) {
-  if (zaloLoginCheckTimer) {
-    clearInterval(zaloLoginCheckTimer);
-  }
-
-  zaloLoginCheckTimer = setInterval(async () => {
-    const loggedIn = await checkZaloLogin(window.zaloScannerWebviewId);
-    
-    if (loggedIn && !isZaloLoggedIn) {
-      // Vừa đăng nhập thành công
-      isZaloLoggedIn = true;
-      if (statusEl) statusEl.textContent = '✅ Đã đăng nhập Zalo. Bắt đầu quét...';
-      
-      // Clear timer kiểm tra đăng nhập
-      clearInterval(zaloLoginCheckTimer);
-      zaloLoginCheckTimer = null;
-      
-      // Tự động bắt đầu quét
-      startZaloScanner(statusEl);
-    } else if (!loggedIn && isZaloLoggedIn) {
-      // Đã đăng xuất
-      isZaloLoggedIn = false;
-      if (statusEl) statusEl.textContent = '⚠️ Đã đăng xuất Zalo. Dừng quét.';
-      stopZaloScanner(statusEl);
-    } else if (!loggedIn) {
-      // Chưa đăng nhập
-      if (statusEl) statusEl.textContent = '⏳ Đang chờ đăng nhập Zalo...';
-    }
-  }, 5000); // Kiểm tra mỗi 5 giây
-}
-
-/**
- * Dừng kiểm tra đăng nhập
- */
-function stopLoginCheck() {
-  if (zaloLoginCheckTimer) {
-    clearInterval(zaloLoginCheckTimer);
-    zaloLoginCheckTimer = null;
-  }
-  isZaloLoggedIn = false;
-}
-
 /**
  * Helper: Normalize text để so sánh chính xác (remove extra spaces, lowercase, etc)
  * @param {string} text - Text cần normalize
@@ -8074,20 +6453,8 @@ function normalizeTextForComparison(text) {
  */
 async function clickZaloGroup(webviewId, groupName) {
   return new Promise((resolve) => {
-    // ✅ FIX: Add timeout to prevent hang
-    const timeoutMs = 10000; // 10 seconds
-    let callbackCalled = false;
-    
-    const timeout = setTimeout(() => {
-      if (callbackCalled) return;
-      callbackCalled = true;
-      console.warn(`⏱️ [ClickZaloGroup] Timeout after ${timeoutMs}ms for group "${groupName}"`);
-      resolve(false);
-    }, timeoutMs);
-    
     const wv = document.getElementById(webviewId);
     if (!wv || !wv.executeScript) {
-      clearTimeout(timeout);
       console.error(`❌ [ClickZaloGroup] Webview ${webviewId} không tồn tại hoặc không hỗ trợ executeScript`);
       resolve(false);
       return;
@@ -8175,10 +6542,6 @@ async function clickZaloGroup(webviewId, groupName) {
     wv.executeScript(
       { code: scriptCode },
       (results) => {
-        if (callbackCalled) return;
-        callbackCalled = true;
-        clearTimeout(timeout);
-        
         try {
           const result = results && results[0] ? JSON.parse(results[0]) : { success: false };
           if (result.success) {
@@ -8196,107 +6559,7 @@ async function clickZaloGroup(webviewId, groupName) {
   });
 }
 
-/**
- * Hàm kiểm tra và phục hồi webview nếu bị mất
- * @returns {Promise<boolean>} true nếu webview sẵn sàng, false nếu không thể phục hồi
- */
-async function ensureWebviewReady() {
-  const webviewId = window.zaloScannerWebviewId;
-  if (!webviewId) {
-    console.warn('⚠️ [ensureWebviewReady] Webview ID chưa được set');
-    return false;
-  }
-
-  // Bước 1: Kiểm tra webview có tồn tại trong DOM không
-  let webview = document.getElementById(webviewId);
-  if (webview && webview.executeScript) {
-    // console.log(`✅ [ensureWebviewReady] Webview ${webviewId} sẵn sàng`);
-    return true;
-  }
-
-  // Bước 2: Webview không tồn tại hoặc mất chức năng
-  console.warn(`⚠️ [ensureWebviewReady] Webview ${webviewId} không tồn tại trong DOM`);
-  
-  // ❌ DISABLED: Không tự động recreate webview vì gây login lại
-  // Recreate webview = tạo session mới = mất login
-  // User phải tự mở lại webview bằng cách stop và start lại scanner
-  
-  console.error(`❌ [ensureWebviewReady] Webview đã mất. Vui lòng STOP scanner và START lại để khôi phục.`);
-  console.error(`   Lý do: Recreate webview sẽ mất session login Zalo.`);
-  
-  // Show notification to user
-  if (window.antd && window.antd.notification) {
-    window.antd.notification.error({
-      message: '⚠️ Webview Zalo đã mất',
-      description: 'Vui lòng STOP và START lại scanner để khôi phục. Không thể tự động recreate vì sẽ mất session login.',
-      duration: 10,
-    });
-  }
-  
-  return false;
-
-  // ❌ OLD CODE - DISABLED vì gây logout
-  // Cố gắng tìm container
-  // const container = document.getElementById("zalo-webview-panel");
-  // if (!container) {
-  //   console.error('❌ [ensureWebviewReady] Không tìm thấy container "zalo-webview-panel"');
-  //   return false;
-  // }
-
-  // Bước 3: Thử tạo lại webview
-  // try {
-  //   console.log(`🔄 [ensureWebviewReady] Tạo lại webview ${webviewId}...`);
-  //   const zaloWebview = createZaloWebview(webviewId, "https://chat.zalo.me/", container);
-  //   
-  //   if (!zaloWebview) {
-  //     console.error('❌ [ensureWebviewReady] Không thể tạo webview');
-  //     return false;
-  //   }
-
-  //   // Chờ webview tải xong trước khi tiếp tục
-  //   return await new Promise((resolve) => {
-  //     const timeout = setTimeout(() => {
-  //       console.warn('⏱️ [ensureWebviewReady] Timeout chờ webview ready');
-  //       resolve(false);
-  //     }, 8000);
-
-  //     const checkReady = () => {
-  //       const wv = document.getElementById(webviewId);
-  //       if (wv && wv.executeScript) {
-  //         clearTimeout(timeout);
-  //         console.log(`✅ [ensureWebviewReady] Webview đã khôi phục thành công`);
-  //         resolve(true);
-  //       }
-  //     };
-
-  //     // Kiểm tra liên tục
-  //     const checkInterval = setInterval(() => {
-  //       checkReady();
-  //     }, 500);
-
-  //     zaloWebview.addEventListener('dom-ready', () => {
-  //       clearInterval(checkInterval);
-  //       checkReady();
-  //     });
-
-  //     // Kiểm tra ngay
-  //     checkReady();
-  //   });
-  // } catch (e) {
-  //   console.error('❌ [ensureWebviewReady] Lỗi khi tạo lại webview:', e);
-  //   return false;
-  // }
-}
-
 async function scanZaloGroup(groupName) {
-  // ✅ Bước 0: Kiểm tra webview sẵn sàng (nếu không thì STOP ngay)
-  const webviewReady = await ensureWebviewReady();
-  if (!webviewReady) {
-    console.error(`❌ [scanZaloGroup] Webview không sẵn sàng cho nhóm "${groupName}". SKIP nhóm này.`);
-    console.error(`   → Vui lòng STOP và START lại scanner để khôi phục webview.`);
-    return []; // Return empty array để không crash scanner
-  }
-
   // Ưu tiên 1: Click vào nhóm trước, sau đó quét
   const webviewId = window.zaloScannerWebviewId;
   
@@ -8432,59 +6695,6 @@ async function waitForPostCreatedAndGetUrl(input, messages, selectedPages) {
       }
     }, checkInterval);
   });
-}
-
-async function pushMessagesToContentInput(messages, groupName = 'Unknown', config_id = null) {
-  const input = document.getElementById("content-input");
-  if (!input) return false;
-
-  // ✅ BƯỚC 1: LỌC CHỈ LẤY TIN CÓ ĐỦ NỘI DUNG + HÌNH ẢNH
-  const messagesWithImages = messages.filter(msg => {
-    const essentials = getMessageEssentials(msg);
-    if (!essentials.hasImages || !essentials.hasText) {
-      console.warn(`⏭️ Bỏ qua tin không đủ điều kiện (cần content + image): hasText=${essentials.hasText}, hasImages=${essentials.hasImages}`);
-    }
-    return essentials.isEligible;
-  });
-  
-  const skippedCount = messages.length - messagesWithImages.length;
-  if (skippedCount > 0) {
-    console.warn(`⚠️ Đã lọc bỏ ${skippedCount}/${messages.length} tin không có hình ảnh`);
-  }
-  
-  if (messagesWithImages.length === 0) {
-    console.warn(`❌ Không có tin nhắn nào đủ điều kiện (nội dung + hình ảnh) để đăng!`);
-    return false;
-  }
-  
-  // ✅ BƯỚC 2: LỌC BỎ TIN ĐÃ ĐƯỢC ĐĂNG TRƯỚC ĐÓ (cho config này)
-  const notPostedMessages = filterNotPostedMessages(messagesWithImages, config_id);
-  
-  if (notPostedMessages.length === 0) {
-    const alreadyPosted = messagesWithImages.length;
-    console.warn(`⚠️ Tất cả ${alreadyPosted} tin nhắn đã được đăng trong config này. Bỏ qua.`);
-    return false;
-  }
-  
-  const duplicates = messagesWithImages.length - notPostedMessages.length;
-  if (duplicates > 0) {
-    console.log(`🔍 Lọc bỏ ${duplicates} tin đã đăng, còn ${notPostedMessages.length} tin mới`);
-  }
-  
-  // Lưu context để dùng sau khi đăng thành công
-  window.__currentZaloGroupName = groupName;
-  window.__currentZaloConfigId = config_id;
-  
-  console.log(`✅ Có ${notPostedMessages.length} tin mới (chưa đăng) sẽ được đăng lên web (config: ${config_id || 'default'})`);
-  
-  // ✅ POST MESSAGES SEQUENTIALLY (1 tin/lần, chờ xong rồi mới tiếp)
-  const selectedPages = config_id 
-    ? getSelectedFacebookPagesForConfig(config_id)
-    : getSelectedFacebookPages();
-  
-  const result = await postMessagesSequentially(notPostedMessages, groupName, config_id, selectedPages);
-  
-  return result.success > 0;
 }
 
 /**
@@ -8720,17 +6930,13 @@ async function postToSelectedFanpages(messages, postUrl, selectedPages = null, o
   const fallbackIndustry = options.industry || 'bat-dong-san';
   const skipRecord = !!options.skipRecord;
   const personaPool = ['investor', 'business_owner', 'professional', 'startup', 'tech_savvy'];
-  const useEnhancedFormat = options.useEnhancedFormat !== false; // Default true để tạo nội dung giàu hơn
-  const domain = options.domain || resolveContext()?.domain?.split(',')[0] || 'domain.vn';
 
   const rawImagesFromMessages = Array.isArray(messages)
     ? messages.flatMap(m => Array.isArray(m?.images) ? m.images : [])
     : [];
   const rawImagesFromOptions = Array.isArray(options.images) ? options.images : [];
   const validFbImages = Array.from(new Set([...rawImagesFromOptions, ...rawImagesFromMessages]))
-    .filter(img => typeof img === 'string')
-    .map(img => img.trim())
-    .filter(img => img && (img.startsWith('http://') || img.startsWith('https://')));
+    .filter(img => typeof img === 'string' && (img.startsWith('http://') || img.startsWith('https://') || img.startsWith('data:')));
 
   console.log(`🖼️ [PostToFanpages] Valid images for post: ${validFbImages.length}`);
 
@@ -8755,44 +6961,6 @@ async function postToSelectedFanpages(messages, postUrl, selectedPages = null, o
         { domain: (resolveContext()?.domain || '') }
       );
 
-      // ✅ CẢI TIẾN: Nếu useEnhancedFormat, thêm trending hashtags + 6 formats như batch manual
-      if (useEnhancedFormat && fbPostData?.facebook_post) {
-        const aiContent = fbPostData.facebook_post;
-        const ctaText = fbPostData.cta || 'Xem chi tiết';
-        
-        // Lấy 8 trending hashtags (giống batch manual posting)
-        const trendingHashtags = getFacebookTrendingHashtags(fallbackIndustry, 8);
-        let allHashtags = [...new Set([...(fbPostData.hashtags || []), ...trendingHashtags])];
-        if (allHashtags.length < 5) {
-          allHashtags = [...new Set([...allHashtags, ...trendingHashtags])];
-        }
-        allHashtags = allHashtags.slice(0, 8);
-        const normalizedTags = allHashtags
-          .map(tag => String(tag || '').trim().replace(/^#+/, ''))
-          .filter(Boolean);
-        const renderHashtags = (start, end) => normalizedTags
-          .slice(start, end)
-          .map(tag => `#${tag}`)
-          .join(' ');
-        
-        // ✅ 6 formats đa dạng (giống batch manual posting)
-        const formats = [
-          () => [aiContent, '', `👉 ${ctaText}: ${postUrl}`, `📌 ${renderHashtags(0, 5)}`, `📍 ${domain}`],
-          () => [aiContent, '', ctaText, postUrl, `📌 ${renderHashtags(0, 5)}`],
-          () => [aiContent, `📌 ${renderHashtags(0, 2)}`, '', ctaText, postUrl, `📌 ${renderHashtags(2, 5)}`],
-          () => [aiContent, '', `💬 ${ctaText}`, `🔗 ${postUrl}`, `📌 ${renderHashtags(0, 5)}`],
-          () => [aiContent, '', `👉 ${postUrl}`, `📌 ${renderHashtags(0, 6)}`],
-          () => [aiContent, '', `↪️ ${ctaText}`, postUrl, '', `📌 ${renderHashtags(0, 5)}`]
-        ];
-        
-        const randomFormat = formats[index % formats.length];
-        const formattedPost = randomFormat().filter(line => line !== '').join('\n');
-        
-        console.log(`✅ [PostToFanpages Enhanced] ${pageName}: ${allHashtags.length} hashtags, format rotated, ${formattedPost.length} chars`);
-        return formattedPost;
-      }
-
-      // Fallback: cách cũ (nếu useEnhancedFormat = false hoặc AI fail)
       if (fbPostData?.facebook_post) {
         const cta = fbPostData.cta || 'Xem chi tiết';
         return `${fbPostData.facebook_post}\n\n👉 ${cta}: ${postUrl}`;
@@ -8906,7 +7074,6 @@ async function postToSelectedFanpages(messages, postUrl, selectedPages = null, o
 /**
  * ✅ THÊM TIN VÀO POSTING QUEUE
  * Thay vì đăng ngay, tin sẽ được thêm vào queue để posting worker xử lý
- * ✅ Memory-safe: Tự động giới hạn kích thước queue
  */
 function addToPostingQueue(messages, groupName, configId, config) {
   if (!messages || messages.length === 0) return 0;
@@ -8922,249 +7089,64 @@ function addToPostingQueue(messages, groupName, configId, config) {
   };
   
   zaloPostingQueue.push(queueItem);
-  
-  // ✅ MEMORY OPTIMIZATION: Giới hạn kích thước queue tránh OOM
-  const removed = MemoryOptimizer.limitQueueSize(zaloPostingQueue);
-  if (removed > 0) {
-    console.warn(`⚠️ [Queue] Removed ${removed} oldest items to prevent memory overflow`);
-  }
-  
   console.log(`📥 [Queue] Added ${messages.length} messages from ${groupName} (config: ${configId}) → Queue size: ${zaloPostingQueue.length}`);
   return messages.length;
 }
 
 /**
- * ✅ GỘP TIN ZALO LIÊN TIẾP CÙNG SENDER/TOPIC
- * Merge nhiều tin từ cùng sender trong khoảng 30s thành 1 message group
- * Gộp content + images để tạo 1 bài Facebook duy nhất với nhiều ảnh
- */
-function mergeConsecutiveMessages(messages) {
-  if (!Array.isArray(messages) || messages.length <= 1) return messages;
-  
-  const MERGE_TIME_WINDOW = 30000; // 30 seconds
-  const merged = [];
-  let currentGroup = null;
-  
-  for (let i = 0; i < messages.length; i++) {
-    const msg = messages[i];
-    const msgTime = msg.timestamp || Date.now();
-    const msgSender = msg.sender || 'Unknown';
-    
-    // Nếu chưa có group hoặc khác sender/topic, tạo group mới
-    if (!currentGroup || 
-        currentGroup.sender !== msgSender || 
-        (msgTime - currentGroup.lastTime) > MERGE_TIME_WINDOW) {
-      
-      // Push group cũ vào merged (nếu có)
-      if (currentGroup) {
-        merged.push(currentGroup.mergedMessage);
-      }
-      
-      // Tạo group mới
-      currentGroup = {
-        sender: msgSender,
-        lastTime: msgTime,
-        mergedMessage: {
-          ...msg, // Clone tin đầu tiên
-          images: msg.images || [],
-          content: msg.content || '',
-          _merged_count: 1
-        }
-      };
-    } else {
-      // Gộp vào group hiện tại
-      currentGroup.lastTime = msgTime;
-      currentGroup.mergedMessage._merged_count++;
-      
-      // Gộp content (thêm xuống dòng)
-      if (msg.content && msg.content.trim()) {
-        currentGroup.mergedMessage.content += '\n\n' + msg.content;
-      }
-      
-      // Gộp images
-      if (Array.isArray(msg.images) && msg.images.length > 0) {
-        currentGroup.mergedMessage.images = [
-          ...currentGroup.mergedMessage.images,
-          ...msg.images
-        ];
-      }
-    }
-  }
-  
-  // Push group cuối cùng
-  if (currentGroup) {
-    merged.push(currentGroup.mergedMessage);
-  }
-  
-  console.log(`🔗 [Merge Messages] ${messages.length} messages → ${merged.length} merged groups`);
-  merged.forEach((msg, idx) => {
-    const count = msg._merged_count || 1;
-    const imgCount = msg.images?.length || 0;
-    console.log(`   [${idx}] ${msg.sender}: ${count} tin, ${imgCount} ảnh`);
-  });
-  
-  return merged;
-}
-
-/**
  * ✅ POSTING WORKER - Xử lý queue độc lập
- * Lấy tin từ queue → GỘP TIN LIÊN TIẾP → đăng tuần tự → đợi xong → lấy tin tiếp
+ * Lấy tin từ queue → đăng tuần tự → đợi xong → lấy tin tiếp
  */
 async function processPostingQueue() {
-  // ✅ WRAP ENTIRE FUNCTION WITH TRY-CATCH to prevent crashes
-  try {
-    // ✅ CHECK: Nếu scanner đã dừng, không xử lý tiếp
-    if (!isZaloScanning) {
-      console.log('⏹️ [Posting Worker] Scanner đã dừng, bỏ qua xử lý queue');
-      return;
-    }
-    
-    // Cooldown giữa 2 queue items để hạ RAM
-    const now = Date.now();
-    if (postingWorkerCooldownUntil > now) {
-      const remaining = Math.ceil((postingWorkerCooldownUntil - now) / 1000);
-      if (remaining % 2 === 0) {
-        console.log(`⏸️ [Posting Worker] Cooldown còn ${remaining}s trước item tiếp theo...`);
-      }
-      return;
-    }
-
-    // Nếu queue rỗng, skip
-    if (zaloPostingQueue.length === 0) return;
-    
-    // Nếu đang xử lý item khác, skip
-    if (postingWorkerStats.currentlyProcessing) return;
-    
-    // Lấy item đầu tiên trong queue
-    const item = zaloPostingQueue.shift();
-    if (!item) return;
-    
-    item.status = 'processing';
-    postingWorkerStats.currentlyProcessing = item.id;
-    postingWorkerStats.totalProcessed++;
-    
-    console.log(`\n🔄 [Posting Worker] Processing queue item ${item.id} (${item.messages.length} messages from ${item.groupName})...`);
-    console.log(`   📊 Queue remaining: ${zaloPostingQueue.length} items`);
-    console.log(`   🔍 Scanner status: isZaloScanning=${isZaloScanning}, isPostingWorkerRunning=${isPostingWorkerRunning}`);
+  // Nếu queue rỗng, skip
+  if (zaloPostingQueue.length === 0) return;
+  
+  // Nếu đang xử lý item khác, skip
+  if (postingWorkerStats.currentlyProcessing) return;
+  
+  // Lấy item đầu tiên trong queue
+  const item = zaloPostingQueue.shift();
+  if (!item) return;
+  
+  item.status = 'processing';
+  postingWorkerStats.currentlyProcessing = item.id;
+  postingWorkerStats.totalProcessed++;
+  
+  console.log(`\n🔄 [Posting Worker] Processing queue item ${item.id} (${item.messages.length} messages from ${item.groupName})...`);
+  console.log(`   📊 Queue remaining: ${zaloPostingQueue.length} items`);
   
   try {
-    // ✅ GỘP TIN LIÊN TIẾP trước khi đăng
-    const mergedMessages = mergeConsecutiveMessages(item.messages);
-    
-    // Đăng TẤT CẢ tin đã merge (tuần tự)
-    for (let i = 0; i < mergedMessages.length; i++) {
-      // ✅ CHECK: Nếu user đã dừng, thoát ngay
-      if (!isZaloScanning) {
-        console.log(`⏹️ [Posting Worker] Bị dừng giữa chừng, dừng xử lý tin còn lại (${mergedMessages.length - i} tin)`);
-        break;
-      }
-
-      await waitForHeapRecovery('before_post');
-      
-      const message = mergedMessages[i];
-      const mergedCount = message._merged_count || 1;
-      const imageCount = message.images?.length || 0;
-      console.log(`\n   📤 [${i + 1}/${mergedMessages.length}] Đăng tin từ ${message.sender} (gộp ${mergedCount} tin, ${imageCount} ảnh)...`);
+    // Đăng TẤT CẢ tin trong item này (tuần tự)
+    for (let i = 0; i < item.messages.length; i++) {
+      const message = item.messages[i];
+      console.log(`\n   📤 [${i + 1}/${item.messages.length}] Đăng tin từ ${message.sender}...`);
       
       // Set global context cho processContent
       window.__currentZaloGroupName = item.groupName;
       window.__currentZaloConfigId = item.configId;
       
       // Đăng tin này (CHẶN cho đến khi xong)
-      let success = false;
-      try {
-        success = await pushSingleMessageToWeb(message, item.groupName, item.configId, item.config);
-      } catch (pushErr) {
-        const errMsg = pushErr?.message || pushErr?.toString() || 'Unknown error';
-        console.error(`   ❌ [${i + 1}/${mergedMessages.length}] Exception in pushSingleMessageToWeb:`, errMsg);
-        success = false;
-      }
+      const success = await pushSingleMessageToWeb(message, item.groupName, item.configId, item.config);
       
       if (success) {
-        console.log(`   ✅ [${i + 1}/${mergedMessages.length}] Đăng thành công`);
+        console.log(`   ✅ [${i + 1}/${item.messages.length}] Đăng thành công`);
       } else {
-        console.warn(`   ⚠️ [${i + 1}/${mergedMessages.length}] Đăng thất bại`);
+        console.warn(`   ⚠️ [${i + 1}/${item.messages.length}] Đăng thất bại`);
       }
-
-      // Giải phóng tham chiếu dữ liệu lớn của tin vừa xử lý
-      try {
-        if (message && Array.isArray(message.images)) {
-          message.images.length = 0;
-          message.images = [];
-        }
-        if (message && typeof message.content === 'string' && message.content.length > 2000) {
-          message.content = message.content.slice(0, 1000);
-        }
-      } catch (e) {
-        // ignore cleanup errors
-      }
-
-      await waitForHeapRecovery('after_post');
-      await flushMemoryBeforeNextPost('after_post_flush');
       
       // Chờ giữa các bài đăng
-      if (i < mergedMessages.length - 1) {
+      if (i < item.messages.length - 1) {
         const waitTime = ZALO_TIMING.WAIT_BETWEEN_POSTS;
         console.log(`   ⏸️  Chờ ${waitTime}ms trước bài tiếp theo...`);
         await new Promise(resolve => setTimeout(resolve, waitTime));
       }
     }
-    
-    item.status = 'done';
-    postingWorkerStats.totalSuccess++;
-    console.log(`\n✅ [Posting Worker] Hoàn tất queue item ${item.id} (${mergedMessages.length} bài từ ${item.messages.length} tin gốc)`);
-    console.log(`   📊 Total stats: ${postingWorkerStats.totalProcessed} processed, ${postingWorkerStats.totalSuccess} success, ${postingWorkerStats.totalError} error`);
   } catch (e) {
+    console.error(`❌ [Posting Worker] Error processing queue item:`, e);
     item.status = 'error';
-    postingWorkerStats.totalError++;
-    // ✅ FIX: Safe error logging
-    const errMsg = e?.message || e?.toString() || 'Unknown error';
-    console.error(`\n❌ [Posting Worker] Lỗi xử lý queue item ${item.id}:`, errMsg);
-    console.error('   Error object:', e);
-    console.error('   Stack:', e?.stack || 'No stack');
+    item.error = e.message;
   } finally {
-    try {
-      if (item && Array.isArray(item.messages)) {
-        item.messages.length = 0;
-      }
-      if (item) {
-        item.config = null;
-      }
-      if (window.__pendingZaloMessages) {
-        window.__pendingZaloMessages = null;
-      }
-      await flushMemoryBeforeNextPost('after_queue_item_flush');
-    } catch (e) {
-      // ignore
-    }
-
     postingWorkerStats.currentlyProcessing = null;
-    postingWorkerStats.lastProcessedAt = Date.now();
-    const cooldownMs = ZALO_TIMING.WAIT_AFTER_QUEUE_ITEM || 8000;
-    postingWorkerCooldownUntil = Date.now() + cooldownMs;
-    console.log(`   💤 [Posting Worker] Cooldown ${cooldownMs}ms để ổn định RAM`);
-    console.log(`   🏁 [Posting Worker] Finished processing (success or error). Scanner still running: ${isZaloScanning}`);
-  }
-  
-  } catch (criticalError) {
-    // ✅ CRITICAL ERROR HANDLER for entire function
-    console.error(`❌ [CRITICAL] processPostingQueue crashed:`, criticalError);
-    console.error('   Stack:', criticalError?.stack);
-    
-    // Reset state
-    postingWorkerStats.currentlyProcessing = null;
-    postingWorkerStats.totalError++;
-    
-    // Show alert
-    if (window.antd && window.antd.notification) {
-      window.antd.notification.error({
-        message: 'Lỗi Posting Worker',
-        description: `${criticalError?.message || 'Unknown error'}`,
-        duration: 5,
-      });
-    }
-    
-    // Don't re-throw, just log and continue
   }
 }
 
@@ -9193,7 +7175,6 @@ async function pushSingleMessageToWeb(message, groupName, configId, config) {
       fanpage_name: config?.fanpage_name,
       primary_domain: config?.primary_domain,
       app_id: config?.app_id,
-      config_object: config,
       // Metadata từ Zalo
       zalo_group: groupName,
       zalo_sender: message.sender,
@@ -9208,10 +7189,7 @@ async function pushSingleMessageToWeb(message, groupName, configId, config) {
       postSuccess = true;
       console.log(`    ✅ [Auto Post] processContent hoàn tất`);
     } catch (processErr) {
-      // ✅ FIX: Safe error message access (processErr might not be Error object)
-      const errMsg = processErr?.message || processErr?.toString() || 'Unknown error';
-      console.error('❌ [Auto Post] processContent lỗi:', errMsg);
-      console.error('   Stack:', processErr?.stack || 'No stack');
+      console.error('❌ [Auto Post] processContent lỗi:', processErr.message);
       // Vẫn tiếp tục để record message (tránh đăng lại)
     }
     
@@ -9220,26 +7198,17 @@ async function pushSingleMessageToWeb(message, groupName, configId, config) {
       recordPostedZaloMessage(message, groupName, configId);
       console.log(`    📝 [Auto Post] Đã record message vào lịch sử`);
     } catch (recordErr) {
-      // ✅ FIX: Safe error message access
-      const errMsg = recordErr?.message || recordErr?.toString() || 'Unknown error';
-      console.error('❌ [Auto Post] recordPostedZaloMessage lỗi:', errMsg);
+      console.error('❌ [Auto Post] recordPostedZaloMessage lỗi:', recordErr.message);
     }
     
-    // ✅ Cập nhật stats UI - wrap trong try-catch để tránh crash
-    try {
-      if (typeof window.updateZaloPostedStats === 'function') {
-        window.updateZaloPostedStats();
-      }
-    } catch (statsErr) {
-      console.warn('⚠️ [Auto Post] updateZaloPostedStats error (non-critical):', statsErr);
+    // ✅ Cập nhật stats UI
+    if (typeof window.updateZaloPostedStats === 'function') {
+      window.updateZaloPostedStats();
     }
     
     return postSuccess;
   } catch (e) {
-    // ✅ FIX: Safe error message access (e might not be Error object)
-    const errMsg = e?.message || e?.toString() || 'Unknown error';
-    console.error('❌ [Auto Post] Lỗi:', errMsg);
-    console.error('   Stack:', e?.stack || 'No stack');
+    console.error('❌ [Auto Post] Lỗi:', e.message);
     return false;
   }
 }
@@ -9257,221 +7226,138 @@ async function pushSingleMessageToWeb(message, groupName, configId, config) {
  * @param {Object} config - {id, config_id, zalo_groups, zalo_scan_interval_minutes, zalo_fanpages}
  * @param {HTMLElement} statusEl - Element hiển thị status
  */
-async function scanAllGroupsForConfig(config, statusEl) {
-  // ✅ WRAP ENTIRE FUNCTION WITH TRY-CATCH to prevent crashes
-  try {
-    if (!isZaloScanning) return;
-    
-    if (!config || !config.zalo_groups || config.zalo_groups.length === 0) {
-      console.log(`⚠️ [Config ${config?.config_id}] Không có nhóm để quét`);
-      return;
-    }
+
+/**
+ * ✅ SEQUENTIAL: Quét + Đăng config tuần tự (không queue, không worker)
+ * Flow: Nhóm 1 (lấy → đăng) → Nhóm 2 (lấy → đăng) → ... → Hết config
+ */
+async function scanAndPostConfig(config, statusEl) {
+  if (!isZaloScanning || !isZaloLoggedIn) {
+    console.warn('⚠️ [scanAndPostConfig] Skip: scanning stopped or not logged in');
+    return;
+  }
+  
+  if (!config || !config.zalo_groups || config.zalo_groups.length === 0) {
+    console.log(`⚠️ [Config] Không có nhóm`);
+    return;
+  }
 
   const configId = config.config_id || config.id;
   const groupList = config.zalo_groups;
-  const configInterval = (config.zalo_scan_interval_minutes || 5) * 60 * 1000;
-  
-  console.log(`🔄 [Config ${configId}] Bắt đầu quét ${groupList.length} nhóm tuần tự (interval: ${config.zalo_scan_interval_minutes || 5} phút)...`);
-  
-  if (statusEl) {
-    statusEl.textContent = `🔍 [Config ${configId}] Quét tuần tự ${groupList.length} nhóm...`;
-  }
-
   let totalNew = 0;
   let totalPosted = 0;
-  let totalErrors = 0;
-  let scannedGroups = []; // ✅ VERIFICATION: Track groups scanned
+  
+  console.log(`\n📍 [Config ${configId}] Quét ${groupList.length} nhóm...`);
 
-  // Quét TẬT CẢ nhóm TUẦN TỰ (1 cái rồi đến cái tiếp)
+  // Quét + Đăng TẤT CẢ nhóm TUẦN TỰ
   for (let groupIdx = 0; groupIdx < groupList.length; groupIdx++) {
-    if (!isZaloScanning) break; // Dừng nếu user stop quét
+    if (!isZaloScanning) break;
     
     const groupName = groupList[groupIdx].trim();
     const groupPos = groupIdx + 1;
     
     try {
-      console.log(`\n  📍 [${configId}] [${groupPos}/${groupList.length}] Quét nhóm: ${groupName}`);
+      console.log(`  [${groupPos}/${groupList.length}] Quét & Đăng nhóm: ${groupName}`);
       
       if (statusEl) {
-        statusEl.textContent = `🔍 [Config ${configId}] [${groupPos}/${groupList.length}] Quét: ${groupName}...`;
+        statusEl.textContent = `[${groupPos}/${groupList.length}] ${groupName}...`;
       }
       
-      // ✅ VERIFICATION: Track this group is being scanned
-      scannedGroups.push({ name: groupName, status: 'scanning', startTime: Date.now() });
-      const rawMessages = await scanZaloGroup(groupName);
-      const messages = Array.isArray(rawMessages) ? rawMessages : [];
-      
-      console.log(`    📊 Quét được ${messages.length} tin nhắn`);
-      
-      // ⏳ Đợi thêm để đảm bảo tất cả tin đã load xong từ webview
-      if (messages.length > 0) {
-        const waitTime = ZALO_TIMING.WAIT_AFTER_SCAN_COMPLETE;
-        console.log(`    ⏳ Chờ ${waitTime}ms để tin được load hoàn toàn...`);
-        await new Promise(resolve => setTimeout(resolve, waitTime));
-      }
-
-      // ✅ CLEANUP: Xóa conversations từ webview để giảm memory leak
-      console.log(`    🧹 Cleanup webview sau scan...`);
-      await cleanupWebviewAfterScan();
-      
-      // DEBUG: Dump first message structure
-      if (messages.length > 0) {
-        const first = messages[0] || {};
-        const keys = Object.keys(first);
-        const imgCount = Array.isArray(first.images) ? first.images.length : 0;
-        const contentLen = typeof first.content === 'string' ? first.content.length : 0;
-        console.log(`    [DEBUG] First message meta: keys=${keys.length}, images=${imgCount}, contentLen=${contentLen}`);
+      // BƯỚC 1: Lấy tin từ nhóm
+      const messages = await scanZaloGroup(groupName);
+      if (!Array.isArray(messages)) {
+        console.warn(`⚠️ Invalid messages returned`);
+        continue;
       }
       
-      // Lọc tin mới (per-config per-group state)
+      console.log(`    📊 Lấy được ${messages.length} tin`);
+      
+      if (messages.length === 0) {
+        continue; // Nhóm tiếp
+      }
+      
+      // BƯỚC 2: Lọc tin mới
       const newMessages = filterNewMessagesForConfig(configId, groupName, messages);
-      
       if (newMessages.length === 0) {
         console.log(`    ⏭️ Không có tin mới`);
-        continue;
+        continue; // Nhóm tiếp
       }
       
       console.log(`    ✅ Có ${newMessages.length} tin mới`);
       totalNew += newMessages.length;
       
-      // Đếm tin có hình
+      // BƯỚC 3: Lọc tin có hình
       const messagesWithImages = newMessages.filter(msg => 
         msg.images && Array.isArray(msg.images) && msg.images.length > 0
       );
       
-      console.log(`    🖼️  ${messagesWithImages.length}/${newMessages.length} tin có hình`);
-      
-      // ✅ THÊM TIN VÀO QUEUE thay vì đăng ngay
-      if (messagesWithImages.length > 0) {
-        console.log(`    📥 Thêm ${messagesWithImages.length} tin vào posting queue...`);
-        
-        const added = addToPostingQueue(messagesWithImages, groupName, configId, config);
-        if (added > 0) {
-          console.log(`    ✅ Đã thêm ${added} tin vào queue`);
-          totalPosted += added;
-        } else {
-          console.warn(`    ⚠️ Không thêm được tin vào queue`);
-          totalErrors++;
-        }
-
-        // Nghỉ thêm nếu nhóm này có tin mới để giảm peak RAM
-        const groupCooldown = ZALO_TIMING.WAIT_GROUP_COOLDOWN_IF_HAS_NEW || 4000;
-        console.log(`    💤 Nghỉ ${groupCooldown}ms sau nhóm có tin mới để hạ RAM...`);
-        await new Promise(resolve => setTimeout(resolve, groupCooldown));
+      if (messagesWithImages.length === 0) {
+        console.log(`    ⏭️ Không có tin có hình`);
+        continue; // Nhóm tiếp
       }
       
-      // ✅ Chờ ngắn giữa các nhóm (chỉ quét, không đăng)
-      if (groupIdx < groupList.length - 1) {
-        const waitTime = ZALO_TIMING.WAIT_BETWEEN_GROUPS;
-        await new Promise(resolve => setTimeout(resolve, waitTime));
+      console.log(`    🖼️  ${messagesWithImages.length} tin có hình - Bắt đầu đăng...`);
+      
+      // BƯỚC 4: Đăng LẦN LƯỢT từng tin (tuần tự, không queue)
+      for (let msgIdx = 0; msgIdx < messagesWithImages.length; msgIdx++) {
+        if (!isZaloScanning) break;
         
-        // ✅ FLUSH MEMORY BETWEEN GROUPS: Gọi GC, clear pending data
-        console.log(`    💾 Flush memory trước nhóm tiếp theo...`);
-        await flushMemoryBetweenGroups(groupPos);
+        const msg = messagesWithImages[msgIdx];
+        const msgPos = msgIdx + 1;
+        
+        try {
+          console.log(`      [TIN ${msgPos}/${messagesWithImages.length}] Đăng "${msg.sender || 'Unknown'}"...`);
+          
+          // Đăng tin này (tuần tự với auth)
+          const success = await pushSingleMessageToWeb(msg, groupName, configId, config);
+          
+          if (success) {
+            console.log(`        ✅ Đăng thành công`);
+            totalPosted++;
+            
+            // Chờ 3s trước tin tiếp (cần để hạ load)
+            await new Promise(resolve => setTimeout(resolve, ZALO_TIMING.WAIT_BETWEEN_POSTS));
+          } else {
+            console.warn(`        ❌ Đăng thất bại`);
+          }
+        } catch (e) {
+          console.error(`        ❌ Lỗi đăng tin:`, e.message);
+        }
+      }
+      
+      console.log(`    ✅ Nhóm ${groupName} đăng xong (${messagesWithImages.length} tin)`);
+      
+      // Chờ 2s trước nhóm tiếp (để hạ load)
+      if (groupIdx < groupList.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, ZALO_TIMING.WAIT_BETWEEN_GROUPS));
       }
       
     } catch (e) {
-      console.error(`    ❌ Lỗi quét nhóm ${groupName}:`, e);
-      totalErrors++;
-      
-      // ✅ Cleanup even on error
-      try {
-        console.log(`    🧹 Cleanup webview sau lỗi...`);
-        await cleanupWebviewAfterScan();
-      } catch (cleanupErr) {
-        console.warn('⚠️ Error during cleanup:', cleanupErr);
-      }
-    }
-  }
-
-  // ✅ FINAL CLEANUP after all groups scanned
-  console.log(`\n✅ [Config ${configId}] Quét xong ${groupList.length} nhóm, bắt đầu final cleanup...`);
-  try {
-    await cleanupWebviewAfterScan();
-    await flushMemoryBetweenGroups(groupList.length);
-  } catch (cleanupErr) {
-    console.warn('⚠️ Final cleanup error:', cleanupErr);
-  }
-
-  // Hoàn tất quét tất cả nhóm của config này
-  console.log(`\n✅ [Config ${configId}] Quét xong ${groupList.length} nhóm:`);
-  console.log(`   📊 ${totalNew} tin mới, ${totalPosted} tin thêm vào queue, ${totalErrors} lỗi`);
-  console.log(`   📋 Nhóm đã quét: ${scannedGroups.map(g => g.name).join(', ')}`);
-  console.log(`   📥 Posting queue hiện tại: ${zaloPostingQueue.length} items chờ xử lý`);
-  console.log(`   ⏳ Chuyển sang config tiếp theo...`);
-  
-  // ✅ VERIFICATION: Check nếu có nhóm nào bị missed
-  if (scannedGroups.length < groupList.length) {
-    console.warn(`⚠️ [VERIFY] Chi tiết: ${groupList.length} nhóm expected, ${scannedGroups.length} nhóm scanned`);
-    const missedGroups = groupList.filter(g => !scannedGroups.find(s => s.name === g.trim()));
-    if (missedGroups.length > 0) {
-      console.error(`❌ [VERIFY] Missed groups: ${missedGroups.join(', ')}`);
+      console.error(`  ❌ Lỗi xử lý nhóm ${groupName}:`, e.message);
     }
   }
   
-  // ✅ CLEANUP: Clear textarea và window variables để config tiếp theo bắt đầu sạch
-  const input = document.getElementById("content-input");
-  if (input && input.value.trim()) {
-    console.log(`🧹 [Config ${configId}] Cleanup: Clear textarea còn lại`);
-    input.value = '';
-  }
-  
-  if (window.__pendingZaloMessages) {
-    console.log(`🧹 [Config ${configId}] Cleanup: Clear window.__pendingZaloMessages`);
-    window.__pendingZaloMessages = null;
-  }
-  
-  console.log(`✅ [Config ${configId}] Cleanup hoàn tất, sẵn sàng cho config tiếp theo`);
-  
-  if (statusEl) {
-    statusEl.textContent = `✅ [Config ${configId}] Quét xong: ${totalNew} tin mới, ${totalPosted} thêm vào queue`;
-  }
-  
-  } catch (criticalError) {
-    // ✅ CRITICAL ERROR HANDLER - Log but don't crash
-    console.error(`❌ [CRITICAL] scanAllGroupsForConfig crashed for config ${config?.config_id}:`, criticalError);
-    console.error('   Stack:', criticalError?.stack);
-    
-    if (statusEl) {
-      statusEl.textContent = `❌ [Config ${config?.config_id}] Lỗi nghiêm trọng: ${criticalError?.message || 'Unknown'}`;
-    }
-    
-    // Show alert to user
-    if (window.antd && window.antd.notification) {
-      window.antd.notification.error({
-        message: 'Lỗi quét Zalo',
-        description: `Config ${config?.config_id}: ${criticalError?.message || 'Unknown error'}`,
-        duration: 5,
-      });
-    }
-    
-    // Don't re-throw, just log and continue
-  }
+  console.log(`\n✅ [Config ${configId}] Hoàn tất: ${totalNew} tin mới, ${totalPosted} tin đăng`);
 }
 
 /**
- * ✅ BẮT ĐẦU QUÉT ZALO - ROUND-ROBIN SCHEDULER VỚI POSTING WORKER ĐỘC LẬP
- * 
- * Kiến trúc 2 luồng:
- * 1. SCANNER: Quét nhanh từng config xoay vòng → lưu tin vào queue → chuyển config tiếp
- * 2. POSTING WORKER: Xử lý queue độc lập → đăng tuần tự từng tin → không gây quá tải
- * 
- * Flow:
- * - Config A quét tất cả nhóm NHANH (~30s với 35 nhóm) → tin vào queue → chờ 5 phút
- * - Config B quét tất cả nhóm NHANH → tin vào queue → chờ 5 phút  
- * - Config C quét... → xoay vòng
- * - Posting Worker: lấy tin từ queue → đăng → đợi xong → lấy tin tiếp (độc lập)
+ * ✅ SEQUENTIAL LOOP - Tuần tự hoàn toàn (không concurrency)
+ * Flow: Quét config → Quét nhóm → Lấy tin → Đăng hết → Nhóm tiếp → ...
+ * Không posting worker loop, tất cả tuần tự
  */
 function startZaloScanner(statusEl) {
   if (isZaloScanning) return;
   isZaloScanning = true;
 
+  // ✅ Start Memory Monitor (passive)
+  startMemoryMonitor();
+
   // Set auto mode flag để tự động xác nhận confirm() dialogs
   isZaloAutoMode = true;
-  console.log('🚀 [Zalo Scanner] Bắt đầu - Round-Robin Scheduler + Posting Worker');
+  console.log('🚀 [Zalo Scanner] Bắt đầu - SEQUENTIAL MODE (tuần tự hoàn toàn)');
   
-  // ✅ KHÓA CÁC BUTTON KHÔNG CẦN THIẾT KHI SCANNER ĐANG CHẠY
-  lockUIButtons();
+  // ✅ KHÓA UI KHI SCANNER ĐANG CHẠY
+  createScannerLockOverlay();
 
   // Lấy tất cả config có Zalo groups
   const configs = getConfigsWithZaloGroups();
@@ -9480,237 +7366,107 @@ function startZaloScanner(statusEl) {
     console.warn('⚠️ Không có config nào có nhóm Zalo để quét');
     if (statusEl) statusEl.textContent = '⚠️ Không có config để quét';
     isZaloScanning = false;
-    unlockUIButtons(); // Mở khóa buttons
+    stopMemoryMonitor();
+    removeScannerLockOverlay();
     return;
   }
 
-  console.log(`📊 Khởi động Round-Robin Scheduler cho ${configs.length} config:`);
+  console.log(`📊 Khởi động Sequential Loop cho ${configs.length} configs:`);
   configs.forEach((config, index) => {
     const configId = config.config_id || config.id;
     const groupCount = config.zalo_groups ? config.zalo_groups.length : 0;
-    const fanpageCount = config.zalo_fanpages ? config.zalo_fanpages.length : 0;
-    console.log(`  → [${index + 1}] ${configId}: ${groupCount} nhóm, ${fanpageCount} fanpage`);
+    console.log(`  → [${index + 1}/${configs.length}] ${configId}: ${groupCount} nhóm`);
   });
   
-  // ✅ ROUND-ROBIN STATE
+  // ✅ STATE
   let currentConfigIndex = 0;
   let lastScanTime = 0;
   let isCurrentlyScanning = false;
   
-  // ✅ SCANNER LOOP: Quét xoay vòng từng config
-  const scannerTimer = safeSetInterval(async () => {
-    if (!isZaloScanning || isShuttingDown()) {
-      if (scannerTimer) clearInterval(scannerTimer);
+  // ✅ MAIN LOOP: Check mỗi 2s xem có nên quét config tiếp không
+  const mainLoopTimer = setInterval(async () => {
+    if (!isZaloScanning) {
+      clearInterval(mainLoopTimer);
       return;
     }
     
-    // Nếu đang quét config, skip
+    // Trong lúc quét, skip
     if (isCurrentlyScanning) return;
     
-    // Check xem đã đủ thời gian chưa (5 phút từ lần quét cuối)
+    // Check interval (5 phút)
     const now = Date.now();
     const timeSinceLastScan = now - lastScanTime;
     const minInterval = ZALO_TIMING.CONFIG_SCAN_INTERVAL;
     
     if (lastScanTime > 0 && timeSinceLastScan < minInterval) {
-      // Chưa đủ 5 phút, chờ tiếp
-      const remaining = Math.round((minInterval - timeSinceLastScan) / 1000);
-      if (remaining % 30 === 0) { // Log mỗi 30s
-        console.log(`⏳ [Scanner] Chờ ${remaining}s nữa để quét config tiếp theo...`);
-      }
+      // Chưa đủ, chờ tiếp
       return;
     }
     
-    // Lấy config hiện tại
+    // Bắt đầu quét config
     const config = configs[currentConfigIndex];
     const configId = config.config_id || config.id;
     
-    console.log(`\n🎯 [Scanner Round ${currentConfigIndex + 1}/${configs.length}] Quét config: ${configId}`);
+    console.log(`\n🎯 [Round ${currentConfigIndex + 1}/${configs.length}] Config: ${configId}`);
     
     isCurrentlyScanning = true;
     
     try {
-      // Quét NHANH tất cả nhóm của config này
-      await scanAllGroupsForConfig(config, statusEl);
-      
-      console.log(`✅ [Scanner] Config ${configId} quét xong, chuyển sang config tiếp sau 5 phút`);
+      // ✅ Quét config này (tuần tự: nhóm → lấy tin → đăng)
+      await scanAndPostConfig(config, statusEl);
     } catch (e) {
-      console.error(`❌ [Scanner] Lỗi quét config ${configId}:`, e);
+      console.error(`❌ [Config ${configId}] Error:`, e);
     } finally {
-      // Di chuyển đến config tiếp theo (round-robin)
+      // Chuyển config tiếp
       currentConfigIndex = (currentConfigIndex + 1) % configs.length;
       lastScanTime = Date.now();
       isCurrentlyScanning = false;
       
       if (statusEl) {
-        const queueSize = zaloPostingQueue.length;
-        statusEl.textContent = `🔄 Scanner: Config ${currentConfigIndex + 1}/${configs.length} | Queue: ${queueSize} items`;
+        statusEl.textContent = `🔄 [${currentConfigIndex + 1}/${configs.length}] Chờ 5 phút để quét lại...`;
       }
     }
   }, ZALO_TIMING.SCANNER_LOOP_INTERVAL);
   
-  // ✅ POSTING WORKER: Xử lý queue độc lập
-  console.log('🚀 [Posting Worker] Khởi động...');
-  isPostingWorkerRunning = true;
-  
-  const postingWorkerTimer = safeSetInterval(async () => {
-    if (!isZaloScanning || !isPostingWorkerRunning || isShuttingDown()) {
-      if (postingWorkerTimer) clearInterval(postingWorkerTimer);
-      isPostingWorkerRunning = false;
-      return;
-    }
-    
-    // Xử lý queue (non-blocking)
-    await processPostingQueue();
-  }, ZALO_TIMING.POSTING_WORKER_INTERVAL);
-  
-  // ✅ REGISTER TIMERS IN CENTRAL REGISTRY
-  timerRegistry.register('scanner-main-loop', scannerTimer, 'interval');
-  timerRegistry.register('posting-worker-loop', postingWorkerTimer, 'interval');
-  
-  // ✅ Log stats mỗi 60s - REGISTER IN REGISTRY
-  const statsTimer = safeSetInterval(() => {
-    if (!isZaloScanning || isShuttingDown()) {
-      timerRegistry.clear('stats-logger-loop');
-      return;
-    }
-    console.log(`\n📊 [Stats] Queue: ${zaloPostingQueue.length} pending | Worker: ${postingWorkerStats.totalProcessed} processed (${postingWorkerStats.totalSuccess} success, ${postingWorkerStats.totalError} error)`);
-  }, 60000);
-  
-  timerRegistry.register('stats-logger-loop', statsTimer, 'interval');
+  // Lưu timer để dừng sau
+  zaloConfigScanners._mainLoopTimer = mainLoopTimer;
 
   if (statusEl) {
-    statusEl.textContent = `🟢 Scanner + Worker đang chạy (${configs.length} configs)...`;
+    statusEl.textContent = `🟢 Sequential Loop chạy (${configs.length} configs)...`;
   }
 }
 
 /**
- * ✅ VERIFICATION: Check xem tất cả configs đã quét thành công không
- * Dùng sau khi stopZaloScanner() để verify
- * @returns {Object} {success: boolean, report: {config_id, status, errors...}}
- */
-function verifyZaloScannerCompletion() {
-  if (!window._zaloScannerVerificationData) {
-    console.warn('⚠️ [Verify] Verification data chưa được khởi tạo');
-    return { success: false, report: 'No verification data' };
-  }
-  
-  const configs = getConfigsWithZaloGroups();
-  const results = {
-    success: true,
-    startedAt: window._zaloScannerVerificationData.startedAt,
-    configsExpected: Object.keys(window._zaloScannerVerificationData.configDetails).length,
-    configsWithScans: 0,
-    configsWithErrors: 0,
-    details: []
-  };
-  
-  // Check từng config
-  Object.entries(window._zaloScannerVerificationData.configDetails).forEach(([configId, expected]) => {
-    const scanner = zaloConfigScanners[configId];
-    
-    const detail = {
-      config_id: configId,
-      expectedGroups: expected.groupCount,
-      expectedFanpages: expected.fanpageCount,
-      scanAttempts: scanner?.scanCount || 0,
-      lastError: scanner?.lastError || null,
-      status: 'unknown'
-    };
-    
-    if (!scanner) {
-      detail.status = 'NOT_FOUND';
-      results.success = false;
-    } else if (scanner.scanCount > 0) {
-      detail.status = scanner.lastError ? 'SCAN_WITH_ERRORS' : 'SCANNED_OK';
-      results.configsWithScans++;
-      if (scanner.lastError) {
-        results.configsWithErrors++;
-      }
-    } else if (scanner.lastError) {
-      detail.status = 'NEVER_SCANNED_ERROR';
-      results.configsWithErrors++;
-      results.success = false;
-    } else {
-      detail.status = 'NEVER_SCANNED_PENDING';
-    }
-    
-    results.details.push(detail);
-  });
-  
-  console.log('🔍 [VERIFY] Zalo Scanner Completion Report:');
-  console.log(`   Configs Expected: ${results.configsExpected}`);
-  console.log(`   Configs Scanned: ${results.configsWithScans}`);
-  console.log(`   Configs With Errors: ${results.configsWithErrors}`);
-  console.log(`   Overall Status: ${results.success ? '✅ OK' : '❌ ISSUES DETECTED'}`);
-  
-  if (results.configsWithErrors > 0) {
-    console.warn('⚠️ [VERIFY] Some configs have errors - check details above');
-  }
-  
-  return results;
-}
-/*
- * Dừng quét Zalo cho tất cả configs
- */
-/**
- * ✅ DỪNG ZALO SCANNER VÀ POSTING WORKER - Hủy tất cả các luồng độc lập
- * Đảm bảo không còn thread nào chạy sau khi stop
+ * ✅ DỪNG ZALO SCANNER
  */
 function stopZaloScanner(statusEl) {
-  console.log('🛑 Stopping Zalo Scanner và tất cả luồng phụ...');
-  
-  // ✅ BẬN CỜ DỪNG TẤT CẢ CÁC LUỒNG
   isZaloScanning = false;
   isPostingWorkerRunning = false;
+  
+  // ✅ Stop Memory Monitor
+  stopMemoryMonitor();
+  
+  // ✅ MỞ KHÓA UI
+  removeScannerLockOverlay();
+
+  // Dừng main loop timer
+  if (zaloConfigScanners._mainLoopTimer) {
+    clearInterval(zaloConfigScanners._mainLoopTimer);
+    console.log(`⏹️ Dừng Main Loop Timer`);
+  }
+  
+  // Clear config scanners
+  zaloConfigScanners = {};
+
+  // Dừng auto mode
   isZaloAutoMode = false;
   
-  // ✅ MỞ KHÓA CÁC BUTTON
-  unlockUIButtons();
-
-  // ✅ HỦY TẤT CẢ TIMERS TRONG REGISTRY (MỐI LUỒNG PHỤ CHÍNH)
-  console.log('🧹 Clearing all automation timers...');
-  timerRegistry.clear('scanner-main-loop');
-  timerRegistry.clear('posting-worker-loop');
-  timerRegistry.clear('stats-logger-loop');
-  timerRegistry.clear('ui-init-polling');
-  timerRegistry.clear('theme-change-debounce');
-  timerRegistry.clearAll(); // ✅ HỦY MỌI TIMER CÒN LẠI
-  
-  // ✅ DỪNG BẤT KỲ MUTATION OBSERVER NÀO
-  console.log('👁️ Disconnecting MutationObserver...');
-  if (typeof uiMutationObserver !== 'undefined' && uiMutationObserver) {
-    try {
-      uiMutationObserver.disconnect();
-      console.log('✅ UI MutationObserver disconnected');
-    } catch (e) {
-      console.warn('⚠️ Error disconnecting UI observer:', e);
-    }
-  }
-  
-  if (typeof uiThemeObserver !== 'undefined' && uiThemeObserver) {
-    try {
-      uiThemeObserver.disconnect();
-      console.log('✅ Theme MutationObserver disconnected');
-    } catch (e) {
-      console.warn('⚠️ Error disconnecting theme observer:', e);
-    }
-  }
-  
-  // ✅ HỦY TÀI NGUYÊN QUEUE (không xử lý thêm items)
-  console.log('📥 Clearing posting queue...');
-  zaloPostingQueue = [];
-  postingWorkerStats.currentlyProcessing = null;
-  
-  // ✅ HỦY STATE CÁC CONFIG
-  zaloConfigScanners = {};
-  
   // Log stats cuối cùng
-  console.log('✅ [Zalo Scanner] Tất cả luồng đã dừng:');
-  timerRegistry.status();
+  console.log('⏹️ [Zalo Scanner] Dừng');
+  console.log(`   💾 Memory: ${getHeapUsageMB()}MB`);
 
   if (statusEl) {
-    statusEl.textContent = `⏸ DỪNG HOÀN TOÀN. Mọi luồng phụ đã hủy.`;
+    statusEl.textContent = `⏸ Đã dừng.`;
   }
 }
 
@@ -9744,6 +7500,7 @@ function createZaloResetButtonsUI() {
   
   // Button 1: Reset Groups State
   const btnResetGroups = document.createElement('button');
+  btnResetGroups.setAttribute('data-zalo-reset-groups', 'true'); // Mark for selective lock
   btnResetGroups.textContent = '🔄 Reset Groups';
   btnResetGroups.style.cssText = `
     padding: 6px 12px;
@@ -9977,11 +7734,6 @@ function ensureZaloMultiGroupUI(container) {
   const setMode = (mode, row = null, options = {}) => {
     currentMode = mode;
     editingRowId = row?.id || null;
-    
-    // ✅ Expose editingRowId ra global scope để handleManualToken có thể access
-    if (typeof window !== 'undefined') {
-      window.__zaloEditingConfigId = editingRowId;
-    }
 
     if (saveConfigBtn) {
       saveConfigBtn.style.display = currentMode === "idle" ? "none" : "inline-block";
@@ -10052,64 +7804,29 @@ function ensureZaloMultiGroupUI(container) {
       cb.checked = fanpageIds.includes(cb.value);
     });
     
-    // ✅ FIX: Lưu fanpage data từ CONFIG ĐÃ LƯU (row.zalo_fanpages hoặc row.fanpage_tokens)
-    // KHÔNG lấy từ facebookState.pages (có thể là token của config khác!)
+    // Lưu fanpage data từ UI checkbox (lấy token từ facebookState.pages matching page.id)
     const checkedBoxes = checkboxes.filter(cb => cb.checked);
-    
     editingFanpageData = {
       fanpage_ids: checkedBoxes.map(cb => cb.value),
       fanpage_id: checkedBoxes[0]?.value || null,
-      fanpage_names: checkedBoxes.map((cb, idx) => {
-        // ✅ Ưu tiên lấy từ zalo_fanpages (format mới)
-        if (Array.isArray(row.zalo_fanpages)) {
-          const zaloFp = row.zalo_fanpages.find(fp => fp.id === cb.value);
-          if (zaloFp) return zaloFp.name;
-        }
-        // Fallback: row.fanpage_names (array cũ)
-        if (Array.isArray(row.fanpage_names) && row.fanpage_names[idx]) {
-          return row.fanpage_names[idx];
-        }
-        // Fallback cuối: facebookState.pages
+      fanpage_names: checkedBoxes.map(cb => {
         const page = facebookState.pages.find(p => p.id === cb.value);
         return page?.name || cb.nextSibling?.textContent?.trim() || 'Unknown';
       }),
-      fanpage_name: '', // Sẽ được set sau
-      fanpage_tokens: checkedBoxes.map((cb, idx) => {
-        // ✅ CRITICAL: Ưu tiên lấy token từ CONFIG ĐÃ LƯU!
-        if (Array.isArray(row.zalo_fanpages)) {
-          const zaloFp = row.zalo_fanpages.find(fp => fp.id === cb.value);
-          if (zaloFp && zaloFp.access_token) return zaloFp.access_token;
-        }
-        // Fallback: row.fanpage_tokens (array cũ)
-        if (Array.isArray(row.fanpage_tokens) && row.fanpage_tokens[idx]) {
-          return row.fanpage_tokens[idx];
-        }
-        // Fallback cuối: facebookState.pages (ít an toàn nhất!)
+      fanpage_name: checkedBoxes.map(cb => {
         const page = facebookState.pages.find(p => p.id === cb.value);
-        console.warn(`⚠️ [loadRowToControls] Fallback to facebookState.pages for token: ${cb.value} - may be WRONG!`);
+        return page?.name || cb.nextSibling?.textContent?.trim() || 'Unknown';
+      }).join(', '),
+      fanpage_tokens: checkedBoxes.map(cb => {
+        const page = facebookState.pages.find(p => p.id === cb.value);
         return page?.access_token || '';
       }),
-      fanpage_token: null // Sẽ được set sau
+      fanpage_token: (() => {
+        const firstPage = facebookState.pages.find(p => p.id === checkedBoxes[0]?.value);
+        return firstPage?.access_token || null;
+      })()
     };
-    
-    // Set fanpage_name và fanpage_token từ array đầu tiên
-    editingFanpageData.fanpage_name = editingFanpageData.fanpage_names.join(', ');
-    editingFanpageData.fanpage_token = editingFanpageData.fanpage_tokens[0] || null;
-    
-    // ✅ Expose ra global scope để handleManualToken có thể access
-    if (typeof window !== 'undefined') {
-      window.__zaloEditingFanpageData = editingFanpageData;
-    }
-    
-    console.log('[Zalo Config] ✅ Loaded', fanpageIds.length, 'fanpages with tokens from CONFIG:', {
-      fanpage_ids: editingFanpageData.fanpage_ids,
-      fanpage_names: editingFanpageData.fanpage_names,
-      token_sources: checkedBoxes.map((cb, idx) => {
-        if (Array.isArray(row.zalo_fanpages) && row.zalo_fanpages.find(fp => fp.id === cb.value)) return 'zalo_fanpages✅';
-        if (Array.isArray(row.fanpage_tokens) && row.fanpage_tokens[idx]) return 'fanpage_tokens⚠️';
-        return 'facebookState❌';
-      })
-    });
+    console.log('[Zalo Config] Checked fanpages:', fanpageIds.length, 'Loaded tokens from facebookState:', editingFanpageData);
     
     // 3. Load zalo groups vào textarea
     const textarea = document.getElementById('zalo-group-list');
@@ -10296,14 +8013,9 @@ function ensureZaloMultiGroupUI(container) {
           btnClear.textContent = '⏳ Đang xóa...';
           
           try {
-            savePostedZaloMessages([], (success, error) => {
-              if (success) {
-                updatePostedStats();
-                status.textContent = '✅ Đã xóa lịch sử tin Zalo đã đăng';
-              } else {
-                status.textContent = `❌ Lỗi xóa: ${error}`;
-              }
-            });
+            savePostedZaloMessages([]);
+            updatePostedStats();
+            status.textContent = '✅ Đã xóa lịch sử tin Zalo đã đăng';
           } finally {
             // Re-enable nút sau khi hoàn tất
             setTimeout(() => {
@@ -10486,10 +8198,12 @@ function ensureZaloMultiGroupUI(container) {
       loadRowToControls(latest);
       status.textContent = `✅ Đã tải config: ${latest.fanpage_names?.join(', ') || latest.fanpage_name}. Nhóm: ${latest.zalo_groups?.length || 0}.`;
     } finally {
-      // ✅ Enable lại nút ngay - KHÔNG cần debounce
-      autoLoadBtn.disabled = false;
-      autoLoadBtn.style.opacity = '1';
-      autoLoadBtn.style.cursor = 'pointer';
+      // Enable lại nút sau 500ms (debounce)
+      setTimeout(() => {
+        autoLoadBtn.disabled = false;
+        autoLoadBtn.style.opacity = '1';
+        autoLoadBtn.style.cursor = 'pointer';
+      }, 500);
     }
   };
   
@@ -10512,39 +8226,29 @@ function ensureZaloMultiGroupUI(container) {
 
       // Lấy data từ controls
       const globalSettings = getGlobalSettings();
-      // ✅ LUÔN ưu tiên fanpage đang check trên UI để sửa cấu hình phản ánh đúng thao tác user
-      // Khi edit: ưu tiên token đã lưu trong editingFanpageData cho fanpage tương ứng, fallback sang facebookState.pages
+      // ✅ Khi edit, dùng fanpage data đã lưu; khi create, lấy từ UI checkbox
       let selectedFanpages = [];
-      const checkboxes = Array.from(document.querySelectorAll('input[name="fb-page-checkbox"]'));
-      const checked = checkboxes.filter(cb => cb.checked);
-
-      selectedFanpages = checked.map(cb => {
-        const page = facebookState.pages.find(p => p.id === cb.value);
-        const tokenFromEdit = (currentMode === 'edit' && editingFanpageData && Array.isArray(editingFanpageData.fanpage_ids))
-          ? (() => {
-              const idx = editingFanpageData.fanpage_ids.indexOf(cb.value);
-              return idx >= 0 ? editingFanpageData.fanpage_tokens?.[idx] : '';
-            })()
-          : '';
-
-        const nameFromEdit = (currentMode === 'edit' && editingFanpageData && Array.isArray(editingFanpageData.fanpage_ids))
-          ? (() => {
-              const idx = editingFanpageData.fanpage_ids.indexOf(cb.value);
-              return idx >= 0 ? editingFanpageData.fanpage_names?.[idx] : '';
-            })()
-          : '';
-
-        return {
-          id: cb.value,
-          name: nameFromEdit || page?.name || cb.nextSibling?.textContent?.trim() || 'Unknown',
-          access_token: tokenFromEdit || page?.access_token || ''
-        };
-      });
-
-      if (currentMode === 'edit') {
-        console.log('[Zalo Config] Edit mode - using CURRENT UI fanpage selection:', selectedFanpages);
+      if (currentMode === "edit" && editingFanpageData && editingFanpageData.fanpage_ids?.length > 0) {
+        // Dùng dữ liệu từ row (bao gồm token)
+        selectedFanpages = editingFanpageData.fanpage_ids.map((id, idx) => ({
+          id,
+          name: editingFanpageData.fanpage_names?.[idx] || 'Unknown',
+          access_token: editingFanpageData.fanpage_tokens?.[idx] || ''
+        }));
+        console.log('[Zalo Config] Using saved fanpage data from edit row:', selectedFanpages);
       } else {
-        console.log('[Zalo Config] Create mode - using UI fanpage selection:', selectedFanpages);
+        // Lấy từ UI checkbox (khi create mới)
+        const checkboxes = Array.from(document.querySelectorAll('input[name="fb-page-checkbox"]'));
+        const checked = checkboxes.filter(cb => cb.checked);
+        selectedFanpages = checked.map(cb => {
+          const page = facebookState.pages.find(p => p.id === cb.value);
+          return {
+            id: cb.value,
+            name: page?.name || cb.nextSibling?.textContent?.trim() || 'Unknown',
+            access_token: page?.access_token || ''
+          };
+        });
+        console.log('[Zalo Config] Using fanpage data from UI checkboxes:', selectedFanpages);
       }
       const groupList = parseGroupList(input.value);
       
@@ -10573,13 +8277,7 @@ function ensureZaloMultiGroupUI(container) {
       fanpage_tokens: selectedFanpages.map(f => f.access_token),
       fanpage_token: selectedFanpages[0]?.access_token || null,
       zalo_groups: groupList,
-      config_for_zalo: true,
-      // ✅ CRITICAL FIX: Lưu array fanpage để processContent có thể đăng lên TẤT CẢ
-      zalo_fanpages: selectedFanpages.map(f => ({
-        id: f.id,
-        name: f.name,
-        access_token: f.access_token
-      }))
+      config_for_zalo: true
     };
     
     // Uniqueness validation: domain + service_type + project
@@ -10613,11 +8311,6 @@ function ensureZaloMultiGroupUI(container) {
             selectedRowData = null;
             editingFanpageData = null;
             
-            // ✅ Clear global state
-            if (typeof window !== 'undefined') {
-              window.__zaloEditingFanpageData = null;
-            }
-            
             // Clear form fields ngay lập tức
             Array.from(document.querySelectorAll('input[name="fb-page-checkbox"]')).forEach(cb => {
               cb.checked = false;
@@ -10629,8 +8322,18 @@ function ensureZaloMultiGroupUI(container) {
             status.textContent = `✅ Đã cập nhật config: ${configData.fanpage_name}`;
             console.log('[Zalo Config] Successfully saved to server');
             
-            // ✅ Render ngay với data vừa save - KHÔNG CẦN fetch lại từ server
+            // Render grid SAU khi state/mode đã được reset
             renderZaloConfigList();
+            
+            // Fetch fresh data từ server để cập nhật
+            fetchDataOptionUserFromServer((fetchSuccess, freshData) => {
+              if (fetchSuccess) {
+                console.log('[Zalo Config] Fetched fresh data');
+                renderZaloConfigList();
+              } else {
+                console.warn('[Zalo Config] Fetch failed, using cached data');
+              }
+            });
           } else {
             status.textContent = `⚠️ Lỗi cập nhật config: ${error || 'Unknown error'}`;
             console.error('[Zalo Config] Save error:', error);
@@ -10650,11 +8353,6 @@ function ensureZaloMultiGroupUI(container) {
           selectedRowData = null;
           editingFanpageData = null;
           
-          // ✅ Clear global state
-          if (typeof window !== 'undefined') {
-            window.__zaloEditingFanpageData = null;
-          }
-          
           // Clear form fields ngay lập tức
           Array.from(document.querySelectorAll('input[name="fb-page-checkbox"]')).forEach(cb => {
             cb.checked = false;
@@ -10666,19 +8364,43 @@ function ensureZaloMultiGroupUI(container) {
           status.textContent = `✅ Đã thêm config mới: ${configData.fanpage_name}. Bạn có thể tiếp tục thêm cấu hình khác hoặc nhấn "➕ Thêm mới" để xóa form.`;
           console.log('[Zalo Config] Add success, rendering grid...');
           
-          // ✅ Render ngay với data vừa save - KHÔNG CẦN fetch lại từ server
+          // Render grid SAU khi state/mode đã được reset
           renderZaloConfigList();
           
           // Auto-suggest clearing form for next entry
           setTimeout(() => {
             status.textContent = `${status.textContent} [💡 Tip: Nhấn "➕ Thêm mới" để xóa form và thêm cấu hình khác]`;
           }, 2000);
+          
+          // Fetch fresh data từ server để cập nhật
+          fetchDataOptionUserFromServer((fetchSuccess, freshData) => {
+            if (fetchSuccess) {
+              console.log('[Zalo Config] After add, fetched fresh data');
+              renderZaloConfigList();
+            } else {
+              console.warn('[Zalo Config] Fetch failed after add, using cached data');
+            }
+          });
         } else {
           status.textContent = `⚠️ Lỗi thêm config mới: ${error || 'Unknown error'}`;
           console.error('[Zalo Config] Add error:', error);
         }
       });
     }
+    
+    // DEBUG: Verify all configs before grid render
+    const allConfigsBeforeRender = loadDataOptionUser();
+    const zaloConfigs = allConfigsBeforeRender.filter(x => x.config_for_zalo);
+    console.log('[Zalo Config] Total configs in localStorage:', allConfigsBeforeRender.length, 'Zalo configs:', zaloConfigs.length, zaloConfigs);
+    
+    // Refresh grid
+    renderZaloConfigList();
+    
+    // DEBUG: Verify grid rendered after 500ms
+    setTimeout(() => {
+      const updatedConfigs = loadDataOptionUser().filter(x => x.config_for_zalo);
+      console.log('[Zalo Config] Grid should now show', updatedConfigs.length, 'configs');
+    }, 500);
     } finally {
       // Enable lại nút
       saveConfigBtn.disabled = false;
@@ -10701,11 +8423,6 @@ function ensureZaloMultiGroupUI(container) {
       // Clear selection
       selectedRowData = null;
       editingFanpageData = null;
-      
-      // ✅ Clear global state
-      if (typeof window !== 'undefined') {
-        window.__zaloEditingFanpageData = null;
-      }
       
       // Clear controls (giữ Global Settings, chỉ clear fanpages từ Facebook Token section và groups)
       Array.from(document.querySelectorAll('input[name="fb-page-checkbox"]')).forEach(cb => {
@@ -10759,12 +8476,6 @@ function ensureZaloMultiGroupUI(container) {
     selectedRowData = null;
     formSnapshot = null;
     editingFanpageData = null;
-    
-    // ✅ Clear global state
-    if (typeof window !== 'undefined') {
-      window.__zaloEditingFanpageData = null;
-    }
-    
     setMode("idle");
   };
 
@@ -10784,48 +8495,14 @@ ${JSON.stringify(zaloConfigs, null, 2)}`;
     alert(`✅ Debug info logged to console!\n\n${debugMsg.substring(0, 300)}...\n\n👓 Mở DevTools (F12) -> Console để xem chi tiết`);
   };
   
-  // ✅ MEMORY STATS BUTTON
-  const memoryBtn = createButton("💾 Memory", "#722ed1");
-  memoryBtn.title = "Hiển thị thông tin bộ nhớ và cấu hình tối ưu hóa";
-  memoryBtn.onclick = () => {
-    const stats = MemoryOptimizer.getStats();
-    const config = MemoryOptimizer.config;
-    
-    let msg = `📊 MEMORY OPTIMIZER STATUS\n\n`;
-    msg += `🔧 Configuration:\n`;
-    msg += `  • Webview Mode: ${config.WEBVIEW_LAZY_LOAD ? '💡 Lazy Load (Tiết kiệm RAM)' : '🚀 Preload (Tiện lợi)'}\n`;
-    msg += `  • Max Queue Size: ${config.MAX_QUEUE_SIZE} items\n`;
-    msg += `  • Max LocalStorage Item: ${(config.MAX_LOCALSTORAGE_ITEM_SIZE/1024).toFixed(0)}KB\n\n`;
-    
-    msg += `📈 Current Stats:\n`;
-    msg += `  • Webview Created: ${stats.webviewCreated ? '✅ Yes' : '❌ No'}\n`;
-    msg += `  • Event Listeners: ${stats.listenersCount} groups\n`;
-    msg += `  • Last Cleanup: ${stats.lastCleanup}\n`;
-    
-    if (stats.memoryUsedMB) {
-      msg += `\n💻 Heap Memory:\n`;
-      msg += `  • Used: ${stats.memoryUsedMB}MB / ${stats.memoryLimitMB}MB (${stats.memoryPercent}%)\n`;
-      msg += `  • Status: ${stats.memoryPercent < 50 ? '🟢 Good' : stats.memoryPercent < 80 ? '🟡 OK' : '🔴 High'}\n`;
-    }
-    
-    msg += `\n🔧 Actions:\n`;
-    msg += `  • Toggle Mode: Change WEBVIEW_LAZY_LOAD in code\n`;
-    msg += `  • Manual Cleanup: MemoryOptimizer.cleanupLocalStorage()\n`;
-    msg += `  • Emergency: MemoryOptimizer.performEmergencyCleanup()\n`;
-    
-    console.log(msg);
-    console.log('MemoryOptimizer config:', config);
-    console.log('MemoryOptimizer stats:', stats);
-    alert(msg);
-  };
-  
-  mgmtBtnRow.append(saveConfigBtn, cancelBtn, newConfigBtn, autoLoadBtn, refreshTokensBtn, showFanpagesBtn, clearAllBtn, debugBtn, memoryBtn);
+  mgmtBtnRow.append(saveConfigBtn, cancelBtn, newConfigBtn, autoLoadBtn, refreshTokensBtn, showFanpagesBtn, clearAllBtn, debugBtn);
   managementSection.append(mgmtTitle, gridGuide, postedStats, mgmtList, mgmtBtnRow);
   
   // Grid sẽ tự động render sau khi fetch data từ server (xem phần expose helpers phía trên)
   
   const input = document.createElement("textarea");
   input.id = "zalo-group-list";
+  input.setAttribute('data-zalo-config-select', 'true'); // Mark for selective lock
   input.placeholder = "Mỗi nhóm 1 dòng:\nNhóm A\nQ1,3 50T\nNhóm BĐS HCM";
   input.style.cssText = `width:100%;min-height:80px;font-size:12px;color:${theme.text};background:${theme.bg};border:1px solid ${theme.border};margin-bottom:8px;flex:1;`;
   input.value = loadGroupList().join("\n");
@@ -10841,7 +8518,10 @@ ${JSON.stringify(zaloConfigs, null, 2)}`;
   btnRow.style.cssText = "display:flex;gap:8px;flex-wrap:wrap";
 
   const startBtn = createButton("▶️ Bắt đầu quét", "#13c2c2");
+  startBtn.setAttribute('data-zalo-start-scan', 'true');
+  
   const stopBtn = createButton("⏸ Dừng quét", "#faad14");
+  stopBtn.setAttribute('data-zalo-stop-scan', 'true');
   
   // ✅ Đảm bảo stopBtn luôn click được (cao hơn overlay)
   stopBtn.id = "zalo-stop-btn";
@@ -10849,22 +8529,16 @@ ${JSON.stringify(zaloConfigs, null, 2)}`;
   stopBtn.style.zIndex = "9999999";  // Cao hơn overlay (999999)
   stopBtn.style.pointerEvents = "auto";
   
-  // Hàm quản lý trạng thái ẩn/hiện các nút
+  // ✅ Hàm quản lý trạng thái ẩn/hiện các nút (disable logic now handled by selective lock)
   const setButtonsState = (isScanning) => {
     if (isScanning) {
       // Đang quét: Ẩn start, hiện stop
       startBtn.style.display = 'none';
       stopBtn.style.display = 'inline-block';
-      
-      // ✅ Gọi lock function để disable các button khác
-      lockUIButtons();
     } else {
       // Không quét: Hiện start, ẩn stop
       startBtn.style.display = 'inline-block';
       stopBtn.style.display = 'none';
-      
-      // ✅ Gọi unlock function để enable lại các button
-      unlockUIButtons();
     }
   };
   
@@ -10874,102 +8548,31 @@ ${JSON.stringify(zaloConfigs, null, 2)}`;
   // Scanner now handled by startZaloScanner() with sequential scheduler
 
   startBtn.onclick = () => {
-    // ✅ LAZY CREATE WEBVIEW nếu chưa có (memory-efficient)
-    const webviewId = window.zaloScannerWebviewId;
-    let existingWebview = document.getElementById(webviewId);
+    // Kiểm tra đăng nhập trước khi chạy scheduler
+    status.textContent = "⏳ Kiểm tra đăng nhập Zalo...";
+    startBtn.disabled = true;
+    startBtn.style.opacity = '0.6';
+    startBtn.style.cursor = 'not-allowed';
     
-    if (!existingWebview) {
-      console.log('[Zalo] 🚀 Lazy creating webview on demand...');
-      status.textContent = "🔄 Đang khởi tạo Zalo Webview...";
-      
-      try {
-        // Remove placeholder nếu có
-        const placeholder = rightPanel.querySelector('div[style*="dashed"]');
-        if (placeholder) placeholder.remove();
+    checkZaloLogin(window.zaloScannerWebviewId).then(loggedIn => {
+      if (loggedIn) {
+        isZaloLoggedIn = true;
+        console.log('▶️ [Zalo Scanner] Bắt đầu Sequential Scheduler');
+        startZaloScanner(status);
         
-        const zaloWebview = createZaloWebview(webviewId, "https://chat.zalo.me/", rightPanel);
-        if (!zaloWebview) {
-          status.textContent = "❌ Không thể tạo webview. Vui lòng reload trang.";
-          return;
-        }
-        
-        MemoryOptimizer.markWebviewUsed();
-        existingWebview = zaloWebview;
-        
-        // Đợi webview load xong
-        status.textContent = "⏳ Đang tải Zalo Web Chat...";
-        const loadTimeout = safeSetTimeout(() => {
-          status.textContent = "⚠️ Webview load chậm, thử tiếp tục...";
-        }, 10000);
-        
-        zaloWebview.addEventListener('dom-ready', () => {
-          if (loadTimeout) clearTimeout(loadTimeout);
-          console.log('[Zalo] ✅ Webview ready!');
-          
-          // Tiếp tục check login sau khi DOM ready
-          safeSetTimeout(() => {
-            proceedWithLoginCheck();
-          }, 2000);
-        }, { once: true });
-        
-        return; // Chờ webview ready
-      } catch (e) {
-        status.textContent = `❌ Lỗi khởi tạo webview: ${e.message}`;
-        console.error('❌ [Zalo] Create webview failed:', e);
-        return;
-      }
-    }
-    
-    // Webview đã sẵn sàng, tiếp tục check login
-    MemoryOptimizer.markWebviewUsed();
-    proceedWithLoginCheck();
-    
-    function proceedWithLoginCheck() {
-      // ✅ Kiểm tra đăng nhập với retry logic (webview đã sẵn sàng)
-      status.textContent = "⏳ Kiểm tra đăng nhập Zalo...";
-      startBtn.disabled = true;
-      startBtn.style.opacity = '0.6';
-      startBtn.style.cursor = 'not-allowed';
-      
-      // ✅ Retry check login nếu lần đầu fail (phòng trường hợp webview chưa hoàn toàn ready)
-      const checkLoginWithRetry = async (maxRetries = 3, delayMs = 2000) => {
-        for (let i = 0; i < maxRetries; i++) {
-          try {
-            const loggedIn = await checkZaloLogin(webviewId);
-            if (loggedIn) return true;
-            
-            console.log(`[Zalo] Retry ${i + 1}/${maxRetries}: Not logged in yet, waiting ${delayMs}ms...`);
-            if (i < maxRetries - 1) {
-              await new Promise(r => safeSetTimeout(r, delayMs));
-            }
-          } catch (err) {
-            console.error(`[Zalo] Retry ${i + 1}/${maxRetries} failed:`, err);
-            if (i === maxRetries - 1) throw err;
-            await new Promise(r => safeSetTimeout(r, delayMs));
-          }
-        }
-        return false;
-      };
-      
-      checkLoginWithRetry().then(loggedIn => {
-        if (loggedIn) {
-          isZaloLoggedIn = true;
-          console.log('▶️ [Zalo Scanner] Bắt đầu Sequential Scheduler');
-          startZaloScanner(status);
-          setButtonsState(true);
-        } else {
-          status.textContent = "⚠️ Chưa đăng nhập Zalo. Vui lòng đăng nhập ở bên phải trước.";
-          startBtn.disabled = false;
-          startBtn.style.opacity = '1';
-          startBtn.style.cursor = 'pointer';
-        }
-      }).catch(err => {
-        status.textContent = `❌ Lỗi: ${err.message}`;
+        setButtonsState(true);
+      } else {
+        status.textContent = "⚠️ Chưa đăng nhập Zalo. Vui lòng đăng nhập ở bên phải trước.";
         startBtn.disabled = false;
         startBtn.style.opacity = '1';
         startBtn.style.cursor = 'pointer';
-      });
-    }
+      }
+    }).catch(err => {
+      status.textContent = `❌ Lỗi: ${err.message}`;
+      startBtn.disabled = false;
+      startBtn.style.opacity = '1';
+      startBtn.style.cursor = 'pointer';
+    });
   };
 
   stopBtn.onclick = () => {
@@ -10999,89 +8602,6 @@ ${JSON.stringify(zaloConfigs, null, 2)}`;
   rightPanel.style.cssText = `flex:1;min-width:350px;display:flex;flex-direction:column;`;
 
   wrapper.append(leftPanel, rightPanel);
-  
-  // ✅ SMART WEBVIEW INIT: Lazy load hoặc Preload tùy config
-  const shouldPreloadWebview = !MemoryOptimizer.config.WEBVIEW_LAZY_LOAD;
-  
-  if (shouldPreloadWebview) {
-    // Preload mode: Tạo webview ngay (tiện lợi nhưng tốn RAM)
-    console.log('[Zalo] 🚀 Preload mode: Auto-initializing webview...');
-    try {
-      const webviewId = window.zaloScannerWebviewId;
-      const zaloWebview = createZaloWebview(webviewId, "https://chat.zalo.me/", rightPanel);
-      
-      if (zaloWebview) {
-        MemoryOptimizer.markWebviewUsed();
-        
-        // ✅ Đợi webview load xong rồi mới check login
-        zaloWebview.addEventListener('dom-ready', () => {
-          console.log('[Zalo] ✅ Webview DOM ready, checking login...');
-          
-          // Delay 2s để webview ổn định hoàn toàn
-          safeSetTimeout(() => {
-            checkZaloLogin(webviewId).then(loggedIn => {
-              if (loggedIn) {
-                isZaloLoggedIn = true;
-                status.textContent = '✅ Đã đăng nhập Zalo. Sẵn sàng quét.';
-                console.log('[Zalo] ✅ Already logged in!');
-              } else {
-                status.textContent = '⏳ Webview đã sẵn sàng. Vui lòng đăng nhập Zalo ở bên phải.';
-                console.log('[Zalo] ⏳ Not logged in yet, waiting...');
-              }
-            }).catch(err => {
-              console.error('[Zalo] ❌ Login check failed:', err);
-              status.textContent = '⚠️ Lỗi kiểm tra đăng nhập. Thử click "Bắt đầu quét".';
-            });
-          }, 2000);
-        });
-        
-        // ✅ Log khi webview bắt đầu load
-        zaloWebview.addEventListener('did-start-loading', () => {
-          console.log('[Zalo] 🔄 Webview đang load...');
-          status.textContent = '🔄 Đang tải Zalo Web Chat...';
-        });
-        
-        // ✅ Log khi webview load xong
-        zaloWebview.addEventListener('did-stop-loading', () => {
-          console.log('[Zalo] ✅ Webview load hoàn tất');
-        });
-      }
-    } catch (e) {
-      console.error('❌ [Zalo] Preload webview failed:', e);
-      status.textContent = '⚠️ Không thể khởi tạo webview. Thử click "Bắt đầu quét".';
-    }
-  } else {
-    // Lazy load mode: Chỉ tạo khi cần (tiết kiệm RAM)
-    console.log('[Zalo] 💡 Lazy load mode: Webview sẽ được tạo khi bấm "Bắt đầu quét"');
-    status.textContent = '💡 Tiết kiệm RAM: Webview sẽ load khi bấm "Bắt đầu quét"';
-    
-    // Tạo placeholder nhắc nhở
-    const placeholder = document.createElement('div');
-    placeholder.style.cssText = `
-      flex: 1;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      background: ${theme.surface};
-      border: 2px dashed ${theme.border};
-      border-radius: 8px;
-      color: ${theme.textSecondary};
-      font-size: 14px;
-      padding: 20px;
-      text-align: center;
-    `;
-    placeholder.innerHTML = `
-      <div>
-        <div style="font-size: 48px; margin-bottom: 10px;">💾</div>
-        <div><strong>Tiết kiệm RAM</strong></div>
-        <div style="margin-top: 8px; font-size: 12px;">
-          Webview Zalo sẽ load khi bạn nhấn "Bắt đầu quét"<br>
-          <span style="color: ${theme.success};">Tiết kiệm ~200MB RAM</span>
-        </div>
-      </div>
-    `;
-    rightPanel.appendChild(placeholder);
-  }
 
   if (container) container.appendChild(wrapper);
   
@@ -11107,9 +8627,24 @@ ${JSON.stringify(zaloConfigs, null, 2)}`;
     renderZaloConfigList();
   }
   
-  // ✅ Không tự động tạo webview khi mở UI để tránh crash lúc startup.
-  // Webview sẽ được tạo khi user bấm "▶️ Bắt đầu quét".
-  status.textContent = `📱 Sẵn sàng. Nhấn "▶️ Bắt đầu quét" để mở Zalo Webview và đăng nhập.`;
+  // Tự động tạo webview Zalo khi mở giao diện
+  const webviewId = window.zaloScannerWebviewId;
+  const zaloUrl = "https://chat.zalo.me/";
+  
+  try {
+    const existingWebview = document.getElementById(webviewId);
+    if (!existingWebview) {
+      console.log(`🔧 Tự động tạo webview Zalo inline vào UI...`);
+      createZaloWebview(webviewId, zaloUrl, rightPanel);
+      status.textContent = `📱 Webview Zalo đã được tạo. Vui lòng đăng nhập...`;
+    } else {
+      console.log(`✅ Webview Zalo đã tồn tại`);
+      status.textContent = `📱 Kết nối Zalo sẵn sàng. Đăng nhập và bắt đầu quét.`;
+    }
+  } catch (error) {
+    console.error("❌ Lỗi tạo webview:", error);
+    status.textContent = `⚠️ Có vấn đề với kết nối Zalo. Vui lòng thử lại.`;
+  }
   
   return wrapper;
 }
@@ -12398,13 +9933,21 @@ async function ensureServiceContentUI() {
   const globalIndustrySelect = document.getElementById("global-industry-select");
   const globalProjectSelect = document.getElementById("global-project-select");
   
-  // ✅ REGISTER LISTENERS IN REGISTRY (NO DUPLICATES)
-  if (globalDomainSelect) eventRegistry.add(globalDomainSelect, 'change', updateInfoDisplay);
-  if (globalIndustrySelect) eventRegistry.add(globalIndustrySelect, 'change', updateInfoDisplay);
-  if (globalProjectSelect) eventRegistry.add(globalProjectSelect, 'change', updateInfoDisplay);
-  
-  // ✅ REMOVED DUPLICATE document-level listener that was firing same handler twice
-  // The direct listeners above are sufficient and more efficient
+  if (globalDomainSelect) globalDomainSelect.addEventListener('change', updateInfoDisplay);
+  if (globalIndustrySelect) globalIndustrySelect.addEventListener('change', updateInfoDisplay);
+  if (globalProjectSelect) globalProjectSelect.addEventListener('change', updateInfoDisplay);
+
+  document.addEventListener('change', (event) => {
+    const target = event?.target;
+    const targetId = target?.id;
+    if (
+      targetId === 'global-domain-select'
+      || targetId === 'global-industry-select'
+      || targetId === 'global-project-select'
+    ) {
+      updateInfoDisplay();
+    }
+  });
 
   // Event: Create content
   createBtn.onclick = async () => {
@@ -13162,7 +10705,8 @@ function updateDescriptionPreview() {
 }
 
 // Init UI
-// ✅ NOTE: UI khởi tạo tập trung qua initAllUI() ở cuối file để tránh tạo trùng controls
+ensureUI();
+ensureServiceContentUI();
 
 // ============================================================
 // FACEBOOK AUTO POST - Đăng bài tự động lên Facebook Fanpage
@@ -13234,16 +10778,6 @@ function facebookFetch(url, options = {}) {
     throw new Error('fetch không khả dụng');
   }
   return fetchFn(url, options);
-}
-
-async function facebookBackendPost(path, payload = {}) {
-  const res = await fetch(`/api${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload || {})
-  });
-  const data = await res.json();
-  return data;
 }
 
 // Flag để tracking FB SDK loaded
@@ -13545,16 +11079,6 @@ function setFacebookNextAllowedPostAt() {
   return next;
 }
 
-function setFacebookNextAllowedPostAtWithConfig(minMs, maxMs) {
-  const min = Math.max(0, Number(minMs) || 0);
-  const max = Math.max(min, Number(maxMs) || min);
-  const now = Date.now();
-  const jitter = Math.floor(Math.random() * (max - min + 1)) + min;
-  const next = now + jitter;
-  localStorage.setItem('facebook_next_post_at', String(next));
-  return next;
-}
-
 function formatDurationMs(ms) {
   const totalSeconds = Math.ceil(ms / 1000);
   const minutes = Math.floor(totalSeconds / 60);
@@ -13675,41 +11199,6 @@ function recordFacebookPost(content = "") {
  * @param {string} pageAccessToken - Token để post (page-specific)
  * @param {string} userAccessToken - User token (để có thể re-exchange sau 60 ngày)
  */
-async function saveFanpageTokenToServer(configId, fanpageId, fanpageName, pageAccessToken, userAccessToken) {
-  try {
-    const allConfigs = loadDataOptionUser();
-    const config = allConfigs.find(c => c.id === configId);
-    
-    if (!config) {
-      console.warn(`⚠️ [SaveFBToken] Config ${configId} không tìm thấy`);
-      return false;
-    }
-    
-    // Update token trong config
-    config.fanpage_id = fanpageId;
-    config.fanpage_name = fanpageName;
-    config.fanpage_token = pageAccessToken;
-    config.fanpage_token_user_token = userAccessToken; // Lưu user token để re-exchange sau
-    config.fanpage_token_timestamp = Date.now();
-    config.fanpage_token_expires_at = Date.now() + (60 * 24 * 60 * 60 * 1000); // 60 ngày
-    
-    // Lưu lên server
-    return new Promise((resolve) => {
-      saveDataOptionUser(allConfigs, (success, error) => {
-        if (success) {
-          console.log(`✅ [SaveFBToken] Đã lưu fanpage token lên server cho config ${configId}`);
-          resolve(true);
-        } else {
-          console.error(`❌ [SaveFBToken] Lỗi lưu:', ${error}`);
-          resolve(false);
-        }
-      });
-    });
-  } catch (e) {
-    console.error('❌ [SaveFBToken] Lỗi:', e);
-    return false;
-  }
-}
 
 /**
  * ✅ Cập nhật token cho TẤT CẢ config có fanpage khi nhập token mới
@@ -13719,53 +11208,35 @@ async function saveFanpageTokenToServer(configId, fanpageId, fanpageName, pageAc
  * @param {string} fanpageName - Fanpage name
  * @returns {Promise<boolean>} - True nếu lưu lên server thành công
  */
-async function updateAllConfigsWithNewFanpageToken(newPageAccessToken, userAccessToken, fanpageId, fanpageName, editingConfigId = null) {
+async function updateAllConfigsWithNewFanpageToken(newPageAccessToken, userAccessToken, fanpageId, fanpageName) {
   return new Promise((resolve, reject) => {
     try {
-      console.log('🚀 [UpdateConfig] BẮT ĐẦU cập nhật token...');
-      console.log('   📌 editingConfigId:', editingConfigId || '(ALL configs)');
+      console.log('🚀 [UpdateAllConfigs] BẮT ĐẦU cập nhật token...');
       console.log('   📌 fanpageId:', fanpageId);
       console.log('   📌 fanpageName:', fanpageName);
       console.log('   📌 Token preview:', newPageAccessToken.substring(0, 20) + '...');
       
       const allConfigs = loadDataOptionUser();
-      console.log('📦 [UpdateConfig] Đã load', allConfigs.length, 'configs');
-
-      const notifySuccess = (msg) => {
-        if (typeof showFacebookMessage === 'function') {
-          showFacebookMessage(msg, 'success');
-          return;
-        }
-        console.log(msg);
-      };
-      const notifyError = (msg) => {
-        if (typeof showFacebookMessage === 'function') {
-          showFacebookMessage(msg, 'error');
-          return;
-        }
-        console.error(msg);
-      };
-
+      console.log('📦 [UpdateAllConfigs] Đã load', allConfigs.length, 'configs');
+      
       let updated = false;
       let updatedCount = 0;
       const updatedConfigIds = [];
       
-      // ✅ FIX: Chỉ cập nhật config ĐANG EDIT (hoặc ALL nếu không có editingConfigId)
+      // Cập nhật tất cả config có fanpage
       for (const config of allConfigs) {
         // 🔍 DEBUG: Check điều kiện cho từng config
         const has_config_for_zalo = config.config_for_zalo;
         const has_zalo_fanpages = !!config.zalo_fanpages;
         const is_array = Array.isArray(config.zalo_fanpages);
-        const is_editing_config = !editingConfigId || config.id === editingConfigId;
         console.log(`   🔍 Config ${config.id}:`);
         console.log(`      - config_for_zalo: ${has_config_for_zalo}`);
         console.log(`      - zalo_fanpages exists: ${has_zalo_fanpages}`);
         console.log(`      - is array: ${is_array}`);
         console.log(`      - fanpage_token exists: ${!!config.fanpage_token}`);
-        console.log(`      - is editing config: ${is_editing_config}`);
         
-        // ✅ CRITICAL FIX: CHỈ update config đang edit (hoặc ALL nếu không truyền editingConfigId)
-        if (config.config_for_zalo && is_editing_config) {
+        // ✅ FIX: Sửa điều kiện check - chỉ check config_for_zalo
+        if (config.config_for_zalo) {
           // Nếu config này có fanpage, update token
           config.fanpage_id = fanpageId;
           config.fanpage_name = fanpageName;
@@ -13773,50 +11244,6 @@ async function updateAllConfigsWithNewFanpageToken(newPageAccessToken, userAcces
           config.fanpage_token_user_token = userAccessToken;
           config.fanpage_token_timestamp = Date.now();
           config.fanpage_token_expires_at = Date.now() + (60 * 24 * 60 * 60 * 1000); // 60 ngày
-          
-          // ✅ CRITICAL FIX: Tạo/update zalo_fanpages array để processContent có thể đăng lên ALL fanpages
-          // Nếu chưa có zalo_fanpages hoặc không phải array, TẠO MỚI từ fanpage_ids
-          if (!Array.isArray(config.zalo_fanpages)) {
-            if (Array.isArray(config.fanpage_ids) && config.fanpage_ids.length > 0) {
-              // Migrate từ fanpage_ids/names/tokens arrays
-              config.zalo_fanpages = config.fanpage_ids.map((id, idx) => ({
-                id,
-                name: config.fanpage_names?.[idx] || fanpageName,
-                access_token: config.fanpage_tokens?.[idx] || newPageAccessToken
-              }));
-              console.log(`   🔄 Migrated zalo_fanpages from fanpage_ids: ${config.zalo_fanpages.length} fanpages`);
-            } else {
-              // Fallback: tạo array với 1 fanpage từ config hiện tại
-              config.zalo_fanpages = [{
-                id: fanpageId,
-                name: fanpageName,
-                access_token: newPageAccessToken
-              }];
-              console.log(`   ✨ Created zalo_fanpages with 1 fanpage`);
-            }
-          } else {
-            // Đã có zalo_fanpages array - UPDATE TOKEN cho tất cả fanpage có cùng ID
-            let tokenUpdated = false;
-            config.zalo_fanpages.forEach(fp => {
-              if (fp.id === fanpageId) {
-                fp.access_token = newPageAccessToken;
-                fp.name = fanpageName;
-                tokenUpdated = true;
-              }
-            });
-            if (tokenUpdated) {
-              console.log(`   🔄 Updated token in zalo_fanpages for fanpage ${fanpageId}`);
-            } else {
-              // Fanpage ID không khớp - thêm mới vào array
-              config.zalo_fanpages.push({
-                id: fanpageId,
-                name: fanpageName,
-                access_token: newPageAccessToken
-              });
-              console.log(`   ➕ Added new fanpage to zalo_fanpages array`);
-            }
-          }
-          
           updated = true;
           updatedCount++;
           updatedConfigIds.push(config.id);
@@ -13836,44 +11263,25 @@ async function updateAllConfigsWithNewFanpageToken(newPageAccessToken, userAcces
       console.log(`💾 [UpdateAllConfigs] BƯỚC 1: Bắt đầu lưu ${updatedCount} config lên server...`);
       console.log(`   window.csmUserData available?`, !!window.csmUserData);
       console.log(`   window.csmUserData.set available?`, typeof window.csmUserData?.set);
-      console.log(`   📊 Kích thước data: ~${JSON.stringify(allConfigs).length} bytes`);
       
-      // ⏱️ TIMEOUT: Tăng lên 60s cho data lớn hoặc mạng chậm
-      // Server cần thời gian xử lý data khoảng 18KB+
-      const SAVE_TIMEOUT_MS = 60000; // ✅ 60s thay vì 15s
-      let callbackInvoked = false;
+      // ⏱️ TIMEOUT: Chờ 30 giây cho backend (có thể network slow, server busy)
+      // Việc làm: Nếu callback không return trong 30 giây, force reject
       const timeoutId = setTimeout(() => {
-        if (!callbackInvoked) {
-          console.error(`❌ [UpdateAllConfigs] TIMEOUT: Callback chưa được gọi sau ${SAVE_TIMEOUT_MS / 1000}s`);
-          console.error(`   💡 Có thể do: mạng chậm, data quá lớn (${JSON.stringify(allConfigs).length} bytes), hoặc server không phản hồi`);
-          reject(new Error(`Lưu lên server timeout sau ${SAVE_TIMEOUT_MS / 1000}s - vui lòng thử lại hoặc kiểm tra kết nối mạng`));
-        }
-      }, SAVE_TIMEOUT_MS);
-      
-      console.log(`⏰ [UpdateAllConfigs] Timeout được set: ${SAVE_TIMEOUT_MS / 1000}s (chờ API callback thực tế, không phải đợi timeout)`);
-      
-      // ✅ Progress indicator mỗi 5 giây (thay vì 2s để giảm spam log)
-      const progressInterval = setInterval(() => {
-        if (!callbackInvoked) {
-          const elapsed = Math.floor((Date.now() - Date.now()) / 1000);
-          console.log(`⏳ [UpdateAllConfigs] Đang chờ API response... (data: ${JSON.stringify(allConfigs).length} bytes)`);
-        }
-      }, 5000);
+        console.error('❌ [UpdateAllConfigs] TIMEOUT: Callback chưa được gọi sau 30s');
+        reject(new Error('Lưu lên server timeout - có thể backend đang xử lý chậm hoặc mạng bị gián đoạn'));
+      }, 30000); // Tăng từ 10s lên 30s
       
       saveDataOptionUser(allConfigs, (success, error) => {
-        callbackInvoked = true; // ✅ Đánh dấu callback đã được gọi
         clearTimeout(timeoutId); // ✅ Clear timeout ngay khi callback được gọi
-        clearInterval(progressInterval); // ✅ Clear progress indicator
-        console.log(`📞 [UpdateAllConfigs] ✅ API callback được gọi: success=${success}, error=${error || 'none'}`);
         
         if (success) {
           console.log(`✅ [UpdateAllConfigs] BƯỚC 2: Lưu THÀNH CÔNG lên server!`);
           console.log(`   ✅ Đã cập nhật các config: ${updatedConfigIds.join(', ')}`);
-          notifySuccess(`✅ Đã cập nhật token cho ${updatedCount} cấu hình và lưu lên server`);
+          thongbao(`✅ Đã cập nhật token cho ${updatedCount} config và lưu lên server`);
           resolve(true);
         } else {
           console.error(`❌ [UpdateAllConfigs] BƯỚC 2: Lỗi lưu lên server: ${error}`);
-          notifyError(`❌ Không thể lưu token lên server: ${error}`);
+          canhbao(`❌ Không thể lưu token lên server: ${error}`);
           resolve(false); // Trả false để báo lỗi
         }
       });
@@ -13881,145 +11289,8 @@ async function updateAllConfigsWithNewFanpageToken(newPageAccessToken, userAcces
     } catch (e) {
       console.error('❌ [UpdateAllConfigs] Exception:', e.message);
       console.error('   Stack:', e.stack);
-      if (typeof showFacebookMessage === 'function') {
-        showFacebookMessage(`❌ Lỗi cập nhật config: ${e.message}`, 'error');
-      }
+      canhbao(`❌ Lỗi cập nhật config: ${e.message}`);
       reject(e);
-    }
-  });
-}
-
-async function syncAllConfigsFanpageTokensFromPages(pages = [], userAccessToken = "") {
-  return new Promise((resolve) => {
-    try {
-      const pageMap = new Map((Array.isArray(pages) ? pages : []).map(p => [String(p?.id || ""), p]));
-      if (!pageMap.size) {
-        console.warn('⚠️ [SyncAllConfigs] Không có pages để đồng bộ token');
-        resolve(false);
-        return;
-      }
-
-      console.log('🌐 [SyncAllConfigs] API returned pages:', Array.from(pageMap.keys()));
-      
-      const allConfigs = loadDataOptionUser();
-      let updatedConfigs = 0;
-      let updatedFanpages = 0;
-
-      for (const config of allConfigs) {
-        if (!config?.config_for_zalo) continue;
-
-        let touched = false;
-        let matchedCount = 0;
-        let unmatchedFanpages = [];
-
-        if (Array.isArray(config.zalo_fanpages) && config.zalo_fanpages.length > 0) {
-          config.zalo_fanpages = config.zalo_fanpages.map(fp => {
-            const match = pageMap.get(String(fp?.id || ""));
-            if (match?.access_token) {
-              touched = true;
-              updatedFanpages++;
-              matchedCount++;
-              return {
-                ...fp,
-                name: match.name || fp.name,
-                access_token: match.access_token
-              };
-            }
-            unmatchedFanpages.push({id: fp?.id, name: fp?.name, oldToken: fp?.access_token?.substring(0, 20) + '...'});
-            return fp;
-          });
-        } else if (Array.isArray(config.fanpage_ids) && config.fanpage_ids.length > 0) {
-          config.zalo_fanpages = config.fanpage_ids.map((id, idx) => {
-            const match = pageMap.get(String(id || ""));
-            if (match?.access_token) {
-              touched = true;
-              updatedFanpages++;
-              matchedCount++;
-              return {
-                id,
-                name: match.name || config.fanpage_names?.[idx] || 'Unknown',
-                access_token: match.access_token
-              };
-            }
-            unmatchedFanpages.push({id, name: config.fanpage_names?.[idx], oldToken: config.fanpage_tokens?.[idx]?.substring(0, 20) + '...'});
-            return {
-              id,
-              name: config.fanpage_names?.[idx] || 'Unknown',
-              access_token: config.fanpage_tokens?.[idx] || ''
-            };
-          });
-        }
-
-        if (touched) {
-          const first = config.zalo_fanpages?.[0] || null;
-          config.fanpage_ids = (config.zalo_fanpages || []).map(fp => fp.id);
-          config.fanpage_names = (config.zalo_fanpages || []).map(fp => fp.name);
-          config.fanpage_tokens = (config.zalo_fanpages || []).map(fp => fp.access_token || '');
-          config.fanpage_id = first?.id || config.fanpage_id;
-          config.fanpage_name = config.fanpage_names.join(', ') || config.fanpage_name;
-          config.fanpage_token = first?.access_token || config.fanpage_token;
-          config.fanpage_token_user_token = userAccessToken || config.fanpage_token_user_token;
-          config.fanpage_token_timestamp = Date.now();
-          config.fanpage_token_expires_at = Date.now() + (60 * 24 * 60 * 60 * 1000);
-          updatedConfigs++;
-          console.log(`✅ [SyncAllConfigs] Updated config ${config.id}:`);
-          console.log(`   - Total fanpages: ${config.zalo_fanpages.length}`);
-          console.log(`   - Updated: ${matchedCount}`);
-          console.log(`   - Kept old token: ${unmatchedFanpages.length}`);
-          if (unmatchedFanpages.length > 0) {
-            console.warn(`   ⚠️ UNMATCHED fanpages (token NOT updated - NOT in API):`);
-            unmatchedFanpages.forEach(fp => {
-              console.warn(`      - ${fp.id} (${fp.name}): token still ${fp.oldToken}`);
-            });
-          }
-        }
-      }
-
-      if (!updatedConfigs) {
-        console.warn('⚠️ [SyncAllConfigs] Không có config nào khớp fanpage để update');
-        resolve(false);
-        return;
-      }
-
-      console.log(`\n📊 [SyncAllConfigs] SUMMARY BEFORE SAVE:`);
-      console.log(`   - Configs updated: ${updatedConfigs}/${allConfigs.length}`);
-      console.log(`   - Fanpages with new token: ${updatedFanpages}`);
-      
-      saveDataOptionUser(allConfigs, (success, error) => {
-        if (success) {
-          console.log(`✅ [SyncAllConfigs] SERVER SAVE SUCCESS!`);
-          console.log(`   - ${updatedConfigs} configs saved`);
-          console.log(`   - ${updatedFanpages} fanpages updated with new token`);
-          
-          // 🔍 VERIFY after save
-          setTimeout(() => {
-            const reloaded = loadDataOptionUser();
-            console.log(`\n🔍 [SyncAllConfigs] VERIFICATION AFTER SAVE:`);
-            reloaded.forEach((cfg, i) => {
-              const totalFanpages = (cfg.zalo_fanpages || []).length;
-              const newTokenCount = (cfg.fanpage_tokens || []).filter(t => t && t.startsWith('EAAQ')).length;
-              console.log(`   [${i}] ${cfg.id}: ${totalFanpages} fanpages, ${newTokenCount} with new 60-day tokens`);
-            });
-          }, 100);
-          
-          if (typeof showFacebookMessage === 'function') {
-            showFacebookMessage(`✅ Đã đồng bộ token cho ${updatedFanpages} fanpage trong ${updatedConfigs} cấu hình.`, 'success');
-          }
-          resolve(true);
-        } else {
-          console.error(`❌ [SyncAllConfigs] Save failed: ${error}`);
-          if (typeof showFacebookMessage === 'function') {
-            showFacebookMessage(`❌ Không thể lưu đồng bộ token: ${error}`, 'error');
-          }
-          resolve(false);
-        }
-      });
-    } catch (e) {
-      console.error('❌ [SyncAllConfigs] Exception:', e);
-      if (typeof showFacebookMessage === 'function') {
-        showFacebookMessage(`❌ Lỗi đồng bộ token: ${e.message}`, 'error');
-      }
-      resolve(false);
     }
   });
 }
@@ -14117,41 +11388,28 @@ Link: https://developers.facebook.com/tools/explorer/`;
     
     // ✅ Check expiry từ config - Page token 60 ngày
     const config = loadDataOptionUser().find(c => c.fanpage_token === pageAccessToken);
-    if (config?.fanpage_token_timestamp) {
-      // ✅ CRITICAL FIX: Calculate from token update timestamp, not absolute expires_at
-      // Reason: expires_at will drift as time passes, always showing less than 60 days
-      const tokenUpdateTime = config.fanpage_token_timestamp;
-      const now = Date.now();
-      const timeSinceUpdate = now - tokenUpdateTime;
-      const msPerDay = 24 * 60 * 60 * 1000;
-      const daysUsed = Math.round(timeSinceUpdate / msPerDay);
-      const daysRemaining = 60 - daysUsed;
+    if (config?.fanpage_token_expires_at) {
+      const willExpireIn = Math.floor((config.fanpage_token_expires_at - Date.now()) / (24 * 60 * 60 * 1000));
       
-      console.log(`🔍 [ValidateToken] Token expiry calc (from update timestamp):`);
-      console.log(`   - fanpage_token_timestamp: ${tokenUpdateTime}`);
-      console.log(`   - Date.now(): ${now}`);
-      console.log(`   - Time since update: ${timeSinceUpdate}ms = ${daysUsed} days`);
-      console.log(`   - Days remaining: 60 - ${daysUsed} = ${daysRemaining}`);
-      
-      if (daysRemaining <= 0) {
-        console.warn(`⚠️ [ValidateToken] Page Token expired ${Math.abs(daysRemaining)} days ago`);
-        return { ok: false, message: `Page Token đã hết hạn ${Math.abs(daysRemaining)} ngày trước` };
+      if (willExpireIn < 0) {
+        console.warn(`⚠️ [ValidateToken] Page Token expired ${Math.abs(willExpireIn)} days ago`);
+        return { ok: false, message: `Page Token đã hết hạn ${Math.abs(willExpireIn)} ngày trước` };
       }
       
-      if (daysRemaining < 7) {
-        console.warn(`⚠️ [ValidateToken] Page Token expiring in ${daysRemaining} days`);
+      if (willExpireIn < 7) {
+        console.warn(`⚠️ [ValidateToken] Page Token expiring in ${willExpireIn} days`);
         return { 
           ok: true, 
-          message: `⚠️ Page Token sẽ hết hạn trong ${daysRemaining} ngày`, 
-          willExpireIn: daysRemaining
+          message: `⚠️ Page Token sẽ hết hạn trong ${willExpireIn} ngày`, 
+          willExpireIn 
         };
       }
       
-      console.log(`✅ [ValidateToken] Page Token valid for ${daysRemaining} more days`);
+      console.log(`✅ [ValidateToken] Page Token valid for ${willExpireIn} more days`);
       return { 
         ok: true, 
-        message: `✅ Page Token còn hạn ${daysRemaining} ngày`,
-        willExpireIn: daysRemaining
+        message: `✅ Page Token còn hạn ${willExpireIn} ngày`,
+        willExpireIn 
       };
     }
     
@@ -14241,67 +11499,6 @@ async function loadAndValidateFanpageTokens() {
   }
 }
 
-function loadFacebookState() {
-  try {
-    // 1️⃣ TRY: Lấy từ database trước (nếu khả dụng)
-    if (window.csmApi?.getTableData && typeof loadZaloGroupsAndFbTokenFromDB === 'function') {
-      loadZaloGroupsAndFbTokenFromDB({
-        domain: 'h-holding.vn',
-        service_type: 'bat-dong-san'
-      }).then(data => {
-        if (data?.fbToken) {
-          console.log('✅ [LoadFacebookState] Tải token từ database');
-          // Nếu có token trong DB, update state
-          if (data.fbToken && !facebookState.userAccessToken) {
-            facebookState.userAccessToken = data.fbToken;
-            console.log('📝 [LoadFacebookState] Cập nhật userAccessToken từ DB');
-          }
-        }
-      }).catch(err => {
-        console.warn('⚠️ [LoadFacebookState] Lỗi khi load từ DB, báygiờ dùng localStorage:', err?.message || err);
-      });
-    }
-    
-    // 2️⃣ FALLBACK: Lấy từ localStorage (luôn chạy để load UI fast)
-    const saved = localStorage.getItem('facebook_post_state');
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      facebookState = { ...facebookState, ...parsed };
-      if (!Array.isArray(facebookState.selectedPageIds)) {
-        facebookState.selectedPageIds = facebookState.selectedPageId ? [facebookState.selectedPageId] : [];
-      }
-      console.log('📝 [LoadFacebookState] Tải từ localStorage');
-      
-      // 3️⃣ IMPORTANT: Mark token as needing validation
-      // Khi load từ localStorage, token cần được validate lại trước sử dụng
-      if (facebookState.selectedPageToken || facebookState.userAccessToken) {
-        facebookState._needsValidation = true;
-        console.log('⚠️ [LoadFacebookState] Token cần được validate trước sử dụng');
-      }
-    }
-    
-    // 4️⃣ LOAD FROM SERVER: Lấy fanpage token từ server (dataOptionUser)
-    // Điều này cho phép load token đã lưu ở nhiều device
-    try {
-      const allConfigs = loadDataOptionUser();
-      // Tìm config đầu tiên có fanpage token
-      const configWithToken = allConfigs.find(c => c.fanpage_token);
-      if (configWithToken) {
-        console.log(`📝 [LoadFacebookState] Tải fanpage token từ server config: ${configWithToken.id}`);
-        facebookState.selectedPageId = configWithToken.fanpage_id;
-        facebookState.selectedPageName = configWithToken.fanpage_name;
-        facebookState.selectedPageToken = configWithToken.fanpage_token;
-        facebookState.userAccessToken = configWithToken.fanpage_token_user_token || configWithToken.fanpage_token;
-        facebookState._needsValidation = true; // Mark để validate (có thể hết hạn)
-      }
-    } catch (e) {
-      console.warn('⚠️ [LoadFacebookState] Lỗi load từ server:', e);
-    }
-  } catch (e) {
-    console.warn('⚠️ [LoadFacebookState] Không thể load Facebook state:', e);
-  }
-}
-
 function saveFacebookState() {
   try {
     const toSave = {
@@ -14359,14 +11556,6 @@ function saveFacebookAutoSettings(settings) {
   } catch (e) {
     console.warn('Không thể save facebook_auto_settings:', e);
   }
-}
-
-function getFacebookAutoIntervalMs() {
-  const settings = loadFacebookAutoSettings();
-  const minMs = settings.minIntervalMin * 60 * 1000;
-  const maxMs = settings.maxIntervalMin * 60 * 1000;
-  const jitter = Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs;
-  return { minMs, maxMs, jitterMs: jitter };
 }
 
 function extractLinkFromMessage(item = {}) {
@@ -14450,34 +11639,6 @@ function stopFacebookAutoPosting(message = '⏹️ Đã dừng auto đăng.') {
   showFacebookMessage(message, 'info');
 }
 
-/**
- * ✅ CẢI TIẾN: Format post với CTA, URL, Domain, Hashtags đa dạng (6 formats)
- * Tương tự luồng auto-from-detail nhưng dùng cho batch input
- */
-function formatAutoPostWithEnhancedContent(aiContent, hashtags, ctaText, postUrl, domain, index) {
-  const normalizedTags = (Array.isArray(hashtags) ? hashtags : [])
-    .map(tag => String(tag || '').trim().replace(/^#+/, ''))
-    .filter(Boolean);
-  const renderHashtags = (start, end) => normalizedTags
-    .slice(start, end)
-    .map(tag => `#${tag}`)
-    .join(' ');
-  const hashtagStr = renderHashtags(0, 5);
-  
-  // 6 format tương tự luồng tự động từ detail
-  const formats = [
-    () => [aiContent, '', `👉 ${ctaText}: ${postUrl}`, `📌 ${hashtagStr}`, `📍 ${domain}`],
-    () => [aiContent, '', ctaText, postUrl, `📌 ${hashtagStr}`],
-    () => [aiContent, `📌 ${renderHashtags(0, 2)}`, '', ctaText, postUrl, `📌 ${renderHashtags(2, 5)}`],
-    () => [aiContent, '', `💬 ${ctaText}`, `🔗 ${postUrl}`, `📌 ${hashtagStr}`],
-    () => [aiContent, '', `👉 ${postUrl}`, `📌 ${renderHashtags(0, 6)}`],
-    () => [aiContent, '', `↪️ ${ctaText}`, postUrl, '', `📌 ${hashtagStr}`]
-  ];
-  
-  const randomFormat = formats[index % formats.length];
-  return randomFormat().filter(line => line !== '').join('\n');
-}
-
 async function buildFacebookAutoQueueFromInput() {
   // Disable buttons khi bắt đầu
   setFacebookButtonsState(true);
@@ -14503,8 +11664,6 @@ async function buildFacebookAutoQueueFromInput() {
       throw new Error('Không tìm thấy AI engine');
     }
 
-    const ctx = resolveContext();
-    const domain = ctx.domain ? ctx.domain.split(',')[0].trim() : 'domain.vn';
     const delayMs = FACEBOOK_POST_COOLDOWN_MIN_MS; // 5 phút delay giữa mỗi bài
     const delaySecs = Math.round(delayMs / 1000);
     
@@ -14514,9 +11673,7 @@ async function buildFacebookAutoQueueFromInput() {
       `🚀 Bắt đầu tạo và đăng ${items.length} bài lên ${selectedPages.length} fanpage!\n\n` +
       `⏱️ Quy trình:\n` +
       `• AI tạo nội dung (~30s/bài)\n` +
-      `• Thêm CTA, URL, Domain, 8 hashtags\n` +
-      `• 6 format đa dạng\n` +
-      `• Đăng lên fanpages\n` +
+      `• Đăng lên Facebook ngay\n` +
       `• Chờ ${delaySecs}s trước bài tiếp\n\n` +
       `📊 Dự kiến: ~${estimatedMinutes} phút mỗi fanpage`,
       'info'
@@ -14524,118 +11681,98 @@ async function buildFacebookAutoQueueFromInput() {
     
     let successCount = 0;
     let failCount = 0;
+    const ctx = resolveContext();
 
-    for (let pIndex = 0; pIndex < selectedPages.length; pIndex++) {
-      const page = selectedPages[pIndex];
-      showFacebookMessage(`📄 Đang xử lý fanpage: ${page.name} (${pIndex + 1}/${selectedPages.length})`, 'info');
+  for (let pIndex = 0; pIndex < selectedPages.length; pIndex++) {
+    const page = selectedPages[pIndex];
+    showFacebookMessage(`📄 Đang xử lý fanpage: ${page.name} (${pIndex + 1}/${selectedPages.length})`, 'info');
 
-      for (let i = 0; i < items.length; i++) {
-        if (facebookAutoAbort) throw new Error('Đã dừng auto.');
-        
-        try {
-          const item = items[i];
-          const productInfo = item.content || '';
-          if (!productInfo.trim()) {
-            failCount++;
-            continue;
-          }
-          
-          // BƯỚC 1: Gọi AI tạo nội dung
-          showFacebookMessage(`🤖 [${page.name}] [${i + 1}/${items.length}] Đang gọi AI tạo nội dung...`, 'info');
-          const prompt = await createFacebookPostPromptWithCreative(industry, productInfo, customInstructions);
-          const aiResponse = await window.csmAI.generateSeoContentWithPrompt(prompt);
-          const parsed = parseFacebookAIResponse(aiResponse);
-          
-          // ✅ CẢI TIẾN: Lấy 8 trending hashtags + AI hashtags
-          const trendingHashtags = getFacebookTrendingHashtags(industry, 8);
-          let allHashtags = [...new Set([...parsed.hashtags, ...trendingHashtags])];
-          if (allHashtags.length < 5) {
-            allHashtags = [...new Set([...allHashtags, ...trendingHashtags])];
-          }
-          allHashtags = allHashtags.slice(0, 8);
-          
-          // ✅ CẢI TIẾN: Lấy CTA từ AI hoặc mặc định
-          const ctaText = parsed.cta || 'Xem chi tiết';
-          
-          // ✅ CẢI TIẾN: Lấy URL từ item hoặc domain
-          const postUrl = item.link || `https://${domain}`;
-          
-          // ✅ CẢI TIẾN: Format đa dạng (6 formats) thay vì cứng nhắc
-          const finalPost = formatAutoPostWithEnhancedContent(
-            parsed.post_content || aiResponse,
-            allHashtags,
-            ctaText,
-            postUrl,
-            domain,
-            i  // Dùng index để rotate formats
-          );
-          
-          // BƯỚC 2: Upload ảnh (nếu có)
-          const images = await prepareFacebookImages(ctx, item.images || []);
-          
-          // BƯỚC 3: Đăng lên Facebook ngay
-          showFacebookMessage(`📤 [${page.name}] [${i + 1}/${items.length}] Đang đăng lên Facebook...`, 'info');
-          const result = await postToFacebookPageWithImages(
-            page.id,
-            page.access_token,
-            finalPost,
-            images,
-            item.link || null,
-            seft
-          );
-          
-          if (result?.success) {
-            successCount++;
-            recordFacebookPost(finalPost);
-            showFacebookMessage(`✅ [${page.name}] [${i + 1}/${items.length}] Đã đăng thành công! (${finalPost.length} chars, ${allHashtags.length} hashtags)`, 'success');
-          } else {
-            throw new Error('Facebook API trả về lỗi');
-          }
-          
-        } catch (error) {
+    for (let i = 0; i < items.length; i++) {
+      if (facebookAutoAbort) throw new Error('Đã dừng auto.');
+      
+      try {
+        const item = items[i];
+        const productInfo = item.content || '';
+        if (!productInfo.trim()) {
           failCount++;
-          console.error(`❌ Lỗi bài ${i + 1} (${page.name}):`, error);
-          showFacebookMessage(`❌ [${page.name}] [${i + 1}/${items.length}] Lỗi: ${error.message}`, 'error');
+          continue;
         }
         
-        // BƯỚC 4: Delay trước bài tiếp (trừ bài cuối)
-        if (i < items.length - 1) {
-          const remaining = items.length - i - 1;
-          showFacebookMessage(
-            `⏳ [${page.name}] Hoàn tát bài ${i + 1}! Chờ ${delaySecs}s trước bài tiếp (còn ${remaining} bài)...`,
-            'info'
-          );
-          
-          // Hiển thị countdown
-          const countdownInterval = Math.max(1, Math.floor(delaySecs / 10));
-          for (let wait = delaySecs; wait > 0; wait -= countdownInterval) {
-            if (wait > countdownInterval) {
-              await new Promise(r => setTimeout(r, countdownInterval * 1000));
-              showFacebookMessage(`⏳ [${page.name}] Còn ${Math.max(0, wait - countdownInterval)}s...`, 'info');
-            } else {
-              await new Promise(r => setTimeout(r, wait * 1000));
-            }
+        // BƯỚC 1: Gọi AI tạo nội dung
+        showFacebookMessage(`🤖 [${page.name}] [${i + 1}/${items.length}] Đang gọi AI tạo nội dung...`, 'info');
+        const prompt = await createFacebookPostPromptWithCreative(industry, productInfo, customInstructions);
+        const aiResponse = await window.csmAI.generateSeoContentWithPrompt(prompt);
+        const parsed = parseFacebookAIResponse(aiResponse);
+        
+        const trendingHashtags = getFacebookTrendingHashtags(industry, 8);
+        let allHashtags = [...new Set([...parsed.hashtags, ...trendingHashtags])];
+        if (allHashtags.length < 5) {
+          allHashtags = [...new Set([...allHashtags, ...trendingHashtags])];
+        }
+        allHashtags = allHashtags.slice(0, 8);
+        const finalPost = formatFacebookPostContent(parsed.post_content, allHashtags);
+        
+        // BƯỚC 2: Upload ảnh (nếu có)
+        const images = await prepareFacebookImages(ctx, item.images || []);
+        
+        // BƯỚC 3: Đăng lên Facebook ngay
+        showFacebookMessage(`📤 [${page.name}] [${i + 1}/${items.length}] Đang đăng lên Facebook...`, 'info');
+        const result = await postToFacebookPageWithImages(
+          page.id,
+          page.access_token,
+          finalPost,
+          images,
+          item.link || null,
+          seft
+        );
+        
+        if (result?.success) {
+          successCount++;
+          recordFacebookPost(finalPost);
+          showFacebookMessage(`✅ [${page.name}] [${i + 1}/${items.length}] Đã đăng thành công!`, 'success');
+        } else {
+          throw new Error('Facebook API trả về lỗi');
+        }
+        
+      } catch (error) {
+        failCount++;
+        console.error(`❌ Lỗi bài ${i + 1} (${page.name}):`, error);
+        showFacebookMessage(`❌ [${page.name}] [${i + 1}/${items.length}] Lỗi: ${error.message}`, 'error');
+      }
+      
+      // BƯỚC 4: Delay trước bài tiếp (trừ bài cuối)
+      if (i < items.length - 1) {
+        const remaining = items.length - i - 1;
+        showFacebookMessage(
+          `⏳ [${page.name}] Hoàn tất bài ${i + 1}! Chờ ${delaySecs}s trước bài tiếp (còn ${remaining} bài)...`,
+          'info'
+        );
+        
+        // Hiển thị countdown
+        const countdownInterval = Math.max(1, Math.floor(delaySecs / 10));
+        for (let wait = delaySecs; wait > 0; wait -= countdownInterval) {
+          if (wait > countdownInterval) {
+            await new Promise(r => setTimeout(r, countdownInterval * 1000));
+            showFacebookMessage(`⏳ [${page.name}] Còn ${Math.max(0, wait - countdownInterval)}s...`, 'info');
+          } else {
+            await new Promise(r => setTimeout(r, wait * 1000));
           }
         }
       }
     }
+  }
 
-    // Kết quả cuối cùng
-    showFacebookMessage(
-      `\n🎉 HOÀN TẤT!\n\n` +
-      `✅ Thành công: ${successCount} bài\n` +
-      `❌ Lỗi: ${failCount} bài\n` +
-      `📊 Tổng: ${items.length} bài\n` +
-      `🎨 Mỗi bài có:\n` +
-      `   • AI content riêng\n` +
-      `   • 8 trending hashtags\n` +
-      `   • CTA + URL + Domain\n` +
-      `   • 6 format đa dạng`,
-      successCount > 0 ? 'success' : 'error'
-    );
-    
-    return successCount;
-    
+  // Kết quả cuối cùng
+  showFacebookMessage(
+    `\n🎉 HOÀN TẤT!\n\n` +
+    `✅ Thành công: ${successCount} bài\n` +
+    `❌ Lỗi: ${failCount} bài\n` +
+    `📊 Tổng: ${items.length} bài`,
+    successCount > 0 ? 'success' : 'error'
+  );
+  
+  return successCount;
+  
   } catch (error) {
     // Re-enable buttons nếu có lỗi
     setFacebookButtonsState(false);
@@ -14685,111 +11822,6 @@ async function startFacebookAutoPosting() {
       btnAutoStart.textContent = '▶️ Bắt đầu auto';
     }
   }
-}
-
-// ===== FACEBOOK SDK INITIALIZATION =====
-
-/**
- * Load Facebook JavaScript SDK
- */
-function loadFacebookSDK() {
-  return new Promise((resolve, reject) => {
-    if (fbSDKLoaded) {
-      resolve();
-      return;
-    }
-    
-    // Check if SDK already exists
-    if (window.FB) {
-      fbSDKLoaded = true;
-      resolve();
-      return;
-    }
-    
-    window.fbAsyncInit = function() {
-      FB.init({
-        appId: FACEBOOK_CONFIG.APP_ID,
-        cookie: true,
-        xfbml: true,
-        version: FACEBOOK_CONFIG.GRAPH_API_VERSION
-      });
-      
-      fbSDKLoaded = true;
-      console.log('✅ Facebook SDK initialized');
-      resolve();
-    };
-    
-    // Load SDK script
-    (function(d, s, id) {
-      var js, fjs = d.getElementsByTagName(s)[0];
-      if (d.getElementById(id)) { return; }
-      js = d.createElement(s); js.id = id;
-      js.src = "https://connect.facebook.net/vi_VN/sdk.js";
-      js.onerror = () => reject(new Error('Failed to load Facebook SDK'));
-      fjs.parentNode.insertBefore(js, fjs);
-    }(document, 'script', 'facebook-jssdk'));
-  });
-}
-
-/**
- * Facebook Login với SDK (thay thế OAuth redirect)
- */
-function loginWithFacebookSDK() {
-  return new Promise((resolve, reject) => {
-    if (!window.FB) {
-      reject(new Error('Facebook SDK chưa được load'));
-      return;
-    }
-    
-    FB.login(function(response) {
-      if (response.authResponse) {
-        console.log('✅ Login thành công:', response.authResponse);
-        resolve(response.authResponse);
-      } else {
-        reject(new Error('User đã hủy login'));
-      }
-    }, {
-      scope: 'pages_show_list,pages_read_engagement,pages_manage_posts,pages_manage_engagement',
-      return_scopes: true
-    });
-  });
-}
-
-/**
- * Kiểm tra login status
- */
-function checkFacebookLoginStatus() {
-  return new Promise((resolve) => {
-    if (!window.FB) {
-      resolve(null);
-      return;
-    }
-    
-    FB.getLoginStatus(function(response) {
-      if (response.status === 'connected') {
-        resolve(response.authResponse);
-      } else {
-        resolve(null);
-      }
-    });
-  });
-}
-
-/**
- * Logout Facebook
- */
-function logoutFacebook() {
-  return new Promise((resolve) => {
-    if (!window.FB) {
-      resolve();
-      return;
-    }
-    
-    FB.logout(function(response) {
-      console.log('✅ Đã logout Facebook');
-      resolve();
-    });
-  });
 }
 
 /**
@@ -14883,11 +11915,8 @@ async function postToFacebookPageWithImages(pageId, pageAccessToken, message, im
     }
     
     // Filter và validate images
-    const validImages = Array.isArray(images)
-      ? images
-        .filter(img => typeof img === 'string')
-        .map(img => img.trim())
-        .filter(img => img && (img.startsWith('http://') || img.startsWith('https://')))
+    const validImages = Array.isArray(images) 
+      ? images.filter(img => typeof img === 'string' && img.trim())
       : [];
     
     console.log(`🚀 [postToFacebookPageWithImages] After validation: ${validImages.length} images (before: ${images.length})`);
@@ -15328,25 +12357,6 @@ function setupFacebookEventListeners() {
   
 }
 
-function buildTokenBUrl(appSecret, tokenA) {
-  const base = `https://graph.facebook.com/${FACEBOOK_CONFIG.GRAPH_API_VERSION}/oauth/access_token`;
-  const params = new URLSearchParams({
-    grant_type: 'fb_exchange_token',
-    client_id: FACEBOOK_CONFIG.APP_ID,
-    client_secret: appSecret,
-    fb_exchange_token: tokenA
-  });
-  return `${base}?${params.toString()}`;
-}
-
-function buildPageTokenUrl(tokenB) {
-  const base = `https://graph.facebook.com/${FACEBOOK_CONFIG.GRAPH_API_VERSION}/me/accounts`;
-  const params = new URLSearchParams({
-    access_token: tokenB
-  });
-  return `${base}?${params.toString()}`;
-}
-
 /**
  * Validate saved token trước sử dụng
  * Nếu token không hợp lệ, sẽ xóa và yêu cầu nhập lại
@@ -15400,10 +12410,6 @@ async function validateSavedTokenIfNeeded() {
  * Handle nhập token thủ công
  */
 async function handleManualToken() {
-  // ✅ Lấy editingConfigId và editingFanpageData từ global scope (set bởi ensureZaloMultiGroupUI)
-  const editingRowId = (typeof window !== 'undefined' && window.__zaloEditingConfigId) || null;
-  const editingFanpageData = (typeof window !== 'undefined' && window.__zaloEditingFanpageData) || null;
-  
   const tokenInput = document.getElementById('fb-token-input');
   const token = tokenInput?.value?.trim();
   
@@ -15413,8 +12419,6 @@ async function handleManualToken() {
   }
   
   console.log('🚀 [HandleManualToken] BẮT ĐẦU XỬ LÝ TOKEN NHẬP TỪ BƯỚC 1');
-  console.log('   📌 editingRowId (from window.__zaloEditingConfigId):', editingRowId);
-  console.log('   📌 editingFanpageData (from window.__zaloEditingFanpageData):', editingFanpageData);
   console.trace('[HandleManualToken] Call stack');
   
   try {
@@ -15457,57 +12461,23 @@ async function handleManualToken() {
       showFacebookMessage('💾 Đang lưu token lên server...', 'info');
       const firstPage = pages[0];
       
-      console.log('📌 [HandleManualToken] Gọi syncAllConfigsFanpageTokensFromPages với:');
-      console.log('   - Số pages từ API:', pages.length);
-      pages.slice(0, 5).forEach((p, i) => {
-        console.log(`     [${i}] Page ID: ${p.id}, Name: ${p.name}, Token preview: ${p.access_token?.substring(0, 20)}...`);
-      });
+      console.log('📌 [HandleManualToken] Gọi updateAllConfigsWithNewFanpageToken với:');
+      console.log('   - newPageAccessToken:', firstPage.access_token?.substring(0, 20) + '...');
+      console.log('   - userAccessToken:', userAccessToken?.substring(0, 20) + '...');
+      console.log('   - fanpageId:', firstPage.id);
+      console.log('   - fanpageName:', firstPage.name);
       
-      // ✅ CRITICAL FIX: Update token cho TẤT CẢ fanpages có trong config đang edit
-      // Không chỉ update firstPage, vì config có thể có nhiều fanpages!
-      let updateSuccess = false;
-      if (editingRowId) {
-        // Update từng fanpage trong editingFanpageData nếu có trong pages list
-        for (const page of pages) {
-          const success = await updateAllConfigsWithNewFanpageToken(
-            page.access_token,
-            userAccessToken,
-            page.id,
-            page.name,
-            editingRowId              // Chỉ update config đang edit
-          );
-          if (success) updateSuccess = true;
-        }
-      } else {
-        // ✅ Luồng global (bản hôm qua): quét toàn bộ config và sync token theo fanpage ID
-        updateSuccess = await syncAllConfigsFanpageTokensFromPages(pages, userAccessToken);
-      }
+      const baseSuccess = await updateAllConfigsWithNewFanpageToken(
+        firstPage.access_token, // Page token đã có
+        userAccessToken,          // User token để re-exchange
+        firstPage.id,
+        firstPage.name
+      );
       
-      console.log(`✅ [HandleManualToken] updateAllConfigsWithNewFanpageToken return: ${updateSuccess}`);
+      console.log(`✅ [HandleManualToken] updateAllConfigsWithNewFanpageToken return: ${baseSuccess}`);
       
-      if (!updateSuccess) {
+      if (!baseSuccess) {
         throw new Error('Không thể lưu token lên server');
-      }
-      
-      // ✅ CRITICAL FIX: Sync editingFanpageData với TẤT CẢ tokens mới
-      if (editingRowId && editingFanpageData && Array.isArray(editingFanpageData.fanpage_ids)) {
-        let updatedCount = 0;
-        editingFanpageData.fanpage_ids.forEach((fpId, idx) => {
-          const page = pages.find(p => p.id === fpId);
-          if (page && page.access_token) {
-            editingFanpageData.fanpage_tokens[idx] = page.access_token;
-            updatedCount++;
-          }
-        });
-        // Đồng bộ fanpage_token (singular) = token của fanpage đầu tiên
-        editingFanpageData.fanpage_token = editingFanpageData.fanpage_tokens[0] || null;
-        
-        // ✅ Sync lại vào global scope
-        if (typeof window !== 'undefined') {
-          window.__zaloEditingFanpageData = editingFanpageData;
-        }
-        
-        console.log(`✅ [HandleManualToken] Updated ${updatedCount}/${editingFanpageData.fanpage_ids.length} fanpage tokens in editingFanpageData`);
       }
 
       updateFacebookAuthUI(true);
@@ -15541,44 +12511,17 @@ async function handleManualToken() {
       console.log('   - fanpageId:', tokenInfo.id);
       console.log('   - fanpageName:', tokenInfo.name);
       
-      let baseSuccess = false;
-      if (editingRowId) {
-        baseSuccess = await updateAllConfigsWithNewFanpageToken(
-          token,                     // Page token
-          token,                     // User token = Page token (vì là page token)
-          tokenInfo.id,
-          tokenInfo.name || 'Unknown Page',
-          editingRowId
-        );
-      } else {
-        baseSuccess = await syncAllConfigsFanpageTokensFromPages([
-          { id: tokenInfo.id, name: tokenInfo.name || 'Unknown Page', access_token: token }
-        ], token);
-      }
+      const baseSuccess = await updateAllConfigsWithNewFanpageToken(
+        token,                     // Page token
+        token,                     // User token = Page token (vì là page token)
+        tokenInfo.id,
+        tokenInfo.name || 'Unknown Page'
+      );
       
       console.log(`✅ [HandleManualToken] updateAllConfigsWithNewFanpageToken return: ${baseSuccess}`);
       
       if (!baseSuccess) {
         throw new Error('Không thể lưu token lên server');
-      }
-      
-      // ✅ CRITICAL FIX: Update editingFanpageData với token mới (nếu đang edit config)
-      if (editingRowId && editingFanpageData && Array.isArray(editingFanpageData.fanpage_ids)) {
-        const fpIdx = editingFanpageData.fanpage_ids.indexOf(tokenInfo.id);
-        if (fpIdx !== -1 && fpIdx >= 0) {
-          editingFanpageData.fanpage_tokens[fpIdx] = token;
-          // Đồng bộ fanpage_token (singular) = token của fanpage đầu tiên
-          editingFanpageData.fanpage_token = editingFanpageData.fanpage_tokens[0] || null;
-          
-          // ✅ Sync lại vào global scope
-          if (typeof window !== 'undefined') {
-            window.__zaloEditingFanpageData = editingFanpageData;
-          }
-          
-          console.log(`✅ [HandleManualToken] Updated editingFanpageData[${fpIdx}] with new Page token for fanpage ${tokenInfo.id}`);
-        } else {
-          console.warn(`⚠️ [HandleManualToken] Fanpage ${tokenInfo.id} not found in editingFanpageData.fanpage_ids`);
-        }
       }
 
       updateFacebookAuthUI(true);
@@ -15593,83 +12536,6 @@ async function handleManualToken() {
     console.error('❌ [HandleManualToken] Lỗi:', error);
     console.error('   Stack:', error.stack);
     showFacebookMessage('Token không hợp lệ: ' + error.message, 'error');
-  }
-}
-
-/**
- * Kiểm tra xem user đã login chưa
- */
-async function checkExistingLogin() {
-  try {
-    const authResponse = await checkFacebookLoginStatus();
-    if (authResponse) {
-      console.log('✅ User đã login Facebook');
-      facebookState.userAccessToken = authResponse.accessToken;
-      saveFacebookState();
-      await loadFacebookPages();
-      updateFacebookAuthUI(true);
-    }
-  } catch (error) {
-    console.error('Lỗi check login status:', error);
-  }
-}
-
-/**
- * Handle Facebook connect (dùng FB SDK)
- */
-async function handleFacebookConnect() {
-  try {
-    showFacebookMessage('Đang kết nối với Facebook...', 'info');
-    
-    // Kiểm tra SDK đã load chưa
-    if (!window.FB) {
-      throw new Error('Facebook SDK chưa sẵn sàng. Vui lòng thử lại sau vài giây hoặc sử dụng tùy chọn "Nhập Token thủ công".');
-    }
-    
-    // Login với Facebook SDK
-    const authResponse = await loginWithFacebookSDK();
-    
-    if (!authResponse || !authResponse.accessToken) {
-      throw new Error('Không nhận được access token từ Facebook');
-    }
-    
-    facebookState.userAccessToken = authResponse.accessToken;
-    saveFacebookState();
-    
-    await loadFacebookPages();
-    
-    showFacebookMessage('✅ Kết nối thành công!', 'success');
-    
-  } catch (error) {
-    console.error('❌ Lỗi kết nối Facebook:', error);
-    
-    let errorMessage = error.message;
-    
-    // Phân tích lỗi cụ thể
-    if (error.message.includes('User đã hủy login')) {
-      errorMessage = 'Bạn đã hủy đăng nhập Facebook';
-    } else if (error.message.includes('password')) {
-      errorMessage = `
-        <strong>Lỗi đăng nhập Facebook</strong><br>
-        <br>
-        <strong>Nguyên nhân:</strong> Facebook App chưa được cấu hình đúng hoặc tài khoản của bạn chưa được thêm vào app.<br>
-        <br>
-        <strong>Giải pháp:</strong><br>
-        1. Sử dụng tùy chọn "Nhập Token thủ công" bên dưới<br>
-        2. Hoặc liên hệ admin để cấu hình Facebook App<br>
-        <br>
-        <strong>Hướng dẫn lấy token:</strong><br>
-        - Truy cập: <a href="https://developers.facebook.com/tools/explorer/${FACEBOOK_CONFIG.APP_ID}/" target="_blank">Graph API Explorer</a><br>
-        - Chọn Page → Generate Access Token<br>
-        - Copy token và paste vào ô "Nhập Token thủ công"
-      `;
-      
-      // Hiển thị nút nhập token thủ công
-      const btnManual = document.getElementById('btn-fb-manual-token');
-      if (btnManual) btnManual.style.display = 'inline-block';
-    }
-    
-    showFacebookMessage(errorMessage, 'error');
   }
 }
 
@@ -16235,185 +13101,33 @@ function loadDataOptionUser() {
  * @param {Function} callback - callback(success, data, error)
  */
 function fetchDataOptionUserFromServer(callback) {
-  // ✅ FIX: Add timeout to prevent hang
-  const timeoutMs = 15000; // 15 seconds
-  let callbackCalled = false;
-  
-  const timeout = setTimeout(() => {
-    if (callbackCalled) return;
-    callbackCalled = true;
-    console.warn(`⏱️ [Zalo] fetchFromDatabase timeout after ${timeoutMs}ms, calling callback with error`);
-    callback(false, null, `Timeout after ${timeoutMs}ms`);
-  }, timeoutMs);
-  
-  const wrappedCallback = (success, data, error) => {
-    if (callbackCalled) return; // Prevent duplicate calls
-    callbackCalled = true;
-    clearTimeout(timeout);
-    callback(success, data, error);
-  };
-  
   if (window.csmUserData && typeof window.csmUserData.fetchFromDatabase === 'function') {
     console.log('[Zalo] Fetching dataOptionUser from server...');
-    try {
-      window.csmUserData.fetchFromDatabase(function(success, data, error) {
-        if (success && Array.isArray(data)) {
-          console.log('[Zalo] ✅ Fetched', data.length, 'items from server');
-          wrappedCallback(true, data, null);
-        } else {
-          console.warn('[Zalo] ❌ Failed to fetch from server:', error);
-          wrappedCallback(false, null, error);
-        }
-      });
-    } catch (e) {
-      console.error('[Zalo] ❌ Exception calling fetchFromDatabase:', e);
-      wrappedCallback(false, null, e.message);
-    }
+    window.csmUserData.fetchFromDatabase(function(success, data, error) {
+      if (success && Array.isArray(data)) {
+        console.log('[Zalo] ✅ Fetched', data.length, 'items from server');
+        callback(true, data, null);
+      } else {
+        console.warn('[Zalo] ❌ Failed to fetch from server:', error);
+        callback(false, null, error);
+      }
+    });
   } else {
     console.warn('[Zalo] csmUserData.fetchFromDatabase not available');
-    wrappedCallback(false, null, 'csmUserData not available');
+    callback(false, null, 'csmUserData not available');
   }
 }
 
 /**
- * Lưu dataOptionUser lên server qua csmUserData với timeout protection
+ * Lưu dataOptionUser lên server qua csmUserData
  * @param {Array} data - Mảng dữ liệu cần lưu
  * @param {Function} callback - callback(success, error)
- * @param {number} retryCount - Số lần retry (default 0, no retry)
  */
-
-// ✅ DEBOUNCE QUEUE for config saves - reduce server calls when multiple saves triggered
-const CONFIG_SAVE_DEBOUNCE = {
-  pendingData: null,
-  pendingCallbacks: [],
-  saveTimer: null,
-  DEBOUNCE_INTERVAL: 5000  // Batch saves within 5 seconds
-};
-
-function saveDataOptionUser(data, callback, retryCount = 0) {
+function saveDataOptionUser(data, callback) {
   const dataToSave = Array.isArray(data) ? data : [];
-  
-  // ✅ DEBOUNCE: Queue the save request
-  const originalCallback = callback;
-  CONFIG_SAVE_DEBOUNCE.pendingData = dataToSave;
-  CONFIG_SAVE_DEBOUNCE.pendingCallbacks.push(originalCallback);
-  
-  console.log(`📥 [SaveDataUser] Queued for debounce (pending: ${CONFIG_SAVE_DEBOUNCE.pendingCallbacks.length}, interval: ${CONFIG_SAVE_DEBOUNCE.DEBOUNCE_INTERVAL}ms)`);
-  
-  // Clear existing timer
-  if (CONFIG_SAVE_DEBOUNCE.saveTimer) {
-    clearTimeout(CONFIG_SAVE_DEBOUNCE.saveTimer);
-  }
-  
-  // Set new timer
-  CONFIG_SAVE_DEBOUNCE.saveTimer = setTimeout(() => {
-    _saveDataOptionUserActual(CONFIG_SAVE_DEBOUNCE.pendingData, CONFIG_SAVE_DEBOUNCE.pendingCallbacks, retryCount);
-    CONFIG_SAVE_DEBOUNCE.pendingData = null;
-    CONFIG_SAVE_DEBOUNCE.pendingCallbacks = [];
-    CONFIG_SAVE_DEBOUNCE.saveTimer = null;
-  }, CONFIG_SAVE_DEBOUNCE.DEBOUNCE_INTERVAL);
-}
-
-/**
- * ✅ ACTUAL save function (after debounce)
- */
-function _saveDataOptionUserActual(dataToSave, callbacks, retryCount = 0) {
-  const MAX_RETRIES = 2;
-  const SERVER_TIMEOUT_MS = 15000; // 15 giây timeout cho server call
   
   console.log('====== 💾 [SaveDataOptionUser] BẮT ĐẦU LƯU DỮ LIỆU ======');
   console.log('📊 Số items được truyền vào:', dataToSave.length);
-  console.log(`📞 Gọi ${callbacks.length} callback(s) khi xong`);
-  
-  // ✅ Call all pending callbacks
-  const callAllCallbacks = (success, error) => {
-    callbacks.forEach(cb => {
-      try {
-        if (typeof cb === 'function') {
-          cb(success, error);
-        }
-      } catch (e) {
-        console.error('❌ Callback error:', e);
-      }
-    });
-  };
-  
-  // ✅ VALIDATE & SANITIZE: Loại bỏ functions, circular refs, non-serializable
-  function sanitizeForJSON(obj, depth = 0) {
-    if (depth > 10) return null; // Prevent infinite recursion
-    if (obj === null || obj === undefined) return obj;
-    if (typeof obj === 'string' || typeof obj === 'number' || typeof obj === 'boolean') return obj;
-    if (typeof obj === 'bigint') return obj.toString(); // Convert BigInt to string
-    if (typeof obj === 'function') return undefined; // Remove functions
-    
-    if (Array.isArray(obj)) {
-      return obj.map(item => sanitizeForJSON(item, depth + 1)).filter(x => x !== undefined);
-    }
-    
-    if (typeof obj === 'object') {
-      const result = {};
-      for (const [key, value] of Object.entries(obj)) {
-        // Skip problematic keys
-        if (key.startsWith('__') || key === 'callback' || key === 'config_object') {
-          continue;
-        }
-        const sanitized = sanitizeForJSON(value, depth + 1);
-        if (sanitized !== undefined) {
-          result[key] = sanitized;
-        }
-      }
-      return result;
-    }
-    
-    return undefined;
-  }
-  
-  const sanitizedData = dataToSave.map(item => sanitizeForJSON(item)).filter(x => x);
-  console.log('✅ [Sanitize] Cleaned data:', sanitizedData.length, 'items (removed functions, circular refs)');
-  
-  // ✅ TEST JSON STRINGIFY before sending
-  let jsonStr = '';
-  try {
-    jsonStr = JSON.stringify(sanitizedData);
-    console.log(`✅ [JSON Test] Serializable - size: ${(jsonStr.length / 1024).toFixed(2)}KB`);
-    
-    if (jsonStr.length > 5 * 1024 * 1024) { // 5MB limit
-      console.error('❌ [JSON Test] Data too large:', (jsonStr.length / 1024 / 1024).toFixed(2), 'MB');
-      safeCallback(false, 'Data too large (>5MB)');
-      return;
-    }
-  } catch (e) {
-    console.error('❌ [JSON Test] SERIALIZE ERROR:', e.message);
-    console.log('   Trying with extra sanitization...');
-    
-    // Ultra sanitize mode: keep only safe fields
-    const ultraSanitized = sanitizedData.map(item => {
-      const safe = {};
-      const safeKeys = ['id', 'config_id', 'domain', 'service_type', 'project', 'fanpage_id', 
-                         'fanpage_token', 'fanpage_name', 'fanpage_token_expires_at',
-                         'zalo_groups', 'config_for_zalo', 'ai_prompt_id', 'type', 'timestamp',
-                         'config_for_facebook', 'service_code'];
-      safeKeys.forEach(key => {
-        if (key in item) {
-          const val = item[key];
-          // Extra check: no functions, no circular
-          if (typeof val !== 'function' && val !== item) {
-            safe[key] = val;
-          }
-        }
-      });
-      return safe;
-    });
-    
-    try {
-      jsonStr = JSON.stringify(ultraSanitized);
-      console.log(`✅ [Ultra Sanitize] Success - size: ${(jsonStr.length / 1024).toFixed(2)}KB`);
-    } catch (e2) {
-      console.error('❌ [Ultra Sanitize] Still failed:', e2.message);
-      callAllCallbacks(false, 'Data not JSON serializable even after sanitization');
-      return;
-    }
-  }
   
   // ✅ CRITICAL FIX: Preserve posted messages khi save configs
   // Lấy posted messages cũ từ storage (nếu có) để merge
@@ -16449,12 +13163,12 @@ function _saveDataOptionUserActual(dataToSave, callbacks, retryCount = 0) {
     console.warn('⚠️ [SaveDataOptionUser] Error loading posted messages:', e);
   }
   
-  // Merge: sanitized configs + posted messages
-  const finalData = [...sanitizedData, ...postedMessages];
-  console.log('📊 Final data to save:', finalData.length, 'items (', sanitizedData.length, 'configs +', postedMessages.length, 'posted messages)');
+  // Merge: configs + posted messages
+  const finalData = [...dataToSave, ...postedMessages];
+  console.log('📊 Final data to save:', finalData.length, 'items (', dataToSave.length, 'configs +', postedMessages.length, 'posted messages)');
   
   // Log chi tiết từng config
-  sanitizedData.forEach((cfg, i) => {
+  dataToSave.forEach((cfg, i) => {
     console.log(`   [${i}] Config:
       - id: ${cfg.id}
       - domain: ${cfg.domain}
@@ -16470,7 +13184,7 @@ function _saveDataOptionUserActual(dataToSave, callbacks, retryCount = 0) {
   
   // Ưu tiên lưu qua csmUserData (server)
   if (window.csmUserData && typeof window.csmUserData.set === 'function') {
-    console.log('✨ Hành động: Lưu qua window.csmUserData.set() (SERVER)', retryCount > 0 ? `[Retry ${retryCount}/${MAX_RETRIES}]` : '');
+    console.log('✨ Hành động: Lưu qua window.csmUserData.set() (SERVER)');
     console.log('📤 Gửi', finalData.length, 'items tới server...');
     
     // Hiển thị 1-2 item mẫu
@@ -16484,79 +13198,28 @@ function _saveDataOptionUserActual(dataToSave, callbacks, retryCount = 0) {
       });
     }
     
-    // ✅ ADD TIMEOUT WRAPPER to prevent hanging
-    let timeoutId = setTimeout(() => {
-      console.error('⏱️ [SaveDataOptionUser] SERVER TIMEOUT after', SERVER_TIMEOUT_MS, 'ms');
-      // If retry budget available, retry
-      if (retryCount < MAX_RETRIES) {
-        console.log(`🔄 [SaveDataOptionUser] Retrying... (${retryCount + 1}/${MAX_RETRIES})`);
-        setTimeout(() => _saveDataOptionUserActual(dataToSave, callbacks, retryCount + 1), 2000);
-      } else {
-        console.error('❌ [SaveDataOptionUser] MAX RETRIES EXCEEDED - using localStorage fallback');
-        // Fallback để tránh mở màn chết
+    window.csmUserData.set(finalData, function (success, error) {
+      console.log('🔔 CALLBACK từ window.csmUserData.set() được gọi');
+      console.log('   ✅ success =', success);
+      console.log('   ❌ error =', error);
+      
+      if (success) {
+        console.log('✅ [SaveDataOptionUser] SERVER SAVE THÀNH CÔNG!');
+        console.log('📍 Backup vào localStorage...');
+        // Optional: also sync to localStorage as backup
         try {
           localStorage.setItem('dataOptionUser', JSON.stringify(finalData));
-          console.log('✅ [SaveDataOptionUser] Fallback to localStorage SUCCESS');
-          callAllCallbacks(true, null); // Report success to prevent hung state
+          console.log('✅ localStorage backup THÀNH CÔNG');
         } catch (e) {
-          console.error('❌ [SaveDataOptionUser] localStorage fallback also failed:', e);
-          callAllCallbacks(false, 'Server timeout + localStorage failed');
+          console.warn('⚠️ localStorage backup THẤT BẠI:', e);
         }
+        if (callback) callback(true, null);
+      } else {
+        console.error('❌ [SaveDataOptionUser] SERVER SAVE THẤT BẠI!');
+        console.error('   Error:', error);
+        if (callback) callback(false, error);
       }
-    }, SERVER_TIMEOUT_MS);
-    
-    try {
-      window.csmUserData.set(finalData, function (success, error) {
-        // ✅ ALWAYS clear timeout to prevent double-callback
-        if (timeoutId) {
-          clearTimeout(timeoutId);
-          timeoutId = null;
-        }
-        
-        console.log('🔔 CALLBACK từ window.csmUserData.set() được gọi');
-        console.log('   ✅ success =', success);
-
-
-        console.log('   ❌ error =', error);
-        
-        if (success) {
-          console.log('✅ [SaveDataOptionUser] SERVER SAVE THÀNH CÔNG!');
-          callAllCallbacks(true, null);
-        } else {
-          console.error('❌ [SaveDataOptionUser] SERVER SAVE THẤT BẠI!');
-          console.error('   Error:', error);
-          
-          // Retry nếu còn retry budget
-          if (retryCount < MAX_RETRIES) {
-            console.log(`🔄 [SaveDataOptionUser] Retrying after error... (${retryCount + 1}/${MAX_RETRIES})`);
-            setTimeout(() => _saveDataOptionUserActual(dataToSave, callbacks, retryCount + 1), 1000 * (retryCount + 1));
-          } else {
-            // Fallback to localStorage on final failure
-            try {
-              localStorage.setItem('dataOptionUser', JSON.stringify(finalData));
-              console.log('⚠️ [SaveDataOptionUser] Fallback to localStorage after retries');
-              callAllCallbacks(true, null);
-            } catch (lsError) {
-              console.error('❌ [SaveDataOptionUser] Final failure:', lsError);
-              callAllCallbacks(false, error);
-            }
-          }
-        }
-      });
-    } catch (e) {
-      // Catch synchronous errors in set() call
-      console.error('❌ [SaveDataOptionUser] Exception calling window.csmUserData.set():', e);
-      if (timeoutId) clearTimeout(timeoutId);
-      
-      // Fallback to localStorage
-      try {
-        localStorage.setItem('dataOptionUser', JSON.stringify(finalData));
-        console.log('✅ [SaveDataOptionUser] Fallback to localStorage after exception');
-        callAllCallbacks(true, null);
-      } catch (lsError) {
-        callAllCallbacks(false, e.message);
-      }
-    }
+    });
   } else {
     // Fallback: localStorage only
     console.log('⚠️ Hành động: FALLBACK sang localStorage (window.csmUserData KHÔNG khả dụng!)');
@@ -16566,10 +13229,10 @@ function _saveDataOptionUserActual(dataToSave, callbacks, retryCount = 0) {
     try {
       localStorage.setItem('dataOptionUser', JSON.stringify(finalData));
       console.log('✅ [SaveDataOptionUser] localStorage SAVE THÀNH CÔNG (FALLBACK MODE)');
-      callAllCallbacks(true, null);
+      if (callback) callback(true, null);
     } catch (e) {
       console.error('❌ [SaveDataOptionUser] localStorage SAVE THẤT BẠI:', e);
-      callAllCallbacks(false, e);
+      if (callback) callback(false, e);
     }
   }
 }
@@ -16592,34 +13255,6 @@ function addToDataOptionUser(item, callback) {
   return newItem;
 }
 
-/**
- * Xóa item từ dataOptionUser
- * @param {String} itemId - ID của item cần xóa
- * @param {Function} callback - callback(success, error)
- */
-function removeFromDataOptionUser(itemId, callback) {
-  const data = loadDataOptionUser();
-  const filtered = data.filter(item => item.id !== itemId);
-  saveDataOptionUser(filtered, callback);
-}
-
-/**
- * Update item trong dataOptionUser
- * @param {String} itemId - ID của item cần update
- * @param {Object} updates - Updates cần áp dụng
- * @param {Function} callback - callback(success, error)
- */
-function updateDataOptionUser(itemId, updates, callback) {
-  const data = loadDataOptionUser();
-  const idx = data.findIndex(item => item.id === itemId);
-  if (idx >= 0) {
-    data[idx] = { ...data[idx], ...updates, updated_at: Date.now() };
-    saveDataOptionUser(data, callback);
-  } else {
-    if (callback) callback(false, 'Item not found');
-  }
-}
-
 // ===== LƯỚI TRỮ THÔNG TIN LỰA CHỌN CHẠY ZALO =====
 // Khi chạy group Zalo, người dùng sẽ chọn:
 // - domain (tên miền đích)
@@ -16633,8 +13268,6 @@ function updateDataOptionUser(itemId, updates, callback) {
 // ===== GLOBAL STATE FOR UI MANAGEMENT =====
 let uiMutationObserver = null;
 let isThemeRefreshing = false;
-let uiThemeObserver = null;
-let isAllUIInitializing = false;
 
 // ===== ZALO DEBUG HELPERS =====
 /**
@@ -16706,48 +13339,6 @@ const ZaloDebugHelpers = {
     } catch (err) {
       console.error('❌ Scan test failed:', err);
     }
-  },
-  
-  /**
-   * ✅ Clear localStorage để giải phóng quota
-   * Sử dụng khi gặp lỗi "exceeded the quota"
-   */
-  clearLocalStorageCache: () => {
-    console.log('🧹 [ClearCache] Bắt đầu clear localStorage cache...');
-    
-    const itemsToRemove = [
-      'dataOptionUser',
-      'user_address', // Item gây quota exceeded
-      'zalo_posted_messages',
-      'facebookState',
-      'facebookPages',
-      'facebookAutoSettings'
-    ];
-    
-    let removedCount = 0;
-    let freedBytes = 0;
-    
-    itemsToRemove.forEach(key => {
-      try {
-        const value = localStorage.getItem(key);
-        if (value) {
-          const bytes = new Blob([value]).size;
-          localStorage.removeItem(key);
-          removedCount++;
-          freedBytes += bytes;
-          console.log(`   ✅ Removed "${key}" (${(bytes/1024).toFixed(1)} KB)`);
-        }
-      } catch (e) {
-        console.warn(`   ⚠️ Could not remove "${key}":`, e.message);
-      }
-    });
-    
-    console.log(`✅ [ClearCache] Completed:`);
-    console.log(`   - Removed ${removedCount} items`);
-    console.log(`   - Freed ~${(freedBytes/1024).toFixed(1)} KB`);
-    console.log(`   💡 Server data is safe - localStorage was just a backup`);
-    
-    return { removedCount, freedBytes };
   }
 };
 
@@ -16773,7 +13364,7 @@ console.log('   window.ZaloDebug.enableWebviewDevTools()');
 console.log('   window.ZaloDebug.dumpImages()');
 console.log('   window.ZaloDebug.dumpChatItemStructure()');
 console.log('   window.ZaloDebug.testScanMessage()');
-console.log('   window.ZaloDebug.clearLocalStorageCache() - Clear localStorage quota');
+
 
 // ===== AUTO INIT ALL UI =====
 /**
@@ -16784,28 +13375,12 @@ console.log('   window.ZaloDebug.clearLocalStorageCache() - Clear localStorage q
  * 3. Facebook Auto Post (createFacebookPostUI)
  */
 function initAllUI() {
-  if (isAllUIInitializing) {
-    console.log('⏭️ initAllUI already running, skip duplicate call');
-    return;
-  }
-  isAllUIInitializing = true;
-
-  if (typeof window !== 'undefined' && window.__AUTO_UPLOAD_LMKT_UI_INIT_DONE__) {
-    console.log('⏭️ UI already initialized, skip duplicate initAllUI');
-    isAllUIInitializing = false;
-    return;
-  }
-
-  if (typeof window !== 'undefined') {
-    window.__AUTO_UPLOAD_LMKT_UI_INIT_DONE__ = true;
-  }
-
   console.log('🚀 Initializing all UI modules...');
   
   let uiInitAttempts = 0;
   const maxAttempts = 10;
   
-  // ✅ Retry mechanism - reduced from 1s to 30s polling (massive CPU savings)
+  // Retry mechanism - thử khởi tạo UI mỗi giây
   const initInterval = setInterval(async () => {
     uiInitAttempts++;
     
@@ -16848,26 +13423,16 @@ function initAllUI() {
       const allUIReady = globalSettings && multiDomainUI && serviceContentUI && facebookUI;
       if (allUIReady || uiInitAttempts >= maxAttempts) {
         clearInterval(initInterval);
-        timerRegistry.clear('ui-init-polling');
-        console.log('✅ All UI modules initialized - polling stopped');
-        isAllUIInitializing = false;
+        console.log('✅ All UI modules initialized');
       }
       
     } catch (error) {
       console.error('❌ Error initializing UI:', error);
     }
-  }, 1000);  // ✅ Check every 1 second (fast UI initialization)
-  
-  // ✅ Register UI polling timer for cleanup
-  timerRegistry.register('ui-init-polling', initInterval, 'interval');
+  }, 1000);
 
   // Monitor DOM changes để tự động tạo lại UI nếu React xóa
   if (typeof MutationObserver !== 'undefined') {
-    if (uiMutationObserver) {
-      uiMutationObserver.disconnect();
-      uiMutationObserver = null;
-    }
-
     uiMutationObserver = new MutationObserver(() => {
       // Skip if theme is refreshing
       if (isThemeRefreshing) return;
@@ -16921,11 +13486,6 @@ function initAllUI() {
  * Listen for theme changes and refresh all UI modules
  */
 function setupThemeChangeListener() {
-  if (uiThemeObserver) {
-    console.log('⏭️ Theme change listener already initialized');
-    return;
-  }
-
   let refreshTimeout = null;
   
   // Debounced function to refresh all UI
@@ -16939,7 +13499,6 @@ function setupThemeChangeListener() {
     // Clear any pending refresh
     if (refreshTimeout) {
       clearTimeout(refreshTimeout);
-      refreshTimeout = null;
     }
     
     // Schedule refresh with debounce
@@ -16999,7 +13558,7 @@ function setupThemeChangeListener() {
   
   // Listen to data-theme attribute changes on html element
   const htmlElement = document.documentElement;
-  uiThemeObserver = new MutationObserver((mutations) => {
+  const themeObserver = new MutationObserver((mutations) => {
     const hasThemeChange = mutations.some(mutation => 
       mutation.type === 'attributes' && 
       (mutation.attributeName === 'data-theme' || mutation.attributeName === 'class')
@@ -17010,7 +13569,7 @@ function setupThemeChangeListener() {
     }
   });
   
-  uiThemeObserver.observe(htmlElement, {
+  themeObserver.observe(htmlElement, {
     attributes: true,
     attributeFilter: ['data-theme', 'class']
   });
