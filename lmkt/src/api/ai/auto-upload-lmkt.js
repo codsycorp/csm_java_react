@@ -9581,6 +9581,20 @@ ${JSON.stringify(zaloConfigs, null, 2)}`;
   // Scanner now handled by startZaloScanner() with sequential scheduler
 
   startBtn.onclick = () => {
+    // ✅ LAZY INIT WEBVIEW: Chỉ tạo webview khi user thực sự bắt đầu quét
+    // Tránh crash renderer ngay lúc mở app nếu webview chưa ổn định
+    try {
+      const webviewId = window.zaloScannerWebviewId;
+      const existingWebview = document.getElementById(webviewId);
+      if (!existingWebview) {
+        createZaloWebview(webviewId, "https://chat.zalo.me/", rightPanel);
+      }
+    } catch (e) {
+      status.textContent = `❌ Không thể khởi tạo Zalo Webview: ${e.message}`;
+      console.error('❌ [Zalo] Lazy create webview failed:', e);
+      return;
+    }
+
     // Kiểm tra đăng nhập trước khi chạy scheduler
     status.textContent = "⏳ Kiểm tra đăng nhập Zalo...";
     startBtn.disabled = true;
@@ -9660,24 +9674,9 @@ ${JSON.stringify(zaloConfigs, null, 2)}`;
     renderZaloConfigList();
   }
   
-  // Tự động tạo webview Zalo khi mở giao diện
-  const webviewId = window.zaloScannerWebviewId;
-  const zaloUrl = "https://chat.zalo.me/";
-  
-  try {
-    const existingWebview = document.getElementById(webviewId);
-    if (!existingWebview) {
-      console.log(`🔧 Tự động tạo webview Zalo inline vào UI...`);
-      createZaloWebview(webviewId, zaloUrl, rightPanel);
-      status.textContent = `📱 Webview Zalo đã được tạo. Vui lòng đăng nhập...`;
-    } else {
-      console.log(`✅ Webview Zalo đã tồn tại`);
-      status.textContent = `📱 Kết nối Zalo sẵn sàng. Đăng nhập và bắt đầu quét.`;
-    }
-  } catch (error) {
-    console.error("❌ Lỗi tạo webview:", error);
-    status.textContent = `⚠️ Có vấn đề với kết nối Zalo. Vui lòng thử lại.`;
-  }
+  // ✅ Không tự động tạo webview khi mở UI để tránh crash lúc startup.
+  // Webview sẽ được tạo khi user bấm "▶️ Bắt đầu quét".
+  status.textContent = `📱 Sẵn sàng. Nhấn "▶️ Bắt đầu quét" để mở Zalo Webview và đăng nhập.`;
   
   return wrapper;
 }
@@ -11738,14 +11737,7 @@ function updateDescriptionPreview() {
 }
 
 // Init UI
-// ✅ FIX: Add proper error handling for async initialization
-ensureUI().catch(err => {
-  console.warn('⚠️ [ensureUI] Initialization failed:', err.message);
-});
-
-ensureServiceContentUI().catch(err => {
-  console.warn('⚠️ [ensureServiceContentUI] Initialization failed:', err.message);
-});
+// ✅ NOTE: UI khởi tạo tập trung qua initAllUI() ở cuối file để tránh tạo trùng controls
 
 // ============================================================
 // FACEBOOK AUTO POST - Đăng bài tự động lên Facebook Fanpage
@@ -15031,6 +15023,8 @@ function updateDataOptionUser(itemId, updates, callback) {
 // ===== GLOBAL STATE FOR UI MANAGEMENT =====
 let uiMutationObserver = null;
 let isThemeRefreshing = false;
+let uiThemeObserver = null;
+let isAllUIInitializing = false;
 
 // ===== ZALO DEBUG HELPERS =====
 /**
@@ -15180,6 +15174,22 @@ console.log('   window.ZaloDebug.clearLocalStorageCache() - Clear localStorage q
  * 3. Facebook Auto Post (createFacebookPostUI)
  */
 function initAllUI() {
+  if (isAllUIInitializing) {
+    console.log('⏭️ initAllUI already running, skip duplicate call');
+    return;
+  }
+  isAllUIInitializing = true;
+
+  if (typeof window !== 'undefined' && window.__AUTO_UPLOAD_LMKT_UI_INIT_DONE__) {
+    console.log('⏭️ UI already initialized, skip duplicate initAllUI');
+    isAllUIInitializing = false;
+    return;
+  }
+
+  if (typeof window !== 'undefined') {
+    window.__AUTO_UPLOAD_LMKT_UI_INIT_DONE__ = true;
+  }
+
   console.log('🚀 Initializing all UI modules...');
   
   let uiInitAttempts = 0;
@@ -15238,6 +15248,11 @@ function initAllUI() {
 
   // Monitor DOM changes để tự động tạo lại UI nếu React xóa
   if (typeof MutationObserver !== 'undefined') {
+    if (uiMutationObserver) {
+      uiMutationObserver.disconnect();
+      uiMutationObserver = null;
+    }
+
     uiMutationObserver = new MutationObserver(() => {
       // Skip if theme is refreshing
       if (isThemeRefreshing) return;
@@ -15284,6 +15299,8 @@ function initAllUI() {
       setupThemeChangeListener();
     }, 2000);
   }
+
+  isAllUIInitializing = false;
 }
 
 // ===== THEME CHANGE LISTENER =====
@@ -15291,6 +15308,11 @@ function initAllUI() {
  * Listen for theme changes and refresh all UI modules
  */
 function setupThemeChangeListener() {
+  if (uiThemeObserver) {
+    console.log('⏭️ Theme change listener already initialized');
+    return;
+  }
+
   let refreshTimeout = null;
   
   // Debounced function to refresh all UI
@@ -15363,7 +15385,7 @@ function setupThemeChangeListener() {
   
   // Listen to data-theme attribute changes on html element
   const htmlElement = document.documentElement;
-  const themeObserver = new MutationObserver((mutations) => {
+  uiThemeObserver = new MutationObserver((mutations) => {
     const hasThemeChange = mutations.some(mutation => 
       mutation.type === 'attributes' && 
       (mutation.attributeName === 'data-theme' || mutation.attributeName === 'class')
@@ -15374,7 +15396,7 @@ function setupThemeChangeListener() {
     }
   });
   
-  themeObserver.observe(htmlElement, {
+  uiThemeObserver.observe(htmlElement, {
     attributes: true,
     attributeFilter: ['data-theme', 'class']
   });
