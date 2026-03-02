@@ -7755,25 +7755,6 @@ async function scanAllGroupsForConfig(config, statusEl) {
     // Don't rethrow - let scanner continue
   }
 }
-  
-  // ✅ CLEANUP: Clear textarea và window variables để config tiếp theo bắt đầu sạch
-  const input = document.getElementById("content-input");
-  if (input && input.value.trim()) {
-    console.log(`🧹 [Config ${configId}] Cleanup: Clear textarea còn lại`);
-    input.value = '';
-  }
-  
-  if (window.__pendingZaloMessages) {
-    console.log(`🧹 [Config ${configId}] Cleanup: Clear window.__pendingZaloMessages`);
-    window.__pendingZaloMessages = null;
-  }
-  
-  console.log(`✅ [Config ${configId}] Xong`);
-  
-  if (statusEl) {
-    statusEl.textContent = `✅ [Config ${configId}] Quét xong: ${totalNew} tin mới, ${totalPosted} đăng`;
-  }
-}
 
 /**
  * ✅ SEQUENTIAL LOOP - Tuần tự hoàn toàn (không concurrency)
