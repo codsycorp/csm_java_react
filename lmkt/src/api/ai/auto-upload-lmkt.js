@@ -5820,6 +5820,84 @@ const ZALO_TIMING = {
 };
 
 /**
+ * ✅ PASSIVE MEMORY MONITOR (v2 - non-aggressive)
+ * Chỉ log, không cleanup aggressive
+ */
+const MEMORY_MONITOR = {
+  // Passive constants - just for logging
+  CHECK_INTERVAL_MS: 30000,              // Check mỗi 30s
+  LOG_THRESHOLD_MB: 300,                 // Log nếu heap > 300MB
+  WARNING_THRESHOLD_MB: 800,             // Warning nếu > 800MB
+  ERROR_THRESHOLD_MB: 1200,              // Error nếu > 1200MB (app vẫn chạy)
+  
+  // State
+  lastHeapValue: 0,
+  monitoringActive: false,
+  errorCount: 0,
+  maxConsecutiveErrors: 5
+};
+
+/**
+ * Lấy heap usage hiện tại (MB)
+ */
+function getHeapUsageMB() {
+  try {
+    if (performance && performance.memory) {
+      return Math.round(performance.memory.usedJSHeapSize / 1024 / 1024);
+    }
+  } catch (e) {
+    // ignore
+  }
+  return 0;
+}
+
+/**
+ * ✅ Start Passive Memory Monitor (chỉ logging)
+ */
+function startMemoryMonitor() {
+  if (MEMORY_MONITOR.monitoringActive) return;
+  
+  MEMORY_MONITOR.monitoringActive = true;
+  console.log('🔍 [Memory Monitor] Bắt đầu (passive mode - chỉ log, không cleanup)');
+  
+  const monitorInterval = setInterval(() => {
+    if (!MEMORY_MONITOR.monitoringActive) {
+      clearInterval(monitorInterval);
+      return;
+    }
+    
+    const heapMB = getHeapUsageMB();
+    MEMORY_MONITOR.lastHeapValue = heapMB;
+    
+    if (heapMB > MEMORY_MONITOR.WARNING_THRESHOLD_MB) {
+      console.warn(`⚠️ [Memory] HEAP CAO: ${heapMB}MB (warning: ${MEMORY_MONITOR.WARNING_THRESHOLD_MB}MB)`);
+      MEMORY_MONITOR.errorCount++;
+    } else if (heapMB > MEMORY_MONITOR.LOG_THRESHOLD_MB) {
+      console.log(`💾 [Memory] Heap usage: ${heapMB}MB`);
+      MEMORY_MONITOR.errorCount = 0; // Reset error count
+    }
+    
+    if (heapMB > MEMORY_MONITOR.ERROR_THRESHOLD_MB) {
+      console.error(`❌ [Memory] HEAP CRITICAL: ${heapMB}MB (error: ${MEMORY_MONITOR.ERROR_THRESHOLD_MB}MB)`);
+      MEMORY_MONITOR.errorCount++;
+      
+      if (MEMORY_MONITOR.errorCount >= MEMORY_MONITOR.maxConsecutiveErrors) {
+        console.error(`❌ [Memory] Liên tục cao 5 lần - app có vấn đề memory leak!`);
+        MEMORY_MONITOR.errorCount = 0;
+      }
+    }
+  }, MEMORY_MONITOR.CHECK_INTERVAL_MS);
+}
+
+/**
+ * Stop Memory Monitor
+ */
+function stopMemoryMonitor() {
+  MEMORY_MONITOR.monitoringActive = false;
+  console.log('🛑 [Memory Monitor] Đã dừng');
+}
+
+/**
  * Load danh sách tin Zalo đã đăng từ SERVER (csmUserData)
  * Tương tự như loadDataOptionUser() - load from server, fallback localStorage
  * @returns {Array} Mảng {hash, timestamp, groupName, content_preview, config_id}
@@ -7370,35 +7448,211 @@ async function pushSingleMessageToWeb(message, groupName, configId, config) {
  * @param {Object} config - {id, config_id, zalo_groups, zalo_scan_interval_minutes, zalo_fanpages}
  * @param {HTMLElement} statusEl - Element hiển thị status
  */
-async function scanAllGroupsForConfig(config, statusEl) {
-  if (!isZaloScanning) return;
+
+/**
+ * ✅ SEQUENTIAL: Quét + Đăng config tuần tự (không queue, không worker)
+ * Flow: Nhóm 1 (lấy → đăng) → Nhóm 2 (lấy → đăng) → ... → Hết config
+ */
+async function scanAndPostConfig(config, statusEl) {
+  if (!isZaloScanning || !isZaloLoggedIn) {
+    console.warn('⚠️ [scanAndPostConfig] Skip: scanning stopped or not logged in');
+    return;
+  }
   
   if (!config || !config.zalo_groups || config.zalo_groups.length === 0) {
-    console.log(`⚠️ [Config ${config?.config_id}] Không có nhóm để quét`);
+    console.log(`⚠️ [Config] Không có nhóm`);
     return;
   }
 
   const configId = config.config_id || config.id;
   const groupList = config.zalo_groups;
-  const configInterval = (config.zalo_scan_interval_minutes || 5) * 60 * 1000;
-  
-  console.log(`🔄 [Config ${configId}] Bắt đầu quét ${groupList.length} nhóm tuần tự (interval: ${config.zalo_scan_interval_minutes || 5} phút)...`);
-  
-  if (statusEl) {
-    statusEl.textContent = `🔍 [Config ${configId}] Quét tuần tự ${groupList.length} nhóm...`;
-  }
-
   let totalNew = 0;
   let totalPosted = 0;
-  let totalErrors = 0;
-  let scannedGroups = []; // ✅ VERIFICATION: Track groups scanned
+  
+  console.log(`\n📍 [Config ${configId}] Quét ${groupList.length} nhóm...`);
 
-  // Quét TẬT CẢ nhóm TUẦN TỰ (1 cái rồi đến cái tiếp)
+  // Quét + Đăng TẤT CẢ nhóm TUẦN TỰ
   for (let groupIdx = 0; groupIdx < groupList.length; groupIdx++) {
-    if (!isZaloScanning) break; // Dừng nếu user stop quét
+    if (!isZaloScanning) break;
     
     const groupName = groupList[groupIdx].trim();
     const groupPos = groupIdx + 1;
+    
+    try {
+      console.log(`  [${groupPos}/${groupList.length}] Quét & Đăng nhóm: ${groupName}`);
+      
+      if (statusEl) {
+        statusEl.textContent = `[${groupPos}/${groupList.length}] ${groupName}...`;
+      }
+      
+      // BƯỚC 1: Lấy tin từ nhóm
+      const messages = await scanZaloGroup(groupName);
+      if (!Array.isArray(messages)) {
+        console.warn(`⚠️ Invalid messages returned`);
+        continue;
+      }
+      
+      console.log(`    📊 Lấy được ${messages.length} tin`);
+      
+      if (messages.length === 0) {
+        continue; // Nhóm tiếp
+      }
+      
+      // BƯỚC 2: Lọc tin mới
+      const newMessages = filterNewMessagesForConfig(configId, groupName, messages);
+      if (newMessages.length === 0) {
+        console.log(`    ⏭️ Không có tin mới`);
+        continue; // Nhóm tiếp
+      }
+      
+      console.log(`    ✅ Có ${newMessages.length} tin mới`);
+      totalNew += newMessages.length;
+      
+      // BƯỚC 3: Lọc tin có hình
+      const messagesWithImages = newMessages.filter(msg => 
+        msg.images && Array.isArray(msg.images) && msg.images.length > 0
+      );
+      
+      if (messagesWithImages.length === 0) {
+        console.log(`    ⏭️ Không có tin có hình`);
+        continue; // Nhóm tiếp
+      }
+      
+      console.log(`    🖼️  ${messagesWithImages.length} tin có hình - Bắt đầu đăng...`);
+      
+      // BƯỚC 4: Đăng LẦN LƯỢT từng tin (tuần tự, không queue)
+      for (let msgIdx = 0; msgIdx < messagesWithImages.length; msgIdx++) {
+        if (!isZaloScanning) break;
+        
+        const msg = messagesWithImages[msgIdx];
+        const msgPos = msgIdx + 1;
+        
+        try {
+          console.log(`      [TIN ${msgPos}/${messagesWithImages.length}] Đăng "${msg.sender || 'Unknown'}"...`);
+          
+          // Đăng tin này
+          const success = await postMessageToFacebook(msg, config);
+          
+          if (success) {
+            console.log(`        ✅ Đăng thành công`);
+            totalPosted++;
+            
+            // Chờ 3s trước tin tiếp (cần để hạ load)
+            await new Promise(resolve => setTimeout(resolve, ZALO_TIMING.WAIT_BETWEEN_POSTS));
+          } else {
+            console.warn(`        ❌ Đăng thất bại`);
+          }
+        } catch (e) {
+          console.error(`        ❌ Lỗi đăng tin:`, e.message);
+        }
+      }
+      
+      console.log(`    ✅ Nhóm ${groupName} đăng xong (${messagesWithImages.length} tin)`);
+      
+      // Chờ 2s trước nhóm tiếp (để hạ load)
+      if (groupIdx < groupList.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, ZALO_TIMING.WAIT_BETWEEN_GROUPS));
+      }
+      
+    } catch (e) {
+      console.error(`  ❌ Lỗi xử lý nhóm ${groupName}:`, e.message);
+    }
+  }
+  
+  console.log(`\n✅ [Config ${configId}] Hoàn tất: ${totalNew} tin mới, ${totalPosted} tin đăng`);
+}
+
+/**
+ * ✅ Helper: Đăng 1 tin lên Facebook (tuần tự)
+ */
+async function postMessageToFacebook(message, config) {
+  try {
+    // Content từ Zalo
+    const content = message.content || '';
+    const images = message.images || [];
+    
+    if (images.length === 0) {
+      console.warn('❌ No images to post');
+      return false;
+    }
+    
+    // Lấy 1 fanpage từ config
+    const fanpages = config.zalo_fanpages || [];
+    if (fanpages.length === 0) {
+      console.warn('❌ No fanpages configured');
+      return false;
+    }
+    
+    const fanpageId = fanpages[0]; // Post tất cả vào fanpage đầu tiên
+    
+    // Gọi API posting
+    const response = await fetch('/api/posts/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        fanpage_id: fanpageId,
+        content: content,
+        images: images,
+        config_id: config.config_id,
+        source: 'zalo_' + message.groupName
+      })
+    });
+    
+    if (!response.ok) {
+      console.error(`API error: ${response.status}`);
+      return false;
+    }
+    
+    // Record posted
+    recordPostedZaloMessage(message.hash, config.config_id, message.groupName);
+    return true;
+    
+  } catch (e) {
+    console.error('Post error:', e.message);
+    return false;
+  }
+}
+
+async function scanAllGroupsForConfig(config, statusEl) {
+  // ✅ WRAP with try-catch to prevent crash
+  try {
+    if (!isZaloScanning) return;
+    
+    // ✅ Check login status BEFORE scanning (passive check, don't interrupt)
+    if (!isZaloLoggedIn) {
+      console.warn(`⚠️ [Config] Zalo chưa đăng nhập, skip config này`);
+      if (statusEl) {
+        statusEl.textContent = `⏳ Zalo chưa đăng nhập - chờ đăng nhập...`;
+      }
+      return; // Skip this config, continue with next
+    }
+    
+    if (!config || !config.zalo_groups || config.zalo_groups.length === 0) {
+      console.log(`⚠️ [Config ${config?.config_id}] Không có nhóm để quét`);
+      return;
+    }
+
+    const configId = config.config_id || config.id;
+    const groupList = config.zalo_groups;
+    const configInterval = (config.zalo_scan_interval_minutes || 5) * 60 * 1000;
+    
+    console.log(`🔄 [Config ${configId}] Bắt đầu quét ${groupList.length} nhóm tuần tự (interval: ${config.zalo_scan_interval_minutes || 5} phút)...`);
+    
+    if (statusEl) {
+      statusEl.textContent = `🔍 [Config ${configId}] Quét tuần tự ${groupList.length} nhóm...`;
+    }
+
+    let totalNew = 0;
+    let totalPosted = 0;
+    let totalErrors = 0;
+    let scannedGroups = []; // ✅ VERIFICATION: Track groups scanned
+
+    // Quét TẬT CẢ nhóm TUẦN TỰ (1 cái rồi đến cái tiếp)
+    for (let groupIdx = 0; groupIdx < groupList.length; groupIdx++) {
+      if (!isZaloScanning) break; // Dừng nếu user stop quét
+      
+      const groupName = groupList[groupIdx].trim();
+      const groupPos = groupIdx + 1;
     
     try {
       console.log(`\n  📍 [${configId}] [${groupPos}/${groupList.length}] Quét nhóm: ${groupName}`);
@@ -7492,6 +7746,16 @@ async function scanAllGroupsForConfig(config, statusEl) {
     }
   }
   
+  } catch (err) {
+    // ✅ CATCH: Prevent crash from entire config scan
+    console.error(`❌ [Config ${config?.config_id || 'UNKNOWN'}] Unexpected error:`, err);
+    if (statusEl) {
+      statusEl.textContent = `❌ Error scanning config. Continue with next...`;
+    }
+    // Don't rethrow - let scanner continue
+  }
+}
+  
   // ✅ CLEANUP: Clear textarea và window variables để config tiếp theo bắt đầu sạch
   const input = document.getElementById("content-input");
   if (input && input.value.trim()) {
@@ -7504,33 +7768,28 @@ async function scanAllGroupsForConfig(config, statusEl) {
     window.__pendingZaloMessages = null;
   }
   
-  console.log(`✅ [Config ${configId}] Cleanup hoàn tất, sẵn sàng cho config tiếp theo`);
+  console.log(`✅ [Config ${configId}] Xong`);
   
   if (statusEl) {
-    statusEl.textContent = `✅ [Config ${configId}] Quét xong: ${totalNew} tin mới, ${totalPosted} thêm vào queue`;
+    statusEl.textContent = `✅ [Config ${configId}] Quét xong: ${totalNew} tin mới, ${totalPosted} đăng`;
   }
 }
 
 /**
- * ✅ BẮT ĐẦU QUÉT ZALO - ROUND-ROBIN SCHEDULER VỚI POSTING WORKER ĐỘC LẬP
- * 
- * Kiến trúc 2 luồng:
- * 1. SCANNER: Quét nhanh từng config xoay vòng → lưu tin vào queue → chuyển config tiếp
- * 2. POSTING WORKER: Xử lý queue độc lập → đăng tuần tự từng tin → không gây quá tải
- * 
- * Flow:
- * - Config A quét tất cả nhóm NHANH (~30s với 35 nhóm) → tin vào queue → chờ 5 phút
- * - Config B quét tất cả nhóm NHANH → tin vào queue → chờ 5 phút  
- * - Config C quét... → xoay vòng
- * - Posting Worker: lấy tin từ queue → đăng → đợi xong → lấy tin tiếp (độc lập)
+ * ✅ SEQUENTIAL LOOP - Tuần tự hoàn toàn (không concurrency)
+ * Flow: Quét config → Quét nhóm → Lấy tin → Đăng hết → Nhóm tiếp → ...
+ * Không posting worker loop, tất cả tuần tự
  */
 function startZaloScanner(statusEl) {
   if (isZaloScanning) return;
   isZaloScanning = true;
 
+  // ✅ Start Memory Monitor (passive)
+  startMemoryMonitor();
+
   // Set auto mode flag để tự động xác nhận confirm() dialogs
   isZaloAutoMode = true;
-  console.log('🚀 [Zalo Scanner] Bắt đầu - Round-Robin Scheduler + Posting Worker');
+  console.log('🚀 [Zalo Scanner] Bắt đầu - SEQUENTIAL MODE (tuần tự hoàn toàn)');
   
   // ✅ KHÓA UI KHI SCANNER ĐANG CHẠY
   createScannerLockOverlay();
@@ -7542,194 +7801,93 @@ function startZaloScanner(statusEl) {
     console.warn('⚠️ Không có config nào có nhóm Zalo để quét');
     if (statusEl) statusEl.textContent = '⚠️ Không có config để quét';
     isZaloScanning = false;
-    removeScannerLockOverlay(); // Mở khóa UI
+    stopMemoryMonitor();
+    removeScannerLockOverlay();
     return;
   }
 
-  console.log(`📊 Khởi động Round-Robin Scheduler cho ${configs.length} config:`);
+  console.log(`📊 Khởi động Sequential Loop cho ${configs.length} configs:`);
   configs.forEach((config, index) => {
     const configId = config.config_id || config.id;
     const groupCount = config.zalo_groups ? config.zalo_groups.length : 0;
-    const fanpageCount = config.zalo_fanpages ? config.zalo_fanpages.length : 0;
-    console.log(`  → [${index + 1}] ${configId}: ${groupCount} nhóm, ${fanpageCount} fanpage`);
+    console.log(`  → [${index + 1}/${configs.length}] ${configId}: ${groupCount} nhóm`);
   });
   
-  // ✅ ROUND-ROBIN STATE
+  // ✅ STATE
   let currentConfigIndex = 0;
   let lastScanTime = 0;
   let isCurrentlyScanning = false;
   
-  // ✅ SCANNER LOOP: Quét xoay vòng từng config
-  const scannerTimer = setInterval(async () => {
+  // ✅ MAIN LOOP: Check mỗi 2s xem có nên quét config tiếp không
+  const mainLoopTimer = setInterval(async () => {
     if (!isZaloScanning) {
-      clearInterval(scannerTimer);
+      clearInterval(mainLoopTimer);
       return;
     }
     
-    // Nếu đang quét config, skip
+    // Trong lúc quét, skip
     if (isCurrentlyScanning) return;
     
-    // Check xem đã đủ thời gian chưa (5 phút từ lần quét cuối)
+    // Check interval (5 phút)
     const now = Date.now();
     const timeSinceLastScan = now - lastScanTime;
     const minInterval = ZALO_TIMING.CONFIG_SCAN_INTERVAL;
     
     if (lastScanTime > 0 && timeSinceLastScan < minInterval) {
-      // Chưa đủ 5 phút, chờ tiếp
-      const remaining = Math.round((minInterval - timeSinceLastScan) / 1000);
-      if (remaining % 30 === 0) { // Log mỗi 30s
-        console.log(`⏳ [Scanner] Chờ ${remaining}s nữa để quét config tiếp theo...`);
-      }
+      // Chưa đủ, chờ tiếp
       return;
     }
     
-    // Lấy config hiện tại
+    // Bắt đầu quét config
     const config = configs[currentConfigIndex];
     const configId = config.config_id || config.id;
     
-    console.log(`\n🎯 [Scanner Round ${currentConfigIndex + 1}/${configs.length}] Quét config: ${configId}`);
+    console.log(`\n🎯 [Round ${currentConfigIndex + 1}/${configs.length}] Config: ${configId}`);
     
     isCurrentlyScanning = true;
     
     try {
-      // Quét NHANH tất cả nhóm của config này
-      await scanAllGroupsForConfig(config, statusEl);
-      
-      console.log(`✅ [Scanner] Config ${configId} quét xong, chuyển sang config tiếp sau 5 phút`);
+      // ✅ Quét config này (tuần tự: nhóm → lấy tin → đăng)
+      await scanAndPostConfig(config, statusEl);
     } catch (e) {
-      console.error(`❌ [Scanner] Lỗi quét config ${configId}:`, e);
+      console.error(`❌ [Config ${configId}] Error:`, e);
     } finally {
-      // Di chuyển đến config tiếp theo (round-robin)
+      // Chuyển config tiếp
       currentConfigIndex = (currentConfigIndex + 1) % configs.length;
       lastScanTime = Date.now();
       isCurrentlyScanning = false;
       
       if (statusEl) {
-        const queueSize = zaloPostingQueue.length;
-        statusEl.textContent = `🔄 Scanner: Config ${currentConfigIndex + 1}/${configs.length} | Queue: ${queueSize} items`;
+        statusEl.textContent = `🔄 [${currentConfigIndex + 1}/${configs.length}] Chờ 5 phút để quét lại...`;
       }
     }
   }, ZALO_TIMING.SCANNER_LOOP_INTERVAL);
   
-  // ✅ POSTING WORKER: Xử lý queue độc lập
-  console.log('🚀 [Posting Worker] Khởi động...');
-  isPostingWorkerRunning = true;
-  
-  const postingWorkerTimer = setInterval(async () => {
-    if (!isZaloScanning || !isPostingWorkerRunning) {
-      clearInterval(postingWorkerTimer);
-      isPostingWorkerRunning = false;
-      return;
-    }
-    
-    // Xử lý queue (non-blocking)
-    await processPostingQueue();
-  }, ZALO_TIMING.POSTING_WORKER_INTERVAL);
-  
-  // Lưu timers để dừng sau
-  zaloConfigScanners._scannerTimer = scannerTimer;
-  zaloConfigScanners._postingWorkerTimer = postingWorkerTimer;
+  // Lưu timer để dừng sau
+  zaloConfigScanners._mainLoopTimer = mainLoopTimer;
 
   if (statusEl) {
-    statusEl.textContent = `🟢 Scanner + Worker đang chạy (${configs.length} configs)...`;
+    statusEl.textContent = `🟢 Sequential Loop chạy (${configs.length} configs)...`;
   }
-  
-  // Log stats mỗi 60s
-  setInterval(() => {
-    if (!isZaloScanning) return;
-    console.log(`\n📊 [Stats] Queue: ${zaloPostingQueue.length} pending | Worker: ${postingWorkerStats.totalProcessed} processed (${postingWorkerStats.totalSuccess} success, ${postingWorkerStats.totalError} error)`);
-  }, 60000);
 }
 
 /**
- * ✅ VERIFICATION: Check xem tất cả configs đã quét thành công không
- * Dùng sau khi stopZaloScanner() để verify
- * @returns {Object} {success: boolean, report: {config_id, status, errors...}}
- */
-function verifyZaloScannerCompletion() {
-  if (!window._zaloScannerVerificationData) {
-    console.warn('⚠️ [Verify] Verification data chưa được khởi tạo');
-    return { success: false, report: 'No verification data' };
-  }
-  
-  const configs = getConfigsWithZaloGroups();
-  const results = {
-    success: true,
-    startedAt: window._zaloScannerVerificationData.startedAt,
-    configsExpected: Object.keys(window._zaloScannerVerificationData.configDetails).length,
-    configsWithScans: 0,
-    configsWithErrors: 0,
-    details: []
-  };
-  
-  // Check từng config
-  Object.entries(window._zaloScannerVerificationData.configDetails).forEach(([configId, expected]) => {
-    const scanner = zaloConfigScanners[configId];
-    
-    const detail = {
-      config_id: configId,
-      expectedGroups: expected.groupCount,
-      expectedFanpages: expected.fanpageCount,
-      scanAttempts: scanner?.scanCount || 0,
-      lastError: scanner?.lastError || null,
-      status: 'unknown'
-    };
-    
-    if (!scanner) {
-      detail.status = 'NOT_FOUND';
-      results.success = false;
-    } else if (scanner.scanCount > 0) {
-      detail.status = scanner.lastError ? 'SCAN_WITH_ERRORS' : 'SCANNED_OK';
-      results.configsWithScans++;
-      if (scanner.lastError) {
-        results.configsWithErrors++;
-      }
-    } else if (scanner.lastError) {
-      detail.status = 'NEVER_SCANNED_ERROR';
-      results.configsWithErrors++;
-      results.success = false;
-    } else {
-      detail.status = 'NEVER_SCANNED_PENDING';
-    }
-    
-    results.details.push(detail);
-  });
-  
-  console.log('🔍 [VERIFY] Zalo Scanner Completion Report:');
-  console.log(`   Configs Expected: ${results.configsExpected}`);
-  console.log(`   Configs Scanned: ${results.configsWithScans}`);
-  console.log(`   Configs With Errors: ${results.configsWithErrors}`);
-  console.log(`   Overall Status: ${results.success ? '✅ OK' : '❌ ISSUES DETECTED'}`);
-  
-  if (results.configsWithErrors > 0) {
-    console.warn('⚠️ [VERIFY] Some configs have errors - check details above');
-  }
-  
-  return results;
-}
-/*
- * Dừng quét Zalo cho tất cả configs
- */
-/**
- * ✅ DỪNG ZALO SCANNER VÀ POSTING WORKER
+ * ✅ DỪNG ZALO SCANNER
  */
 function stopZaloScanner(statusEl) {
   isZaloScanning = false;
   isPostingWorkerRunning = false;
   
+  // ✅ Stop Memory Monitor
+  stopMemoryMonitor();
+  
   // ✅ MỞ KHÓA UI
   removeScannerLockOverlay();
 
-  // Dừng scanner timer
-  if (zaloConfigScanners._scannerTimer) {
-    clearInterval(zaloConfigScanners._scannerTimer);
-    console.log(`⏹️ Dừng Scanner Timer`);
-  }
-  
-  // Dừng posting worker timer
-  if (zaloConfigScanners._postingWorkerTimer) {
-    clearInterval(zaloConfigScanners._postingWorkerTimer);
-    console.log(`⏹️ Dừng Posting Worker Timer`);
+  // Dừng main loop timer
+  if (zaloConfigScanners._mainLoopTimer) {
+    clearInterval(zaloConfigScanners._mainLoopTimer);
+    console.log(`⏹️ Dừng Main Loop Timer`);
   }
   
   // Clear config scanners
@@ -7739,12 +7897,11 @@ function stopZaloScanner(statusEl) {
   isZaloAutoMode = false;
   
   // Log stats cuối cùng
-  console.log('⏹️ [Zalo Scanner] Dừng - Stats:');
-  console.log(`   📥 Queue còn lại: ${zaloPostingQueue.length} items`);
-  console.log(`   📊 Posting Worker: ${postingWorkerStats.totalProcessed} processed (${postingWorkerStats.totalSuccess} success, ${postingWorkerStats.totalError} error)`);
+  console.log('⏹️ [Zalo Scanner] Dừng');
+  console.log(`   💾 Memory: ${getHeapUsageMB()}MB`);
 
   if (statusEl) {
-    statusEl.textContent = `⏸ Đã dừng. Queue: ${zaloPostingQueue.length} items chưa xử lý`;
+    statusEl.textContent = `⏸ Đã dừng.`;
   }
 }
 
