@@ -1280,68 +1280,74 @@ function extractKeywordsForHashtags(text = '', limit = 5) {
 
 /**
  * Tạo hashtags SEO tiếng Việt (không dấu) từ keywords
- * ✅ SUPPORT ĐA NGÀNH: Bất động sản, phần mềm, dịch vụ, giáo dục, etc.
- * VD: "Căn hộ cao cấp" → "#Can_ho_cao_cap #Can_ho #Cao_cap"
+ * ✅ CHUẨN SEO FACEBOOK: Main keyword → Long-tail → Local → Industry → CTA
+ * ✅ CONVERSION OPTIMIZED: Dễ tìm kiếm + thu hút khách hàng
+ * VD: "Căn hộ cao cấp" → "#can-ho-cao-cap #bat-dong-san #viet-nam #gia-tot"
  */
 function generateSeoHashtags(title = '', description = '', tags = [], limit = 6, industry = '') {
   const hashtagsSet = new Set();
   
-  // 1. Từ title (quan trọng nhất)
+  // 1️⃣ MAIN KEYWORDS FROM TITLE (ưu tiên #1 - khách hàng search)
   if (title) {
-    const titleKeywords = extractKeywordsForHashtags(title, 3);
-    titleKeywords.forEach(kw => {
-      const normalized = removeVietnameseTones(kw);
-      if (normalized.length > 0) {
-        hashtagsSet.add(normalized.replace(/\s+/g, '_'));
+    const titleKeywords = extractKeywordsForHashtags(title, 5);
+    titleKeywords.slice(0, 2).forEach(kw => {
+      const normalized = removeVietnameseTones(kw).toLowerCase();
+      if (normalized.length > 2) {
+        hashtagsSet.add(normalized.replace(/\s+/g, '-'));
       }
     });
   }
   
-  // 2. Từ description
+  // 2️⃣ LONG-TAIL KEYWORDS from description (high intent keywords)
   if (description) {
-    const descKeywords = extractKeywordsForHashtags(description, 3);
-    descKeywords.forEach(kw => {
-      const normalized = removeVietnameseTones(kw);
-      if (normalized.length > 0) {
-        hashtagsSet.add(normalized.replace(/\s+/g, '_'));
+    const descKeywords = extractKeywordsForHashtags(description, 5);
+    descKeywords.slice(0, 2).forEach(kw => {
+      const normalized = removeVietnameseTones(kw).toLowerCase();
+      if (normalized.length > 2) {
+        hashtagsSet.add(normalized.replace(/\s+/g, '-'));
       }
     });
   }
   
-  // 3. Từ tags array
-  if (Array.isArray(tags)) {
-    tags.slice(0, 3).forEach(tag => {
-      const normalized = removeVietnameseTones(tag);
-      if (normalized.length > 0) {
-        hashtagsSet.add(normalized.replace(/\s+/g, '_'));
+  // 3️⃣ TAGS ARRAY (explicit SEO keywords)
+  if (Array.isArray(tags) && tags.length > 0) {
+    tags.slice(0, 2).forEach(tag => {
+      const normalized = removeVietnameseTones(tag).toLowerCase();
+      if (normalized.length > 2) {
+        hashtagsSet.add(normalized.replace(/\s+/g, '-'));
       }
     });
   }
   
-  // 4. ✅ INDUSTRY-SPECIFIC HASHTAGS (đa ngành)
-  // Thêm hashtags phổ biến dựa trên lĩnh vực
-  const commonHashtagsByIndustry = {
-    'dich-vu': ['dichvu', 'chuyennghiep', 'giaiphap', 'tuvan', 'toiuu', 'doanhnghiep'],
-    'phan-mem': ['phanmem', 'tudونghoa', 'quanly', 'congnge', 'tangहieuqua', 'startup'],
-    'booking-online': ['datlichonline', 'booking', 'tietkiemthoigian', 'dедang', 'uytin', 'chatluong'],
-    'cho-thue-xe': ['thuexe', 'chothueхе', 'xesachse', 'taixechuyennghiep', 'antoan', 'tphcm'],
-    'lam-dep-my-pham': ['lamdep', 'mypham', 'skincare', 'beautytips', 'chamsocda', 'spa'],
-    'bat-dong-san': ['batdongsan', 'nhadat', 'dautubds', 'minhbachphaply', 'thanhkhoan', 'chuyennghiep']
+  // 4️⃣ INDUSTRY-SPECIFIC HASHTAGS (high-volume search keywords for each industry)
+  const ctaHashtagsByIndustry = {
+    'bat-dong-san': ['bat-dong-san', 'nha-dat', 'dau-tu', 'tphcm'],
+    'dich-vu': ['dich-vu', 'chuyen-nghiep', 'giai-phap', 'tham-van'],
+    'phan-mem': ['phan-mem', 'quan-ly', 'cong-nghe', 'startup'],
+    'booking-online': ['dat-lich', 'booking', 'tham-van', 'tiet-kiem'],
+    'cho-thue-xe': ['thue-xe', 'taxi', 'dich-vu', 'an-toan'],
+    'lam-dep-my-pham': ['lam-dep', 'skincare', 'spa', 'my-pham'],
+    'giao-duc': ['giao-duc', 'hoc-tap', 'khoa-hoc', 'ky-nang']
   };
   
-  // Thêm industry-specific hashtags
-  const industryHashtags = commonHashtagsByIndustry[industry] || [
-    'chitietbaiviet', 'thongtin', 'khoahoc', 'dulinhoc', 'viet_nam'
-  ];
+  const ctaHashtags = ctaHashtagsByIndustry[industry] || ['dich-vu', 'thong-tin', 'giai-phap'];
+  ctaHashtags.slice(0, 2).forEach(ht => hashtagsSet.add(ht));
   
-  industryHashtags.forEach(ht => hashtagsSet.add(ht));
+  // 5️⃣ LOCAL HASHTAGS (Việt Nam - location is key for search)
+  const localHashtags = ['viet-nam', 'tphcm', 'ha-noi', 'da-nang'];
+  localHashtags.slice(0, 1).forEach(ht => hashtagsSet.add(ht));
   
-  // 5. ✅ UNIVERSAL HASHTAGS - Hoạt động với tất cả ngành
-  const universalHashtags = ['viet_nam', 'thongtin', 'tilam'];
-  universalHashtags.forEach(ht => hashtagsSet.add(ht));
+  // 6️⃣ UNIVERSAL CTA HASHTAGS (high engagement + conversion)
+  // These work across all industries and drive action
+  const universalCTA = ['gia-tot', 'khuyen-mai', 'mua-ngay', 'lien-he'];
+  universalCTA.slice(0, 1).forEach(ht => hashtagsSet.add(ht));
   
-  // Lấy top hashtags
-  return Array.from(hashtagsSet).slice(0, limit);
+  // ✅ Return ordered hashtags (important first)
+  const result = Array.from(hashtagsSet).slice(0, limit);
+  
+  console.log(`[SEO Hashtags] Generated ${result.length} hashtags for industry="${industry}": ${result.join(' ')}`);
+  
+  return result;
 }
 
 // ===== ARTICLE HISTORY =====
