@@ -6966,24 +6966,24 @@ async function cleanupWebviewAfterScan(webviewId = null) {
       code: `
         (function() {
           try {
-            // 1. Clear conversations từ DOM (để webview reload khi cần)
-            const convList = document.querySelector('[data-testid="conversation-list"], .conversation-list, [role="list"]');
-            if (convList) {
-              convList.innerHTML = '';
-            }
+            // ❌ DISABLED: Không xóa conversations vì gây Zalo reload và logout
+            // const convList = document.querySelector('[data-testid="conversation-list"], .conversation-list, [role="list"]');
+            // if (convList) {
+            //   convList.innerHTML = '';  // ← GÂY LOGOUT!
+            // }
 
-            // 2. Clear current message input
+            // ✅ 1. Chỉ clear message input (an toàn)
             const msgInput = document.querySelector('input[placeholder*="Nhập tin"]');
             if (msgInput) {
               msgInput.value = '';
             }
 
-            // 3. Clear any pending base64 data trong memory
+            // ✅ 2. Clear any pending base64 data trong memory (không ảnh hưởng session)
             window.__zaloScannedData = null;
             window.__zaloMessages = null;
             window.__pendingImages = null;
 
-            // 4. Remove all event listeners từ custom objects
+            // ✅ 3. Remove all event listeners từ custom objects
             if (window.__zaloEventListeners) {
               Object.values(window.__zaloEventListeners).forEach(listener => {
                 try { listener.remove ? listener.remove() : null; } catch (e) {}
@@ -6991,10 +6991,10 @@ async function cleanupWebviewAfterScan(webviewId = null) {
               window.__zaloEventListeners = {};
             }
 
-            // 5. Force cleanup
+            // ✅ 4. Force cleanup (chỉ memory, không DOM)
             if (window.gc) window.gc();
 
-            console.log('✅ Webview cleanup hoàn tất');
+            console.log('✅ Webview cleanup hoàn tất (giữ conversations để tránh logout)');
           } catch (e) {
             console.error('❌ Webview cleanup error:', e.message);
           }
@@ -8215,65 +8215,86 @@ async function ensureWebviewReady() {
   }
 
   // Bước 2: Webview không tồn tại hoặc mất chức năng
-  console.warn(`⚠️ [ensureWebviewReady] Webview ${webviewId} không tồn tại trong DOM, cố gắng khôi phục...`);
+  console.warn(`⚠️ [ensureWebviewReady] Webview ${webviewId} không tồn tại trong DOM`);
   
-  // Cố gắng tìm container
-  const container = document.getElementById("zalo-webview-panel");
-  if (!container) {
-    console.error('❌ [ensureWebviewReady] Không tìm thấy container "zalo-webview-panel"');
-    return false;
+  // ❌ DISABLED: Không tự động recreate webview vì gây login lại
+  // Recreate webview = tạo session mới = mất login
+  // User phải tự mở lại webview bằng cách stop và start lại scanner
+  
+  console.error(`❌ [ensureWebviewReady] Webview đã mất. Vui lòng STOP scanner và START lại để khôi phục.`);
+  console.error(`   Lý do: Recreate webview sẽ mất session login Zalo.`);
+  
+  // Show notification to user
+  if (window.antd && window.antd.notification) {
+    window.antd.notification.error({
+      message: '⚠️ Webview Zalo đã mất',
+      description: 'Vui lòng STOP và START lại scanner để khôi phục. Không thể tự động recreate vì sẽ mất session login.',
+      duration: 10,
+    });
   }
+  
+  return false;
+
+  // ❌ OLD CODE - DISABLED vì gây logout
+  // Cố gắng tìm container
+  // const container = document.getElementById("zalo-webview-panel");
+  // if (!container) {
+  //   console.error('❌ [ensureWebviewReady] Không tìm thấy container "zalo-webview-panel"');
+  //   return false;
+  // }
 
   // Bước 3: Thử tạo lại webview
-  try {
-    console.log(`🔄 [ensureWebviewReady] Tạo lại webview ${webviewId}...`);
-    const zaloWebview = createZaloWebview(webviewId, "https://chat.zalo.me/", container);
-    
-    if (!zaloWebview) {
-      console.error('❌ [ensureWebviewReady] Không thể tạo webview');
-      return false;
-    }
+  // try {
+  //   console.log(`🔄 [ensureWebviewReady] Tạo lại webview ${webviewId}...`);
+  //   const zaloWebview = createZaloWebview(webviewId, "https://chat.zalo.me/", container);
+  //   
+  //   if (!zaloWebview) {
+  //     console.error('❌ [ensureWebviewReady] Không thể tạo webview');
+  //     return false;
+  //   }
 
-    // Chờ webview tải xong trước khi tiếp tục
-    return await new Promise((resolve) => {
-      const timeout = setTimeout(() => {
-        console.warn('⏱️ [ensureWebviewReady] Timeout chờ webview ready');
-        resolve(false);
-      }, 8000);
+  //   // Chờ webview tải xong trước khi tiếp tục
+  //   return await new Promise((resolve) => {
+  //     const timeout = setTimeout(() => {
+  //       console.warn('⏱️ [ensureWebviewReady] Timeout chờ webview ready');
+  //       resolve(false);
+  //     }, 8000);
 
-      const checkReady = () => {
-        const wv = document.getElementById(webviewId);
-        if (wv && wv.executeScript) {
-          clearTimeout(timeout);
-          console.log(`✅ [ensureWebviewReady] Webview đã khôi phục thành công`);
-          resolve(true);
-        }
-      };
+  //     const checkReady = () => {
+  //       const wv = document.getElementById(webviewId);
+  //       if (wv && wv.executeScript) {
+  //         clearTimeout(timeout);
+  //         console.log(`✅ [ensureWebviewReady] Webview đã khôi phục thành công`);
+  //         resolve(true);
+  //       }
+  //     };
 
-      // Kiểm tra liên tục
-      const checkInterval = setInterval(() => {
-        checkReady();
-      }, 500);
+  //     // Kiểm tra liên tục
+  //     const checkInterval = setInterval(() => {
+  //       checkReady();
+  //     }, 500);
 
-      zaloWebview.addEventListener('dom-ready', () => {
-        clearInterval(checkInterval);
-        checkReady();
-      });
+  //     zaloWebview.addEventListener('dom-ready', () => {
+  //       clearInterval(checkInterval);
+  //       checkReady();
+  //     });
 
-      // Kiểm tra ngay
-      checkReady();
-    });
-  } catch (e) {
-    console.error('❌ [ensureWebviewReady] Lỗi khi tạo lại webview:', e);
-    return false;
-  }
+  //     // Kiểm tra ngay
+  //     checkReady();
+  //   });
+  // } catch (e) {
+  //   console.error('❌ [ensureWebviewReady] Lỗi khi tạo lại webview:', e);
+  //   return false;
+  // }
 }
 
 async function scanZaloGroup(groupName) {
-  // ✅ Bước 0: Kiểm tra webview sẵn sàng (nếu không thì thử phục hồi)
+  // ✅ Bước 0: Kiểm tra webview sẵn sàng (nếu không thì STOP ngay)
   const webviewReady = await ensureWebviewReady();
   if (!webviewReady) {
-    console.warn(`⚠️ [scanZaloGroup] Webview không sẵn sàng, sẽ thử phương pháp khác`);
+    console.error(`❌ [scanZaloGroup] Webview không sẵn sàng cho nhóm "${groupName}". SKIP nhóm này.`);
+    console.error(`   → Vui lòng STOP và START lại scanner để khôi phục webview.`);
+    return []; // Return empty array để không crash scanner
   }
 
   // Ưu tiên 1: Click vào nhóm trước, sau đó quét
