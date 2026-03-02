@@ -1278,62 +1278,6 @@ function extractKeywordsForHashtags(text = '', limit = 5) {
     .map(([word]) => word);
 }
 
-/**
- * Tạo hashtags SEO tiếng Việt (không dấu) từ keywords
- * ✅ SUPPORT ĐA NGÀNH: Bất động sản, phần mềm, dịch vụ, giáo dục, etc.
- */
-function generateSeoHashtags(title = '', description = '', tags = [], limit = 6, industry = '') {
-  const hashtagsSet = new Set();
-  
-  // 1. Từ title (quan trọng nhất)
-  if (title) {
-    const titleKeywords = extractKeywordsForHashtags(title, 3);
-    titleKeywords.forEach(kw => {
-      const normalized = removeVietnameseTones(kw).toLowerCase();
-      if (normalized.length > 2) {
-        hashtagsSet.add(normalized.replace(/\s+/g, '-'));
-      }
-    });
-  }
-  
-  // 2. Từ description
-  if (description) {
-    const descKeywords = extractKeywordsForHashtags(description, 3);
-    descKeywords.forEach(kw => {
-      const normalized = removeVietnameseTones(kw).toLowerCase();
-      if (normalized.length > 2) {
-        hashtagsSet.add(normalized.replace(/\s+/g, '-'));
-      }
-    });
-  }
-  
-  // 3. Từ tags array
-  if (Array.isArray(tags)) {
-    tags.slice(0, 3).forEach(tag => {
-      const normalized = removeVietnameseTones(tag).toLowerCase();
-      if (normalized.length > 2) {
-        hashtagsSet.add(normalized.replace(/\s+/g, '-'));
-      }
-    });
-  }
-  
-  // 4. ✅ INDUSTRY-SPECIFIC HASHTAGS
-  const industryHashtags = {
-    'bat-dong-san': ['bat-dong-san', 'nha-dat', 'dau-tu'],
-    'dich-vu': ['dich-vu', 'chuyen-nghiep', 'tham-van'],
-    'phan-mem': ['phan-mem', 'quan-ly', 'cong-nghe'],
-    'booking-online': ['dat-lich', 'booking', 'tham-van'],
-    'cho-thue-xe': ['thue-xe', 'taxi', 'dich-vu'],
-    'lam-dep-my-pham': ['lam-dep', 'skincare', 'spa']
-  };
-  
-  const ctaList = industryHashtags[industry] || ['dich-vu', 'viet-nam'];
-  ctaList.forEach(ht => hashtagsSet.add(ht));
-  
-  // Lấy top hashtags
-  return Array.from(hashtagsSet).slice(0, limit);
-}
-
 // ===== ARTICLE HISTORY =====
 function saveArticleToHistory(domainKey, industryOrProject, title, slug) {
   try {
@@ -1461,28 +1405,6 @@ function selectSmartFeaturedImage(images) {
   // Lưu vào lịch sử
   saveImageToHistory(selectedImage);
   return selectedImage;
-}
-
-// ===== HELPER FUNCTIONS =====
-function replaceContactInfo(text, opts = {}) {
-  if (!text) return text;
-  
-  const phone = opts.phone || LMKT_CONTACT_PHONE;
-  const name = opts.name || LMKT_CONTACT_NAME;
-  
-  let result = String(text);
-  
-  // Thay thế số điện thoại
-  // Patterns: 0xxx xxx xxxx, (+84)9xx xxx xxxx, 09xxxxxxxx, etc.
-  result = result.replace(/\b0\d{9,10}\b/g, phone);
-  result = result.replace(/\(\+84\)\s*\d{1,2}\s*\d{3,4}\s*\d{3,4}/g, phone);
-  result = result.replace(/\+84\s*\d{1,2}\s*\d{3,4}\s*\d{3,4}/g, phone);
-  
-  // Thay thế tên liên hệ
-  // Patterns: Liên hệ: XXX, Mr/Mrs XXX, Anh/Chị XXX
-  result = result.replace(/(?:Liên hệ|Contact|Ms|Mr|Mrs|Anh|Chị|Bà|Ông)\s+[A-ỦZÀÁẢÃẠĂẰẮẲẴẶÂẦẤẨẪẬÈÉẺẼẸÊỀẾỂỄỆÌÍỈĨỊÒÓỎÕỌÔỒỐỔỖỘƠỜỚỞỠỢÙÚỦŨỤƯỪỨỬỮỰỲÝỶỸỴĐ][a-ủzàáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ\s]*/gi, `${name}`);
-  
-  return result;
 }
 
 /**
@@ -6239,28 +6161,6 @@ function filterNewMessagesForConfig(config_id, groupName, messages) {
     saveGroupStateForConfig(config_id, groupName, hashes[hashes.length - 1]);
   }
   
-  return newItems;
-}
-
-// ⚠️ DEPRECATED: Hàm cũ để backward compatibility
-function filterNewMessages(groupName, messages) {
-  const state = loadGroupState();
-  const lastHash = state[groupName] || "";
-  if (!Array.isArray(messages) || messages.length === 0) {
-    return [];
-  }
-
-  const hashes = messages.map(buildMessageHash);
-  if (!lastHash) {
-    state[groupName] = hashes[hashes.length - 1];
-    saveGroupState(state);
-    return messages;
-  }
-
-  const lastIndex = hashes.lastIndexOf(lastHash);
-  const newItems = lastIndex >= 0 ? messages.slice(lastIndex + 1) : messages;
-  state[groupName] = hashes[hashes.length - 1];
-  saveGroupState(state);
   return newItems;
 }
 
