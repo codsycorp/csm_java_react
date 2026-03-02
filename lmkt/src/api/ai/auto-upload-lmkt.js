@@ -18,6 +18,24 @@ if (typeof window !== 'undefined') {
   window.__AUTO_UPLOAD_LMKT_LOADED__ = true;
 }
 
+// ========== GLOBAL ERROR HANDLERS - PREVENT SILENT CRASHES ==========
+// ✅ FIX: Catch unhandled promise rejections
+if (typeof window !== 'undefined') {
+  window.addEventListener('unhandledrejection', (event) => {
+    console.error('❌ [UNHANDLED REJECTION]', event.reason);
+    console.error('   Stack:', event.reason?.stack || 'no stack');
+    // Prevent default: don't let the browser crash
+    event.preventDefault();
+  });
+
+  window.addEventListener('error', (event) => {
+    console.error('❌ [WINDOW ERROR]', event.error || event.message);
+    if (event.error && event.error.stack) {
+      console.error('   Stack:', event.error.stack);
+    }
+  });
+}
+
 // ========== CRYPTO HELPERS - ENCRYPT/DECRYPT HTML CONTENT ==========
 /**
  * Lấy crypto functions từ window (exposed bởi AutoSetup.tsx)
@@ -6965,8 +6983,20 @@ function createZaloWebview(webviewId, url, container) {
  */
 async function checkZaloLogin(webviewId) {
   return new Promise((resolve) => {
+    // ✅ FIX: Add timeout to prevent hang
+    const timeoutMs = 5000; // 5 seconds
+    let callbackCalled = false;
+    
+    const timeout = setTimeout(() => {
+      if (callbackCalled) return;
+      callbackCalled = true;
+      console.warn(`⏱️ [checkZaloLogin] Timeout after ${timeoutMs}ms`);
+      resolve(false);
+    }, timeoutMs);
+    
     const wv = document.getElementById(webviewId);
     if (!wv || !wv.executeScript) {
+      clearTimeout(timeout);
       resolve(false);
       return;
     }
@@ -6985,6 +7015,10 @@ async function checkZaloLogin(webviewId) {
     wv.executeScript(
       { code: checkScript },
       (results) => {
+        if (callbackCalled) return;
+        callbackCalled = true;
+        clearTimeout(timeout);
+        
         const isLoggedIn = results && results[0] === true;
         console.log(`🔐 Zalo login check: ${isLoggedIn ? '✅ Đã đăng nhập' : '❌ Chưa đăng nhập'}`);
         resolve(isLoggedIn);
@@ -7059,8 +7093,20 @@ function normalizeTextForComparison(text) {
  */
 async function clickZaloGroup(webviewId, groupName) {
   return new Promise((resolve) => {
+    // ✅ FIX: Add timeout to prevent hang
+    const timeoutMs = 10000; // 10 seconds
+    let callbackCalled = false;
+    
+    const timeout = setTimeout(() => {
+      if (callbackCalled) return;
+      callbackCalled = true;
+      console.warn(`⏱️ [ClickZaloGroup] Timeout after ${timeoutMs}ms for group "${groupName}"`);
+      resolve(false);
+    }, timeoutMs);
+    
     const wv = document.getElementById(webviewId);
     if (!wv || !wv.executeScript) {
+      clearTimeout(timeout);
       console.error(`❌ [ClickZaloGroup] Webview ${webviewId} không tồn tại hoặc không hỗ trợ executeScript`);
       resolve(false);
       return;
@@ -7148,6 +7194,10 @@ async function clickZaloGroup(webviewId, groupName) {
     wv.executeScript(
       { code: scriptCode },
       (results) => {
+        if (callbackCalled) return;
+        callbackCalled = true;
+        clearTimeout(timeout);
+        
         try {
           const result = results && results[0] ? JSON.parse(results[0]) : { success: false };
           if (result.success) {
@@ -11610,8 +11660,14 @@ function updateDescriptionPreview() {
 }
 
 // Init UI
-ensureUI();
-ensureServiceContentUI();
+// ✅ FIX: Add proper error handling for async initialization
+ensureUI().catch(err => {
+  console.warn('⚠️ [ensureUI] Initialization failed:', err.message);
+});
+
+ensureServiceContentUI().catch(err => {
+  console.warn('⚠️ [ensureServiceContentUI] Initialization failed:', err.message);
+});
 
 // ============================================================
 // FACEBOOK AUTO POST - Đăng bài tự động lên Facebook Fanpage
@@ -14449,20 +14505,43 @@ function loadDataOptionUser() {
  * @param {Function} callback - callback(success, data, error)
  */
 function fetchDataOptionUserFromServer(callback) {
+  // ✅ FIX: Add timeout to prevent hang
+  const timeoutMs = 15000; // 15 seconds
+  let callbackCalled = false;
+  
+  const timeout = setTimeout(() => {
+    if (callbackCalled) return;
+    callbackCalled = true;
+    console.warn(`⏱️ [Zalo] fetchFromDatabase timeout after ${timeoutMs}ms, calling callback with error`);
+    callback(false, null, `Timeout after ${timeoutMs}ms`);
+  }, timeoutMs);
+  
+  const wrappedCallback = (success, data, error) => {
+    if (callbackCalled) return; // Prevent duplicate calls
+    callbackCalled = true;
+    clearTimeout(timeout);
+    callback(success, data, error);
+  };
+  
   if (window.csmUserData && typeof window.csmUserData.fetchFromDatabase === 'function') {
     console.log('[Zalo] Fetching dataOptionUser from server...');
-    window.csmUserData.fetchFromDatabase(function(success, data, error) {
-      if (success && Array.isArray(data)) {
-        console.log('[Zalo] ✅ Fetched', data.length, 'items from server');
-        callback(true, data, null);
-      } else {
-        console.warn('[Zalo] ❌ Failed to fetch from server:', error);
-        callback(false, null, error);
-      }
-    });
+    try {
+      window.csmUserData.fetchFromDatabase(function(success, data, error) {
+        if (success && Array.isArray(data)) {
+          console.log('[Zalo] ✅ Fetched', data.length, 'items from server');
+          wrappedCallback(true, data, null);
+        } else {
+          console.warn('[Zalo] ❌ Failed to fetch from server:', error);
+          wrappedCallback(false, null, error);
+        }
+      });
+    } catch (e) {
+      console.error('[Zalo] ❌ Exception calling fetchFromDatabase:', e);
+      wrappedCallback(false, null, e.message);
+    }
   } else {
     console.warn('[Zalo] csmUserData.fetchFromDatabase not available');
-    callback(false, null, 'csmUserData not available');
+    wrappedCallback(false, null, 'csmUserData not available');
   }
 }
 
