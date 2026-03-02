@@ -6746,6 +6746,87 @@ function buildMessageHash(msg = {}) {
 const ZALO_POSTED_LIMIT = 200; // Giới hạn tối đa 200 tin (giảm từ 1000 để tránh quota)
 const ZALO_POSTED_CLEANUP_DAYS = 7; // Tự động xóa tin cũ hơn 7 ngày (giảm từ 30)
 
+// ✅ DEBOUNCE QUEUE for posted messages - batch saves to reduce server calls
+const POSTED_MESSAGES_DEBOUNCE = {
+  queue: [],           // Queue tin chờ lưu
+  saveTimer: null,     // Timer id
+  FLUSH_INTERVAL: 30000,  // Flush every 30 seconds
+  BATCH_SIZE: 10,      // Or flush when 10+ messages collected
+  lastFlushTime: Date.now()
+};
+
+/**
+ * Add posted message to debounce queue
+ * Flush when: batch size reaches BATCH_SIZE OR timer expires
+ */
+function queuePostedMessageToSave(newRecord) {
+  POSTED_MESSAGES_DEBOUNCE.queue.push(newRecord);
+  
+  // If batch size reached, flush immediately
+  if (POSTED_MESSAGES_DEBOUNCE.queue.length >= POSTED_MESSAGES_DEBOUNCE.BATCH_SIZE) {
+    console.log(`🔥 [SaveQueue] Batch size ${POSTED_MESSAGES_DEBOUNCE.BATCH_SIZE} reached, flushing now...`);
+    flushPostedMessagesSave();
+    return;
+  }
+  
+  // If timer not set, set it
+  if (!POSTED_MESSAGES_DEBOUNCE.saveTimer) {
+    POSTED_MESSAGES_DEBOUNCE.saveTimer = setTimeout(() => {
+      console.log(`⏰ [SaveQueue] Timer expired, flushing...`);
+      flushPostedMessagesSave();
+    }, POSTED_MESSAGES_DEBOUNCE.FLUSH_INTERVAL);
+  }
+}
+
+/**
+ * Flush queued posted messages to server
+ */
+function flushPostedMessagesSave() {
+  // Clear timer
+  if (POSTED_MESSAGES_DEBOUNCE.saveTimer) {
+    clearTimeout(POSTED_MESSAGES_DEBOUNCE.saveTimer);
+    POSTED_MESSAGES_DEBOUNCE.saveTimer = null;
+  }
+  
+  // Nothing to save
+  if (POSTED_MESSAGES_DEBOUNCE.queue.length === 0) {
+    return;
+  }
+  
+  const queuedMessages = POSTED_MESSAGES_DEBOUNCE.queue.splice(0); // Take all
+  console.log(`💾 [SaveQueue] Flushing ${queuedMessages.length} messages to server...`);
+  
+  try {
+    // Load existing posted messages from storage
+    const existing = loadPostedZaloMessages();
+    
+    // Merge: new queued messages + existing
+    const merged = [...queuedMessages, ...existing];
+    
+    // Trim to limit
+    if (merged.length > ZALO_POSTED_LIMIT) {
+      merged.splice(ZALO_POSTED_LIMIT);
+    }
+    
+    // Save via saveDataOptionUser (will be debounced at that level too)
+    savePostedZaloMessagesOnly(merged, (success, error) => {
+      if (success) {
+        console.log(`✅ [SaveQueue] Flush successful`);
+        POSTED_MESSAGES_DEBOUNCE.lastFlushTime = Date.now();
+      } else {
+        console.error(`❌ [SaveQueue] Flush failed:`, error);
+        // Retry: put messages back in queue
+        console.log(`🔄 [SaveQueue] Re-queueing failed messages...`);
+        POSTED_MESSAGES_DEBOUNCE.queue.unshift(...queuedMessages);
+      }
+    });
+  } catch (e) {
+    console.error(`❌ [SaveQueue] Error during flush:`, e);
+    // Put messages back in queue
+    POSTED_MESSAGES_DEBOUNCE.queue.unshift(...queuedMessages);
+  }
+}
+
 // ✅ TIMING CONSTANTS - Tuỳ chỉnh delays để tránh hang
 // ========== GLOBAL POSTING QUEUE ==========
 // Queue để lưu tin Zalo cần đăng (tách biệt khỏi scanning)
@@ -7157,6 +7238,67 @@ if (typeof window !== 'undefined') {
  * @param {Array} postedMessages - Mảng tin đã đăng
  * @param {Function} callback - Callback(success, error) sau khi lưu xong
  */
+/**
+ * ✅ LIGHTWEIGHT: Save ONLY posted messages (no configs)
+ * Used by debounce queue - much smaller payload
+ * @param {Array} postedMessages - Only posted messages to save
+ * @param {Function} callback - callback(success, error)
+ */
+function savePostedZaloMessagesOnly(postedMessages, callback) {
+  try {
+    // ✅ SANITIZE: Remove any non-essential data
+    const messagesToSave = (Array.isArray(postedMessages) ? postedMessages : [])
+      .map(msg => ({
+        id: msg.id,
+        type: msg.type,
+        hash: msg.hash,
+        config_id: msg.config_id,
+        timestamp: msg.timestamp,
+        groupName: msg.groupName
+      }))
+      .filter(msg => msg.type === 'posted_zalo_message');
+
+    console.log(`💾 [SavePostedOnly] Saving ${messagesToSave.length} posted messages (lightweight, no configs)...`);
+
+    const allData = loadDataOptionUser();
+    if (!Array.isArray(allData)) {
+      console.error('❌ [SavePostedOnly] loadDataOptionUser failed');
+      if (callback) callback(false, 'loadDataOptionUser failed');
+      return;
+    }
+
+    // Filter out old posted messages, keep configs
+    const configs = allData.filter(item => item.type !== 'posted_zalo_message' && !item.id?.toString().startsWith('posted_zalo_'));
+
+    // Merge: configs + new posted messages (configs stay unchanged)
+    const finalData = [...configs, ...messagesToSave];
+
+    console.log(`   📊 Final: ${configs.length} configs + ${messagesToSave.length} messages = ${finalData.length} total`);
+
+    // Save to server
+    saveDataOptionUser(finalData, (success, error) => {
+      try {
+        if (success) {
+          console.log(`✅ [SavePostedOnly] Saved successfully`);
+          if (typeof callback === 'function') callback(true);
+        } else {
+          console.error(`❌ [SavePostedOnly] Save failed:`, error);
+          if (typeof callback === 'function') callback(false, error);
+        }
+      } catch (cbError) {
+        console.error('❌ [SavePostedOnly] Callback error:', cbError);
+      }
+    });
+  } catch (e) {
+    console.error('❌ [SavePostedOnly] Unexpected error:', e);
+    try {
+      if (typeof callback === 'function') callback(false, e.message);
+    } catch (cbError) {
+      console.error('❌ [SavePostedOnly] Callback error:', cbError);
+    }
+  }
+}
+
 function savePostedZaloMessages(postedMessages, callback) {
   try {
     // ✅ CLEANUP: Trim to max 200 newest messages
@@ -7263,17 +7405,15 @@ function recordPostedZaloMessage(message, groupName, config_id = null) {
       return;
     }
     
-    // Thêm tin mới
+    // ✅ SIMPLIFIED: Thêm tin mới với chỉ những field cần thiết (cho deduplication)
     const newRecord = {
       id: 'posted_zalo_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
       type: 'posted_zalo_message',
-      hash: hash,
-      timestamp: Date.now(),
-      config_id: config_id, // NEW: Track config nào đăng (null = legacy/unknown)
-      groupName: groupName || 'Unknown',
-      content_preview: (message.content || '').substring(0, 100),
-      sender: message.sender || 'Unknown',
-      has_images: message.images && message.images.length > 0
+      hash: hash,               // ✅ Để check duplicate
+      config_id: config_id,     // ✅ Để check duplicate per config
+      timestamp: Date.now(),    // ✅ Để cleanup old messages
+      groupName: groupName || 'Unknown'  // ✅ Để track source nhóm
+      // ❌ REMOVED: content_preview, sender, has_images (không cần cho dedup)
     };
     
     posted.unshift(newRecord);
@@ -7287,25 +7427,16 @@ function recordPostedZaloMessage(message, groupName, config_id = null) {
     // Cleanup tin cũ
     cleanupOldPostedZaloMessages(posted);
     
-    // Lưu lại với callback - wrap callback to prevent crashing
-    savePostedZaloMessages(posted, (success, error) => {
-      try {
-        if (success) {
-          console.log(`✅ [RecordPosted] Recorded message from ${groupName} (config: ${config_id || 'unknown'}): ${newRecord.content_preview}`);
-        } else {
-          console.error(`❌ [RecordPosted] Failed to save:`, error);
-          // ✅ Don't crash - just log the error and continue
-          console.warn('⚠️ [RecordPosted] Continuing despite save failure...');
-        }
-      } catch (cbError) {
-        console.error('❌ [RecordPosted] Callback error:', cbError);
-      }
-    });
+    // ✅ QUEUE instead of save immediately - reduce server calls
+    console.log(`📥 [RecordPosted] Queueing message for batch save (queue: ${POSTED_MESSAGES_DEBOUNCE.queue.length + 1})`);
+    queuePostedMessageToSave(newRecord);
+    
   } catch (e) {
     console.warn('⚠️ [RecordPosted] Error:', e);
     // ✅ Continue even if recording fails - don't break the flow
   }
 }
+
 
 /**
  * Dọn dẹp tin Zalo cũ hơn ZALO_POSTED_CLEANUP_DAYS ngày
@@ -16129,13 +16260,62 @@ function fetchDataOptionUserFromServer(callback) {
  * @param {Function} callback - callback(success, error)
  * @param {number} retryCount - Số lần retry (default 0, no retry)
  */
+
+// ✅ DEBOUNCE QUEUE for config saves - reduce server calls when multiple saves triggered
+const CONFIG_SAVE_DEBOUNCE = {
+  pendingData: null,
+  pendingCallbacks: [],
+  saveTimer: null,
+  DEBOUNCE_INTERVAL: 5000  // Batch saves within 5 seconds
+};
+
 function saveDataOptionUser(data, callback, retryCount = 0) {
   const dataToSave = Array.isArray(data) ? data : [];
+  
+  // ✅ DEBOUNCE: Queue the save request
+  const originalCallback = callback;
+  CONFIG_SAVE_DEBOUNCE.pendingData = dataToSave;
+  CONFIG_SAVE_DEBOUNCE.pendingCallbacks.push(originalCallback);
+  
+  console.log(`📥 [SaveDataUser] Queued for debounce (pending: ${CONFIG_SAVE_DEBOUNCE.pendingCallbacks.length}, interval: ${CONFIG_SAVE_DEBOUNCE.DEBOUNCE_INTERVAL}ms)`);
+  
+  // Clear existing timer
+  if (CONFIG_SAVE_DEBOUNCE.saveTimer) {
+    clearTimeout(CONFIG_SAVE_DEBOUNCE.saveTimer);
+  }
+  
+  // Set new timer
+  CONFIG_SAVE_DEBOUNCE.saveTimer = setTimeout(() => {
+    _saveDataOptionUserActual(CONFIG_SAVE_DEBOUNCE.pendingData, CONFIG_SAVE_DEBOUNCE.pendingCallbacks, retryCount);
+    CONFIG_SAVE_DEBOUNCE.pendingData = null;
+    CONFIG_SAVE_DEBOUNCE.pendingCallbacks = [];
+    CONFIG_SAVE_DEBOUNCE.saveTimer = null;
+  }, CONFIG_SAVE_DEBOUNCE.DEBOUNCE_INTERVAL);
+}
+
+/**
+ * ✅ ACTUAL save function (after debounce)
+ */
+function _saveDataOptionUserActual(dataToSave, callbacks, retryCount = 0) {
   const MAX_RETRIES = 2;
   const SERVER_TIMEOUT_MS = 15000; // 15 giây timeout cho server call
   
   console.log('====== 💾 [SaveDataOptionUser] BẮT ĐẦU LƯU DỮ LIỆU ======');
   console.log('📊 Số items được truyền vào:', dataToSave.length);
+  console.log(`📞 Gọi ${callbacks.length} callback(s) khi xong`);
+  
+  // ✅ Call all pending callbacks
+  const callAllCallbacks = (success, error) => {
+    callbacks.forEach(cb => {
+      try {
+        if (typeof cb === 'function') {
+          cb(success, error);
+        }
+      } catch (e) {
+        console.error('❌ Callback error:', e);
+      }
+    });
+  };
   
   // ✅ VALIDATE & SANITIZE: Loại bỏ functions, circular refs, non-serializable
   function sanitizeForJSON(obj, depth = 0) {
@@ -16209,21 +16389,10 @@ function saveDataOptionUser(data, callback, retryCount = 0) {
       console.log(`✅ [Ultra Sanitize] Success - size: ${(jsonStr.length / 1024).toFixed(2)}KB`);
     } catch (e2) {
       console.error('❌ [Ultra Sanitize] Still failed:', e2.message);
-      safeCallback(false, 'Data not JSON serializable even after sanitization');
+      callAllCallbacks(false, 'Data not JSON serializable even after sanitization');
       return;
     }
   }
-  
-  // Ensure callback always exists
-  const safeCallback = (success, error) => {
-    try {
-      if (typeof callback === 'function') {
-        callback(success, error);
-      }
-    } catch (cbError) {
-      console.error('❌ [SaveDataOptionUser] Callback error:', cbError);
-    }
-  };
   
   // ✅ CRITICAL FIX: Preserve posted messages khi save configs
   // Lấy posted messages cũ từ storage (nếu có) để merge
@@ -16300,17 +16469,17 @@ function saveDataOptionUser(data, callback, retryCount = 0) {
       // If retry budget available, retry
       if (retryCount < MAX_RETRIES) {
         console.log(`🔄 [SaveDataOptionUser] Retrying... (${retryCount + 1}/${MAX_RETRIES})`);
-        setTimeout(() => saveDataOptionUser(data, callback, retryCount + 1), 2000);
+        setTimeout(() => _saveDataOptionUserActual(dataToSave, callbacks, retryCount + 1), 2000);
       } else {
         console.error('❌ [SaveDataOptionUser] MAX RETRIES EXCEEDED - using localStorage fallback');
         // Fallback để tránh mở màn chết
         try {
           localStorage.setItem('dataOptionUser', JSON.stringify(finalData));
           console.log('✅ [SaveDataOptionUser] Fallback to localStorage SUCCESS');
-          safeCallback(true, null); // Report success to prevent hung state
+          callAllCallbacks(true, null); // Report success to prevent hung state
         } catch (e) {
           console.error('❌ [SaveDataOptionUser] localStorage fallback also failed:', e);
-          safeCallback(false, 'Server timeout + localStorage failed');
+          callAllCallbacks(false, 'Server timeout + localStorage failed');
         }
       }
     }, SERVER_TIMEOUT_MS);
@@ -16326,11 +16495,12 @@ function saveDataOptionUser(data, callback, retryCount = 0) {
         console.log('🔔 CALLBACK từ window.csmUserData.set() được gọi');
         console.log('   ✅ success =', success);
 
+
         console.log('   ❌ error =', error);
         
         if (success) {
           console.log('✅ [SaveDataOptionUser] SERVER SAVE THÀNH CÔNG!');
-          safeCallback(true, null);
+          callAllCallbacks(true, null);
         } else {
           console.error('❌ [SaveDataOptionUser] SERVER SAVE THẤT BẠI!');
           console.error('   Error:', error);
@@ -16338,16 +16508,16 @@ function saveDataOptionUser(data, callback, retryCount = 0) {
           // Retry nếu còn retry budget
           if (retryCount < MAX_RETRIES) {
             console.log(`🔄 [SaveDataOptionUser] Retrying after error... (${retryCount + 1}/${MAX_RETRIES})`);
-            setTimeout(() => saveDataOptionUser(data, callback, retryCount + 1), 1000 * (retryCount + 1));
+            setTimeout(() => _saveDataOptionUserActual(dataToSave, callbacks, retryCount + 1), 1000 * (retryCount + 1));
           } else {
             // Fallback to localStorage on final failure
             try {
               localStorage.setItem('dataOptionUser', JSON.stringify(finalData));
               console.log('⚠️ [SaveDataOptionUser] Fallback to localStorage after retries');
-              safeCallback(true, null);
+              callAllCallbacks(true, null);
             } catch (lsError) {
               console.error('❌ [SaveDataOptionUser] Final failure:', lsError);
-              safeCallback(false, error);
+              callAllCallbacks(false, error);
             }
           }
         }
@@ -16361,9 +16531,9 @@ function saveDataOptionUser(data, callback, retryCount = 0) {
       try {
         localStorage.setItem('dataOptionUser', JSON.stringify(finalData));
         console.log('✅ [SaveDataOptionUser] Fallback to localStorage after exception');
-        safeCallback(true, null);
+        callAllCallbacks(true, null);
       } catch (lsError) {
-        safeCallback(false, e.message);
+        callAllCallbacks(false, e.message);
       }
     }
   } else {
@@ -16375,10 +16545,10 @@ function saveDataOptionUser(data, callback, retryCount = 0) {
     try {
       localStorage.setItem('dataOptionUser', JSON.stringify(finalData));
       console.log('✅ [SaveDataOptionUser] localStorage SAVE THÀNH CÔNG (FALLBACK MODE)');
-      safeCallback(true, null);
+      callAllCallbacks(true, null);
     } catch (e) {
       console.error('❌ [SaveDataOptionUser] localStorage SAVE THẤT BẠI:', e);
-      safeCallback(false, e);
+      callAllCallbacks(false, e);
     }
   }
 }
