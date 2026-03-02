@@ -3621,7 +3621,7 @@ async function processContent(item, opts = {}) {
           const fallbackFormats = [
             () => [detail.description || detail.excerpt || detail.content?.substring(0, 300) || '', '', `👉 Xem chi tiết: ${articleUrl}`, `📌 #${seoHashtags.slice(0, 4).join(' #')}`],
             () => [`Bạn có biết? ${detail.title}?`, '', detail.description || detail.excerpt || '', '', articleUrl, `📌 #${seoHashtags.slice(0, 4).join(' #')}`],
-            () => [detail.title, '', detail.description || detail.excerpt || '', articleUrl]
+            () => [detail.title, '', detail.description || detail.excerpt || '', articleUrl, `📌 #${seoHashtags.slice(0, 4).join(' #')}`]
           ];
           const randomFallback = fallbackFormats[Math.floor(Math.random() * fallbackFormats.length)];
           pageContent = randomFallback().filter(line => line !== '').join('\n');
@@ -7547,8 +7547,8 @@ async function scanAndPostConfig(config, statusEl) {
         try {
           console.log(`      [TIN ${msgPos}/${messagesWithImages.length}] Đăng "${msg.sender || 'Unknown'}"...`);
           
-          // Đăng tin này
-          const success = await postMessageToFacebook(msg, config);
+          // Đăng tin này (tuần tự với auth)
+          const success = await pushSingleMessageToWeb(msg, groupName, configId, config);
           
           if (success) {
             console.log(`        ✅ Đăng thành công`);
@@ -7579,56 +7579,6 @@ async function scanAndPostConfig(config, statusEl) {
   console.log(`\n✅ [Config ${configId}] Hoàn tất: ${totalNew} tin mới, ${totalPosted} tin đăng`);
 }
 
-/**
- * ✅ Helper: Đăng 1 tin lên Facebook (tuần tự)
- */
-async function postMessageToFacebook(message, config) {
-  try {
-    // Content từ Zalo
-    const content = message.content || '';
-    const images = message.images || [];
-    
-    if (images.length === 0) {
-      console.warn('❌ No images to post');
-      return false;
-    }
-    
-    // Lấy 1 fanpage từ config
-    const fanpages = config.zalo_fanpages || [];
-    if (fanpages.length === 0) {
-      console.warn('❌ No fanpages configured');
-      return false;
-    }
-    
-    const fanpageId = fanpages[0]; // Post tất cả vào fanpage đầu tiên
-    
-    // Gọi API posting
-    const response = await fetch('/api/posts/create', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        fanpage_id: fanpageId,
-        content: content,
-        images: images,
-        config_id: config.config_id,
-        source: 'zalo_' + message.groupName
-      })
-    });
-    
-    if (!response.ok) {
-      console.error(`API error: ${response.status}`);
-      return false;
-    }
-    
-    // Record posted
-    recordPostedZaloMessage(message.hash, config.config_id, message.groupName);
-    return true;
-    
-  } catch (e) {
-    console.error('Post error:', e.message);
-    return false;
-  }
-}
 
 async function scanAllGroupsForConfig(config, statusEl) {
   // ✅ WRAP with try-catch to prevent crash
