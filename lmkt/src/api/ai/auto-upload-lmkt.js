@@ -1280,17 +1280,15 @@ function extractKeywordsForHashtags(text = '', limit = 5) {
 
 /**
  * Tạo hashtags SEO tiếng Việt (không dấu) từ keywords
- * ✅ CHUẨN SEO FACEBOOK: Main keyword → Long-tail → Local → Industry → CTA
- * ✅ CONVERSION OPTIMIZED: Dễ tìm kiếm + thu hút khách hàng
- * VD: "Căn hộ cao cấp" → "#can-ho-cao-cap #bat-dong-san #viet-nam #gia-tot"
+ * ✅ SUPPORT ĐA NGÀNH: Bất động sản, phần mềm, dịch vụ, giáo dục, etc.
  */
 function generateSeoHashtags(title = '', description = '', tags = [], limit = 6, industry = '') {
   const hashtagsSet = new Set();
   
-  // 1️⃣ MAIN KEYWORDS FROM TITLE (ưu tiên #1 - khách hàng search)
+  // 1. Từ title (quan trọng nhất)
   if (title) {
-    const titleKeywords = extractKeywordsForHashtags(title, 5);
-    titleKeywords.slice(0, 2).forEach(kw => {
+    const titleKeywords = extractKeywordsForHashtags(title, 3);
+    titleKeywords.forEach(kw => {
       const normalized = removeVietnameseTones(kw).toLowerCase();
       if (normalized.length > 2) {
         hashtagsSet.add(normalized.replace(/\s+/g, '-'));
@@ -1298,10 +1296,10 @@ function generateSeoHashtags(title = '', description = '', tags = [], limit = 6,
     });
   }
   
-  // 2️⃣ LONG-TAIL KEYWORDS from description (high intent keywords)
+  // 2. Từ description
   if (description) {
-    const descKeywords = extractKeywordsForHashtags(description, 5);
-    descKeywords.slice(0, 2).forEach(kw => {
+    const descKeywords = extractKeywordsForHashtags(description, 3);
+    descKeywords.forEach(kw => {
       const normalized = removeVietnameseTones(kw).toLowerCase();
       if (normalized.length > 2) {
         hashtagsSet.add(normalized.replace(/\s+/g, '-'));
@@ -1309,9 +1307,9 @@ function generateSeoHashtags(title = '', description = '', tags = [], limit = 6,
     });
   }
   
-  // 3️⃣ TAGS ARRAY (explicit SEO keywords)
-  if (Array.isArray(tags) && tags.length > 0) {
-    tags.slice(0, 2).forEach(tag => {
+  // 3. Từ tags array
+  if (Array.isArray(tags)) {
+    tags.slice(0, 3).forEach(tag => {
       const normalized = removeVietnameseTones(tag).toLowerCase();
       if (normalized.length > 2) {
         hashtagsSet.add(normalized.replace(/\s+/g, '-'));
@@ -1319,35 +1317,21 @@ function generateSeoHashtags(title = '', description = '', tags = [], limit = 6,
     });
   }
   
-  // 4️⃣ INDUSTRY-SPECIFIC HASHTAGS (high-volume search keywords for each industry)
-  const ctaHashtagsByIndustry = {
-    'bat-dong-san': ['bat-dong-san', 'nha-dat', 'dau-tu', 'tphcm'],
-    'dich-vu': ['dich-vu', 'chuyen-nghiep', 'giai-phap', 'tham-van'],
-    'phan-mem': ['phan-mem', 'quan-ly', 'cong-nghe', 'startup'],
-    'booking-online': ['dat-lich', 'booking', 'tham-van', 'tiet-kiem'],
-    'cho-thue-xe': ['thue-xe', 'taxi', 'dich-vu', 'an-toan'],
-    'lam-dep-my-pham': ['lam-dep', 'skincare', 'spa', 'my-pham'],
-    'giao-duc': ['giao-duc', 'hoc-tap', 'khoa-hoc', 'ky-nang']
+  // 4. ✅ INDUSTRY-SPECIFIC HASHTAGS
+  const industryHashtags = {
+    'bat-dong-san': ['bat-dong-san', 'nha-dat', 'dau-tu'],
+    'dich-vu': ['dich-vu', 'chuyen-nghiep', 'tham-van'],
+    'phan-mem': ['phan-mem', 'quan-ly', 'cong-nghe'],
+    'booking-online': ['dat-lich', 'booking', 'tham-van'],
+    'cho-thue-xe': ['thue-xe', 'taxi', 'dich-vu'],
+    'lam-dep-my-pham': ['lam-dep', 'skincare', 'spa']
   };
   
-  const ctaHashtags = ctaHashtagsByIndustry[industry] || ['dich-vu', 'thong-tin', 'giai-phap'];
-  ctaHashtags.slice(0, 2).forEach(ht => hashtagsSet.add(ht));
+  const ctaList = industryHashtags[industry] || ['dich-vu', 'viet-nam'];
+  ctaList.forEach(ht => hashtagsSet.add(ht));
   
-  // 5️⃣ LOCAL HASHTAGS (Việt Nam - location is key for search)
-  const localHashtags = ['viet-nam', 'tphcm', 'ha-noi', 'da-nang'];
-  localHashtags.slice(0, 1).forEach(ht => hashtagsSet.add(ht));
-  
-  // 6️⃣ UNIVERSAL CTA HASHTAGS (high engagement + conversion)
-  // These work across all industries and drive action
-  const universalCTA = ['gia-tot', 'khuyen-mai', 'mua-ngay', 'lien-he'];
-  universalCTA.slice(0, 1).forEach(ht => hashtagsSet.add(ht));
-  
-  // ✅ Return ordered hashtags (important first)
-  const result = Array.from(hashtagsSet).slice(0, limit);
-  
-  console.log(`[SEO Hashtags] Generated ${result.length} hashtags for industry="${industry}": ${result.join(' ')}`);
-  
-  return result;
+  // Lấy top hashtags
+  return Array.from(hashtagsSet).slice(0, limit);
 }
 
 // ===== ARTICLE HISTORY =====
@@ -3590,26 +3574,15 @@ async function processContent(item, opts = {}) {
           );
 
           if (fbPostData) {
-            pageContent = fbPostData.facebook_post || '';
-            const seoHashtags = generateSeoHashtags(
-              detail.title,
-              detail.description || '',
-              detail.tags || [],
-              6,
-              effectiveIndustry
-            );
-
-            const postFormats = [
-              () => [pageContent, '', `👉 ${fbPostData.cta || 'Xem chi tiết'}: ${articleUrl}`, `📌 #${seoHashtags.slice(0, 4).join(' #')}`, `📍 ${primaryDomain}`],
-              () => [pageContent, '', fbPostData.cta || 'Xem chi tiết đầy đủ', articleUrl, `📌 #${seoHashtags.slice(0, 4).join(' #')}`],
-              () => [pageContent, `📌 #${seoHashtags.slice(0, 2).join(' #')}`, '', fbPostData.cta || 'Xem chi tiết tại đây', articleUrl, `📌 #${seoHashtags.slice(2, 4).join(' #')}`],
-              () => [pageContent, '', `💬 ${fbPostData.cta || 'Bình luận đề xuất của bạn dưới bài'}`, `🔗 ${articleUrl}`, `📌 #${seoHashtags.slice(0, 4).join(' #')}`],
-              () => [pageContent, '', `👉 ${articleUrl}`, `📌 #${seoHashtags.slice(0, 5).join(' #')}`],
-              () => [pageContent, '', `↪️ ${fbPostData.cta || 'Đừng bỏ lỡ'}`, articleUrl, '', `📌 #${seoHashtags.slice(0, 4).join(' #')}`]
-            ];
-
-            const randomFormat = postFormats[Math.floor(Math.random() * postFormats.length)];
-            pageContent = randomFormat().filter(line => line !== '').join('\n');
+            // ✅ Use AI-generated content as-is (AI should include hashtags if needed)
+            const finalContent = [
+              fbPostData.facebook_post || '',
+              '',
+              fbPostData.cta || 'Xem chi tiết',
+              articleUrl
+            ].filter(line => line !== '').join('\n');
+            
+            pageContent = finalContent;
             console.log(`✅ [Facebook AI] Fanpage="${fanpageName}" generated (${pageContent.length} chars)`);
           }
         } catch (e) {
@@ -3617,20 +3590,15 @@ async function processContent(item, opts = {}) {
         }
 
         if (!pageContent) {
-          const seoHashtags = generateSeoHashtags(
-            detail.title || '',
-            detail.description || detail.excerpt || '',
-            detail.tags || [],
-            6,
-            effectiveIndustry
-          );
-          const fallbackFormats = [
-            () => [detail.description || detail.excerpt || detail.content?.substring(0, 300) || '', '', `👉 Xem chi tiết: ${articleUrl}`, `📌 #${seoHashtags.slice(0, 4).join(' #')}`],
-            () => [`Bạn có biết? ${detail.title}?`, '', detail.description || detail.excerpt || '', '', articleUrl, `📌 #${seoHashtags.slice(0, 4).join(' #')}`],
-            () => [detail.title, '', detail.description || detail.excerpt || '', articleUrl, `📌 #${seoHashtags.slice(0, 4).join(' #')}`]
-          ];
-          const randomFallback = fallbackFormats[Math.floor(Math.random() * fallbackFormats.length)];
-          pageContent = randomFallback().filter(line => line !== '').join('\n');
+          // ✅ FALLBACK ONLY: When AI fails, use simple format without additional hashtags
+          const fallbackContent = [
+            detail.description || detail.excerpt || detail.content?.substring(0, 300) || '',
+            '',
+            `👉 Xem chi tiết: ${articleUrl}`
+          ].filter(line => line !== '').join('\n');
+          
+          pageContent = fallbackContent;
+          console.log(`⚠️ [Facebook Fallback] Using simple format (${pageContent.length} chars)`);
         }
 
         return pageContent;
@@ -5685,7 +5653,8 @@ Thử đủ thứ không hiệu quả. Cho đến khi hiểu rõ 3 nguyên tắc
 
 [HƯỚNG DẪN OUTPUT - JSON]
 {
-  "facebook_post": "Nội dung post (200-400 chars, ${randomStyle}, ${randomAngle}, ${randomEmotion})",
+  "facebook_post": "Nội dung post (200-400 chars) + HASHTAGS SEO cuối (4-6 hashtags liên quan)",
+  "hashtags": ["hashtag1", "hashtag2", "hashtag3", "hashtag4"],
   "hooks": ["Hook 1", "Hook 2", "Hook 3"], 
   "cta": "CTA TỰ NHIÊN phù hợp ${industryCtx.name}",
   "target_mindset": "Tâm lý người dùng khi đọc",
@@ -5696,6 +5665,12 @@ Thử đủ thứ không hiệu quả. Cho đến khi hiểu rõ 3 nguyên tắc
   "style": "${randomStyle}",
   "emotion": "${randomEmotion}"
 }
+
+✅ HASHTAG CONVENTION (để trong facebook_post ở cuối):
+- Dùng hyphens thay vì underscores: #can-ho-cao-cap (không #can_ho_cao_cap)
+- 4-6 hashtags SEO liên quan
+- Ưu tiên: Main keyword (từ title) → Long-tail → Industry → Local → CTA
+- Ví dụ: "#can-ho-cao-cap #nha-dat-tphcm #dau-tu #viet-nam"
 
 ========== CREATIVITY IS KEY ==========
 ✅ MỖI BÀI POST PHẢI KHÁC NHAU - Tránh lặp lại cấu trúc
