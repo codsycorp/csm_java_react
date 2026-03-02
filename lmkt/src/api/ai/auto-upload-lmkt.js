@@ -2899,21 +2899,10 @@ function resolvePublicImageUrl(ctx, url) {
   if (/^https?:\/\//i.test(url)) return url;
 
   const protocol = (typeof window !== 'undefined' && window.location?.protocol) ? window.location.protocol : "https:";
-  const candidates = String(ctx?.domain || "")
-    .split(",")
-    .map(d => d.trim())
-    .filter(Boolean);
-
-  const nonLocalCandidates = candidates.filter(d => !/^localhost(?::\d+)?$/i.test(d) && !/^127\.0\.0\.1(?::\d+)?$/i.test(d));
-  const preferredDomain =
-    nonLocalCandidates.find(d => /phanmemmottrieu\.net$/i.test(d) || /h-holding\.vn$/i.test(d) || /h-holding\.com\.vn$/i.test(d))
-    || nonLocalCandidates.find(d => !/csmbridge\.net$/i.test(d))
-    || nonLocalCandidates[0]
-    || candidates[0]
-    || "";
+  const domain = (ctx?.domain || "").split(",")[0].trim();
 
   if (url.startsWith("//")) return `${protocol}${url}`;
-  if (url.startsWith("/")) return preferredDomain ? `${protocol}//${preferredDomain}${url}` : `${protocol}${url}`;
+  if (url.startsWith("/")) return domain ? `${protocol}//${domain}${url}` : `${protocol}${url}`;
   return url;
 }
 
@@ -3287,15 +3276,21 @@ async function processContent(item, opts = {}) {
 
   // 1️⃣ Lấy config ĐÚNG theo config_id (quan trọng để không nhầm fanpage!)
   let latestConfig = null;
+
+  // ✅ PRIORITY 0: Dùng config object truyền từ queue (chính xác nhất)
+  if (opts.config_object && typeof opts.config_object === 'object') {
+    latestConfig = opts.config_object;
+    console.log(`✅ [Config from Queue Object] config_id=${latestConfig.id || latestConfig.config_id}, domain=${latestConfig.domain}, fanpage=${latestConfig.fanpage_name}`);
+  }
   
   // ✅ PRIORITY 1: Load config by specific config_id (from Zalo auto-post)
-  if (opts.config_id) {
+  if (!latestConfig && opts.config_id) {
     try {
       const allConfigs = loadDataOptionUser && typeof loadDataOptionUser === 'function' ? loadDataOptionUser() : [];
       if (!Array.isArray(allConfigs)) {
         throw new Error("loadDataOptionUser không trả về array");
       }
-      latestConfig = allConfigs.find(x => x && x.id === opts.config_id && x.config_for_zalo);
+      latestConfig = allConfigs.find(x => x && (x.id === opts.config_id || x.config_id === opts.config_id) && x.config_for_zalo);
       if (latestConfig) {
         console.log(`✅ [Config Loaded by ID] config_id=${opts.config_id}, domain=${latestConfig.domain}, fanpage=${latestConfig.fanpage_name}`);
       } else {
@@ -5709,8 +5704,19 @@ function getConfigsWithZaloGroups() {
   const configs = loadDataOptionUser().filter(x => x.config_for_zalo && Array.isArray(x.zalo_groups) && x.zalo_groups.length > 0);
   
   return configs.map(cfg => ({
+    // ✅ CRITICAL: BẢO TOÀN TẤT CẢ TRƯỜNG CẦN THIẾT cho processContent
     id: cfg.id || ('auto_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8)),
     config_id: cfg.id,
+    domain: cfg.domain, // ✅ QUAN TRỌNG: Dùng cho resolvePublicImageUrl()
+    app_id: cfg.app_id,
+    service_type: cfg.service_type,
+    project: cfg.project,
+    fanpage_id: cfg.fanpage_id,
+    fanpage_token: cfg.fanpage_token,
+    fanpage_name: cfg.fanpage_name,
+    primary_domain: cfg.primary_domain,
+    fanpage_token_timestamp: cfg.fanpage_token_timestamp,
+    fanpage_token_expires_at: cfg.fanpage_token_expires_at,
     zalo_groups: cfg.zalo_groups || [],
     zalo_scan_interval_minutes: cfg.zalo_scan_interval_minutes || 5, // Default 5 phút
     zalo_fanpages: cfg.zalo_fanpages || [] // Fanpage riêng cho config này
@@ -8009,6 +8015,7 @@ async function pushSingleMessageToWeb(message, groupName, configId, config) {
       fanpage_name: config?.fanpage_name,
       primary_domain: config?.primary_domain,
       app_id: config?.app_id,
+      config_object: config,
       // Metadata từ Zalo
       zalo_group: groupName,
       zalo_sender: message.sender,
@@ -8712,6 +8719,11 @@ function ensureZaloMultiGroupUI(container) {
   const setMode = (mode, row = null, options = {}) => {
     currentMode = mode;
     editingRowId = row?.id || null;
+    
+    // ✅ Expose editingRowId ra global scope để handleManualToken có thể access
+    if (typeof window !== 'undefined') {
+      window.__zaloEditingConfigId = editingRowId;
+    }
 
     if (saveConfigBtn) {
       saveConfigBtn.style.display = currentMode === "idle" ? "none" : "inline-block";
@@ -8782,29 +8794,64 @@ function ensureZaloMultiGroupUI(container) {
       cb.checked = fanpageIds.includes(cb.value);
     });
     
-    // Lưu fanpage data từ UI checkbox (lấy token từ facebookState.pages matching page.id)
+    // ✅ FIX: Lưu fanpage data từ CONFIG ĐÃ LƯU (row.zalo_fanpages hoặc row.fanpage_tokens)
+    // KHÔNG lấy từ facebookState.pages (có thể là token của config khác!)
     const checkedBoxes = checkboxes.filter(cb => cb.checked);
+    
     editingFanpageData = {
       fanpage_ids: checkedBoxes.map(cb => cb.value),
       fanpage_id: checkedBoxes[0]?.value || null,
-      fanpage_names: checkedBoxes.map(cb => {
+      fanpage_names: checkedBoxes.map((cb, idx) => {
+        // ✅ Ưu tiên lấy từ zalo_fanpages (format mới)
+        if (Array.isArray(row.zalo_fanpages)) {
+          const zaloFp = row.zalo_fanpages.find(fp => fp.id === cb.value);
+          if (zaloFp) return zaloFp.name;
+        }
+        // Fallback: row.fanpage_names (array cũ)
+        if (Array.isArray(row.fanpage_names) && row.fanpage_names[idx]) {
+          return row.fanpage_names[idx];
+        }
+        // Fallback cuối: facebookState.pages
         const page = facebookState.pages.find(p => p.id === cb.value);
         return page?.name || cb.nextSibling?.textContent?.trim() || 'Unknown';
       }),
-      fanpage_name: checkedBoxes.map(cb => {
+      fanpage_name: '', // Sẽ được set sau
+      fanpage_tokens: checkedBoxes.map((cb, idx) => {
+        // ✅ CRITICAL: Ưu tiên lấy token từ CONFIG ĐÃ LƯU!
+        if (Array.isArray(row.zalo_fanpages)) {
+          const zaloFp = row.zalo_fanpages.find(fp => fp.id === cb.value);
+          if (zaloFp && zaloFp.access_token) return zaloFp.access_token;
+        }
+        // Fallback: row.fanpage_tokens (array cũ)
+        if (Array.isArray(row.fanpage_tokens) && row.fanpage_tokens[idx]) {
+          return row.fanpage_tokens[idx];
+        }
+        // Fallback cuối: facebookState.pages (ít an toàn nhất!)
         const page = facebookState.pages.find(p => p.id === cb.value);
-        return page?.name || cb.nextSibling?.textContent?.trim() || 'Unknown';
-      }).join(', '),
-      fanpage_tokens: checkedBoxes.map(cb => {
-        const page = facebookState.pages.find(p => p.id === cb.value);
+        console.warn(`⚠️ [loadRowToControls] Fallback to facebookState.pages for token: ${cb.value} - may be WRONG!`);
         return page?.access_token || '';
       }),
-      fanpage_token: (() => {
-        const firstPage = facebookState.pages.find(p => p.id === checkedBoxes[0]?.value);
-        return firstPage?.access_token || null;
-      })()
+      fanpage_token: null // Sẽ được set sau
     };
-    console.log('[Zalo Config] Checked fanpages:', fanpageIds.length, 'Loaded tokens from facebookState:', editingFanpageData);
+    
+    // Set fanpage_name và fanpage_token từ array đầu tiên
+    editingFanpageData.fanpage_name = editingFanpageData.fanpage_names.join(', ');
+    editingFanpageData.fanpage_token = editingFanpageData.fanpage_tokens[0] || null;
+    
+    // ✅ Expose ra global scope để handleManualToken có thể access
+    if (typeof window !== 'undefined') {
+      window.__zaloEditingFanpageData = editingFanpageData;
+    }
+    
+    console.log('[Zalo Config] ✅ Loaded', fanpageIds.length, 'fanpages with tokens from CONFIG:', {
+      fanpage_ids: editingFanpageData.fanpage_ids,
+      fanpage_names: editingFanpageData.fanpage_names,
+      token_sources: checkedBoxes.map((cb, idx) => {
+        if (Array.isArray(row.zalo_fanpages) && row.zalo_fanpages.find(fp => fp.id === cb.value)) return 'zalo_fanpages✅';
+        if (Array.isArray(row.fanpage_tokens) && row.fanpage_tokens[idx]) return 'fanpage_tokens⚠️';
+        return 'facebookState❌';
+      })
+    });
     
     // 3. Load zalo groups vào textarea
     const textarea = document.getElementById('zalo-group-list');
@@ -9207,29 +9254,39 @@ function ensureZaloMultiGroupUI(container) {
 
       // Lấy data từ controls
       const globalSettings = getGlobalSettings();
-      // ✅ Khi edit, dùng fanpage data đã lưu; khi create, lấy từ UI checkbox
+      // ✅ LUÔN ưu tiên fanpage đang check trên UI để sửa cấu hình phản ánh đúng thao tác user
+      // Khi edit: ưu tiên token đã lưu trong editingFanpageData cho fanpage tương ứng, fallback sang facebookState.pages
       let selectedFanpages = [];
-      if (currentMode === "edit" && editingFanpageData && editingFanpageData.fanpage_ids?.length > 0) {
-        // Dùng dữ liệu từ row (bao gồm token)
-        selectedFanpages = editingFanpageData.fanpage_ids.map((id, idx) => ({
-          id,
-          name: editingFanpageData.fanpage_names?.[idx] || 'Unknown',
-          access_token: editingFanpageData.fanpage_tokens?.[idx] || ''
-        }));
-        console.log('[Zalo Config] Using saved fanpage data from edit row:', selectedFanpages);
+      const checkboxes = Array.from(document.querySelectorAll('input[name="fb-page-checkbox"]'));
+      const checked = checkboxes.filter(cb => cb.checked);
+
+      selectedFanpages = checked.map(cb => {
+        const page = facebookState.pages.find(p => p.id === cb.value);
+        const tokenFromEdit = (currentMode === 'edit' && editingFanpageData && Array.isArray(editingFanpageData.fanpage_ids))
+          ? (() => {
+              const idx = editingFanpageData.fanpage_ids.indexOf(cb.value);
+              return idx >= 0 ? editingFanpageData.fanpage_tokens?.[idx] : '';
+            })()
+          : '';
+
+        const nameFromEdit = (currentMode === 'edit' && editingFanpageData && Array.isArray(editingFanpageData.fanpage_ids))
+          ? (() => {
+              const idx = editingFanpageData.fanpage_ids.indexOf(cb.value);
+              return idx >= 0 ? editingFanpageData.fanpage_names?.[idx] : '';
+            })()
+          : '';
+
+        return {
+          id: cb.value,
+          name: nameFromEdit || page?.name || cb.nextSibling?.textContent?.trim() || 'Unknown',
+          access_token: tokenFromEdit || page?.access_token || ''
+        };
+      });
+
+      if (currentMode === 'edit') {
+        console.log('[Zalo Config] Edit mode - using CURRENT UI fanpage selection:', selectedFanpages);
       } else {
-        // Lấy từ UI checkbox (khi create mới)
-        const checkboxes = Array.from(document.querySelectorAll('input[name="fb-page-checkbox"]'));
-        const checked = checkboxes.filter(cb => cb.checked);
-        selectedFanpages = checked.map(cb => {
-          const page = facebookState.pages.find(p => p.id === cb.value);
-          return {
-            id: cb.value,
-            name: page?.name || cb.nextSibling?.textContent?.trim() || 'Unknown',
-            access_token: page?.access_token || ''
-          };
-        });
-        console.log('[Zalo Config] Using fanpage data from UI checkboxes:', selectedFanpages);
+        console.log('[Zalo Config] Create mode - using UI fanpage selection:', selectedFanpages);
       }
       const groupList = parseGroupList(input.value);
       
@@ -9298,6 +9355,11 @@ function ensureZaloMultiGroupUI(container) {
             selectedRowData = null;
             editingFanpageData = null;
             
+            // ✅ Clear global state
+            if (typeof window !== 'undefined') {
+              window.__zaloEditingFanpageData = null;
+            }
+            
             // Clear form fields ngay lập tức
             Array.from(document.querySelectorAll('input[name="fb-page-checkbox"]')).forEach(cb => {
               cb.checked = false;
@@ -9329,6 +9391,11 @@ function ensureZaloMultiGroupUI(container) {
           // Reset state TRƯỚC khi render grid (tránh flickering)
           selectedRowData = null;
           editingFanpageData = null;
+          
+          // ✅ Clear global state
+          if (typeof window !== 'undefined') {
+            window.__zaloEditingFanpageData = null;
+          }
           
           // Clear form fields ngay lập tức
           Array.from(document.querySelectorAll('input[name="fb-page-checkbox"]')).forEach(cb => {
@@ -9376,6 +9443,11 @@ function ensureZaloMultiGroupUI(container) {
       // Clear selection
       selectedRowData = null;
       editingFanpageData = null;
+      
+      // ✅ Clear global state
+      if (typeof window !== 'undefined') {
+        window.__zaloEditingFanpageData = null;
+      }
       
       // Clear controls (giữ Global Settings, chỉ clear fanpages từ Facebook Token section và groups)
       Array.from(document.querySelectorAll('input[name="fb-page-checkbox"]')).forEach(cb => {
@@ -9429,6 +9501,12 @@ function ensureZaloMultiGroupUI(container) {
     selectedRowData = null;
     formSnapshot = null;
     editingFanpageData = null;
+    
+    // ✅ Clear global state
+    if (typeof window !== 'undefined') {
+      window.__zaloEditingFanpageData = null;
+    }
+    
     setMode("idle");
   };
 
@@ -12224,35 +12302,53 @@ async function saveFanpageTokenToServer(configId, fanpageId, fanpageName, pageAc
  * @param {string} fanpageName - Fanpage name
  * @returns {Promise<boolean>} - True nếu lưu lên server thành công
  */
-async function updateAllConfigsWithNewFanpageToken(newPageAccessToken, userAccessToken, fanpageId, fanpageName) {
+async function updateAllConfigsWithNewFanpageToken(newPageAccessToken, userAccessToken, fanpageId, fanpageName, editingConfigId = null) {
   return new Promise((resolve, reject) => {
     try {
-      console.log('🚀 [UpdateAllConfigs] BẮT ĐẦU cập nhật token...');
+      console.log('🚀 [UpdateConfig] BẮT ĐẦU cập nhật token...');
+      console.log('   📌 editingConfigId:', editingConfigId || '(ALL configs)');
       console.log('   📌 fanpageId:', fanpageId);
       console.log('   📌 fanpageName:', fanpageName);
       console.log('   📌 Token preview:', newPageAccessToken.substring(0, 20) + '...');
       
       const allConfigs = loadDataOptionUser();
-      console.log('📦 [UpdateAllConfigs] Đã load', allConfigs.length, 'configs');
-      
+      console.log('📦 [UpdateConfig] Đã load', allConfigs.length, 'configs');
+
+      const notifySuccess = (msg) => {
+        if (typeof showFacebookMessage === 'function') {
+          showFacebookMessage(msg, 'success');
+          return;
+        }
+        console.log(msg);
+      };
+      const notifyError = (msg) => {
+        if (typeof showFacebookMessage === 'function') {
+          showFacebookMessage(msg, 'error');
+          return;
+        }
+        console.error(msg);
+      };
+
       let updated = false;
       let updatedCount = 0;
       const updatedConfigIds = [];
       
-      // Cập nhật tất cả config có fanpage
+      // ✅ FIX: Chỉ cập nhật config ĐANG EDIT (hoặc ALL nếu không có editingConfigId)
       for (const config of allConfigs) {
         // 🔍 DEBUG: Check điều kiện cho từng config
         const has_config_for_zalo = config.config_for_zalo;
         const has_zalo_fanpages = !!config.zalo_fanpages;
         const is_array = Array.isArray(config.zalo_fanpages);
+        const is_editing_config = !editingConfigId || config.id === editingConfigId;
         console.log(`   🔍 Config ${config.id}:`);
         console.log(`      - config_for_zalo: ${has_config_for_zalo}`);
         console.log(`      - zalo_fanpages exists: ${has_zalo_fanpages}`);
         console.log(`      - is array: ${is_array}`);
         console.log(`      - fanpage_token exists: ${!!config.fanpage_token}`);
+        console.log(`      - is editing config: ${is_editing_config}`);
         
-        // ✅ FIX: Sửa điều kiện check - chỉ check config_for_zalo
-        if (config.config_for_zalo) {
+        // ✅ CRITICAL FIX: CHỈ update config đang edit (hoặc ALL nếu không truyền editingConfigId)
+        if (config.config_for_zalo && is_editing_config) {
           // Nếu config này có fanpage, update token
           config.fanpage_id = fanpageId;
           config.fanpage_name = fanpageName;
@@ -12356,11 +12452,11 @@ async function updateAllConfigsWithNewFanpageToken(newPageAccessToken, userAcces
         if (success) {
           console.log(`✅ [UpdateAllConfigs] BƯỚC 2: Lưu THÀNH CÔNG lên server!`);
           console.log(`   ✅ Đã cập nhật các config: ${updatedConfigIds.join(', ')}`);
-          thongbao(`✅ Đã cập nhật token cho ${updatedCount} config và lưu lên server`);
+          notifySuccess(`✅ Đã cập nhật token cho ${updatedCount} cấu hình và lưu lên server`);
           resolve(true);
         } else {
           console.error(`❌ [UpdateAllConfigs] BƯỚC 2: Lỗi lưu lên server: ${error}`);
-          canhbao(`❌ Không thể lưu token lên server: ${error}`);
+          notifyError(`❌ Không thể lưu token lên server: ${error}`);
           resolve(false); // Trả false để báo lỗi
         }
       });
@@ -12368,8 +12464,145 @@ async function updateAllConfigsWithNewFanpageToken(newPageAccessToken, userAcces
     } catch (e) {
       console.error('❌ [UpdateAllConfigs] Exception:', e.message);
       console.error('   Stack:', e.stack);
-      canhbao(`❌ Lỗi cập nhật config: ${e.message}`);
+      if (typeof showFacebookMessage === 'function') {
+        showFacebookMessage(`❌ Lỗi cập nhật config: ${e.message}`, 'error');
+      }
       reject(e);
+    }
+  });
+}
+
+async function syncAllConfigsFanpageTokensFromPages(pages = [], userAccessToken = "") {
+  return new Promise((resolve) => {
+    try {
+      const pageMap = new Map((Array.isArray(pages) ? pages : []).map(p => [String(p?.id || ""), p]));
+      if (!pageMap.size) {
+        console.warn('⚠️ [SyncAllConfigs] Không có pages để đồng bộ token');
+        resolve(false);
+        return;
+      }
+
+      console.log('🌐 [SyncAllConfigs] API returned pages:', Array.from(pageMap.keys()));
+      
+      const allConfigs = loadDataOptionUser();
+      let updatedConfigs = 0;
+      let updatedFanpages = 0;
+
+      for (const config of allConfigs) {
+        if (!config?.config_for_zalo) continue;
+
+        let touched = false;
+        let matchedCount = 0;
+        let unmatchedFanpages = [];
+
+        if (Array.isArray(config.zalo_fanpages) && config.zalo_fanpages.length > 0) {
+          config.zalo_fanpages = config.zalo_fanpages.map(fp => {
+            const match = pageMap.get(String(fp?.id || ""));
+            if (match?.access_token) {
+              touched = true;
+              updatedFanpages++;
+              matchedCount++;
+              return {
+                ...fp,
+                name: match.name || fp.name,
+                access_token: match.access_token
+              };
+            }
+            unmatchedFanpages.push({id: fp?.id, name: fp?.name, oldToken: fp?.access_token?.substring(0, 20) + '...'});
+            return fp;
+          });
+        } else if (Array.isArray(config.fanpage_ids) && config.fanpage_ids.length > 0) {
+          config.zalo_fanpages = config.fanpage_ids.map((id, idx) => {
+            const match = pageMap.get(String(id || ""));
+            if (match?.access_token) {
+              touched = true;
+              updatedFanpages++;
+              matchedCount++;
+              return {
+                id,
+                name: match.name || config.fanpage_names?.[idx] || 'Unknown',
+                access_token: match.access_token
+              };
+            }
+            unmatchedFanpages.push({id, name: config.fanpage_names?.[idx], oldToken: config.fanpage_tokens?.[idx]?.substring(0, 20) + '...'});
+            return {
+              id,
+              name: config.fanpage_names?.[idx] || 'Unknown',
+              access_token: config.fanpage_tokens?.[idx] || ''
+            };
+          });
+        }
+
+        if (touched) {
+          const first = config.zalo_fanpages?.[0] || null;
+          config.fanpage_ids = (config.zalo_fanpages || []).map(fp => fp.id);
+          config.fanpage_names = (config.zalo_fanpages || []).map(fp => fp.name);
+          config.fanpage_tokens = (config.zalo_fanpages || []).map(fp => fp.access_token || '');
+          config.fanpage_id = first?.id || config.fanpage_id;
+          config.fanpage_name = config.fanpage_names.join(', ') || config.fanpage_name;
+          config.fanpage_token = first?.access_token || config.fanpage_token;
+          config.fanpage_token_user_token = userAccessToken || config.fanpage_token_user_token;
+          config.fanpage_token_timestamp = Date.now();
+          config.fanpage_token_expires_at = Date.now() + (60 * 24 * 60 * 60 * 1000);
+          updatedConfigs++;
+          console.log(`✅ [SyncAllConfigs] Updated config ${config.id}:`);
+          console.log(`   - Total fanpages: ${config.zalo_fanpages.length}`);
+          console.log(`   - Updated: ${matchedCount}`);
+          console.log(`   - Kept old token: ${unmatchedFanpages.length}`);
+          if (unmatchedFanpages.length > 0) {
+            console.warn(`   ⚠️ UNMATCHED fanpages (token NOT updated - NOT in API):`);
+            unmatchedFanpages.forEach(fp => {
+              console.warn(`      - ${fp.id} (${fp.name}): token still ${fp.oldToken}`);
+            });
+          }
+        }
+      }
+
+      if (!updatedConfigs) {
+        console.warn('⚠️ [SyncAllConfigs] Không có config nào khớp fanpage để update');
+        resolve(false);
+        return;
+      }
+
+      console.log(`\n📊 [SyncAllConfigs] SUMMARY BEFORE SAVE:`);
+      console.log(`   - Configs updated: ${updatedConfigs}/${allConfigs.length}`);
+      console.log(`   - Fanpages with new token: ${updatedFanpages}`);
+      
+      saveDataOptionUser(allConfigs, (success, error) => {
+        if (success) {
+          console.log(`✅ [SyncAllConfigs] SERVER SAVE SUCCESS!`);
+          console.log(`   - ${updatedConfigs} configs saved`);
+          console.log(`   - ${updatedFanpages} fanpages updated with new token`);
+          
+          // 🔍 VERIFY after save
+          setTimeout(() => {
+            const reloaded = loadDataOptionUser();
+            console.log(`\n🔍 [SyncAllConfigs] VERIFICATION AFTER SAVE:`);
+            reloaded.forEach((cfg, i) => {
+              const totalFanpages = (cfg.zalo_fanpages || []).length;
+              const newTokenCount = (cfg.fanpage_tokens || []).filter(t => t && t.startsWith('EAAQ')).length;
+              console.log(`   [${i}] ${cfg.id}: ${totalFanpages} fanpages, ${newTokenCount} with new 60-day tokens`);
+            });
+          }, 100);
+          
+          if (typeof showFacebookMessage === 'function') {
+            showFacebookMessage(`✅ Đã đồng bộ token cho ${updatedFanpages} fanpage trong ${updatedConfigs} cấu hình.`, 'success');
+          }
+          resolve(true);
+        } else {
+          console.error(`❌ [SyncAllConfigs] Save failed: ${error}`);
+          if (typeof showFacebookMessage === 'function') {
+            showFacebookMessage(`❌ Không thể lưu đồng bộ token: ${error}`, 'error');
+          }
+          resolve(false);
+        }
+      });
+    } catch (e) {
+      console.error('❌ [SyncAllConfigs] Exception:', e);
+      if (typeof showFacebookMessage === 'function') {
+        showFacebookMessage(`❌ Lỗi đồng bộ token: ${e.message}`, 'error');
+      }
+      resolve(false);
     }
   });
 }
@@ -12467,28 +12700,41 @@ Link: https://developers.facebook.com/tools/explorer/`;
     
     // ✅ Check expiry từ config - Page token 60 ngày
     const config = loadDataOptionUser().find(c => c.fanpage_token === pageAccessToken);
-    if (config?.fanpage_token_expires_at) {
-      const willExpireIn = Math.floor((config.fanpage_token_expires_at - Date.now()) / (24 * 60 * 60 * 1000));
+    if (config?.fanpage_token_timestamp) {
+      // ✅ CRITICAL FIX: Calculate from token update timestamp, not absolute expires_at
+      // Reason: expires_at will drift as time passes, always showing less than 60 days
+      const tokenUpdateTime = config.fanpage_token_timestamp;
+      const now = Date.now();
+      const timeSinceUpdate = now - tokenUpdateTime;
+      const msPerDay = 24 * 60 * 60 * 1000;
+      const daysUsed = Math.round(timeSinceUpdate / msPerDay);
+      const daysRemaining = 60 - daysUsed;
       
-      if (willExpireIn < 0) {
-        console.warn(`⚠️ [ValidateToken] Page Token expired ${Math.abs(willExpireIn)} days ago`);
-        return { ok: false, message: `Page Token đã hết hạn ${Math.abs(willExpireIn)} ngày trước` };
+      console.log(`🔍 [ValidateToken] Token expiry calc (from update timestamp):`);
+      console.log(`   - fanpage_token_timestamp: ${tokenUpdateTime}`);
+      console.log(`   - Date.now(): ${now}`);
+      console.log(`   - Time since update: ${timeSinceUpdate}ms = ${daysUsed} days`);
+      console.log(`   - Days remaining: 60 - ${daysUsed} = ${daysRemaining}`);
+      
+      if (daysRemaining <= 0) {
+        console.warn(`⚠️ [ValidateToken] Page Token expired ${Math.abs(daysRemaining)} days ago`);
+        return { ok: false, message: `Page Token đã hết hạn ${Math.abs(daysRemaining)} ngày trước` };
       }
       
-      if (willExpireIn < 7) {
-        console.warn(`⚠️ [ValidateToken] Page Token expiring in ${willExpireIn} days`);
+      if (daysRemaining < 7) {
+        console.warn(`⚠️ [ValidateToken] Page Token expiring in ${daysRemaining} days`);
         return { 
           ok: true, 
-          message: `⚠️ Page Token sẽ hết hạn trong ${willExpireIn} ngày`, 
-          willExpireIn 
+          message: `⚠️ Page Token sẽ hết hạn trong ${daysRemaining} ngày`, 
+          willExpireIn: daysRemaining
         };
       }
       
-      console.log(`✅ [ValidateToken] Page Token valid for ${willExpireIn} more days`);
+      console.log(`✅ [ValidateToken] Page Token valid for ${daysRemaining} more days`);
       return { 
         ok: true, 
-        message: `✅ Page Token còn hạn ${willExpireIn} ngày`,
-        willExpireIn 
+        message: `✅ Page Token còn hạn ${daysRemaining} ngày`,
+        willExpireIn: daysRemaining
       };
     }
     
@@ -13737,6 +13983,10 @@ async function validateSavedTokenIfNeeded() {
  * Handle nhập token thủ công
  */
 async function handleManualToken() {
+  // ✅ Lấy editingConfigId và editingFanpageData từ global scope (set bởi ensureZaloMultiGroupUI)
+  const editingRowId = (typeof window !== 'undefined' && window.__zaloEditingConfigId) || null;
+  const editingFanpageData = (typeof window !== 'undefined' && window.__zaloEditingFanpageData) || null;
+  
   const tokenInput = document.getElementById('fb-token-input');
   const token = tokenInput?.value?.trim();
   
@@ -13746,6 +13996,8 @@ async function handleManualToken() {
   }
   
   console.log('🚀 [HandleManualToken] BẮT ĐẦU XỬ LÝ TOKEN NHẬP TỪ BƯỚC 1');
+  console.log('   📌 editingRowId (from window.__zaloEditingConfigId):', editingRowId);
+  console.log('   📌 editingFanpageData (from window.__zaloEditingFanpageData):', editingFanpageData);
   console.trace('[HandleManualToken] Call stack');
   
   try {
@@ -13788,23 +14040,57 @@ async function handleManualToken() {
       showFacebookMessage('💾 Đang lưu token lên server...', 'info');
       const firstPage = pages[0];
       
-      console.log('📌 [HandleManualToken] Gọi updateAllConfigsWithNewFanpageToken với:');
-      console.log('   - newPageAccessToken:', firstPage.access_token?.substring(0, 20) + '...');
-      console.log('   - userAccessToken:', userAccessToken?.substring(0, 20) + '...');
-      console.log('   - fanpageId:', firstPage.id);
-      console.log('   - fanpageName:', firstPage.name);
+      console.log('📌 [HandleManualToken] Gọi syncAllConfigsFanpageTokensFromPages với:');
+      console.log('   - Số pages từ API:', pages.length);
+      pages.slice(0, 5).forEach((p, i) => {
+        console.log(`     [${i}] Page ID: ${p.id}, Name: ${p.name}, Token preview: ${p.access_token?.substring(0, 20)}...`);
+      });
       
-      const baseSuccess = await updateAllConfigsWithNewFanpageToken(
-        firstPage.access_token, // Page token đã có
-        userAccessToken,          // User token để re-exchange
-        firstPage.id,
-        firstPage.name
-      );
+      // ✅ CRITICAL FIX: Update token cho TẤT CẢ fanpages có trong config đang edit
+      // Không chỉ update firstPage, vì config có thể có nhiều fanpages!
+      let updateSuccess = false;
+      if (editingRowId) {
+        // Update từng fanpage trong editingFanpageData nếu có trong pages list
+        for (const page of pages) {
+          const success = await updateAllConfigsWithNewFanpageToken(
+            page.access_token,
+            userAccessToken,
+            page.id,
+            page.name,
+            editingRowId              // Chỉ update config đang edit
+          );
+          if (success) updateSuccess = true;
+        }
+      } else {
+        // ✅ Luồng global (bản hôm qua): quét toàn bộ config và sync token theo fanpage ID
+        updateSuccess = await syncAllConfigsFanpageTokensFromPages(pages, userAccessToken);
+      }
       
-      console.log(`✅ [HandleManualToken] updateAllConfigsWithNewFanpageToken return: ${baseSuccess}`);
+      console.log(`✅ [HandleManualToken] updateAllConfigsWithNewFanpageToken return: ${updateSuccess}`);
       
-      if (!baseSuccess) {
+      if (!updateSuccess) {
         throw new Error('Không thể lưu token lên server');
+      }
+      
+      // ✅ CRITICAL FIX: Sync editingFanpageData với TẤT CẢ tokens mới
+      if (editingRowId && editingFanpageData && Array.isArray(editingFanpageData.fanpage_ids)) {
+        let updatedCount = 0;
+        editingFanpageData.fanpage_ids.forEach((fpId, idx) => {
+          const page = pages.find(p => p.id === fpId);
+          if (page && page.access_token) {
+            editingFanpageData.fanpage_tokens[idx] = page.access_token;
+            updatedCount++;
+          }
+        });
+        // Đồng bộ fanpage_token (singular) = token của fanpage đầu tiên
+        editingFanpageData.fanpage_token = editingFanpageData.fanpage_tokens[0] || null;
+        
+        // ✅ Sync lại vào global scope
+        if (typeof window !== 'undefined') {
+          window.__zaloEditingFanpageData = editingFanpageData;
+        }
+        
+        console.log(`✅ [HandleManualToken] Updated ${updatedCount}/${editingFanpageData.fanpage_ids.length} fanpage tokens in editingFanpageData`);
       }
 
       updateFacebookAuthUI(true);
@@ -13838,17 +14124,44 @@ async function handleManualToken() {
       console.log('   - fanpageId:', tokenInfo.id);
       console.log('   - fanpageName:', tokenInfo.name);
       
-      const baseSuccess = await updateAllConfigsWithNewFanpageToken(
-        token,                     // Page token
-        token,                     // User token = Page token (vì là page token)
-        tokenInfo.id,
-        tokenInfo.name || 'Unknown Page'
-      );
+      let baseSuccess = false;
+      if (editingRowId) {
+        baseSuccess = await updateAllConfigsWithNewFanpageToken(
+          token,                     // Page token
+          token,                     // User token = Page token (vì là page token)
+          tokenInfo.id,
+          tokenInfo.name || 'Unknown Page',
+          editingRowId
+        );
+      } else {
+        baseSuccess = await syncAllConfigsFanpageTokensFromPages([
+          { id: tokenInfo.id, name: tokenInfo.name || 'Unknown Page', access_token: token }
+        ], token);
+      }
       
       console.log(`✅ [HandleManualToken] updateAllConfigsWithNewFanpageToken return: ${baseSuccess}`);
       
       if (!baseSuccess) {
         throw new Error('Không thể lưu token lên server');
+      }
+      
+      // ✅ CRITICAL FIX: Update editingFanpageData với token mới (nếu đang edit config)
+      if (editingRowId && editingFanpageData && Array.isArray(editingFanpageData.fanpage_ids)) {
+        const fpIdx = editingFanpageData.fanpage_ids.indexOf(tokenInfo.id);
+        if (fpIdx !== -1 && fpIdx >= 0) {
+          editingFanpageData.fanpage_tokens[fpIdx] = token;
+          // Đồng bộ fanpage_token (singular) = token của fanpage đầu tiên
+          editingFanpageData.fanpage_token = editingFanpageData.fanpage_tokens[0] || null;
+          
+          // ✅ Sync lại vào global scope
+          if (typeof window !== 'undefined') {
+            window.__zaloEditingFanpageData = editingFanpageData;
+          }
+          
+          console.log(`✅ [HandleManualToken] Updated editingFanpageData[${fpIdx}] with new Page token for fanpage ${tokenInfo.id}`);
+        } else {
+          console.warn(`⚠️ [HandleManualToken] Fanpage ${tokenInfo.id} not found in editingFanpageData.fanpage_ids`);
+        }
       }
 
       updateFacebookAuthUI(true);
