@@ -1652,6 +1652,26 @@ function extractHttpStatusFromError(error) {
   return match ? Number(match[1]) : 0;
 }
 
+function extractFacebookAuthErrorInfo(errorLike) {
+  const text = `${errorLike?.message || errorLike?.error || errorLike || ''}`;
+  const normalized = text.toLowerCase();
+
+  const hasSessionExpired = normalized.includes('session has expired');
+  const hasOAuthException = normalized.includes('oauthexception');
+  const hasCode190 = normalized.includes('"code":190') || normalized.includes(' code 190') || normalized.includes('code:190') || normalized.includes('code=190');
+  const hasSubcode463 = normalized.includes('error_subcode":463') || normalized.includes('subcode 463') || normalized.includes('subcode:463') || normalized.includes('subcode=463');
+  const hasInvalidToken = normalized.includes('invalid oauth access token') || normalized.includes('error validating access token');
+
+  const isTokenExpired = hasSessionExpired || hasSubcode463;
+  const isAuthError = isTokenExpired || hasInvalidToken || (hasOAuthException && hasCode190);
+
+  return {
+    isAuthError,
+    isTokenExpired,
+    message: text
+  };
+}
+
 function activateBackendGuard(reason, ms = 2 * 60 * 1000) {
   backendGuardState.pausedUntil = Date.now() + ms;
   backendGuardState.reason = reason || "Backend unavailable";
@@ -3777,6 +3797,12 @@ async function processContent(item, opts = {}) {
 
       const successCount = Number(postSummary?.successCount || 0);
       const failCount = Number(postSummary?.failCount || 0);
+
+      if (postSummary?.tokenExpiredDetected) {
+        const msg = '❌ Facebook token đã hết hạn trong lúc chạy. Vui lòng cập nhật token và chạy lại.';
+        canhbao(msg);
+        thongbao(msg);
+      }
 
       // ✅ CRITICAL: Record posted Zalo message SAU KHI post FB thành công (tránh duplicate)
       if (successCount > 0) {
@@ -6241,15 +6267,13 @@ function savePostedZaloMessages(postedMessages) {
     // ✅ PRIORITY 1: Save to server via csmUserData.set()
     if (window.csmUserData && typeof window.csmUserData.set === 'function') {
       try {
-        // Get ALL existing data
-        const allData = loadDataOptionUser();
+        // Get ALL existing raw data (không dùng loadDataOptionUser vì hàm đó đã filter configs)
+        const allData = getRawDataOptionUserSnapshot();
         
         // Filter out old posted messages
-        const otherData = allData.filter(item => {
-          if (item.type === 'posted_zalo_message') return false;
-          if (item.id && item.id.toString().startsWith('posted_zalo_')) return false;
-          return true;
-        });
+        const otherData = Array.isArray(allData)
+          ? allData.filter(item => !isPostedZaloItem(item))
+          : [];
         
         // Merge: configs + compacted posted messages
         const finalData = [...otherData, ...messagesToSave];
@@ -7388,13 +7412,16 @@ async function postToSelectedFanpages(messages, postUrl, selectedPages = null, o
   // Tracking số fanpage đăng thành công
   let successCount = 0;
   let failCount = 0;
+  let tokenExpiredDetected = false;
+  let tokenExpiredMessage = '';
+  let stopAllPosting = false;
 
   // ✅ CONSTANTS cho retry logic
   const MAX_RETRIES_PER_PAGE = ZALO_TIMING.MAX_FACEBOOK_RETRIES;
   const RETRY_DELAY_MS = ZALO_TIMING.FACEBOOK_RETRY_DELAY;
 
   // Đăng lên từng Fanpage VỚI RETRY LOGIC
-  for (let i = 0; i < selectedPages.length; i++) {
+  for (let i = 0; i < selectedPages.length && !stopAllPosting; i++) {
     const page = selectedPages[i];
     let posted = false;
     
@@ -7421,6 +7448,20 @@ async function postToSelectedFanpages(messages, postUrl, selectedPages = null, o
           posted = true;
           break; // Thành công, thoát loop retry
         } else {
+          const authErrorInfo = extractFacebookAuthErrorInfo(result);
+          if (authErrorInfo.isAuthError) {
+            tokenExpiredDetected = tokenExpiredDetected || authErrorInfo.isTokenExpired;
+            tokenExpiredMessage = authErrorInfo.message || tokenExpiredMessage;
+            facebookState._needsValidation = true;
+
+            console.error(`❌ [Fanpage ${i + 1}] Facebook token lỗi/hết hạn khi đăng ${page.name}: ${authErrorInfo.message}`);
+            canhbao('❌ Facebook token đã hết hạn/không hợp lệ trong lúc chạy. Vui lòng cập nhật token ở mục Facebook Token Management rồi chạy lại.');
+
+            failCount++;
+            stopAllPosting = true;
+            break;
+          }
+
           // Lỗi API
           const status = Number(result?.httpStatus || 0);
           const isRetryable = status === 429 || status >= 500;
@@ -7441,6 +7482,20 @@ async function postToSelectedFanpages(messages, postUrl, selectedPages = null, o
           }
         }
       } catch (e) {
+        const authErrorInfo = extractFacebookAuthErrorInfo(e);
+        if (authErrorInfo.isAuthError) {
+          tokenExpiredDetected = tokenExpiredDetected || authErrorInfo.isTokenExpired;
+          tokenExpiredMessage = authErrorInfo.message || tokenExpiredMessage;
+          facebookState._needsValidation = true;
+
+          console.error(`❌ [Fanpage ${i + 1}] Token Facebook lỗi/hết hạn khi đăng ${page.name}: ${authErrorInfo.message}`);
+          canhbao('❌ Facebook token đã hết hạn/không hợp lệ trong lúc chạy. Vui lòng cập nhật token ở mục Facebook Token Management rồi chạy lại.');
+
+          failCount++;
+          stopAllPosting = true;
+          break;
+        }
+
         console.error(`❌ [Fanpage ${i + 1}] Exception khi đăng lên ${page.name}:`, e.message);
         failCount++;
         break; // Lỗi nặng, không thử lại
@@ -7456,6 +7511,10 @@ async function postToSelectedFanpages(messages, postUrl, selectedPages = null, o
     if (i < selectedPages.length - 1) {
       await new Promise(resolve => setTimeout(resolve, ZALO_TIMING.WAIT_BETWEEN_FANPAGES));
     }
+  }
+
+  if (stopAllPosting) {
+    console.warn('⛔ [PostToFanpages] Dừng batch do token Facebook hết hạn/không hợp lệ.');
   }
   
   console.log(`🎉 [PostToFanpages] Hoàn tất: ${successCount}/${selectedPages.length} Fanpage thành công, ${failCount} lỗi`);
@@ -7480,7 +7539,7 @@ async function postToSelectedFanpages(messages, postUrl, selectedPages = null, o
     console.warn('⚠️ Không có fanpage nào đăng thành công, không lưu tin Zalo vào dataOptionUser');
   }
 
-  return { successCount, failCount };
+  return { successCount, failCount, tokenExpiredDetected, tokenExpiredMessage };
 }
 
 /**
@@ -8311,7 +8370,7 @@ function ensureZaloMultiGroupUI(container) {
               } else {
                 if (status) status.textContent = '⚠️ Lỗi xóa config';
               }
-            });
+            }, { allowEmptyConfigSave: true });
           }
         };
         
@@ -8580,7 +8639,7 @@ function ensureZaloMultiGroupUI(container) {
             clearAllBtn.style.opacity = '1';
             clearAllBtn.style.cursor = 'pointer';
           }
-        });
+        }, { allowEmptyConfigSave: true });
       } catch (e) {
         status.textContent = `❌ Lỗi: ${e.message}`;
         // Enable lại nút
@@ -12624,6 +12683,10 @@ async function postToFacebookPageWithImages(pageId, pageAccessToken, message, im
       throw new Error(data.message || 'Facebook post failed');
     }
   } catch (error) {
+    const authErrorInfo = extractFacebookAuthErrorInfo(error);
+    if (authErrorInfo.isAuthError) {
+      facebookState._needsValidation = true;
+    }
     console.error('❌ Lỗi đăng bài Facebook với ảnh:', error);
     throw error;
   }
@@ -13664,6 +13727,53 @@ function validateCsmUserDataReady() {
   return true;
 }
 
+function isPostedZaloItem(item) {
+  if (!item || typeof item !== 'object') return false;
+  if (item.type === 'posted_zalo_message') return true;
+  if (item.id && item.id.toString().startsWith('posted_zalo_')) return true;
+  return false;
+}
+
+function isZaloConfigItem(item) {
+  if (!item || typeof item !== 'object') return false;
+  if (isPostedZaloItem(item)) return false;
+  return item.config_for_zalo === true || !!item.domain;
+}
+
+function getRawDataOptionUserFromCsmUserData() {
+  if (!window.csmUserData || typeof window.csmUserData.get !== 'function') {
+    return null;
+  }
+  try {
+    let arr = window.csmUserData.get();
+    if (typeof arr === 'string') {
+      arr = JSON.parse(arr);
+    }
+    return Array.isArray(arr) ? arr : [];
+  } catch (e) {
+    console.warn('⚠️ [RawDataOptionUser] csmUserData.get parse failed:', e.message);
+    return null;
+  }
+}
+
+function getRawDataOptionUserFromLocalStorage() {
+  try {
+    const raw = localStorage.getItem('dataOptionUser');
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e) {
+    console.warn('⚠️ [RawDataOptionUser] localStorage parse failed:', e.message);
+    return [];
+  }
+}
+
+function getRawDataOptionUserSnapshot() {
+  const fromCsm = getRawDataOptionUserFromCsmUserData();
+  if (Array.isArray(fromCsm)) return fromCsm;
+  return getRawDataOptionUserFromLocalStorage();
+}
+
 // ===== STORAGE HELPERS - LƯU TRỮ DATAOPTIONUSER GIỐNG SEO.JS (VỚI CSMuserdata) =====
 /**
  * Load dataOptionUser từ csmUserData (giống seo.js)
@@ -13690,21 +13800,15 @@ function loadDataOptionUser() {
         arr = JSON.parse(arr);
       }
       if (Array.isArray(arr) && arr.length > 0) {
-        // ✅ FILTER: Chỉ lấy configs, bỏ posted messages và data không hợp lệ
-        const configs = arr.filter(item => {
-          // Bỏ posted messages (id bắt đầu với posted_zalo_)
-          if (item.id && item.id.toString().startsWith('posted_zalo_')) {
-            return false;
-          }
-          // Chỉ lấy items có config_for_zalo = true hoặc có domain (config cũ)
-          return item.config_for_zalo === true || (item.domain && !item.id?.startsWith('posted_'));
-        });
-        
-        console.log(`✅ [LoadDataOptionUser] Loaded ${configs.length} configs from csmUserData.get() (filtered from ${arr.length} total items)`);
-        configs.forEach((cfg, i) => {
-          console.log(`   [${i}] id: ${cfg.id}, domain: ${cfg.domain}, config_for_zalo: ${cfg.config_for_zalo}, has fanpage_token: ${!!cfg.fanpage_token}`);
-        });
-        return configs;
+        const configs = arr.filter(isZaloConfigItem);
+        if (configs.length > 0) {
+          console.log(`✅ [LoadDataOptionUser] Loaded ${configs.length} configs from csmUserData.get() (filtered from ${arr.length} total items)`);
+          configs.forEach((cfg, i) => {
+            console.log(`   [${i}] id: ${cfg.id}, domain: ${cfg.domain}, config_for_zalo: ${cfg.config_for_zalo}, has fanpage_token: ${!!cfg.fanpage_token}`);
+          });
+          return configs;
+        }
+        console.warn('⚠️ [LoadDataOptionUser] csmUserData có dữ liệu nhưng không có config hợp lệ, thử fallback localStorage...');
       } else {
         console.log('   ⚠️ Result is not an array or empty');
       }
@@ -13724,13 +13828,7 @@ function loadDataOptionUser() {
     }
     const parsed = JSON.parse(raw);
     
-    // ✅ FILTER: Chỉ lấy configs, bỏ posted messages
-    const configs = Array.isArray(parsed) ? parsed.filter(item => {
-      if (item.id && item.id.toString().startsWith('posted_zalo_')) {
-        return false;
-      }
-      return item.config_for_zalo === true || (item.domain && !item.id?.startsWith('posted_'));
-    }) : [];
+    const configs = Array.isArray(parsed) ? parsed.filter(isZaloConfigItem) : [];
     
     console.log(`⚠️ [LoadDataOptionUser] Loaded ${configs.length} configs from localStorage (filtered from ${parsed.length} total items, FALLBACK MODE)`);
     configs.forEach((cfg, i) => {
@@ -13770,38 +13868,33 @@ function fetchDataOptionUserFromServer(callback) {
  * @param {Array} data - Mảng dữ liệu cần lưu
  * @param {Function} callback - callback(success, error)
  */
-function saveDataOptionUser(data, callback) {
+function saveDataOptionUser(data, callback, options = {}) {
   const dataToSave = Array.isArray(data) ? data : [];
+  const allowEmptyConfigSave = !!options.allowEmptyConfigSave;
   
   console.log('====== 💾 [SaveDataOptionUser] BẮT ĐẦU LƯU DỮ LIỆU ======');
   console.log('📊 Số items được truyền vào:', dataToSave.length);
+
+  const incomingConfigs = dataToSave.filter(isZaloConfigItem);
+  const existingRawSnapshot = getRawDataOptionUserSnapshot();
+  const existingConfigs = Array.isArray(existingRawSnapshot)
+    ? existingRawSnapshot.filter(isZaloConfigItem)
+    : [];
+
+  if (!allowEmptyConfigSave && incomingConfigs.length === 0 && existingConfigs.length > 0) {
+    const msg = 'Blocked destructive save: incoming config rỗng trong khi dữ liệu hiện tại vẫn còn config.';
+    console.error(`❌ [SaveDataOptionUser] ${msg}`);
+    if (callback) callback(false, msg);
+    return;
+  }
   
   // ✅ CRITICAL FIX: Preserve posted messages khi save configs
   // Lấy posted messages cũ từ storage (nếu có) để merge
   let postedMessages = [];
   try {
-    if (window.csmUserData && typeof window.csmUserData.get === 'function') {
-      const existing = window.csmUserData.get();
-      if (Array.isArray(existing)) {
-        postedMessages = existing.filter(item => {
-          if (item.type === 'posted_zalo_message') return true;
-          if (item.id && item.id.toString().startsWith('posted_zalo_')) return true;
-          return false;
-        });
-      }
-    } else {
-      // Fallback: localStorage
-      const raw = localStorage.getItem('dataOptionUser');
-      if (raw) {
-        const existing = JSON.parse(raw);
-        if (Array.isArray(existing)) {
-          postedMessages = existing.filter(item => {
-            if (item.type === 'posted_zalo_message') return true;
-            if (item.id && item.id.toString().startsWith('posted_zalo_')) return true;
-            return false;
-          });
-        }
-      }
+    const existing = getRawDataOptionUserSnapshot();
+    if (Array.isArray(existing)) {
+      postedMessages = existing.filter(isPostedZaloItem);
     }
     if (postedMessages.length > 0) {
       console.log(`📌 [SaveDataOptionUser] Preserving ${postedMessages.length} posted messages`);
