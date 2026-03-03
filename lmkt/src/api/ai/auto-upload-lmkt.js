@@ -2242,6 +2242,194 @@ const LMKT_PROJECT_DEFS = [
   }
 ];
 
+// ===== AUTO-SYNC SERVICE DEFINITIONS FROM SERVER =====
+/**
+ * Tự động đồng bộ service types (phanmemmottrieu) và projects (LMKT) từ server
+ * - Đảm bảo khi có service_type hoặc project mới, code sẽ tự cập nhật
+ * - Cache trong localStorage (5 phút)
+ * - Merge trực tiếp vào INDUSTRY_TYPES và LMKT_PROJECT_DEFS
+ */
+let lastSyncTime = 0;
+let serviceDefinitionsHydrated = false;
+const SYNC_INTERVAL_MS = 5 * 60 * 1000; // 5 phút
+
+async function syncServiceDefinitionsFromServer(force = false) {
+  try {
+    const now = Date.now();
+    
+    // Kiểm tra cache
+    if (!force && serviceDefinitionsHydrated && (now - lastSyncTime) < SYNC_INTERVAL_MS) {
+      console.log('ℹ️ [syncServiceDefs] Sử dụng cache (< 5 phút)');
+      return { success: true, cached: true };
+    }
+    
+    // Kiểm tra API availability
+    if (!window.csmApi?.getTableData) {
+      console.warn('⚠️ [syncServiceDefs] window.csmApi.getTableData không khả dụng');
+      return { success: false, reason: 'api_not_available' };
+    }
+    
+    console.log('🔄 [syncServiceDefs] Đang sync từ server...');
+    let totalSynced = 0;
+    
+    // ===== 1️⃣ Sync LMKT Projects =====
+    const lmktData = await window.csmApi.getTableData({
+      app_id: "lmkt",
+      obj_name: "web_services",
+      where: {
+        operator: "AND",
+        conditions: [{ field: "id", type: "like", value: "" }]
+      }
+    }).catch(err => {
+      console.error('❌ [syncServiceDefs] LMKT fetch error:', err);
+      return { rows: [] };
+    });
+    
+    const lmktRows = lmktData?.rows || lmktData?.data || [];
+    if (Array.isArray(lmktRows) && lmktRows.length > 0) {
+      // Merge vào LMKT_PROJECT_DEFS (giữ lại items cũ, thêm mới)
+      const existingSlugs = new Set(LMKT_PROJECT_DEFS.map(p => p.service_code));
+      
+      lmktRows.forEach(item => {
+        const slug = item.slug || item.service_code || item.id;
+        if (!slug) return;
+        
+        const newProject = {
+          service_code: slug,
+          name: item.name || item.category || slug,
+          name_en: item.name_en || item.name || slug,
+          name_zh: item.name_zh || item.name || slug,
+          category: item.category || item.name || slug,
+          category_en: item.category_en || item.category || item.name || slug,
+          category_zh: item.category_zh || item.category || item.name || slug,
+          image: item.image || `https://www.h-holding.vn/app_images/projects/${slug}-og.jpg`,
+          attributes_icon: item.attributes_icon || "BuildOutlined",
+          attributes_color: item.attributes_color || "#1890ff",
+          attributes_priority: item.attributes_priority || 999,
+          attributes_title: item.attributes_title || item.name || slug,
+          attributes_title_en: item.attributes_title_en || item.name || slug,
+          attributes_title_zh: item.attributes_title_zh || item.name || slug,
+          attributes_description: item.attributes_description || "",
+          attributes_description_en: item.attributes_description_en || "",
+          attributes_description_zh: item.attributes_description_zh || "",
+          attributes_keywords: item.attributes_keywords || "",
+          attributes_keywords_en: item.attributes_keywords_en || "",
+          attributes_keywords_zh: item.attributes_keywords_zh || ""
+        };
+        
+        if (existingSlugs.has(slug)) {
+          // Update existing
+          const idx = LMKT_PROJECT_DEFS.findIndex(p => p.service_code === slug);
+          if (idx >= 0) {
+            LMKT_PROJECT_DEFS[idx] = { ...LMKT_PROJECT_DEFS[idx], ...newProject };
+          }
+        } else {
+          // Add new
+          LMKT_PROJECT_DEFS.push(newProject);
+          existingSlugs.add(slug);
+          totalSynced++;
+        }
+      });
+      
+      console.log(`✅ [syncServiceDefs] Synced ${lmktRows.length} LMKT projects (${totalSynced} new)`);
+    }
+    
+    // ===== 2️⃣ Sync Phanmemmottrieu Service Types =====
+    const pmtData = await window.csmApi.getTableData({
+      app_id: "wuweb",
+      obj_name: "web_services",
+      where: {
+        operator: "AND",
+        conditions: [{ field: "id", type: "like", value: "" }]
+      }
+    }).catch(err => {
+      console.error('❌ [syncServiceDefs] PMT fetch error:', err);
+      return { rows: [] };
+    });
+    
+    const pmtRows = pmtData?.rows || pmtData?.data || [];
+    let pmtSynced = 0;
+    
+    if (Array.isArray(pmtRows) && pmtRows.length > 0) {
+      pmtRows.forEach(item => {
+        const slug = item.slug || item.service_code || item.id;
+        if (!slug) return;
+        
+        const existing = INDUSTRY_TYPES[slug] || {};
+        const isNew = !INDUSTRY_TYPES[slug];
+        
+        // Merge trực tiếp vào INDUSTRY_TYPES (giữ prompt configs nếu có)
+        INDUSTRY_TYPES[slug] = {
+          ...existing, // Giữ prompt_role, prompt_style, etc từ hardcoded
+          name: item.name || existing.name || slug,
+          name_en: item.name_en || existing.name_en || item.name || slug,
+          name_zh: item.name_zh || existing.name_zh || item.name || slug,
+          category: item.category || existing.category || item.name || slug,
+          category_en: item.category_en || existing.category_en || item.category || slug,
+          category_zh: item.category_zh || existing.category_zh || item.category || slug,
+          image: item.image || existing.image,
+          attributes_icon: item.attributes_icon || existing.attributes_icon || "AppstoreOutlined",
+          attributes_color: item.attributes_color || existing.attributes_color || "#1890ff",
+          attributes_priority: item.attributes_priority ?? existing.attributes_priority ?? 999,
+          attributes_title: item.attributes_title || existing.attributes_title || item.name || slug,
+          attributes_title_en: item.attributes_title_en || existing.attributes_title_en,
+          attributes_title_zh: item.attributes_title_zh || existing.attributes_title_zh,
+          attributes_description: item.attributes_description || existing.attributes_description || "",
+          attributes_description_en: item.attributes_description_en || existing.attributes_description_en || "",
+          attributes_description_zh: item.attributes_description_zh || existing.attributes_description_zh || "",
+          attributes_keywords: item.attributes_keywords || existing.attributes_keywords || "",
+          attributes_keywords_en: item.attributes_keywords_en || existing.attributes_keywords_en || "",
+          attributes_keywords_zh: item.attributes_keywords_zh || existing.attributes_keywords_zh || "",
+          color: item.attributes_color || existing.color || "#1890ff"
+        };
+        
+        if (isNew) pmtSynced++;
+      });
+      
+      console.log(`✅ [syncServiceDefs] Synced ${pmtRows.length} service types (${pmtSynced} new)`);
+    }
+    
+    lastSyncTime = now;
+    serviceDefinitionsHydrated = true;
+
+    // Nếu UI đã render thì refresh option ngay để user thấy dữ liệu mới
+    refreshGlobalSettingsOptionsFromDefinitions();
+    
+    // Save to localStorage cache
+    try {
+      localStorage.setItem('csm_service_definitions_cache', JSON.stringify({
+        lmkt_count: LMKT_PROJECT_DEFS.length,
+        pmt_count: Object.keys(INDUSTRY_TYPES).length,
+        timestamp: now
+      }));
+    } catch (e) {
+      console.warn('⚠️ [syncServiceDefs] Failed to cache:', e.message);
+    }
+    
+    return { success: true, lmkt: lmktRows.length, pmt: pmtRows.length };
+    
+  } catch (error) {
+    console.error('❌ [syncServiceDefs] Sync failed:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+// Load cache timestamp from localStorage on init
+try {
+  const cached = localStorage.getItem('csm_service_definitions_cache');
+  if (cached) {
+    const parsed = JSON.parse(cached);
+    const age = Date.now() - (parsed.timestamp || 0);
+    
+    if (age < SYNC_INTERVAL_MS) {
+      lastSyncTime = parsed.timestamp;
+      console.log(`ℹ️ Service definitions cache active (${Math.round(age / 1000)}s old, ${parsed.lmkt_count || 0} LMKT + ${parsed.pmt_count || 0} PMT)`);
+    }
+  }
+} catch (e) {
+  console.warn('⚠️ Failed to load cache timestamp:', e.message);
+}
+
 // ===== PARSE ZALO/FACEBOOK JSON =====
 function extractBase64ImagesFromText(text = "") {
   if (!text || typeof text !== "string") return [];
@@ -2769,16 +2957,16 @@ function buildDetail(ctx, seo, imgs, opts = {}) {
   
   console.log(`🖼️ [buildDetail] === IMAGE DEBUG END ===\n`);
   
-  // ✅ SERVER DATABASE USES service_type FIELD ONLY
-  // service_code is always same as serviceType (no separate project field)
-  const service_code = serviceType;
+  // ✅ IMPORTANT FOR LMKT: service_type field = project code (dự án slug)
+  // NOT the service category (bat-dong-san)
+  // In database web_service_detail: service_type = d-homme-quan-6, kieu-by-kita, etc.
+  const dbServiceType = ctx.project || serviceType;
   
-  console.log(`🏷️ [buildDetail] service_code="${service_code}" (serviceType="${serviceType}")`);
+  console.log(`🏷️ [buildDetail] DB service_type="${dbServiceType}" (project="${ctx.project || '(none)'}", industry="${serviceType}")`);
   
   return {
     id: generateId(),
-    service_type: serviceType,
-    service_code: service_code,
+    service_type: dbServiceType,
     slug,
     // Tiêu đề đa ngôn ngữ
     title: titleVi,
@@ -3455,16 +3643,15 @@ async function processContent(item, opts = {}) {
       console.log(`🌐 [Domain Selection] Config domains: ${ctx.domain}`);
       console.log(`🌐 [Domain Selection] Primary domain: ${primaryDomain}${ctx.primary_domain ? ' (from primary_domain field)' : ' (random from list)'}`);
       
-      // Tạo URL bài viết theo format đúng - sử dụng service_code từ detail
-      // service_code đã được set = project slug (hoặc service_type nếu không có project)
+      // Tạo URL bài viết theo format đúng - sử dụng service_type từ detail (= tên dự án)
       let articleUrl;
-      console.log(`🔍 [URL Debug] detail.service_code="${detail.service_code}", detail.service_type="${detail.service_type}"`);
-      articleUrl = `${protocol}www.${primaryDomain}/${detail.service_code}/${detail.slug}`;
+      console.log(`🔍 [URL Debug] detail.service_type="${detail.service_type}", detail.slug="${detail.slug}"`);
+      articleUrl = `${protocol}www.${primaryDomain}/${detail.service_type}/${detail.slug}`;
       
       console.log(`📱 [Facebook] Article URL: ${articleUrl}`);
       
       // ✅ MỖI FANPAGE SẼ SINH NỘI DUNG AI RIÊNG (khác nhau) nhưng cùng link web
-      const effectiveIndustry = ctx.service_type || detail.service_type || 'bat-dong-san';
+      const effectiveIndustry = ctx.service_type || 'bat-dong-san';
       const industryPersonaMap = {
         'bat-dong-san': ['investor', 'homebuyer', 'business_owner'],
         'phan-mem': ['business_owner', 'tech_savvy', 'startup'],
@@ -3920,6 +4107,50 @@ function updateSelectOptions(select, options, preferredValue = '') {
   }
 }
 
+function refreshGlobalSettingsOptionsFromDefinitions() {
+  try {
+    const domainSelect = document.getElementById("global-domain-select");
+    const industrySelect = document.getElementById("global-industry-select");
+    const projectSelect = document.getElementById("global-project-select");
+
+    if (!domainSelect || !industrySelect || !projectSelect) {
+      return false;
+    }
+
+    const currentDomain = domainSelect.value || 'phanmemmottrieu';
+
+    const projectOptions = LMKT_PROJECT_DEFS
+      .map(item => ({
+        value: item.service_code,
+        label: item.name,
+        priority: item.attributes_priority || 999
+      }))
+      .sort((a, b) => a.priority - b.priority);
+
+    const industryOptions = Object.entries(INDUSTRY_TYPES)
+      .map(([key, ind]) => ({
+        value: key,
+        label: ind.name || ind.category || key,
+        color: ind.color,
+        priority: ind.attributes_priority || 999
+      }))
+      .sort((a, b) => a.priority - b.priority);
+
+    updateSelectOptions(projectSelect, projectOptions, projectSelect.value);
+    updateSelectOptions(industrySelect, industryOptions, industrySelect.value);
+
+    if (currentDomain === 'lmkt' && industryOptions.some(o => o.value === 'bat-dong-san')) {
+      industrySelect.value = 'bat-dong-san';
+    }
+
+    domainSelect.dispatchEvent(new Event('change'));
+    return true;
+  } catch (e) {
+    console.warn('⚠️ [syncServiceDefs] Refresh global options failed:', e.message);
+    return false;
+  }
+}
+
 // ===== GLOBAL SETTINGS PANEL =====
 /**
  * Tạo Global Settings Panel - Hiển thị 1 lần duy nhất ở đầu trang
@@ -4021,49 +4252,43 @@ async function ensureGlobalSettingsPanel() {
 }
 
 async function loadCategoriesFromWebServices(domainKey) {
-  const appId = DOMAIN_OPTIONS[domainKey]?.app_id;
-  if (!appId) throw new Error("Không tìm thấy app_id");
-  if (!window.csmApi?.getTableData) {
-    throw new Error("Không tìm thấy window.csmApi.getTableData");
+  // Force sync từ server để cập nhật INDUSTRY_TYPES và LMKT_PROJECT_DEFS
+  const syncResult = await syncServiceDefinitionsFromServer(true);
+  
+  if (!syncResult.success) {
+    const errorMsg = syncResult.reason === 'api_not_available' 
+      ? "⚠️ window.csmApi.getTableData không khả dụng"
+      : `❌ Sync failed: ${syncResult.error || 'Unknown error'}`;
+    throw new Error(errorMsg);
   }
-
-  const rows = await window.csmApi.getTableData({
-    app_id: appId,
-    obj_name: "web_services",
-    where: {
-      operator: "AND",
-      conditions: [
-        { field: "id", type: "like", value: "" }
-      ]
-    }
-  }).catch(() => ({ rows: [] }));
-
-  const data = rows.rows || rows.data || [];
-  if (!Array.isArray(data) || data.length === 0) {
-    throw new Error("Không có dữ liệu web_services");
-  }
-
+  
+  // Refresh UI select options với data mới từ INDUSTRY_TYPES/LMKT_PROJECT_DEFS
   const domainSelect = document.getElementById("global-domain-select");
   const industrySelect = document.getElementById("global-industry-select");
   const projectSelect = document.getElementById("global-project-select");
 
   if (domainKey === 'lmkt') {
-    const projectOptions = data
-      .filter(item => item && (item.slug || item.service_code))
+    const projectOptions = LMKT_PROJECT_DEFS
       .map(item => ({
-        value: item.slug || item.service_code,
-        label: item.name || item.category || item.slug || item.service_code
-      }));
+        value: item.service_code,
+        label: item.name
+      }))
+      .sort((a, b) => {
+        const aPriority = LMKT_PROJECT_DEFS.find(p => p.service_code === a.value)?.attributes_priority || 999;
+        const bPriority = LMKT_PROJECT_DEFS.find(p => p.service_code === b.value)?.attributes_priority || 999;
+        return aPriority - bPriority;
+      });
 
     updateSelectOptions(projectSelect, projectOptions, projectSelect?.value);
     if (projectSelect) projectSelect.dispatchEvent(new Event('change'));
   } else {
-    const industryOptions = data
-      .filter(item => item && (item.slug || item.service_code))
-      .map(item => ({
-        value: item.slug || item.service_code,
-        label: item.name || item.category || item.slug || item.service_code
-      }));
+    const industryOptions = Object.entries(INDUSTRY_TYPES)
+      .map(([key, ind]) => ({
+        value: key,
+        label: ind.name || ind.category || key,
+        priority: ind.attributes_priority || 999
+      }))
+      .sort((a, b) => a.priority - b.priority);
 
     updateSelectOptions(industrySelect, industryOptions, industrySelect?.value);
     if (industrySelect) industrySelect.dispatchEvent(new Event('change'));
@@ -4071,7 +4296,11 @@ async function loadCategoriesFromWebServices(domainKey) {
 
   if (domainSelect) domainSelect.dispatchEvent(new Event('change'));
 
-  const message = `✅ Đã tải ${data.length} danh mục từ web_services`;
+  const totalCount = domainKey === 'lmkt' 
+    ? LMKT_PROJECT_DEFS.length 
+    : Object.keys(INDUSTRY_TYPES).length;
+  const message = `✅ Đã sync ${totalCount} ${domainKey === 'lmkt' ? 'dự án LMKT' : 'loại hình dịch vụ'} từ server`;
+  
   if (window.showNotification) {
     window.showNotification({ type: 'success', message, duration: 3 });
   } else {
@@ -5820,6 +6049,81 @@ function stopMemoryMonitor() {
 }
 
 /**
+ * ===== GLOBAL RESOURCE CLEANUP MANAGER =====
+ * Prevents memory leaks by tracking and cleaning up timers, observers, and listeners
+ */
+const CLEANUP_MANAGER = {
+  timers: [],
+  observers: [],
+  listeners: [],
+  
+  registerTimer(timerId) {
+    if (!this.timers.includes(timerId)) {
+      this.timers.push(timerId);
+    }
+    return timerId;
+  },
+  
+  registerObserver(observer) {
+    if (!this.observers.includes(observer)) {
+      this.observers.push(observer);
+    }
+    return observer;
+  },
+  
+  registerListener(target, event, handler) {
+    this.listeners.push({ target, event, handler });
+    return { target, event, handler };
+  },
+  
+  cleanupAll() {
+    console.log(`🧹 [Cleanup] Cleaning up ${this.timers.length} timers, ${this.observers.length} observers, ${this.listeners.length} listeners`);
+    
+    // Clear all timers
+    this.timers.forEach(id => {
+      clearTimeout(id);
+      clearInterval(id);
+    });
+    this.timers = [];
+    
+    // Disconnect all observers
+    this.observers.forEach(observer => {
+      try {
+        observer.disconnect();
+      } catch (e) {
+        console.warn('Error disconnecting observer:', e);
+      }
+    });
+    this.observers = [];
+    
+    // Remove all event listeners
+    this.listeners.forEach(({ target, event, handler }) => {
+      try {
+        target.removeEventListener(event, handler);
+      } catch (e) {
+        console.warn('Error removing listener:', e);
+      }
+    });
+    this.listeners = [];
+    
+    console.log('✅ [Cleanup] Cleanup completed');
+  }
+};
+
+// Auto cleanup on page hide/before unload
+if (typeof window !== 'undefined') {
+  window.addEventListener('pagehide', () => {
+    console.log('📄 [Cleanup Trigger] Page hidden - running cleanup...');
+    CLEANUP_MANAGER.cleanupAll();
+  }, { passive: true });
+  
+  window.addEventListener('beforeunload', () => {
+    console.log('👋 [Cleanup Trigger] Before unload - running cleanup...');
+    CLEANUP_MANAGER.cleanupAll();
+  }, { passive: true });
+}
+
+/**
  * Load danh sách tin Zalo đã đăng từ SERVER (csmUserData)
  * Tương tự như loadDataOptionUser() - load from server, fallback localStorage
  * @returns {Array} Mảng {hash, timestamp, groupName, content_preview, config_id}
@@ -5853,10 +6157,27 @@ function loadPostedZaloMessages() {
     // ✅ PRIORITY 2: Fallback to localStorage
     const raw = localStorage.getItem('zalo_posted_messages');
     if (raw) {
-      const posted = JSON.parse(raw);
-      if (Array.isArray(posted) && posted.length > 0) {
-        console.log(`📊 [LoadPostedZalo] Loaded ${posted.length} posted messages from localStorage (FALLBACK)`);
-        return posted;
+      try {
+        const posted = JSON.parse(raw);
+        if (Array.isArray(posted) && posted.length > 0) {
+          // ✅ Handle both compacted (h, ts, g, c) and full format (hash, timestamp, groupName, config_id)
+          const decompacted = posted.map(m => {
+            if (m.h !== undefined) {
+              return decompactPostedMessage(m);
+            }
+            return m;
+          });
+          console.log(`📊 [LoadPostedZalo] Loaded ${posted.length} posted messages from localStorage (FALLBACK)`);
+          return decompacted;
+        }
+      } catch (e) {
+        console.warn(`⚠️ [LoadPostedZalo] Error parsing localStorage data:`, e.message);
+        // Clear corrupted data
+        try {
+          localStorage.removeItem('zalo_posted_messages');
+        } catch (e2) {
+          // ignore
+        }
       }
     }
     
@@ -5869,24 +6190,53 @@ function loadPostedZaloMessages() {
 }
 
 /**
+ * Compact message to reduce storage size
+ */
+function compactPostedMessage(msg) {
+  return {
+    id: msg.id,
+    h: msg.hash,          // hash (compact form)
+    ts: msg.timestamp,    // timestamp
+    g: msg.groupName,     // groupName  
+    c: msg.config_id,     // config_id
+  };
+}
+
+/**
+ * Restore compacted message
+ */
+function decompactPostedMessage(msg) {
+  return {
+    id: msg.id,
+    hash: msg.h,
+    timestamp: msg.ts,
+    groupName: msg.g,
+    config_id: msg.c,
+  };
+}
+
+/**
  * Lưu danh sách tin Zalo đã đăng vào SERVER (via csmUserData.set())
  * Giống như saveDataOptionUser() - lưu qua server, backup vào localStorage
- * ✅ CLEANUP: Chỉ giữ 1000 posted messages mới nhất để tránh vượt quá storage quota
+ * ✅ CLEANUP: Chỉ giữ 100 posted messages mới nhất & nén data để tránh vượt quá storage quota
  * @param {Array} postedMessages - Mảng tin đã đăng
  */
 function savePostedZaloMessages(postedMessages) {
   try {
-    // ✅ CLEANUP: Trim to max 1000 newest messages (sort by timestamp descending)
-    const maxMessages = 1000;
+    // ✅ CLEANUP: Trim to max 100 newest messages (much smaller quota)
+    const maxMessages = 100;
     let messagesToSave = Array.isArray(postedMessages) ? postedMessages : [];
     
     if (messagesToSave.length > maxMessages) {
-      // Sort by timestamp descending (newest first), keep first 1000
+      // Sort by timestamp descending (newest first), keep first 100
       messagesToSave = messagesToSave
         .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
         .slice(0, maxMessages);
       console.log(`🧹 [SavePostedZalo] Trimmed to ${maxMessages} newest messages (deleted ${postedMessages.length - maxMessages} old)`);  
     }
+    
+    // ✅ NEW: Compact messages to reduce storage size
+    const compactedData = messagesToSave.map(compactPostedMessage);
     
     // ✅ PRIORITY 1: Save to server via csmUserData.set()
     if (window.csmUserData && typeof window.csmUserData.set === 'function') {
@@ -5901,7 +6251,7 @@ function savePostedZaloMessages(postedMessages) {
           return true;
         });
         
-        // Merge: configs + new posted messages
+        // Merge: configs + compacted posted messages
         const finalData = [...otherData, ...messagesToSave];
         
         console.log(`💾 [SavePostedZalo] Saving ${messagesToSave.length} posted messages to SERVER via csmUserData...`);
@@ -5909,41 +6259,78 @@ function savePostedZaloMessages(postedMessages) {
         window.csmUserData.set(finalData, function(success, error) {
           if (success) {
             console.log(`✅ [SavePostedZalo] SERVER save successful!`);
-            // Backup to localStorage as well
+            // Backup to localStorage as well (using compacted form)
             try {
-              localStorage.setItem('zalo_posted_messages', JSON.stringify(messagesToSave));
+              const oldData = localStorage.getItem('zalo_posted_messages') || '[]';
+              const size = new Blob([JSON.stringify(compactedData)]).size;
+              if (size < 500000) {  // Only save if < 500KB
+                localStorage.setItem('zalo_posted_messages', JSON.stringify(compactedData));
+                console.log(`✅ [SavePostedZalo] localStorage backup: ${size} bytes`);
+              } else {
+                console.warn(`⚠️ [SavePostedZalo] Data too large for localStorage (${size} bytes)`);
+              }
             } catch (e) {
-              console.warn(`⚠️ [SavePostedZalo] localStorage backup failed:`, e.message);
+              if (e.name === 'QuotaExceededError') {
+                console.warn(`⚠️ [SavePostedZalo] localStorage quota exceeded, clearing old data...`);
+                try {
+                  localStorage.removeItem('zalo_posted_messages');
+                  localStorage.setItem('zalo_posted_messages', JSON.stringify(compactedData.slice(0, 50)));
+                } catch (e2) {
+                  console.warn(`⚠️ [SavePostedZalo] Still failed after cleanup:`, e2.message);
+                }
+              } else {
+                console.warn(`⚠️ [SavePostedZalo] localStorage backup failed:`, e.message);
+              }
             }
           } else {
             console.warn(`⚠️ [SavePostedZalo] SERVER save failed:`, error);
-            // Fallback: save to localStorage only
+            // Fallback: save compacted data to localStorage only
             try {
-              localStorage.setItem('zalo_posted_messages', JSON.stringify(messagesToSave));
-              console.log(`💾 [SavePostedZalo] Saved to localStorage as fallback`);
+              const size = new Blob([JSON.stringify(compactedData)]).size;
+              if (size < 500000) {
+                localStorage.setItem('zalo_posted_messages', JSON.stringify(compactedData));
+                console.log(`💾 [SavePostedZalo] Saved compacted data to localStorage (${size} bytes) as fallback`);
+              }
             } catch (e) {
-              console.warn(`⚠️ [SavePostedZalo] localStorage fallback also failed:`, e.message);
+              if (e.name === 'QuotaExceededError') {
+                console.warn(`⚠️ [SavePostedZalo] localStorage quota exceeded - keeping only 50 newest records`);
+                try {
+                  localStorage.removeItem('zalo_posted_messages');
+                  localStorage.setItem('zalo_posted_messages', JSON.stringify(compactedData.slice(0, 50)));
+                } catch (e2) {
+                  console.warn(`⚠️ [SavePostedZalo] Cannot save to localStorage:`, e2.message);
+                }
+              }
             }
           }
         });
       } catch (e) {
         console.warn(`⚠️ [SavePostedZalo] Error with csmUserData:`, e.message);
-        // Fallback: localStorage
-        try {
-          localStorage.setItem('zalo_posted_messages', JSON.stringify(messagesToSave));
-          console.log(`💾 [SavePostedZalo] Saved to localStorage (csmUserData error)`);
-        } catch (e2) {
-          console.warn(`⚠️ [SavePostedZalo] localStorage also failed:`, e2.message);
-        }
       }
     } else {
       // csmUserData not available, fallback to localStorage
       console.log(`⚠️ [SavePostedZalo] csmUserData not available, using localStorage only`);
       try {
-        localStorage.setItem('zalo_posted_messages', JSON.stringify(messagesToSave));
-        console.log(`💾 [SavePostedZalo] Saved to localStorage`);
+        const size = new Blob([JSON.stringify(compactedData)]).size;
+        if (size < 500000) {
+          localStorage.setItem('zalo_posted_messages', JSON.stringify(compactedData));
+          console.log(`💾 [SavePostedZalo] Saved to localStorage (${size} bytes)`);
+        } else {
+          console.warn(`⚠️ [SavePostedZalo] Data too large (${size} bytes), keeping only 50 records`);
+          localStorage.setItem('zalo_posted_messages', JSON.stringify(compactedData.slice(0, 50)));
+        }
       } catch (e) {
-        console.warn(`⚠️ [SavePostedZalo] localStorage save failed:`, e.message);
+        if (e.name === 'QuotaExceededError') {
+          console.warn(`⚠️ [SavePostedZalo] localStorage quota exceeded, trying with 50 records...`);
+          try {
+            localStorage.removeItem('zalo_posted_messages');
+            localStorage.setItem('zalo_posted_messages', JSON.stringify(compactedData.slice(0, 50)));
+          } catch (e2) {
+            console.error(`❌ [SavePostedZalo] Failed to save even 50 records:`, e2.message);
+          }
+        } else {
+          console.warn(`⚠️ [SavePostedZalo] localStorage save failed:`, e.message);
+        }
       }
     }
   } catch (e) {
@@ -6919,12 +7306,12 @@ async function getLastCreatedPostUrl(maxRetries = 5, retryDelayMs = 1000) {
     console.log(`📌 [GetLastPostUrl] Domain: ${domain}`);
   }
   
-  if (!detail.service_code || !detail.slug) {
-    console.warn('❌ [GetLastPostUrl] Thiếu service_code hoặc slug');
+  if (!detail.service_type || !detail.slug) {
+    console.warn('❌ [GetLastPostUrl] Thiếu service_type hoặc slug');
     return null;
   }
   
-  const fullUrl = `https://www.${domain}/${detail.service_code}/${detail.slug}`;
+  const fullUrl = `https://www.${domain}/${detail.service_type}/${detail.slug}`;
   console.log(`✅ [GetLastPostUrl] URL: ${fullUrl}`);
   
   return fullUrl;
@@ -8884,16 +9271,23 @@ DESCRIPTION: Dự án bất động sản
 USER REQUEST: ${userCustomPrompt || '(Không có yêu cầu bổ sung)'}
 
 ========== STRICT RULES ==========
-❗ content_en và content_zh BẮT BUỘC khác content (dịch đúng ngôn ngữ)
+❗❗❗ STATUS = "active" (BẮT BUỘC LÀ STRING, KHÔNG PHẢI SỐ 1)
+❗ content_en và content_zh BẮT BUỘC khác content (dịch ĐÚNG ngôn ngữ, KHÔNG ĐƯỢC copy tiếng Việt)
 ❗ description/description_en/description_zh phải là mô tả đúng nghĩa (1-2 câu), KHÔNG dùng lại prompt_focus
-❗ category/category_en/category_zh bắt buộc đủ 3 ngôn ngữ
+❗ category/category_en/category_zh bắt buộc đủ 3 ngôn ngữ (EN/ZH PHẢI là tiếng Anh/Trung, KHÔNG được tiếng Việt)
 ❗ BẮT BUỘC trả đủ fields: name/name_en/name_zh, category/category_en/category_zh, description/description_en/description_zh, image, attributes_icon/attributes_color/attributes_priority, attributes_title/_en/_zh, attributes_description/_en/_zh, attributes_keywords/_en/_zh
-❗ name_en/name_zh/category_en/category_zh BẮT BUỘC là ngôn ngữ đúng, KHÔNG được giữ nguyên tiếng Việt
+❗ name_en/name_zh/category_en/category_zh BẮT BUỘC là ngôn ngữ đúng:
+  - name_en PHẢI là tiếng Anh (VD: "Real Estate" KHÔNG PHẢI "Bất Động Sản")
+  - name_zh PHẢI là tiếng Trung (VD: "房地产" KHÔNG PHẢI "Bất Động Sản")
+  - category_en PHẢI là tiếng Anh
+  - category_zh PHẢI là tiếng Trung
 ❗ KHÔNG ĐƯỢC để trống bất kỳ trường nào trong JSON output
-❗ Nếu thiếu trường, TỰ KIỂM TRA và TẠO LẠI trước khi trả về
+❗ Nếu thiếu trường hoặc ngôn ngữ SAI, TỰ KIỂM TRA và TẠO LẠI trước khi trả về
 ❗ SELF-CHECK BẮT BUỘC TRƯỚC KHI TRẢ JSON:
+  - status: PHẢI = "active" (string), KHÔNG ĐƯỢC = 1 (number)
   - content, content_en, content_zh (đủ, khác ngôn ngữ)
-  - category, category_en, category_zh (đủ 3 ngôn ngữ)
+  - name: tiếng Việt, name_en: tiếng Anh, name_zh: tiếng Trung (3 ngôn ngữ KHÁC NHAU)
+  - category: tiếng Việt, category_en: tiếng Anh, category_zh: tiếng Trung (3 ngôn ngữ KHÁC NHAU)
   - description, description_en, description_zh (SEO: 150-160 ký tự, 1-2 câu, có keyword chính)
   - attributes_title/_en/_zh (SEO: 60-70 ký tự, có keyword chính + USP, không nhồi nhét)
   - attributes_description/_en/_zh (SEO: 150-160 ký tự, có keyword chính + lợi ích)
@@ -9023,11 +9417,14 @@ INDUSTRY: ${categoryData.name} (${nameEn} / ${nameZh})
 USER REQUEST: ${userCustomPrompt || '(Không có yêu cầu bổ sung)'}
 
 ========== STRICT RULES ==========
-  **** BẮT BUỘC TRƯỚC KHI TRẢ JSON:
+❗❗❗ STATUS = "active" (BẮT BUỘC LÀ STRING, KHÔNG PHẢI SỐ 1)
+❗ content_en và content_zh BẮT BUỘC khác content (dịch ĐÚNG ngôn ngữ, KHÔNG ĐƯỢC copy tiếng Việt)
+❗ BẮT BUỘC TRƯỚC KHI TRẢ JSON:
   - name/name_en/name_zh, category/category_en/category_zh, description/description_en/description_zh, image, attributes_icon/attributes_color/attributes_priority
   - content, content_en, content_zh (đủ, khác ngôn ngữ)
-  - category, category_en, category_zh (đủ 3 ngôn ngữ)
-  - name_en/name_zh/category_en/category_zh phải dịch đúng, không lặp lại tiếng Việt
+  - status: PHẢI = "active" (string), KHÔNG ĐƯỢC = 1 (number)
+  - name: tiếng Việt, name_en: tiếng Anh (PHẢI dịch), name_zh: tiếng Trung (PHẢI dịch)
+  - category: tiếng Việt, category_en: tiếng Anh (PHẢI khác tiếng Việt), category_zh: tiếng Trung (PHẢI khác tiếng Việt)
   - description, description_en, description_zh (SEO: 150-160 ký tự, 1-2 câu, có keyword chính)
   - attributes_title/_en/_zh (SEO: 60-70 ký tự, có keyword chính + USP, không nhồi nhét)
   - attributes_description/_en/_zh (SEO: 150-160 ký tự, có keyword chính + lợi ích)
@@ -9545,8 +9942,7 @@ async function upsertServiceCategoryContent(ctx, categorySlug, contentData) {
     is_group_slug_default: groupFlags.is_group_slug_default,
     domain: ctx.domain,
     app_id: ctx.app_id,
-    status: pick(contentData.status, existing.status, fallbackRow.status, baseCategory.status, 'active'),
-
+    status: 'active',
     name: pick(contentData.name, existing.name, fallbackRow.name, baseCategory.name),
     name_en: pick(contentData.name_en, existing.name_en, fallbackRow.name_en, baseCategory.name_en, contentData.name, existing.name, fallbackRow.name, baseCategory.name),
     name_zh: pick(contentData.name_zh, existing.name_zh, fallbackRow.name_zh, baseCategory.name_zh, contentData.name, existing.name, fallbackRow.name, baseCategory.name),
@@ -9765,6 +10161,38 @@ async function ensureServiceContentUI() {
   deleteInput.type = "text";
   deleteInput.placeholder = "Nhập slug để xóa (không cần domain)";
   deleteInput.style.cssText = `min-width:240px;padding:6px 8px;border:1px solid ${theme.border};border-radius:4px;font-size:12px;color:${theme.text};background:${theme.bg};`;
+
+  const newNameInput = document.createElement("input");
+  newNameInput.type = "text";
+  newNameInput.placeholder = "Tên dự án/dịch vụ mới (VD: Eco Smart City)";
+  newNameInput.style.cssText = `min-width:280px;padding:6px 8px;border:1px solid ${theme.border};border-radius:4px;font-size:12px;color:${theme.text};background:${theme.bg};`;
+
+  const newSlugInput = document.createElement("input");
+  newSlugInput.type = "text";
+  newSlugInput.placeholder = "Slug mới (auto, có thể sửa)";
+  newSlugInput.style.cssText = `min-width:220px;padding:6px 8px;border:1px solid ${theme.border};border-radius:4px;font-size:12px;color:${theme.text};background:${theme.bg};`;
+
+  const addNewBtn = createButton("➕ Thêm Mới bằng AI", "#722ed1");
+  addNewBtn.title = "Nhập tên + prompt để AI tạo đầy đủ nội dung và lưu lên web_services";
+
+  const normalizeNewSlug = (value = "") => String(value)
+    .normalize("NFKD")
+    .replace(/\p{Diacritic}+/gu, "")
+    .replace(/đ/gi, "d")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+  newNameInput.addEventListener("input", () => {
+    if (!newSlugInput.dataset.userEdited) {
+      newSlugInput.value = normalizeNewSlug(newNameInput.value);
+    }
+  });
+  newSlugInput.addEventListener("input", () => {
+    newSlugInput.dataset.userEdited = "1";
+    newSlugInput.value = normalizeNewSlug(newSlugInput.value);
+  });
   
   syncBtn.onmouseover = () => {
     syncBtn.style.background = '#45a017';
@@ -9873,6 +10301,12 @@ async function ensureServiceContentUI() {
   syncRow.appendChild(deleteBtn);
   syncRow.appendChild(updateDetailDomainBtn);
 
+  const addNewRow = document.createElement("div");
+  addNewRow.style.cssText = "margin-bottom:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap";
+  addNewRow.appendChild(newNameInput);
+  addNewRow.appendChild(newSlugInput);
+  addNewRow.appendChild(addNewBtn);
+
   // Note: Lĩnh vực được dùng từ Global Settings (chỉ có 1 chỗ cho tất cả)
   // Không tạo category selector riêng - dùng giá trị từ global-industry-select
   const infoRow = document.createElement("div");
@@ -9894,12 +10328,12 @@ async function ensureServiceContentUI() {
   // Textarea for user prompt
   const promptLabel = document.createElement("label");
   promptLabel.style.cssText = `font-weight:500;display:block;margin-bottom:6px;color:${theme.text}`;
-  promptLabel.textContent = "Hướng dẫn nội dung (tùy chỉnh AI):";
+  promptLabel.textContent = "Hướng dẫn nội dung (tùy chỉnh AI - có thể để trống):";
   
   const textarea = document.createElement("textarea");
   textarea.id = "service-prompt-input";
   textarea.style.cssText = `width:100%;min-height:120px;font-family:monospace;font-size:12px;color:${theme.text};background:${theme.bg};border:1px solid ${theme.border};padding:8px;border-radius:6px;margin-bottom:12px;resize:vertical`;
-  textarea.placeholder = "Ví dụ: Viết về tính năng chính, lợi ích cụ thể, và đối tượng sử dụng...";
+  textarea.placeholder = "Ví dụ: Viết về tính năng chính, lợi ích cụ thể, và đối tượng sử dụng... (để trống sẽ dùng prompt mặc định đầy đủ)";
 
   // Buttons
   const btnRow = document.createElement("div");
@@ -9974,6 +10408,209 @@ async function ensureServiceContentUI() {
     }
   });
 
+  async function generateAndSaveServiceCategory({
+    globalSettings,
+    categoryData,
+    categorySlug,
+    categoryName,
+    userPrompt,
+    mode = 'update_existing',
+    autoPrompt = '',
+    selectNewAfterSave = false
+  }) {
+    const finalPrompt = (userPrompt && userPrompt.trim()) || autoPrompt;
+    if (!finalPrompt) {
+      throw new Error("Thiếu prompt để tạo nội dung");
+    }
+
+    const aiPrompt = buildCategoryPrompt(categoryData, finalPrompt, globalSettings.domainKey);
+    if (!window.csmAI?.generateSeoContentWithPrompt) {
+      throw new Error("🤖 Không tìm thấy AI Helper - Chưa kích hoạt csmAI");
+    }
+
+    const startTime = Date.now();
+    const aiResponse = await window.csmAI.generateSeoContentWithPrompt(aiPrompt);
+    const duration = Math.round((Date.now() - startTime) / 1000);
+    const contentData = parseAIResponse(aiResponse, { encodeContent: false });
+
+    if (!contentData.content) {
+      throw new Error("AI trả về content rỗng");
+    }
+
+    const ctx = resolveContext();
+    const domainConfigForSave = DOMAIN_OPTIONS[globalSettings.domainKey];
+    ctx.app_id = domainConfigForSave?.app_id || ctx.app_id;
+    ctx.domain = domainConfigForSave?.value || ctx.domain;
+
+    const saveResult = await upsertServiceCategoryContent(ctx, categorySlug, {
+      ...categoryData,
+      ...contentData,
+      slug: categorySlug,
+      service_code: categorySlug,
+      id: categoryData.id || categorySlug,
+      name: contentData.name || categoryName
+    });
+
+    if (mode === 'add_new') {
+      if (globalSettings.isLmkt) {
+        const idx = LMKT_PROJECT_DEFS.findIndex(p => p.service_code === categorySlug);
+        const nextProject = {
+          service_code: categorySlug,
+          name: contentData.name || categoryName,
+          name_en: contentData.name_en || categoryName,
+          name_zh: contentData.name_zh || categoryName,
+          category: contentData.category || contentData.name || categoryName,
+          category_en: contentData.category_en || contentData.name_en || categoryName,
+          category_zh: contentData.category_zh || contentData.name_zh || categoryName,
+          image: contentData.image || categoryData.image,
+          attributes_icon: contentData.attributes_icon || categoryData.attributes_icon,
+          attributes_color: contentData.attributes_color || categoryData.attributes_color,
+          attributes_priority: typeof contentData.attributes_priority === 'number' ? contentData.attributes_priority : 999
+        };
+        if (idx >= 0) LMKT_PROJECT_DEFS[idx] = { ...LMKT_PROJECT_DEFS[idx], ...nextProject };
+        else LMKT_PROJECT_DEFS.push(nextProject);
+      } else {
+        INDUSTRY_TYPES[categorySlug] = {
+          ...(INDUSTRY_TYPES[categorySlug] || {}),
+          name: contentData.name || categoryName,
+          name_en: contentData.name_en || categoryName,
+          name_zh: contentData.name_zh || categoryName,
+          category: contentData.category || contentData.name || categoryName,
+          category_en: contentData.category_en || contentData.name_en || categoryName,
+          category_zh: contentData.category_zh || contentData.name_zh || categoryName,
+          image: contentData.image || categoryData.image,
+          attributes_icon: contentData.attributes_icon || categoryData.attributes_icon,
+          attributes_color: contentData.attributes_color || categoryData.attributes_color,
+          attributes_priority: typeof contentData.attributes_priority === 'number' ? contentData.attributes_priority : 999,
+          attributes_title: contentData.attributes_title || categoryName,
+          attributes_title_en: contentData.attributes_title_en || categoryName,
+          attributes_title_zh: contentData.attributes_title_zh || categoryName,
+          attributes_description: contentData.attributes_description || '',
+          attributes_description_en: contentData.attributes_description_en || '',
+          attributes_description_zh: contentData.attributes_description_zh || '',
+          attributes_keywords: contentData.attributes_keywords || '',
+          attributes_keywords_en: contentData.attributes_keywords_en || '',
+          attributes_keywords_zh: contentData.attributes_keywords_zh || '',
+          color: contentData.attributes_color || categoryData.attributes_color
+        };
+      }
+
+      refreshGlobalSettingsOptionsFromDefinitions();
+
+      if (selectNewAfterSave) {
+        const globalDomain = document.getElementById("global-domain-select");
+        const globalIndustry = document.getElementById("global-industry-select");
+        const globalProject = document.getElementById("global-project-select");
+        if (globalDomain) globalDomain.value = globalSettings.domainKey;
+        if (globalSettings.isLmkt && globalProject) globalProject.value = categorySlug;
+        if (!globalSettings.isLmkt && globalIndustry) globalIndustry.value = categorySlug;
+        if (globalDomain) globalDomain.dispatchEvent(new Event('change'));
+      }
+    }
+
+    const displayResult = {
+      ...(saveResult?.objUpdate || contentData),
+      metadata: {
+        mode,
+        domain: globalSettings.domainKey,
+        industry: globalSettings.industry,
+        project: globalSettings.isLmkt ? globalSettings.project : null,
+        slug: categorySlug,
+        duration: `${duration}s`,
+        timestamp: new Date().toLocaleString('vi-VN')
+      }
+    };
+
+    resultContent.textContent = JSON.stringify(displayResult, null, 2);
+    resultArea.style.display = 'block';
+    return { contentData, saveResult, duration };
+  }
+
+  addNewBtn.onclick = async () => {
+    const globalSettings = getGlobalSettings();
+    const userPrompt = textarea.value.trim();
+    const categoryName = (newNameInput.value || '').trim();
+    const customSlug = normalizeNewSlug(newSlugInput.value || categoryName);
+
+    if (!globalSettings.domainKey) {
+      canhbao("❌ Vui lòng chọn Domain ở Cài Đặt Chung");
+      return;
+    }
+    if (!categoryName) {
+      canhbao("❌ Vui lòng nhập tên dự án/dịch vụ mới");
+      return;
+    }
+    if (!customSlug) {
+      canhbao("❌ Slug không hợp lệ. Vui lòng nhập lại tên/slug");
+      return;
+    }
+
+    try {
+      addNewBtn.disabled = true;
+      addNewBtn.textContent = "⏳ Đang tạo mới bằng AI...";
+      resultArea.style.display = 'none';
+
+      const defaultIndustry = INDUSTRY_TYPES["bat-dong-san"] || {};
+      const baseIndustry = globalSettings.isLmkt
+        ? defaultIndustry
+        : (INDUSTRY_TYPES[globalSettings.industry] || defaultIndustry);
+
+      const categoryData = {
+        id: customSlug,
+        service_code: customSlug,
+        slug: customSlug,
+        group_slug: globalSettings.isLmkt ? "du-an" : "dich-vu",
+        is_service: true,
+        is_group_slug: false,
+        is_group_slug_default: false,
+        name: categoryName,
+        name_en: categoryName,
+        name_zh: categoryName,
+        category: categoryName,
+        category_en: categoryName,
+        category_zh: categoryName,
+        image: globalSettings.isLmkt
+          ? `https://www.h-holding.vn/app_images/projects/${customSlug}-og.jpg`
+          : (baseIndustry.image || ''),
+        attributes_icon: baseIndustry.attributes_icon || "AppstoreOutlined",
+        attributes_color: baseIndustry.attributes_color || "#1890ff",
+        attributes_priority: 999,
+        attributes_title: categoryName,
+        attributes_title_en: categoryName,
+        attributes_title_zh: categoryName,
+        attributes_description: baseIndustry.attributes_description || '',
+        attributes_description_en: baseIndustry.attributes_description_en || '',
+        attributes_description_zh: baseIndustry.attributes_description_zh || '',
+        attributes_keywords: baseIndustry.attributes_keywords || '',
+        attributes_keywords_en: baseIndustry.attributes_keywords_en || '',
+        attributes_keywords_zh: baseIndustry.attributes_keywords_zh || ''
+      };
+
+      const autoPrompt = globalSettings.isLmkt
+        ? `Tạo đầy đủ bộ nội dung landing page cho dự án mới "${categoryName}". Nội dung phải chi tiết, thực tế, giàu tính thuyết phục và bám sát cấu trúc JSON bắt buộc.`
+        : `Tạo đầy đủ bộ nội dung landing page cho dịch vụ mới "${categoryName}". Nhấn mạnh lợi ích, tình huống sử dụng thực tế và bám sát cấu trúc JSON bắt buộc.`;
+
+      await generateAndSaveServiceCategory({
+        globalSettings,
+        categoryData,
+        categorySlug: customSlug,
+        categoryName,
+        userPrompt,
+        mode: 'add_new',
+        autoPrompt,
+        selectNewAfterSave: true
+      });
+
+      thongbao(`✅ Đã thêm mới "${categoryName}" (${customSlug}) và cập nhật web_services`);
+    } catch (e) {
+      console.error("[Service Content Add New] Error:", e);
+      canhbao(`❌ Thêm mới thất bại: ${e.message}`);
+    } finally {
+      addNewBtn.disabled = false;
+      addNewBtn.textContent = "➕ Thêm Mới bằng AI";
+    }
+  };
+
   // Event: Create content
   createBtn.onclick = async () => {
     const globalSettings = getGlobalSettings();
@@ -9994,7 +10631,6 @@ async function ensureServiceContentUI() {
       createBtn.textContent = "⏳ Đang gọi AI (30-120s)...";
       resultArea.style.display = 'none';
       
-      const domainConfig = DOMAIN_OPTIONS[globalSettings.domainKey];
       const industryConfig = INDUSTRY_TYPES[globalSettings.industry];
       const industryName = industryConfig?.name
         || getSelectLabel("global-industry-select", globalSettings.industry || 'Bất động sản');
@@ -10033,36 +10669,6 @@ async function ensureServiceContentUI() {
         category_zh: selectedCategory.category_zh || selectedCategory.name_zh || industryName
       };
 
-      const aiPrompt = buildCategoryPrompt(categoryData, userPrompt, globalSettings.domainKey);
-      
-      // ===== CALL AI =====
-      const startTime = Date.now();
-      
-      if (!window.csmAI?.generateSeoContentWithPrompt) {
-        throw new Error("🤖 Không tìm thấy AI Helper - Chưa kích hoạt csmAI");
-      }
-      
-      console.log(`[Service Content] Bắt đầu gọi AI...`);
-      const aiResponse = await window.csmAI.generateSeoContentWithPrompt(aiPrompt);
-      const duration = Math.round((Date.now() - startTime) / 1000);
-      
-      console.log(`[Service Content] ✅ AI trả về sau ${duration}s`);
-      
-      // ===== PARSE RESPONSE =====
-      const contentData = parseAIResponse(aiResponse, { encodeContent: false });
-      
-      if (!contentData.content) {
-        throw new Error("AI trả về content rỗng");
-      }
-
-      console.log(`[Service Content] ✅ Content parse thành công - ${contentData.content.length} ký tự`);
-      
-      // ===== SAVE TO DATABASE =====
-      const ctx = resolveContext();
-      const domainConfigForSave = DOMAIN_OPTIONS[globalSettings.domainKey];
-      ctx.app_id = domainConfigForSave?.app_id || ctx.app_id;
-      ctx.domain = domainConfigForSave?.value || ctx.domain;
-
       const categorySlug = globalSettings.isLmkt ? globalSettings.project : globalSettings.industry;
       const categoryName = globalSettings.isLmkt
         ? projectConfig?.name
@@ -10072,24 +10678,16 @@ async function ensureServiceContentUI() {
         throw new Error("Thiếu thông tin lĩnh vực/dự án đang chọn");
       }
 
-      const saveResult = await upsertServiceCategoryContent(ctx, categorySlug, {
-        ...contentData,
-        name: contentData.name || categoryName
+      await generateAndSaveServiceCategory({
+        globalSettings,
+        categoryData,
+        categorySlug,
+        categoryName,
+        userPrompt,
+        mode: 'update_existing',
+        autoPrompt: ''
       });
 
-      const displayResult = {
-        ...(saveResult?.objUpdate || contentData),
-        metadata: {
-          domain: globalSettings.domainKey,
-          industry: globalSettings.industry,
-          project: globalSettings.isLmkt ? globalSettings.project : null,
-          duration: `${duration}s`,
-          timestamp: new Date().toLocaleString('vi-VN')
-        }
-      };
-
-      resultContent.textContent = JSON.stringify(displayResult, null, 2);
-      resultArea.style.display = 'block';
       thongbao("✅ Tạo content và lưu dữ liệu thành công!");
     } catch (e) {
       console.error("[Service Content] Error:", e);
@@ -10106,6 +10704,7 @@ async function ensureServiceContentUI() {
     title,
     note,
     syncRow,
+    addNewRow,
     infoRow,
     promptLabel,
     textarea,
@@ -10165,9 +10764,32 @@ function parseAIResponse(rawResponse, opts = {}) {
     console.error("Response không có content fields:", result);
     throw new Error("AI response không có content - Đảm bảo output JSON có 'content', 'content_en', 'content_zh'");
   }
-
-  // NOTE: Không kiểm tra thủ công content_en/content_zh; chỉ dựa vào prompt
   
+  // ✅ CRITICAL FIX: FORCE status = 'active' (không để AI tự set)
+  // AI có thể trả về status = "1" hoặc status = 1 → Luôn override về 'active'
+  const forceStatus = 'active';
+  if (result.status && result.status !== 'active') {
+    console.warn(`⚠️ [parseAIResponse] AI trả về status="${result.status}" → Force về "active"`);
+  }
+  
+  // ✅ VALIDATE: name_en/name_zh PHẢI khác name (không được giống tiếng Việt)
+  const validateMultiLang = (viField, enField, zhField, fieldName) => {
+    const vi = result[viField] || '';
+    const en = result[enField] || '';
+    const zh = result[zhField] || '';
+    
+    if (!en || en === vi) {
+      console.warn(`⚠️ [parseAIResponse] ${fieldName}_en trống hoặc giống tiếng Việt → Cần AI translate đúng`);
+    }
+    if (!zh || zh === vi) {
+      console.warn(`⚠️ [parseAIResponse] ${fieldName}_zh trống hoặc giống tiếng Việt → Cần AI translate đúng`);
+    }
+  };
+  
+  validateMultiLang('name', 'name_en', 'name_zh', 'name');
+  validateMultiLang('category', 'category_en', 'category_zh', 'category');
+  validateMultiLang('description', 'description_en', 'description_zh', 'description');
+
   const encodeContent = opts.encodeContent !== false;
   const toContent = (value) => {
     const raw = value || '';
@@ -10186,7 +10808,7 @@ function parseAIResponse(rawResponse, opts = {}) {
     is_group_slug: typeof result.is_group_slug === 'boolean' ? result.is_group_slug : false,
     is_group_slug_default: typeof result.is_group_slug_default === 'boolean' ? result.is_group_slug_default : false,
     domain: result.domain || '',
-    status: result.status || 'active',
+    status: forceStatus, // ✅ FORCE 'active' (không dùng AI value)
 
     // CATEGORY FIELDS
     name: result.name || '',
@@ -13405,6 +14027,31 @@ function initAllUI() {
   let uiInitAttempts = 0;
   const maxAttempts = 10;
   
+  // 🔄 Auto-sync service definitions từ server (chạy ngay và mỗi 5 phút)
+  syncServiceDefinitionsFromServer().then(result => {
+    if (result.success && !result.cached) {
+      console.log(`✅ Initial sync completed: ${result.lmkt || 0} LMKT projects + ${result.pmt || 0} service types`);
+    } else if (!result.success) {
+      console.warn(`⚠️ Initial sync chưa sẵn sàng: ${result.reason || result.error || 'unknown'}`);
+    }
+  });
+
+  // Bootstrap retry: nếu API khởi tạo chậm, thử lại mỗi 15s đến khi hydrate xong
+  const bootstrapSyncId = setInterval(async () => {
+    if (serviceDefinitionsHydrated) {
+      clearInterval(bootstrapSyncId);
+      return;
+    }
+    await syncServiceDefinitionsFromServer(true);
+  }, 15000);
+  CLEANUP_MANAGER.registerTimer(bootstrapSyncId);
+  
+  // Setup auto-refresh mỗi 5 phút
+  const syncIntervalId = setInterval(() => {
+    syncServiceDefinitionsFromServer();
+  }, SYNC_INTERVAL_MS);
+  CLEANUP_MANAGER.registerTimer(syncIntervalId);
+  
   // Retry mechanism - thử khởi tạo UI mỗi giây
   const initInterval = setInterval(async () => {
     uiInitAttempts++;
@@ -13509,8 +14156,18 @@ function initAllUI() {
 // ===== THEME CHANGE LISTENER =====
 /**
  * Listen for theme changes and refresh all UI modules
+ * ✅ Uses CLEANUP_MANAGER to prevent memory leaks
  */
+let themeListenerInitialized = false;
+
 function setupThemeChangeListener() {
+  // Prevent duplicate initialization
+  if (themeListenerInitialized) {
+    console.log('ℹ️ Theme listener already initialized, skipping...');
+    return;
+  }
+  
+  themeListenerInitialized = true;
   let refreshTimeout = null;
   
   // Debounced function to refresh all UI
@@ -13527,7 +14184,7 @@ function setupThemeChangeListener() {
     }
     
     // Schedule refresh with debounce
-    refreshTimeout = setTimeout(async () => {
+    refreshTimeout = CLEANUP_MANAGER.registerTimer(setTimeout(async () => {
       isThemeRefreshing = true;
       console.log('🎨 Theme changed, refreshing all UI modules...');
       
@@ -13553,7 +14210,10 @@ function setupThemeChangeListener() {
         });
         
         // Wait a bit for DOM to settle
-        await new Promise(resolve => setTimeout(resolve, 150));
+        await new Promise(resolve => {
+          const timer = setTimeout(resolve, 150);
+          CLEANUP_MANAGER.registerTimer(timer);
+        });
         
         // Recreate UI with new theme
         await ensureGlobalSettingsPanel();
@@ -13564,7 +14224,7 @@ function setupThemeChangeListener() {
         console.log('✅ UI refresh completed');
         
         // Reconnect MutationObserver after a delay
-        setTimeout(() => {
+        const timer = setTimeout(() => {
           if (uiMutationObserver) {
             uiMutationObserver.observe(document.body, {
               childList: true,
@@ -13572,13 +14232,14 @@ function setupThemeChangeListener() {
             });
           }
         }, 500);
+        CLEANUP_MANAGER.registerTimer(timer);
         
       } catch (error) {
         console.error('❌ Error refreshing UI:', error);
       } finally {
         isThemeRefreshing = false;
       }
-    }, 300); // 300ms debounce
+    }, 300)); // 300ms debounce
   };
   
   // Listen to data-theme attribute changes on html element
@@ -13598,17 +14259,19 @@ function setupThemeChangeListener() {
     attributes: true,
     attributeFilter: ['data-theme', 'class']
   });
+  CLEANUP_MANAGER.registerObserver(themeObserver);
   
   // Listen to system prefers-color-scheme changes
   const darkModeMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
   if (darkModeMediaQuery.addEventListener) {
     darkModeMediaQuery.addEventListener('change', refreshAllUI);
+    CLEANUP_MANAGER.registerListener(darkModeMediaQuery, 'change', refreshAllUI);
   } else if (darkModeMediaQuery.addListener) {
     // Fallback for older browsers
     darkModeMediaQuery.addListener(refreshAllUI);
   }
   
-  console.log('👁️ Theme change listener initialized');
+  console.log('👁️ Theme change listener initialized (with cleanup tracking)');
 }
 
 // Auto-init when script loads

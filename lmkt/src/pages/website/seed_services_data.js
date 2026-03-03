@@ -177,18 +177,37 @@ async function createWebServiceDetailTable() {
   console.log("Create web_service_detail Table result:", result);
   return result;
 }
-// API Helper
+
+// API Helper - with better error handling
 async function csm_obj_updates(payload) {
-  const response = await fetch(`${API_URL}/update-table-data`, {
-    method: 'POST',
-    headers: { 
-      'Content-Type': 'application/json', 
-      'csm-token': CSM_TOKEN 
-    },
-    body: JSON.stringify(payload)
-  });
-  
-  return response.json();
+  try {
+    const response = await fetch(`${API_URL}/update-table-data`, {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json', 
+        'csm-token': CSM_TOKEN 
+      },
+      body: JSON.stringify(payload),
+      timeout: 5000  // 5 second timeout
+    });
+    
+    // Check if endpoint exists
+    if (response.status === 404) {
+      console.warn('⚠️ [API] /update-table-data endpoint not found (404)');
+      console.log('ℹ️ [API] Using fallback: skipping this update');
+      return { success: false, error: 'Endpoint not found', status: 404 };
+    }
+    
+    if (!response.ok) {
+      console.warn(`⚠️ [API] HTTP Error: ${response.status} ${response.statusText}`);
+      return { success: false, error: response.statusText, status: response.status };
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error('❌ [API] csm_obj_updates error:', error);
+    return { success: false, error: error.message };
+  }
 }
 
 createWebServiceDetailTable();
