@@ -8095,7 +8095,7 @@ async function scanAndPostConfig(config, statusEl) {
         }
       }
       
-      console.log(`    ✅ Nhóm ${groupName} đăng xong (${messagesWithImages.length} tin)`);
+      console.log(`    ✅ Nhóm ${groupName} đăng xong (${validMessages.length} tin)`);
       
       // Chờ 2s trước nhóm tiếp (để hạ load)
       if (groupIdx < groupList.length - 1) {
