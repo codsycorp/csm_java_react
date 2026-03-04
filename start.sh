@@ -6,11 +6,23 @@ cd "$(dirname "$0")"
 JAR_PREFIX="csm_server-"
 APP_PORT=9999
 SOCKET_PORT=15301
-LOG_FILE="console.log"
-MAX_LOG_SIZE=$((100 * 1024 * 1024)) # 100MB
 DB_PATH="csm_datas/database"
 LOG_DIR="logs"
+LOG_FILE="$LOG_DIR/console.log"
 GC_LOG="$LOG_DIR/gc.log"
+MAX_LOG_SIZE=$((100 * 1024 * 1024)) # 100MB
+
+# Log retention/cap (can override via env)
+LOG_RETENTION_DAYS="${LOG_RETENTION_DAYS:-7}"
+LOG_DIR_MAX_SIZE_MB="${LOG_DIR_MAX_SIZE_MB:-5120}" # 5GB
+LOG_DIR_MAX_SIZE_BYTES=$((LOG_DIR_MAX_SIZE_MB * 1024 * 1024))
+APP_LOG_MAX_FILES="${APP_LOG_MAX_FILES:-400}"
+
+# Spring Boot rolling policy caps (for logs/application.log)
+APP_LOG_MAX_FILE_SIZE="${APP_LOG_MAX_FILE_SIZE:-100MB}"
+APP_LOG_MAX_HISTORY="${APP_LOG_MAX_HISTORY:-14}"
+APP_LOG_TOTAL_SIZE_CAP="${APP_LOG_TOTAL_SIZE_CAP:-5GB}"
+APP_LOG_CLEAN_ON_START="${APP_LOG_CLEAN_ON_START:-true}"
 
 # 🚀 JVM MEMORY CONFIGURATION (Adjust based on available RAM)
 # - 1g for systems with 2GB RAM
@@ -61,6 +73,8 @@ DIRECT_MEMORY_SIZE="${DIRECT_MEMORY_SIZE:-256m}"
 log() { echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*"; }
 
 rotate_logs() {
+    mkdir -p "$LOG_DIR"
+
     if [ -f "$LOG_FILE" ]; then
         local size
         size=$(stat -f%z "$LOG_FILE" 2>/dev/null || stat -c%s "$LOG_FILE" 2>/dev/null || echo 0)
@@ -78,18 +92,60 @@ rotate_logs() {
             fi
         fi
     fi
+
     # Delete log files older than 7 days
-    find . -maxdepth 1 -name "${LOG_FILE}.*" -mtime +7 -delete 2>/dev/null || true
+    find "$LOG_DIR" -maxdepth 1 -name "console.log.*" -mtime +"$LOG_RETENTION_DAYS" -delete 2>/dev/null || true
+
     # Keep only last 10 log files
-    local log_count=$(ls -1 ${LOG_FILE}.* 2>/dev/null | wc -l)
+    local log_count=$(ls -1 "$LOG_DIR"/console.log.* 2>/dev/null | wc -l)
     if [ "$log_count" -gt 10 ]; then
         log "Cleaning old logs (keeping last 10, deleting $((log_count - 10)))"
-        ls -1 ${LOG_FILE}.* 2>/dev/null | sort | head -n -10 | xargs rm -f 2>/dev/null || true
+        ls -1 "$LOG_DIR"/console.log.* 2>/dev/null | sort | head -n -10 | xargs rm -f 2>/dev/null || true
     fi
+
     # Ensure console.log exists and is writable
     if [ ! -f "$LOG_FILE" ]; then
         touch "$LOG_FILE" 2>&1 || log "⚠ WARNING: Failed to create $LOG_FILE"
     fi
+}
+
+cleanup_logs_dir() {
+    mkdir -p "$LOG_DIR"
+
+    # Time-based cleanup for large/rotated logs
+    find "$LOG_DIR" -maxdepth 1 -type f \
+        \( -name "application.log.*" -o -name "console.log.*" -o -name "gc.log*" -o -name "hs_err_pid*.log" -o -name "*.hprof" \) \
+        -mtime +"$LOG_RETENTION_DAYS" -delete 2>/dev/null || true
+
+    # Keep a bounded number of rotated app logs
+    local app_log_count
+    app_log_count=$(ls -1 "$LOG_DIR"/application.log.* 2>/dev/null | wc -l)
+    if [ "$app_log_count" -gt "$APP_LOG_MAX_FILES" ]; then
+        local delete_count=$((app_log_count - APP_LOG_MAX_FILES))
+        log "Cleaning old application logs (keeping $APP_LOG_MAX_FILES, deleting $delete_count)"
+        ls -1 "$LOG_DIR"/application.log.* 2>/dev/null | sort | head -n "$delete_count" | xargs rm -f 2>/dev/null || true
+    fi
+
+    # Size-cap cleanup: delete oldest rotated logs until under cap
+    local current_size
+    current_size=$(du -sk "$LOG_DIR" 2>/dev/null | awk '{print $1 * 1024}' || echo 0)
+    while [ "$current_size" -gt "$LOG_DIR_MAX_SIZE_BYTES" ]; do
+        local oldest_file
+        oldest_file=$(ls -1tr \
+            "$LOG_DIR"/application.log.* \
+            "$LOG_DIR"/console.log.* \
+            "$LOG_DIR"/gc.log* \
+            "$LOG_DIR"/hs_err_pid*.log \
+            "$LOG_DIR"/*.hprof 2>/dev/null | head -n 1 || true)
+
+        if [ -z "$oldest_file" ]; then
+            break
+        fi
+
+        log "Deleting old log to enforce size cap: $oldest_file"
+        rm -f "$oldest_file" 2>/dev/null || true
+        current_size=$(du -sk "$LOG_DIR" 2>/dev/null | awk '{print $1 * 1024}' || echo 0)
+    done
 }
 
 kill_by_port() {
@@ -153,6 +209,7 @@ kill_existing() {
 }
 
 rotate_logs
+cleanup_logs_dir
 
 # Kill by port with retry verification
 if ! kill_by_port "$SOCKET_PORT"; then
@@ -266,6 +323,11 @@ nohup java \
     --spring.profiles.active=prod \
     --server.port=$APP_PORT \
     --logging.file.name="$LOG_DIR/application.log" \
+    --logging.logback.rollingpolicy.file-name-pattern="$LOG_DIR/application.log.%d{yyyy-MM-dd}.%i.gz" \
+    --logging.logback.rollingpolicy.max-file-size="$APP_LOG_MAX_FILE_SIZE" \
+    --logging.logback.rollingpolicy.max-history="$APP_LOG_MAX_HISTORY" \
+    --logging.logback.rollingpolicy.total-size-cap="$APP_LOG_TOTAL_SIZE_CAP" \
+    --logging.logback.rollingpolicy.clean-history-on-start="$APP_LOG_CLEAN_ON_START" \
     >> "$LOG_DIR/console.log" 2>&1 &
 sleep 3
 
@@ -297,11 +359,12 @@ fi
     while true; do
         sleep 3600
         rotate_logs
+        cleanup_logs_dir
         
         # Cleanup old GC logs
         if [ -d "$LOG_DIR" ]; then
-            find "$LOG_DIR" -name "gc.log*" -mtime +7 -delete 2>/dev/null || true
-            find "$LOG_DIR" -name "hs_err_pid*.log" -mtime +7 -delete 2>/dev/null || true
+            find "$LOG_DIR" -name "gc.log*" -mtime +"$LOG_RETENTION_DAYS" -delete 2>/dev/null || true
+            find "$LOG_DIR" -name "hs_err_pid*.log" -mtime +"$LOG_RETENTION_DAYS" -delete 2>/dev/null || true
         fi
     done
 ) >/dev/null 2>&1 &
