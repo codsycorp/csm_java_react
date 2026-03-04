@@ -140,6 +140,7 @@ public class AuthHandler {
             updateFields.put("refresh_token_ua", ua);
             updateFields.put("refresh_token_expiry", expiry);
             updateFields.put("login_version", nextLoginVersion);
+            updateFields.put("loginVersion", nextLoginVersion);
             // Xác định định danh update (email/username/phone)
             String updateKey = user.getEmail() != null && !user.getEmail().isEmpty() ? "email" : 
                             (user.getUsername() != null && !user.getUsername().isEmpty() ? "username" : "phoneNumber");

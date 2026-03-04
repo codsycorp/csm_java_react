@@ -236,7 +236,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 return false;
             }
             int currentVersion = user.getLoginVersion() != null ? user.getLoginVersion() : 0;
-            if (tokenVersion != currentVersion) {
+            // Legacy compatibility: chỉ enforce khi DB có login version hợp lệ (>0)
+            if (currentVersion > 0 && tokenVersion != currentVersion) {
                 return false;
             }
             org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(

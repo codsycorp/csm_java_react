@@ -559,6 +559,9 @@ public class UserService {
         }
 
         Object loginVersionObj = userRecord.get("login_version");
+        if (loginVersionObj == null) {
+            loginVersionObj = userRecord.get("loginVersion");
+        }
         if (loginVersionObj instanceof Number) {
             user.setLoginVersion(((Number) loginVersionObj).intValue());
         } else if (loginVersionObj instanceof String) {
