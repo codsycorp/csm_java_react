@@ -10882,6 +10882,27 @@ async function ensureServiceContentUI() {
   newSlugInput.placeholder = "Slug mới (auto, có thể sửa)";
   newSlugInput.style.cssText = `min-width:220px;padding:6px 8px;border:1px solid ${theme.border};border-radius:4px;font-size:12px;color:${theme.text};background:${theme.bg};`;
 
+  // ✅ NEW: Service Type Checkbox
+  const serviceTypeCheckbox = document.createElement("input");
+  serviceTypeCheckbox.type = "checkbox";
+  serviceTypeCheckbox.checked = true; // Mặc định là service
+  serviceTypeCheckbox.style.cssText = `cursor:pointer;width:16px;height:16px;`;
+  
+  const serviceTypeLabel = document.createElement("label");
+  serviceTypeLabel.style.cssText = `display:flex;align-items:center;gap:6px;cursor:pointer;white-space:nowrap;padding:6px 8px;border:1px solid ${theme.border};border-radius:4px;background:${theme.bg};color:${theme.text};font-size:12px;user-select:none;`;
+  serviceTypeLabel.appendChild(serviceTypeCheckbox);
+  
+  const labelText = document.createElement("span");
+  labelText.textContent = "✅ Dịch vụ (is_service: true)";
+  serviceTypeLabel.appendChild(labelText);
+  
+  // Update label text when checkbox changes
+  serviceTypeCheckbox.addEventListener('change', () => {
+    labelText.textContent = serviceTypeCheckbox.checked 
+      ? "✅ Dịch vụ (is_service: true)" 
+      : "❌ Menu thường (is_service: false)";
+  });
+
   const addNewBtn = createButton("➕ Thêm Mới bằng AI", "#722ed1");
   addNewBtn.title = "Nhập tên + prompt để AI tạo đầy đủ nội dung và lưu lên web_services";
 
