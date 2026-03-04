@@ -6161,15 +6161,21 @@ if (typeof window !== 'undefined' && window.indexedDB) {
 const MEMORY_MONITOR = {
   // Passive constants - just for logging
   CHECK_INTERVAL_MS: 30000,              // Check mỗi 30s
-  LOG_THRESHOLD_MB: 300,                 // Log nếu heap > 300MB
-  WARNING_THRESHOLD_MB: 800,             // Warning nếu > 800MB
-  ERROR_THRESHOLD_MB: 1200,              // Error nếu > 1200MB (app vẫn chạy)
+  LOG_THRESHOLD_MB: 400,                 // Log nếu heap > 400MB
+  WARNING_THRESHOLD_MB: 1200,            // Warning nếu > 1200MB
+  ERROR_THRESHOLD_MB: 1600,              // Error nếu > 1600MB
+  AUTO_PAUSE_THRESHOLD_MB: 1900,         // ✅ Tự động pause nếu > 1900MB (gần 2GB)
+  AUTO_RESUME_THRESHOLD_MB: 800,         // ✅ Tự động resume khi < 800MB
+  AUTO_RESUME_ENABLED: true,             // ✅ NEW: Cho phép tự động resume
+  AUTO_RESUME_WAIT_MS: 60000,            // ✅ NEW: Đợi 60s sau pause trước khi auto-resume
   
   // State
   lastHeapValue: 0,
   monitoringActive: false,
   errorCount: 0,
-  maxConsecutiveErrors: 5
+  maxConsecutiveErrors: 5,
+  autoPaused: false,                     // Track auto-pause state
+  autoPauseTime: 0                       // ✅ NEW: Thời điểm auto-pause
 };
 
 /**
@@ -6187,13 +6193,13 @@ function getHeapUsageMB() {
 }
 
 /**
- * ✅ Start Passive Memory Monitor (chỉ logging)
+ * ✅ Start Passive Memory Monitor (auto-pause + auto-resume hoàn toàn tự động)
  */
 function startMemoryMonitor() {
   if (MEMORY_MONITOR.monitoringActive) return;
   
   MEMORY_MONITOR.monitoringActive = true;
-  console.log('🔍 [Memory Monitor] Bắt đầu (passive mode - chỉ log, không cleanup)');
+  console.log('🔍 [Memory Monitor] Bắt đầu (auto-pause + auto-resume tự động)');
   
   const monitorInterval = setInterval(() => {
     if (!MEMORY_MONITOR.monitoringActive) {
@@ -6203,6 +6209,46 @@ function startMemoryMonitor() {
     
     const heapMB = getHeapUsageMB();
     MEMORY_MONITOR.lastHeapValue = heapMB;
+    
+    // ✅ AUTO-PAUSE LOGIC: Nếu RAM quá cao, tạm dừng để giải phóng
+    if (heapMB > MEMORY_MONITOR.AUTO_PAUSE_THRESHOLD_MB && !MEMORY_MONITOR.autoPaused) {
+      console.error(`🛑 [Memory] AUTO-PAUSE! RAM: ${heapMB}MB > ${MEMORY_MONITOR.AUTO_PAUSE_THRESHOLD_MB}MB`);
+      MEMORY_MONITOR.autoPaused = true;
+      MEMORY_MONITOR.autoPauseTime = Date.now();
+      
+      const statusEl = document.querySelector('.zalo-scanner-status');
+      pauseZaloScanner(statusEl);
+      
+      // Force cleanup
+      forceCleanupResources();
+      
+      // Hiển thị thông báo (không block - chỉ thông báo)
+      console.log(`⏸️ [Auto-Pause] Hệ thống tạm dừng, sẽ tự động tiếp tục sau ${MEMORY_MONITOR.AUTO_RESUME_WAIT_MS/1000}s...`);
+    }
+    
+    // ✅ AUTO-RESUME LOGIC: Tự động resume sau khi RAM giảm + đủ thời gian chờ
+    if (MEMORY_MONITOR.autoPaused && MEMORY_MONITOR.AUTO_RESUME_ENABLED) {
+      const timeSincePause = Date.now() - MEMORY_MONITOR.autoPauseTime;
+      const waitComplete = timeSincePause >= MEMORY_MONITOR.AUTO_RESUME_WAIT_MS;
+      const ramOk = heapMB < MEMORY_MONITOR.AUTO_RESUME_THRESHOLD_MB;
+      
+      if (waitComplete && ramOk) {
+        console.log(`✅ [Auto-Resume] RAM giảm xuống ${heapMB}MB - TỰ ĐỘNG TIẾP TỤC`);
+        MEMORY_MONITOR.autoPaused = false;
+        MEMORY_MONITOR.autoPauseTime = 0;
+        
+        // Auto-resume (pass true để không hiện confirm dialog)
+        const statusEl = document.querySelector('.zalo-scanner-status');
+        resumeZaloScanner(statusEl, true);
+      } else if (waitComplete && !ramOk) {
+        console.warn(`⏳ [Auto-Resume] Đã đợi ${timeSincePause/1000}s nhưng RAM vẫn cao (${heapMB}MB). Chờ tiếp...`);
+      } else if (!waitComplete) {
+        const remaining = Math.ceil((MEMORY_MONITOR.AUTO_RESUME_WAIT_MS - timeSincePause) / 1000);
+        if (remaining % 10 === 0) { // Log mỗi 10s
+          console.log(`⏳ [Auto-Resume] Đang chờ cleanup... còn ${remaining}s (RAM: ${heapMB}MB)`);
+        }
+      }
+    }
     
     if (heapMB > MEMORY_MONITOR.WARNING_THRESHOLD_MB) {
       console.warn(`⚠️ [Memory] HEAP CAO: ${heapMB}MB (warning: ${MEMORY_MONITOR.WARNING_THRESHOLD_MB}MB)`);
@@ -6230,6 +6276,100 @@ function startMemoryMonitor() {
 function stopMemoryMonitor() {
   MEMORY_MONITOR.monitoringActive = false;
   console.log('🛑 [Memory Monitor] Đã dừng');
+}
+
+/**
+ * ✅ FORCE CLEANUP RESOURCES - Giải phóng bộ nhớ sau mỗi config
+ * Xóa các object lớn, nullify references, trigger GC hints
+ */
+function forceCleanupResources() {
+  try {
+    console.log('🧹 [Cleanup] Bắt đầu giải phóng bộ nhớ...');
+    const before = getHeapUsageMB();
+    
+    // 1. Clear window temporary data
+    if (window.cparams && window.cparams.lastDetail) {
+      delete window.cparams.lastDetail;
+    }
+    
+    // 2. Clear large cached objects
+    if (window._zaloMessageCache) {
+      window._zaloMessageCache = {};
+    }
+    
+    // 3. Nullify large base64 strings if stored globally
+    if (window._tempBase64Images) {
+      window._tempBase64Images.forEach((img, idx) => {
+        window._tempBase64Images[idx] = null;
+      });
+      window._tempBase64Images = [];
+    }
+    
+    // 4. Clear DOM image elements that might hold references
+    const tempImages = document.querySelectorAll('img[data-temp-image="true"]');
+    tempImages.forEach(img => {
+      img.src = ''; // Clear src to allow GC
+      img.remove();
+    });
+    
+    // 5. Force GC hint (if available)
+    if (typeof window.gc === 'function') {
+      try {
+        window.gc();
+        console.log('🗑️ [Cleanup] Manual GC triggered');
+      } catch (e) {
+        // GC not available
+      }
+    }
+    
+    // 6. Give browser time to cleanup
+    setTimeout(() => {
+      const after = getHeapUsageMB();
+      const freed = before - after;
+      if (freed > 0) {
+        console.log(`✅ [Cleanup] Giải phóng ${freed}MB RAM (${before}MB → ${after}MB)`);
+      } else {
+        console.log(`✅ [Cleanup] Hoàn tất (RAM: ${after}MB)`);
+      }
+    }, 1000);
+    
+  } catch (e) {
+    console.warn('⚠️ [Cleanup] Lỗi:', e.message);
+  }
+}
+
+/**
+ * ✅ CLEANUP AFTER CONFIG - Giải phóng tài nguyên sau khi xử lý config
+ * @param {Object} sessionData - Data được collect trong session
+ */
+function cleanupAfterConfig(sessionData = {}) {
+  try {
+    console.log('🧹 [ConfigCleanup] Dọn dẹp sau config...');
+    
+    // Clear session message cache
+    if (sessionData.messages) {
+      sessionData.messages.forEach((msg, idx) => {
+        if (msg.images && Array.isArray(msg.images)) {
+          msg.images.forEach((imgData, imgIdx) => {
+            msg.images[imgIdx] = null; // Nullify base64 data
+          });
+          msg.images = [];
+        }
+        sessionData.messages[idx] = null;
+      });
+      sessionData.messages = [];
+    }
+    
+    // Clear session posted messages (keep only in persistent storage)
+    if (sessionData.sessionPostedMessages && Array.isArray(sessionData.sessionPostedMessages)) {
+      // Don't nullify content_preview, just clear large fields
+      sessionData.sessionPostedMessages = null;
+    }
+    
+    console.log('✅ [ConfigCleanup] Xong');
+  } catch (e) {
+    console.warn('⚠️ [ConfigCleanup] Lỗi:', e.message);
+  }
 }
 
 /**
@@ -7966,7 +8106,7 @@ async function pushSingleMessageToWeb(message, groupName, configId, config, sess
  * Flow: Nhóm 1 (lấy → đăng) → Nhóm 2 (lấy → đăng) → ... → Hết config
  * ✅ OPTIMIZED: Load posted history ONCE at start, save ONCE at end (reduce server calls)
  */
-async function scanAndPostConfig(config, statusEl) {
+async function scanAndPostConfig(config, statusEl, sessionData = {}) {
   if (!isZaloScanning || !isZaloLoggedIn) {
     console.warn('⚠️ [scanAndPostConfig] Skip: scanning stopped or not logged in');
     return;
@@ -7986,6 +8126,10 @@ async function scanAndPostConfig(config, statusEl) {
   console.log(`\n📍 [Config ${configId}] Tải lịch sử đã đăng...`);
   const sessionPostedMessages = loadPostedZaloMessages();
   console.log(`   📊 Đã tải ${sessionPostedMessages.length} tin từ lịch sử`);
+  
+  // Store in sessionData for cleanup
+  sessionData.sessionPostedMessages = sessionPostedMessages;
+  sessionData.messages = [];
   
   console.log(`\n📍 [Config ${configId}] Quét ${groupList.length} nhóm...`);
 
@@ -8011,6 +8155,11 @@ async function scanAndPostConfig(config, statusEl) {
       }
       
       console.log(`    📊 Lấy được ${messages.length} tin`);
+      
+      // Store messages for cleanup tracking
+      if (sessionData && sessionData.messages) {
+        sessionData.messages.push(...messages);
+      }
       
       if (messages.length === 0) {
         continue; // Nhóm tiếp
@@ -8179,6 +8328,7 @@ function startZaloScanner(statusEl) {
   const mainLoopTimer = setInterval(async () => {
     if (!isZaloScanning) {
       clearInterval(mainLoopTimer);
+      forceCleanupResources(); // Cleanup khi dừng
       return;
     }
     
@@ -8202,20 +8352,37 @@ function startZaloScanner(statusEl) {
     console.log(`\n🎯 [Round ${currentConfigIndex + 1}/${configs.length}] Config: ${configId}`);
     
     isCurrentlyScanning = true;
+    let sessionData = {}; // Track session data for cleanup
     
     try {
       // ✅ Quét config này (tuần tự: nhóm → lấy tin → đăng)
-      await scanAndPostConfig(config, statusEl);
+      await scanAndPostConfig(config, statusEl, sessionData);
     } catch (e) {
       console.error(`❌ [Config ${configId}] Error:`, e);
     } finally {
+      // ✅ CLEANUP AFTER CONFIG - Giải phóng RAM sau mỗi config
+      cleanupAfterConfig(sessionData);
+      sessionData = null;
+      
+      // Force GC hint between configs
+      if (typeof window.gc === 'function') {
+        try { window.gc(); } catch (e) {}
+      }
+      
       // Chuyển config tiếp
       currentConfigIndex = (currentConfigIndex + 1) % configs.length;
       lastScanTime = Date.now();
       isCurrentlyScanning = false;
       
       if (statusEl) {
-        statusEl.textContent = `🔄 [${currentConfigIndex + 1}/${configs.length}] Chờ 5 phút để quét lại...`;
+        const heapMB = getHeapUsageMB();
+        statusEl.textContent = `🔄 [${currentConfigIndex + 1}/${configs.length}] Chờ 5 phút (RAM: ${heapMB}MB)...`;
+      }
+      
+      // ✅ PERIODIC CLEANUP: Mỗi 3 configs, force cleanup
+      if (currentConfigIndex % 3 === 0) {
+        console.log('🧹 [Periodic] Cleanup sau 3 configs...');
+        forceCleanupResources();
       }
     }
   }, ZALO_TIMING.SCANNER_LOOP_INTERVAL);
@@ -8253,6 +8420,12 @@ function stopZaloScanner(statusEl) {
   // Dừng auto mode
   isZaloAutoMode = false;
   
+  // Reset auto-pause state
+  MEMORY_MONITOR.autoPaused = false;
+  
+  // Force cleanup
+  forceCleanupResources();
+  
   // Log stats cuối cùng
   console.log('⏹️ [Zalo Scanner] Dừng');
   console.log(`   💾 Memory: ${getHeapUsageMB()}MB`);
@@ -8263,8 +8436,61 @@ function stopZaloScanner(statusEl) {
 }
 
 /**
+ * ✅ TẠM DỪNG ZALO SCANNER (Pause - không xóa state)
+ */
+function pauseZaloScanner(statusEl) {
+  if (!isZaloScanning) return;
+  
+  console.log('⏸️ [Zalo Scanner] Tạm dừng...');
+  isZaloScanning = false; // Dừng loop
+  
+  // Không clear timers, không xóa state - chỉ tạm dừng
+  
+  if (statusEl) {
+    statusEl.textContent = '⏸️ Tạm dừng - Nhấn Tiếp tục để chạy lại';
+  }
+  
+  // Force cleanup khi pause
+  forceCleanupResources();
+  
+  console.log(`   💾 Memory: ${getHeapUsageMB()}MB`);
+}
+
+/**
+ * ✅ TIẾP TỤC ZALO SCANNER (Resume từ pause - manual hoặc auto)
+ */
+function resumeZaloScanner(statusEl, isAutoResume = false) {
+  if (isZaloScanning) {
+    console.warn('⚠️ Scanner đang chạy, không cần resume');
+    return;
+  }
+  
+  const heapMB = getHeapUsageMB();
+  
+  // Nếu manual resume và RAM cao, hỏi xác nhận
+  if (!isAutoResume && heapMB > MEMORY_MONITOR.WARNING_THRESHOLD_MB) {
+    const proceed = confirm(`⚠️ RAM hiện tại: ${heapMB}MB (cao).\n\nBạn có muốn tiếp tục không?\n\nĐề xuất: Đợi RAM giảm xuống dưới ${MEMORY_MONITOR.AUTO_RESUME_THRESHOLD_MB}MB.`);
+    if (!proceed) {
+      return;
+    }
+  }
+  
+  const resumeType = isAutoResume ? 'AUTO-RESUME' : 'MANUAL RESUME';
+  console.log(`▶️ [${resumeType}] Scanner tiếp tục... (RAM: ${heapMB}MB)`);
+  
+  isZaloScanning = true; // Bật lại loop
+  MEMORY_MONITOR.autoPaused = false;
+  MEMORY_MONITOR.autoPauseTime = 0;
+  
+  if (statusEl) {
+    const icon = isAutoResume ? '🔄' : '▶️';
+    statusEl.textContent = `${icon} Đang chạy lại... (RAM: ${heapMB}MB)`;
+  }
+}
+
+/**
  * ✅ CREATE RESET BUTTONS UI
- * Thêm nút Reset Groups + Reset Messages vào UI
+ * Thêm nút Reset Groups + Reset Messages + Pause/Resume + Cleanup vào UI
  */
 function createZaloResetButtonsUI() {
   let container = document.getElementById('zalo-reset-buttons');
@@ -8288,11 +8514,104 @@ function createZaloResetButtonsUI() {
     display: flex;
     gap: 8px;
     flex-wrap: wrap;
+    flex-direction: column;
   `;
+  
+  // ✅ NEW: Memory Config Info
+  const infoBox = document.createElement('div');
+  infoBox.style.cssText = `
+    padding: 8px;
+    background: #e6f7ff;
+    border: 1px solid #91d5ff;
+    border-radius: 2px;
+    font-size: 11px;
+    line-height: 1.5;
+  `;
+  const autoResumeStatus = MEMORY_MONITOR.AUTO_RESUME_ENABLED ? '✅ BẬT' : '❌ TẮT';
+  infoBox.innerHTML = `
+    <strong>⚙️ Cấu Hình RAM Tự Động:</strong><br>
+    📊 Tối đa: <strong>${MEMORY_MONITOR.AUTO_PAUSE_THRESHOLD_MB}MB</strong> (~2GB) → Auto-Pause<br>
+    🔽 Giới hạn: <strong>${MEMORY_MONITOR.AUTO_RESUME_THRESHOLD_MB}MB</strong> → Auto-Resume<br>
+    ⏱️ Chờ cleanup: <strong>${MEMORY_MONITOR.AUTO_RESUME_WAIT_MS/1000}s</strong> sau pause<br>
+    🔄 Auto-Resume: <strong>${autoResumeStatus}</strong>
+  `;
+  wrapper.appendChild(infoBox);
+  
+  // ✅ NEW: Control Buttons Row
+  const buttonRow = document.createElement('div');
+  buttonRow.style.cssText = `
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  `;
+  
+  // ✅ NEW: Pause Button
+  const btnPause = document.createElement('button');
+  btnPause.setAttribute('data-zalo-pause', 'true');
+  btnPause.textContent = '⏸️ Tạm Dừng';
+  btnPause.style.cssText = `
+    padding: 6px 12px;
+    background: #faad14;
+    color: white;
+    border: none;
+    border-radius: 2px;
+    cursor: pointer;
+    font-size: 12px;
+    white-space: nowrap;
+  `;
+  btnPause.onclick = () => {
+    const statusEl = document.querySelector('.zalo-scanner-status');
+    pauseZaloScanner(statusEl);
+  };
+  buttonRow.appendChild(btnPause);
+  
+  // ✅ NEW: Resume Button
+  const btnResume = document.createElement('button');
+  btnResume.setAttribute('data-zalo-resume', 'true');
+  btnResume.textContent = '▶️ Tiếp Tục';
+  btnResume.style.cssText = `
+    padding: 6px 12px;
+    background: #52c41a;
+    color: white;
+    border: none;
+    border-radius: 2px;
+    cursor: pointer;
+    font-size: 12px;
+    white-space: nowrap;
+  `;
+  btnResume.onclick = () => {
+    const statusEl = document.querySelector('.zalo-scanner-status');
+    resumeZaloScanner(statusEl);
+  };
+  buttonRow.appendChild(btnResume);
+  
+  // ✅ NEW: Force Cleanup Button
+  const btnCleanup = document.createElement('button');
+  btnCleanup.setAttribute('data-zalo-cleanup', 'true');
+  btnCleanup.textContent = '🧹 Giải Phóng RAM';
+  btnCleanup.style.cssText = `
+    padding: 6px 12px;
+    background: #1890ff;
+    color: white;
+    border: none;
+    border-radius: 2px;
+    cursor: pointer;
+    font-size: 12px;
+    white-space: nowrap;
+  `;
+  btnCleanup.onclick = () => {
+    const before = getHeapUsageMB();
+    forceCleanupResources();
+    setTimeout(() => {
+      const after = getHeapUsageMB();
+      alert(`✅ Đã giải phóng RAM\n\nTrước: ${before}MB\nSau: ${after}MB\nGiải phóng: ${before - after}MB`);
+    }, 1500);
+  };
+  buttonRow.appendChild(btnCleanup);
   
   // Button 1: Reset Groups State
   const btnResetGroups = document.createElement('button');
-  btnResetGroups.setAttribute('data-zalo-reset-groups', 'true'); // Mark for selective lock
+  btnResetGroups.setAttribute('data-zalo-reset-groups', 'true');
   btnResetGroups.textContent = '🔄 Reset Groups';
   btnResetGroups.style.cssText = `
     padding: 6px 12px;
@@ -8311,7 +8630,7 @@ function createZaloResetButtonsUI() {
       console.log(result);
     }
   };
-  wrapper.appendChild(btnResetGroups);
+  buttonRow.appendChild(btnResetGroups);
   
   // Button 2: Reset Posted Messages
   const btnResetMessages = document.createElement('button');
@@ -8333,7 +8652,7 @@ function createZaloResetButtonsUI() {
       console.log(result);
     }
   };
-  wrapper.appendChild(btnResetMessages);
+  buttonRow.appendChild(btnResetMessages);
   
   // Button 3: Reset ALL
   const btnResetAll = document.createElement('button');
@@ -8356,7 +8675,10 @@ function createZaloResetButtonsUI() {
       console.log(result);
     }
   };
-  wrapper.appendChild(btnResetAll);
+  buttonRow.appendChild(btnResetAll);
+  
+  // Append button row to wrapper
+  wrapper.appendChild(buttonRow);
   
   // Thêm vào DOM
   if (scannerUI) {
@@ -8365,7 +8687,7 @@ function createZaloResetButtonsUI() {
     document.body.appendChild(wrapper);
   }
   
-  console.log('✅ [UI] Reset buttons thêm thành công');
+  console.log('✅ [UI] Control panel với RAM config info thêm thành công');
   return wrapper;
 }
 
@@ -8385,7 +8707,11 @@ function ensureZaloMultiGroupUI(container) {
       resetZaloGroupsState,
       resetPostedZaloMessages,
       resetAllZaloData,
-      createZaloResetButtonsUI
+      createZaloResetButtonsUI,
+      pauseZaloScanner,
+      resumeZaloScanner,
+      forceCleanupResources,
+      getHeapUsageMB
     };
     console.log('[Zalo Grid] Exposed helper functions to window.zaloGridHelpers');
     
@@ -9582,7 +9908,7 @@ function normalizeGroupSlug(slug, groupSlug, isGroupSlug) {
   return groupSlug || '';
 }
 
-function normalizeGroupFlags(slug, isGroupSlug, isGroupSlugDefault) {
+function normalizeGroupFlags(slug, isGroupSlug, isGroupSlugDefault, isService) {
   const normalizedSlug = String(slug || '').trim();
   if (normalizedSlug === 'dich-vu' || normalizedSlug === 'du-an') {
     return {
@@ -9592,8 +9918,9 @@ function normalizeGroupFlags(slug, isGroupSlug, isGroupSlugDefault) {
     };
   }
 
+  // ✅ Preserve is_service từ tham số thay vì hardcode true
   return {
-    is_service: true,
+    is_service: typeof isService === 'boolean' ? isService : true,
     is_group_slug: typeof isGroupSlug === 'boolean' ? isGroupSlug : false,
     is_group_slug_default: false
   };
@@ -10302,7 +10629,10 @@ async function upsertServiceCategoryContent(ctx, categorySlug, contentData) {
       : (typeof baseCategory.is_group_slug === 'boolean' ? baseCategory.is_group_slug : false),
     typeof contentData.is_group_slug_default === 'boolean'
       ? contentData.is_group_slug_default
-      : (typeof baseCategory.is_group_slug_default === 'boolean' ? baseCategory.is_group_slug_default : false)
+      : (typeof baseCategory.is_group_slug_default === 'boolean' ? baseCategory.is_group_slug_default : false),
+    typeof contentData.is_service === 'boolean'
+      ? contentData.is_service
+      : (typeof baseCategory.is_service === 'boolean' ? baseCategory.is_service : true)
   );
 
   const objUpdate = {
@@ -10685,6 +11015,7 @@ async function ensureServiceContentUI() {
   addNewRow.style.cssText = "margin-bottom:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap";
   addNewRow.appendChild(newNameInput);
   addNewRow.appendChild(newSlugInput);
+  addNewRow.appendChild(serviceTypeLabel);
   addNewRow.appendChild(addNewBtn);
 
   // Note: Lĩnh vực được dùng từ Global Settings (chỉ có 1 chỗ cho tất cả)
@@ -10911,6 +11242,7 @@ async function ensureServiceContentUI() {
     const userPrompt = textarea.value.trim();
     const categoryName = (newNameInput.value || '').trim();
     const customSlug = normalizeNewSlug(newSlugInput.value || categoryName);
+    const isService = serviceTypeCheckbox.checked; // ✅ Lấy giá trị từ checkbox
 
     if (!globalSettings.domainKey) {
       canhbao("❌ Vui lòng chọn Domain ở Cài Đặt Chung");
@@ -10935,12 +11267,17 @@ async function ensureServiceContentUI() {
         ? defaultIndustry
         : (INDUSTRY_TYPES[globalSettings.industry] || defaultIndustry);
 
+      // ✅ Logic mới: Nếu is_service = false thì group_slug = ""
+      const groupSlug = isService 
+        ? (globalSettings.isLmkt ? "du-an" : "dich-vu")
+        : "";
+
       const categoryData = {
         id: customSlug,
         service_code: customSlug,
         slug: customSlug,
-        group_slug: globalSettings.isLmkt ? "du-an" : "dich-vu",
-        is_service: true,
+        group_slug: groupSlug,
+        is_service: isService,
         is_group_slug: false,
         is_group_slug_default: false,
         name: categoryName,
@@ -10966,9 +11303,11 @@ async function ensureServiceContentUI() {
         attributes_keywords_zh: baseIndustry.attributes_keywords_zh || ''
       };
 
-      const autoPrompt = globalSettings.isLmkt
-        ? `Tạo đầy đủ bộ nội dung landing page cho dự án mới "${categoryName}". Nội dung phải chi tiết, thực tế, giàu tính thuyết phục và bám sát cấu trúc JSON bắt buộc.`
-        : `Tạo đầy đủ bộ nội dung landing page cho dịch vụ mới "${categoryName}". Nhấn mạnh lợi ích, tình huống sử dụng thực tế và bám sát cấu trúc JSON bắt buộc.`;
+      const autoPrompt = isService
+        ? (globalSettings.isLmkt
+          ? `Tạo đầy đủ bộ nội dung landing page cho dự án mới "${categoryName}". Nội dung phải chi tiết, thực tế, giàu tính thuyết phục và bám sát cấu trúc JSON bắt buộc.`
+          : `Tạo đầy đủ bộ nội dung landing page cho dịch vụ mới "${categoryName}". Nhấn mạnh lợi ích, tình huống sử dụng thực tế và bám sát cấu trúc JSON bắt buộc.`)
+        : `Tạo đầy đủ bộ nội dung landing page cho menu "${categoryName}". Nội dung phải rõ ràng, dễ hiểu và bám sát cấu trúc JSON bắt buộc.`;
 
       await generateAndSaveServiceCategory({
         globalSettings,
@@ -10981,7 +11320,8 @@ async function ensureServiceContentUI() {
         selectNewAfterSave: true
       });
 
-      thongbao(`✅ Đã thêm mới "${categoryName}" (${customSlug}) và cập nhật web_services`);
+      const typeText = isService ? (groupSlug === 'du-an' ? 'dự án' : 'dịch vụ') : 'menu';
+      thongbao(`✅ Đã thêm mới ${typeText} "${categoryName}" (${customSlug}, is_service: ${isService}, group_slug: "${groupSlug}") vào web_services`);
     } catch (e) {
       console.error("[Service Content Add New] Error:", e);
       canhbao(`❌ Thêm mới thất bại: ${e.message}`);
@@ -11436,7 +11776,12 @@ async function syncCategoriesToDatabase(domainKey) {
         const config = cat.config || (domainKey === 'lmkt' ? INDUSTRY_TYPES["bat-dong-san"] : INDUSTRY_TYPES[cat.slug]) || {};
         
         // Chuẩn bị object cập nhật - giống như tin chi tiết
-        const groupFlags = normalizeGroupFlags(cat.slug, cat.is_group_slug, cat.is_group_slug_default);
+        const groupFlags = normalizeGroupFlags(
+          cat.slug, 
+          cat.is_group_slug, 
+          cat.is_group_slug_default,
+          typeof cat.is_service === 'boolean' ? cat.is_service : true
+        );
         const objUpdate = {
           id: cat.id || cat.service_code || cat.slug,
           service_code: cat.service_code || cat.slug,
