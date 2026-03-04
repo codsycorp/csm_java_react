@@ -74,10 +74,25 @@ public class ChatPersistenceService {
             if (rowsObj instanceof List<?>) {
                 List<?> rows = (List<?>) rowsObj;
                 List<ChatMessage> loaded = new ArrayList<>();
+                int backfilledCount = 0;
+                long backfillBaseTime = System.currentTimeMillis();
                 for (Object rowObj : rows) {
                     if (rowObj instanceof Map<?, ?> rowMap) {
                         @SuppressWarnings("unchecked")
                         Map<String, Object> row = (Map<String, Object>) rowMap;
+
+                        Long parsedTs = parseTimestamp(row.get("timestamp"));
+                        if (parsedTs == null) {
+                            long fallbackTs = backfillBaseTime + backfilledCount;
+                            row.put("timestamp", fallbackTs);
+                            try {
+                                recordManager.createRecord(dbAppId, CHAT_TABLE, row);
+                                backfilledCount++;
+                            } catch (Exception backfillError) {
+                                logger.warn("Failed to backfill timestamp for chat row in appId {}: {}", dbAppId, backfillError.getMessage());
+                            }
+                        }
+
                         ChatMessage msg = convertMapToChatMessage(row);
                         if (msg != null) {
                             // Bảo vệ timestamp để sắp xếp đúng
@@ -87,6 +102,10 @@ public class ChatPersistenceService {
                             loaded.add(msg);
                         }
                     }
+                }
+
+                if (backfilledCount > 0) {
+                    logger.info("🛠️ Backfilled missing timestamp for {} chat messages in appId {}", backfilledCount, dbAppId);
                 }
 
                 // Sắp xếp theo timestamp tăng dần và giới hạn dung lượng cache
@@ -472,8 +491,9 @@ public class ChatPersistenceService {
         msg.setAvatar((String) row.get("avatar"));
         msg.setEventType((String) row.get("eventType"));
         
-        if (row.get("timestamp") instanceof Number) {
-            msg.setTimestamp(((Number) row.get("timestamp")).longValue());
+        Long parsedTimestamp = parseTimestamp(row.get("timestamp"));
+        if (parsedTimestamp != null) {
+            msg.setTimestamp(parsedTimestamp);
         }
         
         if (row.get("isAdmin") instanceof Boolean) {
@@ -518,11 +538,7 @@ public class ChatPersistenceService {
                         @SuppressWarnings("unchecked")
                         Map<String, Object> record = (Map<String, Object>) rowMap;
                         
-                        Object recordTimestamp = record.get("timestamp");
-                        Long recordTs = null;
-                        if (recordTimestamp instanceof Number) {
-                            recordTs = ((Number) recordTimestamp).longValue();
-                        }
+                        Long recordTs = parseTimestamp(record.get("timestamp"));
                         
                         if (recordTs != null && recordTs.equals(timestamp)) {
                             // Found! Convert to ChatMessage
@@ -553,9 +569,9 @@ public class ChatPersistenceService {
         msg.setGuestPhone((String) record.get("guestPhone"));
         msg.setEventType((String) record.get("eventType"));
         
-        Object tsObj = record.get("timestamp");
-        if (tsObj instanceof Number) {
-            msg.setTimestamp(((Number) tsObj).longValue());
+        Long parsedTimestamp = parseTimestamp(record.get("timestamp"));
+        if (parsedTimestamp != null) {
+            msg.setTimestamp(parsedTimestamp);
         }
         
         Object readByObj = record.get("readBy");
@@ -570,6 +586,21 @@ public class ChatPersistenceService {
         return msg;
     }
     
+    private Long parseTimestamp(Object value) {
+        if (value == null) return null;
+        if (value instanceof Number) return ((Number) value).longValue();
+        if (value instanceof String) {
+            String text = ((String) value).trim();
+            if (text.isEmpty()) return null;
+            try {
+                return Long.parseLong(text);
+            } catch (NumberFormatException e) {
+                logger.debug("Invalid timestamp string in chat record: {}", text);
+            }
+        }
+        return null;
+    }
+
     private boolean getBoolean(Object obj) {
         if (obj instanceof Boolean) return (Boolean) obj;
         if (obj instanceof String) return "true".equalsIgnoreCase((String) obj);
@@ -626,11 +657,7 @@ public class ChatPersistenceService {
                         Map<String, Object> record = (Map<String, Object>) rowMap;
                         
                         // Kiểm tra timestamp
-                        Object recordTimestamp = record.get("timestamp");
-                        Long recordTs = null;
-                        if (recordTimestamp instanceof Number) {
-                            recordTs = ((Number) recordTimestamp).longValue();
-                        }
+                        Long recordTs = parseTimestamp(record.get("timestamp"));
                         
                         if (recordTs != null && recordTs.equals(timestamp)) {
                             // Tìm thấy! Xóa record này

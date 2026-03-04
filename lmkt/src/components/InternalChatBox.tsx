@@ -167,6 +167,23 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
     }
   };
 
+  const formatMessageTime = (rawTimestamp?: number) => {
+    if (!rawTimestamp) return '';
+
+    const normalizedTimestamp = rawTimestamp < 1000000000000 ? rawTimestamp * 1000 : rawTimestamp;
+    const date = new Date(normalizedTimestamp);
+
+    if (Number.isNaN(date.getTime())) return '';
+
+    return date.toLocaleString('vi-VN', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+
   // Mobile: show floating button + modal
   if (isMobile) {
     return (
@@ -259,6 +276,7 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
                   renderItem={item => {
                     const isMyMessage = isGuest ? item.username === username : item.userId === user.userId;
                     const displayName = isMyMessage ? t('common.chat.you') : item.username;
+                    const messageTime = formatMessageTime(item.timestamp);
 
                     return (
                       <List.Item
@@ -272,14 +290,21 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
                         <List.Item.Meta
                           avatar={item.avatar ? <Avatar src={item.avatar} size="small" /> : <Avatar icon={<UserOutlined />} size="small" />}
                           title={
-                            <span style={{ fontSize: 12, fontWeight: 600 }}>
-                              {displayName}
-                              {item.isAdmin && !isMyMessage && (
-                                <span style={{ color: token.colorWarning, marginLeft: 6 }}>
-                                  [{t('common.chat.admin')}]
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                              <span style={{ fontSize: 12, fontWeight: 600 }}>
+                                {displayName}
+                                {item.isAdmin && !isMyMessage && (
+                                  <span style={{ color: token.colorWarning, marginLeft: 6 }}>
+                                    [{t('common.chat.admin')}]
+                                  </span>
+                                )}
+                              </span>
+                              {messageTime && (
+                                <span style={{ fontSize: 10, color: token.colorTextSecondary, fontWeight: 400, whiteSpace: 'nowrap' }}>
+                                  {messageTime}
                                 </span>
                               )}
-                            </span>
+                            </div>
                           }
                           description={<span style={{ fontSize: 13, color: token.colorTextSecondary }}>
                             {item.message}
@@ -398,6 +423,7 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
               renderItem={item => {
                 const isMyMessage = isGuest ? item.username === username : item.userId === user.userId;
                 const displayName = isMyMessage ? t('common.chat.you') : item.username;
+                const messageTime = formatMessageTime(item.timestamp);
 
                 return (
                   <List.Item
@@ -411,19 +437,26 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
                     <List.Item.Meta
                       avatar={item.avatar ? <Avatar src={item.avatar} size="small" /> : <Avatar icon={<UserOutlined />} size="small" />}
                       title={
-                        <span style={{ fontSize: 12, fontWeight: 600 }}>
-                          {displayName}
-                          {item.isAdmin && !isMyMessage && (
-                            <span style={{ color: token.colorWarning, marginLeft: 6 }}>
-                              [{t('common.chat.admin')}]
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                          <span style={{ fontSize: 12, fontWeight: 600 }}>
+                            {displayName}
+                            {item.isAdmin && !isMyMessage && (
+                              <span style={{ color: token.colorWarning, marginLeft: 6 }}>
+                                [{t('common.chat.admin')}]
+                              </span>
+                            )}
+                            {isMyMessage && item.readBy && item.readBy.length > 0 && (
+                              <span style={{ color: token.colorSuccess, marginLeft: 8, fontSize: 10 }}>
+                                ✓ {t('common.chat.read')}
+                              </span>
+                            )}
+                          </span>
+                          {messageTime && (
+                            <span style={{ fontSize: 10, color: token.colorTextSecondary, fontWeight: 400, whiteSpace: 'nowrap' }}>
+                              {messageTime}
                             </span>
                           )}
-                          {isMyMessage && item.readBy && item.readBy.length > 0 && (
-                            <span style={{ color: token.colorSuccess, marginLeft: 8, fontSize: 10 }}>
-                              ✓ {t('common.chat.read')}
-                            </span>
-                          )}
-                        </span>
+                        </div>
                       }
                       description={
                         <span style={{ fontSize: 12, color: token.colorTextSecondary, marginTop: 4 }}>
