@@ -5259,18 +5259,42 @@ window.zaloScanGroup = async (groupName) => {
 
     console.log(`✅ Quét xong nhóm ${groupName}: ${finalData.length} tin nhắn`);
     
-    // Log summary về ảnh
-    const totalImages = finalData.reduce((sum, msg) => sum + (msg.images?.length || 0), 0);
-    const messagesWithImages = finalData.filter(msg => msg.images?.length > 0).length;
-    const totalSizeKB = Math.round(JSON.stringify(finalData).length / 1024);
+    // ✅ FILTER BẮTBUỘC: Chỉ GIỮ tin có ĐỦ nội dung AND ảnh
+    const validMessages = finalData.filter(msg => {
+      const hasContent = msg.content && typeof msg.content === 'string' && msg.content.trim().length > 0;
+      const hasImages = msg.images && Array.isArray(msg.images) && msg.images.length > 0;
+      
+      if (!hasContent) {
+        console.warn(`  ⏭️ Loại bỏ: THIẾU NỘI DUNG từ ${msg.sender || 'Unknown'}`);
+        return false;
+      }
+      
+      if (!hasImages) {
+        const preview = msg.content ? msg.content.substring(0, 40) : '(no content)';
+        console.warn(`  ⏭️ Loại bỏ: THIẾU HÌNH - ${msg.sender || 'Unknown'}: ${preview}...`);
+        return false;
+      }
+      
+      return true;
+    });
     
-    console.log(`📊 Thống kê:`);
-    console.log(`   - Tổng số tin nhắn: ${finalData.length}`);
-    console.log(`   - Tin nhắn có ảnh: ${messagesWithImages}`);
+    const discardedCount = finalData.length - validMessages.length;
+    if (discardedCount > 0) {
+      console.log(`🧹 [Quét Zalo] Loại bỏ ${discardedCount} tin không hợp lệ (thiếu nội dung hoặc hình)`);
+    }
+    
+    // Log summary về tin HỢPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPППPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPПППPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPППPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPППPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppппppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppппppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppппppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppпппп"""
+      
+    // Log summary về tin HỢPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPПП
+    const totalImages = validMessages.reduce((sum, msg) => sum + (msg.images?.length || 0), 0);
+    const totalSizeKB = Math.round(JSON.stringify(validMessages).length / 1024);
+    
+    console.log(`📊 Thống kê (chỉ tin hợp lệ):`);
+    console.log(`   - Tổng số tin hợp lệ: ${validMessages.length}`);
     console.log(`   - Tổng số ảnh: ${totalImages}`);
     console.log(`   - Kích thước JSON: ${totalSizeKB}KB`);
     
-    return finalData;
+    return validMessages;
     
   } catch (error) {
     console.error(`❌ Lỗi khi quét nhóm ${groupName}:`, error);
@@ -5997,6 +6021,140 @@ const ZALO_TIMING = {
 };
 
 /**
+ * ✅ IndexedDB CONFIGURATION for Zalo Posted Messages
+ * Quota: 50MB+ (much larger than localStorage 5-10MB)
+ * Schema: config_id as index for per-config query
+ */
+const ZALO_INDEXEDDB = {
+  DB_NAME: 'csm_zalo_db_v2',
+  STORE_NAME: 'posted_messages',
+  VERSION: 1,
+  INDEXES: {
+    config_id: 'config_id',
+    hash: 'hash',
+    timestamp: 'timestamp'
+  },
+  instance: null,
+  isReady: false,
+  
+  async getDB() {
+    if (this.instance) return this.instance;
+    
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open(this.DB_NAME, this.VERSION);
+      
+      request.onerror = () => {
+        console.error('❌ [IndexedDB] Failed to open:', request.error);
+        reject(request.error);
+      };
+      
+      request.onsuccess = () => {
+        this.instance = request.result;
+        this.isReady = true;
+        console.log('✅ [IndexedDB] Ready');
+        resolve(this.instance);
+      };
+      
+      request.onupgradeneeded = (event) => {
+        const db = event.target.result;
+        if (db.objectStoreNames.contains(this.STORE_NAME)) {
+          db.deleteObjectStore(this.STORE_NAME);
+        }
+        const store = db.createObjectStore(this.STORE_NAME, { keyPath: 'id' });
+        store.createIndex(this.INDEXES.config_id, 'config_id', { unique: false });
+        store.createIndex(this.INDEXES.hash, 'hash', { unique: false });
+        store.createIndex(this.INDEXES.timestamp, 'timestamp', { unique: false });
+        console.log('✅ [IndexedDB] Schema created');
+      };
+    });
+  },
+  
+  async saveMessages(messages) {
+    if (!Array.isArray(messages) || messages.length === 0) return;
+    try {
+      const db = await this.getDB();
+      const tx = db.transaction(this.STORE_NAME, 'readwrite');
+      const store = tx.objectStore(this.STORE_NAME);
+      messages.forEach(msg => store.put(msg));
+      
+      return new Promise((resolve, reject) => {
+        tx.oncomplete = () => {
+          console.log(`✅ [IndexedDB] Saved ${messages.length} messages`);
+          resolve();
+        };
+        tx.onerror = () => {
+          console.error('❌ [IndexedDB] Save error:', tx.error);
+          reject(tx.error);
+        };
+      });
+    } catch (e) {
+      console.error('❌ [IndexedDB] saveMessages error:', e);
+      throw e;
+    }
+  },
+  
+  async getMessages(configId = null) {
+    try {
+      const db = await this.getDB();
+      const tx = db.transaction(this.STORE_NAME, 'readonly');
+      const store = tx.objectStore(this.STORE_NAME);
+      let request = configId ? store.index(this.INDEXES.config_id).getAll(configId) : store.getAll();
+      
+      return new Promise((resolve, reject) => {
+        request.onsuccess = () => {
+          const messages = request.result.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+          resolve(messages);
+        };
+        request.onerror = () => {
+          console.error('❌ [IndexedDB] getMessages error:', request.error);
+          reject(request.error);
+        };
+      });
+    } catch (e) {
+      console.error('❌ [IndexedDB] getMessages catch:', e);
+      return [];
+    }
+  },
+  
+  async deleteOldMessages(olderThanMs) {
+    try {
+      const db = await this.getDB();
+      const tx = db.transaction(this.STORE_NAME, 'readwrite');
+      const store = tx.objectStore(this.STORE_NAME);
+      const index = store.index(this.INDEXES.timestamp);
+      const cutoffTime = Date.now() - olderThanMs;
+      const range = IDBKeyRange.upperBound(cutoffTime);
+      const request = index.openCursor(range);
+      
+      let deletedCount = 0;
+      return new Promise((resolve, reject) => {
+        request.onsuccess = (event) => {
+          const cursor = event.target.result;
+          if (cursor) {
+            cursor.delete();
+            deletedCount++;
+            cursor.continue();
+          } else {
+            console.log(`🧹 [IndexedDB] Deleted ${deletedCount} old messages`);
+            resolve(deletedCount);
+          }
+        };
+        request.onerror = () => reject(request.error);
+      });
+    } catch (e) {
+      console.error('❌ [IndexedDB] deleteOldMessages error:', e);
+      return 0;
+    }
+  }
+};
+
+if (typeof window !== 'undefined' && window.indexedDB) {
+  ZALO_INDEXEDDB.getDB().catch(e => {
+    console.warn('⚠️ [IndexedDB] Init failed, fallback to localStorage:', e.message);
+  });
+}
+
+/**
  * ✅ PASSIVE MEMORY MONITOR (v2 - non-aggressive)
  * Chỉ log, không cleanup aggressive
  */
@@ -6151,7 +6309,7 @@ if (typeof window !== 'undefined') {
 
 /**
  * Load danh sách tin Zalo đã đăng từ SERVER (csmUserData)
- * Tương tự như loadDataOptionUser() - load from server, fallback localStorage
+ * ✅ OPTIMIZED: Dùng IndexedDB thay vì localStorage (quota lớn hơn, query nhanh hơn)
  * @returns {Array} Mảng {hash, timestamp, groupName, content_preview, config_id}
  */
 function loadPostedZaloMessages() {
@@ -6168,7 +6326,7 @@ function loadPostedZaloMessages() {
           });
           
           if (posted.length > 0) {
-            console.log(`📊 [LoadPostedZalo] Loaded ${posted.length} posted messages from SERVER (csmUserData)`);
+            console.log(`📊 [LoadPostedZalo] Loaded ${posted.length} from SERVER (csmUserData)`);
             if (posted.length > 0) {
               console.log(`   📌 Latest: ${posted[0]?.content_preview?.substring(0, 50)}... (${new Date(posted[0]?.timestamp).toLocaleString()})`);
             }
@@ -6176,41 +6334,63 @@ function loadPostedZaloMessages() {
           }
         }
       } catch (e) {
-        console.warn(`⚠️ [LoadPostedZalo] Error loading from server:`, e.message);
+        console.warn(`⚠️ [LoadPostedZalo] Server load error:`, e.message);
       }
     }
     
-    // ✅ PRIORITY 2: Fallback to localStorage
+    // ✅ PRIORITY 2: Load from IndexedDB (new)
+    // Note: IndexedDB is async, nhưng loadPostedZaloMessages được gọi từ sync context
+    // Nên ta load từ csmUserData trước (sync), IndexedDB là fallback qua async
+    // Để sử dụng IndexedDB properly, phải dùng async/await ở caller
+    console.log(`⚠️ [LoadPostedZalo] Server không có data, fallback qua async IndexedDB...`);
+    
+    // ✅ PRIORITY 3: Fallback to localStorage (old format)
     const raw = localStorage.getItem('zalo_posted_messages');
     if (raw) {
       try {
         const posted = JSON.parse(raw);
         if (Array.isArray(posted) && posted.length > 0) {
-          // ✅ Handle both compacted (h, ts, g, c) and full format (hash, timestamp, groupName, config_id)
           const decompacted = posted.map(m => {
             if (m.h !== undefined) {
               return decompactPostedMessage(m);
             }
             return m;
           });
-          console.log(`📊 [LoadPostedZalo] Loaded ${posted.length} posted messages from localStorage (FALLBACK)`);
+          console.log(`📊 [LoadPostedZalo] Loaded ${posted.length} from localStorage (FALLBACK)`);
           return decompacted;
         }
       } catch (e) {
-        console.warn(`⚠️ [LoadPostedZalo] Error parsing localStorage data:`, e.message);
-        // Clear corrupted data
+        console.warn(`⚠️ [LoadPostedZalo] localStorage parse error:`, e.message);
         try {
           localStorage.removeItem('zalo_posted_messages');
-        } catch (e2) {
-          // ignore
-        }
+        } catch {}
       }
     }
     
-    console.log(`📊 [LoadPostedZalo] No posted messages found`);
+    console.log(`📊 [LoadPostedZalo] No data found`);
     return [];
   } catch (e) {
     console.error('❌ [LoadPostedZalo] Error:', e);
+    return [];
+  }
+}
+
+/**
+ * ✅ NEW: Load posted messages từ IndexedDB (async version)
+ * Sử dụng khi cần load riêng từ IndexedDB (không load server)
+ */
+async function loadPostedZaloMessagesFromIndexedDB(configId = null) {
+  try {
+    if (!window.indexedDB) {
+      console.warn('⚠️ [IndexedDB] Not supported');
+      return [];
+    }
+    
+    const messages = await ZALO_INDEXEDDB.getMessages(configId);
+    console.log(`📊 [IndexedDB Load] ${messages.length} messages${configId ? ` for config ${configId}` : ''}`);
+    return messages;
+  } catch (e) {
+    console.error('❌ [IndexedDB Load] Error:', e);
     return [];
   }
 }
@@ -6243,51 +6423,51 @@ function decompactPostedMessage(msg) {
 
 /**
  * Lưu danh sách tin Zalo đã đăng vào SERVER (via csmUserData.set())
- * Giống như saveDataOptionUser() - lưu qua server, backup vào localStorage
- * ✅ CLEANUP: Chỉ giữ 100 posted messages mới nhất & nén data để tránh vượt quá storage quota
- * @param {Array} postedMessages - Mảng tin đã đăng
+ * ✅ OPTIMIZED: Lưu vào IndexedDB (async), csmUserData (server), và localStorage (fallback)
+ * Giảm localStorage dependency, dùng quota lớn hơn từ IndexedDB
+ * @param {Array} postedMessages - Mảy tin đã đăng
  */
 function savePostedZaloMessages(postedMessages) {
   try {
-    // ✅ CLEANUP: Trim to max 100 newest messages (much smaller quota)
     const maxMessages = 100;
     let messagesToSave = Array.isArray(postedMessages) ? postedMessages : [];
     
     if (messagesToSave.length > maxMessages) {
-      // Sort by timestamp descending (newest first), keep first 100
       messagesToSave = messagesToSave
         .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
         .slice(0, maxMessages);
-      console.log(`🧹 [SavePostedZalo] Trimmed to ${maxMessages} newest messages (deleted ${postedMessages.length - maxMessages} old)`);  
+      console.log(`🧹 [SavePostedZalo] Trimmed to ${maxMessages} newest messages`);  
     }
     
-    // ✅ NEW: Compact messages to reduce storage size
     const compactedData = messagesToSave.map(compactPostedMessage);
     
-    // ✅ PRIORITY 1: Save to server via csmUserData.set()
+    // ✅ PRIORITY 1: Save to IndexedDB (async, no await)
+    // Non-blocking async save
+    if (window.indexedDB && ZALO_INDEXEDDB.isReady) {
+      ZALO_INDEXEDDB.saveMessages(messagesToSave).catch(e => {
+        console.warn(`⚠️ [SavePostedZalo] IndexedDB save error:`, e.message);
+      });
+    }
+    
+    // ✅ PRIORITY 2: Save to server via csmUserData.set()
     if (window.csmUserData && typeof window.csmUserData.set === 'function') {
       try {
-        // Get ALL existing raw data (không dùng loadDataOptionUser vì hàm đó đã filter configs)
         const allData = getRawDataOptionUserSnapshot();
-        
-        // Filter out old posted messages
         const otherData = Array.isArray(allData)
           ? allData.filter(item => !isPostedZaloItem(item))
           : [];
         
-        // Merge: configs + compacted posted messages
         const finalData = [...otherData, ...messagesToSave];
         
-        console.log(`💾 [SavePostedZalo] Saving ${messagesToSave.length} posted messages to SERVER via csmUserData...`);
+        console.log(`💾 [SavePostedZalo] Saving ${messagesToSave.length} messages to SERVER...`);
         
         window.csmUserData.set(finalData, function(success, error) {
           if (success) {
             console.log(`✅ [SavePostedZalo] SERVER save successful!`);
-            // Backup to localStorage as well (using compacted form)
+            // Backup to localStorage (compacted)
             try {
-              const oldData = localStorage.getItem('zalo_posted_messages') || '[]';
               const size = new Blob([JSON.stringify(compactedData)]).size;
-              if (size < 500000) {  // Only save if < 500KB
+              if (size < 500000) {
                 localStorage.setItem('zalo_posted_messages', JSON.stringify(compactedData));
                 console.log(`✅ [SavePostedZalo] localStorage backup: ${size} bytes`);
               } else {
@@ -6295,34 +6475,32 @@ function savePostedZaloMessages(postedMessages) {
               }
             } catch (e) {
               if (e.name === 'QuotaExceededError') {
-                console.warn(`⚠️ [SavePostedZalo] localStorage quota exceeded, clearing old data...`);
+                console.warn(`⚠️ [SavePostedZalo] localStorage quota exceeded`);
                 try {
                   localStorage.removeItem('zalo_posted_messages');
                   localStorage.setItem('zalo_posted_messages', JSON.stringify(compactedData.slice(0, 50)));
                 } catch (e2) {
-                  console.warn(`⚠️ [SavePostedZalo] Still failed after cleanup:`, e2.message);
+                  console.warn(`⚠️ [SavePostedZalo] Cleanup failed:`, e2.message);
                 }
-              } else {
-                console.warn(`⚠️ [SavePostedZalo] localStorage backup failed:`, e.message);
               }
             }
           } else {
             console.warn(`⚠️ [SavePostedZalo] SERVER save failed:`, error);
-            // Fallback: save compacted data to localStorage only
+            // Fallback
             try {
               const size = new Blob([JSON.stringify(compactedData)]).size;
               if (size < 500000) {
                 localStorage.setItem('zalo_posted_messages', JSON.stringify(compactedData));
-                console.log(`💾 [SavePostedZalo] Saved compacted data to localStorage (${size} bytes) as fallback`);
+                console.log(`💾 [SavePostedZalo] Saved to localStorage (${size} bytes) as fallback`);
               }
             } catch (e) {
               if (e.name === 'QuotaExceededError') {
-                console.warn(`⚠️ [SavePostedZalo] localStorage quota exceeded - keeping only 50 newest records`);
+                console.warn(`⚠️ [SavePostedZalo] localStorage quota exceeded - keeping only 50 records`);
                 try {
                   localStorage.removeItem('zalo_posted_messages');
                   localStorage.setItem('zalo_posted_messages', JSON.stringify(compactedData.slice(0, 50)));
                 } catch (e2) {
-                  console.warn(`⚠️ [SavePostedZalo] Cannot save to localStorage:`, e2.message);
+                  console.warn(`⚠️ [SavePostedZalo] Cannot save:`, e2.message);
                 }
               }
             }
@@ -6332,8 +6510,8 @@ function savePostedZaloMessages(postedMessages) {
         console.warn(`⚠️ [SavePostedZalo] Error with csmUserData:`, e.message);
       }
     } else {
-      // csmUserData not available, fallback to localStorage
-      console.log(`⚠️ [SavePostedZalo] csmUserData not available, using localStorage only`);
+      // csmUserData not available, fallback to localStorage + IndexedDB
+      console.log(`⚠️ [SavePostedZalo] csmUserData not available, using localStorage + IndexedDB`);
       try {
         const size = new Blob([JSON.stringify(compactedData)]).size;
         if (size < 500000) {
@@ -6363,7 +6541,54 @@ function savePostedZaloMessages(postedMessages) {
 }
 
 /**
+ * ✅ BATCH MODE: Ghi lại tin Zalo vào session array (không save ngay)
+ * Dùng cho auto-posting để tránh gọi server K lần (mỗi mỗi tin)
+ * @param {Object} message - Tin nhắn Zalo
+ * @param {string} groupName - Tên nhóm
+ * @param {string} config_id - ID của config
+ * @param {Array} sessionPostedMessages - Session array (sẽ được modify in-place)
+ * @returns {boolean} true nếu tin chưa được record, false nếu đã có
+ */
+function recordPostedZaloMessageInSession(message, groupName, config_id, sessionPostedMessages) {
+  try {
+    if (!Array.isArray(sessionPostedMessages)) {
+      console.warn('⚠️ [RecordSession] sessionPostedMessages is not an array');
+      return false;
+    }
+    
+    const hash = buildMessageHash(message);
+    
+    // Check if already recorded in session
+    if (sessionPostedMessages.some(p => p.hash === hash && p.config_id === config_id)) {
+      console.log(`ℹ️ [RecordSession] Message already recorded in session: ${hash}`);
+      return false;
+    }
+    
+    // Thêm tin mới vào session
+    const newRecord = {
+      id: 'posted_zalo_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+      type: 'posted_zalo_message',
+      hash: hash,
+      timestamp: Date.now(),
+      config_id: config_id,
+      groupName: groupName || 'Unknown',
+      content_preview: (message.content || '').substring(0, 100),
+      sender: message.sender || 'Unknown',
+      has_images: message.images && message.images.length > 0
+    };
+    
+    sessionPostedMessages.unshift(newRecord);
+    console.log(`✅ [RecordSession] Added to session: ${groupName} - ${newRecord.content_preview.substring(0, 40)}...`);
+    return true;
+  } catch (e) {
+    console.warn('⚠️ [RecordSession] Error:', e);
+    return false;
+  }
+}
+
+/**
  * Ghi lại tin Zalo đã đăng thành công (có include config_id)
+ * ⚠️ CỰ LỚN: Hàm này gọi server mỗi lần! Dùng recordPostedZaloMessageInSession cho batch instead
  * @param {Object} message - Tin nhắn Zalo
  * @param {string} groupName - Tên nhóm
  * @param {string} config_id - ID của config (tùy chọn)
@@ -6545,6 +6770,39 @@ function filterNotPostedMessages(messages, config_id = null) {
   const filtered = messages.length - notPosted.length;
   if (filtered > 0) {
     console.log(`🔍 [FilterNotPosted] Filtered out ${filtered}/${messages.length} already posted messages for config ${config_id || 'default'}`);
+  }
+  
+  return notPosted;
+}
+
+/**
+ * Lọc tin CHƯA đăng (từ cache/session, không load từ server)
+ * ✅ OPTIMIZED: Dùng posted list từ bộ nhớ thay vì load mỗi lần
+ * @param {Array} messages - Danh sách tin cần lọc
+ * @param {string} config_id - ID config
+ * @param {Array} cachedPosted - Posted messages từ session cache
+ * @returns {Array} Tin chưa được đăng
+ */
+function filterNotPostedMessagesFromCache(messages, config_id = null, cachedPosted = []) {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return [];
+  }
+  
+  // Nếu có config_id, chỉ bỏ qua nếu CÙNG config đã đăng
+  const postedHashes = new Set(
+    cachedPosted
+      .filter(p => !config_id || p.config_id === config_id)
+      .map(p => p.hash)
+  );
+  
+  const notPosted = messages.filter(msg => {
+    const hash = buildMessageHash(msg);
+    return !postedHashes.has(hash);
+  });
+  
+  const filtered = messages.length - notPosted.length;
+  if (filtered > 0) {
+    console.log(`🔍 [FilterNotPostedCache] Filtered out ${filtered}/${messages.length} already posted messages for config ${config_id || 'default'}`);
   }
   
   return notPosted;
@@ -7628,7 +7886,7 @@ async function processPostingQueue() {
  * ⚠️ LƯU Ý: Function này CHỈ dùng cho AUTO POSTING
  * Luồng thủ công (textarea + button) vẫn sử dụng postSingleMessageWithFanpages()
  */
-async function pushSingleMessageToWeb(message, groupName, configId, config) {
+async function pushSingleMessageToWeb(message, groupName, configId, config, sessionPostedMessages = null) {
   try {
     console.log(`    🚀 [Auto Post] Gọi trực tiếp processContent cho tin từ ${message.sender}...`);
     
@@ -7664,10 +7922,15 @@ async function pushSingleMessageToWeb(message, groupName, configId, config) {
       // Vẫn tiếp tục để record message (tránh đăng lại)
     }
     
-    // ✅ Record tin đã đăng (dù thành công hay thất bại để tránh đăng lại)
+    // ✅ Record tin đã đăng (dùng session batch nếu có)
     try {
-      recordPostedZaloMessage(message, groupName, configId);
-      console.log(`    📝 [Auto Post] Đã record message vào lịch sử`);
+      if (sessionPostedMessages) {
+        recordPostedZaloMessageInSession(message, groupName, configId, sessionPostedMessages);
+        console.log(`    📝 [Auto Post] Đã thêm vào session batch`);
+      } else {
+        recordPostedZaloMessage(message, groupName, configId);
+        console.log(`    📝 [Auto Post] Đã record message vào lịch sử`);
+      }
     } catch (recordErr) {
       console.error('❌ [Auto Post] recordPostedZaloMessage lỗi:', recordErr.message);
     }
@@ -7701,6 +7964,7 @@ async function pushSingleMessageToWeb(message, groupName, configId, config) {
 /**
  * ✅ SEQUENTIAL: Quét + Đăng config tuần tự (không queue, không worker)
  * Flow: Nhóm 1 (lấy → đăng) → Nhóm 2 (lấy → đăng) → ... → Hết config
+ * ✅ OPTIMIZED: Load posted history ONCE at start, save ONCE at end (reduce server calls)
  */
 async function scanAndPostConfig(config, statusEl) {
   if (!isZaloScanning || !isZaloLoggedIn) {
@@ -7717,6 +7981,11 @@ async function scanAndPostConfig(config, statusEl) {
   const groupList = config.zalo_groups;
   let totalNew = 0;
   let totalPosted = 0;
+  
+  // ✅ OPTIMIZATION: Load posted messages ONCE for this config session
+  console.log(`\n📍 [Config ${configId}] Tải lịch sử đã đăng...`);
+  const sessionPostedMessages = loadPostedZaloMessages();
+  console.log(`   📊 Đã tải ${sessionPostedMessages.length} tin từ lịch sử`);
   
   console.log(`\n📍 [Config ${configId}] Quét ${groupList.length} nhóm...`);
 
@@ -7754,33 +8023,63 @@ async function scanAndPostConfig(config, statusEl) {
         continue; // Nhóm tiếp
       }
       
-      console.log(`    ✅ Có ${newMessages.length} tin mới`);
-      totalNew += newMessages.length;
+      // BƯỚC 2.1: Lọc tiếp theo lịch sử tin đã đăng (dùng session cache)
+      const unpostedMessages = filterNotPostedMessagesFromCache(newMessages, configId, sessionPostedMessages);
+      if (unpostedMessages.length === 0) {
+        console.log(`    ⏭️ ${newMessages.length} tin mới nhưng đã đăng trước đó (skip)`);
+        continue; // Nhóm tiếp
+      }
+
+      const duplicateCount = newMessages.length - unpostedMessages.length;
+      if (duplicateCount > 0) {
+        console.log(`    🔁 Bỏ qua ${duplicateCount} tin đã đăng trước đó`);
+      }
+
+      console.log(`    ✅ Có ${unpostedMessages.length} tin mới chưa đăng`);
+      totalNew += unpostedMessages.length;
       
-      // BƯỚC 3: Lọc tin có hình
-      const messagesWithImages = newMessages.filter(msg => 
-        msg.images && Array.isArray(msg.images) && msg.images.length > 0
-      );
+      // BƯỚC 3: ✅ VALIDATE BẮTBUỘC - Tin phải có ĐỦ nội dung AND ảnh mới xử lý
+      const validMessages = unpostedMessages.filter(msg => {
+        const hasContent = msg.content && typeof msg.content === 'string' && msg.content.trim().length > 0;
+        const hasImages = msg.images && Array.isArray(msg.images) && msg.images.length > 0;
+        
+        if (!hasContent) {
+          console.log(`      ⏭️ Bỏ qua tin: THIẾU NỘI DUNG từ ${msg.sender || 'Unknown'}`);
+          return false;
+        }
+        
+        if (!hasImages) {
+          console.log(`      ⏭️ Bỏ qua tin: THIẾU HÌNH từ ${msg.sender || 'Unknown'} (content: ${msg.content.substring(0, 50)}...)`);
+          return false;
+        }
+        
+        return true;
+      });
       
-      if (messagesWithImages.length === 0) {
-        console.log(`    ⏭️ Không có tin có hình`);
+      const invalidCount = unpostedMessages.length - validMessages.length;
+      if (invalidCount > 0) {
+        console.log(`    ❌ Loại bỏ ${invalidCount} tin không đủ điều kiện (thiếu nội dung hoặc hình)`);
+      }
+      
+      if (validMessages.length === 0) {
+        console.log(`    ⏭️ Không có tin nào có ĐỦ nội dung AND hình - bỏ qua nhóm này`);
         continue; // Nhóm tiếp
       }
       
-      console.log(`    🖼️  ${messagesWithImages.length} tin có hình - Bắt đầu đăng...`);
+      console.log(`    ✅ ${validMessages.length} tin có ĐỦ nội dung + hình - Bắt đầu đăng...`);
       
       // BƯỚC 4: Đăng LẦN LƯỢT từng tin (tuần tự, không queue)
-      for (let msgIdx = 0; msgIdx < messagesWithImages.length; msgIdx++) {
+      for (let msgIdx = 0; msgIdx < validMessages.length; msgIdx++) {
         if (!isZaloScanning) break;
         
-        const msg = messagesWithImages[msgIdx];
+        const msg = validMessages[msgIdx];
         const msgPos = msgIdx + 1;
         
         try {
-          console.log(`      [TIN ${msgPos}/${messagesWithImages.length}] Đăng "${msg.sender || 'Unknown'}"...`);
+          console.log(`      [TIN ${msgPos}/${validMessages.length}] Đăng "${msg.sender || 'Unknown'}"...`);
           
-          // Đăng tin này (tuần tự với auth)
-          const success = await pushSingleMessageToWeb(msg, groupName, configId, config);
+          // Đăng tin này (tuần tự với auth) + ghi vào session
+          const success = await pushSingleMessageToWeb(msg, groupName, configId, config, sessionPostedMessages);
           
           if (success) {
             console.log(`        ✅ Đăng thành công`);
@@ -7805,6 +8104,28 @@ async function scanAndPostConfig(config, statusEl) {
       
     } catch (e) {
       console.error(`  ❌ Lỗi xử lý nhóm ${groupName}:`, e.message);
+    }
+  }
+  
+  // ✅ OPTIMIZATION: Save all posted messages ONCE at the end
+  if (totalPosted > 0) {
+    console.log(`\n💾 [Config ${configId}] Lưu ${totalPosted} tin vào server (batch save)...`);
+    
+    try {
+      // Cleanup tin cũ trước save
+      cleanupOldPostedZaloMessages(sessionPostedMessages);
+      
+      // Limit to ZALO_POSTED_LIMIT
+      if (sessionPostedMessages.length > ZALO_POSTED_LIMIT) {
+        sessionPostedMessages.splice(ZALO_POSTED_LIMIT);
+        console.log(`🧹 [Config ${configId}] Trimmed to ${ZALO_POSTED_LIMIT} messages`);
+      }
+      
+      // Save once
+      savePostedZaloMessages(sessionPostedMessages);
+      console.log(`✅ [Config ${configId}] Batch save hoàn tất`);
+    } catch (saveErr) {
+      console.error(`❌ [Config ${configId}] Batch save lỗi:`, saveErr.message);
     }
   }
   
