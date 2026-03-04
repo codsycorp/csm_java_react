@@ -1924,6 +1924,9 @@ public class WebSpringController {
 
                         return ResponseEntity.ok()
                                 .contentType(MediaType.APPLICATION_JSON)
+                                .header("Access-Control-Allow-Origin", "*")
+                                .header("Access-Control-Allow-Methods", "GET, POST, DELETE, PUT, OPTIONS")
+                                .header("Access-Control-Allow-Headers", "DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range,Authorization")
                                 .cacheControl(org.springframework.http.CacheControl
                                         .maxAge(2592000, java.util.concurrent.TimeUnit.SECONDS).cachePublic())
                                 .body(objectMapper.writeValueAsBytes(listIMGS));
@@ -1939,7 +1942,12 @@ public class WebSpringController {
                         if (Files.exists(filePath) && Files.isRegularFile(filePath)) {
                             Files.delete(filePath);
                             logger.info("✅ Đã xóa file cục bộ: {}", filePath);
-                            return ResponseEntity.ok("Deleted".getBytes(StandardCharsets.UTF_8));
+                            return ResponseEntity.ok()
+                                    .contentType(MediaType.TEXT_PLAIN)
+                                    .header("Access-Control-Allow-Origin", "*")
+                                    .header("Access-Control-Allow-Methods", "GET, POST, DELETE, PUT, OPTIONS")
+                                    .header("Access-Control-Allow-Headers", "DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range,Authorization")
+                                    .body("Deleted".getBytes(StandardCharsets.UTF_8));
                         } else {
                             logger.warn("❌ File không tồn tại hoặc không phải là file hợp lệ để xóa: {}", filePath);
                             return ResponseEntity.status(HttpStatus.NOT_FOUND)
@@ -1995,7 +2003,12 @@ public class WebSpringController {
                         // Sử dụng finalFileName
                         String fileUrl = String.format("app_images/%s/%s", finalAppId, finalFileName);
                         logger.info("✅ Đã upload file base64 cục bộ: {}", targetFilePath);
-                        return ResponseEntity.ok(fileUrl.getBytes(StandardCharsets.UTF_8));
+                        return ResponseEntity.ok()
+                                .contentType(MediaType.TEXT_PLAIN)
+                                .header("Access-Control-Allow-Origin", "*")
+                                .header("Access-Control-Allow-Methods", "GET, POST, DELETE, PUT, OPTIONS")
+                                .header("Access-Control-Allow-Headers", "DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range,Authorization")
+                                .body(fileUrl.getBytes(StandardCharsets.UTF_8));
                     } catch (IllegalArgumentException e) {
                         logger.error("❌ Dữ liệu Base64 không hợp lệ: {}", e.getMessage());
                         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
@@ -2024,7 +2037,12 @@ public class WebSpringController {
                         // Sử dụng finalAppId
                         String fileUrl = String.format("app_images/%s/%s", finalAppId, name);
                         logger.info("✅ Đã upload file từ link cục bộ: {}", targetFilePath);
-                        return ResponseEntity.ok(fileUrl.getBytes(StandardCharsets.UTF_8));
+                        return ResponseEntity.ok()
+                                .contentType(MediaType.TEXT_PLAIN)
+                                .header("Access-Control-Allow-Origin", "*")
+                                .header("Access-Control-Allow-Methods", "GET, POST, DELETE, PUT, OPTIONS")
+                                .header("Access-Control-Allow-Headers", "DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range,Authorization")
+                                .body(fileUrl.getBytes(StandardCharsets.UTF_8));
                     } catch (IOException e) {
                         logger.error("❌ Lỗi khi đọc dữ liệu từ URL hoặc ghi file cục bộ: {}", e.getMessage(), e);
                         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
