@@ -2098,7 +2098,7 @@ public class ApiSpringController {
     /**
      * Handle Facebook API POST proxy with multiple images
      * POST /api/facebook/post-with-images
-     * Body: { pageId, pageAccessToken, message, images: [], link (optional) }
+     * Body: { pageId, pageAccessToken, message, images: [], videos: [], link (optional) }
      */
     private void handleFacebookPostWithImages(StandardResponse response, Map<String, Object> params) {
         try {
@@ -2107,6 +2107,7 @@ public class ApiSpringController {
             String message = (String) params.get("message");
             String link = (String) params.get("link");
             Object imagesObj = params.get("images");
+            Object videosObj = params.get("videos");
 
             if (pageId == null || pageId.isEmpty() || pageAccessToken == null || pageAccessToken.isEmpty()) {
                 response.set("code", 400);
@@ -2127,6 +2128,13 @@ public class ApiSpringController {
                 images = imagesList;
             }
 
+            java.util.List<String> videos = new java.util.ArrayList<>();
+            if (videosObj instanceof java.util.List) {
+                @SuppressWarnings("unchecked")
+                java.util.List<String> videosList = (java.util.List<String>) videosObj;
+                videos = videosList;
+            }
+
             // Chấp nhận cả URLs và base64
             java.util.List<String> sanitizedImages = new java.util.ArrayList<>();
             for (String image : images) {
@@ -2142,12 +2150,99 @@ public class ApiSpringController {
                 }
             }
 
+            // Chấp nhận video URLs và base64 video
+            java.util.List<String> sanitizedVideos = new java.util.ArrayList<>();
+            for (String video : videos) {
+                if (video == null) continue;
+                String normalized = video.trim();
+                if (normalized.isEmpty()) continue;
+                boolean isUrl = normalized.startsWith("http://") || normalized.startsWith("https://");
+                boolean isBase64 = normalized.startsWith("data:video/");
+                if (!(isUrl || isBase64)) continue;
+                if (!sanitizedVideos.contains(normalized)) {
+                    sanitizedVideos.add(normalized);
+                }
+            }
+
             org.springframework.web.client.RestTemplate restTemplate = new org.springframework.web.client.RestTemplate();
             final int[] imagesPosted = {0};
+            final int[] videosPosted = {0};
             String mainPostId = null;
 
+            // Ưu tiên đăng video trước (Facebook không hỗ trợ mixed attached_media ảnh+video trong cùng API flow này)
+            if (!sanitizedVideos.isEmpty()) {
+                try {
+                    String videoInput = sanitizedVideos.get(0);
+                    String videoUploadUrl = "https://graph.facebook.com/v18.0/" + pageId + "/videos";
+
+                    if (videoInput.startsWith("data:video/")) {
+                        int commaIndex = videoInput.indexOf(',');
+                        if (commaIndex > 0) {
+                            String base64Data = videoInput.substring(commaIndex + 1);
+                            byte[] videoBytes = java.util.Base64.getDecoder().decode(base64Data);
+
+                            org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
+                            headers.setContentType(org.springframework.http.MediaType.MULTIPART_FORM_DATA);
+
+                            org.springframework.util.LinkedMultiValueMap<String, Object> form = new org.springframework.util.LinkedMultiValueMap<>();
+                            final byte[] finalVideoBytes = videoBytes;
+                            org.springframework.core.io.ByteArrayResource videoResource = new org.springframework.core.io.ByteArrayResource(finalVideoBytes) {
+                                @Override
+                                public String getFilename() {
+                                    return "video.mp4";
+                                }
+                            };
+
+                            form.add("source", videoResource);
+                            form.add("description", message);
+                            form.add("access_token", pageAccessToken);
+
+                            org.springframework.http.HttpEntity<org.springframework.util.LinkedMultiValueMap<String, Object>> entity =
+                                new org.springframework.http.HttpEntity<>(form, headers);
+
+                            @SuppressWarnings({"unchecked", "rawtypes"})
+                            ResponseEntity<Map<String, Object>> uploadResp = (ResponseEntity) restTemplate.postForEntity(videoUploadUrl, entity, Map.class);
+                            if (uploadResp.getStatusCode().is2xxSuccessful()) {
+                                Map<String, Object> respBody = uploadResp.getBody();
+                                mainPostId = respBody != null ? (String) respBody.get("id") : null;
+                                if (mainPostId != null && !mainPostId.isEmpty()) {
+                                    videosPosted[0] = 1;
+                                    logger.info("✅ Posted video from base64, post_id: {}", mainPostId);
+                                }
+                            }
+                        }
+                    } else {
+                        org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
+                        headers.setContentType(org.springframework.http.MediaType.APPLICATION_FORM_URLENCODED);
+
+                        org.springframework.util.LinkedMultiValueMap<String, String> payload = new org.springframework.util.LinkedMultiValueMap<>();
+                        payload.add("file_url", videoInput);
+                        payload.add("description", message);
+                        payload.add("access_token", pageAccessToken);
+
+                        org.springframework.http.HttpEntity<org.springframework.util.LinkedMultiValueMap<String, String>> entity =
+                            new org.springframework.http.HttpEntity<>(payload, headers);
+
+                        @SuppressWarnings({"unchecked", "rawtypes"})
+                        ResponseEntity<Map<String, Object>> uploadResp = (ResponseEntity) restTemplate.postForEntity(videoUploadUrl, entity, Map.class);
+                        if (uploadResp.getStatusCode().is2xxSuccessful()) {
+                            Map<String, Object> respBody = uploadResp.getBody();
+                            mainPostId = respBody != null ? (String) respBody.get("id") : null;
+                            if (mainPostId != null && !mainPostId.isEmpty()) {
+                                videosPosted[0] = 1;
+                                logger.info("✅ Posted video from URL, post_id: {}", mainPostId);
+                            }
+                        }
+                    }
+                } catch (Exception videoEx) {
+                    logger.warn("❌ Failed to post video, fallback to image/text flow: {}", videoEx.getMessage());
+                    mainPostId = null;
+                    videosPosted[0] = 0;
+                }
+            }
+
             // Nếu có images, upload từng ảnh ở chế độ unpublished rồi attach vào /feed
-            if (!sanitizedImages.isEmpty()) {
+            if (mainPostId == null && !sanitizedImages.isEmpty()) {
                 try {
                     java.util.List<String> mediaFbIds = new java.util.ArrayList<>();
                     String photoUploadUrl = "https://graph.facebook.com/v18.0/" + pageId + "/photos";
@@ -2377,6 +2472,7 @@ public class ApiSpringController {
                     put("post_id", finalPostId);
                     put("pageId", pageId);
                     put("images_count", imagesPosted[0]);
+                    put("videos_count", videosPosted[0]);
                 }});
             } else {
                 // Nếu không có ảnh, post text bình thường
@@ -2405,6 +2501,7 @@ public class ApiSpringController {
                         put("post_id", postId);
                         put("pageId", pageId);
                         put("images_count", 0);
+                        put("videos_count", 0);
                     }});
                 } else {
                     response.set("code", fbResponse.getStatusCode().value());

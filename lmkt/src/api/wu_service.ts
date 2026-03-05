@@ -111,6 +111,7 @@ export interface ServicePost {
   featured?: boolean;
   activeHome?: boolean;
   images?: string[]; // populated when detail is loaded
+  videos?: string[]; // populated when detail is loaded - support video content
   // All flat fields from backend (attributes_*, specifications_*, etc.)
   [key: string]: any;
 }

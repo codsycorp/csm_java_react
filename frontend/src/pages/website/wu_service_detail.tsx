@@ -52,6 +52,7 @@ import {
 } from '#src/api/wu_service';
 import type { ServicePost } from '#src/api/wu_service';
 import { useWebsiteMenu } from '#src/layout/website/wu_menu';
+import MediaGallery from '#src/components/MediaGallery';
 
 // Helper function to get multilingual field value
 const getMultilingualField = (obj: any, fieldName: string, currentLang: string): string => {
@@ -163,126 +164,25 @@ const normalizeImageUrl = (url?: string): string | undefined => {
   return url;
 };
 
-// ---------------- Image Gallery (Main + Thumbnails) ----------------
+// ---------------- REMOVED OLD ImageGallery - Now using MediaGallery component ----------------
+
 // Simple SVG placeholder as data URL in case remote image URLs fail
 const svgPlaceholder = (label: string, w = 1200, h = 800) => {
-  const svg = `\n    <svg xmlns='http://www.w3.org/2000/svg' width='${w}' height='${h}' viewBox='0 0 ${w} ${h}'>\n      <defs>\n        <linearGradient id='g' x1='0' x2='1' y1='0' y2='1'>\n          <stop offset='0%' stop-color='#e6f0ff'/>\n          <stop offset='100%' stop-color='#f5f7fb'/>\n        </linearGradient>\n      </defs>\n      <rect width='100%' height='100%' fill='url(#g)'/>\n      <g fill='#8aa0c7' font-family='system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial' text-anchor='middle'>\n        <text x='50%' y='48%' font-size='42' font-weight='700'>Hình minh họa</text>\n        <text x='50%' y='58%' font-size='26' opacity='0.8'>${label || 'CSM'}</text>\n      </g>\n    </svg>`;
+  const svg = `
+    <svg xmlns='http://www.w3.org/2000/svg' width='${w}' height='${h}' viewBox='0 0 ${w} ${h}'>
+      <defs>
+        <linearGradient id='g' x1='0' x2='1' y1='0' y2='1'>
+          <stop offset='0%' stop-color='#e6f0ff'/>
+          <stop offset='100%' stop-color='#f5f7fb'/>
+        </linearGradient>
+      </defs>
+      <rect width='100%' height='100%' fill='url(#g)'/>
+      <g fill='#8aa0c7' font-family='system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial' text-anchor='middle'>
+        <text x='50%' y='48%' font-size='42' font-weight='700'>Hình minh họa</text>
+        <text x='50%' y='58%' font-size='26' opacity='0.8'>${label || 'CSM'}</text>
+      </g>
+    </svg>`;
   return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
-};
-
-const ImageGallery: React.FC<{ images?: string[]; alt: string; showCount?: boolean }> = ({ images, alt, showCount = true }) => {
-  const imgs = (images && images.length > 0 ? images : []).map(url => normalizeImageUrl(url)).filter(Boolean) as string[];
-  const fallback = imgs.length > 0 ? imgs[0] : undefined;
-  const [index, setIndex] = React.useState(0);
-  const canPrev = imgs.length > 1 && index > 0;
-  const canNext = imgs.length > 1 && index < imgs.length - 1;
-  const goto = (i: number) => {
-    if (imgs.length === 0) return;
-    const next = Math.max(0, Math.min(i, imgs.length - 1));
-    setIndex(next);
-  };
-  const current = imgs.length > 0 ? imgs[index] : fallback;
-
-  return (
-    <div style={{ width: '100%' }}>
-      <Image.PreviewGroup
-        preview={{
-          toolbarRender: (_, { transform: { scale }, actions: { onFlipY, onFlipX, onRotateLeft, onRotateRight, onZoomOut, onZoomIn } }) => (
-            <div style={{ display: 'flex', gap: 12, background: 'rgba(0,0,0,0.7)', padding: '8px 16px', borderRadius: 8 }}>
-              <Button type="text" icon={<ZoomOutOutlined />} onClick={onZoomOut} style={{ color: '#fff' }} />
-              <Button type="text" icon={<ZoomInOutlined />} onClick={onZoomIn} style={{ color: '#fff' }} />
-              <Button type="text" icon={<RotateLeftOutlined />} onClick={onRotateLeft} style={{ color: '#fff' }} />
-              <Button type="text" icon={<RotateRightOutlined />} onClick={onRotateRight} style={{ color: '#fff' }} />
-            </div>
-          ),
-        }}
-      >
-        <div style={{ position: 'relative' }}>
-          <Image
-            width="100%"
-            src={current}
-            alt={alt}
-            fallback={svgPlaceholder(alt)}
-            style={{ borderRadius: 12, objectFit: 'cover', maxHeight: 460, border: '1px solid #eef0f5' }}
-            preview={{
-              src: current, // Ảnh gốc chất lượng cao
-              mask: <div style={{ fontSize: 14, fontWeight: 500 }}>Click để xem ảnh gốc</div>,
-            }}
-          />
-        {showCount && imgs.length > 0 && (
-          <div
-            style={{
-              position: 'absolute',
-              bottom: 10,
-              right: 10,
-              background: 'rgba(0,0,0,0.55)',
-              color: '#fff',
-              padding: '4px 10px',
-              borderRadius: 999,
-              fontSize: 12,
-              fontWeight: 600,
-            }}
-          >
-            {imgs.length} ảnh
-          </div>
-        )}
-        {imgs.length > 1 && (
-          <>
-            <Button
-              shape="circle"
-              size="large"
-              disabled={!canPrev}
-              onClick={() => goto(index - 1)}
-              icon={<LeftOutlined />}
-              style={{ position: 'absolute', top: '50%', left: 8, transform: 'translateY(-50%)', opacity: 0.9 }}
-            />
-            <Button
-              shape="circle"
-              size="large"
-              disabled={!canNext}
-              onClick={() => goto(index + 1)}
-              icon={<RightOutlined />}
-              style={{ position: 'absolute', top: '50%', right: 8, transform: 'translateY(-50%)', opacity: 0.9 }}
-            />
-          </>
-        )}
-      </div>
-        {/* Hidden images for preview group gallery */}
-        <div style={{ display: 'none' }}>
-          {imgs.slice(1).map((src, i) => (
-            <Image key={src + i} src={src} alt={`${alt} ${i + 2}`} />
-          ))}
-        </div>
-      </Image.PreviewGroup>
-      {imgs.length > 0 && (
-        <div
-          style={{
-            marginTop: 10,
-            display: 'flex',
-            gap: 8,
-            overflowX: 'auto',
-            paddingBottom: 4,
-          }}
-          aria-label="image thumbnails"
-        >
-          {imgs.map((src, i) => (
-            <div key={src + i} style={{ borderRadius: 8, border: i === index ? '2px solid var(--ant-primary-color)' : '1px solid #e5e7eb', padding: 2, background: '#fff' }}>
-              <Image
-                src={src + '?w=480'}
-                alt={`${alt} ${i + 1}`}
-                width={96}
-                height={72}
-                fallback={svgPlaceholder(`${alt} ${i + 1}`, 192, 144)}
-                style={{ objectFit: 'cover', borderRadius: 6, cursor: 'pointer' }}
-                preview={false}
-                onClick={() => goto(i)}
-              />
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
 };
 
 // Helper: Parse JSON field safely
@@ -316,6 +216,7 @@ function parseJsonField<T>(value: any, defaultValue: T): T {
 // Helper: Map SSR detail to ServicePost
 function mapSsrDetailToPost(sd: any): ServicePost {
   const images = parseJsonField<string[]>(sd.images, []);
+  const videos = parseJsonField<string[]>(sd.videos, []); // Parse videos field
   // Parse thumbnail/cover - they might be arrays or JSON strings
   const getThumbnailString = (value: any): string => {
     if (!value) return '';
@@ -339,7 +240,7 @@ function mapSsrDetailToPost(sd: any): ServicePost {
     // Copy all flat fields from database except the ones we explicitly map below
     const excludeKeys = ['id', 'title', 'slug', 'excerpt', 'content', 'service_type', 'thumbnail', 
                          'cover', 'publish_date', 'expiry_date', 'tags', 'keywords', 'featured', 
-                         'activeHome', 'images'];
+                         'activeHome', 'images', 'videos'];
     if (!excludeKeys.includes(key)) {
       // Decode multilingual content fields (content_en, content_fr, etc.)
       if (key.startsWith('content_')) {
@@ -377,6 +278,7 @@ function mapSsrDetailToPost(sd: any): ServicePost {
     activeHome: Boolean(sd.activeHome),
     ...flatFields,
     images,
+    videos,
   } as ServicePost;
   
   return mapped;
@@ -544,7 +446,7 @@ function useServiceDetailAndRelated(category: string | undefined, id: string | u
   return { post, relatedPosts, totalRelated, loading, error };
 }
 
-// Helper: Safely get images array from post
+// Helper: Safely get images and videos array from post
 function getPostImages(post: ServicePost): string[] {
   const images: string[] = [];
   if (post.images && Array.isArray(post.images)) {
@@ -556,6 +458,16 @@ function getPostImages(post: ServicePost): string[] {
     images.push(post.thumbnail);
   }
   return images;
+}
+
+function getPostVideos(post: ServicePost): string[] {
+  const videos: string[] = [];
+  if (post.videos && Array.isArray(post.videos)) {
+    videos.push(
+      ...post.videos.filter((vid: unknown): vid is string => typeof vid === 'string' && vid.length > 0),
+    );
+  }
+  return videos;
 }
 
 // Helper: Safely convert rating to number
@@ -677,7 +589,7 @@ const GenericDetail = ({ post, t }: { post: ServicePost, t: any }) => {
         React.createElement(
           Col,
           { xs: 24, md: 12, key: 'img' },
-          React.createElement(ImageGallery, { images: getPostImages(post), alt: postTitle })
+          React.createElement(MediaGallery, { images: getPostImages(post), videos: getPostVideos(post), alt: postTitle })
         ),
         React.createElement(
           Col,
@@ -775,7 +687,7 @@ const SoftwareDetail = ({ post, t }: { post: ServicePost, t: any }) => {
         React.createElement(
           Col,
           { xs: 24, md: 10, key: 'img' },
-          React.createElement(ImageGallery, { images: getPostImages(post), alt: postTitle })
+          React.createElement(MediaGallery, { images: getPostImages(post), videos: getPostVideos(post), alt: postTitle })
         ),
         React.createElement(
           Col,
@@ -921,7 +833,7 @@ const RealEstateDetail = ({ post, t }: { post: ServicePost, t: any }) => {
         React.createElement(
           Col,
           { xs: 24, md: 12, key: 'img' },
-          React.createElement(ImageGallery, { images: getPostImages(post), alt: postTitle })
+          React.createElement(MediaGallery, { images: getPostImages(post), videos: getPostVideos(post), alt: postTitle })
         ),
         React.createElement(
           Col,
@@ -1271,7 +1183,7 @@ const BeautyDetail = ({ post, t }: { post: ServicePost, t: any }) => {
         React.createElement(
           Col,
           { xs: 24, md: 10, key: 'img' },
-          React.createElement(ImageGallery, { images: getPostImages(post), alt: postTitle })
+          React.createElement(MediaGallery, { images: getPostImages(post), videos: getPostVideos(post), alt: postTitle })
         ),
         React.createElement(
           Col,
@@ -1345,7 +1257,7 @@ const BookingDetail = ({ post, t }: { post: ServicePost, t: any }) => {
         React.createElement(
           Col,
           { xs: 24, md: 10, key: 'img' },
-          React.createElement(ImageGallery, { images: getPostImages(post), alt: postTitle })
+          React.createElement(MediaGallery, { images: getPostImages(post), videos: getPostVideos(post), alt: postTitle })
         ),
         React.createElement(
           Col,
@@ -1448,7 +1360,7 @@ const CarRentalDetail = ({ post, t }: { post: ServicePost, t: any }) => {
         React.createElement(
           Col,
           { xs: 24, md: 12, key: 'img' },
-          React.createElement(ImageGallery, { images: getPostImages(post), alt: postTitle })
+          React.createElement(MediaGallery, { images: getPostImages(post), videos: getPostVideos(post), alt: postTitle })
         ),
         React.createElement(
           Col,

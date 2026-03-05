@@ -2457,6 +2457,12 @@ function extractBase64ImagesFromText(text = "") {
   return matches ? Array.from(new Set(matches)) : [];
 }
 
+function extractBase64VideosFromText(text = "") {
+  if (!text || typeof text !== "string") return [];
+  const matches = text.match(/data:video\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+/g);
+  return matches ? Array.from(new Set(matches)) : [];
+}
+
 function normalizeImageCandidates(value) {
   if (!value) return [];
 
@@ -2469,6 +2475,36 @@ function normalizeImageCandidates(value) {
     if (!raw) return [];
 
     if (/^https?:\/\//i.test(raw) || /^data:image\//i.test(raw) || raw.startsWith("/")) {
+      return [raw];
+    }
+
+    if ((raw.startsWith("[") && raw.endsWith("]")) || (raw.startsWith("{") && raw.endsWith("}"))) {
+      try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          return parsed.filter(v => typeof v === "string" && v.trim());
+        }
+      } catch (e) {
+        // ignore invalid json string
+      }
+    }
+  }
+
+  return [];
+}
+
+function normalizeVideoCandidates(value) {
+  if (!value) return [];
+
+  if (Array.isArray(value)) {
+    return value.filter(v => typeof v === "string" && v.trim());
+  }
+
+  if (typeof value === "string") {
+    const raw = value.trim();
+    if (!raw) return [];
+
+    if (/^https?:\/\//i.test(raw) || /^data:video\//i.test(raw) || raw.startsWith("/")) {
       return [raw];
     }
 
@@ -2611,6 +2647,82 @@ function extractImagesFromMessage(item = {}) {
   return validImages;
 }
 
+function extractVideosFromMessage(item = {}) {
+  console.log(`\n🎬 [extractVideosFromMessage] === START EXTRACTION DEBUG ===`);
+  console.log(`   Item keys:`, Object.keys(item || {}).join(', '));
+
+  const videos = [];
+  let debugInfo = [];
+
+  const videoCandidates = [
+    ["videos", item.videos],
+    ["videoUrls", item.videoUrls],
+    ["video_urls", item.video_urls],
+    ["media", item.media],
+    ["attachments", item.attachments],
+    ["attachments.data", item.attachments?.data]
+  ];
+
+  videoCandidates.forEach(([key, value]) => {
+    const normalized = normalizeVideoCandidates(value);
+    if (normalized.length > 0) {
+      console.log(`   ✅ Found item.${key}: ${normalized.length} items`);
+      videos.push(...normalized);
+      debugInfo.push(`item.${key}: ${normalized.length}`);
+    }
+  });
+
+  if (typeof item.video === "string") {
+    videos.push(item.video);
+    debugInfo.push('item.video: 1');
+  }
+  if (typeof item.videoUrl === "string") {
+    videos.push(item.videoUrl);
+    debugInfo.push('item.videoUrl: 1');
+  }
+
+  const text = item.content || item.text || "";
+  const base64Videos = extractBase64VideosFromText(text);
+  if (base64Videos.length > 0) {
+    videos.push(...base64Videos);
+    debugInfo.push(`base64 from text: ${base64Videos.length}`);
+  }
+
+  // Facebook/Zalo attachments with explicit video markers
+  const attachmentArrays = [item.attachments, item.attachments?.data].filter(Array.isArray);
+  attachmentArrays.forEach(arr => {
+    arr.forEach(att => {
+      const candidate = att?.media?.source || att?.media?.url || att?.url || att?.src;
+      const mime = (att?.mime_type || att?.mimeType || att?.media?.mime_type || "").toLowerCase();
+      const type = (att?.type || att?.media_type || att?.media?.type || "").toLowerCase();
+      if (typeof candidate === "string") {
+        const looksLikeVideo = /\.(mp4|webm|ogg|mov|avi|mkv)(\?|$)/i.test(candidate)
+          || candidate.startsWith('data:video/')
+          || mime.startsWith('video/')
+          || type.includes('video');
+        if (looksLikeVideo) {
+          videos.push(candidate);
+        }
+      }
+    });
+  });
+
+  const validVideos = Array.from(new Set(
+    videos.filter((url) => {
+      if (typeof url !== 'string' || !url.trim()) return false;
+      return url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:video') || url.startsWith('/');
+    })
+  ));
+
+  console.log(`   📊 [AFTER FILTER] Valid videos: ${validVideos.length}/${videos.length}`);
+  if (validVideos.length > 0) {
+    console.log(`✅ extractVideosFromMessage: Found ${validVideos.length} valid video(s) [${debugInfo.join(', ')}]`);
+  }
+  console.log(`🎬 [extractVideosFromMessage] === END EXTRACTION DEBUG ===\n`);
+
+  return validVideos;
+}
+
 function extractMessageText(item = {}) {
   const candidates = [
     item.content,
@@ -2629,12 +2741,17 @@ function extractMessageText(item = {}) {
 function getMessageEssentials(item = {}) {
   const text = extractMessageText(item);
   const images = extractImagesFromMessage(item);
+  const videos = extractVideosFromMessage(item);
+  const hasMedia = images.length > 0 || videos.length > 0;
   return {
     text,
     images,
+    videos,
     hasText: text.length > 0,
     hasImages: images.length > 0,
-    isEligible: text.length > 0 && images.length > 0
+    hasVideos: videos.length > 0,
+    hasMedia,
+    isEligible: text.length > 0 && hasMedia
   };
 }
 
@@ -2697,8 +2814,8 @@ function parseZaloJson(jsonArray) {
   
   return jsonArray.filter((msg, idx) => {
     const essentials = getMessageEssentials(msg);
-    if (!essentials.hasText || !essentials.hasImages) {
-      console.warn(`⚠️ [parseZaloJson] Skip message #${idx + 1}: hasText=${essentials.hasText}, hasImages=${essentials.hasImages}`);
+    if (!essentials.hasText || !essentials.hasMedia) {
+      console.warn(`⚠️ [parseZaloJson] Skip message #${idx + 1}: hasText=${essentials.hasText}, hasMedia=${essentials.hasMedia}`);
       return false;
     }
     return true;
@@ -2712,8 +2829,9 @@ function parseFacebookJson(jsonArray) {
     const essentials = getMessageEssentials(item);
     const declaredImgCount = parseInt(item.imageCount, 10) || 0;
     const hasImages = essentials.images.length > 0 || declaredImgCount > 0;
-    if (!essentials.hasText || !hasImages) {
-      console.warn(`⚠️ [parseFacebookJson] Skip post #${idx + 1}: hasText=${essentials.hasText}, hasImages=${hasImages}`);
+    const hasMedia = hasImages || essentials.videos.length > 0;
+    if (!essentials.hasText || !hasMedia) {
+      console.warn(`⚠️ [parseFacebookJson] Skip post #${idx + 1}: hasText=${essentials.hasText}, hasMedia=${hasMedia}`);
       return false;
     }
     return true;
@@ -2868,6 +2986,56 @@ async function uploadImages(ctx, images) {
   return validResults;
 }
 
+async function uploadVideos(ctx, videos) {
+  const arr = Array.isArray(videos) ? videos : [];
+  const isBase64 = (s = "") => /^data:video\//i.test(s);
+  const getVideoExtensionFromDataUrl = (s = "") => {
+    const m = s.match(/^data:video\/([a-zA-Z0-9.+-]+);base64,/i);
+    if (!m || !m[1]) return "mp4";
+    const mimeExt = m[1].toLowerCase();
+    const extMap = {
+      "quicktime": "mov",
+      "x-matroska": "mkv",
+      "x-msvideo": "avi"
+    };
+    return extMap[mimeExt] || mimeExt;
+  };
+
+  console.log(`\n[uploadVideos] Bắt đầu upload ${arr.length} video - ${new Date().toLocaleTimeString()}`);
+
+  const results = [];
+  for (let i = 0; i < arr.length; i += 1) {
+    const vid = arr[i];
+    if (!vid || typeof vid !== 'string') {
+      results.push("");
+      continue;
+    }
+
+    if (!isBase64(vid)) {
+      results.push(vid);
+      continue;
+    }
+
+    try {
+      const ext = getVideoExtensionFromDataUrl(vid);
+      const result = await uploadBase64Image(vid, `upload-video-${Date.now()}-${i}.${ext}`, ctx);
+      results.push(result);
+    } catch (err) {
+      console.error(`   [${i}] ❌ Base64 video upload error:`, err.message);
+      results.push("");
+    }
+  }
+
+  const validResults = results.filter((r) => {
+    if (!r || typeof r !== 'string') return false;
+    if (r.includes('<!') || r.includes('<html') || r.includes('<?')) return false;
+    return /^https?:\/\/|^\/|^app_images\//.test(r);
+  });
+
+  console.log(`[uploadVideos] Hoàn tất upload ${validResults.length}/${arr.length} video hợp lệ`);
+  return validResults;
+}
+
 function resolvePublicImageUrl(ctx, url) {
   if (!url) return "";
   if (/^https?:\/\//i.test(url)) return url;
@@ -2881,7 +3049,7 @@ function resolvePublicImageUrl(ctx, url) {
 }
 
 // ===== BUILD DETAIL =====
-function buildDetail(ctx, seo, imgs, opts = {}) {
+function buildDetail(ctx, seo, imgs, vids, opts = {}) {
   const now = new Date().toISOString();
   const slug = generateSlug(seo?.title || "bai-viet");
   
@@ -2975,6 +3143,20 @@ function buildDetail(ctx, seo, imgs, opts = {}) {
     imagesJsonString = "[]";
   }
   
+  const validVideos = (Array.isArray(vids) ? vids : []).filter((vid) => {
+    if (!vid || typeof vid !== 'string') return false;
+    if (vid.includes('<!') || vid.includes('<html') || vid.includes('<?')) return false;
+    return /^https?:\/\/|^\/|^app_images\/|^data:video/.test(vid);
+  });
+
+  let videosJsonString = "[]";
+  try {
+    videosJsonString = JSON.stringify(validVideos.filter(vid => typeof vid === 'string'));
+  } catch (stringifyError) {
+    console.error(`   ❌ [buildDetail] videos stringify FAILED:`, stringifyError);
+    videosJsonString = "[]";
+  }
+
   console.log(`🖼️ [buildDetail] === IMAGE DEBUG END ===\n`);
   
   // ✅ IMPORTANT FOR LMKT: service_type field = project code (dự án slug)
@@ -3018,6 +3200,7 @@ function buildDetail(ctx, seo, imgs, opts = {}) {
     tags: Array.isArray(tags) ? tags : [serviceType],
     thumbnail: featuredImage,
     images: imagesJsonString, // ✅ SỬ DỤNG STRING ĐÃ VALIDATE
+    videos: videosJsonString,
     activeHome: opts.activeHome !== false,
     featured: opts.featured || false,
     priority: opts.priority || 10,
@@ -3401,17 +3584,19 @@ async function processContent(item, opts = {}) {
   
   const essentials = getMessageEssentials(item);
   const images = essentials.images;
+  const videos = essentials.videos;
 
   if (!essentials.isEligible) {
-    throw new Error(`Tin nhắn không đủ điều kiện (cần đủ nội dung + hình ảnh): hasContent=${essentials.hasText}, hasImages=${essentials.hasImages}`);
+    throw new Error(`Tin nhắn không đủ điều kiện (cần đủ nội dung + media): hasContent=${essentials.hasText}, hasMedia=${essentials.hasMedia}`);
   }
   
   console.log(`[processContent] Bắt đầu xử lý - Domain: ${ctx.domain}, Service: ${industry}, Project: ${ctx.project}`);
   console.log(`[processContent] Bắt đầu xử lý - ${new Date().toLocaleTimeString()}`);
-  console.log(`📸 [processContent] Extracted ${images.length} images from Zalo message: ${images.slice(0, 2).join(', ')}${images.length > 2 ? ` (+${images.length - 2} more)` : ''}`);
+  console.log(`📸 [processContent] Extracted media from message: ${images.length} images, ${videos.length} videos`);
   
-  thongbao("🖼️ Đang upload ảnh...");
+  thongbao("🎬 Đang upload media (ảnh/video)...");
   let uploadedImages = [];
+  let uploadedVideos = [];
   try {
     uploadedImages = await uploadImages(ctx, images) || [];
     if (!Array.isArray(uploadedImages)) {
@@ -3421,14 +3606,25 @@ async function processContent(item, opts = {}) {
     console.log(`   Sample uploaded paths: ${uploadedImages.slice(0, 2).join(', ')}${uploadedImages.length > 2 ? ` (+${uploadedImages.length - 2} more)` : ''}`);
   } catch (e) {
     console.error(`❌ [processContent] Lỗi upload ảnh:`, e.message);
-    canhbao(`⚠️ Không upload được ảnh, bỏ qua tin nhắn này`);
+    canhbao(`⚠️ Không upload được ảnh, tiếp tục thử video`);
     uploadedImages = [];
   }
 
-  if (!uploadedImages || uploadedImages.length === 0) {
-    throw new Error(`Không upload được ảnh hợp lệ, bỏ qua tin nhắn để đảm bảo đủ dữ liệu cho web/fanpage`);
+  try {
+    uploadedVideos = await uploadVideos(ctx, videos) || [];
+    if (!Array.isArray(uploadedVideos)) {
+      uploadedVideos = [];
+    }
+    console.log(`✅ [processContent] Uploaded ${uploadedVideos.length} videos (from ${videos.length} extracted)`);
+  } catch (e) {
+    console.error(`❌ [processContent] Lỗi upload video:`, e.message);
+    uploadedVideos = [];
   }
-  console.log(`[processContent] Upload ảnh xong - ${uploadedImages.length} ảnh - ${new Date().toLocaleTimeString()}`);
+
+  if ((!uploadedImages || uploadedImages.length === 0) && (!uploadedVideos || uploadedVideos.length === 0)) {
+    throw new Error(`Không upload được media hợp lệ (ảnh/video), bỏ qua tin nhắn để đảm bảo đủ dữ liệu cho web/fanpage`);
+  }
+  console.log(`[processContent] Upload media xong - ${uploadedImages.length} ảnh, ${uploadedVideos.length} video - ${new Date().toLocaleTimeString()}`);
   
   // ✅ CONVERT RELATIVE PATHS TO FULL URLs for Facebook
   // Facebook Graph API requires absolute URLs for images
@@ -3468,6 +3664,17 @@ async function processContent(item, opts = {}) {
   console.log(`🔗 [URL Conversion] === END CONVERSION DEBUG ===\n`);
   
   console.log(`✅ [processContent] Converted ${fullUrlImages.length} images to full URLs for Facebook`);
+
+  const fullUrlVideos = uploadedVideos.map((vid) => {
+    if (!vid) return '';
+    if (vid.startsWith('http://') || vid.startsWith('https://')) return vid;
+    if (vid.startsWith('data:')) return vid;
+    const domainList = ctx.domain.split(',').map(d => d.trim()).filter(d => d && !d.includes('localhost'));
+    const primaryDomain = ctx.primary_domain || (domainList.length > 0 ? domainList[0] : ctx.domain.split(',')[0].trim());
+    return `https://www.${primaryDomain}${vid.startsWith('/') ? vid : '/' + vid}`;
+  }).filter(vid => vid && vid.trim());
+
+  console.log(`✅ [processContent] Converted ${fullUrlVideos.length} videos to full URLs`);
   
   thongbao("🤖 Đang tạo nội dung (Chống Chất AI)...");
   const domainKey = opts.domainKey || "lmkt"; // For LMKT
@@ -3572,7 +3779,7 @@ async function processContent(item, opts = {}) {
   if (!ctx || !ctx.helperApi) {
     throw new Error(`❌ [CRITICAL] ctx.helperApi không tồn tại - không thể lưu database`);
   }
-  const detail = buildDetail(ctx, seo, fullUrlImages, { 
+  const detail = buildDetail(ctx, seo, fullUrlImages, fullUrlVideos, { 
     author: opts.author,
     avatar: opts.avatar,
     activeHome: opts.activeHome,

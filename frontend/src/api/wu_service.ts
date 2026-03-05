@@ -111,6 +111,7 @@ export interface ServicePost {
   featured?: boolean;
   activeHome?: boolean;
   images?: string[]; // populated when detail is loaded
+  videos?: string[]; // populated when detail is loaded - support video content
   // All flat fields from backend (attributes_*, specifications_*, etc.)
   [key: string]: any;
 }
@@ -783,6 +784,14 @@ export async function fetchRelatedServices(category: string, id: string, take = 
   // Có thể lọc thêm theo options.q nếu cần
   if (options?.q) {
     related = related.filter((r: any) => String(r?.title || '').toLowerCase().includes(String(options.q).toLowerCase()));
+  }
+  // Sắp xếp theo publish_date (desc) - tin mới nhất lên đầu
+  if (related.length > 1) {
+    related.sort((a: any, b: any) => {
+      const da = new Date(a.publish_date || a.created_at || 0).getTime();
+      const db = new Date(b.publish_date || b.created_at || 0).getTime();
+      return db - da;
+    });
   }
   // Phân trang: tính start và end index
   const startIndex = (page - 1) * take;

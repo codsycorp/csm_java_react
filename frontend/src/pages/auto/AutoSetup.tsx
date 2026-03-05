@@ -360,7 +360,7 @@ export default function AutoSetup() {
     (window as any).setInterval = function(...args: any[]) {
       const id = originalSetInterval.apply(window, args as any);
       if (!globalTimers.isShuttingDown) {
-        globalTimers.intervals.add(id as number);
+        globalTimers.intervals.add(id as unknown as number);
       }
       return id;
     };
@@ -371,7 +371,7 @@ export default function AutoSetup() {
       const id = originalSetTimeout.apply(window, args as any);
       const delay = typeof args[1] === 'number' ? args[1] : 0;
       if (!globalTimers.isShuttingDown && delay > 10000) { // Only track long timeouts
-        globalTimers.timeouts.add(id as number);
+        globalTimers.timeouts.add(id as unknown as number);
       }
       return id;
     };

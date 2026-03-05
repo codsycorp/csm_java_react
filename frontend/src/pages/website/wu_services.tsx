@@ -200,12 +200,67 @@ const svgPlaceholder = (label: string, w = 800, h = 520) => {
 };
 
 const getPrimaryImage = (post: ServicePost, categoryKey?: string) => {
+  const placeholder = svgPlaceholder(post.title || categoryKey || 'CSM');
+  
+  // Priority 1: Try images first (better for SEO/performance)
   const raw = post.thumbnail || (Array.isArray(post.images) ? post.images[0] : '');
   const normalized = normalizeImageUrl(raw);
-  const placeholder = svgPlaceholder(post.title || categoryKey || 'CSM');
-  // Add ?w=480 for thumbnail cards to load smaller optimized variant
-  const src = normalized ? (normalized + '?w=480') : placeholder;
-  return { src, placeholder };
+  
+  if (normalized) {
+    // Image found - add ?w=480 for thumbnail optimization
+    return { src: normalized + '?w=480', placeholder, type: 'image' as const };
+  }
+  
+  // Priority 2: If no images, check for single video
+  if (Array.isArray(post.videos) && post.videos.length === 1) {
+    const videoUrl = normalizeImageUrl(post.videos[0]);
+    if (videoUrl) {
+      return { src: videoUrl, placeholder, type: 'video' as const };
+    }
+  }
+  
+  // Fallback: placeholder
+  return { src: placeholder, placeholder, type: 'image' as const };
+};
+
+// Helper function to render media (image or video) for card thumbnails
+const renderCardMedia = (post: ServicePost, categoryKey: string, altText: string) => {
+  const { src, placeholder, type } = getPrimaryImage(post, categoryKey);
+  
+  if (type === 'video') {
+    return (
+      <video
+        src={src}
+        poster={placeholder}
+        muted
+        loop
+        playsInline
+        autoPlay
+        onError={(e) => {
+          // Fallback to placeholder image on video error
+          const videoEl = e.currentTarget as HTMLVideoElement;
+          videoEl.style.display = 'none';
+          const img = document.createElement('img');
+          img.src = placeholder;
+          img.alt = altText;
+          img.style.cssText = 'position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover;';
+          videoEl.parentElement?.appendChild(img);
+        }}
+        style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }}
+      />
+    );
+  }
+  
+  // Default: image
+  return (
+    <img
+      alt={altText}
+      src={src}
+      loading="lazy"
+      onError={(e) => { (e.currentTarget as HTMLImageElement).src = placeholder; }}
+      style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }}
+    />
+  );
 };
 
 // Helper function to get multilingual field value
@@ -1821,7 +1876,7 @@ const WuServicesPage: React.FC = () => {
                         transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
                         height: '100%',
                       }}
-                      cover={<div style={{ position: 'relative', width: '100%', paddingBottom: '56.25%', overflow: 'hidden', borderTopLeftRadius: 18, borderTopRightRadius: 18, background: 'linear-gradient(135deg, #13c2c211 0%, #13c2c207 100%)' }}>{(() => { const { src, placeholder } = getPrimaryImage(post, 'bat-dong-san'); return <img alt={postTitle} src={src} loading="lazy" onError={(e) => { (e.currentTarget as HTMLImageElement).src = placeholder; }} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />; })()}{transactionLabel && <Tag color={transactionLabel === "Bán" ? "#52c41a" : "#faad14"} style={{ position: "absolute", bottom: 12, left: 12, fontWeight: 700, fontSize: 11, borderRadius: 6, color: '#fff', border: 'none', backdropFilter: 'blur(6px)', background: transactionLabel === "Bán" ? 'rgba(82, 196, 26, 0.85)' : 'rgba(250, 173, 20, 0.85)', padding: '4px 10px', letterSpacing: '0.5px' }}>{transactionLabel}</Tag>}{propertyTypeLabel && <Tag color="#1890ff" style={{ position: 'absolute', top: 12, right: 12, fontSize: 10, borderRadius: 6, color: '#fff', border: 'none', fontWeight: 600, backdropFilter: 'blur(6px)', background: 'rgba(24, 144, 255, 0.85)', padding: '4px 8px', letterSpacing: '0.3px' }}>{propertyTypeLabel}</Tag>}</div>}
+                      cover={<div style={{ position: 'relative', width: '100%', paddingBottom: '56.25%', overflow: 'hidden', borderTopLeftRadius: 18, borderTopRightRadius: 18, background: 'linear-gradient(135deg, #13c2c211 0%, #13c2c207 100%)' }}>{renderCardMedia(post, 'bat-dong-san', postTitle)}{transactionLabel && <Tag color={transactionLabel === "Bán" ? "#52c41a" : "#faad14"} style={{ position: "absolute", bottom: 12, left: 12, fontWeight: 700, fontSize: 11, borderRadius: 6, color: '#fff', border: 'none', backdropFilter: 'blur(6px)', background: transactionLabel === "Bán" ? 'rgba(82, 196, 26, 0.85)' : 'rgba(250, 173, 20, 0.85)', padding: '4px 10px', letterSpacing: '0.5px' }}>{transactionLabel}</Tag>}{propertyTypeLabel && <Tag color="#1890ff" style={{ position: 'absolute', top: 12, right: 12, fontSize: 10, borderRadius: 6, color: '#fff', border: 'none', fontWeight: 600, backdropFilter: 'blur(6px)', background: 'rgba(24, 144, 255, 0.85)', padding: '4px 8px', letterSpacing: '0.3px' }}>{propertyTypeLabel}</Tag>}</div>}
                       bodyStyle={{ padding: '18px', flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: 10, background: 'var(--card-bg, #fff)', color: 'var(--text-primary)' }}
                     >
                       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
@@ -1938,20 +1993,11 @@ const WuServicesPage: React.FC = () => {
                     justifyContent: "space-between",
                     transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)'
                   }}
-                  cover={(() => {
-                    const { src, placeholder } = getPrimaryImage(post, 'lam-dep-my-pham');
-                    return (
-                      <div style={{ position: 'relative', paddingBottom: '62%', overflow: 'hidden', borderTopLeftRadius: 20, borderTopRightRadius: 20 }}>
-                        <img
-                          alt={postTitle}
-                          src={src}
-                          loading="lazy"
-                          onError={(e) => { (e.currentTarget as HTMLImageElement).src = placeholder; }}
-                          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }}
-                        />
-                      </div>
-                    );
-                  })()}
+                  cover={(
+                    <div style={{ position: 'relative', paddingBottom: '62%', overflow: 'hidden', borderTopLeftRadius: 20, borderTopRightRadius: 20 }}>
+                      {renderCardMedia(post, 'lam-dep-my-pham', postTitle)}
+                    </div>
+                  )}
                   bodyStyle={{ background: 'var(--card-bg, #fff)', color: 'var(--text-primary)' }}
                 >
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
@@ -2047,20 +2093,11 @@ const WuServicesPage: React.FC = () => {
                     justifyContent: "space-between",
                     transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)'
                   }}
-                  cover={(() => {
-                    const { src, placeholder } = getPrimaryImage(post, 'cho-thue-xe');
-                    return (
-                      <div style={{ position: 'relative', width: '100%', paddingBottom: '56.25%', overflow: 'hidden', borderTopLeftRadius: 18, borderTopRightRadius: 18, background: 'linear-gradient(135deg, #1890ff11 0%, #1890ff07 100%)' }}>
-                        <img
-                          alt={postTitle}
-                          src={src}
-                          loading="lazy"
-                          onError={(e) => { (e.currentTarget as HTMLImageElement).src = placeholder; }}
-                          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }}
-                        />
-                      </div>
-                    );
-                  })()}
+                  cover={(
+                    <div style={{ position: 'relative', width: '100%', paddingBottom: '56.25%', overflow: 'hidden', borderTopLeftRadius: 18, borderTopRightRadius: 18, background: 'linear-gradient(135deg, #1890ff11 0%, #1890ff07 100%)' }}>
+                      {renderCardMedia(post, 'cho-thue-xe', postTitle)}
+                    </div>
+                  )}
                   bodyStyle={{ background: 'var(--card-bg, #fff)', color: 'var(--text-primary)' }}
                 >
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
@@ -2143,16 +2180,9 @@ const WuServicesPage: React.FC = () => {
                     transition: "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)"
                   }}
                   cover={(() => {
-                    const { src, placeholder } = getPrimaryImage(post, 'booking-online');
                     return (
                       <div style={{ position: 'relative', paddingBottom: '56.25%', overflow: 'hidden', borderTopLeftRadius: 18, borderTopRightRadius: 18, background: "linear-gradient(135deg, #faad1430, #faad1420)" }}>
-                        <img
-                          alt={postTitle}
-                          src={src}
-                          loading="lazy"
-                          onError={(e) => { (e.currentTarget as HTMLImageElement).src = placeholder; }}
-                          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', transition: "transform 0.3s cubic-bezier(0.4, 0, 0.2, 1)" }}
-                        />
+                        {renderCardMedia(post, 'booking-online', postTitle)}
                         <div style={{
                           position: "absolute",
                           top: 0,
@@ -2252,16 +2282,9 @@ const WuServicesPage: React.FC = () => {
                   justifyContent: 'space-between',
                 }}
                 cover={(() => {
-                  const { src, placeholder } = getPrimaryImage(post, 'phan-mem');
                   return (
                     <div style={{ position: 'relative', paddingBottom: '62%', overflow: 'hidden' }}>
-                      <img
-                        alt={postTitle}
-                        src={src}
-                        loading="lazy"
-                        onError={(e) => { (e.currentTarget as HTMLImageElement).src = placeholder; }}
-                        style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }}
-                      />
+                      {renderCardMedia(post, 'phan-mem', postTitle)}
                     </div>
                   );
                 })()}

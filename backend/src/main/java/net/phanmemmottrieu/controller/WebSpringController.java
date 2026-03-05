@@ -121,6 +121,9 @@ public class WebSpringController {
         "js", "css", "png", "jpg", "jpeg", "gif", "svg", "ico",
         "woff", "woff2", "ttf", "eot", "webp", "mp4", "webm", "json", "xml", "map"
     );
+    private static final Set<String> UPLOAD_IMAGE_EXTENSIONS = Set.of(
+        "png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "avif"
+    );
     private final Map<String, CacheEntry<Map<String, Object>>> propertyDetailCache = new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<String, CacheEntry<Boolean>> staticDetectionCache = new java.util.concurrent.ConcurrentHashMap<>();
     // Dedup processing for image optimization (avoid double work on concurrent requests)
@@ -1997,8 +2000,11 @@ public class WebSpringController {
                         Path targetFilePath = uploadRootPath.resolve(finalFileName);
                         Files.write(targetFilePath, buffer);
 
-                        // Precompute optimized variants to reduce runtime CPU
-                        precomputeImageVariants(finalAppId, finalFileName, targetFilePath);
+                        // Precompute optimized variants chỉ cho ảnh (skip video)
+                        String ext = getExtension(finalFileName.toLowerCase(Locale.ROOT));
+                        if (UPLOAD_IMAGE_EXTENSIONS.contains(ext)) {
+                            precomputeImageVariants(finalAppId, finalFileName, targetFilePath);
+                        }
 
                         // Sử dụng finalFileName
                         String fileUrl = String.format("app_images/%s/%s", finalAppId, finalFileName);
@@ -2031,8 +2037,11 @@ public class WebSpringController {
                         Path targetFilePath = uploadRootPath.resolve(sanitizedName);
                         Files.write(targetFilePath, buffer);
 
-                        // Precompute optimized variants to reduce runtime CPU
-                        precomputeImageVariants(finalAppId, sanitizedName, targetFilePath);
+                        // Precompute optimized variants chỉ cho ảnh (skip video)
+                        String ext = getExtension(sanitizedName.toLowerCase(Locale.ROOT));
+                        if (UPLOAD_IMAGE_EXTENSIONS.contains(ext)) {
+                            precomputeImageVariants(finalAppId, sanitizedName, targetFilePath);
+                        }
 
                         // Sử dụng finalAppId
                         String fileUrl = String.format("app_images/%s/%s", finalAppId, name);

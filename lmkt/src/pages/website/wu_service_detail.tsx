@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useLocation } from 'react-router';
 import i18n from 'i18next';
 import InternalChatBox from '#src/components/InternalChatBox';
+import MediaGallery from '#src/components/MediaGallery';
 import type { ChatMessage } from '#src/model/ChatMessage';
 import { useSocket } from '#src/hooks/useSocket';
 import { useUserStore } from '#src/store/user';
@@ -505,6 +506,17 @@ function getPostImages(post: ServicePost): string[] {
   return images;
 }
 
+// Helper: Safely get videos array from post
+function getPostVideos(post: ServicePost): string[] {
+  const videos: string[] = [];
+  if (post.videos && Array.isArray(post.videos)) {
+    videos.push(
+      ...post.videos.filter((vid: unknown): vid is string => typeof vid === 'string' && vid.length > 0),
+    );
+  }
+  return videos;
+}
+
 // Helper: Safely convert rating to number
 function getRatingValue(rating: string | number | undefined): number {
   if (typeof rating === 'number') return rating;
@@ -602,7 +614,7 @@ const GenericDetail = ({ post, t }: { post: ServicePost, t: any }) => {
         React.createElement(
           Col,
           { xs: 24, md: 12, key: 'img' },
-          React.createElement(ImageGallery, { images: getPostImages(post), alt: postTitle })
+          React.createElement(MediaGallery, { images: getPostImages(post), videos: getPostVideos(post), alt: postTitle })
         ),
         React.createElement(
           Col,
@@ -799,7 +811,7 @@ const RealEstateDetail = ({ post, t }: { post: ServicePost, t: any }) => {
         React.createElement(
           Col,
           { xs: 24, md: 12, key: 'img' },
-          React.createElement(ImageGallery, { images: getPostImages(post), alt: postTitle })
+          React.createElement(MediaGallery, { images: getPostImages(post), videos: getPostVideos(post), alt: postTitle })
         ),
         React.createElement(
           Col,
@@ -1182,7 +1194,7 @@ const BookingDetail = ({ post, t }: { post: ServicePost, t: any }) => {
         React.createElement(
           Col,
           { xs: 24, md: 10, key: 'img' },
-          React.createElement(ImageGallery, { images: getPostImages(post), alt: postTitle })
+          React.createElement(MediaGallery, { images: getPostImages(post), videos: getPostVideos(post), alt: postTitle })
         ),
         React.createElement(
           Col,
