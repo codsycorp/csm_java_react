@@ -4675,6 +4675,7 @@ async function ensureUI() {
   const uploadFbBtn = createButton("👍 Upload Facebook JSON", "#1877f2");
   const createBtn = createButton("✍️ Tạo Bài", "#52c41a");
   const clearHistoryBtn = createButton("🗑️ Xóa Lịch Sử", "#f5222d");
+  const cleanupIndexedDBBtn = createButton("🧹 Dọn IndexedDB", "#fa8c16");
 
   // File inputs (hidden)
   const zaloFileInput = createFileInput("zalo-file");
@@ -4869,8 +4870,34 @@ async function ensureUI() {
   };
 
   clearHistoryBtn.onclick = () => confirm("Xóa lịch sử?") && clearArticleHistory();
+  
+  cleanupIndexedDBBtn.onclick = async () => {
+    if (!window.indexedDB || !ZALO_INDEXEDDB.isReady) {
+      return canhbao("❌ IndexedDB không khả dụng!");
+    }
+    
+    // Show storage size before cleanup
+    const sizeBefore = await ZALO_INDEXEDDB.getStorageSize();
+    const countBefore = await ZALO_INDEXEDDB.getMessageCount();
+    
+    if (!confirm(`🧹 Dọn dẹp IndexedDB?\n\n📊 Hiện tại:\n- ${countBefore} tin nhắn\n- ${sizeBefore ? sizeBefore.usageMB + ' MB / ' + sizeBefore.quotaMB + ' MB (' + sizeBefore.percent + '%)' : 'Unknown size'}\n\nXác nhận xóa tất cả?`)) {
+      return;
+    }
+    
+    try {
+      const success = await ZALO_INDEXEDDB.clearAll();
+      if (success) {
+        const sizeAfter = await ZALO_INDEXEDDB.getStorageSize();
+        thongbao(`✅ Đã dọn dẹp ${countBefore} tin nhắn!\n📉 Dung lượng: ${sizeBefore ? sizeBefore.usageMB : '?'} MB → ${sizeAfter ? sizeAfter.usageMB : '?'} MB`);
+      } else {
+        canhbao("❌ Lỗi khi dọn dẹp IndexedDB");
+      }
+    } catch (e) {
+      canhbao(`❌ Lỗi: ${e.message}`);
+    }
+  };
 
-  btnRow.append(uploadZaloBtn, uploadFbBtn, createBtn, clearHistoryBtn);
+  btnRow.append(uploadZaloBtn, uploadFbBtn, createBtn, clearHistoryBtn, cleanupIndexedDBBtn);
   wrapper.append(title, note, textarea, btnRow, zaloFileInput, fbFileInput);
 
   try {
@@ -6433,6 +6460,102 @@ const ZALO_INDEXEDDB = {
       console.error('❌ [IndexedDB] deleteOldMessages error:', e);
       return 0;
     }
+  },
+  
+  /**
+   * ✅ NEW: Clear all messages for a specific config
+   * Auto cleanup sau khi hoàn thành 1 config
+   */
+  async clearAllForConfig(configId) {
+    if (!configId) return 0;
+    try {
+      const db = await this.getDB();
+      const tx = db.transaction(this.STORE_NAME, 'readwrite');
+      const store = tx.objectStore(this.STORE_NAME);
+      const index = store.index(this.INDEXES.config_id);
+      const request = index.openCursor(IDBKeyRange.only(configId));
+      
+      let deletedCount = 0;
+      return new Promise((resolve, reject) => {
+        request.onsuccess = (event) => {
+          const cursor = event.target.result;
+          if (cursor) {
+            cursor.delete();
+            deletedCount++;
+            cursor.continue();
+          } else {
+            console.log(`🧹 [IndexedDB] Cleared ${deletedCount} messages for config ${configId}`);
+            resolve(deletedCount);
+          }
+        };
+        request.onerror = () => reject(request.error);
+      });
+    } catch (e) {
+      console.error(`❌ [IndexedDB] clearAllForConfig error:`, e);
+      return 0;
+    }
+  },
+  
+  /**
+   * ✅ NEW: Clear ALL messages (complete cleanup)
+   * Sử dụng khi dừng scanner hoặc manual cleanup
+   */
+  async clearAll() {
+    try {
+      const db = await this.getDB();
+      const tx = db.transaction(this.STORE_NAME, 'readwrite');
+      const store = tx.objectStore(this.STORE_NAME);
+      const request = store.clear();
+      
+      return new Promise((resolve, reject) => {
+        request.onsuccess = () => {
+          console.log('🧹 [IndexedDB] Cleared ALL messages');
+          resolve(true);
+        };
+        request.onerror = () => {
+          console.error('❌ [IndexedDB] Clear all error:', request.error);
+          reject(request.error);
+        };
+      });
+    } catch (e) {
+      console.error('❌ [IndexedDB] clearAll error:', e);
+      return false;
+    }
+  },
+  
+  /**
+   * ✅ NEW: Get storage size estimate
+   */
+  async getStorageSize() {
+    try {
+      if (navigator.storage && navigator.storage.estimate) {
+        const estimate = await navigator.storage.estimate();
+        return {
+          usage: estimate.usage || 0,
+          quota: estimate.quota || 0,
+          usageMB: ((estimate.usage || 0) / 1048576).toFixed(2),
+          quotaMB: ((estimate.quota || 0) / 1048576).toFixed(2),
+          percent: estimate.quota ? ((estimate.usage / estimate.quota) * 100).toFixed(1) : 0
+        };
+      }
+      return null;
+    } catch (e) {
+      console.warn('⚠️ [IndexedDB] Cannot estimate storage:', e);
+      return null;
+    }
+  },
+  
+  /**
+   * ✅ NEW: Get message count
+   */
+  async getMessageCount(configId = null) {
+    try {
+      const messages = await this.getMessages(configId);
+      return messages.length;
+    } catch (e) {
+      console.error('❌ [IndexedDB] getMessageCount error:', e);
+      return 0;
+    }
   }
 };
 
@@ -6652,6 +6775,25 @@ function cleanupAfterConfig(sessionData = {}) {
     if (sessionData.sessionPostedMessages && Array.isArray(sessionData.sessionPostedMessages)) {
       // Don't nullify content_preview, just clear large fields
       sessionData.sessionPostedMessages = null;
+    }
+    
+    // ✅ NEW: Auto cleanup IndexedDB cho config vừa xong
+    if (sessionData.configId && window.indexedDB && ZALO_INDEXEDDB.isReady) {
+      ZALO_INDEXEDDB.clearAllForConfig(sessionData.configId).then(count => {
+        if (count > 0) {
+          console.log(`🧹 [IndexedDB] Auto-cleaned ${count} messages for config ${sessionData.configId}`);
+        }
+      }).catch(e => {
+        console.warn(`⚠️ [IndexedDB] Auto-cleanup error:`, e.message);
+      });
+    }
+    
+    // ✅ NEW: Cleanup old messages (> 24 hours) từ tất cả configs
+    if (window.indexedDB && ZALO_INDEXEDDB.isReady) {
+      const ONE_DAY = 24 * 60 * 60 * 1000;
+      ZALO_INDEXEDDB.deleteOldMessages(ONE_DAY).catch(e => {
+        console.warn(`⚠️ [IndexedDB] Delete old messages error:`, e.message);
+      });
     }
     
     console.log('✅ [ConfigCleanup] Xong');
@@ -8649,6 +8791,7 @@ function startZaloScanner(statusEl) {
       console.error(`❌ [Config ${configId}] Error:`, e);
     } finally {
       // ✅ CLEANUP AFTER CONFIG - Giải phóng RAM sau mỗi config
+      sessionData.configId = configId; // Track configId for cleanup
       cleanupAfterConfig(sessionData);
       sessionData = null;
       
@@ -8695,6 +8838,16 @@ function stopZaloScanner(statusEl) {
   
   // ✅ MỞ KHÓA UI
   removeScannerLockOverlay();
+  
+  // ✅ NEW: Auto cleanup IndexedDB khi dừng scanner
+  if (window.indexedDB && ZALO_INDEXEDDB.isReady) {
+    console.log('🧹 [Stop] Cleaning up IndexedDB...');
+    ZALO_INDEXEDDB.clearAll().then(() => {
+      console.log('✅ [Stop] IndexedDB cleaned up');
+    }).catch(e => {
+      console.warn('⚠️ [Stop] IndexedDB cleanup error:', e.message);
+    });
+  }
 
   // Dừng main loop timer
   if (zaloConfigScanners._mainLoopTimer) {
