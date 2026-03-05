@@ -6566,127 +6566,52 @@ if (typeof window !== 'undefined' && window.indexedDB) {
 }
 
 /**
- * ✅ PASSIVE MEMORY MONITOR (v2 - non-aggressive)
- * Chỉ log, không cleanup aggressive
+ * ✅ LIGHTWEIGHT MONITOR - Chỉ theo dõi IndexedDB storage
+ * Không giới hạn heap - tập trung cleanup IndexedDB
  */
-const MEMORY_MONITOR = {
-  // Passive constants - just for logging
+const STORAGE_MONITOR = {
   CHECK_INTERVAL_MS: 30000,              // Check mỗi 30s
-  LOG_THRESHOLD_MB: 400,                 // Log nếu heap > 400MB
-  WARNING_THRESHOLD_MB: 1200,            // Warning nếu > 1200MB
-  ERROR_THRESHOLD_MB: 1600,              // Error nếu > 1600MB
-  AUTO_PAUSE_THRESHOLD_MB: 1900,         // ✅ Tự động pause nếu > 1900MB (gần 2GB)
-  AUTO_RESUME_THRESHOLD_MB: 800,         // ✅ Tự động resume khi < 800MB
-  AUTO_RESUME_ENABLED: true,             // ✅ NEW: Cho phép tự động resume
-  AUTO_RESUME_WAIT_MS: 60000,            // ✅ NEW: Đợi 60s sau pause trước khi auto-resume
-  
-  // State
-  lastHeapValue: 0,
-  monitoringActive: false,
-  errorCount: 0,
-  maxConsecutiveErrors: 5,
-  autoPaused: false,                     // Track auto-pause state
-  autoPauseTime: 0                       // ✅ NEW: Thời điểm auto-pause
+  LOG_STORAGE_USAGE: true,               // Log storage usage
+  monitoringActive: false
 };
 
-/**
- * Lấy heap usage hiện tại (MB)
- */
-function getHeapUsageMB() {
-  try {
-    if (performance && performance.memory) {
-      return Math.round(performance.memory.usedJSHeapSize / 1024 / 1024);
-    }
-  } catch (e) {
-    // ignore
-  }
-  return 0;
-}
+
 
 /**
- * ✅ Start Passive Memory Monitor (auto-pause + auto-resume hoàn toàn tự động)
+ * ✅ Start Storage Monitor - Theo dõi IndexedDB usage
  */
-function startMemoryMonitor() {
-  if (MEMORY_MONITOR.monitoringActive) return;
+function startStorageMonitor() {
+  if (STORAGE_MONITOR.monitoringActive) return;
   
-  MEMORY_MONITOR.monitoringActive = true;
-  console.log('🔍 [Memory Monitor] Bắt đầu (auto-pause + auto-resume tự động)');
+  STORAGE_MONITOR.monitoringActive = true;
+  console.log('🔍 [Storage Monitor] Bắt đầu theo dõi IndexedDB');
   
-  const monitorInterval = setInterval(() => {
-    if (!MEMORY_MONITOR.monitoringActive) {
+  const monitorInterval = setInterval(async () => {
+    if (!STORAGE_MONITOR.monitoringActive) {
       clearInterval(monitorInterval);
       return;
     }
     
-    const heapMB = getHeapUsageMB();
-    MEMORY_MONITOR.lastHeapValue = heapMB;
-    
-    // ✅ AUTO-PAUSE LOGIC: Nếu RAM quá cao, tạm dừng để giải phóng
-    if (heapMB > MEMORY_MONITOR.AUTO_PAUSE_THRESHOLD_MB && !MEMORY_MONITOR.autoPaused) {
-      console.error(`🛑 [Memory] AUTO-PAUSE! RAM: ${heapMB}MB > ${MEMORY_MONITOR.AUTO_PAUSE_THRESHOLD_MB}MB`);
-      MEMORY_MONITOR.autoPaused = true;
-      MEMORY_MONITOR.autoPauseTime = Date.now();
-      
-      const statusEl = document.querySelector('.zalo-scanner-status');
-      pauseZaloScanner(statusEl);
-      
-      // Force cleanup
-      forceCleanupResources();
-      
-      // Hiển thị thông báo (không block - chỉ thông báo)
-      console.log(`⏸️ [Auto-Pause] Hệ thống tạm dừng, sẽ tự động tiếp tục sau ${MEMORY_MONITOR.AUTO_RESUME_WAIT_MS/1000}s...`);
-    }
-    
-    // ✅ AUTO-RESUME LOGIC: Tự động resume sau khi RAM giảm + đủ thời gian chờ
-    if (MEMORY_MONITOR.autoPaused && MEMORY_MONITOR.AUTO_RESUME_ENABLED) {
-      const timeSincePause = Date.now() - MEMORY_MONITOR.autoPauseTime;
-      const waitComplete = timeSincePause >= MEMORY_MONITOR.AUTO_RESUME_WAIT_MS;
-      const ramOk = heapMB < MEMORY_MONITOR.AUTO_RESUME_THRESHOLD_MB;
-      
-      if (waitComplete && ramOk) {
-        console.log(`✅ [Auto-Resume] RAM giảm xuống ${heapMB}MB - TỰ ĐỘNG TIẾP TỤC`);
-        MEMORY_MONITOR.autoPaused = false;
-        MEMORY_MONITOR.autoPauseTime = 0;
-        
-        // Auto-resume (pass true để không hiện confirm dialog)
-        const statusEl = document.querySelector('.zalo-scanner-status');
-        resumeZaloScanner(statusEl, true);
-      } else if (waitComplete && !ramOk) {
-        console.warn(`⏳ [Auto-Resume] Đã đợi ${timeSincePause/1000}s nhưng RAM vẫn cao (${heapMB}MB). Chờ tiếp...`);
-      } else if (!waitComplete) {
-        const remaining = Math.ceil((MEMORY_MONITOR.AUTO_RESUME_WAIT_MS - timeSincePause) / 1000);
-        if (remaining % 10 === 0) { // Log mỗi 10s
-          console.log(`⏳ [Auto-Resume] Đang chờ cleanup... còn ${remaining}s (RAM: ${heapMB}MB)`);
+    if (STORAGE_MONITOR.LOG_STORAGE_USAGE && ZALO_INDEXEDDB.isReady) {
+      try {
+        const storage = await ZALO_INDEXEDDB.getStorageSize();
+        const count = await ZALO_INDEXEDDB.getMessageCount();
+        if (storage) {
+          console.log(`📊 [Storage] ${storage.usageMB}MB/${storage.quotaMB}MB (${storage.percent}%) - ${count} messages`);
         }
+      } catch (e) {
+        // ignore
       }
     }
-    
-    if (heapMB > MEMORY_MONITOR.WARNING_THRESHOLD_MB) {
-      console.warn(`⚠️ [Memory] HEAP CAO: ${heapMB}MB (warning: ${MEMORY_MONITOR.WARNING_THRESHOLD_MB}MB)`);
-      MEMORY_MONITOR.errorCount++;
-    } else if (heapMB > MEMORY_MONITOR.LOG_THRESHOLD_MB) {
-      console.log(`💾 [Memory] Heap usage: ${heapMB}MB`);
-      MEMORY_MONITOR.errorCount = 0; // Reset error count
-    }
-    
-    if (heapMB > MEMORY_MONITOR.ERROR_THRESHOLD_MB) {
-      console.error(`❌ [Memory] HEAP CRITICAL: ${heapMB}MB (error: ${MEMORY_MONITOR.ERROR_THRESHOLD_MB}MB)`);
-      MEMORY_MONITOR.errorCount++;
-      
-      if (MEMORY_MONITOR.errorCount >= MEMORY_MONITOR.maxConsecutiveErrors) {
-        console.error(`❌ [Memory] Liên tục cao 5 lần - app có vấn đề memory leak!`);
-        MEMORY_MONITOR.errorCount = 0;
-      }
-    }
-  }, MEMORY_MONITOR.CHECK_INTERVAL_MS);
+  }, STORAGE_MONITOR.CHECK_INTERVAL_MS);
 }
 
 /**
- * Stop Memory Monitor
+ * Stop Storage Monitor
  */
-function stopMemoryMonitor() {
-  MEMORY_MONITOR.monitoringActive = false;
-  console.log('🛑 [Memory Monitor] Đã dừng');
+function stopStorageMonitor() {
+  STORAGE_MONITOR.monitoringActive = false;
+  console.log('🛑 [Storage Monitor] Đã dừng');
 }
 
 /**
@@ -6696,7 +6621,6 @@ function stopMemoryMonitor() {
 function forceCleanupResources() {
   try {
     console.log('🧹 [Cleanup] Bắt đầu giải phóng bộ nhớ...');
-    const before = getHeapUsageMB();
     
     // 1. Clear window temporary data
     if (window.cparams && window.cparams.lastDetail) {
@@ -6735,13 +6659,7 @@ function forceCleanupResources() {
     
     // 6. Give browser time to cleanup
     setTimeout(() => {
-      const after = getHeapUsageMB();
-      const freed = before - after;
-      if (freed > 0) {
-        console.log(`✅ [Cleanup] Giải phóng ${freed}MB RAM (${before}MB → ${after}MB)`);
-      } else {
-        console.log(`✅ [Cleanup] Hoàn tất (RAM: ${after}MB)`);
-      }
+      console.log(`✅ [Cleanup] Hoàn tất`);
     }, 1000);
     
   } catch (e) {
@@ -6773,28 +6691,10 @@ function cleanupAfterConfig(sessionData = {}) {
     
     // Clear session posted messages (keep only in persistent storage)
     if (sessionData.sessionPostedMessages && Array.isArray(sessionData.sessionPostedMessages)) {
-      // Don't nullify content_preview, just clear large fields
       sessionData.sessionPostedMessages = null;
     }
     
-    // ✅ NEW: Auto cleanup IndexedDB cho config vừa xong
-    if (sessionData.configId && window.indexedDB && ZALO_INDEXEDDB.isReady) {
-      ZALO_INDEXEDDB.clearAllForConfig(sessionData.configId).then(count => {
-        if (count > 0) {
-          console.log(`🧹 [IndexedDB] Auto-cleaned ${count} messages for config ${sessionData.configId}`);
-        }
-      }).catch(e => {
-        console.warn(`⚠️ [IndexedDB] Auto-cleanup error:`, e.message);
-      });
-    }
-    
-    // ✅ NEW: Cleanup old messages (> 24 hours) từ tất cả configs
-    if (window.indexedDB && ZALO_INDEXEDDB.isReady) {
-      const ONE_DAY = 24 * 60 * 60 * 1000;
-      ZALO_INDEXEDDB.deleteOldMessages(ONE_DAY).catch(e => {
-        console.warn(`⚠️ [IndexedDB] Delete old messages error:`, e.message);
-      });
-    }
+    // Note: IndexedDB cleanup đã xử lý sau mỗi group - không cần cleanup lại ở đây
     
     console.log('✅ [ConfigCleanup] Xong');
   } catch (e) {
@@ -8676,6 +8576,25 @@ async function scanAndPostConfig(config, statusEl, sessionData = {}) {
       
       console.log(`    ✅ Nhóm ${groupName} đăng xong (${validMessages.length} tin)`);
       
+      // ✅ CLEANUP INDEXEDDB NGAY SAU MỖI GROUP - Tối ưu bộ nhớ
+      if (window.indexedDB && ZALO_INDEXEDDB.isReady) {
+        try {
+          const beforeCleanup = await ZALO_INDEXEDDB.getMessageCount();
+          const storage = await ZALO_INDEXEDDB.getStorageSize();
+          
+          // Clear messages cho group này
+          const deleted = await ZALO_INDEXEDDB.clearAllForConfig(configId);
+          
+          if (deleted > 0) {
+            const afterStorage = await ZALO_INDEXEDDB.getStorageSize();
+            const savedMB = (parseFloat(storage.usageMB) - parseFloat(afterStorage.usageMB)).toFixed(2);
+            console.log(`    🧹 [IndexedDB] Cleaned ${deleted} messages - Freed ${savedMB}MB (${afterStorage.usageMB}MB remain)`);
+          }
+        } catch (e) {
+          console.warn(`    ⚠️ [IndexedDB] Cleanup error:`, e.message);
+        }
+      }
+      
       // Chờ 2s trước nhóm tiếp (để hạ load)
       if (groupIdx < groupList.length - 1) {
         await new Promise(resolve => setTimeout(resolve, ZALO_TIMING.WAIT_BETWEEN_GROUPS));
@@ -8720,8 +8639,8 @@ function startZaloScanner(statusEl) {
   if (isZaloScanning) return;
   isZaloScanning = true;
 
-  // ✅ Start Memory Monitor (passive)
-  startMemoryMonitor();
+  // ✅ Start Storage Monitor (theo dõi IndexedDB)
+  startStorageMonitor();
 
   // Set auto mode flag để tự động xác nhận confirm() dialogs
   isZaloAutoMode = true;
@@ -8737,7 +8656,7 @@ function startZaloScanner(statusEl) {
     console.warn('⚠️ Không có config nào có nhóm Zalo để quét');
     if (statusEl) statusEl.textContent = '⚠️ Không có config để quét';
     isZaloScanning = false;
-    stopMemoryMonitor();
+    stopStorageMonitor();
     removeScannerLockOverlay();
     return;
   }
@@ -8806,8 +8725,7 @@ function startZaloScanner(statusEl) {
       isCurrentlyScanning = false;
       
       if (statusEl) {
-        const heapMB = getHeapUsageMB();
-        statusEl.textContent = `🔄 [${currentConfigIndex + 1}/${configs.length}] Chờ 5 phút (RAM: ${heapMB}MB)...`;
+        statusEl.textContent = `🔄 [${currentConfigIndex + 1}/${configs.length}] Chờ 5 phút...`;
       }
       
       // ✅ PERIODIC CLEANUP: Mỗi 3 configs, force cleanup
@@ -8833,8 +8751,8 @@ function stopZaloScanner(statusEl) {
   isZaloScanning = false;
   isPostingWorkerRunning = false;
   
-  // ✅ Stop Memory Monitor
-  stopMemoryMonitor();
+  // ✅ Stop Storage Monitor
+  stopStorageMonitor();
   
   // ✅ MỞ KHÓA UI
   removeScannerLockOverlay();
@@ -8861,15 +8779,11 @@ function stopZaloScanner(statusEl) {
   // Dừng auto mode
   isZaloAutoMode = false;
   
-  // Reset auto-pause state
-  MEMORY_MONITOR.autoPaused = false;
-  
   // Force cleanup
   forceCleanupResources();
   
   // Log stats cuối cùng
   console.log('⏹️ [Zalo Scanner] Dừng');
-  console.log(`   💾 Memory: ${getHeapUsageMB()}MB`);
 
   if (statusEl) {
     statusEl.textContent = `⏸ Đã dừng.`;
@@ -8893,8 +8807,6 @@ function pauseZaloScanner(statusEl) {
   
   // Force cleanup khi pause
   forceCleanupResources();
-  
-  console.log(`   💾 Memory: ${getHeapUsageMB()}MB`);
 }
 
 /**
@@ -8906,26 +8818,13 @@ function resumeZaloScanner(statusEl, isAutoResume = false) {
     return;
   }
   
-  const heapMB = getHeapUsageMB();
-  
-  // Nếu manual resume và RAM cao, hỏi xác nhận
-  if (!isAutoResume && heapMB > MEMORY_MONITOR.WARNING_THRESHOLD_MB) {
-    const proceed = confirm(`⚠️ RAM hiện tại: ${heapMB}MB (cao).\n\nBạn có muốn tiếp tục không?\n\nĐề xuất: Đợi RAM giảm xuống dưới ${MEMORY_MONITOR.AUTO_RESUME_THRESHOLD_MB}MB.`);
-    if (!proceed) {
-      return;
-    }
-  }
-  
-  const resumeType = isAutoResume ? 'AUTO-RESUME' : 'MANUAL RESUME';
-  console.log(`▶️ [${resumeType}] Scanner tiếp tục... (RAM: ${heapMB}MB)`);
+  console.log(`▶️ [Resume] Scanner tiếp tục...`);
   
   isZaloScanning = true; // Bật lại loop
-  MEMORY_MONITOR.autoPaused = false;
-  MEMORY_MONITOR.autoPauseTime = 0;
   
   if (statusEl) {
     const icon = isAutoResume ? '🔄' : '▶️';
-    statusEl.textContent = `${icon} Đang chạy lại... (RAM: ${heapMB}MB)`;
+    statusEl.textContent = `${icon} Đang chạy lại...`;
   }
 }
 
@@ -8958,7 +8857,7 @@ function createZaloResetButtonsUI() {
     flex-direction: column;
   `;
   
-  // ✅ NEW: Memory Config Info
+  // ✅ NEW: Storage Info
   const infoBox = document.createElement('div');
   infoBox.style.cssText = `
     padding: 8px;
@@ -8968,13 +8867,11 @@ function createZaloResetButtonsUI() {
     font-size: 11px;
     line-height: 1.5;
   `;
-  const autoResumeStatus = MEMORY_MONITOR.AUTO_RESUME_ENABLED ? '✅ BẬT' : '❌ TẮT';
   infoBox.innerHTML = `
-    <strong>⚙️ Cấu Hình RAM Tự Động:</strong><br>
-    📊 Tối đa: <strong>${MEMORY_MONITOR.AUTO_PAUSE_THRESHOLD_MB}MB</strong> (~2GB) → Auto-Pause<br>
-    🔽 Giới hạn: <strong>${MEMORY_MONITOR.AUTO_RESUME_THRESHOLD_MB}MB</strong> → Auto-Resume<br>
-    ⏱️ Chờ cleanup: <strong>${MEMORY_MONITOR.AUTO_RESUME_WAIT_MS/1000}s</strong> sau pause<br>
-    🔄 Auto-Resume: <strong>${autoResumeStatus}</strong>
+    <strong>⚡ Tối ưu IndexedDB:</strong><br>
+    🧹 Cleanup tự động sau mỗi group<br>
+    📊 Theo dõi storage mỗi 30s<br>
+    ✅ Không giới hạn heap - tập trung cleanup IndexedDB
   `;
   wrapper.appendChild(infoBox);
   
@@ -9041,11 +8938,9 @@ function createZaloResetButtonsUI() {
     white-space: nowrap;
   `;
   btnCleanup.onclick = () => {
-    const before = getHeapUsageMB();
     forceCleanupResources();
     setTimeout(() => {
-      const after = getHeapUsageMB();
-      alert(`✅ Đã giải phóng RAM\n\nTrước: ${before}MB\nSau: ${after}MB\nGiải phóng: ${before - after}MB`);
+      alert(`✅ Đã thực hiện cleanup`);
     }, 1500);
   };
   buttonRow.appendChild(btnCleanup);
@@ -9151,8 +9046,7 @@ function ensureZaloMultiGroupUI(container) {
       createZaloResetButtonsUI,
       pauseZaloScanner,
       resumeZaloScanner,
-      forceCleanupResources,
-      getHeapUsageMB
+      forceCleanupResources
     };
     console.log('[Zalo Grid] Exposed helper functions to window.zaloGridHelpers');
     
