@@ -11648,6 +11648,276 @@ async function ensureServiceContentUI() {
 
   btnRow.append(createBtn);
 
+  // ========================================
+  // ✍️ PHẦN 2: TẠO BÀI CHI TIẾT (WEB_SERVICE_DETAIL)
+  // ========================================
+  
+  const divider = document.createElement("div");
+  divider.style.cssText = `margin:24px 0;border-top:2px solid ${theme.border};`;
+  
+  const detailTitle = document.createElement("div");
+  detailTitle.textContent = "✍️ Tạo Bài Chi Tiết (Web Service Detail)";
+  detailTitle.style.cssText = `${getFeatureTitleStyle(theme)};margin-top:16px;`;
+  
+  const detailNote = document.createElement("div");
+  detailNote.style.cssText = `margin-bottom:12px;padding:8px;background:${theme.infoBg};border-radius:4px;font-size:12px;color:${theme.info};`;
+  detailNote.innerHTML = "💡 <strong>Lưu ý:</strong> Bài viết sẽ lưu vào <code>web_service_detail</code> (bài chi tiết), khác với <code>web_services</code> (landing page).";
+  
+  // Title input
+  const detailTitleLabel = document.createElement("label");
+  detailTitleLabel.style.cssText = `font-weight:500;display:block;margin-bottom:6px;color:${theme.text}`;
+  detailTitleLabel.textContent = "Tiêu đề bài viết:";
+  
+  const detailTitleInput = document.createElement("input");
+  detailTitleInput.id = "detail-title-input";
+  detailTitleInput.type = "text";
+  detailTitleInput.placeholder = "VD: Top 10 phần mềm quản lý bán hàng tốt nhất 2024";
+  detailTitleInput.style.cssText = `width:100%;padding:8px;border:1px solid ${theme.border};border-radius:4px;font-size:13px;color:${theme.text};background:${theme.bg};margin-bottom:12px;`;
+  
+  // Images upload
+  const imagesLabel = document.createElement("label");
+  imagesLabel.style.cssText = `font-weight:500;display:block;margin-bottom:6px;color:${theme.text}`;
+  imagesLabel.textContent = "📷 Ảnh minh họa (tùy chọn):";
+  
+  const imagesUploadArea = document.createElement("div");
+  imagesUploadArea.style.cssText = `border:2px dashed ${theme.border};border-radius:6px;padding:20px;text-align:center;cursor:pointer;margin-bottom:12px;background:${theme.bg};transition:all 0.3s;`;
+  imagesUploadArea.innerHTML = `<div style="color:${theme.textSecondary};">🖼️ Click hoặc kéo thả ảnh vào đây<br><small>(Hỗ trợ nhiều ảnh)</small></div>`;
+  
+  const imagesInput = document.createElement("input");
+  imagesInput.type = "file";
+  imagesInput.accept = "image/*";
+  imagesInput.multiple = true;
+  imagesInput.style.display = "none";
+  
+  const imagesPreview = document.createElement("div");
+  imagesPreview.style.cssText = `display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;`;
+  
+  // Videos upload
+  const videosLabel = document.createElement("label");
+  videosLabel.style.cssText = `font-weight:500;display:block;margin-bottom:6px;color:${theme.text}`;
+  videosLabel.textContent = "🎥 Video minh họa (tùy chọn):";
+  
+  const videosUploadArea = document.createElement("div");
+  videosUploadArea.style.cssText = `border:2px dashed ${theme.border};border-radius:6px;padding:20px;text-align:center;cursor:pointer;margin-bottom:12px;background:${theme.bg};transition:all 0.3s;`;
+  videosUploadArea.innerHTML = `<div style="color:${theme.textSecondary};">🎬 Click hoặc kéo thả video vào đây<br><small>(Hỗ trợ nhiều video)</small></div>`;
+  
+  const videosInput = document.createElement("input");
+  videosInput.type = "file";
+  videosInput.accept = "video/*";
+  videosInput.multiple = true;
+  videosInput.style.display = "none";
+  
+  const videosPreview = document.createElement("div");
+  videosPreview.style.cssText = `display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;`;
+  
+  // Detail prompt
+  const detailPromptLabel = document.createElement("label");
+  detailPromptLabel.style.cssText = `font-weight:500;display:block;margin-bottom:6px;color:${theme.text}`;
+  detailPromptLabel.textContent = "Hướng dẫn nội dung cho AI (tùy chọn):";
+  
+  const detailPromptTextarea = document.createElement("textarea");
+  detailPromptTextarea.style.cssText = `width:100%;min-height:100px;font-family:monospace;font-size:12px;color:${theme.text};background:${theme.bg};border:1px solid ${theme.border};padding:8px;border-radius:6px;margin-bottom:12px;resize:vertical;`;
+  detailPromptTextarea.placeholder = "VD: Nhấn mạnh tính năng tự động hóa, so sánh với đối thủ, case study thực tế...";
+  
+  // Create detail button
+  const createDetailBtn = createButton("🚀 Tạo Bài Chi Tiết", "#52c41a");
+  
+  // Detail result area
+  const detailResultArea = document.createElement("div");
+  detailResultArea.style.cssText = `margin-top:16px;padding:12px;background:${theme.successBg};border:1px solid ${theme.successBorder};border-radius:6px;display:none;max-height:400px;overflow-y:auto;`;
+  
+  const detailResultLabel = document.createElement("strong");
+  detailResultLabel.style.cssText = `display:block;margin-bottom:8px;color:${theme.successText}`;
+  detailResultLabel.textContent = "✅ Kết quả:";
+  
+  const detailResultContent = document.createElement("pre");
+  detailResultContent.style.cssText = `margin:0;font-size:11px;background:${theme.bg};padding:8px;border-radius:4px;color:${theme.text};overflow-x:auto;white-space:pre-wrap;word-wrap:break-word;`;
+  
+  detailResultArea.appendChild(detailResultLabel);
+  detailResultArea.appendChild(detailResultContent);
+  
+  // Upload handlers cho detail
+  const uploadedImagesBase64 = [];
+  const uploadedVideosBase64 = [];
+  
+  const fileToBase64 = (file) => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  };
+  
+  const createPreviewItem = (src, type, onRemove) => {
+    const item = document.createElement("div");
+    item.style.cssText = `position:relative;width:100px;height:100px;border:1px solid ${theme.border};border-radius:4px;overflow:hidden;`;
+    
+    const media = document.createElement(type === 'video' ? 'video' : 'img');
+    media.src = src;
+    media.style.cssText = "width:100%;height:100%;object-fit:cover;";
+    if (type === 'video') {
+      media.controls = false;
+      media.muted = true;
+    }
+    
+    const removeBtn = document.createElement("button");
+    removeBtn.textContent = "✕";
+    removeBtn.style.cssText = `position:absolute;top:2px;right:2px;width:20px;height:20px;border:none;background:rgba(255,0,0,0.8);color:#fff;border-radius:50%;cursor:pointer;font-size:12px;line-height:1;`;
+    removeBtn.onclick = () => {
+      item.remove();
+      onRemove();
+    };
+    
+    item.appendChild(media);
+    item.appendChild(removeBtn);
+    return item;
+  };
+  
+  const handleImagesUpload = async (files) => {
+    for (const file of files) {
+      try {
+        const base64 = await fileToBase64(file);
+        uploadedImagesBase64.push(base64);
+        
+        const preview = createPreviewItem(base64, 'image', () => {
+          const idx = uploadedImagesBase64.indexOf(base64);
+          if (idx > -1) uploadedImagesBase64.splice(idx, 1);
+        });
+        
+        imagesPreview.appendChild(preview);
+      } catch (err) {
+        console.error("Read image failed:", err);
+        canhbao(`Không thể đọc ảnh: ${file.name}`);
+      }
+    }
+  };
+  
+  const handleVideosUpload = async (files) => {
+    for (const file of files) {
+      try {
+        const base64 = await fileToBase64(file);
+        uploadedVideosBase64.push(base64);
+        
+        const preview = createPreviewItem(base64, 'video', () => {
+          const idx = uploadedVideosBase64.indexOf(base64);
+          if (idx > -1) uploadedVideosBase64.splice(idx, 1);
+        });
+        
+        videosPreview.appendChild(preview);
+      } catch (err) {
+        console.error("Read video failed:", err);
+        canhbao(`Không thể đọc video: ${file.name}`);
+      }
+    }
+  };
+  
+  imagesUploadArea.onclick = () => imagesInput.click();
+  videosUploadArea.onclick = () => videosInput.click();
+  
+  imagesInput.onchange = (e) => {
+    if (e.target.files.length > 0) {
+      handleImagesUpload(Array.from(e.target.files));
+    }
+  };
+  
+  videosInput.onchange = (e) => {
+    if (e.target.files.length > 0) {
+      handleVideosUpload(Array.from(e.target.files));
+    }
+  };
+  
+  const setupDragDrop = (area, handler) => {
+    area.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      area.style.borderColor = theme.primary;
+      area.style.background = theme.infoBg;
+    });
+    
+    area.addEventListener('dragleave', () => {
+      area.style.borderColor = theme.border;
+      area.style.background = theme.bg;
+    });
+    
+    area.addEventListener('drop', (e) => {
+      e.preventDefault();
+      area.style.borderColor = theme.border;
+      area.style.background = theme.bg;
+      
+      const files = Array.from(e.dataTransfer.files);
+      handler(files);
+    });
+  };
+  
+  setupDragDrop(imagesUploadArea, handleImagesUpload);
+  setupDragDrop(videosUploadArea, handleVideosUpload);
+  
+  // Create detail button handler
+  createDetailBtn.onclick = async () => {
+    const globalSettings = getGlobalSettings();
+    const titleValue = detailTitleInput.value.trim();
+    const userPrompt = detailPromptTextarea.value.trim();
+    
+    if (!globalSettings.domainKey || !globalSettings.industry) {
+      canhbao("❌ Vui lòng chọn Domain và Lĩnh vực trong Cài Đặt Chung");
+      return;
+    }
+    if (globalSettings.isLmkt && !globalSettings.project) {
+      canhbao("❌ Vui lòng chọn Dự án (LMKT) trong Cài Đặt Chung");
+      return;
+    }
+    if (!titleValue) {
+      canhbao("❌ Vui lòng nhập tiêu đề bài viết");
+      return;
+    }
+    
+    try {
+      createDetailBtn.disabled = true;
+      createDetailBtn.textContent = "⏳ Đang xử lý (30-120s)...";
+      detailResultArea.style.display = 'none';
+      
+      const result = await createServiceDetailPost({
+        title: titleValue,
+        userPrompt,
+        images: uploadedImagesBase64,
+        videos: uploadedVideosBase64,
+        globalSettings
+      });
+      
+      const displayData = {
+        title: result.detail.title,
+        slug: result.detail.slug,
+        service_type: result.detail.service_type,
+        domain: result.detail.domain,
+        images_count: result.uploadedImages.length,
+        videos_count: result.uploadedVideos.length,
+        ai_duration: `${result.aiDuration}s`,
+        preview_url: `https://${result.detail.domain}/${result.detail.service_type}/${result.detail.slug}`,
+        timestamp: new Date().toLocaleString('vi-VN')
+      };
+      
+      detailResultContent.textContent = JSON.stringify(displayData, null, 2);
+      detailResultArea.style.display = 'block';
+      
+      thongbao("✅ Tạo bài chi tiết thành công!");
+      
+      // Reset form
+      detailTitleInput.value = '';
+      detailPromptTextarea.value = '';
+      uploadedImagesBase64.length = 0;
+      uploadedVideosBase64.length = 0;
+      imagesPreview.innerHTML = '';
+      videosPreview.innerHTML = '';
+      
+    } catch (error) {
+      console.error("[Service Detail Post] Error:", error);
+      canhbao(`❌ Lỗi: ${error.message}`);
+    } finally {
+      createDetailBtn.disabled = false;
+      createDetailBtn.textContent = "🚀 Tạo Bài Chi Tiết";
+    }
+  };
+
   wrapper.append(
     title,
     note,
@@ -11657,8 +11927,26 @@ async function ensureServiceContentUI() {
     promptLabel,
     textarea,
     btnRow,
-    resultArea
+    resultArea,
+    divider,
+    detailTitle,
+    detailNote,
+    detailTitleLabel,
+    detailTitleInput,
+    imagesLabel,
+    imagesUploadArea,
+    imagesPreview,
+    videosLabel,
+    videosUploadArea,
+    videosPreview,
+    detailPromptLabel,
+    detailPromptTextarea,
+    createDetailBtn,
+    detailResultArea
   );
+  
+  wrapper.appendChild(imagesInput);
+  wrapper.appendChild(videosInput);
 
   try {
     const host = await waitForContextAuto();
@@ -11672,6 +11960,282 @@ async function ensureServiceContentUI() {
     console.warn("Không tìm thấy #context-auto:", e);
   }
   
+  return wrapper;
+}
+
+// ========================================================
+// PHẦN MỚI: TẠO BÀI CHI TIẾT (WEB_SERVICE_DETAIL) BẰNG AI
+// ========================================================
+
+/**
+ * ========================================================
+ * HÀM: createServiceDetailPostPrompt(opts)
+ * MỤC ĐÍCH: Tạo prompt để AI tạo bài viết chi tiết
+ * 
+ * Input:
+ *   - title: Tiêu đề bài viết
+ *   - industry: Lĩnh vực (slug)
+ *   - project: Dự án (slug) - nếu LMKT
+ *   - userPrompt: Hướng dẫn custom từ user
+ *   - domainKey: lmkt | phanmemmottrieu
+ * 
+ * Output: String prompt hoàn chỉnh cho AI
+ * ========================================================
+ */
+function createServiceDetailPostPrompt(opts = {}) {
+  const {
+    title = '',
+    industry = 'bat-dong-san',
+    project = '',
+    userPrompt = '',
+    domainKey = ''
+  } = opts;
+
+  const isLmkt = domainKey === 'lmkt';
+  const categoryName = isLmkt 
+    ? (LMKT_PROJECT_DEFS.find(p => p.service_code === project)?.name || project)
+    : (INDUSTRY_TYPES[industry]?.name || industry);
+
+  const basePrompt = `
+Bạn là chuyên gia viết nội dung SEO cho website ${isLmkt ? 'BĐS LMKT' : 'Phanmemmottrieu'}.
+
+**NHIỆM VỤ: Tạo bài viết chi tiết**
+
+📋 Thông tin:
+- Tiêu đề: "${title}"
+- Lĩnh vực/Dự án: ${categoryName}
+- Domain: ${domainKey}
+
+🎯 Yêu cầu nội dung:
+1. **Viết đầy đủ 3 ngôn ngữ**: Tiếng Việt, English, 中文
+2. **Cấu trúc bài viết**:
+   - Mở đầu hấp dẫn (2-3 đoạn)
+   - Nội dung chính với heading rõ ràng (h2, h3)
+   - Danh sách lợi ích/tính năng (bullet points)
+   - Phần kết luận và CTA
+3. **HTML format**: Sử dụng HTML tags (h2, h3, p, ul, li, strong, em)
+4. **SEO friendly**: Tối ưu keywords tự nhiên, không spam
+5. **Độ dài**: 800-1500 từ cho mỗi ngôn ngữ
+
+${userPrompt ? `\n📝 Hướng dẫn bổ sung:\n${userPrompt}\n` : ''}
+
+⚠️ **OUTPUT FORMAT - BẮT BUỘC**:
+Trả về **ĐÚNG** JSON format sau (không thêm markdown, không thêm text ngoài):
+
+{
+  "title": "Tiêu đề chính (Tiếng Việt)",
+  "title_en": "Main Title (English)",
+  "title_zh": "主标题 (中文)",
+  
+  "description": "Mô tả ngắn gọn 150-160 ký tự (Tiếng Việt)",
+  "description_en": "Short description 150-160 chars (English)",
+  "description_zh": "简短描述150-160字符 (中文)",
+  
+  "keywords": "từ khóa 1, từ khóa 2, từ khóa 3",
+  "keywords_en": "keyword 1, keyword 2, keyword 3",
+  "keywords_zh": "关键词1, 关键词2, 关键词3",
+  
+  "content": "<h2>Tiêu đề phần 1</h2><p>Nội dung chi tiết...</p>...",
+  "content_en": "<h2>Section 1 Title</h2><p>Detailed content...</p>...",
+  "content_zh": "<h2>第一节标题</h2><p>详细内容...</p>...",
+  
+  "excerpt": "Trích dẫn/Tóm tắt ngắn (Tiếng Việt)",
+  "excerpt_en": "Short excerpt (English)",
+  "excerpt_zh": "简短摘录 (中文)",
+  
+  "author": "Tên tác giả",
+  "readTime": "X phút đọc",
+  "tags": ["tag1", "tag2", "tag3"]
+}
+
+❌ **KHÔNG ĐƯỢC**:
+- Thêm markdown code blocks (\`\`\`json)
+- Thêm text giải thích ngoài JSON
+- Trả về status, id, slug (hệ thống tự tạo)
+- Copy tiếng Việt sang English/中文 (phải translate thật)
+
+✅ **BẮT BUỘC**:
+- content_en PHẢI là tiếng Anh thật
+- content_zh PHẢI là tiếng Trung thật
+- Trả về valid JSON object duy nhất
+`.trim();
+
+  return basePrompt;
+}
+
+/**
+ * ========================================================
+ * HÀM: createServiceDetailPost(opts)
+ * MỤC ĐÍCH: Tạo bài viết chi tiết bằng AI + upload ảnh/video
+ * 
+ * Quy trình:
+ *   1. Upload tất cả ảnh/video lên server → lấy URLs
+ *   2. Build prompt từ user input
+ *   3. Gọi AI tạo nội dung (title, description, content x3 ngôn ngữ)
+ *   4. Build detail object với ảnh/video đã upload
+ *   5. Lưu vào web_service_detail table
+ * 
+ * Input:
+ *   - title: Tiêu đề bài viết
+ *   - userPrompt: Hướng dẫn custom
+ *   - images: Array base64/URLs ảnh
+ *   - videos: Array base64/URLs video
+ *   - ctx: Context (app_id, domain, helperApi, helperAi)
+ *   - globalSettings: { domainKey, industry, project }
+ * 
+ * Output: { detail, uploadedImages, uploadedVideos, aiDuration }
+ * ========================================================
+ */
+async function createServiceDetailPost(opts = {}) {
+  const {
+    title = '',
+    userPrompt = '',
+    images = [],
+    videos = [],
+    ctx = null,
+    globalSettings = {}
+  } = opts;
+
+  // Validation
+  if (!title || !title.trim()) {
+    throw new Error("Thiếu tiêu đề bài viết");
+  }
+  if (!globalSettings.domainKey) {
+    throw new Error("Thiếu domain - chọn từ Cài Đặt Chung");
+  }
+
+  const context = ctx || resolveContext();
+  const domainConfig = DOMAIN_OPTIONS[globalSettings.domainKey];
+  context.app_id = domainConfig?.app_id || context.app_id;
+  context.domain = domainConfig?.value || context.domain;
+
+  console.log(`[createServiceDetailPost] Bắt đầu tạo bài: "${title}"`);
+  
+  // STEP 1: Upload ảnh/video
+  thongbao("📤 Đang upload ảnh/video lên server...");
+  
+  const uploadedImages = [];
+  const uploadedVideos = [];
+  
+  try {
+    // Upload images
+    if (Array.isArray(images) && images.length > 0) {
+      console.log(`Uploading ${images.length} images...`);
+      for (let i = 0; i < images.length; i++) {
+        const img = images[i];
+        if (!img) continue;
+        
+        try {
+          // Nếu đã là URL, giữ nguyên
+          if (img.startsWith('http://') || img.startsWith('https://') || img.startsWith('/')) {
+            uploadedImages.push(img);
+          } else {
+            // Upload base64
+            const filename = `detail-${Date.now()}-${i}.jpg`;
+            const path = await uploadBase64Image(img, filename, context);
+            uploadedImages.push(path);
+            console.log(`✅ Image ${i + 1}/${images.length} uploaded: ${path}`);
+          }
+        } catch (uploadErr) {
+          console.error(`❌ Upload image ${i + 1} failed:`, uploadErr);
+          canhbao(`Không thể upload ảnh ${i + 1}: ${uploadErr.message}`);
+        }
+      }
+    }
+    
+    // Upload videos
+    if (Array.isArray(videos) && videos.length > 0) {
+      console.log(`Uploading ${videos.length} videos...`);
+      for (let i = 0; i < videos.length; i++) {
+        const vid = videos[i];
+        if (!vid) continue;
+        
+        try {
+          // Nếu đã là URL, giữ nguyên
+          if (vid.startsWith('http://') || vid.startsWith('https://') || vid.startsWith('/')) {
+            uploadedVideos.push(vid);
+          } else {
+            // Upload base64
+            const filename = `detail-video-${Date.now()}-${i}.mp4`;
+            const path = await uploadBase64Image(vid, filename, context);
+            uploadedVideos.push(path);
+            console.log(`✅ Video ${i + 1}/${videos.length} uploaded: ${path}`);
+          }
+        } catch (uploadErr) {
+          console.error(`❌ Upload video ${i + 1} failed:`, uploadErr);
+          canhbao(`Không thể upload video ${i + 1}: ${uploadErr.message}`);
+        }
+      }
+    }
+  } catch (uploadError) {
+    throw new Error(`Upload media thất bại: ${uploadError.message}`);
+  }
+  
+  console.log(`Upload completed: ${uploadedImages.length} images, ${uploadedVideos.length} videos`);
+  
+  // STEP 2: Build prompt
+  const prompt = createServiceDetailPostPrompt({
+    title,
+    industry: globalSettings.industry,
+    project: globalSettings.project,
+    userPrompt,
+    domainKey: globalSettings.domainKey
+  });
+  
+  // STEP 3: Gọi AI
+  thongbao("🤖 Đang gọi AI tạo nội dung...");
+  
+  if (!context.helperAi?.generateSeoContentWithPrompt) {
+    throw new Error("Không tìm thấy AI Helper - chưa kích hoạt csmAI");
+  }
+  
+  const startTime = Date.now();
+  const aiResponse = await context.helperAi.generateSeoContentWithPrompt(prompt);
+  const aiDuration = Math.round((Date.now() - startTime) / 1000);
+  
+  console.log(`AI response received in ${aiDuration}s`);
+  
+  // STEP 4: Parse AI response
+  const seoData = parseAIResponse(aiResponse, { encodeContent: false });
+  
+  if (!seoData.content) {
+    throw new Error("AI không trả về content");
+  }
+  
+  // STEP 5: Build detail object
+  const serviceType = globalSettings.isLmkt ? globalSettings.project : globalSettings.industry;
+  context.service_type = serviceType;
+  
+  const detail = buildDetail(context, seoData, uploadedImages, uploadedVideos, {
+    author: seoData.author || "Admin",
+    readTime: seoData.readTime || "5 phút"
+  });
+  
+  // STEP 6: Save to database
+  thongbao("💾 Đang lưu bài viết vào database...");
+  
+  const result = await upsertDetail(context, detail);
+  
+  console.log(`[createServiceDetailPost] Hoàn tất tạo bài`);
+  
+  return {
+    detail,
+    uploadedImages,
+    uploadedVideos,
+    aiDuration,
+    result
+  };
+}
+
+// ===== HELPER: Validate & Parse AI Response =====
+function parseAIResponse(rawResponse, opts = {}) {
+  if (!rawResponse) {
+    throw new Error("AI không trả về dữ liệu");
+  }
+  
+  let result = null;
+  
+  // Nếu response là object
   return wrapper;
 }
 
