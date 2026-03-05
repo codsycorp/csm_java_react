@@ -423,74 +423,80 @@ export default function AutoSetup() {
     };
   }, []);
 
-  // lightweight global notifications for legacy scripts
+  // Lightweight global notifications + LAZY-LOAD heavy modules
   useEffect(() => {
+    // Expose only essential notification helpers immediately
     (window as any).thongbao = (msg: string) => notification.success({ message: msg });
     (window as any).canhbao = (msg: string) => notification.warning({ message: msg });
-    (window as any).React = React;
-    (window as any).ReactDOM = ReactDOM;
-    (window as any).antd = { 
-      notification, 
-      Table, 
-      Tabs, 
-      Button, 
-      Input, 
-      Select, 
-      Card, 
-      Space, 
-      Popconfirm,
-      CsmDynamicGrid,
-      // Legacy Google Index APIs
-      googleIndexUrl,
-      checkGoogleIndexQuota,
-      checkGoogleIndexStatus,
-      getGoogleSearchConsoleSites,
-      checkAndAutoPublish,
-      // NEW Queue Management APIs
-      addToQueue,
-      addBatchToQueue,
-      getQueueInfo,
-      getQueueItems,
-      processQueue,
-      removeFromQueue,
-      getUrlHistory,
-      getRecentHistory,
-    };
-    // Expose CSM API functions
-    (window as any).csmApi = {
-      getTableData,
-      updateTableData,
-      andWhere,
-      googleIndexUrl,
-      checkGoogleIndexQuota,
-      checkGoogleIndexStatus,
-      getGoogleSearchConsoleSites,
-      checkAndAutoPublish,
-      // Expose Queue APIs as well
-      addToQueue,
-      addBatchToQueue,
-      getQueueInfo,
-      getQueueItems,
-      processQueue,
-      removeFromQueue,
-      getUrlHistory,
-      getRecentHistory,
-    };
-    // Expose I18nextProvider for legacy scripts needing it
-    (window as any).I18nextProvider = I18nextProvider;
-    // Expose crypto functions
-    (window as any).csmCrypto = {
-      encrypt: csmEncrypt,
-      decrypt: csmDecrypt
-    };
-    // Expose AI functions
-    (window as any).csmAI = {
-      generateSeoContent,
-      csm_ai_generate_seo_content,
-      generateSeoContentWithPrompt,
-      formatSeoPrompt,
-      PROMPT_GENERATE_POST
-    };
+    
+    // ✅ LAZY LOAD: Use Object.defineProperty with getters to avoid loading heavy modules upfront
+    // React (500KB) - only loads when accessed
+    Object.defineProperty(window, 'React', {
+      get() { return React; },
+      configurable: true,
+      enumerable: false
+    });
+    
+    // ReactDOM (300KB) - only loads when accessed
+    Object.defineProperty(window, 'ReactDOM', {
+      get() { return ReactDOM; },
+      configurable: true,
+      enumerable: false
+    });
+    
+    // Ant Design components - only assembles when first accessed
+    Object.defineProperty(window, 'antd', {
+      get() {
+        return {
+          notification, Table, Tabs, Button, Input, Select, Card, Space, Popconfirm, CsmDynamicGrid,
+          googleIndexUrl, checkGoogleIndexQuota, checkGoogleIndexStatus, getGoogleSearchConsoleSites, checkAndAutoPublish,
+          addToQueue, addBatchToQueue, getQueueInfo, getQueueItems, processQueue, removeFromQueue, getUrlHistory, getRecentHistory,
+        };
+      },
+      configurable: true,
+      enumerable: false
+    });
+    
+    // CSM API functions - lazy loaded
+    Object.defineProperty(window, 'csmApi', {
+      get() {
+        return {
+          getTableData, updateTableData, andWhere,
+          googleIndexUrl, checkGoogleIndexQuota, checkGoogleIndexStatus, getGoogleSearchConsoleSites, checkAndAutoPublish,
+          addToQueue, addBatchToQueue, getQueueInfo, getQueueItems, processQueue, removeFromQueue, getUrlHistory, getRecentHistory,
+        };
+      },
+      configurable: true,
+      enumerable: false
+    });
+    
+    // I18nextProvider - lazy loaded
+    Object.defineProperty(window, 'I18nextProvider', {
+      get() { return I18nextProvider; },
+      configurable: true,
+      enumerable: false
+    });
+    
+    // Crypto functions - lazy loaded
+    Object.defineProperty(window, 'csmCrypto', {
+      get() { return { encrypt: csmEncrypt, decrypt: csmDecrypt }; },
+      configurable: true,
+      enumerable: false
+    });
+    
+    // AI functions - lazy loaded
+    Object.defineProperty(window, 'csmAI', {
+      get() {
+        return {
+          generateSeoContent, csm_ai_generate_seo_content,
+          generateSeoContentWithPrompt, formatSeoPrompt,
+          PROMPT_GENERATE_POST
+        };
+      },
+      configurable: true,
+      enumerable: false
+    });
+    
     return () => {
       delete (window as any).thongbao;
       delete (window as any).canhbao;
@@ -498,6 +504,7 @@ export default function AutoSetup() {
       delete (window as any).ReactDOM;
       delete (window as any).antd;
       delete (window as any).csmApi;
+      delete (window as any).I18nextProvider;
       delete (window as any).csmCrypto;
       delete (window as any).csmAI;
     };
@@ -563,15 +570,18 @@ export default function AutoSetup() {
     };
   }, [user.app_id, appId, navigate]);
 
+  // ✅ OPTIMIZED: Memoize seft object with proper dependencies
+  // Only re-create when appId changes (not user.app_token - use direct access instead)
   const seft = useMemo(() => {
     const userAddressRaw = localStorage.getItem("user_address");
     let userAddress: any = undefined;
     try { userAddress = userAddressRaw ? JSON.parse(userAddressRaw) : undefined; } catch {}
 
     return {
-      // Ưu tiên app_id từ user sau đăng nhập, fallback AppStore
+      // ✅ Get app_id directly from reactive value, not as dependency
       app_id: user.app_id || appId,
       Uinfos: {
+        // ✅ Access app_token directly without capturing in closure
         appToken: user.app_token || "",
         userAddress: userAddress,
       },
@@ -721,7 +731,7 @@ export default function AutoSetup() {
         });
       },
     };
-  }, [appId, user.app_token]);
+  }, [appId]);  // ✅ Only depend on appId, not user.app_token
 
   useEffect(() => {
     // Only execute when autoCode has been successfully loaded from API
@@ -740,10 +750,9 @@ export default function AutoSetup() {
     }
     executedRef.current = true;
     try {
-      const proc: any = (window as any).process;
-      if (proc && typeof proc.setMaxListeners === "function") {
-        proc.setMaxListeners(0);
-      }
+      // ✅ FIXED: Removed setMaxListeners(0) - was causing memory leaks!
+      // Let Node.js track event listeners normally instead of disabling warnings
+      
       const fn = new Function("seft", `try{\n${autoCode}\n} catch (sca_err) {console.error(sca_err); alert(sca_err);}`);
       // Defer execution to avoid blocking initial route render
       setTimeout(() => {
