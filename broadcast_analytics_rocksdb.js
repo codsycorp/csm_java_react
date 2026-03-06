@@ -173,10 +173,71 @@ const timerRegistry = {
 
 function unwrapApiData(response) {
   if (!response) return null;
-  if (response.success !== undefined) {
-    return response.data ?? null;
+  if (response.success !== undefined || response.code !== undefined || response.message !== undefined) {
+    return response.data || response.result || response.rows || null;
   }
   return response;
+}
+
+function normalizeGooglebotStats(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+
+  // Accept multiple payload shapes from legacy/new handlers.
+  const totalVisits =
+    Number(raw.totalVisits ?? raw.total_visits ?? raw.google_bot_visits ?? 0) || 0;
+
+  const latest = Array.isArray(raw.latest)
+    ? raw.latest
+    : Array.isArray(raw.rows)
+      ? raw.rows
+      : [];
+
+  const byDate = Array.isArray(raw.byDate)
+    ? raw.byDate
+    : Array.isArray(raw.by_date)
+      ? raw.by_date
+      : [];
+
+  return {
+    totalVisits,
+    latest,
+    byDate
+  };
+}
+
+function aggregateGooglebotRows(rows) {
+  if (!Array.isArray(rows)) return null;
+
+  const sorted = [...rows].sort((a, b) => {
+    const ta = new Date(a?.visitedAt || a?.visited_at || 0).getTime();
+    const tb = new Date(b?.visitedAt || b?.visited_at || 0).getTime();
+    return tb - ta;
+  });
+
+  const latest = sorted.slice(0, 8).map((r) => ({
+    host: r?.host || '-',
+    path: r?.path || '',
+    visitedAt: r?.visitedAt || r?.visited_at || ''
+  }));
+
+  const dateMap = new Map();
+  for (const r of sorted) {
+    const ts = r?.visitedAt || r?.visited_at;
+    if (!ts) continue;
+    const day = String(ts).slice(0, 10);
+    dateMap.set(day, (dateMap.get(day) || 0) + 1);
+  }
+
+  const byDate = Array.from(dateMap.entries())
+    .sort((a, b) => String(b[0]).localeCompare(String(a[0])))
+    .slice(0, 7)
+    .map(([date, count]) => ({ date, count }));
+
+  return {
+    totalVisits: rows.length,
+    latest,
+    byDate
+  };
 }
 
 // ========== THEME HELPERS ==========
@@ -229,8 +290,17 @@ const translations = {
     googlebot_refresh: 'Làm mới',
     googlebot_clear: 'Xóa tất cả',
     total_visits: 'Tổng lượt truy cập',
+    googlebot_today: 'Hôm nay',
+    googlebot_last_visit: 'Lần truy cập cuối',
+    googlebot_no_visit: 'Chưa có lượt truy cập',
     latest_crawls: 'Crawl gần nhất',
     by_date: 'Theo ngày',
+    googlebot_visited_at: 'Thời gian',
+    googlebot_host: 'Host',
+    googlebot_path: 'Đường dẫn',
+    googlebot_ip: 'IP',
+    googlebot_user_agent: 'User-Agent',
+    googlebot_visits_count: 'Lượt truy cập: {{count}}',
     no_recent_visits: 'Không có lượt truy cập gần đây',
     no_daily_stats: 'Không có thống kê theo ngày',
     crm_overview: '🧩 Tổng quan CRM',
@@ -272,8 +342,17 @@ const translations = {
     googlebot_refresh: 'Refresh',
     googlebot_clear: 'Clear All',
     total_visits: 'Total Visits',
+    googlebot_today: 'Today',
+    googlebot_last_visit: 'Last Visit',
+    googlebot_no_visit: 'No visits yet',
     latest_crawls: 'Latest Crawls',
     by_date: 'By Date',
+    googlebot_visited_at: 'Visited At',
+    googlebot_host: 'Host',
+    googlebot_path: 'Path',
+    googlebot_ip: 'IP',
+    googlebot_user_agent: 'User-Agent',
+    googlebot_visits_count: 'Visits: {{count}}',
     no_recent_visits: 'No recent visits',
     no_daily_stats: 'No daily stats',
     crm_overview: '🧩 CRM Operations Overview',
@@ -315,8 +394,17 @@ const translations = {
     googlebot_refresh: '刷新',
     googlebot_clear: '清除全部',
     total_visits: '总访问量',
+    googlebot_today: '今天',
+    googlebot_last_visit: '最近访问',
+    googlebot_no_visit: '暂无访问',
     latest_crawls: '最新抓取',
     by_date: '按日期',
+    googlebot_visited_at: '访问时间',
+    googlebot_host: '主机',
+    googlebot_path: '路径',
+    googlebot_ip: 'IP',
+    googlebot_user_agent: 'User-Agent',
+    googlebot_visits_count: '访问次数: {{count}}',
     no_recent_visits: '没有最近的访问',
     no_daily_stats: '没有每日统计',
     crm_overview: '🧩 CRM 运营概览',
@@ -354,6 +442,58 @@ function getCurrentLanguage() {
 function t(key) {
   const lang = getCurrentLanguage();
   return translations[lang]?.[key] || translations.vi[key] || key;
+}
+
+function tWithCount(key, count) {
+  return String(t(key)).replace('{{count}}', String(count ?? 0));
+}
+
+function formatDateTimeByLang(value) {
+  if (!value) return '-';
+  const lang = getCurrentLanguage();
+  try {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return String(value);
+    if (lang === 'vi') {
+      const dd = String(date.getDate()).padStart(2, '0');
+      const mm = String(date.getMonth() + 1).padStart(2, '0');
+      const yyyy = date.getFullYear();
+      const hh = String(date.getHours()).padStart(2, '0');
+      const mi = String(date.getMinutes()).padStart(2, '0');
+      return `${dd}/${mm}/${yyyy} ${hh}:${mi}`;
+    }
+    const locale = lang === 'zh' ? 'zh-CN' : 'en-US';
+    return new Intl.DateTimeFormat(locale, {
+      dateStyle: 'medium',
+      timeStyle: 'short'
+    }).format(date);
+  } catch {
+    return String(value);
+  }
+}
+
+function formatDateByLang(value) {
+  if (!value) return '-';
+  const lang = getCurrentLanguage();
+  try {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return String(value);
+    if (lang === 'vi') {
+      const dd = String(date.getDate()).padStart(2, '0');
+      const mm = String(date.getMonth() + 1).padStart(2, '0');
+      const yyyy = date.getFullYear();
+      return `${dd}/${mm}/${yyyy}`;
+    }
+    if (lang === 'zh') {
+      const yyyy = date.getFullYear();
+      const mm = String(date.getMonth() + 1).padStart(2, '0');
+      const dd = String(date.getDate()).padStart(2, '0');
+      return `${yyyy}年${mm}月${dd}日`;
+    }
+    return new Intl.DateTimeFormat('en-US', { dateStyle: 'medium' }).format(date);
+  } catch {
+    return String(value);
+  }
 }
 
 // ========== ANALYTICS STORAGE API ==========
@@ -749,7 +889,7 @@ function CRMOverviewPanel({ crmData }) {
 // ========== MAIN DASHBOARD ==========
 
 async function AnalyticsDashboard() {
-  const appId = window.csmCurrentUser?.appId || 'csm';
+  const appId = window.csmCurrentUser?.app_id || window.csmCurrentUser?.appId || 'csm';
   let timePeriod = 'week';
   let crmStats = null;
   let analytics = null;
@@ -843,10 +983,26 @@ async function AnalyticsDashboard() {
     // Fetch Googlebot visits stats for dynamic dashboard (moved from Home)
     if (window.csmApi?.getGooglebotStats) {
       try {
-        const googlebotResponse = await window.csmApi.getGooglebotStats({ limit: 10, offset: 0 });
-        googlebotStats = unwrapApiData(googlebotResponse);
+        const googlebotResponse = await window.csmApi.getGooglebotStats({ appId, limit: 200, offset: 0 });
+        googlebotStats = normalizeGooglebotStats(unwrapApiData(googlebotResponse));
       } catch (error) {
         console.error('Failed to fetch Googlebot stats:', error);
+        googlebotStats = null;
+      }
+    }
+
+    // Fallback: aggregate directly from googlebot_visits table if API shape changed or unavailable.
+    if (!googlebotStats && window.csmApi?.getTableData) {
+      try {
+        const rowsResponse = await window.csmApi.getTableData({
+          app_id: 'csm',
+          obj_name: 'googlebot_visits',
+          take: 200
+        });
+        const rows = rowsResponse?.rows || rowsResponse?.data || [];
+        googlebotStats = aggregateGooglebotRows(rows);
+      } catch (error) {
+        console.error('Fallback googlebot_visits query failed:', error);
         googlebotStats = null;
       }
     }
@@ -895,8 +1051,11 @@ async function AnalyticsDashboard() {
         `;
       }
 
-      const latestRows = Array.isArray(googlebotStats.latest) ? googlebotStats.latest.slice(0, 8) : [];
+      const latestRows = Array.isArray(googlebotStats.latest) ? googlebotStats.latest : [];
       const byDateRows = Array.isArray(googlebotStats.byDate) ? googlebotStats.byDate.slice(0, 7) : [];
+      const todayKey = new Date().toISOString().slice(0, 10);
+      const todayCount = byDateRows.find((r) => String(r?.date) === todayKey)?.count || 0;
+      const lastVisit = latestRows[0]?.visitedAt ? formatDateTimeByLang(latestRows[0].visitedAt) : t('googlebot_no_visit');
 
       return `
         <div style="background: ${theme.cardBg}; padding: 16px; border-radius: 8px; margin-bottom: 24px;">
@@ -912,29 +1071,60 @@ async function AnalyticsDashboard() {
               <div style="font-size: 12px; color: ${theme.textSecondary};">${t('total_visits')}</div>
               <div style="font-size: 24px; font-weight: 700; color: #1677ff;">${googlebotStats.totalVisits || 0}</div>
             </div>
+            <div style="padding: 12px; border-radius: 6px; background: ${theme.recommendationBg}; border: 1px solid ${theme.border};">
+              <div style="font-size: 12px; color: ${theme.textSecondary};">${t('googlebot_today')}</div>
+              <div style="font-size: 24px; font-weight: 700; color: #13c2c2;">${todayCount}</div>
+            </div>
+            <div style="padding: 12px; border-radius: 6px; background: ${theme.recommendationBg}; border: 1px solid ${theme.border};">
+              <div style="font-size: 12px; color: ${theme.textSecondary};">${t('googlebot_last_visit')}</div>
+              <div style="font-size: 14px; font-weight: 600; color: ${theme.text};">${lastVisit}</div>
+            </div>
           </div>
           <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
-            <div style="border: 1px solid ${theme.border}; border-radius: 6px; padding: 10px;">
-              <div style="font-weight: 600; margin-bottom: 8px; color: ${theme.text};">${t('latest_crawls')}</div>
-              <div style="max-height: 220px; overflow: auto; font-size: 12px;">
-                ${latestRows.length ? latestRows.map((row) => `
-                  <div style="padding: 6px 0; border-bottom: 1px dashed ${theme.border};">
-                    <div style="color: ${theme.text};"><b>${row.host || '-'}</b> ${row.path || ''}</div>
-                    <div style="color: ${theme.textSecondary};">${row.visitedAt || ''}</div>
-                  </div>
-                `).join('') : `<div style="color: ${theme.textSecondary};">${t('no_recent_visits')}</div>`}
-              </div>
-            </div>
             <div style="border: 1px solid ${theme.border}; border-radius: 6px; padding: 10px;">
               <div style="font-weight: 600; margin-bottom: 8px; color: ${theme.text};">${t('by_date')}</div>
               <div style="max-height: 220px; overflow: auto; font-size: 12px;">
                 ${byDateRows.length ? byDateRows.map((row) => `
-                  <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px dashed ${theme.border}; color: ${theme.text};">
-                    <span>${row.date || '-'}</span>
-                    <span><b>${row.count || 0}</b></span>
+                  <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px dashed ${theme.border}; color: ${theme.text}; gap: 8px;">
+                    <span>${formatDateByLang(row.date || '-')}</span>
+                    <span><b>${tWithCount('googlebot_visits_count', row.count || 0)}</b></span>
                   </div>
                 `).join('') : `<div style="color: ${theme.textSecondary};">${t('no_daily_stats')}</div>`}
               </div>
+            </div>
+            <div style="border: 1px solid ${theme.border}; border-radius: 6px; padding: 10px;">
+              <div style="font-weight: 600; margin-bottom: 8px; color: ${theme.text};">${t('latest_crawls')}</div>
+              <div style="max-height: 220px; overflow: auto; font-size: 12px;">
+                ${latestRows.length ? latestRows.slice(0, 12).map((row) => `
+                  <div style="padding: 6px 0; border-bottom: 1px dashed ${theme.border};">
+                    <div style="color: ${theme.text}; margin-bottom: 2px;">
+                      <b>${row.host || '-'}</b> ${row.path || ''}
+                    </div>
+                    <div style="color: ${theme.textSecondary};">${formatDateTimeByLang(row.visitedAt || row.visited_at || '')}</div>
+                  </div>
+                `).join('') : `<div style="color: ${theme.textSecondary};">${t('no_recent_visits')}</div>`}
+              </div>
+            </div>
+          </div>
+
+          <div style="margin-top: 12px; border: 1px solid ${theme.border}; border-radius: 6px; overflow: hidden;">
+            <div style="display: grid; grid-template-columns: 170px 140px 1fr 150px 1.2fr; gap: 8px; padding: 10px; font-size: 12px; font-weight: 600; background: ${theme.recommendationBg}; color: ${theme.text}; border-bottom: 1px solid ${theme.border};">
+              <span>${t('googlebot_visited_at')}</span>
+              <span>${t('googlebot_host')}</span>
+              <span>${t('googlebot_path')}</span>
+              <span>${t('googlebot_ip')}</span>
+              <span>${t('googlebot_user_agent')}</span>
+            </div>
+            <div style="max-height: 280px; overflow: auto;">
+              ${latestRows.length ? latestRows.slice(0, 40).map((row) => `
+                <div style="display: grid; grid-template-columns: 170px 140px 1fr 150px 1.2fr; gap: 8px; padding: 8px 10px; font-size: 12px; color: ${theme.text}; border-bottom: 1px dashed ${theme.border};">
+                  <span>${formatDateTimeByLang(row.visitedAt || row.visited_at || '')}</span>
+                  <span>${row.host || '-'}</span>
+                  <span title="${row.path || ''}">${row.path || '-'}</span>
+                  <span>${row.ip || '-'}</span>
+                  <span title="${row.userAgent || row.user_agent || ''}">${row.userAgent || row.user_agent || '-'}</span>
+                </div>
+              `).join('') : `<div style="padding: 10px; color: ${theme.textSecondary};">${t('no_recent_visits')}</div>`}
             </div>
           </div>
         </div>
@@ -986,8 +1176,19 @@ async function AnalyticsDashboard() {
       refreshGooglebotBtn.addEventListener('click', async () => {
         try {
           if (window.csmApi?.getGooglebotStats) {
-            const response = await window.csmApi.getGooglebotStats({ limit: 10, offset: 0 });
-            googlebotStats = unwrapApiData(response);
+            const response = await window.csmApi.getGooglebotStats({ appId, limit: 200, offset: 0 });
+            googlebotStats = normalizeGooglebotStats(unwrapApiData(response));
+
+            if (!googlebotStats && window.csmApi?.getTableData) {
+              const rowsResponse = await window.csmApi.getTableData({
+                app_id: 'csm',
+                obj_name: 'googlebot_visits',
+                take: 200
+              });
+              const rows = rowsResponse?.rows || rowsResponse?.data || [];
+              googlebotStats = aggregateGooglebotRows(rows);
+            }
+
             renderDashboard();
           }
         } catch (error) {
@@ -1005,7 +1206,11 @@ async function AnalyticsDashboard() {
           }
           if (window.csmApi?.deleteGooglebotStats) {
             const response = await window.csmApi.deleteGooglebotStats({ deleteAll: true });
-            googlebotStats = unwrapApiData(response);
+            googlebotStats = normalizeGooglebotStats(unwrapApiData(response)) || {
+              totalVisits: 0,
+              latest: [],
+              byDate: []
+            };
             renderDashboard();
           }
         } catch (error) {
