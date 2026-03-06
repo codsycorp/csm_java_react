@@ -677,3 +677,433 @@ export async function updateTableData<T extends Record<string, any>>(params: {
 		.post<ApiResponse<string>>("update-table-data", { json: payload, ignoreLoading: true })
 		.json<ApiResponse<string>>();
 }
+
+// ========================================
+// CRM APIs - Customer Relationship Management
+// ========================================
+
+export interface CRMCustomer {
+	phone: string;
+	app_id: string;
+	appId?: string;
+	name?: string;
+	email?: string;
+	birthday?: string; // YYYY-MM-DD
+	nick_zalo?: string;
+	nick_facebook?: string;
+	status?: string; // new, contacted, interested, purchased, cancelled
+	source?: string; // chat, website, facebook, google
+	utm_source?: string;
+	utm_medium?: string;
+	utm_campaign?: string;
+	referrer?: string;
+	landing_page?: string;
+	assigned_to?: string; // userId
+	notes?: string;
+	created_at?: number;
+	updated_at?: number;
+	last_contact_at?: number;
+	contacted_by_count?: number;
+	contacted_by_list?: string; // JSON array
+}
+
+export interface CRMPurchase {
+	id?: string;
+	phone: string;
+	app_id: string;
+	product_id?: string;
+	product_name?: string;
+	price?: number;
+	advisor_id?: string; // nhân viên tư vấn
+	purchased_at?: number;
+}
+
+export interface CRMAd {
+	id?: string;
+	app_id: string;
+	platform: string; // facebook, google
+	ad_id?: string; // ID từ platform
+	name?: string;
+	status?: string; // active, paused, completed, cancelled
+	budget?: number;
+	spent?: number;
+	impressions?: number;
+	clicks?: number;
+	conversions?: number;
+	target_url?: string;
+	created_at?: number;
+	updated_at?: number;
+	metadata?: string; // JSON
+}
+
+/**
+ * Tạo hoặc cập nhật customer
+ */
+export async function createOrUpdateCustomer(customer: Partial<CRMCustomer>): Promise<GoogleIndexResponse> {
+	let response: any;
+	try {
+		response = await request
+			.post("crm/customer", {
+				json: customer,
+				ignoreLoading: true,
+			})
+			.json();
+	} catch (error: any) {
+		response = {
+			success: false,
+			message: error?.message || "CRM customer error",
+			error,
+		};
+	}
+	return response as GoogleIndexResponse;
+}
+
+/**
+ * Lấy danh sách customers
+ */
+export async function getCustomers(params: {
+	appId: string;
+	status?: string;
+	assignedTo?: string;
+	search?: string;
+	limit?: number;
+	offset?: number;
+}): Promise<GoogleIndexResponse> {
+	let response: any;
+	try {
+		response = await request
+			.post("crm/customers", {
+				json: params,
+				ignoreLoading: true,
+			})
+			.json();
+	} catch (error: any) {
+		response = {
+			success: false,
+			message: error?.message || "Get customers error",
+			error,
+		};
+	}
+	return response as GoogleIndexResponse;
+}
+
+/**
+ * Lấy chi tiết customer theo phone
+ */
+export async function getCustomerDetail(phone: string, appId: string): Promise<GoogleIndexResponse> {
+	let response: any;
+	try {
+		response = await request
+			.get(`crm/customer?phone=${encodeURIComponent(phone)}&appId=${encodeURIComponent(appId)}`, {
+				ignoreLoading: true,
+			})
+			.json();
+	} catch (error: any) {
+		response = {
+			success: false,
+			message: error?.message || "Get customer detail error",
+			error,
+		};
+	}
+	return response as GoogleIndexResponse;
+}
+
+/**
+ * Phân bổ customer cho nhân viên
+ */
+export async function assignCustomer(phone: string, appId: string, assignedTo: string): Promise<GoogleIndexResponse> {
+	let response: any;
+	try {
+		response = await request
+			.post("crm/customer/assign", {
+				json: { phone, appId, assignedTo },
+				ignoreLoading: true,
+			})
+			.json();
+	} catch (error: any) {
+		response = {
+			success: false,
+			message: error?.message || "Assign customer error",
+			error,
+		};
+	}
+	return response as GoogleIndexResponse;
+}
+
+/**
+ * Cập nhật trạng thái customer
+ */
+export async function updateCustomerStatus(
+	phone: string,
+	appId: string,
+	status: string,
+	notes?: string
+): Promise<GoogleIndexResponse> {
+	let response: any;
+	try {
+		response = await request
+			.post("crm/customer/status", {
+				json: { phone, appId, status, notes },
+				ignoreLoading: true,
+			})
+			.json();
+	} catch (error: any) {
+		response = {
+			success: false,
+			message: error?.message || "Update status error",
+			error,
+		};
+	}
+	return response as GoogleIndexResponse;
+}
+
+/**
+ * Thêm purchase cho customer
+ */
+export async function addCustomerPurchase(purchase: CRMPurchase): Promise<GoogleIndexResponse> {
+	let response: any;
+	try {
+		response = await request
+			.post("crm/customer/purchase", {
+				json: purchase,
+				ignoreLoading: true,
+			})
+			.json();
+	} catch (error: any) {
+		response = {
+			success: false,
+			message: error?.message || "Add purchase error",
+			error,
+		};
+	}
+	return response as GoogleIndexResponse;
+}
+
+/**
+ * Thêm contact history
+ */
+export async function addContactHistory(params: {
+	phone: string;
+	appId: string;
+	staffId: string;
+	contactType?: string; // call, message, meeting, email
+	notes?: string;
+}): Promise<GoogleIndexResponse> {
+	let response: any;
+	try {
+		response = await request
+			.post("crm/customer/contact", {
+				json: params,
+				ignoreLoading: true,
+			})
+			.json();
+	} catch (error: any) {
+		response = {
+			success: false,
+			message: error?.message || "Add contact error",
+			error,
+		};
+	}
+	return response as GoogleIndexResponse;
+}
+
+/**
+ * Lấy khách hàng có sinh nhật sắp tới
+ */
+export async function getUpcomingBirthdays(appId: string, days: number = 7): Promise<GoogleIndexResponse> {
+	let response: any;
+	try {
+		response = await request
+			.post("crm/birthdays", {
+				json: { appId, days },
+				ignoreLoading: true,
+			})
+			.json();
+	} catch (error: any) {
+		response = {
+			success: false,
+			message: error?.message || "Get birthdays error",
+			error,
+		};
+	}
+	return response as GoogleIndexResponse;
+}
+
+/**
+ * Lấy thống kê CRM
+ */
+export async function getCRMStats(params: {
+	appId: string;
+	fromDate?: string;
+	toDate?: string;
+}): Promise<GoogleIndexResponse> {
+	let response: any;
+	try {
+		response = await request
+			.post("crm/stats", {
+				json: params,
+				ignoreLoading: true,
+			})
+			.json();
+	} catch (error: any) {
+		response = {
+			success: false,
+			message: error?.message || "Get CRM stats error",
+			error,
+		};
+	}
+	return response as GoogleIndexResponse;
+}
+
+/**
+ * Lấy thống kê website (posts, views, Google bot visits)
+ */
+export async function getWebsiteStats(params: {
+	appId: string;
+	fromDate?: string;
+	toDate?: string;
+}): Promise<GoogleIndexResponse> {
+	let response: any;
+	try {
+		response = await request
+			.post("crm/website-stats", {
+				json: params,
+				ignoreLoading: true,
+			})
+			.json();
+	} catch (error: any) {
+		response = {
+			success: false,
+			message: error?.message || "Get website stats error",
+			error,
+		};
+	}
+	return response as GoogleIndexResponse;
+}
+
+/**
+ * Lấy thống kê quảng cáo Facebook/Google
+ */
+export async function getAdsStats(params: {
+	appId: string;
+	platform?: string; // facebook, google, all
+	fromDate?: string;
+	toDate?: string;
+}): Promise<GoogleIndexResponse> {
+	let response: any;
+	try {
+		response = await request
+			.post("crm/ads-stats", {
+				json: params,
+				ignoreLoading: true,
+			})
+			.json();
+	} catch (error: any) {
+		response = {
+			success: false,
+			message: error?.message || "Get ads stats error",
+			error,
+		};
+	}
+	return response as GoogleIndexResponse;
+}
+
+/**
+ * Tạo quảng cáo Facebook/Google
+ */
+export async function createAd(ad: Partial<CRMAd>): Promise<GoogleIndexResponse> {
+	let response: any;
+	try {
+		response = await request
+			.post("crm/ads", {
+				json: { appId: ad.app_id, platform: ad.platform, adData: ad },
+				ignoreLoading: true,
+			})
+			.json();
+	} catch (error: any) {
+		response = {
+			success: false,
+			message: error?.message || "Create ad error",
+			error,
+		};
+	}
+	return response as GoogleIndexResponse;
+}
+
+/**
+ * Lấy danh sách quảng cáo
+ */
+export async function getAds(params: {
+	appId: string;
+	platform?: string;
+	status?: string;
+	limit?: number;
+	offset?: number;
+}): Promise<GoogleIndexResponse> {
+	let response: any;
+	try {
+		response = await request
+			.post("crm/ads", {
+				json: params,
+				ignoreLoading: true,
+			})
+			.json();
+	} catch (error: any) {
+		response = {
+			success: false,
+			message: error?.message || "Get ads error",
+			error,
+		};
+	}
+	return response as GoogleIndexResponse;
+}
+
+/**
+ * Lấy thống kê Googlebot visits cho Home/Broadcast dashboards
+ */
+export async function getGooglebotStats(params?: {
+	limit?: number;
+	offset?: number;
+}): Promise<GoogleIndexResponse> {
+	let response: any;
+	try {
+		response = await request
+			.get("home/googlebot", {
+				searchParams: params,
+				ignoreLoading: true,
+			})
+			.json();
+	} catch (error: any) {
+		response = {
+			success: false,
+			message: error?.message || "Get Googlebot stats error",
+			error,
+		};
+	}
+	return response as GoogleIndexResponse;
+}
+
+/**
+ * Xóa Googlebot visits (theo ids hoặc xóa toàn bộ)
+ */
+export async function deleteGooglebotStats(data: {
+	ids?: string[];
+	deleteAll?: boolean;
+}): Promise<GoogleIndexResponse> {
+	let response: any;
+	try {
+		response = await request
+			.post("home/googlebot/delete", {
+				json: data,
+				ignoreLoading: true,
+			})
+			.json();
+	} catch (error: any) {
+		response = {
+			success: false,
+			message: error?.message || "Delete Googlebot stats error",
+			error,
+		};
+	}
+	return response as GoogleIndexResponse;
+}

@@ -119,6 +119,7 @@ public class CsrfProtectionFilter extends OncePerRequestFilter {
             uri.startsWith("/api/refresh-token") || uri.startsWith("/refresh-token") ||
             uri.startsWith("/api/register") || uri.startsWith("/register") ||
             uri.startsWith("/api/create-default-data") || uri.startsWith("/create-default-data") ||
+            uri.startsWith("/api/crm/customer") || uri.startsWith("/crm/customer") ||
             uri.startsWith("/api/upload") || uri.startsWith("/upload") ||
             uri.startsWith("/api/chat-history") || uri.startsWith("/chat-history") ||
             uri.startsWith("/api/chat-history-guest") || uri.startsWith("/chat-history-guest") ||

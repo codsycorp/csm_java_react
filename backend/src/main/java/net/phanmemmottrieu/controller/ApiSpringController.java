@@ -24,6 +24,7 @@ import net.phanmemmottrieu.handler.MenuHandler;
 import net.phanmemmottrieu.handler.RoleHandler;
 import net.phanmemmottrieu.handler.SeoHandler;
 import net.phanmemmottrieu.handler.TableHandler;
+import net.phanmemmottrieu.handler.CRMHandler;
 import net.phanmemmottrieu.model.StandardResponse;
 import net.phanmemmottrieu.service.AIProviderFactory;
 import net.phanmemmottrieu.service.GeminiService;
@@ -38,7 +39,9 @@ import net.phanmemmottrieu.model.UrlSubmissionHistory;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -62,6 +65,7 @@ public class ApiSpringController {
     private final ChatPersistenceService chatPersistenceService;
     private final SocketIOServer socketIOServer;
     private final XTwitterService xTwitterService;
+    private final CRMHandler crmHandler;
 
     // Tiêm tất cả các Handler thông qua constructor
     @Autowired
@@ -79,7 +83,8 @@ public class ApiSpringController {
             GoogleIndexQueueService googleIndexQueueService,
             ChatPersistenceService chatPersistenceService,
             SocketIOServer socketIOServer,
-            XTwitterService xTwitterService
+            XTwitterService xTwitterService,
+            CRMHandler crmHandler
         ) {
         this.recordManager = recordManager;
         this.initHandler = initHandler;
@@ -96,6 +101,7 @@ public class ApiSpringController {
         this.chatPersistenceService = chatPersistenceService;
         this.socketIOServer = socketIOServer;
         this.xTwitterService = xTwitterService;
+        this.crmHandler = crmHandler;
     }
 
     public ResponseEntity<?> handleApiRequest(
@@ -176,6 +182,15 @@ public class ApiSpringController {
         }
         logger.debug("✅ Tham số {} với phương thức {}", params, httpMethod);
 
+        // CRM multi-tenant guard: force app scoping by authenticated user context.
+        if (isCrmPath(effectivePath)) {
+            if (!secureAndNormalizeCrmParams(response, params, effectivePath, httpMethod)) {
+                logger.info("[API OUT] {} {} status={} response={}", request.getMethod(), request.getRequestURI(),
+                        response.get("code"), response);
+                return buildResponseEntity(response);
+            }
+        }
+
         int statusCode = 200;
         try {
             // Chuyển logic switch từ ApiController.handleRequestByPath vào đây
@@ -237,6 +252,24 @@ public class ApiSpringController {
                 case "/facebook/me":
                     handleFacebookMe(response, params);
                     break;
+                case "/facebook/ads/campaign": {
+                    params.put("platform", "facebook_ads");
+                    if (!params.containsKey("adData")) {
+                        Map<String, Object> adData = new HashMap<>(params);
+                        params.put("adData", adData);
+                    }
+                    crmHandler.handleCreateAd(response, params);
+                    break;
+                }
+                case "/google/ads/campaign": {
+                    params.put("platform", "google_ads");
+                    if (!params.containsKey("adData")) {
+                        Map<String, Object> adData = new HashMap<>(params);
+                        params.put("adData", adData);
+                    }
+                    crmHandler.handleCreateAd(response, params);
+                    break;
+                }
                 case "/login":
                     params.put("_servlet_response", servletResponse);
                     params.put("_host", request.getServerName());
@@ -343,6 +376,55 @@ public class ApiSpringController {
                 case "/chat-delete-message":
                     handleChatDeleteMessage(response, params);
                     break;
+                // ========== CRM APIs ==========
+                case "/crm/customer":
+                    if ("POST".equalsIgnoreCase(httpMethod) || "PUT".equalsIgnoreCase(httpMethod)) {
+                        crmHandler.handleCreateOrUpdateCustomer(response, params);
+                    } else if ("GET".equalsIgnoreCase(httpMethod)) {
+                        // GET single customer by phone
+                        crmHandler.handleGetCustomerDetail(response, params);
+                    }
+                    break;
+                case "/crm/customers":
+                    crmHandler.handleGetCustomers(response, params);
+                    break;
+                case "/crm/customer/assign":
+                    crmHandler.handleAssignCustomer(response, params);
+                    break;
+                case "/crm/customer/status":
+                    crmHandler.handleUpdateCustomerStatus(response, params);
+                    break;
+                case "/crm/customer/purchase":
+                    crmHandler.handleAddPurchase(response, params);
+                    break;
+                case "/crm/customer/contact":
+                    crmHandler.handleAddContactHistory(response, params);
+                    break;
+                case "/crm/birthdays":
+                    crmHandler.handleGetUpcomingBirthdays(response, params);
+                    break;
+                case "/crm/stats":
+                    crmHandler.handleGetCRMStats(response, params);
+                    break;
+                case "/crm/website-stats":
+                    crmHandler.handleGetWebsiteStats(response, params);
+                    break;
+                case "/crm/ads-stats":
+                    crmHandler.handleGetAdsStats(response, params);
+                    break;
+                case "/crm/ads":
+                    if ("POST".equalsIgnoreCase(httpMethod)) {
+                        crmHandler.handleCreateAd(response, params);
+                    } else {
+                        crmHandler.handleGetAds(response, params);
+                    }
+                    break;
+                case "/crm/analytics":
+                    crmHandler.handleGetAnalytics(response, params);
+                    break;
+                case "/crm/insights":
+                    crmHandler.handleGetAIInsights(response, params);
+                    break;
                 default:
                     response.set("message", "Unsupported API path: " + effectivePath);
                     response.set("code", 404);
@@ -360,6 +442,147 @@ public class ApiSpringController {
         logger.info("[API OUT] {} {} status={} response={}", request.getMethod(), request.getRequestURI(), statusCode,
                 response);
         return buildResponseEntity(response);
+    }
+
+    private boolean isCrmPath(String path) {
+        return path != null && path.startsWith("/crm/");
+    }
+
+    private boolean isGuestCrmLeadCapturePath(String path, String httpMethod) {
+        if (path == null || httpMethod == null) {
+            return false;
+        }
+        return "/crm/customer".equals(path)
+                && ("POST".equalsIgnoreCase(httpMethod) || "PUT".equalsIgnoreCase(httpMethod));
+    }
+
+    private static class UserAuthContext {
+        String appId;
+        boolean dev;
+        List<String> roles = new ArrayList<>();
+        boolean authenticated;
+    }
+
+    private UserAuthContext extractUserAuthContext() {
+        UserAuthContext context = new UserAuthContext();
+        org.springframework.security.core.Authentication authentication =
+                org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
+
+        if (authentication == null || !authentication.isAuthenticated()
+                || authentication.getPrincipal() == null
+                || "anonymousUser".equals(authentication.getPrincipal())) {
+            context.authenticated = false;
+            return context;
+        }
+
+        context.authenticated = true;
+        Object principal = authentication.getPrincipal();
+
+        if (principal instanceof net.phanmemmottrieu.model.User) {
+            net.phanmemmottrieu.model.User user = (net.phanmemmottrieu.model.User) principal;
+            context.appId = user.getAppId();
+            context.dev = user.getDev() != null && user.getDev();
+            if (user.getPermissions() != null) {
+                context.roles = user.getPermissions();
+            }
+        } else if (principal instanceof Map<?, ?> principalMap) {
+            Object appObj = principalMap.get("app_id");
+            if (appObj instanceof String) {
+                context.appId = (String) appObj;
+            }
+
+            Object devObj = principalMap.get("dev");
+            context.dev = devObj instanceof Boolean && (Boolean) devObj;
+
+            Object rolesObj = principalMap.get("roles");
+            if (rolesObj instanceof List<?>) {
+                for (Object roleObj : (List<?>) rolesObj) {
+                    if (roleObj instanceof String role) {
+                        context.roles.add(role);
+                    }
+                }
+            }
+        }
+
+        return context;
+    }
+
+    private boolean isCsmAdmin(UserAuthContext context) {
+        if (context == null) {
+            return false;
+        }
+        boolean isAdminRole = context.roles != null && context.roles.contains("admin");
+        return "csm".equalsIgnoreCase(context.appId) && (context.dev || isAdminRole);
+    }
+
+    private String firstNonBlankString(Object... values) {
+        if (values == null) {
+            return null;
+        }
+        for (Object value : values) {
+            if (value instanceof String) {
+                String text = ((String) value).trim();
+                if (!text.isEmpty()) {
+                    return text;
+                }
+            }
+        }
+        return null;
+    }
+
+    private boolean secureAndNormalizeCrmParams(StandardResponse response, Map<String, Object> params, String path,
+            String httpMethod) {
+        if (isGuestCrmLeadCapturePath(path, httpMethod)) {
+            String requestedAppId = firstNonBlankString(params.get("appId"), params.get("app_id"));
+            if (requestedAppId == null) {
+                response.set("code", 400);
+                response.set("success", false);
+                response.set("message", "appId is required for guest CRM lead capture");
+                return false;
+            }
+
+            params.put("appId", requestedAppId);
+            params.put("app_id", requestedAppId);
+            return true;
+        }
+
+        UserAuthContext context = extractUserAuthContext();
+        if (!context.authenticated) {
+            response.set("code", 401);
+            response.set("success", false);
+            response.set("message", "Not authenticated");
+            return false;
+        }
+
+        String userAppId = firstNonBlankString(context.appId);
+        String requestedAppId = firstNonBlankString(params.get("appId"), params.get("app_id"));
+        boolean csmAdmin = isCsmAdmin(context);
+
+        if (!csmAdmin) {
+            if (userAppId == null) {
+                response.set("code", 403);
+                response.set("success", false);
+                response.set("message", "User app scope is missing");
+                return false;
+            }
+            if (requestedAppId != null && !requestedAppId.equals(userAppId)) {
+                logger.warn("🚫 CRM cross-app access denied: path={}, userAppId={}, requestedAppId={}",
+                        path, userAppId, requestedAppId);
+                response.set("code", 403);
+                response.set("success", false);
+                response.set("message", "Forbidden: cannot access CRM data of another app");
+                return false;
+            }
+
+            params.put("appId", userAppId);
+            params.put("app_id", userAppId);
+            return true;
+        }
+
+        String effectiveAppId = firstNonBlankString(requestedAppId, userAppId, "csm");
+        params.put("appId", effectiveAppId);
+        params.put("app_id", effectiveAppId);
+        return true;
     }
 
     /**

@@ -18,6 +18,134 @@ if (typeof window !== 'undefined') {
   window.__AUTO_UPLOAD_LMKT_LOADED__ = true;
 }
 
+// ========== I18N SUPPORT - MULTI-LANGUAGE UI ==========
+// Translation dictionary for 3 languages (vi, en, zh)
+const uiTranslations = {
+  vi: {
+    domain: 'Domain:',
+    industry: 'Lĩnh vực:',
+    project: 'Dự án:',
+    general_settings: '⚙️ Cài Đặt Chung',
+    load_categories: '⬇️ Tải danh mục từ web_services',
+    loading: '⏳ Đang tải...',
+    multi_domain_manager: '🌐 Multi-Domain Content Manager (Chống Chất AI)',
+    tip_label: '💡 <strong>Tip:</strong> LMKT dùng <strong>Dự án</strong> làm category; Phanmemmottrieu dùng <strong>Lĩnh vực</strong>. Chọn ở <strong>Cài Đặt Chung</strong> phía trên.',
+    upload_zalo: '📱 Upload Zalo JSON',
+    upload_facebook: '👍 Upload Facebook JSON',
+    create_post: '✍️ Tạo Bài',
+    clear_history: '🗑️ Xóa Lịch Sử',
+    cleanup_indexeddb: '🧹 Dọn IndexedDB',
+    processing: '🔒 Đang xử lý...',
+    zalo_web_chat: '📱 Zalo Web Chat (Đăng nhập ở đây)',
+    refresh_tokens: '🔄 Cập nhật tokens',
+    show_fanpages: '📱 Xem fanpages',
+    clear_all: '🗑️ Xoá hết',
+    use_latest_config: '⚡ Dùng config mới nhất',
+    save_config: '💾 Lưu cấu hình',
+    add_new: '➕ Thêm mới',
+    reload_from_server: '🔄 Tải lại từ server',
+    reload_tooltip: 'Tải lại dữ liệu từ server và refresh grid (dùng khi grid không hiển thị đúng)',
+    cancel: '✖️ Huỷ thao tác',
+    debug: '🔍 Debug',
+    start_scan: '▶️ Bắt đầu quét',
+    stop_scan: '⏸ Dừng quét',
+    no_config_selected: '⚠️ Không có config để quét',
+    select_industry_project: '⚠️ Vui lòng chọn lĩnh vực/dự án để cập nhật',
+    reloading_data: '✅ Đang tải lại dữ liệu...',
+    reloading: '✅ Đang tải lại...'
+  },
+  en: {
+    domain: 'Domain:',
+    industry: 'Industry:',
+    project: 'Project:',
+    general_settings: '⚙️ General Settings',
+    load_categories: '⬇️ Load categories from web_services',
+    loading: '⏳ Loading...',
+    multi_domain_manager: '🌐 Multi-Domain Content Manager (Anti-AI Detection)',
+    tip_label: '💡 <strong>Tip:</strong> LMKT uses <strong>Projects</strong> as categories; Phanmemmottrieu uses <strong>Industries</strong>. Select in <strong>General Settings</strong> above.',
+    upload_zalo: '📱 Upload Zalo JSON',
+    upload_facebook: '👍 Upload Facebook JSON',
+    create_post: '✍️ Create Post',
+    clear_history: '🗑️ Clear History',
+    cleanup_indexeddb: '🧹 Cleanup IndexedDB',
+    processing: '🔒 Processing...',
+    zalo_web_chat: '📱 Zalo Web Chat (Login here)',
+    refresh_tokens: '🔄 Refresh tokens',
+    show_fanpages: '📱 View fanpages',
+    clear_all: '🗑️ Clear all',
+    use_latest_config: '⚡ Use latest config',
+    save_config: '💾 Save configuration',
+    add_new: '➕ Add new',
+    reload_from_server: '🔄 Reload from server',
+    reload_tooltip: 'Reload data from server and refresh grid (use when grid doesn\'t display correctly)',
+    cancel: '✖️ Cancel',
+    debug: '🔍 Debug',
+    start_scan: '▶️ Start scan',
+    stop_scan: '⏸ Stop scan',
+    no_config_selected: '⚠️ No config to scan',
+    select_industry_project: '⚠️ Please select industry/project to update',
+    reloading_data: '✅ Reloading data...',
+    reloading: '✅ Reloading...'
+  },
+  zh: {
+    domain: 'Domain:',
+    industry: '行业：',
+    project: '项目：',
+    general_settings: '⚙️ 常规设置',
+    load_categories: '⬇️ 从 web_services 加载类别',
+    loading: '⏳ 加载中...',
+    multi_domain_manager: '🌐 多域名内容管理器 (防AI检测)',
+    tip_label: '💡 <strong>提示：</strong>LMKT 使用<strong>项目</strong>作为类别；Phanmemmottrieu 使用<strong>行业</strong>。在上面的<strong>常规设置</strong>中选择。',
+    upload_zalo: '📱 上传 Zalo JSON',
+    upload_facebook: '👍 上传 Facebook JSON',
+    create_post: '✍️ 创建帖子',
+    clear_history: '🗑️ 清除历史',
+    cleanup_indexeddb: '🧹 清理 IndexedDB',
+    processing: '🔒 处理中...',
+    zalo_web_chat: '📱 Zalo Web Chat (在此登录)',
+    refresh_tokens: '🔄 刷新令牌',
+    show_fanpages: '📱 查看粉丝页',
+    clear_all: '🗑️ 全部清除',
+    use_latest_config: '⚡ 使用最新配置',
+    save_config: '💾 保存配置',
+    add_new: '➕ 添加新项',
+    reload_from_server: '🔄 从服务器重新加载',
+    reload_tooltip: '从服务器重新加载数据并刷新网格（当网格显示不正确时使用）',
+    cancel: '✖️ 取消操作',
+    debug: '🔍 调试',
+    start_scan: '▶️ 开始扫描',
+    stop_scan: '⏸ 停止扫描',
+    no_config_selected: '⚠️ 没有配置可扫描',
+    select_industry_project: '⚠️ 请选择行业/项目以更新',
+    reloading_data: '✅ 正在重新加载数据...',
+    reloading: '✅ 正在重新加载...'
+  }
+};
+
+// Get current language from localStorage or default to 'vi'
+function getUILanguage() {
+  try {
+    // Try to get from localStorage (same as React app)
+    const stored = localStorage.getItem('language');
+    if (stored && (stored === 'vi' || stored === 'en' || stored === 'zh-CN')) {
+      return stored === 'zh-CN' ? 'zh' : stored;
+    }
+    // Fallback to browser language
+    const browserLang = navigator.language || navigator.userLanguage;
+    if (browserLang.startsWith('zh')) return 'zh';
+    if (browserLang.startsWith('en')) return 'en';
+    return 'vi'; // Default to Vietnamese
+  } catch {
+    return 'vi';
+  }
+}
+
+// Translation function (t = translate)
+function t(key) {
+  const lang = getUILanguage();
+  return uiTranslations[lang]?.[key] || uiTranslations.vi[key] || key;
+}
+
 // ========== GLOBAL TIMER REGISTRY - QUẢN LÝ TẤT CẢ TIMERS ==========
 // ✅ Ngăn ngừa orphaned timers + memory leaks
 const timerRegistry = {
@@ -4535,7 +4663,7 @@ async function ensureGlobalSettingsPanel() {
   loadBtn.onclick = async () => {
     const domainKey = domainSelect.value || 'phanmemmottrieu';
     loadBtn.disabled = true;
-    loadBtn.textContent = "⏳ Đang tải...";
+    loadBtn.textContent = t('loading');
     try {
       await loadCategoriesFromWebServices(domainKey);
     } finally {

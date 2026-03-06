@@ -107,7 +107,85 @@ const normalizeSpecValue = (value: any, t: any) => {
 import { normalizeServiceDetail } from "../../utils/normalize";
 import { getDefaultCategorySlug } from '../../utils/getDefaultCategorySlug';
 import { csmDecrypt } from "#src/components/CsmCrypto";
+import { request } from "#src/utils";
 const { Title, Paragraph, Text } = Typography;
+
+type TrafficAttribution = {
+  source: string;
+  utmSource: string;
+  utmMedium: string;
+  utmCampaign: string;
+  referrer: string;
+  landingPage: string;
+};
+
+const normalizeSourceName = (value?: string): string => {
+  const raw = (value || '').toLowerCase().trim();
+  if (!raw) return '';
+  if (raw.includes('facebook') || raw.includes('fb') || raw.includes('instagram') || raw.includes('ig')) return 'facebook';
+  if (raw.includes('zalo')) return 'zalo';
+  if (raw.includes('google') || raw.includes('gads') || raw.includes('google_ads') || raw.includes('adwords')) return 'google';
+  return raw;
+};
+
+const detectTrafficAttribution = (): TrafficAttribution => {
+  if (typeof window === 'undefined') {
+    return {
+      source: 'direct',
+      utmSource: '',
+      utmMedium: '',
+      utmCampaign: '',
+      referrer: '',
+      landingPage: '',
+    };
+  }
+
+  const params = new URLSearchParams(window.location.search || '');
+  const utmSourceRaw = params.get('utm_source') || '';
+  const utmMedium = params.get('utm_medium') || '';
+  const utmCampaign = params.get('utm_campaign') || '';
+  const referrer = document.referrer || '';
+  const hasGclid = params.has('gclid');
+  const hasFbclid = params.has('fbclid');
+  const utmSource = normalizeSourceName(utmSourceRaw);
+
+  let source = 'direct';
+  if (utmSource) {
+    source = utmSource;
+  } else if (hasFbclid) {
+    source = 'facebook';
+  } else if (hasGclid) {
+    source = 'google';
+  } else if (referrer) {
+    source = normalizeSourceName(referrer) || 'referral';
+  }
+
+  return {
+    source,
+    utmSource,
+    utmMedium,
+    utmCampaign,
+    referrer,
+    landingPage: window.location.href,
+  };
+};
+
+const createOrUpdateCustomer = async (payload: Record<string, any>) => {
+  try {
+    return await request
+      .post('crm/customer', {
+        json: payload,
+        ignoreLoading: true,
+      })
+      .json<any>();
+  } catch (error: any) {
+    return {
+      success: false,
+      message: error?.message || 'CRM customer error',
+      error,
+    };
+  }
+};
 
 // Helper function to decode URL-encoded HTML or decrypt encrypted content
 const decodeHtml = (html?: string): string | undefined => {
@@ -765,6 +843,31 @@ const RealEstateDetail = ({ post, t }: { post: ServicePost, t: any }) => {
     
     // Lưu số điện thoại vào localStorage (unified phone stream)
     setGuestPhone(phoneValue);
+
+    const traffic = detectTrafficAttribution();
+    const sourceDetails = [
+      traffic.utmSource ? `utm_source=${traffic.utmSource}` : '',
+      traffic.utmMedium ? `utm_medium=${traffic.utmMedium}` : '',
+      traffic.utmCampaign ? `utm_campaign=${traffic.utmCampaign}` : '',
+      traffic.referrer ? `referrer=${traffic.referrer}` : '',
+      traffic.landingPage ? `landing=${traffic.landingPage}` : '',
+    ].filter(Boolean).join(' | ');
+
+    void createOrUpdateCustomer({
+      appId,
+      app_id: appId,
+      phone: phoneValue,
+      source: traffic.source,
+      status: 'new',
+      notes: sourceDetails,
+      utm_source: traffic.utmSource,
+      utm_medium: traffic.utmMedium,
+      utm_campaign: traffic.utmCampaign,
+      referrer: traffic.referrer,
+      landing_page: traffic.landingPage,
+    }).catch((err: any) => {
+      console.warn('Failed to upsert CRM customer from LMKT website contact', err?.message || err);
+    });
     
     // Save chat URL for first-time chat
     setChatUrl(window.location.href);

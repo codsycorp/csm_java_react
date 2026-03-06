@@ -15,6 +15,7 @@ import net.phanmemmottrieu.model.LoginResponse;
 import net.phanmemmottrieu.model.RegistrationResponse;
 import net.phanmemmottrieu.service.UserService;
 import net.phanmemmottrieu.service.ChatPersistenceService;
+import net.phanmemmottrieu.service.CRMService;
 import net.phanmemmottrieu.util.PortKillerUtil;
 
 import java.util.HashMap;
@@ -67,6 +68,9 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
     
     @Autowired
     private ChatPersistenceService chatPersistenceService;
+    
+    @Autowired
+    private CRMService crmService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -518,6 +522,48 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                                 
                                 // 2. Database với guest phone tracking (ChatPersistenceService)
                                 chatPersistenceService.saveMessage(data);
+                                
+                                // 🆕 CRM AUTO-TRACKING: Tự động tạo customer khi guest chat
+                                if (guestPhone != null && !guestPhone.isEmpty() && appId != null && !appId.isEmpty()) {
+                                    try {
+                                        // Extract customer name from message if provided (optional)
+                                        // Format: "Tên: [Name]" hoặc "Name: [Name]" trong tin nhắn đầu tiên
+                                        String customerName = username;
+                                        if (customerName == null || customerName.isEmpty() || customerName.equals(guestPhone)) {
+                                            // Try to extract name from message if guest introduces themselves
+                                            if (message != null && (message.toLowerCase().contains("tên") || message.toLowerCase().contains("name"))) {
+                                                // Basic extraction (can be improved)
+                                                String[] parts = message.split(":");
+                                                if (parts.length > 1) {
+                                                    customerName = parts[1].trim().split("[,\\.\\n]")[0].trim();
+                                                }
+                                            } else {
+                                                customerName = ""; // Empty name for now
+                                            }
+                                        }
+                                        
+                                        // Auto-create or update customer in CRM
+                                        Map<String, Object> customerData = new HashMap<>();
+                                        customerData.put("phone", guestPhone);
+                                        customerData.put("name", customerName);
+                                        customerData.put("email", "");
+                                        customerData.put("birthday", "");
+                                        customerData.put("nick_zalo", "");
+                                        customerData.put("nick_facebook", "");
+                                        customerData.put("status", "new");
+                                        customerData.put("source", "chat");
+                                        String safeMessage = message == null ? "" : message;
+                                        customerData.put("notes", "First contact via chat: " + safeMessage.substring(0, Math.min(100, safeMessage.length())));
+
+                                        crmService.createOrUpdateCustomer(appId, customerData);
+                                        
+                                        logger.info("✅ [CRM] Auto-created/updated customer: phone={}, appId={}, name={}", 
+                                                   guestPhone, appId, customerName);
+                                    } catch (Exception e) {
+                                        logger.error("❌ [CRM] Error auto-creating customer from chat: {}", e.getMessage());
+                                        // Don't fail chat if CRM creation fails
+                                    }
+                                }
                                 
                                 // New message routing logic:
                                 String to = data.getTo();

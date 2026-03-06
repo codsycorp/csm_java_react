@@ -48,6 +48,9 @@ public class SecurityConfig {
         http.authorizeHttpRequests()
             // Allow CORS preflight for all endpoints
             .requestMatchers(org.springframework.http.HttpMethod.OPTIONS, "/**").permitAll()
+            // Public lead-capture endpoint for guest website users
+            .requestMatchers(org.springframework.http.HttpMethod.POST, "/api/crm/customer", "/crm/customer").permitAll()
+            .requestMatchers(org.springframework.http.HttpMethod.PUT, "/api/crm/customer", "/crm/customer").permitAll()
             // Allow all non-API paths (handled by WebSpringController)
             .requestMatchers(request -> !apiMatcher.matches(request)).permitAll()
             // Public monitoring endpoints (no auth required)
