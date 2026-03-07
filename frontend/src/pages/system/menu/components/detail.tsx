@@ -1088,23 +1088,53 @@ export function Detail({
             </div>
           </div>
 
-          <div>
-            <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
-              {t('system.menu.vLink') || 'Vuejs Component'}
-            </div>
-            <ProFormText
-              name="v_link"
-              noStyle
-              fieldProps={{
-                placeholder: 'Tên component Vue',
-                size: 'large',
-                style: { width: '100%' },
-              }}
-            />
-            <div style={{ marginTop: 4, fontSize: 12, color: '#8c8c8c' }}>
-              Component tùy chọn hoặc đường dẫn động
-            </div>
-          </div>
+          <ProFormDependency name={["type_form"]}>
+            {(values: Record<string, any>) => {
+              const typeForm = Number(values.type_form || 1);
+
+              if (typeForm === 3) {
+                return (
+                  <div>
+                    <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
+                      {t("system.menu.vLink") || "Đường dẫn fallback"}
+                    </div>
+                    <ProFormText
+                      name="v_link"
+                      noStyle
+                      fieldProps={{
+                        placeholder: "URL fallback (legacy)",
+                        size: "large",
+                        style: { width: "100%" },
+                      }}
+                    />
+                    <div style={{ marginTop: 4, fontSize: 12, color: "#8c8c8c" }}>
+                      Trường cũ để tương thích dữ liệu legacy, ưu tiên dùng "Đường dẫn Link Động" bên dưới.
+                    </div>
+                  </div>
+                );
+              }
+
+              return (
+                <div>
+                  <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
+                    {t("system.menu.vLink") || "Component hiển thị"}
+                  </div>
+                  <ProFormText
+                    name="v_link"
+                    noStyle
+                    fieldProps={{
+                      placeholder: "Tên component hoặc route key (legacy)",
+                      size: "large",
+                      style: { width: "100%" },
+                    }}
+                  />
+                  <div style={{ marginTop: 4, fontSize: 12, color: "#8c8c8c" }}>
+                    Không còn dùng Vue component; trường này giữ lại để tương thích dữ liệu cũ.
+                  </div>
+                </div>
+              );
+            }}
+          </ProFormDependency>
 
           {/* Auto Code Selector - chỉ hiện khi type_form === 4 (Dynamic Code) */}
           <ProFormDependency name={["type_form"]}>

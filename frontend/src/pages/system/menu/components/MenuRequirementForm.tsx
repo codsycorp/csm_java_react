@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { Modal, Form, Input, Select, Radio, Button, Space, Alert, Tag, Divider } from "antd";
+import { Modal, Form, Input, Radio, Button, Alert, Divider } from "antd";
 import { useTranslation } from "react-i18next";
-import type { MenuItemType } from "#src/api/system/menu";
+import { AI_PROMPTS } from "../ai-prompts/menu-design-system";
 
 const { TextArea } = Input;
 
@@ -23,32 +23,7 @@ interface MenuRequirementFormProps {
   loading?: boolean;
 }
 
-const MENU_TYPE_DESCRIPTIONS = {
-  1: {
-    name: "Dạng Bảng (Table Grid)",
-    description: "Hiển thị & quản lý dữ liệu dạng bảng với CRUD operations",
-    icon: "📊",
-    examples: "Danh sách khách hàng, sản phẩm, nhân viên"
-  },
-  2: {
-    name: "Master-Detail",
-    description: "Dữ liệu phân cấp: Master + nhiều detail records",
-    icon: "📑",
-    examples: "Đơn hàng + Chi tiết SP, Phiếu nhập + Danh sách hàng"
-  },
-  3: {
-    name: "Liên Kết Động",
-    description: "Chuyển hướng tới URL hoặc trang khác",
-    icon: "🔗",
-    examples: "Link website, trang khác, dashboard ngoài"
-  },
-  4: {
-    name: "Chạy Code Động",
-    description: "Thực thi custom JavaScript (analytics, dashboard)",
-    icon: "⚙️",
-    examples: "Analytics, real-time monitor, custom dashboard"
-  }
-};
+const ALL_MENU_TYPES: MenuType[] = [1, 2, 3, 4];
 
 /**
  * Component để user nhập requirement và tạo prompt cho AI
@@ -61,22 +36,21 @@ export function MenuRequirementForm({
 }: MenuRequirementFormProps) {
   const { t } = useTranslation();
   const [form] = Form.useForm();
-  const [selectedTypes, setSelectedTypes] = useState<MenuType[]>([1]);
-  const [scope, setScope] = useState<"minimal" | "complete">("minimal");
+  const [scope, setScope] = useState<"minimal" | "complete">("complete");
 
   const handleFormSubmit = async () => {
     try {
       const values = await form.validateFields();
       
-      // Build comprehensive prompt
-      const prompt = buildMenuDesignPrompt(values, selectedTypes, scope);
+      // Build comprehensive prompt with system context
+      const prompt = buildMenuDesignPrompt(values, ALL_MENU_TYPES, scope);
       
       const data: MenuRequirementData = {
         title: values.title,
         description: values.description,
-        menuTypes: selectedTypes,
+        menuTypes: ALL_MENU_TYPES,
         scope,
-        tables: values.tables?.split("\n").filter(t => t.trim()),
+        tables: values.tables?.split("\n").filter((t: string) => t.trim()),
         customNotes: values.customNotes
       };
       
@@ -88,8 +62,7 @@ export function MenuRequirementForm({
 
   const handleReset = () => {
     form.resetFields();
-    setSelectedTypes([1]);
-    setScope("minimal");
+    setScope("complete");
   };
 
   return (
@@ -146,61 +119,16 @@ Có thể viết tự do, không cần format chính thức.`}
         </Form.Item>
 
         <Divider>{t("system.menu.aiDesigner.menuType") || "Loại Menu Cần Tạo"}</Divider>
-
-        {/* Menu Type Selection */}
-        <div style={{ marginBottom: 24 }}>
-          <div style={{ marginBottom: 12, fontWeight: 500 }}>
-            {t("system.menu.aiDesigner.selectMenuTypes") || "Chọn loại menu cần tạo"}
-          </div>
-          <Space direction="vertical" style={{ width: "100%" }}>
-            {(Object.entries(MENU_TYPE_DESCRIPTIONS) as [string, any][]).map(([type, info]) => (
-              <div
-                key={type}
-                onClick={() => {
-                  const typeNum = Number(type) as MenuType;
-                  setSelectedTypes(
-                    selectedTypes.includes(typeNum)
-                      ? selectedTypes.filter(t => t !== typeNum)
-                      : [...selectedTypes, typeNum]
-                  );
-                }}
-                style={{
-                  padding: 12,
-                  border: selectedTypes.includes(Number(type) as MenuType) ? "2px solid #1890ff" : "1px solid #d9d9d9",
-                  borderRadius: 6,
-                  cursor: "pointer",
-                  background: selectedTypes.includes(Number(type) as MenuType) ? "#f0f5ff" : "#fafafa"
-                }}
-              >
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start" }}>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: 500, marginBottom: 4 }}>
-                      <span>{info.icon} </span>
-                      <span>{info.name}</span>
-                      {selectedTypes.includes(Number(type) as MenuType) && (
-                        <Tag color="blue" style={{ marginLeft: 8 }}>{t("common.selected") || "Đã chọn"}</Tag>
-                      )}
-                    </div>
-                    <div style={{ fontSize: 12, color: "#666", marginBottom: 6 }}>
-                      {info.description}
-                    </div>
-                    <div style={{ fontSize: 12, color: "#999" }}>
-                      💡 {info.examples}
-                    </div>
-                  </div>
-                  <div style={{ marginLeft: 16 }}>
-                    <input
-                      type="checkbox"
-                      checked={selectedTypes.includes(Number(type) as MenuType)}
-                      readOnly
-                      style={{ width: 18, height: 18, cursor: "pointer" }}
-                    />
-                  </div>
-                </div>
-              </div>
-            ))}
-          </Space>
-        </div>
+        <Alert
+          type="success"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message={t("system.menu.aiDesigner.autoAnalyzeTitle") || "AI tự động thiết kế toàn bộ menu theo nghiệp vụ"}
+          description={
+            t("system.menu.aiDesigner.autoAnalyzeDesc") ||
+            "Hệ thống sẽ tự phân tích yêu cầu và tự gán loại menu (Type 1/2/3/4) cho từng chức năng trong toàn bộ cây menu, không cần chọn từng loại thủ công."
+          }
+        />
 
         <Divider>{t("system.menu.aiDesigner.options") || "Tùy chọn"}</Divider>
 
@@ -211,10 +139,10 @@ Có thể viết tự do, không cần format chính thức.`}
         >
           <Radio.Group value={scope} onChange={(e) => setScope(e.target.value)}>
             <Radio value="minimal" style={{ display: "block", marginBottom: 8 }}>
-              <strong>Minimal</strong> - Menu cơ bản, cấu trúc đơn giản
+              <strong>Minimal</strong> - Sinh nhanh cấu trúc khung
             </Radio>
             <Radio value="complete">
-              <strong>Complete</strong> - Menu chi tiết, trigger, combo, validation
+              <strong>Complete</strong> - Sinh đầy đủ toàn bộ menu theo nghiệp vụ (khuyến nghị)
             </Radio>
           </Radio.Group>
         </Form.Item>
@@ -266,14 +194,14 @@ function buildMenuDesignPrompt(
   menuTypes: MenuType[],
   scope: "minimal" | "complete"
 ): string {
-  const typeDescriptions = menuTypes
-    .map(type => {
-      const info = MENU_TYPE_DESCRIPTIONS[type];
-      return `- Type ${type}: ${info.name} (${info.description})`;
-    })
-    .join("\n");
+  const typeDescriptions = "- Type 1: Table Grid\n- Type 2: Master-Detail\n- Type 3: Dynamic Link\n- Type 4: Dynamic Code";
 
-  const prompt = `
+  const prompt = `${AI_PROMPTS.MAIN_MENU_DESIGNER}
+
+${AI_PROMPTS.REQUIREMENT_EXTRACTOR}
+
+${AI_PROMPTS.TYPE_SELECTION_GUIDE}
+
 ## YÊU CẦU THIẾT KẾ MENU
 
 ### Thông tin dự án
@@ -301,11 +229,13 @@ ${data.customNotes}
 ` : ""}
 
 ### Yêu cầu đầu ra
-1. Tạo cây menu JSON hoàn chỉnh theo cấu trúc MenuItemType
-2. Nếu scope=minimal: Cấu trúc cơ bản, không cần trigger phức tạp
-3. Nếu scope=complete: Chi tiết đầy đủ, trigger, combo, validation
-4. Loại menu sử dụng: ${menuTypes.join(", ")}
-5. Trả về format: { "menu": [...], "notes": [...], "warnings": [...] }
+1. Tạo cây menu JSON đầy đủ cho TOÀN BỘ nghiệp vụ khách hàng trong 1 lần
+2. AI tự phân rã chức năng thành nhiều menu con hợp lý (root/group/action)
+3. AI tự chọn type_form phù hợp cho từng menu (1/2/3/4), không làm từng menu rời rạc
+4. Nếu scope=minimal: Cấu trúc khung cho toàn bộ module
+5. Nếu scope=complete: Chi tiết đầy đủ bảng/field/trigger/combo/logic
+6. Trả về format: { "menu": [...], "notes": [...], "warnings": [...] }
+7. Ưu tiên bám đúng nghiệp vụ khách hàng, không sinh menu dư thừa
 
 ### HƯỚNG DẪN CHI TIẾT
 Xem phần "LOẠI MENU HỖ TRỢ", "MENUITEMTYPE SCHEMA", "QUY TẮC THIẾT KẾ" trong prompt chính.

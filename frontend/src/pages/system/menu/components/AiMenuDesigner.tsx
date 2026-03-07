@@ -31,6 +31,167 @@ type AiMenuDesignerProps = {
 
 const AI_REQUEST_TABLE = "csm_ai_menu_requests";
 
+const TRIGGER_CODE_TEMPLATES: Record<string, string> = {
+  validate_order_debt_limit: `const customerId = data.id_khachhang || data.id_kh || data.khachhang_id;
+if (!customerId) return data;
+
+const customers = bang?.dm_doituong?.rows || [];
+const customer = customers.find((r) => String(r.id) === String(customerId));
+if (!customer) return data;
+
+const debtLimit = Number(customer.han_muc_no || 0);
+if (!debtLimit || debtLimit <= 0) return data;
+
+const currentDebt = Number(customer.con_no || customer.tong_no || 0);
+const orderValue = Number(data.tong_tien || data.so_tien_no || 0);
+
+if (currentDebt + orderValue > debtLimit) {
+  throw new Error("Vuot han muc no cua khach hang");
+}
+
+return data;`,
+
+  update_order_total: `const orderId = data.id || data.id_donhang || data.id_don_hang;
+if (!orderId) return {};
+
+const details = bang?.bh_donhang_chitiet?.rows || bang?.bh_donhang_ct?.rows || [];
+const rows = details.filter((r) => {
+  const refId = r.id_donhang || r.id_don_hang || r.order_id;
+  return String(refId) === String(orderId);
+});
+
+const tong_tien = rows.reduce((sum, r) => {
+  const line = Number(r.thanh_tien ?? (Number(r.so_luong || 0) * Number(r.don_gia || 0)));
+  return sum + line;
+}, 0);
+
+const da_thanh_toan = Number(data.da_thanh_toan || 0);
+return {
+  tong_tien,
+  con_no: Math.max(tong_tien - da_thanh_toan, 0),
+};`,
+
+  recalculate_order_total: `const orderId = data.id_donhang || data.id_don_hang || data.order_id;
+if (!orderId) return {};
+
+const details = bang?.bh_donhang_chitiet?.rows || bang?.bh_donhang_ct?.rows || [];
+const rows = details.filter((r) => {
+  const refId = r.id_donhang || r.id_don_hang || r.order_id;
+  return String(refId) === String(orderId);
+});
+
+const tong_tien = rows.reduce((sum, r) => {
+  const line = Number(r.thanh_tien ?? (Number(r.so_luong || 0) * Number(r.don_gia || 0)));
+  return sum + line;
+}, 0);
+
+return { tong_tien };`,
+
+  validate_order_item_stock: `const qty = Number(data.so_luong || 0);
+if (qty <= 0) throw new Error("So luong phai lon hon 0");
+
+const productId = data.id_sanpham || data.id_sp;
+if (!productId) return data;
+
+const products = bang?.dm_sanpham?.rows || [];
+const product = products.find((r) => String(r.id) === String(productId));
+if (!product) return data;
+
+const stock = Number(product.ton_kho_hien_tai ?? product.ton_kho ?? 0);
+if (qty > stock) {
+  throw new Error("Khong du ton kho cho san pham");
+}
+
+return {
+  ...data,
+  thanh_tien: Number(data.don_gia || 0) * qty,
+};`,
+
+  validate_delivery_item_stock: `const qty = Number(data.so_luong || 0);
+if (qty <= 0) throw new Error("So luong xuat phai lon hon 0");
+
+const productId = data.id_sanpham || data.id_sp;
+if (!productId) return data;
+
+const products = bang?.dm_sanpham?.rows || [];
+const product = products.find((r) => String(r.id) === String(productId));
+if (!product) return data;
+
+const stock = Number(product.ton_kho_hien_tai ?? product.ton_kho ?? 0);
+if (qty > stock) {
+  throw new Error("Ton kho khong du de xuat");
+}
+
+return {
+  ...data,
+  thanh_tien: Number(data.don_gia || 0) * qty,
+};`,
+
+  validate_receipt_item_quantity: `const qty = Number(data.so_luong || 0);
+if (qty <= 0) throw new Error("So luong nhap phai lon hon 0");
+
+const don_gia = Number(data.don_gia || 0);
+return {
+  ...data,
+  thanh_tien: don_gia * qty,
+};`,
+
+  update_stock_on_delivery: `const productId = data.id_sanpham || data.id_sp;
+if (!productId) return {};
+
+const qty = Number(data.so_luong || 0);
+if (qty <= 0) return {};
+
+const products = bang?.dm_sanpham?.rows || [];
+const product = products.find((r) => String(r.id) === String(productId));
+if (!product) return {};
+
+const currentStock = Number(product.ton_kho_hien_tai ?? product.ton_kho ?? 0);
+return {
+  ton_kho_hien_tai: Math.max(currentStock - qty, 0),
+};`,
+
+  update_stock_on_receipt: `const productId = data.id_sanpham || data.id_sp;
+if (!productId) return {};
+
+const qty = Number(data.so_luong || 0);
+if (qty <= 0) return {};
+
+const products = bang?.dm_sanpham?.rows || [];
+const product = products.find((r) => String(r.id) === String(productId));
+if (!product) return {};
+
+const currentStock = Number(product.ton_kho_hien_tai ?? product.ton_kho ?? 0);
+return {
+  ton_kho_hien_tai: currentStock + qty,
+};`,
+};
+
+function isLikelyExecutableCode(value: string): boolean {
+  const v = String(value || "").trim();
+  if (!v) return false;
+  return /\n|;|\breturn\b|=>|\bif\b|\bthrow\b|\bconst\b|\blet\b|\bfunction\b/.test(v);
+}
+
+function normalizeTriggerCodeValue(triggerKey: string, rawValue: any): any {
+  if (typeof rawValue !== "string") return rawValue;
+  const value = rawValue.trim();
+  if (!value) return value;
+  if (isLikelyExecutableCode(value)) return value;
+
+  const template = TRIGGER_CODE_TEMPLATES[value];
+  if (template) return template;
+
+  // Fallback templates by trigger phase so AI symbolic output still executes safely.
+  if (triggerKey === "before_save") {
+    return `return data;`;
+  }
+  if (triggerKey === "after_save" || triggerKey === "after_delete") {
+    return `return {};`;
+  }
+  return value;
+}
+
 function createMenuExample(): MenuItemType[] {
   return [
     {
@@ -141,6 +302,24 @@ ${compactMenuContext}
 ## YEU CAU KHACH HANG
 ${requestCore}
 
+## SCHEMA GUARDRAIL (BAT BUOC)
+- CHI dung table field theo format f_*: f_name, f_header, f_types, f_pkid, f_show, f_width, f_dec.
+- KHONG dung field generic: field, label, type, primaryKey, required, editable.
+- Trigger phai nam trong object "trigger": { "before_save": "...", "after_save": "..." }
+- KHONG dung key trigger_* o cap menu (vd: trigger_before_save, trigger_after_save).
+- GIA TRI trigger phai la JS code body thuc thi duoc voi dung chu ky:
+  before_save/after_save/update: (seft, data, bang) => return object
+  afterAdd/afterEdit/afterDelete: (allData, seft, data) => return any
+  load_db/report_db: (seft, db) => return Row[]
+- KHONG tra ve ten ham rong nhu "validate_order_debt_limit" neu khong co code.
+
+## OUTPUT SHAPE (LEGACY COMPAT)
+- Moi menu item uu tien co day du key: id, label, trigger, m_icons, field_root, report_name,
+  orientation, p_width, p_height, m_show, g_readonly, table_name, type_menu, type_form,
+  row_type_edit, dev, prefix_pk, table_pagesize, menu_id, parentId, children.
+- Moi field trong table uu tien co key: id, f_name, f_pkid, f_sort, f_align, f_stt, f_header,
+  f_filter, f_width, f_sorting, f_types, f_show, f_cbo_query, f_dec, f_showgrid, f_showonreport, f_alert_query.
+
 ## LUU Y TOKEN
 Khong lap lai JSON mau dai. Tap trung logic nghiep vu va tra ve JSON menu hoan chinh, dung schema.`;
 
@@ -193,6 +372,24 @@ ${currentMenuContext}
 ## TOM TAT KET QUA AI LAN TRUOC (COMPACT)
 ${previousMenuContext}
 
+## SCHEMA GUARDRAIL (BAT BUOC)
+- CHI dung table field theo format f_*: f_name, f_header, f_types, f_pkid, f_show, f_width, f_dec.
+- KHONG dung field generic: field, label, type, primaryKey, required, editable.
+- Trigger phai nam trong object "trigger": { "before_save": "...", "after_save": "..." }
+- KHONG dung key trigger_* o cap menu (vd: trigger_before_save, trigger_after_save).
+- GIA TRI trigger phai la JS code body thuc thi duoc voi dung chu ky:
+  before_save/after_save/update: (seft, data, bang) => return object
+  afterAdd/afterEdit/afterDelete: (allData, seft, data) => return any
+  load_db/report_db: (seft, db) => return Row[]
+- KHONG tra ve ten ham rong nhu "validate_order_debt_limit" neu khong co code.
+
+## OUTPUT SHAPE (LEGACY COMPAT)
+- Moi menu item uu tien co day du key: id, label, trigger, m_icons, field_root, report_name,
+  orientation, p_width, p_height, m_show, g_readonly, table_name, type_menu, type_form,
+  row_type_edit, dev, prefix_pk, table_pagesize, menu_id, parentId, children.
+- Moi field trong table uu tien co key: id, f_name, f_pkid, f_sort, f_align, f_stt, f_header,
+  f_filter, f_width, f_sorting, f_types, f_show, f_cbo_query, f_dec, f_showgrid, f_showonreport, f_alert_query.
+
 ## DINH DANG DAU RA BAT BUOC
 { "menu": [...], "notes": [...], "warnings": [...] }
 
@@ -219,6 +416,205 @@ function estimateTokenCount(text: string): number {
   const raw = String(text || "");
   // Practical approximation for mixed Vietnamese/English prompts.
   return Math.ceil(raw.length / 4);
+}
+
+function mapGenericTypeToFTypes(input: any): string {
+  const raw = String(input || "").toLowerCase().trim();
+  if (!raw) return "ed";
+  if (raw === "number" || raw === "int" || raw === "float" || raw === "decimal") return "nummeric";
+  if (raw === "date") return "date";
+  if (raw === "datetime") return "datetime";
+  if (raw === "time") return "time";
+  if (raw === "foreignkey" || raw === "enum" || raw === "select" || raw === "combo") return "co";
+  if (raw === "text" || raw === "textarea" || raw === "memo") return "memo";
+  if (raw === "boolean" || raw === "bool" || raw === "checkbox") return "ch";
+  return "ed";
+}
+
+function normalizeTableField(field: any): any {
+  const raw = field && typeof field === "object" ? { ...field } : {};
+
+  const existingType = raw.f_types || raw.type || raw.dataType;
+  let fTypes = mapGenericTypeToFTypes(existingType);
+
+  // Respect read-only intent from generic payload.
+  if (raw.editable === false && fTypes !== "co" && fTypes !== "coro") {
+    fTypes = fTypes === "nummeric" ? "ron" : "ro";
+  }
+
+  const fName = raw.f_name || raw.field || raw.name || "field_unknown";
+  const fHeader = raw.f_header || raw.label || raw.title || fName;
+  const fPkid = raw.f_pkid === 1 || raw.primaryKey === true || fName === "id" ? 1 : 0;
+
+  const normalized: any = {
+    ...raw,
+    f_name: fName,
+    f_header: fHeader,
+    f_types: fTypes,
+    f_pkid: fPkid,
+    f_show: raw.hidden === true ? 0 : (raw.f_show ?? 1),
+    f_width: String(raw.f_width ?? 140),
+  };
+
+  if (typeof raw.f_dec === "number") normalized.f_dec = raw.f_dec;
+  if (typeof raw.decimals === "number") normalized.f_dec = raw.decimals;
+  if (fTypes === "nummeric" && typeof normalized.f_dec !== "number") normalized.f_dec = 2;
+
+  if (raw.foreignKey || raw.enum || raw.options) {
+    normalized.f_types = raw.editable === false ? "coro" : "co";
+  }
+
+  // Remove generic aliases to keep output clean and consistent for backend.
+  delete normalized.field;
+  delete normalized.label;
+  delete normalized.type;
+  delete normalized.primaryKey;
+  delete normalized.required;
+  delete normalized.editable;
+  delete normalized.default;
+  delete normalized.foreignKey;
+  delete normalized.enum;
+  delete normalized.hidden;
+
+  return normalized;
+}
+
+function normalizeTriggerShape(node: any): Record<string, any> {
+  const fromObject = node?.trigger && typeof node.trigger === "object" ? { ...node.trigger } : {};
+  const trigger: Record<string, any> = { ...fromObject };
+
+  Object.keys(node || {}).forEach((key) => {
+    if (!key.startsWith("trigger_")) return;
+    const triggerName = key.replace(/^trigger_/, "");
+    const triggerValue = node[key];
+    if (triggerName && triggerValue !== undefined && triggerValue !== null && triggerValue !== "") {
+      trigger[triggerName] = triggerValue;
+    }
+  });
+
+  ["load_db", "load_table_db", "report_db", "update", "filter", "beforeImport", "afterImport", "barcode"]
+    .forEach((key) => {
+      const value = node?.[key];
+      if (value !== undefined && value !== null && value !== "" && trigger[key] === undefined) {
+        trigger[key] = value;
+      }
+    });
+
+  Object.keys(trigger).forEach((key) => {
+    trigger[key] = normalizeTriggerCodeValue(key, trigger[key]);
+  });
+
+  return trigger;
+}
+
+function normalizeAiMenuNode(input: any): MenuItemType {
+  const node: any = input && typeof input === "object" ? { ...input } : {};
+
+  const normalized: any = {
+    ...node,
+    id: String(node.id || "menu_undefined"),
+    parentId: node.parentId ?? "",
+  };
+
+  if (Array.isArray(node.table)) {
+    normalized.table = node.table.map(normalizeTableField);
+  }
+
+  const trigger = normalizeTriggerShape(node);
+  if (Object.keys(trigger).length > 0) {
+    normalized.trigger = trigger;
+  }
+
+  Object.keys(normalized).forEach((key) => {
+    if (key.startsWith("trigger_")) delete normalized[key];
+  });
+
+  if (Array.isArray(node.children)) {
+    normalized.children = node.children.map(normalizeAiMenuNode);
+  }
+
+  if (!Array.isArray(node.children) && Array.isArray(node.nodes)) {
+    normalized.children = node.nodes.map(normalizeAiMenuNode);
+  }
+
+  return normalized as MenuItemType;
+}
+
+function normalizeAiMenuSchema(menus: MenuItemType[]): MenuItemType[] {
+  return (Array.isArray(menus) ? menus : []).map((menu) => normalizeAiMenuNode(menu));
+}
+
+function ensureLegacyFieldShape(field: any, index: number, menuId: string): any {
+  const fName = String(field?.f_name || field?.field || `field_${index + 1}`);
+  return {
+    id: field?.id || `${menuId}@@@@@${fName}`,
+    f_name: fName,
+    f_pkid: Number(field?.f_pkid ?? 0),
+    f_sort: String(field?.f_sort ?? ""),
+    f_align: String(field?.f_align ?? "left"),
+    f_stt: Number(field?.f_stt ?? index + 1),
+    f_header: String(field?.f_header ?? fName),
+    f_filter: String(field?.f_filter ?? "text_filter"),
+    f_width: String(field?.f_width ?? "150"),
+    f_sorting: String(field?.f_sorting ?? "str"),
+    f_types: String(field?.f_types ?? "ed"),
+    f_show: Number(field?.f_show ?? 1),
+    f_cbo_query: field?.f_cbo_query ?? "",
+    f_dec: Number(field?.f_dec ?? 0),
+    f_showgrid: Number(field?.f_showgrid ?? field?.f_show ?? 1),
+    f_showonreport: Number(field?.f_showonreport ?? field?.f_show ?? 1),
+    f_alert_query: String(field?.f_alert_query ?? ""),
+    ...field,
+  };
+}
+
+function applyLegacyMenuShape(menus: MenuItemType[]): MenuItemType[] {
+  const walk = (nodes: MenuItemType[], parentId: string, pathPrefix: string): MenuItemType[] => {
+    return (Array.isArray(nodes) ? nodes : []).map((rawNode, index) => {
+      const menuId = rawNode.id ? String(rawNode.id) : `${Date.now()}_${Math.random().toString(16).slice(2, 14)}`;
+      const nextMenuId = String((rawNode as any).menu_id || (pathPrefix ? `${pathPrefix}.${index + 1}` : `${index + 1}`));
+      const childrenInput = Array.isArray((rawNode as any).children)
+        ? ((rawNode as any).children as MenuItemType[])
+        : [];
+
+      const table = Array.isArray((rawNode as any).table)
+        ? ((rawNode as any).table as any[]).map((f, idx) => ensureLegacyFieldShape(f, idx, menuId))
+        : [];
+
+      const node: MenuItemType = {
+        ...rawNode,
+        id: menuId,
+        parentId,
+        label: rawNode.label || (rawNode as any).label_vi || rawNode.name || "Ten menu moi",
+        trigger: (rawNode as any).trigger && typeof (rawNode as any).trigger === "object" ? (rawNode as any).trigger : {},
+        m_icons: (rawNode as any).m_icons || rawNode.icon || "",
+        field_root: (rawNode as any).field_root ?? "",
+        report_name: (rawNode as any).report_name ?? "",
+        orientation: (rawNode as any).orientation ?? "",
+        p_width: (rawNode as any).p_width ?? 0,
+        p_height: (rawNode as any).p_height ?? 0,
+        m_show: (rawNode as any).m_show ?? true,
+        g_readonly: (rawNode as any).g_readonly ?? false,
+        table_name: (rawNode as any).table_name ?? "",
+        type_menu: (rawNode as any).type_menu ?? 0,
+        type_form: (rawNode as any).type_form ?? "",
+        row_type_edit: (rawNode as any).row_type_edit ?? "",
+        dev: (rawNode as any).dev ?? false,
+        prefix_pk: (rawNode as any).prefix_pk ?? "",
+        table_pagesize: (rawNode as any).table_pagesize ?? 0,
+        menu_id: nextMenuId,
+        table,
+      };
+
+      if (childrenInput.length > 0) {
+        (node as any).children = walk(childrenInput, menuId, nextMenuId);
+      }
+
+      return node;
+    });
+  };
+
+  return walk(menus, "", "");
 }
 
 function flattenMenuNodes(menus: MenuItemType[], maxNodes: number): MenuItemType[] {
@@ -316,7 +712,9 @@ function ensureMenuDefaults(menu: MenuItemType): MenuItemType {
 }
 
 function normalizeMenuList(menus: MenuItemType[]) {
-  return menus.map(ensureMenuDefaults);
+  const schemaNormalized = normalizeAiMenuSchema(menus);
+  const legacyShaped = applyLegacyMenuShape(schemaNormalized);
+  return legacyShaped.map(ensureMenuDefaults);
 }
 
 function mergeMenus(baseMenus: MenuItemType[], incomingMenus: MenuItemType[]) {

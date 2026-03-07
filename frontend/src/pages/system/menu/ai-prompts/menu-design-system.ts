@@ -391,6 +391,53 @@ Table Names Convention:
 OUTPUT FORMAT (BẮT BUỘC)
 ═══════════════════════════════════════════════════════════════════
 
+RÀNG BUỘC SCHEMA (BẮT BUỘC TUYỆT ĐỐI):
+- KHÔNG dùng field generic trong table: field, label, type, primaryKey, required, editable, default, foreignKey.
+- CHỈ dùng field chuẩn CSM: f_name, f_header, f_types, f_pkid, f_show, f_width, f_dec.
+- Trigger nghiệp vụ PHẢI đặt trong object trigger:
+  - Đúng: "trigger": { "before_save": "validate_order_debt_limit", "after_save": "update_order_total" }
+  - Sai: "trigger_before_save": "...", "trigger_after_save": "..."
+- Nếu có load_db, load_table_db, report_db, ưu tiên đặt trong trigger để thống nhất cấu hình.
+- GIA TRI trigger PHẢI la JS code body thuc thi duoc, khong chi la ten ham:
+  - before_save/after_save/update: code chay voi (seft, data, bang), return object
+  - afterAdd/afterEdit/afterDelete: code chay voi (allData, seft, data)
+  - load_db/report_db: code chay voi (seft, db), return array
+- KHONG tra ve trigger dang chuoi ten ham rong neu khong co code body.
+
+MẪU TRIGGER ĐÚNG CHO NGHIỆP VỤ BẠN:
+
+1) Đơn hàng (bh_donhang) bắt buộc:
+\`\`\`json
+"trigger": {
+  "before_save": "validate_order_debt_limit",
+  "after_save": "update_order_total"
+}
+\`\`\`
+
+2) Chi tiết đơn hàng (bh_donhang_chitiet) bắt buộc:
+\`\`\`json
+"trigger": {
+  "before_save": "validate_order_item_stock",
+  "after_save": "recalculate_order_total"
+}
+\`\`\`
+
+3) Phiếu xuất (bh_phieuxuat) bắt buộc:
+\`\`\`json
+"trigger": {
+  "before_save": "validate_delivery_item_stock",
+  "after_save": "update_stock_on_delivery"
+}
+\`\`\`
+
+4) Phiếu nhập (bh_phieunhap) bắt buộc:
+\`\`\`json
+"trigger": {
+  "before_save": "validate_receipt_item_quantity",
+  "after_save": "update_stock_on_receipt"
+}
+\`\`\`
+
 JSON có cấu trúc:
 {
   "menu": [
