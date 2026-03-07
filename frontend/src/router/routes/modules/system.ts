@@ -11,6 +11,7 @@ const Menu = lazy(() => import("#src/pages/system/menu"));
 const AdminPage = lazy(() => import("#src/pages/system/admin"));
 const Developer = lazy(() => import("#src/pages/system/developer"));
 const Broadcast = lazy(() => import("#src/pages/system/broadcast"));
+const DynamicCode = lazy(() => import("#src/pages/system/dynamic-code"));
 
 const routes: AppRouteRecordRaw[] = [
 	{
@@ -110,6 +111,15 @@ const routes: AppRouteRecordRaw[] = [
 					// Hidden route for dynamic grids; not part of sidebar menu
 					icon: "TableOutlined",
 					title: "Dynamic Grid",
+				},
+			},
+			{
+				path: "/system/dynamic-code/:menuId",
+				Component: DynamicCode,
+				handle: {
+					// Hidden route for dynamic code menus; not part of sidebar menu
+					icon: "CodeOutlined",
+					title: "Dynamic Code Menu",
 				},
 			},
 			],

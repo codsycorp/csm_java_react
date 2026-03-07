@@ -2,6 +2,7 @@ import type { MenuItemType } from "#src/api/system/menu";
 import { fetchAddMenuItem, fetchUpdateMenuItem } from "#src/api/system/menu";
 import { handleTree } from "#src/utils";
 import { isMasterDetailMenu, getMenuDisplayConfig } from "../utils/menu-logic";
+import { getTableData, andWhere } from "#src/components/csm-grid/CsmApi";
 
 import {
   ModalForm,
@@ -15,7 +16,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { FormInstance, UploadProps } from "antd";
-import { Tabs, Alert, Card, Upload, Button, message } from "antd";
+import { Tabs, Alert, Card, Upload, Button, message, Spin } from "antd";
 import FieldConfigEditor from "./FieldConfigEditor";
 import TriggerEditor from "./TriggerEditor";
 import type { TableField, TriggerConfig } from "#src/components/csm-grid/CsmDynamicGrid";
@@ -259,6 +260,8 @@ export function Detail({
   const [tableRows, setTableRows] = useState<TableField[]>([]);
   const [triggerConfig, setTriggerConfig] = useState<TriggerConfig | Record<string, any>>({});
   const user = useUserStore();
+  const [autoCodeOptions, setAutoCodeOptions] = useState<Array<{ label: string; value: string }>>([]);
+  const [loadingAutoCode, setLoadingAutoCode] = useState(false);
 
   const handleReportUpload: UploadProps["customRequest"] = async (options) => {
     const { file, onSuccess, onError } = options;
@@ -450,6 +453,44 @@ export function Detail({
     }
   }, [open]);
 
+  // Load sys_autos (dynamic code templates) when modal opens
+  useEffect(() => {
+    if (!open) return;
+    
+    const loadAutoCode = async () => {
+      try {
+        setLoadingAutoCode(true);
+        const where = andWhere([
+          { field: "p_type", type: "eq", value: 0 } // Only load p_type=0 (code templates)
+        ]);
+        
+        const response = await getTableData<any>({
+          app_id: "csm",
+          obj_name: "sys_autos",
+          where,
+          take: 100
+        });
+        
+        const rows = (response as any)?.rows || (response as any)?.data || [];
+        const options = rows
+          .filter((r: any) => r?.p_name)
+          .map((r: any) => ({
+            label: r.p_name,
+            value: r.p_name
+          }));
+        
+        setAutoCodeOptions(options);
+      } catch (err) {
+        console.error("Failed to load auto code templates:", err);
+        setAutoCodeOptions([]);
+      } finally {
+        setLoadingAutoCode(false);
+      }
+    };
+    
+    loadAutoCode();
+  }, [open]);
+
   return (
     <ModalForm<MenuItemType>
       title={title}
@@ -616,12 +657,14 @@ export function Detail({
                 style: { width: '100%' },
               }}
               options={[
-                { label: t('system.menu.typeForm.table') || 'Dạng bảng', value: 1 },
+                { label: t('system.menu.typeForm.table') || 'Dạng bảng (Table)', value: 1 },
                 { label: t('system.menu.typeForm.masterDetail') || 'Dạng Form Master-Detail', value: 2 },
+                { label: t('system.menu.typeForm.dynamicLink') || 'Liên kết động (Dynamic Link)', value: 3 },
+                { label: t('system.menu.typeForm.dynamicCode') || 'Chạy code động (Dynamic Code)', value: 4 },
               ]}
             />
             <div style={{ marginTop: 4, fontSize: 12, color: '#8c8c8c' }}>
-              Cách hiển thị dữ liệu
+              Cách hiển thị dữ liệu hoặc loại nội dung
             </div>
           </div>
 
@@ -696,6 +739,36 @@ export function Detail({
             />
           );
         }
+        
+        // Hiển thị cảnh báo khi menu là Dynamic Code
+        const typeForm = Number(values.type_form || 1);
+        if (typeForm === 4) {
+          return (
+            <Alert
+              message="Menu dạng Dynamic Code"
+              description="Menu này sẽ chạy code JavaScript từ template sys_autos mà bạn chọn. Đảm bảo template có sẵn trong hệ thống."
+              type="warning"
+              showIcon
+              style={{ marginBottom: 16, marginTop: 16 }}
+              closable
+            />
+          );
+        }
+
+        // Hiển thị cảnh báo khi menu là Dynamic Link
+        if (typeForm === 3) {
+          return (
+            <Alert
+              message="Menu dạng Dynamic Link"
+              description="Menu này sẽ điều hướng tới đường dẫn được tính toán động. Đường dẫn có thể thay đổi dựa vào ngữ cảnh."
+              type="info"
+              showIcon
+              style={{ marginBottom: 16, marginTop: 16 }}
+              closable
+            />
+          );
+        }
+        
         return null;
       }}
     </ProFormDependency>
@@ -1029,9 +1102,69 @@ export function Detail({
               }}
             />
             <div style={{ marginTop: 4, fontSize: 12, color: '#8c8c8c' }}>
-              Component tùy chọn
+              Component tùy chọn hoặc đường dẫn động
             </div>
           </div>
+
+          {/* Auto Code Selector - chỉ hiện khi type_form === 4 (Dynamic Code) */}
+          <ProFormDependency name={["type_form"]}>
+            {(values: Record<string, any>) => {
+              const typeForm = Number(values.type_form || 1);
+              
+              if (typeForm === 4) {
+                return (
+                  <div style={{ position: 'relative' }}>
+                    <Spin spinning={loadingAutoCode} size="small">
+                      <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
+                        {t('system.menu.autoCodeTemplate') || 'Template Code Động'}
+                        <span style={{ color: '#ff4d4f', marginLeft: 4 }}>*</span>
+                      </div>
+                      <ProFormSelect
+                        name="auto_code_name"
+                        noStyle
+                        rules={[{ required: true, message: t("form.required") }]}
+                        fieldProps={{
+                          placeholder: 'Chọn template code từ sys_autos',
+                          allowClear: true,
+                          size: 'large',
+                          style: { width: '100%' },
+                          loading: loadingAutoCode,
+                        }}
+                        options={autoCodeOptions}
+                      />
+                      <div style={{ marginTop: 4, fontSize: 12, color: '#8c8c8c' }}>
+                        Chọn p_name từ sys_autos (p_type=0) để chạy code động
+                      </div>
+                    </Spin>
+                  </div>
+                );
+              }
+              
+              if (typeForm === 3) {
+                return (
+                  <div>
+                    <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
+                      {t('system.menu.dynamicLinkUrl') || 'Đường dẫn Link Động'}
+                    </div>
+                    <ProFormText
+                      name="dynamic_link_url"
+                      noStyle
+                      fieldProps={{
+                        placeholder: 'Nhập URL hoặc biểu thức của đường dẫn động',
+                        size: 'large',
+                        style: { width: '100%' },
+                      }}
+                    />
+                    <div style={{ marginTop: 4, fontSize: 12, color: '#8c8c8c' }}>
+                      URL sẽ được tính toán động dựa vào ngữ cảnh menu
+                    </div>
+                  </div>
+                );
+              }
+              
+              return null;
+            }}
+          </ProFormDependency>
         </div>
       </Card>
     </div>

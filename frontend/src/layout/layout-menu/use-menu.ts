@@ -433,6 +433,53 @@ export function useMenu() {
 		} else if (selectedApiMenu?.id === "auto" || selectedApiMenu?.path === "/auto-setup") {
 			console.warn('[AUTO_SETUP] Auto menu selected but NO auto_code found:', selectedApiMenu);
 		}
+
+		// Handle Dynamic Link (type_form = 3)
+		if (selectedApiMenu && Number(selectedApiMenu.type_form) === 3) {
+			const linkUrl = selectedApiMenu.dynamic_link_url || selectedApiMenu.v_link || "";
+			if (!linkUrl) {
+				console.warn('[DYNAMIC_LINK] Menu has no link URL configured:', selectedApiMenu);
+				return;
+			}
+
+			// Check if it's an external URL
+			if (/^https?:/.test(linkUrl)) {
+				window.open(linkUrl, '_blank');
+			} else if (linkUrl.startsWith('/')) {
+				// Absolute internal path
+				navigate(linkUrl, { state: { menuLabel: selectedApiMenu.label, menuData: selectedApiMenu } });
+			} else {
+				// Relative path or custom route
+				navigate(linkUrl, { state: { menuLabel: selectedApiMenu.label, menuData: selectedApiMenu } });
+			}
+			return;
+		}
+
+		// Handle Dynamic Code (type_form = 4)
+		if (selectedApiMenu && Number(selectedApiMenu.type_form) === 4) {
+			const menuId = String(selectedApiMenu.id || selectedApiMenu.key);
+			const autoCodeName = selectedApiMenu.auto_code_name;
+
+			if (!autoCodeName) {
+				console.warn('[DYNAMIC_CODE] Menu has no auto code template configured:', selectedApiMenu);
+				return;
+			}
+
+			const rawLabel = selectedApiMenu.label || selectedApiMenu.title || 'Dynamic Code';
+			const menuLabel = String(rawLabel).replace(/^.*?\.\s+/, '').trim();
+
+			// Update store BEFORE navigation
+			useUserStore.getState().setSelectedMenuIdForTab(menuId);
+
+			// Navigate to dynamic code page
+			navigate(`/system/dynamic-code/${menuId}`, {
+				state: {
+					menuLabel,
+					menuData: selectedApiMenu
+				}
+			});
+			return;
+		}
 		
 		// Check if menu has table_name or report_name (grid/report) - navigate to dynamic route
 		if (selectedApiMenu && (selectedApiMenu.table_name || selectedApiMenu.report_name)) {

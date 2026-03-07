@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Button, Card, Divider, Input, message, Radio, Space, Tag } from "antd";
+import { Alert, Button, Card, Divider, Input, message, Radio, Space, Tag, Tabs } from "antd";
 import type { RadioChangeEvent } from "antd";
 import { useTranslation } from "react-i18next";
 
 import type { MenuItemType } from "#src/api/system/menu";
 import { generateSeoContentWithPrompt } from "#src/api/ai";
 import { getTableData, updateTableData } from "#src/components/csm-grid/CsmApi";
+import { AI_PROMPTS } from "../ai-prompts/menu-design-system";
+import MenuRequirementForm from "./MenuRequirementForm";
 
 const { TextArea } = Input;
 
@@ -30,69 +32,101 @@ type AiMenuDesignerProps = {
 
 const AI_REQUEST_TABLE = "csm_ai_menu_requests";
 
-const MENU_PROMPT_TEMPLATE = `Bạn là AI thiết kế menu cho hệ thống CSM. Sinh JSON hợp lệ, ngắn gọn, đúng schema.
+// Use comprehensive prompts from menu-design-system.ts
+// The old MENU_PROMPT_TEMPLATE is replaced by AI_MENU_DESIGN_MAIN_PROMPT which includes
+// complete documentation of all 4 menu types with detailed examples and rules
+  const handleRequirementSubmit = async (data: any, prompt: string) => {
+    if (!appId) {
+      message.warning(t("system.menu.pleaseSelectApp") || "Vui lòng chọn app");
+      return;
+    }
 
-OUTPUT BẮT BUỘC:
-{"menu":[...],"notes":[...]}
+    setLoading(true);
+    setRequirementModalOpen(false);
+    setRequirementScope(data.scope || "minimal");
+/**
+    try {
+      const command = recordId ? "update" : "create";
+      const fullPrompt = buildPromptWithRequirement(data.description, currentMenus, data.scope);
+      
+      await saveRequestRecord(
+        {
+          request_text: data.description,
+          last_prompt: fullPrompt,
+          updated_at: Date.now(),
+        },
+        command,
+      );
+      setStoredRequest(data.description);
+ * Build comprehensive prompt with additional context from customer requirements 
+      const res = await generateSeoContentWithPrompt(fullPrompt);
+      const payload = extractAiPayload(res);
+      if (!payload) {
+        message.error("AI trả về không đúng JSON");
+        setAiResultText(String(res?.message || "AI error"));
+        return;
+      }
+ * Uses AI_MENU_DESIGN_MAIN_PROMPT as the base instruction
+      const menuPayload = Array.isArray(payload.menu) ? payload.menu : Array.isArray(payload) ? payload : [];
+      if (menuPayload.length === 0) {
+        message.warning("AI chưa trả về danh sách menu");
+      }
+ */
+      const normalized = normalizeMenuList(menuPayload);
+      const output = {
+        menu: normalized,
+        notes: Array.isArray(payload.notes) ? payload.notes : [],
+      };
+function buildPromptWithRequirement(
+      setAiMenus(normalized);
+      setAiResultText(JSON.stringify(output, null, 2));
+  requestText: string, 
+      await saveRequestRecord(
+        {
+          request_text: data.description,
+          last_result: JSON.stringify(output),
+          updated_at: Date.now(),
+        },
+        "update",
+      );
+  currentMenus?: MenuItemType[],
+      message.success("Đã tạo menu bằng AI (Form)");
+    } catch (error) {
+      console.error("AI menu generation failed:", error);
+      message.error("Lỗi gọi AI");
+    } finally {
+      setLoading(false);
+    }
+  };
+  scope: "minimal" | "complete" = "minimal"
+): string {
+  const menuExample = createMenuExample();
+  const menuJson = JSON.stringify(menuExample, null, 2);
+  
+  // Start with comprehensive main prompt
+  let prompt = AI_PROMPTS.AI_MENU_DESIGN_MAIN_PROMPT || "";
+  
+  // Add responsibility section
+  prompt += `
 
-QUY TẮC CỐT LÕI:
-1) Đa ngôn ngữ đầy đủ: _vi, _en, _zh (KHÔNG dùng _sh). label/name gốc = tiếng Việt.
-2) type_form:
-  - 1: Grid đơn
-  - 2: Master-Detail (nodes/children = tab)
-  - 0: Báo cáo (CsmReport)
-3) Master-Detail:
-  - Master có table_name = DB table
-  - Tab detail KHÔNG có DB table; table_name = tên field JSON lưu trong master
-4) Menu cấp 1-2 chỉ nhóm, KHÔNG có table_name. Menu cấp 3 mới có table_name/table/trigger.
-5) Nếu thiếu dữ liệu: tạo placeholder rõ ràng, không tự bịa.
-6) Bảng luôn có field id và khóa chính rõ ràng.
+## TRÁCH NHIỆM CỦA BẠN
+Bạn cần:
+1) Phân tích yêu cầu của khách hàng ở phần YÊUHCẦU KHÁCH HÀNG dưới đây
+2) Chọn menu type phù hợp: ${scope === "minimal" ? "Chọn type tối giản (1 hoặc 3)" : "Có thể dùng bất kỳ type nào (1/2/3/4)"}
+3) Tạo menu JSON đúng schema MenuItemType
+4) Giải thích lý do chọn type trong notes
 
-MenuItemType (tối thiểu cần có):
-id,parentId,menuType,type_menu,type_form,row_type_edit,path,component,order,icon,
-label,label_vi,label_en,label_zh,name,name_vi,name_en,name_zh,
-table_name,g_readonly,table_pagesize,table,trigger,report_name,p_width,p_height,orientation,nodes,children
+## MENU HIỆN TẠI (Reference):
+\`\`\`json
+${menuJson}
+\`\`\`
 
-TableField (tối thiểu cần có):
-f_name,f_header,f_header_vi,f_header_en,f_header_zh,f_types,f_show,f_stt,f_search,f_report,f_align,f_width,f_dec,f_cbo_query,f_pkid
-
-f_types thường dùng: txt, edt, nummeric, price, ron, date, datetime, time, co, coro, cp, img, file, codejs.
-
-KHÓA CHÍNH & ID:
-- Mỗi bảng có field id.
-- Đặt f_pkid=1 cho field khóa chính.
-- Nếu có nhiều khóa chính: thêm m_configs.struct.fieldsPK=["k1","k2",...].
-
-TRIGGER (nếu nghiệp vụ cần):
-update, barcode, load_db, filter, update_db, delete_db, afterAdd, afterEdit, afterDelete, beforeImport, afterImport, report_db
-Combo mẫu:
-- Giới tính: {"options":[{"ma":"1","ten":"Nam"},{"ma":"0","ten":"Nữ"}],"query":[]}
-- Query bảng khác: {"options":[],"query":[{"obj_name":"dm_phongban","fields":["ma_pb","ten_pb"],"obj_where":""}]}
-
-f_cbo_query quy ước:
-- Static JSON: {"options":[{"ma":"1","ten":"Nam"}],"query":[]}
-- Query bảng: {"options":[],"query":[{"obj_name":"dm_khachhang","fields":["ma_kh","ten_kh"],"obj_where":""}]}
-- Dynamic JS: return { options: [...], query: [] };
-
-Trigger code (JS thuần, dạng string):
-- update(seft,data,bang) -> return object cập nhật field
-- barcode(seft,data,bang) -> return object
-- load_db(seft,db) -> return Row[]
-- filter(obj) -> return boolean
-- afterAdd/afterEdit/afterDelete(allData,seft,data) -> return any
-- report_db(seft,data,bang) -> return object dữ liệu báo cáo
-
-Gợi ý tổ chức cây menu:
-- Root: dm_root, nghiepvu_root, baocao_root, hethong_root
-- Group: dm_chung, dm_banhang, dm_kho, bh_nghiepvu, kho_nghiepvu, tc_nghiepvu, bc_banhang, bc_kho, bc_taichinh
-- Prefix ID: dm_, bh_, kho_, tc_, bc_
-
-MENU HIỆN TẠI:
-%s
-
-YÊU CẦU KHÁCH HÀNG:
-%s
+## YÊU CẦU KHÁCH HÀNG:
+${requestText}
 `;
+
+  return prompt;
+}
 
 function stringifyMenu(menus?: MenuItemType[]) {
   if (!menus || menus.length === 0) return "[]";
@@ -162,12 +196,11 @@ function createMenuExample(): MenuItemType[] {
   ];
 }
 
+/**
+ * Wrapper for backward compatibility - uses new comprehensive prompt system
+ */
 function buildPrompt(requestText: string, currentMenus?: MenuItemType[]) {
-  // Sử dụng mẫu cây menu đơn giản thay vì tất cả currentMenus
-  // Vì dùng hết currentMenus sẽ quá dài và gây confusion cho AI
-  const menuExample = createMenuExample();
-  const menuJson = JSON.stringify(menuExample, null, 2);
-  return MENU_PROMPT_TEMPLATE.replace("%s", menuJson).replace("%s", requestText);
+  return buildPromptWithRequirement(requestText, currentMenus, "minimal");
 }
 
 function ensureMenuDefaults(menu: MenuItemType): MenuItemType {
@@ -250,13 +283,15 @@ function extractAiPayload(response: any) {
 
 export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerProps) {
   const { t } = useTranslation();
-  const [requestText, setRequestText] = useState("");
+  const [requestText, setRequestText] = useState<string>("");
   const [storedRequest, setStoredRequest] = useState("");
   const [aiResultText, setAiResultText] = useState("");
   const [aiMenus, setAiMenus] = useState<MenuItemType[] | null>(null);
   const [mergeMode, setMergeMode] = useState<MergeMode>("merge");
   const [loading, setLoading] = useState(false);
   const [recordId, setRecordId] = useState<string | undefined>(undefined);
+  const [requirementModalOpen, setRequirementModalOpen] = useState(false);
+  const [requirementScope, setRequirementScope] = useState<"minimal" | "complete">("minimal");
 
   const hasStoredRequest = storedRequest.trim().length > 0;
 
