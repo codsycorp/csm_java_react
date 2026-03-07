@@ -230,6 +230,155 @@ Trigger Functions:
   barcode: Xử lý barcode scan
   beforeImport, afterImport: Hook import dữ liệu
 
+═══════════════════════════════════════════════════════════════════
+TRIGGER NGHIỆP VỤ - KHI NÀO CẦN DÙNG?
+═══════════════════════════════════════════════════════════════════
+
+**Khi nào thêm trigger:**
+AI phân tích yêu cầu → Nếu có logic tự động → Thêm trigger thích hợp
+
+**Các trường hợp phổ biến:**
+
+1. **Tính toán tự động** → before_save / after_save
+   Yêu cầu: "Tự động tính tổng tiền", "Cập nhật số lượng tồn"
+   Trigger: before_save = "calculate_total", after_save = "update_inventory"
+   Ví dụ: Đơn hàng (tính tổng), Chi tiết (cập nhật tồn kho)
+
+2. **Kiểm tra dữ liệu** → before_save / validate
+   Yêu cầu: "Kiểm tra số điện thoại", "Validate email"
+   Trigger: before_save = "validate_customer_info"
+   Ví dụ: Khách hàng (validate phone/email)
+
+3. **Cập nhật liên quan** → after_save / after_delete
+   Yêu cầu: "Cập nhật thống kê", "Đồng bộ dữ liệu"
+   Trigger: after_save = "update_statistics", after_delete = "sync_related_data"
+   Ví dụ: Bán hàng (cập nhật doanh thu), Kho (cập nhật tồn)
+
+4. **Phòng ngừa xóa** → before_delete
+   Yêu cầu: "Không cho xóa nếu đã dùng", "Kiểm tra trước khi xóa"
+   Trigger: before_delete = "check_dependencies"
+   Ví dụ: Sản phẩm (kiểm tra đã có đơn hàng chưa)
+
+5. **Load dữ liệu mặc định** → on_load / load_db
+   Yêu cầu: "Hiển thị dữ liệu theo điều kiện", "Filter mặc định"
+   Trigger: load_db = "load_active_only"
+   Ví dụ: Danh sách (chỉ hiện bản ghi active)
+
+6. **Master-Detail đồng bộ** → after_save / after_delete (trong children)
+   Yêu cầu: "Chi tiết thay đổi → cập nhật master"
+   Trigger trong children: after_save = "recalculate_master_total"
+   Ví dụ: Chi tiết đơn hàng → Cập nhật tổng tiền đơn hàng
+
+**Tên trigger nên rõ ràng:**
+✓ validate_customer, calculate_total, update_inventory
+✗ trigger1, handler, process
+
+**Trigger đơn giản:**
+{
+  "before_save": "validate_data",
+  "after_save": "update_related"
+}
+
+**Trigger phức tạp:**
+{
+  "before_save": "validate_order",
+  "after_save": "calculate_total_and_update_inventory",
+  "before_delete": "check_order_status",
+  "after_delete": "restore_inventory"
+}
+
+**KHÔNG thêm trigger nếu:**
+- Menu chỉ hiển thị dữ liệu (readonly)
+- Không có logic tự động nào
+- Danh mục đơn giản (chỉ lưu/xem)
+
+═══════════════════════════════════════════════════════════════════
+PATTERNS NGHIỆP VỤ PHỨC TẠP (MẪU THỰC TẾ)
+═══════════════════════════════════════════════════════════════════
+
+**1. TÍNH TUỔI TỰ ĐỘNG**
+Yêu cầu: "Tự động tính tuổi khi nhập năm sinh"
+Trigger: load_db hoặc load_table_db
+Nghiệp vụ: Lấy năm hiện tại trừ năm sinh
+Áp dụng: Quản lý khách hàng, phật tử, học sinh, nhân viên
+
+**2. TRA CỨU THÔNG TIN PHỤ THEO NĂM SINH**
+Yêu cầu: "Xem sao hạn, mạng, cung mệnh theo năm sinh"
+Trigger: load_db hoặc load_table_db
+Nghiệp vụ: Tra bảng tra cứu (cbq_banghan, cbq_bangmang, cbq_bangsao) 
+         dựa trên năm sinh + giới tính
+Áp dụng: Phong thủy, tử vi, chiêm tinh, y học cổ truyền
+
+**3. TẠO BÁO CÁO ĐỘNG**
+Yêu cầu: "In báo cáo danh sách theo điều kiện"
+Trigger: report_db
+Nghiệp vụ: 
+- Lọc dữ liệu master + detail theo điều kiện input
+- Join nhiều bảng
+- Format dữ liệu cho template báo cáo
+Áp dụng: Tất cả menu báo cáo (type_form=0 có report_name)
+
+**4. MASTER-DETAIL VỚI TÍNH TOÁN**
+Yêu cầu: "Quản lý gia đình có nhiều thành viên, tự động tính tuổi/thông tin"
+Trigger: 
+- load_db: Load master + tra cứu thông tin phụ
+- load_table_db: Load detail + tính toán cho từng detail row
+Nghiệp vụ:
+- Master: Thông tin chính (gia đình, đơn hàng, hóa đơn)
+- Detail: Chi tiết (thành viên, sản phẩm, dịch vụ)
+- Tính toán cho detail: tuổi, sao hạn, thành tiền, VAT, v.v.
+Áp dụng: Đơn hàng, hóa đơn, gia đình, phiếu nhập/xuất
+
+**5. AUTO-GENERATE CODE**
+Yêu cầu: "Tự động sinh mã số khi tạo mới"
+Trigger: before_save
+Nghiệp vụ: Sinh mã tự động (MS-001, KH-0001, DH-20240101-001)
+Áp dụng: Tất cả danh mục cần mã số duy nhất
+
+**6. COMBO ĐỘNG (DROPDOWN PHỤ THUỘC)**
+Yêu cầu: "Chọn tỉnh → hiện danh sách quận/huyện thuộc tỉnh đó"
+Trigger: combo_db_[table_name]
+Nghiệp vụ: Load options cho combobox động dựa trên giá trị khác
+Áp dụng: Địa chỉ (tỉnh-quận-phường), danh mục phụ thuộc
+
+**7. TÍNH TOÁN FIELD TỰ ĐỘNG**
+Yêu cầu: "Nhập số lượng, đơn giá → tự động tính thành tiền"
+Trigger: update
+Nghiệp vụ: Lắng nghe thay đổi field → tính toán realtime
+Áp dụng: Chi tiết đơn hàng, hóa đơn, phiếu xuất/nhập
+
+**8. VALIDATE DỮ LIỆU NGHIỆP VỤ**
+Yêu cầu: "Kiểm tra tồn kho trước khi xuất", "Ngày kết thúc > ngày bắt đầu"
+Trigger: before_save
+Nghiệp vụ: Kiểm tra điều kiện nghiệp vụ trước khi cho phép lưu
+Áp dụng: Tất cả form có điều kiện nghiệp vụ
+
+**9. BÁO CÁO THAM SỐ HOÁ**
+Yêu cầu: "Chọn khách hàng, tỉnh thành → in danh sách"
+Trigger: report_db với table có fields là tham số
+Nghiệp vụ: 
+- Hiển thị form nhập tham số (combobox, datepicker)
+- Lọc dữ liệu theo tham số
+- Trả về data cho template
+Áp dụng: Báo cáo doanh thu, công nợ, danh sách lọc
+
+**MẪU YÊU CẦU → TRIGGER MAPPING:**
+
+| Yêu cầu khách hàng | Loại Menu | Trigger cần tạo |
+|-------------------|-----------|-----------------|
+| "Quản lý gia đình phật tử, tự động tính tuổi và xem sao hạn" | Master-Detail (type_form=2) | load_db, load_table_db |
+| "In danh sách cầu an theo khách hàng" | Report (type_form=0) | report_db + table params |
+| "Quản lý đơn hàng, tự động tính tổng tiền" | Master-Detail (type_form=2) | update, after_save (children) |
+| "Danh mục sản phẩm, mã tự động" | Table (type_form=1) | before_save |
+| "Chọn tỉnh thành → hiện quận huyện" | Table (type_form=1) | combo_db_[table] |
+| "Xuất kho, kiểm tra tồn" | Master-Detail (type_form=2) | before_save |
+
+**CHÚ Ý QUAN TRỌNG:**
+- Báo cáo (type_form=0 có report_name): PHẢI có report_db
+- Master-Detail (type_form=2): NÊN có load_db + load_table_db (cho children)
+- Table đơn giản (type_form=1): CHỈ thêm trigger nếu có nghiệp vụ đặc biệt
+- Trigger name PHẢI mô tả rõ nghiệp vụ (validate_stock, calculate_age, generate_code)
+
 Table Names Convention:
   dm_* = Danh mục (Catalog)
   bh_* = Bán hàng (Sales)

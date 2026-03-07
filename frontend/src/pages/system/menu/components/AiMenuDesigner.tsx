@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Button, Card, Divider, Input, message, Radio, Space, Tag, Tabs } from "antd";
+import { Alert, Button, Card, Divider, Input, message, Radio, Space } from "antd";
 import type { RadioChangeEvent } from "antd";
 import { useTranslation } from "react-i18next";
 
@@ -7,7 +7,6 @@ import type { MenuItemType } from "#src/api/system/menu";
 import { generateSeoContentWithPrompt } from "#src/api/ai";
 import { getTableData, updateTableData } from "#src/components/csm-grid/CsmApi";
 import { AI_PROMPTS } from "../ai-prompts/menu-design-system";
-import MenuRequirementForm from "./MenuRequirementForm";
 
 const { TextArea } = Input;
 
@@ -32,163 +31,77 @@ type AiMenuDesignerProps = {
 
 const AI_REQUEST_TABLE = "csm_ai_menu_requests";
 
-// Use comprehensive prompts from menu-design-system.ts
-// The old MENU_PROMPT_TEMPLATE is replaced by AI_MENU_DESIGN_MAIN_PROMPT which includes
-// complete documentation of all 4 menu types with detailed examples and rules
-  const handleRequirementSubmit = async (data: any, prompt: string) => {
-    if (!appId) {
-      message.warning(t("system.menu.pleaseSelectApp") || "Vui lòng chọn app");
-      return;
-    }
-
-    setLoading(true);
-    setRequirementModalOpen(false);
-    setRequirementScope(data.scope || "minimal");
-/**
-    try {
-      const command = recordId ? "update" : "create";
-      const fullPrompt = buildPromptWithRequirement(data.description, currentMenus, data.scope);
-      
-      await saveRequestRecord(
-        {
-          request_text: data.description,
-          last_prompt: fullPrompt,
-          updated_at: Date.now(),
-        },
-        command,
-      );
-      setStoredRequest(data.description);
- * Build comprehensive prompt with additional context from customer requirements 
-      const res = await generateSeoContentWithPrompt(fullPrompt);
-      const payload = extractAiPayload(res);
-      if (!payload) {
-        message.error("AI trả về không đúng JSON");
-        setAiResultText(String(res?.message || "AI error"));
-        return;
-      }
- * Uses AI_MENU_DESIGN_MAIN_PROMPT as the base instruction
-      const menuPayload = Array.isArray(payload.menu) ? payload.menu : Array.isArray(payload) ? payload : [];
-      if (menuPayload.length === 0) {
-        message.warning("AI chưa trả về danh sách menu");
-      }
- */
-      const normalized = normalizeMenuList(menuPayload);
-      const output = {
-        menu: normalized,
-        notes: Array.isArray(payload.notes) ? payload.notes : [],
-      };
-function buildPromptWithRequirement(
-      setAiMenus(normalized);
-      setAiResultText(JSON.stringify(output, null, 2));
-  requestText: string, 
-      await saveRequestRecord(
-        {
-          request_text: data.description,
-          last_result: JSON.stringify(output),
-          updated_at: Date.now(),
-        },
-        "update",
-      );
-  currentMenus?: MenuItemType[],
-      message.success("Đã tạo menu bằng AI (Form)");
-    } catch (error) {
-      console.error("AI menu generation failed:", error);
-      message.error("Lỗi gọi AI");
-    } finally {
-      setLoading(false);
-    }
-  };
-  scope: "minimal" | "complete" = "minimal"
-): string {
-  const menuExample = createMenuExample();
-  const menuJson = JSON.stringify(menuExample, null, 2);
-  
-  // Start with comprehensive main prompt
-  let prompt = AI_PROMPTS.AI_MENU_DESIGN_MAIN_PROMPT || "";
-  
-  // Add responsibility section
-  prompt += `
-
-## TRÁCH NHIỆM CỦA BẠN
-Bạn cần:
-1) Phân tích yêu cầu của khách hàng ở phần YÊUHCẦU KHÁCH HÀNG dưới đây
-2) Chọn menu type phù hợp: ${scope === "minimal" ? "Chọn type tối giản (1 hoặc 3)" : "Có thể dùng bất kỳ type nào (1/2/3/4)"}
-3) Tạo menu JSON đúng schema MenuItemType
-4) Giải thích lý do chọn type trong notes
-
-## MENU HIỆN TẠI (Reference):
-\`\`\`json
-${menuJson}
-\`\`\`
-
-## YÊU CẦU KHÁCH HÀNG:
-${requestText}
-`;
-
-  return prompt;
-}
-
-function stringifyMenu(menus?: MenuItemType[]) {
-  if (!menus || menus.length === 0) return "[]";
-  try {
-    return JSON.stringify(menus, null, 2);
-  } catch {
-    return "[]";
-  }
-}
-
-/**
- * Tạo mẫu cây menu đơn giản để làm example cho AI hiểu cấu trúc.
- * Không đưa hết currentMenus vì sẽ quá dài và gây confusion.
- */
 function createMenuExample(): MenuItemType[] {
   return [
     {
-      id: "dm_root",
-      parentId: "",
-      menuType: 0,
-      type_menu: 0,
-      type_form: 0,
-      row_type_edit: 0,
-      path: "/danh-muc",
-      component: "CsmGrid",
-      order: 1,
-      icon: "fa fa-database",
-      label: "Danh Mục",
-      label_vi: "Danh Mục",
-      label_en: "Catalog",
-      label_zh: "目录",
-      name: "dm_root",
-      name_vi: "dm_root",
-      name_en: "dm_root",
-      name_zh: "dm_root",
+      id: "dm_1",
+      label: "Danh mục",
+      m_icons: "fa fa-database",
+      m_show: true,
+      menu_id: "1",
       children: [
         {
-          id: "dm_khachhang",
-          parentId: "dm_root",
-          menuType: 1,
-          type_menu: 1,
+          id: "dm_kh",
+          parentId: "dm_1",
+          label: "Khách hàng",
+          m_icons: "fa fa-users",
+          m_show: true,
+          menu_id: "1.1",
           type_form: 1,
-          row_type_edit: 1,
-          path: "/danh-muc/khach-hang",
-          component: "CsmGrid",
-          order: 1,
-          icon: "fa fa-users",
-          label: "Khách Hàng",
-          label_vi: "Khách Hàng",
-          label_en: "Customers",
-          label_zh: "客户",
-          name: "dm_khachhang",
-          name_vi: "dm_khachhang",
-          name_en: "dm_khachhang",
-          name_zh: "dm_khachhang",
           table_name: "dm_khachhang",
-          g_readonly: false,
           table_pagesize: 50,
+          trigger: {
+            before_save: "validate_customer",
+            after_save: "update_customer_stats"
+          },
           table: [
-            { f_name: "id", f_header: "ID", f_header_vi: "ID", f_header_en: "ID", f_header_zh: "ID", f_types: "txt", f_show: 1, f_stt: 1, f_search: 1, f_report: 1, f_align: "left", f_width: 100, f_dec: 0, f_pkid: 1 },
-            { f_name: "ma_kh", f_header: "Mã KH", f_header_vi: "Mã KH", f_header_en: "Code", f_header_zh: "代码", f_types: "txt", f_show: 1, f_stt: 2, f_search: 1, f_report: 1, f_align: "left", f_width: 80, f_dec: 0 },
-            { f_name: "ten_kh", f_header: "Tên KH", f_header_vi: "Tên KH", f_header_en: "Name", f_header_zh: "名称", f_types: "txt", f_show: 1, f_stt: 3, f_search: 1, f_report: 1, f_align: "left", f_width: 150, f_dec: 0 }
+            { f_name: "id", f_header: "ID", f_types: "ed", f_pkid: 0, f_show: 1, f_width: "150" },
+            { f_name: "ma_kh", f_header: "Mã KH", f_types: "ed", f_pkid: 1, f_show: 1, f_width: "120" },
+            { f_name: "ten_kh", f_header: "Tên KH", f_types: "ed", f_pkid: 0, f_show: 1, f_width: "250" }
+          ]
+        },
+        {
+          id: "bh_dh",
+          parentId: "dm_1",
+          label: "Đơn hàng",
+          m_icons: "fa fa-shopping-cart",
+          m_show: true,
+          menu_id: "1.2",
+          type_form: 2,
+          table_name: "bh_donhang",
+          table_pagesize: 50,
+          field_root: "id_don_hang",
+          trigger: {
+            before_save: "validate_order",
+            after_save: "calculate_order_total",
+            before_delete: "check_order_status"
+          },
+          table: [
+            { f_name: "id", f_header: "ID", f_types: "ed", f_pkid: 0, f_show: 1, f_width: "150" },
+            { f_name: "ma_dh", f_header: "Mã ĐH", f_types: "ro", f_pkid: 1, f_show: 1, f_width: "120" },
+            { f_name: "ngay_ct", f_header: "Ngày CT", f_types: "date", f_pkid: 0, f_show: 1, f_width: "100" },
+            { f_name: "tong_tien", f_header: "Tổng tiền", f_types: "nummeric", f_pkid: 0, f_show: 1, f_width: "120", f_dec: 2 }
+          ],
+          children: [
+            {
+              id: "bh_dh_ct",
+              parentId: "bh_dh",
+              label: "Chi tiết ĐH",
+              m_show: true,
+              menu_id: "1.2.1",
+              table_name: "bh_donhang_ct",
+              trigger: {
+                after_save: "update_order_total",
+                after_delete: "recalculate_order_total"
+              },
+              table: [
+                { f_name: "id", f_header: "ID", f_types: "ed", f_pkid: 0, f_show: 1, f_width: "150" },
+                { f_name: "id_sp", f_header: "Sản phẩm", f_types: "co", f_pkid: 1, f_show: 1, f_width: "250", f_cbo_query: "{\"query\":[{\"obj_name\":\"dm_sanpham\",\"fields\":[\"id\",\"ten_sp\"]}]}" },
+                { f_name: "so_luong", f_header: "SL", f_types: "nummeric", f_pkid: 0, f_show: 1, f_width: "100", f_dec: 2 },
+                { f_name: "don_gia", f_header: "Đơn giá", f_types: "nummeric", f_pkid: 0, f_show: 1, f_width: "120", f_dec: 2 },
+                { f_name: "thanh_tien", f_header: "Thành tiền", f_types: "nummeric", f_pkid: 0, f_show: 1, f_width: "120", f_dec: 2 }
+              ]
+            }
           ]
         }
       ]
@@ -196,11 +109,186 @@ function createMenuExample(): MenuItemType[] {
   ];
 }
 
-/**
- * Wrapper for backward compatibility - uses new comprehensive prompt system
- */
-function buildPrompt(requestText: string, currentMenus?: MenuItemType[]) {
-  return buildPromptWithRequirement(requestText, currentMenus, "minimal");
+function buildPromptWithRequirement(
+  requestText: string,
+  scope: "minimal" | "complete" = "minimal",
+  currentMenus?: MenuItemType[],
+): string {
+  const referenceMenus = Array.isArray(currentMenus) && currentMenus.length > 0
+    ? currentMenus.slice(0, 12)
+    : createMenuExample();
+  const mainPrompt = trimToMax(AI_PROMPTS.MAIN_MENU_DESIGNER || "", 5200);
+  const extractorPrompt = trimToMax(AI_PROMPTS.REQUIREMENT_EXTRACTOR || "", 2200);
+  const selectorGuide = trimToMax(AI_PROMPTS.TYPE_SELECTION_GUIDE || "", 2200);
+  const requestCore = trimToMax(requestText || "", 2800);
+  const compactMenuContext = buildCompactMenuContext(referenceMenus, 80);
+
+  const prompt = `${mainPrompt}
+
+${extractorPrompt}
+
+${selectorGuide}
+
+## TRACH NHIEM CUA BAN
+1) Phan tich yeu cau khach hang
+2) Chon menu type phu hop (${scope === "minimal" ? "uu tien type 1/3" : "co the dung 1/2/3/4"})
+3) Tao JSON hop le theo MenuItemType
+4) Neu can, ghi chu gia dinh vao notes
+
+## MENU HE THONG HIEN TAI (COMPACT REFERENCE)
+${compactMenuContext}
+
+## YEU CAU KHACH HANG
+${requestCore}
+
+## LUU Y TOKEN
+Khong lap lai JSON mau dai. Tap trung logic nghiep vu va tra ve JSON menu hoan chinh, dung schema.`;
+
+  return trimToMax(prompt, 18000);
+}
+
+function buildRefinementPrompt(
+  baseRequest: string,
+  refineRequest: string,
+  previousResultJson: string,
+  scope: "minimal" | "complete" = "complete",
+  currentMenus?: MenuItemType[],
+): string {
+  const referenceMenus = Array.isArray(currentMenus) && currentMenus.length > 0
+    ? currentMenus.slice(0, 24)
+    : createMenuExample();
+
+  const mainPrompt = trimToMax(AI_PROMPTS.MAIN_MENU_DESIGNER || "", 5200);
+  const extractorPrompt = trimToMax(AI_PROMPTS.REQUIREMENT_EXTRACTOR || "", 2200);
+  const selectorGuide = trimToMax(AI_PROMPTS.TYPE_SELECTION_GUIDE || "", 2200);
+
+  const requestCore = trimToMax(baseRequest || "(khong co)", 2600);
+  const refineCore = trimToMax(refineRequest || "", 1800);
+  const currentMenuContext = buildCompactMenuContext(referenceMenus, 80);
+  const previousMenuContext = buildPreviousResultContext(previousResultJson, 90);
+  const strictScope = scope === "minimal" ? "uu tien type 1/3" : "duoc dung day du type 1/2/3/4";
+
+  const prompt = `${mainPrompt}
+
+${extractorPrompt}
+
+${selectorGuide}
+
+## NHIEM VU REFINE (TOI UU TOKEN)
+Ban da co ket qua menu lan truoc. Hay cap nhat theo yeu cau moi voi nguyen tac:
+1) Giu on dinh phan dung, chi sua phan can thay doi.
+2) Van tra ve TOAN BO menu sau khi cap nhat (khong tra ve delta).
+3) Dam bao schema MenuItemType hop le va ${strictScope}.
+4) Neu thong tin chua du, dua ra gia dinh hop ly va ghi vao warnings.
+
+## YEU CAU GOC (RUT GON)
+${requestCore}
+
+## YEU CAU BO SUNG MOI (UU TIEN CAO NHAT)
+${refineCore}
+
+## MENU HE THONG HIEN TAI (COMPACT REFERENCE)
+${currentMenuContext}
+
+## TOM TAT KET QUA AI LAN TRUOC (COMPACT)
+${previousMenuContext}
+
+## DINH DANG DAU RA BAT BUOC
+{ "menu": [...], "notes": [...], "warnings": [...] }
+
+## LUU Y TOKEN
+Khong lap lai JSON mau dai. Chi tap trung logic nghiep vu va tra ve JSON menu hoan chinh, dung schema.
+`;
+
+  return trimToMax(prompt, 22000);
+}
+
+function trimToMax(text: string, maxChars: number): string {
+  const raw = String(text || "").trim();
+  if (!raw) return "";
+  if (raw.length <= maxChars) return raw;
+
+  const keepHead = Math.floor(maxChars * 0.65);
+  const keepTail = Math.max(0, maxChars - keepHead - 24);
+  const head = raw.slice(0, keepHead).trim();
+  const tail = raw.slice(Math.max(0, raw.length - keepTail)).trim();
+  return `${head}\n...[truncated for token budget]...\n${tail}`;
+}
+
+function estimateTokenCount(text: string): number {
+  const raw = String(text || "");
+  // Practical approximation for mixed Vietnamese/English prompts.
+  return Math.ceil(raw.length / 4);
+}
+
+function flattenMenuNodes(menus: MenuItemType[], maxNodes: number): MenuItemType[] {
+  const out: MenuItemType[] = [];
+  const stack = [...menus];
+
+  while (stack.length > 0 && out.length < maxNodes) {
+    const node = stack.shift();
+    if (!node) continue;
+    out.push(node);
+
+    const children = Array.isArray((node as any).children)
+      ? ((node as any).children as MenuItemType[])
+      : [];
+    if (children.length > 0) {
+      stack.unshift(...children);
+    }
+  }
+
+  return out;
+}
+
+function compactNodeLine(node: MenuItemType): string {
+  const label = node.label_vi || node.label || node.name_vi || node.name || "(unnamed)";
+  const tableName = (node as any).table_name || "";
+  const hasChildren = Array.isArray((node as any).children) && (node as any).children.length > 0;
+  return [
+    `id=${node.id}`,
+    `parent=${node.parentId || "root"}`,
+    `path=${node.path || ""}`,
+    `type=${(node as any).type_form ?? (node as any).menuType ?? "?"}`,
+    `label=${label}`,
+    tableName ? `table=${tableName}` : "",
+    hasChildren ? "children=yes" : "",
+  ].filter(Boolean).join(" | ");
+}
+
+function buildCompactMenuContext(menus: MenuItemType[], maxNodes: number): string {
+  const nodes = flattenMenuNodes(menus, maxNodes);
+  const lines = nodes.map((node) => `- ${compactNodeLine(node)}`);
+  const truncated = nodes.length >= maxNodes ? "\n- ...more nodes omitted for token budget..." : "";
+  return `total_nodes_sampled=${nodes.length}${truncated ? " (truncated)" : ""}\n${lines.join("\n")}${truncated}`;
+}
+
+function buildPreviousResultContext(previousResultJson: string, maxNodes: number): string {
+  const raw = String(previousResultJson || "").trim();
+  if (!raw) return "(khong co ket qua truoc)";
+
+  try {
+    const parsed = JSON.parse(raw);
+    const menuList = Array.isArray(parsed?.menu)
+      ? parsed.menu
+      : Array.isArray(parsed)
+        ? parsed
+        : [];
+
+    if (!Array.isArray(menuList) || menuList.length === 0) {
+      return `khong tim thay mang menu hop le. raw_preview=${trimToMax(raw, 1200)}`;
+    }
+
+    const normalized = normalizeMenuList(menuList as MenuItemType[]);
+    const compact = buildCompactMenuContext(normalized, maxNodes);
+    const notesPreview = Array.isArray((parsed as any)?.notes)
+      ? trimToMax(JSON.stringify((parsed as any).notes), 600)
+      : "[]";
+
+    return `menu_count=${menuList.length}\n${compact}\nnotes_preview=${notesPreview}`;
+  } catch {
+    return `khong parse duoc JSON ket qua truoc. raw_preview=${trimToMax(raw, 1200)}`;
+  }
 }
 
 function ensureMenuDefaults(menu: MenuItemType): MenuItemType {
@@ -208,7 +296,6 @@ function ensureMenuDefaults(menu: MenuItemType): MenuItemType {
 
   if ((next as any).label_vi && !next.label) next.label = (next as any).label_vi;
   if ((next as any).name_vi && !next.name) next.name = (next as any).name_vi;
-
   if ((next as any).label_sh && !next.label_zh) next.label_zh = (next as any).label_sh;
   if ((next as any).name_sh && !next.name_zh) next.name_zh = (next as any).name_sh;
 
@@ -283,15 +370,14 @@ function extractAiPayload(response: any) {
 
 export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerProps) {
   const { t } = useTranslation();
-  const [requestText, setRequestText] = useState<string>("");
+  const [requestText, setRequestText] = useState("");
   const [storedRequest, setStoredRequest] = useState("");
   const [aiResultText, setAiResultText] = useState("");
   const [aiMenus, setAiMenus] = useState<MenuItemType[] | null>(null);
   const [mergeMode, setMergeMode] = useState<MergeMode>("merge");
   const [loading, setLoading] = useState(false);
   const [recordId, setRecordId] = useState<string | undefined>(undefined);
-  const [requirementModalOpen, setRequirementModalOpen] = useState(false);
-  const [requirementScope, setRequirementScope] = useState<"minimal" | "complete">("minimal");
+  const [refineText, setRefineText] = useState("");
 
   const hasStoredRequest = storedRequest.trim().length > 0;
 
@@ -303,6 +389,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
 
   useEffect(() => {
     if (!appId) return;
+
     const loadRequest = async () => {
       try {
         const res = await getTableData<AiRequestRecord>({
@@ -314,6 +401,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
             value: appId,
           },
         });
+
         const rows = (res as any)?.rows || (res as any)?.data || [];
         const item = rows[0];
         if (item) {
@@ -333,11 +421,13 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
 
   const saveRequestRecord = async (payload: Partial<AiRequestRecord>, mode: "create" | "update") => {
     if (!appId) return;
+
     const now = Date.now();
     const objUpdate: AiRequestRecord = {
       id: recordId || `ai_menu_${appId}`,
       app_id_target: appId,
       request_text: storedRequest,
+      request_history: payload.request_history || storedRequest,
       updated_at: now,
       created_at: payload.created_at || now,
       ...payload,
@@ -354,42 +444,53 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     if (!recordId) setRecordId(objUpdate.id);
   };
 
-  const handleGenerate = async () => {
+  const runGenerate = async (
+    inputRequest: string,
+    scope: "minimal" | "complete" = "minimal",
+    promptOverride?: string,
+  ) => {
     if (!appId) {
-      message.warning(t("system.menu.pleaseSelectApp") || "Vui long chon app");
+      message.warning(t("system.menu.pleaseSelectApp") || "Vui lòng chọn app");
       return;
     }
-    if (!requestText.trim() && !storedRequest.trim()) {
-      message.warning("Hay nhap yeu cau khach hang");
+    if (!inputRequest.trim()) {
+      message.warning(t("system.menu.aiDesigner.enterRequirement") || "Hãy nhập yêu cầu khách hàng");
       return;
     }
 
-    const prompt = buildPrompt(mergedRequestText, currentMenus);
+    const prompt = promptOverride || buildPromptWithRequirement(inputRequest, scope, currentMenus);
+    const estimatedTokens = estimateTokenCount(prompt);
+    if (estimatedTokens > 6000) {
+      message.warning(
+        `Prompt dang lon (~${estimatedTokens} tokens uoc luong). Neu goi mien phi bi gioi han, hay rut gon yeu cau.`,
+      );
+    }
     setLoading(true);
 
     try {
       const command = recordId ? "update" : "create";
+
       await saveRequestRecord(
         {
-          request_text: mergedRequestText,
+          request_text: inputRequest,
           last_prompt: prompt,
           updated_at: Date.now(),
         },
         command,
       );
-      setStoredRequest(mergedRequestText);
+      setStoredRequest(inputRequest);
 
       const res = await generateSeoContentWithPrompt(prompt);
       const payload = extractAiPayload(res);
       if (!payload) {
-        message.error("AI tra ve khong dung JSON");
+        message.error(t("system.menu.aiDesigner.invalidJson") || "AI trả về không đúng JSON");
         setAiResultText(String(res?.message || "AI error"));
         return;
       }
 
       const menuPayload = Array.isArray(payload.menu) ? payload.menu : Array.isArray(payload) ? payload : [];
       if (menuPayload.length === 0) {
-        message.warning("AI chua tra ve danh sach menu");
+        message.warning(t("system.menu.aiDesigner.emptyMenu") || "AI chưa trả về danh sách menu");
       }
 
       const normalized = normalizeMenuList(menuPayload);
@@ -403,25 +504,53 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
 
       await saveRequestRecord(
         {
-          request_text: mergedRequestText,
+          request_text: inputRequest,
           last_result: JSON.stringify(output),
           updated_at: Date.now(),
         },
         "update",
       );
 
-      message.success("Da tao menu bang AI");
+      message.success(t("system.menu.aiDesigner.generateSuccess") || "Đã tạo menu bằng AI");
     } catch (error) {
       console.error("AI menu generation failed:", error);
-      message.error("Loi goi AI");
+      message.error(t("system.menu.aiDesigner.generateFailed") || "Lỗi gọi AI");
     } finally {
       setLoading(false);
     }
   };
 
+  const handleRefineGenerate = async () => {
+    if (!refineText.trim()) {
+      message.warning(t("system.menu.aiDesigner.enterRefine") || "Hãy nhập yêu cầu bổ sung/chỉnh sửa");
+      return;
+    }
+
+    const prompt = buildRefinementPrompt(
+      storedRequest,
+      refineText,
+      aiResultText,
+      "complete",
+      currentMenus,
+    );
+
+    const combinedRequest = [
+      storedRequest || "",
+      "\n[Bo sung/chinh sua]\n",
+      refineText,
+    ].join("\n").trim();
+
+    await runGenerate(combinedRequest, "complete", prompt);
+    setRefineText("");
+  };
+
+  const handleGenerate = async () => {
+    await runGenerate(mergedRequestText, "complete");
+  };
+
   const handleApply = async () => {
     if (!aiMenus || aiMenus.length === 0) {
-      message.warning("Khong co menu de ap dung");
+      message.warning(t("system.menu.aiDesigner.noMenuToApply") || "Không có menu để áp dụng");
       return;
     }
 
@@ -430,10 +559,10 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
 
     try {
       await onApply(normalizeMenuList(nextMenus));
-      message.success("Da ap dung menu vao he thong");
+      message.success(t("system.menu.aiDesigner.applySuccess") || "Đã áp dụng menu vào hệ thống");
     } catch (error) {
       console.error("Apply AI menu failed:", error);
-      message.error("Ap dung menu that bai");
+      message.error(t("system.menu.aiDesigner.applyFailed") || "Áp dụng menu thất bại");
     }
   };
 
@@ -441,180 +570,109 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     setMergeMode(evt.target.value as MergeMode);
   };
 
-  // Mẫu yêu cầu nhanh
-  const quickTemplates = [
-    {
-      label: "Danh mục đơn giản",
-      value: `Tạo menu Danh mục khách hàng.
-Các trường: Mã KH (tự động), Họ tên, Giới tính (combo Nam/Nữ), Ngày sinh, Số điện thoại, Email, Địa chỉ.
-Cho phép thêm/sửa/xóa, phân trang 50 dòng.`
-    },
-    {
-      label: "Master-Detail (Đơn hàng)",
-      value: `Tạo menu Quản lý đơn hàng dạng Master-Detail.
-Master: Số ĐH (tự động), Ngày ĐH, Khách hàng (combo từ dm_khachhang), Tổng tiền (tự tính).
-Tab Chi tiết SP: Mã SP (combo từ dm_sanpham), Số lượng, Đơn giá, Thành tiền (tự động = số lượng × đơn giá).
-Tab Lịch sử thanh toán: Ngày TT, Số tiền, Ghi chú.
-Master cho phép sửa/xóa, các tab cho phép inline edit.`
-    },
-    {
-      label: "Nghiệp vụ kho",
-      value: `Tạo 3 menu:
-1. Danh mục sản phẩm: Mã SP, Tên SP, Đơn vị (combo: Cái/Thùng/Kg), Giá bán, Tồn kho.
-2. Phiếu nhập kho (Master-Detail): Số phiếu, Ngày nhập, Nhà cung cấp. Tab chi tiết: SP, SL, Đơn giá, Thành tiền.
-3. Phiếu xuất kho (Master-Detail): Số phiếu, Ngày xuất, Khách hàng. Tab chi tiết: SP, SL, Đơn giá, Thành tiền.`
-    },
-    {
-      label: "Quản lý nhân sự",
-      value: `Tạo module quản lý nhân sự với 4 menu:
-1. Danh mục phòng ban: Mã PB, Tên PB, Ghi chú.
-2. Danh mục chức vụ: Mã CV, Tên CV, Hệ số lương.
-3. Danh mục nhân viên: Mã NV, Họ tên, Giới tính, Ngày sinh, Năm sinh, Tuổi (tự tính), Phòng ban (combo), Chức vụ (combo), Lương cơ bản.
-4. Bảng lương (Master-Detail): Tháng, Năm. Tab chi tiết: NV, Lương cơ bản, Phụ cấp, Thưởng, Tổng lương (tự tính).`
-    }
-  ];
-
-  const handleQuickTemplate = (template: string) => {
-    setRequestText(template);
-    message.success("Đã chọn mẫu yêu cầu");
-  };
-
   return (
-    <Card title="AI Thiết kế Menu Tự động" bordered={false}>
-      {!appId && (
-        <Alert type="warning" showIcon message="Vui lòng chọn App trước khi sử dụng AI." />
-      )}
+    <>
+      <Card title={t("system.menu.aiDesigner.panelTitle") || "AI Thiet ke Menu Tu dong"} bordered={false}>
+        {!appId && <Alert type="warning" showIcon message={t("system.menu.aiDesigner.selectAppFirst") || "Vui long chon App truoc khi su dung AI."} />}
 
-      {/* Hướng dẫn sử dụng */}
-      <Alert
-        type="info"
-        showIcon
-        message="Hướng dẫn nhập yêu cầu"
-        description={
-          <div>
-            <p><strong>Mô tả càng chi tiết, AI sinh menu càng chính xác:</strong></p>
-            <ol style={{ paddingLeft: 20, marginBottom: 0 }}>
-              <li><strong>Tên chức năng:</strong> "Quản lý nhân viên", "Danh mục khách hàng", "Báo cáo doanh thu"...</li>
-              <li><strong>Các trường dữ liệu:</strong> "Cần các trường: Mã NV, Họ tên, Giới tính (Nam/Nữ), Ngày sinh, Lương, Phòng ban"</li>
-              <li><strong>Combo/Dropdown:</strong> "Giới tính là combo chọn Nam/Nữ", "Phòng ban lấy từ bảng dm_phongban"</li>
-              <li><strong>Tính toán tự động:</strong> "Tự động tính tuổi từ năm sinh", "Tính thành tiền = số lượng × đơn giá"</li>
-              <li><strong>Định dạng:</strong> "Lương hiển thị dạng tiền tệ", "Ngày sinh dạng dd/mm/yyyy"</li>
-              <li><strong>Phân quyền:</strong> "Chỉ đọc cho user thường", "Cho phép thêm/sửa/xóa"</li>
-            </ol>
-            <p style={{ marginTop: 8, marginBottom: 0 }}><strong>Ví dụ yêu cầu tốt:</strong></p>
-            <p style={{ fontStyle: 'italic', marginBottom: 0 }}>
-              "Tạo menu Quản lý nhân viên. Các trường: Mã NV (tự động), Họ tên, Giới tính (combo Nam/Nữ), 
-              Ngày sinh (kiểu date), Năm sinh (số), Tuổi (tự tính từ năm sinh), Phòng ban (combo lấy từ bảng dm_phongban), 
-              Lương (dạng tiền). Cho phép thêm/sửa/xóa, phân trang 50 dòng."
-            </p>
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message={t("system.menu.aiDesigner.autoAnalyzeTitle") || "AI tự động thiết kế toàn bộ menu theo nghiệp vụ"}
+          description={t("system.menu.aiDesigner.autoAnalyzeDesc") || "AI sẽ tự phân tích yêu cầu và tự chọn loại menu phù hợp cho từng chức năng trong toàn bộ cây menu."}
+        />
+
+        {hasStoredRequest && (
+          <div style={{ marginBottom: 12 }}>
+            <Alert
+              type="success"
+              showIcon
+              message={t("system.menu.aiDesigner.hasStoredRequestTitle") || "Da co yeu cau truoc do"}
+              description={t("system.menu.aiDesigner.hasStoredRequestDesc") || "Neu nhap them, he thong se ket hop voi yeu cau cu de AI hieu ro hon."}
+            />
           </div>
-        }
-        style={{ marginBottom: 16 }}
-        closable
-      />
+        )}
 
-      {hasStoredRequest && (
-        <div className="mb-3">
-          <Alert
-            type="success"
-            showIcon
-            message="Đã có yêu cầu trước đó"
-            description="Nếu nhập thêm yêu cầu mới, hệ thống sẽ tự động kết hợp với yêu cầu cũ để AI hiểu rõ hơn."
-            closable
-          />
-        </div>
-      )}
+        <TextArea
+          value={requestText}
+          onChange={(e) => setRequestText(e.target.value)}
+          placeholder={t("system.menu.aiDesigner.singleInputPlaceholder") || "Nhập yêu cầu đầy đủ nghiệp vụ của khách hàng để AI tự động thiết kế toàn bộ menu app..."}
+          rows={8}
+          style={{ marginBottom: 16 }}
+        />
 
-      {/* Mẫu yêu cầu nhanh */}
-      <div style={{ marginBottom: 16 }}>
-        <div style={{ marginBottom: 8, fontWeight: 500 }}>Hoặc chọn mẫu yêu cầu nhanh:</div>
-        <Space wrap>
-          {quickTemplates.map((template, idx) => (
-            <Button
-              key={idx}
-              size="small"
-              type="dashed"
-              onClick={() => handleQuickTemplate(template.value)}
-            >
-              {template.label}
-            </Button>
-          ))}
+        <Divider />
+
+        <Space wrap style={{ marginBottom: 16 }}>
+          <Button type="primary" onClick={handleGenerate} loading={loading} disabled={!appId} size="large">
+            {loading
+              ? (t("system.menu.aiDesigner.generatingAll") || "Đang tạo toàn bộ menu...")
+              : (t("system.menu.aiDesigner.generateAll") || "Tạo bằng AI toàn bộ menu")}
+          </Button>
+
+          {aiMenus && aiMenus.length > 0 && (
+            <>
+              <Radio.Group onChange={handleMergeModeChange} value={mergeMode}>
+                <Radio value="merge">{t("system.menu.aiDesigner.mergeLabel") || "Merge"}</Radio>
+                <Radio value="replace">{t("system.menu.aiDesigner.replaceLabel") || "Replace"}</Radio>
+              </Radio.Group>
+
+              <Button
+                type="primary"
+                onClick={handleApply}
+                size="large"
+                style={{ background: "#52c41a", borderColor: "#52c41a" }}
+              >
+                {`${t("system.menu.aiDesigner.applySystem") || "Ap dung vao He thong"} (${aiMenus.length} menu)`}
+              </Button>
+            </>
+          )}
         </Space>
-      </div>
 
-      <TextArea
-        value={requestText}
-        onChange={(e) => setRequestText(e.target.value)}
-        placeholder="Nhập yêu cầu của bạn (càng chi tiết càng tốt)...&#10;&#10;Ví dụ: Tạo menu Quản lý hóa đơn. Các trường: Số CT (tự động), Ngày CT, Khách hàng (combo), Tổng tiền (tự tính). Chi tiết hóa đơn gồm: STT, Mã hàng (combo), Tên hàng, Số lượng, Đơn giá, Thành tiền (tự tính = SL × ĐG)."
-        rows={8}
-        style={{ marginBottom: 16 }}
-      />
-
-      <Divider />
-
-      <Space wrap style={{ marginBottom: 16 }}>
-        <Button 
-          type="primary" 
-          onClick={handleGenerate} 
-          loading={loading} 
-          disabled={!appId}
-          size="large"
-        >
-          {loading ? "Đang tạo menu..." : "🤖 Tạo Menu bằng AI"}
-        </Button>
-        
-        {aiMenus && aiMenus.length > 0 && (
+        {aiResultText && (
           <>
-            <Radio.Group onChange={handleMergeModeChange} value={mergeMode}>
-              <Radio value="merge">
-                <span title="Giữ menu cũ, chỉ cập nhật/thêm menu mới theo ID">
-                  Merge (Kết hợp)
-                </span>
-              </Radio>
-              <Radio value="replace">
-                <span title="Xóa toàn bộ menu cũ, thay thế bằng menu AI tạo">
-                  Replace (Thay thế hoàn toàn)
-                </span>
-              </Radio>
-            </Radio.Group>
-            
-            <Button 
-              type="primary" 
-              onClick={handleApply}
-              size="large"
-              style={{ background: '#52c41a', borderColor: '#52c41a' }}
-            >
-              ✓ Áp dụng vào Hệ thống ({aiMenus.length} menu)
-            </Button>
+            <Divider orientation="left">{t("system.menu.aiDesigner.resultTitle") || "Ket qua tu AI"}</Divider>
+
+            <Space direction="vertical" style={{ width: "100%" }}>
+              {aiMenus && aiMenus.length > 0 && (
+                <Alert
+                  type="success"
+                  showIcon
+                  message={`${t("system.menu.aiDesigner.generatedCount") || "AI đã tạo thành công"} ${aiMenus.length} ${t("system.menu.aiDesigner.menuFeatures") || "menu/chức năng"}`}
+                  description={t("system.menu.aiDesigner.reviewBeforeApply") || "Xem JSON bên dưới và kiểm tra trước khi áp dụng."}
+                />
+              )}
+
+              <TextArea
+                value={aiResultText}
+                placeholder={t("system.menu.aiDesigner.resultPlaceholder") || "Kết quả AI sẽ hiển thị ở đây (JSON format)"}
+                rows={15}
+                readOnly
+                style={{ fontFamily: "Monaco, Consolas, monospace", fontSize: 12 }}
+              />
+
+              <Divider orientation="left">{t("system.menu.aiDesigner.refineTitle") || "Yêu cầu bổ sung / chỉnh sửa"}</Divider>
+              <Alert
+                type="info"
+                showIcon
+                message={t("system.menu.aiDesigner.refineHintTitle") || "Bạn có thể yêu cầu AI chỉnh sửa thêm"}
+                description={t("system.menu.aiDesigner.refineHintDesc") || "Nhập thay đổi mong muốn, AI sẽ dựa trên kết quả đã tạo và phân tích lại toàn bộ menu theo đúng nghiệp vụ."}
+              />
+              <TextArea
+                value={refineText}
+                onChange={(e) => setRefineText(e.target.value)}
+                placeholder={t("system.menu.aiDesigner.refinePlaceholder") || "Ví dụ: Thêm menu báo cáo doanh thu theo tháng, sửa đơn hàng thành Master-Detail có tab lịch sử thanh toán..."}
+                rows={4}
+              />
+              <Button type="primary" onClick={handleRefineGenerate} loading={loading} disabled={!appId}>
+                {t("system.menu.aiDesigner.refineButton") || "Phân tích lại theo yêu cầu bổ sung"}
+              </Button>
+            </Space>
           </>
         )}
-      </Space>
-
-      {aiResultText && (
-        <>
-          <Divider orientation="left">Kết quả từ AI</Divider>
-          
-          <Space direction="vertical" style={{ width: '100%' }}>
-            {aiMenus && aiMenus.length > 0 && (
-              <Alert
-                type="success"
-                showIcon
-                message={`AI đã tạo thành công ${aiMenus.length} menu/chức năng`}
-                description="Xem chi tiết JSON bên dưới. Kiểm tra kỹ trước khi áp dụng vào hệ thống."
-              />
-            )}
-            
-            <TextArea
-              value={aiResultText}
-              placeholder="Kết quả AI sẽ hiển thị ở đây (JSON format)"
-              rows={15}
-              readOnly
-              style={{ fontFamily: 'Monaco, Consolas, monospace', fontSize: 12 }}
-            />
-          </Space>
-        </>
-      )}
-    </Card>
+      </Card>
+    </>
   );
 }
 
