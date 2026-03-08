@@ -309,6 +309,19 @@ const translations = {
     purchased: 'Đã mua',
     cancelled: 'Đã hủy',
     crm_conversion: 'Chuyển đổi CRM',
+    traffic_intelligence: '🧠 Thống kê truy cập thông minh',
+    traffic_source_breakdown: 'Phân bổ nguồn truy cập',
+    top_landing_links: 'Top link truy cập',
+    ad_traffic_share: 'Tỷ trọng traffic quảng cáo',
+    organic_traffic_share: 'Tỷ trọng traffic organic',
+    traffic_smart_insights: 'Insight tự động',
+    source_google_ads: 'Google Ads',
+    source_facebook_ads: 'Facebook Ads',
+    source_google_organic: 'Google Organic',
+    source_facebook_social: 'Facebook Social',
+    source_direct: 'Direct',
+    source_referral: 'Referral',
+    no_traffic_data: 'Chưa có dữ liệu truy cập dịch vụ trong kỳ này.',
     loading_analytics: '⏳ Đang tải phân tích...',
     loading_ai_insights: '⏳ Đang tải phân tích AI...',
     auto_saved: '✅ Phân tích tự động lưu vào RocksDB mỗi 5 phút',
@@ -361,6 +374,19 @@ const translations = {
     purchased: 'Purchased',
     cancelled: 'Cancelled',
     crm_conversion: 'CRM Conversion',
+    traffic_intelligence: '🧠 Smart Traffic Intelligence',
+    traffic_source_breakdown: 'Traffic Source Breakdown',
+    top_landing_links: 'Top Landing Links',
+    ad_traffic_share: 'Ad Traffic Share',
+    organic_traffic_share: 'Organic Traffic Share',
+    traffic_smart_insights: 'Automated Insights',
+    source_google_ads: 'Google Ads',
+    source_facebook_ads: 'Facebook Ads',
+    source_google_organic: 'Google Organic',
+    source_facebook_social: 'Facebook Social',
+    source_direct: 'Direct',
+    source_referral: 'Referral',
+    no_traffic_data: 'No service traffic data available for this period.',
     loading_analytics: '⏳ Loading analytics...',
     loading_ai_insights: '⏳ Loading AI Insights...',
     auto_saved: '✅ Analytics auto-saved to RocksDB every 5 minutes',
@@ -413,6 +439,19 @@ const translations = {
     purchased: '已购买',
     cancelled: '已取消',
     crm_conversion: 'CRM 转化',
+    traffic_intelligence: '🧠 智能访问分析',
+    traffic_source_breakdown: '访问来源分布',
+    top_landing_links: '热门落地链接',
+    ad_traffic_share: '广告流量占比',
+    organic_traffic_share: '自然流量占比',
+    traffic_smart_insights: '自动洞察',
+    source_google_ads: 'Google Ads',
+    source_facebook_ads: 'Facebook Ads',
+    source_google_organic: 'Google 自然流量',
+    source_facebook_social: 'Facebook 社交流量',
+    source_direct: '直接访问',
+    source_referral: '外部引荐',
+    no_traffic_data: '当前周期暂无服务访问数据。',
     loading_analytics: '⏳ 加载分析中...',
     loading_ai_insights: '⏳ 加载 AI 洞察中...',
     auto_saved: '✅ 分析每 5 分钟自动保存到 RocksDB',
@@ -496,6 +535,160 @@ function formatDateByLang(value) {
   }
 }
 
+function periodToDays(period) {
+  const map = {
+    day: 1,
+    week: 7,
+    month: 30,
+    year: 365
+  };
+  return map[period] || 7;
+}
+
+function getSourceLabel(source) {
+  return t(`source_${source}`) || source;
+}
+
+function hasServiceIdentity(row) {
+  const serviceType = String(row?.serviceType || row?.service_type || '').trim();
+  const slug = String(row?.slug || '').trim();
+  return Boolean(serviceType || slug);
+}
+
+function normalizeTrafficRows(rows) {
+  if (!Array.isArray(rows)) {
+    console.warn('⚠️ normalizeTrafficRows: input is not an array:', typeof rows);
+    return [];
+  }
+  
+  console.log(`📊 normalizeTrafficRows: Processing ${rows.length} raw rows`);
+  console.log(`📊 Sample raw row:`, rows[0]);
+  
+  const normalized = rows
+    .map((row, index) => {
+      const statDate = String(row?.stat_date || '').slice(0, 10);
+      const visitCount = Number(row?.visit_count || 0) || 0;
+      const source = String(row?.source || 'referral').toLowerCase();
+      const linkPath = String(row?.link_path || row?.path || '/');
+      const serviceType = String(row?.service_type || '');
+      const slug = String(row?.slug || '');
+      
+      if (index < 3) {
+        console.log(`📊 Row ${index}: statDate=${statDate}, visitCount=${visitCount}, source=${source}, linkPath=${linkPath}`);
+      }
+      
+      return {
+        statDate,
+        visitCount,
+        source,
+        linkPath,
+        serviceType,
+        slug
+      };
+    })
+    .filter((row) => {
+      const isValid = row.statDate && row.visitCount > 0 && hasServiceIdentity(row);
+      if (!isValid && rows.indexOf(row) < 3) {
+        console.warn(`⚠️ Row filtered out: statDate=${row.statDate}, visitCount=${row.visitCount}, serviceType=${row.serviceType}, slug=${row.slug}`);
+      }
+      return isValid;
+    });
+  
+  console.log(`📊 normalizeTrafficRows: Kept ${normalized.length}/${rows.length} rows after filtering`);
+  return normalized;
+}
+
+function buildTrafficIntelligence(rows, period) {
+  const normalized = normalizeTrafficRows(rows);
+  console.log(`📊 buildTrafficIntelligence: ${normalized.length} normalized rows for period: ${period}`);
+  
+  if (!normalized.length) {
+    console.warn('⚠️ No traffic data available - table may be empty or all rows filtered out');
+    return {
+      totalVisits: 0,
+      adTrafficShare: 0,
+      organicTrafficShare: 0,
+      sourceBreakdown: [],
+      topLinks: [],
+      smartInsights: []
+    };
+  }
+
+  const fromDate = new Date();
+  fromDate.setDate(fromDate.getDate() - (periodToDays(period) - 1));
+  const fromKey = fromDate.toISOString().slice(0, 10);
+  const scopedRows = normalized.filter((row) => row.statDate >= fromKey);
+  const activeRows = scopedRows.length ? scopedRows : normalized;
+  
+  console.log(`📊 Date filter: fromDate=${fromKey}, scopedRows=${scopedRows.length}, using ${activeRows.length} rows`);
+  if (activeRows.length === 0) {
+    console.warn('⚠️ No rows left after date filtering - data may be too old for selected period');
+  }
+
+  const sourceMap = new Map();
+  const linkMap = new Map();
+  let totalVisits = 0;
+
+  for (const row of activeRows) {
+    totalVisits += row.visitCount;
+    sourceMap.set(row.source, (sourceMap.get(row.source) || 0) + row.visitCount);
+    const linkKey = [row.linkPath || '/', row.serviceType || '', row.slug || ''].join('|');
+    linkMap.set(linkKey, (linkMap.get(linkKey) || 0) + row.visitCount);
+  }
+
+  const sourceBreakdown = Array.from(sourceMap.entries())
+    .map(([source, visits]) => ({
+      source,
+      label: getSourceLabel(source),
+      visits,
+      pct: totalVisits > 0 ? (visits * 100) / totalVisits : 0
+    }))
+    .sort((a, b) => b.visits - a.visits);
+
+  const topLinks = Array.from(linkMap.entries())
+    .map(([key, visits]) => {
+      const [linkPath, serviceType, slug] = key.split('|');
+      return {
+        linkPath,
+        serviceType,
+        slug,
+        visits
+      };
+    })
+    .sort((a, b) => b.visits - a.visits)
+    .slice(0, 8);
+
+  const adsVisits = (sourceMap.get('google_ads') || 0) + (sourceMap.get('facebook_ads') || 0);
+  const organicVisits = (sourceMap.get('google_organic') || 0) + (sourceMap.get('facebook_social') || 0);
+
+  const adTrafficShare = totalVisits > 0 ? (adsVisits * 100) / totalVisits : 0;
+  const organicTrafficShare = totalVisits > 0 ? (organicVisits * 100) / totalVisits : 0;
+
+  const smartInsights = [];
+  if (adTrafficShare >= 60) {
+    smartInsights.push('Traffic phụ thuộc quảng cáo cao, cần tăng nguồn organic để giảm rủi ro chi phí.');
+  } else if (adTrafficShare <= 25) {
+    smartInsights.push('Traffic quảng cáo đang thấp, có thể mở rộng ngân sách Google/Facebook cho nhóm link hiệu quả.');
+  }
+
+  if (topLinks[0] && topLinks[1] && topLinks[0].visits >= topLinks[1].visits * 2) {
+    smartInsights.push(`Link ${topLinks[0].linkPath} đang vượt trội, nên nhân bản nội dung/CTA theo mẫu này.`);
+  }
+
+  if (!smartInsights.length) {
+    smartInsights.push('Phân bổ nguồn truy cập đang tương đối cân bằng, nên tiếp tục A/B test cho top link để tăng chuyển đổi.');
+  }
+
+  return {
+    totalVisits,
+    adTrafficShare,
+    organicTrafficShare,
+    sourceBreakdown,
+    topLinks,
+    smartInsights
+  };
+}
+
 // ========== ANALYTICS STORAGE API ==========
 // Save analytics data to RocksDB via backend API
 
@@ -511,7 +704,7 @@ const AnalyticsStorage = {
    * @param {Object} params.ads - Ad platform performance
    * @returns {Promise}
    */
-  async saveAnalytics({ appId, period, metrics, timeline, channels, ads }) {
+  async saveAnalytics({ appId, period, metrics, timeline, channels, ads, trafficIntelligence }) {
     try {
       if (!window.csmApi || !window.csmApi.updateTableData) {
         console.warn('⚠️ window.csmApi.updateTableData not available');
@@ -531,12 +724,21 @@ const AnalyticsStorage = {
           metrics: JSON.stringify(metrics),
           timeline: JSON.stringify(timeline),
           channels: JSON.stringify(channels),
-          ads: JSON.stringify(ads)
+          ads: JSON.stringify(ads),
+          traffic_intelligence: JSON.stringify(trafficIntelligence || {})
         }
       };
 
       console.log(`📤 Saving analytics to RocksDB for ${appId}/${period}...`);
       const result = await window.csmApi.updateTableData(payload);
+      
+      // Check if save was successful
+      if (result?.success === false && result?.message?.includes('structMap')) {
+        console.error(`❌ Analytics table not initialized. Please create 'crm_analytics' table first.`);
+        console.warn(`💡 Use admin panel to create table or visit /api/cache/clear?token=ADMIN_TOKEN to reset`);
+        return { success: false, error: 'TABLE_NOT_INITIALIZED', message: result.message };
+      }
+      
       console.log(`✅ Analytics saved successfully:`, result);
       return result;
     } catch (error) {
@@ -608,6 +810,14 @@ const AnalyticsStorage = {
 
       console.log(`📤 Saving CRM overview for ${appId}/${period}...`);
       const result = await window.csmApi.updateTableData(payload);
+      
+      // Check if save was successful
+      if (result?.success === false && result?.message?.includes('structMap')) {
+        console.error(`❌ CRM overview table not initialized. Please create 'crm_dashboard_overview' table first.`);
+        console.warn(`💡 Use admin panel to create table structure before saving`);
+        return { success: false, error: 'TABLE_NOT_INITIALIZED', message: result.message };
+      }
+      
       console.log('✅ CRM overview saved successfully:', result);
       return result;
     } catch (error) {
@@ -616,6 +826,10 @@ const AnalyticsStorage = {
     }
   }
 };
+
+// ========== TABLE BOOTSTRAP (NOT NEEDED - Backend creates crm_service_traffic_stats automatically) ==========
+// Traffic stats table is created by backend on first visit tracking
+// No frontend table bootstrap needed
 
 // ========== MOCK DATA GENERATOR ==========
 // Replace with RecordManager.filter() when integrated
@@ -886,22 +1100,109 @@ function CRMOverviewPanel({ crmData }) {
   `;
 }
 
+function TrafficIntelligencePanel({ trafficData }) {
+  if (!trafficData || !trafficData.totalVisits) {
+    return `
+      <div style="background: ${getTheme().cardBg}; padding: 16px; border-radius: 8px; margin-bottom: 24px;">
+        <h3 style="color: ${getTheme().text};">${t('traffic_intelligence')}</h3>
+        <div style="padding: 16px; background: ${getTheme().recommendationBg}; border-radius: 6px; border: 1px solid ${getTheme().border};">
+          <div style="font-size: 13px; color: ${getTheme().textSecondary}; margin-bottom: 12px;">
+            ${t('no_traffic_data')}
+          </div>
+          <div style="font-size: 12px; color: ${getTheme().textSecondary}; line-height: 1.6;">
+            💡 <b>Để bắt đầu thu thập dữ liệu:</b><br/>
+            1. Đảm bảo backend đã deploy với code tracking mới nhất<br/>
+            2. Truy cập các trang dịch vụ (không dùng bot/crawler)<br/>
+            3. Có thể thêm tham số ?utm_source=google&utm_medium=cpc để test<br/>
+            4. Kiểm tra Console log backend sẽ thấy: "✅ Tracked service visit..."<br/>
+            5. Refresh dashboard sau vài phút để xem dữ liệu
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  const theme = getTheme();
+  const sourceRows = trafficData.sourceBreakdown || [];
+  const topLinks = trafficData.topLinks || [];
+  const smartInsights = trafficData.smartInsights || [];
+
+  return `
+    <div style="background: ${theme.cardBg}; padding: 16px; border-radius: 8px; margin-bottom: 24px;">
+      <h3 style="color: ${theme.text};">${t('traffic_intelligence')}</h3>
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin: 12px 0;">
+        <div style="padding: 12px; border-radius: 6px; background: ${theme.recommendationBg}; border: 1px solid ${theme.border};">
+          <div style="font-size: 12px; color: ${theme.textSecondary};">${t('total_visits')}</div>
+          <div style="font-size: 24px; font-weight: 700; color: #1677ff;">${trafficData.totalVisits}</div>
+        </div>
+        <div style="padding: 12px; border-radius: 6px; background: ${theme.recommendationBg}; border: 1px solid ${theme.border};">
+          <div style="font-size: 12px; color: ${theme.textSecondary};">${t('ad_traffic_share')}</div>
+          <div style="font-size: 24px; font-weight: 700; color: #fa8c16;">${trafficData.adTrafficShare.toFixed(1)}%</div>
+        </div>
+        <div style="padding: 12px; border-radius: 6px; background: ${theme.recommendationBg}; border: 1px solid ${theme.border};">
+          <div style="font-size: 12px; color: ${theme.textSecondary};">${t('organic_traffic_share')}</div>
+          <div style="font-size: 24px; font-weight: 700; color: #52c41a;">${trafficData.organicTrafficShare.toFixed(1)}%</div>
+        </div>
+      </div>
+
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+        <div style="border: 1px solid ${theme.border}; border-radius: 6px; padding: 10px;">
+          <div style="font-weight: 600; margin-bottom: 8px; color: ${theme.text};">${t('traffic_source_breakdown')}</div>
+          <div style="max-height: 220px; overflow: auto; font-size: 12px;">
+            ${sourceRows.map((row) => `
+              <div style="display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px dashed ${theme.border}; color: ${theme.text}; gap: 8px;">
+                <span>${row.label}</span>
+                <span><b>${row.visits}</b> (${row.pct.toFixed(1)}%)</span>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+
+        <div style="border: 1px solid ${theme.border}; border-radius: 6px; padding: 10px;">
+          <div style="font-weight: 600; margin-bottom: 8px; color: ${theme.text};">${t('top_landing_links')}</div>
+          <div style="max-height: 220px; overflow: auto; font-size: 12px;">
+            ${topLinks.map((row) => `
+              <div style="padding: 6px 0; border-bottom: 1px dashed ${theme.border}; color: ${theme.text};">
+                <div style="font-weight: 600;">${row.linkPath || '/'}</div>
+                <div style="color: ${theme.textSecondary};">${row.serviceType || '-'} ${row.slug ? `/ ${row.slug}` : ''}</div>
+                <div><b>${row.visits}</b> visits</div>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top: 12px; border: 1px solid ${theme.border}; border-radius: 6px; padding: 10px; background: ${theme.recommendationBg};">
+        <div style="font-weight: 600; margin-bottom: 8px; color: ${theme.text};">${t('traffic_smart_insights')}</div>
+        <ul style="margin: 0; padding-left: 18px; color: ${theme.text}; font-size: 12px;">
+          ${smartInsights.map((insight) => `<li style="margin-bottom: 6px;">${insight}</li>`).join('')}
+        </ul>
+      </div>
+    </div>
+  `;
+}
+
 // ========== MAIN DASHBOARD ==========
 
 async function AnalyticsDashboard() {
   const appId = window.csmCurrentUser?.app_id || window.csmCurrentUser?.appId || 'csm';
+  console.log(`🔍 Dashboard initialized with appId: ${appId}`, window.csmCurrentUser);
+  // Keep this dashboard read-focused for traffic intelligence.
+  // Persisting crm_analytics/crm_dashboard_overview is optional and can fail if tables are missing.
+  const ENABLE_DASHBOARD_PERSIST = false;
   let timePeriod = 'week';
   let crmStats = null;
   let analytics = null;
   let aiInsights = null;
   let googlebotStats = null;
+  let trafficIntelligence = null;
   let lastSaveTime = 0;
 
   // Auto-save every 5 minutes
   const autoSaveInterval = timerRegistry.register(
     'analytics-auto-save',
     setInterval(async () => {
-      if (analytics && (Date.now() - lastSaveTime > 5 * 60 * 1000)) {
+      if (ENABLE_DASHBOARD_PERSIST && analytics && (Date.now() - lastSaveTime > 5 * 60 * 1000)) {
         try {
           await AnalyticsStorage.saveAnalytics({
             appId,
@@ -909,7 +1210,8 @@ async function AnalyticsDashboard() {
             metrics: analytics.metrics,
             timeline: analytics.timeline,
             channels: analytics.channels,
-            ads: analytics.ads
+            ads: analytics.ads,
+            trafficIntelligence
           });
 
           if (aiInsights) {
@@ -940,6 +1242,26 @@ async function AnalyticsDashboard() {
   // Fetch analytics on startup
   async function loadAnalytics(period) {
     timePeriod = period;
+
+    // Bust client-side cache for traffic table to avoid stale empty responses.
+    try {
+      const cache = window.__csm_getTableDataCache;
+      if (cache && typeof cache.forEach === 'function') {
+        const prefix = `${appId}::crm_service_traffic_stats::`;
+        const keysToDelete = [];
+        cache.forEach((_, key) => {
+          if (String(key).startsWith(prefix)) {
+            keysToDelete.push(key);
+          }
+        });
+        keysToDelete.forEach((key) => cache.delete(key));
+        if (keysToDelete.length) {
+          console.log(`🧹 Cleared ${keysToDelete.length} cached traffic queries for appId=${appId}`);
+        }
+      }
+    } catch (e) {
+      console.warn('Skip cache clear for traffic table:', e?.message || e);
+    }
 
     if (window.csmApi?.getCRMStats) {
       try {
@@ -991,6 +1313,96 @@ async function AnalyticsDashboard() {
       }
     }
 
+    // Fetch service traffic stats from newly added backend table and build smart insights.
+    if (window.csmApi?.getTableData) {
+      try {
+        // DEBUG: First try querying WITHOUT filter to see if data exists at all
+        console.log(`🔍 DEBUG: Querying traffic stats WITHOUT filter to check table data...`);
+        const debugResponse = await window.csmApi.getTableData({
+          app_id: appId,
+          obj_name: 'crm_service_traffic_stats'
+        });
+        console.log(`🔍 DEBUG: Unfiltered query returned ${debugResponse?.rows?.length || 0} rows`);
+        if (debugResponse?.rows?.length > 0) {
+          console.log(`🔍 DEBUG: Sample row:`, debugResponse.rows[0]);
+          console.log(`🔍 DEBUG: Sample row app_id:`, debugResponse.rows[0]?.app_id);
+        }
+        
+        console.log(`📊 Fetching traffic stats for appId: ${appId}, period: ${period}...`);
+        
+        // Build filter to get records for this appId
+        const filter = {
+          operator: 'AND',
+          conditions: [
+            { field: 'app_id', type: 'eq', value: appId }
+          ]
+        };
+        
+        const trafficResponse = await window.csmApi.getTableData({
+          app_id: appId,
+          obj_name: 'crm_service_traffic_stats',
+          where: filter
+        });
+
+        // Retry once with cache-busted call if first response is empty.
+        if ((trafficResponse?.rows || []).length === 0) {
+          try {
+            const retryResponse = await window.csmApi.getTableData({
+              app_id: appId,
+              obj_name: 'crm_service_traffic_stats',
+              where: filter,
+              // Use take to alter cache key and force a fresh request path.
+              take: 5000
+            });
+            if ((retryResponse?.rows || []).length > 0) {
+              console.log('🔁 Retry query returned rows after cache-bust path.');
+              Object.assign(trafficResponse, retryResponse);
+            }
+          } catch (retryErr) {
+            console.warn('Retry traffic query failed:', retryErr?.message || retryErr);
+          }
+        }
+        
+        console.log(`📊 RAW API Response:`, trafficResponse);
+        console.log(`📊 Response keys:`, Object.keys(trafficResponse || {}));
+        console.log(`📊 Response.rows:`, trafficResponse?.rows);
+        console.log(`📊 Response.data:`, trafficResponse?.data);
+        
+        let trafficRows = trafficResponse?.rows || trafficResponse?.data || [];
+        
+        // FALLBACK: If filtered query returns empty but unfiltered has data, 
+        // query all and filter client-side (Lucene index might not be ready)
+        if (trafficRows.length === 0 && debugResponse?.rows?.length > 0) {
+          console.warn('⚠️ Filtered query empty but unfiltered has data - using client-side filter');
+          const allRows = debugResponse.rows;
+          trafficRows = allRows.filter(row => {
+            const rowAppId = row.app_id || row['app_id'];
+            return rowAppId === appId;
+          });
+          console.log(`📊 Client-side filtered ${allRows.length} → ${trafficRows.length} rows for appId=${appId}`);
+        }
+        
+        console.log(`📊 Extracted ${trafficRows.length} traffic stat rows for appId: ${appId}`);
+        console.log(`📊 Sample rows (first 3):`, trafficRows.slice(0, 3));
+      
+        // If no data, might be table not initialized - skip for now
+        if (trafficRows.length === 0) {
+          console.warn('⚠️ No traffic data found - table may not be initialized yet');
+          trafficIntelligence = null;
+        } else {
+        trafficIntelligence = buildTrafficIntelligence(trafficRows, period);
+        console.log(`📊 Traffic intelligence result:`, {
+          totalVisits: trafficIntelligence?.totalVisits,
+          sourceCount: trafficIntelligence?.sourceBreakdown?.length,
+          topLinksCount: trafficIntelligence?.topLinks?.length
+        });
+        }
+      } catch (error) {
+        console.error('❌ Failed to fetch service traffic stats:', error);
+        trafficIntelligence = null;
+      }
+    }
+
     // Fallback: aggregate directly from googlebot_visits table if API shape changed or unavailable.
     if (!googlebotStats && window.csmApi?.getTableData) {
       try {
@@ -1007,8 +1419,8 @@ async function AnalyticsDashboard() {
       }
     }
 
-    // Initial save
-    if (analytics) {
+    // Initial save (optional, disabled by default)
+    if (ENABLE_DASHBOARD_PERSIST && analytics) {
       try {
         await AnalyticsStorage.saveAnalytics({
           appId,
@@ -1016,7 +1428,8 @@ async function AnalyticsDashboard() {
           metrics: analytics.metrics,
           timeline: analytics.timeline,
           channels: analytics.channels,
-          ads: analytics.ads
+          ads: analytics.ads,
+          trafficIntelligence
         });
 
         if (crmStats) {
@@ -1148,6 +1561,7 @@ async function AnalyticsDashboard() {
 
         ${analytics ? `
           ${googlebotPanel}
+          ${TrafficIntelligencePanel({ trafficData: trafficIntelligence })}
           ${CRMOverviewPanel({ crmData: crmStats })}
           ${KeyMetricsCards({ data: analytics })}
           ${TrendCharts({ data: analytics })}

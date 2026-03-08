@@ -116,6 +116,8 @@ public class WebSpringController {
     private static final long CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes cache
     // Cache trang chi tiết bất động sản (cross-request) để giảm truy vấn DB khi bot crawl liên tục
     private static final long SERVICE_DETAIL_CACHE_TTL_MS = 20 * 60 * 1000; // 20 minutes
+    private static final String TABLE_SERVICE_TRAFFIC_STATS = "crm_service_traffic_stats";
+    private final Set<String> trafficStatsTableReadyApps = java.util.concurrent.ConcurrentHashMap.newKeySet();
     private static final long STATIC_DETECT_TTL_MS = 5 * 60 * 1000; // cache static detection 5 minutes
     private static final Set<String> STATIC_EXTENSIONS = Set.of(
         "js", "css", "png", "jpg", "jpeg", "gif", "svg", "ico",
@@ -1269,6 +1271,23 @@ public class WebSpringController {
         
         // Check for invalid parameter keys
         for (String key : params.keySet()) {
+            // Internal metadata injected by backend for analytics/tracking.
+            if (key != null && (key.startsWith("__") || key.startsWith("csm-"))) {
+                continue;
+            }
+
+            // Common ad/tracking params should not block data rendering.
+            if (key != null && (
+                    key.startsWith("utm_")
+                    || "fbclid".equals(key)
+                    || "gclid".equals(key)
+                    || "wbraid".equals(key)
+                    || "gbraid".equals(key)
+                    || "ref".equals(key)
+                    || "referrer".equals(key))) {
+                continue;
+            }
+
             // Only allow whitelisted fields
             if (!ALLOWED_SEARCH_FIELDS.contains(key)) {
                 logger.warn("⚠️ SECURITY: Invalid search parameter key detected: {}", key);
@@ -1455,6 +1474,11 @@ public class WebSpringController {
         
         // 🔴 FIXED: Get User-Agent header for Google Crawler detection
         String userAgent = request.getHeader("User-Agent");
+        requestParams.put("__referrer", safeStr(request.getHeader("Referer")));
+        requestParams.put("__user_agent", safeStr(userAgent));
+        requestParams.put("__client_ip", safeStr(Ip_Client));
+        requestParams.put("__request_path", safeStr(normalizedPath));
+        requestParams.put("__request_host", safeStr(hostHeader));
 
         // Log Googlebot visits for admin reporting
         if (googleBotVisitService != null) {
@@ -5900,6 +5924,7 @@ public class WebSpringController {
                 if (cacheableDetail) {
                     Map<String, Object> cached = getCacheIfFresh(propertyDetailCache, detailCacheKey, SERVICE_DETAIL_CACHE_TTL_MS);
                     if (cached != null) {
+                        trackServiceRouteVisit(appId, domain, normalizedPath, tblServiceDetail, null, null, serviceCode, detailSlug, requestParams);
                         logger.debug("✅ Serving property detail from cache: {}", detailCacheKey);
                         return new HashMap<>(cached);
                     }
@@ -6093,6 +6118,7 @@ public class WebSpringController {
                     logger.info("✅ Detail page (exact slug match): returning {} related posts (page {}/{}) out of {} total (cursor next={})", 
                         paginatedRelated.size(), relatedPageComputed, (int) Math.ceil((double) totalRelatedCount / effectiveTake), totalRelatedCount, relatedNextCursor);
                     Map<String, Object> cachedOut = new HashMap<>(out);
+                    trackServiceRouteVisit(appId, domain, normalizedPath, tblServiceDetail, detail, null, serviceCode, detailSlug, requestParams);
                     if (cacheableDetail) {
                         putCacheValue(propertyDetailCache, detailCacheKey, cachedOut);
                     }
@@ -6255,6 +6281,7 @@ public class WebSpringController {
                             logger.info("✅ Detail page: returning {} related posts (page {}/{}) out of {} total (cursor next={})", 
                                 paginatedRelated.size(), relatedPageComputed, (int) Math.ceil((double) totalRelatedCount / relatedTake), totalRelatedCount, relatedNextCursor);
                             Map<String, Object> cachedOut = new HashMap<>(out);
+                            trackServiceRouteVisit(appId, domain, normalizedPath, tblServiceDetail, best, null, serviceCode, detailSlug, requestParams);
                             if (cacheableDetail) {
                                 putCacheValue(propertyDetailCache, detailCacheKey, cachedOut);
                             }
@@ -6396,6 +6423,7 @@ public class WebSpringController {
                             paginatedRelated.size(), relatedPageComputed, (int) Math.ceil((double) totalRelatedCount / relatedTake), totalRelatedCount, relatedNextCursor);
                     }
                     Map<String, Object> cachedOut = new HashMap<>(out);
+                    trackServiceRouteVisit(appId, domain, normalizedPath, tblServiceDetail, detail, null, serviceTypeFromDetail, detailSlugOnly, requestParams);
                     if (cacheableDetailSlug) {
                         putCacheValue(propertyDetailCache, slugOnlyCacheKey, cachedOut);
                     }
@@ -6731,6 +6759,7 @@ public class WebSpringController {
                         out.put("nextCursor", nextCursor);
                         out.put("paginationMode", "cursor");
                         out.put("serviceCategory", mapServiceCategoryByLang(groupService, currentLang));
+                        trackServiceRouteVisit(appId, domain, normalizedPath, tblServices, null, groupService, slug, null, requestParams);
                         logger.info("✅ Group slug case: Returned {} details (page {}/{}) with totalCount={}, nextCursor='{}', lastKeyParam='{}'", 
                             details.size(), page, (int) Math.ceil((double) totalCount / effectiveTake), totalCount, nextCursor, lastKeyParam);
                         return out;
@@ -6982,6 +7011,7 @@ public class WebSpringController {
                         out.put("lastkey", lastKeyParam);
                         out.put("nextCursor", nextCursor);
                         out.put("paginationMode", "cursor");
+                        trackServiceRouteVisit(appId, domain, normalizedPath, tblServices, null, service, serviceCode, null, requestParams);
                         logger.info("✅ Service code case: Returned {} details (page {}/{}) with totalCount={}, nextCursor='{}', lastKeyParam='{}'", 
                             details.size(), page, (int) Math.ceil((double) totalCount / effectiveTake), totalCount, nextCursor, lastKeyParam);
                         return out;
@@ -6998,6 +7028,305 @@ public class WebSpringController {
             logger.error("❌ Error in resolveServiceListingForRoute: {}", e.getMessage(), e);
             return null;
         }
+    }
+
+    private void trackServiceRouteVisit(
+            String appId,
+            String domain,
+            String requestPath,
+            String tableToUpdate,
+            Map<String, Object> detailRow,
+            Map<String, Object> serviceRow,
+            String serviceCodeHint,
+            String slugHint,
+            Map<String, Object> requestParams) {
+        try {
+            String cleanPath = sanitizeInput(safeStr(requestPath));
+            if (cleanPath.isEmpty()) {
+                cleanPath = "/";
+            }
+            if (isStaticFile(cleanPath)) {
+                logger.debug("Skip tracking for static path: {}", cleanPath);
+                return;
+            }
+
+            String ua = safeStr(requestParams != null ? requestParams.get("__user_agent") : "").toLowerCase(Locale.ROOT);
+            if (isBotUserAgent(ua)) {
+                return;
+            }
+
+            String source = detectTrafficSource(requestParams);
+            long now = Instant.now().toEpochMilli();
+            String statDate = java.time.LocalDate.now(java.time.ZoneOffset.UTC).toString();
+
+            String serviceCode = sanitizeInput(!safeStr(serviceCodeHint).isEmpty() ? serviceCodeHint
+                    : (detailRow != null ? safeStr(detailRow.get("service_type")) : safeStr(serviceRow != null ? serviceRow.get("service_code") : "")));
+            String slug = sanitizeInput(!safeStr(slugHint).isEmpty() ? slugHint
+                    : safeStr(detailRow != null ? detailRow.get("slug") : ""));
+
+            // Track only service listing/detail pages.
+            if (serviceCode.isEmpty() && slug.isEmpty()) {
+                logger.debug("Skip tracking due to missing service identity for path: {}", cleanPath);
+                return;
+            }
+
+            ensureTrafficStatsTable(appId);
+
+            String statKey = String.join("|",
+                    statDate,
+                    source,
+                    sanitizeInput(safeStr(domain)),
+                    sanitizeInput(serviceCode),
+                    sanitizeInput(slug),
+                    cleanPath);
+
+            SearchFilter statFilter = RecordManager.createCondition("stat_key", "eq", statKey);
+            Map<String, Object> existingStat = recordManager.find(appId, TABLE_SERVICE_TRAFFIC_STATS, statFilter);
+            Map<String, Object> statRow = (existingStat != null && !existingStat.isEmpty())
+                    ? new HashMap<>(existingStat)
+                    : new HashMap<>();
+
+            if (safeStr(statRow.get("id")).isEmpty()) {
+                statRow.put("id", UUID.randomUUID().toString());
+            }
+            statRow.put("stat_key", statKey);
+            statRow.put("app_id", appId);
+            statRow.put("domain", safeStr(domain));
+            statRow.put("stat_date", statDate);
+            statRow.put("source", source);
+            statRow.put("service_type", serviceCode);
+            statRow.put("slug", slug);
+            statRow.put("link_path", cleanPath);
+            statRow.put("referrer", safeStr(requestParams != null ? requestParams.get("__referrer") : ""));
+            statRow.put("utm_source", safeStr(requestParams != null ? requestParams.get("utm_source") : ""));
+            statRow.put("utm_medium", safeStr(requestParams != null ? requestParams.get("utm_medium") : ""));
+            statRow.put("utm_campaign", safeStr(requestParams != null ? requestParams.get("utm_campaign") : ""));
+            statRow.put("visit_count", parseLongSafe(statRow.get("visit_count")) + 1L);
+            statRow.put("updated_at", now);
+            if (!statRow.containsKey("created_at")) {
+                statRow.put("created_at", now);
+            }
+            upsertRecord(appId, TABLE_SERVICE_TRAFFIC_STATS, statRow, List.of("stat_key"));
+            logger.info("✅ Tracked service visit: {} | {} | {} | visits={}", 
+                statDate, source, cleanPath, statRow.get("visit_count"));
+
+            Map<String, Object> detailRowToUpdate = detailRow;
+            if (detailRowToUpdate == null && !serviceCode.isEmpty() && !slug.isEmpty() && tableToUpdate != null && !tableToUpdate.isBlank()) {
+                SearchFilter detailFilter = new SearchFilter();
+                detailFilter.setOperator("AND");
+                List<SearchFilter> detailConditions = new ArrayList<>();
+                detailConditions.add(RecordManager.createCondition("service_type", "eq", serviceCode));
+                detailConditions.add(RecordManager.createCondition("slug", "eq", slug));
+                if (!safeStr(domain).isEmpty()) {
+                    detailConditions.add(RecordManager.createCondition("domain", "like", domain));
+                }
+                detailFilter.setConditions(detailConditions);
+                Map<String, Object> foundDetail = recordManager.find(appId, tableToUpdate, detailFilter);
+                if (foundDetail != null && !foundDetail.isEmpty()) {
+                    detailRowToUpdate = foundDetail;
+                }
+            }
+
+            Map<String, Object> serviceRowToUpdate = serviceRow;
+            if (serviceRowToUpdate == null && !serviceCode.isEmpty() && slug.isEmpty() && tableToUpdate != null && !tableToUpdate.isBlank()) {
+                SearchFilter serviceFilter = new SearchFilter();
+                serviceFilter.setOperator("AND");
+                List<SearchFilter> serviceConditions = new ArrayList<>();
+                serviceConditions.add(RecordManager.createCondition("service_code", "eq", serviceCode));
+                if (!safeStr(domain).isEmpty()) {
+                    serviceConditions.add(RecordManager.createCondition("domain", "like", domain));
+                }
+                serviceFilter.setConditions(serviceConditions);
+                Map<String, Object> foundService = recordManager.find(appId, tableToUpdate, serviceFilter);
+                if (foundService != null && !foundService.isEmpty()) {
+                    serviceRowToUpdate = foundService;
+                }
+            }
+
+            if (detailRowToUpdate != null && tableToUpdate != null && !tableToUpdate.isBlank()) {
+                incrementVisitCountersOnRow(appId, tableToUpdate, detailRowToUpdate, source, cleanPath, now);
+            }
+            if (serviceRowToUpdate != null && tableToUpdate != null && !tableToUpdate.isBlank()) {
+                incrementVisitCountersOnRow(appId, tableToUpdate, serviceRowToUpdate, source, cleanPath, now);
+            }
+        } catch (Exception ex) {
+            logger.debug("Skip service traffic tracking for path {}: {}", requestPath, ex.getMessage());
+        }
+    }
+
+    private void ensureTrafficStatsTable(String appId) {
+        if (appId == null || appId.isBlank()) {
+            return;
+        }
+        if (trafficStatsTableReadyApps.contains(appId)) {
+            return;
+        }
+        synchronized (trafficStatsTableReadyApps) {
+            if (trafficStatsTableReadyApps.contains(appId)) {
+                return;
+            }
+            try {
+                List<String> requiredPk = List.of("stat_key");
+                List<String> requiredSearch = List.of(
+                        "id",
+                        "stat_key",
+                        "app_id",
+                        "domain",
+                        "stat_date",
+                        "source",
+                        "service_type",
+                        "slug",
+                        "link_path",
+                        "utm_source",
+                        "utm_medium",
+                        "utm_campaign",
+                        "visit_count");
+
+                SearchFilter filter = RecordManager.createCondition("id", "eq", TABLE_SERVICE_TRAFFIC_STATS);
+                Map<String, Object> existing = recordManager.find(appId, "index", filter);
+
+                boolean shouldUpsert = (existing == null || existing.isEmpty());
+                Map<String, Object> tableRecord = shouldUpsert ? new HashMap<>() : new HashMap<>(existing);
+
+                Map<String, Object> struct = new HashMap<>();
+                if (!shouldUpsert && tableRecord.get("struct") instanceof Map<?, ?> oldStructRaw) {
+                    for (Map.Entry<?, ?> entry : oldStructRaw.entrySet()) {
+                        if (entry.getKey() instanceof String key) {
+                            struct.put(key, entry.getValue());
+                        }
+                    }
+                }
+
+                Object oldPkObj = struct.get("fieldsPK");
+                Object oldSearchObj = struct.get("fieldsSearch");
+                List<String> oldPk = (oldPkObj instanceof List<?> l)
+                        ? l.stream().map(String::valueOf).toList()
+                        : List.of();
+                List<String> oldSearch = (oldSearchObj instanceof List<?> l)
+                        ? l.stream().map(String::valueOf).toList()
+                        : List.of();
+
+                if (!oldPk.equals(requiredPk) || !oldSearch.containsAll(requiredSearch)) {
+                    shouldUpsert = true;
+                    struct.put("fieldsPK", requiredPk);
+                    struct.put("fieldsSearch", requiredSearch);
+                }
+
+                if (shouldUpsert) {
+                    tableRecord.put("id", TABLE_SERVICE_TRAFFIC_STATS);
+                    tableRecord.put("struct", struct);
+                    upsertRecord(appId, "index", tableRecord);
+                    logger.info("✅ Ensured/migrated traffic stats struct for app {}", appId);
+                }
+
+                trafficStatsTableReadyApps.add(appId);
+            } catch (Exception e) {
+                logger.debug("Cannot ensure traffic stats table for app {}: {}", appId, e.getMessage());
+            }
+        }
+    }
+
+    private void incrementVisitCountersOnRow(String appId, String tableName, Map<String, Object> row, String source, String requestPath, long now) {
+        if (row == null || row.isEmpty()) {
+            return;
+        }
+        Map<String, Object> updated = new HashMap<>(row);
+        if (safeStr(updated.get("id")).isEmpty()) {
+            updated.put("id", UUID.randomUUID().toString());
+        }
+
+        updated.put("visit_count", parseLongSafe(updated.get("visit_count")) + 1L);
+        switch (source) {
+            case "google_ads" -> updated.put("visit_google_ads", parseLongSafe(updated.get("visit_google_ads")) + 1L);
+            case "facebook_ads" -> updated.put("visit_facebook_ads", parseLongSafe(updated.get("visit_facebook_ads")) + 1L);
+            case "google_organic" -> updated.put("visit_google_organic", parseLongSafe(updated.get("visit_google_organic")) + 1L);
+            case "facebook_social" -> updated.put("visit_facebook_social", parseLongSafe(updated.get("visit_facebook_social")) + 1L);
+            case "direct" -> updated.put("visit_direct", parseLongSafe(updated.get("visit_direct")) + 1L);
+            default -> updated.put("visit_referral", parseLongSafe(updated.get("visit_referral")) + 1L);
+        }
+
+        updated.put("last_visit_source", source);
+        updated.put("last_visit_path", requestPath);
+        updated.put("last_visit_at", now);
+        updated.put("updated_at", now);
+        upsertRecord(appId, tableName, updated);
+    }
+
+    @SuppressWarnings("unchecked")
+    private void upsertRecord(String appId, String tableName, Map<String, Object> data) {
+        List<String>[] empty = (List<String>[]) new List<?>[0];
+        recordManager.createRecord(appId, tableName, data, empty);
+    }
+
+    @SuppressWarnings("unchecked")
+    private void upsertRecord(String appId, String tableName, Map<String, Object> data, List<String> keyFields) {
+        if (keyFields == null || keyFields.isEmpty()) {
+            upsertRecord(appId, tableName, data);
+            return;
+        }
+        List<String>[] keys = (List<String>[]) new List<?>[] { keyFields };
+        recordManager.createRecord(appId, tableName, data, keys);
+    }
+
+    private long parseLongSafe(Object value) {
+        if (value == null) {
+            return 0L;
+        }
+        if (value instanceof Number n) {
+            return n.longValue();
+        }
+        try {
+            return Long.parseLong(String.valueOf(value).trim());
+        } catch (Exception ignore) {
+            return 0L;
+        }
+    }
+
+    private boolean isBotUserAgent(String userAgent) {
+        if (userAgent == null || userAgent.isBlank()) {
+            return false;
+        }
+        String ua = userAgent.toLowerCase(Locale.ROOT);
+        return ua.contains("bot")
+                || ua.contains("crawl")
+                || ua.contains("spider")
+                || ua.contains("slurp")
+                || ua.contains("bingpreview")
+                || ua.contains("inspectiontool");
+    }
+
+    private String detectTrafficSource(Map<String, Object> requestParams) {
+        String utmSource = safeStr(requestParams != null ? requestParams.get("utm_source") : "").toLowerCase(Locale.ROOT);
+        String utmMedium = safeStr(requestParams != null ? requestParams.get("utm_medium") : "").toLowerCase(Locale.ROOT);
+        String referrer = safeStr(requestParams != null ? requestParams.get("__referrer") : "").toLowerCase(Locale.ROOT);
+
+        boolean hasGoogleClickId = !safeStr(requestParams != null ? requestParams.get("gclid") : "").isEmpty()
+                || !safeStr(requestParams != null ? requestParams.get("gbraid") : "").isEmpty()
+                || !safeStr(requestParams != null ? requestParams.get("wbraid") : "").isEmpty();
+        boolean hasFacebookClickId = !safeStr(requestParams != null ? requestParams.get("fbclid") : "").isEmpty();
+        boolean paidMedium = utmMedium.contains("cpc")
+                || utmMedium.contains("ppc")
+                || utmMedium.contains("paid")
+                || utmMedium.contains("ads")
+                || utmMedium.contains("ad");
+
+        if (hasGoogleClickId || (utmSource.contains("google") && paidMedium) || utmSource.contains("adwords")) {
+            return "google_ads";
+        }
+        if (hasFacebookClickId
+                || ((utmSource.contains("facebook") || utmSource.contains("fb") || utmSource.contains("instagram")) && paidMedium)) {
+            return "facebook_ads";
+        }
+        if (referrer.contains("google.")) {
+            return "google_organic";
+        }
+        if (referrer.contains("facebook.com") || referrer.contains("m.facebook.com") || referrer.contains("instagram.com")) {
+            return "facebook_social";
+        }
+        if (referrer.isEmpty()) {
+            return "direct";
+        }
+        return "referral";
     }
 
     /**
