@@ -7,16 +7,19 @@
 import { BasicContent } from "#src/components";
 import { getTableData, andWhere } from "#src/components/csm-grid/CsmApi";
 import * as CsmApi from "#src/components/csm-grid/CsmApi";
-import { csmDecrypt } from "#src/components/csm-grid/CsmCrypto";
+import { csmDecrypt, csmEncrypt } from "#src/components/csm-grid/CsmCrypto";
+import CsmDynamicGrid from "#src/components/csm-grid/CsmDynamicGrid";
+import { generateSeoContent, csm_ai_generate_seo_content, generateSeoContentWithPrompt, formatSeoPrompt, PROMPT_GENERATE_POST } from "#src/api/ai";
 import { useAppStore } from "#src/store/app";
 import { useUserStore } from "#src/store/user";
 import { usePreferences } from "#src/hooks";
+import { request } from "#src/utils";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useTranslation } from "react-i18next";
+import { useTranslation, I18nextProvider } from "react-i18next";
 import { useParams, useLocation, useNavigate } from "react-router";
 import * as React from "react";
 import * as ReactDOM from "react-dom/client";
-import { Spin, Empty, Alert } from "antd";
+import { Spin, Empty, Alert, notification, Table, Tabs, Button, Input, Select, Card, Space, Popconfirm } from "antd";
 
 declare global {
   interface Window {
@@ -25,12 +28,159 @@ declare global {
     csmTheme?: Record<string, any>;
     csmUserData?: {
       get: () => any[];
-      set: (data: any[], callback?: (success: boolean, error?: any) => void) => void;
-      fetchFromDatabase: (callback?: (success: boolean, data?: any[], error?: any) => void) => void;
-      clearCache: () => void;
+      fetchFromDatabase?: (callback?: (success: boolean, data?: any[], error?: string) => void) => Promise<void>;
+      set: (newUserAddress: any[], callback?: (success: boolean, error?: string) => void) => Promise<void>;
     };
   }
 }
+
+// ============================================================================
+// Helper Functions (from AutoSetup.tsx)
+// ============================================================================
+
+/**
+ * Base64 encode with UTF-8 support
+ */
+function base64Encode(str: string): string {
+  try {
+    return btoa(unescape(encodeURIComponent(str)));
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Base64 decode with UTF-8 support
+ */
+function base64Decode(str: string): string {
+  try {
+    return decodeURIComponent(escape(atob(str)));
+  } catch {
+    return "";
+  }
+}
+
+// Facebook API helpers - exposed via self object to auto code
+const FACEBOOK_POST_TIMEOUT_MS = 120000;
+
+/**
+ * Post to Facebook page with multiple images
+ */
+async function postToFacebookWithImages(pageId: string, pageAccessToken: string, message: string, images: string[] = [], link?: string) {
+  try {
+    const payload = {
+      pageId,
+      pageAccessToken,
+      message,
+      images,
+      link: link || null
+    };
+    const response = await request
+      .post<any>('facebook/post-with-images', {
+        json: payload,
+        ignoreLoading: true,
+        timeout: FACEBOOK_POST_TIMEOUT_MS
+      })
+      .json<any>();
+    if (response?.success) {
+      return {
+        success: true,
+        post_id: response.data?.post_id,
+        images_count: response.data?.images_count || images.length
+      };
+    } else {
+      throw new Error(response?.message || 'Facebook post failed');
+    }
+  } catch (error: any) {
+    console.error('❌ Error posting to Facebook with images:', error);
+    throw error;
+  }
+}
+
+/**
+ * Post to Facebook page with single image
+ */
+async function postToFacebook(pageId: string, pageAccessToken: string, message: string, imageUrl?: string, link?: string) {
+  try {
+    const payload = {
+      pageId,
+      pageAccessToken,
+      message,
+      imageUrl: imageUrl || null,
+      link: link || null
+    };
+    const response = await request
+      .post<any>('facebook/post', {
+        json: payload,
+        ignoreLoading: true,
+        timeout: FACEBOOK_POST_TIMEOUT_MS
+      })
+      .json<any>();
+    if (response?.success) {
+      return {
+        success: true,
+        post_id: response.data?.post_id
+      };
+    } else {
+      throw new Error(response?.message || 'Facebook post failed');
+    }
+  } catch (error: any) {
+    console.error('❌ Error posting to Facebook:', error);
+    throw error;
+  }
+}
+
+/**
+ * Validate Facebook access token
+ */
+async function facebookValidateToken(accessToken: string) {
+  try {
+    const response = await request.post<any>('facebook/me', { 
+      json: { accessToken }, 
+      ignoreLoading: true 
+    }).json<any>();
+    return response;
+  } catch (error: any) {
+    console.error('❌ Error validating Facebook token:', error);
+    throw error;
+  }
+}
+
+/**
+ * Exchange short-lived Facebook token for long-lived token
+ */
+async function facebookExchangeToken(accessToken: string, clientId: string, appSecret: string) {
+  try {
+    const response = await request.post<any>('facebook/exchange-token', { 
+      json: { accessToken, clientId, appSecret }, 
+      ignoreLoading: true 
+    }).json<any>();
+    return response;
+  } catch (error: any) {
+    console.error('❌ Error exchanging Facebook token:', error);
+    throw error;
+  }
+}
+
+/**
+ * Get Facebook pages for the user
+ */
+async function facebookGetPages(accessToken: string) {
+  try {
+    const response = await request.post<any>('facebook/pages', { 
+      json: { accessToken }, 
+      ignoreLoading: true 
+    }).json<any>();
+    return response;
+  } catch (error: any) {
+    console.error('❌ Error getting Facebook pages:', error);
+    throw error;
+  }
+}
+
+// ============================================================================
+// Component Props
+// ============================================================================
 
 interface DynamicCodeMenuProps {
   menuId?: string;
@@ -68,132 +218,165 @@ export default function DynamicCodeMenu({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Expose theme preferences and csmUserData for dynamic code
-  if (typeof window !== "undefined") {
-    window.csmApi = {
-      ...window.csmApi,
-      ...CsmApi,
-    };
-    (window as any).csmTheme = {
-      isDark,
-      themeColorPrimary,
-      getBackgroundColor: () => isDark ? '#141414' : '#ffffff',
-      getTextColor: () => isDark ? '#ffffff' : '#000000',
-      getSecondaryTextColor: () => isDark ? '#8c8c8c' : '#666666',
-      getBorderColor: () => isDark ? '#303030' : '#f0f0f0',
-      getCardBackground: () => isDark ? '#1f1f1f' : '#ffffff',
-    };
+  // ============================================
+  // SETUP WINDOW OBJECTS - IMMEDIATELY (NOT IN useEffect)
+  // ============================================
+  // Setup window.csmApi immediately using Object.defineProperty to avoid conflicts
+  if (typeof window !== "undefined" && !window.csmApi) {
+    Object.defineProperty(window, 'csmApi', {
+      get() {
+        return {
+          ...CsmApi,
+          getTableData: CsmApi.getTableData,
+          updateTableData: (CsmApi as any).updateTableData,
+          andWhere: CsmApi.andWhere,
+        };
+      },
+      configurable: true,
+      enumerable: true
+    });
+  }
 
-    // Initialize window.csmUserData for auto-upload-lmkt.js compatibility
-    if (!(window as any).csmUserData) {
-      let cachedData: any[] = [];
-      let cacheValid = false;
-
-      (window as any).csmUserData = {
+  // Initialize window.csmUserData for auto-upload-lmkt.js compatibility
+  // This matches the original AutoSetup.tsx implementation
+  if (typeof window !== "undefined" && !(window as any).csmUserData) {
+    (window as any).csmUserData = {
         /**
-         * Get user data from cache or fetch if needed
+         * Get user_address from window.csmCurrentUser
          */
-        get: function() {
-          if (cacheValid && Array.isArray(cachedData)) {
-            return cachedData;
-          }
-          // Try to fetch synchronously from localStorage as fallback
+        get: function(): any[] {
           try {
-            const stored = localStorage.getItem('dataOptionUser');
-            if (stored) {
-              cachedData = JSON.parse(stored);
-              cacheValid = true;
-              return cachedData;
+            const currentUser = (window as any).csmCurrentUser || {};
+            let arr = [];
+            if (typeof currentUser.user_address === "string") {
+              try { arr = JSON.parse(currentUser.user_address); } catch { arr = []; }
+            } else if (Array.isArray(currentUser.user_address)) {
+              arr = currentUser.user_address;
             }
-          } catch (e) {
-            console.warn('[csmUserData] Failed to get from localStorage:', e);
-          }
+            if (!Array.isArray(arr)) arr = [];
+            return arr;
+          } catch {}
           return [];
         },
 
         /**
-         * Set user data and optionally persist to server
+         * Fetch user_address from csm_accounts database
          */
-        set: async function(data: any[], callback?: (success: boolean, error?: any) => void) {
+        fetchFromDatabase: async function(callback?: (success: boolean, data?: any[], error?: string) => void): Promise<void> {
           try {
-            if (!Array.isArray(data)) {
-              throw new Error('Data must be an array');
+            const currentUser = (window as any).csmCurrentUser || {};
+            let pkField = currentUser.email ? "email" : (currentUser.username ? "username" : "phoneNumber");
+            let pkValue = currentUser.email || currentUser.username || currentUser.phoneNumber;
+            
+            if (!pkValue) {
+              if (typeof callback === "function") callback(false, [], "No user info");
+              return;
             }
 
-            // Update cache
-            cachedData = data;
-            cacheValid = true;
+            if (window.csmApi && window.csmApi.getTableData) {
+              const response = await window.csmApi.getTableData({
+                app_id: "csm",
+                obj_name: "csm_accounts",
+                where: {
+                  field: pkField,
+                  type: "eq",
+                  value: pkValue
+                },
+                take: 1
+              });
 
-            // Persist to localStorage
-            try {
-              localStorage.setItem('dataOptionUser', JSON.stringify(data));
-            } catch (e) {
-              console.warn('[csmUserData] Failed to save to localStorage:', e);
-            }
-
-            // Optionally persist to server via updateTableData
-            // Note: This depends on your schema, adjust table name and fields as needed
-            if (callback) {
-              callback(true);
+              const rows = (response as any)?.rows || (response as any)?.data || [];
+              if (rows.length > 0) {
+                const userData = rows[0];
+                let userAddress = [];
+                
+                if (typeof userData.user_address === "string") {
+                  try { userAddress = JSON.parse(userData.user_address); } catch { userAddress = []; }
+                } else if (Array.isArray(userData.user_address)) {
+                  userAddress = userData.user_address;
+                }
+                
+                // Update window.csmCurrentUser
+                if ((window as any).csmCurrentUser) {
+                  (window as any).csmCurrentUser.user_address = Array.isArray(userAddress) ? JSON.stringify(userAddress) : userAddress;
+                }
+                
+                // Update localStorage
+                if (Array.isArray(userAddress) && userAddress.length > 0) {
+                  localStorage.setItem('user_address', JSON.stringify(userAddress));
+                }
+                
+                if (typeof callback === "function") callback(true, userAddress);
+              } else {
+                if (typeof callback === "function") callback(false, [], "User not found");
+              }
+            } else {
+              if (typeof callback === "function") callback(false, [], "API not available");
             }
           } catch (error: any) {
-            console.error('[csmUserData] Set error:', error);
-            if (callback) {
-              callback(false, error);
+            if (typeof callback === "function") {
+              callback(false, [], error?.message || String(error));
             }
           }
         },
 
         /**
-         * Fetch data from server database
+         * Set user_address and update to csm_accounts database
          */
-        fetchFromDatabase: async function(callback?: (success: boolean, data?: any[], error?: any) => void) {
+        set: async function(newUserData: any[], callback?: (success: boolean, error?: string) => void): Promise<void> {
           try {
-            const currentAppId = user?.app_id || appId || 'csm';
-            
-            // Fetch from server - adjust table name and conditions as needed
-            const response = await CsmApi.getTableData({
-              app_id: currentAppId,
-              obj_name: 'dataOptionUser', // Adjust to your actual table name
-              take: 1000,
-            });
-
-            const rows = (response as any)?.rows || (response as any)?.data || [];
-            
-            // Update cache
-            cachedData = rows;
-            cacheValid = true;
-
-            // Persist to localStorage
-            try {
-              localStorage.setItem('dataOptionUser', JSON.stringify(rows));
-            } catch (e) {
-              console.warn('[csmUserData] Failed to cache to localStorage:', e);
+            console.log("Dữ liệu user_address đưa vào là:", newUserData);
+            let arr = Array.isArray(newUserData) ? newUserData : [];
+            (window as any).csmCurrentUser = (window as any).csmCurrentUser || {};
+            (window as any).csmCurrentUser.user_address = JSON.stringify(arr);
+            const currentUser = (window as any).csmCurrentUser;
+            let pkField = currentUser.email ? "email" : (currentUser.username ? "username" : "phoneNumber");
+            let pkValue = currentUser.email || currentUser.username || currentUser.phoneNumber;
+            if (!pkValue) {
+              if (typeof callback === "function") callback(false, "No user info");
+              return;
             }
-
-            if (callback) {
-              callback(true, rows);
+            
+            // Prepare update data
+            const updateData: any = {
+              [pkField]: pkValue
+            };
+            if (Array.isArray(arr) && arr.length > 0) {
+              updateData.user_address = JSON.stringify(arr);
+            } else {
+              updateData.user_address = null;
+            }
+            
+            if (window.csmApi && (window.csmApi as any).updateTableData) {
+              const response = await (window.csmApi as any).updateTableData({
+                app_id: "csm",
+                obj_name: "csm_accounts",
+                command: "update",
+                obj_update: updateData,
+                pk_fields: [pkField],
+              });
+              
+              if (response?.success) {
+                console.log("✅ Updated user_address to database successfully");
+                if (typeof callback === "function") callback(true);
+              } else {
+                const errorMsg = response?.message || response?.error || "Update failed";
+                console.error("❌ Failed to update user_address:", errorMsg);
+                if (typeof callback === "function") callback(false, errorMsg);
+              }
+            } else {
+              if (typeof callback === "function") callback(false, "updateTableData API not available");
             }
           } catch (error: any) {
-            console.error('[csmUserData] Fetch error:', error);
-            if (callback) {
-              callback(false, undefined, error);
-            }
+            const errorMsg = error?.message || String(error);
+            console.error("❌ Error setting user_address:", errorMsg);
+            if (typeof callback === "function") callback(false, errorMsg);
           }
-        },
-
-        /**
-         * Clear cache to force refresh on next get()
-         */
-        clearCache: function() {
-          cacheValid = false;
-          cachedData = [];
         }
       };
 
-      console.log('✅ [DynamicCode] window.csmUserData initialized');
+      console.log('✅ [DynamicCode] window.csmUserData initialized (from AutoSetup.tsx pattern)');
     }
-  }
 
   // Sync current user to window
   useEffect(() => {
@@ -216,6 +399,172 @@ export default function DynamicCodeMenu({
       };
     }
   }, [isDark, themeColorPrimary]);
+
+  // ============================================
+  // GLOBAL WINDOW OBJECTS - Lazy Loading for Auto Code
+  // ============================================
+  useEffect(() => {
+    // Expose only essential notification helpers immediately
+    (window as any).thongbao = (msg: string) => notification.success({ message: msg });
+    (window as any).canhbao = (msg: string) => notification.warning({ message: msg });
+    
+    // ✅ LAZY LOAD: Use Object.defineProperty with getters to avoid loading heavy modules upfront
+    // React (500KB) - only loads when accessed
+    Object.defineProperty(window, 'React', {
+      get() { return React; },
+      configurable: true,
+      enumerable: false
+    });
+    
+    // ReactDOM (300KB) - only loads when accessed
+    Object.defineProperty(window, 'ReactDOM', {
+      get() { return ReactDOM; },
+      configurable: true,
+      enumerable: false
+    });
+    
+    // Ant Design components - only assembles when first accessed
+    Object.defineProperty(window, 'antd', {
+      get() {
+        return {
+          notification, Table, Tabs, Button, Input, Select, Card, Space, Popconfirm, CsmDynamicGrid,
+          googleIndexUrl: (CsmApi as any).googleIndexUrl,
+          checkGoogleIndexQuota: (CsmApi as any).checkGoogleIndexQuota,
+          checkGoogleIndexStatus: (CsmApi as any).checkGoogleIndexStatus,
+          getGoogleSearchConsoleSites: (CsmApi as any).getGoogleSearchConsoleSites,
+          checkAndAutoPublish: (CsmApi as any).checkAndAutoPublish,
+          addToQueue: (CsmApi as any).addToQueue,
+          addBatchToQueue: (CsmApi as any).addBatchToQueue,
+          getQueueInfo: (CsmApi as any).getQueueInfo,
+          getQueueItems: (CsmApi as any).getQueueItems,
+          processQueue: (CsmApi as any).processQueue,
+          removeFromQueue: (CsmApi as any).removeFromQueue,
+          getUrlHistory: (CsmApi as any).getUrlHistory,
+          getRecentHistory: (CsmApi as any).getRecentHistory,
+        };
+      },
+      configurable: true,
+      enumerable: false
+    });
+    
+    // I18nextProvider - lazy loaded
+    Object.defineProperty(window, 'I18nextProvider', {
+      get() { return I18nextProvider; },
+      configurable: true,
+      enumerable: false
+    });
+    
+    // Crypto functions - lazy loaded
+    Object.defineProperty(window, 'csmCrypto', {
+      get() { return { encrypt: csmEncrypt, decrypt: csmDecrypt }; },
+      configurable: true,
+      enumerable: false
+    });
+    
+    // AI functions - lazy loaded
+    Object.defineProperty(window, 'csmAI', {
+      get() {
+        return {
+          generateSeoContent, csm_ai_generate_seo_content,
+          generateSeoContentWithPrompt, formatSeoPrompt,
+          PROMPT_GENERATE_POST
+        };
+      },
+      configurable: true,
+      enumerable: false
+    });
+    
+    return () => {
+      delete (window as any).thongbao;
+      delete (window as any).canhbao;
+      delete (window as any).React;
+      delete (window as any).ReactDOM;
+      delete (window as any).antd;
+      delete (window as any).I18nextProvider;
+      delete (window as any).csmCrypto;
+      delete (window as any).csmAI;
+    };
+  }, []);
+
+  // ============================================
+  // GLOBAL TIMER CLEANUP SYSTEM - Ngăn Memory Leak & Crash
+  // ============================================
+  useEffect(() => {
+    // Create global timer registry
+    const globalTimers = {
+      intervals: new Set<number>(),
+      timeouts: new Set<number>(),
+      isShuttingDown: false,
+    };
+
+    // Override setInterval to auto-register
+    const originalSetInterval = window.setInterval;
+    (window as any).setInterval = function(...args: any[]) {
+      const id = originalSetInterval.apply(window, args as any);
+      if (!globalTimers.isShuttingDown) {
+        globalTimers.intervals.add(id as unknown as number);
+      }
+      return id;
+    };
+
+    // Override setTimeout to auto-register (only for long-running ones > 10s)
+    const originalSetTimeout = window.setTimeout;
+    (window as any).setTimeout = function(...args: any[]) {
+      const id = originalSetTimeout.apply(window, args as any);
+      const delay = typeof args[1] === 'number' ? args[1] : 0;
+      if (!globalTimers.isShuttingDown && delay > 10000) { // Only track long timeouts
+        globalTimers.timeouts.add(id as unknown as number);
+      }
+      return id;
+    };
+
+    // Expose global cleanup function
+    (window as any).__cleanupAllTimers = () => {
+      console.log('🧹 [CLEANUP] Clearing all timers...');
+      globalTimers.isShuttingDown = true;
+      
+      let cleared = 0;
+      globalTimers.intervals.forEach(id => {
+        try {
+          clearInterval(id);
+          cleared++;
+        } catch (e) {
+          console.warn('Failed to clear interval:', id);
+        }
+      });
+      
+      globalTimers.timeouts.forEach(id => {
+        try {
+          clearTimeout(id);
+          cleared++;
+        } catch (e) {
+          console.warn('Failed to clear timeout:', id);
+        }
+      });
+      
+      globalTimers.intervals.clear();
+      globalTimers.timeouts.clear();
+      
+      console.log(`✅ [CLEANUP] Cleared ${cleared} timers`);
+    };
+
+    // Expose isShuttingDown flag for scripts to check
+    (window as any).__isAutoShuttingDown = () => globalTimers.isShuttingDown;
+
+    // Cleanup function when component unmounts
+    return () => {
+      console.log('🛑 [DynamicCodeMenu] Component unmounting, cleaning up...');
+      (window as any).__cleanupAllTimers();
+      
+      // Restore original functions
+      window.setInterval = originalSetInterval;
+      window.setTimeout = originalSetTimeout;
+      
+      delete (window as any).__cleanupAllTimers;
+      delete (window as any).__isAutoShuttingDown;
+    };
+  }, []);
+
 
   // Load inline code or fetch template code from sys_autos
   useEffect(() => {
@@ -300,12 +649,185 @@ export default function DynamicCodeMenu({
   }, [menuId, location.state, propAutoCodeName, propMenuData, inlineCode]);
 
   const seft = useMemo(() => {
+    const userAddressRaw = localStorage.getItem("user_address");
+    let userAddress: any = undefined;
+    try { userAddress = userAddressRaw ? JSON.parse(userAddressRaw) : undefined; } catch {}
+    
     return {
+      // App and user info
+      app_id: user.app_id || appId,
       appId: user.app_id || appId || "csm",
       menuId,
       user: window.csmCurrentUser || user,
       t,
       navigate,
+      
+      Uinfos: {
+        appToken: user.app_token || "",
+        userAddress: userAddress,
+      },
+      
+      // Base64 utilities
+      Base64: {
+        encode: base64Encode,
+        decode: base64Decode,
+      },
+      
+      // Facebook Posting APIs
+      postToFacebookWithImages: postToFacebookWithImages,
+      postToFacebook: postToFacebook,
+      
+      // Facebook Backend APIs (for token management)
+      facebookValidateToken: facebookValidateToken,
+      facebookExchangeToken: facebookExchangeToken,
+      facebookGetPages: facebookGetPages,
+      
+      // AI SEO Content Generation
+      csm_ai_generate_seo_content: csm_ai_generate_seo_content,
+      generateSeoContent: generateSeoContent,
+      generateSeoContentWithPrompt: generateSeoContentWithPrompt,
+      formatSeoPrompt: formatSeoPrompt,
+      PROMPT_GENERATE_POST: PROMPT_GENERATE_POST,
+      
+      // Crypto utilities
+      csm_encrypt: (code: string) => csmEncrypt(code),
+      csm_decrypt: (code: string) => csmDecrypt(code),
+      
+      // Database operations
+      csm_obj_tables: (params: any, fn?: (res: any) => void) => {
+        getTableData<any>({
+          app_id: params?.app_id || appId,
+          obj_name: params?.obj_name,
+          where: params?.e_where || params?.where,
+          take: params?.take,
+          lastkey: params?.lastkey,
+        })
+          .then(res => {
+            const rows = (res as any)?.rows ?? (res as any)?.data ?? [];
+            fn?.({ success: true, rows, raw: res });
+          })
+          .catch(error => {
+            fn?.({ success: false, error: (error as any)?.message || error });
+          });
+      },
+      
+      csm_obj_updates: (params: any, fn?: (res: any) => void) => {
+        if (!params?.obj_name) {
+          fn?.({ success: false, error: "Missing obj_name" });
+          return;
+        }
+        (CsmApi as any).updateTableData({
+          app_id: params?.app_id || appId,
+          obj_name: params?.obj_name,
+          command: (params?.command as any) || "update",
+          obj_update: params?.obj_update || params?.obj || {},
+          pk_fields: params?.pk_fields,
+        } as any)
+          .then((res: any) => fn?.(res))
+          .catch((error: any) => fn?.({ success: false, error: (error as any)?.message || error }));
+      },
+      
+      csm_savedb: (key: string, data: any, fn?: (res: any) => void) => {
+        try {
+          localStorage.setItem(key, JSON.stringify(data));
+          fn?.({ status: true });
+        } catch (e: any) {
+          fn?.({ status: false, error: e?.message || String(e) });
+        }
+      },
+      
+      csm_userinfo_update: (app_token: string, userInfoUp: any, fn?: (res: any) => void) => {
+        const self = {
+          csm_obj_tables: (params: any, callback: (res: any) => void) => {
+            getTableData<any>({
+              app_id: params?.app_id || appId,
+              obj_name: params?.obj_name,
+              where: params?.e_where || params?.where,
+              take: params?.take,
+              lastkey: params?.lastkey,
+            })
+              .then(res => {
+                const rows = (res as any)?.rows ?? (res as any)?.data ?? [];
+                callback({ success: true, rows, raw: res });
+              })
+              .catch(error => {
+                callback({ success: false, error: (error as any)?.message || error });
+              });
+          },
+          csm_obj_updates: (params: any, callback: (res: any) => void) => {
+            if (!params?.obj_name) {
+              callback({ success: false, error: "Missing obj_name" });
+              return;
+            }
+            (CsmApi as any).updateTableData({
+              app_id: params?.app_id || appId,
+              obj_name: params?.obj_name,
+              command: (params?.command as any) || "update",
+              obj_update: params?.obj_update || params?.obj || {},
+              pk_fields: params?.pk_fields,
+            } as any)
+              .then((res: any) => callback(res))
+              .catch((error: any) => callback({ success: false, error: (error as any)?.message || error }));
+          },
+          csm_savedb: (key: string, data: any, callback: (res: any) => void) => {
+            try {
+              localStorage.setItem(key, JSON.stringify(data));
+              callback({ status: true });
+            } catch (e: any) {
+              callback({ status: false, error: e?.message || String(e) });
+            }
+          }
+        };
+
+        // Implementation matching AutoSetup.tsx
+        self.csm_obj_tables({
+          app_id: "csm",
+          obj_name: "csm_accounts",
+          e_where: {
+            field: "app_token",
+            type: "eq",
+            value: app_token
+          }
+        }, function(rs) {
+          if (!rs.success) {
+            fn?.({ status: false, error: rs.error });
+            return;
+          }
+          
+          const rows = rs.rows || [];
+          if (rows.length === 0) {
+            fn?.({ status: false, error: "User not found" });
+            return;
+          }
+          
+          const currentUser = rows[0];
+          const updateObj: any = { app_token: app_token };
+          
+          // Map userInfoUp fields to database fields
+          if (userInfoUp.username !== undefined) updateObj.username = userInfoUp.username;
+          if (userInfoUp.fullName !== undefined) updateObj.full_name = userInfoUp.fullName;
+          if (userInfoUp.phoneNumber !== undefined) updateObj.phone_number = userInfoUp.phoneNumber;
+          if (userInfoUp.email !== undefined) updateObj.email = userInfoUp.email;
+          if (userInfoUp.avatar !== undefined) updateObj.avatar = userInfoUp.avatar;
+          if (userInfoUp.address !== undefined) updateObj.address = userInfoUp.address;
+          
+          self.csm_obj_updates({
+            app_id: "csm",
+            obj_name: "csm_accounts",
+            command: "update",
+            obj_update: updateObj,
+            pk_fields: ["app_token"]
+          }, function(updateRes) {
+            if (updateRes?.success || updateRes?.data === "success") {
+              fn?.({ status: true, data: updateObj });
+            } else {
+              fn?.({ status: false, error: updateRes?.error || updateRes?.message || "Update failed" });
+            }
+          });
+        });
+      },
+      
+      // Expose all CsmApi functions
       ...CsmApi,
     };
   }, [user, appId, menuId, t, navigate]);
@@ -317,15 +839,33 @@ export default function DynamicCodeMenu({
         `try{\n${code}\n} catch (sca_err) {console.error(sca_err); alert('Menu Error: ' + sca_err);}`
       );
       
-      // Defer execution to avoid blocking initial route render
-      setTimeout(() => {
-        try {
-          fn(seft);
-        } catch (err: any) {
-          const msg = err?.message || String(err);
-          console.error("❌ [DynamicCodeMenu] Error executing code:", msg);
+      // Wait for #context-auto element to be rendered before executing code
+      const waitForContextAuto = (attempt = 0) => {
+        const contextAuto = document.getElementById('context-auto');
+        const dynamicRoot = document.getElementById(containerId);
+        
+        if (contextAuto && dynamicRoot) {
+          // Elements exist, execute code
+          try {
+            fn(seft);
+            console.log('✅ [DynamicCodeMenu] Code executed successfully after DOM ready');
+          } catch (err: any) {
+            const msg = err?.message || String(err);
+            console.error("❌ [DynamicCodeMenu] Error executing code:", msg);
+          }
+        } else if (attempt < 20) {
+          // Retry after 50ms (max 20 attempts = 1 second)
+          setTimeout(() => waitForContextAuto(attempt + 1), 50);
+          if (attempt === 0) {
+            console.log('⏳ [DynamicCodeMenu] Waiting for DOM elements to render...');
+          }
+        } else {
+          console.error('❌ [DynamicCodeMenu] Timeout waiting for DOM elements after 1 second');
         }
-      }, 0);
+      };
+      
+      // Start waiting for DOM
+      waitForContextAuto();
     } catch (error: any) {
       const msg = error?.message || String(error);
       console.error("❌ [DynamicCodeMenu] Error creating function:", msg);
@@ -384,6 +924,19 @@ export default function DynamicCodeMenu({
           style={{
             width: "100%",
             minHeight: 400,
+            ...(loading ? { display: "none" } : {})
+          }}
+        />
+        
+        {/* Legacy context-auto container for backward compatibility */}
+        <div
+          id="context-auto"
+          style={{
+            width: "100%",
+            minHeight: 480,
+            border: "1px dashed #ddd",
+            borderRadius: 8,
+            padding: 8,
             ...(loading ? { display: "none" } : {})
           }}
         />
