@@ -23,6 +23,12 @@ declare global {
     csmApi?: Record<string, any>;
     csmCurrentUser?: any;
     csmTheme?: Record<string, any>;
+    csmUserData?: {
+      get: () => any[];
+      set: (data: any[], callback?: (success: boolean, error?: any) => void) => void;
+      fetchFromDatabase: (callback?: (success: boolean, data?: any[], error?: any) => void) => void;
+      clearCache: () => void;
+    };
   }
 }
 
@@ -62,7 +68,7 @@ export default function DynamicCodeMenu({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Expose theme preferences for dynamic code
+  // Expose theme preferences and csmUserData for dynamic code
   if (typeof window !== "undefined") {
     window.csmApi = {
       ...window.csmApi,
@@ -77,6 +83,116 @@ export default function DynamicCodeMenu({
       getBorderColor: () => isDark ? '#303030' : '#f0f0f0',
       getCardBackground: () => isDark ? '#1f1f1f' : '#ffffff',
     };
+
+    // Initialize window.csmUserData for auto-upload-lmkt.js compatibility
+    if (!(window as any).csmUserData) {
+      let cachedData: any[] = [];
+      let cacheValid = false;
+
+      (window as any).csmUserData = {
+        /**
+         * Get user data from cache or fetch if needed
+         */
+        get: function() {
+          if (cacheValid && Array.isArray(cachedData)) {
+            return cachedData;
+          }
+          // Try to fetch synchronously from localStorage as fallback
+          try {
+            const stored = localStorage.getItem('dataOptionUser');
+            if (stored) {
+              cachedData = JSON.parse(stored);
+              cacheValid = true;
+              return cachedData;
+            }
+          } catch (e) {
+            console.warn('[csmUserData] Failed to get from localStorage:', e);
+          }
+          return [];
+        },
+
+        /**
+         * Set user data and optionally persist to server
+         */
+        set: async function(data: any[], callback?: (success: boolean, error?: any) => void) {
+          try {
+            if (!Array.isArray(data)) {
+              throw new Error('Data must be an array');
+            }
+
+            // Update cache
+            cachedData = data;
+            cacheValid = true;
+
+            // Persist to localStorage
+            try {
+              localStorage.setItem('dataOptionUser', JSON.stringify(data));
+            } catch (e) {
+              console.warn('[csmUserData] Failed to save to localStorage:', e);
+            }
+
+            // Optionally persist to server via updateTableData
+            // Note: This depends on your schema, adjust table name and fields as needed
+            if (callback) {
+              callback(true);
+            }
+          } catch (error: any) {
+            console.error('[csmUserData] Set error:', error);
+            if (callback) {
+              callback(false, error);
+            }
+          }
+        },
+
+        /**
+         * Fetch data from server database
+         */
+        fetchFromDatabase: async function(callback?: (success: boolean, data?: any[], error?: any) => void) {
+          try {
+            const currentAppId = user?.app_id || appId || 'csm';
+            
+            // Fetch from server - adjust table name and conditions as needed
+            const response = await CsmApi.getTableData({
+              app_id: currentAppId,
+              obj_name: 'dataOptionUser', // Adjust to your actual table name
+              take: 1000,
+            });
+
+            const rows = (response as any)?.rows || (response as any)?.data || [];
+            
+            // Update cache
+            cachedData = rows;
+            cacheValid = true;
+
+            // Persist to localStorage
+            try {
+              localStorage.setItem('dataOptionUser', JSON.stringify(rows));
+            } catch (e) {
+              console.warn('[csmUserData] Failed to cache to localStorage:', e);
+            }
+
+            if (callback) {
+              callback(true, rows);
+            }
+          } catch (error: any) {
+            console.error('[csmUserData] Fetch error:', error);
+            if (callback) {
+              callback(false, undefined, error);
+            }
+          }
+        },
+
+        /**
+         * Clear cache to force refresh on next get()
+         */
+        clearCache: function() {
+          cacheValid = false;
+          cachedData = [];
+        }
+      };
+
+      console.log('✅ [DynamicCode] window.csmUserData initialized');
+    }
   }
 
   // Sync current user to window
