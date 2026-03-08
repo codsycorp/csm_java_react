@@ -581,6 +581,8 @@ function applyLegacyMenuShape(menus: MenuItemType[]): MenuItemType[] {
         ? ((rawNode as any).table as any[]).map((f, idx) => ensureLegacyFieldShape(f, idx, menuId))
         : [];
 
+      const typeForm = Number((rawNode as any).type_form ?? 1);
+      
       const node: MenuItemType = {
         ...rawNode,
         id: menuId,
@@ -597,13 +599,16 @@ function applyLegacyMenuShape(menus: MenuItemType[]): MenuItemType[] {
         g_readonly: (rawNode as any).g_readonly ?? false,
         table_name: (rawNode as any).table_name ?? "",
         type_menu: (rawNode as any).type_menu ?? 0,
-        type_form: (rawNode as any).type_form ?? "",
+        type_form: typeForm,
         row_type_edit: (rawNode as any).row_type_edit ?? "",
         dev: (rawNode as any).dev ?? false,
         prefix_pk: (rawNode as any).prefix_pk ?? "",
         table_pagesize: (rawNode as any).table_pagesize ?? 0,
         menu_id: nextMenuId,
         table,
+        // Explicit support for Type 3 (Dynamic Link) and Type 4 (Dynamic Code)
+        ...(typeForm === 3 && { dynamic_link_url: (rawNode as any).dynamic_link_url ?? "" }),
+        ...(typeForm === 4 && { auto_code_name: (rawNode as any).auto_code_name ?? "" }),
       };
 
       if (childrenInput.length > 0) {

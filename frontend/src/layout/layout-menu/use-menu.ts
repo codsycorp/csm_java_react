@@ -455,7 +455,7 @@ export function useMenu() {
 			return;
 		}
 
-		// Handle Dynamic Code (type_form = 4)
+		// Handle Dynamic Code (type_form = 4) - navigate to /system/grid/:menuId like other dynamic menus
 		if (selectedApiMenu && Number(selectedApiMenu.type_form) === 4) {
 			const menuId = String(selectedApiMenu.id || selectedApiMenu.key);
 			const autoCodeName = selectedApiMenu.auto_code_name;
@@ -471,8 +471,8 @@ export function useMenu() {
 			// Update store BEFORE navigation
 			useUserStore.getState().setSelectedMenuIdForTab(menuId);
 
-			// Navigate to dynamic code page
-			navigate(`/system/dynamic-code/${menuId}`, {
+			// Navigate to dynamic grid route (same as grid/report) - AdminPage will render DynamicCodeMenu based on type_form=4
+			navigate(`/system/grid/${menuId}`, {
 				state: {
 					menuLabel,
 					menuData: selectedApiMenu

@@ -159,11 +159,14 @@ export function CsmDynamicGrid({
 	const [isUpdatingFromTrigger, setIsUpdatingFromTrigger] = useState(false);
 	const updateTriggerTimeoutRef = useRef<NodeJS.Timeout>();
 
-	// SINGLE SOURCE OF TRUTH: Use global database from store for ALL data
-	// - Loaded initially from menus (permission.ts)
-	// - Updated in real-time via socket (useSocket hook)
-	// - Shared across ALL components
-	const database = useAppStore(state => state.database);
+	// SINGLE SOURCE OF TRUTH: Use database from props first (from AdminPage)
+	// Then merge with global database from store for real-time updates
+	// This ensures non-menu tables like csm_accounts are available
+	const globalDatabase = useAppStore(state => state.database);
+	const database = useMemo(
+		() => ({ ...globalDatabase, ..._unusedDatabaseProp }),
+		[globalDatabase, _unusedDatabaseProp]
+	);
 	const [, setUpdateTrigger] = useState(0);
 
 	// Enable socket for real-time database updates

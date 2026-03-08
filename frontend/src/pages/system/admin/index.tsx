@@ -1,6 +1,7 @@
 import CsmDynamicGrid from "#src/components/csm-grid/CsmDynamicGrid";
 import CsmMasterDetail from "#src/components/csm-grid/CsmMasterDetail";
 import CsmReport from "#src/components/csm-report/CsmReport";
+import DynamicCodeMenu from "#src/pages/system/dynamic-code";
 import { useAppStore, useUserStore, usePermissionStore, useTabsStore } from "#src/store";
 import { Empty, Spin, Alert } from "antd";
 import { useEffect, useState } from "react";
@@ -123,6 +124,7 @@ export default function AdminPage() {
 						   path: "/system/user",
 						   label: t("common.menu.user"),
 						   table_name: "csm_accounts",
+						   app_id: "csm",
 						   type_form: 1,
 						   row_type_edit: 0,
 						   g_readonly: false,
@@ -132,6 +134,7 @@ export default function AdminPage() {
 						   path: "/system/role",
 						   label: t("common.menu.role"),
 						   table_name: "csm_roles",
+						   app_id: "csm",
 						   type_form: 1,
 						   row_type_edit: 0,
 						   g_readonly: false,
@@ -182,8 +185,11 @@ export default function AdminPage() {
 				conditions: [{ field: "id", type: "like", value: "" }]
 			};
 
+			// Use menu-specific app_id if available, otherwise fall back to global appId
+			const effectiveAppId = menuData.app_id || appId;
+
 			const response = await getTableData<any>({
-				app_id: appId,
+				app_id: effectiveAppId,
 				obj_name: primaryTable,
 				where: defaultFilter
 			});
@@ -200,7 +206,7 @@ export default function AdminPage() {
 			if (tableList.length > 1) {
 				for (const t of tableList.slice(1)) {
 					try {
-						const resT = await getTableData<any>({ app_id: appId, obj_name: t, where: defaultFilter });
+						const resT = await getTableData<any>({ app_id: effectiveAppId, obj_name: t, where: defaultFilter });
 						const rowsT = (resT as any).rows || (resT as any).data || [];
 						const pkT = (resT as any).fieldsPK || ["id"];
 						newDatabase[t] = { rows: rowsT, fieldsPK: pkT };
@@ -231,7 +237,7 @@ export default function AdminPage() {
 			for (const depTable of dependencyTables) {
 				try {
 					const depResponse = await getTableData<any>({
-						app_id: appId,
+						app_id: effectiveAppId,
 						obj_name: depTable,
 						where: defaultFilter
 					});
@@ -244,8 +250,17 @@ export default function AdminPage() {
 				}
 			}
 			
+			// Update both local state AND global store database
 			setDatabase(newDatabase);
-			   // ...existing code...
+			
+			// Update global store so CsmDynamicGrid can access the data
+			const currentStoreDb = useAppStore.getState().getDatabase();
+			useAppStore.getState().setDatabase({
+				...currentStoreDb,
+				...newDatabase
+			});
+			
+			console.log('💾 Database updated (local + global store):', Object.keys(newDatabase));
 		} catch (err: any) {
 			const msg = err?.message || "Failed to load table data";
 			setDbError(msg);
@@ -311,6 +326,9 @@ export default function AdminPage() {
 			</div>
 		);
 	}
+
+	// Use menu-specific app_id if available, otherwise fall back to global appId
+	const effectiveAppId = menuData.app_id || appId;
 
 	// Render grid
 	if (menuData.table_name) {
@@ -487,7 +505,7 @@ export default function AdminPage() {
 			return (
 				<div style={{ padding: 16, height: "100%" }}>
 					<CsmMasterDetail
-						appId={appId}
+						appId={effectiveAppId}
 						permissions={-1}
 						menusPermissions={{}}
 						database={database}
@@ -505,7 +523,7 @@ export default function AdminPage() {
 				<CsmDynamicGrid
 					m_configs={m_configs}
 					database={database}
-					appId={appId}
+					appId={effectiveAppId}
 					permissions={-1}
 					menusPermissions={{}}
 					menuId={menuData.id}
@@ -521,9 +539,20 @@ export default function AdminPage() {
 		return (
 			<div style={{ padding: 16, height: "100%" }}>
 				<CsmReport
-					appId={appId}
+					appId={effectiveAppId}
 					m_configs={menuData}
 				/>
+			</div>
+		);
+	}
+
+	// Render dynamic code menu (type_form = 4)
+	const typeForm = Number(menuData.type_form || 1);
+	const hasAutoCodeName = !!(menuData as any).auto_code_name || typeForm === 4;
+	if (hasAutoCodeName) {
+		return (
+			<div style={{ padding: 16, height: "100%" }}>
+				<DynamicCodeMenu menuId={menuId} menuData={menuData} />
 			</div>
 		);
 	}

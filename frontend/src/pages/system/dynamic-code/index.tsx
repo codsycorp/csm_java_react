@@ -11,26 +11,52 @@ import { csmDecrypt } from "#src/components/csm-grid/CsmCrypto";
 import { useAppStore } from "#src/store/app";
 import { useUserStore } from "#src/store/user";
 import { usePreferences } from "#src/hooks";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useParams, useLocation } from "react-router";
+import { useParams, useLocation, useNavigate } from "react-router";
 import * as React from "react";
 import * as ReactDOM from "react-dom/client";
 import { Spin, Empty, Alert } from "antd";
 
-interface DynamicCodeMenuProps {
-  menuId: string;
-  autoCodeName: string;
+declare global {
+  interface Window {
+    csmApi?: Record<string, any>;
+    csmCurrentUser?: any;
+    csmTheme?: Record<string, any>;
+  }
 }
 
-export default function DynamicCodeMenu() {
-  const { menuId } = useParams<{ menuId: string }>();
+interface DynamicCodeMenuProps {
+  menuId?: string;
+  menuData?: any;
+  autoCodeName?: string;
+  inlineCode?: string;
+  containerId?: string;
+  containerClassName?: string;
+  rootPadding?: number;
+  noCodeMessage?: string;
+}
+
+export default function DynamicCodeMenu({
+  menuId: propMenuId,
+  menuData: propMenuData,
+  autoCodeName: propAutoCodeName,
+  inlineCode,
+  containerId = "dynamic-code-root",
+  containerClassName,
+  rootPadding = 16,
+  noCodeMessage,
+}: DynamicCodeMenuProps = {}) {
+  const { menuId: paramMenuId } = useParams<{ menuId: string }>();
   const location = useLocation();
+  const navigate = useNavigate();
+  const menuId = propMenuId || paramMenuId;
   const { i18n, t } = useTranslation();
   const user = useUserStore();
   const appId = useAppStore(state => state.currentAppId);
   const preferences = usePreferences();
   const { isDark, themeColorPrimary } = preferences;
+  const executedRef = useRef(false);
   
   const [autoCode, setAutoCode] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(true);
@@ -75,26 +101,30 @@ export default function DynamicCodeMenu() {
     }
   }, [isDark, themeColorPrimary]);
 
-  // Load the dynamic code from menu auto_code_name
+  // Load inline code or fetch template code from sys_autos
   useEffect(() => {
     let cancelled = false;
 
     async function loadAutoCode() {
       try {
-        setLoading(true);
-        setError(null);
-
-        if (!menuId) {
-          setError("Menu ID not provided");
+        if (inlineCode !== undefined) {
+          setError(null);
+          setLoading(false);
+          setAutoCode(inlineCode);
           return;
         }
 
-        // Get menu data from location state or fetch it
-        const locationState = location.state as any;
-        const autoCodeName = locationState?.menuData?.auto_code_name;
+        setLoading(true);
+        setError(null);
+
+        const autoCodeName =
+          propAutoCodeName
+          || propMenuData?.auto_code_name
+          || (location.state as any)?.menuData?.auto_code_name
+          || "";
 
         if (!autoCodeName) {
-          setError("Auto code template name not configured for this menu");
+          setError("Auto code template name not configured");
           setAutoCode("");
           return;
         }
@@ -149,8 +179,9 @@ export default function DynamicCodeMenu() {
     loadAutoCode();
     return () => {
       cancelled = true;
+      executedRef.current = false;
     };
-  }, [menuId, location.state]);
+  }, [menuId, location.state, propAutoCodeName, propMenuData, inlineCode]);
 
   const seft = useMemo(() => {
     return {
@@ -158,9 +189,10 @@ export default function DynamicCodeMenu() {
       menuId,
       user: window.csmCurrentUser || user,
       t,
+      navigate,
       ...CsmApi,
     };
-  }, [user, appId, menuId, t]);
+  }, [user, appId, menuId, t, navigate]);
 
   const executeCode = (code: string) => {
     try {
@@ -194,12 +226,17 @@ export default function DynamicCodeMenu() {
       return; // Empty code, nothing to execute
     }
 
+    if (executedRef.current) {
+      return;
+    }
+    executedRef.current = true;
+
     executeCode(autoCode);
   }, [autoCode, seft]);
 
   return (
     <BasicContent key={i18n.language}>
-      <div style={{ padding: 16 }}>
+      <div style={{ padding: rootPadding }}>
         {loading && (
           <div style={{ textAlign: "center", padding: 40 }}>
             <Spin size="large" tip={t("common.loading", "Đang tải...")} />
@@ -219,14 +256,15 @@ export default function DynamicCodeMenu() {
 
         {!loading && !error && autoCode === "" && (
           <Empty
-            description={t("system.dynamic_code.no_code", "Không có code để chạy")}
+            description={noCodeMessage || t("system.dynamic_code.no_code", "Không có code để chạy")}
             style={{ marginTop: 40 }}
           />
         )}
 
         {/* Container for dynamic code output */}
         <div
-          id="dynamic-code-root"
+          id={containerId}
+          className={containerClassName}
           style={{
             width: "100%",
             minHeight: 400,
@@ -263,7 +301,7 @@ export const DynamicCodeHelpers = {
   /**
    * Get container element for direct DOM manipulation
    */
-  getContainer: () => document.getElementById("dynamic-code-root"),
+  getContainer: (containerId: string = "dynamic-code-root") => document.getElementById(containerId),
 
   /**
    * Log with prefix for easy debugging
