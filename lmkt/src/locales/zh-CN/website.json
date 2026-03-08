@@ -426,7 +426,7 @@
     }
   },
   "contact": {
-    "intro": "我们随时准备倾听并为您提供支持。请联系我们！",
+    "intro": "H Holding投资股份公司专业提供胡志明市西区房地产服务。如需交易信息、咨询或支持，请联系我们的热线或直接访问办公室。",
     "info": "联系信息",
     "phone": "电话",
     "address": "地址",
@@ -505,8 +505,8 @@
     "founder_bio": "金融与银行经验助力资金对接、风险管理与高效谈判，为客户创造最大价值。"
   },
   "footer": {
-    "description": "联盟区西 - 西贡西区豪华公寓、经济公寓、土地。官方分销商5+项目：Sunshine、Kieu by Kita、Destino Centro。法律透明、70%贷款支持、准时交付。24/7热线：+84909879885",
-    "companyName": "联盟区西 - 胡志明市可信房地产中介",
+    "description": "H Holding投资股份公司 - 西贡西区豪华公寓、经济公寓、土地。官方分销商5+项目：Sunshine、Kieu by Kita、Destino Centro。法律透明、70%贷款支持、准时交付。24/7热线：+84909879885",
+    "companyName": "H Holding投资股份公司",
     "email": "phongkinhdoanhlmkt@gmail.com",
     "phone": "+84909879885 (房地产热线24/7)",
     "location": "办公室：1472 Vo Van Kiet街，平田坊，第8郡，胡志明市（近平田市场）",
@@ -524,7 +524,7 @@
     "news": "新闻",
     "blog": "博客",
     "followUs": "关注我们",
-    "copyright": "版权所有 © 2006-{{year}} CSM 客户成功经理。保留所有权利。",
+    "copyright": "版权所有 © 2006-{{year}} H Holding投资股份公司。保留所有权利。",
     "privacy": "隐私政策",
     "terms": "使用条款",
     "about": "关于我们",

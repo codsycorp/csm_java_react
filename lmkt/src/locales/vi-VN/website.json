@@ -448,7 +448,7 @@
     "about": "Về Chúng Tôi"
   },
   "contact": {
-    "intro": "Chúng tôi luôn sẵn sàng lắng nghe và hỗ trợ bạn. Hãy liên hệ với chúng tôi!",
+    "intro": "Công Ty Cổ Phần Đầu Tư H Holding chuyên cung cấp dịch vụ bất động sản khu vực phía Tây TPHCM. Mọi thông tin giao dịch, tư vấn, hỗ trợ vui lòng liên hệ hotline hoặc đến trực tiếp văn phòng.",
     "info": "Thông Tin Liên Hệ",
     "phone": "Điện Thoại",
     "address": "Địa Chỉ",
@@ -481,7 +481,7 @@
     "map_placeholder": "Bản đồ sẽ được tích hợp tại đây"
   },
   "about": {
-    "intro": "Liên Minh Khu Tây chuyên tư vấn, phân phối và kết nối đầu tư bất động sản khu Tây TPHCM. Cam kết pháp lý minh bạch, hỗ trợ vay 70%, bàn giao đúng tiến độ.",
+    "intro": "Công Ty Cổ Phần Đầu Tư H Holding chuyên tư vấn, phân phối và kết nối đầu tư bất động sản khu Tây TPHCM. Cam kết pháp lý minh bạch, hỗ trợ vay 70%, bàn giao đúng tiến độ.",
     "our_mission": "Sứ Mệnh",
     "mission_desc": "Kết nối cơ hội đầu tư an toàn, minh bạch; tối ưu giá trị tài sản cho khách hàng tại khu Tây Sài Gòn.",
     "our_vision": "Tầm Nhìn",
@@ -527,8 +527,8 @@
     "founder_bio": "Kinh nghiệm tài chính - ngân hàng giúp kết nối vốn, quản trị rủi ro và đàm phán hiệu quả, mang lại lợi ích tối đa cho khách hàng."
   },
   "footer": {
-    "description": "Liên Minh Khu Tây - Chuyên mua bán căn hộ cao cấp, chung cư giá rẻ, đất nền khu Tây TPHCM. Đối tác phân phối 5+ dự án: Sunshine, Kiều by Kita, Destino Centro. Pháp lý minh bạch, hỗ trợ vay 70%, bàn giao đúng hạn. Hotline 24/7: 0909879885",
-    "companyName": "Liên Minh Khu Tây - Sàn BĐS Uy Tín TPHCM",
+    "description": "Công Ty Cổ Phần Đầu Tư H Holding - Chuyên mua bán căn hộ cao cấp, chung cư giá rẻ, đất nền khu Tây TPHCM. Đối tác phân phối 5+ dự án: Sunshine, Kiều by Kita, Destino Centro. Pháp lý minh bạch, hỗ trợ vay 70%, bàn giao đúng hạn. Hotline 24/7: 0909879885",
+    "companyName": "Công Ty Cổ Phần Đầu Tư H Holding",
     "email": "phongkinhdoanhlmkt@gmail.com",
     "phone": "0909879885 (Hotline Tư Vấn BĐS 24/7)",
     "location": "VP: 1472 Võ Văn Kiệt, P.Bình Tiên, Q.8, TPHCM (Gần Chợ Bình Tiên)",
@@ -546,7 +546,7 @@
     "news": "Tin Tức",
     "blog": "Blog",
     "followUs": "Theo Dõi Chúng Tôi",
-    "copyright": "Bản quyền © 2006-{{year}} CSM Quản Lý Thành Công Khách Hàng. Tất cả các quyền được bảo lưu.",
+    "copyright": "Bản quyền © 2006-{{year}} Công Ty Cổ Phần Đầu Tư H Holding. Tất cả các quyền được bảo lưu.",
     "privacy": "Chính Sách Bảo Mật",
     "terms": "Điều Khoản Sử Dụng",
     "about": "Về Chúng Tôi",

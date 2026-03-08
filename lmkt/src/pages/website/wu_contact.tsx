@@ -126,7 +126,7 @@ export default function WuContact() {
       icon: <PhoneOutlined style={{ fontSize: "24px", color: "#1890ff" }} />,
       title: t("website.contact.phone", "Hotline"),
       content: "0909879885",
-      description: "Phòng Kinh Doanh Liên Minh Khu Tây"
+      description: "Phòng Kinh Doanh H Holding"
     },
     {
       icon: <MailOutlined style={{ fontSize: "24px", color: "#52c41a" }} />,
@@ -138,7 +138,7 @@ export default function WuContact() {
       icon: <EnvironmentOutlined style={{ fontSize: "24px", color: "#fa8c16" }} />,
       title: t("website.contact.address", "Địa Chỉ"),
       content: "1472 Võ Văn Kiệt, Phường Bình Tiên, TPHCM",
-      description: "Văn phòng giao dịch bất động sản khu Tây"
+      description: "Văn phòng giao dịch H Holding"
     },
     {
       icon: <ClockCircleOutlined style={{ fontSize: "24px", color: "#722ed1" }} />,
@@ -154,10 +154,10 @@ export default function WuContact() {
         {/* Header */}
         <Card style={{ marginBottom: "24px", textAlign: "center" }}>
           <Title level={1}>
-            {t("website.menu.contact", "Liên Hệ Liên Minh Khu Tây")}
+            {t("website.menu.contact", "Liên Hệ H Holding")}
           </Title>
           <Paragraph style={{ fontSize: "18px", color: "#666" }}>
-            {t("website.contact.intro", "Liên Minh Khu Tây chuyên cung cấp dịch vụ bất động sản khu vực phía Tây TPHCM. Mọi thông tin giao dịch, tư vấn, hỗ trợ vui lòng liên hệ hotline hoặc đến trực tiếp văn phòng.")}
+            {t("website.contact.intro", "Công Ty Cổ Phần Đầu Tư H Holding chuyên cung cấp dịch vụ bất động sản khu vực phía Tây TPHCM. Mọi thông tin giao dịch, tư vấn, hỗ trợ vui lòng liên hệ hotline hoặc đến trực tiếp văn phòng.")}
           </Paragraph>
         </Card>
 

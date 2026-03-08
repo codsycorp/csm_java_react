@@ -48,7 +48,7 @@ export default function WuAbout() {
             {t("website.menu.about", "Về Chúng Tôi")}
           </Title>
           <Paragraph style={{ fontSize: "18px", color: "#666" }}>
-            {t("website.about.intro", "Liên Minh Khu Tây chuyên tư vấn, phân phối và kết nối đầu tư bất động sản khu vực phía Tây TPHCM với đội ngũ am hiểu thị trường, pháp lý minh bạch.")}
+            {t("website.about.intro", "Công Ty Cổ Phần Đầu Tư H Holding chuyên tư vấn, phân phối và kết nối đầu tư bất động sản khu vực phía Tây TPHCM với đội ngũ am hiểu thị trường, pháp lý minh bạch.")}
           </Paragraph>
         </Card>
 
