@@ -4,13 +4,16 @@ import java.util.*;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import jakarta.annotation.PostConstruct;
 import net.phanmemmottrieu.data.RecordManager;
+import net.phanmemmottrieu.data.SearchFilter;
 
 /**
  * CRM Service - Simplified version using correct RecordManager APIs
@@ -37,12 +40,135 @@ public class CRMService {
     private static final String TABLE_CONTACT_HISTORY = "crm_contact_history";
     private static final String TABLE_ADS = "crm_ads";
     private static final String TABLE_GOOGLEBOT_VISITS = "googlebot_visits";
+    
+    // Table ready flags
+    private final AtomicBoolean customersTableReady = new AtomicBoolean(false);
+    private final AtomicBoolean purchasesTableReady = new AtomicBoolean(false);
+    private final AtomicBoolean contactHistoryTableReady = new AtomicBoolean(false);
+    private final AtomicBoolean adsTableReady = new AtomicBoolean(false);
 
     @Autowired
     public CRMService(RecordManager recordManager, GoogleIndexService googleIndexService) {
         this.recordManager = recordManager;
         this.googleIndexService = googleIndexService;
-        logger.info("CRMService initialized - tables will be auto-created on first insert");
+    }
+    
+    @PostConstruct
+    public void initializeTables() {
+        logger.info("Initializing CRM tables...");
+        try {
+            ensureCustomersTable();
+            ensurePurchasesTable();
+            ensureContactHistoryTable();
+            ensureAdsTable();
+            logger.info("✅ All CRM tables initialized successfully");
+        } catch (Exception e) {
+            logger.error("❌ Error initializing CRM tables: {}", e.getMessage(), e);
+        }
+    }
+    
+    @SuppressWarnings("unchecked")
+    private void ensureCustomersTable() {
+        if (customersTableReady.get()) return;
+        synchronized (customersTableReady) {
+            if (customersTableReady.get()) return;
+            try {
+                SearchFilter filter = RecordManager.createCondition("id", "eq", TABLE_CUSTOMERS);
+                Map<String, Object> existing = recordManager.find("csm", "index", filter);
+                if (existing == null || existing.isEmpty()) {
+                    Map<String, Object> struct = new HashMap<>();
+                    struct.put("fieldsPK", List.of("phone", "app_id"));
+                    struct.put("fieldsSearch", List.of("id", "phone", "name", "email", "status", "source", "assigned_to"));
+                    
+                    Map<String, Object> record = new HashMap<>();
+                    record.put("id", TABLE_CUSTOMERS);
+                    record.put("struct", struct);
+                    recordManager.createRecord("csm", "index", record);
+                    logger.info("✅ Created table struct: {}", TABLE_CUSTOMERS);
+                }
+                customersTableReady.set(true);
+            } catch (Exception e) {
+                logger.warn("Cannot ensure table {}: {}", TABLE_CUSTOMERS, e.getMessage());
+            }
+        }
+    }
+    
+    @SuppressWarnings("unchecked")
+    private void ensurePurchasesTable() {
+        if (purchasesTableReady.get()) return;
+        synchronized (purchasesTableReady) {
+            if (purchasesTableReady.get()) return;
+            try {
+                SearchFilter filter = RecordManager.createCondition("id", "eq", TABLE_PURCHASES);
+                Map<String, Object> existing = recordManager.find("csm", "index", filter);
+                if (existing == null || existing.isEmpty()) {
+                    Map<String, Object> struct = new HashMap<>();
+                    struct.put("fieldsPK", List.of("purchase_id"));
+                    struct.put("fieldsSearch", List.of("id", "purchase_id", "customer_phone", "product_id", "product_name", "advisor_id"));
+                    
+                    Map<String, Object> record = new HashMap<>();
+                    record.put("id", TABLE_PURCHASES);
+                    record.put("struct", struct);
+                    recordManager.createRecord("csm", "index", record);
+                    logger.info("✅ Created table struct: {}", TABLE_PURCHASES);
+                }
+                purchasesTableReady.set(true);
+            } catch (Exception e) {
+                logger.warn("Cannot ensure table {}: {}", TABLE_PURCHASES, e.getMessage());
+            }
+        }
+    }
+    
+    @SuppressWarnings("unchecked")
+    private void ensureContactHistoryTable() {
+        if (contactHistoryTableReady.get()) return;
+        synchronized (contactHistoryTableReady) {
+            if (contactHistoryTableReady.get()) return;
+            try {
+                SearchFilter filter = RecordManager.createCondition("id", "eq", TABLE_CONTACT_HISTORY);
+                Map<String, Object> existing = recordManager.find("csm", "index", filter);
+                if (existing == null || existing.isEmpty()) {
+                    Map<String, Object> struct = new HashMap<>();
+                    struct.put("fieldsPK", List.of("history_id"));
+                    struct.put("fieldsSearch", List.of("id", "history_id", "customer_phone", "contact_type", "employee_id"));
+                    
+                    Map<String, Object> record = new HashMap<>();
+                    record.put("id", TABLE_CONTACT_HISTORY);
+                    record.put("struct", struct);
+                    recordManager.createRecord("csm", "index", record);
+                    logger.info("✅ Created table struct: {}", TABLE_CONTACT_HISTORY);
+                }
+                contactHistoryTableReady.set(true);
+            } catch (Exception e) {
+                logger.warn("Cannot ensure table {}: {}", TABLE_CONTACT_HISTORY, e.getMessage());
+            }
+        }
+    }
+    
+    @SuppressWarnings("unchecked")
+    private void ensureAdsTable() {
+        if (adsTableReady.get()) return;
+        synchronized (adsTableReady) {
+            if (adsTableReady.get()) return;
+            try {
+                SearchFilter filter = RecordManager.createCondition("id", "eq", TABLE_ADS);
+                Map<String, Object> existing = recordManager.find("csm", "index", filter);
+                if (existing == null || existing.isEmpty()) {
+                    Map<String, Object> struct = new HashMap<>();
+                    struct.put("fieldsPK", List.of("ad_id"));
+                    struct.put("fieldsSearch", List.of("id", "ad_id", "platform", "status", "name", "app_id"));
+                    
+                    Map<String, Object> record = new HashMap<>();
+                    record.put("id", TABLE_ADS);
+                    record.put("struct", struct);
+                    recordManager.createRecord("csm", "index", record);
+                    logger.info("✅ Created table struct: {}", TABLE_ADS);
+                }
+                adsTableReady.set(true);
+            } catch (Exception e) {
+                logger.warn("Cannot ensure table {}: {}", TABLE_ADS, e.getMessage());
+            }
+        }
     }
 
     /**
@@ -51,6 +177,7 @@ public class CRMService {
      */
     @SuppressWarnings("unchecked")
     public Map<String, Object> createOrUpdateCustomer(String appId, Map<String, Object> customerData) {
+        ensureCustomersTable(); // Ensure table exists before insert
         try {
             String phone = (String) customerData.get("phone");
             if (phone == null || phone.trim().isEmpty()) {
@@ -61,6 +188,11 @@ public class CRMService {
             Map<String, Object> data = new HashMap<>(customerData);
             data.put("app_id", appId);
             data.put("phone", phone);
+            
+            // Ensure id exists
+            if (!data.containsKey("id") || data.get("id") == null || data.get("id").toString().isBlank()) {
+                data.put("id", UUID.randomUUID().toString());
+            }
             
             // Set timestamps
             long now = Instant.now().toEpochMilli();
@@ -166,9 +298,11 @@ public class CRMService {
      */
     @SuppressWarnings("unchecked")
     public Map<String, Object> addCustomerPurchase(String appId, String phone, Map<String, Object> purchaseData) {
+        ensurePurchasesTable(); // Ensure table exists before insert
         try {
             String purchaseId = UUID.randomUUID().toString();
             Map<String, Object> data = new HashMap<>(purchaseData);
+            data.put("id", UUID.randomUUID().toString());
             data.put("purchase_id", purchaseId);
             data.put("app_id", appId);
             data.put("customer_phone", phone);
@@ -198,9 +332,11 @@ public class CRMService {
     @SuppressWarnings("unchecked")
     public Map<String, Object> addContactHistory(String appId, String phone, String contactType, 
                                                   String notes, String employeeId) {
+        ensureContactHistoryTable(); // Ensure table exists before insert
         try {
             String historyId = UUID.randomUUID().toString();
             Map<String, Object> data = new HashMap<>();
+            data.put("id", UUID.randomUUID().toString());
             data.put("history_id", historyId);
             data.put("app_id", appId);
             data.put("customer_phone", phone);
@@ -396,6 +532,7 @@ public class CRMService {
      */
     @SuppressWarnings("unchecked")
     public Map<String, Object> createAd(String appId, Map<String, Object> adData) {
+        ensureAdsTable(); // Ensure table exists before insert
         try {
             String adId = UUID.randomUUID().toString();
             Map<String, Object> data = new HashMap<>(adData);
@@ -439,6 +576,7 @@ public class CRMService {
                 publishMessage = asString(publishResult.get("message"));
             }
 
+            data.put("id", UUID.randomUUID().toString());
             data.put("ad_id", adId);
             data.put("app_id", appId);
             data.put("created_at", Instant.now().toEpochMilli());
