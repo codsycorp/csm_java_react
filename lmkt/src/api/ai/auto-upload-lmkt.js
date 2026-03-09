@@ -146,6 +146,32 @@ function t(key) {
   return uiTranslations[lang]?.[key] || uiTranslations.vi[key] || key;
 }
 
+// Unified notification helpers used throughout this file.
+// Keep auto-post flow alive even when UI toast function is unavailable.
+function notifyUser(type, message, duration = 3) {
+  const safeMessage = String(message || "");
+
+  if (typeof window !== "undefined" && typeof window.showNotification === "function") {
+    try {
+      window.showNotification({ type, message: safeMessage, duration });
+      return;
+    } catch (error) {
+      console.warn("[notifyUser] showNotification failed:", error?.message || error);
+    }
+  }
+
+  const logger = type === "error" ? console.error : type === "warning" ? console.warn : console.log;
+  logger(safeMessage);
+}
+
+function thongbao(message, duration = 3) {
+  notifyUser("success", message, duration);
+}
+
+function canhbao(message, duration = 4) {
+  notifyUser("warning", message, duration);
+}
+
 // ========== GLOBAL TIMER REGISTRY - QUẢN LÝ TẤT CẢ TIMERS ==========
 // ✅ Ngăn ngừa orphaned timers + memory leaks
 const timerRegistry = {
@@ -4386,31 +4412,28 @@ async function runMessages(messages, configIdOverride = null) {
 }
 
 // ===== UI =====
-function waitForContextAuto(timeoutMs = 5000, intervalMs = 100) {
-  return new Promise((resolve, reject) => {
-    const start = Date.now();
-    const timer = setInterval(() => {
-      const host = document.querySelector("#context-auto");
-      if (host) {
-        clearInterval(timer);
-        resolve(host);
-      } else if (Date.now() - start > timeoutMs) {
-        clearInterval(timer);
-        reject(new Error("Không tìm thấy #context-auto (React chưa render xong)"));
-      }
-    }, intervalMs);
-  });
-}
-
 function ensureUnifiedUIContainer() {
-  const host = document.querySelector("#context-auto");
-  if (!host) return null;
+  // Mount all UI into #context-auto to match the broadcast embedding pattern.
+  const host = document.getElementById("context-auto");
+  if (!host) {
+    console.warn("⚠️ Không tìm thấy #context-auto, không thể mount UI");
+    return null;
+  }
 
   let container = document.getElementById("csm-ui-container");
   if (!container) {
+    container = host.querySelector("[data-csm-ui-container]");
+  }
+
+  if (!container) {
     container = document.createElement("div");
     container.id = "csm-ui-container";
+    container.setAttribute("data-csm-ui-container", "1");
     container.style.cssText = "width:100%;padding:0 16px;margin:0 auto;display:flex;flex-direction:column;gap:16px;box-sizing:border-box;";
+  }
+
+  // Ensure container is physically inside #context-auto.
+  if (!host.contains(container)) {
     host.prepend(container);
   }
 
@@ -4679,15 +4702,10 @@ async function ensureGlobalSettingsPanel() {
   // Append title and container to wrapper
   wrapper.append(title, settingsContainer);
 
-  try {
-    await waitForContextAuto();
-    const container = ensureUnifiedUIContainer();
-    if (container) {
-      // Insert at the beginning
-      container.insertBefore(wrapper, container.firstChild);
-    }
-  } catch (e) {
-    console.warn("Không tìm thấy #context-auto:", e);
+  // Insert settings UI into container
+  const container = ensureUnifiedUIContainer();
+  if (container) {
+    container.insertBefore(wrapper, container.firstChild);
   }
 
   return wrapper;
@@ -5028,17 +5046,11 @@ async function ensureUI() {
   btnRow.append(uploadZaloBtn, uploadFbBtn, createBtn, clearHistoryBtn, cleanupIndexedDBBtn);
   wrapper.append(title, note, textarea, btnRow, zaloFileInput, fbFileInput);
 
-  try {
-    await waitForContextAuto();
-    const container = ensureUnifiedUIContainer();
-    if (container) {
-      container.appendChild(wrapper);
-      ensureZaloMultiGroupUI(container);
-    } else {
-      canhbao("Không tìm thấy #context-auto");
-    }
-  } catch (e) {
-    canhbao("Không tìm thấy #context-auto");
+  // Insert upload UI into container
+  const container = ensureUnifiedUIContainer();
+  if (container) {
+    container.appendChild(wrapper);
+    ensureZaloMultiGroupUI(container);
   }
   
   return wrapper;
@@ -8516,7 +8528,7 @@ async function pushSingleMessageToWeb(message, groupName, configId, config, sess
       postSuccess = true;
       console.log(`    ✅ [Auto Post] processContent hoàn tất`);
     } catch (processErr) {
-      console.error('❌ [Auto Post] processContent lỗi:', processErr.message);
+      console.error('❌ [Auto Post] processContent lỗi:', processErr);
       // Vẫn tiếp tục để record message (tránh đăng lại)
     }
     
@@ -8530,7 +8542,7 @@ async function pushSingleMessageToWeb(message, groupName, configId, config, sess
         console.log(`    📝 [Auto Post] Đã record message vào lịch sử`);
       }
     } catch (recordErr) {
-      console.error('❌ [Auto Post] recordPostedZaloMessage lỗi:', recordErr.message);
+      console.error('❌ [Auto Post] recordPostedZaloMessage lỗi:', recordErr);
     }
     
     // ✅ Cập nhật stats UI
@@ -8540,7 +8552,7 @@ async function pushSingleMessageToWeb(message, groupName, configId, config, sess
     
     return postSuccess;
   } catch (e) {
-    console.error('❌ [Auto Post] Lỗi:', e.message);
+    console.error('❌ [Auto Post] Lỗi:', e);
     return false;
   }
 }
@@ -11294,7 +11306,7 @@ async function createServiceCategoryContent(opts = {}) {
 //      - Buttons: Tạo Content, Copy VI/EN/ZH
 //      - Result area (Hiển thị kết quả từ AI)
 //
-// 4. Attach UI vào #context-auto element
+// 4. Attach UI vào unified UI container
 // ========================================================
 async function ensureServiceContentUI() {
   const existing = document.getElementById("service-content-ui");
@@ -12193,17 +12205,14 @@ async function ensureServiceContentUI() {
   wrapper.appendChild(imagesInput);
   wrapper.appendChild(videosInput);
 
-  try {
-    const host = await waitForContextAuto();
-    const container = ensureUnifiedUIContainer();
-    if (container) container.appendChild(wrapper);
-    else host.prepend(wrapper);
-    
-    // Update info display from global settings
-    updateInfoDisplay();
-  } catch (e) {
-    console.warn("Không tìm thấy #context-auto:", e);
+  // Insert detail form UI into container
+  const container = ensureUnifiedUIContainer();
+  if (container) {
+    container.appendChild(wrapper);
   }
+  
+  // Update info display from global settings
+  updateInfoDisplay();
   
   return wrapper;
 }
@@ -15868,10 +15877,9 @@ function initAllUI() {
       uiInitAttempts++;
       
       try {
-        // Kiểm tra #context-auto đã có chưa
-        const contextAuto = document.getElementById('context-auto');
-        if (!contextAuto) {
-          console.log(`⏳ Waiting for #context-auto (attempt ${uiInitAttempts})...`);
+        // Verify document is ready
+        if (!document.body) {
+          console.log(`⏳ Waiting for DOM to be ready (attempt ${uiInitAttempts})...`);
           return;
         }
         
@@ -15945,9 +15953,6 @@ function initAllUI() {
         // Skip if theme is refreshing
         if (isThemeRefreshing) return;
         
-        const contextAuto = document.getElementById('context-auto');
-        if (!contextAuto) return;
-        
         // Kiểm tra và tạo lại các UI bị mất (batch vào 1 operation)
         const globalSettings = document.getElementById('global-settings-panel');
         const multiDomainUI = document.getElementById('multi-domain-ui');
@@ -15975,16 +15980,19 @@ function initAllUI() {
     
     uiMutationObserver = new MutationObserver(debouncedUICheck);
     
-    // Bắt đầu theo dõi sau 2 giây - ONLY watch context-auto element, not entire tree
+    // Bắt đầu theo dõi sau 2 giây - watch UI container for changes
     setTimeout(() => {
-      const contextAutoElem = document.getElementById('context-auto');
-      if (contextAutoElem) {
-        // ✅ FIX: Watch only context-auto direct children (not entire subtree)
-        uiMutationObserver.observe(contextAutoElem, {
+      // Watch csm container inside #context-auto.
+      const containerElem = document.getElementById('csm-ui-container') || document.getElementById('context-auto');
+      
+      if (containerElem) {
+        // Watch only direct children (not entire subtree for performance)
+        uiMutationObserver.observe(containerElem, {
           childList: true,
-          subtree: false  // ✅ CRITICAL: Don't watch entire tree
+          subtree: false  // Don't watch entire tree
         });
-        console.log('👁️ MutationObserver watching #context-auto element only');
+        const elemId = containerElem.id || 'container';
+        console.log(`👁️ MutationObserver watching ${elemId} element`);
       }
       
       // Setup theme listener AFTER MutationObserver starts to avoid conflicts
@@ -16072,18 +16080,19 @@ function setupThemeChangeListener() {
           
           console.log('✅ UI refresh completed');
           
-          // ✅ FIX: Reconnect MutationObserver ONLY to context-auto (not entire tree)
+          // Reconnect MutationObserver to UI container
           const timer2 = timerRegistry.register(
             'theme-reconnect-observer',
             setTimeout(() => {
               if (uiMutationObserver) {
-                const contextAutoElem = document.getElementById('context-auto');
-                if (contextAutoElem) {
-                  uiMutationObserver.observe(contextAutoElem, {
+                const containerElem = document.getElementById('csm-ui-container') || document.getElementById('context-auto');
+                if (containerElem) {
+                  uiMutationObserver.observe(containerElem, {
                     childList: true,
-                    subtree: false  // ✅ CRITICAL: Don't watch entire tree
+                    subtree: false
                   });
-                  console.log('   👁️ MutationObserver re-connected to context-auto');
+                  const elemId = containerElem.id || 'container';
+                  console.log(`   👁️ MutationObserver re-connected to ${elemId}`);
                 }
               }
             }, 300),

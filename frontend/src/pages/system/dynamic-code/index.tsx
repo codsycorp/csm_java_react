@@ -21,11 +21,22 @@ import * as React from "react";
 import * as ReactDOM from "react-dom/client";
 import { Spin, Empty, Alert, notification, Table, Tabs, Button, Input, Select, Card, Space, Popconfirm } from "antd";
 
+const dynamicReactRoots = new Map<string, ReactDOM.Root>();
+
+function sanitizeIdPart(value?: string): string {
+  if (!value) return "default";
+  return String(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "default";
+}
+
 declare global {
   interface Window {
     csmApi?: Record<string, any>;
     csmCurrentUser?: any;
     csmTheme?: Record<string, any>;
+    csmDynamicCodeContainerId?: string;
     csmUserData?: {
       get: () => any[];
       fetchFromDatabase?: (callback?: (success: boolean, data?: any[], error?: string) => void) => Promise<void>;
@@ -218,6 +229,15 @@ export default function DynamicCodeMenu({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Scope default container ID by menu/template to avoid cross-menu collisions.
+  const resolvedContainerId = useMemo(() => {
+    if (containerId !== "dynamic-code-root") {
+      return containerId;
+    }
+    const scopeSource = propAutoCodeName || menuId || "default";
+    return `dynamic-code-root-${sanitizeIdPart(scopeSource)}`;
+  }, [containerId, propAutoCodeName, menuId]);
+
   // ============================================
   // SETUP WINDOW OBJECTS - IMMEDIATELY (NOT IN useEffect)
   // ============================================
@@ -403,6 +423,18 @@ export default function DynamicCodeMenu({
   // ============================================
   // GLOBAL WINDOW OBJECTS - Lazy Loading for Auto Code
   // ============================================
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.csmDynamicCodeContainerId = resolvedContainerId;
+    }
+
+    return () => {
+      if (typeof window !== "undefined" && window.csmDynamicCodeContainerId === resolvedContainerId) {
+        delete window.csmDynamicCodeContainerId;
+      }
+    };
+  }, [resolvedContainerId]);
+
   useEffect(() => {
     // Expose only essential notification helpers immediately
     (window as any).thongbao = (msg: string) => notification.success({ message: msg });
@@ -600,15 +632,35 @@ export default function DynamicCodeMenu({
           { field: "p_type", type: "eq", value: 0 },
         ]);
 
-        const response = await getTableData<any>({
+        let response = await getTableData<any>({
           app_id: "csm",
           obj_name: "sys_autos",
           where,
           take: 1,
         });
 
-        const rows = (response as any)?.rows || (response as any)?.data || [];
-        const codeRecord = rows[0];
+        let rows = (response as any)?.rows || (response as any)?.data || [];
+
+        // Backward-compatible fallback from old AutoSetup:
+        // if exact p_name is missing, fetch shared p_type=0 templates.
+        if (!Array.isArray(rows) || rows.length === 0) {
+          const fallbackWhere = andWhere([
+            { field: "p_type", type: "eq", value: 0 },
+          ]);
+
+          response = await getTableData<any>({
+            app_id: "csm",
+            obj_name: "sys_autos",
+            where: fallbackWhere,
+            take: 5,
+          });
+
+          rows = (response as any)?.rows || (response as any)?.data || [];
+        }
+
+        const codeRecord = Array.isArray(rows)
+          ? (rows.find((r: any) => r?.p_name === autoCodeName) || rows[0])
+          : undefined;
 
         if (!codeRecord?.p_code) {
           setError(`Code template "${autoCodeName}" not found in sys_autos`);
@@ -658,6 +710,8 @@ export default function DynamicCodeMenu({
       app_id: user.app_id || appId,
       appId: user.app_id || appId || "csm",
       menuId,
+      containerId: resolvedContainerId,
+      getContainer: () => document.getElementById(resolvedContainerId),
       user: window.csmCurrentUser || user,
       t,
       navigate,
@@ -830,7 +884,7 @@ export default function DynamicCodeMenu({
       // Expose all CsmApi functions
       ...CsmApi,
     };
-  }, [user, appId, menuId, t, navigate]);
+  }, [user, appId, menuId, t, navigate, resolvedContainerId]);
 
   const executeCode = (code: string) => {
     try {
@@ -839,13 +893,12 @@ export default function DynamicCodeMenu({
         `try{\n${code}\n} catch (sca_err) {console.error(sca_err); alert('Menu Error: ' + sca_err);}`
       );
       
-      // Wait for #context-auto element to be rendered before executing code
-      const waitForContextAuto = (attempt = 0) => {
-        const contextAuto = document.getElementById('context-auto');
-        const dynamicRoot = document.getElementById(containerId);
+      // Wait for dynamic container to be rendered before executing code
+      const waitForDynamicRoot = (attempt = 0) => {
+        const dynamicRoot = document.getElementById(resolvedContainerId);
         
-        if (contextAuto && dynamicRoot) {
-          // Elements exist, execute code
+        if (dynamicRoot) {
+          // Container exists, execute code
           try {
             fn(seft);
             console.log('✅ [DynamicCodeMenu] Code executed successfully after DOM ready');
@@ -855,17 +908,17 @@ export default function DynamicCodeMenu({
           }
         } else if (attempt < 20) {
           // Retry after 50ms (max 20 attempts = 1 second)
-          setTimeout(() => waitForContextAuto(attempt + 1), 50);
+          setTimeout(() => waitForDynamicRoot(attempt + 1), 50);
           if (attempt === 0) {
-            console.log('⏳ [DynamicCodeMenu] Waiting for DOM elements to render...');
+            console.log('⏳ [DynamicCodeMenu] Waiting for dynamic root container to render...');
           }
         } else {
-          console.error('❌ [DynamicCodeMenu] Timeout waiting for DOM elements after 1 second');
+          console.error('❌ [DynamicCodeMenu] Timeout waiting for dynamic root container after 1 second');
         }
       };
       
       // Start waiting for DOM
-      waitForContextAuto();
+      waitForDynamicRoot();
     } catch (error: any) {
       const msg = error?.message || String(error);
       console.error("❌ [DynamicCodeMenu] Error creating function:", msg);
@@ -919,7 +972,7 @@ export default function DynamicCodeMenu({
 
         {/* Container for dynamic code output */}
         <div
-          id={containerId}
+          id={resolvedContainerId}
           className={containerClassName}
           style={{
             width: "100%",
@@ -927,19 +980,19 @@ export default function DynamicCodeMenu({
             ...(loading ? { display: "none" } : {})
           }}
         />
+
+        {resolvedContainerId !== "context-auto" && (
+          <div
+            id="context-auto"
+            className={containerClassName}
+            style={{
+              width: "100%",
+              minHeight: 400,
+              ...(loading ? { display: "none" } : {})
+            }}
+          />
+        )}
         
-        {/* Legacy context-auto container for backward compatibility */}
-        <div
-          id="context-auto"
-          style={{
-            width: "100%",
-            minHeight: 480,
-            border: "1px dashed #ddd",
-            borderRadius: 8,
-            padding: 8,
-            ...(loading ? { display: "none" } : {})
-          }}
-        />
       </div>
     </BasicContent>
   );
@@ -954,15 +1007,25 @@ export const DynamicCodeHelpers = {
    */
   renderComponent: (
     Component: React.ComponentType<any>,
-    props?: Record<string, any>
+    props?: Record<string, any>,
+    containerId?: string
   ) => {
-    const container = document.getElementById("dynamic-code-root");
+    const preferredContainerId = containerId
+      || (typeof window !== "undefined" ? window.csmDynamicCodeContainerId : undefined)
+      || (document.getElementById("dynamic-code-root") ? "dynamic-code-root" : undefined)
+      || (document.getElementById("context-auto") ? "context-auto" : "dynamic-code-root");
+
+    const container = document.getElementById(preferredContainerId);
     if (!container) {
-      console.error("Dynamic code root container not found");
+      console.error(`Dynamic code root container not found: ${preferredContainerId}`);
       return null;
     }
-    
-    const root = ReactDOM.createRoot(container);
+
+    let root = dynamicReactRoots.get(preferredContainerId);
+    if (!root) {
+      root = ReactDOM.createRoot(container);
+      dynamicReactRoots.set(preferredContainerId, root);
+    }
     root.render(React.createElement(Component, props));
     return root;
   },
@@ -970,7 +1033,13 @@ export const DynamicCodeHelpers = {
   /**
    * Get container element for direct DOM manipulation
    */
-  getContainer: (containerId: string = "dynamic-code-root") => document.getElementById(containerId),
+  getContainer: (containerId?: string) => {
+    const preferredContainerId = containerId
+      || (typeof window !== "undefined" ? window.csmDynamicCodeContainerId : undefined)
+      || (document.getElementById("dynamic-code-root") ? "dynamic-code-root" : undefined)
+      || (document.getElementById("context-auto") ? "context-auto" : "dynamic-code-root");
+    return document.getElementById(preferredContainerId);
+  },
 
   /**
    * Log with prefix for easy debugging
