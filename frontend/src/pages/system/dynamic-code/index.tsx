@@ -423,6 +423,95 @@ export default function DynamicCodeMenu({
   // ============================================
   // GLOBAL WINDOW OBJECTS - Lazy Loading for Auto Code
   // ============================================
+  // CRITICAL: Expose dependencies IMMEDIATELY (not in useEffect) to ensure they're available when code executes
+  // ============================================
+  if (typeof window !== 'undefined') {
+    // Notification helpers - always available
+    if (!(window as any).thongbao) {
+      (window as any).thongbao = (msg: string) => notification.success({ message: msg });
+    }
+    if (!(window as any).canhbao) {
+      (window as any).canhbao = (msg: string) => notification.warning({ message: msg });
+    }
+    
+    // React - lazy loaded via getter
+    if (!Object.getOwnPropertyDescriptor(window, 'React')) {
+      Object.defineProperty(window, 'React', {
+        get() { return React; },
+        configurable: true,
+        enumerable: false
+      });
+    }
+    
+    // ReactDOM - lazy loaded via getter
+    if (!Object.getOwnPropertyDescriptor(window, 'ReactDOM')) {
+      Object.defineProperty(window, 'ReactDOM', {
+        get() { return ReactDOM; },
+        configurable: true,
+        enumerable: false
+      });
+    }
+    
+    // Ant Design components - lazy loaded via getter
+    if (!Object.getOwnPropertyDescriptor(window, 'antd')) {
+      Object.defineProperty(window, 'antd', {
+        get() {
+          return {
+            notification, Table, Tabs, Button, Input, Select, Card, Space, Popconfirm, CsmDynamicGrid,
+            googleIndexUrl: (CsmApi as any).googleIndexUrl,
+            checkGoogleIndexQuota: (CsmApi as any).checkGoogleIndexQuota,
+            checkGoogleIndexStatus: (CsmApi as any).checkGoogleIndexStatus,
+            getGoogleSearchConsoleSites: (CsmApi as any).getGoogleSearchConsoleSites,
+            checkAndAutoPublish: (CsmApi as any).checkAndAutoPublish,
+            addToQueue: (CsmApi as any).addToQueue,
+            addBatchToQueue: (CsmApi as any).addBatchToQueue,
+            getQueueInfo: (CsmApi as any).getQueueInfo,
+            getQueueItems: (CsmApi as any).getQueueItems,
+            processQueue: (CsmApi as any).processQueue,
+            removeFromQueue: (CsmApi as any).removeFromQueue,
+            getUrlHistory: (CsmApi as any).getUrlHistory,
+            getRecentHistory: (CsmApi as any).getRecentHistory,
+          };
+        },
+        configurable: true,
+        enumerable: false
+      });
+    }
+    
+    // I18nextProvider - lazy loaded via getter
+    if (!Object.getOwnPropertyDescriptor(window, 'I18nextProvider')) {
+      Object.defineProperty(window, 'I18nextProvider', {
+        get() { return I18nextProvider; },
+        configurable: true,
+        enumerable: false
+      });
+    }
+    
+    // Crypto functions - lazy loaded via getter
+    if (!Object.getOwnPropertyDescriptor(window, 'csmCrypto')) {
+      Object.defineProperty(window, 'csmCrypto', {
+        get() { return { encrypt: csmEncrypt, decrypt: csmDecrypt }; },
+        configurable: true,
+        enumerable: false
+      });
+    }
+    
+    // AI functions - lazy loaded via getter
+    if (!Object.getOwnPropertyDescriptor(window, 'csmAI')) {
+      Object.defineProperty(window, 'csmAI', {
+        get() {
+          return {
+            generateSeoContent, csm_ai_generate_seo_content,
+            generateSeoContentWithPrompt, formatSeoPrompt,
+            PROMPT_GENERATE_POST
+          };
+        },
+        configurable: true,
+        enumerable: false
+      });
+    }
+  }
+
   useEffect(() => {
     if (typeof window !== "undefined") {
       window.csmDynamicCodeContainerId = resolvedContainerId;
@@ -434,89 +523,6 @@ export default function DynamicCodeMenu({
       }
     };
   }, [resolvedContainerId]);
-
-  useEffect(() => {
-    // Expose only essential notification helpers immediately
-    (window as any).thongbao = (msg: string) => notification.success({ message: msg });
-    (window as any).canhbao = (msg: string) => notification.warning({ message: msg });
-    
-    // ✅ LAZY LOAD: Use Object.defineProperty with getters to avoid loading heavy modules upfront
-    // React (500KB) - only loads when accessed
-    Object.defineProperty(window, 'React', {
-      get() { return React; },
-      configurable: true,
-      enumerable: false
-    });
-    
-    // ReactDOM (300KB) - only loads when accessed
-    Object.defineProperty(window, 'ReactDOM', {
-      get() { return ReactDOM; },
-      configurable: true,
-      enumerable: false
-    });
-    
-    // Ant Design components - only assembles when first accessed
-    Object.defineProperty(window, 'antd', {
-      get() {
-        return {
-          notification, Table, Tabs, Button, Input, Select, Card, Space, Popconfirm, CsmDynamicGrid,
-          googleIndexUrl: (CsmApi as any).googleIndexUrl,
-          checkGoogleIndexQuota: (CsmApi as any).checkGoogleIndexQuota,
-          checkGoogleIndexStatus: (CsmApi as any).checkGoogleIndexStatus,
-          getGoogleSearchConsoleSites: (CsmApi as any).getGoogleSearchConsoleSites,
-          checkAndAutoPublish: (CsmApi as any).checkAndAutoPublish,
-          addToQueue: (CsmApi as any).addToQueue,
-          addBatchToQueue: (CsmApi as any).addBatchToQueue,
-          getQueueInfo: (CsmApi as any).getQueueInfo,
-          getQueueItems: (CsmApi as any).getQueueItems,
-          processQueue: (CsmApi as any).processQueue,
-          removeFromQueue: (CsmApi as any).removeFromQueue,
-          getUrlHistory: (CsmApi as any).getUrlHistory,
-          getRecentHistory: (CsmApi as any).getRecentHistory,
-        };
-      },
-      configurable: true,
-      enumerable: false
-    });
-    
-    // I18nextProvider - lazy loaded
-    Object.defineProperty(window, 'I18nextProvider', {
-      get() { return I18nextProvider; },
-      configurable: true,
-      enumerable: false
-    });
-    
-    // Crypto functions - lazy loaded
-    Object.defineProperty(window, 'csmCrypto', {
-      get() { return { encrypt: csmEncrypt, decrypt: csmDecrypt }; },
-      configurable: true,
-      enumerable: false
-    });
-    
-    // AI functions - lazy loaded
-    Object.defineProperty(window, 'csmAI', {
-      get() {
-        return {
-          generateSeoContent, csm_ai_generate_seo_content,
-          generateSeoContentWithPrompt, formatSeoPrompt,
-          PROMPT_GENERATE_POST
-        };
-      },
-      configurable: true,
-      enumerable: false
-    });
-    
-    return () => {
-      delete (window as any).thongbao;
-      delete (window as any).canhbao;
-      delete (window as any).React;
-      delete (window as any).ReactDOM;
-      delete (window as any).antd;
-      delete (window as any).I18nextProvider;
-      delete (window as any).csmCrypto;
-      delete (window as any).csmAI;
-    };
-  }, []);
 
   // ============================================
   // GLOBAL TIMER CLEANUP SYSTEM - Ngăn Memory Leak & Crash
@@ -898,14 +904,18 @@ export default function DynamicCodeMenu({
         const dynamicRoot = document.getElementById(resolvedContainerId);
         
         if (dynamicRoot) {
-          // Container exists, execute code
-          try {
-            fn(seft);
-            console.log('✅ [DynamicCodeMenu] Code executed successfully after DOM ready');
-          } catch (err: any) {
-            const msg = err?.message || String(err);
-            console.error("❌ [DynamicCodeMenu] Error executing code:", msg);
-          }
+          // ✅ CRITICAL FIX: Defer execution to ensure window.React/ReactDOM are exposed first
+          // Without this setTimeout, executeCode useEffect may run BEFORE the expose useEffect,
+          // causing "window.React is not defined" errors
+          setTimeout(() => {
+            try {
+              fn(seft);
+              console.log('✅ [DynamicCodeMenu] Code executed successfully after DOM ready');
+            } catch (err: any) {
+              const msg = err?.message || String(err);
+              console.error("❌ [DynamicCodeMenu] Error executing code:", msg);
+            }
+          }, 0);
         } else if (attempt < 20) {
           // Retry after 50ms (max 20 attempts = 1 second)
           setTimeout(() => waitForDynamicRoot(attempt + 1), 50);
