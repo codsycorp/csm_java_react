@@ -2709,7 +2709,7 @@ public class WebSpringController {
                         catFilter.setOperator("AND");
                         String domainLike = domain; // WildcardQuery tự thêm * hai đầu
                         catFilter.setConditions(List.of(
-                            RecordManager.createCondition("is_service", "eq", true),
+                            // ✅ FIXED: Bỏ filter is_service=true để lấy cả service và standalone menu items (is_service=false)
                             RecordManager.createCondition("status", "eq", "active"),
                             // Domain: khớp chính xác hoặc chuỗi chứa domain (CSV). Dùng "like" để bao phủ "a.com,b.com".
                             RecordManager.createCondition("domain", "like", domainLike)
