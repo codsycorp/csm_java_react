@@ -80,6 +80,7 @@ export function useWebsiteMenu() {
   // Any dynamic item with the same key will be removed to avoid duplication.
   const staticMenuKeys = new Set([
     "/",
+    "/home",
     "/cong-cu",
     "/kqxs",
     "/xem-ngay",
@@ -114,27 +115,11 @@ export function useWebsiteMenu() {
     return serviceFlag === true;
   };
 
-  // Helper: Build path cho menu items khác nhau
-  // - Service items: /slug (để navigate đến service list)
-  // - Non-service items với dynamic code: /dynamic-code/:slug
-  // - Non-service items không có dynamic code: /no-content/:slug (trang báo chưa có nội dung)
+  // Helper: Build path theo slug cho tất cả menu động.
+  // Không dùng /no-content/:slug để tránh URL sai (vd: /no-content/home).
   const buildMenuPath = (cat: SSRCategoryObject): string => {
     const slug = cat.slug;
-    const dynamicCodeName = (cat as any).dynamic_code_name || undefined;
-    
-    if (isService(cat)) {
-      // Service: /slug
-      return buildPath(`/${slug}`);
-    } else {
-      // Non-service menu item (standalone menu)
-      if (dynamicCodeName && dynamicCodeName.trim()) {
-        // Có dynamic code: navigate đến dynamic code page
-        return buildPath(`/dynamic-code/${slug}`);
-      } else {
-        // Không có dynamic code: show trang "chưa có nội dung"
-        return buildPath(`/no-content/${slug}`);
-      }
-    }
+    return buildPath(`/${slug}`);
   };
 
   // Build service group menus (is_group_slug=true, group_slug='', is_service=true)
