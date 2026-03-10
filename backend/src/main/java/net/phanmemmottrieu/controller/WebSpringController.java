@@ -1509,8 +1509,9 @@ public class WebSpringController {
                     SearchFilter catFilter = new SearchFilter();
                     catFilter.setOperator("AND");
                     String domainLike = domain; // WildcardQuery tự thêm * hai đầu
+                    // Lấy cả items có is_service = true (dịch vụ) và is_service = false (menu tĩnh/động)
+                    // Xóa filter "is_service = true" để lấy tất cả menu items
                     catFilter.setConditions(List.of(
-                        RecordManager.createCondition("is_service", "eq", true),
                         RecordManager.createCondition("status", "eq", "active"),
                         // domain có thể là CSV, dùng like "%domain%"
                         RecordManager.createCondition("domain", "like", domainLike)
@@ -2684,6 +2685,8 @@ public class WebSpringController {
                     if (lang == null || lang.isEmpty()) lang = "vi";
                     // Truy vấn lấy danh sách category từ bảng dịch vụ, trả về đầy đủ thông tin đa ngôn ngữ
                     List<Map<String, Object>> ssrCategories = new ArrayList<>();
+                    // 🔴 NEW: Map để lưu dynamic code templates (tên -> mã code đã mã hóa)
+                    Map<String, String> dynamicCodeTemplatesMap = new HashMap<>();
                     
                     // Check cache for categories
                     String catCacheKey = domain + ":" + lang;
@@ -2692,6 +2695,7 @@ public class WebSpringController {
                         Long catCacheTime = (Long) cachedCatData.get("__cache_time__");
                         if (catCacheTime != null && (System.currentTimeMillis() - catCacheTime) < CACHE_TTL_MS) {
                             ssrCategories = (List<Map<String, Object>>) cachedCatData.get("categories");
+                            dynamicCodeTemplatesMap = (Map<String, String>) cachedCatData.getOrDefault("dynamicCodeTemplates", new HashMap<>());
                             logger.info("✅ SSR: Using cached categories for domain={}, lang={}", domain, lang);
                         } else {
                             ssrCategoriesCache.remove(catCacheKey);
@@ -2749,6 +2753,9 @@ public class WebSpringController {
                             String attributes_icon = safeStr(row.get("attributes_icon"));
                             String attributes_description = safeStr(row.get(langCat.equals("vi") ? "attributes_description" : "attributes_description_" + langCat));
                             
+                            // 🔴 NEW: Extract dynamic code name từ web_services row
+                            String dynamicCodeName = safeStr(row.get("dynamic_code_name"));
+                            
                             // ✅ GỬI TẤT CẢ CÁC TRƯỜNG DỊCH: category, category_en, category_zh, attributes_description_en, attributes_description_zh
                             catObj.put("slug", slug);
                             catObj.put("is_group_slug", is_group_slug);
@@ -2763,12 +2770,59 @@ public class WebSpringController {
                             catObj.put("description", safeStr(row.get("attributes_description")) != null && !safeStr(row.get("attributes_description")).isEmpty() ? safeStr(row.get("attributes_description")) : "");
                             catObj.put("description_en", safeStr(row.get("attributes_description_en")) != null && !safeStr(row.get("attributes_description_en")).isEmpty() ? safeStr(row.get("attributes_description_en")) : "");
                             catObj.put("description_zh", safeStr(row.get("attributes_description_zh")) != null && !safeStr(row.get("attributes_description_zh")).isEmpty() ? safeStr(row.get("attributes_description_zh")) : "");
+                            
+                            // 🔴 NEW: Thêm dynamic code name vào catObj để gửi tới frontend
+                            catObj.put("dynamicCodeName", dynamicCodeName);
+                            
                             ssrCategories.add(catObj);
                         }
+                        
+                        // 🔴 NEW: Resolve dynamic code templates từ sys_autos cho tất cả category có dynamic_code_name
+                        for (Map<String, Object> category : ssrCategories) {
+                            String dynamicCodeName = (String) category.get("dynamicCodeName");
+                            if (dynamicCodeName != null && !dynamicCodeName.isEmpty()) {
+                                try {
+                                    // Query sys_autos để lấy template code: p_name = dynamicCodeName AND p_type = 0
+                                    SearchFilter templateFilter = new SearchFilter();
+                                    templateFilter.setOperator("AND");
+                                    templateFilter.setConditions(List.of(
+                                        RecordManager.createCondition("p_name", "eq", dynamicCodeName),
+                                        RecordManager.createCondition("p_type", "eq", 0)
+                                    ));
+                                    Map<String, Object> templateResult = recordManager.filter("csm", "sys_autos", templateFilter);
+                                    @SuppressWarnings("unchecked")
+                                    List<Map<String, Object>> templateRows = (List<Map<String, Object>>) templateResult.getOrDefault("rows", new ArrayList<>());
+                                    
+                                    if (!templateRows.isEmpty()) {
+                                        String encryptedCode = safeStr(templateRows.get(0).get("p_code"));
+                                        if (!encryptedCode.isEmpty()) {
+                                            // 🔴 NEW: Decrypt code tại backend để client execute ngay
+                                            try {
+                                                String decryptedCode = recordManager.csm_decrypt(encryptedCode);
+                                                if (decryptedCode != null && !decryptedCode.isEmpty()) {
+                                                    dynamicCodeTemplatesMap.put(dynamicCodeName, decryptedCode);
+                                                    logger.info("✅ Loaded & decrypted dynamic code template: {} for domain={}", dynamicCodeName, domain);
+                                                } else {
+                                                    logger.warn("⚠️ Dynamic code template '{}' decryption failed or empty", dynamicCodeName);
+                                                }
+                                            } catch (Exception decryptEx) {
+                                                logger.warn("⚠️ Failed to decrypt dynamic code template '{}': {}", dynamicCodeName, decryptEx.getMessage());
+                                            }
+                                        }
+                                    } else {
+                                        logger.warn("⚠️ Dynamic code template '{}' not found in sys_autos (p_type=0)", dynamicCodeName);
+                                    }
+                                } catch (Exception ex) {
+                                    logger.warn("⚠️ Failed to load dynamic code template '{}': {}", dynamicCodeName, ex.getMessage());
+                                }
+                            }
+                        }
+                        logger.info("✅ Resolved {} dynamic code templates for domain={}", dynamicCodeTemplatesMap.size(), domain);
                         
                         // Store in cache
                         Map<String, Object> catCacheData = new HashMap<>();
                         catCacheData.put("categories", new ArrayList<>(ssrCategories));
+                        catCacheData.put("dynamicCodeTemplates", new HashMap<>(dynamicCodeTemplatesMap));
                         catCacheData.put("__cache_time__", System.currentTimeMillis());
                         ssrCategoriesCache.put(catCacheKey, catCacheData);
                         logger.info("✅ SSR: Cached {} categories for domain={}, lang={}", ssrCategories.size(), domain, lang);
@@ -3198,6 +3252,10 @@ public class WebSpringController {
                             String ssrCategoriesScript = "<script>window.__SSR_WEBSITE_CATEGORIES__ = " + categoriesJson + ";</script>";
                             String ssrRoutesScript = "<script>window.__SSR_WEBSITE_ROUTES__ = " + templateData.get("ssrWebsiteRoutesJson") + ";</script>";
                             
+                            // 🔴 NEW: Serialize dynamic code templates map
+                            String dynamicCodeTemplatesJson = SHARED_OBJECT_MAPPER.writeValueAsString(dynamicCodeTemplatesMap);
+                            String ssrDynamicCodeScript = "<script>window.__SSR_DYNAMIC_CODE_TEMPLATES__ = " + dynamicCodeTemplatesJson + ";</script>";
+                            
                             // Find </head> and </body> once
                             int headIdx = lower.indexOf("</head>");
                             int bodyIdx = lower.indexOf("</body>");
@@ -3216,10 +3274,10 @@ public class WebSpringController {
                             try {
                                 String injectedHtml;
                                 if (headIdx >= 0) {
-                                    injectedHtml = finalHtmlResponse.substring(0, headIdx) + preloadImageTag + ssrScript + ssrCategoriesScript + ssrRoutesScript + finalHtmlResponse.substring(headIdx);
+                                    injectedHtml = finalHtmlResponse.substring(0, headIdx) + preloadImageTag + ssrScript + ssrCategoriesScript + ssrRoutesScript + ssrDynamicCodeScript + finalHtmlResponse.substring(headIdx);
                                     logger.info("✅ SSR: Injected scripts before </head>");
                                 } else if (bodyIdx >= 0) {
-                                    injectedHtml = finalHtmlResponse.substring(0, bodyIdx) + preloadImageTag + ssrScript + ssrCategoriesScript + ssrRoutesScript + finalHtmlResponse.substring(bodyIdx);
+                                    injectedHtml = finalHtmlResponse.substring(0, bodyIdx) + preloadImageTag + ssrScript + ssrCategoriesScript + ssrRoutesScript + ssrDynamicCodeScript + finalHtmlResponse.substring(bodyIdx);
                                     logger.info("✅ SSR: Injected scripts before </body>");
                                 } else {
                                     logger.warn("⚠️ No </head> or </body> found");

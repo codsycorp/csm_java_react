@@ -11,6 +11,8 @@ const XemNgay = lazy(() => import("#src/pages/website/tools/XemNgay"));
 const KQXS = lazy(() => import("#src/pages/website/tools/kqxs_main"));
 const PrivacyPolicy = lazy(() => import("#src/pages/website/privacy_policy"));
 const TermsOfService = lazy(() => import("#src/pages/website/terms_of_service"));
+const WuDynamicMenuPage = lazy(() => import("#src/pages/website/wu_dynamic_menu_page"));
+const WuNoContentPage = lazy(() => import("#src/pages/website/wu_no_content_page"));
 
 const routes: AppRouteRecordRaw[] = [
 	{
@@ -69,6 +71,28 @@ const routes: AppRouteRecordRaw[] = [
       order: 7,
       title: "Về Chúng Tôi",
       icon: createElement(UserOutlined),
+      hideInMenu: true,
+    },
+  },
+  // Dynamic menu page (non-service items with dynamic code)
+  // Must be before dynamic category routes to take precedence
+  {
+    path: "/dynamic-code/:slug",
+    Component: WuDynamicMenuPage,
+    handle: {
+      order: 8,
+      title: "Dynamic Menu",
+      hideInMenu: true,
+    },
+  },
+  // No content page (non-service items without dynamic code)
+  // Must be before dynamic category routes to take precedence
+  {
+    path: "/no-content/:slug",
+    Component: WuNoContentPage,
+    handle: {
+      order: 8,
+      title: "No Content",
       hideInMenu: true,
     },
   }

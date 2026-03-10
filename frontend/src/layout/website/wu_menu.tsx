@@ -76,9 +76,10 @@ export function useWebsiteMenu() {
     ReadOutlined: <ReadOutlined />,
   };
 
-  // Build main menu dynamically from SSR group tổng (group_slug === '' && is_group_slug === true)
+  // Build main menu dynamically from SSR group tổng (group_slug === '' && is_group_slug === true && is_service !== false)
   function isSSRGroupCategory(cat: any): cat is SSRCategoryObject {
-    return cat && typeof cat === 'object' && cat.group_slug === '' && cat.is_group_slug === true && typeof cat.slug === 'string';
+    // CHỈ lấy SERVICE GROUPS (is_group_slug=true VÀ is_service !== false)
+    return cat && typeof cat === 'object' && cat.group_slug === '' && cat.is_group_slug === true && typeof cat.slug === 'string' && cat.is_service !== false;
   }
   // Helper function to get translated category name based on current language
   const getCategoryLabel = (cat: SSRCategoryObject): string => {
@@ -91,18 +92,45 @@ export function useWebsiteMenu() {
     return cat.category;
   };
 
-  // ssrCategoryObjects debug removed
-  const mainServiceMenus = ssrCategoryObjects.filter(isSSRGroupCategory).map((groupCat) => {
-    // Building menu for group category debug removed
-    // Lấy các lĩnh vực con cho group này
+  // Helper: Check if item là service (is_service = true) hay là menu thường
+  const isService = (cat: SSRCategoryObject): boolean => {
+    return (cat as any).is_service !== false; // mặc định là true nếu không xác định
+  };
+
+  // Helper: Build path cho menu items khác nhau
+  // - Service items: /slug (để navigate đến service list)
+  // - Non-service items với dynamic code: /dynamic-code/:slug
+  // - Non-service items không có dynamic code: /no-content/:slug (trang báo chưa có nội dung)
+  const buildMenuPath = (cat: SSRCategoryObject): string => {
+    const slug = cat.slug;
+    const dynamicCodeName = (cat as any).dynamic_code_name || undefined;
+    
+    if (isService(cat)) {
+      // Service: /slug
+      return buildPath(`/${slug}`);
+    } else {
+      // Non-service menu item (standalone menu)
+      if (dynamicCodeName && dynamicCodeName.trim()) {
+        // Có dynamic code: navigate đến dynamic code page
+        return buildPath(`/dynamic-code/${slug}`);
+      } else {
+        // Không có dynamic code: show trang "chưa có nội dung"
+        return buildPath(`/no-content/${slug}`);
+      }
+    }
+  };
+
+  // Build service group menus (is_group_slug=true, group_slug='', is_service=true)
+  const serviceGroupMenus = ssrCategoryObjects.filter(isSSRGroupCategory).map((groupCat) => {
+    // Lấy các service children cho group này (CHỈ service items, is_service=true)
     const children = ssrCategoryObjects
-      .filter((cat) => cat.group_slug === groupCat.slug && !cat.is_group_slug)
+      .filter((cat) => cat.group_slug === groupCat.slug && !cat.is_group_slug && isService(cat))
       .map((cat) => ({
         key: `/${cat.slug}`,
         label: getCategoryLabel(cat),
         path: buildPath(`/${cat.slug}`),
         icon: iconMap[cat.attributes_icon ?? ''] || <DatabaseOutlined />,
-        children: [], // Đảm bảo type an toàn
+        children: [],
       }));
     return {
       key: `/${groupCat.slug}`,
@@ -113,7 +141,46 @@ export function useWebsiteMenu() {
     };
   });
 
-  // Main menu structure
+  // Build standalone menus (is_service=false, group_slug='')
+  // Bao gồm:
+  // - Non-service items: is_group_slug=false, group_slug='', is_service=false
+  // - Non-service groups: is_group_slug=true, group_slug='', is_service=false
+  const standaloneMenus = ssrCategoryObjects
+    .filter((cat) => {
+      const isStandalone = (cat.group_slug === '' || !cat.group_slug) && !isService(cat);
+      if (isStandalone) {
+        console.log('🔍 [Standalone Menu Found]:', {
+          slug: cat.slug,
+          category: cat.category,
+          is_service: (cat as any).is_service,
+          is_group_slug: cat.is_group_slug,
+          group_slug: cat.group_slug,
+          dynamic_code_name: (cat as any).dynamic_code_name
+        });
+      }
+      return isStandalone;
+    })
+    .map((cat) => ({
+      key: `/${cat.slug}`,
+      label: getCategoryLabel(cat),
+      path: buildMenuPath(cat),
+      icon: iconMap[cat.attributes_icon ?? ''] || <DatabaseOutlined />,
+      children: [],
+    }));
+
+  console.log('📊 [Menu Stats]:', {
+    totalCategories: ssrCategoryObjects.length,
+    serviceGroups: serviceGroupMenus.length,
+    standaloneMenus: standaloneMenus.length,
+    allCategories: ssrCategoryObjects.map(c => ({
+      slug: c.slug,
+      is_service: (c as any).is_service,
+      is_group_slug: c.is_group_slug,
+      group_slug: c.group_slug
+    }))
+  });
+
+  // Main menu structure: Trang chủ → Service Groups → Standalone Menus → Static pages
   return [
     {
       key: "/",
@@ -122,7 +189,8 @@ export function useWebsiteMenu() {
       icon: <HomeOutlined />,
       children: [],
     },
-    ...mainServiceMenus,
+    ...serviceGroupMenus,
+    ...standaloneMenus,
     {
       key: "/cong-cu",
       label: t("website.menu.tools", "Công Cụ"),

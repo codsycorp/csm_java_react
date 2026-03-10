@@ -159,6 +159,7 @@ export interface ServiceCategory {
   icon: React.ReactNode;
   description: string;
   content?: string;
+  dynamicCodeName?: string;
 }
 
 import { extractLangAndSlug } from "../../utils/lang-slug";
@@ -774,6 +775,7 @@ const WuServicesPage: React.FC = () => {
         icon: typeof cat !== 'string' ? (iconMap[cat.icon] || <CodeOutlined />) : <CodeOutlined />,
         description: categoryDescription,
         content,
+        dynamicCodeName: typeof cat !== 'string' ? ((cat as any).dynamic_code_name || (cat as any).auto_code_name || '') : '',
       };
     });
   }, [i18n.language, ssrServiceCategory]);
@@ -817,6 +819,8 @@ const WuServicesPage: React.FC = () => {
         }
         
         const content = ssrServiceCategory.content || '';
+        const dynamicCodeName = (ssrServiceCategory as any).dynamic_code_name || (ssrServiceCategory as any).auto_code_name || '';
+        const dynamicCode = (ssrServiceCategory as any).dynamic_code || (ssrServiceCategory as any).web_dynamic_code || '';
         
         return {
           key: categoryKey,
@@ -825,6 +829,8 @@ const WuServicesPage: React.FC = () => {
           color: ssrServiceCategory.color || '#13c2c2',
           icon: iconNode,
           content,
+          dynamicCodeName,
+          dynamicCode,
         } as ServiceCategory;
       }
     }
@@ -2389,6 +2395,8 @@ const WuServicesPage: React.FC = () => {
                   dangerouslySetInnerHTML={{ __html: decodeHtml(content) || '' }}
                 />
               )}
+
+              <div id={`wu-dynamic-code-${category.key}`} style={{ marginTop: 16 }} />
             </>;
           })()}
         </header>
@@ -2488,6 +2496,51 @@ const WuServicesPage: React.FC = () => {
     setTotal(0);
     setLoading(false);
   }, [activeTabKey]);
+
+  useEffect(() => {
+    if (!activeTabKey) return;
+
+    const categoryMeta = getHeaderMeta(activeTabKey) as ServiceCategory;
+    const codeName = String(categoryMeta.dynamicCodeName || '').trim();
+
+    if (!codeName || typeof window === 'undefined') return;
+
+    const codeMap = (window as any).__SSR_DYNAMIC_CODE_TEMPLATES__;
+    const code = codeMap && typeof codeMap === 'object' && typeof codeMap[codeName] === 'string'
+      ? codeMap[codeName]
+      : null;
+
+    if (!code) return;
+
+    if (!code) return;
+
+    const containerId = `wu-dynamic-code-${activeTabKey}`;
+    const timerId = window.setTimeout(() => {
+      const container = document.getElementById(containerId);
+      if (!container) return;
+
+      container.innerHTML = '';
+      try {
+        const fn = new Function(
+          'seft',
+          `try{\n${code}\n} catch (dynamicErr) { console.error('[WU_DYNAMIC_CODE] Error:', dynamicErr); }`
+        );
+        fn({
+          app_id: 'wuweb',
+          categoryKey: activeTabKey,
+          containerId,
+          getContainer: () => document.getElementById(containerId),
+          navigate,
+          t,
+          i18n: i18nInstance,
+        });
+      } catch (err) {
+        console.error('[WU_DYNAMIC_CODE] Invalid code:', err);
+      }
+    }, 0);
+
+    return () => window.clearTimeout(timerId);
+  }, [activeTabKey, navigate, t]);
 
   // Lấy category đang active
   const activeCategory = allCategories.find(c => c.key === activeTabKey) || allCategories[0] || { key: '', title: '', color: '', icon: null, description: '' };

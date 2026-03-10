@@ -110,6 +110,7 @@ export interface ServicePost {
   thumbnail?: string;
   featured?: boolean;
   activeHome?: boolean;
+  dynamicCodeName?: string;
   images?: string[]; // populated when detail is loaded
   videos?: string[]; // populated when detail is loaded - support video content
   // All flat fields from backend (attributes_*, specifications_*, etc.)
@@ -434,6 +435,7 @@ function mapWebServicesRow(row: any): ServicePost {
     thumbnail: toAbsoluteIfNeeded(row?.thumbnail) || toAbsoluteIfNeeded(row?.cover) || "",
     featured: !!(row?.featured || attributes?.featured),
     activeHome: !!(row?.active_home || attributes?.activeHome),
+    dynamicCodeName: row?.dynamic_code_name || row?.auto_code_name || row?.web_dynamic_code_name || "",
     attributes: {
       ...attributes,
       // keep service_code on attributes so UI / related-lookup can reuse it
