@@ -76,6 +76,14 @@ export function useWebsiteMenu() {
     ReadOutlined: <ReadOutlined />,
   };
 
+  // Static menus have higher priority than dynamic SSR menus.
+  // Any dynamic item with the same key will be removed to avoid duplication.
+  const staticMenuKeys = new Set([
+    "/",
+    "/lien-he",
+    "/ve-chung-toi",
+  ]);
+
   // Build main menu dynamically from SSR group tổng (group_slug === '' && is_group_slug === true && is_service !== false)
   function isSSRGroupCategory(cat: any): cat is SSRCategoryObject {
     // CHỈ lấy SERVICE GROUPS (is_group_slug=true VÀ is_service !== false)
@@ -147,6 +155,13 @@ export function useWebsiteMenu() {
     };
   });
 
+  const filteredServiceGroupMenus = serviceGroupMenus
+    .filter((menu) => !staticMenuKeys.has(menu.key))
+    .map((menu) => ({
+      ...menu,
+      children: (menu.children || []).filter((child) => !staticMenuKeys.has(child.key)),
+    }));
+
   // Build standalone menus (is_service=false, group_slug='')
   // Bao gồm:
   // - Non-service items: is_group_slug=false, group_slug='', is_service=false
@@ -178,10 +193,12 @@ export function useWebsiteMenu() {
       };
     });
 
+  const filteredStandaloneMenus = standaloneMenus.filter((menu) => !staticMenuKeys.has(menu.key));
+
   console.log('📊 [Menu Stats]:', {
     totalCategories: ssrCategoryObjects.length,
-    serviceGroups: serviceGroupMenus.length,
-    standaloneMenus: standaloneMenus.length,
+    serviceGroups: filteredServiceGroupMenus.length,
+    standaloneMenus: filteredStandaloneMenus.length,
     allCategories: ssrCategoryObjects.map(c => ({
       slug: c.slug,
       is_service: (c as any).is_service,
@@ -199,8 +216,8 @@ export function useWebsiteMenu() {
       icon: <HomeOutlined />,
       children: [],
     },
-    ...serviceGroupMenus,
-    ...standaloneMenus,
+    ...filteredServiceGroupMenus,
+    ...filteredStandaloneMenus,
     {
       key: "/lien-he",
       label: t("website.menu.contact", "Liên Hệ"),
