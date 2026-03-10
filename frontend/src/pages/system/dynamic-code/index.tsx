@@ -592,7 +592,11 @@ export default function DynamicCodeMenu({
     // Cleanup function when component unmounts
     return () => {
       console.log('🛑 [DynamicCodeMenu] Component unmounting, cleaning up...');
-      (window as any).__cleanupAllTimers();
+      
+      // Check if cleanup function exists before calling (prevent "is not a function" error)
+      if (typeof (window as any).__cleanupAllTimers === 'function') {
+        (window as any).__cleanupAllTimers();
+      }
       
       // Restore original functions
       window.setInterval = originalSetInterval;

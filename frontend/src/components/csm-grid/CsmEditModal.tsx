@@ -20,6 +20,7 @@ import { HtmlEditor } from "./HtmlEditor";
 import { InlineImageUploader } from "./InlineImageUploader";
 import CsmDynamicGrid from "./CsmDynamicGrid";
 import { useAppStore } from "#src/store/app";
+import { getTableData } from "./CsmApi";
 
 // Helper: safeEval for trigger execution (same as CsmDynamicGrid)
 // CRITICAL: Handle both side-effect triggers (alert, console.log) and return-value triggers
@@ -62,6 +63,95 @@ function safeEval<TArgs extends any[], TReturn>(args: string[], body: string): (
 		console.error("[safeEval] Body (first 500 chars):", body.substring(0, 500));
 		return null;
 	}
+}
+
+// ============================================================================
+// GLOBAL CACHE: Tự động fetch missing tables cho combo queries
+// ============================================================================
+const globalTableFetchCache = new Map<string, Promise<any>>();
+
+/**
+ * Fetch table data nếu chưa có trong database
+ * Returns true nếu đang fetch, false nếu đã có data
+ */
+async function ensureTableInDatabase(
+  tableName: string,
+  appId: string,
+  database: any,
+  whereClause?: any
+): Promise<boolean> {
+  // Include where clause in cache key to handle different filters on same table
+  const whereSuffix = whereClause ? `::${JSON.stringify(whereClause)}` : '';
+  const cacheKey = `${appId}::${tableName}${whereSuffix}`;
+  
+  // ✅ IMPORTANT: If whereClause exists, ALWAYS fetch (API requires obj_where to return data)
+  // Don't check existing data because previous fetch might have different/no where clause
+  if (!whereClause) {
+    // Only check existing data if no where clause
+    const existing = database[tableName];
+    if (existing && (Array.isArray(existing) || (existing.rows && Array.isArray(existing.rows)))) {
+      const rowCount = Array.isArray(existing) ? existing.length : existing.rows?.length || 0;
+      if (rowCount > 0) {
+        console.log(`✓ [AutoFetch] Table ${tableName} already in database (${rowCount} rows)`);
+        return false; // Already have data
+      }
+    }
+  } else {
+    console.log(`🔍 [AutoFetch] Query has where clause, will fetch ${tableName} with filter (ignore existing data)`);
+  }
+
+  // Check if currently fetching this specific query (same table + same where)
+  if (globalTableFetchCache.has(cacheKey)) {
+    // Already fetching, wait for it
+    console.log(`⏳ [AutoFetch] Already fetching ${tableName} with same where clause, waiting...`);
+    try {
+      await globalTableFetchCache.get(cacheKey);
+      return true; // Was fetching
+    } catch (err) {
+      console.warn(`[ensureTableInDatabase] Failed to fetch ${tableName}:`, err);
+      globalTableFetchCache.delete(cacheKey);
+      return true;
+    }
+  }
+
+  // Start fetching
+  console.log(`🔄 [AutoFetch] Fetching missing table: ${tableName} (app: ${appId})`, whereClause ? 'with where:' : '', whereClause);
+  
+  // Build request params - include where if provided
+  const requestParams: any = {
+    app_id: appId,
+    obj_name: tableName,
+  };
+  if (whereClause) {
+    requestParams.where = whereClause;
+  }
+  
+  const fetchPromise = getTableData<any>(requestParams)
+    .then((response) => {
+      const rows = response?.rows || [];
+      console.log(`✅ [AutoFetch] Fetched ${tableName}: ${rows.length} rows`);
+      // Mutate database object directly (will trigger re-render in parent)
+      database[tableName] = {
+        rows,
+        total: response?.total || rows.length,
+      };
+      globalTableFetchCache.delete(cacheKey);
+      return rows;
+    })
+    .catch((err) => {
+      console.error(`❌ [AutoFetch] Failed to fetch ${tableName}:`, err);
+      globalTableFetchCache.delete(cacheKey);
+      // Set empty data để avoid repeated failures
+      database[tableName] = { rows: [], total: 0 };
+      throw err;
+    });
+
+  globalTableFetchCache.set(cacheKey, fetchPromise);
+  
+  // Kick off fetch but don't wait
+  fetchPromise.catch(() => {}); // Ignore error (already logged)
+  
+  return true; // Started fetching
 }
 
 // Helper: Build selectEnums từ trigger f_cbo_query (Vue compatible)
@@ -151,7 +241,25 @@ export function buildDetailGridSelectEnums(
 
       const trimmedQ = q.trim();
       if (trimmedQ.startsWith('{') || trimmedQ.startsWith('[')) {
-        const parsed = JSON.parse(trimmedQ);
+        let parsed: any;
+        try {
+          // Try strict JSON parse first
+          parsed = JSON.parse(trimmedQ);
+        } catch (jsonErr) {
+          console.warn(`[buildDetailGridSelectEnums] JSON.parse failed for ${f.f_name}, trying JS object literal fallback...`);
+          // Fallback: Try parsing as JavaScript object literal using Function()
+          // This handles cases like: {field: "value"} instead of {"field": "value"}
+          try {
+            const evalFn = new Function(`return (${trimmedQ})`);
+            parsed = evalFn();
+            console.log(`[buildDetailGridSelectEnums] Successfully parsed JS object literal for ${f.f_name}`);
+          } catch (evalErr) {
+            console.error(`[buildDetailGridSelectEnums] Both JSON.parse and JS eval failed for ${f.f_name}:`, evalErr);
+            console.error(`[buildDetailGridSelectEnums] Query was:`, trimmedQ);
+            // Skip this field if parsing fails
+            return;
+          }
+        }
 
         // Handle query array in JSON
         if (parsed && typeof parsed === 'object' && Array.isArray(parsed.query) && parsed.query.length > 0) {
@@ -160,17 +268,98 @@ export function buildDetailGridSelectEnums(
             if (!querySpec?.obj_name || !database) return;
             const tableName = querySpec.obj_name;
             const fields = querySpec.fields || [];
-            const whereClause = querySpec.obj_where || '';
+            const appId = querySpec.app_id || seftContext?.appId || 'csm';
+            // Default obj_where if not provided or invalid
+            // Check for: undefined, null, empty string, empty object, or object without required fields
+            let whereClause = querySpec.obj_where;
+            const isInvalidWhere = !whereClause 
+              || (typeof whereClause === 'string' && !whereClause.trim())
+              || (typeof whereClause === 'object' && (!whereClause.field || !whereClause.type));
+            
+            if (isInvalidWhere) {
+              whereClause = {field: 'id', type: 'like', value: ""};
+              console.log(`[buildDetailGridSelectEnums] Using default where clause for ${tableName}:`, whereClause);
+            }
+            
             const tableData = database[tableName];
+            const tableExists = tableData && (Array.isArray(tableData) || (tableData.rows && Array.isArray(tableData.rows)));
+            const rowCount = tableExists ? (Array.isArray(tableData) ? tableData.length : tableData.rows?.length || 0) : 0;
+            const hasData = tableExists && rowCount > 0;
+            
+            // Build cache key to check if already fetching
+            const whereSuffix = whereClause ? `::${JSON.stringify(whereClause)}` : '';
+            const cacheKey = `${appId}::${tableName}${whereSuffix}`;
+            
+            // 🔄 AUTO-FETCH: If query has where clause and no data, ALWAYS fetch with it
+            // But check if already fetching to prevent infinite loop
+            if (whereClause && !hasData) {
+              // Check if already fetching this specific query
+              if (globalTableFetchCache.has(cacheKey)) {
+                console.log(`⏳ [ComboQuery] Already fetching ${tableName} with this where clause, waiting...`);
+                return; // Skip, will have data on next render after fetch completes
+              }
+              
+              console.log(`⚠️ [ComboQuery] Query has where clause but no data, fetching table "${tableName}" with filter...`);
+              // Kick off fetch with where clause (fire-and-forget) - will populate database when done
+              ensureTableInDatabase(tableName, appId, database, whereClause).catch(err => {
+                console.error(`Failed to auto-fetch table ${tableName}:`, err);
+              });
+              // Return early for this query - will have data on next render after fetch completes
+              return;
+            }
+            
+            // No where clause or already have data: check if need to fetch
+            if (!whereClause && !hasData) {
+              // Check if already fetching
+              if (globalTableFetchCache.has(cacheKey)) {
+                console.log(`⏳ [ComboQuery] Already fetching ${tableName}, waiting...`);
+                return; // Skip, will have data on next render
+              }
+              
+              console.warn(`⚠️ [ComboQuery] Table "${tableName}" ${tableExists ? 'exists but empty' : 'not found'}. Auto-fetching...`);
+              // Kick off fetch without where clause
+              ensureTableInDatabase(tableName, appId, database).catch(err => {
+                console.error(`Failed to auto-fetch table ${tableName}:`, err);
+              });
+              // Return early for this query - will have data on next render after fetch completes
+              return;
+            }
+            
+            // Have data (from fetch with where clause or without), build options
             const rows = Array.isArray(tableData) ? tableData : (tableData as any)?.rows || [];
             if (!Array.isArray(rows)) return;
 
             let filteredData = rows;
             if (whereClause) {
               try {
-                const whereFn = safeEval(['row'], `return ${whereClause}`);
-                if (whereFn) filteredData = rows.filter((row: any) => whereFn(row));
-              } catch {}
+                // Support both object and string format for obj_where
+                if (typeof whereClause === 'object' && whereClause.field && whereClause.type) {
+                  // Object format: { field: "p_type", type: "eq", value: 1 }
+                  const field = whereClause.field;
+                  const type = whereClause.type;
+                  const value = whereClause.value;
+                  filteredData = rows.filter((row: any) => {
+                    const rowValue = row[field];
+                    switch (type) {
+                      case 'eq': return rowValue == value;
+                      case 'ne': return rowValue != value;
+                      case 'gt': return rowValue > value;
+                      case 'gte': return rowValue >= value;
+                      case 'lt': return rowValue < value;
+                      case 'lte': return rowValue <= value;
+                      case 'like': return String(rowValue || '').toLowerCase().includes(String(value || '').toLowerCase());
+                      case 'in': return Array.isArray(value) && value.includes(rowValue);
+                      default: return true;
+                    }
+                  });
+                } else if (typeof whereClause === 'string') {
+                  // String format: "row.p_type === 1"
+                  const whereFn = safeEval(['row'], `return ${whereClause}`);
+                  if (whereFn) filteredData = rows.filter((row: any) => whereFn(row));
+                }
+              } catch (error) {
+                console.warn('Failed to apply obj_where filter:', error);
+              }
             }
 
             filteredData.forEach((row: any) => {
@@ -260,6 +449,25 @@ export function buildDetailGridSelectEnums(
 function DetailGridTab({ node, record, appId, permissions, menusPermissions, decrypt, form, detailFieldName, menuId }: any) {
   const setTableData = useAppStore(state => state.setTableData);
   const database = useAppStore(state => state.database);
+  
+  // 🔄 Track database version để force re-compute selectEnums khi missing tables được fetch
+  const [databaseVersion, setDatabaseVersion] = useState(0);
+  
+  // Poll for completed table fetches and trigger re-compute
+  useEffect(() => {
+    if (globalTableFetchCache.size === 0) return;
+    
+    const checkInterval = setInterval(() => {
+      // If all fetches completed, increment version to trigger re-compute
+      if (globalTableFetchCache.size === 0) {
+        console.log('✅ [DetailGridTab] All table fetches completed, triggering re-compute...');
+        setDatabaseVersion(v => v + 1);
+        clearInterval(checkInterval);
+      }
+    }, 500);
+    
+    return () => clearInterval(checkInterval);
+  }, [globalTableFetchCache.size]);
   
   // Helper: parse detail data từ string hoặc array
   const parseDetailData = (data: any): Row[] => {
@@ -352,6 +560,7 @@ function DetailGridTab({ node, record, appId, permissions, menusPermissions, dec
   // Build selectEnums từ trigger f_cbo_query (tránh phụ thuộc vào database table)
   const detailGridSelectEnums = useMemo(() => {
     const seftContext = {
+      appId, // 🔄 Pass appId for auto-fetch logic
       m_configs: node,
       context: {},
       // Lunar calendar utilities
@@ -379,7 +588,7 @@ function DetailGridTab({ node, record, appId, permissions, menusPermissions, dec
       DateUtils,
     };
     return buildDetailGridSelectEnums(node?.table || [], database, decrypt, seftContext);
-  }, [node?.table, database, decrypt, node]);
+  }, [node?.table, database, decrypt, node, databaseVersion, appId]); // 🔄 Re-compute when databaseVersion changes (after table fetches)
   
   return (
     <div style={{ minHeight: 'auto', padding: '8px 0' }}>

@@ -85,16 +85,22 @@ export function useWebsiteMenu() {
   const getCategoryLabel = (cat: SSRCategoryObject): string => {
     const currentLang = i18n.language || 'vi-VN';
     if (currentLang.includes('en')) {
-      return cat.category_en && cat.category_en.trim() ? cat.category_en : cat.category;
+      const en = cat.category_en as string | undefined;
+      return en && en.trim() ? en : cat.category;
     } else if (currentLang.includes('zh')) {
-      return cat.category_zh && cat.category_zh.trim() ? cat.category_zh : cat.category;
+      const zh = cat.category_zh as string | undefined;
+      return zh && zh.trim() ? zh : cat.category;
     }
     return cat.category;
   };
 
   // Helper: Check if item là service (is_service = true) hay là menu thường
+  // Chỉ coi là service nếu is_service explicitly = true
+  // Nếu undefined/null, mặc định là false (non-service menu)
   const isService = (cat: SSRCategoryObject): boolean => {
-    return (cat as any).is_service !== false; // mặc định là true nếu không xác định
+    const serviceFlag = (cat as any).is_service;
+    // Explicitly true = service, otherwise = not service
+    return serviceFlag === true;
   };
 
   // Helper: Build path cho menu items khác nhau
@@ -160,13 +166,17 @@ export function useWebsiteMenu() {
       }
       return isStandalone;
     })
-    .map((cat) => ({
-      key: `/${cat.slug}`,
-      label: getCategoryLabel(cat),
-      path: buildMenuPath(cat),
-      icon: iconMap[cat.attributes_icon ?? ''] || <DatabaseOutlined />,
-      children: [],
-    }));
+    .map((cat) => {
+      const pathForMenu = buildMenuPath(cat);
+      console.log(`📍 Standalone menu path: ${cat.slug} -> ${pathForMenu}`, { is_service: (cat as any).is_service, dynamic_code_name: (cat as any).dynamic_code_name });
+      return {
+        key: `/${cat.slug}`,
+        label: getCategoryLabel(cat),
+        path: pathForMenu,
+        icon: iconMap[cat.attributes_icon ?? ''] || <DatabaseOutlined />,
+        children: [],
+      };
+    });
 
   console.log('📊 [Menu Stats]:', {
     totalCategories: ssrCategoryObjects.length,

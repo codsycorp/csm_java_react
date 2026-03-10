@@ -2756,8 +2756,20 @@ public class WebSpringController {
                             // 🔴 NEW: Extract dynamic code name từ web_services row
                             String dynamicCodeName = safeStr(row.get("dynamic_code_name"));
                             
+                            // ✅ Extract is_service field - kiểm tra từ database (Boolean, String, hoặc Number)
+                            Object is_service_raw = row.get("is_service");
+                            boolean is_service = true; // mặc định true (item là service)
+                            if (is_service_raw instanceof Boolean) {
+                                is_service = (Boolean) is_service_raw;
+                            } else if (is_service_raw instanceof String) {
+                                is_service = "true".equalsIgnoreCase((String) is_service_raw);
+                            } else if (is_service_raw instanceof Number) {
+                                is_service = ((Number) is_service_raw).intValue() == 1;
+                            }
+                            
                             // ✅ GỬI TẤT CẢ CÁC TRƯỜNG DỊCH: category, category_en, category_zh, attributes_description_en, attributes_description_zh
                             catObj.put("slug", slug);
+                            catObj.put("is_service", is_service); // ✅ GỬI is_service FIELD ĐỊ FRONTEND BIẾT LÀ SERVICE HAY MENU
                             catObj.put("is_group_slug", is_group_slug);
                             catObj.put("is_group_slug_default", is_group_slug_default);
                             catObj.put("group_slug", group_slug);

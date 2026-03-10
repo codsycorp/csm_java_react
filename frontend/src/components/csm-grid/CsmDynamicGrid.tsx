@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { BasicTable } from "#src/components/basic-table";
-import { updateTableData } from "./CsmApi";
+import { updateTableData, getTableData } from "./CsmApi";
 import CsmEditModal, { DetailGridTab } from "./CsmEditModal";
 import { csmDecrypt } from "./CsmCrypto";
 import { INT, jdFromDate, jdToDate, NewMoon, KinhDoMatTroi, SunLongitude, getSunLongitude, getNewMoonDay, getLunarMonth11, getLeapMonthOffset, duong_qua_am, am_qua_duong, LunarCalendar } from "#src/utils/lunarCalendar";
@@ -12,6 +12,7 @@ import { Button, Input, Space, Tooltip, message, Modal, Tabs, Divider } from "an
 import { PlusOutlined, ImportOutlined, ExportOutlined, SearchOutlined } from "@ant-design/icons";
 import { read, utils } from "xlsx";
 import { useAppStore } from "#src/store/app";
+import { useUserStore } from "#src/store/user";
 
 // Minimal types (kept local to avoid wider type churn)
 type Row = Record<string, any>;
@@ -39,6 +40,7 @@ export interface TableField {
 	f_group_footer_template?: string;
 	f_group_index?: number | string;
 }
+								
 
 export interface TriggerConfig {
 	filter?: string;
@@ -148,6 +150,11 @@ export function CsmDynamicGrid({
 	const [selectedKeys, setSelectedKeys] = useState<React.Key[]>([]);
 	const [editableKeys, setEditableKeys] = useState<React.Key[]>([]);
 	const [pendingEditableRowId, setPendingEditableRowId] = useState<string | null>(null);
+	
+	// 🔄 Track database version để force re-compute selectEnums khi missing tables được fetch
+	const [databaseVersion, setDatabaseVersion] = useState(0);
+	const globalTableFetchCache = useRef(new Map<string, Promise<any>>()).current;
+	const hasFetchedComboTables = useRef(false); // Track if we already fetched combo tables on mount
 	const [_selectedRow, setSelectedRow] = useState<Row | null>(null);
 	const [selectedDetailRow, setSelectedDetailRow] = useState<Row | null>(null); // For detail tabs panel
 	const [editorOpen, setEditorOpen] = useState(false);
@@ -163,6 +170,8 @@ export function CsmDynamicGrid({
 	// Then merge with global database from store for real-time updates
 	// This ensures non-menu tables like csm_accounts are available
 	const globalDatabase = useAppStore(state => state.database);
+	const setTableData = useAppStore(state => state.setTableData); // For updating fetched tables
+	const userAppId = useUserStore(state => state.app_id); // Get user appId for fallback
 	const database = useMemo(
 		() => ({ ...globalDatabase, ..._unusedDatabaseProp }),
 		[globalDatabase, _unusedDatabaseProp]
@@ -171,6 +180,197 @@ export function CsmDynamicGrid({
 
 	// Enable socket for real-time database updates
 	useSocket({ enabled: true });
+	
+	// 🔄 Auto-fetch missing combo tables ONCE on mount
+	useEffect(() => {
+		// Only fetch once per component lifecycle
+		if (hasFetchedComboTables.current) return;
+		hasFetchedComboTables.current = true;
+		
+		console.log('[CsmDynamicGrid] Scanning combo queries for missing tables...');
+		
+		// Collect all combo queries that need table data
+		const comboFields = (m_configs?.table || []).filter((f: TableField) => {
+			const types = (f.f_types || '').toLowerCase();
+			return types.indexOf('co') !== -1; // co = combo
+		});
+		
+		const tablesToFetch: Array<{tableName: string; appId: string; whereClause: any}> = [];
+		
+		comboFields.forEach((f: TableField) => {
+			const rawQuery = f.f_cbo_query;
+			if (!rawQuery) return;
+			
+			let q = rawQuery;
+			// Try decrypt
+			if (decrypt) {
+				try {
+					const decrypted = decrypt(q);
+					q = decrypted;
+				} catch {}
+			}
+			
+			const trimmedQ = q.trim();
+			if (trimmedQ.startsWith('{') || trimmedQ.startsWith('[')) {
+				let parsed: any;
+				try {
+					parsed = JSON.parse(trimmedQ);
+				} catch {
+					try {
+						const evalFn = new Function(`return (${trimmedQ})`);
+						parsed = evalFn();
+					} catch {
+						return;
+					}
+				}
+				
+				// Extract table info from parsed query
+				if (parsed && Array.isArray(parsed.query)) {
+					parsed.query.forEach((querySpec: any) => {
+						if (!querySpec?.obj_name) return;
+						
+						const tableName = querySpec.obj_name;
+						const queryAppId = querySpec.app_id || appId || userAppId || 'csm';
+						let whereClause = querySpec.obj_where;
+						
+						// Default obj_where if not provided or invalid
+						// Check for: undefined, null, empty string, empty object, or object without required fields
+						const isInvalidWhere = !whereClause 
+							|| (typeof whereClause === 'string' && !whereClause.trim())
+							|| (typeof whereClause === 'object' && (!whereClause.field || !whereClause.type));
+						
+						if (isInvalidWhere) {
+							whereClause = {field: 'id', type: 'like', value: ""};
+							console.log(`[CsmDynamicGrid] Using default where clause for ${tableName}:`, whereClause);
+						}
+						
+						tablesToFetch.push({ tableName, appId: queryAppId, whereClause });
+					});
+				}
+			}
+		});
+		
+		// Remove duplicates (same table + same where clause)
+		const uniqueFetches = tablesToFetch.filter((item, index, self) => {
+			const key = `${item.appId}::${item.tableName}::${JSON.stringify(item.whereClause)}`;
+			return index === self.findIndex(t => 
+				`${t.appId}::${t.tableName}::${JSON.stringify(t.whereClause)}` === key
+			);
+		});
+		
+		if (uniqueFetches.length === 0) {
+			console.log('[CsmDynamicGrid] No combo tables to fetch');
+			return;
+		}
+		
+		console.log(`[CsmDynamicGrid] Found ${uniqueFetches.length} combo tables to fetch:`, uniqueFetches);
+		
+		// Fetch all tables in parallel
+		Promise.all(
+			uniqueFetches.map(({tableName, appId, whereClause}) => 
+				ensureTableInDatabase(tableName, appId, whereClause)
+					.catch(err => {
+						console.error(`Failed to fetch ${tableName}:`, err);
+						return null; // Don't fail entire Promise.all
+					})
+			)
+		).then(() => {
+			console.log('[CsmDynamicGrid] All combo tables fetched, triggering re-compute...');
+			setDatabaseVersion(v => v + 1);
+		});
+	}, []); // Empty deps = run once on mount
+	
+	// 🔧 Helper: Auto-fetch missing table when combo query needs it
+	const ensureTableInDatabase = useCallback(async (
+		tableName: string,
+		queryAppId?: string,
+		whereClause?: any
+	): Promise<boolean> => {
+		// Fallback appId: query.app_id > props.appId > user.app_id
+		const effectiveAppId = queryAppId || appId || userAppId || 'csm';
+		
+		// Include where clause in cache key to handle different filters on same table
+		const whereSuffix = whereClause ? `::${JSON.stringify(whereClause)}` : '';
+		const cacheKey = `${effectiveAppId}::${tableName}${whereSuffix}`;
+		
+		// ✅ IMPORTANT: If whereClause exists, ALWAYS fetch (API requires obj_where to return data)
+		// Don't check existing data because previous fetch might have different/no where clause
+		if (!whereClause) {
+			// Only check existing data if no where clause
+			const existing = database[tableName];
+			if (existing && (Array.isArray(existing) || (existing.rows && Array.isArray(existing.rows)))) {
+				const rowCount = Array.isArray(existing) ? existing.length : existing.rows?.length || 0;
+				if (rowCount > 0) {
+					console.log(`✓ [AutoFetch] Table ${tableName} already in database (${rowCount} rows)`);
+					return false; // Already have data
+				}
+			}
+		} else {
+			console.log(`🔍 [AutoFetch] Query has where clause, will fetch ${tableName} with filter (ignore existing data)`);
+		}
+
+		// Check if currently fetching this specific query (same table + same where)
+		if (globalTableFetchCache.has(cacheKey)) {
+			// Already fetching, wait for it
+			console.log(`⏳ [AutoFetch] Already fetching ${tableName} with same where clause, waiting...`);
+			try {
+				await globalTableFetchCache.get(cacheKey);
+				return true; // Was fetching
+			} catch (err) {
+				console.warn(`[ensureTableInDatabase] Failed to fetch ${tableName}:`, err);
+				globalTableFetchCache.delete(cacheKey);
+				return true;
+			}
+		}
+
+		// Start fetching
+		console.log(`🔄 [AutoFetch] Fetching missing table: ${tableName} (app: ${effectiveAppId})`, whereClause ? `with where:` : '', whereClause);
+		
+		// Build request params - include where if provided
+		const requestParams: any = {
+			app_id: effectiveAppId,
+			obj_name: tableName,
+		};
+		if (whereClause) {
+			requestParams.where = whereClause;
+		}
+		
+		const fetchPromise = getTableData<any>(requestParams)
+			.then((response) => {
+				const rows = response?.rows || [];
+				console.log(`✅ [AutoFetch] Fetched ${tableName}: ${rows.length} rows`, rows.slice(0, 3));
+				
+				// ✅ CRITICAL: Update global store instead of mutating local database object
+				// This triggers re-render and database useMemo will have new data
+				setTableData(tableName, {
+					id: tableName,
+					rows,
+					app_id: effectiveAppId,
+				});
+				
+				globalTableFetchCache.delete(cacheKey);
+				console.log(`🎉 [AutoFetch] Successfully populated ${tableName} in global store`);
+				return rows;
+			})
+			.catch((err) => {
+				console.error(`❌ [AutoFetch] Failed to fetch ${tableName}:`, err);
+				globalTableFetchCache.delete(cacheKey);
+				// Set empty data to avoid repeated failures
+				setTableData(tableName, {
+					id: tableName,
+					rows: [],
+					app_id: effectiveAppId,
+				});
+				throw err;
+			});
+
+		globalTableFetchCache.set(cacheKey, fetchPromise);
+		
+		// Kick off fetch but don't wait
+		fetchPromise.catch(() => {}); // Ignore error (already logged)
+		
+		return true; // Started fetching
+	}, [database, appId, userAppId, globalTableFetchCache, setTableData]);
 
 	// Helper: Create seft context with all utility functions
 	const createSeftContext = useCallback(() => ({
@@ -385,60 +585,147 @@ export function CsmDynamicGrid({
 				}
 			}
 				
-				// Check if it's static JSON (starts with { or [)
-				const trimmedQ = q.trim();
-				if (trimmedQ.startsWith('{') || trimmedQ.startsWith('[')) {
-					// Static JSON - parse directly without decrypt
+			// Check if it's static JSON (starts with { or [)
+			const trimmedQ = q.trim();
+			if (trimmedQ.startsWith('{') || trimmedQ.startsWith('[')) {
+				// Static JSON - parse directly without decrypt
+				let parsed: any;
+				try {
+					// Try strict JSON parse first
+					parsed = JSON.parse(trimmedQ);
+				} catch (jsonErr) {
+					console.warn(`[selectEnums] JSON.parse failed for ${f.f_name}, trying JS object literal fallback...`);
+					// Fallback: Try parsing as JavaScript object literal using Function()
+					// This handles cases like: {field: "value"} instead of {"field": "value"}
 					try {
-						let parsed = JSON.parse(trimmedQ);
-						console.log(`[selectEnums] Parsed static JSON for ${f.f_name}:`, parsed);
-						
-						// Check if this has a query array (hybrid format: {query: [...], options: [...]})
-						// If query exists and is non-empty, we need to process it dynamically
-						console.log(`[selectEnums] Checking query for ${f.f_name}:`, {
-							hasQuery: parsed && typeof parsed === 'object' && Array.isArray(parsed.query),
-							queryLength: Array.isArray(parsed.query) ? parsed.query.length : 0,
-							hasDatabase: !!database
-						});
-						
-						if (parsed && typeof parsed === 'object' && 
-						    Array.isArray(parsed.query) && parsed.query.length > 0) {
-							console.log(`[selectEnums] Detected query array for ${f.f_name}, processing dynamically...`);
+						const evalFn = new Function(`return (${trimmedQ})`);
+						parsed = evalFn();
+						console.log(`[selectEnums] Successfully parsed JS object literal for ${f.f_name}`);
+					} catch (evalErr) {
+						console.error(`[selectEnums] Both JSON.parse and JS eval failed for ${f.f_name}:`, evalErr);
+						console.error(`[selectEnums] Query was:`, trimmedQ);
+						// Skip this field if parsing fails
+						return;
+					}
+				}
+				
+				try {
+					console.log(`[selectEnums] Parsed static JSON for ${f.f_name}:`, parsed);
+					console.log(`[selectEnums] 🔍 DEBUG parsed.query[0]:`, parsed?.query?.[0]);
+					
+					// Check if this has a query array (hybrid format: {query: [...], options: [...]})
+					// If query exists and is non-empty, we need to process it dynamically
+					console.log(`[selectEnums] Checking query for ${f.f_name}:`, {
+						hasQuery: parsed && typeof parsed === 'object' && Array.isArray(parsed.query),
+						queryLength: Array.isArray(parsed.query) ? parsed.query.length : 0,
+						hasDatabase: !!database
+					});
+					
+					if (parsed && typeof parsed === 'object' && 
+					    Array.isArray(parsed.query) && parsed.query.length > 0) {
+						console.log(`[selectEnums] Detected query array for ${f.f_name}, processing dynamically...`);
 							
 							// Process each query specification
 							const allOptions: any[] = [];
 							parsed.query.forEach((querySpec: any) => {
-						if (!querySpec.obj_name || !database) {
+								if (!querySpec.obj_name || !database) {
 									return;
 								}
 								
 								const tableName = querySpec.obj_name;
 								const fields = querySpec.fields || [];
-								const whereClause = querySpec.obj_where || '';
+								// Default obj_where if not provided or invalid
+								// Check for: undefined, null, empty string, empty object, or object without required fields
+								let whereClause = querySpec.obj_where;
+								const isInvalidWhere = !whereClause 
+									|| (typeof whereClause === 'string' && !whereClause.trim())
+									|| (typeof whereClause === 'object' && (!whereClause.field || !whereClause.type));
 								
+								if (isInvalidWhere) {
+									whereClause = {field: 'id', type: 'like', value: ""};
+									console.log(`[selectEnums] Using default where clause for ${tableName}:`, whereClause);
+								}
+								const queryAppId = querySpec.app_id; // May be undefined
+								
+								console.log(`[selectEnums] 🔍 Raw querySpec.obj_where:`, querySpec.obj_where);
+								console.log(`[selectEnums] 🔍 whereClause after assignment:`, whereClause);
 								console.log(`[selectEnums] Querying table: ${tableName}, fields:`, fields, 'where:', whereClause);
 								
-								// Get data from database table
-						const tableData = database[tableName];
-						if (!tableData) {
-							console.warn(`[selectEnums] Table ${tableName} not found in database. Available tables:`, Object.keys(database));
+								const tableData = database[tableName];
+								const tableExists = tableData && (Array.isArray(tableData) || (tableData.rows && Array.isArray(tableData.rows)));
+								const rows = tableExists ? (Array.isArray(tableData) ? tableData : (tableData as any).rows || []) : [];
+								const hasData = tableExists && rows.length > 0;
+								
+								console.log(`[selectEnums] Checking table ${tableName} in database:`, {
+									exists: tableExists,
+									rowCount: rows.length,
+									hasData,
+								});
+								
+								// Already fetched all combo tables in useEffect mount
+								// ONLY build options from database, NO fetch in useMemo
+								if (!hasData) {
+									console.warn(`[selectEnums] Table ${tableName} not available yet (will be fetched on mount)`);
+								
+
+									return;
 								}
 								
+								console.log(`[selectEnums] Building options from ${tableName}: ${rows.length} rows`);
+
+
 								// Database tables have structure: { rows: Row[] }
-								const rows = Array.isArray(tableData) ? tableData : (tableData as any).rows || [];
 								if (!Array.isArray(rows)) {
 									console.warn(`[selectEnums] Table ${tableName} has no valid rows array`);
 									return;
 								}
 								
+								console.log(`[selectEnums] Table ${tableName} has ${rows.length} total rows`);
+								if (rows.length > 0) {
+									console.log(`[selectEnums] Sample rows from ${tableName}:`, rows.slice(0, 3));
+									console.log(`[selectEnums] 🔍 p_type values in first 10 rows:`, rows.slice(0, 10).map((r: any) => r.p_type));
+								}
+								
 								// Filter data if where clause exists
 								let filteredData = rows;
 								if (whereClause) {
-									// Simple where clause evaluation (you may need to enhance this)
 									try {
-										const whereFn = safeEval(['row'], `return ${whereClause}`);
-										if (whereFn) {
-											filteredData = rows.filter((row: any) => whereFn(row));
+										// Support both object and string format for obj_where
+										if (typeof whereClause === 'object' && whereClause.field && whereClause.type) {
+											// Object format: { field: "p_type", type: "eq", value: 1 }
+											const field = whereClause.field;
+											const type = whereClause.type;
+											const value = whereClause.value;
+											
+											console.log(`[selectEnums] 🔍 Filtering with object where: field="${field}", type="${type}", value=`, value, `(typeof: ${typeof value})`);
+											
+											filteredData = rows.filter((row: any) => {
+												const rowValue = row[field];
+												let matches = false;
+												switch (type) {
+													case 'eq': matches = rowValue == value; break;
+													case 'ne': matches = rowValue != value; break;
+													case 'gt': matches = rowValue > value; break;
+													case 'gte': matches = rowValue >= value; break;
+													case 'lt': matches = rowValue < value; break;
+													case 'lte': matches = rowValue <= value; break;
+													case 'like': matches = String(rowValue || '').toLowerCase().includes(String(value || '').toLowerCase()); break;
+													case 'in': matches = Array.isArray(value) && value.includes(rowValue); break;
+													default: matches = true; break;
+												}
+												return matches;
+											});
+											
+											console.log(`[selectEnums] 🔍 After filtering: ${filteredData.length} rows (from ${rows.length})`);
+											if (filteredData.length > 0) {
+												console.log(`[selectEnums] 🔍 Sample filtered rows:`, filteredData.slice(0, 3));
+											}
+										} else if (typeof whereClause === 'string') {
+											// String format: "row.p_type === 1"
+											const whereFn = safeEval(['row'], `return ${whereClause}`);
+											if (whereFn) {
+												filteredData = rows.filter((row: any) => whereFn(row));
+											}
 										}
 									} catch (err) {
 										console.warn(`[selectEnums] Where clause evaluation failed for ${f.f_name}:`, err);
@@ -701,7 +988,7 @@ export function CsmDynamicGrid({
 			});
 		console.log('[selectEnums] Final map:', map);
 		return map;
-	}, [m_configs.table, database, decrypt, context, m_configs, m_configs.selectEnumsOverride]);
+	}, [m_configs.table, database, decrypt, context, m_configs, m_configs.selectEnumsOverride, databaseVersion, ensureTableInDatabase]); // 🔄 Re-compute when databaseVersion changes (after table fetches)
 
 	// Map backend fields to ProColumns with f_types rules
 	const baseColumns: ProColumns<Row>[] = useMemo(() => {
