@@ -1157,7 +1157,7 @@ const WuServicesPage: React.FC = () => {
   // Lấy ngôn ngữ hiện tại từ i18n hoặc URL, fallback 'vi'
   const currentLang = i18nInstance.language && i18nInstance.language !== 'cimode' ? i18nInstance.language : 'vi';
   const { lang, slug } = extractLangAndSlug(location.pathname);
-  
+
   // Check if we're on a group route (e.g., /du-an accessed directly)
   // ssrCategories already declared at component scope level (line 786)
   const isGroupRoute = slug && ssrCategories.some(cat => cat && typeof cat === 'object' && cat.slug === slug && cat.is_group_slug === true);

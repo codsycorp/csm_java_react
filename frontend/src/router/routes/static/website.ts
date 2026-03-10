@@ -3,7 +3,6 @@ import { createElement, lazy } from "react";
 import type { AppRouteRecordRaw } from "#src/router/types";
 
 const WuHome = lazy(() => import("#src/pages/website/wu_home"));
-const WuServices = lazy(() => import("#src/pages/website/wu_services"));
 const WuServiceDetail = lazy(() => import("#src/pages/website/wu_service_detail"));
 const WuContact = lazy(() => import("#src/pages/website/wu_contact"));
 const WuAbout = lazy(() => import("#src/pages/website/wu_about"));
@@ -11,8 +10,7 @@ const XemNgay = lazy(() => import("#src/pages/website/tools/XemNgay"));
 const KQXS = lazy(() => import("#src/pages/website/tools/kqxs_main"));
 const PrivacyPolicy = lazy(() => import("#src/pages/website/privacy_policy"));
 const TermsOfService = lazy(() => import("#src/pages/website/terms_of_service"));
-const WuDynamicMenuPage = lazy(() => import("#src/pages/website/wu_dynamic_menu_page"));
-const WuNoContentPage = lazy(() => import("#src/pages/website/wu_no_content_page"));
+const WuCategoryPage = lazy(() => import("#src/pages/website/wu_category_page"));
 
 const routes: AppRouteRecordRaw[] = [
 	{
@@ -74,33 +72,11 @@ const routes: AppRouteRecordRaw[] = [
       hideInMenu: true,
     },
   },
-  // Dynamic menu page (non-service items with dynamic code)
-  // Must be before dynamic category routes to take precedence
+  // Single dispatcher: reads SSR data at render time and shows the right component
+  // (WuServices, WuDynamicMenuPage, or WuNoContentPage) — no redirect, clean /:slug URL.
   {
-    path: "/dynamic-code/:slug",
-    Component: WuDynamicMenuPage,
-    handle: {
-      order: 8,
-      title: "Dynamic Menu",
-      hideInMenu: true,
-    },
-  },
-  // No content page (non-service items without dynamic code)
-  // Must be before dynamic category routes to take precedence
-  {
-    path: "/no-content/:slug",
-    Component: WuNoContentPage,
-    handle: {
-      order: 8,
-      title: "No Content",
-      hideInMenu: true,
-    },
-  }
-  ,
-  // Dynamic category pages and service details (placed after specific static routes)
-  {
-    path: "/:category",
-    Component: WuServices,
+    path: "/:slug",
+    Component: WuCategoryPage,
     handle: {
       order: 9,
       title: "Dịch Vụ - Category",
