@@ -1447,14 +1447,27 @@
 /* Desktop Menu */
 .desktopMenu {
   flex: 1;
+  min-width: 0;
   display: flex;
   justify-content: center;
-  max-width: 600px;
+  max-width: none;
 }
 
 .wuMenu {
   background: transparent !important;
   border: none !important;
+}
+
+.wuMenu :global(.ant-menu-overflow) {
+  display: flex;
+  flex-wrap: nowrap;
+  justify-content: center;
+  width: 100%;
+}
+
+.wuMenu :global(.ant-menu-item),
+.wuMenu :global(.ant-menu-submenu) {
+  white-space: nowrap;
 }
 
 .wuMenu .ant-menu-item {

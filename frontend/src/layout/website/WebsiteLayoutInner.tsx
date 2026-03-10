@@ -325,11 +325,13 @@ export default function WebsiteLayoutInner({ children, selectedKey, menuItems, t
                   selectedKeys={selectedKeys}
                   openKeys={openMenuKeys}
                   onOpenChange={setOpenMenuKeys}
+                  disabledOverflow={true}
                   className={styles.wuMenu}
                   style={{
                     background: 'transparent',
                     border: 'none',
                     flex: 1,
+                    minWidth: 0,
                     justifyContent: 'center'
                   }}
                 />

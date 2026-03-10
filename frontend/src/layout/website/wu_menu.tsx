@@ -88,10 +88,10 @@ export function useWebsiteMenu() {
     "/ve-chung-toi",
   ]);
 
-  // Build main menu dynamically from SSR group tổng (group_slug === '' && is_group_slug === true && is_service !== false)
+  // Build main menu dynamically from SSR group tổng (group_slug === '' && is_group_slug === true && is_service === true)
   function isSSRGroupCategory(cat: any): cat is SSRCategoryObject {
-    // CHỈ lấy SERVICE GROUPS (is_group_slug=true VÀ is_service !== false)
-    return cat && typeof cat === 'object' && cat.group_slug === '' && cat.is_group_slug === true && typeof cat.slug === 'string' && cat.is_service !== false;
+    // CHỈ lấy SERVICE GROUPS thực sự (is_group_slug=true VÀ is_service=true)
+    return cat && typeof cat === 'object' && cat.group_slug === '' && cat.is_group_slug === true && typeof cat.slug === 'string' && isService(cat);
   }
   // Helper function to get translated category name based on current language
   const getCategoryLabel = (cat: SSRCategoryObject): string => {
@@ -150,6 +150,12 @@ export function useWebsiteMenu() {
       children: (menu.children || []).filter((child) => !staticMenuKeys.has(child.key)),
     }));
 
+  const serviceMenuKeys = new Set<string>();
+  filteredServiceGroupMenus.forEach((menu) => {
+    serviceMenuKeys.add(menu.key);
+    (menu.children || []).forEach((child) => serviceMenuKeys.add(child.key));
+  });
+
   // Build standalone menus (is_service=false, group_slug='')
   // Bao gồm:
   // - Non-service items: is_group_slug=false, group_slug='', is_service=false
@@ -181,7 +187,9 @@ export function useWebsiteMenu() {
       };
     });
 
-  const filteredStandaloneMenus = standaloneMenus.filter((menu) => !staticMenuKeys.has(menu.key));
+  const filteredStandaloneMenus = standaloneMenus.filter(
+    (menu) => !staticMenuKeys.has(menu.key) && !serviceMenuKeys.has(menu.key)
+  );
 
   console.log('📊 [Menu Stats]:', {
     totalCategories: ssrCategoryObjects.length,
