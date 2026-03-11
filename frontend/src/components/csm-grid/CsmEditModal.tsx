@@ -1074,13 +1074,53 @@ function getFieldComponent(
       </Form.Item>
     );
   }
-  // Kiểu Image Inline Upload: image_inline, album_inline (cho phép upload ngay trong form)
-  if (types === 'image_inline' || types === 'album_inline') {
-    const isAlbum = types === 'album_inline';
+  // Kiểu Image/Video Inline Upload: image_inline, album_inline, video_inline, album_video_inline (cho phép upload ngay trong form)
+  if (types === 'image_inline' || types === 'album_inline' || types === 'video_inline' || types === 'album_video_inline') {
+    const isAlbum = types === 'album_inline' || types === 'album_video_inline';
+    const isVideo = types === 'video_inline' || types === 'album_video_inline';
     const value = form.getFieldValue(key) || initialVal;
     return (
       <Form.Item key={key} name={key} label={f.f_header} initialValue={initialVal}>
-        <InlineImageUploader value={value} onChange={(url) => form.setFieldsValue({ [key]: url })} multiple={isAlbum} />
+        <InlineImageUploader value={value} onChange={(url) => form.setFieldsValue({ [key]: url })} multiple={isAlbum} acceptVideo={isVideo} />
+      </Form.Item>
+    );
+  }
+  // Kiểu Video: video, videos, media
+  if (/^video$|^videos$|^media$/.test(types)) {
+    const formValue = form.getFieldValue(key);
+    const currentValue = (formValue !== undefined && formValue !== null && formValue !== '') ? formValue : initialVal;
+    const MediaUploader = lazy(() => import('./MediaUploader').then(mod => ({ default: mod.MediaUploader })));
+    
+    function VideoField() {
+      const [videoUrl, setVideoUrl] = React.useState(currentValue || '');
+      React.useEffect(() => {
+        setVideoUrl(currentValue || '');
+      }, [currentValue]);
+      
+      const handleVideoChange = React.useCallback((urls: string | string[]) => {
+        const url = Array.isArray(urls) ? urls[0] : urls;
+        setVideoUrl(url);
+        form.setFieldsValue({ [key]: url });
+      }, []);
+      
+      return (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          {videoUrl && (
+            <div style={{ position: 'relative' }}>
+              <video src={videoUrl} style={{ maxWidth: 120, maxHeight: 100, borderRadius: 8, border: '1px solid #eee' }} />
+              <div style={{ marginTop: 4, fontSize: 12, color: '#999' }}>Preview</div>
+            </div>
+          )}
+          <Suspense fallback={<span>Đang tải...</span>}>
+            <MediaUploader value={videoUrl} onChange={handleVideoChange} type="video" />
+          </Suspense>
+        </div>
+      );
+    }
+    
+    return (
+      <Form.Item key={key} name={key} label={f.f_header} initialValue={initialVal}>
+        <VideoField />
       </Form.Item>
     );
   }
@@ -1120,48 +1160,91 @@ function getFieldComponent(
   }
   if (types === 'album' || types === 'images' || types === 'gallery') {
     const formValue = form.getFieldValue(key);
+    const normalizedInitial = (() => {
+      if (Array.isArray(initialVal)) return initialVal;
+      if (typeof initialVal === 'string') {
+        try {
+          const parsed = JSON.parse(initialVal);
+          return Array.isArray(parsed) ? parsed : (initialVal ? [initialVal] : []);
+        } catch {
+          return initialVal ? [initialVal] : [];
+        }
+      }
+      return [];
+    })();
+    const currentValue = Array.isArray(formValue) ? formValue : normalizedInitial;
+    const MediaUploader = lazy(() => import('./MediaUploader').then(mod => ({ default: mod.MediaUploader })));
+
+    function AlbumField() {
+      const [mediaUrls, setMediaUrls] = React.useState<string[]>(currentValue || []);
+      React.useEffect(() => {
+        setMediaUrls(currentValue || []);
+      }, [currentValue]);
+
+      const handleMediaChange = React.useCallback((urls: string | string[]) => {
+        const next = Array.isArray(urls) ? urls : (urls ? [urls] : []);
+        setMediaUrls(next);
+        form.setFieldsValue({ [key]: next });
+      }, []);
+
+      return (
+        <Suspense fallback={<span>Đang tải...</span>}>
+          <MediaUploader value={mediaUrls} onChange={handleMediaChange} type="both" multiple={true} />
+        </Suspense>
+      );
+    }
+
+    return (
+      <Form.Item key={key} name={key} label={f.f_header} initialValue={currentValue}>
+        <AlbumField />
+      </Form.Item>
+    );
+  }
+  // Kiểu Album Video: album_video (multiple videos)
+  if (types === 'album_video' || types === 'videos_album') {
+    const formValue = form.getFieldValue(key);
     const currentValue = Array.isArray(formValue) ? formValue : (initialVal && Array.isArray(initialVal) ? initialVal : []);
     const MediaUploader = lazy(() => import('./MediaUploader').then(mod => ({ default: mod.MediaUploader })));
     
-    function AlbumField() {
-      const [images, setImages] = React.useState(currentValue || []);
+    function AlbumVideoField() {
+      const [videos, setVideos] = React.useState(currentValue || []);
       React.useEffect(() => {
-        setImages(currentValue || []);
+        setVideos(currentValue || []);
       }, [currentValue]);
       
-      const handleImageAdd = React.useCallback((urls: string | string[]) => {
+      const handleVideoAdd = React.useCallback((urls: string | string[]) => {
         const url = Array.isArray(urls) ? urls[0] : urls;
         if (url && url !== '') {
-          const newImages = [...images, url];
-          setImages(newImages);
-          form.setFieldsValue({ [key]: newImages });
+          const newVideos = [...videos, url];
+          setVideos(newVideos);
+          form.setFieldsValue({ [key]: newVideos });
         }
-      }, [images]);
+      }, [videos]);
       
-      const handleImageRemove = React.useCallback((idx: number) => {
-        const newImages = images.filter((_: string, i: number) => i !== idx);
-        setImages(newImages);
-        form.setFieldsValue({ [key]: newImages });
-      }, [images]);
+      const handleVideoRemove = React.useCallback((idx: number) => {
+        const newVideos = videos.filter((_: string, i: number) => i !== idx);
+        setVideos(newVideos);
+        form.setFieldsValue({ [key]: newVideos });
+      }, [videos]);
       
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-            {images.map((img: string, idx: number) => (
+            {videos.map((vid: string, idx: number) => (
               <div key={idx} style={{ position: 'relative', display: 'inline-block' }}>
-                <img src={img} alt={`img-${idx}`} style={{ width: 100, height: 100, objectFit: 'cover', borderRadius: 8 }} />
+                <video src={vid} style={{ width: 100, height: 100, objectFit: 'cover', borderRadius: 8 }} />
                 <Button
                   danger
                   size="small"
                   icon={<DeleteOutlined />}
                   style={{ position: 'absolute', top: 4, right: 4 }}
-                  onClick={() => handleImageRemove(idx)}
+                  onClick={() => handleVideoRemove(idx)}
                 />
               </div>
             ))}
           </div>
           <Suspense fallback={<span>Đang tải...</span>}>
-            <MediaUploader value={undefined} onChange={handleImageAdd} multiple={false} />
+            <MediaUploader value={undefined} onChange={handleVideoAdd} type="video" multiple={false} />
           </Suspense>
         </div>
       );
@@ -1169,7 +1252,7 @@ function getFieldComponent(
     
     return (
       <Form.Item key={key} name={key} label={f.f_header} initialValue={initialVal}>
-        <AlbumField />
+        <AlbumVideoField />
       </Form.Item>
     );
   }
@@ -1483,6 +1566,25 @@ export function CsmEditModal({
       });
       // Convert date fields to dayjs objects
       const convertedValues = { ...initialValues };
+      const parseMediaArray = (input: any): string[] => {
+        if (!input) return [];
+        if (Array.isArray(input)) return input.filter((v) => typeof v === 'string' && v.trim() !== '').map((v) => String(v));
+        if (typeof input === 'string') {
+          const s = input.trim();
+          if (!s) return [];
+          if (s.startsWith('[') || s.startsWith('{')) {
+            try {
+              const parsed = JSON.parse(s);
+              if (Array.isArray(parsed)) return parsed.filter((v) => typeof v === 'string' && v.trim() !== '').map((v) => String(v));
+              if (typeof parsed === 'string' && parsed.trim()) return [parsed.trim()];
+            } catch {
+              // Keep fallback below
+            }
+          }
+          return [s];
+        }
+        return [];
+      };
       dynamicFields.forEach(f => {
         const types = (f.f_types || '').toLowerCase();
         const key = f.f_name;
@@ -1510,6 +1612,22 @@ export function CsmEditModal({
             }
           }
           // If it's a plain URL string, keep it as is (MediaUploader will handle it)
+        }
+
+        // Migrate legacy video/videos fields into unified album media field.
+        if (types === 'album' || types === 'images' || types === 'gallery') {
+          const merged = [
+            ...parseMediaArray(convertedValues[key]),
+            ...parseMediaArray(convertedValues[`${key}_video`]),
+            ...parseMediaArray(convertedValues[`${key}_videos`]),
+            ...parseMediaArray(convertedValues.video),
+            ...parseMediaArray(convertedValues.videos),
+            ...parseMediaArray(convertedValues.video_url),
+            ...parseMediaArray(convertedValues.video_urls),
+          ];
+          if (merged.length > 0) {
+            convertedValues[key] = Array.from(new Set(merged));
+          }
         }
       });
       

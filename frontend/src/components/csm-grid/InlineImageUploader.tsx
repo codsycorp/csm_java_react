@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from "react";
-import { Upload, Button, message, Image, Spin } from "antd";
+import { Upload, Button, message, Image, Spin, Modal } from "antd";
 import { PictureOutlined, DeleteOutlined, CloudUploadOutlined } from "@ant-design/icons";
 import type { UploadProps, UploadFile } from "antd";
 
@@ -7,19 +7,21 @@ const APP_ID = "wuweb"; // Backend app_id
 const UPLOAD_ENDPOINT = "/upload"; // Backend upload API
 
 /**
- * InlineImageUploader: Compact image uploader for inline table cell editing
- * Supports single image upload with preview
- * Used in table cells with image_inline or album_inline types
+ * InlineImageUploader: Compact image/video uploader for inline table cell editing
+ * Supports single image or video upload with preview
+ * Used in table cells with image_inline, album_inline, video_inline or album_video_inline types
  */
 export function InlineImageUploader({
   value,
   onChange,
   multiple = false,
+  acceptVideo = false,
   size = 48,
 }: {
   value?: string | string[];
   onChange?: (url: string | string[]) => void;
   multiple?: boolean;
+  acceptVideo?: boolean;
   size?: number; // thumbnail size (square)
 }) {
   // Parse value thành array URLs
@@ -157,19 +159,33 @@ export function InlineImageUploader({
                 borderRadius: 4,
                 overflow: "hidden",
                 border: "1px solid #ddd",
+                backgroundColor: acceptVideo ? "#000" : undefined,
               }}
             >
-              <img
-                src={url}
-                alt="thumbnail"
-                style={{
-                  width: "100%",
-                  height: "100%",
-                  objectFit: "cover",
-                  cursor: "pointer",
-                }}
-                onClick={() => setPreviewUrl(url)}
-              />
+              {acceptVideo ? (
+                <video
+                  src={url}
+                  style={{
+                    width: "100%",
+                    height: "100%",
+                    objectFit: "cover",
+                    cursor: "pointer",
+                  }}
+                  onClick={() => setPreviewUrl(url)}
+                />
+              ) : (
+                <img
+                  src={url}
+                  alt="thumbnail"
+                  style={{
+                    width: "100%",
+                    height: "100%",
+                    objectFit: "cover",
+                    cursor: "pointer",
+                  }}
+                  onClick={() => setPreviewUrl(url)}
+                />
+              )}
               <Button
                 type="text"
                 size="small"
@@ -209,7 +225,7 @@ export function InlineImageUploader({
       {/* Upload button */}
       <Spin spinning={uploading}>
         <Upload
-          accept="image/*"
+          accept={acceptVideo ? "video/*" : "image/*"}
           customRequest={handleUpload}
           showUploadList={false}
           multiple={multiple}
@@ -222,21 +238,33 @@ export function InlineImageUploader({
             disabled={!multiple && urls.length >= 1 || uploading}
             style={{ minWidth: 0 }}
           >
-            {uploading ? "..." : <PictureOutlined />}
+            {uploading ? "..." : acceptVideo ? "🎬" : <PictureOutlined />}
           </Button>
         </Upload>
       </Spin>
 
       {/* Preview modal */}
-      {previewUrl && (
-        <Image
-          src={previewUrl}
-          preview={{
-            mask: "Xem",
-            onVisibleChange: (v) => !v && setPreviewUrl(""),
-          }}
-          style={{ display: "none" }}
-        />
+      {previewUrl && acceptVideo ? (
+        <Modal
+          title="Xem Video"
+          open={!!previewUrl}
+          onCancel={() => setPreviewUrl("")}
+          footer={null}
+          width={600}
+        >
+          <video src={previewUrl} controls autoPlay style={{ width: "100%", borderRadius: 8 }} />
+        </Modal>
+      ) : (
+        previewUrl && (
+          <Image
+            src={previewUrl}
+            preview={{
+              mask: "Xem",
+              onVisibleChange: (v) => !v && setPreviewUrl(""),
+            }}
+            style={{ display: "none" }}
+          />
+        )
       )}
     </div>
   );

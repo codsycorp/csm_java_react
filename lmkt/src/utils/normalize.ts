@@ -46,6 +46,7 @@ export function normalizeServiceDetail(raw: any): ServicePost {
   const content = raw?.content ?? raw?.html ?? "";
   const thumbnail = raw?.thumbnail ?? raw?.image_url ?? raw?.cover ?? undefined;
   const images = toArrayOfStrings(raw?.images) ?? (thumbnail ? [thumbnail] : undefined);
+  const videos = toArrayOfStrings(raw?.videos ?? raw?.video ?? raw?.video_url ?? raw?.album);
   // service_code (web_services) tương đương service_type (web_service_detail)
   // Không còn dùng category/service_category nữa
   const serviceType = raw?.service_type ?? raw?.service_code ?? raw?.type ?? undefined;
@@ -104,6 +105,7 @@ export function normalizeServiceDetail(raw: any): ServicePost {
     content,
     thumbnail,
     images,
+    videos,
     serviceType,
     category,
     serviceId,

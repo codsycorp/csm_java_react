@@ -15,8 +15,12 @@ const fTypeOptions = [
   { value: "textarea", label: "Textarea" },
   { value: "password", label: "Password" },
   { value: "image", label: "Image" },
+  { value: "album", label: "Album (Image/Video)" },
   { value: "image_inline", label: "Image (Inline Upload)" },
   { value: "album_inline", label: "Album (Inline Upload)" },
+  { value: "video", label: "Video" },
+  { value: "video_inline", label: "Video (Inline Upload)" },
+  { value: "album_video_inline", label: "Album Video (Inline Upload)" },
 ];
 
 const defaultField = {

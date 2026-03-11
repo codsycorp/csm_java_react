@@ -1026,11 +1026,18 @@ export function CsmDynamicGrid({
 			const isFile = /^file$/.test(types);
 			// Kiểu ảnh inline: image_inline, album_inline (cho phép upload trực tiếp trong cell)
 			const isImageInline = /image_inline|album_inline/.test(types);
+			// Kiểu video inline: video_inline, album_video_inline (cho phép upload trực tiếp trong cell)
+			const isVideoInline = /video_inline|album_video_inline/.test(types);
+			const isAlbumMedia = /^(album|images|gallery)$/.test(types);
 			// Check both f_types and field name for image detection
-			const isImage = (/img|image|avatar|photo|picture|album|gallery/.test(types)
-				|| /^(thumbnail|cover|images|avatar|photo)$/i.test(key)) && !isImageInline;
+			const isImage = (/img|image|avatar|photo|picture/.test(types)
+				|| /^(thumbnail|cover|avatar|photo)$/i.test(key)) && !isImageInline && !isAlbumMedia;
+			// Check for video types (not inline)
+			const isVideo = (/^video$|^videos$|^media$|album_video|videos_album/.test(types)) && !isVideoInline;
 			// Determine if album (multiple images)
 			const isAlbum = /album|album_inline/.test(types);
+			// Determine if album video (multiple videos)
+			const isAlbumVideo = /album_video|album_video_inline/.test(types);
 
 			const resolvedAlign =
 				typeof f.f_align === "string" && ["left", "right", "center"].includes(f.f_align)
@@ -1044,7 +1051,7 @@ export function CsmDynamicGrid({
 				width: f.width,
 				align: resolvedAlign ?? (isNumber ? "right" : "left"),
 				// Add responsive property to hide less important columns on mobile
-				responsive: isImage ? ['lg'] : isRichText ? ['md'] : isTextArea ? ['md'] : undefined,
+				responsive: (isImage || isVideo || isAlbumMedia) ? ['lg'] : isRichText ? ['md'] : isTextArea ? ['md'] : undefined,
 			};
 
 			if (isNumber) col.valueType = "digit";
@@ -1077,6 +1084,69 @@ export function CsmDynamicGrid({
 				};
 			} else if (isPassword) {
 				col.render = () => "••••••";
+			} else if (isAlbumMedia) {
+				col.render = (dom, entity) => {
+					let value = entity[f.f_name];
+					if (!value) return null;
+
+					if (typeof value === 'string' && value.trim().startsWith('[')) {
+						try {
+							value = JSON.parse(value);
+						} catch {
+							// Not valid JSON, treat as single URL
+						}
+					}
+
+					const urls: string[] = Array.isArray(value)
+						? value.filter((u) => u && typeof u === 'string')
+						: (typeof value === 'string' && value ? [value] : []);
+
+					if (urls.length === 0) return null;
+
+					const firstUrl = String(urls[0]);
+					const isFirstVideo = /\.(mp4|webm|ogg|mov|avi|mkv)(\?|$)/i.test(firstUrl);
+
+					return React.createElement("a", {
+						href: firstUrl,
+						target: "_blank",
+						rel: "noopener noreferrer",
+						style: { position: "relative", display: "inline-block" }
+					},
+						React.createElement("div", {
+							style: { position: "relative", width: 64, height: 64, borderRadius: 4, border: "1px solid #eee", overflow: "hidden", background: "#000" }
+						},
+							isFirstVideo
+								? React.createElement("video", {
+									src: firstUrl,
+									style: { width: "100%", height: "100%", objectFit: "cover" },
+									muted: true,
+									playsInline: true,
+									preload: "metadata"
+								})
+								: React.createElement("img", {
+									src: firstUrl,
+									alt: f.f_header,
+									style: { width: "100%", height: "100%", objectFit: "cover" }
+								}),
+							isFirstVideo ? React.createElement("div", {
+								style: { position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", color: "white", fontSize: 20 }
+							}, "▶") : null,
+							urls.length > 1 ? React.createElement("span", {
+								style: {
+									position: "absolute",
+									bottom: 4,
+									right: 4,
+									background: "rgba(0,0,0,0.65)",
+									color: "white",
+									padding: "1px 5px",
+									borderRadius: 6,
+									fontSize: 11,
+									fontWeight: 600
+								}
+							}, `+${urls.length - 1}`) : null
+						)
+					);
+				};
 			} else if (isImage) {
 				col.render = (dom, entity) => {
 					let value = entity[f.f_name];
@@ -1186,6 +1256,118 @@ export function CsmDynamicGrid({
 						return renderThumb(urls[0], 0);
 					}
 				};
+			} else if (isVideo) {
+				// Hiển thị thumbnail video
+				col.render = (dom, entity) => {
+					let value = entity[f.f_name];
+					if (!value) return null;
+
+					// Handle JSON string (e.g., '["url1", "url2"]')
+					if (typeof value === 'string' && value.trim().startsWith('[')) {
+						try {
+							value = JSON.parse(value);
+						} catch {
+							// Not valid JSON, treat as single URL
+						}
+					}
+
+					const renderVideoThumb = (url: string, extra?: number) => (
+						React.createElement("a", {
+							href: url,
+							target: "_blank",
+							rel: "noopener noreferrer",
+							style: { position: "relative", display: "inline-block" }
+						},
+							React.createElement("div", {
+								style: { position: "relative", width: 64, height: 64, borderRadius: 4, border: "1px solid #eee", overflow: "hidden", backgroundColor: "#000" }
+							},
+								React.createElement("video", {
+									src: url,
+									style: { maxWidth: 64, maxHeight: 64, objectFit: "cover" }
+								}),
+								React.createElement("div", {
+									style: { position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", color: "white", fontSize: 24 }
+								}, "▶")
+							),
+							extra && extra > 0 ? React.createElement("span", {
+								style: {
+									position: "absolute",
+									bottom: 4,
+									right: 4,
+									background: "rgba(0,0,0,0.65)",
+									color: "white",
+									padding: "1px 5px",
+									borderRadius: 6,
+									fontSize: 11,
+									fontWeight: 600
+								}
+							}, `+${extra}`) : null
+						)
+					);
+
+					// Handle array of URLs (show first video with count badge)
+					if (Array.isArray(value)) {
+						const urls = value.filter(u => u && typeof u === 'string');
+						if (urls.length === 0) return null;
+						return renderVideoThumb(urls[0], urls.length - 1);
+					}
+
+					// Handle single URL string
+					return renderVideoThumb(String(value));
+				};
+			} else if (isVideoInline) {
+				// Inline video upload in table cell
+				col.render = (dom, entity) => {
+					const value = entity[f.f_name];
+
+					// Handle JSON string (e.g., '["url1", "url2"]')
+					let parsedValue = value;
+					if (typeof value === 'string' && value && value.trim().startsWith('[')) {
+						try {
+							parsedValue = JSON.parse(value);
+						} catch {
+							// Not valid JSON, treat as single URL
+						}
+					}
+
+					const urls = Array.isArray(parsedValue) ? parsedValue : (parsedValue ? [parsedValue] : []);
+					if (urls.length === 0) return null;
+
+					const renderVideoThumb = (url: string, extra?: number) => (
+						React.createElement("div", { style: { position: "relative", display: "inline-block", width: 48, height: 48 } },
+							React.createElement("div", {
+								style: { position: "relative", width: 48, height: 48, borderRadius: 4, border: "1px solid #ddd", overflow: "hidden", backgroundColor: "#000" }
+							},
+								React.createElement("video", {
+									src: url,
+									style: { maxWidth: 48, maxHeight: 48, objectFit: "cover" }
+								}),
+								React.createElement("div", {
+									style: { position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", color: "white", fontSize: 12 }
+								}, "▶")
+							),
+								extra && extra > 0 ? React.createElement("span", {
+									style: {
+										position: "absolute",
+										bottom: -4,
+										right: -4,
+										background: "#1890ff",
+										color: "white",
+										padding: "1px 4px",
+										borderRadius: 3,
+										fontSize: 10,
+										fontWeight: 600
+									}
+								}, `+${extra}`) : null
+						)
+					);
+
+					if (isAlbumVideo) {
+						return renderVideoThumb(urls[0], urls.length - 1);
+					} else {
+						return renderVideoThumb(urls[0], 0);
+					}
+				};
 			} else if (isRichText) {
 				// Strip HTML tags for grid preview, show ellipsis
 				col.render = (dom, entity) => {
@@ -1238,13 +1420,15 @@ export function CsmDynamicGrid({
 				const isCodeEditor = /code/.test(types);
 				const isFile = /^file$/.test(types);
 				const isImageInline = /image_inline|album_inline/.test(types);
+				const isVideoInline = /video_inline|album_video_inline/.test(types);
 				const isImage = (/img|image|avatar|photo|picture|album|gallery/.test(types)
 					|| /^(thumbnail|cover|images|avatar|photo)$/i.test(String(col.dataIndex))) && !isImageInline;
+				const isVideo = (/^video$|^videos$|^media$|album_video|videos_album/.test(types)) && !isVideoInline;
 				const isPassword = /password/.test(types);
 
 				// Skip readonly, complex types, and non-editable types
-				// Allow image_inline and album_inline to be edited
-				if (isReadonly || isRichText || isCodeEditor || isFile || isImage || isPassword) {
+				// Allow image_inline, album_inline, video_inline and album_video_inline to be edited
+				if (isReadonly || isRichText || isCodeEditor || isFile || isImage || isVideo || isPassword) {
 					return;
 				}
 

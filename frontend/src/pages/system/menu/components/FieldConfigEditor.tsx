@@ -33,6 +33,7 @@ const TYPE_OPTIONS = [
   "link",
   "btn",
   "img",
+  "album",
   "file",
   "date",
   "time",
@@ -46,6 +47,12 @@ const TYPE_OPTIONS = [
   "code",
   "password",
 ];
+
+const TYPE_LABEL_MAP: Record<string, string> = {
+  album: "album (media: image/video)",
+};
+
+const getTypeLabel = (type: string) => TYPE_LABEL_MAP[type] || type;
 
 const toFlag = (v: any) => (v === undefined || v === null ? v : v ? 1 : 0);
 
@@ -326,7 +333,7 @@ export function FieldConfigEditor({ value, onChange }: FieldConfigEditorProps) {
       title: t('system.menu.field.type'),
       dataIndex: "f_types",
       width: 110,
-      render: (val: string) => <Tag>{val}</Tag>,
+      render: (val: string) => <Tag>{getTypeLabel(val)}</Tag>,
     },
     {
       title: t('system.menu.field.grid'),
@@ -491,7 +498,7 @@ export function FieldConfigEditor({ value, onChange }: FieldConfigEditorProps) {
           <Row gutter={12}>
             <Col span={8}>
               <Form.Item name="f_types" label="Loại data" rules={[{ required: true }]}> 
-                <Select options={TYPE_OPTIONS.map(v => ({ label: v, value: v }))} />
+                <Select options={TYPE_OPTIONS.map(v => ({ label: getTypeLabel(v), value: v }))} />
               </Form.Item>
             </Col>
             <Col span={8}>

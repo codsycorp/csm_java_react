@@ -487,6 +487,7 @@ const decryptHtmlContent = (data) => {
  */
 const DEFAULT_UPLOAD_ENDPOINT = "/upload.shtml";
 const UPLOAD_ENDPOINT_COOLDOWN_MS = 2 * 60 * 1000;
+const UPLOAD_REQUEST_TIMEOUT_MS = 180000;
 const uploadEndpointHealth = {};
 
 function markUploadEndpointFailure(endpoint, status = 0) {
@@ -2698,11 +2699,39 @@ function extractBase64VideosFromText(text = "") {
   return matches ? Array.from(new Set(matches)) : [];
 }
 
+function getMediaUrlFromCandidate(candidate) {
+  if (!candidate) return "";
+  if (typeof candidate === "string") return candidate.trim();
+  if (typeof candidate !== "object") return "";
+
+  const url =
+    candidate.url ||
+    candidate.src ||
+    candidate.path ||
+    candidate.value ||
+    candidate.link ||
+    candidate.media?.url ||
+    candidate.media?.source ||
+    "";
+
+  return typeof url === "string" ? url.trim() : "";
+}
+
 function normalizeImageCandidates(value) {
   if (!value) return [];
 
   if (Array.isArray(value)) {
-    return value.filter(v => typeof v === "string" && v.trim());
+    return value
+      .map(getMediaUrlFromCandidate)
+      .filter((v) => {
+        if (!v) return false;
+        if (/^data:image\//i.test(v)) return true;
+        if (/\.(png|jpe?g|gif|webp|bmp|svg)(\?|$)/i.test(v)) return true;
+        if (/^https?:\/\//i.test(v) || v.startsWith("/")) {
+          return !(/\.(mp4|webm|ogg|mov|avi|mkv)(\?|$)/i.test(v) || /^data:video\//i.test(v));
+        }
+        return false;
+      });
   }
 
   if (typeof value === "string") {
@@ -2717,7 +2746,7 @@ function normalizeImageCandidates(value) {
       try {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed)) {
-          return parsed.filter(v => typeof v === "string" && v.trim());
+          return normalizeImageCandidates(parsed);
         }
       } catch (e) {
         // ignore invalid json string
@@ -2732,7 +2761,17 @@ function normalizeVideoCandidates(value) {
   if (!value) return [];
 
   if (Array.isArray(value)) {
-    return value.filter(v => typeof v === "string" && v.trim());
+    return value
+      .map(getMediaUrlFromCandidate)
+      .filter((v) => {
+        if (!v) return false;
+        if (/^data:video\//i.test(v)) return true;
+        if (/\.(mp4|webm|ogg|mov|avi|mkv)(\?|$)/i.test(v)) return true;
+        if (/^https?:\/\//i.test(v) || v.startsWith("/")) {
+          return !(/^data:image\//i.test(v) || /\.(png|jpe?g|gif|webp|bmp|svg)(\?|$)/i.test(v));
+        }
+        return false;
+      });
   }
 
   if (typeof value === "string") {
@@ -2747,7 +2786,7 @@ function normalizeVideoCandidates(value) {
       try {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed)) {
-          return parsed.filter(v => typeof v === "string" && v.trim());
+          return normalizeVideoCandidates(parsed);
         }
       } catch (e) {
         // ignore invalid json string
@@ -2783,6 +2822,7 @@ function extractImagesFromMessage(item = {}) {
     ["images", item.images],
     ["imageUrls", item.imageUrls],
     ["image_urls", item.image_urls],
+    ["album", item.album],
     ["photos", item.photos],
     ["media", item.media],
     ["photo", item.photo],
@@ -2893,6 +2933,7 @@ function extractVideosFromMessage(item = {}) {
     ["videos", item.videos],
     ["videoUrls", item.videoUrls],
     ["video_urls", item.video_urls],
+    ["album", item.album],
     ["media", item.media],
     ["attachments", item.attachments],
     ["attachments.data", item.attachments?.data]
@@ -3075,8 +3116,17 @@ function parseFacebookJson(jsonArray) {
 
 // ===== UPLOAD IMAGES =====
 async function uploadBase64Image(base64, filename, ctx) {
-  if (!base64 || base64.endsWith("...")) {
+  if (!base64 || (typeof base64 === "string" && base64.endsWith("..."))) {
     throw new Error("Ảnh base64 chưa đầy đủ");
+  }
+  if (typeof base64 !== "string") {
+    throw new Error(`Payload media không phải chuỗi base64 (type=${typeof base64})`);
+  }
+  if (!/^data:(image|video)\//i.test(base64)) {
+    throw new Error(`Payload media không đúng data URL (preview=${base64.slice(0, 40)})`);
+  }
+  if (!base64.includes(",")) {
+    throw new Error("Payload media thiếu phần base64 sau dấu phẩy");
   }
 
   const inputName = (filename || `img-${Date.now()}.png`).toLowerCase();
@@ -3114,40 +3164,288 @@ async function uploadBase64Image(base64, filename, ctx) {
   const finalFileName = sanitizedName + fileExtension;
   
   const uploadPayload = JSON.stringify({ app_id: ctx.app_id, name: finalFileName, src: base64 });
+  const payloadSizeMb = (uploadPayload.length / (1024 * 1024)).toFixed(2);
+  if (!uploadPayload.includes('"src":"data:')) {
+    throw new Error("Upload payload không chứa src data URL hợp lệ");
+  }
   const candidates = getCandidateUploadEndpoints(ctx);
   const availableCandidates = candidates.filter(ep => !isUploadEndpointCoolingDown(ep));
   const endpoints = availableCandidates.length > 0 ? availableCandidates : candidates;
   let lastError = null;
 
+  const isParseBodyErrorHtml = (responseText = "") => {
+    const t = String(responseText || "").toLowerCase();
+    return t.includes("lỗi khi phân tích dữ liệu gửi lên")
+      || t.includes("loi khi phan tich du lieu gui len")
+      || t.includes("parse body")
+      || t.includes("json parse");
+  };
+
+  const buildFormUploadPayload = () => {
+    // Encode đầy đủ để backend parse theo application/x-www-form-urlencoded an toàn
+    const appId = encodeURIComponent(String(ctx.app_id || ""));
+    const nameParam = encodeURIComponent(String(finalFileName || ""));
+    const srcParam = encodeURIComponent(String(base64 || ""));
+    return `app_id=${appId}&name=${nameParam}&src=${srcParam}`;
+  };
+
+  const normalizeUploadPath = (raw = "") => {
+    const cleaned = String(raw || "").trim();
+    if (!cleaned) return "";
+    if (/^https?:\/\//i.test(cleaned)) return cleaned;
+    if (cleaned.startsWith("app_images/")) return `/${cleaned}`;
+    if (cleaned.startsWith("/")) return cleaned;
+    return "";
+  };
+
+  const parseUploadResponsePath = (responseText = "", contentType = "") => {
+    const text = String(responseText || "").trim();
+    const lowerCt = String(contentType || "").toLowerCase();
+    const lowerText = text.toLowerCase();
+
+    // 200 nhưng trả HTML (thường do fallback route/proxy) => coi là lỗi endpoint
+    if (lowerCt.includes("text/html") || lowerText.includes("<!doctype") || lowerText.includes("<html")) {
+      return "";
+    }
+
+    // Plain text path/url
+    const normalizedDirect = normalizeUploadPath(text);
+    if (normalizedDirect) {
+      return normalizedDirect;
+    }
+
+    // JSON string response: "app_images/x/y.mp4" hoặc "https://..."
+    if ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'"))) {
+      const unwrapped = text.slice(1, -1).replace(/\\\//g, "/").trim();
+      const normalizedWrapped = normalizeUploadPath(unwrapped);
+      if (normalizedWrapped) {
+        return normalizedWrapped;
+      }
+    }
+
+    // Một số backend có thể trả JSON thay vì text
+    if ((text.startsWith("{") && text.endsWith("}")) || (text.startsWith("[") && text.endsWith("]"))) {
+      try {
+        const parsed = JSON.parse(text);
+        const candidate =
+          (parsed && typeof parsed === "object" && (
+            parsed.path ||
+            parsed.url ||
+            parsed.src ||
+            parsed.data ||
+            (parsed.result && (parsed.result.path || parsed.result.url || parsed.result.src))
+          )) ||
+          "";
+        return normalizeUploadPath(candidate);
+      } catch (e) {
+        return "";
+      }
+    }
+
+    // Fallback: thử trích path/url hợp lệ nếu backend trả message bao quanh
+    const embeddedPathMatch = text.match(/(?:https?:\/\/[^\s"'<>]+|\/?app_images\/[^\s"'<>]+)/i);
+    if (embeddedPathMatch && embeddedPathMatch[0]) {
+      return normalizeUploadPath(embeddedPathMatch[0]);
+    }
+
+    return "";
+  };
+
   for (const endpoint of endpoints) {
+    const startedAt = Date.now();
+    console.log(`[uploadBase64Image] -> Trying endpoint: ${endpoint} | file=${finalFileName} | payload=${payloadSizeMb}MB`);
+    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const timeoutId = controller
+      ? setTimeout(() => controller.abort(new Error(`Upload timeout after ${UPLOAD_REQUEST_TIMEOUT_MS}ms`)), UPLOAD_REQUEST_TIMEOUT_MS)
+      : null;
+
     try {
-      const res = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: uploadPayload
-      });
+      const requestOnce = async (mode = "json") => {
+        const isForm = mode === "form";
+        const reqBody = isForm ? buildFormUploadPayload() : uploadPayload;
+        const reqHeaders = {
+          "Content-Type": isForm
+            ? "application/x-www-form-urlencoded;charset=UTF-8"
+            : "application/json;charset=UTF-8",
+          "Accept": "text/plain, application/json, */*"
+        };
+        const response = await fetch(endpoint, {
+          method: "POST",
+          headers: reqHeaders,
+          body: reqBody,
+          signal: controller ? controller.signal : undefined
+        });
+        const responseText = await response.text();
+        const contentType = response.headers.get("content-type") || "";
+        return { response, responseText, contentType, mode };
+      };
+
+      let reqResult = await requestOnce("json");
+      const firstPreview = String(reqResult.responseText || "").replace(/\s+/g, " ").slice(0, 140);
+
+      // Backend variant có thể parse JSON lỗi và trả HTML 200; retry bằng form-urlencoded.
+      if (
+        reqResult.response.ok
+        && !parseUploadResponsePath(reqResult.responseText, reqResult.contentType)
+        && isParseBodyErrorHtml(reqResult.responseText)
+      ) {
+        console.warn(`[uploadBase64Image] JSON parse failed at ${endpoint}, retrying as form-urlencoded... | body=${firstPreview || "(empty)"}`);
+        reqResult = await requestOnce("form");
+      }
+
+      const res = reqResult.response;
+      const responseText = reqResult.responseText;
+      const contentType = reqResult.contentType;
+
+      if (timeoutId) clearTimeout(timeoutId);
 
       if (!res.ok) {
         markUploadEndpointFailure(endpoint, res.status);
         lastError = new Error(`Upload failed: ${res.status} @ ${endpoint}`);
+        console.warn(`[uploadBase64Image] <- HTTP ${res.status} from ${endpoint} (${Date.now() - startedAt}ms)`);
         continue;
       }
 
-      const path = await res.text();
-      clearUploadEndpointHealth(endpoint);
-      const cleanedPath = (path || "").trim();
-      if (!cleanedPath) {
-        lastError = new Error(`Upload empty response @ ${endpoint}`);
+      const parsedPath = parseUploadResponsePath(responseText, contentType);
+
+      if (!parsedPath) {
+        markUploadEndpointFailure(endpoint, res.status);
+        const preview = String(responseText || "").replace(/\s+/g, " ").slice(0, 140);
+        lastError = new Error(`Upload invalid response @ ${endpoint} (status ${res.status}, ct=${contentType || "n/a"}, body=${preview || "(empty)"})`);
+        console.warn(`[uploadBase64Image] <- Invalid body from ${endpoint} (${Date.now() - startedAt}ms) | status=${res.status} | ct=${contentType || "n/a"} | body=${preview || "(empty)"}`);
         continue;
       }
-      return cleanedPath.startsWith("/") ? cleanedPath : `/${cleanedPath}`;
+
+      clearUploadEndpointHealth(endpoint);
+      console.log(`[uploadBase64Image] <- Success from ${endpoint} in ${Date.now() - startedAt}ms: ${parsedPath}`);
+      return parsedPath;
     } catch (error) {
+      if (timeoutId) clearTimeout(timeoutId);
       markUploadEndpointFailure(endpoint, 0);
+      const isAbort = error && (error.name === "AbortError" || String(error.message || "").toLowerCase().includes("timeout"));
+      if (isAbort) {
+        console.error(`[uploadBase64Image] <- Timeout at ${endpoint} after ${UPLOAD_REQUEST_TIMEOUT_MS}ms`);
+      } else {
+        console.error(`[uploadBase64Image] <- Network error at ${endpoint}: ${error?.message || error}`);
+      }
       lastError = error;
     }
   }
 
   throw lastError || new Error("Upload failed: không tìm thấy endpoint upload khả dụng");
+}
+
+async function uploadBinaryFile(file, filename, ctx) {
+  if (!(file instanceof File)) {
+    throw new Error("uploadBinaryFile yêu cầu File hợp lệ");
+  }
+
+  const candidates = getCandidateUploadEndpoints(ctx);
+  const availableCandidates = candidates.filter(ep => !isUploadEndpointCoolingDown(ep));
+  const endpoints = availableCandidates.length > 0 ? availableCandidates : candidates;
+  let lastError = null;
+
+  const normalizeUploadPath = (raw = "") => {
+    const cleaned = String(raw || "").trim();
+    if (!cleaned) return "";
+    if (/^https?:\/\//i.test(cleaned)) return cleaned;
+    if (cleaned.startsWith("app_images/")) return `/${cleaned}`;
+    if (cleaned.startsWith("/")) return cleaned;
+    return "";
+  };
+
+  const parseUploadResponsePath = (responseText = "", contentType = "") => {
+    const text = String(responseText || "").trim();
+    const lowerCt = String(contentType || "").toLowerCase();
+    const lowerText = text.toLowerCase();
+    if (lowerCt.includes("text/html") || lowerText.includes("<!doctype") || lowerText.includes("<html")) {
+      return "";
+    }
+    const direct = normalizeUploadPath(text);
+    if (direct) return direct;
+    if ((text.startsWith("{") && text.endsWith("}")) || (text.startsWith("[") && text.endsWith("]"))) {
+      try {
+        const parsed = JSON.parse(text);
+        const candidate =
+          (parsed && typeof parsed === "object" && (
+            parsed.path ||
+            parsed.url ||
+            parsed.src ||
+            (parsed.result && (parsed.result.path || parsed.result.url || parsed.result.src))
+          )) ||
+          "";
+        return normalizeUploadPath(candidate);
+      } catch (_) {
+        return "";
+      }
+    }
+    const embeddedPathMatch = text.match(/(?:https?:\/\/[^\s"'<>]+|\/?app_images\/[^\s"'<>]+)/i);
+    if (embeddedPathMatch && embeddedPathMatch[0]) {
+      return normalizeUploadPath(embeddedPathMatch[0]);
+    }
+    return "";
+  };
+
+  for (const endpoint of endpoints) {
+    const startedAt = Date.now();
+    console.log(`[uploadBinaryFile] -> Trying endpoint: ${endpoint} | file=${filename} | size=${(file.size / (1024 * 1024)).toFixed(2)}MB`);
+    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const timeoutId = controller
+      ? setTimeout(() => controller.abort(new Error(`Upload timeout after ${UPLOAD_REQUEST_TIMEOUT_MS}ms`)), UPLOAD_REQUEST_TIMEOUT_MS)
+      : null;
+
+    try {
+      const formData = new FormData();
+      formData.append("app_id", String(ctx.app_id || ""));
+      formData.append("name", String(filename || file.name || `upload-${Date.now()}`));
+      formData.append("file", file, String(filename || file.name || `upload-${Date.now()}`));
+
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "Accept": "text/plain, application/json, */*"
+        },
+        body: formData,
+        signal: controller ? controller.signal : undefined
+      });
+      if (timeoutId) clearTimeout(timeoutId);
+
+      const responseText = await res.text();
+      const contentType = res.headers.get("content-type") || "";
+
+      if (!res.ok) {
+        markUploadEndpointFailure(endpoint, res.status);
+        lastError = new Error(`Upload file failed: ${res.status} @ ${endpoint}`);
+        console.warn(`[uploadBinaryFile] <- HTTP ${res.status} from ${endpoint} (${Date.now() - startedAt}ms)`);
+        continue;
+      }
+
+      const parsedPath = parseUploadResponsePath(responseText, contentType);
+      if (!parsedPath) {
+        markUploadEndpointFailure(endpoint, res.status);
+        const preview = String(responseText || "").replace(/\s+/g, " ").slice(0, 140);
+        lastError = new Error(`Upload file invalid response @ ${endpoint} (status ${res.status}, ct=${contentType || "n/a"}, body=${preview || "(empty)"})`);
+        console.warn(`[uploadBinaryFile] <- Invalid body from ${endpoint} (${Date.now() - startedAt}ms) | status=${res.status} | ct=${contentType || "n/a"} | body=${preview || "(empty)"}`);
+        continue;
+      }
+
+      clearUploadEndpointHealth(endpoint);
+      console.log(`[uploadBinaryFile] <- Success from ${endpoint} in ${Date.now() - startedAt}ms: ${parsedPath}`);
+      return parsedPath;
+    } catch (error) {
+      if (timeoutId) clearTimeout(timeoutId);
+      markUploadEndpointFailure(endpoint, 0);
+      const isAbort = error && (error.name === "AbortError" || String(error.message || "").toLowerCase().includes("timeout"));
+      if (isAbort) {
+        console.error(`[uploadBinaryFile] <- Timeout at ${endpoint} after ${UPLOAD_REQUEST_TIMEOUT_MS}ms`);
+      } else {
+        console.error(`[uploadBinaryFile] <- Network error at ${endpoint}: ${error?.message || error}`);
+      }
+      lastError = error;
+    }
+  }
+
+  throw lastError || new Error("Upload file failed: không tìm thấy endpoint upload khả dụng");
 }
 
 async function uploadImages(ctx, images) {
@@ -3392,6 +3690,19 @@ function buildDetail(ctx, seo, imgs, vids, opts = {}) {
     videosJsonString = "[]";
   }
 
+  // Unified mixed-media field for systems using a single `album` type.
+  let albumJsonString = "[]";
+  try {
+    const albumMedia = Array.from(new Set([
+      ...validImages.filter((img) => typeof img === "string"),
+      ...validVideos.filter((vid) => typeof vid === "string"),
+    ]));
+    albumJsonString = JSON.stringify(albumMedia);
+  } catch (stringifyError) {
+    console.error(`   ❌ [buildDetail] album stringify FAILED:`, stringifyError);
+    albumJsonString = "[]";
+  }
+
   console.log(`🖼️ [buildDetail] === IMAGE DEBUG END ===\n`);
   
   // ✅ IMPORTANT FOR LMKT: service_type field = project code (dự án slug)
@@ -3436,6 +3747,7 @@ function buildDetail(ctx, seo, imgs, vids, opts = {}) {
     thumbnail: featuredImage,
     images: imagesJsonString, // ✅ SỬ DỤNG STRING ĐÃ VALIDATE
     videos: videosJsonString,
+    album: albumJsonString,
     activeHome: opts.activeHome !== false,
     featured: opts.featured || false,
     priority: opts.priority || 10,
@@ -4145,31 +4457,53 @@ async function processContent(item, opts = {}) {
           );
 
           if (fbPostData) {
-            // ✅ Use AI-generated content as-is (AI should include hashtags if needed)
-            const finalContent = [
-              fbPostData.facebook_post || '',
-              '',
-              fbPostData.cta || 'Xem chi tiết',
-              articleUrl
-            ].filter(line => line !== '').join('\n');
+            // ✅ FIX: Dùng toàn bộ AI content thay vì cắt xén
+            // AI đã sinh đầy đủ content, hashtags, CTA - không cần cắt
+            // Chỉ thêm link cuối cùng (nếu chưa có)
+            let fullContent = '';
             
-            pageContent = finalContent;
-            console.log(`✅ [Facebook AI] Fanpage="${fanpageName}" generated (${pageContent.length} chars)`);
+            // Ưu tiên content đã được tổng hợp (nếu có)
+            if (fbPostData.full_post) {
+              fullContent = fbPostData.full_post;
+            } else if (fbPostData.facebook_post) {
+              // Nếu không có full_post, ghép các phần
+              fullContent = fbPostData.facebook_post;
+              if (fbPostData.hashtags && !fullContent.includes(fbPostData.hashtags)) {
+                fullContent += '\n\n' + fbPostData.hashtags;
+              }
+              if (fbPostData.cta && !fullContent.includes(fbPostData.cta)) {
+                fullContent += '\n\n' + fbPostData.cta;
+              }
+            } else {
+              // Fallback: nếu AI không trả về format mong đợi
+              fullContent = fbPostData.toString();
+            }
+            
+            // Thêm link web cuối cùng nếu chưa có
+            if (!fullContent.includes(articleUrl)) {
+              fullContent += '\n\n👉 Link bài viết: ' + articleUrl;
+            }
+            
+            pageContent = fullContent;
+            console.log(`✅ [Facebook AI] Fanpage="${fanpageName}" generated (${pageContent.length} chars, toàn bộ content AI)`);
           }
         } catch (e) {
           console.warn(`⚠️ [Facebook AI] Fanpage="${fanpageName}" failed: ${e.message}`);
         }
 
         if (!pageContent) {
-          // ✅ FALLBACK ONLY: When AI fails, use simple format without additional hashtags
+          // ✅ FALLBACK ONLY: When AI fails, use full content without cutting
+          // Dùng description/excerpt đầy đủ, không cắt substring
           const fallbackContent = [
-            detail.description || detail.excerpt || detail.content?.substring(0, 300) || '',
+            detail.description || detail.excerpt || '',
+            '',
+            detail.title || '',
             '',
             `👉 Xem chi tiết: ${articleUrl}`
           ].filter(line => line !== '').join('\n');
           
           pageContent = fallbackContent;
-          console.log(`⚠️ [Facebook Fallback] Using simple format (${pageContent.length} chars)`);
+          console.log(`⚠️ [Facebook Fallback] Using full description (${pageContent.length} chars, không cắt content)`);
         }
 
         return pageContent;
@@ -4621,7 +4955,7 @@ function refreshGlobalSettingsOptionsFromDefinitions() {
  * Tạo Global Settings Panel - Hiển thị 1 lần duy nhất ở đầu trang
  * Chứa Domain, Industry, Project selectors dùng chung cho tất cả UI
  */
-async function ensureGlobalSettingsPanel() {
+function ensureGlobalSettingsPanel() {
   const existing = document.getElementById("global-settings-panel");
   if (existing) return existing;
 
@@ -4706,6 +5040,9 @@ async function ensureGlobalSettingsPanel() {
   const container = ensureUnifiedUIContainer();
   if (container) {
     container.insertBefore(wrapper, container.firstChild);
+    console.log('✅ [ensureGlobalSettingsPanel] Panel mounted to DOM');
+  } else {
+    console.warn('⚠️ [ensureGlobalSettingsPanel] Container not ready - MutationObserver will recreate');
   }
 
   return wrapper;
@@ -8255,7 +8592,7 @@ async function postToSelectedFanpages(messages, postUrl, selectedPages = null, o
       const fbPostData = await generateFacebookPostContent(
         {
           title: firstMsg?.content?.substring(0, 80) || 'Nội dung mới từ Zalo',
-          description: `${messageContent.substring(0, 300)}\n[PAGE:${pageName}|${index + 1}]`,
+          description: `${messageContent}\n[PAGE:${pageName}|${index + 1}]`,
           content: messageContent,
           keywords: 'zalo, fanpage, auto-post',
           industry: fallbackIndustry,
@@ -8266,8 +8603,19 @@ async function postToSelectedFanpages(messages, postUrl, selectedPages = null, o
       );
 
       if (fbPostData?.facebook_post) {
+        // ✅ FIX: Dùng toàn bộ AI response, không cắt xén
+        let fullPostContent = fbPostData.facebook_post;
+        
+        // Thêm hashtags nếu có
+        if (fbPostData.hashtags && !fullPostContent.includes(fbPostData.hashtags)) {
+          fullPostContent += '\n\n' + fbPostData.hashtags;
+        }
+        
+        // Thêm CTA cuối cùng với link
         const cta = fbPostData.cta || 'Xem chi tiết';
-        return `${fbPostData.facebook_post}\n\n👉 ${cta}: ${postUrl}`;
+        fullPostContent += `\n\n👉 ${cta}: ${postUrl}`;
+        
+        return fullPostContent;
       }
 
       return defaultFacebookContent;
@@ -10376,8 +10724,17 @@ function getCategoriesForDomain(domainKey) {
   }
 }
 
-function normalizeGroupSlug(slug, groupSlug, isGroupSlug) {
+function normalizeGroupSlug(slug, groupSlug, isGroupSlug, isService = true) {
+  // ✅ FIX: Nếu is_service:false, PHẢI để group_slug trống
+  // (không phải return default "du-an" hay "dich-vu")
   const normalizedSlug = String(slug || '').trim();
+  
+  // Nếu uncheck "Là dịch vụ/Dự án" (is_service: false), group_slug phải trống
+  if (!isService) {
+    return '';
+  }
+  
+  // Nếu slug là dich-vu hoặc du-an, nó là group category, group_slug phải trống
   if (normalizedSlug === 'dich-vu' || normalizedSlug === 'du-an') return '';
   if (isGroupSlug) return normalizedSlug || '';
   return groupSlug || '';
@@ -11118,7 +11475,8 @@ async function upsertServiceCategoryContent(ctx, categorySlug, contentData) {
     group_slug: normalizeGroupSlug(
       baseCategory.slug || categorySlug,
       pick(contentData.group_slug, existing.group_slug, fallbackRow.group_slug, baseCategory.group_slug, domainKey === 'lmkt' ? 'du-an' : 'dich-vu'),
-      groupFlags.is_group_slug
+      groupFlags.is_group_slug,
+      groupFlags.is_service
     ),
     is_service: typeof groupFlags.is_service === 'boolean'
       ? groupFlags.is_service
@@ -12053,12 +12411,22 @@ async function ensureServiceContentUI() {
   const handleVideosUpload = async (files) => {
     for (const file of files) {
       try {
-        const base64 = await fileToBase64(file);
-        uploadedVideosBase64.push(base64);
-        
-        const preview = createPreviewItem(base64, 'video', () => {
-          const idx = uploadedVideosBase64.indexOf(base64);
+        const previewUrl = URL.createObjectURL(file);
+        const videoItem = {
+          file,
+          previewUrl,
+          name: file.name,
+          size: file.size,
+          type: file.type
+        };
+        uploadedVideosBase64.push(videoItem);
+
+        const preview = createPreviewItem(previewUrl, 'video', () => {
+          const idx = uploadedVideosBase64.indexOf(videoItem);
           if (idx > -1) uploadedVideosBase64.splice(idx, 1);
+          try {
+            URL.revokeObjectURL(previewUrl);
+          } catch (_) {}
         });
         
         videosPreview.appendChild(preview);
@@ -12162,6 +12530,13 @@ async function ensureServiceContentUI() {
       detailTitleInput.value = '';
       detailPromptTextarea.value = '';
       uploadedImagesBase64.length = 0;
+      for (const v of uploadedVideosBase64) {
+        if (v && v.previewUrl && typeof v.previewUrl === 'string' && v.previewUrl.startsWith('blob:')) {
+          try {
+            URL.revokeObjectURL(v.previewUrl);
+          } catch (_) {}
+        }
+      }
       uploadedVideosBase64.length = 0;
       imagesPreview.innerHTML = '';
       videosPreview.innerHTML = '';
@@ -12406,8 +12781,24 @@ async function createServiceDetailPost(opts = {}) {
         
         try {
           // Nếu đã là URL, giữ nguyên
-          if (vid.startsWith('http://') || vid.startsWith('https://') || vid.startsWith('/')) {
+          if (typeof vid === 'string' && (vid.startsWith('http://') || vid.startsWith('https://') || vid.startsWith('/'))) {
             uploadedVideos.push(vid);
+          } else if ((vid instanceof File) || (vid && vid.file instanceof File)) {
+            const fileObj = vid instanceof File ? vid : vid.file;
+            const extFromName = (String(fileObj.name || '').split('.').pop() || 'mp4').toLowerCase();
+            const ext = /^[a-z0-9]+$/i.test(extFromName) ? extFromName : 'mp4';
+            const filename = `detail-video-${Date.now()}-${i}.${ext}`;
+            try {
+              const path = await uploadBinaryFile(fileObj, filename, context);
+              uploadedVideos.push(path);
+              console.log(`✅ Video file ${i + 1}/${videos.length} uploaded: ${path}`);
+            } catch (fileUploadErr) {
+              console.warn(`⚠️ Multipart upload failed for video ${i + 1}, fallback to base64: ${fileUploadErr?.message || fileUploadErr}`);
+              const base64Vid = await fileToBase64(fileObj);
+              const path = await uploadBase64Image(base64Vid, filename, context);
+              uploadedVideos.push(path);
+              console.log(`✅ Video fallback(base64) ${i + 1}/${videos.length} uploaded: ${path}`);
+            }
           } else {
             // Upload base64
             const filename = `detail-video-${Date.now()}-${i}.mp4`;
@@ -12550,6 +12941,19 @@ function parseAIResponse(rawResponse, opts = {}) {
     return encodeContent ? encodeHtml(raw, { encrypt: true, urlEncode: true }) : raw;
   };
 
+  // Alias mapping: ưu tiên format mới (title/keywords/excerpt), fallback về format cũ (attributes_* / name)
+  const titleVi = result.title || result.attributes_title || result.name || '';
+  const titleEn = result.title_en || result.attributes_title_en || result.name_en || '';
+  const titleZh = result.title_zh || result.attributes_title_zh || result.name_zh || '';
+
+  const keywordsVi = result.keywords || result.attributes_keywords || '';
+  const keywordsEn = result.keywords_en || result.attributes_keywords_en || '';
+  const keywordsZh = result.keywords_zh || result.attributes_keywords_zh || '';
+
+  const excerptVi = result.excerpt || result.summary || result.description || '';
+  const excerptEn = result.excerpt_en || result.summary_en || result.description_en || '';
+  const excerptZh = result.excerpt_zh || result.summary_zh || result.description_zh || '';
+
   // NOTE: Không kiểm tra thủ công fields thiếu; chỉ dựa vào prompt
   // Trả về đầy đủ fields (có fallback cho fields thiếu)
   return {
@@ -12574,6 +12978,20 @@ function parseAIResponse(rawResponse, opts = {}) {
     description: result.description || '',
     description_en: result.description_en || '',
     description_zh: result.description_zh || '',
+
+    // DETAIL CORE FIELDS (FORMAT MỚI)
+    title: titleVi,
+    title_en: titleEn,
+    title_zh: titleZh,
+    keywords: keywordsVi,
+    keywords_en: keywordsEn,
+    keywords_zh: keywordsZh,
+    excerpt: excerptVi,
+    excerpt_en: excerptEn,
+    excerpt_zh: excerptZh,
+    author: result.author || '',
+    readTime: result.readTime || result.read_time || '',
+    tags: Array.isArray(result.tags) ? result.tags : [],
 
     // MEDIA / STYLE
     image: result.image || '',
@@ -12823,7 +13241,8 @@ async function syncCategoriesToDatabase(domainKey) {
           group_slug: normalizeGroupSlug(
             cat.slug,
             cat.group_slug || (domainKey === 'lmkt' ? 'du-an' : 'dich-vu'),
-            groupFlags.is_group_slug
+            groupFlags.is_group_slug,
+            groupFlags.is_service
           ),
           is_service: typeof groupFlags.is_service === 'boolean'
             ? groupFlags.is_service
@@ -13111,6 +13530,7 @@ function updateDescriptionPreview() {
 }
 
 // Init UI
+ensureGlobalSettingsPanel(); // ✅ Call directly, MutationObserver will fix if needed
 ensureUI();
 ensureServiceContentUI();
 

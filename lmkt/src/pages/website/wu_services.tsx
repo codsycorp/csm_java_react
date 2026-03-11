@@ -209,6 +209,59 @@ const normalizeImageUrl = (url?: string): string | undefined => {
   return url;
 };
 
+const isSvgDataPlaceholder = (url?: string): boolean => {
+  if (!url || typeof url !== 'string') return false;
+  return url.trim().toLowerCase().startsWith('data:image/svg+xml');
+};
+
+const isLikelyVideoUrl = (url?: string): boolean => {
+  if (!url || typeof url !== 'string') return false;
+  const clean = url.split('?')[0].split('#')[0].toLowerCase();
+  return /\.(mp4|webm|ogg|mov|m4v|m3u8|mpd)$/.test(clean);
+};
+
+const isLikelyImageUrl = (url?: string): boolean => {
+  if (!url || typeof url !== 'string') return false;
+  if (isSvgDataPlaceholder(url) || isLikelyVideoUrl(url)) return false;
+  const clean = url.split('?')[0].split('#')[0].toLowerCase();
+  // If extension is present, only allow known image extensions.
+  if (/\.[a-z0-9]+$/.test(clean)) {
+    return /\.(jpg|jpeg|png|gif|webp|bmp|svg|avif)$/.test(clean);
+  }
+  // Extension-less CDN/API URLs are treated as image candidates.
+  return true;
+};
+
+const parseMediaUrls = (value: any): string[] => {
+  const toUrl = (u: unknown): string => {
+    if (typeof u !== 'string') return '';
+    return (normalizeImageUrl(u)?.trim() || '').trim();
+  };
+
+  const walk = (input: any, depth = 0): string[] => {
+    if (depth > 3 || input == null) return [];
+    if (Array.isArray(input)) return input.flatMap((item) => walk(item, depth + 1));
+    if (typeof input === 'object') {
+      return [input.url, input.src, input.path, input.name]
+        .map((v) => toUrl(v))
+        .filter((v) => v.length > 0);
+    }
+    if (typeof input === 'string') {
+      const raw = input.trim();
+      if (!raw) return [];
+      try {
+        return walk(JSON.parse(raw), depth + 1);
+      } catch {
+        const direct = toUrl(raw);
+        return direct ? [direct] : [];
+      }
+    }
+    return [];
+  };
+
+  return Array.from(new Set(walk(value).filter(Boolean)));
+};
+
 const svgPlaceholder = (label: string, w = 800, h = 520) => {
   const svg = `
     <svg xmlns='http://www.w3.org/2000/svg' width='${w}' height='${h}' viewBox='0 0 ${w} ${h}'>
@@ -229,22 +282,31 @@ const svgPlaceholder = (label: string, w = 800, h = 520) => {
 
 const getPrimaryImage = (post: ServicePost, categoryKey?: string) => {
   const placeholder = svgPlaceholder(post.title || categoryKey || 'CSM');
-  
-  // Priority 1: Try images first (better for SEO/performance)
-  const raw = post.thumbnail || (Array.isArray(post.images) ? post.images[0] : '');
-  const normalized = normalizeImageUrl(raw);
-  
-  if (normalized) {
-    // Image found - add ?w=480 for thumbnail optimization
-    return { src: normalized + '?w=480', placeholder, type: 'image' as const };
+
+  // Priority 1 (old behavior): always prefer image fields first.
+  const imageCandidates = [
+    ...parseMediaUrls(post.thumbnail),
+    ...parseMediaUrls((post as any).cover),
+    ...parseMediaUrls(post.images),
+  ];
+  const realImage = imageCandidates.find((u) => isLikelyImageUrl(u));
+
+  if (realImage) {
+    return { src: realImage, placeholder, type: 'image' as const };
   }
-  
-  // Priority 2: If no images, check for single video
-  if (Array.isArray(post.videos) && post.videos.length === 1) {
-    const videoUrl = normalizeImageUrl(post.videos[0]);
-    if (videoUrl) {
-      return { src: videoUrl, placeholder, type: 'video' as const };
-    }
+
+  // Priority 2: only when no image, use video as card cover.
+  const videoCandidates = Array.from(new Set([
+    ...parseMediaUrls(post.videos),
+    ...parseMediaUrls((post as any).album),
+    ...parseMediaUrls((post as any).video),
+    ...parseMediaUrls((post as any).video_url),
+    ...imageCandidates.filter((u) => isLikelyVideoUrl(u)),
+  ]))
+    .filter((u) => !!u && !isSvgDataPlaceholder(u));
+  const videoUrl = videoCandidates.find(Boolean);
+  if (videoUrl) {
+    return { src: videoUrl, placeholder, type: 'video' as const };
   }
   
   // Fallback: placeholder
@@ -259,10 +321,10 @@ const renderCardMedia = (post: ServicePost, categoryKey: string, altText: string
     return (
       <video
         src={src}
-        poster={placeholder}
         muted
         loop
         playsInline
+        preload="metadata"
         autoPlay
         onError={(e) => {
           // Fallback to placeholder image on video error

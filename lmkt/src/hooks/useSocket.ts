@@ -17,9 +17,11 @@ type LegacySocket = {
 import { useAppStore, useUserStore } from "#src/store";
 
 interface SocketUpdateEvent {
+	appId: string;
 	table: string;
 	action: "create" | "update" | "delete";
 	primaryKeys: Record<string, any>;
+	dataRow?: Record<string, any>;
 }
 
 interface UseSocketOptions {
@@ -94,8 +96,88 @@ export function useSocket(options: UseSocketOptions = {}) {
 
 		       // Listen for data update events
 		       socket.on("csm_msg_update", (data: SocketUpdateEvent) => {
-				   // [Socket] Received update
-			       onUpdateRef.current?.(data);
+			   // [Socket] Received update
+
+			   const isSystemTable = data.table?.startsWith('sys_') || data.table?.startsWith('csm_') || data.table?.startsWith('wu_');
+			   const belongsToCurrentApp = !data.appId || data.appId === appId;
+			   const shouldProcess = isSystemTable || belongsToCurrentApp;
+
+			   if (!shouldProcess || !data.table) {
+				   onUpdateRef.current?.(data);
+				   return;
+			   }
+
+			   const currentTableData = useAppStore.getState().database[data.table];
+			   if (currentTableData) {
+				   const pkFields = currentTableData.fieldsPK || ['id'];
+				   let updatedRows = [...(currentTableData.rows || [])];
+
+				   const getRowId = (row: Record<string, any> | undefined | null) => {
+					   if (!row) return null;
+					   const id = row.id;
+					   return id !== undefined && id !== null ? String(id) : null;
+				   };
+
+				   const getPkValues = (row: Record<string, any> | undefined | null) => {
+					   if (!row) return null;
+					   const values: Record<string, any> = {};
+					   pkFields.forEach(pk => {
+						   if (row[pk] !== undefined) {
+							   values[pk] = row[pk];
+						   }
+					   });
+					   return Object.keys(values).length ? values : null;
+				   };
+
+				   const primaryKeyMatch = (row: Record<string, any>, pkValues: Record<string, any> | null) => {
+					   if (!pkValues) return false;
+					   return pkFields.every(pk => row[pk] === pkValues[pk]);
+				   };
+
+				   const eventRowId = getRowId(data.dataRow) ?? (data.primaryKeys?.id != null ? String(data.primaryKeys.id) : null);
+				   const eventPkValues = data.primaryKeys || getPkValues(data.dataRow);
+				   const findIndexById = () => (eventRowId ? updatedRows.findIndex(r => getRowId(r) === eventRowId) : -1);
+
+				   if (data.action === 'create') {
+					   if (data.dataRow) {
+						   const idxById = findIndexById();
+						   if (idxById === -1) {
+							   updatedRows.push(data.dataRow);
+						   } else {
+							   updatedRows[idxById] = { ...updatedRows[idxById], ...data.dataRow };
+						   }
+					   }
+				   } else if (data.action === 'update') {
+					   if (data.dataRow) {
+						   const idxById = findIndexById();
+						   if (idxById !== -1) {
+							   updatedRows[idxById] = { ...updatedRows[idxById], ...data.dataRow };
+						   } else if (eventPkValues) {
+							   const idxByPk = updatedRows.findIndex(row => primaryKeyMatch(row, eventPkValues));
+							   if (idxByPk !== -1) {
+								   updatedRows[idxByPk] = { ...updatedRows[idxByPk], ...data.dataRow };
+							   } else {
+								   updatedRows.push(data.dataRow);
+							   }
+						   } else {
+							   updatedRows.push(data.dataRow);
+						   }
+					   }
+				   } else if (data.action === 'delete') {
+					   if (eventRowId) {
+						   updatedRows = updatedRows.filter(row => getRowId(row) !== eventRowId);
+					   } else if (eventPkValues) {
+						   updatedRows = updatedRows.filter(row => !primaryKeyMatch(row, eventPkValues));
+					   }
+				   }
+
+				   useAppStore.getState().setTableData(data.table, {
+					   ...currentTableData,
+					   rows: updatedRows
+				   });
+			   }
+
+			   onUpdateRef.current?.(data);
 		       });
 
 		       // Cleanup only when disabled or URL changes/unmount

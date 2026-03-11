@@ -411,6 +411,7 @@ public class TableHandler {
     }
     
     private Map<String, Object> handleUpdateTableOperation(String appId, String tblname, Map<String, Object> msg, SearchFilter filters, List<String> pkFields) throws Exception {
+        List<String> effectivePkFields = (pkFields != null) ? pkFields : Collections.emptyList();
         String command = msg.get("command").toString().toLowerCase(Locale.ROOT);
         Map<String, Object> objUpdate = (Map<String, Object>) msg.get("obj_update");
         if (objUpdate == null) {
@@ -418,12 +419,23 @@ public class TableHandler {
         }
         Map<String, Object> filterResult = recordManager.filter(appId, tblname, filters);
         List<Map<String, Object>> records = (List<Map<String, Object>>) filterResult.getOrDefault("rows", new ArrayList<>());
+
+        // Ưu tiên update theo id: nếu e_where quá chặt làm rỗng, fallback query theo id để ghi đè đúng bản ghi.
+        if ("update".equals(command) && records.isEmpty() && objUpdate.get("id") != null) {
+            SearchFilter idFilter = new SearchFilter();
+            idFilter.setField("id");
+            idFilter.setType("eq");
+            idFilter.setValue(objUpdate.get("id"));
+            Map<String, Object> idLookupResult = recordManager.filter(appId, tblname, idFilter);
+            records = (List<Map<String, Object>>) idLookupResult.getOrDefault("rows", new ArrayList<>());
+            logger.info("Fallback lookup by id for update {}.{} id={} -> {} row(s)", appId, tblname, objUpdate.get("id"), records.size());
+        }
+
         Map<String, Object> primaryKeysAndValues = new HashMap<>();
-        Map<String, Object> old_primaryKeysAndValues = new HashMap<>();
         logger.info("Kiem tra su kien command {} du lieu {}",command,filterResult);
         // Populate primaryKeysAndValues
-        if (pkFields != null) {
-            for (String pkField : pkFields) {
+        if (!effectivePkFields.isEmpty()) {
+            for (String pkField : effectivePkFields) {
                 if (objUpdate.containsKey(pkField)) {
                     primaryKeysAndValues.put(pkField, objUpdate.get(pkField));
                 }
@@ -433,15 +445,15 @@ public class TableHandler {
         switch (command) {
             case "create":
                 ensureRowId(objUpdate);
-                List<String> missingCreatePk = missingPrimaryKeyFields(objUpdate, pkFields);
+                List<String> missingCreatePk = missingPrimaryKeyFields(objUpdate, effectivePkFields);
                 if (!missingCreatePk.isEmpty()) {
                     return errorResponse("Thiếu khóa chính: " + String.join(", ", missingCreatePk));
                 }
-                if (recordManager.existsByPrimaryKey(appId, tblname, objUpdate, pkFields)) {
+                if (recordManager.existsByPrimaryKey(appId, tblname, objUpdate, effectivePkFields)) {
                     return errorResponse("Trùng khóa chính khi tạo dữ liệu");
                 }
                 if (records.isEmpty()) {
-                    command = recordManager.createRecord(appId, tblname, objUpdate, pkFields);
+                    command = recordManager.createRecord(appId, tblname, objUpdate, effectivePkFields);
                     enqueueServiceInvalidation(appId, tblname, objUpdate);
                     msg.put("command", command);
                     // 🔥 CRITICAL: Flush pending batch updates to ensure Lucene searcher is refreshed before socket notification
@@ -453,7 +465,7 @@ public class TableHandler {
                         logger.error("Error committing Lucene index for create: {}", e.getMessage());
                     }
                     // Gửi full data row để client có thể insert trực tiếp
-                    socketIOConfig.sendUpdateNotification(appId, tblname, "create", extractPrimaryKeyValues(objUpdate, pkFields), objUpdate);
+                    socketIOConfig.sendUpdateNotification(appId, tblname, "create", extractPrimaryKeyValues(objUpdate, effectivePkFields), objUpdate);
                     break;
                 } else {
                     // Nếu bản ghi đã tồn tại thì chuyển sang update
@@ -462,7 +474,7 @@ public class TableHandler {
                 }
             case "update":
                 Map<String, Object> newPkValues = new HashMap<>();
-                for (String pkField : pkFields) {
+                for (String pkField : effectivePkFields) {
                     if (objUpdate.containsKey(pkField)) {
                         newPkValues.put(pkField, objUpdate.get(pkField));
                     }
@@ -475,99 +487,82 @@ public class TableHandler {
                             return errorResponse("Không được thay đổi id của bản ghi");
                         }
 
-                        // Prevent duplicate primary key when updating a different row
-                        if (pkFields != null && !pkFields.isEmpty()) {
-                            List<String> missingPk = missingPrimaryKeyFields(objUpdate, pkFields);
-                            if (missingPk.isEmpty()) {
-                                Object currentId = row.get("id");
-                                if (hasDuplicatePrimaryKey(appId, tblname, objUpdate, pkFields, currentId)) {
-                                    return errorResponse("Trùng khóa chính khi cập nhật dữ liệu");
+                        // Luôn thay thế bản ghi theo chiến lược delete + create để đồng bộ khóa/Lucene/socket nhất quán.
+                        Map<String, Object> newRow = new HashMap<>(row);
+                        newRow.putAll(objUpdate);
+                        ensureRowId(newRow);
+
+                        if (!effectivePkFields.isEmpty()) {
+                            List<String> missingPk = missingPrimaryKeyFields(newRow, effectivePkFields);
+                            if (!missingPk.isEmpty()) {
+                                return errorResponse("Thiếu khóa chính: " + String.join(", ", missingPk));
+                            }
+                        }
+
+                        String oldKey = recordManager.buildPrimaryKeyKey(appId, tblname, row, effectivePkFields);
+                        String newKey = recordManager.buildPrimaryKeyKey(appId, tblname, newRow, effectivePkFields);
+                        if (newKey != null && !newKey.equals(oldKey) && recordManager.existsByPrimaryKey(appId, tblname, newRow, effectivePkFields)) {
+                            // FORCE-REPLACE MODE: xóa các bản ghi đang giữ PK mới (khác id hiện tại),
+                            // sau đó tạo lại newRow để đảm bảo update theo id luôn thành công.
+                            SearchFilter conflictFilter = buildPrimaryKeyFilter(newRow, effectivePkFields);
+                            if (conflictFilter != null) {
+                                Map<String, Object> conflictRes = recordManager.filter(appId, tblname, conflictFilter);
+                                List<Map<String, Object>> conflictRows = (List<Map<String, Object>>) conflictRes.getOrDefault("rows", new ArrayList<>());
+                                for (Map<String, Object> conflictRow : conflictRows) {
+                                    if (Objects.equals(conflictRow.get("id"), row.get("id"))) {
+                                        continue;
+                                    }
+                                    Map<String, Object> conflictKeys = extractPrimaryKeyValues(conflictRow, effectivePkFields);
+                                    recordManager.deleteRecord(appId, tblname, conflictRow);
+                                    enqueueServiceInvalidation(appId, tblname, conflictRow);
+                                    socketIOConfig.sendUpdateNotification(appId, tblname, "delete", conflictKeys, conflictRow);
+                                    logger.warn("Force-replace PK collision: deleted conflicting row id={} table={}", conflictRow.get("id"), tblname);
                                 }
                             }
                         }
 
-                        boolean pkChanged = false;
-                        for (String pkField : pkFields) {
-                            if (!Objects.equals(row.get(pkField), newPkValues.get(pkField))) {
-                                pkChanged = true;
-                                break;
-                            }
-                        }
-    
-                        if (pkChanged) {
-                            Map<String, Object> newRow = new HashMap<>(row); // tránh làm thay đổi bản gốc
-                            newRow.putAll(objUpdate);
-                            ensureRowId(newRow);
+                        Map<String, Object> oldKeys = extractPrimaryKeyValues(row, effectivePkFields);
+                        Map<String, Object> newKeys = extractPrimaryKeyValues(newRow, effectivePkFields);
 
-                            String oldKey = recordManager.buildPrimaryKeyKey(appId, tblname, row, pkFields);
-                            String newKey = recordManager.buildPrimaryKeyKey(appId, tblname, newRow, pkFields);
-                            if (newKey != null && !newKey.equals(oldKey) && recordManager.existsByPrimaryKey(appId, tblname, newRow, pkFields)) {
-                                return errorResponse("Trùng khóa chính khi cập nhật dữ liệu");
-                            }
+                        recordManager.deleteRecord(appId, tblname, row);
+                        enqueueServiceInvalidation(appId, tblname, row);
+                        socketIOConfig.sendUpdateNotification(appId, tblname, "delete", oldKeys, row);
 
-                            primaryKeysAndValues = new HashMap<>();
-                            recordManager.deleteRecord(appId, tblname, row);
-                            enqueueServiceInvalidation(appId, tblname, row);
-                            // Tạo mới bản ghi
-                            if (pkFields != null) {
-                                for (String pkField : pkFields) {
-                                    if (row.containsKey(pkField))
-                                        old_primaryKeysAndValues.put(pkField, row.get(pkField));
-                                    if (newRow.containsKey(pkField))
-                                        primaryKeysAndValues.put(pkField, newRow.get(pkField));
-                                }
-                            }
-                            // Gửi delete cho row cũ
-                            socketIOConfig.sendUpdateNotification(appId, tblname, "delete", old_primaryKeysAndValues, row);
-                            command=recordManager.createRecord(appId, tblname, newRow, pkFields);
-                            enqueueServiceInvalidation(appId, tblname, newRow);
-                            logger.info("Xem dữ liệu câu lệnh {} khoá mới là {} giá trị cập nhật là {}", command, primaryKeysAndValues,newRow);
-                            // 🔥 CRITICAL: Flush pending batch updates to ensure Lucene searcher is refreshed before socket notification
-                            recordManager.flushPendingBatchUpdates(appId, tblname);
-                            // 🔥 CRITICAL: Force commit Lucene index before socket notification
-                            try {
-                                recordManager.commitLuceneIndex(appId, tblname);
-                            } catch (IOException e) {
-                                logger.error("Error committing Lucene index for PK change: {}", e.getMessage());
-                            }
-                            // Gửi create cho row mới với full data
-                            socketIOConfig.sendUpdateNotification(appId, tblname, command, primaryKeysAndValues, newRow);
-                            msg.put("command", command);
-                        } else {
-                            // Cập nhật dữ liệu trong bản ghi
-                            Map<String, Object> oldRecord = new HashMap<>(row);
-                            row.putAll(objUpdate);
-                            
-                            // Extract khóa chính từ bản ghi hiện tại để client có thể tìm thấy row
-                            Map<String, Object> rowPrimaryKeys = extractPrimaryKeyValues(oldRecord, pkFields);
-                            
-                            // Tạo/cập nhật bản ghi trong RocksDB
-                            // Note: createRecord sẽ tự động cập nhật Lucene index
-                            recordManager.createRecord(appId, tblname, row, pkFields);
-                            enqueueServiceInvalidation(appId, tblname, row);
-                            
-                            // 🔥 CRITICAL: Flush pending batch updates to ensure Lucene searcher is refreshed before socket notification
-                            recordManager.flushPendingBatchUpdates(appId, tblname);
-                            
-                            // 🔥 CRITICAL: Force commit Lucene index before socket notification
-                            try {
-                                recordManager.commitLuceneIndex(appId, tblname);
-                            } catch (IOException e) {
-                                logger.error("Error committing Lucene index for update: {}", e.getMessage());
-                            }
-                            
-                            // Gửi update với full data row sau khi merge và khóa chính đúng
-                            socketIOConfig.sendUpdateNotification(appId, tblname, "update", rowPrimaryKeys, row);
-                            msg.put("command", "update");
+                        command = recordManager.createRecord(appId, tblname, newRow, effectivePkFields);
+                        enqueueServiceInvalidation(appId, tblname, newRow);
+
+                        // 🔥 CRITICAL: Flush + commit Lucene trước khi broadcast bản ghi mới
+                        recordManager.flushPendingBatchUpdates(appId, tblname);
+                        try {
+                            recordManager.commitLuceneIndex(appId, tblname);
+                        } catch (IOException e) {
+                            logger.error("Error committing Lucene index for replace-update: {}", e.getMessage());
                         }
+
+                        // Gửi create cho row mới để client insert/reconcile nhất quán
+                        socketIOConfig.sendUpdateNotification(appId, tblname, "create", newKeys, newRow);
+                        msg.put("command", "update");
+                        msg.put("updated_row", newRow);
+                        msg.put("socket_actions", List.of("delete", "create"));
                     }
-                } else if (!newPkValues.isEmpty() && newPkValues.keySet().containsAll(pkFields)) {
+                } else if (!newPkValues.isEmpty() && newPkValues.keySet().containsAll(effectivePkFields)) {
                     // Trường hợp upsert (không tìm thấy bản ghi nhưng đủ khóa chính)
                     ensureRowId(objUpdate);
-                    if (recordManager.existsByPrimaryKey(appId, tblname, objUpdate, pkFields)) {
-                        return errorResponse("Trùng khóa chính khi cập nhật dữ liệu");
+                    if (recordManager.existsByPrimaryKey(appId, tblname, objUpdate, effectivePkFields)) {
+                        SearchFilter conflictFilter = buildPrimaryKeyFilter(objUpdate, effectivePkFields);
+                        if (conflictFilter != null) {
+                            Map<String, Object> conflictRes = recordManager.filter(appId, tblname, conflictFilter);
+                            List<Map<String, Object>> conflictRows = (List<Map<String, Object>>) conflictRes.getOrDefault("rows", new ArrayList<>());
+                            for (Map<String, Object> conflictRow : conflictRows) {
+                                Map<String, Object> conflictKeys = extractPrimaryKeyValues(conflictRow, effectivePkFields);
+                                recordManager.deleteRecord(appId, tblname, conflictRow);
+                                enqueueServiceInvalidation(appId, tblname, conflictRow);
+                                socketIOConfig.sendUpdateNotification(appId, tblname, "delete", conflictKeys, conflictRow);
+                                logger.warn("Force-replace upsert collision: deleted row id={} table={}", conflictRow.get("id"), tblname);
+                            }
+                        }
                     }
-                    command = recordManager.createRecord(appId, tblname, objUpdate, pkFields);
+                    command = recordManager.createRecord(appId, tblname, objUpdate, effectivePkFields);
                     enqueueServiceInvalidation(appId, tblname, objUpdate);
                     msg.put("command", command);
                     // 🔥 CRITICAL: Flush pending batch updates to ensure Lucene searcher is refreshed before socket notification
@@ -579,13 +574,15 @@ public class TableHandler {
                         logger.error("Error committing Lucene index for upsert: {}", e.getMessage());
                     }
                     // Gửi create với full data
-                    socketIOConfig.sendUpdateNotification(appId, tblname, "create", extractPrimaryKeyValues(objUpdate, pkFields), objUpdate);
+                    socketIOConfig.sendUpdateNotification(appId, tblname, "create", extractPrimaryKeyValues(objUpdate, effectivePkFields), objUpdate);
+                    msg.put("updated_row", objUpdate);
+                    msg.put("socket_actions", List.of("create"));
                 }
                 break;
     
             case "delete":
                 for (Map<String, Object> row : records) {
-                    Map<String, Object> rowPrimaryKeys = extractPrimaryKeyValues(row, pkFields);
+                    Map<String, Object> rowPrimaryKeys = extractPrimaryKeyValues(row, effectivePkFields);
                     recordManager.deleteRecord(appId, tblname, row);
                     enqueueServiceInvalidation(appId, tblname, row);
                     // 🔥 CRITICAL: Flush pending batch updates to ensure Lucene searcher is refreshed before socket notification
@@ -739,25 +736,4 @@ public class TableHandler {
         return root;
     }
 
-    private boolean hasDuplicatePrimaryKey(String appId, String tableName, Map<String, Object> record,
-                                           List<String> pkFields, Object currentId) throws Exception {
-        SearchFilter pkFilter = buildPrimaryKeyFilter(record, pkFields);
-        if (pkFilter == null) {
-            return false;
-        }
-        Map<String, Object> filterResult = recordManager.filter(appId, tableName, pkFilter);
-        List<Map<String, Object>> rows = (List<Map<String, Object>>) filterResult.getOrDefault("rows", new ArrayList<>());
-        if (rows.isEmpty()) {
-            return false;
-        }
-        if (currentId == null) {
-            return true;
-        }
-        for (Map<String, Object> row : rows) {
-            if (!Objects.equals(row.get("id"), currentId)) {
-                return true;
-            }
-        }
-        return false;
-    }
 }

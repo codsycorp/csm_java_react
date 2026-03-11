@@ -396,7 +396,21 @@ function parseJsonField<T>(value: any, defaultValue: T): T {
   if (typeof value === 'object') return value as T;
   if (typeof value === 'string') {
     try {
-      return JSON.parse(value) as T;
+      let parsed = JSON.parse(value);
+      // Handle double-stringified JSON arrays
+      if (Array.isArray(parsed)) {
+        parsed = parsed.map((item: any) => {
+          if (typeof item === 'string') {
+            try {
+              return JSON.parse(item);
+            } catch {
+              return item;
+            }
+          }
+          return item;
+        }).filter((item: any) => item && (typeof item === 'string' ? item.trim().length > 0 : true));
+      }
+      return parsed as T;
     } catch {
       return defaultValue;
     }
@@ -404,9 +418,49 @@ function parseJsonField<T>(value: any, defaultValue: T): T {
   return defaultValue;
 }
 
+// Helper: Parse media field from DB/socket (array, JSON string, double-encoded string)
+function parseMediaUrls(value: any): string[] {
+  const toUrl = (u: unknown): string => {
+    if (typeof u !== 'string') return '';
+    return (normalizeImageUrl(u)?.trim() || '').trim();
+  };
+
+  const walk = (input: any, depth = 0): string[] => {
+    if (depth > 3 || input == null) return [];
+    if (Array.isArray(input)) return input.flatMap((item) => walk(item, depth + 1));
+    if (typeof input === 'object') {
+      return [input.url, input.src, input.path, input.name]
+        .map((v) => toUrl(v))
+        .filter((v) => v.length > 0);
+    }
+    if (typeof input === 'string') {
+      const raw = input.trim();
+      if (!raw) return [];
+      try {
+        return walk(JSON.parse(raw), depth + 1);
+      } catch {
+        const direct = toUrl(raw);
+        return direct ? [direct] : [];
+      }
+    }
+    return [];
+  };
+
+  const urls = walk(value)
+    .filter((u) => typeof u === 'string' && u.length > 0)
+    .map((u) => u.trim());
+  return Array.from(new Set(urls));
+}
+
+function isSvgDataPlaceholder(url?: string): boolean {
+  if (!url || typeof url !== 'string') return false;
+  return url.trim().toLowerCase().startsWith('data:image/svg+xml');
+}
+
 // Helper: Map SSR detail to ServicePost
 function mapSsrDetailToPost(sd: any): ServicePost {
-  const images = parseJsonField<string[]>(sd.images, []);
+  const images = parseMediaUrls(sd.images);
+  const videos = parseMediaUrls(sd.videos);
   // Parse thumbnail/cover - they might be arrays or JSON strings
   const getThumbnailString = (value: any): string => {
     if (!value) return '';
@@ -428,8 +482,8 @@ function mapSsrDetailToPost(sd: any): ServicePost {
   Object.keys(sd).forEach(key => {
     // Copy all flat fields from database except the ones we explicitly map below
     const excludeKeys = ['id', 'title', 'slug', 'excerpt', 'content', 'service_type', 'thumbnail', 
-                         'cover', 'publish_date', 'expiry_date', 'tags', 'keywords', 'featured', 
-                         'activeHome', 'images'];
+               'cover', 'publish_date', 'expiry_date', 'tags', 'keywords', 'featured', 
+               'activeHome', 'images', 'videos'];
     if (!excludeKeys.includes(key)) {
       // Decode multilingual content fields (content_en, content_fr, etc.)
       if (key.startsWith('content_')) {
@@ -467,6 +521,7 @@ function mapSsrDetailToPost(sd: any): ServicePost {
     activeHome: Boolean(sd.activeHome),
     ...flatFields,
     images,
+    videos,
   } as ServicePost;
   
   return mapped;
@@ -514,7 +569,9 @@ function useServiceDetailAndRelated(category: string | undefined, id: string | u
               title: String(r.title || ''),
               slug: r.slug || '',
               excerpt: r.excerpt || r.summary || '',
-              thumbnail: r.thumbnail || r.cover || '',
+              thumbnail: r.thumbnail || r.cover || parseMediaUrls(r.images)[0] || '',
+              images: parseMediaUrls(r.images),
+              videos: parseMediaUrls(r.videos),
               serviceType: r.service_type || '',
               publishDate: r.publish_date || r.created_at || r.updated_at || '',
             })) as ServicePost[];
@@ -535,7 +592,9 @@ function useServiceDetailAndRelated(category: string | undefined, id: string | u
               title: String(r.title || ''),
               slug: r.slug || '',
               excerpt: r.excerpt || r.summary || '',
-              thumbnail: r.thumbnail || r.cover || '',
+              thumbnail: r.thumbnail || r.cover || parseMediaUrls(r.images)[0] || '',
+              images: parseMediaUrls(r.images),
+              videos: parseMediaUrls(r.videos),
               serviceType: r.service_type || '',
               publishDate: r.created_at || r.updated_at || '',
             })) as ServicePost[];
@@ -572,25 +631,20 @@ function useServiceDetailAndRelated(category: string | undefined, id: string | u
 
 // Helper: Safely get images array from post
 function getPostImages(post: ServicePost): string[] {
-  const images: string[] = [];
-  if (post.images && Array.isArray(post.images)) {
-    images.push(
-      ...post.images.filter((img: unknown): img is string => typeof img === 'string' && img.length > 0),
-    );
-  }
+  const images: string[] = parseMediaUrls(post.images);
   if (images.length === 0 && post.thumbnail) {
-    images.push(post.thumbnail);
+    images.push(...parseMediaUrls(post.thumbnail));
   }
   return images;
 }
 
 // Helper: Safely get videos array from post
 function getPostVideos(post: ServicePost): string[] {
-  const videos: string[] = [];
-  if (post.videos && Array.isArray(post.videos)) {
-    videos.push(
-      ...post.videos.filter((vid: unknown): vid is string => typeof vid === 'string' && vid.length > 0),
-    );
+  const videos: string[] = parseMediaUrls(post.videos);
+  if (videos.length === 0) {
+    videos.push(...parseMediaUrls((post as any).album));
+    videos.push(...parseMediaUrls((post as any).video));
+    videos.push(...parseMediaUrls((post as any).video_url));
   }
   return videos;
 }
@@ -1702,6 +1756,11 @@ export default function WuServiceDetail() {
                       const relCurrentLang = i18n.language || 'vi';
                       const relTitle = getMultilingualField(rel, 'title', relCurrentLang);
                       const relExcerpt = getMultilingualField(rel, 'excerpt', relCurrentLang);
+                      const relImages = getPostImages(rel);
+                      const relVideos = getPostVideos(rel);
+                      const relThumbCandidate = normalizeImageUrl(rel.thumbnail);
+                      const relThumb = relImages[0] || (!isSvgDataPlaceholder(relThumbCandidate) ? relThumbCandidate : '');
+                      const relVideo = relVideos[0];
                       const relServiceType = rel.serviceType || rel.category || post?.serviceType || 'bat-dong-san';
                       const relHref = `/${relServiceType}/${rel.slug}${langSuffix}`;
                       return (
@@ -1726,20 +1785,52 @@ export default function WuServiceDetail() {
                               aria-label={relTitle} 
                               style={{ display:'block', position: 'relative', paddingBottom: '62%', overflow: 'hidden', borderRadius: '14px 14px 0 0' }}
                             >
-                              <img
-                                src={normalizeImageUrl(rel.thumbnail) || svgPlaceholder(relTitle || 'CSM', 640, 360)}
-                                alt={relTitle}
-                                loading="lazy"
-                                onError={(e) => { (e.currentTarget as HTMLImageElement).src = svgPlaceholder(relTitle || 'CSM', 640, 360); }}
-                                style={{ 
-                                  position: 'absolute', 
-                                  inset: 0, 
-                                  width: '100%', 
-                                  height: '100%', 
-                                  objectFit: 'cover',
-                                  borderRadius: '14px 14px 0 0'
-                                }}
-                              />
+                              {relThumb ? (
+                                <img
+                                  src={relThumb}
+                                  alt={relTitle}
+                                  loading="lazy"
+                                  onError={(e) => { (e.currentTarget as HTMLImageElement).src = svgPlaceholder(relTitle || 'CSM', 640, 360); }}
+                                  style={{ 
+                                    position: 'absolute', 
+                                    inset: 0, 
+                                    width: '100%', 
+                                    height: '100%', 
+                                    objectFit: 'cover',
+                                    borderRadius: '14px 14px 0 0'
+                                  }}
+                                />
+                              ) : relVideo ? (
+                                <video
+                                  src={relVideo}
+                                  muted
+                                  playsInline
+                                  preload="metadata"
+                                  style={{
+                                    position: 'absolute',
+                                    inset: 0,
+                                    width: '100%',
+                                    height: '100%',
+                                    objectFit: 'cover',
+                                    borderRadius: '14px 14px 0 0',
+                                    background: '#000'
+                                  }}
+                                />
+                              ) : (
+                                <img
+                                  src={svgPlaceholder(relTitle || 'CSM', 640, 360)}
+                                  alt={relTitle}
+                                  loading="lazy"
+                                  style={{ 
+                                    position: 'absolute', 
+                                    inset: 0, 
+                                    width: '100%', 
+                                    height: '100%', 
+                                    objectFit: 'cover',
+                                    borderRadius: '14px 14px 0 0'
+                                  }}
+                                />
+                              )}
                             </a>
                           }
                           bodyStyle={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 8, flex: 1 }}

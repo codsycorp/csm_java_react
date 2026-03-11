@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.Part;
 import net.phanmemmottrieu.data.RecordManager;
 import net.phanmemmottrieu.data.SearchFilter;
 import net.phanmemmottrieu.model.StandardResponse;
@@ -36,8 +37,10 @@ import org.springframework.scheduling.annotation.Scheduled;
 
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
+import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URLDecoder;
 import java.net.URLEncoder;
@@ -46,6 +49,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.StandardCopyOption;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -1986,6 +1990,60 @@ public class WebSpringController {
                         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                                 .body("Lỗi khi xóa file".getBytes(StandardCharsets.UTF_8));
                     }
+                } // 3. Upload multipart file (ưu tiên cho video lớn để tránh payload base64 quá lớn)
+                else if (request.getContentType() != null
+                        && request.getContentType().toLowerCase(Locale.ROOT).contains("multipart/form-data")) {
+                    try {
+                        Part filePart = request.getPart("file");
+                        if (filePart == null || filePart.getSize() <= 0) {
+                            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                                    .body("Thiếu file multipart hợp lệ.".getBytes(StandardCharsets.UTF_8));
+                        }
+
+                        String incomingName = name;
+                        if (incomingName == null || incomingName.isEmpty()) {
+                            incomingName = filePart.getSubmittedFileName();
+                        }
+                        if (incomingName == null || incomingName.isEmpty()) {
+                            incomingName = "upload-" + System.currentTimeMillis();
+                        }
+
+                        int lastDotIndex = incomingName.lastIndexOf('.');
+                        String fileNameWithoutExtension;
+                        String fileExtension = "";
+                        if (lastDotIndex > 0) {
+                            fileNameWithoutExtension = incomingName.substring(0, lastDotIndex);
+                            fileExtension = incomingName.substring(lastDotIndex);
+                        } else {
+                            fileNameWithoutExtension = incomingName;
+                        }
+
+                        String sanitizedName = xoa_dau(fileNameWithoutExtension);
+                        String finalFileName = sanitizedName + fileExtension;
+
+                        Path targetFilePath = uploadRootPath.resolve(finalFileName);
+                        try (InputStream in = filePart.getInputStream()) {
+                            Files.copy(in, targetFilePath, StandardCopyOption.REPLACE_EXISTING);
+                        }
+
+                        String ext = getExtension(finalFileName.toLowerCase(Locale.ROOT));
+                        if (UPLOAD_IMAGE_EXTENSIONS.contains(ext)) {
+                            precomputeImageVariants(finalAppId, finalFileName, targetFilePath);
+                        }
+
+                        String fileUrl = String.format("app_images/%s/%s", finalAppId, finalFileName);
+                        logger.info("✅ Đã upload multipart file cục bộ: {} ({} bytes)", targetFilePath, filePart.getSize());
+                        return ResponseEntity.ok()
+                                .contentType(MediaType.TEXT_PLAIN)
+                                .header("Access-Control-Allow-Origin", "*")
+                                .header("Access-Control-Allow-Methods", "GET, POST, DELETE, PUT, OPTIONS")
+                                .header("Access-Control-Allow-Headers", "DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range,Authorization")
+                                .body(fileUrl.getBytes(StandardCharsets.UTF_8));
+                    } catch (Exception e) {
+                        logger.error("❌ Lỗi khi upload multipart file: {}", e.getMessage(), e);
+                        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                                .body("Lỗi khi upload multipart file".getBytes(StandardCharsets.UTF_8));
+                    }
                 } // 3. Upload từ base64
                 else if (src != null && !src.isEmpty()) {
                     if (name == null || name.isEmpty()) {
@@ -2020,10 +2078,16 @@ public class WebSpringController {
                         // Ghép lại tên file đã xử lý với đuôi file gốc
                         String finalFileName = sanitizedName + fileExtension;
 
-                        byte[] buffer = Base64.getDecoder().decode(base64Image);
-                        // Sử dụng finalFileName thay cho sanitizedName
+                        // Tránh cấp phát byte[] lớn cho video: decode Base64 theo stream để giảm áp lực RAM
+                        long approxDecodedBytes = (base64Image.length() * 3L) / 4L;
+                        logger.info("⬆️ Upload base64 request appId={} file={} approxSize={}MB", finalAppId, finalFileName,
+                            Math.max(1L, approxDecodedBytes / (1024 * 1024)));
+
                         Path targetFilePath = uploadRootPath.resolve(finalFileName);
-                        Files.write(targetFilePath, buffer);
+                        try (InputStream base64Stream = Base64.getDecoder().wrap(
+                            new ByteArrayInputStream(base64Image.getBytes(StandardCharsets.US_ASCII)))) {
+                            Files.copy(base64Stream, targetFilePath, StandardCopyOption.REPLACE_EXISTING);
+                        }
 
                         // Precompute optimized variants chỉ cho ảnh (skip video)
                         String ext = getExtension(finalFileName.toLowerCase(Locale.ROOT));
@@ -2083,6 +2147,15 @@ public class WebSpringController {
                                 .body("Lỗi khi upload từ link".getBytes(StandardCharsets.UTF_8));
                     }
                 } else {
+                    logger.warn("❌ Upload request invalid/empty payload: appId={}, cmd={}, name={}, hasSrc={}, hasLink={}, contentType={}, bodyLen={}, paramsKeys={}",
+                        finalAppId,
+                        cmd,
+                        name,
+                        (src != null && !src.isEmpty()),
+                        (link != null && !link.isEmpty()),
+                        lowerCaseHeaders.getOrDefault("content-type", ""),
+                        requestBody != null ? requestBody.length() : 0,
+                        requestParams != null ? requestParams.keySet() : Collections.emptySet());
                     return ResponseEntity.status(HttpStatus.NOT_FOUND)
                             .body("Không tìm thấy lệnh upload hợp lệ.".getBytes(StandardCharsets.UTF_8));
                 }
@@ -2425,7 +2498,7 @@ public class WebSpringController {
                     String paginationKey = useCursorPagination
                         ? String.format("cursor:%d:%s", pageSize, ssr_lastkey != null ? ssr_lastkey : "")
                         : String.format("page:%d:%d", ssr_page, pageSize);
-                    String cacheKey = String.format("%s:%s:%s:%s", domain, service_type, paginationKey, ssr_q != null ? ssr_q : "");
+                    String cacheKey = String.format("%s:%s:%s:%s:%s", domain, service_type, paginationKey, ssr_q != null ? ssr_q : "", "newest-v2");
                     Map<String, Object> cachedData = ssrServiceDataCache.get(cacheKey);
                     if (cachedData != null) {
                         Long cacheTime = (Long) cachedData.get("__cache_time__");
@@ -5404,6 +5477,75 @@ public class WebSpringController {
         return Math.max(0.0, Math.min(1.0, finalScore));
     }
 
+    private long parseDateTimeToEpochMillis(Object value) {
+        if (value == null) {
+            return 0L;
+        }
+        if (value instanceof Number n) {
+            return n.longValue();
+        }
+        if (value instanceof Date d) {
+            return d.getTime();
+        }
+        if (value instanceof Instant i) {
+            return i.toEpochMilli();
+        }
+
+        String raw = String.valueOf(value).trim();
+        if (raw.isEmpty()) {
+            return 0L;
+        }
+
+        // Pure digits: epoch (seconds or millis)
+        if (raw.matches("^\\d{10,13}$")) {
+            try {
+                long epoch = Long.parseLong(raw);
+                return raw.length() == 10 ? epoch * 1000L : epoch;
+            } catch (Exception ignore) {
+                return 0L;
+            }
+        }
+
+        try {
+            return Instant.parse(raw).toEpochMilli();
+        } catch (Exception ignore) {
+            // continue with common DB datetime formats
+        }
+
+        if (raw.length() <= 10) {
+            try {
+                java.time.LocalDate d = java.time.LocalDate.parse(raw, java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd"));
+                return d.atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli();
+            } catch (Exception ignore) {
+                // continue with datetime formats
+            }
+        }
+
+        java.time.format.DateTimeFormatter[] fmts = new java.time.format.DateTimeFormatter[] {
+            java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"),
+            java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
+        };
+        for (java.time.format.DateTimeFormatter fmt : fmts) {
+            try {
+                java.time.LocalDateTime dt = java.time.LocalDateTime.parse(raw, fmt);
+                return dt.atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli();
+            } catch (Exception ignore) {
+                // try next format
+            }
+        }
+        return 0L;
+    }
+
+    private long resolveRelatedPostSortTs(Map<String, Object> row) {
+        if (row == null || row.isEmpty()) {
+            return 0L;
+        }
+        long ts = parseDateTimeToEpochMillis(row.get("publish_date"));
+        if (ts <= 0L) ts = parseDateTimeToEpochMillis(row.get("updated_at"));
+        if (ts <= 0L) ts = parseDateTimeToEpochMillis(row.get("created_at"));
+        return ts;
+    }
+
     private Map<String, String> resolveSeoForServiceRoute(
             String appId,
             String tblServices,
@@ -5832,6 +5974,10 @@ public class WebSpringController {
                 m.put("thumbnail", thumb);
                 m.put("cover", cover);
                 m.put("images", safeStr(row.get("images")));
+                m.put("videos", safeStr(row.get("videos")));
+                m.put("album", safeStr(row.get("album")));
+                m.put("video", safeStr(row.get("video")));
+                m.put("video_url", safeStr(row.get("video_url")));
                 m.put("tags", safeStr(row.get("tags")));
                 m.put("keywords", keywords);
                 m.put("meta_description", safeStr(row.get("meta_description")));
@@ -5880,6 +6026,10 @@ public class WebSpringController {
                 m.put("excerpt", excerpt);
                 m.put("content", content);
                 m.put("images", safeStr(row.get("images")));
+                m.put("videos", safeStr(row.get("videos")));
+                m.put("album", safeStr(row.get("album")));
+                m.put("video", safeStr(row.get("video")));
+                m.put("video_url", safeStr(row.get("video_url")));
                 String thumb = safeStr(row.get("thumbnail"));
                 String cover = safeStr(row.get("cover"));
                 if (!thumb.isEmpty() && !thumb.startsWith("http") && !thumb.startsWith("/images.shtml")) {
@@ -5919,7 +6069,7 @@ public class WebSpringController {
             };
 
             // 🔴 LOG: Confirm mapDetailFull is mapping all fields correctly
-            logger.info("✅ mapDetailFull function configured to return all fields: id, domain, service_type, title, excerpt, content, images, thumbnail, cover, tags, keywords, meta_description, seo_meta, featured, activeHome, publish_date, expiry_date, status, author, dien_thoai, + all attributes_* and specifications_* fields");
+            logger.info("✅ mapDetailFull function configured to return all fields: id, domain, service_type, title, excerpt, content, images, videos, album, thumbnail, cover, tags, keywords, meta_description, seo_meta, featured, activeHome, publish_date, expiry_date, status, author, dien_thoai, + all attributes_* and specifications_* fields");
             
             // TRƯỜNG HỢP 1: HOMEPAGE - lấy tất cả detail có active_home=1 hoặc featured=1
             if (isHome) {
@@ -6137,14 +6287,30 @@ public class WebSpringController {
                         if (sim >= 0.15) {  // Loại bỏ tin quá khác biệt
                             Map<String, Object> scored = new java.util.HashMap<>(r);
                             scored.put("__similarity__", sim);
+                            scored.put("__sort_ts__", resolveRelatedPostSortTs(r));
                             scoredRows.add(scored);
                         }
                     }
-                    // Sort DESC by similarity (tin giống nhất lên đầu)
+                    // Sort newest first, similarity as tie-break
                     scoredRows.sort((a, b) -> {
+                        long tsA = ((Number) a.getOrDefault("__sort_ts__", 0L)).longValue();
+                        long tsB = ((Number) b.getOrDefault("__sort_ts__", 0L)).longValue();
+                        int dateCmp = Long.compare(tsB, tsA);
+                        if (dateCmp != 0) return dateCmp;
                         double simA = (double) a.getOrDefault("__similarity__", 0.0);
                         double simB = (double) b.getOrDefault("__similarity__", 0.0);
-                        return Double.compare(simB, simA);
+                        int simCmp = Double.compare(simB, simA);
+                        if (simCmp != 0) return simCmp;
+                        // Stable tie-break by id desc
+                        String ida = safeStr(a.get("id"));
+                        String idb = safeStr(b.get("id"));
+                        try {
+                            long la = Long.parseLong(ida);
+                            long lb = Long.parseLong(idb);
+                            return Long.compare(lb, la);
+                        } catch (Exception e) {
+                            return idb.compareTo(ida);
+                        }
                     });
                     
                     // ✅ CRITICAL: totalRelatedCount = số tin đã sort (không phải từ DB)
@@ -6160,8 +6326,11 @@ public class WebSpringController {
                     double minSim = topSimilar.isEmpty() ? 0.0 : (double) topSimilar.get(topSimilar.size() - 1).getOrDefault("__similarity__", 0.0);
                     double maxSim = topSimilar.isEmpty() ? 0.0 : (double) topSimilar.get(0).getOrDefault("__similarity__", 0.0);
                     
-                    // Remove __similarity__ before mapping
-                    topSimilar.forEach(r -> r.remove("__similarity__"));
+                    // Remove temporary scoring fields before mapping
+                    topSimilar.forEach(r -> {
+                        r.remove("__similarity__");
+                        r.remove("__sort_ts__");
+                    });
                     
                     List<Map<String, Object>> paginatedRelated = topSimilar.stream()
                         .map(mapDetail)
@@ -6261,11 +6430,16 @@ public class WebSpringController {
                                 if (sim >= 0.15) {
                                     Map<String, Object> scored = new java.util.HashMap<>(r);
                                     scored.put("__similarity__", sim);
+                                    scored.put("__sort_ts__", resolveRelatedPostSortTs(r));
                                     scoredRows.add(scored);
                                 }
                             }
-                            // Sort DESC by similarity (tin giống nhất lên đầu)
+                            // Sort newest first, similarity as tie-break
                             scoredRows.sort((a, b) -> {
+                                long tsA = ((Number) a.getOrDefault("__sort_ts__", 0L)).longValue();
+                                long tsB = ((Number) b.getOrDefault("__sort_ts__", 0L)).longValue();
+                                int dateCmp = Long.compare(tsB, tsA);
+                                if (dateCmp != 0) return dateCmp;
                                 double simA = (double) a.getOrDefault("__similarity__", 0.0);
                                 double simB = (double) b.getOrDefault("__similarity__", 0.0);
                                 int cmp = Double.compare(simB, simA);
@@ -6282,9 +6456,12 @@ public class WebSpringController {
                                 }
                             });
                             
-                            // Remove __similarity__ sau khi sort xong
+                            // Remove temporary scoring fields after sorting
                             List<Map<String, Object>> orderedRelRows = scoredRows.stream()
-                                .peek(r -> r.remove("__similarity__"))
+                                .peek(r -> {
+                                    r.remove("__similarity__");
+                                    r.remove("__sort_ts__");
+                                })
                                 .collect(java.util.stream.Collectors.toList());
                             
                             logger.info("📊 Fallback related: candidates={}, filtered(>=0.15)={}", 
@@ -6754,66 +6931,77 @@ public class WebSpringController {
                                 i + 1, cond.getField(), cond.getType(), cond.getOperator());
                         }
                         
-                        // ✅ CURSOR DERIVATION: If page > 1 without cached cursor, walk previous pages
+                        // ✅ NEWEST-FIRST: load filtered rows, sort by publish_date/updated_at/created_at DESC, then paginate
+                        Map<String, Object> detResult = recordManager.filter(appId, tblServiceDetail, detFilter);
+                        List<Map<String, Object>> allDetRows = (List<Map<String, Object>>) detResult.getOrDefault("rows", new ArrayList<>());
+                        List<Map<String, Object>> orderedDetRows = new ArrayList<>(allDetRows);
+                        orderedDetRows.sort((a, b) -> {
+                            long tsA = resolveRelatedPostSortTs(a);
+                            long tsB = resolveRelatedPostSortTs(b);
+                            int dateCmp = Long.compare(tsB, tsA);
+                            if (dateCmp != 0) return dateCmp;
+                            String ida = safeStr(a.get("id"));
+                            String idb = safeStr(b.get("id"));
+                            try {
+                                long la = Long.parseLong(ida);
+                                long lb = Long.parseLong(idb);
+                                return Long.compare(lb, la);
+                            } catch (Exception e) {
+                                return idb.compareTo(ida);
+                            }
+                        });
+
+                        long totalCount = orderedDetRows.size();
+
+                        // Cursor cache lookup for requested page (if available)
                         if ((lastKeyParam == null || lastKeyParam.isBlank()) && page > 1) {
-                            logger.info("🔄 Category Pagination: deriving lastKey by stepping through pages until {}", page);
-                            String iterCursor = null;
-                            for (int iterPage = 1; iterPage < Math.min(page, 20); iterPage++) {
-                                Map<String, Object> iterRes = recordManager.filterWithPagination(
-                                    appId,
-                                    tblServiceDetail,
-                                    detFilter,
-                                    effectiveTake,
-                                    iterCursor
-                                );
-                                String next = (String) iterRes.get("nextCursor");
-                                long iterTotal = ((Number) iterRes.getOrDefault("totalCount", 0)).longValue();
-                                PaginationCacheManager.saveCursorForPage(
-                                    querySig,
-                                    iterPage,
-                                    iterCursor,
-                                    next,
-                                    iterTotal
-                                );
-                                iterCursor = next;
-                                if (iterCursor == null || iterCursor.isEmpty()) {
-                                    logger.warn("⚠️ Category Pagination: reached end at page {} while deriving for target page {}", iterPage, page);
+                            String cachedKey = PaginationCacheManager.getLastKeyForPage(querySig, page);
+                            if (cachedKey != null && !cachedKey.isEmpty()) {
+                                lastKeyParam = cachedKey;
+                                logger.info("✅ Category Pagination Cache HIT after sort: page={}, lastkey={}", page, lastKeyParam);
+                            }
+                        }
+
+                        boolean useCursor = (lastKeyParam != null && !lastKeyParam.isEmpty()) || takeParam != null;
+                        int startIndex;
+                        if (useCursor && lastKeyParam != null && !lastKeyParam.isEmpty()) {
+                            int idx = -1;
+                            for (int i = 0; i < orderedDetRows.size(); i++) {
+                                if (lastKeyParam.equals(safeStr(orderedDetRows.get(i).get("id")))) {
+                                    idx = i;
                                     break;
                                 }
                             }
-                            if (iterCursor != null && !iterCursor.isEmpty()) {
-                                lastKeyParam = iterCursor;
-                                logger.info("✅ Derived lastKey for category page {} -> {}", page, lastKeyParam);
-                            } else {
-                                page = 1;
-                                lastKeyParam = null;
-                                logger.warn("⚠️ Category Pagination: fallback to page 1 due to insufficient data");
+                            startIndex = idx >= 0 ? idx + 1 : 0;
+                        } else {
+                            int safePage = page < 1 ? 1 : page;
+                            startIndex = (safePage - 1) * effectiveTake;
+                        }
+
+                        if (startIndex >= orderedDetRows.size() && page > 1) {
+                            page = 1;
+                            startIndex = 0;
+                            lastKeyParam = null;
+                            logger.warn("⚠️ Category Pagination: requested page out of range after sort, fallback to page 1");
+                        }
+
+                        int endIndex = Math.min(startIndex + effectiveTake, orderedDetRows.size());
+                        List<Map<String, Object>> details = new ArrayList<>();
+                        if (startIndex < orderedDetRows.size()) {
+                            for (int i = startIndex; i < endIndex; i++) {
+                                details.add(mapDetail.apply(orderedDetRows.get(i)));
                             }
                         }
-                        
-                        // ✅ FIX: Dùng filterWithPagination thay vì filter để hỗ trợ phân trang cursor
-                        logger.info("🔍 Group slug case: Calling filterWithPagination with appId={}, table={}, effectiveTake={}, lastKeyParam='{}'", 
-                            appId, tblServiceDetail, effectiveTake, lastKeyParam);
-                        Map<String, Object> detResult = recordManager.filterWithPagination(
-                            appId, 
-                            tblServiceDetail, 
-                            detFilter, 
-                            effectiveTake, 
-                            lastKeyParam
-                        );
-                        List<Map<String, Object>> detRows = (List<Map<String, Object>>) detResult.getOrDefault("rows", new ArrayList<>());
-                        long totalCount = ((Number) detResult.getOrDefault("totalCount", detRows.size())).longValue();
-                        String nextCursor = (String) detResult.get("nextCursor");
-                        
-                        List<Map<String, Object>> details = new ArrayList<>();
-                        for (Map<String, Object> r : detRows) {
-                            details.add(mapDetail.apply(r));
-                        }
+
+                        String nextCursor = (endIndex < orderedDetRows.size())
+                            ? safeStr(orderedDetRows.get(endIndex - 1).get("id"))
+                            : null;
+                        int pageComputed = (effectiveTake > 0) ? (startIndex / effectiveTake) + 1 : 1;
                         
                         // 💾 Save cursor mapping for this page
                         PaginationCacheManager.saveCursorForPage(
                             querySig,
-                            page,
+                            pageComputed,
                             lastKeyParam,
                             nextCursor,
                             totalCount
@@ -6822,7 +7010,7 @@ public class WebSpringController {
                         out.put("groupSlug", groupSlug);
                         out.put("details", details);
                         out.put("totalCount", totalCount);
-                        out.put("page", page);
+                        out.put("page", pageComputed);
                         out.put("pageSize", effectiveTake);
                         out.put("take", effectiveTake);
                         out.put("lastkey", lastKeyParam);
@@ -6830,8 +7018,8 @@ public class WebSpringController {
                         out.put("paginationMode", "cursor");
                         out.put("serviceCategory", mapServiceCategoryByLang(groupService, currentLang));
                         trackServiceRouteVisit(appId, domain, normalizedPath, tblServices, null, groupService, slug, null, requestParams);
-                        logger.info("✅ Group slug case: Returned {} details (page {}/{}) with totalCount={}, nextCursor='{}', lastKeyParam='{}'", 
-                            details.size(), page, (int) Math.ceil((double) totalCount / effectiveTake), totalCount, nextCursor, lastKeyParam);
+                        logger.info("✅ Group slug case (newest-first): Returned {} details (page {}/{}) with totalCount={}, nextCursor='{}', lastKeyParam='{}'", 
+                            details.size(), pageComputed, (int) Math.ceil((double) totalCount / effectiveTake), totalCount, nextCursor, lastKeyParam);
                         return out;
                     }
                 } else {
@@ -7005,68 +7193,76 @@ public class WebSpringController {
                                 i + 1, cond.getField(), cond.getType(), cond.getOperator());
                         }
                         
-                        // ✅ CURSOR DERIVATION: If page > 1 without cached cursor, walk previous pages
+                        // ✅ NEWEST-FIRST: load filtered rows, sort by publish_date/updated_at/created_at DESC, then paginate
+                        Map<String, Object> detResult = recordManager.filter(appId, tblServiceDetail, detFilter);
+                        List<Map<String, Object>> allDetRows = (List<Map<String, Object>>) detResult.getOrDefault("rows", new ArrayList<>());
+                        List<Map<String, Object>> orderedDetRows = new ArrayList<>(allDetRows);
+                        orderedDetRows.sort((a, b) -> {
+                            long tsA = resolveRelatedPostSortTs(a);
+                            long tsB = resolveRelatedPostSortTs(b);
+                            int dateCmp = Long.compare(tsB, tsA);
+                            if (dateCmp != 0) return dateCmp;
+                            String ida = safeStr(a.get("id"));
+                            String idb = safeStr(b.get("id"));
+                            try {
+                                long la = Long.parseLong(ida);
+                                long lb = Long.parseLong(idb);
+                                return Long.compare(lb, la);
+                            } catch (Exception e) {
+                                return idb.compareTo(ida);
+                            }
+                        });
+
+                        long totalCount = orderedDetRows.size();
+
                         if ((lastKeyParam == null || lastKeyParam.isBlank()) && page > 1) {
-                            logger.info("🔄 Service Code Pagination: deriving lastKey by stepping through pages until {}", page);
-                            String iterCursor = null;
-                            for (int iterPage = 1; iterPage < Math.min(page, 20); iterPage++) {
-                                Map<String, Object> iterRes = recordManager.filterWithPagination(
-                                    appId,
-                                    tblServiceDetail,
-                                    detFilter,
-                                    effectiveTake,
-                                    iterCursor
-                                );
-                                String next = (String) iterRes.get("nextCursor");
-                                long iterTotal = ((Number) iterRes.getOrDefault("totalCount", 0)).longValue();
-                                PaginationCacheManager.saveCursorForPage(
-                                    querySig,
-                                    iterPage,
-                                    iterCursor,
-                                    next,
-                                    iterTotal
-                                );
-                                iterCursor = next;
-                                if (iterCursor == null || iterCursor.isEmpty()) {
-                                    logger.warn("⚠️ Service Code Pagination: reached end at page {} while deriving for target page {}", iterPage, page);
+                            String cachedKey = PaginationCacheManager.getLastKeyForPage(querySig, page);
+                            if (cachedKey != null && !cachedKey.isEmpty()) {
+                                lastKeyParam = cachedKey;
+                                logger.info("✅ Service Code Pagination Cache HIT after sort: page={}, lastkey={}", page, lastKeyParam);
+                            }
+                        }
+
+                        boolean useCursor = (lastKeyParam != null && !lastKeyParam.isEmpty()) || takeParam != null;
+                        int startIndex;
+                        if (useCursor && lastKeyParam != null && !lastKeyParam.isEmpty()) {
+                            int idx = -1;
+                            for (int i = 0; i < orderedDetRows.size(); i++) {
+                                if (lastKeyParam.equals(safeStr(orderedDetRows.get(i).get("id")))) {
+                                    idx = i;
                                     break;
                                 }
                             }
-                            if (iterCursor != null && !iterCursor.isEmpty()) {
-                                lastKeyParam = iterCursor;
-                                logger.info("✅ Derived lastKey for service code page {} -> {}", page, lastKeyParam);
-                            } else {
-                                page = 1;
-                                lastKeyParam = null;
-                                logger.warn("⚠️ Service Code Pagination: fallback to page 1 due to insufficient data");
+                            startIndex = idx >= 0 ? idx + 1 : 0;
+                        } else {
+                            int safePage = page < 1 ? 1 : page;
+                            startIndex = (safePage - 1) * effectiveTake;
+                        }
+
+                        if (startIndex >= orderedDetRows.size() && page > 1) {
+                            page = 1;
+                            startIndex = 0;
+                            lastKeyParam = null;
+                            logger.warn("⚠️ Service Code Pagination: requested page out of range after sort, fallback to page 1");
+                        }
+
+                        int endIndex = Math.min(startIndex + effectiveTake, orderedDetRows.size());
+                        List<Map<String, Object>> details = new ArrayList<>();
+                        if (startIndex < orderedDetRows.size()) {
+                            for (int i = startIndex; i < endIndex; i++) {
+                                details.add(mapDetail.apply(orderedDetRows.get(i)));
                             }
                         }
-                        
-                        // ✅ FIX: Dùng filterWithPagination thay vì filter để hỗ trợ phân trang cursor
-                        logger.info("🔍 Service code case: Calling filterWithPagination with appId={}, table={}, effectiveTake={}, lastKeyParam='{}'", 
-                            appId, tblServiceDetail, effectiveTake, lastKeyParam);
-                        
-                        Map<String, Object> detResult = recordManager.filterWithPagination(
-                            appId, 
-                            tblServiceDetail, 
-                            detFilter, 
-                            effectiveTake, 
-                            lastKeyParam
-                        );
-                        
-                        List<Map<String, Object>> detRows = (List<Map<String, Object>>) detResult.getOrDefault("rows", new ArrayList<>());
-                        long totalCount = ((Number) detResult.getOrDefault("totalCount", detRows.size())).longValue();
-                        String nextCursor = (String) detResult.get("nextCursor");
-                        
-                        List<Map<String, Object>> details = new ArrayList<>();
-                        for (Map<String, Object> r : detRows) {
-                            details.add(mapDetail.apply(r));
-                        }
+
+                        String nextCursor = (endIndex < orderedDetRows.size())
+                            ? safeStr(orderedDetRows.get(endIndex - 1).get("id"))
+                            : null;
+                        int pageComputed = (effectiveTake > 0) ? (startIndex / effectiveTake) + 1 : 1;
                         
                         // 💾 Save cursor mapping for this page
                         PaginationCacheManager.saveCursorForPage(
                             querySig,
-                            page,
+                            pageComputed,
                             lastKeyParam,
                             nextCursor,
                             totalCount
@@ -7075,15 +7271,15 @@ public class WebSpringController {
                         out.put("serviceCode", serviceCode);
                         out.put("details", details);
                         out.put("totalCount", totalCount);
-                        out.put("page", page);
+                        out.put("page", pageComputed);
                         out.put("pageSize", effectiveTake);
                         out.put("take", effectiveTake);
                         out.put("lastkey", lastKeyParam);
                         out.put("nextCursor", nextCursor);
                         out.put("paginationMode", "cursor");
                         trackServiceRouteVisit(appId, domain, normalizedPath, tblServices, null, service, serviceCode, null, requestParams);
-                        logger.info("✅ Service code case: Returned {} details (page {}/{}) with totalCount={}, nextCursor='{}', lastKeyParam='{}'", 
-                            details.size(), page, (int) Math.ceil((double) totalCount / effectiveTake), totalCount, nextCursor, lastKeyParam);
+                        logger.info("✅ Service code case (newest-first): Returned {} details (page {}/{}) with totalCount={}, nextCursor='{}', lastKeyParam='{}'", 
+                            details.size(), pageComputed, (int) Math.ceil((double) totalCount / effectiveTake), totalCount, nextCursor, lastKeyParam);
                         return out;
                     }
                 }

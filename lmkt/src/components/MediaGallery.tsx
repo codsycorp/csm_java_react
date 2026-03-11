@@ -173,6 +173,9 @@ const MediaGallery: React.FC<MediaGalleryProps> = ({ images = [], videos = [], a
         <div style={{ position: 'relative', cursor: 'pointer' }} onClick={() => handleVideoClick(currentItem.url)}>
           <video
             src={currentItem.url}
+            preload="metadata"
+            playsInline
+            muted
             style={{
               width: '100%',
               borderRadius: 12,
@@ -180,7 +183,6 @@ const MediaGallery: React.FC<MediaGalleryProps> = ({ images = [], videos = [], a
               maxHeight: 460,
               border: '1px solid #eef0f5',
             }}
-            poster={svgPlaceholder(alt)}
           />
           {/* Play icon overlay */}
           <div
