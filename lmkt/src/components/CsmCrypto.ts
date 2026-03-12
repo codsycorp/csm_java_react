@@ -6,6 +6,7 @@
 
 const PHONE = "0937.528.839";
 const WRITEBY = "base._co.osa";
+const UTF8_DECODER = typeof TextDecoder !== "undefined" ? new TextDecoder("utf-8") : null;
 
 function strtr(str: string, from: string, to: string): string {
   if (from.length !== to.length)
@@ -20,6 +21,7 @@ function strtr(str: string, from: string, to: string): string {
 }
 
 export function csmEncrypt(d_code: string): string {
+  if (!d_code) return "";
   // Browser environment
   const base64 = typeof btoa === "function"
     ? btoa(unescape(encodeURIComponent(d_code)))
@@ -29,6 +31,18 @@ export function csmEncrypt(d_code: string): string {
 
 export function csmDecrypt(e_code: string): string {
 	try {
+		if (!e_code) return "";
+
+		// Fast path for already-plain HTML/text to avoid unnecessary decode cost.
+		if (/<[a-z][\s\S]*>/i.test(e_code)) return e_code;
+		if (/[%]/.test(e_code)) {
+			try {
+				return decodeURIComponent(e_code);
+			} catch {
+				// keep original path below
+			}
+		}
+
 		const swapped = strtr(e_code, WRITEBY + PHONE, PHONE + WRITEBY);
 
 		function padBase64(s: string): string {
@@ -42,10 +56,12 @@ export function csmDecrypt(e_code: string): string {
 				const binary = atob(padded);
 				
 				try {
-					const bytes = new Uint8Array(binary.length);
-					for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-					const decoded = new TextDecoder("utf-8").decode(bytes);
-					return decoded;
+					if (UTF8_DECODER) {
+						const bytes = new Uint8Array(binary.length);
+						for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+						return UTF8_DECODER.decode(bytes);
+					}
+					return binary;
 				} catch (decodeErr) {
 					try {
 						// eslint-disable-next-line @typescript-eslint/ban-ts-comment
@@ -70,5 +86,10 @@ export default { csmEncrypt, csmDecrypt };
 
 // Expose to window for auto-upload scripts
 if (typeof window !== 'undefined') {
-	(window as any).csmCrypto = { csmEncrypt, csmDecrypt };
+	(window as any).csmCrypto = {
+		encrypt: csmEncrypt,
+		decrypt: csmDecrypt,
+		csmEncrypt,
+		csmDecrypt
+	};
 }

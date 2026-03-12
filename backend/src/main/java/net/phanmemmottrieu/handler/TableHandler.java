@@ -637,9 +637,12 @@ public class TableHandler {
 
     private void enqueueServiceInvalidation(String appId, String tableName, Map<String, Object> record) {
         try {
-            WebSpringController.enqueueAutoInvalidation(appId, tableName, record);
+            boolean triggered = WebSpringController.triggerDynamicImmediateInvalidation(appId, tableName, record);
+            if (!triggered) {
+                logger.debug("Skip immediate cache sync for {}.{} because no matching router/cache mapping was found", appId, tableName);
+            }
         } catch (Exception ex) {
-            logger.debug("Skip enqueue auto invalidation for {}.{}: {}", appId, tableName, ex.getMessage());
+            logger.warn("Immediate cache sync failed for {}.{}: {}", appId, tableName, ex.getMessage());
         }
     }
 

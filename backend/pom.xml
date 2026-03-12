@@ -207,6 +207,13 @@
       <version>0.4.20</version>
     </dependency>
 
+    <!-- Video thumbnail extraction with bundled FFmpeg binaries (no OS install required) -->
+    <dependency>
+      <groupId>ws.schild</groupId>
+      <artifactId>jave-all-deps</artifactId>
+      <version>3.5.0</version>
+    </dependency>
+
     <dependency>
       <groupId>org.apache.lucene</groupId>
       <artifactId>lucene-codecs</artifactId>

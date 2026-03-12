@@ -3,6 +3,7 @@
 
 const PHONE = "0937.528.839";
 const WRITEBY = "base._co.osa";
+const UTF8_DECODER = typeof TextDecoder !== "undefined" ? new TextDecoder("utf-8") : null;
 
 function strtr(str: string, from: string, to: string): string {
   if (from.length !== to.length)
@@ -17,6 +18,7 @@ function strtr(str: string, from: string, to: string): string {
 }
 
 export function csmEncrypt(d_code: string): string {
+  if (!d_code) return "";
   // Browser environment
   const base64 = typeof btoa === "function"
     ? btoa(unescape(encodeURIComponent(d_code)))
@@ -26,11 +28,19 @@ export function csmEncrypt(d_code: string): string {
 
 export function csmDecrypt(e_code: string): string {
 	try {
-		console.log("[csmDecrypt] Input (first 100 chars):", e_code.substring(0, 100));
+		if (!e_code) return "";
+
+		// Fast path for already-plain HTML/text to avoid unnecessary decode cost.
+		if (/<[a-z][\s\S]*>/i.test(e_code)) return e_code;
+		if (/[%]/.test(e_code)) {
+			try {
+				return decodeURIComponent(e_code);
+			} catch {
+				// keep original path below
+			}
+		}
 		
 		const swapped = strtr(e_code, WRITEBY + PHONE, PHONE + WRITEBY);
-		console.log("[csmDecrypt] After strtr swap (first 100 chars):", swapped.substring(0, 100));
-		console.log("[csmDecrypt] Input === swapped?", e_code === swapped);
 
 		function padBase64(s: string): string {
 			const rem = s.length % 4;
@@ -40,40 +50,31 @@ export function csmDecrypt(e_code: string): string {
 		if (typeof atob === "function") {
 			try {
 				const padded = padBase64(swapped);
-				console.log("[csmDecrypt] After padding (first 100 chars):", padded.substring(0, 100));
-				
 				const binary = atob(padded);
-				console.log("[csmDecrypt] atob() succeeded, binary length:", binary.length);
 				
 				try {
-					const bytes = new Uint8Array(binary.length);
-					for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-					const decoded = new TextDecoder("utf-8").decode(bytes);
-					console.log("[csmDecrypt] ✅ UTF-8 decode succeeded, result (first 100 chars):", decoded.substring(0, 100));
-					return decoded;
+					if (UTF8_DECODER) {
+						const bytes = new Uint8Array(binary.length);
+						for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+						return UTF8_DECODER.decode(bytes);
+					}
+					return binary;
 				} catch (decodeErr) {
-					console.warn("[csmDecrypt] UTF-8 decode failed, trying escape/decodeURIComponent:", decodeErr);
 					try {
 						// eslint-disable-next-line @typescript-eslint/ban-ts-comment
 						// @ts-ignore
 						const decoded = decodeURIComponent(escape(binary));
-						console.log("[csmDecrypt] ✅ escape/decodeURIComponent succeeded, result (first 100 chars):", decoded.substring(0, 100));
 						return decoded;
 					} catch (escapeErr) {
-						console.warn("[csmDecrypt] escape/decodeURIComponent failed, returning binary:", escapeErr);
 						return binary;
 					}
 				}
 			} catch (atobErr) {
-				console.error("[csmDecrypt] ❌ atob() failed:", atobErr);
-				console.log("[csmDecrypt] Returning swapped string instead (probably not encrypted)");
+				// atob failed, return swapped string as-is
 			}
-		} else {
-			console.warn("[csmDecrypt] atob not available, returning swapped");
 		}
 		return swapped;
 	} catch (err) {
-		console.error("[csmDecrypt] Unexpected error:", err);
 		return e_code;
 	}
 }

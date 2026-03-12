@@ -36,6 +36,12 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.scheduling.annotation.Scheduled;
 
 import java.awt.image.BufferedImage;
+import java.awt.Color;
+import java.awt.Font;
+import java.awt.GradientPaint;
+import java.awt.Graphics2D;
+import java.awt.Polygon;
+import java.awt.RenderingHints;
 import java.io.ByteArrayOutputStream;
 import java.io.ByteArrayInputStream;
 import java.io.File;
@@ -60,6 +66,8 @@ import java.util.zip.Deflater;
 import java.util.zip.DeflaterOutputStream;
 import javax.imageio.ImageIO;
 import net.coobird.thumbnailator.Thumbnails;
+import ws.schild.jave.MultimediaObject;
+import ws.schild.jave.ScreenExtractor;
 
 // --- Import Thymeleaf classes ---
 import org.thymeleaf.TemplateEngine;
@@ -130,6 +138,10 @@ public class WebSpringController {
     private static final Set<String> UPLOAD_IMAGE_EXTENSIONS = Set.of(
         "png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "avif"
     );
+    private static final Set<String> UPLOAD_VIDEO_EXTENSIONS = Set.of(
+        "mp4", "webm", "ogg", "mov", "m4v", "mkv", "avi"
+    );
+    private static final Pattern VIDEO_FILE_PATTERN = Pattern.compile("([\\w%./-]+\\.(mp4|webm|ogg|mov|m4v|mkv|avi))(?:\\?[^\\s\"'\\]]*)?", Pattern.CASE_INSENSITIVE);
     private final Map<String, CacheEntry<Map<String, Object>>> propertyDetailCache = new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<String, CacheEntry<Boolean>> staticDetectionCache = new java.util.concurrent.ConcurrentHashMap<>();
     // Dedup processing for image optimization (avoid double work on concurrent requests)
@@ -227,6 +239,34 @@ public class WebSpringController {
         this.templateEngine = new TemplateEngine();
         this.templateEngine.setTemplateResolver(templateResolver);
         // --- End Initialization ---
+    }
+
+    public static boolean triggerDynamicImmediateInvalidation(String appId, String tableName, Map<String, Object> record) {
+        if (INSTANCE == null) {
+            return false;
+        }
+        return INSTANCE.triggerDynamicImmediateInvalidationInternal(appId, tableName, record);
+    }
+
+    private boolean triggerDynamicImmediateInvalidationInternal(String appId, String tableName, Map<String, Object> record) {
+        if (tableName == null || tableName.isBlank()) {
+            return false;
+        }
+
+        String domain = safeRecordStr(record != null ? record.get("domain") : null);
+        String serviceType = firstNonEmpty(
+                safeRecordStr(record != null ? record.get("service_type") : null),
+                safeRecordStr(record != null ? record.get("serviceType") : null));
+        String slug = safeRecordStr(record != null ? record.get("slug") : null);
+
+        List<RouteConfig> routes = resolveRoutesForTable(appId, tableName, domain);
+        if (routes.isEmpty()) {
+            logger.debug("Dynamic immediate cache sync skipped for {}:{} because no matching route was found", appId, tableName);
+            return false;
+        }
+
+        processInvalidationTask(new InvalidationTask(appId, tableName, domain, serviceType, slug));
+        return true;
     }
 
     /**
@@ -2026,19 +2066,25 @@ public class WebSpringController {
                             Files.copy(in, targetFilePath, StandardCopyOption.REPLACE_EXISTING);
                         }
 
-                        String ext = getExtension(finalFileName.toLowerCase(Locale.ROOT));
-                        if (UPLOAD_IMAGE_EXTENSIONS.contains(ext)) {
-                            precomputeImageVariants(finalAppId, finalFileName, targetFilePath);
-                        }
+                        String thumbUrl = processUploadedMediaArtifacts(finalAppId, finalFileName, targetFilePath);
 
                         String fileUrl = String.format("app_images/%s/%s", finalAppId, finalFileName);
                         logger.info("✅ Đã upload multipart file cục bộ: {} ({} bytes)", targetFilePath, filePart.getSize());
+                        
+                        // Trả về JSON có cả path (video) và thumb (thumbnail nếu có)
+                        StringBuilder jsonRespone = new StringBuilder("{");
+                        jsonRespone.append("\"path\":\"").append(fileUrl).append("\"");
+                        if (thumbUrl != null && !thumbUrl.isEmpty()) {
+                            jsonRespone.append(",\"thumb\":\"").append(thumbUrl).append("\"");
+                        }
+                        jsonRespone.append("}");
+                        
                         return ResponseEntity.ok()
-                                .contentType(MediaType.TEXT_PLAIN)
+                                .contentType(MediaType.APPLICATION_JSON)
                                 .header("Access-Control-Allow-Origin", "*")
                                 .header("Access-Control-Allow-Methods", "GET, POST, DELETE, PUT, OPTIONS")
                                 .header("Access-Control-Allow-Headers", "DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range,Authorization")
-                                .body(fileUrl.getBytes(StandardCharsets.UTF_8));
+                                .body(jsonRespone.toString().getBytes(StandardCharsets.UTF_8));
                     } catch (Exception e) {
                         logger.error("❌ Lỗi khi upload multipart file: {}", e.getMessage(), e);
                         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
@@ -2089,21 +2135,26 @@ public class WebSpringController {
                             Files.copy(base64Stream, targetFilePath, StandardCopyOption.REPLACE_EXISTING);
                         }
 
-                        // Precompute optimized variants chỉ cho ảnh (skip video)
-                        String ext = getExtension(finalFileName.toLowerCase(Locale.ROOT));
-                        if (UPLOAD_IMAGE_EXTENSIONS.contains(ext)) {
-                            precomputeImageVariants(finalAppId, finalFileName, targetFilePath);
-                        }
+                        String thumbUrl = processUploadedMediaArtifacts(finalAppId, finalFileName, targetFilePath);
 
                         // Sử dụng finalFileName
                         String fileUrl = String.format("app_images/%s/%s", finalAppId, finalFileName);
                         logger.info("✅ Đã upload file base64 cục bộ: {}", targetFilePath);
+                        
+                        // Trả về JSON có cả path (video) và thumb (thumbnail nếu có)
+                        StringBuilder jsonResponse = new StringBuilder("{");
+                        jsonResponse.append("\"path\":\"").append(fileUrl).append("\"");
+                        if (thumbUrl != null && !thumbUrl.isEmpty()) {
+                            jsonResponse.append(",\"thumb\":\"").append(thumbUrl).append("\"");
+                        }
+                        jsonResponse.append("}");
+                        
                         return ResponseEntity.ok()
-                                .contentType(MediaType.TEXT_PLAIN)
+                                .contentType(MediaType.APPLICATION_JSON)
                                 .header("Access-Control-Allow-Origin", "*")
                                 .header("Access-Control-Allow-Methods", "GET, POST, DELETE, PUT, OPTIONS")
                                 .header("Access-Control-Allow-Headers", "DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range,Authorization")
-                                .body(fileUrl.getBytes(StandardCharsets.UTF_8));
+                                .body(jsonResponse.toString().getBytes(StandardCharsets.UTF_8));
                     } catch (IllegalArgumentException e) {
                         logger.error("❌ Dữ liệu Base64 không hợp lệ: {}", e.getMessage());
                         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
@@ -2126,21 +2177,26 @@ public class WebSpringController {
                         Path targetFilePath = uploadRootPath.resolve(sanitizedName);
                         Files.write(targetFilePath, buffer);
 
-                        // Precompute optimized variants chỉ cho ảnh (skip video)
-                        String ext = getExtension(sanitizedName.toLowerCase(Locale.ROOT));
-                        if (UPLOAD_IMAGE_EXTENSIONS.contains(ext)) {
-                            precomputeImageVariants(finalAppId, sanitizedName, targetFilePath);
-                        }
+                        String thumbUrl = processUploadedMediaArtifacts(finalAppId, sanitizedName, targetFilePath);
 
                         // Sử dụng finalAppId
-                        String fileUrl = String.format("app_images/%s/%s", finalAppId, name);
+                        String fileUrl = String.format("app_images/%s/%s", finalAppId, sanitizedName);
                         logger.info("✅ Đã upload file từ link cục bộ: {}", targetFilePath);
+                        
+                        // Trả về JSON có cả path (video) và thumb (thumbnail nếu có)
+                        StringBuilder jsonResponse = new StringBuilder("{");
+                        jsonResponse.append("\"path\":\"").append(fileUrl).append("\"");
+                        if (thumbUrl != null && !thumbUrl.isEmpty()) {
+                            jsonResponse.append(",\"thumb\":\"").append(thumbUrl).append("\"");
+                        }
+                        jsonResponse.append("}");
+                        
                         return ResponseEntity.ok()
-                                .contentType(MediaType.TEXT_PLAIN)
+                                .contentType(MediaType.APPLICATION_JSON)
                                 .header("Access-Control-Allow-Origin", "*")
                                 .header("Access-Control-Allow-Methods", "GET, POST, DELETE, PUT, OPTIONS")
                                 .header("Access-Control-Allow-Headers", "DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range,Authorization")
-                                .body(fileUrl.getBytes(StandardCharsets.UTF_8));
+                                .body(jsonResponse.toString().getBytes(StandardCharsets.UTF_8));
                     } catch (IOException e) {
                         logger.error("❌ Lỗi khi đọc dữ liệu từ URL hoặc ghi file cục bộ: {}", e.getMessage(), e);
                         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
@@ -3768,6 +3824,299 @@ public class WebSpringController {
         } catch (Exception e) {
             logger.warn("⚠️ Lỗi precompute variants cho {}/{}: {}", appId, imageName, e.getMessage());
         }
+    }
+
+    private String processUploadedMediaArtifacts(String appId, String fileName, Path filePath) {
+        String ext = getExtension(fileName.toLowerCase(Locale.ROOT));
+        if (UPLOAD_IMAGE_EXTENSIONS.contains(ext)) {
+            precomputeImageVariants(appId, fileName, filePath);
+            return "";
+        }
+        if (UPLOAD_VIDEO_EXTENSIONS.contains(ext)) {
+            return precomputeVideoThumbnail(appId, fileName, filePath);
+        }
+        return "";
+    }
+
+    private String deriveVideoThumbnailFileName(String videoFileName) {
+        if (videoFileName == null || videoFileName.isBlank()) return "";
+        int dot = videoFileName.lastIndexOf('.');
+        if (dot <= 0) return "";
+        return videoFileName.substring(0, dot) + ".thumb.jpg";
+    }
+
+    private String precomputeVideoThumbnail(String appId, String videoFileName, Path videoFilePath) {
+        try {
+            if (videoFileName == null || videoFileName.isBlank() || videoFilePath == null || !Files.exists(videoFilePath)) {
+                return "";
+            }
+            String thumbFileName = deriveVideoThumbnailFileName(videoFileName);
+            if (thumbFileName.isBlank()) {
+                return "";
+            }
+
+            Path uploadDir = Paths.get(appDataDir, "public", "app_images", appId);
+            Path thumbPath = uploadDir.resolve(thumbFileName);
+            if (Files.exists(thumbPath)) {
+                long thumbTs = Files.getLastModifiedTime(thumbPath).toMillis();
+                long videoTs = Files.getLastModifiedTime(videoFilePath).toMillis();
+                if (thumbTs >= videoTs) {
+                    return String.format("app_images/%s/%s", appId, thumbFileName);
+                }
+            }
+
+            boolean extracted = extractVideoThumbnailWithJave2(videoFilePath, thumbPath);
+            if (!extracted) {
+                logger.warn("⚠️ Không tạo được thumbnail frame thực bằng Jave2 cho {}/{} - fallback placeholder", appId, videoFileName);
+                createVideoPlaceholderThumbnail(appId, videoFileName, thumbPath);
+                return String.format("app_images/%s/%s", appId, thumbFileName);
+            }
+
+            logger.info("✅ Đã tạo thumbnail video: {}/{} -> {}", appId, videoFileName, thumbFileName);
+            return String.format("app_images/%s/%s", appId, thumbFileName);
+        } catch (Exception e) {
+            logger.warn("⚠️ Lỗi tạo thumbnail video cho {}/{}: {}", appId, videoFileName, e.getMessage());
+            return "";
+        }
+    }
+
+    private boolean extractVideoThumbnailWithJave2(Path videoFilePath, Path thumbPath) {
+        try {
+            Path parent = thumbPath.getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
+            }
+            Files.deleteIfExists(thumbPath);
+
+            MultimediaObject multimediaObject = new MultimediaObject(videoFilePath.toFile());
+            ScreenExtractor screenExtractor = new ScreenExtractor();
+            // Lấy frame tại giây thứ 1 (1000ms), resize về 1280x720, quality 85.
+            screenExtractor.renderOneImage(multimediaObject, 1280, 720, 1000L, thumbPath.toFile(), 85);
+
+            return Files.exists(thumbPath) && Files.size(thumbPath) > 0;
+        } catch (Exception e) {
+            logger.warn("⚠️ Jave2 render thumbnail thất bại cho {}: {}", videoFilePath, e.getMessage());
+            return false;
+        }
+    }
+
+    private void createVideoPlaceholderThumbnail(String appId, String videoFileName, Path thumbPath) {
+        try {
+            if (thumbPath == null) return;
+            Path parent = thumbPath.getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
+            }
+
+            final int width = 1280;
+            final int height = 720;
+            BufferedImage img = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+            Graphics2D g = img.createGraphics();
+            try {
+                g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+
+                GradientPaint gradient = new GradientPaint(0, 0, new Color(29, 53, 87), width, height, new Color(69, 123, 157));
+                g.setPaint(gradient);
+                g.fillRect(0, 0, width, height);
+
+                int circleDiameter = 180;
+                int cx = width / 2;
+                int cy = height / 2;
+                g.setColor(new Color(255, 255, 255, 210));
+                g.fillOval(cx - circleDiameter / 2, cy - circleDiameter / 2, circleDiameter, circleDiameter);
+
+                int triSize = 58;
+                Polygon tri = new Polygon(
+                        new int[]{cx - triSize / 3, cx - triSize / 3, cx + (triSize * 2) / 3},
+                        new int[]{cy - triSize / 2, cy + triSize / 2, cy},
+                        3
+                );
+                g.setColor(new Color(29, 53, 87));
+                g.fillPolygon(tri);
+
+                String label = "VIDEO";
+                g.setFont(new Font("SansSerif", Font.BOLD, 44));
+                g.setColor(new Color(255, 255, 255, 235));
+                int labelX = (width - g.getFontMetrics().stringWidth(label)) / 2;
+                g.drawString(label, labelX, cy + 170);
+
+                String safeName = safeVideoBaseName(videoFileName);
+                if (!safeName.isBlank()) {
+                    String displayName = truncateForThumbnail(safeName, 64);
+                    g.setFont(new Font("SansSerif", Font.PLAIN, 30));
+                    g.setColor(new Color(245, 245, 245, 230));
+                    int nameX = (width - g.getFontMetrics().stringWidth(displayName)) / 2;
+                    g.drawString(displayName, Math.max(40, nameX), height - 52);
+                }
+            } finally {
+                g.dispose();
+            }
+
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            ImageIO.write(img, "jpg", baos);
+            Files.write(thumbPath, baos.toByteArray(), StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+            logger.info("✅ Đã tạo thumbnail placeholder cho video (không cần công cụ hệ thống bổ sung): {}/{}", appId, videoFileName);
+        } catch (Exception e) {
+            logger.warn("⚠️ Không tạo được thumbnail placeholder cho {}/{}: {}", appId, videoFileName, e.getMessage());
+        }
+    }
+
+    private String safeVideoBaseName(String videoFileName) {
+        if (videoFileName == null || videoFileName.isBlank()) return "";
+        String clean = videoFileName;
+        int slash = clean.lastIndexOf('/');
+        if (slash >= 0 && slash < clean.length() - 1) {
+            clean = clean.substring(slash + 1);
+        }
+        int dot = clean.lastIndexOf('.');
+        if (dot > 0) {
+            clean = clean.substring(0, dot);
+        }
+        clean = clean.replace('-', ' ').replace('_', ' ').trim();
+        return clean;
+    }
+
+    private String truncateForThumbnail(String value, int maxLen) {
+        if (value == null) return "";
+        if (value.length() <= maxLen) return value;
+        return value.substring(0, Math.max(0, maxLen - 3)).trim() + "...";
+    }
+
+    private String extractFirstVideoFileNameForApp(String appId, Object... fieldValues) {
+        if (appId == null || appId.isBlank() || fieldValues == null) {
+            return "";
+        }
+        for (Object value : fieldValues) {
+            String candidate = safeStr(value);
+            if (candidate.isBlank()) continue;
+            String fileName = extractVideoFileNameFromText(appId, candidate);
+            if (!fileName.isBlank()) {
+                return fileName;
+            }
+        }
+        return "";
+    }
+
+    private String extractVideoFileNameFromText(String appId, String rawText) {
+        if (rawText == null || rawText.isBlank()) {
+            return "";
+        }
+
+        List<String> candidates = new ArrayList<>();
+        String trimmed = rawText.trim();
+        candidates.add(trimmed);
+
+        Matcher matcher = VIDEO_FILE_PATTERN.matcher(trimmed);
+        while (matcher.find()) {
+            String matched = matcher.group(1);
+            if (matched != null && !matched.isBlank()) {
+                candidates.add(matched);
+            }
+        }
+
+        for (String candidate : candidates) {
+            String fileName = normalizeVideoFileNameForApp(appId, candidate);
+            if (!fileName.isBlank()) {
+                return fileName;
+            }
+        }
+        return "";
+    }
+
+    private String normalizeVideoFileNameForApp(String appId, String candidateRaw) {
+        if (candidateRaw == null || candidateRaw.isBlank()) {
+            return "";
+        }
+
+        String candidate = candidateRaw.trim().replace("\\/", "/").replace("\"", "");
+
+        try {
+            if (candidate.contains("/images.shtml")) {
+                int qIndex = candidate.indexOf('?');
+                if (qIndex >= 0 && qIndex < candidate.length() - 1) {
+                    String query = candidate.substring(qIndex + 1);
+                    for (String pair : query.split("&")) {
+                        int eqIndex = pair.indexOf('=');
+                        if (eqIndex <= 0) continue;
+                        String key = pair.substring(0, eqIndex);
+                        if (!"name".equalsIgnoreCase(key)) continue;
+                        String value = URLDecoder.decode(pair.substring(eqIndex + 1), StandardCharsets.UTF_8);
+                        candidate = value;
+                        break;
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        }
+
+        try {
+            candidate = URLDecoder.decode(candidate, StandardCharsets.UTF_8);
+        } catch (Exception ignored) {
+        }
+
+        int qIdx = candidate.indexOf('?');
+        if (qIdx >= 0) candidate = candidate.substring(0, qIdx);
+        int hIdx = candidate.indexOf('#');
+        if (hIdx >= 0) candidate = candidate.substring(0, hIdx);
+        candidate = candidate.trim();
+
+        String appPrefix1 = "app_images/" + appId + "/";
+        String appPrefix2 = "/app_images/" + appId + "/";
+        if (candidate.startsWith(appPrefix2)) {
+            candidate = candidate.substring(appPrefix2.length());
+        } else if (candidate.startsWith(appPrefix1)) {
+            candidate = candidate.substring(appPrefix1.length());
+        } else {
+            String marker = "/app_images/" + appId + "/";
+            int markerIndex = candidate.indexOf(marker);
+            if (markerIndex >= 0) {
+                candidate = candidate.substring(markerIndex + marker.length());
+            }
+        }
+
+        candidate = candidate.replace("\\", "/");
+        int slash = candidate.lastIndexOf('/');
+        if (slash >= 0 && slash < candidate.length() - 1) {
+            candidate = candidate.substring(slash + 1);
+        }
+
+        String ext = getExtension(candidate.toLowerCase(Locale.ROOT));
+        if (!UPLOAD_VIDEO_EXTENSIONS.contains(ext)) {
+            return "";
+        }
+        return candidate;
+    }
+
+    private String resolveVideoThumbnailUrlFromRow(String appId, Map<String, Object> row) {
+        if (appId == null || appId.isBlank() || row == null) {
+            return "";
+        }
+
+        String videoFileName = extractFirstVideoFileNameForApp(
+                appId,
+                row.get("videos"),
+                row.get("video"),
+                row.get("video_url"),
+                row.get("album")
+        );
+        if (videoFileName.isBlank()) {
+            return "";
+        }
+
+        String thumbFileName = deriveVideoThumbnailFileName(videoFileName);
+        if (thumbFileName.isBlank()) {
+            return "";
+        }
+
+        try {
+            Path thumbPath = Paths.get(appDataDir, "public", "app_images", appId, thumbFileName);
+            if (Files.exists(thumbPath) && Files.isRegularFile(thumbPath)) {
+                return "/images.shtml?app_id=" + appId + "&name=" + thumbFileName;
+            }
+        } catch (Exception ignored) {
+        }
+        return "";
     }
 
     // Try to load a precomputed variant that fits the requested width and preferred format (AVIF/WebP/JPEG/PNG)
@@ -5965,6 +6314,9 @@ public class WebSpringController {
                 m.put("excerpt", excerpt);
                 String thumb = safeStr(row.get("thumbnail"));
                 String cover = safeStr(row.get("cover"));
+                if (thumb.isEmpty()) {
+                    thumb = resolveVideoThumbnailUrlFromRow(appId, row);
+                }
                 if (!thumb.isEmpty() && !thumb.startsWith("http") && !thumb.startsWith("/images.shtml")) {
                     thumb = "/images.shtml?app_id=" + appId + "&name=" + thumb;
                 }
@@ -6032,6 +6384,9 @@ public class WebSpringController {
                 m.put("video_url", safeStr(row.get("video_url")));
                 String thumb = safeStr(row.get("thumbnail"));
                 String cover = safeStr(row.get("cover"));
+                if (thumb.isEmpty()) {
+                    thumb = resolveVideoThumbnailUrlFromRow(appId, row);
+                }
                 if (!thumb.isEmpty() && !thumb.startsWith("http") && !thumb.startsWith("/images.shtml")) {
                     thumb = "/images.shtml?app_id=" + appId + "&name=" + thumb;
                 }

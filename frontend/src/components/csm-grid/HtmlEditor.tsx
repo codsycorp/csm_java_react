@@ -83,30 +83,42 @@ export function HtmlEditor({
             const responseText = await response.text();
             
             let viewUrl: string;
+            let thumbUrl: string | undefined;
             
-            // Backend returns: app_images/{app_id}/{filename} (text/plain)
-            // We need to convert this to viewing URL
-            if (responseText.includes("app_images/")) {
-              // Extract the path from response
-              const filePath = responseText.trim();
-              // Use /images.shtml with app_id and name extracted from path
-              const match = filePath.match(/app_images\/([^/]+)\/(.+)$/);
+            // Backend returns JSON: {path, thumb} or plain text
+            let responseJson: any = null;
+            try {
+              const trimmed = responseText.trim();
+              if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+                responseJson = JSON.parse(trimmed);
+              }
+            } catch {
+              // Not JSON, handle as plain text below
+            }
+            
+            const resolveImagePath = (pathStr: string): string => {
+              if (!pathStr) return `/images.shtml?app_id=${APP_ID}&name=${fileName}`;
+              if (pathStr.includes('http')) return pathStr; // Already absolute URL
+              if (pathStr.includes('/images.shtml')) return pathStr; // Already resolved
+              const match = pathStr.match(/app_images\/([^/]+)\/(.+)$/);
               if (match) {
                 const [, appId, name] = match;
-                viewUrl = `/images.shtml?app_id=${appId}&name=${name}`;
-              } else {
-                // Fallback: assume the response is just the filename
-                viewUrl = `/images.shtml?app_id=${APP_ID}&name=${fileName}`;
+                return `/images.shtml?app_id=${appId}&name=${name}`;
+              }
+              return `/images.shtml?app_id=${APP_ID}&name=${pathStr}`;
+            };
+            
+            if (responseJson) {
+              // Backend returned JSON with path and optional thumb
+              viewUrl = resolveImagePath(responseJson.path || responseJson.url || '');
+              if (isVideo && responseJson.thumb) {
+                thumbUrl = resolveImagePath(responseJson.thumb);
               }
             } else {
-              // Try to parse as JSON
-              try {
-                const responseJson = JSON.parse(responseText);
-                viewUrl = responseJson.url || responseJson.path || `/images.shtml?app_id=${APP_ID}&name=${fileName}`;
-              } catch {
-                // Fallback
-                viewUrl = `/images.shtml?app_id=${APP_ID}&name=${fileName}`;
-              }
+              // Fallback: plain text response
+              viewUrl = responseText.includes('app_images/') 
+                ? resolveImagePath(responseText.trim())
+                : `/images.shtml?app_id=${APP_ID}&name=${fileName}`;
             }
             
             // Insert into Quill editor
@@ -114,9 +126,14 @@ export function HtmlEditor({
             if (quill) {
               const range = quill.getSelection(true);
               if (isVideo) {
-                quill.insertEmbed(range.index, "video", viewUrl);
+                // For videos: insert thumbnail image if available, else insert video tag
+                if (thumbUrl) {
+                  quill.insertEmbed(range.index, 'image', thumbUrl);
+                } else {
+                  quill.insertEmbed(range.index, 'video', viewUrl);
+                }
               } else {
-                quill.insertEmbed(range.index, "image", viewUrl);
+                quill.insertEmbed(range.index, 'image', viewUrl);
               }
               quill.setSelection(range.index + 1, 0);
             }

@@ -30,6 +30,10 @@ import javax.annotation.PreDestroy;
 
 import java.util.*;
 import java.util.Timer;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 
 import org.apache.lucene.document.*;
 import org.apache.lucene.index.*;
@@ -90,6 +94,100 @@ public class RecordManager {
 
     public static final String PHONE = "0937.528.839";
     public static final String WRITEBY = "base._co.osa";
+
+    // Stable key ordering for pagination/cursor. Prefer larger numeric IDs first.
+    private static final Comparator<String> RECORD_KEY_COMPARATOR_DESC = (a, b) -> {
+        if (a == null && b == null) return 0;
+        if (a == null) return 1;
+        if (b == null) return -1;
+        try {
+            long la = Long.parseLong(a);
+            long lb = Long.parseLong(b);
+            return Long.compare(lb, la);
+        } catch (Exception ignored) {
+        }
+        return b.compareTo(a);
+    };
+
+    private static final Comparator<Map<String, Object>> RECORD_ROW_COMPARATOR_DESC = (a, b) -> {
+        long ta = resolveRecordSortTimestamp(a);
+        long tb = resolveRecordSortTimestamp(b);
+        int tsCmp = Long.compare(tb, ta);
+        if (tsCmp != 0) return tsCmp;
+
+        String ida = a != null ? String.valueOf(a.getOrDefault("id", "")) : "";
+        String idb = b != null ? String.valueOf(b.getOrDefault("id", "")) : "";
+        try {
+            long la = Long.parseLong(ida);
+            long lb = Long.parseLong(idb);
+            return Long.compare(lb, la);
+        } catch (Exception ignored) {
+        }
+        return idb.compareTo(ida);
+    };
+
+    private static long resolveRecordSortTimestamp(Map<String, Object> row) {
+        if (row == null) return 0L;
+        long ts = parseEpochMillisLike(row.get("publish_date"));
+        if (ts <= 0L) ts = parseEpochMillisLike(row.get("updated_at"));
+        if (ts <= 0L) ts = parseEpochMillisLike(row.get("created_at"));
+        if (ts <= 0L) ts = parseEpochMillisLike(row.get("id"));
+        return ts;
+    }
+
+    private static long parseEpochMillisLike(Object value) {
+        if (value == null) return 0L;
+
+        if (value instanceof Number n) {
+            long raw = n.longValue();
+            if (raw > 0 && raw < 1_000_000_000_000L) {
+                return raw * 1000L;
+            }
+            return Math.max(raw, 0L);
+        }
+
+        String s = String.valueOf(value).trim();
+        if (s.isEmpty()) return 0L;
+
+        try {
+            long raw = Long.parseLong(s);
+            if (raw > 0 && raw < 1_000_000_000_000L) {
+                return raw * 1000L;
+            }
+            return Math.max(raw, 0L);
+        } catch (Exception ignored) {
+        }
+
+        try {
+            return Instant.parse(s).toEpochMilli();
+        } catch (Exception ignored) {
+        }
+
+        try {
+            return Instant.parse(s.replace(" ", "T") + "Z").toEpochMilli();
+        } catch (Exception ignored) {
+        }
+
+        try {
+            LocalDateTime dt = LocalDateTime.parse(s, DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+            return dt.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
+        } catch (Exception ignored) {
+        }
+
+        try {
+            LocalDateTime dt = LocalDateTime.parse(s, DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"));
+            return dt.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
+        } catch (Exception ignored) {
+        }
+
+        try {
+            LocalDateTime dt = LocalDateTime.parse(s, DateTimeFormatter.ofPattern("yyyy-MM-dd"));
+            return dt.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
+        } catch (Exception ignored) {
+        }
+
+        return 0L;
+    }
 
     private String DIR_PATH; // <--- BỎ TỪ KHÓA 'static'
 
@@ -1689,6 +1787,8 @@ public class RecordManager {
                     logger.warn("Document {} found without '_key' field in index {}.", scoreDoc.doc, indexKey);
                 }
             }
+            // Ensure deterministic ordering across requests (independent of Lucene score/docId changes).
+            keys.sort(RECORD_KEY_COMPARATOR_DESC);
             logger.debug("Found {} keys {} in table {} for app {}.", keys.size(),keys, tableName, appId);
 
         } catch (IOException e) {
@@ -2671,7 +2771,7 @@ public class RecordManager {
                     // Nếu không thể, trả về error hoặc return empty (không lấy từ trang 1 lại)
                     
                     // Tìm thử lastKey có giá trị cao hơn key nào không (binary search để find position)
-                    int insertPos = Collections.binarySearch(allKeys, lastKey);
+                    int insertPos = Collections.binarySearch(allKeys, lastKey, RECORD_KEY_COMPARATOR_DESC);
                     if (insertPos < 0) {
                         // insertPos = -(insertion point) - 1
                         // insertion point là vị trí nơi lastKey sẽ được insert để giữ list sorted
@@ -2783,6 +2883,8 @@ public class RecordManager {
         }
 
         // --- TRẢ VỀ KẾT QUẢ ---
+        rows.sort(RECORD_ROW_COMPARATOR_DESC);
+        rows.sort(RECORD_ROW_COMPARATOR_DESC);
         Map<String, Object> result = new HashMap<>();
         result.put("rows", rows);
         result.put("totalCount", totalCount);
@@ -2889,6 +2991,7 @@ public class RecordManager {
         }
 
         Map<String, Object> result = new HashMap<>();
+        rows.sort(RECORD_ROW_COMPARATOR_DESC);
         result.put("rows", rows);
         result.put("totalCount", totalCount);
         result.put("nextCursor", nextCursor);

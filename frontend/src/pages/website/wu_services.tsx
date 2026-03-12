@@ -66,17 +66,12 @@ import { csmDecrypt } from "#src/components/csm-grid/CsmCrypto";
 // Nếu decrypt fail (dữ liệu cũ), fallback về decodeURIComponent
 const decodeHtml = (html?: string): string | undefined => {
   if (!html) return html;
-  console.log('🔍 [wu_services] decodeHtml input (first 100 chars):', html.substring(0, 100));
   
   // Nếu input chứa %, chắc chắn là dữ liệu cũ (URL-encoded), SKIP decrypt
   if (html.includes('%')) {
-    console.log('📄 [wu_services] Input contains %, skipping decrypt (old URL-encoded data)');
     try {
-      const decoded = decodeURIComponent(html);
-      console.log('✅ [wu_services] decodeURIComponent success (first 100 chars):', decoded.substring(0, 100));
-      return decoded;
-    } catch (e) {
-      console.warn('⚠️ [wu_services] decodeURIComponent failed:', e);
+      return decodeURIComponent(html);
+    } catch {
       return html;
     }
   }
@@ -86,30 +81,58 @@ const decodeHtml = (html?: string): string | undefined => {
   const hasVietnamese = /[\u00C0-\u1EF9]/i.test(html);
   
   if (hasHtmlTags || hasVietnamese) {
-    console.log('✅ [wu_services] Input is plain HTML or Vietnamese text (not encrypted), using as-is');
     return html;
   }
   
   // Thử decrypt (cho dữ liệu MỚI - encrypted)
   try {
     const decrypted = csmDecrypt(html);
-    console.log('✅ [wu_services] csmDecrypt returned (first 100 chars):', decrypted?.substring(0, 100));
     // Kiểm tra nếu decrypt thành công: chứa HTML tags hợp lệ
     if (decrypted && typeof decrypted === 'string' && decrypted.length > 0) {
       // Nếu chứa HTML tag thì OK
       if (/<[a-z][\s\S]*>/i.test(decrypted)) {
-        console.log('✅ [wu_services] Using decrypted result (contains valid HTML)');
         return decrypted;
       }
-      console.warn('⚠️ [wu_services] Decrypt result doesn\'t contain HTML tags, likely corrupted');
     }
-  } catch (e) {
-    console.warn('❌ [wu_services] csmDecrypt failed:', (e as any).message);
+  } catch {
+    // Fallback below
   }
   
   // Fallback: return nguyên bản
-  console.log('🔙 [wu_services] Using original input');
   return html;
+};
+
+const sanitizeHtmlForRender = (html?: string): string => {
+  if (!html) return '';
+  if (typeof window === 'undefined' || typeof DOMParser === 'undefined') return html;
+
+  try {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+
+    doc.querySelectorAll('script,iframe,object,embed,link[rel="import"]').forEach((node) => node.remove());
+
+    const allElements = doc.body.querySelectorAll('*');
+    allElements.forEach((el) => {
+      Array.from(el.attributes).forEach((attr) => {
+        const name = attr.name.toLowerCase();
+        const value = String(attr.value || '').trim().toLowerCase();
+
+        if (name.startsWith('on')) {
+          el.removeAttribute(attr.name);
+          return;
+        }
+
+        if ((name === 'href' || name === 'src') && value.startsWith('javascript:')) {
+          el.removeAttribute(attr.name);
+        }
+      });
+    });
+
+    return doc.body.innerHTML;
+  } catch {
+    return html;
+  }
 };
 
 // Helper functions to get translated property types and transaction types
@@ -197,9 +220,9 @@ const isLikelyImageUrl = (url?: string): boolean => {
   if (!url || typeof url !== 'string') return false;
   if (isSvgDataPlaceholder(url) || isLikelyVideoUrl(url)) return false;
   const clean = url.split('?')[0].split('#')[0].toLowerCase();
-  // If extension is present, only allow known image extensions.
+  // If extension is present, only allow known image extensions (including .thumb.jpg).
   if (/\.[a-z0-9]+$/.test(clean)) {
-    return /\.(jpg|jpeg|png|gif|webp|bmp|svg|avif)$/.test(clean);
+    return /\.(jpg|jpeg|png|gif|webp|bmp|svg|avif|thumb\.jpg)$/.test(clean);
   }
   // Extension-less CDN/API URLs are treated as image candidates.
   return true;
@@ -235,6 +258,35 @@ const parseMediaUrls = (value: any): string[] => {
   return Array.from(new Set(walk(value).filter(Boolean)));
 };
 
+const deriveVideoThumbnailUrl = (videoUrl?: string): string => {
+  if (!videoUrl || typeof videoUrl !== 'string') return '';
+  const input = videoUrl.trim();
+  if (!input) return '';
+
+  try {
+    if (input.includes('/images.shtml')) {
+      const parsed = new URL(input, window.location.origin);
+      const name = parsed.searchParams.get('name');
+      if (name) {
+        const cleanName = name.split('?')[0].split('#')[0];
+        const dotIndex = cleanName.lastIndexOf('.');
+        if (dotIndex > 0) {
+          const thumbName = `${cleanName.slice(0, dotIndex)}.thumb.jpg`;
+          parsed.searchParams.set('name', thumbName);
+          return `${parsed.pathname}?${parsed.searchParams.toString()}`;
+        }
+      }
+    }
+  } catch {
+    // Keep fallback path conversion below.
+  }
+
+  const clean = input.split('?')[0].split('#')[0];
+  const dotIndex = clean.lastIndexOf('.');
+  if (dotIndex <= 0) return '';
+  return `${clean.slice(0, dotIndex)}.thumb.jpg`;
+};
+
 const svgPlaceholder = (label: string, w = 800, h = 520) => {
   const svg = `
     <svg xmlns='http://www.w3.org/2000/svg' width='${w}' height='${h}' viewBox='0 0 ${w} ${h}'>
@@ -256,11 +308,25 @@ const svgPlaceholder = (label: string, w = 800, h = 520) => {
 const getPrimaryImage = (post: ServicePost, categoryKey?: string) => {
   const placeholder = svgPlaceholder(post.title || categoryKey || 'CSM');
 
-  // Priority 1 (old behavior): always prefer image fields first.
+  const videoCandidates = Array.from(new Set([
+    ...parseMediaUrls(post.videos),
+    ...parseMediaUrls((post as any).album),
+    ...parseMediaUrls((post as any).video),
+    ...parseMediaUrls((post as any).video_url),
+  ]))
+    .filter((u) => !!u && !isSvgDataPlaceholder(u));
+
+  const derivedThumbCandidates = videoCandidates
+    .filter((u) => isLikelyVideoUrl(u))
+    .map((u) => normalizeImageUrl(deriveVideoThumbnailUrl(u)) || '')
+    .filter((u) => !!u && isLikelyImageUrl(u));
+
+  // Priority 1: always prefer image fields first (including derived thumbnails from videos).
   const imageCandidates = [
     ...parseMediaUrls(post.thumbnail),
     ...parseMediaUrls((post as any).cover),
     ...parseMediaUrls(post.images),
+    ...derivedThumbCandidates,
   ];
   const realImage = imageCandidates.find((u) => isLikelyImageUrl(u));
 
@@ -269,14 +335,6 @@ const getPrimaryImage = (post: ServicePost, categoryKey?: string) => {
   }
 
   // Priority 2: only when no image, use video as card cover.
-  const videoCandidates = Array.from(new Set([
-    ...parseMediaUrls(post.videos),
-    ...parseMediaUrls((post as any).album),
-    ...parseMediaUrls((post as any).video),
-    ...parseMediaUrls((post as any).video_url),
-    ...imageCandidates.filter((u) => isLikelyVideoUrl(u)),
-  ]))
-    .filter((u) => !!u && !isSvgDataPlaceholder(u));
   const videoUrl = videoCandidates.find(Boolean);
   if (videoUrl) {
     return { src: videoUrl, placeholder, type: 'video' as const };
@@ -2454,7 +2512,7 @@ const WuServicesPage: React.FC = () => {
                     color: 'var(--text-primary)'
                   }}
                   className="category-content-intro"
-                  dangerouslySetInnerHTML={{ __html: decodeHtml(content) || '' }}
+                  dangerouslySetInnerHTML={{ __html: sanitizeHtmlForRender(decodeHtml(content) || '') }}
                 />
               )}
 

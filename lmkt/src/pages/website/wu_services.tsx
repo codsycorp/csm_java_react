@@ -130,53 +130,73 @@ const translatePropertyType = (key: string, t: any): string => {
 
 const { Title, Paragraph, Text } = Typography;
 
-// Helper function to decode HTML or decrypt encrypted content
+// Helper function to decode HTML - csmDecrypt already handles URL-decoding path internally.
 const decodeHtml = (html?: string): string | undefined => {
   if (!html) return html;
   
-  // Nếu input chứa %, chắc chắn là dữ liệu cũ (URL-encoded), SKIP decrypt
+  // Legacy URL-encoded data path.
   if (html.includes('%')) {
     try {
-      const decoded = decodeURIComponent(html);
-      console.log('✅ URL-decode success, returning decoded HTML');
-      return decoded;
-    } catch (e) {
-      console.warn('⚠️ URL-decode failed:', e);
+      return decodeURIComponent(html);
+    } catch {
       // If decodeURIComponent fails, return as-is
       return html;
     }
   }
   
-  // Kiểm tra nếu input là plain HTML/text - KHÔNG decrypt
+  // Plain HTML/text path - skip decrypt for better performance.
   const hasHtmlTags = /<[a-z][\s\S]*>/i.test(html);
-  const hasVietnamese = /[\u00C0-\u1EF9]/i.test(html); // Tiếng Việt Unicode range
+  const hasVietnamese = /[\u00C0-\u1EF9]/i.test(html);
   
   if (hasHtmlTags || hasVietnamese) {
-    // Chắc chắn là plain text/HTML, KHÔNG phải encrypted
-    console.log('✅ Input is plain HTML or Vietnamese text, using as-is');
     return html;
   }
   
-  // Thử decrypt (cho dữ liệu MỚI - encrypted)
+  // Encrypted data path.
   try {
     const decrypted = csmDecrypt(html);
-    console.log('✅ csmDecrypt returned result');
-    // Kiểm tra nếu decrypt thành công: chứa HTML tags hợp lệ
     if (decrypted && typeof decrypted === 'string' && decrypted.length > 0) {
-      // Nếu chứa HTML tag thì OK
-      if (/<[a-z][\s\S]*>/i.test(decrypted)) {
-        console.log('✅ Using decrypted result (contains valid HTML)');
-        return decrypted;
-      }
-      console.warn('⚠️ Decrypt result doesn\'t contain HTML tags, likely corrupted');
+      if (/<[a-z][\s\S]*>/i.test(decrypted)) return decrypted;
     }
-  } catch (e) {
-    console.warn('❌ csmDecrypt failed:', (e as any).message);
+  } catch {
+    // Fallback below
   }
   
-  // Fallback: return nguyên bản
-  console.log('🔙 Using original input');
+  // Fallback: return original raw value.
   return html;
+};
+
+const sanitizeHtmlForRender = (html?: string): string => {
+  if (!html) return '';
+  if (typeof window === 'undefined' || typeof DOMParser === 'undefined') return html;
+
+  try {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+
+    doc.querySelectorAll('script,iframe,object,embed,link[rel="import"]').forEach((node) => node.remove());
+
+    const allElements = doc.body.querySelectorAll('*');
+    allElements.forEach((el) => {
+      Array.from(el.attributes).forEach((attr) => {
+        const name = attr.name.toLowerCase();
+        const value = String(attr.value || '').trim().toLowerCase();
+
+        if (name.startsWith('on')) {
+          el.removeAttribute(attr.name);
+          return;
+        }
+
+        if ((name === 'href' || name === 'src') && value.startsWith('javascript:')) {
+          el.removeAttribute(attr.name);
+        }
+      });
+    });
+
+    return doc.body.innerHTML;
+  } catch {
+    return html;
+  }
 };
 
 export interface ServiceCategory {
@@ -218,6 +238,35 @@ const isLikelyVideoUrl = (url?: string): boolean => {
   if (!url || typeof url !== 'string') return false;
   const clean = url.split('?')[0].split('#')[0].toLowerCase();
   return /\.(mp4|webm|ogg|mov|m4v|m3u8|mpd)$/.test(clean);
+};
+
+const deriveVideoThumbnailUrl = (videoUrl?: string): string => {
+  if (!videoUrl || typeof videoUrl !== 'string') return '';
+  const input = videoUrl.trim();
+  if (!input) return '';
+
+  try {
+    if (input.includes('/images.shtml')) {
+      const parsed = new URL(input, window.location.origin);
+      const name = parsed.searchParams.get('name');
+      if (name) {
+        const cleanName = name.split('?')[0].split('#')[0];
+        const dotIndex = cleanName.lastIndexOf('.');
+        if (dotIndex > 0) {
+          const thumbName = `${cleanName.slice(0, dotIndex)}.thumb.jpg`;
+          parsed.searchParams.set('name', thumbName);
+          return `${parsed.pathname}?${parsed.searchParams.toString()}`;
+        }
+      }
+    }
+  } catch {
+    // Keep fallback path conversion below.
+  }
+
+  const clean = input.split('?')[0].split('#')[0];
+  const dotIndex = clean.lastIndexOf('.');
+  if (dotIndex <= 0) return '';
+  return `${clean.slice(0, dotIndex)}.thumb.jpg`;
 };
 
 const isLikelyImageUrl = (url?: string): boolean => {
@@ -283,11 +332,25 @@ const svgPlaceholder = (label: string, w = 800, h = 520) => {
 const getPrimaryImage = (post: ServicePost, categoryKey?: string) => {
   const placeholder = svgPlaceholder(post.title || categoryKey || 'CSM');
 
+  const videoCandidates = Array.from(new Set([
+    ...parseMediaUrls(post.videos),
+    ...parseMediaUrls((post as any).album),
+    ...parseMediaUrls((post as any).video),
+    ...parseMediaUrls((post as any).video_url),
+  ]))
+    .filter((u) => !!u && !isSvgDataPlaceholder(u));
+
+  const derivedThumbCandidates = videoCandidates
+    .filter((u) => isLikelyVideoUrl(u))
+    .map((u) => normalizeImageUrl(deriveVideoThumbnailUrl(u)) || '')
+    .filter((u) => !!u && isLikelyImageUrl(u));
+
   // Priority 1 (old behavior): always prefer image fields first.
   const imageCandidates = [
     ...parseMediaUrls(post.thumbnail),
     ...parseMediaUrls((post as any).cover),
     ...parseMediaUrls(post.images),
+    ...derivedThumbCandidates,
   ];
   const realImage = imageCandidates.find((u) => isLikelyImageUrl(u));
 
@@ -296,15 +359,12 @@ const getPrimaryImage = (post: ServicePost, categoryKey?: string) => {
   }
 
   // Priority 2: only when no image, use video as card cover.
-  const videoCandidates = Array.from(new Set([
-    ...parseMediaUrls(post.videos),
-    ...parseMediaUrls((post as any).album),
-    ...parseMediaUrls((post as any).video),
-    ...parseMediaUrls((post as any).video_url),
+  const videoCandidatesWithImageFallback = Array.from(new Set([
+    ...videoCandidates,
     ...imageCandidates.filter((u) => isLikelyVideoUrl(u)),
   ]))
     .filter((u) => !!u && !isSvgDataPlaceholder(u));
-  const videoUrl = videoCandidates.find(Boolean);
+  const videoUrl = videoCandidatesWithImageFallback.find(Boolean);
   if (videoUrl) {
     return { src: videoUrl, placeholder, type: 'video' as const };
   }
@@ -2330,7 +2390,7 @@ const WuServicesPage: React.FC = () => {
   const tabItems = allCategories.map(category => ({
     key: category.key,
     label: (
-      <span style={{ display: 'none' }}>{category.title}</span>
+      <span style={{ display: 'none' }}>{(getHeaderMeta(category.key).title) || category.title}</span>
     ),
     children: (
       <section aria-labelledby={`tab-title-${category.key}`} style={{ minHeight: 400 }}>
@@ -2344,7 +2404,7 @@ const WuServicesPage: React.FC = () => {
             
             return <>
               <h1 id={`tab-title-${category.key}`} style={{ fontSize: 28, fontWeight: 800, color, margin: 0, letterSpacing: 0.2, textShadow: `0 2px 8px ${color}22` }}>
-                {meta.icon || category.icon} <span style={{ marginLeft: 8 }}>{title}</span>
+                {meta.icon} <span style={{ marginLeft: 8 }}>{title}</span>
               </h1>
               <Paragraph style={{ fontSize: 17, color: 'var(--text-secondary)', margin: '8px 0 0 0' }}>{desc}</Paragraph>
               
@@ -2363,7 +2423,7 @@ const WuServicesPage: React.FC = () => {
                     color: 'var(--text-primary)'
                   }}
                   className="category-content-intro"
-                  dangerouslySetInnerHTML={{ __html: decodeHtml(content) || '' }}
+                  dangerouslySetInnerHTML={{ __html: sanitizeHtmlForRender(decodeHtml(content) || '') }}
                 />
               )}
 

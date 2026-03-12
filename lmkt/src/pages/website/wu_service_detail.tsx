@@ -457,6 +457,75 @@ function isSvgDataPlaceholder(url?: string): boolean {
   return url.trim().toLowerCase().startsWith('data:image/svg+xml');
 }
 
+function isLikelyVideoUrl(url?: string): boolean {
+  if (!url || typeof url !== 'string') return false;
+  const clean = url.split('?')[0].split('#')[0].toLowerCase();
+  return /\.(mp4|webm|ogg|mov|m4v|m3u8|mpd)$/.test(clean);
+}
+
+function isLikelyImageUrl(url?: string): boolean {
+  if (!url || typeof url !== 'string') return false;
+  if (isSvgDataPlaceholder(url) || isLikelyVideoUrl(url)) return false;
+  const clean = url.split('?')[0].split('#')[0].toLowerCase();
+  if (/\.[a-z0-9]+$/.test(clean)) {
+    return /\.(jpg|jpeg|png|gif|webp|bmp|svg|avif)$/.test(clean);
+  }
+  return true;
+}
+
+function deriveVideoThumbnailUrl(videoUrl?: string): string {
+  if (!videoUrl || typeof videoUrl !== 'string') return '';
+  const input = videoUrl.trim();
+  if (!input) return '';
+
+  try {
+    if (input.includes('/images.shtml')) {
+      const parsed = new URL(input, window.location.origin);
+      const name = parsed.searchParams.get('name');
+      if (name) {
+        const cleanName = name.split('?')[0].split('#')[0];
+        const dotIndex = cleanName.lastIndexOf('.');
+        if (dotIndex > 0) {
+          const thumbName = `${cleanName.slice(0, dotIndex)}.thumb.jpg`;
+          parsed.searchParams.set('name', thumbName);
+          return `${parsed.pathname}?${parsed.searchParams.toString()}`;
+        }
+      }
+    }
+  } catch {
+    // Keep fallback below.
+  }
+
+  const clean = input.split('?')[0].split('#')[0];
+  const dotIndex = clean.lastIndexOf('.');
+  if (dotIndex <= 0) return '';
+  return `${clean.slice(0, dotIndex)}.thumb.jpg`;
+}
+
+function resolveRepresentativeThumbnail(rawThumbnail: any, rawCover: any, rawImages: any, rawVideos: any, rawAlbum?: any, rawVideo?: any, rawVideoUrl?: any): string {
+  const imageCandidates = [
+    ...parseMediaUrls(rawThumbnail),
+    ...parseMediaUrls(rawCover),
+    ...parseMediaUrls(rawImages),
+  ].filter((u) => !!u && isLikelyImageUrl(u));
+  if (imageCandidates.length > 0) {
+    return imageCandidates[0];
+  }
+
+  const videoCandidates = [
+    ...parseMediaUrls(rawVideos),
+    ...parseMediaUrls(rawAlbum),
+    ...parseMediaUrls(rawVideo),
+    ...parseMediaUrls(rawVideoUrl),
+  ].filter((u) => !!u && isLikelyVideoUrl(u));
+
+  const derivedThumb = videoCandidates
+    .map((u) => normalizeImageUrl(deriveVideoThumbnailUrl(u)) || '')
+    .find((u) => !!u && isLikelyImageUrl(u));
+
+  return derivedThumb || '';
+}
+
 // Helper: Map SSR detail to ServicePost
 function mapSsrDetailToPost(sd: any): ServicePost {
   const images = parseMediaUrls(sd.images);
@@ -511,7 +580,10 @@ function mapSsrDetailToPost(sd: any): ServicePost {
     content: decodeHtml(sd.content) || '',
     category: sd.service_type || '',
     serviceType: sd.service_type || '',
-    thumbnail: getThumbnailString(sd.thumbnail) || getThumbnailString(sd.cover) || '',
+    thumbnail: resolveRepresentativeThumbnail(sd.thumbnail, sd.cover, sd.images, sd.videos, sd.album, sd.video, sd.video_url)
+      || getThumbnailString(sd.thumbnail)
+      || getThumbnailString(sd.cover)
+      || '',
     publishDate: sd.publish_date || '',
     readTime: '',
     expiryDate: sd.expiry_date || '',
@@ -569,7 +641,11 @@ function useServiceDetailAndRelated(category: string | undefined, id: string | u
               title: String(r.title || ''),
               slug: r.slug || '',
               excerpt: r.excerpt || r.summary || '',
-              thumbnail: r.thumbnail || r.cover || parseMediaUrls(r.images)[0] || '',
+              thumbnail: resolveRepresentativeThumbnail(r.thumbnail, r.cover, r.images, r.videos, r.album, r.video, r.video_url)
+                || r.thumbnail
+                || r.cover
+                || parseMediaUrls(r.images)[0]
+                || '',
               images: parseMediaUrls(r.images),
               videos: parseMediaUrls(r.videos),
               serviceType: r.service_type || '',
@@ -592,7 +668,11 @@ function useServiceDetailAndRelated(category: string | undefined, id: string | u
               title: String(r.title || ''),
               slug: r.slug || '',
               excerpt: r.excerpt || r.summary || '',
-              thumbnail: r.thumbnail || r.cover || parseMediaUrls(r.images)[0] || '',
+              thumbnail: resolveRepresentativeThumbnail(r.thumbnail, r.cover, r.images, r.videos, r.album, r.video, r.video_url)
+                || r.thumbnail
+                || r.cover
+                || parseMediaUrls(r.images)[0]
+                || '',
               images: parseMediaUrls(r.images),
               videos: parseMediaUrls(r.videos),
               serviceType: r.service_type || '',
@@ -634,6 +714,15 @@ function getPostImages(post: ServicePost): string[] {
   const images: string[] = parseMediaUrls(post.images);
   if (images.length === 0 && post.thumbnail) {
     images.push(...parseMediaUrls(post.thumbnail));
+  }
+  if (images.length === 0) {
+    const videos = getPostVideos(post);
+    const derived = videos
+      .map((v) => normalizeImageUrl(deriveVideoThumbnailUrl(v)) || '')
+      .find((u) => !!u && isLikelyImageUrl(u));
+    if (derived) {
+      images.push(derived);
+    }
   }
   return images;
 }
@@ -1758,8 +1847,11 @@ export default function WuServiceDetail() {
                       const relExcerpt = getMultilingualField(rel, 'excerpt', relCurrentLang);
                       const relImages = getPostImages(rel);
                       const relVideos = getPostVideos(rel);
-                      const relThumbCandidate = normalizeImageUrl(rel.thumbnail);
-                      const relThumb = relImages[0] || (!isSvgDataPlaceholder(relThumbCandidate) ? relThumbCandidate : '');
+                      const relThumbCandidate = resolveRepresentativeThumbnail(rel.thumbnail, (rel as any).cover, rel.images, rel.videos, (rel as any).album, (rel as any).video, (rel as any).video_url);
+                      const relThumb = relImages[0]
+                        || (!isSvgDataPlaceholder(relThumbCandidate) ? relThumbCandidate : '')
+                        || relVideos.map((v) => normalizeImageUrl(deriveVideoThumbnailUrl(v)) || '').find((u) => !!u && isLikelyImageUrl(u))
+                        || '';
                       const relVideo = relVideos[0];
                       const relServiceType = rel.serviceType || rel.category || post?.serviceType || 'bat-dong-san';
                       const relHref = `/${relServiceType}/${rel.slug}${langSuffix}`;

@@ -265,9 +265,17 @@ const eventRegistry = {
  */
 const getCryptoFunctions = () => {
   if (typeof window !== 'undefined' && window.csmCrypto) {
+    const encryptFn = window.csmCrypto.encrypt || window.csmCrypto.csmEncrypt;
+    const decryptFn = window.csmCrypto.decrypt || window.csmCrypto.csmDecrypt;
+    if (typeof encryptFn === 'function' && typeof decryptFn === 'function') {
+      return {
+        encrypt: encryptFn,
+        decrypt: decryptFn
+      };
+    }
     return {
-      encrypt: window.csmCrypto.encrypt,
-      decrypt: window.csmCrypto.decrypt
+      encrypt: (text) => text,
+      decrypt: (text) => text
     };
   }
   console.warn('⚠️ window.csmCrypto not found, crypto functions disabled');
@@ -2552,15 +2560,21 @@ async function syncServiceDefinitionsFromServer(force = false) {
       lmktRows.forEach(item => {
         const slug = item.slug || item.service_code || item.id;
         if (!slug) return;
+
+        const existingProject = LMKT_PROJECT_DEFS.find(p => p.service_code === slug) || {};
+        const menuNames = normalizeMenuTranslations(item, {
+          ...existingProject,
+          name: item.name || item.category || existingProject.name || slug
+        });
         
         const newProject = {
           service_code: slug,
-          name: item.name || item.category || slug,
-          name_en: item.name_en || item.name || slug,
-          name_zh: item.name_zh || item.name || slug,
-          category: item.category || item.name || slug,
-          category_en: item.category_en || item.category || item.name || slug,
-          category_zh: item.category_zh || item.category || item.name || slug,
+          name: menuNames.name,
+          name_en: menuNames.name_en,
+          name_zh: menuNames.name_zh,
+          category: menuNames.category,
+          category_en: menuNames.category_en,
+          category_zh: menuNames.category_zh,
           image: item.image || `https://www.h-holding.vn/app_images/projects/${slug}-og.jpg`,
           attributes_icon: item.attributes_icon || "BuildOutlined",
           attributes_color: item.attributes_color || "#1890ff",
@@ -2613,16 +2627,20 @@ async function syncServiceDefinitionsFromServer(force = false) {
         
         const existing = INDUSTRY_TYPES[slug] || {};
         const isNew = !INDUSTRY_TYPES[slug];
+        const menuNames = normalizeMenuTranslations(item, {
+          ...existing,
+          name: item.name || item.category || existing.name || slug
+        });
         
         // Merge trực tiếp vào INDUSTRY_TYPES (giữ prompt configs nếu có)
         INDUSTRY_TYPES[slug] = {
           ...existing, // Giữ prompt_role, prompt_style, etc từ hardcoded
-          name: item.name || existing.name || slug,
-          name_en: item.name_en || existing.name_en || item.name || slug,
-          name_zh: item.name_zh || existing.name_zh || item.name || slug,
-          category: item.category || existing.category || item.name || slug,
-          category_en: item.category_en || existing.category_en || item.category || slug,
-          category_zh: item.category_zh || existing.category_zh || item.category || slug,
+          name: menuNames.name,
+          name_en: menuNames.name_en,
+          name_zh: menuNames.name_zh,
+          category: menuNames.category,
+          category_en: menuNames.category_en,
+          category_zh: menuNames.category_zh,
           image: item.image || existing.image,
           attributes_icon: item.attributes_icon || existing.attributes_icon || "AppstoreOutlined",
           attributes_color: item.attributes_color || existing.attributes_color || "#1890ff",
@@ -10758,6 +10776,57 @@ function normalizeGroupFlags(slug, isGroupSlug, isGroupSlugDefault, isService) {
   };
 }
 
+function firstNonEmptyValue(...values) {
+  for (const value of values) {
+    if (value === undefined || value === null) continue;
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (trimmed) return trimmed;
+      continue;
+    }
+    return value;
+  }
+  return '';
+}
+
+// Keep name/category aligned across vi/en/zh and always prefer selected menu labels.
+function normalizeMenuTranslations(source = {}, fallback = {}) {
+  const vi = firstNonEmptyValue(
+    source.name,
+    source.category,
+    fallback.name,
+    fallback.category,
+    source.slug,
+    source.service_code,
+    fallback.slug,
+    fallback.service_code,
+    ''
+  );
+  const en = firstNonEmptyValue(
+    source.name_en,
+    source.category_en,
+    fallback.name_en,
+    fallback.category_en,
+    vi
+  );
+  const zh = firstNonEmptyValue(
+    source.name_zh,
+    source.category_zh,
+    fallback.name_zh,
+    fallback.category_zh,
+    vi
+  );
+
+  return {
+    name: vi,
+    name_en: en,
+    name_zh: zh,
+    category: vi,
+    category_en: en,
+    category_zh: zh
+  };
+}
+
 /**
  * ========================================================
  * HÀM: buildCategoryPrompt(categoryData, userCustomPrompt, domainKey)
@@ -11448,6 +11517,21 @@ async function upsertServiceCategoryContent(ctx, categorySlug, contentData) {
     }
     return 0;
   };
+
+  const menuNames = normalizeMenuTranslations(
+    contentData.selectedCategoryData || {},
+    {
+      ...baseCategory,
+      ...existing,
+      ...fallbackRow,
+      name: firstNonEmptyValue(baseCategory.name, existing.name, fallbackRow.name, contentData.name, categorySlug),
+      name_en: firstNonEmptyValue(baseCategory.name_en, existing.name_en, fallbackRow.name_en, contentData.name_en, contentData.name, categorySlug),
+      name_zh: firstNonEmptyValue(baseCategory.name_zh, existing.name_zh, fallbackRow.name_zh, contentData.name_zh, contentData.name, categorySlug),
+      category: firstNonEmptyValue(baseCategory.category, existing.category, fallbackRow.category, contentData.category, contentData.name, categorySlug),
+      category_en: firstNonEmptyValue(baseCategory.category_en, existing.category_en, fallbackRow.category_en, contentData.category_en, contentData.name_en, contentData.name, categorySlug),
+      category_zh: firstNonEmptyValue(baseCategory.category_zh, existing.category_zh, fallbackRow.category_zh, contentData.category_zh, contentData.name_zh, contentData.name, categorySlug)
+    }
+  );
   
   // Chuẩn bị dữ liệu cập nhật
   const rawContent = encodeHtml(contentData.content || '', { urlEncode: false }) || '';
@@ -11486,12 +11570,12 @@ async function upsertServiceCategoryContent(ctx, categorySlug, contentData) {
     domain: ctx.domain,
     app_id: ctx.app_id,
     status: 'active',
-    name: pick(contentData.name, existing.name, fallbackRow.name, baseCategory.name),
-    name_en: pick(contentData.name_en, existing.name_en, fallbackRow.name_en, baseCategory.name_en, contentData.name, existing.name, fallbackRow.name, baseCategory.name),
-    name_zh: pick(contentData.name_zh, existing.name_zh, fallbackRow.name_zh, baseCategory.name_zh, contentData.name, existing.name, fallbackRow.name, baseCategory.name),
-    category: pick(contentData.category, existing.category, fallbackRow.category, baseCategory.category, contentData.name, existing.name, fallbackRow.name, baseCategory.name),
-    category_en: pick(contentData.category_en, existing.category_en, fallbackRow.category_en, baseCategory.category_en, contentData.name_en, existing.name_en, fallbackRow.name_en, baseCategory.name_en),
-    category_zh: pick(contentData.category_zh, existing.category_zh, fallbackRow.category_zh, baseCategory.category_zh, contentData.name_zh, existing.name_zh, fallbackRow.name_zh, baseCategory.name_zh),
+    name: pick(menuNames.name, baseCategory.name, existing.name, fallbackRow.name, contentData.name),
+    name_en: pick(menuNames.name_en, baseCategory.name_en, existing.name_en, fallbackRow.name_en, contentData.name_en, contentData.name),
+    name_zh: pick(menuNames.name_zh, baseCategory.name_zh, existing.name_zh, fallbackRow.name_zh, contentData.name_zh, contentData.name),
+    category: pick(menuNames.category, baseCategory.category, existing.category, fallbackRow.category, contentData.category, contentData.name),
+    category_en: pick(menuNames.category_en, baseCategory.category_en, existing.category_en, fallbackRow.category_en, contentData.category_en, contentData.name_en, contentData.name),
+    category_zh: pick(menuNames.category_zh, baseCategory.category_zh, existing.category_zh, fallbackRow.category_zh, contentData.category_zh, contentData.name_zh, contentData.name),
     description: pick(contentData.description, existing.description, fallbackRow.description, baseCategory.description),
     description_en: pick(contentData.description_en, existing.description_en, fallbackRow.description_en, baseCategory.description_en),
     description_zh: pick(contentData.description_zh, existing.description_zh, fallbackRow.description_zh, baseCategory.description_zh),
@@ -11519,21 +11603,13 @@ async function upsertServiceCategoryContent(ctx, categorySlug, contentData) {
     updated_at: new Date().toISOString()
   };
 
-  const nameBase = objUpdate.name || '';
-  const categoryBase = objUpdate.category || '';
-
-  if (!objUpdate.name_en || objUpdate.name_en === nameBase) {
-    objUpdate.name_en = objUpdate.category_en || nameBase;
-  }
-  if (!objUpdate.name_zh || objUpdate.name_zh === nameBase) {
-    objUpdate.name_zh = objUpdate.category_zh || nameBase;
-  }
-  if (!objUpdate.category_en || objUpdate.category_en === categoryBase) {
-    objUpdate.category_en = objUpdate.name_en || categoryBase;
-  }
-  if (!objUpdate.category_zh || objUpdate.category_zh === categoryBase) {
-    objUpdate.category_zh = objUpdate.name_zh || categoryBase;
-  }
+  // Keep name/category strictly synchronized per language based on selected menu config.
+  objUpdate.name = firstNonEmptyValue(objUpdate.name, objUpdate.category, categorySlug);
+  objUpdate.name_en = firstNonEmptyValue(objUpdate.name_en, objUpdate.category_en, objUpdate.name);
+  objUpdate.name_zh = firstNonEmptyValue(objUpdate.name_zh, objUpdate.category_zh, objUpdate.name);
+  objUpdate.category = objUpdate.name;
+  objUpdate.category_en = objUpdate.name_en;
+  objUpdate.category_zh = objUpdate.name_zh;
   
   console.log(`[upsertServiceCategoryContent] Cập nhật web_services.${categorySlug}`);
   
@@ -11999,23 +12075,29 @@ async function ensureServiceContentUI() {
     const saveResult = await upsertServiceCategoryContent(ctx, categorySlug, {
       ...categoryData,
       ...contentData,
+      selectedCategoryData: {
+        ...categoryData,
+        ...normalizeMenuTranslations(categoryData, categoryData)
+      },
       slug: categorySlug,
       service_code: categorySlug,
       id: categoryData.id || categorySlug,
-      name: contentData.name || categoryName
+      name: categoryData.name || categoryName
     });
+
+    const syncedMenuNames = normalizeMenuTranslations(categoryData, contentData);
 
     if (mode === 'add_new') {
       if (globalSettings.isLmkt) {
         const idx = LMKT_PROJECT_DEFS.findIndex(p => p.service_code === categorySlug);
         const nextProject = {
           service_code: categorySlug,
-          name: contentData.name || categoryName,
-          name_en: contentData.name_en || categoryName,
-          name_zh: contentData.name_zh || categoryName,
-          category: contentData.category || contentData.name || categoryName,
-          category_en: contentData.category_en || contentData.name_en || categoryName,
-          category_zh: contentData.category_zh || contentData.name_zh || categoryName,
+          name: syncedMenuNames.name,
+          name_en: syncedMenuNames.name_en,
+          name_zh: syncedMenuNames.name_zh,
+          category: syncedMenuNames.category,
+          category_en: syncedMenuNames.category_en,
+          category_zh: syncedMenuNames.category_zh,
           image: contentData.image || categoryData.image,
           attributes_icon: contentData.attributes_icon || categoryData.attributes_icon,
           attributes_color: contentData.attributes_color || categoryData.attributes_color,
@@ -12026,12 +12108,12 @@ async function ensureServiceContentUI() {
       } else {
         INDUSTRY_TYPES[categorySlug] = {
           ...(INDUSTRY_TYPES[categorySlug] || {}),
-          name: contentData.name || categoryName,
-          name_en: contentData.name_en || categoryName,
-          name_zh: contentData.name_zh || categoryName,
-          category: contentData.category || contentData.name || categoryName,
-          category_en: contentData.category_en || contentData.name_en || categoryName,
-          category_zh: contentData.category_zh || contentData.name_zh || categoryName,
+          name: syncedMenuNames.name,
+          name_en: syncedMenuNames.name_en,
+          name_zh: syncedMenuNames.name_zh,
+          category: syncedMenuNames.category,
+          category_en: syncedMenuNames.category_en,
+          category_zh: syncedMenuNames.category_zh,
           image: contentData.image || categoryData.image,
           attributes_icon: contentData.attributes_icon || categoryData.attributes_icon,
           attributes_color: contentData.attributes_color || categoryData.attributes_color,
@@ -12220,16 +12302,26 @@ async function ensureServiceContentUI() {
         throw new Error("Không tìm thấy danh mục đang chọn để tạo prompt");
       }
 
+      const selectedMenuNames = normalizeMenuTranslations(selectedCategory, {
+        name: selectedCategory.name || industryName,
+        name_en: selectedCategory.name_en || selectedCategory.category_en || industryName,
+        name_zh: selectedCategory.name_zh || selectedCategory.category_zh || industryName,
+        category: selectedCategory.category || selectedCategory.name || industryName,
+        category_en: selectedCategory.category_en || selectedCategory.name_en || industryName,
+        category_zh: selectedCategory.category_zh || selectedCategory.name_zh || industryName,
+        slug: selectedCategory.slug || globalSettings.industry
+      });
+
       const categoryData = {
         ...selectedCategory,
         slug: selectedCategory.slug || globalSettings.industry,
         service_code: selectedCategory.service_code || selectedCategory.slug || globalSettings.industry,
-        name: selectedCategory.name || industryName,
-        name_en: selectedCategory.name_en || industryName,
-        name_zh: selectedCategory.name_zh || industryName,
-        category: selectedCategory.category || selectedCategory.name || industryName,
-        category_en: selectedCategory.category_en || selectedCategory.name_en || industryName,
-        category_zh: selectedCategory.category_zh || selectedCategory.name_zh || industryName
+        name: selectedMenuNames.name,
+        name_en: selectedMenuNames.name_en,
+        name_zh: selectedMenuNames.name_zh,
+        category: selectedMenuNames.category,
+        category_en: selectedMenuNames.category_en,
+        category_zh: selectedMenuNames.category_zh
       };
 
       const categorySlug = globalSettings.isLmkt ? globalSettings.project : globalSettings.industry;
