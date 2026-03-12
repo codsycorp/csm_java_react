@@ -4114,6 +4114,14 @@ public class WebSpringController {
             if (Files.exists(thumbPath) && Files.isRegularFile(thumbPath)) {
                 return "/images.shtml?app_id=" + appId + "&name=" + thumbFileName;
             }
+
+            Path videoPath = Paths.get(appDataDir, "public", "app_images", appId, videoFileName);
+            if (Files.exists(videoPath) && Files.isRegularFile(videoPath)) {
+                String generated = precomputeVideoThumbnail(appId, videoFileName, videoPath);
+                if (!generated.isBlank()) {
+                    return "/images.shtml?app_id=" + appId + "&name=" + thumbFileName;
+                }
+            }
         } catch (Exception ignored) {
         }
         return "";

@@ -29,6 +29,18 @@ const svgPlaceholder = (label: string, w = 1200, h = 800) => {
   return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
 };
 
+const withWidthParam = (url: string, width: number): string => {
+  if (!url) return url;
+  try {
+    const parsed = new URL(url, window.location.origin);
+    parsed.searchParams.set('w', String(width));
+    return `${parsed.pathname}?${parsed.searchParams.toString()}`;
+  } catch {
+    const separator = url.includes('?') ? '&' : '?';
+    return `${url}${separator}w=${width}`;
+  }
+};
+
 // Helper: detect if URL is video based on extension
 const isVideoUrl = (url: string): boolean => {
   return /\.(mp4|webm|ogg|mov|avi|mkv)$/i.test(url);
@@ -278,7 +290,7 @@ const MediaGallery: React.FC<MediaGalleryProps> = ({ images = [], videos = [], a
               >
                 {item.type === 'image' ? (
                   <Image
-                    src={item.url + '?w=480'}
+                    src={withWidthParam(item.url, 480)}
                     alt={`${alt} ${i + 1}`}
                     width={96}
                     height={72}

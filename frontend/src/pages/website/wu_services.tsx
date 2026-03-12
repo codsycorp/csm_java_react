@@ -197,7 +197,9 @@ const normalizeImageUrl = (url?: string): string | undefined => {
     try {
       const urlObj = new URL(url, window.location.origin);
       const namePath = urlObj.searchParams.get('name');
-      if (namePath) return namePath;
+      if (namePath && (/^\/?app_images\//.test(namePath) || /^https?:\/\//i.test(namePath))) {
+        return namePath.startsWith('/') ? namePath : `/${namePath}`;
+      }
     } catch (e) {
       console.error(`❌ Failed to parse URL:`, url, e);
     }
@@ -210,16 +212,29 @@ const isSvgDataPlaceholder = (url?: string): boolean => {
   return url.trim().toLowerCase().startsWith('data:image/svg+xml');
 };
 
+const getMediaAssetPath = (url?: string): string => {
+  if (!url || typeof url !== 'string') return '';
+  try {
+    if (url.includes('/images.shtml')) {
+      const parsed = new URL(url, window.location.origin);
+      return (parsed.searchParams.get('name') || url).trim();
+    }
+  } catch {
+    return url.trim();
+  }
+  return url.trim();
+};
+
 const isLikelyVideoUrl = (url?: string): boolean => {
   if (!url || typeof url !== 'string') return false;
-  const clean = url.split('?')[0].split('#')[0].toLowerCase();
+  const clean = getMediaAssetPath(url).split('?')[0].split('#')[0].toLowerCase();
   return /\.(mp4|webm|ogg|mov|m4v|m3u8|mpd)$/.test(clean);
 };
 
 const isLikelyImageUrl = (url?: string): boolean => {
   if (!url || typeof url !== 'string') return false;
   if (isSvgDataPlaceholder(url) || isLikelyVideoUrl(url)) return false;
-  const clean = url.split('?')[0].split('#')[0].toLowerCase();
+  const clean = getMediaAssetPath(url).split('?')[0].split('#')[0].toLowerCase();
   // If extension is present, only allow known image extensions (including .thumb.jpg).
   if (/\.[a-z0-9]+$/.test(clean)) {
     return /\.(jpg|jpeg|png|gif|webp|bmp|svg|avif|thumb\.jpg)$/.test(clean);

@@ -214,8 +214,8 @@ const normalizeImageUrl = (url?: string): string | undefined => {
     try {
       const urlObj = new URL(url, window.location.origin);
       const namePath = urlObj.searchParams.get('name');
-      if (namePath) {
-        return namePath;
+      if (namePath && (/^\/?app_images\//.test(namePath) || /^https?:\/\//i.test(namePath))) {
+        return namePath.startsWith('/') ? namePath : `/${namePath}`;
       }
     } catch (e) {
       console.error(`Failed to parse URL:`, url, e);
@@ -311,6 +311,35 @@ function parseMediaUrls(value: any): string[] {
 function isSvgDataPlaceholder(url?: string): boolean {
   if (!url || typeof url !== 'string') return false;
   return url.trim().toLowerCase().startsWith('data:image/svg+xml');
+}
+
+function deriveVideoThumbnailUrl(videoUrl?: string): string {
+  if (!videoUrl || typeof videoUrl !== 'string') return '';
+  const input = videoUrl.trim();
+  if (!input) return '';
+
+  try {
+    if (input.includes('/images.shtml')) {
+      const parsed = new URL(input, window.location.origin);
+      const name = parsed.searchParams.get('name');
+      if (name) {
+        const cleanName = name.split('?')[0].split('#')[0];
+        const dotIndex = cleanName.lastIndexOf('.');
+        if (dotIndex > 0) {
+          const thumbName = `${cleanName.slice(0, dotIndex)}.thumb.jpg`;
+          parsed.searchParams.set('name', thumbName);
+          return `${parsed.pathname}?${parsed.searchParams.toString()}`;
+        }
+      }
+    }
+  } catch {
+    return '';
+  }
+
+  const clean = input.split('?')[0].split('#')[0];
+  const dotIndex = clean.lastIndexOf('.');
+  if (dotIndex <= 0) return '';
+  return `${clean.slice(0, dotIndex)}.thumb.jpg`;
 }
 
 // Helper: Map SSR detail to ServicePost
@@ -555,7 +584,16 @@ function getPostImages(post: ServicePost): string[] {
   if (images.length === 0 && post.thumbnail) {
     images.push(...parseMediaUrls(post.thumbnail));
   }
-  return images;
+  if (images.length === 0) {
+    const videos = getPostVideos(post);
+    const derived = videos
+      .map((v) => normalizeImageUrl(deriveVideoThumbnailUrl(v)) || '')
+      .find((u) => !!u);
+    if (derived) {
+      images.push(derived);
+    }
+  }
+  return Array.from(new Set(images.filter(Boolean)));
 }
 
 function getPostVideos(post: ServicePost): string[] {
@@ -565,7 +603,7 @@ function getPostVideos(post: ServicePost): string[] {
     videos.push(...parseMediaUrls((post as any).video));
     videos.push(...parseMediaUrls((post as any).video_url));
   }
-  return videos;
+  return Array.from(new Set(videos.filter(Boolean)));
 }
 
 // Helper: Safely convert rating to number
