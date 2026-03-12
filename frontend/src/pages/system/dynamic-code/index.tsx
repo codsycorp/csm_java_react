@@ -74,118 +74,314 @@ function base64Decode(str: string): string {
 // Facebook API helpers - exposed via self object to auto code
 const FACEBOOK_POST_TIMEOUT_MS = 120000;
 
+// Type definitions for Facebook responses
+type FacebookResponse = {
+  success: boolean;
+  message?: string;
+  data?: any;
+  error?: any;
+};
+
 /**
- * Post to Facebook page with multiple images
+ * Check if auth is valid before posting (for debugging 403 errors)
  */
-async function postToFacebookWithImages(pageId: string, pageAccessToken: string, message: string, images: string[] = [], link?: string) {
+async function facebookCheckAuth(): Promise<FacebookResponse> {
+  console.log(`🔐 [facebookCheckAuth] Checking if auth is valid...`);
+  let response: any;
   try {
+    response = await request
+      .post<FacebookResponse>('user-info', {
+        json: {},
+        ignoreLoading: true,
+      })
+      .json<FacebookResponse>();
+    
+    if (response?.success || response?.data) {
+      console.log(`✅ [facebookCheckAuth] Auth is valid, user:`, response?.data?.username);
+      return {
+        success: true,
+        message: 'Auth valid',
+        data: response?.data,
+      };
+    } else {
+      console.warn(`⚠️ [facebookCheckAuth] Auth check failed:`, response);
+      return {
+        success: false,
+        message: response?.message || 'Auth check failed',
+        data: response?.data,
+      };
+    }
+  } catch (error: any) {
+    console.error('❌ [facebookCheckAuth] Auth error:', error);
+    return {
+      success: false,
+      message: error?.message || 'Auth check error',
+      error,
+    };
+  }
+}
+
+/**
+ * Post to Facebook page with multiple images and/or videos (Google Index pattern)
+ * @param params Structured params object
+ * @returns Promise<FacebookResponse>
+ * 
+ * Usage (new - recommended):
+ *   postToFacebookWithImages({ pageId, pageAccessToken, message, images: [], videos: [], link })
+ * 
+ * Usage (old - backward compat):
+ *   postToFacebookWithImages(pageId, pageAccessToken, message, images, videosOrLink, linkMaybe)
+ */
+async function postToFacebookWithImages(
+  pageIdOrParams: string | {
+    pageId: string;
+    pageAccessToken: string;
+    message: string;
+    images?: string[];
+    videos?: string[];
+    link?: string;
+  },
+  pageAccessTokenArg?: string,
+  messageArg?: string,
+  imagesArg?: string[],
+  videosOrLinkArg?: string[] | string,
+  linkMaybeArg?: string,
+): Promise<FacebookResponse> {
+  let response: any;
+  try {
+    let pageId: string;
+    let pageAccessToken: string;
+    let message: string;
+    let images: string[];
+    let videos: string[];
+    let link: string | null;
+
+    // Handle both new (object) and old (args) calling conventions
+    if (typeof pageIdOrParams === 'object') {
+      // New pattern: structured params
+      pageId = pageIdOrParams.pageId;
+      pageAccessToken = pageIdOrParams.pageAccessToken;
+      message = pageIdOrParams.message;
+      images = pageIdOrParams.images || [];
+      videos = pageIdOrParams.videos || [];
+      link = pageIdOrParams.link || null;
+    } else {
+      // Old pattern: individual args (backward compat)
+      pageId = pageIdOrParams;
+      pageAccessToken = pageAccessTokenArg || '';
+      message = messageArg || '';
+      images = imagesArg || [];
+      videos = Array.isArray(videosOrLinkArg) ? videosOrLinkArg : [];
+      link = typeof videosOrLinkArg === 'string' ? videosOrLinkArg : linkMaybeArg || null;
+    }
+
     const payload = {
       pageId,
       pageAccessToken,
       message,
       images,
-      link: link || null
+      videos,
+      link,
     };
-    const response = await request
-      .post<any>('facebook/post-with-images', {
-        json: payload,
-        ignoreLoading: true,
-        timeout: FACEBOOK_POST_TIMEOUT_MS
-      })
-      .json<any>();
+
+    // Call API with retry for transient errors
+    const callApi = async () => {
+      console.log(`🔐 [postToFacebookWithImages] Sending request to facebook/post-with-images with csm-token...`);
+      const result = await request
+        .post<FacebookResponse>('facebook/post-with-images', {
+          json: payload,
+          ignoreLoading: true,
+          timeout: FACEBOOK_POST_TIMEOUT_MS,
+        })
+        .json<FacebookResponse>();
+      console.log(`✅ [postToFacebookWithImages] Got response:`, result);
+      return result;
+    };
+
+    try {
+      response = await callApi();
+    } catch (firstError: any) {
+      const messageText = `${firstError?.message || ''}`;
+      const isTransient =
+        messageText.includes('HTTP 502') ||
+        messageText.includes('HTTP 503') ||
+        messageText.includes('HTTP 504') ||
+        messageText.includes('timeout') ||
+        messageText.includes('403');  // Add 403 as transient (might be CSRF token issue)
+      if (!isTransient) {
+        throw firstError;
+      }
+      console.warn('⚠️ Transient error posting Facebook media, retrying once...', firstError);
+      // Wait 500ms before retry to allow token refresh
+      await new Promise(resolve => setTimeout(resolve, 500));
+      response = await callApi();
+    }
+
+    // Return response (success or error)
     if (response?.success) {
       return {
         success: true,
-        post_id: response.data?.post_id,
-        images_count: response.data?.images_count || images.length
+        message: response?.message,
+        data: {
+          post_id: response.data?.post_id,
+          images_count: response.data?.images_count || images.length,
+          videos_count: response.data?.videos_count || videos.length,
+        },
       };
     } else {
-      throw new Error(response?.message || 'Facebook post failed');
+      return {
+        success: false,
+        message: response?.message || 'Facebook post failed',
+        data: response?.data,
+      };
     }
   } catch (error: any) {
     console.error('❌ Error posting to Facebook with images:', error);
-    throw error;
+    return {
+      success: false,
+      message: error?.message || 'Failed to post to Facebook',
+      error,
+    };
   }
 }
 
 /**
- * Post to Facebook page with single image
+ * Post to Facebook page with single image (Google Index pattern)
+ * @param pageId Facebook page ID
+ * @param pageAccessToken Facebook page access token
+ * @param message Post message/caption
+ * @param imageUrl Optional image URL
+ * @param link Optional link to attach
+ * @returns Promise<FacebookResponse>
  */
-async function postToFacebook(pageId: string, pageAccessToken: string, message: string, imageUrl?: string, link?: string) {
+async function postToFacebook(
+  pageId: string,
+  pageAccessToken: string,
+  message: string,
+  imageUrl?: string,
+  link?: string,
+): Promise<FacebookResponse> {
+  let response: any;
   try {
     const payload = {
       pageId,
       pageAccessToken,
       message,
       imageUrl: imageUrl || null,
-      link: link || null
+      link: link || null,
     };
-    const response = await request
-      .post<any>('facebook/post', {
+
+    response = await request
+      .post<FacebookResponse>('facebook/post', {
         json: payload,
         ignoreLoading: true,
-        timeout: FACEBOOK_POST_TIMEOUT_MS
+        timeout: FACEBOOK_POST_TIMEOUT_MS,
       })
-      .json<any>();
+      .json<FacebookResponse>();
+
     if (response?.success) {
       return {
         success: true,
-        post_id: response.data?.post_id
+        message: response?.message,
+        data: {
+          post_id: response.data?.post_id,
+        },
       };
     } else {
-      throw new Error(response?.message || 'Facebook post failed');
+      return {
+        success: false,
+        message: response?.message || 'Facebook post failed',
+        data: response?.data,
+      };
     }
   } catch (error: any) {
     console.error('❌ Error posting to Facebook:', error);
-    throw error;
+    return {
+      success: false,
+      message: error?.message || 'Failed to post to Facebook',
+      error,
+    };
   }
 }
 
 /**
- * Validate Facebook access token
+ * Validate Facebook access token (Google Index pattern)
+ * @param accessToken Facebook user access token
+ * @returns Promise<FacebookResponse>
  */
-async function facebookValidateToken(accessToken: string) {
+async function facebookValidateToken(accessToken: string): Promise<FacebookResponse> {
+  let response: any;
   try {
-    const response = await request.post<any>('facebook/me', { 
-      json: { accessToken }, 
-      ignoreLoading: true 
-    }).json<any>();
+    response = await request
+      .post<FacebookResponse>('facebook/me', {
+        json: { accessToken },
+        ignoreLoading: true,
+      })
+      .json<FacebookResponse>();
     return response;
   } catch (error: any) {
     console.error('❌ Error validating Facebook token:', error);
-    throw error;
+    return {
+      success: false,
+      message: error?.message || 'Token validation failed',
+      error,
+    };
   }
 }
 
 /**
- * Exchange short-lived Facebook token for long-lived token
+ * Exchange short-lived Facebook token for long-lived token (Google Index pattern)
+ * @param accessToken Short-lived access token
+ * @param clientId Facebook app ID
+ * @param appSecret Facebook app secret
+ * @returns Promise<FacebookResponse>
  */
-async function facebookExchangeToken(accessToken: string, clientId: string, appSecret: string) {
+async function facebookExchangeToken(
+  accessToken: string,
+  clientId: string,
+  appSecret: string,
+): Promise<FacebookResponse> {
+  let response: any;
   try {
-    const response = await request.post<any>('facebook/exchange-token', { 
-      json: { accessToken, clientId, appSecret }, 
-      ignoreLoading: true 
-    }).json<any>();
+    response = await request
+      .post<FacebookResponse>('facebook/exchange-token', {
+        json: { accessToken, clientId, appSecret },
+        ignoreLoading: true,
+      })
+      .json<FacebookResponse>();
     return response;
   } catch (error: any) {
     console.error('❌ Error exchanging Facebook token:', error);
-    throw error;
+    return {
+      success: false,
+      message: error?.message || 'Token exchange failed',
+      error,
+    };
   }
 }
 
 /**
- * Get Facebook pages for the user
+ * Get Facebook pages for the user (Google Index pattern)
+ * @param accessToken Facebook user access token
+ * @returns Promise<FacebookResponse>
  */
-async function facebookGetPages(accessToken: string) {
+async function facebookGetPages(accessToken: string): Promise<FacebookResponse> {
+  let response: any;
   try {
-    const response = await request.post<any>('facebook/pages', { 
-      json: { accessToken }, 
-      ignoreLoading: true 
-    }).json<any>();
+    response = await request
+      .post<FacebookResponse>('facebook/pages', {
+        json: { accessToken },
+        ignoreLoading: true,
+      })
+      .json<FacebookResponse>();
     return response;
   } catch (error: any) {
     console.error('❌ Error getting Facebook pages:', error);
-    throw error;
+    return {
+      success: false,
+      message: error?.message || 'Failed to get pages',
+      error,
+    };
   }
 }
 
@@ -736,6 +932,9 @@ export default function DynamicCodeMenu({
         encode: base64Encode,
         decode: base64Decode,
       },
+      
+      // Auth check (for debugging 403 errors)
+      facebookCheckAuth: facebookCheckAuth,
       
       // Facebook Posting APIs
       postToFacebookWithImages: postToFacebookWithImages,

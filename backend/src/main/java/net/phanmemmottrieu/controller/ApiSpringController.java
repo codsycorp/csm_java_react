@@ -2345,17 +2345,25 @@ public class ApiSpringController {
             }
 
             java.util.List<String> images = new java.util.ArrayList<>();
-            if (imagesObj instanceof java.util.List) {
-                @SuppressWarnings("unchecked")
-                java.util.List<String> imagesList = (java.util.List<String>) imagesObj;
-                images = imagesList;
+            if (imagesObj instanceof java.util.List<?>) {
+                for (Object imageObj : (java.util.List<?>) imagesObj) {
+                    if (imageObj instanceof String) {
+                        images.add((String) imageObj);
+                    }
+                }
+            } else if (imagesObj instanceof String && !((String) imagesObj).isBlank()) {
+                images.add((String) imagesObj);
             }
 
             java.util.List<String> videos = new java.util.ArrayList<>();
-            if (videosObj instanceof java.util.List) {
-                @SuppressWarnings("unchecked")
-                java.util.List<String> videosList = (java.util.List<String>) videosObj;
-                videos = videosList;
+            if (videosObj instanceof java.util.List<?>) {
+                for (Object videoObj : (java.util.List<?>) videosObj) {
+                    if (videoObj instanceof String) {
+                        videos.add((String) videoObj);
+                    }
+                }
+            } else if (videosObj instanceof String && !((String) videosObj).isBlank()) {
+                videos.add((String) videosObj);
             }
 
             // Chấp nhận cả URLs và base64
@@ -2381,7 +2389,8 @@ public class ApiSpringController {
                 if (normalized.isEmpty()) continue;
                 boolean isUrl = normalized.startsWith("http://") || normalized.startsWith("https://");
                 boolean isBase64 = normalized.startsWith("data:video/");
-                if (!(isUrl || isBase64)) continue;
+                boolean isRelativeLocal = normalized.startsWith("/app_images/") || normalized.startsWith("app_images/");
+                if (!(isUrl || isBase64 || isRelativeLocal)) continue;
                 if (!sanitizedVideos.contains(normalized)) {
                     sanitizedVideos.add(normalized);
                 }
@@ -2390,6 +2399,7 @@ public class ApiSpringController {
             org.springframework.web.client.RestTemplate restTemplate = new org.springframework.web.client.RestTemplate();
             final int[] imagesPosted = {0};
             final int[] videosPosted = {0};
+            String videoFailureReason = null;
             String mainPostId = null;
 
             // Ưu tiên đăng video trước (Facebook không hỗ trợ mixed attached_media ảnh+video trong cùng API flow này)
@@ -2397,6 +2407,10 @@ public class ApiSpringController {
                 try {
                     String videoInput = sanitizedVideos.get(0);
                     String videoUploadUrl = "https://graph.facebook.com/v18.0/" + pageId + "/videos";
+                    String videoDescription = message;
+                    if (link != null && !link.isEmpty() && (videoDescription == null || !videoDescription.contains(link))) {
+                        videoDescription = (videoDescription == null ? "" : videoDescription) + "\n\n" + link;
+                    }
 
                     if (videoInput.startsWith("data:video/")) {
                         int commaIndex = videoInput.indexOf(',');
@@ -2417,7 +2431,7 @@ public class ApiSpringController {
                             };
 
                             form.add("source", videoResource);
-                            form.add("description", message);
+                            form.add("description", videoDescription);
                             form.add("access_token", pageAccessToken);
 
                             org.springframework.http.HttpEntity<org.springframework.util.LinkedMultiValueMap<String, Object>> entity =
@@ -2433,35 +2447,148 @@ public class ApiSpringController {
                                     logger.info("✅ Posted video from base64, post_id: {}", mainPostId);
                                 }
                             }
+                        } else {
+                            videoFailureReason = "Invalid base64 video payload";
                         }
                     } else {
-                        org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
-                        headers.setContentType(org.springframework.http.MediaType.APPLICATION_FORM_URLENCODED);
+                        byte[] videoBytes = null;
+                        String relativePath = null;
 
-                        org.springframework.util.LinkedMultiValueMap<String, String> payload = new org.springframework.util.LinkedMultiValueMap<>();
-                        payload.add("file_url", videoInput);
-                        payload.add("description", message);
-                        payload.add("access_token", pageAccessToken);
+                        // Relative local path: /app_images/... or app_images/...
+                        if (videoInput.startsWith("/app_images/") || videoInput.startsWith("app_images/")) {
+                            relativePath = videoInput.startsWith("/") ? videoInput.substring(1) : videoInput;
+                        }
 
-                        org.springframework.http.HttpEntity<org.springframework.util.LinkedMultiValueMap<String, String>> entity =
-                            new org.springframework.http.HttpEntity<>(payload, headers);
+                        // Absolute URL: thử parse path để đọc local disk nếu là app_images
+                        if (relativePath == null && (videoInput.startsWith("http://") || videoInput.startsWith("https://"))) {
+                            try {
+                                java.net.URI uri = new java.net.URI(videoInput);
+                                String path = uri.getPath();
+                                if (path != null && path.startsWith("/app_images/")) {
+                                    relativePath = path.substring(1);
+                                }
+                            } catch (Exception e) {
+                                logger.warn("Cannot parse video URL {}: {}", videoInput, e.getMessage());
+                            }
+                        }
 
-                        @SuppressWarnings({"unchecked", "rawtypes"})
-                        ResponseEntity<Map<String, Object>> uploadResp = (ResponseEntity) restTemplate.postForEntity(videoUploadUrl, entity, Map.class);
-                        if (uploadResp.getStatusCode().is2xxSuccessful()) {
-                            Map<String, Object> respBody = uploadResp.getBody();
-                            mainPostId = respBody != null ? (String) respBody.get("id") : null;
-                            if (mainPostId != null && !mainPostId.isEmpty()) {
-                                videosPosted[0] = 1;
-                                logger.info("✅ Posted video from URL, post_id: {}", mainPostId);
+                        // Ưu tiên đọc từ disk giống luồng ảnh
+                        if (relativePath != null) {
+                            try {
+                                java.io.File videoFile = recordManager.getStaticFile(relativePath);
+                                if (videoFile != null && videoFile.exists() && videoFile.isFile()) {
+                                    videoBytes = java.nio.file.Files.readAllBytes(videoFile.toPath());
+                                    logger.info("✅ Read video from disk: {} bytes from {}", videoBytes.length, relativePath);
+                                } else {
+                                    logger.warn("⚠️ Video file not found on disk: {}", relativePath);
+                                    videoFailureReason = "Video file not found on disk: " + relativePath;
+                                }
+                            } catch (Exception diskError) {
+                                logger.warn("⚠️ Cannot read video from disk {}: {}", relativePath, diskError.getMessage());
+                                videoFailureReason = "Cannot read video from disk: " + diskError.getMessage();
+                            }
+                        }
+
+                        // Fallback: download HTTP URL if needed
+                        if ((videoBytes == null || videoBytes.length == 0)
+                                && (videoInput.startsWith("http://") || videoInput.startsWith("https://"))) {
+                            try {
+                                java.net.URL url = new java.net.URL(videoInput);
+                                java.io.InputStream inputStream = url.openStream();
+                                videoBytes = inputStream.readAllBytes();
+                                inputStream.close();
+                                logger.info("✅ Downloaded video via HTTP: {} bytes", videoBytes.length);
+                            } catch (Exception downloadError) {
+                                logger.warn("⚠️ Failed to download video via HTTP {}: {}", videoInput, downloadError.getMessage());
+                                videoFailureReason = "Cannot download video URL: " + downloadError.getMessage();
+                            }
+                        }
+
+                        // Strategy A: upload binary multipart (ổn định hơn khi Facebook không fetch được URL)
+                        if (videoBytes != null && videoBytes.length > 0) {
+                            org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
+                            headers.setContentType(org.springframework.http.MediaType.MULTIPART_FORM_DATA);
+
+                            org.springframework.util.LinkedMultiValueMap<String, Object> form = new org.springframework.util.LinkedMultiValueMap<>();
+                            final byte[] finalVideoBytes = videoBytes;
+                            org.springframework.core.io.ByteArrayResource videoResource = new org.springframework.core.io.ByteArrayResource(finalVideoBytes) {
+                                @Override
+                                public String getFilename() {
+                                    return "video.mp4";
+                                }
+                            };
+
+                            form.add("source", videoResource);
+                            form.add("description", videoDescription);
+                            form.add("access_token", pageAccessToken);
+
+                            org.springframework.http.HttpEntity<org.springframework.util.LinkedMultiValueMap<String, Object>> entity =
+                                new org.springframework.http.HttpEntity<>(form, headers);
+
+                            @SuppressWarnings({"unchecked", "rawtypes"})
+                            ResponseEntity<Map<String, Object>> uploadResp = (ResponseEntity) restTemplate.postForEntity(videoUploadUrl, entity, Map.class);
+                            if (uploadResp.getStatusCode().is2xxSuccessful()) {
+                                Map<String, Object> respBody = uploadResp.getBody();
+                                mainPostId = respBody != null ? (String) respBody.get("id") : null;
+                                if (mainPostId != null && !mainPostId.isEmpty()) {
+                                    videosPosted[0] = 1;
+                                    logger.info("✅ Posted video from binary upload, post_id: {}", mainPostId);
+                                }
+                            }
+                        }
+
+                        // Strategy B fallback: Facebook tự fetch file_url
+                        if (mainPostId == null && (videoInput.startsWith("http://") || videoInput.startsWith("https://"))) {
+                            org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
+                            headers.setContentType(org.springframework.http.MediaType.APPLICATION_FORM_URLENCODED);
+
+                            org.springframework.util.LinkedMultiValueMap<String, String> payload = new org.springframework.util.LinkedMultiValueMap<>();
+                            payload.add("file_url", videoInput);
+                            payload.add("description", videoDescription);
+                            payload.add("access_token", pageAccessToken);
+
+                            org.springframework.http.HttpEntity<org.springframework.util.LinkedMultiValueMap<String, String>> entity =
+                                new org.springframework.http.HttpEntity<>(payload, headers);
+
+                            @SuppressWarnings({"unchecked", "rawtypes"})
+                            ResponseEntity<Map<String, Object>> uploadResp = (ResponseEntity) restTemplate.postForEntity(videoUploadUrl, entity, Map.class);
+                            if (uploadResp.getStatusCode().is2xxSuccessful()) {
+                                Map<String, Object> respBody = uploadResp.getBody();
+                                mainPostId = respBody != null ? (String) respBody.get("id") : null;
+                                if (mainPostId != null && !mainPostId.isEmpty()) {
+                                    videosPosted[0] = 1;
+                                    logger.info("✅ Posted video from URL, post_id: {}", mainPostId);
+                                } else {
+                                    videoFailureReason = "Facebook did not return video id";
+                                }
                             }
                         }
                     }
                 } catch (Exception videoEx) {
-                    logger.warn("❌ Failed to post video, fallback to image/text flow: {}", videoEx.getMessage());
+                    if (videoEx instanceof org.springframework.web.client.HttpStatusCodeException httpEx) {
+                        logger.warn("❌ Failed to post video, fallback to image/text flow: status={}, body={}",
+                                httpEx.getStatusCode(), httpEx.getResponseBodyAsString());
+                    } else {
+                        logger.warn("❌ Failed to post video, fallback to image/text flow: {}", videoEx.getMessage());
+                    }
+                    videoFailureReason = videoEx.getMessage();
                     mainPostId = null;
                     videosPosted[0] = 0;
                 }
+            }
+
+            // If caller only requested video, do not silently downgrade to text post.
+            if (!sanitizedVideos.isEmpty() && sanitizedImages.isEmpty() && videosPosted[0] == 0) {
+                Map<String, Object> data = new HashMap<>();
+                data.put("pageId", pageId);
+                data.put("videos_count", 0);
+                data.put("images_count", 0);
+                data.put("reason", videoFailureReason != null ? videoFailureReason : "Video upload failed");
+                response.set("code", 502);
+                response.set("success", false);
+                response.set("message", "Video upload failed. Post was not published to avoid text-only fallback.");
+                response.set("data", data);
+                return;
             }
 
             // Nếu có images, upload từng ảnh ở chế độ unpublished rồi attach vào /feed
@@ -2734,7 +2861,12 @@ public class ApiSpringController {
             }
 
         } catch (Exception e) {
-            logger.error("❌ Error posting to Facebook with images: {}", e.getMessage(), e);
+            if (e instanceof org.springframework.web.client.HttpStatusCodeException httpEx) {
+                logger.error("❌ Error posting to Facebook with images: status={}, body={}",
+                        httpEx.getStatusCode(), httpEx.getResponseBodyAsString(), e);
+            } else {
+                logger.error("❌ Error posting to Facebook with images: {}", e.getMessage(), e);
+            }
             response.set("code", 500);
             response.set("success", false);
             response.set("message", "Error: " + e.getMessage());

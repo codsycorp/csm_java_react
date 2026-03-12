@@ -1571,7 +1571,7 @@ function clearArticleHistory() {
 async function postToFacebookPageNWJS(pageId, pageAccessToken, message, imageUrl = null, link = null, seft = {}) {
   console.warn('⚠️ postToFacebookPageNWJS is deprecated. Using postToFacebookPageWithImages instead.');
   const images = imageUrl ? [imageUrl] : [];
-  return postToFacebookPageWithImages(pageId, pageAccessToken, message, images, link, seft);
+  return postToFacebookPageWithImages(pageId, pageAccessToken, message, images, [], link, seft);
 }
 
 // ===== FEATURED IMAGE HISTORY =====
@@ -4391,9 +4391,21 @@ async function processContent(item, opts = {}) {
   console.log(`   latestConfig.zalo_fanpages isArray: ${Array.isArray(latestConfig?.zalo_fanpages)}`);
   console.log(`   latestConfig.zalo_fanpages length: ${latestConfig?.zalo_fanpages?.length || 0}`);
   
-  if (latestConfig && Array.isArray(latestConfig.zalo_fanpages) && latestConfig.zalo_fanpages.length > 0) {
+  const fanpagesFromConfig = latestConfig
+    ? (Array.isArray(latestConfig.zalo_fanpages) && latestConfig.zalo_fanpages.length > 0
+        ? latestConfig.zalo_fanpages
+        : (Array.isArray(latestConfig.fanpage_ids)
+            ? latestConfig.fanpage_ids.map((id, idx) => ({
+                id,
+                name: latestConfig.fanpage_names?.[idx] || latestConfig.fanpage_name || 'Unknown',
+                access_token: latestConfig.fanpage_tokens?.[idx] || latestConfig.fanpage_token || ''
+              }))
+            : []))
+    : [];
+
+  if (fanpagesFromConfig.length > 0) {
     // ✅ Config có nhiều fanpages - POST LÊN TẤT CẢ
-    fanpagesToPost = latestConfig.zalo_fanpages;
+    fanpagesToPost = fanpagesFromConfig;
     console.log(`✅ [Facebook] Config có ${fanpagesToPost.length} fanpages:`);
     fanpagesToPost.forEach((fp, idx) => {
       const hasToken = !!(fp.access_token && fp.access_token.length > 0);
@@ -4426,19 +4438,21 @@ async function processContent(item, opts = {}) {
         }
       }
       
-      // ✅ Lấy domain NGẪU NHIÊN (bỏ localhost) - random để phân tán traffic/SEO
-      const domainList = ctx.domain.split(',').map(d => d.trim()).filter(d => d && !d.includes('localhost'));
-      const primaryDomain = ctx.primary_domain // Ưu tiên field primary_domain nếu có
-        || (domainList.length > 0 ? domainList[Math.floor(Math.random() * domainList.length)] : ctx.domain.split(',')[0].trim());
-      const protocol = "https://";
-      
-      console.log(`🌐 [Domain Selection] Config domains: ${ctx.domain}`);
-      console.log(`🌐 [Domain Selection] Primary domain: ${primaryDomain}${ctx.primary_domain ? ' (from primary_domain field)' : ' (random from list)'}`);
-      
-      // Tạo URL bài viết theo format đúng - sử dụng service_type từ detail (= tên dự án)
-      let articleUrl;
-      console.log(`🔍 [URL Debug] detail.service_type="${detail.service_type}", detail.slug="${detail.slug}"`);
-      articleUrl = `${protocol}www.${primaryDomain}/${detail.service_type}/${detail.slug}`;
+      // Ưu tiên URL bài vừa tạo theo logic chuẩn (như luồng thủ công).
+      let articleUrl = await getLastCreatedPostUrl(5, 600);
+
+      if (!articleUrl) {
+        // Fallback an toàn nếu lastDetail chưa sẵn sàng.
+        const domainList = ctx.domain.split(',').map(d => d.trim()).filter(d => d && !d.includes('localhost'));
+        const primaryDomain = ctx.primary_domain
+          || (domainList.length > 0 ? domainList[Math.floor(Math.random() * domainList.length)] : ctx.domain.split(',')[0].trim());
+        const protocol = "https://";
+
+        console.log(`🌐 [Domain Selection] Config domains: ${ctx.domain}`);
+        console.log(`🌐 [Domain Selection] Primary domain: ${primaryDomain}${ctx.primary_domain ? ' (from primary_domain field)' : ' (random from list)'}`);
+        console.log(`🔍 [URL Debug] detail.service_type="${detail.service_type}", detail.slug="${detail.slug}"`);
+        articleUrl = `${protocol}www.${primaryDomain}/${detail.service_type}/${detail.slug}`;
+      }
       
       console.log(`📱 [Facebook] Article URL: ${articleUrl}`);
       
@@ -4567,32 +4581,59 @@ async function processContent(item, opts = {}) {
       if (validFbImages.length !== fullUrlImages.length) {
         console.warn(`⚠️ [Facebook] Lọc bỏ ${fullUrlImages.length - validFbImages.length} hình không hợp lệ`);
       }
+
+      const validFbVideos = fullUrlVideos.filter((vid, idx) => {
+        if (!vid || typeof vid !== 'string') {
+          console.log(`  [video ${idx}] ❌ REJECT: invalid value`);
+          return false;
+        }
+        const isHttp = vid.startsWith('http://') || vid.startsWith('https://');
+        const isData = vid.startsWith('data:');
+        const isRelative = vid.startsWith('/app_images/') || vid.startsWith('app_images/');
+        const ok = isHttp || isData || isRelative;
+        console.log(`  [video ${idx}] ${ok ? '✅ ACCEPT' : '❌ REJECT'}: ${vid.substring(0, 60)}${vid.length > 60 ? '...' : ''}`);
+        return ok;
+      });
       
       console.log(`✅ [Facebook] Sẽ post ${validFbImages.length} hình hợp lệ`);
+      console.log(`✅ [Facebook] Sẽ post ${validFbVideos.length} video hợp lệ`);
       
-      // ✅ DÙNG CHUNG NHÁNH CHUẨN postToSelectedFanpages (worker cũ)
-      // đảm bảo auto-flow và worker-flow đồng nhất: nội dung + ảnh + tuần tự từng fanpage
-      const postSummary = await postToSelectedFanpages(
-        [{
-          sender: item?.sender || 'Zalo',
-          content: extractMessageText(item) || detail.title || '',
-          images: validFbImages
-        }],
-        articleUrl,
-        fanpagesToPost,
-        {
-          images: validFbImages,
-          helperAi: ctx.helperAi,
-          seft: seft || {},
-          industry: effectiveIndustry,
-          skipRecord: true
+      // Chạy độc lập theo từng fanpage: mỗi fanpage = một quy trình đăng riêng.
+      let successCount = 0;
+      let failCount = 0;
+      let tokenExpiredDetected = false;
+
+      for (let pageIndex = 0; pageIndex < fanpagesToPost.length; pageIndex++) {
+        const page = fanpagesToPost[pageIndex];
+        const postSummary = await postToSelectedFanpages(
+          [{
+            sender: item?.sender || 'Zalo',
+            content: extractMessageText(item) || detail.title || '',
+            images: validFbImages,
+            videos: validFbVideos
+          }],
+          articleUrl,
+          [page],
+          {
+            images: validFbImages,
+            videos: validFbVideos,
+            helperAi: ctx.helperAi,
+            seft: seft || {},
+            industry: effectiveIndustry,
+            skipRecord: true
+          }
+        );
+
+        successCount += Number(postSummary?.successCount || 0);
+        failCount += Number(postSummary?.failCount || 0);
+
+        if (postSummary?.tokenExpiredDetected) {
+          tokenExpiredDetected = true;
+          break;
         }
-      );
+      }
 
-      const successCount = Number(postSummary?.successCount || 0);
-      const failCount = Number(postSummary?.failCount || 0);
-
-      if (postSummary?.tokenExpiredDetected) {
+      if (tokenExpiredDetected) {
         const msg = '❌ Facebook token đã hết hạn trong lúc chạy. Vui lòng cập nhật token và chạy lại.';
         canhbao(msg);
         thongbao(msg);
@@ -6333,7 +6374,16 @@ function getConfigsWithZaloGroups() {
     config_id: cfg.id,
     zalo_groups: cfg.zalo_groups || [],
     zalo_scan_interval_minutes: cfg.zalo_scan_interval_minutes || 5, // Default 5 phút
-    zalo_fanpages: cfg.zalo_fanpages || [] // Fanpage riêng cho config này
+    // Keep backward compatibility: derive fanpage list from legacy fields when needed.
+    zalo_fanpages: Array.isArray(cfg.zalo_fanpages) && cfg.zalo_fanpages.length > 0
+      ? cfg.zalo_fanpages
+      : (Array.isArray(cfg.fanpage_ids)
+          ? cfg.fanpage_ids.map((id, idx) => ({
+              id,
+              name: cfg.fanpage_names?.[idx] || cfg.fanpage_name || 'Unknown',
+              access_token: cfg.fanpage_tokens?.[idx] || cfg.fanpage_token || ''
+            })).filter(fp => fp.id)
+          : [])
   }));
 }
 
@@ -7952,11 +8002,25 @@ function getSelectedFacebookPagesForConfig(config_id) {
     const configs = loadDataOptionUser();
     const config = configs.find(c => c.id === config_id);
     
-    if (!config || !Array.isArray(config.zalo_fanpages)) {
+    if (!config) {
       return [];
     }
+
+    if (Array.isArray(config.zalo_fanpages) && config.zalo_fanpages.length > 0) {
+      return config.zalo_fanpages;
+    }
+
+    if (Array.isArray(config.fanpage_ids) && config.fanpage_ids.length > 0) {
+      return config.fanpage_ids
+        .map((id, idx) => ({
+          id,
+          name: config.fanpage_names?.[idx] || config.fanpage_name || 'Unknown',
+          access_token: config.fanpage_tokens?.[idx] || config.fanpage_token || ''
+        }))
+        .filter(fp => fp.id);
+    }
     
-    return config.zalo_fanpages;
+    return [];
   } catch (e) {
     console.warn(`⚠️ [GetFanpages] Error loading fanpages for config ${config_id}:`, e);
     return [];
@@ -8593,11 +8657,18 @@ async function postToSelectedFanpages(messages, postUrl, selectedPages = null, o
   const rawImagesFromMessages = Array.isArray(messages)
     ? messages.flatMap(m => Array.isArray(m?.images) ? m.images : [])
     : [];
+  const rawVideosFromMessages = Array.isArray(messages)
+    ? messages.flatMap(m => Array.isArray(m?.videos) ? m.videos : [])
+    : [];
   const rawImagesFromOptions = Array.isArray(options.images) ? options.images : [];
+  const rawVideosFromOptions = Array.isArray(options.videos) ? options.videos : [];
   const validFbImages = Array.from(new Set([...rawImagesFromOptions, ...rawImagesFromMessages]))
     .filter(img => typeof img === 'string' && (img.startsWith('http://') || img.startsWith('https://') || img.startsWith('data:')));
+  const validFbVideos = Array.from(new Set([...rawVideosFromOptions, ...rawVideosFromMessages]))
+    .filter(vid => typeof vid === 'string' && (vid.startsWith('http://') || vid.startsWith('https://') || vid.startsWith('data:') || vid.startsWith('/app_images/') || vid.startsWith('app_images/')));
 
   console.log(`🖼️ [PostToFanpages] Valid images for post: ${validFbImages.length}`);
+  console.log(`🎬 [PostToFanpages] Valid videos for post: ${validFbVideos.length}`);
 
   const buildUniqueFanpageContent = async (pageName, index) => {
     try {
@@ -8672,6 +8743,7 @@ async function postToSelectedFanpages(messages, postUrl, selectedPages = null, o
           page.access_token,
           pageFacebookContent,
           validFbImages,
+          validFbVideos,
           postUrl,
           seftObj
         );
@@ -10229,6 +10301,7 @@ function ensureZaloMultiGroupUI(container) {
       domain_key: globalSettings.domainKey,
       service_type: globalSettings.industry,
       project: globalSettings.project,
+      zalo_fanpages: selectedFanpages,
       fanpage_ids: selectedFanpages.map(f => f.id),
       fanpage_id: selectedFanpages[0]?.id || null,
       fanpage_names: selectedFanpages.map(f => f.name),
@@ -12952,6 +13025,68 @@ async function createServiceDetailPost(opts = {}) {
   thongbao("💾 Đang lưu bài viết vào database...");
   
   const result = await upsertDetail(context, detail);
+
+  // STEP 7: Auto post lên các fanpage đã chọn (nếu có)
+  let postSummary = null;
+  try {
+    const selectedPages = getSelectedFacebookPages();
+    if (!Array.isArray(selectedPages) || selectedPages.length === 0) {
+      console.warn('[createServiceDetailPost] Không có fanpage nào được chọn, bỏ qua bước đăng Facebook');
+    } else {
+      thongbao(`📱 Đang đăng bài lên ${selectedPages.length} fanpage đã chọn...`);
+
+      let postUrl = await getLastCreatedPostUrl(5, 600);
+      if (!postUrl) {
+        const domainRaw = detail.domain || context.domain || '';
+        const domains = String(domainRaw)
+          .split(',')
+          .map(d => d.trim())
+          .filter(d => d && !d.includes('localhost') && !d.includes('127.0.0.1'));
+        const fallbackDomain = domains[0] || String(domainRaw).split(',')[0]?.trim();
+        if (fallbackDomain && detail.service_type && detail.slug) {
+          postUrl = `https://www.${fallbackDomain}/${detail.service_type}/${detail.slug}`;
+        }
+      }
+
+      if (!postUrl) {
+        console.warn('[createServiceDetailPost] Không xác định được URL bài viết, bỏ qua đăng fanpage');
+      } else {
+        const fbImages = (uploadedImages || [])
+          .map(img => resolvePublicImageUrl(context, img))
+          .filter(img => typeof img === 'string' && (img.startsWith('http://') || img.startsWith('https://') || img.startsWith('data:')));
+        const fbVideos = (uploadedVideos || [])
+          .map(vid => resolvePublicImageUrl(context, vid))
+          .filter(vid => typeof vid === 'string' && (vid.startsWith('http://') || vid.startsWith('https://') || vid.startsWith('data:') || vid.startsWith('/app_images/') || vid.startsWith('app_images/')));
+
+        const fbMessageContent = detail?.excerpt || detail?.description || detail?.title || title;
+
+        postSummary = await postToSelectedFanpages(
+          [{
+            sender: 'ManualCreate',
+            content: fbMessageContent,
+            images: fbImages,
+            videos: fbVideos
+          }],
+          postUrl,
+          selectedPages,
+          {
+            images: fbImages,
+            videos: fbVideos,
+            helperAi: context.helperAi,
+            seft: seft || {},
+            industry: globalSettings.industry || context.service_type || 'bat-dong-san',
+            skipRecord: true
+          }
+        );
+
+        console.log(`[createServiceDetailPost] Facebook post summary:`, postSummary);
+      }
+    }
+  } catch (fbErr) {
+    // Không fail toàn bộ quy trình tạo bài nếu post fanpage lỗi
+    console.error('[createServiceDetailPost] Lỗi khi đăng fanpage:', fbErr);
+    canhbao(`⚠️ Bài đã tạo thành công nhưng đăng fanpage lỗi: ${fbErr.message}`);
+  }
   
   console.log(`[createServiceDetailPost] Hoàn tất tạo bài`);
   
@@ -12960,7 +13095,8 @@ async function createServiceDetailPost(opts = {}) {
     uploadedImages,
     uploadedVideos,
     aiDuration,
-    result
+    result,
+    postSummary
   };
 }
 
@@ -14640,6 +14776,7 @@ async function buildFacebookAutoQueueFromInput() {
           page.access_token,
           finalPost,
           images,
+          [],
           item.link || null,
           seft
         );
@@ -14821,7 +14958,7 @@ async function postToFacebookPage(pageId, pageAccessToken, message, imageUrl = n
 /**
  * Post to Facebook with multiple images (sử dụng seft helper)
  */
-async function postToFacebookPageWithImages(pageId, pageAccessToken, message, images = [], link = null, seft = {}) {
+async function postToFacebookPageWithImages(pageId, pageAccessToken, message, images = [], videos = [], link = null, seft = {}) {
   try {
     // ===== DEBUG: Log images received =====
     console.log(`📸 [postToFacebookPageWithImages] RECEIVED images (raw):`, images);
@@ -14832,12 +14969,31 @@ async function postToFacebookPageWithImages(pageId, pageAccessToken, message, im
       });
     }
     
+    // ===== DEBUG: Validate params =====
+    if (!pageId || !pageAccessToken || !message) {
+      console.error(`❌ [postToFacebookPageWithImages] Missing required params:`, {
+        pageId: !!pageId,
+        pageAccessToken: !!pageAccessToken && pageAccessToken.length > 0,
+        message: !!message && message.length > 0
+      });
+      throw new Error('Missing required params: pageId, pageAccessToken, message');
+    }
+    
+    console.log(`📝 [postToFacebookPageWithImages] Params validation passed`);
+    console.log(`  - pageId: ${pageId}`);
+    console.log(`  - pageAccessToken: ${pageAccessToken.substring(0, 20)}...`);
+    console.log(`  - message: ${message.substring(0, 100)}...`);
+    
     // Filter và validate images
     const validImages = Array.isArray(images) 
       ? images.filter(img => typeof img === 'string' && img.trim())
       : [];
+    const validVideos = Array.isArray(videos)
+      ? videos.filter(vid => typeof vid === 'string' && vid.trim())
+      : [];
     
     console.log(`🚀 [postToFacebookPageWithImages] After validation: ${validImages.length} images (before: ${images.length})`);
+    console.log(`🚀 [postToFacebookPageWithImages] After validation: ${validVideos.length} videos (before: ${videos.length})`);
     console.log(`📝 [postToFacebookPageWithImages] Message length: ${message.length} characters`);
     
     // ===== DEBUG: Log valid images =====
@@ -14847,11 +15003,49 @@ async function postToFacebookPageWithImages(pageId, pageAccessToken, message, im
       });
     }
     
-    // Ưu tiên sử dụng helper từ seft (thông qua AutoSetup.tsx)
+    // Ưu tiên sử dụng helper từ seft (thông qua DynamicCode/AutoSetup.tsx)
     if (seft && typeof seft.postToFacebookWithImages === 'function') {
-      console.log(`🔄 [postToFacebookPageWithImages] Calling seft.postToFacebookWithImages with ${validImages.length} images`);
-      const result = await seft.postToFacebookWithImages(pageId, pageAccessToken, message, validImages, link);
+      console.log(`🔄 [postToFacebookPageWithImages] Calling seft.postToFacebookWithImages with ${validImages.length} images, ${validVideos.length} videos`);
+      console.log(`🔐 [postToFacebookPageWithImages] Auth check - seft should have csm-token injected by request library`);
+      
+      // New pattern: call with structured params object
+      // postToFacebookWithImages supports both old args and new object pattern
+      let result;
+      try {
+        result = await seft.postToFacebookWithImages({
+          pageId,
+          pageAccessToken,
+          message,
+          images: validImages,
+          videos: validVideos,
+          link: link || null
+        });
+      } catch (callError) {
+        console.error(`❌ [postToFacebookPageWithImages] Exception from postToFacebookWithImages:`, callError);
+        throw callError;
+      }
+      
       console.log(`📤 [postToFacebookPageWithImages] seft.postToFacebookWithImages returned:`, result);
+      
+      // Handle new response format: { success, message, data: { post_id, images_count, videos_count }, error }
+      if (result && typeof result === 'object') {
+        if (result.success) {
+          return {
+            success: true,
+            post_id: result.data?.post_id,
+            images_count: result.data?.images_count || validImages.length,
+            videos_count: result.data?.videos_count || validVideos.length
+          };
+        } else {
+          const errorMsg = result.message || 'Facebook post failed';
+          console.warn(`⚠️ Facebook API returned error: ${errorMsg}`);
+          console.warn(`⚠️ Full error response:`, result);
+          throw new Error(errorMsg);
+        }
+      }
+      
+      // Fallback for unexpected response format
+      console.warn('⚠️ Unexpected response format from postToFacebookWithImages:', result);
       return result;
     }
     
@@ -14865,6 +15059,7 @@ async function postToFacebookPageWithImages(pageId, pageAccessToken, message, im
       pageAccessToken,
       message,
       images: validImages,
+      videos: validVideos,
       link: link || null
     };
 
@@ -14885,11 +15080,13 @@ async function postToFacebookPageWithImages(pageId, pageAccessToken, message, im
 
     if (data.success) {
       const imagesCount = data.data.images_count || validImages.length;
-      console.log(`✅ Post successful! ID: ${data.data.post_id}, Images: ${imagesCount}`);
+      const videosCount = data.data.videos_count || validVideos.length || 0;
+      console.log(`✅ Post successful! ID: ${data.data.post_id}, Images: ${imagesCount}, Videos: ${videosCount}`);
       return {
         post_id: data.data.post_id,
         success: true,
-        images_count: imagesCount
+        images_count: imagesCount,
+        videos_count: videosCount
       };
     } else {
       throw new Error(data.message || 'Facebook post failed');
@@ -15832,6 +16029,7 @@ async function handleFacebookPost() {
       targetPage.access_token,
       postContent,
       imagesToPost,
+      [],
       websiteLink || null,
       seft
     );  
