@@ -15185,7 +15185,7 @@ function parseFacebookAIResponse(rawResponse) {
     }
 
     return {
-      post_content: parsed.post_content || '',
+      post_content: parsed.post_content || parsed.facebook_post || '',
       hashtags: Array.isArray(parsed.hashtags) ? parsed.hashtags : [],
       suggested_image_description: parsed.suggested_image_description || '',
       target_audience: parsed.target_audience || '',
@@ -15201,11 +15201,29 @@ function parseFacebookAIResponse(rawResponse) {
  * Format post content với hashtags
  */
 function formatFacebookPostContent(content, hashtags) {
-  const hashtagStr = hashtags.map(tag => 
-    tag.startsWith('#') ? tag : `#${tag}`
-  ).join(' ');
-  
-  return `${content}\n\n${hashtagStr}`;
+  const baseContent = String(content || '').trim();
+  const givenTags = Array.isArray(hashtags) ? hashtags : [];
+
+  // Normalize tags to a canonical, deduplicated list.
+  const normalizeTag = (tag) => {
+    const t = String(tag || '').trim();
+    if (!t) return '';
+    return t.startsWith('#') ? t : `#${t}`;
+  };
+
+  const tagsInContent = baseContent.match(/#[^\s#]+/g) || [];
+  const mergedTags = [...new Set([...tagsInContent, ...givenTags.map(normalizeTag).filter(Boolean)])];
+
+  if (mergedTags.length === 0) {
+    return baseContent;
+  }
+
+  // Remove an existing trailing hashtag block (if present) to prevent double hashtags.
+  const contentWithoutTrailingHashtags = baseContent
+    .replace(/(\n\s*)?(#[^\s#]+(\s+|$))+\s*$/g, '')
+    .trim();
+
+  return `${contentWithoutTrailingHashtags}\n\n${mergedTags.join(' ')}`;
 }
 
 // ===== FACEBOOK UI COMPONENTS =====
