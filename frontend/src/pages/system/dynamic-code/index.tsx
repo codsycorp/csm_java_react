@@ -601,6 +601,20 @@ export default function DynamicCodeMenu({
     }
   }, [user]);
 
+  // Sync locale to DOM + notify injected dynamic scripts.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const html = document.documentElement;
+    if (html && i18n?.language) {
+      html.lang = i18n.language;
+    }
+
+    window.dispatchEvent(new CustomEvent("csm:locale-change", {
+      detail: { language: i18n?.language || "vi" }
+    }));
+  }, [i18n.language]);
+
   // Sync theme preferences to window
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -613,6 +627,10 @@ export default function DynamicCodeMenu({
         getBorderColor: () => isDark ? '#303030' : '#f0f0f0',
         getCardBackground: () => isDark ? '#1f1f1f' : '#ffffff',
       };
+
+      window.dispatchEvent(new CustomEvent("csm:theme-change", {
+        detail: { isDark, themeColorPrimary }
+      }));
     }
   }, [isDark, themeColorPrimary]);
 

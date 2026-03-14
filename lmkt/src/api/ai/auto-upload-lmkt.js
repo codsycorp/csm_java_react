@@ -22,37 +22,95 @@ if (typeof window !== 'undefined') {
 // Translation dictionary for 3 languages (vi, en, zh)
 const uiTranslations = {
   vi: {
-    domain: 'Domain:',
+    domain: 'Tên miền:',
     industry: 'Lĩnh vực:',
     project: 'Dự án:',
     general_settings: '⚙️ Cài Đặt Chung',
     load_categories: '⬇️ Tải danh mục từ web_services',
     loading: '⏳ Đang tải...',
-    multi_domain_manager: '🌐 Multi-Domain Content Manager (Chống Chất AI)',
-    tip_label: '💡 <strong>Tip:</strong> LMKT dùng <strong>Dự án</strong> làm category; Phanmemmottrieu dùng <strong>Lĩnh vực</strong>. Chọn ở <strong>Cài Đặt Chung</strong> phía trên.',
-    upload_zalo: '📱 Upload Zalo JSON',
-    upload_facebook: '👍 Upload Facebook JSON',
+    multi_domain_manager: '🌐 Trình quản lý nội dung đa tên miền (chống nhận diện AI)',
+    tip_label: '💡 <strong>Mẹo:</strong> LMKT dùng <strong>Dự án</strong> làm danh mục; Phanmemmottrieu dùng <strong>Lĩnh vực</strong>. Chọn tại <strong>Cài Đặt Chung</strong> phía trên.',
+    upload_zalo: '📱 Tải lên JSON Zalo',
+    upload_facebook: '👍 Tải lên JSON Facebook',
     create_post: '✍️ Tạo Bài',
     clear_history: '🗑️ Xóa Lịch Sử',
     cleanup_indexeddb: '🧹 Dọn IndexedDB',
     processing: '🔒 Đang xử lý...',
-    zalo_web_chat: '📱 Zalo Web Chat (Đăng nhập ở đây)',
-    refresh_tokens: '🔄 Cập nhật tokens',
-    show_fanpages: '📱 Xem fanpages',
+    zalo_web_chat: '📱 Zalo Web (Đăng nhập tại đây)',
+    refresh_tokens: '🔄 Cập nhật mã truy cập',
+    show_fanpages: '📱 Xem trang Facebook',
     clear_all: '🗑️ Xoá hết',
     use_latest_config: '⚡ Dùng config mới nhất',
     save_config: '💾 Lưu cấu hình',
     add_new: '➕ Thêm mới',
     reload_from_server: '🔄 Tải lại từ server',
-    reload_tooltip: 'Tải lại dữ liệu từ server và refresh grid (dùng khi grid không hiển thị đúng)',
+    reload_tooltip: 'Tải lại dữ liệu từ máy chủ và làm mới bảng (dùng khi bảng hiển thị sai)',
     cancel: '✖️ Huỷ thao tác',
-    debug: '🔍 Debug',
+    debug: '🔍 Gỡ lỗi',
     start_scan: '▶️ Bắt đầu quét',
     stop_scan: '⏸ Dừng quét',
     no_config_selected: '⚠️ Không có config để quét',
     select_industry_project: '⚠️ Vui lòng chọn lĩnh vực/dự án để cập nhật',
     reloading_data: '✅ Đang tải lại dữ liệu...',
-    reloading: '✅ Đang tải lại...'
+    reloading: '✅ Đang tải lại...',
+    // Ads Panel
+    ads_panel_title: '📢 Kiểm thử API quảng cáo (Facebook + Google)',
+    ads_panel_hint: 'Nhập thông tin tối thiểu rồi bấm Kiểm thử. Mặc định chiến dịch tạo ở trạng thái PAUSED để an toàn.',
+    ads_lbl_target_url: 'Liên kết/URL đích',
+    ads_lbl_ai_brief: 'Mô tả cho AI (sản phẩm/mục tiêu)',
+    ads_ph_campaign: 'VD: Kiểm thử quảng cáo LMKT',
+    ads_ph_headline: 'Tiêu đề quảng cáo',
+    ads_ph_description: 'Mô tả ngắn',
+    ads_ph_message: 'Nội dung chính của quảng cáo',
+    ads_ph_ai_brief: 'VD: Căn hộ 2PN tại Q9, mục tiêu lead tư vấn, tệp khách 28-40 tuổi...',
+    ads_ph_log: 'Kết quả API sẽ hiển thị ở đây...',
+    ads_approval_label: 'Luôn duyệt nội dung AI trước khi đẩy quảng cáo',
+    ads_btn_fill_ids: '⚡ Điền nhanh mã ID mẫu',
+    ads_btn_fill_payload: '📋 Điền dữ liệu tối thiểu',
+    ads_btn_clear_log: '🗑️ Xóa nhật ký',
+    ads_loading_api: '⏳ Đang gọi API...',
+    ads_err_fb_url: '❌ Facebook Ads cần nhập link/URL đích',
+    ads_err_gg_url: '❌ Google Ads cần nhập link/URL đích',
+    ads_ok_fb: '✅ Facebook Ads API gọi thành công',
+    ads_ok_gg: '✅ Google Ads API gọi thành công',
+    ads_err_ai_url: '❌ Cần nhập liên kết/URL đích trước khi chạy AI + đẩy quảng cáo',
+    ads_err_credentials: '❌ Thiếu thông tin xác thực Facebook/Google để tự đẩy quảng cáo',
+    ads_ok_ai_push: '✅ AI đã tạo nội dung và đẩy quảng cáo lên Facebook + Google',
+    ads_ok_fill_ids: '✅ Đã điền nhanh ID Facebook/Google mẫu',
+    ads_ok_fill_payload: '✅ Đã điền dữ liệu tối thiểu',
+    ads_cancelled: 'ℹ️ Đã hủy đẩy quảng cáo sau bước duyệt nội dung AI',
+    ads_approve_title: 'Duyệt nội dung AI trước khi đẩy quảng cáo',
+    ads_approve_sub: "Xác nhận nội dung bên dưới. Bấm 'Đẩy quảng cáo' để gọi API thực.",
+    ads_approve_empty: '(trống)',
+    ads_approve_cancel: '✖️ Sửa lại',
+    ads_approve_confirm: '🚀 Đẩy quảng cáo',
+    ads_lbl_campaign_name: 'Tên chiến dịch',
+    ads_lbl_objective: 'Mục tiêu',
+    ads_lbl_budget_daily: 'Ngân sách/ngày',
+    ads_lbl_headline: 'Tiêu đề',
+    ads_lbl_description: 'Mô tả',
+    ads_lbl_message: 'Nội dung chính',
+    ads_lbl_fb_ad_account: 'Facebook adAccountId (mã tài khoản quảng cáo)',
+    ads_lbl_fb_page_id: 'Facebook pageId (mã trang)',
+    ads_lbl_fb_page_token: 'Facebook pageAccessToken (token trang)',
+    ads_lbl_gg_customer_id: 'Google customer_id (mã khách hàng)',
+    ads_lbl_gg_access_token: 'Google access_token (token truy cập)',
+    ads_lbl_gg_developer_token: 'Google developer_token (token nhà phát triển)',
+    ads_lbl_gg_login_customer_id: 'Google login_customer_id (mã đăng nhập, không bắt buộc)',
+    ads_ph_objective: 'VD: OUTCOME_TRAFFIC',
+    ads_ph_budget: 'VD: 50000',
+    ads_ph_fb_ad_account: 'VD: 201051000069730',
+    ads_ph_gg_customer_id: 'VD: 3308977729',
+    ads_ph_gg_login_customer_id: 'Mã khách hàng MCC',
+    ads_btn_test_fb: '🧪 Kiểm thử quảng cáo Facebook',
+    ads_btn_test_gg: '🧪 Kiểm thử quảng cáo Google',
+    ads_btn_ai_push: '🤖 AI + Đẩy FB+Google',
+    ads_log_fb_error: '❌ Lỗi quảng cáo Facebook',
+    ads_log_gg_error: '❌ Lỗi quảng cáo Google',
+    ads_log_ai_push_error: '❌ Lỗi AI + đẩy quảng cáo',
+    ads_min_payload_note: 'Đã điền dữ liệu tối thiểu. Bạn chỉ cần thêm token (Facebook pageAccessToken / Google access_token + developer_token) để kiểm thử thực tế.',
+    ads_fallback_confirm_intro: 'AI đã tạo nội dung quảng cáo.',
+    ads_fallback_confirm_question: 'Bạn có muốn tiếp tục đẩy quảng cáo lên Facebook + Google không?'
   },
   en: {
     domain: 'Domain:',
@@ -85,7 +143,65 @@ const uiTranslations = {
     no_config_selected: '⚠️ No config to scan',
     select_industry_project: '⚠️ Please select industry/project to update',
     reloading_data: '✅ Reloading data...',
-    reloading: '✅ Reloading...'
+    reloading: '✅ Reloading...',
+    // Ads Panel
+    ads_panel_title: '📢 Ads API Test (Facebook + Google)',
+    ads_panel_hint: 'Enter minimum information then click Test. Campaigns default to PAUSED status for safety.',
+    ads_lbl_target_url: 'Target URL',
+    ads_lbl_ai_brief: 'AI Brief (product/campaign description)',
+    ads_ph_campaign: 'E.g. Test ads LMKT',
+    ads_ph_headline: 'Ad headline',
+    ads_ph_description: 'Short description',
+    ads_ph_message: 'Primary ad copy',
+    ads_ph_ai_brief: 'E.g. 2BR apt in District 9, lead gen target, audience 28-40 years...',
+    ads_ph_log: 'API results will appear here...',
+    ads_approval_label: 'Always review AI content before pushing',
+    ads_btn_fill_ids: '⚡ Quick-fill sample IDs',
+    ads_btn_fill_payload: '📋 Fill minimal payload',
+    ads_btn_clear_log: '🗑️ Clear Log',
+    ads_loading_api: '⏳ Calling API...',
+    ads_err_fb_url: '❌ Facebook Ads requires a target URL',
+    ads_err_gg_url: '❌ Google Ads requires a target URL',
+    ads_ok_fb: '✅ Facebook Ads API call successful',
+    ads_ok_gg: '✅ Google Ads API call successful',
+    ads_err_ai_url: '❌ Target URL required before AI + Push',
+    ads_err_credentials: '❌ Missing Facebook/Google credentials for auto-push',
+    ads_ok_ai_push: '✅ AI created content and pushed to Facebook + Google',
+    ads_ok_fill_ids: '✅ Filled sample Facebook/Google IDs',
+    ads_ok_fill_payload: '✅ Filled minimal payload',
+    ads_cancelled: 'ℹ️ Cancelled push after AI content review',
+    ads_approve_title: 'Review AI Content Before Push',
+    ads_approve_sub: "Confirm the content below. Click 'Push Ads' to call the real API.",
+    ads_approve_empty: '(empty)',
+    ads_approve_cancel: '✖️ Edit',
+    ads_approve_confirm: '🚀 Push Ads',
+    ads_lbl_campaign_name: 'Campaign name',
+    ads_lbl_objective: 'Objective',
+    ads_lbl_budget_daily: 'Budget (daily)',
+    ads_lbl_headline: 'Headline',
+    ads_lbl_description: 'Description',
+    ads_lbl_message: 'Primary text/message',
+    ads_lbl_fb_ad_account: 'Facebook adAccountId',
+    ads_lbl_fb_page_id: 'Facebook pageId',
+    ads_lbl_fb_page_token: 'Facebook pageAccessToken',
+    ads_lbl_gg_customer_id: 'Google customer_id',
+    ads_lbl_gg_access_token: 'Google access_token',
+    ads_lbl_gg_developer_token: 'Google developer_token',
+    ads_lbl_gg_login_customer_id: 'Google login_customer_id (optional)',
+    ads_ph_objective: 'E.g. OUTCOME_TRAFFIC',
+    ads_ph_budget: 'E.g. 50000',
+    ads_ph_fb_ad_account: 'E.g. 201051000069730',
+    ads_ph_gg_customer_id: 'E.g. 3308977729',
+    ads_ph_gg_login_customer_id: 'MCC customer id',
+    ads_btn_test_fb: '🧪 Test Facebook Ads',
+    ads_btn_test_gg: '🧪 Test Google Ads',
+    ads_btn_ai_push: '🤖 AI + Push FB+Google',
+    ads_log_fb_error: '❌ Facebook Ads error',
+    ads_log_gg_error: '❌ Google Ads error',
+    ads_log_ai_push_error: '❌ AI + Push error',
+    ads_min_payload_note: 'Minimal payload is filled. You only need tokens (Facebook pageAccessToken / Google access_token + developer_token) for a real test.',
+    ads_fallback_confirm_intro: 'AI generated ad content.',
+    ads_fallback_confirm_question: 'Do you want to continue pushing to Facebook + Google?'
   },
   zh: {
     domain: 'Domain:',
@@ -118,23 +234,98 @@ const uiTranslations = {
     no_config_selected: '⚠️ 没有配置可扫描',
     select_industry_project: '⚠️ 请选择行业/项目以更新',
     reloading_data: '✅ 正在重新加载数据...',
-    reloading: '✅ 正在重新加载...'
+    reloading: '✅ 正在重新加载...',
+    // Ads Panel
+    ads_panel_title: '📢 广告API测试 (Facebook + Google)',
+    ads_panel_hint: '输入最少信息后点击测试。默认以PAUSED状态创建广告活动以确保安全。',
+    ads_lbl_target_url: '目标链接/URL',
+    ads_lbl_ai_brief: 'AI简报（产品/目标描述）',
+    ads_ph_campaign: '例：Test ads LMKT',
+    ads_ph_headline: '广告标题',
+    ads_ph_description: '简短描述',
+    ads_ph_message: '主要广告文案',
+    ads_ph_ai_brief: '例：区9两室公寓，潜在客户生成目标，受众28-40岁...',
+    ads_ph_log: 'API结果将显示在此处...',
+    ads_approval_label: '推送前始终审核AI内容',
+    ads_btn_fill_ids: '⚡ 快速填写示例ID',
+    ads_btn_fill_payload: '📋 填写最小配置',
+    ads_btn_clear_log: '🗑️ 清除日志',
+    ads_loading_api: '⏳ 正在调用API...',
+    ads_err_fb_url: '❌ Facebook广告需要目标链接',
+    ads_err_gg_url: '❌ Google广告需要目标链接',
+    ads_ok_fb: '✅ Facebook广告API调用成功',
+    ads_ok_gg: '✅ Google广告API调用成功',
+    ads_err_ai_url: '❌ AI+推送前需要输入目标链接',
+    ads_err_credentials: '❌ 缺少Facebook/Google凭据，无法自动推送',
+    ads_ok_ai_push: '✅ AI已创建内容并推送至Facebook+Google',
+    ads_ok_fill_ids: '✅ 已填写示例Facebook/Google ID',
+    ads_ok_fill_payload: '✅ 已填写最小配置',
+    ads_cancelled: 'ℹ️ 审核AI内容后已取消推送',
+    ads_approve_title: '推送前审核AI内容',
+    ads_approve_sub: '确认以下内容。点击"推送广告"以调用真实API。',
+    ads_approve_empty: '（空）',
+    ads_approve_cancel: '✖️ 修改',
+    ads_approve_confirm: '🚀 推送广告',
+    ads_lbl_campaign_name: '活动名称',
+    ads_lbl_objective: '目标',
+    ads_lbl_budget_daily: '每日预算',
+    ads_lbl_headline: '标题',
+    ads_lbl_description: '描述',
+    ads_lbl_message: '主要文案',
+    ads_lbl_fb_ad_account: 'Facebook adAccountId',
+    ads_lbl_fb_page_id: 'Facebook pageId',
+    ads_lbl_fb_page_token: 'Facebook pageAccessToken',
+    ads_lbl_gg_customer_id: 'Google customer_id',
+    ads_lbl_gg_access_token: 'Google access_token',
+    ads_lbl_gg_developer_token: 'Google developer_token',
+    ads_lbl_gg_login_customer_id: 'Google login_customer_id（可选）',
+    ads_ph_objective: '例：OUTCOME_TRAFFIC',
+    ads_ph_budget: '例：50000',
+    ads_ph_fb_ad_account: '例：201051000069730',
+    ads_ph_gg_customer_id: '例：3308977729',
+    ads_ph_gg_login_customer_id: 'MCC customer id',
+    ads_btn_test_fb: '🧪 测试 Facebook Ads',
+    ads_btn_test_gg: '🧪 测试 Google Ads',
+    ads_btn_ai_push: '🤖 AI + 推送 FB+Google',
+    ads_log_fb_error: '❌ Facebook Ads 错误',
+    ads_log_gg_error: '❌ Google Ads 错误',
+    ads_log_ai_push_error: '❌ AI + 推送错误',
+    ads_min_payload_note: '最小配置已填写。你只需补充 token（Facebook pageAccessToken / Google access_token + developer_token）即可真实测试。',
+    ads_fallback_confirm_intro: 'AI 已生成广告内容。',
+    ads_fallback_confirm_question: '是否继续推送到 Facebook + Google？'
   }
 };
 
 // Get current language from localStorage or default to 'vi'
+function normalizeUILanguage(rawLang) {
+  const lang = String(rawLang || '').toLowerCase();
+  if (!lang) return 'vi';
+  if (lang === 'zh' || lang === 'zh-cn' || lang.startsWith('zh')) return 'zh';
+  if (lang === 'en' || lang.startsWith('en')) return 'en';
+  if (lang === 'vi' || lang.startsWith('vi')) return 'vi';
+  return 'vi';
+}
+
 function getUILanguage() {
   try {
-    // Try to get from localStorage (same as React app)
-    const stored = localStorage.getItem('language');
-    if (stored && (stored === 'vi' || stored === 'en' || stored === 'zh-CN')) {
-      return stored === 'zh-CN' ? 'zh' : stored;
-    }
-    // Fallback to browser language
+    // 1) Prefer app runtime language (i18next)
+    const appLang = window?.i18next?.language;
+    if (appLang) return normalizeUILanguage(appLang);
+
+    // 2) localStorage keys used by app
+    const storedLanguage = localStorage.getItem('language');
+    if (storedLanguage) return normalizeUILanguage(storedLanguage);
+
+    const storedI18next = localStorage.getItem('i18nextLng');
+    if (storedI18next) return normalizeUILanguage(storedI18next);
+
+    // 3) html lang attribute
+    const htmlLang = document?.documentElement?.lang;
+    if (htmlLang) return normalizeUILanguage(htmlLang);
+
+    // 4) browser language
     const browserLang = navigator.language || navigator.userLanguage;
-    if (browserLang.startsWith('zh')) return 'zh';
-    if (browserLang.startsWith('en')) return 'en';
-    return 'vi'; // Default to Vietnamese
+    return normalizeUILanguage(browserLang);
   } catch {
     return 'vi';
   }
@@ -144,6 +335,14 @@ function getUILanguage() {
 function t(key) {
   const lang = getUILanguage();
   return uiTranslations[lang]?.[key] || uiTranslations.vi[key] || key;
+}
+
+// Lightweight inline 3-language helper for legacy hardcoded strings.
+function ti(viText, enText, zhText) {
+  const lang = getUILanguage();
+  if (lang === 'en') return enText || viText;
+  if (lang === 'zh') return zhText || viText;
+  return viText;
 }
 
 // Unified notification helpers used throughout this file.
@@ -157,6 +356,29 @@ function notifyUser(type, message, duration = 3) {
       return;
     } catch (error) {
       console.warn("[notifyUser] showNotification failed:", error?.message || error);
+    }
+  }
+
+  // Fallback to host-provided toast helpers exposed by DynamicCodeMenu.
+  if (typeof window !== "undefined") {
+    try {
+      if (type === "error" || type === "warning") {
+        if (typeof window.canhbao === "function") {
+          window.canhbao(safeMessage);
+          return;
+        }
+      } else if (typeof window.thongbao === "function") {
+        window.thongbao(safeMessage);
+        return;
+      }
+
+      // Secondary fallback: if success helper exists, still show warning/error to users.
+      if (typeof window.thongbao === "function") {
+        window.thongbao(safeMessage);
+        return;
+      }
+    } catch (error) {
+      console.warn("[notifyUser] host toast fallback failed:", error?.message || error);
     }
   }
 
@@ -1559,7 +1781,7 @@ function getArticleHistory(domainKey, industryOrProject) {
 function clearArticleHistory() {
   try {
     localStorage.removeItem(ARTICLE_HISTORY_KEY);
-    thongbao("✅ Đã xóa lịch sử bài viết");
+    thongbao(ti("✅ Đã xóa lịch sử bài viết", "✅ Post history cleared", "✅ 已清除发文历史"));
   } catch (e) {
     console.warn("Lỗi xóa lịch sử:", e);
   }
@@ -4159,7 +4381,7 @@ async function processContent(item, opts = {}) {
   console.log(`[processContent] Bắt đầu xử lý - ${new Date().toLocaleTimeString()}`);
   console.log(`📸 [processContent] Extracted media from message: ${images.length} images, ${videos.length} videos`);
   
-  thongbao("🎬 Đang upload media (ảnh/video)...");
+  thongbao(ti("🎬 Đang upload media (ảnh/video)...", "🎬 Uploading media (images/videos)...", "🎬 正在上传媒体（图片/视频）..."));
   let uploadedImages = [];
   let uploadedVideos = [];
   try {
@@ -4171,7 +4393,7 @@ async function processContent(item, opts = {}) {
     console.log(`   Sample uploaded paths: ${uploadedImages.slice(0, 2).join(', ')}${uploadedImages.length > 2 ? ` (+${uploadedImages.length - 2} more)` : ''}`);
   } catch (e) {
     console.error(`❌ [processContent] Lỗi upload ảnh:`, e.message);
-    canhbao(`⚠️ Không upload được ảnh, tiếp tục thử video`);
+    canhbao(ti("⚠️ Không upload được ảnh, tiếp tục thử video", "⚠️ Image upload failed, continue with video upload", "⚠️ 图片上传失败，继续尝试上传视频"));
     uploadedImages = [];
   }
 
@@ -4241,7 +4463,7 @@ async function processContent(item, opts = {}) {
 
   console.log(`✅ [processContent] Converted ${fullUrlVideos.length} videos to full URLs`);
   
-  thongbao("🤖 Đang tạo nội dung (Chống Chất AI)...");
+  thongbao(ti("🤖 Đang tạo nội dung (Chống Chất AI)...", "🤖 Generating content (anti-AI pattern)...", "🤖 正在生成内容（反AI痕迹）..."));
   const domainKey = opts.domainKey || "lmkt"; // For LMKT
   const articleHistory = getArticleHistory(domainKey, industry);
   
@@ -4285,7 +4507,7 @@ async function processContent(item, opts = {}) {
   }
   
   console.log(`[processContent] ⏳ Gọi AI - BẮT ĐẦU CHỜ (có thể mất 30-60 giây) - ${new Date().toLocaleTimeString()}`);
-  thongbao("⏳ Đang gọi AI... (Có thể mất 30-60 giây, vui lòng chờ)");
+  thongbao(ti("⏳ Đang gọi AI... (Có thể mất 30-60 giây, vui lòng chờ)", "⏳ Calling AI... (may take 30-60 seconds, please wait)", "⏳ 正在调用AI...（可能需要30-60秒，请稍候）"));
   
   let result;
   try {
@@ -4311,13 +4533,27 @@ async function processContent(item, opts = {}) {
   if (!result) {
     throw new Error("AI trả về null/undefined");
   }
-  
-  if (!result.success) {
-    throw new Error(`AI failed: ${result.message || 'Không có message'}`);
-  }
 
   // ✅ Backend trả format: result.data.result = SEO content
   let seo = result.data?.result || result.result || result.data;
+
+  // Fallback: backend có thể trả success=false khi không parse được JSON,
+  // nhưng vẫn gửi rawContent để frontend tự phục hồi parse.
+  if (!result.success) {
+    const rawContent = result?.rawContent || result?.data?.rawContent;
+    if (typeof rawContent === 'string' && rawContent.trim()) {
+      console.warn('[processContent] ⚠️ AI returned success=false, attempting to parse rawContent fallback...');
+      try {
+        seo = parseSeoJsonString(rawContent);
+        console.log('[processContent] ✅ Recovered SEO JSON from rawContent fallback');
+      } catch (rawParseErr) {
+        console.error('[processContent] ❌ Failed parsing rawContent fallback:', rawParseErr);
+        throw new Error(`AI failed: ${result.message || 'Không có message'}`);
+      }
+    } else {
+      throw new Error(`AI failed: ${result.message || 'Không có message'}`);
+    }
+  }
   
   // ✅ XỬ LÝ TRƯỜNG HỢP AI TRẢ VỀ MARKDOWN-WRAPPED JSON STRING
   if (typeof seo === 'string') {
@@ -4353,7 +4589,7 @@ async function processContent(item, opts = {}) {
   });
   console.log(`[processContent] Built detail object - title: ${detail.title}, slug: ${detail.slug}, images: ${fullUrlImages.length}`);
   
-  thongbao("💾 Đang lưu dữ liệu...");
+  thongbao(ti("💾 Đang lưu dữ liệu...", "💾 Saving data...", "💾 正在保存数据..."));
   console.log(`[processContent] Lưu DB - ${new Date().toLocaleTimeString()}`);
   
   try {
@@ -4426,7 +4662,7 @@ async function processContent(item, opts = {}) {
   
   if (fanpagesToPost.length > 0) {
     try {
-      thongbao(`📱 Đang post lên ${fanpagesToPost.length} Facebook fanpage(s)...`);
+      thongbao(ti(`📱 Đang post lên ${fanpagesToPost.length} Facebook fanpage(s)...`, `📱 Posting to ${fanpagesToPost.length} Facebook fanpage(s)...`, `📱 正在发布到 ${fanpagesToPost.length} 个 Facebook 专页...`));
       console.log(`[processContent] Chuẩn bị post lên ${fanpagesToPost.length} fanpage(s)`);
       
       // ✅ VALIDATE TOKEN trước post (nếu cần) - chỉ validate 1 lần
@@ -4634,7 +4870,7 @@ async function processContent(item, opts = {}) {
       }
 
       if (tokenExpiredDetected) {
-        const msg = '❌ Facebook token đã hết hạn trong lúc chạy. Vui lòng cập nhật token và chạy lại.';
+        const msg = ti('❌ Facebook token đã hết hạn trong lúc chạy. Vui lòng cập nhật token và chạy lại.', '❌ Facebook token expired during execution. Please refresh token and retry.', '❌ Facebook Token 在运行中已过期，请更新后重试。');
         canhbao(msg);
         thongbao(msg);
       }
@@ -4649,11 +4885,11 @@ async function processContent(item, opts = {}) {
         // ✅ Set flag để posting worker biết bài viết đã hoàn tất
         window.__lastPostCompleted = true;
         
-        thongbao(`✅ Hoàn tất: ${successCount}/${fanpagesToPost.length} fanpage(s) thành công${failCount > 0 ? `, ${failCount} lỗi` : ''}!`);
+        thongbao(ti(`✅ Hoàn tất: ${successCount}/${fanpagesToPost.length} fanpage(s) thành công${failCount > 0 ? `, ${failCount} lỗi` : ''}!`, `✅ Completed: ${successCount}/${fanpagesToPost.length} fanpage(s) succeeded${failCount > 0 ? `, ${failCount} failed` : ''}!`, `✅ 完成：${successCount}/${fanpagesToPost.length} 个专页成功${failCount > 0 ? `，${failCount} 个失败` : ''}！`));
         console.log(`\n🎉 [Facebook] Kết quả: ${successCount}/${fanpagesToPost.length} fanpage(s) thành công, ${failCount} lỗi`);
       } else {
         console.warn(`⚠️ [Facebook] Không post được fanpage nào`);
-        thongbao(`⚠️ Không post được fanpage nào`);
+        thongbao(ti(`⚠️ Không post được fanpage nào`, `⚠️ Could not post to any fanpage`, `⚠️ 未能发布到任何专页`));
       }
     } catch (fbError) {
       console.error(`❌ [Facebook] Lỗi post:`, fbError.message);
@@ -4772,7 +5008,7 @@ async function runMessages(messages, configIdOverride = null) {
         continue;
       }
 
-      thongbao(`🔄 Đang xử lý tin ${i + 1}/${messages.length}...`);
+      thongbao(ti(`🔄 Đang xử lý tin ${i + 1}/${messages.length}...`, `🔄 Processing message ${i + 1}/${messages.length}...`, `🔄 正在处理消息 ${i + 1}/${messages.length}...`));
       
       // ✅ Get app_id from DOMAIN_OPTIONS lookup (exact match)
       const derivedAppId = getAppIdFromDomainOptions(domainConfigToUse.value);
@@ -4786,30 +5022,39 @@ async function runMessages(messages, configIdOverride = null) {
         config_id: configIdOverride || null  // ✅ Pass config_id to ensure proper config isolation
       });
       ok++;
-      thongbao(`✅ [${i + 1}/${messages.length}] Đã xử lý xong tin nhắn`);
+      thongbao(ti(`✅ [${i + 1}/${messages.length}] Đã xử lý xong tin nhắn`, `✅ [${i + 1}/${messages.length}] Message processed`, `✅ [${i + 1}/${messages.length}] 消息处理完成`));
     } catch (e) {
       fail++;
-      canhbao(`❌ [${i + 1}/${messages.length}] Lỗi: ${e.message}`);
+      canhbao(ti(`❌ [${i + 1}/${messages.length}] Lỗi: ${e.message}`, `❌ [${i + 1}/${messages.length}] Error: ${e.message}`, `❌ [${i + 1}/${messages.length}] 错误：${e.message}`));
     }
     
     // Delay sau mỗi tin (trừ tin cuối cùng)
     if (i < messages.length - 1) {
       const delayMs = FACEBOOK_POST_COOLDOWN_MIN_MS;
       const delaySecs = Math.round(delayMs / 1000);
-      thongbao(`⏳ Chờ ${delaySecs} giây trước khi xử lý tin tiếp theo...`);
+      thongbao(ti(`⏳ Chờ ${delaySecs} giây trước khi xử lý tin tiếp theo...`, `⏳ Waiting ${delaySecs}s before next message...`, `⏳ 等待 ${delaySecs} 秒后处理下一条消息...`));
       await new Promise(r => setTimeout(r, delayMs));
     }
   }
   
-  thongbao(`✅ Hoàn tất! Thành công: ${ok}, Lỗi: ${fail}`);
+  thongbao(ti(`✅ Hoàn tất! Thành công: ${ok}, Lỗi: ${fail}`, `✅ Done! Success: ${ok}, Failed: ${fail}`, `✅ 完成！成功：${ok}，失败：${fail}`));
 }
 
 // ===== UI =====
 function ensureUnifiedUIContainer() {
-  // Mount all UI into #context-auto to match the broadcast embedding pattern.
-  const host = document.getElementById("context-auto");
+  // Mount all UI into a stable dynamic host, with fallbacks.
+  const preferredContainerId = (typeof window !== 'undefined' && window.csmDynamicCodeContainerId)
+    ? window.csmDynamicCodeContainerId
+    : null;
+
+  const host =
+    (preferredContainerId ? document.getElementById(preferredContainerId) : null)
+    || document.getElementById("context-auto")
+    || document.getElementById("dynamic-code-root")
+    || document.getElementById("dynamic-code-root-default");
+
   if (!host) {
-    console.warn("⚠️ Không tìm thấy #context-auto, không thể mount UI");
+    console.warn("⚠️ Không tìm thấy container mount dynamic code, không thể mount UI");
     return null;
   }
 
@@ -4890,7 +5135,7 @@ function createIndustrySelector(selectId = "industry-select", rowId = "industry-
   industryRow.style.cssText = "margin-bottom:12px;display:flex;gap:8px;align-items:center";
   
   const industryLabel = document.createElement("label");
-  industryLabel.textContent = "Lĩnh vực:";
+  industryLabel.textContent = t('industry');
   industryLabel.style.cssText = `font-weight:500;color:${theme.text}`;
   
   const industrySelect = document.createElement("select");
@@ -4926,7 +5171,7 @@ function createProjectSelector(selectId = "project-select", rowId = "project-row
   projectRow.style.cssText = "margin-bottom:12px;display:none;gap:8px;align-items:center";
   
   const projectLabel = document.createElement("label");
-  projectLabel.textContent = "Dự án:";
+  projectLabel.textContent = t('project');
   projectLabel.style.cssText = `font-weight:500;color:${theme.text}`;
   
   const projectSelect = document.createElement("select");
@@ -5024,7 +5269,7 @@ function ensureGlobalSettingsPanel() {
   wrapper.style.cssText = getFeatureCardStyle(theme) + ";margin-bottom:16px;";
 
   const title = document.createElement("div");
-  title.textContent = "⚙️ Cài Đặt Chung";
+  title.textContent = t('general_settings');
   title.style.cssText = getFeatureTitleStyle(theme);
 
   // Tạo container cho settings dạng grid gọn gàng
@@ -5073,7 +5318,7 @@ function ensureGlobalSettingsPanel() {
 
   // Load categories from web_services button
   const loadBtn = document.createElement('button');
-  loadBtn.textContent = "⬇️ Tải danh mục từ web_services";
+  loadBtn.textContent = t('load_categories');
   loadBtn.style.cssText = `padding:6px 10px;border:1px solid ${theme.border};border-radius:4px;background:${theme.bg};color:${theme.text};font-size:12px;cursor:pointer`;
 
   loadBtn.onclick = async () => {
@@ -5084,7 +5329,7 @@ function ensureGlobalSettingsPanel() {
       await loadCategoriesFromWebServices(domainKey);
     } finally {
       loadBtn.disabled = false;
-      loadBtn.textContent = "⬇️ Tải danh mục từ web_services";
+      loadBtn.textContent = t('load_categories');
     }
   };
 
@@ -5155,12 +5400,14 @@ async function loadCategoriesFromWebServices(domainKey) {
   const totalCount = domainKey === 'lmkt' 
     ? LMKT_PROJECT_DEFS.length 
     : Object.keys(INDUSTRY_TYPES).length;
-  const message = `✅ Đã sync ${totalCount} ${domainKey === 'lmkt' ? 'dự án LMKT' : 'loại hình dịch vụ'} từ server`;
+  const message = domainKey === 'lmkt'
+    ? ti(`✅ Đã sync ${totalCount} dự án LMKT từ server`, `✅ Synced ${totalCount} LMKT projects from server`, `✅ 已从服务器同步 ${totalCount} 个 LMKT 项目`)
+    : ti(`✅ Đã sync ${totalCount} loại hình dịch vụ từ server`, `✅ Synced ${totalCount} service types from server`, `✅ 已从服务器同步 ${totalCount} 个服务类型`);
   
   if (window.showNotification) {
     window.showNotification({ type: 'success', message, duration: 3 });
   } else {
-    alert(message);
+    thongbao(message);
   }
 }
 
@@ -5184,6 +5431,699 @@ function getGlobalSettings() {
   };
 }
 
+const ADS_TESTER_STORAGE_KEY = "csm_ads_tester_draft";
+
+function readAdsTesterDraft() {
+  try {
+    const raw = localStorage.getItem(ADS_TESTER_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch (e) {
+    console.warn("⚠️ [AdsTester] Không đọc được draft:", e.message);
+    return {};
+  }
+}
+
+function writeAdsTesterDraft(draft = {}) {
+  try {
+    localStorage.setItem(ADS_TESTER_STORAGE_KEY, JSON.stringify(draft));
+  } catch (e) {
+    console.warn("⚠️ [AdsTester] Không lưu được draft:", e.message);
+  }
+}
+
+function adsTesterNotify(message, type = "info") {
+  if (type === "success" && typeof thongbao === "function") return thongbao(message);
+  if (type === "error" && typeof canhbao === "function") return canhbao(message);
+  if (typeof thongbao === "function") return thongbao(message);
+  console.log(message);
+}
+
+function appendAdsTesterLog(logEl, title, data) {
+  if (!logEl) return;
+  const timestamp = new Date().toLocaleTimeString();
+  const payload = typeof data === "string" ? data : JSON.stringify(data, null, 2);
+  const next = `[${timestamp}] ${title}\n${payload}\n\n${logEl.value || ""}`;
+  logEl.value = next.trim();
+}
+
+async function callAdsCampaignApi(platform, payload = {}) {
+  const ctx = resolveContext();
+  const route = platform === "facebook" ? "/facebook/ads/campaign" : "/google/ads/campaign";
+  const apiUrl = `${ctx.apiBase}${route}`;
+
+  if (!ctx.apiBase) {
+    throw new Error("Thiếu apiBase (domain_api_url). Không thể gọi Ads API.");
+  }
+
+  const response = await fetch(apiUrl, {
+    method: "POST",
+    headers: buildApiHeaders(ctx),
+    credentials: "include",
+    body: JSON.stringify(payload)
+  });
+
+  const responseText = await response.text();
+  let responseData = {};
+  try {
+    responseData = responseText ? JSON.parse(responseText) : {};
+  } catch (_e) {
+    responseData = { raw: responseText };
+  }
+
+  if (!response.ok) {
+    const errorMsg = responseData?.message || responseData?.error || responseText || `HTTP ${response.status}`;
+    throw new Error(`HTTP ${response.status}: ${errorMsg}`);
+  }
+
+  if (responseData && typeof responseData.code === "number" && responseData.code >= 400) {
+    throw new Error(responseData.message || `API trả code ${responseData.code}`);
+  }
+
+  return responseData;
+}
+
+async function generateAdsCreativeWithAI(input = {}) {
+  const ctx = resolveContext();
+  const helperAi = (ctx && ctx.helperAi) || (typeof window !== "undefined" ? window.csmAI : null);
+  if (!helperAi || typeof helperAi.generateSeoContentWithPrompt !== "function") {
+    throw new Error("Không tìm thấy AI helper (window.csmAI.generateSeoContentWithPrompt)");
+  }
+
+  const brief = String(input.brief || "").trim();
+  const targetUrl = String(input.target_url || "").trim();
+  const campaignName = String(input.campaign_name || "").trim();
+  const domain = String(input.domain || "").trim();
+  const serviceType = String(input.service_type || "").trim();
+
+  const prompt = `
+Bạn là chuyên gia Performance Marketing.
+Hãy tạo nội dung quảng cáo cho Facebook Ads và Google Ads.
+
+YÊU CẦU:
+- Trả về CHỈ JSON hợp lệ, không markdown.
+- Giọng văn tự nhiên, rõ lợi ích, có CTA.
+- Nội dung an toàn chính sách, không phóng đại quá mức.
+
+NGỮ CẢNH:
+- campaign_name: ${campaignName || "Auto Campaign"}
+- domain: ${domain || "n/a"}
+- service_type: ${serviceType || "n/a"}
+- target_url: ${targetUrl || "n/a"}
+- brief: ${brief || "Tối ưu lead chất lượng"}
+
+JSON SCHEMA:
+{
+  "headline": "...",
+  "description": "...",
+  "message": "...",
+  "cta": "...",
+  "keywords": ["...", "..."]
+}
+`;
+
+  const aiResponse = await helperAi.generateSeoContentWithPrompt(prompt);
+  if (!aiResponse || aiResponse.success === false) {
+    throw new Error(aiResponse?.message || "AI không trả về kết quả hợp lệ");
+  }
+
+  let aiData = aiResponse.data?.result || aiResponse.result || aiResponse.data || aiResponse;
+  if (typeof aiData === "string") {
+    aiData = parseSeoJsonString(aiData);
+  }
+
+  const headline = String(aiData?.headline || aiData?.title || campaignName || "").trim();
+  const description = String(aiData?.description || aiData?.desc || "").trim();
+  const message = String(aiData?.message || aiData?.facebook_post || aiData?.content || description || headline).trim();
+  const cta = String(aiData?.cta || "Dang ky ngay").trim();
+  const keywords = Array.isArray(aiData?.keywords) ? aiData.keywords.filter(Boolean) : [];
+
+  if (!headline || !message) {
+    throw new Error("AI output thiếu headline/message");
+  }
+
+  return { headline, description, message, cta, keywords, raw: aiData };
+}
+
+function requestAdsPushApproval(theme, preview = {}) {
+  if (typeof document === "undefined" || !document.body) {
+    const fallbackMsg = [
+      t('ads_fallback_confirm_intro'),
+      t('ads_fallback_confirm_question'),
+      `Headline: ${preview.headline || t('ads_approve_empty')}`,
+      `Description: ${preview.description || t('ads_approve_empty')}`,
+      `Message: ${(preview.message || t('ads_approve_empty')).slice(0, 220)}`
+    ].join("\n");
+    return Promise.resolve(window.confirm(fallbackMsg));
+  }
+
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.style.cssText = "position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;padding:16px";
+
+    const modal = document.createElement("div");
+    modal.style.cssText = `width:min(680px,96vw);max-height:82vh;overflow:auto;background:${theme.bg};color:${theme.text};border:1px solid ${theme.border};border-radius:10px;box-shadow:0 14px 36px rgba(0,0,0,0.25);padding:14px`;
+
+    const heading = document.createElement("div");
+    heading.textContent = t('ads_approve_title');
+    heading.style.cssText = `font-size:16px;font-weight:700;margin-bottom:8px;color:${theme.text}`;
+
+    const sub = document.createElement("div");
+    sub.textContent = t('ads_approve_sub');
+    sub.style.cssText = `font-size:12px;line-height:1.5;margin-bottom:10px;color:${theme.textSecondary}`;
+
+    const previewBox = document.createElement("div");
+    previewBox.style.cssText = `background:${theme.inputBg};border:1px solid ${theme.border};border-radius:8px;padding:10px;display:grid;gap:8px`;
+
+    const mkRow = (label, value) => {
+      const row = document.createElement("div");
+      row.style.cssText = "display:grid;gap:4px";
+      const lb = document.createElement("div");
+      lb.textContent = label;
+      lb.style.cssText = `font-size:12px;font-weight:600;color:${theme.text}`;
+      const val = document.createElement("div");
+      val.textContent = value || t('ads_approve_empty');
+      val.style.cssText = `font-size:12px;line-height:1.55;white-space:pre-wrap;word-break:break-word;color:${theme.textSecondary}`;
+      row.append(lb, val);
+      return row;
+    };
+
+    previewBox.append(
+      mkRow("Headline", preview.headline),
+      mkRow("Description", preview.description),
+      mkRow("Message", preview.message)
+    );
+
+    const actionRow = document.createElement("div");
+    actionRow.style.cssText = "display:flex;justify-content:flex-end;gap:8px;margin-top:12px;flex-wrap:wrap";
+
+    const cancelBtn = document.createElement("button");
+    cancelBtn.textContent = t('ads_approve_cancel');
+    cancelBtn.style.cssText = `padding:8px 12px;border:1px solid ${theme.border};background:${theme.bg};color:${theme.text};border-radius:6px;cursor:pointer`;
+
+    const approveBtn = document.createElement("button");
+    approveBtn.textContent = t('ads_approve_confirm');
+    approveBtn.style.cssText = "padding:8px 12px;border:none;background:#1677ff;color:#fff;border-radius:6px;cursor:pointer";
+
+    const cleanup = (approved) => {
+      overlay.remove();
+      resolve(!!approved);
+    };
+
+    cancelBtn.onclick = () => cleanup(false);
+    approveBtn.onclick = () => cleanup(true);
+    overlay.onclick = (e) => {
+      if (e.target === overlay) cleanup(false);
+    };
+
+    actionRow.append(cancelBtn, approveBtn);
+    modal.append(heading, sub, previewBox, actionRow);
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+  });
+}
+
+function ensureAdsApiTestPanel() {
+  const existing = document.getElementById("ads-api-test-panel");
+  if (existing) return existing;
+
+  const theme = getThemeTokens();
+  const draft = readAdsTesterDraft();
+
+  const wrapper = document.createElement("div");
+  wrapper.id = "ads-api-test-panel";
+  wrapper.style.cssText = getFeatureCardStyle(theme) + ";margin-top:16px;";
+
+  const title = document.createElement("div");
+  title.textContent = t('ads_panel_title');
+  title.style.cssText = getFeatureTitleStyle(theme);
+
+  const hint = document.createElement("div");
+  hint.style.cssText = `margin:8px 0 12px 0;padding:8px;border-radius:6px;background:${theme.infoBg};color:${theme.infoText};font-size:12px;line-height:1.5`;
+  hint.textContent = t('ads_panel_hint');
+
+  const grid = document.createElement("div");
+  grid.style.cssText = "display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px";
+
+  const makeField = (labelText, id, placeholder = "", value = "", type = "text") => {
+    const box = document.createElement("div");
+    box.style.cssText = "display:flex;flex-direction:column;gap:4px";
+
+    const label = document.createElement("label");
+    label.htmlFor = id;
+    label.textContent = labelText;
+    label.style.cssText = `font-size:12px;font-weight:600;color:${theme.text}`;
+
+    const input = document.createElement("input");
+    input.id = id;
+    input.type = type;
+    input.value = value || "";
+    input.placeholder = placeholder;
+    input.style.cssText = `padding:8px;border:1px solid ${theme.border};border-radius:4px;background:${theme.inputBg};color:${theme.text};font-size:12px`;
+
+    box.append(label, input);
+    return { box, input };
+  };
+
+  const makeTextarea = (labelText, id, placeholder = "", value = "") => {
+    const box = document.createElement("div");
+    box.style.cssText = "display:flex;flex-direction:column;gap:4px";
+
+    const label = document.createElement("label");
+    label.htmlFor = id;
+    label.textContent = labelText;
+    label.style.cssText = `font-size:12px;font-weight:600;color:${theme.text}`;
+
+    const input = document.createElement("textarea");
+    input.id = id;
+    input.value = value || "";
+    input.placeholder = placeholder;
+    input.rows = 3;
+    input.style.cssText = `padding:8px;border:1px solid ${theme.border};border-radius:4px;background:${theme.inputBg};color:${theme.text};font-size:12px;resize:vertical`;
+
+    box.append(label, input);
+    return { box, input };
+  };
+
+  const campaignNameField = makeField(
+    t('ads_lbl_campaign_name'),
+    "ads-test-campaign-name",
+    t('ads_ph_campaign'),
+    draft.campaign_name || ""
+  );
+  const objectiveField = makeField(
+    t('ads_lbl_objective'),
+    "ads-test-objective",
+    t('ads_ph_objective'),
+    draft.objective || "OUTCOME_TRAFFIC"
+  );
+  const budgetField = makeField(
+    t('ads_lbl_budget_daily'),
+    "ads-test-budget",
+    t('ads_ph_budget'),
+    draft.budget || "50000",
+    "number"
+  );
+  const linkField = makeField(
+    t('ads_lbl_target_url'),
+    "ads-test-target-url",
+    "https://example.com",
+    draft.target_url || ""
+  );
+  const headlineField = makeField(
+    t('ads_lbl_headline'),
+    "ads-test-headline",
+    t('ads_ph_headline'),
+    draft.headline || ""
+  );
+  const descriptionField = makeField(
+    t('ads_lbl_description'),
+    "ads-test-description",
+    t('ads_ph_description'),
+    draft.description || ""
+  );
+  const messageField = makeTextarea(
+    t('ads_lbl_message'),
+    "ads-test-message",
+    t('ads_ph_message'),
+    draft.message || ""
+  );
+  const aiBriefField = makeTextarea(
+    t('ads_lbl_ai_brief'),
+    "ads-test-ai-brief",
+    t('ads_ph_ai_brief'),
+    draft.ai_brief || ""
+  );
+
+  const fbAdAccountField = makeField(
+    t('ads_lbl_fb_ad_account'),
+    "ads-test-fb-ad-account",
+    t('ads_ph_fb_ad_account'),
+    draft.fb_ad_account_id || ""
+  );
+  const fbPageIdField = makeField(
+    t('ads_lbl_fb_page_id'),
+    "ads-test-fb-page-id",
+    "Page ID",
+    draft.fb_page_id || ""
+  );
+  const fbTokenField = makeField(
+    t('ads_lbl_fb_page_token'),
+    "ads-test-fb-page-token",
+    "EAAB...",
+    draft.fb_page_access_token || ""
+  );
+
+  const ggCustomerField = makeField(
+    t('ads_lbl_gg_customer_id'),
+    "ads-test-gg-customer",
+    t('ads_ph_gg_customer_id'),
+    draft.gg_customer_id || ""
+  );
+  const ggAccessTokenField = makeField(
+    t('ads_lbl_gg_access_token'),
+    "ads-test-gg-access-token",
+    "ya29...",
+    draft.gg_access_token || ""
+  );
+  const ggDevTokenField = makeField(
+    t('ads_lbl_gg_developer_token'),
+    "ads-test-gg-developer-token",
+    "Dev token",
+    draft.gg_developer_token || ""
+  );
+  const ggLoginCustomerField = makeField(
+    t('ads_lbl_gg_login_customer_id'),
+    "ads-test-gg-login-customer",
+    t('ads_ph_gg_login_customer_id'),
+    draft.gg_login_customer_id || ""
+  );
+
+  grid.append(
+    campaignNameField.box,
+    objectiveField.box,
+    budgetField.box,
+    linkField.box,
+    headlineField.box,
+    descriptionField.box,
+    messageField.box,
+    aiBriefField.box,
+    fbAdAccountField.box,
+    fbPageIdField.box,
+    fbTokenField.box,
+    ggCustomerField.box,
+    ggAccessTokenField.box,
+    ggDevTokenField.box,
+    ggLoginCustomerField.box
+  );
+
+  const actionRow = document.createElement("div");
+  actionRow.style.cssText = "display:flex;gap:8px;flex-wrap:wrap;margin-top:12px";
+
+  const approvalToggleRow = document.createElement("label");
+  approvalToggleRow.style.cssText = `display:flex;align-items:center;gap:8px;margin-top:10px;font-size:12px;color:${theme.text}`;
+  const approvalToggle = document.createElement("input");
+  approvalToggle.type = "checkbox";
+  approvalToggle.checked = draft.approve_before_push !== false;
+  approvalToggle.style.cssText = "cursor:pointer";
+  const approvalToggleText = document.createElement("span");
+  approvalToggleText.textContent = t('ads_approval_label');
+  approvalToggleRow.append(approvalToggle, approvalToggleText);
+
+  const fbBtn = createButton(t('ads_btn_test_fb'), "#1877f2");
+  const ggBtn = createButton(t('ads_btn_test_gg'), "#4285f4");
+  const aiPushBothBtn = createButton(t('ads_btn_ai_push'), "#722ed1");
+  const fillKnownIdsBtn = createButton(t('ads_btn_fill_ids'), "#13a8a8");
+  const fillMinimalPayloadBtn = createButton(t('ads_btn_fill_payload'), "#2f54eb");
+  const clearBtn = createButton(t('ads_btn_clear_log'), "#8c8c8c");
+
+  const logArea = document.createElement("textarea");
+  logArea.id = "ads-test-log";
+  logArea.readOnly = true;
+  logArea.placeholder = t('ads_ph_log');
+  logArea.style.cssText = `width:100%;min-height:180px;margin-top:10px;padding:10px;border:1px solid ${theme.border};border-radius:6px;background:${theme.bg};color:${theme.text};font-family:monospace;font-size:12px`;
+
+  const saveDraft = () => {
+    writeAdsTesterDraft({
+      campaign_name: campaignNameField.input.value,
+      objective: objectiveField.input.value,
+      budget: budgetField.input.value,
+      target_url: linkField.input.value,
+      headline: headlineField.input.value,
+      description: descriptionField.input.value,
+      message: messageField.input.value,
+      ai_brief: aiBriefField.input.value,
+      approve_before_push: approvalToggle.checked,
+      fb_ad_account_id: fbAdAccountField.input.value,
+      fb_page_id: fbPageIdField.input.value,
+      fb_page_access_token: fbTokenField.input.value,
+      gg_customer_id: ggCustomerField.input.value,
+      gg_access_token: ggAccessTokenField.input.value,
+      gg_developer_token: ggDevTokenField.input.value,
+      gg_login_customer_id: ggLoginCustomerField.input.value
+    });
+  };
+
+  [
+    campaignNameField.input,
+    objectiveField.input,
+    budgetField.input,
+    linkField.input,
+    headlineField.input,
+    descriptionField.input,
+    messageField.input,
+    aiBriefField.input,
+    fbAdAccountField.input,
+    fbPageIdField.input,
+    fbTokenField.input,
+    ggCustomerField.input,
+    ggAccessTokenField.input,
+    ggDevTokenField.input,
+    ggLoginCustomerField.input
+  ].forEach((input) => {
+    input.addEventListener("change", saveDraft);
+    input.addEventListener("blur", saveDraft);
+  });
+  approvalToggle.addEventListener("change", saveDraft);
+
+  const collectCommonPayload = () => {
+    const campaignName = campaignNameField.input.value.trim() || `Test Campaign ${Date.now()}`;
+    const budgetNumber = Number(budgetField.input.value) || 50000;
+    const targetUrl = linkField.input.value.trim();
+    const headline = headlineField.input.value.trim() || campaignName;
+    const description = descriptionField.input.value.trim();
+    const message = messageField.input.value.trim() || headline;
+    const objective = objectiveField.input.value.trim() || "OUTCOME_TRAFFIC";
+    const globalSettings = getGlobalSettings();
+
+    return {
+      app_id: resolveContext().app_id,
+      domain: globalSettings.domain,
+      service_type: globalSettings.isLmkt ? globalSettings.project : globalSettings.industry,
+      campaign_name: campaignName,
+      name: campaignName,
+      objective,
+      daily_budget: budgetNumber,
+      budget: budgetNumber,
+      target_url: targetUrl,
+      final_url: targetUrl,
+      link: targetUrl,
+      headline,
+      title: headline,
+      description,
+      message,
+      primary_text: message,
+      status: "PAUSED"
+    };
+  };
+
+  const setLoading = (btn, loading) => {
+    if (!btn) return;
+    btn.disabled = loading;
+    btn.dataset.originalText = btn.dataset.originalText || btn.textContent;
+    btn.textContent = loading ? t('ads_loading_api') : btn.dataset.originalText;
+  };
+
+  const buildFacebookPayload = () => {
+    const common = collectCommonPayload();
+    return {
+      ...common,
+      platform: "facebook_ads",
+      adAccountId: fbAdAccountField.input.value.trim(),
+      pageId: fbPageIdField.input.value.trim(),
+      pageAccessToken: fbTokenField.input.value.trim()
+    };
+  };
+
+  const buildGooglePayload = () => {
+    const common = collectCommonPayload();
+    const customerIdRaw = ggCustomerField.input.value.trim();
+    const loginCustomerIdRaw = ggLoginCustomerField.input.value.trim();
+    return {
+      ...common,
+      platform: "google_ads",
+      customer_id: customerIdRaw.replace(/-/g, ""),
+      access_token: ggAccessTokenField.input.value.trim(),
+      developer_token: ggDevTokenField.input.value.trim(),
+      login_customer_id: loginCustomerIdRaw ? loginCustomerIdRaw.replace(/-/g, "") : "",
+      headline1: common.headline,
+      headline2: common.headline,
+      headline3: "Dang ky ngay",
+      description1: common.description || common.message,
+      description2: common.description || "Nhan uu dai hom nay"
+    };
+  };
+
+  fbBtn.onclick = async () => {
+    const payload = buildFacebookPayload();
+    if (!payload.target_url) {
+      adsTesterNotify(t('ads_err_fb_url'), "error");
+      return;
+    }
+
+    appendAdsTesterLog(logArea, "Facebook request", payload);
+    saveDraft();
+    setLoading(fbBtn, true);
+
+    try {
+      const result = await callAdsCampaignApi("facebook", payload);
+      appendAdsTesterLog(logArea, "Facebook response", result);
+      adsTesterNotify(t('ads_ok_fb'), "success");
+    } catch (e) {
+      appendAdsTesterLog(logArea, "Facebook error", e.message || String(e));
+      adsTesterNotify(`${t('ads_log_fb_error')}: ${e.message || e}`, "error");
+    } finally {
+      setLoading(fbBtn, false);
+    }
+  };
+
+  ggBtn.onclick = async () => {
+    const payload = buildGooglePayload();
+    if (!payload.target_url) {
+      adsTesterNotify(t('ads_err_gg_url'), "error");
+      return;
+    }
+
+    appendAdsTesterLog(logArea, "Google request", payload);
+    saveDraft();
+    setLoading(ggBtn, true);
+
+    try {
+      const result = await callAdsCampaignApi("google", payload);
+      appendAdsTesterLog(logArea, "Google response", result);
+      adsTesterNotify(t('ads_ok_gg'), "success");
+    } catch (e) {
+      appendAdsTesterLog(logArea, "Google error", e.message || String(e));
+      adsTesterNotify(`${t('ads_log_gg_error')}: ${e.message || e}`, "error");
+    } finally {
+      setLoading(ggBtn, false);
+    }
+  };
+
+  aiPushBothBtn.onclick = async () => {
+    const common = collectCommonPayload();
+    if (!common.target_url) {
+      adsTesterNotify(t('ads_err_ai_url'), "error");
+      return;
+    }
+
+    const missingFb = !fbAdAccountField.input.value.trim() || !fbPageIdField.input.value.trim() || !fbTokenField.input.value.trim();
+    const missingGg = !ggCustomerField.input.value.trim() || !ggAccessTokenField.input.value.trim() || !ggDevTokenField.input.value.trim();
+    if (missingFb || missingGg) {
+      adsTesterNotify(t('ads_err_credentials'), "error");
+      return;
+    }
+
+    setLoading(aiPushBothBtn, true);
+    saveDraft();
+
+    try {
+      appendAdsTesterLog(logArea, "AI request", {
+        brief: aiBriefField.input.value.trim(),
+        target_url: common.target_url,
+        campaign_name: common.campaign_name
+      });
+
+      const aiCreative = await generateAdsCreativeWithAI({
+        brief: aiBriefField.input.value,
+        target_url: common.target_url,
+        campaign_name: common.campaign_name,
+        domain: common.domain,
+        service_type: common.service_type
+      });
+
+      headlineField.input.value = aiCreative.headline || headlineField.input.value;
+      descriptionField.input.value = aiCreative.description || descriptionField.input.value;
+      messageField.input.value = aiCreative.message || messageField.input.value;
+      saveDraft();
+      appendAdsTesterLog(logArea, "AI response", aiCreative.raw || aiCreative);
+
+      if (approvalToggle.checked) {
+        const approved = await requestAdsPushApproval(theme, {
+          headline: headlineField.input.value.trim(),
+          description: descriptionField.input.value.trim(),
+          message: messageField.input.value.trim()
+        });
+
+        if (!approved) {
+          appendAdsTesterLog(logArea, "AI flow", "User cancelled before push");
+          adsTesterNotify(t('ads_cancelled'), "info");
+          return;
+        }
+      } else {
+        appendAdsTesterLog(logArea, "AI flow", "Approval step skipped by setting");
+      }
+
+      const fbPayload = buildFacebookPayload();
+      appendAdsTesterLog(logArea, "Facebook request (AI flow)", fbPayload);
+      const fbResult = await callAdsCampaignApi("facebook", fbPayload);
+      appendAdsTesterLog(logArea, "Facebook response (AI flow)", fbResult);
+
+      const ggPayload = buildGooglePayload();
+      appendAdsTesterLog(logArea, "Google request (AI flow)", ggPayload);
+      const ggResult = await callAdsCampaignApi("google", ggPayload);
+      appendAdsTesterLog(logArea, "Google response (AI flow)", ggResult);
+
+      adsTesterNotify(t('ads_ok_ai_push'), "success");
+    } catch (e) {
+      appendAdsTesterLog(logArea, "AI+Push error", e.message || String(e));
+      adsTesterNotify(`${t('ads_log_ai_push_error')}: ${e.message || e}`, "error");
+    } finally {
+      setLoading(aiPushBothBtn, false);
+    }
+  };
+
+  fillKnownIdsBtn.onclick = () => {
+    fbAdAccountField.input.value = fbAdAccountField.input.value.trim() || "201051000069730";
+    ggCustomerField.input.value = ggCustomerField.input.value.trim() || "3308977729";
+    if (!campaignNameField.input.value.trim()) {
+      campaignNameField.input.value = `Test LMKT ${new Date().toLocaleDateString(getUILanguage())}`;
+    }
+    if (!objectiveField.input.value.trim()) {
+      objectiveField.input.value = "OUTCOME_TRAFFIC";
+    }
+    if (!budgetField.input.value.trim()) {
+      budgetField.input.value = "50000";
+    }
+    saveDraft();
+    adsTesterNotify(t('ads_ok_fill_ids'), "success");
+  };
+
+  fillMinimalPayloadBtn.onclick = () => {
+    fillKnownIdsBtn.onclick();
+
+    const today = new Date().toLocaleDateString(getUILanguage());
+    campaignNameField.input.value = campaignNameField.input.value.trim() || `Test Ads ${today}`;
+    objectiveField.input.value = objectiveField.input.value.trim() || "OUTCOME_TRAFFIC";
+    budgetField.input.value = budgetField.input.value.trim() || "50000";
+    linkField.input.value = linkField.input.value.trim() || "https://phanmemmottrieu.net";
+    headlineField.input.value = headlineField.input.value.trim() || "Uu dai dac biet hom nay";
+    descriptionField.input.value = descriptionField.input.value.trim() || "Nhan tu van nhanh va uu dai ngay";
+    messageField.input.value = messageField.input.value.trim() || "Dang ky de nhan thong tin chi tiet va uu dai moi nhat.";
+
+    appendAdsTesterLog(logArea, "Hint", {
+      note: t('ads_min_payload_note')
+    });
+    saveDraft();
+    adsTesterNotify(t('ads_ok_fill_payload'), "success");
+  };
+
+  clearBtn.onclick = () => {
+    logArea.value = "";
+  };
+
+  actionRow.append(fbBtn, ggBtn, aiPushBothBtn, fillKnownIdsBtn, fillMinimalPayloadBtn, clearBtn);
+  wrapper.append(title, hint, grid, approvalToggleRow, actionRow, logArea);
+
+  const container = ensureUnifiedUIContainer();
+  if (container) {
+    container.appendChild(wrapper);
+  }
+
+  return wrapper;
+}
+
 async function ensureUI() {
   const existing = document.getElementById("multi-domain-ui");
   if (existing) return existing;
@@ -5194,30 +6134,30 @@ async function ensureUI() {
   wrapper.style.cssText = getFeatureCardStyle(theme);
 
   const title = document.createElement("div");
-  title.textContent = "🌐 Multi-Domain Content Manager (Chống Chất AI)";
+  title.textContent = t('multi_domain_manager');
   title.style.cssText = getFeatureTitleStyle(theme);
 
   // Note: Sử dụng Global Settings Panel (không tạo selector riêng nữa)
   const note = document.createElement("div");
   note.id = "service-content-tip";
   note.style.cssText = `margin-bottom:12px;padding:8px;background:${theme.infoBg};border-radius:4px;font-size:12px;color:${theme.info};`;
-  note.innerHTML = "💡 <strong>Tip:</strong> LMKT dùng <strong>Dự án</strong> làm category; Phanmemmottrieu dùng <strong>Lĩnh vực</strong>. Chọn ở <strong>Cài Đặt Chung</strong> phía trên.";
+  note.innerHTML = t('tip_label');
 
   // Textarea
   const textarea = document.createElement("textarea");
   textarea.id = "content-input";
   textarea.style.cssText = `width:100%;min-height:200px;font-family:monospace;font-size:12px;color:${theme.text};background:${theme.bg};border:1px solid ${theme.border};margin-bottom:8px`;
-  textarea.placeholder = "Dán JSON Zalo/Facebook hoặc nội dung vào đây...";
+  textarea.placeholder = ti("Dán JSON Zalo/Facebook hoặc nội dung vào đây...", "Paste Zalo/Facebook JSON or content here...", "在此粘贴 Zalo/Facebook JSON 或内容...");
 
   // Buttons
   const btnRow = document.createElement("div");
   btnRow.style.cssText = "display:flex;gap:8px;flex-wrap:wrap";
 
-  const uploadZaloBtn = createButton("📱 Upload Zalo JSON", "#0068ff");
-  const uploadFbBtn = createButton("👍 Upload Facebook JSON", "#1877f2");
-  const createBtn = createButton("✍️ Tạo Bài", "#52c41a");
-  const clearHistoryBtn = createButton("🗑️ Xóa Lịch Sử", "#f5222d");
-  const cleanupIndexedDBBtn = createButton("🧹 Dọn IndexedDB", "#fa8c16");
+  const uploadZaloBtn = createButton(t('upload_zalo'), "#0068ff");
+  const uploadFbBtn = createButton(t('upload_facebook'), "#1877f2");
+  const createBtn = createButton(t('create_post'), "#52c41a");
+  const clearHistoryBtn = createButton(t('clear_history'), "#f5222d");
+  const cleanupIndexedDBBtn = createButton(t('cleanup_indexeddb'), "#fa8c16");
 
   // File inputs (hidden)
   const zaloFileInput = createFileInput("zalo-file");
@@ -5236,9 +6176,9 @@ async function ensureUI() {
         const data = JSON.parse(ev.target.result);
         const valid = parseZaloJson(data);
         textarea.value = JSON.stringify(valid, null, 2);
-        thongbao(`✅ Đã load ${valid.length} tin nhắn Zalo hợp lệ`);
+        thongbao(ti(`✅ Đã load ${valid.length} tin nhắn Zalo hợp lệ`, `✅ Loaded ${valid.length} valid Zalo messages`, `✅ 已加载 ${valid.length} 条有效 Zalo 消息`));
       } catch (e) {
-        canhbao(`❌ Lỗi parse JSON: ${e.message}`);
+        canhbao(ti(`❌ Lỗi parse JSON: ${e.message}`, `❌ JSON parse error: ${e.message}`, `❌ JSON 解析错误：${e.message}`));
       }
     };
     reader.readAsText(file);
@@ -5253,9 +6193,9 @@ async function ensureUI() {
         const data = JSON.parse(ev.target.result);
         const valid = parseFacebookJson(data);
         textarea.value = JSON.stringify(valid, null, 2);
-        thongbao(`✅ Đã load ${valid.length} posts Facebook hợp lệ`);
+        thongbao(ti(`✅ Đã load ${valid.length} posts Facebook hợp lệ`, `✅ Loaded ${valid.length} valid Facebook posts`, `✅ 已加载 ${valid.length} 条有效 Facebook 帖子`));
       } catch (e) {
-        canhbao(`❌ Lỗi parse JSON: ${e.message}`);
+        canhbao(ti(`❌ Lỗi parse JSON: ${e.message}`, `❌ JSON parse error: ${e.message}`, `❌ JSON 解析错误：${e.message}`));
       }
     };
     reader.readAsText(file);
@@ -5264,12 +6204,12 @@ async function ensureUI() {
   createBtn.onclick = async () => {
     // Kiểm tra xem có đang xử lý không
     if (isProcessing) {
-      canhbao("⚠️ Hệ thống đang xử lý bài viết khác, vui lòng đợi!");
+      canhbao(ti("⚠️ Hệ thống đang xử lý bài viết khác, vui lòng đợi!", "⚠️ Another article is being processed, please wait!", "⚠️ 系统正在处理另一篇内容，请稍候！"));
       return;
     }
     
     const content = textarea.value.trim();
-    if (!content) return canhbao("❌ Vui lòng nhập nội dung!");
+    if (!content) return canhbao(ti("❌ Vui lòng nhập nội dung!", "❌ Please enter content!", "❌ 请输入内容！"));
     
     // Sử dụng Global Settings
     const globalSettings = getGlobalSettings();
@@ -5337,7 +6277,7 @@ async function ensureUI() {
       }
       
       if (arrWithImages.length === 0) {
-        return canhbao("❌ Không có tin nhắn nào có đủ nội dung và hình ảnh để đăng!");
+        return canhbao(ti("❌ Không có tin nhắn nào có đủ nội dung và hình ảnh để đăng!", "❌ No messages have enough content and images to post!", "❌ 没有同时具备内容和图片可发布的消息！"));
       }
       
       if (!isZaloAutoMode) {
@@ -5349,7 +6289,7 @@ async function ensureUI() {
       // Bắt đầu processing
       isProcessing = true;
       createBtn.disabled = true;
-      createBtn.textContent = "🔒 Đang xử lý...";
+      createBtn.textContent = t('processing');
       
       console.log(`\n========== BẮT ĐẦU XỬ LÝ ${arrWithImages.length} BÀI VIẾT (TUẦN TỰ) - ${new Date().toLocaleTimeString()} ==========`);
       
@@ -5357,7 +6297,7 @@ async function ensureUI() {
       for (let i = 0; i < arrWithImages.length; i++) {
         console.log(`\n--- BÀI ${i + 1}/${arrWithImages.length} - BẮT ĐẦU - ${new Date().toLocaleTimeString()} ---`);
         try {
-          thongbao(`🔄 [${i + 1}/${arrWithImages.length}] Đang xử lý...`);
+          thongbao(ti(`🔄 [${i + 1}/${arrWithImages.length}] Đang xử lý...`, `🔄 [${i + 1}/${arrWithImages.length}] Processing...`, `🔄 [${i + 1}/${arrWithImages.length}] 正在处理...`));
           await processContent(arrWithImages[i], {
             app_id: domainConfig.app_id,
             domain: domainConfig.value,
@@ -5374,22 +6314,22 @@ async function ensureUI() {
           });
           ok++;
           console.log(`--- BÀI ${i + 1}/${arrWithImages.length} - THÀNH CÔNG - ${new Date().toLocaleTimeString()} ---`);
-          thongbao(`✅ [${i + 1}/${arrWithImages.length}] Đưa dữ liệu lên server hoàn tất!`);
+          thongbao(ti(`✅ [${i + 1}/${arrWithImages.length}] Đưa dữ liệu lên server hoàn tất!`, `✅ [${i + 1}/${arrWithImages.length}] Data uploaded to server!`, `✅ [${i + 1}/${arrWithImages.length}] 数据已上传到服务器！`));
         } catch (e) {
           fail++;
           console.error(`--- BÀI ${i + 1}/${arrWithImages.length} - LỖI - ${new Date().toLocaleTimeString()} ---`, e);
-          canhbao(`❌ [${i + 1}/${arrWithImages.length}] Lỗi: ${e.message}`);
+          canhbao(ti(`❌ [${i + 1}/${arrWithImages.length}] Lỗi: ${e.message}`, `❌ [${i + 1}/${arrWithImages.length}] Error: ${e.message}`, `❌ [${i + 1}/${arrWithImages.length}] 错误：${e.message}`));
         }
         
         // Không chờ theo tiêu chuẩn Facebook Auto Post
         if (i < arrWithImages.length - 1) {
           const remaining = arrWithImages.length - i - 1;
-          thongbao(`✅ BÀI ${i + 1}/${arrWithImages.length} HOÀN TẤT! Tiếp bài tiếp (${remaining} bài còn lại)...`);
+          thongbao(ti(`✅ BÀI ${i + 1}/${arrWithImages.length} HOÀN TẤT! Tiếp bài tiếp (${remaining} bài còn lại)...`, `✅ POST ${i + 1}/${arrWithImages.length} DONE! Continue next (${remaining} remaining)...`, `✅ 第 ${i + 1}/${arrWithImages.length} 篇已完成！继续下一篇（剩余 ${remaining} 篇）...`));
         }
       }
       
       console.log(`\n========== KẾT THÚC - ${new Date().toLocaleTimeString()} ==========`);
-      thongbao(`✅ Hoàn tất! Thành công: ${ok}, Lỗi: ${fail}`);
+      thongbao(ti(`✅ Hoàn tất! Thành công: ${ok}, Lỗi: ${fail}`, `✅ Done! Success: ${ok}, Failed: ${fail}`, `✅ 完成！成功：${ok}，失败：${fail}`));
       
       // ✅ Clear textarea sau khi xử lý xong
       textarea.value = '';
@@ -5397,12 +6337,12 @@ async function ensureUI() {
       
     } catch (e) {
       console.error("Lỗi parse JSON:", e);
-      canhbao(`❌ JSON không hợp lệ: ${e.message}`);
+      canhbao(ti(`❌ JSON không hợp lệ: ${e.message}`, `❌ Invalid JSON: ${e.message}`, `❌ JSON 无效：${e.message}`));
     } finally {
       // Kết thúc processing
       isProcessing = false;
       createBtn.disabled = false;
-      createBtn.textContent = "✍️ Tạo Bài";
+      createBtn.textContent = t('create_post');
       
       // ✅ Clear window variables để tránh reuse
       window.__pendingZaloMessages = null;
@@ -5415,7 +6355,7 @@ async function ensureUI() {
   
   cleanupIndexedDBBtn.onclick = async () => {
     if (!window.indexedDB || !ZALO_INDEXEDDB.isReady) {
-      return canhbao("❌ IndexedDB không khả dụng!");
+      return canhbao(ti("❌ IndexedDB không khả dụng!", "❌ IndexedDB is unavailable!", "❌ IndexedDB 不可用！"));
     }
     
     // Show storage size before cleanup
@@ -5430,12 +6370,12 @@ async function ensureUI() {
       const success = await ZALO_INDEXEDDB.clearAll();
       if (success) {
         const sizeAfter = await ZALO_INDEXEDDB.getStorageSize();
-        thongbao(`✅ Đã dọn dẹp ${countBefore} tin nhắn!\n📉 Dung lượng: ${sizeBefore ? sizeBefore.usageMB : '?'} MB → ${sizeAfter ? sizeAfter.usageMB : '?'} MB`);
+        thongbao(ti(`✅ Đã dọn dẹp ${countBefore} tin nhắn!\n📉 Dung lượng: ${sizeBefore ? sizeBefore.usageMB : '?'} MB → ${sizeAfter ? sizeAfter.usageMB : '?'} MB`, `✅ Cleaned ${countBefore} messages!\n📉 Storage: ${sizeBefore ? sizeBefore.usageMB : '?'} MB → ${sizeAfter ? sizeAfter.usageMB : '?'} MB`, `✅ 已清理 ${countBefore} 条消息！\n📉 空间：${sizeBefore ? sizeBefore.usageMB : '?'} MB → ${sizeAfter ? sizeAfter.usageMB : '?'} MB`));
       } else {
-        canhbao("❌ Lỗi khi dọn dẹp IndexedDB");
+        canhbao(ti("❌ Lỗi khi dọn dẹp IndexedDB", "❌ Error while cleaning IndexedDB", "❌ 清理 IndexedDB 时出错"));
       }
     } catch (e) {
-      canhbao(`❌ Lỗi: ${e.message}`);
+      canhbao(ti(`❌ Lỗi: ${e.message}`, `❌ Error: ${e.message}`, `❌ 错误：${e.message}`));
     }
   };
 
@@ -8076,7 +9016,7 @@ function createZaloWebview(webviewId, url, container) {
     user-select: none;
     font-size: 13px;
   `;
-  header.textContent = '📱 Zalo Web Chat (Đăng nhập ở đây)';
+  header.textContent = t('zalo_web_chat');
 
   // Tạo webview element
   const webview = document.createElement("webview");
@@ -8761,7 +9701,7 @@ async function postToSelectedFanpages(messages, postUrl, selectedPages = null, o
             facebookState._needsValidation = true;
 
             console.error(`❌ [Fanpage ${i + 1}] Facebook token lỗi/hết hạn khi đăng ${page.name}: ${authErrorInfo.message}`);
-            canhbao('❌ Facebook token đã hết hạn/không hợp lệ trong lúc chạy. Vui lòng cập nhật token ở mục Facebook Token Management rồi chạy lại.');
+            canhbao(ti('❌ Facebook token đã hết hạn/không hợp lệ trong lúc chạy. Vui lòng cập nhật token ở mục Facebook Token Management rồi chạy lại.', '❌ Facebook token expired/invalid during execution. Please update token in Facebook Token Management and retry.', '❌ Facebook token 在运行中已过期/无效。请在 Facebook Token 管理中更新后重试。'));
 
             failCount++;
             stopAllPosting = true;
@@ -8795,7 +9735,7 @@ async function postToSelectedFanpages(messages, postUrl, selectedPages = null, o
           facebookState._needsValidation = true;
 
           console.error(`❌ [Fanpage ${i + 1}] Token Facebook lỗi/hết hạn khi đăng ${page.name}: ${authErrorInfo.message}`);
-          canhbao('❌ Facebook token đã hết hạn/không hợp lệ trong lúc chạy. Vui lòng cập nhật token ở mục Facebook Token Management rồi chạy lại.');
+          canhbao(ti('❌ Facebook token đã hết hạn/không hợp lệ trong lúc chạy. Vui lòng cập nhật token ở mục Facebook Token Management rồi chạy lại.', '❌ Facebook token expired/invalid during execution. Please update token in Facebook Token Management and retry.', '❌ Facebook token 在运行中已过期/无效。请在 Facebook Token 管理中更新后重试。'));
 
           failCount++;
           stopAllPosting = true;
@@ -9232,7 +10172,7 @@ function startZaloScanner(statusEl) {
   
   if (configs.length === 0) {
     console.warn('⚠️ Không có config nào có nhóm Zalo để quét');
-    if (statusEl) statusEl.textContent = '⚠️ Không có config để quét';
+    if (statusEl) statusEl.textContent = t('no_config_selected');
     isZaloScanning = false;
     stopStorageMonitor();
     removeScannerLockOverlay();
@@ -9380,7 +10320,7 @@ function pauseZaloScanner(statusEl) {
   // Không clear timers, không xóa state - chỉ tạm dừng
   
   if (statusEl) {
-    statusEl.textContent = '⏸️ Tạm dừng - Nhấn Tiếp tục để chạy lại';
+    statusEl.textContent = ti('⏸️ Tạm dừng - Nhấn Tiếp tục để chạy lại', '⏸️ Paused - Click Resume to continue', '⏸️ 已暂停 - 点击继续以恢复');
   }
   
   // Force cleanup khi pause
@@ -9402,7 +10342,7 @@ function resumeZaloScanner(statusEl, isAutoResume = false) {
   
   if (statusEl) {
     const icon = isAutoResume ? '🔄' : '▶️';
-    statusEl.textContent = `${icon} Đang chạy lại...`;
+    statusEl.textContent = `${icon} ${ti('Đang chạy lại...', 'Resuming...', '正在恢复运行...')}`;
   }
 }
 
@@ -9446,10 +10386,10 @@ function createZaloResetButtonsUI() {
     line-height: 1.5;
   `;
   infoBox.innerHTML = `
-    <strong>⚡ Tối ưu IndexedDB:</strong><br>
-    🧹 Cleanup tự động sau mỗi group<br>
-    📊 Theo dõi storage mỗi 30s<br>
-    ✅ Không giới hạn heap - tập trung cleanup IndexedDB
+    <strong>${ti('⚡ Tối ưu IndexedDB:', '⚡ IndexedDB optimization:', '⚡ IndexedDB 优化：')}</strong><br>
+    ${ti('🧹 Cleanup tự động sau mỗi group', '🧹 Auto cleanup after each group', '🧹 每个群组后自动清理')}<br>
+    ${ti('📊 Theo dõi storage mỗi 30s', '📊 Monitor storage every 30s', '📊 每30秒监控一次存储')}<br>
+    ${ti('✅ Không giới hạn heap - tập trung cleanup IndexedDB', '✅ No heap limit changes - focus on IndexedDB cleanup', '✅ 不调整 heap 限制 - 专注 IndexedDB 清理')}
   `;
   wrapper.appendChild(infoBox);
   
@@ -9464,7 +10404,7 @@ function createZaloResetButtonsUI() {
   // ✅ NEW: Pause Button
   const btnPause = document.createElement('button');
   btnPause.setAttribute('data-zalo-pause', 'true');
-  btnPause.textContent = '⏸️ Tạm Dừng';
+  btnPause.textContent = ti('⏸️ Tạm Dừng', '⏸️ Pause', '⏸️ 暂停');
   btnPause.style.cssText = `
     padding: 6px 12px;
     background: #faad14;
@@ -9484,7 +10424,7 @@ function createZaloResetButtonsUI() {
   // ✅ NEW: Resume Button
   const btnResume = document.createElement('button');
   btnResume.setAttribute('data-zalo-resume', 'true');
-  btnResume.textContent = '▶️ Tiếp Tục';
+  btnResume.textContent = ti('▶️ Tiếp Tục', '▶️ Resume', '▶️ 继续');
   btnResume.style.cssText = `
     padding: 6px 12px;
     background: #52c41a;
@@ -9504,7 +10444,7 @@ function createZaloResetButtonsUI() {
   // ✅ NEW: Force Cleanup Button
   const btnCleanup = document.createElement('button');
   btnCleanup.setAttribute('data-zalo-cleanup', 'true');
-  btnCleanup.textContent = '🧹 Giải Phóng RAM';
+  btnCleanup.textContent = ti('🧹 Giải Phóng RAM', '🧹 Free RAM', '🧹 释放内存');
   btnCleanup.style.cssText = `
     padding: 6px 12px;
     background: #1890ff;
@@ -9518,7 +10458,7 @@ function createZaloResetButtonsUI() {
   btnCleanup.onclick = () => {
     forceCleanupResources();
     setTimeout(() => {
-      alert(`✅ Đã thực hiện cleanup`);
+      thongbao(ti(`✅ Đã thực hiện cleanup`, `✅ Cleanup completed`, `✅ 清理已完成`));
     }, 1500);
   };
   buttonRow.appendChild(btnCleanup);
@@ -9526,7 +10466,7 @@ function createZaloResetButtonsUI() {
   // Button 1: Reset Groups State
   const btnResetGroups = document.createElement('button');
   btnResetGroups.setAttribute('data-zalo-reset-groups', 'true');
-  btnResetGroups.textContent = '🔄 Reset Groups';
+  btnResetGroups.textContent = ti('🔄 Reset Groups', '🔄 Reset Groups', '🔄 重置群组');
   btnResetGroups.style.cssText = `
     padding: 6px 12px;
     background: #faad14;
@@ -9538,7 +10478,7 @@ function createZaloResetButtonsUI() {
     white-space: nowrap;
   `;
   btnResetGroups.onclick = () => {
-    if (confirm('⚠️ Reset trạng thái các nhóm Zalo đã quét?\n\nBạn sẽ quét lại TẤT CẢ các nhóm.')) {
+    if (confirm(ti('⚠️ Reset trạng thái các nhóm Zalo đã quét?\n\nBạn sẽ quét lại TẤT CẢ các nhóm.', '⚠️ Reset scanned Zalo groups state?\n\nYou will rescan ALL groups.', '⚠️ 要重置已扫描的 Zalo 群组状态吗？\n\n你将重新扫描所有群组。'))) {
       const result = resetZaloGroupsState();
       alert(`✅ ${result.message}`);
       console.log(result);
@@ -9548,7 +10488,7 @@ function createZaloResetButtonsUI() {
   
   // Button 2: Reset Posted Messages
   const btnResetMessages = document.createElement('button');
-  btnResetMessages.textContent = '🧹 Reset Posted';
+  btnResetMessages.textContent = ti('🧹 Reset Posted', '🧹 Reset Posted', '🧹 重置已发布');
   btnResetMessages.style.cssText = `
     padding: 6px 12px;
     background: #ff7875;
@@ -9560,7 +10500,7 @@ function createZaloResetButtonsUI() {
     white-space: nowrap;
   `;
   btnResetMessages.onclick = () => {
-    if (confirm('⚠️ Xóa toàn bộ tin Zalo đã đăng?\n\n❌ KHÔNG THỂ UNDO!\n\nBạn sẽ đăng lại TẤT CẢ từ lần quét đầu.')) {
+    if (confirm(ti('⚠️ Xóa toàn bộ tin Zalo đã đăng?\n\n❌ KHÔNG THỂ UNDO!\n\nBạn sẽ đăng lại TẤT CẢ từ lần quét đầu.', '⚠️ Delete all posted Zalo messages?\n\n❌ CANNOT UNDO!\n\nYou will repost ALL messages from first scan.', '⚠️ 要删除所有已发布的 Zalo 消息吗？\n\n❌ 无法撤销！\n\n系统将从首次扫描开始重新发布全部消息。'))) {
       const result = resetPostedZaloMessages();
       alert(`✅ ${result.message}`);
       console.log(result);
@@ -9570,7 +10510,7 @@ function createZaloResetButtonsUI() {
   
   // Button 3: Reset ALL
   const btnResetAll = document.createElement('button');
-  btnResetAll.textContent = '⚡ Reset ALL';
+  btnResetAll.textContent = ti('⚡ Reset ALL', '⚡ Reset ALL', '⚡ 全部重置');
   btnResetAll.style.cssText = `
     padding: 6px 12px;
     background: #ff4d4f;
@@ -9583,7 +10523,7 @@ function createZaloResetButtonsUI() {
     white-space: nowrap;
   `;
   btnResetAll.onclick = () => {
-    if (confirm('⚠️ RESET TOÀN BỘ DỮ LIỆU ZALO?\n\n❌ CẢN THẬN: KHÔNG THỂ UNDO!\n\n- Reset tất cả groups state\n- Xóa tất cả posted messages\n- Quét + đăng lại từ đầu')) {
+    if (confirm(ti('⚠️ RESET TOÀN BỘ DỮ LIỆU ZALO?\n\n❌ CẢN THẬN: KHÔNG THỂ UNDO!\n\n- Reset tất cả groups state\n- Xóa tất cả posted messages\n- Quét + đăng lại từ đầu', '⚠️ RESET ALL ZALO DATA?\n\n❌ WARNING: CANNOT UNDO!\n\n- Reset all groups state\n- Delete all posted messages\n- Rescan and repost from beginning', '⚠️ 要重置全部 ZALO 数据吗？\n\n❌ 警告：无法撤销！\n\n- 重置所有群组状态\n- 删除所有已发布消息\n- 从头重新扫描并发布'))) {
       const result = resetAllZaloData();
       alert(`✅ ${result.message}`);
       console.log(result);
@@ -9660,12 +10600,13 @@ function ensureZaloMultiGroupUI(container) {
   leftPanel.style.cssText = `flex:1;min-width:300px;display:flex;flex-direction:column;`;
 
   const title = document.createElement("div");
-  title.textContent = "💬 Zalo Multi-Group Scanner";
+  title.textContent = ti("💬 Trình quét nhiều nhóm Zalo", "💬 Zalo Multi-Group Scanner", "💬 Zalo 多群组扫描器");
   title.style.cssText = getFeatureTitleStyle(theme);
 
   const note = document.createElement("div");
   note.style.cssText = `margin-bottom:10px;padding:8px;background:${theme.successBg};border-radius:4px;font-size:12px;color:${theme.success};`;
-  note.innerHTML = `
+  note.innerHTML = ti(
+    `
     ✅ <strong>Hướng dẫn sử dụng:</strong><br>
     <strong>BƯỚC 1 - CÀI ĐẶT:</strong><br>
     &nbsp;&nbsp;• Chọn <strong>Domain, Loại Dịch Vụ, Dự Án</strong> ở <strong>"⚙️ Cài Đặt Chung"</strong> phía trên<br>
@@ -9679,7 +10620,38 @@ function ensureZaloMultiGroupUI(container) {
     &nbsp;&nbsp;• Hệ thống sẽ tự động quét tin mỗi 5 phút và đăng lên fanpage đã chọn<br><br>
     
     💡 <strong>Mẹo:</strong> Click vào dòng trong lưới động để sửa cấu hình!
-  `.trim();
+  `.trim(),
+    `
+    ✅ <strong>Usage guide:</strong><br>
+    <strong>STEP 1 - SETUP:</strong><br>
+    &nbsp;&nbsp;• Select <strong>Domain, Service Type, Project</strong> in <strong>"⚙️ General Settings"</strong> above<br>
+    &nbsp;&nbsp;• Check <strong>Fanpages</strong> in <strong>"📱 Facebook Token Management"</strong> above<br>
+    &nbsp;&nbsp;• Enter <strong>Zalo group list</strong> below (one group per line)<br>
+    &nbsp;&nbsp;• Click <strong>"💾 Save configuration"</strong> to save into dynamic grid<br><br>
+    
+    <strong>STEP 2 - RUN SCANNER:</strong><br>
+    &nbsp;&nbsp;• Login to <strong>Zalo</strong> on the right side (QR or phone number)<br>
+    &nbsp;&nbsp;• Click <strong>"▶️ Start scan"</strong> after successful login<br>
+    &nbsp;&nbsp;• The system auto-scans every 5 minutes and posts to selected fanpages<br><br>
+    
+    💡 <strong>Tip:</strong> Click a row in dynamic grid to edit configuration!
+  `.trim(),
+    `
+    ✅ <strong>使用说明：</strong><br>
+    <strong>第1步 - 配置：</strong><br>
+    &nbsp;&nbsp;• 在上方 <strong>"⚙️ 常规设置"</strong> 选择 <strong>Domain、服务类型、项目</strong><br>
+    &nbsp;&nbsp;• 在上方 <strong>"📱 Facebook Token Management"</strong> 勾选 <strong>Fanpage</strong><br>
+    &nbsp;&nbsp;• 在下方输入 <strong>Zalo 群组列表</strong>（每行一个）<br>
+    &nbsp;&nbsp;• 点击 <strong>"💾 保存配置"</strong> 保存到动态表格<br><br>
+    
+    <strong>第2步 - 运行扫描：</strong><br>
+    &nbsp;&nbsp;• 在右侧登录 <strong>Zalo</strong>（二维码或手机号）<br>
+    &nbsp;&nbsp;• 登录成功后点击 <strong>"▶️ 开始扫描"</strong><br>
+    &nbsp;&nbsp;• 系统将每 5 分钟自动扫描并发布到已选 fanpage<br><br>
+    
+    💡 <strong>提示：</strong>点击动态表格中的行可编辑配置！
+  `.trim()
+  );
 
   // ===== Hàm lấy fanpages từ Facebook Token section =====
   // ĐỌC TỪ FACEBOOK TOKEN SECTION (fb-pages-checkboxes), KHÔNG TẠO CHECKBOXES RIÊNG
@@ -9777,11 +10749,11 @@ function ensureZaloMultiGroupUI(container) {
 
     if (status && !options.preserveStatus) {
       if (currentMode === "edit") {
-        status.textContent = `✏️ Đang sửa cấu hình: ${row?.fanpage_names?.join(', ') || row?.fanpage_name || 'N/A'}. Nhấn "Lưu chỉnh sửa" hoặc "Huỷ".`;
+        status.textContent = ti(`✏️ Đang sửa cấu hình: ${row?.fanpage_names?.join(', ') || row?.fanpage_name || 'N/A'}. Nhấn "Lưu chỉnh sửa" hoặc "Huỷ".`, `✏️ Editing config: ${row?.fanpage_names?.join(', ') || row?.fanpage_name || 'N/A'}. Click "Save changes" or "Cancel".`, `✏️ 正在编辑配置：${row?.fanpage_names?.join(', ') || row?.fanpage_name || 'N/A'}。点击“保存修改”或“取消”。`);
       } else if (currentMode === "create") {
-        status.textContent = "➕ Đang thêm mới cấu hình. Nhấn \"Lưu cấu hình\" hoặc \"Huỷ\".";
+        status.textContent = ti("➕ Đang thêm mới cấu hình. Nhấn \"Lưu cấu hình\" hoặc \"Huỷ\".", "➕ Creating new configuration. Click \"Save configuration\" or \"Cancel\".", "➕ 正在新增配置。点击“保存配置”或“取消”。");
       } else {
-        status.textContent = "⏸ Chưa chạy quét.";
+        status.textContent = ti("⏸ Chưa chạy quét.", "⏸ Scanner not started.", "⏸ 尚未开始扫描。");
       }
     }
 
@@ -9875,10 +10847,10 @@ function ensureZaloMultiGroupUI(container) {
   const renderZaloConfigList = () => {
     mgmtList.innerHTML = "";
     const allConfigs = loadDataOptionUser().filter(x => x.config_for_zalo);
-    mgmtTitle.innerHTML = `📋 Cấu hình đã lưu (${allConfigs.length})`;
+    mgmtTitle.innerHTML = `📋 ${ti('Cấu hình đã lưu', 'Saved configurations', '已保存配置')} (${allConfigs.length})`;
     
     if (allConfigs.length === 0) {
-      mgmtList.innerHTML = `<div style="color:${theme.muted};font-size:11px;padding:8px;">Chưa có cấu hình nào. Hãy điền thông tin và nhấn "💾 Lưu cấu hình" để lưu.</div>`;
+      mgmtList.innerHTML = `<div style="color:${theme.muted};font-size:11px;padding:8px;">${ti('Chưa có cấu hình nào. Hãy điền thông tin và nhấn "💾 Lưu cấu hình" để lưu.', 'No configuration yet. Fill in info and click "💾 Save configuration".', '暂无配置。请填写信息并点击“💾 保存配置”。')}</div>`;
       return;
     }
     
@@ -9890,16 +10862,16 @@ function ensureZaloMultiGroupUI(container) {
       const info = document.createElement("div");
       info.style.cssText = `flex:1;`;
       const dateStr = new Date(cfg.created_at).toLocaleString('vi-VN', {month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'});
-      const tokenStatus = cfg.fanpage_token ? '✅ Token' : '⚠️ Không có token';
+      const tokenStatus = cfg.fanpage_token ? ti('✅ Token', '✅ Token', '✅ Token') : ti('⚠️ Không có token', '⚠️ Missing token', '⚠️ 缺少 token');
       
       // ✅ CHỈ hiển thị project nếu domain là LMKT
       const isLmktDomain = cfg.domain && (cfg.domain.includes('h-holding') || cfg.domain.includes('lmkt'));
       const serviceInfo = cfg.service_type || 'N/A';
-      const projectInfo = (isLmktDomain && cfg.project) ? ` | Dự án: ${cfg.project}` : '';
+      const projectInfo = (isLmktDomain && cfg.project) ? ` | ${ti('Dự án', 'Project', '项目')}: ${cfg.project}` : '';
       
       info.innerHTML = `
-        <div><strong>${cfg.fanpage_names?.join(', ') || cfg.fanpage_name}</strong> @ ${cfg.domain} <span style="color:${cfg.fanpage_token ? '#52c41a' : '#ff4d4f'};font-size:10px;">${tokenStatus}</span> ${isEditingRow ? '<span style="margin-left:6px;color:#1890ff;font-weight:600;">(Đang sửa)</span>' : ''}</div>
-        <div style="color:${theme.muted};font-size:10px;">Dịch vụ: ${serviceInfo}${projectInfo} | ${cfg.zalo_groups?.length || 0} nhóm | ${dateStr}</div>
+        <div><strong>${cfg.fanpage_names?.join(', ') || cfg.fanpage_name}</strong> @ ${cfg.domain} <span style="color:${cfg.fanpage_token ? '#52c41a' : '#ff4d4f'};font-size:10px;">${tokenStatus}</span> ${isEditingRow ? `<span style="margin-left:6px;color:#1890ff;font-weight:600;">(${ti('Đang sửa', 'Editing', '编辑中')})</span>` : ''}</div>
+        <div style="color:${theme.muted};font-size:10px;">${ti('Dịch vụ', 'Service', '服务')}: ${serviceInfo}${projectInfo} | ${cfg.zalo_groups?.length || 0} ${ti('nhóm', 'groups', '个群组')} | ${dateStr}</div>
       `;
       
       if (currentMode === "idle") {
@@ -9920,15 +10892,15 @@ function ensureZaloMultiGroupUI(container) {
         deleteBtn.textContent = "🗑️";
         deleteBtn.style.cssText = `padding:3px 6px;background:#ff4d4f;color:white;border:none;border-radius:2px;cursor:pointer;font-size:10px;`;
         deleteBtn.onclick = () => {
-          if (confirm(`⚠️ Xóa config: ${cfg.fanpage_names?.join(', ') || cfg.fanpage_name}?`)) {
+          if (confirm(ti(`⚠️ Xóa config: ${cfg.fanpage_names?.join(', ') || cfg.fanpage_name}?`, `⚠️ Delete config: ${cfg.fanpage_names?.join(', ') || cfg.fanpage_name}?`, `⚠️ 删除配置：${cfg.fanpage_names?.join(', ') || cfg.fanpage_name}？`))) {
             const allData = loadDataOptionUser().filter(item => item.id !== cfg.id);
             saveDataOptionUser(allData, (success) => {
               if (success) {
-                if (status) status.textContent = '✅ Đã xóa config';
+                if (status) status.textContent = ti('✅ Đã xóa config', '✅ Config deleted', '✅ 配置已删除');
                 if (selectedRowData?.id === cfg.id) selectedRowData = null;
                 renderZaloConfigList();
               } else {
-                if (status) status.textContent = '⚠️ Lỗi xóa config';
+                if (status) status.textContent = ti('⚠️ Lỗi xóa config', '⚠️ Failed to delete config', '⚠️ 删除配置失败');
               }
             }, { allowEmptyConfigSave: true });
           }
@@ -9945,13 +10917,13 @@ function ensureZaloMultiGroupUI(container) {
   
   const mgmtTitle = document.createElement("div");
   mgmtTitle.style.cssText = `font-weight:bold;margin-bottom:8px;color:${theme.text};font-size:12px;`;
-  mgmtTitle.innerHTML = `📋 Cấu hình đã lưu (${loadDataOptionUser().filter(x => x.config_for_zalo).length})`;
+  mgmtTitle.innerHTML = `📋 ${ti('Cấu hình đã lưu', 'Saved configurations', '已保存配置')} (${loadDataOptionUser().filter(x => x.config_for_zalo).length})`;
   
   // Hướng dẫn thao tác
   const gridGuide = document.createElement("div");
   gridGuide.style.cssText = `margin-bottom:10px;padding:10px;background:${theme.infoBg};border-radius:4px;font-size:11px;color:${theme.info};border-left:3px solid ${theme.info};`;
   gridGuide.innerHTML = `
-    <strong>📖 Hướng dẫn thao tác:</strong><br>
+    <strong>${ti('📖 Hướng dẫn thao tác:', '📖 Usage instructions:', '📖 操作指南：')}</strong><br>
     <div style="margin-top:6px;line-height:1.6;">
       <strong>➕ THÊM MỚI:</strong><br>
       &nbsp;&nbsp;1. Nhấn nút <strong>"➕ Thêm mới"</strong> để xóa form<br>
@@ -9992,12 +10964,12 @@ function ensureZaloMultiGroupUI(container) {
     postedStats.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;">
         <div>
-          <strong>📊 Tin Zalo đã đăng:</strong> ${totalPosted} tin (${last24h} tin trong 24h)<br>
-          <span style="font-size:10px;opacity:0.8;">Tự động lọc trùng lặp, cleanup sau ${ZALO_POSTED_CLEANUP_DAYS} ngày</span>
+          <strong>${ti('📊 Tin Zalo đã đăng:', '📊 Posted Zalo messages:', '📊 已发布 Zalo 消息：')}</strong> ${totalPosted} ${ti('tin', 'messages', '条')} (${last24h} ${ti('tin trong 24h', 'in last 24h', '24小时内')})<br>
+          <span style="font-size:10px;opacity:0.8;">${ti(`Tự động lọc trùng lặp, cleanup sau ${ZALO_POSTED_CLEANUP_DAYS} ngày`, `Auto duplicate-filter, cleanup after ${ZALO_POSTED_CLEANUP_DAYS} days`, `自动去重，${ZALO_POSTED_CLEANUP_DAYS} 天后清理`)}</span>
         </div>
         <div style="display:flex;gap:4px;">
-          <button id="btn-view-posted" style="padding:4px 8px;background:#52c41a;color:white;border:none;border-radius:3px;cursor:pointer;font-size:10px;">👁️ Xem</button>
-          <button id="btn-clear-posted" style="padding:4px 8px;background:#ff4d4f;color:white;border:none;border-radius:3px;cursor:pointer;font-size:10px;">🗑️ Xóa</button>
+          <button id="btn-view-posted" style="padding:4px 8px;background:#52c41a;color:white;border:none;border-radius:3px;cursor:pointer;font-size:10px;">${ti('👁️ Xem', '👁️ View', '👁️ 查看')}</button>
+          <button id="btn-clear-posted" style="padding:4px 8px;background:#ff4d4f;color:white;border:none;border-radius:3px;cursor:pointer;font-size:10px;">${ti('🗑️ Xóa', '🗑️ Delete', '🗑️ 删除')}</button>
         </div>
       </div>
     `;
@@ -10017,18 +10989,22 @@ function ensureZaloMultiGroupUI(container) {
       btnView.onclick = () => {
         const posted = loadPostedZaloMessages();
         if (posted.length === 0) {
-          alert('Chưa có tin Zalo nào được đăng.');
+          canhbao(ti('Chưa có tin Zalo nào được đăng.', 'No Zalo messages have been posted yet.', '尚未发布任何 Zalo 消息。'));
           return;
         }
         
-        let msg = `📊 DANH SÁCH ${posted.length} TIN ZALO ĐÃ ĐĂNG:\\n\\n`;
+        let msg = ti(
+          `📊 DANH SÁCH ${posted.length} TIN ZALO ĐÃ ĐĂNG:\\n\\n`,
+          `📊 LIST OF ${posted.length} POSTED ZALO MESSAGES:\\n\\n`,
+          `📊 已发布的 ${posted.length} 条 ZALO 消息列表：\\n\\n`
+        );
         posted.slice(0, 50).forEach((p, i) => {
           const date = new Date(p.timestamp).toLocaleString('vi-VN');
           msg += `${i + 1}. [${p.groupName}] ${p.sender} - ${date}\\n   ${p.content_preview}\\n\\n`;
         });
         
         if (posted.length > 50) {
-          msg += `\\n... và ${posted.length - 50} tin khác`;
+          msg += ti(`\\n... và ${posted.length - 50} tin khác`, `\\n... and ${posted.length - 50} more messages`, `\\n... 还有 ${posted.length - 50} 条消息`);
         }
         
         alert(msg);
@@ -10037,16 +11013,16 @@ function ensureZaloMultiGroupUI(container) {
     
     if (btnClear) {
       btnClear.onclick = () => {
-        if (confirm(`⚠️ Xóa tất cả ${loadPostedZaloMessages().length} tin Zalo đã đăng?\\n\\nSau khi xóa, hệ thống có thể đăng lại các tin cũ.`)) {
+        if (confirm(ti(`⚠️ Xóa tất cả ${loadPostedZaloMessages().length} tin Zalo đã đăng?\\n\\nSau khi xóa, hệ thống có thể đăng lại các tin cũ.`, `⚠️ Delete all ${loadPostedZaloMessages().length} posted Zalo messages?\\n\\nAfter deletion, old messages may be posted again.`, `⚠️ 要删除全部 ${loadPostedZaloMessages().length} 条已发布 Zalo 消息吗？\\n\\n删除后系统可能会再次发布旧消息。`))) {
           // Disable nút khi đang xử lý
           btnClear.disabled = true;
           const originalText = btnClear.textContent;
-          btnClear.textContent = '⏳ Đang xóa...';
+          btnClear.textContent = ti('⏳ Đang xóa...', '⏳ Deleting...', '⏳ 删除中...');
           
           try {
             savePostedZaloMessages([]);
             updatePostedStats();
-            status.textContent = '✅ Đã xóa lịch sử tin Zalo đã đăng';
+            status.textContent = ti('✅ Đã xóa lịch sử tin Zalo đã đăng', '✅ Posted Zalo history cleared', '✅ 已清除已发布 Zalo 历史');
           } finally {
             // Re-enable nút sau khi hoàn tất
             setTimeout(() => {
@@ -10064,20 +11040,20 @@ function ensureZaloMultiGroupUI(container) {
   mgmtBtnRow.style.cssText = `display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;`;
   
   const refreshTokensBtn = createButton("🔄 Cập nhật tokens", "#722ed1");
-  refreshTokensBtn.title = "Tự động cập nhật access token mới từ Facebook Token Management cho tất cả cấu hình đã lưu";
+  refreshTokensBtn.title = ti("Tự động cập nhật access token mới từ Facebook Token Management cho tất cả cấu hình đã lưu", "Auto-update latest access token from Facebook Token Management for all saved configs", "为所有已保存配置自动更新 Facebook Token Management 中最新的 access token");
   refreshTokensBtn.onclick = async () => {
     // Disable nút khi đang xử lý
     refreshTokensBtn.disabled = true;
     refreshTokensBtn.style.opacity = '0.6';
     refreshTokensBtn.style.cursor = 'not-allowed';
     const originalText = refreshTokensBtn.textContent;
-    refreshTokensBtn.textContent = '⏳ Đang cập nhật...';
+    refreshTokensBtn.textContent = ti('⏳ Đang cập nhật...', '⏳ Updating...', '⏳ 更新中...');
     
     try {
-      status.textContent = "⏳ Đang cập nhật tokens...";
+      status.textContent = ti("⏳ Đang cập nhật tokens...", "⏳ Updating tokens...", "⏳ 正在更新 tokens...");
       const pages = getSelectedFacebookPages();
       if (pages.length === 0) {
-        status.textContent = "⚠️ Chưa có fanpage. Hãy chọn fanpage ở mục Facebook trước.";
+        status.textContent = ti("⚠️ Chưa có fanpage. Hãy chọn fanpage ở mục Facebook trước.", "⚠️ No fanpage selected. Please choose fanpage(s) in Facebook section first.", "⚠️ 尚未选择 fanpage，请先在 Facebook 区域勾选 fanpage。");
         return;
       }
       
@@ -10096,7 +11072,7 @@ function ensureZaloMultiGroupUI(container) {
         item.config_for_zalo ? allConfigs.find(c => c.id === item.id) || item : item
       ), (success, error) => {
         if (success) {
-          status.textContent = `✅ Đang tải lại dữ liệu...`;
+          status.textContent = t('reloading_data');
           console.log('[Zalo] Token refresh saved successfully');
           
           // Fetch fresh data trước khi render grid
@@ -10117,7 +11093,7 @@ function ensureZaloMultiGroupUI(container) {
         }
       });
     } catch (e) {
-      status.textContent = `❌ Lỗi cập nhật: ${e.message}`;
+      status.textContent = ti(`❌ Lỗi cập nhật: ${e.message}`, `❌ Update error: ${e.message}`, `❌ 更新错误：${e.message}`);
       renderZaloConfigList();
     } finally {
       // Enable lại nút
@@ -10128,8 +11104,8 @@ function ensureZaloMultiGroupUI(container) {
     }
   };
 
-  const showFanpagesBtn = createButton("📱 Xem fanpages", "#1890ff");
-  showFanpagesBtn.title = "Xem danh sách tất cả fanpage đã lưu trong Facebook Token Management";
+  const showFanpagesBtn = createButton(ti("📱 Xem fanpages", "📱 View fanpages", "📱 查看 fanpages"), "#1890ff");
+  showFanpagesBtn.title = ti("Xem danh sách tất cả fanpage đã lưu trong Facebook Token Management", "View all fanpages saved in Facebook Token Management", "查看 Facebook Token Management 中保存的所有 fanpage");
   showFanpagesBtn.onclick = () => {
     // Disable nút khi đang xử lý
     showFanpagesBtn.disabled = true;
@@ -10139,14 +11115,14 @@ function ensureZaloMultiGroupUI(container) {
     try {
       const pages = getSelectedFacebookPages();
       if (pages.length === 0) {
-        status.textContent = "⚠️ Chưa có fanpage nào. Hãy chọn fanpage ở mục Facebook trước.";
+        status.textContent = ti("⚠️ Chưa có fanpage nào. Hãy chọn fanpage ở mục Facebook trước.", "⚠️ No fanpage found. Please select fanpage(s) in Facebook section first.", "⚠️ 尚无 fanpage，请先在 Facebook 区域选择 fanpage。");
         return;
       }
-      let msg = `✅ Hiện có ${pages.length} fanpage:\n\n`;
+      let msg = ti(`✅ Hiện có ${pages.length} fanpage:\n\n`, `✅ Currently ${pages.length} fanpage(s):\n\n`, `✅ 当前有 ${pages.length} 个 fanpage：\n\n`);
       pages.forEach(p => {
         msg += `• ${p.name} (ID: ${p.id})\n`;
       });
-      msg += `\n💡 Có thể dùng token từ các fanpage này để cập nhật config bằng nút "🔄 Cập nhật tokens"`;
+      msg += ti(`\n💡 Có thể dùng token từ các fanpage này để cập nhật config bằng nút "🔄 Cập nhật tokens"`, `\n💡 You can use these fanpage tokens to update configs via "🔄 Refresh tokens"`, `\n💡 可使用这些 fanpage token 通过“🔄 刷新 tokens”更新配置`);
       alert(msg);
     } finally {
       // Enable lại nút sau 300ms
@@ -10158,10 +11134,10 @@ function ensureZaloMultiGroupUI(container) {
     }
   };
   
-  const clearAllBtn = createButton("🗑️ Xoá hết", "#ff4d4f");
-  clearAllBtn.title = "Xóa toàn bộ cấu hình Zalo đã lưu (không thể hoàn tác)";
+  const clearAllBtn = createButton(ti("🗑️ Xoá hết", "🗑️ Clear all", "🗑️ 全部清空"), "#ff4d4f");
+  clearAllBtn.title = ti("Xóa toàn bộ cấu hình Zalo đã lưu (không thể hoàn tác)", "Delete all saved Zalo configs (cannot undo)", "删除全部已保存 Zalo 配置（不可撤销）");
   clearAllBtn.onclick = () => {
-    if (confirm("⚠️ Xoá tất cả cấu hình Zalo? Hành động này KHÔNG THỂ HOÀN TÁC.")) {
+    if (confirm(ti("⚠️ Xoá tất cả cấu hình Zalo? Hành động này KHÔNG THỂ HOÀN TÁC.", "⚠️ Delete all Zalo configurations? This action CANNOT be undone.", "⚠️ 要删除全部 Zalo 配置吗？此操作无法撤销。"))) {
       // Disable nút khi đang xử lý
       clearAllBtn.disabled = true;
       clearAllBtn.style.opacity = '0.6';
@@ -10171,12 +11147,12 @@ function ensureZaloMultiGroupUI(container) {
         const allData = loadDataOptionUser().filter(x => !x.config_for_zalo);
         saveDataOptionUser(allData, (success, error) => {
           if (success) {
-            status.textContent = "✅ Đang tải lại...";
+            status.textContent = ti("✅ Đang tải lại...", "✅ Reloading...", "✅ 正在重新加载...");
             console.log('[Zalo] Clear all configs saved successfully');
             
             // Fetch fresh data trước khi render grid
             fetchDataOptionUserFromServer((fetchSuccess) => {
-              status.textContent = "✅ Đã xoá tất cả cấu hình";
+              status.textContent = ti("✅ Đã xoá tất cả cấu hình", "✅ All configurations cleared", "✅ 已清空全部配置");
               if (fetchSuccess) {
                 console.log('[Zalo] Fetched fresh data after clear all');
               } else {
@@ -10210,8 +11186,8 @@ function ensureZaloMultiGroupUI(container) {
     }
   };
   
-  autoLoadBtn = createButton("⚡ Dùng config mới nhất", "#13c2c2");
-  autoLoadBtn.title = "Tự động load cấu hình mới nhất vào form để sửa hoặc chạy scanner";
+  autoLoadBtn = createButton(t('use_latest_config'), "#13c2c2");
+  autoLoadBtn.title = ti("Tự động nạp cấu hình mới nhất vào biểu mẫu để sửa hoặc chạy bộ quét", "Auto-load latest config into form for editing or scanner run", "自动加载最新配置到表单以便编辑或运行扫描");
   autoLoadBtn.onclick = () => {
     // Disable nút khi đang xử lý
     autoLoadBtn.disabled = true;
@@ -10221,13 +11197,13 @@ function ensureZaloMultiGroupUI(container) {
     try {
       const allConfigs = loadDataOptionUser().filter(x => x.config_for_zalo);
       if (allConfigs.length === 0) {
-        status.textContent = "⚠️ Không có cấu hình nào để tải";
+        status.textContent = ti("⚠️ Không có cấu hình nào để tải", "⚠️ No configuration to load", "⚠️ 没有可加载的配置");
         return;
       }
       const latest = allConfigs[allConfigs.length - 1];
       selectedRowData = latest;
       loadRowToControls(latest);
-      status.textContent = `✅ Đã tải config: ${latest.fanpage_names?.join(', ') || latest.fanpage_name}. Nhóm: ${latest.zalo_groups?.length || 0}.`;
+      status.textContent = ti(`✅ Đã tải config: ${latest.fanpage_names?.join(', ') || latest.fanpage_name}. Nhóm: ${latest.zalo_groups?.length || 0}.`, `✅ Loaded config: ${latest.fanpage_names?.join(', ') || latest.fanpage_name}. Groups: ${latest.zalo_groups?.length || 0}.`, `✅ 已加载配置：${latest.fanpage_names?.join(', ') || latest.fanpage_name}。群组：${latest.zalo_groups?.length || 0}。`);
     } finally {
       // Enable lại nút sau 500ms (debounce)
       setTimeout(() => {
@@ -10239,19 +11215,19 @@ function ensureZaloMultiGroupUI(container) {
   };
   
   // ===== NÚT SAVE VÀ NEW: Thêm/sửa dữ liệu từ controls vào grid =====
-  saveConfigBtn = createButton("💾 Lưu cấu hình", "#52c41a");
-  saveConfigBtn.title = "Lưu/cập nhật cấu hình từ các control (Global Settings, Fanpages, Zalo Groups)";
+  saveConfigBtn = createButton(t('save_config'), "#52c41a");
+  saveConfigBtn.title = ti("Lưu/cập nhật cấu hình từ các control (Global Settings, Fanpages, Zalo Groups)", "Save/update config from controls (Global Settings, Fanpages, Zalo Groups)", "从控件保存/更新配置（常规设置、Fanpages、Zalo 群组）");
   saveConfigBtn.onclick = async () => {
     // Disable nút khi đang xử lý
     saveConfigBtn.disabled = true;
     saveConfigBtn.style.opacity = '0.6';
     saveConfigBtn.style.cursor = 'not-allowed';
     const originalText = saveConfigBtn.textContent;
-    saveConfigBtn.textContent = '⏳ Đang lưu...';
+    saveConfigBtn.textContent = ti('⏳ Đang lưu...', '⏳ Saving...', '⏳ 保存中...');
     
     try {
       if (currentMode === "idle") {
-        status.textContent = "⚠️ Hãy nhấn \"✏️\" để sửa hoặc \"➕ Thêm mới\" để tạo cấu hình mới.";
+        status.textContent = ti("⚠️ Hãy nhấn \"✏️\" để sửa hoặc \"➕ Thêm mới\" để tạo cấu hình mới.", "⚠️ Click \"✏️\" to edit or \"➕ Add new\" to create a new config.", "⚠️ 请点击\"✏️\"编辑，或点击\"➕ 新增\"创建新配置。");
         return;
       }
 
@@ -10285,13 +11261,13 @@ function ensureZaloMultiGroupUI(container) {
       
       // Validate
       if (selectedFanpages.length === 0) {
-        status.textContent = "⚠️ Vui lòng check fanpage ở mục '📱 Facebook Token Management' phía trên trước!";
+        status.textContent = ti("⚠️ Vui lòng check fanpage ở mục '📱 Facebook Token Management' phía trên trước!", "⚠️ Please check fanpage(s) in '📱 Facebook Token Management' above first!", "⚠️ 请先在上方 '📱 Facebook Token Management' 勾选 fanpage！");
         console.warn('[Zalo Config] No fanpages selected. Mode:', currentMode, 'editingFanpageData:', editingFanpageData);
         return;
       }
       
       if (groupList.length === 0) {
-        status.textContent = "⚠️ Vui lòng nhập ít nhất 1 nhóm Zalo";
+        status.textContent = ti("⚠️ Vui lòng nhập ít nhất 1 nhóm Zalo", "⚠️ Please enter at least 1 Zalo group", "⚠️ 请至少输入 1 个 Zalo 群组");
         return;
       }
     
@@ -10323,7 +11299,7 @@ function ensureZaloMultiGroupUI(container) {
       return cfgKey === nextKey;
     });
     if (duplicate) {
-      status.textContent = "⚠️ Trùng cấu hình (Domain + Dịch vụ + Dự án). Vui lòng đổi giá trị để tránh trùng.";
+      status.textContent = ti("⚠️ Trùng cấu hình (Tên miền + Dịch vụ + Dự án). Vui lòng đổi giá trị để tránh trùng.", "⚠️ Duplicate configuration (Domain + Service + Project). Please change values.", "⚠️ 配置重复（Domain + 服务 + 项目）。请修改参数。" );
       return;
     }
 
@@ -10401,7 +11377,7 @@ function ensureZaloMultiGroupUI(container) {
           
           // Auto-suggest clearing form for next entry
           setTimeout(() => {
-            status.textContent = `${status.textContent} [💡 Tip: Nhấn "➕ Thêm mới" để xóa form và thêm cấu hình khác]`;
+            status.textContent = `${status.textContent} ${ti('[💡 Tip: Nhấn "➕ Thêm mới" để xóa form và thêm cấu hình khác]', '[💡 Tip: Click "➕ Add new" to clear form and add another config]', '[💡 提示：点击“➕ 新增”可清空表单并继续添加]')}`;
           }, 2000);
           
           // Fetch fresh data từ server để cập nhật
@@ -10442,8 +11418,8 @@ function ensureZaloMultiGroupUI(container) {
     }
   };
   
-  newConfigBtn = createButton("➕ Thêm mới", "#1890ff");
-  newConfigBtn.title = "Xóa form (clear fanpage + groups) để tạo cấu hình mới. Sau đó check fanpage, nhập nhóm và nhấn 'Lưu cấu hình'"; 
+  newConfigBtn = createButton(t('add_new'), "#1890ff");
+  newConfigBtn.title = ti("Xóa form (clear fanpage + groups) để tạo cấu hình mới. Sau đó check fanpage, nhập nhóm và nhấn 'Lưu cấu hình'", "Clear form (fanpage + groups) to create new config. Then check fanpage(s), enter groups, and click 'Save configuration'", "清空表单（fanpage + 群组）以创建新配置，然后勾选 fanpage、输入群组并点击“保存配置”"); 
   newConfigBtn.onclick = () => {
     // Disable nút khi đang xử lý
     newConfigBtn.disabled = true;
@@ -10463,7 +11439,7 @@ function ensureZaloMultiGroupUI(container) {
       
       input.value = '';
       setMode("create");
-      status.textContent = "📝 Form đã được xoá. Check fanpage và điền danh sách nhóm, rồi nhấn '💾 Lưu cấu hình'.";
+      status.textContent = ti("📝 Form đã được xoá. Check fanpage và điền danh sách nhóm, rồi nhấn '💾 Lưu cấu hình'.", "📝 Form cleared. Check fanpage(s), fill group list, then click '💾 Save configuration'.", "📝 表单已清空。请勾选 fanpage、填写群组列表，然后点击“💾 保存配置”。");
     } finally {
       // Enable lại nút sau 300ms (debounce)
       setTimeout(() => {
@@ -10475,12 +11451,12 @@ function ensureZaloMultiGroupUI(container) {
   };
   
   // � Refresh from server button - force reload từ server
-  refreshFromServerBtn = createButton("🔄 Tải lại từ server", "#722ed1");
-  refreshFromServerBtn.title = "Tải lại dữ liệu từ server và refresh grid (dùng khi grid không hiển thị đúng)";
+  refreshFromServerBtn = createButton(t('reload_from_server'), "#722ed1");
+  refreshFromServerBtn.title = t('reload_tooltip');
   refreshFromServerBtn.onclick = () => {
     refreshFromServerBtn.disabled = true;
     const originalText = refreshFromServerBtn.textContent;
-    refreshFromServerBtn.textContent = '⏳ Đang tải...';
+    refreshFromServerBtn.textContent = t('loading');
     
     fetchDataOptionUserFromServer((success, data, error) => {
       if (success) {
@@ -10488,7 +11464,7 @@ function ensureZaloMultiGroupUI(container) {
         console.log('[Zalo] Manual refresh from server success');
         renderZaloConfigList();
       } else {
-        status.textContent = `⚠️ Lỗi tải từ server: ${error}`;
+        status.textContent = ti(`⚠️ Lỗi tải từ server: ${error}`, `⚠️ Failed to load from server: ${error}`, `⚠️ 从服务器加载失败：${error}`);
         console.error('[Zalo] Manual refresh from server failed:', error);
       }
       
@@ -10501,8 +11477,8 @@ function ensureZaloMultiGroupUI(container) {
   };
   
   // �🔍 Debug button - kiểm tra dữ liệu localStorage
-  cancelBtn = createButton("✖️ Huỷ thao tác", "#d46b08");
-  cancelBtn.title = "Hủy thao tác sửa/thêm và khôi phục trạng thái trước đó";
+  cancelBtn = createButton(t('cancel'), "#d46b08");
+  cancelBtn.title = ti("Hủy thao tác sửa/thêm và khôi phục trạng thái trước đó", "Cancel edit/create and restore previous state", "取消编辑/新增并恢复之前状态");
   cancelBtn.onclick = () => {
     applyFormState(formSnapshot);
     selectedRowData = null;
@@ -10511,8 +11487,8 @@ function ensureZaloMultiGroupUI(container) {
     setMode("idle");
   };
 
-  const debugBtn = createButton("🔍 Debug", "#8c8c8c");
-  debugBtn.title = "Hiển thị dữ liệu Zalo config từ localStorage (mở DevTools console để xem chi tiết)";
+  const debugBtn = createButton(t('debug'), "#8c8c8c");
+  debugBtn.title = ti("Hiển thị dữ liệu Zalo config từ localStorage (mở DevTools console để xem chi tiết)", "Show Zalo config data from localStorage (open DevTools console for details)", "显示来自 localStorage 的 Zalo 配置数据（打开 DevTools 控制台查看详情）");
   debugBtn.onclick = () => {
     const allData = loadDataOptionUser();
     const zaloConfigs = allData.filter(x => x.config_for_zalo);
@@ -10524,7 +11500,7 @@ Data stored in localStorage:
 ${JSON.stringify(zaloConfigs, null, 2)}`;
     
     console.log(debugMsg);
-    alert(`✅ Debug info logged to console!\n\n${debugMsg.substring(0, 300)}...\n\n👓 Mở DevTools (F12) -> Console để xem chi tiết`);
+    thongbao(ti(`✅ Debug info logged to console!\n\n${debugMsg.substring(0, 300)}...\n\n👓 Mở DevTools (F12) -> Console để xem chi tiết`, `✅ Debug info logged to console!\n\n${debugMsg.substring(0, 300)}...\n\n👓 Open DevTools (F12) -> Console for details`, `✅ 调试信息已写入控制台！\n\n${debugMsg.substring(0, 300)}...\n\n👓 打开 DevTools (F12) -> Console 查看详情`));
   };
   
   mgmtBtnRow.append(saveConfigBtn, cancelBtn, newConfigBtn, autoLoadBtn, refreshTokensBtn, showFanpagesBtn, clearAllBtn, debugBtn);
@@ -10535,24 +11511,24 @@ ${JSON.stringify(zaloConfigs, null, 2)}`;
   const input = document.createElement("textarea");
   input.id = "zalo-group-list";
   input.setAttribute('data-zalo-config-select', 'true'); // Mark for selective lock
-  input.placeholder = "Mỗi nhóm 1 dòng:\nNhóm A\nQ1,3 50T\nNhóm BĐS HCM";
+  input.placeholder = ti("Mỗi nhóm 1 dòng:\nNhóm A\nQ1,3 50T\nNhóm BĐS HCM", "One group per line:\nGroup A\nQ1,3 50T\nHCM Real Estate Group", "每行一个群组：\n群组A\nQ1,3 50T\n胡志明房产群");
   input.style.cssText = `width:100%;min-height:80px;font-size:12px;color:${theme.text};background:${theme.bg};border:1px solid ${theme.border};margin-bottom:8px;flex:1;`;
   input.value = loadGroupList().join("\n");
 
   status = document.createElement("div");
   status.id = "zalo-group-status";
   status.style.cssText = `font-size:12px;color:${theme.muted};margin-bottom:8px;`;
-  status.textContent = "⏸ Chưa chạy quét.";
+  status.textContent = ti("⏸ Chưa chạy quét.", "⏸ Scanner not started.", "⏸ 尚未开始扫描。");
 
   setMode("idle");
 
   const btnRow = document.createElement("div");
   btnRow.style.cssText = "display:flex;gap:8px;flex-wrap:wrap";
 
-  const startBtn = createButton("▶️ Bắt đầu quét", "#13c2c2");
+  const startBtn = createButton(t('start_scan'), "#13c2c2");
   startBtn.setAttribute('data-zalo-start-scan', 'true');
   
-  const stopBtn = createButton("⏸ Dừng quét", "#faad14");
+  const stopBtn = createButton(t('stop_scan'), "#faad14");
   stopBtn.setAttribute('data-zalo-stop-scan', 'true');
   
   // ✅ Đảm bảo stopBtn luôn click được (cao hơn overlay)
@@ -10581,7 +11557,7 @@ ${JSON.stringify(zaloConfigs, null, 2)}`;
 
   startBtn.onclick = () => {
     // Kiểm tra đăng nhập trước khi chạy scheduler
-    status.textContent = "⏳ Kiểm tra đăng nhập Zalo...";
+    status.textContent = ti("⏳ Kiểm tra đăng nhập Zalo...", "⏳ Checking Zalo login...", "⏳ 正在检查 Zalo 登录状态...");
     startBtn.disabled = true;
     startBtn.style.opacity = '0.6';
     startBtn.style.cursor = 'not-allowed';
@@ -10594,7 +11570,7 @@ ${JSON.stringify(zaloConfigs, null, 2)}`;
         
         setButtonsState(true);
       } else {
-        status.textContent = "⚠️ Chưa đăng nhập Zalo. Vui lòng đăng nhập ở bên phải trước.";
+        status.textContent = ti("⚠️ Chưa đăng nhập Zalo. Vui lòng đăng nhập ở bên phải trước.", "⚠️ Not logged into Zalo. Please login on the right panel first.", "⚠️ 尚未登录 Zalo。请先在右侧面板登录。");
         startBtn.disabled = false;
         startBtn.style.opacity = '1';
         startBtn.style.cursor = 'pointer';
@@ -10610,7 +11586,7 @@ ${JSON.stringify(zaloConfigs, null, 2)}`;
   stopBtn.onclick = () => {
     stopZaloScanner(status);
     stopLoginCheck();
-    status.textContent = "⏸ Đã dừng quét. Nhấn ▶️ Bắt đầu quét để quét lại.";
+    status.textContent = ti("⏸ Đã dừng quét. Nhấn ▶️ Bắt đầu quét để quét lại.", "⏸ Scan stopped. Click ▶️ Start scan to run again.", "⏸ 扫描已停止。点击 ▶️ 开始扫描 重新运行。");
     
     // Ẩn/hiện nút theo trạng thái không scanning
     setButtonsState(false);
@@ -10621,10 +11597,20 @@ ${JSON.stringify(zaloConfigs, null, 2)}`;
   // Ghi chú hướng dẫn sử dụng fanpage từ Facebook Token section
   const fanpageNote = document.createElement("div");
   fanpageNote.style.cssText = `margin-bottom:10px;padding:8px;background:${theme.infoBg};border-radius:4px;font-size:11px;color:${theme.info};border-left:3px solid ${theme.info};`;
-  fanpageNote.innerHTML = `
+  fanpageNote.innerHTML = ti(
+    `
     💡 <strong>Lưu ý:</strong> Để chọn Fanpage đăng bài Zalo, hãy check vào các fanpage ở phần <strong>"📱 Facebook Token Management"</strong> phía trên.<br>
     ⚙️ Domain, Loại Dịch Vụ, Dự Án lấy từ <strong>"Cài Đặt Chung"</strong> phía trên.
-  `;
+  `,
+    `
+    💡 <strong>Note:</strong> To select fanpages for Zalo posting, check fanpages in <strong>"📱 Facebook Token Management"</strong> above.<br>
+    ⚙️ Domain, Service Type, and Project are taken from <strong>"General Settings"</strong> above.
+  `,
+    `
+    💡 <strong>提示：</strong>要选择用于发布 Zalo 的 fanpage，请在上方 <strong>"📱 Facebook Token Management"</strong> 中勾选。<br>
+    ⚙️ Domain、服务类型、项目来自上方 <strong>"常规设置"</strong>。
+  `
+  );
   
   leftPanel.append(title, note, fanpageNote, managementSection, input, status, btnRow);
 
@@ -10668,14 +11654,14 @@ ${JSON.stringify(zaloConfigs, null, 2)}`;
     if (!existingWebview) {
       console.log(`🔧 Tự động tạo webview Zalo inline vào UI...`);
       createZaloWebview(webviewId, zaloUrl, rightPanel);
-      status.textContent = `📱 Webview Zalo đã được tạo. Vui lòng đăng nhập...`;
+      status.textContent = ti(`📱 Webview Zalo đã được tạo. Vui lòng đăng nhập...`, `📱 Zalo Webview created. Please log in...`, `📱 Zalo Webview 已创建，请登录...`);
     } else {
       console.log(`✅ Webview Zalo đã tồn tại`);
-      status.textContent = `📱 Kết nối Zalo sẵn sàng. Đăng nhập và bắt đầu quét.`;
+      status.textContent = ti(`📱 Kết nối Zalo sẵn sàng. Đăng nhập và bắt đầu quét.`, `📱 Zalo connection ready. Log in and start scanning.`, `📱 Zalo 连接已就绪，登录后开始扫描。`);
     }
   } catch (error) {
     console.error("❌ Lỗi tạo webview:", error);
-    status.textContent = `⚠️ Có vấn đề với kết nối Zalo. Vui lòng thử lại.`;
+    status.textContent = ti(`⚠️ Có vấn đề với kết nối Zalo. Vui lòng thử lại.`, `⚠️ There is an issue with Zalo connection. Please try again.`, `⚠️ Zalo 连接出现问题，请重试。`);
   }
   
   return wrapper;
@@ -11825,43 +12811,43 @@ async function ensureServiceContentUI() {
   wrapper.style.cssText = getFeatureCardStyle(theme);
 
   const title = document.createElement("div");
-  title.textContent = "✨ Tạo Content Dịch Vụ (Service Categories)";
+  title.textContent = ti("✨ Tạo nội dung dịch vụ (Danh mục dịch vụ)", "✨ Generate Service Content (Service Categories)", "✨ 生成服务内容 (Service Categories)");
   title.style.cssText = getFeatureTitleStyle(theme);
 
   // Note: Sử dụng Global Settings Panel
   const note = document.createElement("div");
   note.style.cssText = `margin-bottom:12px;padding:8px;background:${theme.infoBg};border-radius:4px;font-size:12px;color:${theme.info};`;
-  note.innerHTML = "💡 <strong>Tip:</strong> Chọn ở <strong>Cài Đặt Chung</strong> phía trên.";
+  note.innerHTML = ti("💡 <strong>Mẹo:</strong> Chọn ở <strong>Cài Đặt Chung</strong> phía trên.", "💡 <strong>Tip:</strong> Select settings in <strong>General Settings</strong> above.", "💡 <strong>提示：</strong>请在上方 <strong>常规设置</strong> 中选择。");
   
   // Button: Sync Categories
   const syncBtn = document.createElement("button");
-  syncBtn.textContent = "🔄 Sync Categories";
-  syncBtn.title = "Cập nhật tất cả lĩnh vực/dự án lên database";
+  syncBtn.textContent = ti("🔄 Đồng bộ danh mục", "🔄 Sync Categories", "🔄 同步分类");
+  syncBtn.title = ti("Cập nhật tất cả lĩnh vực/dự án lên database", "Update all industries/projects to database", "将所有行业/项目更新到数据库");
   syncBtn.style.cssText = `padding:6px 12px;background:#52c41a;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:12px;font-weight:500;transition:all 0.3s;margin-bottom:12px;display:inline-block;`;
 
   const deleteBtn = document.createElement("button");
-  deleteBtn.textContent = "🗑️ Xóa theo slug";
-  deleteBtn.title = "Xóa bản ghi theo slug đang chọn";
+  deleteBtn.textContent = ti("🗑️ Xóa theo slug", "🗑️ Delete by slug", "🗑️ 按 slug 删除");
+  deleteBtn.title = ti("Xóa bản ghi theo slug đang chọn", "Delete record by selected slug", "按所选 slug 删除记录");
   deleteBtn.style.cssText = `padding:6px 12px;background:#ff4d4f;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:12px;font-weight:500;transition:all 0.3s;margin-bottom:12px;display:inline-block;`;
 
   const updateDetailDomainBtn = document.createElement("button");
-  updateDetailDomainBtn.textContent = "🔁 Cập nhật domain bài chi tiết";
-  updateDetailDomainBtn.title = "Cập nhật domain cho web_service_detail theo service_type";
+  updateDetailDomainBtn.textContent = ti("🔁 Cập nhật tên miền bài chi tiết", "🔁 Update detailed post domain", "🔁 更新详情文章域名");
+  updateDetailDomainBtn.title = ti("Cập nhật tên miền cho bảng web_service_detail theo trường service_type", "Update domain for web_service_detail by service_type", "按 service_type 更新 web_service_detail 域名");
   updateDetailDomainBtn.style.cssText = `padding:6px 12px;background:#1677ff;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:12px;font-weight:500;transition:all 0.3s;margin-bottom:12px;display:inline-block;`;
 
   const deleteInput = document.createElement("input");
   deleteInput.type = "text";
-  deleteInput.placeholder = "Nhập slug để xóa (không cần domain)";
+  deleteInput.placeholder = ti("Nhập slug để xóa (không cần tên miền)", "Enter slug to delete (domain not required)", "输入要删除的 slug（无需 domain）");
   deleteInput.style.cssText = `min-width:240px;padding:6px 8px;border:1px solid ${theme.border};border-radius:4px;font-size:12px;color:${theme.text};background:${theme.bg};`;
 
   const newNameInput = document.createElement("input");
   newNameInput.type = "text";
-  newNameInput.placeholder = "Tên dự án/dịch vụ mới (VD: Eco Smart City)";
+  newNameInput.placeholder = ti("Tên dự án/dịch vụ mới (VD: Eco Smart City)", "New project/service name (e.g. Eco Smart City)", "新项目/服务名称（例如：Eco Smart City）");
   newNameInput.style.cssText = `min-width:280px;padding:6px 8px;border:1px solid ${theme.border};border-radius:4px;font-size:12px;color:${theme.text};background:${theme.bg};`;
 
   const newSlugInput = document.createElement("input");
   newSlugInput.type = "text";
-  newSlugInput.placeholder = "Slug mới (auto, có thể sửa)";
+  newSlugInput.placeholder = ti("Slug mới (tự tạo, có thể sửa)", "New slug (auto-generated, editable)", "新 slug（自动生成，可编辑）");
   newSlugInput.style.cssText = `min-width:220px;padding:6px 8px;border:1px solid ${theme.border};border-radius:4px;font-size:12px;color:${theme.text};background:${theme.bg};`;
 
   // ✅ NEW: Service Type Checkbox
@@ -11875,18 +12861,18 @@ async function ensureServiceContentUI() {
   serviceTypeLabel.appendChild(serviceTypeCheckbox);
   
   const labelText = document.createElement("span");
-  labelText.textContent = "✅ Dịch vụ (is_service: true)";
+  labelText.textContent = ti("✅ Dịch vụ (is_service: bật)", "✅ Service (is_service: true)", "✅ 服务 (is_service: true)");
   serviceTypeLabel.appendChild(labelText);
   
   // Update label text when checkbox changes
   serviceTypeCheckbox.addEventListener('change', () => {
     labelText.textContent = serviceTypeCheckbox.checked 
-      ? "✅ Dịch vụ (is_service: true)" 
-      : "❌ Menu thường (is_service: false)";
+      ? ti("✅ Dịch vụ (is_service: bật)", "✅ Service (is_service: true)", "✅ 服务 (is_service: true)") 
+      : ti("❌ Mục thường (is_service: tắt)", "❌ Normal menu (is_service: false)", "❌ 普通菜单 (is_service: false)");
   });
 
-  const addNewBtn = createButton("➕ Thêm Mới bằng AI", "#722ed1");
-  addNewBtn.title = "Nhập tên + prompt để AI tạo đầy đủ nội dung và lưu lên web_services";
+  const addNewBtn = createButton(ti("➕ Thêm Mới bằng AI", "➕ Add New with AI", "➕ AI 新增"), "#722ed1");
+  addNewBtn.title = ti("Nhập tên + chỉ dẫn để AI tạo đầy đủ nội dung và lưu vào bảng web_services", "Enter name + prompt for AI to generate full content and save to web_services", "输入名称与提示词，让 AI 生成完整内容并保存到 web_services");
 
   const normalizeNewSlug = (value = "") => String(value)
     .normalize("NFKD")
@@ -11934,75 +12920,75 @@ async function ensureServiceContentUI() {
   syncBtn.onclick = async () => {
     const globalSettings = getGlobalSettings();
     if (!globalSettings.domainKey) {
-      alert("⚠️ Vui lòng chọn domain từ Cài Đặt Chung");
+      canhbao(ti("⚠️ Vui lòng chọn tên miền từ Cài Đặt Chung", "⚠️ Please select domain in General Settings", "⚠️ 请在常规设置中选择 domain"));
       return;
     }
     
     syncBtn.disabled = true;
-    syncBtn.textContent = "⏳ Đang sync...";
+    syncBtn.textContent = ti("⏳ Đang đồng bộ...", "⏳ Syncing...", "⏳ 同步中...");
     
     try {
       await syncCategoriesToDatabase(globalSettings.domainKey);
     } finally {
       syncBtn.disabled = false;
-      syncBtn.textContent = "🔄 Sync Categories";
+      syncBtn.textContent = ti("🔄 Đồng bộ danh mục", "🔄 Sync Categories", "🔄 同步分类");
     }
   };
 
   deleteBtn.onclick = async () => {
     const globalSettings = getGlobalSettings();
     if (!globalSettings.domainKey) {
-      alert("⚠️ Vui lòng chọn domain từ Cài Đặt Chung");
+      canhbao(ti("⚠️ Vui lòng chọn tên miền từ Cài Đặt Chung", "⚠️ Please select domain in General Settings", "⚠️ 请在常规设置中选择 domain"));
       return;
     }
 
     const manualSlug = deleteInput.value.trim();
     const categorySlug = manualSlug || (globalSettings.isLmkt ? globalSettings.project : globalSettings.industry);
     if (!categorySlug) {
-      alert("⚠️ Vui lòng nhập slug để xóa");
+      canhbao(ti("⚠️ Vui lòng nhập slug để xóa", "⚠️ Please enter slug to delete", "⚠️ 请输入要删除的 slug"));
       return;
     }
 
-    if (!window.confirm(`Bạn có chắc muốn xóa slug "${categorySlug}"?`)) {
+    if (!window.confirm(ti(`Bạn có chắc muốn xóa slug "${categorySlug}"?`, `Are you sure to delete slug "${categorySlug}"?`, `确定要删除 slug "${categorySlug}" 吗？`))) {
       return;
     }
 
     deleteBtn.disabled = true;
-    deleteBtn.textContent = "⏳ Đang xóa...";
+    deleteBtn.textContent = ti("⏳ Đang xóa...", "⏳ Deleting...", "⏳ 删除中...");
 
     try {
       await deleteCategoryBySlug(globalSettings.domainKey, categorySlug);
     } finally {
       deleteBtn.disabled = false;
-      deleteBtn.textContent = "🗑️ Xóa theo slug";
+      deleteBtn.textContent = ti("🗑️ Xóa theo slug", "🗑️ Delete by slug", "🗑️ 按 slug 删除");
     }
   };
 
   updateDetailDomainBtn.onclick = async () => {
     const globalSettings = getGlobalSettings();
     if (!globalSettings.domainKey) {
-      alert("⚠️ Vui lòng chọn domain từ Cài Đặt Chung");
+      canhbao(ti("⚠️ Vui lòng chọn tên miền từ Cài Đặt Chung", "⚠️ Please select domain in General Settings", "⚠️ 请在常规设置中选择 domain"));
       return;
     }
 
     const serviceType = globalSettings.isLmkt ? globalSettings.project : globalSettings.industry;
     if (!serviceType) {
-      alert("⚠️ Vui lòng chọn lĩnh vực/dự án để cập nhật");
+      canhbao(ti("⚠️ Vui lòng chọn lĩnh vực/dự án để cập nhật", "⚠️ Please select industry/project to update", "⚠️ 请选择行业/项目后再更新"));
       return;
     }
 
-    if (!window.confirm(`Bạn có chắc muốn cập nhật domain cho service_type "${serviceType}"?`)) {
+    if (!window.confirm(ti(`Bạn có chắc muốn cập nhật domain cho service_type "${serviceType}"?`, `Are you sure to update domain for service_type "${serviceType}"?`, `确定要更新 service_type "${serviceType}" 的域名吗？`))) {
       return;
     }
 
     updateDetailDomainBtn.disabled = true;
-    updateDetailDomainBtn.textContent = "⏳ Đang cập nhật...";
+    updateDetailDomainBtn.textContent = ti("⏳ Đang cập nhật...", "⏳ Updating...", "⏳ 更新中...");
 
     try {
       await updateDetailDomainByServiceType(globalSettings.domainKey, serviceType);
     } finally {
       updateDetailDomainBtn.disabled = false;
-      updateDetailDomainBtn.textContent = "🔁 Cập nhật domain bài chi tiết";
+      updateDetailDomainBtn.textContent = ti("🔁 Cập nhật tên miền bài chi tiết", "🔁 Update detailed post domain", "🔁 更新详情文章域名");
     }
   };
   
@@ -12029,12 +13015,12 @@ async function ensureServiceContentUI() {
   
   const infoLabel = document.createElement("small");
   infoLabel.style.cssText = `color:${theme.textSecondary};font-weight:500;display:block;margin-bottom:4px`;
-  infoLabel.textContent = "Thông tin hiện tại:";
+  infoLabel.textContent = ti("Thông tin hiện tại:", "Current information:", "当前信息：");
   
   const infoContent = document.createElement("div");
   infoContent.id = "service-info-content";
   infoContent.style.cssText = `color:${theme.text};font-size:13px;line-height:1.5`;
-  infoContent.textContent = "(Dùng Lĩnh Vực từ Cài Đặt Chung)";
+  infoContent.textContent = ti("(Dùng Lĩnh Vực từ Cài Đặt Chung)", "(Uses Industry from General Settings)", "（使用常规设置中的行业）");
   
   infoRow.appendChild(infoLabel);
   infoRow.appendChild(infoContent);
@@ -12042,18 +13028,18 @@ async function ensureServiceContentUI() {
   // Textarea for user prompt
   const promptLabel = document.createElement("label");
   promptLabel.style.cssText = `font-weight:500;display:block;margin-bottom:6px;color:${theme.text}`;
-  promptLabel.textContent = "Hướng dẫn nội dung (tùy chỉnh AI - có thể để trống):";
+  promptLabel.textContent = ti("Hướng dẫn nội dung (tùy chỉnh AI - có thể để trống):", "Content instructions (AI customization - optional):", "内容指引（AI 自定义，可选）：");
   
   const textarea = document.createElement("textarea");
   textarea.id = "service-prompt-input";
   textarea.style.cssText = `width:100%;min-height:120px;font-family:monospace;font-size:12px;color:${theme.text};background:${theme.bg};border:1px solid ${theme.border};padding:8px;border-radius:6px;margin-bottom:12px;resize:vertical`;
-  textarea.placeholder = "Ví dụ: Viết về tính năng chính, lợi ích cụ thể, và đối tượng sử dụng... (để trống sẽ dùng prompt mặc định đầy đủ)";
+  textarea.placeholder = ti("Ví dụ: Viết về tính năng chính, lợi ích cụ thể, và đối tượng sử dụng... (để trống sẽ dùng prompt mặc định đầy đủ)", "Example: Write about key features, concrete benefits, and target audience... (leave empty to use full default prompt)", "例如：撰写核心功能、具体收益和目标用户...（留空将使用完整默认提示词）");
 
   // Buttons
   const btnRow = document.createElement("div");
   btnRow.style.cssText = "display:flex;gap:8px;flex-wrap:wrap";
 
-  const createBtn = createButton("🚀 Tạo Content", "#52c41a");
+  const createBtn = createButton(ti("🚀 Tạo nội dung", "🚀 Generate Content", "🚀 生成内容"), "#52c41a");
 
   // Result area
   const resultArea = document.createElement("div");
@@ -12062,7 +13048,7 @@ async function ensureServiceContentUI() {
   
   const resultLabel = document.createElement("strong");
   resultLabel.style.cssText = `display:block;margin-bottom:8px;color:${theme.successText}`;
-  resultLabel.textContent = "✅ Kết quả:";
+  resultLabel.textContent = ti("✅ Kết quả:", "✅ Result:", "✅ 结果：");
   
   const resultContent = document.createElement("pre");
   resultContent.id = "service-result-content";
@@ -12080,18 +13066,18 @@ async function ensureServiceContentUI() {
   // Helper: Update info display based on global settings
   function updateInfoDisplay() {
     const globalSettings = getGlobalSettings();
-    const domainLabel = DOMAIN_OPTIONS[globalSettings.domainKey]?.label || 'Chưa biết';
+    const domainLabel = DOMAIN_OPTIONS[globalSettings.domainKey]?.label || ti('Chưa biết', 'Unknown', '未知');
     const industryLabel = INDUSTRY_TYPES[globalSettings.industry]?.name
-      || getSelectLabel("global-industry-select", 'Chưa chọn');
+      || getSelectLabel("global-industry-select", ti('Chưa chọn', 'Not selected', '未选择'));
     const projectLabel = LMKT_PROJECT_DEFS.find(p => p.service_code === globalSettings.project)?.name
-      || getSelectLabel("global-project-select", 'Chưa chọn');
+      || getSelectLabel("global-project-select", ti('Chưa chọn', 'Not selected', '未选择'));
     
     if (globalSettings.isLmkt) {
-      note.innerHTML = "💡 <strong>LMKT:</strong> Category chính là <strong>Dự án</strong>. Lĩnh vực bị khóa ở <strong>Bất động sản</strong>.";
-      infoContent.innerHTML = `<strong>🏢 Domain:</strong> ${domainLabel} | <strong>🏗️ Category (Dự án):</strong> ${projectLabel} | <strong>🏢 Lĩnh vực:</strong> ${industryLabel} (cố định)`;
+      note.innerHTML = ti("💡 <strong>LMKT:</strong> Danh mục chính là <strong>Dự án</strong>. Lĩnh vực bị khóa ở <strong>Bất động sản</strong>.", "💡 <strong>LMKT:</strong> Main category is <strong>Project</strong>. Industry is locked to <strong>Real Estate</strong>.", "💡 <strong>LMKT：</strong>主分类为<strong>项目</strong>，行业锁定为<strong>房地产</strong>。");
+      infoContent.innerHTML = `<strong>🏢 ${ti('Tên miền', 'Domain', '域名')}:</strong> ${domainLabel} | <strong>🏗️ ${ti('Danh mục (Dự án)', 'Category (Project)', '分类（项目）')}:</strong> ${projectLabel} | <strong>🏢 ${ti('Lĩnh vực', 'Industry', '行业')}:</strong> ${industryLabel} (${ti('cố định', 'fixed', '固定')})`;
     } else {
-      note.innerHTML = "💡 <strong>Phanmemmottrieu:</strong> Category chính là <strong>Lĩnh vực</strong>. Chọn ở <strong>Cài Đặt Chung</strong>.";
-      infoContent.innerHTML = `<strong>🏢 Domain:</strong> ${domainLabel} | <strong>🏢 Category (Lĩnh vực):</strong> ${industryLabel}`;
+      note.innerHTML = ti("💡 <strong>Phanmemmottrieu:</strong> Danh mục chính là <strong>Lĩnh vực</strong>. Chọn ở <strong>Cài Đặt Chung</strong>.", "💡 <strong>Phanmemmottrieu:</strong> Main category is <strong>Industry</strong>. Choose it in <strong>General Settings</strong>.", "💡 <strong>Phanmemmottrieu：</strong>主分类为<strong>行业</strong>，请在<strong>常规设置</strong>中选择。");
+      infoContent.innerHTML = `<strong>🏢 ${ti('Tên miền', 'Domain', '域名')}:</strong> ${domainLabel} | <strong>🏢 ${ti('Danh mục (Lĩnh vực)', 'Category (Industry)', '分类（行业）')}:</strong> ${industryLabel}`;
     }
     
     textarea.value = '';
@@ -12243,21 +13229,21 @@ async function ensureServiceContentUI() {
     const isService = serviceTypeCheckbox.checked; // ✅ Lấy giá trị từ checkbox
 
     if (!globalSettings.domainKey) {
-      canhbao("❌ Vui lòng chọn Domain ở Cài Đặt Chung");
+      canhbao(ti("❌ Vui lòng chọn Tên miền ở Cài Đặt Chung", "❌ Please select Domain in General Settings", "❌ 请在常规设置中选择 Domain"));
       return;
     }
     if (!categoryName) {
-      canhbao("❌ Vui lòng nhập tên dự án/dịch vụ mới");
+      canhbao(ti("❌ Vui lòng nhập tên dự án/dịch vụ mới", "❌ Please enter new project/service name", "❌ 请输入新的项目/服务名称"));
       return;
     }
     if (!customSlug) {
-      canhbao("❌ Slug không hợp lệ. Vui lòng nhập lại tên/slug");
+      canhbao(ti("❌ Slug không hợp lệ. Vui lòng nhập lại tên/slug", "❌ Invalid slug. Please re-enter name/slug", "❌ Slug 无效，请重新输入名称/slug"));
       return;
     }
 
     try {
       addNewBtn.disabled = true;
-      addNewBtn.textContent = "⏳ Đang tạo mới bằng AI...";
+      addNewBtn.textContent = ti("⏳ Đang tạo mới bằng AI...", "⏳ Creating with AI...", "⏳ AI 创建中...");
       resultArea.style.display = 'none';
 
       const defaultIndustry = INDUSTRY_TYPES["bat-dong-san"] || {};
@@ -12318,14 +13304,20 @@ async function ensureServiceContentUI() {
         selectNewAfterSave: true
       });
 
-      const typeText = isService ? (groupSlug === 'du-an' ? 'dự án' : 'dịch vụ') : 'menu';
-      thongbao(`✅ Đã thêm mới ${typeText} "${categoryName}" (${customSlug}, is_service: ${isService}, group_slug: "${groupSlug}") vào web_services`);
+      const typeText = isService
+        ? (groupSlug === 'du-an' ? ti('dự án', 'project', '项目') : ti('dịch vụ', 'service', '服务'))
+        : ti('menu', 'menu', '菜单');
+      thongbao(ti(
+        `✅ Đã thêm mới ${typeText} "${categoryName}" (${customSlug}, is_service: ${isService}, group_slug: "${groupSlug}") vào web_services`,
+        `✅ Added new ${typeText} "${categoryName}" (${customSlug}, is_service: ${isService}, group_slug: "${groupSlug}") to web_services`,
+        `✅ 已新增${typeText} "${categoryName}"（${customSlug}, is_service: ${isService}, group_slug: "${groupSlug}"）到 web_services`
+      ));
     } catch (e) {
       console.error("[Service Content Add New] Error:", e);
-      canhbao(`❌ Thêm mới thất bại: ${e.message}`);
+      canhbao(ti(`❌ Thêm mới thất bại: ${e.message}`, `❌ Add new failed: ${e.message}`, `❌ 新增失败：${e.message}`));
     } finally {
       addNewBtn.disabled = false;
-      addNewBtn.textContent = "➕ Thêm Mới bằng AI";
+      addNewBtn.textContent = ti("➕ Thêm Mới bằng AI", "➕ Add New with AI", "➕ AI 新增");
     }
   };
 
@@ -12336,17 +13328,17 @@ async function ensureServiceContentUI() {
     
     // ===== VALIDATION =====
     if (!globalSettings.domainKey || !globalSettings.industry || !userPrompt) {
-      canhbao("❌ Vui lòng: Chọn Domain (Cài Đặt Chung) → Lĩnh Vực → Nhập Hướng Dẫn");
+      canhbao(ti("❌ Vui lòng: Chọn Tên miền (Cài Đặt Chung) → Lĩnh vực → Nhập hướng dẫn", "❌ Please: Select Domain (General Settings) → Industry → Enter Instructions", "❌ 请按顺序：选择 Domain（常规设置）→ 行业 → 输入指引"));
       return;
     }
     if (globalSettings.isLmkt && !globalSettings.project) {
-      canhbao("❌ Vui lòng chọn Dự án (LMKT) trong Cài Đặt Chung");
+      canhbao(ti("❌ Vui lòng chọn Dự án (LMKT) trong Cài Đặt Chung", "❌ Please select Project (LMKT) in General Settings", "❌ 请在常规设置中选择项目（LMKT）"));
       return;
     }
     
     try {
       createBtn.disabled = true;
-      createBtn.textContent = "⏳ Đang gọi AI (30-120s)...";
+      createBtn.textContent = ti("⏳ Đang gọi AI (30-120s)...", "⏳ Calling AI (30-120s)...", "⏳ 正在调用 AI（30-120秒）...");
       resultArea.style.display = 'none';
       
       const industryConfig = INDUSTRY_TYPES[globalSettings.industry];
@@ -12416,13 +13408,13 @@ async function ensureServiceContentUI() {
         autoPrompt: ''
       });
 
-      thongbao("✅ Tạo content và lưu dữ liệu thành công!");
+      thongbao(ti("✅ Tạo nội dung và lưu dữ liệu thành công!", "✅ Content generated and saved successfully!", "✅ 内容生成并保存成功！"));
     } catch (e) {
       console.error("[Service Content] Error:", e);
-      canhbao(`❌ Lỗi: ${e.message}`);
+      canhbao(ti(`❌ Lỗi: ${e.message}`, `❌ Error: ${e.message}`, `❌ 错误：${e.message}`));
     } finally {
       createBtn.disabled = false;
-      createBtn.textContent = "🚀 Tạo Content";
+      createBtn.textContent = ti("🚀 Tạo nội dung", "🚀 Generate Content", "🚀 生成内容");
     }
   };
 
@@ -12436,32 +13428,36 @@ async function ensureServiceContentUI() {
   divider.style.cssText = `margin:24px 0;border-top:2px solid ${theme.border};`;
   
   const detailTitle = document.createElement("div");
-  detailTitle.textContent = "✍️ Tạo Bài Chi Tiết (Web Service Detail)";
+  detailTitle.textContent = ti("✍️ Tạo bài chi tiết (bảng web_service_detail)", "✍️ Create Detailed Post (Web Service Detail)", "✍️ 创建详情文章 (Web Service Detail)");
   detailTitle.style.cssText = `${getFeatureTitleStyle(theme)};margin-top:16px;`;
   
   const detailNote = document.createElement("div");
   detailNote.style.cssText = `margin-bottom:12px;padding:8px;background:${theme.infoBg};border-radius:4px;font-size:12px;color:${theme.info};`;
-  detailNote.innerHTML = "💡 <strong>Lưu ý:</strong> Bài viết sẽ lưu vào <code>web_service_detail</code> (bài chi tiết), khác với <code>web_services</code> (landing page).";
+  detailNote.innerHTML = ti(
+    "💡 <strong>Lưu ý:</strong> Bài viết sẽ lưu vào <code>web_service_detail</code> (bài chi tiết), khác với <code>web_services</code> (landing page).",
+    "💡 <strong>Note:</strong> This post will be saved to <code>web_service_detail</code> (detailed article), different from <code>web_services</code> (landing page).",
+    "💡 <strong>提示：</strong>文章将保存到 <code>web_service_detail</code>（详情文章），不同于 <code>web_services</code>（落地页）。"
+  );
   
   // Title input
   const detailTitleLabel = document.createElement("label");
   detailTitleLabel.style.cssText = `font-weight:500;display:block;margin-bottom:6px;color:${theme.text}`;
-  detailTitleLabel.textContent = "Tiêu đề bài viết:";
+  detailTitleLabel.textContent = ti("Tiêu đề bài viết:", "Post title:", "文章标题：");
   
   const detailTitleInput = document.createElement("input");
   detailTitleInput.id = "detail-title-input";
   detailTitleInput.type = "text";
-  detailTitleInput.placeholder = "VD: Top 10 phần mềm quản lý bán hàng tốt nhất 2024";
+  detailTitleInput.placeholder = ti("VD: Top 10 phần mềm quản lý bán hàng tốt nhất 2024", "E.g. Top 10 best sales management software in 2024", "例如：2024年十大最佳销售管理软件");
   detailTitleInput.style.cssText = `width:100%;padding:8px;border:1px solid ${theme.border};border-radius:4px;font-size:13px;color:${theme.text};background:${theme.bg};margin-bottom:12px;`;
   
   // Images upload
   const imagesLabel = document.createElement("label");
   imagesLabel.style.cssText = `font-weight:500;display:block;margin-bottom:6px;color:${theme.text}`;
-  imagesLabel.textContent = "📷 Ảnh minh họa (tùy chọn):";
+  imagesLabel.textContent = ti("📷 Ảnh minh họa (tùy chọn):", "📷 Illustrative images (optional):", "📷 配图（可选）：");
   
   const imagesUploadArea = document.createElement("div");
   imagesUploadArea.style.cssText = `border:2px dashed ${theme.border};border-radius:6px;padding:20px;text-align:center;cursor:pointer;margin-bottom:12px;background:${theme.bg};transition:all 0.3s;`;
-  imagesUploadArea.innerHTML = `<div style="color:${theme.textSecondary};">🖼️ Click hoặc kéo thả ảnh vào đây<br><small>(Hỗ trợ nhiều ảnh)</small></div>`;
+  imagesUploadArea.innerHTML = `<div style="color:${theme.textSecondary};">${ti("🖼️ Click hoặc kéo thả ảnh vào đây<br><small>(Hỗ trợ nhiều ảnh)</small>", "🖼️ Click or drag and drop images here<br><small>(Multiple images supported)</small>", "🖼️ 点击或拖拽图片到这里<br><small>（支持多张图片）</small>")}</div>`;
   
   const imagesInput = document.createElement("input");
   imagesInput.type = "file";
@@ -12475,11 +13471,11 @@ async function ensureServiceContentUI() {
   // Videos upload
   const videosLabel = document.createElement("label");
   videosLabel.style.cssText = `font-weight:500;display:block;margin-bottom:6px;color:${theme.text}`;
-  videosLabel.textContent = "🎥 Video minh họa (tùy chọn):";
+  videosLabel.textContent = ti("🎥 Video minh họa (tùy chọn):", "🎥 Illustrative videos (optional):", "🎥 演示视频（可选）：");
   
   const videosUploadArea = document.createElement("div");
   videosUploadArea.style.cssText = `border:2px dashed ${theme.border};border-radius:6px;padding:20px;text-align:center;cursor:pointer;margin-bottom:12px;background:${theme.bg};transition:all 0.3s;`;
-  videosUploadArea.innerHTML = `<div style="color:${theme.textSecondary};">🎬 Click hoặc kéo thả video vào đây<br><small>(Hỗ trợ nhiều video)</small></div>`;
+  videosUploadArea.innerHTML = `<div style="color:${theme.textSecondary};">${ti("🎬 Click hoặc kéo thả video vào đây<br><small>(Hỗ trợ nhiều video)</small>", "🎬 Click or drag and drop videos here<br><small>(Multiple videos supported)</small>", "🎬 点击或拖拽视频到这里<br><small>（支持多个视频）</small>")}</div>`;
   
   const videosInput = document.createElement("input");
   videosInput.type = "file";
@@ -12493,14 +13489,14 @@ async function ensureServiceContentUI() {
   // Detail prompt
   const detailPromptLabel = document.createElement("label");
   detailPromptLabel.style.cssText = `font-weight:500;display:block;margin-bottom:6px;color:${theme.text}`;
-  detailPromptLabel.textContent = "Hướng dẫn nội dung cho AI (tùy chọn):";
+  detailPromptLabel.textContent = ti("Hướng dẫn nội dung cho AI (tùy chọn):", "AI content instructions (optional):", "AI 内容指令（可选）：");
   
   const detailPromptTextarea = document.createElement("textarea");
   detailPromptTextarea.style.cssText = `width:100%;min-height:100px;font-family:monospace;font-size:12px;color:${theme.text};background:${theme.bg};border:1px solid ${theme.border};padding:8px;border-radius:6px;margin-bottom:12px;resize:vertical;`;
-  detailPromptTextarea.placeholder = "VD: Nhấn mạnh tính năng tự động hóa, so sánh với đối thủ, case study thực tế...";
+  detailPromptTextarea.placeholder = ti("VD: Nhấn mạnh tính năng tự động hóa, so sánh với đối thủ, case study thực tế...", "E.g. Emphasize automation features, competitor comparison, real case studies...", "例如：强调自动化功能、与竞品对比、真实案例分析...");
   
   // Create detail button
-  const createDetailBtn = createButton("🚀 Tạo Bài Chi Tiết", "#52c41a");
+  const createDetailBtn = createButton(ti("🚀 Tạo Bài Chi Tiết", "🚀 Create Detailed Post", "🚀 创建详情文章"), "#52c41a");
   
   // Detail result area
   const detailResultArea = document.createElement("div");
@@ -12508,7 +13504,7 @@ async function ensureServiceContentUI() {
   
   const detailResultLabel = document.createElement("strong");
   detailResultLabel.style.cssText = `display:block;margin-bottom:8px;color:${theme.successText}`;
-  detailResultLabel.textContent = "✅ Kết quả:";
+  detailResultLabel.textContent = ti("✅ Kết quả:", "✅ Result:", "✅ 结果：");
   
   const detailResultContent = document.createElement("pre");
   detailResultContent.style.cssText = `margin:0;font-size:11px;background:${theme.bg};padding:8px;border-radius:4px;color:${theme.text};overflow-x:auto;white-space:pre-wrap;word-wrap:break-word;`;
@@ -12568,7 +13564,7 @@ async function ensureServiceContentUI() {
         imagesPreview.appendChild(preview);
       } catch (err) {
         console.error("Read image failed:", err);
-        canhbao(`Không thể đọc ảnh: ${file.name}`);
+        canhbao(ti(`Không thể đọc ảnh: ${file.name}`, `Cannot read image: ${file.name}`, `无法读取图片：${file.name}`));
       }
     }
   };
@@ -12597,7 +13593,7 @@ async function ensureServiceContentUI() {
         videosPreview.appendChild(preview);
       } catch (err) {
         console.error("Read video failed:", err);
-        canhbao(`Không thể đọc video: ${file.name}`);
+        canhbao(ti(`Không thể đọc video: ${file.name}`, `Cannot read video: ${file.name}`, `无法读取视频：${file.name}`));
       }
     }
   };
@@ -12649,21 +13645,21 @@ async function ensureServiceContentUI() {
     const userPrompt = detailPromptTextarea.value.trim();
     
     if (!globalSettings.domainKey || !globalSettings.industry) {
-      canhbao("❌ Vui lòng chọn Domain và Lĩnh vực trong Cài Đặt Chung");
+      canhbao(ti("❌ Vui lòng chọn Tên miền và Lĩnh vực trong Cài Đặt Chung", "❌ Please select Domain and Industry in General Settings", "❌ 请在常规设置中选择 Domain 和行业"));
       return;
     }
     if (globalSettings.isLmkt && !globalSettings.project) {
-      canhbao("❌ Vui lòng chọn Dự án (LMKT) trong Cài Đặt Chung");
+      canhbao(ti("❌ Vui lòng chọn Dự án (LMKT) trong Cài Đặt Chung", "❌ Please select Project (LMKT) in General Settings", "❌ 请在常规设置中选择项目（LMKT）"));
       return;
     }
     if (!titleValue) {
-      canhbao("❌ Vui lòng nhập tiêu đề bài viết");
+      canhbao(ti("❌ Vui lòng nhập tiêu đề bài viết", "❌ Please enter post title", "❌ 请输入文章标题"));
       return;
     }
     
     try {
       createDetailBtn.disabled = true;
-      createDetailBtn.textContent = "⏳ Đang xử lý (30-120s)...";
+      createDetailBtn.textContent = ti("⏳ Đang xử lý (30-120s)...", "⏳ Processing (30-120s)...", "⏳ 处理中（30-120秒）...");
       detailResultArea.style.display = 'none';
       
       const result = await createServiceDetailPost({
@@ -12689,7 +13685,7 @@ async function ensureServiceContentUI() {
       detailResultContent.textContent = JSON.stringify(displayData, null, 2);
       detailResultArea.style.display = 'block';
       
-      thongbao("✅ Tạo bài chi tiết thành công!");
+      thongbao(ti("✅ Tạo bài chi tiết thành công!", "✅ Detailed post created successfully!", "✅ 详情文章创建成功！"));
       
       // Reset form
       detailTitleInput.value = '';
@@ -12708,10 +13704,10 @@ async function ensureServiceContentUI() {
       
     } catch (error) {
       console.error("[Service Detail Post] Error:", error);
-      canhbao(`❌ Lỗi: ${error.message}`);
+      canhbao(ti(`❌ Lỗi: ${error.message}`, `❌ Error: ${error.message}`, `❌ 错误：${error.message}`));
     } finally {
       createDetailBtn.disabled = false;
-      createDetailBtn.textContent = "🚀 Tạo Bài Chi Tiết";
+      createDetailBtn.textContent = ti("🚀 Tạo Bài Chi Tiết", "🚀 Create Detailed Post", "🚀 创建详情文章");
     }
   };
 
@@ -12906,7 +13902,7 @@ async function createServiceDetailPost(opts = {}) {
   console.log(`[createServiceDetailPost] Bắt đầu tạo bài: "${title}"`);
   
   // STEP 1: Upload ảnh/video
-  thongbao("📤 Đang upload ảnh/video lên server...");
+  thongbao(ti("📤 Đang upload ảnh/video lên server...", "📤 Uploading images/videos to server...", "📤 正在上传图片/视频到服务器..."));
   
   const uploadedImages = [];
   const uploadedVideos = [];
@@ -12993,7 +13989,7 @@ async function createServiceDetailPost(opts = {}) {
   });
   
   // STEP 3: Gọi AI
-  thongbao("🤖 Đang gọi AI tạo nội dung...");
+  thongbao(ti("🤖 Đang gọi AI tạo nội dung...", "🤖 Calling AI to generate content...", "🤖 正在调用 AI 生成内容..."));
   
   if (!context.helperAi?.generateSeoContentWithPrompt) {
     throw new Error("Không tìm thấy AI Helper - chưa kích hoạt csmAI");
@@ -13022,7 +14018,7 @@ async function createServiceDetailPost(opts = {}) {
   });
   
   // STEP 6: Save to database
-  thongbao("💾 Đang lưu bài viết vào database...");
+  thongbao(ti("💾 Đang lưu bài viết vào database...", "💾 Saving article to database...", "💾 正在保存文章到数据库..."));
   
   const result = await upsertDetail(context, detail);
 
@@ -13033,7 +14029,7 @@ async function createServiceDetailPost(opts = {}) {
     if (!Array.isArray(selectedPages) || selectedPages.length === 0) {
       console.warn('[createServiceDetailPost] Không có fanpage nào được chọn, bỏ qua bước đăng Facebook');
     } else {
-      thongbao(`📱 Đang đăng bài lên ${selectedPages.length} fanpage đã chọn...`);
+      thongbao(ti(`📱 Đang đăng bài lên ${selectedPages.length} fanpage đã chọn...`, `📱 Posting to ${selectedPages.length} selected fanpage(s)...`, `📱 正在发布到已选择的 ${selectedPages.length} 个 fanpage...`));
 
       let postUrl = await getLastCreatedPostUrl(5, 600);
       if (!postUrl) {
@@ -13722,7 +14718,7 @@ function updateServiceCategoryUI() {
   const categories = getCategoriesForDomain(selectedDomain);
   
   // Clear options cũ
-  categorySelect.innerHTML = '<option value="">-- Chọn lĩnh vực/dự án --</option>';
+  categorySelect.innerHTML = `<option value="">${ti('-- Chọn lĩnh vực/dự án --', '-- Select industry/project --', '-- 选择行业/项目 --')}</option>`;
   
   // Thêm options mới
   categories.forEach(cat => {
@@ -13735,7 +14731,7 @@ function updateServiceCategoryUI() {
   
   // Reset description
   if (descContent) {
-    descContent.textContent = '(Chọn lĩnh vực/dự án để xem mô tả)';
+    descContent.textContent = ti('(Chọn lĩnh vực/dự án để xem mô tả)', '(Select industry/project to view description)', '（选择行业/项目以查看描述）');
   }
 }
 
@@ -13760,6 +14756,7 @@ function updateDescriptionPreview() {
 // Init UI
 ensureGlobalSettingsPanel(); // ✅ Call directly, MutationObserver will fix if needed
 ensureUI();
+ensureAdsApiTestPanel();
 ensureServiceContentUI();
 
 // ============================================================
@@ -14678,7 +15675,7 @@ async function prepareFacebookImages(ctx, images = []) {
     .map(path => resolvePublicImageUrl(ctx, path));
 }
 
-function stopFacebookAutoPosting(message = '⏹️ Đã dừng auto đăng.') {
+function stopFacebookAutoPosting(message = ti('⏹️ Đã dừng auto đăng.', '⏹️ Auto posting stopped.', '⏹️ 自动发布已停止。')) {
   facebookAutoRunning = false;
   facebookAutoAbort = true;
   
@@ -14687,7 +15684,7 @@ function stopFacebookAutoPosting(message = '⏹️ Đã dừng auto đăng.') {
   if (btnAutoStart) {
     btnAutoStart.disabled = false;
     btnAutoStart.style.opacity = '1';
-    btnAutoStart.textContent = '▶️ Bắt đầu auto';
+    btnAutoStart.textContent = ti('▶️ Bắt đầu auto', '▶️ Start auto', '▶️ 开始自动发布');
   }
   
   showFacebookMessage(message, 'info');
@@ -14840,12 +15837,12 @@ async function buildFacebookAutoQueueFromInput() {
 
 async function startFacebookAutoPosting() {
   if (facebookAutoRunning) {
-    showFacebookMessage('⚠️ Auto đăng đang chạy.', 'info');
+    showFacebookMessage(ti('⚠️ Auto đăng đang chạy.', '⚠️ Auto posting is running.', '⚠️ 自动发布正在运行。'), 'info');
     return;
   }
   const selectedPages = getSelectedFacebookPages();
   if (!selectedPages.length) {
-    showFacebookMessage('Vui lòng chọn Fanpage trước', 'error');
+    showFacebookMessage(ti('Vui lòng chọn Fanpage trước', 'Please select a Fanpage first', '请先选择 Fanpage'), 'error');
     return;
   }
 
@@ -14858,7 +15855,7 @@ async function startFacebookAutoPosting() {
   if (btnAutoStart) {
     btnAutoStart.disabled = true;
     btnAutoStart.style.opacity = '0.5';
-    btnAutoStart.textContent = '⏸️ Đang auto...';
+    btnAutoStart.textContent = ti('⏸️ Đang auto...', '⏸️ Auto running...', '⏸️ 自动运行中...');
   }
   if (btnAutoStop) {
     btnAutoStop.disabled = false;
@@ -14874,7 +15871,7 @@ async function startFacebookAutoPosting() {
     if (btnAutoStart) {
       btnAutoStart.disabled = false;
       btnAutoStart.style.opacity = '1';
-      btnAutoStart.textContent = '▶️ Bắt đầu auto';
+      btnAutoStart.textContent = ti('▶️ Bắt đầu auto', '▶️ Start auto', '▶️ 开始自动发布');
     }
   }
 }
@@ -15244,83 +16241,83 @@ function createFacebookPostUI() {
   wrapper.style.cssText = getFeatureCardStyle(theme);
 
   const title = document.createElement('div');
-  title.textContent = '📱 Đăng Bài Facebook Tự Động';
+  title.textContent = ti('📱 Đăng Bài Facebook Tự Động', '📱 Facebook Auto Posting', '📱 Facebook 自动发帖');
   title.style.cssText = getFeatureTitleStyle(theme);
 
   const content = document.createElement('div');
   content.innerHTML = `
   <!-- Hướng dẫn cấu hình -->
   <div id="fb-setup-guide" style="margin-bottom: 20px; padding: 15px; background: ${theme.warning}; border: 1px solid ${theme.warningBorder}; border-radius: 6px;">
-    <h4 style="color: ${theme.warningText};">🔑 Hướng dẫn lấy Page Token vĩnh viễn</h4>
+    <h4 style="color: ${theme.warningText};">${ti('🔑 Hướng dẫn lấy Page Token vĩnh viễn', '🔑 Guide to get permanent Page Token', '🔑 获取永久 Page Token 指南')}</h4>
       <ol style="margin: 8px 0 0 20px;">
-        <li>Mở <a href="https://developers.facebook.com/tools/explorer/" target="_blank" style="color: ${theme.link};">Graph API Explorer</a> và chọn đúng App.</li>
-        <li>Chọn quyền: <code>pages_show_list</code>, <code>pages_read_engagement</code>, <code>pages_manage_posts</code>.</li>
-        <li>Bấm <strong>Generate Access Token</strong> để lấy User Token.</li>
-        <li>Gọi API <code>/me/accounts</code> để lấy danh sách Page. Token đi kèm từng Page là Page Token (vĩnh viễn).</li>
-        <li>Sao chép Page Token và dán vào ô <strong>Page Access Token</strong> bên dưới.</li>
+        <li>${ti('Mở <a href="https://developers.facebook.com/tools/explorer/" target="_blank" style="color: ' + theme.link + ';">Graph API Explorer</a> và chọn đúng App.', 'Open <a href="https://developers.facebook.com/tools/explorer/" target="_blank" style="color: ' + theme.link + ';">Graph API Explorer</a> and select the correct App.', '打开 <a href="https://developers.facebook.com/tools/explorer/" target="_blank" style="color: ' + theme.link + ';">Graph API Explorer</a> 并选择正确的 App。')}</li>
+        <li>${ti('Chọn quyền: <code>pages_show_list</code>, <code>pages_read_engagement</code>, <code>pages_manage_posts</code>.', 'Select permissions: <code>pages_show_list</code>, <code>pages_read_engagement</code>, <code>pages_manage_posts</code>.', '选择权限：<code>pages_show_list</code>、<code>pages_read_engagement</code>、<code>pages_manage_posts</code>。')}</li>
+        <li>${ti('Bấm <strong>Generate Access Token</strong> để lấy User Token.', 'Click <strong>Generate Access Token</strong> to get User Token.', '点击 <strong>Generate Access Token</strong> 获取 User Token。')}</li>
+        <li>${ti('Gọi API <code>/me/accounts</code> để lấy danh sách Page. Token đi kèm từng Page là Page Token (vĩnh viễn).', 'Call API <code>/me/accounts</code> to get Page list. Token attached to each Page is the (permanent) Page Token.', '调用 API <code>/me/accounts</code> 获取 Page 列表。每个 Page 附带的 Token 即为（长期）Page Token。')}</li>
+        <li>${ti('Sao chép Page Token và dán vào ô <strong>Page Access Token</strong> bên dưới.', 'Copy Page Token and paste it into <strong>Page Access Token</strong> below.', '复制 Page Token 并粘贴到下方 <strong>Page Access Token</strong> 输入框。')}</li>
       </ol>
     </div>
     <div style="margin-top: 12px; color: ${theme.warningText};">
-      <strong>⚠️ Lưu ý tránh bị "Checkpoint":</strong>
+      <strong>${ti('⚠️ Lưu ý tránh bị "Checkpoint":', '⚠️ Notes to avoid "Checkpoint":', '⚠️ 避免触发 "Checkpoint" 的注意事项：')}</strong>
       <ul style="margin: 8px 0 0 20px;">
-        <li><strong>Tần suất đăng</strong>: Không đăng dồn dập. Cách nhau tối thiểu 5 phút giữa mỗi bài tự động.</li>
-        <li><strong>Chất lượng ảnh</strong>: Ưu tiên ảnh từ server uy tín hoặc link từ website của bạn, tránh nguồn bị Facebook liệt vào blacklist.</li>
-        <li><strong>Nội dung khác biệt</strong>: Tránh dùng caption/link/ảnh giống nhau giữa các bài. Nên thay đổi caption cho từng bài.</li>
+        <li>${ti('<strong>Tần suất đăng</strong>: Không đăng dồn dập. Cách nhau tối thiểu 5 phút giữa mỗi bài tự động.', '<strong>Posting frequency</strong>: Do not post too aggressively. Keep at least 5 minutes between auto posts.', '<strong>发布频率</strong>：不要密集发布。自动发帖之间至少间隔 5 分钟。')}</li>
+        <li>${ti('<strong>Chất lượng ảnh</strong>: Ưu tiên ảnh từ server uy tín hoặc link từ website của bạn, tránh nguồn bị Facebook liệt vào blacklist.', '<strong>Image quality</strong>: Prefer images from trusted servers or your website links, avoid sources blacklisted by Facebook.', '<strong>图片质量</strong>：优先使用可信服务器或你网站的图片链接，避免使用被 Facebook 拉黑的来源。')}</li>
+        <li>${ti('<strong>Nội dung khác biệt</strong>: Tránh dùng caption/link/ảnh giống nhau giữa các bài. Nên thay đổi caption cho từng bài.', '<strong>Content variation</strong>: Avoid using identical caption/link/image across posts. Change caption for each post.', '<strong>内容差异化</strong>：避免多篇使用相同 caption/链接/图片。建议每篇更换 caption。')}</li>
       </ul>
     </div>
     <button id="btn-hide-guide" style="padding: 6px 12px; background: ${theme.warningText}; color: white; border: none; border-radius: 4px; cursor: pointer; margin-top: 10px;">
-      Đã hiểu, ẩn hướng dẫn
+      ${ti('Đã hiểu, ẩn hướng dẫn', 'Got it, hide guide', '知道了，隐藏说明')}
     </button>
   </div>
   
   <!-- Bước 1: Nhập Token -->
   <div style="margin-bottom: 20px; padding: 15px; background: ${theme.bg}; border: 1px solid ${theme.border}; border-radius: 6px;">
-    <h4 style="color: ${theme.text};">🔑 Bước 1: Nhập User hoặc Page Access Token</h4>
+    <h4 style="color: ${theme.text};">${ti('🔑 Bước 1: Nhập User hoặc Page Access Token', '🔑 Step 1: Enter User or Page Access Token', '🔑 第1步：输入 User 或 Page Access Token')}</h4>
     <div id="fb-manual-token-input" style="margin-top: 5px;">
-      <label style="color: ${theme.text};">Nhập User hoặc Page Access Token (lấy từ <a href="https://developers.facebook.com/tools/explorer/" target="_blank" style="color: ${theme.link};">Graph API Explorer</a>):</label><br>
-      <textarea id="fb-token-input" rows="3" style="width: 100%; padding: 8px; margin-top: 5px; border: 1px solid ${theme.border}; border-radius: 4px; background: ${theme.inputBg}; color: ${theme.text};" placeholder="Dán User/Page Access Token tại đây..."></textarea>
+      <label style="color: ${theme.text};">${ti('Nhập User hoặc Page Access Token (lấy từ <a href="https://developers.facebook.com/tools/explorer/" target="_blank" style="color: ${theme.link};">Graph API Explorer</a>):', 'Enter User or Page Access Token (from <a href="https://developers.facebook.com/tools/explorer/" target="_blank" style="color: ${theme.link};">Graph API Explorer</a>):', '输入 User 或 Page Access Token（来自 <a href="https://developers.facebook.com/tools/explorer/" target="_blank" style="color: ${theme.link};">Graph API Explorer</a>）：')}</label><br>
+      <textarea id="fb-token-input" rows="3" style="width: 100%; padding: 8px; margin-top: 5px; border: 1px solid ${theme.border}; border-radius: 4px; background: ${theme.inputBg}; color: ${theme.text};" placeholder="${ti('Dán User/Page Access Token tại đây...', 'Paste User/Page Access Token here...', '在此粘贴 User/Page Access Token...')}"></textarea>
       <button id="btn-fb-save-token" style="padding: 6px 12px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; margin-top: 5px;">
-        Lưu Token
+        ${ti('Lưu Token', 'Save Token', '保存 Token')}
       </button>
     </div>
     
     <div id="fb-pages-list" style="margin-top: 15px; display: none;">
-      <label style="color: ${theme.text};">Chọn Fanpage (có thể chọn nhiều):</label><br>
+      <label style="color: ${theme.text};">${ti('Chọn Fanpage (có thể chọn nhiều):', 'Select Fanpages (multiple allowed):', '选择 Fanpage（可多选）：')}</label><br>
       <div id="fb-pages-checkboxes" style="margin-top: 8px; max-height: 220px; overflow-y: auto; padding: 8px; border: 1px solid ${theme.border}; border-radius: 4px; background: ${theme.inputBg}; color: ${theme.text};"></div>
     </div>
   </div>
   
   <!-- Bước 2: Auto đăng nhiều bài -->
   <div style="margin-bottom: 20px; padding: 15px; background: ${theme.bg}; border: 1px solid ${theme.border}; border-radius: 6px;">
-    <h4 style="color: ${theme.text};">🤖 Bước 2: Tạo và Auto đăng bài (AI tự động)</h4>
+    <h4 style="color: ${theme.text};">${ti('🤖 Bước 2: Tạo và Auto đăng bài (AI tự động)', '🤖 Step 2: Generate and Auto-post (AI automation)', '🤖 第2步：生成并自动发布（AI 自动化）')}</h4>
     
     <!-- Giải thích cơ chế -->
     <div style="background: ${theme.infoBg}; color: ${theme.infoText}; padding: 10px; border-left: 4px solid ${theme.info}; margin-bottom: 15px; border-radius: 4px;">
-      <strong>📖 Cơ chế hoạt động:</strong><br>
-      1️⃣ <strong>Tạo nội dung AI:</strong> Hệ thống sẽ tạo nội dung cho từng bài với delay 30s giữa mỗi lần gọi AI<br>
-      2️⃣ <strong>Đăng trực tiếp:</strong> Đăng lên Facebook ngay sau khi AI tạo xong<br>
-      3️⃣ <strong>Khoảng cách:</strong> Theo cấu hình (random ${FACEBOOK_AUTO_DEFAULTS.minIntervalMin}-${FACEBOOK_AUTO_DEFAULTS.maxIntervalMin} phút)<br>
-      4️⃣ <strong>Giới hạn:</strong> ${FACEBOOK_AUTO_DEFAULTS.maxPostsPerDay > 0 ? `Tối đa ${FACEBOOK_AUTO_DEFAULTS.maxPostsPerDay} bài/ngày` : 'Không giới hạn/ngày'}
+      <strong>${ti('📖 Cơ chế hoạt động:', '📖 How it works:', '📖 运行机制：')}</strong><br>
+      ${ti('1️⃣ <strong>Tạo nội dung AI:</strong> Hệ thống sẽ tạo nội dung cho từng bài với delay 30s giữa mỗi lần gọi AI', '1️⃣ <strong>Generate AI content:</strong> The system creates each post with a 30s delay between AI calls', '1️⃣ <strong>AI 生成内容：</strong>系统会为每篇帖子生成内容，并在每次 AI 调用之间延迟 30 秒')}<br>
+      ${ti('2️⃣ <strong>Đăng trực tiếp:</strong> Đăng lên Facebook ngay sau khi AI tạo xong', '2️⃣ <strong>Direct posting:</strong> Post to Facebook right after AI generation', '2️⃣ <strong>直接发布：</strong>AI 生成完成后立即发布到 Facebook')}<br>
+      ${ti('3️⃣ <strong>Khoảng cách:</strong> Theo cấu hình', '3️⃣ <strong>Interval:</strong> Based on settings', '3️⃣ <strong>间隔：</strong>按配置执行')} (random ${FACEBOOK_AUTO_DEFAULTS.minIntervalMin}-${FACEBOOK_AUTO_DEFAULTS.maxIntervalMin} ${ti('phút', 'minutes', '分钟')})<br>
+      ${ti('4️⃣ <strong>Giới hạn:</strong>', '4️⃣ <strong>Limit:</strong>', '4️⃣ <strong>上限：</strong>')} ${FACEBOOK_AUTO_DEFAULTS.maxPostsPerDay > 0 ? ti(`Tối đa ${FACEBOOK_AUTO_DEFAULTS.maxPostsPerDay} bài/ngày`, `Max ${FACEBOOK_AUTO_DEFAULTS.maxPostsPerDay} posts/day`, `每日最多 ${FACEBOOK_AUTO_DEFAULTS.maxPostsPerDay} 篇`) : ti('Không giới hạn/ngày', 'Unlimited/day', '每日不限')}
     </div>
     
     <div style="margin-bottom: 15px; padding: 10px; background: ${theme.infoBg}; color: ${theme.infoText}; border-left: 4px solid ${theme.info}; border-radius: 4px;">
-      <strong>📊 Sử dụng lĩnh vực từ Cài Đặt Chung:</strong> Hệ thống sẽ tự động sử dụng lĩnh vực bạn đã chọn trong phần <em>Cài Đặt Chung</em> ở trên.<br>
-      <strong>🤖 AI tự động đa dạng hóa:</strong> Hệ thống đã tích hợp logic anti-AI với nhiều personas và patterns, tự động tạo nội dung không trùng lặp.
+      <strong>${ti('📊 Sử dụng lĩnh vực từ Cài Đặt Chung:', '📊 Uses industry from General Settings:', '📊 使用常规设置中的行业：')}</strong> ${ti('Hệ thống sẽ tự động sử dụng lĩnh vực bạn đã chọn trong phần <em>Cài Đặt Chung</em> ở trên.', 'The system automatically uses the industry selected in <em>General Settings</em> above.', '系统将自动使用你在上方 <em>常规设置</em> 中选择的行业。')}<br>
+      <strong>${ti('🤖 AI tự động đa dạng hóa:', '🤖 AI auto-diversification:', '🤖 AI 自动多样化：')}</strong> ${ti('Hệ thống đã tích hợp logic anti-AI với nhiều personas và patterns, tự động tạo nội dung không trùng lặp.', 'The system includes anti-AI-detection logic with multiple personas and patterns to avoid duplicate content.', '系统已集成多 persona 与 pattern 的 anti-AI 逻辑，自动生成不重复内容。')}
     </div>
     
     <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom: 10px;">
-      <label style="color: ${theme.text};">Khoảng cách:</label>
-      <input type="number" id="fb-auto-min" min="1" style="width: 90px; padding: 6px; border: 1px solid ${theme.border}; border-radius: 4px; background: ${theme.inputBg}; color: ${theme.text};" placeholder="Min (phút)">
-      <input type="number" id="fb-auto-max" min="1" style="width: 90px; padding: 6px; border: 1px solid ${theme.border}; border-radius: 4px; background: ${theme.inputBg}; color: ${theme.text};" placeholder="Max (phút)">
-      <label style="color: ${theme.text};">Giới hạn/ngày:</label>
-      <input type="number" id="fb-auto-maxday" min="0" style="width: 90px; padding: 6px; border: 1px solid ${theme.border}; border-radius: 4px; background: ${theme.inputBg}; color: ${theme.text};" placeholder="0 = không giới hạn">
+      <label style="color: ${theme.text};">${ti('Khoảng cách:', 'Interval:', '间隔：')}</label>
+      <input type="number" id="fb-auto-min" min="1" style="width: 90px; padding: 6px; border: 1px solid ${theme.border}; border-radius: 4px; background: ${theme.inputBg}; color: ${theme.text};" placeholder="${ti('Min (phút)', 'Min (minutes)', '最小（分钟）')}">
+      <input type="number" id="fb-auto-max" min="1" style="width: 90px; padding: 6px; border: 1px solid ${theme.border}; border-radius: 4px; background: ${theme.inputBg}; color: ${theme.text};" placeholder="${ti('Max (phút)', 'Max (minutes)', '最大（分钟）')}">
+      <label style="color: ${theme.text};">${ti('Giới hạn/ngày:', 'Limit/day:', '每日上限：')}</label>
+      <input type="number" id="fb-auto-maxday" min="0" style="width: 90px; padding: 6px; border: 1px solid ${theme.border}; border-radius: 4px; background: ${theme.inputBg}; color: ${theme.text};" placeholder="${ti('0 = không giới hạn', '0 = unlimited', '0 = 不限')}">
     </div>
     <div style="display:flex; gap:8px; flex-wrap:wrap;">
       <button id="btn-fb-auto-start" class="btn-success" style="padding: 8px 16px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer;">
-        ▶️ Bắt đầu auto
+        ${ti('▶️ Bắt đầu auto', '▶️ Start auto', '▶️ 开始自动发布')}
       </button>
       <button id="btn-fb-auto-stop" class="btn-warning" style="padding: 8px 16px; background: #ffc107; color: #212529; border: none; border-radius: 4px; cursor: pointer;">
-        ⏹️ Dừng auto
+        ${ti('⏹️ Dừng auto', '⏹️ Stop auto', '⏹️ 停止自动发布')}
       </button>
     </div>
   </div>
@@ -15388,7 +16385,7 @@ function setupFacebookEventListeners() {
       try {
         const isValid = await validateSavedTokenIfNeeded();
         if (isValid) {
-          thongbao('✅ Token đã được verify - sẵn sàng sử dụng!');
+          thongbao(ti('✅ Token đã được verify - sẵn sàng sử dụng!', '✅ Token verified - ready to use!', '✅ Token 已验证，可直接使用！'));
           updateFacebookAuthUI(true);
         }
       } catch (e) {
@@ -15482,7 +16479,7 @@ function setupFacebookEventListeners() {
       // Disable ngay để tránh double-click
       btnAutoStop.disabled = true;
       btnAutoStop.style.opacity = '0.5';
-      stopFacebookAutoPosting('⏹️ Đã dừng auto đăng.');
+      stopFacebookAutoPosting(ti('⏹️ Đã dừng auto đăng.', '⏹️ Auto posting stopped.', '⏹️ 自动发布已停止。'));
       // Re-enable sau 300ms
       setTimeout(() => {
         btnAutoStop.disabled = false;
@@ -15527,7 +16524,7 @@ async function validateSavedTokenIfNeeded() {
       saveFacebookState();
       facebookState._needsValidation = false;
       
-      canhbao('❌ Token đã lưu không còn hợp lệ. Vui lòng nhập token mới.');
+      canhbao(ti('❌ Token đã lưu không còn hợp lệ. Vui lòng nhập token mới.', '❌ Saved token is no longer valid. Please enter a new token.', '❌ 已保存的 Token 已失效，请输入新 Token。'));
       document.getElementById('fb-manual-token-input').style.display = 'block';
       return false;
     }
@@ -15537,7 +16534,7 @@ async function validateSavedTokenIfNeeded() {
     return true;
   } catch (error) {
     console.error('❌ [ValidateSavedToken] Lỗi validate:', error);
-    canhbao('❌ Lỗi kiểm tra token: ' + error.message);
+    canhbao(ti('❌ Lỗi kiểm tra token: ', '❌ Token validation error: ', '❌ Token 校验错误：') + error.message);
     facebookState._needsValidation = false;
     return false;
   }
@@ -15551,7 +16548,7 @@ async function handleManualToken() {
   const token = tokenInput?.value?.trim();
   
   if (!token) {
-    showFacebookMessage('Vui lòng nhập token', 'error');
+    showFacebookMessage(ti('Vui lòng nhập token', 'Please enter token', '请输入 token'), 'error');
     return;
   }
   
@@ -15559,7 +16556,7 @@ async function handleManualToken() {
   console.trace('[HandleManualToken] Call stack');
   
   try {
-    showFacebookMessage('Đang kiểm tra token...', 'info');
+    showFacebookMessage(ti('Đang kiểm tra token...', 'Validating token...', '正在校验 token...'), 'info');
 
     // Validate token via backend
     const meRes = await seft.facebookValidateToken(token);
@@ -15571,7 +16568,7 @@ async function handleManualToken() {
     console.log('✅ [HandleManualToken] Đã validate token qua backend');
 
     // Exchange sang Token B (60 ngày) nếu có thể
-    showFacebookMessage('Đang exchange sang Token B (60 ngày)...', 'info');
+    showFacebookMessage(ti('Đang exchange sang Token B (60 ngày)...', 'Exchanging to long-lived token (60 days)...', '正在换取长效 Token（60天）...'), 'info');
     
     let longLivedToken = token;
     let userAccessToken = token; // Lưu để có thể re-exchange sau 60 ngày
@@ -15580,7 +16577,7 @@ async function handleManualToken() {
       longLivedToken = exchangeRes.data.access_token;
       userAccessToken = longLivedToken; // Update user token
       console.log('✅ [HandleManualToken] Đã exchange sang 60-day token');
-      showFacebookMessage('✅ Đã đổi sang Token B (60 ngày).', 'info');
+      showFacebookMessage(ti('✅ Đã đổi sang Token B (60 ngày).', '✅ Exchanged to long-lived token (60 days).', '✅ 已换取长效 Token（60天）。'), 'info');
     }
 
     // Get pages list via backend using long-lived token
@@ -15595,7 +16592,7 @@ async function handleManualToken() {
       saveFacebookState();
 
       // ✅ SAVE LÊN SERVER: Cập nhật tất cả config với token mới
-      showFacebookMessage('💾 Đang lưu token lên server...', 'info');
+      showFacebookMessage(ti('💾 Đang lưu token lên server...', '💾 Saving token to server...', '💾 正在将 token 保存到服务器...'), 'info');
       const firstPage = pages[0];
       
       console.log('📌 [HandleManualToken] Gọi updateAllConfigsWithNewFanpageToken với:');
@@ -15622,7 +16619,7 @@ async function handleManualToken() {
       if (pagesList) pagesList.style.display = 'block';
       populateFacebookPages(pages);
       console.log('✅ [HandleManualToken] KẾT THÚC THÀNH CÔNG');
-      showFacebookMessage(`✅ Token đã lưu lên server thành công!\n💾 Tất cả ${pages?.length || 1} config đã được cập nhật.\n\n Vui lòng chọn Page để đăng bài.`, 'success');
+      showFacebookMessage(ti(`✅ Token đã lưu lên server thành công!\n💾 Tất cả ${pages?.length || 1} config đã được cập nhật.\n\n Vui lòng chọn Page để đăng bài.`, `✅ Token saved to server successfully!\n💾 Updated ${pages?.length || 1} config(s).\n\n Please select a Page to post.`, `✅ Token 已成功保存到服务器！\n💾 已更新 ${pages?.length || 1} 个配置。\n\n 请选择要发布的 Page。`), 'success');
       document.getElementById('fb-manual-token-input').style.display = 'none';
       return;
     }
@@ -15631,7 +16628,7 @@ async function handleManualToken() {
     const pagesErr = pagesRes?.message || '';
     if (pagesErr.includes('accounts') || pagesErr.includes('(#100)') || pagesErr.includes('OAuthException')) {
       console.log('🔍 [HandleManualToken] Token là Page Access Token của Page');
-      showFacebookMessage('✅ Phát hiện Page Access Token. Đang sử dụng trực tiếp...', 'info');
+      showFacebookMessage(ti('✅ Phát hiện Page Access Token. Đang sử dụng trực tiếp...', '✅ Detected Page Access Token. Using it directly...', '✅ 检测到 Page Access Token，正在直接使用...'), 'info');
 
       facebookState.selectedPageId = tokenInfo.id;
       facebookState.selectedPageName = tokenInfo.name || 'Unknown Page';
@@ -15641,7 +16638,7 @@ async function handleManualToken() {
       saveFacebookState();
 
       // ✅ SAVE LÊN SERVER: Lưu page token lên server
-      showFacebookMessage('💾 Đang lưu token lên server...', 'info');
+      showFacebookMessage(ti('💾 Đang lưu token lên server...', '💾 Saving token to server...', '💾 正在将 token 保存到服务器...'), 'info');
       
       console.log('📌 [HandleManualToken] Gọi updateAllConfigsWithNewFanpageToken (Page Token) với:');
       console.log('   - Token:', token?.substring(0, 20) + '...');
@@ -15663,7 +16660,7 @@ async function handleManualToken() {
 
       updateFacebookAuthUI(true);
       console.log('✅ [HandleManualToken] KẾT THÚC THÀNH CÔNG (Page Token Path)');
-      showFacebookMessage(`✅ Đã kết nối Page: ${facebookState.selectedPageName}. Token đã lưu lên server.`, 'success');
+      showFacebookMessage(ti(`✅ Đã kết nối Page: ${facebookState.selectedPageName}. Token đã lưu lên server.`, `✅ Connected Page: ${facebookState.selectedPageName}. Token saved to server.`, `✅ 已连接 Page：${facebookState.selectedPageName}。Token 已保存到服务器。`), 'success');
       document.getElementById('fb-manual-token-input').style.display = 'none';
       return;
     }
@@ -15672,7 +16669,7 @@ async function handleManualToken() {
   } catch (error) {
     console.error('❌ [HandleManualToken] Lỗi:', error);
     console.error('   Stack:', error.stack);
-    showFacebookMessage('Token không hợp lệ: ' + error.message, 'error');
+    showFacebookMessage(ti('Token không hợp lệ: ', 'Invalid token: ', 'Token 无效：') + error.message, 'error');
   }
 }
 
@@ -15699,7 +16696,7 @@ async function loadFacebookPages() {
     
   } catch (error) {
     console.error('❌ Lỗi load pages:', error);
-    showFacebookMessage('Không thể tải Fanpages: ' + error.message, 'error');
+    showFacebookMessage(ti('Không thể tải Fanpages: ', 'Cannot load Fanpages: ', '无法加载 Fanpages：') + error.message, 'error');
   }
 }
 
@@ -15712,12 +16709,12 @@ function updateFacebookAuthUI(isConnected = false) {
   const pagesList = document.getElementById('fb-pages-list');
   
   if (statusText) {
-    statusText.textContent = isConnected ? '✅ Đã kết nối' : 'Chưa kết nối';
+    statusText.textContent = isConnected ? ti('✅ Đã kết nối', '✅ Connected', '✅ 已连接') : ti('Chưa kết nối', 'Not connected', '未连接');
     statusText.style.color = isConnected ? 'green' : '#666';
   }
   
   if (btnConnect) {
-    btnConnect.textContent = isConnected ? '🔄 Kết nối lại' : 'Kết nối với Facebook';
+    btnConnect.textContent = isConnected ? ti('🔄 Kết nối lại', '🔄 Reconnect', '🔄 重新连接') : ti('Kết nối với Facebook', 'Connect to Facebook', '连接到 Facebook');
   }
   
   if (pagesList) {
@@ -15770,7 +16767,7 @@ function handleSelectPage(event) {
     facebookState.selectedPageName = null;
     facebookState.pageAccessToken = null;
     saveFacebookState();
-    showFacebookMessage('⚠️ Chưa chọn Fanpage nào.', 'info');
+    showFacebookMessage(ti('⚠️ Chưa chọn Fanpage nào.', '⚠️ No Fanpage selected.', '⚠️ 尚未选择 Fanpage。'), 'info');
     return;
   }
 
@@ -15787,17 +16784,17 @@ function handleSelectPage(event) {
       if (validation.ok) {
         console.log(`✅ [SelectPage] Token hợp lệ: ${validation.message}`);
         if (validation.willExpireIn < 7) {
-          showFacebookMessage(`⚠️ ${validation.message}. Hãy update token sau 60 ngày!`, 'warning');
+          showFacebookMessage(ti(`⚠️ ${validation.message}. Hãy update token sau 60 ngày!`, `⚠️ ${validation.message}. Please refresh token every 60 days!`, `⚠️ ${validation.message}。请每60天更新一次 token！`), 'warning');
         }
       } else {
         console.error(`❌ [SelectPage] Token không hợp lệ: ${validation.message}`);
-        showFacebookMessage(`❌ Token của page này không hợp lệ: ${validation.message}`, 'error');
+        showFacebookMessage(ti(`❌ Token của page này không hợp lệ: ${validation.message}`, `❌ This page token is invalid: ${validation.message}`, `❌ 此页面 token 无效：${validation.message}`), 'error');
       }
     }, 100);
   }
 
   saveFacebookState();
-  showFacebookMessage(`✅ Đã chọn ${selectedIds.length} fanpage.`, 'success');
+  showFacebookMessage(ti(`✅ Đã chọn ${selectedIds.length} fanpage.`, `✅ Selected ${selectedIds.length} fanpage(s).`, `✅ 已选择 ${selectedIds.length} 个 fanpage。`), 'success');
 }
 
 /**
@@ -15810,7 +16807,7 @@ async function handleFacebookPreview() {
     btnPreview.disabled = true;
     btnPreview.style.opacity = '0.5';
     btnPreview.style.cursor = 'not-allowed';
-    btnPreview.textContent = '⏳ Đang tạo...';
+    btnPreview.textContent = ti('⏳ Đang tạo...', '⏳ Generating...', '⏳ 生成中...');
   }
   
   const globalSettings = getGlobalSettings();
@@ -15836,19 +16833,19 @@ async function handleFacebookPreview() {
   }
   
   if (!industry || !productInfo) {
-    showFacebookMessage('Vui lòng chọn lĩnh vực và nhập thông tin sản phẩm', 'error');
+    showFacebookMessage(ti('Vui lòng chọn lĩnh vực và nhập thông tin sản phẩm', 'Please select industry and enter product info', '请选择行业并输入产品信息'), 'error');
     // Enable lại nút
     if (btnPreview) {
       btnPreview.disabled = false;
       btnPreview.style.opacity = '1';
       btnPreview.style.cursor = 'pointer';
-      btnPreview.textContent = '👁️ Xem trước';
+      btnPreview.textContent = ti('👁️ Xem trước', '👁️ Preview', '👁️ 预览');
     }
     return;
   }
   
   try {
-    showFacebookMessage('🤖 AI đang tạo nội dung...', 'info');
+    showFacebookMessage(ti('🤖 AI đang tạo nội dung...', '🤖 AI is generating content...', '🤖 AI 正在生成内容...'), 'info');
     
     const prompt = await createFacebookPostPromptWithCreative(industry, productInfo, customInstructions);
     
@@ -15876,11 +16873,11 @@ async function handleFacebookPreview() {
       meta: parsed
     };
     
-    showFacebookMessage('✅ Đã tạo nội dung', 'success');
+    showFacebookMessage(ti('✅ Đã tạo nội dung', '✅ Content generated', '✅ 内容已生成'), 'success');
     
   } catch (error) {
     console.error('❌ Lỗi preview:', error);
-    showFacebookMessage('Lỗi: ' + error.message, 'error');
+    showFacebookMessage(ti('Lỗi: ', 'Error: ', '错误：') + error.message, 'error');
   } finally {
     // Enable lại nút sau 500ms (debounce)
     setTimeout(() => {
@@ -15889,7 +16886,7 @@ async function handleFacebookPreview() {
         btnPreview.disabled = false;
         btnPreview.style.opacity = '1';
         btnPreview.style.cursor = 'pointer';
-        btnPreview.textContent = '👁️ Xem trước';
+        btnPreview.textContent = ti('👁️ Xem trước', '👁️ Preview', '👁️ 预览');
       }
     }, 500);
   }
@@ -15905,11 +16902,11 @@ async function handleFacebookPost() {
     try {
       const isValid = await validateSavedTokenIfNeeded();
       if (!isValid) {
-        showFacebookMessage('❌ Token không hợp lệ - vui lòng nhập lại', 'error');
+        showFacebookMessage(ti('❌ Token không hợp lệ - vui lòng nhập lại', '❌ Invalid token - please re-enter', '❌ Token 无效，请重新输入'), 'error');
         return;
       }
     } catch (e) {
-      showFacebookMessage('❌ Lỗi kiểm tra token: ' + e.message, 'error');
+      showFacebookMessage(ti('❌ Lỗi kiểm tra token: ', '❌ Token validation error: ', '❌ Token 校验错误：') + e.message, 'error');
       return;
     }
   }
@@ -15920,30 +16917,30 @@ async function handleFacebookPost() {
     btnPost.disabled = true;
     btnPost.style.opacity = '0.5';
     btnPost.style.cursor = 'not-allowed';
-    btnPost.textContent = '⏳ Đang đăng...';
+    btnPost.textContent = ti('⏳ Đang đăng...', '⏳ Posting...', '⏳ 发布中...');
   }
   
   const selectedPages = getSelectedFacebookPages();
   if (!selectedPages.length) {
-    showFacebookMessage('Vui lòng chọn Fanpage trước', 'error');
+    showFacebookMessage(ti('Vui lòng chọn Fanpage trước', 'Please select a Fanpage first', '请先选择 Fanpage'), 'error');
     // Re-enable nút
     if (btnPost) {
       btnPost.disabled = false;
       btnPost.style.opacity = '1';
       btnPost.style.cursor = 'pointer';
-      btnPost.textContent = '📤 Đăng bài';
+      btnPost.textContent = ti('📤 Đăng bài', '📤 Post', '📤 发布');
     }
     return;
   }
   
   if (!facebookState.lastPostResult) {
-    showFacebookMessage('Vui lòng tạo nội dung trước (nhấn Xem trước)', 'error');
+    showFacebookMessage(ti('Vui lòng tạo nội dung trước (nhấn Xem trước)', 'Please generate content first (click Preview)', '请先生成内容（点击预览）'), 'error');
     // Re-enable nút
     if (btnPost) {
       btnPost.disabled = false;
       btnPost.style.opacity = '1';
       btnPost.style.cursor = 'pointer';
-      btnPost.textContent = '📤 Đăng bài';
+      btnPost.textContent = ti('📤 Đăng bài', '📤 Post', '📤 发布');
     }
     return;
   }
@@ -15952,13 +16949,13 @@ async function handleFacebookPost() {
   const nextAllowedAt = getFacebookNextAllowedPostAt();
   if (nextAllowedAt && now < nextAllowedAt) {
     const waitMs = nextAllowedAt - now;
-    showFacebookMessage(`⏳ Vui lòng chờ ${formatDurationMs(waitMs)} trước khi đăng bài tiếp theo.`, 'error');
+    showFacebookMessage(ti(`⏳ Vui lòng chờ ${formatDurationMs(waitMs)} trước khi đăng bài tiếp theo.`, `⏳ Please wait ${formatDurationMs(waitMs)} before posting next article.`, `⏳ 请等待 ${formatDurationMs(waitMs)} 后再发布下一篇。`), 'error');
     // Re-enable nút
     if (btnPost) {
       btnPost.disabled = false;
       btnPost.style.opacity = '1';
       btnPost.style.cursor = 'pointer';
-      btnPost.textContent = '📤 Đăng bài';
+      btnPost.textContent = ti('📤 Đăng bài', '📤 Post', '📤 发布');
     }
     return;
   }
@@ -15968,7 +16965,7 @@ async function handleFacebookPost() {
   const postContent = facebookState.lastPostResult?.content || '';
   const targetPage = selectedPages[0];
   if (selectedPages.length > 1) {
-    showFacebookMessage(`ℹ️ Đang đăng thủ công lên fanpage đầu tiên: ${targetPage.name}.`, 'info');
+    showFacebookMessage(ti(`ℹ️ Đang đăng thủ công lên fanpage đầu tiên: ${targetPage.name}.`, `ℹ️ Posting manually to the first fanpage: ${targetPage.name}.`, `ℹ️ 正在手动发布到第一个 fanpage：${targetPage.name}。`), 'info');
   }
 
   const validation = validateFacebookPostContent(postContent);
@@ -15981,21 +16978,21 @@ async function handleFacebookPost() {
         btnPost.disabled = false;
         btnPost.style.opacity = '1';
         btnPost.style.cursor = 'pointer';
-        btnPost.textContent = '📤 Đăng bài';
+        btnPost.textContent = ti('📤 Đăng bài', '📤 Post', '📤 发布');
       }
       return;
     }
 
     if (!isZaloAutoMode) {
-      const confirmDuplicate = confirm(`${validation.message}\n\nBạn có muốn tiếp tục đăng bài này không?`);
+      const confirmDuplicate = confirm(`${validation.message}\n\n${ti('Bạn có muốn tiếp tục đăng bài này không?', 'Do you want to continue posting this?', '你要继续发布这篇内容吗？')}`);
       if (!confirmDuplicate) {
-        showFacebookMessage('Đã hủy đăng bài.', 'info');
+        showFacebookMessage(ti('Đã hủy đăng bài.', 'Post cancelled.', '已取消发布。'), 'info');
         // Re-enable nút
         if (btnPost) {
           btnPost.disabled = false;
           btnPost.style.opacity = '1';
           btnPost.style.cursor = 'pointer';
-          btnPost.textContent = '📤 Đăng bài';
+          btnPost.textContent = ti('📤 Đăng bài', '📤 Post', '📤 发布');
         }
         return;
       }
@@ -16005,15 +17002,15 @@ async function handleFacebookPost() {
   }
 
   if (!isZaloAutoMode) {
-    const confirmPost = confirm('Xác nhận đăng bài này lên Facebook?');
+    const confirmPost = confirm(ti('Xác nhận đăng bài này lên Facebook?', 'Confirm posting this to Facebook?', '确认将此内容发布到 Facebook？'));
     if (!confirmPost) {
-      showFacebookMessage('Đã hủy đăng bài.', 'info');
+      showFacebookMessage(ti('Đã hủy đăng bài.', 'Post cancelled.', '已取消发布。'), 'info');
       // Re-enable nút
       if (btnPost) {
         btnPost.disabled = false;
         btnPost.style.opacity = '1';
         btnPost.style.cursor = 'pointer';
-        btnPost.textContent = '📤 Đăng bài';
+        btnPost.textContent = ti('📤 Đăng bài', '📤 Post', '📤 发布');
       }
       return;
     }
@@ -16022,7 +17019,7 @@ async function handleFacebookPost() {
   }
   
   try {
-    showFacebookMessage('📤 Đang đăng bài...', 'info');
+    showFacebookMessage(ti('📤 Đang đăng bài...', '📤 Posting...', '📤 正在发布...'), 'info');
 
     const ctx = resolveContext();
     let finalImageUrl = imageUrl || null;
@@ -16056,13 +17053,13 @@ async function handleFacebookPost() {
       recordFacebookPost(postContent);
       const nextAt = setFacebookNextAllowedPostAt();
       const waitMs = nextAt - Date.now();
-      showFacebookMessage(`🎉 Đăng bài thành công trên ${targetPage.name}! (${result.images_count} ảnh) <a href="https://www.facebook.com/${result.post_id}" target="_blank">Xem bài viết</a>`, 'success');
-      showFacebookMessage(`⏳ Hệ thống sẽ cho phép đăng bài tiếp theo sau ${formatDurationMs(waitMs)}.`, 'info');
+      showFacebookMessage(ti(`🎉 Đăng bài thành công trên ${targetPage.name}! (${result.images_count} ảnh) <a href="https://www.facebook.com/${result.post_id}" target="_blank">Xem bài viết</a>`, `🎉 Posted successfully on ${targetPage.name}! (${result.images_count} images) <a href="https://www.facebook.com/${result.post_id}" target="_blank">View post</a>`, `🎉 已在 ${targetPage.name} 发布成功！（${result.images_count} 张图片）<a href="https://www.facebook.com/${result.post_id}" target="_blank">查看帖子</a>`), 'success');
+      showFacebookMessage(ti(`⏳ Hệ thống sẽ cho phép đăng bài tiếp theo sau ${formatDurationMs(waitMs)}.`, `⏳ Next post will be allowed after ${formatDurationMs(waitMs)}.`, `⏳ 系统将在 ${formatDurationMs(waitMs)} 后允许下一次发布。`), 'info');
     }
     
   } catch (error) {
     console.error('❌ Lỗi đăng bài:', error);
-    showFacebookMessage('Lỗi: ' + error.message, 'error');
+    showFacebookMessage(ti('Lỗi: ', 'Error: ', '错误：') + error.message, 'error');
   } finally {
     // Enable lại nút sau 500ms (debounce)
     setTimeout(() => {
@@ -16071,7 +17068,7 @@ async function handleFacebookPost() {
         btnPost.disabled = false;
         btnPost.style.opacity = '1';
         btnPost.style.cursor = 'pointer';
-        btnPost.textContent = '📤 Đăng bài';
+        btnPost.textContent = ti('📤 Đăng bài', '📤 Post', '📤 发布');
       }
     }, 500);
   }
@@ -16114,7 +17111,8 @@ function showFacebookMessage(message, type = 'info') {
   const colors = {
     success: { bg: '#d4edda', border: '#c3e6cb', color: '#155724' },
     error: { bg: '#f8d7da', border: '#f5c6cb', color: '#721c24' },
-    info: { bg: '#d1ecf1', border: '#bee5eb', color: '#0c5460' }
+    info: { bg: '#d1ecf1', border: '#bee5eb', color: '#0c5460' },
+    warning: { bg: '#fff3cd', border: '#ffe69c', color: '#664d03' }
   };
   
   const style = colors[type] || colors.info;
@@ -16596,12 +17594,9 @@ function initAllUI() {
     'interval'
   );
   
-  // ✅ FIX 3: Reduce polling from 1000ms to 30000ms (30 seconds) - 97% CPU reduction
-  // Retry mechanism - thử khởi tạo UI mỗi 30 giây (không phải 1 giây)
-  // ✅ FIX: LAZY LOAD UI modules (not all at once to prevent RAM spike)
-  const initInterval = timerRegistry.register(
-    'ui-init-polling',
-    setInterval(async () => {
+  // Retry mechanism with immediate first run to avoid delayed first paint.
+  // Keep lazy-load sequence, but do not wait 30s for the first attempt.
+  const runUIInitCycle = async () => {
       uiInitAttempts++;
       
       try {
@@ -16635,9 +17630,19 @@ function initAllUI() {
           return;
         }
         
+        const adsApiTestPanel = document.getElementById('ads-api-test-panel');
+        if (!adsApiTestPanel) {
+          console.log('🧪 [3/5] Creating Ads API Test Panel...');
+          scheduleTask(async () => {
+            ensureAdsApiTestPanel();
+            await new Promise(r => setTimeout(r, 50));
+          }, 180);
+          return;
+        }
+
         const serviceContentUI = document.getElementById('service-content-ui');
         if (!serviceContentUI) {
-          console.log('✨ [3/4] Creating Service Content UI...');
+          console.log('✨ [4/5] Creating Service Content UI...');
           // ✅ Schedule via requestIdleCallback
           scheduleTask(async () => {
             await ensureServiceContentUI();
@@ -16648,7 +17653,7 @@ function initAllUI() {
         
         const facebookUI = document.getElementById('facebook-post-ui');
         if (!facebookUI) {
-          console.log('📱 [4/4] Creating Facebook Post UI...');
+          console.log('📱 [5/5] Creating Facebook Post UI...');
           // ✅ Schedule via requestIdleCallback
           scheduleTask(() => {
             createFacebookPostUI();
@@ -16657,7 +17662,7 @@ function initAllUI() {
         }
         
         // Nếu tất cả UI đã có, dừng interval
-        const allUIReady = globalSettings && multiDomainUI && serviceContentUI && facebookUI;
+        const allUIReady = globalSettings && multiDomainUI && adsApiTestPanel && serviceContentUI && facebookUI;
         if (allUIReady || uiInitAttempts >= maxAttempts) {
           timerRegistry.clear('ui-init-polling');
           console.log('✅ All UI modules initialized');
@@ -16666,7 +17671,21 @@ function initAllUI() {
       } catch (error) {
         console.error('❌ Error initializing UI:', error);
       }
-    }, 30000),  // ✅ CHANGED from 1000ms to 30000ms (30 seconds)
+  };
+
+  // First attempt immediately (after a tiny delay for host container stability)
+  timerRegistry.register(
+    'ui-init-immediate',
+    setTimeout(() => {
+      runUIInitCycle();
+    }, 120),
+    'timeout'
+  );
+
+  // Retry every 3s until ready/max attempts
+  const initInterval = timerRegistry.register(
+    'ui-init-polling',
+    setInterval(runUIInitCycle, 3000),
     'interval'
   );
 
@@ -16684,12 +17703,14 @@ function initAllUI() {
         // Kiểm tra và tạo lại các UI bị mất (batch vào 1 operation)
         const globalSettings = document.getElementById('global-settings-panel');
         const multiDomainUI = document.getElementById('multi-domain-ui');
+        const adsApiTestPanel = document.getElementById('ads-api-test-panel');
         const serviceContentUI = document.getElementById('service-content-ui');
         const facebookUI = document.getElementById('facebook-post-ui');
         
         const missingElements = [];
         if (!globalSettings) missingElements.push('global-settings-panel');
         if (!multiDomainUI) missingElements.push('multi-domain-ui');
+        if (!adsApiTestPanel) missingElements.push('ads-api-test-panel');
         if (!serviceContentUI) missingElements.push('service-content-ui');
         if (!facebookUI) missingElements.push('facebook-post-ui');
         
@@ -16701,8 +17722,9 @@ function initAllUI() {
         // This prevents multiple DOM operations from spiking RAM at once
         if (!globalSettings) scheduleTask(() => ensureGlobalSettingsPanel(), 50);
         if (!multiDomainUI) scheduleTask(() => ensureUI(), 100);
-        if (!serviceContentUI) scheduleTask(() => ensureServiceContentUI(), 150);
-        if (!facebookUI) scheduleTask(() => createFacebookPostUI(), 200);
+        if (!adsApiTestPanel) scheduleTask(() => ensureAdsApiTestPanel(), 150);
+        if (!serviceContentUI) scheduleTask(() => ensureServiceContentUI(), 200);
+        if (!facebookUI) scheduleTask(() => createFacebookPostUI(), 250);
       }, 500);  // Debounce: wait 500ms after last mutation
     };
     
@@ -16725,6 +17747,7 @@ function initAllUI() {
       
       // Setup theme listener AFTER MutationObserver starts to avoid conflicts
       setupThemeChangeListener();
+      setupLanguageChangeListener();
     }, 2000);
   }
 }
@@ -16736,6 +17759,67 @@ function initAllUI() {
  */
 let themeListenerInitialized = false;
 let uiThemeRefreshLock = false;
+let languageListenerInitialized = false;
+let lastKnownUILanguage = getUILanguage();
+
+async function refreshDynamicUIModules(reason = 'theme-change') {
+  // Lock to prevent recursive refresh loops.
+  if (isThemeRefreshing || uiThemeRefreshLock) {
+    console.log(`⏭️ Refresh skipped (${reason}) - refresh already in progress`);
+    return;
+  }
+
+  uiThemeRefreshLock = true;
+  isThemeRefreshing = true;
+  console.log(`🎨 Refreshing dynamic UI modules (${reason})...`);
+
+  try {
+    if (uiMutationObserver) {
+      uiMutationObserver.disconnect();
+    }
+
+    const elementsToRefresh = [
+      'global-settings-panel',
+      'multi-domain-ui',
+      'ads-api-test-panel',
+      'service-content-ui',
+      'facebook-post-ui'
+    ];
+
+    const fragment = document.createDocumentFragment();
+    elementsToRefresh.forEach(id => {
+      const element = document.getElementById(id);
+      if (element) {
+        fragment.appendChild(element);
+      }
+    });
+    while (fragment.firstChild) fragment.removeChild(fragment.firstChild);
+
+    await new Promise(resolve => {
+      const timer = setTimeout(resolve, 100);
+      timerRegistry.register('ui-refresh-reflow', timer, 'timeout');
+    });
+
+    await ensureGlobalSettingsPanel();
+    await ensureUI();
+    ensureAdsApiTestPanel();
+    await ensureServiceContentUI();
+    createFacebookPostUI();
+
+    const containerElem = document.getElementById('csm-ui-container') || document.getElementById('context-auto');
+    if (uiMutationObserver && containerElem) {
+      uiMutationObserver.observe(containerElem, {
+        childList: true,
+        subtree: false
+      });
+    }
+  } catch (error) {
+    console.error(`❌ Error refreshing UI (${reason}):`, error);
+  } finally {
+    uiThemeRefreshLock = false;
+    isThemeRefreshing = false;
+  }
+}
 
 function setupThemeChangeListener() {
   // Prevent duplicate initialization
@@ -16749,12 +17833,6 @@ function setupThemeChangeListener() {
   
   // Debounced function to refresh all UI
   const refreshAllUI = () => {
-    // ✅ FIX: Lock to prevent recursive theme refresh
-    if (isThemeRefreshing || uiThemeRefreshLock) {
-      console.log('⏭️ Refresh already in progress or locked, skipping...');
-      return;
-    }
-    
     // Clear any pending refresh
     if (refreshTimeout) {
       clearTimeout(refreshTimeout);
@@ -16764,75 +17842,7 @@ function setupThemeChangeListener() {
     refreshTimeout = timerRegistry.register(
       'theme-refresh-debounce',
       setTimeout(async () => {
-        uiThemeRefreshLock = true;
-        isThemeRefreshing = true;
-        console.log('🎨 Theme changed, refreshing all UI modules...');
-        
-        try {
-          // Temporarily disconnect MutationObserver to avoid cascade triggers
-          if (uiMutationObserver) {
-            uiMutationObserver.disconnect();
-          }
-          
-          // ✅ FIX: Batch remove all UI elements into single operation
-          const elementsToRefresh = [
-            'global-settings-panel',
-            'multi-domain-ui', 
-            'service-content-ui',
-            'facebook-post-ui'
-          ];
-          
-          // Create fragment for batch removal
-          const fragment = document.createDocumentFragment();
-          elementsToRefresh.forEach(id => {
-            const element = document.getElementById(id);
-            if (element) {
-              fragment.appendChild(element);
-            }
-          });
-          // Clear fragment contents
-          while (fragment.firstChild) fragment.removeChild(fragment.firstChild);
-          
-          // Wait for browser reflow
-          await new Promise(resolve => {
-            const timer = setTimeout(resolve, 100);
-            timerRegistry.register('theme-refresh-reflow', timer, 'timeout');
-          });
-          
-          // ✅ FIX: Recreate UI with Lock held
-          console.log('   🔨 Recreating UI elements...');
-          await ensureGlobalSettingsPanel();
-          await ensureUI();
-          await ensureServiceContentUI();
-          createFacebookPostUI();
-          
-          console.log('✅ UI refresh completed');
-          
-          // Reconnect MutationObserver to UI container
-          const timer2 = timerRegistry.register(
-            'theme-reconnect-observer',
-            setTimeout(() => {
-              if (uiMutationObserver) {
-                const containerElem = document.getElementById('csm-ui-container') || document.getElementById('context-auto');
-                if (containerElem) {
-                  uiMutationObserver.observe(containerElem, {
-                    childList: true,
-                    subtree: false
-                  });
-                  const elemId = containerElem.id || 'container';
-                  console.log(`   👁️ MutationObserver re-connected to ${elemId}`);
-                }
-              }
-            }, 300),
-            'timeout'
-          );
-          
-        } catch (error) {
-          console.error('❌ Error refreshing UI:', error);
-        } finally {
-          uiThemeRefreshLock = false;
-          isThemeRefreshing = false;
-        }
+        await refreshDynamicUIModules('theme-change');
       }, 300),  // 300ms debounce
       'timeout'
     );
@@ -16866,8 +17876,67 @@ function setupThemeChangeListener() {
     // Fallback for older browsers
     darkModeMediaQuery.addListener(refreshAllUI);
   }
+
+  // Listen to explicit host event from DynamicCodeMenu.
+  window.addEventListener('csm:theme-change', refreshAllUI);
   
   console.log('👁️ Theme change listener initialized (with optimization)');
+}
+
+function setupLanguageChangeListener() {
+  if (languageListenerInitialized) {
+    return;
+  }
+
+  languageListenerInitialized = true;
+
+  const triggerLanguageRefresh = async (source = 'unknown') => {
+    const nextLang = getUILanguage();
+    if (nextLang === lastKnownUILanguage) return;
+
+    lastKnownUILanguage = nextLang;
+    console.log(`🌐 Language changed to ${nextLang} (${source}), refreshing UI...`);
+    await refreshDynamicUIModules('language-change');
+  };
+
+  // Listen when the same tab changes app language (custom event from host).
+  window.addEventListener('csm:locale-change', () => {
+    triggerLanguageRefresh('custom-event');
+  });
+
+  // Listen localStorage updates from other tabs/windows.
+  window.addEventListener('storage', (event) => {
+    if (event.key === 'language' || event.key === 'i18nextLng') {
+      triggerLanguageRefresh('storage');
+    }
+  });
+
+  // Watch html lang changes from app shell.
+  const htmlElement = document.documentElement;
+  const langObserver = new MutationObserver((mutations) => {
+    const hasLangChange = mutations.some(mutation =>
+      mutation.type === 'attributes' && mutation.attributeName === 'lang'
+    );
+    if (hasLangChange) {
+      triggerLanguageRefresh('html-lang');
+    }
+  });
+  langObserver.observe(htmlElement, {
+    attributes: true,
+    attributeFilter: ['lang'],
+    subtree: false
+  });
+
+  // Lightweight poll fallback for environments without explicit events.
+  timerRegistry.register(
+    'language-sync-polling',
+    setInterval(() => {
+      triggerLanguageRefresh('polling');
+    }, 2000),
+    'interval'
+  );
+
+  console.log('👁️ Language change listener initialized');
 }
 
 // ===== DEFERRED INITIALIZATION =====
