@@ -453,6 +453,15 @@ export default function DynamicCodeMenu({
     });
   }
 
+  // ✅ CRITICAL FIX: Sync csmCurrentUser BEFORE initializing csmUserData so that
+  // fetchFromDatabase can resolve pkValue when called immediately from auto-upload scripts.
+  if (typeof window !== "undefined") {
+    const latestUser = JSON.parse(JSON.stringify(user));
+    if (!window.csmCurrentUser || !(window.csmCurrentUser as any).email) {
+      window.csmCurrentUser = latestUser;
+    }
+  }
+
   // Initialize window.csmUserData for auto-upload-lmkt.js compatibility
   // This matches the original AutoSetup.tsx implementation
   if (typeof window !== "undefined" && !(window as any).csmUserData) {
@@ -481,8 +490,8 @@ export default function DynamicCodeMenu({
         fetchFromDatabase: async function(callback?: (success: boolean, data?: any[], error?: string) => void): Promise<void> {
           try {
             const currentUser = (window as any).csmCurrentUser || {};
-            let pkField = currentUser.email ? "email" : (currentUser.username ? "username" : "phoneNumber");
-            let pkValue = currentUser.email || currentUser.username || currentUser.phoneNumber;
+            let pkField = currentUser.email ? "email" : (currentUser.username ? "username" : (currentUser.phoneNumber ? "phoneNumber" : "app_token"));
+            let pkValue = currentUser.email || currentUser.username || currentUser.phoneNumber || currentUser.app_token;
             
             if (!pkValue) {
               if (typeof callback === "function") callback(false, [], "No user info");
@@ -546,8 +555,8 @@ export default function DynamicCodeMenu({
             (window as any).csmCurrentUser = (window as any).csmCurrentUser || {};
             (window as any).csmCurrentUser.user_address = JSON.stringify(arr);
             const currentUser = (window as any).csmCurrentUser;
-            let pkField = currentUser.email ? "email" : (currentUser.username ? "username" : "phoneNumber");
-            let pkValue = currentUser.email || currentUser.username || currentUser.phoneNumber;
+            let pkField = currentUser.email ? "email" : (currentUser.username ? "username" : (currentUser.phoneNumber ? "phoneNumber" : "app_token"));
+            let pkValue = currentUser.email || currentUser.username || currentUser.phoneNumber || currentUser.app_token;
             if (!pkValue) {
               if (typeof callback === "function") callback(false, "No user info");
               return;
