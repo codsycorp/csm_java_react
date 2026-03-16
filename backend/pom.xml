@@ -207,6 +207,13 @@
       <version>0.4.20</version>
     </dependency>
 
+    <!-- Alibaba Cloud OSS SDK for image offloading -->
+    <dependency>
+      <groupId>com.aliyun.oss</groupId>
+      <artifactId>aliyun-sdk-oss</artifactId>
+      <version>3.17.4</version>
+    </dependency>
+
     <!-- Video thumbnail extraction with bundled FFmpeg binaries (no OS install required) -->
     <dependency>
       <groupId>ws.schild</groupId>
