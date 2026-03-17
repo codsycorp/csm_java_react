@@ -2003,10 +2003,230 @@ function findDuplicateArticles(articles = [], opts = {}) {
  * @param {Object} ctx - Context API
  * @returns {Object} - Kết quả cleanup {success, deletedCount, failedCount, results}
  */
+function safeParseJson(value, fallback = null) {
+  if (value == null) return fallback;
+  if (typeof value === 'object') return value;
+  if (typeof value !== 'string') return fallback;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+
+function extractFacebookPostsFromArticle(article = {}) {
+  const directPosts = safeParseJson(article.facebook_posts, null);
+  if (Array.isArray(directPosts)) {
+    return directPosts.filter(p => p && p.post_id);
+  }
+
+  const attrs = safeParseJson(article.attributes, {});
+  if (attrs && Array.isArray(attrs.facebook_posts)) {
+    return attrs.facebook_posts.filter(p => p && p.post_id);
+  }
+
+  const postIdsFromAttrs = attrs && Array.isArray(attrs.facebook_post_ids)
+    ? attrs.facebook_post_ids
+    : safeParseJson(article.facebook_post_ids, []);
+
+  if (Array.isArray(postIdsFromAttrs)) {
+    return postIdsFromAttrs
+      .map((id) => ({ post_id: String(id || '').trim() }))
+      .filter((p) => p.post_id);
+  }
+
+  return [];
+}
+
+function buildFanpageTokenMap(ctx = {}) {
+  const map = {};
+  const fallbackTokens = [];
+  const pages = [];
+
+  const addToken = (pageId, token, pageName = '') => {
+    if (!token) return;
+    const normToken = String(token).trim();
+    if (!normToken) return;
+    if (!fallbackTokens.includes(normToken)) {
+      fallbackTokens.push(normToken);
+    }
+    const normPageId = String(pageId || '').trim();
+    if (normPageId && !map[normPageId]) {
+      map[normPageId] = normToken;
+      pages.push({ id: normPageId, token: normToken, name: pageName || '' });
+    }
+  };
+
+  addToken(ctx.fanpage_id, ctx.fanpage_token, ctx.fanpage_name || '');
+
+  if (Array.isArray(ctx.fanpages)) {
+    ctx.fanpages.forEach((fp) => addToken(fp?.id, fp?.access_token || fp?.token || fp?.page_token, fp?.name || fp?.page_name || ''));
+  }
+
+  if (typeof loadDataOptionUser === 'function') {
+    try {
+      const allConfigs = loadDataOptionUser();
+      if (Array.isArray(allConfigs)) {
+        allConfigs.forEach((cfg) => {
+          if (!cfg || !cfg.config_for_zalo) return;
+
+          // Ưu tiên token từ list fanpages mới
+          if (Array.isArray(cfg.zalo_fanpages)) {
+            cfg.zalo_fanpages.forEach((fp) => addToken(fp?.id, fp?.access_token || fp?.token || fp?.page_token, fp?.name || fp?.page_name || ''));
+          }
+
+          // Fallback token format cũ
+          if (Array.isArray(cfg.fanpage_ids) && Array.isArray(cfg.fanpage_tokens)) {
+            cfg.fanpage_ids.forEach((id, idx) => addToken(id, cfg.fanpage_tokens[idx], cfg?.fanpage_names?.[idx] || cfg?.fanpage_name || ''));
+          }
+
+          addToken(cfg.fanpage_id, cfg.fanpage_token, cfg.fanpage_name || '');
+        });
+      }
+    } catch (e) {
+      console.warn('⚠️ [buildFanpageTokenMap] Không thể loadDataOptionUser:', e.message);
+    }
+  }
+
+  return { map, fallbackTokens, pages };
+}
+
+function buildArticleUrlCandidates(article = {}) {
+  const slug = String(article.slug || '').trim();
+  const serviceType = String(article.service_type || '').trim();
+  const domainValue = String(article.domain || '').trim();
+  const domains = domainValue
+    .split(',')
+    .map((d) => d.trim())
+    .filter((d) => d && !d.includes('localhost') && !d.includes('127.0.0.1'));
+
+  const urls = [];
+  domains.forEach((domain) => {
+    if (!slug || !serviceType) return;
+    urls.push(`https://www.${domain}/${serviceType}/${slug}`);
+    urls.push(`https://${domain}/${serviceType}/${slug}`);
+    urls.push(`http://www.${domain}/${serviceType}/${slug}`);
+    urls.push(`http://${domain}/${serviceType}/${slug}`);
+  });
+
+  return Array.from(new Set(urls.filter(Boolean)));
+}
+
+async function fetchRecentFacebookPostsByPage(pageId, pageAccessToken, limit = 50) {
+  const encodedPageId = encodeURIComponent(pageId);
+  const encodedToken = encodeURIComponent(pageAccessToken);
+  const fields = encodeURIComponent('id,created_time,message,permalink_url');
+  const url = `${FACEBOOK_CONFIG.GRAPH_API_BASE}/${encodedPageId}/posts?fields=${fields}&limit=${limit}&access_token=${encodedToken}`;
+
+  const response = await facebookFetch(url, { method: 'GET' });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data?.error) {
+    const errMsg = data?.error?.message || `HTTP ${response.status}`;
+    throw new Error(errMsg);
+  }
+
+  return Array.isArray(data?.data) ? data.data : [];
+}
+
+async function discoverFacebookPostsForArticle(article = {}, fanpages = [], opts = {}) {
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const scanDelayMs = Math.max(300, Number(opts.scanDelayMs || 800));
+  const scanLimit = Math.max(10, Number(opts.scanLimit || 50));
+  const slug = String(article.slug || '').trim();
+  const candidates = buildArticleUrlCandidates(article);
+
+  if (!slug || fanpages.length === 0) {
+    return [];
+  }
+
+  const found = [];
+  for (let i = 0; i < fanpages.length; i++) {
+    const page = fanpages[i];
+    try {
+      const posts = await fetchRecentFacebookPostsByPage(page.id, page.token, scanLimit);
+      for (const post of posts) {
+        const message = String(post?.message || '');
+        const permalink = String(post?.permalink_url || '');
+        const messageLower = message.toLowerCase();
+        const permalinkLower = permalink.toLowerCase();
+        const slugMatched = messageLower.includes(slug.toLowerCase()) || permalinkLower.includes(slug.toLowerCase());
+        const urlMatched = candidates.some((url) => message.includes(url) || permalink.includes(url));
+        if (slugMatched || urlMatched) {
+          found.push({
+            post_id: post.id,
+            page_id: page.id,
+            page_name: page.name || '',
+            page_token: page.token,
+            created_time: post.created_time || '',
+            matched_by: urlMatched ? 'url' : 'slug'
+          });
+        }
+      }
+    } catch (e) {
+      console.warn(`      ⚠️ Không quét được page ${page.id}: ${e.message}`);
+    }
+
+    if (i < fanpages.length - 1) {
+      await sleep(scanDelayMs);
+    }
+  }
+
+  return found;
+}
+
+async function deleteFacebookPostByGraphApi(postId, pageAccessToken, seft = {}) {
+  if (!postId || !pageAccessToken) {
+    throw new Error('Missing postId or pageAccessToken');
+  }
+
+  // Ưu tiên helper từ seft nếu có
+  if (seft && typeof seft.deleteFacebookPost === 'function') {
+    const result = await seft.deleteFacebookPost({ postId, pageAccessToken });
+    if (result?.success) return { success: true };
+    throw new Error(result?.message || 'deleteFacebookPost failed');
+  }
+
+  const url = `${FACEBOOK_CONFIG.GRAPH_API_BASE}/${encodeURIComponent(postId)}?access_token=${encodeURIComponent(pageAccessToken)}`;
+  const response = await facebookFetch(url, { method: 'DELETE' });
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok || data?.error || data?.success === false) {
+    const fbErr = data?.error?.message || `HTTP ${response.status}`;
+    throw new Error(fbErr);
+  }
+
+  return { success: true };
+}
+
 async function cleanupDuplicateArticles(duplicateGroups = [], ctx = {}) {
   if (!Array.isArray(duplicateGroups) || duplicateGroups.length === 0) {
     return { success: false, message: "Không có bài viết trùng lặp" };
   }
+
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const deleteDelayMs = Math.max(300, Number(ctx.cleanupDeleteDelayMs || window.CSM_CLEANUP_DELETE_DELAY_MS || 1500));
+  const deleteJitterMs = Math.max(0, Number(ctx.cleanupDeleteJitterMs || window.CSM_CLEANUP_DELETE_JITTER_MS || 500));
+  const maxRetries = Math.max(1, Number(ctx.cleanupDeleteMaxRetries || window.CSM_CLEANUP_DELETE_MAX_RETRIES || 3));
+  const withJitter = () => deleteDelayMs + Math.floor(Math.random() * (deleteJitterMs + 1));
+
+  const { map: fanpageTokenMap, fallbackTokens, pages: configuredFanpages } = buildFanpageTokenMap(ctx);
+
+  const withRetry = async (fn, label) => {
+    let lastErr = null;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        return await fn();
+      } catch (e) {
+        lastErr = e;
+        if (attempt < maxRetries) {
+          const waitMs = withJitter() * attempt;
+          console.warn(`      ⏱️ ${label} retry ${attempt}/${maxRetries} sau ${waitMs}ms`);
+          await sleep(waitMs);
+        }
+      }
+    }
+    throw lastErr || new Error(`${label} failed`);
+  };
   
   console.log(`\n🧹 [cleanupDuplicateArticles] Bắt đầu dọn ${duplicateGroups.length} nhóm trùng - ${new Date().toLocaleTimeString()}`);
   
@@ -2024,6 +2244,77 @@ async function cleanupDuplicateArticles(duplicateGroups = [], ctx = {}) {
         // ✅ Determine correct app_id from domain
         const isLmktDomain = (oldArticle.domain || ctx.domain || "").toLowerCase().includes("h-holding");
         const finalAppId = isLmktDomain ? "lmkt" : "wuweb";
+
+        // 🧽 Xóa post đã publish trực tiếp trên Facebook fanpage (Graph API)
+        let deletedFacebookPostsCount = 0;
+        let facebookPosts = extractFacebookPostsFromArticle(oldArticle);
+        if (!facebookPosts.length && configuredFanpages.length > 0) {
+          // Legacy data: chưa lưu post_id, quét theo slug/url để lấy post Facebook cần xóa
+          const discovered = await discoverFacebookPostsForArticle(oldArticle, configuredFanpages, {
+            scanDelayMs: ctx.cleanupFacebookScanDelayMs || 800,
+            scanLimit: ctx.cleanupFacebookScanLimit || 50
+          });
+          if (discovered.length > 0) {
+            facebookPosts = discovered;
+            console.log(`      🔎 Found ${discovered.length} Facebook posts (legacy lookup) cho slug=${oldArticle.slug}`);
+          }
+        }
+        if (facebookPosts.length > 0) {
+          // Nếu tìm được nhiều post cùng fanpage, chỉ xóa post cũ hơn, giữ post mới nhất.
+          const groupedByPage = {};
+          facebookPosts.forEach((p) => {
+            const pageKey = String(p.page_id || 'unknown');
+            if (!groupedByPage[pageKey]) groupedByPage[pageKey] = [];
+            groupedByPage[pageKey].push(p);
+          });
+
+          const facebookPostsToDelete = [];
+          Object.values(groupedByPage).forEach((posts) => {
+            if (!Array.isArray(posts) || posts.length === 0) return;
+            const sorted = [...posts].sort((a, b) => {
+              const ta = new Date(a.created_time || 0).getTime();
+              const tb = new Date(b.created_time || 0).getTime();
+              return tb - ta;
+            });
+
+            // Bài cũ (oldArticle) có thể có 1 post duy nhất trên mỗi page => vẫn xóa.
+            // Nếu có nhiều post cùng page (duplicate legacy), giữ mới nhất, xóa phần còn lại.
+            if (sorted.length === 1) {
+              facebookPostsToDelete.push(sorted[0]);
+            } else {
+              facebookPostsToDelete.push(...sorted.slice(1));
+            }
+          });
+
+          for (const fbPost of facebookPostsToDelete) {
+            const pageId = String(fbPost.page_id || '').trim();
+            const tokenFromMap = pageId ? fanpageTokenMap[pageId] : null;
+            const token = fbPost.page_token || tokenFromMap || fallbackTokens[0] || ctx.fanpage_token;
+
+            if (!token) {
+              console.warn(`      ⚠️ Thiếu token để xóa Facebook post: ${fbPost.post_id}`);
+              continue;
+            }
+
+            try {
+              await withRetry(
+                () => deleteFacebookPostByGraphApi(fbPost.post_id, token, ctx.seftObj || {}),
+                `delete-facebook-post ${fbPost.post_id}`
+              );
+              deletedFacebookPostsCount++;
+              console.log(`      🗑️ Facebook post deleted: ${fbPost.post_id}`);
+            } catch (fbErr) {
+              console.warn(`      ⚠️ Không thể xóa Facebook post ${fbPost.post_id}: ${fbErr.message}`);
+            }
+
+            // Throttle để tránh dính rate limit Facebook/Server
+            await sleep(withJitter());
+          }
+
+          if (facebookPosts.length > facebookPostsToDelete.length) {
+            console.log(`      ℹ️ Kept newest FB post on ${facebookPosts.length - facebookPostsToDelete.length} fanpage group(s)`);
+          }
+        }
         
         // �️ Xóa images liên quan 
         let deletedImagesCount = 0;
@@ -2049,11 +2340,22 @@ async function cleanupDuplicateArticles(duplicateGroups = [], ctx = {}) {
                       obj_update: { url: imgUrl },
                       pk_fields: ["url"]
                     };
-                    
-                    const delImgResult = await window.csmApi.updateTableData(delImgPayload).catch(() => ({ success: false }));
+
+                    const delImgResult = await withRetry(
+                      async () => {
+                        const r = await window.csmApi.updateTableData(delImgPayload);
+                        if (!r?.success) {
+                          throw new Error(r?.message || 'Delete image failed');
+                        }
+                        return r;
+                      },
+                      `delete-image ${imgUrl}`
+                    ).catch(() => ({ success: false }));
                     if (delImgResult && delImgResult.success) {
                       deletedImagesCount++;
                     }
+
+                    await sleep(withJitter());
                   }
                 } catch (imgErr) {
                   console.warn(`      ⚠️ Không thể xóa image: ${img}`, imgErr.message);
@@ -2079,17 +2381,29 @@ async function cleanupDuplicateArticles(duplicateGroups = [], ctx = {}) {
             },
             pk_fields: ["slug", "domain", "status"]
           };
-          
-          const deleteResult = await window.csmApi.updateTableData(deletePayload);
+
+          const deleteResult = await withRetry(
+            async () => {
+              const r = await window.csmApi.updateTableData(deletePayload);
+              if (!r?.success) {
+                throw new Error(r?.message || 'Delete article failed');
+              }
+              return r;
+            },
+            `delete-article ${oldArticle.slug || oldArticle.title || ''}`
+          );
           
           if (deleteResult && deleteResult.success) {
             deletedCount++;
             results.push({
               deleted: oldArticle.title,
               success: true,
-              imagesDeleted: deletedImagesCount
+              imagesDeleted: deletedImagesCount,
+              facebookPostsDeleted: deletedFacebookPostsCount
             });
-            console.log(`      ✅ Đã xóa: "${oldArticle.title?.substring(0, 40)}"${deletedImagesCount > 0 ? ` (+ ${deletedImagesCount} hình)` : ''}`);
+            console.log(`      ✅ Đã xóa: "${oldArticle.title?.substring(0, 40)}"${deletedImagesCount > 0 ? ` (+ ${deletedImagesCount} hình)` : ''}${deletedFacebookPostsCount > 0 ? ` (+ ${deletedFacebookPostsCount} FB posts)` : ''}`);
+
+            await sleep(withJitter());
           } else {
             failedCount++;
             results.push({
@@ -5282,6 +5596,7 @@ async function processContent(item, opts = {}) {
       let successCount = 0;
       let failCount = 0;
       let tokenExpiredDetected = false;
+      const postedFacebookItems = [];
 
       for (let pageIndex = 0; pageIndex < fanpagesToPost.length; pageIndex++) {
         const page = fanpagesToPost[pageIndex];
@@ -5306,6 +5621,9 @@ async function processContent(item, opts = {}) {
 
         successCount += Number(postSummary?.successCount || 0);
         failCount += Number(postSummary?.failCount || 0);
+        if (Array.isArray(postSummary?.postedItems) && postSummary.postedItems.length > 0) {
+          postedFacebookItems.push(...postSummary.postedItems);
+        }
 
         if (postSummary?.tokenExpiredDetected) {
           tokenExpiredDetected = true;
@@ -5321,6 +5639,27 @@ async function processContent(item, opts = {}) {
 
       // ✅ CRITICAL: Record posted Zalo message SAU KHI post FB thành công (tránh duplicate)
       if (successCount > 0) {
+        // Lưu post_id Facebook vào attributes để cleanup Graph API về sau
+        if (postedFacebookItems.length > 0) {
+          try {
+            const attributes = safeParseJson(detail.attributes, {}) || {};
+            const existingPosts = Array.isArray(attributes.facebook_posts) ? attributes.facebook_posts : [];
+            const mergedPosts = [...existingPosts, ...postedFacebookItems]
+              .filter((p) => p && p.post_id)
+              .filter((p, idx, arr) => arr.findIndex((x) => x.post_id === p.post_id) === idx);
+
+            attributes.facebook_posts = mergedPosts;
+            attributes.facebook_post_ids = mergedPosts.map((p) => p.post_id);
+
+            detail.attributes = JSON.stringify(attributes);
+            detail.updated_at = new Date().toISOString();
+            await upsertDetail(ctx, detail);
+            console.log(`💾 [processContent] Saved ${mergedPosts.length} Facebook post IDs into detail.attributes`);
+          } catch (persistFbErr) {
+            console.warn(`⚠️ [processContent] Không lưu được Facebook post IDs: ${persistFbErr.message}`);
+          }
+        }
+
         if (opts.groupName && opts.config_id && opts.isZaloMessage) {
           console.log(`💾 [processContent] Recording posted Zalo message: group=${opts.groupName}, config=${opts.config_id}`);
           recordPostedZaloMessage(item, opts.groupName, opts.config_id);
@@ -6894,6 +7233,8 @@ async function ensureUI() {
       ctx.domain = selectedDomain;
       ctx.service_type = selectedService;
       ctx.project = selectedProject;
+      ctx.fanpage_id = ctx.fanpage_id || facebookState.selectedPageId || "";
+      ctx.fanpage_token = ctx.fanpage_token || facebookState.selectedPageToken || facebookState.pageAccessToken || "";
       
       // Synchronously sync service definitions first (if needed)
       console.log(`🔄 [Cleanup] Syncing service definitions...`);
@@ -10229,6 +10570,7 @@ async function postToSelectedFanpages(messages, postUrl, selectedPages = null, o
   // Tracking số fanpage đăng thành công
   let successCount = 0;
   let failCount = 0;
+  const postedItems = [];
   let tokenExpiredDetected = false;
   let tokenExpiredMessage = '';
   let stopAllPosting = false;
@@ -10263,6 +10605,14 @@ async function postToSelectedFanpages(messages, postUrl, selectedPages = null, o
         if (result?.success) {
           console.log(`✅ [Fanpage ${i + 1}] Đã đăng lên ${page.name} thành công! (Post ID: ${result.post_id || 'N/A'})`);
           successCount++;
+          if (result.post_id) {
+            postedItems.push({
+              page_id: page.id,
+              page_name: page.name,
+              post_id: result.post_id,
+              posted_at: Date.now()
+            });
+          }
           posted = true;
           break; // Thành công, thoát loop retry
         } else {
@@ -10357,7 +10707,7 @@ async function postToSelectedFanpages(messages, postUrl, selectedPages = null, o
     console.warn('⚠️ Không có fanpage nào đăng thành công, không lưu tin Zalo vào dataOptionUser');
   }
 
-  return { successCount, failCount, tokenExpiredDetected, tokenExpiredMessage };
+  return { successCount, failCount, tokenExpiredDetected, tokenExpiredMessage, postedItems };
 }
 
 /**
