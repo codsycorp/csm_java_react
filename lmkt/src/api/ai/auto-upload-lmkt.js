@@ -35,6 +35,12 @@ const uiTranslations = {
     create_post: '✍️ Tạo Bài',
     clear_history: '🗑️ Xóa Lịch Sử',
     cleanup_indexeddb: '🧹 Dọn IndexedDB',
+    cleanup_duplicates: '🧹 Dọn tin trùng',
+    cleanup_dup_confirm: '🧹 Dọn tin trùng của lĩnh vực "{service}"?\n\nDomain: {domain}\n\nQuá trình này sẽ:\n1. Tải tất cả bài viết của lĩnh vực này\n2. Phát hiện bài viết trùng lặp (theo nội dung, tiêu đề, ảnh)\n3. Xóa bài cũ, giữ lại bài mới nhất\n\nXác nhận?',
+    cleanup_dup_running: '⏳ Đang xử lý dọn tin trùng...',
+    cleanup_dup_success: '✅ Dọn tin trùng hoàn tất!\n\nTìm thấy: {groups} nhóm trùng\nXoá: {deleted} bài viết cũ',
+    cleanup_dup_no_select: '⚠️ Vui lòng chọn Domain và Lĩnh Vực/Dự án ở Cài Đặt Chung',
+    cleanup_dup_not_selected: '⚠️ Domain hoặc Lĩnh Vực/Dự án chưa được chọn',
     processing: '🔒 Đang xử lý...',
     zalo_web_chat: '📱 Zalo Web (Đăng nhập tại đây)',
     refresh_tokens: '🔄 Cập nhật mã truy cập',
@@ -126,6 +132,12 @@ const uiTranslations = {
     create_post: '✍️ Create Post',
     clear_history: '🗑️ Clear History',
     cleanup_indexeddb: '🧹 Cleanup IndexedDB',
+    cleanup_duplicates: '🧹 Cleanup Duplicates',
+    cleanup_dup_confirm: '🧹 Cleanup duplicates for "{service}"?\n\nDomain: {domain}\n\nThis will:\n1. Load all articles in this category\n2. Detect duplicates (by content, title, images)\n3. Remove old articles, keep newest\n\nConfirm?',
+    cleanup_dup_running: '⏳ Processing duplicate cleanup...',
+    cleanup_dup_success: '✅ Duplicate cleanup completed!\n\nFound: {groups} duplicate groups\nDeleted: {deleted} old articles',
+    cleanup_dup_no_select: '⚠️ Please select Domain and Industry/Project in General Settings',
+    cleanup_dup_not_selected: '⚠️ Domain or Industry/Project not selected',
     processing: '🔒 Processing...',
     zalo_web_chat: '📱 Zalo Web Chat (Login here)',
     refresh_tokens: '🔄 Refresh tokens',
@@ -217,6 +229,12 @@ const uiTranslations = {
     create_post: '✍️ 创建帖子',
     clear_history: '🗑️ 清除历史',
     cleanup_indexeddb: '🧹 清理 IndexedDB',
+    cleanup_duplicates: '🧹 清理重复',
+    cleanup_dup_confirm: '🧹 清理"{service}"的重复内容？\n\n域名: {domain}\n\n这将：\n1. 加载此类别中的所有文章\n2. 检测重复项（按内容、标题、图像）\n3. 移除旧文章，保留最新的\n\n确认？',
+    cleanup_dup_running: '⏳ 处理中...',
+    cleanup_dup_success: '✅ 重复清理完成！\n\n找到：{groups} 组重复项\n删除：{deleted} 篇旧文章',
+    cleanup_dup_no_select: '⚠️ 请在常规设置中选择域名和行业/项目',
+    cleanup_dup_not_selected: '⚠️ 未选择域名或行业/项目',
     processing: '🔒 处理中...',
     zalo_web_chat: '📱 Zalo Web Chat (在此登录)',
     refresh_tokens: '🔄 刷新令牌',
@@ -1784,6 +1802,432 @@ function clearArticleHistory() {
     thongbao(ti("✅ Đã xóa lịch sử bài viết", "✅ Post history cleared", "✅ 已清除发文历史"));
   } catch (e) {
     console.warn("Lỗi xóa lịch sử:", e);
+  }
+}
+
+// ========== DUPLICATE CLEANUP FEATURE - DỌN TIN TRÙNG THEO DỊCH VỤ/DỰ ÁN ==========
+
+/**
+ * Tính toán hash của nội dung để phát hiện trùng lặp
+ * @param {string} text - Nội dung cần hash
+ * @returns {string} - Hash của nội dung (simplified, không mã hóa)
+ */
+function calculateContentHash(text = "") {
+  if (!text) return "";
+  
+  try {
+    // Normalize text: loại bỏ khoảng trắng thừa, chuyển thành lowercase
+    let normalized = String(text || "")
+      .toLowerCase()
+      .replace(/\s+/g, " ") // Collapse whitespace
+      .trim();
+    
+    // Tạo simple hash từ normalized text
+    let hash = 0;
+    for (let i = 0; i < normalized.length; i++) {
+      const char = normalized.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash; // Convert to 32bit integer
+    }
+    
+    return Math.abs(hash).toString(36);
+  } catch (e) {
+    console.error("[calculateContentHash] Error:", e);
+    return "";
+  }
+}
+
+/**
+ * Tính độ tương tự giữa 2 chuỗi (Levenshtein distance)
+ * @param {string} str1 - Chuỗi 1
+ * @param {string} str2 - Chuỗi 2
+ * @returns {number} - Độ tương tự từ 0 đến 1 (1 = giống hệt)
+ */
+function calculateStringSimilarity(str1 = "", str2 = "") {
+  if (!str1 || !str2) return str1 === str2 ? 1 : 0;
+  
+  str1 = String(str1).toLowerCase();
+  str2 = String(str2).toLowerCase();
+  
+  if (str1 === str2) return 1;
+  
+  const len1 = str1.length;
+  const len2 = str2.length;
+  const maxLen = Math.max(len1, len2);
+  
+  // Levenshtein distance
+  const matrix = Array(len2 + 1)
+    .fill(null)
+    .map(() => Array(len1 + 1).fill(0));
+  
+  for (let i = 0; i <= len1; i++) matrix[0][i] = i;
+  for (let j = 0; j <= len2; j++) matrix[j][0] = j;
+  
+  for (let j = 1; j <= len2; j++) {
+    for (let i = 1; i <= len1; i++) {
+      const cost = str1[i - 1] === str2[j - 1] ? 0 : 1;
+      matrix[j][i] = Math.min(
+        matrix[j][i - 1] + 1, // Insert
+        matrix[j - 1][i] + 1, // Delete
+        matrix[j - 1][i - 1] + cost // Replace
+      );
+    }
+  }
+  
+  const distance = matrix[len2][len1];
+  const similarity = 1 - distance / maxLen;
+  return Math.max(0, similarity);
+}
+
+/**
+ * Phát hiện các bài viết trùng lặp theo nhiều tiêu chí
+ * @param {Array} articles - Danh sách bài viết từ database
+ * @param {Object} opts - Options
+ * @returns {Array} - Mảng nhóm duplicate [{groupId, articles, reason}]
+ */
+function findDuplicateArticles(articles = [], opts = {}) {
+  if (!Array.isArray(articles) || articles.length < 2) return [];
+  
+  const titleSimilarityThreshold = opts.titleThreshold || 0.75; // 75%
+  const contentHashThreshold = opts.contentHashThreshold || true; // Exact hash match
+  const imageSimilarityThreshold = opts.imageThreshold || 0.5; // Ít nhất 50% ảnh trùng
+  
+  const duplicateGroups = [];
+  const processed = new Set();
+  
+  console.log(`[findDuplicateArticles] Bắt đầu phát hiện trùng lặp - ${articles.length} bài viết`);
+  
+  for (let i = 0; i < articles.length; i++) {
+    if (processed.has(articles[i].id)) continue;
+    
+    const mainArticle = articles[i];
+    const duplicates = [mainArticle];
+    const mainHash = calculateContentHash(mainArticle.content || "");
+    const mainTitle = mainArticle.title || "";
+    
+    // Trích xuất danh sách ảnh từ main article
+    let mainImages = [];
+    try {
+      mainImages = JSON.parse(mainArticle.images || "[]");
+      if (!Array.isArray(mainImages)) mainImages = [];
+    } catch (e) {
+      mainImages = [];
+    }
+    
+    for (let j = i + 1; j < articles.length; j++) {
+      if (processed.has(articles[j].id)) continue;
+      
+      const compareArticle = articles[j];
+      const compareHash = calculateContentHash(compareArticle.content || "");
+      const compareTitle = compareArticle.title || "";
+      
+      let isDuplicate = false;
+      let reason = [];
+      
+      // ✅ CRITERIUM 1: Exact content hash match
+      if (contentHashThreshold && mainHash && mainHash === compareHash && mainHash !== "") {
+        isDuplicate = true;
+        reason.push("exact-content");
+      }
+      
+      // ✅ CRITERIUM 2: Title similarity (> threshold)
+      if (!isDuplicate) {
+        const titleSim = calculateStringSimilarity(mainTitle, compareTitle);
+        if (titleSim >= titleSimilarityThreshold) {
+          isDuplicate = true;
+          reason.push(`title-${Math.round(titleSim * 100)}%`);
+        }
+      }
+      
+      // ✅ CRITERIUM 3: Shared images (ít nhất 50% ảnh trùng)
+      if (!isDuplicate) {
+        try {
+          let compareImages = JSON.parse(compareArticle.images || "[]");
+          if (!Array.isArray(compareImages)) compareImages = [];
+          
+          if (mainImages.length > 0 && compareImages.length > 0) {
+            const sharedCount = mainImages.filter(img => compareImages.includes(img)).length;
+            const sharedRatio = Math.max(
+              sharedCount / mainImages.length,
+              sharedCount / compareImages.length
+            );
+            
+            if (sharedRatio >= imageSimilarityThreshold) {
+              isDuplicate = true;
+              reason.push(`shared-images-${Math.round(sharedRatio * 100)}%`);
+            }
+          }
+        } catch (e) {
+          // Ignore image parsing error
+        }
+      }
+      
+      if (isDuplicate) {
+        duplicates.push(compareArticle);
+        processed.add(compareArticle.id);
+        console.log(`   ✅ Duplicate found: "${compareTitle}" (reason: ${reason.join(", ")})`);
+      }
+    }
+    
+    // Nếu tìm thấy duplicates, add vào group
+    if (duplicates.length > 1) {
+      processed.add(mainArticle.id);
+      
+      // Sort by created_at (newest first)
+      duplicates.sort((a, b) => {
+        const dateA = new Date(a.created_at || 0);
+        const dateB = new Date(b.created_at || 0);
+        return dateB - dateA;
+      });
+      
+      duplicateGroups.push({
+        groupId: generateId(),
+        articles: duplicates,
+        keepArticle: duplicates[0], // Keep the newest
+        removeArticles: duplicates.slice(1), // Remove older ones
+        reason: `${duplicates.length} bài trùng lặp tìm thấy`
+      });
+      
+      console.log(`   📊 Nhóm trùng: ${duplicates.length} bài (giữ: "${duplicates[0].title?.substring(0, 50)}", xóa: ${duplicates.slice(1).length})`);
+    }
+  }
+  
+  console.log(`[findDuplicateArticles] Hoàn tất - Tìm được ${duplicateGroups.length} nhóm trùng`);
+  
+  return duplicateGroups;
+}
+
+/**
+ * Xóa bài viết cũ, giữ lại bài viết mới nhất trong nhóm trùng
+ * @param {Array} duplicatGroups - Mảng nhóm duplicate
+ * @param {Object} ctx - Context API
+ * @returns {Object} - Kết quả cleanup {success, deletedCount, failedCount, results}
+ */
+async function cleanupDuplicateArticles(duplicateGroups = [], ctx = {}) {
+  if (!Array.isArray(duplicateGroups) || duplicateGroups.length === 0) {
+    return { success: false, message: "Không có bài viết trùng lặp" };
+  }
+  
+  console.log(`\n🧹 [cleanupDuplicateArticles] Bắt đầu dọn ${duplicateGroups.length} nhóm trùng - ${new Date().toLocaleTimeString()}`);
+  
+  let deletedCount = 0;
+  let failedCount = 0;
+  const results = [];
+  
+  for (const group of duplicateGroups) {
+    const { keepArticle, removeArticles } = group;
+    
+    console.log(`\n   Nhóm: keep="${keepArticle.title?.substring(0, 40)}" - Xóa ${removeArticles.length} bài cũ`);
+    
+    for (const oldArticle of removeArticles) {
+      try {
+        // ✅ Determine correct app_id from domain
+        const isLmktDomain = (oldArticle.domain || ctx.domain || "").toLowerCase().includes("h-holding");
+        const finalAppId = isLmktDomain ? "lmkt" : "wuweb";
+        
+        // �️ Xóa images liên quan 
+        let deletedImagesCount = 0;
+        if (oldArticle.images) {
+          try {
+            let images = oldArticle.images;
+            // Parse JSON nếu images là string
+            if (typeof images === 'string') {
+              images = JSON.parse(images);
+            }
+            
+            if (Array.isArray(images)) {
+              for (const img of images) {
+                try {
+                  // Lấy URL của image
+                  const imgUrl = typeof img === 'object' ? img.url || img.path : img;
+                  if (imgUrl) {
+                    // Gọi API xóa image
+                    const delImgPayload = {
+                      app_id: finalAppId,
+                      obj_name: "web_service_detail_images",
+                      command: "delete",
+                      obj_update: { url: imgUrl },
+                      pk_fields: ["url"]
+                    };
+                    
+                    const delImgResult = await window.csmApi.updateTableData(delImgPayload).catch(() => ({ success: false }));
+                    if (delImgResult && delImgResult.success) {
+                      deletedImagesCount++;
+                    }
+                  }
+                } catch (imgErr) {
+                  console.warn(`      ⚠️ Không thể xóa image: ${img}`, imgErr.message);
+                }
+              }
+              console.log(`      📸 Xóa ${deletedImagesCount}/${images.length} hình ảnh`);
+            }
+          } catch (parseErr) {
+            console.warn(`      ⚠️ Lỗi parse images field:`, parseErr.message);
+          }
+        }
+        
+        // 🗑️ Xóa bài viết cũ using window.csmApi.updateTableData
+        if (window.csmApi && typeof window.csmApi.updateTableData === 'function') {
+          const deletePayload = {
+            app_id: finalAppId,
+            obj_name: "web_service_detail",
+            command: "delete",
+            obj_update: {
+              slug: oldArticle.slug,
+              domain: oldArticle.domain,
+              status: oldArticle.status || "active"
+            },
+            pk_fields: ["slug", "domain", "status"]
+          };
+          
+          const deleteResult = await window.csmApi.updateTableData(deletePayload);
+          
+          if (deleteResult && deleteResult.success) {
+            deletedCount++;
+            results.push({
+              deleted: oldArticle.title,
+              success: true,
+              imagesDeleted: deletedImagesCount
+            });
+            console.log(`      ✅ Đã xóa: "${oldArticle.title?.substring(0, 40)}"${deletedImagesCount > 0 ? ` (+ ${deletedImagesCount} hình)` : ''}`);
+          } else {
+            failedCount++;
+            results.push({
+              deleted: oldArticle.title,
+              success: false,
+              error: deleteResult?.message || "Delete failed"
+            });
+            console.log(`      ❌ Failed: "${oldArticle.title?.substring(0, 40)}" - ${deleteResult?.message}`);
+          }
+        } else {
+          // Fallback: Không có API, báo lỗi
+          failedCount++;
+          results.push({
+            deleted: oldArticle.title,
+            success: false,
+            error: "window.csmApi.updateTableData not available"
+          });
+          console.warn(`      ⚠️ API not available: "${oldArticle.title?.substring(0, 40)}"`);
+        }
+      } catch (err) {
+        failedCount++;
+        results.push({
+          deleted: oldArticle.title,
+          success: false,
+          error: err.message
+        });
+        console.error(`      ❌ Error: "${oldArticle.title?.substring(0, 40)}" - ${err.message}`);
+      }
+    }
+  }
+  
+  console.log(`\n✅ [cleanupDuplicateArticles] Hoàn tất - Xóa: ${deletedCount}, Lỗi: ${failedCount} - ${new Date().toLocaleTimeString()}`);
+  
+  return {
+    success: failedCount === 0,
+    message: `✅ Dọn dẹp xong: Xóa ${deletedCount} bài cũ${failedCount > 0 ? `, Lỗi: ${failedCount}` : ""}`,
+    deletedCount,
+    failedCount,
+    results
+  };
+}
+
+/**
+ * Master workflow: Tải bài viết theo service type → Phát hiện trùng → Dọn dẹp
+ * @param {string} domainValue - Giá trị domain (từ dropdown)
+ * @param {string} serviceType - Loại dịch vụ (bat-dong-san, ...)
+ * @param {string} projectCode - Mã dự án (LMKT only)
+ * @param {Object} ctx - Context API
+ * @returns {Object} - Kết quả cleanup
+ */
+async function cleanupDuplicatesByServiceType(domainValue, serviceType, projectCode = "", ctx = {}) {
+  console.log(`\n[cleanupDuplicatesByServiceType] === START ===`);
+  console.log(`   Domain: ${domainValue}`);
+  console.log(`   Service Type: ${serviceType}`);
+  console.log(`   Project: ${projectCode || "(none)"}`);
+  
+  // ✅ Determine app_id from domain
+  const appId = getAppIdFromDomainOptions(domainValue) || "wuweb";
+  
+  try {
+    // 1️⃣ Lấy tất cả bài viết của service type này cùng domain
+    console.log(`\n   📥 Đang tải bài viết của "${serviceType}" trên domain "${domainValue}"...`);
+    
+    const where = {
+      operator: "AND",
+      conditions: [
+        { field: "service_type", type: "eq", value: serviceType || projectCode || "" },
+        { field: "domain", type: "eq", value: domainValue },
+        { field: "status", type: "eq", value: "active" }
+      ]
+    };
+    
+    const fetchResult = await ctx.helperApi.getTableData({
+      app_id: appId,
+      obj_name: "web_service_detail",
+      where,
+      take: 500 // Limit để không quá tải
+    }).catch(err => {
+      console.error(`❌ Lỗi tải dữ liệu:`, err);
+      return { rows: [], error: err.message };
+    });
+    
+    const articles = fetchResult.rows || fetchResult.data || [];
+    console.log(`   📊 Tải được ${articles.length} bài viết`);
+    
+    if (articles.length < 2) {
+      return {
+        success: false,
+        message: `❌ Không đủ bài để check trùng (chỉ có ${articles.length} bài)`,
+        duplicateCount: 0,
+        cleanedCount: 0
+      };
+    }
+    
+    // 2️⃣ Phát hiện trùng lặp
+    console.log(`\n   🔍 Đang phát hiện bài trùng lặp...`);
+    const duplicateGroups = findDuplicateArticles(articles, {
+      titleThreshold: 0.75,
+      contentHashThreshold: true,
+      imageThreshold: 0.5
+    });
+    
+    if (duplicateGroups.length === 0) {
+      return {
+        success: true,
+        message: "✅ Không tìm thấy bài trùng lặp",
+        duplicateCount: 0,
+        cleanedCount: 0
+      };
+    }
+    
+    console.log(`   📊 Tìm thấy ${duplicateGroups.length} nhóm trùng lặp`);
+    
+    // 3️⃣ Dọn dẹp bài cũ
+    console.log(`\n   🧹 Đang dọn dẹp bài cũ...`);
+    const cleanupResult = await cleanupDuplicateArticles(duplicateGroups, ctx);
+    
+    return {
+      success: cleanupResult.success,
+      message: cleanupResult.message,
+      duplicateCount: duplicateGroups.length,
+      cleanedCount: cleanupResult.deletedCount,
+      failedCount: cleanupResult.failedCount,
+      details: duplicateGroups.map(g => ({
+        kept: g.keepArticle.title,
+        removed: g.removeArticles.map(a => a.title),
+        count: g.removeArticles.length
+      }))
+    };
+    
+  } catch (error) {
+    console.error(`[cleanupDuplicatesByServiceType] Error:`, error);
+    return {
+      success: false,
+      message: `❌ Lỗi: ${error.message}`,
+      duplicateCount: 0,
+      cleanedCount: 0
+    };
   }
 }
 
@@ -6379,7 +6823,135 @@ async function ensureUI() {
     }
   };
 
-  btnRow.append(uploadZaloBtn, uploadFbBtn, createBtn, clearHistoryBtn, cleanupIndexedDBBtn);
+  // ========== BUTTON: Dọn tin trùng theo dịch vụ/dự án ==========
+  const cleanupDupBtn = createButton(ti("🧹 Dọn tin trùng", "🧹 Cleanup Duplicates", "🧹 清理重复"), "#ff7a45");
+  
+  cleanupDupBtn.onclick = async () => {
+    // ✅ Get current domain from settings using same function as createBtn
+    const globalSettings = getGlobalSettings();
+    
+    console.log(`[cleanupDupBtn] Global settings:`, globalSettings);
+    
+    // ✅ Determine which field to use: LMKT uses Project, Phanmemmottrieu uses Industry
+    const isLmkt = globalSettings.domainKey === "lmkt";
+    const serviceFieldName = isLmkt ? "project" : "industry";
+    const serviceFieldValue = isLmkt ? globalSettings.project : globalSettings.industry;
+    
+    if (!globalSettings.domain || !serviceFieldValue) {
+      console.warn(`[cleanupDupBtn] Missing settings - domain:${globalSettings.domain}, ${serviceFieldName}:${serviceFieldValue}`);
+      const fieldLabel = isLmkt ? "Dự Án" : "Lĩnh Vực";
+      return canhbao(ti(
+        `⚠️ Vui lòng chọn Domain và ${fieldLabel} ở Cài Đặt Chung`,
+        `⚠️ Please select Domain and ${fieldLabel === "Dự Án" ? "Project" : "Industry"} in General Settings`,
+        `⚠️ 请在常规设置中选择域名和${fieldLabel === "Dự Án" ? "项目" : "行业"}`
+      ));
+    }
+    
+    // ✅ Map domainKey back to actual domain value from DOMAIN_OPTIONS
+    const domainConfig = DOMAIN_OPTIONS[globalSettings.domainKey];
+    console.log(`[cleanupDupBtn] Domain config for key "${globalSettings.domainKey}":`, domainConfig);
+    
+    if (!domainConfig) {
+      return canhbao(ti(
+        "❌ Cấu hình Domain không hợp lệ",
+        "❌ Invalid Domain configuration",
+        "❌ 域名配置无效"
+      ));
+    }
+    
+    const selectedDomain = domainConfig.value; // Get full domain value like "phanmemmottrieu.net,localhost:3333"
+    const selectedService = serviceFieldValue;
+    const selectedProject = globalSettings.project || "";
+    
+    console.log(`[cleanupDupBtn] Settings loaded - Domain:${selectedDomain}, ${serviceFieldName}:${selectedService}, Project:${selectedProject}`);
+    
+    // ✅ Show appropriate message based on domain type
+    const fieldLabel = isLmkt ? "dự án" : "lĩnh vực";
+    const fieldLabelEn = isLmkt ? "Project" : "Industry";
+    const fieldLabelZh = isLmkt ? "项目" : "行业";
+    
+    const confirmMsg = ti(
+      `🧹 Dọn tin trùng của ${fieldLabel} "${selectedService}"?\n\n📊 Domain: ${selectedDomain}\n\nQuá trình này sẽ:\n1. Tải tất cả bài viết từ server\n2. Phát hiện bài viết trùng lặp (theo nội dung, tiêu đề, ảnh)\n3. Xóa bài cũ, giữ lại bài mới nhất\n\nXác nhận?`,
+      `🧹 Cleanup duplicates for "${fieldLabelEn}: ${selectedService}"?\n\nDomain: ${selectedDomain}\n\nThis will:\n1. Load all articles from server\n2. Detect duplicates (by content, title, images)\n3. Remove old articles, keep newest\n\nConfirm?`,
+      `🧹 清理"${fieldLabelZh}：${selectedService}"的重复内容？\n\n域名:${selectedDomain}\n\n这将：\n1. 从服务器加载所有文章\n2. 检测重复项（按内容、标题、图像）\n3. 移除旧文章，保留最新的\n\n确认？`
+    );
+    
+    if (!confirm(confirmMsg)) {
+      return;
+    }
+    
+    // Show loading
+    cleanupDupBtn.disabled = true;
+    cleanupDupBtn.textContent = ti("⏳ Đang xử lý...", "⏳ Processing...", "⏳ 处理中...");
+    
+    try {
+      // Resolve context
+      const ctx = resolveContext();
+      
+      // ✅ Get app_id from domain
+      const appId = getAppIdFromDomainOptions(selectedDomain);
+      ctx.app_id = appId;
+      ctx.domain = selectedDomain;
+      ctx.service_type = selectedService;
+      ctx.project = selectedProject;
+      
+      // Synchronously sync service definitions first (if needed)
+      console.log(`🔄 [Cleanup] Syncing service definitions...`);
+      await syncServiceDefinitionsFromServer(false);
+      
+      console.log(`[Cleanup] Starting duplicate cleanup workflow...`);
+      console.log(`   Domain: ${selectedDomain}`);
+      console.log(`   ${serviceFieldName}: ${selectedService}`);
+      console.log(`   Project: ${selectedProject || "(none)"}`);
+      
+      // Call cleanup function
+      // For LMKT: use project as serviceType parameter
+      // For Phanmemmottrieu: use industry as serviceType parameter
+      const cleanupResult = await cleanupDuplicatesByServiceType(
+        selectedDomain,
+        selectedService,  // This is either project (LMKT) or industry (Phanmemmottrieu)
+        selectedProject,
+        ctx
+      );
+      
+      // Show result
+      if (cleanupResult.success) {
+        thongbao(ti(
+          `✅ ${cleanupResult.message}\n\n📊 Tìm thấy: ${cleanupResult.duplicateCount} nhóm trùng\n✅ Xoá:${cleanupResult.cleanedCount} bài viết cũ`,
+          `✅ ${cleanupResult.message}\n\n📊 Found: ${cleanupResult.duplicateCount} duplicate groups\n✅ Deleted: ${cleanupResult.cleanedCount} old articles`,
+          `✅ ${cleanupResult.message}\n\n📊 找到：${cleanupResult.duplicateCount} 组重复项\n✅ 删除：${cleanupResult.cleanedCount} 篇旧文章`
+        ));
+        
+        // Log details if available
+        if (cleanupResult.details && cleanupResult.details.length > 0) {
+          console.log(`\n📋 [Cleanup Results] Details:`);
+          cleanupResult.details.forEach((group, idx) => {
+            console.log(`   Group ${idx + 1}: Kept="${group.kept}", Removed=${group.count}`);
+          });
+        }
+      } else {
+        canhbao(ti(
+          `⚠️ ${cleanupResult.message}`,
+          `⚠️ ${cleanupResult.message}`,
+          `⚠️ ${cleanupResult.message}`
+        ));
+      }
+      
+    } catch (error) {
+      console.error(`[Cleanup ERROR]:`, error);
+      canhbao(ti(
+        `❌ Lỗi: ${error.message}`,
+        `❌ Error: ${error.message}`,
+        `❌ 错误：${error.message}`
+      ));
+    } finally {
+      // Reset button
+      cleanupDupBtn.disabled = false;
+      cleanupDupBtn.textContent = ti("🧹 Dọn tin trùng", "🧹 Cleanup Duplicates", "🧹 清理重复");
+    }
+  };
+
+  btnRow.append(uploadZaloBtn, uploadFbBtn, createBtn, clearHistoryBtn, cleanupIndexedDBBtn, cleanupDupBtn);
   wrapper.append(title, note, textarea, btnRow, zaloFileInput, fbFileInput);
 
   // Insert upload UI into container
