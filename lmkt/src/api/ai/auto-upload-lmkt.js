@@ -2236,6 +2236,12 @@ async function cleanupDuplicateArticles(duplicateGroups = [], ctx = {}) {
   
   for (const group of duplicateGroups) {
     const { keepArticle, removeArticles } = group;
+    const keepImageRefs = new Set(
+      normalizeArticleImageUrls(keepArticle?.images)
+        .map((u) => extractServerImageRef(u, ctx?.app_id || "wuweb"))
+        .filter(Boolean)
+        .map((r) => r.key)
+    );
     
     console.log(`\n   Nhóm: keep="${keepArticle.title?.substring(0, 40)}" - Xóa ${removeArticles.length} bài cũ`);
     
@@ -2320,48 +2326,57 @@ async function cleanupDuplicateArticles(duplicateGroups = [], ctx = {}) {
         let deletedImagesCount = 0;
         if (oldArticle.images) {
           try {
-            let images = oldArticle.images;
-            // Parse JSON nếu images là string
-            if (typeof images === 'string') {
-              images = JSON.parse(images);
-            }
-            
-            if (Array.isArray(images)) {
+            const images = normalizeArticleImageUrls(oldArticle.images);
+            const attemptedImageKeys = new Set();
+
+            if (images.length > 0) {
               for (const img of images) {
                 try {
-                  // Lấy URL của image
-                  const imgUrl = typeof img === 'object' ? img.url || img.path : img;
-                  if (imgUrl) {
-                    // Gọi API xóa image
-                    const delImgPayload = {
-                      app_id: finalAppId,
-                      obj_name: "web_service_detail_images",
-                      command: "delete",
-                      obj_update: { url: imgUrl },
-                      pk_fields: ["url"]
-                    };
+                  const imgUrl = String(img || "").trim();
+                  if (!imgUrl) continue;
 
-                    const delImgResult = await withRetry(
-                      async () => {
-                        const r = await window.csmApi.updateTableData(delImgPayload);
-                        if (!r?.success) {
-                          throw new Error(r?.message || 'Delete image failed');
-                        }
-                        return r;
-                      },
-                      `delete-image ${imgUrl}`
-                    ).catch(() => ({ success: false }));
-                    if (delImgResult && delImgResult.success) {
-                      deletedImagesCount++;
-                    }
-
-                    await sleep(withJitter());
+                  const imageRef = extractServerImageRef(imgUrl, finalAppId);
+                  if (!imageRef) {
+                    console.log(`      ⏭️ Skip non-server image: ${imgUrl.substring(0, 120)}`);
+                    continue;
                   }
+
+                  if (keepImageRefs.has(imageRef.key)) {
+                    console.log(`      ♻️ Skip shared image (keep article still uses): ${imageRef.key}`);
+                    continue;
+                  }
+
+                  if (attemptedImageKeys.has(imageRef.key)) {
+                    continue;
+                  }
+                  attemptedImageKeys.add(imageRef.key);
+
+                  const delImgResult = await withRetry(
+                    async () => {
+                      const r = await deleteUploadedImageFromServer(imageRef, {
+                        ...ctx,
+                        app_id: imageRef.app_id || finalAppId
+                      });
+                      if (!r?.success) {
+                        throw new Error(r?.message || "Delete image failed");
+                      }
+                      return r;
+                    },
+                    `delete-image ${imgUrl}`
+                  ).catch(() => ({ success: false }));
+
+                  if (delImgResult?.success) {
+                    deletedImagesCount++;
+                  } else {
+                    console.warn(`      ⚠️ Delete image server thất bại: ${imageRef.key}`);
+                  }
+
+                  await sleep(withJitter());
                 } catch (imgErr) {
                   console.warn(`      ⚠️ Không thể xóa image: ${img}`, imgErr.message);
                 }
               }
-              console.log(`      📸 Xóa ${deletedImagesCount}/${images.length} hình ảnh`);
+              console.log(`      📸 Xóa ${deletedImagesCount}/${attemptedImageKeys.size} hình ảnh server`);
             }
           } catch (parseErr) {
             console.warn(`      ⚠️ Lỗi parse images field:`, parseErr.message);
@@ -4444,6 +4459,142 @@ async function uploadBinaryFile(file, filename, ctx) {
   }
 
   throw lastError || new Error("Upload file failed: không tìm thấy endpoint upload khả dụng");
+}
+
+function extractServerImageRef(rawImageUrl, fallbackAppId = "") {
+  const raw = String(rawImageUrl || "").trim();
+  if (!raw) return null;
+
+  let path = raw;
+  try {
+    if (/^https?:\/\//i.test(raw)) {
+      path = new URL(raw).pathname || "";
+    }
+  } catch (_e) {
+    path = raw;
+  }
+
+  if (path.startsWith("app_images/")) {
+    path = `/${path}`;
+  }
+
+  const m = path.match(/^\/app_images\/([^/]+)\/([^?#]+)$/i);
+  if (!m) return null;
+
+  const appId = decodeURIComponent(m[1] || "").trim() || String(fallbackAppId || "").trim();
+  const name = decodeURIComponent(m[2] || "").trim();
+  if (!name) return null;
+
+  return {
+    app_id: appId || String(fallbackAppId || "").trim() || "wuweb",
+    name,
+    key: `${appId || fallbackAppId || "wuweb"}/${name}`
+  };
+}
+
+function normalizeArticleImageUrls(imagesField) {
+  if (!imagesField) return [];
+  let arr = imagesField;
+  if (typeof arr === "string") {
+    try {
+      arr = JSON.parse(arr);
+    } catch (_e) {
+      return [];
+    }
+  }
+  if (!Array.isArray(arr)) return [];
+
+  return arr
+    .map((img) => {
+      if (typeof img === "string") return img;
+      if (img && typeof img === "object") return img.url || img.path || "";
+      return "";
+    })
+    .map((u) => String(u || "").trim())
+    .filter(Boolean);
+}
+
+async function deleteUploadedImageFromServer(imageRef, ctx = {}) {
+  if (!imageRef?.name) {
+    return { success: false, message: "Thiếu tên file ảnh" };
+  }
+
+  const candidates = getCandidateUploadEndpoints(ctx);
+  const availableCandidates = candidates.filter((ep) => !isUploadEndpointCoolingDown(ep));
+  const endpoints = availableCandidates.length > 0 ? availableCandidates : candidates;
+  let lastError = null;
+
+  const payloadObj = {
+    app_id: imageRef.app_id || ctx.app_id || "wuweb",
+    cmd: "removeimg",
+    name: imageRef.name
+  };
+
+  const buildFormPayload = () => (
+    `app_id=${encodeURIComponent(String(payloadObj.app_id || ""))}`
+    + `&cmd=${encodeURIComponent("removeimg")}`
+    + `&name=${encodeURIComponent(String(payloadObj.name || ""))}`
+  );
+
+  for (const endpoint of endpoints) {
+    const startedAt = Date.now();
+    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const timeoutId = controller
+      ? setTimeout(() => controller.abort(new Error(`Delete timeout after ${UPLOAD_REQUEST_TIMEOUT_MS}ms`)), UPLOAD_REQUEST_TIMEOUT_MS)
+      : null;
+
+    try {
+      const requestOnce = async (mode = "json") => {
+        const isForm = mode === "form";
+        const response = await fetch(endpoint, {
+          method: "POST",
+          headers: {
+            "Content-Type": isForm
+              ? "application/x-www-form-urlencoded;charset=UTF-8"
+              : "application/json;charset=UTF-8",
+            "Accept": "text/plain, application/json, */*"
+          },
+          body: isForm ? buildFormPayload() : JSON.stringify(payloadObj),
+          signal: controller ? controller.signal : undefined
+        });
+        const responseText = await response.text();
+        return { response, responseText };
+      };
+
+      let reqResult = await requestOnce("json");
+      const lowerBody = String(reqResult.responseText || "").toLowerCase();
+      if (reqResult.response.ok && (lowerBody.includes("phan tich du lieu") || lowerBody.includes("parse body"))) {
+        reqResult = await requestOnce("form");
+      }
+
+      if (timeoutId) clearTimeout(timeoutId);
+
+      const { response, responseText } = reqResult;
+      if (!response.ok) {
+        markUploadEndpointFailure(endpoint, response.status);
+        lastError = new Error(`HTTP ${response.status}`);
+        continue;
+      }
+
+      const okBody = String(responseText || "").toLowerCase();
+      const isDeleted = okBody.includes("deleted") || okBody.includes("da xoa") || okBody.includes("đã xóa") || okBody === "";
+      if (!isDeleted) {
+        markUploadEndpointFailure(endpoint, response.status);
+        lastError = new Error(`Delete invalid response from ${endpoint}`);
+        continue;
+      }
+
+      clearUploadEndpointHealth(endpoint);
+      console.log(`      🗑️ Image deleted on server: ${imageRef.key} via ${endpoint} (${Date.now() - startedAt}ms)`);
+      return { success: true, endpoint };
+    } catch (error) {
+      if (timeoutId) clearTimeout(timeoutId);
+      markUploadEndpointFailure(endpoint, 0);
+      lastError = error;
+    }
+  }
+
+  return { success: false, message: lastError?.message || "Delete image failed" };
 }
 
 async function uploadImages(ctx, images) {
