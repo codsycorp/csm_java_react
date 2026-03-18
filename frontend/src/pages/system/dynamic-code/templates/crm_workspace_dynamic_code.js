@@ -3156,18 +3156,51 @@
         .crm-dynamic-theme .ant-tabs-nav,
         .crm-dynamic-theme .ant-tabs-ink-bar,
         .crm-dynamic-theme .ant-tabs-tab,
+        .crm-dynamic-theme .ant-tabs-tab .ant-tabs-tab-btn,
         .crm-dynamic-theme .ant-segmented-item,
+        .crm-dynamic-theme .ant-radio-button-wrapper,
         .crm-dynamic-theme .ant-divider,
         .crm-dynamic-theme .ant-empty-description {
           color: ${themeTokens.textSecondary} !important;
           border-color: ${themeTokens.border} !important;
         }
+        .crm-dynamic-theme .ant-tabs-tab {
+          background: ${themeTokens.cardBg} !important;
+        }
+        .crm-dynamic-theme .ant-tabs-tab:hover,
+        .crm-dynamic-theme .ant-tabs-tab:hover .ant-tabs-tab-btn {
+          color: ${themeTokens.text} !important;
+        }
+        .crm-dynamic-theme .ant-segmented {
+          background: ${themeTokens.cardBgMuted} !important;
+          border: 1px solid ${themeTokens.border} !important;
+        }
+        .crm-dynamic-theme .ant-segmented-item {
+          background: transparent !important;
+        }
+        .crm-dynamic-theme .ant-radio-group,
+        .crm-dynamic-theme .ant-radio-group-solid {
+          background: ${themeTokens.cardBgMuted} !important;
+          color: ${themeTokens.text} !important;
+        }
+        .crm-dynamic-theme .ant-radio-button-wrapper {
+          background: ${themeTokens.cardBg} !important;
+          color: ${themeTokens.textSecondary} !important;
+          border-color: ${themeTokens.border} !important;
+        }
+        .crm-dynamic-theme .ant-radio-button-wrapper:hover {
+          color: ${themeTokens.text} !important;
+        }
         .crm-dynamic-theme .ant-tabs-tab-active .ant-tabs-tab-btn,
+        .crm-dynamic-theme .ant-tabs-tab-active,
         .crm-dynamic-theme .ant-segmented-item-selected,
-        .crm-dynamic-theme .ant-segmented-item-selected .ant-segmented-item-label {
+        .crm-dynamic-theme .ant-segmented-item-selected .ant-segmented-item-label,
+        .crm-dynamic-theme .ant-radio-group-solid .ant-radio-button-wrapper-checked:not(.ant-radio-button-wrapper-disabled),
+        .crm-dynamic-theme .ant-radio-button-wrapper-checked:not(.ant-radio-button-wrapper-disabled) {
           color: ${themeTokens.text} !important;
           background: ${themeTokens.cardBgMuted} !important;
-          border-color: ${themeTokens.border} !important;
+          border-color: ${themeTokens.primary} !important;
+          box-shadow: none !important;
         }
         .crm-dynamic-theme .ant-picker-panel,
         .crm-dynamic-theme .ant-picker-header,

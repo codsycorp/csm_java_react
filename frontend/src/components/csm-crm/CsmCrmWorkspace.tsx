@@ -420,14 +420,40 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 		}
 		.crm-workspace-theme .ant-tabs-tab,
 		.crm-workspace-theme .ant-tabs-tab-btn,
+		.crm-workspace-theme .ant-radio-button-wrapper,
 		.crm-workspace-theme .ant-segmented-item-label {
 			color: ${token.colorTextSecondary};
 		}
+		.crm-workspace-theme .ant-tabs-tab {
+			background: ${token.colorBgContainer};
+		}
+		.crm-workspace-theme .ant-segmented {
+			background: ${(token as any).colorFillTertiary || token.colorBgContainer};
+			border: 1px solid ${token.colorBorder};
+		}
+		.crm-workspace-theme .ant-segmented-item {
+			background: transparent;
+		}
+		.crm-workspace-theme .ant-radio-group,
+		.crm-workspace-theme .ant-radio-group-solid {
+			background: ${(token as any).colorFillTertiary || token.colorBgContainer};
+			color: ${token.colorText};
+		}
+		.crm-workspace-theme .ant-radio-button-wrapper {
+			background: ${token.colorBgContainer};
+			color: ${token.colorTextSecondary};
+			border-color: ${token.colorBorder};
+		}
 		.crm-workspace-theme .ant-tabs-tab-active .ant-tabs-tab-btn,
+		.crm-workspace-theme .ant-tabs-tab-active,
 		.crm-workspace-theme .ant-segmented-item-selected,
-		.crm-workspace-theme .ant-segmented-item-selected .ant-segmented-item-label {
+		.crm-workspace-theme .ant-segmented-item-selected .ant-segmented-item-label,
+		.crm-workspace-theme .ant-radio-group-solid .ant-radio-button-wrapper-checked:not(.ant-radio-button-wrapper-disabled),
+		.crm-workspace-theme .ant-radio-button-wrapper-checked:not(.ant-radio-button-wrapper-disabled) {
 			color: ${token.colorText};
 			background: ${(token as any).colorFillSecondary || token.colorBgContainer};
+			border-color: ${(token as any).colorPrimaryBorder || token.colorPrimary};
+			box-shadow: none;
 		}
 		.crm-workspace-theme .ant-table-wrapper .ant-table,
 		.crm-workspace-theme .ant-table-wrapper .ant-table-container,
