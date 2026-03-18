@@ -3346,6 +3346,43 @@
         .crm-dynamic-theme .ant-picker-cell-disabled .ant-picker-cell-inner {
           color: ${themeTokens.textTertiary} !important;
         }
+        .crm-workspace-theme .ant-picker-header {
+          border-bottom: 1px solid ${themeTokens.border} !important;
+        }
+        .crm-workspace-theme .ant-picker-header-super-prev-btn,
+        .crm-workspace-theme .ant-picker-header-prev-btn,
+        .crm-workspace-theme .ant-picker-header-super-next-btn,
+        .crm-workspace-theme .ant-picker-header-next-btn {
+          color: ${themeTokens.text} !important;
+        }
+        .crm-workspace-theme .ant-picker-header-super-prev-btn:hover,
+        .crm-workspace-theme .ant-picker-header-prev-btn:hover,
+        .crm-workspace-theme .ant-picker-header-super-next-btn:hover,
+        .crm-workspace-theme .ant-picker-header-next-btn:hover {
+          color: ${themeTokens.primary} !important;
+        }
+        .crm-workspace-theme .ant-picker-content th {
+          color: ${themeTokens.textSecondary} !important;
+          font-weight: 600 !important;
+          background: ${themeTokens.cardBgMuted} !important;
+        }
+        .crm-workspace-theme .ant-picker-cell:hover .ant-picker-cell-inner {
+          background: ${themeTokens.subtleBg} !important;
+          color: ${themeTokens.text} !important;
+        }
+        .crm-workspace-theme .ant-picker-cell-in-view.ant-picker-cell-in-range .ant-picker-cell-inner {
+          background: ${themeTokens.cardBgMuted} !important;
+          color: ${themeTokens.text} !important;
+        }
+        .crm-workspace-theme .ant-picker-cell-disabled .ant-picker-cell-inner {
+          color: ${themeTokens.textTertiary} !important;
+        }
+        .crm-workspace-theme .ant-picker-cell-in-view.ant-picker-cell-selected .ant-picker-cell-inner,
+        .crm-workspace-theme .ant-picker-cell-in-view.ant-picker-cell-today .ant-picker-cell-inner {
+          background: ${themeTokens.primary} !important;
+          color: #ffffff !important;
+          font-weight: 600 !important;
+        }
         .crm-dynamic-theme .ant-alert,
         .crm-dynamic-theme .ant-alert-message,
         .crm-dynamic-theme .ant-alert-description {
