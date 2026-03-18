@@ -163,6 +163,9 @@
       todoSaved: "Đã lưu công việc",
       todoCompleted: "Đã hoàn thành công việc",
       todoSaveFailed: "Không thể lưu công việc",
+      todoCreateTitle: "Thêm mới công việc",
+      todoEditTitle: "Chỉnh sửa công việc",
+      todoDeleteTitle: "Xoá công việc",
       noSalesUsers: "Chưa có nhân sự kinh doanh phù hợp với phạm vi vận hành hiện tại. Vui lòng kiểm tra phân quyền nhân sự.",
       crmCrudTitle: "Trung tâm dữ liệu CRM",
       crmCrudDesc: "Quản lý dữ liệu khách hàng, sản phẩm và hoạt động bán hàng để toàn bộ hệ thống cập nhật tức thì.",
@@ -170,6 +173,9 @@
       entityInventory: "Sản phẩm / giỏ giữ chỗ",
       entityActivities: "Hoạt động",
       entityTasks: "Công việc",
+      crudCreateTitle: "Thêm mới dữ liệu",
+      crudEditTitle: "Chỉnh sửa dữ liệu",
+      crudDeleteTitle: "Xoá dữ liệu",
       addNew: "Thêm mới",
       edit: "Sửa",
       delete: "Xoá",
@@ -241,6 +247,18 @@
       inventoryFilterDirection: "Hướng",
       inventoryFilterBedrooms: "Phòng ngủ",
       inventoryFilterPrice: "Khoảng giá",
+      activityTypeEmail: "Email",
+      activityTypeNote: "Ghi chú",
+      activityResultPending: "Chờ xử lý",
+      activityResultCanceled: "Đã huỷ",
+      directionNorth: "Bắc",
+      directionSouth: "Nam",
+      directionEast: "Đông",
+      directionWest: "Tây",
+      directionNE: "Đông Bắc",
+      directionSE: "Đông Nam",
+      directionNW: "Tây Bắc",
+      directionSW: "Tây Nam",
       adsListTitle: "Danh sách quảng cáo đang vận hành",
       source: "Nguồn",
       leads: "Leads",
@@ -350,6 +368,9 @@
       todoSaved: "Task saved",
       todoCompleted: "Task completed",
       todoSaveFailed: "Unable to save task",
+      todoCreateTitle: "Create task",
+      todoEditTitle: "Edit task",
+      todoDeleteTitle: "Delete task",
       noSalesUsers: "No sales team members are available for the current operating scope. Please review team permissions.",
       crmCrudTitle: "CRM Data Operations Center",
       crmCrudDesc: "Maintain customer, inventory, and activity records with immediate system-wide updates.",
@@ -357,6 +378,9 @@
       entityInventory: "Inventory / Reservation Basket",
       entityActivities: "Activities",
       entityTasks: "Tasks",
+      crudCreateTitle: "Create record",
+      crudEditTitle: "Edit record",
+      crudDeleteTitle: "Delete record",
       addNew: "Add new",
       edit: "Edit",
       delete: "Delete",
@@ -428,6 +452,18 @@
       inventoryFilterDirection: "Direction",
       inventoryFilterBedrooms: "Bedrooms",
       inventoryFilterPrice: "Price range",
+      activityTypeEmail: "Email",
+      activityTypeNote: "Note",
+      activityResultPending: "Pending",
+      activityResultCanceled: "Canceled",
+      directionNorth: "North",
+      directionSouth: "South",
+      directionEast: "East",
+      directionWest: "West",
+      directionNE: "Northeast",
+      directionSE: "Southeast",
+      directionNW: "Northwest",
+      directionSW: "Southwest",
       adsListTitle: "Running ads",
       source: "Source",
       leads: "Leads",
@@ -537,6 +573,9 @@
       todoSaved: "任务已保存",
       todoCompleted: "任务已完成",
       todoSaveFailed: "无法保存任务",
+      todoCreateTitle: "新增任务",
+      todoEditTitle: "编辑任务",
+      todoDeleteTitle: "删除任务",
       noSalesUsers: "当前运营范围内没有可分配的销售人员，请检查团队权限配置。",
       crmCrudTitle: "CRM 数据运营中心",
       crmCrudDesc: "统一维护客户、房源与跟进数据，并实时同步到业务看板。",
@@ -544,6 +583,9 @@
       entityInventory: "房源 / 锁定清单",
       entityActivities: "活动",
       entityTasks: "任务",
+      crudCreateTitle: "新增数据",
+      crudEditTitle: "编辑数据",
+      crudDeleteTitle: "删除数据",
       addNew: "新增",
       edit: "编辑",
       delete: "删除",
@@ -615,6 +657,18 @@
       inventoryFilterDirection: "朝向",
       inventoryFilterBedrooms: "卧室",
       inventoryFilterPrice: "价格区间",
+      activityTypeEmail: "邮件",
+      activityTypeNote: "备注",
+      activityResultPending: "待处理",
+      activityResultCanceled: "已取消",
+      directionNorth: "北",
+      directionSouth: "南",
+      directionEast: "东",
+      directionWest: "西",
+      directionNE: "东北",
+      directionSE: "东南",
+      directionNW: "西北",
+      directionSW: "西南",
       adsListTitle: "运行中的广告",
       source: "来源",
       leads: "线索",
@@ -1812,8 +1866,8 @@
     const Select = antd.Select;
     const Table = antd.Table;
     const Tabs = antd.Tabs;
-    const Popconfirm = antd.Popconfirm;
     const Checkbox = antd.Checkbox;
+      const Modal = antd.Modal;
 
     const [loadingOps, setLoadingOps] = React.useState(false);
     const [submittingAd, setSubmittingAd] = React.useState(false);
@@ -1864,6 +1918,7 @@
       due_at: Date.now() + 24 * 60 * 60 * 1000,
     });
     const [todoSaving, setTodoSaving] = React.useState(false);
+    const [todoModalOpen, setTodoModalOpen] = React.useState(false);
     const [todoOwnerFilter, setTodoOwnerFilter] = React.useState("all");
     const [todoStatusFilter, setTodoStatusFilter] = React.useState("all");
     const [todoPriorityFilter, setTodoPriorityFilter] = React.useState("all");
@@ -1873,6 +1928,7 @@
     const [crudMode, setCrudMode] = React.useState("create");
     const [crudDraft, setCrudDraft] = React.useState({});
     const [crudSaving, setCrudSaving] = React.useState(false);
+      const [crudModalOpen, setCrudModalOpen] = React.useState(false);
     const [projectOptions, setProjectOptions] = React.useState([]);
     const [language, setLanguage] = React.useState(getUILanguage());
     const [themeVersion, setThemeVersion] = React.useState(0);
@@ -2149,6 +2205,7 @@
         reminder_at: 0,
         completed_at: 0,
       });
+      setTodoModalOpen(true);
     }
 
     function openEditTodo(row) {
@@ -2165,6 +2222,7 @@
         reminder_at: toNumber(row?.reminder_at, 0),
         completed_at: toNumber(row?.completed_at, 0),
       });
+      setTodoModalOpen(true);
     }
 
     async function saveTodoTask() {
@@ -2235,12 +2293,34 @@
         }
 
         if (notification?.success) notification.success({ message: translate("todoSaved"), duration: 1.5 });
+        setTodoModalOpen(false);
         if (typeof reloadDatabase === "function") await reloadDatabase();
       } catch (error) {
         if (notification?.error) notification.error({ message: translate("todoSaveFailed"), description: error?.message || translate("unknownError") });
       } finally {
         setTodoSaving(false);
       }
+    }
+
+    function confirmDeleteTodoTask(row) {
+      if (!canManageTask(row)) {
+        if (notification?.warning) notification.warning({ message: translate("permissionDenied") });
+        return;
+      }
+      if (Modal && typeof Modal.confirm === "function") {
+        Modal.confirm({
+          title: translate("todoDeleteTitle"),
+          content: translate("confirmDeleteRecord"),
+          okText: translate("delete"),
+          cancelText: translate("cancel"),
+          okButtonProps: { danger: true },
+          onOk: () => deleteTodoTask(row),
+          className: "crm-dynamic-theme-modal",
+          wrapClassName: "crm-dynamic-theme-modal",
+        });
+        return;
+      }
+      deleteTodoTask(row);
     }
 
     async function completeTodoTask(row) {
@@ -2380,11 +2460,13 @@
     function openCreateEntity() {
       setCrudMode("create");
       setCrudDraft({ ...currentEntity.defaults, id: `${String(crudEntity).toUpperCase()}_${Date.now()}` });
+      setCrudModalOpen(true);
     }
 
     function openEditEntity(row) {
       setCrudMode("edit");
       setCrudDraft({ ...row });
+      setCrudModalOpen(true);
     }
 
     async function saveCrudDraft() {
@@ -2411,6 +2493,7 @@
           where: { [pkField]: id },
         });
 
+        setCrudModalOpen(false);
         if (notification?.success) {
           notification.success({ message: translate("dataSaved"), duration: 1.5 });
         }
@@ -2447,6 +2530,23 @@
           notification.error({ message: translate("dataDeleteFailed"), description: error?.message || translate("unknownError") });
         }
       }
+    }
+
+    function confirmDeleteEntity(row) {
+      if (Modal && typeof Modal.confirm === "function") {
+        Modal.confirm({
+          title: translate("crudDeleteTitle"),
+          content: translate("confirmDeleteRecord"),
+          okText: translate("delete"),
+          cancelText: translate("cancel"),
+          okButtonProps: { danger: true },
+          onOk: () => deleteEntityRow(row),
+          className: "crm-dynamic-theme-modal",
+          wrapClassName: "crm-dynamic-theme-modal",
+        });
+        return;
+      }
+      deleteEntityRow(row);
     }
 
     async function generateAdCopyWithAI() {
@@ -3004,28 +3104,18 @@
         key: "actions",
         width: 160,
         render: (_, row) => {
-          const deleteBtn = React.createElement(Button, {
-            key: `del_${String(row[currentEntity.pkField || "id"] || row.id)}`,
-            danger: true,
-            size: "small",
-            onClick: () => deleteEntityRow(row),
-          }, translate("delete"));
-
           return React.createElement("div", { style: { display: "flex", gap: 6 } }, [
             React.createElement(Button, {
               key: `edit_${String(row[currentEntity.pkField || "id"] || row.id)}`,
               size: "small",
               onClick: () => openEditEntity(row),
             }, translate("edit")),
-            Popconfirm
-              ? React.createElement(Popconfirm, {
-                key: `pc_${String(row[currentEntity.pkField || "id"] || row.id)}`,
-                title: translate("confirmDeleteRecord"),
-                getPopupContainer: resolvePopupContainer,
-                overlayClassName: "crm-dynamic-popover",
-                onConfirm: () => deleteEntityRow(row),
-              }, deleteBtn)
-              : deleteBtn,
+            React.createElement(Button, {
+              key: `del_${String(row[currentEntity.pkField || "id"] || row.id)}`,
+              danger: true,
+              size: "small",
+              onClick: () => confirmDeleteEntity(row),
+            }, translate("delete")),
           ]);
         },
       },
@@ -3218,15 +3308,264 @@
           color: ${themeTokens.text} !important;
           border-color: ${themeTokens.border} !important;
         }
-        .ant-modal,
-        .ant-modal .ant-modal-content,
-        .ant-modal .ant-modal-header,
-        .ant-modal .ant-modal-body,
-        .ant-modal .ant-modal-footer,
-        .ant-modal .ant-modal-title {
+        .crm-dynamic-theme-modal.ant-modal,
+        .crm-dynamic-theme-modal .ant-modal,
+        .crm-dynamic-theme-modal .ant-modal .ant-modal-content,
+        .crm-dynamic-theme-modal.ant-modal .ant-modal-content,
+        .crm-dynamic-theme-modal .ant-modal-content,
+        .crm-dynamic-theme-modal .ant-modal .ant-modal-header,
+        .crm-dynamic-theme-modal.ant-modal .ant-modal-header,
+        .crm-dynamic-theme-modal .ant-modal-header,
+        .crm-dynamic-theme-modal .ant-modal .ant-modal-body,
+        .crm-dynamic-theme-modal.ant-modal .ant-modal-body,
+        .crm-dynamic-theme-modal .ant-modal-body,
+        .crm-dynamic-theme-modal .ant-modal .ant-modal-footer,
+        .crm-dynamic-theme-modal.ant-modal .ant-modal-footer,
+        .crm-dynamic-theme-modal .ant-modal-footer,
+        .crm-dynamic-theme-modal .ant-modal .ant-modal-title,
+        .crm-dynamic-theme-modal.ant-modal .ant-modal-title,
+        .crm-dynamic-theme-modal .ant-modal-title,
+        .crm-dynamic-theme-modal .ant-modal-confirm .ant-modal-confirm-title,
+        .crm-dynamic-theme-modal .ant-modal-confirm .ant-modal-confirm-content,
+        .crm-workspace-theme-modal.ant-modal,
+        .crm-workspace-theme-modal .ant-modal,
+        .crm-workspace-theme-modal .ant-modal .ant-modal-content,
+        .crm-workspace-theme-modal.ant-modal .ant-modal-content,
+        .crm-workspace-theme-modal .ant-modal-content,
+        .crm-workspace-theme-modal .ant-modal .ant-modal-header,
+        .crm-workspace-theme-modal.ant-modal .ant-modal-header,
+        .crm-workspace-theme-modal .ant-modal-header,
+        .crm-workspace-theme-modal .ant-modal .ant-modal-body,
+        .crm-workspace-theme-modal.ant-modal .ant-modal-body,
+        .crm-workspace-theme-modal .ant-modal-body,
+        .crm-workspace-theme-modal .ant-modal .ant-modal-footer,
+        .crm-workspace-theme-modal.ant-modal .ant-modal-footer,
+        .crm-workspace-theme-modal .ant-modal-footer,
+        .crm-workspace-theme-modal .ant-modal .ant-modal-title,
+        .crm-workspace-theme-modal.ant-modal .ant-modal-title,
+        .crm-workspace-theme-modal .ant-modal-title,
+        .crm-workspace-theme-modal .ant-modal-confirm .ant-modal-confirm-title,
+        .crm-workspace-theme-modal .ant-modal-confirm .ant-modal-confirm-content {
           background: ${themeTokens.cardBg} !important;
           color: ${themeTokens.text} !important;
           border-color: ${themeTokens.border} !important;
+        }
+        .crm-dynamic-theme-modal.ant-modal .ant-modal-content,
+        .crm-dynamic-theme-modal .ant-modal .ant-modal-content,
+        .crm-dynamic-theme-modal .ant-modal-content,
+        .crm-workspace-theme-modal.ant-modal .ant-modal-content,
+        .crm-workspace-theme-modal .ant-modal .ant-modal-content,
+        .crm-workspace-theme-modal .ant-modal-content {
+          box-shadow: 0 20px 50px rgba(0, 0, 0, ${themeTokens.isDark ? "0.48" : "0.18"}) !important;
+        }
+        .crm-dynamic-theme-modal.ant-modal-root .ant-modal-mask,
+        .crm-dynamic-theme-modal .ant-modal-root .ant-modal-mask,
+        .crm-workspace-theme-modal.ant-modal-root .ant-modal-mask,
+        .crm-workspace-theme-modal .ant-modal-root .ant-modal-mask,
+        .crm-workspace-theme-modal.ant-modal-wrap + .ant-modal-root .ant-modal-mask,
+        .crm-dynamic-theme-modal.ant-modal-wrap + .ant-modal-root .ant-modal-mask {
+          background: rgba(0, 0, 0, ${themeTokens.isDark ? "0.72" : "0.45"}) !important;
+        }
+        .crm-dynamic-theme-modal .ant-modal .ant-modal-close,
+        .crm-dynamic-theme-modal .ant-modal .ant-modal-close-x,
+        .crm-dynamic-theme-modal.ant-modal .ant-modal-close,
+        .crm-dynamic-theme-modal.ant-modal .ant-modal-close-x,
+        .crm-workspace-theme-modal .ant-modal .ant-modal-close,
+        .crm-workspace-theme-modal .ant-modal .ant-modal-close-x,
+        .crm-workspace-theme-modal.ant-modal .ant-modal-close,
+        .crm-workspace-theme-modal.ant-modal .ant-modal-close-x {
+          color: ${themeTokens.textSecondary} !important;
+        }
+        .crm-dynamic-theme-modal .ant-form-item-label > label,
+        .crm-dynamic-theme-modal .ant-form-item-explain,
+        .crm-dynamic-theme-modal .ant-form-item-extra,
+        .crm-dynamic-theme-modal .ant-typography,
+        .crm-dynamic-theme-modal .ant-spin-text,
+        .crm-workspace-theme-modal .ant-form-item-label > label,
+        .crm-workspace-theme-modal .ant-form-item-explain,
+        .crm-workspace-theme-modal .ant-form-item-extra,
+        .crm-workspace-theme-modal .ant-typography,
+        .crm-workspace-theme-modal .ant-spin-text,
+        .crm-workspace-theme-modal .ant-empty-description {
+          color: ${themeTokens.text} !important;
+        }
+        .crm-dynamic-theme-modal .ant-form-item-label > label,
+        .crm-workspace-theme-modal .ant-form-item-label > label {
+          background: ${themeTokens.isDark ? themeTokens.subtleBg : themeTokens.cardBgMuted} !important;
+          border: 1px solid ${themeTokens.border} !important;
+          border-radius: 8px !important;
+          padding: 2px 8px !important;
+          min-height: 28px !important;
+          display: inline-flex !important;
+          align-items: center !important;
+          line-height: 1.2 !important;
+        }
+        .crm-dynamic-theme-modal .ant-form-item-required::before,
+        .crm-workspace-theme-modal .ant-form-item-required::before {
+          color: ${themeTokens.danger} !important;
+        }
+        .crm-dynamic-theme-modal .ant-input,
+        .crm-dynamic-theme-modal .ant-input-affix-wrapper,
+        .crm-dynamic-theme-modal .ant-input-outlined,
+        .crm-dynamic-theme-modal .ant-input-password,
+        .crm-dynamic-theme-modal .ant-input-textarea,
+        .crm-dynamic-theme-modal .ant-input-number,
+        .crm-dynamic-theme-modal .ant-input-number-input,
+        .crm-dynamic-theme-modal .ant-picker,
+        .crm-dynamic-theme-modal textarea,
+        .crm-dynamic-theme-modal input,
+        .crm-dynamic-theme-modal select,
+        .crm-workspace-theme-modal .ant-input,
+        .crm-workspace-theme-modal .ant-input-affix-wrapper,
+        .crm-workspace-theme-modal .ant-input-outlined,
+        .crm-workspace-theme-modal .ant-input-password,
+        .crm-workspace-theme-modal .ant-input-textarea,
+        .crm-workspace-theme-modal .ant-input-number,
+        .crm-workspace-theme-modal .ant-input-number-input,
+        .crm-workspace-theme-modal .ant-picker,
+        .crm-workspace-theme-modal textarea,
+        .crm-workspace-theme-modal input,
+        .crm-workspace-theme-modal select {
+          background: ${themeTokens.cardBgMuted} !important;
+          color: ${themeTokens.text} !important;
+          border-color: ${themeTokens.border} !important;
+        }
+        .crm-dynamic-theme-modal .ant-input::placeholder,
+        .crm-dynamic-theme-modal textarea::placeholder,
+        .crm-dynamic-theme-modal input::placeholder,
+        .crm-workspace-theme-modal .ant-input::placeholder,
+        .crm-workspace-theme-modal textarea::placeholder,
+        .crm-workspace-theme-modal input::placeholder {
+          color: ${themeTokens.textTertiary} !important;
+        }
+        .crm-dynamic-theme-modal .ant-select .ant-select-selector,
+        .crm-dynamic-theme-modal .ant-select-single:not(.ant-select-customize-input) .ant-select-selector,
+        .crm-workspace-theme-modal .ant-select .ant-select-selector,
+        .crm-workspace-theme-modal .ant-select-single:not(.ant-select-customize-input) .ant-select-selector {
+          background: ${themeTokens.cardBgMuted} !important;
+          color: ${themeTokens.text} !important;
+          border-color: ${themeTokens.border} !important;
+        }
+        .crm-dynamic-theme-modal .ant-select .ant-select-selection-placeholder,
+        .crm-dynamic-theme-modal .ant-select .ant-select-selection-item,
+        .crm-workspace-theme-modal .ant-select .ant-select-selection-placeholder,
+        .crm-workspace-theme-modal .ant-select .ant-select-selection-item,
+        .crm-workspace-theme-modal .ant-picker-input > input,
+        .crm-workspace-theme-modal .ant-input-number-input,
+        .crm-dynamic-theme-modal .ant-picker-input > input,
+        .crm-dynamic-theme-modal .ant-input-number-input {
+          color: ${themeTokens.text} !important;
+        }
+        .crm-dynamic-theme-modal .ant-select-arrow,
+        .crm-dynamic-theme-modal .ant-select-clear,
+        .crm-dynamic-theme-modal .ant-picker-suffix,
+        .crm-dynamic-theme-modal .ant-picker-clear,
+        .crm-dynamic-theme-modal .ant-input-password-icon,
+        .crm-workspace-theme-modal .ant-select-arrow,
+        .crm-workspace-theme-modal .ant-select-clear,
+        .crm-workspace-theme-modal .ant-picker-suffix,
+        .crm-workspace-theme-modal .ant-picker-clear,
+        .crm-workspace-theme-modal .ant-input-password-icon {
+          color: ${themeTokens.textSecondary} !important;
+        }
+        .crm-dynamic-theme-modal .ant-select-open .ant-select-selection-item,
+        .crm-workspace-theme-modal .ant-select-open .ant-select-selection-item {
+          color: ${themeTokens.text} !important;
+        }
+        .crm-dynamic-theme-modal .ant-input-number-handler-wrap,
+        .crm-workspace-theme-modal .ant-input-number-handler-wrap {
+          background: ${themeTokens.cardBg} !important;
+          border-inline-start: 1px solid ${themeTokens.border} !important;
+        }
+        .crm-dynamic-theme-modal .ant-input-number-handler,
+        .crm-workspace-theme-modal .ant-input-number-handler {
+          border-color: ${themeTokens.border} !important;
+        }
+        .crm-dynamic-theme-modal .ant-btn-default,
+        .crm-dynamic-theme-modal .ant-btn-dashed,
+        .crm-dynamic-theme-modal .ant-btn-text,
+        .crm-workspace-theme-modal .ant-btn-default,
+        .crm-workspace-theme-modal .ant-btn-dashed,
+        .crm-workspace-theme-modal .ant-btn-text {
+          background: ${themeTokens.cardBgMuted} !important;
+          color: ${themeTokens.text} !important;
+          border-color: ${themeTokens.border} !important;
+        }
+        .crm-dynamic-theme-modal .ant-btn-default:hover,
+        .crm-dynamic-theme-modal .ant-btn-dashed:hover,
+        .crm-dynamic-theme-modal .ant-btn-text:hover,
+        .crm-workspace-theme-modal .ant-btn-default:hover,
+        .crm-workspace-theme-modal .ant-btn-dashed:hover,
+        .crm-workspace-theme-modal .ant-btn-text:hover {
+          background: ${themeTokens.subtleBg} !important;
+          color: ${themeTokens.text} !important;
+          border-color: ${themeTokens.primary} !important;
+        }
+        .crm-dynamic-theme-modal .ant-btn-color-primary,
+        .crm-workspace-theme-modal .ant-btn-color-primary {
+          color: ${themeTokens.isDark ? "#0b1220" : "#ffffff"} !important;
+        }
+        .crm-dynamic-theme-modal .ant-btn[disabled],
+        .crm-dynamic-theme-modal .ant-btn:disabled,
+        .crm-workspace-theme-modal .ant-btn[disabled],
+        .crm-workspace-theme-modal .ant-btn:disabled,
+        .crm-dynamic-theme-modal .ant-input[disabled],
+        .crm-dynamic-theme-modal .ant-input-affix-wrapper-disabled,
+        .crm-dynamic-theme-modal .ant-picker.ant-picker-disabled,
+        .crm-dynamic-theme-modal .ant-input-number-disabled,
+        .crm-workspace-theme-modal .ant-input[disabled],
+        .crm-workspace-theme-modal .ant-input-affix-wrapper-disabled,
+        .crm-workspace-theme-modal .ant-picker.ant-picker-disabled,
+        .crm-workspace-theme-modal .ant-input-number-disabled,
+        .crm-dynamic-theme-modal .ant-select-disabled .ant-select-selector,
+        .crm-workspace-theme-modal .ant-select-disabled .ant-select-selector {
+          background: ${themeTokens.subtleBg} !important;
+          color: ${themeTokens.textSecondary} !important;
+          border-color: ${themeTokens.border} !important;
+          opacity: 1 !important;
+        }
+        .crm-dynamic-theme-modal input:-webkit-autofill,
+        .crm-dynamic-theme-modal input:-webkit-autofill:hover,
+        .crm-dynamic-theme-modal input:-webkit-autofill:focus,
+        .crm-workspace-theme-modal input:-webkit-autofill,
+        .crm-workspace-theme-modal input:-webkit-autofill:hover,
+        .crm-workspace-theme-modal input:-webkit-autofill:focus {
+          -webkit-text-fill-color: ${themeTokens.text} !important;
+          -webkit-box-shadow: 0 0 0 1000px ${themeTokens.cardBgMuted} inset !important;
+          transition: background-color 9999s ease-in-out 0s !important;
+        }
+        .crm-dynamic-theme-modal .ant-select-dropdown,
+        .crm-dynamic-theme-modal .ant-select-item,
+        .crm-dynamic-theme-modal .ant-select-item-option-content,
+        .crm-dynamic-theme-modal .ant-select-item-empty,
+        .crm-dynamic-theme-modal .ant-picker-dropdown .ant-picker-panel-container,
+        .crm-dynamic-theme-modal .ant-picker-panel,
+        .crm-dynamic-theme-modal .ant-picker-header,
+        .crm-dynamic-theme-modal .ant-picker-content th,
+        .crm-dynamic-theme-modal .ant-picker-cell,
+        .crm-dynamic-theme-modal .ant-picker-cell-inner,
+        .crm-workspace-theme-modal .ant-select-dropdown,
+        .crm-workspace-theme-modal .ant-select-item,
+        .crm-workspace-theme-modal .ant-select-item-option-content,
+        .crm-workspace-theme-modal .ant-select-item-empty,
+        .crm-workspace-theme-modal .ant-picker-dropdown .ant-picker-panel-container,
+        .crm-workspace-theme-modal .ant-picker-panel,
+        .crm-workspace-theme-modal .ant-picker-header,
+        .crm-workspace-theme-modal .ant-picker-content th,
+        .crm-workspace-theme-modal .ant-picker-cell,
+        .crm-workspace-theme-modal .ant-picker-cell-inner {
+          background: ${themeTokens.cardBg} !important;
+          color: ${themeTokens.text} !important;
+          border-color: ${themeTokens.border} !important;
+        }
+        .crm-dynamic-theme-modal .ant-select-item-option-active:not(.ant-select-item-option-disabled),
+        .crm-dynamic-theme-modal .ant-select-item-option-selected:not(.ant-select-item-option-disabled),
+        .crm-workspace-theme-modal .ant-select-item-option-active:not(.ant-select-item-option-disabled),
+        .crm-workspace-theme-modal .ant-select-item-option-selected:not(.ant-select-item-option-disabled),
+        .crm-dynamic-theme-modal .ant-picker-cell-in-view.ant-picker-cell-selected .ant-picker-cell-inner,
+        .crm-workspace-theme-modal .ant-picker-cell-in-view.ant-picker-cell-selected .ant-picker-cell-inner {
+          background: ${themeTokens.subtleBg} !important;
+          color: ${themeTokens.text} !important;
         }
         .crm-dynamic-theme .ant-input,
         .crm-dynamic-theme .ant-input-affix-wrapper,
@@ -3736,6 +4075,7 @@
                 setCrudEntity(value);
                 setCrudMode("create");
                 setCrudDraft({});
+                setCrudModalOpen(false);
               },
             })
             : React.createElement("input", {
@@ -3748,13 +4088,22 @@
             size: "small",
             onClick: openCreateEntity,
           }, translate("addNew")),
-          React.createElement(Button, {
-            key: "crud_save",
-            type: "primary",
-            size: "small",
-            loading: crudSaving,
-            onClick: saveCrudDraft,
-          }, translate("save")),
+          !Modal && crudModalOpen
+            ? React.createElement(Button, {
+              key: "crud_save_inline",
+              type: "primary",
+              size: "small",
+              loading: crudSaving,
+              onClick: saveCrudDraft,
+            }, translate("save"))
+            : null,
+          !Modal && crudModalOpen
+            ? React.createElement(Button, {
+              key: "crud_cancel_inline",
+              size: "small",
+              onClick: () => setCrudModalOpen(false),
+            }, translate("cancel"))
+            : null,
           React.createElement(Button, {
             key: "crud_sync",
             size: "small",
@@ -3764,6 +4113,19 @@
             },
           }, translate("reloadCrmNow")),
         ]),
+        crudModalOpen ? React.createElement(Modal || "div", {
+          key: "crud-editor-modal",
+          open: crudModalOpen,
+          title: crudMode === "create" ? translate("crudCreateTitle") : translate("crudEditTitle"),
+          onCancel: () => setCrudModalOpen(false),
+          onOk: saveCrudDraft,
+          okText: translate("save"),
+          cancelText: translate("cancel"),
+          confirmLoading: crudSaving,
+          destroyOnClose: true,
+          className: "crm-dynamic-theme-modal",
+          wrapClassName: "crm-dynamic-theme-modal",
+        }, [
         React.createElement("div", {
           key: "crud-editor-grid",
           style: {
@@ -3804,8 +4166,138 @@
                 { value: "website", label: translate("sourceWebsite") },
                 { value: "sales_self", label: translate("sourceSalesSelf") },
                 { value: "external_floor", label: translate("sourceExternalFloor") },
+                { value: "other", label: translate("sourceOther") },
               ],
               onChange: (nextValue) => setDraftField(field, nextValue || "sales_self"),
+            });
+          }
+          if (field === "status" && Select) {
+            let statusOptions;
+            if (crudEntity === "leads") {
+              statusOptions = [
+                { value: "lead", label: translate("pipelineLead") },
+                { value: "contacted", label: translate("pipelineContacted") },
+                { value: "visit", label: translate("pipelineVisit") },
+                { value: "booking", label: translate("pipelineBooking") },
+                { value: "contract", label: translate("pipelineContract") },
+                { value: "after_sale", label: translate("pipelineAfterSale") },
+              ];
+            } else if (crudEntity === "inventory") {
+              statusOptions = [
+                { value: "available", label: translate("inventoryAvailable") },
+                { value: "booking", label: translate("inventoryBooking") },
+                { value: "sold", label: translate("inventorySold") },
+              ];
+            } else {
+              statusOptions = [
+                { value: "todo", label: translate("statusTodo") },
+                { value: "in_progress", label: translate("statusInProgress") },
+                { value: "done", label: translate("statusDone") },
+              ];
+            }
+            return React.createElement(Select, {
+              key: `crud_field_${field}`,
+              getPopupContainer: resolvePopupContainer,
+              popupClassName: "crm-dynamic-popup",
+              dropdownClassName: "crm-dynamic-popup",
+              size: "small",
+              value: value || statusOptions[0].value,
+              options: statusOptions,
+              onChange: (nextValue) => setDraftField(field, nextValue || statusOptions[0].value),
+            });
+          }
+          if (field === "priority" && Select) {
+            return React.createElement(Select, {
+              key: `crud_field_${field}`,
+              getPopupContainer: resolvePopupContainer,
+              popupClassName: "crm-dynamic-popup",
+              dropdownClassName: "crm-dynamic-popup",
+              size: "small",
+              value: value || "medium",
+              options: [
+                { value: "low", label: translate("priorityLow") },
+                { value: "medium", label: translate("priorityMedium") },
+                { value: "high", label: translate("priorityHigh") },
+                { value: "urgent", label: translate("priorityUrgent") },
+              ],
+              onChange: (nextValue) => setDraftField(field, nextValue || "medium"),
+            });
+          }
+          if (field === "task_type" && Select) {
+            return React.createElement(Select, {
+              key: `crud_field_${field}`,
+              getPopupContainer: resolvePopupContainer,
+              popupClassName: "crm-dynamic-popup",
+              dropdownClassName: "crm-dynamic-popup",
+              size: "small",
+              value: value || "follow_up",
+              options: [
+                { value: "follow_up", label: translate("taskTypeFollowUp") },
+                { value: "call", label: translate("taskTypeCall") },
+                { value: "meeting", label: translate("taskTypeMeeting") },
+                { value: "visit", label: translate("taskTypeVisit") },
+                { value: "paperwork", label: translate("taskTypePaperwork") },
+                { value: "other", label: translate("taskTypeOther") },
+              ],
+              onChange: (nextValue) => setDraftField(field, nextValue || "follow_up"),
+            });
+          }
+          if (field === "activity_type" && Select) {
+            return React.createElement(Select, {
+              key: `crud_field_${field}`,
+              getPopupContainer: resolvePopupContainer,
+              popupClassName: "crm-dynamic-popup",
+              dropdownClassName: "crm-dynamic-popup",
+              size: "small",
+              value: value || "call",
+              options: [
+                { value: "call", label: translate("taskTypeCall") },
+                { value: "meeting", label: translate("taskTypeMeeting") },
+                { value: "visit", label: translate("taskTypeVisit") },
+                { value: "email", label: translate("activityTypeEmail") },
+                { value: "note", label: translate("activityTypeNote") },
+                { value: "other", label: translate("taskTypeOther") },
+              ],
+              onChange: (nextValue) => setDraftField(field, nextValue || "call"),
+            });
+          }
+          if (field === "result" && Select && crudEntity === "activities") {
+            return React.createElement(Select, {
+              key: `crud_field_${field}`,
+              getPopupContainer: resolvePopupContainer,
+              popupClassName: "crm-dynamic-popup",
+              dropdownClassName: "crm-dynamic-popup",
+              size: "small",
+              value: value || "pending",
+              options: [
+                { value: "pending", label: translate("activityResultPending") },
+                { value: "done", label: translate("statusDone") },
+                { value: "canceled", label: translate("activityResultCanceled") },
+              ],
+              onChange: (nextValue) => setDraftField(field, nextValue || "pending"),
+            });
+          }
+          if (field === "direction" && Select) {
+            return React.createElement(Select, {
+              key: `crud_field_${field}`,
+              getPopupContainer: resolvePopupContainer,
+              popupClassName: "crm-dynamic-popup",
+              dropdownClassName: "crm-dynamic-popup",
+              size: "small",
+              allowClear: true,
+              placeholder: getFieldLabel(field),
+              value: value || undefined,
+              options: [
+                { value: "N", label: translate("directionNorth") },
+                { value: "S", label: translate("directionSouth") },
+                { value: "E", label: translate("directionEast") },
+                { value: "W", label: translate("directionWest") },
+                { value: "NE", label: translate("directionNE") },
+                { value: "SE", label: translate("directionSE") },
+                { value: "NW", label: translate("directionNW") },
+                { value: "SW", label: translate("directionSW") },
+              ],
+              onChange: (nextValue) => setDraftField(field, nextValue || ""),
             });
           }
           return React.createElement(Input, {
@@ -3816,6 +4308,7 @@
             onChange: (event) => setDraftField(field, isNumeric ? toNumber(event.target.value, 0) : event.target.value),
           });
         })),
+        ]) : null,
         Table
           ? React.createElement(Table, {
             key: "crud-table",
@@ -3936,14 +4429,36 @@
             size: "small",
             onClick: openCreateTodo,
           }, translate("addNew")),
-          React.createElement(Button, {
-            key: "todo_save",
-            type: "primary",
-            size: "small",
-            loading: todoSaving,
-            onClick: saveTodoTask,
-          }, translate("save")),
+          !Modal && todoModalOpen
+            ? React.createElement(Button, {
+              key: "todo_save_inline",
+              type: "primary",
+              size: "small",
+              loading: todoSaving,
+              onClick: saveTodoTask,
+            }, translate("save"))
+            : null,
+          !Modal && todoModalOpen
+            ? React.createElement(Button, {
+              key: "todo_cancel_inline",
+              size: "small",
+              onClick: () => setTodoModalOpen(false),
+            }, translate("cancel"))
+            : null,
         ]),
+        todoModalOpen ? React.createElement(Modal || "div", {
+          key: "todo-editor-modal",
+          open: todoModalOpen,
+          title: todoMode === "create" ? translate("todoCreateTitle") : translate("todoEditTitle"),
+          onCancel: () => setTodoModalOpen(false),
+          onOk: saveTodoTask,
+          okText: translate("save"),
+          cancelText: translate("cancel"),
+          confirmLoading: todoSaving,
+          destroyOnClose: true,
+          className: "crm-dynamic-theme-modal",
+          wrapClassName: "crm-dynamic-theme-modal",
+        }, [
         React.createElement("div", {
           key: "todo-editor-grid",
           style: {
@@ -4046,6 +4561,7 @@
             onChange: (event) => setTodoDraft((prev) => ({ ...prev, reminder_at: toNumber(event.target.value, 0) })),
           }),
         ]),
+        ]) : null,
         Table
           ? React.createElement(Table, {
             key: "todo-table",
@@ -4124,27 +4640,13 @@
                       onClick: () => completeTodoTask(row),
                     }, translate("markDone"))
                     : null,
-                  Popconfirm
-                    ? React.createElement(Popconfirm, {
-                      key: `todo_del_pc_${row.id}`,
-                      title: translate("confirmDeleteRecord"),
-                      getPopupContainer: resolvePopupContainer,
-                      overlayClassName: "crm-dynamic-popover",
-                      disabled: !canManageTask(row),
-                      onConfirm: () => deleteTodoTask(row),
-                    }, React.createElement(Button, {
-                      key: `todo_del_${row.id}`,
-                      size: "small",
-                      danger: true,
-                      disabled: !canManageTask(row),
-                    }, translate("delete")))
-                    : React.createElement(Button, {
-                      key: `todo_del_${row.id}`,
-                      size: "small",
-                      danger: true,
-                      disabled: !canManageTask(row),
-                      onClick: () => deleteTodoTask(row),
-                    }, translate("delete")),
+                  React.createElement(Button, {
+                    key: `todo_del_${row.id}`,
+                    size: "small",
+                    danger: true,
+                    disabled: !canManageTask(row),
+                    onClick: () => confirmDeleteTodoTask(row),
+                  }, translate("delete")),
                 ]),
               },
             ],

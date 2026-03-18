@@ -254,6 +254,7 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 	const { i18n } = useTranslation();
 	const { token } = theme.useToken();
 	const user = useUserStore();
+	const resolvePopupContainer = useCallback((node?: HTMLElement) => node?.parentElement || document.body, []);
 	const language = useMemo<CrmLocale>(() => normalizeCrmLanguage(i18n.language), [i18n.language]);
 	const localeCode = language === "en" ? "en-US" : language === "zh" ? "zh-CN" : "vi-VN";
 	const text = useMemo(() => {
@@ -514,6 +515,81 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 		.crm-workspace-theme textarea::placeholder,
 		.crm-workspace-theme .ant-select-selection-placeholder {
 			color: ${(token as any).colorTextTertiary || token.colorTextSecondary};
+		}
+		.crm-workspace-theme-modal .ant-modal-content,
+		.crm-workspace-theme-modal .ant-modal-header,
+		.crm-workspace-theme-modal .ant-modal-body,
+		.crm-workspace-theme-modal .ant-modal-footer,
+		.crm-workspace-theme-modal .ant-modal-title,
+		.crm-workspace-theme-modal .ant-typography,
+		.crm-workspace-theme-modal .ant-form-item-label > label,
+		.crm-workspace-theme-modal .ant-form-item-explain,
+		.crm-workspace-theme-modal .ant-form-item-extra {
+			background: ${token.colorBgContainer};
+			color: ${token.colorText};
+			border-color: ${token.colorBorder};
+		}
+		.crm-workspace-theme-modal .ant-modal-content {
+			box-shadow: ${token.boxShadowSecondary};
+		}
+		.crm-workspace-theme-modal .ant-modal-close,
+		.crm-workspace-theme-modal .ant-modal-close-x {
+			color: ${token.colorTextSecondary};
+		}
+		.crm-workspace-theme-modal .ant-input,
+		.crm-workspace-theme-modal .ant-input-affix-wrapper,
+		.crm-workspace-theme-modal .ant-input-number,
+		.crm-workspace-theme-modal .ant-input-number-input,
+		.crm-workspace-theme-modal .ant-select-selector,
+		.crm-workspace-theme-modal .ant-picker,
+		.crm-workspace-theme-modal textarea {
+			background: ${(token as any).colorFillSecondary || token.colorBgContainer};
+			color: ${token.colorText};
+			border-color: ${token.colorBorder};
+		}
+		.crm-workspace-theme-modal .ant-input::placeholder,
+		.crm-workspace-theme-modal textarea::placeholder,
+		.crm-workspace-theme-modal .ant-select-selection-placeholder {
+			color: ${(token as any).colorTextTertiary || token.colorTextSecondary};
+		}
+		.crm-workspace-theme-modal .ant-select-selection-item,
+		.crm-workspace-theme-modal .ant-picker-input > input,
+		.crm-workspace-theme-modal .ant-input-number-input {
+			color: ${token.colorText};
+		}
+		.crm-workspace-theme-modal .ant-btn-default,
+		.crm-workspace-theme-modal .ant-btn-dashed,
+		.crm-workspace-theme-modal .ant-btn-text {
+			background: ${(token as any).colorFillSecondary || token.colorBgContainer};
+			color: ${token.colorText};
+			border-color: ${token.colorBorder};
+		}
+		.crm-workspace-theme-modal .ant-btn-default:hover,
+		.crm-workspace-theme-modal .ant-btn-dashed:hover,
+		.crm-workspace-theme-modal .ant-btn-text:hover {
+			background: ${(token as any).colorFillTertiary || token.colorBgContainer};
+			color: ${token.colorText};
+			border-color: ${(token as any).colorPrimaryBorder || token.colorPrimary};
+		}
+		.crm-workspace-theme-modal .ant-select-dropdown,
+		.crm-workspace-theme-modal .ant-select-item,
+		.crm-workspace-theme-modal .ant-picker-dropdown .ant-picker-panel-container,
+		.crm-workspace-theme-modal .ant-picker-panel,
+		.crm-workspace-theme-modal .ant-picker-header,
+		.crm-workspace-theme-modal .ant-picker-content th,
+		.crm-workspace-theme-modal .ant-picker-cell,
+		.crm-workspace-theme-modal .ant-picker-cell-inner {
+			background: ${token.colorBgContainer};
+			color: ${token.colorText};
+			border-color: ${token.colorBorder};
+		}
+		.crm-workspace-theme-modal .ant-select-item-option-active:not(.ant-select-item-option-disabled),
+		.crm-workspace-theme-modal .ant-select-item-option-selected:not(.ant-select-item-option-disabled),
+		.crm-workspace-theme-modal .ant-picker-cell-in-view.ant-picker-cell-selected .ant-picker-cell-inner,
+		.crm-workspace-theme-modal .ant-picker-cell-in-view.ant-picker-cell-range-start .ant-picker-cell-inner,
+		.crm-workspace-theme-modal .ant-picker-cell-in-view.ant-picker-cell-range-end .ant-picker-cell-inner {
+			background: ${(token as any).colorPrimaryBg || token.colorBgElevated};
+			color: ${token.colorText};
 		}
 	`, [token]);
 	const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
@@ -1643,10 +1719,13 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 				onOk={createActivity}
 				confirmLoading={saving}
 				title={text.activityModalTitle}
+				className="crm-workspace-theme-modal"
+				wrapClassName="crm-workspace-theme-modal"
 			>
 				<Form form={activityForm} layout="vertical" initialValues={{ lead_id: selectedLead ? getPrimaryKey(selectedLead, leadSource) : undefined, phone: selectedLead?.[leadPhoneField], activity_type: activityTypes[0], result: activitySource?.appointmentSuccessValue || "success", scheduled_at: dayjs() }}>
 					<Form.Item name="lead_id" label={text.leadLabel} rules={[{ required: true, message: text.chooseLead }]}>
 						<Select
+							getPopupContainer={resolvePopupContainer}
 							showSearch
 							optionFilterProp="label"
 							options={visibleLeadRows.map((row) => ({ label: `${row[leadTitleField] || text.lead} - ${maskPhone(row)}`, value: getPrimaryKey(row, leadSource) }))}
@@ -1654,13 +1733,13 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 					</Form.Item>
 					<Form.Item name="phone" hidden><Input /></Form.Item>
 					<Form.Item name="activity_type" label={text.activityType} rules={[{ required: true, message: text.chooseActivityType }]}>
-						<Select options={activityTypes.map((type) => ({ label: type, value: type }))} />
+						<Select getPopupContainer={resolvePopupContainer} options={activityTypes.map((type) => ({ label: type, value: type }))} />
 					</Form.Item>
 					<Form.Item name="scheduled_at" label={text.time} rules={[{ required: true, message: text.chooseTime }]}>
-						<DatePicker showTime style={{ width: "100%" }} format="DD/MM/YYYY HH:mm" />
+						<DatePicker getPopupContainer={resolvePopupContainer} showTime style={{ width: "100%" }} format="DD/MM/YYYY HH:mm" />
 					</Form.Item>
 					<Form.Item name="result" label={text.result}>
-						<Select options={[{ label: "success", value: "success" }, { label: "pending", value: "pending" }, { label: "failed", value: "failed" }]} />
+						<Select getPopupContainer={resolvePopupContainer} options={[{ label: "success", value: "success" }, { label: "pending", value: "pending" }, { label: "failed", value: "failed" }]} />
 					</Form.Item>
 					<Form.Item name="notes" label={text.notes} rules={[{ required: true, message: text.enterNotes }]}>
 						<Input.TextArea rows={4} placeholder={text.enterNotes} />
@@ -1674,10 +1753,13 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 				onOk={createTask}
 				confirmLoading={saving}
 				title={text.taskModalTitle}
+				className="crm-workspace-theme-modal"
+				wrapClassName="crm-workspace-theme-modal"
 			>
 				<Form form={taskForm} layout="vertical" initialValues={{ lead_id: selectedLead ? getPrimaryKey(selectedLead, leadSource) : undefined, status: taskStatuses[0], due_at: dayjs().add(1, "day") }}>
 					<Form.Item name="lead_id" label={text.leadLabel} rules={[{ required: true, message: text.chooseLead }]}>
 						<Select
+							getPopupContainer={resolvePopupContainer}
 							showSearch
 							optionFilterProp="label"
 							options={visibleLeadRows.map((row) => ({ label: `${row[leadTitleField] || text.lead} - ${row[leadProjectField] || ""}`, value: getPrimaryKey(row, leadSource) }))}
@@ -1687,10 +1769,10 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 						<Input placeholder={text.enterTaskTitle} />
 					</Form.Item>
 					<Form.Item name="status" label={text.status}>
-						<Select options={taskStatuses.map((status) => ({ label: status, value: status }))} />
+						<Select getPopupContainer={resolvePopupContainer} options={taskStatuses.map((status) => ({ label: status, value: status }))} />
 					</Form.Item>
 					<Form.Item name="due_at" label={text.dueAt} rules={[{ required: true, message: text.chooseDueAt }]}> 
-						<DatePicker showTime style={{ width: "100%" }} format="DD/MM/YYYY HH:mm" />
+						<DatePicker getPopupContainer={resolvePopupContainer} showTime style={{ width: "100%" }} format="DD/MM/YYYY HH:mm" />
 					</Form.Item>
 				</Form>
 			</Modal>
@@ -1703,6 +1785,8 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 				confirmLoading={saving}
 				title={editingLead ? text.editLead : text.addLead}
 				width={640}
+				className="crm-workspace-theme-modal"
+				wrapClassName="crm-workspace-theme-modal"
 			>
 				<Spin spinning={saving}>
 					<Form form={leadForm} layout="vertical">
@@ -1719,7 +1803,7 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 							</Col>
 							<Col xs={24} md={12}>
 								<Form.Item name={leadSource?.sourceField || "source"} label={text.sourceLead}>
-									<Select options={[
+									<Select getPopupContainer={resolvePopupContainer} options={[
 										{ value: "facebook", label: "Facebook" },
 										{ value: "google", label: "Google" },
 										{ value: "website", label: "Website" },
@@ -1731,7 +1815,7 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 							</Col>
 							<Col xs={24} md={12}>
 								<Form.Item name={leadStatusField} label={text.status}>
-									<Select options={pipelineStages.map((stage) => ({ label: stage.label, value: stage.id }))} />
+									<Select getPopupContainer={resolvePopupContainer} options={pipelineStages.map((stage) => ({ label: stage.label, value: stage.id }))} />
 								</Form.Item>
 							</Col>
 							<Col xs={24} md={12}>
@@ -1772,6 +1856,8 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 				confirmLoading={saving}
 				title={editingInventory ? text.editInventory : text.addInventory}
 				width={640}
+				className="crm-workspace-theme-modal"
+				wrapClassName="crm-workspace-theme-modal"
 			>
 				<Spin spinning={saving}>
 					<Form form={inventoryForm} layout="vertical">
@@ -1793,7 +1879,7 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 							</Col>
 							<Col xs={24} md={12}>
 								<Form.Item name={inventorySource?.statusField || "status"} label={text.status}>
-									<Select options={inventoryStatuses.map((item) => ({ label: item.label, value: item.id }))} />
+									<Select getPopupContainer={resolvePopupContainer} options={inventoryStatuses.map((item) => ({ label: item.label, value: item.id }))} />
 								</Form.Item>
 							</Col>
 							<Col xs={24} md={12}>
