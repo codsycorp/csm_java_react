@@ -1932,6 +1932,10 @@
     const [projectOptions, setProjectOptions] = React.useState([]);
     const [language, setLanguage] = React.useState(getUILanguage());
     const [themeVersion, setThemeVersion] = React.useState(0);
+    const [onboardingOpen, setOnboardingOpen] = React.useState(false);
+    const [onboardingStepIndex, setOnboardingStepIndex] = React.useState(0);
+
+    const onboardingStorageKey = React.useMemo(() => `crm_dynamic_onboarding_seen:${appId}`, []);
 
     function normalizePageId(value) {
       return String(value || "").trim();
@@ -1954,13 +1958,86 @@
     }
 
     React.useEffect(() => {
-      const syncLanguage = (event) => setLanguage(normalizeUILanguage(event?.detail?.language || getUILanguage()));
+      const syncLanguage = (event) => {
+        const nextLanguage = normalizeUILanguage(event?.detail?.language || getUILanguage());
+        setLanguage((prev) => (prev === nextLanguage ? prev : nextLanguage));
+      };
       const syncTheme = () => setThemeVersion((current) => current + 1);
+      const handleStorage = (event) => {
+        const key = String(event?.key || "");
+        if (["language", "i18nextLng"].includes(key)) {
+          syncLanguage();
+        }
+        if (["theme", "theme_mode"].includes(key)) {
+          syncTheme();
+        }
+      };
+      const handleVisibilityOrFocus = () => {
+        syncLanguage();
+        syncTheme();
+      };
+
+      // Keep UI synced even when global settings are changed outside this screen.
       window.addEventListener("csm:locale-change", syncLanguage);
       window.addEventListener("csm:theme-change", syncTheme);
+      window.addEventListener("storage", handleStorage);
+      window.addEventListener("focus", handleVisibilityOrFocus);
+      document.addEventListener("visibilitychange", handleVisibilityOrFocus);
+
+      const html = document.documentElement;
+      const body = document.body;
+      const mutationObserver = new MutationObserver((mutations) => {
+        let shouldSyncLanguage = false;
+        let shouldSyncTheme = false;
+        for (let i = 0; i < mutations.length; i += 1) {
+          const attr = String(mutations[i]?.attributeName || "");
+          if (attr === "lang") shouldSyncLanguage = true;
+          if (attr === "data-theme" || attr === "theme" || attr === "class") shouldSyncTheme = true;
+        }
+        if (shouldSyncLanguage) syncLanguage();
+        if (shouldSyncTheme) syncTheme();
+      });
+
+      if (html) mutationObserver.observe(html, { attributes: true, attributeFilter: ["lang", "data-theme", "theme", "class"] });
+      if (body) mutationObserver.observe(body, { attributes: true, attributeFilter: ["data-theme", "theme", "class"] });
+
+      let mediaQuery = null;
+      let onSystemThemeChange = null;
+      try {
+        if (window.matchMedia) {
+          mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+          onSystemThemeChange = () => syncTheme();
+          if (typeof mediaQuery.addEventListener === "function") {
+            mediaQuery.addEventListener("change", onSystemThemeChange);
+          } else if (typeof mediaQuery.addListener === "function") {
+            mediaQuery.addListener(onSystemThemeChange);
+          }
+        }
+      } catch {
+        // Ignore listener setup issues in constrained runtimes.
+      }
+
+      syncLanguage();
+      syncTheme();
+
       return () => {
         window.removeEventListener("csm:locale-change", syncLanguage);
         window.removeEventListener("csm:theme-change", syncTheme);
+        window.removeEventListener("storage", handleStorage);
+        window.removeEventListener("focus", handleVisibilityOrFocus);
+        document.removeEventListener("visibilitychange", handleVisibilityOrFocus);
+        mutationObserver.disconnect();
+        try {
+          if (mediaQuery && onSystemThemeChange) {
+            if (typeof mediaQuery.removeEventListener === "function") {
+              mediaQuery.removeEventListener("change", onSystemThemeChange);
+            } else if (typeof mediaQuery.removeListener === "function") {
+              mediaQuery.removeListener(onSystemThemeChange);
+            }
+          }
+        } catch {
+          // Ignore listener cleanup issues in constrained runtimes.
+        }
       };
     }, []);
 
@@ -1978,6 +2055,128 @@
       const rows = (database[taskTableName] && database[taskTableName].rows) || [];
       return Array.isArray(rows) ? rows : [];
     }, [database, taskTableName]);
+    const inventoryRows = React.useMemo(() => {
+      const rows = (database[crmConfig.dataSources.inventory.tableName] && database[crmConfig.dataSources.inventory.tableName].rows) || [];
+      return Array.isArray(rows) ? rows : [];
+    }, [database]);
+    const activityRows = React.useMemo(() => {
+      const rows = (database[crmConfig.dataSources.activities.tableName] && database[crmConfig.dataSources.activities.tableName].rows) || [];
+      return Array.isArray(rows) ? rows : [];
+    }, [database]);
+
+    React.useEffect(() => {
+      let seen = false;
+      try {
+        seen = localStorage.getItem(onboardingStorageKey) === "1";
+      } catch {
+        seen = false;
+      }
+      if (!seen) setOnboardingOpen(true);
+    }, [onboardingStorageKey]);
+
+    const workflowTextMap = React.useMemo(() => ({
+      vi: {
+        title: "Checklist quy trình",
+        subtitle: "Thực hiện đúng thứ tự để vận hành CRM ổn định mỗi ngày",
+        progress: "Tiến độ",
+        done: "Hoàn thành",
+        pending: "Chưa hoàn thành",
+        open: "Mở",
+        openTour: "Xem lại hướng dẫn",
+        skip: "Bỏ qua",
+        previous: "Bước trước",
+        next: "Bước tiếp",
+        finish: "Kết thúc",
+        gotoStep: "Đi đến màn hình",
+        completionRule: "Điều kiện hoàn thành",
+        steps: [
+          { id: "data", tab: "data", title: "1. Khởi tạo dữ liệu nền", desc: "Tạo dữ liệu tối thiểu trong Data Center: lead + sản phẩm.", criteria: "Cần ít nhất 1 lead và 1 inventory." },
+          { id: "pipeline", tab: "crm", title: "2. Vận hành pipeline", desc: "Vào CRM Workspace, kiểm tra lead theo stage và thông tin giá trị.", criteria: "Hệ thống có lead đang tồn tại." },
+          { id: "activities", tab: "crm", title: "3. Ghi nhận hoạt động", desc: "Log call/meeting để lưu lịch sử tương tác với lead.", criteria: "Cần ít nhất 1 bản ghi activity." },
+          { id: "tasks", tab: "sales", title: "4. Giao việc đội sales", desc: "Tạo task, gán owner và hạn xử lý để tránh bỏ sót việc.", criteria: "Cần ít nhất 1 task được tạo." },
+          { id: "marketing", tab: "marketing", title: "5. Tạo chiến dịch", desc: "Cấu hình ad form, fanpage/token và tạo campaign.", criteria: "Cần ít nhất 1 bản ghi ads trong hệ thống." },
+          { id: "analytics", tab: "marketing", title: "6. Theo dõi kết quả", desc: "Đọc KPI (lead, traffic, ROI) và đánh giá hiệu quả.", criteria: "Đã có số liệu lead hoặc traffic để phân tích." },
+        ],
+      },
+      en: {
+        title: "Workflow checklist",
+        subtitle: "Follow the sequence to run CRM correctly every day",
+        progress: "Progress",
+        done: "Done",
+        pending: "Pending",
+        open: "Open",
+        openTour: "Replay guide",
+        skip: "Skip",
+        previous: "Previous",
+        next: "Next",
+        finish: "Finish",
+        gotoStep: "Go to this step",
+        completionRule: "Completion rule",
+        steps: [
+          { id: "data", tab: "data", title: "1. Prepare base data", desc: "Create minimum records in Data Center: lead + inventory.", criteria: "At least 1 lead and 1 inventory record." },
+          { id: "pipeline", tab: "crm", title: "2. Run pipeline", desc: "Open CRM Workspace and verify lead stages and values.", criteria: "Lead list is available in CRM." },
+          { id: "activities", tab: "crm", title: "3. Log activities", desc: "Record call/meeting interactions for lead history.", criteria: "At least 1 activity record exists." },
+          { id: "tasks", tab: "sales", title: "4. Assign sales tasks", desc: "Create tasks with owner and due date for execution.", criteria: "At least 1 sales task exists." },
+          { id: "marketing", tab: "marketing", title: "5. Launch campaigns", desc: "Configure ad form, fanpage/token and create campaign.", criteria: "At least 1 ads record exists." },
+          { id: "analytics", tab: "marketing", title: "6. Monitor outcomes", desc: "Review KPI (leads, traffic, ROI) to evaluate performance.", criteria: "Lead or traffic metrics are available." },
+        ],
+      },
+      zh: {
+        title: "工作流检查清单",
+        subtitle: "按顺序执行，确保CRM每日操作正确",
+        progress: "进度",
+        done: "已完成",
+        pending: "未完成",
+        open: "打开",
+        openTour: "重新查看引导",
+        skip: "跳过",
+        previous: "上一步",
+        next: "下一步",
+        finish: "完成",
+        gotoStep: "前往此步骤",
+        completionRule: "完成条件",
+        steps: [
+          { id: "data", tab: "data", title: "1. 初始化基础数据", desc: "先在数据中心创建最少数据：线索和房源。", criteria: "至少有1条线索和1条房源记录。" },
+          { id: "pipeline", tab: "crm", title: "2. 推进销售管道", desc: "进入CRM工作区，检查线索阶段和金额信息。", criteria: "CRM中已有线索数据。" },
+          { id: "activities", tab: "crm", title: "3. 记录互动活动", desc: "记录电话/会面互动，形成完整跟进历史。", criteria: "至少有1条活动记录。" },
+          { id: "tasks", tab: "sales", title: "4. 分配销售任务", desc: "创建任务并设置负责人和截止时间。", criteria: "至少有1条销售任务。" },
+          { id: "marketing", tab: "marketing", title: "5. 创建投放活动", desc: "填写广告配置并绑定粉丝页Token。", criteria: "系统中至少有1条广告记录。" },
+          { id: "analytics", tab: "marketing", title: "6. 查看结果指标", desc: "查看线索、流量、ROI等核心KPI。", criteria: "已有线索或流量统计数据。" },
+        ],
+      },
+    }), []);
+
+    const workflowText = workflowTextMap[language] || workflowTextMap.vi;
+
+    const workflowCompletion = React.useMemo(() => ({
+      data: leadRows.length > 0 && inventoryRows.length > 0,
+      pipeline: leadRows.length > 0,
+      activities: activityRows.length > 0,
+      tasks: taskRows.length > 0,
+      marketing: opsData.adsRows.length > 0,
+      analytics: Number(summary.totalLeads || 0) > 0 || Number(summary.totalVisits || 0) > 0,
+    }), [leadRows.length, inventoryRows.length, activityRows.length, taskRows.length, opsData.adsRows.length, summary.totalLeads, summary.totalVisits]);
+
+    const checklistStats = React.useMemo(() => {
+      const steps = workflowText.steps || [];
+      const completed = steps.filter((step) => Boolean(workflowCompletion[step.id])).length;
+      const total = steps.length;
+      return { completed, total, percent: total > 0 ? Math.round((completed * 100) / total) : 0 };
+    }, [workflowCompletion, workflowText.steps]);
+
+    function markOnboardingSeen() {
+      try {
+        localStorage.setItem(onboardingStorageKey, "1");
+      } catch {
+        // Ignore storage write issues.
+      }
+    }
+
+    function closeOnboarding() {
+      markOnboardingSeen();
+      setOnboardingOpen(false);
+      setOnboardingStepIndex(0);
+    }
 
     const currentUserId = React.useMemo(() => String(seft?.user?.userId || seft?.user?.username || "").trim(), [seft?.user?.userId, seft?.user?.username]);
     const roleSet = React.useMemo(() => {
@@ -3838,6 +4037,32 @@
       React.createElement("div", { key: `${label}_v`, style: { fontSize: 18, fontWeight: 700, color: color || themeTokens.text } }, value),
     ]);
 
+    const onboardingSteps = workflowText.steps || [];
+    const safeOnboardingIndex = Math.min(Math.max(onboardingStepIndex, 0), Math.max(onboardingSteps.length - 1, 0));
+    const currentOnboardingStep = onboardingSteps[safeOnboardingIndex] || null;
+
+    function openWorkflowStep(step) {
+      if (!step || !step.tab) return;
+      setActiveHubTab(step.tab);
+    }
+
+    function goNextOnboardingStep() {
+      const maxIndex = onboardingSteps.length - 1;
+      if (safeOnboardingIndex >= maxIndex) {
+        closeOnboarding();
+        return;
+      }
+      const nextIndex = safeOnboardingIndex + 1;
+      setOnboardingStepIndex(nextIndex);
+      openWorkflowStep(onboardingSteps[nextIndex]);
+    }
+
+    function goPrevOnboardingStep() {
+      const prevIndex = Math.max(safeOnboardingIndex - 1, 0);
+      setOnboardingStepIndex(prevIndex);
+      openWorkflowStep(onboardingSteps[prevIndex]);
+    }
+
     const shellNode = React.createElement("div", {
       className: "crm-dynamic-theme",
       style: {
@@ -3868,6 +4093,135 @@
           { key: "marketing", label: translate("opsTitle") },
         ],
       }) : null,
+      React.createElement(Card, {
+        key: "workflow-checklist-card",
+        title: workflowText.title,
+        style: { borderRadius: 14, borderColor: themeTokens.border, background: themeTokens.cardBg },
+        styles: { body: { padding: 12 } },
+        extra: React.createElement(Space, { size: 8 }, [
+          React.createElement("span", { key: "workflow-progress-label", style: { fontSize: 12, color: themeTokens.textSecondary } }, `${workflowText.progress}: ${checklistStats.completed}/${checklistStats.total}`),
+          React.createElement(Button, {
+            key: "workflow-open-tour",
+            size: "small",
+            onClick: () => {
+              setOnboardingOpen(true);
+              setOnboardingStepIndex(0);
+              openWorkflowStep(onboardingSteps[0]);
+            },
+          }, workflowText.openTour),
+        ]),
+      }, [
+        React.createElement("div", {
+          key: "workflow-subtitle",
+          style: { fontSize: 12, color: themeTokens.textSecondary, marginBottom: 8 },
+        }, workflowText.subtitle),
+        React.createElement("div", {
+          key: "workflow-progress-bar-wrap",
+          style: {
+            width: "100%",
+            height: 8,
+            borderRadius: 999,
+            overflow: "hidden",
+            background: themeTokens.cardBgMuted,
+            marginBottom: 10,
+          },
+        }, React.createElement("div", {
+          style: {
+            height: "100%",
+            width: `${checklistStats.percent}%`,
+            background: themeTokens.primary,
+            transition: "width 200ms ease",
+          },
+        })),
+        React.createElement("div", {
+          key: "workflow-steps-grid",
+          style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))", gap: 8 },
+        }, onboardingSteps.map((step) => {
+          const completed = Boolean(workflowCompletion[step.id]);
+          return React.createElement("div", {
+            key: `workflow_step_${step.id}`,
+            style: {
+              border: `1px solid ${completed ? themeTokens.primary : themeTokens.border}`,
+              borderRadius: 10,
+              padding: 10,
+              background: completed ? themeTokens.subtleBg : themeTokens.cardBg,
+              display: "grid",
+              gap: 6,
+            },
+          }, [
+            React.createElement("div", { key: "title", style: { fontWeight: 600, color: themeTokens.text } }, step.title),
+            React.createElement("div", { key: "desc", style: { fontSize: 12, color: themeTokens.textSecondary } }, step.desc),
+            React.createElement("div", {
+              key: "criteria",
+              style: { fontSize: 12, color: themeTokens.textSecondary, background: themeTokens.cardBgMuted, borderRadius: 6, padding: "6px 8px" },
+            }, `${workflowText.completionRule}: ${step.criteria || ""}`),
+            React.createElement("div", { key: "footer", style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 } }, [
+              React.createElement("span", {
+                key: "status",
+                style: { fontSize: 12, color: completed ? themeTokens.success : themeTokens.warning, fontWeight: 600 },
+              }, completed ? workflowText.done : workflowText.pending),
+              React.createElement(Button, {
+                key: "open",
+                size: "small",
+                onClick: () => openWorkflowStep(step),
+              }, workflowText.open),
+            ]),
+          ]);
+        })),
+      ]),
+      (Modal && onboardingOpen && currentOnboardingStep) ? React.createElement(Modal, {
+        key: "workflow-onboarding-modal",
+        open: onboardingOpen,
+        title: `${workflowText.title} (${safeOnboardingIndex + 1}/${onboardingSteps.length})`,
+        onCancel: closeOnboarding,
+        footer: React.createElement("div", { style: { display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap" } }, [
+          React.createElement(Button, { key: "skip", onClick: closeOnboarding }, workflowText.skip),
+          React.createElement("div", { key: "right", style: { display: "flex", gap: 8 } }, [
+            React.createElement(Button, {
+              key: "prev",
+              disabled: safeOnboardingIndex === 0,
+              onClick: goPrevOnboardingStep,
+            }, workflowText.previous),
+            React.createElement(Button, {
+              key: "goto",
+              onClick: () => openWorkflowStep(currentOnboardingStep),
+            }, workflowText.gotoStep),
+            React.createElement(Button, {
+              key: "next",
+              type: "primary",
+              onClick: goNextOnboardingStep,
+            }, safeOnboardingIndex >= onboardingSteps.length - 1 ? workflowText.finish : workflowText.next),
+          ]),
+        ]),
+        className: "crm-dynamic-theme-modal",
+        wrapClassName: "crm-dynamic-theme-modal",
+        destroyOnClose: true,
+      }, React.createElement("div", { style: { display: "grid", gap: 10 } }, [
+        React.createElement("div", { key: "title", style: { fontWeight: 700, color: themeTokens.text } }, currentOnboardingStep.title),
+        React.createElement("div", { key: "desc", style: { color: themeTokens.textSecondary } }, currentOnboardingStep.desc),
+        React.createElement("div", {
+          key: "criteria",
+          style: {
+            border: `1px solid ${themeTokens.border}`,
+            borderRadius: 8,
+            background: themeTokens.cardBgMuted,
+            padding: 10,
+            fontSize: 12,
+            color: themeTokens.textSecondary,
+          },
+        }, `${workflowText.completionRule}: ${currentOnboardingStep.criteria || ""}`),
+        React.createElement("div", {
+          key: "hint",
+          style: {
+            border: `1px solid ${themeTokens.border}`,
+            borderRadius: 8,
+            background: themeTokens.cardBgMuted,
+            padding: 10,
+            fontSize: 12,
+            color: themeTokens.textSecondary,
+          },
+        }, `${workflowText.progress}: ${checklistStats.completed}/${checklistStats.total}`),
+      ])) : null,
       activeHubTab === "marketing" ? React.createElement(Card, {
         key: "ops-summary",
         title: React.createElement("div", { style: { display: "grid", gap: 2 } }, [
