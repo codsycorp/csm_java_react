@@ -3309,6 +3309,43 @@
           color: ${themeTokens.text} !important;
           border-color: ${themeTokens.border} !important;
         }
+        .crm-dynamic-theme .ant-picker-header {
+          border-bottom: 1px solid ${themeTokens.border} !important;
+        }
+        .crm-dynamic-theme .ant-picker-header-super-prev-btn,
+        .crm-dynamic-theme .ant-picker-header-prev-btn,
+        .crm-dynamic-theme .ant-picker-header-super-next-btn,
+        .crm-dynamic-theme .ant-picker-header-next-btn {
+          color: ${themeTokens.text} !important;
+        }
+        .crm-dynamic-theme .ant-picker-header-super-prev-btn:hover,
+        .crm-dynamic-theme .ant-picker-header-prev-btn:hover,
+        .crm-dynamic-theme .ant-picker-header-super-next-btn:hover,
+        .crm-dynamic-theme .ant-picker-header-next-btn:hover {
+          color: ${themeTokens.primary} !important;
+        }
+        .crm-dynamic-theme .ant-picker-content th {
+          color: ${themeTokens.textSecondary} !important;
+          font-weight: 600 !important;
+          background: ${themeTokens.cardBgMuted} !important;
+        }
+        .crm-dynamic-theme .ant-picker-cell-in-view.ant-picker-cell-selected .ant-picker-cell-inner,
+        .crm-dynamic-theme .ant-picker-cell-in-view.ant-picker-cell-today .ant-picker-cell-inner {
+          background: ${themeTokens.primary} !important;
+          color: #ffffff !important;
+          font-weight: 600 !important;
+        }
+        .crm-dynamic-theme .ant-picker-cell:hover .ant-picker-cell-inner {
+          background: ${themeTokens.subtleBg} !important;
+          color: ${themeTokens.text} !important;
+        }
+        .crm-dynamic-theme .ant-picker-cell-in-view.ant-picker-cell-in-range .ant-picker-cell-inner {
+          background: ${themeTokens.cardBgMuted} !important;
+          color: ${themeTokens.text} !important;
+        }
+        .crm-dynamic-theme .ant-picker-cell-disabled .ant-picker-cell-inner {
+          color: ${themeTokens.textTertiary} !important;
+        }
         .crm-dynamic-theme .ant-alert,
         .crm-dynamic-theme .ant-alert-message,
         .crm-dynamic-theme .ant-alert-description {
@@ -3573,14 +3610,59 @@
           color: ${themeTokens.text} !important;
           border-color: ${themeTokens.border} !important;
         }
+        .crm-dynamic-theme-modal .ant-picker-header,
+        .crm-workspace-theme-modal .ant-picker-header {
+          border-bottom: 1px solid ${themeTokens.border} !important;
+        }
+        .crm-dynamic-theme-modal .ant-picker-header-super-prev-btn,
+        .crm-dynamic-theme-modal .ant-picker-header-prev-btn,
+        .crm-dynamic-theme-modal .ant-picker-header-super-next-btn,
+        .crm-dynamic-theme-modal .ant-picker-header-next-btn,
+        .crm-workspace-theme-modal .ant-picker-header-super-prev-btn,
+        .crm-workspace-theme-modal .ant-picker-header-prev-btn,
+        .crm-workspace-theme-modal .ant-picker-header-super-next-btn,
+        .crm-workspace-theme-modal .ant-picker-header-next-btn {
+          color: ${themeTokens.text} !important;
+        }
+        .crm-dynamic-theme-modal .ant-picker-header-super-prev-btn:hover,
+        .crm-dynamic-theme-modal .ant-picker-header-prev-btn:hover,
+        .crm-dynamic-theme-modal .ant-picker-header-super-next-btn:hover,
+        .crm-dynamic-theme-modal .ant-picker-header-next-btn:hover,
+        .crm-workspace-theme-modal .ant-picker-header-super-prev-btn:hover,
+        .crm-workspace-theme-modal .ant-picker-header-prev-btn:hover,
+        .crm-workspace-theme-modal .ant-picker-header-super-next-btn:hover,
+        .crm-workspace-theme-modal .ant-picker-header-next-btn:hover {
+          color: ${themeTokens.primary} !important;
+        }
+        .crm-dynamic-theme-modal .ant-picker-content th,
+        .crm-workspace-theme-modal .ant-picker-content th {
+          color: ${themeTokens.textSecondary} !important;
+          font-weight: 600 !important;
+          background: ${themeTokens.cardBgMuted} !important;
+        }
+        .crm-dynamic-theme-modal .ant-picker-cell:hover .ant-picker-cell-inner,
+        .crm-workspace-theme-modal .ant-picker-cell:hover .ant-picker-cell-inner {
+          background: ${themeTokens.subtleBg} !important;
+          color: ${themeTokens.text} !important;
+        }
+        .crm-dynamic-theme-modal .ant-picker-cell-in-view.ant-picker-cell-in-range .ant-picker-cell-inner,
+        .crm-workspace-theme-modal .ant-picker-cell-in-view.ant-picker-cell-in-range .ant-picker-cell-inner {
+          background: ${themeTokens.cardBgMuted} !important;
+          color: ${themeTokens.text} !important;
+        }
+        .crm-dynamic-theme-modal .ant-picker-cell-disabled .ant-picker-cell-inner,
+        .crm-workspace-theme-modal .ant-picker-cell-disabled .ant-picker-cell-inner {
+          color: ${themeTokens.textTertiary} !important;
+        }
         .crm-dynamic-theme-modal .ant-select-item-option-active:not(.ant-select-item-option-disabled),
         .crm-dynamic-theme-modal .ant-select-item-option-selected:not(.ant-select-item-option-disabled),
         .crm-workspace-theme-modal .ant-select-item-option-active:not(.ant-select-item-option-disabled),
         .crm-workspace-theme-modal .ant-select-item-option-selected:not(.ant-select-item-option-disabled),
         .crm-dynamic-theme-modal .ant-picker-cell-in-view.ant-picker-cell-selected .ant-picker-cell-inner,
         .crm-workspace-theme-modal .ant-picker-cell-in-view.ant-picker-cell-selected .ant-picker-cell-inner {
-          background: ${themeTokens.subtleBg} !important;
-          color: ${themeTokens.text} !important;
+          background: ${themeTokens.primary} !important;
+          color: #ffffff !important;
+          font-weight: 600 !important;
         }
         .crm-dynamic-theme .ant-input,
         .crm-dynamic-theme .ant-input-affix-wrapper,
