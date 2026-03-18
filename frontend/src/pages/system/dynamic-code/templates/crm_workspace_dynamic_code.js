@@ -3265,6 +3265,13 @@
         .crm-dynamic-theme .ant-tabs-tab {
           background: ${themeTokens.cardBg} !important;
         }
+        .crm-dynamic-theme .ant-tabs-nav::before,
+        .crm-dynamic-theme .ant-tabs-nav-list {
+          border-color: ${themeTokens.border} !important;
+        }
+        .crm-dynamic-theme .ant-tabs-nav-list {
+          background: transparent !important;
+        }
         .crm-dynamic-theme .ant-tabs-tab:hover,
         .crm-dynamic-theme .ant-tabs-tab:hover .ant-tabs-tab-btn {
           color: ${themeTokens.text} !important;
@@ -3320,6 +3327,14 @@
           font-weight: 600 !important;
         }
         .crm-dynamic-theme .ant-picker-panel,
+        .crm-dynamic-theme .ant-picker-calendar,
+        .crm-dynamic-theme .ant-picker-calendar .ant-picker-calendar-header,
+        .crm-dynamic-theme .ant-picker-calendar .ant-picker-calendar-date,
+        .crm-dynamic-theme .ant-picker-calendar .ant-picker-calendar-date-content,
+        .crm-workspace-theme .ant-picker-calendar,
+        .crm-workspace-theme .ant-picker-calendar .ant-picker-calendar-header,
+        .crm-workspace-theme .ant-picker-calendar .ant-picker-calendar-date,
+        .crm-workspace-theme .ant-picker-calendar .ant-picker-calendar-date-content,
         .crm-dynamic-theme .ant-picker-header,
         .crm-dynamic-theme .ant-picker-content th,
         .crm-dynamic-theme .ant-picker-cell,
@@ -3327,6 +3342,18 @@
           background: ${themeTokens.cardBg} !important;
           color: ${themeTokens.text} !important;
           border-color: ${themeTokens.border} !important;
+        }
+        .crm-dynamic-theme .ant-picker-calendar .ant-picker-calendar-date-value,
+        .crm-workspace-theme .ant-picker-calendar .ant-picker-calendar-date-value {
+          color: ${themeTokens.text} !important;
+        }
+        .crm-dynamic-theme .ant-picker-calendar .ant-picker-calendar-date-today,
+        .crm-workspace-theme .ant-picker-calendar .ant-picker-calendar-date-today {
+          border-color: ${themeTokens.primary} !important;
+        }
+        .crm-dynamic-theme .ant-picker-calendar .ant-picker-calendar-date:hover,
+        .crm-workspace-theme .ant-picker-calendar .ant-picker-calendar-date:hover {
+          background: ${themeTokens.subtleBg} !important;
         }
         .crm-dynamic-theme .ant-picker-header {
           border-bottom: 1px solid ${themeTokens.border} !important;
