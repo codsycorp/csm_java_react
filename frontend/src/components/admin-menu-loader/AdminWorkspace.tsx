@@ -13,6 +13,7 @@ import { MenuFoldOutlined, MenuUnfoldOutlined } from "@ant-design/icons";
 import type { MenuProps, TabsProps, DrawerProps } from "antd";
 import { useTranslation } from "react-i18next";
 
+import CsmCrmWorkspace from "../csm-crm/CsmCrmWorkspace";
 import CsmDynamicGrid from "../csm-grid/CsmDynamicGrid";
 import CsmReport from "../csm-report/CsmReport";
 import { useUserStore } from "#src/store";
@@ -35,7 +36,7 @@ export interface AdminWorkspaceProps {
 interface TabItem {
 	menuId: string;
 	menu: MenuConfig;
-	menuType: "system" | "report" | "grid" | "unknown";
+	menuType: "system" | "report" | "grid" | "crm" | "unknown";
 }
 
 /**
@@ -59,9 +60,11 @@ function getMenuLabel(menu: MenuConfig): string {
  * - table_name = grid/CRUD display
  * - Containers (menus with children but no action) = system
  */
-function getMenuType(menu: MenuConfig): "system" | "report" | "grid" | "unknown" {
+function getMenuType(menu: MenuConfig): "system" | "report" | "grid" | "crm" | "unknown" {
 	// Priority 1: Explicit type field
 	if (menu.type === "system") return "system";
+
+	if (Number(menu.type_form || 0) === 5 || menu.crm_config) return "crm";
 	
 	// Priority 2: Report name
 	if (menu.report_name) return "report";
@@ -85,6 +88,18 @@ function getMenuType(menu: MenuConfig): "system" | "report" | "grid" | "unknown"
 	}
 	
 	return "unknown";
+}
+
+function CrmContent({
+	menu,
+	appId,
+	database,
+}: {
+	menu: MenuConfig;
+	appId?: string;
+	database: Record<string, { rows: any[] }>;
+}) {
+	return <CsmCrmWorkspace appId={appId} menuData={menu as any} database={database as any} />;
 }
 
 /**
@@ -349,6 +364,8 @@ export function AdminWorkspace({
 			if (menuType === "report") {
 				// console.log("  → Rendering ReportContent");
 				content = <ReportContent menu={menu} appId={appId} decrypt={decrypt} />;
+			} else if (menuType === "crm") {
+				content = <CrmContent menu={menu} appId={appId} database={database} />;
 			} else if (menuType === "grid") {
 				// console.log("  → Rendering GridContent");
 				content = (

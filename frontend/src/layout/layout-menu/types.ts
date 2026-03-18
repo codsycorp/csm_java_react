@@ -55,11 +55,12 @@ export interface MenuItemType {
 	table?: any[]
 	trigger?: Record<string, any>
 	config?: string
+	crm_config?: Record<string, any> | string
 	/**
 	 * Menu configuration
 	 */
 	type_menu?: number | string // 0=Column, 1=Row
-	type_form?: number | string // 1=Table, 2=Master-Detail
+	type_form?: number | string // 1=Table, 2=Master-Detail, 3=Dynamic Link, 4=Dynamic Code, 5=CRM Workspace
 	row_type_edit?: number | string // 0=Popup, 1=Inline
 	/**
 	 * Display configuration

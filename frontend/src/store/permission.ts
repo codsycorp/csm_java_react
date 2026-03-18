@@ -155,6 +155,7 @@ export function transformApiMenusToLayoutMenus(apiMenus: (ApiMenuItemType & { ch
 			table: apiMenu.table,
 			trigger: apiMenu.trigger,
 			config: apiMenu.config,
+			crm_config: (apiMenu as any).crm_config,
 			type_menu: apiMenu.type_menu,
 			type_form: apiMenu.type_form,
 			row_type_edit: apiMenu.row_type_edit,

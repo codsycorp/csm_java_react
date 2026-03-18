@@ -1,6 +1,7 @@
 import CsmDynamicGrid from "#src/components/csm-grid/CsmDynamicGrid";
 import CsmMasterDetail from "#src/components/csm-grid/CsmMasterDetail";
 import CsmReport from "#src/components/csm-report/CsmReport";
+import CsmCrmWorkspace, { collectCrmTableNames, normalizeMenuRuntimeConfig } from "#src/components/csm-crm";
 import DynamicCodeMenu from "#src/pages/system/dynamic-code";
 import { useAppStore, useUserStore, usePermissionStore, useTabsStore } from "#src/store";
 import { Empty, Spin, Alert } from "antd";
@@ -16,7 +17,7 @@ interface MenuData {
 	label: string;
 	table_name?: string;
 	report_name?: string;
-	type_form?: "" | 1 | 2;
+	type_form?: "" | 1 | 2 | 3 | 4 | 5;
 	row_type_edit?: 0 | 1;
 	[key: string]: any;
 }
@@ -88,10 +89,10 @@ export default function AdminPage() {
 		// Try to get menu data from navigation state first (faster)
 		const locationState = location.state as any;
 		if (locationState?.menuData) {
-			const withLabel = {
+			const withLabel = normalizeMenuRuntimeConfig({
 				...locationState.menuData,
 				label: resolveDisplayLabel(locationState.menuData),
-			};
+			});
 			setMenuData(withLabel);
 			setLoading(false);
 			if (selectedMenuIdForTab === menuId) {
@@ -146,7 +147,7 @@ export default function AdminPage() {
 					   found = fb;
 				   }
 			}
-			const withLabel = found ? { ...found, label: resolveDisplayLabel(found) } : found;
+			const withLabel = found ? normalizeMenuRuntimeConfig({ ...found, label: resolveDisplayLabel(found) }) : found;
 			setMenuData(withLabel);
 			setLoading(false);
 			
@@ -172,13 +173,23 @@ export default function AdminPage() {
 
 	// Di chuyển hàm loadTableData ra ngoài useEffect để có thể tái sử dụng
 	const loadTableData = async () => {
-		if (!menuData?.table_name) return;
+		const runtimeMenu = menuData ? normalizeMenuRuntimeConfig(menuData) : null;
+		if (!runtimeMenu) return;
+
+		const allMenuTables = new Set<string>();
+		(runtimeMenu.table_name || "")
+			.split(",")
+			.map((item: string) => item.trim())
+			.filter(Boolean)
+			.forEach((item: string) => allMenuTables.add(item));
+		collectCrmTableNames(runtimeMenu.crm_config).forEach((tableName) => allMenuTables.add(tableName));
+
+		if (allMenuTables.size === 0) return;
 
 		setDbLoading(true);
 		setDbError(null);
 		try {
-			const rawTableName = menuData.table_name;
-			const tableList = rawTableName.split(",").map(s => s.trim()).filter(Boolean);
+			const tableList = Array.from(allMenuTables);
 			const primaryTable = tableList[0];
 			const defaultFilter = {
 				operator: "AND" as const,
@@ -186,7 +197,7 @@ export default function AdminPage() {
 			};
 
 			// Use menu-specific app_id if available, otherwise fall back to global appId
-			const effectiveAppId = menuData.app_id || appId;
+			const effectiveAppId = runtimeMenu.app_id || appId;
 
 			const response = await getTableData<any>({
 				app_id: effectiveAppId,
@@ -219,8 +230,8 @@ export default function AdminPage() {
 
 			// Extract dependency tables from trigger config
 			const dependencyTables = new Set<string>();
-			if (menuData && menuData.trigger && typeof menuData.trigger === 'object') {
-				Object.values(menuData.trigger).forEach((trigger: any) => {
+			if (runtimeMenu.trigger && typeof runtimeMenu.trigger === 'object') {
+				Object.values(runtimeMenu.trigger).forEach((trigger: any) => {
 					if (trigger?.query && Array.isArray(trigger.query)) {
 						trigger.query.forEach((q: any) => {
 							if (q.obj_name) {
@@ -273,7 +284,7 @@ export default function AdminPage() {
 	// Load table data from API when menuData changes
 	useEffect(() => {
 		loadTableData();
-	}, [menuData?.table_name, appId, reloadTrigger]);
+	}, [menuData?.table_name, menuData?.crm_config, appId, reloadTrigger]);
 
 	// Refresh function for data changes
 	const refreshDatabase = () => {
@@ -328,13 +339,28 @@ export default function AdminPage() {
 	}
 
 	// Use menu-specific app_id if available, otherwise fall back to global appId
-	const effectiveAppId = menuData.app_id || appId;
+	const runtimeMenuData = normalizeMenuRuntimeConfig(menuData);
+	const effectiveAppId = runtimeMenuData.app_id || appId;
+	const typeForm = Number(runtimeMenuData.type_form || 1);
+
+	if (typeForm === 5) {
+		return (
+			<div style={{ height: "100%" }}>
+				<CsmCrmWorkspace
+					appId={effectiveAppId}
+					menuData={runtimeMenuData}
+					database={database}
+					onDataChange={() => handleDataChange(database)}
+				/>
+			</div>
+		);
+	}
 
 	// Render grid
-	if (menuData.table_name) {
+	if (runtimeMenuData.table_name) {
 		// Extract type_form and row_type_edit from backend, with support for override
-		let typeForm: "" | 1 | 2 = menuData.type_form || "";
-		let rowTypeEdit: 0 | 1 = menuData.row_type_edit ?? 0;
+		let typeForm: "" | 1 | 2 | 3 | 4 | 5 = runtimeMenuData.type_form || "";
+		let rowTypeEdit: 0 | 1 = runtimeMenuData.row_type_edit ?? 0;
 		
 		// Check localStorage for overrides (for testing purposes)
 		// Can be set via: localStorage.setItem(`${menuId}:type_form`, "1")
@@ -353,9 +379,9 @@ export default function AdminPage() {
 		}
 		
 		// Fallback: try to find type_form and row_type_edit in the table configuration
-		if (!typeForm && menuData.table && Array.isArray(menuData.table)) {
-			const typeFormField = menuData.table.find((f: any) => f.f_name === "type_form");
-			if (typeFormField && menuData.table_name === "csm_menu") {
+		if (!typeForm && runtimeMenuData.table && Array.isArray(runtimeMenuData.table)) {
+			const typeFormField = runtimeMenuData.table.find((f: any) => f.f_name === "type_form");
+			if (typeFormField && runtimeMenuData.table_name === "csm_menu") {
 				// If we're in csm_menu table, try to get the current menu's type_form
 				// This is stored as a table field value, not in the menu metadata
 			}
@@ -363,24 +389,24 @@ export default function AdminPage() {
 		
 		// Transform menu data to m_configs format expected by CsmDynamicGrid
 		const m_configs = {
-			id: menuData.id,
-			label: menuData.label,
-			table_name: menuData.table_name,
-			table: menuData.table || [],
-			trigger: menuData.trigger || {},
-			g_readonly: menuData.g_readonly,
-			table_pagesize: menuData.table_pagesize,
+			id: runtimeMenuData.id,
+			label: runtimeMenuData.label,
+			table_name: runtimeMenuData.table_name,
+			table: runtimeMenuData.table || [],
+			trigger: runtimeMenuData.trigger || {},
+			g_readonly: runtimeMenuData.g_readonly,
+			table_pagesize: runtimeMenuData.table_pagesize,
 			type_form: typeForm,
 			row_type_edit: rowTypeEdit,
 			struct: {
-				...(menuData.struct || {}),
-				fieldsPK: database[menuData.table_name]?.fieldsPK || menuData.struct?.fieldsPK || ["id"]
+				...(runtimeMenuData.struct || {}),
+				fieldsPK: database[runtimeMenuData.table_name]?.fieldsPK || runtimeMenuData.struct?.fieldsPK || ["id"]
 			}
 		};
 
 		// If columns are missing, auto-generate sensible defaults for known tables
-		if ((!m_configs.table || m_configs.table.length === 0) && menuData.table_name) {
-			const rows = database[menuData.table_name]?.rows || [];
+		if ((!m_configs.table || m_configs.table.length === 0) && runtimeMenuData.table_name) {
+			const rows = database[runtimeMenuData.table_name]?.rows || [];
 			const firstRow = rows[0] || {};
 			// Default column headers mapping (Vietnamese i18n keys used where applicable)
 			// Cập nhật ánh xạ trong DEFAULT_HEADERS
@@ -434,30 +460,30 @@ export default function AdminPage() {
 			// Uncomment and configure when needed
 		};
 
-		let nodes = MASTER_DETAIL_CONFIGS[menuData.table_name!] || [];
+		let nodes = MASTER_DETAIL_CONFIGS[runtimeMenuData.table_name!] || [];
 		
 		// Log menuData to check for nodes or children
 		   // ...existing code...
 		
 		// If no hardcoded config, try to get from backend/menuData
-		if (nodes.length === 0 && (menuData as any).nodes) {
-			nodes = (menuData as any).nodes;
+		if (nodes.length === 0 && (runtimeMenuData as any).nodes) {
+			nodes = (runtimeMenuData as any).nodes;
 			   // ...existing code...
 		}
 		
 		// Try children if nodes not found
-		if (nodes.length === 0 && (menuData as any).children && Array.isArray((menuData as any).children)) {
-			const children = (menuData as any).children;
+		if (nodes.length === 0 && (runtimeMenuData as any).children && Array.isArray((runtimeMenuData as any).children)) {
+			const children = (runtimeMenuData as any).children;
 			// Filter children that might be detail tables (have table_name)
 			nodes = children.filter((c: any) => c.table_name);
 			   // ...existing code...
 		}
 		
 		// AUTO-DETECT: If type_form=2 but no nodes, generate from menu structure
-		if (nodes.length === 0 && Number(m_configs.type_form) === 2 && menuData.table_name) {
+		if (nodes.length === 0 && Number(m_configs.type_form) === 2 && runtimeMenuData.table_name) {
 			   // ...existing code...
 			// Try to find detail tables by looking for tables with same prefix
-			const masterTableName = menuData.table_name;
+			const masterTableName = runtimeMenuData.table_name;
 			const allTables = Object.keys(database);
 			
 			// Look for tables that might be detail tables
@@ -473,8 +499,8 @@ export default function AdminPage() {
 					id: tableName,
 					table_name: tableName,
 					label: t('common.detail', { index: idx + 1 }),
-					table: menuData.table || [],
-					trigger: menuData.trigger || {},
+					table: runtimeMenuData.table || [],
+					trigger: runtimeMenuData.trigger || {},
 					g_readonly: false,
 					type_form: "",
 					row_type_edit: 0,
@@ -489,8 +515,8 @@ export default function AdminPage() {
 						id: fallbackDetail,
 						table_name: fallbackDetail,
 						label: "Chi tiết",
-						table: menuData.table || [],
-						trigger: menuData.trigger || {},
+						table: runtimeMenuData.table || [],
+						trigger: runtimeMenuData.trigger || {},
 						g_readonly: false,
 						type_form: "",
 						row_type_edit: 0,
@@ -526,7 +552,7 @@ export default function AdminPage() {
 					appId={effectiveAppId}
 					permissions={-1}
 					menusPermissions={{}}
-					menuId={menuData.id}
+					menuId={runtimeMenuData.id}
 					decrypt={(s: string) => s}
 					onDataChange={() => handleDataChange(database)}
 				/>
@@ -535,24 +561,23 @@ export default function AdminPage() {
 	}
 
 	// Render report
-	if (menuData.report_name) {
+	if (runtimeMenuData.report_name) {
 		return (
 			<div style={{ padding: 16, height: "100%" }}>
 				<CsmReport
 					appId={effectiveAppId}
-					m_configs={menuData}
+					m_configs={runtimeMenuData}
 				/>
 			</div>
 		);
 	}
 
 	// Render dynamic code menu (type_form = 4)
-	const typeForm = Number(menuData.type_form || 1);
-	const hasAutoCodeName = !!(menuData as any).auto_code_name || typeForm === 4;
+	const hasAutoCodeName = !!(runtimeMenuData as any).auto_code_name || typeForm === 4;
 	if (hasAutoCodeName) {
 		return (
 			<div style={{ padding: 16, height: "100%" }}>
-				<DynamicCodeMenu menuId={menuId} menuData={menuData} />
+				<DynamicCodeMenu menuId={menuId} menuData={runtimeMenuData} />
 			</div>
 		);
 	}

@@ -480,6 +480,22 @@ export function useMenu() {
 			});
 			return;
 		}
+
+		// Handle CRM Workspace (type_form = 5) - use same dynamic admin route as grid/report
+		if (selectedApiMenu && Number(selectedApiMenu.type_form) === 5) {
+			const menuId = String(selectedApiMenu.id || selectedApiMenu.key);
+			const rawLabel = selectedApiMenu.label || selectedApiMenu.title || 'CRM Workspace';
+			const menuLabel = String(rawLabel).replace(/^.*?\.\s+/, '').trim();
+
+			useUserStore.getState().setSelectedMenuIdForTab(menuId);
+			navigate(`/system/grid/${menuId}`, {
+				state: {
+					menuLabel,
+					menuData: selectedApiMenu,
+				}
+			});
+			return;
+		}
 		
 		// Check if menu has table_name or report_name (grid/report) - navigate to dynamic route
 		if (selectedApiMenu && (selectedApiMenu.table_name || selectedApiMenu.report_name)) {

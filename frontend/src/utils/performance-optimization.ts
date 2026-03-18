@@ -204,13 +204,11 @@ export function monitorWebVitals(enableLogging = false) {
             }
           });
         });
-        // Try to observe both first-input and interaction (interaction might not be supported in all browsers)
-        try {
-          inpObserver.observe({ entryTypes: ["first-input", "interaction"] });
-        } catch {
-          // Fallback to just first-input if interaction is not supported
-          inpObserver.observe({ entryTypes: ["first-input"] });
-        }
+        const supportedEntryTypes = Array.isArray((PerformanceObserver as any).supportedEntryTypes)
+          ? (PerformanceObserver as any).supportedEntryTypes
+          : [];
+        const canObserveInteraction = supportedEntryTypes.includes("interaction");
+        inpObserver.observe({ entryTypes: canObserveInteraction ? ["first-input", "interaction"] : ["first-input"] });
       } catch (e) {
         if (enableLogging) {
           console.warn("FID/INP monitoring not available");

@@ -20,6 +20,7 @@ import { Tabs, Alert, Card, Upload, Button, message, Spin } from "antd";
 import FieldConfigEditor from "./FieldConfigEditor";
 import TriggerEditor from "./TriggerEditor";
 import type { TableField, TriggerConfig } from "#src/components/csm-grid/CsmDynamicGrid";
+import { CRM_CONFIG_TEMPLATE } from "#src/components/csm-crm";
 import { csmDecrypt } from "#src/components/csm-grid/CsmCrypto";
 import { useUserStore } from "#src/store/user";
 
@@ -338,6 +339,22 @@ export function Detail({
       parentId, // Luôn set parentId
     };
 
+    if (typeof values.crm_config === "string") {
+      const trimmed = values.crm_config.trim();
+      if (trimmed) {
+        try {
+          payload.crm_config = JSON.parse(trimmed);
+        }
+        catch {
+          window.$message?.error("CRM config phải là JSON hợp lệ");
+          return false;
+        }
+      }
+      else {
+        payload.crm_config = undefined;
+      }
+    }
+
     if (values.config) {
       try {
         const parsed = JSON.parse(values.config);
@@ -435,6 +452,9 @@ export function Detail({
       }
       if (nextData.p_height !== undefined && nextData.p_height !== null) {
         nextData.p_height = Number(nextData.p_height);
+      }
+      if (nextData.crm_config && typeof nextData.crm_config === 'object') {
+        nextData.crm_config = JSON.stringify(nextData.crm_config, null, 2);
       }
       
       setTableRows(Array.isArray(detailData.table) ? detailData.table : []);
@@ -661,6 +681,7 @@ export function Detail({
                 { label: t('system.menu.typeForm.masterDetail') || 'Dạng Form Master-Detail', value: 2 },
                 { label: t('system.menu.typeForm.dynamicLink') || 'Liên kết động (Dynamic Link)', value: 3 },
                 { label: t('system.menu.typeForm.dynamicCode') || 'Chạy code động (Dynamic Code)', value: 4 },
+                { label: t('system.menu.typeForm.crmWorkspace') || 'CRM Workspace', value: 5 },
               ]}
             />
             <div style={{ marginTop: 4, fontSize: 12, color: '#8c8c8c' }}>
@@ -755,6 +776,19 @@ export function Detail({
           );
         }
 
+        if (typeForm === 5) {
+          return (
+            <Alert
+              message="Menu dạng CRM Workspace"
+              description="Menu này render workspace CRM kế thừa với Kanban pipeline, kho hàng, activity tracking và analytics theo cấu hình JSON."
+              type="success"
+              showIcon
+              style={{ marginBottom: 16, marginTop: 16 }}
+              closable
+            />
+          );
+        }
+
         // Hiển thị cảnh báo khi menu là Dynamic Link
         if (typeForm === 3) {
           return (
@@ -772,6 +806,36 @@ export function Detail({
         return null;
       }}
     </ProFormDependency>
+
+  <ProFormDependency name={["type_form"]}>
+    {(values: Record<string, any>) => {
+      const typeForm = Number(values.type_form || 1);
+      if (typeForm !== 5) return null;
+
+      return (
+        <div style={{ marginBottom: 32, width: '100%' }}>
+          <Card
+            title={t('system.menu.crmConfigTitle') || 'Cấu hình CRM Workspace'}
+            bordered
+            style={{ borderRadius: 10, boxShadow: '0 2px 8px #f0f1f2', padding: 0, width: '100%' }}
+            bodyStyle={{ padding: 20 }}
+          >
+            <ProFormTextArea
+              name="crm_config"
+              fieldProps={{
+                rows: 20,
+                style: { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' },
+                placeholder: CRM_CONFIG_TEMPLATE,
+              }}
+            />
+            <div style={{ marginTop: 8, fontSize: 12, color: '#8c8c8c', whiteSpace: 'pre-line' }}>
+              {t('system.menu.crmConfigHint') || 'Khai báo JSON cho pipeline Kanban, bảng hàng, activity tracking, KPI và chính sách bảo mật dữ liệu khách hàng.'}
+            </div>
+          </Card>
+        </div>
+      );
+    }}
+  </ProFormDependency>
 
     {/* Cài đặt cơ bản */}
     <div style={{ marginBottom: 32, width: '100%' }}>

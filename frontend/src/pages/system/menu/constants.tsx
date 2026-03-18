@@ -45,6 +45,10 @@ export function getTypeFormOptions(t?: TFunction<"translation", undefined>) {
 			label: t ? t("system.menu.typeForm.masterDetail") : "Dạng Form Master-Detail",
 			value: 2,
 		},
+		{
+			label: t ? t("system.menu.typeForm.crmWorkspace") : "CRM Workspace",
+			value: 5,
+		},
 	];
 }
 

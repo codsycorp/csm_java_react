@@ -83,6 +83,9 @@
 		"typeForm.table": "Grid",
 		"typeForm.grid": "Grid",
 		"typeForm.masterDetail": "Master-Detail Form",
+		"typeForm.dynamicLink": "Dynamic Link",
+		"typeForm.dynamicCode": "Dynamic Code",
+		"typeForm.crmWorkspace": "CRM Workspace",
 		"rowTypeEdit": "Row edit type",
 		"rowTypeEdit.form": "Form",
 		"rowTypeEdit.inline": "Inline edit",
@@ -123,6 +126,8 @@
 		"mShow": "Display",
 		"gReadonly": "Read-only",
 		"vLink": "Legacy Component / Link",
+		"crmConfigTitle": "CRM Workspace Config",
+		"crmConfigHint": "Provide JSON for pipeline stages, inventory, activities, analytics KPIs, and customer data protection rules.",
 		"aiDesigner": {
 			"requirementForm": {
 				"title": "Menu Design Requirement"

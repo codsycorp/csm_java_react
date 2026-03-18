@@ -2560,6 +2560,201 @@ async function cleanupDuplicatesByServiceType(domainValue, serviceType, projectC
   }
 }
 
+function getPrimaryPublicDomain(domainValue = "") {
+  const domains = String(domainValue || "")
+    .split(",")
+    .map((d) => d.trim())
+    .filter(Boolean);
+  if (!domains.length) return "";
+  const preferred = domains.find((d) => !/localhost|127\.0\.0\.1/i.test(d));
+  return preferred || domains[0] || "";
+}
+
+function resolveArticleFeaturedImageUrl(article = {}, domainValue = "") {
+  const direct = [article.image, article.thumbnail]
+    .map((v) => String(v || "").trim())
+    .filter(Boolean);
+  const imageList = normalizeArticleImageUrls(article.images);
+  const fromList = imageList.length > 0 ? [imageList[0]] : [];
+  const candidate = [...direct, ...fromList].find(Boolean) || "";
+  if (!candidate) return "";
+
+  const primaryDomain = getPrimaryPublicDomain(article.domain || domainValue);
+  return resolvePublicImageUrl({ domain: primaryDomain }, candidate);
+}
+
+async function checkImageIsLoadable(imageUrl = "", timeoutMs = 3000) {
+  const url = String(imageUrl || "").trim();
+  if (!url) {
+    return { ok: false, reason: "missing-image-url" };
+  }
+
+  if (/^data:image\//i.test(url)) {
+    return { ok: true, reason: "data-url" };
+  }
+
+  if (typeof Image === "undefined") {
+    return { ok: true, reason: "skip-image-api-unavailable" };
+  }
+
+  return new Promise((resolve) => {
+    let done = false;
+    const img = new Image();
+    const finish = (ok, reason) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      img.onload = null;
+      img.onerror = null;
+      resolve({ ok, reason });
+    };
+
+    const timer = setTimeout(() => finish(false, "timeout"), Math.max(500, Number(timeoutMs) || 3000));
+
+    img.onload = () => finish(true, "loaded");
+    img.onerror = () => finish(false, "load-error");
+    img.src = url;
+  });
+}
+
+async function findBrokenFeaturedImageArticles(articles = [], domainValue = "", opts = {}) {
+  if (!Array.isArray(articles) || articles.length === 0) return [];
+
+  const timeoutMs = Math.max(800, Number(opts.timeoutMs || 3000));
+  const concurrency = Math.max(1, Math.min(8, Number(opts.concurrency || 4)));
+  const issues = [];
+  let cursor = 0;
+
+  console.log(`[findBrokenFeaturedImageArticles] Kiểm tra ${articles.length} bài, concurrency=${concurrency}, timeout=${timeoutMs}ms`);
+
+  const worker = async () => {
+    while (cursor < articles.length) {
+      const index = cursor;
+      cursor += 1;
+      const article = articles[index] || {};
+      const imageUrl = resolveArticleFeaturedImageUrl(article, domainValue);
+
+      if (!imageUrl) {
+        issues.push({ article, reason: "missing-featured-image", imageUrl: "" });
+        continue;
+      }
+
+      const check = await checkImageIsLoadable(imageUrl, timeoutMs);
+      if (!check.ok) {
+        issues.push({
+          article,
+          reason: `broken-featured-image:${check.reason || "unknown"}`,
+          imageUrl
+        });
+      }
+    }
+  };
+
+  await Promise.all(Array.from({ length: concurrency }, () => worker()));
+  console.log(`[findBrokenFeaturedImageArticles] Phát hiện ${issues.length} bài có ảnh đại diện lỗi/thiếu`);
+  return issues;
+}
+
+function buildRemovalGroupsForArticles(articles = [], reason = "cleanup") {
+  if (!Array.isArray(articles) || articles.length === 0) return [];
+  return articles.map((article) => ({
+    groupId: generateId(),
+    articles: [article],
+    keepArticle: { title: "(remove-invalid-article)", images: "[]" },
+    removeArticles: [article],
+    reason
+  }));
+}
+
+async function cleanupBrokenFeaturedImagesByServiceType(domainValue, serviceType, projectCode = "", ctx = {}) {
+  console.log(`\n[cleanupBrokenFeaturedImagesByServiceType] === START ===`);
+  console.log(`   Domain: ${domainValue}`);
+  console.log(`   Service Type: ${serviceType}`);
+  console.log(`   Project: ${projectCode || "(none)"}`);
+
+  const appId = getAppIdFromDomainOptions(domainValue) || "wuweb";
+
+  try {
+    console.log(`\n   📥 Đang tải bài viết để kiểm tra ảnh đại diện...`);
+    const where = {
+      operator: "AND",
+      conditions: [
+        { field: "service_type", type: "eq", value: serviceType || projectCode || "" },
+        { field: "domain", type: "eq", value: domainValue },
+        { field: "status", type: "eq", value: "active" }
+      ]
+    };
+
+    const fetchResult = await ctx.helperApi.getTableData({
+      app_id: appId,
+      obj_name: "web_service_detail",
+      where,
+      take: 500
+    }).catch((err) => {
+      console.error(`❌ Lỗi tải dữ liệu:`, err);
+      return { rows: [], error: err.message };
+    });
+
+    const articles = fetchResult.rows || fetchResult.data || [];
+    console.log(`   📊 Tải được ${articles.length} bài viết`);
+
+    if (articles.length === 0) {
+      return {
+        success: false,
+        message: "❌ Không có bài viết để kiểm tra",
+        invalidCount: 0,
+        cleanedCount: 0
+      };
+    }
+
+    console.log(`\n   🔍 Đang phát hiện bài lỗi ảnh đại diện...`);
+    const brokenArticles = await findBrokenFeaturedImageArticles(articles, domainValue, {
+      timeoutMs: Number(ctx.cleanupImageCheckTimeoutMs || 3000),
+      concurrency: Number(ctx.cleanupImageCheckConcurrency || 4)
+    });
+
+    if (brokenArticles.length === 0) {
+      return {
+        success: true,
+        message: "✅ Không tìm thấy bài lỗi ảnh đại diện",
+        invalidCount: 0,
+        cleanedCount: 0
+      };
+    }
+
+    console.log(`   📊 Tìm thấy ${brokenArticles.length} bài lỗi ảnh đại diện`);
+    const groups = buildRemovalGroupsForArticles(
+      brokenArticles.map((x) => x.article),
+      "broken-featured-image"
+    );
+
+    console.log(`\n   🧹 Đang dọn bài lỗi ảnh đại diện...`);
+    const cleanupResult = await cleanupDuplicateArticles(groups, ctx);
+
+    return {
+      success: cleanupResult.success,
+      message: cleanupResult.message,
+      invalidCount: brokenArticles.length,
+      cleanedCount: cleanupResult.deletedCount,
+      failedCount: cleanupResult.failedCount,
+      details: brokenArticles.map((x) => ({
+        title: x.article?.title || "",
+        slug: x.article?.slug || "",
+        reason: x.reason,
+        imageUrl: x.imageUrl || ""
+      }))
+    };
+  } catch (error) {
+    console.error(`[cleanupBrokenFeaturedImagesByServiceType] Error:`, error);
+    return {
+      success: false,
+      message: `❌ Lỗi: ${error.message}`,
+      invalidCount: 0,
+      cleanedCount: 0
+    };
+  }
+}
+
 /**
  * Đăng bài lên Facebook Page bằng Node.js (NW.js) để bypass hạn chế trình duyệt
  */
@@ -7315,6 +7510,7 @@ async function ensureUI() {
 
   // ========== BUTTON: Dọn tin trùng theo dịch vụ/dự án ==========
   const cleanupDupBtn = createButton(ti("🧹 Dọn tin trùng", "🧹 Cleanup Duplicates", "🧹 清理重复"), "#ff7a45");
+  const cleanupBrokenAvatarBtn = createButton(ti("🧹 Dọn tin lỗi ảnh đại diện", "🧹 Cleanup Broken Avatars", "🧹 清理头像异常"), "#d46b08");
   
   cleanupDupBtn.onclick = async () => {
     // ✅ Get current domain from settings using same function as createBtn
@@ -7443,7 +7639,110 @@ async function ensureUI() {
     }
   };
 
-  btnRow.append(uploadZaloBtn, uploadFbBtn, createBtn, clearHistoryBtn, cleanupIndexedDBBtn, cleanupDupBtn);
+  cleanupBrokenAvatarBtn.onclick = async () => {
+    const globalSettings = getGlobalSettings();
+    const isLmkt = globalSettings.domainKey === "lmkt";
+    const serviceFieldName = isLmkt ? "project" : "industry";
+    const serviceFieldValue = isLmkt ? globalSettings.project : globalSettings.industry;
+
+    if (!globalSettings.domain || !serviceFieldValue) {
+      const fieldLabel = isLmkt ? "Dự Án" : "Lĩnh Vực";
+      return canhbao(ti(
+        `⚠️ Vui lòng chọn Domain và ${fieldLabel} ở Cài Đặt Chung`,
+        `⚠️ Please select Domain and ${fieldLabel === "Dự Án" ? "Project" : "Industry"} in General Settings`,
+        `⚠️ 请在常规设置中选择域名和${fieldLabel === "Dự Án" ? "项目" : "行业"}`
+      ));
+    }
+
+    const domainConfig = DOMAIN_OPTIONS[globalSettings.domainKey];
+    if (!domainConfig) {
+      return canhbao(ti(
+        "❌ Cấu hình Domain không hợp lệ",
+        "❌ Invalid Domain configuration",
+        "❌ 域名配置无效"
+      ));
+    }
+
+    const selectedDomain = domainConfig.value;
+    const selectedService = serviceFieldValue;
+    const selectedProject = globalSettings.project || "";
+
+    const fieldLabel = isLmkt ? "dự án" : "lĩnh vực";
+    const fieldLabelEn = isLmkt ? "Project" : "Industry";
+    const fieldLabelZh = isLmkt ? "项目" : "行业";
+
+    const confirmMsg = ti(
+      `🧹 Dọn tin lỗi ảnh đại diện của ${fieldLabel} "${selectedService}"?\n\n📊 Domain: ${selectedDomain}\n\nQuá trình này sẽ:\n1. Tải tất cả bài viết từ server\n2. Kiểm tra ảnh đại diện (image/thumbnail) có tải được không\n3. Xóa các bài có ảnh đại diện lỗi hoặc thiếu\n\nXác nhận?`,
+      `🧹 Cleanup broken avatars for "${fieldLabelEn}: ${selectedService}"?\n\nDomain: ${selectedDomain}\n\nThis will:\n1. Load all articles from server\n2. Verify featured image (image/thumbnail) can be loaded\n3. Remove articles with broken or missing featured image\n\nConfirm?`,
+      `🧹 清理"${fieldLabelZh}：${selectedService}"的头像异常内容？\n\n域名:${selectedDomain}\n\n这将：\n1. 从服务器加载所有文章\n2. 检查头像图（image/thumbnail）是否可加载\n3. 删除头像图损坏或缺失的文章\n\n确认？`
+    );
+
+    if (!confirm(confirmMsg)) {
+      return;
+    }
+
+    cleanupBrokenAvatarBtn.disabled = true;
+    cleanupBrokenAvatarBtn.textContent = ti("⏳ Đang xử lý...", "⏳ Processing...", "⏳ 处理中...");
+
+    try {
+      const ctx = resolveContext();
+      const appId = getAppIdFromDomainOptions(selectedDomain);
+      ctx.app_id = appId;
+      ctx.domain = selectedDomain;
+      ctx.service_type = selectedService;
+      ctx.project = selectedProject;
+      ctx.fanpage_id = ctx.fanpage_id || facebookState.selectedPageId || "";
+      ctx.fanpage_token = ctx.fanpage_token || facebookState.selectedPageToken || facebookState.pageAccessToken || "";
+
+      console.log(`🔄 [Cleanup Broken Avatar] Syncing service definitions...`);
+      await syncServiceDefinitionsFromServer(false);
+
+      console.log(`[Cleanup Broken Avatar] Starting workflow...`);
+      console.log(`   Domain: ${selectedDomain}`);
+      console.log(`   ${serviceFieldName}: ${selectedService}`);
+      console.log(`   Project: ${selectedProject || "(none)"}`);
+
+      const cleanupResult = await cleanupBrokenFeaturedImagesByServiceType(
+        selectedDomain,
+        selectedService,
+        selectedProject,
+        ctx
+      );
+
+      if (cleanupResult.success) {
+        thongbao(ti(
+          `✅ ${cleanupResult.message}\n\n📊 Tin lỗi ảnh đại diện: ${cleanupResult.invalidCount}\n✅ Đã xoá: ${cleanupResult.cleanedCount}`,
+          `✅ ${cleanupResult.message}\n\n📊 Broken-avatar articles: ${cleanupResult.invalidCount}\n✅ Deleted: ${cleanupResult.cleanedCount}`,
+          `✅ ${cleanupResult.message}\n\n📊 头像异常文章：${cleanupResult.invalidCount}\n✅ 已删除：${cleanupResult.cleanedCount}`
+        ));
+
+        if (cleanupResult.details && cleanupResult.details.length > 0) {
+          console.log(`\n📋 [Cleanup Broken Avatar] Details:`);
+          cleanupResult.details.forEach((row, idx) => {
+            console.log(`   ${idx + 1}. slug=${row.slug || "(none)"}, reason=${row.reason}, image=${(row.imageUrl || "").substring(0, 100)}`);
+          });
+        }
+      } else {
+        canhbao(ti(
+          `⚠️ ${cleanupResult.message}`,
+          `⚠️ ${cleanupResult.message}`,
+          `⚠️ ${cleanupResult.message}`
+        ));
+      }
+    } catch (error) {
+      console.error(`[Cleanup Broken Avatar ERROR]:`, error);
+      canhbao(ti(
+        `❌ Lỗi: ${error.message}`,
+        `❌ Error: ${error.message}`,
+        `❌ 错误：${error.message}`
+      ));
+    } finally {
+      cleanupBrokenAvatarBtn.disabled = false;
+      cleanupBrokenAvatarBtn.textContent = ti("🧹 Dọn tin lỗi ảnh đại diện", "🧹 Cleanup Broken Avatars", "🧹 清理头像异常");
+    }
+  };
+
+  btnRow.append(uploadZaloBtn, uploadFbBtn, createBtn, clearHistoryBtn, cleanupIndexedDBBtn, cleanupDupBtn, cleanupBrokenAvatarBtn);
   wrapper.append(title, note, textarea, btnRow, zaloFileInput, fbFileInput);
 
   // Insert upload UI into container

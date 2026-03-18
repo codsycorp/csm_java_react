@@ -9,6 +9,7 @@ import { getTableData, andWhere } from "#src/components/csm-grid/CsmApi";
 import * as CsmApi from "#src/components/csm-grid/CsmApi";
 import { csmDecrypt, csmEncrypt } from "#src/components/csm-grid/CsmCrypto";
 import CsmDynamicGrid from "#src/components/csm-grid/CsmDynamicGrid";
+import CsmCrmWorkspace from "#src/components/csm-crm/CsmCrmWorkspace";
 import { generateSeoContent, csm_ai_generate_seo_content, generateSeoContentWithPrompt, formatSeoPrompt, PROMPT_GENERATE_POST } from "#src/api/ai";
 import { useAppStore } from "#src/store/app";
 import { useUserStore } from "#src/store/user";
@@ -22,6 +23,13 @@ import * as ReactDOM from "react-dom/client";
 import { Spin, Empty, Alert, notification, Table, Tabs, Button, Input, Select, Card, Space, Popconfirm } from "antd";
 
 const dynamicReactRoots = new Map<string, ReactDOM.Root>();
+const LEGACY_CONTAINER_IDS = new Set(["context-auto", "dynamic-code-root"]);
+
+type ScopedRuntime = {
+  windowProxy: Window;
+  documentProxy: Document;
+  cleanup: () => void;
+};
 
 function sanitizeIdPart(value?: string): string {
   if (!value) return "default";
@@ -29,6 +37,206 @@ function sanitizeIdPart(value?: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9_-]+/g, "-")
     .replace(/^-+|-+$/g, "") || "default";
+}
+
+function escapeCssId(value: string): string {
+  return String(value).replace(/([ !"#$%&'()*+,./:;<=>?@[\\\]^`{|}~])/g, "\\$1");
+}
+
+function cleanupOwnedContainer(containerId: string) {
+  const root = dynamicReactRoots.get(containerId);
+  if (root) {
+    try {
+      root.unmount();
+    } catch (error) {
+      console.warn(`[DynamicCode] Failed to unmount root ${containerId}:`, error);
+    }
+    dynamicReactRoots.delete(containerId);
+  }
+
+  const container = document.getElementById(containerId);
+  if (container) {
+    container.innerHTML = "";
+  }
+}
+
+function createScopedRuntime(containerId: string): ScopedRuntime {
+  const rawWindow = window;
+  const rawDocument = document;
+  const runtimeStore: Record<string, any> = Object.create(null);
+  runtimeStore.csmDynamicCodeContainerId = containerId;
+  const timerRefs = {
+    intervals: new Set<number>(),
+    timeouts: new Set<number>(),
+  };
+  const windowListeners: Array<{ type: string; listener: EventListenerOrEventListenerObject; options?: boolean | AddEventListenerOptions }> = [];
+  const documentListeners: Array<{ type: string; listener: EventListenerOrEventListenerObject; options?: boolean | AddEventListenerOptions }> = [];
+
+  const resolveContainer = () => {
+    return rawDocument.getElementById(containerId)
+      || rawDocument.getElementById("dynamic-code-root")
+      || rawDocument.getElementById("context-auto");
+  };
+
+  const documentProxy = new Proxy(rawDocument, {
+    get(target, prop, receiver) {
+      if (prop === "getElementById") {
+        return (id: string) => {
+          if (LEGACY_CONTAINER_IDS.has(String(id))) {
+            return resolveContainer();
+          }
+          return target.getElementById(id);
+        };
+      }
+      if (prop === "querySelector") {
+        return (selector: string) => {
+          if (selector === "#context-auto" || selector === "#dynamic-code-root") {
+            return resolveContainer();
+          }
+          return target.querySelector(selector);
+        };
+      }
+      if (prop === "querySelectorAll") {
+        return (selector: string) => {
+          if (selector === "#context-auto" || selector === "#dynamic-code-root") {
+            return target.querySelectorAll(`#${containerId}`);
+          }
+          return target.querySelectorAll(selector);
+        };
+      }
+      if (prop === "addEventListener") {
+        return (type: string, listener: EventListenerOrEventListenerObject, options?: boolean | AddEventListenerOptions) => {
+          documentListeners.push({ type, listener, options });
+          target.addEventListener(type, listener, options);
+        };
+      }
+      if (prop === "removeEventListener") {
+        return (type: string, listener: EventListenerOrEventListenerObject, options?: boolean | EventListenerOptions) => {
+          target.removeEventListener(type, listener, options);
+        };
+      }
+
+      // Use native target as receiver to avoid browser brand-check failures (Illegal invocation).
+      const value = Reflect.get(target, prop, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  }) as unknown as Document;
+
+  const windowProxy = new Proxy(rawWindow, {
+    get(target, prop, receiver) {
+      if (prop === "window" || prop === "self" || prop === "globalThis") {
+        return windowProxy;
+      }
+      if (prop === "document") {
+        return documentProxy;
+      }
+      if (prop === "setInterval") {
+        return (...args: any[]) => {
+          const id = (target.setInterval as any)(...args);
+          timerRefs.intervals.add(Number(id));
+          return id;
+        };
+      }
+      if (prop === "clearInterval") {
+        return (id: number) => {
+          timerRefs.intervals.delete(Number(id));
+          return target.clearInterval(id);
+        };
+      }
+      if (prop === "setTimeout") {
+        return (...args: any[]) => {
+          const id = (target.setTimeout as any)(...args);
+          timerRefs.timeouts.add(Number(id));
+          return id;
+        };
+      }
+      if (prop === "clearTimeout") {
+        return (id: number) => {
+          timerRefs.timeouts.delete(Number(id));
+          return target.clearTimeout(id);
+        };
+      }
+      if (prop === "addEventListener") {
+        return (type: string, listener: EventListenerOrEventListenerObject, options?: boolean | AddEventListenerOptions) => {
+          windowListeners.push({ type, listener, options });
+          target.addEventListener(type, listener, options);
+        };
+      }
+      if (prop === "removeEventListener") {
+        return (type: string, listener: EventListenerOrEventListenerObject, options?: boolean | EventListenerOptions) => {
+          target.removeEventListener(type, listener, options);
+        };
+      }
+
+      const key = String(prop);
+      if (Object.prototype.hasOwnProperty.call(runtimeStore, key)) {
+        return runtimeStore[key];
+      }
+
+      // Use native target as receiver to avoid browser brand-check failures (Illegal invocation).
+      const value = Reflect.get(target, prop, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+    set(target, prop, value, receiver) {
+      const key = String(prop);
+      if (key === "csmDynamicCodeContainerId") {
+        runtimeStore[key] = value;
+        return true;
+      }
+      if (
+        key.startsWith("csm")
+        || key === "React"
+        || key === "ReactDOM"
+        || key === "antd"
+        || key === "thongbao"
+        || key === "canhbao"
+      ) {
+        return Reflect.set(target, prop, value, receiver);
+      }
+
+      runtimeStore[key] = value;
+      return true;
+    },
+    has(target, prop) {
+      const key = String(prop);
+      return Object.prototype.hasOwnProperty.call(runtimeStore, key) || key in target;
+    },
+  }) as unknown as Window;
+
+  const cleanup = () => {
+    ["__crmDynamicDispose", "__dynamicCodeDispose", "__autoUploadDispose", "__autoDispose"].forEach((fnName) => {
+      const disposer = runtimeStore[fnName];
+      if (typeof disposer === "function") {
+        try {
+          disposer();
+        } catch (error) {
+          console.warn(`[DynamicCode] Failed to invoke scoped disposer ${fnName}:`, error);
+        }
+      }
+    });
+
+    timerRefs.intervals.forEach((id) => {
+      try { rawWindow.clearInterval(id); } catch {}
+    });
+    timerRefs.timeouts.forEach((id) => {
+      try { rawWindow.clearTimeout(id); } catch {}
+    });
+    timerRefs.intervals.clear();
+    timerRefs.timeouts.clear();
+
+    windowListeners.forEach(({ type, listener, options }) => {
+      try { rawWindow.removeEventListener(type, listener, options); } catch {}
+    });
+    documentListeners.forEach(({ type, listener, options }) => {
+      try { rawDocument.removeEventListener(type, listener, options); } catch {}
+    });
+  };
+
+  return {
+    windowProxy,
+    documentProxy,
+    cleanup,
+  };
 }
 
 declare global {
@@ -420,19 +628,72 @@ export default function DynamicCodeMenu({
   const preferences = usePreferences();
   const { isDark, themeColorPrimary } = preferences;
   const executedRef = useRef(false);
+  const runtimeRef = useRef<ScopedRuntime | null>(null);
   
   const [autoCode, setAutoCode] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Scope default container ID by menu/template to avoid cross-menu collisions.
+  // Scope default container ID by menu/template/tab instance to avoid cross-tab collisions.
   const resolvedContainerId = useMemo(() => {
     if (containerId !== "dynamic-code-root") {
       return containerId;
     }
-    const scopeSource = propAutoCodeName || menuId || "default";
+    const scopeSource = [propAutoCodeName || menuId || "default", location.key || "tab"]
+      .filter(Boolean)
+      .join("_");
     return `dynamic-code-root-${sanitizeIdPart(scopeSource)}`;
-  }, [containerId, propAutoCodeName, menuId]);
+  }, [containerId, propAutoCodeName, menuId, location.key]);
+
+  const resolvedContainerSelector = useMemo(() => `#${escapeCssId(resolvedContainerId)}`, [resolvedContainerId]);
+
+  const scopedLayoutCss = useMemo(() => {
+    return `${resolvedContainerSelector} {
+  width: 100%;
+  max-width: 100%;
+  margin: 0 auto;
+  overflow-x: auto;
+  overflow-y: visible;
+  box-sizing: border-box;
+}
+
+${resolvedContainerSelector},
+${resolvedContainerSelector} * {
+  box-sizing: border-box;
+}
+
+${resolvedContainerSelector} > * {
+  max-width: 100%;
+}
+
+${resolvedContainerSelector} img,
+${resolvedContainerSelector} video,
+${resolvedContainerSelector} canvas,
+${resolvedContainerSelector} svg,
+${resolvedContainerSelector} iframe,
+${resolvedContainerSelector} table,
+${resolvedContainerSelector} pre {
+  max-width: 100%;
+}
+
+${resolvedContainerSelector} .ant-table-wrapper,
+${resolvedContainerSelector} .ant-table,
+${resolvedContainerSelector} .ant-table-container,
+${resolvedContainerSelector} .ant-table-content {
+  max-width: 100%;
+}
+
+${resolvedContainerSelector} .ant-table-content {
+  overflow-x: auto;
+}
+
+${resolvedContainerSelector} input,
+${resolvedContainerSelector} textarea,
+${resolvedContainerSelector} select {
+  max-width: 100%;
+}
+`;
+  }, [resolvedContainerSelector]);
 
   // ============================================
   // SETUP WINDOW OBJECTS - IMMEDIATELY (NOT IN useEffect)
@@ -681,6 +942,7 @@ export default function DynamicCodeMenu({
         get() {
           return {
             notification, Table, Tabs, Button, Input, Select, Card, Space, Popconfirm, CsmDynamicGrid,
+            CsmCrmWorkspace,
             googleIndexUrl: (CsmApi as any).googleIndexUrl,
             checkGoogleIndexQuota: (CsmApi as any).checkGoogleIndexQuota,
             checkGoogleIndexStatus: (CsmApi as any).checkGoogleIndexStatus,
@@ -735,100 +997,23 @@ export default function DynamicCodeMenu({
     }
   }
 
+  // Ensure menu instances are isolated: clean old dynamic instances when switching menus.
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      window.csmDynamicCodeContainerId = resolvedContainerId;
+    if (runtimeRef.current) {
+      runtimeRef.current.cleanup();
+      runtimeRef.current = null;
     }
+    cleanupOwnedContainer(resolvedContainerId);
+    executedRef.current = false;
 
     return () => {
-      if (typeof window !== "undefined" && window.csmDynamicCodeContainerId === resolvedContainerId) {
-        delete window.csmDynamicCodeContainerId;
+      if (runtimeRef.current) {
+        runtimeRef.current.cleanup();
+        runtimeRef.current = null;
       }
+      cleanupOwnedContainer(resolvedContainerId);
     };
-  }, [resolvedContainerId]);
-
-  // ============================================
-  // GLOBAL TIMER CLEANUP SYSTEM - Ngăn Memory Leak & Crash
-  // ============================================
-  useEffect(() => {
-    // Create global timer registry
-    const globalTimers = {
-      intervals: new Set<number>(),
-      timeouts: new Set<number>(),
-      isShuttingDown: false,
-    };
-
-    // Override setInterval to auto-register
-    const originalSetInterval = window.setInterval;
-    (window as any).setInterval = function(...args: any[]) {
-      const id = originalSetInterval.apply(window, args as any);
-      if (!globalTimers.isShuttingDown) {
-        globalTimers.intervals.add(id as unknown as number);
-      }
-      return id;
-    };
-
-    // Override setTimeout to auto-register (only for long-running ones > 10s)
-    const originalSetTimeout = window.setTimeout;
-    (window as any).setTimeout = function(...args: any[]) {
-      const id = originalSetTimeout.apply(window, args as any);
-      const delay = typeof args[1] === 'number' ? args[1] : 0;
-      if (!globalTimers.isShuttingDown && delay > 10000) { // Only track long timeouts
-        globalTimers.timeouts.add(id as unknown as number);
-      }
-      return id;
-    };
-
-    // Expose global cleanup function
-    (window as any).__cleanupAllTimers = () => {
-      console.log('🧹 [CLEANUP] Clearing all timers...');
-      globalTimers.isShuttingDown = true;
-      
-      let cleared = 0;
-      globalTimers.intervals.forEach(id => {
-        try {
-          clearInterval(id);
-          cleared++;
-        } catch (e) {
-          console.warn('Failed to clear interval:', id);
-        }
-      });
-      
-      globalTimers.timeouts.forEach(id => {
-        try {
-          clearTimeout(id);
-          cleared++;
-        } catch (e) {
-          console.warn('Failed to clear timeout:', id);
-        }
-      });
-      
-      globalTimers.intervals.clear();
-      globalTimers.timeouts.clear();
-      
-      console.log(`✅ [CLEANUP] Cleared ${cleared} timers`);
-    };
-
-    // Expose isShuttingDown flag for scripts to check
-    (window as any).__isAutoShuttingDown = () => globalTimers.isShuttingDown;
-
-    // Cleanup function when component unmounts
-    return () => {
-      console.log('🛑 [DynamicCodeMenu] Component unmounting, cleaning up...');
-      
-      // Check if cleanup function exists before calling (prevent "is not a function" error)
-      if (typeof (window as any).__cleanupAllTimers === 'function') {
-        (window as any).__cleanupAllTimers();
-      }
-      
-      // Restore original functions
-      window.setInterval = originalSetInterval;
-      window.setTimeout = originalSetTimeout;
-      
-      delete (window as any).__cleanupAllTimers;
-      delete (window as any).__isAutoShuttingDown;
-    };
-  }, []);
+  }, [menuId, resolvedContainerId, location.key]);
 
 
   // Load inline code or fetch template code from sys_autos
@@ -1124,9 +1309,24 @@ export default function DynamicCodeMenu({
 
   const executeCode = (code: string) => {
     try {
+      if (runtimeRef.current) {
+        runtimeRef.current.cleanup();
+        runtimeRef.current = null;
+      }
+
+      const scopedRuntime = createScopedRuntime(resolvedContainerId);
+      runtimeRef.current = scopedRuntime;
+
       const fn = new Function(
         "seft",
-        `try{\n${code}\n} catch (sca_err) {console.error(sca_err); alert('Menu Error: ' + sca_err);}`
+        "__dynamicContainerId",
+        "__scopedWindow",
+        "__scopedDocument",
+        `const window = __scopedWindow;\n`
+        + `const self = __scopedWindow;\n`
+        + `const globalThis = __scopedWindow;\n`
+        + `const document = __scopedDocument;\n`
+        + `try{\n${code}\n} catch (sca_err) {console.error(sca_err); alert('Menu Error: ' + sca_err);}`
       );
       
       // Wait for dynamic container to be rendered before executing code
@@ -1139,7 +1339,7 @@ export default function DynamicCodeMenu({
           // causing "window.React is not defined" errors
           setTimeout(() => {
             try {
-              fn(seft);
+              fn(seft, resolvedContainerId, scopedRuntime.windowProxy, scopedRuntime.documentProxy);
               console.log('✅ [DynamicCodeMenu] Code executed successfully after DOM ready');
             } catch (err: any) {
               const msg = err?.message || String(err);
@@ -1185,7 +1385,8 @@ export default function DynamicCodeMenu({
 
   return (
     <BasicContent key={i18n.language}>
-      <div style={{ padding: rootPadding }}>
+      <div style={{ padding: rootPadding, width: "100%", maxWidth: "100%", overflowX: "hidden" }}>
+        <style>{scopedLayoutCss}</style>
         {loading && (
           <div style={{ textAlign: "center", padding: 40 }}>
             <Spin size="large" tip={t("common.loading", "Đang tải...")} />
@@ -1216,22 +1417,13 @@ export default function DynamicCodeMenu({
           className={containerClassName}
           style={{
             width: "100%",
+            maxWidth: "100%",
+            margin: "0 auto",
+            overflowX: "auto",
             minHeight: 400,
             ...(loading ? { display: "none" } : {})
           }}
         />
-
-        {resolvedContainerId !== "context-auto" && (
-          <div
-            id="context-auto"
-            className={containerClassName}
-            style={{
-              width: "100%",
-              minHeight: 400,
-              ...(loading ? { display: "none" } : {})
-            }}
-          />
-        )}
         
       </div>
     </BasicContent>

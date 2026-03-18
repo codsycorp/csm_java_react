@@ -8,6 +8,7 @@
 
 import React from "react";
 import { Empty } from "antd";
+import CsmCrmWorkspace from "../csm-crm/CsmCrmWorkspace";
 import CsmDynamicGrid from "../csm-grid/CsmDynamicGrid";
 import CsmReport from "../csm-report/CsmReport";
 
@@ -24,6 +25,7 @@ export interface MenuConfig {
 	table?: any[];
 	trigger?: Record<string, string>;
 	struct?: Record<string, any>;
+	crm_config?: Record<string, any> | string;
 	m_icons?: string;
 	parentId?: string;
 	[key: string]: any;
@@ -43,8 +45,9 @@ export interface MenuContentRendererProps {
  * Get menu type based on config
  * Priority: type field → report_name → table_name → unknown
  */
-export function getMenuType(menu: MenuConfig): "system" | "report" | "grid" | "unknown" {
+export function getMenuType(menu: MenuConfig): "system" | "report" | "grid" | "crm" | "unknown" {
 	if (menu.type) return menu.type as "system" | "report" | "grid";
+	if (Number(menu.type_form || 0) === 5 || menu.crm_config) return "crm";
 	if (menu.report_name) return "report";
 	if (menu.table_name) return "grid";
 	return "unknown";
@@ -96,6 +99,10 @@ function GridContent({
 	);
 }
 
+function CrmContent({ menu, appId, database, onDataChange }: MenuContentRendererProps) {
+	return <CsmCrmWorkspace appId={appId} menuData={menu as any} database={database} onDataChange={onDataChange} />;
+}
+
 /**
  * Main renderer - chooses what to display based on menu type
  * 
@@ -121,6 +128,8 @@ export function MenuContentRenderer({
 			return <SystemContent menu={menu} />;
 		case "report":
 			return <ReportContent menu={menu} appId={appId} decrypt={decrypt} />;
+			case "crm":
+				return <CrmContent menu={menu} appId={appId} database={database} onDataChange={onDataChange} />;
 		case "grid":
 			return (
 				<GridContent

@@ -5,6 +5,7 @@
  * - type_form = 2: Master-Detail Form
  * - type_form = 3: Dynamic Link (external/internal redirect)
  * - type_form = 4: Dynamic Code (execute JavaScript template from sys_autos)
+ * - type_form = 5: CRM Workspace (Kanban + Inventory + Activities + Analytics)
  */
 
 import type { MenuItemType } from "#src/api/system/menu";
@@ -17,6 +18,7 @@ export enum MenuFormType {
   MASTER_DETAIL = 2,         // Dạng Form Master-Detail
   DYNAMIC_LINK = 3,          // Liên kết động
   DYNAMIC_CODE = 4,          // Chạy code động
+  CRM_WORKSPACE = 5,         // Workspace CRM chuyên biệt
 }
 
 /**
@@ -29,6 +31,7 @@ export function getMenuFormTypeLabel(typeForm: number | string | undefined): str
     [MenuFormType.MASTER_DETAIL]: "Master-Detail",
     [MenuFormType.DYNAMIC_LINK]: "Liên kết động",
     [MenuFormType.DYNAMIC_CODE]: "Code động",
+    [MenuFormType.CRM_WORKSPACE]: "CRM Workspace",
   };
   return labels[type] || labels[MenuFormType.TABLE];
 }
@@ -65,6 +68,12 @@ export function resolveMenuRoute(
         route: `/system/dynamic-code/${menu.id}`,
       };
 
+    case MenuFormType.CRM_WORKSPACE:
+      return {
+        type: MenuFormType.CRM_WORKSPACE,
+        route: `${baseRoutes.gridPath}/${menu.id}`,
+      };
+
     default:
       return null;
   }
@@ -89,7 +98,7 @@ export function isDynamicCodeMenu(menu: MenuItemType): boolean {
  */
 export function isGridMenu(menu: MenuItemType): boolean {
   const typeForm = Number(menu.type_form || MenuFormType.TABLE);
-  return typeForm === MenuFormType.TABLE || typeForm === MenuFormType.MASTER_DETAIL;
+  return typeForm === MenuFormType.TABLE || typeForm === MenuFormType.MASTER_DETAIL || typeForm === MenuFormType.CRM_WORKSPACE;
 }
 
 /**
@@ -129,6 +138,9 @@ export function getMenuNavigationTarget(
 
     case MenuFormType.DYNAMIC_CODE:
       return `/system/dynamic-code/${menu.id}`;
+
+    case MenuFormType.CRM_WORKSPACE:
+      return `${options.gridPath || "/system/grid"}/${menu.id}`;
 
     default:
       return null;
@@ -173,6 +185,7 @@ export function buildMenuNavConfig(
     isGrid: isGridMenu(menu),
     isDynamicLink: isDynamicLinkMenu(menu),
     isDynamicCode: isDynamicCodeMenu(menu),
+    isCrmWorkspace: Number(menu.type_form || MenuFormType.TABLE) === MenuFormType.CRM_WORKSPACE,
     shouldOpenNewWindow: shouldNewWindow,
   };
 }

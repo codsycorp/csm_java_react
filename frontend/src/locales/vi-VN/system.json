@@ -84,6 +84,9 @@
 		"typeForm.table": "Dạng bảng",
 		"typeForm.grid": "Dạng bảng",
 		"typeForm.masterDetail": "Dạng Form Master-Detail",
+		"typeForm.dynamicLink": "Liên kết động",
+		"typeForm.dynamicCode": "Chạy code động",
+		"typeForm.crmWorkspace": "CRM Workspace",
 		"rowTypeEdit": "Kiểu chỉnh sửa dòng",
 		"rowTypeEdit.form": "Dạng Form",
 		"rowTypeEdit.inline": "Chỉnh sửa trên dòng",
@@ -124,6 +127,8 @@
 		"mShow": "Hiện",
 		"gReadonly": "Chỉ được xem",
 		"vLink": "Component / Link tương thích",
+		"crmConfigTitle": "Cấu hình CRM Workspace",
+		"crmConfigHint": "Khai báo JSON cho pipeline Kanban, bảng hàng, activity tracking, KPI và chính sách bảo mật dữ liệu khách hàng.",
 		"aiDesigner": {
 			"requirementForm": {
 				"title": "Nhập Yêu Cầu Thiết Kế Menu"
