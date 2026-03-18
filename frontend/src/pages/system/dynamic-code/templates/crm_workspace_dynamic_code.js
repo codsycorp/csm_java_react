@@ -1849,6 +1849,7 @@
       facebook_user_token: "",
     });
     const [facebookPages, setFacebookPages] = React.useState([]);
+    const [activeHubTab, setActiveHubTab] = React.useState("crm");
     const [selectedFacebookPageIds, setSelectedFacebookPageIds] = React.useState([]);
     const [loadingFacebookPages, setLoadingFacebookPages] = React.useState(false);
     const [salesUsers, setSalesUsers] = React.useState([]);
@@ -3333,7 +3334,22 @@
       },
     }, [
       React.createElement("style", { key: "crm-theme-style" }, runtimeThemeCss),
-      React.createElement(Card, {
+      Tabs ? React.createElement(Tabs, {
+        key: "hub-nav-tabs",
+        activeKey: activeHubTab,
+        onChange: setActiveHubTab,
+        type: "card",
+        size: "middle",
+        style: { marginBottom: 0 },
+        tabBarStyle: { marginBottom: 0, paddingBottom: 0 },
+        items: [
+          { key: "crm", label: localizedCrmConfig.title || translate("crmTitle") },
+          { key: "data", label: translate("crmCrudTitle") },
+          { key: "sales", label: translate("salesTodoTitle") },
+          { key: "marketing", label: translate("opsTitle") },
+        ],
+      }) : null,
+      activeHubTab === "marketing" ? React.createElement(Card, {
         key: "ops-summary",
         title: React.createElement("div", { style: { display: "grid", gap: 2 } }, [
           React.createElement("div", { key: "title", style: { fontWeight: 700, color: themeTokens.text } }, translate("opsTitle")),
@@ -3371,9 +3387,9 @@
           metricCard(translate("indexRemaining"), formatNumber(summary.indexRemaining), uiPalette.accentC),
           metricCard(translate("indexQueue"), formatNumber(summary.queuePending), uiPalette.accentF),
         ]),
-      ]),
+      ]) : null,
 
-      React.createElement(Card, {
+      activeHubTab === "marketing" ? React.createElement(Card, {
         key: "ad-setup",
         title: translate("adSetupTitle"),
         style: { borderRadius: 16, borderColor: themeTokens.border, background: themeTokens.cardBg },
@@ -3645,9 +3661,9 @@
             },
           }, translate("quickFill")),
         ]),
-      ]),
+      ]) : null,
 
-      React.createElement("div", {
+      activeHubTab === "marketing" ? React.createElement("div", {
         key: "ops-tables",
         style: {
           display: "grid",
@@ -3685,9 +3701,9 @@
             scroll: { x: true },
           })
           : React.createElement("pre", null, JSON.stringify(opsData.adsRows, null, 2))),
-      ]),
+      ]) : null,
 
-      React.createElement(Card, {
+      activeHubTab === "data" ? React.createElement(Card, {
         key: "crm-crud-manager",
         title: translate("crmCrudTitle"),
         style: { borderRadius: 16, borderColor: themeTokens.border, background: themeTokens.cardBg },
@@ -3811,9 +3827,9 @@
             scroll: { x: true },
           })
           : React.createElement("pre", { key: "crud-json" }, JSON.stringify(crudRows.slice(0, 20), null, 2)),
-      ]),
+      ]) : null,
 
-      React.createElement(Card, {
+      activeHubTab === "sales" ? React.createElement(Card, {
         key: "crm-sales-todo",
         title: translate("salesTodoTitle"),
         style: { borderRadius: 16, borderColor: themeTokens.border, background: themeTokens.cardBg },
@@ -4135,9 +4151,9 @@
             scroll: { x: true },
           })
           : React.createElement("pre", { key: "todo-json" }, JSON.stringify(filteredTodoRows.slice(0, 20), null, 2)),
-      ]),
+      ]) : null,
 
-      React.createElement(CsmCrmWorkspace, {
+      activeHubTab === "crm" ? React.createElement(CsmCrmWorkspace, {
         key: "crm-workspace",
         appId,
         menuData: {
@@ -4161,7 +4177,7 @@
             reloadDatabase();
           }
         },
-      }),
+      }) : null,
     ]);
 
     if (ConfigProvider) {

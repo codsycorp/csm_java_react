@@ -14,10 +14,12 @@ import {
 	InputNumber,
 	List,
 	Modal,
+	Popconfirm,
 	Row,
 	Segmented,
 	Select,
 	Space,
+	Spin,
 	Statistic,
 	Table,
 	Tabs,
@@ -35,6 +37,7 @@ import type { EChartsOption } from "echarts";
 import { useTranslation } from "react-i18next";
 import {
 	addContactHistory,
+	getTableData,
 	updateCustomerStatus,
 	updateTableData,
 } from "#src/components/csm-grid/CsmApi";
@@ -246,6 +249,8 @@ function DroppableStageColumn({
 export default function CsmCrmWorkspace({ appId, menuData, database, onDataChange }: CsmCrmWorkspaceProps) {
 	const [activityForm] = Form.useForm();
 	const [taskForm] = Form.useForm();
+	const [leadForm] = Form.useForm();
+	const [inventoryForm] = Form.useForm();
 	const { i18n } = useTranslation();
 	const { token } = theme.useToken();
 	const user = useUserStore();
@@ -346,6 +351,31 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 			dueAt: tr("Hạn xử lý", "Due time", "截止时间"),
 			chooseDueAt: tr("Chọn hạn xử lý", "Choose due time", "请选择截止时间"),
 			status: tr("Trạng thái", "Status", "状态"),
+			// CRUD
+			addLead: tr("+ Thêm khách", "+ Add lead", "+ 新增线索"),
+			editLead: tr("Sửa khách hàng", "Edit lead", "编辑线索"),
+			addInventory: tr("+ Thêm sản phẩm", "+ Add product", "+ 新增房源"),
+			editInventory: tr("Sửa sản phẩm", "Edit product", "编辑房源"),
+			confirmDelete: tr("Xác nhận xóa bản ghi này?", "Confirm delete this record?", "确认删除此记录？"),
+			deleteOk: tr("Đã xóa", "Deleted", "已删除"),
+			deleteFail: tr("Không thể xóa", "Delete failed", "删除失败"),
+			saveOk: tr("Đã lưu", "Saved", "已保存"),
+			saveFail: tr("Không thể lưu", "Save failed", "无法保存"),
+			refresh: tr("Làm mới", "Refresh", "刷新"),
+			customerName: tr("Tên khách hàng", "Customer name", "客户姓名"),
+			enterName: tr("Nhập tên", "Enter name", "请输入姓名"),
+			enterPhone: tr("Nhập số điện thoại", "Enter phone", "请输入手机号"),
+			sourceLead: tr("Nguồn khách", "Lead source", "线索来源"),
+			assignedTo: tr("Nhân viên phụ trách", "Assigned to", "负责人"),
+			teamId: tr("Nhóm", "Team", "团队"),
+			productCode: tr("Mã sản phẩm", "Product code", "产品编号"),
+			productName: tr("Tên sản phẩm", "Product name", "产品名称"),
+			areaM2: tr("Diện tích (m²)", "Area (m²)", "面积（m²）"),
+			bedrooms: tr("Số phòng ngủ", "Bedrooms", "卧室"),
+			direction: tr("Hướng", "Direction", "朝向"),
+			interactionTitle: tr("Tiêu đề", "Title", "标题"),
+			delete: tr("Xóa", "Delete", "删除"),
+			edit: tr("Sửa", "Edit", "编辑"),
 		};
 	}, [language]);
 	const workspaceTheme = useMemo(() => {
@@ -532,6 +562,12 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 	const [activityRows, setActivityRows] = useState<RowData[]>([]);
 	const [taskRows, setTaskRows] = useState<RowData[]>([]);
 	const [exportRows, setExportRows] = useState<RowData[]>([]);
+	// CRUD & Refresh state
+	const [fetchLoading, setFetchLoading] = useState(false);
+	const [isLeadModalOpen, setIsLeadModalOpen] = useState(false);
+	const [editingLead, setEditingLead] = useState<RowData | null>(null);
+	const [isInventoryModalOpen, setIsInventoryModalOpen] = useState(false);
+	const [editingInventory, setEditingInventory] = useState<RowData | null>(null);
 
 	const sectionItems = useMemo(() => {
 		const items: Array<{ label: string; value: CrmSectionKey }> = [];
@@ -958,6 +994,184 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 		}
 	};
 
+	// ── Refresh from API ──────────────────────────────────────────────────────
+	const refreshData = useCallback(async () => {
+		const resolvedAppId = appId || menuData.app_id || (user as any).app_id || "csm";
+		const sources = [
+			{ source: leadSource, setter: setLeadRows },
+			{ source: inventorySource, setter: setInventoryRows },
+			{ source: activitySource, setter: setActivityRows },
+			{ source: taskSource, setter: setTaskRows },
+			{ source: exportSource, setter: setExportRows },
+		].filter((item) => item.source?.tableName);
+		if (!sources.length) return;
+		setFetchLoading(true);
+		// Clear in-memory cache so we always get fresh data
+		try { (window as any).__csm_getTableDataCache?.clear(); } catch { /* ignore */ }
+		try {
+			await Promise.all(sources.map(async ({ source, setter }) => {
+				const res = await getTableData({ app_id: resolvedAppId, obj_name: source!.tableName!, take: 2000 });
+				const rows: RowData[] = (res as any)?.rows ?? (res as any)?.data ?? [];
+				setter(rows);
+			}));
+		} catch {
+			// silently ignore refresh failures
+		} finally {
+			setFetchLoading(false);
+		}
+	}, [appId, menuData.app_id, (user as any).app_id, leadSource?.tableName, inventorySource?.tableName, activitySource?.tableName, taskSource?.tableName, exportSource?.tableName]);
+
+	// ── Lead CRUD ─────────────────────────────────────────────────────────────
+	const openCreateLead = useCallback(() => {
+		setEditingLead(null);
+		leadForm.resetFields();
+		leadForm.setFieldsValue({
+			[leadStatusField]: pipelineStages[0]?.id || "lead",
+			[leadSource?.sourceField || "source"]: "sales_self",
+			[leadAssignedField]: (user as any).userId || (user as any).username || "",
+		});
+		setIsLeadModalOpen(true);
+	}, [leadForm, leadStatusField, pipelineStages, leadSource?.sourceField, leadAssignedField, user]);
+
+	const openEditLead = useCallback((row: RowData) => {
+		setEditingLead(row);
+		leadForm.setFieldsValue(row);
+		setIsLeadModalOpen(true);
+	}, [leadForm]);
+
+	const saveLead = async () => {
+		if (!leadSource?.tableName) return;
+		const values = await leadForm.validateFields();
+		const isCreate = !editingLead;
+		const existingPk = isCreate ? "" : getPrimaryKey(editingLead, leadSource);
+		const row: RowData = {
+			...(editingLead || {}),
+			...values,
+			[leadSource.pkField || "id"]: existingPk || `LEAD_${Date.now()}`,
+			[leadUpdatedField]: Date.now(),
+			...(isCreate ? { [leadCreatedField]: Date.now() } : {}),
+		};
+		setSaving(true);
+		try {
+			await saveRecord({ source: leadSource, row, command: isCreate ? "create" : "update", where: isCreate ? undefined : pickWhere(leadSource, editingLead!) });
+			if (isCreate) {
+				setLeadRows((current) => [row, ...current]);
+			} else {
+				const pk = getPrimaryKey(row, leadSource);
+				setLeadRows((current) => current.map((r) => getPrimaryKey(r, leadSource) === pk ? row : r));
+			}
+			message.success(text.saveOk);
+			setIsLeadModalOpen(false);
+			setEditingLead(null);
+			leadForm.resetFields();
+			onDataChange?.();
+		} catch (error: any) {
+			message.error(error?.message || text.saveFail);
+		} finally {
+			setSaving(false);
+		}
+	};
+
+	const deleteLead = useCallback(async (row: RowData) => {
+		if (!leadSource?.tableName) return;
+		try {
+			await saveRecord({ source: leadSource, row, command: "delete", where: pickWhere(leadSource, row) });
+			const pk = getPrimaryKey(row, leadSource);
+			setLeadRows((current) => current.filter((r) => getPrimaryKey(r, leadSource) !== pk));
+			message.success(text.deleteOk);
+			onDataChange?.();
+		} catch (error: any) {
+			message.error(error?.message || text.deleteFail);
+		}
+	}, [leadSource, text.deleteOk, text.deleteFail, onDataChange]);
+
+	// ── Inventory CRUD ───────────────────────────────────────────────────────
+	const openCreateInventory = useCallback(() => {
+		setEditingInventory(null);
+		inventoryForm.resetFields();
+		inventoryForm.setFieldsValue({ [inventorySource?.statusField || "status"]: "available" });
+		setIsInventoryModalOpen(true);
+	}, [inventoryForm, inventorySource?.statusField]);
+
+	const openEditInventory = useCallback((row: RowData) => {
+		setEditingInventory(row);
+		inventoryForm.setFieldsValue(row);
+		setIsInventoryModalOpen(true);
+	}, [inventoryForm]);
+
+	const saveInventory = async () => {
+		if (!inventorySource?.tableName) return;
+		const values = await inventoryForm.validateFields();
+		const isCreate = !editingInventory;
+		const existingPk = isCreate ? "" : getPrimaryKey(editingInventory, inventorySource);
+		const row: RowData = {
+			...(editingInventory || {}),
+			...values,
+			[inventorySource.pkField || "id"]: existingPk || `INV_${Date.now()}`,
+			updated_at: Date.now(),
+			...(isCreate ? { created_at: Date.now() } : {}),
+		};
+		setSaving(true);
+		try {
+			await saveRecord({ source: inventorySource, row, command: isCreate ? "create" : "update", where: isCreate ? undefined : pickWhere(inventorySource, editingInventory!) });
+			if (isCreate) {
+				setInventoryRows((current) => [row, ...current]);
+			} else {
+				const pk = getPrimaryKey(row, inventorySource);
+				setInventoryRows((current) => current.map((r) => getPrimaryKey(r, inventorySource) === pk ? row : r));
+			}
+			message.success(text.saveOk);
+			setIsInventoryModalOpen(false);
+			setEditingInventory(null);
+			inventoryForm.resetFields();
+			onDataChange?.();
+		} catch (error: any) {
+			message.error(error?.message || text.saveFail);
+		} finally {
+			setSaving(false);
+		}
+	};
+
+	const deleteInventory = useCallback(async (row: RowData) => {
+		if (!inventorySource?.tableName) return;
+		try {
+			await saveRecord({ source: inventorySource, row, command: "delete", where: pickWhere(inventorySource, row) });
+			const pk = getPrimaryKey(row, inventorySource);
+			setInventoryRows((current) => current.filter((r) => getPrimaryKey(r, inventorySource) !== pk));
+			message.success(text.deleteOk);
+			onDataChange?.();
+		} catch (error: any) {
+			message.error(error?.message || text.deleteFail);
+		}
+	}, [inventorySource, text.deleteOk, text.deleteFail, onDataChange]);
+
+	// ── Activity & Task delete ────────────────────────────────────────────────
+	const deleteActivity = useCallback(async (row: RowData) => {
+		if (!activitySource?.tableName) return;
+		try {
+			await saveRecord({ source: activitySource, row, command: "delete", where: pickWhere(activitySource, row) });
+			const pk = getPrimaryKey(row, activitySource);
+			setActivityRows((current) => current.filter((r) => getPrimaryKey(r, activitySource) !== pk));
+			message.success(text.deleteOk);
+			onDataChange?.();
+		} catch (error: any) {
+			message.error(error?.message || text.deleteFail);
+		}
+	}, [activitySource, text.deleteOk, text.deleteFail, onDataChange]);
+
+	const deleteTask = useCallback(async (row: RowData) => {
+		if (!taskSource?.tableName) return;
+		try {
+			await saveRecord({ source: taskSource, row, command: "delete", where: pickWhere(taskSource, row) });
+			const pk = getPrimaryKey(row, taskSource);
+			setTaskRows((current) => current.filter((r) => getPrimaryKey(r, taskSource) !== pk));
+			message.success(text.deleteOk);
+			onDataChange?.();
+		} catch (error: any) {
+			message.error(error?.message || text.deleteFail);
+		}
+	}, [taskSource, text.deleteOk, text.deleteFail, onDataChange]);
+
 	const pipelineSection = (
 		<Card
 			title={text.pipelineTitle}
@@ -968,10 +1182,12 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 					<Input.Search
 						allowClear
 						placeholder={text.searchLead}
-						style={{ width: 260 }}
+						style={{ width: 240 }}
 						value={searchText}
 						onChange={(event) => setSearchText(event.target.value)}
 					/>
+					<Button loading={fetchLoading} onClick={refreshData} size="small">{text.refresh}</Button>
+					<Button type="primary" size="small" onClick={openCreateLead}>{text.addLead}</Button>
 					{security.phoneMask?.enabled && (
 						<Tag color={workspaceTheme.warning}>{text.phoneMaskHint}</Tag>
 					)}
@@ -1043,6 +1259,23 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 																<Typography.Text type="secondary">{text.lastContact}: {formatDateTime(row[leadLastInteractionField] || row[leadUpdatedField], localeCode, text.noData)}</Typography.Text>
 																<Typography.Text type="secondary">{text.phone}: {maskPhone(row)}</Typography.Text>
 																<Typography.Text type="secondary">{text.sales}: {row[leadAssignedField] || text.noData}</Typography.Text>
+																<Space size={4} style={{ justifyContent: "flex-end", width: "100%" }}>
+																	<Button
+																		size="small"
+																		onClick={(e) => { e.stopPropagation(); openEditLead(row); }}
+																	>{text.edit}</Button>
+																	<Popconfirm
+																		title={text.confirmDelete}
+																		onConfirm={(e) => { e?.stopPropagation(); deleteLead(row); }}
+																		onCancel={(e) => e?.stopPropagation()}
+																	>
+																		<Button
+																			size="small"
+																			danger
+																			onClick={(e) => e.stopPropagation()}
+																		>{text.delete}</Button>
+																	</Popconfirm>
+																</Space>
 															</Space>
 														</Card>
 													</DraggableLeadCard>
@@ -1092,6 +1325,7 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 								onChange={(value) => setBedroomFilter(value || "")}
 								options={inventoryBedrooms}
 							/>
+							<Button type="primary" size="small" onClick={openCreateInventory}>{text.addInventory}</Button>
 						</Space>
 					}
 				>
@@ -1146,6 +1380,12 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 											<Button type={isLinked ? "default" : "primary"} block onClick={() => handleAttachInventory(row)}>
 												{isLinked ? text.linkedCurrentLead : text.attachCurrentLead}
 											</Button>
+											<Space size={4} style={{ justifyContent: "flex-end", width: "100%" }}>
+												<Button size="small" onClick={() => openEditInventory(row)}>{text.edit}</Button>
+												<Popconfirm title={text.confirmDelete} onConfirm={() => deleteInventory(row)}>
+													<Button size="small" danger>{text.delete}</Button>
+												</Popconfirm>
+											</Space>
 										</Space>
 									</Card>
 								</Col>
@@ -1251,9 +1491,15 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 							label: text.recentInteractions,
 							children: (
 								<List
-									dataSource={activityRows.slice(0, 8)}
+									dataSource={activityRows.slice(0, 20)}
 									renderItem={(row) => (
-										<List.Item>
+										<List.Item
+											actions={[
+												<Popconfirm key="del" title={text.confirmDelete} onConfirm={() => deleteActivity(row)}>
+													<Button size="small" danger>{text.delete}</Button>
+												</Popconfirm>,
+											]}
+										>
 											<Space direction="vertical" size={0} style={{ width: "100%" }}>
 												<Typography.Text>{String(row[activitySource?.contactTypeField || "activity_type"] || text.activities).toUpperCase()} - {row[activitySource?.notesField || "notes"] || text.noData}</Typography.Text>
 												<Typography.Text type="secondary">{formatDateTime(row[activitySource?.completedAtField || "completed_at"] || row[activitySource?.scheduledAtField || "scheduled_at"], localeCode, text.noData)} - {row[activitySource?.resultField || "result"] || "pending"}</Typography.Text>
@@ -1269,9 +1515,15 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 							label: text.followupTasks,
 							children: (
 								<List
-									dataSource={taskRows.slice(0, 8)}
+									dataSource={taskRows.slice(0, 20)}
 									renderItem={(row) => (
-										<List.Item>
+										<List.Item
+											actions={[
+												<Popconfirm key="del" title={text.confirmDelete} onConfirm={() => deleteTask(row)}>
+													<Button size="small" danger>{text.delete}</Button>
+												</Popconfirm>,
+											]}
+										>
 											<Space direction="vertical" size={0} style={{ width: "100%" }}>
 												<Typography.Text>{row[taskSource?.titleKeyField || "title"] || text.followupTasks}</Typography.Text>
 												<Typography.Text type="secondary">{text.due}: {formatDateTime(row[taskSource?.dueDateField || "due_at"], localeCode, text.noData)} - {row[taskSource?.statusField || "status"] || "todo"}</Typography.Text>
@@ -1441,6 +1693,132 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 						<DatePicker showTime style={{ width: "100%" }} format="DD/MM/YYYY HH:mm" />
 					</Form.Item>
 				</Form>
+			</Modal>
+
+			{/* ── Lead Create/Edit Modal ─────────────────────────────────── */}
+			<Modal
+				open={isLeadModalOpen}
+				onCancel={() => { setIsLeadModalOpen(false); setEditingLead(null); leadForm.resetFields(); }}
+				onOk={saveLead}
+				confirmLoading={saving}
+				title={editingLead ? text.editLead : text.addLead}
+				width={640}
+			>
+				<Spin spinning={saving}>
+					<Form form={leadForm} layout="vertical">
+						<Row gutter={12}>
+							<Col xs={24} md={12}>
+								<Form.Item name={leadTitleField} label={text.customerName} rules={[{ required: true, message: text.enterName }]}>
+									<Input placeholder={text.enterName} />
+								</Form.Item>
+							</Col>
+							<Col xs={24} md={12}>
+								<Form.Item name={leadPhoneField} label={text.phone} rules={[{ required: true, message: text.enterPhone }]}>
+									<Input placeholder={text.enterPhone} />
+								</Form.Item>
+							</Col>
+							<Col xs={24} md={12}>
+								<Form.Item name={leadSource?.sourceField || "source"} label={text.sourceLead}>
+									<Select options={[
+										{ value: "facebook", label: "Facebook" },
+										{ value: "google", label: "Google" },
+										{ value: "website", label: "Website" },
+										{ value: "sales_self", label: "Sales tự khai thác" },
+										{ value: "external_floor", label: "Sàn / đối tác" },
+										{ value: "other", label: text.other },
+									]} />
+								</Form.Item>
+							</Col>
+							<Col xs={24} md={12}>
+								<Form.Item name={leadStatusField} label={text.status}>
+									<Select options={pipelineStages.map((stage) => ({ label: stage.label, value: stage.id }))} />
+								</Form.Item>
+							</Col>
+							<Col xs={24} md={12}>
+								<Form.Item name={leadProjectField} label={text.project}>
+									<Input placeholder={text.project} />
+								</Form.Item>
+							</Col>
+							<Col xs={24} md={12}>
+								<Form.Item name={leadValueField} label={text.expectedValue}>
+									<InputNumber style={{ width: "100%" }} min={0} step={100000000} formatter={(v) => `${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ",")} />
+								</Form.Item>
+							</Col>
+							<Col xs={24} md={12}>
+								<Form.Item name={leadAssignedField} label={text.assignedTo}>
+									<Input placeholder={text.assignedTo} />
+								</Form.Item>
+							</Col>
+							<Col xs={24} md={12}>
+								<Form.Item name={leadTeamField} label={text.teamId}>
+									<Input placeholder={text.teamId} />
+								</Form.Item>
+							</Col>
+							<Col xs={24}>
+								<Form.Item name={leadSource?.notesField || "notes"} label={text.notes}>
+									<Input.TextArea rows={3} placeholder={text.enterNotes} />
+								</Form.Item>
+							</Col>
+						</Row>
+					</Form>
+				</Spin>
+			</Modal>
+
+			{/* ── Inventory Create/Edit Modal ───────────────────────────── */}
+			<Modal
+				open={isInventoryModalOpen}
+				onCancel={() => { setIsInventoryModalOpen(false); setEditingInventory(null); inventoryForm.resetFields(); }}
+				onOk={saveInventory}
+				confirmLoading={saving}
+				title={editingInventory ? text.editInventory : text.addInventory}
+				width={640}
+			>
+				<Spin spinning={saving}>
+					<Form form={inventoryForm} layout="vertical">
+						<Row gutter={12}>
+							<Col xs={24} md={12}>
+								<Form.Item name={inventorySource?.titleField || "product_name"} label={text.productName} rules={[{ required: true }]}>
+									<Input />
+								</Form.Item>
+							</Col>
+							<Col xs={24} md={12}>
+								<Form.Item name={inventorySource?.productCodeField || "product_code"} label={text.productCode}>
+									<Input />
+								</Form.Item>
+							</Col>
+							<Col xs={24} md={12}>
+								<Form.Item name={inventorySource?.projectField || "project_name"} label={text.project}>
+									<Input />
+								</Form.Item>
+							</Col>
+							<Col xs={24} md={12}>
+								<Form.Item name={inventorySource?.statusField || "status"} label={text.status}>
+									<Select options={inventoryStatuses.map((item) => ({ label: item.label, value: item.id }))} />
+								</Form.Item>
+							</Col>
+							<Col xs={24} md={12}>
+								<Form.Item name={inventorySource?.priceField || "price"} label={text.priceFrom}>
+									<InputNumber style={{ width: "100%" }} min={0} step={100000000} formatter={(v) => `${v}`.replace(/\B(?=(\d{3})+(?!\d))/g, ",")} />
+								</Form.Item>
+							</Col>
+							<Col xs={24} md={8}>
+								<Form.Item name={inventorySource?.areaField || "area_m2"} label={text.areaM2}>
+									<InputNumber style={{ width: "100%" }} min={0} />
+								</Form.Item>
+							</Col>
+							<Col xs={24} md={8}>
+								<Form.Item name={inventorySource?.bedroomField || "bedrooms"} label={text.bedrooms}>
+									<InputNumber style={{ width: "100%" }} min={0} />
+								</Form.Item>
+							</Col>
+							<Col xs={24} md={8}>
+								<Form.Item name={inventorySource?.directionField || "direction"} label={text.direction}>
+									<Input />
+								</Form.Item>
+							</Col>
+						</Row>
+					</Form>
+				</Spin>
 			</Modal>
 		</div>
 	);
