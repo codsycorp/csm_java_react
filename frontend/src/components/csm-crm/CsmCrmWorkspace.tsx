@@ -6,6 +6,7 @@ import {
 	Calendar,
 	Card,
 	Col,
+	ConfigProvider,
 	DatePicker,
 	Divider,
 	Empty,
@@ -20,6 +21,7 @@ import {
 	Select,
 	Space,
 	Spin,
+	Steps,
 	Statistic,
 	Table,
 	Tabs,
@@ -254,7 +256,13 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 	const { i18n } = useTranslation();
 	const { token } = theme.useToken();
 	const user = useUserStore();
-	const resolvePopupContainer = useCallback((node?: HTMLElement) => node?.parentElement || document.body, []);
+	const resolvePopupContainer = useCallback((node?: HTMLElement) => {
+		if (node && typeof node.closest === "function") {
+			const themedRoot = node.closest(".crm-workspace-theme");
+			if (themedRoot) return themedRoot as HTMLElement;
+		}
+		return node?.parentElement || document.body;
+	}, []);
 	const language = useMemo<CrmLocale>(() => normalizeCrmLanguage(i18n.language), [i18n.language]);
 	const localeCode = language === "en" ? "en-US" : language === "zh" ? "zh-CN" : "vi-VN";
 	const text = useMemo(() => {
@@ -328,8 +336,26 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 			closed: tr("Đã chốt", "Closed", "成交"),
 			rate: tr("Tỷ lệ", "Rate", "转化率"),
 			workspaceTag: tr("CRM Workspace", "CRM Workspace", "CRM 工作台"),
-			headerTitle: tr("CRM bất động sản", "Real estate CRM", "房地产 CRM"),
+			headerTitle: tr("CRM Kinh doanh", "Sales CRM", "销售 CRM"),
 			headerDesc: tr("Biến dữ liệu lead, kho hàng và tương tác thành hành động có thể đo lường ngay trên admin frontend.", "Turn lead, inventory, and interaction data into measurable actions directly inside the admin frontend.", "将线索、库存与互动数据转化为管理后台中可衡量的行动。"),
+			guideTitle: tr("Hướng dẫn thao tác nhanh", "Quick start guide", "快速上手指南"),
+			guideSubtitle: tr("Làm theo đúng trình tự để dữ liệu sạch, dễ theo dõi và chốt cơ hội nhanh hơn.", "Follow this sequence to keep data clean, trackable, and easier to close.", "按此顺序操作可保持数据整洁、便于追踪并更快推进成交。"),
+			guideStep1Title: tr("Bước 1: Tạo lead đủ thông tin", "Step 1: Create complete lead", "步骤 1：创建完整线索"),
+			guideStep1Desc: tr("Điền tối thiểu: Tên khách, SĐT, Dự án quan tâm, Nguồn khách.", "Fill at least: Customer name, phone, interested project, and source.", "至少填写：客户姓名、手机号、意向项目、线索来源。"),
+			guideStep2Title: tr("Bước 2: Gắn sản phẩm phù hợp", "Step 2: Link matching inventory", "步骤 2：关联匹配房源"),
+			guideStep2Desc: tr("Chọn sản phẩm theo giá, diện tích, hướng và số phòng rồi liên kết với lead.", "Filter by budget, area, direction, bedrooms, then link to the lead.", "按预算、面积、朝向、卧室筛选后，关联到线索。"),
+			guideStep3Title: tr("Bước 3: Ghi nhận tương tác", "Step 3: Log interactions", "步骤 3：记录互动"),
+			guideStep3Desc: tr("Mỗi cuộc gọi/lịch hẹn cần có thời điểm, kết quả và ghi chú ngắn gọn.", "Every call/meeting should include time, result, and concise notes.", "每次通话/会面需记录时间、结果与简要备注。"),
+			guideStep4Title: tr("Bước 4: Tạo task theo dõi", "Step 4: Create follow-up tasks", "步骤 4：创建跟进任务"),
+			guideStep4Desc: tr("Đặt hạn xử lý rõ ràng để không bỏ sót cơ hội và đảm bảo nhịp chăm sóc.", "Set clear due times to avoid misses and keep consistent follow-up.", "设置明确截止时间，避免遗漏机会并保持跟进节奏。"),
+			guideStep5Title: tr("Bước 5: Cập nhật trạng thái & đo hiệu suất", "Step 5: Update status and measure", "步骤 5：更新状态并衡量效果"),
+			guideStep5Desc: tr("Kéo thả lead theo pipeline và theo dõi tỷ lệ chốt ở mục Phân tích.", "Move leads through pipeline stages and monitor close rate in Analytics.", "在线索看板推进阶段，并在分析页查看成交率。"),
+			guideDataTitle: tr("Chuẩn điền dữ liệu", "Data entry standards", "数据填写规范"),
+			guideLeadRule: tr("Lead: Tên + SĐT + Dự án + Nguồn là bắt buộc để đủ điều kiện chăm sóc.", "Lead: Name + phone + project + source are required for proper follow-up.", "线索：姓名 + 手机号 + 项目 + 来源为基础必填。"),
+			guideInventoryRule: tr("Sản phẩm: Mã SP, giá, diện tích, trạng thái cần thống nhất để lọc chính xác.", "Inventory: Product code, price, area, and status should be consistent for accurate filtering.", "房源：编号、价格、面积、状态需统一，便于精准筛选。"),
+			guideActivityRule: tr("Tương tác: Ghi chú 1-2 câu nêu nhu cầu chính và bước tiếp theo.", "Interactions: Keep 1-2 sentence notes for key need and next action.", "互动：用 1-2 句记录核心需求与下一步动作。"),
+			guideTaskRule: tr("Task: Tiêu đề rõ việc, có hạn xử lý và người phụ trách cụ thể.", "Task: Use action-oriented title, clear due time, and explicit owner.", "任务：标题要可执行，并明确截止时间与负责人。"),
+			guideProgressLabel: tr("Tiến độ onboard", "Onboarding progress", "上手进度"),
 			activeLeads: tr("Lead đang xử lý", "Active leads", "跟进中的线索"),
 			availableProducts: tr("Sản phẩm trống", "Available products", "可售产品"),
 			openTasks: tr("Task mở", "Open tasks", "进行中任务"),
@@ -458,6 +484,44 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 		.crm-workspace-theme .ant-tabs-tab {
 			background: ${token.colorBgContainer};
 		}
+		.crm-workspace-theme .crm-activity-tabs > .ant-tabs-nav {
+			margin-bottom: 12px;
+		}
+		.crm-workspace-theme .crm-activity-tabs > .ant-tabs-nav::before {
+			border-bottom: 1px solid ${token.colorBorder};
+		}
+		.crm-workspace-theme .crm-activity-tabs .ant-tabs-tab {
+			border: 1px solid transparent;
+			border-radius: 10px 10px 0 0;
+			padding: 8px 12px;
+			transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+		}
+		.crm-workspace-theme .crm-activity-tabs .ant-tabs-tab:hover {
+			background: ${(token as any).colorFillSecondary || token.colorBgElevated};
+			border-color: ${(token as any).colorPrimaryBorder || token.colorBorder};
+		}
+		.crm-workspace-theme .crm-activity-tabs .ant-tabs-tab .ant-tabs-tab-btn {
+			color: ${token.colorTextSecondary};
+			font-weight: 500;
+		}
+		.crm-workspace-theme .crm-activity-tabs .ant-tabs-tab.ant-tabs-tab-active {
+			background: ${(token as any).colorPrimaryBg || token.colorBgElevated};
+			border-color: ${(token as any).colorPrimaryBorder || token.colorPrimary};
+		}
+		.crm-workspace-theme .crm-activity-tabs .ant-tabs-tab.ant-tabs-tab-active .ant-tabs-tab-btn {
+			color: ${(token as any).colorPrimaryText || token.colorText};
+			font-weight: 600;
+		}
+		.crm-workspace-theme .crm-activity-tabs .ant-tabs-ink-bar {
+			height: 3px;
+			border-radius: 999px;
+			background: ${token.colorPrimary};
+		}
+		.crm-workspace-theme .crm-activity-tabs .ant-tabs-tab-btn:focus-visible {
+			outline: 2px solid ${(token as any).colorPrimaryBorder || token.colorPrimary};
+			outline-offset: 2px;
+			border-radius: 8px;
+		}
 		.crm-workspace-theme .ant-segmented {
 			background: ${(token as any).colorFillTertiary || token.colorBgContainer};
 			border: 1px solid ${token.colorBorder};
@@ -515,6 +579,98 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 		.crm-workspace-theme textarea::placeholder,
 		.crm-workspace-theme .ant-select-selection-placeholder {
 			color: ${(token as any).colorTextTertiary || token.colorTextSecondary};
+		}
+		.crm-workspace-theme .ant-select-dropdown,
+		.crm-workspace-theme .ant-select-item,
+		.crm-workspace-theme .ant-select-item-option-content,
+		.crm-workspace-theme .ant-select-item-empty,
+		.crm-workspace-theme .ant-picker-dropdown .ant-picker-panel-container,
+		.crm-workspace-theme .ant-picker-dropdown .ant-picker-panel,
+		.crm-workspace-theme .ant-picker-dropdown .ant-picker-header,
+		.crm-workspace-theme .ant-picker-dropdown .ant-picker-content th,
+		.crm-workspace-theme .ant-picker-dropdown .ant-picker-cell,
+		.crm-workspace-theme .ant-picker-dropdown .ant-picker-cell-inner,
+		.crm-workspace-theme .ant-popover .ant-popover-inner,
+		.crm-workspace-theme .ant-popconfirm .ant-popconfirm-message-title,
+		.crm-workspace-theme .ant-popconfirm .ant-popconfirm-description {
+			background: ${token.colorBgContainer};
+			color: ${token.colorText};
+			border-color: ${token.colorBorder};
+		}
+		.crm-workspace-theme .ant-select-item-option-active:not(.ant-select-item-option-disabled),
+		.crm-workspace-theme .ant-select-item-option-selected:not(.ant-select-item-option-disabled),
+		.crm-workspace-theme .ant-picker-dropdown .ant-picker-cell-in-view.ant-picker-cell-selected .ant-picker-cell-inner {
+			background: ${(token as any).colorPrimaryBg || token.colorBgElevated};
+			color: ${token.colorText};
+		}
+		.crm-workspace-theme .ant-popover .ant-popover-arrow::before {
+			background: ${token.colorBgContainer};
+			border-color: ${token.colorBorder};
+		}
+		.crm-workspace-theme .ant-pagination .ant-pagination-item,
+		.crm-workspace-theme .ant-pagination .ant-pagination-prev .ant-pagination-item-link,
+		.crm-workspace-theme .ant-pagination .ant-pagination-next .ant-pagination-item-link {
+			background: ${(token as any).colorFillSecondary || token.colorBgContainer};
+			border-color: ${token.colorBorder};
+			color: ${token.colorText};
+		}
+		.crm-workspace-theme .ant-pagination .ant-pagination-item-active {
+			border-color: ${(token as any).colorPrimaryBorder || token.colorPrimary};
+		}
+		.crm-workspace-theme .ant-pagination .ant-pagination-item a {
+			color: ${token.colorText};
+		}
+		.crm-workspace-theme .crm-onboarding-guide {
+			background: ${token.colorBgContainer};
+			border: 1px solid ${token.colorBorder};
+		}
+		.crm-workspace-theme .crm-onboarding-guide .crm-onboarding-subtitle {
+			color: ${token.colorTextSecondary};
+			line-height: 1.6;
+			font-weight: 500;
+		}
+		.crm-workspace-theme .crm-onboarding-guide .ant-steps-item-title {
+			color: ${token.colorText};
+			font-weight: 600;
+		}
+		.crm-workspace-theme .crm-onboarding-guide .ant-steps-item-description {
+			color: ${token.colorTextSecondary};
+		}
+		.crm-workspace-theme .crm-onboarding-guide .ant-steps-item-process .ant-steps-item-title {
+			color: ${(token as any).colorPrimaryText || token.colorText};
+		}
+		.crm-workspace-theme .crm-onboarding-guide .ant-steps-item-process .ant-steps-item-description {
+			color: ${token.colorText};
+		}
+		.crm-workspace-theme .crm-onboarding-guide .ant-steps-item-wait .ant-steps-item-icon,
+		.crm-workspace-theme .crm-onboarding-guide .ant-steps-item-process .ant-steps-item-icon,
+		.crm-workspace-theme .crm-onboarding-guide .ant-steps-item-finish .ant-steps-item-icon {
+			background: ${(token as any).colorFillSecondary || token.colorBgContainer};
+			border-color: ${(token as any).colorPrimaryBorder || token.colorPrimary};
+		}
+		.crm-workspace-theme .crm-onboarding-guide .ant-steps-item-process .ant-steps-item-icon {
+			background: ${token.colorPrimary};
+			border-color: ${token.colorPrimary};
+		}
+		.crm-workspace-theme .crm-onboarding-guide .ant-steps-item-icon .ant-steps-icon {
+			color: ${(token as any).colorPrimaryText || token.colorText};
+		}
+		.crm-workspace-theme .crm-onboarding-guide .ant-steps-item-process .ant-steps-item-icon .ant-steps-icon {
+			color: ${(token as any).colorTextLightSolid || "#ffffff"};
+		}
+		.crm-workspace-theme .crm-onboarding-guide .ant-steps-item-tail::after {
+			background-color: ${token.colorBorder};
+		}
+		.crm-workspace-theme .crm-onboarding-guide .crm-onboarding-rules {
+			background: ${(token as any).colorFillSecondary || token.colorBgContainer};
+			border: 1px solid ${(token as any).colorPrimaryBorder || token.colorBorder};
+			box-shadow: inset 0 0 0 1px ${(token as any).colorFillQuaternary || token.colorBorder};
+		}
+		.crm-workspace-theme .crm-onboarding-guide .crm-onboarding-rules .ant-list-item {
+			border-block-end: 1px solid ${token.colorBorder};
+		}
+		.crm-workspace-theme .crm-onboarding-guide .crm-onboarding-rules .ant-list-item:last-child {
+			border-block-end: none;
 		}
 		.crm-workspace-theme-modal .ant-modal-content,
 		.crm-workspace-theme-modal .ant-modal-header,
@@ -792,6 +948,33 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 	const bookingCount = filteredLeadRows.filter((row) => bookingStageIds.includes(String(row[leadStatusField] || ""))).length;
 	const closedCount = filteredLeadRows.filter((row) => closedStageIds.includes(String(row[leadStatusField] || ""))).length;
 	const conversionRate = filteredLeadRows.length > 0 ? Math.round((closedCount / filteredLeadRows.length) * 100) : 0;
+	const inventoryLeadLinkField = crmConfig.inventory?.leadLinkField || inventorySource?.leadRefField || "lead_id";
+	const hasLeadCoreInfo = filteredLeadRows.some((row) => Boolean(row[leadTitleField] && row[leadPhoneField] && row[leadProjectField] && row[leadSource?.sourceField || "source"]));
+	const hasLinkedInventory = inventoryRows.some((row) => Boolean(row[inventoryLeadLinkField]));
+	const hasInteractionLog = activityRows.length > 0;
+	const hasTaskPlan = taskRows.length > 0;
+	const guideCurrentStep = useMemo(() => {
+		if (!hasLeadCoreInfo) return 0;
+		if (!hasLinkedInventory) return 1;
+		if (!hasInteractionLog) return 2;
+		if (!hasTaskPlan) return 3;
+		if (closedCount <= 0) return 4;
+		return 5;
+	}, [hasLeadCoreInfo, hasLinkedInventory, hasInteractionLog, hasTaskPlan, closedCount]);
+	const guideProgressPercent = Math.min(100, Math.round((guideCurrentStep / 5) * 100));
+	const guideStepItems = useMemo(() => ([
+		{ title: text.guideStep1Title, description: text.guideStep1Desc },
+		{ title: text.guideStep2Title, description: text.guideStep2Desc },
+		{ title: text.guideStep3Title, description: text.guideStep3Desc },
+		{ title: text.guideStep4Title, description: text.guideStep4Desc },
+		{ title: text.guideStep5Title, description: text.guideStep5Desc },
+	]), [text]);
+	const guideRules = useMemo(() => ([
+		text.guideLeadRule,
+		text.guideInventoryRule,
+		text.guideActivityRule,
+		text.guideTaskRule,
+	]), [text]);
 
 	const salesByDimension = useMemo(() => {
 		const fieldMap = {
@@ -1560,6 +1743,7 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 			</Col>
 			<Col xs={24} xl={8}>
 				<Tabs
+					className="crm-activity-tabs"
 					style={{ background: token.colorBgContainer, borderRadius: 16, padding: 12 }}
 					items={[
 						{
@@ -1668,8 +1852,46 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 		</Row>
 	);
 
+	const onboardingGuideSection = (
+		<Card className="crm-onboarding-guide" style={{ borderRadius: 16 }} styles={{ body: { padding: 14 } }}>
+			<Row gutter={[16, 16]}>
+				<Col xs={24} xl={16}>
+					<Space direction="vertical" size={8} style={{ width: "100%" }}>
+						<Typography.Title level={5} style={{ margin: 0 }}>{text.guideTitle}</Typography.Title>
+						<Typography.Text className="crm-onboarding-subtitle" type="secondary">{text.guideSubtitle}</Typography.Text>
+						<Steps
+							current={Math.min(guideCurrentStep, 4)}
+							direction="vertical"
+							size="small"
+							items={guideStepItems}
+						/>
+					</Space>
+				</Col>
+				<Col xs={24} xl={8}>
+					<Card className="crm-onboarding-rules" style={{ borderRadius: 12, height: "100%" }} styles={{ body: { padding: 12 } }}>
+						<Space direction="vertical" size={10} style={{ width: "100%" }}>
+							<Statistic title={text.guideProgressLabel} value={guideProgressPercent} suffix="%" />
+							<Divider style={{ margin: "4px 0" }} />
+							<Typography.Text strong>{text.guideDataTitle}</Typography.Text>
+							<List
+								size="small"
+								dataSource={guideRules}
+								renderItem={(item) => (
+									<List.Item style={{ paddingInline: 0 }}>
+										<Typography.Text type="secondary">{item}</Typography.Text>
+									</List.Item>
+								)}
+							/>
+						</Space>
+					</Card>
+				</Col>
+			</Row>
+		</Card>
+	);
+
 	return (
-		<div className="crm-workspace-theme" style={{ padding: 12, background: token.colorBgLayout, minHeight: "100%" }}>
+		<ConfigProvider getPopupContainer={resolvePopupContainer}>
+			<div className="crm-workspace-theme" style={{ padding: 12, background: token.colorBgLayout, minHeight: "100%" }}>
 			<style>{workspaceCss}</style>
 			<Space direction="vertical" size={12} style={{ width: "100%" }}>
 				<Card style={{ borderRadius: 18, overflow: "hidden", background: workspaceTheme.headerGradient, borderColor: token.colorBorder }} styles={{ body: { padding: 18 } }}>
@@ -1706,6 +1928,8 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 				<Card style={{ borderRadius: 16 }} styles={{ body: { padding: 10 } }}>
 					<Segmented block options={sectionItems} value={activeSection} onChange={(value) => setActiveSection(value as CrmSectionKey)} />
 				</Card>
+
+				{onboardingGuideSection}
 
 				{activeSection === "pipeline" && pipelineSection}
 				{activeSection === "inventory" && inventorySection}
@@ -1906,6 +2130,7 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 					</Form>
 				</Spin>
 			</Modal>
-		</div>
+			</div>
+		</ConfigProvider>
 	);
 }

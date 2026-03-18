@@ -77,7 +77,7 @@
 
   const uiTranslations = {
     vi: {
-      crmTitle: "CRM Môi Giới Bất Động Sản",
+      crmTitle: "CRM Kinh doanh",
       crmDescription: "Quản lý toàn bộ sales pipeline, kho hàng, hoạt động và analytics theo thời gian thực.",
       pipelineLead: "Mới",
       pipelineContacted: "Đã liên hệ",
@@ -282,7 +282,7 @@
       dynamicInitError: "Không thể khởi tạo CRM dynamic code:",
     },
     en: {
-      crmTitle: "Real Estate CRM",
+      crmTitle: "Sales CRM",
       crmDescription: "Manage the full sales pipeline, inventory, activities, and analytics in real time.",
       pipelineLead: "New",
       pipelineContacted: "Contacted",
@@ -487,7 +487,7 @@
       dynamicInitError: "Unable to initialize CRM dynamic code:",
     },
     zh: {
-      crmTitle: "房地产 CRM",
+      crmTitle: "销售 CRM",
       crmDescription: "实时管理完整销售漏斗、库存、活动与分析。",
       pipelineLead: "新线索",
       pipelineContacted: "已联系",
@@ -774,33 +774,124 @@
     return false;
   }
 
-  function getThemeTokens() {
+  function readJsonObject(value) {
+    if (!value) return {};
+    if (typeof value === "object" && !Array.isArray(value)) return value;
+    if (typeof value === "string") {
+      try {
+        const parsed = JSON.parse(value);
+        return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+      } catch {
+        return {};
+      }
+    }
+    return {};
+  }
+
+  function normalizeThemeOverrides(raw) {
+    const source = readJsonObject(raw);
+    const keys = [
+      "isDark",
+      "primary",
+      "info",
+      "success",
+      "warning",
+      "danger",
+      "bg",
+      "cardBg",
+      "cardBgMuted",
+      "text",
+      "textSecondary",
+      "textTertiary",
+      "border",
+      "dangerBg",
+      "dangerBorder",
+      "dangerText",
+      "subtleBg",
+    ];
+    const cleaned = {};
+    keys.forEach((key) => {
+      const value = source[key];
+      if (key === "isDark") {
+        if (typeof value === "boolean") cleaned.isDark = value;
+        return;
+      }
+      if (typeof value === "string" && value.trim()) {
+        cleaned[key] = value.trim();
+      }
+    });
+    return cleaned;
+  }
+
+  function getThemeOverrides() {
+    let storageOverrides = {};
     try {
-      const root = getComputedStyle(document.documentElement);
+      storageOverrides = normalizeThemeOverrides(localStorage.getItem("crm_dynamic_theme_overrides"));
+    } catch {
+      storageOverrides = {};
+    }
+
+    const seftOverrides = normalizeThemeOverrides(
+      seft?.themeOverrides
+      || seft?.crmThemeOverrides
+      || seft?.menuData?.crm_theme_overrides
+      || seft?.menuData?.crmThemeOverrides
+    );
+    const runtimeOverrides = normalizeThemeOverrides(window.csmCrmThemeOverrides);
+
+    return {
+      ...storageOverrides,
+      ...seftOverrides,
+      ...runtimeOverrides,
+    };
+  }
+
+  function getThemeTokens(themeOverrides) {
+    const overrides = normalizeThemeOverrides(themeOverrides);
+    try {
+      // AntD 5 scopes CSS vars to a container (often .ant-app or body), not always :root.
+      // Try multiple sources so we always pick up the live computed value.
+      const themeRoot = (
+        document.querySelector(".ant-app") ||
+        document.querySelector("[class*='ant-app']") ||
+        document.body
+      );
+      const rootStyles = getComputedStyle(document.documentElement);
+      const bodyStyles = getComputedStyle(document.body);
+      const appStyles  = getComputedStyle(themeRoot);
+      const getCssVar  = (varName) =>
+        rootStyles.getPropertyValue(varName).trim() ||
+        bodyStyles.getPropertyValue(varName).trim() ||
+        appStyles.getPropertyValue(varName).trim();
       const runtimeTheme = window.csmTheme || {};
       const isDark = detectSystemDarkMode(runtimeTheme);
-      return {
+      const base = {
         isDark,
-        primary: root.getPropertyValue("--ant-color-primary").trim() || runtimeTheme.themeColorPrimary || "#1677ff",
-        info: root.getPropertyValue("--ant-color-info").trim() || root.getPropertyValue("--ant-color-primary").trim() || "#1677ff",
-        success: root.getPropertyValue("--ant-color-success").trim() || "#52c41a",
-        warning: root.getPropertyValue("--ant-color-warning").trim() || "#faad14",
-        danger: root.getPropertyValue("--ant-color-error").trim() || "#ff4d4f",
-        bg: root.getPropertyValue("--ant-color-bg-layout").trim() || (isDark ? "#0f1115" : "#f5f7fb"),
-        cardBg: root.getPropertyValue("--ant-color-bg-container").trim() || runtimeTheme.getCardBackground?.() || (isDark ? "#141414" : "#ffffff"),
-        cardBgMuted: root.getPropertyValue("--ant-color-fill-tertiary").trim() || (isDark ? "rgba(255,255,255,0.06)" : "#f8fafc"),
-        text: root.getPropertyValue("--ant-color-text").trim() || runtimeTheme.getTextColor?.() || (isDark ? "rgba(255,255,255,0.88)" : "#0f172a"),
-        textSecondary: root.getPropertyValue("--ant-color-text-secondary").trim() || runtimeTheme.getSecondaryTextColor?.() || (isDark ? "rgba(255,255,255,0.45)" : "#64748b"),
-        textTertiary: root.getPropertyValue("--ant-color-text-tertiary").trim() || (isDark ? "rgba(255,255,255,0.35)" : "#94a3b8"),
-        border: root.getPropertyValue("--ant-color-border").trim() || runtimeTheme.getBorderColor?.() || (isDark ? "#303030" : "#dbe2ea"),
-        dangerBg: root.getPropertyValue("--ant-color-error-bg").trim() || (isDark ? "#2a1215" : "#fff2f0"),
-        dangerBorder: root.getPropertyValue("--ant-color-error-border").trim() || (isDark ? "#58181c" : "#ffccc7"),
-        dangerText: root.getPropertyValue("--ant-color-error-text").trim() || "#cf1322",
-        subtleBg: root.getPropertyValue("--ant-color-fill-secondary").trim() || (isDark ? "rgba(255,255,255,0.03)" : "#f8fafc"),
+        primary: getCssVar("--ant-color-primary") || runtimeTheme.themeColorPrimary || "#1677ff",
+        info: getCssVar("--ant-color-info") || getCssVar("--ant-color-primary") || "#1677ff",
+        success: getCssVar("--ant-color-success") || "#52c41a",
+        warning: getCssVar("--ant-color-warning") || "#faad14",
+        danger: getCssVar("--ant-color-error") || "#ff4d4f",
+        bg: getCssVar("--ant-color-bg-layout") || (isDark ? "#0f1115" : "#f5f7fb"),
+        cardBg: getCssVar("--ant-color-bg-container") || runtimeTheme.getCardBackground?.() || (isDark ? "#141414" : "#ffffff"),
+        cardBgMuted: getCssVar("--ant-color-fill-tertiary") || (isDark ? "rgba(255,255,255,0.06)" : "#f8fafc"),
+        text: getCssVar("--ant-color-text") || runtimeTheme.getTextColor?.() || (isDark ? "rgba(255,255,255,0.88)" : "#0f172a"),
+        textSecondary: getCssVar("--ant-color-text-secondary") || runtimeTheme.getSecondaryTextColor?.() || (isDark ? "rgba(255,255,255,0.45)" : "#64748b"),
+        textTertiary: getCssVar("--ant-color-text-tertiary") || (isDark ? "rgba(255,255,255,0.35)" : "#94a3b8"),
+        border: getCssVar("--ant-color-border") || runtimeTheme.getBorderColor?.() || (isDark ? "#303030" : "#dbe2ea"),
+        dangerBg: getCssVar("--ant-color-error-bg") || (isDark ? "#2a1215" : "#fff2f0"),
+        dangerBorder: getCssVar("--ant-color-error-border") || (isDark ? "#58181c" : "#ffccc7"),
+        dangerText: getCssVar("--ant-color-error-text") || "#cf1322",
+        subtleBg: getCssVar("--ant-color-fill-secondary") || (isDark ? "rgba(255,255,255,0.03)" : "#f8fafc"),
+      };
+      return {
+        ...base,
+        ...overrides,
+        isDark: typeof overrides.isDark === "boolean" ? overrides.isDark : base.isDark,
       };
     } catch {
       const isDark = detectSystemDarkMode(window.csmTheme || {});
-      return {
+      const base = {
         isDark,
         primary: "#1677ff",
         info: "#1677ff",
@@ -819,23 +910,28 @@
         dangerText: "#cf1322",
         subtleBg: isDark ? "rgba(255,255,255,0.03)" : "#f8fafc",
       };
+      return {
+        ...base,
+        ...overrides,
+        isDark: typeof overrides.isDark === "boolean" ? overrides.isDark : base.isDark,
+      };
     }
   }
 
-  function buildLocalizedCrmConfig(baseConfig) {
-    const tone = getThemeTokens();
+  function buildLocalizedCrmConfig(baseConfig, tone) {
+    const normalizedTone = tone || getThemeTokens();
     const pipelineColorMap = {
-      lead: tone.info,
-      contacted: tone.primary || tone.info,
-      site_visit: tone.primary,
-      booking: tone.warning,
-      contract: tone.success,
-      after_sale: tone.primary,
+      lead: normalizedTone.info,
+      contacted: normalizedTone.primary || normalizedTone.info,
+      site_visit: normalizedTone.primary,
+      booking: normalizedTone.warning,
+      contract: normalizedTone.success,
+      after_sale: normalizedTone.primary,
     };
     const inventoryColorMap = {
-      available: tone.success,
-      booking: tone.warning,
-      sold: tone.danger,
+      available: normalizedTone.success,
+      booking: normalizedTone.warning,
+      sold: normalizedTone.danger,
     };
     return {
       ...baseConfig,
@@ -887,7 +983,7 @@
   }
 
   const crmConfig = {
-    title: "CRM Môi Giới Bất Động Sản",
+    title: "CRM Kinh doanh",
     description: "Quản lý toàn bộ sales pipeline, kho hàng, hoạt động và analytics theo thời gian thực.",
     defaultSection: "pipeline",
     sections: {
@@ -2041,8 +2137,9 @@
       };
     }, []);
 
-    const themeTokens = React.useMemo(() => getThemeTokens(), [themeVersion]);
-    const localizedCrmConfig = React.useMemo(() => buildLocalizedCrmConfig(crmConfig), [language, themeVersion]);
+    const themeOverrides = React.useMemo(() => getThemeOverrides(), [themeVersion]);
+    const themeTokens = React.useMemo(() => getThemeTokens(themeOverrides), [themeVersion, themeOverrides]);
+    const localizedCrmConfig = React.useMemo(() => buildLocalizedCrmConfig(crmConfig, themeTokens), [language, themeTokens]);
     const sourceStats = React.useMemo(() => getLeadSourceStats(database), [database]);
     const summary = React.useMemo(() => buildOpsSummary({ ...opsData, sourceStats }), [opsData, sourceStats]);
     const leadTableName = crmConfig.dataSources.leads.tableName;
@@ -3390,8 +3487,8 @@
     const runtimeThemeCss = React.useMemo(() => {
       return `
         .crm-dynamic-theme {
-          color: ${themeTokens.text};
-          background: ${themeTokens.bg};
+          color: ${themeTokens.text} !important;
+          background: ${themeTokens.bg} !important;
         }
         .crm-dynamic-theme .ant-card,
         .crm-dynamic-theme .ant-card .ant-card-head,
@@ -3400,8 +3497,121 @@
           color: ${themeTokens.text} !important;
           border-color: ${themeTokens.border} !important;
         }
+        .crm-dynamic-theme .ant-card .ant-card-head {
+          border-bottom: 1px solid ${themeTokens.border} !important;
+        }
         .crm-dynamic-theme .ant-card {
           box-shadow: ${themeTokens.isDark ? "0 2px 8px rgba(0,0,0,0.35)" : "0 1px 3px rgba(0,0,0,0.08)"} !important;
+          overflow: hidden !important;
+        }
+        /* Nested cards inside a parent card-body get a contrasting background + no shadow */
+        .crm-dynamic-theme .ant-card-body .ant-card.ant-card-bordered,
+        .crm-dynamic-theme .ant-card-body .ant-card.ant-card-bordered .ant-card-body {
+          background: ${themeTokens.isDark ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.02)"} !important;
+          box-shadow: none !important;
+        }
+        .crm-dynamic-theme .ant-card-body .ant-card.ant-card-bordered {
+          border-color: ${themeTokens.border} !important;
+        }
+        .crm-dynamic-theme .ant-card-body .ant-card.ant-card-bordered .ant-statistic-title {
+          color: ${themeTokens.textSecondary} !important;
+          font-size: 13px !important;
+          font-weight: 500 !important;
+        }
+        .crm-dynamic-theme .ant-card-body .ant-card.ant-card-bordered .ant-statistic-content-value {
+          color: ${themeTokens.text} !important;
+          font-weight: 700 !important;
+        }
+        .crm-dynamic-theme .crm-onboarding-guide {
+          background: ${themeTokens.cardBg} !important;
+          border: 1px solid ${themeTokens.border} !important;
+        }
+        .crm-dynamic-theme .crm-onboarding-guide .crm-onboarding-subtitle {
+          color: ${themeTokens.textSecondary} !important;
+          font-weight: 500 !important;
+          line-height: 1.6 !important;
+        }
+        .crm-dynamic-theme .crm-onboarding-guide .ant-steps-item-title {
+          color: ${themeTokens.text} !important;
+          font-weight: 600 !important;
+        }
+        .crm-dynamic-theme .crm-onboarding-guide .ant-steps-item-description {
+          color: ${themeTokens.textSecondary} !important;
+        }
+        .crm-dynamic-theme .crm-onboarding-guide .ant-steps-item-process .ant-steps-item-title,
+        .crm-dynamic-theme .crm-onboarding-guide .ant-steps-item-process .ant-steps-item-description {
+          color: ${themeTokens.text} !important;
+        }
+        .crm-dynamic-theme .crm-onboarding-guide .ant-steps-item-wait .ant-steps-item-icon,
+        .crm-dynamic-theme .crm-onboarding-guide .ant-steps-item-finish .ant-steps-item-icon {
+          background: ${themeTokens.cardBgMuted} !important;
+          border-color: ${themeTokens.primary} !important;
+        }
+        .crm-dynamic-theme .crm-onboarding-guide .ant-steps-item-process .ant-steps-item-icon {
+          background: ${themeTokens.primary} !important;
+          border-color: ${themeTokens.primary} !important;
+        }
+        .crm-dynamic-theme .crm-onboarding-guide .ant-steps-item-icon .ant-steps-icon {
+          color: ${themeTokens.text} !important;
+        }
+        .crm-dynamic-theme .crm-onboarding-guide .ant-steps-item-process .ant-steps-item-icon .ant-steps-icon {
+          color: #ffffff !important;
+        }
+        .crm-dynamic-theme .crm-onboarding-guide .ant-steps-item-tail::after {
+          background-color: ${themeTokens.border} !important;
+        }
+        .crm-dynamic-theme .crm-onboarding-guide .crm-onboarding-rules {
+          background: ${themeTokens.cardBgMuted} !important;
+          border: 1px solid ${themeTokens.primary}55 !important;
+          box-shadow: inset 0 0 0 1px ${themeTokens.border} !important;
+        }
+        .crm-dynamic-theme .crm-onboarding-guide .crm-onboarding-rules .ant-statistic-title {
+          color: ${themeTokens.textSecondary} !important;
+          font-weight: 600 !important;
+          letter-spacing: 0.2px !important;
+        }
+        .crm-dynamic-theme .crm-onboarding-guide .crm-onboarding-rules .ant-statistic-content {
+          color: ${themeTokens.text} !important;
+        }
+        .crm-dynamic-theme .crm-onboarding-guide .crm-onboarding-rules .ant-statistic-content-value,
+        .crm-dynamic-theme .crm-onboarding-guide .crm-onboarding-rules .ant-statistic-content-value-int,
+        .crm-dynamic-theme .crm-onboarding-guide .crm-onboarding-rules .ant-statistic-content-suffix {
+          color: ${themeTokens.text} !important;
+          font-weight: 700 !important;
+        }
+        .crm-dynamic-theme .crm-onboarding-guide .crm-onboarding-rules .ant-divider {
+          border-color: ${themeTokens.border} !important;
+          opacity: ${themeTokens.isDark ? "0.9" : "1"} !important;
+        }
+        .crm-dynamic-theme .crm-onboarding-guide .crm-onboarding-rules .ant-typography strong {
+          color: ${themeTokens.text} !important;
+          font-weight: 700 !important;
+        }
+        .crm-dynamic-theme .crm-onboarding-guide .crm-onboarding-rules .ant-list {
+          background: transparent !important;
+        }
+        .crm-dynamic-theme .crm-onboarding-guide .crm-onboarding-rules .ant-list-items {
+          background: ${themeTokens.subtleBg} !important;
+          border: 1px solid ${themeTokens.border} !important;
+          border-radius: 10px !important;
+          overflow: hidden !important;
+        }
+        .crm-dynamic-theme .crm-onboarding-guide .crm-onboarding-rules .ant-list-item {
+          border-block-end: 1px solid ${themeTokens.border} !important;
+          background: ${themeTokens.cardBg} !important;
+          padding-block: 10px !important;
+          padding-inline: 10px !important;
+        }
+        .crm-dynamic-theme .crm-onboarding-guide .crm-onboarding-rules .ant-list-item:nth-child(odd) {
+          background: ${themeTokens.cardBgMuted} !important;
+        }
+        .crm-dynamic-theme .crm-onboarding-guide .crm-onboarding-rules .ant-list-item:last-child {
+          border-block-end: none !important;
+        }
+        .crm-dynamic-theme .crm-onboarding-guide .crm-onboarding-rules .ant-typography.ant-typography-secondary {
+          color: ${themeTokens.text} !important;
+          line-height: 1.55 !important;
+          font-weight: 500 !important;
         }
         .crm-dynamic-theme .crm-workspace-theme {
           background: ${themeTokens.bg} !important;
@@ -3414,9 +3624,17 @@
         }
         .crm-dynamic-theme .ant-card .ant-card-head-title,
         .crm-dynamic-theme .ant-card .ant-card-extra,
-        .crm-dynamic-theme .ant-typography,
+        .crm-dynamic-theme .ant-typography {
+          color: ${themeTokens.text} !important;
+        }
         .crm-dynamic-theme .ant-form-item-label > label {
           color: ${themeTokens.text} !important;
+          font-weight: 500 !important;
+        }
+        .crm-dynamic-theme .ant-table-wrapper {
+          border-radius: 12px !important;
+          overflow: hidden !important;
+          border: 1px solid ${themeTokens.border} !important;
         }
         .crm-dynamic-theme .ant-table-wrapper .ant-table,
         .crm-dynamic-theme .ant-table-wrapper .ant-table-container,
@@ -3432,9 +3650,15 @@
           background: ${themeTokens.cardBgMuted} !important;
           color: ${themeTokens.textSecondary} !important;
           font-weight: 600 !important;
+          font-size: 12px !important;
+          letter-spacing: 0.3px !important;
+          text-transform: uppercase !important;
         }
         .crm-dynamic-theme .ant-table-wrapper .ant-table-tbody > tr:hover > td {
-          background: ${themeTokens.subtleBg} !important;
+          background: ${themeTokens.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.03)"} !important;
+        }
+        .crm-dynamic-theme .ant-table-wrapper .ant-table-tbody > tr.ant-table-row-selected > td {
+          background: ${themeTokens.primary}18 !important;
         }
         .crm-dynamic-theme .ant-tabs,
         .crm-dynamic-theme .ant-tabs-content,
@@ -3445,12 +3669,38 @@
         .crm-dynamic-theme .ant-list,
         .crm-dynamic-theme .ant-empty,
         .crm-dynamic-theme .ant-statistic,
-        .crm-dynamic-theme .ant-statistic-content,
+        .crm-dynamic-theme .ant-statistic-content {
+          color: ${themeTokens.text} !important;
+          border-color: ${themeTokens.border} !important;
+        }
         .crm-dynamic-theme .ant-statistic-title {
+          color: ${themeTokens.textSecondary} !important;
+          font-size: 13px !important;
+          font-weight: 500 !important;
+        }
+        .crm-dynamic-theme .ant-statistic-content-value-int,
+        .crm-dynamic-theme .ant-statistic-content-value {
+          color: ${themeTokens.text} !important;
+          font-weight: 700 !important;
+        }
+        .crm-dynamic-theme .ant-tabs,
+        .crm-dynamic-theme .ant-tabs-content,
+        .crm-dynamic-theme .ant-tabs-tabpane,
+        .crm-dynamic-theme .ant-segmented,
+        .crm-dynamic-theme .ant-calendar,
+        .crm-dynamic-theme .ant-picker-panel,
+        .crm-dynamic-theme .ant-list,
+        .crm-dynamic-theme .ant-empty {
           color: ${themeTokens.text} !important;
           border-color: ${themeTokens.border} !important;
         }
         .crm-dynamic-theme .ant-tabs-nav,
+        .crm-dynamic-theme .ant-tabs-nav-wrap,
+        .crm-dynamic-theme .ant-tabs-nav-operations {
+          background: ${themeTokens.cardBg} !important;
+          color: ${themeTokens.textSecondary} !important;
+          border-color: ${themeTokens.border} !important;
+        }
         .crm-dynamic-theme .ant-tabs-ink-bar,
         .crm-dynamic-theme .ant-tabs-tab,
         .crm-dynamic-theme .ant-tabs-tab .ant-tabs-tab-btn,
@@ -3461,8 +3711,53 @@
           color: ${themeTokens.textSecondary} !important;
           border-color: ${themeTokens.border} !important;
         }
+        /* crm-activity-tabs nav area: inherit card bg, no extra colour */
+        .crm-dynamic-theme .crm-activity-tabs .ant-tabs-nav,
+        .crm-dynamic-theme .crm-activity-tabs .ant-tabs-nav-wrap,
+        .crm-dynamic-theme .crm-activity-tabs .ant-tabs-nav-operations {
+          background: transparent !important;
+        }
+        .crm-dynamic-theme .crm-activity-tabs > .ant-tabs-nav {
+          margin-bottom: 12px !important;
+        }
+        .crm-dynamic-theme .crm-activity-tabs > .ant-tabs-nav::before {
+          border-bottom: 1px solid ${themeTokens.border} !important;
+        }
+        /* Generic tabs (not crm-activity-tabs) — no background to avoid card bleed */
         .crm-dynamic-theme .ant-tabs-tab {
-          background: ${themeTokens.cardBg} !important;
+          background: transparent !important;
+        }
+        .crm-dynamic-theme .crm-activity-tabs .ant-tabs-tab {
+          border: 1px solid transparent !important;
+          border-radius: 10px 10px 0 0 !important;
+          padding: 8px 12px !important;
+          transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+        }
+        .crm-dynamic-theme .crm-activity-tabs .ant-tabs-tab:hover {
+          background: ${themeTokens.cardBgMuted} !important;
+          border-color: ${themeTokens.primary} !important;
+        }
+        .crm-dynamic-theme .crm-activity-tabs .ant-tabs-tab .ant-tabs-tab-btn {
+          color: ${themeTokens.textSecondary} !important;
+          font-weight: 500 !important;
+        }
+        .crm-dynamic-theme .crm-activity-tabs .ant-tabs-tab.ant-tabs-tab-active {
+          background: ${themeTokens.isDark ? "rgba(255,255,255,0.10)" : themeTokens.subtleBg} !important;
+          border-color: ${themeTokens.primary} !important;
+        }
+        .crm-dynamic-theme .crm-activity-tabs .ant-tabs-tab.ant-tabs-tab-active .ant-tabs-tab-btn {
+          color: ${themeTokens.text} !important;
+          font-weight: 600 !important;
+        }
+        .crm-dynamic-theme .crm-activity-tabs .ant-tabs-ink-bar {
+          height: 3px !important;
+          border-radius: 999px !important;
+          background: ${themeTokens.primary} !important;
+        }
+        .crm-dynamic-theme .crm-activity-tabs .ant-tabs-tab-btn:focus-visible {
+          outline: 2px solid ${themeTokens.primary} !important;
+          outline-offset: 2px !important;
+          border-radius: 8px !important;
         }
         .crm-dynamic-theme .ant-tabs-nav::before,
         .crm-dynamic-theme .ant-tabs-nav-list {
@@ -3478,6 +3773,29 @@
         .crm-dynamic-theme .ant-segmented {
           background: ${themeTokens.cardBgMuted} !important;
           border: 1px solid ${themeTokens.border} !important;
+          border-radius: 8px !important;
+        }
+        /* Segmented inside a card: no outer border (card already provides it),
+           border-radius = card-radius(16) - card-padding(10) = ~6px to match inner corner */
+        .crm-dynamic-theme .ant-card .ant-card-body > .ant-segmented.ant-segmented-block {
+          background: ${themeTokens.cardBgMuted} !important;
+          border: none !important;
+          border-radius: 6px !important;
+          padding: 3px !important;
+          box-shadow: none !important;
+        }
+        .crm-dynamic-theme .ant-card .ant-card-body > .ant-segmented.ant-segmented-block .ant-segmented-item {
+          border: 1px solid transparent !important;
+          border-radius: 4px !important;
+          background: transparent !important;
+        }
+        .crm-dynamic-theme .ant-card .ant-card-body > .ant-segmented.ant-segmented-block .ant-segmented-item:hover {
+          border-color: ${themeTokens.border} !important;
+          background: ${themeTokens.isDark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.04)"} !important;
+        }
+        .crm-dynamic-theme .ant-card .ant-card-body > .ant-segmented.ant-segmented-block .ant-segmented-item.ant-segmented-item-selected {
+          border-color: ${themeTokens.primary}55 !important;
+          background: ${themeTokens.cardBg} !important;
         }
         .crm-dynamic-theme .ant-segmented-group,
         .crm-dynamic-theme .crm-workspace-theme .ant-segmented-group {
@@ -3490,6 +3808,12 @@
         .crm-dynamic-theme .crm-workspace-theme .ant-segmented-item-label {
           color: ${themeTokens.textSecondary} !important;
         }
+        .crm-dynamic-theme .ant-card .ant-card-body > .ant-segmented.ant-segmented-block .ant-segmented-thumb {
+          background: ${themeTokens.cardBg} !important;
+          border-color: ${themeTokens.primary}55 !important;
+          border-radius: 4px !important;
+          box-shadow: none !important;
+        }
         .crm-dynamic-theme .ant-segmented-thumb,
         .crm-dynamic-theme .crm-workspace-theme .ant-segmented-thumb {
           background: ${themeTokens.cardBg} !important;
@@ -3500,23 +3824,85 @@
         .crm-dynamic-theme .ant-radio-group-solid {
           background: ${themeTokens.cardBgMuted} !important;
           color: ${themeTokens.text} !important;
+          border-radius: 8px !important;
+          overflow: hidden !important;
         }
         .crm-dynamic-theme .ant-radio-button-wrapper {
           background: ${themeTokens.cardBg} !important;
           color: ${themeTokens.textSecondary} !important;
           border-color: ${themeTokens.border} !important;
         }
+        .crm-dynamic-theme .ant-radio-button-wrapper:first-child {
+          border-start-start-radius: 8px !important;
+          border-end-start-radius: 8px !important;
+        }
+        .crm-dynamic-theme .ant-radio-button-wrapper:last-child {
+          border-start-end-radius: 8px !important;
+          border-end-end-radius: 8px !important;
+        }
         .crm-dynamic-theme .ant-radio-button-wrapper:hover {
           color: ${themeTokens.text} !important;
+          background: ${themeTokens.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.03)"} !important;
         }
-        .crm-dynamic-theme .ant-tabs-tab-active .ant-tabs-tab-btn,
-        .crm-dynamic-theme .ant-tabs-tab-active,
+        /* ── CARD-TYPE TABS (hub navigation) ── */
+        /* Inactive tab: muted tray */
+        .crm-dynamic-theme .crm-hub-nav-tabs.ant-tabs-card > .ant-tabs-nav .ant-tabs-tab,
+        .crm-dynamic-theme .crm-hub-nav-tabs.ant-tabs-card > div > .ant-tabs-nav .ant-tabs-tab {
+          background: ${themeTokens.cardBgMuted} !important;
+          border-color: ${themeTokens.border} !important;
+          border-radius: 8px 8px 0 0 !important;
+          transition: background 0.18s ease, color 0.18s ease;
+        }
+        /* Inactive tab label */
+        .crm-dynamic-theme .crm-hub-nav-tabs.ant-tabs-card > .ant-tabs-nav .ant-tabs-tab .ant-tabs-tab-btn {
+          color: ${themeTokens.textSecondary} !important;
+          font-weight: 500 !important;
+        }
+        /* Inactive tab hover */
+        .crm-dynamic-theme .crm-hub-nav-tabs.ant-tabs-card > .ant-tabs-nav .ant-tabs-tab:hover {
+          background: ${themeTokens.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.04)"} !important;
+        }
+        .crm-dynamic-theme .crm-hub-nav-tabs.ant-tabs-card > .ant-tabs-nav .ant-tabs-tab:hover .ant-tabs-tab-btn {
+          color: ${themeTokens.text} !important;
+        }
+        /* Active tab: raised, cardBg bg, primary top-accent, bottom merges into panel */
+        .crm-dynamic-theme .crm-hub-nav-tabs.ant-tabs-card > .ant-tabs-nav .ant-tabs-tab.ant-tabs-tab-active,
+        .crm-dynamic-theme .crm-hub-nav-tabs.ant-tabs-card > div > .ant-tabs-nav .ant-tabs-tab.ant-tabs-tab-active {
+          background: ${themeTokens.cardBg} !important;
+          border-color: ${themeTokens.border} !important;
+          border-top: 2px solid ${themeTokens.primary} !important;
+          border-bottom-color: ${themeTokens.cardBg} !important;
+          box-shadow: 0 -1px 4px rgba(0,0,0,${themeTokens.isDark ? "0.25" : "0.06"}) !important;
+        }
+        /* Active tab label */
+        .crm-dynamic-theme .crm-hub-nav-tabs.ant-tabs-card > .ant-tabs-nav .ant-tabs-tab.ant-tabs-tab-active .ant-tabs-tab-btn {
+          color: ${themeTokens.text} !important;
+          font-weight: 600 !important;
+        }
+        /* Panel area below card tabs */
+        .crm-dynamic-theme .crm-hub-nav-tabs.ant-tabs-card > .ant-tabs-content-holder,
+        .crm-dynamic-theme .crm-hub-nav-tabs.ant-tabs-card > .ant-tabs-content-holder > .ant-tabs-content > .ant-tabs-tabpane {
+          background: ${themeTokens.cardBg} !important;
+          border: 1px solid ${themeTokens.border} !important;
+          border-top: none !important;
+          border-radius: 0 8px 8px 8px !important;
+        }
+        /* Nav bar bottom separator line */
+        .crm-dynamic-theme .crm-hub-nav-tabs.ant-tabs-card > .ant-tabs-nav::before {
+          border-bottom: 1px solid ${themeTokens.border} !important;
+        }
+        /* Generic active tab (line/default type) ── only text color, no bg override */
+        .crm-dynamic-theme .ant-tabs-tab-active .ant-tabs-tab-btn {
+          color: ${themeTokens.primary} !important;
+          font-weight: 600 !important;
+        }
+        /* Segmented selected + Radio checked (keep bg/border) */
         .crm-dynamic-theme .ant-segmented-item-selected,
         .crm-dynamic-theme .ant-segmented-item-selected .ant-segmented-item-label,
         .crm-dynamic-theme .ant-radio-group-solid .ant-radio-button-wrapper-checked:not(.ant-radio-button-wrapper-disabled),
         .crm-dynamic-theme .ant-radio-button-wrapper-checked:not(.ant-radio-button-wrapper-disabled) {
           color: ${themeTokens.text} !important;
-          background: ${themeTokens.cardBgMuted} !important;
+          background: ${themeTokens.isDark ? "rgba(255,255,255,0.12)" : themeTokens.primary + "18"} !important;
           border-color: ${themeTokens.primary} !important;
           box-shadow: none !important;
         }
@@ -3552,7 +3938,7 @@
         }
         .crm-dynamic-theme .ant-picker-calendar .ant-picker-calendar-date:hover,
         .crm-workspace-theme .ant-picker-calendar .ant-picker-calendar-date:hover {
-          background: ${themeTokens.subtleBg} !important;
+          background: ${themeTokens.isDark ? "rgba(255,255,255,0.10)" : "rgba(0,0,0,0.04)"} !important;
         }
         .crm-dynamic-theme .ant-picker-header {
           border-bottom: 1px solid ${themeTokens.border} !important;
@@ -3581,7 +3967,7 @@
           font-weight: 600 !important;
         }
         .crm-dynamic-theme .ant-picker-cell:hover .ant-picker-cell-inner {
-          background: ${themeTokens.subtleBg} !important;
+          background: ${themeTokens.isDark ? "rgba(255,255,255,0.10)" : "rgba(0,0,0,0.04)"} !important;
           color: ${themeTokens.text} !important;
         }
         .crm-dynamic-theme .ant-picker-cell-in-view.ant-picker-cell-in-range .ant-picker-cell-inner {
@@ -3612,7 +3998,7 @@
           background: ${themeTokens.cardBgMuted} !important;
         }
         .crm-workspace-theme .ant-picker-cell:hover .ant-picker-cell-inner {
-          background: ${themeTokens.subtleBg} !important;
+          background: ${themeTokens.isDark ? "rgba(255,255,255,0.10)" : "rgba(0,0,0,0.04)"} !important;
           color: ${themeTokens.text} !important;
         }
         .crm-workspace-theme .ant-picker-cell-in-view.ant-picker-cell-in-range .ant-picker-cell-inner {
@@ -3628,19 +4014,41 @@
           color: #ffffff !important;
           font-weight: 600 !important;
         }
-        .crm-dynamic-theme .ant-alert,
+        /* ── ALERT ── */
+        .crm-dynamic-theme .ant-alert {
+          border-radius: 10px !important;
+        }
         .crm-dynamic-theme .ant-alert-message,
         .crm-dynamic-theme .ant-alert-description {
           color: ${themeTokens.text} !important;
-          border-color: ${themeTokens.border} !important;
         }
+        .crm-dynamic-theme .ant-alert.ant-alert-info {
+          background: ${themeTokens.isDark ? "rgba(22,119,255,0.12)" : "rgba(22,119,255,0.06)"} !important;
+          border-color: ${themeTokens.primary}55 !important;
+        }
+        .crm-dynamic-theme .ant-alert.ant-alert-success {
+          background: ${themeTokens.isDark ? "rgba(82,196,26,0.12)" : "rgba(82,196,26,0.06)"} !important;
+          border-color: ${themeTokens.success}66 !important;
+        }
+        .crm-dynamic-theme .ant-alert.ant-alert-warning {
+          background: ${themeTokens.isDark ? "rgba(250,173,20,0.12)" : "rgba(250,173,20,0.06)"} !important;
+          border-color: ${themeTokens.warning}66 !important;
+        }
+        .crm-dynamic-theme .ant-alert.ant-alert-error {
+          background: ${themeTokens.isDark ? "rgba(255,77,79,0.12)" : "rgba(255,77,79,0.06)"} !important;
+          border-color: ${themeTokens.danger}55 !important;
+        }
+        /* ── TAG ── */
         .crm-dynamic-theme .ant-tag {
           border-color: ${themeTokens.border} !important;
           background: ${themeTokens.cardBgMuted} !important;
           color: ${themeTokens.text} !important;
+          border-radius: 6px !important;
         }
-        .crm-dynamic-theme .ant-badge {
-          background: ${themeTokens.cardBgMuted} !important;
+        .crm-dynamic-theme .ant-badge-count,
+        .crm-dynamic-theme .ant-badge-dot {
+          border-color: ${themeTokens.cardBg} !important;
+          box-shadow: 0 0 0 2px ${themeTokens.cardBg} !important;
         }
         .crm-dynamic-theme-modal.ant-modal,
         .crm-dynamic-theme-modal .ant-modal,
@@ -3831,7 +4239,7 @@
         .crm-workspace-theme-modal .ant-btn-default:hover,
         .crm-workspace-theme-modal .ant-btn-dashed:hover,
         .crm-workspace-theme-modal .ant-btn-text:hover {
-          background: ${themeTokens.subtleBg} !important;
+          background: ${themeTokens.isDark ? "rgba(255,255,255,0.10)" : "rgba(0,0,0,0.04)"} !important;
           color: ${themeTokens.text} !important;
           border-color: ${themeTokens.primary} !important;
         }
@@ -3924,7 +4332,7 @@
         }
         .crm-dynamic-theme-modal .ant-picker-cell:hover .ant-picker-cell-inner,
         .crm-workspace-theme-modal .ant-picker-cell:hover .ant-picker-cell-inner {
-          background: ${themeTokens.subtleBg} !important;
+          background: ${themeTokens.isDark ? "rgba(255,255,255,0.10)" : "rgba(0,0,0,0.04)"} !important;
           color: ${themeTokens.text} !important;
         }
         .crm-dynamic-theme-modal .ant-picker-cell-in-view.ant-picker-cell-in-range .ant-picker-cell-inner,
@@ -3937,8 +4345,11 @@
           color: ${themeTokens.textTertiary} !important;
         }
         .crm-dynamic-theme-modal .ant-select-item-option-active:not(.ant-select-item-option-disabled),
+        .crm-workspace-theme-modal .ant-select-item-option-active:not(.ant-select-item-option-disabled) {
+          background: ${themeTokens.isDark ? "rgba(255,255,255,0.10)" : themeTokens.subtleBg} !important;
+          color: ${themeTokens.text} !important;
+        }
         .crm-dynamic-theme-modal .ant-select-item-option-selected:not(.ant-select-item-option-disabled),
-        .crm-workspace-theme-modal .ant-select-item-option-active:not(.ant-select-item-option-disabled),
         .crm-workspace-theme-modal .ant-select-item-option-selected:not(.ant-select-item-option-disabled),
         .crm-dynamic-theme-modal .ant-picker-cell-in-view.ant-picker-cell-selected .ant-picker-cell-inner,
         .crm-workspace-theme-modal .ant-picker-cell-in-view.ant-picker-cell-selected .ant-picker-cell-inner {
@@ -3982,7 +4393,7 @@
         .crm-dynamic-theme .ant-btn-default:hover,
         .crm-dynamic-theme .ant-btn-dashed:hover,
         .crm-dynamic-theme .ant-btn-text:hover {
-          background: ${themeTokens.subtleBg} !important;
+          background: ${themeTokens.isDark ? "rgba(255,255,255,0.10)" : "rgba(0,0,0,0.04)"} !important;
           color: ${themeTokens.text} !important;
           border-color: ${themeTokens.primary} !important;
         }
@@ -4013,12 +4424,242 @@
         }
         .crm-dynamic-popup .ant-select-item-option-active:not(.ant-select-item-option-disabled),
         .crm-dynamic-popup .ant-select-item-option-selected:not(.ant-select-item-option-disabled) {
-          background: ${themeTokens.subtleBg} !important;
+          background: ${themeTokens.isDark ? "rgba(255,255,255,0.12)" : themeTokens.subtleBg} !important;
+          color: ${themeTokens.text} !important;
+        }
+        .crm-dynamic-theme .ant-popconfirm .ant-popconfirm-inner-content,
+        .crm-dynamic-theme .ant-popconfirm .ant-popconfirm-message,
+        .crm-dynamic-theme .ant-popconfirm .ant-popconfirm-message-title,
+        .crm-dynamic-theme .ant-popconfirm .ant-popconfirm-description,
+        .crm-dynamic-theme .ant-popconfirm .ant-popconfirm-buttons {
+          color: ${themeTokens.text} !important;
+          background: ${themeTokens.cardBg} !important;
+        }
+        .crm-dynamic-theme .ant-popover .ant-popover-inner,
+        .crm-dynamic-theme .ant-popover .ant-popover-title,
+        .crm-dynamic-theme .ant-popover .ant-popover-inner-content {
+          background: ${themeTokens.cardBg} !important;
+          color: ${themeTokens.text} !important;
+          border-color: ${themeTokens.border} !important;
+        }
+        .crm-dynamic-theme .ant-pagination .ant-pagination-item,
+        .crm-dynamic-theme .ant-pagination .ant-pagination-prev .ant-pagination-item-link,
+        .crm-dynamic-theme .ant-pagination .ant-pagination-next .ant-pagination-item-link {
+          background: ${themeTokens.cardBgMuted} !important;
+          border-color: ${themeTokens.border} !important;
+          color: ${themeTokens.text} !important;
+        }
+        .crm-dynamic-theme .ant-pagination .ant-pagination-item-active {
+          border-color: ${themeTokens.primary} !important;
+        }
+        .crm-dynamic-theme .ant-pagination .ant-pagination-item a {
           color: ${themeTokens.text} !important;
         }
         .crm-dynamic-popover .ant-popover-arrow::before {
           background: ${themeTokens.cardBg} !important;
           border-color: ${themeTokens.border} !important;
+        }
+        /* ── SELECT DROPDOWN (rendered inside .crm-dynamic-theme via getPopupContainer) ── */
+        .crm-dynamic-theme .ant-select-dropdown {
+          background: ${themeTokens.cardBg} !important;
+          border: 1px solid ${themeTokens.border} !important;
+          border-radius: 10px !important;
+          box-shadow: 0 6px 20px rgba(0,0,0,${themeTokens.isDark ? "0.45" : "0.12"}) !important;
+          overflow: hidden !important;
+        }
+        .crm-dynamic-theme .ant-select-item,
+        .crm-dynamic-theme .ant-select-item-option-content,
+        .crm-dynamic-theme .ant-select-item-empty {
+          background: ${themeTokens.cardBg} !important;
+          color: ${themeTokens.text} !important;
+        }
+        .crm-dynamic-theme .ant-select-item-option-active:not(.ant-select-item-option-disabled) {
+          background: ${themeTokens.isDark ? "rgba(255,255,255,0.10)" : "rgba(0,0,0,0.04)"} !important;
+          color: ${themeTokens.text} !important;
+        }
+        .crm-dynamic-theme .ant-select-item-option-selected:not(.ant-select-item-option-disabled) {
+          background: ${themeTokens.primary}22 !important;
+          color: ${themeTokens.primary} !important;
+          font-weight: 600 !important;
+        }
+        /* ── INPUT (main workspace) border-radius ── */
+        .crm-dynamic-theme .ant-input,
+        .crm-dynamic-theme .ant-input-affix-wrapper,
+        .crm-dynamic-theme .ant-input-outlined,
+        .crm-dynamic-theme .ant-input-password,
+        .crm-dynamic-theme .ant-input-textarea,
+        .crm-dynamic-theme textarea,
+        .crm-dynamic-theme select {
+          border-radius: 8px !important;
+        }
+        .crm-dynamic-theme .ant-input-search .ant-input-group .ant-input {
+          border-radius: 8px 0 0 8px !important;
+        }
+        .crm-dynamic-theme .ant-input-search .ant-input-group-addon .ant-btn {
+          border-radius: 0 8px 8px 0 !important;
+        }
+        /* ── INPUT NUMBER + PICKER in main workspace ── */
+        .crm-dynamic-theme .ant-input-number,
+        .crm-dynamic-theme .ant-picker {
+          background: ${themeTokens.cardBgMuted} !important;
+          color: ${themeTokens.text} !important;
+          border-color: ${themeTokens.border} !important;
+          border-radius: 8px !important;
+        }
+        .crm-dynamic-theme .ant-input-number-input {
+          background: transparent !important;
+          color: ${themeTokens.text} !important;
+        }
+        .crm-dynamic-theme .ant-picker-input > input,
+        .crm-dynamic-theme .ant-picker-separator {
+          color: ${themeTokens.text} !important;
+        }
+        .crm-dynamic-theme .ant-input-number-handler-wrap {
+          background: ${themeTokens.cardBg} !important;
+          border-inline-start: 1px solid ${themeTokens.border} !important;
+          border-radius: 0 7px 7px 0 !important;
+        }
+        .crm-dynamic-theme .ant-input-number-handler {
+          border-color: ${themeTokens.border} !important;
+        }
+        /* ── SELECT border-radius + icon colors ── */
+        .crm-dynamic-theme .ant-select .ant-select-selector {
+          border-radius: 8px !important;
+        }
+        .crm-dynamic-theme .ant-select .ant-select-selection-item {
+          color: ${themeTokens.text} !important;
+        }
+        .crm-dynamic-theme .ant-select-arrow,
+        .crm-dynamic-theme .ant-select-clear,
+        .crm-dynamic-theme .ant-picker-suffix,
+        .crm-dynamic-theme .ant-picker-clear,
+        .crm-dynamic-theme .ant-input-password-icon {
+          color: ${themeTokens.textSecondary} !important;
+        }
+        /* ── BUTTONS border-radius ── */
+        .crm-dynamic-theme .ant-btn {
+          border-radius: 8px !important;
+        }
+        /* ── PRIMARY BUTTON text color ── */
+        .crm-dynamic-theme .ant-btn-primary,
+        .crm-dynamic-theme .ant-btn-color-primary {
+          color: ${themeTokens.isDark ? "#0b1220" : "#ffffff"} !important;
+        }
+        /* ── DISABLED STATES ── */
+        .crm-dynamic-theme .ant-btn[disabled],
+        .crm-dynamic-theme .ant-btn:disabled,
+        .crm-dynamic-theme .ant-input[disabled],
+        .crm-dynamic-theme .ant-input-affix-wrapper-disabled,
+        .crm-dynamic-theme .ant-picker.ant-picker-disabled,
+        .crm-dynamic-theme .ant-input-number-disabled,
+        .crm-dynamic-theme .ant-select-disabled .ant-select-selector {
+          background: ${themeTokens.subtleBg} !important;
+          color: ${themeTokens.textSecondary} !important;
+          border-color: ${themeTokens.border} !important;
+          opacity: 1 !important;
+        }
+        /* ── AUTOFILL (WebKit) ── */
+        .crm-dynamic-theme input:-webkit-autofill,
+        .crm-dynamic-theme input:-webkit-autofill:hover,
+        .crm-dynamic-theme input:-webkit-autofill:focus {
+          -webkit-text-fill-color: ${themeTokens.text} !important;
+          -webkit-box-shadow: 0 0 0 1000px ${themeTokens.cardBgMuted} inset !important;
+          transition: background-color 9999s ease-in-out 0s !important;
+        }
+        /* ── FORM validation text ── */
+        .crm-dynamic-theme .ant-form-item-explain,
+        .crm-dynamic-theme .ant-form-item-extra {
+          color: ${themeTokens.textSecondary} !important;
+        }
+        .crm-dynamic-theme .ant-form-item-explain-error {
+          color: ${themeTokens.danger} !important;
+        }
+        /* ── LIST ITEM meta ── */
+        .crm-dynamic-theme .ant-list-item {
+          border-block-end-color: ${themeTokens.border} !important;
+          color: ${themeTokens.text} !important;
+        }
+        .crm-dynamic-theme .ant-list-item-meta-title,
+        .crm-dynamic-theme .ant-list-item-meta-title a {
+          color: ${themeTokens.text} !important;
+        }
+        .crm-dynamic-theme .ant-list-item-meta-description {
+          color: ${themeTokens.textSecondary} !important;
+        }
+        /* ── DESCRIPTIONS ── */
+        .crm-dynamic-theme .ant-descriptions-title {
+          color: ${themeTokens.text} !important;
+          font-weight: 600 !important;
+        }
+        .crm-dynamic-theme .ant-descriptions-view {
+          border-color: ${themeTokens.border} !important;
+          border-radius: 10px !important;
+          overflow: hidden !important;
+        }
+        .crm-dynamic-theme .ant-descriptions .ant-descriptions-item-label {
+          background: ${themeTokens.cardBgMuted} !important;
+          color: ${themeTokens.textSecondary} !important;
+          border-color: ${themeTokens.border} !important;
+          font-weight: 500 !important;
+        }
+        .crm-dynamic-theme .ant-descriptions .ant-descriptions-item-content {
+          background: ${themeTokens.cardBg} !important;
+          color: ${themeTokens.text} !important;
+          border-color: ${themeTokens.border} !important;
+        }
+        /* ── COLLAPSE ── */
+        .crm-dynamic-theme .ant-collapse {
+          background: ${themeTokens.cardBgMuted} !important;
+          border-color: ${themeTokens.border} !important;
+          border-radius: 10px !important;
+          overflow: hidden !important;
+        }
+        .crm-dynamic-theme .ant-collapse > .ant-collapse-item {
+          background: transparent !important;
+          border-bottom-color: ${themeTokens.border} !important;
+        }
+        .crm-dynamic-theme .ant-collapse > .ant-collapse-item:last-child {
+          border-bottom: none !important;
+        }
+        .crm-dynamic-theme .ant-collapse .ant-collapse-header {
+          color: ${themeTokens.text} !important;
+          font-weight: 500 !important;
+        }
+        .crm-dynamic-theme .ant-collapse .ant-collapse-expand-icon {
+          color: ${themeTokens.textSecondary} !important;
+        }
+        .crm-dynamic-theme .ant-collapse .ant-collapse-content {
+          background: ${themeTokens.cardBg} !important;
+          border-top-color: ${themeTokens.border} !important;
+        }
+        .crm-dynamic-theme .ant-collapse .ant-collapse-content-box {
+          color: ${themeTokens.text} !important;
+        }
+        /* ── TIMELINE ── */
+        .crm-dynamic-theme .ant-timeline .ant-timeline-item-content {
+          color: ${themeTokens.text} !important;
+        }
+        .crm-dynamic-theme .ant-timeline .ant-timeline-item-head {
+          background: ${themeTokens.cardBg} !important;
+          border-color: ${themeTokens.primary} !important;
+        }
+        .crm-dynamic-theme .ant-timeline .ant-timeline-item-tail {
+          border-inline-start: 2px solid ${themeTokens.border} !important;
+        }
+        /* ── SPIN ── */
+        .crm-dynamic-theme .ant-spin-text {
+          color: ${themeTokens.text} !important;
+        }
+        .crm-dynamic-theme .ant-spin-dot-item {
+          background: ${themeTokens.primary} !important;
+        }
+        /* ── TOOLTIP ── */
+        .crm-dynamic-theme .ant-tooltip .ant-tooltip-inner {
+          background: ${themeTokens.isDark ? "rgba(28,32,40,0.96)" : "rgba(0,0,0,0.82)"} !important;
+          color: #fff !important;
+        }
+        .crm-dynamic-theme .ant-tooltip .ant-tooltip-arrow::before {
+          background: ${themeTokens.isDark ? "rgba(28,32,40,0.96)" : "rgba(0,0,0,0.82)"} !important;
         }
       `;
     }, [themeTokens]);
@@ -4065,6 +4706,7 @@
 
     const shellNode = React.createElement("div", {
       className: "crm-dynamic-theme",
+      "data-color-scheme": themeTokens.isDark ? "dark" : "light",
       style: {
         display: "grid",
         gap: 12,
@@ -4080,6 +4722,7 @@
       React.createElement("style", { key: "crm-theme-style" }, runtimeThemeCss),
       Tabs ? React.createElement(Tabs, {
         key: "hub-nav-tabs",
+        className: "crm-hub-nav-tabs",
         activeKey: activeHubTab,
         onChange: setActiveHubTab,
         type: "card",
@@ -5219,6 +5862,7 @@
     if (ConfigProvider) {
       return React.createElement(ConfigProvider, {
         theme: configProviderTheme,
+        getPopupContainer: resolvePopupContainer,
       }, shellNode);
     }
 
@@ -5308,7 +5952,7 @@
 
   function renderError(error) {
     const message = error?.message || String(error);
-    const themeTokens = getThemeTokens();
+    const themeTokens = getThemeTokens(getThemeOverrides());
     const fallbackRoot = ReactDOM.createRoot(container);
     fallbackRoot.render(
       React.createElement("div", {

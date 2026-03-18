@@ -111,7 +111,7 @@ export const DEFAULT_CRM_STAGES: CrmStageConfig[] = [
 
 export const CRM_CONFIG_TEMPLATE = JSON.stringify(
 	{
-		title: "CRM môi giới bất động sản",
+		title: "CRM Kinh doanh",
 		description: "Workspace quản lý phễu bán hàng, tồn kho, hoạt động và phân tích hiệu suất.",
 		defaultSection: "pipeline",
 		sections: {
