@@ -3273,8 +3273,22 @@
           background: ${themeTokens.cardBgMuted} !important;
           border: 1px solid ${themeTokens.border} !important;
         }
+        .crm-dynamic-theme .ant-segmented-group,
+        .crm-dynamic-theme .crm-workspace-theme .ant-segmented-group {
+          color: ${themeTokens.textSecondary} !important;
+        }
         .crm-dynamic-theme .ant-segmented-item {
           background: transparent !important;
+        }
+        .crm-dynamic-theme .ant-segmented-item-label,
+        .crm-dynamic-theme .crm-workspace-theme .ant-segmented-item-label {
+          color: ${themeTokens.textSecondary} !important;
+        }
+        .crm-dynamic-theme .ant-segmented-thumb,
+        .crm-dynamic-theme .crm-workspace-theme .ant-segmented-thumb {
+          background: ${themeTokens.cardBg} !important;
+          border: 1px solid ${themeTokens.border} !important;
+          box-shadow: none !important;
         }
         .crm-dynamic-theme .ant-radio-group,
         .crm-dynamic-theme .ant-radio-group-solid {
@@ -3299,6 +3313,11 @@
           background: ${themeTokens.cardBgMuted} !important;
           border-color: ${themeTokens.primary} !important;
           box-shadow: none !important;
+        }
+        .crm-dynamic-theme .ant-segmented-item-selected .ant-segmented-item-label,
+        .crm-dynamic-theme .crm-workspace-theme .ant-segmented-item-selected .ant-segmented-item-label {
+          color: ${themeTokens.text} !important;
+          font-weight: 600 !important;
         }
         .crm-dynamic-theme .ant-picker-panel,
         .crm-dynamic-theme .ant-picker-header,
