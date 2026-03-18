@@ -3201,6 +3201,9 @@
           color: ${themeTokens.text} !important;
           border-color: ${themeTokens.border} !important;
         }
+        .crm-dynamic-theme .ant-card {
+          box-shadow: ${themeTokens.isDark ? "0 2px 8px rgba(0,0,0,0.35)" : "0 1px 3px rgba(0,0,0,0.08)"} !important;
+        }
         .crm-dynamic-theme .crm-workspace-theme {
           background: ${themeTokens.bg} !important;
           color: ${themeTokens.text} !important;
@@ -3229,6 +3232,10 @@
         .crm-dynamic-theme .ant-table-wrapper .ant-table-thead > tr > th {
           background: ${themeTokens.cardBgMuted} !important;
           color: ${themeTokens.textSecondary} !important;
+          font-weight: 600 !important;
+        }
+        .crm-dynamic-theme .ant-table-wrapper .ant-table-tbody > tr:hover > td {
+          background: ${themeTokens.subtleBg} !important;
         }
         .crm-dynamic-theme .ant-tabs,
         .crm-dynamic-theme .ant-tabs-content,
@@ -3307,6 +3314,14 @@
         .crm-dynamic-theme .ant-alert-description {
           color: ${themeTokens.text} !important;
           border-color: ${themeTokens.border} !important;
+        }
+        .crm-dynamic-theme .ant-tag {
+          border-color: ${themeTokens.border} !important;
+          background: ${themeTokens.cardBgMuted} !important;
+          color: ${themeTokens.text} !important;
+        }
+        .crm-dynamic-theme .ant-badge {
+          background: ${themeTokens.cardBgMuted} !important;
         }
         .crm-dynamic-theme-modal.ant-modal,
         .crm-dynamic-theme-modal .ant-modal,
