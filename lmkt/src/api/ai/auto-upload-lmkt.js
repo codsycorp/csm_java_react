@@ -3692,8 +3692,154 @@ const LMKT_PROJECT_DEFS = [
     attributes_keywords: "d-homme, quận 6, biệt thự, h-holding",
     attributes_keywords_en: "d-homme, district 6, villa, h-holding",
     attributes_keywords_zh: "d-homme, 6区, 别墅, h-holding"
+  },
+  {
+    service_code: "thanh-phu-centre-point",
+    name: "THANH PHÚ CENTRE POINT",
+    name_en: "THANH PHÚ CENTRE POINT",
+    name_zh: "THANH PHÚ CENTRE POINT",
+    category: "THANH PHÚ CENTRE POINT",
+    category_en: "THANH PHÚ CENTRE POINT",
+    category_zh: "THANH PHÚ CENTRE POINT",
+    image: "https://www.h-holding.vn/app_images/projects/thanh-phu-centre-point-og.jpg",
+    attributes_icon: "HomeOutlined",
+    attributes_color: "#13c2c2",
+    attributes_priority: 7,
+    attributes_title: "THANH PHÚ CENTRE POINT",
+    attributes_title_en: "THANH PHÚ CENTRE POINT",
+    attributes_title_zh: "THANH PHÚ CENTRE POINT",
+    attributes_description: "Thanh Phú Centre Point – Khu đô thị phức hợp cao cấp, mang đến không gian sống lý tưởng với tiện ích vượt trội và tiềm năng đầu tư sinh lời cao.",
+    attributes_description_en: "Thanh Phú Centre Point – A premium integrated urban area offering ideal living spaces, superior amenities, and strong investment potential.",
+    attributes_description_zh: "清富中心點是一個高端綜合都市項目，提供理想生活空間、完善配套與良好投資潛力。",
+    attributes_keywords: "thanh phú centre point, dự án, khu đô thị, h-holding",
+    attributes_keywords_en: "thanh phu centre point, project, urban area, h-holding",
+    attributes_keywords_zh: "thanh phu centre point, 項目, 都市區, h-holding"
+  },
+  {
+    service_code: "sunshine-bay-retreat-vung-tau",
+    name: "SUNSHINE BAY RETREAT VŨNG TÀU",
+    name_en: "SUNSHINE BAY RETREAT VUNG TAU",
+    name_zh: "陽光灣靜修度假村頭頓",
+    category: "SUNSHINE BAY RETREAT VŨNG TÀU",
+    category_en: "SUNSHINE BAY RETREAT VUNG TAU",
+    category_zh: "陽光灣靜修度假村頭頓",
+    image: "https://www.h-holding.vn/app_images/projects/sunshine-bay-retreat-vung-tau-og.jpg",
+    attributes_icon: "StarOutlined",
+    attributes_color: "#1890ff",
+    attributes_priority: 8,
+    attributes_title: "SUNSHINE BAY RETREAT VŨNG TÀU",
+    attributes_title_en: "SUNSHINE BAY RETREAT VUNG TAU",
+    attributes_title_zh: "陽光灣靜修度假村頭頓",
+    attributes_description: "SUNSHINE BAY RETREAT VŨNG TÀU",
+    attributes_description_en: "Sunshine Bay Retreat Vung Tau coastal retreat project.",
+    attributes_description_zh: "陽光灣靜修度假村頭頓海濱度假項目。",
+    attributes_keywords: "sunshine bay retreat vung tau, dự án, nghỉ dưỡng, h-holding",
+    attributes_keywords_en: "sunshine bay retreat vung tau, project, retreat, h-holding",
+    attributes_keywords_zh: "sunshine bay retreat vung tau, 項目, 度假, h-holding"
   }
 ];
+
+const LMKT_STATIC_CATEGORY_DEFS = [
+  { id: "home", service_code: "home", slug: "home", group_slug: "", is_service: false, is_group_slug: false, is_group_slug_default: false, category: "Trang Chủ", category_en: "Home", category_zh: "首頁" },
+  { id: "ve-chung-toi", service_code: "ve-chung-toi", slug: "ve-chung-toi", group_slug: "", is_service: false, is_group_slug: false, is_group_slug_default: false, category: "Về Chúng Tôi", category_en: "About Us", category_zh: "關於我們" },
+  { id: "du-an", service_code: "du-an", slug: "du-an", group_slug: "", is_service: true, is_group_slug: true, is_group_slug_default: false, category: "Dự Án", category_en: "Projects", category_zh: "項目", description: "Danh sách đầy đủ các dự án của H-Holding", description_en: "Complete list of H-Holding projects", description_zh: "H-Holding 的完整項目列表", attributes_icon: "AppstoreOutlined", attributes_color: "#52c41a" },
+  { id: "tuyen-dung", service_code: "tuyen-dung", slug: "tuyen-dung", group_slug: "", is_service: false, is_group_slug: true, is_group_slug_default: false, category: "Tuyển Dụng", category_en: "Recruitment", category_zh: "招聘", description: "H Holding tuyển dụng chuyên gia BĐS, cam kết pháp lý minh bạch, hỗ trợ vay 70%, bàn giao đúng tiến độ.", description_en: "H Holding recruits real estate professionals with transparent legal commitments, 70% loan support, and on-schedule handover.", description_zh: "H Holding 招聘房地產專家，承諾法理透明、支持 70% 貸款並按進度交付。", attributes_icon: "HomeOutlined", attributes_color: "#13c2c2" },
+  { id: "lien-he", service_code: "lien-he", slug: "lien-he", group_slug: "", is_service: false, is_group_slug: false, is_group_slug_default: false, category: "Liên Hệ", category_en: "Contact", category_zh: "聯繫我們" }
+];
+
+const PMT_STATIC_CATEGORY_DEFS = [
+  { id: "home", service_code: "home", slug: "home", group_slug: "", is_service: false, is_group_slug: false, is_group_slug_default: false, category: "Trang Chủ", category_en: "Home", category_zh: "首頁" },
+  { id: "ve-chung-toi", service_code: "ve-chung-toi", slug: "ve-chung-toi", group_slug: "", is_service: false, is_group_slug: false, is_group_slug_default: false, category: "Về Chúng Tôi", category_en: "About Me", category_zh: "關於我" },
+  { id: "dich-vu", service_code: "dich-vu", slug: "dich-vu", group_slug: "", is_service: true, is_group_slug: true, is_group_slug_default: false, category: "Dịch Vụ", category_en: "Services", category_zh: "服務", description: "Tổng hợp các dịch vụ chuyên nghiệp, uy tín trong nhiều lĩnh vực khác nhau.", description_en: "A collection of professional and reputable services across many fields.", description_zh: "彙整多個領域的專業與可靠服務。", attributes_icon: "AppstoreOutlined", attributes_color: "#722ed1" },
+  { id: "lien-he", service_code: "lien-he", slug: "lien-he", group_slug: "", is_service: false, is_group_slug: false, is_group_slug_default: false, category: "Liên Hệ", category_en: "Contact", category_zh: "聯繫我們" }
+];
+
+function buildCanonicalCategoryRecord(raw = {}, defaults = {}) {
+  const merged = { ...defaults, ...raw };
+  const menuNames = normalizeMenuTranslations(merged, merged);
+  return {
+    id: merged.id || merged.service_code || merged.slug,
+    service_code: merged.service_code || merged.slug || merged.id,
+    slug: merged.slug || merged.service_code || merged.id,
+    group_slug: merged.group_slug || '',
+    is_service: typeof merged.is_service === 'boolean' ? merged.is_service : true,
+    is_group_slug: typeof merged.is_group_slug === 'boolean' ? merged.is_group_slug : false,
+    is_group_slug_default: typeof merged.is_group_slug_default === 'boolean' ? merged.is_group_slug_default : false,
+    name: menuNames.name,
+    name_en: menuNames.name_en,
+    name_zh: menuNames.name_zh,
+    category: menuNames.category,
+    category_en: menuNames.category_en,
+    category_zh: menuNames.category_zh,
+    description: firstNonEmptyValue(merged.description, merged.attributes_description, defaults.description, ''),
+    description_en: firstNonEmptyValue(merged.description_en, merged.attributes_description_en, defaults.description_en, ''),
+    description_zh: firstNonEmptyValue(merged.description_zh, merged.attributes_description_zh, defaults.description_zh, ''),
+    image: merged.image || '',
+    icon: firstNonEmptyValue(merged.icon, merged.attributes_icon, defaults.icon, ''),
+    attributes_icon: firstNonEmptyValue(merged.attributes_icon, merged.icon, defaults.attributes_icon, ''),
+    attributes_color: firstNonEmptyValue(merged.attributes_color, merged.color, defaults.attributes_color, ''),
+    attributes_priority: typeof merged.attributes_priority === 'number' ? merged.attributes_priority : (typeof defaults.attributes_priority === 'number' ? defaults.attributes_priority : 0),
+    attributes_title: firstNonEmptyValue(merged.attributes_title, menuNames.category, ''),
+    attributes_title_en: firstNonEmptyValue(merged.attributes_title_en, menuNames.category_en, ''),
+    attributes_title_zh: firstNonEmptyValue(merged.attributes_title_zh, menuNames.category_zh, ''),
+    attributes_description: firstNonEmptyValue(merged.attributes_description, merged.description, ''),
+    attributes_description_en: firstNonEmptyValue(merged.attributes_description_en, merged.description_en, ''),
+    attributes_description_zh: firstNonEmptyValue(merged.attributes_description_zh, merged.description_zh, ''),
+    attributes_keywords: firstNonEmptyValue(merged.attributes_keywords, ''),
+    attributes_keywords_en: firstNonEmptyValue(merged.attributes_keywords_en, ''),
+    attributes_keywords_zh: firstNonEmptyValue(merged.attributes_keywords_zh, ''),
+    config: merged.config || defaults.config,
+    type: merged.type || defaults.type || ''
+  };
+}
+
+function getCategoryTemplatesForDomain(domainKey) {
+  if (domainKey === 'lmkt') {
+    const baseConfig = INDUSTRY_TYPES["bat-dong-san"] || {};
+    const projectTemplates = LMKT_PROJECT_DEFS.map((project) => buildCanonicalCategoryRecord({
+      ...project,
+      id: project.service_code,
+      slug: project.service_code,
+      group_slug: 'du-an',
+      is_service: true,
+      is_group_slug: false,
+      is_group_slug_default: false,
+      description: project.description || project.attributes_description || `Dự án bất động sản: ${project.name}`,
+      description_en: project.description_en || project.attributes_description_en || '',
+      description_zh: project.description_zh || project.attributes_description_zh || '',
+      config: baseConfig,
+      type: 'project'
+    }));
+    return [
+      ...LMKT_STATIC_CATEGORY_DEFS.map((item) => buildCanonicalCategoryRecord(item, { type: item.slug === 'du-an' ? 'group' : 'page' })),
+      ...projectTemplates
+    ];
+  }
+
+  const serviceTemplates = Object.entries(INDUSTRY_TYPES).map(([key, ind]) => buildCanonicalCategoryRecord({
+    ...ind,
+    id: key,
+    service_code: key,
+    slug: key,
+    group_slug: 'dich-vu',
+    is_service: true,
+    is_group_slug: false,
+    is_group_slug_default: key === 'phan-mem',
+    description: ind.attributes_description || ind.description || ind.prompt_focus || '',
+    description_en: ind.attributes_description_en || '',
+    description_zh: ind.attributes_description_zh || '',
+    config: ind,
+    type: 'industry'
+  }));
+  return [
+    ...PMT_STATIC_CATEGORY_DEFS.map((item) => buildCanonicalCategoryRecord(item, { type: item.slug === 'dich-vu' ? 'group' : 'page' })),
+    ...serviceTemplates
+  ];
+}
+
+function findCategoryTemplate(domainKey, slug) {
+  return getCategoryTemplatesForDomain(domainKey).find((item) => item.slug === slug) || null;
+}
 
 // ===== AUTO-SYNC SERVICE DEFINITIONS FROM SERVER =====
 /**
@@ -3724,25 +3870,25 @@ async function syncServiceDefinitionsFromServer(force = false) {
     
     console.log('🔄 [syncServiceDefs] Đang sync từ server (với LIMIT)...');
     let totalSynced = 0;
-    
-    // ✅ FIX: Add LIMIT to prevent loading 1000+ rows at once
-    const queryOptions = {
-      operator: "AND",
-      conditions: [{ field: "id", type: "like", value: "" }],
-      limit: 500  // ✅ LIMIT 500 per query (avoid RAM spike)
-    };
-    
+
+    // Helper: so sánh boolean kể cả khi DB trả về string "true"/"false"
+    const isTruthy = (val) => val === true || val === 'true' || val === 1 || val === '1';
+
+    // Lấy tất cả rows có status=active, giới hạn 500 để tránh tràn RAM
+    const queryWhere = { field: "status", type: "eq", value: "active" };
+
     // ===== 1️⃣ Sync LMKT Projects =====
     const lmktData = await window.csmApi.getTableData({
       app_id: "lmkt",
       obj_name: "web_services",
-      where: queryOptions
+      where: queryWhere,
+      take: 500
     }).catch(err => {
       console.error('❌ [syncServiceDefs] LMKT fetch error:', err);
       return { rows: [] };
     });
-    
-    const lmktRows = lmktData?.rows || lmktData?.data || [];
+
+    const lmktRows = (lmktData?.rows || lmktData?.data || []).filter(item => item && isTruthy(item.is_service) && !isTruthy(item.is_group_slug));
     if (Array.isArray(lmktRows) && lmktRows.length > 0) {
       // Merge vào LMKT_PROJECT_DEFS (giữ lại items cũ, thêm mới)
       const existingSlugs = new Set(LMKT_PROJECT_DEFS.map(p => p.service_code));
@@ -3801,13 +3947,14 @@ async function syncServiceDefinitionsFromServer(force = false) {
     const pmtData = await window.csmApi.getTableData({
       app_id: "wuweb",
       obj_name: "web_services",
-      where: queryOptions
+      where: queryWhere,
+      take: 500
     }).catch(err => {
       console.error('❌ [syncServiceDefs] PMT fetch error:', err);
       return { rows: [] };
     });
-    
-    const pmtRows = pmtData?.rows || pmtData?.data || [];
+
+    const pmtRows = (pmtData?.rows || pmtData?.data || []).filter(item => item && isTruthy(item.is_service) && !isTruthy(item.is_group_slug));
     let pmtSynced = 0;
     
     if (Array.isArray(pmtRows) && pmtRows.length > 0) {
@@ -5838,11 +5985,8 @@ async function processContent(item, opts = {}) {
             if (fbPostData.full_post) {
               fullContent = fbPostData.full_post;
             } else if (fbPostData.facebook_post) {
-              // Nếu không có full_post, ghép các phần
-              fullContent = fbPostData.facebook_post;
-              if (fbPostData.hashtags && !fullContent.includes(fbPostData.hashtags)) {
-                fullContent += '\n\n' + fbPostData.hashtags;
-              }
+              // Chuẩn hóa nội dung AI để không lặp block hashtag cuối bài.
+              fullContent = formatFacebookPostContent(fbPostData.facebook_post, fbPostData.hashtags);
               if (fbPostData.cta && !fullContent.includes(fbPostData.cta)) {
                 fullContent += '\n\n' + fbPostData.cta;
               }
@@ -10995,13 +11139,8 @@ async function postToSelectedFanpages(messages, postUrl, selectedPages = null, o
       );
 
       if (fbPostData?.facebook_post) {
-        // ✅ FIX: Dùng toàn bộ AI response, không cắt xén
-        let fullPostContent = fbPostData.facebook_post;
-        
-        // Thêm hashtags nếu có
-        if (fbPostData.hashtags && !fullPostContent.includes(fbPostData.hashtags)) {
-          fullPostContent += '\n\n' + fbPostData.hashtags;
-        }
+        // Chuẩn hóa nội dung AI để hashtag cuối bài chỉ xuất hiện một lần.
+        let fullPostContent = formatFacebookPostContent(fbPostData.facebook_post, fbPostData.hashtags);
         
         // Thêm CTA cuối cùng với link
         const cta = fbPostData.cta || 'Xem chi tiết';
@@ -11055,14 +11194,17 @@ async function postToSelectedFanpages(messages, postUrl, selectedPages = null, o
         if (result?.success) {
           console.log(`✅ [Fanpage ${i + 1}] Đã đăng lên ${page.name} thành công! (Post ID: ${result.post_id || 'N/A'})`);
           successCount++;
-          if (result.post_id) {
+          const resultPostIds = Array.isArray(result.all_post_ids) && result.all_post_ids.length > 0
+            ? result.all_post_ids
+            : [result.post_id].filter(Boolean);
+          resultPostIds.forEach((postId) => {
             postedItems.push({
               page_id: page.id,
               page_name: page.name,
-              post_id: result.post_id,
+              post_id: postId,
               posted_at: Date.now()
             });
-          }
+          });
           posted = true;
           break; // Thành công, thoát loop retry
         } else {
@@ -13094,83 +13236,7 @@ function getDomainInfo() {
  * ========================================================
  */
 function getCategoriesForDomain(domainKey) {
-  const isLmkt = domainKey === 'lmkt';
-  
-  if (isLmkt) {
-    // LMKT: 6 dự án BĐS
-    const baseConfig = INDUSTRY_TYPES["bat-dong-san"] || {};
-
-    return LMKT_PROJECT_DEFS.map(p => ({
-      id: p.service_code,
-      service_code: p.service_code,
-      slug: p.service_code,
-      group_slug: "du-an",
-      is_service: true,
-      is_group_slug: false,
-      is_group_slug_default: false,
-      name: p.name,
-      name_en: p.name_en,
-      name_zh: p.name_zh,
-      category: p.category || p.name,
-      category_en: p.category_en || p.name_en,
-      category_zh: p.category_zh || p.name_zh,
-      description: p.description || `Dự án bất động sản: ${p.name}`,
-      description_en: p.description_en || '',
-      description_zh: p.description_zh || '',
-      image: p.image || '',
-      icon: p.icon || '',
-      attributes_icon: p.attributes_icon || baseConfig.attributes_icon || '',
-      attributes_color: p.attributes_color || baseConfig.attributes_color || '',
-      attributes_priority: typeof p.attributes_priority === 'number' ? p.attributes_priority : (baseConfig.attributes_priority || 0),
-      attributes_title: p.attributes_title || baseConfig.attributes_title || '',
-      attributes_title_en: p.attributes_title_en || baseConfig.attributes_title_en || '',
-      attributes_title_zh: p.attributes_title_zh || baseConfig.attributes_title_zh || '',
-      attributes_description: p.attributes_description || baseConfig.attributes_description || '',
-      attributes_description_en: p.attributes_description_en || baseConfig.attributes_description_en || '',
-      attributes_description_zh: p.attributes_description_zh || baseConfig.attributes_description_zh || '',
-      attributes_keywords: p.attributes_keywords || baseConfig.attributes_keywords || '',
-      attributes_keywords_en: p.attributes_keywords_en || baseConfig.attributes_keywords_en || '',
-      attributes_keywords_zh: p.attributes_keywords_zh || baseConfig.attributes_keywords_zh || '',
-      config: baseConfig,
-      type: 'project'
-    }));
-  } else {
-    // Phanmemmottrieu: 5 lĩnh vực kinh doanh
-    return Object.entries(INDUSTRY_TYPES).map(([key, ind]) => ({
-      id: key,
-      service_code: key,
-      slug: key,
-      group_slug: "dich-vu",
-      is_service: true,
-      is_group_slug: false,
-      is_group_slug_default: false,
-      name: ind.name,
-      name_en: ind.name_en || '',
-      name_zh: ind.name_zh || '',
-      category: ind.category || ind.name,
-      category_en: ind.category_en || ind.name_en || '',
-      category_zh: ind.category_zh || ind.name_zh || '',
-      description: ind.attributes_description || ind.description || ind.prompt_focus || '',
-      description_en: ind.attributes_description_en || '',
-      description_zh: ind.attributes_description_zh || '',
-      image: ind.image || '',
-      icon: ind.icon || '',
-      attributes_icon: ind.attributes_icon || '',
-      attributes_color: ind.attributes_color || '',
-      attributes_priority: typeof ind.attributes_priority === 'number' ? ind.attributes_priority : 0,
-      attributes_title: ind.attributes_title || '',
-      attributes_title_en: ind.attributes_title_en || '',
-      attributes_title_zh: ind.attributes_title_zh || '',
-      attributes_description: ind.attributes_description || '',
-      attributes_description_en: ind.attributes_description_en || '',
-      attributes_description_zh: ind.attributes_description_zh || '',
-      attributes_keywords: ind.attributes_keywords || '',
-      attributes_keywords_en: ind.attributes_keywords_en || '',
-      attributes_keywords_zh: ind.attributes_keywords_zh || '',
-      type: 'industry',
-      config: ind
-    }));
-  }
+  return getCategoryTemplatesForDomain(domainKey).filter(item => item.is_service && !item.is_group_slug);
 }
 
 function normalizeGroupSlug(slug, groupSlug, isGroupSlug, isService = true) {
@@ -13910,36 +13976,20 @@ async function upsertServiceCategoryContent(ctx, categorySlug, contentData) {
       || (primaryDomain && ctx.domain.includes(primaryDomain));
   }) || '';
 
-  const baseCategory = getCategoriesForDomain(domainKey || 'phanmemmottrieu')
-    .find(cat => cat.slug === categorySlug) || {};
+  const selectedCategoryData = contentData.selectedCategoryData || {};
+  const baseCategory = findCategoryTemplate(domainKey || 'phanmemmottrieu', categorySlug) || selectedCategoryData || {};
   const baseConfig = baseCategory.config || {};
-  
-  const where = {
-    operator: "AND",
-    conditions: [
-      { field: "slug", type: "eq", value: categorySlug },
-      { field: "domain", type: "eq", value: ctx.domain }
-    ]
-  };
 
-  const rows = await ctx.helperApi.getTableData({
+  const rowsBySlug = await ctx.helperApi.getTableData({
     app_id: ctx.app_id,
     obj_name: "web_services",
-    where,
-    take: 1
+    where: { field: "slug", type: "eq", value: categorySlug },
+    take: 5
   }).catch(() => ({ rows: [] }));
 
-  const existing = (rows.rows || rows.data || [])[0] || {};
-  let fallbackRow = {};
-  if (!existing || !existing.slug) {
-    const rowsBySlug = await ctx.helperApi.getTableData({
-      app_id: ctx.app_id,
-      obj_name: "web_services",
-      where: { field: "slug", type: "eq", value: categorySlug },
-      take: 1
-    }).catch(() => ({ rows: [] }));
-    fallbackRow = (rowsBySlug.rows || rowsBySlug.data || [])[0] || {};
-  }
+  const slugRows = rowsBySlug.rows || rowsBySlug.data || [];
+  const existing = slugRows.find(row => String(row?.status || 'active') === 'active') || slugRows[0] || {};
+  const fallbackRow = existing || {};
 
   const pick = (...vals) => vals.find(v => v !== undefined && v !== null && v !== '');
   const pickNumber = (...vals) => {
@@ -13950,7 +14000,7 @@ async function upsertServiceCategoryContent(ctx, categorySlug, contentData) {
   };
 
   const menuNames = normalizeMenuTranslations(
-    contentData.selectedCategoryData || {},
+    selectedCategoryData,
     {
       ...baseCategory,
       ...existing,
@@ -13969,33 +14019,52 @@ async function upsertServiceCategoryContent(ctx, categorySlug, contentData) {
   const rawContentEn = encodeHtml(contentData.content_en || '', { urlEncode: false }) || '';
   const rawContentZh = encodeHtml(contentData.content_zh || '', { urlEncode: false }) || '';
 
+  const resolvedIsGroupSlug = typeof selectedCategoryData.is_group_slug === 'boolean'
+    ? selectedCategoryData.is_group_slug
+    : (typeof contentData.is_group_slug === 'boolean'
+    ? contentData.is_group_slug
+    : (typeof baseCategory.is_group_slug === 'boolean' ? baseCategory.is_group_slug : false));
+
+  const resolvedIsGroupSlugDefault = typeof selectedCategoryData.is_group_slug_default === 'boolean'
+    ? selectedCategoryData.is_group_slug_default
+    : (typeof contentData.is_group_slug_default === 'boolean'
+    ? contentData.is_group_slug_default
+    : (typeof baseCategory.is_group_slug_default === 'boolean' ? baseCategory.is_group_slug_default : false));
+
+  const resolvedIsService = typeof selectedCategoryData.is_service === 'boolean'
+    ? selectedCategoryData.is_service
+    : (typeof contentData.is_service === 'boolean'
+    ? contentData.is_service
+    : (typeof baseCategory.is_service === 'boolean' ? baseCategory.is_service : true));
+
   const groupFlags = normalizeGroupFlags(
     baseCategory.slug || categorySlug,
-    typeof contentData.is_group_slug === 'boolean'
-      ? contentData.is_group_slug
-      : (typeof baseCategory.is_group_slug === 'boolean' ? baseCategory.is_group_slug : false),
-    typeof contentData.is_group_slug_default === 'boolean'
-      ? contentData.is_group_slug_default
-      : (typeof baseCategory.is_group_slug_default === 'boolean' ? baseCategory.is_group_slug_default : false),
-    typeof contentData.is_service === 'boolean'
-      ? contentData.is_service
-      : (typeof baseCategory.is_service === 'boolean' ? baseCategory.is_service : true)
+    resolvedIsGroupSlug,
+    resolvedIsGroupSlugDefault,
+    resolvedIsService
   );
 
   const objUpdate = {
     ...existing,
-    id: pick(contentData.id, existing.id, fallbackRow.id, baseCategory.id, baseCategory.service_code, baseCategory.slug),
-    service_code: pick(contentData.service_code, existing.service_code, fallbackRow.service_code, baseCategory.service_code, baseCategory.slug),
+    id: pick(contentData.id, existing.id, fallbackRow.id, baseCategory.id, baseCategory.service_code, baseCategory.slug, categorySlug),
+    service_code: pick(contentData.service_code, baseCategory.service_code, existing.service_code, fallbackRow.service_code, categorySlug),
     slug: baseCategory.slug || categorySlug,
     group_slug: normalizeGroupSlug(
       baseCategory.slug || categorySlug,
-      pick(contentData.group_slug, existing.group_slug, fallbackRow.group_slug, baseCategory.group_slug, domainKey === 'lmkt' ? 'du-an' : 'dich-vu'),
+      firstNonEmptyValue(
+        selectedCategoryData.group_slug,
+        baseCategory.group_slug,
+        contentData.group_slug,
+        existing.group_slug,
+        fallbackRow.group_slug,
+        resolvedIsService ? (domainKey === 'lmkt' ? 'du-an' : 'dich-vu') : ''
+      ),
       groupFlags.is_group_slug,
       groupFlags.is_service
     ),
     is_service: typeof groupFlags.is_service === 'boolean'
       ? groupFlags.is_service
-      : (typeof contentData.is_service === 'boolean' ? contentData.is_service : (typeof baseCategory.is_service === 'boolean' ? baseCategory.is_service : true)),
+      : (typeof selectedCategoryData.is_service === 'boolean' ? selectedCategoryData.is_service : (typeof contentData.is_service === 'boolean' ? contentData.is_service : (typeof baseCategory.is_service === 'boolean' ? baseCategory.is_service : true))),
     is_group_slug: groupFlags.is_group_slug,
     is_group_slug_default: groupFlags.is_group_slug_default,
     domain: ctx.domain,
@@ -14007,15 +14076,15 @@ async function upsertServiceCategoryContent(ctx, categorySlug, contentData) {
     category: pick(menuNames.category, baseCategory.category, existing.category, fallbackRow.category, contentData.category, contentData.name),
     category_en: pick(menuNames.category_en, baseCategory.category_en, existing.category_en, fallbackRow.category_en, contentData.category_en, contentData.name_en, contentData.name),
     category_zh: pick(menuNames.category_zh, baseCategory.category_zh, existing.category_zh, fallbackRow.category_zh, contentData.category_zh, contentData.name_zh, contentData.name),
-    description: pick(contentData.description, existing.description, fallbackRow.description, baseCategory.description),
-    description_en: pick(contentData.description_en, existing.description_en, fallbackRow.description_en, baseCategory.description_en),
-    description_zh: pick(contentData.description_zh, existing.description_zh, fallbackRow.description_zh, baseCategory.description_zh),
+    description: pick(selectedCategoryData.description, baseCategory.description, contentData.description, existing.description, fallbackRow.description),
+    description_en: pick(selectedCategoryData.description_en, baseCategory.description_en, contentData.description_en, existing.description_en, fallbackRow.description_en),
+    description_zh: pick(selectedCategoryData.description_zh, baseCategory.description_zh, contentData.description_zh, existing.description_zh, fallbackRow.description_zh),
 
-    image: pick(contentData.image, existing.image, fallbackRow.image, baseCategory.image, ''),
-    icon: pick(contentData.icon, existing.icon, fallbackRow.icon, baseCategory.icon, ''),
-    attributes_icon: pick(contentData.attributes_icon, existing.attributes_icon, fallbackRow.attributes_icon, baseCategory.attributes_icon, baseConfig.attributes_icon),
-    attributes_color: pick(contentData.attributes_color, existing.attributes_color, fallbackRow.attributes_color, baseCategory.attributes_color, baseConfig.attributes_color),
-    attributes_priority: pickNumber(contentData.attributes_priority, existing.attributes_priority, fallbackRow.attributes_priority, baseCategory.attributes_priority, baseConfig.attributes_priority),
+    image: pick(selectedCategoryData.image, baseCategory.image, contentData.image, existing.image, fallbackRow.image, ''),
+    icon: pick(selectedCategoryData.icon, baseCategory.icon, contentData.icon, existing.icon, fallbackRow.icon, ''),
+    attributes_icon: pick(selectedCategoryData.attributes_icon, baseCategory.attributes_icon, contentData.attributes_icon, existing.attributes_icon, fallbackRow.attributes_icon, baseConfig.attributes_icon),
+    attributes_color: pick(selectedCategoryData.attributes_color, baseCategory.attributes_color, contentData.attributes_color, existing.attributes_color, fallbackRow.attributes_color, baseConfig.attributes_color),
+    attributes_priority: pickNumber(selectedCategoryData.attributes_priority, baseCategory.attributes_priority, contentData.attributes_priority, existing.attributes_priority, fallbackRow.attributes_priority, baseConfig.attributes_priority),
 
     attributes_title: pick(contentData.attributes_title, existing.attributes_title, fallbackRow.attributes_title, baseCategory.attributes_title, baseConfig.attributes_title),
     attributes_title_en: pick(contentData.attributes_title_en, existing.attributes_title_en, fallbackRow.attributes_title_en, baseCategory.attributes_title_en, baseConfig.attributes_title_en),
@@ -14049,7 +14118,7 @@ async function upsertServiceCategoryContent(ctx, categorySlug, contentData) {
     obj_name: "web_services",
     command: "update",
     obj_update: objUpdate,
-    pk_fields: ["slug", "domain", "status"]
+    pk_fields: ["slug"]
   });
   
   console.log(`[upsertServiceCategoryContent] Cập nhật thành công - ${new Date().toLocaleTimeString()}`);
@@ -14498,22 +14567,23 @@ async function ensureServiceContentUI() {
       throw new Error("AI trả về content rỗng");
     }
 
+    const templateData = findCategoryTemplate(globalSettings.domainKey, categorySlug) || categoryData;
     const ctx = resolveContext();
     const domainConfigForSave = DOMAIN_OPTIONS[globalSettings.domainKey];
     ctx.app_id = domainConfigForSave?.app_id || ctx.app_id;
     ctx.domain = domainConfigForSave?.value || ctx.domain;
 
     const saveResult = await upsertServiceCategoryContent(ctx, categorySlug, {
-      ...categoryData,
+      ...templateData,
       ...contentData,
       selectedCategoryData: {
-        ...categoryData,
-        ...normalizeMenuTranslations(categoryData, categoryData)
+        ...templateData,
+        ...normalizeMenuTranslations(templateData, templateData)
       },
       slug: categorySlug,
       service_code: categorySlug,
-      id: categoryData.id || categorySlug,
-      name: categoryData.name || categoryName
+      id: templateData.id || categoryData.id || categorySlug,
+      name: templateData.name || categoryData.name || categoryName
     });
 
     const syncedMenuNames = normalizeMenuTranslations(categoryData, contentData);
@@ -14627,36 +14697,40 @@ async function ensureServiceContentUI() {
       const groupSlug = isService 
         ? (globalSettings.isLmkt ? "du-an" : "dich-vu")
         : "";
+      const templateData = findCategoryTemplate(globalSettings.domainKey, customSlug) || {};
 
       const categoryData = {
-        id: customSlug,
-        service_code: customSlug,
-        slug: customSlug,
-        group_slug: groupSlug,
-        is_service: isService,
-        is_group_slug: false,
-        is_group_slug_default: false,
-        name: categoryName,
-        name_en: categoryName,
-        name_zh: categoryName,
-        category: categoryName,
-        category_en: categoryName,
-        category_zh: categoryName,
-        image: globalSettings.isLmkt
-          ? `https://www.h-holding.vn/app_images/projects/${customSlug}-og.jpg`
-          : (baseIndustry.image || ''),
-        attributes_icon: baseIndustry.attributes_icon || "AppstoreOutlined",
-        attributes_color: baseIndustry.attributes_color || "#1890ff",
-        attributes_priority: 999,
-        attributes_title: categoryName,
-        attributes_title_en: categoryName,
-        attributes_title_zh: categoryName,
-        attributes_description: baseIndustry.attributes_description || '',
-        attributes_description_en: baseIndustry.attributes_description_en || '',
-        attributes_description_zh: baseIndustry.attributes_description_zh || '',
-        attributes_keywords: baseIndustry.attributes_keywords || '',
-        attributes_keywords_en: baseIndustry.attributes_keywords_en || '',
-        attributes_keywords_zh: baseIndustry.attributes_keywords_zh || ''
+          id: templateData.id || customSlug,
+          service_code: templateData.service_code || customSlug,
+          slug: templateData.slug || customSlug,
+          group_slug: templateData.group_slug !== undefined ? templateData.group_slug : groupSlug,
+          is_service: typeof templateData.is_service === 'boolean' ? templateData.is_service : isService,
+          is_group_slug: typeof templateData.is_group_slug === 'boolean' ? templateData.is_group_slug : false,
+          is_group_slug_default: typeof templateData.is_group_slug_default === 'boolean' ? templateData.is_group_slug_default : false,
+          name: templateData.name || categoryName,
+          name_en: templateData.name_en || categoryName,
+          name_zh: templateData.name_zh || categoryName,
+          category: templateData.category || categoryName,
+          category_en: templateData.category_en || categoryName,
+          category_zh: templateData.category_zh || categoryName,
+          description: templateData.description || '',
+          description_en: templateData.description_en || '',
+          description_zh: templateData.description_zh || '',
+          image: templateData.image || (globalSettings.isLmkt
+            ? `https://www.h-holding.vn/app_images/projects/${customSlug}-og.jpg`
+            : (baseIndustry.image || '')),
+          attributes_icon: templateData.attributes_icon || baseIndustry.attributes_icon || "AppstoreOutlined",
+          attributes_color: templateData.attributes_color || baseIndustry.attributes_color || "#1890ff",
+          attributes_priority: typeof templateData.attributes_priority === 'number' ? templateData.attributes_priority : 999,
+          attributes_title: templateData.attributes_title || categoryName,
+          attributes_title_en: templateData.attributes_title_en || categoryName,
+          attributes_title_zh: templateData.attributes_title_zh || categoryName,
+          attributes_description: templateData.attributes_description || baseIndustry.attributes_description || '',
+          attributes_description_en: templateData.attributes_description_en || baseIndustry.attributes_description_en || '',
+          attributes_description_zh: templateData.attributes_description_zh || baseIndustry.attributes_description_zh || '',
+          attributes_keywords: templateData.attributes_keywords || baseIndustry.attributes_keywords || '',
+          attributes_keywords_en: templateData.attributes_keywords_en || baseIndustry.attributes_keywords_en || '',
+          attributes_keywords_zh: templateData.attributes_keywords_zh || baseIndustry.attributes_keywords_zh || ''
       };
 
       const autoPrompt = isService
@@ -15802,7 +15876,7 @@ function buildAntiAICreativeOverrides(creative = {}) {
 async function syncCategoriesToDatabase(domainKey) {
   try {
     // Lấy danh sách categories
-    const categories = getCategoriesForDomain(domainKey);
+    const categories = getCategoryTemplatesForDomain(domainKey);
     const appId = DOMAIN_OPTIONS[domainKey]?.app_id;
     const domainValue = DOMAIN_OPTIONS[domainKey]?.value;
     
@@ -15881,7 +15955,7 @@ async function syncCategoriesToDatabase(domainKey) {
           obj_name: "web_services",
           command: "update",
           obj_update: objUpdate,
-          pk_fields: ["slug", "domain", "status"]
+          pk_fields: ["slug"]
         };
         
         await window.csmApi.updateTableData(updatePayload);
@@ -17402,6 +17476,8 @@ async function postToFacebookPageWithImages(pageId, pageAccessToken, message, im
           return {
             success: true,
             post_id: result.data?.post_id,
+            extra_post_ids: Array.isArray(result.data?.extra_post_ids) ? result.data.extra_post_ids : [],
+            all_post_ids: Array.isArray(result.data?.all_post_ids) ? result.data.all_post_ids : [result.data?.post_id].filter(Boolean),
             images_count: result.data?.images_count || validImages.length,
             videos_count: result.data?.videos_count || validVideos.length
           };
@@ -17454,6 +17530,8 @@ async function postToFacebookPageWithImages(pageId, pageAccessToken, message, im
       return {
         post_id: data.data.post_id,
         success: true,
+        extra_post_ids: Array.isArray(data.data.extra_post_ids) ? data.data.extra_post_ids : [],
+        all_post_ids: Array.isArray(data.data.all_post_ids) ? data.data.all_post_ids : [data.data.post_id].filter(Boolean),
         images_count: imagesCount,
         videos_count: videosCount
       };

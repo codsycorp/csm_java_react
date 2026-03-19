@@ -1544,7 +1544,10 @@ public class RecordManager {
             db = getDatabaseWithBloomFilter(appId, tableName);
 
             List<String> primaryKeys;
-            if ("index".equalsIgnoreCase(tableName)) {
+            if (customKey != null && customKey.length > 0 && customKey[0] != null && !customKey[0].isEmpty()) {
+                primaryKeys = new ArrayList<>(customKey[0]);
+                logger.info("Sử dụng custom primary keys cho {}.{}: {}", appId, tableName, primaryKeys);
+            } else if ("index".equalsIgnoreCase(tableName)) {
                 primaryKeys = List.of("id");
             } else {
                 SearchFilter filter = new SearchFilter();
