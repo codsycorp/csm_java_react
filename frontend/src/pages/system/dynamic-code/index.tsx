@@ -14,13 +14,17 @@ import { generateSeoContent, csm_ai_generate_seo_content, generateSeoContentWith
 import { useAppStore } from "#src/store/app";
 import { useUserStore } from "#src/store/user";
 import { usePreferences } from "#src/hooks";
+import { ANT_DESIGN_LOCALE } from "#src/locales";
 import { request } from "#src/utils";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation, I18nextProvider } from "react-i18next";
 import { useParams, useLocation, useNavigate } from "react-router";
 import * as React from "react";
 import * as ReactDOM from "react-dom/client";
-import { Spin, Empty, Alert, notification, Table, Tabs, Button, Input, Select, Card, Space, Popconfirm } from "antd";
+import { Spin, Empty, Alert, notification, Table, Tabs, Button, Input, Select, Card, Space, Popconfirm, ConfigProvider } from "antd";
+import i18nInstance from "i18next";
+
+import { customAntdDarkTheme, customAntdLightTheme } from "#src/styles/theme/antd/antd-theme";
 
 const dynamicReactRoots = new Map<string, ReactDOM.Root>();
 const LEGACY_CONTAINER_IDS = new Set(["context-auto", "dynamic-code-root"]);
@@ -626,7 +630,7 @@ export default function DynamicCodeMenu({
   const user = useUserStore();
   const appId = useAppStore(state => state.currentAppId);
   const preferences = usePreferences();
-  const { isDark, themeColorPrimary } = preferences;
+  const { isDark, themeColorPrimary, language } = preferences;
   const executedRef = useRef(false);
   const runtimeRef = useRef<ScopedRuntime | null>(null);
   
@@ -941,8 +945,10 @@ ${resolvedContainerSelector} select {
       Object.defineProperty(window, 'antd', {
         get() {
           return {
-            notification, Table, Tabs, Button, Input, Select, Card, Space, Popconfirm, CsmDynamicGrid,
+            notification, Table, Tabs, Button, Input, Select, Card, Space, Popconfirm, ConfigProvider, CsmDynamicGrid,
             CsmCrmWorkspace,
+            antdLocale: ANT_DESIGN_LOCALE[language],
+            antdThemeConfig: isDark ? customAntdDarkTheme : customAntdLightTheme,
             googleIndexUrl: (CsmApi as any).googleIndexUrl,
             checkGoogleIndexQuota: (CsmApi as any).checkGoogleIndexQuota,
             checkGoogleIndexStatus: (CsmApi as any).checkGoogleIndexStatus,
@@ -967,6 +973,14 @@ ${resolvedContainerSelector} select {
     if (!Object.getOwnPropertyDescriptor(window, 'I18nextProvider')) {
       Object.defineProperty(window, 'I18nextProvider', {
         get() { return I18nextProvider; },
+        configurable: true,
+        enumerable: false
+      });
+    }
+
+    if (!Object.getOwnPropertyDescriptor(window, 'i18n')) {
+      Object.defineProperty(window, 'i18n', {
+        get() { return i18n || i18nInstance; },
         configurable: true,
         enumerable: false
       });

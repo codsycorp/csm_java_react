@@ -1,7 +1,7 @@
 import type { BlockerFunction } from "react-router";
 import type { ReactRouterType, RouterSubscriber } from "./types";
 
-import { useAuthStore, usePermissionStore, usePreferencesStore, useUserStore } from "#src/store";
+import { usePermissionStore, usePreferencesStore, useUserStore } from "#src/store";
 import { NProgress } from "#src/utils";
 
 import { matchRoutes } from "react-router";
@@ -419,7 +419,6 @@ export async function routerInitReady(reactRouter: ReactRouterType) {
 	}
 
 	/* 是否登录 */
-	// Đã chuyển sang kiểm tra userId, không còn dùng token
 	const isLogin = Boolean(useUserStore.getState().userId);
 	const isWebsite = isWebsiteMode();
 	const isWebRoute = isWebsiteRoute(pathnameWithoutBase);

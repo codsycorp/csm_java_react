@@ -1,72 +1,5 @@
 // Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/55.0.2883.87 Safari/537.36 OPR/42.0.2393.517
 // Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/40.0.2214.115 Safari/537.36
-
-// ========== SHUTDOWN DETECTION HELPERS - Ng\u0103n Memory Leak ==========
-/**
- * Ki\u1ec3m tra xem AutoSetup component \u0111\u00e3 unmount ch\u01b0a
- * N\u1ebfu unmount r\u1ed3i, c\u00e1c timer/async operations ph\u1ea3i d\u1eebng l\u1ea1i
- */
-const isShuttingDown = () => {
-  if (typeof window !== 'undefined' && typeof window.__isAutoShuttingDown === 'function') {
-    return window.__isAutoShuttingDown();
-  }
-  return false;
-};
-
-/**
- * Safe setInterval - T\u1ef1 \u0111\u1ed9ng ki\u1ec3m tra shutdown
- * @param {Function} callback 
- * @param {number} interval 
- * @returns {number|null} interval ID ho\u1eb7c null n\u1ebfu shutdown
- */
-const safeSetInterval = (callback, interval) => {
-  if (isShuttingDown()) {
-    console.warn('\u26a0\ufe0f [SHUTDOWN] B\u1ecf qua setInterval v\u00ec \u0111ang shutdown');
-    return null;
-  }
-  
-  const wrappedCallback = () => {
-    if (isShuttingDown()) {
-      console.log('\ud83d\uded1 [SHUTDOWN] D\u1eebng interval v\u00ec shutdown detected');
-      return;
-    }
-    try {
-      callback();
-    } catch (e) {
-      console.error('\u274c [INTERVAL ERROR]', e);
-    }
-  };
-  
-  return setInterval(wrappedCallback, interval);
-};
-
-/**
- * Safe setTimeout - T\u1ef1 \u0111\u1ed9ng ki\u1ec3m tra shutdown
- * @param {Function} callback 
- * @param {number} delay 
- * @returns {number|null} timeout ID ho\u1eb7c null n\u1ebfu shutdown
- */
-const safeSetTimeout = (callback, delay) => {
-  if (isShuttingDown()) {
-    console.warn('\u26a0\ufe0f [SHUTDOWN] B\u1ecf qua setTimeout v\u00ec \u0111ang shutdown');
-    return null;
-  }
-  
-  const wrappedCallback = () => {
-    if (isShuttingDown()) {
-      console.log('\ud83d\uded1 [SHUTDOWN] B\u1ecf qua timeout v\u00ec shutdown detected');
-      return;
-    }
-    try {
-      callback();
-    } catch (e) {
-      console.error('\u274c [TIMEOUT ERROR]', e);
-    }
-  };
-  
-  return setTimeout(wrappedCallback, delay);
-};
-
 window.fnBililiteRange = function () {
   let bililiteRange; // create one global variable
   (function () {
@@ -1052,7 +985,7 @@ async function getAccurateClientId() {
     sendFinalEngagementEvent(sessionId, startTime);
   }
 `;
-window.strGoogleAds = strEvent + `
+window.strGoogleAds = window.strEvent + `
   // Tạo một hàm để gọi hành động tiếp theo
   // Tạo một hàm để gọi hành động tiếp theo
   // Khóa lưu trữ trong localStorage
@@ -2649,12 +2582,7 @@ window.TabManager = {
     return new Promise((resolve, reject) => {
       const startTime = Date.now();
       let lastWarnTime = 0;
-      const checkInterval = safeSetInterval(() => {
-        if (isShuttingDown()) {
-          if (checkInterval) clearInterval(checkInterval);
-          reject(new Error('Shutdown detected'));
-          return;
-        }
+      const checkInterval = setInterval(() => {
         const elapsed = Date.now() - startTime;
         const elapsedSecs = Math.round(elapsed / 1000);
         
@@ -3251,13 +3179,7 @@ const runParallelProcessing = async () => {
   
   const waitForAllTabsClose = () => {
     return new Promise((resolve) => {
-      const checkInterval = safeSetInterval(() => {
-        if (isShuttingDown()) {
-          if (checkInterval) clearInterval(checkInterval);
-          console.warn('[Parallel] 🛑 Shutdown detected, stopping batch wait');
-          resolve(false);
-          return;
-        }
+      const checkInterval = setInterval(() => {
         const activeCount = window.TabManager.getActiveTabCount();
         const elapsedMs = Date.now() - batchStartTime;
         const elapsedSecs = Math.round(elapsedMs / 1000);
@@ -4357,6 +4279,36 @@ function initializeApp() {
 function mainAppCode() {
   console.log('✓ Entering main code block');
 
+  // ✅ ĐỊNH NGHĨA checkIP NGAY ĐẦU để tránh ReferenceError
+  // Lấy IP thật của máy: thử lần lượt ipinfo → ipify → ping.eu (HTML). Luôn gọi fn với string hoặc false.
+  if (!window.checkIP) {
+    window.checkIP = function (fn) {
+      const tryIpInfo = () => fetch('https://ipinfo.io/json', { method: 'GET', headers: { 'Accept': 'application/json' } })
+        .then(r => r.ok ? r.json() : Promise.reject())
+        .then(res => res?.ip || Promise.reject());
+
+      const tryIpify = () => fetch('https://api.ipify.org/?format=json', { method: 'GET', headers: { 'Accept': 'application/json' } })
+        .then(r => r.ok ? r.json() : Promise.reject())
+        .then(res => res?.ip || Promise.reject());
+
+      const tryPingEu = () => fetch('https://ping.eu/', { method: 'GET' })
+        .then(r => r.text())
+        .then(html => {
+          const parser = new DOMParser();
+          const doc = parser.parseFromString(html, 'text/html');
+          const ip = doc.querySelector('.ip-td>b')?.innerText;
+          if (ip) return ip;
+          return Promise.reject();
+        });
+
+      tryIpInfo()
+        .catch(tryIpify)
+        .catch(tryPingEu)
+        .then(ip => fn(ip))
+        .catch(() => fn(false));
+    };
+  }
+
   // const gui = require('nw.gui'); 
   // gui.App.clearCache();
   // fnClearCache();
@@ -4400,32 +4352,6 @@ function mainAppCode() {
       }
     }
   };
-  // Lấy IP thật của máy: thử lần lượt ipinfo → ipify → ping.eu (HTML). Luôn gọi fn với string hoặc false.
-  window.checkIP = function (fn) {
-    const tryIpInfo = () => fetch('https://ipinfo.io/json', { method: 'GET', headers: { 'Accept': 'application/json' } })
-      .then(r => r.ok ? r.json() : Promise.reject())
-      .then(res => res?.ip || Promise.reject());
-
-    const tryIpify = () => fetch('https://api.ipify.org/?format=json', { method: 'GET', headers: { 'Accept': 'application/json' } })
-      .then(r => r.ok ? r.json() : Promise.reject())
-      .then(res => res?.ip || Promise.reject());
-
-    const tryPingEu = () => fetch('https://ping.eu/', { method: 'GET' })
-      .then(r => r.text())
-      .then(html => {
-        const parser = new DOMParser();
-        const doc = parser.parseFromString(html, 'text/html');
-        const ip = doc.querySelector('.ip-td>b')?.innerText;
-        if (ip) return ip;
-        return Promise.reject();
-      });
-
-    tryIpInfo()
-      .catch(tryIpify)
-      .catch(tryPingEu)
-      .then(ip => fn(ip))
-      .catch(() => fn(false));
-  }
   // Legacy sync helpers removed (checkIP_old, checkIPFromPingEU) – logic folded above
   /**
    * Lấy danh sách các proxy có sẵn từ API wwproxy.com.
@@ -5027,13 +4953,26 @@ function mainAppCode() {
         if (gridContainer) {
           console.log('Rendering CsmDynamicGrid...');
           const gridRoot = window.ReactDOM.createRoot(gridContainer);
+          const gridElement = window.renderKeywordGrid();
+
+          if (!gridElement) {
+            console.error('❌ renderKeywordGrid returned null/undefined');
+            return;
+          }
+
+          const providerReady = !!window.I18nextProvider && !!window.i18n;
           gridRoot.render(
-            window.React.createElement(
-              window.I18nextProvider,
-              { i18n: window.i18n },
-              window.renderKeywordGrid()
-            )
+            providerReady
+              ? window.React.createElement(
+                  window.I18nextProvider,
+                  { i18n: window.i18n },
+                  gridElement
+                )
+              : gridElement
           );
+          if (!providerReady) {
+            console.warn('⚠️ I18nextProvider hoặc i18n chưa sẵn sàng, render grid không bọc provider');
+          }
           console.log('✅ CsmDynamicGrid đã render thành công');
         }
       }, 5000);

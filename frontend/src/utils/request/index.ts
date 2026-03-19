@@ -134,7 +134,13 @@ const defaultConfig: Options = {
 						   // Skip 401 handling if already on login page
 						   const isOnLoginPage = typeof window !== "undefined" && window.location.pathname.includes("/login");
 						   if (isOnLoginPage) {
-							   return handleErrorResponse(response);
+							   try {
+								   clearAllClientState();
+							   } catch (error) {
+								   console.warn("[Auth] Failed to clear stale client state on login page:", error);
+							   }
+							   console.warn("[Auth] Ignoring stale 401 on login page:", request.url);
+							   return response;
 						   }
 						   
 						   if ([`/${refreshTokenPath}`].some(url => request.url.endsWith(url))) {
