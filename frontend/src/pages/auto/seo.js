@@ -4034,6 +4034,11 @@ window.fnCreateTab = function (id_tab, url_open, script_code, multi_tab_name, au
 
     // Webview element
     var webview = document.createElement('webview');
+    const canUseWebviewApi = typeof webview.addContentScripts === 'function' && typeof webview.executeScript === 'function';
+    if (!canUseWebviewApi) {
+      console.error('[fnCreateTab] ❌ WebView API không khả dụng trong context hiện tại. Kiểm tra env NW/Electron và cấu hình webview.');
+      return false;
+    }
     webview.setAttribute('id', 'U_' + id_tab);
     // webview.setAttribute('name', us[0]);
     // webview.setAttribute('pass', us[1]);
@@ -4333,7 +4338,10 @@ window.fnCreateTab = function (id_tab, url_open, script_code, multi_tab_name, au
       },15000);
     });
     if (script_code) {
-      var strScript = 'window.tabid="' + id_tab + '";\n window.fnBililiteRange=' + fnBililiteRange.toString() + ';\n window.bililiteRange=fnBililiteRange();\n try{\n console.log(JSON.stringify({type:"title",tabid:tabid,title:document.title||location.href})); \n ' + script_code + '\n}catch(exT){console.log(JSON.stringify({type:"error",tabid:tabid,msg:exT.message}));} \n ';
+      const bililiteFactory = (typeof window.fnBililiteRange === 'function')
+        ? window.fnBililiteRange.toString()
+        : 'function(){return function(){return {sendkeys:function(){}};};}';
+      var strScript = 'window.tabid="' + id_tab + '";\n window.fnBililiteRange=' + bililiteFactory + ';\n window.bililiteRange=window.fnBililiteRange();\n try{\n console.log(JSON.stringify({type:"title",tabid:tabid,title:document.title||location.href})); \n ' + script_code + '\n}catch(exT){console.log(JSON.stringify({type:"error",tabid:tabid,msg:exT.message}));} \n ';
       // alert(id_tab)
       // if(id_tab!=="reset3G")
       //   console.log(strScript);
@@ -4347,15 +4355,26 @@ window.fnCreateTab = function (id_tab, url_open, script_code, multi_tab_name, au
           container.prepend(newChild);
       }
       `;
-      var strCode = 'var scriptAu=document.createElement("script");\n';
-      strCode += '  scriptAu.src="data:text/javascript;base64,' + seft.Base64.encode(strScript) + '";\n';
-      strCode += '  scriptAu.type="text/javascript";\n';
-      strCode += '  document.head.appendChild(scriptAu);\n';
-      webview.addContentScripts([
-        {
-          js: { code: strCode, },
-          name: 'params', matches: ['<all_urls>'], all_frames: true, run_at: 'document_end',
-        }]);
+      const base64Encode = (seft && seft.Base64 && typeof seft.Base64.encode === 'function')
+        ? seft.Base64.encode
+        : null;
+      if (!base64Encode) {
+        console.warn('[fnCreateTab] ⚠️ Không có Base64 encoder, bỏ qua addContentScripts cho tab', id_tab);
+      } else {
+        var strCode = 'var scriptAu=document.createElement("script");\n';
+        strCode += '  scriptAu.src="data:text/javascript;base64,' + base64Encode(strScript) + '";\n';
+        strCode += '  scriptAu.type="text/javascript";\n';
+        strCode += '  document.head.appendChild(scriptAu);\n';
+        try {
+          webview.addContentScripts([
+            {
+              js: { code: strCode, },
+              name: 'params', matches: ['<all_urls>'], all_frames: true, run_at: 'document_end',
+            }]);
+        } catch (addScriptErr) {
+          console.warn('[fnCreateTab] ⚠️ addContentScripts thất bại:', addScriptErr.message);
+        }
+      }
     }
     webview.addEventListener('loadstop', function (e) {
       // Xử lý Google Sorry Page (CAPTCHA)
