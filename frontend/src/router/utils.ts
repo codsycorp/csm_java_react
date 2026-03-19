@@ -21,7 +21,7 @@ export function mergeRouteModules(...routes: RouteFileModule[]) {
 	return routes.flatMap((modules) => {
 		return Object.keys(modules).reduce<AppRouteRecordRaw[]>(
 			(list, key) => {
-				const mod = modules[key].default ?? {};
+				const mod = modules[key]?.default ?? {};
 				const modList = Array.isArray(mod) ? [...mod] : [mod];
 				return [...list, ...addIdToRoutes(modList)];
 			},
@@ -29,6 +29,8 @@ export function mergeRouteModules(...routes: RouteFileModule[]) {
 		);
 	});
 }
+
+const DynamicRouteFallback = () => createElement("div", { style: { padding: 16 } }, "Page not found");
 
 /**
  * 为路由数组中的每个路由对象添加一个唯一的 ID，该 ID 默认为路由的路径。
@@ -154,6 +156,7 @@ export function addAsyncRoutes(arrRoutes: Array<AppRouteRecordRaw>) {
 		return [];
 	const modulesRoutesKeys = Object.keys(modulesRoutes);
 	arrRoutes.forEach((v: AppRouteRecordRaw) => {
+		v.handle = v.handle || {};
 		// 将 backstage 属性加入 handle，标识此路由为后端返回路由
 		v.handle.backstage = true;
 
@@ -165,13 +168,29 @@ export function addAsyncRoutes(arrRoutes: Array<AppRouteRecordRaw>) {
 		}
 		else {
 			const routePath = v.path!;
-			const index = modulesRoutesKeys.findIndex(ev => ev === `/src/pages${routePath}/index.tsx`);
+			const routeModulePath = `/src/pages${routePath}/index.tsx`;
+			const index = modulesRoutesKeys.findIndex(ev => ev === routeModulePath);
+			const loader = index >= 0 ? modulesRoutes[modulesRoutesKeys[index]] : undefined;
 			// https://github.com/remix-run/react-router/tree/dev/examples/lazy-loading-router-provider
 			// https://reactrouter.com/en/main/route/lazy
 			v.lazy = async () => {
-				const DefaultComponent = await modulesRoutes[modulesRoutesKeys[index]]();
+				if (!loader) {
+					console.error("[router] Missing route module:", routeModulePath, v);
+					return {
+						Component: DynamicRouteFallback,
+					};
+				}
+
+				const loadedModule = await loader();
+				if (!loadedModule?.default) {
+					console.error("[router] Route module has no default export:", routeModulePath, loadedModule);
+					return {
+						Component: DynamicRouteFallback,
+					};
+				}
+
 				return {
-					Component: DefaultComponent.default,
+					Component: loadedModule.default,
 				};
 			};
 		}

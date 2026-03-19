@@ -1,8 +1,9 @@
 package net.phanmemmottrieu.security;
 
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.http.HttpStatus;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
@@ -16,10 +17,14 @@ import java.util.Map;
 
 @Component
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
-        @Autowired
-        private net.phanmemmottrieu.service.UserService userService;
+    private static final Logger LOGGER = LoggerFactory.getLogger(JwtAuthenticationFilter.class);
+
+    @Autowired
+    private net.phanmemmottrieu.service.UserService userService;
+
     @Autowired
     private JwtUtil jwtUtil;
+
 
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
@@ -235,9 +240,20 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             if (user == null) {
                 return false;
             }
+            // CRITICAL FIX: findUserById may return a stale record (old refresh-token-keyed record)
+            // with an outdated loginVersion. Re-fetch by app_token (direct key lookup) to get
+            // the authoritative, always-fresh record with the correct loginVersion.
+            String appToken = user.getAppToken();
+            if (appToken != null && !appToken.isBlank()) {
+                net.phanmemmottrieu.model.User freshUser = userService.findUserByAppToken(appToken).orElse(null);
+                if (freshUser != null) {
+                    user = freshUser;
+                }
+            }
             int currentVersion = user.getLoginVersion() != null ? user.getLoginVersion() : 0;
             // Legacy compatibility: chỉ enforce khi DB có login version hợp lệ (>0)
             if (currentVersion > 0 && tokenVersion != currentVersion) {
+                LOGGER.warn("[JWT] Version mismatch for user {}: token ver={}, DB ver={}", subject, tokenVersion, currentVersion);
                 return false;
             }
             org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(

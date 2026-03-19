@@ -2,6 +2,7 @@ import { BasicButton } from "#src/components";
 import { isDynamicRoutingEnabled } from "#src/router/routes/config";
 import { useAuthStore, usePermissionStore, useUserStore, useAppStore } from "#src/store";
 import { resolveDevFlag, persistDevLocalFlag } from "#src/utils/dev-flag";
+import { fetchUserInfo } from "#src/api/user";
 
 import {
 	Button,
@@ -28,6 +29,34 @@ const FORM_INITIAL_VALUES = {
 };
 export type PasswordLoginFormType = typeof FORM_INITIAL_VALUES;
 
+function resetAuthArtifacts() {
+	try {
+		useAuthStore.getState().reset();
+	} catch {}
+	try {
+		useUserStore.getState().reset();
+	} catch {}
+	try {
+		localStorage.removeItem("access-token");
+		localStorage.removeItem("user-info");
+		localStorage.removeItem("refreshToken");
+	} catch {}
+}
+
+function getReadableLoginError(error: any, fallback: string) {
+	const status = error?.response?.status;
+	if (status === 401) {
+		return "Đăng nhập thành công nhưng không đồng bộ được phiên người dùng. Vui lòng thử lại.";
+	}
+
+	const rawMessage = error?.message || error?.toString?.() || "";
+	if (typeof rawMessage === "string" && rawMessage.startsWith("Request failed with status code")) {
+		return fallback;
+	}
+
+	return rawMessage || fallback;
+}
+
 export function PasswordLogin() {
 	const [loading, setLoading] = useState(false);
 	const [passwordLoginForm] = Form.useForm();
@@ -53,6 +82,7 @@ export function PasswordLogin() {
 	};
 
 	const handleFinish = (values: PasswordLoginFormType) => {
+		resetAuthArtifacts();
 		setLoading(true);
 		login(values)
 			.then((loginRes: any) => {
@@ -64,7 +94,15 @@ export function PasswordLogin() {
 				return new Promise(resolve => setTimeout(resolve, 600)).then(() => loginRes);
 			})
 			.then((loginRes: any) => {
-				return getUserInfo().then((userInfoResult: any) => {
+			// Token đã được lưu vào auth store bởi login() rồi
+			// Đợi một chút để persist middleware flushed
+			return new Promise(resolve => setTimeout(resolve, 100)).then(() => {
+				console.log("[LOGIN] Token stored in auth store, calling fetchUserInfo()");
+				return fetchUserInfo().then((response: any) => {
+					const userInfoResult = response?.result;
+					if (userInfoResult) {
+						useUserStore.setState({ ...userInfoResult });
+					}
 					if (!userInfoResult || !userInfoResult.userId) {
 						console.error("[LOGIN] Failed to get user info after login");
 						useAuthStore.getState().reset();
@@ -89,8 +127,9 @@ export function PasswordLogin() {
 
 					return { loginRes, userInfoResult };
 				});
-			})
-			.then(({ loginRes, userInfoResult }) => {
+			});
+		})
+		.then(({ loginRes, userInfoResult }) => {
 				if (isDynamicRoutingEnabled) {
 					const routesFromLogin = loginRes?.result?.asyncRoutes;
 					const devFromLogin = resolveDevFlag(loginRes?.result?.dev ?? userInfoResult.dev, userInfoResult.roles);
@@ -123,9 +162,10 @@ export function PasswordLogin() {
 				} catch (e) {
 					console.error("[LOGIN] Error resetting auth state:", e);
 				}
+				const fallbackMessage = t("login.loginFailed") || "Đăng nhập thất bại";
 				const { message } = await import("#src/utils/static-antd");
 				message.error({
-					content: error.message || error.toString() || t("login.loginFailed") || "Đăng nhập thất bại",
+					content: getReadableLoginError(error, fallbackMessage),
 					duration: 3,
 				});
 			})

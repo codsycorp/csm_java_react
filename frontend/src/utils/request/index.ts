@@ -39,6 +39,15 @@ function getCsrfToken() {
 
 // Không cần set cookie CSRF-TOKEN từ frontend nữa
 
+
+function hasAuthState() {
+	try {
+		const authState = useAuthStore.getState();
+		return Boolean(authState?.token || authState?.refreshToken || getCsrfToken());
+	} catch {
+		return false;
+	}
+}
 // 请求超时时间
 const API_TIMEOUT = Number(import.meta.env.VITE_API_TIMEOUT) || 10000;
 
@@ -60,6 +69,7 @@ const defaultConfig: Options = {
 			   }
 				// Set language header for all requests
 				request.headers.set(LANG_HEADER, usePreferencesStore.getState().language);
+				const isRefreshTokenRequest = [`/${refreshTokenPath}`].some(url => request.url.endsWith(url));
 				
 				// NWJS Support: Send refreshToken in header since cookies don't persist
 				const isNwjs = typeof (window as any).nw !== 'undefined' || 
@@ -91,8 +101,9 @@ const defaultConfig: Options = {
 								// Check if this is a website request (no auth required)
 								const isWebsiteRequest = request.url.includes('/wu_');
 								const isWhiteRequest = requestWhiteList.some(url => request.url.endsWith(url));
-								// If not a white request and not a website request, attach token header
-								if (!isWhiteRequest && !isWebsiteRequest) {
+								// Do not attach access token for refresh-token endpoint.
+								// Backend filter prioritizes csm-token over refresh token, so sending both breaks refresh flow.
+								if (!isWhiteRequest && !isWebsiteRequest && !isRefreshTokenRequest) {
 									try {
 										const token = useAuthStore.getState().token;
 										if (token) {
@@ -120,6 +131,17 @@ const defaultConfig: Options = {
 							request.headers.set("X-CSRF-Token", csrfToken);
 						}
 					}
+				
+				// DIAGNOSTIC: Log user-info / refresh-token request headers
+				if (request.url.includes('/user-info') || isRefreshTokenRequest) {
+					console.log("[DIAGNOSTIC] user-info request - sending headers:", {
+						url: request.url,
+						'csm-token': request.headers.get('csm-token'),
+						'X-Refresh-Token': request.headers.get('X-Refresh-Token'),
+						'Authorization': request.headers.get('Authorization'),
+						all_headers: Array.from(request.headers.entries()).map(([k, v]) => ({ key: k, value: v }))
+					});
+				}
 			},
 		],
 		afterResponse: [
@@ -131,24 +153,26 @@ const defaultConfig: Options = {
 				// request error
 				   if (!response.ok) {
 					   if (response.status === 401) {
-						   // Skip 401 handling if already on login page
 						   const isOnLoginPage = typeof window !== "undefined" && window.location.pathname.includes("/login");
-						   if (isOnLoginPage) {
-							   try {
-								   clearAllClientState();
-							   } catch (error) {
-								   console.warn("[Auth] Failed to clear stale client state on login page:", error);
-							   }
-							   console.warn("[Auth] Ignoring stale 401 on login page:", request.url);
-							   return response;
-						   }
-						   
 						   if ([`/${refreshTokenPath}`].some(url => request.url.endsWith(url))) {
 						   // Clear cache when refresh token endpoint fails
 						   clearAllClientState();
 						   goLogin();
 						   return response;
 					   }
+
+						   if (isOnLoginPage) {
+							   if (hasAuthState()) {
+								   try {
+									   return await refreshTokenAndRetry(request, options);
+								   } catch (error) {
+									   console.warn("[Auth] Refresh failed during login bootstrap:", error);
+								   }
+							   }
+
+							   console.warn("[Auth] Ignoring stale 401 on login page without clearing fresh login state:", request.url);
+							   return response;
+						   }
 					   
 					   // Prevent multiple simultaneous 401 handling
 					   if (is401HandlingInProgress) {

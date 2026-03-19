@@ -19,8 +19,8 @@ export function fetchAsyncRoutes() {
 	return request.get("get-async-routes").json<ApiResponse<AppRouteRecordRaw[]>>();
 }
 
-export function fetchUserInfo() {
-	return request.get("user-info").json<ApiResponse<UserInfoType>>();
+export function fetchUserInfo(headers?: HeadersInit) {
+	return request.get("user-info", headers ? { headers } : undefined).json<ApiResponse<UserInfoType>>();
 }
 
 export interface RefreshTokenResult {

@@ -66,6 +66,12 @@ export function preloadHeroImage() {
     const hero = maybeMeta?.image || maybeMeta?.f_logo || maybeMeta?.og_image;
     if (!hero || typeof hero !== "string") return;
 
+    // Skip favicon/logo-like resources to avoid preload-not-used warning
+    const normalizedHero = hero.toLowerCase();
+    if (normalizedHero.includes("icon.png") || normalizedHero.includes("favicon")) {
+      return;
+    }
+
     // Avoid duplicate preload
     if (head.querySelector(`link[rel="preload"][href="${hero}"]`)) return;
 

@@ -246,6 +246,24 @@ public class UserService {
     }
 
     /**
+    /**
+     * Tìm kiếm người dùng theo app_token (direct key lookup – luôn trả về record mới nhất).
+     * Dùng để lấy loginVersion chính xác, tránh stale records từ full scan.
+     */
+    public Optional<User> findUserByAppToken(String appToken) {
+        if (appToken == null || appToken.isEmpty()) return Optional.empty();
+        SearchFilter filter = new SearchFilter();
+        filter.setField("app_token");
+        filter.setType("eq");
+        filter.setValue(appToken);
+        Map<String, Object> userRecord = recordManager.find(CSM_APP_ID, ACCOUNTS_TABLE, filter);
+        if (userRecord != null && !userRecord.isEmpty()) {
+            return Optional.of(mapRecordToUser(userRecord));
+        }
+        return Optional.empty();
+    }
+
+    /**
      * Tìm kiếm người dùng theo email.
      * Kiểm tra cả tài khoản chính và tài khoản con.
      *

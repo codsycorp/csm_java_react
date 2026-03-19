@@ -1172,6 +1172,8 @@ window.strGoogleAds = window.strEvent + `
 // ipcRenderer.on('CHANNEL', (event, data) =>{ console.log(data); })
 if (window.hasOwnProperty("process")) {
   window.opsys = process.platform;
+} else if (!window.opsys) {
+  window.opsys = 'unknown';
 }
 // Giả sử bạn có thẻ webview trong HTML: <webview id="myWebview" src="..."></webview>
 
@@ -1502,7 +1504,7 @@ window.fnClearCache = function () {
   gui.App.clearCache();
   // deleteFolderRecursive(getAppDataPath()+'/Cache');
   // deleteFolderRecursive(getAppDataPath()+'/Storage');
-  if (opsys === "win32") {
+  if (window.opsys === "win32") {
     deleteFolderRecursive(gui.App.dataPath + '/Cache');
     deleteFolderRecursive(gui.App.dataPath + '/Storage');
   }
@@ -1530,7 +1532,8 @@ window.fnClearCache = function () {
 }
 
 // Auto cleanup cache cho tất cả webview mỗi 30 giây - DỌN MEMORY LIÊN TỤC
-if (!window.__cacheCleanupInterval) {
+// Mặc định tắt để tránh ERR_CACHE_READ_FAILURE khi tài nguyên đang được đọc.
+if (window.AUTO_CLEANUP_CACHE_INTERVAL === true && !window.__cacheCleanupInterval) {
   window.__cacheCleanupInterval = setInterval(() => {
     const allWebviews = document.querySelectorAll('webview[id^="U_"]');
     
@@ -1564,6 +1567,8 @@ if (!window.__cacheCleanupInterval) {
     }
   }, 30000); // Mỗi 30 giây (tần suất cao hơn để dọn liên tục)
   console.log('[AUTO-CLEANUP] ✅ Auto cache cleanup started (every 30s) - giữ tabs chạy liên tục');
+} else if (!window.__cacheCleanupInterval) {
+  console.log('[AUTO-CLEANUP] ⏭️ Auto cache cleanup interval bị tắt mặc định (set window.AUTO_CLEANUP_CACHE_INTERVAL = true để bật)');
 }
 const deleteFolderRecursive = function (directoryPath) {
   if (window.hasOwnProperty("process")) {
@@ -1591,7 +1596,7 @@ const deleteFolderRecursive = function (directoryPath) {
 
 // QUAN TRỌNG: Dọn dẹp tất cả partition cũ khi khởi động app
 // Điều này giải quyết vấn đề tích lũy storage từ các webview đã đóng
-window.cleanupAllPartitions = function() {
+window.cleanupAllPartitions = function(options = {}) {
   if (!window.hasOwnProperty("process")) return;
   
   try {
@@ -1616,20 +1621,25 @@ window.cleanupAllPartitions = function() {
       console.log('[CLEANUP-PARTITIONS] ✅ Đã xóa Storage/ext');
     }
     
-    // 3. Xóa các cache folder khác
-    const cachePaths = [
-      Path.join(userDataPath, 'Cache'),
-      Path.join(userDataPath, 'Default', 'Cache'),
-      Path.join(userDataPath, 'Default', 'Code Cache'),
-      Path.join(userDataPath, 'Default', 'GPUCache'),
-    ];
-    
-    cachePaths.forEach(cachePath => {
-      if (fs.existsSync(cachePath)) {
-        console.log('[CLEANUP-PARTITIONS] 🧹 Xóa cache:', cachePath);
-        deleteFolderRecursive(cachePath);
-      }
-    });
+    // 3. Chỉ xóa browser cache khi thực sự yêu cầu (tránh lỗi ERR_CACHE_READ_FAILURE lúc reload)
+    const includeBrowserCache = options && options.includeBrowserCache === true;
+    if (includeBrowserCache) {
+      const cachePaths = [
+        Path.join(userDataPath, 'Cache'),
+        Path.join(userDataPath, 'Default', 'Cache'),
+        Path.join(userDataPath, 'Default', 'Code Cache'),
+        Path.join(userDataPath, 'Default', 'GPUCache'),
+      ];
+
+      cachePaths.forEach(cachePath => {
+        if (fs.existsSync(cachePath)) {
+          console.log('[CLEANUP-PARTITIONS] 🧹 Xóa cache:', cachePath);
+          deleteFolderRecursive(cachePath);
+        }
+      });
+    } else {
+      console.log('[CLEANUP-PARTITIONS] ⏭️ Bỏ qua xóa browser cache (safe mode)');
+    }
     
     console.log('[CLEANUP-PARTITIONS] ✅ Hoàn tất dọn dẹp toàn bộ storage cũ');
   } catch (err) {
@@ -1641,16 +1651,16 @@ window.cleanupAllPartitions = function() {
 if (!window.__initialCleanupDone) {
   window.__initialCleanupDone = true;
   
-  // Kiểm tra option AUTO_CLEANUP_ON_STARTUP (mặc định: true)
-  const autoCleanup = window.AUTO_CLEANUP_ON_STARTUP !== false;
+  // Kiểm tra option AUTO_CLEANUP_ON_STARTUP (mặc định: false để tránh đụng cache lúc reload)
+  const autoCleanup = window.AUTO_CLEANUP_ON_STARTUP === true;
   
   if (autoCleanup) {
     setTimeout(() => {
-      console.log('[STARTUP] 🚀 Bắt đầu cleanup partitions cũ...');
-      window.cleanupAllPartitions();
-    }, 2000); // Delay 2s để app khởi động xong
+      console.log('[STARTUP] 🚀 Bắt đầu cleanup partitions cũ (safe mode)...');
+      window.cleanupAllPartitions({ includeBrowserCache: false });
+    }, 15000); // Delay dài hơn để tránh race với quá trình tải asset khi vừa reload
   } else {
-    console.log('[STARTUP] ⏭️ Auto cleanup bị tắt (AUTO_CLEANUP_ON_STARTUP = false)');
+    console.log('[STARTUP] ⏭️ Auto cleanup bị tắt mặc định (set window.AUTO_CLEANUP_ON_STARTUP = true để bật)');
   }
 }
 
@@ -1667,8 +1677,9 @@ if (!window.__initialCleanupDone) {
 // 3. Sử dụng partition ID không persist để dễ dọn dẹp
 //
 // Options để kiểm soát:
-// - window.AUTO_CLEANUP_ON_STARTUP = true/false (mặc định: true)
+// - window.AUTO_CLEANUP_ON_STARTUP = true/false (mặc định: false)
 // - window.AUTO_CLEANUP_ON_CLOSE = true/false (mặc định: true)
+// - window.AUTO_CLEANUP_CACHE_INTERVAL = true/false (mặc định: false)
 // - window.MAX_PROXY_RUNTIME = 300000 (5 phút, tự động đóng webview)
 //
 // Để tắt auto cleanup, thêm vào code trước khi load app:
@@ -1683,7 +1694,7 @@ if (!window.__initialCleanupDone) {
 console.log('╔════════════════════════════════════════════════════════════╗');
 console.log('║        WEBVIEW STORAGE CLEANUP - CONFIGURATION             ║');
 console.log('╠════════════════════════════════════════════════════════════╣');
-console.log('║ AUTO_CLEANUP_ON_STARTUP:', (window.AUTO_CLEANUP_ON_STARTUP !== false ? '✅ Enabled ' : '❌ Disabled'), '            ║');
+console.log('║ AUTO_CLEANUP_ON_STARTUP:', (window.AUTO_CLEANUP_ON_STARTUP === true ? '✅ Enabled ' : '❌ Disabled'), '            ║');
 console.log('║ AUTO_CLEANUP_ON_CLOSE:  ', (window.AUTO_CLEANUP_ON_CLOSE !== false ? '✅ Enabled ' : '❌ Disabled'), '            ║');
 console.log('║ MAX_PROXY_RUNTIME:      ', ((window.MAX_PROXY_RUNTIME || 300000)/60000) + ' phút', '                ║');
 console.log('╠════════════════════════════════════════════════════════════╣');
@@ -1773,6 +1784,120 @@ function getStayMinutes() {
   const n = Number(raw);
   if (Number.isFinite(n) && n > 0) return n;
   return 5;
+}
+
+// Compatibility wrapper: nhiều chỗ legacy gọi fnResetIP() trực tiếp.
+// Trong môi trường strict/eval, window.fnResetIP không tự tạo binding tên fnResetIP.
+function fnResetIP(...args) {
+  if (typeof window.fnResetIP !== 'function') {
+    console.warn('[fnResetIP-wrapper] window.fnResetIP chưa sẵn sàng');
+    return;
+  }
+  return window.fnResetIP(...args);
+}
+
+function getTMProxy(...args) {
+  if (typeof window.getTMProxy !== 'function') {
+    console.warn('[getTMProxy-wrapper] window.getTMProxy chưa sẵn sàng');
+    return false;
+  }
+  return window.getTMProxy(...args);
+}
+
+async function proxy_status_check(...args) {
+  if (typeof window.proxy_status_check !== 'function') {
+    console.warn('[proxy_status_check-wrapper] window.proxy_status_check chưa sẵn sàng');
+    return false;
+  }
+  return await window.proxy_status_check(...args);
+}
+
+async function proxy_deactivate(...args) {
+  if (typeof window.proxy_deactivate !== 'function') {
+    console.warn('[proxy_deactivate-wrapper] window.proxy_deactivate chưa sẵn sàng');
+    return false;
+  }
+  return await window.proxy_deactivate(...args);
+}
+
+function fetchWithTimeout(...args) {
+  if (typeof window.fetchWithTimeout === 'function') {
+    return window.fetchWithTimeout(...args);
+  }
+
+  const [url, options] = args;
+  return fetch(url, options);
+}
+
+async function getAvailableProxiesWithTimeout(...args) {
+  if (typeof window.getAvailableProxiesWithTimeout === 'function') {
+    return await window.getAvailableProxiesWithTimeout(...args);
+  }
+  return await getAvailableProxies(...args);
+}
+
+function fnCreateTab(...args) {
+  if (typeof window.fnCreateTab !== 'function') {
+    console.warn('[fnCreateTab-wrapper] window.fnCreateTab chưa sẵn sàng');
+    return false;
+  }
+  return window.fnCreateTab(...args);
+}
+
+function fnRemoveTab(...args) {
+  if (typeof window.fnRemoveTab !== 'function') {
+    console.warn('[fnRemoveTab-wrapper] window.fnRemoveTab chưa sẵn sàng');
+    return false;
+  }
+  return window.fnRemoveTab(...args);
+}
+
+function fnClearCache(...args) {
+  if (typeof window.fnClearCache !== 'function') {
+    console.warn('[fnClearCache-wrapper] window.fnClearCache chưa sẵn sàng');
+    return false;
+  }
+  return window.fnClearCache(...args);
+}
+
+function fnClearWebviewCache(...args) {
+  if (typeof window.fnClearWebviewCache !== 'function') {
+    console.warn('[fnClearWebviewCache-wrapper] window.fnClearWebviewCache chưa sẵn sàng');
+    return false;
+  }
+  return window.fnClearWebviewCache(...args);
+}
+
+function cleanupAllPartitions(...args) {
+  if (typeof window.cleanupAllPartitions !== 'function') {
+    console.warn('[cleanupAllPartitions-wrapper] window.cleanupAllPartitions chưa sẵn sàng');
+    return false;
+  }
+  return window.cleanupAllPartitions(...args);
+}
+
+function closeAllTabsAndCleanup(...args) {
+  if (typeof window.closeAllTabsAndCleanup !== 'function') {
+    console.warn('[closeAllTabsAndCleanup-wrapper] window.closeAllTabsAndCleanup chưa sẵn sàng');
+    return false;
+  }
+  return window.closeAllTabsAndCleanup(...args);
+}
+
+async function proxy_activate(...args) {
+  if (typeof window.proxy_activate !== 'function') {
+    console.warn('[proxy_activate-wrapper] window.proxy_activate chưa sẵn sàng');
+    return false;
+  }
+  return await window.proxy_activate(...args);
+}
+
+async function proxy_change_address(...args) {
+  if (typeof window.proxy_change_address !== 'function') {
+    console.warn('[proxy_change_address-wrapper] window.proxy_change_address chưa sẵn sàng');
+    return false;
+  }
+  return await window.proxy_change_address(...args);
 }
 
 // ============================================
@@ -2329,7 +2454,7 @@ if (!window.__appCleanupRegistered) {
               proxy_addess = msg.data['proxy'];
             if (msg.data['https'])
               proxy_addess = msg.data['https'];
-            if (opsys === "darwin")
+            if (window.opsys === "darwin")
               proxy_addess = msg.data;
             var public_ip = msg.data['public_ip'] ? msg.data['public_ip'] : "";
             if (msg.data['ipAddress'])
@@ -2427,7 +2552,13 @@ if (!window.__appCleanupRegistered) {
                       }
                     } else {
                       // Nếu public_ip trống, kiểm tra bằng API thực tế
-                      checkIP(function (ip) {
+                      const checkIPFn = window.checkIP || globalThis.checkIP;
+                      if (typeof checkIPFn !== 'function') {
+                        console.warn('[verifyIPChange] checkIP chưa sẵn sàng');
+                        return;
+                      }
+
+                      checkIPFn(function (ip) {
                         if (ip) {
                           document.querySelector('#ipNew').textContent = ip;
                           if (ip !== document.querySelector('#ipReal').textContent) {
@@ -3074,30 +3205,46 @@ const runParallelProcessing = async () => {
   
   // 6. Tạo các webview song song (không chờ nhau)
   const createPromises = batch.map(async (item, index) => {
-    // Chờ slot nếu đã đạt giới hạn
-    if (!window.TabManager.canCreateTab()) {
-      console.log(`[Parallel] Chờ slot cho link ${index + 1}/${batch.length}`);
-      try {
-        await window.TabManager.waitForSlot();
-      } catch (err) {
-        console.error(`[Parallel] Timeout chờ slot:`, err);
-        return;
+    try {
+      // Chờ slot nếu đã đạt giới hạn
+      if (!window.TabManager.canCreateTab()) {
+        console.log(`[Parallel] Chờ slot cho link ${index + 1}/${batch.length}`);
+        try {
+          await window.TabManager.waitForSlot();
+        } catch (err) {
+          console.error(`[Parallel] Timeout chờ slot:`, err);
+          return;
+        }
       }
-    }
-    
-    let content = '';
-    let url = '';
-    let tabId = '';
-    
-    if (item.type === 'dataUser') {
-      const keyword = item.data;
-      const kieuChayValue = parseInt(keyword.kieu_chay, 10) || 0;
       
-      content = `${strGoogleAds}google_click('${keyword.tu_khoa.toLowerCase()}','${keyword.domain_or_link.toLowerCase()}',${delayTime},${kieuChayValue});\n`;
-      url = "https://www.google.com/";
-      tabId = `gAds_${Date.now()}_${index}`;
+      let content = '';
+      let url = '';
+      let tabId = '';
       
-    } else if (item.type === 'webview') {
+      if (item.type === 'dataUser') {
+        const keyword = item.data || {};
+        const kieuChayValue = parseInt(keyword.kieu_chay, 10) || 0;
+        const tuKhoa = String(keyword.tu_khoa || '').trim().toLowerCase();
+        const domainOrLink = String(keyword.domain_or_link || '').trim().toLowerCase();
+
+        // Chỉ bắt buộc link. Từ khóa có thể trống (google_click sẽ tự chuyển thẳng tới link_check).
+        if (!domainOrLink) {
+          console.warn(`[Parallel] ⚠️ Bỏ qua item thiếu domain_or_link:`, keyword);
+          return;
+        }
+
+        if (!tuKhoa) {
+          console.log(`[Parallel] ℹ️ Item không có tu_khoa, chạy direct-link mode: ${domainOrLink}`);
+        }
+
+        const safeTuKhoa = JSON.stringify(tuKhoa);
+        const safeDomainOrLink = JSON.stringify(domainOrLink);
+        content = `${window.strGoogleAds || ''}google_click(${safeTuKhoa},${safeDomainOrLink},${delayTime},${kieuChayValue});\n`;
+        // Bám theo file mẫu: khi tu_khoa rỗng thì ưu tiên mở trực tiếp link đích.
+        url = tuKhoa ? "https://www.google.com/" : domainOrLink;
+        tabId = `gAds_${Date.now()}_${index}`;
+        
+      } else if (item.type === 'webview') {
       // Script để quét thêm links trong trang
       const scanLinksScript = `
         (function() {
@@ -3132,17 +3279,24 @@ const runParallelProcessing = async () => {
         })();
       `;
       
-      content = strGoogleAds + scanLinksScript;
-      url = item.url;
-      tabId = `web_${Date.now()}_${index}`;
-    }
-    
-    try {
-      fnCreateTab(tabId, url, content, true, (Number(delayTime)||1)*60000+30000);
-      console.log(`[Parallel] ✓ [${index + 1}/${batch.length}] Tạo tab: ${tabId}`);
-      window.UnifiedLinkManager.markAsProcessed(item.id);
-    } catch (err) {
-      console.error(`[Parallel] ✗ Lỗi tạo tab ${tabId}:`, err);
+        content = (window.strGoogleAds || '') + scanLinksScript;
+        url = item.url;
+        tabId = `web_${Date.now()}_${index}`;
+      }
+
+      try {
+        const created = fnCreateTab(tabId, url, content, true, (Number(delayTime)||1)*60000+30000);
+        if (created) {
+          console.log(`[Parallel] ✓ [${index + 1}/${batch.length}] Tạo tab: ${tabId}`);
+          window.UnifiedLinkManager.markAsProcessed(item.id);
+        } else {
+          console.warn(`[Parallel] ⚠️ fnCreateTab không tạo được tab: ${tabId}`);
+        }
+      } catch (err) {
+        console.error(`[Parallel] ✗ Lỗi tạo tab ${tabId}:`, err);
+      }
+    } catch (prepareErr) {
+      console.error(`[Parallel] ✗ Lỗi chuẩn bị tab ${index + 1}/${batch.length}:`, prepareErr);
     }
     
     // Delay nhỏ giữa các tab (không chặn toàn bộ)
@@ -3150,7 +3304,11 @@ const runParallelProcessing = async () => {
   });
   
   // 7. Chờ tất cả tabs được tạo xong
-  await Promise.allSettled(createPromises);
+  const creationResults = await Promise.allSettled(createPromises);
+  const rejectedCreations = creationResults.filter(r => r.status === 'rejected').length;
+  if (rejectedCreations > 0) {
+    console.error(`[Parallel] ❌ Có ${rejectedCreations}/${creationResults.length} promise tạo tab bị reject trước khi hoàn tất`);
+  }
   
   // ⏱️ QUAN TRỌNG: CHỜ tất cả tabs tự tắt theo timeout của người dùng
   // Không đổi proxy hay tạo batch tiếp theo cho đến khi tabs đóng hết
@@ -3171,7 +3329,11 @@ const runParallelProcessing = async () => {
     console.log(`[Parallel] ⚠️ Không có next_request từ API, dùng timeout mặc định`);
   }
   
-  console.log(`[Parallel] ⏰ Đã tạo ${batch.length} tabs, chờ chúng tự tắt theo timeout ${Math.round(safetyTimeoutMs/1000)}s (${timeoutSource})...`);
+  const realCreatedCount = window.TabManager.getActiveTabCount();
+  console.log(`[Parallel] ⏰ Đã tạo thực tế ${realCreatedCount}/${batch.length} tabs, chờ chúng tự tắt theo timeout ${Math.round(safetyTimeoutMs/1000)}s (${timeoutSource})...`);
+  if (realCreatedCount === 0) {
+    console.warn('[Parallel] ⚠️ Không có webview nào được tạo. Kiểm tra vùng mount webview và trạng thái fnCreateTab().');
+  }
   
   // SET FLAG: Không cho tạo tabs mới
   window.TabManager.isWaitingForBatchClose = true;
@@ -3446,10 +3608,14 @@ async function activateWindowsProxy(proxyInfo) {
     // Refresh để áp dụng settings ngay (optional)
     try {
       // Gửi WM_SETTINGCHANGE để notify Windows về thay đổi
-      const refresh_cmd = `reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings\\Connections" /v DefaultConnectionSettings /f || true`;
+      const refresh_cmd = `reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings\\Connections" /v DefaultConnectionSettings /f`;
       await executeCmd(refresh_cmd);
     } catch (e) {
-      console.warn(`[activateWindowsProxy] Không refresh settings:`, e.message);
+      if (e && e.message && e.message.includes('unable to find the specified registry key or value')) {
+        console.log(`[activateWindowsProxy] ℹ️ Bỏ qua refresh settings (DefaultConnectionSettings chưa tồn tại)`);
+      } else {
+        console.warn(`[activateWindowsProxy] Không refresh settings:`, e.message);
+      }
     }
     
     return await proxy_status_check();
@@ -3649,7 +3815,7 @@ window.proxy_activate = async function (proxyInfo) {
   console.log('[proxy_activate] Raw proxy URL:', proxyInfo.https || proxyInfo.proxy);
   
   try {
-    if (opsys === 'darwin') {
+    if (window.opsys === 'darwin') {
       let proxyUrl = proxyInfo.https || proxyInfo.proxy;
       
       // Parse proxy URL
@@ -3662,7 +3828,7 @@ window.proxy_activate = async function (proxyInfo) {
       const { host: proxyHost, port: proxyPort } = parsed;
       console.log(`[proxy_activate] Mac: ${proxyHost}:${proxyPort} with ${proxyInfo.username}`);
       return await activateMacProxy(proxyHost, proxyPort, proxyInfo.username || '', proxyInfo.password || '');
-    } else if (opsys === 'win32') {
+    } else if (window.opsys === 'win32') {
       return await activateWindowsProxy(proxyInfo);
     }
   } catch(err) {
@@ -3673,18 +3839,18 @@ window.proxy_activate = async function (proxyInfo) {
 };
 
 window.proxy_deactivate = async function () {
-  if (opsys === 'darwin') {
+  if (window.opsys === 'darwin') {
     return await deactivateMacProxy();
-  } else if (opsys === 'win32') {
+  } else if (window.opsys === 'win32') {
     return await deactivateWindowsProxy();
   }
   return false;
 };
 
 window.proxy_status_check = async function () {
-  if (opsys === 'darwin') {
+  if (window.opsys === 'darwin') {
     return await checkMacProxyStatus();
-  } else if (opsys === 'win32') {
+  } else if (window.opsys === 'win32') {
     return await checkWindowsProxyStatus();
   }
   return false;
@@ -3750,8 +3916,13 @@ function resizeElement(elmnt) {
   }
 }
 window.fnCreateTab = function (id_tab, url_open, script_code, multi_tab_name, auto_close) {
-  if (!isRunning)
-    return;
+  const runningState = (typeof window.isRunning === 'boolean')
+    ? window.isRunning
+    : (typeof isRunning !== 'undefined' ? isRunning : false);
+  if (!runningState && id_tab !== 'reset3G') {
+    console.warn('[fnCreateTab] Bỏ qua tạo tab vì app chưa running:', id_tab);
+    return false;
+  }
   try {
     // console.log("Tao tab",id_tab, url_open, multi_tab_name, auto_close);
     // const gui = require('nw.gui');
@@ -3760,13 +3931,16 @@ window.fnCreateTab = function (id_tab, url_open, script_code, multi_tab_name, au
     if (multi_tab_name)
       id_tab = id_tab + (document.querySelectorAll('[id^="U_' + id_tab + '"]').length + 1);
     else if (document.querySelectorAll('[id^="U_' + id_tab + '"]').length > 0)
-      return;
+      return false;
 
     const modalId = id_tab;
 
     // Tạo webview panel container (không modal, hiển thị trực tiếp)
     // Container chứa nhiều webview dạng grid
     let webviewContainer = document.getElementById('webview-grid-container');
+    if (webviewContainer && !document.body.contains(webviewContainer)) {
+      webviewContainer = null;
+    }
     if (!webviewContainer) {
       webviewContainer = document.createElement("div");
       webviewContainer.id = 'webview-grid-container';
@@ -3779,8 +3953,15 @@ window.fnCreateTab = function (id_tab, url_open, script_code, multi_tab_name, au
             min-height: 400px;
             overflow: auto;
           `;
-      const container = document.querySelector('#context-auto .card-body') || document.querySelector('#context-auto') || document.body;
+      let container =
+        document.querySelector('#context-auto .card-body') ||
+        document.querySelector('#context-auto .ant-card-body') ||
+        document.querySelector('#context-auto') ||
+        document.getElementById('keyword-grid-container') ||
+        document.body;
+
       if (container) {
+        console.log('[fnCreateTab] Mount webview container vào:', container.id || container.className || container.tagName);
         container.appendChild(webviewContainer);
       }
     }
@@ -3796,7 +3977,7 @@ window.fnCreateTab = function (id_tab, url_open, script_code, multi_tab_name, au
           border: 1px solid #e0e0e0;
           border-radius: 4px;
           overflow: hidden;
-          box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+          box-shadow: 0 2px 4px rgba(100, 39, 39, 0.08);
         `;
 
     // Header toolbar
@@ -3871,8 +4052,16 @@ window.fnCreateTab = function (id_tab, url_open, script_code, multi_tab_name, au
     // Tắt các chính sách bảo mật nghiêm ngặt
     // webview.setAttribute('disablewebsecurity', true);
     // webview.setAttribute('sandbox', 'allow-scripts allow-same-origin');
-    var curentUserAgent=bindings[rand % Object.keys(bindings).length];
-    webview.setUserAgentOverride(curentUserAgent);
+    const bindingsMap = (window.bindings && typeof window.bindings === 'object') ? window.bindings : null;
+    const bindingValues = bindingsMap ? Object.values(bindingsMap).filter(Boolean) : [];
+    const curentUserAgent = bindingValues.length > 0
+      ? bindingValues[rand % bindingValues.length]
+      : (navigator.userAgent || 'Mozilla/5.0');
+    try {
+      webview.setUserAgentOverride(curentUserAgent);
+    } catch (uaErr) {
+      console.warn('[fnCreateTab] ⚠️ Không set được User-Agent override:', uaErr.message);
+    }
     setTimeout(() => {
         webview.setAttribute('src', url_open);
     }, 2000); // Trì hoãn 2 giây
@@ -3918,7 +4107,7 @@ window.fnCreateTab = function (id_tab, url_open, script_code, multi_tab_name, au
             else if (jsonMessage.type === "nganh_nghe") {
                 document.querySelector('#U_' + jsonMessage.tabid).executeScript(
                     {
-                        code: strGoogleAds + `
+                        code: (window.strGoogleAds || '') + `
             JSON.parse(localStorage.getItem("nhom_nganh"));
             `, runAt: "document_end"
                     },
@@ -4194,6 +4383,11 @@ window.fnCreateTab = function (id_tab, url_open, script_code, multi_tab_name, au
     
     // Append panelItem vào webviewContainer (không phải #context-auto .card-body)
     webviewContainer.appendChild(panelItem);
+    console.log('[fnCreateTab] ✅ Appended webview', {
+      tabId: id_tab,
+      webviewCount: document.querySelectorAll('webview[id^="U_"]').length,
+      idPrefixCount: document.querySelectorAll('[id^="U_"]').length
+    });
     
     // ⏰ QUAN TRỌNG: Set timeout fallback MỘT LẦN DUY NHẤT ngay sau khi tạo tab
     // Timeout này KHÔNG bị ảnh hưởng bởi loadstop/redirect events
@@ -4213,10 +4407,12 @@ window.fnCreateTab = function (id_tab, url_open, script_code, multi_tab_name, au
         if (document.querySelector('#U_' + id_tab))
             document.querySelector('#U_' + id_tab).scrollIntoView();
     }, 5000);
+    return true;
   } catch (exT) {
     console.log("Lỗi Tao tab", exT.message, id_tab, url_open, multi_tab_name, auto_close);
     fnRemoveTab(id_tab);
     // fnCreateTab(id_tab,url_open,script_code,multi_tab_name,auto_close);
+    return false;
   }
 }
 
@@ -4800,6 +4996,13 @@ function mainAppCode() {
   window.bindings_old = JSON.parse(strUserAgen_old);
   window.bindings_fb = JSON.parse(strFB_Agen);
   window.idx_fb_agen = 0;
+
+  function resolveWindowModule(mod) {
+    if (!mod) return null;
+    if (typeof mod === 'object' && mod.default) return mod.default;
+    return mod;
+  }
+
   // Component để render setting panel với CsmDynamicGrid
   window.renderSettingPanel = function () {
     console.log('renderSettingPanel called');
@@ -4809,8 +5012,9 @@ function mainAppCode() {
       return null;
     }
 
-    const { Card, Input, Select, Button, Space, Tabs, ConfigProvider, antdLocale, antdThemeConfig } = window.antd || {};
-    if (!Card || !Input || !Select || !Button || !Space) {
+    const antdLib = resolveWindowModule(window.antd) || {};
+    const { Card, Input, Select, Button, Space, Tabs } = antdLib;
+    if (!Card || !Input || !Select || !Button || !Space || !Tabs) {
       console.error('Ant Design components not available');
       return null;
     }
@@ -4867,8 +5071,29 @@ function mainAppCode() {
     const settingsContent = React.createElement('div', null,
       settingsTab,
       React.createElement(Space, { style: { marginTop: 12 }, wrap: true },
-        React.createElement(Button, { id: 'btnStart', type: 'primary', onClick: () => runApp?.() }, 'Chạy chương trình'),
-        React.createElement(Button, { id: 'btnStop', danger: true, onClick: () => stopApp?.(true), style: { display: 'none' } }, 'Tạm dừng'),
+        React.createElement(Button, {
+          id: 'btnStart',
+          type: 'primary',
+          onClick: () => {
+            if (typeof window.runApp !== 'function') {
+              console.warn('[UI] runApp chưa sẵn sàng');
+              return;
+            }
+            window.runApp();
+          }
+        }, 'Chạy chương trình'),
+        React.createElement(Button, {
+          id: 'btnStop',
+          danger: true,
+          onClick: () => {
+            if (typeof window.stopApp !== 'function') {
+              console.warn('[UI] stopApp chưa sẵn sàng');
+              return;
+            }
+            window.stopApp(true);
+          },
+          style: { display: 'none' }
+        }, 'Tạm dừng'),
         React.createElement('span', { id: 'trang_thai', style: { fontWeight: 600, color: '#1677ff' } })
       )
     );
@@ -4897,10 +5122,6 @@ function mainAppCode() {
         ]
       })
     );
-
-    if (ConfigProvider) {
-      return React.createElement(ConfigProvider, { locale: antdLocale, theme: antdThemeConfig }, content);
-    }
 
     return content;
   };
@@ -4960,11 +5181,15 @@ function mainAppCode() {
             return;
           }
 
-          const providerReady = !!window.I18nextProvider && !!window.i18n;
+          const I18nextProvider =
+            resolveWindowModule(window.I18nextProvider) ||
+            resolveWindowModule(window.reactI18next)?.I18nextProvider ||
+            resolveWindowModule(window.ReactI18next)?.I18nextProvider;
+          const providerReady = !!I18nextProvider && !!window.i18n;
           gridRoot.render(
             providerReady
               ? window.React.createElement(
-                  window.I18nextProvider,
+                  I18nextProvider,
                   { i18n: window.i18n },
                   gridElement
                 )
@@ -4984,7 +5209,13 @@ function mainAppCode() {
 
   setTimeout(function () {
     try {
-      checkIP(function (ip) {
+      const checkIPFn = window.checkIP || globalThis.checkIP;
+      if (typeof checkIPFn !== 'function') {
+        console.warn('[INIT] checkIP chưa sẵn sàng');
+        return;
+      }
+
+      checkIPFn(function (ip) {
         if (document.querySelectorAll('#context-auto .ant-tabs-tab')[0]) {
           document.querySelectorAll('#context-auto .ant-tabs-tab')[0].click();
           setTimeout(function () {
@@ -5080,7 +5311,9 @@ function mainAppCode() {
   }
   window.reopen = function (msg) {
     var tabid = msg.tabid, tu_khoa = msg.tu_khoa, link_check = msg.link_check, time_o_lai_trang = msg.time_o_lai_trang, isRunAds = msg.isRunAds;
-    var content = strGoogleAds + "google_click('" + tu_khoa.toLowerCase() + "','" + link_check.toLowerCase() + "'," + time_o_lai_trang + "," + isRunAds + "); \n";
+    const safeTuKhoa = JSON.stringify(String(tu_khoa || '').toLowerCase());
+    const safeLinkCheck = JSON.stringify(String(link_check || '').toLowerCase());
+    var content = (window.strGoogleAds || '') + "google_click(" + safeTuKhoa + "," + safeLinkCheck + "," + time_o_lai_trang + "," + isRunAds + "); \n";
     fnCreateTab(tabid, "https://www.google.com/", content, true, (Number(time_o_lai_trang)||1)*60000+30000);
   }
   window.isRunning = false;
@@ -5088,6 +5321,7 @@ function mainAppCode() {
     console.log('[stopApp] ⏸️ Dừng app...');
     
     isRunning = false;
+    window.isRunning = false;
     
     // 1. Stop interval tạo tab mới
     if (window.tmRun) {
@@ -5146,6 +5380,7 @@ function mainAppCode() {
   window.runApp = function () {
     open_links = [];
     isRunning = true;
+    window.isRunning = true;
     currentIndex = 0; // Reset currentIndex khi khởi động
     
     // Bắt đầu health monitoring cho webviews
@@ -5268,10 +5503,28 @@ function mainAppCode() {
 
   // Hàm render lưới động CsmDynamicGrid
   window.renderKeywordGrid = function () {
-    const { CsmDynamicGrid } = window.antd;
+    const antdLib = resolveWindowModule(window.antd) || {};
+    const CsmDynamicGrid = antdLib.CsmDynamicGrid || window.CsmDynamicGrid;
     const React = window.React;
-    const { getTableData, updateTableData, andWhere } = window.csmApi;
-    const { encrypt, decrypt } = window.csmCrypto;
+    const csmApi = window.csmApi || {};
+    const csmCrypto = window.csmCrypto || {};
+    const { getTableData, updateTableData, andWhere } = csmApi;
+    const { encrypt, decrypt } = csmCrypto;
+
+    if (!React) {
+      console.error('[renderKeywordGrid] window.React not available');
+      return null;
+    }
+
+    if (typeof CsmDynamicGrid !== 'function') {
+      console.error('[renderKeywordGrid] CsmDynamicGrid chưa sẵn sàng');
+      return null;
+    }
+
+    if (typeof encrypt !== 'function' || typeof decrypt !== 'function') {
+      console.error('[renderKeywordGrid] csmCrypto.encrypt/decrypt chưa sẵn sàng');
+      return null;
+    }
 
     // Cấu hình m_configs cho lưới từ khóa
     const m_configs = {

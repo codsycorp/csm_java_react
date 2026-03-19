@@ -27,7 +27,7 @@ type UserState = UserInfoType & {
 };
 
 interface UserAction {
-	getUserInfo: () => Promise<UserInfoType>
+	getUserInfo: (headers?: HeadersInit) => Promise<UserInfoType>
 	reset: () => void
 	setSelectedMenuIdForTab: (menuId: string) => void
 };
@@ -37,8 +37,8 @@ export const useUserStore = create<UserState & UserAction>()(
 		set => ({
 			...initialState,
 
-			getUserInfo: async () => {
-				const response = await fetchUserInfo();
+			getUserInfo: async (headers) => {
+				const response = await fetchUserInfo(headers);
 				set({
 					...response.result,
 				});
