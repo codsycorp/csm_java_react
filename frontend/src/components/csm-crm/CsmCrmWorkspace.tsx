@@ -378,6 +378,23 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 			dueAt: tr("Hạn xử lý", "Due time", "截止时间"),
 			chooseDueAt: tr("Chọn hạn xử lý", "Choose due time", "请选择截止时间"),
 			status: tr("Trạng thái", "Status", "状态"),
+			statusTodo: tr("Chưa xử lý", "To do", "待处理"),
+			statusInProgress: tr("Đang xử lý", "In progress", "处理中"),
+			statusDone: tr("Hoàn thành", "Done", "已完成"),
+			resultSuccess: tr("Thành công", "Success", "成功"),
+			resultPending: tr("Chờ xử lý", "Pending", "待处理"),
+			resultFailed: tr("Thất bại", "Failed", "失败"),
+			activityTypeCall: tr("Gọi điện", "Call", "电话沟通"),
+			activityTypeMeeting: tr("Họp / tư vấn", "Meeting / consulting", "会议 / 咨询"),
+			activityTypeSiteVisit: tr("Tham quan dự án", "Site visit", "带看项目"),
+			activityTypeEmail: tr("Email", "Email", "邮件"),
+			activityTypeNote: tr("Ghi chú", "Note", "备注"),
+			activityTypeOther: tr("Khác", "Other", "其他"),
+			sourceFacebook: tr("Facebook", "Facebook", "Facebook"),
+			sourceGoogle: tr("Google", "Google", "Google"),
+			sourceWebsite: tr("Website", "Website", "Website"),
+			sourceSalesSelf: tr("Sales tự khai thác", "Sales self-sourced", "销售自拓"),
+			sourceExternalFloor: tr("Sàn / đối tác", "Exchange / partner", "渠道 / 合作方"),
 			// CRUD
 			addLead: tr("+ Thêm khách", "+ Add lead", "+ 新增线索"),
 			editLead: tr("Sửa khách hàng", "Edit lead", "编辑线索"),
@@ -776,6 +793,53 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 	const inventoryStatuses = crmConfig.inventory?.statuses?.length ? crmConfig.inventory.statuses : defaultInventoryStatuses;
 	const activityTypes = crmConfig.activities?.activityTypes?.length ? crmConfig.activities.activityTypes : defaultActivityTypes;
 	const taskStatuses = crmConfig.activities?.taskStatuses?.length ? crmConfig.activities.taskStatuses : defaultTaskStatuses;
+
+	const getTaskStatusLabel = useCallback((status: string) => {
+		switch (String(status || "").toLowerCase()) {
+			case "todo": return text.statusTodo;
+			case "in_progress": return text.statusInProgress;
+			case "done": return text.statusDone;
+			default: return status;
+		}
+	}, [text.statusDone, text.statusInProgress, text.statusTodo]);
+
+	const getActivityTypeLabel = useCallback((type: string) => {
+		switch (String(type || "").toLowerCase()) {
+			case "call": return text.activityTypeCall;
+			case "meeting": return text.activityTypeMeeting;
+			case "site_visit": return text.activityTypeSiteVisit;
+			case "email": return text.activityTypeEmail;
+			case "note": return text.activityTypeNote;
+			case "other": return text.activityTypeOther;
+			default: return type;
+		}
+	}, [text.activityTypeCall, text.activityTypeEmail, text.activityTypeMeeting, text.activityTypeNote, text.activityTypeOther, text.activityTypeSiteVisit]);
+
+	const getActivityResultLabel = useCallback((result: string) => {
+		switch (String(result || "").toLowerCase()) {
+			case "success": return text.resultSuccess;
+			case "pending": return text.resultPending;
+			case "failed": return text.resultFailed;
+			case "done": return text.statusDone;
+			default: return result;
+		}
+	}, [text.resultFailed, text.resultPending, text.resultSuccess, text.statusDone]);
+
+	const taskStatusOptions = useMemo(
+		() => taskStatuses.map((status) => ({ label: getTaskStatusLabel(status), value: status })),
+		[getTaskStatusLabel, taskStatuses],
+	);
+
+	const activityTypeOptions = useMemo(
+		() => activityTypes.map((type) => ({ label: getActivityTypeLabel(type), value: type })),
+		[activityTypes, getActivityTypeLabel],
+	);
+
+	const activityResultOptions = useMemo(() => {
+		const successValue = activitySource?.appointmentSuccessValue || "success";
+		const candidates = Array.from(new Set([successValue, "pending", "failed"]));
+		return candidates.map((value) => ({ label: getActivityResultLabel(value), value }));
+	}, [activitySource?.appointmentSuccessValue, getActivityResultLabel]);
 	const [activeSection, setActiveSection] = useState<CrmSectionKey>(crmConfig.defaultSection || "pipeline");
 	const [searchText, setSearchText] = useState("");
 	const [selectedLeadId, setSelectedLeadId] = useState<string>("");
@@ -1062,19 +1126,19 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 		const rows = [
 			...activityRows.map((row) => ({
 				kind: "activity",
-				title: `${String(row[activitySource?.contactTypeField || "activity_type"] || "Hoạt động").toUpperCase()} - ${row[activitySource?.notesField || "notes"] || "Không có ghi chú"}`,
+				title: `${String(getActivityTypeLabel(String(row[activitySource?.contactTypeField || "activity_type"] || "other"))).toUpperCase()} - ${row[activitySource?.notesField || "notes"] || text.noData}`,
 				date: dayjs(toTimestamp(row[activityDateField]) || 0).format("YYYY-MM-DD"),
 				status: row[activitySource?.resultField || "result"] || "pending",
 			})),
 			...taskRows.map((row) => ({
 				kind: "task",
-				title: row[taskSource?.titleKeyField || "title"] || "Task",
+				title: row[taskSource?.titleKeyField || "title"] || text.taskTitle,
 				date: dayjs(toTimestamp(row[taskDateField]) || 0).format("YYYY-MM-DD"),
 				status: row[taskSource?.statusField || "status"] || "todo",
 			})),
 		];
 		return rows.filter((row) => row.date === target);
-	}, [calendarDate, activityRows, taskRows, activitySource, taskSource]);
+	}, [calendarDate, activityRows, taskRows, activitySource, taskSource, getActivityTypeLabel, text.noData, text.taskTitle]);
 
 	const exportAlert = useMemo(() => {
 		const threshold = security.exportAlertThreshold || 100;
@@ -1146,7 +1210,7 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 					where: pickWhere(leadSource, targetLead),
 				});
 			}
-			message.success(`Đã chuyển khách sang bước ${nextStage.label}`);
+			message.success(`${text.status}: ${nextStage.label}`);
 			onDataChange?.();
 		}
 		catch (error: any) {
@@ -1957,13 +2021,13 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 					</Form.Item>
 					<Form.Item name="phone" hidden><Input /></Form.Item>
 					<Form.Item name="activity_type" label={text.activityType} rules={[{ required: true, message: text.chooseActivityType }]}>
-						<Select getPopupContainer={resolvePopupContainer} options={activityTypes.map((type) => ({ label: type, value: type }))} />
+						<Select getPopupContainer={resolvePopupContainer} options={activityTypeOptions} />
 					</Form.Item>
 					<Form.Item name="scheduled_at" label={text.time} rules={[{ required: true, message: text.chooseTime }]}>
 						<DatePicker getPopupContainer={resolvePopupContainer} showTime style={{ width: "100%" }} format="DD/MM/YYYY HH:mm" />
 					</Form.Item>
 					<Form.Item name="result" label={text.result}>
-						<Select getPopupContainer={resolvePopupContainer} options={[{ label: "success", value: "success" }, { label: "pending", value: "pending" }, { label: "failed", value: "failed" }]} />
+						<Select getPopupContainer={resolvePopupContainer} options={activityResultOptions} />
 					</Form.Item>
 					<Form.Item name="notes" label={text.notes} rules={[{ required: true, message: text.enterNotes }]}>
 						<Input.TextArea rows={4} placeholder={text.enterNotes} />
@@ -1993,7 +2057,7 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 						<Input placeholder={text.enterTaskTitle} />
 					</Form.Item>
 					<Form.Item name="status" label={text.status}>
-						<Select getPopupContainer={resolvePopupContainer} options={taskStatuses.map((status) => ({ label: status, value: status }))} />
+						<Select getPopupContainer={resolvePopupContainer} options={taskStatusOptions} />
 					</Form.Item>
 					<Form.Item name="due_at" label={text.dueAt} rules={[{ required: true, message: text.chooseDueAt }]}> 
 						<DatePicker getPopupContainer={resolvePopupContainer} showTime style={{ width: "100%" }} format="DD/MM/YYYY HH:mm" />
@@ -2028,11 +2092,11 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 							<Col xs={24} md={12}>
 								<Form.Item name={leadSource?.sourceField || "source"} label={text.sourceLead}>
 									<Select getPopupContainer={resolvePopupContainer} options={[
-										{ value: "facebook", label: "Facebook" },
-										{ value: "google", label: "Google" },
-										{ value: "website", label: "Website" },
-										{ value: "sales_self", label: "Sales tự khai thác" },
-										{ value: "external_floor", label: "Sàn / đối tác" },
+										{ value: "facebook", label: text.sourceFacebook },
+										{ value: "google", label: text.sourceGoogle },
+										{ value: "website", label: text.sourceWebsite },
+										{ value: "sales_self", label: text.sourceSalesSelf },
+										{ value: "external_floor", label: text.sourceExternalFloor },
 										{ value: "other", label: text.other },
 									]} />
 								</Form.Item>

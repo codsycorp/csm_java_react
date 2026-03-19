@@ -3616,6 +3616,7 @@
         .crm-dynamic-theme .crm-workspace-theme {
           background: ${themeTokens.bg} !important;
           color: ${themeTokens.text} !important;
+          padding: 0 !important;
         }
         .crm-dynamic-theme .crm-workspace-theme .ant-typography,
         .crm-dynamic-theme .crm-workspace-theme .ant-statistic-content,
@@ -3716,6 +3717,32 @@
         .crm-dynamic-theme .crm-activity-tabs .ant-tabs-nav-wrap,
         .crm-dynamic-theme .crm-activity-tabs .ant-tabs-nav-operations {
           background: transparent !important;
+        }
+        .crm-dynamic-theme .crm-activity-tabs {
+          background: ${themeTokens.cardBg} !important;
+          border: 1px solid ${themeTokens.border} !important;
+          color: ${themeTokens.text} !important;
+        }
+        .crm-dynamic-theme .crm-activity-tabs .ant-tabs-content-holder,
+        .crm-dynamic-theme .crm-activity-tabs .ant-tabs-content,
+        .crm-dynamic-theme .crm-activity-tabs .ant-tabs-tabpane,
+        .crm-dynamic-theme .crm-activity-tabs .ant-list,
+        .crm-dynamic-theme .crm-activity-tabs .ant-spin-container {
+          background: transparent !important;
+          color: ${themeTokens.text} !important;
+        }
+        .crm-dynamic-theme .crm-activity-tabs .ant-list-empty-text,
+        .crm-dynamic-theme .crm-activity-tabs .ant-empty-description,
+        .crm-dynamic-theme .crm-activity-tabs .ant-spin-text {
+          color: ${themeTokens.textSecondary} !important;
+        }
+        .crm-dynamic-theme .crm-activity-tabs .ant-tabs-nav-more,
+        .crm-dynamic-theme .crm-activity-tabs .ant-tabs-nav-more .anticon {
+          color: ${themeTokens.textSecondary} !important;
+        }
+        .crm-dynamic-theme .crm-activity-tabs .ant-tabs-nav-more:hover,
+        .crm-dynamic-theme .crm-activity-tabs .ant-tabs-nav-more:hover .anticon {
+          color: ${themeTokens.text} !important;
         }
         .crm-dynamic-theme .crm-activity-tabs > .ant-tabs-nav {
           margin-bottom: 12px !important;
@@ -4586,6 +4613,19 @@
         .crm-dynamic-theme .ant-list-item-meta-description {
           color: ${themeTokens.textSecondary} !important;
         }
+        .crm-dynamic-theme .ant-list,
+        .crm-dynamic-theme .ant-list .ant-spin-nested-loading,
+        .crm-dynamic-theme .ant-list .ant-spin-container {
+          background: transparent !important;
+          color: ${themeTokens.text} !important;
+        }
+        .crm-dynamic-theme .ant-list .ant-list-empty-text {
+          color: ${themeTokens.textSecondary} !important;
+          background: ${themeTokens.isDark ? "rgba(255,255,255,0.02)" : "transparent"} !important;
+          border: 1px dashed ${themeTokens.border} !important;
+          border-radius: 10px !important;
+          padding: 12px 10px !important;
+        }
         /* ── DESCRIPTIONS ── */
         .crm-dynamic-theme .ant-descriptions-title {
           color: ${themeTokens.text} !important;
@@ -4660,6 +4700,184 @@
         }
         .crm-dynamic-theme .ant-tooltip .ant-tooltip-arrow::before {
           background: ${themeTokens.isDark ? "rgba(28,32,40,0.96)" : "rgba(0,0,0,0.82)"} !important;
+        }
+        @media (max-width: 992px) {
+          .crm-dynamic-theme .ant-card .ant-card-body {
+            padding: 12px !important;
+          }
+          .crm-dynamic-theme .crm-hub-nav-tabs > .ant-tabs-nav .ant-tabs-nav-list {
+            flex-wrap: nowrap !important;
+            overflow-x: auto !important;
+            overflow-y: hidden !important;
+            scrollbar-width: thin;
+          }
+          .crm-dynamic-theme .crm-activity-tabs > .ant-tabs-nav .ant-tabs-nav-list,
+          .crm-dynamic-theme .ant-tabs:not(.crm-hub-nav-tabs) > .ant-tabs-nav .ant-tabs-nav-list {
+            flex-wrap: nowrap !important;
+            overflow-x: auto !important;
+            overflow-y: hidden !important;
+            scrollbar-width: thin;
+          }
+          .crm-dynamic-theme .crm-hub-nav-tabs > .ant-tabs-nav .ant-tabs-nav-list::-webkit-scrollbar {
+            height: 6px;
+          }
+          .crm-dynamic-theme .crm-activity-tabs > .ant-tabs-nav .ant-tabs-nav-list::-webkit-scrollbar,
+          .crm-dynamic-theme .ant-tabs:not(.crm-hub-nav-tabs) > .ant-tabs-nav .ant-tabs-nav-list::-webkit-scrollbar {
+            height: 6px;
+          }
+          .crm-dynamic-theme .crm-hub-nav-tabs.ant-tabs-card > .ant-tabs-nav .ant-tabs-tab,
+          .crm-dynamic-theme .crm-hub-nav-tabs.ant-tabs-card > div > .ant-tabs-nav .ant-tabs-tab {
+            margin-inline-end: 6px !important;
+          }
+          .crm-dynamic-theme .crm-activity-tabs .ant-tabs-tab,
+          .crm-dynamic-theme .ant-tabs:not(.crm-hub-nav-tabs) .ant-tabs-tab {
+            flex: 0 0 auto !important;
+          }
+          .crm-dynamic-theme .crm-hub-nav-tabs .ant-tabs-tab,
+          .crm-dynamic-theme .crm-activity-tabs .ant-tabs-tab,
+          .crm-dynamic-theme .ant-tabs:not(.crm-hub-nav-tabs) .ant-tabs-tab {
+            height: auto !important;
+            min-height: 36px !important;
+            align-items: center !important;
+          }
+          .crm-dynamic-theme .crm-hub-nav-tabs .ant-tabs-tab .ant-tabs-tab-btn,
+          .crm-dynamic-theme .crm-activity-tabs .ant-tabs-tab .ant-tabs-tab-btn,
+          .crm-dynamic-theme .ant-tabs:not(.crm-hub-nav-tabs) .ant-tabs-tab .ant-tabs-tab-btn {
+            display: block !important;
+            white-space: normal !important;
+            overflow-wrap: anywhere !important;
+            word-break: break-word !important;
+            text-align: center !important;
+            line-height: 1.3 !important;
+            max-width: 100% !important;
+          }
+          .crm-dynamic-theme .ant-segmented.ant-segmented-block .ant-segmented-group {
+            align-items: stretch !important;
+          }
+          .crm-dynamic-theme .ant-segmented.ant-segmented-block .ant-segmented-item {
+            min-width: 0 !important;
+            height: auto !important;
+          }
+          .crm-dynamic-theme .ant-segmented.ant-segmented-block .ant-segmented-item-label,
+          .crm-dynamic-theme .crm-workspace-theme .ant-segmented.ant-segmented-block .ant-segmented-item-label {
+            white-space: normal !important;
+            overflow-wrap: anywhere !important;
+            word-break: break-word !important;
+            text-align: center !important;
+            line-height: 1.3 !important;
+            padding-block: 6px !important;
+            max-width: 100% !important;
+          }
+        }
+        @media (max-width: 768px) {
+          .crm-dynamic-theme .ant-space,
+          .crm-dynamic-theme .ant-space-item,
+          .crm-dynamic-theme .ant-form-item,
+          .crm-dynamic-theme .ant-form-item-control,
+          .crm-dynamic-theme .ant-form-item-control-input,
+          .crm-dynamic-theme .ant-form-item-control-input-content,
+          .crm-dynamic-theme .ant-col,
+          .crm-dynamic-theme-modal .ant-form-item-control,
+          .crm-dynamic-theme-modal .ant-form-item-control-input,
+          .crm-dynamic-theme-modal .ant-form-item-control-input-content,
+          .crm-workspace-theme-modal .ant-form-item-control,
+          .crm-workspace-theme-modal .ant-form-item-control-input,
+          .crm-workspace-theme-modal .ant-form-item-control-input-content {
+            min-width: 0 !important;
+            max-width: 100% !important;
+          }
+          .crm-dynamic-theme .ant-typography,
+          .crm-dynamic-theme .ant-form-item-label > label,
+          .crm-dynamic-theme .ant-btn,
+          .crm-dynamic-theme .ant-tag,
+          .crm-dynamic-theme .ant-alert-message,
+          .crm-dynamic-theme .ant-alert-description,
+          .crm-dynamic-theme-modal .ant-form-item-label > label,
+          .crm-workspace-theme-modal .ant-form-item-label > label {
+            overflow-wrap: anywhere !important;
+            word-break: break-word !important;
+          }
+          .crm-dynamic-theme .ant-input,
+          .crm-dynamic-theme .ant-input-affix-wrapper,
+          .crm-dynamic-theme .ant-input-number,
+          .crm-dynamic-theme .ant-picker,
+          .crm-dynamic-theme .ant-select,
+          .crm-dynamic-theme .ant-select-selector,
+          .crm-dynamic-theme-modal .ant-input,
+          .crm-dynamic-theme-modal .ant-input-affix-wrapper,
+          .crm-dynamic-theme-modal .ant-input-number,
+          .crm-dynamic-theme-modal .ant-picker,
+          .crm-dynamic-theme-modal .ant-select,
+          .crm-dynamic-theme-modal .ant-select-selector,
+          .crm-workspace-theme-modal .ant-input,
+          .crm-workspace-theme-modal .ant-input-affix-wrapper,
+          .crm-workspace-theme-modal .ant-input-number,
+          .crm-workspace-theme-modal .ant-picker,
+          .crm-workspace-theme-modal .ant-select,
+          .crm-workspace-theme-modal .ant-select-selector {
+            width: 100% !important;
+            max-width: 100% !important;
+          }
+          .crm-dynamic-theme .ant-select-selection-item,
+          .crm-dynamic-theme .ant-select-selection-placeholder,
+          .crm-dynamic-theme-modal .ant-select-selection-item,
+          .crm-dynamic-theme-modal .ant-select-selection-placeholder,
+          .crm-workspace-theme-modal .ant-select-selection-item,
+          .crm-workspace-theme-modal .ant-select-selection-placeholder {
+            max-width: 100% !important;
+            overflow: hidden !important;
+            text-overflow: ellipsis !important;
+            white-space: nowrap !important;
+          }
+          .crm-dynamic-theme .ant-card .ant-card-head {
+            min-height: 44px !important;
+            padding-inline: 12px !important;
+          }
+          .crm-dynamic-theme .ant-card .ant-card-head-title {
+            font-size: 15px !important;
+          }
+          .crm-dynamic-theme .ant-statistic-content-value,
+          .crm-dynamic-theme .ant-statistic-content-value-int {
+            font-size: 18px !important;
+          }
+          .crm-dynamic-theme .ant-table-wrapper .ant-table {
+            font-size: 12px !important;
+          }
+          .crm-dynamic-theme-modal .ant-modal,
+          .crm-workspace-theme-modal .ant-modal {
+            max-width: calc(100vw - 20px) !important;
+            margin: 10px auto !important;
+          }
+        }
+        @media (max-width: 576px) {
+          .crm-dynamic-theme .ant-btn {
+            height: auto !important;
+            min-height: 32px !important;
+            padding-inline: 10px !important;
+            white-space: normal !important;
+            line-height: 1.35 !important;
+          }
+          .crm-dynamic-theme .ant-form-item {
+            margin-bottom: 12px !important;
+          }
+          .crm-dynamic-theme .crm-hub-nav-tabs.ant-tabs-card > .ant-tabs-nav .ant-tabs-tab .ant-tabs-tab-btn {
+            font-size: 13px !important;
+          }
+          .crm-dynamic-theme .crm-hub-nav-tabs .ant-tabs-tab,
+          .crm-dynamic-theme .crm-activity-tabs .ant-tabs-tab,
+          .crm-dynamic-theme .ant-tabs:not(.crm-hub-nav-tabs) .ant-tabs-tab {
+            padding: 6px 10px !important;
+          }
+          .crm-dynamic-theme .crm-hub-nav-tabs .ant-tabs-tab .ant-tabs-tab-btn,
+          .crm-dynamic-theme .crm-activity-tabs .ant-tabs-tab .ant-tabs-tab-btn,
+          .crm-dynamic-theme .ant-tabs:not(.crm-hub-nav-tabs) .ant-tabs-tab .ant-tabs-tab-btn {
+            font-size: 12px !important;
+          }
+          .crm-dynamic-theme .ant-segmented.ant-segmented-block .ant-segmented-item-label,
+          .crm-dynamic-theme .crm-workspace-theme .ant-segmented.ant-segmented-block .ant-segmented-item-label {
+            font-size: 12px !important;
+            line-height: 1.25 !important;
+          }
         }
       `;
     }, [themeTokens]);
@@ -4778,7 +4996,7 @@
         })),
         React.createElement("div", {
           key: "workflow-steps-grid",
-          style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))", gap: 8 },
+          style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 250px), 1fr))", gap: 8 },
         }, onboardingSteps.map((step) => {
           const completed = Boolean(workflowCompletion[step.id]);
           return React.createElement("div", {
