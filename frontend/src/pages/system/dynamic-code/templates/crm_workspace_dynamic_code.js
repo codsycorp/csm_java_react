@@ -2854,16 +2854,6 @@
     },
   }), [appId, canManageTask, language, leadRows, salesUsers, taskBoardFields, taskRows]);
 
-  const taskBoardDatabase = React.useMemo(() => ({
-    ...database,
-    [taskTableName]: {
-      ...(database?.[taskTableName] || {}),
-      id: taskTableName,
-      rows: filteredTodoRows,
-      fieldsPK: ["id"],
-    },
-  }), [database, filteredTodoRows, taskTableName]);
-
     const filteredTodoRows = React.useMemo(() => {
       const priorityRank = { urgent: 4, high: 3, medium: 2, low: 1 };
       const filtered = taskRows.filter((row) => {
@@ -2886,6 +2876,16 @@
         return toNumber(a?.due_at, 0) - toNumber(b?.due_at, 0);
       });
     }, [taskRows, todoOwnerFilter, todoStatusFilter, todoPriorityFilter, todoTypeFilter]);
+
+  const taskBoardDatabase = React.useMemo(() => ({
+    ...database,
+    [taskTableName]: {
+      ...(database?.[taskTableName] || {}),
+      id: taskTableName,
+      rows: filteredTodoRows,
+      fieldsPK: ["id"],
+    },
+  }), [database, filteredTodoRows, taskTableName]);
 
     const todoKpi = React.useMemo(() => {
       const nowTs = Date.now();
