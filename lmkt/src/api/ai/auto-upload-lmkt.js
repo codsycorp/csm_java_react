@@ -10363,6 +10363,78 @@ function filterNotPostedMessages(messages, config_id = null) {
 }
 
 /**
+ * Đối chiếu hash đã đăng trực tiếp từ SERVER theo danh sách hash cần kiểm tra.
+ * Giảm RAM: không tạo full in-memory cache lịch sử, chỉ lấy hash cần đối chiếu.
+ * @param {Array<string>} candidateHashes
+ * @param {string|null} config_id
+ * @returns {Promise<Set<string>>}
+ */
+async function lookupPostedHashesViaServer(candidateHashes = [], config_id = null) {
+  const hashes = Array.from(new Set((Array.isArray(candidateHashes) ? candidateHashes : [])
+    .map((h) => String(h || '').trim())
+    .filter(Boolean)));
+
+  if (hashes.length === 0) return new Set();
+
+  const matched = new Set();
+  const candidateSet = new Set(hashes);
+
+  try {
+    const server = await fetchDataOptionUserFromServerAsync();
+    const source = Array.isArray(server?.data) && server.data.length > 0
+      ? server.data
+      : getRawDataOptionUserSnapshot();
+
+    const arr = Array.isArray(source) ? source : [];
+    for (const item of arr) {
+      if (!isPostedZaloItem(item)) continue;
+      if (config_id && item?.config_id !== config_id) continue;
+
+      const hash = String(item?.hash || '').trim();
+      if (hash && candidateSet.has(hash)) {
+        matched.add(hash);
+        if (matched.size >= candidateSet.size) break;
+      }
+    }
+
+    console.log(`📡 [ServerPostedCheck] Matched ${matched.size}/${candidateSet.size} hashes (config: ${config_id || 'default'})`);
+    return matched;
+  } catch (e) {
+    console.warn('⚠️ [ServerPostedCheck] Error:', e?.message || e);
+    return new Set();
+  }
+}
+
+/**
+ * Lọc tin chưa đăng bằng cách đối chiếu trực tiếp với SERVER.
+ * @param {Array} messages
+ * @param {string|null} config_id
+ * @returns {Promise<Array>}
+ */
+async function filterNotPostedMessagesViaServer(messages, config_id = null) {
+  if (!Array.isArray(messages) || messages.length === 0) return [];
+
+  try {
+    const hashRows = messages.map((msg) => ({ msg, hash: buildMessageHash(msg) }));
+    const hashes = hashRows.map((x) => x.hash).filter(Boolean);
+    const matched = await lookupPostedHashesViaServer(hashes, config_id);
+
+    const notPosted = hashRows
+      .filter((x) => !matched.has(x.hash))
+      .map((x) => x.msg);
+
+    const filtered = messages.length - notPosted.length;
+    if (filtered > 0) {
+      console.log(`🔍 [FilterNotPostedServer] Filtered out ${filtered}/${messages.length} via SERVER check (config ${config_id || 'default'})`);
+    }
+    return notPosted;
+  } catch (e) {
+    console.warn('⚠️ [FilterNotPostedServer] Fallback to local check:', e?.message || e);
+    return filterNotPostedMessages(messages, config_id);
+  }
+}
+
+/**
  * Lọc tin CHƯA đăng (từ cache/session, không load từ server)
  * ✅ OPTIMIZED: Dùng posted list từ bộ nhớ thay vì load mỗi lần
  * @param {Array} messages - Danh sách tin cần lọc
@@ -10393,6 +10465,43 @@ function filterNotPostedMessagesFromCache(messages, config_id = null, cachedPost
   }
   
   return notPosted;
+}
+
+/**
+ * Merge lịch sử posted mới vào dữ liệu server hiện tại và save lại 1 lần.
+ * @param {Array} newPostedMessages - Các record mới của phiên chạy hiện tại
+ */
+async function appendPostedZaloMessagesToServer(newPostedMessages = []) {
+  const incoming = Array.isArray(newPostedMessages) ? newPostedMessages : [];
+  if (incoming.length === 0) return;
+
+  try {
+    await fetchDataOptionUserFromServerAsync();
+  } catch {}
+
+  const existing = loadPostedZaloMessages();
+  const merged = [];
+  const seen = new Set();
+
+  const pushUnique = (item) => {
+    if (!item || !item.hash) return;
+    const key = `${item.hash}__${item.config_id || ''}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    merged.push(item);
+  };
+
+  incoming.forEach(pushUnique);
+  existing.forEach(pushUnique);
+
+  merged.sort((a, b) => (b?.timestamp || 0) - (a?.timestamp || 0));
+  if (merged.length > ZALO_POSTED_LIMIT) {
+    merged.splice(ZALO_POSTED_LIMIT);
+  }
+  cleanupOldPostedZaloMessages(merged);
+
+  console.log(`💾 [appendPostedZaloMessagesToServer] Saving merged history: ${merged.length} records (${incoming.length} new)`);
+  savePostedZaloMessages(merged);
 }
 
 /**
@@ -11591,7 +11700,7 @@ async function pushSingleMessageToWeb(message, groupName, configId, config, sess
 /**
  * ✅ SEQUENTIAL: Quét + Đăng config tuần tự (không queue, không worker)
  * Flow: Nhóm 1 (lấy → đăng) → Nhóm 2 (lấy → đăng) → ... → Hết config
- * ✅ OPTIMIZED: Load posted history ONCE at start, save ONCE at end (reduce server calls)
+ * ✅ OPTIMIZED: Đối chiếu trực tiếp qua API theo batch hash, giảm RAM nội bộ
  */
 async function scanAndPostConfig(config, statusEl, sessionData = {}) {
   if (!isZaloScanning || !isZaloLoggedIn) {
@@ -11608,14 +11717,11 @@ async function scanAndPostConfig(config, statusEl, sessionData = {}) {
   const groupList = config.zalo_groups;
   let totalNew = 0;
   let totalPosted = 0;
+  const sessionNewPostedMessages = [];
+  const sessionNewPostedHashSet = new Set();
   
-  // ✅ OPTIMIZATION: Load posted messages ONCE for this config session
-  console.log(`\n📍 [Config ${configId}] Tải lịch sử đã đăng...`);
-  const sessionPostedMessages = loadPostedZaloMessages();
-  console.log(`   📊 Đã tải ${sessionPostedMessages.length} tin từ lịch sử`);
-  
-  // Store in sessionData for cleanup
-  sessionData.sessionPostedMessages = sessionPostedMessages;
+  // Store in sessionData for cleanup/debug
+  sessionData.sessionPostedMessages = sessionNewPostedMessages;
   sessionData.messages = [];
   
   console.log(`\n📍 [Config ${configId}] Quét ${groupList.length} nhóm...`);
@@ -11659,10 +11765,20 @@ async function scanAndPostConfig(config, statusEl, sessionData = {}) {
         continue; // Nhóm tiếp
       }
       
-      // BƯỚC 2.1: Lọc tiếp theo lịch sử tin đã đăng (dùng session cache)
-      const unpostedMessages = filterNotPostedMessagesFromCache(newMessages, configId, sessionPostedMessages);
+      // BƯỚC 2.1: Lọc trùng trong phiên hiện tại (không gọi server, chỉ Set hash nhẹ)
+      const localUnpostedMessages = newMessages.filter((msg) => {
+        const hash = buildMessageHash(msg);
+        return !sessionNewPostedHashSet.has(hash);
+      });
+      if (localUnpostedMessages.length === 0) {
+        console.log(`    ⏭️ ${newMessages.length} tin mới nhưng đã xuất hiện trong phiên chạy (skip)`);
+        continue; // Nhóm tiếp
+      }
+
+      // BƯỚC 2.2: Lọc theo SERVER (API-based) để chống trùng đa phiên/đa máy
+      const unpostedMessages = await filterNotPostedMessagesViaServer(localUnpostedMessages, configId);
       if (unpostedMessages.length === 0) {
-        console.log(`    ⏭️ ${newMessages.length} tin mới nhưng đã đăng trước đó (skip)`);
+        console.log(`    ⏭️ ${localUnpostedMessages.length} tin còn lại đều đã đăng trước đó trên server (skip)`);
         continue; // Nhóm tiếp
       }
 
@@ -11715,7 +11831,8 @@ async function scanAndPostConfig(config, statusEl, sessionData = {}) {
           console.log(`      [TIN ${msgPos}/${validMessages.length}] Đăng "${msg.sender || 'Unknown'}"...`);
           
           // Đăng tin này (tuần tự với auth) + ghi vào session
-          const success = await pushSingleMessageToWeb(msg, groupName, configId, config, sessionPostedMessages);
+          const success = await pushSingleMessageToWeb(msg, groupName, configId, config, sessionNewPostedMessages);
+          sessionNewPostedHashSet.add(buildMessageHash(msg));
           
           if (success) {
             console.log(`        ✅ Đăng thành công`);
@@ -11762,22 +11879,12 @@ async function scanAndPostConfig(config, statusEl, sessionData = {}) {
     }
   }
   
-  // ✅ OPTIMIZATION: Save all posted messages ONCE at the end
+  // ✅ Save posted messages ONCE at end (merge với server history)
   if (totalPosted > 0) {
     console.log(`\n💾 [Config ${configId}] Lưu ${totalPosted} tin vào server (batch save)...`);
     
     try {
-      // Cleanup tin cũ trước save
-      cleanupOldPostedZaloMessages(sessionPostedMessages);
-      
-      // Limit to ZALO_POSTED_LIMIT
-      if (sessionPostedMessages.length > ZALO_POSTED_LIMIT) {
-        sessionPostedMessages.splice(ZALO_POSTED_LIMIT);
-        console.log(`🧹 [Config ${configId}] Trimmed to ${ZALO_POSTED_LIMIT} messages`);
-      }
-      
-      // Save once
-      savePostedZaloMessages(sessionPostedMessages);
+      await appendPostedZaloMessagesToServer(sessionNewPostedMessages);
       console.log(`✅ [Config ${configId}] Batch save hoàn tất`);
     } catch (saveErr) {
       console.error(`❌ [Config ${configId}] Batch save lỗi:`, saveErr.message);
@@ -19104,6 +19211,18 @@ function fetchDataOptionUserFromServer(callback) {
     console.warn('[Zalo] csmUserData.fetchFromDatabase not available');
     callback(false, null, 'csmUserData not available');
   }
+}
+
+function fetchDataOptionUserFromServerAsync() {
+  return new Promise((resolve) => {
+    try {
+      fetchDataOptionUserFromServer((success, data, error) => {
+        resolve({ success: !!success, data: Array.isArray(data) ? data : [], error: error || null });
+      });
+    } catch (e) {
+      resolve({ success: false, data: [], error: e?.message || String(e) });
+    }
+  });
 }
 
 /**

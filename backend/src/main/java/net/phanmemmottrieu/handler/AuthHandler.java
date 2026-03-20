@@ -141,15 +141,11 @@ public class AuthHandler {
             updateFields.put("refresh_token_expiry", expiry);
             updateFields.put("login_version", nextLoginVersion);
             updateFields.put("loginVersion", nextLoginVersion);
-            // Xác định định danh update (email/username/phone)
-            String updateKey = user.getEmail() != null && !user.getEmail().isEmpty() ? "email" : 
-                            (user.getUsername() != null && !user.getUsername().isEmpty() ? "username" : "phoneNumber");
-            String updateValue = user.getEmail() != null && !user.getEmail().isEmpty() ? user.getEmail() : 
-                              (user.getUsername() != null && !user.getUsername().isEmpty() ? user.getUsername() : user.getPhoneNumber());
-            userService.updateUserField(updateKey, updateValue, updateFields);
+            // Cập nhật theo user id để tránh ảnh hưởng nhầm tài khoản khác.
+            userService.updateUserFieldById(user.getId(), updateFields);
             // Log xác nhận lưu refresh_token
             logger.info("[LOGIN] Saved refreshToken for user {}={} (refreshToken={}, ip={}, ua={})", 
-                       updateKey, updateValue, refreshToken.substring(0, Math.min(10, refreshToken.length())) + "...", ip, ua);
+                       "id", user.getId(), refreshToken.substring(0, Math.min(10, refreshToken.length())) + "...", ip, ua);
 
             // Chuẩn bị dữ liệu trả về: token + routes + quyền
             Map<String, Object> result = new HashMap<>();
@@ -321,6 +317,11 @@ public class AuthHandler {
     }
 
     public void handleLogout(StandardResponse response, Map<String, Object> params) {
+        org.springframework.security.core.Authentication authentication = null;
+        try {
+            authentication = org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
+        } catch (Exception ignore) {}
+
         // 1. Clear Spring Security context
         try {
             org.springframework.security.core.context.SecurityContextHolder.clearContext();
@@ -330,8 +331,6 @@ public class AuthHandler {
         
         // 2. Invalidate refreshToken in database
         try {
-            org.springframework.security.core.Authentication authentication = 
-                org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
             if (authentication != null && authentication.getPrincipal() instanceof User) {
                 User user = (User) authentication.getPrincipal();
                 Map<String, Object> updateFields = new HashMap<>();
@@ -339,13 +338,9 @@ public class AuthHandler {
                 updateFields.put("refresh_token_ip", null);
                 updateFields.put("refresh_token_ua", null);
                 updateFields.put("refresh_token_expiry", null);
-                
-                String updateKey = user.getEmail() != null ? "email" : 
-                                 (user.getUsername() != null ? "username" : "phoneNumber");
-                String updateValue = user.getEmail() != null ? user.getEmail() : 
-                                   (user.getUsername() != null ? user.getUsername() : user.getPhoneNumber());
-                userService.updateUserField(updateKey, updateValue, updateFields);
-                logger.info("[LOGOUT] Invalidated refreshToken for user {}={}", updateKey, updateValue);
+
+                userService.updateUserFieldById(user.getId(), updateFields);
+                logger.info("[LOGOUT] Invalidated refreshToken for user id={}", user.getId());
             }
         } catch (Exception e) {
             logger.warn("[LOGOUT] Failed to invalidate refreshToken: {}", e.getMessage());
@@ -399,10 +394,8 @@ public class AuthHandler {
         updateFields.put("refresh_token_ua", ua);
         updateFields.put("refresh_token_expiry", newExpiry);
         updateFields.put("login_version", loginVersion);
-        String updateKey = user.getEmail() != null ? "email" : (user.getUsername() != null ? "username" : "phoneNumber");
-        String updateValue = user.getEmail() != null ? user.getEmail() : (user.getUsername() != null ? user.getUsername() : user.getPhoneNumber());
-        userService.updateUserField(updateKey, updateValue, updateFields);
-        logger.info("[REFRESH] Đã lưu refresh_token {} cho user {}={} (ip={}, ua={})", newRefreshToken, updateKey, updateValue, ip, ua);
+        userService.updateUserFieldById(user.getId(), updateFields);
+        logger.info("[REFRESH] Đã lưu refresh_token {} cho user id={} (ip={}, ua={})", newRefreshToken, user.getId(), ip, ua);
 
         String jwtToken = jwtUtil.generateToken(user.getId(), loginVersion);
         response.set("code", 200);

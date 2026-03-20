@@ -137,65 +137,91 @@ public class UserService {
         org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(UserService.class);
         logger.info("[updateUserField] Filter: {}={}, userRecord: {}", key, value, userRecord);
         if (userRecord != null && !userRecord.isEmpty()) {
-            // Lấy cấu trúc bảng để biết các trường PK
-            SearchFilter tableFilter = new SearchFilter();
-            tableFilter.setField("id");
-            tableFilter.setType("eq");
-            tableFilter.setValue("csm_accounts");
-            Map<String, Object> tableStruct = recordManager.find("csm", "index", tableFilter);
-            List<String> primaryKeys = null;
-            if (tableStruct != null && tableStruct.get("struct") instanceof Map) {
-                Map<String, Object> structMap = (Map<String, Object>) tableStruct.get("struct");
-                primaryKeys = (List<String>) structMap.get("fieldsPK");
-            }
-            if (primaryKeys != null) {
-                for (String pk : primaryKeys) {
-                    // Nếu userRecord thiếu PK, lấy từ filter
-                    if (!userRecord.containsKey(pk) || userRecord.get(pk) == null || userRecord.get(pk).toString().isEmpty()) {
-                        if (key.equals(pk)) {
-                            userRecord.put(pk, value);
-                        } else if (updateFields.containsKey(pk)) {
-                            userRecord.put(pk, updateFields.get(pk));
-                        } else {
-                            userRecord.put(pk, "");
-                        }
+            applyUserRecordUpdate(userRecord, key, value, updateFields);
+        }
+    }
+
+    /**
+     * Cập nhật user theo ID để tránh cập nhật nhầm bản ghi theo email/username/phone.
+     */
+    public void updateUserFieldById(String userId, Map<String, Object> updateFields) {
+        if (userId == null || userId.isBlank()) return;
+        SearchFilter filter = new SearchFilter();
+        filter.setField("id");
+        filter.setType("eq");
+        filter.setValue(userId);
+        Map<String, Object> userRecord = recordManager.find("csm", "csm_accounts", filter);
+        if (userRecord != null && !userRecord.isEmpty()) {
+            applyUserRecordUpdate(userRecord, "id", userId, updateFields);
+        } else {
+            logger.warn("[updateUserFieldById] User not found by id={}", userId);
+        }
+    }
+
+    private void applyUserRecordUpdate(Map<String, Object> userRecord, String key, String value, Map<String, Object> updateFields) {
+        // Lấy cấu trúc bảng để biết các trường PK
+        SearchFilter tableFilter = new SearchFilter();
+        tableFilter.setField("id");
+        tableFilter.setType("eq");
+        tableFilter.setValue("csm_accounts");
+        Map<String, Object> tableStruct = recordManager.find("csm", "index", tableFilter);
+        List<String> primaryKeys = null;
+        if (tableStruct != null && tableStruct.get("struct") instanceof Map) {
+            Map<String, Object> structMap = (Map<String, Object>) tableStruct.get("struct");
+            primaryKeys = (List<String>) structMap.get("fieldsPK");
+        }
+        if (primaryKeys != null) {
+            for (String pk : primaryKeys) {
+                // Nếu userRecord thiếu PK, lấy từ filter
+                if (!userRecord.containsKey(pk) || userRecord.get(pk) == null || userRecord.get(pk).toString().isEmpty()) {
+                    if (key.equals(pk)) {
+                        userRecord.put(pk, value);
+                    } else if (updateFields.containsKey(pk)) {
+                        userRecord.put(pk, updateFields.get(pk));
+                    } else {
+                        userRecord.put(pk, "");
                     }
                 }
             }
-            // Luôn lấy id từ userRecord (nếu có)
-            Object id = userRecord.get("id");
-            if (id == null && updateFields.get("id") != null) {
-                id = updateFields.get("id");
-            }
-            if (id == null && userRecord.containsKey("username")) {
-                Object userObj = updateFields.get("userObject");
-                if (userObj instanceof net.phanmemmottrieu.model.User) {
-                    id = ((net.phanmemmottrieu.model.User) userObj).getId();
-                }
-            }
-            if (id == null) {
-                logger.warn("[updateUserField] Không xác định được id cho userRecord: {}. Không update.", userRecord);
-                return;
-            }
-            updateFields.put("id", id);
-            userRecord.put("id", id);
-            logger.info("[updateUserField] id xác định để update: {}", id);
-            logger.info("[updateUserField] updateFields cuối cùng: {}", updateFields);
-            // Đồng bộ trường refresh theo schema hiện tại ('refresh')
-            if (updateFields.containsKey("refresh_token") && updateFields.get("refresh_token") != null) {
-                userRecord.put("refresh", updateFields.get("refresh_token"));
-            }
-            userRecord.putAll(updateFields);
-            // Ghi bản ghi với customKey là app_token (mặc định)
-            recordManager.createRecord("csm", "csm_accounts", userRecord, java.util.List.of("app_token"));
-            // Nếu có refresh (schema hiện tại) hoặc refresh_token, ghi thêm bản ghi alias với customKey là [refresh]
-            Object refreshVal = userRecord.get("refresh") != null ? userRecord.get("refresh") : userRecord.get("refresh_token");
-            if (refreshVal != null) {
-                recordManager.createRecord("csm", "csm_accounts", userRecord, java.util.List.of("refresh"));
-            }
-            logger.info("[updateUserField] Đã ghi bản ghi với app_token và refresh làm customKey cho user: {}", userRecord.get("username"));
-            recordManager.createRecord("csm", "csm_accounts", userRecord);
         }
+        // Luôn lấy id từ userRecord (nếu có)
+        Object id = userRecord.get("id");
+        if (id == null && updateFields.get("id") != null) {
+            id = updateFields.get("id");
+        }
+        if (id == null && userRecord.containsKey("username")) {
+            Object userObj = updateFields.get("userObject");
+            if (userObj instanceof net.phanmemmottrieu.model.User) {
+                id = ((net.phanmemmottrieu.model.User) userObj).getId();
+            }
+        }
+        if (id == null) {
+            logger.warn("[applyUserRecordUpdate] Không xác định được id cho userRecord: {}. Không update.", userRecord);
+            return;
+        }
+        updateFields.put("id", id);
+        userRecord.put("id", id);
+        logger.info("[applyUserRecordUpdate] id xác định để update: {}", id);
+
+        // Đồng bộ 2 trường refresh/refresh_token cả khi set null để tránh stale session alias.
+        if (updateFields.containsKey("refresh_token")) {
+            userRecord.put("refresh", updateFields.get("refresh_token"));
+        }
+        if (updateFields.containsKey("refresh")) {
+            userRecord.put("refresh_token", updateFields.get("refresh"));
+        }
+
+        userRecord.putAll(updateFields);
+        // Ghi bản ghi với customKey là app_token (mặc định)
+        recordManager.createRecord("csm", "csm_accounts", userRecord, java.util.List.of("app_token"));
+
+        // Chỉ ghi alias refresh khi còn token hợp lệ (tránh tạo alias rỗng/null).
+        Object refreshVal = userRecord.get("refresh") != null ? userRecord.get("refresh") : userRecord.get("refresh_token");
+        if (refreshVal != null && !String.valueOf(refreshVal).isBlank()) {
+            recordManager.createRecord("csm", "csm_accounts", userRecord, java.util.List.of("refresh"));
+        }
+        logger.info("[applyUserRecordUpdate] Đã ghi bản ghi với app_token/refresh alias cho user: {}", userRecord.get("username"));
+        recordManager.createRecord("csm", "csm_accounts", userRecord);
     }
 
     /**
@@ -238,6 +264,21 @@ public class UserService {
             }
             
             User user = mapRecordToUser(userRecord);
+
+            // Re-fetch canonical record theo app_token để tránh dính stale refresh alias record.
+            if (user.getAppToken() != null && !user.getAppToken().isBlank()) {
+                Optional<User> canonicalOpt = findUserByAppToken(user.getAppToken());
+                if (canonicalOpt.isPresent()) {
+                    User canonical = canonicalOpt.get();
+                    String canonicalRefresh = canonical.getRefreshToken();
+                    if (canonicalRefresh == null || !refreshToken.equals(canonicalRefresh)) {
+                        logger.warn("[findUserByRefreshToken] Reject stale refresh token for user {}", canonical.getEmail());
+                        return null;
+                    }
+                    user = canonical;
+                }
+            }
+
             logger.info("[findUserByRefreshToken] Found user: {} (email: {})", user.getUsername(), user.getEmail());
             return user;
         }

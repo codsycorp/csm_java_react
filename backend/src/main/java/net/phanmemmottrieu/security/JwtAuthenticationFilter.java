@@ -119,11 +119,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                         updateFields.put("refresh_token_ua", null);
                         updateFields.put("refresh_token_expiry", null);
                         
-                        String updateKey = user.getEmail() != null ? "email" : 
-                                         (user.getUsername() != null ? "username" : "phoneNumber");
-                        String updateValue = user.getEmail() != null ? user.getEmail() : 
-                                           (user.getUsername() != null ? user.getUsername() : user.getPhoneNumber());
-                        userService.updateUserField(updateKey, updateValue, updateFields);
+                        userService.updateUserFieldById(user.getId(), updateFields);
                     } catch (Exception e) {
                         // Log but don't fail
                     }
