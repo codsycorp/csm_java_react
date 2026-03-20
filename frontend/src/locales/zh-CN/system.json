@@ -86,6 +86,7 @@
 		"typeForm.dynamicLink": "动态链接",
 		"typeForm.dynamicCode": "动态代码",
 		"typeForm.crmWorkspace": "CRM 工作台",
+		"typeForm.kanbanBoard": "看板",
 		"rowTypeEdit": "行编辑类型",
 		"rowTypeEdit.form": "表单",
 		"rowTypeEdit.inline": "行内编辑",
@@ -127,6 +128,8 @@
 		"gReadonly": "只读",
 		"vLink": "兼容组件 / 链接",
 		"crmConfigTitle": "CRM 工作台配置",
+		"kanbanConfigTitle": "看板配置",
+		"kanbanConfigHint": "填写独立看板 JSON 配置，包括数据表、状态字段、阶段、时间线与报表行为。",
 		"crmConfigHint": "填写 JSON，用于定义销售漏斗、房源库存、活动跟进、分析指标和客户数据保护规则。",
 		"aiDesigner": {
 			"requirementForm": {

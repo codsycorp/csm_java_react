@@ -86,6 +86,7 @@
 		"typeForm.dynamicLink": "Dynamic Link",
 		"typeForm.dynamicCode": "Dynamic Code",
 		"typeForm.crmWorkspace": "CRM Workspace",
+		"typeForm.kanbanBoard": "Kanban Board",
 		"rowTypeEdit": "Row edit type",
 		"rowTypeEdit.form": "Form",
 		"rowTypeEdit.inline": "Inline edit",
@@ -127,6 +128,8 @@
 		"gReadonly": "Read-only",
 		"vLink": "Legacy Component / Link",
 		"crmConfigTitle": "CRM Workspace Config",
+		"kanbanConfigTitle": "Kanban Board Config",
+		"kanbanConfigHint": "Provide JSON for the standalone board: source table, status field, stages, timeline, and reporting behavior.",
 		"crmConfigHint": "Provide JSON for pipeline stages, inventory, activities, analytics KPIs, and customer data protection rules.",
 		"aiDesigner": {
 			"requirementForm": {

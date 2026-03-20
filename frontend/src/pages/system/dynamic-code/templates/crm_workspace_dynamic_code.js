@@ -158,8 +158,21 @@
       todoInProgress: "Đang xử lý",
       todoDoneToday: "Hoàn thành hôm nay",
       todoDueToday: "Đến hạn hôm nay",
+      openTasks: "Công việc mở",
       permissionDenied: "Bạn không có quyền thao tác công việc này",
       markDone: "Hoàn thành",
+      todoViewKanban: "Kanban",
+      todoViewTimeline: "Dòng thời gian",
+      todoViewTable: "Bảng",
+      salesExecutiveDesc: "Kanban để điều phối trạng thái xử lý, dòng thời gian để kiểm soát hạn xử lý, và lớp pipeline để thấy mỗi công việc đang phục vụ giai đoạn bán hàng nào.",
+      salesOwnerBoard: "Tải việc theo nhân sự",
+      salesPipelineBoard: "Độ phủ task theo pipeline",
+      salesTimelineTitle: "Dòng thời gian ưu tiên",
+      salesTimelineEmpty: "Không có công việc phù hợp với bộ lọc hiện tại.",
+      completionRate: "Tỷ lệ hoàn thành",
+      tasksWithoutLead: "Task chưa gắn lead",
+      unassigned: "Chưa phân công",
+      nextDeadline: "Hạn gần nhất",
       todoSaved: "Đã lưu công việc",
       todoCompleted: "Đã hoàn thành công việc",
       todoSaveFailed: "Không thể lưu công việc",
@@ -363,8 +376,21 @@
       todoInProgress: "In progress",
       todoDoneToday: "Done today",
       todoDueToday: "Due today",
+      openTasks: "Open tasks",
       permissionDenied: "You do not have permission to modify this task",
       markDone: "Complete",
+      todoViewKanban: "Kanban",
+      todoViewTimeline: "Timeline",
+      todoViewTable: "Table",
+      salesExecutiveDesc: "Use Kanban for execution flow, Timeline for deadline control, and pipeline context to show which sales stage each task is supporting.",
+      salesOwnerBoard: "Workload by owner",
+      salesPipelineBoard: "Pipeline task coverage",
+      salesTimelineTitle: "Priority timeline",
+      salesTimelineEmpty: "No tasks match the current filters.",
+      completionRate: "Completion rate",
+      tasksWithoutLead: "Tasks without linked lead",
+      unassigned: "Unassigned",
+      nextDeadline: "Nearest deadline",
       todoSaved: "Task saved",
       todoCompleted: "Task completed",
       todoSaveFailed: "Unable to save task",
@@ -568,8 +594,21 @@
       todoInProgress: "处理中",
       todoDoneToday: "今日完成",
       todoDueToday: "今日到期",
+      openTasks: "未完成任务",
       permissionDenied: "您没有权限操作此任务",
       markDone: "完成",
+      todoViewKanban: "看板",
+      todoViewTimeline: "时间线",
+      todoViewTable: "列表",
+      salesExecutiveDesc: "看板用于推进处理状态，时间线用于管理截止时间，销售阶段视图用于查看每项任务正支撑哪个成交阶段。",
+      salesOwnerBoard: "人员任务负载",
+      salesPipelineBoard: "销售阶段任务覆盖",
+      salesTimelineTitle: "优先级时间线",
+      salesTimelineEmpty: "当前筛选条件下没有任务。",
+      completionRate: "完成率",
+      tasksWithoutLead: "未关联线索的任务",
+      unassigned: "未分配",
+      nextDeadline: "最近截止时间",
       todoSaved: "任务已保存",
       todoCompleted: "任务已完成",
       todoSaveFailed: "无法保存任务",
@@ -983,8 +1022,8 @@
   }
 
   const crmConfig = {
-    title: "CRM Kinh doanh",
-    description: "Quản lý toàn bộ sales pipeline, kho hàng, hoạt động và analytics theo thời gian thực.",
+    title: translate("crmTitle"),
+    description: translate("crmDescription"),
     defaultSection: "pipeline",
     sections: {
       pipeline: true,
@@ -1053,27 +1092,27 @@
     },
     pipeline: {
       stages: [
-        { id: "lead", label: "Mới", color: "#1677ff", staleAfterHours: 24, probability: 10 },
-        { id: "contacted", label: "Đã liên hệ", color: "#13c2c2", probability: 25 },
-        { id: "site_visit", label: "Tham quan dự án", color: "#722ed1", probability: 45 },
-        { id: "booking", label: "Đặt cọc", color: "#fa8c16", probability: 70 },
-        { id: "contract", label: "Hợp đồng", color: "#52c41a", probability: 95 },
-        { id: "after_sale", label: "Chăm sóc sau bán", color: "#2f54eb", probability: 100 },
+        { id: "lead", label: translate("pipelineLead"), color: "#1677ff", staleAfterHours: 24, probability: 10 },
+        { id: "contacted", label: translate("pipelineContacted"), color: "#13c2c2", probability: 25 },
+        { id: "site_visit", label: translate("pipelineVisit"), color: "#722ed1", probability: 45 },
+        { id: "booking", label: translate("pipelineBooking"), color: "#fa8c16", probability: 70 },
+        { id: "contract", label: translate("pipelineContract"), color: "#52c41a", probability: 95 },
+        { id: "after_sale", label: translate("pipelineAfterSale"), color: "#2f54eb", probability: 100 },
       ],
       defaultStaleHours: 24,
       warningStageIds: ["lead"],
     },
     inventory: {
       statuses: [
-        { id: "available", label: "Trống", color: "green" },
-        { id: "booking", label: "Đang giữ chỗ", color: "orange" },
-        { id: "sold", label: "Đã bán", color: "red" },
+        { id: "available", label: translate("inventoryAvailable"), color: "green" },
+        { id: "booking", label: translate("inventoryBooking"), color: "orange" },
+        { id: "sold", label: translate("inventorySold"), color: "red" },
       ],
       filters: [
-        { field: "area_m2", label: "Diện tích", type: "range", minField: "area_min", maxField: "area_max" },
-        { field: "direction", label: "Hướng", type: "select" },
-        { field: "bedrooms", label: "Phòng ngủ", type: "select" },
-        { field: "price", label: "Khoảng giá", type: "range", minField: "price_min", maxField: "price_max" },
+        { field: "area_m2", label: translate("inventoryFilterArea"), type: "range", minField: "area_min", maxField: "area_max" },
+        { field: "direction", label: translate("inventoryFilterDirection"), type: "select" },
+        { field: "bedrooms", label: translate("inventoryFilterBedrooms"), type: "select" },
+        { field: "price", label: translate("inventoryFilterPrice"), type: "range", minField: "price_min", maxField: "price_max" },
       ],
       leadLinkField: "lead_id",
     },
@@ -1955,15 +1994,20 @@
   function WorkspaceShell({ database, reloadDatabase }) {
     const ConfigProvider = antd.ConfigProvider;
     const antdTheme = antd.theme || {};
+    const Alert = antd.Alert;
     const Card = antd.Card || "div";
     const Space = antd.Space || "div";
     const Button = antd.Button || "button";
     const Input = antd.Input || "input";
     const Select = antd.Select;
+    const Segmented = antd.Segmented;
     const Table = antd.Table;
     const Tabs = antd.Tabs;
+    const Tag = antd.Tag;
+    const Timeline = antd.Timeline;
     const Checkbox = antd.Checkbox;
       const Modal = antd.Modal;
+    const CsmKanbanBoard = antd.CsmKanbanBoard;
 
     const [loadingOps, setLoadingOps] = React.useState(false);
     const [submittingAd, setSubmittingAd] = React.useState(false);
@@ -2019,6 +2063,7 @@
     const [todoStatusFilter, setTodoStatusFilter] = React.useState("all");
     const [todoPriorityFilter, setTodoPriorityFilter] = React.useState("all");
     const [todoTypeFilter, setTodoTypeFilter] = React.useState("all");
+    const [todoViewMode, setTodoViewMode] = React.useState("kanban");
     const [aiGenerating, setAiGenerating] = React.useState(false);
     const [crudEntity, setCrudEntity] = React.useState("leads");
     const [crudMode, setCrudMode] = React.useState("create");
@@ -2707,6 +2752,118 @@
       { value: "other", label: translate("taskTypeOther") },
     ];
 
+    async function syncLeadOwnerFromTask(taskPayload) {
+    if (typeof updateTableData !== "function") return;
+    const leadId = String(taskPayload?.lead_id || "").trim();
+    if (!leadId) return;
+    const linkedLead = leadRows.find((row) => String(row?.id || "") === leadId);
+    if (!linkedLead) return;
+    await updateTableData({
+      app_id: appId,
+      obj_name: leadTableName,
+      command: "update",
+      pk_fields: ["id"],
+      obj_update: {
+        ...linkedLead,
+        id: String(linkedLead.id || leadId),
+        assigned_to: String(taskPayload?.owner_id || linkedLead?.assigned_to || ""),
+        updated_at: Date.now(),
+      },
+      where: { id: String(linkedLead.id || leadId) },
+    });
+  }
+
+  const taskBoardFields = React.useMemo(() => {
+    const makeEnumObject = (options) => options.reduce((acc, option) => {
+      const value = String(option?.value || "").trim();
+      if (!value) return acc;
+      acc[value] = String(option?.label || value);
+      return acc;
+    }, {});
+
+    return [
+      { f_name: "id", f_header: translate("idLabel"), f_show: 0, f_pkid: 1, f_types: "text" },
+      { f_name: "title", f_header: translate("taskTitleField"), f_show: 1, f_stt: 1, f_types: "text" },
+      { f_name: "lead_id", f_header: translate("linkedLead"), f_show: 1, f_stt: 2, f_types: "co", f_cbo_query: JSON.stringify(makeEnumObject(leadOptions)) },
+      { f_name: "owner_id", f_header: translate("assignee"), f_show: 1, f_stt: 3, f_types: "co", f_cbo_query: JSON.stringify(makeEnumObject(salesUserOptions)) },
+      { f_name: "status", f_header: translate("status"), f_show: 1, f_stt: 4, f_types: "co", f_cbo_query: JSON.stringify({
+        todo: translate("statusTodo"),
+        in_progress: translate("statusInProgress"),
+        done: translate("statusDone"),
+      }) },
+      { f_name: "priority", f_header: translate("taskPriority"), f_show: 1, f_stt: 5, f_types: "co", f_cbo_query: JSON.stringify(makeEnumObject(todoPriorityOptions.filter((item) => item.value !== "all"))) },
+      { f_name: "task_type", f_header: translate("taskType"), f_show: 1, f_stt: 6, f_types: "co", f_cbo_query: JSON.stringify(makeEnumObject(todoTaskTypeOptions.filter((item) => item.value !== "all"))) },
+      { f_name: "due_at", f_header: translate("dueAtField"), f_show: 1, f_stt: 7, f_types: "text" },
+      { f_name: "reminder_at", f_header: translate("reminderAtField"), f_show: 1, f_stt: 8, f_types: "text" },
+      { f_name: "completed_at", f_header: translate("statusDone"), f_show: 0, f_stt: 9, f_types: "text" },
+      { f_name: "metadata", f_header: "metadata", f_show: 0, f_stt: 10, f_types: "textarea" },
+    ];
+  }, [leadOptions, salesUserOptions, todoPriorityOptions, todoTaskTypeOptions, language]);
+
+  const taskBoardMenuData = React.useMemo(() => ({
+    id: "crm_dynamic_tasks_board",
+    label: translate("salesTodoTitle"),
+    table_name: taskTableName,
+    table: taskBoardFields,
+    struct: { fieldsPK: ["id"] },
+    row_type_edit: 0,
+    trigger: {
+      beforeSave: async (payload, context) => {
+        const existingTask = context.isEdit
+          ? context.previousRecord
+          : taskRows.find((row) => String(row?.id || "") === String(payload?.id || ""));
+        if (context.isEdit && existingTask && !canManageTask(existingTask)) {
+          if (notification?.warning) notification.warning({ message: translate("permissionDenied") });
+          return false;
+        }
+        const nowTs = Date.now();
+        const nextStatus = String(payload?.status || "todo");
+        return {
+          ...existingTask,
+          ...payload,
+          id: String(payload?.id || existingTask?.id || `TASK_${nowTs}`),
+          title: String(payload?.title || "").trim(),
+          lead_id: String(payload?.lead_id || "").trim(),
+          owner_id: String(payload?.owner_id || "").trim(),
+          status: nextStatus,
+          priority: String(payload?.priority || "medium"),
+          task_type: String(payload?.task_type || "follow_up"),
+          due_at: toNumber(payload?.due_at, nowTs + 24 * 60 * 60 * 1000),
+          reminder_at: toNumber(payload?.reminder_at, 0),
+          completed_at: nextStatus === "done"
+            ? (toNumber(payload?.completed_at, 0) || nowTs)
+            : 0,
+          metadata: buildTaskMetadataWithHistory({ ...existingTask, ...payload }, context.isEdit ? "update" : "create"),
+          updated_at: nowTs,
+          created_at: context.isEdit ? existingTask?.created_at : (toNumber(payload?.created_at, 0) || nowTs),
+        };
+      },
+      afterAdd: async (payload) => {
+        await syncLeadOwnerFromTask(payload);
+      },
+      afterEdit: async (payload) => {
+        await syncLeadOwnerFromTask(payload);
+      },
+      beforeDelete: async ({ row }) => {
+        if (!canManageTask(row)) {
+          if (notification?.warning) notification.warning({ message: translate("permissionDenied") });
+          return false;
+        }
+        return true;
+      },
+    },
+  }), [appId, canManageTask, language, leadRows, salesUsers, taskBoardFields, taskRows]);
+
+  const taskBoardDatabase = React.useMemo(() => ({
+    ...database,
+    [taskTableName]: {
+      ...(database?.[taskTableName] || {}),
+      id: taskTableName,
+      rows: filteredTodoRows,
+      fieldsPK: ["id"],
+    },
+  }), [database, filteredTodoRows, taskTableName]);
+
     const filteredTodoRows = React.useMemo(() => {
       const priorityRank = { urgent: 4, high: 3, medium: 2, low: 1 };
       const filtered = taskRows.filter((row) => {
@@ -2748,6 +2905,171 @@
         return acc;
       }, { overdue: 0, inProgress: 0, doneToday: 0, dueToday: 0 });
     }, [taskRows]);
+
+    const formatTaskDateTime = React.useCallback((value) => {
+      const ts = toNumber(value, 0);
+      return ts > 0 ? new Date(ts).toLocaleString(getLocaleCode(language)) : "";
+    }, [language]);
+
+    const leadById = React.useMemo(() => {
+      const map = new Map();
+      leadRows.forEach((row) => {
+        const id = String(row?.id || "").trim();
+        if (id) map.set(id, row);
+      });
+      return map;
+    }, [leadRows]);
+
+    const salesUserNameMap = React.useMemo(() => {
+      return salesUsers.reduce((acc, user) => {
+        const id = String(user?.id || "").trim();
+        if (!id) return acc;
+        acc[id] = String(user?.full_name || user?.username || id).trim();
+        return acc;
+      }, {});
+    }, [salesUsers]);
+
+    const pipelineStages = React.useMemo(() => {
+      return Array.isArray(localizedCrmConfig?.pipeline?.stages) ? localizedCrmConfig.pipeline.stages : [];
+    }, [localizedCrmConfig]);
+
+    const todoOwnerStats = React.useMemo(() => {
+      const grouped = new Map();
+      filteredTodoRows.forEach((row) => {
+        const ownerId = String(row?.owner_id || "").trim();
+        const key = ownerId || "__unassigned__";
+        if (!grouped.has(key)) {
+          grouped.set(key, {
+            ownerId,
+            ownerName: ownerId ? (salesUserNameMap[ownerId] || ownerId) : translate("unassigned"),
+            total: 0,
+            open: 0,
+            overdue: 0,
+            inProgress: 0,
+            done: 0,
+            nearestDeadline: 0,
+          });
+        }
+        const bucket = grouped.get(key);
+        const status = String(row?.status || "");
+        const dueAt = toNumber(row?.due_at, 0);
+        bucket.total += 1;
+        if (status === "done") {
+          bucket.done += 1;
+        } else {
+          bucket.open += 1;
+        }
+        if (status === "in_progress") bucket.inProgress += 1;
+        if (isOverdueTask(row)) bucket.overdue += 1;
+        if (dueAt > 0 && status !== "done" && (!bucket.nearestDeadline || dueAt < bucket.nearestDeadline)) {
+          bucket.nearestDeadline = dueAt;
+        }
+      });
+      return Array.from(grouped.values())
+        .map((row) => ({
+          ...row,
+          completionRate: row.total > 0 ? Math.round((row.done * 100) / row.total) : 0,
+        }))
+        .sort((a, b) => {
+          if (b.open !== a.open) return b.open - a.open;
+          if (b.overdue !== a.overdue) return b.overdue - a.overdue;
+          return a.completionRate - b.completionRate;
+        });
+    }, [filteredTodoRows, salesUserNameMap]);
+
+    const todoPipelineStats = React.useMemo(() => {
+      const stageOrder = pipelineStages.map((stage) => stage.id);
+      const grouped = new Map();
+      pipelineStages.forEach((stage) => {
+        grouped.set(stage.id, {
+          stageId: stage.id,
+          label: stage.label,
+          color: stage.color || themeTokens.info || themeTokens.primary,
+          total: 0,
+          open: 0,
+          overdue: 0,
+        });
+      });
+      let withoutLead = 0;
+
+      filteredTodoRows.forEach((task) => {
+        const leadId = String(task?.lead_id || "").trim();
+        const linkedLead = leadId ? leadById.get(leadId) : null;
+        if (!linkedLead) {
+          withoutLead += 1;
+          return;
+        }
+        const stageId = normalizeAlias(linkedLead?.status, STAGE_ALIASES, leadDefaultStatus);
+        if (!grouped.has(stageId)) {
+          grouped.set(stageId, {
+            stageId,
+            label: stageId,
+            color: themeTokens.info || themeTokens.primary,
+            total: 0,
+            open: 0,
+            overdue: 0,
+          });
+        }
+        const bucket = grouped.get(stageId);
+        bucket.total += 1;
+        if (String(task?.status || "") !== "done") bucket.open += 1;
+        if (isOverdueTask(task)) bucket.overdue += 1;
+      });
+
+      const rows = Array.from(grouped.values()).sort((a, b) => {
+        const ai = stageOrder.indexOf(a.stageId);
+        const bi = stageOrder.indexOf(b.stageId);
+        if (ai === -1 && bi === -1) return a.label.localeCompare(b.label);
+        if (ai === -1) return 1;
+        if (bi === -1) return -1;
+        return ai - bi;
+      });
+
+      return { rows, withoutLead };
+    }, [filteredTodoRows, leadById, pipelineStages, themeTokens.info, themeTokens.primary]);
+
+    const todoTimelineItems = React.useMemo(() => {
+      const priorityRank = { urgent: 4, high: 3, medium: 2, low: 1 };
+      return filteredTodoRows
+        .slice()
+        .sort((a, b) => {
+          const dueDiff = toNumber(a?.due_at, 0) - toNumber(b?.due_at, 0);
+          if (dueDiff !== 0) return dueDiff;
+          return (priorityRank[String(b?.priority || "medium")] || 0) - (priorityRank[String(a?.priority || "medium")] || 0);
+        })
+        .slice(0, 12)
+        .map((task, index) => {
+          const leadId = String(task?.lead_id || "").trim();
+          const linkedLead = leadId ? leadById.get(leadId) : null;
+          const stageId = linkedLead ? normalizeAlias(linkedLead?.status, STAGE_ALIASES, leadDefaultStatus) : "";
+          const stageMeta = pipelineStages.find((stage) => stage.id === stageId);
+          const dueAt = toNumber(task?.due_at, 0);
+          const priority = String(task?.priority || "medium");
+          const ownerId = String(task?.owner_id || "").trim();
+          return {
+            key: String(task?.id || `timeline_${index}`),
+            color: String(task?.status || "") === "done"
+              ? themeTokens.success
+              : isOverdueTask(task)
+                ? (themeTokens.dangerText || themeTokens.danger)
+                : priority === "urgent"
+                  ? themeTokens.warning
+                  : (themeTokens.info || themeTokens.primary),
+            label: dueAt > 0 ? formatTaskDateTime(dueAt) : "",
+            title: String(task?.title || task?.id || ""),
+            ownerName: ownerId ? (salesUserNameMap[ownerId] || ownerId) : translate("unassigned"),
+            leadName: String(linkedLead?.name || linkedLead?.phone || linkedLead?.id || leadId || ""),
+            stageLabel: stageMeta?.label || stageId || "",
+            stageColor: stageMeta?.color || themeTokens.info || themeTokens.primary,
+            priorityLabel: translate(`priority${priority.charAt(0).toUpperCase()}${priority.slice(1)}`),
+            overdue: isOverdueTask(task),
+          };
+        });
+    }, [filteredTodoRows, leadById, pipelineStages, salesUserNameMap, formatTaskDateTime, themeTokens.success, themeTokens.dangerText, themeTokens.danger, themeTokens.warning, themeTokens.info, themeTokens.primary]);
+
+    const todoPipelineMax = React.useMemo(() => {
+      return Math.max(1, ...todoPipelineStats.rows.map((item) => Number(item?.total || 0)));
+    }, [todoPipelineStats]);
 
     function setDraftField(key, value) {
       setCrudDraft((prev) => ({ ...prev, [key]: value }));
@@ -5819,12 +6141,12 @@
               onChange: (value) => setTodoTypeFilter(value || "all"),
             })
             : null,
-          React.createElement(Button, {
+          !CsmKanbanBoard ? React.createElement(Button, {
             key: "todo_new",
             size: "small",
             onClick: openCreateTodo,
-          }, translate("addNew")),
-          !Modal && todoModalOpen
+          }, translate("addNew")) : null,
+          !CsmKanbanBoard && !Modal && todoModalOpen
             ? React.createElement(Button, {
               key: "todo_save_inline",
               type: "primary",
@@ -5833,7 +6155,7 @@
               onClick: saveTodoTask,
             }, translate("save"))
             : null,
-          !Modal && todoModalOpen
+          !CsmKanbanBoard && !Modal && todoModalOpen
             ? React.createElement(Button, {
               key: "todo_cancel_inline",
               size: "small",
@@ -5841,7 +6163,7 @@
             }, translate("cancel"))
             : null,
         ]),
-        todoModalOpen ? React.createElement(Modal || "div", {
+        !CsmKanbanBoard && todoModalOpen ? React.createElement(Modal || "div", {
           key: "todo-editor-modal",
           open: todoModalOpen,
           title: todoMode === "create" ? translate("todoCreateTitle") : translate("todoEditTitle"),
@@ -5957,97 +6279,431 @@
           }),
         ]),
         ]) : null,
-        Table
-          ? React.createElement(Table, {
-            key: "todo-table",
-            size: "small",
-            rowKey: (row, idx) => String(row?.id || idx),
-            dataSource: filteredTodoRows,
-            pagination: { pageSize: 6, size: "small" },
-            columns: [
-              { title: translate("idLabel"), dataIndex: "id", key: "id", width: 180 },
-              { title: translate("taskTitleField"), dataIndex: "title", key: "title", ellipsis: true },
-              { title: translate("linkedLead"), dataIndex: "lead_id", key: "lead_id", width: 150 },
-              { title: translate("assignee"), dataIndex: "owner_id", key: "owner_id", width: 160 },
-              { title: translate("status"), dataIndex: "status", key: "status", width: 120 },
-              {
-                title: translate("taskPriority"),
-                dataIndex: "priority",
-                key: "priority",
-                width: 120,
-                render: (value) => {
-                  const key = String(value || "medium");
-                  const color = key === "urgent"
-                    ? uiPalette.danger
-                    : key === "high"
-                      ? uiPalette.warning
-                      : key === "low"
-                        ? uiPalette.success
-                        : uiPalette.info;
-                  return React.createElement("span", { style: { color, fontWeight: 600 } }, translate(`priority${key.charAt(0).toUpperCase()}${key.slice(1)}`));
-                },
-              },
-              {
-                title: translate("taskType"),
-                dataIndex: "task_type",
-                key: "task_type",
-                width: 150,
-                render: (value) => {
-                  const map = {
-                    follow_up: "taskTypeFollowUp",
-                    call: "taskTypeCall",
-                    meeting: "taskTypeMeeting",
-                    visit: "taskTypeVisit",
-                    paperwork: "taskTypePaperwork",
-                    other: "taskTypeOther",
-                  };
-                  return translate(map[String(value || "follow_up")] || "taskTypeOther");
-                },
-              },
-              {
-                title: translate("dueTime"),
-                dataIndex: "due_at",
-                key: "due_at",
-                width: 170,
-                render: (value) => {
-                  const ts = toNumber(value, 0);
-                  const overdue = ts > 0 && ts < Date.now();
-                  return React.createElement("span", { style: { color: overdue ? uiPalette.danger : themeTokens.text, fontWeight: overdue ? 600 : 400 } }, ts > 0 ? new Date(ts).toLocaleString(getLocaleCode(language)) : "");
-                },
-              },
-              {
-                title: translate("actions"),
-                key: "actions",
-                width: 220,
-                render: (_, row) => React.createElement("div", { style: { display: "flex", gap: 6, flexWrap: "wrap" } }, [
-                  React.createElement(Button, {
-                    key: `todo_edit_${row.id}`,
-                    size: "small",
-                    disabled: !canManageTask(row),
-                    onClick: () => openEditTodo(row),
-                  }, translate("edit")),
-                  String(row?.status || "") !== "done"
-                    ? React.createElement(Button, {
-                      key: `todo_done_${row.id}`,
-                      size: "small",
-                      type: "primary",
-                      disabled: !canManageTask(row),
-                      onClick: () => completeTodoTask(row),
-                    }, translate("markDone"))
-                    : null,
-                  React.createElement(Button, {
-                    key: `todo_del_${row.id}`,
-                    size: "small",
-                    danger: true,
-                    disabled: !canManageTask(row),
-                    onClick: () => confirmDeleteTodoTask(row),
-                  }, translate("delete")),
-                ]),
-              },
-            ],
-            scroll: { x: true },
+        Alert
+          ? React.createElement(Alert, {
+            key: "sales-executive-alert",
+            showIcon: true,
+            type: todoKpi.overdue > 0 || todoPipelineStats.withoutLead > 0 ? "warning" : "info",
+            message: `${translate("todoOverdue")}: ${formatNumber(todoKpi.overdue)} · ${translate("todoDueToday")}: ${formatNumber(todoKpi.dueToday)} · ${translate("tasksWithoutLead")}: ${formatNumber(todoPipelineStats.withoutLead)}`,
+            description: translate("salesExecutiveDesc"),
+            style: { marginBottom: 10, borderRadius: 12 },
           })
-          : React.createElement("pre", { key: "todo-json" }, JSON.stringify(filteredTodoRows.slice(0, 20), null, 2)),
+          : React.createElement("div", {
+            key: "sales-executive-hint",
+            style: {
+              marginBottom: 10,
+              padding: 10,
+              borderRadius: 12,
+              background: themeTokens.subtleBg,
+              border: `1px solid ${themeTokens.border}`,
+              color: themeTokens.textSecondary,
+              fontSize: 12,
+            },
+          }, translate("salesExecutiveDesc")),
+        React.createElement("div", {
+          key: "sales-executive-grid",
+          style: {
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+            gap: 10,
+            marginBottom: 10,
+          },
+        }, [
+          React.createElement(Card, {
+            key: "sales-owner-board",
+            size: "small",
+            style: { borderRadius: 14, borderColor: themeTokens.border, background: themeTokens.cardBg },
+            styles: { body: { padding: 12 } },
+          }, [
+            React.createElement("div", {
+              key: "sales-owner-board-title",
+              style: { fontWeight: 700, marginBottom: 10, color: themeTokens.text },
+            }, translate("salesOwnerBoard")),
+            todoOwnerStats.length
+              ? todoOwnerStats.slice(0, 6).map((row, index) => React.createElement("div", {
+                key: `sales-owner-row_${row.ownerId || index}`,
+                style: {
+                  padding: 10,
+                  borderRadius: 12,
+                  background: themeTokens.cardBgMuted,
+                  border: `1px solid ${themeTokens.border}`,
+                  marginBottom: index === Math.min(todoOwnerStats.length, 6) - 1 ? 0 : 8,
+                },
+              }, [
+                React.createElement("div", {
+                  key: `sales-owner-head_${row.ownerId || index}`,
+                  style: { display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", marginBottom: 6 },
+                }, [
+                  React.createElement("strong", {
+                    key: `sales-owner-name_${row.ownerId || index}`,
+                    style: { color: themeTokens.text },
+                  }, row.ownerName),
+                  Tag
+                    ? React.createElement(Tag, {
+                      key: `sales-owner-open_${row.ownerId || index}`,
+                      color: row.overdue > 0 ? "error" : "processing",
+                      style: { margin: 0 },
+                    }, `${formatNumber(row.open)} ${translate("openTasks")}`)
+                    : React.createElement("span", {
+                      key: `sales-owner-open_${row.ownerId || index}`,
+                      style: { color: row.overdue > 0 ? themeTokens.dangerText : themeTokens.info, fontSize: 12, fontWeight: 600 },
+                    }, `${formatNumber(row.open)} ${translate("openTasks")}`),
+                ]),
+                React.createElement("div", {
+                  key: `sales-owner-metrics_${row.ownerId || index}`,
+                  style: {
+                    display: "grid",
+                    gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+                    gap: 8,
+                    fontSize: 12,
+                    color: themeTokens.textSecondary,
+                  },
+                }, [
+                  React.createElement("div", { key: `sales-owner-overdue_${row.ownerId || index}` }, `${translate("todoOverdue")}: ${formatNumber(row.overdue)}`),
+                  React.createElement("div", { key: `sales-owner-rate_${row.ownerId || index}` }, `${translate("completionRate")}: ${row.completionRate}%`),
+                  React.createElement("div", { key: `sales-owner-deadline_${row.ownerId || index}` }, `${translate("nextDeadline")}: ${row.nearestDeadline ? formatTaskDateTime(row.nearestDeadline) : "-"}`),
+                ]),
+              ]))
+              : React.createElement("div", {
+                key: "sales-owner-empty",
+                style: { color: themeTokens.textSecondary, fontSize: 12 },
+              }, translate("salesTimelineEmpty")),
+          ]),
+          React.createElement(Card, {
+            key: "sales-pipeline-board",
+            size: "small",
+            style: { borderRadius: 14, borderColor: themeTokens.border, background: themeTokens.cardBg },
+            styles: { body: { padding: 12 } },
+          }, [
+            React.createElement("div", {
+              key: "sales-pipeline-board-title",
+              style: { fontWeight: 700, marginBottom: 10, color: themeTokens.text },
+            }, translate("salesPipelineBoard")),
+            todoPipelineStats.withoutLead > 0
+              ? React.createElement("div", {
+                key: "sales-pipeline-no-lead",
+                style: {
+                  marginBottom: 10,
+                  padding: "8px 10px",
+                  borderRadius: 10,
+                  background: themeTokens.dangerBg,
+                  border: `1px solid ${themeTokens.dangerBorder}`,
+                  color: themeTokens.dangerText,
+                  fontSize: 12,
+                },
+              }, `${translate("tasksWithoutLead")}: ${formatNumber(todoPipelineStats.withoutLead)}`)
+              : null,
+            todoPipelineStats.rows.map((stage, index) => React.createElement("div", {
+              key: `sales-pipeline-stage_${stage.stageId || index}`,
+              style: { marginBottom: index === todoPipelineStats.rows.length - 1 ? 0 : 10 },
+            }, [
+              React.createElement("div", {
+                key: `sales-pipeline-stage-head_${stage.stageId || index}`,
+                style: { display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", marginBottom: 4 },
+              }, [
+                Tag
+                  ? React.createElement(Tag, {
+                    key: `sales-pipeline-stage-tag_${stage.stageId || index}`,
+                    color: stage.color,
+                    style: { margin: 0 },
+                  }, stage.label)
+                  : React.createElement("strong", {
+                    key: `sales-pipeline-stage-label_${stage.stageId || index}`,
+                    style: { color: stage.color || themeTokens.info || themeTokens.primary },
+                  }, stage.label),
+                React.createElement("span", {
+                  key: `sales-pipeline-stage-total_${stage.stageId || index}`,
+                  style: { color: themeTokens.textSecondary, fontSize: 12 },
+                }, `${formatNumber(stage.total)} | ${translate("todoOverdue")}: ${formatNumber(stage.overdue)}`),
+              ]),
+              React.createElement("div", {
+                key: `sales-pipeline-stage-bar-wrap_${stage.stageId || index}`,
+                style: {
+                  height: 8,
+                  borderRadius: 999,
+                  overflow: "hidden",
+                  background: themeTokens.subtleBg,
+                  border: `1px solid ${themeTokens.border}`,
+                },
+              }, React.createElement("div", {
+                key: `sales-pipeline-stage-bar_${stage.stageId || index}`,
+                style: {
+                  width: stage.total > 0 ? `${Math.max(8, Math.round((stage.total * 100) / todoPipelineMax))}%` : "0%",
+                  height: "100%",
+                  borderRadius: 999,
+                  background: stage.color || themeTokens.info || themeTokens.primary,
+                },
+              })),
+            ])),
+          ]),
+        ]),
+        !CsmKanbanBoard && Segmented
+          ? React.createElement(Segmented, {
+            key: "todo-view-toggle",
+            block: true,
+            size: "small",
+            value: todoViewMode,
+            style: { marginBottom: 10 },
+            options: [
+              { value: "kanban", label: translate("todoViewKanban") },
+              { value: "timeline", label: translate("todoViewTimeline") },
+              { value: "table", label: translate("todoViewTable") },
+            ],
+            onChange: (value) => setTodoViewMode(String(value || "kanban")),
+          })
+          : !CsmKanbanBoard ? React.createElement("div", {
+            key: "todo-view-toggle",
+            style: { display: "flex", justifyContent: "flex-end", marginBottom: 8, gap: 4 },
+          }, [
+            React.createElement(Button, {
+              key: "btn-kanban",
+              size: "small",
+              type: todoViewMode === "kanban" ? "primary" : "default",
+              onClick: () => setTodoViewMode("kanban"),
+            }, translate("todoViewKanban")),
+            React.createElement(Button, {
+              key: "btn-timeline",
+              size: "small",
+              type: todoViewMode === "timeline" ? "primary" : "default",
+              onClick: () => setTodoViewMode("timeline"),
+            }, translate("todoViewTimeline")),
+            React.createElement(Button, {
+              key: "btn-table",
+              size: "small",
+              type: todoViewMode === "table" ? "primary" : "default",
+              onClick: () => setTodoViewMode("table"),
+            }, translate("todoViewTable")),
+          ]) : null,
+
+        CsmKanbanBoard
+          ? React.createElement(CsmKanbanBoard, {
+            key: `todo-board-${todoViewMode}`,
+            appId,
+            menuData: taskBoardMenuData,
+            config: {
+              tableName: taskTableName,
+              pkField: "id",
+              titleField: "title",
+              stageField: "status",
+              stages: [
+                { id: "todo", label: translate("statusTodo"), color: "blue" },
+                { id: "in_progress", label: translate("statusInProgress"), color: "orange" },
+                { id: "done", label: translate("statusDone"), color: "green" },
+              ],
+              assigneeField: "owner_id",
+              priorityField: "priority",
+              dueDateField: "due_at",
+              descriptionField: "task_type",
+              defaultView: todoViewMode === "table" ? "report" : todoViewMode,
+              views: { kanban: true, timeline: true, report: true },
+              timeline: {
+				primaryDateField: "due_at",
+				defaultGranularity: "day",
+				defaultRangePreset: "30d",
+			  },
+              take: 500,
+            },
+            database: taskBoardDatabase,
+            onDataChange: async () => {
+              if (typeof reloadDatabase === "function") await reloadDatabase();
+            },
+            decrypt: (value) => value,
+          })
+          : null,
+
+        !CsmKanbanBoard && todoViewMode === "timeline"
+          ? React.createElement(Card, {
+            key: "todo-timeline-card",
+            size: "small",
+            style: { borderRadius: 14, borderColor: themeTokens.border, background: themeTokens.cardBg },
+            styles: { body: { padding: 12 } },
+          }, [
+            React.createElement("div", {
+              key: "todo-timeline-title",
+              style: { fontWeight: 700, marginBottom: 10, color: themeTokens.text },
+            }, translate("salesTimelineTitle")),
+            todoTimelineItems.length
+              ? (Timeline
+                ? React.createElement(Timeline, {
+                  key: "todo-timeline",
+                  items: todoTimelineItems.map((item) => ({
+                    color: item.color,
+                    label: item.label,
+                    children: React.createElement("div", {
+                      style: {
+                        display: "grid",
+                        gap: 6,
+                        padding: "2px 0 10px",
+                      },
+                    }, [
+                      React.createElement("div", {
+                        key: `${item.key}_title_row`,
+                        style: { display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" },
+                      }, [
+                        React.createElement("strong", {
+                          key: `${item.key}_title`,
+                          style: { color: themeTokens.text },
+                        }, item.title),
+                        item.overdue
+                          ? React.createElement("span", {
+                            key: `${item.key}_overdue`,
+                            style: { color: themeTokens.dangerText, fontSize: 12, fontWeight: 600 },
+                          }, translate("overdue"))
+                          : null,
+                      ]),
+                      React.createElement("div", {
+                        key: `${item.key}_meta`,
+                        style: { display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", color: themeTokens.textSecondary, fontSize: 12 },
+                      }, [
+                        item.stageLabel
+                          ? (Tag
+                            ? React.createElement(Tag, {
+                              key: `${item.key}_stage`,
+                              color: item.stageColor,
+                              style: { margin: 0 },
+                            }, item.stageLabel)
+                            : React.createElement("span", {
+                              key: `${item.key}_stage`,
+                              style: { color: item.stageColor, fontWeight: 600 },
+                            }, item.stageLabel))
+                          : null,
+                        React.createElement("span", { key: `${item.key}_owner` }, item.ownerName),
+                        item.leadName ? React.createElement("span", { key: `${item.key}_lead` }, item.leadName) : null,
+                        React.createElement("span", { key: `${item.key}_priority` }, item.priorityLabel),
+                      ]),
+                    ]),
+                  })),
+                })
+                : React.createElement("div", {
+                  key: "todo-timeline-fallback",
+                  style: { display: "grid", gap: 8 },
+                }, todoTimelineItems.map((item) => React.createElement("div", {
+                  key: `todo-timeline-fallback_${item.key}`,
+                  style: {
+                    padding: 10,
+                    borderRadius: 12,
+                    background: themeTokens.cardBgMuted,
+                    border: `1px solid ${themeTokens.border}`,
+                  },
+                }, [
+                  React.createElement("div", {
+                    key: `todo-timeline-fallback_head_${item.key}`,
+                    style: { display: "flex", justifyContent: "space-between", gap: 8, color: themeTokens.text, fontWeight: 600 },
+                  }, [item.title, React.createElement("span", { key: `todo-timeline-fallback_label_${item.key}`, style: { color: themeTokens.textSecondary, fontWeight: 400 } }, item.label)]),
+                  React.createElement("div", {
+                    key: `todo-timeline-fallback_meta_${item.key}`,
+                    style: { marginTop: 6, fontSize: 12, color: themeTokens.textSecondary },
+                  }, [item.ownerName, item.leadName ? ` · ${item.leadName}` : "", item.stageLabel ? ` · ${item.stageLabel}` : "", ` · ${item.priorityLabel}`].join("")),
+                ]))))
+              : React.createElement("div", {
+                key: "todo-timeline-empty",
+                style: {
+                  padding: 16,
+                  borderRadius: 12,
+                  background: themeTokens.cardBgMuted,
+                  border: `1px dashed ${themeTokens.border}`,
+                  color: themeTokens.textSecondary,
+                  textAlign: "center",
+                },
+              }, translate("salesTimelineEmpty")),
+          ])
+          : null,
+
+        !CsmKanbanBoard && todoViewMode === "table"
+          ? (
+            Table
+              ? React.createElement(Table, {
+                key: "todo-table",
+                size: "small",
+                rowKey: (row, idx) => String(row?.id || idx),
+                dataSource: filteredTodoRows,
+                pagination: { pageSize: 6, size: "small" },
+                columns: [
+                  { title: translate("idLabel"), dataIndex: "id", key: "id", width: 180 },
+                  { title: translate("taskTitleField"), dataIndex: "title", key: "title", ellipsis: true },
+                  { title: translate("linkedLead"), dataIndex: "lead_id", key: "lead_id", width: 150 },
+                  { title: translate("assignee"), dataIndex: "owner_id", key: "owner_id", width: 160 },
+                  { title: translate("status"), dataIndex: "status", key: "status", width: 120 },
+                  {
+                    title: translate("taskPriority"),
+                    dataIndex: "priority",
+                    key: "priority",
+                    width: 120,
+                    render: (value) => {
+                      const key = String(value || "medium");
+                      const color = key === "urgent"
+                        ? uiPalette.danger
+                        : key === "high"
+                          ? uiPalette.warning
+                          : key === "low"
+                            ? uiPalette.success
+                            : uiPalette.info;
+                      return React.createElement("span", { style: { color, fontWeight: 600 } }, translate(`priority${key.charAt(0).toUpperCase()}${key.slice(1)}`));
+                    },
+                  },
+                  {
+                    title: translate("taskType"),
+                    dataIndex: "task_type",
+                    key: "task_type",
+                    width: 150,
+                    render: (value) => {
+                      const map = {
+                        follow_up: "taskTypeFollowUp",
+                        call: "taskTypeCall",
+                        meeting: "taskTypeMeeting",
+                        visit: "taskTypeVisit",
+                        paperwork: "taskTypePaperwork",
+                        other: "taskTypeOther",
+                      };
+                      return translate(map[String(value || "follow_up")] || "taskTypeOther");
+                    },
+                  },
+                  {
+                    title: translate("dueTime"),
+                    dataIndex: "due_at",
+                    key: "due_at",
+                    width: 170,
+                    render: (value) => {
+                      const ts = toNumber(value, 0);
+                      const overdue = ts > 0 && ts < Date.now();
+                      return React.createElement("span", { style: { color: overdue ? uiPalette.danger : themeTokens.text, fontWeight: overdue ? 600 : 400 } }, formatTaskDateTime(value));
+                    },
+                  },
+                  {
+                    title: translate("actions"),
+                    key: "actions",
+                    width: 220,
+                    render: (_, row) => React.createElement("div", { style: { display: "flex", gap: 6, flexWrap: "wrap" } }, [
+                      React.createElement(Button, {
+                        key: `todo_edit_${row.id}`,
+                        size: "small",
+                        disabled: !canManageTask(row),
+                        onClick: () => openEditTodo(row),
+                      }, translate("edit")),
+                      String(row?.status || "") !== "done"
+                        ? React.createElement(Button, {
+                          key: `todo_done_${row.id}`,
+                          size: "small",
+                          type: "primary",
+                          disabled: !canManageTask(row),
+                          onClick: () => completeTodoTask(row),
+                        }, translate("markDone"))
+                        : null,
+                      React.createElement(Button, {
+                        key: `todo_del_${row.id}`,
+                        size: "small",
+                        danger: true,
+                        disabled: !canManageTask(row),
+                        onClick: () => confirmDeleteTodoTask(row),
+                      }, translate("delete")),
+                    ]),
+                  },
+                ],
+                scroll: { x: true },
+              })
+              : React.createElement("pre", { key: "todo-json" }, JSON.stringify(filteredTodoRows.slice(0, 20), null, 2))
+          )
+          : null,
       ]) : null,
 
       activeHubTab === "crm" ? React.createElement(CsmCrmWorkspace, {

@@ -10,6 +10,7 @@ import * as CsmApi from "#src/components/csm-grid/CsmApi";
 import { csmDecrypt, csmEncrypt } from "#src/components/csm-grid/CsmCrypto";
 import CsmDynamicGrid from "#src/components/csm-grid/CsmDynamicGrid";
 import CsmCrmWorkspace from "#src/components/csm-crm/CsmCrmWorkspace";
+import CsmKanbanBoard from "#src/components/csm-kanban/CsmKanbanBoard";
 import { generateSeoContent, csm_ai_generate_seo_content, generateSeoContentWithPrompt, formatSeoPrompt, PROMPT_GENERATE_POST } from "#src/api/ai";
 import { useAppStore } from "#src/store/app";
 import { useUserStore } from "#src/store/user";
@@ -629,6 +630,7 @@ export default function DynamicCodeMenu({
   const { i18n, t } = useTranslation();
   const user = useUserStore();
   const appId = useAppStore(state => state.currentAppId);
+  const effectiveAppId = user.app_id || appId || "csm";
   const preferences = usePreferences();
   const { isDark, themeColorPrimary, language } = preferences;
   const executedRef = useRef(false);
@@ -765,7 +767,7 @@ ${resolvedContainerSelector} select {
 
             if (window.csmApi && window.csmApi.getTableData) {
               const response = await window.csmApi.getTableData({
-                app_id: "csm",
+                app_id: effectiveAppId,
                 obj_name: "csm_accounts",
                 where: {
                   field: pkField,
@@ -839,7 +841,7 @@ ${resolvedContainerSelector} select {
             
             if (window.csmApi && (window.csmApi as any).updateTableData) {
               const response = await (window.csmApi as any).updateTableData({
-                app_id: "csm",
+                app_id: effectiveAppId,
                 obj_name: "csm_accounts",
                 command: "update",
                 obj_update: updateData,
@@ -947,6 +949,7 @@ ${resolvedContainerSelector} select {
           return {
             notification, Table, Tabs, Button, Input, Select, Card, Space, Popconfirm, ConfigProvider, CsmDynamicGrid,
             CsmCrmWorkspace,
+            CsmKanbanBoard,
             antdLocale: ANT_DESIGN_LOCALE[language],
             antdThemeConfig: isDark ? customAntdDarkTheme : customAntdLightTheme,
             googleIndexUrl: (CsmApi as any).googleIndexUrl,
@@ -1058,40 +1061,22 @@ ${resolvedContainerSelector} select {
           return;
         }
 
-        // Load the code template from sys_autos
+        // Load the code template STRICTLY from app_id=csm, table=sys_autos.
         const where = andWhere([
           { field: "p_name", type: "eq", value: autoCodeName },
           { field: "p_type", type: "eq", value: 0 },
         ]);
 
-        let response = await getTableData<any>({
+        const response = await getTableData<any>({
           app_id: "csm",
           obj_name: "sys_autos",
           where,
           take: 1,
         });
 
-        let rows = (response as any)?.rows || (response as any)?.data || [];
-
-        // Backward-compatible fallback from old AutoSetup:
-        // if exact p_name is missing, fetch shared p_type=0 templates.
-        if (!Array.isArray(rows) || rows.length === 0) {
-          const fallbackWhere = andWhere([
-            { field: "p_type", type: "eq", value: 0 },
-          ]);
-
-          response = await getTableData<any>({
-            app_id: "csm",
-            obj_name: "sys_autos",
-            where: fallbackWhere,
-            take: 5,
-          });
-
-          rows = (response as any)?.rows || (response as any)?.data || [];
-        }
-
+        const rows = (response as any)?.rows || (response as any)?.data || [];
         const codeRecord = Array.isArray(rows)
-          ? (rows.find((r: any) => r?.p_name === autoCodeName) || rows[0])
+          ? rows.find((r: any) => r?.p_name === autoCodeName)
           : undefined;
 
         if (!codeRecord?.p_code) {
@@ -1270,7 +1255,7 @@ ${resolvedContainerSelector} select {
 
         // Implementation matching AutoSetup.tsx
         self.csm_obj_tables({
-          app_id: "csm",
+          app_id: effectiveAppId,
           obj_name: "csm_accounts",
           e_where: {
             field: "app_token",
@@ -1301,7 +1286,7 @@ ${resolvedContainerSelector} select {
           if (userInfoUp.address !== undefined) updateObj.address = userInfoUp.address;
           
           self.csm_obj_updates({
-            app_id: "csm",
+            app_id: effectiveAppId,
             obj_name: "csm_accounts",
             command: "update",
             obj_update: updateObj,

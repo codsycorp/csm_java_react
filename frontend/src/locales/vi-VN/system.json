@@ -87,6 +87,7 @@
 		"typeForm.dynamicLink": "Liên kết động",
 		"typeForm.dynamicCode": "Chạy code động",
 		"typeForm.crmWorkspace": "CRM Workspace",
+		"typeForm.kanbanBoard": "Kanban Board",
 		"rowTypeEdit": "Kiểu chỉnh sửa dòng",
 		"rowTypeEdit.form": "Dạng Form",
 		"rowTypeEdit.inline": "Chỉnh sửa trên dòng",
@@ -128,6 +129,8 @@
 		"gReadonly": "Chỉ được xem",
 		"vLink": "Component / Link tương thích",
 		"crmConfigTitle": "Cấu hình CRM Workspace",
+		"kanbanConfigTitle": "Cấu hình Kanban Board",
+		"kanbanConfigHint": "Khai báo JSON cho board độc lập: bảng dữ liệu, cột trạng thái, stage hiển thị, timeline và báo cáo.",
 		"crmConfigHint": "Khai báo JSON cho pipeline Kanban, bảng hàng, activity tracking, KPI và chính sách bảo mật dữ liệu khách hàng.",
 		"aiDesigner": {
 			"requirementForm": {

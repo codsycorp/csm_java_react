@@ -62,10 +62,10 @@ interface CsmCrmWorkspaceProps {
 	onDataChange?: () => void;
 }
 
-const defaultInventoryStatuses = [
-	{ id: "available", label: "Trống", color: "green" },
-	{ id: "booking", label: "Đang giữ chỗ", color: "orange" },
-	{ id: "sold", label: "Đã bán", color: "red" },
+const defaultInventoryStatuses: Array<{ id: string; label?: string; color: string }> = [
+	{ id: "available", color: "green" },
+	{ id: "booking", color: "orange" },
+	{ id: "sold", color: "red" },
 ];
 
 const defaultActivityTypes = ["call", "meeting", "site_visit", "email"];
@@ -78,12 +78,6 @@ function normalizeCrmLanguage(raw: string | undefined): CrmLocale {
 	if (lang.startsWith("en")) return "en";
 	if (lang.startsWith("zh")) return "zh";
 	return "vi";
-}
-
-function pickCrmText(locale: CrmLocale, vi: string, en: string, zh: string) {
-	if (locale === "en") return en;
-	if (locale === "zh") return zh;
-	return vi;
 }
 
 function resolveIntlLocale(locale?: string) {
@@ -129,7 +123,7 @@ function formatCurrency(value: any, locale?: string) {
 	}).format(amount);
 }
 
-function formatDateTime(value: any, locale?: string, emptyText: string = "Chưa có") {
+function formatDateTime(value: any, locale?: string, emptyText: string = "") {
 	const timestamp = toTimestamp(value);
 	if (!timestamp) return emptyText;
 	const currentLocale = resolveIntlLocale(locale).toLowerCase();
@@ -253,7 +247,7 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 	const [taskForm] = Form.useForm();
 	const [leadForm] = Form.useForm();
 	const [inventoryForm] = Form.useForm();
-	const { i18n } = useTranslation();
+	const { t, i18n } = useTranslation();
 	const { token } = theme.useToken();
 	const user = useUserStore();
 	const resolvePopupContainer = useCallback((node?: HTMLElement) => {
@@ -265,163 +259,162 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 	}, []);
 	const language = useMemo<CrmLocale>(() => normalizeCrmLanguage(i18n.language), [i18n.language]);
 	const localeCode = language === "en" ? "en-US" : language === "zh" ? "zh-CN" : "vi-VN";
-	const text = useMemo(() => {
-		const tr = (vi: string, en: string, zh: string) => pickCrmText(language, vi, en, zh);
-		return {
-			pipeline: tr("Phễu bán hàng", "Pipeline", "销售漏斗"),
-			inventory: tr("Kho hàng", "Inventory", "库存"),
-			activities: tr("Hoạt động", "Activities", "活动"),
-			analytics: tr("Phân tích", "Analytics", "分析"),
-			noData: tr("Chưa có", "No data", "暂无"),
-			uncategorized: tr("Chưa phân loại", "Uncategorized", "未分类"),
-			other: tr("Khác", "Other", "其他"),
-			selectLeadFirst: tr("Chọn một lead trước khi đính kèm sản phẩm", "Select a lead before linking a product", "请先选择线索再关联产品"),
-			attachInventoryOk: tr("Đã đính kèm sản phẩm quan tâm cho lead", "Linked the product to the selected lead", "已将产品关联到所选线索"),
-			attachInventoryFail: tr("Không thể đính kèm sản phẩm cho lead", "Unable to link the product to the lead", "无法将产品关联到线索"),
-			activityLogged: tr("Đã ghi nhận tương tác", "Interaction logged", "互动已记录"),
-			activitySaveFail: tr("Không thể lưu lịch sử tương tác", "Unable to save interaction history", "无法保存互动记录"),
-			taskCreated: tr("Đã tạo task theo dõi", "Follow-up task created", "已创建跟进任务"),
-			taskCreateFail: tr("Không thể tạo task", "Unable to create task", "无法创建任务"),
-			statusUpdateFail: tr("Không thể cập nhật trạng thái khách hàng", "Unable to update customer status", "无法更新客户状态"),
-			pipelineTitle: tr("Sales Pipeline", "Sales Pipeline", "销售流程"),
-			searchLead: tr("Tìm khách, số điện thoại, dự án", "Search customer, phone, or project", "搜索客户、电话或项目"),
-			phoneMaskHint: tr("Ẩn số điện thoại khi chưa đến bước hợp đồng", "Phone is masked before contract stage", "合同阶段前隐藏手机号"),
-			noLeadYet: tr("Chưa có lead", "No leads yet", "暂无线索"),
-			unnamedLead: tr("Khách chưa đặt tên", "Unnamed lead", "未命名线索"),
-			stale: tr("Quá hạn xử lý", "Overdue", "超时未处理"),
-			project: tr("Dự án", "Project", "项目"),
-			lastContact: tr("Liên hệ gần nhất", "Last contact", "最近联系"),
-			phone: tr("SĐT", "Phone", "电话"),
-			sales: tr("Sales", "Sales", "销售"),
-			expectedValue: tr("Giá trị dự kiến", "Expected value", "预估价值"),
-			inventoryTitle: tr("Kho hàng thời gian thực", "Live inventory", "实时库存"),
-			statusPlaceholder: tr("Trạng thái", "Status", "状态"),
-			directionPlaceholder: tr("Hướng", "Direction", "朝向"),
-			bedroomPlaceholder: tr("Phòng ngủ", "Bedrooms", "卧室"),
-			priceFrom: tr("Giá từ", "Price from", "价格从"),
-			to: tr("đến", "to", "到"),
-			areaFrom: tr("Diện tích từ", "Area from", "面积从"),
-			emptyInventory: tr("Không có sản phẩm phù hợp bộ lọc", "No products match the filters", "没有符合筛选条件的产品"),
-			productFallback: tr("Sản phẩm", "Product", "产品"),
-			code: tr("Mã", "Code", "编号"),
-			attachCurrentLead: tr("Đính kèm vào lead đang chọn", "Link to selected lead", "关联到当前线索"),
-			linkedCurrentLead: tr("Đã gắn với lead đang chọn", "Linked to selected lead", "已关联当前线索"),
-			activeLead: tr("Lead đang tư vấn", "Active lead", "当前跟进线索"),
-			targetValue: tr("Giá trị mục tiêu", "Target value", "目标价值"),
-			interestedProducts: tr("Sản phẩm quan tâm", "Interested products", "意向产品"),
-			pickLeadKanban: tr("Chọn một lead từ Kanban để ghép sản phẩm", "Choose a lead from Kanban to match products", "从看板中选择线索以匹配产品"),
-			todayCalls: tr("Cuộc gọi hôm nay", "Calls today", "今日通话"),
-			successMeetings: tr("Lịch hẹn thành công", "Successful meetings", "成功预约"),
-			bookingLeads: tr("Lead đặt cọc", "Booked leads", "订金线索"),
-			closeRate: tr("Tỷ lệ chốt", "Close rate", "成交率"),
-			quickActions: tr("Thao tác nhanh", "Quick actions", "快捷操作"),
-			logInteraction: tr("Ghi log cuộc gọi / ghi chú", "Log call / note", "记录通话 / 备注"),
-			createTask: tr("Tạo task nhắc việc", "Create follow-up task", "创建提醒任务"),
-			exportWarningTitle: tr("Cảnh báo xuất dữ liệu số lượng lớn", "Large export warning", "大量导出警告"),
-			exportWarningDesc: tr("Có {{count}} bản ghi export trong 24h gần nhất, vượt ngưỡng {{threshold}}.", "There were {{count}} export records in the last 24 hours, exceeding {{threshold}}.", "最近 24 小时内有 {{count}} 条导出记录，超过阈值 {{threshold}}。"),
-			activityCalendar: tr("Lịch hoạt động", "Activity calendar", "活动日历"),
-			noCalendarToday: tr("Không có lịch trong ngày", "No schedule for today", "今天没有日程"),
-			recentInteractions: tr("Tương tác gần đây", "Recent interactions", "最近互动"),
-			noInteractionLog: tr("Chưa có log tương tác", "No interaction logs", "暂无互动记录"),
-			followupTasks: tr("Task theo dõi", "Follow-up tasks", "跟进任务"),
-			noTaskPending: tr("Chưa có task cần xử lý", "No pending tasks", "暂无待处理任务"),
-			due: tr("Hạn", "Due", "截止"),
-			funnelChart: tr("Biểu đồ phễu bán hàng", "Sales funnel chart", "销售漏斗图"),
-			salesDimension: tr("Doanh số theo chiều phân tích", "Sales by dimension", "按维度统计销售额"),
-			dimensionAssigned: tr("Cá nhân", "Assignee", "人员"),
-			dimensionProject: tr("Dự án", "Project", "项目"),
-			dimensionSource: tr("Nguồn khách", "Lead source", "线索来源"),
-			source: tr("Nguồn", "Source", "来源"),
-			lead: tr("Lead", "Lead", "线索"),
-			closed: tr("Đã chốt", "Closed", "成交"),
-			rate: tr("Tỷ lệ", "Rate", "转化率"),
-			workspaceTag: tr("CRM Workspace", "CRM Workspace", "CRM 工作台"),
-			headerTitle: tr("CRM Kinh doanh", "Sales CRM", "销售 CRM"),
-			headerDesc: tr("Biến dữ liệu lead, kho hàng và tương tác thành hành động có thể đo lường ngay trên admin frontend.", "Turn lead, inventory, and interaction data into measurable actions directly inside the admin frontend.", "将线索、库存与互动数据转化为管理后台中可衡量的行动。"),
-			guideTitle: tr("Hướng dẫn thao tác nhanh", "Quick start guide", "快速上手指南"),
-			guideSubtitle: tr("Làm theo đúng trình tự để dữ liệu sạch, dễ theo dõi và chốt cơ hội nhanh hơn.", "Follow this sequence to keep data clean, trackable, and easier to close.", "按此顺序操作可保持数据整洁、便于追踪并更快推进成交。"),
-			guideStep1Title: tr("Bước 1: Tạo lead đủ thông tin", "Step 1: Create complete lead", "步骤 1：创建完整线索"),
-			guideStep1Desc: tr("Điền tối thiểu: Tên khách, SĐT, Dự án quan tâm, Nguồn khách.", "Fill at least: Customer name, phone, interested project, and source.", "至少填写：客户姓名、手机号、意向项目、线索来源。"),
-			guideStep2Title: tr("Bước 2: Gắn sản phẩm phù hợp", "Step 2: Link matching inventory", "步骤 2：关联匹配房源"),
-			guideStep2Desc: tr("Chọn sản phẩm theo giá, diện tích, hướng và số phòng rồi liên kết với lead.", "Filter by budget, area, direction, bedrooms, then link to the lead.", "按预算、面积、朝向、卧室筛选后，关联到线索。"),
-			guideStep3Title: tr("Bước 3: Ghi nhận tương tác", "Step 3: Log interactions", "步骤 3：记录互动"),
-			guideStep3Desc: tr("Mỗi cuộc gọi/lịch hẹn cần có thời điểm, kết quả và ghi chú ngắn gọn.", "Every call/meeting should include time, result, and concise notes.", "每次通话/会面需记录时间、结果与简要备注。"),
-			guideStep4Title: tr("Bước 4: Tạo task theo dõi", "Step 4: Create follow-up tasks", "步骤 4：创建跟进任务"),
-			guideStep4Desc: tr("Đặt hạn xử lý rõ ràng để không bỏ sót cơ hội và đảm bảo nhịp chăm sóc.", "Set clear due times to avoid misses and keep consistent follow-up.", "设置明确截止时间，避免遗漏机会并保持跟进节奏。"),
-			guideStep5Title: tr("Bước 5: Cập nhật trạng thái & đo hiệu suất", "Step 5: Update status and measure", "步骤 5：更新状态并衡量效果"),
-			guideStep5Desc: tr("Kéo thả lead theo pipeline và theo dõi tỷ lệ chốt ở mục Phân tích.", "Move leads through pipeline stages and monitor close rate in Analytics.", "在线索看板推进阶段，并在分析页查看成交率。"),
-			guideDataTitle: tr("Chuẩn điền dữ liệu", "Data entry standards", "数据填写规范"),
-			guideLeadRule: tr("Lead: Tên + SĐT + Dự án + Nguồn là bắt buộc để đủ điều kiện chăm sóc.", "Lead: Name + phone + project + source are required for proper follow-up.", "线索：姓名 + 手机号 + 项目 + 来源为基础必填。"),
-			guideInventoryRule: tr("Sản phẩm: Mã SP, giá, diện tích, trạng thái cần thống nhất để lọc chính xác.", "Inventory: Product code, price, area, and status should be consistent for accurate filtering.", "房源：编号、价格、面积、状态需统一，便于精准筛选。"),
-			guideActivityRule: tr("Tương tác: Ghi chú 1-2 câu nêu nhu cầu chính và bước tiếp theo.", "Interactions: Keep 1-2 sentence notes for key need and next action.", "互动：用 1-2 句记录核心需求与下一步动作。"),
-			guideTaskRule: tr("Task: Tiêu đề rõ việc, có hạn xử lý và người phụ trách cụ thể.", "Task: Use action-oriented title, clear due time, and explicit owner.", "任务：标题要可执行，并明确截止时间与负责人。"),
-			guideProgressLabel: tr("Tiến độ onboard", "Onboarding progress", "上手进度"),
-			activeLeads: tr("Lead đang xử lý", "Active leads", "跟进中的线索"),
-			availableProducts: tr("Sản phẩm trống", "Available products", "可售产品"),
-			openTasks: tr("Task mở", "Open tasks", "进行中任务"),
-			closedLeads: tr("Lead chốt", "Closed leads", "成交线索"),
-			exportLimitTitle: tr("Log xuất dữ liệu vượt ngưỡng kiểm soát", "Export log threshold exceeded", "导出日志超过控制阈值"),
-			exportLimitDesc: tr("Đã ghi nhận {{count}} lượt export trong 24 giờ gần nhất. Kiểm tra quyền export và nhật ký {{threshold}} bản ghi/ngày.", "Detected {{count}} exports in the last 24 hours. Review export permissions and the {{threshold}} records/day audit threshold.", "最近 24 小时检测到 {{count}} 次导出，请检查导出权限和每日 {{threshold}} 条记录的审计阈值。"),
-			activityModalTitle: tr("Ghi log tương tác", "Log interaction", "记录互动"),
-			taskModalTitle: tr("Tạo task theo dõi", "Create follow-up task", "创建跟进任务"),
-			leadLabel: tr("Lead", "Lead", "线索"),
-			chooseLead: tr("Chọn lead", "Choose a lead", "请选择线索"),
-			activityType: tr("Loại tương tác", "Interaction type", "互动类型"),
-			chooseActivityType: tr("Chọn loại tương tác", "Choose interaction type", "请选择互动类型"),
-			time: tr("Thời điểm", "Time", "时间"),
-			chooseTime: tr("Chọn thời điểm", "Choose a time", "请选择时间"),
-			result: tr("Kết quả", "Result", "结果"),
-			notes: tr("Tóm tắt nội dung", "Summary", "内容摘要"),
-			enterNotes: tr("Nhập nội dung trao đổi", "Enter interaction details", "请输入互动内容"),
-			taskTitle: tr("Tiêu đề task", "Task title", "任务标题"),
-			enterTaskTitle: tr("Nhập tiêu đề task", "Enter task title", "请输入任务标题"),
-			dueAt: tr("Hạn xử lý", "Due time", "截止时间"),
-			chooseDueAt: tr("Chọn hạn xử lý", "Choose due time", "请选择截止时间"),
-			status: tr("Trạng thái", "Status", "状态"),
-			statusTodo: tr("Chưa xử lý", "To do", "待处理"),
-			statusInProgress: tr("Đang xử lý", "In progress", "处理中"),
-			statusDone: tr("Hoàn thành", "Done", "已完成"),
-			resultSuccess: tr("Thành công", "Success", "成功"),
-			resultPending: tr("Chờ xử lý", "Pending", "待处理"),
-			resultFailed: tr("Thất bại", "Failed", "失败"),
-			activityTypeCall: tr("Gọi điện", "Call", "电话沟通"),
-			activityTypeMeeting: tr("Họp / tư vấn", "Meeting / consulting", "会议 / 咨询"),
-			activityTypeSiteVisit: tr("Tham quan dự án", "Site visit", "带看项目"),
-			activityTypeEmail: tr("Email", "Email", "邮件"),
-			activityTypeNote: tr("Ghi chú", "Note", "备注"),
-			activityTypeOther: tr("Khác", "Other", "其他"),
-			sourceFacebook: tr("Facebook", "Facebook", "Facebook"),
-			sourceGoogle: tr("Google", "Google", "Google"),
-			sourceWebsite: tr("Website", "Website", "Website"),
-			sourceSalesSelf: tr("Sales tự khai thác", "Sales self-sourced", "销售自拓"),
-			sourceExternalFloor: tr("Sàn / đối tác", "Exchange / partner", "渠道 / 合作方"),
-			// CRUD
-			addLead: tr("+ Thêm khách", "+ Add lead", "+ 新增线索"),
-			editLead: tr("Sửa khách hàng", "Edit lead", "编辑线索"),
-			addInventory: tr("+ Thêm sản phẩm", "+ Add product", "+ 新增房源"),
-			editInventory: tr("Sửa sản phẩm", "Edit product", "编辑房源"),
-			confirmDelete: tr("Xác nhận xóa bản ghi này?", "Confirm delete this record?", "确认删除此记录？"),
-			deleteOk: tr("Đã xóa", "Deleted", "已删除"),
-			deleteFail: tr("Không thể xóa", "Delete failed", "删除失败"),
-			saveOk: tr("Đã lưu", "Saved", "已保存"),
-			saveFail: tr("Không thể lưu", "Save failed", "无法保存"),
-			refresh: tr("Làm mới", "Refresh", "刷新"),
-			customerName: tr("Tên khách hàng", "Customer name", "客户姓名"),
-			enterName: tr("Nhập tên", "Enter name", "请输入姓名"),
-			enterPhone: tr("Nhập số điện thoại", "Enter phone", "请输入手机号"),
-			sourceLead: tr("Nguồn khách", "Lead source", "线索来源"),
-			assignedTo: tr("Nhân viên phụ trách", "Assigned to", "负责人"),
-			teamId: tr("Nhóm", "Team", "团队"),
-			productCode: tr("Mã sản phẩm", "Product code", "产品编号"),
-			productName: tr("Tên sản phẩm", "Product name", "产品名称"),
-			areaM2: tr("Diện tích (m²)", "Area (m²)", "面积（m²）"),
-			bedrooms: tr("Số phòng ngủ", "Bedrooms", "卧室"),
-			direction: tr("Hướng", "Direction", "朝向"),
-			interactionTitle: tr("Tiêu đề", "Title", "标题"),
-			delete: tr("Xóa", "Delete", "删除"),
-			edit: tr("Sửa", "Edit", "编辑"),
-		};
-	}, [language]);
+	const text = useMemo(() => ({
+		pipeline: t("crmWorkspace.pipeline"),
+		inventory: t("crmWorkspace.inventory"),
+		activities: t("crmWorkspace.activities"),
+		analytics: t("crmWorkspace.analytics"),
+		noData: t("crmWorkspace.noData"),
+		uncategorized: t("crmWorkspace.uncategorized"),
+		other: t("crmWorkspace.other"),
+		selectLeadFirst: t("crmWorkspace.selectLeadFirst"),
+		attachInventoryOk: t("crmWorkspace.attachInventoryOk"),
+		attachInventoryFail: t("crmWorkspace.attachInventoryFail"),
+		activityLogged: t("crmWorkspace.activityLogged"),
+		activitySaveFail: t("crmWorkspace.activitySaveFail"),
+		taskCreated: t("crmWorkspace.taskCreated"),
+		taskCreateFail: t("crmWorkspace.taskCreateFail"),
+		statusUpdateFail: t("crmWorkspace.statusUpdateFail"),
+		pipelineTitle: t("crmWorkspace.pipelineTitle"),
+		searchLead: t("crmWorkspace.searchLead"),
+		phoneMaskHint: t("crmWorkspace.phoneMaskHint"),
+		noLeadYet: t("crmWorkspace.noLeadYet"),
+		unnamedLead: t("crmWorkspace.unnamedLead"),
+		stale: t("crmWorkspace.stale"),
+		project: t("crmWorkspace.project"),
+		lastContact: t("crmWorkspace.lastContact"),
+		phone: t("crmWorkspace.phone"),
+		sales: t("crmWorkspace.sales"),
+		expectedValue: t("crmWorkspace.expectedValue"),
+		inventoryTitle: t("crmWorkspace.inventoryTitle"),
+		inventoryStatusAvailable: t("crmWorkspace.inventoryStatusAvailable"),
+		inventoryStatusBooking: t("crmWorkspace.inventoryStatusBooking"),
+		inventoryStatusSold: t("crmWorkspace.inventoryStatusSold"),
+		statusPlaceholder: t("crmWorkspace.statusPlaceholder"),
+		directionPlaceholder: t("crmWorkspace.directionPlaceholder"),
+		bedroomPlaceholder: t("crmWorkspace.bedroomPlaceholder"),
+		priceFrom: t("crmWorkspace.priceFrom"),
+		to: t("crmWorkspace.to"),
+		areaFrom: t("crmWorkspace.areaFrom"),
+		emptyInventory: t("crmWorkspace.emptyInventory"),
+		productFallback: t("crmWorkspace.productFallback"),
+		code: t("crmWorkspace.code"),
+		attachCurrentLead: t("crmWorkspace.attachCurrentLead"),
+		linkedCurrentLead: t("crmWorkspace.linkedCurrentLead"),
+		activeLead: t("crmWorkspace.activeLead"),
+		targetValue: t("crmWorkspace.targetValue"),
+		interestedProducts: t("crmWorkspace.interestedProducts"),
+		pickLeadKanban: t("crmWorkspace.pickLeadKanban"),
+		todayCalls: t("crmWorkspace.todayCalls"),
+		successMeetings: t("crmWorkspace.successMeetings"),
+		bookingLeads: t("crmWorkspace.bookingLeads"),
+		closeRate: t("crmWorkspace.closeRate"),
+		quickActions: t("crmWorkspace.quickActions"),
+		logInteraction: t("crmWorkspace.logInteraction"),
+		createTask: t("crmWorkspace.createTask"),
+		exportWarningTitle: t("crmWorkspace.exportWarningTitle"),
+		exportWarningDesc: t("crmWorkspace.exportWarningDesc"),
+		activityCalendar: t("crmWorkspace.activityCalendar"),
+		noCalendarToday: t("crmWorkspace.noCalendarToday"),
+		recentInteractions: t("crmWorkspace.recentInteractions"),
+		noInteractionLog: t("crmWorkspace.noInteractionLog"),
+		followupTasks: t("crmWorkspace.followupTasks"),
+		noTaskPending: t("crmWorkspace.noTaskPending"),
+		due: t("crmWorkspace.due"),
+		funnelChart: t("crmWorkspace.funnelChart"),
+		salesDimension: t("crmWorkspace.salesDimension"),
+		dimensionAssigned: t("crmWorkspace.dimensionAssigned"),
+		dimensionProject: t("crmWorkspace.dimensionProject"),
+		dimensionSource: t("crmWorkspace.dimensionSource"),
+		source: t("crmWorkspace.source"),
+		lead: t("crmWorkspace.lead"),
+		closed: t("crmWorkspace.closed"),
+		rate: t("crmWorkspace.rate"),
+		workspaceTag: t("crmWorkspace.workspaceTag"),
+		headerTitle: t("crmWorkspace.headerTitle"),
+		headerDesc: t("crmWorkspace.headerDesc"),
+		guideTitle: t("crmWorkspace.guideTitle"),
+		guideSubtitle: t("crmWorkspace.guideSubtitle"),
+		guideStep1Title: t("crmWorkspace.guideStep1Title"),
+		guideStep1Desc: t("crmWorkspace.guideStep1Desc"),
+		guideStep2Title: t("crmWorkspace.guideStep2Title"),
+		guideStep2Desc: t("crmWorkspace.guideStep2Desc"),
+		guideStep3Title: t("crmWorkspace.guideStep3Title"),
+		guideStep3Desc: t("crmWorkspace.guideStep3Desc"),
+		guideStep4Title: t("crmWorkspace.guideStep4Title"),
+		guideStep4Desc: t("crmWorkspace.guideStep4Desc"),
+		guideStep5Title: t("crmWorkspace.guideStep5Title"),
+		guideStep5Desc: t("crmWorkspace.guideStep5Desc"),
+		guideDataTitle: t("crmWorkspace.guideDataTitle"),
+		guideLeadRule: t("crmWorkspace.guideLeadRule"),
+		guideInventoryRule: t("crmWorkspace.guideInventoryRule"),
+		guideActivityRule: t("crmWorkspace.guideActivityRule"),
+		guideTaskRule: t("crmWorkspace.guideTaskRule"),
+		guideProgressLabel: t("crmWorkspace.guideProgressLabel"),
+		activeLeads: t("crmWorkspace.activeLeads"),
+		availableProducts: t("crmWorkspace.availableProducts"),
+		openTasks: t("crmWorkspace.openTasks"),
+		closedLeads: t("crmWorkspace.closedLeads"),
+		exportLimitTitle: t("crmWorkspace.exportLimitTitle"),
+		exportLimitDesc: t("crmWorkspace.exportLimitDesc"),
+		activityModalTitle: t("crmWorkspace.activityModalTitle"),
+		taskModalTitle: t("crmWorkspace.taskModalTitle"),
+		leadLabel: t("crmWorkspace.leadLabel"),
+		chooseLead: t("crmWorkspace.chooseLead"),
+		activityType: t("crmWorkspace.activityType"),
+		chooseActivityType: t("crmWorkspace.chooseActivityType"),
+		time: t("crmWorkspace.time"),
+		chooseTime: t("crmWorkspace.chooseTime"),
+		result: t("crmWorkspace.result"),
+		notes: t("crmWorkspace.notes"),
+		enterNotes: t("crmWorkspace.enterNotes"),
+		taskTitle: t("crmWorkspace.taskTitle"),
+		enterTaskTitle: t("crmWorkspace.enterTaskTitle"),
+		dueAt: t("crmWorkspace.dueAt"),
+		chooseDueAt: t("crmWorkspace.chooseDueAt"),
+		status: t("crmWorkspace.status"),
+		statusTodo: t("crmWorkspace.statusTodo"),
+		statusInProgress: t("crmWorkspace.statusInProgress"),
+		statusDone: t("crmWorkspace.statusDone"),
+		resultSuccess: t("crmWorkspace.resultSuccess"),
+		resultPending: t("crmWorkspace.resultPending"),
+		resultFailed: t("crmWorkspace.resultFailed"),
+		activityTypeCall: t("crmWorkspace.activityTypeCall"),
+		activityTypeMeeting: t("crmWorkspace.activityTypeMeeting"),
+		activityTypeSiteVisit: t("crmWorkspace.activityTypeSiteVisit"),
+		activityTypeEmail: t("crmWorkspace.activityTypeEmail"),
+		activityTypeNote: t("crmWorkspace.activityTypeNote"),
+		activityTypeOther: t("crmWorkspace.activityTypeOther"),
+		sourceFacebook: t("crmWorkspace.sourceFacebook"),
+		sourceGoogle: t("crmWorkspace.sourceGoogle"),
+		sourceWebsite: t("crmWorkspace.sourceWebsite"),
+		sourceSalesSelf: t("crmWorkspace.sourceSalesSelf"),
+		sourceExternalFloor: t("crmWorkspace.sourceExternalFloor"),
+		addLead: t("crmWorkspace.addLead"),
+		editLead: t("crmWorkspace.editLead"),
+		addInventory: t("crmWorkspace.addInventory"),
+		editInventory: t("crmWorkspace.editInventory"),
+		confirmDelete: t("crmWorkspace.confirmDelete"),
+		deleteOk: t("crmWorkspace.deleteOk"),
+		deleteFail: t("crmWorkspace.deleteFail"),
+		saveOk: t("crmWorkspace.saveOk"),
+		saveFail: t("crmWorkspace.saveFail"),
+		refresh: t("crmWorkspace.refresh"),
+		customerName: t("crmWorkspace.customerName"),
+		enterName: t("crmWorkspace.enterName"),
+		enterPhone: t("crmWorkspace.enterPhone"),
+		sourceLead: t("crmWorkspace.sourceLead"),
+		assignedTo: t("crmWorkspace.assignedTo"),
+		teamId: t("crmWorkspace.teamId"),
+		productCode: t("crmWorkspace.productCode"),
+		productName: t("crmWorkspace.productName"),
+		areaM2: t("crmWorkspace.areaM2"),
+		bedrooms: t("crmWorkspace.bedrooms"),
+		direction: t("crmWorkspace.direction"),
+		interactionTitle: t("crmWorkspace.interactionTitle"),
+		delete: t("crmWorkspace.delete"),
+		edit: t("crmWorkspace.edit")
+	}), [t]);
 	const workspaceTheme = useMemo(() => {
 		const danger = (token as any).colorError || "#ff4d4f";
 		const warning = (token as any).colorWarning || "#faad14";
@@ -803,6 +796,15 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 		}
 	}, [text.statusDone, text.statusInProgress, text.statusTodo]);
 
+	const getInventoryStatusLabel = useCallback((status: string) => {
+		switch (String(status || "").toLowerCase()) {
+			case "available": return text.inventoryStatusAvailable;
+			case "booking": return text.inventoryStatusBooking;
+			case "sold": return text.inventoryStatusSold;
+			default: return status;
+		}
+	}, [text.inventoryStatusAvailable, text.inventoryStatusBooking, text.inventoryStatusSold]);
+
 	const getActivityTypeLabel = useCallback((type: string) => {
 		switch (String(type || "").toLowerCase()) {
 			case "call": return text.activityTypeCall;
@@ -825,6 +827,11 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 		}
 	}, [text.resultFailed, text.resultPending, text.resultSuccess, text.statusDone]);
 
+	const getPipelineStageLabel = useCallback((stageId: string) => {
+		const match = pipelineStages.find((stage) => stage.id === String(stageId || ""));
+		return match?.label || stageId;
+	}, [pipelineStages]);
+
 	const taskStatusOptions = useMemo(
 		() => taskStatuses.map((status) => ({ label: getTaskStatusLabel(status), value: status })),
 		[getTaskStatusLabel, taskStatuses],
@@ -840,6 +847,15 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 		const candidates = Array.from(new Set([successValue, "pending", "failed"]));
 		return candidates.map((value) => ({ label: getActivityResultLabel(value), value }));
 	}, [activitySource?.appointmentSuccessValue, getActivityResultLabel]);
+
+	const inventoryStatusOptions = useMemo(
+		() => inventoryStatuses.map((status) => ({
+			value: status.id,
+			label: status.label || getInventoryStatusLabel(status.id),
+			color: status.color,
+		})),
+		[getInventoryStatusLabel, inventoryStatuses],
+	);
 	const [activeSection, setActiveSection] = useState<CrmSectionKey>(crmConfig.defaultSection || "pipeline");
 	const [searchText, setSearchText] = useState("");
 	const [selectedLeadId, setSelectedLeadId] = useState<string>("");
@@ -1125,20 +1141,20 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 		const taskDateField = taskSource?.dueDateField || "due_at";
 		const rows = [
 			...activityRows.map((row) => ({
-				kind: "activity",
+				kind: text.activities,
 				title: `${String(getActivityTypeLabel(String(row[activitySource?.contactTypeField || "activity_type"] || "other"))).toUpperCase()} - ${row[activitySource?.notesField || "notes"] || text.noData}`,
 				date: dayjs(toTimestamp(row[activityDateField]) || 0).format("YYYY-MM-DD"),
-				status: row[activitySource?.resultField || "result"] || "pending",
+				status: getActivityResultLabel(String(row[activitySource?.resultField || "result"] || "pending")),
 			})),
 			...taskRows.map((row) => ({
-				kind: "task",
+				kind: text.followupTasks,
 				title: row[taskSource?.titleKeyField || "title"] || text.taskTitle,
 				date: dayjs(toTimestamp(row[taskDateField]) || 0).format("YYYY-MM-DD"),
-				status: row[taskSource?.statusField || "status"] || "todo",
+				status: getTaskStatusLabel(String(row[taskSource?.statusField || "status"] || "todo")),
 			})),
 		];
 		return rows.filter((row) => row.date === target);
-	}, [calendarDate, activityRows, taskRows, activitySource, taskSource, getActivityTypeLabel, text.noData, text.taskTitle]);
+	}, [calendarDate, activityRows, taskRows, activitySource, taskSource, getActivityTypeLabel, getActivityResultLabel, getTaskStatusLabel, text.activities, text.followupTasks, text.noData, text.taskTitle]);
 
 	const exportAlert = useMemo(() => {
 		const threshold = security.exportAlertThreshold || 100;
@@ -1630,7 +1646,7 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 								style={{ width: 160 }}
 								value={inventoryStatusFilter || undefined}
 								onChange={(value) => setInventoryStatusFilter(value || "")}
-								options={inventoryStatuses.map((item) => ({ label: item.label, value: item.id }))}
+								options={inventoryStatusOptions.map((item) => ({ label: item.label, value: item.value }))}
 							/>
 							<Select
 								allowClear
@@ -1679,7 +1695,7 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 						{filteredInventoryRows.map((row) => {
 							const pk = getPrimaryKey(row, inventorySource);
 							const statusValue = String(row[inventorySource?.statusField || "status"] || "available");
-							const statusConfig = inventoryStatuses.find((item) => item.id === statusValue);
+							const statusConfig = inventoryStatusOptions.find((item) => item.value === statusValue);
 							const leadLinkField = crmConfig.inventory?.leadLinkField || inventorySource?.leadRefField || "lead_id";
 							const isLinked = selectedLead && String(row[leadLinkField] || "") === getPrimaryKey(selectedLead, leadSource);
 							return (
@@ -1725,7 +1741,7 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 							<Typography.Text type="secondary">{text.phone}: {maskPhone(selectedLead)}</Typography.Text>
 							<Typography.Text type="secondary">{text.project}: {selectedLead[leadProjectField] || text.noData}</Typography.Text>
 							<Typography.Text>{text.targetValue}: {formatCurrency(selectedLead[leadValueField], localeCode)}</Typography.Text>
-							<Tag color={workspaceTheme.info}>{selectedLead[leadStatusField] || "lead"}</Tag>
+							<Tag color={workspaceTheme.info}>{getPipelineStageLabel(String(selectedLead[leadStatusField] || "lead"))}</Tag>
 							<Divider style={{ margin: "8px 0" }} />
 							<Typography.Text strong>{text.interestedProducts}</Typography.Text>
 							<Space direction="vertical" size={8} style={{ width: "100%" }}>
@@ -1825,8 +1841,8 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 											]}
 										>
 											<Space direction="vertical" size={0} style={{ width: "100%" }}>
-												<Typography.Text>{String(row[activitySource?.contactTypeField || "activity_type"] || text.activities).toUpperCase()} - {row[activitySource?.notesField || "notes"] || text.noData}</Typography.Text>
-												<Typography.Text type="secondary">{formatDateTime(row[activitySource?.completedAtField || "completed_at"] || row[activitySource?.scheduledAtField || "scheduled_at"], localeCode, text.noData)} - {row[activitySource?.resultField || "result"] || "pending"}</Typography.Text>
+												<Typography.Text>{String(getActivityTypeLabel(String(row[activitySource?.contactTypeField || "activity_type"] || "other"))).toUpperCase()} - {row[activitySource?.notesField || "notes"] || text.noData}</Typography.Text>
+												<Typography.Text type="secondary">{formatDateTime(row[activitySource?.completedAtField || "completed_at"] || row[activitySource?.scheduledAtField || "scheduled_at"], localeCode, text.noData)} - {getActivityResultLabel(String(row[activitySource?.resultField || "result"] || "pending"))}</Typography.Text>
 											</Space>
 										</List.Item>
 									)}
@@ -1850,7 +1866,7 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 										>
 											<Space direction="vertical" size={0} style={{ width: "100%" }}>
 												<Typography.Text>{row[taskSource?.titleKeyField || "title"] || text.followupTasks}</Typography.Text>
-												<Typography.Text type="secondary">{text.due}: {formatDateTime(row[taskSource?.dueDateField || "due_at"], localeCode, text.noData)} - {row[taskSource?.statusField || "status"] || "todo"}</Typography.Text>
+												<Typography.Text type="secondary">{text.due}: {formatDateTime(row[taskSource?.dueDateField || "due_at"], localeCode, text.noData)} - {getTaskStatusLabel(String(row[taskSource?.statusField || "status"] || "todo"))}</Typography.Text>
 											</Space>
 										</List.Item>
 									)}
@@ -2167,7 +2183,7 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 							</Col>
 							<Col xs={24} md={12}>
 								<Form.Item name={inventorySource?.statusField || "status"} label={text.status}>
-									<Select getPopupContainer={resolvePopupContainer} options={inventoryStatuses.map((item) => ({ label: item.label, value: item.id }))} />
+									<Select getPopupContainer={resolvePopupContainer} options={inventoryStatusOptions.map((item) => ({ label: item.label, value: item.value }))} />
 								</Form.Item>
 							</Col>
 							<Col xs={24} md={12}>

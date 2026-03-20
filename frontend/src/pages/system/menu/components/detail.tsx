@@ -21,6 +21,7 @@ import FieldConfigEditor from "./FieldConfigEditor";
 import TriggerEditor from "./TriggerEditor";
 import type { TableField, TriggerConfig } from "#src/components/csm-grid/CsmDynamicGrid";
 import { CRM_CONFIG_TEMPLATE } from "#src/components/csm-crm";
+import { KANBAN_CONFIG_TEMPLATE } from "#src/components/csm-kanban";
 import { csmDecrypt } from "#src/components/csm-grid/CsmCrypto";
 import { useUserStore } from "#src/store/user";
 
@@ -355,6 +356,22 @@ export function Detail({
       }
     }
 
+    if (typeof values.kanban_config === "string") {
+    const trimmed = values.kanban_config.trim();
+    if (trimmed) {
+      try {
+        payload.kanban_config = JSON.parse(trimmed);
+      }
+      catch {
+        window.$message?.error("Kanban config phải là JSON hợp lệ");
+        return false;
+      }
+    }
+    else {
+      payload.kanban_config = undefined;
+    }
+  }
+
     if (values.config) {
       try {
         const parsed = JSON.parse(values.config);
@@ -455,6 +472,9 @@ export function Detail({
       }
       if (nextData.crm_config && typeof nextData.crm_config === 'object') {
         nextData.crm_config = JSON.stringify(nextData.crm_config, null, 2);
+      }
+      if (nextData.kanban_config && typeof nextData.kanban_config === 'object') {
+        nextData.kanban_config = JSON.stringify(nextData.kanban_config, null, 2);
       }
       
       setTableRows(Array.isArray(detailData.table) ? detailData.table : []);
@@ -682,6 +702,7 @@ export function Detail({
                 { label: t('system.menu.typeForm.dynamicLink') || 'Liên kết động (Dynamic Link)', value: 3 },
                 { label: t('system.menu.typeForm.dynamicCode') || 'Chạy code động (Dynamic Code)', value: 4 },
                 { label: t('system.menu.typeForm.crmWorkspace') || 'CRM Workspace', value: 5 },
+                { label: t('system.menu.typeForm.kanbanBoard') || 'Kanban Board', value: 6 },
               ]}
             />
             <div style={{ marginTop: 4, fontSize: 12, color: '#8c8c8c' }}>
@@ -789,6 +810,19 @@ export function Detail({
           );
         }
 
+    if (typeForm === 6) {
+      return (
+        <Alert
+          message="Menu dạng Kanban Board"
+          description="Menu này render board độc lập theo cấu hình menu, dùng chung CRUD với lưới động và hỗ trợ timeline hoặc báo cáo theo khoảng thời gian."
+          type="success"
+          showIcon
+          style={{ marginBottom: 16, marginTop: 16 }}
+          closable
+        />
+      );
+    }
+
         // Hiển thị cảnh báo khi menu là Dynamic Link
         if (typeForm === 3) {
           return (
@@ -835,6 +869,36 @@ export function Detail({
         </div>
       );
     }}
+  </ProFormDependency>
+
+  <ProFormDependency name={["type_form"]}>
+  {(values: Record<string, any>) => {
+    const typeForm = Number(values.type_form || 1);
+    if (typeForm !== 6) return null;
+
+    return (
+      <div style={{ marginBottom: 32, width: '100%' }}>
+        <Card
+          title={t('system.menu.kanbanConfigTitle') || 'Cấu hình Kanban Board'}
+          bordered
+          style={{ borderRadius: 10, boxShadow: '0 2px 8px #f0f1f2', padding: 0, width: '100%' }}
+          bodyStyle={{ padding: 20 }}
+        >
+          <ProFormTextArea
+            name="kanban_config"
+            fieldProps={{
+              rows: 20,
+              style: { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' },
+              placeholder: KANBAN_CONFIG_TEMPLATE,
+            }}
+          />
+          <div style={{ marginTop: 8, fontSize: 12, color: '#8c8c8c', whiteSpace: 'pre-line' }}>
+            {t('system.menu.kanbanConfigHint') || 'Khai báo JSON cho board độc lập: bảng nguồn, khóa chính, cột trạng thái, các stage hiển thị, chế độ kanban, timeline và báo cáo theo thời gian.'}
+          </div>
+        </Card>
+      </div>
+    );
+  }}
   </ProFormDependency>
 
     {/* Cài đặt cơ bản */}

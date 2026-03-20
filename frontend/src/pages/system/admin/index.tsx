@@ -2,10 +2,11 @@ import CsmDynamicGrid from "#src/components/csm-grid/CsmDynamicGrid";
 import CsmMasterDetail from "#src/components/csm-grid/CsmMasterDetail";
 import CsmReport from "#src/components/csm-report/CsmReport";
 import CsmCrmWorkspace, { collectCrmTableNames, normalizeMenuRuntimeConfig } from "#src/components/csm-crm";
+import CsmKanbanBoard from "#src/components/csm-kanban/CsmKanbanBoard";
 import DynamicCodeMenu from "#src/pages/system/dynamic-code";
 import { useAppStore, useUserStore, usePermissionStore, useTabsStore } from "#src/store";
 import { Empty, Spin, Alert } from "antd";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useParams, useLocation } from "react-router";
 import { getTableData } from "#src/components/csm-grid/CsmApi";
 import { useTranslation } from "react-i18next";
@@ -17,7 +18,7 @@ interface MenuData {
 	label: string;
 	table_name?: string;
 	report_name?: string;
-	type_form?: "" | 1 | 2 | 3 | 4 | 5;
+	type_form?: "" | 1 | 2 | 3 | 4 | 5 | 6;
 	row_type_edit?: 0 | 1;
 	[key: string]: any;
 }
@@ -48,12 +49,10 @@ export default function AdminPage() {
 	const [dbError, setDbError] = useState<string | null>(null);
 	const [reloadTrigger, setReloadTrigger] = useState(0);
 
-	// Merge in-memory updates from grids immediately without forcing a server reload
-	const handleDataChange = (newData: Record<string, { rows: any[] }>) => {
-		setTimeout(() => {
-			setDatabase(prev => ({ ...prev, ...newData }));
-		}, 0);
-	};
+	// Centralized refresh hook for dynamic grid/report/crm widgets.
+	const handleDataChange = useCallback(() => {
+		setReloadTrigger(prev => prev + 1);
+	}, []);
 
 	// Known system menu fallback map for translation when API lacks multilingual fields
 	const SYSTEM_MENU_I18N_MAP: Record<string, string> = {
@@ -287,10 +286,9 @@ export default function AdminPage() {
 	}, [menuData?.table_name, menuData?.crm_config, appId, reloadTrigger]);
 
 	// Refresh function for data changes
-	const refreshDatabase = () => {
-		// ...existing code...
+	const refreshDatabase = useCallback(() => {
 		setReloadTrigger(prev => prev + 1);
-	};
+	}, []);
 
 	// Theo dõi thay đổi ngôn ngữ và cập nhật giao diện
 	useEffect(() => {
@@ -299,7 +297,7 @@ export default function AdminPage() {
 			setReloadTrigger(prev => prev + 1); // Kích hoạt render lại lưới
 
 			// Tải lại dữ liệu lưới
-			if (menuData?.table_name) {
+			if (menuData?.table_name || menuData?.crm_config) {
 				loadTableData();
 			}
 		};
@@ -350,7 +348,43 @@ export default function AdminPage() {
 					appId={effectiveAppId}
 					menuData={runtimeMenuData}
 					database={database}
-					onDataChange={() => handleDataChange(database)}
+					onDataChange={handleDataChange}
+				/>
+			</div>
+		);
+	}
+
+	// Render standalone Kanban board (type_form = 6 or kanban_config present)
+	if (typeForm === 6 || (runtimeMenuData as any).kanban_config) {
+		return (
+			<div style={{ height: "100%" }}>
+				<CsmKanbanBoard
+					appId={effectiveAppId}
+					menuData={runtimeMenuData}
+					database={database}
+					onDataChange={handleDataChange}
+				/>
+			</div>
+		);
+	}
+
+	// Render dynamic code menu (type_form = 4) with higher priority than grid/report.
+	const hasAutoCodeName = !!(runtimeMenuData as any).auto_code_name || typeForm === 4;
+	if (hasAutoCodeName) {
+		return (
+			<div style={{ padding: 16, height: "100%" }}>
+				<DynamicCodeMenu menuId={menuId} menuData={runtimeMenuData} />
+			</div>
+		);
+	}
+
+	// Render report before grid when both fields exist.
+	if (runtimeMenuData.report_name) {
+		return (
+			<div style={{ padding: 16, height: "100%" }}>
+				<CsmReport
+					appId={effectiveAppId}
+					m_configs={runtimeMenuData}
 				/>
 			</div>
 		);
@@ -359,7 +393,7 @@ export default function AdminPage() {
 	// Render grid
 	if (runtimeMenuData.table_name) {
 		// Extract type_form and row_type_edit from backend, with support for override
-		let typeForm: "" | 1 | 2 | 3 | 4 | 5 = runtimeMenuData.type_form || "";
+		let typeForm: "" | 1 | 2 | 3 | 4 | 5 | 6 = runtimeMenuData.type_form || "";
 		let rowTypeEdit: 0 | 1 = runtimeMenuData.row_type_edit ?? 0;
 		
 		// Check localStorage for overrides (for testing purposes)
@@ -537,7 +571,7 @@ export default function AdminPage() {
 						database={database}
 						decrypt={(s: string) => s}
 						m_configs={{ ...m_configs, nodes }}
-						onDataChange={() => handleDataChange(database)}
+						onDataChange={handleDataChange}
 					/>
 				</div>
 			);
@@ -554,30 +588,8 @@ export default function AdminPage() {
 					menusPermissions={{}}
 					menuId={runtimeMenuData.id}
 					decrypt={(s: string) => s}
-					onDataChange={() => handleDataChange(database)}
+					onDataChange={handleDataChange}
 				/>
-			</div>
-		);
-	}
-
-	// Render report
-	if (runtimeMenuData.report_name) {
-		return (
-			<div style={{ padding: 16, height: "100%" }}>
-				<CsmReport
-					appId={effectiveAppId}
-					m_configs={runtimeMenuData}
-				/>
-			</div>
-		);
-	}
-
-	// Render dynamic code menu (type_form = 4)
-	const hasAutoCodeName = !!(runtimeMenuData as any).auto_code_name || typeForm === 4;
-	if (hasAutoCodeName) {
-		return (
-			<div style={{ padding: 16, height: "100%" }}>
-				<DynamicCodeMenu menuId={menuId} menuData={runtimeMenuData} />
 			</div>
 		);
 	}
