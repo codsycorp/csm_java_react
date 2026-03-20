@@ -732,6 +732,71 @@ ${resolvedContainerSelector} select {
   // Initialize window.csmUserData for auto-upload-lmkt.js compatibility
   // This matches the original AutoSetup.tsx implementation
   if (typeof window !== "undefined" && !(window as any).csmUserData) {
+    const parseUserAddress = (raw: any): any[] => {
+      if (Array.isArray(raw)) return raw;
+      if (typeof raw === "string" && raw.trim()) {
+        try {
+          const parsed = JSON.parse(raw);
+          return Array.isArray(parsed) ? parsed : [];
+        } catch {
+          return [];
+        }
+      }
+      return [];
+    };
+
+    const getIdentityCandidates = (currentUser: any) => {
+      const candidates = [
+        { field: "email", value: currentUser?.email },
+        { field: "username", value: currentUser?.username },
+        { field: "phone_number", value: currentUser?.phone_number || currentUser?.phoneNumber },
+        { field: "phoneNumber", value: currentUser?.phoneNumber || currentUser?.phone_number },
+        { field: "app_token", value: currentUser?.app_token || currentUser?.appToken },
+        { field: "id", value: currentUser?.id || currentUser?.user_id || currentUser?.account_id },
+      ];
+      return candidates.filter((x) => x.value !== undefined && x.value !== null && String(x.value).trim() !== "");
+    };
+
+    const getAppIdCandidates = (currentUser: any) => {
+      const appIds = [currentUser?.app_id, effectiveAppId, appId, "csm"]
+        .filter(Boolean)
+        .map((x) => String(x));
+      return Array.from(new Set(appIds));
+    };
+
+    const fetchAccountRow = async (): Promise<{ row: any; pkField: string; pkValue: any } | null> => {
+      const currentUser = (window as any).csmCurrentUser || {};
+      const identities = getIdentityCandidates(currentUser);
+      if (identities.length === 0) return null;
+
+      const appIds = getAppIdCandidates(currentUser);
+      for (const app_id of appIds) {
+        for (const identity of identities) {
+          try {
+            const response = await (window as any).csmApi.getTableData({
+              app_id,
+              obj_name: "csm_accounts",
+              where: {
+                field: identity.field,
+                type: "eq",
+                value: identity.value,
+              },
+              take: 1,
+            });
+
+            const rows = (response as any)?.rows || (response as any)?.data || [];
+            if (Array.isArray(rows) && rows.length > 0) {
+              return { row: rows[0], pkField: identity.field, pkValue: identity.value };
+            }
+          } catch {
+            // Try next candidate.
+          }
+        }
+      }
+
+      return null;
+    };
+
     (window as any).csmUserData = {
         /**
          * Get user_address from window.csmCurrentUser
@@ -739,14 +804,11 @@ ${resolvedContainerSelector} select {
         get: function(): any[] {
           try {
             const currentUser = (window as any).csmCurrentUser || {};
-            let arr = [];
-            if (typeof currentUser.user_address === "string") {
-              try { arr = JSON.parse(currentUser.user_address); } catch { arr = []; }
-            } else if (Array.isArray(currentUser.user_address)) {
-              arr = currentUser.user_address;
-            }
-            if (!Array.isArray(arr)) arr = [];
-            return arr;
+            const fromCurrentUser = parseUserAddress(currentUser.user_address);
+            if (fromCurrentUser.length > 0) return fromCurrentUser;
+
+            const localRaw = localStorage.getItem("user_address");
+            return parseUserAddress(localRaw);
           } catch {}
           return [];
         },
@@ -756,55 +818,25 @@ ${resolvedContainerSelector} select {
          */
         fetchFromDatabase: async function(callback?: (success: boolean, data?: any[], error?: string) => void): Promise<void> {
           try {
-            const currentUser = (window as any).csmCurrentUser || {};
-            let pkField = currentUser.email ? "email" : (currentUser.username ? "username" : (currentUser.phoneNumber ? "phoneNumber" : "app_token"));
-            let pkValue = currentUser.email || currentUser.username || currentUser.phoneNumber || currentUser.app_token;
-            
-            if (!pkValue) {
+            if (!(window as any).csmApi || !(window as any).csmApi.getTableData) {
+              if (typeof callback === "function") callback(false, [], "API not available");
+              return;
+            }
+
+            const account = await fetchAccountRow();
+            if (!account) {
               if (typeof callback === "function") callback(false, [], "No user info");
               return;
             }
 
-            if (window.csmApi && window.csmApi.getTableData) {
-              const response = await window.csmApi.getTableData({
-                app_id: effectiveAppId,
-                obj_name: "csm_accounts",
-                where: {
-                  field: pkField,
-                  type: "eq",
-                  value: pkValue
-                },
-                take: 1
-              });
+            const userAddress = parseUserAddress(account.row?.user_address);
 
-              const rows = (response as any)?.rows || (response as any)?.data || [];
-              if (rows.length > 0) {
-                const userData = rows[0];
-                let userAddress = [];
-                
-                if (typeof userData.user_address === "string") {
-                  try { userAddress = JSON.parse(userData.user_address); } catch { userAddress = []; }
-                } else if (Array.isArray(userData.user_address)) {
-                  userAddress = userData.user_address;
-                }
-                
-                // Update window.csmCurrentUser
-                if ((window as any).csmCurrentUser) {
-                  (window as any).csmCurrentUser.user_address = Array.isArray(userAddress) ? JSON.stringify(userAddress) : userAddress;
-                }
-                
-                // Update localStorage
-                if (Array.isArray(userAddress) && userAddress.length > 0) {
-                  localStorage.setItem('user_address', JSON.stringify(userAddress));
-                }
-                
-                if (typeof callback === "function") callback(true, userAddress);
-              } else {
-                if (typeof callback === "function") callback(false, [], "User not found");
-              }
-            } else {
-              if (typeof callback === "function") callback(false, [], "API not available");
-            }
+            (window as any).csmCurrentUser = (window as any).csmCurrentUser || {};
+            (window as any).csmCurrentUser.user_address = JSON.stringify(userAddress);
+
+            localStorage.setItem("user_address", JSON.stringify(userAddress));
+
+            if (typeof callback === "function") callback(true, userAddress);
           } catch (error: any) {
             if (typeof callback === "function") {
               callback(false, [], error?.message || String(error));
@@ -821,17 +853,17 @@ ${resolvedContainerSelector} select {
             let arr = Array.isArray(newUserData) ? newUserData : [];
             (window as any).csmCurrentUser = (window as any).csmCurrentUser || {};
             (window as any).csmCurrentUser.user_address = JSON.stringify(arr);
-            const currentUser = (window as any).csmCurrentUser;
-            let pkField = currentUser.email ? "email" : (currentUser.username ? "username" : (currentUser.phoneNumber ? "phoneNumber" : "app_token"));
-            let pkValue = currentUser.email || currentUser.username || currentUser.phoneNumber || currentUser.app_token;
-            if (!pkValue) {
+            localStorage.setItem("user_address", JSON.stringify(arr));
+
+            const account = await fetchAccountRow();
+            if (!account) {
               if (typeof callback === "function") callback(false, "No user info");
               return;
             }
             
             // Prepare update data
             const updateData: any = {
-              [pkField]: pkValue
+              [account.pkField]: account.pkValue
             };
             if (Array.isArray(arr) && arr.length > 0) {
               updateData.user_address = JSON.stringify(arr);
@@ -841,11 +873,11 @@ ${resolvedContainerSelector} select {
             
             if (window.csmApi && (window.csmApi as any).updateTableData) {
               const response = await (window.csmApi as any).updateTableData({
-                app_id: effectiveAppId,
+                app_id: String(account.row?.app_id || effectiveAppId || "csm"),
                 obj_name: "csm_accounts",
                 command: "update",
                 obj_update: updateData,
-                pk_fields: [pkField],
+                pk_fields: [account.pkField],
               });
               
               if (response?.success) {

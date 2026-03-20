@@ -18616,6 +18616,166 @@ function isZaloConfigItem(item) {
   return item.config_for_zalo === true || !!item.domain;
 }
 
+function normalizeDataOptionUserRecords(records) {
+  if (!Array.isArray(records)) return [];
+  return records.filter((item) => item && typeof item === 'object' && !isPostedZaloItem(item));
+}
+
+function logDataOptionUserSource(source, records, total) {
+  try {
+    const count = Array.isArray(records) ? records.length : 0;
+    const prevSource = window.__lastDataOptionUserSource || '';
+    const prevCount = Number(window.__lastDataOptionUserCount || -1);
+    window.__lastDataOptionUserSource = source;
+    window.__lastDataOptionUserCount = count;
+
+    if (prevSource !== source || prevCount !== count) {
+      console.log(`[LoadDataOptionUser][SOURCE] ${source} -> ${count}/${Number(total) || 0} records`);
+    }
+  } catch {
+    // Keep logging best-effort only.
+  }
+}
+
+function parseUserAddressArray(raw) {
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === 'string' && raw.trim() !== '') {
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+async function fetchDataOptionUserDirectFromServer() {
+  const api = window.csmApi;
+  const currentUser = window.csmCurrentUser || {};
+
+  if (!api || typeof api.getTableData !== 'function') {
+    return { success: false, data: [], error: 'csmApi.getTableData not available' };
+  }
+
+  const appIdCandidates = [];
+  if (currentUser.app_id) appIdCandidates.push(String(currentUser.app_id));
+  appIdCandidates.push('csm');
+  const uniqueAppIds = Array.from(new Set(appIdCandidates.filter(Boolean)));
+
+  const identityCandidates = [
+    { field: 'email', value: currentUser.email },
+    { field: 'username', value: currentUser.username },
+    { field: 'phoneNumber', value: currentUser.phoneNumber },
+    { field: 'app_token', value: currentUser.app_token || currentUser.appToken },
+    { field: 'id', value: currentUser.id || currentUser.user_id || currentUser.account_id }
+  ].filter((x) => x.value !== undefined && x.value !== null && String(x.value).trim() !== '');
+
+  for (const app_id of uniqueAppIds) {
+    for (const iden of identityCandidates) {
+      try {
+        const resp = await api.getTableData({
+          app_id,
+          obj_name: 'csm_accounts',
+          where: { field: iden.field, type: 'eq', value: iden.value },
+          take: 1
+        });
+        const rows = resp?.rows || resp?.data || [];
+        if (Array.isArray(rows) && rows.length > 0) {
+          const row = rows[0] || {};
+          const arr = parseUserAddressArray(row.user_address);
+          console.log(`[LoadDataOptionUser][DIRECT] Matched by ${iden.field} in app_id=${app_id}, user_address size=${arr.length}`);
+          return { success: true, data: arr, error: null };
+        }
+      } catch (e) {
+        console.warn(`[LoadDataOptionUser][DIRECT] Query failed (${iden.field}, app_id=${app_id}):`, e?.message || e);
+      }
+    }
+  }
+
+  return { success: false, data: [], error: 'Direct query no matching user' };
+}
+
+function syncDataOptionUserFromServerOnce(reason = 'auto') {
+  if (window.__dataOptionUserServerSyncInProgress) {
+    return;
+  }
+  if (window.__dataOptionUserServerSyncDone) {
+    return;
+  }
+  if (!window.csmUserData || typeof window.csmUserData.fetchFromDatabase !== 'function') {
+    return;
+  }
+
+  window.__dataOptionUserServerSyncInProgress = true;
+  console.log(`[LoadDataOptionUser][SYNC] Start fetchFromDatabase (${reason})...`);
+
+  window.csmUserData.fetchFromDatabase(function(success, data, error) {
+    window.__dataOptionUserServerSyncInProgress = false;
+
+    if (!success || !Array.isArray(data)) {
+      console.warn('[LoadDataOptionUser][SYNC] Fetch failed:', error || 'unknown');
+      const tryDirectFetch = async () => {
+        const direct = await fetchDataOptionUserDirectFromServer();
+        if (!direct.success || !Array.isArray(direct.data) || direct.data.length === 0) {
+          const fallbackFromCurrentUser = getRawDataOptionUserFromCurrentUserAddress();
+          if (Array.isArray(fallbackFromCurrentUser) && fallbackFromCurrentUser.length > 0) {
+            window.__dataOptionUserServerSyncDone = true;
+            window.dataUserOption = fallbackFromCurrentUser;
+            try { localStorage.setItem('user_address', JSON.stringify(fallbackFromCurrentUser)); } catch {}
+            try { localStorage.setItem('dataOptionUser', JSON.stringify(fallbackFromCurrentUser)); } catch {}
+            console.log(`[LoadDataOptionUser][SYNC] Fallback from csmCurrentUser.user_address: ${fallbackFromCurrentUser.length} items`);
+            window.dispatchEvent(new CustomEvent('csm:dataOptionUserSynced', {
+              detail: { source: 'csmCurrentUser.user_address', total: fallbackFromCurrentUser.length, usable: normalizeDataOptionUserRecords(fallbackFromCurrentUser).length }
+            }));
+            return;
+          }
+
+          const errorText = String(error || '').toLowerCase();
+          if (errorText.includes('user not found')) {
+            window.__dataOptionUserServerSyncRetryAfter = Date.now() + 30000;
+          }
+          return;
+        }
+
+        window.__dataOptionUserServerSyncDone = true;
+        window.dataUserOption = direct.data;
+        try { localStorage.setItem('user_address', JSON.stringify(direct.data)); } catch {}
+        try { localStorage.setItem('dataOptionUser', JSON.stringify(direct.data)); } catch {}
+        const usable = normalizeDataOptionUserRecords(direct.data);
+        console.log(`[LoadDataOptionUser][SYNC] Direct fetch success: ${direct.data.length} items, usable ${usable.length}`);
+        window.dispatchEvent(new CustomEvent('csm:dataOptionUserSynced', {
+          detail: { source: 'direct-csm_accounts', total: direct.data.length, usable: usable.length }
+        }));
+      };
+
+      void tryDirectFetch();
+      return;
+    }
+
+    window.__dataOptionUserServerSyncDone = true;
+    const records = normalizeDataOptionUserRecords(data);
+    window.dataUserOption = Array.isArray(data) ? data : [];
+
+    try {
+      localStorage.setItem('user_address', JSON.stringify(window.dataUserOption));
+    } catch (e) {
+      console.warn('[LoadDataOptionUser][SYNC] user_address backup failed:', e.message);
+    }
+
+    try {
+      localStorage.setItem('dataOptionUser', JSON.stringify(window.dataUserOption));
+    } catch (e) {
+      console.warn('[LoadDataOptionUser][SYNC] dataOptionUser backup failed:', e.message);
+    }
+
+    console.log(`[LoadDataOptionUser][SYNC] Done: fetched ${data.length} items, usable records ${records.length}`);
+    window.dispatchEvent(new CustomEvent('csm:dataOptionUserSynced', {
+      detail: { source: 'fetchFromDatabase', total: data.length, usable: records.length }
+    }));
+  });
+}
+
 function getRawDataOptionUserFromCsmUserData() {
   if (!window.csmUserData || typeof window.csmUserData.get !== 'function') {
     return null;
@@ -18628,6 +18788,28 @@ function getRawDataOptionUserFromCsmUserData() {
     return Array.isArray(arr) ? arr : [];
   } catch (e) {
     console.warn('⚠️ [RawDataOptionUser] csmUserData.get parse failed:', e.message);
+    return null;
+  }
+}
+
+function getRawDataOptionUserFromWindowDataUserOption() {
+  try {
+    const arr = window.dataUserOption;
+    return Array.isArray(arr) ? arr : null;
+  } catch (e) {
+    console.warn('⚠️ [RawDataOptionUser] window.dataUserOption read failed:', e.message);
+    return null;
+  }
+}
+
+function getRawDataOptionUserFromUserAddressStorage() {
+  try {
+    const raw = localStorage.getItem('user_address');
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e) {
+    console.warn('⚠️ [RawDataOptionUser] user_address parse failed:', e.message);
     return null;
   }
 }
@@ -18647,6 +18829,13 @@ function getRawDataOptionUserFromLocalStorage() {
 function getRawDataOptionUserSnapshot() {
   const fromCsm = getRawDataOptionUserFromCsmUserData();
   if (Array.isArray(fromCsm)) return fromCsm;
+
+  const fromWindowDataUserOption = getRawDataOptionUserFromWindowDataUserOption();
+  if (Array.isArray(fromWindowDataUserOption)) return fromWindowDataUserOption;
+
+  const fromUserAddress = getRawDataOptionUserFromUserAddressStorage();
+  if (Array.isArray(fromUserAddress)) return fromUserAddress;
+
   return getRawDataOptionUserFromLocalStorage();
 }
 
@@ -18676,43 +18865,87 @@ function loadDataOptionUser() {
         arr = JSON.parse(arr);
       }
       if (Array.isArray(arr) && arr.length > 0) {
-        const configs = arr.filter(isZaloConfigItem);
-        if (configs.length > 0) {
-          console.log(`✅ [LoadDataOptionUser] Loaded ${configs.length} configs from csmUserData.get() (filtered from ${arr.length} total items)`);
-          configs.forEach((cfg, i) => {
+        const records = normalizeDataOptionUserRecords(arr);
+        if (records.length > 0) {
+          console.log(`✅ [LoadDataOptionUser] Loaded ${records.length} records from csmUserData.get() (filtered from ${arr.length} total items)`);
+          logDataOptionUserSource('csmUserData.get', records, arr.length);
+          records.slice(0, 5).forEach((cfg, i) => {
             console.log(`   [${i}] id: ${cfg.id}, domain: ${cfg.domain}, config_for_zalo: ${cfg.config_for_zalo}, has fanpage_token: ${!!cfg.fanpage_token}`);
           });
-          return configs;
+          return records;
         }
-        console.warn('⚠️ [LoadDataOptionUser] csmUserData có dữ liệu nhưng không có config hợp lệ, thử fallback localStorage...');
+        console.warn('⚠️ [LoadDataOptionUser] csmUserData có dữ liệu nhưng không có record hợp lệ, thử fallback tiếp...');
       } else {
         console.log('   ⚠️ Result is not an array or empty');
+        syncDataOptionUserFromServerOnce('csmUserData.get empty');
       }
     } catch (e) {
       console.error('❌ Error loading from csmUserData:', e);
       console.error('   Stack:', e.stack);
+      syncDataOptionUserFromServerOnce('csmUserData.get error');
     }
   }
 
-  // Fallback: localStorage
-  console.log('   📍 Trying localStorage fallback...');
+  // Fallback #2: window.dataUserOption (tương thích seo.js)
+  console.log('   📍 Trying window.dataUserOption fallback...');
+  try {
+    const arr = Array.isArray(window.dataUserOption) ? window.dataUserOption : [];
+    if (arr.length > 0) {
+      const records = normalizeDataOptionUserRecords(arr);
+      if (records.length > 0) {
+        console.log(`⚠️ [LoadDataOptionUser] Loaded ${records.length} records from window.dataUserOption (filtered from ${arr.length} total items, FALLBACK #2)`);
+        logDataOptionUserSource('window.dataUserOption', records, arr.length);
+        return records;
+      }
+      console.warn('⚠️ [LoadDataOptionUser] window.dataUserOption có dữ liệu nhưng không có record hợp lệ, thử fallback user_address...');
+    }
+  } catch (e) {
+    console.warn('⚠️ [LoadDataOptionUser] window.dataUserOption fallback failed:', e.message);
+  }
+
+  // Fallback #3: localStorage.user_address (tương thích seo.js)
+  console.log('   📍 Trying localStorage user_address fallback...');
+  try {
+    const rawUserAddress = localStorage.getItem('user_address');
+    if (rawUserAddress) {
+      const parsedUserAddress = JSON.parse(rawUserAddress);
+      const arr = Array.isArray(parsedUserAddress) ? parsedUserAddress : [];
+      if (arr.length > 0) {
+        const records = normalizeDataOptionUserRecords(arr);
+        if (records.length > 0) {
+          console.log(`⚠️ [LoadDataOptionUser] Loaded ${records.length} records from localStorage.user_address (filtered from ${arr.length} total items, FALLBACK #3)`);
+          logDataOptionUserSource('localStorage.user_address', records, arr.length);
+          return records;
+        }
+        console.warn('⚠️ [LoadDataOptionUser] user_address có dữ liệu nhưng không có record hợp lệ, thử fallback dataOptionUser...');
+      }
+    }
+  } catch (e) {
+    console.warn('⚠️ [LoadDataOptionUser] user_address fallback failed:', e.message);
+  }
+
+  // Fallback #4: localStorage.dataOptionUser
+  console.log('   📍 Trying localStorage dataOptionUser fallback...');
   try {
     const raw = localStorage.getItem('dataOptionUser');
     if (!raw) {
-      console.log('❌ [LoadDataOptionUser] localStorage is empty');
+      console.log('❌ [LoadDataOptionUser] localStorage dataOptionUser is empty');
       return [];
     }
     const parsed = JSON.parse(raw);
-    
-    const configs = Array.isArray(parsed) ? parsed.filter(isZaloConfigItem) : [];
-    
-    console.log(`⚠️ [LoadDataOptionUser] Loaded ${configs.length} configs from localStorage (filtered from ${parsed.length} total items, FALLBACK MODE)`);
-    configs.forEach((cfg, i) => {
+
+    const sourceArray = Array.isArray(parsed) ? parsed : [];
+    const records = normalizeDataOptionUserRecords(sourceArray);
+
+    console.log(`⚠️ [LoadDataOptionUser] Loaded ${records.length} records from localStorage.dataOptionUser (filtered from ${sourceArray.length} total items, FALLBACK #4)`);
+    logDataOptionUserSource('localStorage.dataOptionUser', records, sourceArray.length);
+    records.slice(0, 5).forEach((cfg, i) => {
       console.log(`   [${i}] id: ${cfg.id}, domain: ${cfg.domain}, config_for_zalo: ${cfg.config_for_zalo}`);
     });
-    return configs;
+    return records;
   } catch (e) {
     console.error('❌ Lỗi load dataOptionUser from localStorage:', e);
+    logDataOptionUserSource('none(error)', [], 0);
     return [];
   }
 }
@@ -18729,8 +18962,17 @@ function fetchDataOptionUserFromServer(callback) {
         console.log('[Zalo] ✅ Fetched', data.length, 'items from server');
         callback(true, data, null);
       } else {
-        console.warn('[Zalo] ❌ Failed to fetch from server:', error);
-        callback(false, null, error);
+        console.warn('[Zalo] ❌ Failed to fetch from server:', error, '- trying direct csm_accounts query...');
+        fetchDataOptionUserDirectFromServer().then((direct) => {
+          if (direct.success && Array.isArray(direct.data)) {
+            console.log('[Zalo] ✅ Direct fetch success:', direct.data.length, 'items');
+            callback(true, direct.data, null);
+          } else {
+            callback(false, null, error || direct.error || 'User not found');
+          }
+        }).catch((e) => {
+          callback(false, null, error || e?.message || 'User not found');
+        });
       }
     });
   } else {
