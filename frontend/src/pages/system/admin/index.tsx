@@ -2,7 +2,7 @@ import CsmDynamicGrid from "#src/components/csm-grid/CsmDynamicGrid";
 import CsmMasterDetail from "#src/components/csm-grid/CsmMasterDetail";
 import CsmReport from "#src/components/csm-report/CsmReport";
 import CsmCrmWorkspace, { collectCrmTableNames, normalizeMenuRuntimeConfig } from "#src/components/csm-crm";
-import CsmKanbanBoard from "#src/components/csm-kanban/CsmKanbanBoard";
+import { CsmKanbanBoard } from "#src/components/csm-kanban";
 import DynamicCodeMenu from "#src/pages/system/dynamic-code";
 import { useAppStore, useUserStore, usePermissionStore, useTabsStore } from "#src/store";
 import { Empty, Spin, Alert } from "antd";

@@ -10,7 +10,7 @@ import * as CsmApi from "#src/components/csm-grid/CsmApi";
 import { csmDecrypt, csmEncrypt } from "#src/components/csm-grid/CsmCrypto";
 import CsmDynamicGrid from "#src/components/csm-grid/CsmDynamicGrid";
 import CsmCrmWorkspace from "#src/components/csm-crm/CsmCrmWorkspace";
-import CsmKanbanBoard from "#src/components/csm-kanban/CsmKanbanBoard";
+import { CsmKanbanBoard } from "#src/components/csm-kanban";
 import { generateSeoContent, csm_ai_generate_seo_content, generateSeoContentWithPrompt, formatSeoPrompt, PROMPT_GENERATE_POST } from "#src/api/ai";
 import { useAppStore } from "#src/store/app";
 import { useUserStore } from "#src/store/user";
