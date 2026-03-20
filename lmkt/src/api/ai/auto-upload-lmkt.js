@@ -1879,13 +1879,118 @@ function calculateStringSimilarity(str1 = "", str2 = "") {
   return Math.max(0, similarity);
 }
 
+// ============================================================================
+// Pixelmatch – so sánh hình ảnh thumbnail để phát hiện bài trùng
+// Tự load Pixelmatch qua dynamic import (CDN), không cần cài thêm package.
+// ============================================================================
+
+/**
+ * Lazy-load Pixelmatch từ CDN (chỉ tải 1 lần, cache trong window.__pixelmatchLib).
+ * @returns {Function|null} pixelmatch function hoặc null nếu không tải được
+ */
+async function loadPixelmatch() {
+  if (window.__pixelmatchLib) return window.__pixelmatchLib;
+  try {
+    const mod = await import('https://cdn.jsdelivr.net/npm/pixelmatch@5.3.0/+esm');
+    const fn = mod.default || mod;
+    if (typeof fn !== 'function') throw new Error('Pixelmatch export is not a function');
+    window.__pixelmatchLib = fn;
+    console.log('[Pixelmatch] ✅ Tải Pixelmatch thành công từ CDN');
+    return fn;
+  } catch (e) {
+    console.warn('[Pixelmatch] ⚠️ Không tải được Pixelmatch:', e?.message);
+    return null;
+  }
+}
+
+/**
+ * Load ảnh từ URL, vẽ lên canvas kích thước cố định, trả về ImageData pixels.
+ * @param {string} url - URL ảnh (phải cho phép CORS hoặc same-origin)
+ * @param {number} w - Chiều rộng canvas
+ * @param {number} h - Chiều cao canvas
+ * @param {Map} [cache] - Cache tái sử dụng giữa các lần so sánh
+ * @returns {Promise<Uint8ClampedArray|null>}
+ */
+async function loadImageToCanvasPixels(url, w, h, cache) {
+  if (!url) return null;
+  const cacheKey = `${url}||${w}x${h}`;
+  if (cache && cache.has(cacheKey)) return cache.get(cacheKey);
+
+  return new Promise((resolve) => {
+    try {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      // Timeout 8 giây để tránh treo khi ảnh không phản hồi
+      const timer = setTimeout(() => resolve(null), 8000);
+      img.onload = () => {
+        clearTimeout(timer);
+        try {
+          const canvas = document.createElement('canvas');
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, w, h);
+          const pixels = ctx.getImageData(0, 0, w, h).data;
+          if (cache) cache.set(cacheKey, pixels);
+          resolve(pixels);
+        } catch {
+          resolve(null);
+        }
+      };
+      img.onerror = () => { clearTimeout(timer); resolve(null); };
+      img.src = url;
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+/**
+ * So sánh 2 URL thumbnail bằng Pixelmatch, trả về similarity 0–1 hoặc null.
+ * - null = không thể so sánh (load thất bại, CORS, v.v.)
+ * - 1.0  = giống hệt nhau
+ * - 0.0  = hoàn toàn khác nhau
+ * @param {string} url1
+ * @param {string} url2
+ * @param {Object} [opts]
+ * @param {Map}    [pixelCache] - Cache pixels để tái sử dụng trong 1 phiên dedup
+ * @returns {Promise<number|null>}
+ */
+async function compareThumbnailsPixelmatch(url1, url2, opts = {}, pixelCache) {
+  if (!url1 || !url2) return null;
+  if (url1 === url2) return 1;
+
+  const w = opts.thumbWidth  || 64;
+  const h = opts.thumbHeight || 64;
+
+  try {
+    const pixelmatch = await loadPixelmatch();
+    if (!pixelmatch) return null;
+
+    const [px1, px2] = await Promise.all([
+      loadImageToCanvasPixels(url1, w, h, pixelCache),
+      loadImageToCanvasPixels(url2, w, h, pixelCache),
+    ]);
+
+    if (!px1 || !px2) return null;
+
+    const diff = new Uint8Array(w * h * 4);
+    const numDiff = pixelmatch(px1, px2, diff, w, h, { threshold: 0.1 });
+    const similarity = 1 - numDiff / (w * h);
+    return Math.max(0, Math.min(1, similarity));
+  } catch (e) {
+    console.warn('[Pixelmatch] compareThumbnails lỗi:', e?.message);
+    return null;
+  }
+}
+
 /**
  * Phát hiện các bài viết trùng lặp theo nhiều tiêu chí
  * @param {Array} articles - Danh sách bài viết từ database
  * @param {Object} opts - Options
  * @returns {Array} - Mảng nhóm duplicate [{groupId, articles, reason}]
  */
-function findDuplicateArticles(articles = [], opts = {}) {
+async function findDuplicateArticles(articles = [], opts = {}) {
   if (!Array.isArray(articles) || articles.length < 2) return [];
   
   const titleSimilarityThreshold = opts.titleThreshold || 0.75; // 75%
@@ -1894,6 +1999,8 @@ function findDuplicateArticles(articles = [], opts = {}) {
   
   const duplicateGroups = [];
   const processed = new Set();
+  // Cache pixel data trong toàn bộ phiên dedup để không load lại ảnh trùng
+  const pixelCache = new Map();
   
   console.log(`[findDuplicateArticles] Bắt đầu phát hiện trùng lặp - ${articles.length} bài viết`);
   
@@ -1959,6 +2066,23 @@ function findDuplicateArticles(articles = [], opts = {}) {
           }
         } catch (e) {
           // Ignore image parsing error
+        }
+      }
+
+      // ✅ CRITERIUM 4: Visual thumbnail similarity via Pixelmatch (phương án cuối cùng)
+      // Chỉ chạy khi 3 tiêu chí trên không phát hiện được trùng, để tránh so sánh không cần thiết.
+      if (!isDuplicate) {
+        const thumbUrl1 = mainArticle.image || mainArticle.thumbnail || "";
+        const thumbUrl2 = compareArticle.image || compareArticle.thumbnail || "";
+        if (thumbUrl1 && thumbUrl2 && thumbUrl1 !== thumbUrl2) {
+          const thumbSim = await compareThumbnailsPixelmatch(thumbUrl1, thumbUrl2, {}, pixelCache);
+          if (thumbSim !== null) {
+            const thumbThreshold = opts.thumbnailThreshold || 0.85; // 85% giống nhau
+            if (thumbSim >= thumbThreshold) {
+              isDuplicate = true;
+              reason.push(`thumbnail-visual-${Math.round(thumbSim * 100)}%`);
+            }
+          }
         }
       }
       
@@ -2515,10 +2639,11 @@ async function cleanupDuplicatesByServiceType(domainValue, serviceType, projectC
     
     // 2️⃣ Phát hiện trùng lặp
     console.log(`\n   🔍 Đang phát hiện bài trùng lặp...`);
-    const duplicateGroups = findDuplicateArticles(articles, {
+    const duplicateGroups = await findDuplicateArticles(articles, {
       titleThreshold: 0.75,
       contentHashThreshold: true,
-      imageThreshold: 0.5
+      imageThreshold: 0.5,
+      thumbnailThreshold: 0.85
     });
     
     if (duplicateGroups.length === 0) {
