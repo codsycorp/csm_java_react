@@ -2280,7 +2280,7 @@
         steps: [
           { id: "data", tab: "data", entity: "leads", title: "1. 标准化基础数据", desc: "在 CRM 数据中心先建立最小可用的线索与房源数据，作为全系统输入基础。", criteria: "至少有1条线索和1条房源记录。" },
           { id: "pipeline", tab: "crm", title: "2. 校验 CRM 工作台", desc: "进入 CRM 工作台，确认销售阶段、负责人与预估金额展示正确。", criteria: "CRM 工作台可看到线索列表。" },
-          { id: "activities", tab: "data", entity: "activities", title: "3. 记录互动历史", desc: "在数据中心选择"活动"实体，创建电话、会面、带看等记录并关联线索，确保跟进历史完整。", criteria: "至少有1条活动记录。" },
+          { id: "activities", tab: "data", entity: "activities", title: "3. 记录互动历史", desc: '在数据中心选择"活动"实体，创建电话、会面、带看等记录并关联线索，确保跟进历史完整。', criteria: "至少有1条活动记录。" },
           { id: "tasks", tab: "sales", title: "4. 运行新版销售看板", desc: "在统一 Sales Board 中使用看板、时间线、报表三种模式执行任务并按销售阶段跟踪时效。", criteria: "至少有1条任务可在 Sales Board 中查看。" },
           { id: "marketing", tab: "marketing", title: "5. 启动营销运营", desc: "配置活动参数、粉丝页/Token，并创建广告记录，把线索持续导入 CRM。", criteria: "系统中至少有1条广告记录。" },
           { id: "analytics", tab: "marketing", title: "6. 对齐端到端结果", desc: "查看线索、流量、ROI 等指标，确认数据已从数据中心到工作台、销售看板再到分析模块完整贯通。", criteria: "已有可分析的线索或流量指标。" },
