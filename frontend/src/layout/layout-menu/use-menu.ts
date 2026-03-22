@@ -230,8 +230,9 @@ export function useMenu() {
 		return translateMenus(menusForTranslation, t, currentLanguage);
 	}, [menusForTranslation, t, currentLanguage]);
 
-		// Xác định user có phải dev không từ user store
+		// Xác định quyền dev/admin từ user store
 		const isDev = useUserStore(state => resolveDevFlag(state.dev, state.roles));
+		const isAdmin = useUserStore(state => (state.roles || []).some(r => r.trim().toLowerCase() === "admin"));
 
 	const { pathname } = useCurrentRoute();
 	/**
@@ -244,12 +245,28 @@ export function useMenu() {
 
 	// Áp dụng logic autoFixMenu vào translatedMenus
 	const processedMenus = useMemo(() => {
-		// Ẩn hoàn toàn menu hệ thống (/system) với user không có quyền dev
-		const filteredForDev = !isDev
+		// Ẩn hoàn toàn menu hệ thống (/system) chỉ với user không có quyền dev/admin
+		const canSeeSystemMenus = isDev || isAdmin;
+		const filteredForDev = !canSeeSystemMenus
 			? translatedMenus.filter(item => item?.key !== '/system' && item?.path !== '/system' && item?.id !== 'system')
 			: translatedMenus;
 
-		const result = autoFixMenu(filteredForDev, isDev);
+		// Với admin (không phải dev): loại bỏ triệt để các mục dev-only trong nhánh /system
+		const filteredForRole = (canSeeSystemMenus && !isDev)
+			? filteredForDev.map((item: any) => {
+				if (item?.key !== '/system' && item?.path !== '/system' && item?.id !== 'system') {
+					return item;
+				}
+				const devOnlyPaths = new Set(['/system/menu', '/system/developer', '/system/broadcast']);
+				const children = Array.isArray(item.children) ? item.children : [];
+				return {
+					...item,
+					children: children.filter((child: any) => !devOnlyPaths.has(child?.key || child?.path || '')),
+				};
+			})
+			: filteredForDev;
+
+		const result = autoFixMenu(filteredForRole, isDev);
 		const preserveMenuIds = (items: any[]): any[] => {
 			return items.map(item => {
 				const processed = { ...item };
@@ -286,7 +303,7 @@ export function useMenu() {
 		};
 		const cleanedMenus = cleanupMenuItems(finalResult);
 		return cleanedMenus;
-	}, [translatedMenus, isDev, currentLanguage]);
+	}, [translatedMenus, isDev, isAdmin, currentLanguage]);
 
 	/* 混合菜单模式下需要拆分 menu 的 items */
 	const splitSideNavItems = useMemo(

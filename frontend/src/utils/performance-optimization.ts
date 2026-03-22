@@ -68,7 +68,26 @@ export function preloadHeroImage() {
 
     // Skip favicon/logo-like resources to avoid preload-not-used warning
     const normalizedHero = hero.toLowerCase();
-    if (normalizedHero.includes("icon.png") || normalizedHero.includes("favicon")) {
+    if (
+      normalizedHero.includes("icon.png")
+      || normalizedHero.includes("favicon")
+      || normalizedHero.includes("/icon")
+      || normalizedHero.includes("/logo")
+    ) {
+      return;
+    }
+
+    // Only preload if the hero candidate appears in the current DOM as an image source.
+    // This prevents warnings on routes where meta image is not rendered above the fold.
+    const matchingImage = document.querySelector(
+      `img[src="${hero}"], img[data-src="${hero}"]`
+    );
+    if (!matchingImage) return;
+
+    // Avoid preloading tiny assets that are unlikely to be LCP.
+    const width = Number((matchingImage as HTMLImageElement).getAttribute("width") || 0);
+    const height = Number((matchingImage as HTMLImageElement).getAttribute("height") || 0);
+    if (width > 0 && height > 0 && width * height < 120000) {
       return;
     }
 

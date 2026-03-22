@@ -58,17 +58,19 @@ export function RouterGuards() {
 			);
 		}
 		
-		// Admin system routes are only accessible to dev users.
-		// IMPORTANT: Dynamic grid routes (/system/grid/...) are NOT admin routes and must remain accessible.
 		const currentPath = location.pathname;
-		const isAdminSystemRoute = currentPath.startsWith("/system") && !currentPath.startsWith("/system/grid");
+		const isDynamicSystemGridRoute = currentPath.startsWith("/system/grid");
 		
-		if (isAdminSystemRoute) {
-			console.warn("🔒 Admin system route access denied: User role", userRoles, "is not 'dev'. Only dev users can access admin system routes.");
-			return <Navigate to="/error/403" replace />;
+		// Dynamic /system/grid routes are runtime menus and should inherit backend menu permissions.
+		// Keep them accessible for authenticated users.
+		if (isDynamicSystemGridRoute) {
+			return (
+				<ErrorBoundary FallbackComponent={PageError}>
+					<Outlet />
+				</ErrorBoundary>
+			);
 		}
 		
-		// For non-system routes, check if user has required roles (admin or user)
 		const hasRequiredRole = routeHandle.roles.some((requiredRole: string) => 
 			userRoles.includes(requiredRole)
 		);

@@ -582,6 +582,7 @@ export async function getTableData<T>(params: {
 	take?: number
 	lastkey?: any
 }) {
+	const TABLE_DATA_TIMEOUT_MS = 120000;
 	// In-memory cache to avoid repeated identical requests
 	const cacheKey = (() => {
 		let whereKey = "";
@@ -606,7 +607,11 @@ export async function getTableData<T>(params: {
 		...(params.lastkey ? { lastkey: params.lastkey } : {}),
 	};
 	const promise = request
-		.post<ApiListResponse<T>>("get-table-data", { json: payload, ignoreLoading: true })
+		.post<ApiListResponse<T>>("get-table-data", {
+			json: payload,
+			ignoreLoading: true,
+			timeout: TABLE_DATA_TIMEOUT_MS,
+		})
 		.json<ApiListResponse<T>>()
 		.then((res) => {
 			return res;

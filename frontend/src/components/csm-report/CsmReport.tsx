@@ -391,7 +391,9 @@ export default function CsmReport({ appId, m_configs, decrypt }: CsmReportProps)
 
       const dataUri: string = await (html2pdf as any)().set(opt).from(html.toString()).outputPdf("datauristring");
       setReportSrc(dataUri);
-      document.body.removeChild(container);
+      if (container.parentNode && container.parentNode.contains(container)) {
+        container.parentNode.removeChild(container);
+      }
     } catch (e: any) {
       console.error(e);
       message.error(e?.message || "Lỗi tạo báo cáo");

@@ -78,7 +78,7 @@
   const uiTranslations = {
     vi: {
       crmTitle: "CRM Kinh doanh",
-      crmDescription: "Quản lý toàn bộ sales pipeline, kho hàng, hoạt động và analytics theo thời gian thực.",
+      crmDescription: "Quản lý toàn bộ sales pipeline, giỏ hàng, hoạt động và analytics theo thời gian thực.",
       pipelineLead: "Mới",
       pipelineContacted: "Đã liên hệ",
       pipelineVisit: "Tham quan dự án",
@@ -169,6 +169,60 @@
       salesPipelineBoard: "Độ phủ task theo pipeline",
       salesTimelineTitle: "Dòng thời gian ưu tiên",
       salesTimelineEmpty: "Không có công việc phù hợp với bộ lọc hiện tại.",
+      salesReportTitle: "Báo cáo hiệu suất NVKD",
+      salesReportDesc: "Tổng hợp KPI thực tế theo tuần và doanh số theo từng nhân sự.",
+      salesAiReviewTitle: "AI đánh giá năng suất Sales",
+      salesAiReviewDesc: "AI tổng hợp năng suất theo nhân sự, nêu điểm nghẽn và đề xuất hành động ưu tiên theo chu kỳ 7/30 ngày.",
+      salesAiGenerate: "AI phân tích hiệu suất",
+      salesAiEmpty: "Chưa có kết quả AI. Hãy bấm phân tích để tạo bản đánh giá.",
+      salesAiOverview: "Tổng quan",
+      salesAiTeamHealth: "Điểm sức khỏe đội Sales",
+      salesAiTopWins: "Điểm mạnh nổi bật",
+      salesAiRisks: "Rủi ro cần xử lý",
+      salesAiOwnerReviews: "Đánh giá theo nhân sự",
+      salesAiAction7d: "Kế hoạch 7 ngày",
+      salesAiAction30d: "Kế hoạch 30 ngày",
+      salesAiLastUpdated: "Cập nhật AI",
+      salesAiFailed: "AI phân tích hiệu suất thất bại",
+      salesScoreboardTitle: "Bảng điểm năng suất theo trọng số",
+      salesScoreboardDesc: "Chấm điểm tổng hợp theo doanh thu, deal, hoạt động, hoàn thành task và mức quá hạn.",
+      salesScoreRank: "Xếp hạng",
+      salesWeightedScore: "Điểm tổng",
+      salesRevenueScore: "Điểm doanh thu",
+      salesDealScore: "Điểm chốt deal",
+      salesActivityScore: "Điểm hoạt động",
+      salesTaskScore: "Điểm task",
+      salesPenaltyScore: "Điểm phạt quá hạn",
+      salesEarlyWarningTitle: "Cảnh báo sớm hiệu suất",
+      salesEarlyWarningDesc: "Phát hiện nguy cơ giảm năng suất liên tiếp để quản lý can thiệp sớm.",
+      salesWarningLowScore: "{name}: điểm năng suất thấp ({score}), cần coaching ngay.",
+      salesWarningDropTrend: "{name}: xu hướng giảm {days} kỳ liên tiếp, cần can thiệp sớm.",
+      salesWarningNone: "Không phát hiện cảnh báo sớm trong chu kỳ gần nhất.",
+      salesAiHistoryTitle: "Lịch sử đánh giá AI",
+      salesAiHistoryDesc: "Lưu các lần AI đánh giá để theo dõi xu hướng cải thiện theo thời gian.",
+      salesAiHistoryEmpty: "Chưa có lịch sử đánh giá AI.",
+      salesAiHistoryAvgScore: "Điểm TB đội",
+      salesChatCareTitle: "Chăm sóc khách chat từ website",
+      salesChatCareDesc: "Theo dõi hội thoại website theo nhân viên phụ trách để quản lý chất lượng chăm sóc khách hàng.",
+      salesChatRefresh: "Tải lại chat web",
+      salesChatLoading: "Đang tải dữ liệu chat website...",
+      salesChatLoadFailed: "Không thể tải dữ liệu chat website",
+      salesChatNoData: "Chưa có hội thoại chat website trong phạm vi hiện tại.",
+      salesChatConversations: "Hội thoại",
+      salesChatWaiting: "Đang chờ phản hồi",
+      salesChatUnassigned: "Chưa gán phụ trách",
+      salesChatAvgFirstResponse: "Phản hồi đầu tiên TB",
+      salesChatSla: "Đạt SLA 15 phút",
+      salesChatOwnerTableTitle: "Bảng chăm sóc theo nhân viên",
+      salesChatPendingTableTitle: "Khách đang chờ xử lý",
+      salesChatGuestPhone: "SĐT khách",
+      salesChatLastMessageAt: "Tin nhắn cuối",
+      salesChatWaitingMinutes: "Chờ (phút)",
+      salesChatOwnerHandled: "Số hội thoại phụ trách",
+      salesChatOwnerReplies: "Lượt phản hồi",
+      salesChatOwnerAvgResponse: "Phản hồi đầu tiên TB",
+      salesChatOwnerSlaRate: "Tỷ lệ đạt SLA",
+      salesChatAiSignal: "Tín hiệu từ chat web",
       completionRate: "Tỷ lệ hoàn thành",
       tasksWithoutLead: "Task chưa gắn lead",
       unassigned: "Chưa phân công",
@@ -183,9 +237,10 @@
       crmCrudTitle: "Trung tâm dữ liệu CRM",
       crmCrudDesc: "Trung tâm dữ liệu CRM mới quản lý đồng nhất Lead, Inventory, Activity và Task; mọi thay đổi cập nhật tức thì cho Workspace, Sales Board và Analytics.",
       entityLeads: "Khách hàng tiềm năng",
-      entityInventory: "Sản phẩm / giỏ giữ chỗ",
+      entityInventory: "Giỏ hàng phân bổ",
       entityActivities: "Hoạt động",
       entityTasks: "Công việc",
+      entitySalesReports: "Báo cáo NVKD",
       crudCreateTitle: "Thêm mới dữ liệu",
       crudEditTitle: "Chỉnh sửa dữ liệu",
       crudDeleteTitle: "Xoá dữ liệu",
@@ -246,6 +301,14 @@
       field_bedrooms: "Số phòng ngủ",
       field_direction: "Hướng",
       field_lead_id: "Mã cơ hội",
+      field_basket_type: "Loại giỏ",
+      field_allocation_qty: "Số lượng phân bổ",
+      field_allocated_until: "Hiệu lực đến",
+      field_parent_basket_id: "Giỏ tổng",
+      field_requested_extra_qty: "SL xin cấp thêm",
+      field_request_extra_status: "Trạng thái duyệt",
+      field_requested_by: "Người yêu cầu",
+      field_approved_by: "Người duyệt",
       field_activity_type: "Loại hoạt động",
       field_result: "Kết quả",
       field_owner_id: "Người phụ trách",
@@ -256,6 +319,33 @@
       field_task_type: "Loại công việc",
       field_due_at: "Hạn xử lý",
       field_reminder_at: "Nhắc việc lúc",
+      field_customer_title: "Danh xưng",
+      field_address: "Địa chỉ",
+      field_phone_last4: "4 số cuối",
+      field_sales_name: "Tên NV Sale",
+      field_team_name: "Đội nhóm",
+      field_visit_date: "Ngày tham quan",
+      field_unit_type: "Loại căn",
+      field_view_name: "View",
+      field_area_net_m2: "Diện tích thông thủy (m2)",
+      field_area_gross_m2: "Diện tích tim tường (m2)",
+      field_price_vn: "Giá bán hành (VN)",
+      field_price_foreign: "Giá bán hành (Nước ngoài)",
+      field_report_date: "Ngày báo cáo",
+      field_owner_name: "Nhân sự",
+      field_calls_total: "Số cuộc gọi",
+      field_spam_total: "Spam Zalo/FB",
+      field_interaction_total: "Đăng tương tác",
+      field_video_posts: "Đăng video",
+      field_old_customer_care: "Chăm sóc khách cũ",
+      field_new_data_today: "Data mới trong ngày",
+      field_new_customers_week: "Khách phát sinh tuần",
+      field_meetings_week: "Khách gặp tuần",
+      field_visits_week: "Khách xem dự án tuần",
+      field_follow_needs: "Khách cần theo dõi",
+      field_deals_month: "Giao dịch tháng",
+      field_target_revenue: "Chỉ tiêu doanh số",
+      field_actual_revenue: "Doanh số hoàn thành",
       inventoryFilterArea: "Diện tích",
       inventoryFilterDirection: "Hướng",
       inventoryFilterBedrooms: "Phòng ngủ",
@@ -292,11 +382,28 @@
       indexQueue: "Queue Index",
       crmUpdated: "CRM đã cập nhật",
       crmUpdatedDesc: "Dữ liệu đã đồng bộ, bạn có thể tiếp tục thao tác.",
+      basketTypeGlobal: "Giỏ tổng",
+      basketTypeAllocated: "Giỏ NVKD",
+      basketTypePending: "Chờ duyệt cấp thêm",
+      approvalPending: "Chờ duyệt",
+      approvalApproved: "Đã duyệt",
+      approvalRejected: "Từ chối",
+      basketRequestExtra: "Xin cấp thêm",
+      basketApprove: "Duyệt",
+      basketReject: "Từ chối",
+      basketReturn: "Trả giỏ tổng",
+      basketRevoke: "Thu hồi",
+      basketRequestSubmitted: "Đã gửi yêu cầu cấp thêm",
+      basketRequestApproved: "Đã duyệt yêu cầu cấp thêm",
+      basketRequestDenied: "Đã từ chối yêu cầu cấp thêm",
+      basketReturned: "Đã trả về giỏ tổng",
+      basketRevoked: "Đã thu hồi về giỏ tổng",
+      basketWorkflowDenied: "Bạn không có quyền thao tác giỏ hàng này",
       dynamicInitError: "Không thể khởi tạo CRM dynamic code:",
     },
     en: {
       crmTitle: "Sales CRM",
-      crmDescription: "Manage the full sales pipeline, inventory, activities, and analytics in real time.",
+      crmDescription: "Manage the full sales pipeline, basket allocation, activities, and analytics in real time.",
       pipelineLead: "New",
       pipelineContacted: "Contacted",
       pipelineVisit: "Site Visit",
@@ -387,6 +494,60 @@
       salesPipelineBoard: "Pipeline task coverage",
       salesTimelineTitle: "Priority timeline",
       salesTimelineEmpty: "No tasks match the current filters.",
+      salesReportTitle: "Sales KPI Report",
+      salesReportDesc: "Weekly activity KPI and revenue completion by sales owner.",
+      salesAiReviewTitle: "AI Sales Productivity Review",
+      salesAiReviewDesc: "AI summarizes productivity per sales owner, highlights bottlenecks, and proposes prioritized 7/30-day actions.",
+      salesAiGenerate: "Run AI performance review",
+      salesAiEmpty: "No AI review yet. Click analyze to generate one.",
+      salesAiOverview: "Overview",
+      salesAiTeamHealth: "Sales Team Health Score",
+      salesAiTopWins: "Top strengths",
+      salesAiRisks: "Risks to fix",
+      salesAiOwnerReviews: "Owner-level review",
+      salesAiAction7d: "7-day action plan",
+      salesAiAction30d: "30-day action plan",
+      salesAiLastUpdated: "AI updated",
+      salesAiFailed: "AI performance review failed",
+      salesScoreboardTitle: "Weighted productivity scoreboard",
+      salesScoreboardDesc: "Composite score from revenue, deals, activity, task completion, and overdue penalties.",
+      salesScoreRank: "Rank",
+      salesWeightedScore: "Overall score",
+      salesRevenueScore: "Revenue score",
+      salesDealScore: "Deal score",
+      salesActivityScore: "Activity score",
+      salesTaskScore: "Task score",
+      salesPenaltyScore: "Overdue penalty",
+      salesEarlyWarningTitle: "Early productivity warnings",
+      salesEarlyWarningDesc: "Detect continuous productivity declines so managers can intervene early.",
+      salesWarningLowScore: "{name}: low productivity score ({score}), immediate coaching needed.",
+      salesWarningDropTrend: "{name}: declining trend for {days} consecutive periods, early intervention required.",
+      salesWarningNone: "No early warning signals detected in recent periods.",
+      salesAiHistoryTitle: "AI review history",
+      salesAiHistoryDesc: "Store AI review runs to track improvement trends over time.",
+      salesAiHistoryEmpty: "No AI review history yet.",
+      salesAiHistoryAvgScore: "Team avg score",
+      salesChatCareTitle: "Website chat customer care",
+      salesChatCareDesc: "Track website chat conversations by assigned sales owners to improve customer-care quality.",
+      salesChatRefresh: "Refresh web chat",
+      salesChatLoading: "Loading website chat data...",
+      salesChatLoadFailed: "Unable to load website chat data",
+      salesChatNoData: "No website chat conversations found in the current scope.",
+      salesChatConversations: "Conversations",
+      salesChatWaiting: "Waiting for response",
+      salesChatUnassigned: "Unassigned",
+      salesChatAvgFirstResponse: "Avg first response",
+      salesChatSla: "15-min SLA",
+      salesChatOwnerTableTitle: "Owner care scoreboard",
+      salesChatPendingTableTitle: "Customers waiting for support",
+      salesChatGuestPhone: "Guest phone",
+      salesChatLastMessageAt: "Last message",
+      salesChatWaitingMinutes: "Waiting (mins)",
+      salesChatOwnerHandled: "Handled conversations",
+      salesChatOwnerReplies: "Replies",
+      salesChatOwnerAvgResponse: "Avg first response",
+      salesChatOwnerSlaRate: "SLA pass rate",
+      salesChatAiSignal: "Website chat signals",
       completionRate: "Completion rate",
       tasksWithoutLead: "Tasks without linked lead",
       unassigned: "Unassigned",
@@ -401,9 +562,10 @@
       crmCrudTitle: "CRM Data Operations Center",
       crmCrudDesc: "The new CRM Data Center unifies Lead, Inventory, Activity, and Task CRUD so updates instantly propagate to Workspace, Sales Board, and Analytics.",
       entityLeads: "Leads",
-      entityInventory: "Inventory / Reservation Basket",
+      entityInventory: "Sales Basket Allocation",
       entityActivities: "Activities",
       entityTasks: "Tasks",
+      entitySalesReports: "Sales reports",
       crudCreateTitle: "Create record",
       crudEditTitle: "Edit record",
       crudDeleteTitle: "Delete record",
@@ -464,6 +626,14 @@
       field_bedrooms: "Bedrooms",
       field_direction: "Direction",
       field_lead_id: "Lead ID",
+      field_basket_type: "Basket type",
+      field_allocation_qty: "Allocated quantity",
+      field_allocated_until: "Valid until",
+      field_parent_basket_id: "Global basket",
+      field_requested_extra_qty: "Requested extra qty",
+      field_request_extra_status: "Approval status",
+      field_requested_by: "Requested by",
+      field_approved_by: "Approved by",
       field_activity_type: "Activity type",
       field_result: "Result",
       field_owner_id: "Owner",
@@ -474,6 +644,33 @@
       field_task_type: "Task type",
       field_due_at: "Due at",
       field_reminder_at: "Reminder at",
+      field_customer_title: "Title",
+      field_address: "Address",
+      field_phone_last4: "Last 4 digits",
+      field_sales_name: "Sales name",
+      field_team_name: "Team",
+      field_visit_date: "Visit date",
+      field_unit_type: "Unit type",
+      field_view_name: "View",
+      field_area_net_m2: "Net area (m2)",
+      field_area_gross_m2: "Gross area (m2)",
+      field_price_vn: "Price (VN)",
+      field_price_foreign: "Price (Foreign)",
+      field_report_date: "Report date",
+      field_owner_name: "Sales owner",
+      field_calls_total: "Calls",
+      field_spam_total: "Spam Zalo/FB",
+      field_interaction_total: "Interactions",
+      field_video_posts: "Video posts",
+      field_old_customer_care: "Old customer care",
+      field_new_data_today: "New data today",
+      field_new_customers_week: "New customers this week",
+      field_meetings_week: "Meetings this week",
+      field_visits_week: "Project visits this week",
+      field_follow_needs: "Need follow-up",
+      field_deals_month: "Deals this month",
+      field_target_revenue: "Revenue target",
+      field_actual_revenue: "Revenue achieved",
       inventoryFilterArea: "Area",
       inventoryFilterDirection: "Direction",
       inventoryFilterBedrooms: "Bedrooms",
@@ -510,11 +707,28 @@
       indexQueue: "Index queue",
       crmUpdated: "CRM updated",
       crmUpdatedDesc: "Data has been synchronized. You can continue working.",
+      basketTypeGlobal: "Global basket",
+      basketTypeAllocated: "Sales basket",
+      basketTypePending: "Pending extra quota",
+      approvalPending: "Pending",
+      approvalApproved: "Approved",
+      approvalRejected: "Rejected",
+      basketRequestExtra: "Request extra quota",
+      basketApprove: "Approve",
+      basketReject: "Reject",
+      basketReturn: "Return to global",
+      basketRevoke: "Revoke",
+      basketRequestSubmitted: "Extra quota request submitted",
+      basketRequestApproved: "Extra quota request approved",
+      basketRequestDenied: "Extra quota request rejected",
+      basketReturned: "Basket returned to global pool",
+      basketRevoked: "Basket revoked to global pool",
+      basketWorkflowDenied: "You do not have permission for this basket action",
       dynamicInitError: "Unable to initialize CRM dynamic code:",
     },
     zh: {
       crmTitle: "销售 CRM",
-      crmDescription: "实时管理完整销售漏斗、库存、活动与分析。",
+      crmDescription: "实时管理完整销售漏斗、销售篮子、活动与分析。",
       pipelineLead: "新线索",
       pipelineContacted: "已联系",
       pipelineVisit: "到访项目",
@@ -605,6 +819,60 @@
       salesPipelineBoard: "销售阶段任务覆盖",
       salesTimelineTitle: "优先级时间线",
       salesTimelineEmpty: "当前筛选条件下没有任务。",
+      salesReportTitle: "销售绩效报表",
+      salesReportDesc: "按人员汇总每周行为 KPI 与业绩达成。",
+      salesAiReviewTitle: "AI 销售效率评估",
+      salesAiReviewDesc: "AI 按人员汇总效率、识别瓶颈，并给出 7/30 天优先改进动作。",
+      salesAiGenerate: "AI 分析绩效",
+      salesAiEmpty: "尚无 AI 评估结果，请先执行分析。",
+      salesAiOverview: "总体概览",
+      salesAiTeamHealth: "销售团队健康分",
+      salesAiTopWins: "核心优势",
+      salesAiRisks: "关键风险",
+      salesAiOwnerReviews: "人员评估",
+      salesAiAction7d: "7 天行动计划",
+      salesAiAction30d: "30 天行动计划",
+      salesAiLastUpdated: "AI 更新时间",
+      salesAiFailed: "AI 绩效分析失败",
+      salesScoreboardTitle: "加权效率评分板",
+      salesScoreboardDesc: "按业绩、成交、活动、任务完成与超期惩罚综合评分。",
+      salesScoreRank: "排名",
+      salesWeightedScore: "总分",
+      salesRevenueScore: "业绩分",
+      salesDealScore: "成交分",
+      salesActivityScore: "活动分",
+      salesTaskScore: "任务分",
+      salesPenaltyScore: "超期惩罚分",
+      salesEarlyWarningTitle: "效率预警",
+      salesEarlyWarningDesc: "识别连续效率下滑，便于管理者提前干预。",
+      salesWarningLowScore: "{name}：效率分偏低（{score}），建议立即辅导。",
+      salesWarningDropTrend: "{name}：连续 {days} 个周期下滑，需尽快干预。",
+      salesWarningNone: "近期未发现效率预警信号。",
+      salesAiHistoryTitle: "AI 评估历史",
+      salesAiHistoryDesc: "保存 AI 评估记录，用于跟踪效率提升趋势。",
+      salesAiHistoryEmpty: "暂无 AI 评估历史。",
+      salesAiHistoryAvgScore: "团队平均分",
+      salesChatCareTitle: "网站聊天客户维护",
+      salesChatCareDesc: "按销售负责人跟踪网站聊天会话，帮助管理者完整评估客户维护质量。",
+      salesChatRefresh: "刷新网站聊天",
+      salesChatLoading: "正在加载网站聊天数据...",
+      salesChatLoadFailed: "无法加载网站聊天数据",
+      salesChatNoData: "当前范围暂无网站聊天会话。",
+      salesChatConversations: "会话数",
+      salesChatWaiting: "待回复会话",
+      salesChatUnassigned: "未分配",
+      salesChatAvgFirstResponse: "首次响应均值",
+      salesChatSla: "15 分钟 SLA",
+      salesChatOwnerTableTitle: "按人员维护看板",
+      salesChatPendingTableTitle: "待处理客户",
+      salesChatGuestPhone: "客户手机号",
+      salesChatLastMessageAt: "最后消息时间",
+      salesChatWaitingMinutes: "等待（分钟）",
+      salesChatOwnerHandled: "负责会话数",
+      salesChatOwnerReplies: "回复次数",
+      salesChatOwnerAvgResponse: "首次响应均值",
+      salesChatOwnerSlaRate: "SLA 达标率",
+      salesChatAiSignal: "网站聊天信号",
       completionRate: "完成率",
       tasksWithoutLead: "未关联线索的任务",
       unassigned: "未分配",
@@ -619,9 +887,10 @@
       crmCrudTitle: "CRM 数据运营中心",
       crmCrudDesc: "新版 CRM 数据中心统一维护线索、房源、活动与任务，变更会实时同步到工作台、销售看板与分析模块。",
       entityLeads: "线索",
-      entityInventory: "房源 / 锁定清单",
+      entityInventory: "销售篮子分配",
       entityActivities: "活动",
       entityTasks: "任务",
+      entitySalesReports: "销售报表",
       crudCreateTitle: "新增数据",
       crudEditTitle: "编辑数据",
       crudDeleteTitle: "删除数据",
@@ -682,6 +951,14 @@
       field_bedrooms: "卧室数",
       field_direction: "朝向",
       field_lead_id: "线索编号",
+      field_basket_type: "篮子类型",
+      field_allocation_qty: "分配数量",
+      field_allocated_until: "有效期至",
+      field_parent_basket_id: "总篮子",
+      field_requested_extra_qty: "申请追加数量",
+      field_request_extra_status: "审批状态",
+      field_requested_by: "申请人",
+      field_approved_by: "审批人",
       field_activity_type: "活动类型",
       field_result: "结果",
       field_owner_id: "负责人",
@@ -692,6 +969,33 @@
       field_task_type: "任务类型",
       field_due_at: "截止时间",
       field_reminder_at: "提醒时间",
+      field_customer_title: "称呼",
+      field_address: "地址",
+      field_phone_last4: "手机号后四位",
+      field_sales_name: "销售姓名",
+      field_team_name: "团队",
+      field_visit_date: "到访日期",
+      field_unit_type: "户型",
+      field_view_name: "景观",
+      field_area_net_m2: "套内面积（m2）",
+      field_area_gross_m2: "建筑面积（m2）",
+      field_price_vn: "售价（本地）",
+      field_price_foreign: "售价（外籍）",
+      field_report_date: "报表日期",
+      field_owner_name: "销售人员",
+      field_calls_total: "电话量",
+      field_spam_total: "Zalo/FB 触达",
+      field_interaction_total: "互动发布",
+      field_video_posts: "视频发布",
+      field_old_customer_care: "老客维护",
+      field_new_data_today: "当日新增数据",
+      field_new_customers_week: "周新增客户",
+      field_meetings_week: "周会面客户",
+      field_visits_week: "周带看客户",
+      field_follow_needs: "待跟进客户",
+      field_deals_month: "月成交",
+      field_target_revenue: "业绩目标",
+      field_actual_revenue: "实际业绩",
       inventoryFilterArea: "面积",
       inventoryFilterDirection: "朝向",
       inventoryFilterBedrooms: "卧室",
@@ -728,6 +1032,23 @@
       indexQueue: "索引队列",
       crmUpdated: "CRM 已更新",
       crmUpdatedDesc: "数据已同步，可以继续操作。",
+      basketTypeGlobal: "总篮子",
+      basketTypeAllocated: "销售篮子",
+      basketTypePending: "待审批追加",
+      approvalPending: "待审批",
+      approvalApproved: "已批准",
+      approvalRejected: "已拒绝",
+      basketRequestExtra: "申请追加",
+      basketApprove: "批准",
+      basketReject: "拒绝",
+      basketReturn: "退回总篮子",
+      basketRevoke: "回收",
+      basketRequestSubmitted: "追加申请已提交",
+      basketRequestApproved: "追加申请已批准",
+      basketRequestDenied: "追加申请已拒绝",
+      basketReturned: "已退回总篮子",
+      basketRevoked: "已回收至总篮子",
+      basketWorkflowDenied: "你无权执行该篮子操作",
       dynamicInitError: "无法初始化 CRM dynamic code：",
     },
   };
@@ -1038,6 +1359,12 @@
         statusField: "status",
         titleField: "name",
         phoneField: "phone",
+        phoneLast4Field: "phone_last4",
+        addressField: "address",
+        customerTitleField: "customer_title",
+        salesNameField: "sales_name",
+        teamNameField: "team_name",
+        visitDateField: "visit_date",
         projectField: "project_name",
         valueField: "expected_value",
         sourceField: "source",
@@ -1055,8 +1382,14 @@
         statusField: "status",
         titleField: "product_name",
         productCodeField: "product_code",
+        unitTypeField: "unit_type",
         projectField: "project_name",
         leadRefField: "lead_id",
+        viewField: "view_name",
+        netAreaField: "area_net_m2",
+        grossAreaField: "area_gross_m2",
+        localPriceField: "price_vn",
+        foreignPriceField: "price_foreign",
         areaField: "area_m2",
         directionField: "direction",
         bedroomField: "bedrooms",
@@ -1088,6 +1421,15 @@
         pkField: "id",
         assignedToField: "owner_id",
         createdAtField: "created_at",
+      },
+      salesReports: {
+        tableName: "crm_sales_reports",
+        pkField: "id",
+        reportDateField: "report_date",
+        ownerIdField: "owner_id",
+        ownerNameField: "owner_name",
+        targetRevenueField: "target_revenue",
+        actualRevenueField: "actual_revenue",
       },
     },
     pipeline: {
@@ -1167,6 +1509,7 @@
     crmConfig.dataSources.activities.tableName,
     crmConfig.dataSources.tasks.tableName,
     crmConfig.dataSources.exports.tableName,
+    crmConfig.dataSources.salesReports?.tableName,
   ].filter(Boolean);
 
   function applyContainerLayout(containerEl, scopedId) {
@@ -1286,7 +1629,10 @@
         id: "",
         app_id: appId,
         phone: "",
+        phone_last4: "",
         name: "",
+        customer_title: "",
+        address: "",
         email: "",
         birthday: "",
         status: "lead",
@@ -1297,9 +1643,12 @@
         referrer: "",
         landing_page: "",
         assigned_to: "",
+        sales_name: "",
         team_id: "",
+        team_name: "",
         notes: "",
         project_name: "",
+        visit_date: "",
         expected_value: 0,
         interested_product_ids: "[]",
         created_at: 0,
@@ -1307,16 +1656,34 @@
         last_contact_at: 0,
       },
       [crmConfig.dataSources.leads.pkField || "id"],
-      ["id", "phone", "name", "email", "status", "source", "project_name", "assigned_to"]
+      ["id", "phone", "phone_last4", "name", "customer_title", "status", "source", "project_name", "assigned_to", "sales_name", "team_name"]
     ),
     [crmConfig.dataSources.inventory.tableName]: createStruct(
       {
         id: "",
         product_code: "",
         product_name: "",
+        unit_type: "",
         project_name: "",
         status: "available",
         lead_id: "",
+        basket_type: "global",
+        allocation_qty: 0,
+        allocated_until: 0,
+        owner_id: "",
+        parent_basket_id: "",
+        requested_extra_qty: 0,
+        request_extra_status: "approved",
+        requested_by: "",
+        approved_by: "",
+        approved_at: 0,
+        returned_at: 0,
+        revoked_at: 0,
+        view_name: "",
+        area_net_m2: 0,
+        area_gross_m2: 0,
+        price_vn: 0,
+        price_foreign: 0,
         area_m2: 0,
         direction: "",
         bedrooms: 0,
@@ -1325,7 +1692,7 @@
         updated_at: 0,
       },
       [crmConfig.dataSources.inventory.pkField || "id"],
-      ["id", "product_code", "product_name", "project_name", "status"]
+      ["id", "product_code", "product_name", "unit_type", "project_name", "status", "basket_type", "owner_id", "request_extra_status", "view_name"]
     ),
     [crmConfig.dataSources.activities.tableName]: createStruct(
       {
@@ -1370,6 +1737,32 @@
       },
       [crmConfig.dataSources.exports.pkField || "id"],
       ["id", "owner_id", "action", "created_at"]
+    ),
+    [crmConfig.dataSources.salesReports?.tableName || "crm_sales_reports"]: createStruct(
+      {
+        id: "",
+        report_date: "",
+        owner_id: "",
+        owner_name: "",
+        calls_total: 0,
+        spam_total: 0,
+        interaction_total: 0,
+        video_posts: 0,
+        old_customer_care: 0,
+        new_data_today: 0,
+        new_customers_week: 0,
+        meetings_week: 0,
+        visits_week: 0,
+        follow_needs: 0,
+        deals_month: 0,
+        target_revenue: 0,
+        actual_revenue: 0,
+        notes: "",
+        created_at: 0,
+        updated_at: 0,
+      },
+      [crmConfig.dataSources.salesReports?.pkField || "id"],
+      ["id", "report_date", "owner_id", "owner_name"]
     ),
     [crmConfig.security.exportLogTable || "crm_export_logs"]: createStruct(
       {
@@ -1567,11 +1960,14 @@
       const expectedValue = toNumber(row[source.valueField], 0);
       const status = normalizeAlias(row[source.statusField], STAGE_ALIASES, leadDefaultStatus);
       const linkedProducts = parseArrayLike(row[source.productIdsField]);
+      const phoneRaw = String(row[source.phoneField] || row.phone || "").trim();
+      const normalizedLast4 = String(row[source.phoneLast4Field] || row.phone_last4 || phoneRaw.slice(-4) || "").replace(/\D/g, "").slice(-4);
       return {
         ...row,
         id,
         [source.pkField]: id,
         [source.statusField]: status,
+        [source.phoneLast4Field || "phone_last4"]: normalizedLast4,
         [source.valueField]: expectedValue,
         [source.createdAtField]: createdAt,
         [source.updatedAtField]: updatedAt,
@@ -1585,14 +1981,38 @@
     return rows.map((row, index) => {
       const id = String(row[source.pkField] || row.id || `inv_${index}_${now}`);
       const status = normalizeAlias(row[source.statusField], STATUS_ALIASES, inventoryDefaultStatus);
+      const localPrice = toNumber(row[source.localPriceField || "price_vn"], toNumber(row[source.priceField], 0));
+      const netArea = toNumber(row[source.netAreaField || "area_net_m2"], toNumber(row[source.areaField], 0));
+      const basketTypeRaw = String(row.basket_type || "").toLowerCase();
+      const basketType = ["global", "allocated", "pending"].includes(basketTypeRaw)
+        ? basketTypeRaw
+        : (String(row.owner_id || "").trim() ? "allocated" : "global");
+      const approvalRaw = String(row.request_extra_status || "").toLowerCase();
+      const approvalStatus = ["pending", "approved", "rejected"].includes(approvalRaw) ? approvalRaw : "approved";
       return {
         ...row,
         id,
         [source.pkField]: id,
         [source.statusField]: status,
-        [source.priceField]: toNumber(row[source.priceField], 0),
-        [source.areaField]: toNumber(row[source.areaField], 0),
+        basket_type: basketType,
+        allocation_qty: toNumber(row.allocation_qty, 0),
+        allocated_until: toNumber(row.allocated_until, 0),
+        owner_id: String(row.owner_id || row.assigned_to || "").trim(),
+        parent_basket_id: String(row.parent_basket_id || "").trim(),
+        requested_extra_qty: toNumber(row.requested_extra_qty, 0),
+        request_extra_status: approvalStatus,
+        requested_by: String(row.requested_by || "").trim(),
+        approved_by: String(row.approved_by || "").trim(),
+        approved_at: toNumber(row.approved_at, 0),
+        returned_at: toNumber(row.returned_at, 0),
+        revoked_at: toNumber(row.revoked_at, 0),
+        [source.localPriceField || "price_vn"]: localPrice,
+        [source.priceField]: localPrice,
+        [source.netAreaField || "area_net_m2"]: netArea,
+        [source.grossAreaField || "area_gross_m2"]: toNumber(row[source.grossAreaField || "area_gross_m2"], 0),
+        [source.areaField]: netArea,
         [source.bedroomField]: toNumber(row[source.bedroomField], 0),
+        [source.foreignPriceField || "price_foreign"]: toNumber(row[source.foreignPriceField || "price_foreign"], 0),
       };
     });
   }
@@ -1652,20 +2072,60 @@
     });
   }
 
+  function normalizeSalesReportRows(rows) {
+    const source = crmConfig.dataSources.salesReports || {};
+    const pkField = source.pkField || "id";
+    return rows.map((row, index) => {
+      const id = String(row[pkField] || row.id || `sale_report_${index}_${now}`);
+      const targetRevenue = toNumber(row[source.targetRevenueField || "target_revenue"], 0);
+      const actualRevenue = toNumber(row[source.actualRevenueField || "actual_revenue"], 0);
+      return {
+        ...row,
+        id,
+        [pkField]: id,
+        report_date: String(row[source.reportDateField || "report_date"] || row.report_date || ""),
+        owner_id: String(row[source.ownerIdField || "owner_id"] || row.owner_id || ""),
+        owner_name: String(row[source.ownerNameField || "owner_name"] || row.owner_name || ""),
+        calls_total: toNumber(row.calls_total, 0),
+        spam_total: toNumber(row.spam_total, 0),
+        interaction_total: toNumber(row.interaction_total, 0),
+        video_posts: toNumber(row.video_posts, 0),
+        old_customer_care: toNumber(row.old_customer_care, 0),
+        new_data_today: toNumber(row.new_data_today, 0),
+        new_customers_week: toNumber(row.new_customers_week, 0),
+        meetings_week: toNumber(row.meetings_week, 0),
+        visits_week: toNumber(row.visits_week, 0),
+        follow_needs: toNumber(row.follow_needs, 0),
+        deals_month: toNumber(row.deals_month, 0),
+        [source.targetRevenueField || "target_revenue"]: targetRevenue,
+        [source.actualRevenueField || "actual_revenue"]: actualRevenue,
+        completion_rate: targetRevenue > 0 ? (actualRevenue * 100) / targetRevenue : 0,
+        updated_at: toNumber(row.updated_at, now),
+        created_at: toNumber(row.created_at, now),
+      };
+    });
+  }
+
   function makeSeedData() {
     const uid = (seft?.user?.userId || seft?.user?.username || "sale_01");
     const team = (seft?.user?.team_id || "team_a");
     const leads = [
       {
         id: "LEAD001",
+        customer_title: "Anh",
         name: "Nguyen Van An",
         phone: "0909000111",
+        phone_last4: "0111",
+        address: "Q7, TP.HCM",
         status: "lead",
         source: "facebook",
         project_name: "Celesta Riverside",
         expected_value: 3500000000,
         assigned_to: uid,
+        sales_name: "Nguyen Van An",
         team_id: team,
+        team_name: "Doi A",
+        visit_date: new Date(now).toISOString().slice(0, 10),
         interested_product_ids: JSON.stringify(["INV001"]),
         created_at: now - 36 * 60 * 60 * 1000,
         updated_at: now - 30 * 60 * 60 * 1000,
@@ -1673,14 +2133,20 @@
       },
       {
         id: "LEAD002",
+        customer_title: "Chi",
         name: "Le Thi Bich",
         phone: "0933000222",
+        phone_last4: "0222",
+        address: "Thu Duc, TP.HCM",
         status: "site_visit",
         source: "website",
         project_name: "Lumiere Boulevard",
         expected_value: 5200000000,
         assigned_to: uid,
+        sales_name: "Le Thi Bich",
         team_id: team,
+        team_name: "Doi A",
+        visit_date: new Date(now - 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
         interested_product_ids: JSON.stringify(["INV003", "INV004"]),
         created_at: now - 10 * 24 * 60 * 60 * 1000,
         updated_at: now - 6 * 60 * 60 * 1000,
@@ -1688,14 +2154,20 @@
       },
       {
         id: "LEAD003",
+        customer_title: "Anh",
         name: "Pham Quoc Cuong",
         phone: "0977000333",
+        phone_last4: "0333",
+        address: "Binh Thanh, TP.HCM",
         status: "booking",
         source: "walkin",
         project_name: "Masteri Centre Point",
         expected_value: 4100000000,
         assigned_to: "sale_02",
+        sales_name: "Pham Quoc Cuong",
         team_id: "team_b",
+        team_name: "Doi B",
+        visit_date: new Date(now - 2 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
         interested_product_ids: JSON.stringify(["INV005"]),
         created_at: now - 7 * 24 * 60 * 60 * 1000,
         updated_at: now - 4 * 60 * 60 * 1000,
@@ -1704,11 +2176,11 @@
     ];
 
     const inventory = [
-      { id: "INV001", product_code: "A1-1208", product_name: "Can ho A1-1208", project_name: "Celesta Riverside", status: "available", area_m2: 72, bedrooms: 2, direction: "Dong Nam", price: 3400000000 },
-      { id: "INV002", product_code: "A2-0910", product_name: "Can ho A2-0910", project_name: "Celesta Riverside", status: "booking", area_m2: 85, bedrooms: 3, direction: "Tay Nam", price: 4500000000 },
-      { id: "INV003", product_code: "B3-1802", product_name: "Can ho B3-1802", project_name: "Lumiere Boulevard", status: "available", area_m2: 64, bedrooms: 2, direction: "Dong Bac", price: 3900000000 },
-      { id: "INV004", product_code: "B3-1506", product_name: "Can ho B3-1506", project_name: "Lumiere Boulevard", status: "sold", area_m2: 78, bedrooms: 2, direction: "Nam", price: 4700000000 },
-      { id: "INV005", product_code: "C1-2201", product_name: "Can ho C1-2201", project_name: "Masteri Centre Point", status: "booking", area_m2: 95, bedrooms: 3, direction: "Dong", price: 5400000000 },
+      { id: "INV001", product_code: "C1.2-07-04", product_name: "Can C1.2-07-04", unit_type: "2PN 2WC", project_name: "The Win City", status: "available", view_name: "Phan khu Glory Sky", area_net_m2: 62.3, area_gross_m2: 68.3, area_m2: 62.3, bedrooms: 2, direction: "N", price_vn: 2036000000, price_foreign: 2138000000, price: 2036000000 },
+      { id: "INV002", product_code: "C1.2-12A-17", product_name: "Can C1.2-12A-17", unit_type: "2PN 1WC", project_name: "The Win City", status: "booking", view_name: "Phan khu Glory Sky", area_net_m2: 46.0, area_gross_m2: 50.2, area_m2: 46.0, bedrooms: 2, direction: "N", price_vn: 1573000000, price_foreign: 1652000000, price: 1573000000 },
+      { id: "INV003", product_code: "C1.3-15-20", product_name: "Can C1.3-15-20", unit_type: "2PN 1WC", project_name: "The Win City", status: "available", view_name: "To hop tien ich Victory Central", area_net_m2: 47.2, area_gross_m2: 51.6, area_m2: 47.2, bedrooms: 2, direction: "S", price_vn: 1774000000, price_foreign: 1863000000, price: 1774000000 },
+      { id: "INV004", product_code: "C2.2-21-08", product_name: "Can C2.2-21-08", unit_type: "2PN 1WC", project_name: "The Win City", status: "sold", view_name: "Noi khu", area_net_m2: 46.0, area_gross_m2: 50.2, area_m2: 46.0, bedrooms: 2, direction: "S", price_vn: 1639000000, price_foreign: 1720000000, price: 1639000000 },
+      { id: "INV005", product_code: "C2.3-26-08", product_name: "Can C2.3-26-08", unit_type: "2PN 2WC", project_name: "The Win City", status: "booking", view_name: "Noi khu", area_net_m2: 59.8, area_gross_m2: 65.6, area_m2: 59.8, bedrooms: 2, direction: "S", price_vn: 2074000000, price_foreign: 2178000000, price: 2074000000 },
     ];
 
     const activities = [
@@ -1727,12 +2199,54 @@
       { id: "EXP002", owner_id: uid, created_at: now - 10 * 60 * 60 * 1000 },
     ];
 
+    const salesReports = [
+      {
+        id: "REPORT001",
+        report_date: new Date(now).toISOString().slice(0, 10),
+        owner_id: uid,
+        owner_name: "Nguyen Thi Kieu Oanh",
+        calls_total: 16,
+        spam_total: 300,
+        interaction_total: 6,
+        video_posts: 6,
+        old_customer_care: 7,
+        new_data_today: 7,
+        new_customers_week: 1,
+        meetings_week: 1,
+        visits_week: 0,
+        follow_needs: 5,
+        deals_month: 0,
+        target_revenue: 2000000000,
+        actual_revenue: 0,
+      },
+      {
+        id: "REPORT002",
+        report_date: new Date(now).toISOString().slice(0, 10),
+        owner_id: "sale_02",
+        owner_name: "Ngo Thanh Huy",
+        calls_total: 13,
+        spam_total: 205,
+        interaction_total: 7,
+        video_posts: 5,
+        old_customer_care: 10,
+        new_data_today: 4,
+        new_customers_week: 0,
+        meetings_week: 0,
+        visits_week: 1,
+        follow_needs: 4,
+        deals_month: 0,
+        target_revenue: 2000000000,
+        actual_revenue: 0,
+      },
+    ];
+
     return {
       [crmConfig.dataSources.leads.tableName]: leads,
       [crmConfig.dataSources.inventory.tableName]: inventory,
       [crmConfig.dataSources.activities.tableName]: activities,
       [crmConfig.dataSources.tasks.tableName]: tasks,
       [crmConfig.dataSources.exports.tableName]: exports,
+      [crmConfig.dataSources.salesReports?.tableName || "crm_sales_reports"]: salesReports,
     };
   }
 
@@ -1827,6 +2341,7 @@
     const activitiesTable = crmConfig.dataSources.activities.tableName;
     const tasksTable = crmConfig.dataSources.tasks.tableName;
     const exportsTable = crmConfig.dataSources.exports.tableName;
+    const salesReportsTable = crmConfig.dataSources.salesReports?.tableName;
 
     map[leadTable] = {
       id: leadTable,
@@ -1853,6 +2368,13 @@
       rows: normalizeExportRows(map[exportsTable]?.rows || []),
       fieldsPK: [crmConfig.dataSources.exports.pkField],
     };
+    if (salesReportsTable) {
+      map[salesReportsTable] = {
+        id: salesReportsTable,
+        rows: normalizeSalesReportRows(map[salesReportsTable]?.rows || []),
+        fieldsPK: [crmConfig.dataSources.salesReports?.pkField || "id"],
+      };
+    }
 
     return enforceConsistency(map);
   }
@@ -2065,6 +2587,19 @@
     const [todoTypeFilter, setTodoTypeFilter] = React.useState("all");
     const [todoViewMode, setTodoViewMode] = React.useState("kanban");
     const [aiGenerating, setAiGenerating] = React.useState(false);
+    const [salesAiReview, setSalesAiReview] = React.useState({
+      loading: false,
+      generatedAt: 0,
+      data: null,
+      error: "",
+    });
+    const [salesAiHistory, setSalesAiHistory] = React.useState([]);
+    const [webChatCare, setWebChatCare] = React.useState({
+      loading: false,
+      error: "",
+      updatedAt: 0,
+      messages: [],
+    });
     const [crudEntity, setCrudEntity] = React.useState("leads");
     const [crudMode, setCrudMode] = React.useState("create");
     const [crudDraft, setCrudDraft] = React.useState({});
@@ -2077,6 +2612,7 @@
     const [onboardingStepIndex, setOnboardingStepIndex] = React.useState(0);
 
     const onboardingStorageKey = React.useMemo(() => `crm_dynamic_onboarding_seen:${appId}`, []);
+    const salesAiHistoryStorageKey = React.useMemo(() => `crm_dynamic_sales_ai_history:${appId}`, [appId]);
 
     function normalizePageId(value) {
       return String(value || "").trim();
@@ -2187,24 +2723,157 @@
     const localizedCrmConfig = React.useMemo(() => buildLocalizedCrmConfig(crmConfig, themeTokens), [language, themeTokens]);
     const sourceStats = React.useMemo(() => getLeadSourceStats(database), [database]);
     const summary = React.useMemo(() => buildOpsSummary({ ...opsData, sourceStats }), [opsData, sourceStats]);
+    const currentUserId = React.useMemo(() => String(seft?.user?.userId || seft?.user?.username || "").trim(), [seft?.user?.userId, seft?.user?.username]);
+    const roleSet = React.useMemo(() => {
+      const fromPermissions = Array.isArray(seft?.user?.permissions) ? seft.user.permissions : [];
+      const fromRoles = Array.isArray(seft?.user?.roles) ? seft.user.roles : [];
+      const normalized = [...fromPermissions, ...fromRoles]
+        .map((item) => String(item || "").toLowerCase().trim())
+        .filter(Boolean);
+      return new Set(normalized);
+    }, [seft?.user?.permissions, seft?.user?.roles]);
+    const canViewAllData = roleSet.has("admin") || roleSet.has("dev");
+    const rowOwnedByCurrentUser = React.useCallback((row, ownerFields) => {
+      if (canViewAllData) return true;
+      if (!currentUserId) return false;
+      return ownerFields.some((field) => String(row?.[field] || "").trim() === currentUserId);
+    }, [canViewAllData, currentUserId]);
+
     const leadTableName = crmConfig.dataSources.leads.tableName;
     const taskTableName = crmConfig.dataSources.tasks.tableName;
     const leadRows = React.useMemo(() => {
       const rows = (database[leadTableName] && database[leadTableName].rows) || [];
-      return Array.isArray(rows) ? rows : [];
-    }, [database, leadTableName]);
+      const list = Array.isArray(rows) ? rows : [];
+      if (canViewAllData) return list;
+      return list.filter((row) => rowOwnedByCurrentUser(row, ["assigned_to", "owner_id", "sales_owner_id", "created_by"]));
+    }, [database, leadTableName, canViewAllData, rowOwnedByCurrentUser]);
     const taskRows = React.useMemo(() => {
       const rows = (database[taskTableName] && database[taskTableName].rows) || [];
-      return Array.isArray(rows) ? rows : [];
-    }, [database, taskTableName]);
+      const list = Array.isArray(rows) ? rows : [];
+      if (canViewAllData) return list;
+      return list.filter((row) => rowOwnedByCurrentUser(row, ["owner_id", "assigned_to", "created_by"]));
+    }, [database, taskTableName, canViewAllData, rowOwnedByCurrentUser]);
     const inventoryRows = React.useMemo(() => {
       const rows = (database[crmConfig.dataSources.inventory.tableName] && database[crmConfig.dataSources.inventory.tableName].rows) || [];
-      return Array.isArray(rows) ? rows : [];
-    }, [database]);
+      const list = Array.isArray(rows) ? rows : [];
+      if (canViewAllData) return list;
+      return list.filter((row) => rowOwnedByCurrentUser(row, ["owner_id", "assigned_to", "allocated_to", "requested_by", "created_by"]));
+    }, [database, canViewAllData, rowOwnedByCurrentUser]);
     const activityRows = React.useMemo(() => {
       const rows = (database[crmConfig.dataSources.activities.tableName] && database[crmConfig.dataSources.activities.tableName].rows) || [];
-      return Array.isArray(rows) ? rows : [];
-    }, [database]);
+      const list = Array.isArray(rows) ? rows : [];
+      if (canViewAllData) return list;
+      return list.filter((row) => rowOwnedByCurrentUser(row, ["owner_id", "assigned_to", "created_by"]));
+    }, [database, canViewAllData, rowOwnedByCurrentUser]);
+    const salesReportRows = React.useMemo(() => {
+      const tableName = crmConfig.dataSources.salesReports?.tableName;
+      const rows = (tableName && database[tableName] && database[tableName].rows) || [];
+      const list = Array.isArray(rows) ? rows : [];
+      if (canViewAllData) return list;
+      return list.filter((row) => rowOwnedByCurrentUser(row, ["owner_id", "assigned_to"]));
+    }, [database, canViewAllData, rowOwnedByCurrentUser]);
+
+    const webChatMessages = React.useMemo(() => {
+      return Array.isArray(webChatCare?.messages) ? webChatCare.messages : [];
+    }, [webChatCare]);
+
+    const normalizePhoneDigits = React.useCallback((value) => {
+      const digits = String(value || "").replace(/\D/g, "");
+      if (!digits) return "";
+      return digits.startsWith("84") && digits.length >= 10 ? `0${digits.slice(2)}` : digits;
+    }, []);
+
+    const parseGuestPhoneFromMessage = React.useCallback((message) => {
+      const direct = normalizePhoneDigits(message?.guestPhone);
+      if (direct) return direct;
+      const room = String(message?.room || "");
+      const roomMatch = room.match(/guest:[^;]+;([^;]+)/i);
+      if (roomMatch && roomMatch[1]) return normalizePhoneDigits(roomMatch[1]);
+      return "";
+    }, [normalizePhoneDigits]);
+
+    const leadOwnerByPhoneMap = React.useMemo(() => {
+      const map = new Map();
+      leadRows.forEach((row) => {
+        const digits = normalizePhoneDigits(row?.phone);
+        if (!digits) return;
+        const ownerId = String(row?.assigned_to || "").trim();
+        const ownerName = String(row?.sales_name || row?.name || ownerId || "").trim();
+        const payload = {
+          ownerId,
+          ownerName,
+          leadId: String(row?.id || "").trim(),
+          leadName: String(row?.name || "").trim(),
+        };
+        map.set(digits, payload);
+        if (digits.length >= 8) map.set(digits.slice(-8), payload);
+      });
+      return map;
+    }, [leadRows, normalizePhoneDigits]);
+
+    const salesUserLookup = React.useMemo(() => {
+      const map = new Map();
+      salesUsers.forEach((user) => {
+        const id = String(user?.id || "").trim();
+        if (!id) return;
+        const fullName = String(user?.full_name || "").trim();
+        const username = String(user?.username || "").trim();
+        map.set(id, id);
+        if (fullName) map.set(fullName.toLowerCase(), id);
+        if (username) map.set(username.toLowerCase(), id);
+      });
+      return map;
+    }, [salesUsers]);
+
+    const loadWebChatCareData = React.useCallback(async ({ silent = false } = {}) => {
+      const loader = window.loadAllAppChatHistory;
+      if (typeof loader !== "function") {
+        setWebChatCare((prev) => ({
+          ...prev,
+          loading: false,
+          error: translate("salesChatLoadFailed"),
+          updatedAt: Date.now(),
+          messages: [],
+        }));
+        return;
+      }
+
+      if (!silent) {
+        setWebChatCare((prev) => ({ ...prev, loading: true, error: "" }));
+      }
+      try {
+        const response = await loader(appId, 800);
+        const messages = Array.isArray(response?.messages) ? response.messages : [];
+        const scopedMessages = messages
+          .filter((item) => {
+            const itemAppId = String(item?.appId || item?.app_id || "").trim();
+            return !itemAppId || itemAppId === appId;
+          })
+          .filter((item) => Boolean(parseGuestPhoneFromMessage(item)));
+        setWebChatCare({
+          loading: false,
+          error: "",
+          updatedAt: Date.now(),
+          messages: scopedMessages,
+        });
+      } catch (error) {
+        setWebChatCare((prev) => ({
+          ...prev,
+          loading: false,
+          error: String(error?.message || translate("unknownError")),
+          updatedAt: Date.now(),
+        }));
+      }
+    }, [appId, parseGuestPhoneFromMessage, language]);
+
+    React.useEffect(() => {
+      if (activeHubTab !== "sales") return undefined;
+      loadWebChatCareData();
+      const timer = window.setInterval(() => {
+        loadWebChatCareData({ silent: true });
+      }, 60000);
+      return () => window.clearInterval(timer);
+    }, [activeHubTab, loadWebChatCareData]);
 
     React.useEffect(() => {
       let seen = false;
@@ -2215,6 +2884,21 @@
       }
       if (!seen) setOnboardingOpen(true);
     }, [onboardingStorageKey]);
+
+    React.useEffect(() => {
+      try {
+        const raw = localStorage.getItem(salesAiHistoryStorageKey);
+        if (!raw) {
+          setSalesAiHistory([]);
+          return;
+        }
+        const parsed = JSON.parse(raw);
+        const rows = Array.isArray(parsed) ? parsed : [];
+        setSalesAiHistory(rows.slice(0, 40));
+      } catch {
+        setSalesAiHistory([]);
+      }
+    }, [salesAiHistoryStorageKey]);
 
     const workflowTextMap = React.useMemo(() => ({
       vi: {
@@ -2320,15 +3004,6 @@
       setOnboardingStepIndex(0);
     }
 
-    const currentUserId = React.useMemo(() => String(seft?.user?.userId || seft?.user?.username || "").trim(), [seft?.user?.userId, seft?.user?.username]);
-    const roleSet = React.useMemo(() => {
-      const fromPermissions = Array.isArray(seft?.user?.permissions) ? seft.user.permissions : [];
-      const fromRoles = Array.isArray(seft?.user?.roles) ? seft.user.roles : [];
-      const normalized = [...fromPermissions, ...fromRoles]
-        .map((item) => String(item || "").toLowerCase().trim())
-        .filter(Boolean);
-      return new Set(normalized);
-    }, [seft?.user?.permissions, seft?.user?.roles]);
     const canManageAnyTask = roleSet.has("admin") || roleSet.has("dev") || roleSet.has("manager") || roleSet.has("leader") || roleSet.has("team_leader");
 
     function isOverdueTask(task) {
@@ -2341,6 +3016,65 @@
       if (canManageAnyTask) return true;
       const owner = String(task?.owner_id || "").trim();
       return Boolean(currentUserId) && owner === currentUserId;
+    }
+
+    function canManageBasketAdminActions() {
+      return roleSet.has("admin") || roleSet.has("dev");
+    }
+
+    function canManageInventoryRow(row) {
+      if (canManageBasketAdminActions()) return true;
+      return rowOwnedByCurrentUser(row, ["owner_id", "assigned_to", "requested_by", "created_by"]);
+    }
+
+    function canManageCrudRow(entity, row) {
+      if (canViewAllData) return true;
+      if (entity === "leads") {
+        return rowOwnedByCurrentUser(row, ["assigned_to", "owner_id", "sales_owner_id", "created_by"]);
+      }
+      if (entity === "inventory") {
+        return canManageInventoryRow(row);
+      }
+      if (entity === "activities" || entity === "tasks" || entity === "sales_reports") {
+        return rowOwnedByCurrentUser(row, ["owner_id", "assigned_to", "created_by"]);
+      }
+      return false;
+    }
+
+    async function updateInventoryBasket(row, patch, successMessageKey) {
+      if (typeof updateTableData !== "function") return;
+      if (!canManageInventoryRow(row)) {
+        if (notification?.warning) notification.warning({ message: translate("basketWorkflowDenied") });
+        return;
+      }
+
+      const inventoryEntity = entityConfig.inventory;
+      const pkField = inventoryEntity.pkField || "id";
+      const id = String(row?.[pkField] || row?.id || "").trim();
+      if (!id) return;
+
+      const nowTs = Date.now();
+      const next = {
+        ...row,
+        ...patch,
+        [pkField]: id,
+        id,
+        updated_at: nowTs,
+      };
+
+      await updateTableData({
+        app_id: appId,
+        obj_name: inventoryEntity.tableName,
+        command: "update",
+        pk_fields: [pkField],
+        obj_update: next,
+        where: { [pkField]: id },
+      });
+
+      if (notification?.success && successMessageKey) {
+        notification.success({ message: translate(successMessageKey), duration: 1.5 });
+      }
+      if (typeof reloadDatabase === "function") await reloadDatabase();
     }
 
     function parseTaskMetadata(task) {
@@ -2373,17 +3107,23 @@
       leads: {
         tableName: crmConfig.dataSources.leads.tableName,
         pkField: crmConfig.dataSources.leads.pkField || "id",
-        fields: ["id", "name", "phone", "source", "project_name", "expected_value", "status", "assigned_to", "team_id", "notes"],
+        fields: ["id", "customer_title", "name", "phone", "phone_last4", "address", "source", "project_name", "visit_date", "expected_value", "status", "assigned_to", "sales_name", "team_id", "team_name", "notes"],
         defaults: {
           id: `LEAD_${Date.now()}`,
+          customer_title: "",
           name: "",
           phone: "",
+          phone_last4: "",
+          address: "",
           source: "sales_self",
           project_name: "",
+          visit_date: "",
           expected_value: 0,
           status: "lead",
           assigned_to: "",
+          sales_name: "",
           team_id: "",
+          team_name: "",
           notes: "",
           created_at: Date.now(),
           updated_at: Date.now(),
@@ -2392,17 +3132,35 @@
       inventory: {
         tableName: crmConfig.dataSources.inventory.tableName,
         pkField: crmConfig.dataSources.inventory.pkField || "id",
-        fields: ["id", "product_code", "product_name", "project_name", "status", "price", "area_m2", "bedrooms", "direction", "lead_id"],
+        fields: ["id", "product_code", "product_name", "unit_type", "project_name", "status", "basket_type", "owner_id", "allocation_qty", "allocated_until", "parent_basket_id", "requested_extra_qty", "request_extra_status", "requested_by", "approved_by", "price_vn", "price_foreign", "area_net_m2", "area_gross_m2", "area_m2", "bedrooms", "direction", "view_name", "lead_id"],
         defaults: {
           id: `INV_${Date.now()}`,
           product_code: "",
           product_name: "",
+          unit_type: "",
           project_name: "",
           status: "available",
+          basket_type: "global",
+          owner_id: "",
+          allocation_qty: 0,
+          allocated_until: 0,
+          parent_basket_id: "",
+          requested_extra_qty: 0,
+          request_extra_status: "approved",
+          requested_by: "",
+          approved_by: "",
+          approved_at: 0,
+          returned_at: 0,
+          revoked_at: 0,
+          price_vn: 0,
+          price_foreign: 0,
           price: 0,
+          area_net_m2: 0,
+          area_gross_m2: 0,
           area_m2: 0,
           bedrooms: 0,
           direction: "",
+          view_name: "",
           lead_id: "",
           created_at: Date.now(),
           updated_at: Date.now(),
@@ -2443,14 +3201,53 @@
           updated_at: Date.now(),
         },
       },
+      sales_reports: {
+        tableName: crmConfig.dataSources.salesReports?.tableName || "crm_sales_reports",
+        pkField: crmConfig.dataSources.salesReports?.pkField || "id",
+        fields: ["id", "report_date", "owner_id", "owner_name", "calls_total", "spam_total", "interaction_total", "video_posts", "old_customer_care", "new_data_today", "new_customers_week", "meetings_week", "visits_week", "follow_needs", "deals_month", "target_revenue", "actual_revenue", "notes"],
+        defaults: {
+          id: `REPORT_${Date.now()}`,
+          report_date: new Date().toISOString().slice(0, 10),
+          owner_id: seft?.user?.userId || seft?.user?.username || "",
+          owner_name: "",
+          calls_total: 0,
+          spam_total: 0,
+          interaction_total: 0,
+          video_posts: 0,
+          old_customer_care: 0,
+          new_data_today: 0,
+          new_customers_week: 0,
+          meetings_week: 0,
+          visits_week: 0,
+          follow_needs: 0,
+          deals_month: 0,
+          target_revenue: 0,
+          actual_revenue: 0,
+          notes: "",
+          created_at: Date.now(),
+          updated_at: Date.now(),
+        },
+      },
     }), [language]);
 
     const currentEntity = entityConfig[crudEntity] || entityConfig.leads;
     const crudRows = React.useMemo(() => {
       const tableName = currentEntity.tableName;
       const rawRows = (database[tableName] && database[tableName].rows) || [];
-      return Array.isArray(rawRows) ? rawRows : [];
-    }, [database, currentEntity]);
+      const list = Array.isArray(rawRows) ? rawRows : [];
+      if (canViewAllData) return list;
+
+      if (crudEntity === "leads") {
+        return list.filter((row) => rowOwnedByCurrentUser(row, ["assigned_to", "owner_id", "sales_owner_id", "created_by"]));
+      }
+      if (crudEntity === "inventory") {
+        return list.filter((row) => rowOwnedByCurrentUser(row, ["owner_id", "assigned_to", "allocated_to", "requested_by", "created_by"]));
+      }
+      if (crudEntity === "activities" || crudEntity === "tasks" || crudEntity === "sales_reports") {
+        return list.filter((row) => rowOwnedByCurrentUser(row, ["owner_id", "assigned_to", "created_by"]));
+      }
+      return list;
+    }, [database, currentEntity, crudEntity, canViewAllData, rowOwnedByCurrentUser]);
 
     const loadProjectOptions = React.useCallback(async () => {
       try {
@@ -2929,6 +3726,161 @@
       }, {});
     }, [salesUsers]);
 
+    const webChatConversationRows = React.useMemo(() => {
+      const groups = new Map();
+      const sortedMessages = webChatMessages
+        .slice()
+        .sort((a, b) => toNumber(a?.timestamp, 0) - toNumber(b?.timestamp, 0));
+
+      sortedMessages.forEach((message) => {
+        const guestPhone = parseGuestPhoneFromMessage(message);
+        if (!guestPhone) return;
+        const ts = toNumber(message?.timestamp, 0) || Date.now();
+        const rawUserId = String(message?.userId || "").trim();
+        const username = String(message?.username || "").trim();
+        const normalizedUserId = rawUserId || (username ? String(salesUserLookup.get(username.toLowerCase()) || "") : "");
+        const isAdminMessage = Boolean(message?.isAdmin) || Boolean(normalizedUserId);
+
+        if (!groups.has(guestPhone)) {
+          groups.set(guestPhone, {
+            guestPhone,
+            messageCount: 0,
+            adminReplies: 0,
+            firstGuestAt: 0,
+            firstAdminAt: 0,
+            lastGuestAt: 0,
+            lastAdminAt: 0,
+            lastMessageAt: 0,
+            lastAdminUserId: "",
+            lastAdminName: "",
+            ownerReplyCountMap: {},
+          });
+        }
+
+        const bucket = groups.get(guestPhone);
+        bucket.messageCount += 1;
+        bucket.lastMessageAt = Math.max(bucket.lastMessageAt || 0, ts);
+
+        if (isAdminMessage) {
+          bucket.adminReplies += 1;
+          if (!bucket.firstAdminAt) bucket.firstAdminAt = ts;
+          bucket.lastAdminAt = Math.max(bucket.lastAdminAt || 0, ts);
+          if (normalizedUserId) {
+            bucket.lastAdminUserId = normalizedUserId;
+            bucket.ownerReplyCountMap[normalizedUserId] = toNumber(bucket.ownerReplyCountMap[normalizedUserId], 0) + 1;
+          }
+          if (username) bucket.lastAdminName = username;
+        } else {
+          if (!bucket.firstGuestAt) bucket.firstGuestAt = ts;
+          bucket.lastGuestAt = Math.max(bucket.lastGuestAt || 0, ts);
+        }
+      });
+
+      const nowTs = Date.now();
+      const rows = Array.from(groups.values()).map((row) => {
+        const leadMatch = leadOwnerByPhoneMap.get(row.guestPhone) || leadOwnerByPhoneMap.get(String(row.guestPhone || "").slice(-8));
+        const ownerId = String(row.lastAdminUserId || leadMatch?.ownerId || "").trim();
+        const ownerName = ownerId
+          ? (salesUserNameMap[ownerId] || row.lastAdminName || leadMatch?.ownerName || ownerId)
+          : (leadMatch?.ownerName || translate("unassigned"));
+        const firstResponseMinutes = row.firstGuestAt > 0 && row.firstAdminAt > 0 && row.firstAdminAt >= row.firstGuestAt
+          ? Math.round((row.firstAdminAt - row.firstGuestAt) / 60000)
+          : null;
+        const waitingMinutes = row.lastGuestAt > row.lastAdminAt
+          ? Math.max(0, Math.round((nowTs - row.lastGuestAt) / 60000))
+          : 0;
+        const isWaiting = row.lastGuestAt > row.lastAdminAt;
+        const ownerReplyCount = ownerId ? toNumber(row.ownerReplyCountMap?.[ownerId], 0) : 0;
+        return {
+          ...row,
+          ownerId,
+          ownerName,
+          leadId: String(leadMatch?.leadId || "").trim(),
+          leadName: String(leadMatch?.leadName || "").trim(),
+          firstResponseMinutes,
+          waitingMinutes,
+          isWaiting,
+          ownerReplyCount,
+          slaPassed: firstResponseMinutes !== null ? firstResponseMinutes <= 15 : false,
+        };
+      });
+
+      return rows.sort((a, b) => toNumber(b?.lastMessageAt, 0) - toNumber(a?.lastMessageAt, 0));
+    }, [webChatMessages, parseGuestPhoneFromMessage, salesUserLookup, leadOwnerByPhoneMap, salesUserNameMap, language]);
+
+    const webChatSummary = React.useMemo(() => {
+      const rows = webChatConversationRows;
+      const waitingRows = rows.filter((row) => row.isWaiting);
+      const unassignedRows = rows.filter((row) => !String(row?.ownerId || "").trim());
+      const firstResponseRows = rows.filter((row) => row.firstResponseMinutes !== null);
+      const avgFirstResponse = firstResponseRows.length
+        ? Math.round((firstResponseRows.reduce((acc, row) => acc + toNumber(row.firstResponseMinutes, 0), 0) / firstResponseRows.length) * 10) / 10
+        : 0;
+      const slaRate = firstResponseRows.length
+        ? Math.round((firstResponseRows.filter((row) => row.slaPassed).length * 1000) / firstResponseRows.length) / 10
+        : 0;
+      return {
+        total: rows.length,
+        waiting: waitingRows.length,
+        unassigned: unassignedRows.length,
+        avgFirstResponse,
+        slaRate,
+      };
+    }, [webChatConversationRows]);
+
+    const webChatOwnerScoreboard = React.useMemo(() => {
+      const grouped = new Map();
+      webChatConversationRows.forEach((row) => {
+        const ownerId = String(row?.ownerId || "").trim() || "__unassigned__";
+        if (!grouped.has(ownerId)) {
+          grouped.set(ownerId, {
+            ownerId: ownerId === "__unassigned__" ? "" : ownerId,
+            ownerName: ownerId === "__unassigned__"
+              ? translate("unassigned")
+              : (salesUserNameMap[ownerId] || row.ownerName || ownerId),
+            handledConversations: 0,
+            waitingConversations: 0,
+            totalReplies: 0,
+            firstResponseCount: 0,
+            firstResponseTotalMinutes: 0,
+            slaPassCount: 0,
+          });
+        }
+        const bucket = grouped.get(ownerId);
+        bucket.handledConversations += 1;
+        if (row.isWaiting) bucket.waitingConversations += 1;
+        bucket.totalReplies += toNumber(row.ownerReplyCount, 0);
+        if (row.firstResponseMinutes !== null) {
+          bucket.firstResponseCount += 1;
+          bucket.firstResponseTotalMinutes += toNumber(row.firstResponseMinutes, 0);
+          if (row.slaPassed) bucket.slaPassCount += 1;
+        }
+      });
+
+      return Array.from(grouped.values())
+        .map((row) => ({
+          ...row,
+          avgFirstResponseMinutes: row.firstResponseCount > 0
+            ? Math.round((row.firstResponseTotalMinutes / row.firstResponseCount) * 10) / 10
+            : 0,
+          slaRate: row.firstResponseCount > 0
+            ? Math.round((row.slaPassCount * 1000) / row.firstResponseCount) / 10
+            : 0,
+        }))
+        .sort((a, b) => {
+          if (b.handledConversations !== a.handledConversations) return b.handledConversations - a.handledConversations;
+          return a.avgFirstResponseMinutes - b.avgFirstResponseMinutes;
+        })
+        .map((row, index) => ({ ...row, rank: index + 1 }));
+    }, [webChatConversationRows, salesUserNameMap, language]);
+
+    const webChatPendingRows = React.useMemo(() => {
+      return webChatConversationRows
+        .filter((row) => row.isWaiting)
+        .sort((a, b) => toNumber(b?.waitingMinutes, 0) - toNumber(a?.waitingMinutes, 0))
+        .slice(0, 30);
+    }, [webChatConversationRows]);
+
     const pipelineStages = React.useMemo(() => {
       return Array.isArray(localizedCrmConfig?.pipeline?.stages) ? localizedCrmConfig.pipeline.stages : [];
     }, [localizedCrmConfig]);
@@ -3077,11 +4029,21 @@
 
     function openCreateEntity() {
       setCrudMode("create");
-      setCrudDraft({ ...currentEntity.defaults, id: `${String(crudEntity).toUpperCase()}_${Date.now()}` });
+      const nextDraft = { ...currentEntity.defaults, id: `${String(crudEntity).toUpperCase()}_${Date.now()}` };
+      if (crudEntity === "inventory" && !canManageBasketAdminActions()) {
+        nextDraft.basket_type = "allocated";
+        nextDraft.owner_id = currentUserId;
+        nextDraft.requested_by = currentUserId;
+      }
+      setCrudDraft(nextDraft);
       setCrudModalOpen(true);
     }
 
     function openEditEntity(row) {
+      if (!canManageCrudRow(crudEntity, row)) {
+        if (notification?.warning) notification.warning({ message: translate("basketWorkflowDenied") });
+        return;
+      }
       setCrudMode("edit");
       setCrudDraft({ ...row });
       setCrudModalOpen(true);
@@ -3094,6 +4056,13 @@
         const nowTs = Date.now();
         const pkField = currentEntity.pkField || "id";
         const id = String(crudDraft[pkField] || crudDraft.id || `${String(crudEntity).toUpperCase()}_${nowTs}`);
+        const existingRow = crudRows.find((row) => String(row?.[pkField] || row?.id || "") === id);
+
+        if (crudMode === "edit" && existingRow && !canManageCrudRow(crudEntity, existingRow)) {
+          if (notification?.warning) notification.warning({ message: translate("basketWorkflowDenied") });
+          return;
+        }
+
         const next = {
           ...crudDraft,
           [pkField]: id,
@@ -3101,6 +4070,45 @@
           updated_at: nowTs,
         };
         if (crudMode === "create" && !next.created_at) next.created_at = nowTs;
+
+        if (crudEntity === "inventory") {
+          const isAdminAction = canManageBasketAdminActions();
+          const basketTypeRaw = String(next.basket_type || "").toLowerCase();
+          next.basket_type = ["global", "allocated", "pending"].includes(basketTypeRaw)
+            ? basketTypeRaw
+            : (String(next.owner_id || "").trim() ? "allocated" : "global");
+
+          next.owner_id = String(next.owner_id || "").trim();
+          next.parent_basket_id = String(next.parent_basket_id || "").trim();
+          next.requested_by = String(next.requested_by || "").trim();
+          next.approved_by = String(next.approved_by || "").trim();
+          next.allocation_qty = toNumber(next.allocation_qty, 0);
+          next.allocated_until = toNumber(next.allocated_until, 0);
+          next.requested_extra_qty = toNumber(next.requested_extra_qty, 0);
+
+          if (!isAdminAction) {
+            next.owner_id = currentUserId;
+            if (next.requested_extra_qty > 0) {
+              next.request_extra_status = "pending";
+              next.requested_by = currentUserId;
+              next.basket_type = "pending";
+            }
+          } else {
+            const approval = String(next.request_extra_status || "").toLowerCase();
+            if (approval === "approved" || approval === "rejected") {
+              next.approved_by = currentUserId;
+              next.approved_at = nowTs;
+              if (approval === "approved" && next.owner_id) {
+                next.basket_type = "allocated";
+              }
+            }
+          }
+
+          if (!next.owner_id) {
+            next.basket_type = "global";
+            next.request_extra_status = "approved";
+          }
+        }
 
         await updateTableData({
           app_id: appId,
@@ -3127,6 +4135,10 @@
 
     async function deleteEntityRow(row) {
       if (typeof updateTableData !== "function") return;
+      if (!canManageCrudRow(crudEntity, row)) {
+        if (notification?.warning) notification.warning({ message: translate("basketWorkflowDenied") });
+        return;
+      }
       try {
         const pkField = currentEntity.pkField || "id";
         const id = String(row[pkField] || row.id || "");
@@ -3700,6 +4712,411 @@
       { title: translate("status"), dataIndex: "status", key: "status", width: 120 },
     ];
 
+    const salesReportSummary = React.useMemo(() => {
+      return salesReportRows.reduce((acc, row) => {
+        acc.target += toNumber(row?.target_revenue, 0);
+        acc.actual += toNumber(row?.actual_revenue, 0);
+        acc.calls += toNumber(row?.calls_total, 0);
+        acc.interactions += toNumber(row?.interaction_total, 0);
+        acc.deals += toNumber(row?.deals_month, 0);
+        return acc;
+      }, { target: 0, actual: 0, calls: 0, interactions: 0, deals: 0 });
+    }, [salesReportRows]);
+
+    const salesOwnerAiSnapshot = React.useMemo(() => {
+      const byOwner = new Map();
+      salesReportRows.forEach((row) => {
+        const ownerId = String(row?.owner_id || row?.owner_name || "unassigned").trim() || "unassigned";
+        const ownerName = String(row?.owner_name || row?.owner_id || translate("unassigned")).trim() || translate("unassigned");
+        const prev = byOwner.get(ownerId) || {
+          ownerId,
+          ownerName,
+          calls: 0,
+          interactions: 0,
+          meetings: 0,
+          visits: 0,
+          followNeeds: 0,
+          deals: 0,
+          targetRevenue: 0,
+          actualRevenue: 0,
+        };
+        prev.calls += toNumber(row?.calls_total, 0);
+        prev.interactions += toNumber(row?.interaction_total, 0);
+        prev.meetings += toNumber(row?.meetings_week, 0);
+        prev.visits += toNumber(row?.visits_week, 0);
+        prev.followNeeds += toNumber(row?.follow_needs, 0);
+        prev.deals += toNumber(row?.deals_month, 0);
+        prev.targetRevenue += toNumber(row?.target_revenue, 0);
+        prev.actualRevenue += toNumber(row?.actual_revenue, 0);
+        byOwner.set(ownerId, prev);
+      });
+
+      const ownerTaskMap = new Map((Array.isArray(todoOwnerStats) ? todoOwnerStats : []).map((item) => [String(item?.ownerId || ""), item]));
+      return Array.from(byOwner.values())
+        .map((row) => {
+          const taskMetrics = ownerTaskMap.get(String(row.ownerId || ""));
+          const completionRate = row.targetRevenue > 0 ? Math.round((row.actualRevenue * 10000) / row.targetRevenue) / 100 : 0;
+          return {
+            ...row,
+            completionRate,
+            openTasks: toNumber(taskMetrics?.open, 0),
+            overdueTasks: toNumber(taskMetrics?.overdue, 0),
+            taskCompletionRate: toNumber(taskMetrics?.completionRate, 0),
+          };
+        })
+        .sort((a, b) => b.actualRevenue - a.actualRevenue)
+        .slice(0, 12);
+    }, [salesReportRows, todoOwnerStats, language]);
+
+    const salesOwnerScoreboard = React.useMemo(() => {
+      const rows = Array.isArray(salesOwnerAiSnapshot) ? salesOwnerAiSnapshot : [];
+      const maxDeals = Math.max(1, ...rows.map((item) => toNumber(item?.deals, 0)));
+      const maxCalls = Math.max(1, ...rows.map((item) => toNumber(item?.calls, 0)));
+      const maxInteractions = Math.max(1, ...rows.map((item) => toNumber(item?.interactions, 0)));
+
+      const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+      const scoreRows = rows.map((row) => {
+        const revenueScore = clamp(toNumber(row?.completionRate, 0), 0, 130);
+        const dealScore = clamp((toNumber(row?.deals, 0) * 100) / maxDeals, 0, 100);
+        const callScore = clamp((toNumber(row?.calls, 0) * 100) / maxCalls, 0, 100);
+        const interactionScore = clamp((toNumber(row?.interactions, 0) * 100) / maxInteractions, 0, 100);
+        const activityScore = clamp((callScore + interactionScore) / 2, 0, 100);
+        const taskScore = clamp(toNumber(row?.taskCompletionRate, 0), 0, 100);
+        const overduePenaltyScore = clamp(toNumber(row?.overdueTasks, 0) * 15, 0, 100);
+
+        const weightedScore = (
+          revenueScore * 0.35
+          + dealScore * 0.2
+          + activityScore * 0.15
+          + taskScore * 0.2
+          + (100 - overduePenaltyScore) * 0.1
+        );
+
+        return {
+          ownerId: String(row?.ownerId || ""),
+          ownerName: String(row?.ownerName || row?.ownerId || translate("unassigned")),
+          weightedScore: Math.round(weightedScore * 100) / 100,
+          revenueScore: Math.round(revenueScore * 100) / 100,
+          dealScore: Math.round(dealScore * 100) / 100,
+          activityScore: Math.round(activityScore * 100) / 100,
+          taskScore: Math.round(taskScore * 100) / 100,
+          overduePenaltyScore: Math.round(overduePenaltyScore * 100) / 100,
+          overdueTasks: toNumber(row?.overdueTasks, 0),
+        };
+      });
+
+      return scoreRows
+        .sort((a, b) => b.weightedScore - a.weightedScore)
+        .map((row, index) => ({ ...row, rank: index + 1 }));
+    }, [salesOwnerAiSnapshot, language]);
+
+    const salesEarlyWarnings = React.useMemo(() => {
+      const warnings = [];
+      const historyRows = Array.isArray(salesAiHistory) ? salesAiHistory : [];
+
+      salesOwnerScoreboard.forEach((row) => {
+        if (toNumber(row?.weightedScore, 0) < 60) {
+          warnings.push({
+            ownerId: row.ownerId,
+            severity: "high",
+            message: translate("salesWarningLowScore", {
+              name: row.ownerName,
+              score: Math.round(toNumber(row.weightedScore, 0) * 10) / 10,
+            }),
+          });
+        }
+
+        const ownerHistory = historyRows
+          .map((item) => {
+            const ownerScore = (Array.isArray(item?.ownerScores) ? item.ownerScores : []).find((x) => String(x?.ownerId || "") === String(row.ownerId || ""));
+            return {
+              at: toNumber(item?.at, 0),
+              score: toNumber(ownerScore?.weightedScore, NaN),
+            };
+          })
+          .filter((item) => Number.isFinite(item.score) && item.at > 0)
+          .sort((a, b) => a.at - b.at)
+          .slice(-4)
+          .map((item) => item.score);
+
+        if (ownerHistory.length >= 3) {
+          const n = ownerHistory.length;
+          const drop3 = ownerHistory[n - 3] > ownerHistory[n - 2] && ownerHistory[n - 2] > ownerHistory[n - 1];
+          if (drop3) {
+            warnings.push({
+              ownerId: row.ownerId,
+              severity: "warning",
+              message: translate("salesWarningDropTrend", {
+                name: row.ownerName,
+                days: 3,
+              }),
+            });
+          }
+        }
+      });
+
+      return warnings.slice(0, 12);
+    }, [salesOwnerScoreboard, salesAiHistory, language]);
+
+    const salesAiHistorySummaryRows = React.useMemo(() => {
+      const rows = Array.isArray(salesAiHistory) ? salesAiHistory : [];
+      return rows.map((row) => ({
+        at: toNumber(row?.at, 0),
+        teamHealthScore: toNumber(row?.teamHealthScore, 0),
+        ownerCount: Array.isArray(row?.ownerScores) ? row.ownerScores.length : 0,
+        avgScore: toNumber(row?.avgScore, 0),
+      }));
+    }, [salesAiHistory]);
+
+    function normalizeAiArray(value) {
+      if (!Array.isArray(value)) return [];
+      return value
+        .map((item) => String(item || "").trim())
+        .filter(Boolean)
+        .slice(0, 12);
+    }
+
+    async function generateSalesPerformanceReviewWithAI() {
+      const ai = window.csmAI || seft;
+      if (!ai || typeof ai.generateSeoContentWithPrompt !== "function") {
+        const message = translate("salesAiFailed");
+        const description = translate("aiBridgeUnavailable");
+        setSalesAiReview((prev) => ({ ...prev, error: `${message}: ${description}` }));
+        if (notification?.warning) notification.warning({ message, description });
+        return;
+      }
+
+      const kpiSnapshot = {
+        reportSummary: {
+          targetRevenue: salesReportSummary.target,
+          actualRevenue: salesReportSummary.actual,
+          completionRate: salesReportSummary.target > 0 ? Math.round((salesReportSummary.actual * 10000) / salesReportSummary.target) / 100 : 0,
+          totalCalls: salesReportSummary.calls,
+          totalInteractions: salesReportSummary.interactions,
+          totalDeals: salesReportSummary.deals,
+        },
+        taskSummary: {
+          overdue: todoKpi.overdue,
+          inProgress: todoKpi.inProgress,
+          dueToday: todoKpi.dueToday,
+          doneToday: todoKpi.doneToday,
+          tasksWithoutLead: toNumber(todoPipelineStats?.withoutLead, 0),
+        },
+        chatSummary: {
+          totalConversations: toNumber(webChatSummary?.total, 0),
+          waitingConversations: toNumber(webChatSummary?.waiting, 0),
+          unassignedConversations: toNumber(webChatSummary?.unassigned, 0),
+          avgFirstResponseMinutes: toNumber(webChatSummary?.avgFirstResponse, 0),
+          slaRate15m: toNumber(webChatSummary?.slaRate, 0),
+        },
+        chatOwnerCare: webChatOwnerScoreboard,
+        owners: salesOwnerAiSnapshot,
+        ownerScoreboard: salesOwnerScoreboard,
+      };
+
+      const prompt = [
+        "You are a strict sales operations analyst.",
+        "Analyze sales productivity data and return STRICT JSON only.",
+        "Language: Vietnamese.",
+        "JSON schema:",
+        "{",
+        '  "overview": "string, concise overall assessment",',
+        '  "team_health_score": "number 0-100",',
+        '  "top_wins": ["string"],',
+        '  "risks": ["string"],',
+        '  "owner_reviews": ["OwnerName: short assessment + bottleneck"],',
+        '  "action_plan_7d": ["string actionable step"],',
+        '  "action_plan_30d": ["string actionable step"]',
+        "}",
+        "Prioritize practical management actions and coaching suggestions.",
+        "Use website-chat customer-care signals as a core input for risk and action recommendations.",
+        "Data:",
+        JSON.stringify(kpiSnapshot),
+      ].join("\n");
+
+      setSalesAiReview((prev) => ({ ...prev, loading: true, error: "" }));
+      try {
+        const result = await ai.generateSeoContentWithPrompt(prompt);
+        const raw = typeof result === "string"
+          ? result
+          : (result?.data || result?.result || result?.content || "");
+        const textPayload = String(raw || "").trim();
+        const jsonText = textPayload.startsWith("```")
+          ? textPayload.replace(/^```[a-zA-Z]*\n?/, "").replace(/```$/, "")
+          : textPayload;
+        const parsed = JSON.parse(jsonText);
+        const normalized = {
+          overview: String(parsed?.overview || "").trim(),
+          teamHealthScore: Math.max(0, Math.min(100, toNumber(parsed?.team_health_score, 0))),
+          topWins: normalizeAiArray(parsed?.top_wins),
+          risks: normalizeAiArray(parsed?.risks),
+          ownerReviews: normalizeAiArray(parsed?.owner_reviews),
+          action7d: normalizeAiArray(parsed?.action_plan_7d),
+          action30d: normalizeAiArray(parsed?.action_plan_30d),
+        };
+        setSalesAiReview({
+          loading: false,
+          generatedAt: Date.now(),
+          data: normalized,
+          error: "",
+        });
+
+        setSalesAiHistory((prev) => {
+          const nextRow = {
+            at: Date.now(),
+            teamHealthScore: normalized.teamHealthScore,
+            avgScore: salesOwnerScoreboard.length
+              ? Math.round((salesOwnerScoreboard.reduce((acc, item) => acc + toNumber(item?.weightedScore, 0), 0) / salesOwnerScoreboard.length) * 100) / 100
+              : 0,
+            ownerScores: salesOwnerScoreboard.map((item) => ({
+              ownerId: item.ownerId,
+              ownerName: item.ownerName,
+              weightedScore: item.weightedScore,
+            })),
+          };
+          const next = [nextRow, ...(Array.isArray(prev) ? prev : [])].slice(0, 40);
+          try {
+            localStorage.setItem(salesAiHistoryStorageKey, JSON.stringify(next));
+          } catch {
+            // Ignore storage write failures in restricted environments.
+          }
+          return next;
+        });
+      } catch (error) {
+        const message = translate("salesAiFailed");
+        const description = error?.message || translate("unknownError");
+        setSalesAiReview({
+          loading: false,
+          generatedAt: Date.now(),
+          data: null,
+          error: description,
+        });
+        if (notification?.error) notification.error({ message, description });
+      }
+    }
+
+    const salesReportColumns = React.useMemo(() => [
+      {
+        title: getFieldLabel("report_date"),
+        dataIndex: "report_date",
+        key: "report_date",
+        width: 120,
+      },
+      {
+        title: getFieldLabel("owner_name"),
+        dataIndex: "owner_name",
+        key: "owner_name",
+        width: 180,
+        render: (value, row) => String(value || row?.owner_id || ""),
+      },
+      { title: getFieldLabel("calls_total"), dataIndex: "calls_total", key: "calls_total", width: 120 },
+      { title: getFieldLabel("interaction_total"), dataIndex: "interaction_total", key: "interaction_total", width: 130 },
+      { title: getFieldLabel("new_data_today"), dataIndex: "new_data_today", key: "new_data_today", width: 130 },
+      { title: getFieldLabel("visits_week"), dataIndex: "visits_week", key: "visits_week", width: 120 },
+      {
+        title: getFieldLabel("target_revenue"),
+        dataIndex: "target_revenue",
+        key: "target_revenue",
+        width: 170,
+        render: (value) => formatCurrency(value),
+      },
+      {
+        title: getFieldLabel("actual_revenue"),
+        dataIndex: "actual_revenue",
+        key: "actual_revenue",
+        width: 170,
+        render: (value) => formatCurrency(value),
+      },
+      {
+        title: translate("completionRate"),
+        key: "completion_rate",
+        width: 120,
+        render: (_, row) => {
+          const target = toNumber(row?.target_revenue, 0);
+          const actual = toNumber(row?.actual_revenue, 0);
+          const rate = target > 0 ? (actual * 100) / target : 0;
+          return formatPercent(rate);
+        },
+      },
+    ], [language, themeVersion, salesReportRows]);
+
+    const salesScoreboardColumns = React.useMemo(() => [
+      { title: translate("salesScoreRank"), dataIndex: "rank", key: "rank", width: 90 },
+      { title: getFieldLabel("owner_name"), dataIndex: "ownerName", key: "ownerName", width: 180 },
+      { title: translate("salesWeightedScore"), dataIndex: "weightedScore", key: "weightedScore", width: 120 },
+      { title: translate("salesRevenueScore"), dataIndex: "revenueScore", key: "revenueScore", width: 120 },
+      { title: translate("salesDealScore"), dataIndex: "dealScore", key: "dealScore", width: 120 },
+      { title: translate("salesActivityScore"), dataIndex: "activityScore", key: "activityScore", width: 120 },
+      { title: translate("salesTaskScore"), dataIndex: "taskScore", key: "taskScore", width: 120 },
+      { title: translate("salesPenaltyScore"), dataIndex: "overduePenaltyScore", key: "overduePenaltyScore", width: 130 },
+    ], [language, themeVersion]);
+
+    const salesAiHistoryColumns = React.useMemo(() => [
+      {
+        title: translate("updatedAt"),
+        dataIndex: "at",
+        key: "at",
+        width: 180,
+        render: (value) => {
+          const ts = toNumber(value, 0);
+          return ts > 0 ? new Date(ts).toLocaleString(getLocaleCode(language)) : "";
+        },
+      },
+      {
+        title: translate("salesAiTeamHealth"),
+        dataIndex: "teamHealthScore",
+        key: "teamHealthScore",
+        width: 160,
+        render: (value) => `${formatNumber(value)}/100`,
+      },
+      { title: translate("salesAiHistoryAvgScore"), dataIndex: "avgScore", key: "avgScore", width: 160 },
+      { title: translate("entitySalesReports"), dataIndex: "ownerCount", key: "ownerCount", width: 140 },
+    ], [language, themeVersion]);
+
+    const salesChatOwnerColumns = React.useMemo(() => [
+      { title: translate("salesScoreRank"), dataIndex: "rank", key: "rank", width: 90 },
+      { title: getFieldLabel("owner_name"), dataIndex: "ownerName", key: "ownerName", width: 180 },
+      { title: translate("salesChatOwnerHandled"), dataIndex: "handledConversations", key: "handledConversations", width: 170 },
+      { title: translate("salesChatWaiting"), dataIndex: "waitingConversations", key: "waitingConversations", width: 160 },
+      { title: translate("salesChatOwnerReplies"), dataIndex: "totalReplies", key: "totalReplies", width: 130 },
+      {
+        title: translate("salesChatOwnerAvgResponse"),
+        dataIndex: "avgFirstResponseMinutes",
+        key: "avgFirstResponseMinutes",
+        width: 170,
+        render: (value) => `${formatNumber(value)}m`,
+      },
+      {
+        title: translate("salesChatOwnerSlaRate"),
+        dataIndex: "slaRate",
+        key: "slaRate",
+        width: 150,
+        render: (value) => formatPercent(value),
+      },
+    ], [language, themeVersion]);
+
+    const salesChatPendingColumns = React.useMemo(() => [
+      { title: translate("salesChatGuestPhone"), dataIndex: "guestPhone", key: "guestPhone", width: 150 },
+      { title: getFieldLabel("owner_name"), dataIndex: "ownerName", key: "ownerName", width: 170 },
+      {
+        title: translate("linkedLead"),
+        key: "lead_name",
+        width: 180,
+        render: (_, row) => String(row?.leadName || row?.leadId || "-"),
+      },
+      { title: translate("salesChatWaitingMinutes"), dataIndex: "waitingMinutes", key: "waitingMinutes", width: 150 },
+      {
+        title: translate("salesChatLastMessageAt"),
+        dataIndex: "lastMessageAt",
+        key: "lastMessageAt",
+        width: 190,
+        render: (value) => {
+          const ts = toNumber(value, 0);
+          return ts > 0 ? new Date(ts).toLocaleString(getLocaleCode(language)) : "";
+        },
+      },
+    ], [language, themeVersion]);
+
     const crudColumns = [
       {
         title: translate("idLabel"),
@@ -3722,7 +5139,7 @@
         key: "actions",
         width: 160,
         render: (_, row) => {
-          return React.createElement("div", { style: { display: "flex", gap: 6 } }, [
+          const actionButtons = [
             React.createElement(Button, {
               key: `edit_${String(row[currentEntity.pkField || "id"] || row.id)}`,
               size: "small",
@@ -3734,7 +5151,94 @@
               size: "small",
               onClick: () => confirmDeleteEntity(row),
             }, translate("delete")),
-          ]);
+          ];
+
+          if (crudEntity === "inventory") {
+            const ownerId = String(row?.owner_id || "").trim();
+            const isOwner = Boolean(currentUserId) && ownerId === currentUserId;
+            const approval = String(row?.request_extra_status || "approved").toLowerCase();
+            const isAdminAction = canManageBasketAdminActions();
+
+            if (!isAdminAction && isOwner) {
+              actionButtons.push(React.createElement(Button, {
+                key: `request_${String(row[currentEntity.pkField || "id"] || row.id)}`,
+                size: "small",
+                onClick: async () => {
+                  await updateInventoryBasket(row, {
+                    requested_extra_qty: Math.max(1, toNumber(row?.requested_extra_qty, 0) || 1),
+                    request_extra_status: "pending",
+                    basket_type: "pending",
+                    requested_by: currentUserId,
+                  }, "basketRequestSubmitted");
+                },
+              }, translate("basketRequestExtra")));
+
+              actionButtons.push(React.createElement(Button, {
+                key: `return_${String(row[currentEntity.pkField || "id"] || row.id)}`,
+                size: "small",
+                onClick: async () => {
+                  await updateInventoryBasket(row, {
+                    basket_type: "global",
+                    owner_id: "",
+                    allocation_qty: 0,
+                    allocated_until: 0,
+                    request_extra_status: "approved",
+                    returned_at: Date.now(),
+                  }, "basketReturned");
+                },
+              }, translate("basketReturn")));
+            }
+
+            if (isAdminAction && approval === "pending") {
+              actionButtons.push(React.createElement(Button, {
+                key: `approve_${String(row[currentEntity.pkField || "id"] || row.id)}`,
+                size: "small",
+                type: "primary",
+                onClick: async () => {
+                  await updateInventoryBasket(row, {
+                    request_extra_status: "approved",
+                    basket_type: ownerId ? "allocated" : "global",
+                    approved_by: currentUserId,
+                    approved_at: Date.now(),
+                  }, "basketRequestApproved");
+                },
+              }, translate("basketApprove")));
+
+              actionButtons.push(React.createElement(Button, {
+                key: `reject_${String(row[currentEntity.pkField || "id"] || row.id)}`,
+                size: "small",
+                onClick: async () => {
+                  await updateInventoryBasket(row, {
+                    request_extra_status: "rejected",
+                    approved_by: currentUserId,
+                    approved_at: Date.now(),
+                    basket_type: ownerId ? "allocated" : "global",
+                  }, "basketRequestDenied");
+                },
+              }, translate("basketReject")));
+            }
+
+            if (isAdminAction && ownerId) {
+              actionButtons.push(React.createElement(Button, {
+                key: `revoke_${String(row[currentEntity.pkField || "id"] || row.id)}`,
+                size: "small",
+                onClick: async () => {
+                  await updateInventoryBasket(row, {
+                    basket_type: "global",
+                    owner_id: "",
+                    allocation_qty: 0,
+                    allocated_until: 0,
+                    request_extra_status: "approved",
+                    revoked_at: Date.now(),
+                    approved_by: currentUserId,
+                    approved_at: Date.now(),
+                  }, "basketRevoked");
+                },
+              }, translate("basketRevoke")));
+            }
+          }
+
+          return React.createElement("div", { style: { display: "flex", gap: 6, flexWrap: "wrap" } }, actionButtons);
         },
       },
     ];
@@ -5792,6 +7296,7 @@
                 { value: "inventory", label: translate("entityInventory") },
                 { value: "activities", label: translate("entityActivities") },
                 { value: "tasks", label: translate("entityTasks") },
+                { value: "sales_reports", label: translate("entitySalesReports") },
               ],
               onChange: (value) => {
                 setCrudEntity(value);
@@ -5858,7 +7363,29 @@
           },
         }, currentEntity.fields.map((field) => {
           const value = crudDraft[field] === undefined || crudDraft[field] === null ? "" : crudDraft[field];
-          const isNumeric = ["expected_value", "price", "area_m2", "bedrooms"].includes(field);
+          const isNumeric = [
+            "expected_value",
+            "price",
+            "price_vn",
+            "price_foreign",
+            "area_m2",
+            "area_net_m2",
+            "area_gross_m2",
+            "bedrooms",
+            "calls_total",
+            "spam_total",
+            "interaction_total",
+            "video_posts",
+            "old_customer_care",
+            "new_data_today",
+            "new_customers_week",
+            "meetings_week",
+            "visits_week",
+            "follow_needs",
+            "deals_month",
+            "target_revenue",
+            "actual_revenue",
+          ].includes(field);
           if (field === "project_name" && Select) {
             return React.createElement(Select, {
               key: `crud_field_${field}`,
@@ -5891,6 +7418,56 @@
                 { value: "other", label: translate("sourceOther") },
               ],
               onChange: (nextValue) => setDraftField(field, nextValue || "sales_self"),
+            });
+          }
+          if (field === "basket_type" && Select) {
+            return React.createElement(Select, {
+              key: `crud_field_${field}`,
+              getPopupContainer: resolvePopupContainer,
+              popupClassName: "crm-dynamic-popup",
+              dropdownClassName: "crm-dynamic-popup",
+              size: "small",
+              value: value || "global",
+              options: [
+                { value: "global", label: translate("basketTypeGlobal") },
+                { value: "allocated", label: translate("basketTypeAllocated") },
+                { value: "pending", label: translate("basketTypePending") },
+              ],
+              onChange: (nextValue) => setDraftField(field, nextValue || "global"),
+              disabled: !canManageBasketAdminActions(),
+            });
+          }
+          if (field === "request_extra_status" && Select) {
+            return React.createElement(Select, {
+              key: `crud_field_${field}`,
+              getPopupContainer: resolvePopupContainer,
+              popupClassName: "crm-dynamic-popup",
+              dropdownClassName: "crm-dynamic-popup",
+              size: "small",
+              value: value || "approved",
+              options: [
+                { value: "pending", label: translate("approvalPending") },
+                { value: "approved", label: translate("approvalApproved") },
+                { value: "rejected", label: translate("approvalRejected") },
+              ],
+              onChange: (nextValue) => setDraftField(field, nextValue || "pending"),
+              disabled: !canManageBasketAdminActions(),
+            });
+          }
+          if (field === "owner_id" && Select && crudEntity === "inventory") {
+            const ownerOptions = salesUsers.map((user) => ({ value: user.id, label: user.full_name || user.id }));
+            return React.createElement(Select, {
+              key: `crud_field_${field}`,
+              getPopupContainer: resolvePopupContainer,
+              popupClassName: "crm-dynamic-popup",
+              dropdownClassName: "crm-dynamic-popup",
+              size: "small",
+              allowClear: true,
+              showSearch: true,
+              value: value || undefined,
+              options: ownerOptions,
+              onChange: (nextValue) => setDraftField(field, nextValue || ""),
+              disabled: !canManageBasketAdminActions(),
             });
           }
           if (field === "status" && Select) {
@@ -6440,6 +8017,365 @@
                 },
               })),
             ])),
+          ]),
+        ]),
+        React.createElement(Card, {
+          key: "sales-kpi-report",
+          size: "small",
+          style: { borderRadius: 14, borderColor: themeTokens.border, background: themeTokens.cardBg, marginBottom: 10 },
+          styles: { body: { padding: 12 } },
+          title: React.createElement("div", { style: { display: "grid", gap: 2 } }, [
+            React.createElement("div", { key: "title", style: { fontWeight: 700, color: themeTokens.text } }, translate("salesReportTitle")),
+            React.createElement("div", { key: "desc", style: { fontSize: 12, color: themeTokens.textSecondary } }, translate("salesReportDesc")),
+          ]),
+        }, [
+          React.createElement("div", {
+            key: "sales-report-metrics",
+            style: {
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+              gap: 8,
+              marginBottom: 10,
+            },
+          }, [
+            metricCard(getFieldLabel("target_revenue"), formatCurrency(salesReportSummary.target), uiPalette.warning),
+            metricCard(getFieldLabel("actual_revenue"), formatCurrency(salesReportSummary.actual), uiPalette.success),
+            metricCard(translate("completionRate"), formatPercent(salesReportSummary.target > 0 ? (salesReportSummary.actual * 100) / salesReportSummary.target : 0), uiPalette.info),
+            metricCard(getFieldLabel("calls_total"), formatNumber(salesReportSummary.calls), uiPalette.accentA),
+            metricCard(getFieldLabel("interaction_total"), formatNumber(salesReportSummary.interactions), uiPalette.accentB),
+            metricCard(getFieldLabel("deals_month"), formatNumber(salesReportSummary.deals), uiPalette.accentC),
+          ]),
+          Table
+            ? React.createElement(Table, {
+              key: "sales-report-table",
+              size: "small",
+              rowKey: (row, idx) => String(row?.id || idx),
+              columns: salesReportColumns,
+              dataSource: salesReportRows,
+              pagination: { pageSize: 6, size: "small" },
+              scroll: { x: true },
+            })
+            : React.createElement("pre", { key: "sales-report-fallback" }, JSON.stringify(salesReportRows.slice(0, 20), null, 2)),
+        ]),
+        React.createElement(Card, {
+          key: "sales-chat-care",
+          size: "small",
+          style: { borderRadius: 14, borderColor: themeTokens.border, background: themeTokens.cardBg, marginBottom: 10 },
+          styles: { body: { padding: 12 } },
+          title: React.createElement("div", { style: { display: "grid", gap: 2 } }, [
+            React.createElement("div", { key: "title", style: { fontWeight: 700, color: themeTokens.text } }, translate("salesChatCareTitle")),
+            React.createElement("div", { key: "desc", style: { fontSize: 12, color: themeTokens.textSecondary } }, translate("salesChatCareDesc")),
+          ]),
+          extra: React.createElement(Button, {
+            key: "sales-chat-refresh",
+            size: "small",
+            loading: webChatCare.loading,
+            onClick: () => loadWebChatCareData(),
+          }, translate("salesChatRefresh")),
+        }, [
+          React.createElement("div", {
+            key: "sales-chat-metrics",
+            style: {
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+              gap: 8,
+              marginBottom: 10,
+            },
+          }, [
+            metricCard(translate("salesChatConversations"), formatNumber(webChatSummary.total), uiPalette.info),
+            metricCard(translate("salesChatWaiting"), formatNumber(webChatSummary.waiting), uiPalette.warning),
+            metricCard(translate("salesChatUnassigned"), formatNumber(webChatSummary.unassigned), uiPalette.danger),
+            metricCard(translate("salesChatAvgFirstResponse"), `${formatNumber(webChatSummary.avgFirstResponse)}m`, uiPalette.accentA),
+            metricCard(translate("salesChatSla"), formatPercent(webChatSummary.slaRate), uiPalette.success),
+          ]),
+          webChatCare.error
+            ? (Alert
+              ? React.createElement(Alert, {
+                key: "sales-chat-error",
+                type: "error",
+                showIcon: true,
+                message: translate("salesChatLoadFailed"),
+                description: webChatCare.error,
+                style: { marginBottom: 8, borderRadius: 10 },
+              })
+              : React.createElement("div", {
+                key: "sales-chat-error-fallback",
+                style: {
+                  marginBottom: 8,
+                  padding: "8px 10px",
+                  borderRadius: 10,
+                  background: themeTokens.dangerBg,
+                  border: `1px solid ${themeTokens.dangerBorder}`,
+                  color: themeTokens.dangerText,
+                  fontSize: 12,
+                },
+              }, `${translate("salesChatLoadFailed")}: ${webChatCare.error}`))
+            : null,
+          webChatCare.loading && !webChatConversationRows.length
+            ? React.createElement("div", {
+              key: "sales-chat-loading",
+              style: { color: themeTokens.textSecondary, fontSize: 12, marginBottom: 8 },
+            }, translate("salesChatLoading"))
+            : null,
+          !webChatCare.loading && !webChatConversationRows.length
+            ? React.createElement("div", {
+              key: "sales-chat-empty",
+              style: {
+                border: `1px dashed ${themeTokens.border}`,
+                borderRadius: 8,
+                padding: "8px 10px",
+                color: themeTokens.textSecondary,
+                background: themeTokens.cardBgMuted,
+                fontSize: 12,
+                marginBottom: 8,
+              },
+            }, translate("salesChatNoData"))
+            : null,
+          webChatConversationRows.length
+            ? React.createElement("div", { key: "sales-chat-table-wrap", style: { display: "grid", gap: 10 } }, [
+              React.createElement("div", { key: "owner-title", style: { fontWeight: 700, color: themeTokens.text, marginBottom: 4 } }, translate("salesChatOwnerTableTitle")),
+              Table
+                ? React.createElement(Table, {
+                  key: "sales-chat-owner-table",
+                  size: "small",
+                  rowKey: (row, idx) => String(row?.ownerId || `owner_${idx}`),
+                  columns: salesChatOwnerColumns,
+                  dataSource: webChatOwnerScoreboard,
+                  pagination: { pageSize: 6, size: "small" },
+                  scroll: { x: true },
+                })
+                : React.createElement("pre", { key: "sales-chat-owner-fallback" }, JSON.stringify(webChatOwnerScoreboard.slice(0, 20), null, 2)),
+              React.createElement("div", { key: "pending-title", style: { fontWeight: 700, color: themeTokens.text, marginBottom: 4 } }, translate("salesChatPendingTableTitle")),
+              Table
+                ? React.createElement(Table, {
+                  key: "sales-chat-pending-table",
+                  size: "small",
+                  rowKey: (row, idx) => String(`${row?.guestPhone || "guest"}_${idx}`),
+                  columns: salesChatPendingColumns,
+                  dataSource: webChatPendingRows,
+                  pagination: { pageSize: 6, size: "small" },
+                  scroll: { x: true },
+                })
+                : React.createElement("pre", { key: "sales-chat-pending-fallback" }, JSON.stringify(webChatPendingRows.slice(0, 20), null, 2)),
+            ])
+            : null,
+        ]),
+        React.createElement(Card, {
+          key: "sales-ai-review",
+          size: "small",
+          style: { borderRadius: 14, borderColor: themeTokens.border, background: themeTokens.cardBg, marginBottom: 10 },
+          styles: { body: { padding: 12 } },
+          title: React.createElement("div", { style: { display: "grid", gap: 2 } }, [
+            React.createElement("div", { key: "title", style: { fontWeight: 700, color: themeTokens.text } }, translate("salesAiReviewTitle")),
+            React.createElement("div", { key: "desc", style: { fontSize: 12, color: themeTokens.textSecondary } }, translate("salesAiReviewDesc")),
+          ]),
+          extra: React.createElement(Button, {
+            key: "sales-ai-generate",
+            size: "small",
+            loading: salesAiReview.loading,
+            onClick: generateSalesPerformanceReviewWithAI,
+          }, translate("salesAiGenerate")),
+        }, [
+          salesAiReview.generatedAt
+            ? React.createElement("div", {
+              key: "sales-ai-time",
+              style: { fontSize: 12, color: themeTokens.textSecondary, marginBottom: 8 },
+            }, `${translate("salesAiLastUpdated")}: ${new Date(salesAiReview.generatedAt).toLocaleString(getLocaleCode(language))}`)
+            : null,
+          salesAiReview.error
+            ? (Alert
+              ? React.createElement(Alert, {
+                key: "sales-ai-error",
+                type: "error",
+                showIcon: true,
+                message: translate("salesAiFailed"),
+                description: salesAiReview.error,
+                style: { marginBottom: 8, borderRadius: 10 },
+              })
+              : React.createElement("div", {
+                key: "sales-ai-error-fallback",
+                style: {
+                  marginBottom: 8,
+                  padding: "8px 10px",
+                  borderRadius: 10,
+                  background: themeTokens.dangerBg,
+                  border: `1px solid ${themeTokens.dangerBorder}`,
+                  color: themeTokens.dangerText,
+                  fontSize: 12,
+                },
+              }, `${translate("salesAiFailed")}: ${salesAiReview.error}`))
+            : null,
+          salesAiReview.data
+            ? React.createElement("div", {
+              key: "sales-ai-content",
+              style: { display: "grid", gap: 10 },
+            }, [
+              React.createElement("div", {
+                key: "sales-ai-overview",
+                style: {
+                  border: `1px solid ${themeTokens.border}`,
+                  borderRadius: 10,
+                  padding: 10,
+                  background: themeTokens.cardBgMuted,
+                },
+              }, [
+                React.createElement("div", { key: "overview-title", style: { fontWeight: 700, color: themeTokens.text, marginBottom: 4 } }, translate("salesAiOverview")),
+                React.createElement("div", { key: "overview-text", style: { color: themeTokens.textSecondary, fontSize: 13, lineHeight: 1.6 } }, salesAiReview.data.overview || "-"),
+                React.createElement("div", {
+                  key: "health-score",
+                  style: { marginTop: 8, fontSize: 12, color: themeTokens.textSecondary },
+                }, `${translate("salesAiTeamHealth")}: ${formatNumber(salesAiReview.data.teamHealthScore)}/100`),
+              ]),
+              React.createElement("div", {
+                key: "sales-ai-grid",
+                style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 8 },
+              }, [
+                React.createElement("div", {
+                  key: "wins",
+                  style: { border: `1px solid ${themeTokens.border}`, borderRadius: 10, padding: 10, background: themeTokens.cardBg },
+                }, [
+                  React.createElement("div", { key: "wins-title", style: { fontWeight: 700, marginBottom: 6, color: themeTokens.text } }, translate("salesAiTopWins")),
+                  React.createElement("ul", { key: "wins-list", style: { margin: 0, paddingLeft: 16, color: themeTokens.textSecondary, fontSize: 12, lineHeight: 1.6 } },
+                    (salesAiReview.data.topWins.length ? salesAiReview.data.topWins : ["-"]).map((item, idx) => React.createElement("li", { key: `win_${idx}` }, item))
+                  ),
+                ]),
+                React.createElement("div", {
+                  key: "risks",
+                  style: { border: `1px solid ${themeTokens.border}`, borderRadius: 10, padding: 10, background: themeTokens.cardBg },
+                }, [
+                  React.createElement("div", { key: "risks-title", style: { fontWeight: 700, marginBottom: 6, color: themeTokens.text } }, translate("salesAiRisks")),
+                  React.createElement("ul", { key: "risks-list", style: { margin: 0, paddingLeft: 16, color: themeTokens.textSecondary, fontSize: 12, lineHeight: 1.6 } },
+                    (salesAiReview.data.risks.length ? salesAiReview.data.risks : ["-"]).map((item, idx) => React.createElement("li", { key: `risk_${idx}` }, item))
+                  ),
+                ]),
+                React.createElement("div", {
+                  key: "owner-reviews",
+                  style: { border: `1px solid ${themeTokens.border}`, borderRadius: 10, padding: 10, background: themeTokens.cardBg },
+                }, [
+                  React.createElement("div", { key: "owner-title", style: { fontWeight: 700, marginBottom: 6, color: themeTokens.text } }, translate("salesAiOwnerReviews")),
+                  React.createElement("ul", { key: "owner-list", style: { margin: 0, paddingLeft: 16, color: themeTokens.textSecondary, fontSize: 12, lineHeight: 1.6 } },
+                    (salesAiReview.data.ownerReviews.length ? salesAiReview.data.ownerReviews : ["-"]).map((item, idx) => React.createElement("li", { key: `owner_${idx}` }, item))
+                  ),
+                ]),
+                React.createElement("div", {
+                  key: "action-7d",
+                  style: { border: `1px solid ${themeTokens.border}`, borderRadius: 10, padding: 10, background: themeTokens.cardBg },
+                }, [
+                  React.createElement("div", { key: "action-7d-title", style: { fontWeight: 700, marginBottom: 6, color: themeTokens.text } }, translate("salesAiAction7d")),
+                  React.createElement("ul", { key: "action-7d-list", style: { margin: 0, paddingLeft: 16, color: themeTokens.textSecondary, fontSize: 12, lineHeight: 1.6 } },
+                    (salesAiReview.data.action7d.length ? salesAiReview.data.action7d : ["-"]).map((item, idx) => React.createElement("li", { key: `act7_${idx}` }, item))
+                  ),
+                ]),
+                React.createElement("div", {
+                  key: "action-30d",
+                  style: { border: `1px solid ${themeTokens.border}`, borderRadius: 10, padding: 10, background: themeTokens.cardBg },
+                }, [
+                  React.createElement("div", { key: "action-30d-title", style: { fontWeight: 700, marginBottom: 6, color: themeTokens.text } }, translate("salesAiAction30d")),
+                  React.createElement("ul", { key: "action-30d-list", style: { margin: 0, paddingLeft: 16, color: themeTokens.textSecondary, fontSize: 12, lineHeight: 1.6 } },
+                    (salesAiReview.data.action30d.length ? salesAiReview.data.action30d : ["-"]).map((item, idx) => React.createElement("li", { key: `act30_${idx}` }, item))
+                  ),
+                ]),
+              ]),
+            ])
+            : React.createElement("div", {
+              key: "sales-ai-empty",
+              style: {
+                border: `1px dashed ${themeTokens.border}`,
+                borderRadius: 10,
+                padding: 10,
+                color: themeTokens.textSecondary,
+                fontSize: 12,
+                background: themeTokens.cardBgMuted,
+              },
+            }, translate("salesAiEmpty")),
+          React.createElement("div", {
+            key: "sales-scoreboard-wrap",
+            style: { marginTop: 10 },
+          }, [
+            React.createElement("div", {
+              key: "sales-scoreboard-title",
+              style: { fontWeight: 700, color: themeTokens.text, marginBottom: 4 },
+            }, translate("salesScoreboardTitle")),
+            React.createElement("div", {
+              key: "sales-scoreboard-desc",
+              style: { color: themeTokens.textSecondary, fontSize: 12, marginBottom: 8 },
+            }, translate("salesScoreboardDesc")),
+            Table
+              ? React.createElement(Table, {
+                key: "sales-scoreboard-table",
+                size: "small",
+                rowKey: (row, idx) => String(row?.ownerId || idx),
+                columns: salesScoreboardColumns,
+                dataSource: salesOwnerScoreboard,
+                pagination: { pageSize: 6, size: "small" },
+                scroll: { x: true },
+              })
+              : React.createElement("pre", { key: "sales-scoreboard-fallback" }, JSON.stringify(salesOwnerScoreboard.slice(0, 20), null, 2)),
+          ]),
+          React.createElement("div", {
+            key: "sales-warning-wrap",
+            style: { marginTop: 10 },
+          }, [
+            React.createElement("div", {
+              key: "sales-warning-title",
+              style: { fontWeight: 700, color: themeTokens.text, marginBottom: 4 },
+            }, translate("salesEarlyWarningTitle")),
+            React.createElement("div", {
+              key: "sales-warning-desc",
+              style: { color: themeTokens.textSecondary, fontSize: 12, marginBottom: 8 },
+            }, translate("salesEarlyWarningDesc")),
+            salesEarlyWarnings.length
+              ? React.createElement("ul", {
+                key: "sales-warning-list",
+                style: { margin: 0, paddingLeft: 16, color: themeTokens.textSecondary, fontSize: 12, lineHeight: 1.6 },
+              }, salesEarlyWarnings.map((item, idx) => React.createElement("li", { key: `sales_warning_${item.ownerId || "none"}_${idx}` }, item.message)))
+              : React.createElement("div", {
+                key: "sales-warning-empty",
+                style: {
+                  border: `1px dashed ${themeTokens.border}`,
+                  borderRadius: 8,
+                  padding: "8px 10px",
+                  color: themeTokens.textSecondary,
+                  background: themeTokens.cardBgMuted,
+                  fontSize: 12,
+                },
+              }, translate("salesWarningNone")),
+          ]),
+          React.createElement("div", {
+            key: "sales-history-wrap",
+            style: { marginTop: 10 },
+          }, [
+            React.createElement("div", {
+              key: "sales-history-title",
+              style: { fontWeight: 700, color: themeTokens.text, marginBottom: 4 },
+            }, translate("salesAiHistoryTitle")),
+            React.createElement("div", {
+              key: "sales-history-desc",
+              style: { color: themeTokens.textSecondary, fontSize: 12, marginBottom: 8 },
+            }, translate("salesAiHistoryDesc")),
+            salesAiHistorySummaryRows.length
+              ? (Table
+                ? React.createElement(Table, {
+                  key: "sales-history-table",
+                  size: "small",
+                  rowKey: (row, idx) => String(row?.at || idx),
+                  columns: salesAiHistoryColumns,
+                  dataSource: salesAiHistorySummaryRows,
+                  pagination: { pageSize: 5, size: "small" },
+                  scroll: { x: true },
+                })
+                : React.createElement("pre", { key: "sales-history-fallback" }, JSON.stringify(salesAiHistorySummaryRows.slice(0, 20), null, 2)))
+              : React.createElement("div", {
+                key: "sales-history-empty",
+                style: {
+                  border: `1px dashed ${themeTokens.border}`,
+                  borderRadius: 8,
+                  padding: "8px 10px",
+                  color: themeTokens.textSecondary,
+                  background: themeTokens.cardBgMuted,
+                  fontSize: 12,
+                },
+              }, translate("salesAiHistoryEmpty")),
           ]),
         ]),
         !CsmKanbanBoard && Segmented

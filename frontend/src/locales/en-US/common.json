@@ -21,6 +21,7 @@
 		"dept": "Department Management",
 		"broadcast": "Send Broadcast",
 		"developer": "Code Editor",
+		"userSub": "Sub-user Management",
 		"personalCenter": "Personal Center",
 		"profile": "My Profile",
 		"settings": "Settings",
@@ -102,6 +103,9 @@
 	"password": "Password",
 	"appToken": "App Token",
 	"appId": "App ID",
+	"loginIdentifier": "Login Identifier",
+	"parentAccountId": "Parent Account",
+	"groupId": "Group",
 	"active": "Active",
 	"export": "Export",
 	"chat": {

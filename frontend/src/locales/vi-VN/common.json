@@ -22,6 +22,7 @@
 		"dept": "Quản lý phòng ban",
 		"broadcast": "Gửi thông báo",
 		"developer": "Trình biên tập mã",
+		"userSub": "Quản lý tài khoản phụ",
 		"personalCenter": "Trung tâm cá nhân",
 		"profile": "Hồ sơ của tôi",
 		"settings": "Cài đặt",
@@ -103,6 +104,9 @@
 	"password": "Mật khẩu",
 	"appToken": "Mã ứng dụng",
 	"appId": "ID ứng dụng",
+	"loginIdentifier": "Định danh đăng nhập",
+	"parentAccountId": "Tài khoản cha",
+	"groupId": "Nhóm quyền",
 	"active": "Kích hoạt",
 	"export": "Xuất dữ liệu",
 	"chat": {

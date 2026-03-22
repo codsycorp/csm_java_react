@@ -15,6 +15,22 @@ export function AppVersionMonitor({ checkUpdatesInterval = 1, checkUpdateUrl = i
 	const currentVersionTag = useRef("");
 	const lastVersionTag = useRef("");
 	const timer = useRef<ReturnType<typeof setInterval>>();
+	const consecutiveFailures = useRef(0);
+	const cooldownUntil = useRef(0);
+
+	function buildProbeUrl(path: string) {
+		try {
+			const normalizedBase = String(checkUpdateUrl || "/").trim() || "/";
+			const base = /^https?:\/\//i.test(normalizedBase)
+				? normalizedBase
+				: `${location.origin}${normalizedBase.startsWith("/") ? "" : "/"}${normalizedBase}`;
+			const cleanBase = base.endsWith("/") ? base : `${base}/`;
+			return new URL(path.replace(/^\//, ""), cleanBase).toString();
+		}
+		catch {
+			return `${location.origin}/${path.replace(/^\//, "")}`;
+		}
+	}
 
 	function handleNotice(versionTag: string) {
 		currentVersionTag.current = versionTag;
@@ -65,24 +81,44 @@ export function AppVersionMonitor({ checkUpdatesInterval = 1, checkUpdateUrl = i
 				return null;
 			}
 
+			if (typeof navigator !== "undefined" && navigator.onLine === false) {
+				return null;
+			}
+
+			if (cooldownUntil.current > Date.now()) {
+				return null;
+			}
+
+			const controller = new AbortController();
+			const timeoutId = setTimeout(() => controller.abort(), 5000);
+
 			// Check version from a JSON file in the OSS directory
-			const response = await fetch(`${checkUpdateUrl}/version.json`, {
+			const response = await fetch(buildProbeUrl("version.json"), {
 				cache: !isCache ? "no-cache" : "default",
 				method: "GET",
+				signal: controller.signal,
 			});
+			clearTimeout(timeoutId);
 
 			if (response.ok) {
 				const data = await response.json();
+				consecutiveFailures.current = 0;
 				return data.version || null;
 			}
 
+			const fallbackController = new AbortController();
+			const fallbackTimeoutId = setTimeout(() => fallbackController.abort(), 5000);
+
 			// Fallback to checking headers if JSON file is not available
-			const fallbackResponse = await fetch(`${checkUpdateUrl}/fversion`, {
+			const fallbackResponse = await fetch(buildProbeUrl("fversion"), {
 				cache: !isCache ? "no-cache" : "default",
 				method: "HEAD",
+				signal: fallbackController.signal,
 			});
+			clearTimeout(fallbackTimeoutId);
 
 			if (fallbackResponse.ok) {
+				consecutiveFailures.current = 0;
 				return fallbackResponse.headers.get("etag") || fallbackResponse.headers.get("last-modified");
 			}
 			
@@ -90,6 +126,11 @@ export function AppVersionMonitor({ checkUpdatesInterval = 1, checkUpdateUrl = i
 			return null;
 		}
 		catch (error) {
+			consecutiveFailures.current += 1;
+			if (consecutiveFailures.current >= 3) {
+				// Pause probing for a short period to avoid noisy retries after network changes.
+				cooldownUntil.current = Date.now() + 5 * 60 * 1000;
+			}
 			// Only log errors in development mode
 			if (import.meta.env.DEV) {
 				console.warn("Failed to fetch version tag:", error);

@@ -669,11 +669,20 @@ public class AuthHandler {
                 // System/admin routes should ONLY rely on dev privilege or role access (not menu path access)
                 boolean isSystemRoute = path != null && ("/system".equals(path) || path.startsWith("/system/"));
 
-                // Include if (system route -> dev or role or children) else (role or menu or children)
+                // Admin users can access system routes except dev-only ones
+                // Dev-only paths: /system/menu, /system/developer, /system/broadcast
+                boolean isDevOnlySystemPath = path != null && (
+                    path.equals("/system/menu") || path.startsWith("/system/menu/") ||
+                    path.equals("/system/developer") || path.startsWith("/system/developer/") ||
+                    path.equals("/system/broadcast") || path.startsWith("/system/broadcast/")
+                );
+                boolean isAdminSystemAccess = "admin".equals(userRole) && isSystemRoute && !isDevOnlySystemPath;
+
+                // Include if (system route -> dev or role or admin-system or children) else (role or menu or children)
                 boolean hasChildren = currentRoute.containsKey("children") && 
                                      !((List) currentRoute.get("children")).isEmpty();
 
-                boolean include = isSystemRoute ? (isDev || hasRoleAccess || hasChildren)
+                boolean include = isSystemRoute ? (isDev || hasRoleAccess || isAdminSystemAccess || hasChildren)
                                                  : (hasRoleAccess || hasMenuAccess || hasChildren);
                 return include ? currentRoute : null;
             })

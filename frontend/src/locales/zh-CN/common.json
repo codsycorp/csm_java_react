@@ -21,6 +21,7 @@
 		"dept": "部门管理",
 		"broadcast": "发送广播",
 		"developer": "代码编辑器",
+		"userSub": "子账号管理",
 		"personalCenter": "个人中心",
 		"profile": "我的资料",
 		"settings": "设置",
@@ -102,6 +103,9 @@
 	"password": "密码",
 	"appToken": "应用令牌",
 	"appId": "应用 ID",
+	"loginIdentifier": "登录标识",
+	"parentAccountId": "父账号",
+	"groupId": "分组",
 	"active": "激活",
 	"export": "导出",
 	"chat": {

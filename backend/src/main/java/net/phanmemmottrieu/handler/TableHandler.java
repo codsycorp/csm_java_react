@@ -8,12 +8,15 @@ import net.phanmemmottrieu.controller.WebSpringController;
 import net.phanmemmottrieu.data.RecordManager;
 import net.phanmemmottrieu.data.SearchFilter;
 import net.phanmemmottrieu.model.StandardResponse;
+import net.phanmemmottrieu.model.User;
 import net.phanmemmottrieu.socket.SocketIOConfig;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 
 import java.io.IOException;
 import java.util.*;
@@ -236,6 +239,11 @@ public class TableHandler {
                 filtersObjs = null;  // hoặc tạo SearchFilter mặc định nếu cần
             }
 
+            // Security scope: admin (non-dev) chỉ xem users cùng app_id khi đọc bảng csm_accounts.
+            filtersObjs = applyAdminUserListScope(tblname, filtersObjs, isUpdate);
+            // Security scope: admin (non-dev) chỉ xem sub-user thuộc mình trong bảng csm_group_members.
+            filtersObjs = applyAdminSubUserListScope(tblname, filtersObjs, isUpdate);
+
 //            OSSUtil.log("Lấy dữ liệu "+appId+" trên bảng "+tblname+" với điều kiện "+filtersObjs+" so với điều kiện của nó là:"+msg.get("e_where"));
             if ("index".equals(tblname)) {
                 return handleIndexTableOperation(appId, msg, filtersObjs, isUpdate);
@@ -266,6 +274,201 @@ public class TableHandler {
         } catch (Exception e) {
             logger.info("Lỗi thao tác chương trình {} với bảng:{} với lỗi:{}",msg.get("app_id").toString(),msg.get("obj_name").toString(),e.getMessage());
             return errorResponse("Lỗi thao tác bảng: " + e.getMessage());
+        }
+    }
+
+    private SearchFilter applyAdminUserListScope(String tableName, SearchFilter existingFilter, boolean isUpdate) {
+        if (isUpdate || !"csm_accounts".equals(tableName)) {
+            return existingFilter;
+        }
+
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null || !authentication.isAuthenticated() || authentication.getPrincipal() == null ||
+            "anonymousUser".equals(authentication.getPrincipal())) {
+            return existingFilter;
+        }
+
+        Object principal = authentication.getPrincipal();
+        List<String> roles = null;
+        Boolean dev = false;
+        String userAppId = null;
+
+        if (principal instanceof User) {
+            User user = (User) principal;
+            roles = user.getPermissions();
+            dev = user.getDev() != null ? user.getDev() : false;
+            userAppId = user.getAppId();
+        } else if (principal instanceof Map<?, ?>) {
+            Map<?, ?> principalMap = (Map<?, ?>) principal;
+            Object rolesObj = principalMap.get("roles");
+            if (rolesObj instanceof List<?>) {
+                roles = ((List<?>) rolesObj).stream().filter(String.class::isInstance).map(String.class::cast).collect(java.util.stream.Collectors.toList());
+            }
+            Object devObj = principalMap.get("dev");
+            if (devObj instanceof Boolean) {
+                dev = (Boolean) devObj;
+            }
+            Object appIdObj = principalMap.get("app_id");
+            if (appIdObj != null) {
+                userAppId = String.valueOf(appIdObj);
+            }
+        }
+
+        boolean isAdmin = roles != null && roles.stream().anyMatch(r -> "admin".equalsIgnoreCase(r));
+        if (!isAdmin || Boolean.TRUE.equals(dev) || userAppId == null || userAppId.isBlank()) {
+            return existingFilter;
+        }
+
+        SearchFilter appScope = new SearchFilter();
+        appScope.setField("app_id");
+        appScope.setType("eq");
+        appScope.setValue(userAppId);
+
+        if (isEmptyFilter(existingFilter)) {
+            return appScope;
+        }
+
+        SearchFilter merged = new SearchFilter();
+        merged.setOperator("AND");
+        merged.setConditions(new ArrayList<>(List.of(existingFilter, appScope)));
+        return merged;
+    }
+
+    private SearchFilter applyAdminSubUserListScope(String tableName, SearchFilter existingFilter, boolean isUpdate) {
+        if (isUpdate || !"csm_group_members".equals(tableName)) {
+            return existingFilter;
+        }
+
+        UserAccessContext access = resolveCurrentUserAccessContext();
+        if (!access.isAdmin || access.isDev || access.parentAccountCandidates.isEmpty()) {
+            return existingFilter;
+        }
+
+        SearchFilter ownerScope = buildParentAccountScopeFilter(access.parentAccountCandidates);
+        if (ownerScope == null) {
+            return existingFilter;
+        }
+        if (isEmptyFilter(existingFilter)) {
+            return ownerScope;
+        }
+
+        SearchFilter merged = new SearchFilter();
+        merged.setOperator("AND");
+        merged.setConditions(new ArrayList<>(List.of(existingFilter, ownerScope)));
+        return merged;
+    }
+
+    private SearchFilter buildParentAccountScopeFilter(Set<String> parentCandidates) {
+        List<SearchFilter> conditions = new ArrayList<>();
+        for (String candidate : parentCandidates) {
+            if (candidate == null || candidate.isBlank()) continue;
+            SearchFilter cond = new SearchFilter();
+            cond.setField("parent_account_id");
+            cond.setType("eq");
+            cond.setValue(candidate);
+            conditions.add(cond);
+        }
+        if (conditions.isEmpty()) {
+            return null;
+        }
+        if (conditions.size() == 1) {
+            return conditions.get(0);
+        }
+        SearchFilter filter = new SearchFilter();
+        filter.setOperator("OR");
+        filter.setConditions(conditions);
+        return filter;
+    }
+
+    private boolean isOwnedSubUserRow(Map<String, Object> row, UserAccessContext access) {
+        if (row == null || access == null || access.parentAccountCandidates.isEmpty()) {
+            return false;
+        }
+        Object parentObj = row.get("parent_account_id");
+        if (parentObj == null) {
+            return false;
+        }
+        String parent = String.valueOf(parentObj);
+        return access.parentAccountCandidates.contains(parent);
+    }
+
+    private boolean isEmptyFilter(SearchFilter filter) {
+        if (filter == null) {
+            return true;
+        }
+        boolean hasField = filter.getField() != null && !filter.getField().isBlank();
+        boolean hasType = filter.getType() != null && !filter.getType().isBlank();
+        boolean hasValue = filter.getValue() != null && !String.valueOf(filter.getValue()).isBlank();
+        boolean hasConditions = filter.getConditions() != null && !filter.getConditions().isEmpty();
+        return !(hasField || hasType || hasValue || hasConditions);
+    }
+
+    private UserAccessContext resolveCurrentUserAccessContext() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null || !authentication.isAuthenticated() || authentication.getPrincipal() == null ||
+            "anonymousUser".equals(authentication.getPrincipal())) {
+            return new UserAccessContext(false, false, null, Collections.emptySet());
+        }
+
+        Object principal = authentication.getPrincipal();
+        List<String> roles = null;
+        Boolean dev = false;
+        String userAppId = null;
+        Set<String> parentCandidates = new HashSet<>();
+
+        if (principal instanceof User) {
+            User user = (User) principal;
+            roles = user.getPermissions();
+            dev = user.getDev() != null ? user.getDev() : false;
+            userAppId = user.getAppId();
+            if (user.getId() != null && !user.getId().isBlank()) parentCandidates.add(user.getId());
+            if (user.getAppId() != null && !user.getAppId().isBlank()) parentCandidates.add(user.getAppId());
+            if (user.getUsername() != null && !user.getUsername().isBlank()) parentCandidates.add(user.getUsername());
+            if (user.getEmail() != null && !user.getEmail().isBlank()) parentCandidates.add(user.getEmail());
+            if (user.getPhoneNumber() != null && !user.getPhoneNumber().isBlank()) parentCandidates.add(user.getPhoneNumber());
+        } else if (principal instanceof Map<?, ?>) {
+            Map<?, ?> principalMap = (Map<?, ?>) principal;
+            Object rolesObj = principalMap.get("roles");
+            if (rolesObj instanceof List<?>) {
+                roles = ((List<?>) rolesObj).stream()
+                    .filter(String.class::isInstance)
+                    .map(String.class::cast)
+                    .collect(java.util.stream.Collectors.toList());
+            }
+            Object devObj = principalMap.get("dev");
+            if (devObj instanceof Boolean) {
+                dev = (Boolean) devObj;
+            }
+            Object appIdObj = principalMap.get("app_id");
+            if (appIdObj != null) {
+                userAppId = String.valueOf(appIdObj);
+                if (!userAppId.isBlank()) parentCandidates.add(userAppId);
+            }
+            Object idObj = principalMap.get("id");
+            if (idObj != null && !String.valueOf(idObj).isBlank()) parentCandidates.add(String.valueOf(idObj));
+            Object usernameObj = principalMap.get("username");
+            if (usernameObj != null && !String.valueOf(usernameObj).isBlank()) parentCandidates.add(String.valueOf(usernameObj));
+            Object emailObj = principalMap.get("email");
+            if (emailObj != null && !String.valueOf(emailObj).isBlank()) parentCandidates.add(String.valueOf(emailObj));
+            Object phoneObj = principalMap.get("phoneNumber");
+            if (phoneObj != null && !String.valueOf(phoneObj).isBlank()) parentCandidates.add(String.valueOf(phoneObj));
+        }
+
+        boolean isAdmin = roles != null && roles.stream().anyMatch(r -> "admin".equalsIgnoreCase(r));
+        return new UserAccessContext(isAdmin, Boolean.TRUE.equals(dev), userAppId, parentCandidates);
+    }
+
+    private static final class UserAccessContext {
+        private final boolean isAdmin;
+        private final boolean isDev;
+        private final String appId;
+        private final Set<String> parentAccountCandidates;
+
+        private UserAccessContext(boolean isAdmin, boolean isDev, String appId, Set<String> parentAccountCandidates) {
+            this.isAdmin = isAdmin;
+            this.isDev = isDev;
+            this.appId = appId;
+            this.parentAccountCandidates = parentAccountCandidates != null ? parentAccountCandidates : Collections.emptySet();
         }
     }
 
@@ -417,8 +620,72 @@ public class TableHandler {
         if (objUpdate == null) {
             return errorResponse("Thiếu dữ liệu cập nhật");
         }
+
+        UserAccessContext accessContext = resolveCurrentUserAccessContext();
+        boolean isSystemUsersTable = "csm_accounts".equals(tblname);
+        boolean isAdminNonDev = accessContext.isAdmin && !accessContext.isDev;
+        boolean isSubUserTable = "csm_group_members".equals(tblname);
+
+        // Admin (non-dev) không được thao tác ghi trên bảng user hệ thống.
+        // Họ chỉ nên quản lý sub-user ở bảng/luồng riêng.
+        if (isSystemUsersTable && isAdminNonDev) {
+            return errorResponse("Admin không có quyền thêm/sửa/xóa trên bảng user hệ thống (csm_accounts)");
+        }
+
+        if (isSubUserTable && isAdminNonDev) {
+            Object parentObj = objUpdate.get("parent_account_id");
+            if ("create".equals(command)) {
+                if (parentObj == null || String.valueOf(parentObj).isBlank()) {
+                    String preferredParent = accessContext.appId;
+                    if (preferredParent == null || preferredParent.isBlank()) {
+                        preferredParent = accessContext.parentAccountCandidates.stream().findFirst().orElse("");
+                    }
+                    if (preferredParent == null || preferredParent.isBlank()) {
+                        return errorResponse("Không xác định được parent_account_id để tạo sub-user");
+                    }
+                    objUpdate.put("parent_account_id", preferredParent);
+                } else if (!accessContext.parentAccountCandidates.contains(String.valueOf(parentObj))) {
+                    return errorResponse("Admin chỉ được tạo sub-user thuộc tài khoản của chính mình");
+                }
+            } else if (parentObj != null && !String.valueOf(parentObj).isBlank()
+                && !accessContext.parentAccountCandidates.contains(String.valueOf(parentObj))) {
+                return errorResponse("Không được chuyển sub-user sang parent_account_id khác");
+            }
+        }
+
+        boolean enforceAccountAppScope = isSystemUsersTable
+            && accessContext.isAdmin
+            && !accessContext.isDev
+            && accessContext.appId != null
+            && !accessContext.appId.isBlank();
+
+        if (enforceAccountAppScope) {
+            Object targetAppIdObj = objUpdate.get("app_id");
+            if ("create".equals(command)) {
+                if (targetAppIdObj == null || String.valueOf(targetAppIdObj).isBlank()) {
+                    objUpdate.put("app_id", accessContext.appId);
+                } else if (!accessContext.appId.equals(String.valueOf(targetAppIdObj))) {
+                    return errorResponse("Admin chỉ được tạo người dùng trong app_id của chính mình");
+                }
+            } else if (targetAppIdObj != null && !String.valueOf(targetAppIdObj).isBlank()
+                && !accessContext.appId.equals(String.valueOf(targetAppIdObj))) {
+                return errorResponse("Không được chuyển tài khoản sang app_id khác");
+            }
+        }
+
         Map<String, Object> filterResult = recordManager.filter(appId, tblname, filters);
         List<Map<String, Object>> records = (List<Map<String, Object>>) filterResult.getOrDefault("rows", new ArrayList<>());
+
+        if (enforceAccountAppScope) {
+            records = records.stream()
+                .filter(row -> accessContext.appId.equals(String.valueOf(row.get("app_id"))))
+                .collect(java.util.stream.Collectors.toList());
+        }
+        if (isSubUserTable && isAdminNonDev) {
+            records = records.stream()
+                .filter(row -> isOwnedSubUserRow(row, accessContext))
+                .collect(java.util.stream.Collectors.toList());
+        }
 
         // Ưu tiên update theo id: nếu e_where quá chặt làm rỗng, fallback query theo id để ghi đè đúng bản ghi.
         if ("update".equals(command) && records.isEmpty() && objUpdate.get("id") != null) {
@@ -428,6 +695,16 @@ public class TableHandler {
             idFilter.setValue(objUpdate.get("id"));
             Map<String, Object> idLookupResult = recordManager.filter(appId, tblname, idFilter);
             records = (List<Map<String, Object>>) idLookupResult.getOrDefault("rows", new ArrayList<>());
+            if (enforceAccountAppScope) {
+                records = records.stream()
+                    .filter(row -> accessContext.appId.equals(String.valueOf(row.get("app_id"))))
+                    .collect(java.util.stream.Collectors.toList());
+            }
+            if (isSubUserTable && isAdminNonDev) {
+                records = records.stream()
+                    .filter(row -> isOwnedSubUserRow(row, accessContext))
+                    .collect(java.util.stream.Collectors.toList());
+            }
             logger.info("Fallback lookup by id for update {}.{} id={} -> {} row(s)", appId, tblname, objUpdate.get("id"), records.size());
         }
 

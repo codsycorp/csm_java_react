@@ -236,7 +236,9 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 		// Dev flag to decide whether to keep system menus
 		const userState = useUserStore.getState();
 		const isDev = resolveDevFlag(userState.dev, userState.roles);
-		// Nếu dev, bỏ roles trên nhánh /system trước khi sinh menu để giữ đầy đủ menu hệ thống
+		const isAdmin = !isDev && (userState.roles || []).some(r => r.trim().toLowerCase() === 'admin');
+		// Nếu dev, bỏ roles trên nhánh /system để giữ đầy đủ menu hệ thống
+		// Nếu admin, chỉ giữ sub-menus có roles chứa 'admin'
 		const routesForMenu = (isDev
 			? newRoutes.map(r => r.path === "/system"
 				? {
@@ -247,7 +249,19 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 					})),
 				}
 				: r)
-			: newRoutes) as AppRouteRecordRaw[];
+			: isAdmin
+				? newRoutes.map(r => r.path === "/system"
+					? {
+						...r,
+						children: (r.children || [])
+							.filter(c => {
+								const childRoles: string[] | undefined = (c as any).handle?.roles;
+								return !childRoles || childRoles.includes('admin');
+							})
+							.map(c => ({ ...c, handle: { ...(c as any).handle, roles: undefined } })),
+					}
+					: r)
+				: newRoutes) as AppRouteRecordRaw[];
 
 		let routeMenus: MenuItemType[] = getMenuItems(routesForMenu);
 		const homeMenu = routeMenus.find(m => m.key === "/home");
@@ -277,7 +291,7 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 				const apiMenus = transformApiMenusToLayoutMenus(apiMenuList as (ApiMenuItemType & { children?: MenuItemType[] })[]);
 				// Giữ auto-setup nếu có auto_code; loại bỏ chỉ khi không có auto_code
 				const filterAutoSetup = (m: any) => !(m.key === "/auto-setup" && !m.auto_code);
-				if (isDev) {
+				if (isDev || isAdmin) {
 					const apiMenusFiltered = apiMenus.filter(m => m.key !== "/system" && m.key !== "/home").filter(filterAutoSetup);
 					wholeMenus = [
 						...(homeMenu ? [homeMenu] : []),
@@ -292,8 +306,8 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 					];
 				}
 			} else {
-				// API trả về rỗng: chỉ giữ system menu nếu dev, ngược lại không menu
-				if (isDev) {
+				// API trả về rỗng: chỉ giữ system menu nếu dev hoặc admin, ngược lại không menu
+				if (isDev || isAdmin) {
 					wholeMenus = [
 						...(homeMenu ? [homeMenu] : []),
 						...systemMenusFromRoute,
@@ -303,8 +317,8 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 				}
 			}
 		} catch (error) {
-			// Nếu API 请求失败，也 áp dụng logic tương tự: dev giữ system, user không menu
-			if (isDev) {
+			// Nếu API 请求失败: dev/admin giữ system, user không menu
+			if (isDev || isAdmin) {
 				wholeMenus = [
 					...(homeMenu ? [homeMenu] : []),
 					...systemMenusFromRoute,
@@ -351,6 +365,7 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 			const apiMenuResponse = await fetchNavigationMenus(effectiveAppId);
 			const userState = useUserStore.getState();
 			const isDev = resolveDevFlag(devFlag ?? userState.dev, userState.roles);
+			const isAdmin = !isDev && (userState.roles || []).some(r => r.trim().toLowerCase() === 'admin');
 			const routesForMenu = (isDev
 				? newRoutes.map(r => r.path === '/system'
 					? {
@@ -361,7 +376,19 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 						})),
 					}
 					: r)
-				: newRoutes) as AppRouteRecordRaw[];
+				: isAdmin
+					? newRoutes.map(r => r.path === '/system'
+						? {
+							...r,
+							children: (r.children || [])
+								.filter(c => {
+									const childRoles: string[] | undefined = (c as any).handle?.roles;
+									return !childRoles || childRoles.includes('admin');
+								})
+								.map(c => ({ ...c, handle: { ...(c as any).handle, roles: undefined } })),
+						}
+						: r)
+					: newRoutes) as AppRouteRecordRaw[];
 			const routeMenus = getMenuItems(routesForMenu);
 			const homeMenu = routeMenus.find(m => m.key === '/home');
 			const systemMenus = routeMenus.filter(m => m.key === '/system');
@@ -381,7 +408,7 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 				const apiMenus = transformApiMenusToLayoutMenus(apiMenuList as (ApiMenuItemType & { children?: MenuItemType[] })[]);
 				const filterAutoSetup = (m: any) => !(m.key === '/auto-setup' && !m.auto_code);
 				const apiMenusFiltered = apiMenus.filter(m => m.key !== '/system' && m.key !== '/home').filter(filterAutoSetup);
-				if (isDev) {
+				if (isDev || isAdmin) {
 					wholeMenus = [
 						...(homeMenu ? [homeMenu] : []),
 						...systemMenus,
@@ -393,19 +420,20 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 						...apiMenusFiltered,
 					];
 				}
-			} else if (isDev) {
-				// API rỗng và dev: chỉ giữ home + system
+			} else if (isDev || isAdmin) {
+				// API rỗng và dev/admin: chỉ giữ home + system
 				wholeMenus = [
 					...(homeMenu ? [homeMenu] : []),
 					...systemMenus,
 				];
 			} else {
-				// API rỗng và không dev: chỉ giữ home (nếu có)
+				// API rỗng và không dev/admin: chỉ giữ home (nếu có)
 				wholeMenus = homeMenu ? [homeMenu] : [];
 			}
 		} catch {
 			const userState = useUserStore.getState();
 			const isDev = resolveDevFlag(devFlag ?? userState.dev, userState.roles);
+			const isAdmin = !isDev && (userState.roles || []).some(r => r.trim().toLowerCase() === 'admin');
 			const routesForMenu = (isDev
 				? newRoutes.map(r => r.path === '/system'
 					? {
@@ -416,11 +444,23 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 						})),
 					}
 					: r)
-				: newRoutes) as AppRouteRecordRaw[];
+				: isAdmin
+					? newRoutes.map(r => r.path === '/system'
+						? {
+							...r,
+							children: (r.children || [])
+								.filter(c => {
+									const childRoles: string[] | undefined = (c as any).handle?.roles;
+									return !childRoles || childRoles.includes('admin');
+								})
+								.map(c => ({ ...c, handle: { ...(c as any).handle, roles: undefined } })),
+						}
+						: r)
+					: newRoutes) as AppRouteRecordRaw[];
 			const routeMenus = getMenuItems(routesForMenu);
 			const homeMenu = routeMenus.find(m => m.key === '/home');
 			const systemMenus = routeMenus.filter(m => m.key === '/system');
-			wholeMenus = isDev
+			wholeMenus = (isDev || isAdmin)
 				? [...(homeMenu ? [homeMenu] : []), ...systemMenus]
 				: (homeMenu ? [homeMenu] : []);
 		}

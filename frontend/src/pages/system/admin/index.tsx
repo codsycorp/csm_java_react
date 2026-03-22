@@ -5,6 +5,7 @@ import CsmCrmWorkspace, { collectCrmTableNames, normalizeMenuRuntimeConfig } fro
 import { CsmKanbanBoard } from "#src/components/csm-kanban";
 import DynamicCodeMenu from "#src/pages/system/dynamic-code";
 import { useAppStore, useUserStore, usePermissionStore, useTabsStore } from "#src/store";
+import { resolveDevFlag } from "#src/utils/dev-flag";
 import { Empty, Spin, Alert } from "antd";
 import { useEffect, useState, useCallback } from "react";
 import { useParams, useLocation } from "react-router";
@@ -34,6 +35,15 @@ export default function AdminPage() {
 	// Prefer reactive currentAppId from AppStore; fallback to user.app_id
 	const currentAppId = useAppStore(state => state.currentAppId);
 	const userAppId = useUserStore(state => state.app_id);
+	const userRoles = useUserStore(state => state.roles || []);
+	const devFlag = useUserStore(state => state.dev);
+	const userId = useUserStore(state => state.userId);
+	const username = useUserStore(state => state.username);
+	const email = useUserStore(state => state.email);
+	const phoneNumber = useUserStore(state => state.phoneNumber);
+	const isDevUser = resolveDevFlag(devFlag, userRoles);
+	const isAdminUser = !isDevUser && userRoles.some(r => typeof r === "string" && r.trim().toLowerCase() === "admin");
+	const isSystemUserRoute = (menuId === "user") || (location.pathname === "/system/user");
 	// Prefer logged-in user's app_id; fallback to selected app or localStorage default
 	const appId = (userAppId && userAppId.trim())
 		|| (currentAppId && currentAppId.trim())
@@ -48,6 +58,49 @@ export default function AdminPage() {
 	const [dbLoading, setDbLoading] = useState(false);
 	const [dbError, setDbError] = useState<string | null>(null);
 	const [reloadTrigger, setReloadTrigger] = useState(0);
+
+	const userSubOwnerCandidates = [userAppId, userId, username, email, phoneNumber]
+		.filter((v): v is string => typeof v === "string" && v.trim().length > 0);
+
+	const buildUserMenuByRole = useCallback((base: any = {}): any => {
+		if (!isSystemUserRoute) {
+			return base;
+		}
+
+		if (isDevUser) {
+			return normalizeMenuRuntimeConfig({
+				...base,
+				id: "user",
+				path: "/system/user",
+				label: t("common.menu.user"),
+				label_en: "System User Management",
+				label_zh: "系统用户管理",
+				table_name: "csm_accounts",
+				app_id: "csm",
+				type_form: 1,
+				row_type_edit: 0,
+				g_readonly: false,
+			});
+		}
+
+		if (isAdminUser) {
+			return normalizeMenuRuntimeConfig({
+				...base,
+				id: "user",
+				path: "/system/user",
+				label: t("common.menu.userSub"),
+				label_en: "Sub-user Management",
+				label_zh: "子账号管理",
+				table_name: "csm_group_members",
+				app_id: "csm",
+				type_form: 1,
+				row_type_edit: 0,
+				g_readonly: false,
+			});
+		}
+
+		return base;
+	}, [isSystemUserRoute, isDevUser, isAdminUser, t]);
 
 	// Centralized refresh hook for dynamic grid/report/crm widgets.
 	const handleDataChange = useCallback(() => {
@@ -88,9 +141,10 @@ export default function AdminPage() {
 		// Try to get menu data from navigation state first (faster)
 		const locationState = location.state as any;
 		if (locationState?.menuData) {
+			const roleMenu = buildUserMenuByRole(locationState.menuData);
 			const withLabel = normalizeMenuRuntimeConfig({
-				...locationState.menuData,
-				label: resolveDisplayLabel(locationState.menuData),
+				...roleMenu,
+				label: resolveDisplayLabel(roleMenu),
 			});
 			setMenuData(withLabel);
 			setLoading(false);
@@ -146,7 +200,8 @@ export default function AdminPage() {
 					   found = fb;
 				   }
 			}
-			const withLabel = found ? normalizeMenuRuntimeConfig({ ...found, label: resolveDisplayLabel(found) }) : found;
+			const roleMenu = found ? buildUserMenuByRole(found) : found;
+			const withLabel = roleMenu ? normalizeMenuRuntimeConfig({ ...roleMenu, label: resolveDisplayLabel(roleMenu) }) : roleMenu;
 			setMenuData(withLabel);
 			setLoading(false);
 			
@@ -168,7 +223,7 @@ export default function AdminPage() {
 				useUserStore.getState().setSelectedMenuIdForTab("");
 			}
 		}
-	}, [menuId, apiWholeMenus, selectedMenuIdForTab, location.state, location.pathname, location.search, location.hash, addTab]);
+	}, [menuId, apiWholeMenus, selectedMenuIdForTab, location.state, location.pathname, location.search, location.hash, addTab, buildUserMenuByRole, t]);
 
 	// Di chuyển hàm loadTableData ra ngoài useEffect để có thể tái sử dụng
 	const loadTableData = async () => {
@@ -194,6 +249,17 @@ export default function AdminPage() {
 				operator: "AND" as const,
 				conditions: [{ field: "id", type: "like", value: "" }]
 			};
+
+			if (isSystemUserRoute && isAdminUser && primaryTable === "csm_group_members") {
+				const ownerConditions = userSubOwnerCandidates.map(owner => ({
+					field: "parent_account_id",
+					type: "eq",
+					value: owner,
+				}));
+				if (ownerConditions.length > 0) {
+					(defaultFilter.conditions as any[]).push({ operator: "OR", conditions: ownerConditions });
+				}
+			}
 
 			// Use menu-specific app_id if available, otherwise fall back to global appId
 			const effectiveAppId = runtimeMenu.app_id || appId;
@@ -283,7 +349,7 @@ export default function AdminPage() {
 	// Load table data from API when menuData changes
 	useEffect(() => {
 		loadTableData();
-	}, [menuData?.table_name, menuData?.crm_config, appId, reloadTrigger]);
+	}, [menuData?.table_name, menuData?.crm_config, appId, reloadTrigger, isSystemUserRoute, isAdminUser, userSubOwnerCandidates.join("|")]);
 
 	// Refresh function for data changes
 	const refreshDatabase = useCallback(() => {
@@ -469,11 +535,16 @@ export default function AdminPage() {
 			};
 			const keys = Object.keys(firstRow);
 			// If no rows yet, choose a sensible schema for csm_accounts
-			const fallbackKeys = [
-				"id", "username", "email", "avatar", "phoneNumber", "description", "roles", "actived",
-				"permissions", "menusPermissions", "group_rights", "full_name", "user_address", "app_id", "app_token", "refresh",
-				"picture", "userid", "pass", "app_token", "app_id", "active", "action"
-			];
+			const fallbackKeys = runtimeMenuData.table_name === "csm_group_members"
+				? ["id", "parent_account_id", "login_identifier", "pass", "group_id", "permissions", "menusPermissions", "actived"]
+				: [
+					"id", "username", "email", "avatar", "phoneNumber", "description", "roles", "actived",
+					"permissions", "menusPermissions", "group_rights", "full_name", "user_address", "app_id", "app_token", "refresh",
+					"picture", "userid", "pass", "app_token", "app_id", "active", "action"
+				];
+			DEFAULT_HEADERS.parent_account_id = "common.parentAccountId";
+			DEFAULT_HEADERS.login_identifier = "common.loginIdentifier";
+			DEFAULT_HEADERS.group_id = "common.groupId";
 			const fields = (keys.length ? keys : fallbackKeys).map((k) => ({
 				f_name: k,
 				f_header: t(DEFAULT_HEADERS[k] || k), // Sử dụng hàm `t` để dịch tiêu đề cột

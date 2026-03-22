@@ -20,7 +20,7 @@ const routes: AppRouteRecordRaw[] = [
 			icon: "SettingOutlined",
 			title: "common.menu.system",
 			order: system,
-			roles: ["dev"], // Only dev users can access system menu
+			roles: ["admin", "dev"],
 		},
 		children: [
 			{
@@ -29,7 +29,7 @@ const routes: AppRouteRecordRaw[] = [
 				handle: {
 					icon: "UserOutlined",
 					title: "common.menu.user",
-					roles: ["dev"],
+					roles: ["admin", "dev"],
 					permissions: [
 						"permission:button:add",
 						"permission:button:update",
@@ -43,7 +43,7 @@ const routes: AppRouteRecordRaw[] = [
 				handle: {
 					icon: "TeamOutlined",
 					title: "common.menu.role",
-					roles: ["dev"],
+					roles: ["admin", "dev"],
 					permissions: [
 						"permission:button:add",
 						"permission:button:update",
@@ -86,7 +86,7 @@ const routes: AppRouteRecordRaw[] = [
 					keepAlive: false,
 					icon: "ApartmentOutlined",
 					title: "common.menu.dept",
-					roles: ["dev"],
+					roles: ["admin", "dev"],
 					permissions: [
 						"permission:button:add",
 						"permission:button:update",
