@@ -38,7 +38,13 @@ export async function refreshTokenAndRetry(request: Request, options: Options) {
 				} catch (e) {}
 			}
 			// Retry the original request after successful token refresh
-			return ky(request, options);
+			// Use request.url instead of request object to ensure middleware chain runs again
+			return ky(request.url, {
+				...options,
+				method: request.method,
+				headers: request.headers,
+				body: request.body,
+			});
 		} catch (error) {
 			onRefreshFailed(error);
 			// Clear user data when refresh token fails
@@ -57,7 +63,12 @@ export async function refreshTokenAndRetry(request: Request, options: Options) {
 			addRefreshSubscriber({
 				resolve: async (newToken) => {
 					request.headers.set(AUTH_HEADER, `${newToken}`);
-					resolve(ky(request, options));
+					resolve(ky(request.url, {
+						...options,
+						method: request.method,
+						headers: request.headers,
+						body: request.body,
+					}));
 				},
 				// 当 token 刷新失败时，拒绝当前 Promise
 				reject,

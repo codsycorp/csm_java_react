@@ -25,6 +25,24 @@ let is401HandlingInProgress = false;
 
 // Helper: Lấy CSRF token từ cookie chỉ theo domain của VITE_API_BASE_URL
 import { useAuthStore } from "#src/store/auth";
+
+function readPersistedAuthState(): { token?: string; refreshToken?: string; csrfToken?: string } {
+	try {
+		const raw = localStorage.getItem("access-token");
+		if (!raw)
+			return {};
+		const parsed = JSON.parse(raw);
+		const state = parsed?.state || {};
+		return {
+			token: typeof state.token === "string" ? state.token : undefined,
+			refreshToken: typeof state.refreshToken === "string" ? state.refreshToken : undefined,
+			csrfToken: typeof state.csrfToken === "string" ? state.csrfToken : undefined,
+		};
+	} catch {
+		return {};
+	}
+}
+
 function getCsrfToken() {
 	// Ưu tiên đồng bộ với cookie để tránh mismatch
 	const match = typeof document !== "undefined" ? document.cookie.match(/(?:^|; )CSRF-TOKEN=([^;]*)/) : null;
@@ -34,6 +52,9 @@ function getCsrfToken() {
 		const token = useAuthStore.getState().csrfToken;
 		if (token) return token;
 	} catch {}
+	// Fallback cuối: lấy từ persisted localStorage khi store chưa hydrate xong
+	const persisted = readPersistedAuthState().csrfToken;
+	if (persisted) return persisted;
 	return null;
 }
 
@@ -43,7 +64,11 @@ function getCsrfToken() {
 function hasAuthState() {
 	try {
 		const authState = useAuthStore.getState();
-		return Boolean(authState?.token || authState?.refreshToken || getCsrfToken());
+		if (authState?.token || authState?.refreshToken || getCsrfToken()) {
+			return true;
+		}
+		const persisted = readPersistedAuthState();
+		return Boolean(persisted.token || persisted.refreshToken || persisted.csrfToken);
 	} catch {
 		return false;
 	}
@@ -90,7 +115,7 @@ const defaultConfig: Options = {
 				}
 
 				try {
-					const refreshToken = useAuthStore.getState().refreshToken;
+					const refreshToken = useAuthStore.getState().refreshToken || readPersistedAuthState().refreshToken;
 					if (refreshToken) {
 						request.headers.set('X-Refresh-Token', refreshToken);
 					}
@@ -105,7 +130,7 @@ const defaultConfig: Options = {
 								// Backend filter prioritizes csm-token over refresh token, so sending both breaks refresh flow.
 								if (!isWhiteRequest && !isWebsiteRequest && !isRefreshTokenRequest) {
 									try {
-										const token = useAuthStore.getState().token;
+										const token = useAuthStore.getState().token || readPersistedAuthState().token;
 										if (token) {
 											// Attach custom csm-token header (used by some backend handlers)
 											request.headers.set(AUTH_HEADER, `${token}`);
@@ -196,8 +221,21 @@ const defaultConfig: Options = {
 					if (response.status === 403 && !(options as any)._csrfRetried) {
 						try {
 							const cloned = response.clone();
-							const data = await cloned.json().catch(() => ({} as any));
+							const raw = await cloned.text();
+							console.log(`[403 DEBUG] URL: ${request.url}, Response body length: ${raw.length}`, raw.substring(0, 500));
+							
+							let data: any = {};
+							if (raw && raw.trim()) {
+								try {
+									data = JSON.parse(raw);
+								} catch (parseErr) {
+									console.log("[403 DEBUG] Failed to parse JSON:", parseErr);
+								}
+							}
+							
 							const tokenFromBody = (data as any)?.csrfToken || (data as any)?.result?.csrfToken;
+							console.log(`[403 DEBUG] CSRF token in body: ${Boolean(tokenFromBody)}, hasAuthState: ${hasAuthState()}`);
+							
 						if (tokenFromBody) {
 							// Cập nhật store để các request sau dùng token mới
 							try { 
@@ -218,8 +256,19 @@ const defaultConfig: Options = {
 							return ky(request.url, retryOptions);
 						}
 					} catch (e) {
-						console.error("[CSRF] Lỗi khi retry 403:", e);
+						console.error("[CSRF] Lỗi khi parse 403 body:", e);
 					}
+						// Không có csrfToken trong body: có thể là 403 do token hết hạn/thiếu token ở API bảo vệ.
+						// Thử refresh + retry 1 lần nếu có trạng thái đăng nhập.
+						if (!(options as any)._authRetried && hasAuthState()) {
+							try {
+								console.log("[403] Attempting auth refresh + retry for:", request.url);
+								const retryOptions = { ...options, _authRetried: true } as Options;
+								return await refreshTokenAndRetry(request, retryOptions);
+							} catch (refreshError) {
+								console.warn("[AUTH] Refresh after 403 failed:", refreshError);
+							}
+						}
 					}
 					   return handleErrorResponse(response);
 				   }

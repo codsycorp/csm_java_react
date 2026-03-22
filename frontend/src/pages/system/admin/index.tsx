@@ -67,6 +67,8 @@ export default function AdminPage() {
 			return base;
 		}
 
+		const resolvedAppId = (base?.app_id && String(base.app_id).trim()) || appId;
+
 		if (isDevUser) {
 			return normalizeMenuRuntimeConfig({
 				...base,
@@ -76,7 +78,7 @@ export default function AdminPage() {
 				label_en: "System User Management",
 				label_zh: "系统用户管理",
 				table_name: "csm_accounts",
-				app_id: "csm",
+				app_id: resolvedAppId,
 				type_form: 1,
 				row_type_edit: 0,
 				g_readonly: false,
@@ -92,7 +94,7 @@ export default function AdminPage() {
 				label_en: "Sub-user Management",
 				label_zh: "子账号管理",
 				table_name: "csm_group_members",
-				app_id: "csm",
+				app_id: resolvedAppId,
 				type_form: 1,
 				row_type_edit: 0,
 				g_readonly: false,
@@ -100,7 +102,7 @@ export default function AdminPage() {
 		}
 
 		return base;
-	}, [isSystemUserRoute, isDevUser, isAdminUser, t]);
+	}, [isSystemUserRoute, isDevUser, isAdminUser, t, appId]);
 
 	// Centralized refresh hook for dynamic grid/report/crm widgets.
 	const handleDataChange = useCallback(() => {

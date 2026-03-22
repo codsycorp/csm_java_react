@@ -10,8 +10,19 @@ export async function handleErrorResponse(response: Response) {
 	try {
 		// Clone response để tránh consumed body
 		const clonedResponse = response.clone();
-		// 将响应内容解析为 JSON 格式
-		const data = await clonedResponse.json();
+		const raw = await clonedResponse.text();
+		if (!raw || !raw.trim()) {
+			message.error(response.statusText || `HTTP ${response.status}`);
+			return response;
+		}
+
+		let data: unknown;
+		try {
+			data = JSON.parse(raw);
+		} catch {
+			message.error(response.statusText || `HTTP ${response.status}`);
+			return response;
+		}
 
 		// 判断解析后的数据是否为对象类型
 		if (isObject(data)) {
