@@ -56,6 +56,7 @@ export interface MenuItemType {
 	trigger?: Record<string, any>
 	config?: string
 	crm_config?: Record<string, any> | string
+	system_user_modes?: Record<string, any> | string
 	/**
 	 * Menu configuration
 	 */

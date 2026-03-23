@@ -182,7 +182,20 @@
 		"name": "Tên Phòng Ban",
 		"id": "Mã Phòng Ban",
 		"addDept": "Thêm Phòng Ban",
-		"editDept": "Chỉnh Sửa Phòng Ban"
+		"editDept": "Chỉnh Sửa Phòng Ban",
+		"fields": {
+			"id": "ID",
+			"parentDeptId": "Phòng ban cha",
+			"code": "Mã phòng ban",
+			"name": "Tên phòng ban",
+			"fullName": "Tên đầy đủ",
+			"description": "Mô tả",
+			"managerUser": "Người quản lý",
+			"isGlobal": "Dùng chung",
+			"status": "Trạng thái",
+			"createTime": "Thời gian tạo",
+			"updateTime": "Thời gian cập nhật"
+		}
 	},
 	"broadcast": {
 		"title": "Gửi Thông Báo Broadcast đến AppId",

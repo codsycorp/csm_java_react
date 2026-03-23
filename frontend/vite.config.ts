@@ -4,7 +4,7 @@ import process from "node:process";
 import react from "@vitejs/plugin-react";
 import { codeInspectorPlugin } from "code-inspector-plugin";
 import dayjs from "dayjs";
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv } from "vite";
 import { defineConfig as defineVitestConfig } from "vitest/config";
 import { checker } from "vite-plugin-checker";
 import svgrPlugin from "vite-plugin-svgr";
@@ -23,7 +23,11 @@ const __APP_INFO__ = {
 const isDev = process.env.NODE_ENV === "development";
 
 // https://vitejs.dev/config/
-export default defineVitestConfig({
+export default defineVitestConfig(({ mode }) => {
+	const env = loadEnv(mode, process.cwd(), "");
+	const apiBaseUrl = env.VITE_API_BASE_URL || "http://localhost:8080";
+
+	return {
 	base: "/",
 	plugins: [
 		react(),
@@ -65,7 +69,7 @@ export default defineVitestConfig({
 		// https://vitejs.dev/config/server-options#server-proxy
 		proxy: {
 			"/api": {
-				target: process.env.VITE_API_BASE_URL || "http://localhost:8080",
+				target: apiBaseUrl,
 				changeOrigin: true,
 				rewrite: path => path.replace(/^\/api/, ""),
 			},
@@ -122,4 +126,5 @@ export default defineVitestConfig({
 		  external: [],
 		},
 	},
+	};
 });

@@ -132,6 +132,114 @@ function formatDateTime(value: any, locale?: string, emptyText: string = "") {
 	return dayjs(timestamp).format("DD/MM/YYYY HH:mm");
 }
 
+// Vietnamese lunar conversion (solar -> lunar) using timezone +7 astronomical rules.
+function jdFromDate(day: number, month: number, year: number) {
+	const a = Math.floor((14 - month) / 12);
+	const y = year + 4800 - a;
+	const m = month + 12 * a - 3;
+	let jd = day + Math.floor((153 * m + 2) / 5) + 365 * y + Math.floor(y / 4);
+	jd -= Math.floor(y / 100);
+	jd += Math.floor(y / 400) - 32045;
+	if (jd < 2299161) {
+		jd = day + Math.floor((153 * m + 2) / 5) + 365 * y + Math.floor(y / 4) - 32083;
+	}
+	return jd;
+}
+
+function getNewMoonDay(k: number, timeZone: number) {
+	const t = k / 1236.85;
+	const t2 = t * t;
+	const t3 = t2 * t;
+	const dr = Math.PI / 180;
+	let jd1 = 2415020.75933 + 29.53058868 * k + 0.0001178 * t2 - 0.000000155 * t3;
+	jd1 += 0.00033 * Math.sin((166.56 + 132.87 * t - 0.009173 * t2) * dr);
+	const m = 359.2242 + 29.10535608 * k - 0.0000333 * t2 - 0.00000347 * t3;
+	const mpr = 306.0253 + 385.81691806 * k + 0.0107306 * t2 + 0.00001236 * t3;
+	const f = 21.2964 + 390.67050646 * k - 0.0016528 * t2 - 0.00000239 * t3;
+	let c1 = (0.1734 - 0.000393 * t) * Math.sin(m * dr) + 0.0021 * Math.sin(2 * dr * m);
+	c1 -= 0.4068 * Math.sin(mpr * dr) + 0.0161 * Math.sin(2 * dr * mpr);
+	c1 -= 0.0004 * Math.sin(3 * dr * mpr);
+	c1 += 0.0104 * Math.sin(2 * dr * f) - 0.0051 * Math.sin(dr * (m + mpr));
+	c1 -= 0.0074 * Math.sin(dr * (m - mpr)) + 0.0004 * Math.sin(dr * (2 * f + m));
+	c1 -= 0.0004 * Math.sin(dr * (2 * f - m)) - 0.0006 * Math.sin(dr * (2 * f + mpr));
+	c1 += 0.0010 * Math.sin(dr * (2 * f - mpr)) + 0.0005 * Math.sin(dr * (2 * mpr + m));
+	const deltaT = t < -11
+		? 0.001 + 0.000839 * t + 0.0002261 * t2 - 0.00000845 * t3 - 0.000000081 * t * t3
+		: -0.000278 + 0.000265 * t + 0.000262 * t2;
+	const jdNew = jd1 + c1 - deltaT;
+	return Math.floor(jdNew + 0.5 + timeZone / 24);
+}
+
+function getSunLongitude(dayNumber: number, timeZone: number) {
+	const t = (dayNumber - 2451545.5 - timeZone / 24) / 36525;
+	const t2 = t * t;
+	const dr = Math.PI / 180;
+	const m = 357.52910 + 35999.05030 * t - 0.0001559 * t2 - 0.00000048 * t * t2;
+	const l0 = 280.46645 + 36000.76983 * t + 0.0003032 * t2;
+	let dl = (1.914600 - 0.004817 * t - 0.000014 * t2) * Math.sin(dr * m);
+	dl += (0.019993 - 0.000101 * t) * Math.sin(2 * dr * m) + 0.000290 * Math.sin(3 * dr * m);
+	let l = l0 + dl;
+	l *= dr;
+	l -= Math.PI * 2 * Math.floor(l / (Math.PI * 2));
+	return Math.floor(l / Math.PI * 6);
+}
+
+function getLunarMonth11(year: number, timeZone: number) {
+	const off = jdFromDate(31, 12, year) - 2415021;
+	const k = Math.floor(off / 29.530588853);
+	let nm = getNewMoonDay(k, timeZone);
+	const sunLong = getSunLongitude(nm, timeZone);
+	if (sunLong >= 9) nm = getNewMoonDay(k - 1, timeZone);
+	return nm;
+}
+
+function getLeapMonthOffset(a11: number, timeZone: number) {
+	const k = Math.floor(0.5 + (a11 - 2415021.076998695) / 29.530588853);
+	let i = 1;
+	let arc = getSunLongitude(getNewMoonDay(k + i, timeZone), timeZone);
+	let last = 0;
+	while (arc !== last && i < 14) {
+		last = arc;
+		i += 1;
+		arc = getSunLongitude(getNewMoonDay(k + i, timeZone), timeZone);
+	}
+	return i - 1;
+}
+
+function solarToVietnamLunar(day: number, month: number, year: number, timeZone = 7) {
+	const dayNumber = jdFromDate(day, month, year);
+	const k = Math.floor((dayNumber - 2415021.076998695) / 29.530588853);
+	let monthStart = getNewMoonDay(k + 1, timeZone);
+	if (monthStart > dayNumber) monthStart = getNewMoonDay(k, timeZone);
+
+	let a11 = getLunarMonth11(year, timeZone);
+	let b11 = a11;
+	let lunarYear: number;
+	if (a11 >= monthStart) {
+		lunarYear = year;
+		a11 = getLunarMonth11(year - 1, timeZone);
+	}
+	else {
+		lunarYear = year + 1;
+		b11 = getLunarMonth11(year + 1, timeZone);
+	}
+
+	const lunarDay = dayNumber - monthStart + 1;
+	const diff = Math.floor((monthStart - a11) / 29);
+	let lunarLeap = 0;
+	let lunarMonth = diff + 11;
+	if (b11 - a11 > 365) {
+		const leapMonthDiff = getLeapMonthOffset(a11, timeZone);
+		if (diff >= leapMonthDiff) {
+			lunarMonth = diff + 10;
+			if (diff === leapMonthDiff) lunarLeap = 1;
+		}
+	}
+	if (lunarMonth > 12) lunarMonth -= 12;
+	if (lunarMonth >= 11 && diff < 4) lunarYear -= 1;
+	return { day: lunarDay, month: lunarMonth, year: lunarYear, leap: lunarLeap };
+}
+
 function compareUserIdentity(user: Record<string, any>, value: any) {
 	const normalized = String(value || "").trim().toLowerCase();
 	if (!normalized) return false;
@@ -316,6 +424,30 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 		exportWarningDesc: t("crmWorkspace.exportWarningDesc"),
 		activityCalendar: t("crmWorkspace.activityCalendar"),
 		noCalendarToday: t("crmWorkspace.noCalendarToday"),
+		calendarSolar: t("crmWorkspace.calendarSolar"),
+		calendarLunar: t("crmWorkspace.calendarLunar"),
+		visitCareTab: t("crmWorkspace.visitCareTab"),
+		visitCareTitle: t("crmWorkspace.visitCareTitle"),
+		appointmentDateTime: t("crmWorkspace.appointmentDateTime"),
+		noVisitCare: t("crmWorkspace.noVisitCare"),
+		visitColIndex: t("crmWorkspace.visitColIndex"),
+		visitColTitle: t("crmWorkspace.visitColTitle"),
+		visitColName: t("crmWorkspace.visitColName"),
+		visitColAddress: t("crmWorkspace.visitColAddress"),
+		visitColPhoneLast4: t("crmWorkspace.visitColPhoneLast4"),
+		visitColSalesName: t("crmWorkspace.visitColSalesName"),
+		visitColTeamName: t("crmWorkspace.visitColTeamName"),
+		visitColProject: t("crmWorkspace.visitColProject"),
+		visitFilterKeyword: t("crmWorkspace.visitFilterKeyword"),
+		visitFilterSales: t("crmWorkspace.visitFilterSales"),
+		visitFilterTeam: t("crmWorkspace.visitFilterTeam"),
+		visitFilterFrom: t("crmWorkspace.visitFilterFrom"),
+		visitFilterTo: t("crmWorkspace.visitFilterTo"),
+		visitFilterAll: t("crmWorkspace.visitFilterAll"),
+		visitSummaryTotal: t("crmWorkspace.visitSummaryTotal"),
+		visitSummaryToday: t("crmWorkspace.visitSummaryToday"),
+		visitSummaryOverdue: t("crmWorkspace.visitSummaryOverdue"),
+		visitSummaryUpcoming: t("crmWorkspace.visitSummaryUpcoming"),
 		recentInteractions: t("crmWorkspace.recentInteractions"),
 		noInteractionLog: t("crmWorkspace.noInteractionLog"),
 		followupTasks: t("crmWorkspace.followupTasks"),
@@ -345,7 +477,22 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 		guideStep4Desc: t("crmWorkspace.guideStep4Desc"),
 		guideStep5Title: t("crmWorkspace.guideStep5Title"),
 		guideStep5Desc: t("crmWorkspace.guideStep5Desc"),
+		guideStep6Title: t("crmWorkspace.guideStep6Title"),
+		guideStep6Desc: t("crmWorkspace.guideStep6Desc"),
+		guideStep7Title: t("crmWorkspace.guideStep7Title"),
+		guideStep7Desc: t("crmWorkspace.guideStep7Desc"),
+		guideStep8Title: t("crmWorkspace.guideStep8Title"),
+		guideStep8Desc: t("crmWorkspace.guideStep8Desc"),
 		guideDataTitle: t("crmWorkspace.guideDataTitle"),
+		guideLogicTitle: t("crmWorkspace.guideLogicTitle"),
+		guideLogicStep1: t("crmWorkspace.guideLogicStep1"),
+		guideLogicStep2: t("crmWorkspace.guideLogicStep2"),
+		guideLogicStep3: t("crmWorkspace.guideLogicStep3"),
+		guideLogicStep4: t("crmWorkspace.guideLogicStep4"),
+		guideLogicStep5: t("crmWorkspace.guideLogicStep5"),
+		guideLogicStep6: t("crmWorkspace.guideLogicStep6"),
+		guideLogicStep7: t("crmWorkspace.guideLogicStep7"),
+		guideLogicStep8: t("crmWorkspace.guideLogicStep8"),
 		guideLeadRule: t("crmWorkspace.guideLeadRule"),
 		guideInventoryRule: t("crmWorkspace.guideInventoryRule"),
 		guideActivityRule: t("crmWorkspace.guideActivityRule"),
@@ -874,6 +1021,10 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 	const [activityRows, setActivityRows] = useState<RowData[]>([]);
 	const [taskRows, setTaskRows] = useState<RowData[]>([]);
 	const [exportRows, setExportRows] = useState<RowData[]>([]);
+	const [visitCareKeyword, setVisitCareKeyword] = useState("");
+	const [visitCareSalesFilter, setVisitCareSalesFilter] = useState("");
+	const [visitCareTeamFilter, setVisitCareTeamFilter] = useState("");
+	const [visitCareDateRange, setVisitCareDateRange] = useState<[dayjs.Dayjs | null, dayjs.Dayjs | null]>([null, null]);
 	// CRUD & Refresh state
 	const [fetchLoading, setFetchLoading] = useState(false);
 	const [isLeadModalOpen, setIsLeadModalOpen] = useState(false);
@@ -1033,22 +1184,92 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 	const hasLinkedInventory = inventoryRows.some((row) => Boolean(row[inventoryLeadLinkField]));
 	const hasInteractionLog = activityRows.length > 0;
 	const hasTaskPlan = taskRows.length > 0;
+	const visitTypeSet = useMemo(() => new Set(["site_visit", "visit", "tham_quan", "tham quan du an"]), []);
+	const visitLeadIds = useMemo(() => {
+		const ids = new Set<string>();
+		const leadVisitField = "visit_date";
+		const leadPkField = leadSource?.pkField || "id";
+		filteredLeadRows.forEach((lead) => {
+			const ts = toTimestamp(lead[leadVisitField]);
+			const id = String(lead[leadPkField] || lead.id || "").trim();
+			if (ts && id) ids.add(id);
+		});
+		const activityTypeField = activitySource?.contactTypeField || "activity_type";
+		const activityLeadField = activitySource?.leadRefField || "lead_id";
+		const activityDateField = activitySource?.scheduledAtField || activitySource?.completedAtField || "scheduled_at";
+		activityRows.forEach((row) => {
+			const type = String(row[activityTypeField] || "").trim().toLowerCase();
+			const leadId = String(row[activityLeadField] || "").trim();
+			const ts = toTimestamp(row[activityDateField]);
+			if (visitTypeSet.has(type) && leadId && ts) ids.add(leadId);
+		});
+		return ids;
+	}, [filteredLeadRows, leadSource?.pkField, activityRows, activitySource, visitTypeSet]);
+	const hasVisitAppointment = visitLeadIds.size > 0;
+	const hasVisitResultLog = activityRows.some((row) => {
+		const type = String(row[activitySource?.contactTypeField || "activity_type"] || "").trim().toLowerCase();
+		if (!visitTypeSet.has(type)) return false;
+		const result = String(row[activitySource?.resultField || "result"] || "").trim().toLowerCase();
+		return ["success", "pending", "done"].includes(result);
+	});
+	const hasVisitFollowupTask = taskRows.some((row) => {
+		const leadId = String(row[taskSource?.leadRefField || "lead_id"] || "").trim();
+		if (!leadId || !visitLeadIds.has(leadId)) return false;
+		const status = String(row[taskSource?.statusField || "status"] || "").toLowerCase();
+		return ["todo", "in_progress", "done"].includes(status);
+	});
+	const hasSalesOutcome = bookingCount > 0 || closedCount > 0;
 	const guideCurrentStep = useMemo(() => {
 		if (!hasLeadCoreInfo) return 0;
 		if (!hasLinkedInventory) return 1;
 		if (!hasInteractionLog) return 2;
-		if (!hasTaskPlan) return 3;
-		if (closedCount <= 0) return 4;
-		return 5;
-	}, [hasLeadCoreInfo, hasLinkedInventory, hasInteractionLog, hasTaskPlan, closedCount]);
-	const guideProgressPercent = Math.min(100, Math.round((guideCurrentStep / 5) * 100));
+		if (!hasVisitAppointment) return 3;
+		if (!hasVisitResultLog) return 4;
+		if (!hasVisitFollowupTask) return 5;
+		if (!hasTaskPlan) return 6;
+		if (!hasSalesOutcome) return 7;
+		return 8;
+	}, [
+		hasLeadCoreInfo,
+		hasLinkedInventory,
+		hasInteractionLog,
+		hasVisitAppointment,
+		hasVisitResultLog,
+		hasVisitFollowupTask,
+		hasTaskPlan,
+		hasSalesOutcome,
+	]);
+	const guideProgressPercent = Math.min(100, Math.round((guideCurrentStep / 8) * 100));
 	const guideStepItems = useMemo(() => ([
 		{ title: text.guideStep1Title, description: text.guideStep1Desc },
 		{ title: text.guideStep2Title, description: text.guideStep2Desc },
 		{ title: text.guideStep3Title, description: text.guideStep3Desc },
 		{ title: text.guideStep4Title, description: text.guideStep4Desc },
 		{ title: text.guideStep5Title, description: text.guideStep5Desc },
+		{ title: text.guideStep6Title, description: text.guideStep6Desc },
+		{ title: text.guideStep7Title, description: text.guideStep7Desc },
+		{ title: text.guideStep8Title, description: text.guideStep8Desc },
 	]), [text]);
+	const guideLogicItems = useMemo(() => ([
+		{ label: text.guideLogicStep1, done: hasLeadCoreInfo },
+		{ label: text.guideLogicStep2, done: hasLinkedInventory },
+		{ label: text.guideLogicStep3, done: hasInteractionLog },
+		{ label: text.guideLogicStep4, done: hasVisitAppointment },
+		{ label: text.guideLogicStep5, done: hasVisitResultLog },
+		{ label: text.guideLogicStep6, done: hasVisitFollowupTask },
+		{ label: text.guideLogicStep7, done: hasTaskPlan },
+		{ label: text.guideLogicStep8, done: hasSalesOutcome },
+	]), [
+		text,
+		hasLeadCoreInfo,
+		hasLinkedInventory,
+		hasInteractionLog,
+		hasVisitAppointment,
+		hasVisitResultLog,
+		hasVisitFollowupTask,
+		hasTaskPlan,
+		hasSalesOutcome,
+	]);
 	const guideRules = useMemo(() => ([
 		text.guideLeadRule,
 		text.guideInventoryRule,
@@ -1127,13 +1348,140 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 		],
 	}), [salesByDimension, workspaceTheme.info]);
 
-	const activitiesByDate = useMemo(() => {
-		const map = buildDateBadgeItems(activityRows, activitySource);
-		for (const [key, value] of buildDateBadgeItems(taskRows, taskSource)) {
-			map.set(key, (map.get(key) || 0) + value);
-		}
-		return map;
-	}, [activityRows, taskRows, activitySource, taskSource]);
+	const visitCareRows = useMemo(() => {
+		const leadPkField = leadSource?.pkField || "id";
+		const leadVisitField = "visit_date";
+		const leadPhoneLast4Field = "phone_last4";
+		const leadAddressField = "address";
+		const leadSalesNameField = "sales_name";
+		const leadTeamNameField = "team_name";
+		const leadCustomerTitleField = "customer_title";
+		const activityTypeField = activitySource?.contactTypeField || "activity_type";
+		const activityLeadField = activitySource?.leadRefField || "lead_id";
+		const activityDateField = activitySource?.scheduledAtField || activitySource?.completedAtField || "scheduled_at";
+		const activityNotesField = activitySource?.notesField || "notes";
+		const visitTypes = new Set(["site_visit", "visit", "tham_quan", "tham quan du an"]);
+
+		const latestVisitActivityByLead = new Map<string, { ts: number; notes: string }>();
+		activityRows.forEach((row) => {
+			const type = String(row[activityTypeField] || "").trim().toLowerCase();
+			if (!visitTypes.has(type)) return;
+			const leadId = String(row[activityLeadField] || "").trim();
+			const ts = toTimestamp(row[activityDateField]);
+			if (!leadId || !ts) return;
+			const prev = latestVisitActivityByLead.get(leadId);
+			if (!prev || ts > prev.ts) {
+				latestVisitActivityByLead.set(leadId, {
+					ts,
+					notes: String(row[activityNotesField] || "").trim(),
+				});
+			}
+		});
+
+		return visibleLeadRows
+			.map((lead, index) => {
+				const leadId = String(lead[leadPkField] || lead.id || `lead_${index}`);
+				const leadVisitTs = toTimestamp(lead[leadVisitField]);
+				const visitActivity = latestVisitActivityByLead.get(leadId);
+				const appointmentTs = leadVisitTs || visitActivity?.ts || null;
+				const status = String(lead[leadStatusField] || "").toLowerCase();
+				if (!appointmentTs && status !== "site_visit") return null;
+
+				const fullPhone = String(lead[leadPhoneField] || "").trim();
+				const phoneLast4 = String(lead[leadPhoneLast4Field] || fullPhone.slice(-4) || "").trim();
+				return {
+					key: leadId,
+					stt: index + 1,
+					customer_title: String(lead[leadCustomerTitleField] || "").trim(),
+					name: String(lead[leadTitleField] || "").trim(),
+					address: String(lead[leadAddressField] || "").trim(),
+					phone_last4: phoneLast4,
+					sales_name: String(lead[leadSalesNameField] || lead[leadAssignedField] || "").trim(),
+					team_name: String(lead[leadTeamNameField] || lead[leadTeamField] || "").trim(),
+					project_name: String(lead[leadProjectField] || "").trim(),
+					appointment_ts: appointmentTs,
+					appointment_label: formatDateTime(appointmentTs, localeCode, text.noData),
+					notes: visitActivity?.notes || "",
+				};
+			})
+			.filter((row): row is NonNullable<typeof row> => Boolean(row))
+			.sort((a, b) => (a.appointment_ts || 0) - (b.appointment_ts || 0));
+	}, [
+		activityRows,
+		activitySource,
+		leadAssignedField,
+		leadPhoneField,
+		leadProjectField,
+		leadSource,
+		leadStatusField,
+		leadTeamField,
+		leadTitleField,
+		localeCode,
+		text.noData,
+		visibleLeadRows,
+	]);
+
+	const visitCareSalesOptions = useMemo(() => {
+		const values = Array.from(new Set(
+			visitCareRows
+				.map((row) => String(row.sales_name || "").trim())
+				.filter(Boolean),
+		)).sort((a, b) => a.localeCompare(b));
+		return values.map((value) => ({ label: value, value }));
+	}, [visitCareRows]);
+
+	const visitCareTeamOptions = useMemo(() => {
+		const values = Array.from(new Set(
+			visitCareRows
+				.map((row) => String(row.team_name || "").trim())
+				.filter(Boolean),
+		)).sort((a, b) => a.localeCompare(b));
+		return values.map((value) => ({ label: value, value }));
+	}, [visitCareRows]);
+
+	const filteredVisitCareRows = useMemo(() => {
+		const keyword = visitCareKeyword.trim().toLowerCase();
+		const [fromDate, toDate] = visitCareDateRange;
+		const fromTs = fromDate ? fromDate.startOf("day").valueOf() : 0;
+		const toTs = toDate ? toDate.endOf("day").valueOf() : 0;
+		return visitCareRows.filter((row) => {
+			const salesOk = !visitCareSalesFilter || String(row.sales_name || "") === visitCareSalesFilter;
+			const teamOk = !visitCareTeamFilter || String(row.team_name || "") === visitCareTeamFilter;
+			const ts = toNumber(row.appointment_ts);
+			const fromOk = !fromTs || (ts >= fromTs);
+			const toOk = !toTs || (ts <= toTs);
+			const keywordOk = !keyword || [
+				row.customer_title,
+				row.name,
+				row.address,
+				row.phone_last4,
+				row.sales_name,
+				row.team_name,
+				row.project_name,
+			]
+				.filter(Boolean)
+				.some((value) => String(value).toLowerCase().includes(keyword));
+			return salesOk && teamOk && fromOk && toOk && keywordOk;
+		});
+	}, [visitCareRows, visitCareSalesFilter, visitCareTeamFilter, visitCareDateRange, visitCareKeyword]);
+
+	const visitCareStats = useMemo(() => {
+		const todayStart = dayjs().startOf("day").valueOf();
+		const todayEnd = dayjs().endOf("day").valueOf();
+		let total = 0;
+		let today = 0;
+		let overdue = 0;
+		let upcoming = 0;
+		filteredVisitCareRows.forEach((row) => {
+			const ts = toNumber(row.appointment_ts);
+			if (!ts) return;
+			total += 1;
+			if (ts >= todayStart && ts <= todayEnd) today += 1;
+			else if (ts < todayStart) overdue += 1;
+			else if (ts > todayEnd) upcoming += 1;
+		});
+		return { total, today, overdue, upcoming };
+	}, [filteredVisitCareRows]);
 
 	const calendarRows = useMemo(() => {
 		const target = calendarDate.format("YYYY-MM-DD");
@@ -1144,17 +1492,64 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 				kind: text.activities,
 				title: `${String(getActivityTypeLabel(String(row[activitySource?.contactTypeField || "activity_type"] || "other"))).toUpperCase()} - ${row[activitySource?.notesField || "notes"] || text.noData}`,
 				date: dayjs(toTimestamp(row[activityDateField]) || 0).format("YYYY-MM-DD"),
+				timestamp: toTimestamp(row[activityDateField]) || 0,
 				status: getActivityResultLabel(String(row[activitySource?.resultField || "result"] || "pending")),
 			})),
 			...taskRows.map((row) => ({
 				kind: text.followupTasks,
 				title: row[taskSource?.titleKeyField || "title"] || text.taskTitle,
 				date: dayjs(toTimestamp(row[taskDateField]) || 0).format("YYYY-MM-DD"),
+				timestamp: toTimestamp(row[taskDateField]) || 0,
 				status: getTaskStatusLabel(String(row[taskSource?.statusField || "status"] || "todo")),
 			})),
+			...visitCareRows.map((row) => ({
+				kind: text.visitCareTitle,
+				title: `${row.customer_title || ""} ${row.name}`.trim() || text.noData,
+				date: dayjs(row.appointment_ts || 0).format("YYYY-MM-DD"),
+				timestamp: row.appointment_ts || 0,
+				status: row.project_name || text.noData,
+			})),
 		];
-		return rows.filter((row) => row.date === target);
-	}, [calendarDate, activityRows, taskRows, activitySource, taskSource, getActivityTypeLabel, getActivityResultLabel, getTaskStatusLabel, text.activities, text.followupTasks, text.noData, text.taskTitle]);
+		const dedup = new Set<string>();
+		return rows
+			.filter((row) => row.date === target && row.timestamp > 0)
+			.filter((row) => {
+				const key = `${row.kind}|${row.title}|${row.status}|${row.date}`;
+				if (dedup.has(key)) return false;
+				dedup.add(key);
+				return true;
+			})
+			.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+	}, [
+		calendarDate,
+		activityRows,
+		taskRows,
+		visitCareRows,
+		activitySource,
+		taskSource,
+		getActivityTypeLabel,
+		getActivityResultLabel,
+		getTaskStatusLabel,
+		text.activities,
+		text.followupTasks,
+		text.visitCareTitle,
+		text.noData,
+		text.taskTitle,
+	]);
+
+	const enhancedActivitiesByDate = useMemo(() => {
+		const map = new Map<string, number>();
+		const addDate = (timestamp: any) => {
+			const ts = toTimestamp(timestamp);
+			if (!ts) return;
+			const key = dayjs(ts).format("YYYY-MM-DD");
+			map.set(key, (map.get(key) || 0) + 1);
+		};
+		activityRows.forEach((row) => addDate(row[activitySource?.scheduledAtField || activitySource?.completedAtField || "scheduled_at"]));
+		taskRows.forEach((row) => addDate(row[taskSource?.dueDateField || "due_at"]));
+		visitCareRows.forEach((row) => addDate(row.appointment_ts));
+		return map;
+	}, [activityRows, taskRows, visitCareRows, activitySource, taskSource]);
 
 	const exportAlert = useMemo(() => {
 		const threshold = security.exportAlertThreshold || 100;
@@ -1794,13 +2189,15 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 						value={calendarDate}
 						onSelect={(value) => setCalendarDate(value)}
 						cellRender={(current, info) => {
-							if (info.type !== "date") return info.originNode;
-							const count = activitiesByDate.get(current.format("YYYY-MM-DD")) || 0;
-							if (!count) return info.originNode;
+							if (info && info.type !== "date") return info.originNode;
+							const count = enhancedActivitiesByDate.get(current.format("YYYY-MM-DD")) || 0;
+							const lunar = solarToVietnamLunar(current.date(), current.month() + 1, current.year(), 7);
 							return (
-								<div style={{ position: "relative", height: "100%" }}>
-									{info.originNode}
-									<Badge count={count} size="small" style={{ position: "absolute", top: 2, right: 2 }} />
+								<div style={{ position: "relative", minHeight: 16, padding: "0 2px" }}>
+									<div style={{ fontSize: 10, marginTop: 14, color: token.colorTextSecondary, lineHeight: 1.1 }}>
+										{lunar.day}/{lunar.month}
+									</div>
+									{count > 0 ? <Badge count={count} size="small" style={{ position: "absolute", top: 2, right: 2 }} /> : null}
 								</div>
 							);
 						}}
@@ -1813,7 +2210,7 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 							<List.Item>
 								<Space direction="vertical" size={0} style={{ width: "100%" }}>
 									<Typography.Text>{item.title}</Typography.Text>
-									<Typography.Text type="secondary">{item.kind} - {item.status}</Typography.Text>
+									<Typography.Text type="secondary">{formatDateTime(item.timestamp, localeCode, text.noData)} - {item.kind} - {item.status}</Typography.Text>
 								</Space>
 							</List.Item>
 						)}
@@ -1872,6 +2269,83 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 									)}
 									locale={{ emptyText: text.noTaskPending }}
 								/>
+							),
+						},
+						{
+							key: "visit-care",
+							label: text.visitCareTab,
+							children: (
+								<Space direction="vertical" size={10} style={{ width: "100%" }}>
+									<Row gutter={[8, 8]}>
+										<Col xs={24} md={12}>
+											<Input
+												allowClear
+												placeholder={text.visitFilterKeyword}
+												value={visitCareKeyword}
+												onChange={(event) => setVisitCareKeyword(event.target.value)}
+											/>
+										</Col>
+										<Col xs={24} md={12}>
+											<Space.Compact style={{ width: "100%" }}>
+												<DatePicker
+													style={{ width: "50%" }}
+													placeholder={text.visitFilterFrom}
+													value={visitCareDateRange[0]}
+													onChange={(value) => setVisitCareDateRange([value, visitCareDateRange[1]])}
+												/>
+												<DatePicker
+													style={{ width: "50%" }}
+													placeholder={text.visitFilterTo}
+													value={visitCareDateRange[1]}
+													onChange={(value) => setVisitCareDateRange([visitCareDateRange[0], value])}
+												/>
+											</Space.Compact>
+										</Col>
+										<Col xs={24} md={12}>
+											<Select
+												allowClear
+												placeholder={text.visitFilterSales}
+												value={visitCareSalesFilter || undefined}
+												onChange={(value) => setVisitCareSalesFilter(value || "")}
+												options={visitCareSalesOptions}
+											/>
+										</Col>
+										<Col xs={24} md={12}>
+											<Select
+												allowClear
+												placeholder={text.visitFilterTeam}
+												value={visitCareTeamFilter || undefined}
+												onChange={(value) => setVisitCareTeamFilter(value || "")}
+												options={visitCareTeamOptions}
+											/>
+										</Col>
+									</Row>
+									<Row gutter={[8, 8]}>
+										<Col xs={12} md={6}><Statistic title={text.visitSummaryTotal} value={visitCareStats.total} /></Col>
+										<Col xs={12} md={6}><Statistic title={text.visitSummaryToday} value={visitCareStats.today} /></Col>
+										<Col xs={12} md={6}><Statistic title={text.visitSummaryOverdue} value={visitCareStats.overdue} /></Col>
+										<Col xs={12} md={6}><Statistic title={text.visitSummaryUpcoming} value={visitCareStats.upcoming} /></Col>
+									</Row>
+									<Table
+										size="small"
+										rowKey={(row) => String(row.key)}
+										dataSource={filteredVisitCareRows}
+										pagination={{ pageSize: 8, size: "small" }}
+										scroll={{ x: true }}
+										locale={{ emptyText: text.noVisitCare }}
+										columns={[
+											{ title: text.visitColIndex, key: "stt", width: 64, render: (_value, _row, index) => index + 1 },
+											{ title: text.visitColTitle, dataIndex: "customer_title", key: "customer_title", width: 120 },
+											{ title: text.visitColName, dataIndex: "name", key: "name", width: 140 },
+											{ title: text.visitColAddress, dataIndex: "address", key: "address", width: 140 },
+											{ title: text.visitColPhoneLast4, dataIndex: "phone_last4", key: "phone_last4", width: 110 },
+											{ title: text.visitColSalesName, dataIndex: "sales_name", key: "sales_name", width: 130 },
+											{ title: text.visitColTeamName, dataIndex: "team_name", key: "team_name", width: 110 },
+											{ title: text.visitColProject, dataIndex: "project_name", key: "project_name", width: 130 },
+											{ title: text.appointmentDateTime, dataIndex: "appointment_label", key: "appointment_label", width: 170 },
+										]}
+									/>
+								</Space>
 							),
 						},
 					]}
@@ -1940,7 +2414,7 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 						<Typography.Title level={5} style={{ margin: 0 }}>{text.guideTitle}</Typography.Title>
 						<Typography.Text className="crm-onboarding-subtitle" type="secondary">{text.guideSubtitle}</Typography.Text>
 						<Steps
-							current={Math.min(guideCurrentStep, 4)}
+							current={Math.min(guideCurrentStep, guideStepItems.length - 1)}
 							direction="vertical"
 							size="small"
 							items={guideStepItems}
@@ -1959,6 +2433,20 @@ export default function CsmCrmWorkspace({ appId, menuData, database, onDataChang
 								renderItem={(item) => (
 									<List.Item style={{ paddingInline: 0 }}>
 										<Typography.Text type="secondary">{item}</Typography.Text>
+									</List.Item>
+								)}
+							/>
+							<Divider style={{ margin: "4px 0" }} />
+							<Typography.Text strong>{text.guideLogicTitle}</Typography.Text>
+							<List
+								size="small"
+								dataSource={guideLogicItems}
+								renderItem={(item) => (
+									<List.Item style={{ paddingInline: 0 }}>
+										<Space style={{ width: "100%", justifyContent: "space-between" }}>
+											<Typography.Text type="secondary">{item.label}</Typography.Text>
+											<Tag color={item.done ? "success" : "default"}>{item.done ? text.statusDone : text.statusTodo}</Tag>
+										</Space>
 									</List.Item>
 								)}
 							/>

@@ -16,7 +16,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { FormInstance, UploadProps } from "antd";
-import { Tabs, Alert, Card, Upload, Button, message, Spin } from "antd";
+import { Tabs, Alert, Card, Upload, Button, message, Spin, Input } from "antd";
 import FieldConfigEditor from "./FieldConfigEditor";
 import TriggerEditor from "./TriggerEditor";
 import type { TableField, TriggerConfig } from "#src/components/csm-grid/CsmDynamicGrid";
@@ -24,6 +24,7 @@ import { CRM_CONFIG_TEMPLATE } from "#src/components/csm-crm";
 import { KANBAN_CONFIG_TEMPLATE } from "#src/components/csm-kanban";
 import { csmDecrypt } from "#src/components/csm-grid/CsmCrypto";
 import { useUserStore } from "#src/store/user";
+import { getDefaultSystemUserModeConfig, parseSystemUserModes, type SystemUserMenuModeConfig } from "#src/pages/system/admin/system-user-menu-config";
 
 import { getMenuTypeOptions } from "../constants";
 
@@ -261,6 +262,7 @@ export function Detail({
   const formRef = useRef<FormInstance>(null);
   const [tableRows, setTableRows] = useState<TableField[]>([]);
   const [triggerConfig, setTriggerConfig] = useState<TriggerConfig | Record<string, any>>({});
+  const [subUserModeConfig, setSubUserModeConfig] = useState<SystemUserMenuModeConfig>(() => getDefaultSystemUserModeConfig("sub", t));
   const user = useUserStore();
   const [autoCodeOptions, setAutoCodeOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [loadingAutoCode, setLoadingAutoCode] = useState(false);
@@ -339,6 +341,29 @@ export function Detail({
       trigger: triggerConfig,
       parentId, // Luôn set parentId
     };
+
+    const isSystemUserMenu = (values.path || detailData.path) === "/system/user";
+    if (isSystemUserMenu) {
+      payload.system_user_modes = {
+        main: {
+          table_name: payload.table_name,
+          table: tableRows,
+          trigger: triggerConfig,
+          type_form: payload.type_form,
+          row_type_edit: payload.row_type_edit,
+          g_readonly: payload.g_readonly,
+        },
+        sub: {
+          ...subUserModeConfig,
+          table_name: String(subUserModeConfig.table_name || "csm_group_members").trim() || "csm_group_members",
+          table: Array.isArray(subUserModeConfig.table) ? subUserModeConfig.table : [],
+          trigger: subUserModeConfig.trigger && typeof subUserModeConfig.trigger === "object" ? subUserModeConfig.trigger : {},
+          type_form: subUserModeConfig.type_form ?? payload.type_form ?? 1,
+          row_type_edit: subUserModeConfig.row_type_edit ?? payload.row_type_edit ?? 0,
+          g_readonly: subUserModeConfig.g_readonly ?? false,
+        },
+      };
+    }
 
     if (typeof values.crm_config === "string") {
       const trimmed = values.crm_config.trim();
@@ -476,6 +501,12 @@ export function Detail({
       if (nextData.kanban_config && typeof nextData.kanban_config === 'object') {
         nextData.kanban_config = JSON.stringify(nextData.kanban_config, null, 2);
       }
+
+      const systemUserModes = parseSystemUserModes(detailData);
+      setSubUserModeConfig({
+        ...getDefaultSystemUserModeConfig("sub", t),
+        ...(systemUserModes.sub || {}),
+      });
       
       setTableRows(Array.isArray(detailData.table) ? detailData.table : []);
       setTriggerConfig(parseTriggerConfig(detailData.trigger));
@@ -490,8 +521,9 @@ export function Detail({
       formRef.current.resetFields();
       setTableRows([]);
       setTriggerConfig({});
+      setSubUserModeConfig(getDefaultSystemUserModeConfig("sub", t));
     }
-  }, [open]);
+  }, [open, t]);
 
   // Load sys_autos (dynamic code templates) when modal opens
   useEffect(() => {
@@ -840,6 +872,94 @@ export function Detail({
         return null;
       }}
     </ProFormDependency>
+
+  <ProFormDependency name={["path"]}>
+    {(values: Record<string, any>) => {
+      const currentPath = values.path || detailData.path;
+      if (currentPath !== "/system/user") return null;
+
+      return (
+        <div style={{ marginBottom: 32, width: '100%' }}>
+          <Card
+            title={t('common.menu.userSub') || 'Cấu hình Sub-user'}
+            bordered
+            style={{ borderRadius: 10, boxShadow: '0 2px 8px #f0f1f2', padding: 0, width: '100%' }}
+            bodyStyle={{ padding: 20 }}
+          >
+            <Alert
+              type="info"
+              showIcon
+              message="Menu /system/user đang có 2 cấu hình"
+              description="Field/trigger mặc định phía trên áp dụng cho tài khoản chính. Phần bên dưới áp dụng cho sub-user khi admin mở cùng route /system/user."
+              style={{ marginBottom: 16 }}
+            />
+            <Tabs
+              defaultActiveKey="sub"
+              items={[
+                {
+                  key: 'main',
+                  label: 'Main User',
+                  children: (
+                    <Alert
+                      type="success"
+                      showIcon
+                      message="Cấu hình main user dùng editor chuẩn"
+                      description="Bảng dữ liệu, field config và trigger của tài khoản chính được chỉnh trực tiếp ở các phần Table/Trigger hiện có của menu này."
+                    />
+                  ),
+                },
+                {
+                  key: 'sub',
+                  label: 'Sub-user',
+                  children: (
+                    <div style={{ display: 'grid', gap: 16 }}>
+                      <div>
+                        <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
+                          {t('system.menu.table') || 'Bảng dữ liệu'}
+                        </div>
+                        <Input
+                          value={String(subUserModeConfig.table_name || '')}
+                          placeholder="csm_group_members"
+                          onChange={(event) => {
+                            const nextValue = event.target.value;
+                            setSubUserModeConfig((prev) => ({ ...prev, table_name: nextValue }));
+                          }}
+                        />
+                      </div>
+                      <div>
+                        <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
+                          Field Config
+                        </div>
+                        <FieldConfigEditor
+                          value={Array.isArray(subUserModeConfig.table) ? subUserModeConfig.table : []}
+                          onChange={(nextTable) => {
+                            setSubUserModeConfig((prev) => ({ ...prev, table: nextTable }));
+                          }}
+                        />
+                      </div>
+                      <div>
+                        <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
+                          Trigger Config
+                        </div>
+                        <div style={{ width: '100%', minWidth: 0 }}>
+                          <TriggerEditor
+                            value={subUserModeConfig.trigger && typeof subUserModeConfig.trigger === 'object' ? subUserModeConfig.trigger : {}}
+                            onChange={(nextTrigger) => {
+                              setSubUserModeConfig((prev) => ({ ...prev, trigger: nextTrigger }));
+                            }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ),
+                },
+              ]}
+            />
+          </Card>
+        </div>
+      );
+    }}
+  </ProFormDependency>
 
   <ProFormDependency name={["type_form"]}>
     {(values: Record<string, any>) => {

@@ -237,7 +237,7 @@
       crmCrudTitle: "Trung tâm dữ liệu CRM",
       crmCrudDesc: "Trung tâm dữ liệu CRM mới quản lý đồng nhất Lead, Inventory, Activity và Task; mọi thay đổi cập nhật tức thì cho Workspace, Sales Board và Analytics.",
       entityLeads: "Khách hàng tiềm năng",
-      entityInventory: "Giỏ hàng phân bổ",
+      entityInventory: "Giỏ hàng",
       entityActivities: "Hoạt động",
       entityTasks: "Công việc",
       entitySalesReports: "Báo cáo NVKD",
@@ -285,7 +285,7 @@
       pagesCountDesc: "{count} trang",
       unknownError: "Lỗi không xác định",
       field_id: "Mã",
-      field_name: "Tên khách hàng",
+      field_name: "Tên KH",
       field_phone: "Số điện thoại",
       field_source: "Nguồn khách",
       field_project_name: "Dự án",
@@ -319,12 +319,12 @@
       field_task_type: "Loại công việc",
       field_due_at: "Hạn xử lý",
       field_reminder_at: "Nhắc việc lúc",
-      field_customer_title: "Danh xưng",
+      field_customer_title: "Họ (anh/chị/cô/chú,...)",
       field_address: "Địa chỉ",
       field_phone_last4: "4 số cuối",
       field_sales_name: "Tên NV Sale",
       field_team_name: "Đội nhóm",
-      field_visit_date: "Ngày tham quan",
+      field_visit_date: "Ngày",
       field_unit_type: "Loại căn",
       field_view_name: "View",
       field_area_net_m2: "Diện tích thông thủy (m2)",
@@ -562,7 +562,7 @@
       crmCrudTitle: "CRM Data Operations Center",
       crmCrudDesc: "The new CRM Data Center unifies Lead, Inventory, Activity, and Task CRUD so updates instantly propagate to Workspace, Sales Board, and Analytics.",
       entityLeads: "Leads",
-      entityInventory: "Sales Basket Allocation",
+      entityInventory: "Cart",
       entityActivities: "Activities",
       entityTasks: "Tasks",
       entitySalesReports: "Sales reports",
@@ -887,7 +887,7 @@
       crmCrudTitle: "CRM 数据运营中心",
       crmCrudDesc: "新版 CRM 数据中心统一维护线索、房源、活动与任务，变更会实时同步到工作台、销售看板与分析模块。",
       entityLeads: "线索",
-      entityInventory: "销售篮子分配",
+      entityInventory: "购物车",
       entityActivities: "活动",
       entityTasks: "任务",
       entitySalesReports: "销售报表",
@@ -1661,6 +1661,13 @@
     [crmConfig.dataSources.inventory.tableName]: createStruct(
       {
         id: "",
+        customer_title: "",
+        name: "",
+        address: "",
+        phone_last4: "",
+        sales_name: "",
+        team_name: "",
+        visit_date: "",
         product_code: "",
         product_name: "",
         unit_type: "",
@@ -1692,7 +1699,7 @@
         updated_at: 0,
       },
       [crmConfig.dataSources.inventory.pkField || "id"],
-      ["id", "product_code", "product_name", "unit_type", "project_name", "status", "basket_type", "owner_id", "request_extra_status", "view_name"]
+      ["id", "customer_title", "name", "address", "phone_last4", "sales_name", "team_name", "project_name", "visit_date", "status", "basket_type", "owner_id"]
     ),
     [crmConfig.dataSources.activities.tableName]: createStruct(
       {
@@ -3132,9 +3139,16 @@
       inventory: {
         tableName: crmConfig.dataSources.inventory.tableName,
         pkField: crmConfig.dataSources.inventory.pkField || "id",
-        fields: ["id", "product_code", "product_name", "unit_type", "project_name", "status", "basket_type", "owner_id", "allocation_qty", "allocated_until", "parent_basket_id", "requested_extra_qty", "request_extra_status", "requested_by", "approved_by", "price_vn", "price_foreign", "area_net_m2", "area_gross_m2", "area_m2", "bedrooms", "direction", "view_name", "lead_id"],
+        fields: ["id", "customer_title", "name", "address", "phone_last4", "sales_name", "team_name", "project_name", "visit_date"],
         defaults: {
           id: `INV_${Date.now()}`,
+          customer_title: "",
+          name: "",
+          address: "",
+          phone_last4: "",
+          sales_name: "",
+          team_name: "",
+          visit_date: "",
           product_code: "",
           product_name: "",
           unit_type: "",
@@ -5117,23 +5131,42 @@
       },
     ], [language, themeVersion]);
 
+    const inventoryMinimalColumns = ["customer_title", "name", "address", "phone_last4", "sales_name", "team_name", "project_name", "visit_date"];
     const crudColumns = [
-      {
-        title: translate("idLabel"),
-        dataIndex: currentEntity.pkField || "id",
-        key: "id",
-        width: 180,
-      },
-      ...currentEntity.fields
-        .filter((field) => field !== (currentEntity.pkField || "id") && field !== "id")
-        .slice(0, 4)
-        .map((field) => ({
-          title: getFieldLabel(field),
-          dataIndex: field,
-          key: field,
-          ellipsis: true,
-          render: (value) => (value === undefined || value === null ? "" : String(value)),
-        })),
+      ...(crudEntity === "inventory"
+        ? [
+          {
+            title: "STT",
+            key: "stt",
+            width: 70,
+            render: (_, __, index) => index + 1,
+          },
+          ...inventoryMinimalColumns.map((field) => ({
+            title: getFieldLabel(field),
+            dataIndex: field,
+            key: field,
+            ellipsis: true,
+            render: (value) => (value === undefined || value === null ? "" : String(value)),
+          })),
+        ]
+        : [
+          {
+            title: translate("idLabel"),
+            dataIndex: currentEntity.pkField || "id",
+            key: "id",
+            width: 180,
+          },
+          ...currentEntity.fields
+            .filter((field) => field !== (currentEntity.pkField || "id") && field !== "id")
+            .slice(0, 4)
+            .map((field) => ({
+              title: getFieldLabel(field),
+              dataIndex: field,
+              key: field,
+              ellipsis: true,
+              render: (value) => (value === undefined || value === null ? "" : String(value)),
+            })),
+        ]),
       {
         title: translate("actions"),
         key: "actions",
@@ -5573,6 +5606,15 @@
         .crm-dynamic-theme .crm-activity-tabs > .ant-tabs-nav {
           margin-bottom: 12px !important;
         }
+        .crm-dynamic-theme .crm-activity-tabs > .ant-tabs-nav .ant-tabs-nav-wrap {
+          overflow-x: auto !important;
+          overflow-y: hidden !important;
+        }
+        .crm-dynamic-theme .crm-activity-tabs > .ant-tabs-nav .ant-tabs-nav-list {
+          width: max-content !important;
+          min-width: max-content !important;
+          justify-content: flex-start !important;
+        }
         .crm-dynamic-theme .crm-activity-tabs > .ant-tabs-nav::before {
           border-bottom: 1px solid ${themeTokens.border} !important;
         }
@@ -5593,6 +5635,9 @@
         .crm-dynamic-theme .crm-activity-tabs .ant-tabs-tab .ant-tabs-tab-btn {
           color: ${themeTokens.textSecondary} !important;
           font-weight: 500 !important;
+          white-space: nowrap !important;
+          overflow-wrap: normal !important;
+          word-break: normal !important;
         }
         .crm-dynamic-theme .crm-activity-tabs .ant-tabs-tab.ant-tabs-tab-active {
           background: ${themeTokens.isDark ? "rgba(255,255,255,0.10)" : themeTokens.subtleBg} !important;
@@ -5784,6 +5829,11 @@
         .crm-dynamic-theme .ant-picker-calendar .ant-picker-calendar-date-value,
         .crm-workspace-theme .ant-picker-calendar .ant-picker-calendar-date-value {
           color: ${themeTokens.text} !important;
+        }
+        /* Hotfix: hide duplicate custom solar day line in calendar cells (keep built-in day + lunar line). */
+        .crm-dynamic-theme .ant-picker-calendar .ant-picker-calendar-date-content div[style*="font-size: 12px"][style*="font-weight: 600"],
+        .crm-workspace-theme .ant-picker-calendar .ant-picker-calendar-date-content div[style*="font-size: 12px"][style*="font-weight: 600"] {
+          display: none !important;
         }
         .crm-dynamic-theme .ant-picker-calendar .ant-picker-calendar-date-today,
         .crm-workspace-theme .ant-picker-calendar .ant-picker-calendar-date-today {
@@ -6576,6 +6626,12 @@
             text-align: center !important;
             line-height: 1.3 !important;
             max-width: 100% !important;
+          }
+          .crm-dynamic-theme .crm-activity-tabs .ant-tabs-tab .ant-tabs-tab-btn {
+            white-space: nowrap !important;
+            overflow-wrap: normal !important;
+            word-break: normal !important;
+            text-align: left !important;
           }
           .crm-dynamic-theme .ant-segmented.ant-segmented-block .ant-segmented-group {
             align-items: stretch !important;

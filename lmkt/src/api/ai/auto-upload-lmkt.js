@@ -4278,25 +4278,8 @@ function normalizeVideoCandidates(value) {
 }
 
 function extractImagesFromMessage(item = {}) {
-  console.log(`\n📋 [extractImagesFromMessage] === START EXTRACTION DEBUG ===`);
-  console.log(`   Item keys:`, Object.keys(item || {}).join(', '));
-  console.log(`   Item structure:`, {
-    has_images: !!item.images,
-    images_len: Array.isArray(item.images) ? item.images.length : 'N/A',
-    has_imageUrls: !!item.imageUrls,
-    imageUrls_len: Array.isArray(item.imageUrls) ? item.imageUrls.length : 'N/A',
-    has_image_urls: !!item.image_urls,
-    image_urls_len: Array.isArray(item.image_urls) ? item.image_urls.length : 'N/A',
-    has_photos: !!item.photos,
-    photos_len: Array.isArray(item.photos) ? item.photos.length : 'N/A',
-    has_attachments: !!item.attachments,
-    attachments_len: Array.isArray(item.attachments) ? item.attachments.length : 'N/A',
-    has_attachments_data: !!item.attachments?.data,
-    attachments_data_len: Array.isArray(item.attachments?.data) ? item.attachments.data.length : 'N/A'
-  });
-  
+  // DISABLED excessive logging (was causing console buffer overflow)
   const images = [];
-  let debugInfo = [];
 
   const imageCandidates = [
     ["images", item.images],
@@ -4312,102 +4295,58 @@ function extractImagesFromMessage(item = {}) {
   imageCandidates.forEach(([key, value]) => {
     const normalized = normalizeImageCandidates(value);
     if (normalized.length > 0) {
-      console.log(`   ✅ Found item.${key}: ${normalized.length} items`);
       images.push(...normalized);
-      debugInfo.push(`item.${key}: ${normalized.length}`);
     }
   });
 
   if (typeof item.image === "string") {
-    console.log(`   ✅ Found item.image: 1 item`);
     images.push(item.image);
-    debugInfo.push('item.image: 1');
   }
   if (typeof item.imageUrl === "string") {
-    console.log(`   ✅ Found item.imageUrl: 1 item`);
     images.push(item.imageUrl);
-    debugInfo.push('item.imageUrl: 1');
   }
 
   // Facebook-style attachments
   if (Array.isArray(item.attachments)) {
-    let count = 0;
-    item.attachments.forEach((att, idx) => {
+    item.attachments.forEach((att) => {
       const src = att?.media?.image?.src || att?.media?.image || att?.url;
       if (typeof src === "string") {
-        console.log(`   ✅ Found attachment[${idx}].media.image.src: ${src.substring(0, 80)}`);
         images.push(src);
-        count++;
       }
     });
-    if (count > 0) debugInfo.push(`item.attachments: ${count}`);
   }
 
   if (Array.isArray(item.attachments?.data)) {
-    let count = 0;
-    item.attachments.data.forEach((att, idx) => {
+    item.attachments.data.forEach((att) => {
       const src = att?.media?.image?.src || att?.media?.image || att?.url;
       if (typeof src === "string") {
-        console.log(`   ✅ Found attachments.data[${idx}].media.image.src: ${src.substring(0, 80)}`);
         images.push(src);
-        count++;
       }
     });
-    if (count > 0) debugInfo.push(`item.attachments.data: ${count}`);
   }
 
   const text = item.content || item.text || "";
   const base64Images = extractBase64ImagesFromText(text);
   if (base64Images.length > 0) {
-    console.log(`   ✅ Found ${base64Images.length} base64 images from text`);
     images.push(...base64Images);
-    debugInfo.push(`base64 from text: ${base64Images.length}`);
   }
-
-  console.log(`\n   📊 [BEFORE FILTER] Total raw images collected: ${images.length}`);
-  images.slice(0, 5).forEach((img, idx) => {
-    console.log(`     [${idx}] ${typeof img === 'string' ? img.substring(0, 100) : String(img).substring(0, 100)}...`);
-  });
 
   // Validate URLs before returning
   const validImages = Array.from(new Set(
-    images.filter((img, idx) => {
+    images.filter((img) => {
       if (typeof img !== 'string' || !img.trim()) {
-        console.log(`   ❌ [Filter ${idx}] Not string or empty`);
         return false;
       }
-      const isValid = img.startsWith('http://') || img.startsWith('https://') || img.startsWith('data:');
-      if (!isValid) {
-        console.log(`   ❌ [Filter ${idx}] Invalid format (doesn't start with http/https/data): ${img.substring(0, 80)}`);
-      } else {
-        console.log(`   ✅ [Filter ${idx}] Valid URL: ${img.substring(0, 100)}`);
-      }
-      return isValid;
+      return img.startsWith('http://') || img.startsWith('https://') || img.startsWith('data:');
     })
   ));
-  
-  console.log(`\n   📊 [AFTER FILTER] Valid images: ${validImages.length}/${images.length}`);
-  if (validImages.length > 0) {
-    console.log(`✅ extractImagesFromMessage: Found ${validImages.length} valid image(s) [${debugInfo.join(', ')}]`);
-    validImages.slice(0, 3).forEach((url, idx) => {
-      console.log(`   [${idx}] ${url}`);
-    });
-  } else if (debugInfo.length > 0) {
-    console.warn(`⚠️ extractImagesFromMessage: Found ${images.length} raw images but 0 valid after filter. Sources: [${debugInfo.join(', ')}]`);
-  } else {
-    console.warn(`⚠️ extractImagesFromMessage: No images found in any field!`);
-  }
-  console.log(`📋 [extractImagesFromMessage] === END EXTRACTION DEBUG ===\n`);
   
   return validImages;
 }
 
 function extractVideosFromMessage(item = {}) {
-  console.log(`\n🎬 [extractVideosFromMessage] === START EXTRACTION DEBUG ===`);
-  console.log(`   Item keys:`, Object.keys(item || {}).join(', '));
-
+  // DISABLED excessive logging (was causing console buffer overflow)
   const videos = [];
-  let debugInfo = [];
 
   const videoCandidates = [
     ["videos", item.videos],
@@ -4422,26 +4361,21 @@ function extractVideosFromMessage(item = {}) {
   videoCandidates.forEach(([key, value]) => {
     const normalized = normalizeVideoCandidates(value);
     if (normalized.length > 0) {
-      console.log(`   ✅ Found item.${key}: ${normalized.length} items`);
       videos.push(...normalized);
-      debugInfo.push(`item.${key}: ${normalized.length}`);
     }
   });
 
   if (typeof item.video === "string") {
     videos.push(item.video);
-    debugInfo.push('item.video: 1');
   }
   if (typeof item.videoUrl === "string") {
     videos.push(item.videoUrl);
-    debugInfo.push('item.videoUrl: 1');
   }
 
   const text = item.content || item.text || "";
   const base64Videos = extractBase64VideosFromText(text);
   if (base64Videos.length > 0) {
     videos.push(...base64Videos);
-    debugInfo.push(`base64 from text: ${base64Videos.length}`);
   }
 
   // Facebook/Zalo attachments with explicit video markers
@@ -4469,12 +4403,6 @@ function extractVideosFromMessage(item = {}) {
       return url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:video') || url.startsWith('/');
     })
   ));
-
-  console.log(`   📊 [AFTER FILTER] Valid videos: ${validVideos.length}/${videos.length}`);
-  if (validVideos.length > 0) {
-    console.log(`✅ extractVideosFromMessage: Found ${validVideos.length} valid video(s) [${debugInfo.join(', ')}]`);
-  }
-  console.log(`🎬 [extractVideosFromMessage] === END EXTRACTION DEBUG ===\n`);
 
   return validVideos;
 }
@@ -5771,6 +5699,10 @@ async function processContent(item, opts = {}) {
     console.error(`❌ [processContent] Lỗi upload ảnh:`, e.message);
     canhbao(ti("⚠️ Không upload được ảnh, tiếp tục thử video", "⚠️ Image upload failed, continue with video upload", "⚠️ 图片上传失败，继续尝试上传视频"));
     uploadedImages = [];
+  } finally {
+    // 🟢 CLEANUP: Giải phóng base64 data từ images array (có thể rất lớn)
+    images.splice(0, images.length);
+    console.log(`🧹 [Cleanup] Cleared ${images.length} base64 images from memory`);
   }
 
   try {
@@ -5782,6 +5714,10 @@ async function processContent(item, opts = {}) {
   } catch (e) {
     console.error(`❌ [processContent] Lỗi upload video:`, e.message);
     uploadedVideos = [];
+  } finally {
+    // 🟢 CLEANUP: Giải phóng video data
+    videos.splice(0, videos.length);
+    console.log(`🧹 [Cleanup] Cleared videos array from memory`);
   }
 
   if ((!uploadedImages || uploadedImages.length === 0) && (!uploadedVideos || uploadedVideos.length === 0)) {
@@ -5886,7 +5822,15 @@ async function processContent(item, opts = {}) {
   thongbao(ti("⏳ Đang gọi AI... (Có thể mất 30-60 giây, vui lòng chờ)", "⏳ Calling AI... (may take 30-60 seconds, please wait)", "⏳ 正在调用AI...（可能需要30-60秒，请稍候）"));
   
   let result;
+  let aiTimeoutId = null;
   try {
+    // 🟢 TIMEOUT SAFETY: Đăng ký timeout vào timerRegistry để đảm bảo cleanup
+    const aiTimeoutMs = 120000;  // 2 phút timeout
+    aiTimeoutId = setTimeout(() => {
+      console.error(`⏱️ [processContent] AI timeout sau ${aiTimeoutMs}ms`);
+    }, aiTimeoutMs);
+    timerRegistry.register('processContent_ai_' + Date.now(), aiTimeoutId, 'timeout');
+    
     const startAI = Date.now();
     result = await generateFn(prompt);
     const durationAI = ((Date.now() - startAI) / 1000).toFixed(1);
@@ -5898,6 +5842,10 @@ async function processContent(item, opts = {}) {
     console.log(`[DEBUG] result.result:`, result?.result);
     console.log(`[DEBUG] result.data:`, result?.data);
   } catch (aiError) {
+    // 🟢 CLEANUP: Xóa timeout nếu có lỗi
+    if (aiTimeoutId) {
+      timerRegistry.clear('processContent_ai_' + (aiTimeoutId.toString().match(/\d+/) || [Date.now()])[0]);
+    }
     const aiStatus = extractHttpStatusFromError(aiError);
     if ([401, 403, 404, 429, 500, 502, 503, 504].includes(aiStatus)) {
       activateBackendGuard(`AI API lỗi ${aiStatus}`, 2 * 60 * 1000);
@@ -7618,13 +7566,11 @@ async function ensureUI() {
       // This has all data including base64 images
       let items;
       if (window.__pendingZaloMessages && Array.isArray(window.__pendingZaloMessages) && window.__pendingZaloMessages.length > 0) {
-        console.log(`✅ Using full messages from window.__pendingZaloMessages (${window.__pendingZaloMessages.length} items)`);
         items = window.__pendingZaloMessages;
         // Clear after use
         window.__pendingZaloMessages = null;
       } else {
         // ✅ PRIORITY 2: Parse from textarea (fallback, might not have base64)
-        console.log(`⚠️ Parsing messages from textarea (may not have base64 images)`);
         items = JSON.parse(content);
       }
       
@@ -7633,7 +7579,6 @@ async function ensureUI() {
       // ✅ NORMALIZE messages: preserve original structure (attachments/imageUrls...)
       const normalizedArr = arr.map((item, idx) => {
         if (!item || typeof item !== 'object') {
-          console.warn(`[parseMessages] Item ${idx} is not an object:`, typeof item);
           return null;
         }
         return {
@@ -7647,41 +7592,57 @@ async function ensureUI() {
         };
       }).filter(item => item !== null);
       
-      console.log(`[parseMessages] Normalized ${normalizedArr.length}/${arr.length} messages`);
+      // 🟢 LIMIT: Giới hạn số bài để tránh crash (max 10 bài/lần)
+      const MAX_BATCH_SIZE = 10;
+      const limitedArr = normalizedArr.slice(0, MAX_BATCH_SIZE);
+      if (normalizedArr.length > MAX_BATCH_SIZE) {
+        console.warn(`⚠️ GIỎ HẠN: Chỉ xử lý ${MAX_BATCH_SIZE}/${normalizedArr.length} bài`);
+      }
       
       // ✅ LỌC CHỈ LẤY TIN CÓ HÌNH ẢNH VÀ CONTENT
-      const arrWithImages = normalizedArr.filter(item => {
+      let arrWithImages = limitedArr.filter(item => {
         const essentials = getMessageEssentials(item);
         const hasImages = essentials.hasImages;
         const hasContent = essentials.hasText;
-        
-        if (!hasImages) {
-          console.warn(`⚠️ Bỏ qua tin không có hình:`, item.content?.substring(0, 50) || 'No content');
-        }
-        if (!hasContent) {
-          console.warn(`⚠️ Bỏ qua tin không có nội dung:`, item.sender || 'Unknown sender');
-        }
-        
         return hasImages && hasContent;
       });
       
-      const skippedCount = normalizedArr.length - arrWithImages.length;
-      if (skippedCount > 0) {
-        const msg = `⚠️ Đã lọc bỏ ${skippedCount} tin (không có hình hoặc nội dung). Chỉ xử lý ${arrWithImages.length}/${normalizedArr.length} tin.`;
-        console.warn(msg);
-        if (!isZaloAutoMode) {
-          canhbao(msg);
+      let skippedCount = limitedArr.length - arrWithImages.length;
+      
+      // 🟢 DEDUP CHECK: Filter out already posted messages from server
+      try {
+        const configId = window.__currentZaloConfigId || null;
+        const unpostedMessages = await filterNotPostedMessagesViaServer(arrWithImages, configId);
+        const dedupSkipped = arrWithImages.length - unpostedMessages.length;
+        
+        if (dedupSkipped > 0) {
+          console.warn(`🔁 Đã lọc bỏ ${dedupSkipped} tin đã đăng trước đó (trùng)`);
+          if (!isZaloAutoMode) {
+            canhbao(ti(`⚠️ Đã lọc bỏ ${dedupSkipped} tin đã đăng trước đó (trùng)`, `⚠️ Filtered out ${dedupSkipped} already posted messages`, `⚠️ 已过滤 ${dedupSkipped} 条已发布消息`));
+          }
         }
+        
+        arrWithImages = unpostedMessages;
+        skippedCount += dedupSkipped;
+      } catch (e) {
+        console.warn(`⚠️ Không thể kiểm tra tin đã đăng trên server, vẫn tiếp tục: ${e.message}`);
+      }
+      
+      if (skippedCount > 0 && arrWithImages.length > 0) {
+        console.warn(`⚠️ Đã lọc bỏ tổng ${skippedCount} tin. Chỉ xử lý ${arrWithImages.length}/${normalizedArr.length} tin.`);
       }
       
       if (arrWithImages.length === 0) {
-        return canhbao(ti("❌ Không có tin nhắn nào có đủ nội dung và hình ảnh để đăng!", "❌ No messages have enough content and images to post!", "❌ 没有同时具备内容和图片可发布的消息！"));
+        const msg = skippedCount > 0 
+          ? ti(`❌ Tất cả ${normalizedArr.length} tin đều đã đăng trước đó hoặc không đủ hình/nội dung!`, `❌ All ${normalizedArr.length} messages were already posted or missing content/images!`, `❌ 所有 ${normalizedArr.length} 条消息都已发布或缺少内容/图片！`)
+          : ti("❌ Không có tin nhắn nào có đủ nội dung và hình ảnh để đăng!", "❌ No messages have enough content and images to post!", "❌ 没有同时具备内容和图片可发布的消息！");
+        return canhbao(msg);
       }
       
       if (!isZaloAutoMode) {
         if (!confirm(`Tạo ${arrWithImages.length} bài viết có hình ảnh? (Chạy TUẦN TỰ từng bài, mỗi bài hoàn tất (AI + lưu DB + đưa lên server) rồi tiếp bài tiếp)`)) return;
       } else {
-        console.log(`✅ [Auto Mode] Tự động xác nhận tạo ${arrWithImages.length} bài viết (đã lọc ${skippedCount} tin không có hình)`);
+        console.log(`✅ [Auto Mode] Tạo ${arrWithImages.length} bài viết`);
       }
       
       // Bắt đầu processing
@@ -7689,33 +7650,29 @@ async function ensureUI() {
       createBtn.disabled = true;
       createBtn.textContent = t('processing');
       
-      console.log(`\n========== BẮT ĐẦU XỬ LÝ ${arrWithImages.length} BÀI VIẾT (TUẦN TỰ) - ${new Date().toLocaleTimeString()} ==========`);
-      
       let ok = 0, fail = 0;
+      const postedMessages = [];  // Track successfully posted messages
       for (let i = 0; i < arrWithImages.length; i++) {
-        console.log(`\n--- BÀI ${i + 1}/${arrWithImages.length} - BẮT ĐẦU - ${new Date().toLocaleTimeString()} ---`);
         try {
           thongbao(ti(`🔄 [${i + 1}/${arrWithImages.length}] Đang xử lý...`, `🔄 [${i + 1}/${arrWithImages.length}] Processing...`, `🔄 [${i + 1}/${arrWithImages.length}] 正在处理...`));
           await processContent(arrWithImages[i], {
             app_id: domainConfig.app_id,
             domain: domainConfig.value,
             domainKey: globalSettings.domainKey,
-            service_type: globalSettings.isLmkt ? globalSettings.project : globalSettings.industry, // Sẽ bị override nếu có config_id
-            project: globalSettings.project, // Pass project để buildDetail xử lý đúng
+            service_type: globalSettings.isLmkt ? globalSettings.project : globalSettings.industry,
+            project: globalSettings.project,
             author: globalSettings.isLmkt ? "LMKT Expert" : "Auto Content",
             avatar: globalSettings.isLmkt ? "https://h-holding.vn/media/icon.png" : undefined,
-            // ✅ Pass Zalo context để record posted messages (nếu có)
-            // ⚠️ Nếu có config_id, processContent sẽ override service_type/project/fanpage từ config
             config_id: window.__currentZaloConfigId,
             groupName: window.__currentZaloGroupName,
             isZaloMessage: !!window.__currentZaloConfigId
           });
           ok++;
-          console.log(`--- BÀI ${i + 1}/${arrWithImages.length} - THÀNH CÔNG - ${new Date().toLocaleTimeString()} ---`);
+          postedMessages.push(arrWithImages[i]);  // Record as successfully posted
           thongbao(ti(`✅ [${i + 1}/${arrWithImages.length}] Đưa dữ liệu lên server hoàn tất!`, `✅ [${i + 1}/${arrWithImages.length}] Data uploaded to server!`, `✅ [${i + 1}/${arrWithImages.length}] 数据已上传到服务器！`));
         } catch (e) {
           fail++;
-          console.error(`--- BÀI ${i + 1}/${arrWithImages.length} - LỖI - ${new Date().toLocaleTimeString()} ---`, e);
+          console.error(`Bài ${i + 1}/${arrWithImages.length} lỗi:`, e.message);
           canhbao(ti(`❌ [${i + 1}/${arrWithImages.length}] Lỗi: ${e.message}`, `❌ [${i + 1}/${arrWithImages.length}] Error: ${e.message}`, `❌ [${i + 1}/${arrWithImages.length}] 错误：${e.message}`));
         }
         
@@ -7724,14 +7681,45 @@ async function ensureUI() {
           const remaining = arrWithImages.length - i - 1;
           thongbao(ti(`✅ BÀI ${i + 1}/${arrWithImages.length} HOÀN TẤT! Tiếp bài tiếp (${remaining} bài còn lại)...`, `✅ POST ${i + 1}/${arrWithImages.length} DONE! Continue next (${remaining} remaining)...`, `✅ 第 ${i + 1}/${arrWithImages.length} 篇已完成！继续下一篇（剩余 ${remaining} 篇）...`));
         }
+        
+        // 🟢 CLEANUP: Sau mỗi bài viết, giải phóng memory để tránh accumulation
+        if ((i + 1) % 5 === 0 || i === arrWithImages.length - 1) {
+          timerRegistry.clearAll();
+          eventRegistry.removeAll();
+          
+          if (typeof gc === 'function') {
+            gc();
+          }
+          
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
       }
       
-      console.log(`\n========== KẾT THÚC - ${new Date().toLocaleTimeString()} ==========`);
+      // 🟢 RECORD POSTED MESSAGES: Save posted messages to server to prevent duplicate posting
+      if (postedMessages.length > 0) {
+        try {
+          const postedRecords = postedMessages.map(msg => ({
+            hash: buildMessageHash(msg),
+            date: msg.date || new Date().toLocaleDateString('vi-VN'),
+            time: msg.time || new Date().toLocaleTimeString('vi-VN'),
+            sender: msg.sender || 'Manual Post',
+            content: (msg.content || msg.text || '').substring(0, 100),
+            config_id: window.__currentZaloConfigId || null,
+            timestamp: Date.now(),
+            source: 'manual_post'
+          }));
+          
+          await appendPostedZaloMessagesToServer(postedRecords);
+          console.log(`💾 [Manual Post] Recorded ${postedMessages.length} posted messages to prevent duplicate posting`);
+        } catch (e) {
+          console.warn(`⚠️ [Manual Post] Could not record posted messages: ${e.message}`);
+        }
+      }
+      
       thongbao(ti(`✅ Hoàn tất! Thành công: ${ok}, Lỗi: ${fail}`, `✅ Done! Success: ${ok}, Failed: ${fail}`, `✅ 完成！成功：${ok}，失败：${fail}`));
       
       // ✅ Clear textarea sau khi xử lý xong
       textarea.value = '';
-      console.log(`🧹 Cleared textarea after processing`);
       
     } catch (e) {
       console.error("Lỗi parse JSON:", e);

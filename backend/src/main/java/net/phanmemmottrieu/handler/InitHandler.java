@@ -12,21 +12,11 @@ import org.springframework.stereotype.Component;
 
 import net.phanmemmottrieu.data.RecordManager;
 import net.phanmemmottrieu.model.StandardResponse;
+import net.phanmemmottrieu.util.AppTokenHelper;
 
 @Component
 public class InitHandler {
         private static final int system = 100; // Add this line to define the 'system' variable
-        private static final String ADMIN_TOKEN = "4d543bb4-714c-4bb1-952f-a2e0bf8b24a3"; // Add this line to define the
-                                                                                          // 'ADMIN_TOKEN' variable
-        private static final String ADMIN_REFRESH_TOKEN = "3075217c-4445-47b6-a9a3-ebf003ebde99"; // Add this line to
-                                                                                                  // define
-                                                                                                  // the
-                                                                                                  // 'ADMIN_REFRESH_TOKEN'
-                                                                                                  // variable
-        private static final String COMMON_TOKEN = "c196c8ef-a80f-43c1-b98b-24f80f95bd8a"; // Add this line to define
-                                                                                           // the
-                                                                                           // 'COMMON_TOKEN' variable
-        private static final String COMMON_REFRESH_TOKEN = "0fd107de-e1fa-47a6-9eb4-ee1fb479aa91"; // Add this line to
         private final RecordManager recordManager; // Khai báo một trường để giữ instance của RecordManager
 
         // Sử dụng Dependency Injection thông qua Constructor
@@ -166,6 +156,13 @@ public class InitHandler {
                         menuList2.put("status", 1);
                         menuList2.put("createTime", 1737023155965L);
                         menuList2.put("updateTime", 1737023164653L);
+                        menuList2.put("type_form", 1);
+                        menuList2.put("row_type_edit", 0);
+                        menuList2.put("g_readonly", false);
+                        menuList2.put("table_name", "csm_accounts");
+                        menuList2.put("table", buildSystemAccountFields());
+                        menuList2.put("trigger", Map.of("beforeSave", buildMainAccountBeforeSaveScript()));
+                        menuList2.put("system_user_modes", buildSystemUserModes());
                         menuList.add(menuList2);
 
                         // 2. Role
@@ -443,6 +440,30 @@ public class InitHandler {
                         recordManager.createRecord("csm", "index", Map.of("id", "accessRights", "data", asyncRoutes),
                                         List.of("id"));
 
+                        // Initialize permission system tables
+                        initializeDataTables("csm", "csm_depts",
+                                        List.of("id", "dept_code"), List.of(
+                                                        "id", "parent_dept_id", "dept_code", "dept_name", "dept_full_name",
+                                                        "description", "manager_user_id", "is_global", "status", "create_time", "update_time"));
+                        initializeDataTables("csm", "csm_roles",
+                                        List.of("id", "role_code"), List.of(
+                                                        "id", "role_code", "role_name", "is_global", "department_id",
+                                                        "description", "status", "create_time", "update_time"));
+                        initializeDataTables("csm", "csm_permissions",
+                                        List.of("id", "permission_code"), List.of(
+                                                        "id", "permission_code", "permission_name", "resource", "action",
+                                                        "description", "category", "create_time"));
+                        initializeDataTables("csm", "csm_role_permissions",
+                                        List.of("id", "role_id", "permission_id"), List.of(
+                                                        "id", "role_id", "permission_id", "create_time"));
+                        initializeDataTables("csm", "csm_user_depts",
+                                        List.of("id", "user_id", "dept_id"), List.of(
+                                                        "id", "user_id", "dept_id", "is_sub_user", "role_id", "direct_permissions",
+                                                        "status", "join_date", "create_time"));
+                        initializeDataTables("csm", "csm_user_roles",
+                                        List.of("id", "user_id", "role_id"), List.of(
+                                                        "id", "user_id", "role_id", "create_time"));
+
                         initializeDataTables("csm", "csm_accounts",
                                         List.of("email", "username", "phoneNumber", "app_id","app_token", "id"), List.of(
                                                         "id", "username", "pass", "app_token", "refresh", "email",
@@ -451,14 +472,16 @@ public class InitHandler {
                                                         "roles", "actived", "permissions", "menusPermissions",
                                                         "group_rights",
                                                         "full_name", "user_address", "app_id"));
+                        initializeDataTables("csm", "csm_group_members",
+                                        List.of("id", "login_identifier"), List.of(
+                                                        "id", "parent_account_id", "login_identifier", "group_id",
+                                                        "app_token", "refresh", "pass", "actived",
+                                                        "permissions", "menusPermissions"));
                         initializeDataTables("csm", "routers", List.of("path"),
                                         List.of("path", "component", "layout", "handle", "children"));
                         initializeDataTables("csm", "index", List.of("id"), List.of("id", "struct"));
 
                         String defaultAppId = "csm";
-                        String defaultReferrerEmail = "codsycorp@gmail.com";
-                        String adminAccessLevel = "FULL_ADMIN";
-                        String commonAccessLevel = "STANDARD_USER";
 
                         // 2. Đồng bộ tạo tài khoản Admin
                         Map<String, Object> adminAccount = new HashMap<>();
@@ -472,8 +495,11 @@ public class InitHandler {
 
                         // TẠO app_token THEO NGUYÊN TẮC MỚI: dùng adminEmail làm định danh chính trong
                         // token
-                        String adminAppTokenRawData = defaultAppId + "_____admin_____"
-                                        + defaultReferrerEmail + "_____" + adminAccessLevel;
+                        String adminAppTokenRawData = AppTokenHelper.buildRawToken(
+                                        defaultAppId,
+                                        "admin",
+                                        "admin",
+                                        AppTokenHelper.resolveAccessRight("admin"));
                         String adminAppToken = recordManager.csm_encrypt(adminAppTokenRawData);
 
                         adminAccount.put("app_token", adminAppToken);
@@ -506,8 +532,11 @@ public class InitHandler {
 
                         // TẠO app_token THEO NGUYÊN TẮC MỚI: dùng commonEmail làm định danh chính trong
                         // token
-                        String commonAppTokenRawData = defaultAppId + "_____common_____"
-                                        + defaultReferrerEmail + "_____" + commonAccessLevel;
+                        String commonAppTokenRawData = AppTokenHelper.buildRawToken(
+                                        defaultAppId,
+                                        "common",
+                                        "user",
+                                        AppTokenHelper.resolveAccessRight("user"));
                         String commonAppToken = recordManager.csm_encrypt(commonAppTokenRawData);
 
                         commonAccount.put("app_token", commonAppToken);
@@ -527,6 +556,98 @@ public class InitHandler {
                         commonAccount.put("app_id", defaultAppId);
 
                         recordManager.createRecord("csm", "csm_accounts", commonAccount,List.of("email", "username", "phoneNumber", "app_id","app_token", "id"));
+
+                        // ========== INITIALIZE PERMISSION SYSTEM ==========
+                        // Seed default permissions
+                        List<Map<String, Object>> permissions = buildDefaultPermissions();
+                        for (Map<String, Object> perm : permissions) {
+                                recordManager.createRecord("csm", "csm_permissions", perm, List.of("id", "permission_code"));
+                        }
+
+                        // Seed default roles
+                        List<Map<String, Object>> roles = buildDefaultRoles();
+                        for (Map<String, Object> role : roles) {
+                                recordManager.createRecord("csm", "csm_roles", role, List.of("id", "role_code"));
+                        }
+
+                        // Link admin role to all admin permissions
+                        String adminRoleId = roles.stream()
+                                .filter(r -> "ADMIN".equals(r.get("role_code")))
+                                .map(r -> r.get("id").toString())
+                                .findFirst().orElse(UUID.randomUUID().toString());
+                        
+                        for (Map<String, Object> perm : permissions) {
+                                Map<String, Object> rolePermMap = new HashMap<>();
+                                rolePermMap.put("id", UUID.randomUUID().toString());
+                                rolePermMap.put("role_id", adminRoleId);
+                                rolePermMap.put("permission_id", perm.get("id"));
+                                rolePermMap.put("create_time", System.currentTimeMillis());
+                                recordManager.createRecord("csm", "csm_role_permissions", rolePermMap, List.of("id", "role_id", "permission_id"));
+                        }
+
+                        // Create default organization/root department
+                        String rootDeptId = UUID.randomUUID().toString();
+                        Map<String, Object> rootDept = new HashMap<>();
+                        rootDept.put("id", rootDeptId);
+                        rootDept.put("parent_dept_id", null);
+                        rootDept.put("dept_code", "ROOT");
+                        rootDept.put("dept_name", "Organization");
+                        rootDept.put("dept_full_name", "Organization");
+                        rootDept.put("description", "Root organization");
+                        rootDept.put("manager_user_id", (String)adminAccount.get("id"));
+                        rootDept.put("is_global", true);
+                        rootDept.put("status", 1);
+                        rootDept.put("create_time", System.currentTimeMillis());
+                        rootDept.put("update_time", System.currentTimeMillis());
+                        recordManager.createRecord("csm", "csm_depts", rootDept, List.of("id", "dept_code"));
+
+                        // Create HR department as child of root
+                        String hrDeptId = UUID.randomUUID().toString();
+                        Map<String, Object> hrDept = new HashMap<>();
+                        hrDept.put("id", hrDeptId);
+                        hrDept.put("parent_dept_id", rootDeptId);
+                        hrDept.put("dept_code", "HR-001");
+                        hrDept.put("dept_name", "HR");
+                        hrDept.put("dept_full_name", "Organization/HR");
+                        hrDept.put("description", "Human Resources Department");
+                        hrDept.put("manager_user_id", (String)commonAccount.get("id"));
+                        hrDept.put("is_global", false);
+                        hrDept.put("status", 1);
+                        hrDept.put("create_time", System.currentTimeMillis());
+                        hrDept.put("update_time", System.currentTimeMillis());
+                        recordManager.createRecord("csm", "csm_depts", hrDept, List.of("id", "dept_code"));
+
+                        // Link admin to root department with admin role
+                        String adminUserDeptId = UUID.randomUUID().toString();
+                        Map<String, Object> adminUserDept = new HashMap<>();
+                        adminUserDept.put("id", adminUserDeptId);
+                        adminUserDept.put("user_id", (String)adminAccount.get("id"));
+                        adminUserDept.put("dept_id", rootDeptId);
+                        adminUserDept.put("is_sub_user", false);
+                        adminUserDept.put("role_id", adminRoleId);
+                        adminUserDept.put("direct_permissions", null);
+                        adminUserDept.put("status", 1);
+                        adminUserDept.put("join_date", System.currentTimeMillis());
+                        adminUserDept.put("create_time", System.currentTimeMillis());
+                        recordManager.createRecord("csm", "csm_user_depts", adminUserDept, List.of("id", "user_id", "dept_id"));
+
+                        // Link common user to HR department
+                        String commonUserDeptId = UUID.randomUUID().toString();
+                        Map<String, Object> commonUserDept = new HashMap<>();
+                        commonUserDept.put("id", commonUserDeptId);
+                        commonUserDept.put("user_id", (String)commonAccount.get("id"));
+                        commonUserDept.put("dept_id", hrDeptId);
+                        commonUserDept.put("is_sub_user", false);
+                        String deptManagerRoleId = roles.stream()
+                                .filter(r -> "DEPT_MANAGER".equals(r.get("role_code")))
+                                .map(r -> r.get("id").toString())
+                                .findFirst().orElse(UUID.randomUUID().toString());
+                        commonUserDept.put("role_id", deptManagerRoleId);
+                        commonUserDept.put("direct_permissions", null);
+                        commonUserDept.put("status", 1);
+                        commonUserDept.put("join_date", System.currentTimeMillis());
+                        commonUserDept.put("create_time", System.currentTimeMillis());
+                        recordManager.createRecord("csm", "csm_user_depts", commonUserDept, List.of("id", "user_id", "dept_id"));
 
                 } catch (Exception e) {
                         // logger("Error creating default data: " + e.getMessage());
@@ -551,4 +672,240 @@ public class InitHandler {
                 recordManager.createRecord(app_id, "index", parametMap, List.of("id"));
         }
 
+                private List<Map<String, Object>> buildSystemAccountFields() {
+                                return List.of(
+                                                                buildFieldConfig("id", "ID", 1, "number", "right"),
+                                                                buildFieldConfig("username", "common.username", 1, "string", "left"),
+                                                                buildFieldConfig("email", "common.email", 1, "string", "left"),
+                                                                buildFieldConfig("phoneNumber", "common.phoneNumber", 1, "string", "left"),
+                                                                buildFieldConfig("full_name", "common.fullName", 1, "string", "left"),
+                                                                buildFieldConfig("user_address", "common.address", 1, "string", "left"),
+                                                                buildFieldConfig("app_id", "common.appId", 1, "string", "left"),
+                                                                buildFieldConfig("app_token", "common.appToken", 1, "string", "left"),
+                                                                buildFieldConfig("pass", "common.password", 1, "password", "left"),
+                                                                buildFieldConfig("roles", "Roles", 1, "string", "left"),
+                                                                buildFieldConfig("permissions", "Permissions", 1, "string", "left"),
+                                                                buildFieldConfig("menusPermissions", "Menu Permissions", 1, "string", "left"),
+                                                                buildFieldConfig("actived", "common.active", 1, "checkbox", "left"));
+                }
+
+                private List<Map<String, Object>> buildSubUserFields() {
+                                return List.of(
+                                                                buildFieldConfig("id", "ID", 1, "number", "right"),
+                                                                buildFieldConfig("parent_account_id", "common.parentAccountId", 1, "string", "left"),
+                                                                buildFieldConfig("login_identifier", "common.loginIdentifier", 1, "string", "left"),
+                                                                buildFieldConfig("group_id", "common.groupId", 1, "string", "left"),
+                                                                buildFieldConfig("app_token", "common.appToken", 1, "string", "left"),
+                                                                buildFieldConfig("pass", "common.password", 1, "password", "left"),
+                                                                buildFieldConfig("permissions", "Permissions", 1, "string", "left"),
+                                                                buildFieldConfig("menusPermissions", "Menu Permissions", 1, "string", "left"),
+                                                                buildFieldConfig("actived", "common.active", 1, "checkbox", "left"));
+                }
+
+                private Map<String, Object> buildFieldConfig(String name, String header, int show, String type, String align) {
+                                Map<String, Object> field = new HashMap<>();
+                                field.put("f_name", name);
+                                field.put("f_header", header);
+                                field.put("f_show", show);
+                                field.put("f_types", type);
+                                field.put("f_align", align);
+                                return field;
+                }
+
+                private Map<String, Object> buildSystemUserModes() {
+                                Map<String, Object> modes = new HashMap<>();
+                                modes.put("main", buildSystemUserMode("csm_accounts", buildSystemAccountFields(), buildMainAccountBeforeSaveScript()));
+                                modes.put("sub", buildSystemUserMode("csm_group_members", buildSubUserFields(), buildSubUserBeforeSaveScript()));
+                                return modes;
+                }
+
+                private Map<String, Object> buildSystemUserMode(String tableName, List<Map<String, Object>> table,
+                                                String beforeSaveScript) {
+                                Map<String, Object> mode = new HashMap<>();
+                                mode.put("table_name", tableName);
+                                mode.put("table", table);
+                                mode.put("trigger", Map.of("beforeSave", beforeSaveScript));
+                                mode.put("type_form", 1);
+                                mode.put("row_type_edit", 0);
+                                mode.put("g_readonly", false);
+                                return mode;
+                }
+
+                private String buildMainAccountBeforeSaveScript() {
+                                return """
+function beforeSave(row, seft) {
+        const resolvedAppId = String(row.app_id || seft.appId || \"\").trim();
+        if (!resolvedAppId) {
+                window.$message?.error(\"Vui lòng chọn app_id trước khi tạo tài khoản\");
+                return false;
+        }
+        const primaryIdentifier = String(row.username || row.email || row.phoneNumber || \"\").trim();
+        if (!primaryIdentifier) {
+                window.$message?.error(\"Cần username, email hoặc phoneNumber để tạo tài khoản\");
+                return false;
+        }
+        row.app_id = resolvedAppId;
+        const roleValue = Array.isArray(row.roles) && row.roles.length > 0
+                ? String(row.roles[0] || \"admin\").trim() || \"admin\"
+                : \"admin\";
+        const accessRight = roleValue.toLowerCase() === \"dev\" ? \"1\" : \"0\";
+        row.app_token = seft.csmEncrypt([resolvedAppId, primaryIdentifier, roleValue, accessRight].join(\"_____\"));
+        row.refresh = row.app_token;
+        const currentPass = String(row.pass || \"\").trim();
+        if (currentPass) {
+                const decryptedPass = String(seft.csmDecrypt(currentPass) || \"\");
+                if (!decryptedPass.startsWith(primaryIdentifier + \"_____\")) {
+                        row.pass = seft.csmEncrypt(primaryIdentifier + \"_____\" + currentPass);
+                }
+        }
+        if (row.actived == null) row.actived = true;
+        return row;
+}
+""";
+                }
+
+                private String buildSubUserBeforeSaveScript() {
+                                return """
+function beforeSave(row, seft) {
+        const sourceAppToken = String(seft.user?.app_token || \"\").trim();
+        if (!sourceAppToken) {
+                window.$message?.error(\"Không tìm thấy app_token của tài khoản hiện tại\");
+                return false;
+        }
+        const decryptedSource = String(seft.csmDecrypt(sourceAppToken) || \"\");
+        const sourceParts = decryptedSource.split(\"_____\");
+        const sourceAppId = String(sourceParts[0] || seft.user?.app_id || \"\").trim();
+        if (!sourceAppId) {
+                window.$message?.error(\"Không xác định được app_id từ tài khoản hiện tại\");
+                return false;
+        }
+        const loginIdentifier = String(row.login_identifier || \"\").trim();
+        if (!loginIdentifier) {
+                window.$message?.error(\"Vui lòng nhập login_identifier cho sub-user\");
+                return false;
+        }
+        row.parent_account_id = String(row.parent_account_id || seft.user?.app_id || sourceAppId).trim();
+        row.app_token = seft.csmEncrypt([sourceAppId, loginIdentifier, \"user\", \"0\"].join(\"_____\"));
+        row.refresh = row.app_token;
+        const currentPass = String(row.pass || \"\").trim();
+        if (currentPass) {
+                const decryptedPass = String(seft.csmDecrypt(currentPass) || \"\");
+                if (!decryptedPass.startsWith(loginIdentifier + \"_____\")) {
+                        row.pass = seft.csmEncrypt(loginIdentifier + \"_____\" + currentPass);
+                }
+        }
+        if (row.actived == null) row.actived = true;
+        return row;
+}
+""";
+                }
+
+                private List<Map<String, Object>> buildDefaultPermissions() {
+                                List<Map<String, Object>> permissions = new ArrayList<>();
+                                long now = System.currentTimeMillis();
+                                
+                                // User management permissions
+                                permissions.add(buildPermission("USER.CREATE", "Tạo người dùng", "USER", "CREATE", "Có thể tạo người dùng mới", "USER", now));
+                                permissions.add(buildPermission("USER.READ", "Xem người dùng", "USER", "READ", "Có thể xem danh sách người dùng", "USER", now));
+                                permissions.add(buildPermission("USER.UPDATE", "Cập nhật người dùng", "USER", "UPDATE", "Có thể cập nhật thông tin người dùng", "USER", now));
+                                permissions.add(buildPermission("USER.DELETE", "Xóa người dùng", "USER", "DELETE", "Có thể xóa người dùng", "USER", now));
+                                
+                                // Sub-user management permissions
+                                permissions.add(buildPermission("SUBUSER.CREATE", "Tạo người dùng con", "SUBUSER", "CREATE", "Có thể tạo người dùng con", "USER", now));
+                                permissions.add(buildPermission("SUBUSER.READ", "Xem người dùng con", "SUBUSER", "READ", "Có thể xem danh sách người dùng con", "USER", now));
+                                permissions.add(buildPermission("SUBUSER.UPDATE", "Cập nhật người dùng con", "SUBUSER", "UPDATE", "Có thể cập nhật thông tin người dùng con", "USER", now));
+                                permissions.add(buildPermission("SUBUSER.DELETE", "Xóa người dùng con", "SUBUSER", "DELETE", "Có thể xóa người dùng con", "USER", now));
+                                
+                                // Department management permissions
+                                permissions.add(buildPermission("DEPARTMENT.CREATE", "Tạo phòng ban", "DEPARTMENT", "CREATE", "Có thể tạo phòng ban mới", "DEPARTMENT", now));
+                                permissions.add(buildPermission("DEPARTMENT.READ", "Xem phòng ban", "DEPARTMENT", "READ", "Có thể xem danh sách phòng ban", "DEPARTMENT", now));
+                                permissions.add(buildPermission("DEPARTMENT.UPDATE", "Cập nhật phòng ban", "DEPARTMENT", "UPDATE", "Có thể cập nhật thông tin phòng ban", "DEPARTMENT", now));
+                                permissions.add(buildPermission("DEPARTMENT.DELETE", "Xóa phòng ban", "DEPARTMENT", "DELETE", "Có thể xóa phòng ban", "DEPARTMENT", now));
+                                
+                                // Role management permissions
+                                permissions.add(buildPermission("ROLE.CREATE", "Tạo vai trò", "ROLE", "CREATE", "Có thể tạo vai trò mới", "ROLE", now));
+                                permissions.add(buildPermission("ROLE.READ", "Xem vai trò", "ROLE", "READ", "Có thể xem danh sách vai trò", "ROLE", now));
+                                permissions.add(buildPermission("ROLE.UPDATE", "Cập nhật vai trò", "ROLE", "UPDATE", "Có thể cập nhật vai trò", "ROLE", now));
+                                permissions.add(buildPermission("ROLE.DELETE", "Xóa vai trò", "ROLE", "DELETE", "Có thể xóa vai trò", "ROLE", now));
+                                
+                                // Permission management
+                                permissions.add(buildPermission("PERMISSION.MANAGE", "Quản lý quyền hạn", "PERMISSION", "MANAGE", "Có thể quản lý quyền hạn", "PERMISSION", now));
+                                
+                                // System permissions
+                                permissions.add(buildPermission("SYSTEM.ADMIN", "Quản trị hệ thống", "SYSTEM", "ADMIN", "Có tất cả quyền hạn tối cao", "SYSTEM", now));
+                                
+                                return permissions;
+                }
+
+                private Map<String, Object> buildPermission(String code, String name, String resource, String action, String description, String category, long createTime) {
+                                Map<String, Object> perm = new HashMap<>();
+                                perm.put("id", UUID.randomUUID().toString());
+                                perm.put("permission_code", code);
+                                perm.put("permission_name", name);
+                                perm.put("resource", resource);
+                                perm.put("action", action);
+                                perm.put("description", description);
+                                perm.put("category", category);
+                                perm.put("create_time", createTime);
+                                return perm;
+                }
+
+                private List<Map<String, Object>> buildDefaultRoles() {
+                                List<Map<String, Object>> roles = new ArrayList<>();
+                                long now = System.currentTimeMillis();
+                                
+                                // Global admin role
+                                Map<String, Object> adminRole = new HashMap<>();
+                                adminRole.put("id", UUID.randomUUID().toString());
+                                adminRole.put("role_code", "ADMIN");
+                                adminRole.put("role_name", "Quản trị viên");
+                                adminRole.put("is_global", true);
+                                adminRole.put("department_id", null);
+                                adminRole.put("description", "Có tất cả quyền hạn tối cao trên hệ thống");
+                                adminRole.put("status", 1);
+                                adminRole.put("create_time", now);
+                                adminRole.put("update_time", now);
+                                roles.add(adminRole);
+                                
+                                // Department manager role
+                                Map<String, Object> deptManagerRole = new HashMap<>();
+                                deptManagerRole.put("id", UUID.randomUUID().toString());
+                                deptManagerRole.put("role_code", "DEPT_MANAGER");
+                                deptManagerRole.put("role_name", "Trưởng phòng ban");
+                                deptManagerRole.put("is_global", false);
+                                deptManagerRole.put("department_id", null);
+                                deptManagerRole.put("description", "Quản lý phòng ban và nhân viên trong phòng ban");
+                                deptManagerRole.put("status", 1);
+                                deptManagerRole.put("create_time", now);
+                                deptManagerRole.put("update_time", now);
+                                roles.add(deptManagerRole);
+                                
+                                // Department staff role
+                                Map<String, Object> staffRole = new HashMap<>();
+                                staffRole.put("id", UUID.randomUUID().toString());
+                                staffRole.put("role_code", "STAFF");
+                                staffRole.put("role_name", "Nhân viên");
+                                staffRole.put("is_global", false);
+                                staffRole.put("department_id", null);
+                                staffRole.put("description", "Nhân viên bình thường chỉ có quyền xem và chỉnh sửa dữ liệu của phòng ban");
+                                staffRole.put("status", 1);
+                                staffRole.put("create_time", now);
+                                staffRole.put("update_time", now);
+                                roles.add(staffRole);
+                                
+                                // Guest role (limit permissions)
+                                Map<String, Object> guestRole = new HashMap<>();
+                                guestRole.put("id", UUID.randomUUID().toString());
+                                guestRole.put("role_code", "GUEST");
+                                guestRole.put("role_name", "Khách");
+                                guestRole.put("is_global", true);
+                                guestRole.put("department_id", null);
+                                guestRole.put("description", "Quyền hạn tối thiểu chỉ xem dữ liệu");
+                                guestRole.put("status", 1);
+                                guestRole.put("create_time", now);
+                                guestRole.put("update_time", now);
+                                roles.add(guestRole);
+                                
+                                return roles;
+                }
 }

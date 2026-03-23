@@ -5,14 +5,12 @@ import net.phanmemmottrieu.data.RecordManager;
 import net.phanmemmottrieu.data.SearchFilter;
 import net.phanmemmottrieu.model.RegistrationResponse;
 import net.phanmemmottrieu.model.User;
-import net.phanmemmottrieu.model.SubUser; // Giả sử bạn có lớp SubUser mới
+import net.phanmemmottrieu.util.AppTokenHelper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.gson.Gson;
 
 import java.util.*;
@@ -117,6 +115,8 @@ public class UserService {
     private static final String ACCOUNTS_TABLE = "csm_accounts";
     private static final String SUB_ACCOUNTS_TABLE = "csm_group_members"; 
     private static final Gson GSON = new Gson(); // Khởi tạo đối tượng Gson một lần
+    private static final String MAIN_ACCOUNT_ROLE = "admin";
+    private static final String SUB_USER_ROLE = "user";
 
     @Autowired
     public UserService(RecordManager recordManager) {
@@ -750,7 +750,6 @@ public class UserService {
 
         String newAppToken = UUID.randomUUID().toString();
         String appId = null;
-        String commonAccessLevel = "STANDARD_USER";
 
         try {
             if (sourceAppToken != null && !sourceAppToken.isEmpty()) {
@@ -761,7 +760,12 @@ public class UserService {
                 logger.warn("No sourceAppToken provided or empty. Using default_app_id: {}", appId);
             }
 
-            String newUserAppTokenRawData = appId + "_____" + primaryLoginIdentifier + "_____" + (email != null && !email.isEmpty() ? email : "no_email") + "_____" + commonAccessLevel;
+            String newUserAppTokenRawData = AppTokenHelper.buildRawToken(
+                appId,
+                primaryLoginIdentifier,
+                MAIN_ACCOUNT_ROLE,
+                AppTokenHelper.resolveAccessRight(MAIN_ACCOUNT_ROLE)
+            );
             newAppToken = recordManager.csm_encrypt(newUserAppTokenRawData);
         } catch (Exception e) {
             logger.error("Error processing app_token for registration: " + e.getMessage());
@@ -922,6 +926,32 @@ public class UserService {
             subUserData.put("pass", recordManager.csm_encrypt(loginIdentifier + "_____" + rawPassword)); // Mã hóa mật khẩu của tài khoản con
             subUserData.put("actived", subUserRequest.getOrDefault("actived", true)); // Mặc định là true
             subUserData.put("group_id", subUserGroupId); // Lưu group_id vào tài khoản con
+
+            Object parentAppTokenValue = parentUserRecord.get("app_token");
+            String parentAppToken = parentAppTokenValue instanceof String ? ((String) parentAppTokenValue).trim() : "";
+            Object parentAppIdValue = parentUserRecord.get("app_id");
+            String parentAppId = parentAppIdValue instanceof String ? ((String) parentAppIdValue).trim() : "";
+            if (!parentAppToken.isBlank()) {
+                try {
+                    String decryptedParentToken = recordManager.csm_decrypt(parentAppToken);
+                    String[] tokenParts = decryptedParentToken.split("_____");
+                    if (tokenParts.length > 0 && tokenParts[0] != null && !tokenParts[0].isBlank()) {
+                        parentAppId = tokenParts[0].trim();
+                    }
+                } catch (Exception ex) {
+                    logger.warn("[createSubUser] Cannot extract app_id from parent app_token: {}", ex.getMessage());
+                }
+            }
+
+            String subUserAppTokenRawData = AppTokenHelper.buildRawToken(
+                parentAppId,
+                loginIdentifier,
+                SUB_USER_ROLE,
+                AppTokenHelper.resolveAccessRight(SUB_USER_ROLE)
+            );
+            String subUserAppToken = recordManager.csm_encrypt(subUserAppTokenRawData);
+            subUserData.put("app_token", subUserAppToken);
+            subUserData.put("refresh", subUserAppToken);
 
             // Xử lý permissions và menusPermissions (nếu được cung cấp trực tiếp cho tài khoản con)
             Object permissionsObj = subUserRequest.get("permissions");

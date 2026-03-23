@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { BasicTable } from "#src/components/basic-table";
 import { updateTableData, getTableData } from "./CsmApi";
 import CsmEditModal, { DetailGridTab } from "./CsmEditModal";
-import { csmDecrypt } from "./CsmCrypto";
+import { csmDecrypt, csmEncrypt } from "./CsmCrypto";
 import { INT, jdFromDate, jdToDate, NewMoon, KinhDoMatTroi, SunLongitude, getSunLongitude, getNewMoonDay, getLunarMonth11, getLeapMonthOffset, duong_qua_am, am_qua_duong, LunarCalendar } from "#src/utils/lunarCalendar";
 import { dateFormat, chuyenNgay, TruNgayRaSoNgay, CongNgay, CongGio, validateEmail, validatePhone, DateUtils } from "#src/utils/dateUtils";
 import { useSocket } from "#src/hooks/useSocket";
@@ -77,6 +77,29 @@ export interface MConfig {
 	type_form?: number | string;
 	row_type_edit?: number | string;
 	selectEnumsOverride?: Record<string, any>; // For detail grid: override selectEnums from trigger
+}
+
+function getPrimaryKeyFields(mConfig: MConfig): string[] {
+	const rawFields = Array.isArray(mConfig.struct?.fieldsPK) ? mConfig.struct.fieldsPK : [];
+	const normalizedFields = rawFields
+		.map((field) => String(field || "").trim())
+		.filter(Boolean);
+	return normalizedFields.length > 0 ? normalizedFields : ["id"];
+}
+
+function buildRowKey(row: Row | null | undefined, pkFields: string[]): string {
+	if (!row) return "";
+	const fields = pkFields.length > 0 ? pkFields : ["id"];
+	const compositeKey = fields
+		.map((field) => `${field}:${row[field] == null ? "" : String(row[field])}`)
+		.join("|");
+	if (compositeKey.replace(/[|:]/g, "").trim()) {
+		return compositeKey;
+	}
+	if (row.id != null && row.id !== "") {
+		return `id:${String(row.id)}`;
+	}
+	return JSON.stringify(row);
 }
 
 function safeEval<TArgs extends any[], TReturn>(args: string[], body: string): ((...a: TArgs) => TReturn) | null {
@@ -177,6 +200,8 @@ export function CsmDynamicGrid({
 		[globalDatabase, _unusedDatabaseProp]
 	);
 	const [, setUpdateTrigger] = useState(0);
+	const pkFields = useMemo(() => getPrimaryKeyFields(m_configs), [m_configs.struct?.fieldsPK]);
+	const getRowKey = useCallback((row: Row | null | undefined) => buildRowKey(row, pkFields), [pkFields]);
 
 	// Enable socket for real-time database updates
 	useSocket({ enabled: true });
@@ -377,6 +402,10 @@ export function CsmDynamicGrid({
 		m_configs,
 		context,
 		database,
+		appId,
+		user: useUserStore.getState(),
+		csmEncrypt,
+		csmDecrypt,
 		// Lunar calendar utilities
 		INT,
 		jdFromDate,
@@ -400,7 +429,7 @@ export function CsmDynamicGrid({
 		validateEmail,
 		validatePhone,
 		DateUtils,
-	}), [m_configs, context, database]);
+	}), [m_configs, context, database, appId]);
 
 	useEffect(() => {
 		const handleResize = () => {
@@ -516,6 +545,54 @@ export function CsmDynamicGrid({
 		next = runRowTrigger("barcode", next, true);
 		return next;
 	};
+
+	const runBeforeSaveTrigger = useCallback(async (rowData: Row): Promise<Row | false> => {
+		const trigger = m_configs.trigger?.beforeSave;
+		if (!trigger) return rowData;
+
+		const seftContext = createSeftContext();
+		const inputRow = JSON.parse(JSON.stringify(rowData || {}));
+
+		const normalizeResult = (result: any): Row | false => {
+			if (result === false) return false;
+			if (result && typeof result === "object") {
+				return { ...rowData, ...result };
+			}
+			return rowData;
+		};
+
+		if (typeof trigger === "function") {
+			const result = await (trigger as (row: Row, seft: any, data: Database) => any)(inputRow, seftContext, database);
+			return normalizeResult(result);
+		}
+
+		let code = String(trigger);
+		const effectiveDecrypt = decrypt || csmDecrypt;
+		try {
+			code = effectiveDecrypt(code);
+		} catch {
+			// Keep raw code when trigger is not encrypted.
+		}
+
+		const compileAttempts = [
+			`const __beforeSave = (${code}); return __beforeSave(row, seft, data);`,
+			code,
+		];
+
+		for (const body of compileAttempts) {
+			const fn = safeEval<[Row, any, Database], any>(["row", "seft", "data"], body);
+			if (!fn) continue;
+
+			try {
+				const result = await fn(inputRow, seftContext, database);
+				return normalizeResult(result);
+			} catch (err) {
+				console.error("beforeSave trigger error:", err);
+			}
+		}
+
+		return rowData;
+	}, [m_configs.trigger, createSeftContext, database, decrypt]);
 
 	// Helper: Run after trigger (afterAdd, afterEdit, afterDelete)
 	// Truyền toàn bộ mảng dữ liệu sau khi thay đổi để trigger có thể sync
@@ -1479,7 +1556,8 @@ export function CsmDynamicGrid({
 									// Giống Vue: chỉ lưu khi master save
 									if (isDetailGrid || !hasTableName) {
 										setData(prev => {
-											const next = prev.filter(row => row.id !== record.id);
+											const deletedRowKey = getRowKey(record);
+											const next = prev.filter(row => getRowKey(row) !== deletedRowKey);
 											runAfterTrigger('afterDelete', next);
 											return next;
 										});
@@ -1522,16 +1600,15 @@ export function CsmDynamicGrid({
 											command: "delete", 
 											obj_update,
 											pk_fields: pkFields,
-											where: record?.id ? { id: record.id } : undefined
+											where: pkFields.every((field) => record?.[field] != null)
+												? Object.fromEntries(pkFields.map((field) => [field, record[field]]))
+												: undefined
 										});
 										
 										// Update local state immediately
 										setData(prev => {
-											const next = prev.filter(row => {
-												const pkValue = pkFields.length === 1 ? row[pkFields[0]] : String(row.id);
-												const recordPkValue = pkFields.length === 1 ? record[pkFields[0]] : record.id;
-												return pkValue !== recordPkValue;
-											});
+											const deletedRowKey = getRowKey(record);
+											const next = prev.filter(row => getRowKey(row) !== deletedRowKey);
 											runAfterTrigger('afterDelete', next);
 											return next;
 										});
@@ -1757,11 +1834,11 @@ export function CsmDynamicGrid({
 
 	// Auto-enable edit mode for newly added rows
 	useEffect(() => {
-		if (pendingEditableRowId && searchedData.some(row => row.id === pendingEditableRowId)) {
+		if (pendingEditableRowId && searchedData.some(row => getRowKey(row) === pendingEditableRowId)) {
 			setEditableKeys([pendingEditableRowId]);
 			setPendingEditableRowId(null);
 		}
-	}, [pendingEditableRowId, searchedData]);
+	}, [pendingEditableRowId, searchedData, getRowKey]);
 
 	// Phím tắt cơ bản tương tự Vue: Ctrl+S (save), F4 (add), F3 (edit), F8 (delete)
 	useEffect(() => {
@@ -1810,15 +1887,14 @@ export function CsmDynamicGrid({
 						command: "delete", 
 						obj_update,
 						pk_fields: pkFields,
-						where: _selectedRow?.id ? { id: _selectedRow.id } : undefined
+						where: _selectedRow && pkFields.every((field) => (_selectedRow as any)[field] != null)
+							? Object.fromEntries(pkFields.map((field) => [field, (_selectedRow as any)[field]]))
+							: undefined
 					})
 						.then(() => {
 							// Update local state immediately
-							setData(prev => prev.filter(row => {
-								const pkValue = pkFields.length === 1 ? row[pkFields[0]] : String(row.id);
-								const selectedPkValue = pkFields.length === 1 ? _selectedRow[pkFields[0]] : _selectedRow.id;
-								return pkValue !== selectedPkValue;
-							}));
+							const selectedRowKey = getRowKey(_selectedRow);
+							setData(prev => prev.filter(row => getRowKey(row) !== selectedRowKey));
 							message.success("Đã xóa thành công");
 							onDelete?.(_selectedRow);
 							// Notify parent to reload database from server
@@ -1833,7 +1909,7 @@ export function CsmDynamicGrid({
 		};
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
-	}, [canAdd, canEdit, canDelete, onAdd, onEdit, onDelete, _selectedRow, appId, tableName]);
+	}, [canAdd, canEdit, canDelete, onAdd, onEdit, onDelete, _selectedRow, appId, tableName, pkFields, getRowKey]);
 
 	// Export CSV
 	const handleExport = () => {
@@ -2045,10 +2121,11 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 					return next;
 				});
 				// Select the new row
-				setSelectedKeys([newRowId]);
+				const newRowKey = getRowKey(newRow);
+				setSelectedKeys([newRowKey]);
 				setSelectedRow(newRow);
 				// Mark this row to be editable once it appears in the table
-				setPendingEditableRowId(newRowId);
+				setPendingEditableRowId(newRowKey);
 				onAdd?.();
 			}
 		} else {
@@ -2061,8 +2138,7 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 	const handleEdit = (record: Row) => {
 		// If inline editing is enabled, activate inline edit mode for the row
 		if (enableInlineCellEdit) {
-			const pkFields = m_configs.struct?.fieldsPK || ['id'];
-			const rowKey = String(pkFields.length === 1 ? record[pkFields[0]] : record.id);
+			const rowKey = getRowKey(record);
 			
 			console.log('[CsmDynamicGrid] Activating inline edit:', {
 				record,
@@ -2090,7 +2166,8 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 			// Giống Vue: detail grid chỉ update khi master save
 			if (isDetailGrid || !hasTableName) {
 				setData((prev) => {
-					const next = prev.filter(row => row.id !== record.id);
+					const deletedRowKey = getRowKey(record);
+					const next = prev.filter(row => getRowKey(row) !== deletedRowKey);
 					// Run afterDelete trigger với toàn bộ mảng còn lại
 					runAfterTrigger('afterDelete', next);
 					return next;
@@ -2137,16 +2214,15 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 				command: "delete", 
 				obj_update,
 				pk_fields: pkFields,
-				where: record?.id ? { id: record.id } : undefined
+				where: pkFields.every((field) => record?.[field] != null)
+					? Object.fromEntries(pkFields.map((field) => [field, record[field]]))
+					: undefined
 			});
 			
 			// Update local state và run afterDelete trigger
 			setData((prev) => {
-				const next = prev.filter(row => {
-					const pkValue = pkFields.length === 1 ? row[pkFields[0]] : String(row.id);
-					const recordPkValue = pkFields.length === 1 ? record[pkFields[0]] : record.id;
-					return pkValue !== recordPkValue;
-				});
+				const deletedRowKey = getRowKey(record);
+				const next = prev.filter(row => getRowKey(row) !== deletedRowKey);
 				// Run afterDelete trigger với toàn bộ mảng còn lại
 				runAfterTrigger('afterDelete', next);
 				return next;
@@ -2165,8 +2241,7 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 
 	const tableProps: any = {
 		rowKey: (record: Row) => {
-			const pkFields = m_configs.struct?.fieldsPK || ['id'];
-			return pkFields.length === 1 ? String(record[pkFields[0]]) : String(record.id);
+			return getRowKey(record);
 		},
 		actionRef,
 		columns,
@@ -2198,13 +2273,10 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 							const processedData = runUpdateTrigger(record);
 							
 							// Update lại data nếu trigger thay đổi giá trị
-							const pkFields = m_configs.struct?.fieldsPK || ['id'];
-							const rowKey = pkFields.length === 1 ? processedData[pkFields[0]] : processedData.id;
+							const currentRowKey = getRowKey(originRow);
 							
 							setData((prev) => prev.map(row => {
-								const isTarget = pkFields.length === 1 
-									? row[pkFields[0]] === rowKey
-									: row.id === rowKey;
+								const isTarget = getRowKey(row) === currentRowKey;
 								return isTarget ? { ...row, ...processedData } : row;
 							}));
 							
@@ -2217,14 +2289,8 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 					}, 300);
 				},
 				onSave: async (rowKey: React.Key, newData: Row) => {
-					const pkFields = m_configs.struct?.fieldsPK || ['id'];
 					// Find old row data
-					let oldRow: Row | undefined = undefined;
-					if (pkFields.length === 1) {
-						oldRow = data.find((row: Row) => row[pkFields[0]] === rowKey);
-					} else {
-						oldRow = data.find((row: Row) => String(row.id) === String(rowKey));
-					}
+					let oldRow: Row | undefined = data.find((row: Row) => getRowKey(row) === String(rowKey));
 					
 					const safeNewData = oldRow?.id && newData.id == null ? { ...newData, id: oldRow.id } : newData;
 					
@@ -2232,15 +2298,17 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 					// Giống Vue: detail grid chỉ lưu khi master save
 					if (isDetailGrid) {
 						// Run UPDATE trigger TRƯỚC KHI save (Vue compatibility)
-						const processedData = runUpdateTrigger(safeNewData);
+						const updatedDataFromTrigger = runUpdateTrigger(safeNewData);
+						const processedData = await runBeforeSaveTrigger(updatedDataFromTrigger);
+						if (processedData === false) {
+							return;
+						}
 						
 						// Update local state AND database object
 						let updatedData: Row[] = [];
 						setData((prev) => {
 							const next = prev.map(row => {
-								const isUpdatedRow = pkFields.length === 1 
-									? String(row[pkFields[0]]) === String(rowKey)
-									: String(row.id) === String(rowKey);
+								const isUpdatedRow = getRowKey(row) === String(rowKey);
 								
 								if (isUpdatedRow) {
 									return { ...row, ...processedData };
@@ -2280,7 +2348,11 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 					
 					try {
 						// Run UPDATE trigger TRƯỚC KHI save (Vue compatibility)
-						const processedData = runUpdateTrigger(safeNewData);
+						const updatedDataFromTrigger = runUpdateTrigger(safeNewData);
+						const processedData = await runBeforeSaveTrigger(updatedDataFromTrigger);
+						if (processedData === false) {
+							return;
+						}
 						
 						await updateTableData<Row>({
 							app_id: appId,
@@ -2288,15 +2360,15 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 							command: 'update',
 							obj_update: processedData,
 							pk_fields: pkFields,
-							where: oldRow?.id ? { id: oldRow.id } : undefined,
+							where: oldRow && pkFields.every((field) => oldRow?.[field] != null)
+								? Object.fromEntries(pkFields.map((field) => [field, oldRow[field]]))
+								: undefined,
 						});
 						
 						// Update local state immediately with merged data
 						setData((prev) => {
 							const next = prev.map(row => {
-								const isUpdatedRow = pkFields.length === 1 
-									? String(row[pkFields[0]]) === String(rowKey)
-									: String(row.id) === String(rowKey);
+								const isUpdatedRow = getRowKey(row) === String(rowKey);
 								
 								if (isUpdatedRow) {
 									return { ...row, ...processedData };
@@ -2331,8 +2403,7 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 		onRow: (record: Row) => ({
 			onClick: () => {
 				// Always select row on click for master-detail and inline edit
-				const pkFields = m_configs.struct?.fieldsPK || ['id'];
-				const rowKey = String(pkFields.length === 1 ? record[pkFields[0]] : record.id);
+				const rowKey = getRowKey(record);
 				setSelectedKeys([rowKey]);
 				setSelectedRow(record);
 				setSelectedDetailRow(record); // Update detail panel immediately
@@ -2417,7 +2488,7 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 						key: "batch-delete",
 						danger: true,
 						onClick: () => {
-							const selectedRows = searchedData.filter(row => selectedKeys.includes(row.id));
+							const selectedRows = searchedData.filter(row => selectedKeys.includes(getRowKey(row)));
 							if (selectedRows.length === 0) return;
 							
 							Modal.confirm({
@@ -2462,7 +2533,9 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 												command: "delete",
 												obj_update,
 												pk_fields: pkFields,
-												where: row?.id ? { id: row.id } : undefined
+												where: pkFields.every((field) => row?.[field] != null)
+													? Object.fromEntries(pkFields.map((field) => [field, row[field]]))
+													: undefined
 											});
 											deleteCount++;
 										} catch (err) {
@@ -2473,11 +2546,8 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 									
 									if (deleteCount > 0) {
 										// Update local state immediately
-										const deletedIds = selectedRows.map(r => pkFields.length === 1 ? r[pkFields[0]] : r.id);
-										setData(prev => prev.filter(row => {
-											const pkValue = pkFields.length === 1 ? row[pkFields[0]] : String(row.id);
-											return !deletedIds.includes(pkValue);
-										}));
+										const deletedKeys = new Set(selectedRows.map((row) => getRowKey(row)));
+										setData(prev => prev.filter(row => !deletedKeys.has(getRowKey(row))));
 										message.success(`Đã xóa ${deleteCount} bản ghi`);
 										setSelectedKeys([]);
 										// Notify parent to reload database from server
@@ -2555,7 +2625,7 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 				app_id: appId
 			});
 		});
-	}, [selectedDetailRow?.id, appId]); // Remove detailNodes to prevent duplicate renders
+	}, [selectedDetailRow ? getRowKey(selectedDetailRow) : "", appId, isMasterDetail, hasDetailNodes, detailNodes, getRowKey]);
 	
 	// Detail panel rendering is now only in CsmEditModal, not here
 	// Keep children array with just the table
@@ -2580,6 +2650,12 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 				menusPermissions,
 				decrypt,
 				onSubmit: async (values: Row) => {
+					const beforeSaveValues = await runBeforeSaveTrigger(values);
+					if (beforeSaveValues === false) {
+						return;
+					}
+					values = beforeSaveValues;
+
 					// Nếu không có table_name: chỉ lưu vào state local
 					if (!hasTableName) {
 						const cmd = editingRecord ? "update" : "create";
@@ -2596,7 +2672,8 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 								return next;
 							} else if (editingRecord) {
 								// Update: tìm và thay thế bản ghi cũ
-								const idx = prev.findIndex(row => row.id === editingRecord.id);
+								const editingRowKey = getRowKey(editingRecord);
+								const idx = prev.findIndex(row => getRowKey(row) === editingRowKey);
 								if (idx >= 0) {
 									const next = [...prev];
 									next[idx] = { ...next[idx], ...values };
@@ -2629,7 +2706,9 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 						command: cmd as any, 
 						obj_update: payloadValues,
 						pk_fields: pkFields,
-						where: cmd === "update" && editingRecord?.id ? { id: editingRecord.id } : undefined
+						where: cmd === "update" && editingRecord && pkFields.every((field) => editingRecord?.[field] != null)
+							? Object.fromEntries(pkFields.map((field) => [field, editingRecord[field]]))
+							: undefined
 					});
 					
 					// Update local state và run after trigger
@@ -2640,10 +2719,9 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 							runAfterTrigger('afterAdd', next);
 							return next;
 						} else if (editingRecord) {
+							const editingRowKey = getRowKey(editingRecord);
 							const idx = prev.findIndex(row => {
-								const pkValue = pkFields.length === 1 ? row[pkFields[0]] : row.id;
-								const editPkValue = pkFields.length === 1 ? editingRecord[pkFields[0]] : editingRecord.id;
-								return pkValue === editPkValue;
+								return getRowKey(row) === editingRowKey;
 							});
 							if (idx >= 0) {
 								const next = [...prev];

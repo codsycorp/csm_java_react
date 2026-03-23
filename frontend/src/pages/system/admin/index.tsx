@@ -6,6 +6,7 @@ import { CsmKanbanBoard } from "#src/components/csm-kanban";
 import DynamicCodeMenu from "#src/pages/system/dynamic-code";
 import { useAppStore, useUserStore, usePermissionStore, useTabsStore } from "#src/store";
 import { resolveDevFlag } from "#src/utils/dev-flag";
+import { buildSystemUserMenuConfig } from "./system-user-menu-config";
 import { Empty, Spin, Alert } from "antd";
 import { useEffect, useState, useCallback } from "react";
 import { useParams, useLocation } from "react-router";
@@ -22,6 +23,37 @@ interface MenuData {
 	type_form?: "" | 1 | 2 | 3 | 4 | 5 | 6;
 	row_type_edit?: 0 | 1;
 	[key: string]: any;
+}
+
+const DEPT_MENU_FIELD_KEYS = [
+	{ f_name: "id", key: "system.dept.fields.id", f_types: "string", f_align: "left" },
+	{ f_name: "parent_dept_id", key: "system.dept.fields.parentDeptId", f_types: "string", f_align: "left" },
+	{ f_name: "dept_code", key: "system.dept.fields.code", f_types: "string", f_align: "left" },
+	{ f_name: "dept_name", key: "system.dept.fields.name", f_types: "string", f_align: "left" },
+	{ f_name: "dept_full_name", key: "system.dept.fields.fullName", f_types: "string", f_align: "left" },
+	{ f_name: "description", key: "system.dept.fields.description", f_types: "string", f_align: "left" },
+	{ f_name: "manager_user_id", key: "system.dept.fields.managerUser", f_types: "string", f_align: "left" },
+	{ f_name: "is_global", key: "system.dept.fields.isGlobal", f_types: "checkbox", f_align: "center" },
+	{ f_name: "status", key: "system.dept.fields.status", f_types: "number", f_align: "right" },
+	{ f_name: "create_time", key: "system.dept.fields.createTime", f_types: "number", f_align: "right" },
+	{ f_name: "update_time", key: "system.dept.fields.updateTime", f_types: "number", f_align: "right" },
+];
+
+function buildDeptMenuFields(
+	t: (key: string) => string,
+	tEn: (key: string) => string,
+	tZh: (key: string) => string,
+) {
+	return DEPT_MENU_FIELD_KEYS.map((field) => ({
+		f_name: field.f_name,
+		f_header: t(field.key),
+		f_header_vi: t(field.key),
+		f_header_en: tEn(field.key),
+		f_header_zh: tZh(field.key),
+		f_show: 1,
+		f_types: field.f_types,
+		f_align: field.f_align,
+	}));
 }
 
 /**
@@ -51,6 +83,8 @@ export default function AdminPage() {
 	const selectedMenuIdForTab = useUserStore(state => state.selectedMenuIdForTab);
 	const { addTab } = useTabsStore();
 	const { t, i18n } = useTranslation();
+	const tEn = i18n.getFixedT("en-US");
+	const tZh = i18n.getFixedT("zh-CN");
 	
 	const [menuData, setMenuData] = useState<MenuData | null>(null);
 	const [loading, setLoading] = useState(true);
@@ -70,7 +104,7 @@ export default function AdminPage() {
 		const resolvedAppId = (base?.app_id && String(base.app_id).trim()) || appId;
 
 		if (isDevUser) {
-			return normalizeMenuRuntimeConfig({
+			return normalizeMenuRuntimeConfig(buildSystemUserMenuConfig({
 				...base,
 				id: "user",
 				path: "/system/user",
@@ -82,11 +116,11 @@ export default function AdminPage() {
 				type_form: 1,
 				row_type_edit: 0,
 				g_readonly: false,
-			});
+			}, "main", resolvedAppId, t));
 		}
 
 		if (isAdminUser) {
-			return normalizeMenuRuntimeConfig({
+			return normalizeMenuRuntimeConfig(buildSystemUserMenuConfig({
 				...base,
 				id: "user",
 				path: "/system/user",
@@ -98,7 +132,7 @@ export default function AdminPage() {
 				type_form: 1,
 				row_type_edit: 0,
 				g_readonly: false,
-			});
+			}, "sub", resolvedAppId, t));
 		}
 
 		return base;
@@ -195,6 +229,22 @@ export default function AdminPage() {
 						   row_type_edit: 0,
 						   g_readonly: false,
 					   },
+					   "/system/dept": {
+						   id: "dept",
+						   path: "/system/dept",
+						   label: t("common.menu.dept"),
+						   label_en: "Department Management",
+						   label_zh: "部门管理",
+						   table_name: "csm_depts",
+						   app_id: "csm",
+						   type_form: 1,
+						   row_type_edit: 0,
+						   g_readonly: false,
+						   table: buildDeptMenuFields(t, tEn, tZh),
+						   struct: {
+							   fieldsPK: ["id", "dept_code"],
+						   },
+					   },
 					   // Add more fallbacks here if needed
 				   };
 				   const fb = FALLBACK_MENU_MAP[targetId];
@@ -273,8 +323,18 @@ export default function AdminPage() {
 			});
 
 			const rows = response.rows || response.data || [];
-			const deduped = Array.from(new Map(rows.map((r: any) => [r.id, r])).values());
 			const fieldsPK = response.fieldsPK || ["id"];
+			const deduped = Array.from(
+				new Map(
+					rows.map((row: any, index: number) => {
+						const compositeKey = (Array.isArray(fieldsPK) ? fieldsPK : ["id"])
+							.map((field: string) => `${field}:${row?.[field] == null ? "" : String(row[field])}`)
+							.join("|");
+						const fallbackKey = row?.id != null ? `id:${String(row.id)}` : `index:${index}`;
+						return [compositeKey.replace(/[|:]/g, "").trim() ? compositeKey : fallbackKey, row];
+					})
+				).values()
+			);
 
 			const newDatabase: Record<string, any> = {
 				[primaryTable]: { rows: deduped, fieldsPK: fieldsPK }
@@ -538,7 +598,7 @@ export default function AdminPage() {
 			const keys = Object.keys(firstRow);
 			// If no rows yet, choose a sensible schema for csm_accounts
 			const fallbackKeys = runtimeMenuData.table_name === "csm_group_members"
-				? ["id", "parent_account_id", "login_identifier", "pass", "group_id", "permissions", "menusPermissions", "actived"]
+				? ["id", "parent_account_id", "login_identifier", "pass", "group_id", "app_token", "permissions", "menusPermissions", "actived"]
 				: [
 					"id", "username", "email", "avatar", "phoneNumber", "description", "roles", "actived",
 					"permissions", "menusPermissions", "group_rights", "full_name", "user_address", "app_id", "app_token", "refresh",

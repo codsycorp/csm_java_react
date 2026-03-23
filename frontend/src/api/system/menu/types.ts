@@ -45,5 +45,6 @@ export interface MenuItemType {
 	dynamic_link_url?: string // 动态链接地址
 	crm_config?: Record<string, any> | string // CRM workspace configuration JSON
 	kanban_config?: Record<string, any> | string // Kanban board configuration JSON
+	system_user_modes?: Record<string, any> | string // Role-specific config for /system/user
 	[key: string]: any // 允许其他字段
 }

@@ -181,7 +181,20 @@
 		"name": "Department Name",
 		"id": "Department Id",
 		"addDept": "Add Department",
-		"editDept": "Edit Department"
+		"editDept": "Edit Department",
+		"fields": {
+			"id": "ID",
+			"parentDeptId": "Parent Department",
+			"code": "Department Code",
+			"name": "Department Name",
+			"fullName": "Full Name",
+			"description": "Description",
+			"managerUser": "Manager User",
+			"isGlobal": "Global",
+			"status": "Status",
+			"createTime": "Create Time",
+			"updateTime": "Update Time"
+		}
 	},
 	"broadcast": {
 		"title": "Send Broadcast Notification to AppId",

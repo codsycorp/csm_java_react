@@ -181,7 +181,20 @@
 		"name": "部门名称",
 		"id": "部门标识",
 		"addDept": "新增部门",
-		"editDept": "编辑部门"
+		"editDept": "编辑部门",
+		"fields": {
+			"id": "ID",
+			"parentDeptId": "上级部门",
+			"code": "部门编码",
+			"name": "部门名称",
+			"fullName": "完整名称",
+			"description": "描述",
+			"managerUser": "管理人",
+			"isGlobal": "全局通用",
+			"status": "状态",
+			"createTime": "创建时间",
+			"updateTime": "更新时间"
+		}
 	},
 	"broadcast": {
 		"title": "发送广播通知到AppId",

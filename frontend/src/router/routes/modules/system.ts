@@ -5,12 +5,12 @@ import { system } from "#src/router/extra-info";
 import { lazy } from "react";
 
 const User = lazy(() => import("#src/pages/system/user"));
-const Dept = lazy(() => import("#src/pages/system/dept"));
 const Role = lazy(() => import("#src/pages/system/role"));
 const Menu = lazy(() => import("#src/pages/system/menu"));
 const AdminPage = lazy(() => import("#src/pages/system/admin"));
 const Developer = lazy(() => import("#src/pages/system/developer"));
 const Broadcast = lazy(() => import("#src/pages/system/broadcast"));
+const PermissionMatrix = lazy(() => import("#src/pages/system/permission-matrix"));
 
 const routes: AppRouteRecordRaw[] = [
 	{
@@ -81,7 +81,7 @@ const routes: AppRouteRecordRaw[] = [
 			},
 			{
 				path: "/system/dept",
-				Component: Dept,
+				Component: AdminPage,
 				handle: {
 					keepAlive: false,
 					icon: "ApartmentOutlined",
@@ -101,6 +101,18 @@ const routes: AppRouteRecordRaw[] = [
 					icon: "BellOutlined",
 					title: "common.menu.broadcast",
 					roles: ["dev"],
+				},
+			},
+			{
+				path: "/system/permission-matrix",
+				Component: PermissionMatrix,
+				handle: {
+					icon: "SafetyOutlined",
+					title: "Permission Matrix",
+					roles: ["admin"],
+					permissions: [
+						"permission:button:view",
+					],
 				},
 			},
 			{
