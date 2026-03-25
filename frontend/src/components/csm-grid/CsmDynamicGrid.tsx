@@ -13,6 +13,7 @@ import { PlusOutlined, ImportOutlined, ExportOutlined, SearchOutlined } from "@a
 import { read, utils } from "xlsx";
 import { useAppStore } from "#src/store/app";
 import { useUserStore } from "#src/store/user";
+import { PERMISSION_BITS, hasAnyPermissionBit, hasPermissionBit, parseMenuBitIndex, toPermissionBigInt } from "#src/utils/permission-bitfield";
 
 // Minimal types (kept local to avoid wider type churn)
 type Row = Record<string, any>;
@@ -139,6 +140,7 @@ export function CsmDynamicGrid({
 	permissions,
 	menusPermissions,
 	menuId,
+	dataScope,
 	decrypt,
 	onAdd,
 	onEdit,
@@ -153,9 +155,10 @@ export function CsmDynamicGrid({
 	m_configs: MConfig
 	database?: Database // DEPRECATED: Kept for backward compatibility, not used
 	appId?: string
-	permissions?: number
+	permissions?: number | string | bigint
 	menusPermissions?: Record<string | number, number>
 	menuId?: string | number
+	dataScope?: string
 	decrypt?: (s: string) => string
 	onAdd?: () => void
 	onEdit?: (row: Row) => void
@@ -195,13 +198,33 @@ export function CsmDynamicGrid({
 	const globalDatabase = useAppStore(state => state.database);
 	const setTableData = useAppStore(state => state.setTableData); // For updating fetched tables
 	const userAppId = useUserStore(state => state.app_id); // Get user appId for fallback
+	const userId = useUserStore(state => state.userId);
+	const username = useUserStore(state => state.username);
+	const userEmail = useUserStore(state => state.email);
+	const phoneNumber = useUserStore(state => state.phoneNumber);
 	const database = useMemo(
-		() => ({ ...globalDatabase, ..._unusedDatabaseProp }),
+		() => ({ ..._unusedDatabaseProp, ...globalDatabase }),
 		[globalDatabase, _unusedDatabaseProp]
 	);
+	// Helpers
+	const tableName = (m_configs.table_name || "").split(",")[0];
+	const hasTableName = Boolean(tableName);
 	const [, setUpdateTrigger] = useState(0);
 	const pkFields = useMemo(() => getPrimaryKeyFields(m_configs), [m_configs.struct?.fieldsPK]);
 	const getRowKey = useCallback((row: Row | null | undefined) => buildRowKey(row, pkFields), [pkFields]);
+	const syncMasterTableRows = useCallback((nextRows: Row[]) => {
+		if (isDetailGrid || !tableName) return;
+		const currentStoreTable = useAppStore.getState().database[tableName];
+		const fallbackTable = database[tableName];
+		const sourceTable = currentStoreTable || fallbackTable;
+		setTableData(tableName, {
+			id: sourceTable?.id || tableName,
+			fields: sourceTable?.fields,
+			fieldsPK: sourceTable?.fieldsPK || pkFields,
+			rows: nextRows,
+			app_id: sourceTable?.app_id || appId,
+		});
+	}, [appId, database, isDetailGrid, pkFields, setTableData, tableName]);
 
 	// Enable socket for real-time database updates
 	useSocket({ enabled: true });
@@ -439,12 +462,20 @@ export function CsmDynamicGrid({
 		return () => window.removeEventListener('resize', handleResize);
 	}, []);
 
-	const canAll = permissions === -1;
-	const mask = menusPermissions && menuId != null ? menusPermissions[menuId] ?? 0 : 0;
+	const permissionBits = useMemo(() => toPermissionBigInt(permissions), [permissions]);
+	const canAll = permissions === -1 || permissionBits === -1n;
+	const legacyMask = menusPermissions && menuId != null ? Number(menusPermissions[menuId] ?? 0) : 0;
+	const hasBitfieldActions = hasAnyPermissionBit(permissionBits, PERMISSION_BITS.action.view, PERMISSION_BITS.action.export);
+	const hasBitfieldMenus = hasAnyPermissionBit(permissionBits, PERMISSION_BITS.menu.min, PERMISSION_BITS.menu.max);
+	const menuBitIndex = parseMenuBitIndex(menuId);
+	const menuGrantedByBitfield = !hasBitfieldMenus || (menuBitIndex !== null && hasPermissionBit(permissionBits, menuBitIndex));
+	const canCreateByBitfield = hasPermissionBit(permissionBits, PERMISSION_BITS.action.create);
+	const canEditByBitfield = hasPermissionBit(permissionBits, PERMISSION_BITS.action.edit);
+	const canDeleteByBitfield = hasPermissionBit(permissionBits, PERMISSION_BITS.action.delete);
 	const isReadonly = !!m_configs.g_readonly;
-	const canAdd = !isReadonly && (canAll || ((mask & 2) !== 0));
-	const canEdit = !isReadonly && (canAll || ((mask & 4) !== 0));
-	const canDelete = !isReadonly && (canAll || ((mask & 8) !== 0));
+	const canAdd = !isReadonly && (canAll || ((legacyMask & 2) !== 0) || (hasBitfieldActions && menuGrantedByBitfield && canCreateByBitfield));
+	const canEdit = !isReadonly && (canAll || ((legacyMask & 4) !== 0) || (hasBitfieldActions && menuGrantedByBitfield && canEditByBitfield));
+	const canDelete = !isReadonly && (canAll || ((legacyMask & 8) !== 0) || (hasBitfieldActions && menuGrantedByBitfield && canDeleteByBitfield));
 
 	// type_form: "" (không chọn), 1 (dạng bảng), 2 (dạng Master-Detail)
 	// row_type_edit: 0 (dạng Form popup), 1 (chỉnh sửa trên dòng)
@@ -463,11 +494,7 @@ export function CsmDynamicGrid({
 	// 	canEdit
 	// });
 
-	// Helpers
-	const tableName = (m_configs.table_name || "").split(",")[0];
-
 	// Kiểm tra có table_name hay không
-	const hasTableName = Boolean(tableName);
 
 	// Subscribe to database changes to force re-render when socket updates nested data
 	useEffect(() => {
@@ -625,6 +652,12 @@ export function CsmDynamicGrid({
 		console.log('[selectEnums] m_configs.table:', m_configs.table);
 		console.log('[selectEnums] database keys:', Object.keys(database || {}));
 		console.log('[selectEnums] decrypt available:', !!decrypt);
+
+		const localizeOptionLabel = (raw: unknown) => {
+			const text = String(raw == null ? "" : raw);
+			if (!text) return "";
+			return text.includes(".") ? t(text) : text;
+		};
 		
 		const map: Record<string, Record<string, { text: string }>> = {};
 		
@@ -850,7 +883,7 @@ export function CsmDynamicGrid({
 							allOptions.forEach((opt: any) => {
 								if (opt && typeof opt === 'object' && 'ma' in opt && 'ten' in opt) {
 									const value = opt.ma;
-									const label = opt.ten;
+									const label = localizeOptionLabel(opt.ten);
 									console.log(`[selectEnums] Processing option:`, { opt, value, label });
 									if (value !== undefined && value !== null) {
 										enumObj[String(value)] = { text: String(label) };
@@ -885,18 +918,18 @@ export function CsmDynamicGrid({
 							let aLabel: string;
 							let bLabel: string;
 							if (Array.isArray(a)) {
-								aLabel = String(a[1] ?? a[0] ?? '');
+									aLabel = localizeOptionLabel(a[1] ?? a[0] ?? '');
 							} else if (a && typeof a === 'object') {
-								aLabel = String(a.ten ?? a.label ?? a.text ?? a.ma ?? a.value ?? a.id ?? '');
+									aLabel = localizeOptionLabel(a.ten ?? a.label ?? a.text ?? a.ma ?? a.value ?? a.id ?? '');
 							} else {
-								aLabel = String(a);
+									aLabel = localizeOptionLabel(a);
 							}
 							if (Array.isArray(b)) {
-								bLabel = String(b[1] ?? b[0] ?? '');
+									bLabel = localizeOptionLabel(b[1] ?? b[0] ?? '');
 							} else if (b && typeof b === 'object') {
-								bLabel = String(b.ten ?? b.label ?? b.text ?? b.ma ?? b.value ?? b.id ?? '');
+									bLabel = localizeOptionLabel(b.ten ?? b.label ?? b.text ?? b.ma ?? b.value ?? b.id ?? '');
 							} else {
-								bLabel = String(b);
+									bLabel = localizeOptionLabel(b);
 							}
 							return aLabel.localeCompare(bLabel);
 						});
@@ -908,20 +941,20 @@ export function CsmDynamicGrid({
 							if (Array.isArray(opt)) {
 								// Format: [value, label]
 								value = opt[0];
-								label = opt[1] ?? opt[0];
+								label = localizeOptionLabel(opt[1] ?? opt[0]);
 							} else if (opt && typeof opt === "object") {
 								// Format: { ma, ten } (Vue format) or { value, label }
 								if ('ma' in opt && 'ten' in opt) {
 									value = opt.ma;
-									label = opt.ten;
+									label = localizeOptionLabel(opt.ten);
 								} else {
 									value = opt.value ?? opt[0];
-									label = opt.label ?? opt.text ?? opt[1] ?? value;
+									label = localizeOptionLabel(opt.label ?? opt.text ?? opt[1] ?? value);
 								}
 							} else {
 								// Primitive value: use as both value and label
 								value = opt;
-								label = String(opt);
+								label = localizeOptionLabel(opt);
 							}
 							
 							// Add to enumObj
@@ -1065,7 +1098,7 @@ export function CsmDynamicGrid({
 			});
 		console.log('[selectEnums] Final map:', map);
 		return map;
-	}, [m_configs.table, database, decrypt, context, m_configs, m_configs.selectEnumsOverride, databaseVersion, ensureTableInDatabase]); // 🔄 Re-compute when databaseVersion changes (after table fetches)
+	}, [m_configs.table, database, decrypt, context, m_configs, m_configs.selectEnumsOverride, databaseVersion, ensureTableInDatabase, i18n.language, t]); // 🔄 Re-compute when database/language changes
 
 	// Map backend fields to ProColumns with f_types rules
 	const baseColumns: ProColumns<Row>[] = useMemo(() => {
@@ -1606,17 +1639,14 @@ export function CsmDynamicGrid({
 										});
 										
 										// Update local state immediately
-										setData(prev => {
-											const deletedRowKey = getRowKey(record);
-											const next = prev.filter(row => getRowKey(row) !== deletedRowKey);
-											runAfterTrigger('afterDelete', next);
-											return next;
-										});
+										const deletedRowKey = getRowKey(record);
+										const nextRows = data.filter(row => getRowKey(row) !== deletedRowKey);
+										runAfterTrigger('afterDelete', nextRows);
+										setData(nextRows);
+										syncMasterTableRows(nextRows);
 										
 										message.success("Đã xóa thành công");
 										onDelete?.(record);
-										// Notify parent to reload database from server
-										onDataChange?.();
 									} catch (err) {
 										console.error("❌ Delete error:", err);
 										message.error("Xóa thất bại: " + (err as Error).message);
@@ -1821,16 +1851,32 @@ export function CsmDynamicGrid({
 	}, [searchFields, m_configs.table]);
 
 	const searchedData = useMemo(() => {
-		if (!enableSearch || !searchTerm.trim()) return filtered;
+		let sourceRows = filtered;
+
+		if ((dataScope || "").toUpperCase() === "OWNER") {
+			const ownerCandidates = [userId, username, userEmail, phoneNumber, userAppId]
+				.filter((v): v is string => typeof v === "string" && v.trim().length > 0)
+				.map(v => v.trim().toLowerCase());
+			const ownerFields = ["created_by", "create_by", "owner_id", "owner", "user_id", "userid", "account_id", "parent_account_id"];
+
+			sourceRows = filtered.filter((row) => {
+				const existingOwnerField = ownerFields.find((field) => row?.[field] != null && String(row[field]).trim() !== "");
+				if (!existingOwnerField) return true;
+				const ownerValue = String(row[existingOwnerField] || "").trim().toLowerCase();
+				return ownerCandidates.includes(ownerValue);
+			});
+		}
+
+		if (!enableSearch || !searchTerm.trim()) return sourceRows;
 		const term = searchTerm.trim().toLowerCase();
-		return filtered.filter(row => {
+		return sourceRows.filter(row => {
 			return derivedSearchFields.some(field => {
 				const val = row[field];
 				if (val == null) return false;
 				return String(val).toLowerCase().includes(term);
 			});
 		});
-	}, [filtered, enableSearch, searchTerm, derivedSearchFields]);
+	}, [filtered, enableSearch, searchTerm, derivedSearchFields, dataScope, userId, username, userEmail, phoneNumber, userAppId]);
 
 	// Auto-enable edit mode for newly added rows
 	useEffect(() => {
@@ -1894,11 +1940,11 @@ export function CsmDynamicGrid({
 						.then(() => {
 							// Update local state immediately
 							const selectedRowKey = getRowKey(_selectedRow);
-							setData(prev => prev.filter(row => getRowKey(row) !== selectedRowKey));
+							const nextRows = data.filter(row => getRowKey(row) !== selectedRowKey);
+							setData(nextRows);
+							syncMasterTableRows(nextRows);
 							message.success("Đã xóa thành công");
 							onDelete?.(_selectedRow);
-							// Notify parent to reload database from server
-							onDataChange?.();
 						})
 						.catch((err) => {
 							console.error("Delete error:", err);
@@ -2231,8 +2277,6 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 			message.success("Đã xóa thành công");
 			onDelete?.(record);
 			runSideEffectTrigger("delete_db", record);
-			// Notify parent to reload database from server
-			onDataChange?.();
 		} catch (err) {
 			console.error("Delete error:", err);
 			message.error("Xóa thất bại: " + (err as Error).message);
@@ -2550,8 +2594,6 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 										setData(prev => prev.filter(row => !deletedKeys.has(getRowKey(row))));
 										message.success(`Đã xóa ${deleteCount} bản ghi`);
 										setSelectedKeys([]);
-										// Notify parent to reload database from server
-										onDataChange?.();
 									}
 									if (deleteError) {
 										message.warning(`Xóa ${deleteCount} bản ghi thành công, nhưng một số bản ghi thất bại`);
@@ -2699,27 +2741,49 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 					// Get primary key fields from m_configs.struct
 					const pkFields = m_configs.struct?.fieldsPK || ["id"];
 					
-					const payloadValues = cmd === "update" && editingRecord?.id ? { ...values, id: editingRecord.id } : values;
+					let existingRowByPk: Row | null = null;
+					if (cmd === "create") {
+						const hasCompletePk = pkFields.every((field) => {
+							const value = values?.[field];
+							return value !== undefined && value !== null && String(value).trim() !== "";
+						});
+						if (hasCompletePk) {
+							existingRowByPk = data.find((row) =>
+								pkFields.every((field) => String(row?.[field] ?? "") === String(values?.[field] ?? ""))
+							) || null;
+						}
+					}
+
+					const effectiveCommand = (cmd === "create" && existingRowByPk) ? "update" : cmd;
+					const targetRowForUpdate = editingRecord || existingRowByPk;
+
+					const payloadValues = values;
+
+					const whereValues =
+						effectiveCommand === "update" && targetRowForUpdate && pkFields.every((field) => targetRowForUpdate?.[field] != null)
+							? {
+								...Object.fromEntries(pkFields.map((field) => [field, targetRowForUpdate[field]])),
+							}
+							: undefined;
+
 					await updateTableData<Row>({ 
 						app_id: appId, 
 						obj_name: tableName, 
-						command: cmd as any, 
+						command: effectiveCommand as any, 
 						obj_update: payloadValues,
 						pk_fields: pkFields,
-						where: cmd === "update" && editingRecord && pkFields.every((field) => editingRecord?.[field] != null)
-							? Object.fromEntries(pkFields.map((field) => [field, editingRecord[field]]))
-							: undefined
+						where: whereValues
 					});
 					
 					// Update local state và run after trigger
 					setData((prev) => {
-						if (cmd === "create") {
+						if (effectiveCommand === "create") {
 							const next = [...prev, payloadValues];
 							// Run afterAdd trigger với toàn bộ mảng mới
 							runAfterTrigger('afterAdd', next);
 							return next;
-						} else if (editingRecord) {
-							const editingRowKey = getRowKey(editingRecord);
+						} else if (targetRowForUpdate) {
+							const editingRowKey = getRowKey(targetRowForUpdate);
 							const idx = prev.findIndex(row => {
 								return getRowKey(row) === editingRowKey;
 							});
@@ -2737,8 +2801,6 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 					
 					setEditorOpen(false);
 					runSideEffectTrigger("update_db", payloadValues);
-					// Notify parent to reload database from server
-					onDataChange?.();
 				},
 			})
 		);

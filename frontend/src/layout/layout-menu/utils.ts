@@ -56,14 +56,12 @@ const SYSTEM_MENU_I18N_MAP: Record<string, string> = {
 	"system": "common.menu.system",
 	"/system/user": "common.menu.user",
 	"user": "common.menu.user",
-	"/system/role": "common.menu.role",
-	"role": "common.menu.role",
 	"/system/menu": "common.menu.menu",
 	"menu": "common.menu.menu",
 	"/system/developer": "common.menu.developer",
 	"developer": "common.menu.developer",
-	"/system/dept": "common.menu.dept",
-	"dept": "common.menu.dept",
+	"/system/dept": "common.menu.permissionGroup",
+	"dept": "common.menu.permissionGroup",
 };
 
 function getI18nKeyFromMenu(menu: MenuItemType): string | null {

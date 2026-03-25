@@ -536,6 +536,7 @@ public class CRMService {
         try {
             String adId = UUID.randomUUID().toString();
             Map<String, Object> data = new HashMap<>(adData);
+            normalizeAdPayloadForPublishing(data);
             String platform = nonBlankOrDefault(asString(data.get("platform")), "").toLowerCase();
 
             Map<String, Object> publishResult = new HashMap<>();
@@ -602,6 +603,40 @@ public class CRMService {
             error.put("success", false);
             error.put("error", e.getMessage());
             return error;
+        }
+    }
+
+    private void normalizeAdPayloadForPublishing(Map<String, Object> adData) {
+        if (adData == null || adData.isEmpty()) {
+            return;
+        }
+
+        // Keep legacy gg_* fields working by mapping them to canonical Google Ads fields.
+        copyIfBlank(adData, "customer_id", "gg_customer_id");
+        copyIfBlank(adData, "access_token", "gg_access_token");
+        copyIfBlank(adData, "developer_token", "gg_developer_token");
+        copyIfBlank(adData, "login_customer_id", "gg_login_customer_id");
+
+        copyIfBlank(adData, "final_url", "target_url");
+        copyIfBlank(adData, "campaign_name", "name");
+        copyIfBlank(adData, "headline1", "headline");
+        copyIfBlank(adData, "description1", "description");
+        copyIfBlank(adData, "description2", "message");
+
+        // Keep legacy fb_* fields working by mapping them to canonical Facebook fields.
+        copyIfBlank(adData, "pageId", "fb_page_id");
+        copyIfBlank(adData, "pageAccessToken", "fb_page_access_token");
+        copyIfBlank(adData, "adAccountId", "fb_ad_account_id");
+    }
+
+    private void copyIfBlank(Map<String, Object> adData, String targetKey, String sourceKey) {
+        String targetValue = nonBlankOrDefault(asString(adData.get(targetKey)), "");
+        if (!targetValue.isBlank()) {
+            return;
+        }
+        String sourceValue = nonBlankOrDefault(asString(adData.get(sourceKey)), "");
+        if (!sourceValue.isBlank()) {
+            adData.put(targetKey, sourceValue);
         }
     }
 
@@ -1090,6 +1125,7 @@ public class CRMService {
             String accessToken = nonBlankOrDefault(asString(adData.get("access_token")), "");
             String developerToken = nonBlankOrDefault(asString(adData.get("developer_token")), "");
             String loginCustomerId = nonBlankOrDefault(asString(adData.get("login_customer_id")), "");
+            String normalizedStatus = normalizeGoogleAdsStatus(asString(adData.get("status")));
 
             if (customerId.isEmpty() || accessToken.isEmpty() || developerToken.isEmpty()) {
                 result.put("success", false);
@@ -1116,6 +1152,19 @@ public class CRMService {
                     budgetMicros = Long.parseLong(String.valueOf(budgetObj));
                 } catch (Exception ignored) {
                     // keep default
+                }
+            }
+            if (budgetObj == null) {
+                Object simpleBudgetObj = adData.get("budget");
+                if (simpleBudgetObj instanceof Number n) {
+                    budgetMicros = Math.max(1_000_000L, Math.round(n.doubleValue() * 1_000_000d));
+                } else if (simpleBudgetObj != null) {
+                    try {
+                        double simpleBudget = Double.parseDouble(String.valueOf(simpleBudgetObj));
+                        budgetMicros = Math.max(1_000_000L, Math.round(simpleBudget * 1_000_000d));
+                    } catch (Exception ignored) {
+                        // keep default
+                    }
                 }
             }
 
@@ -1181,7 +1230,7 @@ public class CRMService {
             Map<String, Object> campaignCreate = new HashMap<>();
             campaignCreate.put("name", campaignName);
             campaignCreate.put("advertisingChannelType", "SEARCH");
-            campaignCreate.put("status", nonBlankOrDefault(asString(adData.get("status")), "PAUSED"));
+            campaignCreate.put("status", normalizedStatus);
             campaignCreate.put("campaignBudget", budgetResourceName);
             campaignCreate.put("manualCpc", new HashMap<String, Object>());
             campaignCreate.put("networkSettings", networkSettings);
@@ -1224,7 +1273,7 @@ public class CRMService {
                 Map<String, Object> adGroupCreate = new HashMap<>();
                 adGroupCreate.put("name", adGroupName);
                 adGroupCreate.put("campaign", campaignResourceName);
-                adGroupCreate.put("status", nonBlankOrDefault(asString(adData.get("status")), "PAUSED"));
+                adGroupCreate.put("status", normalizedStatus);
                 adGroupCreate.put("type", "SEARCH_STANDARD");
                 adGroupCreate.put("cpcBidMicros", String.valueOf(cpcBidMicros));
 
@@ -1278,7 +1327,7 @@ public class CRMService {
 
                 Map<String, Object> adGroupAdCreate = new HashMap<>();
                 adGroupAdCreate.put("adGroup", adGroupResourceName);
-                adGroupAdCreate.put("status", nonBlankOrDefault(asString(adData.get("status")), "PAUSED"));
+                adGroupAdCreate.put("status", normalizedStatus);
                 adGroupAdCreate.put("ad", adCreate);
 
                 Map<String, Object> adGroupAdOp = new HashMap<>();
@@ -1319,6 +1368,17 @@ public class CRMService {
             result.put("message", e.getMessage());
         }
         return result;
+    }
+
+    private String normalizeGoogleAdsStatus(String rawStatus) {
+        String status = nonBlankOrDefault(rawStatus, "paused").trim().toLowerCase();
+        if ("active".equals(status) || "enabled".equals(status) || "run".equals(status)) {
+            return "ENABLED";
+        }
+        if ("removed".equals(status) || "delete".equals(status)) {
+            return "REMOVED";
+        }
+        return "PAUSED";
     }
 
     private String buildFacebookTargetingJson(Map<String, Object> adData) {

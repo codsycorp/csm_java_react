@@ -4,7 +4,7 @@ import CsmDynamicGrid from "./CsmDynamicGrid";
 import { buildDetailGridSelectEnums } from "./CsmEditModal";
 
 export default function CsmMasterDetail(props: any) {
-	const { appId, permissions, menusPermissions, database, decrypt, m_configs, onDataChange } = props;
+	const { appId, permissions, menusPermissions, dataScope, database, decrypt, m_configs, onDataChange } = props;
 	const [selectRow, setSelectRow] = useState<any>(null);
 
 	const nodes = (m_configs && m_configs.nodes) || [];
@@ -17,6 +17,7 @@ export default function CsmMasterDetail(props: any) {
 			appId,
 			permissions,
 			menusPermissions,
+			dataScope,
 			menuId: (m_configs as any).menu_id,
 			database,
 			decrypt,
@@ -56,6 +57,7 @@ export default function CsmMasterDetail(props: any) {
 				appId,
 				permissions,
 				menusPermissions,
+				dataScope,
 				menuId: (m_configs as any).menu_id,
 				database,
 				decrypt,

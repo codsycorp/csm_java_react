@@ -109,10 +109,9 @@ export function getConstantColumns(t: TFunction<"translation", undefined>): ProC
 				const idMap: Record<string, string> = {
 					"system": "common.menu.system",
 					"user": "common.menu.user",
-					"role": "common.menu.role",
 					"menu": "common.menu.menu",
 					"developer": "common.menu.developer",
-					"dept": "common.menu.dept",
+					"dept": "common.menu.permissionGroup",
 				};
 				if (record.id && idMap[record.id]) return t(idMap[record.id]);
 				return rawLabel;

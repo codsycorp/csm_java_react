@@ -611,6 +611,8 @@ interface DynamicCodeMenuProps {
   containerClassName?: string;
   rootPadding?: number;
   noCodeMessage?: string;
+  /** Khi true: nếu load lỗi (template không tồn tại, v.v.) thì ẩn hoàn toàn thay vì hiện Alert lỗi */
+  hideOnError?: boolean;
 }
 
 export default function DynamicCodeMenu({
@@ -622,6 +624,7 @@ export default function DynamicCodeMenu({
   containerClassName,
   rootPadding = 16,
   noCodeMessage,
+  hideOnError = false,
 }: DynamicCodeMenuProps = {}) {
   const { menuId: paramMenuId } = useParams<{ menuId: string }>();
   const location = useLocation();
@@ -1413,6 +1416,11 @@ ${resolvedContainerSelector} select {
 
     executeCode(autoCode);
   }, [autoCode, seft]);
+
+  // Ẩn hoàn toàn khi có lỗi và hideOnError=true
+  if (hideOnError && error && !loading) {
+    return null;
+  }
 
   return (
     <BasicContent key={i18n.language}>

@@ -1537,6 +1537,32 @@ public class RecordManager {
     
     // Cập nhật các hàm createRecord và deleteRecord để cập nhật __meta_totalCount
 
+    /**
+     * Batch update nhiều records trong cùng một bảng: 1 WriteBatch, 1 lần Lucene commit.
+     * Dùng khi cần persist nhiều rows cùng lúc để tránh N lần flush Lucene (rất chậm).
+     */
+    public void batchUpdateRecords(String appId, String tableName, List<Map<String, Object>> records, List<String> primaryKeys) {
+        if (records == null || records.isEmpty()) return;
+        RocksDB db = null;
+        try {
+            db = getDatabaseWithBloomFilter(appId, tableName);
+            try (WriteBatch writeBatch = new WriteBatch();
+                 WriteOptions writeOptions = new WriteOptions()) {
+                for (Map<String, Object> record : records) {
+                    String key = generateKey(appId, tableName, record, primaryKeys);
+                    writeBatch.put(key.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                                   objectMapper.writeValueAsBytes(record));
+                    indexRecord(appId, tableName, key, record);
+                }
+                db.write(writeOptions, writeBatch);
+            }
+            commitLuceneIndex(appId, tableName);
+            logger.info("✅ batchUpdateRecords: updated {} records in {}.{}", records.size(), appId, tableName);
+        } catch (Exception e) {
+            logger.error("❌ batchUpdateRecords failed for {}.{}: {}", appId, tableName, e.getMessage(), e);
+        }
+    }
+
     public String createRecord(String appId, String tableName, Map<String, Object> record, List<String>... customKey) {
         RocksDB db = null;
         String command="";

@@ -270,8 +270,8 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 		let apiWholeMenus: ApiMenuItemType[] = [];
 		try {
 			// 获取当前应用 ID - 优先使用登录用户 app_id，其次参数，再次 store
-			const effectiveAppId = (useUserStore.getState().app_id || "").trim()
-				|| (appIdParam || "").trim()
+			const effectiveAppId = (appIdParam || "").trim()
+				|| (useUserStore.getState().app_id || "").trim()
 				|| useAppStore.getState().getCurrentAppId();
 			const apiMenuResponse = await fetchNavigationMenus(effectiveAppId);
 			// ...existing code (API menu processing, tree transform, etc)...
@@ -359,8 +359,8 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 		
 		// Thử lấy menu điều hướng API để có đủ metadata
 		try {
-			const effectiveAppId = (useUserStore.getState().app_id || "").trim()
-				|| (appIdParam || "").trim()
+			const effectiveAppId = (appIdParam || "").trim()
+				|| (useUserStore.getState().app_id || "").trim()
 				|| useAppStore.getState().getCurrentAppId();
 			const apiMenuResponse = await fetchNavigationMenus(effectiveAppId);
 			const userState = useUserStore.getState();

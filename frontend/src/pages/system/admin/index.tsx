@@ -6,12 +6,13 @@ import { CsmKanbanBoard } from "#src/components/csm-kanban";
 import DynamicCodeMenu from "#src/pages/system/dynamic-code";
 import { useAppStore, useUserStore, usePermissionStore, useTabsStore } from "#src/store";
 import { resolveDevFlag } from "#src/utils/dev-flag";
-import { buildSystemUserMenuConfig } from "./system-user-menu-config";
+import { buildSystemUserMenuConfig, PERMISSION_GROUP_BEFORE_SAVE, PERMISSION_TOKEN_OPTIONS, ACTION_PRESET_OPTIONS_JSON, MENU_PERMISSION_OPTIONS, DATA_SCOPE_OPTIONS_JSON } from "./system-user-menu-config";
 import { Empty, Spin, Alert } from "antd";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import { useParams, useLocation } from "react-router";
-import { getTableData } from "#src/components/csm-grid/CsmApi";
+import { getTableData, createTableStruct, type CreateTableStruct } from "#src/components/csm-grid/CsmApi";
 import { useTranslation } from "react-i18next";
+import { toPermissionBigInt, resolvePermissionDataScope } from "#src/utils/permission-bitfield";
 // Import hàm hỗ trợ đa ngôn ngữ
 import { getLocalizedField, SupportedLanguage } from "#src/utils/i18nHelper";
 
@@ -23,6 +24,159 @@ interface MenuData {
 	type_form?: "" | 1 | 2 | 3 | 4 | 5 | 6;
 	row_type_edit?: 0 | 1;
 	[key: string]: any;
+}
+
+interface TableBootstrapDefinition {
+	tableName: string;
+	struct: CreateTableStruct;
+}
+
+function buildStruct(defaultValue: Record<string, any>, fieldsPK: string[], fieldsSearch: string[]): CreateTableStruct {
+	return {
+		defaultValue,
+		fieldsPK,
+		fieldsSearch,
+		fields: Array.from(new Set(Object.keys(defaultValue))),
+	};
+}
+
+const SYSTEM_ROUTE_TABLE_SCHEMAS: Record<string, TableBootstrapDefinition[]> = {
+	"/system/dept": [
+		{
+			tableName: "csm_roles",
+			struct: buildStruct(
+				{
+					id: "",
+					role_code: "",
+					role_name: "",
+					is_global: 0,
+					department_id: "",
+					description: "",
+					status: 1,
+					permissionBitfield: "0",
+					permissionSchemaVersion: "v2",
+					dataScope: "NONE",
+					create_time: 0,
+					update_time: 0,
+				},
+				["id", "role_code"],
+				["id", "role_code", "role_name", "description", "status", "dataScope"],
+			),
+		},
+	],
+	"/system/user": [
+		{
+			tableName: "csm_group_members",
+			struct: buildStruct(
+				{
+					id: "",
+					parent_account_id: "",
+					login_identifier: "",
+					group_id: "",
+					app_token: "",
+					refresh: "",
+					pass: "",
+					actived: true,
+					permissions: "[]",
+					menusPermissions: "[]",
+					permissionBitfield: "0",
+					permissionSchemaVersion: "v2",
+					dataScope: "NONE",
+					dept_id: "",
+					branch_id: "",
+					department_id: "",
+					team_id: "",
+				},
+				["id", "login_identifier"],
+				["id", "login_identifier", "parent_account_id", "group_id", "dept_id", "branch_id"],
+			),
+		},
+	],
+};
+
+function normalizeStringList(raw: unknown): string[] {
+	if (Array.isArray(raw)) {
+		return Array.from(new Set(raw.map((item) => String(item || "").trim()).filter(Boolean)));
+	}
+	if (raw && typeof raw === "object") {
+		return Array.from(new Set(Object.values(raw).map((item) => String(item || "").trim()).filter(Boolean)));
+	}
+	if (typeof raw === "string") {
+		const text = raw.trim();
+		if (!text) return [];
+		if (text.startsWith("[") || text.startsWith("{")) {
+			try {
+				return normalizeStringList(JSON.parse(text));
+			} catch {
+				return [];
+			}
+		}
+		return Array.from(new Set(text.split(/[;,\n]/g).map((item) => item.trim()).filter(Boolean)));
+	}
+	return [];
+}
+
+function structMatchesExpected(currentStruct: unknown, expectedStruct: CreateTableStruct): boolean {
+	if (!currentStruct || typeof currentStruct !== "object") return false;
+	const currentMap = currentStruct as Record<string, unknown>;
+	const currentFields = new Set(normalizeStringList(currentMap.fields).map((item) => item.toLowerCase()));
+	const currentPK = new Set(normalizeStringList(currentMap.fieldsPK).map((item) => item.toLowerCase()));
+
+	const expectedFields = expectedStruct.fields.map((item) => item.toLowerCase());
+	const expectedPK = expectedStruct.fieldsPK.map((item) => item.toLowerCase());
+
+	const fieldsOk = expectedFields.every((field) => currentFields.has(field));
+	const pkOk = expectedPK.every((field) => currentPK.has(field));
+	return fieldsOk && pkOk;
+}
+
+function parsePermissionMask(raw: unknown): number | null {
+	const bits = toPermissionBigInt(raw);
+	if (bits === null) return null;
+	const asNumber = Number(bits);
+	return Number.isSafeInteger(asNumber) ? asNumber : null;
+}
+
+function parseMenusPermissions(raw: unknown): Record<string | number, number> {
+	if (!raw) return {};
+
+	let source: unknown = raw;
+	if (typeof source === "string") {
+		const trimmed = source.trim();
+		if (!trimmed) return {};
+		try {
+			source = JSON.parse(trimmed);
+		} catch {
+			return {};
+		}
+	}
+
+	const output: Record<string | number, number> = {};
+
+	if (Array.isArray(source)) {
+		source.forEach((item) => {
+			if (typeof item === "string") {
+				const key = item.trim();
+				if (key) output[key] = 14;
+				return;
+			}
+			if (!item || typeof item !== "object") return;
+			const obj = item as Record<string, unknown>;
+			const key = String(obj.menuId || obj.menu_id || obj.id || obj.key || "").trim();
+			if (!key) return;
+			const mask = parsePermissionMask(obj.mask ?? obj.permission ?? obj.permissions ?? obj.value);
+			if (mask !== null) output[key] = mask;
+		});
+		return output;
+	}
+
+	if (typeof source !== "object") return {};
+	Object.entries(source as Record<string, unknown>).forEach(([key, value]) => {
+		const parsed = parsePermissionMask(value);
+		if (parsed !== null) output[key] = parsed;
+	});
+
+	return output;
 }
 
 const DEPT_MENU_FIELD_KEYS = [
@@ -56,6 +210,116 @@ function buildDeptMenuFields(
 	}));
 }
 
+function buildRoleMenuFields(
+	t: (key: string) => string,
+	tEn: (key: string) => string,
+	tZh: (key: string) => string,
+) {
+	const h = (key: string) => ({
+		f_header: t(key),
+		f_header_vi: t(key),
+		f_header_en: tEn(key),
+		f_header_zh: tZh(key),
+	});
+	return [
+		{ f_name: "id", ...h("system.role.id"), f_show: 0, f_types: "string", f_align: "left" },
+		{ f_name: "role_code", ...h("system.role.id"), f_show: 1, f_types: "string", f_align: "left" },
+		{ f_name: "role_name", ...h("system.role.name"), f_show: 1, f_types: "string", f_align: "left" },
+		{ f_name: "description", ...h("common.description"), f_show: 1, f_types: "string", f_align: "left" },
+		{ f_name: "permissionPreset", ...h("system.userPermission.fields.permissionPreset"), f_show: 1, f_types: "co", f_align: "left", f_cbo_query: ACTION_PRESET_OPTIONS_JSON },
+		{ f_name: "permissions", ...h("system.userPermission.fields.permissions"), f_show: 1, f_types: "multi_tag", f_align: "left", f_options: PERMISSION_TOKEN_OPTIONS },
+		{ f_name: "menusPermissions", ...h("system.userPermission.fields.menusPermissions"), f_show: 1, f_types: "menu_tree", f_align: "left", f_options: MENU_PERMISSION_OPTIONS },
+		{ f_name: "dataScope", ...h("system.userPermission.fields.dataScope"), f_show: 1, f_types: "co", f_align: "left", f_cbo_query: DATA_SCOPE_OPTIONS_JSON },
+		{ f_name: "permissionBitfield", ...h("system.userPermission.fields.permissionBitfield"), f_show: 0, f_types: "string", f_align: "left" },
+		{ f_name: "permissionSchemaVersion", ...h("system.userPermission.fields.permissionSchemaVersion"), f_show: 0, f_types: "string", f_align: "left" },
+		{ f_name: "status", ...h("common.status"), f_show: 1, f_types: "number", f_align: "right" },
+		{ f_name: "is_global", ...h("system.dept.fields.isGlobal"), f_show: 0, f_types: "checkbox", f_align: "center" },
+		{ f_name: "department_id", ...h("system.userPermission.fields.deptId"), f_show: 0, f_types: "string", f_align: "left" },
+		{ f_name: "create_time", ...h("common.createTime"), f_show: 0, f_types: "number", f_align: "right" },
+		{ f_name: "update_time", ...h("common.updateTime"), f_show: 0, f_types: "number", f_align: "right" },
+	];
+}
+
+const SYSTEM_FRIENDLY_VISIBLE_FIELDS: Record<string, string[]> = {
+	csm_accounts: [
+		"id",
+		"username",
+		"full_name",
+		"email",
+		"phoneNumber",
+		"permissionGroups",
+		"permissionsAdd",
+		"permissionsDeny",
+		"menusPermissionsAdd",
+		"menusPermissionsDeny",
+		"dataScope",
+		"permissionBitfield",
+		"actived",
+	],
+	csm_group_members: [
+		"id",
+		"login_identifier",
+		"group_id",
+		"permissionsAdd",
+		"permissionsDeny",
+		"menusPermissionsAdd",
+		"menusPermissionsDeny",
+		"dataScope",
+		"permissionBitfield",
+		"actived",
+	],
+	csm_roles: [
+		"id",
+		"role_code",
+		"role_name",
+		"description",
+		"permissionPreset",
+		"permissions",
+		"menusPermissions",
+		"dataScope",
+		"status",
+	],
+	csm_depts: [
+		"id",
+		"dept_code",
+		"dept_name",
+		"parent_dept_id",
+		"manager_user_id",
+		"status",
+	],
+};
+
+function applyFriendlyFieldPolicy(tableName: string | undefined, rawFields: any[]) {
+	if (!tableName || !Array.isArray(rawFields) || rawFields.length === 0) {
+		return rawFields;
+	}
+	const visibleFields = SYSTEM_FRIENDLY_VISIBLE_FIELDS[tableName];
+	if (!visibleFields || visibleFields.length === 0) {
+		return rawFields;
+	}
+
+	const orderMap = new Map<string, number>();
+	visibleFields.forEach((name, idx) => orderMap.set(name, idx));
+
+	const normalized = rawFields.map((field: any) => {
+		const fName = String(field?.f_name || "").trim();
+		const isVisible = orderMap.has(fName);
+		return {
+			...field,
+			f_show: isVisible ? 1 : 0,
+		};
+	});
+
+	normalized.sort((a: any, b: any) => {
+		const ia = orderMap.has(a?.f_name) ? (orderMap.get(a?.f_name) as number) : Number.MAX_SAFE_INTEGER;
+		const ib = orderMap.has(b?.f_name) ? (orderMap.get(b?.f_name) as number) : Number.MAX_SAFE_INTEGER;
+		if (ia !== ib) return ia - ib;
+		return String(a?.f_name || "").localeCompare(String(b?.f_name || ""));
+	});
+
+	return normalized;
+}
+
 /**
  * AdminPage - Renders dynamic grid/report based on menuId parameter
  * Integrates with layout tabbar system for tab-based navigation
@@ -73,6 +337,10 @@ export default function AdminPage() {
 	const username = useUserStore(state => state.username);
 	const email = useUserStore(state => state.email);
 	const phoneNumber = useUserStore(state => state.phoneNumber);
+	const userPermissionsRaw = useUserStore(state => state.permissions as any);
+	const userMenusPermissionsRaw = useUserStore(state => state.menusPermissions as any);
+	const userPermissionBitfieldRaw = useUserStore(state => (state as any).permissionBitfield as any);
+	const userPermissionSchemaVersion = useUserStore(state => (state as any).permissionSchemaVersion as any);
 	const isDevUser = resolveDevFlag(devFlag, userRoles);
 	const isAdminUser = !isDevUser && userRoles.some(r => typeof r === "string" && r.trim().toLowerCase() === "admin");
 	const isSystemUserRoute = (menuId === "user") || (location.pathname === "/system/user");
@@ -83,8 +351,8 @@ export default function AdminPage() {
 	const selectedMenuIdForTab = useUserStore(state => state.selectedMenuIdForTab);
 	const { addTab } = useTabsStore();
 	const { t, i18n } = useTranslation();
-	const tEn = i18n.getFixedT("en-US");
-	const tZh = i18n.getFixedT("zh-CN");
+	const tEn = useMemo(() => i18n.getFixedT("en-US"), [i18n]);
+	const tZh = useMemo(() => i18n.getFixedT("zh-CN"), [i18n]);
 	
 	const [menuData, setMenuData] = useState<MenuData | null>(null);
 	const [loading, setLoading] = useState(true);
@@ -95,6 +363,18 @@ export default function AdminPage() {
 
 	const userSubOwnerCandidates = [userAppId, userId, username, email, phoneNumber]
 		.filter((v): v is string => typeof v === "string" && v.trim().length > 0);
+	const runtimePermissionBits = isDevUser
+		? null
+		: (toPermissionBigInt(userPermissionBitfieldRaw) ?? toPermissionBigInt(userPermissionsRaw));
+	const hasPermissionSchemaV2 = String(userPermissionSchemaVersion || "").trim().toLowerCase() === "v2";
+	const isLegacyPermissionProfile = !isDevUser && !hasPermissionSchemaV2 && runtimePermissionBits === null;
+	const runtimePermissions = (isDevUser || isLegacyPermissionProfile)
+		? -1
+		: (parsePermissionMask(runtimePermissionBits) ?? -1);
+	const runtimeMenusPermissions = parseMenusPermissions(userMenusPermissionsRaw);
+	const runtimeDataScope = (isDevUser || isLegacyPermissionProfile)
+		? "ALL"
+		: resolvePermissionDataScope(runtimePermissionBits);
 
 	const buildUserMenuByRole = useCallback((base: any = {}): any => {
 		if (!isSystemUserRoute) {
@@ -138,6 +418,29 @@ export default function AdminPage() {
 		return base;
 	}, [isSystemUserRoute, isDevUser, isAdminUser, t, appId]);
 
+	const normalizeKnownSystemMenu = useCallback((menu: any = {}): any => {
+		if (location.pathname === "/system/dept") {
+			return normalizeMenuRuntimeConfig({
+				...menu,
+				id: "permission-group",
+				path: "/system/dept",
+				label: t("common.menu.permissionGroup"),
+				table_name: "csm_roles",
+				app_id: (menu?.app_id && String(menu.app_id).trim()) || appId,
+				type_form: 1,
+				row_type_edit: 0,
+				g_readonly: false,
+				table: buildRoleMenuFields(t, tEn, tZh),
+				trigger: { beforeSave: PERMISSION_GROUP_BEFORE_SAVE },
+				struct: {
+					fieldsPK: ["id", "role_code"],
+				},
+			});
+		}
+
+		return normalizeMenuRuntimeConfig(menu);
+	}, [location.pathname, t, tEn, tZh, appId]);
+
 	// Centralized refresh hook for dynamic grid/report/crm widgets.
 	const handleDataChange = useCallback(() => {
 		setReloadTrigger(prev => prev + 1);
@@ -149,14 +452,13 @@ export default function AdminPage() {
 		"system": "common.menu.system",
 		"/system/user": "common.menu.user",
 		"user": "common.menu.user",
-		"/system/role": "common.menu.role",
-		"role": "common.menu.role",
 		"/system/menu": "common.menu.menu",
 		"menu": "common.menu.menu",
 		"/system/developer": "common.menu.developer",
 		"developer": "common.menu.developer",
-		"/system/dept": "common.menu.dept",
-		"dept": "common.menu.dept",
+		"/system/dept": "common.menu.permissionGroup",
+		"dept": "common.menu.permissionGroup",
+		"permission-group": "common.menu.permissionGroup",
 	};
 
 	const resolveDisplayLabel = (menu: any): string => {
@@ -178,7 +480,7 @@ export default function AdminPage() {
 		const locationState = location.state as any;
 		if (locationState?.menuData) {
 			const roleMenu = buildUserMenuByRole(locationState.menuData);
-			const withLabel = normalizeMenuRuntimeConfig({
+			const withLabel = normalizeKnownSystemMenu({
 				...roleMenu,
 				label: resolveDisplayLabel(roleMenu),
 			});
@@ -193,7 +495,7 @@ export default function AdminPage() {
 		// Fallback: search in tree
 		const findMenuInTree = (menus: any[], targetId: string): any => {
 			for (const menu of menus) {
-				// Match by id, key, or path to support routes like /system/user and /system/role
+				// Match by id, key, or path to support routes like /system/user
 				if (menu.id === targetId || menu.key === targetId || menu.path === targetId) return menu;
 				if (menu.children?.length) {
 					const found = findMenuInTree(menu.children, targetId);
@@ -219,30 +521,22 @@ export default function AdminPage() {
 						   row_type_edit: 0,
 						   g_readonly: false,
 					   },
-					   "/system/role": {
-						   id: "role",
-						   path: "/system/role",
-						   label: t("common.menu.role"),
+
+					   "/system/dept": {
+						   id: "permission-group",
+						   path: "/system/dept",
+						   label: t("common.menu.permissionGroup"),
+						   label_en: "Permission Group Management",
+						   label_zh: "权限组管理",
 						   table_name: "csm_roles",
 						   app_id: "csm",
 						   type_form: 1,
 						   row_type_edit: 0,
 						   g_readonly: false,
-					   },
-					   "/system/dept": {
-						   id: "dept",
-						   path: "/system/dept",
-						   label: t("common.menu.dept"),
-						   label_en: "Department Management",
-						   label_zh: "部门管理",
-						   table_name: "csm_depts",
-						   app_id: "csm",
-						   type_form: 1,
-						   row_type_edit: 0,
-						   g_readonly: false,
-						   table: buildDeptMenuFields(t, tEn, tZh),
+						   table: buildRoleMenuFields(t, tEn, tZh),
+						   trigger: { beforeSave: PERMISSION_GROUP_BEFORE_SAVE },
 						   struct: {
-							   fieldsPK: ["id", "dept_code"],
+							   fieldsPK: ["id", "role_code"],
 						   },
 					   },
 					   // Add more fallbacks here if needed
@@ -253,7 +547,7 @@ export default function AdminPage() {
 				   }
 			}
 			const roleMenu = found ? buildUserMenuByRole(found) : found;
-			const withLabel = roleMenu ? normalizeMenuRuntimeConfig({ ...roleMenu, label: resolveDisplayLabel(roleMenu) }) : roleMenu;
+			const withLabel = roleMenu ? normalizeKnownSystemMenu({ ...roleMenu, label: resolveDisplayLabel(roleMenu) }) : roleMenu;
 			setMenuData(withLabel);
 			setLoading(false);
 			
@@ -275,12 +569,43 @@ export default function AdminPage() {
 				useUserStore.getState().setSelectedMenuIdForTab("");
 			}
 		}
-	}, [menuId, apiWholeMenus, selectedMenuIdForTab, location.state, location.pathname, location.search, location.hash, addTab, buildUserMenuByRole, t]);
+	}, [menuId, apiWholeMenus, selectedMenuIdForTab, location.state, location.pathname, location.search, location.hash, addTab, buildUserMenuByRole, normalizeKnownSystemMenu, t, appId, tEn, tZh]);
 
 	// Di chuyển hàm loadTableData ra ngoài useEffect để có thể tái sử dụng
 	const loadTableData = async () => {
 		const runtimeMenu = menuData ? normalizeMenuRuntimeConfig(menuData) : null;
 		if (!runtimeMenu) return;
+
+		const ensureSystemRouteTables = async (effectiveAppId: string) => {
+			const definitions = SYSTEM_ROUTE_TABLE_SCHEMAS[location.pathname] || [];
+			if (definitions.length === 0) return;
+
+			for (const definition of definitions) {
+				try {
+					const indexRes = await getTableData<any>({
+						app_id: effectiveAppId,
+						obj_name: "index",
+						where: { field: "id", type: "eq", value: definition.tableName },
+						take: 1,
+					});
+					const indexRows = (indexRes as any)?.rows || (indexRes as any)?.data || [];
+					const currentStruct = Array.isArray(indexRows) && indexRows.length > 0 ? indexRows[0]?.struct : null;
+					if (structMatchesExpected(currentStruct, definition.struct)) {
+						continue;
+					}
+				} catch {
+					// Continue to create-table fallback.
+				}
+
+				await createTableStruct({
+					app_id: effectiveAppId,
+					obj_table: {
+						id: definition.tableName,
+						struct: definition.struct,
+					},
+				});
+			}
+		};
 
 		const allMenuTables = new Set<string>();
 		(runtimeMenu.table_name || "")
@@ -315,6 +640,8 @@ export default function AdminPage() {
 
 			// Use menu-specific app_id if available, otherwise fall back to global appId
 			const effectiveAppId = runtimeMenu.app_id || appId;
+
+			await ensureSystemRouteTables(effectiveAppId);
 
 			const response = await getTableData<any>({
 				app_id: effectiveAppId,
@@ -441,21 +768,21 @@ export default function AdminPage() {
 			<div style={{ padding: 24, textAlign: "center" }}>
 				<Spin size="large" />
 				<p style={{ marginTop: 16, color: "#666" }}>
-					{loading ? "Đang tải menu..." : "Đang tải dữ liệu..."}
+					{loading ? t("system.admin.loadingMenu") : t("system.admin.loadingData")}
 				</p>
 			</div>
 		);
 	}
 
 	if (!menuData) {
-		return <Empty description="Menu not found" />;
+		return <Empty description={t("system.admin.menuNotFound")} />;
 	}
 
 	if (dbError) {
 		return (
 			<div style={{ padding: 24 }}>
 				<Alert
-					message="Lỗi tải dữ liệu"
+					message={t("system.admin.loadDataError")}
 					description={dbError}
 					type="error"
 					showIcon
@@ -468,10 +795,30 @@ export default function AdminPage() {
 	const runtimeMenuData = normalizeMenuRuntimeConfig(menuData);
 	const effectiveAppId = runtimeMenuData.app_id || appId;
 	const typeForm = Number(runtimeMenuData.type_form || 1);
+	const tableNameByPath: Record<string, string[]> = {
+		"/system/user": ["csm_accounts", "csm_group_members"],
+		"/system/dept": ["csm_roles"],
+	};
+	const expectedTableNames = tableNameByPath[location.pathname] || [];
+	const currentTableName = String(runtimeMenuData.table_name || "").trim();
+	const hasSystemMenuTableMismatch = expectedTableNames.length > 0 && !!currentTableName && !expectedTableNames.includes(currentTableName);
+	const mismatchAlertNode = hasSystemMenuTableMismatch ? (
+		<Alert
+			type="warning"
+			showIcon
+			message={t("system.menu.configMismatch.title") || "Menu configuration mismatch"}
+			description={
+				(t("system.menu.configMismatch.desc") || "The current route and table configuration are inconsistent.")
+					+ ` path=${location.pathname}, table=${currentTableName}, expected=${expectedTableNames.join(" | ")}`
+			}
+			style={{ marginBottom: 12 }}
+		/>
+	) : null;
 
 	if (typeForm === 5) {
 		return (
 			<div style={{ height: "100%" }}>
+				{mismatchAlertNode}
 				<CsmCrmWorkspace
 					appId={effectiveAppId}
 					menuData={runtimeMenuData}
@@ -486,6 +833,7 @@ export default function AdminPage() {
 	if (typeForm === 6 || (runtimeMenuData as any).kanban_config) {
 		return (
 			<div style={{ height: "100%" }}>
+				{mismatchAlertNode}
 				<CsmKanbanBoard
 					appId={effectiveAppId}
 					menuData={runtimeMenuData}
@@ -501,6 +849,7 @@ export default function AdminPage() {
 	if (hasAutoCodeName) {
 		return (
 			<div style={{ padding: 16, height: "100%" }}>
+				{mismatchAlertNode}
 				<DynamicCodeMenu menuId={menuId} menuData={runtimeMenuData} />
 			</div>
 		);
@@ -510,6 +859,7 @@ export default function AdminPage() {
 	if (runtimeMenuData.report_name) {
 		return (
 			<div style={{ padding: 16, height: "100%" }}>
+				{mismatchAlertNode}
 				<CsmReport
 					appId={effectiveAppId}
 					m_configs={runtimeMenuData}
@@ -566,6 +916,8 @@ export default function AdminPage() {
 			}
 		};
 
+		m_configs.table = applyFriendlyFieldPolicy(runtimeMenuData.table_name, m_configs.table as any) as any;
+
 		// If columns are missing, auto-generate sensible defaults for known tables
 		if ((!m_configs.table || m_configs.table.length === 0) && runtimeMenuData.table_name) {
 			const rows = database[runtimeMenuData.table_name]?.rows || [];
@@ -573,48 +925,74 @@ export default function AdminPage() {
 			// Default column headers mapping (Vietnamese i18n keys used where applicable)
 			// Cập nhật ánh xạ trong DEFAULT_HEADERS
 			const DEFAULT_HEADERS: Record<string, string> = {
-				id: "ID",
+				id: "common.id",
 				username: "common.username",
 				email: "common.email",
-				avatar: "Avatar",
+				avatar: "common.picture",
 				phoneNumber: "common.phoneNumber",
 				description: "common.description",
-				roles: "Roles",
+				roles: "system.userPermission.fields.roles",
+				permissionPreset: "system.userPermission.fields.permissionPreset",
+				permissionGroups: "system.userPermission.fields.permissionGroups",
 				actived: "common.active",
-				permissions: "Permissions",
-				menusPermissions: "Menu Permissions",
-				group_rights: "Group Rights",
+				permissions: "system.userPermission.fields.permissions",
+				permissionsAdd: "system.userPermission.fields.permissionsAdd",
+				permissionsDeny: "system.userPermission.fields.permissionsDeny",
+				menusPermissions: "system.userPermission.fields.menusPermissions",
+				menusPermissionsAdd: "system.userPermission.fields.menusPermissionsAdd",
+				menusPermissionsDeny: "system.userPermission.fields.menusPermissionsDeny",
+				permissionBitfield: "system.userPermission.fields.permissionBitfield",
+				permissionSchemaVersion: "system.userPermission.fields.permissionSchemaVersion",
+				dataScope: "system.userPermission.fields.dataScope",
+				dept_id: "system.userPermission.fields.deptId",
+				branch_id: "system.userPermission.fields.branchId",
+				department_id: "system.userPermission.fields.deptId",
+				team_id: "system.userPermission.fields.deptId",
+				group_rights: "common.groupId",
 				full_name: "common.fullName",
 				user_address: "common.address",
 				app_id: "common.appId",
 				app_token: "common.appToken",
-				refresh: "Refresh Token",
+				refresh: "common.refresh",
 				picture: "common.picture",
 				userid: "common.userId",
 				pass: "common.password",
 				active: "common.active",
 				action: "common.action",
+				role_code: "system.role.id",
+				role_name: "system.role.name",
+				dept_code: "system.dept.fields.code",
+				dept_name: "system.dept.fields.name",
+				parent_dept_id: "system.dept.fields.parentDeptId",
+				manager_user_id: "system.dept.fields.managerUser",
+				is_global: "system.dept.fields.isGlobal",
+				create_time: "common.createTime",
+				update_time: "common.updateTime",
 			};
 			const keys = Object.keys(firstRow);
 			// If no rows yet, choose a sensible schema for csm_accounts
 			const fallbackKeys = runtimeMenuData.table_name === "csm_group_members"
-				? ["id", "parent_account_id", "login_identifier", "pass", "group_id", "app_token", "permissions", "menusPermissions", "actived"]
-				: [
-					"id", "username", "email", "avatar", "phoneNumber", "description", "roles", "actived",
-					"permissions", "menusPermissions", "group_rights", "full_name", "user_address", "app_id", "app_token", "refresh",
-					"picture", "userid", "pass", "app_token", "app_id", "active", "action"
-				];
+				? ["id", "parent_account_id", "login_identifier", "pass", "group_id", "permissionsAdd", "permissionsDeny", "menusPermissionsAdd", "menusPermissionsDeny", "permissionBitfield", "dataScope", "actived"]
+				: runtimeMenuData.table_name === "csm_roles"
+					? ["id", "role_code", "role_name", "description", "permissionPreset", "permissions", "menusPermissions", "dataScope", "permissionBitfield", "status"]
+					: runtimeMenuData.table_name === "csm_depts"
+						? ["id", "parent_dept_id", "dept_code", "dept_name", "dept_full_name", "description", "manager_user_id", "is_global", "status", "create_time", "update_time"]
+						: [
+							"id", "username", "email", "phoneNumber", "full_name", "user_address", "app_id", "app_token", "pass", "roles", "actived",
+							"permissionGroups", "permissionsAdd", "permissionsDeny", "menusPermissionsAdd", "menusPermissionsDeny", "dataScope", "permissionBitfield",
+						];
 			DEFAULT_HEADERS.parent_account_id = "common.parentAccountId";
 			DEFAULT_HEADERS.login_identifier = "common.loginIdentifier";
 			DEFAULT_HEADERS.group_id = "common.groupId";
-			const fields = (keys.length ? keys : fallbackKeys).map((k) => ({
+			const normalizedKeys = Array.from(new Set(keys.length ? keys : fallbackKeys));
+			const fields = normalizedKeys.map((k) => ({
 				f_name: k,
 				f_header: t(DEFAULT_HEADERS[k] || k), // Sử dụng hàm `t` để dịch tiêu đề cột
 				f_show: 1,
 				f_types: k === "id" ? "number" : "string",
 				f_align: k === "id" ? "right" : "left",
 			}));
-			m_configs.table = fields as any;
+			m_configs.table = applyFriendlyFieldPolicy(runtimeMenuData.table_name, fields as any) as any;
 		}
 		
 		// Debug log to check if backend returned type_form and row_type_edit
@@ -697,10 +1075,12 @@ export default function AdminPage() {
 		if (Number(m_configs.type_form) === 2 && hasNodes) {
 			return (
 				<div style={{ padding: 16, height: "100%" }}>
+					{mismatchAlertNode}
 					<CsmMasterDetail
 						appId={effectiveAppId}
-						permissions={-1}
-						menusPermissions={{}}
+						permissions={runtimePermissions}
+						menusPermissions={runtimeMenusPermissions}
+						dataScope={runtimeDataScope}
 						database={database}
 						decrypt={(s: string) => s}
 						m_configs={{ ...m_configs, nodes }}
@@ -713,12 +1093,14 @@ export default function AdminPage() {
 		// Otherwise render single grid
 		return (
 			<div style={{ padding: 16, height: "100%" }}>
+				{mismatchAlertNode}
 				<CsmDynamicGrid
 					m_configs={m_configs}
 					database={database}
 					appId={effectiveAppId}
-					permissions={-1}
-					menusPermissions={{}}
+					permissions={runtimePermissions}
+					menusPermissions={runtimeMenusPermissions}
+					dataScope={runtimeDataScope}
 					menuId={runtimeMenuData.id}
 					decrypt={(s: string) => s}
 					onDataChange={handleDataChange}

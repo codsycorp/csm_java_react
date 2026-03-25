@@ -3,7 +3,7 @@ import type { ActionType } from "@ant-design/pro-components";
 import { fetchDeleteMenuItem, fetchMenuList, fetchAppList, fetchMenuItemDetail, saveMenuStruct } from "#src/api/system/menu";
 import { BasicButton, BasicContent } from "#src/components";
 import { useAuth } from "#src/hooks";
-import { useAppStore } from "#src/store";
+import { useAppStore, useUserStore } from "#src/store";
 import { usePermissionStore } from "#src/store";
 import { handleTree } from "#src/utils";
 import { resolveDevFlag } from "#src/utils/dev-flag";
@@ -24,7 +24,9 @@ export default function Menu() {
 	const hasAuth = useAuth();
 	const { setCurrentAppId } = useAppStore();
 	const { handleAsyncRoutes } = usePermissionStore();
-	const [isDevUser, setIsDevUser] = useState(false);
+	const userDev = useUserStore(state => state.dev);
+	const userRoles = useUserStore(state => state.roles || []);
+	const isDevUser = resolveDevFlag(userDev, userRoles);
 	const [activeTab, setActiveTab] = useState("table");
 	const [selectedApp, setSelectedApp] = useState<string>("csm");
 	const [appList, setAppList] = useState<any[]>([]);
@@ -148,23 +150,8 @@ export default function Menu() {
 
 	const actionRef = useRef<ActionType>(null);
 
-	// Detect dev user and load apps
+	// Load app list
 	useEffect(() => {
-		try {
-			const userDevFlag = localStorage.getItem("user_dev");
-			const userInfo = localStorage.getItem("user_info");
-			
-			if (userDevFlag === "true") {
-				setIsDevUser(true);
-			} else if (userInfo) {
-				const parsed = JSON.parse(userInfo);
-				setIsDevUser(resolveDevFlag(parsed.dev, parsed.roles));
-			}
-		} catch (error) {
-
-		}
-
-		// Load app list
 		loadAppList();
 	}, []);
 

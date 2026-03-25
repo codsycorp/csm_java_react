@@ -1,7 +1,7 @@
 import type { BlockerFunction } from "react-router";
 import type { ReactRouterType, RouterSubscriber } from "./types";
 
-import { usePermissionStore, usePreferencesStore, useUserStore } from "#src/store";
+import { useAppStore, usePermissionStore, usePreferencesStore, useUserStore } from "#src/store";
 import { NProgress } from "#src/utils";
 
 import { matchRoutes } from "react-router";
@@ -474,36 +474,37 @@ export async function routerInitReady(reactRouter: ReactRouterType) {
 
 	/* --------------- 以下为已登录的处理逻辑 ------------------ */
 
-	// 已登录，获取动态路由
+	// 已登录，按顺序初始化：先 user info，再 async routes
+	// Tránh race-condition khiến handleAsyncRoutes đọc nhầm app_id/dev/roles cũ từ persisted store.
 	const { handleAsyncRoutes } = usePermissionStore.getState();
-
-	// 初始化一个空数组来存放 Promise 对象
-	const promises = [];
-
-	// 总是添加获取用户信息的 Promise
-	promises.push(useUserStore.getState().getUserInfo());
-
-	// 如果启用了动态路由，则添加处理动态路由的 Promise
-	if (isDynamicRoutingEnabled) {
-		promises.push(handleAsyncRoutes());
-	}
-
-	/**
-	 * 用户信息包含了用户角色，需要在获取菜单权限前面获取，用于权限校验
-	 */
-	const results = await Promise.allSettled(promises);
-	const hasError = results.some(result => result.status === "rejected");
-
-	// 网络请求失败，跳转到 500 页面
-	if (hasError) {
-		const unAuthorized = results.some((result: any) => result?.reason?.response?.status === 401);
-		if (unAuthorized) {
-			// Token expired or unauthorized: clear caches and redirect to login
+	let userInfo: any;
+	try {
+		userInfo = await useUserStore.getState().getUserInfo();
+	} catch (error: any) {
+		if (error?.response?.status === 401) {
 			goLogin();
 		} else {
 			reactRouter.navigate("/error/500");
 		}
 		return;
+	}
+
+	const effectiveAppId = (userInfo?.app_id || "").trim() || useAppStore.getState().getCurrentAppId();
+	if (effectiveAppId) {
+		useAppStore.getState().setCurrentAppId(effectiveAppId);
+	}
+
+	if (isDynamicRoutingEnabled) {
+		try {
+			await handleAsyncRoutes(effectiveAppId);
+		} catch (error: any) {
+			if (error?.response?.status === 401) {
+				goLogin();
+			} else {
+				reactRouter.navigate("/error/500");
+			}
+			return;
+		}
 	}
 
 	/* --------------- Start ------------------ */

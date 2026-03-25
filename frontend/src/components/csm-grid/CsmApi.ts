@@ -547,6 +547,40 @@ export interface Condition {
 
 export type Where = Condition | { operator: "AND" | "OR"; conditions: Condition[] };
 
+export interface CreateTableStruct {
+	defaultValue: Record<string, any>
+	fieldsPK: string[]
+	fieldsSearch?: string[]
+	fields: string[]
+	[key: string]: any
+}
+
+function clearGetTableDataCache() {
+	const globalAny = globalThis as any;
+	const cache: Map<string, Promise<any>> | undefined = globalAny.__csm_getTableDataCache;
+	if (cache) {
+		cache.clear();
+	}
+}
+
+export async function createTableStruct(params: {
+	app_id: string
+	obj_table: {
+		id: string
+		struct: CreateTableStruct
+	}
+}) {
+	const res = await request
+		.post("create-table", {
+			json: params,
+			ignoreLoading: true,
+			timeout: 60000,
+		})
+		.json<any>();
+	clearGetTableDataCache();
+	return res;
+}
+
 export function buildDomainCondition() {
 	try {
 		const host = window?.location?.hostname;
@@ -613,13 +647,14 @@ export async function getTableData<T>(params: {
 			timeout: TABLE_DATA_TIMEOUT_MS,
 		})
 		.json<ApiListResponse<T>>()
-		.then((res) => {
-			return res;
-		})
 		.catch((err) => {
 			// On error, ensure we don't keep a failed promise in cache
 			try { cache.delete(cacheKey); } catch {}
 			throw err;
+		})
+		.finally(() => {
+			// Keep cache for in-flight dedupe only; avoid stale data after mutations.
+			try { cache.delete(cacheKey); } catch {}
 		});
 	cache.set(cacheKey, promise);
 	return promise;
@@ -639,10 +674,35 @@ export async function updateTableData<T extends Record<string, any>>(params: {
 		command: params.command,
 		obj_update: params.obj_update,
 	};
+
+	// Only create command gets mandatory id assignment.
+	if (params.command === "create") {
+		const idVal = payload.obj_update?.id;
+		if (idVal == null || String(idVal).trim() === "") {
+			const generatedId = (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function")
+				? crypto.randomUUID()
+				: `_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+			payload.obj_update = { ...payload.obj_update, id: generatedId };
+			// Keep caller object in sync so local grid can render the new row immediately.
+			try {
+				(params.obj_update as any).id = generatedId;
+			} catch {
+				// ignore if caller object is immutable
+			}
+		}
+	}
 	
 	// Always add e_where with primary key conditions for all commands
 	// Backend uses e_where to check existing records and determine action
-	const pkSource: Record<string, any> = params.where ? params.where : params.obj_update;
+	const whereSource: Record<string, any> = params.where ? params.where : {};
+	const updateSource: Record<string, any> = params.obj_update ? params.obj_update : {};
+	// Keep old-PK values from where, but still allow fallback to obj_update.id.
+	const pkSource: Record<string, any> = params.where
+		? { ...updateSource, ...whereSource }
+		: updateSource;
+	const stableId = params.command === "create"
+		? payload.obj_update?.id
+		: (whereSource.id !== undefined ? whereSource.id : updateSource.id);
 	if (params.pk_fields && params.pk_fields.length > 0) {
 		const conditions: any[] = [];
 		for (const pkField of params.pk_fields) {
@@ -654,12 +714,12 @@ export async function updateTableData<T extends Record<string, any>>(params: {
 				});
 			}
 		}
-		// Always include id if available (stable unique key)
-		if (pkSource.id !== undefined && !conditions.some(c => c.field === "id")) {
+		// Include id when provided; create always has id after normalization above.
+		if (stableId !== undefined && !conditions.some(c => c.field === "id")) {
 			conditions.push({
 				field: "id",
 				type: "eq",
-				value: pkSource.id
+				value: stableId
 			});
 		}
 		// Build e_where with correct format: operator (uppercase) + conditions
@@ -678,9 +738,11 @@ export async function updateTableData<T extends Record<string, any>>(params: {
 		full_payload: payload
 	});
 	
-	return request
+	const res = await request
 		.post<ApiResponse<string>>("update-table-data", { json: payload, ignoreLoading: true })
 		.json<ApiResponse<string>>();
+	clearGetTableDataCache();
+	return res;
 }
 
 // ========================================

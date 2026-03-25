@@ -1,6 +1,5 @@
 package net.phanmemmottrieu.handler;
 
-import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -14,6 +13,7 @@ import net.phanmemmottrieu.model.User; // Import User model
 import net.phanmemmottrieu.service.UserService; // Import UserService
 import net.phanmemmottrieu.model.RegistrationRequest; // Import RegistrationRequest
 import net.phanmemmottrieu.model.RegistrationResponse; // Import RegistrationResponse
+import net.phanmemmottrieu.util.PermissionBitfieldUtil;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -59,6 +59,11 @@ public class AuthHandler {
             userInfo.put("roles", u.getPermissions()); // dùng permissions như roles
             userInfo.put("permissions", u.getPermissions());
             userInfo.put("menusPermissions", u.getMenusPermissions());
+            userInfo.put("permissionBitfield", u.getPermissionBitfield());
+            userInfo.put("permissionSchemaVersion", u.getPermissionSchemaVersion());
+            userInfo.put("dataScope", u.getDataScope());
+            userInfo.put("dept_id", u.getDeptId());
+            userInfo.put("branch_id", u.getBranchId());
             userInfo.put("app_id", u.getAppId());
             userInfo.put("app_token", u.getAppToken());
             userInfo.put("dev", u.getDev()); // Thêm dev flag
@@ -72,6 +77,7 @@ public class AuthHandler {
             userInfo.put("principal", principal.toString());
         }
         response.set("code", 200);
+        enrichUserInfoWithBitfield(userInfo);
         response.set("result", userInfo);
         response.set("message", "ok");
         response.set("success", true);
@@ -187,10 +193,13 @@ public class AuthHandler {
                 // Trả về quyền để FE dùng trực tiếp
                 result.put("permissions", user.getPermissions());
                 result.put("menusPermissions", user.getMenusPermissions());
+                long permissionBitfield = PermissionBitfieldUtil.buildBitfield(user.getPermissions(), user.getMenusPermissions(), user.getDev());
+                result.put("permissionBitfield", String.valueOf(permissionBitfield));
+                result.put("permissionSchemaVersion", "v2");
+                result.put("dataScope", PermissionBitfieldUtil.resolveDataScope(permissionBitfield));
             } catch (Exception ex) {
                 logger.error("[LOGIN] Lỗi khi tính asyncRoutes/permissions: {}", ex.getMessage(), ex);
             }
-
             response.set("code", 200);
             response.set("result", result);
             
@@ -316,6 +325,42 @@ public class AuthHandler {
         }
     }
 
+    private void enrichUserInfoWithBitfield(Map<String, Object> userInfo) {
+        if (userInfo == null) {
+            return;
+        }
+
+        List<String> permissions = toStringList(userInfo.get("permissions"));
+        List<String> menusPermissions = toStringList(userInfo.get("menusPermissions"));
+        Boolean devFlag = parseBoolean(userInfo.get("dev"));
+
+        long permissionBitfield = PermissionBitfieldUtil.buildBitfield(permissions, menusPermissions, devFlag);
+        userInfo.put("permissionBitfield", String.valueOf(permissionBitfield));
+        userInfo.put("permissionSchemaVersion", "v2");
+        userInfo.put("dataScope", PermissionBitfieldUtil.resolveDataScope(permissionBitfield));
+    }
+
+    private List<String> toStringList(Object raw) {
+        if (!(raw instanceof List<?> list)) {
+            return Collections.emptyList();
+        }
+        return list.stream().map(item -> item == null ? "" : String.valueOf(item)).collect(Collectors.toList());
+    }
+
+    private Boolean parseBoolean(Object raw) {
+        if (raw instanceof Boolean) {
+            return (Boolean) raw;
+        }
+        if (raw instanceof Number) {
+            return ((Number) raw).intValue() != 0;
+        }
+        if (raw instanceof String) {
+            String value = ((String) raw).trim().toLowerCase(Locale.ROOT);
+            return "true".equals(value) || "1".equals(value) || "yes".equals(value) || "y".equals(value) || "on".equals(value);
+        }
+        return Boolean.FALSE;
+    }
+
     public void handleLogout(StandardResponse response, Map<String, Object> params) {
         org.springframework.security.core.Authentication authentication = null;
         try {
@@ -399,11 +444,10 @@ public class AuthHandler {
 
         String jwtToken = jwtUtil.generateToken(user.getId(), loginVersion);
         response.set("code", 200);
-        response.set("result", Map.of(
-            "token", jwtToken,
-            "refreshToken", newRefreshToken,
-            "app_token", user.getAppToken()
-        ));
+        Map<String, Object> result = new HashMap<>();
+        result.put("token", jwtToken);
+        result.put("refreshToken", newRefreshToken);
+        result.put("app_token", user.getAppToken());
         
         // Phát hiện localhost hoặc node-webkit
         boolean isLocalhost = false;
@@ -465,7 +509,22 @@ public class AuthHandler {
             String expiresStr = java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME.format(expiresAt);
             refreshHeader.append("; Expires=").append(expiresStr);
             servletResponse.addHeader("Set-Cookie", refreshHeader.toString());
+
+            // Đồng bộ CSRF token mới sau khi refresh để tránh 403 ở request POST đầu tiên sau restart.
+            String csrfToken = UUID.randomUUID().toString();
+            StringBuilder csrfHeader = new StringBuilder();
+            csrfHeader.append("CSRF-TOKEN=").append(csrfToken)
+                .append("; Path=/");
+
+            if (isCrossSite) {
+                csrfHeader.append("; SameSite=None; Secure");
+            } else {
+                csrfHeader.append("; SameSite=Lax");
+            }
+            servletResponse.addHeader("Set-Cookie", csrfHeader.toString());
+            result.put("csrfToken", csrfToken);
         }
+        response.set("result", result);
         
         response.set("message", "ok");
         response.set("success", true);

@@ -12,7 +12,82 @@
 		"addUser": "Add User",
 		"editUser": "Edit User"
 	},
+	"userPermission": {
+		"fields": {
+			"roles": "Roles",
+			"permissionPreset": "Preset",
+			"permissionGroups": "Groups",
+			"permissions": "Actions",
+			"permissionsAdd": "Add",
+			"permissionsDeny": "Deny",
+			"menusPermissions": "Menus",
+			"menusPermissionsAdd": "Add Menus",
+			"menusPermissionsDeny": "Deny Menus",
+			"permissionBitfield": "Perm Code",
+			"permissionSchemaVersion": "Version",
+			"dataScope": "Scope",
+			"deptId": "Department",
+			"branchId": "Branch"
+		},
+		"group": {
+			"systemAdmin": "System Admin Group",
+			"manager": "Manager Group",
+			"staff": "Staff Group",
+			"viewer": "Viewer Group"
+		},
+		"preset": {
+			"custom": "Custom",
+			"viewer": "View only",
+			"editor": "View + Edit",
+			"fullCrud": "CRUD",
+			"fullCrudExport": "CRUD + Export",
+			"adminFull": "Full Access"
+		},
+		"scope": {
+			"none": "None",
+			"owner": "Own data",
+			"department": "Department",
+			"branch": "Branch",
+			"all": "All data"
+		},
+		"option": {
+			"admin": "Admin",
+			"dev": "Developer",
+			"user": "User",
+			"view": "View",
+			"create": "Create",
+			"edit": "Edit",
+			"delete": "Delete",
+			"export": "Export",
+			"scopeOwner": "Own",
+			"scopeDepartment": "Department",
+			"scopeBranch": "Branch",
+			"scopeAll": "All"
+		},
+		"menu": {
+			"dashboard": "Dashboard",
+			"dashboardPath": "/dashboard",
+			"home": "Home",
+			"homePath": "/home",
+			"systemUser": "Users",
+			"systemDept": "Permission Groups",
+			"systemMenu": "System Menus",
+			"systemDeveloper": "Developer",
+			"systemBroadcast": "Broadcast",
+			"crm": "CRM"
+		}
+	},
+	"admin": {
+		"loadingMenu": "Loading menu...",
+		"loadingData": "Loading data...",
+		"menuNotFound": "Menu not found",
+		"loadDataError": "Failed to load data"
+	},
 	"menu": {
+		"configMismatch": {
+			"title": "Menu Configuration Mismatch",
+			"desc": "The menu route and configured data table are inconsistent."
+		},
 						"editField": "Edit Field",
 					"addField": "Add Field",
 				"field": {

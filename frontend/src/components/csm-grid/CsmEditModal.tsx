@@ -7,7 +7,7 @@ import { sql } from '@codemirror/lang-sql';
 import { xml } from '@codemirror/lang-xml';
 import { vscodeDark } from '@uiw/codemirror-theme-vscode';
 import React, { useEffect, useMemo, useState, Suspense, lazy, useCallback, useRef } from "react";
-import { Form, Input, Button, Select, Divider, Typography, InputNumber, DatePicker, TimePicker, Switch, Modal, Tabs, Space } from "antd";
+import { Form, Input, Button, Select, Divider, Typography, InputNumber, DatePicker, TimePicker, Switch, Modal, Tabs, Space, TreeSelect } from "antd";
 import { DeleteOutlined } from "@ant-design/icons";
 import { csmEncrypt, csmDecrypt } from "./CsmCrypto";
 import { INT, jdFromDate, jdToDate, NewMoon, KinhDoMatTroi, SunLongitude, getSunLongitude, getNewMoonDay, getLunarMonth11, getLeapMonthOffset, duong_qua_am, am_qua_duong, LunarCalendar } from "#src/utils/lunarCalendar";
@@ -20,6 +20,7 @@ import { HtmlEditor } from "./HtmlEditor";
 import { InlineImageUploader } from "./InlineImageUploader";
 import CsmDynamicGrid from "./CsmDynamicGrid";
 import { useAppStore } from "#src/store/app";
+import { usePermissionStore } from "#src/store";
 import { getTableData } from "./CsmApi";
 
 // Helper: safeEval for trigger execution (same as CsmDynamicGrid)
@@ -840,7 +841,8 @@ function getFieldComponent(
   appId?: string,
   permissions?: number,
   menusPermissions?: Record<string | number, number>,
-  decrypt?: (s: string) => string
+  decrypt?: (s: string) => string,
+  translate?: (key: string, defaultValue?: string) => string
 ) {
   const types = (f.f_types || "ed").toLowerCase(); // default to 'ed' (text input)
   const key = f.f_name;
@@ -849,6 +851,56 @@ function getFieldComponent(
   
   // Kiểu Readonly: chứa 'ro' trong f_types - chỉ hiển thị, không cho edit
   const isReadonly = types.indexOf('ro') !== -1;
+
+  const parseStringArray = (raw: any): string[] => {
+    if (Array.isArray(raw)) {
+      return Array.from(new Set(raw.map((item) => String(item || "").trim()).filter(Boolean)));
+    }
+    if (typeof raw === "string") {
+      const text = raw.trim();
+      if (!text) return [];
+      if ((text.startsWith("[") && text.endsWith("]")) || (text.startsWith("{") && text.endsWith("}"))) {
+        try {
+          const parsed = JSON.parse(text);
+          if (Array.isArray(parsed)) {
+            return Array.from(new Set(parsed.map((item) => String(item || "").trim()).filter(Boolean)));
+          }
+        } catch {
+          // Fallback to delimiter split below.
+        }
+      }
+      return Array.from(new Set(text.split(/[;,\n]/g).map((item) => item.trim()).filter(Boolean)));
+    }
+    return [];
+  };
+
+  const localizeLabel = (raw: unknown) => {
+    const text = String(raw == null ? "" : raw).trim();
+    if (!text) return "";
+    if (text.includes(".")) {
+      return translate ? translate(text, text) : text;
+    }
+    return text;
+  };
+
+  const buildMenuPermissionTreeData = () => {
+    const sourceMenus = usePermissionStore.getState().apiWholeMenus || [];
+    const mapNode = (node: any): any => {
+      const rawValue = String(node?.path || node?.id || node?.key || node?.name || "").trim();
+      if (!rawValue) return null;
+      const rawTitle = String(node?.label || node?.title || node?.name || node?.path || node?.id || rawValue);
+      const children = Array.isArray(node?.children)
+        ? node.children.map((child: any) => mapNode(child)).filter(Boolean)
+        : undefined;
+      return {
+        title: rawTitle,
+        value: rawValue,
+        key: rawValue,
+        children: children && children.length > 0 ? children : undefined,
+      };
+    };
+    return sourceMenus.map((item: any) => mapNode(item)).filter(Boolean);
+  };
   
     // Kiểu HTML/RichText hoặc edt
     if (/html|richtext/.test(types) || types === 'edt') {
@@ -1258,8 +1310,50 @@ function getFieldComponent(
   }
   // Kiểu Multi Tag
   if (types === 'multi_tag') {
+    const rawTagOptions = Array.isArray((f as any).f_options)
+      ? (f as any).f_options
+      : (Array.isArray(selectOptions?.[key]) ? selectOptions?.[key] : []);
+    const tagOptions = rawTagOptions.map((opt: any) => {
+      if (opt && typeof opt === "object") {
+        const value = opt.value ?? opt.ma ?? opt.id ?? opt.key;
+        const label = localizeLabel(opt.label ?? opt.ten ?? opt.text ?? value);
+        return { ...opt, value, label };
+      }
+      const value = String(opt ?? "");
+      return { value, label: localizeLabel(value) };
+    });
     return <Form.Item key={key} name={key} label={f.f_header} initialValue={initialVal}>
-      <Select mode="tags" style={{ width: '100%' }} tokenSeparators={[',']} />
+      <Select
+        mode="tags"
+        style={{ width: '100%' }}
+        tokenSeparators={[',']}
+        options={tagOptions}
+        optionFilterProp="label"
+      />
+    </Form.Item>;
+  }
+
+  // Kiểu cây menu phân quyền (new permission model)
+  if (types.indexOf('menu_tree') !== -1) {
+    const treeData = buildMenuPermissionTreeData();
+    const selectedValues = parseStringArray(form.getFieldValue(key) ?? initialVal);
+    return <Form.Item key={key} name={key} label={f.f_header} initialValue={selectedValues}>
+      <TreeSelect
+        treeData={treeData}
+        value={selectedValues}
+        style={{ width: '100%' }}
+        treeCheckable
+        showSearch
+        allowClear
+        disabled={isReadonly}
+        placeholder={translate ? translate("system.userPermission.fields.menusPermissions", "Select menu permissions") : "Select menu permissions"}
+        onChange={(nextValue) => {
+          const normalized = Array.isArray(nextValue)
+            ? nextValue.map((item) => String(item || '').trim()).filter(Boolean)
+            : [];
+          form.setFieldsValue({ [key]: Array.from(new Set(normalized)) });
+        }}
+      />
     </Form.Item>;
   }
   
@@ -1285,6 +1379,10 @@ function getFieldComponent(
             value: value
           }))
         : [];
+    const localizedOptions = options.map((opt: any) => ({
+      ...opt,
+      label: localizeLabel(opt?.label),
+    }));
     
     // console.log(`[CsmEditModal] Final options for ${key}:`, options);
     
@@ -1292,7 +1390,7 @@ function getFieldComponent(
     return <Form.Item key={key} name={key} label={f.f_header} initialValue={initialVal}>
       <Select 
         style={{ width: '100%' }} 
-        options={options}
+        options={localizedOptions}
         showSearch
         optionFilterProp="label"
         allowClear
@@ -1879,7 +1977,8 @@ export function CsmEditModal({
                                 }
                               } catch {}
                               return decoded;
-                            }
+                            },
+                            (key: string, defaultValue?: string) => t(key, defaultValue || "")
                           )}
                         </div>
                       ))}
@@ -1908,7 +2007,8 @@ export function CsmEditModal({
                           }
                         } catch {}
                         return decoded;
-                      }
+                      },
+                      (key: string, defaultValue?: string) => t(key, defaultValue || "")
                     )}
                   </div>
                 ))}

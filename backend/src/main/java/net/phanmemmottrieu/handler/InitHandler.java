@@ -13,6 +13,7 @@ import org.springframework.stereotype.Component;
 import net.phanmemmottrieu.data.RecordManager;
 import net.phanmemmottrieu.model.StandardResponse;
 import net.phanmemmottrieu.util.AppTokenHelper;
+import net.phanmemmottrieu.util.PermissionBitfieldUtil;
 
 @Component
 public class InitHandler {
@@ -448,7 +449,8 @@ public class InitHandler {
                         initializeDataTables("csm", "csm_roles",
                                         List.of("id", "role_code"), List.of(
                                                         "id", "role_code", "role_name", "is_global", "department_id",
-                                                        "description", "status", "create_time", "update_time"));
+                                                        "description", "status", "permissionBitfield", "permissionSchemaVersion", "dataScope",
+                                                        "create_time", "update_time"));
                         initializeDataTables("csm", "csm_permissions",
                                         List.of("id", "permission_code"), List.of(
                                                         "id", "permission_code", "permission_name", "resource", "action",
@@ -459,7 +461,8 @@ public class InitHandler {
                         initializeDataTables("csm", "csm_user_depts",
                                         List.of("id", "user_id", "dept_id"), List.of(
                                                         "id", "user_id", "dept_id", "is_sub_user", "role_id", "direct_permissions",
-                                                        "status", "join_date", "create_time"));
+                                                        "permissionBitfield", "permissionSchemaVersion", "dataScope",
+                                                        "branch_id", "status", "join_date", "create_time"));
                         initializeDataTables("csm", "csm_user_roles",
                                         List.of("id", "user_id", "role_id"), List.of(
                                                         "id", "user_id", "role_id", "create_time"));
@@ -471,12 +474,16 @@ public class InitHandler {
                                                         "phoneNumber", "description",
                                                         "roles", "actived", "permissions", "menusPermissions",
                                                         "group_rights",
-                                                        "full_name", "user_address", "app_id"));
+                                                        "full_name", "user_address", "app_id",
+                                                        "permissionBitfield", "permissionSchemaVersion", "dataScope",
+                                                        "dept_id", "branch_id", "department_id", "team_id"));
                         initializeDataTables("csm", "csm_group_members",
                                         List.of("id", "login_identifier"), List.of(
                                                         "id", "parent_account_id", "login_identifier", "group_id",
                                                         "app_token", "refresh", "pass", "actived",
-                                                        "permissions", "menusPermissions"));
+                                                        "permissions", "menusPermissions",
+                                                        "permissionBitfield", "permissionSchemaVersion", "dataScope",
+                                                        "dept_id", "branch_id", "department_id", "team_id"));
                         initializeDataTables("csm", "routers", List.of("path"),
                                         List.of("path", "component", "layout", "handle", "children"));
                         initializeDataTables("csm", "index", List.of("id"), List.of("id", "struct"));
@@ -513,6 +520,17 @@ public class InitHandler {
                         adminAccount.put("actived", true);
                         adminAccount.put("permissions", List.of("admin"));
                         adminAccount.put("menusPermissions", List.of("dashboard", "users", "settings"));
+                        long adminBitfield = PermissionBitfieldUtil.buildBitfield(
+                                        (List<String>) adminAccount.get("permissions"),
+                                        (List<String>) adminAccount.get("menusPermissions"),
+                                        true);
+                        adminAccount.put("permissionBitfield", String.valueOf(adminBitfield));
+                        adminAccount.put("permissionSchemaVersion", "v2");
+                        adminAccount.put("dataScope", PermissionBitfieldUtil.resolveDataScope(adminBitfield));
+                        adminAccount.put("dept_id", "ROOT");
+                        adminAccount.put("branch_id", "MAIN");
+                        adminAccount.put("department_id", "ROOT");
+                        adminAccount.put("team_id", "ROOT");
                         adminAccount.put("group_rights", new ArrayList<>());
                         adminAccount.put("full_name", "Admin User");
                         adminAccount.put("user_address", "Admin Address");
@@ -550,6 +568,17 @@ public class InitHandler {
                         commonAccount.put("actived", true);
                         commonAccount.put("permissions", List.of("user"));
                         commonAccount.put("menusPermissions", List.of("home", "profile"));
+                        long commonBitfield = PermissionBitfieldUtil.buildBitfield(
+                                        (List<String>) commonAccount.get("permissions"),
+                                        (List<String>) commonAccount.get("menusPermissions"),
+                                        false);
+                        commonAccount.put("permissionBitfield", String.valueOf(commonBitfield));
+                        commonAccount.put("permissionSchemaVersion", "v2");
+                        commonAccount.put("dataScope", PermissionBitfieldUtil.resolveDataScope(commonBitfield));
+                        commonAccount.put("dept_id", "HR-001");
+                        commonAccount.put("branch_id", "MAIN");
+                        commonAccount.put("department_id", "HR-001");
+                        commonAccount.put("team_id", "HR-001");
                         commonAccount.put("group_rights", new ArrayList<>());
                         commonAccount.put("full_name", "Tom User");
                         commonAccount.put("user_address", "Common Address");
@@ -686,6 +715,11 @@ public class InitHandler {
                                                                 buildFieldConfig("roles", "Roles", 1, "string", "left"),
                                                                 buildFieldConfig("permissions", "Permissions", 1, "string", "left"),
                                                                 buildFieldConfig("menusPermissions", "Menu Permissions", 1, "string", "left"),
+                                                                buildFieldConfig("permissionBitfield", "Permission Bitfield", 1, "string", "left"),
+                                                                buildFieldConfig("permissionSchemaVersion", "Permission Schema", 1, "string", "left"),
+                                                                buildFieldConfig("dataScope", "Data Scope", 1, "string", "left"),
+                                                                buildFieldConfig("dept_id", "Dept ID", 1, "string", "left"),
+                                                                buildFieldConfig("branch_id", "Branch ID", 1, "string", "left"),
                                                                 buildFieldConfig("actived", "common.active", 1, "checkbox", "left"));
                 }
 
@@ -699,6 +733,11 @@ public class InitHandler {
                                                                 buildFieldConfig("pass", "common.password", 1, "password", "left"),
                                                                 buildFieldConfig("permissions", "Permissions", 1, "string", "left"),
                                                                 buildFieldConfig("menusPermissions", "Menu Permissions", 1, "string", "left"),
+                                                                buildFieldConfig("permissionBitfield", "Permission Bitfield", 1, "string", "left"),
+                                                                buildFieldConfig("permissionSchemaVersion", "Permission Schema", 1, "string", "left"),
+                                                                buildFieldConfig("dataScope", "Data Scope", 1, "string", "left"),
+                                                                buildFieldConfig("dept_id", "Dept ID", 1, "string", "left"),
+                                                                buildFieldConfig("branch_id", "Branch ID", 1, "string", "left"),
                                                                 buildFieldConfig("actived", "common.active", 1, "checkbox", "left"));
                 }
 

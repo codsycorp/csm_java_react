@@ -6,6 +6,7 @@ import net.phanmemmottrieu.data.SearchFilter;
 import net.phanmemmottrieu.model.RegistrationResponse;
 import net.phanmemmottrieu.model.User;
 import net.phanmemmottrieu.util.AppTokenHelper;
+import net.phanmemmottrieu.util.PermissionBitfieldUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -485,6 +486,27 @@ public class UserService {
         
         user.setMenusPermissions(subUserMenus);
         logger.info("[mapSubUserRecordToUser] Sub-user {} assigned role=user with menusPermissions={}", user.getEmail(), subUserMenus);
+
+        Object subPermissionBitfield = subUserRecord.get("permissionBitfield");
+        if (subPermissionBitfield != null) {
+            user.setPermissionBitfield(String.valueOf(subPermissionBitfield));
+        }
+        Object subPermissionSchemaVersion = subUserRecord.get("permissionSchemaVersion");
+        if (subPermissionSchemaVersion != null) {
+            user.setPermissionSchemaVersion(String.valueOf(subPermissionSchemaVersion));
+        }
+        Object subDataScope = subUserRecord.get("dataScope");
+        if (subDataScope != null) {
+            user.setDataScope(String.valueOf(subDataScope));
+        }
+        Object subDeptId = subUserRecord.get("dept_id");
+        if (subDeptId != null) {
+            user.setDeptId(String.valueOf(subDeptId));
+        }
+        Object subBranchId = subUserRecord.get("branch_id");
+        if (subBranchId != null) {
+            user.setBranchId(String.valueOf(subBranchId));
+        }
         
         // Also can get permissions from group if subUserRecord has group_id
         String subUserGroupId = (String) subUserRecord.get("group_id");
@@ -503,6 +525,11 @@ public class UserService {
                 logger.warn("Sub-user belongs to group '{}' but group not found in parent account's group_rights. Using direct sub-user menusPermissions from record if available.", subUserGroupId);
             }
         }
+
+        long normalizedBitfield = PermissionBitfieldUtil.buildBitfield(user.getPermissions(), user.getMenusPermissions(), user.getDev());
+        user.setPermissionBitfield(String.valueOf(normalizedBitfield));
+        user.setPermissionSchemaVersion("v2");
+        user.setDataScope(PermissionBitfieldUtil.resolveDataScope(normalizedBitfield));
 
         return Optional.of(user);
     }
@@ -610,6 +637,12 @@ public class UserService {
             user.setMenusPermissions(menusPermissions);
         }
 
+        user.setPermissionBitfield(String.valueOf(userRecord.getOrDefault("permissionBitfield", "")));
+        user.setPermissionSchemaVersion(String.valueOf(userRecord.getOrDefault("permissionSchemaVersion", "")));
+        user.setDataScope(String.valueOf(userRecord.getOrDefault("dataScope", "")));
+        user.setDeptId(String.valueOf(userRecord.getOrDefault("dept_id", "")));
+        user.setBranchId(String.valueOf(userRecord.getOrDefault("branch_id", "")));
+
         Object groupRightsObj = userRecord.get("group_rights");
         if (groupRightsObj instanceof List) {
             user.setGroupRights((List<Map<String, Object>>) groupRightsObj);
@@ -687,6 +720,11 @@ public class UserService {
                 }
             }
         }
+
+        long permissionBitfield = PermissionBitfieldUtil.buildBitfield(user.getPermissions(), user.getMenusPermissions(), user.getDev());
+        user.setPermissionBitfield(String.valueOf(permissionBitfield));
+        user.setPermissionSchemaVersion("v2");
+        user.setDataScope(PermissionBitfieldUtil.resolveDataScope(permissionBitfield));
         // Sub-users will have their roles set in mapSubUserRecordToUser
         
         return user;

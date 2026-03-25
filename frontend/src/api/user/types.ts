@@ -12,6 +12,11 @@ export interface UserInfoType {
 	roles: string[]
 	permissions: string[]
 	menusPermissions: string[]
+	permissionBitfield?: string
+	permissionSchemaVersion?: string
+	dataScope?: "NONE" | "OWNER" | "DEPARTMENT" | "BRANCH" | "ALL"
+	dept_id?: string
+	branch_id?: string
 	app_id: string
 	app_token: string
 	dev?: boolean // Thêm dev flag từ backend

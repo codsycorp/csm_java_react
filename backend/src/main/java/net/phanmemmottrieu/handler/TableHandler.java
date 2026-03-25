@@ -10,6 +10,7 @@ import net.phanmemmottrieu.data.SearchFilter;
 import net.phanmemmottrieu.model.StandardResponse;
 import net.phanmemmottrieu.model.User;
 import net.phanmemmottrieu.socket.SocketIOConfig;
+import net.phanmemmottrieu.util.PermissionBitfieldUtil;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,6 +27,12 @@ public class TableHandler {
     private static final Logger logger = LoggerFactory.getLogger(TableHandler.class);
     private final RecordManager recordManager; // Khai báo một trường để giữ instance của RecordManager
     private static final ObjectMapper objectMapper = new ObjectMapper();
+    private static final List<String> OWNER_SCOPE_FIELDS = List.of("created_by", "create_by", "owner_id", "owner", "user_id", "userid", "account_id", "parent_account_id");
+    private static final List<String> DEPARTMENT_SCOPE_FIELDS = List.of("dept_id", "department_id", "team_id", "group_id", "org_unit_id");
+    private static final List<String> BRANCH_SCOPE_FIELDS = List.of("branch_id", "site_id", "region_id");
+    private static final Map<String, List<String>> AUTO_PERMISSION_SCHEMA_FIELDS = createAutoPermissionSchemaFields();
+    private static final Map<String, List<String>> DEFAULT_TABLE_PK_FIELDS = createDefaultTablePkFields();
+    private static final Map<String, List<String>> DEFAULT_TABLE_FIELDS = createDefaultTableFields();
     
     @Autowired
     private SocketIOConfig socketIOConfig; // Inject SocketIOConfig
@@ -256,11 +263,23 @@ public class TableHandler {
             filter.setValue(tblname);
 
             Map<String, Object> findStruct = recordManager.find(appId, "index", filter);
+            Map<String, Object> objUpdate = null;
+            if (msg.get("obj_update") instanceof Map<?, ?> rawUpdate) {
+                objUpdate = new HashMap<>();
+                for (Map.Entry<?, ?> entry : rawUpdate.entrySet()) {
+                    if (entry.getKey() == null) {
+                        continue;
+                    }
+                    objUpdate.put(String.valueOf(entry.getKey()), entry.getValue());
+                }
+            }
 
-            if (findStruct == null) return errorResponse("Không tìm thấy cấu trúc bảng");
-
-            Map<String, Object> structMap = (Map<String, Object>) findStruct.get("struct");
-            List<String> primaryKeyFields = (List<String>) structMap.get("fieldsPK");
+            Map<String, Object> structMap = ensureTableStructReadyForOperation(appId, tblname, findStruct, objUpdate);
+            if (structMap == null) {
+                return errorResponse("Không tìm thấy cấu trúc bảng");
+            }
+            ensureAutoPermissionSchemaForTable(appId, tblname, findStruct, structMap);
+            List<String> primaryKeyFields = toMutableStringList(structMap.get("fieldsPK"));
             try {
                 String filtersJson = objectMapper.writeValueAsString(filtersObjs); // Use the 'filters' parameter
                 logger.info("JSON của SearchFilter (filters): {} client gui len la {}", filtersJson,eWhereObj);
@@ -403,22 +422,206 @@ public class TableHandler {
         return !(hasField || hasType || hasValue || hasConditions);
     }
 
+    private static Map<String, List<String>> createAutoPermissionSchemaFields() {
+        Map<String, List<String>> map = new HashMap<>();
+        map.put("csm_accounts", List.of(
+            "permissionBitfield", "permissionSchemaVersion", "dataScope",
+            "dept_id", "branch_id", "department_id", "team_id"
+        ));
+        map.put("csm_group_members", List.of(
+            "permissionBitfield", "permissionSchemaVersion", "dataScope",
+            "dept_id", "branch_id", "department_id", "team_id"
+        ));
+        map.put("csm_roles", List.of(
+            "permissionBitfield", "permissionSchemaVersion", "dataScope"
+        ));
+        map.put("csm_user_depts", List.of(
+            "permissionBitfield", "permissionSchemaVersion", "dataScope", "branch_id"
+        ));
+        return map;
+    }
+
+    private static Map<String, List<String>> createDefaultTablePkFields() {
+        Map<String, List<String>> map = new HashMap<>();
+        map.put("csm_depts", List.of("id", "dept_code"));
+        map.put("csm_roles", List.of("id", "role_code"));
+        map.put("csm_permissions", List.of("id", "permission_code"));
+        map.put("csm_role_permissions", List.of("id", "role_id", "permission_id"));
+        map.put("csm_user_depts", List.of("id", "user_id", "dept_id"));
+        map.put("csm_user_roles", List.of("id", "user_id", "role_id"));
+        map.put("csm_accounts", List.of("email", "username", "phoneNumber", "app_id", "app_token", "id"));
+        map.put("csm_group_members", List.of("id", "login_identifier"));
+        map.put("routers", List.of("path"));
+        map.put("index", List.of("id"));
+        return map;
+    }
+
+    private static Map<String, List<String>> createDefaultTableFields() {
+        Map<String, List<String>> map = new HashMap<>();
+        map.put("csm_depts", List.of(
+            "id", "parent_dept_id", "dept_code", "dept_name", "dept_full_name",
+            "description", "manager_user_id", "is_global", "status", "create_time", "update_time"
+        ));
+        map.put("csm_roles", List.of(
+            "id", "role_code", "role_name", "is_global", "department_id",
+            "description", "status", "permissionBitfield", "permissionSchemaVersion", "dataScope",
+            "create_time", "update_time"
+        ));
+        map.put("csm_permissions", List.of(
+            "id", "permission_code", "permission_name", "resource", "action",
+            "description", "category", "create_time"
+        ));
+        map.put("csm_role_permissions", List.of("id", "role_id", "permission_id", "create_time"));
+        map.put("csm_user_depts", List.of(
+            "id", "user_id", "dept_id", "is_sub_user", "role_id", "direct_permissions",
+            "permissionBitfield", "permissionSchemaVersion", "dataScope",
+            "branch_id", "status", "join_date", "create_time"
+        ));
+        map.put("csm_user_roles", List.of("id", "user_id", "role_id", "create_time"));
+        map.put("csm_accounts", List.of(
+            "id", "username", "pass", "app_token", "refresh", "email", "avatar", "phoneNumber",
+            "description", "roles", "actived", "permissions", "menusPermissions", "group_rights",
+            "full_name", "user_address", "app_id", "permissionBitfield", "permissionSchemaVersion", "dataScope",
+            "dept_id", "branch_id", "department_id", "team_id"
+        ));
+        map.put("csm_group_members", List.of(
+            "id", "parent_account_id", "login_identifier", "group_id", "app_token", "refresh", "pass", "actived",
+            "permissions", "menusPermissions", "permissionBitfield", "permissionSchemaVersion", "dataScope",
+            "dept_id", "branch_id", "department_id", "team_id"
+        ));
+        map.put("routers", List.of("path", "component", "layout", "handle", "children"));
+        map.put("index", List.of("id", "struct"));
+        return map;
+    }
+
+    private Map<String, Object> ensureTableStructReadyForOperation(
+        String appId,
+        String tableName,
+        Map<String, Object> existingStructRecord,
+        Map<String, Object> objUpdate
+    ) {
+        Map<String, Object> structRecord = existingStructRecord;
+        if (structRecord == null) {
+            structRecord = new HashMap<>();
+            structRecord.put("id", tableName);
+        }
+
+        Map<String, Object> structMap = null;
+        Object rawStruct = structRecord.get("struct");
+        if (rawStruct instanceof Map<?, ?> rawMap) {
+            structMap = new HashMap<>();
+            for (Map.Entry<?, ?> entry : rawMap.entrySet()) {
+                if (entry.getKey() == null) {
+                    continue;
+                }
+                structMap.put(String.valueOf(entry.getKey()), entry.getValue());
+            }
+        }
+
+        boolean changed = false;
+        if (structMap == null) {
+            structMap = new HashMap<>();
+            changed = true;
+        }
+
+        List<String> fieldsPk = toMutableStringList(structMap.get("fieldsPK"));
+        if (fieldsPk.isEmpty()) {
+            fieldsPk = new ArrayList<>(DEFAULT_TABLE_PK_FIELDS.getOrDefault(tableName, List.of("id")));
+            changed = true;
+        }
+
+        List<String> fields = toMutableStringList(structMap.get("fields"));
+        if (fields.isEmpty()) {
+            fields = new ArrayList<>(DEFAULT_TABLE_FIELDS.getOrDefault(tableName, new ArrayList<>(fieldsPk)));
+            changed = true;
+        }
+
+        if (objUpdate != null && !objUpdate.isEmpty()) {
+            for (String key : objUpdate.keySet()) {
+                if (key == null || key.isBlank()) {
+                    continue;
+                }
+                if (!fields.contains(key)) {
+                    fields.add(key);
+                    changed = true;
+                }
+            }
+        }
+
+        for (String pkField : fieldsPk) {
+            if (!fields.contains(pkField)) {
+                fields.add(pkField);
+                changed = true;
+            }
+        }
+
+        if (fieldsPk.isEmpty()) {
+            fieldsPk = List.of("id");
+            if (!fields.contains("id")) {
+                fields.add("id");
+            }
+            changed = true;
+        }
+
+        structMap.put("fieldsPK", fieldsPk);
+        structMap.put("fields", fields);
+        structRecord.put("struct", structMap);
+
+        if (changed || existingStructRecord == null || existingStructRecord.get("struct") == null) {
+            logger.warn("Auto-heal cấu trúc bảng {}.{} vì thiếu/không hợp lệ struct trong index", appId, tableName);
+            recordManager.createRecord(appId, "index", structRecord, List.of("id"));
+        }
+
+        return structMap;
+    }
+
+    private List<String> toMutableStringList(Object raw) {
+        if (!(raw instanceof List<?> list)) {
+            return new ArrayList<>();
+        }
+        List<String> out = new ArrayList<>();
+        for (Object item : list) {
+            if (item == null) {
+                continue;
+            }
+            String value = String.valueOf(item).trim();
+            if (!value.isEmpty() && !out.contains(value)) {
+                out.add(value);
+            }
+        }
+        return out;
+    }
+
     private UserAccessContext resolveCurrentUserAccessContext() {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
         if (authentication == null || !authentication.isAuthenticated() || authentication.getPrincipal() == null ||
             "anonymousUser".equals(authentication.getPrincipal())) {
-            return new UserAccessContext(false, false, null, Collections.emptySet());
+            return new UserAccessContext(
+                false,
+                false,
+                null,
+                Collections.emptySet(),
+                Collections.emptySet(),
+                Collections.emptySet(),
+                Collections.emptySet(),
+                "NONE"
+            );
         }
 
         Object principal = authentication.getPrincipal();
         List<String> roles = null;
+        List<String> menusPermissions = null;
         Boolean dev = false;
         String userAppId = null;
         Set<String> parentCandidates = new HashSet<>();
+        Set<String> ownerCandidates = new HashSet<>();
+        Set<String> departmentCandidates = new HashSet<>();
+        Set<String> branchCandidates = new HashSet<>();
 
         if (principal instanceof User) {
             User user = (User) principal;
             roles = user.getPermissions();
+            menusPermissions = user.getMenusPermissions();
             dev = user.getDev() != null ? user.getDev() : false;
             userAppId = user.getAppId();
             if (user.getId() != null && !user.getId().isBlank()) parentCandidates.add(user.getId());
@@ -426,15 +629,16 @@ public class TableHandler {
             if (user.getUsername() != null && !user.getUsername().isBlank()) parentCandidates.add(user.getUsername());
             if (user.getEmail() != null && !user.getEmail().isBlank()) parentCandidates.add(user.getEmail());
             if (user.getPhoneNumber() != null && !user.getPhoneNumber().isBlank()) parentCandidates.add(user.getPhoneNumber());
+
+            collectCandidate(ownerCandidates, user.getId());
+            collectCandidate(ownerCandidates, user.getUsername());
+            collectCandidate(ownerCandidates, user.getEmail());
+            collectCandidate(ownerCandidates, user.getPhoneNumber());
+            collectCandidate(ownerCandidates, user.getAppId());
         } else if (principal instanceof Map<?, ?>) {
             Map<?, ?> principalMap = (Map<?, ?>) principal;
-            Object rolesObj = principalMap.get("roles");
-            if (rolesObj instanceof List<?>) {
-                roles = ((List<?>) rolesObj).stream()
-                    .filter(String.class::isInstance)
-                    .map(String.class::cast)
-                    .collect(java.util.stream.Collectors.toList());
-            }
+            roles = toStringList(principalMap.get("roles"));
+            menusPermissions = toStringList(principalMap.get("menusPermissions"));
             Object devObj = principalMap.get("dev");
             if (devObj instanceof Boolean) {
                 dev = (Boolean) devObj;
@@ -452,10 +656,177 @@ public class TableHandler {
             if (emailObj != null && !String.valueOf(emailObj).isBlank()) parentCandidates.add(String.valueOf(emailObj));
             Object phoneObj = principalMap.get("phoneNumber");
             if (phoneObj != null && !String.valueOf(phoneObj).isBlank()) parentCandidates.add(String.valueOf(phoneObj));
+
+            collectCandidate(ownerCandidates, principalMap.get("id"));
+            collectCandidate(ownerCandidates, principalMap.get("userId"));
+            collectCandidate(ownerCandidates, principalMap.get("username"));
+            collectCandidate(ownerCandidates, principalMap.get("email"));
+            collectCandidate(ownerCandidates, principalMap.get("phoneNumber"));
+            collectCandidate(ownerCandidates, principalMap.get("app_id"));
+
+            collectCandidate(departmentCandidates, principalMap.get("dept_id"));
+            collectCandidate(departmentCandidates, principalMap.get("deptId"));
+            collectCandidate(departmentCandidates, principalMap.get("department_id"));
+            collectCandidate(departmentCandidates, principalMap.get("team_id"));
+            collectCandidate(departmentCandidates, principalMap.get("group_id"));
+
+            collectCandidate(branchCandidates, principalMap.get("branch_id"));
+            collectCandidate(branchCandidates, principalMap.get("branchId"));
+            collectCandidate(branchCandidates, principalMap.get("site_id"));
+            collectCandidate(branchCandidates, principalMap.get("region_id"));
         }
 
         boolean isAdmin = roles != null && roles.stream().anyMatch(r -> "admin".equalsIgnoreCase(r));
-        return new UserAccessContext(isAdmin, Boolean.TRUE.equals(dev), userAppId, parentCandidates);
+        String dataScope = PermissionBitfieldUtil.resolveDataScope(
+            PermissionBitfieldUtil.buildBitfield(roles, menusPermissions, dev)
+        );
+        return new UserAccessContext(
+            isAdmin,
+            Boolean.TRUE.equals(dev),
+            userAppId,
+            parentCandidates,
+            ownerCandidates,
+            departmentCandidates,
+            branchCandidates,
+            dataScope
+        );
+    }
+
+    private List<Map<String, Object>> applyDataScopeRowFilter(String tableName, List<Map<String, Object>> rows, UserAccessContext access) {
+        if (rows == null || rows.isEmpty() || access == null || access.isDev || isDataScopeExemptTable(tableName)) {
+            return rows;
+        }
+
+        String scope = access.dataScope != null ? access.dataScope : "NONE";
+        if ("ALL".equalsIgnoreCase(scope) || "NONE".equalsIgnoreCase(scope)) {
+            return rows;
+        }
+
+        return rows.stream().filter(row -> rowMatchesDataScope(row, access)).collect(java.util.stream.Collectors.toList());
+    }
+
+    private boolean rowMatchesDataScope(Map<String, Object> row, UserAccessContext access) {
+        String scope = access.dataScope != null ? access.dataScope : "NONE";
+        if ("OWNER".equalsIgnoreCase(scope)) {
+            return matchesByFields(row, OWNER_SCOPE_FIELDS, access.ownerCandidates);
+        }
+        if ("DEPARTMENT".equalsIgnoreCase(scope)) {
+            return matchesByFields(row, DEPARTMENT_SCOPE_FIELDS, access.departmentCandidates);
+        }
+        if ("BRANCH".equalsIgnoreCase(scope)) {
+            return matchesByFields(row, BRANCH_SCOPE_FIELDS, access.branchCandidates);
+        }
+        return true;
+    }
+
+    private String applyDataScopeCreateGuard(String tableName, Map<String, Object> objUpdate, UserAccessContext access) {
+        if (objUpdate == null || access == null || access.isDev || isDataScopeExemptTable(tableName)) {
+            return null;
+        }
+
+        String scope = access.dataScope != null ? access.dataScope : "NONE";
+        if ("ALL".equalsIgnoreCase(scope) || "NONE".equalsIgnoreCase(scope)) {
+            return null;
+        }
+
+        if ("OWNER".equalsIgnoreCase(scope)) {
+            return validateOrAssignField(objUpdate, OWNER_SCOPE_FIELDS, access.ownerCandidates, access.preferredOwner, "Bạn chỉ được tạo dữ liệu thuộc phạm vi OWNER");
+        }
+        if ("DEPARTMENT".equalsIgnoreCase(scope)) {
+            return validateOrAssignField(objUpdate, DEPARTMENT_SCOPE_FIELDS, access.departmentCandidates, access.preferredDepartment, "Bạn chỉ được tạo dữ liệu thuộc DEPARTMENT của mình");
+        }
+        if ("BRANCH".equalsIgnoreCase(scope)) {
+            return validateOrAssignField(objUpdate, BRANCH_SCOPE_FIELDS, access.branchCandidates, access.preferredBranch, "Bạn chỉ được tạo dữ liệu thuộc BRANCH của mình");
+        }
+        return null;
+    }
+
+    private String validateOrAssignField(
+        Map<String, Object> row,
+        List<String> fields,
+        Set<String> allowedValues,
+        String fallbackValue,
+        String errorMessage
+    ) {
+        for (String field : fields) {
+            if (!row.containsKey(field)) {
+                continue;
+            }
+            Object current = row.get(field);
+            if (current == null || String.valueOf(current).isBlank()) {
+                if (fallbackValue != null && !fallbackValue.isBlank()) {
+                    row.put(field, fallbackValue);
+                    return null;
+                }
+                return errorMessage;
+            }
+
+            String normalized = String.valueOf(current).trim().toLowerCase(Locale.ROOT);
+            if (allowedValues.isEmpty() || !allowedValues.contains(normalized)) {
+                return errorMessage;
+            }
+            return null;
+        }
+        return null;
+    }
+
+    private boolean matchesByFields(Map<String, Object> row, List<String> fields, Set<String> allowedValues) {
+        if (row == null || fields == null || fields.isEmpty()) {
+            return true;
+        }
+        String foundValue = null;
+        for (String field : fields) {
+            Object value = row.get(field);
+            if (value != null && !String.valueOf(value).isBlank()) {
+                foundValue = String.valueOf(value).trim().toLowerCase(Locale.ROOT);
+                break;
+            }
+        }
+        if (foundValue == null) {
+            return true;
+        }
+        return allowedValues.contains(foundValue);
+    }
+
+    private boolean isDataScopeExemptTable(String tableName) {
+        if (tableName == null || tableName.isBlank()) {
+            return true;
+        }
+        return "index".equals(tableName)
+            || "csm_accounts".equals(tableName)
+            || "csm_group_members".equals(tableName)
+            || "csm_roles".equals(tableName)
+            || "csm_permissions".equals(tableName)
+            || "csm_role_permissions".equals(tableName)
+            || "csm_user_roles".equals(tableName)
+            || "csm_user_depts".equals(tableName)
+            || "csm_depts".equals(tableName)
+            || "csm_menu".equals(tableName);
+    }
+
+    private void collectCandidate(Set<String> target, Object raw) {
+        if (target == null || raw == null) {
+            return;
+        }
+        String normalized = String.valueOf(raw).trim().toLowerCase(Locale.ROOT);
+        if (!normalized.isBlank()) {
+            target.add(normalized);
+        }
+    }
+
+    private List<String> toStringList(Object raw) {
+        if (!(raw instanceof List<?> list)) {
+            return Collections.emptyList();
+        }
+        List<String> out = new ArrayList<>();
+        for (Object item : list) {
+            if (item == null) continue;
+            String value = String.valueOf(item).trim();
+            if (!value.isBlank()) {
+                out.add(value);
+            }
+        }
+        return out;
     }
 
     private static final class UserAccessContext {
@@ -463,12 +834,35 @@ public class TableHandler {
         private final boolean isDev;
         private final String appId;
         private final Set<String> parentAccountCandidates;
+        private final Set<String> ownerCandidates;
+        private final Set<String> departmentCandidates;
+        private final Set<String> branchCandidates;
+        private final String dataScope;
+        private final String preferredOwner;
+        private final String preferredDepartment;
+        private final String preferredBranch;
 
-        private UserAccessContext(boolean isAdmin, boolean isDev, String appId, Set<String> parentAccountCandidates) {
+        private UserAccessContext(
+            boolean isAdmin,
+            boolean isDev,
+            String appId,
+            Set<String> parentAccountCandidates,
+            Set<String> ownerCandidates,
+            Set<String> departmentCandidates,
+            Set<String> branchCandidates,
+            String dataScope
+        ) {
             this.isAdmin = isAdmin;
             this.isDev = isDev;
             this.appId = appId;
             this.parentAccountCandidates = parentAccountCandidates != null ? parentAccountCandidates : Collections.emptySet();
+            this.ownerCandidates = ownerCandidates != null ? ownerCandidates : Collections.emptySet();
+            this.departmentCandidates = departmentCandidates != null ? departmentCandidates : Collections.emptySet();
+            this.branchCandidates = branchCandidates != null ? branchCandidates : Collections.emptySet();
+            this.dataScope = dataScope != null ? dataScope : "NONE";
+            this.preferredOwner = this.ownerCandidates.stream().findFirst().orElse("");
+            this.preferredDepartment = this.departmentCandidates.stream().findFirst().orElse("");
+            this.preferredBranch = this.branchCandidates.stream().findFirst().orElse("");
         }
     }
 
@@ -686,6 +1080,8 @@ public class TableHandler {
                 .filter(row -> isOwnedSubUserRow(row, accessContext))
                 .collect(java.util.stream.Collectors.toList());
         }
+        autoFillPermissionSchemaValues(appId, tblname, records, true);
+        records = applyDataScopeRowFilter(tblname, records, accessContext);
 
         // Ưu tiên update theo id: nếu e_where quá chặt làm rỗng, fallback query theo id để ghi đè đúng bản ghi.
         if ("update".equals(command) && records.isEmpty() && objUpdate.get("id") != null) {
@@ -721,6 +1117,10 @@ public class TableHandler {
     
         switch (command) {
             case "create":
+                String createGuardError = applyDataScopeCreateGuard(tblname, objUpdate, accessContext);
+                if (createGuardError != null) {
+                    return errorResponse(createGuardError);
+                }
                 ensureRowId(objUpdate);
                 List<String> missingCreatePk = missingPrimaryKeyFields(objUpdate, effectivePkFields);
                 if (!missingCreatePk.isEmpty()) {
@@ -895,13 +1295,24 @@ public class TableHandler {
             // logger.info("Bảng {} chương trình {} lọc với take = {}, lastkey = {}, full params = {}",
             //             tblname, appId, take, lastkey, msg);
         
-            return recordManager.filterWithPagination(appId, tblname, filters, take, lastkey);
+            Map<String, Object> paginated = recordManager.filterWithPagination(appId, tblname, filters, take, lastkey);
+            Object rowsObj = paginated.get("rows");
+            if (rowsObj instanceof List<?>) {
+                @SuppressWarnings("unchecked")
+                List<Map<String, Object>> rows = (List<Map<String, Object>>) rowsObj;
+                autoFillPermissionSchemaValues(appId, tblname, rows, true);
+                rows = applyDataScopeRowFilter(tblname, rows, resolveCurrentUserAccessContext());
+                paginated.put("rows", rows);
+            }
+            return paginated;
         } else {
             // logger.info("Bảng {} chương trình {} dùng filter thường, params = {}", tblname, appId, msg);
             filterResult = recordManager.filter(appId, tblname, filters);
         }
              
         List<Map<String, Object>> data = (List<Map<String, Object>>) filterResult.getOrDefault("rows", new ArrayList<>());
+        autoFillPermissionSchemaValues(appId, tblname, data, true);
+        data = applyDataScopeRowFilter(tblname, data, resolveCurrentUserAccessContext());
     
         Map<String, Object> result = new HashMap<>();
         result.put("id", tblname);
@@ -910,7 +1321,155 @@ public class TableHandler {
         result.put("rows", data);
     
         return result;
-    }    
+    }
+
+    private void ensureAutoPermissionSchemaForTable(String appId, String tableName, Map<String, Object> structRecord, Map<String, Object> structMap) {
+        if (!"csm".equals(appId) || structRecord == null || structMap == null) {
+            return;
+        }
+        List<String> requiredFields = AUTO_PERMISSION_SCHEMA_FIELDS.get(tableName);
+        if (requiredFields == null || requiredFields.isEmpty()) {
+            return;
+        }
+
+        Object fieldsObj = structMap.get("fields");
+        if (!(fieldsObj instanceof List<?> rawFields)) {
+            return;
+        }
+
+        List<String> fields = new ArrayList<>();
+        for (Object item : rawFields) {
+            if (item == null) continue;
+            fields.add(String.valueOf(item));
+        }
+
+        boolean changed = false;
+        for (String requiredField : requiredFields) {
+            if (!fields.contains(requiredField)) {
+                fields.add(requiredField);
+                changed = true;
+            }
+        }
+
+        if (!changed) {
+            return;
+        }
+
+        structMap.put("fields", fields);
+        structRecord.put("struct", structMap);
+        recordManager.createRecord(appId, "index", structRecord, List.of("id"));
+    }
+
+    private void autoFillPermissionSchemaValues(String appId, String tableName, List<Map<String, Object>> rows, boolean persist) {
+        if (!"csm".equals(appId) || rows == null || rows.isEmpty()) {
+            return;
+        }
+        List<String> requiredFields = AUTO_PERMISSION_SCHEMA_FIELDS.get(tableName);
+        if (requiredFields == null || requiredFields.isEmpty()) {
+            return;
+        }
+
+        List<Map<String, Object>> changedRows = new ArrayList<>();
+        for (Map<String, Object> row : rows) {
+            if (row == null) continue;
+            boolean changed = false;
+
+            for (String field : requiredFields) {
+                if (!row.containsKey(field)) {
+                    row.put(field, "");
+                    changed = true;
+                }
+            }
+
+            if ("csm_accounts".equals(tableName) || "csm_group_members".equals(tableName)) {
+                List<String> permissions = toStringList(row.get("permissions"));
+                List<String> menusPermissions = toStringList(row.get("menusPermissions"));
+                boolean dev = extractDevFlagFromAppToken(row.get("app_token"));
+                long bitfield = PermissionBitfieldUtil.buildBitfield(permissions, menusPermissions, dev);
+                String dataScope = PermissionBitfieldUtil.resolveDataScope(bitfield);
+
+                if (!Objects.equals(String.valueOf(row.getOrDefault("permissionBitfield", "")), String.valueOf(bitfield))) {
+                    row.put("permissionBitfield", String.valueOf(bitfield));
+                    changed = true;
+                }
+                if (!Objects.equals(String.valueOf(row.getOrDefault("permissionSchemaVersion", "")), "v2")) {
+                    row.put("permissionSchemaVersion", "v2");
+                    changed = true;
+                }
+                if (!Objects.equals(String.valueOf(row.getOrDefault("dataScope", "")), dataScope)) {
+                    row.put("dataScope", dataScope);
+                    changed = true;
+                }
+
+                if (!hasNonBlank(row.get("department_id")) && hasNonBlank(row.get("dept_id"))) {
+                    row.put("department_id", String.valueOf(row.get("dept_id")));
+                    changed = true;
+                }
+                if (!hasNonBlank(row.get("team_id")) && hasNonBlank(row.get("dept_id"))) {
+                    row.put("team_id", String.valueOf(row.get("dept_id")));
+                    changed = true;
+                }
+            } else if ("csm_roles".equals(tableName)) {
+                if (!hasNonBlank(row.get("permissionBitfield"))) {
+                    row.put("permissionBitfield", "0");
+                    changed = true;
+                }
+                if (!Objects.equals(String.valueOf(row.getOrDefault("permissionSchemaVersion", "")), "v2")) {
+                    row.put("permissionSchemaVersion", "v2");
+                    changed = true;
+                }
+                if (!hasNonBlank(row.get("dataScope"))) {
+                    row.put("dataScope", "NONE");
+                    changed = true;
+                }
+            } else if ("csm_user_depts".equals(tableName)) {
+                if (!hasNonBlank(row.get("permissionBitfield"))) {
+                    row.put("permissionBitfield", "0");
+                    changed = true;
+                }
+                if (!Objects.equals(String.valueOf(row.getOrDefault("permissionSchemaVersion", "")), "v2")) {
+                    row.put("permissionSchemaVersion", "v2");
+                    changed = true;
+                }
+                if (!hasNonBlank(row.get("dataScope"))) {
+                    row.put("dataScope", hasNonBlank(row.get("dept_id")) ? "DEPARTMENT" : "NONE");
+                    changed = true;
+                }
+            }
+
+            if (persist && changed && hasNonBlank(row.get("id"))) {
+                changedRows.add(row);
+            }
+        }
+        if (persist && !changedRows.isEmpty()) {
+            recordManager.batchUpdateRecords(appId, tableName, changedRows, List.of("id"));
+        }
+    }
+
+    private boolean extractDevFlagFromAppToken(Object rawAppToken) {
+        if (rawAppToken == null) {
+            return false;
+        }
+        String appToken = String.valueOf(rawAppToken).trim();
+        if (appToken.isEmpty()) {
+            return false;
+        }
+        try {
+            String decrypted = recordManager.csm_decrypt(appToken);
+            String[] parts = decrypted.split("_____");
+            if (parts.length == 0) {
+                return false;
+            }
+            int accessRight = Integer.parseInt(parts[parts.length - 1].trim());
+            return accessRight > 0;
+        } catch (Exception ignore) {
+            return false;
+        }
+    }
+
+    private boolean hasNonBlank(Object value) {
+        return value != null && !String.valueOf(value).trim().isEmpty();
+    }
 
     private void enqueueServiceInvalidation(String appId, String tableName, Map<String, Object> record) {
         try {

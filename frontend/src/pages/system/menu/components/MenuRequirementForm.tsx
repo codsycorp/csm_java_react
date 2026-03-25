@@ -236,6 +236,10 @@ ${data.customNotes}
 5. Nếu scope=complete: Chi tiết đầy đủ bảng/field/trigger/combo/logic
 6. Trả về format: { "menu": [...], "notes": [...], "warnings": [...] }
 7. Ưu tiên bám đúng nghiệp vụ khách hàng, không sinh menu dư thừa
+8. Field table bắt buộc chuẩn f_* (f_name, f_header, f_types, f_pkid, f_show, f_width, f_dec)
+9. Trigger bắt buộc trong object trigger và ưu tiên code body chạy được theo chữ ký hệ thống
+10. Field select/combo (co/coro/cbo) phải có f_cbo_query hợp lệ theo 2 dạng: static options hoặc query DB
+11. Nếu đã có menu cũ thì chuẩn hóa menu cũ theo schema hiện tại, giữ ổn định id/menu_id/path khi có thể
 
 ### HƯỚNG DẪN CHI TIẾT
 Xem phần "LOẠI MENU HỖ TRỢ", "MENUITEMTYPE SCHEMA", "QUY TẮC THIẾT KẾ" trong prompt chính.

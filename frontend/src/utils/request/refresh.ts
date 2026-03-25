@@ -9,6 +9,17 @@ import { goLogin } from "./go-login";
 
 let isRefreshing = false;
 
+function retryOriginalRequest(request: Request, options: Options) {
+	return ky(request.url, {
+		...options,
+		// request.url is absolute at this point; keep prefix disabled to avoid base URL duplication.
+		prefixUrl: undefined,
+		method: request.method,
+		headers: request.headers,
+		body: request.body,
+	});
+}
+
 /**
  * 刷新token并重新发起请求
  *
@@ -26,6 +37,7 @@ export async function refreshTokenAndRetry(request: Request, options: Options) {
 			const freshResponse = await fetchRefreshToken();
 			const nextToken = freshResponse?.result?.token;
 			const nextRefreshToken = freshResponse?.result?.refreshToken;
+			const nextCsrfToken = freshResponse?.result?.csrfToken;
 			if (nextToken) {
 				useAuthStore.setState({ token: nextToken });
 				request.headers.set(AUTH_HEADER, `${nextToken}`);
@@ -37,14 +49,12 @@ export async function refreshTokenAndRetry(request: Request, options: Options) {
 					localStorage.setItem("refreshToken", nextRefreshToken);
 				} catch (e) {}
 			}
+			if (nextCsrfToken) {
+				useAuthStore.setState({ csrfToken: nextCsrfToken });
+			}
 			// Retry the original request after successful token refresh
 			// Use request.url instead of request object to ensure middleware chain runs again
-			return ky(request.url, {
-				...options,
-				method: request.method,
-				headers: request.headers,
-				body: request.body,
-			});
+			return retryOriginalRequest(request, options);
 		} catch (error) {
 			onRefreshFailed(error);
 			// Clear user data when refresh token fails
@@ -63,12 +73,7 @@ export async function refreshTokenAndRetry(request: Request, options: Options) {
 			addRefreshSubscriber({
 				resolve: async (newToken) => {
 					request.headers.set(AUTH_HEADER, `${newToken}`);
-					resolve(ky(request.url, {
-						...options,
-						method: request.method,
-						headers: request.headers,
-						body: request.body,
-					}));
+					resolve(retryOriginalRequest(request, options));
 				},
 				// 当 token 刷新失败时，拒绝当前 Promise
 				reject,

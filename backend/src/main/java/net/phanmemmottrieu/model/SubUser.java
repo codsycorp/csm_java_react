@@ -12,6 +12,11 @@ public class SubUser {
     private String groupId; // Có thể có nếu bạn có cấu trúc nhóm rõ ràng
     private List<String> permissions; // Quyền hạn cụ thể của tài khoản con
     private List<String> menusPermissions; // Quyền truy cập menu của tài khoản con
+    private String permissionBitfield;
+    private String permissionSchemaVersion;
+    private String dataScope;
+    private String deptId;
+    private String branchId;
 
     public SubUser() {
         this.permissions = new ArrayList<>();
@@ -84,6 +89,46 @@ public class SubUser {
         this.menusPermissions = menusPermissions;
     }
 
+    public String getPermissionBitfield() {
+        return permissionBitfield;
+    }
+
+    public void setPermissionBitfield(String permissionBitfield) {
+        this.permissionBitfield = permissionBitfield;
+    }
+
+    public String getPermissionSchemaVersion() {
+        return permissionSchemaVersion;
+    }
+
+    public void setPermissionSchemaVersion(String permissionSchemaVersion) {
+        this.permissionSchemaVersion = permissionSchemaVersion;
+    }
+
+    public String getDataScope() {
+        return dataScope;
+    }
+
+    public void setDataScope(String dataScope) {
+        this.dataScope = dataScope;
+    }
+
+    public String getDeptId() {
+        return deptId;
+    }
+
+    public void setDeptId(String deptId) {
+        this.deptId = deptId;
+    }
+
+    public String getBranchId() {
+        return branchId;
+    }
+
+    public void setBranchId(String branchId) {
+        this.branchId = branchId;
+    }
+
     @Override
     public String toString() {
         return "SubUser{" +
@@ -94,6 +139,11 @@ public class SubUser {
                ", groupId='" + groupId + '\'' +
                ", permissions=" + permissions +
                ", menusPermissions=" + menusPermissions +
+               ", permissionBitfield='" + permissionBitfield + '\'' +
+               ", permissionSchemaVersion='" + permissionSchemaVersion + '\'' +
+               ", dataScope='" + dataScope + '\'' +
+               ", deptId='" + deptId + '\'' +
+               ", branchId='" + branchId + '\'' +
                '}';
     }
 }

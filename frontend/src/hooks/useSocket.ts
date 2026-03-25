@@ -110,83 +110,88 @@ export function useSocket(options: UseSocketOptions = {}) {
 			
 			if (data.table) {
 				const currentTableData = useAppStore.getState().database[data.table];
-				if (currentTableData) {
-					const pkFields = currentTableData.fieldsPK || ['id'];
-					let updatedRows = [...(currentTableData.rows || [])];
+				const inferredPkFields = Object.keys(data.primaryKeys || {}).filter(Boolean);
+				const tableSnapshot = currentTableData || {
+					id: data.table,
+					rows: [],
+					fieldsPK: inferredPkFields.length ? inferredPkFields : ['id'],
+					app_id: data.appId,
+				};
+				const pkFields = tableSnapshot.fieldsPK || ['id'];
+				let updatedRows = [...(tableSnapshot.rows || [])];
 
-					const getRowId = (row: Record<string, any> | undefined | null) => {
-						if (!row) return null;
-						const id = row.id;
-						return id !== undefined && id !== null ? String(id) : null;
-					};
+				const getRowId = (row: Record<string, any> | undefined | null) => {
+					if (!row) return null;
+					const id = row.id;
+					return id !== undefined && id !== null ? String(id) : null;
+				};
 
-					const getPkValues = (row: Record<string, any> | undefined | null) => {
-						if (!row) return null;
-						const values: Record<string, any> = {};
-						pkFields.forEach(pk => {
-							if (row[pk] !== undefined) {
-								values[pk] = row[pk];
-							}
-						});
-						return Object.keys(values).length ? values : null;
-					};
-
-					const primaryKeyMatch = (row: Record<string, any>, pkValues: Record<string, any> | null) => {
-						if (!pkValues) return false;
-						return pkFields.every(pk => row[pk] === pkValues[pk]);
-					};
-
-					const eventRowId = getRowId(data.dataRow) ?? (data.primaryKeys?.id != null ? String(data.primaryKeys.id) : null);
-					const eventPkValues = data.primaryKeys || getPkValues(data.dataRow);
-					const findIndexById = () => (eventRowId ? updatedRows.findIndex(r => getRowId(r) === eventRowId) : -1);
-
-					if (data.action === 'create') {
-						if (data.dataRow) {
-							const idxById = findIndexById();
-							if (idxById === -1) {
-								updatedRows.push(data.dataRow);
-								console.log(`[Socket Global] ✅ Inserted row to ${data.table}`);
-							} else {
-								updatedRows[idxById] = { ...updatedRows[idxById], ...data.dataRow };
-								console.log(`[Socket Global] ✅ Merged row in ${data.table} (create->merge)`);
-							}
+				const getPkValues = (row: Record<string, any> | undefined | null) => {
+					if (!row) return null;
+					const values: Record<string, any> = {};
+					pkFields.forEach(pk => {
+						if (row[pk] !== undefined) {
+							values[pk] = row[pk];
 						}
-					} else if (data.action === 'update') {
-						if (data.dataRow) {
-							const idxById = findIndexById();
-							if (idxById !== -1) {
-								updatedRows[idxById] = { ...updatedRows[idxById], ...data.dataRow };
-								console.log(`[Socket Global] ✅ Updated row in ${data.table} by id`);
-							} else if (eventPkValues) {
-								const idxByPk = updatedRows.findIndex(row => primaryKeyMatch(row, eventPkValues));
-								if (idxByPk !== -1) {
-									updatedRows[idxByPk] = { ...updatedRows[idxByPk], ...data.dataRow };
-									console.log(`[Socket Global] ✅ Updated row in ${data.table} by pk`);
-								} else {
-									updatedRows.push(data.dataRow);
-									console.log(`[Socket Global] ✅ Inserted row to ${data.table} (update fallback)`);
-								}
-							} else {
-								updatedRows.push(data.dataRow);
-								console.log(`[Socket Global] ✅ Inserted row to ${data.table} (update fallback no keys)`);
-							}
-						}
-					} else if (data.action === 'delete') {
-						if (eventRowId) {
-							updatedRows = updatedRows.filter(row => getRowId(row) !== eventRowId);
-							console.log(`[Socket Global] ✅ Deleted row from ${data.table} by id`);
-						} else if (eventPkValues) {
-							updatedRows = updatedRows.filter(row => !primaryKeyMatch(row, eventPkValues));
-							console.log(`[Socket Global] ✅ Deleted row from ${data.table} by pk`);
+					});
+					return Object.keys(values).length ? values : null;
+				};
+
+				const primaryKeyMatch = (row: Record<string, any>, pkValues: Record<string, any> | null) => {
+					if (!pkValues) return false;
+					return pkFields.every(pk => row[pk] === pkValues[pk]);
+				};
+
+				const eventRowId = getRowId(data.dataRow) ?? (data.primaryKeys?.id != null ? String(data.primaryKeys.id) : null);
+				const eventPkValues = data.primaryKeys || getPkValues(data.dataRow);
+				const findIndexById = () => (eventRowId ? updatedRows.findIndex(r => getRowId(r) === eventRowId) : -1);
+
+				if (data.action === 'create') {
+					if (data.dataRow) {
+						const idxById = findIndexById();
+						if (idxById === -1) {
+							updatedRows.push(data.dataRow);
+							console.log(`[Socket Global] ✅ Inserted row to ${data.table}`);
+						} else {
+							updatedRows[idxById] = { ...updatedRows[idxById], ...data.dataRow };
+							console.log(`[Socket Global] ✅ Merged row in ${data.table} (create->merge)`);
 						}
 					}
-
-					useAppStore.getState().setTableData(data.table, {
-						...currentTableData,
-						rows: updatedRows
-					});
-					console.log(`[Socket Global] ✅ Global database updated for ${data.table}, ${updatedRows.length} rows`);
+				} else if (data.action === 'update') {
+					if (data.dataRow) {
+						const idxById = findIndexById();
+						if (idxById !== -1) {
+							updatedRows[idxById] = { ...updatedRows[idxById], ...data.dataRow };
+							console.log(`[Socket Global] ✅ Updated row in ${data.table} by id`);
+						} else if (eventPkValues) {
+							const idxByPk = updatedRows.findIndex(row => primaryKeyMatch(row, eventPkValues));
+							if (idxByPk !== -1) {
+								updatedRows[idxByPk] = { ...updatedRows[idxByPk], ...data.dataRow };
+								console.log(`[Socket Global] ✅ Updated row in ${data.table} by pk`);
+							} else {
+								updatedRows.push(data.dataRow);
+								console.log(`[Socket Global] ✅ Inserted row to ${data.table} (update fallback)`);
+							}
+						} else {
+							updatedRows.push(data.dataRow);
+							console.log(`[Socket Global] ✅ Inserted row to ${data.table} (update fallback no keys)`);
+						}
+					}
+				} else if (data.action === 'delete') {
+					if (eventRowId) {
+						updatedRows = updatedRows.filter(row => getRowId(row) !== eventRowId);
+						console.log(`[Socket Global] ✅ Deleted row from ${data.table} by id`);
+					} else if (eventPkValues) {
+						updatedRows = updatedRows.filter(row => !primaryKeyMatch(row, eventPkValues));
+						console.log(`[Socket Global] ✅ Deleted row from ${data.table} by pk`);
+					}
 				}
+
+				useAppStore.getState().setTableData(data.table, {
+					...tableSnapshot,
+					rows: updatedRows
+				});
+				console.log(`[Socket Global] ✅ Global database updated for ${data.table}, ${updatedRows.length} rows`);
 			}
 			
 			onUpdateRef.current?.(data);

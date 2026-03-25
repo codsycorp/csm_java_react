@@ -198,10 +198,9 @@ function addMenuToTree(menus: MenuItemType[], newMenu: MenuItemType): void {
 const ID_TO_I18N_KEY: Record<string, string> = {
 	"system": "common.menu.system",
 	"user": "common.menu.user",
-	"role": "common.menu.role",
 	"menu": "common.menu.menu",
 	"developer": "common.menu.developer",
-	"dept": "common.menu.dept",
+	"dept": "common.menu.permissionGroup",
 };
 
 function getMenuLabel(menu: MenuItemType, lang: string = 'vi', t?: (key: string) => string): string {

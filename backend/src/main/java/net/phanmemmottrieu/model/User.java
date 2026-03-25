@@ -34,6 +34,11 @@ public class User {
     private String avatar; // THÊM TRƯỜNG NÀY: Dùng để lưu đường dẫn ảnh đại diện
     private List<String> permissions;
     private List<String> menusPermissions;
+    private String permissionBitfield;
+    private String permissionSchemaVersion;
+    private String dataScope;
+    private String deptId;
+    private String branchId;
     private List<Map<String, Object>> groupRights; // Thêm trường này để xử lý group_rights
     private Boolean dev; // Thêm trường để xác định user có quyền dev/admin không
     private Integer loginVersion; // Single-session version
@@ -198,6 +203,46 @@ public class User {
         this.menusPermissions = menusPermissions;
     }
 
+    public String getPermissionBitfield() {
+        return permissionBitfield;
+    }
+
+    public void setPermissionBitfield(String permissionBitfield) {
+        this.permissionBitfield = permissionBitfield;
+    }
+
+    public String getPermissionSchemaVersion() {
+        return permissionSchemaVersion;
+    }
+
+    public void setPermissionSchemaVersion(String permissionSchemaVersion) {
+        this.permissionSchemaVersion = permissionSchemaVersion;
+    }
+
+    public String getDataScope() {
+        return dataScope;
+    }
+
+    public void setDataScope(String dataScope) {
+        this.dataScope = dataScope;
+    }
+
+    public String getDeptId() {
+        return deptId;
+    }
+
+    public void setDeptId(String deptId) {
+        this.deptId = deptId;
+    }
+
+    public String getBranchId() {
+        return branchId;
+    }
+
+    public void setBranchId(String branchId) {
+        this.branchId = branchId;
+    }
+
     public List<Map<String, Object>> getGroupRights() {
         return groupRights;
     }
@@ -237,6 +282,11 @@ public class User {
                 ", avatar='" + avatar + '\'' +
                 ", permissions=" + permissions +
                 ", menusPermissions=" + menusPermissions +
+                ", permissionBitfield='" + permissionBitfield + '\'' +
+                ", permissionSchemaVersion='" + permissionSchemaVersion + '\'' +
+                ", dataScope='" + dataScope + '\'' +
+                ", deptId='" + deptId + '\'' +
+                ", branchId='" + branchId + '\'' +
                 ", groupRights=" + groupRights +
                 ", refreshToken='" + refreshToken + '\'' +
                 ", refreshTokenIp='" + refreshTokenIp + '\'' +

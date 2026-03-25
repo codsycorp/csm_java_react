@@ -12,7 +12,82 @@
 		"addUser": "Thêm Người Dùng",
 		"editUser": "Chỉnh Sửa Người Dùng"
 	},
+	"userPermission": {
+		"fields": {
+			"roles": "Vai trò",
+			"permissionPreset": "Mẫu quyền",
+			"permissionGroups": "Nhóm quyền",
+			"permissions": "Quyền thao tác",
+			"permissionsAdd": "Bổ sung",
+			"permissionsDeny": "Loại trừ",
+			"menusPermissions": "Menu",
+			"menusPermissionsAdd": "Bổ sung menu",
+			"menusPermissionsDeny": "Loại trừ menu",
+			"permissionBitfield": "Mã quyền",
+			"permissionSchemaVersion": "Phiên bản",
+			"dataScope": "Phạm vi",
+			"deptId": "Phòng ban",
+			"branchId": "Chi nhánh"
+		},
+		"group": {
+			"systemAdmin": "Nhóm Quản trị hệ thống",
+			"manager": "Nhóm Quản lý",
+			"staff": "Nhóm Nhân viên",
+			"viewer": "Nhóm Chỉ xem"
+		},
+		"preset": {
+			"custom": "Tùy chỉnh",
+			"viewer": "Chỉ xem",
+			"editor": "Xem + Sửa",
+			"fullCrud": "CRUD",
+			"fullCrudExport": "CRUD + Xuất",
+			"adminFull": "Toàn quyền"
+		},
+		"scope": {
+			"none": "Không giới hạn",
+			"owner": "Của mình (OWNER)",
+			"department": "Phòng ban",
+			"branch": "Chi nhánh",
+			"all": "Tất cả"
+		},
+		"option": {
+			"admin": "Quản trị",
+			"dev": "Developer",
+			"user": "Người dùng",
+			"view": "Xem",
+			"create": "Thêm",
+			"edit": "Sửa",
+			"delete": "Xóa",
+			"export": "Xuất",
+			"scopeOwner": "Của mình",
+			"scopeDepartment": "Phòng ban",
+			"scopeBranch": "Chi nhánh",
+			"scopeAll": "Tất cả"
+		},
+		"menu": {
+			"dashboard": "Dashboard",
+			"dashboardPath": "/dashboard",
+			"home": "Trang chủ",
+			"homePath": "/home",
+			"systemUser": "Người dùng",
+			"systemDept": "Nhóm quyền",
+			"systemMenu": "Menu hệ thống",
+			"systemDeveloper": "Developer",
+			"systemBroadcast": "Broadcast",
+			"crm": "CRM"
+		}
+	},
+	"admin": {
+		"loadingMenu": "Đang tải menu...",
+		"loadingData": "Đang tải dữ liệu...",
+		"menuNotFound": "Không tìm thấy menu",
+		"loadDataError": "Lỗi tải dữ liệu"
+	},
 	"menu": {
+		"configMismatch": {
+			"title": "Cảnh báo lệch cấu hình menu",
+			"desc": "Đường dẫn menu và bảng dữ liệu đang không khớp."
+		},
 						"editField": "Sửa trường",
 					"addField": "Thêm trường",
 				"field": {

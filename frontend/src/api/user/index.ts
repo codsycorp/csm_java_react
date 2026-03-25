@@ -26,6 +26,7 @@ export function fetchUserInfo(headers?: HeadersInit) {
 export interface RefreshTokenResult {
 	token: string
 	refreshToken: string
+	csrfToken?: string
 }
 
 export const refreshTokenPath = "refresh-token";

@@ -29,6 +29,13 @@ type AiMenuDesignerProps = {
   onApply: (menus: MenuItemType[]) => Promise<void>;
 };
 
+type MenuValidationIssue = {
+  severity: "error" | "warning";
+  rule: string;
+  path: string;
+  message: string;
+};
+
 const AI_REQUEST_TABLE = "csm_ai_menu_requests";
 
 const TRIGGER_CODE_TEMPLATES: Record<string, string> = {
@@ -173,6 +180,116 @@ function isLikelyExecutableCode(value: string): boolean {
   return /\n|;|\breturn\b|=>|\bif\b|\bthrow\b|\bconst\b|\blet\b|\bfunction\b/.test(v);
 }
 
+function isPlainObject(value: any): value is Record<string, any> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeSelectOption(option: any): Record<string, any> {
+  if (isPlainObject(option)) {
+    const ma = option.ma ?? option.value ?? option.id ?? "";
+    const ten = option.ten ?? option.label ?? option.text ?? option.name ?? String(ma || "");
+    return { ...option, ma, ten };
+  }
+  return {
+    ma: option,
+    ten: String(option ?? ""),
+  };
+}
+
+function normalizeComboQueryValue(rawValue: any, fName: string, fTypes: string): string {
+  const isComboField = /co|coro|cbo/i.test(String(fTypes || ""));
+  if (!isComboField) return String(rawValue ?? "");
+
+  const fallback = JSON.stringify({ options: [], query: [] });
+  if (rawValue == null || rawValue === "") return fallback;
+
+  if (Array.isArray(rawValue)) {
+    return JSON.stringify({
+      options: rawValue.map(normalizeSelectOption),
+      query: [],
+    });
+  }
+
+  if (isPlainObject(rawValue)) {
+    if (Array.isArray(rawValue.query) || Array.isArray(rawValue.options)) {
+      const normalized = {
+        ...rawValue,
+        options: Array.isArray(rawValue.options) ? rawValue.options.map(normalizeSelectOption) : [],
+        query: Array.isArray(rawValue.query) ? rawValue.query : [],
+      };
+      return JSON.stringify(normalized);
+    }
+
+    if (typeof rawValue.obj_name === "string" && rawValue.obj_name.trim()) {
+      return JSON.stringify({
+        options: [],
+        query: [{
+          obj_name: rawValue.obj_name.trim(),
+          fields: Array.isArray(rawValue.fields) && rawValue.fields.length > 0 ? rawValue.fields : ["id", "name"],
+          obj_where: rawValue.obj_where || { field: "id", type: "like", value: "" },
+          ...(rawValue.app_id ? { app_id: rawValue.app_id } : {}),
+        }],
+      });
+    }
+
+    return fallback;
+  }
+
+  const text = String(rawValue || "").trim();
+  if (!text) return fallback;
+
+  if (/^[a-z0-9_]+$/i.test(text) && !text.includes("return")) {
+    return JSON.stringify({
+      options: [],
+      query: [{
+        obj_name: text,
+        fields: ["id", "name"],
+        obj_where: { field: "id", type: "like", value: "" },
+      }],
+    });
+  }
+
+  if (text.startsWith("{") || text.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(text);
+      return normalizeComboQueryValue(parsed, fName, fTypes);
+    } catch {
+      try {
+        const fn = new Function(`return (${text})`);
+        const parsed = fn();
+        return normalizeComboQueryValue(parsed, fName, fTypes);
+      } catch {
+        return text;
+      }
+    }
+  }
+
+  return text;
+}
+
+function normalizeTriggerKeyName(key: string): string {
+  const raw = String(key || "").trim();
+  if (!raw) return raw;
+
+  const aliasMap: Record<string, string> = {
+    beforeSave: "before_save",
+    afterSave: "after_save",
+    beforeDelete: "before_delete",
+    afterDelete: "after_delete",
+    loadDb: "load_db",
+    loadTableDb: "load_table_db",
+    reportDb: "report_db",
+    beforeImport: "beforeImport",
+    afterImport: "afterImport",
+  };
+  if (aliasMap[raw]) return aliasMap[raw];
+
+  return raw
+    .replace(/[\s-]+/g, "_")
+    .replace(/([a-z])([A-Z])/g, "$1_$2")
+    .toLowerCase();
+}
+
 function normalizeTriggerCodeValue(triggerKey: string, rawValue: any): any {
   if (typeof rawValue !== "string") return rawValue;
   const value = rawValue.trim();
@@ -183,7 +300,7 @@ function normalizeTriggerCodeValue(triggerKey: string, rawValue: any): any {
   if (template) return template;
 
   // Fallback templates by trigger phase so AI symbolic output still executes safely.
-  if (triggerKey === "before_save") {
+  if (triggerKey === "before_save" || triggerKey === "before_delete") {
     return `return data;`;
   }
   if (triggerKey === "after_save" || triggerKey === "after_delete") {
@@ -295,6 +412,7 @@ ${selectorGuide}
 2) Chon menu type phu hop (${scope === "minimal" ? "uu tien type 1/3" : "co the dung 1/2/3/4"})
 3) Tao JSON hop le theo MenuItemType
 4) Neu can, ghi chu gia dinh vao notes
+5) Neu da co menu cu: chuan hoa theo schema he thong hien tai, giu ID/path/menu_id on dinh toi da
 
 ## MENU HE THONG HIEN TAI (COMPACT REFERENCE)
 ${compactMenuContext}
@@ -312,6 +430,11 @@ ${requestCore}
   afterAdd/afterEdit/afterDelete: (allData, seft, data) => return any
   load_db/report_db: (seft, db) => return Row[]
 - KHONG tra ve ten ham rong nhu "validate_order_debt_limit" neu khong co code.
+- Field select/combo (f_types co/coro/cbo) BAT BUOC co f_cbo_query hop le:
+  + Dang static: {"options":[{"ma":"...","ten":"..."}],"query":[]}
+  + Dang query DB: {"options":[],"query":[{"obj_name":"table","fields":["id","name"],"obj_where":{"field":"id","type":"like","value":""}}]}
+  + Khong tra ve JSON loi hoac SQL thuan.
+- Neu yeu cau nghiep vu co ket noi master-detail, bao cao, combo phu thuoc: phai tao du trigger va f_cbo_query tuong ung.
 
 ## OUTPUT SHAPE (LEGACY COMPAT)
 - Moi menu item uu tien co day du key: id, label, trigger, m_icons, field_root, report_name,
@@ -359,6 +482,7 @@ Ban da co ket qua menu lan truoc. Hay cap nhat theo yeu cau moi voi nguyen tac:
 2) Van tra ve TOAN BO menu sau khi cap nhat (khong tra ve delta).
 3) Dam bao schema MenuItemType hop le va ${strictScope}.
 4) Neu thong tin chua du, dua ra gia dinh hop ly va ghi vao warnings.
+5) Chuan hoa lai cac menu cu chua dung schema (field generic, trigger sai cho, combo sai format).
 
 ## YEU CAU GOC (RUT GON)
 ${requestCore}
@@ -382,6 +506,8 @@ ${previousMenuContext}
   afterAdd/afterEdit/afterDelete: (allData, seft, data) => return any
   load_db/report_db: (seft, db) => return Row[]
 - KHONG tra ve ten ham rong nhu "validate_order_debt_limit" neu khong co code.
+- Field select/combo (f_types co/coro/cbo) BAT BUOC co f_cbo_query hop le theo 1 trong 2 mau static/query DB.
+- Neu refine tu menu cu: giu id/menu_id/path/menu cha-con toi da, chi thay doi phan duoc yeu cau.
 
 ## OUTPUT SHAPE (LEGACY COMPAT)
 - Moi menu item uu tien co day du key: id, label, trigger, m_icons, field_root, report_name,
@@ -421,6 +547,7 @@ function estimateTokenCount(text: string): number {
 function mapGenericTypeToFTypes(input: any): string {
   const raw = String(input || "").toLowerCase().trim();
   if (!raw) return "ed";
+  if (raw === "cbo") return "co";
   if (raw === "number" || raw === "int" || raw === "float" || raw === "decimal") return "nummeric";
   if (raw === "date") return "date";
   if (raw === "datetime") return "datetime";
@@ -464,6 +591,14 @@ function normalizeTableField(field: any): any {
     normalized.f_types = raw.editable === false ? "coro" : "co";
   }
 
+  if (/co|coro|cbo/i.test(String(normalized.f_types || ""))) {
+    normalized.f_cbo_query = normalizeComboQueryValue(
+      normalized.f_cbo_query ?? raw.cbo_query ?? raw.options ?? raw.foreignKey,
+      fName,
+      normalized.f_types,
+    );
+  }
+
   // Remove generic aliases to keep output clean and consistent for backend.
   delete normalized.field;
   delete normalized.label;
@@ -475,6 +610,8 @@ function normalizeTableField(field: any): any {
   delete normalized.foreignKey;
   delete normalized.enum;
   delete normalized.hidden;
+  delete normalized.cbo_query;
+  delete normalized.dataSource;
 
   return normalized;
 }
@@ -485,7 +622,7 @@ function normalizeTriggerShape(node: any): Record<string, any> {
 
   Object.keys(node || {}).forEach((key) => {
     if (!key.startsWith("trigger_")) return;
-    const triggerName = key.replace(/^trigger_/, "");
+    const triggerName = normalizeTriggerKeyName(key.replace(/^trigger_/, ""));
     const triggerValue = node[key];
     if (triggerName && triggerValue !== undefined && triggerValue !== null && triggerValue !== "") {
       trigger[triggerName] = triggerValue;
@@ -500,8 +637,13 @@ function normalizeTriggerShape(node: any): Record<string, any> {
       }
     });
 
-  Object.keys(trigger).forEach((key) => {
-    trigger[key] = normalizeTriggerCodeValue(key, trigger[key]);
+  Object.keys({ ...trigger }).forEach((key) => {
+    const normalizedKey = normalizeTriggerKeyName(key);
+    const triggerValue = trigger[key];
+    if (normalizedKey !== key) {
+      delete trigger[key];
+    }
+    trigger[normalizedKey] = normalizeTriggerCodeValue(normalizedKey, triggerValue);
   });
 
   return trigger;
@@ -771,6 +913,158 @@ function extractAiPayload(response: any) {
   return payload && typeof payload === "object" ? payload : null;
 }
 
+function isComboType(rawType: any): boolean {
+  return /co|coro|cbo/i.test(String(rawType || ""));
+}
+
+function isValidComboQueryShape(rawQuery: any): boolean {
+  const text = String(rawQuery || "").trim();
+  if (!text) return false;
+  if (/\breturn\b/.test(text)) return true;
+
+  try {
+    const parsed = JSON.parse(text);
+    if (Array.isArray(parsed)) return true;
+    if (parsed && typeof parsed === "object") {
+      if (Array.isArray((parsed as any).options) || Array.isArray((parsed as any).query)) {
+        return true;
+      }
+    }
+  } catch {
+    try {
+      const fn = new Function(`return (${text})`);
+      const parsed = fn();
+      if (Array.isArray(parsed)) return true;
+      if (parsed && typeof parsed === "object") {
+        if (Array.isArray((parsed as any).options) || Array.isArray((parsed as any).query)) {
+          return true;
+        }
+      }
+    } catch {
+      return false;
+    }
+  }
+
+  return false;
+}
+
+function validateMenusForApply(menus: MenuItemType[]): MenuValidationIssue[] {
+  const issues: MenuValidationIssue[] = [];
+
+  const walk = (nodes: MenuItemType[], parentPath: string) => {
+    (Array.isArray(nodes) ? nodes : []).forEach((node) => {
+      const id = String((node as any).id || "menu_undefined");
+      const label = String((node as any).label || (node as any).name || id);
+      const path = parentPath ? `${parentPath} > ${label}` : label;
+      const typeForm = Number((node as any).type_form || 0);
+      const tableName = String((node as any).table_name || "").trim();
+      const trigger = (node as any).trigger;
+      const fields = Array.isArray((node as any).table) ? (node as any).table : [];
+
+      if ((typeForm === 1 || typeForm === 2) && !tableName) {
+        issues.push({
+          severity: "error",
+          rule: "table_name_required",
+          path,
+          message: "Menu type_form=1/2 thiếu table_name.",
+        });
+      }
+
+      if (typeForm === 3 && !String((node as any).dynamic_link_url || (node as any).v_link || "").trim()) {
+        issues.push({
+          severity: "error",
+          rule: "dynamic_link_required",
+          path,
+          message: "Menu type_form=3 thiếu dynamic_link_url (hoặc v_link).",
+        });
+      }
+
+      if (typeForm === 4 && !String((node as any).auto_code_name || "").trim()) {
+        issues.push({
+          severity: "error",
+          rule: "dynamic_code_required",
+          path,
+          message: "Menu type_form=4 thiếu auto_code_name.",
+        });
+      }
+
+      if (trigger != null && typeof trigger !== "object") {
+        issues.push({
+          severity: "error",
+          rule: "trigger_object_required",
+          path,
+          message: "Trigger phải là object.",
+        });
+      }
+
+      if (fields.length > 0) {
+        fields.forEach((field: any, index: number) => {
+          const fName = String(field?.f_name || "").trim();
+          const fTypes = String(field?.f_types || "").trim();
+          const fieldPath = `${path} > field[${index + 1}]`;
+
+          if (!fName) {
+            issues.push({
+              severity: "error",
+              rule: "field_name_required",
+              path: fieldPath,
+              message: "Thiếu f_name.",
+            });
+          }
+
+          if (!fTypes) {
+            issues.push({
+              severity: "error",
+              rule: "field_type_required",
+              path: fieldPath,
+              message: `Field ${fName || "(unknown)"} thiếu f_types.`,
+            });
+          }
+
+          if (isComboType(fTypes)) {
+            if (!isValidComboQueryShape(field?.f_cbo_query)) {
+              issues.push({
+                severity: "error",
+                rule: "combo_query_invalid",
+                path: fieldPath,
+                message: `Field ${fName || "(unknown)"} có kiểu combo nhưng f_cbo_query chưa hợp lệ.`,
+              });
+            }
+          }
+        });
+      }
+
+      const normalizedTrigger = trigger && typeof trigger === "object" ? trigger : {};
+      if ((tableName.includes("donhang") || tableName.includes("phieuxuat") || tableName.includes("phieunhap")) && typeForm === 2) {
+        if (!normalizedTrigger.before_save) {
+          issues.push({
+            severity: "warning",
+            rule: "business_before_save_recommended",
+            path,
+            message: `Menu nghiệp vụ ${tableName} nên có trigger.before_save để validate dữ liệu.`,
+          });
+        }
+        if (!normalizedTrigger.after_save) {
+          issues.push({
+            severity: "warning",
+            rule: "business_after_save_recommended",
+            path,
+            message: `Menu nghiệp vụ ${tableName} nên có trigger.after_save để đồng bộ nghiệp vụ liên quan.`,
+          });
+        }
+      }
+
+      const children = Array.isArray((node as any).children) ? ((node as any).children as MenuItemType[]) : [];
+      if (children.length > 0) {
+        walk(children, path);
+      }
+    });
+  };
+
+  walk(menus, "");
+  return issues;
+}
+
 export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerProps) {
   const { t } = useTranslation();
   const [requestText, setRequestText] = useState("");
@@ -781,6 +1075,18 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
   const [loading, setLoading] = useState(false);
   const [recordId, setRecordId] = useState<string | undefined>(undefined);
   const [refineText, setRefineText] = useState("");
+
+  const menuValidationIssues = useMemo(() => {
+    return validateMenusForApply(aiMenus || []);
+  }, [aiMenus]);
+  const menuValidationErrors = useMemo(
+    () => menuValidationIssues.filter((item) => item.severity === "error"),
+    [menuValidationIssues],
+  );
+  const menuValidationWarnings = useMemo(
+    () => menuValidationIssues.filter((item) => item.severity === "warning"),
+    [menuValidationIssues],
+  );
 
   const hasStoredRequest = storedRequest.trim().length > 0;
 
@@ -900,6 +1206,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
       const output = {
         menu: normalized,
         notes: Array.isArray(payload.notes) ? payload.notes : [],
+        warnings: Array.isArray(payload.warnings) ? payload.warnings : [],
       };
 
       setAiMenus(normalized);
@@ -954,6 +1261,11 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
   const handleApply = async () => {
     if (!aiMenus || aiMenus.length === 0) {
       message.warning(t("system.menu.aiDesigner.noMenuToApply") || "Không có menu để áp dụng");
+      return;
+    }
+
+    if (menuValidationErrors.length > 0) {
+      message.error(`Khong the ap dung vi con ${menuValidationErrors.length} loi schema/nghiep vu.`);
       return;
     }
 
@@ -1025,6 +1337,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                 type="primary"
                 onClick={handleApply}
                 size="large"
+                disabled={menuValidationErrors.length > 0}
                 style={{ background: "#52c41a", borderColor: "#52c41a" }}
               >
                 {`${t("system.menu.aiDesigner.applySystem") || "Ap dung vao He thong"} (${aiMenus.length} menu)`}
@@ -1044,6 +1357,26 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                   showIcon
                   message={`${t("system.menu.aiDesigner.generatedCount") || "AI đã tạo thành công"} ${aiMenus.length} ${t("system.menu.aiDesigner.menuFeatures") || "menu/chức năng"}`}
                   description={t("system.menu.aiDesigner.reviewBeforeApply") || "Xem JSON bên dưới và kiểm tra trước khi áp dụng."}
+                />
+              )}
+
+              {menuValidationIssues.length > 0 && (
+                <Alert
+                  type={menuValidationErrors.length > 0 ? "error" : "warning"}
+                  showIcon
+                  message={`Checklist chuan hoa: ${menuValidationErrors.length} loi, ${menuValidationWarnings.length} canh bao`}
+                  description={
+                    <div style={{ maxHeight: 220, overflow: "auto", paddingRight: 8 }}>
+                      {(menuValidationIssues || []).slice(0, 50).map((issue, idx) => (
+                        <div key={`${issue.rule}_${idx}`} style={{ marginBottom: 6 }}>
+                          [{issue.severity.toUpperCase()}] {issue.path}: {issue.message}
+                        </div>
+                      ))}
+                      {menuValidationIssues.length > 50 && (
+                        <div>...con {menuValidationIssues.length - 50} muc nua</div>
+                      )}
+                    </div>
+                  }
                 />
               )}
 

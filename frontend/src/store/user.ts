@@ -15,6 +15,9 @@ const initialState = {
 	roles: [] as string[],
 	permissions: [] as string[],
 	menusPermissions: [] as string[],
+	permissionBitfield: "",
+	permissionSchemaVersion: "",
+	dataScope: "NONE" as "NONE" | "OWNER" | "DEPARTMENT" | "BRANCH" | "ALL",
 	app_id: "",
 	app_token: "",
 	dev: false, // Thêm dev flag để track quyền dev/admin

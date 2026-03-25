@@ -10,6 +10,7 @@ export default function Home() {
       autoCodeName={`broadcast_${userAppId}`}
       containerId="broadcast-auto-root"
       noCodeMessage="Chua cau hinh auto_code cho trang nay."
+      hideOnError
     />
   );
 }

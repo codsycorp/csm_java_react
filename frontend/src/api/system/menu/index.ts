@@ -4,6 +4,7 @@ import { handleTree } from "#src/utils";
 import { csmDecrypt } from "#src/components/csm-grid/CsmCrypto";
 import { getTableData } from "#src/components/csm-grid/CsmApi";
 import { useUserStore } from "#src/store";
+import { resolveDevFlag } from "#src/utils/dev-flag";
 
 export * from "./types";
 
@@ -380,13 +381,14 @@ export async function fetchNavigationMenus(appIdParam?: string) {
 		order: -1 // 首页始终在最前
 	};
 	
-	// 2. Admin 用户有系统管理菜单 - 从 user store 获取 roles
+	// 2. Admin 用户有系统管理菜单 - derive from current user state
 	let isAdmin = false;
+	let isDev = false;
 	try {
-		// Get roles from Zustand user store
-		const userRoles = useUserStore.getState().roles;
-
-		isAdmin = Array.isArray(userRoles) && userRoles.includes("admin");
+		const userState = useUserStore.getState();
+		const userRoles = userState.roles;
+		isDev = resolveDevFlag(userState.dev, userRoles);
+		isAdmin = Array.isArray(userRoles) && userRoles.includes("admin") && !isDev;
 
 	} catch (error) {
 		console.warn("Failed to detect admin role from store:", error);
@@ -396,7 +398,7 @@ export async function fetchNavigationMenus(appIdParam?: string) {
 	const existingSystemMenu = menuData.find(item => item.path === "/system" || item.id === "system");
 	
 	// Nếu chưa có và user là admin, thì inject menu System
-	if (isAdmin && !existingSystemMenu) {
+	if (isAdmin && !isDev && !existingSystemMenu) {
 		const systemMenu: MenuItemType = {
 			id: "system",
 			name: "menu.system",
@@ -420,17 +422,6 @@ export async function fetchNavigationMenus(appIdParam?: string) {
 			type: "system",
 			// Remove icon field - it's being rendered as text which breaks the UI
 			// icon: "user",
-			menuType: 0,
-			parentId: "system",
-		});
-		menuData.push({
-			id: "system-role",
-			name: "menu.system.role",
-			label: "Quản lý vai trò",
-			path: "/system/role",
-			type: "system",
-			// Remove icon field - it's being rendered as text which breaks the UI
-			// icon: "team",
 			menuType: 0,
 			parentId: "system",
 		});

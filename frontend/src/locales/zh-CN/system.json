@@ -12,7 +12,82 @@
 		"addUser": "新增用户",
 		"editUser": "编辑用户"
 	},
+	"userPermission": {
+		"fields": {
+			"roles": "角色",
+			"permissionPreset": "权限模板",
+			"permissionGroups": "权限组",
+			"permissions": "操作权限",
+			"permissionsAdd": "补充",
+			"permissionsDeny": "排除",
+			"menusPermissions": "菜单",
+			"menusPermissionsAdd": "补充菜单",
+			"menusPermissionsDeny": "排除菜单",
+			"permissionBitfield": "权限码",
+			"permissionSchemaVersion": "版本",
+			"dataScope": "数据范围",
+			"deptId": "部门",
+			"branchId": "分支"
+		},
+		"group": {
+			"systemAdmin": "系统管理员组",
+			"manager": "管理组",
+			"staff": "员工组",
+			"viewer": "只读组"
+		},
+		"preset": {
+			"custom": "自定义",
+			"viewer": "仅查看",
+			"editor": "查看+编辑",
+			"fullCrud": "CRUD",
+			"fullCrudExport": "CRUD+导出",
+			"adminFull": "全权限"
+		},
+		"scope": {
+			"none": "无",
+			"owner": "本人",
+			"department": "部门",
+			"branch": "分支",
+			"all": "全部"
+		},
+		"option": {
+			"admin": "管理员",
+			"dev": "开发者",
+			"user": "用户",
+			"view": "查看",
+			"create": "新增",
+			"edit": "编辑",
+			"delete": "删除",
+			"export": "导出",
+			"scopeOwner": "本人",
+			"scopeDepartment": "部门",
+			"scopeBranch": "分支",
+			"scopeAll": "全部"
+		},
+		"menu": {
+			"dashboard": "仪表盘",
+			"dashboardPath": "/dashboard",
+			"home": "首页",
+			"homePath": "/home",
+			"systemUser": "用户",
+			"systemDept": "权限组",
+			"systemMenu": "系统菜单",
+			"systemDeveloper": "开发者",
+			"systemBroadcast": "广播",
+			"crm": "CRM"
+		}
+	},
+	"admin": {
+		"loadingMenu": "正在加载菜单...",
+		"loadingData": "正在加载数据...",
+		"menuNotFound": "未找到菜单",
+		"loadDataError": "数据加载失败"
+	},
 	"menu": {
+		"configMismatch": {
+			"title": "菜单配置不匹配",
+			"desc": "菜单路由与配置的数据表不一致。"
+		},
 						"editField": "编辑字段",
 					"addField": "添加字段",
 				"field": {
