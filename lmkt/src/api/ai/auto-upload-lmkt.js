@@ -9370,6 +9370,50 @@ function buildMessageHash(msg = {}) {
   return [msg.date, msg.time, msg.sender, msg.content, firstImage].join("||");
 }
 
+function normalizeImageSignature(raw = '') {
+  const str = String(raw || '').trim();
+  if (!str) return '';
+
+  if (str.startsWith('data:')) {
+    const splitIdx = str.indexOf(',');
+    const header = splitIdx > 0 ? str.slice(0, splitIdx) : 'data:';
+    const body = splitIdx > 0 ? str.slice(splitIdx + 1) : str;
+    return `${header}|len:${body.length}|head:${body.slice(0, 96)}`;
+  }
+
+  if (str.startsWith('http://') || str.startsWith('https://')) {
+    try {
+      const u = new URL(str);
+      return `${u.origin}${u.pathname}`.toLowerCase();
+    } catch {
+      return str.toLowerCase().split('?')[0];
+    }
+  }
+
+  return str.toLowerCase();
+}
+
+function getMessageFirstImageSignature(msg = {}) {
+  const first = Array.isArray(msg?.images) ? msg.images[0] : '';
+  return normalizeImageSignature(first);
+}
+
+function extractFirstImageFromHash(hash = '') {
+  try {
+    const str = String(hash || '');
+    if (!str) return '';
+    let start = 0;
+    for (let i = 0; i < 4; i++) {
+      const idx = str.indexOf('||', start);
+      if (idx < 0) return '';
+      start = idx + 2;
+    }
+    return str.slice(start).trim();
+  } catch {
+    return '';
+  }
+}
+
 // ========== QUẢN LÝ TIN ZALO ĐÃ ĐĂNG (LƯU VÀO dataOptionUser) ==========
 
 // Constants cho Zalo posted messages
@@ -9379,6 +9423,12 @@ const ZALO_STATS_ONLY_MODE = true; // Chỉ lưu thống kê theo nhóm/config �
 const ZALO_POSTED_STATS_TYPE = 'posted_zalo_stats';
 const ZALO_POSTED_STATS_MAX_GROUPS = 120; // Chỉ giữ top nhóm hoạt động gần nhất
 const ZALO_POSTED_STATS_FLUSH_INTERVAL_MS = 45000; // Flush batch mỗi 45s
+const ZALO_POSTED_STATS_FLUSH_MIN_DELTA = 5; // Chỉ flush sớm khi có ít nhất 5 events
+const ZALO_POSTED_STATS_FLUSH_MAX_WAIT_MS = 3 * 60 * 1000; // Dù ít thay đổi vẫn flush tối đa mỗi 3 phút
+const ZALO_RUNTIME_STORAGE_VERSION = 2;
+const ZALO_RUNTIME_STORAGE_PREFIX = 'zalo_runtime_state_v2';
+const ZALO_IMAGE_SIG_STORAGE_PREFIX = 'zalo_image_sig_dedup_v1';
+const ZALO_IMAGE_SIG_LIMIT_PER_CONFIG = 2000;
 
 // ✅ TIMING CONSTANTS - Tuỳ chỉnh delays để tránh hang
 // ========== GLOBAL POSTING QUEUE ==========
@@ -9698,34 +9748,18 @@ function loadPostedZaloMessages() {
     return [];
   }
   try {
-    // ✅ PRIORITY 1: Load from server (csmUserData)
-    if (window.csmUserData && typeof window.csmUserData.get === 'function') {
-      try {
-        const allData = window.csmUserData.get();
-        if (Array.isArray(allData)) {
-          const posted = allData.filter(item => {
-            if (item.type === 'posted_zalo_message') return true;
-            if (item.id && item.id.toString().startsWith('posted_zalo_')) return true;
-            return false;
-          });
-          
-          if (posted.length > 0) {
-            console.log(`📊 [LoadPostedZalo] Loaded ${posted.length} from SERVER (csmUserData)`);
-            if (posted.length > 0) {
-              console.log(`   📌 Latest: ${posted[0]?.content_preview?.substring(0, 50)}... (${new Date(posted[0]?.timestamp).toLocaleString()})`);
-            }
-            return posted;
-          }
-        }
-      } catch (e) {
-        console.warn(`⚠️ [LoadPostedZalo] Server load error:`, e.message);
-      }
+    // ✅ PRIORITY 1: Dedicated runtime state (decoupled from user_address)
+    const runtime = ensureZaloRuntimeMigrated();
+    const runtimePosted = Array.isArray(runtime?.postedMessages) ? runtime.postedMessages : [];
+    if (runtimePosted.length > 0) {
+      const posted = runtimePosted
+        .filter(isPostedZaloItem)
+        .sort((a, b) => (Number(b?.timestamp || 0) - Number(a?.timestamp || 0)));
+      console.log(`📊 [LoadPostedZalo] Loaded ${posted.length} from runtime storage`);
+      return posted;
     }
-    
-    // ✅ PRIORITY 2: Fallback to localStorage
-    console.log(`⚠️ [LoadPostedZalo] Server không có data, fallback localStorage...`);
-    
-    // ✅ PRIORITY 3: Fallback to localStorage (old format)
+
+    // ✅ PRIORITY 2: Backward fallback from compact legacy key
     const raw = localStorage.getItem('zalo_posted_messages');
     if (raw) {
       try {
@@ -9737,7 +9771,13 @@ function loadPostedZaloMessages() {
             }
             return m;
           });
-          console.log(`📊 [LoadPostedZalo] Loaded ${posted.length} from localStorage (FALLBACK)`);
+          const migrated = ensureZaloRuntimeMigrated();
+          migrated.postedMessages = decompacted
+            .filter(isPostedZaloItem)
+            .sort((a, b) => (Number(b?.timestamp || 0) - Number(a?.timestamp || 0)))
+            .slice(0, Math.max(500, Number(ZALO_POSTED_LIMIT) || 1000));
+          writeZaloRuntimeState(migrated);
+          console.log(`📊 [LoadPostedZalo] Loaded ${posted.length} from legacy backup and migrated to runtime storage`);
           return decompacted;
         }
       } catch (e) {
@@ -9782,7 +9822,106 @@ const ZALO_POSTED_STATS_RUNTIME = {
   flushTimer: null,
   flushing: false,
   lastFlushAt: 0,
+  pendingEvents: 0,
+  firstDirtyAt: 0,
 };
+
+function getZaloRuntimeIdentityKey() {
+  try {
+    const user = window.csmCurrentUser || {};
+    const appId = String(user.app_id || window?.seft?.app_id || 'csm');
+    const userKey = String(
+      user.id
+      || user.user_id
+      || user.account_id
+      || user.email
+      || user.username
+      || user.phone_number
+      || user.phoneNumber
+      || 'anonymous'
+    ).trim().toLowerCase();
+    return `${appId}:${userKey}`;
+  } catch {
+    return 'csm:anonymous';
+  }
+}
+
+function getZaloRuntimeStorageKey() {
+  return `${ZALO_RUNTIME_STORAGE_PREFIX}:${getZaloRuntimeIdentityKey()}`;
+}
+
+function getDefaultZaloRuntimeState() {
+  return {
+    version: ZALO_RUNTIME_STORAGE_VERSION,
+    postedMessages: [],
+    postedStats: [],
+    migratedLegacy: false,
+    updatedAt: Date.now(),
+  };
+}
+
+function readZaloRuntimeState() {
+  try {
+    const raw = localStorage.getItem(getZaloRuntimeStorageKey());
+    if (!raw) return getDefaultZaloRuntimeState();
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return getDefaultZaloRuntimeState();
+
+    return {
+      version: Number(parsed.version || ZALO_RUNTIME_STORAGE_VERSION),
+      postedMessages: Array.isArray(parsed.postedMessages) ? parsed.postedMessages : [],
+      postedStats: Array.isArray(parsed.postedStats) ? parsed.postedStats : [],
+      migratedLegacy: !!parsed.migratedLegacy,
+      updatedAt: Number(parsed.updatedAt || 0),
+    };
+  } catch (e) {
+    console.warn('⚠️ [ZaloRuntime] read failed:', e?.message || e);
+    return getDefaultZaloRuntimeState();
+  }
+}
+
+function writeZaloRuntimeState(state = {}) {
+  try {
+    const payload = {
+      version: ZALO_RUNTIME_STORAGE_VERSION,
+      postedMessages: Array.isArray(state.postedMessages) ? state.postedMessages : [],
+      postedStats: Array.isArray(state.postedStats) ? state.postedStats : [],
+      migratedLegacy: !!state.migratedLegacy,
+      updatedAt: Date.now(),
+    };
+    localStorage.setItem(getZaloRuntimeStorageKey(), JSON.stringify(payload));
+    return true;
+  } catch (e) {
+    console.warn('⚠️ [ZaloRuntime] write failed:', e?.message || e);
+    return false;
+  }
+}
+
+function ensureZaloRuntimeMigrated() {
+  try {
+    const runtime = readZaloRuntimeState();
+    if (runtime.migratedLegacy) return runtime;
+
+    const legacy = getRawDataOptionUserSnapshot();
+    const legacyArr = Array.isArray(legacy) ? legacy : [];
+    const legacyPosted = legacyArr.filter(isPostedZaloItem);
+    const legacyStats = legacyArr.filter(isPostedZaloStatsItem);
+
+    if (runtime.postedMessages.length === 0 && legacyPosted.length > 0) {
+      runtime.postedMessages = legacyPosted;
+    }
+    if (runtime.postedStats.length === 0 && legacyStats.length > 0) {
+      runtime.postedStats = legacyStats;
+    }
+
+    runtime.migratedLegacy = true;
+    writeZaloRuntimeState(runtime);
+    return runtime;
+  } catch (e) {
+    console.warn('⚠️ [ZaloRuntime] migration failed:', e?.message || e);
+    return readZaloRuntimeState();
+  }
+}
 
 function prunePostedZaloStatsRows(stats = []) {
   const rows = Array.isArray(stats) ? stats : [];
@@ -9803,8 +9942,9 @@ function loadPostedZaloStats() {
       return ZALO_POSTED_STATS_RUNTIME.cache;
     }
 
-    const allData = getRawDataOptionUserSnapshot();
-    const rawStats = (Array.isArray(allData) ? allData : [])
+    const runtime = ensureZaloRuntimeMigrated();
+    const sourceStats = Array.isArray(runtime?.postedStats) ? runtime.postedStats : [];
+    const rawStats = sourceStats
       .filter(isPostedZaloStatsItem)
       .map((item) => ({
         id: item.id,
@@ -9832,35 +9972,13 @@ function savePostedZaloStats(statsItems = [], opts = {}) {
     ZALO_POSTED_STATS_RUNTIME.cache = stats;
     ZALO_POSTED_STATS_RUNTIME.dirty = false;
 
-    const allData = getRawDataOptionUserSnapshot();
-    const others = (Array.isArray(allData) ? allData : [])
-      .filter((item) => !isPostedZaloItem(item) && !isPostedZaloStatsItem(item));
-
-    const finalData = [...others, ...stats];
-
     if (opts.skipPersist) {
       return;
     }
 
-    if (window.csmUserData && typeof window.csmUserData.set === 'function') {
-      window.csmUserData.set(finalData, function(success, error) {
-        if (!success) {
-          console.warn('⚠️ [PostedStats] save failed:', error);
-        }
-      });
-      return;
-    }
-
-    if (!CSM_ALLOW_LOCAL_DATAOPTIONUSER_CACHE) {
-      return;
-    }
-
-    // Fallback best-effort để không mất dữ liệu nếu csmUserData unavailable
-    try {
-      localStorage.setItem('dataOptionUser', JSON.stringify(finalData));
-    } catch (e) {
-      console.warn('⚠️ [PostedStats] localStorage fallback failed:', e?.message || e);
-    }
+    const runtime = ensureZaloRuntimeMigrated();
+    runtime.postedStats = stats;
+    writeZaloRuntimeState(runtime);
   } catch (e) {
     console.warn('⚠️ [PostedStats] save error:', e?.message || e);
   }
@@ -9868,15 +9986,42 @@ function savePostedZaloStats(statsItems = [], opts = {}) {
 
 function schedulePostedZaloStatsFlush(reason = 'auto') {
   if (ZALO_POSTED_STATS_RUNTIME.flushTimer) return;
+
+  const now = Date.now();
+  const firstDirtyAt = Number(ZALO_POSTED_STATS_RUNTIME.firstDirtyAt || 0);
+  const pendingEvents = Number(ZALO_POSTED_STATS_RUNTIME.pendingEvents || 0);
+  const dirtyAge = firstDirtyAt > 0 ? (now - firstDirtyAt) : 0;
+
+  let waitMs = ZALO_POSTED_STATS_FLUSH_INTERVAL_MS;
+  if (pendingEvents >= ZALO_POSTED_STATS_FLUSH_MIN_DELTA) {
+    waitMs = 5000;
+  }
+  if (dirtyAge >= ZALO_POSTED_STATS_FLUSH_MAX_WAIT_MS) {
+    waitMs = 0;
+  }
+
   ZALO_POSTED_STATS_RUNTIME.flushTimer = setTimeout(() => {
     ZALO_POSTED_STATS_RUNTIME.flushTimer = null;
     flushPostedZaloStatsNow(reason);
-  }, ZALO_POSTED_STATS_FLUSH_INTERVAL_MS);
+  }, waitMs);
 }
 
 function flushPostedZaloStatsNow(reason = 'manual') {
   if (ZALO_POSTED_STATS_RUNTIME.flushing) return;
   if (!ZALO_POSTED_STATS_RUNTIME.dirty) return;
+
+  const forceFlush = ['manual', 'pagehide', 'beforeunload', 'stop-scanner'].includes(String(reason));
+  const now = Date.now();
+  const firstDirtyAt = Number(ZALO_POSTED_STATS_RUNTIME.firstDirtyAt || 0);
+  const dirtyAge = firstDirtyAt > 0 ? (now - firstDirtyAt) : 0;
+  const pendingEvents = Number(ZALO_POSTED_STATS_RUNTIME.pendingEvents || 0);
+
+  if (!forceFlush
+    && pendingEvents < ZALO_POSTED_STATS_FLUSH_MIN_DELTA
+    && dirtyAge < ZALO_POSTED_STATS_FLUSH_MAX_WAIT_MS) {
+    schedulePostedZaloStatsFlush('defer');
+    return;
+  }
 
   ZALO_POSTED_STATS_RUNTIME.flushing = true;
   try {
@@ -9885,6 +10030,8 @@ function flushPostedZaloStatsNow(reason = 'manual') {
       : loadPostedZaloStats();
     savePostedZaloStats(current);
     ZALO_POSTED_STATS_RUNTIME.lastFlushAt = Date.now();
+    ZALO_POSTED_STATS_RUNTIME.pendingEvents = 0;
+    ZALO_POSTED_STATS_RUNTIME.firstDirtyAt = 0;
     console.log(`💾 [PostedStats] Flushed ${current.length} group rows (${reason})`);
   } finally {
     ZALO_POSTED_STATS_RUNTIME.flushing = false;
@@ -9926,6 +10073,10 @@ function recordPostedZaloStats(groupName, config_id = null, increment = 1, ts = 
     }
 
     ZALO_POSTED_STATS_RUNTIME.cache = prunePostedZaloStatsRows(stats);
+    if (!ZALO_POSTED_STATS_RUNTIME.dirty) {
+      ZALO_POSTED_STATS_RUNTIME.firstDirtyAt = Date.now();
+    }
+    ZALO_POSTED_STATS_RUNTIME.pendingEvents = Number(ZALO_POSTED_STATS_RUNTIME.pendingEvents || 0) + inc;
     ZALO_POSTED_STATS_RUNTIME.dirty = true;
     schedulePostedZaloStatsFlush('record');
   } catch (e) {
@@ -9985,90 +10136,29 @@ function savePostedZaloMessages(postedMessages) {
     }
     
     const compactedData = messagesToSave.map(compactPostedMessage);
-    
-    // ✅ PRIORITY 1: Save to server via csmUserData.set()
-    if (window.csmUserData && typeof window.csmUserData.set === 'function') {
-      try {
-        const allData = getRawDataOptionUserSnapshot();
-        const otherData = Array.isArray(allData)
-          ? allData.filter(item => !isPostedZaloItem(item))
-          : [];
-        
-        const finalData = [...otherData, ...messagesToSave];
-        
-        console.log(`💾 [SavePostedZalo] Saving ${messagesToSave.length} messages to SERVER...`);
-        
-        window.csmUserData.set(finalData, function(success, error) {
-          if (success) {
-            console.log(`✅ [SavePostedZalo] SERVER save successful!`);
-            // Backup to localStorage (compacted)
-            try {
-              const size = new Blob([JSON.stringify(compactedData)]).size;
-              if (size < 500000) {
-                localStorage.setItem('zalo_posted_messages', JSON.stringify(compactedData));
-                console.log(`✅ [SavePostedZalo] localStorage backup: ${size} bytes`);
-              } else {
-                console.warn(`⚠️ [SavePostedZalo] Data too large for localStorage (${size} bytes)`);
-              }
-            } catch (e) {
-              if (e.name === 'QuotaExceededError') {
-                console.warn(`⚠️ [SavePostedZalo] localStorage quota exceeded`);
-                try {
-                  localStorage.removeItem('zalo_posted_messages');
-                  localStorage.setItem('zalo_posted_messages', JSON.stringify(compactedData.slice(0, 50)));
-                } catch (e2) {
-                  console.warn(`⚠️ [SavePostedZalo] Cleanup failed:`, e2.message);
-                }
-              }
-            }
-          } else {
-            console.warn(`⚠️ [SavePostedZalo] SERVER save failed:`, error);
-            // Fallback
-            try {
-              const size = new Blob([JSON.stringify(compactedData)]).size;
-              if (size < 500000) {
-                localStorage.setItem('zalo_posted_messages', JSON.stringify(compactedData));
-                console.log(`💾 [SavePostedZalo] Saved to localStorage (${size} bytes) as fallback`);
-              }
-            } catch (e) {
-              if (e.name === 'QuotaExceededError') {
-                console.warn(`⚠️ [SavePostedZalo] localStorage quota exceeded - keeping only 50 records`);
-                try {
-                  localStorage.removeItem('zalo_posted_messages');
-                  localStorage.setItem('zalo_posted_messages', JSON.stringify(compactedData.slice(0, 50)));
-                } catch (e2) {
-                  console.warn(`⚠️ [SavePostedZalo] Cannot save:`, e2.message);
-                }
-              }
-            }
-          }
-        });
-      } catch (e) {
-        console.warn(`⚠️ [SavePostedZalo] Error with csmUserData:`, e.message);
+
+    const runtime = ensureZaloRuntimeMigrated();
+    runtime.postedMessages = messagesToSave
+      .filter(isPostedZaloItem)
+      .sort((a, b) => (Number(b?.timestamp || 0) - Number(a?.timestamp || 0)))
+      .slice(0, maxMessages);
+    writeZaloRuntimeState(runtime);
+
+    // Keep compact backup key for backward compatibility
+    try {
+      const size = new Blob([JSON.stringify(compactedData)]).size;
+      if (size < 500000) {
+        localStorage.setItem('zalo_posted_messages', JSON.stringify(compactedData));
+      } else {
+        localStorage.setItem('zalo_posted_messages', JSON.stringify(compactedData.slice(0, 50)));
       }
-    } else {
-      // csmUserData not available, fallback to localStorage only
-      console.log(`⚠️ [SavePostedZalo] csmUserData not available, using localStorage fallback`);
-      try {
-        const size = new Blob([JSON.stringify(compactedData)]).size;
-        if (size < 500000) {
-          localStorage.setItem('zalo_posted_messages', JSON.stringify(compactedData));
-          console.log(`💾 [SavePostedZalo] Saved to localStorage (${size} bytes)`);
-        } else {
-          console.warn(`⚠️ [SavePostedZalo] Data too large (${size} bytes), keeping only 50 records`);
+    } catch (e) {
+      if (e.name === 'QuotaExceededError') {
+        try {
+          localStorage.removeItem('zalo_posted_messages');
           localStorage.setItem('zalo_posted_messages', JSON.stringify(compactedData.slice(0, 50)));
-        }
-      } catch (e) {
-        if (e.name === 'QuotaExceededError') {
-          console.warn(`⚠️ [SavePostedZalo] localStorage quota exceeded, trying with 50 records...`);
-          try {
-            localStorage.removeItem('zalo_posted_messages');
-            localStorage.setItem('zalo_posted_messages', JSON.stringify(compactedData.slice(0, 50)));
-          } catch (e2) {
-            console.error(`❌ [SavePostedZalo] Failed to save even 50 records:`, e2.message);
-          }
-        } else {
-          console.warn(`⚠️ [SavePostedZalo] localStorage save failed:`, e.message);
+        } catch (e2) {
+          console.warn(`⚠️ [SavePostedZalo] Cannot save compact backup:`, e2.message);
         }
       }
     }
@@ -10363,6 +10453,16 @@ async function lookupPostedHashesViaServer(candidateHashes = [], config_id = nul
       }
     }
 
+    const runtimePosted = loadPostedZaloMessages();
+    for (const item of (Array.isArray(runtimePosted) ? runtimePosted : [])) {
+      if (config_id && item?.config_id !== config_id) continue;
+      const hash = String(item?.hash || '').trim();
+      if (hash && candidateSet.has(hash)) {
+        matched.add(hash);
+        if (matched.size >= candidateSet.size) break;
+      }
+    }
+
     console.log(`📡 [ServerPostedCheck] Matched ${matched.size}/${candidateSet.size} hashes (config: ${config_id || 'default'})`);
     return matched;
   } catch (e) {
@@ -10405,11 +10505,94 @@ async function filterNotPostedMessagesViaServer(messages, config_id = null) {
 const ZALO_DEDUP_GUARD = {
   SERVER_CACHE_TTL_MS: 20000,
   serverHashCache: new Map(),
+  serverImageCache: new Map(),
+  localImageSigCache: new Map(),
   runtimePostedByConfig: new Map(),
   normalizeConfigKey(configId) {
     return String(configId || 'default').trim() || 'default';
   }
 };
+
+function getZaloImageSigStorageKey() {
+  return `${ZALO_IMAGE_SIG_STORAGE_PREFIX}:${getZaloRuntimeIdentityKey()}`;
+}
+
+function readPostedImageSigStore() {
+  try {
+    const raw = localStorage.getItem(getZaloImageSigStorageKey());
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writePostedImageSigStore(store = {}) {
+  try {
+    localStorage.setItem(getZaloImageSigStorageKey(), JSON.stringify(store));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function getLocalPostedImageSigSetForConfig(configId = null) {
+  const key = ZALO_DEDUP_GUARD.normalizeConfigKey(configId);
+  const cached = ZALO_DEDUP_GUARD.localImageSigCache.get(key);
+  if (cached instanceof Set) {
+    return cached;
+  }
+
+  const store = readPostedImageSigStore();
+  const rows = Array.isArray(store?.[key]) ? store[key] : [];
+  const set = new Set();
+  for (const row of rows) {
+    const sig = normalizeImageSignature(row?.sig || row);
+    if (sig) set.add(sig);
+  }
+  ZALO_DEDUP_GUARD.localImageSigCache.set(key, set);
+  return set;
+}
+
+function persistLocalPostedImageSigSetForConfig(configId = null, sigSet = new Set()) {
+  const key = ZALO_DEDUP_GUARD.normalizeConfigKey(configId);
+  const set = sigSet instanceof Set ? sigSet : new Set();
+  const rows = Array.from(set)
+    .filter(Boolean)
+    .slice(-ZALO_IMAGE_SIG_LIMIT_PER_CONFIG)
+    .map((sig) => ({ sig, ts: Date.now() }));
+
+  const store = readPostedImageSigStore();
+  store[key] = rows;
+  writePostedImageSigStore(store);
+}
+
+function markRuntimePostedImageSignature(configId, signature) {
+  const sig = normalizeImageSignature(signature);
+  if (!sig) return;
+
+  const key = ZALO_DEDUP_GUARD.normalizeConfigKey(configId);
+  const set = getLocalPostedImageSigSetForConfig(key);
+  if (!set.has(sig)) {
+    set.add(sig);
+    if (set.size > ZALO_IMAGE_SIG_LIMIT_PER_CONFIG) {
+      const all = Array.from(set);
+      const trimmed = new Set(all.slice(-ZALO_IMAGE_SIG_LIMIT_PER_CONFIG));
+      ZALO_DEDUP_GUARD.localImageSigCache.set(key, trimmed);
+      persistLocalPostedImageSigSetForConfig(key, trimmed);
+      return;
+    }
+    persistLocalPostedImageSigSetForConfig(key, set);
+  }
+}
+
+function hasRuntimePostedImageSignature(configId, signature) {
+  const sig = normalizeImageSignature(signature);
+  if (!sig) return false;
+  const set = getLocalPostedImageSigSetForConfig(configId);
+  return set.has(sig);
+}
 
 function markRuntimePostedHash(configId, hash) {
   const cleanHash = String(hash || '').trim();
@@ -10454,6 +10637,13 @@ async function getServerPostedHashSetForConfig(configId = null, opts = {}) {
       if (hash) hashSet.add(hash);
     }
 
+    const runtimePosted = loadPostedZaloMessages();
+    for (const item of (Array.isArray(runtimePosted) ? runtimePosted : [])) {
+      if (configId && item?.config_id !== configId) continue;
+      const hash = String(item?.hash || '').trim();
+      if (hash) hashSet.add(hash);
+    }
+
     ZALO_DEDUP_GUARD.serverHashCache.set(key, { fetchedAt: now, hashSet });
     return hashSet;
   } catch (e) {
@@ -10462,8 +10652,55 @@ async function getServerPostedHashSetForConfig(configId = null, opts = {}) {
   }
 }
 
+async function getServerPostedImageSetForConfig(configId = null, opts = {}) {
+  const key = ZALO_DEDUP_GUARD.normalizeConfigKey(configId);
+  const forceRefresh = !!opts.forceRefresh;
+  const now = Date.now();
+  const cacheEntry = ZALO_DEDUP_GUARD.serverImageCache.get(key);
+
+  if (!forceRefresh && cacheEntry && (now - cacheEntry.fetchedAt) < ZALO_DEDUP_GUARD.SERVER_CACHE_TTL_MS) {
+    return cacheEntry.imageSet;
+  }
+
+  try {
+    const server = await fetchDataOptionUserFromServerAsync();
+    const source = Array.isArray(server?.data) && server.data.length > 0
+      ? server.data
+      : getRawDataOptionUserSnapshot();
+
+    const imageSet = new Set();
+    const arr = Array.isArray(source) ? source : [];
+    for (const item of arr) {
+      if (!isPostedZaloItem(item)) continue;
+      if (configId && item?.config_id !== configId) continue;
+
+      const sig = normalizeImageSignature(extractFirstImageFromHash(item?.hash || ''));
+      if (sig) imageSet.add(sig);
+    }
+
+    const runtimePosted = loadPostedZaloMessages();
+    for (const item of (Array.isArray(runtimePosted) ? runtimePosted : [])) {
+      if (configId && item?.config_id !== configId) continue;
+      const sig = normalizeImageSignature(extractFirstImageFromHash(item?.hash || ''));
+      if (sig) imageSet.add(sig);
+    }
+
+    const localSigSet = getLocalPostedImageSigSetForConfig(configId);
+    for (const sig of localSigSet) {
+      if (sig) imageSet.add(sig);
+    }
+
+    ZALO_DEDUP_GUARD.serverImageCache.set(key, { fetchedAt: now, imageSet });
+    return imageSet;
+  } catch (e) {
+    console.warn(`⚠️ [DedupGuard] Không thể tải image set đã đăng từ server (${key}):`, e?.message || e);
+    return cacheEntry?.imageSet || new Set();
+  }
+}
+
 async function preflightPostedCheckForMessage(message, configId = null, opts = {}) {
   const hash = buildMessageHash(message);
+  const firstImageSig = getMessageFirstImageSignature(message);
   if (!hash) {
     return { shouldSkip: false, reason: 'no_hash', hash: '' };
   }
@@ -10472,7 +10709,19 @@ async function preflightPostedCheckForMessage(message, configId = null, opts = {
     return { shouldSkip: true, reason: 'runtime_already_posted', hash };
   }
 
+  if (firstImageSig && hasRuntimePostedImageSignature(configId, firstImageSig)) {
+    return { shouldSkip: true, reason: 'runtime_image_already_posted', hash };
+  }
+
   try {
+    if (firstImageSig) {
+      const serverImageSet = await getServerPostedImageSetForConfig(configId, { forceRefresh: !!opts.forceRefresh });
+      if (serverImageSet.has(firstImageSig)) {
+        markRuntimePostedImageSignature(configId, firstImageSig);
+        return { shouldSkip: true, reason: 'server_image_already_posted', hash };
+      }
+    }
+
     const serverHashes = await getServerPostedHashSetForConfig(configId, { forceRefresh: !!opts.forceRefresh });
     if (serverHashes.has(hash)) {
       markRuntimePostedHash(configId, hash);
@@ -10481,6 +10730,17 @@ async function preflightPostedCheckForMessage(message, configId = null, opts = {
   } catch (e) {
     console.warn('⚠️ [DedupGuard] Preflight server check lỗi, fallback local:', e?.message || e);
     const localPosted = loadPostedZaloMessages();
+    if (firstImageSig) {
+      const existedByImage = localPosted.some((p) => {
+        if (configId && p?.config_id !== configId) return false;
+        const sig = normalizeImageSignature(extractFirstImageFromHash(p?.hash || ''));
+        return sig && sig === firstImageSig;
+      });
+      if (existedByImage) {
+        markRuntimePostedImageSignature(configId, firstImageSig);
+        return { shouldSkip: true, reason: 'local_image_already_posted', hash };
+      }
+    }
     const existed = localPosted.some((p) => (!configId || p.config_id === configId) && p.hash === hash);
     if (existed) {
       markRuntimePostedHash(configId, hash);
@@ -11760,6 +12020,10 @@ async function pushSingleMessageToWeb(message, groupName, configId, config, sess
         console.log(`    📝 [Auto Post] Đã record message vào lịch sử`);
       }
       markRuntimePostedHash(configId, preflight.hash);
+      const postedImageSig = getMessageFirstImageSignature(message);
+      if (postedImageSig) {
+        markRuntimePostedImageSignature(configId, postedImageSig);
+      }
     } catch (recordErr) {
       console.error('❌ [Auto Post] recordPostedZaloMessage lỗi:', recordErr);
     }
@@ -19437,24 +19701,9 @@ function saveDataOptionUser(data, callback, options = {}) {
     return;
   }
   
-  // ✅ CRITICAL FIX: Preserve posted messages khi save configs
-  // Lấy posted messages cũ từ storage (nếu có) để merge
-  let postedMessages = [];
-  try {
-    const existing = getRawDataOptionUserSnapshot();
-    if (Array.isArray(existing)) {
-      postedMessages = existing.filter((x) => isPostedZaloItem(x) || isZaloMetaStatsItem(x));
-    }
-    if (postedMessages.length > 0) {
-      console.log(`📌 [SaveDataOptionUser] Preserving ${postedMessages.length} posted messages`);
-    }
-  } catch (e) {
-    console.warn('⚠️ [SaveDataOptionUser] Error loading posted messages:', e);
-  }
-  
-  // Merge: configs + posted messages
-  const finalData = [...dataToSave, ...postedMessages];
-  console.log('📊 Final data to save:', finalData.length, 'items (', dataToSave.length, 'configs +', postedMessages.length, 'posted messages)');
+  // Phase B: chỉ lưu config vào user_address; posted runtime tách sang storage riêng
+  const finalData = [...dataToSave];
+  console.log('📊 Final data to save:', finalData.length, 'config items (runtime posted data is decoupled)');
   
   // Log chi tiết từng config
   dataToSave.forEach((cfg, i) => {

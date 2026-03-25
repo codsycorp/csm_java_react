@@ -748,6 +748,29 @@ ${resolvedContainerSelector} select {
       return [];
     };
 
+    const stableStringify = (value: any): string => {
+      const sortObject = (input: any): any => {
+        if (Array.isArray(input)) {
+          return input.map(sortObject);
+        }
+        if (input && typeof input === "object") {
+          return Object.keys(input)
+            .sort()
+            .reduce((acc: Record<string, any>, key) => {
+              acc[key] = sortObject(input[key]);
+              return acc;
+            }, {});
+        }
+        return input;
+      };
+
+      try {
+        return JSON.stringify(sortObject(value));
+      } catch {
+        return "";
+      }
+    };
+
     const getIdentityCandidates = (currentUser: any) => {
       const candidates = [
         { field: "email", value: currentUser?.email },
@@ -854,6 +877,7 @@ ${resolvedContainerSelector} select {
           try {
             console.log("Dữ liệu user_address đưa vào là:", newUserData);
             let arr = Array.isArray(newUserData) ? newUserData : [];
+            const nextSerialized = stableStringify(arr);
             (window as any).csmCurrentUser = (window as any).csmCurrentUser || {};
             (window as any).csmCurrentUser.user_address = JSON.stringify(arr);
             localStorage.setItem("user_address", JSON.stringify(arr));
@@ -868,6 +892,15 @@ ${resolvedContainerSelector} select {
             const updateData: any = {
               [account.pkField]: account.pkValue
             };
+
+            const currentUserAddress = parseUserAddress(account.row?.user_address);
+            const currentSerialized = stableStringify(currentUserAddress);
+            if (currentSerialized === nextSerialized) {
+              console.log("ℹ️ [csmUserData.set] Skipped database update because user_address is unchanged");
+              if (typeof callback === "function") callback(true);
+              return;
+            }
+
             if (Array.isArray(arr) && arr.length > 0) {
               updateData.user_address = JSON.stringify(arr);
             } else {
