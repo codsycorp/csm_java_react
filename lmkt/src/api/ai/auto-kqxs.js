@@ -559,6 +559,31 @@
     return out;
   }
 
+  function stripVietnamese(input) {
+    var s = String(input || "");
+    if (!s) return "";
+    return s
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/đ/g, "d")
+      .replace(/Đ/g, "D");
+  }
+
+  function normalizeStationTableName(rawName) {
+    var name = String(rawName || "").trim();
+    if (!name) return "";
+    if (name === "TP. HCM") name = "tphcm";
+    if (name === "Thừa T. Huế" || name === "Huế" || name === "Thừa Thiên Huế") name = "thuathienhue";
+    if (name === "Đắc Lắc") name = "daklak";
+    if (name === "Đắc Nông") name = "daknong";
+    name = stripVietnamese(name).toLowerCase().replace(/\s+/g, "");
+    return "kqxs_" + name;
+  }
+
+  function randomId(prefix) {
+    return String(prefix || "id") + "_" + Date.now() + "_" + Math.random().toString(36).slice(2, 10);
+  }
+
   function formatSoChuInput(value) {
     var digits = String(value || "").replace(/\D/g, "").slice(0, 18);
     var pairs = digits.match(/\d{1,2}/g) || [];
@@ -1244,6 +1269,114 @@
       var link = "https://api.phanmemmottrieu.net/scrape-web";
       if (window.hasOwnProperty("process")) link = "";
 
+      function txt(node) {
+        return String((node && (node.innerText || node.textContent)) || "").trim();
+      }
+
+      async function fetchHtml(url) {
+        if (!link) {
+          var raw = await fetch(url, { cache: "no-store" });
+          return await raw.text();
+        }
+        var resp = await fetch(link, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          cache: "no-store",
+          body: JSON.stringify({ link: url })
+        });
+        try {
+          var payload = await resp.json();
+          return String((payload && payload.data) || "");
+        } catch (_e) {
+          return await resp.text();
+        }
+      }
+
+      async function saveRecord(tableName, objKQ) {
+        if (!tableName || !objKQ || !objKQ.field_ngay) return;
+        var data = Object.assign({}, objKQ);
+        data.id = randomId("kqxs");
+        data.thu = days[chuyenNgay(String(data.field_ngay || ""), "yyyymmdd").getDay()];
+        await updateRows({
+          app_id: "kqxs",
+          obj_name: tableName,
+          command: "create",
+          obj_update: data,
+          e_where: { field: "id", type: "eq", value: data.id }
+        });
+      }
+
+      async function parseMienNamTrung(html, isMienTrung) {
+        var docP = new DOMParser().parseFromString(String(html || ""), "text/html");
+        var bangketqua = docP.querySelector(".box_kqxs");
+        if (!bangketqua) return;
+        var ngayNode = bangketqua.querySelector(".ngay");
+        var ngay = txt(ngayNode);
+        if (!ngay) return;
+
+        var tables = bangketqua.querySelectorAll("table.rightcl");
+        for (var ti = 0; ti < tables.length; ti += 1) {
+          var kq = tables[ti];
+          var tinh = txt(kq.querySelector(".tinh"));
+          var tableName = normalizeStationTableName(tinh);
+          if (isMienTrung && (tinh === "Thừa T. Huế" || tinh === "Huế")) {
+            tableName = "kqxs_thuathienhue";
+          }
+          if (!tableName) continue;
+
+          var objKQ = { field_ngay: dateFormat(chuyenNgay(ngay, "dd/mm/yyyy"), "yyyymmdd") };
+          var idx = 0;
+          var rows = kq.querySelectorAll("tr");
+          for (var ri = 0; ri < rows.length; ri += 1) {
+            var cols = rows[ri].querySelectorAll("td");
+            for (var ci = 0; ci < cols.length; ci += 1) {
+              var gs = cols[ci].querySelectorAll("div");
+              for (var gi = 0; gi < gs.length; gi += 1) {
+                var val = txt(gs[gi]);
+                if (!val) continue;
+                idx += 1;
+                if (idx === 1) objKQ.field_dau = val;
+                else if (idx === 18) objKQ.field_duoi = val;
+                else objKQ["field_so" + idx] = val;
+              }
+            }
+          }
+          await saveRecord(tableName, objKQ);
+        }
+      }
+
+      async function parseMienBac(html) {
+        var docP = new DOMParser().parseFromString(String(html || ""), "text/html");
+        var bangketqua = docP.querySelector(".box_kqxs");
+        if (!bangketqua) return;
+        var ngayNode = bangketqua.querySelector("table.bkqtinhmienbac .tngay a");
+        var ngay = txt(ngayNode);
+        if (!ngay) return;
+
+        var tables = bangketqua.querySelectorAll("table.bkqtinhmienbac");
+        for (var ti = 0; ti < tables.length; ti += 1) {
+          var kq = tables[ti];
+          var objKQ = { field_ngay: dateFormat(chuyenNgay(ngay, "dd/mm/yyyy"), "yyyymmdd") };
+          var idx = 28;
+          var rows = kq.querySelectorAll("tr:not(:first-child)");
+          for (var ri = 0; ri < rows.length; ri += 1) {
+            var cols = rows[ri].querySelectorAll("td");
+            for (var ci = 0; ci < cols.length; ci += 1) {
+              var gs = cols[ci].querySelectorAll("div");
+              for (var gi = 0; gi < gs.length; gi += 1) {
+                var val = txt(gs[gi]);
+                if (!val) continue;
+                idx -= 1;
+                if (idx === 27) objKQ.field_duoi = val;
+                else if (idx === 1) objKQ.field_dau = val;
+                else objKQ["field_so" + idx] = val;
+              }
+            }
+          }
+          await saveRecord("kqxs_mienbac", objKQ);
+        }
+      }
+
       var regions = [
         { mien: "MN", url: "https://www.minhngoc.net.vn/ket-qua-xo-so/mien-nam/" + ngay_cap_nhat + ".html" },
         { mien: "MT", url: "https://www.minhngoc.net.vn/ket-qua-xo-so/mien-trung/" + ngay_cap_nhat + ".html" },
@@ -1253,23 +1386,12 @@
       for (var i = 0; i < regions.length; i += 1) {
         var r = regions[i];
         try {
-          var html;
-          if (link) {
-            var resp = await fetch(link, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ link: r.url })
-            });
-            html = await resp.text();
-          } else {
-            var raw = await fetch(r.url, { cache: "no-store" });
-            html = await raw.text();
-          }
-
-          if (html) {
-            // Keep crawler behavior but avoid destructive writes when source format changes.
-            thongbao("Đã tải dữ liệu " + r.mien + " ngày " + dateFormat(ngay_lay, "dd/mm/yyyy"));
-          }
+          var html = await fetchHtml(r.url);
+          if (!html) continue;
+          if (r.mien === "MN") await parseMienNamTrung(html, false);
+          else if (r.mien === "MT") await parseMienNamTrung(html, true);
+          else await parseMienBac(html);
+          thongbao("Đã cập nhật kết quả " + r.mien + " ngày " + dateFormat(ngay_lay, "dd/mm/yyyy"));
         } catch (err) {
           console.log("Failed to fetch page:", err);
         }
@@ -1313,11 +1435,13 @@
 
       setLoading(true);
       var timer = setInterval(function () {
-        if (cur > 0) {
+        if (cur >= 0) {
           var ngay_xo = CongNgay(tu_ngay, cur, "dd/mm/yyyy");
           cap_nhat(chuyenNgay(ngay_xo, "dd/mm/yyyy"));
           cur -= 1;
-          var pct = Math.round(((soNgay - cur) / Math.max(soNgay, 1)) * 100);
+          var totalSteps = Math.max(soNgay + 1, 1);
+          var done = totalSteps - (cur + 1);
+          var pct = Math.round((done / totalSteps) * 100);
           setProgress(Math.max(0, Math.min(100, pct)));
         } else {
           clearInterval(timer);
@@ -2218,12 +2342,12 @@
             onClick: thong_ke_moi,
             loading: loading
           }, tt.btnStatNew),
-          h(Button, {
+          unlock ? h(Button, {
             key: "xsk",
             className: "kqxs-action-btn",
             onClick: function () { return cap_nhat_xskt(chuyenNgay(den_ngay, "dd/mm/yyyy")); },
             loading: loading
-          }, tt.btnUpdateXskt)
+          }, tt.btnUpdateXskt) : null
         ]),
 
         h("div", { style: { marginTop: 8 } }, h(Progress, { percent: progress, status: loading ? "active" : "normal" }))
