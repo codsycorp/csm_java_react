@@ -2054,6 +2054,7 @@
     function themedNumberProps(extra) {
       var base = {
         style: { width: "100%" },
+        controls: false,
         parser: function (v) {
           return String(v == null ? "" : v).replace(/[^\d-]/g, "");
         },
@@ -2126,6 +2127,12 @@
       + ".kqxs-react-auto .ant-tabs-nav-more, .kqxs-react-auto .ant-tabs-nav-more .anticon { color: var(--kqxs-muted, #666) !important; }"
       + ".kqxs-react-auto .ant-tabs-nav-more:hover, .kqxs-react-auto .ant-tabs-nav-more:focus { color: var(--kqxs-primary, #1677ff) !important; }"
       + ".kqxs-react-auto .ant-input, .kqxs-react-auto .ant-input-number, .kqxs-react-auto .ant-input-number-input, .kqxs-react-auto .ant-select-selector, .kqxs-react-auto input, .kqxs-react-auto select, .kqxs-react-auto textarea { background: var(--kqxs-input-bg, #fff) !important; color: var(--kqxs-input-text, #1f1f1f) !important; border-color: var(--kqxs-border, #d9d9d9) !important; }"
+      + ".kqxs-react-auto .ant-input, .kqxs-react-auto .ant-input-number, .kqxs-react-auto .ant-picker, .kqxs-react-auto .ant-select-single .ant-select-selector { min-height: 32px !important; height: 32px !important; border-radius: 6px !important; }"
+      + ".kqxs-react-auto .ant-select-single .ant-select-selector .ant-select-selection-item, .kqxs-react-auto .ant-select-single .ant-select-selector .ant-select-selection-placeholder { line-height: 30px !important; }"
+      + ".kqxs-react-auto .ant-input-number { overflow: hidden !important; }"
+      + ".kqxs-react-auto .ant-input-number .ant-input-number-handler-wrap { display: none !important; }"
+      + ".kqxs-react-auto .ant-input-number-input-wrap { padding-left: 10px !important; padding-right: 10px !important; }"
+      + ".kqxs-react-auto .ant-input-number-input { height: 30px !important; line-height: 30px !important; padding: 0 !important; }"
       + ".kqxs-react-auto .ant-picker { width: 100% !important; background: var(--kqxs-input-bg, #fff) !important; border-color: var(--kqxs-border, #d9d9d9) !important; }"
       + ".kqxs-react-auto .ant-picker-input > input, .kqxs-react-auto .ant-picker .ant-picker-suffix, .kqxs-react-auto .ant-picker .ant-picker-clear { color: var(--kqxs-input-text, #1f1f1f) !important; }"
       + ".kqxs-react-auto .ant-picker:hover, .kqxs-react-auto .ant-picker-focused { border-color: var(--kqxs-primary, #1677ff) !important; box-shadow: 0 0 0 2px color-mix(in srgb, var(--kqxs-primary, #1677ff) 25%, transparent) !important; }"
