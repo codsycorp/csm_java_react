@@ -12,14 +12,23 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 
 @Component
 public class RateLimitingFilter extends OncePerRequestFilter {
     private static final Logger logger = LoggerFactory.getLogger(RateLimitingFilter.class);
-    private static final int MAX_REQUESTS_PER_MINUTE = 20;
-    private static final long WINDOW_MS = 60_000L;
-    private static final long CLEANUP_INTERVAL_MS = 60_000L;
-    private static final long TRACKER_TTL_MS = 10 * 60_000L;
+    @Value("${security.auth-rate-limit.max-requests-per-minute:120}")
+    private int maxRequestsPerMinute;
+
+    @Value("${security.auth-rate-limit.window-ms:60000}")
+    private long windowMs;
+
+    @Value("${security.auth-rate-limit.cleanup-interval-ms:60000}")
+    private long cleanupIntervalMs;
+
+    @Value("${security.auth-rate-limit.tracker-ttl-ms:600000}")
+    private long trackerTtlMs;
+
     private static final String CLIENT_ID_COOKIE = "csm_client_id";
     private static final String CLIENT_ID_HEADER = "X-Client-Id";
     private static final String LOGIN_IDENTIFIER_HEADER = "X-Login-Identifier";
@@ -50,19 +59,19 @@ public class RateLimitingFilter extends OncePerRequestFilter {
 
             UserRateLimit limit = rateLimits.computeIfAbsent(rateLimitKey, k -> new UserRateLimit());
             synchronized (limit) {
-                if (now - limit.windowStart > WINDOW_MS) {
+                if (now - limit.windowStart > windowMs) {
                     limit.windowStart = now;
                     limit.requestCount = 0;
                 }
                 limit.requestCount++;
                 limit.lastAccessAt = now;
-                if (limit.requestCount > MAX_REQUESTS_PER_MINUTE) {
+                if (limit.requestCount > maxRequestsPerMinute) {
                     logger.warn("Rate limit exceeded: key={}, URI={}, UA={}", rateLimitKey, uri, ua);
                     response.setStatus(429);
                     response.getWriter().write("Too many requests. Please try again later.");
                     return;
                 }
-                if (limit.requestCount == MAX_REQUESTS_PER_MINUTE) {
+                if (limit.requestCount == maxRequestsPerMinute) {
                     logger.info("Rate limit warning: key={}, URI={}, UA={}", rateLimitKey, uri, ua);
                 }
             }
@@ -164,10 +173,10 @@ public class RateLimitingFilter extends OncePerRequestFilter {
     }
 
     private void maybeCleanup(long now) {
-        if (now - lastCleanupAt < CLEANUP_INTERVAL_MS) {
+        if (now - lastCleanupAt < cleanupIntervalMs) {
             return;
         }
-        rateLimits.entrySet().removeIf(entry -> now - entry.getValue().lastAccessAt > TRACKER_TTL_MS);
+        rateLimits.entrySet().removeIf(entry -> now - entry.getValue().lastAccessAt > trackerTtlMs);
         lastCleanupAt = now;
     }
 

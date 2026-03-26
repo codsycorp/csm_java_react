@@ -62,6 +62,59 @@ function buildMenuTree(flatMenus: ApiMenuItemType[], parentId: string = ""): Api
 	return result;
 }
 
+function normalizeAccessKey(raw: unknown): string {
+	if (raw == null) return "";
+	return String(raw).trim().toLowerCase();
+}
+
+function buildAllowedPathSet(routesForMenu: AppRouteRecordRaw[]): Set<string> {
+	const pathSet = new Set<string>();
+	const flat = flattenRoutes(routesForMenu);
+	Object.values(flat).forEach((route: any) => {
+		const path = typeof route?.path === "string" ? route.path.trim() : "";
+		if (!path || !path.startsWith("/")) return;
+		pathSet.add(path.toLowerCase());
+	});
+	return pathSet;
+}
+
+function isLegacyAppScopeToken(token: string, appId: string): boolean {
+	if (!token) return false;
+	const appKey = normalizeAccessKey(appId);
+	if (!appKey) return false;
+	return token === appKey || token === `app:${appKey}` || token === `/${appKey}`;
+}
+
+function isMenuAllowedByLegacyAccess(menu: any, allowedKeys: Set<string>, allowedPaths: Set<string>): boolean {
+	const path = normalizeAccessKey(menu?.path || menu?.key);
+	const id = normalizeAccessKey(menu?.id);
+	const name = normalizeAccessKey(menu?.name);
+
+	if (path && allowedPaths.has(path)) return true;
+	if (path && allowedKeys.has(path)) return true;
+	if (id && allowedKeys.has(id)) return true;
+	if (name && allowedKeys.has(name)) return true;
+
+	return false;
+}
+
+function filterMenuTreeByLegacyAccess(items: any[], allowedKeys: Set<string>, allowedPaths: Set<string>): any[] {
+	return (items || []).reduce((acc: any[], item: any) => {
+		const filteredChildren = item?.children && item.children.length > 0
+			? filterMenuTreeByLegacyAccess(item.children, allowedKeys, allowedPaths)
+			: undefined;
+		const selfAllowed = isMenuAllowedByLegacyAccess(item, allowedKeys, allowedPaths);
+		const hasChildren = !!(filteredChildren && filteredChildren.length > 0);
+		if (!selfAllowed && !hasChildren) return acc;
+
+		acc.push({
+			...item,
+			children: hasChildren ? filteredChildren : undefined,
+		});
+		return acc;
+	}, []);
+}
+
 /**
  * Load all database tables from menu tree structure
  * @param menuTree API menu tree
@@ -273,6 +326,26 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 			const effectiveAppId = (appIdParam || "").trim()
 				|| (useUserStore.getState().app_id || "").trim()
 				|| useAppStore.getState().getCurrentAppId();
+			const userMenusPermissions = Array.isArray(userState.menusPermissions) ? userState.menusPermissions : [];
+			const normalizedMenuTokens = userMenusPermissions.map(normalizeAccessKey).filter(Boolean);
+			const hasLegacyAppOnly = normalizedMenuTokens.length > 0
+				&& normalizedMenuTokens.every(token => isLegacyAppScopeToken(token, effectiveAppId));
+			const explicitAllowedKeys = new Set(
+				normalizedMenuTokens.filter(token => !isLegacyAppScopeToken(token, effectiveAppId))
+			);
+			const shouldBypassMenuFilter = isDev || hasLegacyAppOnly || (isAdmin && explicitAllowedKeys.size === 0);
+			const allowedRoutePaths = buildAllowedPathSet(routesForMenu);
+			console.log("[MENU-FILTER] handleAsyncRoutes", {
+				effectiveAppId,
+				roles: userState.roles,
+				isDev,
+				isAdmin,
+				userMenusPermissions,
+				hasLegacyAppOnly,
+				explicitAllowedCount: explicitAllowedKeys.size,
+				allowedRoutePathCount: allowedRoutePaths.size,
+				shouldBypassMenuFilter,
+			});
 			const apiMenuResponse = await fetchNavigationMenus(effectiveAppId);
 			// ...existing code (API menu processing, tree transform, etc)...
 			if (apiMenuResponse?.result?.list && apiMenuResponse.result.list.length > 0) {
@@ -291,18 +364,29 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 				const apiMenus = transformApiMenusToLayoutMenus(apiMenuList as (ApiMenuItemType & { children?: MenuItemType[] })[]);
 				// Giữ auto-setup nếu có auto_code; loại bỏ chỉ khi không có auto_code
 				const filterAutoSetup = (m: any) => !(m.key === "/auto-setup" && !m.auto_code);
+				// isDev hoặc hasLegacyAppOnly (menusPermissions=[appId] = tài khoản chính, full quyền app)
+				// thì bypass filter → hiện toàn bộ menu app
+				// Ngược lại lọc theo các path/id cụ thể trong menusPermissions
+				const filteredByLegacyAccess = shouldBypassMenuFilter
+					? apiMenus
+					: filterMenuTreeByLegacyAccess(
+						apiMenus,
+						explicitAllowedKeys,
+						allowedRoutePaths,
+					);
+				const apiMenusFiltered = filteredByLegacyAccess.filter(m => m.key !== "/system" && m.key !== "/home").filter(filterAutoSetup);
 				if (isDev || isAdmin) {
-					const apiMenusFiltered = apiMenus.filter(m => m.key !== "/system" && m.key !== "/home").filter(filterAutoSetup);
+					// dev/admin luôn có system routes; API business menus đã được filter ở trên
 					wholeMenus = [
 						...(homeMenu ? [homeMenu] : []),
 						...systemMenusFromRoute,
 						...apiMenusFiltered,
 					];
 				} else {
-					const apiMenusFiltered = apiMenus.filter(filterAutoSetup);
+					const shouldShowOnlyHome = hasLegacyAppOnly && apiMenusFiltered.length === 0;
 					wholeMenus = [
 						...(homeMenu ? [homeMenu] : []),
-						...apiMenusFiltered,
+						...(shouldShowOnlyHome ? [] : apiMenusFiltered),
 					];
 				}
 			} else {
@@ -364,8 +448,16 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 				|| useAppStore.getState().getCurrentAppId();
 			const apiMenuResponse = await fetchNavigationMenus(effectiveAppId);
 			const userState = useUserStore.getState();
+			const userMenusPermissions = Array.isArray(userState.menusPermissions) ? userState.menusPermissions : [];
+			const normalizedMenuTokens = userMenusPermissions.map(normalizeAccessKey).filter(Boolean);
+			const hasLegacyAppOnly = normalizedMenuTokens.length > 0
+				&& normalizedMenuTokens.every(token => isLegacyAppScopeToken(token, effectiveAppId));
+			const explicitAllowedKeys = new Set(
+				normalizedMenuTokens.filter(token => !isLegacyAppScopeToken(token, effectiveAppId))
+			);
 			const isDev = resolveDevFlag(devFlag ?? userState.dev, userState.roles);
 			const isAdmin = !isDev && (userState.roles || []).some(r => r.trim().toLowerCase() === 'admin');
+			const shouldBypassMenuFilter = isDev || hasLegacyAppOnly || (isAdmin && explicitAllowedKeys.size === 0);
 			const routesForMenu = (isDev
 				? newRoutes.map(r => r.path === '/system'
 					? {
@@ -389,6 +481,18 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 						}
 						: r)
 					: newRoutes) as AppRouteRecordRaw[];
+			const allowedRoutePaths = buildAllowedPathSet(routesForMenu);
+			console.log("[MENU-FILTER] applyAsyncRoutesFromLogin", {
+				effectiveAppId,
+				roles: userState.roles,
+				isDev,
+				isAdmin,
+				userMenusPermissions,
+				hasLegacyAppOnly,
+				explicitAllowedCount: explicitAllowedKeys.size,
+				allowedRoutePathCount: allowedRoutePaths.size,
+				shouldBypassMenuFilter,
+			});
 			const routeMenus = getMenuItems(routesForMenu);
 			const homeMenu = routeMenus.find(m => m.key === '/home');
 			const systemMenus = routeMenus.filter(m => m.key === '/system');
@@ -407,17 +511,29 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 				
 				const apiMenus = transformApiMenusToLayoutMenus(apiMenuList as (ApiMenuItemType & { children?: MenuItemType[] })[]);
 				const filterAutoSetup = (m: any) => !(m.key === '/auto-setup' && !m.auto_code);
-				const apiMenusFiltered = apiMenus.filter(m => m.key !== '/system' && m.key !== '/home').filter(filterAutoSetup);
+				// isDev hoặc hasLegacyAppOnly (menusPermissions=[appId] = tài khoản chính, full quyền app)
+				// thì bypass filter → hiện toàn bộ menu app
+				// Ngược lại lọc theo các path/id cụ thể trong menusPermissions
+				const filteredByLegacyAccess = shouldBypassMenuFilter
+					? apiMenus
+					: filterMenuTreeByLegacyAccess(
+						apiMenus,
+						explicitAllowedKeys,
+						allowedRoutePaths,
+					);
+				const apiMenusFiltered = filteredByLegacyAccess.filter(m => m.key !== '/system' && m.key !== '/home').filter(filterAutoSetup);
 				if (isDev || isAdmin) {
+					// dev/admin luôn có system routes; API business menus đã được filter ở trên
 					wholeMenus = [
 						...(homeMenu ? [homeMenu] : []),
 						...systemMenus,
 						...apiMenusFiltered,
 					];
 				} else {
+					const shouldShowOnlyHome = hasLegacyAppOnly && apiMenusFiltered.length === 0;
 					wholeMenus = [
 						...(homeMenu ? [homeMenu] : []),
-						...apiMenusFiltered,
+						...(shouldShowOnlyHome ? [] : apiMenusFiltered),
 					];
 				}
 			} else if (isDev || isAdmin) {

@@ -64,6 +64,8 @@ public class RecordManager {
     private static final ConcurrentHashMap<String, Timer> batchFlushTimers = new ConcurrentHashMap<>();
     private static final int BATCH_SIZE = 50;  // Batch updates in groups of 50
     private static final long BATCH_TIMEOUT_MS = 100;  // Or flush after 100ms
+    private static final int DEFAULT_FILTER_TAKE = 500;
+    private static final int MAX_FILTER_TAKE = 5000;
     private static final ScheduledExecutorService batchExecutor = 
         new java.util.concurrent.ScheduledThreadPoolExecutor(
             Math.max(2, Runtime.getRuntime().availableProcessors() / 2),
@@ -2830,7 +2832,8 @@ public class RecordManager {
                 return emptyResult;
             }
 
-            int numToTake = (take != null && take > 0) ? take : 100; // Số lượng bản ghi tối đa cần lấy
+            int requestedTake = (take != null && take > 0) ? take : DEFAULT_FILTER_TAKE;
+            int numToTake = Math.min(requestedTake, MAX_FILTER_TAKE);
             int endIndex = Math.min(startIndex + numToTake, allKeys.size());
             List<String> pageKeys = allKeys.subList(startIndex, endIndex);
             logger.info("✅ filterWithPagination: Extracted {} keys from index {} to {} for this page", pageKeys.size(), startIndex, endIndex);

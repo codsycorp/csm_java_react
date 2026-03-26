@@ -9,7 +9,6 @@ const Menu = lazy(() => import("#src/pages/system/menu"));
 const AdminPage = lazy(() => import("#src/pages/system/admin"));
 const Developer = lazy(() => import("#src/pages/system/developer"));
 const Broadcast = lazy(() => import("#src/pages/system/broadcast"));
-const PermissionMatrix = lazy(() => import("#src/pages/system/permission-matrix"));
 
 const routes: AppRouteRecordRaw[] = [
 	{
@@ -86,18 +85,6 @@ const routes: AppRouteRecordRaw[] = [
 					icon: "BellOutlined",
 					title: "common.menu.broadcast",
 					roles: ["dev"],
-				},
-			},
-			{
-				path: "/system/permission-matrix",
-				Component: PermissionMatrix,
-				handle: {
-					icon: "SafetyOutlined",
-					title: "Permission Matrix",
-					roles: ["admin"],
-					permissions: [
-						"permission:button:view",
-					],
 				},
 			},
 			{

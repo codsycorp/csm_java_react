@@ -23,8 +23,8 @@ import { FormModeContext } from "../form-mode-context";
 const { Title } = Typography;
 
 const FORM_INITIAL_VALUES = {
-	username: "admin",
-	password: "123456789admin",
+	username: "",
+	password: "",
 	remember: true,
 };
 export type PasswordLoginFormType = typeof FORM_INITIAL_VALUES;
@@ -115,29 +115,27 @@ export function PasswordLogin() {
 					
 					// CRITICAL: Always set currentAppId from user's app_id after successful login
 					const redirect = searchParams.get("redirect");
-					if (redirect === "admin") {
-						setCurrentAppId("csm");
-						console.log("[LOGIN] Set appId to 'csm' (admin redirect)");
-					} else {
-						// Always use user's app_id, fallback to "csm" only if not set
-						const userAppId = userInfoResult.app_id || "csm";
-						setCurrentAppId(userAppId);
-						console.log(`[LOGIN] Set appId to '${userAppId}' from user profile`);
-					}
+					const loginAppId = String(loginRes?.result?.app_id || "").trim();
+					const profileAppId = String(userInfoResult.app_id || "").trim();
+					// Keep admin mode behavior, but always use the actual account app_id for menu/data scoping.
+					const resolvedAppId = profileAppId || loginAppId || "csm";
 
-					return { loginRes, userInfoResult };
+					setCurrentAppId(resolvedAppId);
+					useUserStore.setState({ app_id: resolvedAppId });
+					console.log(`[LOGIN] Set appId to '${resolvedAppId}' (resolved), redirect='${redirect || ""}'`);
+
+					return { loginRes, userInfoResult, resolvedAppId };
 				});
 			});
 		})
-		.then(({ loginRes, userInfoResult }) => {
+		.then(({ loginRes, userInfoResult, resolvedAppId }) => {
 				if (isDynamicRoutingEnabled) {
 					const routesFromLogin = loginRes?.result?.asyncRoutes;
 					const devFromLogin = resolveDevFlag(loginRes?.result?.dev ?? userInfoResult.dev, userInfoResult.roles);
-					const appId = useAppStore.getState().currentAppId;
 					if (routesFromLogin && Array.isArray(routesFromLogin) && routesFromLogin.length > 0) {
-						return applyAsyncRoutesFromLogin(routesFromLogin, appId, devFromLogin).then(() => ({ loginRes, userInfoResult }));
+						return applyAsyncRoutesFromLogin(routesFromLogin, resolvedAppId, devFromLogin).then(() => ({ loginRes, userInfoResult }));
 					} else {
-						return handleAsyncRoutes(appId).then(() => ({ loginRes, userInfoResult }));
+						return handleAsyncRoutes(resolvedAppId).then(() => ({ loginRes, userInfoResult }));
 					}
 				}
 				return { loginRes, userInfoResult };

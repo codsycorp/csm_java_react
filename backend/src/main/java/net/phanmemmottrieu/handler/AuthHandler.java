@@ -158,6 +158,7 @@ public class AuthHandler {
             String jwtToken = jwtUtil.generateToken(user.getId(), nextLoginVersion);
             result.put("token", jwtToken);
             result.put("app_token", user.getAppToken());
+            result.put("app_id", user.getAppId());
             result.put("refreshToken", refreshToken);
             result.put("dev", user.getDev()); // Thêm dev flag
 

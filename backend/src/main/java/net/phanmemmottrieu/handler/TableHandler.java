@@ -592,6 +592,20 @@ public class TableHandler {
         return out;
     }
 
+    private Integer parseIntegerParam(Object raw) {
+        if (raw == null) {
+            return null;
+        }
+        if (raw instanceof Number) {
+            return ((Number) raw).intValue();
+        }
+        try {
+            return Integer.parseInt(String.valueOf(raw).trim());
+        } catch (Exception ignore) {
+            return null;
+        }
+    }
+
     private UserAccessContext resolveCurrentUserAccessContext() {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
         if (authentication == null || !authentication.isAuthenticated() || authentication.getPrincipal() == null ||
@@ -868,13 +882,19 @@ public class TableHandler {
 
     private Map<String, Object> handleIndexTableOperation(String appId, Map<String, Object> msg, SearchFilter filters, boolean isUpdate) throws Exception {
         Map<String, Object> filterResult = null;
-        Object takeObj = msg.get("take");
+        Integer take = parseIntegerParam(msg.get("take"));
+        Integer offset = parseIntegerParam(msg.get("offset"));
+        Integer limit = parseIntegerParam(msg.get("limit"));
         Object lastkeyObj = msg.get("lastkey");
 
         // logger.info("Bảng {} chương trình {} có lọc số dòng {} bắt đầu khoá là{}", "index", appId, takeObj, lastkeyObj);
 
-        if (takeObj instanceof Number) {
-            int take = ((Number) takeObj).intValue();
+        if (limit != null && limit > 0) {
+            int safeOffset = Math.max(0, offset != null ? offset : 0);
+            return recordManager.filterWithOffset(appId, "index", filters, safeOffset, limit);
+        }
+
+        if (take != null && take > 0) {
             String lastkey = (lastkeyObj != null) ? lastkeyObj.toString() : null;
 
             return recordManager.filterWithPagination(appId, "index", filters, take, lastkey);
@@ -1285,11 +1305,26 @@ public class TableHandler {
     
     private Map<String, Object> handleSelectTableOperation(String appId, String tblname,Map<String, Object> msg, SearchFilter filters, Map<String, Object> structMap) {
         Map<String, Object> filterResult = null;
-        Object takeObj = msg.get("take");
+        Integer take = parseIntegerParam(msg.get("take"));
+        Integer offset = parseIntegerParam(msg.get("offset"));
+        Integer limit = parseIntegerParam(msg.get("limit"));
         Object lastkeyObj = msg.get("lastkey");
+
+        if (limit != null && limit > 0) {
+            int safeOffset = Math.max(0, offset != null ? offset : 0);
+            Map<String, Object> paginated = recordManager.filterWithOffset(appId, tblname, filters, safeOffset, limit);
+            Object rowsObj = paginated.get("rows");
+            if (rowsObj instanceof List<?>) {
+                @SuppressWarnings("unchecked")
+                List<Map<String, Object>> rows = (List<Map<String, Object>>) rowsObj;
+                autoFillPermissionSchemaValues(appId, tblname, rows, true);
+                rows = applyDataScopeRowFilter(tblname, rows, resolveCurrentUserAccessContext());
+                paginated.put("rows", rows);
+            }
+            return paginated;
+        }
         
-        if (takeObj instanceof Number) {
-            int take = ((Number) takeObj).intValue();  // hỗ trợ Integer, Long, Double, v.v.
+        if (take != null && take > 0) {
             String lastkey = (lastkeyObj != null) ? lastkeyObj.toString() : null;
         
             // logger.info("Bảng {} chương trình {} lọc với take = {}, lastkey = {}, full params = {}",

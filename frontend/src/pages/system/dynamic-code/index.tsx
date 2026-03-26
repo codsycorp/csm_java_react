@@ -22,7 +22,8 @@ import { useTranslation, I18nextProvider } from "react-i18next";
 import { useParams, useLocation, useNavigate } from "react-router";
 import * as React from "react";
 import * as ReactDOM from "react-dom/client";
-import { Spin, Empty, Alert, notification, Table, Tabs, Button, Input, Select, Card, Space, Popconfirm, ConfigProvider } from "antd";
+import { Spin, Empty, Alert, notification, Table, Tabs, Button, Input, InputNumber, Select, Card, Space, Popconfirm, ConfigProvider, DatePicker, Row, Col, Switch, Progress, Tag } from "antd";
+import dayjs from "dayjs";
 import i18nInstance from "i18next";
 
 import { customAntdDarkTheme, customAntdLightTheme } from "#src/styles/theme/antd/antd-theme";
@@ -1015,7 +1016,7 @@ ${resolvedContainerSelector} select {
       Object.defineProperty(window, 'antd', {
         get() {
           return {
-            notification, Table, Tabs, Button, Input, Select, Card, Space, Popconfirm, ConfigProvider, CsmDynamicGrid,
+            notification, Table, Tabs, Button, Input, InputNumber, Select, Card, Space, Popconfirm, ConfigProvider, DatePicker, Row, Col, Switch, Progress, Tag, dayjs, CsmDynamicGrid,
             CsmCrmWorkspace,
             CsmKanbanBoard,
             antdLocale: ANT_DESIGN_LOCALE[language],

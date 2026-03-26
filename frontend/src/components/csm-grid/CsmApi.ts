@@ -615,13 +615,15 @@ export async function getTableData<T>(params: {
 	where?: Where
 	take?: number
 	lastkey?: any
+	offset?: number
+	limit?: number
 }) {
 	const TABLE_DATA_TIMEOUT_MS = 120000;
 	// In-memory cache to avoid repeated identical requests
 	const cacheKey = (() => {
 		let whereKey = "";
 		try { whereKey = params.where ? JSON.stringify(params.where) : ""; } catch { whereKey = String(params.where); }
-		return `${params.app_id}::${params.obj_name}::${whereKey}::${params.take ?? ''}::${params.lastkey ?? ''}`;
+		return `${params.app_id}::${params.obj_name}::${whereKey}::${params.take ?? ''}::${params.lastkey ?? ''}::${params.offset ?? ''}::${params.limit ?? ''}`;
 	})();
 	const globalAny = window as any;
 	if (!globalAny.__csm_getTableDataCache) {
@@ -639,6 +641,8 @@ export async function getTableData<T>(params: {
 		...(params.where ? { e_where: params.where } : {}),
 		...(params.take ? { take: params.take } : {}),
 		...(params.lastkey ? { lastkey: params.lastkey } : {}),
+		...(Number.isInteger(params.offset) ? { offset: params.offset } : {}),
+		...(Number.isInteger(params.limit) ? { limit: params.limit } : {}),
 	};
 	const promise = request
 		.post<ApiListResponse<T>>("get-table-data", {
