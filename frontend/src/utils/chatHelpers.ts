@@ -3,7 +3,7 @@
  * Các functions này sử dụng CsmApi để gọi backend
  */
 
-import { getChatHistory, getChatHistoryGuest, getChatHistoryApp, getChatGuestsList, markChatAsReadGuest, markChatAsReadAll, deleteChatMessage } from '#src/components/csm-grid/CsmApi';
+import { getChatHistory, getChatHistoryGuest, getChatHistoryApp, getChatGuestsList, getChatHistoryWithAppId, markChatAsReadGuest, markChatAsReadAll, deleteChatMessage } from '#src/components/csm-grid/CsmApi';
 
 /**
  * Load danh sách tất cả apps từ sys_apps (cho CSM admin broadcast)
@@ -47,9 +47,11 @@ export async function loadGuestChatHistory(appId: string, guestPhone: string, li
 /**
  * Load lịch sử chat cho admin (theo room)
  */
-export async function loadAdminChatHistory(room: string, limit: number = 100) {
+export async function loadAdminChatHistory(room: string, limit: number = 100, appId?: string) {
   try {
-    const response = await getChatHistory(room, limit);
+    const response = appId
+      ? await getChatHistoryWithAppId(room, appId, limit)
+      : await getChatHistory(room, limit);
     if (response?.success && response.data?.messages) {
       return response.data.messages;
     }

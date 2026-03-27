@@ -86,6 +86,17 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
   
   // Ref to track loadHistory callback to avoid circular dependency
   const loadHistoryRef = useRef<typeof loadHistory | null>(null);
+
+  const emitAutoOpenChat = useCallback((detail: {
+    targetRoom: string;
+    appId: string;
+    username?: string;
+    guestPhone?: string;
+    source: 'message' | 'notification';
+  }) => {
+    if (typeof window === 'undefined') return;
+    window.dispatchEvent(new CustomEvent('csm-chat-auto-open', { detail }));
+  }, []);
   
   // Helper: Get localStorage key
   const getStorageKey = useCallback((room: string) => {
@@ -319,6 +330,17 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
         
         const updated = [...roomMessages, msg];
         saveToLocalStorage(targetRoom, updated);
+
+        const isOwnMessage = !msg.isAdmin && !msg.userId && (msg.username === guestPhone || msg.guestPhone === guestPhone);
+        if (!activeChats.includes(targetRoom) && !isOwnMessage) {
+          emitAutoOpenChat({
+            targetRoom,
+            appId,
+            username: msg.username,
+            guestPhone: msg.guestPhone,
+            source: 'message',
+          });
+        }
         
         // Update unread count if chat not active (messages from admin)
         if (!activeChats.includes(targetRoom) && msg.guestPhone !== guestPhone) {
@@ -369,6 +391,16 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
         
         const updated = [...roomMessages, msg];
         saveToLocalStorage(targetRoom, updated);
+
+        if (!activeChats.includes(targetRoom)) {
+          emitAutoOpenChat({
+            targetRoom,
+            appId,
+            username: msg.username,
+            guestPhone: msg.guestPhone,
+            source: 'notification',
+          });
+        }
         
         // Update unread count
         if (!activeChats.includes(targetRoom)) {
@@ -424,7 +456,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
       socket.off?.("notification", handleNotification);
       socket.off?.("user_typing", handleTyping);
     };
-  }, [socket, guestPhone, appId, activeChats, saveToLocalStorage, loadHistory]);
+  }, [socket, guestPhone, appId, activeChats, saveToLocalStorage, loadHistory, emitAutoOpenChat]);
   
   // Load initial history khi connect - LMKT: Guest only
   useEffect(() => {

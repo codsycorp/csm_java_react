@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -38,7 +39,6 @@ import net.phanmemmottrieu.model.UrlSubmissionQueue;
 import net.phanmemmottrieu.model.UrlSubmissionHistory;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -1692,7 +1692,7 @@ public class ApiSpringController {
         }
 
         String room = (String) params.get("room");
-        String appId = (String) params.get("appId");
+        String appId = resolveAppIdParam(params);
         int limit = 50;
         
         // Handle limit parameter - convert to int, handle both Number and String types
@@ -1762,7 +1762,29 @@ public class ApiSpringController {
         if (semicolonIdx > 0) {
             normalized = normalized.substring(0, semicolonIdx);
         }
-        return normalized.isEmpty() ? "csm" : normalized;
+        if (normalized.isEmpty() || isPhoneLikeValue(normalized)) {
+            return "csm";
+        }
+        return normalized;
+    }
+
+    private String resolveAppIdParam(Map<String, Object> params) {
+        Object appIdRaw = params.get("appId");
+        if (appIdRaw == null) {
+            appIdRaw = params.get("app_id");
+        }
+        if (appIdRaw == null) {
+            return null;
+        }
+        String appId = String.valueOf(appIdRaw).trim();
+        if (appId.isEmpty() || isPhoneLikeValue(appId)) {
+            return null;
+        }
+        return appId;
+    }
+
+    private boolean isPhoneLikeValue(String value) {
+        return value != null && value.matches("^\\+?\\d[\\d\\s-]{7,}$");
     }
 
     /**
@@ -1781,7 +1803,7 @@ public class ApiSpringController {
             return;
         }
 
-        String appId = (String) params.get("appId");
+        String appId = resolveAppIdParam(params);
         String guestPhone = (String) params.get("guestPhone");
         int limit = params.containsKey("limit") ? ((Number) params.get("limit")).intValue() : 50;
 
@@ -1837,7 +1859,7 @@ public class ApiSpringController {
             return;
         }
 
-        String appId = (String) params.get("appId");
+        String appId = resolveAppIdParam(params);
         int limit = params.containsKey("limit") ? ((Number) params.get("limit")).intValue() : 200;
 
         if (appId == null || appId.isEmpty()) {
@@ -1933,7 +1955,7 @@ public class ApiSpringController {
         // Log authentication status for debugging
         logger.info("[CHAT-GUESTS-LIST] Authentication status: {}", isAuthenticated ? "authenticated" : "anonymous");
 
-        String appId = (String) params.get("appId");
+        String appId = resolveAppIdParam(params);
 
         if (appId == null || appId.isEmpty()) {
             response.set("code", 400);
@@ -2031,7 +2053,7 @@ public class ApiSpringController {
             return;
         }
 
-        String appId = (String) params.get("appId");
+        String appId = resolveAppIdParam(params);
         String guestPhone = (String) params.get("guestPhone");
 
         if (appId == null || appId.isEmpty() || guestPhone == null || guestPhone.isEmpty()) {
@@ -2081,21 +2103,30 @@ public class ApiSpringController {
     }
 
     // Phương thức trợ giúp để xây dựng ResponseEntity từ StandardResponse cho API
-    private ResponseEntity<String> buildResponseEntity(StandardResponse response) {
+    private ResponseEntity<?> buildResponseEntity(StandardResponse response) {
         try {
             if (response.hasBinaryBody()) {
                 String contentType = response.getContentType();
                 if (contentType == null || contentType.isEmpty()) {
                     contentType = MediaType.APPLICATION_OCTET_STREAM_VALUE;
                 }
+                HttpHeaders headers = new HttpHeaders();
+                headers.setContentType(MediaType.parseMediaType(contentType));
+                headers.add("X-Accel-Buffering", "no");
+                headers.add("Cache-Control", "no-store, no-cache, max-age=0, must-revalidate, no-transform");
                 return ResponseEntity.status(HttpStatus.OK)
-                        .contentType(MediaType.parseMediaType(contentType))
-                        .body(new String(response.getBinaryBody(), StandardCharsets.UTF_8));
+                        .headers(headers)
+                        .body(response.getBinaryBody());
             } else {
-                // API responses are always JSON
+                // Serialize directly to bytes to reduce GC/memory overhead for very large payloads.
+                byte[] payload = objectMapper.writeValueAsBytes(response.getPropertiesMap());
+                HttpHeaders headers = new HttpHeaders();
+                headers.setContentType(MediaType.APPLICATION_JSON);
+                headers.add("X-Accel-Buffering", "no");
+                headers.add("Cache-Control", "no-store, no-cache, max-age=0, must-revalidate, no-transform");
                 return ResponseEntity.status(HttpStatus.OK)
-                        .contentType(MediaType.APPLICATION_JSON) // Spring tự thêm charset=UTF-8
-                        .body(response.toString()); // StandardResponse.toString() trả về JSON
+                        .headers(headers)
+                        .body(payload);
             }
         } catch (Exception e) {
             logger.error("❌ Lỗi khi xây dựng phản hồi API: {}", e.getMessage(), e);

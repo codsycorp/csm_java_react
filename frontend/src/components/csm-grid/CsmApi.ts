@@ -374,6 +374,29 @@ export async function getChatHistory(room: string, limit: number = 50): Promise<
 	return response as GoogleIndexResponse;
 }
 
+export async function getChatHistoryWithAppId(
+	room: string,
+	appId: string,
+	limit: number = 50
+): Promise<GoogleIndexResponse> {
+	let response: any;
+	try {
+		response = await request
+			.post("chat-history", {
+				json: { room, appId, app_id: appId, limit },
+				ignoreLoading: true,
+			})
+			.json();
+	} catch (error: any) {
+		response = {
+			success: false,
+			message: error?.message || "Chat history error",
+			error,
+		};
+	}
+	return response as GoogleIndexResponse;
+}
+
 /**
  * Lấy lịch sử chat của guest user (không cần authentication)
  * @param appId Application ID

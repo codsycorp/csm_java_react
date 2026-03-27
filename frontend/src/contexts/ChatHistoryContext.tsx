@@ -89,6 +89,17 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
   
   // Ref to track loadHistory callback to avoid circular dependency
   const loadHistoryRef = useRef<typeof loadHistory | null>(null);
+
+  const emitAutoOpenChat = useCallback((detail: {
+    targetRoom: string;
+    appId: string;
+    username?: string;
+    guestPhone?: string;
+    source: 'message' | 'notification';
+  }) => {
+    if (typeof window === 'undefined') return;
+    window.dispatchEvent(new CustomEvent('csm-chat-auto-open', { detail }));
+  }, []);
   
   // Helper: Get localStorage key
   const getStorageKey = useCallback((room: string) => {
@@ -159,7 +170,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
           }
         } else if (room === 'csm') {
           // Load system chat (room = "csm" is the system room name)
-          history = await (window as any).loadAdminChatHistory?.(room, 100) || [];
+          history = await (window as any).loadAdminChatHistory?.(room, 100, appId) || [];
           if (history && Array.isArray(history) && history.length > 0) {
             console.log(`📥 [ChatHistory] Admin loaded ${history.length} messages from server for system room`);
             setMessages(prev => ({ ...prev, [room]: history }));
@@ -179,7 +190,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
           }
         } else {
           // Load by room (backward compatibility for other rooms)
-          history = await (window as any).loadAdminChatHistory?.(room, 100) || [];
+          history = await (window as any).loadAdminChatHistory?.(room, 100, appId) || [];
           if (history && Array.isArray(history) && history.length > 0) {
             console.log(`📥 [ChatHistory] Admin loaded ${history.length} messages from server for room ${room}`);
             setMessages(prev => ({ ...prev, [room]: history }));
@@ -440,6 +451,20 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
         
         const updated = [...roomMessages, msg];
         saveToLocalStorage(targetRoom, updated);
+
+        const isOwnMessage = isGuest
+          ? (!msg.isAdmin && !msg.userId && (msg.username === guestPhone || msg.guestPhone === guestPhone))
+          : (msg.userId === user.userId);
+
+        if (!activeChats.includes(targetRoom) && !isOwnMessage) {
+          emitAutoOpenChat({
+            targetRoom,
+            appId,
+            username: msg.username,
+            guestPhone: msg.guestPhone,
+            source: 'message',
+          });
+        }
         
         // Update unread count if chat not active
         if (!activeChats.includes(targetRoom) && msg.userId !== user.userId) {
@@ -493,6 +518,16 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
         
         const updated = [...roomMessages, msg];
         saveToLocalStorage(targetRoom, updated);
+
+        if (!activeChats.includes(targetRoom)) {
+          emitAutoOpenChat({
+            targetRoom,
+            appId,
+            username: msg.username,
+            guestPhone: msg.guestPhone,
+            source: 'notification',
+          });
+        }
         
         // Update unread count for broadcast notifications
         if (!activeChats.includes(targetRoom)) {
@@ -608,7 +643,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
       socket.off?.("chat_read_update", handleReadUpdate);
       socket.off?.("user_typing", handleTyping);
     };
-  }, [socket, isGuest, guestPhone, appId, user.userId, activeChats, saveToLocalStorage, loadHistory]);
+  }, [socket, isGuest, guestPhone, appId, user.userId, activeChats, saveToLocalStorage, loadHistory, emitAutoOpenChat]);
   
   // Load initial history khi connect
   useEffect(() => {

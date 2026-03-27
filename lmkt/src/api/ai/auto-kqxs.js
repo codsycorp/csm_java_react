@@ -260,10 +260,14 @@
       btnResult: "Kết Quả",
       btnStat: "Thống Kê",
       btnStatNew: "Thống Kê Mới",
+      btnExportExcel: "Xuất Excel",
       btnUpdateXskt: "Cập nhật XSKT",
       tabResult: "Kết Quả",
       tabStat: "Thống Kê",
       noResult: "Chưa có dữ liệu kết quả",
+      exportNoData: "Không có dữ liệu để xuất",
+      exportDone: "Đã xuất dữ liệu thành công",
+      exportFallbackCsv: "Không có thư viện XLSX, đã xuất CSV thay thế",
       kqByChuc: "Kết quả theo hàng chục và đơn vị",
       colChuc: "Hàng Chục",
       colSo: "Số",
@@ -311,10 +315,14 @@
       btnResult: "Results",
       btnStat: "Statistics",
       btnStatNew: "New Statistics",
+      btnExportExcel: "Export Excel",
       btnUpdateXskt: "Update XSKT",
       tabResult: "Results",
       tabStat: "Statistics",
       noResult: "No result data",
+      exportNoData: "No data to export",
+      exportDone: "Export completed",
+      exportFallbackCsv: "XLSX library not found, exported CSV instead",
       kqByChuc: "Results by tens and units",
       colChuc: "Tens",
       colSo: "Number",
@@ -362,10 +370,14 @@
       btnResult: "开奖结果",
       btnStat: "统计",
       btnStatNew: "新统计",
+      btnExportExcel: "导出 Excel",
       btnUpdateXskt: "更新 XSKT",
       tabResult: "开奖结果",
       tabStat: "统计",
       noResult: "暂无结果数据",
+      exportNoData: "没有可导出的数据",
+      exportDone: "导出成功",
+      exportFallbackCsv: "未找到 XLSX 库，已改为导出 CSV",
       kqByChuc: "按十位和个位显示结果",
       colChuc: "十位",
       colSo: "号码",
@@ -588,6 +600,130 @@
     var digits = String(value || "").replace(/\D/g, "").slice(0, 18);
     var pairs = digits.match(/\d{1,2}/g) || [];
     return pairs.join("-");
+  }
+
+  function sanitizeSheetName(name) {
+    var out = String(name || "Sheet").replace(/[\\\/?*\[\]:]/g, " ").trim();
+    if (!out) out = "Sheet";
+    if (out.length > 31) out = out.slice(0, 31);
+    return out;
+  }
+
+  function toExcelCellValue(value) {
+    if (value == null) return "";
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "boolean") return value ? "TRUE" : "FALSE";
+    return String(value);
+  }
+
+  function makeWorksheetFromAoa(aoa, XLSX) {
+    var ws = {};
+    var maxCols = 0;
+    for (var r = 0; r < aoa.length; r += 1) {
+      var row = Array.isArray(aoa[r]) ? aoa[r] : [];
+      if (row.length > maxCols) maxCols = row.length;
+      for (var c = 0; c < row.length; c += 1) {
+        var raw = toExcelCellValue(row[c]);
+        var cell = { v: raw, t: typeof raw === "number" ? "n" : "s" };
+        ws[XLSX.utils.encode_cell({ r: r, c: c })] = cell;
+      }
+    }
+    if (aoa.length === 0) {
+      ws.A1 = { v: "", t: "s" };
+      ws["!ref"] = "A1";
+      return ws;
+    }
+    ws["!ref"] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: Math.max(aoa.length - 1, 0), c: Math.max(maxCols - 1, 0) } });
+    return ws;
+  }
+
+  function isUsableXlsx(XLSX) {
+    return !!(XLSX
+      && XLSX.utils
+      && typeof XLSX.writeFile === "function"
+      && typeof XLSX.utils.encode_cell === "function"
+      && typeof XLSX.utils.encode_range === "function");
+  }
+
+  function loadScriptFile(src) {
+    return new Promise(function (resolve, reject) {
+      if (!src) return reject(new Error("Empty script src"));
+
+      var existed = document.querySelector('script[src="' + src + '"]');
+      if (existed) {
+        if (isUsableXlsx(window.XLSX)) return resolve(window.XLSX);
+        existed.addEventListener("load", function () { resolve(window.XLSX); }, { once: true });
+        existed.addEventListener("error", function () { reject(new Error("Failed to load script: " + src)); }, { once: true });
+        return;
+      }
+
+      var script = document.createElement("script");
+      script.src = src;
+      script.async = true;
+      script.dataset.kqxsXlsx = "1";
+      script.onload = function () {
+        resolve(window.XLSX);
+      };
+      script.onerror = function () {
+        reject(new Error("Failed to load script: " + src));
+      };
+      document.head.appendChild(script);
+    });
+  }
+
+  var __kqxsXlsxLoaderPromise = null;
+  async function ensureXlsxLibrary() {
+    if (isUsableXlsx(window.XLSX)) return window.XLSX;
+    if (__kqxsXlsxLoaderPromise) return __kqxsXlsxLoaderPromise;
+
+    var candidates = [
+      "/assets/xlsx.js",
+      "./assets/xlsx.js",
+      "assets/xlsx.js",
+      "/backend/csm_datas/public/assets/xlsx.js"
+    ];
+
+    __kqxsXlsxLoaderPromise = (async function () {
+      var seen = {};
+      for (var i = 0; i < candidates.length; i += 1) {
+        var src = String(candidates[i] || "").trim();
+        if (!src || seen[src]) continue;
+        seen[src] = true;
+        try {
+          await loadScriptFile(src);
+          if (isUsableXlsx(window.XLSX)) return window.XLSX;
+        } catch (e) {
+          // Try next candidate
+        }
+      }
+      throw new Error("XLSX script unavailable");
+    })();
+
+    try {
+      return await __kqxsXlsxLoaderPromise;
+    } finally {
+      __kqxsXlsxLoaderPromise = null;
+    }
+  }
+
+  function downloadCsvFromAoa(fileName, aoa) {
+    var lines = (aoa || []).map(function (row) {
+      return (row || []).map(function (cell) {
+        var txt = String(cell == null ? "" : cell);
+        if (/[",\n]/.test(txt)) txt = '"' + txt.replace(/"/g, '""') + '"';
+        return txt;
+      }).join(",");
+    });
+    var csv = "\uFEFF" + lines.join("\n");
+    var blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   }
 
   function KQXSApp() {
@@ -2037,6 +2173,226 @@
     var firstTabKey = thongkeTabs.length ? thongkeTabs[0].key : "";
     var activeTabKey = (subTab && thongkeTabs.some(function (it) { return it.key === subTab; })) ? subTab : firstTabKey;
 
+    function getKyHeaders() {
+      var out = [];
+      var totalKy = Math.max(1, Number(so_ky || 1));
+      if (Number(sap_xep) === 0) {
+        for (var i = 1; i <= totalKy; i += 1) out.push(String(i));
+      } else {
+        for (var j = totalKy; j >= 1; j -= 1) out.push(String(j));
+      }
+      return out;
+    }
+
+    function getPrizeRowsForCard(dai) {
+      function getV(f) { return String((dai && dai.data && dai.data[f]) || "-"); }
+      var mienMb = mien === "MB";
+      var rows = [
+        { label: "Giải ĐB", vals: [getV("field_duoi")] },
+        { label: "Giải nhất", vals: [mienMb ? getV("field_so26") : getV("field_so17")] },
+        { label: "Giải nhì", vals: mienMb ? [getV("field_so24"), getV("field_so25")] : [getV("field_so16")] },
+        { label: "Giải ba", vals: mienMb ? [getV("field_so18"), getV("field_so19"), getV("field_so20"), getV("field_so21"), getV("field_so22"), getV("field_so23")] : [getV("field_so15"), getV("field_so14")] },
+        { label: "Giải tư", vals: mienMb ? [getV("field_so14"), getV("field_so15"), getV("field_so16"), getV("field_so17")] : [getV("field_so13"), getV("field_so12"), getV("field_so11"), getV("field_so10"), getV("field_so9"), getV("field_so8"), getV("field_so7")] },
+        { label: "Giải năm", vals: mienMb ? [getV("field_so8"), getV("field_so9"), getV("field_so10"), getV("field_so11"), getV("field_so12"), getV("field_so13")] : [getV("field_so6")] },
+        { label: "Giải sáu", vals: mienMb ? [getV("field_so5"), getV("field_so6"), getV("field_so7")] : [getV("field_so5"), getV("field_so4"), getV("field_so3")] },
+        { label: "Giải bảy", vals: mienMb ? [getV("field_dau"), getV("field_so2"), getV("field_so3"), getV("field_so4")] : [getV("field_so2")] }
+      ];
+      if (!mienMb) rows.push({ label: "Giải 8", vals: [getV("field_dau")] });
+      return rows;
+    }
+
+    function flattenLaySoKyExportRows(pairRows) {
+      var out = [];
+      var maxCot = Math.max(1, Number(lay_so_ky || 1));
+      (pairRows || []).forEach(function (r) {
+        if (r && r.so1) {
+          var left = { so: r.so1, ket_qua: r.kq1, to_mau: r.to_mau1 ? 1 : 0 };
+          for (var i = 1; i <= maxCot; i += 1) left["c_" + i] = r["c1_" + i];
+          out.push(left);
+        }
+        if (r && r.so2) {
+          var right = { so: r.so2, ket_qua: r.kq2, to_mau: r.to_mau2 ? 1 : 0 };
+          for (var j = 1; j <= maxCot; j += 1) right["c_" + j] = r["c2_" + j];
+          out.push(right);
+        }
+      });
+      return out;
+    }
+
+    function flattenPairExportRows(pairRows, valueField) {
+      var out = [];
+      (pairRows || []).forEach(function (r) {
+        if (r && r.so1) out.push({ so: r.so1, value: r[valueField + "1"] });
+        if (r && r.so2) out.push({ so: r.so2, value: r[valueField + "2"] });
+      });
+      return out;
+    }
+
+    function buildExportPayload() {
+      var ymd = dateFormat(new Date(), "yyyymmdd");
+      var payload = { fileName: "kqxs_" + ymd, sheets: [] };
+
+      if (activeAction === "kq") {
+        var aoaPrize = [["Đài", "Ngày", "Giải", "Kết quả"]];
+        (ds_dai_chon_xem_ket_qua || []).forEach(function (dai) {
+          var rows = getPrizeRowsForCard(dai);
+          rows.forEach(function (r) {
+            aoaPrize.push([dai.ten_dai || "", dai.ngay || "", r.label, (r.vals || []).join(" | ")]);
+          });
+        });
+        if (aoaPrize.length > 1) {
+          payload.sheets.push({ name: "Ket qua", aoa: aoaPrize });
+        }
+
+        if ((xu_ly_ket_qua || []).length) {
+          var headers = [tt.colChuc].concat((ds_dai_chon_xem_ket_qua || []).map(function (d) { return d.ten_dai; }));
+          var aoaKq = [headers];
+          (xu_ly_ket_qua || []).forEach(function (r) {
+            var line = [r.chuc];
+            (ds_dai_chon_xem_ket_qua || []).forEach(function (d) {
+              line.push(r["dai_" + d.stt] || "");
+            });
+            aoaKq.push(line);
+          });
+          payload.sheets.push({ name: "Theo chuc", aoa: aoaKq });
+        }
+
+        payload.fileName = "kqxs_ket_qua_" + ymd;
+        return payload;
+      }
+
+      if (!activeTabKey) return payload;
+
+      if (activeTabKey === "lich_su_so_chu") {
+        var aoaLichSu = [["STT", "Ngày", "Số kỳ"]];
+        (lichSuSoChuRows || []).forEach(function (r) {
+          aoaLichSu.push([r.stt, r.ngay, r.so_ky]);
+        });
+        if (aoaLichSu.length > 1) payload.sheets.push({ name: "Lich su so chu", aoa: aoaLichSu });
+        payload.fileName = "kqxs_lich_su_so_chu_" + ymd;
+        return payload;
+      }
+
+      var combo = "";
+      if (activeTabKey.indexOf("tk_") === 0) combo = activeTabKey.slice(3);
+      if (activeTabKey.indexOf("kq_") === 0) combo = activeTabKey.slice(3);
+      var grp = thongkeGroups.find(function (g) { return String(g.combo || "") === String(combo || ""); });
+      if (!grp) return payload;
+
+      if (activeTabKey.indexOf("tk_") === 0) {
+        var kyHeaders = getKyHeaders();
+        var aoaMain = [[tt.colTong, tt.colDem, tt.colKxh, tt.colMaxKxh, tt.colSo].concat(kyHeaders)];
+        (grp.rows || []).forEach(function (r) {
+          var line = [r.tong, r.dem, r.kxh, r.lich_su, r.so];
+          kyHeaders.forEach(function (kyLabel) {
+            var idx = Number(kyLabel) - 1;
+            line.push(Number((r.ky && r.ky[idx]) || 0));
+          });
+          aoaMain.push(line);
+        });
+        payload.sheets.push({ name: "Thong ke", aoa: aoaMain });
+        payload.fileName = "kqxs_thong_ke_" + combo.replace(/,/g, "-") + "_" + ymd;
+        return payload;
+      }
+
+      if (activeTabKey.indexOf("kq_") === 0) {
+        if (activeAction === "tkm") {
+          var aoaTkm = [[tt.colTong, tt.colDem, tt.colKxh, tt.colMaxKxh, tt.colSo, "Kết quả"]];
+          (grp.rows || []).filter(function (r) { return !!(r && r.thoa_man); }).forEach(function (r) {
+            aoaTkm.push([r.tong, r.dem, r.kxh, r.lich_su, r.so, r.bieu_dien || ""]);
+          });
+          if (aoaTkm.length > 1) payload.sheets.push({ name: "KQ moi", aoa: aoaTkm });
+        } else {
+          var hasMatrix = Number(dem_lon_hon) > 0 && (grp.matrixRows || []).length;
+          if (hasMatrix) {
+            var head = [];
+            for (var g = 1; g <= grp.matrixGroupCount; g += 1) {
+              head.push("Số " + g, "T " + g, "SL " + g, "KXH " + g, "Tô màu " + g);
+            }
+            var aoaMatrix = [head];
+            (grp.matrixRows || []).forEach(function (r) {
+              var line = [];
+              for (var gg = 1; gg <= grp.matrixGroupCount; gg += 1) {
+                line.push(r["so" + gg] || "", r["tong" + gg] || "", r["dem" + gg] || "", r["kxh" + gg] || "", r["hl" + gg] ? 1 : 0);
+              }
+              aoaMatrix.push(line);
+            });
+            if (aoaMatrix.length > 1) payload.sheets.push({ name: "KQ matrix", aoa: aoaMatrix });
+          } else {
+            if (Number(lay_so_ky) > 0 && (grp.laySoKyRows || []).length) {
+              var maxCot = Math.max(1, Number(lay_so_ky || 1));
+              var hdr = ["Số"];
+              for (var i = 1; i <= maxCot; i += 1) hdr.push("Kỳ " + i);
+              hdr.push("KQ", "Tô màu");
+              var aoaLaySoKy = [hdr];
+              flattenLaySoKyExportRows(grp.laySoKyRows).forEach(function (r) {
+                var line = [r.so];
+                for (var c = 1; c <= maxCot; c += 1) line.push(r["c_" + c]);
+                line.push(r.ket_qua, r.to_mau);
+                aoaLaySoKy.push(line);
+              });
+              if (aoaLaySoKy.length > 1) payload.sheets.push({ name: "Lay so ky", aoa: aoaLaySoKy });
+            }
+
+            if (Number(kxh_phai_lonhon) > 0 && (grp.kxhPairRows || []).length) {
+              var aoaKxh = [[tt.colSo, tt.colKxh]];
+              flattenPairExportRows(grp.kxhPairRows, "val").forEach(function (r) {
+                aoaKxh.push([r.so, r.value]);
+              });
+              if (aoaKxh.length > 1) payload.sheets.push({ name: "KQ KXH", aoa: aoaKxh });
+            }
+
+            if (Number(dem_nho_hon) > 0 && (grp.demNhoPairRows || []).length) {
+              var aoaDem = [[tt.colSo, tt.colDem]];
+              flattenPairExportRows(grp.demNhoPairRows, "val").forEach(function (r) {
+                aoaDem.push([r.so, r.value]);
+              });
+              if (aoaDem.length > 1) payload.sheets.push({ name: "KQ dem", aoa: aoaDem });
+            }
+          }
+        }
+
+        payload.fileName = "kqxs_kq_" + combo.replace(/,/g, "-") + "_" + ymd;
+      }
+
+      return payload;
+    }
+
+    async function xuatExcel() {
+      var payload = buildExportPayload();
+      if (!payload || !payload.sheets || payload.sheets.length === 0) {
+        canhbao(tt.exportNoData);
+        return;
+      }
+
+      var baseName = payload.fileName || ("kqxs_" + dateFormat(new Date(), "yyyymmdd"));
+      var XLSX = window.XLSX;
+
+      if (!isUsableXlsx(XLSX)) {
+        try {
+          XLSX = await ensureXlsxLibrary();
+        } catch (err) {
+          XLSX = null;
+        }
+      }
+
+      if (isUsableXlsx(XLSX)) {
+        var wb = { SheetNames: [], Sheets: {} };
+        payload.sheets.forEach(function (sheet, idx) {
+          var sheetName = sanitizeSheetName(sheet && sheet.name ? sheet.name : ("Sheet" + (idx + 1)));
+          var ws = makeWorksheetFromAoa((sheet && sheet.aoa) || [[""]], XLSX);
+          wb.SheetNames.push(sheetName);
+          wb.Sheets[sheetName] = ws;
+        });
+        XLSX.writeFile(wb, baseName + ".xlsx");
+        thongbao(tt.exportDone);
+        return;
+      }
+
+      downloadCsvFromAoa(baseName + ".csv", payload.sheets[0].aoa || [[""]]);
+      canhbao(tt.exportFallbackCsv);
+    }
+
     function themedSelectProps(extra) {
       var base = {
         style: { width: "100%" },
@@ -2193,9 +2549,20 @@
       + ".kqxs-react-auto .kqxs-result-row { align-items: stretch; }"
       + ".kqxs-react-auto .kqxs-result-row > .ant-col { display: flex; }"
       + ".kqxs-react-auto .kqxs-result-col .ant-card { height: 100%; }"
-      + ".kqxs-react-auto .kqxs-result-card .ant-card-head { background: color-mix(in srgb, var(--kqxs-primary, #1677ff) 7%, var(--kqxs-card-bg, #fff)) !important; }"
-      + ".kqxs-react-auto .kqxs-result-card .ant-card-body { padding: 10px 12px !important; }"
-      + ".kqxs-react-auto .kqxs-result-tag { min-width: 32px; text-align: center; margin-bottom: 2px; }"
+      + ".kqxs-react-auto .kqxs-result-card { border: 1px solid var(--kqxs-border, #d9d9d9) !important; }"
+      + ".kqxs-react-auto .kqxs-result-card .ant-card-head { background: color-mix(in srgb, var(--kqxs-primary, #1677ff) 5%, var(--kqxs-card-bg, #fff)) !important; border-bottom-color: var(--kqxs-border, #d9d9d9) !important; }"
+      + ".kqxs-react-auto .kqxs-result-card .ant-card-body { padding: 8px 0 !important; }"
+      + ".kqxs-react-auto .kqxs-result-card .ant-card-head-title { font-weight: 700; text-align: center; font-size: 28px; }"
+      + ".kqxs-react-auto .kqxs-kqline { display: grid; grid-template-columns: 105px 1fr; align-items: center; min-height: 46px; padding: 0 12px; }"
+      + ".kqxs-react-auto .kqxs-kqline:nth-child(even) { background: color-mix(in srgb, var(--kqxs-input-bg, #fff) 60%, var(--kqxs-page-bg, #f5f7fb)); }"
+      + ".kqxs-react-auto .kqxs-kqlabel { font-size: 13px; color: var(--kqxs-muted, #666); font-weight: 700; text-align: left; }"
+      + ".kqxs-react-auto .kqxs-kqvals { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 16px; padding: 4px 0; }"
+      + ".kqxs-react-auto .kqxs-kqvals-many { gap: 4px 10px; }"
+      + ".kqxs-react-auto .kqxs-kqval { font-weight: 800; letter-spacing: 0.5px; color: var(--kqxs-text, #1f1f1f); line-height: 1.05; font-size: 38px; text-align: center; min-width: 64px; }"
+      + ".kqxs-react-auto .kqxs-kqval-small { font-size: 24px; min-width: 56px; }"
+      + ".kqxs-react-auto .kqxs-kqval-db { color: #ff5f5f; font-size: 50px; }"
+      + ".kqxs-react-auto .kqxs-kqval-g8 { color: #ff9f43; font-size: 38px; }"
+      + ".kqxs-react-auto .kqxs-kq-pane .ant-table-title { text-align: center; text-transform: uppercase; }"
       // Tô màu hàng thỏa mãn — giống Vue's to_mau class (màu vàng #cc9108)
       + ".kqxs-react-auto .ant-table-tbody > tr.to_mau > td { background: " + (chon_mau || "#cc9108") + " !important; }"
       + ".kqxs-react-auto .ant-table-tbody > tr.to_mau:hover > td { background: " + (chon_mau || "#cc9108") + " !important; }"
@@ -2361,23 +2728,14 @@
       ]),
 
       h(Card, { key: "tabs", size: "small", style: { marginTop: 12, background: theme.cardBg, color: theme.text, borderColor: theme.border } }, [
+        h("div", { style: { display: "flex", justifyContent: "flex-end", marginBottom: 8 } },
+          h(Button, { className: "kqxs-action-btn", onClick: xuatExcel, disabled: loading }, tt.btnExportExcel)
+        ),
         activeAction === "kq"
           ? h("div", null, [
               ds_dai_chon_xem_ket_qua.length
                 ? h(Row, { gutter: 12, className: "kqxs-result-row" }, ds_dai_chon_xem_ket_qua.map(function (dai) {
-                    function getV(f) { return String((dai.data && dai.data[f]) || "-"); }
-                    var mienMb = mien === "MB";
-                    var prizeRows = [
-                      { label: "Giải ĐB", vals: [getV("field_duoi")], color: "red" },
-                      { label: "Giải nhất", vals: [mienMb ? getV("field_so26") : getV("field_so17")], color: "gold" },
-                      { label: "Giải nhì", vals: mienMb ? [getV("field_so24"), getV("field_so25")] : [getV("field_so16")] },
-                      { label: "Giải ba", vals: mienMb ? [getV("field_so18"), getV("field_so19"), getV("field_so20"), getV("field_so21"), getV("field_so22"), getV("field_so23")] : [getV("field_so15"), getV("field_so14")] },
-                      { label: "Giải tư", vals: mienMb ? [getV("field_so14"), getV("field_so15"), getV("field_so16"), getV("field_so17")] : [getV("field_so13"), getV("field_so12"), getV("field_so11"), getV("field_so10"), getV("field_so9"), getV("field_so8"), getV("field_so7")] },
-                      { label: "Giải năm", vals: mienMb ? [getV("field_so8"), getV("field_so9"), getV("field_so10"), getV("field_so11"), getV("field_so12"), getV("field_so13")] : [getV("field_so6")] },
-                      { label: "Giải sáu", vals: mienMb ? [getV("field_so5"), getV("field_so6"), getV("field_so7")] : [getV("field_so5"), getV("field_so4"), getV("field_so3")] },
-                      { label: "Giải bảy", vals: mienMb ? [getV("field_dau"), getV("field_so2"), getV("field_so3"), getV("field_so4")] : [getV("field_so2")] }
-                    ];
-                    if (!mienMb) prizeRows.push({ label: "Giải 8", vals: [getV("field_dau")] });
+                    var prizeRows = getPrizeRowsForCard(dai);
 
                     var colSpan = 24;
                     var daiCount = Math.max(1, ds_dai_chon_xem_ket_qua.length);
@@ -2386,11 +2744,18 @@
                     return h(Col, { xs: 24, md: colSpan, className: "kqxs-result-col", key: String(dai.stt) },
                       h(Card, { className: "kqxs-result-card", size: "small", title: (dai.ten_dai || "") + " - " + (dai.ngay || "") },
                         prizeRows.map(function (row) {
-                          return h(Row, { key: row.label, gutter: 6, style: { marginBottom: 6 } }, [
-                            h(Col, { span: 8 }, h("b", null, row.label)),
-                            h(Col, { span: 16 }, h(Space, { wrap: true }, row.vals.map(function (v, idx) {
-                              return h(Tag, { className: "kqxs-result-tag", key: row.label + "_" + idx, color: row.color || undefined, style: row.color === "red" ? { fontSize: 18 } : null }, v);
-                            })))
+                          var vals = (row.vals || []).filter(function (v) { return String(v || "").trim() !== ""; });
+                          var many = vals.length >= 5;
+                          return h("div", { key: row.label, className: "kqxs-kqline" }, [
+                            h("div", { className: "kqxs-kqlabel" }, row.label),
+                            h("div", { className: "kqxs-kqvals" + (many ? " kqxs-kqvals-many" : "") }, vals.map(function (v, idx) {
+                              var small = vals.length >= 5;
+                              var valueClass = "kqxs-kqval"
+                                + (small ? " kqxs-kqval-small" : "")
+                                + (row.label === "Giải ĐB" ? " kqxs-kqval-db" : "")
+                                + (row.label === "Giải 8" ? " kqxs-kqval-g8" : "");
+                              return h("span", { className: valueClass, key: row.label + "_" + idx }, v);
+                            }))
                           ]);
                         })
                       )

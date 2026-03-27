@@ -9,7 +9,7 @@ import { BellOutlined } from "@ant-design/icons";
 import { useToggle } from "ahooks";
 import { Popover, theme, Divider } from "antd";
 import { clsx } from "clsx";
-import { useMemo, useState, useEffect, useCallback } from "react";
+import { useMemo, useState, useEffect, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { createUseStyles } from "react-jss";
 import { useAppStore } from "#src/store/app";
@@ -87,9 +87,11 @@ interface Props extends ButtonProps {
 
 
 export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications, setNotifications, onEventChange, ...restProps }) => {
+	const AUTO_OPEN_COOLDOWN_MS = 30_000;
 	const [open, action] = useToggle();
 	const [input, setInput] = useState("");
 	const [openChats, setOpenChats] = useState<{room: string, username: string}[]>([]);
+	const autoOpenCooldownRef = useRef<Record<string, number>>({});
 	const classes = useStyles();
 	const { t } = useTranslation();
 	const { token } = theme.useToken();
@@ -276,6 +278,33 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 			}
 		});
 	}, [openChats, markAsRead]);
+
+	useEffect(() => {
+		const handleAutoOpen = (event: Event) => {
+			const detail = (event as CustomEvent).detail || {};
+			const targetAppId = typeof detail.appId === 'string' ? detail.appId.trim() : '';
+			if (targetAppId && targetAppId !== appId) return;
+
+			const room = typeof detail.targetRoom === 'string' ? detail.targetRoom.trim() : '';
+			if (!room) return;
+
+			const now = Date.now();
+			const lastOpenedAt = autoOpenCooldownRef.current[room] || 0;
+			if (now - lastOpenedAt < AUTO_OPEN_COOLDOWN_MS) return;
+			autoOpenCooldownRef.current[room] = now;
+
+			const candidateUsername = typeof detail.guestPhone === 'string' && detail.guestPhone.trim()
+				? detail.guestPhone.trim()
+				: (typeof detail.username === 'string' && detail.username.trim() ? detail.username.trim() : room);
+
+			openChatAndMarkRead(room, candidateUsername);
+		};
+
+		window.addEventListener('csm-chat-auto-open', handleAutoOpen as EventListener);
+		return () => {
+			window.removeEventListener('csm-chat-auto-open', handleAutoOpen as EventListener);
+		};
+	}, [appId, openChatAndMarkRead]);
 
 	// Force refresh when opening notification popup
 	const handleOpenChange = useCallback(async (visible: boolean) => {

@@ -31,6 +31,7 @@ interface WebsiteLayoutProps {
 }
 
 export default function WebsiteLayoutInner({ children, selectedKey, menuItems, title, breadcrumb }: WebsiteLayoutProps) {
+  const AUTO_OPEN_COOLDOWN_MS = 30_000;
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [openMenuKeys, setOpenMenuKeys] = useState<string[]>([]);
   const [chatOpen, setChatOpen] = useState(false);
@@ -53,11 +54,12 @@ export default function WebsiteLayoutInner({ children, selectedKey, menuItems, t
   // CRITICAL: Get appId from useGuestPhone hook to ensure consistency
   // Hook already computes appId with same priority logic, so we use it directly
   const user = useUserStore();
-  const { guestPhone, setGuestPhone, setChatUrl, getChatUrlToSend, appId } = useGuestPhone();
+  const { guestPhone, setGuestPhone, setChatUrl, getChatUrlToSend, appId, isGuest } = useGuestPhone();
   const { sendMessage, messages } = useChatHistory(); // Sử dụng context để gửi tin nhắn và lấy messages
   
   // Ref để lưu pending message (tin nhắn cần gửi sau khi có phone)
   const pendingMessageRef = useRef<string | null>(null);
+  const autoOpenCooldownRef = useRef<Record<string, number>>({});
 
   // Helper function to check if current URL is already in chat history
   const hasCurrentUrlInMessages = React.useCallback((currentUrl: string, room: string): boolean => {
@@ -90,6 +92,36 @@ export default function WebsiteLayoutInner({ children, selectedKey, menuItems, t
     // Fallback to state nếu localStorage không có
     return guestPhone?.trim() || "";
   }, [guestPhone, appId, setGuestPhone]);
+
+  useEffect(() => {
+    if (!isGuest) return;
+
+    const handleAutoOpen = (event: Event) => {
+      const detail = (event as CustomEvent).detail || {};
+      const targetAppId = typeof detail.appId === 'string' ? detail.appId.trim() : '';
+      if (targetAppId && targetAppId !== appId) return;
+
+      const targetRoom = typeof detail.targetRoom === 'string' ? detail.targetRoom.trim() : '';
+      const phone = getEffectiveGuestPhone();
+      if (!phone) return;
+
+      if (targetRoom && targetRoom !== appId && targetRoom !== phone) return;
+
+      const roomKey = targetRoom || appId;
+      const now = Date.now();
+      const lastOpenedAt = autoOpenCooldownRef.current[roomKey] || 0;
+      if (now - lastOpenedAt < AUTO_OPEN_COOLDOWN_MS) return;
+      autoOpenCooldownRef.current[roomKey] = now;
+
+      setShowNameInput(false);
+      setChatOpen(true);
+    };
+
+    window.addEventListener('csm-chat-auto-open', handleAutoOpen as EventListener);
+    return () => {
+      window.removeEventListener('csm-chat-auto-open', handleAutoOpen as EventListener);
+    };
+  }, [isGuest, appId, getEffectiveGuestPhone]);
 
   
   // Get system preferences from admin store

@@ -16,6 +16,7 @@ import net.phanmemmottrieu.model.RegistrationResponse;
 import net.phanmemmottrieu.service.UserService;
 import net.phanmemmottrieu.service.ChatPersistenceService;
 import net.phanmemmottrieu.service.CRMService;
+import net.phanmemmottrieu.service.AIProviderFactory;
 import net.phanmemmottrieu.util.PortKillerUtil;
 
 import java.util.HashMap;
@@ -24,6 +25,10 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArraySet;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 import javax.annotation.PostConstruct;
 
@@ -72,7 +77,18 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
     @Autowired
     private CRMService crmService;
 
+    @Autowired
+    private AIProviderFactory aiProviderFactory;
+
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ScheduledExecutorService chatAiScheduler = Executors.newScheduledThreadPool(2);
+    private final Map<String, ScheduledFuture<?>> pendingGuestWelcomeTasks = new ConcurrentHashMap<>();
+    private final Map<String, ScheduledFuture<?>> pendingGuestNoReplyTasks = new ConcurrentHashMap<>();
+    private final Map<UUID, String> sessionGuestPhones = new ConcurrentHashMap<>();
+
+    private static final long AI_TRIGGER_DELAY_MS = 60_000L;
+    private static final String AI_ASSISTANT_USER_ID = "ai_assistant";
+    private static final String AI_ASSISTANT_USERNAME = "Tu van vien";
 
     // Extract appId from room patterns: guest:{appId};{phone}, app:{appId}, user:{appId};..., private:{appId};...
     private String parseAppIdFromRoom(String room) {
@@ -83,6 +99,160 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
         if (payload == null || payload.isBlank()) return null;
         int semi = payload.indexOf(";");
         return semi >= 0 ? payload.substring(0, semi) : payload;
+    }
+
+    private String parseGuestPhoneFromRoom(String room) {
+        if (room == null || room.isBlank() || !room.startsWith("guest:")) return null;
+        int semi = room.indexOf(';');
+        if (semi < 0 || semi + 1 >= room.length()) return null;
+        String guestPhone = room.substring(semi + 1).trim();
+        return guestPhone.isEmpty() ? null : guestPhone;
+    }
+
+    private String guestKey(String appId, String guestPhone) {
+        return (appId == null ? "" : appId.trim()) + "::" + (guestPhone == null ? "" : guestPhone.trim());
+    }
+
+    private void cancelGuestWelcomeTask(String appId, String guestPhone) {
+        String key = guestKey(appId, guestPhone);
+        ScheduledFuture<?> future = pendingGuestWelcomeTasks.remove(key);
+        if (future != null) {
+            future.cancel(false);
+        }
+    }
+
+    private void cancelGuestNoReplyTask(String appId, String guestPhone) {
+        String key = guestKey(appId, guestPhone);
+        ScheduledFuture<?> future = pendingGuestNoReplyTasks.remove(key);
+        if (future != null) {
+            future.cancel(false);
+        }
+    }
+
+    private String extractAiText(String raw, String fallbackText) {
+        if (raw == null || raw.isBlank()) return fallbackText;
+        try {
+            Map<?, ?> rawParsed = objectMapper.readValue(raw, Map.class);
+            Map<String, Object> parsed = new HashMap<>();
+            for (Map.Entry<?, ?> entry : rawParsed.entrySet()) {
+                if (entry.getKey() != null) {
+                    parsed.put(String.valueOf(entry.getKey()), entry.getValue());
+                }
+            }
+            Object successObj = parsed.get("success");
+            boolean success = !(successObj instanceof Boolean) || (Boolean) successObj;
+            if (!success) {
+                return fallbackText;
+            }
+
+            Object result = parsed.get("result");
+            if (result instanceof String s && !s.isBlank()) {
+                return s.trim();
+            }
+
+            if (result instanceof Map<?, ?> map) {
+                Object text = map.get("message");
+                if (text == null) text = map.get("text");
+                if (text == null) text = map.get("reply");
+                if (text instanceof String s && !s.isBlank()) {
+                    return s.trim();
+                }
+                return objectMapper.writeValueAsString(map);
+            }
+
+            if (result != null) {
+                return String.valueOf(result).trim();
+            }
+        } catch (Exception ignored) {
+            // Some providers may return plain text; fallback to raw.
+        }
+        return raw.trim().isEmpty() ? fallbackText : raw.trim();
+    }
+
+    private String buildWelcomePrompt(String appId, String guestPhone) {
+        return "Ban la nhan vien CSKH chat website appId=" + appId + ". "
+                + "Khach co phone=" + guestPhone + " da vao chat hon 1 phut nhung chua nhan tin. "
+                + "Hay viet DUY NHAT 1 tin nhan tieng Viet tu nhien, than thien, ngan gon (toi da 180 ky tu), "
+                + "khong may moc, de chao va xin: ten, so dien thoai, san pham/nhu cau dang quan tam. "
+                + "Khong nhac den AI, khong dung markdown, chi tra ve cau tra loi.";
+    }
+
+    private String buildNoHumanReplyPrompt(String appId, String guestPhone, String guestMessage) {
+        return "Ban la nhan vien CSKH website appId=" + appId + ". "
+                + "Khach phone=" + guestPhone + " vua nhan: \"" + (guestMessage == null ? "" : guestMessage) + "\". "
+                + "Da 1 phut chua co nguoi tra loi. Hay viet DUY NHAT 1 tin nhan tieng Viet tu nhien, ngan gon (toi da 220 ky tu), "
+                + "tra loi dung van de khach vua hoi va kheo xin day du: ten, so dien thoai, san pham/nhu cau quan tam. "
+                + "Giong nguoi that dang cham soc, khong robot, khong markdown.";
+    }
+
+    private void dispatchAiMessageToGuest(String appId, String guestPhone, String messageText, String eventType) {
+        if (appId == null || appId.isBlank() || guestPhone == null || guestPhone.isBlank() || messageText == null || messageText.isBlank()) {
+            return;
+        }
+
+        String privateRoom = "guest:" + appId + ";" + guestPhone;
+        String masterRoom = "app:" + appId;
+
+        ChatMessage aiMsg = new ChatMessage();
+        aiMsg.setRoom(privateRoom);
+        aiMsg.setUsername(AI_ASSISTANT_USERNAME);
+        aiMsg.setUserId(AI_ASSISTANT_USER_ID);
+        aiMsg.setIsAdmin(true);
+        aiMsg.setAppId(appId);
+        aiMsg.setGuestPhone(guestPhone);
+        aiMsg.setEventType(eventType);
+        aiMsg.setMessage(messageText.length() > 280 ? messageText.substring(0, 280) : messageText);
+        aiMsg.setTimestamp(System.currentTimeMillis());
+
+        chatPersistenceService.saveMessage(aiMsg);
+        server.getRoomOperations(privateRoom).sendEvent("message", aiMsg);
+        server.getRoomOperations(masterRoom).sendEvent("message", aiMsg);
+
+        logger.info("🤖 AI auto reply sent - appId={}, guestPhone={}, eventType={}", appId, guestPhone, eventType);
+    }
+
+    private void scheduleWelcomeIfGuestSilent(String appId, String guestPhone) {
+        if (appId == null || appId.isBlank() || guestPhone == null || guestPhone.isBlank()) return;
+        cancelGuestWelcomeTask(appId, guestPhone);
+
+        String key = guestKey(appId, guestPhone);
+        ScheduledFuture<?> future = chatAiScheduler.schedule(() -> {
+            try {
+                String prompt = buildWelcomePrompt(appId, guestPhone);
+                String aiRaw = aiProviderFactory.generateContent(prompt);
+                String text = extractAiText(aiRaw,
+                        "Em chao anh/chị. Mình cho em xin ten, so dien thoai va san pham anh/chị dang quan tam de em ho tro nhanh nha.");
+                dispatchAiMessageToGuest(appId, guestPhone, text, "ai_auto_welcome");
+            } catch (Exception e) {
+                logger.warn("Failed to send AI welcome for {}:{} - {}", appId, guestPhone, e.getMessage());
+            } finally {
+                pendingGuestWelcomeTasks.remove(key);
+            }
+        }, AI_TRIGGER_DELAY_MS, TimeUnit.MILLISECONDS);
+
+        pendingGuestWelcomeTasks.put(key, future);
+    }
+
+    private void scheduleAutoReplyIfNoHuman(String appId, String guestPhone, String guestMessage) {
+        if (appId == null || appId.isBlank() || guestPhone == null || guestPhone.isBlank()) return;
+        cancelGuestNoReplyTask(appId, guestPhone);
+
+        String key = guestKey(appId, guestPhone);
+        ScheduledFuture<?> future = chatAiScheduler.schedule(() -> {
+            try {
+                String prompt = buildNoHumanReplyPrompt(appId, guestPhone, guestMessage);
+                String aiRaw = aiProviderFactory.generateContent(prompt);
+                String text = extractAiText(aiRaw,
+                        "Em da tiep nhan thong tin roi. Anh/chị cho em xin ten, so dien thoai va san pham dang quan tam de ben em lien he tu van ngay.");
+                dispatchAiMessageToGuest(appId, guestPhone, text, "ai_auto_followup");
+            } catch (Exception e) {
+                logger.warn("Failed to send AI follow-up for {}:{} - {}", appId, guestPhone, e.getMessage());
+            } finally {
+                pendingGuestNoReplyTasks.remove(key);
+            }
+        }, AI_TRIGGER_DELAY_MS, TimeUnit.MILLISECONDS);
+
+        pendingGuestNoReplyTasks.put(key, future);
     }
 
     // --- Hàm notifySignInToRoom được thêm vào đây ---
@@ -295,6 +465,12 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
             UUID sessionId = client.getSessionId();
             String username = sessionUsernames.remove(sessionId);
             String appId = sessionAppIds.remove(sessionId);
+            String guestPhone = sessionGuestPhones.remove(sessionId);
+
+            if (appId != null && guestPhone != null && !guestPhone.isBlank()) {
+                cancelGuestWelcomeTask(appId, guestPhone);
+                cancelGuestNoReplyTask(appId, guestPhone);
+            }
 
             if (username != null) {
                 for (Map.Entry<String, Set<UUID>> entry : roomSessions.entrySet()) {
@@ -348,6 +524,7 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                 // Guest joins private room + master room for admin monitoring
                 String privateRoom = "guest:" + appId + ";" + guestPhone;
                 String masterRoom = "app:" + appId;
+                sessionGuestPhones.put(sessionId, guestPhone);
                 
                 roomSessions.computeIfAbsent(privateRoom, r -> new CopyOnWriteArraySet<>()).add(sessionId);
                 roomSessions.computeIfAbsent(masterRoom, r -> new CopyOnWriteArraySet<>()).add(sessionId);
@@ -358,6 +535,8 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                 logger.info("🚪 Guest {} joined private room {} and master room {} (appId: {})", 
                            username, privateRoom, masterRoom, appId);
                 server.getRoomOperations(privateRoom).sendEvent("user_joined", username);
+
+                scheduleWelcomeIfGuestSilent(appId, guestPhone);
             } else if (userId != null && !userId.isEmpty()) {
                 // Authenticated user joins app room (can chat with other users)
                 String appRoom = "app:" + appId;
@@ -448,6 +627,10 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                                 if (isAdmin != null && isAdmin) {
                                     // Admin luôn được phép
                                     allow = true;
+                                    String targetGuestPhone = (guestPhone == null || guestPhone.isBlank()) ? parseGuestPhoneFromRoom(room) : guestPhone;
+                                    if (targetGuestPhone != null && !targetGuestPhone.isBlank()) {
+                                        cancelGuestNoReplyTask(appId, targetGuestPhone);
+                                    }
                                 } else if (userId == null) {
                                     // Guest: chỉ cho phép gửi vào phòng của mình hoặc phòng app
                                     String guestAppId = appId; // appId đã được normalize ở trên
@@ -475,9 +658,20 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                                         data.setAppId(guestAppId);
                                         appId = guestAppId;
                                     }
+
+                                    String targetGuestPhone = (guestPhone == null || guestPhone.isBlank()) ? parseGuestPhoneFromRoom(room) : guestPhone;
+                                    if (targetGuestPhone != null && !targetGuestPhone.isBlank()) {
+                                        cancelGuestWelcomeTask(appId, targetGuestPhone);
+                                        scheduleAutoReplyIfNoHuman(appId, targetGuestPhone, message);
+                                    }
                                 } else {
                                     // Authenticated user: cho phép chat trong app của mình
                                     allow = true;
+
+                                    String targetGuestPhone = (guestPhone == null || guestPhone.isBlank()) ? parseGuestPhoneFromRoom(room) : guestPhone;
+                                    if (targetGuestPhone != null && !targetGuestPhone.isBlank()) {
+                                        cancelGuestNoReplyTask(appId, targetGuestPhone);
+                                    }
                                 }
                                 if (!allow) {
                                     logger.warn("[Chat] User {} không có quyền gửi chat nội bộ!", userId);
@@ -991,6 +1185,12 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
             } catch (Exception e) {
                 logger.error("❌ Failed to stop Socket.IO server: {}", e.getMessage(), e);
             }
+        }
+
+        try {
+            chatAiScheduler.shutdownNow();
+        } catch (Exception e) {
+            logger.warn("Failed to shutdown chat AI scheduler: {}", e.getMessage());
         }
     }
 }
