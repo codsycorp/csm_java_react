@@ -268,6 +268,7 @@
       exportNoData: "Không có dữ liệu để xuất",
       exportDone: "Đã xuất dữ liệu thành công",
       exportFallbackCsv: "Không có thư viện XLSX, đã xuất CSV thay thế",
+      exportFallbackXls: "Không có thư viện XLSX, đã xuất Excel XML (.xls) thay thế",
       kqByChuc: "Kết quả theo hàng chục và đơn vị",
       colChuc: "Hàng Chục",
       colSo: "Số",
@@ -323,6 +324,7 @@
       exportNoData: "No data to export",
       exportDone: "Export completed",
       exportFallbackCsv: "XLSX library not found, exported CSV instead",
+      exportFallbackXls: "XLSX library not found, exported Excel XML (.xls) instead",
       kqByChuc: "Results by tens and units",
       colChuc: "Tens",
       colSo: "Number",
@@ -378,6 +380,7 @@
       exportNoData: "没有可导出的数据",
       exportDone: "导出成功",
       exportFallbackCsv: "未找到 XLSX 库，已改为导出 CSV",
+      exportFallbackXls: "未找到 XLSX 库，已改为导出 Excel XML（.xls）",
       kqByChuc: "按十位和个位显示结果",
       colChuc: "十位",
       colSo: "号码",
@@ -616,6 +619,71 @@
     return String(value);
   }
 
+  function cellDisplayLength(value) {
+    var txt = String(value == null ? "" : value);
+    var max = 0;
+    for (var i = 0; i < txt.length; i += 1) {
+      var code = txt.charCodeAt(i);
+      max += code > 255 ? 2 : 1;
+    }
+    return max;
+  }
+
+  function buildAutoColsFromAoa(aoa) {
+    var maxCols = 0;
+    for (var r = 0; r < (aoa || []).length; r += 1) {
+      var row = Array.isArray(aoa[r]) ? aoa[r] : [];
+      if (row.length > maxCols) maxCols = row.length;
+    }
+    var out = [];
+    for (var c = 0; c < maxCols; c += 1) {
+      var maxLen = 6;
+      for (var rr = 0; rr < (aoa || []).length; rr += 1) {
+        var row2 = Array.isArray(aoa[rr]) ? aoa[rr] : [];
+        var l = cellDisplayLength(row2[c]);
+        if (l > maxLen) maxLen = l;
+      }
+      out.push({ wch: Math.min(48, Math.max(8, maxLen + 2)) });
+    }
+    return out;
+  }
+
+  function tryApplyWorksheetVisuals(ws, aoa, XLSX) {
+    var cols = buildAutoColsFromAoa(aoa);
+    if (cols.length) ws["!cols"] = cols;
+
+    if ((aoa || []).length > 1 && cols.length > 0) {
+      ws["!autofilter"] = {
+        ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: 0, c: cols.length - 1 } })
+      };
+      ws["!freeze"] = { xSplit: 0, ySplit: 1, topLeftCell: "A2", activePane: "bottomLeft", state: "frozen" };
+    }
+
+    // Some SheetJS builds ignore styles. We still assign them for builds that support style writing.
+    var headerStyle = {
+      font: { bold: true, color: { rgb: "FFFFFF" } },
+      fill: { patternType: "solid", fgColor: { rgb: "1F4E78" } },
+      alignment: { horizontal: "center", vertical: "center", wrapText: true },
+      border: {
+        top: { style: "thin", color: { rgb: "D9D9D9" } },
+        bottom: { style: "thin", color: { rgb: "D9D9D9" } },
+        left: { style: "thin", color: { rgb: "D9D9D9" } },
+        right: { style: "thin", color: { rgb: "D9D9D9" } }
+      }
+    };
+
+    for (var r = 0; r < (aoa || []).length; r += 1) {
+      var row = Array.isArray(aoa[r]) ? aoa[r] : [];
+      for (var c = 0; c < row.length; c += 1) {
+        var addr = XLSX.utils.encode_cell({ r: r, c: c });
+        var cell = ws[addr];
+        if (!cell) continue;
+        if (r === 0) cell.s = headerStyle;
+        if (cell.t === "n") cell.z = Number.isInteger(cell.v) ? "0" : "0.00";
+      }
+    }
+  }
+
   function makeWorksheetFromAoa(aoa, XLSX) {
     var ws = {};
     var maxCols = 0;
@@ -631,9 +699,11 @@
     if (aoa.length === 0) {
       ws.A1 = { v: "", t: "s" };
       ws["!ref"] = "A1";
+      tryApplyWorksheetVisuals(ws, aoa, XLSX);
       return ws;
     }
     ws["!ref"] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: Math.max(aoa.length - 1, 0), c: Math.max(maxCols - 1, 0) } });
+    tryApplyWorksheetVisuals(ws, aoa, XLSX);
     return ws;
   }
 
@@ -645,24 +715,72 @@
       && typeof XLSX.utils.encode_range === "function");
   }
 
-  function loadScriptFile(src) {
+  function canWriteXlsx(XLSX) {
+    if (!isUsableXlsx(XLSX)) return false;
+    try {
+      var wb = { SheetNames: ["Sheet1"], Sheets: {} };
+      wb.Sheets.Sheet1 = makeWorksheetFromAoa([["ok"]], XLSX);
+      XLSX.write(wb, { bookType: "xlsx", type: "binary" });
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function normalizeJsZipGlobal() {
+    var z = window.JSZip || window.jszip;
+    if (z && typeof z !== "function") {
+      if (typeof z.default === "function") z = z.default;
+      else if (typeof z.JSZip === "function") z = z.JSZip;
+    }
+    if (typeof z === "function") {
+      window.JSZip = z;
+      window.jszip = z;
+      return z;
+    }
+    return null;
+  }
+
+  function findScriptBySrc(src) {
+    var scripts = document.getElementsByTagName("script");
+    for (var i = 0; i < scripts.length; i += 1) {
+      var s = scripts[i];
+      if (!s) continue;
+      if (s.dataset && s.dataset.kqxsSrc === src) return s;
+      var raw = s.getAttribute("src") || "";
+      if (raw === src || raw.indexOf(src + "?") === 0) return s;
+    }
+    return null;
+  }
+
+  function loadScriptFile(src, options) {
     return new Promise(function (resolve, reject) {
       if (!src) return reject(new Error("Empty script src"));
 
-      var existed = document.querySelector('script[src="' + src + '"]');
+      var opts = options || {};
+      var forceReload = !!opts.forceReload;
+      var checkReady = typeof opts.checkReady === "function" ? opts.checkReady : null;
+
+      var existed = findScriptBySrc(src);
       if (existed) {
-        if (isUsableXlsx(window.XLSX)) return resolve(window.XLSX);
+        if (!forceReload && (!checkReady || checkReady())) return resolve(true);
+        if (forceReload && existed.parentNode) existed.parentNode.removeChild(existed);
+      }
+
+      if (existed && !forceReload) {
         existed.addEventListener("load", function () { resolve(window.XLSX); }, { once: true });
         existed.addEventListener("error", function () { reject(new Error("Failed to load script: " + src)); }, { once: true });
         return;
       }
 
       var script = document.createElement("script");
-      script.src = src;
+      script.src = forceReload
+        ? src + (src.indexOf("?") >= 0 ? "&" : "?") + "_kqxs_reload=" + Date.now()
+        : src;
       script.async = true;
-      script.dataset.kqxsXlsx = "1";
+      script.dataset.kqxsSrc = src;
       script.onload = function () {
-        resolve(window.XLSX);
+        resolve(true);
       };
       script.onerror = function () {
         reject(new Error("Failed to load script: " + src));
@@ -672,26 +790,86 @@
   }
 
   var __kqxsXlsxLoaderPromise = null;
+
+  function buildAssetScriptCandidates(relPath, extraCandidates) {
+    var out = [];
+    var seen = {};
+
+    function add(src) {
+      var s = String(src || "").trim();
+      if (!s || seen[s]) return;
+      seen[s] = true;
+      out.push(s);
+    }
+
+    add("/assets/" + relPath);
+    add("./assets/" + relPath);
+    add("assets/" + relPath);
+    add("/backend/csm_datas/public/assets/" + relPath);
+    add("/csm_datas/public/assets/" + relPath);
+
+    try {
+      var pathname = String((window.location && window.location.pathname) || "/");
+      var parts = pathname.split("/").filter(Boolean);
+      for (var i = parts.length; i >= 0; i -= 1) {
+        var base = "/" + parts.slice(0, i).join("/");
+        if (base === "/") base = "";
+        add(base + "/assets/" + relPath);
+      }
+    } catch (e) {
+      // Ignore location parsing issues
+    }
+
+    (extraCandidates || []).forEach(add);
+    return out;
+  }
+
   async function ensureXlsxLibrary() {
-    if (isUsableXlsx(window.XLSX)) return window.XLSX;
+    if (canWriteXlsx(window.XLSX)) return window.XLSX;
     if (__kqxsXlsxLoaderPromise) return __kqxsXlsxLoaderPromise;
 
-    var candidates = [
-      "/assets/xlsx.js",
-      "./assets/xlsx.js",
-      "assets/xlsx.js",
-      "/backend/csm_datas/public/assets/xlsx.js"
-    ];
+    var jszipCandidates = buildAssetScriptCandidates("jszip/jszip.js", [
+      "https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js",
+      "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"
+    ]);
+
+    var candidates = buildAssetScriptCandidates("xlsx.js", [
+      "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js",
+      "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"
+    ]);
 
     __kqxsXlsxLoaderPromise = (async function () {
+      if (!normalizeJsZipGlobal()) {
+        var seenJsZip = {};
+        for (var j = 0; j < jszipCandidates.length; j += 1) {
+          var jsSrc = String(jszipCandidates[j] || "").trim();
+          if (!jsSrc || seenJsZip[jsSrc]) continue;
+          seenJsZip[jsSrc] = true;
+          try {
+            await loadScriptFile(jsSrc, { checkReady: normalizeJsZipGlobal });
+            if (normalizeJsZipGlobal()) break;
+          } catch (e) {
+            // Try next JSZip candidate
+          }
+        }
+      }
+
       var seen = {};
       for (var i = 0; i < candidates.length; i += 1) {
         var src = String(candidates[i] || "").trim();
         if (!src || seen[src]) continue;
         seen[src] = true;
         try {
-          await loadScriptFile(src);
-          if (isUsableXlsx(window.XLSX)) return window.XLSX;
+          await loadScriptFile(src, { checkReady: function () { return isUsableXlsx(window.XLSX); } });
+          if (canWriteXlsx(window.XLSX)) return window.XLSX;
+
+          // XLSX may have been loaded before JSZip was ready; force a clean reload.
+          window.XLSX = undefined;
+          await loadScriptFile(src, {
+            forceReload: true,
+            checkReady: function () { return isUsableXlsx(window.XLSX); }
+          });
+          if (canWriteXlsx(window.XLSX)) return window.XLSX;
         } catch (e) {
           // Try next candidate
         }
@@ -716,6 +894,112 @@
     });
     var csv = "\uFEFF" + lines.join("\n");
     var blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  function escapeXmlText(input) {
+    return String(input == null ? "" : input)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&apos;");
+  }
+
+  function detectExcelXmlCellType(value) {
+    if (typeof value === "number" && isFinite(value)) {
+      return { type: "Number", value: String(value), styleId: Number.isInteger(value) ? "sNumberInt" : "sNumberDec" };
+    }
+    if (typeof value === "boolean") return { type: "Number", value: value ? "1" : "0", styleId: "sNumberInt" };
+    var txt = String(value == null ? "" : value).trim();
+    if (/^-?\d+(\.\d+)?$/.test(txt)) {
+      return { type: "Number", value: txt, styleId: txt.indexOf(".") >= 0 ? "sNumberDec" : "sNumberInt" };
+    }
+    return { type: "String", value: escapeXmlText(value == null ? "" : value), styleId: "sBody" };
+  }
+
+  function buildExcelXmlWorkbook(sheets) {
+    var header = '<?xml version="1.0" encoding="UTF-8"?>';
+    var open = '<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"'
+      + ' xmlns:o="urn:schemas-microsoft-com:office:office"'
+      + ' xmlns:x="urn:schemas-microsoft-com:office:excel"'
+      + ' xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"'
+      + ' xmlns:html="http://www.w3.org/TR/REC-html40">';
+    var styles = '<Styles>'
+      + '<Style ss:ID="Default" ss:Name="Normal">'
+      + '<Alignment ss:Vertical="Bottom"/>'
+      + '<Borders/>'
+      + '<Font ss:FontName="Calibri" ss:Size="11"/>'
+      + '<Interior/>'
+      + '<NumberFormat/>'
+      + '<Protection/>'
+      + '</Style>'
+      + '<Style ss:ID="sHeader">'
+      + '<Font ss:Bold="1" ss:Color="#FFFFFF"/>'
+      + '<Interior ss:Color="#1F4E78" ss:Pattern="Solid"/>'
+      + '<Alignment ss:Horizontal="Center" ss:Vertical="Center" ss:WrapText="1"/>'
+      + '<Borders>'
+      + '<Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#D9D9D9"/>'
+      + '<Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#D9D9D9"/>'
+      + '<Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#D9D9D9"/>'
+      + '<Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#D9D9D9"/>'
+      + '</Borders>'
+      + '</Style>'
+      + '<Style ss:ID="sBody">'
+      + '<Borders>'
+      + '<Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#EFEFEF"/>'
+      + '</Borders>'
+      + '</Style>'
+      + '<Style ss:ID="sNumberInt"><NumberFormat ss:Format="0"/></Style>'
+      + '<Style ss:ID="sNumberDec"><NumberFormat ss:Format="0.00"/></Style>'
+      + '</Styles>';
+    var body = [];
+
+    function worksheetOptionsXml() {
+      return '<WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel">'
+        + '<FreezePanes/>'
+        + '<FrozenNoSplit/>'
+        + '<SplitHorizontal>1</SplitHorizontal>'
+        + '<TopRowBottomPane>1</TopRowBottomPane>'
+        + '<ActivePane>2</ActivePane>'
+        + '</WorksheetOptions>';
+    }
+
+    (sheets || []).forEach(function (sheet, idx) {
+      var name = sanitizeSheetName((sheet && sheet.name) || ("Sheet" + (idx + 1)));
+      var aoa = (sheet && sheet.aoa) || [[""]];
+      var rows = [];
+      var cols = buildAutoColsFromAoa(aoa).map(function (col) {
+        var width = Math.max(40, (Number(col.wch || 8) * 6.8));
+        return '<Column ss:AutoFitWidth="0" ss:Width="' + width.toFixed(2) + '"/>';
+      });
+
+      aoa.forEach(function (row, rowIdx) {
+        var cells = [];
+        (row || []).forEach(function (cell) {
+          var cellInfo = detectExcelXmlCellType(cell);
+          var sid = rowIdx === 0 ? 'sHeader' : (cellInfo.styleId || 'sBody');
+          cells.push('<Cell ss:StyleID="' + sid + '"><Data ss:Type="' + cellInfo.type + '">' + cellInfo.value + '</Data></Cell>');
+        });
+        rows.push('<Row>' + cells.join("") + '</Row>');
+      });
+
+      body.push('<Worksheet ss:Name="' + escapeXmlText(name) + '"><Table>' + cols.join("") + rows.join("") + '</Table>' + worksheetOptionsXml() + '</Worksheet>');
+    });
+
+    return header + open + styles + body.join("") + '</Workbook>';
+  }
+
+  function downloadExcelXmlFromSheets(fileName, sheets) {
+    var xml = buildExcelXmlWorkbook(sheets);
+    var blob = new Blob(["\uFEFF", xml], { type: "application/vnd.ms-excel;charset=utf-8;" });
     var url = URL.createObjectURL(blob);
     var a = document.createElement("a");
     a.href = url;
@@ -2384,13 +2668,31 @@
           wb.SheetNames.push(sheetName);
           wb.Sheets[sheetName] = ws;
         });
-        XLSX.writeFile(wb, baseName + ".xlsx");
-        thongbao(tt.exportDone);
-        return;
+        try {
+          XLSX.writeFile(wb, baseName + ".xlsx");
+          thongbao(tt.exportDone);
+          return;
+        } catch (e) {
+          // Try one forced reload cycle for environments where XLSX bound JSZip too early.
+          try {
+            XLSX = await ensureXlsxLibrary();
+            XLSX.writeFile(wb, baseName + ".xlsx");
+            thongbao(tt.exportDone);
+            return;
+          } catch (e2) {
+            // Fall through to CSV fallback
+          }
+        }
       }
 
-      downloadCsvFromAoa(baseName + ".csv", payload.sheets[0].aoa || [[""]]);
-      canhbao(tt.exportFallbackCsv);
+      try {
+        downloadExcelXmlFromSheets(baseName + ".xls", payload.sheets);
+        canhbao(tt.exportFallbackXls || tt.exportFallbackCsv);
+        return;
+      } catch (xlsErr) {
+        downloadCsvFromAoa(baseName + ".csv", payload.sheets[0].aoa || [[""]]);
+        canhbao(tt.exportFallbackCsv);
+      }
     }
 
     function themedSelectProps(extra) {

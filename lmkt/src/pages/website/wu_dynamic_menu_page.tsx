@@ -24,6 +24,94 @@ interface DynamicMenuCategory extends SSRCategoryObject {
   dynamic_code?: string;
 }
 
+function normalizeJsZipGlobal() {
+  if (typeof window === 'undefined') return;
+  const w = window as any;
+  const ctor = w.JSZip || w.jszip || w?.XLSX?.JSZip;
+  if (typeof ctor === 'function') {
+    w.JSZip = ctor;
+    w.jszip = ctor;
+  }
+}
+
+function loadScriptByCandidates(candidates: string[], checkReady?: () => boolean): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (typeof document === 'undefined') {
+      reject(new Error('Document is unavailable'));
+      return;
+    }
+
+    const uniqueCandidates = candidates.filter((item, index, arr) => item && arr.indexOf(item) === index);
+    let index = 0;
+
+    const tryNext = () => {
+      if (checkReady?.()) {
+        resolve('already-loaded');
+        return;
+      }
+      if (index >= uniqueCandidates.length) {
+        reject(new Error(`Unable to load any script from candidates: ${uniqueCandidates.join(', ')}`));
+        return;
+      }
+
+      const src = uniqueCandidates[index++];
+      const existing = document.querySelector(`script[src="${src}"]`) as HTMLScriptElement | null;
+      if (existing) {
+        if (checkReady?.()) {
+          resolve(src);
+          return;
+        }
+        existing.addEventListener('load', () => {
+          if (checkReady?.()) resolve(src);
+          else tryNext();
+        }, { once: true });
+        existing.addEventListener('error', () => tryNext(), { once: true });
+        return;
+      }
+
+      const script = document.createElement('script');
+      script.src = src;
+      script.async = true;
+      script.onload = () => {
+        if (checkReady?.()) resolve(src);
+        else tryNext();
+      };
+      script.onerror = () => tryNext();
+      document.head.appendChild(script);
+    };
+
+    tryNext();
+  });
+}
+
+async function ensureSpreadsheetLibraries(): Promise<void> {
+  if (typeof window === 'undefined') return;
+
+  const jsZipCandidates = [
+    '/assets/jszip/jszip.js',
+    './assets/jszip/jszip.js',
+    '/csm_datas/public/assets/jszip/jszip.js',
+    'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js',
+  ];
+
+  const xlsxCandidates = [
+    '/assets/xlsx.js',
+    './assets/xlsx.js',
+    '/csm_datas/public/assets/xlsx.js',
+    'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js',
+  ];
+
+  normalizeJsZipGlobal();
+  if (typeof (window as any).JSZip !== 'function') {
+    await loadScriptByCandidates(jsZipCandidates, () => typeof (window as any).JSZip === 'function' || typeof (window as any).jszip === 'function');
+  }
+  normalizeJsZipGlobal();
+  if (!(window as any).XLSX || typeof (window as any).XLSX.writeFile !== 'function') {
+    await loadScriptByCandidates(xlsxCandidates, () => Boolean((window as any).XLSX && typeof (window as any).XLSX.writeFile === 'function'));
+  }
+  normalizeJsZipGlobal();
+}
+
 export default function WuDynamicMenuPage() {
   const { slug } = useParams<{ slug: string }>();
   const { t, i18n } = useTranslation();
@@ -128,25 +216,44 @@ export default function WuDynamicMenuPage() {
     }
     executedRef.current = true;
 
-    try {
-      const fn = new Function(
-        'seft',
-        `try{\n${autoCode}\n} catch (sca_err) {console.error(sca_err); alert('Menu Error: ' + sca_err);}`
-      );
-      
-      // Call function with available context
-      fn({
-        t,
-        navigate,
-        slug,
-      });
-    } catch (error: any) {
-      console.error('[WuDynamicMenuPage] Error executing code:', error);
-      notification.error({
-        message: t('website.error.execution_failed', 'Lỗi khi thực thi code'),
-        description: error?.message || String(error),
-      });
-    }
+    let cancelled = false;
+
+    const runDynamicCode = async () => {
+      try {
+        try {
+          await ensureSpreadsheetLibraries();
+        } catch (libError) {
+          console.warn('[WuDynamicMenuPage] Spreadsheet libraries preload failed:', libError);
+        }
+
+        if (cancelled) return;
+
+        const fn = new Function(
+          'seft',
+          `try{\n${autoCode}\n} catch (sca_err) {console.error(sca_err); alert('Menu Error: ' + sca_err);}`
+        );
+
+        // Call function with available context
+        fn({
+          t,
+          navigate,
+          slug,
+          ensureSpreadsheetLibraries,
+        });
+      } catch (error: any) {
+        console.error('[WuDynamicMenuPage] Error executing code:', error);
+        notification.error({
+          message: t('website.error.execution_failed', 'Lỗi khi thực thi code'),
+          description: error?.message || String(error),
+        });
+      }
+    };
+
+    runDynamicCode();
+
+    return () => {
+      cancelled = true;
+    };
   }, [autoCode, t, navigate, slug]);
 
   if (loading) {

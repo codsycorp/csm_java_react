@@ -37,6 +37,91 @@ type ScopedRuntime = {
   cleanup: () => void;
 };
 
+function normalizeJsZipGlobal() {
+  const w = window as any;
+  const ctor = w.JSZip || w.jszip || w?.XLSX?.JSZip;
+  if (typeof ctor === "function") {
+    w.JSZip = ctor;
+    w.jszip = ctor;
+  }
+}
+
+function loadScriptCandidates(candidates: string[], ready?: () => boolean): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (ready?.()) {
+      resolve("already-loaded");
+      return;
+    }
+
+    const list = candidates.filter((item, index, arr) => item && arr.indexOf(item) === index);
+    let idx = 0;
+
+    const run = () => {
+      if (ready?.()) {
+        resolve("ready");
+        return;
+      }
+      if (idx >= list.length) {
+        reject(new Error(`Unable to load script candidates: ${list.join(", ")}`));
+        return;
+      }
+
+      const src = list[idx++];
+      const existing = document.querySelector(`script[src="${src}"]`) as HTMLScriptElement | null;
+      if (existing) {
+        if (ready?.()) {
+          resolve(src);
+          return;
+        }
+        existing.addEventListener("load", () => (ready?.() ? resolve(src) : run()), { once: true });
+        existing.addEventListener("error", () => run(), { once: true });
+        return;
+      }
+
+      const script = document.createElement("script");
+      script.src = src;
+      script.async = true;
+      script.onload = () => (ready?.() ? resolve(src) : run());
+      script.onerror = () => run();
+      document.head.appendChild(script);
+    };
+
+    run();
+  });
+}
+
+async function ensureSpreadsheetLibraries() {
+  normalizeJsZipGlobal();
+
+  if (typeof (window as any).JSZip !== "function") {
+    await loadScriptCandidates(
+      [
+        "/assets/jszip/jszip.js",
+        "./assets/jszip/jszip.js",
+        "/csm_datas/public/assets/jszip/jszip.js",
+        "https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js",
+      ],
+      () => typeof (window as any).JSZip === "function" || typeof (window as any).jszip === "function",
+    );
+  }
+
+  normalizeJsZipGlobal();
+
+  if (!(window as any).XLSX || typeof (window as any).XLSX.writeFile !== "function") {
+    await loadScriptCandidates(
+      [
+        "/assets/xlsx.js",
+        "./assets/xlsx.js",
+        "/csm_datas/public/assets/xlsx.js",
+        "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js",
+      ],
+      () => Boolean((window as any).XLSX && typeof (window as any).XLSX.writeFile === "function"),
+    );
+  }
+
+  normalizeJsZipGlobal();
+}
+
 function sanitizeIdPart(value?: string): string {
   if (!value) return "default";
   return String(value)
@@ -1405,8 +1490,16 @@ ${resolvedContainerSelector} select {
           // ✅ CRITICAL FIX: Defer execution to ensure window.React/ReactDOM are exposed first
           // Without this setTimeout, executeCode useEffect may run BEFORE the expose useEffect,
           // causing "window.React is not defined" errors
-          setTimeout(() => {
+          setTimeout(async () => {
             try {
+              try {
+                await ensureSpreadsheetLibraries();
+              } catch (libError) {
+                console.warn("[DynamicCodeMenu] Spreadsheet libraries preload failed:", libError);
+              }
+
+              (window as any).ensureSpreadsheetLibraries = ensureSpreadsheetLibraries;
+              (scopedRuntime.windowProxy as any).ensureSpreadsheetLibraries = ensureSpreadsheetLibraries;
               fn(seft, resolvedContainerId, scopedRuntime.windowProxy, scopedRuntime.documentProxy);
               console.log('✅ [DynamicCodeMenu] Code executed successfully after DOM ready');
             } catch (err: any) {
