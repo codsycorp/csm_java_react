@@ -8,7 +8,7 @@
   }
 
   var h = ReactRef.createElement;
-  var KQXS_VIEW_ONLY = window.csmKqxsViewOnly !== false;
+  var KQXS_VIEW_ONLY = window.csmKqxsViewOnly === true;
 
   function FallbackCard(props) {
     return h("div", { style: Object.assign({ border: "1px solid var(--kqxs-border, #d9d9d9)", borderRadius: 8, padding: 12, background: "var(--kqxs-card-bg, #fff)", color: "var(--kqxs-text, #1f1f1f)" }, props && props.style ? props.style : {}) }, [
@@ -1342,13 +1342,7 @@
     }, [dsDaiMienThu, mien, loai_tim]);
 
     useEffect(function () {
-      var hasRuntimeProcess = false;
-      try {
-        hasRuntimeProcess = !!(typeof window !== "undefined" && window && window.hasOwnProperty("process") && window.process);
-      } catch (e) {
-        hasRuntimeProcess = false;
-      }
-      setAllowUpdateActions(!KQXS_VIEW_ONLY && hasRuntimeProcess);
+      setAllowUpdateActions(!KQXS_VIEW_ONLY);
       setThuTuan(days[chuyenNgay(den_ngay, "dd/mm/yyyy").getDay()]);
 
       fetchRows({
@@ -2833,7 +2827,9 @@
             pagination: false,
             scroll: { x: 900 },
             title: function () {
-              return h("b", null, kqTitle);
+              return renderTableTitleWithExport(kqTitle, function (evt) {
+                captureTableFromActionEvent(evt, "kqxs_kq_moi_" + String(grp.combo || ""));
+              });
             }
           }));
         } else {
@@ -3291,10 +3287,9 @@
     }
 
     function renderTableTitleWithExport(titleText, onCaptureClick) {
-      return h("div", { className: "kqxs-table-title-wrap", style: { display: "grid", gridTemplateColumns: "28px 1fr 28px", alignItems: "center", columnGap: 6, minHeight: 24 } }, [
-        h("div", { key: "left-spacer", className: "kqxs-table-title-spacer", "aria-hidden": "true" }),
-        h("b", { key: "txt", className: "kqxs-table-title-text", style: { display: "block", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", textAlign: "center" } }, String(titleText || "")),
-        h("div", { key: "actions", className: "kqxs-table-actions kqxs-capture-ignore", "data-capture-ignore": "true", style: { display: "flex", justifyContent: "flex-end" } }, [
+      return h("div", { className: "kqxs-table-title-wrap", style: { display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8, minHeight: 24, whiteSpace: "nowrap" } }, [
+        h("b", { key: "txt", className: "kqxs-table-title-text", style: { display: "inline-block", whiteSpace: "nowrap", overflow: "visible", textOverflow: "clip", textAlign: "center" } }, String(titleText || "")),
+        h("div", { key: "actions", className: "kqxs-table-actions kqxs-capture-ignore", "data-capture-ignore": "true", style: { display: "inline-flex", justifyContent: "center" } }, [
           h(Button, {
             key: "btn_capture",
             size: "small",
@@ -3469,10 +3464,10 @@
       + ".kqxs-react-auto .kqxs-thongke-subcard > .ant-card-head { background: color-mix(in srgb, var(--kqxs-primary, #1677ff) 5%, var(--kqxs-card-bg, #fff)) !important; }"
       + ".kqxs-react-auto .kqxs-vach-col { background: #f3e3a6 !important; padding: 0 !important; }"
       + ".kqxs-react-auto .kqxs-kq-pane { padding-top: 2px; }"
-      + ".kqxs-react-auto .kqxs-kq-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; }"
-      + ".kqxs-react-auto .kqxs-kq-col { flex: 1 1 calc(33.333% - 8px); min-width: 300px; }"
-      + ".kqxs-react-auto .kqxs-kq-col-main { flex: 0 0 602px; max-width: 602px; min-width: 602px; }"
-      + ".kqxs-react-auto .kqxs-kq-col-side { flex: 0 0 230px; max-width: 230px; min-width: 230px; }"
+      + ".kqxs-react-auto .kqxs-kq-row { display: flex; flex-wrap: nowrap; gap: 12px; align-items: flex-start; overflow-x: auto; padding-bottom: 2px; }"
+      + ".kqxs-react-auto .kqxs-kq-col { flex: 0 0 auto; min-width: max-content; }"
+      + ".kqxs-react-auto .kqxs-kq-col-main { flex: 0 0 auto; min-width: 602px; }"
+      + ".kqxs-react-auto .kqxs-kq-col-side { flex: 0 0 auto; min-width: 320px; width: max-content; }"
       + ".kqxs-react-auto .kqxs-kq-zone { border: 1px solid #3a3a3a; border-radius: 0; padding: 0; background: color-mix(in srgb, var(--kqxs-card-bg, #fff) 95%, #111722); }"
       + ".kqxs-react-auto .kqxs-kq-zone + .kqxs-kq-zone { box-shadow: none; }"
       + ".kqxs-react-auto .kqxs-kq-zone .ant-table { border: 1px solid #3a3a3a !important; background: transparent !important; }"
@@ -3500,6 +3495,9 @@
       + ".kqxs-react-auto .kqxs-kqval-db { color: #ff5f5f; font-size: 50px; }"
       + ".kqxs-react-auto .kqxs-kqval-g8 { color: #ff9f43; font-size: 38px; }"
       + ".kqxs-react-auto .kqxs-kq-pane .ant-table-title { text-align: center; text-transform: none; }"
+      + ".kqxs-react-auto .kqxs-kq-pane .ant-table-wrapper { border: 1px solid var(--kqxs-header-border, #2a3d57) !important; }"
+      + ".kqxs-react-auto .kqxs-kq-pane .ant-table-title { border-bottom: 1px solid var(--kqxs-header-border, #2a3d57) !important; color: var(--kqxs-header-text, #f4f8ff) !important; background: var(--kqxs-header-bg, #152235) !important; padding: 6px 8px !important; }"
+      + ".kqxs-react-auto .kqxs-kq-pane .ant-table-thead > tr > th { background: var(--kqxs-header-bg, #152235) !important; color: var(--kqxs-header-text, #f4f8ff) !important; border-color: var(--kqxs-header-border, #2a3d57) !important; font-size: 10pt !important; font-weight: 700 !important; padding: 5px 6px !important; }"
       // Tô màu hàng thỏa mãn — giống Vue's to_mau class (màu vàng #cc9108)
       + ".kqxs-react-auto .ant-table-tbody > tr.to_mau > td { background: " + (chon_mau || "#cc9108") + " !important; }"
       + ".kqxs-react-auto .ant-table-tbody > tr.to_mau:hover > td { background: " + (chon_mau || "#cc9108") + " !important; }"
@@ -3519,8 +3517,8 @@
       + ".kqxs-react-auto .kqxs-kq-zone .ant-table-title { border-bottom: 1px solid var(--kqxs-header-border, #2a3d57) !important; color: var(--kqxs-header-text, #f4f8ff) !important; background: var(--kqxs-header-bg, #152235) !important; }"
       + ".kqxs-react-auto .kqxs-kq-zone .ant-table-thead > tr > th { background: var(--kqxs-header-bg, #152235) !important; color: var(--kqxs-header-text, #f4f8ff) !important; border-color: var(--kqxs-header-border, #2a3d57) !important; padding: 4px 6px !important; }"
       + ".kqxs-react-auto .ant-table-wrapper { position: relative; }"
-      + ".kqxs-react-auto .kqxs-table-title-wrap { display: grid !important; grid-template-columns: 28px 1fr 28px !important; align-items: center !important; column-gap: 6px !important; }"
-      + ".kqxs-react-auto .kqxs-table-title-text { text-align: center !important; }"
+      + ".kqxs-react-auto .kqxs-table-title-wrap { display: inline-flex !important; align-items: center !important; justify-content: center !important; gap: 8px !important; width: max-content !important; max-width: none !important; margin: 0 auto !important; white-space: nowrap !important; }"
+      + ".kqxs-react-auto .kqxs-table-title-text { text-align: center !important; white-space: nowrap !important; overflow: visible !important; text-overflow: clip !important; }"
       + ".kqxs-react-auto .kqxs-table-actions .ant-btn { min-width: 22px !important; width: 22px !important; height: 22px !important; line-height: 20px !important; padding: 0 !important; font-size: 10px !important; border-radius: 2px !important; }"
       + ".kqxs-react-auto .kqxs-capture-icon-btn { min-width: 24px !important; width: 24px !important; height: 24px !important; padding: 0 !important; display: inline-flex !important; align-items: center !important; justify-content: center !important; }"
       + ".kqxs-react-auto .kqxs-capture-icon-btn .ant-btn-icon { margin-inline-end: 0 !important; }"
@@ -3694,17 +3692,6 @@
 
       h(Card, { key: "tabs", size: "small", style: { marginTop: 12, background: theme.cardBg, color: theme.text, borderColor: theme.border } }, [
         h("div", { className: "kqxs-tab-shell", style: { position: "relative" } }, [
-          h("div", { className: "kqxs-top-actions kqxs-capture-ignore kqxs-capture-toolbar", "data-capture-ignore": "true", style: { display: "flex", justifyContent: "flex-end", gap: 8 } },
-            h(Button, {
-              className: "kqxs-action-btn kqxs-capture-ignore kqxs-capture-icon-btn",
-              "data-capture-ignore": "true",
-              title: tt.btnCaptureTab || "Capture tab",
-              "aria-label": tt.btnCaptureTab || "Capture tab",
-              icon: renderCaptureIcon(),
-              onClick: captureActiveTabContent,
-              disabled: loading
-            })
-          ),
           h("div", { className: "kqxs-tab-capture-root" },
         activeAction === "kq"
           ? h("div", null, [
