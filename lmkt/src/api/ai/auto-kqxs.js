@@ -8,6 +8,7 @@
   }
 
   var h = ReactRef.createElement;
+  var KQXS_VIEW_ONLY = window.csmKqxsViewOnly !== false;
 
   function FallbackCard(props) {
     return h("div", { style: Object.assign({ border: "1px solid var(--kqxs-border, #d9d9d9)", borderRadius: 8, padding: 12, background: "var(--kqxs-card-bg, #fff)", color: "var(--kqxs-text, #1f1f1f)" }, props && props.style ? props.style : {}) }, [
@@ -261,14 +262,21 @@
       btnStat: "Thống Kê",
       btnStatNew: "Thống Kê Mới",
       btnExportExcel: "Xuất Excel",
+      btnCaptureTab: "Chụp tab",
+      btnExportTable: "Xuất bảng",
+      btnCaptureTable: "Chụp bảng",
       btnUpdateXskt: "Cập nhật XSKT",
       tabResult: "Kết Quả",
       tabStat: "Thống Kê",
       noResult: "Chưa có dữ liệu kết quả",
       exportNoData: "Không có dữ liệu để xuất",
       exportDone: "Đã xuất dữ liệu thành công",
+      captureDone: "Đã lưu ảnh bảng",
+      captureNoDom: "Không tìm thấy bảng để chụp",
+      captureNoLib: "Không tải được thư viện chụp ảnh",
       exportFallbackCsv: "Không có thư viện XLSX, đã xuất CSV thay thế",
       exportFallbackXls: "Không có thư viện XLSX, đã xuất Excel XML (.xls) thay thế",
+      readonlyWarn: "Chế độ chỉ xem: không cho phép cập nhật dữ liệu",
       kqByChuc: "Kết quả theo hàng chục và đơn vị",
       colChuc: "Hàng Chục",
       colSo: "Số",
@@ -317,14 +325,21 @@
       btnStat: "Statistics",
       btnStatNew: "New Statistics",
       btnExportExcel: "Export Excel",
+      btnCaptureTab: "Capture tab",
+      btnExportTable: "Export table",
+      btnCaptureTable: "Capture table",
       btnUpdateXskt: "Update XSKT",
       tabResult: "Results",
       tabStat: "Statistics",
       noResult: "No result data",
       exportNoData: "No data to export",
       exportDone: "Export completed",
+      captureDone: "Table image saved",
+      captureNoDom: "Table element not found",
+      captureNoLib: "Failed to load capture library",
       exportFallbackCsv: "XLSX library not found, exported CSV instead",
       exportFallbackXls: "XLSX library not found, exported Excel XML (.xls) instead",
+      readonlyWarn: "View-only mode: data updates are disabled",
       kqByChuc: "Results by tens and units",
       colChuc: "Tens",
       colSo: "Number",
@@ -373,14 +388,21 @@
       btnStat: "统计",
       btnStatNew: "新统计",
       btnExportExcel: "导出 Excel",
+      btnCaptureTab: "截图当前页签",
+      btnExportTable: "导出表格",
+      btnCaptureTable: "截图表格",
       btnUpdateXskt: "更新 XSKT",
       tabResult: "开奖结果",
       tabStat: "统计",
       noResult: "暂无结果数据",
       exportNoData: "没有可导出的数据",
       exportDone: "导出成功",
+      captureDone: "表格图片已保存",
+      captureNoDom: "未找到可截图的表格",
+      captureNoLib: "无法加载截图库",
       exportFallbackCsv: "未找到 XLSX 库，已改为导出 CSV",
       exportFallbackXls: "未找到 XLSX 库，已改为导出 Excel XML（.xls）",
+      readonlyWarn: "只读模式：不允许更新数据",
       kqByChuc: "按十位和个位显示结果",
       colChuc: "十位",
       colSo: "号码",
@@ -790,6 +812,9 @@
   }
 
   var __kqxsXlsxLoaderPromise = null;
+  var __kqxsCaptureLoaderPromise = null;
+  var __kqxsDomToImageLoaderPromise = null;
+  var __kqxsHtmlToImageLoaderPromise = null;
 
   function buildAssetScriptCandidates(relPath, extraCandidates) {
     var out = [];
@@ -882,6 +907,209 @@
     } finally {
       __kqxsXlsxLoaderPromise = null;
     }
+  }
+
+  async function ensureCaptureLibrary() {
+    if (typeof window.html2canvas === "function") return window.html2canvas;
+    if (__kqxsCaptureLoaderPromise) return __kqxsCaptureLoaderPromise;
+
+    var candidates = buildAssetScriptCandidates("html2canvas.min.js", [
+      "https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js",
+      "https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"
+    ]);
+
+    __kqxsCaptureLoaderPromise = (async function () {
+      var seen = {};
+      for (var i = 0; i < candidates.length; i += 1) {
+        var src = String(candidates[i] || "").trim();
+        if (!src || seen[src]) continue;
+        seen[src] = true;
+        try {
+          await loadScriptFile(src, { checkReady: function () { return typeof window.html2canvas === "function"; } });
+          if (typeof window.html2canvas === "function") return window.html2canvas;
+        } catch (e) {
+          // try next
+        }
+      }
+      throw new Error("html2canvas script unavailable");
+    })();
+
+    try {
+      return await __kqxsCaptureLoaderPromise;
+    } finally {
+      __kqxsCaptureLoaderPromise = null;
+    }
+  }
+
+  async function ensureDomToImageLibrary() {
+    if (window.domtoimage && typeof window.domtoimage.toPng === "function") return window.domtoimage;
+    if (__kqxsDomToImageLoaderPromise) return __kqxsDomToImageLoaderPromise;
+
+    var candidates = buildAssetScriptCandidates("dom-to-image-more.min.js", [
+      "https://cdn.jsdelivr.net/npm/dom-to-image-more@3.3.0/dist/dom-to-image-more.min.js",
+      "https://unpkg.com/dom-to-image-more@3.3.0/dist/dom-to-image-more.min.js"
+    ]);
+
+    __kqxsDomToImageLoaderPromise = (async function () {
+      var seen = {};
+      for (var i = 0; i < candidates.length; i += 1) {
+        var src = String(candidates[i] || "").trim();
+        if (!src || seen[src]) continue;
+        seen[src] = true;
+        try {
+          await loadScriptFile(src, { checkReady: function () { return !!(window.domtoimage && typeof window.domtoimage.toPng === "function"); } });
+          if (window.domtoimage && typeof window.domtoimage.toPng === "function") return window.domtoimage;
+        } catch (e) {
+          // try next candidate
+        }
+      }
+      throw new Error("dom-to-image script unavailable");
+    })();
+
+    try {
+      return await __kqxsDomToImageLoaderPromise;
+    } finally {
+      __kqxsDomToImageLoaderPromise = null;
+    }
+  }
+
+  async function ensureHtmlToImageLibrary() {
+    if (window.htmlToImage && typeof window.htmlToImage.toPng === "function") return window.htmlToImage;
+    if (__kqxsHtmlToImageLoaderPromise) return __kqxsHtmlToImageLoaderPromise;
+
+    var candidates = buildAssetScriptCandidates("html-to-image.min.js", [
+      "https://cdn.jsdelivr.net/npm/html-to-image@1.11.11/dist/html-to-image.min.js",
+      "https://unpkg.com/html-to-image@1.11.11/dist/html-to-image.min.js"
+    ]);
+
+    __kqxsHtmlToImageLoaderPromise = (async function () {
+      var seen = {};
+      for (var i = 0; i < candidates.length; i += 1) {
+        var src = String(candidates[i] || "").trim();
+        if (!src || seen[src]) continue;
+        seen[src] = true;
+        try {
+          await loadScriptFile(src, { checkReady: function () { return !!(window.htmlToImage && typeof window.htmlToImage.toPng === "function"); } });
+          if (window.htmlToImage && typeof window.htmlToImage.toPng === "function") return window.htmlToImage;
+        } catch (e) {
+          // try next candidate
+        }
+      }
+      throw new Error("html-to-image script unavailable");
+    })();
+
+    try {
+      return await __kqxsHtmlToImageLoaderPromise;
+    } finally {
+      __kqxsHtmlToImageLoaderPromise = null;
+    }
+  }
+
+  function downloadDataUrl(fileName, dataUrl) {
+    var a = document.createElement("a");
+    a.href = dataUrl;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  }
+
+  function getCaptureMetrics(node, fullContent) {
+    if (!node) return { width: 0, height: 0 };
+    var rect = node.getBoundingClientRect ? node.getBoundingClientRect() : { width: 0, height: 0 };
+    var width = fullContent
+      ? Math.max(1, Math.ceil(Math.max(rect.width || 0, node.scrollWidth || 0, node.clientWidth || 0)))
+      : Math.max(1, Math.ceil(rect.width || node.clientWidth || 0));
+    var height = fullContent
+      ? Math.max(1, Math.ceil(Math.max(rect.height || 0, node.scrollHeight || 0, node.clientHeight || 0)))
+      : Math.max(1, Math.ceil(rect.height || node.clientHeight || 0));
+    return { width: width, height: height };
+  }
+
+  function shouldIgnoreCaptureNode(node) {
+    if (!node || node.nodeType !== 1) return false;
+    var el = node;
+    if (el.getAttribute && String(el.getAttribute("data-capture-ignore") || "").toLowerCase() === "true") return true;
+    if (!el.classList) return false;
+    return el.classList.contains("kqxs-capture-ignore")
+      || el.classList.contains("kqxs-table-actions")
+      || el.classList.contains("kqxs-top-actions");
+  }
+
+  async function waitForCaptureFonts(timeoutMs) {
+    try {
+      if (!document.fonts || typeof document.fonts.ready === "undefined") return;
+      var timeout = Math.max(300, Number(timeoutMs || 1500));
+      await Promise.race([
+        document.fonts.ready,
+        new Promise(function (resolve) { setTimeout(resolve, timeout); })
+      ]);
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  function snapshotComputedStyles(root) {
+    if (!root || !root.querySelectorAll) return function () {};
+    var props = [
+      "color",
+      "background-color",
+      "border-top-color",
+      "border-right-color",
+      "border-bottom-color",
+      "border-left-color",
+      "outline-color",
+      "box-shadow",
+      "text-shadow",
+      "fill",
+      "stroke"
+    ];
+
+    var nodes = [root];
+    var all = root.querySelectorAll("*");
+    for (var i = 0; i < all.length; i += 1) nodes.push(all[i]);
+
+    var saved = [];
+    nodes.forEach(function (el) {
+      try {
+        var cs = window.getComputedStyle(el);
+        if (!cs) return;
+        var prev = el.getAttribute("style");
+        var append = "";
+        props.forEach(function (p) {
+          var v = String(cs.getPropertyValue(p) || "").trim();
+          if (!v) return;
+          append += p + ":" + v + " !important;";
+        });
+        if (!append) return;
+        el.setAttribute("style", (prev ? prev + ";" : "") + append);
+        saved.push({ el: el, prev: prev });
+      } catch (e) {
+        // ignore node
+      }
+    });
+
+    return function restore() {
+      for (var j = 0; j < saved.length; j += 1) {
+        var item = saved[j];
+        if (item.prev == null) item.el.removeAttribute("style");
+        else item.el.setAttribute("style", item.prev);
+      }
+    };
+  }
+
+  function getCaptureBackground(node) {
+    try {
+      var cs = window.getComputedStyle(node);
+      var bg = String(cs && cs.backgroundColor ? cs.backgroundColor : "").trim();
+      if (bg && bg !== "rgba(0, 0, 0, 0)" && bg !== "transparent") return bg;
+      var root = document.querySelector(".kqxs-react-auto") || document.body;
+      var rootBg = String(window.getComputedStyle(root).backgroundColor || "").trim();
+      if (rootBg && rootBg !== "rgba(0, 0, 0, 0)" && rootBg !== "transparent") return rootBg;
+    } catch (e) {
+      // ignore
+    }
+    return "#ffffff";
   }
 
   function downloadCsvFromAoa(fileName, aoa) {
@@ -1057,6 +1285,7 @@
     var _ai = useState([]), lichSuSoChuRows = _ai[0], setLichSuSoChuRows = _ai[1];
     var _aj = useState("ketqua"), subTab = _aj[0], setSubTab = _aj[1];
     var _ak = useState("kq"), activeAction = _ak[0], setActiveAction = _ak[1];
+    var _al = useState([]), thongkeTabItems = _al[0], setThongkeTabItems = _al[1];
     var taiDuLieuReqRef = useRef(0);
 
     var tt = useMemo(function () {
@@ -1119,7 +1348,7 @@
       } catch (e) {
         hasRuntimeProcess = false;
       }
-      setAllowUpdateActions(hasRuntimeProcess);
+      setAllowUpdateActions(!KQXS_VIEW_ONLY && hasRuntimeProcess);
       setThuTuan(days[chuyenNgay(den_ngay, "dd/mm/yyyy").getDay()]);
 
       fetchRows({
@@ -1356,10 +1585,14 @@
       var sources = layNguonTheoDanhSach(ds_dai_chon_so_chu, dataMienOverride);
       var dateAnyMap = {};
       var dateHitMap = {};
+      var dateHitForStatsMap = {};
+      var mergedByDate = {};
 
       sources.forEach(function (dai) {
         var rows = (dai.data || []).slice();
-        if (loai_tim === 1) {
+        if (loai_tim === 0) {
+          rows = rows.filter(function (r) { return String(r.thu || "") === String(dai.thu || ""); });
+        } else {
           rows = rows.filter(function (r) { return r.thu === thu_tuan; });
         }
         rows = rows.filter(function (r) {
@@ -1378,12 +1611,28 @@
         Object.keys(byDate).forEach(function (ngay) {
           dateAnyMap[ngay] = true;
           var values = getRowTwoDigits(byDate[ngay]);
+          if (!mergedByDate[ngay]) mergedByDate[ngay] = { all: [], byStt: {} };
+          mergedByDate[ngay].all = mergedByDate[ngay].all.concat(values);
+          var sttKey = String(dai.stt || "");
+          if (!mergedByDate[ngay].byStt[sttKey]) mergedByDate[ngay].byStt[sttKey] = [];
+          mergedByDate[ngay].byStt[sttKey] = mergedByDate[ngay].byStt[sttKey].concat(values);
+
           var hit = so_chu.some(function (so) { return values.indexOf(String(so)) >= 0; });
           if (hit) dateHitMap[ngay] = true;
         });
       });
 
-      var allowedDateSet = new Set(Object.keys(dateHitMap));
+      Object.keys(mergedByDate).forEach(function (ngay) {
+        var merged = mergedByDate[ngay] || { byStt: {} };
+        var hitMainStations = (ds_dai_chon || []).some(function (sttRaw) {
+          var stt = String(sttRaw || "");
+          var vals = merged.byStt[stt] || [];
+          return so_chu.some(function (so) { return vals.indexOf(String(so)) >= 0; });
+        });
+        if (hitMainStations) dateHitForStatsMap[ngay] = true;
+      });
+
+      var allowedDateSet = new Set(Object.keys(dateHitForStatsMap));
       var datesDesc = Object.keys(dateAnyMap).sort(function (a, b) {
         return chuyenNgay(b, "yyyymmdd") - chuyenNgay(a, "yyyymmdd");
       });
@@ -1415,6 +1664,75 @@
 
       historyRows.sort(function (a, b) { return Number(a.stt) - Number(b.stt); });
       return { allowedDateSet: allowedDateSet, historyRows: historyRows };
+    }
+
+    function buildThongKeTabItems(dataMienOverride, sourceSttList, includeKqTabs, includeHistoryTab, comboSourceSttList) {
+      var mapData = dataMienOverride || du_lieu_dai_mien;
+      var dsData = (mapData[mien] && mapData[mien].data) || [];
+      var sourceList = (sourceSttList || []).map(function (x) { return String(x); });
+      var comboSourceList = (comboSourceSttList || sourceList).map(function (x) { return String(x); });
+
+      var ds_dai_chon_local = [];
+      var sttSeen = {};
+      sourceList.forEach(function (sttRaw) {
+        var stt = String(sttRaw || "").trim();
+        if (!stt || sttSeen[stt]) return;
+        sttSeen[stt] = true;
+
+        if (Number(loai_tim) === 0) {
+          ds_dai_chon_local.push({ stt: stt, dai: mien + stt, ten_dai: mien + stt });
+          return;
+        }
+
+        var dlDT = dsData.find(function (dm) {
+          return String(dm.stt) === stt && String(dm.thu || "") === String(thu_tuan || "");
+        });
+        if (dlDT) ds_dai_chon_local.push({ stt: stt, dai: dlDT.ten_dai, ten_dai: dlDT.ten_dai });
+        else ds_dai_chon_local.push({ stt: stt, dai: mien + stt, ten_dai: mien + stt });
+      });
+
+      var ds_dai_chonN = ds_dai_chon_local.slice();
+      if (includeKqTabs) {
+        var mang_cac_dai = getUniqueCombinations(comboSourceList, Number(loai_tk || 1));
+        mang_cac_dai.forEach(function (lstDai) {
+          if (Number(loai_tim) === 0) {
+            var stt = lstDai.join("&");
+            var dai = mien + " " + lstDai.join("&");
+            ds_dai_chonN.push({ stt: stt, dai: dai, ten_dai: dai });
+          } else if (lstDai.length > 1) {
+            var sttN = lstDai.join("&");
+            var daiN = mien + " " + lstDai.join("&");
+            var tenDaiN = "";
+            lstDai.forEach(function (id) {
+              var csdai = ds_dai_chon_local.find(function (d) { return String(d.stt) === String(id); });
+              if (!csdai) return;
+              tenDaiN += (tenDaiN ? " & " : (mien + " ")) + csdai.ten_dai;
+            });
+            ds_dai_chonN.push({ stt: sttN, dai: daiN, ten_dai: tenDaiN || daiN });
+          }
+        });
+      }
+
+      var items = [];
+      if (includeHistoryTab) {
+        var ten_dai = ds_dai_chon_local.map(function (d) { return d.ten_dai; }).join(" & ");
+        items.push({ id: "lich_su_so_chu", text: "Lịch Sử Sổ Chủ", ketqua: false, ten_dai: ten_dai || "Lịch Sử Sổ Chủ" });
+      }
+
+      if (includeKqTabs) {
+        ds_dai_chonN.forEach(function (o) {
+          items.push({ id: String(o.stt), text: o.dai, ketqua: false, ten_dai: o.ten_dai });
+          if (String(o.stt) !== "lich_su_so_chu") {
+            items.push({ id: "kq_" + String(o.stt), text: "KQ " + o.dai, ketqua: true, ten_dai: o.ten_dai });
+          }
+        });
+      } else {
+        ds_dai_chon_local.forEach(function (o) {
+          items.push({ id: String(o.stt), text: o.dai, ketqua: false, ten_dai: o.ten_dai });
+        });
+      }
+
+      return items;
     }
 
     async function lay_ds_dai(dsDaiDaLoc) {
@@ -1555,12 +1873,12 @@
 
     async function buildThongKeData(isThongKeMoi, allowedDateSet, sourceSttList, dataMienOverride) {
       var sourceList = Array.isArray(sourceSttList) && sourceSttList.length ? sourceSttList : ds_dai_chon;
-      if (!sourceList.length) return [];
+      if (!sourceList.length) return { rows: [], mang_dai: [] };
 
       var tu = tu_ngay;
       var den = den_ngay;
       var daysRange = TruNgayRaSoNgay(den, tu, "dd/mm/yyyy");
-      if (daysRange < 0) return [];
+      if (daysRange < 0) return { rows: [], mang_dai: [] };
 
       var selected = layNguonTheoDanhSach(sourceList, dataMienOverride);
       var mang_dl_dai = {};
@@ -1569,17 +1887,20 @@
       for (var i = 0; i < selected.length; i += 1) {
         var dai = selected[i];
         var rows = (dai.data || []).slice();
-        if (loai_tim === 1) {
+        if (loai_tim === 0) {
+          rows = rows.filter(function (d) { return String(d.thu || "") === String(dai.thu || ""); });
+        } else {
           rows = rows.filter(function (d) { return d.thu === thu_tuan; });
         }
-        rows = rows.filter(function (obj) {
-          return chuyenNgay(String(obj.field_ngay || "").trim(), "yyyymmdd") >= chuyenNgay(tu, "dd/mm/yyyy")
-            && chuyenNgay(String(obj.field_ngay || "").trim(), "yyyymmdd") < chuyenNgay(den, "dd/mm/yyyy");
-        });
         if (allowedDateSet && allowedDateSet.size) {
           rows = rows.filter(function (obj) {
             var ngay = String(obj.field_ngay || "").trim();
             return allowedDateSet.has(ngay);
+          });
+        } else {
+          rows = rows.filter(function (obj) {
+            return chuyenNgay(String(obj.field_ngay || "").trim(), "yyyymmdd") >= chuyenNgay(tu, "dd/mm/yyyy")
+              && chuyenNgay(String(obj.field_ngay || "").trim(), "yyyymmdd") < chuyenNgay(den, "dd/mm/yyyy");
           });
         }
         rows = locVaSapXepNgay(rows);
@@ -1680,7 +2001,7 @@
         return Number(a.so || 0) - Number(b.so || 0);
       });
 
-      return outRows;
+      return { rows: outRows, mang_dai: mang_dai.map(function (x) { return String(x); }) };
     }
 
     async function chay_thong_ke() {
@@ -1699,8 +2020,14 @@
         var soChuCtx = xayDungNguCanhSoChu(loadedDataMien);
         var useSoChuSource = so_chu.length > 0 && ds_dai_chon_so_chu.length > 0;
         var thongKeSource = useSoChuSource ? ds_dai_chon_so_chu : ds_dai_chon;
+        var includeKqTabs = (Number(lay_so_ky || 0) + Number(dem_be_hon || 0) + Number(kxh_phai_lonhon || 0) + Number(dem_nho_hon || 0) > 0)
+          || (Number(dem_lon_hon || 0) > 0 && so_chu.length > 0);
+        var thongKeResult = await buildThongKeData(false, soChuCtx.allowedDateSet, thongKeSource, loadedDataMien);
+        var rows = (thongKeResult && Array.isArray(thongKeResult.rows)) ? thongKeResult.rows : [];
+        var mangDaiTabs = (thongKeResult && Array.isArray(thongKeResult.mang_dai)) ? thongKeResult.mang_dai : thongKeSource;
+        var tabItems = buildThongKeTabItems(loadedDataMien, thongKeSource, includeKqTabs, useSoChuSource, mangDaiTabs);
+        setThongkeTabItems(tabItems);
         setLichSuSoChuRows(soChuCtx.historyRows || []);
-        var rows = await buildThongKeData(false, soChuCtx.allowedDateSet, thongKeSource, loadedDataMien);
         setThongkeRows(rows);
         setProgress(100);
       } catch (e) {
@@ -1725,8 +2052,12 @@
 
       try {
         var loadedDataMien = await lay_ds_dai(dsDaiCanTai);
+        var thongKeResult = await buildThongKeData(true, null, null, loadedDataMien);
+        var rows = (thongKeResult && Array.isArray(thongKeResult.rows)) ? thongKeResult.rows : [];
+        var mangDaiTabs = (thongKeResult && Array.isArray(thongKeResult.mang_dai)) ? thongKeResult.mang_dai : ds_dai_chon;
+        var tabItems = buildThongKeTabItems(loadedDataMien, ds_dai_chon, true, false, mangDaiTabs);
+        setThongkeTabItems(tabItems);
         setLichSuSoChuRows([]);
-        var rows = await buildThongKeData(true, null, null, loadedDataMien);
         setThongkeRows(rows);
         setProgress(100);
       } catch (e) {
@@ -1906,6 +2237,10 @@
     }
 
     async function cap_nhat_xskt(ngay_lay) {
+      if (KQXS_VIEW_ONLY) {
+        canhbao(tt.readonlyWarn || "View-only mode");
+        return;
+      }
       var ngay_cap_nhat = dateFormat(ngay_lay, "d-m-yyyy");
       var link = "api.shtml?link=";
       if (window.hasOwnProperty("process")) link = "";
@@ -1936,6 +2271,10 @@
     }
 
     async function chay_cap_nhat() {
+      if (KQXS_VIEW_ONLY) {
+        canhbao(tt.readonlyWarn || "View-only mode");
+        return;
+      }
       var soNgay = TruNgayRaSoNgay(den_ngay, tu_ngay, "dd/mm/yyyy");
       if (soNgay < 0) return;
 
@@ -2042,10 +2381,7 @@
           id: idPrefix + "_" + i,
           so1: left ? left.so : "",
           val1: left ? left[valueKey] : "",
-          vach1: "",
-          vach: "",
           so2: right ? right.so : "",
-          vach2: "",
           val2: right ? right[valueKey] : ""
         });
       }
@@ -2061,18 +2397,11 @@
       function pickKyVals(src) {
         var vals = [];
         var kyArr = (src && src.ky) || [];
-        if (Number(sap_xep) === 0) {
-          for (var i = 0; i < kyArr.length; i += 1) {
-            var v = Number(kyArr[i] || 0);
-            if (v > 0) vals.push(v);
-            if (vals.length >= maxCot) break;
-          }
-        } else {
-          for (var j = kyArr.length - 1; j >= 0; j -= 1) {
-            var vv = Number(kyArr[j] || 0);
-            if (vv > 0) vals.push(vv);
-            if (vals.length >= maxCot) break;
-          }
+        // Keep the same traversal behavior as legacy Vue implementation.
+        for (var i = 0; i < kyArr.length; i += 1) {
+          var v = Number(kyArr[i] || 0);
+          if (v > 0) vals.push(v);
+          if (vals.length >= maxCot) break;
         }
         while (vals.length < maxCot) vals.push("");
         return vals;
@@ -2099,16 +2428,14 @@
           so1: left.so,
           kq1: left.ket_qua,
           to_mau1: left.to_mau,
-          vach1: "",
           so2: right.so,
           kq2: right.ket_qua,
           to_mau2: right.to_mau,
-          vach: "",
-          vach2: ""
+          vach: ""
         };
         for (var c = 0; c < maxCot; c += 1) {
-          rec["c1_" + (c + 1)] = left.kyVals[c];
-          rec["c2_" + (c + 1)] = right.kyVals[c];
+          rec["c_" + (c + 1)] = left.kyVals[c];
+          rec["c_" + (maxCot + c + 1)] = right.kyVals[c];
         }
         out.push(rec);
       }
@@ -2143,13 +2470,17 @@
 
     var thongkeGroups = useMemo(function () {
       var grouped = {};
+      var comboOrder = [];
       (thongkeRows || []).forEach(function (r) {
         var key = String(r.to_hop || "");
-        if (!grouped[key]) grouped[key] = [];
+        if (!grouped[key]) {
+          grouped[key] = [];
+          comboOrder.push(key);
+        }
         grouped[key].push(r);
       });
 
-      return Object.keys(grouped).sort().map(function (combo) {
+      return comboOrder.map(function (combo) {
         var rows = grouped[combo].slice().sort(function (a, b) {
           return Number(a.so || 0) - Number(b.so || 0);
         });
@@ -2164,8 +2495,12 @@
           : [];
 
         var demNhoRows = Number(dem_nho_hon) > 0
-          ? rows.filter(function (r) { return !r.has_ky_chot && Number(r.dem) <= Number(dem_nho_hon); })
+          ? rows.filter(function (r) { return Number(r.k_so_ky || 0) === 0 && Number(r.dem) <= Number(dem_nho_hon); })
           : [];
+
+        if (Number(dem_nho_hon) > 0 && demNhoRows.length === 0) {
+          demNhoRows = [{ so: "0", dem: 0 }];
+        }
 
         var matrix = buildMatrixRows(rows);
 
@@ -2195,15 +2530,17 @@
         }
       ];
       for (var i = 1; i <= maxCot; i += 1) {
+        (function (colIdx) {
         cols.push({
           title: "",
-          dataIndex: "c1_" + i,
-          key: "c1_" + i,
+          dataIndex: "c_" + colIdx,
+          key: "c_" + colIdx,
           width: 40,
           onCell: function (rec) {
             return rec && rec.to_mau1 ? { className: "to_mau_zone" } : {};
           }
         });
+        })(i);
       }
       cols.push({
         title: "",
@@ -2214,7 +2551,6 @@
           return rec && rec.to_mau1 ? { className: "to_mau_zone" } : {};
         }
       });
-      cols.push({ title: "", dataIndex: "vach1", key: "vach1", width: 20, className: "kqxs-vach-col" });
       cols.push({ title: "", dataIndex: "vach", key: "vach", width: 50, className: "kqxs-vach-col" });
       cols.push({
         title: "",
@@ -2226,17 +2562,18 @@
         }
       });
       for (var j = 1; j <= maxCot; j += 1) {
+        (function (colIdx) {
         cols.push({
           title: "",
-          dataIndex: "c2_" + j,
-          key: "c2_" + j,
+          dataIndex: "c_" + colIdx,
+          key: "c_" + colIdx,
           width: 40,
           onCell: function (rec) {
             return rec && rec.to_mau2 ? { className: "to_mau_zone" } : {};
           }
         });
+        })(maxCot + j);
       }
-      cols.push({ title: "", dataIndex: "vach2", key: "vach2", width: 20, className: "kqxs-vach-col" });
       cols.push({
         title: "",
         dataIndex: "kq2",
@@ -2250,13 +2587,10 @@
     }
 
     var pairColumns = [
-      { title: "", dataIndex: "so1", key: "so1", width: 40 },
-      { title: "", dataIndex: "vach1", key: "vach1", width: 20, className: "kqxs-vach-col" },
-      { title: "", dataIndex: "val1", key: "val1", width: 40 },
-      { title: "", dataIndex: "vach", key: "vach", width: 20, className: "kqxs-vach-col" },
-      { title: "", dataIndex: "so2", key: "so2", width: 40 },
-      { title: "", dataIndex: "vach2", key: "vach2", width: 20, className: "kqxs-vach-col" },
-      { title: "", dataIndex: "val2", key: "val2", width: 40 }
+      { title: "", dataIndex: "so1", key: "so1", width: 50 },
+      { title: "", dataIndex: "val1", key: "val1", width: 50 },
+      { title: "", dataIndex: "so2", key: "so2", width: 50 },
+      { title: "", dataIndex: "val2", key: "val2", width: 50 }
     ];
 
     var thongkeComboColumns = [
@@ -2336,18 +2670,47 @@
       return cols;
     }
 
-    function buildLaySoKyTitle(comboLabel) {
-      if (Number(sap_xep) === 0) {
-        return comboLabel + " 1-" + String(so_ky) + "-" + String(lay_so_ky) + " " + String(thu_tuan || "") + " " + String(den_ngay || "");
-      }
-      return comboLabel + " " + String(so_ky) + "-1-" + String(lay_so_ky) + " " + String(thu_tuan || "") + " " + String(den_ngay || "");
+    function gridAoaFromColumns(columns, rows) {
+      var cols = Array.isArray(columns) ? columns : [];
+      var srcRows = Array.isArray(rows) ? rows : [];
+      var header = cols.map(function (c) {
+        if (!c) return "";
+        if (typeof c.title === "string") return c.title;
+        return "";
+      });
+      var aoa = [header];
+      srcRows.forEach(function (r) {
+        var line = cols.map(function (c) {
+          var key = c && c.dataIndex ? c.dataIndex : "";
+          return key ? (r && r[key] != null ? r[key] : "") : "";
+        });
+        aoa.push(line);
+      });
+      return aoa;
     }
 
-    function buildThresholdTitle(comboLabel, threshold) {
-      if (Number(sap_xep) === 0) {
-        return comboLabel + " 1-" + String(so_ky) + "-" + String(threshold);
-      }
-      return comboLabel + " " + String(so_ky) + "-1-" + String(threshold);
+    function normalizeKqTitleLabel(comboLabel) {
+      return String(comboLabel || "").replace(/^KQ\s+/i, "").trim();
+    }
+
+    function buildLaySoKyTitle(comboLabel) {
+      var base = normalizeKqTitleLabel(comboLabel);
+      var range = Number(sap_xep) === 0
+        ? ("1-" + String(so_ky) + "-" + String(lay_so_ky))
+        : (String(so_ky) + "-1-" + String(lay_so_ky));
+      return base + " " + range + " " + String(thu_tuan || "") + " " + String(den_ngay || "");
+    }
+
+    function buildKxhTitle(comboLabel) {
+      var base = normalizeKqTitleLabel(comboLabel);
+      var range = "1-" + String(so_ky) + "-" + String(kxh_phai_lonhon);
+      return base + " " + range;
+    }
+
+    function buildDemNhoHonTitle(comboLabel) {
+      var base = normalizeKqTitleLabel(comboLabel);
+      var range = "1-" + String(so_ky) + "-" + String(dem_nho_hon);
+      return base + " " + range;
     }
 
     function buildMainThongKeTitle(comboLabel) {
@@ -2391,67 +2754,71 @@
 
     var thongkeTabs = (function () {
       var items = [];
-      var allowKqTabsInThongKe = (Number(lay_so_ky || 0) + Number(dem_be_hon || 0) + Number(kxh_phai_lonhon || 0) + Number(dem_nho_hon || 0) > 0)
-        || (Number(dem_lon_hon || 0) > 0 && so_chu.length > 0);
+      var groupMap = {};
+      (thongkeGroups || []).forEach(function (g) {
+        groupMap[String(g.combo || "")] = g;
+      });
 
-      if (activeAction === "tk" && lichSuSoChuRows.length) {
-        items.push({
-          key: "lich_su_so_chu",
-          label: "Lịch Sử Số Chủ",
-          children: h(Card, {
-            size: "small",
-            style: { background: theme.cardBg, color: theme.text, borderColor: theme.border }
-          }, h(Table, {
-            rowKey: "id",
-            columns: lichSuSoChuColumns,
-            dataSource: lichSuSoChuRows,
-            pagination: false,
-            size: "small",
-            scroll: { x: 400 }
-          }))
-        });
-      }
+      (thongkeTabItems || []).forEach(function (tabDef) {
+        var tabId = String(tabDef && tabDef.id || "");
+        if (!tabId) return;
 
-      thongkeGroups.forEach(function (grp) {
-        var isComboGroup = String(grp.combo || "").indexOf(",") >= 0;
-        var showComboGroup = activeAction === "tkm" || (activeAction === "tk" && allowKqTabsInThongKe);
-        if (isComboGroup && !showComboGroup) {
+        if (tabId === "lich_su_so_chu") {
+          if (activeAction !== "tk" || !lichSuSoChuRows.length) return;
+          items.push({
+            key: "lich_su_so_chu",
+            label: String(tabDef.text || "Lịch Sử Số Chủ"),
+            children: h(Card, {
+              size: "small",
+              style: { background: theme.cardBg, color: theme.text, borderColor: theme.border }
+            }, h(Table, {
+              rowKey: "id",
+              columns: lichSuSoChuColumns,
+              dataSource: lichSuSoChuRows,
+              pagination: false,
+              size: "small",
+              scroll: { x: 400 }
+            }))
+          });
           return;
         }
 
-        var comboDisplay = buildComboDisplay(grp.combo);
-        var comboText = comboDisplay.text;
-        var comboTenDai = comboDisplay.ten_dai;
+        var isKqTab = tabId.indexOf("kq_") === 0;
+        var comboId = isKqTab ? tabId.slice(3) : tabId;
+        var comboKey = String(comboId || "").replace(/&/g, ",");
+        var grp = groupMap[comboKey];
+        if (!grp) return;
+
+        var comboDisplay = buildComboDisplay(comboKey);
+        var comboTenDai = String((tabDef && tabDef.ten_dai) || comboDisplay.ten_dai || comboDisplay.text || "");
         var mainTitle = buildMainThongKeTitle(comboTenDai);
         var kqTitle = String(thu_tuan || "") + " " + String(den_ngay || "") + " " + comboTenDai;
 
-        items.push({
-          key: "tk_" + grp.combo,
-          label: comboText,
-          children: h(Card, {
-            className: "kqxs-thongke-combo",
-            size: "small",
-            title: mainTitle,
-            style: { background: theme.cardBg, color: theme.text, borderColor: theme.border }
-          }, h("div", { className: "kqxs-thongke-main" },
-            h(Table, {
-              rowKey: "id",
-              columns: thongkeComboColumns,
-              dataSource: grp.rows,
+        if (!isKqTab) {
+          items.push({
+            key: tabId,
+            label: String(tabDef && tabDef.text || comboDisplay.text || tabId),
+            children: h(Card, {
+              className: "kqxs-thongke-combo",
               size: "small",
-              pagination: false,
-              scroll: { x: 1200 },
-              rowClassName: function (rec) {
-                if (activeAction === "tkm" && rec && rec.thoa_man) return "to_mau";
-                if (activeAction === "tk" && Number(dem_lon_hon) > 0 && so_chu.length > 0 && so_chu.indexOf(String(rec && rec.so || "")) >= 0) return "to_mau";
-                return "";
-              }
-            })
-          ))
-        });
-
-        // Vue: ở Thống Kê, nếu không có điều kiện KQ thì chỉ có tab chính, không sinh tab KQ
-        if (activeAction === "tk" && !allowKqTabsInThongKe) {
+              title: mainTitle,
+              style: { background: theme.cardBg, color: theme.text, borderColor: theme.border }
+            }, h("div", { className: "kqxs-thongke-main" },
+              h(Table, {
+                rowKey: "id",
+                columns: thongkeComboColumns,
+                dataSource: grp.rows,
+                size: "small",
+                pagination: false,
+                scroll: { x: 1200 },
+                rowClassName: function (rec) {
+                  if (activeAction === "tkm" && rec && rec.thoa_man) return "to_mau";
+                  if (activeAction === "tk" && Number(dem_lon_hon) > 0 && so_chu.length > 0 && so_chu.indexOf(String(rec && rec.so || "")) >= 0) return "to_mau";
+                  return "";
+                }
+              })
+            ))
+          });
           return;
         }
 
@@ -2470,22 +2837,9 @@
             }
           }));
         } else {
-          var hasMatrix = Number(dem_lon_hon) > 0 && grp.matrixRows.length;
-          kqChildren = hasMatrix
-            ? h("div", { className: "kqxs-thongke-main" }, h(Table, {
-                rowKey: "id",
-                columns: buildMatrixColumns(grp.matrixGroupCount),
-                dataSource: grp.matrixRows,
-                size: "small",
-                pagination: false,
-                scroll: { x: 1200 },
-                title: function () {
-                  return h("b", null, kqTitle);
-                }
-              }))
-            : h("div", { className: "kqxs-kq-row" }, [
+          kqChildren = h("div", { className: "kqxs-kq-row" }, [
                 Number(lay_so_ky) > 0 && grp.laySoKyRows.length
-                  ? h("div", { key: "lsk_" + grp.combo, className: "kqxs-kq-col kqxs-kq-zone" }, h(Table, {
+                  ? h("div", { key: "lsk_" + grp.combo, className: "kqxs-kq-col kqxs-kq-col-main kqxs-kq-zone" }, h(Table, {
                       rowKey: "id",
                       columns: buildLaySoKyColumns(),
                       dataSource: grp.laySoKyRows,
@@ -2494,12 +2848,15 @@
                       bordered: true,
                       scroll: { x: "max-content" },
                       title: function () {
-                        return h("b", null, buildLaySoKyTitle(comboTenDai));
+                        var titleText = buildLaySoKyTitle(comboTenDai);
+                        return renderTableTitleWithExport(titleText, function (evt) {
+                          captureTableFromActionEvent(evt, "kqxs_lay_so_ky_" + String(grp.combo || ""));
+                        });
                       }
                     }))
                   : null,
-                Number(kxh_phai_lonhon) > 0 && grp.kxhPairRows.length
-                  ? h("div", { key: "kxh_" + grp.combo, className: "kqxs-kq-col kqxs-kq-zone" }, h(Table, {
+                Number(kxh_phai_lonhon) > 0
+                  ? h("div", { key: "kxh_" + grp.combo, className: "kqxs-kq-col kqxs-kq-col-side kqxs-kq-zone" }, h(Table, {
                       rowKey: "id",
                       columns: pairColumns,
                       dataSource: grp.kxhPairRows,
@@ -2508,12 +2865,15 @@
                       bordered: true,
                       scroll: { x: "max-content" },
                       title: function () {
-                        return h("b", null, buildThresholdTitle(comboTenDai, kxh_phai_lonhon));
+                        var titleText = buildKxhTitle(comboTenDai);
+                        return renderTableTitleWithExport(titleText, function (evt) {
+                          captureTableFromActionEvent(evt, "kqxs_kq_kxh_" + String(grp.combo || ""));
+                        });
                       }
                     }))
                   : null,
-                Number(dem_nho_hon) > 0 && grp.demNhoPairRows.length
-                  ? h("div", { key: "dnh_" + grp.combo, className: "kqxs-kq-col kqxs-kq-zone" }, h(Table, {
+                Number(dem_nho_hon) > 0
+                  ? h("div", { key: "dnh_" + grp.combo, className: "kqxs-kq-col kqxs-kq-col-side kqxs-kq-zone" }, h(Table, {
                       rowKey: "id",
                       columns: pairColumns,
                       dataSource: grp.demNhoPairRows,
@@ -2522,7 +2882,10 @@
                       bordered: true,
                       scroll: { x: "max-content" },
                       title: function () {
-                        return h("b", null, buildThresholdTitle(comboTenDai, dem_nho_hon));
+                        var titleText = buildDemNhoHonTitle(comboTenDai);
+                        return renderTableTitleWithExport(titleText, function (evt) {
+                          captureTableFromActionEvent(evt, "kqxs_kq_dem_" + String(grp.combo || ""));
+                        });
                       }
                     }))
                   : null
@@ -2530,8 +2893,8 @@
         }
 
         items.push({
-          key: "kq_" + grp.combo,
-          label: "KQ " + comboText,
+          key: tabId,
+          label: String(tabDef && tabDef.text || ("KQ " + comboDisplay.text)),
           children: kqChildren
         });
       });
@@ -2576,12 +2939,12 @@
       (pairRows || []).forEach(function (r) {
         if (r && r.so1) {
           var left = { so: r.so1, ket_qua: r.kq1, to_mau: r.to_mau1 ? 1 : 0 };
-          for (var i = 1; i <= maxCot; i += 1) left["c_" + i] = r["c1_" + i];
+          for (var i = 1; i <= maxCot; i += 1) left["c_" + i] = r["c_" + i];
           out.push(left);
         }
         if (r && r.so2) {
           var right = { so: r.so2, ket_qua: r.kq2, to_mau: r.to_mau2 ? 1 : 0 };
-          for (var j = 1; j <= maxCot; j += 1) right["c_" + j] = r["c2_" + j];
+          for (var j = 1; j <= maxCot; j += 1) right["c_" + j] = r["c_" + (maxCot + j)];
           out.push(right);
         }
       });
@@ -2643,12 +3006,13 @@
       }
 
       var combo = "";
-      if (activeTabKey.indexOf("tk_") === 0) combo = activeTabKey.slice(3);
-      if (activeTabKey.indexOf("kq_") === 0) combo = activeTabKey.slice(3);
-      var grp = thongkeGroups.find(function (g) { return String(g.combo || "") === String(combo || ""); });
+      var isKqExportTab = activeTabKey.indexOf("kq_") === 0;
+      combo = isKqExportTab ? activeTabKey.slice(3) : activeTabKey;
+      var comboKey = String(combo || "").replace(/&/g, ",");
+      var grp = thongkeGroups.find(function (g) { return String(g.combo || "") === comboKey; });
       if (!grp) return payload;
 
-      if (activeTabKey.indexOf("tk_") === 0) {
+      if (!isKqExportTab) {
         var kyHeaders = getKyHeaders();
         var aoaMain = [[tt.colTong, tt.colDem, tt.colKxh, tt.colMaxKxh, tt.colSo].concat(kyHeaders)];
         (grp.rows || []).forEach(function (r) {
@@ -2664,7 +3028,7 @@
         return payload;
       }
 
-      if (activeTabKey.indexOf("kq_") === 0) {
+      if (isKqExportTab) {
         if (activeAction === "tkm") {
           var aoaTkm = [[tt.colTong, tt.colDem, tt.colKxh, tt.colMaxKxh, tt.colSo, "Kết quả"]];
           (grp.rows || []).filter(function (r) { return !!(r && r.thoa_man); }).forEach(function (r) {
@@ -2672,52 +3036,20 @@
           });
           if (aoaTkm.length > 1) payload.sheets.push({ name: "KQ moi", aoa: aoaTkm });
         } else {
-          var hasMatrix = Number(dem_lon_hon) > 0 && (grp.matrixRows || []).length;
-          if (hasMatrix) {
-            var head = [];
-            for (var g = 1; g <= grp.matrixGroupCount; g += 1) {
-              head.push("Số " + g, "T " + g, "SL " + g, "KXH " + g, "Tô màu " + g);
-            }
-            var aoaMatrix = [head];
-            (grp.matrixRows || []).forEach(function (r) {
-              var line = [];
-              for (var gg = 1; gg <= grp.matrixGroupCount; gg += 1) {
-                line.push(r["so" + gg] || "", r["tong" + gg] || "", r["dem" + gg] || "", r["kxh" + gg] || "", r["hl" + gg] ? 1 : 0);
-              }
-              aoaMatrix.push(line);
-            });
-            if (aoaMatrix.length > 1) payload.sheets.push({ name: "KQ matrix", aoa: aoaMatrix });
-          } else {
-            if (Number(lay_so_ky) > 0 && (grp.laySoKyRows || []).length) {
-              var maxCot = Math.max(1, Number(lay_so_ky || 1));
-              var hdr = ["Số"];
-              for (var i = 1; i <= maxCot; i += 1) hdr.push("Kỳ " + i);
-              hdr.push("KQ", "Tô màu");
-              var aoaLaySoKy = [hdr];
-              flattenLaySoKyExportRows(grp.laySoKyRows).forEach(function (r) {
-                var line = [r.so];
-                for (var c = 1; c <= maxCot; c += 1) line.push(r["c_" + c]);
-                line.push(r.ket_qua, r.to_mau);
-                aoaLaySoKy.push(line);
-              });
-              if (aoaLaySoKy.length > 1) payload.sheets.push({ name: "Lay so ky", aoa: aoaLaySoKy });
-            }
+          if (Number(lay_so_ky) > 0 && (grp.laySoKyRows || []).length) {
+            var layCols = buildLaySoKyColumns();
+            var aoaLaySoKy = gridAoaFromColumns(layCols, grp.laySoKyRows || []);
+            if (aoaLaySoKy.length > 1) payload.sheets.push({ name: "Lay so ky", aoa: aoaLaySoKy });
+          }
 
-            if (Number(kxh_phai_lonhon) > 0 && (grp.kxhPairRows || []).length) {
-              var aoaKxh = [[tt.colSo, tt.colKxh]];
-              flattenPairExportRows(grp.kxhPairRows, "val").forEach(function (r) {
-                aoaKxh.push([r.so, r.value]);
-              });
-              if (aoaKxh.length > 1) payload.sheets.push({ name: "KQ KXH", aoa: aoaKxh });
-            }
+          if (Number(kxh_phai_lonhon) > 0) {
+            var aoaKxh = gridAoaFromColumns(pairColumns, grp.kxhPairRows || []);
+            payload.sheets.push({ name: "KQ KXH", aoa: aoaKxh });
+          }
 
-            if (Number(dem_nho_hon) > 0 && (grp.demNhoPairRows || []).length) {
-              var aoaDem = [[tt.colSo, tt.colDem]];
-              flattenPairExportRows(grp.demNhoPairRows, "val").forEach(function (r) {
-                aoaDem.push([r.so, r.value]);
-              });
-              if (aoaDem.length > 1) payload.sheets.push({ name: "KQ dem", aoa: aoaDem });
-            }
+          if (Number(dem_nho_hon) > 0) {
+            var aoaDem = gridAoaFromColumns(pairColumns, grp.demNhoPairRows || []);
+            payload.sheets.push({ name: "KQ dem", aoa: aoaDem });
           }
         }
 
@@ -2727,8 +3059,7 @@
       return payload;
     }
 
-    async function xuatExcel() {
-      var payload = buildExportPayload();
+    async function exportPayloadToFile(payload) {
       if (!payload || !payload.sheets || payload.sheets.length === 0) {
         canhbao(tt.exportNoData);
         return;
@@ -2778,6 +3109,212 @@
         downloadCsvFromAoa(baseName + ".csv", payload.sheets[0].aoa || [[""]]);
         canhbao(tt.exportFallbackCsv);
       }
+    }
+
+    function buildSubtableExportPayload(combo, sheetName, columns, rows) {
+      var ymd = dateFormat(new Date(), "yyyymmdd");
+      var comboToken = String(combo || "").replace(/,/g, "-").replace(/[^a-zA-Z0-9_-]/g, "");
+      var aoa = gridAoaFromColumns(columns || [], rows || []);
+      return {
+        fileName: "kqxs_" + sanitizeSheetName(String(sheetName || "sheet")).replace(/\s+/g, "_") + "_" + comboToken + "_" + ymd,
+        sheets: [{ name: String(sheetName || "Sheet"), aoa: aoa }]
+      };
+    }
+
+    async function captureNodeToPng(wrapper, fileNameBase, hideSelector, options) {
+      if (!wrapper) {
+        canhbao(tt.captureNoDom || "Table not found");
+        return;
+      }
+      var captureOptions = options || {};
+      var metrics = getCaptureMetrics(wrapper, !!captureOptions.fullContent);
+      var bgColor = getCaptureBackground(wrapper);
+      var userScale = Number(window.csmKqxsCaptureScale || 0);
+      var defaultScale = ((window.innerWidth || 0) <= 768) ? 3 : 4;
+      var pxRatio = userScale > 0
+        ? Math.max(2, Math.min(6, userScale))
+        : Math.max(2, Math.min(6, defaultScale));
+
+      var selectors = Array.isArray(hideSelector) ? hideSelector : [hideSelector || ".kqxs-table-actions"];
+      var actions = [];
+      selectors.forEach(function (sel) {
+        if (!sel) return;
+        var list = wrapper.querySelectorAll(sel);
+        for (var i = 0; i < list.length; i += 1) actions.push(list[i]);
+      });
+      var oldDisplay = [];
+      for (var j = 0; j < actions.length; j += 1) {
+        oldDisplay.push(actions[j].style.display || "");
+        actions[j].style.display = "none";
+      }
+
+      var restoreStyles = snapshotComputedStyles(wrapper);
+
+      var oldWrapperStyle = {
+        width: wrapper.style.width || "",
+        height: wrapper.style.height || "",
+        maxWidth: wrapper.style.maxWidth || "",
+        maxHeight: wrapper.style.maxHeight || "",
+        overflow: wrapper.style.overflow || ""
+      };
+
+      if (captureOptions.fullContent) {
+        // Optional full-content mode if caller needs full scroll area.
+        wrapper.style.width = metrics.width + "px";
+        wrapper.style.height = metrics.height + "px";
+        wrapper.style.maxWidth = "none";
+        wrapper.style.maxHeight = "none";
+        wrapper.style.overflow = "visible";
+      }
+
+      try {
+        await waitForCaptureFonts(2000);
+        var selectedEngine = String(window.csmKqxsCaptureEngine || "auto").toLowerCase();
+
+        if (selectedEngine === "auto" || selectedEngine === "html-to-image" || selectedEngine === "htmltoimage") {
+          try {
+            var htmlToImage = await ensureHtmlToImageLibrary();
+            var dataUrlHtml = await htmlToImage.toPng(wrapper, {
+              cacheBust: true,
+              backgroundColor: bgColor,
+              width: metrics.width,
+              height: metrics.height,
+              canvasWidth: Math.round(metrics.width * pxRatio),
+              canvasHeight: Math.round(metrics.height * pxRatio),
+              pixelRatio: pxRatio,
+              filter: function (node) {
+                return !shouldIgnoreCaptureNode(node);
+              },
+              style: {
+                transform: "none",
+                transformOrigin: "top left"
+              }
+            });
+            var ymdhmsHtml = dateFormat(new Date(), "yyyymmdd") + "_" + dateFormat(new Date(), "hhMMss");
+            var fileNameHtml = String(fileNameBase || "kqxs_table") + "_" + ymdhmsHtml + ".png";
+            downloadDataUrl(fileNameHtml, dataUrlHtml);
+            thongbao(tt.captureDone || "Captured");
+            return;
+          } catch (htmlErr) {
+            if (selectedEngine === "html-to-image" || selectedEngine === "htmltoimage") throw htmlErr;
+          }
+        }
+
+        if (selectedEngine === "auto" || selectedEngine === "dom-to-image" || selectedEngine === "domtoimage") {
+          try {
+            var domtoimage = await ensureDomToImageLibrary();
+            var dataUrl = await domtoimage.toPng(wrapper, {
+              bgcolor: bgColor,
+              cacheBust: true,
+              quality: 1,
+              width: metrics.width,
+              height: metrics.height,
+              pixelRatio: pxRatio,
+              filter: function (node) {
+                return !shouldIgnoreCaptureNode(node);
+              },
+              style: {
+                transform: "none",
+                transformOrigin: "top left"
+              }
+            });
+            var ymdhmsDom = dateFormat(new Date(), "yyyymmdd") + "_" + dateFormat(new Date(), "hhMMss");
+            var fileNameDom = String(fileNameBase || "kqxs_table") + "_" + ymdhmsDom + ".png";
+            downloadDataUrl(fileNameDom, dataUrl);
+            thongbao(tt.captureDone || "Captured");
+            return;
+          } catch (domErr) {
+            if (selectedEngine === "dom-to-image" || selectedEngine === "domtoimage") throw domErr;
+          }
+        }
+
+        var html2canvas = await ensureCaptureLibrary();
+        var canvas = await html2canvas(wrapper, {
+          backgroundColor: bgColor,
+          scale: pxRatio,
+          width: metrics.width,
+          height: metrics.height,
+          windowWidth: Math.max(metrics.width, window.innerWidth || 0),
+          windowHeight: Math.max(metrics.height, window.innerHeight || 0),
+          useCORS: true,
+          logging: false,
+          foreignObjectRendering: true,
+          scrollX: 0,
+          scrollY: 0
+        });
+        var ymdhms = dateFormat(new Date(), "yyyymmdd") + "_" + dateFormat(new Date(), "hhMMss");
+        var fileName = String(fileNameBase || "kqxs_table") + "_" + ymdhms + ".png";
+        downloadDataUrl(fileName, canvas.toDataURL("image/png"));
+        thongbao(tt.captureDone || "Captured");
+      } catch (err) {
+        canhbao((tt.captureNoLib || "Capture failed") + ": " + String((err && err.message) || err || ""));
+      } finally {
+        restoreStyles();
+        wrapper.style.width = oldWrapperStyle.width;
+        wrapper.style.height = oldWrapperStyle.height;
+        wrapper.style.maxWidth = oldWrapperStyle.maxWidth;
+        wrapper.style.maxHeight = oldWrapperStyle.maxHeight;
+        wrapper.style.overflow = oldWrapperStyle.overflow;
+        for (var k = 0; k < actions.length; k += 1) {
+          actions[k].style.display = oldDisplay[k] || "";
+        }
+      }
+    }
+
+    async function captureTableFromActionEvent(evt, fileNameBase) {
+      var trigger = evt && evt.currentTarget;
+      var wrapper = trigger && trigger.closest ? trigger.closest(".ant-table-wrapper") : null;
+      await captureNodeToPng(wrapper, fileNameBase, ".kqxs-table-actions", { fullContent: false });
+    }
+
+    async function captureActiveTabContent() {
+      var root = document.querySelector(".kqxs-react-auto .kqxs-tab-capture-root");
+      var base = "kqxs_tab_" + String(activeAction || "") + "_" + String(activeTabKey || "").replace(/[^a-zA-Z0-9_-]/g, "-");
+      await captureNodeToPng(root, base, [".kqxs-top-actions", ".kqxs-table-actions"], { fullContent: false });
+    }
+
+    function renderCaptureIcon() {
+      return h("svg", {
+        viewBox: "0 0 24 24",
+        width: 14,
+        height: 14,
+        "aria-hidden": "true",
+        focusable: "false",
+        style: { display: "block" }
+      }, [
+        h("path", {
+          key: "p1",
+          d: "M9 4h6l1.2 2H19a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H5a3 3 0 0 1-3-3V9a3 3 0 0 1 3-3h2.8L9 4zm3 4.5A4.5 4.5 0 1 0 12 17.5 4.5 4.5 0 0 0 12 8.5zm0 2A2.5 2.5 0 1 1 9.5 13 2.5 2.5 0 0 1 12 10.5z",
+          fill: "currentColor"
+        })
+      ]);
+    }
+
+    function renderTableTitleWithExport(titleText, onCaptureClick) {
+      return h("div", { className: "kqxs-table-title-wrap", style: { display: "grid", gridTemplateColumns: "28px 1fr 28px", alignItems: "center", columnGap: 6, minHeight: 24 } }, [
+        h("div", { key: "left-spacer", className: "kqxs-table-title-spacer", "aria-hidden": "true" }),
+        h("b", { key: "txt", className: "kqxs-table-title-text", style: { display: "block", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", textAlign: "center" } }, String(titleText || "")),
+        h("div", { key: "actions", className: "kqxs-table-actions kqxs-capture-ignore", "data-capture-ignore": "true", style: { display: "flex", justifyContent: "flex-end" } }, [
+          h(Button, {
+            key: "btn_capture",
+            size: "small",
+            className: "kqxs-action-btn kqxs-capture-ignore",
+            "data-capture-ignore": "true",
+            title: tt.btnCaptureTable || "Capture table",
+            "aria-label": tt.btnCaptureTable || "Capture table",
+            icon: renderCaptureIcon(),
+            onClick: function (e) {
+              if (e && typeof e.stopPropagation === "function") e.stopPropagation();
+              if (typeof onCaptureClick === "function") onCaptureClick(e);
+            }
+          })
+        ])
+      ]);
+    }
+
+    async function xuatExcel() {
+      var payload = buildExportPayload();
+      await exportPayloadToFile(payload);
     }
 
     function themedSelectProps(extra) {
@@ -2869,6 +3406,11 @@
       + ".kqxs-react-auto .ant-tabs-content-holder, .kqxs-react-auto .ant-tabs-tabpane { border-color: var(--kqxs-border, #d9d9d9) !important; }"
       + ".kqxs-react-auto .ant-tabs-nav-more, .kqxs-react-auto .ant-tabs-nav-more .anticon { color: var(--kqxs-muted, #666) !important; }"
       + ".kqxs-react-auto .ant-tabs-nav-more:hover, .kqxs-react-auto .ant-tabs-nav-more:focus { color: var(--kqxs-primary, #1677ff) !important; }"
+      + ".kqxs-react-auto .kqxs-thongke-tabs .ant-tabs-nav { margin-bottom: 8px !important; }"
+      + ".kqxs-react-auto .kqxs-thongke-tabs .ant-tabs-tab { margin-right: 6px !important; padding: 0 !important; }"
+      + ".kqxs-react-auto .kqxs-thongke-tabs .ant-tabs-tab .ant-tabs-tab-btn { font-size: 10pt !important; font-weight: 700 !important; line-height: 1.2 !important; padding: 6px 10px !important; border: 1px solid transparent !important; }"
+      + ".kqxs-react-auto .kqxs-thongke-tabs .ant-tabs-tab.ant-tabs-tab-active .ant-tabs-tab-btn { color: #fff !important; background: #0b5aa2 !important; border-color: #0f7bdc !important; border-radius: 2px !important; }"
+      + ".kqxs-react-auto .kqxs-thongke-tabs .ant-tabs-ink-bar { display: none !important; }"
       + ".kqxs-react-auto .ant-input, .kqxs-react-auto .ant-input-number, .kqxs-react-auto .ant-input-number-input, .kqxs-react-auto .ant-select-selector, .kqxs-react-auto input, .kqxs-react-auto select, .kqxs-react-auto textarea { background: var(--kqxs-input-bg, #fff) !important; color: var(--kqxs-input-text, #1f1f1f) !important; border-color: var(--kqxs-border, #d9d9d9) !important; }"
       + ".kqxs-react-auto .ant-input, .kqxs-react-auto .ant-input-number, .kqxs-react-auto .ant-picker, .kqxs-react-auto .ant-select-single .ant-select-selector { min-height: 32px !important; height: 32px !important; border-radius: 6px !important; }"
       + ".kqxs-react-auto .ant-select-single .ant-select-selector .ant-select-selection-item, .kqxs-react-auto .ant-select-single .ant-select-selector .ant-select-selection-placeholder { line-height: 30px !important; }"
@@ -2919,18 +3461,26 @@
       + ".kqxs-react-auto-date-popup .ant-picker-content th, .kqxs-react-auto-date-popup .ant-picker-content td, .kqxs-react-auto-date-popup .ant-picker-header, .kqxs-react-auto-date-popup .ant-picker-cell-inner, .kqxs-react-auto-date-popup .ant-picker-header button { color: var(--kqxs-text, #1f1f1f) !important; }"
       + ".kqxs-react-auto-date-popup .ant-picker-cell-in-view.ant-picker-cell-selected .ant-picker-cell-inner { background: var(--kqxs-primary, #1677ff) !important; color: #fff !important; }"
       + ".kqxs-react-auto-date-popup .ant-picker-cell-in-view.ant-picker-cell-today .ant-picker-cell-inner::before { border-color: var(--kqxs-primary, #1677ff) !important; }"
-      + ".kqxs-react-auto .kqxs-thongke-combo { border: 1px solid color-mix(in srgb, var(--kqxs-primary, #1677ff) 28%, var(--kqxs-border, #d9d9d9)) !important; box-shadow: 0 4px 14px color-mix(in srgb, var(--kqxs-primary, #1677ff) 10%, transparent); }"
-      + ".kqxs-react-auto .kqxs-thongke-combo > .ant-card-head { background: color-mix(in srgb, var(--kqxs-primary, #1677ff) 8%, var(--kqxs-card-bg, #fff)) !important; }"
+      + ".kqxs-react-auto .kqxs-thongke-combo { border: 1px solid #2b3b4f !important; box-shadow: none !important; }"
+      + ".kqxs-react-auto .kqxs-thongke-combo > .ant-card-head { background: color-mix(in srgb, var(--kqxs-card-bg, #fff) 85%, #1a2636) !important; }"
       + ".kqxs-react-auto .kqxs-thongke-main { padding: 4px 0 2px 0; }"
       + ".kqxs-react-auto .kqxs-thongke-main .ant-table-thead > tr > th { font-weight: 700 !important; }"
       + ".kqxs-react-auto .kqxs-thongke-subcard { margin-top: 12px; border-left: 4px solid color-mix(in srgb, var(--kqxs-primary, #1677ff) 52%, var(--kqxs-border, #d9d9d9)) !important; }"
       + ".kqxs-react-auto .kqxs-thongke-subcard > .ant-card-head { background: color-mix(in srgb, var(--kqxs-primary, #1677ff) 5%, var(--kqxs-card-bg, #fff)) !important; }"
-      + ".kqxs-react-auto .kqxs-vach-col { background: color-mix(in srgb, var(--kqxs-primary, #1677ff) 16%, var(--kqxs-card-bg, #fff)) !important; padding: 0 !important; }"
+      + ".kqxs-react-auto .kqxs-vach-col { background: #f3e3a6 !important; padding: 0 !important; }"
       + ".kqxs-react-auto .kqxs-kq-pane { padding-top: 2px; }"
       + ".kqxs-react-auto .kqxs-kq-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; }"
       + ".kqxs-react-auto .kqxs-kq-col { flex: 1 1 calc(33.333% - 8px); min-width: 300px; }"
-      + ".kqxs-react-auto .kqxs-kq-zone { border: 1px solid var(--kqxs-border, #d9d9d9); border-radius: 8px; padding: 6px; background: color-mix(in srgb, var(--kqxs-card-bg, #fff) 92%, var(--kqxs-primary, #1677ff)); }"
-      + ".kqxs-react-auto .kqxs-kq-zone + .kqxs-kq-zone { box-shadow: inset 2px 0 0 color-mix(in srgb, var(--kqxs-primary, #1677ff) 28%, transparent); }"
+      + ".kqxs-react-auto .kqxs-kq-col-main { flex: 0 0 602px; max-width: 602px; min-width: 602px; }"
+      + ".kqxs-react-auto .kqxs-kq-col-side { flex: 0 0 230px; max-width: 230px; min-width: 230px; }"
+      + ".kqxs-react-auto .kqxs-kq-zone { border: 1px solid #3a3a3a; border-radius: 0; padding: 0; background: color-mix(in srgb, var(--kqxs-card-bg, #fff) 95%, #111722); }"
+      + ".kqxs-react-auto .kqxs-kq-zone + .kqxs-kq-zone { box-shadow: none; }"
+      + ".kqxs-react-auto .kqxs-kq-zone .ant-table { border: 1px solid #3a3a3a !important; background: transparent !important; }"
+      + ".kqxs-react-auto .kqxs-kq-zone .ant-table-container { border-inline-start: 0 !important; border-top: 0 !important; }"
+      + ".kqxs-react-auto .kqxs-kq-zone .ant-table-thead > tr > th { background: color-mix(in srgb, var(--kqxs-input-bg, #fff) 92%, var(--kqxs-primary, #1677ff)) !important; color: var(--kqxs-text, #1f1f1f) !important; border-color: var(--kqxs-border, #d9d9d9) !important; font-size: 10pt !important; font-weight: 700 !important; padding: 2px 4px !important; }"
+      + ".kqxs-react-auto .kqxs-kq-zone .ant-table-tbody > tr > td { background: color-mix(in srgb, var(--kqxs-card-bg, #fff) 96%, var(--kqxs-page-bg, #f5f7fb)) !important; color: var(--kqxs-text, #1f1f1f) !important; border-color: var(--kqxs-border, #d9d9d9) !important; }"
+      + ".kqxs-react-auto .kqxs-kq-zone .ant-table-cell { text-align: center !important; padding: 2px 4px !important; font-family: 'Times New Roman', Times, serif !important; font-size: 16px !important; }"
+      + ".kqxs-react-auto .kqxs-kq-zone .ant-table-title { text-align: center !important; font-size: 12pt !important; text-transform: none !important; color: var(--kqxs-text, #1f1f1f) !important; background: transparent !important; padding: 4px 8px !important; }"
       + ".kqxs-react-auto .ant-table-tbody > tr > td.to_mau_zone { background: " + (chon_mau || "#cc9108") + " !important; }"
       + ".kqxs-react-auto .ant-table-thead > tr > th.matrix_group_start, .kqxs-react-auto .ant-table-tbody > tr > td.matrix_group_start { border-left: 3px solid var(--kqxs-border, #d9d9d9) !important; }"
       + ".kqxs-react-auto .kqxs-result-row { align-items: stretch; }"
@@ -2949,12 +3499,38 @@
       + ".kqxs-react-auto .kqxs-kqval-small { font-size: 24px; min-width: 56px; }"
       + ".kqxs-react-auto .kqxs-kqval-db { color: #ff5f5f; font-size: 50px; }"
       + ".kqxs-react-auto .kqxs-kqval-g8 { color: #ff9f43; font-size: 38px; }"
-      + ".kqxs-react-auto .kqxs-kq-pane .ant-table-title { text-align: center; text-transform: uppercase; }"
+      + ".kqxs-react-auto .kqxs-kq-pane .ant-table-title { text-align: center; text-transform: none; }"
       // Tô màu hàng thỏa mãn — giống Vue's to_mau class (màu vàng #cc9108)
       + ".kqxs-react-auto .ant-table-tbody > tr.to_mau > td { background: " + (chon_mau || "#cc9108") + " !important; }"
       + ".kqxs-react-auto .ant-table-tbody > tr.to_mau:hover > td { background: " + (chon_mau || "#cc9108") + " !important; }"
       // Tiêu đề nội tuyến của table trong Tổng Hợp
-      + ".kqxs-react-auto .ant-table-title { padding: 4px 8px !important; font-weight: 700 !important; background: color-mix(in srgb, var(--kqxs-primary, #1677ff) 6%, var(--kqxs-card-bg, #fff)) !important; }";
+      + ".kqxs-react-auto .ant-table-title { padding: 4px 8px !important; font-weight: 700 !important; background: transparent !important; }"
+      // Final precise overrides for Thong Ke KQ tabs + data headers
+      + ".kqxs-react-auto .kqxs-thongke-tabs .ant-tabs-nav-list { gap: 2px !important; }"
+      + ".kqxs-react-auto .kqxs-thongke-tabs .ant-tabs-tab { margin: 0 !important; }"
+      + ".kqxs-react-auto .kqxs-thongke-tabs .ant-tabs-tab .ant-tabs-tab-btn { padding: 6px 11px !important; border: 1px solid var(--kqxs-header-border, #2a3d57) !important; background: var(--kqxs-header-bg, #152235) !important; color: var(--kqxs-header-text, #f4f8ff) !important; border-radius: 0 !important; }"
+      + ".kqxs-react-auto .kqxs-thongke-tabs .ant-tabs-tab.ant-tabs-tab-active .ant-tabs-tab-btn { background: var(--kqxs-header-active-bg, #0b5aa2) !important; border-color: #0f7bdc !important; color: #ffffff !important; }"
+      + ".kqxs-react-auto .kqxs-thongke-tabs .ant-tabs-tab + .ant-tabs-tab { margin-left: 0 !important; }"
+      + ".kqxs-react-auto .kqxs-thongke-main .ant-table-wrapper { border: 1px solid var(--kqxs-border, #d9d9d9) !important; }"
+      + ".kqxs-react-auto .kqxs-thongke-main .ant-table-title { border-bottom: 1px solid var(--kqxs-header-border, #2a3d57) !important; color: var(--kqxs-header-text, #f4f8ff) !important; background: var(--kqxs-header-bg, #152235) !important; text-align: center !important; padding: 6px 8px !important; }"
+      + ".kqxs-react-auto .kqxs-thongke-main .ant-table-thead > tr > th { background: var(--kqxs-header-bg, #152235) !important; color: var(--kqxs-header-text, #f4f8ff) !important; border-color: var(--kqxs-header-border, #2a3d57) !important; font-size: 10pt !important; font-weight: 700 !important; padding: 5px 6px !important; }"
+      + ".kqxs-react-auto .kqxs-thongke-main .ant-table-tbody > tr > td { border-color: var(--kqxs-border, #d9d9d9) !important; }"
+      + ".kqxs-react-auto .kqxs-kq-zone { border-color: var(--kqxs-border, #d9d9d9) !important; }"
+      + ".kqxs-react-auto .kqxs-kq-zone .ant-table-title { border-bottom: 1px solid var(--kqxs-header-border, #2a3d57) !important; color: var(--kqxs-header-text, #f4f8ff) !important; background: var(--kqxs-header-bg, #152235) !important; }"
+      + ".kqxs-react-auto .kqxs-kq-zone .ant-table-thead > tr > th { background: var(--kqxs-header-bg, #152235) !important; color: var(--kqxs-header-text, #f4f8ff) !important; border-color: var(--kqxs-header-border, #2a3d57) !important; padding: 4px 6px !important; }"
+      + ".kqxs-react-auto .ant-table-wrapper { position: relative; }"
+      + ".kqxs-react-auto .kqxs-table-title-wrap { display: grid !important; grid-template-columns: 28px 1fr 28px !important; align-items: center !important; column-gap: 6px !important; }"
+      + ".kqxs-react-auto .kqxs-table-title-text { text-align: center !important; }"
+      + ".kqxs-react-auto .kqxs-table-actions .ant-btn { min-width: 22px !important; width: 22px !important; height: 22px !important; line-height: 20px !important; padding: 0 !important; font-size: 10px !important; border-radius: 2px !important; }"
+      + ".kqxs-react-auto .kqxs-capture-icon-btn { min-width: 24px !important; width: 24px !important; height: 24px !important; padding: 0 !important; display: inline-flex !important; align-items: center !important; justify-content: center !important; }"
+      + ".kqxs-react-auto .kqxs-capture-icon-btn .ant-btn-icon { margin-inline-end: 0 !important; }"
+      + ".kqxs-react-auto .kqxs-capture-toolbar { position: absolute; right: 8px; top: 8px; z-index: 10; }"
+      + ".kqxs-react-auto .kqxs-capture-toolbar .ant-btn { box-shadow: 0 1px 4px rgba(0,0,0,0.28); }"
+      + ".kqxs-react-auto .kqxs-vach-col { background: #bf9522 !important; }"
+      + "@media (max-width: 1200px) {"
+      + ".kqxs-react-auto .kqxs-kq-col-main, .kqxs-react-auto .kqxs-kq-col-side { flex: 1 1 100%; max-width: 100%; min-width: 0; }"
+      + ".kqxs-react-auto .kqxs-capture-toolbar { position: static; margin-bottom: 6px; display: flex; justify-content: flex-end; }"
+      + "}";
 
     return h("div", {
       className: "kqxs-react-auto",
@@ -2971,6 +3547,10 @@
         "--kqxs-primary": theme.primary,
         "--kqxs-input-bg": theme.inputBg,
         "--kqxs-input-text": theme.inputText,
+        "--kqxs-header-bg": theme.isDark ? "#152235" : "#0f3761",
+        "--kqxs-header-text": "#f4f8ff",
+        "--kqxs-header-border": theme.isDark ? "#2a3d57" : "#16548e",
+        "--kqxs-header-active-bg": theme.isDark ? "#0b5aa2" : "#0b5aa2",
         "--kqxs-color-scheme": theme.isDark ? "dark" : "light",
         "--kqxs-date-icon-filter": theme.isDark ? "invert(0.9)" : "none"
       }
@@ -3113,9 +3693,19 @@
       ]),
 
       h(Card, { key: "tabs", size: "small", style: { marginTop: 12, background: theme.cardBg, color: theme.text, borderColor: theme.border } }, [
-        h("div", { style: { display: "flex", justifyContent: "flex-end", marginBottom: 8 } },
-          h(Button, { className: "kqxs-action-btn", onClick: xuatExcel, disabled: loading }, tt.btnExportExcel)
-        ),
+        h("div", { className: "kqxs-tab-shell", style: { position: "relative" } }, [
+          h("div", { className: "kqxs-top-actions kqxs-capture-ignore kqxs-capture-toolbar", "data-capture-ignore": "true", style: { display: "flex", justifyContent: "flex-end", gap: 8 } },
+            h(Button, {
+              className: "kqxs-action-btn kqxs-capture-ignore kqxs-capture-icon-btn",
+              "data-capture-ignore": "true",
+              title: tt.btnCaptureTab || "Capture tab",
+              "aria-label": tt.btnCaptureTab || "Capture tab",
+              icon: renderCaptureIcon(),
+              onClick: captureActiveTabContent,
+              disabled: loading
+            })
+          ),
+          h("div", { className: "kqxs-tab-capture-root" },
         activeAction === "kq"
           ? h("div", null, [
               ds_dai_chon_xem_ket_qua.length
@@ -3154,6 +3744,7 @@
             ])
           : thongkeTabs.length
             ? h(Tabs, {
+              className: "kqxs-thongke-tabs",
                 activeKey: activeTabKey,
                 onChange: function (k) { setSubTab(k); },
                 size: "small",
@@ -3161,6 +3752,8 @@
                 items: thongkeTabs
               })
             : h("div", { style: { padding: 24, textAlign: "center", color: theme.muted } }, tt.noResult)
+          )
+        ])
       ])
     ]);
   }

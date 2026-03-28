@@ -151,6 +151,8 @@ export function CsmDynamicGrid({
   enableSearch = true,
   searchFields,
   isDetailGrid = false,
+  disablePagination = false,
+  allowReadonlyExport = false,
 }: {
 	m_configs: MConfig
 	database?: Database // DEPRECATED: Kept for backward compatibility, not used
@@ -169,6 +171,8 @@ export function CsmDynamicGrid({
   enableSearch?: boolean
   searchFields?: string[]
   isDetailGrid?: boolean
+	disablePagination?: boolean
+	allowReadonlyExport?: boolean
 }) {
 	const { t, i18n } = useTranslation();
 	const actionRef = useRef<ActionType>();
@@ -2290,7 +2294,7 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 		actionRef,
 		columns,
 		dataSource: searchedData,
-		pagination: { pageSize: Number(m_configs.table_pagesize) || 10 },
+		pagination: disablePagination ? false : { pageSize: Number(m_configs.table_pagesize) || 10 },
 		// Responsive scroll: on mobile, use auto; on desktop, use max-content for horizontal scroll
 		scroll: isMobile ? { x: 'auto', y: 'calc(100vh - 400px)' } : { x: 'max-content', y: 'calc(100vh - 400px)' },
 		...(enableInlineCellEdit && canEdit ? {
@@ -2499,6 +2503,7 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 		} : {}),
 		toolBarRender: () => {
 			const items: React.ReactNode[] = [];
+			const canShowExport = !isReadonly || allowReadonlyExport;
 			if (enableSearch) {
 				items.push(
 					React.createElement(Input, {
@@ -2612,6 +2617,8 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 						onClick: handleImport 
 					}, "Import")
 				);
+			}
+			if (canShowExport) {
 				buttons.push(
 					React.createElement(Button, { 
 						key: "export",

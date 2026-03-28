@@ -5550,10 +5550,10 @@ function mainAppCode() {
       id: 'keyword_grid',
       label: 'Quản lý từ khóa SEO',
       table_name: '', // Không sử dụng backend, chỉ dùng local storage
-      table_pagesize: 10,
+      table_pagesize: 0,
       type_form: 1, // Dạng bảng
-      row_type_edit: 1, // Chỉnh sửa inline
-      g_readonly: false,
+      row_type_edit: 0,
+      g_readonly: true,
       struct: {
         fieldsPK: ['id']
       },
@@ -5856,9 +5856,11 @@ try {
       m_configs: m_configs,
       database: database,
       appId: seft.app_id,
-      permissions: -1, // Full permissions
+      permissions: -1,
       decrypt: decrypt,
       enableSearch: true,
+      disablePagination: true,
+      allowReadonlyExport: true,
       onDataChange: () => {
         // Dữ liệu đã được sync qua trigger, không cần làm gì thêm
         console.log('[onDataChange] Grid data changed, triggers đã xử lý sync');
