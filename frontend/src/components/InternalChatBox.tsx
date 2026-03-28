@@ -42,7 +42,7 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
     typingUsers
   } = useChatHistory();
   
-  const { guestPhone: guestPhoneFromHook, isGuest, setChatUrl, getChatUrlToSend } = useGuestPhone();
+  const { guestPhone: guestPhoneFromHook, guestSessionId, ensureGuestSessionId, isGuest, setChatUrl, getChatUrlToSend } = useGuestPhone();
 
   // Ensure we always pick the latest guest phone (state or localStorage)
   const storedGuestPhone = React.useMemo(() => {
@@ -54,16 +54,32 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
       return "";
     }
   }, [isGuest, appId, guestPhoneFromHook]);
+
+  const storedGuestSessionId = React.useMemo(() => {
+    if (!isGuest) return "";
+    try {
+      return localStorage.getItem(`csm_guest_session_${appId}`) || guestSessionId || "";
+    } catch (e) {
+      console.warn("Cannot read guest session from localStorage", e);
+      return guestSessionId || "";
+    }
+  }, [isGuest, appId, guestSessionId]);
   
   // Use priority: prop.username (if provided) > hook state > localStorage
   const effectiveGuestPhone = isGuest
     ? ((username && username.trim()) || guestPhoneFromHook || storedGuestPhone)
     : "";
 
-  // Consistent room key for guests: use phone; for others: username/app room
+  const effectiveGuestSessionId = isGuest
+    ? (guestSessionId || storedGuestSessionId || ensureGuestSessionId())
+    : "";
+
+  const isGuestConversation = !isGuest && !!room && room !== appId && room !== 'csm' && !room.includes(':');
+
+  // Consistent room key for guests: use session id; for admin guest chats use room, for internal chats keep username
   const roomKey = isGuest
-    ? (effectiveGuestPhone || storedGuestPhone || chatRoom)
-    : (username || chatRoom);
+    ? (effectiveGuestSessionId || effectiveGuestPhone || storedGuestPhone || chatRoom)
+    : (isGuestConversation ? room : (username || chatRoom));
 
   // Get messages for this specific chat
   const messages = allMessages[roomKey] || [];
@@ -107,15 +123,14 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
   useEffect(() => {
     if (visible) {
       openChatContext(roomKey);
-      // Always pass effective guest phone when guest so history/API uses correct identifier
-      loadHistory(roomKey, isGuest ? effectiveGuestPhone || storedGuestPhone : username);
+      loadHistory(roomKey, isGuest ? (effectiveGuestSessionId || effectiveGuestPhone || storedGuestPhone) : roomKey);
     }
     return () => {
       if (visible) {
         closeChatContext(roomKey);
       }
     };
-  }, [visible, roomKey, username, chatRoom, isGuest, effectiveGuestPhone, storedGuestPhone, openChatContext, closeChatContext, loadHistory]);
+  }, [visible, roomKey, isGuest, effectiveGuestSessionId, effectiveGuestPhone, storedGuestPhone, openChatContext, closeChatContext, loadHistory]);
 
   const handleMouseDown = (e: React.MouseEvent) => {
     setIsDragging(true);
@@ -179,15 +194,15 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
     setInput(e.target.value);
     
     // Emit typing event if socket connected
-    const guestIdentifier = effectiveGuestPhone || storedGuestPhone;
-    const roomIdentifier = isGuest ? guestIdentifier : (username || chatRoom);
+    const guestIdentifier = effectiveGuestSessionId || effectiveGuestPhone || storedGuestPhone;
+    const roomIdentifier = isGuest ? guestIdentifier : roomKey;
     
     if (connected && roomIdentifier) {
       const actualRoom = isGuest && guestIdentifier
         ? `guest:${appId};${guestIdentifier}`
-        : (username ? `user:${appId};${username}` : `app:${appId}`);
+        : (isGuestConversation ? `guest:${appId};${roomKey}` : (username ? `user:${appId};${username}` : `app:${appId}`));
       
-      (window as any).emitTyping?.(actualRoom, isGuest ? guestIdentifier : username, appId);
+      (window as any).emitTyping?.(actualRoom, isGuest ? (effectiveGuestPhone || guestIdentifier) : username, appId);
     }
   };
 
@@ -201,19 +216,19 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
       
       // 🔴 CRITICAL: For guest users, MUST pass guestPhone as room identifier
       // The context's sendMessage will detect it and construct proper room
-      const guestIdentifier = effectiveGuestPhone || storedGuestPhone;
-      const roomIdentifier = isGuest ? guestIdentifier : (username || chatRoom);
+      const guestIdentifier = effectiveGuestSessionId || effectiveGuestPhone || storedGuestPhone;
+      const roomIdentifier = isGuest ? guestIdentifier : roomKey;
 
-      // If guest but still no phone, do not send (avoid saving blank on server)
+      // Guest chỉ cần session id, không bắt buộc phone
       if (isGuest && !roomIdentifier) {
-        console.warn("Guest phone is missing; cannot send message.");
+        console.warn("Guest identity is missing; cannot send message.");
         return;
       }
       
       sendMessageContext(
         roomIdentifier,
         input,
-        isGuest ? undefined : username
+        isGuest ? undefined : (isGuestConversation ? undefined : username)
       );
       setInput("");
     }
@@ -326,13 +341,15 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
                 <List
                   dataSource={visibleMessages}
                   renderItem={item => {
-                    const isMyMessage = isGuest ? item.username === username : item.userId === user.userId;
+                    const isMyMessage = isGuest
+                      ? (item.guestSessionId === effectiveGuestSessionId || item.guestPhone === effectiveGuestPhone || (!item.isAdmin && !item.userId))
+                      : item.userId === user.userId;
                     const displayName = isMyMessage ? t('common.chat.you') : item.username;
                     const messageTime = formatMessageTime(item.timestamp);
                     const isReadForCurrent = (() => {
                       if (item.readBy && item.readBy.length > 0) {
                         if (user.userId) return item.readBy.includes(user.userId);
-                        if (isGuest && effectiveGuestPhone) return item.readBy.includes(effectiveGuestPhone);
+                        if (isGuest && effectiveGuestSessionId) return item.readBy.includes(`guest:${effectiveGuestSessionId}`) || item.readBy.includes(effectiveGuestSessionId);
                       }
                       return false;
                     })();
@@ -519,13 +536,15 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
             <List
               dataSource={visibleMessages}
               renderItem={item => {
-                const isMyMessage = isGuest ? item.username === username : item.userId === user.userId;
+                const isMyMessage = isGuest
+                  ? (item.guestSessionId === effectiveGuestSessionId || item.guestPhone === effectiveGuestPhone || (!item.isAdmin && !item.userId))
+                  : item.userId === user.userId;
                 const displayName = isMyMessage ? t('common.chat.you') : item.username;
                 const messageTime = formatMessageTime(item.timestamp);
                 const isReadForCurrent = (() => {
                   if (item.readBy && item.readBy.length > 0) {
                     if (user.userId) return item.readBy.includes(user.userId);
-                    if (isGuest && effectiveGuestPhone) return item.readBy.includes(effectiveGuestPhone);
+                    if (isGuest && effectiveGuestSessionId) return item.readBy.includes(`guest:${effectiveGuestSessionId}`) || item.readBy.includes(effectiveGuestSessionId);
                   }
                   return false;
                 })();

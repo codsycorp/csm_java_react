@@ -1788,34 +1788,23 @@ public class ApiSpringController {
     }
 
     /**
-     * Lấy lịch sử chat theo appId và guestPhone
+     * Lấy lịch sử chat theo appId và guest identity.
      */
     private void handleChatHistoryGuest(StandardResponse response, Map<String, Object> params) {
-        // Check authentication first
-        org.springframework.security.core.Authentication authentication = 
-            org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
-        
-        if (authentication == null || !authentication.isAuthenticated() || 
-            authentication.getPrincipal() == null || "anonymousUser".equals(authentication.getPrincipal())) {
-            response.set("code", 401);
-            response.set("message", "Not authenticated");
-            response.set("success", false);
-            return;
-        }
-
         String appId = resolveAppIdParam(params);
-        String guestPhone = (String) params.get("guestPhone");
+        String guestPhone = params.get("guestPhone") instanceof String ? ((String) params.get("guestPhone")).trim() : null;
+        String guestSessionId = params.get("guestSessionId") instanceof String ? ((String) params.get("guestSessionId")).trim() : null;
         int limit = params.containsKey("limit") ? ((Number) params.get("limit")).intValue() : 50;
 
-        if (appId == null || appId.isEmpty() || guestPhone == null || guestPhone.isEmpty()) {
+        if (appId == null || appId.isEmpty() || ((guestPhone == null || guestPhone.isEmpty()) && (guestSessionId == null || guestSessionId.isEmpty()))) {
             response.set("code", 400);
-            response.set("message", "Missing 'appId' or 'guestPhone' parameter");
+            response.set("message", "Missing 'appId' and guest identity parameter");
             return;
         }
 
         try {
             java.util.List<net.phanmemmottrieu.model.ChatMessage> history = chatPersistenceService
-                    .getHistoryByGuestPhone(appId, guestPhone, limit);
+                    .getHistoryByGuestIdentity(appId, guestSessionId, guestPhone, limit);
 
             // Normalize room field: if room="csm" (legacy data), replace with appId for consistency
             for (net.phanmemmottrieu.model.ChatMessage msg : history) {
@@ -1964,18 +1953,20 @@ public class ApiSpringController {
         }
 
         try {
+            java.util.List<String> guestSessions = chatPersistenceService.getGuestSessionsByAppId(appId);
             java.util.List<String> guestPhones = chatPersistenceService.getGuestPhonesByAppId(appId);
 
             Map<String, Object> data = new HashMap<>();
             data.put("appId", appId);
-            data.put("guests", guestPhones); // Use 'guests' to match frontend expectation
+            data.put("guests", guestSessions); // Use stable guest session ids for frontend expectation
+            data.put("guestSessions", guestSessions);
             data.put("guestPhones", guestPhones); // Also include 'guestPhones' for backward compatibility
-            data.put("count", guestPhones.size());
+            data.put("count", guestSessions.size());
 
             response.set("code", 200);
             response.set("success", true);
             response.set("data", data);
-            response.set("message", "Retrieved " + guestPhones.size() + " guest users");
+            response.set("message", "Retrieved " + guestSessions.size() + " guest users");
 
         } catch (Exception e) {
             logger.error("❌ Error getting guests list: {}", e.getMessage(), e);
@@ -2038,36 +2029,26 @@ public class ApiSpringController {
     }
 
     /**
-     * Đánh dấu tin nhắn theo guestPhone là đã đọc
+     * Đánh dấu tin nhắn theo guest identity là đã đọc.
      */
     private void handleChatMarkRead(StandardResponse response, Map<String, Object> params) {
-        // Check authentication first
-        org.springframework.security.core.Authentication authentication = 
-            org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
-        
-        if (authentication == null || !authentication.isAuthenticated() || 
-            authentication.getPrincipal() == null || "anonymousUser".equals(authentication.getPrincipal())) {
-            response.set("code", 401);
-            response.set("message", "Not authenticated");
-            response.set("success", false);
-            return;
-        }
-
         String appId = resolveAppIdParam(params);
-        String guestPhone = (String) params.get("guestPhone");
+        String guestPhone = params.get("guestPhone") instanceof String ? ((String) params.get("guestPhone")).trim() : null;
+        String guestSessionId = params.get("guestSessionId") instanceof String ? ((String) params.get("guestSessionId")).trim() : null;
 
-        if (appId == null || appId.isEmpty() || guestPhone == null || guestPhone.isEmpty()) {
+        if (appId == null || appId.isEmpty() || ((guestPhone == null || guestPhone.isEmpty()) && (guestSessionId == null || guestSessionId.isEmpty()))) {
             response.set("code", 400);
-            response.set("message", "Missing 'appId' or 'guestPhone' parameter");
+            response.set("message", "Missing 'appId' and guest identity parameter");
             return;
         }
 
         try {
-            chatPersistenceService.markAllAsReadByGuestPhone(appId, guestPhone);
+            chatPersistenceService.markAllAsReadByGuestIdentity(appId, guestSessionId, guestPhone);
 
             Map<String, Object> data = new HashMap<>();
             data.put("appId", appId);
             data.put("guestPhone", guestPhone);
+            data.put("guestSessionId", guestSessionId);
 
             response.set("code", 200);
             response.set("success", true);

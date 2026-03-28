@@ -42,14 +42,15 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
     typingUsers
   } = useChatHistory();
   
-  // Get messages for this specific chat
-  const messages = allMessages[username || chatRoom] || [];
-  const unreadCount = unreadCounts[username || chatRoom] || 0;
-
-  const { guestPhone: guestPhoneFromHook, isGuest, setChatUrl, getChatUrlToSend } = useGuestPhone();
+  const { guestPhone: guestPhoneFromHook, guestSessionId, ensureGuestSessionId, isGuest, setChatUrl, getChatUrlToSend } = useGuestPhone();
   
-  // Use username prop if provided (from WebsiteLayout), otherwise use hook value
-  const effectiveGuestPhone = isGuest ? (username || guestPhoneFromHook) : "";
+  const effectiveGuestPhone = isGuest ? (guestPhoneFromHook || "") : "";
+  const effectiveGuestSessionId = isGuest ? (guestSessionId || ensureGuestSessionId()) : "";
+  const roomKey = isGuest ? (effectiveGuestSessionId || chatRoom) : (username || chatRoom);
+
+  // Get messages for this specific chat
+  const messages = allMessages[roomKey] || [];
+  const unreadCount = unreadCounts[roomKey] || 0;
 
   // Detect mobile
   useEffect(() => {
@@ -64,15 +65,15 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
   // Open chat khi component mount
   useEffect(() => {
     if (visible) {
-      openChatContext(username || chatRoom);
-      loadHistory(username || chatRoom, isGuest ? effectiveGuestPhone : username);
+      openChatContext(roomKey);
+      loadHistory(roomKey, isGuest ? effectiveGuestSessionId : username);
     }
     return () => {
       if (visible) {
-        closeChatContext(username || chatRoom);
+        closeChatContext(roomKey);
       }
     };
-  }, [visible, username, chatRoom, isGuest, effectiveGuestPhone, openChatContext, closeChatContext, loadHistory]);
+  }, [visible, roomKey, isGuest, effectiveGuestSessionId, username, openChatContext, closeChatContext, loadHistory]);
 
   const handleMouseDown = (e: React.MouseEvent) => {
     setIsDragging(true);
@@ -117,9 +118,9 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
   // Mark as read khi chat box mở
   useEffect(() => {
     if (visible) {
-      markAsRead(username || chatRoom);
+      markAsRead(roomKey);
     }
-  }, [visible, username, chatRoom, markAsRead]);
+  }, [visible, roomKey, markAsRead]);
 
   // Auto scroll to bottom when new messages arrive
   useEffect(() => {
@@ -133,21 +134,21 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
   // Mark as read khi chat box mở
   useEffect(() => {
     if (visible) {
-      markAsRead(username || chatRoom);
+      markAsRead(roomKey);
     }
-  }, [visible, username, chatRoom, markAsRead]);
+  }, [visible, roomKey, markAsRead]);
 
   // Handle input with typing indicator
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setInput(e.target.value);
     
     // Emit typing event if socket connected
-    const roomIdentifier = username || chatRoom;
+    const roomIdentifier = isGuest ? effectiveGuestSessionId : (username || chatRoom);
     
     if (connected && roomIdentifier) {
-      const actualRoom = username ? `user:${appId};${username}` : `app:${appId}`;
+      const actualRoom = isGuest ? `guest:${appId};${effectiveGuestSessionId}` : (username ? `user:${appId};${username}` : `app:${appId}`);
       
-      (window as any).emitTyping?.(actualRoom, username || effectiveGuestPhone, appId);
+      (window as any).emitTyping?.(actualRoom, username || effectiveGuestPhone || effectiveGuestSessionId, appId);
     }
   };
 
@@ -159,7 +160,7 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
       }
       
       sendMessageContext(
-        username || chatRoom,
+        isGuest ? effectiveGuestSessionId : (username || chatRoom),
         input,
         isGuest ? undefined : username
       );
@@ -274,7 +275,9 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
                 <List
                   dataSource={messages}
                   renderItem={item => {
-                    const isMyMessage = isGuest ? item.username === username : item.userId === user.userId;
+                    const isMyMessage = isGuest
+                      ? (item.guestSessionId === effectiveGuestSessionId || item.guestPhone === effectiveGuestPhone || (!item.isAdmin && !item.userId))
+                      : item.userId === user.userId;
                     const displayName = isMyMessage ? t('common.chat.you') : item.username;
                     const messageTime = formatMessageTime(item.timestamp);
 
@@ -317,9 +320,9 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
               </div>
 
               {/* Typing Indicator */}
-              {typingUsers[username || chatRoom] && typingUsers[username || chatRoom].length > 0 && (
+              {typingUsers[roomKey] && typingUsers[roomKey].length > 0 && (
                 <div style={{ padding: '6px 12px', background: token.colorBgElevated, borderTop: `1px solid ${token.colorBorder}`, fontSize: 11, color: token.colorTextSecondary, fontStyle: 'italic' }}>
-                  💬 {typingUsers[username || chatRoom].join(', ')} {t('common.chat.isTyping', 'đang nhập...')}
+                  💬 {typingUsers[roomKey].join(', ')} {t('common.chat.isTyping', 'đang nhập...')}
                 </div>
               )}
 
@@ -421,7 +424,9 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
             <List
               dataSource={messages}
               renderItem={item => {
-                const isMyMessage = isGuest ? item.username === username : item.userId === user.userId;
+                const isMyMessage = isGuest
+                  ? (item.guestSessionId === effectiveGuestSessionId || item.guestPhone === effectiveGuestPhone || (!item.isAdmin && !item.userId))
+                  : item.userId === user.userId;
                 const displayName = isMyMessage ? t('common.chat.you') : item.username;
                 const messageTime = formatMessageTime(item.timestamp);
 
@@ -471,9 +476,9 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
           </div>
 
           {/* Input */}
-          {typingUsers[username || chatRoom] && typingUsers[username || chatRoom].length > 0 && (
+          {typingUsers[roomKey] && typingUsers[roomKey].length > 0 && (
             <div style={{ padding: '6px 12px', background: token.colorBgElevated, borderTop: `1px solid ${token.colorBorder}`, fontSize: 11, color: token.colorTextSecondary, fontStyle: 'italic' }}>
-              💬 {typingUsers[username || chatRoom].join(', ')} {t('common.chat.isTyping', 'đang nhập...')}
+              💬 {typingUsers[roomKey].join(', ')} {t('common.chat.isTyping', 'đang nhập...')}
             </div>
           )}
 

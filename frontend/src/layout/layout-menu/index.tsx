@@ -4,6 +4,7 @@ import type { MenuItemType } from "./types";
 import { useDeviceType } from "#src/hooks";
 import { LayoutContext } from "#src/layout/container-layout/layout-context";
 import { removeTrailingSlash } from "#src/router/utils";
+import { useAppStore, useUserStore } from "#src/store";
 
 import { Menu } from "antd";
 import { useContext, useEffect, useMemo, useState } from "react";
@@ -33,6 +34,19 @@ export default function LayoutMenu({
 	const { sidebarCollapsed } = useContext(LayoutContext);
 	const [openKeys, setOpenKeys] = useState<string[]>([]);
 	const { isMobile } = useDeviceType();
+	const currentAppId = useAppStore(state => state.currentAppId);
+	const userAppId = useUserStore(state => state.app_id);
+
+	const effectiveAppId = useMemo(() => {
+		const fromUser = String(userAppId || "").trim();
+		if (fromUser) return fromUser;
+		const fromStore = String(currentAppId || "").trim();
+		return fromStore || "csm";
+	}, [userAppId, currentAppId]);
+
+	const openKeysStorageKey = useMemo(() => {
+		return `layout_menu_open_keys:${effectiveAppId}:${mode}`;
+	}, [effectiveAppId, mode]);
 
 	const getSelectedKeys = useMemo(() => {
 		const homePath = import.meta.env.VITE_BASE_HOME_PATH || "/home";
@@ -46,6 +60,35 @@ export default function LayoutMenu({
 		return [normalizedPath];
 	}, [location.pathname]);
 
+	const selectedKey = useMemo(() => String(getSelectedKeys[0] || ""), [getSelectedKeys]);
+
+	const findMenuKeyPath = (
+		items: MenuItemType[],
+		targetKey: string,
+		parents: string[] = [],
+	): string[] => {
+		for (const item of items) {
+			const key = String(item?.key || "");
+			if (!key) continue;
+
+			if (key === targetKey) {
+				return [...parents, key];
+			}
+
+			const children = Array.isArray(item?.children)
+				? (item.children as MenuItemType[])
+				: [];
+			if (children.length > 0) {
+				const found = findMenuKeyPath(children, targetKey, [...parents, key]);
+				if (found.length > 0) {
+					return found;
+				}
+			}
+		}
+
+		return [];
+	};
+
 	const menuInlineCollapsedProp = useMemo(
 		() => {
 			/* inlineCollapsed 只在 inline 模式可用 */
@@ -58,17 +101,10 @@ export default function LayoutMenu({
 	);
 
 	const handleOpenChange: MenuProps["onOpenChange"] = (keys) => {
-		// eslint-disable-next-line unicorn/prefer-includes
-		const latestOpenKey = keys.find(key => openKeys.indexOf(key) === -1);
-		const isExistChildren = latestOpenKey
-			? findChildrenLen(menus, latestOpenKey)
-			: false;
-		setOpenKeys(() => {
-			if (isExistChildren) {
-				return latestOpenKey ? [latestOpenKey] : [];
-			}
-			return keys;
-		});
+		const normalizedKeys = (Array.isArray(keys) ? keys : [])
+			.map(key => String(key))
+			.filter(key => !!key && !!findChildrenLen(menus, key));
+		setOpenKeys(normalizedKeys);
 	};
 
 	const menuOpenProps = useMemo(
@@ -86,11 +122,39 @@ export default function LayoutMenu({
 	);
 
 	useEffect(() => {
-		/* 如果菜单是收起的，则不需要自动展开，防止子路由激活，菜单自动弹出 */
-		if (!sidebarCollapsed) {
-			setOpenKeys(matches.map(item => item.id));
+		if (!autoOpenMenu) return;
+		try {
+			const raw = sessionStorage.getItem(openKeysStorageKey);
+			if (!raw) return;
+			const parsed = JSON.parse(raw);
+			if (!Array.isArray(parsed)) return;
+			const restored = parsed
+				.map((key: unknown) => String(key || ""))
+				.filter((key: string) => !!key && !!findChildrenLen(menus, key));
+			if (restored.length > 0) {
+				setOpenKeys(restored);
+			}
+		} catch {
+			// Ignore broken storage payload.
 		}
-	}, [matches]);
+	}, [autoOpenMenu, openKeysStorageKey, menus]);
+
+	useEffect(() => {
+		if (!autoOpenMenu) return;
+		sessionStorage.setItem(openKeysStorageKey, JSON.stringify(openKeys));
+	}, [autoOpenMenu, openKeysStorageKey, openKeys]);
+
+	useEffect(() => {
+		if (!autoOpenMenu || sidebarCollapsed || !selectedKey) return;
+		const keyPath = findMenuKeyPath(menus, selectedKey);
+		if (keyPath.length === 0) return;
+
+		// Keep user-expanded branches and ensure current branch is always expanded.
+		setOpenKeys((prev) => {
+			const merged = Array.from(new Set([...prev, ...keyPath.slice(0, -1)]));
+			return merged.filter((key) => !!findChildrenLen(menus, key));
+		});
+	}, [autoOpenMenu, sidebarCollapsed, selectedKey, menus, matches]);
 
 	return (
 		<Menu

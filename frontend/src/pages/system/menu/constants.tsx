@@ -46,8 +46,8 @@ export function getTypeFormOptions(t?: TFunction<"translation", undefined>) {
 			value: 2,
 		},
 		{
-			label: t ? t("system.menu.typeForm.crmWorkspace") : "CRM Workspace",
-			value: 5,
+			label: t ? t("system.menu.typeForm.kanbanBoard") : "Kanban Board",
+			value: 6,
 		},
 	];
 }

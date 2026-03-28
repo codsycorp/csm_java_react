@@ -13,5 +13,6 @@ export interface ChatMessage {
   appId?: string;
   to?: string;
   guestPhone?: string; // Số điện thoại của khách (dùng làm identifier)
+  guestSessionId?: string; // Định danh phiên chat ẩn danh của khách
   timestamp?: number; // Thời gian gửi tin nhắn (milliseconds)
 }

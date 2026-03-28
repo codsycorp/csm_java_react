@@ -1,6 +1,6 @@
 /**
  * AI Menu Design System - Comprehensive Prompts
- * Hỗ trợ 4 loại menu: Table, Master-Detail, Dynamic Link, Dynamic Code
+ * Hỗ trợ đầy đủ loại menu runtime hiện tại: Group, Table, Master-Detail, Dynamic Link, Dynamic Code, Kanban Board
  */
 
 /**
@@ -11,8 +11,33 @@ export const AI_MENU_DESIGN_MAIN_PROMPT = `Bạn là AI thiết kế hệ thốn
 Nhiệm vụ: Phân tích yêu cầu khách hàng và tạo ra cây menu JSON hoàn chỉnh.
 
 ═══════════════════════════════════════════════════════════════════
-LOẠI MENU HỖ TRỢ (4 TYPE)
+LOẠI MENU HỖ TRỢ (TYPE_FORM 0/1/2/3/4/6)
 ═══════════════════════════════════════════════════════════════════
+
+**Type 0: Nhóm Menu (type_form=0) - MENU CONTAINER**
+  Dùng để tổ chức cây menu nhiều cấp
+  - Không cần table_name, dynamic_link_url, auto_code_name
+  - Chỉ chứa children
+  - Ví dụ: Danh mục, Nghiệp vụ, Báo cáo, Hệ thống
+
+┌────────────────────────────────────────────────────────────────────┐
+│ TYPE 6: KANBAN BOARD (Standalone Board)                          │
+├────────────────────────────────────────────────────────────────────┤
+│ Khi nào dùng:                                                      │
+│ • Cần board công việc/đơn hàng với stage kéo-thả                  │
+│ • Cần view kanban/timeline/report theo cùng nguồn dữ liệu         │
+│                                                                    │
+│ Cấu hình khuyến nghị: kanban_config (JSON object) + table_name   │
+│                                                                    │
+│ Ví dụ:                                                            │
+│ ✓ "Sales Board"                                                   │
+│ ✓ "Board triển khai dự án"                                        │
+└────────────────────────────────────────────────────────────────────┘
+
+Lưu ý runtime quan trọng:
+- Type 1/2/4/6 được điều hướng về /system/grid/:menuId và AdminPage sẽ chọn component đúng theo type_form.
+- Type 3 mới điều hướng trực tiếp theo dynamic_link_url.
+- CRM hoặc quản lý công việc phải được thiết kế bằng nhiều menu nhỏ kết hợp grid/master-detail/kanban/report/dynamic code.
 
 **Type 1: Dạng Bảng (type_form=1) - DATA GRID**
   Hiển thị dữ liệu dạng bảng với CRUD operations
@@ -42,6 +67,11 @@ LOẠI MENU HỖ TRỢ (4 TYPE)
   - Code có sẵn trong DB, menu chỉ kích hoạt nó
   - Ví dụ: "Analytics Dashboard", "Real-time Monitor"
 
+**Type 6: Kanban Board (type_form=6) - STANDALONE KANBAN**
+  Kanban board độc lập với các view kanban/timeline/report
+  - Khuyến nghị: kanban_config (JSON object) + table_name
+  - Ví dụ: "Sales Board", "Công việc triển khai"
+
 ═══════════════════════════════════════════════════════════════════
 CẤU TRÚC CÂY MENU
 ═══════════════════════════════════════════════════════════════════
@@ -55,11 +85,12 @@ Level 2: GROUP = Nhóm con (Quản lý bán hàng, Quản lý kho, v.v)
   - type_form: 0 (Menu nhóm)
   - children: Chứa menu thực tế (table/master-detail/link/code)
 
-Level 3+: ACTION = Menu thực tế (Table, Master-Detail, Link, Code)
-  - type_form: 1, 2, 3, hoặc 4
+Level 3+: ACTION = Menu thực tế (Table, Master-Detail, Link, Code, Kanban)
+  - type_form: 1, 2, 3, 4 hoặc 6
   - Có table_name (nếu là Table/Master-Detail)
   - Có dynamic_link_url (nếu là Dynamic Link)
   - Có auto_code_name (nếu là Dynamic Code)
+  - Có kanban_config (nếu là Kanban Board)
   - children: Chỉ có với Master-Detail (detail tabs)
 
 ═══════════════════════════════════════════════════════════════════
@@ -76,7 +107,7 @@ MENUITEMTYPE - SCHEMA ĐẦY ĐỦ
   "row_type_edit": 0,                   // 0=Form, 1=Inline (chỉ cho Table)
   
   // Hiển thị & điều hướng
-  "path": "/route/path",                // Route path
+  "path": "/route/path",                // Route path (ưu tiên chỉ dùng cho type_form=3 hoặc route đặc biệt)
   "component": "CsmGrid",                // Tên component (CsmGrid, Layout, v.v)
   "order": 1,                           // Thứ tự hiển thị
   "icon": "fa fa-database",             // Icon CSS class
@@ -177,10 +208,13 @@ QUY TẮC THIẾT KẾ
    - Chứa children = sub-menu
 
 3. **Menu Level 3+ (Action Menu)**
-   - CÓ table_name nếu type_form = 1 hoặc 2
+  - CÓ table_name nếu type_form = 1 hoặc 2
    - CÓ dynamic_link_url nếu type_form = 3
    - CÓ auto_code_name nếu type_form = 4
+  - CÓ kanban_config nếu type_form = 6
    - Master-Detail: Master CÓ table_name, children KHÔNG có (children = detail tabs)
+  - Type 1/2/4/6: không bắt buộc path vì runtime điều hướng theo /system/grid/:menuId
+  - CRM/quản lý công việc phải tách thành nhiều menu nhỏ thay vì một workspace tổng hợp
 
 4. **Field ID & Primary Key**
    - Mỗi bảng bắt buộc có field "id" (khóa chính)
@@ -467,7 +501,7 @@ YÊU CẦU CỦA KHÁCH HÀNG
 ═══════════════════════════════════════════════════════════════════
 HÀNH ĐỘNG:
 - Phân tích yêu cầu
-- Xác định loại menu (Type 1/2/3/4) cho từng phần
+- Xác định loại menu (Type 0/1/2/3/4/6) cho từng phần
 - Tạo cây menu JSON hoàn chỉnh
 - Trả về JSON format trên
 - Ghi chú các thiết kế decisions
@@ -499,6 +533,10 @@ PHÂN LOẠI REQUIREMENT:
    - "Analytics dashboard", "Real-time monitor", "Custom dashboard"
    - Cần: JavaScript code, không có bảng dữ liệu truyền thống
 
+5. **Kanban Board** (Type 6)
+  - "Board công việc", "Sales board", "Ticket board"
+  - Cần: kanban_config (JSON object) + table_name
+
 XÁCDỊNH TABLE STRUCTURE:
 - Primary Key: id (bắt buộc)
 - Fields: Liệt kê tên, loại dữ liệu
@@ -509,7 +547,7 @@ FORMAT OUTPUT:
 Menu Structure:
 - Root: [name]
   - Group: [name]
-    - Action: [name] (Type: 1/2/3/4)
+    - Action: [name] (Type: 0/1/2/3/4/6)
       - Table: [table_name]
       - Fields: [field1, field2, ...]
       
@@ -606,6 +644,21 @@ export const MENU_TYPE_SELECTION_GUIDE = `
 │ ✓ "System Status"          → system_health_check                 │
 └────────────────────────────────────────────────────────────────────┘
 
+┌────────────────────────────────────────────────────────────────────┐
+│ TYPE 6: KANBAN BOARD (Standalone Board)                          │
+├────────────────────────────────────────────────────────────────────┤
+│ Khi nào dùng:                                                      │
+│ • Cần board công việc/đơn hàng với stage kéo-thả                  │
+│ • Cần view kanban/timeline/report theo cùng nguồn dữ liệu         │
+│                                                                    │
+│ Cấu hình khuyến nghị: kanban_config (JSON object) + table_name   │
+└────────────────────────────────────────────────────────────────────┘
+
+Lưu ý runtime quan trọng:
+- Type 1/2/4/6 được điều hướng về /system/grid/:menuId và AdminPage sẽ chọn component đúng theo type_form.
+- Type 3 điều hướng trực tiếp theo dynamic_link_url.
+- CRM/quản lý công việc không dùng type workspace tổng hợp, mà phải tách thành nhiều menu nhỏ.
+
 ╔════════════════════════════════════════════════════════════════════╗
 ║              SO SÁNH NHANH (QUICK COMPARISON)                     ║
 ╠═════════╦════════════╦═══════════╦═════════════╦═════════════════╣
@@ -627,8 +680,14 @@ export const MENU_TYPE_SELECTION_GUIDE = `
  */
 export const AI_MENU_TEMPLATE_GENERATOR = `
 Tạo template menu skeleton từ requirement:
-Đầu vào: Module name + loại menu (Type 1/2/3/4)
+Đầu vào: Module name + loại menu (Type 0/1/2/3/4/6)
 Đầu ra: Menu JSON skeleton với cấu trúc mặc định
+
+Template cho Type 0 (Group):
+{
+  id, parentId, type_form=0,
+  children: [...]
+}
 
 Template cho Type 1 (Table):
 {
@@ -653,6 +712,12 @@ Template cho Type 4 (Dynamic Code):
 {
   id, parentId, type_form=4,
   auto_code_name (sys_autos p_name)
+}
+
+Template cho Type 6 (Kanban Board):
+{
+  id, parentId, type_form=6,
+  table_name, kanban_config
 }
 `;
 

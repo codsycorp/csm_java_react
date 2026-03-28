@@ -1,8 +1,8 @@
 import CsmDynamicGrid from "#src/components/csm-grid/CsmDynamicGrid";
 import CsmMasterDetail from "#src/components/csm-grid/CsmMasterDetail";
 import CsmReport from "#src/components/csm-report/CsmReport";
-import CsmCrmWorkspace, { collectCrmTableNames, normalizeMenuRuntimeConfig } from "#src/components/csm-crm";
 import { CsmKanbanBoard } from "#src/components/csm-kanban";
+import { normalizeMenuRuntimeConfig } from "#src/components/csm-crm/crm-config";
 import DynamicCodeMenu from "#src/pages/system/dynamic-code";
 import { useAppStore, useUserStore, usePermissionStore, useTabsStore } from "#src/store";
 import { resolveDevFlag } from "#src/utils/dev-flag";
@@ -21,7 +21,7 @@ interface MenuData {
 	label: string;
 	table_name?: string;
 	report_name?: string;
-	type_form?: "" | 1 | 2 | 3 | 4 | 5 | 6;
+	type_form?: "" | 1 | 2 | 3 | 4 | 6;
 	row_type_edit?: 0 | 1;
 	[key: string]: any;
 }
@@ -613,8 +613,6 @@ export default function AdminPage() {
 			.map((item: string) => item.trim())
 			.filter(Boolean)
 			.forEach((item: string) => allMenuTables.add(item));
-		collectCrmTableNames(runtimeMenu.crm_config).forEach((tableName) => allMenuTables.add(tableName));
-
 		if (allMenuTables.size === 0) return;
 
 		setDbLoading(true);
@@ -738,7 +736,7 @@ export default function AdminPage() {
 	// Load table data from API when menuData changes
 	useEffect(() => {
 		loadTableData();
-	}, [menuData?.table_name, menuData?.crm_config, appId, reloadTrigger, isSystemUserRoute, isAdminUser, userSubOwnerCandidates.join("|")]);
+	}, [menuData?.table_name, appId, reloadTrigger, isSystemUserRoute, isAdminUser, userSubOwnerCandidates.join("|")]);
 
 	// Refresh function for data changes
 	const refreshDatabase = useCallback(() => {
@@ -752,7 +750,7 @@ export default function AdminPage() {
 			setReloadTrigger(prev => prev + 1); // Kích hoạt render lại lưới
 
 			// Tải lại dữ liệu lưới
-			if (menuData?.table_name || menuData?.crm_config) {
+			if (menuData?.table_name) {
 				loadTableData();
 			}
 		};
@@ -814,20 +812,6 @@ export default function AdminPage() {
 			style={{ marginBottom: 12 }}
 		/>
 	) : null;
-
-	if (typeForm === 5) {
-		return (
-			<div style={{ height: "100%" }}>
-				{mismatchAlertNode}
-				<CsmCrmWorkspace
-					appId={effectiveAppId}
-					menuData={runtimeMenuData}
-					database={database}
-					onDataChange={handleDataChange}
-				/>
-			</div>
-		);
-	}
 
 	// Render standalone Kanban board (type_form = 6 or kanban_config present)
 	if (typeForm === 6 || (runtimeMenuData as any).kanban_config) {

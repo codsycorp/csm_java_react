@@ -29,6 +29,7 @@ export function NotificationContainer({ ...restProps }: ButtonProps) {
 	       // Load lịch sử chat từ guest users khi admin đăng nhập - reload khi socket reconnect
 	       useEffect(() => {
 		       if (!socket || !connected || !isAdmin || !appId) return;
+		       const getGuestKey = (msg: ChatMessage) => (msg.guestSessionId || msg.guestPhone || '').trim();
 		       
 		       // Load tất cả chat history của appId này
 		       socket.emit("chat_history_app", appId, (data: string) => {
@@ -36,17 +37,18 @@ export function NotificationContainer({ ...restProps }: ButtonProps) {
 				       const history: ChatMessage[] = JSON.parse(data);
 				       // Chuyển đổi sang notifications
 				       const chatNotifs = history
-					       .filter(msg => msg.guestPhone && !msg.isAdmin) // Chỉ lấy tin từ guest
+					       .filter(msg => getGuestKey(msg) && !msg.isAdmin) // Chỉ lấy tin từ guest
 					       .map(msg => ({
 						       avatar: msg.avatar || '',
 						       date: new Date(msg.timestamp || Date.now()).toLocaleString(),
 						       isRead: msg.readBy?.includes(user.userId || '') || false,
 						       message: msg.message,
-						       title: msg.guestPhone || 'Guest',
+						       title: msg.guestPhone || msg.username || 'Khách mới',
 						       type: 'chat' as const,
 						       roomId: msg.room,
 						       fromUserId: msg.userId,
 						       guestPhone: msg.guestPhone,
+						       guestSessionId: msg.guestSessionId,
 						       appId: msg.appId,
 					       }));
 				       // Chỉ giữ lại non-chat notifications và merge với chat mới
@@ -63,15 +65,17 @@ export function NotificationContainer({ ...restProps }: ButtonProps) {
 	       // Lắng nghe tin nhắn chat mới từ guest users
 	       useEffect(() => {
 		       if (!socket || !isAdmin) return;
+		       const getGuestKey = (msg: ChatMessage) => (msg.guestSessionId || msg.guestPhone || '').trim();
 		       const handler = (msg: ChatMessage) => {
 			       // Chỉ nhận tin nhắn từ guest trong appId hiện tại
-			       if (msg.appId === appId && msg.guestPhone && !msg.isAdmin) {
+			       if (msg.appId === appId && getGuestKey(msg) && !msg.isAdmin) {
 				       setNotifications(prev => {
 					       // Kiểm tra duplicate
+					       const guestKey = getGuestKey(msg);
 					       const isDuplicate = prev.some(n => 
 						       n.type === 'chat' && 
 						       n.message === msg.message && 
-						       n.guestPhone === msg.guestPhone &&
+						       (n.guestSessionId || n.guestPhone) === guestKey &&
 						       Math.abs(new Date(n.date).getTime() - (msg.timestamp || Date.now())) < 2000
 					       );
 					       if (isDuplicate) return prev;
@@ -82,11 +86,12 @@ export function NotificationContainer({ ...restProps }: ButtonProps) {
 							       date: new Date(msg.timestamp || Date.now()).toLocaleString(),
 							       isRead: false,
 							       message: msg.message,
-							       title: msg.guestPhone || 'Guest',
+							       title: msg.guestPhone || msg.username || 'Khách mới',
 							       type: 'chat',
 							       roomId: msg.room,
 							       fromUserId: msg.userId,
 							       guestPhone: msg.guestPhone,
+							       guestSessionId: msg.guestSessionId,
 							       appId: msg.appId,
 						       },
 						       ...prev

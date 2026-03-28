@@ -71,7 +71,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
     () => (user.app_id || "").trim() || useAppStore.getState().getCurrentAppId() || "csm",
     [user.app_id]
   );
-  const { guestPhone, isGuest } = useGuestPhone();
+  const { guestPhone, guestSessionId, ensureGuestSessionId, isGuest } = useGuestPhone();
   
   // Debug logging for appId
   useEffect(() => {
@@ -95,16 +95,29 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
     appId: string;
     username?: string;
     guestPhone?: string;
+    guestSessionId?: string;
     source: 'message' | 'notification';
   }) => {
     if (typeof window === 'undefined') return;
     window.dispatchEvent(new CustomEvent('csm-chat-auto-open', { detail }));
   }, []);
   
+  const guestIdentity = useMemo(
+    () => (guestSessionId || guestPhone || "").trim(),
+    [guestSessionId, guestPhone]
+  );
+
+  const isPhoneLike = useCallback((val?: string) => !!val && /^(\+?\d[\d\s\-]{7,})$/.test(val), []);
+
+  const isGuestConversationKey = useCallback((value?: string) => {
+    if (!value) return false;
+    return value !== appId && value !== 'csm' && !value.includes(':');
+  }, [appId]);
+
   // Helper: Get localStorage key
   const getStorageKey = useCallback((room: string) => {
-    return `chat_history_${room}_${isGuest ? guestPhone : user.userId || 'admin'}`;
-  }, [isGuest, guestPhone, user.userId]);
+    return `chat_history_${room}_${isGuest ? guestIdentity : user.userId || 'admin'}`;
+  }, [isGuest, guestIdentity, user.userId]);
   
   // Helper: Save to localStorage (ONLY for guest, not admin)
   const saveToLocalStorage = useCallback((room: string, msgs: ChatMessage[]) => {
@@ -132,7 +145,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
   }, [getStorageKey]);
   
   // Load history from server
-  const loadHistory = useCallback(async (room: string, guestPhoneOverride?: string) => {
+  const loadHistory = useCallback(async (room: string, guestIdentityOverride?: string) => {
     // ONLY guest loads from localStorage for offline support
     // Admin ALWAYS loads fresh from server for real-time data
     if (isGuest) {
@@ -147,24 +160,21 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
     try {
       let history: ChatMessage[] = [];
       
-      if (isGuest && (guestPhone || guestPhoneOverride)) {
-        // Guest: load by guestPhone
-        const phone = guestPhoneOverride || guestPhone;
-        history = await (window as any).loadGuestChatHistory?.(appId, phone, 100) || [];
+      if (isGuest && (guestIdentity || guestIdentityOverride)) {
+        const identity = guestIdentityOverride || guestIdentity || ensureGuestSessionId();
+        history = await (window as any).loadGuestChatHistory?.(appId, identity, 100, guestPhone) || [];
         if (history && Array.isArray(history) && history.length > 0) {
-          console.log(`📥 [ChatHistory] Loaded ${history.length} messages from server for guest ${phone}`);
+          console.log(`📥 [ChatHistory] Loaded ${history.length} messages from server for guest ${identity}`);
           setMessages(prev => ({ ...prev, [room]: history }));
           saveToLocalStorage(room, history);
         }
       } else if (!isGuest) {
         // Admin: load based on room type
-        const isPhoneLike = (val?: string) => !!val && /^(\+?\d[\d\s\-]{7,})$/.test(val);
-        if (guestPhoneOverride && isPhoneLike(guestPhoneOverride)) {
-          // Load chat với guest cụ thể - sử dụng loadGuestChatHistory
-          history = await (window as any).loadGuestChatHistory?.(appId, guestPhoneOverride, 200) || [];
-          const guestRoom = guestPhoneOverride;
+        if (guestIdentityOverride && isGuestConversationKey(guestIdentityOverride)) {
+          history = await (window as any).loadGuestChatHistory?.(appId, guestIdentityOverride, 200) || [];
+          const guestRoom = guestIdentityOverride;
           if (history && Array.isArray(history) && history.length > 0) {
-            console.log(`📥 [ChatHistory] Admin loaded ${history.length} messages from server for guest ${guestPhoneOverride}`);
+            console.log(`📥 [ChatHistory] Admin loaded ${history.length} messages from server for guest ${guestIdentityOverride}`);
             setMessages(prev => ({ ...prev, [guestRoom]: history }));
             // No localStorage save for admin
           }
@@ -201,7 +211,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
     } catch (error) {
       console.warn('Failed to load chat history from server:', error);
     }
-  }, [isGuest, guestPhone, appId, loadFromLocalStorage, saveToLocalStorage]);
+  }, [isGuest, guestIdentity, ensureGuestSessionId, guestPhone, appId, loadFromLocalStorage, saveToLocalStorage, isGuestConversationKey]);
   
   // Update loadHistory ref whenever it changes (for initialization to use latest)
   useEffect(() => {
@@ -216,34 +226,25 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
     
     // Determine target guestPhone for admin->guest messages
     // If room looks like a phone number, it's a guest identifier
-    const isPhoneLike = (val?: string) => !!val && /^(\+?\d[\d\s\-]{7,})$/.test(val);
-    const targetGuestPhone = isAdminUser && isPhoneLike(room) ? room : undefined;
+    const targetGuestIdentity = isAdminUser && isGuestConversationKey(room) ? room : undefined;
     
     // 🔴 CRITICAL FIX: For guest user, extract guestPhone from room parameter
     // When InternalChatBox calls sendMessage, it passes guestPhone as room for guests
     // Also check localStorage as backup for stale state issue
-    let effectiveGuestPhone = guestPhone;
-    if (isGuest && isPhoneLike(room)) {
-      // room parameter is guestPhone for guest users (use this if provided)
-      effectiveGuestPhone = room;
-    } else if (isGuest && !effectiveGuestPhone && typeof window !== 'undefined') {
-      // Fallback to localStorage in case state is stale
-      const stored = localStorage.getItem(`csm_guest_phone_${appId}`);
-      if (stored) {
-        effectiveGuestPhone = stored;
-        console.log(`📱 [ChatHistory] Using stored guestPhone from localStorage: ${effectiveGuestPhone}`);
-      }
+    let effectiveGuestIdentity = guestIdentity || ensureGuestSessionId();
+    if (isGuest && room && isGuestConversationKey(room)) {
+      effectiveGuestIdentity = room;
     }
     
     // Determine actual backend room based on user type
     let actualRoom = room;
-    if (isGuest && effectiveGuestPhone) {
+    if (isGuest && effectiveGuestIdentity) {
       // Guest always uses their private guest room
-      actualRoom = `guest:${appId};${effectiveGuestPhone}`;
+      actualRoom = `guest:${appId};${effectiveGuestIdentity}`;
     } else if (isAdminUser) {
-      if (targetGuestPhone) {
+      if (targetGuestIdentity) {
         // Admin → specific guest
-        actualRoom = `guest:${appId};${targetGuestPhone}`;
+        actualRoom = `guest:${appId};${targetGuestIdentity}`;
       } else if (to) {
         // Admin → specific user
         actualRoom = `user:${appId};${to}`;
@@ -265,7 +266,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
     
     const msg: ChatMessage = {
       room: actualRoom,
-      username: isGuest ? (effectiveGuestPhone || "Guest") : (user.username || "Admin"),
+      username: isGuest ? (guestPhone || "Guest") : (user.username || "Admin"),
       userId: user.userId,
       avatar: user.avatar,
       isAdmin: isAdminUser,
@@ -274,7 +275,8 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
       readBy: [],
       appId,
       to,
-      guestPhone: isGuest ? (effectiveGuestPhone || "") : (targetGuestPhone || ""),
+      guestPhone: isGuest ? (guestPhone || "") : undefined,
+      guestSessionId: isGuest ? (effectiveGuestIdentity || "") : (targetGuestIdentity || undefined),
       timestamp: Date.now(),
     };
     
@@ -295,9 +297,10 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
       actualRoom,
       uiRoom: room,
       guestPhone: msg.guestPhone,
+      guestSessionId: msg.guestSessionId,
       message: msg.message.substring(0, 50)
     });
-  }, [socket, user, isGuest, guestPhone, appId, saveToLocalStorage]);
+  }, [socket, user, isGuest, guestIdentity, guestPhone, ensureGuestSessionId, appId, saveToLocalStorage, isGuestConversationKey]);
   
   // Mark as read with refresh
   const markAsRead = useCallback((room: string) => {
@@ -305,10 +308,10 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
     
     console.log(`📖 [ChatHistory] Marking room as read: ${room}`);
     
-    if (isGuest && guestPhone) {
-      (window as any).markGuestMessagesAsRead?.(appId, guestPhone).then(() => {
+    if (isGuest && guestIdentity) {
+      (window as any).markGuestMessagesAsRead?.(appId, guestIdentity).then(() => {
         // Reload history to refresh readBy flags
-        loadHistoryRef.current?.(room, guestPhone).catch((err: any) => {
+        loadHistoryRef.current?.(room, guestIdentity).catch((err: any) => {
           console.warn("Failed to reload history after marking as read", err);
         });
       }).catch((err: any) => {
@@ -317,8 +320,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
     } else if (!isGuest && user.userId) {
       // For admin: infer actual room for API call
       let apiRoom = room;
-      if (/^(\+?\d[\d\s\-]{7,})$/.test(room)) {
-        // If room is a phone number, it's a guestPhone - get the actual app room
+      if (isGuestConversationKey(room)) {
         apiRoom = `guest:${appId};${room}`;
       } else if (!room.includes(':') && room !== appId) {
         // Normalize room names for API
@@ -347,7 +349,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
       }
       return updated;
     });
-  }, [socket, isGuest, guestPhone, appId, user.userId, loadHistoryRef]);
+  }, [socket, isGuest, guestIdentity, appId, user.userId, loadHistoryRef, isGuestConversationKey]);
   
   // Open/close chat
   const openChat = useCallback((room: string) => {
@@ -376,7 +378,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
       
       const joinData: ChatMessage = {
         room: appId, // Will be processed by backend based on isAdmin/guestPhone
-        username: user.username || (isGuest ? guestPhone : "Admin"),
+        username: user.username || (isGuest ? guestPhone || guestIdentity : "Admin"),
         userId: user.userId,
         avatar: user.avatar,
         isAdmin: isAdminUser,
@@ -385,6 +387,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
         readBy: [],
         appId,
         guestPhone: isGuest ? guestPhone : undefined,
+        guestSessionId: isGuest ? guestIdentity : undefined,
       };
       socket.emit("join", joinData);
       
@@ -392,11 +395,12 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
         isAdmin: isAdminUser,
         isGuest,
         guestPhone,
+        guestSessionId: guestIdentity,
         appId,
-        room: isAdminUser ? `app:${appId}` : isGuest ? `guest:${appId};${guestPhone}` : appId
+        room: isAdminUser ? `app:${appId}` : isGuest ? `guest:${appId};${guestIdentity}` : appId
       });
     }
-  }, [socket, connected, appId, user, isGuest, guestPhone]);
+  }, [socket, connected, appId, user, isGuest, guestPhone, guestIdentity]);
   
   // Listen for messages
   useEffect(() => {
@@ -422,15 +426,14 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
       
       if (isGuest) {
         // Guest: chỉ nhận msg cho mình
-        if (msg.to !== guestPhone && msg.guestPhone !== guestPhone) {
+        if (msg.to !== guestIdentity && msg.guestSessionId !== guestIdentity && msg.guestPhone !== guestPhone) {
           return;
         }
         targetRoom = appId;
       } else {
         // Admin: nhận msg từ guest hoặc msg của mình
-        if (msg.guestPhone) {
-          // Msg từ guest hoặc tới guest: lưu theo guestPhone
-          targetRoom = msg.guestPhone;
+        if (msg.guestSessionId || msg.guestPhone) {
+          targetRoom = (msg.guestSessionId || msg.guestPhone)!;
         } else if (msg.to && msg.userId !== user.userId) {
           // Msg tới người khác
           return;
@@ -453,7 +456,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
         saveToLocalStorage(targetRoom, updated);
 
         const isOwnMessage = isGuest
-          ? (!msg.isAdmin && !msg.userId && (msg.username === guestPhone || msg.guestPhone === guestPhone))
+          ? (!msg.isAdmin && !msg.userId && (msg.guestSessionId === guestIdentity || msg.guestPhone === guestPhone))
           : (msg.userId === user.userId);
 
         if (!activeChats.includes(targetRoom) && !isOwnMessage) {
@@ -462,6 +465,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
             appId,
             username: msg.username,
             guestPhone: msg.guestPhone,
+            guestSessionId: msg.guestSessionId,
             source: 'message',
           });
         }
@@ -525,6 +529,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
             appId,
             username: msg.username,
             guestPhone: msg.guestPhone,
+            guestSessionId: msg.guestSessionId,
             source: 'notification',
           });
         }
@@ -643,7 +648,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
       socket.off?.("chat_read_update", handleReadUpdate);
       socket.off?.("user_typing", handleTyping);
     };
-  }, [socket, isGuest, guestPhone, appId, user.userId, activeChats, saveToLocalStorage, loadHistory, emitAutoOpenChat]);
+  }, [socket, isGuest, guestIdentity, guestPhone, appId, user.userId, activeChats, saveToLocalStorage, loadHistory, emitAutoOpenChat]);
   
   // Load initial history khi connect
   useEffect(() => {
@@ -651,7 +656,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
       console.log(`📌 [ChatHistory] Starting initialization with connected=${connected}, appId="${appId}", isGuest=${isGuest}, userId=${user.userId}, isInitialized=${isInitialized}`);
       const initializeChat = async () => {
         try {
-          if (isGuest && guestPhone) {
+          if (isGuest && guestIdentity) {
             // Guest: restore chat history + unread từ localStorage
             await loadHistoryRef.current?.(appId);
             
@@ -682,12 +687,12 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
               // 3. Load lịch sử chat cho từng guest
               if (guestsList && Array.isArray(guestsList) && guestsList.length > 0) {
                 console.log(`📱 [ChatHistory] Loading history for ${guestsList.length} guests...`);
-                for (const guestPhone of guestsList) {
+                for (const guestIdentityValue of guestsList) {
                   try {
-                    console.log(`📱 [ChatHistory] Loading history for guest: ${guestPhone}`);
-                    await loadHistoryRef.current?.(guestPhone, guestPhone);
+                    console.log(`📱 [ChatHistory] Loading history for guest: ${guestIdentityValue}`);
+                    await loadHistoryRef.current?.(guestIdentityValue, guestIdentityValue);
                   } catch (error) {
-                    console.warn(`Failed to load history for guest ${guestPhone}:`, error);
+                    console.warn(`Failed to load history for guest ${guestIdentityValue}:`, error);
                   }
                 }
                 console.log('📱 [ChatHistory] Finished loading all guest histories');
@@ -733,7 +738,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
       
       initializeChat();
     }
-  }, [connected, appId, isGuest, guestPhone, user.userId, isInitialized]);
+  }, [connected, appId, isGuest, guestIdentity, user.userId, isInitialized]);
   
   // Refresh all messages - force reload from backend
   const refreshAllMessages = useCallback(async () => {
@@ -771,14 +776,14 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
           
           return prevMessages;
         });
-      } else if (isGuest && guestPhone) {
+      } else if (isGuest && guestIdentity) {
         // For guest, reload their chat history
-        await loadHistoryRef.current?.(appId, guestPhone);
+        await loadHistoryRef.current?.(appId, guestIdentity);
       }
     } catch (error) {
       console.error('❌ [ChatHistory] Failed to refresh messages:', error);
     }
-  }, [connected, appId, isGuest, guestPhone, user.userId]);
+  }, [connected, appId, isGuest, guestIdentity, user.userId]);
   
   // Broadcast notification (CSM admin only)
   const broadcastNotification = useCallback((targetAppId: string, message: string): Promise<boolean> => {

@@ -31,7 +31,7 @@ export interface MenuItemType {
 	children?: MenuItemType[] // 子菜单列表（别名）
 	trigger?: Record<string, any> // 触发器配置
 	type_menu?: number | string // 菜单排列类型（0: 列式, 1: 行式）
-	type_form?: number | string // 表格展示类型（1: 表格模式, 2: Master-Detail模式, 3: 动态链接, 4: 动态代码, 5: CRM Workspace, 6: Kanban Board）
+	type_form?: number | string // 表格展示类型（1: 表格模式, 2: Master-Detail模式, 3: 动态链接, 4: 动态代码, 6: Kanban Board）
 	row_type_edit?: number | string // 行编辑类型（0: 表单弹窗, 1: 行内编辑）
 	dev?: string | boolean // 开发者模式
 	prefix_pk?: string // 创建ID时的前缀
@@ -43,7 +43,7 @@ export interface MenuItemType {
 	field_root?: string // Master-Detail 根字段
 	auto_code_name?: string // 动态代码模板名称 (p_name from sys_autos where p_type=0)
 	dynamic_link_url?: string // 动态链接地址
-	crm_config?: Record<string, any> | string // CRM workspace configuration JSON
+	crm_config?: Record<string, any> | string // Legacy CRM composite config JSON
 	kanban_config?: Record<string, any> | string // Kanban board configuration JSON
 	system_user_modes?: Record<string, any> | string // Role-specific config for /system/user
 	[key: string]: any // 允许其他字段

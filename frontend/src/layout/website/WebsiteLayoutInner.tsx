@@ -54,7 +54,7 @@ export default function WebsiteLayoutInner({ children, selectedKey, menuItems, t
   // CRITICAL: Get appId from useGuestPhone hook to ensure consistency
   // Hook already computes appId with same priority logic, so we use it directly
   const user = useUserStore();
-  const { guestPhone, setGuestPhone, setChatUrl, getChatUrlToSend, appId, isGuest } = useGuestPhone();
+  const { guestPhone, guestSessionId, ensureGuestSessionId, setGuestPhone, setChatUrl, getChatUrlToSend, appId, isGuest } = useGuestPhone();
   const { sendMessage, messages } = useChatHistory(); // Sử dụng context để gửi tin nhắn và lấy messages
   
   // Ref để lưu pending message (tin nhắn cần gửi sau khi có phone)
@@ -103,9 +103,10 @@ export default function WebsiteLayoutInner({ children, selectedKey, menuItems, t
 
       const targetRoom = typeof detail.targetRoom === 'string' ? detail.targetRoom.trim() : '';
       const phone = getEffectiveGuestPhone();
-      if (!phone) return;
+      const guestIdentity = ensureGuestSessionId();
+      if (!phone && !guestIdentity) return;
 
-      if (targetRoom && targetRoom !== appId && targetRoom !== phone) return;
+      if (targetRoom && targetRoom !== appId && targetRoom !== phone && targetRoom !== guestIdentity) return;
 
       const roomKey = targetRoom || appId;
       const now = Date.now();
@@ -121,7 +122,7 @@ export default function WebsiteLayoutInner({ children, selectedKey, menuItems, t
     return () => {
       window.removeEventListener('csm-chat-auto-open', handleAutoOpen as EventListener);
     };
-  }, [isGuest, appId, getEffectiveGuestPhone]);
+  }, [isGuest, appId, getEffectiveGuestPhone, ensureGuestSessionId]);
 
   
   // Get system preferences from admin store
@@ -212,42 +213,37 @@ export default function WebsiteLayoutInner({ children, selectedKey, menuItems, t
         }
         
         const phone = getEffectiveGuestPhone();
+        const guestIdentity = ensureGuestSessionId();
         const currentUrl = typeof window !== 'undefined' ? window.location.href : "";
         
-        // Nếu đã có phone, mở chat và gửi tin nhắn luôn
-        if (phone) {
-          // Đã có phone rồi thì đóng prompt (tránh modal vẫn mở)
-          setShowNameInput(false);
-          // Kiểm tra xem có URL mới không
-          const urlToSend = getChatUrlToSend();
-          if (urlToSend) {
-            setChatUrl(urlToSend);
-          }
-          
-          setChatOpen(true);
-          
-          // 🔥 Nếu đã có URL mới và chưa gửi, tự động gửi link + phone ngay khi mở lại chat
-          if (urlToSend && !hasCurrentUrlInMessages(urlToSend, phone)) {
-            const template = t('website.services.detail.contact_message_text', 'Tôi quan tâm đến tin này: %link% - Số điện thoại của tôi: %phone%');
-            const autoMessage = template
-              .replace('%link%', urlToSend)
-              .replace('%phone%', phone);
-            console.log('📤 [Chat] Auto-send link on reopen:', urlToSend);
-            sendMessage(phone, autoMessage, undefined);
-          }
-          
-          // Gửi pending message nếu có
-          // 🔴 CRITICAL: For guest, pass phone as room identifier, not appId
-          if (pendingMessageRef.current) {
-            setTimeout(() => {
-              sendMessage(phone, pendingMessageRef.current!, undefined);
-              pendingMessageRef.current = null;
-            }, 500); // Delay để đảm bảo chat box đã mở
-          }
+        if (!guestIdentity) {
+          return;
+        }
+
+        setShowNameInput(false);
+        const urlToSend = getChatUrlToSend();
+        if (urlToSend) {
+          setChatUrl(urlToSend);
         } else {
-          // Chưa có phone, lưu URL hiện tại và mở modal nhập phone
           setChatUrl(currentUrl);
-          setShowNameInput(true);
+        }
+
+        setChatOpen(true);
+
+        if (phone && urlToSend && !hasCurrentUrlInMessages(urlToSend, guestIdentity)) {
+          const template = t('website.services.detail.contact_message_text', 'Tôi quan tâm đến tin này: %link% - Số điện thoại của tôi: %phone%');
+          const autoMessage = template
+            .replace('%link%', urlToSend)
+            .replace('%phone%', phone);
+          console.log('📤 [Chat] Auto-send link on reopen:', urlToSend);
+          sendMessage(guestIdentity, autoMessage, undefined);
+        }
+
+        if (pendingMessageRef.current) {
+          setTimeout(() => {
+            sendMessage(guestIdentity, pendingMessageRef.current!, undefined);
+            pendingMessageRef.current = null;
+          }, 500);
         }
       };
     }
@@ -256,7 +252,7 @@ export default function WebsiteLayoutInner({ children, selectedKey, menuItems, t
         delete (window as any).openWebsiteChat;
       }
     };
-  }, [getEffectiveGuestPhone, sendMessage, appId, getChatUrlToSend, setChatUrl, hasCurrentUrlInMessages, t]);
+  }, [getEffectiveGuestPhone, ensureGuestSessionId, sendMessage, appId, getChatUrlToSend, setChatUrl, hasCurrentUrlInMessages, t]);
 
   // Calculate selected keys for menu (không tự động mở submenu)
   const getMenuKeys = () => {
@@ -406,46 +402,32 @@ export default function WebsiteLayoutInner({ children, selectedKey, menuItems, t
       <FloatingChatButton
         onClick={() => {
           const phone = getEffectiveGuestPhone();
-          if (phone) {
-            // 🔥 MỖI LẦN MỞ CHAT đều kiểm tra và gửi link nếu chưa có
-            // Không chỉ lần đầu - mỗi lần click đều check URL hiện tại
-            setShowNameInput(false);
-            const currentUrl = typeof window !== 'undefined' ? window.location.href : "";
-            
-            // ✅ Kiểm tra xem URL hiện tại đã có trong lịch sử chat chưa
-            // Nếu user chuyển sang trang mới → URL mới → tự động gửi
-            if (!hasCurrentUrlInMessages(currentUrl, phone)) {
-              console.log('📤 [Chat] Auto-sending contact message - URL not in history:', currentUrl);
-              
-              // Tự động gửi tin nhắn với URL hiện tại và số điện thoại
-              const messageTemplate = t('website.services.detail.contact_message_text', 'Tôi quan tâm đến tin này: %link% - Số điện thoại của tôi: %phone%');
-              const autoMessage = messageTemplate
-                .replace('%link%', currentUrl)
-                .replace('%phone%', phone);
-              
-              // Lưu URL vào chatUrl
-              setChatUrl(currentUrl);
-              
-              // Gửi tin nhắn sau khi chat mở (delay để đảm bảo chat box đã render)
-              setTimeout(() => {
-                sendMessage(phone, autoMessage, undefined);
-              }, 500);
-            } else {
-              console.log('✓ [Chat] URL already in messages, skipping auto-send:', currentUrl);
-              
-              // URL đã có trong lịch sử, chỉ cập nhật chatUrl nếu thay đổi
-              const urlToSend = getChatUrlToSend();
-              if (urlToSend) {
-                setChatUrl(urlToSend);
-              }
-            }
-            
-            // Mở chat
-            setChatOpen(true);
+          const guestIdentity = ensureGuestSessionId();
+          if (!guestIdentity) return;
+
+          setShowNameInput(false);
+          const currentUrl = typeof window !== 'undefined' ? window.location.href : "";
+          if (phone && !hasCurrentUrlInMessages(currentUrl, guestIdentity)) {
+            console.log('📤 [Chat] Auto-sending contact message - URL not in history:', currentUrl);
+            const messageTemplate = t('website.services.detail.contact_message_text', 'Tôi quan tâm đến tin này: %link% - Số điện thoại của tôi: %phone%');
+            const autoMessage = messageTemplate
+              .replace('%link%', currentUrl)
+              .replace('%phone%', phone);
+
+            setChatUrl(currentUrl);
+            setTimeout(() => {
+              sendMessage(guestIdentity, autoMessage, undefined);
+            }, 500);
           } else {
-            // Chưa có số điện thoại, hiển thị modal nhập phone
-            setShowNameInput(true);
+            const urlToSend = getChatUrlToSend();
+            if (urlToSend) {
+              setChatUrl(urlToSend);
+            } else {
+              setChatUrl(currentUrl);
+            }
           }
+
+          setChatOpen(true);
         }}
         label={t('common.chat.title')}
         visible={!chatOpen}
@@ -510,6 +492,7 @@ export default function WebsiteLayoutInner({ children, selectedKey, menuItems, t
         <InternalChatBox
           visible={true}
           onClose={() => setChatOpen(false)}
+          room={guestSessionId || undefined}
         />
       )}
     </ConfigProvider>

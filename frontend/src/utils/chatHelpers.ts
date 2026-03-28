@@ -31,9 +31,9 @@ export async function loadAppsList() {
 /**
  * Load lịch sử chat cho guest user
  */
-export async function loadGuestChatHistory(appId: string, guestPhone: string, limit: number = 100) {
+export async function loadGuestChatHistory(appId: string, guestIdentity: string, limit: number = 100, guestPhone?: string) {
   try {
-    const response = await getChatHistoryGuest(appId, guestPhone, limit);
+    const response = await getChatHistoryGuest(appId, guestIdentity, limit, guestPhone);
     if (response?.success && response.data?.messages) {
       return response.data.messages;
     }
@@ -97,9 +97,9 @@ export async function loadChatGuestsList(appId: string) {
 /**
  * Mark messages as read cho guest
  */
-export async function markGuestMessagesAsRead(appId: string, guestPhone: string) {
+export async function markGuestMessagesAsRead(appId: string, guestIdentity: string) {
   try {
-    const response = await markChatAsReadGuest(appId, guestPhone);
+    const response = await markChatAsReadGuest(appId, guestIdentity);
     return response;
   } catch (error) {
     console.warn('Failed to mark guest messages as read:', error);

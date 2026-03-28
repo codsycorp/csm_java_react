@@ -85,6 +85,7 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
     private final Map<String, ScheduledFuture<?>> pendingGuestWelcomeTasks = new ConcurrentHashMap<>();
     private final Map<String, ScheduledFuture<?>> pendingGuestNoReplyTasks = new ConcurrentHashMap<>();
     private final Map<UUID, String> sessionGuestPhones = new ConcurrentHashMap<>();
+    private final Map<UUID, String> sessionGuestSessionIds = new ConcurrentHashMap<>();
 
     private static final long AI_TRIGGER_DELAY_MS = 60_000L;
     private static final String AI_ASSISTANT_USER_ID = "ai_assistant";
@@ -109,20 +110,29 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
         return guestPhone.isEmpty() ? null : guestPhone;
     }
 
-    private String guestKey(String appId, String guestPhone) {
-        return (appId == null ? "" : appId.trim()) + "::" + (guestPhone == null ? "" : guestPhone.trim());
+    private String guestKey(String appId, String guestIdentity) {
+        return (appId == null ? "" : appId.trim()) + "::" + (guestIdentity == null ? "" : guestIdentity.trim());
     }
 
-    private void cancelGuestWelcomeTask(String appId, String guestPhone) {
-        String key = guestKey(appId, guestPhone);
+    private String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value.trim();
+            }
+        }
+        return null;
+    }
+
+    private void cancelGuestWelcomeTask(String appId, String guestIdentity) {
+        String key = guestKey(appId, guestIdentity);
         ScheduledFuture<?> future = pendingGuestWelcomeTasks.remove(key);
         if (future != null) {
             future.cancel(false);
         }
     }
 
-    private void cancelGuestNoReplyTask(String appId, String guestPhone) {
-        String key = guestKey(appId, guestPhone);
+    private void cancelGuestNoReplyTask(String appId, String guestIdentity) {
+        String key = guestKey(appId, guestIdentity);
         ScheduledFuture<?> future = pendingGuestNoReplyTasks.remove(key);
         if (future != null) {
             future.cancel(false);
@@ -170,27 +180,33 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
     }
 
     private String buildWelcomePrompt(String appId, String guestPhone) {
+        String guestDescription = (guestPhone == null || guestPhone.isBlank())
+                ? "Khach moi chua de lai so dien thoai"
+                : "Khach co phone=" + guestPhone;
         return "Ban la nhan vien CSKH chat website appId=" + appId + ". "
-                + "Khach co phone=" + guestPhone + " da vao chat hon 1 phut nhung chua nhan tin. "
+                + guestDescription + " da vao chat hon 1 phut nhung chua nhan tin. "
                 + "Hay viet DUY NHAT 1 tin nhan tieng Viet tu nhien, than thien, ngan gon (toi da 180 ky tu), "
-                + "khong may moc, de chao va xin: ten, so dien thoai, san pham/nhu cau dang quan tam. "
+                + "khong may moc, de chao va kheo hoi ten, cach lien he va san pham/nhu cau dang quan tam. "
                 + "Khong nhac den AI, khong dung markdown, chi tra ve cau tra loi.";
     }
 
     private String buildNoHumanReplyPrompt(String appId, String guestPhone, String guestMessage) {
+        String guestDescription = (guestPhone == null || guestPhone.isBlank())
+                ? "Khach moi chua de lai so dien thoai"
+                : "Khach phone=" + guestPhone;
         return "Ban la nhan vien CSKH website appId=" + appId + ". "
-                + "Khach phone=" + guestPhone + " vua nhan: \"" + (guestMessage == null ? "" : guestMessage) + "\". "
+                + guestDescription + " vua nhan: \"" + (guestMessage == null ? "" : guestMessage) + "\". "
                 + "Da 1 phut chua co nguoi tra loi. Hay viet DUY NHAT 1 tin nhan tieng Viet tu nhien, ngan gon (toi da 220 ky tu), "
-                + "tra loi dung van de khach vua hoi va kheo xin day du: ten, so dien thoai, san pham/nhu cau quan tam. "
+                + "tra loi dung van de khach vua hoi va kheo xin ten, cach lien he va san pham/nhu cau quan tam neu phu hop. "
                 + "Giong nguoi that dang cham soc, khong robot, khong markdown.";
     }
 
-    private void dispatchAiMessageToGuest(String appId, String guestPhone, String messageText, String eventType) {
-        if (appId == null || appId.isBlank() || guestPhone == null || guestPhone.isBlank() || messageText == null || messageText.isBlank()) {
+    private void dispatchAiMessageToGuest(String appId, String guestIdentity, String guestPhone, String messageText, String eventType) {
+        if (appId == null || appId.isBlank() || guestIdentity == null || guestIdentity.isBlank() || messageText == null || messageText.isBlank()) {
             return;
         }
 
-        String privateRoom = "guest:" + appId + ";" + guestPhone;
+        String privateRoom = "guest:" + appId + ";" + guestIdentity;
         String masterRoom = "app:" + appId;
 
         ChatMessage aiMsg = new ChatMessage();
@@ -200,6 +216,7 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
         aiMsg.setIsAdmin(true);
         aiMsg.setAppId(appId);
         aiMsg.setGuestPhone(guestPhone);
+        aiMsg.setGuestSessionId(guestIdentity);
         aiMsg.setEventType(eventType);
         aiMsg.setMessage(messageText.length() > 280 ? messageText.substring(0, 280) : messageText);
         aiMsg.setTimestamp(System.currentTimeMillis());
@@ -208,23 +225,23 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
         server.getRoomOperations(privateRoom).sendEvent("message", aiMsg);
         server.getRoomOperations(masterRoom).sendEvent("message", aiMsg);
 
-        logger.info("🤖 AI auto reply sent - appId={}, guestPhone={}, eventType={}", appId, guestPhone, eventType);
+        logger.info("🤖 AI auto reply sent - appId={}, guestIdentity={}, guestPhone={}, eventType={}", appId, guestIdentity, guestPhone, eventType);
     }
 
-    private void scheduleWelcomeIfGuestSilent(String appId, String guestPhone) {
-        if (appId == null || appId.isBlank() || guestPhone == null || guestPhone.isBlank()) return;
-        cancelGuestWelcomeTask(appId, guestPhone);
+    private void scheduleWelcomeIfGuestSilent(String appId, String guestIdentity, String guestPhone) {
+        if (appId == null || appId.isBlank() || guestIdentity == null || guestIdentity.isBlank()) return;
+        cancelGuestWelcomeTask(appId, guestIdentity);
 
-        String key = guestKey(appId, guestPhone);
+        String key = guestKey(appId, guestIdentity);
         ScheduledFuture<?> future = chatAiScheduler.schedule(() -> {
             try {
                 String prompt = buildWelcomePrompt(appId, guestPhone);
                 String aiRaw = aiProviderFactory.generateContent(prompt);
                 String text = extractAiText(aiRaw,
                         "Em chao anh/chị. Mình cho em xin ten, so dien thoai va san pham anh/chị dang quan tam de em ho tro nhanh nha.");
-                dispatchAiMessageToGuest(appId, guestPhone, text, "ai_auto_welcome");
+                dispatchAiMessageToGuest(appId, guestIdentity, guestPhone, text, "ai_auto_welcome");
             } catch (Exception e) {
-                logger.warn("Failed to send AI welcome for {}:{} - {}", appId, guestPhone, e.getMessage());
+                logger.warn("Failed to send AI welcome for {}:{} - {}", appId, guestIdentity, e.getMessage());
             } finally {
                 pendingGuestWelcomeTasks.remove(key);
             }
@@ -233,20 +250,20 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
         pendingGuestWelcomeTasks.put(key, future);
     }
 
-    private void scheduleAutoReplyIfNoHuman(String appId, String guestPhone, String guestMessage) {
-        if (appId == null || appId.isBlank() || guestPhone == null || guestPhone.isBlank()) return;
-        cancelGuestNoReplyTask(appId, guestPhone);
+    private void scheduleAutoReplyIfNoHuman(String appId, String guestIdentity, String guestPhone, String guestMessage) {
+        if (appId == null || appId.isBlank() || guestIdentity == null || guestIdentity.isBlank()) return;
+        cancelGuestNoReplyTask(appId, guestIdentity);
 
-        String key = guestKey(appId, guestPhone);
+        String key = guestKey(appId, guestIdentity);
         ScheduledFuture<?> future = chatAiScheduler.schedule(() -> {
             try {
                 String prompt = buildNoHumanReplyPrompt(appId, guestPhone, guestMessage);
                 String aiRaw = aiProviderFactory.generateContent(prompt);
                 String text = extractAiText(aiRaw,
                         "Em da tiep nhan thong tin roi. Anh/chị cho em xin ten, so dien thoai va san pham dang quan tam de ben em lien he tu van ngay.");
-                dispatchAiMessageToGuest(appId, guestPhone, text, "ai_auto_followup");
+                dispatchAiMessageToGuest(appId, guestIdentity, guestPhone, text, "ai_auto_followup");
             } catch (Exception e) {
-                logger.warn("Failed to send AI follow-up for {}:{} - {}", appId, guestPhone, e.getMessage());
+                logger.warn("Failed to send AI follow-up for {}:{} - {}", appId, guestIdentity, e.getMessage());
             } finally {
                 pendingGuestNoReplyTasks.remove(key);
             }
@@ -466,10 +483,12 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
             String username = sessionUsernames.remove(sessionId);
             String appId = sessionAppIds.remove(sessionId);
             String guestPhone = sessionGuestPhones.remove(sessionId);
+            String guestSessionId = sessionGuestSessionIds.remove(sessionId);
 
-            if (appId != null && guestPhone != null && !guestPhone.isBlank()) {
-                cancelGuestWelcomeTask(appId, guestPhone);
-                cancelGuestNoReplyTask(appId, guestPhone);
+            String guestIdentity = firstNonBlank(guestSessionId, guestPhone);
+            if (appId != null && guestIdentity != null) {
+                cancelGuestWelcomeTask(appId, guestIdentity);
+                cancelGuestNoReplyTask(appId, guestIdentity);
             }
 
             if (username != null) {
@@ -493,6 +512,7 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
             String username = data.getUsername();
             String appId = data.getAppId();
             String guestPhone = data.getGuestPhone();
+            String guestSessionId = data.getGuestSessionId();
             Boolean isAdmin = data.getIsAdmin();
 
             sessionUsernames.put(sessionId, username);
@@ -520,11 +540,13 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                 client.joinRoom(masterRoom);
                 logger.info("🚪 Admin {} joined master room {} (appId: {})", username, masterRoom, appId);
                 server.getRoomOperations(masterRoom).sendEvent("user_joined", username);
-            } else if (guestPhone != null && !guestPhone.isEmpty()) {
+            } else if (firstNonBlank(guestSessionId, guestPhone) != null) {
                 // Guest joins private room + master room for admin monitoring
-                String privateRoom = "guest:" + appId + ";" + guestPhone;
+                String guestIdentity = firstNonBlank(guestSessionId, guestPhone);
+                String privateRoom = "guest:" + appId + ";" + guestIdentity;
                 String masterRoom = "app:" + appId;
                 sessionGuestPhones.put(sessionId, guestPhone);
+                sessionGuestSessionIds.put(sessionId, guestIdentity);
                 
                 roomSessions.computeIfAbsent(privateRoom, r -> new CopyOnWriteArraySet<>()).add(sessionId);
                 roomSessions.computeIfAbsent(masterRoom, r -> new CopyOnWriteArraySet<>()).add(sessionId);
@@ -532,11 +554,11 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                 client.joinRoom(privateRoom);
                 client.joinRoom(masterRoom);
                 
-                logger.info("🚪 Guest {} joined private room {} and master room {} (appId: {})", 
-                           username, privateRoom, masterRoom, appId);
+                logger.info("🚪 Guest {} joined private room {} and master room {} (appId: {}, guestSessionId: {}, guestPhone: {})", 
+                           username, privateRoom, masterRoom, appId, guestIdentity, guestPhone);
                 server.getRoomOperations(privateRoom).sendEvent("user_joined", username);
 
-                scheduleWelcomeIfGuestSilent(appId, guestPhone);
+                scheduleWelcomeIfGuestSilent(appId, guestIdentity, guestPhone);
             } else if (userId != null && !userId.isEmpty()) {
                 // Authenticated user joins app room (can chat with other users)
                 String appRoom = "app:" + appId;
@@ -591,6 +613,7 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                                 String userId = data.getUserId();
                                 Boolean isAdmin = data.getIsAdmin();
                                 String guestPhone = data.getGuestPhone();
+                                String guestSessionId = data.getGuestSessionId();
                                 String appId = data.getAppId();
 
                                 // 🔥 CRITICAL: Normalize appId FIRST before any processing
@@ -627,9 +650,9 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                                 if (isAdmin != null && isAdmin) {
                                     // Admin luôn được phép
                                     allow = true;
-                                    String targetGuestPhone = (guestPhone == null || guestPhone.isBlank()) ? parseGuestPhoneFromRoom(room) : guestPhone;
-                                    if (targetGuestPhone != null && !targetGuestPhone.isBlank()) {
-                                        cancelGuestNoReplyTask(appId, targetGuestPhone);
+                                    String targetGuestIdentity = firstNonBlank(guestSessionId, parseGuestPhoneFromRoom(room), guestPhone);
+                                    if (targetGuestIdentity != null && !targetGuestIdentity.isBlank()) {
+                                        cancelGuestNoReplyTask(appId, targetGuestIdentity);
                                     }
                                 } else if (userId == null) {
                                     // Guest: chỉ cho phép gửi vào phòng của mình hoặc phòng app
@@ -639,8 +662,8 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                                     } else {
                                         sessionAppIds.put(client.getSessionId(), guestAppId);
                                     }
-                                    logger.info("[Chat] Guest attempting to send - room: {}, appId: {}, guestPhone: {}", 
-                                               room, guestAppId, guestPhone);
+                                    logger.info("[Chat] Guest attempting to send - room: {}, appId: {}, guestPhone: {}, guestSessionId: {}", 
+                                               room, guestAppId, guestPhone, guestSessionId);
                                     
                                     // Allow guest to send to their app's rooms
                                     if (guestAppId != null && room != null && 
@@ -659,18 +682,18 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                                         appId = guestAppId;
                                     }
 
-                                    String targetGuestPhone = (guestPhone == null || guestPhone.isBlank()) ? parseGuestPhoneFromRoom(room) : guestPhone;
-                                    if (targetGuestPhone != null && !targetGuestPhone.isBlank()) {
-                                        cancelGuestWelcomeTask(appId, targetGuestPhone);
-                                        scheduleAutoReplyIfNoHuman(appId, targetGuestPhone, message);
+                                    String targetGuestIdentity = firstNonBlank(guestSessionId, parseGuestPhoneFromRoom(room), guestPhone);
+                                    if (targetGuestIdentity != null && !targetGuestIdentity.isBlank()) {
+                                        cancelGuestWelcomeTask(appId, targetGuestIdentity);
+                                        scheduleAutoReplyIfNoHuman(appId, targetGuestIdentity, guestPhone, message);
                                     }
                                 } else {
                                     // Authenticated user: cho phép chat trong app của mình
                                     allow = true;
 
-                                    String targetGuestPhone = (guestPhone == null || guestPhone.isBlank()) ? parseGuestPhoneFromRoom(room) : guestPhone;
-                                    if (targetGuestPhone != null && !targetGuestPhone.isBlank()) {
-                                        cancelGuestNoReplyTask(appId, targetGuestPhone);
+                                    String targetGuestIdentity = firstNonBlank(guestSessionId, parseGuestPhoneFromRoom(room), guestPhone);
+                                    if (targetGuestIdentity != null && !targetGuestIdentity.isBlank()) {
+                                        cancelGuestNoReplyTask(appId, targetGuestIdentity);
                                     }
                                 }
                                 if (!allow) {
@@ -690,15 +713,24 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                                 }
                                 
                                 // Normalize guest message data BEFORE saving
-                                if (userId == null && guestPhone != null && !guestPhone.isEmpty()) {
-                                    // This is a guest message - ensure username is set to guestPhone
+                                String guestIdentity = firstNonBlank(guestSessionId, parseGuestPhoneFromRoom(room), guestPhone);
+                                if (guestIdentity != null && !guestIdentity.isEmpty()) {
+                                    data.setGuestSessionId(guestIdentity);
+                                }
+
+                                if (userId == null && guestIdentity != null && !guestIdentity.isEmpty()) {
+                                    // This is a guest message - ensure username is set to a stable label
+                                    String guestLabel = firstNonBlank(guestPhone, guestIdentity, username, "Guest");
                                     if (username == null || username.isEmpty() || username.equals("Guest")) {
-                                        data.setUsername(guestPhone);
-                                        logger.info("🔧 [Chat] Normalized guest username: {} → {}", username, guestPhone);
+                                        data.setUsername(guestLabel);
+                                        logger.info("🔧 [Chat] Normalized guest username: {} → {}", username, guestLabel);
                                     }
                                     // Ensure guestPhone is set in data
                                     if (data.getGuestPhone() == null || data.getGuestPhone().isEmpty()) {
                                         data.setGuestPhone(guestPhone);
+                                    }
+                                    if (data.getGuestSessionId() == null || data.getGuestSessionId().isEmpty()) {
+                                        data.setGuestSessionId(guestIdentity);
                                     }
                                 }
                                 
@@ -707,8 +739,8 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                                     data.setTimestamp(System.currentTimeMillis());
                                 }
                                 
-                                logger.info("💾 [Chat] Saving message - appId={}, room={}, guestPhone={}, to={}", 
-                                           data.getAppId(), data.getRoom(), data.getGuestPhone(), data.getTo());
+                                logger.info("💾 [Chat] Saving message - appId={}, room={}, guestPhone={}, guestSessionId={}, to={}", 
+                                           data.getAppId(), data.getRoom(), data.getGuestPhone(), data.getGuestSessionId(), data.getTo());
                                 
                                 // Lưu lịch sử chat vào các layers:
                                 // 1. Memory cache (ChatHistoryManager)
@@ -764,10 +796,10 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                                 
                                 if (isAdmin != null && isAdmin) {
                                     // ===== ADMIN SENDING MESSAGE =====
-                                    if (guestPhone != null && !guestPhone.isEmpty()) {
+                                    if (guestIdentity != null && !guestIdentity.isEmpty()) {
                                         // Admin → specific Guest: send to guest's private room
-                                        String privateRoom = "guest:" + appId + ";" + guestPhone;
-                                        logger.info("✉️ Admin {} → Guest {} (room: {})", username, guestPhone, privateRoom);
+                                        String privateRoom = "guest:" + appId + ";" + guestIdentity;
+                                        logger.info("✉️ Admin {} → Guest {} (room: {})", username, guestIdentity, privateRoom);
                                         server.getRoomOperations(privateRoom).sendEvent("message", data);
                                     } else if (to != null && !to.isEmpty()) {
                                         // Admin → specific User: send to user's private chat room
@@ -783,13 +815,13 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                                         server.getRoomOperations(masterRoom).sendEvent("message", data);
                                     }
                                     
-                                } else if (guestPhone != null && !guestPhone.isEmpty()) {
+                                } else if (guestIdentity != null && !guestIdentity.isEmpty()) {
                                     // ===== GUEST SENDING MESSAGE =====
                                     // Guest → Admin: send to master room and guest's own private room
                                     String masterRoom = "app:" + appId;
-                                    String privateRoom = "guest:" + appId + ";" + guestPhone;
+                                    String privateRoom = "guest:" + appId + ";" + guestIdentity;
                                     
-                                    logger.info("✉️ Guest {} → Admin (rooms: {} + {})", guestPhone, masterRoom, privateRoom);
+                                    logger.info("✉️ Guest {} → Admin (rooms: {} + {})", guestIdentity, masterRoom, privateRoom);
                                     server.getRoomOperations(masterRoom).sendEvent("message", data);
                                     server.getRoomOperations(privateRoom).sendEvent("message", data);
                                     
@@ -925,18 +957,19 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
             }
         });
 
-        // Lấy lịch sử chat theo appId và guestPhone cho guest user
+        // Lấy lịch sử chat theo appId và guest identity cho guest user
         server.addEventListener("chat_history_guest", ChatMessage.class, (client, request, ackSender) -> {
             try {
                 String appId = request.getAppId();
                 String guestPhone = request.getGuestPhone();
+                String guestSessionId = request.getGuestSessionId();
                 int limit = 50;
                 
-                if (appId != null && guestPhone != null && !guestPhone.isEmpty()) {
-                    var history = ChatHistoryManager.getHistoryByGuestPhone(appId, guestPhone, limit);
+                if (appId != null && ((guestSessionId != null && !guestSessionId.isEmpty()) || (guestPhone != null && !guestPhone.isEmpty()))) {
+                    var history = ChatHistoryManager.getHistoryByGuestIdentity(appId, guestSessionId, guestPhone, limit);
                     ackSender.sendAckData(objectMapper.writeValueAsString(history));
                 } else {
-                    logger.warn("Missing appId or guestPhone in chat_history_guest request");
+                    logger.warn("Missing appId or guest identity in chat_history_guest request");
                     ackSender.sendAckData("[]");
                 }
             } catch (Exception e) {
@@ -957,11 +990,11 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
             }
         });
 
-        // Lấy danh sách guest phones đã chat trong appId
+        // Lấy danh sách guest sessions đã chat trong appId
         server.addEventListener("chat_guests_list", String.class, (client, appId, ackSender) -> {
             try {
-                var guestPhones = ChatHistoryManager.getGuestPhonesByAppId(appId);
-                ackSender.sendAckData(objectMapper.writeValueAsString(guestPhones));
+                var guestSessions = ChatHistoryManager.getGuestSessionsByAppId(appId);
+                ackSender.sendAckData(objectMapper.writeValueAsString(guestSessions));
             } catch (Exception e) {
                 logger.error("Error getting guest list for appId {}: {}", appId, e.getMessage(), e);
                 ackSender.sendAckData("[]");

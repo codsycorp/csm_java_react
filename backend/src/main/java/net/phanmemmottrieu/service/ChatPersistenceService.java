@@ -38,6 +38,7 @@ public class ChatPersistenceService {
     
     // Map để track guest phone numbers theo appId
     private final Map<String, Set<String>> guestPhonesByApp = new ConcurrentHashMap<>();
+    private final Map<String, Set<String>> guestSessionsByApp = new ConcurrentHashMap<>();
     
     private static final String CHAT_TABLE = "chat_messages";
     private static final int CACHE_SIZE_LIMIT = 10000; // Giữ 10k messages trong cache
@@ -121,10 +122,15 @@ public class ChatPersistenceService {
 
                 // Khôi phục danh sách guest phones theo appId
                 guestPhonesByApp.remove(dbAppId);
+                guestSessionsByApp.remove(dbAppId);
                 for (ChatMessage msg : loaded) {
                     if (msg.getAppId() != null && msg.getGuestPhone() != null && !msg.getGuestPhone().isEmpty()) {
                         guestPhonesByApp.computeIfAbsent(normalizeAppId(msg.getAppId()), k -> ConcurrentHashMap.newKeySet())
                             .add(msg.getGuestPhone());
+                    }
+                    if (msg.getAppId() != null && msg.getGuestSessionId() != null && !msg.getGuestSessionId().isEmpty()) {
+                        guestSessionsByApp.computeIfAbsent(normalizeAppId(msg.getAppId()), k -> ConcurrentHashMap.newKeySet())
+                            .add(msg.getGuestSessionId());
                     }
                 }
 
@@ -163,8 +169,8 @@ public class ChatPersistenceService {
             
             String dbAppId = normalizeAppId(appId);
             
-            logger.info("💾 [ChatPersistenceService.saveMessage] Saving to appId={}, dbAppId={}, room={}, guestPhone={}, to={}",
-                       appId, dbAppId, message.getRoom(), message.getGuestPhone(), message.getTo());
+            logger.info("💾 [ChatPersistenceService.saveMessage] Saving to appId={}, dbAppId={}, room={}, guestPhone={}, guestSessionId={}, to={}",
+                       appId, dbAppId, message.getRoom(), message.getGuestPhone(), message.getGuestSessionId(), message.getTo());
 
             // Thêm vào cache
             chatCache.add(message);
@@ -174,6 +180,11 @@ public class ChatPersistenceService {
                 guestPhonesByApp.computeIfAbsent(message.getAppId(), k -> ConcurrentHashMap.newKeySet())
                     .add(message.getGuestPhone());
                 logger.info("📱 Tracked guest phone: appId={}, phone={}", message.getAppId(), message.getGuestPhone());
+            }
+            if (message.getAppId() != null && message.getGuestSessionId() != null && !message.getGuestSessionId().isEmpty()) {
+                guestSessionsByApp.computeIfAbsent(message.getAppId(), k -> ConcurrentHashMap.newKeySet())
+                    .add(message.getGuestSessionId());
+                logger.info("🆔 Tracked guest session: appId={}, guestSessionId={}", message.getAppId(), message.getGuestSessionId());
             }
             
             // Giới hạn cache size
@@ -218,6 +229,7 @@ public class ChatPersistenceService {
             record.put("appId", message.getAppId());
             record.put("to", message.getTo());
             record.put("guestPhone", message.getGuestPhone());
+            record.put("guestSessionId", message.getGuestSessionId());
             record.put("avatar", message.getAvatar());
             record.put("isAdmin", message.getIsAdmin());
             record.put("eventType", message.getEventType());
@@ -229,8 +241,8 @@ public class ChatPersistenceService {
             // 🔥 CRITICAL: Create record with appId to ensure it's stored in the correct database
             logger.info("✅ [persistMessageToDatabase] About to call recordManager.createRecord with appId={}", appId);
             recordManager.createRecord(appId, CHAT_TABLE, record);
-            logger.info("✅ [persistMessageToDatabase] Successfully saved to database - appId={}, guestPhone={}, room={}", 
-                       appId, message.getGuestPhone(), message.getRoom());
+            logger.info("✅ [persistMessageToDatabase] Successfully saved to database - appId={}, guestPhone={}, guestSessionId={}, room={}", 
+                       appId, message.getGuestPhone(), message.getGuestSessionId(), message.getRoom());
             
         } catch (Exception e) {
             logger.error("❌ Error persisting message to database: appId={}, error={}", appId, e.getMessage(), e);
@@ -254,7 +266,7 @@ public class ChatPersistenceService {
             // Tạo table structure
             Map<String, Object> struct = new HashMap<>();
             struct.put("fieldsPK", List.of("id"));
-            struct.put("fieldsSearch", List.of("room", "userId", "username", "to", "guestPhone", "message", "appId", "timestamp"));
+            struct.put("fieldsSearch", List.of("room", "userId", "username", "to", "guestPhone", "guestSessionId", "message", "appId", "timestamp"));
             
             Map<String, Object> record = new HashMap<>();
             record.put("id", CHAT_TABLE);
@@ -316,15 +328,28 @@ public class ChatPersistenceService {
      * Lấy lịch sử chat của guest phone cụ thể
      */
     public List<ChatMessage> getHistoryByGuestPhone(String appId, String guestPhone, int limit) {
+        return getHistoryByGuestIdentity(appId, null, guestPhone, limit);
+    }
+
+    public List<ChatMessage> getHistoryByGuestIdentity(String appId, String guestSessionId, String guestPhone, int limit) {
         String dbAppId = normalizeAppId(appId);
-        // OR (guestPhone == x) OR (to == x) and appId == appId
         SearchFilter byApp = buildEqFilter("appId", appId);
-        SearchFilter byGuest = buildEqFilter("guestPhone", guestPhone);
-        SearchFilter byTo = buildEqFilter("to", guestPhone);
+        List<SearchFilter> guestFilters = new ArrayList<>();
+        if (!isBlank(guestSessionId)) {
+            guestFilters.add(buildEqFilter("guestSessionId", guestSessionId));
+            guestFilters.add(buildEqFilter("to", guestSessionId));
+        }
+        if (!isBlank(guestPhone)) {
+            guestFilters.add(buildEqFilter("guestPhone", guestPhone));
+            guestFilters.add(buildEqFilter("to", guestPhone));
+        }
+        if (guestFilters.isEmpty()) {
+            return Collections.emptyList();
+        }
 
         SearchFilter orGuest = new SearchFilter();
         orGuest.setOperator("OR");
-        orGuest.setConditions(Arrays.asList(byGuest, byTo));
+        orGuest.setConditions(guestFilters);
 
         SearchFilter root = new SearchFilter();
         root.setOperator("AND");
@@ -340,8 +365,14 @@ public class ChatPersistenceService {
                 ChatMessage msg = chatCache.get(i);
                 if (msg.getAppId() != null && msg.getAppId().equals(appId) && normalizeAppId(msg.getAppId()).equals(dbAppId)) {
                     String msgGuestPhone = msg.getGuestPhone();
-                    if ((msgGuestPhone != null && msgGuestPhone.equals(guestPhone)) ||
-                        (msg.getTo() != null && msg.getTo().equals(guestPhone))) {
+                    String msgGuestSessionId = msg.getGuestSessionId();
+                    boolean matchesSession = !isBlank(guestSessionId) &&
+                        ((msgGuestSessionId != null && msgGuestSessionId.equals(guestSessionId)) ||
+                         (msg.getTo() != null && msg.getTo().equals(guestSessionId)));
+                    boolean matchesPhone = !isBlank(guestPhone) &&
+                        ((msgGuestPhone != null && msgGuestPhone.equals(guestPhone)) ||
+                         (msg.getTo() != null && msg.getTo().equals(guestPhone)));
+                    if (matchesSession || matchesPhone) {
                         result.add(0, msg);
                     }
                 }
@@ -358,6 +389,13 @@ public class ChatPersistenceService {
         ensureCacheLoadedFromDb(dbAppId);
         Set<String> phones = guestPhonesByApp.getOrDefault(dbAppId, Collections.emptySet());
         return new ArrayList<>(phones);
+    }
+
+    public List<String> getGuestSessionsByAppId(String appId) {
+        String dbAppId = normalizeAppId(appId);
+        ensureCacheLoadedFromDb(dbAppId);
+        Set<String> sessions = guestSessionsByApp.getOrDefault(dbAppId, Collections.emptySet());
+        return new ArrayList<>(sessions);
     }
 
     // === Lucene helper methods ===
@@ -424,18 +462,28 @@ public class ChatPersistenceService {
      * Đánh dấu messages của guest phone là đã đọc
      */
     public synchronized void markAllAsReadByGuestPhone(String appId, String guestPhone) {
+        markAllAsReadByGuestIdentity(appId, null, guestPhone);
+    }
+
+    public synchronized void markAllAsReadByGuestIdentity(String appId, String guestSessionId, String guestPhone) {
         String dbAppId = normalizeAppId(appId);
         ensureCacheLoadedFromDb(dbAppId);
         synchronized (chatCache) {
             for (ChatMessage msg : chatCache) {
                 if (msg.getAppId() != null && msg.getAppId().equals(appId) && normalizeAppId(msg.getAppId()).equals(dbAppId)) {
                     String msgGuestPhone = msg.getGuestPhone();
-                    if ((msg.getTo() != null && msg.getTo().equals(guestPhone)) ||
-                        (msgGuestPhone != null && msgGuestPhone.equals(guestPhone))) {
+                    String msgGuestSessionId = msg.getGuestSessionId();
+                    boolean matchesSession = !isBlank(guestSessionId) &&
+                        ((msg.getTo() != null && msg.getTo().equals(guestSessionId)) ||
+                         (msgGuestSessionId != null && msgGuestSessionId.equals(guestSessionId)));
+                    boolean matchesPhone = !isBlank(guestPhone) &&
+                        ((msg.getTo() != null && msg.getTo().equals(guestPhone)) ||
+                         (msgGuestPhone != null && msgGuestPhone.equals(guestPhone)));
+                    if (matchesSession || matchesPhone) {
                         if (msg.getReadBy() == null) {
                             msg.setReadBy(new ArrayList<>());
                         }
-                        String readerId = "guest:" + guestPhone;
+                        String readerId = "guest:" + (!isBlank(guestSessionId) ? guestSessionId : guestPhone);
                         if (!msg.getReadBy().contains(readerId)) {
                             msg.getReadBy().add(readerId);
                         }
@@ -488,6 +536,7 @@ public class ChatPersistenceService {
         msg.setAppId((String) row.get("appId"));
         msg.setTo((String) row.get("to"));
         msg.setGuestPhone((String) row.get("guestPhone"));
+        msg.setGuestSessionId((String) row.get("guestSessionId"));
         msg.setAvatar((String) row.get("avatar"));
         msg.setEventType((String) row.get("eventType"));
         
@@ -567,6 +616,7 @@ public class ChatPersistenceService {
         msg.setIsAdmin(getBoolean(record.get("isAdmin")));
         msg.setAppId((String) record.get("appId"));
         msg.setGuestPhone((String) record.get("guestPhone"));
+        msg.setGuestSessionId((String) record.get("guestSessionId"));
         msg.setEventType((String) record.get("eventType"));
         
         Long parsedTimestamp = parseTimestamp(record.get("timestamp"));
@@ -605,6 +655,10 @@ public class ChatPersistenceService {
         if (obj instanceof Boolean) return (Boolean) obj;
         if (obj instanceof String) return "true".equalsIgnoreCase((String) obj);
         return false;
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.isBlank();
     }
     
     /**
@@ -694,5 +748,6 @@ public class ChatPersistenceService {
         logger.info("🔄 ChatPersistenceService shutting down...");
         chatCache.clear();
         guestPhonesByApp.clear();
+        guestSessionsByApp.clear();
     }
 }

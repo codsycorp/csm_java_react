@@ -406,14 +406,23 @@ export async function getChatHistoryWithAppId(
  */
 export async function getChatHistoryGuest(
 	appId: string,
-	guestPhone: string,
-	limit: number = 50
+	guestIdentity: string,
+	limit: number = 50,
+	guestPhone?: string
 ): Promise<GoogleIndexResponse> {
 	let response: any;
 	try {
+		const trimmedIdentity = guestIdentity?.trim() || "";
+		const trimmedPhone = guestPhone?.trim() || "";
+		const looksLikePhone = /^\+?\d[\d\s-]{7,}$/.test(trimmedIdentity);
 		response = await request
 			.post("chat-history-guest", {
-				json: { appId, guestPhone, limit },
+				json: {
+					appId,
+					guestSessionId: looksLikePhone ? undefined : trimmedIdentity,
+					guestPhone: looksLikePhone ? trimmedIdentity : trimmedPhone,
+					limit,
+				},
 				ignoreLoading: true,
 			})
 			.json();
@@ -485,9 +494,15 @@ export async function getChatGuestsList(appId: string): Promise<GoogleIndexRespo
 export async function markChatAsReadGuest(appId: string, guestPhone: string): Promise<GoogleIndexResponse> {
 	let response: any;
 	try {
+		const trimmedIdentity = guestPhone?.trim() || "";
+		const looksLikePhone = /^\+?\d[\d\s-]{7,}$/.test(trimmedIdentity);
 		response = await request
 			.post("chat-mark-read", {
-				json: { appId, guestPhone },
+				json: {
+					appId,
+					guestSessionId: looksLikePhone ? undefined : trimmedIdentity,
+					guestPhone: looksLikePhone ? trimmedIdentity : undefined,
+				},
 				ignoreLoading: true,
 			})
 			.json();

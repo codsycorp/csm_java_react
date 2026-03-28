@@ -149,7 +149,7 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 
 		const handleNewMessage = (msg: any) => {
 			// Immediately trigger refresh when new message arrives
-			if (msg && (msg.guestPhone || msg.userId)) {
+			if (msg && (msg.guestSessionId || msg.guestPhone || msg.userId)) {
 				console.log('📬 [Notification] New message received, triggering refresh');
 				refreshAllMessages().catch(err => 
 					console.error('❌ [Notification] Failed to refresh on new message:', err)
@@ -176,7 +176,7 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 	// Group 2: Guests - messages có guestPhone (khách vãng lai)
 	const { internalUsersWithUnread, guestUsersWithUnread } = useMemo(() => {
 		const internalMap = new Map<string, { username: string; avatar?: string; unread: number }>();
-		const guestMap = new Map<string, { phone: string; unread: number }>();
+		const guestMap = new Map<string, { key: string; label: string; unread: number }>();
 		
 		// Duyệt TẤT CẢ rooms trong contextMessages để không bỏ lỡ tin của guests
 		Object.entries(contextMessages).forEach(([roomKey, msgs]) => {
@@ -195,12 +195,14 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 				const isUnread = !hasRead;
 				
 				// PRIORITY: Check guestPhone FIRST - guest messages go to guests section
-				if (msg.guestPhone) {
-					const phone = String(msg.guestPhone).trim();
-					if (phone) {
-						const existing = guestMap.get(phone) || { phone, unread: 0 };
+				if (msg.guestSessionId || msg.guestPhone) {
+					const guestKey = String(msg.guestSessionId || msg.guestPhone).trim();
+					const guestLabel = String(msg.guestPhone || msg.username || guestKey || 'Khách mới').trim();
+					if (guestKey) {
+						const existing = guestMap.get(guestKey) || { key: guestKey, label: guestLabel, unread: 0 };
+						existing.label = guestLabel || existing.label;
 						if (isUnread) existing.unread++;
-						guestMap.set(phone, existing);
+						guestMap.set(guestKey, existing);
 					}
 				} 
 				// THEN: Check internal user (userId or username) - must NOT have guestPhone
@@ -223,7 +225,7 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 		
 		console.log(`👥 [Notification] Parsed ${internalUsersWithUnread.length} internal users & ${guestUsersWithUnread.length} guests`);
 		console.log(`📊 [Notification] Internal users:`, internalUsersWithUnread.map(u => u.username));
-		console.log(`📱 [Notification] Guests:`, guestUsersWithUnread.map(g => g.phone));
+		console.log(`📱 [Notification] Guests:`, guestUsersWithUnread.map(g => g.key));
 		
 		return { internalUsersWithUnread, guestUsersWithUnread };
 	}, [contextMessages, appId, user.userId, user.username]);
@@ -295,7 +297,9 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 
 			const candidateUsername = typeof detail.guestPhone === 'string' && detail.guestPhone.trim()
 				? detail.guestPhone.trim()
-				: (typeof detail.username === 'string' && detail.username.trim() ? detail.username.trim() : room);
+				: (typeof detail.username === 'string' && detail.username.trim()
+					? detail.username.trim()
+					: (typeof detail.guestSessionId === 'string' && detail.guestSessionId.trim() ? 'Khách mới' : room));
 
 			openChatAndMarkRead(room, candidateUsername);
 		};
@@ -373,10 +377,10 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 								<>
 									<div style={{ fontWeight: 600, color: token.colorTextSecondary, marginBottom: 6 }}>{t('common.notification.guests', 'Khách vãng lai')}</div>
 									{guestUsersWithUnread.map(g => (
-										<div key={g.phone} className={classes.userItem} onClick={() => openChatAndMarkRead(g.phone, g.phone)}>
+										<div key={g.key} className={classes.userItem} onClick={() => openChatAndMarkRead(g.key, g.label)}>
 											<Avatar icon={<UserOutlined />} size="small" />
 											<div style={{ flex: 1 }}>
-												<div className={classes.username}>{g.phone}</div>
+												<div className={classes.username}>{g.label}</div>
 												<div style={{ fontSize: 12, color: '#8c8c8c' }}>{t('common.notification.guestDesc', 'Khách của web/app')}</div>
 											</div>
 											{g.unread > 0 && <span className={classes.unreadBadge}>{g.unread}</span>}

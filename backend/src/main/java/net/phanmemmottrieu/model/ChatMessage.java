@@ -22,6 +22,7 @@ public class ChatMessage {
     private String appId;
     private String to; // Username của người nhận (để chat riêng)
     private String guestPhone; // Số điện thoại của khách (dùng làm identifier cho guest user)
+    private String guestSessionId; // Định danh phiên chat ẩn danh của khách
     private Long timestamp; // Thời gian gửi tin nhắn (milliseconds)
 
     // Getters and Setters
@@ -110,6 +111,14 @@ public class ChatMessage {
 
     public void setGuestPhone(String guestPhone) {
         this.guestPhone = guestPhone;
+    }
+
+    public String getGuestSessionId() {
+        return guestSessionId;
+    }
+
+    public void setGuestSessionId(String guestSessionId) {
+        this.guestSessionId = guestSessionId;
     }
 
     public Long getTimestamp() {

@@ -59,9 +59,23 @@ public class ChatHistoryManager {
         return new ArrayList<>();
     }
 
+    public static List<ChatMessage> getHistoryByGuestIdentity(String appId, String guestSessionId, String guestPhone, int limit) {
+        if (persistenceService != null) {
+            return persistenceService.getHistoryByGuestIdentity(appId, guestSessionId, guestPhone, limit);
+        }
+        return new ArrayList<>();
+    }
+
     public static List<String> getGuestPhonesByAppId(String appId) {
         if (persistenceService != null) {
             return persistenceService.getGuestPhonesByAppId(appId);
+        }
+        return new ArrayList<>();
+    }
+
+    public static List<String> getGuestSessionsByAppId(String appId) {
+        if (persistenceService != null) {
+            return persistenceService.getGuestSessionsByAppId(appId);
         }
         return new ArrayList<>();
     }
@@ -75,6 +89,12 @@ public class ChatHistoryManager {
     public static void markAllAsReadByGuestPhone(String appId, String guestPhone) {
         if (persistenceService != null) {
             persistenceService.markAllAsReadByGuestPhone(appId, guestPhone);
+        }
+    }
+
+    public static void markAllAsReadByGuestIdentity(String appId, String guestSessionId, String guestPhone) {
+        if (persistenceService != null) {
+            persistenceService.markAllAsReadByGuestIdentity(appId, guestSessionId, guestPhone);
         }
     }
 

@@ -38,9 +38,31 @@ export const useGuestPhone = () => {
       return "";
     }
   };
+
+  const createGuestSessionId = () => {
+    const randomPart = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+    return `guest_${appId}_${randomPart}`;
+  };
+
+  const getStoredGuestSessionId = () => {
+    if (!isGuest) return "";
+    try {
+      const storageKey = `csm_guest_session_${appId}`;
+      const existing = localStorage.getItem(storageKey) || "";
+      if (existing) return existing;
+      const created = createGuestSessionId();
+      localStorage.setItem(storageKey, created);
+      return created;
+    } catch {
+      return "";
+    }
+  };
   
   const [guestPhone, setGuestPhoneState] = useState<string>(getStoredPhone());
   const [chatUrl, setChatUrlState] = useState<string>(getStoredChatUrl());
+  const [guestSessionId, setGuestSessionIdState] = useState<string>(getStoredGuestSessionId());
 
   // Broadcast helper so all hook instances (floating chat + detail page) stay in sync
   const emitPhoneChange = (phone: string) => {
@@ -51,6 +73,11 @@ export const useGuestPhone = () => {
   const emitChatUrlChange = (url: string) => {
     if (typeof window === 'undefined') return;
     window.dispatchEvent(new CustomEvent('csm-guest-chat-url-changed', { detail: { appId, url } }));
+  };
+
+  const emitGuestSessionChange = (guestSessionIdValue: string) => {
+    if (typeof window === 'undefined') return;
+    window.dispatchEvent(new CustomEvent('csm-guest-session-changed', { detail: { appId, guestSessionId: guestSessionIdValue } }));
   };
   
   const setGuestPhone = (phone: string) => {
@@ -77,6 +104,16 @@ export const useGuestPhone = () => {
     } catch (e) {
       console.warn('Cannot save chat URL to localStorage', e);
     }
+  };
+
+  const ensureGuestSessionId = () => {
+    if (!isGuest) return "";
+    const current = getStoredGuestSessionId();
+    if (current && current !== guestSessionId) {
+      setGuestSessionIdState(current);
+      emitGuestSessionChange(current);
+    }
+    return current;
   };
 
   /**
@@ -132,12 +169,16 @@ export const useGuestPhone = () => {
     if (!isGuest) return;
     const storedPhone = getStoredPhone();
     const storedUrl = getStoredChatUrl();
+    const storedGuestSessionId = getStoredGuestSessionId();
 
     if (storedPhone) {
       setGuestPhoneState(storedPhone);
     }
     if (storedUrl) {
       setChatUrlState(storedUrl);
+    }
+    if (storedGuestSessionId) {
+      setGuestSessionIdState(storedGuestSessionId);
     }
   }, [appId, isGuest]);
 
@@ -159,6 +200,13 @@ export const useGuestPhone = () => {
       }
     };
 
+    const handleGuestSessionEvent = (event: Event) => {
+      const detail = (event as CustomEvent).detail;
+      if (detail?.appId === appId && typeof detail.guestSessionId === 'string') {
+        setGuestSessionIdState(detail.guestSessionId || "");
+      }
+    };
+
     const handleStorage = (evt: StorageEvent) => {
       if (evt.key === `csm_guest_phone_${appId}`) {
         setGuestPhoneState(evt.newValue || "");
@@ -166,21 +214,28 @@ export const useGuestPhone = () => {
       if (evt.key === `csm_guest_chat_url_${appId}`) {
         setChatUrlState(evt.newValue || "");
       }
+      if (evt.key === `csm_guest_session_${appId}`) {
+        setGuestSessionIdState(evt.newValue || "");
+      }
     };
 
     window.addEventListener('csm-guest-phone-changed', handlePhoneEvent as EventListener);
     window.addEventListener('csm-guest-chat-url-changed', handleChatUrlEvent as EventListener);
+    window.addEventListener('csm-guest-session-changed', handleGuestSessionEvent as EventListener);
     window.addEventListener('storage', handleStorage);
 
     return () => {
       window.removeEventListener('csm-guest-phone-changed', handlePhoneEvent as EventListener);
       window.removeEventListener('csm-guest-chat-url-changed', handleChatUrlEvent as EventListener);
+      window.removeEventListener('csm-guest-session-changed', handleGuestSessionEvent as EventListener);
       window.removeEventListener('storage', handleStorage);
     };
   }, [appId, isGuest]);
   
   return {
     guestPhone,
+    guestSessionId,
+    ensureGuestSessionId,
     setGuestPhone,
     clearGuestPhone,
     isGuest,

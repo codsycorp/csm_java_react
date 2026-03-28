@@ -1,11 +1,12 @@
 /**
  * Menu Type Resolver Utility
  * Handles resolution and rendering of different menu types:
+ * - type_form = 0: Group Menu (container only)
  * - type_form = 1: Data Table Grid
  * - type_form = 2: Master-Detail Form
  * - type_form = 3: Dynamic Link (external/internal redirect)
- * - type_form = 4: Dynamic Code (execute JavaScript template from sys_autos)
- * - type_form = 5: CRM Workspace (Kanban + Inventory + Activities + Analytics)
+ * - type_form = 4: Dynamic Code (resolved inside AdminPage runtime)
+ * - type_form = 6: Kanban Board (resolved inside AdminPage runtime)
  */
 
 import type { MenuItemType } from "#src/api/system/menu";
@@ -14,11 +15,12 @@ import type { MenuItemType } from "#src/api/system/menu";
  * Menu type enumeration
  */
 export enum MenuFormType {
+  GROUP = 0,                 // Nhom menu
   TABLE = 1,                  // Dạng bảng
   MASTER_DETAIL = 2,         // Dạng Form Master-Detail
   DYNAMIC_LINK = 3,          // Liên kết động
   DYNAMIC_CODE = 4,          // Chạy code động
-  CRM_WORKSPACE = 5,         // Workspace CRM chuyên biệt
+  KANBAN_BOARD = 6,          // Bang Kanban doc lap
 }
 
 /**
@@ -27,13 +29,14 @@ export enum MenuFormType {
 export function getMenuFormTypeLabel(typeForm: number | string | undefined): string {
   const type = Number(typeForm || 1);
   const labels: Record<number, string> = {
+    [MenuFormType.GROUP]: "Nhóm menu",
     [MenuFormType.TABLE]: "Dạng bảng",
     [MenuFormType.MASTER_DETAIL]: "Master-Detail",
     [MenuFormType.DYNAMIC_LINK]: "Liên kết động",
     [MenuFormType.DYNAMIC_CODE]: "Code động",
-    [MenuFormType.CRM_WORKSPACE]: "CRM Workspace",
+    [MenuFormType.KANBAN_BOARD]: "Kanban Board",
   };
-  return labels[type] || labels[MenuFormType.TABLE];
+  return labels[type] || labels[MenuFormType.GROUP];
 }
 
 /**
@@ -43,11 +46,16 @@ export function resolveMenuRoute(
   menu: MenuItemType,
   baseRoutes: { gridPath: string; adminPath: string }
 ): { type: MenuFormType; route: string; target?: string } | null {
-  const typeForm = Number(menu.type_form || MenuFormType.TABLE);
+  const typeForm = Number(menu.type_form ?? MenuFormType.GROUP);
 
   switch (typeForm) {
+    case MenuFormType.GROUP:
+      return null;
+
     case MenuFormType.TABLE:
     case MenuFormType.MASTER_DETAIL:
+    case MenuFormType.DYNAMIC_CODE:
+    case MenuFormType.KANBAN_BOARD:
       // Route to dynamic grid page
       return {
         type: typeForm,
@@ -59,19 +67,6 @@ export function resolveMenuRoute(
       return {
         type: MenuFormType.DYNAMIC_LINK,
         route: menu.dynamic_link_url || menu.v_link || "",
-      };
-
-    case MenuFormType.DYNAMIC_CODE:
-      // Return special marker for dynamic code
-      return {
-        type: MenuFormType.DYNAMIC_CODE,
-        route: `/system/dynamic-code/${menu.id}`,
-      };
-
-    case MenuFormType.CRM_WORKSPACE:
-      return {
-        type: MenuFormType.CRM_WORKSPACE,
-        route: `${baseRoutes.gridPath}/${menu.id}`,
       };
 
     default:
@@ -97,8 +92,13 @@ export function isDynamicCodeMenu(menu: MenuItemType): boolean {
  * Check if menu should be handled as Grid (Table or Master-Detail)
  */
 export function isGridMenu(menu: MenuItemType): boolean {
-  const typeForm = Number(menu.type_form || MenuFormType.TABLE);
-  return typeForm === MenuFormType.TABLE || typeForm === MenuFormType.MASTER_DETAIL || typeForm === MenuFormType.CRM_WORKSPACE;
+  const typeForm = Number(menu.type_form ?? MenuFormType.GROUP);
+  return [
+    MenuFormType.TABLE,
+    MenuFormType.MASTER_DETAIL,
+    MenuFormType.DYNAMIC_CODE,
+    MenuFormType.KANBAN_BOARD,
+  ].includes(typeForm);
 }
 
 /**
@@ -112,11 +112,16 @@ export function getMenuNavigationTarget(
     baseUrl?: string;
   } = {}
 ): string | null {
-  const typeForm = Number(menu.type_form || MenuFormType.TABLE);
+  const typeForm = Number(menu.type_form ?? MenuFormType.GROUP);
 
   switch (typeForm) {
+    case MenuFormType.GROUP:
+      return null;
+
     case MenuFormType.TABLE:
     case MenuFormType.MASTER_DETAIL:
+    case MenuFormType.DYNAMIC_CODE:
+    case MenuFormType.KANBAN_BOARD:
       return `${options.gridPath || "/system/grid"}/${menu.id}`;
 
     case MenuFormType.DYNAMIC_LINK: {
@@ -136,12 +141,6 @@ export function getMenuNavigationTarget(
       return linkUrl;
     }
 
-    case MenuFormType.DYNAMIC_CODE:
-      return `/system/dynamic-code/${menu.id}`;
-
-    case MenuFormType.CRM_WORKSPACE:
-      return `${options.gridPath || "/system/grid"}/${menu.id}`;
-
     default:
       return null;
   }
@@ -154,7 +153,7 @@ export function shouldOpenInNewWindow(
   menu: MenuItemType,
   navigationTarget: string | null
 ): boolean {
-  const typeForm = Number(menu.type_form || MenuFormType.TABLE);
+  const typeForm = Number(menu.type_form ?? MenuFormType.GROUP);
 
   if (typeForm === MenuFormType.DYNAMIC_LINK) {
     const linkUrl = menu.dynamic_link_url || menu.v_link || "";
@@ -185,7 +184,7 @@ export function buildMenuNavConfig(
     isGrid: isGridMenu(menu),
     isDynamicLink: isDynamicLinkMenu(menu),
     isDynamicCode: isDynamicCodeMenu(menu),
-    isCrmWorkspace: Number(menu.type_form || MenuFormType.TABLE) === MenuFormType.CRM_WORKSPACE,
+    isKanbanBoard: Number(menu.type_form ?? MenuFormType.GROUP) === MenuFormType.KANBAN_BOARD,
     shouldOpenNewWindow: shouldNewWindow,
   };
 }

@@ -388,18 +388,20 @@ function createMenuExample(): MenuItemType[] {
 }
 
 function buildPromptWithRequirement(
+  appId: string | undefined,
   requestText: string,
   scope: "minimal" | "complete" = "minimal",
   currentMenus?: MenuItemType[],
 ): string {
   const referenceMenus = Array.isArray(currentMenus) && currentMenus.length > 0
-    ? currentMenus.slice(0, 12)
+    ? currentMenus
     : createMenuExample();
   const mainPrompt = trimToMax(AI_PROMPTS.MAIN_MENU_DESIGNER || "", 5200);
   const extractorPrompt = trimToMax(AI_PROMPTS.REQUIREMENT_EXTRACTOR || "", 2200);
   const selectorGuide = trimToMax(AI_PROMPTS.TYPE_SELECTION_GUIDE || "", 2200);
   const requestCore = trimToMax(requestText || "", 2800);
-  const compactMenuContext = buildCompactMenuContext(referenceMenus, 80);
+  const compactMenuContext = buildCompactMenuContext(referenceMenus, 180);
+  const typeCatalog = buildMenuTypeCatalog();
 
   const prompt = `${mainPrompt}
 
@@ -409,10 +411,16 @@ ${selectorGuide}
 
 ## TRACH NHIEM CUA BAN
 1) Phan tich yeu cau khach hang
-2) Chon menu type phu hop (${scope === "minimal" ? "uu tien type 1/3" : "co the dung 1/2/3/4"})
+2) Chon menu type phu hop (${scope === "minimal" ? "uu tien type 1/3" : "co the dung 1/2/3/4/6"})
 3) Tao JSON hop le theo MenuItemType
 4) Neu can, ghi chu gia dinh vao notes
 5) Neu da co menu cu: chuan hoa theo schema he thong hien tai, giu ID/path/menu_id on dinh toi da
+
+## APP_ID DANG THIET KE
+${String(appId || "")}
+
+## BO MENU TYPE HE THONG DANG CO
+${typeCatalog}
 
 ## MENU HE THONG HIEN TAI (COMPACT REFERENCE)
 ${compactMenuContext}
@@ -435,6 +443,9 @@ ${requestCore}
   + Dang query DB: {"options":[],"query":[{"obj_name":"table","fields":["id","name"],"obj_where":{"field":"id","type":"like","value":""}}]}
   + Khong tra ve JSON loi hoac SQL thuan.
 - Neu yeu cau nghiep vu co ket noi master-detail, bao cao, combo phu thuoc: phai tao du trigger va f_cbo_query tuong ung.
+- Menu type 1/2/6 KHONG can path dieu huong. Neu AI tao path cho cac type nay, hay de rong hoac bo qua.
+- CRM/quan ly cong viec phai thiet ke bang nhieu menu nho: type 1/2/3/4/6 va report, khong dung workspace tong hop.
+- Type 6 (Kanban Board): uu tien co kanban_config hop le (JSON object), table_name, id/status/title fields theo config.
 
 ## OUTPUT SHAPE (LEGACY COMPAT)
 - Moi menu item uu tien co day du key: id, label, trigger, m_icons, field_root, report_name,
@@ -450,6 +461,7 @@ Khong lap lai JSON mau dai. Tap trung logic nghiep vu va tra ve JSON menu hoan c
 }
 
 function buildRefinementPrompt(
+  appId: string | undefined,
   baseRequest: string,
   refineRequest: string,
   previousResultJson: string,
@@ -457,7 +469,7 @@ function buildRefinementPrompt(
   currentMenus?: MenuItemType[],
 ): string {
   const referenceMenus = Array.isArray(currentMenus) && currentMenus.length > 0
-    ? currentMenus.slice(0, 24)
+    ? currentMenus
     : createMenuExample();
 
   const mainPrompt = trimToMax(AI_PROMPTS.MAIN_MENU_DESIGNER || "", 5200);
@@ -466,9 +478,10 @@ function buildRefinementPrompt(
 
   const requestCore = trimToMax(baseRequest || "(khong co)", 2600);
   const refineCore = trimToMax(refineRequest || "", 1800);
-  const currentMenuContext = buildCompactMenuContext(referenceMenus, 80);
+  const currentMenuContext = buildCompactMenuContext(referenceMenus, 180);
   const previousMenuContext = buildPreviousResultContext(previousResultJson, 90);
-  const strictScope = scope === "minimal" ? "uu tien type 1/3" : "duoc dung day du type 1/2/3/4";
+  const strictScope = scope === "minimal" ? "uu tien type 1/3" : "duoc dung day du type 1/2/3/4/6";
+  const typeCatalog = buildMenuTypeCatalog();
 
   const prompt = `${mainPrompt}
 
@@ -483,6 +496,12 @@ Ban da co ket qua menu lan truoc. Hay cap nhat theo yeu cau moi voi nguyen tac:
 3) Dam bao schema MenuItemType hop le va ${strictScope}.
 4) Neu thong tin chua du, dua ra gia dinh hop ly va ghi vao warnings.
 5) Chuan hoa lai cac menu cu chua dung schema (field generic, trigger sai cho, combo sai format).
+
+## APP_ID DANG THIET KE
+${String(appId || "")}
+
+## BO MENU TYPE HE THONG DANG CO
+${typeCatalog}
 
 ## YEU CAU GOC (RUT GON)
 ${requestCore}
@@ -508,6 +527,9 @@ ${previousMenuContext}
 - KHONG tra ve ten ham rong nhu "validate_order_debt_limit" neu khong co code.
 - Field select/combo (f_types co/coro/cbo) BAT BUOC co f_cbo_query hop le theo 1 trong 2 mau static/query DB.
 - Neu refine tu menu cu: giu id/menu_id/path/menu cha-con toi da, chi thay doi phan duoc yeu cau.
+- Menu type 1/2/6 KHONG can path dieu huong. Neu co path o cac type nay, hay loai bo.
+- CRM/quan ly cong viec phai doi thanh cac menu nho bang type 1/2/3/4/6 va report.
+- Type 6 (Kanban Board) can uu tien kanban_config chuyen biet.
 
 ## OUTPUT SHAPE (LEGACY COMPAT)
 - Moi menu item uu tien co day du key: id, label, trigger, m_icons, field_root, report_name,
@@ -751,7 +773,20 @@ function applyLegacyMenuShape(menus: MenuItemType[]): MenuItemType[] {
         // Explicit support for Type 3 (Dynamic Link) and Type 4 (Dynamic Code)
         ...(typeForm === 3 && { dynamic_link_url: (rawNode as any).dynamic_link_url ?? "" }),
         ...(typeForm === 4 && { auto_code_name: (rawNode as any).auto_code_name ?? "" }),
+        ...(typeForm === 6 && { kanban_config: (rawNode as any).kanban_config ?? {} }),
       };
+
+      if (typeForm === 1 || typeForm === 2 || typeForm === 6) {
+        delete (node as any).path;
+      }
+
+      if (typeForm !== 3) {
+        delete (node as any).dynamic_link_url;
+      }
+
+      if (typeForm !== 4) {
+        delete (node as any).auto_code_name;
+      }
 
       if (childrenInput.length > 0) {
         (node as any).children = walk(childrenInput, menuId, nextMenuId);
@@ -782,6 +817,19 @@ function flattenMenuNodes(menus: MenuItemType[], maxNodes: number): MenuItemType
   }
 
   return out;
+}
+
+function buildMenuTypeCatalog(): string {
+  return [
+    "- type_form=0: Nhom menu (khong CRUD, chi de to chuc cay)",
+    "- type_form=1: Luoi dong / Data Grid (table_name + table)",
+    "- type_form=2: Master-Detail (master + children tabs)",
+    "- type_form=3: Dynamic Link (dynamic_link_url)",
+    "- type_form=4: Dynamic Code (auto_code_name)",
+    "- type_form=6: Kanban Board (kanban_config + table_name)",
+    "- Quy uoc: type 1/2/6 khong can path; dieu huong runtime theo /system/grid/:menuId",
+    "- Khuyen nghi thiet ke CRM/quan ly cong viec bang nhieu menu nho: type 1/2/4/6/report",
+  ].join("\n");
 }
 
 function compactNodeLine(node: MenuItemType): string {
@@ -988,6 +1036,33 @@ function validateMenusForApply(menus: MenuItemType[]): MenuValidationIssue[] {
         });
       }
 
+      if (typeForm === 6 && !tableName) {
+        issues.push({
+          severity: "warning",
+          rule: "workspace_table_recommended",
+          path,
+          message: `Menu type_form=${typeForm} nên có table_name để đồng bộ CRUD/runtime.`,
+        });
+      }
+
+      if (typeForm === 6 && !(node as any).kanban_config) {
+        issues.push({
+          severity: "warning",
+          rule: "kanban_config_recommended",
+          path,
+          message: "Menu type_form=6 nên có kanban_config để cấu hình board.",
+        });
+      }
+
+      if ((typeForm === 1 || typeForm === 2 || typeForm === 6) && String((node as any).path || "").trim()) {
+        issues.push({
+          severity: "warning",
+          rule: "path_not_needed_for_grid_runtime",
+          path,
+          message: `Menu type_form=${typeForm} không cần path; nên để trống để tránh route sai.`,
+        });
+      }
+
       if (trigger != null && typeof trigger !== "object") {
         issues.push({
           severity: "error",
@@ -1167,7 +1242,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
       return;
     }
 
-    const prompt = promptOverride || buildPromptWithRequirement(inputRequest, scope, currentMenus);
+    const prompt = promptOverride || buildPromptWithRequirement(appId, inputRequest, scope, currentMenus);
     const estimatedTokens = estimateTokenCount(prompt);
     if (estimatedTokens > 6000) {
       message.warning(
@@ -1237,6 +1312,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     }
 
     const prompt = buildRefinementPrompt(
+      appId,
       storedRequest,
       refineText,
       aiResultText,

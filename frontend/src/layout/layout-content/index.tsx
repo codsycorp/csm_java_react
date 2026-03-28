@@ -1,4 +1,5 @@
 import { GlobalSpin, Scrollbar } from "#src/components";
+import { removeTrailingSlash } from "#src/router/utils";
 import { usePermissionStore, usePreferencesStore, useTabsStore } from "#src/store";
 import { theme } from "antd";
 import KeepAlive, { useKeepaliveRef } from "keepalive-for-react";
@@ -24,9 +25,12 @@ export default function LayoutContent() {
 	/**
 	 * to distinguish different pages to cache
 	 */
-	// Use pathname only to keep a stable cache key; avoid creating new keep-alive nodes
-	// when querystring changes (e.g., language switches add ?t=timestamp).
-	const cacheKey = useMemo(() => pathname, [pathname]);
+	// Use normalized pathname only so cache keys are stable and aligned with tab keys.
+	const cacheKey = useMemo(() => {
+		const homePath = import.meta.env.VITE_BASE_HOME_PATH || "/home";
+		const normalized = removeTrailingSlash(pathname);
+		return normalized === "/" ? homePath : normalized;
+	}, [pathname]);
 
 	/**
 	 * 当使用关闭当前标签页、关闭右侧标签页、关闭左侧标签页、关闭其他标签页、关闭所有标签页功能时，需要清除这个标签页的缓存
@@ -38,7 +42,7 @@ export default function LayoutContent() {
 				aliveRef.current?.destroy(node.cacheKey);
 			}
 		});
-	}, [openTabs]);
+	}, [openTabs, cacheKey]);
 
 	/**
 	 * 关闭多 tab 功能，清空所有的缓存页面
@@ -53,7 +57,7 @@ export default function LayoutContent() {
 				}
 			});
 		}
-	}, [tabbarEnable]);
+	}, [tabbarEnable, cacheKey]);
 
 	/* KeepAlive 的刷新 */
 	useEffect(() => {

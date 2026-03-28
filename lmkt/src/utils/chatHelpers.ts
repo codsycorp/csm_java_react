@@ -7,19 +7,19 @@
 /**
  * Load lịch sử chat cho guest user (via socket if available)
  */
-export async function loadGuestChatHistory(appId: string, guestPhone: string, limit: number = 100) {
+export async function loadGuestChatHistory(appId: string, guestIdentity: string, limit: number = 100, guestPhone?: string) {
   // Guest chat uses socket.io connection, not HTTP API
   // This is a fallback stub if needed
-  console.log('[lmkt] Guest chat history loaded via socket.io');
+  console.log('[lmkt] Guest chat history loaded via socket.io', { appId, guestIdentity, guestPhone, limit });
   return [];
 }
 
 /**
  * Mark guest messages as read
  */
-export async function markGuestMessagesAsRead(appId: string, guestPhone: string) {
+export async function markGuestMessagesAsRead(appId: string, guestIdentity: string) {
   // Guest read status managed via socket.io
-  console.log('[lmkt] Guest messages marked as read (via socket)');
+  console.log('[lmkt] Guest messages marked as read (via socket)', { appId, guestIdentity });
   return { success: true };
 }
 

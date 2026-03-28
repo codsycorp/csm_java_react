@@ -233,7 +233,7 @@
 
   var UI_TEXT = {
     vi: {
-      title: "KQXS - React Auto Code",
+      title: "Thống Kê Lô",
       fromDate: "Từ Ngày (dd/mm/yyyy)",
       toDate: "Đến Ngày (dd/mm/yyyy)",
       region: "Miền",
@@ -289,7 +289,7 @@
       sxCu: "Ngày cũ đứng trước"
     },
     en: {
-      title: "KQXS - React Auto Code",
+      title: "Lo Statistics",
       fromDate: "From Date (dd/mm/yyyy)",
       toDate: "To Date (dd/mm/yyyy)",
       region: "Region",
@@ -345,7 +345,7 @@
       sxCu: "Oldest first"
     },
     zh: {
-      title: "KQXS - React Auto Code",
+      title: "号码统计",
       fromDate: "开始日期 (dd/mm/yyyy)",
       toDate: "结束日期 (dd/mm/yyyy)",
       region: "地区",
@@ -1014,8 +1014,9 @@
     var useState = ReactRef.useState;
     var useEffect = ReactRef.useEffect;
     var useMemo = ReactRef.useMemo;
+    var useRef = ReactRef.useRef;
 
-    var _a = useState(false), unlock = _a[0], setUnlock = _a[1];
+    var _a = useState(false), allowUpdateActions = _a[0], setAllowUpdateActions = _a[1];
     var _b = useState("MN"), mien = _b[0], setMien = _b[1];
     var _c = useState(dateFormat(new Date(), "dd/mm/yyyy")), den_ngay = _c[0], setDenNgay = _c[1];
     var _d = useState(CongNgay(dateFormat(new Date(), "dd/mm/yyyy"), -4 * 365, "dd/mm/yyyy")), tu_ngay = _d[0], setTuNgay = _d[1];
@@ -1056,6 +1057,7 @@
     var _ai = useState([]), lichSuSoChuRows = _ai[0], setLichSuSoChuRows = _ai[1];
     var _aj = useState("ketqua"), subTab = _aj[0], setSubTab = _aj[1];
     var _ak = useState("kq"), activeAction = _ak[0], setActiveAction = _ak[1];
+    var taiDuLieuReqRef = useRef(0);
 
     var tt = useMemo(function () {
       return UI_TEXT[uiLang] || UI_TEXT.vi;
@@ -1083,21 +1085,41 @@
       return ["CN", "T2", "T3", "T4", "T5", "T6", "T7"];
     }, []);
 
-    var dsDaiThu = useMemo(function () {
-      var out = danh_sach_dai.filter(function (d) {
+    var dsDaiMienThu = useMemo(function () {
+      return danh_sach_dai.filter(function (d) {
         return d.mien === mien && d.thu === thu_tuan;
       }).sort(function (a, b) { return Number(a.stt || 0) - Number(b.stt || 0); });
-      out = out.map(function (d) {
+    }, [danh_sach_dai, mien, thu_tuan]);
+
+    var dsDaiCanTai = useMemo(function () {
+      var dsMien = danh_sach_dai.filter(function (d) { return d.mien === mien; })
+        .sort(function (a, b) {
+          var ka = String(a.thu || "") + "_" + String(a.stt || "");
+          var kb = String(b.thu || "") + "_" + String(b.stt || "");
+          return ka < kb ? -1 : ka > kb ? 1 : 0;
+        });
+      if (loai_tim === 1) {
+        return dsMien.filter(function (d) { return d.thu === thu_tuan; });
+      }
+      return dsMien;
+    }, [danh_sach_dai, mien, thu_tuan, loai_tim]);
+
+    var dsDaiThu = useMemo(function () {
+      return dsDaiMienThu.map(function (d) {
         var n = Object.assign({}, d);
         n.label = loai_tim === 0 ? (mien + n.stt + " - " + n.ten_dai) : n.ten_dai;
         return n;
       });
-      return out;
-    }, [danh_sach_dai, mien, thu_tuan, loai_tim]);
+    }, [dsDaiMienThu, mien, loai_tim]);
 
     useEffect(function () {
-      var params = new URLSearchParams(window.location.search || "");
-      setUnlock(Boolean(params.get("unlock")));
+      var hasRuntimeProcess = false;
+      try {
+        hasRuntimeProcess = !!(typeof window !== "undefined" && window && window.hasOwnProperty("process") && window.process);
+      } catch (e) {
+        hasRuntimeProcess = false;
+      }
+      setAllowUpdateActions(hasRuntimeProcess);
       setThuTuan(days[chuyenNgay(den_ngay, "dd/mm/yyyy").getDay()]);
 
       fetchRows({
@@ -1143,11 +1165,6 @@
       };
     }, []);
 
-    useEffect(function () {
-      if (!danh_sach_dai.length) return;
-      lay_ds_dai();
-    }, [danh_sach_dai, mien, thu_tuan, loai_tim, tu_ngay, den_ngay]);
-
     function locVaSapXepNgay(rows) {
       var seen = {};
       var out = [];
@@ -1164,25 +1181,23 @@
       return out;
     }
 
-    function layNguonDaChon() {
-      var dsData = (du_lieu_dai_mien[mien] && du_lieu_dai_mien[mien].data) || [];
+    function layNguonDaChon(dataMienOverride) {
+      var mapData = dataMienOverride || du_lieu_dai_mien;
+      var dsData = (mapData[mien] && mapData[mien].data) || [];
       var out = [];
       ds_dai_chon.forEach(function (sttRaw) {
         var stt = Number(sttRaw);
-        if (loai_tim === 0) {
-          dsData.filter(function (dm) { return Number(dm.stt) === stt; }).forEach(function (dlD) {
-            out.push(dlD);
-          });
-        } else {
-          var dlOne = dsData.find(function (dm) { return Number(dm.stt) === stt && dm.thu === thu_tuan; });
-          if (dlOne) out.push(dlOne);
-        }
+        var dsTheoThu = dsData.filter(function (dm) {
+          return Number(dm.stt) === stt && dm.thu === thu_tuan;
+        });
+        dsTheoThu.forEach(function (dlD) { out.push(dlD); });
       });
       return out;
     }
 
-    function layNguonTheoDanhSach(sttList) {
-      var dsData = (du_lieu_dai_mien[mien] && du_lieu_dai_mien[mien].data) || [];
+    function layNguonTheoDanhSach(sttList, dataMienOverride) {
+      var mapData = dataMienOverride || du_lieu_dai_mien;
+      var dsData = (mapData[mien] && mapData[mien].data) || [];
       var out = [];
       (sttList || []).forEach(function (sttRaw) {
         var stt = Number(sttRaw);
@@ -1208,6 +1223,46 @@
         if (/^\d{2}$/.test(so)) out.push(so);
       });
       return out;
+    }
+
+    function stationNameKey(name) {
+      return stripVietnamese(String(name || ""))
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, "");
+    }
+
+    function resolveStationObjectName(rawName, mienCode) {
+      var raw = String(rawName || "").trim();
+      if (!raw) return "";
+      var key = stationNameKey(raw);
+      if (!key) return "";
+
+      var aliasToObject = {
+        thuatthienhue: "kqxs_thuathienhue",
+        thuathienhue: "kqxs_thuathienhue",
+        hue: "kqxs_thuathienhue",
+        binhduong: "kqxs_binhduong",
+        songbe: "kqxs_binhduong",
+        tphcm: "kqxs_tphcm",
+        thanhphohochiminh: "kqxs_tphcm",
+        hochiminh: "kqxs_tphcm"
+      };
+      if (aliasToObject[key]) return aliasToObject[key];
+
+      var mienList = (danh_sach_dai || []).filter(function (d) {
+        return !mienCode || String(d.mien || "") === String(mienCode || "");
+      });
+
+      for (var i = 0; i < mienList.length; i += 1) {
+        var item = mienList[i] || {};
+        var nameKey = stationNameKey(item.ten_dai || "");
+        if (!nameKey) continue;
+        if (nameKey === key || nameKey.indexOf(key) >= 0 || key.indexOf(nameKey) >= 0) {
+          if (item.du_lieu_dai) return String(item.du_lieu_dai);
+        }
+      }
+
+      return normalizeStationTableName(raw);
     }
 
     function calcThongKeMetrics(kyCounts) {
@@ -1292,13 +1347,13 @@
       };
     }
 
-    function xayDungNguCanhSoChu() {
+    function xayDungNguCanhSoChu(dataMienOverride) {
       if (!(so_chu.length && ds_dai_chon_so_chu.length)) {
         return { allowedDateSet: null, historyRows: [] };
       }
 
       var denDate = chuyenNgay(den_ngay, "dd/mm/yyyy");
-      var sources = layNguonTheoDanhSach(ds_dai_chon_so_chu);
+      var sources = layNguonTheoDanhSach(ds_dai_chon_so_chu, dataMienOverride);
       var dateAnyMap = {};
       var dateHitMap = {};
 
@@ -1362,28 +1417,22 @@
       return { allowedDateSet: allowedDateSet, historyRows: historyRows };
     }
 
-    async function lay_ds_dai() {
-      setDsDaiChon([]);
-      setDsDaiChonSoChu([]);
-      setDsDaiChonXemKetQua([]);
-      setXuLyKetQua([]);
-      setLichSuSoChuRows([]);
+    async function lay_ds_dai(dsDaiDaLoc) {
+      var reqId = taiDuLieuReqRef.current + 1;
+      taiDuLieuReqRef.current = reqId;
 
-      var dsDaiMien = danh_sach_dai.slice();
-      var dsDai = dsDaiMien.filter(function (d) { return d.mien === mien; })
-        .sort(function (a, b) {
-          var ka = String(a.thu || "") + "_" + String(a.stt || "");
-          var kb = String(b.thu || "") + "_" + String(b.stt || "");
-          return ka < kb ? -1 : ka > kb ? 1 : 0;
-        });
-
-      if (loai_tim === 1) {
-        dsDai = dsDai.filter(function (d) { return d.thu === thu_tuan; });
+      var dsDai = Array.isArray(dsDaiDaLoc) ? dsDaiDaLoc.slice() : [];
+      if (!dsDai.length) {
+        var emptyNext = {};
+        emptyNext[mien] = { data: [] };
+        setDuLieuDaiMien(emptyNext);
+        return emptyNext;
       }
 
       var theoDai = {};
       var dataMien = [];
       for (var i = 0; i < dsDai.length; i += 1) {
+        if (reqId !== taiDuLieuReqRef.current) return;
         var obj = dsDai[i];
         if (!theoDai[obj.du_lieu_dai]) {
           var rows = await fetchRows({
@@ -1397,6 +1446,8 @@
               ]
             }
           });
+
+          if (reqId !== taiDuLieuReqRef.current) return;
 
           theoDai[obj.du_lieu_dai] = rows.filter(function (kq) {
             return Boolean(kq && kq.field_ngay);
@@ -1418,9 +1469,11 @@
         });
       }
 
+      if (reqId !== taiDuLieuReqRef.current) return;
       var next = {};
       next[mien] = { data: dataMien };
       setDuLieuDaiMien(next);
+      return next;
     }
 
     async function xem_ket_qua() {
@@ -1437,8 +1490,9 @@
       setProgress(10);
 
       try {
+        var loadedDataMien = await lay_ds_dai(dsDaiCanTai);
         var ymd = Number(dateFormat(chuyenNgay(den_ngay, "dd/mm/yyyy"), "yyyymmdd"));
-        var selected = layNguonDaChon();
+        var selected = layNguonDaChon(loadedDataMien);
 
         var cards = [];
         var xuLy = [];
@@ -1499,7 +1553,7 @@
       }
     }
 
-    async function buildThongKeData(isThongKeMoi, allowedDateSet, sourceSttList) {
+    async function buildThongKeData(isThongKeMoi, allowedDateSet, sourceSttList, dataMienOverride) {
       var sourceList = Array.isArray(sourceSttList) && sourceSttList.length ? sourceSttList : ds_dai_chon;
       if (!sourceList.length) return [];
 
@@ -1508,16 +1562,14 @@
       var daysRange = TruNgayRaSoNgay(den, tu, "dd/mm/yyyy");
       if (daysRange < 0) return [];
 
-      var selected = layNguonTheoDanhSach(sourceList);
+      var selected = layNguonTheoDanhSach(sourceList, dataMienOverride);
       var mang_dl_dai = {};
       var maxSoKy = Math.max(1, Number(so_ky || 1));
 
       for (var i = 0; i < selected.length; i += 1) {
         var dai = selected[i];
         var rows = (dai.data || []).slice();
-        if (loai_tim === 0) {
-          rows = rows.filter(function (d) { return d.thu === dai.thu; });
-        } else {
+        if (loai_tim === 1) {
           rows = rows.filter(function (d) { return d.thu === thu_tuan; });
         }
         rows = rows.filter(function (obj) {
@@ -1643,11 +1695,12 @@
       setProgress(15);
 
       try {
-        var soChuCtx = xayDungNguCanhSoChu();
+        var loadedDataMien = await lay_ds_dai(dsDaiCanTai);
+        var soChuCtx = xayDungNguCanhSoChu(loadedDataMien);
         var useSoChuSource = so_chu.length > 0 && ds_dai_chon_so_chu.length > 0;
         var thongKeSource = useSoChuSource ? ds_dai_chon_so_chu : ds_dai_chon;
         setLichSuSoChuRows(soChuCtx.historyRows || []);
-        var rows = await buildThongKeData(false, soChuCtx.allowedDateSet, thongKeSource);
+        var rows = await buildThongKeData(false, soChuCtx.allowedDateSet, thongKeSource, loadedDataMien);
         setThongkeRows(rows);
         setProgress(100);
       } catch (e) {
@@ -1671,8 +1724,9 @@
       setProgress(15);
 
       try {
+        var loadedDataMien = await lay_ds_dai(dsDaiCanTai);
         setLichSuSoChuRows([]);
-        var rows = await buildThongKeData(true, null);
+        var rows = await buildThongKeData(true, null, null, loadedDataMien);
         setThongkeRows(rows);
         setProgress(100);
       } catch (e) {
@@ -1684,26 +1738,57 @@
       }
     }
 
+    function sleepMs(ms) {
+      return new Promise(function (resolve) {
+        setTimeout(resolve, Math.max(0, Number(ms) || 0));
+      });
+    }
+
+    async function fetchWithBackoff(url, options, maxRetries, baseDelayMs) {
+      var retries = Math.max(0, Number(maxRetries) || 0);
+      var baseDelay = Math.max(200, Number(baseDelayMs) || 800);
+      var lastErr = null;
+      for (var attempt = 0; attempt <= retries; attempt += 1) {
+        if (attempt > 0) {
+          await sleepMs(baseDelay * attempt);
+        }
+        try {
+          var resp = await fetch(url, options || {});
+          if (resp && (resp.status === 429 || resp.status === 503 || resp.status === 502 || resp.status === 403)) {
+            lastErr = new Error("HTTP " + resp.status + " from " + url);
+            if (attempt < retries) continue;
+          }
+          return resp;
+        } catch (err) {
+          lastErr = err;
+          if (attempt >= retries) throw err;
+        }
+      }
+      throw lastErr || new Error("Fetch failed: " + url);
+    }
+
     async function cap_nhat(ngay_lay) {
       var ngay_cap_nhat = dateFormat(ngay_lay, "dd-mm-yyyy");
       var link = "https://api.phanmemmottrieu.net/scrape-web";
       if (window.hasOwnProperty("process")) link = "";
+      var requestGapMs = link ? 1500 : 900;
 
       function txt(node) {
         return String((node && (node.innerText || node.textContent)) || "").trim();
       }
 
       async function fetchHtml(url) {
+        await sleepMs(requestGapMs);
         if (!link) {
-          var raw = await fetch(url, { cache: "no-store" });
+          var raw = await fetchWithBackoff(url, { cache: "no-store" }, 2, requestGapMs);
           return await raw.text();
         }
-        var resp = await fetch(link, {
+        var resp = await fetchWithBackoff(link, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           cache: "no-store",
           body: JSON.stringify({ link: url })
-        });
+        }, 2, requestGapMs);
         try {
           var payload = await resp.json();
           return String((payload && payload.data) || "");
@@ -1715,14 +1800,14 @@
       async function saveRecord(tableName, objKQ) {
         if (!tableName || !objKQ || !objKQ.field_ngay) return;
         var data = Object.assign({}, objKQ);
-        data.id = randomId("kqxs");
+        data.id = tableName + "_" + String(data.field_ngay || "").trim();
         data.thu = days[chuyenNgay(String(data.field_ngay || ""), "yyyymmdd").getDay()];
         await updateRows({
           app_id: "kqxs",
           obj_name: tableName,
-          command: "create",
+          command: "update",
           obj_update: data,
-          e_where: { field: "id", type: "eq", value: data.id }
+          e_where: { field: "field_ngay", type: "eq", value: data.field_ngay }
         });
       }
 
@@ -1734,11 +1819,13 @@
         var ngay = txt(ngayNode);
         if (!ngay) return;
 
+        var mienCode = isMienTrung ? "MT" : "MN";
+
         var tables = bangketqua.querySelectorAll("table.rightcl");
         for (var ti = 0; ti < tables.length; ti += 1) {
           var kq = tables[ti];
           var tinh = txt(kq.querySelector(".tinh"));
-          var tableName = normalizeStationTableName(tinh);
+          var tableName = resolveStationObjectName(tinh, mienCode);
           if (isMienTrung && (tinh === "Thừa T. Huế" || tinh === "Huế")) {
             tableName = "kqxs_thuathienhue";
           }
@@ -1848,27 +1935,25 @@
       setLoading(false);
     }
 
-    function chay_cap_nhat() {
+    async function chay_cap_nhat() {
       var soNgay = TruNgayRaSoNgay(den_ngay, tu_ngay, "dd/mm/yyyy");
-      var cur = soNgay;
-      if (cur < 0) return;
+      if (soNgay < 0) return;
 
       setLoading(true);
-      var timer = setInterval(function () {
-        if (cur >= 0) {
+      try {
+        var totalSteps = Math.max(soNgay + 1, 1);
+        for (var cur = soNgay; cur >= 0; cur -= 1) {
           var ngay_xo = CongNgay(tu_ngay, cur, "dd/mm/yyyy");
-          cap_nhat(chuyenNgay(ngay_xo, "dd/mm/yyyy"));
-          cur -= 1;
-          var totalSteps = Math.max(soNgay + 1, 1);
-          var done = totalSteps - (cur + 1);
+          await cap_nhat(chuyenNgay(ngay_xo, "dd/mm/yyyy"));
+          await sleepMs(1200);
+          var done = totalSteps - cur;
           var pct = Math.round((done / totalSteps) * 100);
           setProgress(Math.max(0, Math.min(100, pct)));
-        } else {
-          clearInterval(timer);
-          setLoading(false);
-          setTimeout(function () { setProgress(0); }, 800);
         }
-      }, 1000);
+      } finally {
+        setLoading(false);
+        setTimeout(function () { setProgress(0); }, 800);
+      }
     }
 
     function buildKyColumns() {
@@ -2897,14 +2982,12 @@
             h("div", { style: { marginBottom: 6, fontWeight: 600 } }, tt.fromDate),
             renderDateField(tu_ngay, function (next) {
               setTuNgay(next);
-              lay_ds_dai();
             }, { maxDate: den_ngay })
           ]),
           h(Col, { xs: 24, md: 6, key: "c2" }, [
             h("div", { style: { marginBottom: 6, fontWeight: 600 } }, tt.toDate),
             renderDateField(den_ngay, function (next) {
               setDenNgay(next);
-              lay_ds_dai();
             }, { minDate: tu_ngay })
           ]),
           h(Col, { xs: 24, md: 4, key: "c3" }, [
@@ -2916,7 +2999,7 @@
                 { value: "MT", label: tt.mienTrung },
                 { value: "MB", label: tt.mienBac }
               ],
-              onChange: function (v) { setMien(v); lay_ds_dai(); }
+              onChange: function (v) { setMien(v); }
             }))
           ]),
           h(Col, { xs: 24, md: 4, key: "c4" }, [
@@ -2999,7 +3082,7 @@
         ]),
 
         h(Space, { wrap: true, style: { marginTop: 12 } }, [
-          unlock ? h(Button, { key: "up", className: "kqxs-action-btn", onClick: chay_cap_nhat, loading: loading }, tt.btnUpdate) : null,
+          allowUpdateActions ? h(Button, { key: "up", className: "kqxs-action-btn", onClick: chay_cap_nhat, loading: loading }, tt.btnUpdate) : null,
           h(Button, {
             key: "kq",
             className: "kqxs-action-btn" + (activeAction === "kq" ? " kqxs-action-btn-active" : ""),
@@ -3018,7 +3101,7 @@
             onClick: thong_ke_moi,
             loading: loading
           }, tt.btnStatNew),
-          unlock ? h(Button, {
+          allowUpdateActions ? h(Button, {
             key: "xsk",
             className: "kqxs-action-btn",
             onClick: function () { return cap_nhat_xskt(chuyenNgay(den_ngay, "dd/mm/yyyy")); },
