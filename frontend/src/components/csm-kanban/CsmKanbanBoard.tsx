@@ -373,6 +373,27 @@ function buildWhereFromRow(row: RowData, pkFields: string[]) {
 	return where;
 }
 
+function inferFieldTypeFromValue(value: any): string {
+	if (value == null) return "txt";
+	if (typeof value === "number") return "num";
+	if (typeof value === "boolean") return "ch";
+	const text = String(value);
+	if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(text)) return "datetime";
+	if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return "date";
+	return "txt";
+}
+
+function toFallbackField(fieldName: string, index: number, sampleRow?: RowData): TableField {
+	const value = sampleRow ? sampleRow[fieldName] : undefined;
+	return {
+		f_name: fieldName,
+		f_header: fieldName,
+		f_show: 1,
+		f_stt: index + 1,
+		f_types: inferFieldTypeFromValue(value),
+	};
+}
+
 function getRowTimeBounds(row: RowData, primaryField: string, secondaryField?: string) {
 	const primary = toTimestamp(row[primaryField]);
 	const secondary = secondaryField ? toTimestamp(row[secondaryField]) : 0;
@@ -445,12 +466,50 @@ export default function CsmKanbanBoard({
 	const titleField = config.titleField || "title";
 	const stageField = config.stageField || "status";
 	const stages = config.stages || [];
-	const fields = useMemo<TableField[]>(() => Array.isArray(menuData?.table) ? menuData.table : [], [menuData?.table]);
+	const fields = useMemo<TableField[]>(() => {
+		if (Array.isArray(menuData?.table) && menuData.table.length > 0) return menuData.table;
+
+		const dbRows = config.tableName && database?.[config.tableName]?.rows
+			? database[config.tableName].rows
+			: [];
+		const sampleRow = Array.isArray(dbRows) && dbRows.length > 0 ? dbRows[0] : undefined;
+
+		const preferred = [
+			pkField,
+			titleField,
+			stageField,
+			config.descriptionField,
+			config.assigneeField,
+			config.priorityField,
+			config.dueDateField,
+			config.labelField,
+		].filter((item): item is string => !!item && String(item).trim().length > 0);
+
+		const fallbackNames = preferred.length > 0
+			? Array.from(new Set(preferred))
+			: (sampleRow ? Object.keys(sampleRow).slice(0, 12) : []);
+
+		return fallbackNames.map((name, index) => toFallbackField(name, index, sampleRow));
+	}, [
+		config.assigneeField,
+		config.descriptionField,
+		config.dueDateField,
+		config.labelField,
+		config.priorityField,
+		config.tableName,
+		database,
+		menuData?.table,
+		pkField,
+		stageField,
+		titleField,
+	]);
 	const pkFields = useMemo(() => {
+		const fromDatabase = config.tableName ? database?.[config.tableName]?.fieldsPK : undefined;
+		if (Array.isArray(fromDatabase) && fromDatabase.length > 0) return fromDatabase;
 		const fromStruct = menuData?.struct?.fieldsPK;
 		if (Array.isArray(fromStruct) && fromStruct.length) return fromStruct;
 		return [pkField];
-	}, [menuData?.struct?.fieldsPK, pkField]);
+	}, [config.tableName, database, menuData?.struct?.fieldsPK, pkField]);
 	const mConfigs = useMemo<MConfig>(() => ({
 		id: String(menuId || menuData?.id || config.tableName || "kanban-board"),
 		label: String(menuData?.label || menuData?.title || config.tableName || t("kanban.boardTitle")),
@@ -618,9 +677,6 @@ export default function CsmKanbanBoard({
 		if (!config.tableName) return;
 		const isEdit = Boolean(editingRecord);
 		let payload = isEdit ? { ...editingRecord, ...values } : { ...values };
-		if (!isEdit && payload[pkField] === undefined) {
-			payload[pkField] = `temp_${Date.now()}`;
-		}
 		const triggerContext: BoardSaveContext = {
 			appId: effectiveAppId,
 			config,

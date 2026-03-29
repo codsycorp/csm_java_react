@@ -823,6 +823,9 @@ export default function AdminPage() {
 					menuData={runtimeMenuData}
 					database={database}
 					onDataChange={handleDataChange}
+					permissions={runtimePermissions}
+					menusPermissions={runtimeMenusPermissions}
+					menuId={runtimeMenuData.id || menuId}
 				/>
 			</div>
 		);
