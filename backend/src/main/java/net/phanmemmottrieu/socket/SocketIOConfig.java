@@ -230,18 +230,41 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
 
     private void scheduleWelcomeIfGuestSilent(String appId, String guestIdentity, String guestPhone) {
         if (appId == null || appId.isBlank() || guestIdentity == null || guestIdentity.isBlank()) return;
+        if (guestPhone != null && !guestPhone.isBlank()) {
+            logger.info("⏭️ Skip AI welcome because guest already has phone - appId={}, guestIdentity={}, guestPhone={}", appId, guestIdentity, guestPhone);
+            return;
+        }
+
+        try {
+            java.util.List<ChatMessage> existingHistory = chatPersistenceService.getHistoryByGuestIdentity(appId, guestIdentity, guestPhone, 5);
+            if (existingHistory != null && !existingHistory.isEmpty()) {
+                logger.info("⏭️ Skip AI welcome because guest already has chat history - appId={}, guestIdentity={}, historyCount={}", appId, guestIdentity, existingHistory.size());
+                return;
+            }
+        } catch (Exception historyError) {
+            logger.warn("Unable to inspect guest history before scheduling welcome - appId={}, guestIdentity={}, error={}", appId, guestIdentity, historyError.getMessage());
+        }
+
         cancelGuestWelcomeTask(appId, guestIdentity);
 
         String key = guestKey(appId, guestIdentity);
+        final String fallbackWelcome = "Em chao anh/chị. Mình cho em xin ten, so dien thoai va san pham anh/chị dang quan tam de em ho tro nhanh nha.";
         ScheduledFuture<?> future = chatAiScheduler.schedule(() -> {
             try {
+                java.util.List<ChatMessage> latestHistory = chatPersistenceService.getHistoryByGuestIdentity(appId, guestIdentity, guestPhone, 5);
+                if (latestHistory != null && !latestHistory.isEmpty()) {
+                    logger.info("⏭️ Cancel scheduled AI welcome because guest has started chatting - appId={}, guestIdentity={}, historyCount={}", appId, guestIdentity, latestHistory.size());
+                    return;
+                }
+
                 String prompt = buildWelcomePrompt(appId, guestPhone);
                 String aiRaw = aiProviderFactory.generateContent(prompt);
                 String text = extractAiText(aiRaw,
-                        "Em chao anh/chị. Mình cho em xin ten, so dien thoai va san pham anh/chị dang quan tam de em ho tro nhanh nha.");
+                        fallbackWelcome);
                 dispatchAiMessageToGuest(appId, guestIdentity, guestPhone, text, "ai_auto_welcome");
             } catch (Exception e) {
                 logger.warn("Failed to send AI welcome for {}:{} - {}", appId, guestIdentity, e.getMessage());
+                dispatchAiMessageToGuest(appId, guestIdentity, guestPhone, fallbackWelcome, "ai_auto_welcome_fallback");
             } finally {
                 pendingGuestWelcomeTasks.remove(key);
             }
@@ -255,15 +278,17 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
         cancelGuestNoReplyTask(appId, guestIdentity);
 
         String key = guestKey(appId, guestIdentity);
+        final String fallbackFollowup = "Em da tiep nhan thong tin roi. Anh/chị cho em xin ten, so dien thoai va san pham dang quan tam de ben em lien he tu van ngay.";
         ScheduledFuture<?> future = chatAiScheduler.schedule(() -> {
             try {
                 String prompt = buildNoHumanReplyPrompt(appId, guestPhone, guestMessage);
                 String aiRaw = aiProviderFactory.generateContent(prompt);
                 String text = extractAiText(aiRaw,
-                        "Em da tiep nhan thong tin roi. Anh/chị cho em xin ten, so dien thoai va san pham dang quan tam de ben em lien he tu van ngay.");
+                        fallbackFollowup);
                 dispatchAiMessageToGuest(appId, guestIdentity, guestPhone, text, "ai_auto_followup");
             } catch (Exception e) {
                 logger.warn("Failed to send AI follow-up for {}:{} - {}", appId, guestIdentity, e.getMessage());
+                dispatchAiMessageToGuest(appId, guestIdentity, guestPhone, fallbackFollowup, "ai_auto_followup_fallback");
             } finally {
                 pendingGuestNoReplyTasks.remove(key);
             }

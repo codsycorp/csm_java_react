@@ -446,6 +446,9 @@ ${requestCore}
 - Menu type 1/2/6 KHONG can path dieu huong. Neu AI tao path cho cac type nay, hay de rong hoac bo qua.
 - CRM/quan ly cong viec phai thiet ke bang nhieu menu nho: type 1/2/3/4/6 va report, khong dung workspace tong hop.
 - Type 6 (Kanban Board): uu tien co kanban_config hop le (JSON object), table_name, id/status/title fields theo config.
+- Neu yeu cau la bao cao/dashboard tong hop cua he thong, uu tien su dung report_name + trigger.report_db + cac field loc trong table de runtime CsmReport tu render.
+- KHONG tu tao path/URL co dinh kieu crm/reports/dashboard, reports/dashboard, /dashboard cho menu report noi bo.
+- Chi dung dynamic_link_url khi thuc su can dieu huong sang mot URL/route ben ngoai co san.
 
 ## OUTPUT SHAPE (LEGACY COMPAT)
 - Moi menu item uu tien co day du key: id, label, trigger, m_icons, field_root, report_name,
@@ -530,6 +533,8 @@ ${previousMenuContext}
 - Menu type 1/2/6 KHONG can path dieu huong. Neu co path o cac type nay, hay loai bo.
 - CRM/quan ly cong viec phai doi thanh cac menu nho bang type 1/2/3/4/6 va report.
 - Type 6 (Kanban Board) can uu tien kanban_config chuyen biet.
+- Neu menu mang tinh chat bao cao/dashboard tong hop thi uu tien report_name + trigger.report_db thay vi path crm/reports/dashboard.
+- Neu AI xuat menu ten Dashboard/Bao cao tong hop/KPI ma lai khong co report_name hoac auto_code_name thi phai tu sua lai truoc khi tra ket qua.
 
 ## OUTPUT SHAPE (LEGACY COMPAT)
 - Moi menu item uu tien co day du key: id, label, trigger, m_icons, field_root, report_name,
@@ -671,13 +676,91 @@ function normalizeTriggerShape(node: any): Record<string, any> {
   return trigger;
 }
 
+function toFiniteNumber(value: any): number | undefined {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : undefined;
+}
+
+function isSupportedTypeForm(value: any): value is number {
+  return value === 0 || value === 1 || value === 2 || value === 3 || value === 4 || value === 6;
+}
+
+function inferTypeForm(node: any): number {
+  const explicit = toFiniteNumber(node?.type_form);
+  const fromType = toFiniteNumber(node?.type);
+
+  const tableName = String(node?.table_name || "").trim();
+  const tableFields = Array.isArray(node?.table) ? node.table : [];
+  const children = Array.isArray(node?.children)
+    ? node.children
+    : Array.isArray(node?.nodes)
+      ? node.nodes
+      : [];
+  const hasChildren = children.length > 0;
+
+  // Strong signals first.
+  if (node?.kanban_config != null) return 6;
+  if (String(node?.auto_code_name || "").trim()) return 4;
+  if (String(node?.dynamic_link_url || node?.v_link || node?.externalLink || "").trim()) return 3;
+
+  // Container node: has children but no own table payload.
+  if (hasChildren && !tableName && tableFields.length === 0) return 0;
+
+  // Legacy AI often returns `type` đúng nhưng `type_form` bị default = 1.
+  // Khi `type_form`=1/2 mà không có table payload, ưu tiên `type` nếu hợp lệ.
+  if ((explicit === 1 || explicit === 2) && !tableName && tableFields.length === 0 && isSupportedTypeForm(fromType) && fromType !== explicit) {
+    return fromType;
+  }
+
+  // Prefer explicit type_form when valid.
+  if (isSupportedTypeForm(explicit)) return explicit;
+
+  // Fallback to legacy AI "type" if looks like type_form.
+  if (isSupportedTypeForm(fromType)) return fromType;
+
+  if (hasChildren && tableName) return 2;
+  if (tableName || tableFields.length > 0) return 1;
+  return 0;
+}
+
+function normalizeNodeByTypeForm(node: any, typeForm: number): void {
+  // Keep schema minimal and avoid invalid cross-type leftovers.
+  if (typeForm === 0) {
+    node.table_name = "";
+    node.table = [];
+    delete node.dynamic_link_url;
+    delete node.v_link;
+    delete node.externalLink;
+    delete node.auto_code_name;
+    delete node.kanban_config;
+    return;
+  }
+
+  if (typeForm !== 3) {
+    delete node.dynamic_link_url;
+  }
+  if (typeForm !== 4) {
+    delete node.auto_code_name;
+  }
+  if (typeForm !== 6) {
+    delete node.kanban_config;
+  }
+
+  if (typeForm !== 1 && typeForm !== 2 && typeForm !== 6 && !String(node.table_name || "").trim()) {
+    node.table = [];
+  }
+}
+
 function normalizeAiMenuNode(input: any): MenuItemType {
   const node: any = input && typeof input === "object" ? { ...input } : {};
+
+  const resolvedTypeForm = inferTypeForm(node);
 
   const normalized: any = {
     ...node,
     id: String(node.id || "menu_undefined"),
     parentId: node.parentId ?? "",
+    type_form: resolvedTypeForm,
   };
 
   if (Array.isArray(node.table)) {
@@ -700,6 +783,8 @@ function normalizeAiMenuNode(input: any): MenuItemType {
   if (!Array.isArray(node.children) && Array.isArray(node.nodes)) {
     normalized.children = node.nodes.map(normalizeAiMenuNode);
   }
+
+  normalizeNodeByTypeForm(normalized, resolvedTypeForm);
 
   return normalized as MenuItemType;
 }
@@ -745,7 +830,7 @@ function applyLegacyMenuShape(menus: MenuItemType[]): MenuItemType[] {
         ? ((rawNode as any).table as any[]).map((f, idx) => ensureLegacyFieldShape(f, idx, menuId))
         : [];
 
-      const typeForm = Number((rawNode as any).type_form ?? 1);
+      const typeForm = inferTypeForm(rawNode);
       
       const node: MenuItemType = {
         ...rawNode,
@@ -775,6 +860,8 @@ function applyLegacyMenuShape(menus: MenuItemType[]): MenuItemType[] {
         ...(typeForm === 4 && { auto_code_name: (rawNode as any).auto_code_name ?? "" }),
         ...(typeForm === 6 && { kanban_config: (rawNode as any).kanban_config ?? {} }),
       };
+
+      normalizeNodeByTypeForm(node, typeForm);
 
       if (typeForm === 1 || typeForm === 2 || typeForm === 6) {
         delete (node as any).path;
@@ -827,7 +914,9 @@ function buildMenuTypeCatalog(): string {
     "- type_form=3: Dynamic Link (dynamic_link_url)",
     "- type_form=4: Dynamic Code (auto_code_name)",
     "- type_form=6: Kanban Board (kanban_config + table_name)",
+    "- report runtime: menu co report_name + trigger.report_db se duoc render bang CsmReport, khong can route crm/reports/dashboard",
     "- Quy uoc: type 1/2/6 khong can path; dieu huong runtime theo /system/grid/:menuId",
+    "- Neu yeu cau la bao cao/dashboard tong hop thi uu tien report_name + trigger.report_db; chi dung type_form=4 khi can man hinh tuong tac phuc tap",
     "- Khuyen nghi thiet ke CRM/quan ly cong viec bang nhieu menu nho: type 1/2/4/6/report",
   ].join("\n");
 }
@@ -1008,13 +1097,24 @@ function validateMenusForApply(menus: MenuItemType[]): MenuValidationIssue[] {
       const tableName = String((node as any).table_name || "").trim();
       const trigger = (node as any).trigger;
       const fields = Array.isArray((node as any).table) ? (node as any).table : [];
+      const children = Array.isArray((node as any).children) ? ((node as any).children as MenuItemType[]) : [];
+      const isContainerLike = children.length > 0 && !tableName && fields.length === 0;
 
-      if ((typeForm === 1 || typeForm === 2) && !tableName) {
+      if ((typeForm === 1 || typeForm === 2) && !tableName && !isContainerLike) {
         issues.push({
           severity: "error",
           rule: "table_name_required",
           path,
           message: "Menu type_form=1/2 thiếu table_name.",
+        });
+      }
+
+      if ((typeForm === 1 || typeForm === 2) && isContainerLike) {
+        issues.push({
+          severity: "warning",
+          rule: "container_type_should_be_zero",
+          path,
+          message: "Menu cha co children nhung khong co table_name/table. Nen dung type_form=0 (menu nhom).",
         });
       }
 
@@ -1129,7 +1229,6 @@ function validateMenusForApply(menus: MenuItemType[]): MenuValidationIssue[] {
         }
       }
 
-      const children = Array.isArray((node as any).children) ? ((node as any).children as MenuItemType[]) : [];
       if (children.length > 0) {
         walk(children, path);
       }

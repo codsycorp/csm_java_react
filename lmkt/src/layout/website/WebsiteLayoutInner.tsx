@@ -96,8 +96,17 @@ export default function WebsiteLayoutInner({ children, selectedKey, menuItems, t
   useEffect(() => {
     if (!isGuest) return;
 
+    const guestAutoOpenEventTypes = new Set(['ai_auto_welcome', 'ai_auto_welcome_fallback']);
+
     const handleAutoOpen = (event: Event) => {
       const detail = (event as CustomEvent).detail || {};
+      const eventType = typeof detail.eventType === 'string' ? detail.eventType.trim() : '';
+      const source = typeof detail.source === 'string' ? detail.source.trim() : '';
+      const isAdminMessage = detail.isAdmin === true;
+      const shouldOpenForWelcome = guestAutoOpenEventTypes.has(eventType);
+      const shouldOpenForAdminReply = source === 'message' && isAdminMessage;
+      if (!shouldOpenForWelcome && !shouldOpenForAdminReply) return;
+
       const targetAppId = typeof detail.appId === 'string' ? detail.appId.trim() : '';
       if (targetAppId && targetAppId !== appId) return;
 

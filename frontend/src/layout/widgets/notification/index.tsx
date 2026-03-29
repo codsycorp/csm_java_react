@@ -102,6 +102,17 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
     const { socket, connected } = useSocket();
 	const { sendMessage: sendChatMessage, unreadCounts: contextUnreadCounts, messages: contextMessages, refreshAllMessages, markAsRead } = useChatHistory();
 
+	const formatGuestLabel = useCallback((guestKey: string, guestPhone?: string, username?: string, isAdminMessage?: boolean) => {
+		const phone = String(guestPhone || '').trim();
+		if (phone) return phone;
+
+		const name = String(username || '').trim();
+		if (!isAdminMessage && name && name !== guestKey) return name;
+
+		const shortId = guestKey.slice(-6);
+		return shortId ? `Khách ${shortId}` : 'Khách mới';
+	}, []);
+
 	// Load guest list from backend API when component mounts or appId changes
 	useEffect(() => {
 		if (!connected) return;
@@ -197,11 +208,11 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 				// PRIORITY: Check guestPhone FIRST - guest messages go to guests section
 				if (msg.guestSessionId || msg.guestPhone) {
 					const guestKey = String(msg.guestSessionId || msg.guestPhone).trim();
-					const guestLabel = String(msg.guestPhone || msg.username || guestKey || 'Khách mới').trim();
 					if (guestKey) {
+						const guestLabel = formatGuestLabel(guestKey, msg.guestPhone, msg.username, msg.isAdmin);
 						const existing = guestMap.get(guestKey) || { key: guestKey, label: guestLabel, unread: 0 };
 						existing.label = guestLabel || existing.label;
-						if (isUnread) existing.unread++;
+						if (isUnread && !msg.isAdmin) existing.unread++;
 						guestMap.set(guestKey, existing);
 					}
 				} 
@@ -219,8 +230,10 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 		});
 		
 		const internalUsersWithUnread = Array.from(internalMap.values())
+			.filter(item => item.unread > 0)
 			.sort((a, b) => b.unread - a.unread);
 		const guestUsersWithUnread = Array.from(guestMap.values())
+			.filter(item => item.unread > 0)
 			.sort((a, b) => b.unread - a.unread);
 		
 		console.log(`👥 [Notification] Parsed ${internalUsersWithUnread.length} internal users & ${guestUsersWithUnread.length} guests`);
@@ -228,7 +241,7 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 		console.log(`📱 [Notification] Guests:`, guestUsersWithUnread.map(g => g.key));
 		
 		return { internalUsersWithUnread, guestUsersWithUnread };
-	}, [contextMessages, appId, user.userId, user.username]);
+	}, [contextMessages, appId, user.userId, user.username, formatGuestLabel]);
 
 	const totalGuestUnread = useMemo(() => guestUsersWithUnread.reduce((sum, g) => sum + g.unread, 0), [guestUsersWithUnread]);
 	const totalInternalUnread = useMemo(() => internalUsersWithUnread.reduce((sum, u) => sum + u.unread, 0), [internalUsersWithUnread]);
@@ -297,9 +310,9 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 
 			const candidateUsername = typeof detail.guestPhone === 'string' && detail.guestPhone.trim()
 				? detail.guestPhone.trim()
-				: (typeof detail.username === 'string' && detail.username.trim()
-					? detail.username.trim()
-					: (typeof detail.guestSessionId === 'string' && detail.guestSessionId.trim() ? 'Khách mới' : room));
+				: (typeof detail.guestSessionId === 'string' && detail.guestSessionId.trim()
+					? formatGuestLabel(detail.guestSessionId.trim(), detail.guestPhone, detail.username, detail.isAdmin === true)
+					: (typeof detail.username === 'string' && detail.username.trim() ? detail.username.trim() : room));
 
 			openChatAndMarkRead(room, candidateUsername);
 		};
@@ -308,7 +321,7 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 		return () => {
 			window.removeEventListener('csm-chat-auto-open', handleAutoOpen as EventListener);
 		};
-	}, [appId, openChatAndMarkRead]);
+	}, [appId, openChatAndMarkRead, formatGuestLabel]);
 
 	// Force refresh when opening notification popup
 	const handleOpenChange = useCallback(async (visible: boolean) => {

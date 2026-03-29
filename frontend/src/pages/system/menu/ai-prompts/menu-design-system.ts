@@ -1,6 +1,6 @@
 /**
  * AI Menu Design System - Comprehensive Prompts
- * Hỗ trợ đầy đủ loại menu runtime hiện tại: Group, Table, Master-Detail, Dynamic Link, Dynamic Code, Kanban Board
+ * Hỗ trợ đầy đủ loại menu runtime hiện tại: Group, Table, Master-Detail, Dynamic Link, Dynamic Code, Kanban Board, Report runtime
  */
 
 /**
@@ -37,7 +37,24 @@ LOẠI MENU HỖ TRỢ (TYPE_FORM 0/1/2/3/4/6)
 Lưu ý runtime quan trọng:
 - Type 1/2/4/6 được điều hướng về /system/grid/:menuId và AdminPage sẽ chọn component đúng theo type_form.
 - Type 3 mới điều hướng trực tiếp theo dynamic_link_url.
+- Nếu menu có report_name thì AdminPage sẽ render CsmReport trực tiếp, KHÔNG cần route/dashboard cứng.
 - CRM hoặc quản lý công việc phải được thiết kế bằng nhiều menu nhỏ kết hợp grid/master-detail/kanban/report/dynamic code.
+- Menu cha có children nhưng không có table_name/table BẮT BUỘC là type_form=0.
+- Không dùng key "type" để thay cho type_form. Nếu vẫn trả key type thì giá trị phải trùng type_form.
+
+**Report Runtime (report_name + trigger.report_db) - BÁO CÁO HỆ THỐNG CÓ SẴN**
+  Đây không phải một type_form riêng. Đây là 1 menu dùng runtime CsmReport của hệ thống.
+  Dùng khi cần:
+  - In báo cáo, xuất PDF, biểu mẫu DOCX
+  - Báo cáo tổng hợp có bộ lọc ngày/tháng/kho/nhân viên/chi nhánh
+  - Dashboard dạng báo cáo tĩnh hoặc bán tĩnh sinh từ dữ liệu hệ thống
+  Cấu hình khuyến nghị:
+  - report_name: đường dẫn file .docx template
+  - trigger.report_db: script lấy dữ liệu báo cáo
+  - table: khai báo các field lọc để form báo cáo tự render
+  - orientation, p_width, p_height: cấu hình khổ in
+  KHÔNG tạo path kiểu crm/reports/dashboard hoặc dashboard cố định cho loại này.
+  Nếu chỉ là báo cáo/tổng hợp thì ưu tiên report runtime trước khi nghĩ tới dynamic_link_url.
 
 **Type 1: Dạng Bảng (type_form=1) - DATA GRID**
   Hiển thị dữ liệu dạng bảng với CRUD operations
@@ -91,6 +108,7 @@ Level 3+: ACTION = Menu thực tế (Table, Master-Detail, Link, Code, Kanban)
   - Có dynamic_link_url (nếu là Dynamic Link)
   - Có auto_code_name (nếu là Dynamic Code)
   - Có kanban_config (nếu là Kanban Board)
+  - Có report_name + trigger.report_db (nếu là menu báo cáo dùng runtime CsmReport)
   - children: Chỉ có với Master-Detail (detail tabs)
 
 ═══════════════════════════════════════════════════════════════════
@@ -164,6 +182,7 @@ MENUITEMTYPE - SCHEMA ĐẦY ĐỦ
   
   // Báo cáo
   "report_name": "report_file_path.docx",
+  // Nếu là menu report runtime thì trigger.report_db sẽ cung cấp dữ liệu cho CsmReport
   
   // In ấn
   "orientation": "p",                   // p=Dọc (Portrait), l=Ngang (Landscape)
@@ -206,15 +225,30 @@ QUY TẮC THIẾT KẾ
    - KHÔNG có table, trigger, report_name
    - type_form: 0
    - Chứa children = sub-menu
+  - Tuyệt đối KHÔNG gán type_form=1/2 cho menu nhóm chỉ để gom cây
 
 3. **Menu Level 3+ (Action Menu)**
   - CÓ table_name nếu type_form = 1 hoặc 2
    - CÓ dynamic_link_url nếu type_form = 3
    - CÓ auto_code_name nếu type_form = 4
   - CÓ kanban_config nếu type_form = 6
+  - CÓ report_name + trigger.report_db nếu là báo cáo dùng runtime hệ thống
    - Master-Detail: Master CÓ table_name, children KHÔNG có (children = detail tabs)
   - Type 1/2/4/6: không bắt buộc path vì runtime điều hướng theo /system/grid/:menuId
   - CRM/quản lý công việc phải tách thành nhiều menu nhỏ thay vì một workspace tổng hợp
+  - Không tự tạo menu path cố định kiểu crm/reports/dashboard, reports/dashboard, /dashboard nếu mục tiêu chỉ là báo cáo/tổng hợp
+  - Nếu khách hàng nói "dashboard", phải phân tích bản chất:
+    + Nếu là báo cáo/in ấn/tổng hợp có bộ lọc -> dùng report_name + trigger.report_db
+    + Nếu là màn hình tương tác realtime, widget phức tạp -> dùng auto_code_name (type_form=4)
+    + Nếu chỉ là điều hướng sang hệ khác -> dùng dynamic_link_url (type_form=3)
+
+3.1 **Rule chống lỗi phổ biến (BẮT BUỘC trước khi xuất JSON)**
+  - Nếu node có children và table_name rỗng + table rỗng -> ép type_form=0.
+  - Nếu type_form=6 -> phải có kanban_config object; khuyến nghị có table_name.
+  - Nếu type_form=3 -> phải có dynamic_link_url; không có thì không được xuất node type 3.
+  - Nếu type_form=4 -> phải có auto_code_name; không có thì không được xuất node type 4.
+  - Nếu menu có report_name thì KHÔNG cần tạo dynamic_link_url/path cố định cho dashboard/report.
+  - Nếu menu đặt tên là Dashboard/Báo cáo tổng hợp/KPI mà không có report_name hoặc auto_code_name thì phải suy nghĩ lại trước khi xuất JSON.
 
 4. **Field ID & Primary Key**
    - Mỗi bảng bắt buộc có field "id" (khóa chính)

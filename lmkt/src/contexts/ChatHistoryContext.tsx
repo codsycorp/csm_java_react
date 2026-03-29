@@ -93,6 +93,8 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
     username?: string;
     guestPhone?: string;
     guestSessionId?: string;
+    eventType?: string;
+    isAdmin?: boolean;
     source: 'message' | 'notification';
   }) => {
     if (typeof window === 'undefined') return;
@@ -320,8 +322,8 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
         return;
       }
       
-      // Use appId as targetRoom for guest
-      const targetRoom = appId;
+      // Use guest identity as target room key so UI room mapping is consistent.
+      const targetRoom = guestIdentity || appId;
       
       setMessages(prev => {
         const roomMessages = prev[targetRoom] || [];
@@ -346,6 +348,8 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
             username: msg.username,
             guestPhone: msg.guestPhone,
             guestSessionId: msg.guestSessionId,
+            eventType: msg.eventType,
+            isAdmin: !!msg.isAdmin,
             source: 'message',
           });
         }
@@ -407,6 +411,8 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
             username: msg.username,
             guestPhone: msg.guestPhone,
             guestSessionId: msg.guestSessionId,
+            eventType: msg.eventType,
+            isAdmin: !!msg.isAdmin,
             source: 'notification',
           });
         }
@@ -473,7 +479,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
       const initializeChat = async () => {
         try {
           // LMKT: Only guest mode - restore chat history + unread from localStorage
-          await loadHistoryRef.current?.(appId);
+          await loadHistoryRef.current?.(guestIdentity, guestIdentity);
           
           // Load unread counts from localStorage
           try {

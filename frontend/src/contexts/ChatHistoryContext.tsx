@@ -96,6 +96,8 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
     username?: string;
     guestPhone?: string;
     guestSessionId?: string;
+    eventType?: string;
+    isAdmin?: boolean;
     source: 'message' | 'notification';
   }) => {
     if (typeof window === 'undefined') return;
@@ -429,7 +431,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
         if (msg.to !== guestIdentity && msg.guestSessionId !== guestIdentity && msg.guestPhone !== guestPhone) {
           return;
         }
-        targetRoom = appId;
+        targetRoom = guestIdentity || appId;
       } else {
         // Admin: nhận msg từ guest hoặc msg của mình
         if (msg.guestSessionId || msg.guestPhone) {
@@ -466,6 +468,8 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
             username: msg.username,
             guestPhone: msg.guestPhone,
             guestSessionId: msg.guestSessionId,
+            eventType: msg.eventType,
+            isAdmin: !!msg.isAdmin,
             source: 'message',
           });
         }
@@ -530,6 +534,8 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
             username: msg.username,
             guestPhone: msg.guestPhone,
             guestSessionId: msg.guestSessionId,
+            eventType: msg.eventType,
+            isAdmin: !!msg.isAdmin,
             source: 'notification',
           });
         }
@@ -658,7 +664,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
         try {
           if (isGuest && guestIdentity) {
             // Guest: restore chat history + unread từ localStorage
-            await loadHistoryRef.current?.(appId);
+            await loadHistoryRef.current?.(guestIdentity, guestIdentity);
             
             // Load unread counts từ localStorage cho guest
             try {
@@ -778,7 +784,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
         });
       } else if (isGuest && guestIdentity) {
         // For guest, reload their chat history
-        await loadHistoryRef.current?.(appId, guestIdentity);
+        await loadHistoryRef.current?.(guestIdentity, guestIdentity);
       }
     } catch (error) {
       console.error('❌ [ChatHistory] Failed to refresh messages:', error);
