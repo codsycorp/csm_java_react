@@ -420,11 +420,25 @@ export function useMenu() {
 		
 		const selectedProcessedMenu = findMenuInProcessedMenus(processedMenus, normalizedKey);
 		const menuIdToSearch = selectedProcessedMenu?.menuId || normalizedKey;
+		const legacyMenuIdFromKey = (() => {
+			const m = String(normalizedKey || "").match(/^\/system\/([^/?#]+).*$/);
+			return m?.[1] ? String(m[1]) : "";
+		})();
 		
 		// Find the menu in API menus (which have table_name, report_name fields)
 		const findMenuInTree = (menus: any[], targetId: string, targetKey?: string): any => {
 			for (const menu of menus) {
-				if (menu.id === targetId || menu.key === targetKey) {
+				const menuId = String(menu?.id || "");
+				const menuKey = String(menu?.key || "");
+				const menuPath = String(menu?.path || "");
+				const normalizedTargetId = String(targetId || "");
+				const normalizedTargetKey = String(targetKey || "");
+				if (
+					menuId === normalizedTargetId
+					|| menuKey === normalizedTargetKey
+					|| menuPath === normalizedTargetKey
+					|| (normalizedTargetId && menuPath === `/system/${normalizedTargetId}`)
+				) {
 					return menu;
 				}
 				if (menu.children && menu.children.length > 0) {
@@ -435,7 +449,10 @@ export function useMenu() {
 			return null;
 		};
 		
-		const selectedApiMenu = findMenuInTree(apiWholeMenus, menuIdToSearch, normalizedKey) as any;
+		const selectedApiMenu = (
+			findMenuInTree(apiWholeMenus, String(menuIdToSearch || ""), normalizedKey)
+			|| (legacyMenuIdFromKey ? findMenuInTree(apiWholeMenus, legacyMenuIdFromKey, normalizedKey) : null)
+		) as any;
 
 		// If menu is marked as auto setup (sys_autos), navigate to dedicated runner page
 		if (selectedApiMenu?.auto_code) {
