@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Button, Card, Divider, Input, message, Radio, Space } from "antd";
+import { Alert, Button, Card, Collapse, Divider, Input, message, Radio, Space } from "antd";
 import type { RadioChangeEvent } from "antd";
 import { useTranslation } from "react-i18next";
 
@@ -417,6 +417,7 @@ function buildPromptWithRequirement(
   requestText: string,
   scope: "minimal" | "complete" = "minimal",
   currentMenus?: MenuItemType[],
+  sampleMenus?: MenuItemType[],
 ): string {
   const referenceMenus = Array.isArray(currentMenus) && currentMenus.length > 0
     ? currentMenus
@@ -427,6 +428,9 @@ function buildPromptWithRequirement(
   const requestCore = trimToMax(requestText || "", 2800);
   const compactMenuContext = buildCompactMenuContext(referenceMenus, 180);
   const typeCatalog = buildMenuTypeCatalog();
+  const sampleMenuContext = sampleMenus && sampleMenus.length > 0
+    ? buildCompactMenuContext(sampleMenus, 120)
+    : null;
 
   const prompt = `${mainPrompt}
 
@@ -449,7 +453,7 @@ ${typeCatalog}
 
 ## MENU HE THONG HIEN TAI (COMPACT REFERENCE)
 ${compactMenuContext}
-
+${sampleMenuContext ? `\n## MENU MAU THAM KHAO TU CHUONG TRINH KHAC\nDay la menu thuc te da trien khai tu mot chuong trinh khac de ban tham khao cau truc, pattern, va logic nghiep vu:\n${sampleMenuContext}\n` : ""}
 ## YEU CAU KHACH HANG
 ${requestCore}
 
@@ -503,6 +507,7 @@ function buildRefinementPrompt(
   previousResultJson: string,
   scope: "minimal" | "complete" = "complete",
   currentMenus?: MenuItemType[],
+  sampleMenus?: MenuItemType[],
 ): string {
   const referenceMenus = Array.isArray(currentMenus) && currentMenus.length > 0
     ? currentMenus
@@ -518,6 +523,9 @@ function buildRefinementPrompt(
   const previousMenuContext = buildPreviousResultContext(previousResultJson, 90);
   const strictScope = scope === "minimal" ? "uu tien type 1/3" : "duoc dung day du type 1/2/3/4/6";
   const typeCatalog = buildMenuTypeCatalog();
+  const sampleMenuContext = sampleMenus && sampleMenus.length > 0
+    ? buildCompactMenuContext(sampleMenus, 120)
+    : null;
 
   const prompt = `${mainPrompt}
 
@@ -547,7 +555,7 @@ ${refineCore}
 
 ## MENU HE THONG HIEN TAI (COMPACT REFERENCE)
 ${currentMenuContext}
-
+${sampleMenuContext ? `\n## MENU MAU THAM KHAO TU CHUONG TRINH KHAC\nDay la menu thuc te da trien khai tu mot chuong trinh khac de ban tham khao cau truc, pattern, va logic nghiep vu:\n${sampleMenuContext}\n` : ""}
 ## TOM TAT KET QUA AI LAN TRUOC (COMPACT)
 ${previousMenuContext}
 
@@ -1299,6 +1307,9 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
   const [loading, setLoading] = useState(false);
   const [recordId, setRecordId] = useState<string | undefined>(undefined);
   const [refineText, setRefineText] = useState("");
+  const [sampleMenuText, setSampleMenuText] = useState("");
+  const [sampleMenuParsed, setSampleMenuParsed] = useState<MenuItemType[] | null>(null);
+  const [sampleMenuError, setSampleMenuError] = useState<string | null>(null);
 
   const menuValidationIssues = useMemo(() => {
     return validateMenusForApply(aiMenus || []);
@@ -1377,6 +1388,39 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     if (!recordId) setRecordId(objUpdate.id);
   };
 
+  const handleParseSampleMenu = () => {
+    if (!sampleMenuText.trim()) {
+      setSampleMenuParsed(null);
+      setSampleMenuError(null);
+      return;
+    }
+    try {
+      const rawParsed = JSON.parse(sampleMenuText);
+      const rawArray = Array.isArray(rawParsed)
+        ? rawParsed
+        : Array.isArray((rawParsed as any)?.menu)
+          ? (rawParsed as any).menu
+          : null;
+      if (!rawArray || rawArray.length === 0) {
+        setSampleMenuParsed(null);
+        setSampleMenuError("Không tìm thấy mảng menu trong JSON (cần là [] hoặc {\"menu\":[...]}).");
+        return;
+      }
+      const normalized = normalizeMenuList(rawArray);
+      setSampleMenuParsed(normalized);
+      setSampleMenuError(null);
+    } catch (e: any) {
+      setSampleMenuParsed(null);
+      setSampleMenuError(`JSON không hợp lệ: ${e.message}`);
+    }
+  };
+
+  const handleClearSampleMenu = () => {
+    setSampleMenuText("");
+    setSampleMenuParsed(null);
+    setSampleMenuError(null);
+  };
+
   const runGenerate = async (
     inputRequest: string,
     scope: "minimal" | "complete" = "minimal",
@@ -1391,7 +1435,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
       return;
     }
 
-    const prompt = promptOverride || buildPromptWithRequirement(appId, inputRequest, scope, currentMenus);
+    const prompt = promptOverride || buildPromptWithRequirement(appId, inputRequest, scope, currentMenus, sampleMenuParsed || undefined);
     const estimatedTokens = estimateTokenCount(prompt);
     if (estimatedTokens > 6000) {
       message.warning(
@@ -1467,6 +1511,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
       aiResultText,
       "complete",
       currentMenus,
+      sampleMenuParsed || undefined,
     );
 
     const combinedRequest = [
@@ -1533,6 +1578,57 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
             />
           </div>
         )}
+
+        <Collapse
+          style={{ marginBottom: 12 }}
+          items={[{
+            key: "sample_menu",
+            label: sampleMenuParsed
+              ? `Menu mẫu tham khảo ✓ (${sampleMenuParsed.length} menu gốc đã đọc)`
+              : "Menu mẫu tham khảo (tùy chọn) — dán JSON từ chương trình khác để AI học theo",
+            children: (
+              <Space direction="vertical" style={{ width: "100%" }}>
+                <Alert
+                  type="info"
+                  showIcon
+                  message="Dán JSON menu từ chương trình khác để AI học theo cấu trúc"
+                  description='AI sẽ dùng làm tài liệu tham khảo khi thiết kế menu mới — giúp đúng hơn với pattern thực tế của dự án bạn. Hỗ trợ mảng [] hoặc object { "menu": [] }.'
+                />
+                <TextArea
+                  value={sampleMenuText}
+                  onChange={(e) => setSampleMenuText(e.target.value)}
+                  placeholder='Dán JSON menu mẫu vào đây (mảng [] hoặc {"menu":[...]})...'
+                  rows={6}
+                  style={{ fontFamily: "Monaco, Consolas, monospace", fontSize: 12 }}
+                />
+                <Space>
+                  <Button onClick={handleParseSampleMenu} type="default">
+                    Phân tích mẫu
+                  </Button>
+                  {(sampleMenuParsed || sampleMenuText.trim()) && (
+                    <Button onClick={handleClearSampleMenu} danger>
+                      Xóa mẫu
+                    </Button>
+                  )}
+                </Space>
+                {sampleMenuParsed && (
+                  <Alert
+                    type="success"
+                    showIcon
+                    message={`Đã đọc ${sampleMenuParsed.length} menu gốc — AI sẽ dùng làm tham khảo khi tạo menu mới`}
+                  />
+                )}
+                {sampleMenuError && (
+                  <Alert
+                    type="error"
+                    showIcon
+                    message={sampleMenuError}
+                  />
+                )}
+              </Space>
+            ),
+          }]}
+        />
 
         <TextArea
           value={requestText}
