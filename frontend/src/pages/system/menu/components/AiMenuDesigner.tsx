@@ -1155,11 +1155,15 @@ function validateMenusForApply(menus: MenuItemType[]): MenuValidationIssue[] {
       const typeForm = Number((node as any).type_form || 0);
       const tableName = String((node as any).table_name || "").trim();
       const trigger = (node as any).trigger;
+      const reportName = String((node as any).report_name || "").trim();
       const fields = Array.isArray((node as any).table) ? (node as any).table : [];
       const children = Array.isArray((node as any).children) ? ((node as any).children as MenuItemType[]) : [];
       const isContainerLike = children.length > 0 && !tableName && fields.length === 0;
+      const normalizedTrigger = trigger && typeof trigger === "object" ? trigger : {};
+      const hasReportDbTrigger = !!String((normalizedTrigger as any).report_db || "").trim();
+      const isReportRuntime = !!reportName || hasReportDbTrigger;
 
-      if ((typeForm === 1 || typeForm === 2) && !tableName && !isContainerLike) {
+      if ((typeForm === 1 || typeForm === 2) && !tableName && !isContainerLike && !isReportRuntime) {
         issues.push({
           severity: "error",
           rule: "table_name_required",
@@ -1175,6 +1179,26 @@ function validateMenusForApply(menus: MenuItemType[]): MenuValidationIssue[] {
           path,
           message: "Menu cha co children nhung khong co table_name/table. Nen dung type_form=0 (menu nhom).",
         });
+      }
+
+      // Report runtime (CsmReport): can run without table_name, but must have report_name + trigger.report_db.
+      if (isReportRuntime) {
+        if (!reportName) {
+          issues.push({
+            severity: "error",
+            rule: "report_name_required_for_report_runtime",
+            path,
+            message: "Menu bao cao runtime thieu report_name (duong dan file .docx).",
+          });
+        }
+        if (!hasReportDbTrigger) {
+          issues.push({
+            severity: "error",
+            rule: "report_db_required_for_report_runtime",
+            path,
+            message: "Menu bao cao runtime thieu trigger.report_db de tao du lieu bao cao.",
+          });
+        }
       }
 
       if (typeForm === 3 && !String((node as any).dynamic_link_url || (node as any).v_link || "").trim()) {
@@ -1268,7 +1292,6 @@ function validateMenusForApply(menus: MenuItemType[]): MenuValidationIssue[] {
         });
       }
 
-      const normalizedTrigger = trigger && typeof trigger === "object" ? trigger : {};
       if ((tableName.includes("donhang") || tableName.includes("phieuxuat") || tableName.includes("phieunhap")) && typeForm === 2) {
         if (!normalizedTrigger.before_save) {
           issues.push({
