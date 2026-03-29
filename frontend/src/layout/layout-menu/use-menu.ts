@@ -451,44 +451,28 @@ export function useMenu() {
 			console.warn('[AUTO_SETUP] Auto menu selected but NO auto_code found:', selectedApiMenu);
 		}
 
-		// Handle Dynamic Link (type_form = 3)
-		if (selectedApiMenu && Number(selectedApiMenu.type_form) === 3) {
-			const linkUrl = selectedApiMenu.dynamic_link_url || selectedApiMenu.v_link || "";
-			if (!linkUrl) {
-				console.warn('[DYNAMIC_LINK] Menu has no link URL configured:', selectedApiMenu);
-				return;
-			}
+		// Runtime menus (grid/report/kanban/dynamic code) always route to /system/grid/:menuId first.
+		// This prevents accidental external redirect when menu data has stale type_form=3 but still has runtime payload.
+		const hasRuntimePayload = !!(
+			selectedApiMenu && (
+				selectedApiMenu.table_name
+				|| selectedApiMenu.report_name
+				|| selectedApiMenu.auto_code_name
+				|| Number(selectedApiMenu.type_form) === 4
+				|| Number(selectedApiMenu.type_form) === 6
+				|| selectedApiMenu.kanban_config
+			)
+		);
 
-			// Check if it's an external URL
-			if (/^https?:/.test(linkUrl)) {
-				window.open(linkUrl, '_blank');
-			} else if (linkUrl.startsWith('/')) {
-				// Absolute internal path
-				navigate(linkUrl, { state: { menuLabel: selectedApiMenu.label, menuData: selectedApiMenu } });
-			} else {
-				// Relative path or custom route
-				navigate(linkUrl, { state: { menuLabel: selectedApiMenu.label, menuData: selectedApiMenu } });
-			}
-			return;
-		}
-
-		// Handle Dynamic Code (type_form = 4) - navigate to /system/grid/:menuId like other dynamic menus
-		if (selectedApiMenu && Number(selectedApiMenu.type_form) === 4) {
+		if (selectedApiMenu && hasRuntimePayload) {
 			const menuId = String(selectedApiMenu.id || selectedApiMenu.key);
-			const autoCodeName = selectedApiMenu.auto_code_name;
-
-			if (!autoCodeName) {
-				console.warn('[DYNAMIC_CODE] Menu has no auto code template configured:', selectedApiMenu);
-				return;
-			}
-
-			const rawLabel = selectedApiMenu.label || selectedApiMenu.title || 'Dynamic Code';
+			const rawLabel = selectedApiMenu.label || selectedApiMenu.title || 'Dynamic Grid';
 			const menuLabel = String(rawLabel).replace(/^.*?\.\s+/, '').trim();
 
 			// Update store BEFORE navigation
 			useUserStore.getState().setSelectedMenuIdForTab(menuId);
 
-			// Navigate to dynamic grid route (same as grid/report) - AdminPage will render DynamicCodeMenu based on type_form=4
+			// Navigate to dynamic grid route - AdminPage decides render type by runtime menu metadata.
 			navigate(`/system/grid/${menuId}`, {
 				state: {
 					menuLabel,
@@ -498,28 +482,22 @@ export function useMenu() {
 			return;
 		}
 
-		// Check if menu has table_name or report_name (grid/report) - navigate to dynamic route
-		if (selectedApiMenu && (selectedApiMenu.table_name || selectedApiMenu.report_name)) {
+		// Handle Dynamic Link (type_form = 3) only when it is a pure link menu.
+		if (selectedApiMenu && Number(selectedApiMenu.type_form) === 3) {
+			const linkUrl = selectedApiMenu.dynamic_link_url || selectedApiMenu.v_link || "";
+			if (!linkUrl) {
+				console.warn('[DYNAMIC_LINK] Menu has no link URL configured:', selectedApiMenu);
+				return;
+			}
 
-			   // Removed invalid object literal, as it is not assigned or used.
-			// Use menu.id for route parameter
-			const menuId = String(selectedApiMenu.id || selectedApiMenu.key);
-			
-			// Navigate to dynamic grid route with menu label in state
-			const rawLabel = selectedApiMenu.label || selectedApiMenu.title || 'Dynamic Grid';
-			// Strip menu prefix: "A.01. Quản Lý" → "Quản Lý"
-			const menuLabel = rawLabel.replace(/^.*?\.\s+/, '').trim();
-			
-			// Update store BEFORE navigation so tab can use it
-			useUserStore.getState().setSelectedMenuIdForTab(menuId);
-			
-			navigate(`/system/grid/${menuId}`, { 
-				state: { 
-					menuLabel,
-					menuData: selectedApiMenu 
-				} 
-			});
-			return; // Don't navigate for grid/report menus
+			if (/^https?:/.test(linkUrl)) {
+				window.open(linkUrl, '_blank');
+			} else if (linkUrl.startsWith('/')) {
+				navigate(linkUrl, { state: { menuLabel: selectedApiMenu.label, menuData: selectedApiMenu } });
+			} else {
+				navigate(linkUrl, { state: { menuLabel: selectedApiMenu.label, menuData: selectedApiMenu } });
+			}
+			return;
 		}
 		
 		/* 1. 非混合导航模式 2. 混合导航模式下的侧边导航 */
