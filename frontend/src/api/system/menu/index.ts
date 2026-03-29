@@ -2,7 +2,7 @@ import type { MenuItemType } from "./types";
 import { request } from "#src/utils";
 import { handleTree } from "#src/utils";
 import { csmDecrypt } from "#src/components/csm-grid/CsmCrypto";
-import { getTableData } from "#src/components/csm-grid/CsmApi";
+import { createTableStruct, getTableData } from "#src/components/csm-grid/CsmApi";
 import { useUserStore } from "#src/store";
 import { resolveDevFlag } from "#src/utils/dev-flag";
 
@@ -94,6 +94,138 @@ function buildMenuTree(flatMenus: MenuItemType[], parentId: string = ""): MenuIt
 				children: children.length > 0 ? children : undefined
 			};
 		});
+}
+
+function asStringList(input: any): string[] {
+	if (!Array.isArray(input)) return [];
+	return input
+		.map((item) => String(item || "").trim())
+		.filter(Boolean);
+}
+
+function normalizeFieldName(field: any): string {
+	return String(field?.f_name || field?.name || "").trim();
+}
+
+function normalizePrimaryKeys(keys: string[], fields: string[]): string[] {
+	const uniqueKeys = Array.from(new Set(
+		(keys || []).map((k) => String(k || "").trim()).filter(Boolean)
+	));
+
+	// System convention: every table has id and should be searchable by id.
+	if (fields.includes("id")) {
+		return ["id", ...uniqueKeys.filter((k) => k !== "id")];
+	}
+
+	if (uniqueKeys.length > 0) return uniqueKeys;
+	if (fields.length > 0) return [fields[0]];
+	return ["id"];
+}
+
+function pickPrimaryKeysFromMenu(menu: any, fields: string[]): string[] {
+	const structPK = asStringList(menu?.struct?.fieldsPK);
+	if (structPK.length > 0) return normalizePrimaryKeys(structPK, fields);
+
+	const mConfigPK = asStringList(menu?.m_configs?.struct?.fieldsPK);
+	if (mConfigPK.length > 0) return normalizePrimaryKeys(mConfigPK, fields);
+
+	const tableFields = Array.isArray(menu?.table) ? menu.table : [];
+	const fieldPk = tableFields
+		.filter((f: any) => {
+			const v = f?.f_pkid;
+			return v === 1 || v === "1" || v === true || v === "true";
+		})
+		.map((f: any) => normalizeFieldName(f))
+		.filter(Boolean);
+	if (fieldPk.length > 0) return normalizePrimaryKeys(fieldPk, fields);
+
+	return normalizePrimaryKeys([], fields);
+}
+
+function buildStructFromMenu(menu: any): { tableName: string; struct: any } | null {
+	const tableName = String(menu?.table_name || "").trim();
+	if (!tableName) return null;
+
+	const tableFields = Array.isArray(menu?.table) ? menu.table : [];
+	const fields: string[] = Array.from(new Set(
+		tableFields
+			.map((f: any) => normalizeFieldName(f))
+			.filter(Boolean)
+	));
+	if (!fields.includes("id")) fields.unshift("id");
+
+	const fieldsPK = pickPrimaryKeysFromMenu(menu, fields);
+	fieldsPK.forEach((pk) => {
+		if (!fields.includes(pk)) fields.push(pk);
+	});
+	if (fields.length === 0) fields.push("id");
+
+	const fieldsSearch: string[] = Array.from(new Set(
+		tableFields
+			.filter((f: any) => {
+				const v = f?.f_search;
+				return v === 1 || v === "1" || v === true || v === "true";
+			})
+			.map((f: any) => normalizeFieldName(f))
+			.filter(Boolean)
+	));
+	if (!fieldsSearch.includes("id")) fieldsSearch.unshift("id");
+
+	const defaultValue: Record<string, any> = {};
+	fields.forEach((name) => {
+		defaultValue[name] = "";
+	});
+
+	return {
+		tableName,
+		struct: {
+			defaultValue,
+			fieldsPK,
+			fieldsSearch: fieldsSearch.length > 0 ? fieldsSearch : fields,
+			fields,
+		},
+	};
+}
+
+function collectMenuStructs(menus: MenuItemType[]): Map<string, any> {
+	const byTable = new Map<string, any>();
+
+	const walk = (items: any[]) => {
+		items.forEach((item) => {
+			const candidate = buildStructFromMenu(item);
+			if (candidate) {
+				const prev = byTable.get(candidate.tableName);
+				if (!prev || (candidate.struct?.fields?.length || 0) > (prev?.fields?.length || 0)) {
+					byTable.set(candidate.tableName, candidate.struct);
+				}
+			}
+
+			if (Array.isArray(item?.children) && item.children.length > 0) walk(item.children);
+			if (Array.isArray(item?.nodes) && item.nodes.length > 0) walk(item.nodes);
+		});
+	};
+
+	walk(Array.isArray(menus) ? menus : []);
+	return byTable;
+}
+
+async function ensureMenuTableStructs(appIdParam: string, menus: MenuItemType[]) {
+	if (!appIdParam || !Array.isArray(menus) || menus.length === 0) return;
+
+	const tableStructMap = collectMenuStructs(menus);
+	for (const [tableName, struct] of tableStructMap.entries()) {
+		try {
+			await createTableStruct({
+				app_id: appIdParam,
+				obj_table: {
+					id: tableName,
+					struct,
+				},
+			});
+		} catch (error) {
+			console.warn(`Failed to ensure table struct for ${appIdParam}.${tableName}:`, error);
+		}
+	}
 }
 
 /**
@@ -237,6 +369,7 @@ async function loadMenuStruct(appIdParam: string): Promise<MenuItemType[]> {
 // Persist menu struct back to backend (create or update)
 async function persistMenuStruct(appIdParam: string, menus: MenuItemType[], mode: "update" | "create" = "update") {
 	const { csmEncrypt } = await import("#src/components/csm-grid/CsmCrypto");
+	await ensureMenuTableStructs(appIdParam, menus);
 	const payload = {
 		app_id: appIdParam,
 		obj_name: "index",
@@ -422,17 +555,6 @@ export async function fetchNavigationMenus(appIdParam?: string) {
 			type: "system",
 			// Remove icon field - it's being rendered as text which breaks the UI
 			// icon: "user",
-			menuType: 0,
-			parentId: "system",
-		});
-		menuData.push({
-			id: "system-menu",
-			name: "menu.system.menu",
-			label: "Quản lý menu",
-			path: "/system/menu",
-			type: "system",
-			// Remove icon field - it's being rendered as text which breaks the UI
-			// icon: "menu",
 			menuType: 0,
 			parentId: "system",
 		});

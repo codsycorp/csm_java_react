@@ -140,7 +140,7 @@ export function useMenu() {
 				return menus.map(menu => {
 					// Preserve ONLY these fields:
 					// - key, path, id: for routing
-					// - label, label_en, label_zh, name: for translation
+					// - label/label_* and name/name_*: for translation
 					// - children: for tree structure
 					// - icon, disabled: for Ant Design Menu
 					// - table_name, report_name, type_form: for app logic
@@ -150,8 +150,13 @@ export function useMenu() {
 						path: menu.path,
 						id: menu.id,
 						label: menu.label,
+						label_vi: menu.label_vi,
 						label_en: menu.label_en,
 						label_zh: menu.label_zh,
+						name: menu.name,
+						name_vi: menu.name_vi,
+						name_en: menu.name_en,
+						name_zh: menu.name_zh,
 						icon: menu.icon,
 						disabled: menu.disabled,
 						children: menu.children,

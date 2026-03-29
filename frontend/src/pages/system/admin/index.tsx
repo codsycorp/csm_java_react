@@ -363,16 +363,16 @@ export default function AdminPage() {
 
 	const userSubOwnerCandidates = [userAppId, userId, username, email, phoneNumber]
 		.filter((v): v is string => typeof v === "string" && v.trim().length > 0);
-	const runtimePermissionBits = isDevUser
+	const runtimePermissionBits = (isDevUser || isAdminUser)
 		? null
 		: (toPermissionBigInt(userPermissionBitfieldRaw) ?? toPermissionBigInt(userPermissionsRaw));
 	const hasPermissionSchemaV2 = String(userPermissionSchemaVersion || "").trim().toLowerCase() === "v2";
-	const isLegacyPermissionProfile = !isDevUser && !hasPermissionSchemaV2 && runtimePermissionBits === null;
-	const runtimePermissions = (isDevUser || isLegacyPermissionProfile)
+	const isLegacyPermissionProfile = !isDevUser && !isAdminUser && !hasPermissionSchemaV2 && runtimePermissionBits === null;
+	const runtimePermissions = (isDevUser || isAdminUser || isLegacyPermissionProfile)
 		? -1
 		: (parsePermissionMask(runtimePermissionBits) ?? -1);
 	const runtimeMenusPermissions = parseMenusPermissions(userMenusPermissionsRaw);
-	const runtimeDataScope = (isDevUser || isLegacyPermissionProfile)
+	const runtimeDataScope = (isDevUser || isAdminUser || isLegacyPermissionProfile)
 		? "ALL"
 		: resolvePermissionDataScope(runtimePermissionBits);
 

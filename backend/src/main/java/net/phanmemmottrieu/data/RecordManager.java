@@ -2320,6 +2320,8 @@ public class RecordManager {
             return null;
         }
 
+        boolean isMetaKey = key != null && key.startsWith("__meta_");
+
         try {
             // Bước 1: Thử deserialize trực tiếp thành Map
             return objectMapper.readValue(valueBytes, Map.class);
@@ -2331,19 +2333,25 @@ public class RecordManager {
                 // Bước 3: Nếu là giá trị nguyên thủy, bao bọc nó vào một Map với khóa đặc biệt
                 Map<String, Object> wrappedMap = new HashMap<>();
                 wrappedMap.put("_value", primitiveValue); // Sử dụng khóa đặc biệt "_value"
-                logger.warn("⚠️ Bản ghi với key '{}' có giá trị nguyên thủy '{}'. Đã được bao bọc thành Map với khóa '_value'.",
-                           key, primitiveValue);
+                if (!isMetaKey) {
+                    logger.warn("⚠️ Bản ghi với key '{}' có giá trị nguyên thủy '{}'. Đã được bao bọc thành Map với khóa '_value'.",
+                               key, primitiveValue);
+                }
                 return wrappedMap;
             } catch (JsonProcessingException innerEx) {
                 // Vẫn không thể xử lý (ví dụ: JSON bị hỏng hoàn toàn)
-                logger.warn("⚠️ Bỏ qua bản ghi với key '{}' vì không thể deserialize giá trị. Lỗi: {}",
-                           key, innerEx.getMessage());
+                if (!isMetaKey) {
+                    logger.warn("⚠️ Bỏ qua bản ghi với key '{}' vì không thể deserialize giá trị. Lỗi: {}",
+                               key, innerEx.getMessage());
+                }
                 return null;
             }
         } catch (JsonProcessingException e) {
             // Bắt các lỗi JsonProcessingException khác (ví dụ: JSON malformed nhưng không phải mismatch)
-            logger.warn("⚠️ Bỏ qua bản ghi với key '{}' vì giá trị không phải JSON hợp lệ. Lỗi: {}",
-                       key, e.getMessage());
+            if (!isMetaKey) {
+                logger.warn("⚠️ Bỏ qua bản ghi với key '{}' vì giá trị không phải JSON hợp lệ. Lỗi: {}",
+                           key, e.getMessage());
+            }
             return null;
         } catch (Exception e) {
             // Bắt các lỗi bất ngờ khác trong quá trình deserialize
@@ -2526,6 +2534,10 @@ public class RecordManager {
             Map<String, Object> tableStruct = find(appId, "index", filterI);
             if (tableStruct == null) return null;
             Map<String, Object> structMap = (Map<String, Object>) tableStruct.get("struct");
+            if (structMap == null) {
+                logger.debug("Missing struct metadata for {}.{}; skip primary-key variant lookup.", appId, tableName);
+                return null;
+            }
             List<String> primaryKeys = (List<String>) structMap.get("fieldsPK");
             if (primaryKeys == null || primaryKeys.isEmpty()) return null;
 

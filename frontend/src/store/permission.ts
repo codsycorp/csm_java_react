@@ -98,6 +98,34 @@ function isMenuAllowedByLegacyAccess(menu: any, allowedKeys: Set<string>, allowe
 	return false;
 }
 
+function isDevOnlySystemPath(rawPath: unknown): boolean {
+	const path = normalizeAccessKey(rawPath);
+	if (!path) return false;
+	return path === "/system/menu"
+		|| path.startsWith("/system/menu/")
+		|| path === "/system/developer"
+		|| path.startsWith("/system/developer/")
+		|| path === "/system/broadcast"
+		|| path.startsWith("/system/broadcast/");
+}
+
+function pruneDevOnlySystemMenusForAdmin(items: any[]): any[] {
+	return (items || []).reduce((acc: any[], item: any) => {
+		const path = item?.path || item?.key;
+		if (isDevOnlySystemPath(path)) {
+			return acc;
+		}
+		const nextChildren = Array.isArray(item?.children)
+			? pruneDevOnlySystemMenusForAdmin(item.children)
+			: undefined;
+		acc.push({
+			...item,
+			children: nextChildren && nextChildren.length > 0 ? nextChildren : undefined,
+		});
+		return acc;
+	}, []);
+}
+
 function filterMenuTreeByLegacyAccess(items: any[], allowedKeys: Set<string>, allowedPaths: Set<string>): any[] {
 	return (items || []).reduce((acc: any[], item: any) => {
 		const filteredChildren = item?.children && item.children.length > 0
@@ -362,15 +390,16 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 				});
 				
 				const apiMenus = transformApiMenusToLayoutMenus(apiMenuList as (ApiMenuItemType & { children?: MenuItemType[] })[]);
+				const sanitizedApiMenus = isAdmin ? pruneDevOnlySystemMenusForAdmin(apiMenus) : apiMenus;
 				// Giữ auto-setup nếu có auto_code; loại bỏ chỉ khi không có auto_code
 				const filterAutoSetup = (m: any) => !(m.key === "/auto-setup" && !m.auto_code);
 				// isDev hoặc hasLegacyAppOnly (menusPermissions=[appId] = tài khoản chính, full quyền app)
 				// thì bypass filter → hiện toàn bộ menu app
 				// Ngược lại lọc theo các path/id cụ thể trong menusPermissions
 				const filteredByLegacyAccess = shouldBypassMenuFilter
-					? apiMenus
+					? sanitizedApiMenus
 					: filterMenuTreeByLegacyAccess(
-						apiMenus,
+						sanitizedApiMenus,
 						explicitAllowedKeys,
 						allowedRoutePaths,
 					);
@@ -510,14 +539,15 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 				});
 				
 				const apiMenus = transformApiMenusToLayoutMenus(apiMenuList as (ApiMenuItemType & { children?: MenuItemType[] })[]);
+				const sanitizedApiMenus = isAdmin ? pruneDevOnlySystemMenusForAdmin(apiMenus) : apiMenus;
 				const filterAutoSetup = (m: any) => !(m.key === '/auto-setup' && !m.auto_code);
 				// isDev hoặc hasLegacyAppOnly (menusPermissions=[appId] = tài khoản chính, full quyền app)
 				// thì bypass filter → hiện toàn bộ menu app
 				// Ngược lại lọc theo các path/id cụ thể trong menusPermissions
 				const filteredByLegacyAccess = shouldBypassMenuFilter
-					? apiMenus
+					? sanitizedApiMenus
 					: filterMenuTreeByLegacyAccess(
-						apiMenus,
+						sanitizedApiMenus,
 						explicitAllowedKeys,
 						allowedRoutePaths,
 					);

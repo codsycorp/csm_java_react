@@ -729,6 +729,8 @@ function normalizeTriggerShape(node: any): Record<string, any> {
 }
 
 function toFiniteNumber(value: any): number | undefined {
+  if (value == null) return undefined;
+  if (typeof value === "string" && value.trim() === "") return undefined;
   const num = Number(value);
   return Number.isFinite(num) ? num : undefined;
 }
@@ -1026,10 +1028,30 @@ function buildPreviousResultContext(previousResultJson: string, maxNodes: number
 function ensureMenuDefaults(menu: MenuItemType): MenuItemType {
   const next: MenuItemType = { ...menu };
 
+  if ((next as any).name_en && !next.label_en) next.label_en = (next as any).name_en;
+  if ((next as any).name_zh && !next.label_zh) next.label_zh = (next as any).name_zh;
+  if ((next as any).name_vi && !next.label) next.label = (next as any).name_vi;
+
   if ((next as any).label_vi && !next.label) next.label = (next as any).label_vi;
   if ((next as any).name_vi && !next.name) next.name = (next as any).name_vi;
   if ((next as any).label_sh && !next.label_zh) next.label_zh = (next as any).label_sh;
   if ((next as any).name_sh && !next.name_zh) next.name_zh = (next as any).name_sh;
+
+  if (isPlainObject(next.label)) {
+    const labelObj = next.label as any;
+    if (labelObj.vi && !(next as any).label_vi) (next as any).label_vi = String(labelObj.vi);
+    if (labelObj.en && !next.label_en) next.label_en = String(labelObj.en);
+    if ((labelObj.zh || labelObj.cn) && !next.label_zh) next.label_zh = String(labelObj.zh || labelObj.cn);
+    next.label = String(labelObj.vi || labelObj.en || labelObj.zh || labelObj.cn || next.name || next.id || "");
+  }
+
+  if (isPlainObject(next.name)) {
+    const nameObj = next.name as any;
+    if (nameObj.vi && !(next as any).name_vi) (next as any).name_vi = String(nameObj.vi);
+    if (nameObj.en && !next.name_en) next.name_en = String(nameObj.en);
+    if ((nameObj.zh || nameObj.cn) && !next.name_zh) next.name_zh = String(nameObj.zh || nameObj.cn);
+    next.name = String(nameObj.vi || nameObj.en || nameObj.zh || nameObj.cn || next.label || next.id || "");
+  }
 
   if (Array.isArray((next as any).table)) {
     (next as any).table = (next as any).table.map((field: any) => {

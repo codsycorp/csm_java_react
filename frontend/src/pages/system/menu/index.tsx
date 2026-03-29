@@ -311,6 +311,7 @@ export default function Menu() {
 
 		copyForm.setFieldsValue({
 			mode: "all",
+			copyStrategy: "merge",
 			selectedMenuIds: [],
 			targetAppIds: [selectedApp],
 		});
@@ -321,6 +322,7 @@ export default function Menu() {
 		try {
 			const values = await copyForm.validateFields();
 			const mode: "all" | "selected" = values.mode;
+			const copyStrategy: "merge" | "replace" = values.copyStrategy || "merge";
 			const selectedMenuIds: string[] = values.selectedMenuIds || [];
 			const targetAppIds: string[] = values.targetAppIds || [];
 
@@ -341,12 +343,17 @@ export default function Menu() {
 			setCopySubmitting(true);
 
 			for (const targetAppId of targetAppIds) {
+				// Clone with new IDs so copied menus are independent per program.
+				const copiedTree = cloneMenusForTargetApp(sourceTrees, targetAppId);
+
+				if (copyStrategy === "replace") {
+					await saveMenuStruct(targetAppId, copiedTree);
+					continue;
+				}
+
 				const responseData = await fetchMenuList(targetAppId);
 				const rawTargetList = responseData?.result?.list || [];
 				const targetTree = normalizeMenus(rawTargetList);
-
-				// Clone with new IDs so copied menus are independent per program.
-				const copiedTree = cloneMenusForTargetApp(sourceTrees, targetAppId);
 				const mergedTree = [...targetTree, ...copiedTree];
 
 				await saveMenuStruct(targetAppId, mergedTree);
@@ -357,7 +364,7 @@ export default function Menu() {
 			}
 
 			setCopyOpen(false);
-			window.$message?.success(`Đã copy ${mode === "all" ? "toàn bộ" : "menu đã chọn"} sang ${targetAppIds.length} chương trình`);
+			window.$message?.success(`Đã copy ${mode === "all" ? "toàn bộ" : "menu đã chọn"} theo chế độ ${copyStrategy === "replace" ? "thay thế toàn bộ" : "gộp thêm"} sang ${targetAppIds.length} chương trình`);
 		} catch (error: any) {
 			if (error?.errorFields) return;
 			console.error("Failed to copy menus:", error);
@@ -605,6 +612,13 @@ export default function Menu() {
 							</Radio.Group>
 						</Form.Item>
 
+						<Form.Item name="copyStrategy" label="Cách ghi vào chương trình đích" initialValue="merge">
+							<Radio.Group>
+								<Radio value="merge">Gộp thêm vào menu hiện có của chương trình đích</Radio>
+								<Radio value="replace">Thay thế toàn bộ menu chương trình đích bằng menu nguồn</Radio>
+							</Radio.Group>
+						</Form.Item>
+
 						<Form.Item shouldUpdate noStyle>
 							{({ getFieldValue }) => {
 								const mode = getFieldValue("mode");
@@ -642,7 +656,8 @@ export default function Menu() {
 
 						<div style={{ color: "#8c8c8c", fontSize: 12 }}>
 							Menu copy sang app đích sẽ được tạo ID mới để tránh đè dữ liệu. Cấu hình Kanban/report/trigger được giữ nguyên,
-							nhưng dữ liệu CRUD/tìm kiếm vẫn chạy độc lập theo từng app_id.
+							nhưng dữ liệu CRUD/tìm kiếm vẫn chạy độc lập theo từng app_id. Nếu chọn "Thay thế toàn bộ",
+							menu hiện tại của chương trình đích sẽ bị ghi đè hoàn toàn.
 						</div>
 					</Form>
 				</Modal>

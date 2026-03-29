@@ -32,13 +32,18 @@ export function getMenuLabelByLanguage(
 	const lang = (language.toLowerCase().startsWith("en") ? "en" : 
 	              language.toLowerCase().startsWith("zh") ? "zh" : "vi") as SupportedLanguage;
 
-	// Try to get localized label using helper function
-	// First try 'label' field with language suffix
-	let labelValue = getLocalizedField(menu, 'label', lang, true);
-	
-	// If no label found, try 'name' field
+	// Resolve in strict order to avoid premature fallback to Vietnamese:
+	// 1) label_<lang> / label
+	// 2) name_<lang> / name
+	// 3) fallback across other languages for label/name
+	const labelByLang = getLocalizedField(menu, "label", lang, false);
+	const nameByLang = getLocalizedField(menu, "name", lang, false);
+	let labelValue = labelByLang || nameByLang;
+
 	if (!labelValue) {
-		labelValue = getLocalizedField(menu, 'name', lang, true);
+		const labelFallback = getLocalizedField(menu, "label", lang, true);
+		const nameFallback = getLocalizedField(menu, "name", lang, true);
+		labelValue = labelFallback || nameFallback;
 	}
 	
 	// If still no value, use id as fallback
