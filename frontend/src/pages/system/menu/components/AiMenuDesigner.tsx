@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Button, Card, Collapse, Divider, Input, message, Radio, Space } from "antd";
+import { Alert, Button, Card, Collapse, Divider, Input, message, Radio, Select, Space } from "antd";
 import type { RadioChangeEvent } from "antd";
 import { useTranslation } from "react-i18next";
 
 import type { MenuItemType } from "#src/api/system/menu";
+import { fetchAppList, fetchMenuList } from "#src/api/system/menu";
 import { generateSeoContentWithPrompt } from "#src/api/ai";
 import { getTableData, updateTableData } from "#src/components/csm-grid/CsmApi";
 import { AI_PROMPTS } from "../ai-prompts/menu-design-system";
@@ -1307,7 +1308,9 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
   const [loading, setLoading] = useState(false);
   const [recordId, setRecordId] = useState<string | undefined>(undefined);
   const [refineText, setRefineText] = useState("");
-  const [sampleMenuText, setSampleMenuText] = useState("");
+  const [sampleAppList, setSampleAppList] = useState<any[]>([]);
+  const [sampleAppId, setSampleAppId] = useState<string | undefined>(undefined);
+  const [sampleMenuLoading, setSampleMenuLoading] = useState(false);
   const [sampleMenuParsed, setSampleMenuParsed] = useState<MenuItemType[] | null>(null);
   const [sampleMenuError, setSampleMenuError] = useState<string | null>(null);
 
@@ -1330,6 +1333,42 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     if (!storedRequest.trim()) return requestText;
     return `${storedRequest}\n---\n${requestText}`;
   }, [requestText, storedRequest]);
+
+  const sampleAppOptions = useMemo(() => {
+    const rows = [
+      { label: "CSM", value: "csm" },
+      ...((sampleAppList || []).map((app) => ({
+        label: app?.app_name || app?.app_id,
+        value: app?.app_id,
+      }))),
+    ].filter((opt) => !!opt.value);
+
+    const seen = new Set<string>();
+    return rows.filter((opt) => {
+      if (seen.has(opt.value)) return false;
+      seen.add(opt.value);
+      return true;
+    });
+  }, [sampleAppList]);
+
+  const sampleAppLabel = useMemo(() => {
+    if (!sampleAppId) return "";
+    const hit = sampleAppOptions.find((opt) => opt.value === sampleAppId);
+    return hit?.label || sampleAppId;
+  }, [sampleAppId, sampleAppOptions]);
+
+  useEffect(() => {
+    const loadApps = async () => {
+      try {
+        const res = await fetchAppList();
+        const list = (res as any)?.result?.list || [];
+        setSampleAppList(Array.isArray(list) ? list : []);
+      } catch (error) {
+        console.warn("Failed to load app list for sample menu:", error);
+      }
+    };
+    loadApps();
+  }, []);
 
   useEffect(() => {
     if (!appId) return;
@@ -1388,35 +1427,40 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     if (!recordId) setRecordId(objUpdate.id);
   };
 
-  const handleParseSampleMenu = () => {
-    if (!sampleMenuText.trim()) {
+  const loadSampleMenuFromApp = async (targetAppId: string) => {
+    if (!targetAppId) {
       setSampleMenuParsed(null);
       setSampleMenuError(null);
       return;
     }
+    setSampleMenuLoading(true);
     try {
-      const rawParsed = JSON.parse(sampleMenuText);
-      const rawArray = Array.isArray(rawParsed)
-        ? rawParsed
-        : Array.isArray((rawParsed as any)?.menu)
-          ? (rawParsed as any).menu
-          : null;
-      if (!rawArray || rawArray.length === 0) {
+      const res = await fetchMenuList(targetAppId);
+      const rawMenuList = (res as any)?.result?.list || [];
+      if (!Array.isArray(rawMenuList) || rawMenuList.length === 0) {
         setSampleMenuParsed(null);
-        setSampleMenuError("Không tìm thấy mảng menu trong JSON (cần là [] hoặc {\"menu\":[...]}).");
+        setSampleMenuError(`Không tìm thấy menu mẫu trong ứng dụng ${targetAppId}.`);
         return;
       }
-      const normalized = normalizeMenuList(rawArray);
+      const normalized = normalizeMenuList(rawMenuList);
       setSampleMenuParsed(normalized);
       setSampleMenuError(null);
+      message.success(`Đã nạp ${normalized.length} menu gốc từ app ${targetAppId} làm mẫu cho AI.`);
     } catch (e: any) {
       setSampleMenuParsed(null);
-      setSampleMenuError(`JSON không hợp lệ: ${e.message}`);
+      setSampleMenuError(`Không thể tải menu mẫu từ app ${targetAppId}: ${e?.message || "Unknown error"}`);
+    } finally {
+      setSampleMenuLoading(false);
     }
   };
 
+  const handleSampleAppChange = async (value: string) => {
+    setSampleAppId(value);
+    await loadSampleMenuFromApp(value);
+  };
+
   const handleClearSampleMenu = () => {
-    setSampleMenuText("");
+    setSampleAppId(undefined);
     setSampleMenuParsed(null);
     setSampleMenuError(null);
   };
@@ -1584,30 +1628,36 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
           items={[{
             key: "sample_menu",
             label: sampleMenuParsed
-              ? `Menu mẫu tham khảo ✓ (${sampleMenuParsed.length} menu gốc đã đọc)`
-              : "Menu mẫu tham khảo (tùy chọn) — dán JSON từ chương trình khác để AI học theo",
+              ? `Menu mẫu tham khảo ✓ (${sampleMenuParsed.length} menu gốc từ ${sampleAppLabel || sampleAppId || "app da chon"})`
+              : "Menu mẫu tham khảo (tùy chọn) — chọn ứng dụng để AI học theo",
             children: (
               <Space direction="vertical" style={{ width: "100%" }}>
                 <Alert
                   type="info"
                   showIcon
-                  message="Dán JSON menu từ chương trình khác để AI học theo cấu trúc"
-                  description='AI sẽ dùng làm tài liệu tham khảo khi thiết kế menu mới — giúp đúng hơn với pattern thực tế của dự án bạn. Hỗ trợ mảng [] hoặc object { "menu": [] }.'
-                />
-                <TextArea
-                  value={sampleMenuText}
-                  onChange={(e) => setSampleMenuText(e.target.value)}
-                  placeholder='Dán JSON menu mẫu vào đây (mảng [] hoặc {"menu":[...]})...'
-                  rows={6}
-                  style={{ fontFamily: "Monaco, Consolas, monospace", fontSize: 12 }}
+                  message="Chọn ứng dụng để tự động lấy menu mẫu"
+                  description="Hệ thống sẽ tự tải menu của ứng dụng được chọn và đưa vào prompt làm mẫu tham khảo cho AI."
                 />
                 <Space>
-                  <Button onClick={handleParseSampleMenu} type="default">
-                    Phân tích mẫu
-                  </Button>
-                  {(sampleMenuParsed || sampleMenuText.trim()) && (
+                  <Select
+                    showSearch
+                    style={{ minWidth: 300 }}
+                    value={sampleAppId}
+                    placeholder={t("system.menu.pleaseSelectApp") || "Vui lòng chọn ứng dụng"}
+                    options={sampleAppOptions}
+                    optionFilterProp="label"
+                    onChange={handleSampleAppChange}
+                    loading={sampleMenuLoading}
+                    disabled={!appId}
+                  />
+                  {sampleAppId && (
+                    <Button onClick={() => sampleAppId && loadSampleMenuFromApp(sampleAppId)} loading={sampleMenuLoading}>
+                      Tải lại menu mẫu
+                    </Button>
+                  )}
+                  {(sampleMenuParsed || sampleAppId) && (
                     <Button onClick={handleClearSampleMenu} danger>
-                      Xóa mẫu
+                      Bỏ mẫu
                     </Button>
                   )}
                 </Space>
@@ -1615,7 +1665,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                   <Alert
                     type="success"
                     showIcon
-                    message={`Đã đọc ${sampleMenuParsed.length} menu gốc — AI sẽ dùng làm tham khảo khi tạo menu mới`}
+                    message={`Đã nạp ${sampleMenuParsed.length} menu gốc từ ${sampleAppLabel || sampleAppId} — AI sẽ dùng làm tham khảo khi tạo menu mới`}
                   />
                 )}
                 {sampleMenuError && (
