@@ -238,6 +238,31 @@ function normalizeComboQueryValue(rawValue: any, fName: string, fTypes: string):
   const text = String(rawValue || "").trim();
   if (!text) return fallback;
 
+  // Handle "static:val1,val2,val3" shorthand from AI output.
+  if (/^static:/i.test(text)) {
+    const vals = text.slice(7).split(",").map((v) => v.trim()).filter(Boolean);
+    return JSON.stringify({
+      options: vals.map((v) => ({ ma: v, ten: v })),
+      query: [],
+    });
+  }
+
+  // Handle raw SQL like "SELECT id, col FROM table" from AI output.
+  if (/^select\s+/i.test(text)) {
+    const m = text.match(/^select\s+(.+?)\s+from\s+([a-z0-9_]+)/i);
+    if (m) {
+      const rawFields = m[1].split(",").map((f) => f.trim().split(/\s+|\./g).pop() || f.trim()).filter(Boolean);
+      return JSON.stringify({
+        options: [],
+        query: [{
+          obj_name: m[2],
+          fields: rawFields.length >= 2 ? [rawFields[0], rawFields[1]] : ["id", "name"],
+          obj_where: { field: "id", type: "like", value: "" },
+        }],
+      });
+    }
+  }
+
   if (/^[a-z0-9_]+$/i.test(text) && !text.includes("return")) {
     return JSON.stringify({
       options: [],
@@ -437,11 +462,19 @@ ${requestCore}
   before_save/after_save/update: (seft, data, bang) => return object
   afterAdd/afterEdit/afterDelete: (allData, seft, data) => return any
   load_db/report_db: (seft, db) => return Row[]
-- KHONG tra ve ten ham rong nhu "validate_order_debt_limit" neu khong co code.
-- Field select/combo (f_types co/coro/cbo) BAT BUOC co f_cbo_query hop le:
-  + Dang static: {"options":[{"ma":"...","ten":"..."}],"query":[]}
-  + Dang query DB: {"options":[],"query":[{"obj_name":"table","fields":["id","name"],"obj_where":{"field":"id","type":"like","value":""}}]}
-  + Khong tra ve JSON loi hoac SQL thuan.
+- KHONG tra ve comment placeholder trong trigger code nhu "/* Validate */ return data" - thay vao do viet code that hoac ten template.
+  Ten template co san: validate_order_debt_limit, update_order_total, validate_order_item_stock,
+  recalculate_order_total, validate_delivery_item_stock, update_stock_on_delivery,
+  validate_receipt_item_quantity, update_stock_on_receipt.
+- Field select/combo (f_types co/coro/cbo) BAT BUOC co f_cbo_query KHONG RONG. Cac dang hop le:
+  + Shorthand static:   "static:Gia tri 1,Gia tri 2,Gia tri 3"
+  + Static JSON day du:  "{\\"options\\":[{\\"ma\\":\\"1\\",\\"ten\\":\\"Ten\\"}],\\"query\\":[]}"
+  + Shorthand SQL:       "SELECT id, ten_truong FROM ten_bang"
+  + Query JSON day du:   "{\\"options\\":[],\\"query\\":[{\\"obj_name\\":\\"ten_bang\\",\\"fields\\":[\\"id\\",\\"ten\\"],\\"obj_where\\":{\\"field\\":\\"id\\",\\"type\\":\\"like\\",\\"value\\":\\"\\"}}]}"
+  TUYET DOI KHONG: f_cbo_query rong ("") cho combo field.
+- parentId CUA MENU CON PHAI = id cua menu cha. KHONG de tat ca parentId = "" roi de children:[] rong o cha.
+  Dung: {"id":"dm_root","type_form":0,"children":[{"id":"dm_kh","parentId":"dm_root","type_form":1,...}]}
+  SAI:  {"id":"dm_root","type_form":0,"children":[]}, {"id":"dm_kh","parentId":"","type_form":1,...}
 - Neu yeu cau nghiep vu co ket noi master-detail, bao cao, combo phu thuoc: phai tao du trigger va f_cbo_query tuong ung.
 - Menu type 1/2/6 KHONG can path dieu huong. Neu AI tao path cho cac type nay, hay de rong hoac bo qua.
 - CRM/quan ly cong viec phai thiet ke bang nhieu menu nho: type 1/2/3/4/6 va report, khong dung workspace tong hop.
@@ -527,8 +560,18 @@ ${previousMenuContext}
   before_save/after_save/update: (seft, data, bang) => return object
   afterAdd/afterEdit/afterDelete: (allData, seft, data) => return any
   load_db/report_db: (seft, db) => return Row[]
-- KHONG tra ve ten ham rong nhu "validate_order_debt_limit" neu khong co code.
-- Field select/combo (f_types co/coro/cbo) BAT BUOC co f_cbo_query hop le theo 1 trong 2 mau static/query DB.
+- KHONG tra ve comment placeholder nhu "/* Validate */ return data". Viet code that hoac ten template co san:
+  validate_order_debt_limit, update_order_total, validate_order_item_stock, recalculate_order_total,
+  validate_delivery_item_stock, update_stock_on_delivery, validate_receipt_item_quantity, update_stock_on_receipt.
+- Field select/combo (f_types co/coro/cbo) BAT BUOC co f_cbo_query KHONG RONG. Cac dang hop le:
+  + Shorthand static:   "static:Gia tri 1,Gia tri 2,Gia tri 3"
+  + Static JSON day du:  "{\\"options\\":[{\\"ma\\":\\"1\\",\\"ten\\":\\"Ten\\"}],\\"query\\":[]}"
+  + Shorthand SQL:       "SELECT id, ten_truong FROM ten_bang"
+  + Query JSON day du:   "{\\"options\\":[],\\"query\\":[{\\"obj_name\\":\\"ten_bang\\",\\"fields\\":[\\"id\\",\\"ten\\"],\\"obj_where\\":{\\"field\\":\\"id\\",\\"type\\":\\"like\\",\\"value\\":\\"\\"}}]}"
+  TUYET DOI KHONG: f_cbo_query rong ("") cho combo field.
+- parentId CUA MENU CON PHAI = id cua menu cha. KHONG de tat ca parentId = "" roi de children:[] rong o cha.
+  Dung: {"id":"dm_root","type_form":0,"children":[{"id":"dm_kh","parentId":"dm_root","type_form":1,...}]}
+  SAI:  {"id":"dm_root","type_form":0,"children":[]}, {"id":"dm_kh","parentId":"","type_form":1,...}
 - Neu refine tu menu cu: giu id/menu_id/path/menu cha-con toi da, chi thay doi phan duoc yeu cau.
 - Menu type 1/2/6 KHONG can path dieu huong. Neu co path o cac type nay, hay loai bo.
 - CRM/quan ly cong viec phai doi thanh cac menu nho bang type 1/2/3/4/6 va report.
@@ -1058,6 +1101,10 @@ function isValidComboQueryShape(rawQuery: any): boolean {
   const text = String(rawQuery || "").trim();
   if (!text) return false;
   if (/\breturn\b/.test(text)) return true;
+  // Accept static: shorthand that normalizeComboQueryValue converts at runtime.
+  if (/^static:/i.test(text)) return true;
+  // Accept raw SQL SELECT that normalizeComboQueryValue converts at runtime.
+  if (/^select\s+.+\s+from\s+/i.test(text)) return true;
 
   try {
     const parsed = JSON.parse(text);
@@ -1091,7 +1138,10 @@ function validateMenusForApply(menus: MenuItemType[]): MenuValidationIssue[] {
   const walk = (nodes: MenuItemType[], parentPath: string) => {
     (Array.isArray(nodes) ? nodes : []).forEach((node) => {
       const id = String((node as any).id || "menu_undefined");
-      const label = String((node as any).label || (node as any).name || id);
+      const rawLabel = (node as any).label || (node as any).name || id;
+      const label = rawLabel && typeof rawLabel === "object"
+        ? String(rawLabel.vi || rawLabel.en || rawLabel.jp || id)
+        : String(rawLabel || id);
       const path = parentPath ? `${parentPath} > ${label}` : label;
       const typeForm = Number((node as any).type_form || 0);
       const tableName = String((node as any).table_name || "").trim();

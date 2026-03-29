@@ -255,29 +255,70 @@ QUY TẮC THIẾT KẾ
    - f_pkid = 1 cho primary key
    - Nếu composite key: thêm m_configs.struct.fieldsPK = ["k1", "k2", ...]
 
-5. **Combo Field (f_types = co, coro)**
-   - Static: f_cbo_query = {"options": [{"ma":"1","ten":"Nam"}], "query": []}
-   - Query DB: f_cbo_query = {"options": [], "query": [{"obj_name":"table","fields":["ma","ten"],"obj_where":""}]}
-   - Dynamic JS: f_cbo_query = "return { options: [...], query: [] };"
+5. **Combo Field (f_types = co / coro / cbo) - BAT BUOC co f_cbo_query hop le**
 
-6. **Dữ liệu Placeholder**
-   - Nếu thiếu dữ liệu: dùng placeholder rõ ràng
-   - Không tự bịa bạ số liệu không liên quan
-   - Ví dụ: "Placeholder: Danh sách khách hàng từ table dm_khachhang"
+   Moi field co f_types bat dau bang "co", "coro" hoac "cbo" BAT BUOC co f_cbo_query KHONG rong.
+   He thong chap nhan 5 dang sau (tat ca deu hop le):
 
-7. **Master-Detail cấu trúc**
-   - Master menu: Có table_name, table fields, trigger
+   A) Shorthand static - khuyen nghi cho danh sach enum ngan gon:
+      f_cbo_query = "static:Ke hoach,Dang chay,Da ket thuc,Tam dung"
+      He thong tu chuyen sang JSON {options:[{ma,ten}],query:[]}.
+
+   B) Static JSON day du - khi gia tri code khac ten hien thi:
+      f_cbo_query = "{\"options\":[{\"ma\":\"1\",\"ten\":\"Nam\"},{\"ma\":\"2\",\"ten\":\"Nu\"}],\"query\":[]}"
+
+   C) Shorthand SQL - lay du lieu tu bang DB:
+      f_cbo_query = "SELECT id, ten_khachhang FROM dm_khachhang"
+      He thong tu chuyen sang {options:[],query:[{obj_name,fields}]}.
+
+   D) Query JSON day du - khuyen nghi cho combo DB:
+      f_cbo_query = "{\"options\":[],\"query\":[{\"obj_name\":\"dm_nhanvien\",\"fields\":[\"id\",\"ten_nv\"],\"obj_where\":{\"field\":\"id\",\"type\":\"like\",\"value\":\"\"}}]}"
+
+   E) Dynamic JS - combo gia tri phu thuoc field khac:
+      f_cbo_query = "return { options: [], query: [{ obj_name: 'dm_sanpham', fields: ['id','ten_sp'] }] };"
+
+   TUYET DOI KHONG:
+   - f_cbo_query rong ("") cho combo field
+   - f_cbo_query dung SELECT * thay vi chi dinh fields cu the
+
+6. **Du lieu Placeholder**
+   - Neu thieu du lieu: dung placeholder ro rang
+   - Khong tu bia ba so lieu khong lien quan
+   - Vi du: "Placeholder: Danh sach khach hang tu table dm_khachhang"
+
+7. **Master-Detail cau truc**
+   - Master menu: Co table_name, table fields, trigger
    - Detail (children[]):
-     - KHÔNG có DB table_name (để trống hoặc omit)
-     - table_name có thể = tên field JSON lưu chi tiết (tùy ý)
-     - Là tabs trong detail form của master
+     - KHONG co DB table_name (de trong hoac omit)
+     - table_name co the = ten field JSON luu chi tiet (tuy y)
+     - La tabs trong detail form cua master
 
-8. **Đa ngôn ngữ**
-   - label, name: Luôn dùng tiếng Việt làm mặc định
-   - label_vi, name_vi: Tiếng Việt (có thể bỏ nếu trùng label)
-   - label_en, name_en: Tiếng Anh
-   - label_zh, name_zh: Tiếng Trung
-   - Không dùng label_sh, name_sh (cũ, đã thay bằng _zh)
+8. **Da ngon ngu**
+   - label: Co the la string "Ten menu" hoac object {"vi":"Ten","en":"Name","jp":"Namae"}
+   - Uu tien object da ngon ngu cho 3 loai: vi, en, jp
+   - KHONG dung label_sh, name_sh (cu, da thay bang _zh)
+
+9. **Cau truc cha-con - parentId BAT BUOC chinh xac**
+   - Menu con THUOC ve menu cha -> dat trong mang children cua cha VA/HOAC dat parentId = id cua cha.
+   - KHONG de tat ca node co parentId="" roi root group de children:[]. Day la loi pho bien!
+   - Menu con trong mot GROUP phai co parentId = ID cua GROUP do.
+   - Cach DUNG (nested):
+     {"id":"dm_root","type_form":0,"children":[
+       {"id":"dm_khachhang","parentId":"dm_root","type_form":1,"table_name":"dm_khachhang",...}
+     ]}
+   - Cach SAI (flat voi parentId rong):
+     {"id":"dm_root","type_form":0,"children":[]},
+     {"id":"dm_khachhang","parentId":"","type_form":1,...}  <- SAI! parentId phai = "dm_root"
+
+10. **Trigger - Gia tri phai la JS code thuc thi duoc hoac ten template**
+    - Ten template co san: validate_order_debt_limit, update_order_total,
+      validate_order_item_stock, recalculate_order_total, validate_delivery_item_stock,
+      update_stock_on_delivery, validate_receipt_item_quantity, update_stock_on_receipt
+    - Hoac viet code truc tiep:
+      "before_save": "(seft, data, bang) => { if (!data.f_customer_id) throw new Error('Phai chon khach hang'); return data; }"
+    - Ten ngan gon mo ta nghiep vu cung chap nhan (he thong dung fallback return data/{})
+    - KHONG viet comment gia: "(seft, data, bang) => { /* Validate */ return data; }"
+
 
 ═══════════════════════════════════════════════════════════════════
 DICTIONARY & ABBREVIATION
