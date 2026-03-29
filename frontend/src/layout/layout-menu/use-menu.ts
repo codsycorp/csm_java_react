@@ -419,9 +419,13 @@ export function useMenu() {
 		};
 		
 		const selectedProcessedMenu = findMenuInProcessedMenus(processedMenus, normalizedKey);
-		const menuIdToSearch = selectedProcessedMenu?.menuId || normalizedKey;
+		const menuIdToSearch = selectedProcessedMenu?.menuId || selectedProcessedMenu?.id || normalizedKey;
 		const legacyMenuIdFromKey = (() => {
 			const m = String(normalizedKey || "").match(/^\/system\/([^/?#]+).*$/);
+			return m?.[1] ? String(m[1]) : "";
+		})();
+		const menuIdSegmentFromKey = (() => {
+			const m = String(normalizedKey || "").match(/(?:^|\/)(menu_[A-Za-z0-9_]+)(?:[/?#]|$)/);
 			return m?.[1] ? String(m[1]) : "";
 		})();
 		
@@ -452,6 +456,7 @@ export function useMenu() {
 		const selectedApiMenu = (
 			findMenuInTree(apiWholeMenus, String(menuIdToSearch || ""), normalizedKey)
 			|| (legacyMenuIdFromKey ? findMenuInTree(apiWholeMenus, legacyMenuIdFromKey, normalizedKey) : null)
+			|| (menuIdSegmentFromKey ? findMenuInTree(apiWholeMenus, menuIdSegmentFromKey, normalizedKey) : null)
 		) as any;
 
 		// If menu is marked as auto setup (sys_autos), navigate to dedicated runner page
@@ -514,6 +519,17 @@ export function useMenu() {
 			} else {
 				navigate(linkUrl, { state: { menuLabel: selectedApiMenu.label, menuData: selectedApiMenu } });
 			}
+			return;
+		}
+
+		// Legacy fallback: keys like "home/menu_123" or "menu_123" should map to runtime grid route.
+		if (!selectedApiMenu && menuIdSegmentFromKey) {
+			useUserStore.getState().setSelectedMenuIdForTab(menuIdSegmentFromKey);
+			navigate(`/system/grid/${menuIdSegmentFromKey}`, {
+				state: {
+					menuLabel: selectedProcessedMenu?.label || selectedProcessedMenu?.title || menuIdSegmentFromKey,
+				}
+			});
 			return;
 		}
 		
