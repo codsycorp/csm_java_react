@@ -12,6 +12,7 @@ import { PlusCircleOutlined } from "@ant-design/icons";
 import { Button, Tabs, Select, Row, Col } from "antd";
 import { useRef, useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
+import { Form, Modal, Radio } from "antd";
 
 import { Detail } from "./components/detail";
 import { csmEncrypt } from "#src/components/csm-grid/CsmCrypto";
@@ -21,6 +22,7 @@ import AiMenuDesigner from "./components/AiMenuDesigner";
 
 export default function Menu() {
 	const { t, i18n } = useTranslation();
+	const [copyForm] = Form.useForm();
 	const hasAuth = useAuth();
 	const { setCurrentAppId } = useAppStore();
 	const { handleAsyncRoutes } = usePermissionStore();
@@ -33,6 +35,8 @@ export default function Menu() {
 	const [menuData, setMenuData] = useState<any[]>([]);
 	const [tableLoading, setTableLoading] = useState(false);
 	const [referralToken, setReferralToken] = useState<string>("");
+	const [copyOpen, setCopyOpen] = useState(false);
+	const [copySubmitting, setCopySubmitting] = useState(false);
 	/* Detail Data */
 	const [isOpen, setIsOpen] = useState(false);
 	const [title, setTitle] = useState("");
@@ -134,6 +138,54 @@ export default function Menu() {
 		};
 		walk(list);
 		return result;
+	};
+
+	const deepClone = <T,>(value: T): T => JSON.parse(JSON.stringify(value));
+
+	const pickSelectedSubtrees = (menus: any[], selectedIds: Set<string>): any[] => {
+		const out: any[] = [];
+
+		const walk = (items: any[]) => {
+			items.forEach((item) => {
+				if (selectedIds.has(item.id)) {
+					out.push(deepClone(item));
+					return;
+				}
+				if (Array.isArray(item.children) && item.children.length > 0) {
+					walk(item.children);
+				}
+			});
+		};
+
+		walk(menus);
+		return out;
+	};
+
+	const cloneMenusForTargetApp = (menus: any[], targetAppId: string): any[] => {
+		let counter = 0;
+		const seed = Date.now();
+
+		const cloneNode = (node: any, parentId: string): any => {
+			counter += 1;
+			const newId = `menu_${seed}_${counter}`;
+			const clonedChildren = Array.isArray(node.children)
+				? node.children.map((child: any) => cloneNode(child, newId))
+				: undefined;
+
+			const cloned = {
+				...deepClone(node),
+				id: newId,
+				parentId,
+				app_id: targetAppId,
+				menu_id: "",
+				children: clonedChildren,
+			};
+
+			delete cloned.nodes;
+			return cloned;
+		};
+
+		return menus.map((item) => cloneNode(item, ""));
 	};
 
 	// Find parentId of a menu in the tree
@@ -251,6 +303,75 @@ export default function Menu() {
 		window.$message?.success(t("system.menu.savedSuccess"));
 	};
 
+	const openCopyModal = () => {
+		if (!selectedApp) {
+			window.$message?.warning(t("system.menu.pleaseSelectApp"));
+			return;
+		}
+
+		copyForm.setFieldsValue({
+			mode: "all",
+			selectedMenuIds: [],
+			targetAppIds: [selectedApp],
+		});
+		setCopyOpen(true);
+	};
+
+	const handleConfirmCopy = async () => {
+		try {
+			const values = await copyForm.validateFields();
+			const mode: "all" | "selected" = values.mode;
+			const selectedMenuIds: string[] = values.selectedMenuIds || [];
+			const targetAppIds: string[] = values.targetAppIds || [];
+
+			if (!targetAppIds.length) {
+				window.$message?.warning("Vui lòng chọn ít nhất 1 chương trình đích");
+				return;
+			}
+
+			const sourceTrees = mode === "all"
+				? deepClone(menuData)
+				: pickSelectedSubtrees(menuData, new Set(selectedMenuIds));
+
+			if (!sourceTrees.length) {
+				window.$message?.warning("Không có menu nguồn để copy");
+				return;
+			}
+
+			setCopySubmitting(true);
+
+			for (const targetAppId of targetAppIds) {
+				const responseData = await fetchMenuList(targetAppId);
+				const rawTargetList = responseData?.result?.list || [];
+				const targetTree = normalizeMenus(rawTargetList);
+
+				// Clone with new IDs so copied menus are independent per program.
+				const copiedTree = cloneMenusForTargetApp(sourceTrees, targetAppId);
+				const mergedTree = [...targetTree, ...copiedTree];
+
+				await saveMenuStruct(targetAppId, mergedTree);
+			}
+
+			if (targetAppIds.includes(selectedApp)) {
+				await refreshTable();
+			}
+
+			setCopyOpen(false);
+			window.$message?.success(`Đã copy ${mode === "all" ? "toàn bộ" : "menu đã chọn"} sang ${targetAppIds.length} chương trình`);
+		} catch (error: any) {
+			if (error?.errorFields) return;
+			console.error("Failed to copy menus:", error);
+			window.$message?.error("Copy menu thất bại");
+		} finally {
+			setCopySubmitting(false);
+		}
+	};
+
+	const menuOptions = flattenMenus(menuData).map((item: any) => ({
+		label: item.label || item.name || item.id,
+		value: item.id,
+	}));
+
 	return (
 		<BasicContent className="h-full">
 			{/* App Selector */}
@@ -273,6 +394,14 @@ export default function Menu() {
 					/>
 				</Col>
 
+			</Row>
+
+			<Row gutter={[16, 16]} className="mb-4">
+				<Col>
+					<Button onClick={openCopyModal} disabled={!selectedApp}>
+						Copy menu sang chương trình khác
+					</Button>
+				</Col>
 			</Row>
 
 			{/* Nút tạo mã giới thiệu */}
@@ -458,6 +587,65 @@ export default function Menu() {
 					/>
 				</>
 			)}
+
+				<Modal
+					open={copyOpen}
+					title="Copy menu giữa các chương trình"
+					onCancel={() => setCopyOpen(false)}
+					onOk={handleConfirmCopy}
+					confirmLoading={copySubmitting}
+					okText="Thực hiện copy"
+					cancelText={t("common.cancel")}
+				>
+					<Form form={copyForm} layout="vertical">
+						<Form.Item name="mode" label="Phạm vi copy" initialValue="all">
+							<Radio.Group>
+								<Radio value="all">Toàn bộ menu chương trình nguồn</Radio>
+								<Radio value="selected">Chỉ menu được chọn</Radio>
+							</Radio.Group>
+						</Form.Item>
+
+						<Form.Item shouldUpdate noStyle>
+							{({ getFieldValue }) => {
+								const mode = getFieldValue("mode");
+								if (mode !== "selected") return null;
+								return (
+									<Form.Item
+										name="selectedMenuIds"
+										label="Chọn menu cần copy"
+										rules={[{ required: true, message: "Vui lòng chọn ít nhất 1 menu" }]}
+									>
+										<Select mode="multiple" showSearch options={menuOptions} placeholder="Chọn menu..." />
+									</Form.Item>
+								);
+							}}
+						</Form.Item>
+
+						<Form.Item
+							name="targetAppIds"
+							label="Chương trình đích"
+							rules={[{ required: true, message: "Vui lòng chọn ít nhất 1 chương trình đích" }]}
+						>
+							<Select
+								mode="multiple"
+								showSearch
+								options={[
+									{ label: "CSM", value: "csm" },
+									...appList.map((app) => ({
+										label: app.app_name || app.app_id,
+										value: app.app_id,
+									})),
+								]}
+								placeholder="Chọn 1 hoặc nhiều chương trình..."
+							/>
+						</Form.Item>
+
+						<div style={{ color: "#8c8c8c", fontSize: 12 }}>
+							Menu copy sang app đích sẽ được tạo ID mới để tránh đè dữ liệu. Cấu hình Kanban/report/trigger được giữ nguyên,
+							nhưng dữ liệu CRUD/tìm kiếm vẫn chạy độc lập theo từng app_id.
+						</div>
+					</Form>
+				</Modal>
 		</BasicContent>
 	);
 };
