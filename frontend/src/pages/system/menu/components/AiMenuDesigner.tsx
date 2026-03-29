@@ -1053,6 +1053,110 @@ function normalizeMenuList(menus: MenuItemType[]) {
   return legacyShaped.map(ensureMenuDefaults);
 }
 
+function hasMeaningfulValue(value: any): boolean {
+  if (value == null) return false;
+  if (typeof value === "string") return value.trim().length > 0;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === "object") return Object.keys(value).length > 0;
+  return true;
+}
+
+function mergeFieldList(existingFields: any[], incomingFields: any[]): any[] {
+  if (!Array.isArray(existingFields) || existingFields.length === 0) return incomingFields || [];
+  if (!Array.isArray(incomingFields) || incomingFields.length === 0) return existingFields;
+
+  const keyOf = (field: any, index: number) => String(field?.f_name || field?.id || `idx_${index}`);
+  const byKey = new Map<string, any>();
+  existingFields.forEach((f, idx) => byKey.set(keyOf(f, idx), { ...f }));
+
+  incomingFields.forEach((incoming, idx) => {
+    const key = keyOf(incoming, idx);
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, { ...incoming });
+      return;
+    }
+
+    const merged = { ...existing };
+    Object.keys(incoming || {}).forEach((k) => {
+      const nextVal = (incoming as any)[k];
+      const prevVal = (existing as any)[k];
+      if (!hasMeaningfulValue(prevVal) && hasMeaningfulValue(nextVal)) {
+        (merged as any)[k] = nextVal;
+      }
+    });
+    byKey.set(key, merged);
+  });
+
+  return Array.from(byKey.values());
+}
+
+function mergeObjectFillMissing(existingObj: Record<string, any>, incomingObj: Record<string, any>) {
+  const merged: Record<string, any> = { ...(existingObj || {}) };
+  Object.keys(incomingObj || {}).forEach((key) => {
+    const prevVal = merged[key];
+    const nextVal = incomingObj[key];
+
+    if (Array.isArray(prevVal) && Array.isArray(nextVal)) {
+      merged[key] = nextVal.length > 0 ? nextVal : prevVal;
+      return;
+    }
+
+    if (
+      prevVal && typeof prevVal === "object" && !Array.isArray(prevVal)
+      && nextVal && typeof nextVal === "object" && !Array.isArray(nextVal)
+    ) {
+      merged[key] = mergeObjectFillMissing(prevVal, nextVal);
+      return;
+    }
+
+    if (!hasMeaningfulValue(prevVal) && hasMeaningfulValue(nextVal)) {
+      merged[key] = nextVal;
+    }
+  });
+  return merged;
+}
+
+function mergeMenuNodeNonDestructive(existing: MenuItemType, incoming: MenuItemType): MenuItemType {
+  const merged: any = { ...existing };
+  const incomingObj: any = incoming || {};
+
+  Object.keys(incomingObj).forEach((key) => {
+    if (key === "children") return;
+    const prevVal = (merged as any)[key];
+    const nextVal = incomingObj[key];
+
+    if (key === "table") {
+      (merged as any)[key] = mergeFieldList(
+        Array.isArray(prevVal) ? prevVal : [],
+        Array.isArray(nextVal) ? nextVal : [],
+      );
+      return;
+    }
+
+    if (key === "trigger") {
+      const prevObj = prevVal && typeof prevVal === "object" ? prevVal : {};
+      const nextObj = nextVal && typeof nextVal === "object" ? nextVal : {};
+      (merged as any)[key] = mergeObjectFillMissing(prevObj, nextObj);
+      return;
+    }
+
+    if (
+      prevVal && typeof prevVal === "object" && !Array.isArray(prevVal)
+      && nextVal && typeof nextVal === "object" && !Array.isArray(nextVal)
+    ) {
+      (merged as any)[key] = mergeObjectFillMissing(prevVal, nextVal);
+      return;
+    }
+
+    if (!hasMeaningfulValue(prevVal) && hasMeaningfulValue(nextVal)) {
+      (merged as any)[key] = nextVal;
+    }
+  });
+
+  return merged as MenuItemType;
+}
+
 function mergeMenus(baseMenus: MenuItemType[], incomingMenus: MenuItemType[]) {
   const byId = new Map<string, MenuItemType>();
   baseMenus.forEach((m) => byId.set(m.id, { ...m }));
@@ -1064,11 +1168,8 @@ function mergeMenus(baseMenus: MenuItemType[], incomingMenus: MenuItemType[]) {
       return;
     }
 
-    const merged: MenuItemType = {
-      ...existing,
-      ...incoming,
-      children: undefined,
-    };
+    const merged: MenuItemType = mergeMenuNodeNonDestructive(existing, incoming);
+    (merged as any).children = undefined;
 
     const existingChildren = Array.isArray((existing as any).children)
       ? ((existing as any).children as MenuItemType[])
