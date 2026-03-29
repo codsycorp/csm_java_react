@@ -1536,7 +1536,56 @@ public class RecordManager {
             }
         });
     }
-    
+
+    /**
+     * Xóa triệt để Lucene index của một bảng: đóng và giải phóng tất cả tài nguyên
+     * (IndexWriter, SearcherManager, FSDirectory, Analyzer) khỏi cache, sau đó xóa
+     * thư mục vật lý trên đĩa. Cần gọi trước khi rebuild index theo cấu trúc mới.
+     */
+    public void deleteLuceneIndex(String appId, String tableName) {
+        String indexKey = appId + "_" + tableName;
+        luceneIndexLocks.putIfAbsent(indexKey, new Object());
+        synchronized (luceneIndexLocks.get(indexKey)) {
+            // 1. Đóng và xóa IndexWriter
+            IndexWriter writer = indexWriterCache.remove(indexKey);
+            if (writer != null) {
+                try {
+                    if (writer.isOpen()) writer.close();
+                } catch (Exception e) {
+                    logger.warn("Lỗi đóng IndexWriter khi xóa lucene index {}: {}", indexKey, e.getMessage());
+                }
+            }
+            // 2. Đóng và xóa SearcherManager
+            SearcherManager sm = searcherManagerCache.remove(indexKey);
+            if (sm != null) {
+                try { sm.close(); } catch (Exception e) {
+                    logger.warn("Lỗi đóng SearcherManager khi xóa lucene index {}: {}", indexKey, e.getMessage());
+                }
+            }
+            // 3. Đóng và xóa FSDirectory
+            FSDirectory dir = indexDirectoryCache.remove(indexKey);
+            if (dir != null) {
+                try { dir.close(); } catch (Exception e) {
+                    logger.warn("Lỗi đóng FSDirectory khi xóa lucene index {}: {}", indexKey, e.getMessage());
+                }
+            }
+            // 4. Xóa Analyzer khỏi cache
+            Analyzer analyzer = indexAnalyzerCache.remove(indexKey);
+            if (analyzer != null) {
+                try { analyzer.close(); } catch (Exception e) {
+                    logger.warn("Lỗi đóng Analyzer khi xóa lucene index {}: {}", indexKey, e.getMessage());
+                }
+            }
+            // 5. Xóa thư mục lucene_index trên đĩa
+            Path indexPath = Paths.get(DIR_PATH, "lucene_index", appId, tableName);
+            File indexDir = indexPath.toFile();
+            if (indexDir.exists()) {
+                deleteDirectory(indexDir);
+                logger.info("Đã xóa hoàn toàn Lucene index vật lý tại: {}", indexPath);
+            }
+        }
+    }
+
     // Cập nhật các hàm createRecord và deleteRecord để cập nhật __meta_totalCount
 
     /**

@@ -154,9 +154,20 @@ public class TableHandler {
     
         // Ghi cấu trúc bảng vào bảng 'index' trong database được chỉ định bởi appId.
         recordManager.createRecord(appId, "index", recordParams, List.of("id"));
-    
-        response.set("success", true);
-        response.set("message", "Đã tạo xong cấu trúc");
+
+        // Xóa triệt để Lucene index cũ trước khi tạo lại theo cấu trúc mới
+        recordManager.deleteLuceneIndex(appId, id);
+
+        // Rebuild Lucene index theo cấu trúc mới của bảng
+        try {
+            recordManager.indexExistingRecords(appId, id);
+            response.set("success", true);
+            response.set("message", "Đã tạo xong cấu trúc và lập lại chỉ mục tìm kiếm cho bảng: " + id);
+        } catch (Exception e) {
+            logger.warn("Tạo cấu trúc thành công nhưng lỗi khi lập lại chỉ mục cho bảng {}: {}", id, e.getMessage());
+            response.set("success", true);
+            response.set("message", "Đã tạo xong cấu trúc (lỗi lập chỉ mục: " + e.getMessage() + ")");
+        }
     }
 
     public void handleIndexExistingRecords(StandardResponse response, Map<String, Object> params) {
