@@ -131,54 +131,22 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 		loadGuestList();
 	}, [connected, appId]);
 
-	// Auto-refresh notification data every 30 seconds
+	// Socket-first: only do one sync when connected/app changes.
+	// Realtime updates are handled by ChatHistoryContext socket listeners.
 	useEffect(() => {
 		if (!connected) return;
 
-		const refreshNotificationData = async () => {
+		const syncNotificationData = async () => {
 			try {
-				// Use the new refreshAllMessages method from context
-				console.log(`🔄 [Notification] Auto-refreshing data for appId="${appId}"`);
+				console.log(`🔄 [Notification] Initial sync for appId="${appId}"`);
 				await refreshAllMessages();
 			} catch (error) {
-				console.error('❌ [Notification] Auto-refresh failed:', error);
+				console.error('❌ [Notification] Initial sync failed:', error);
 			}
 		};
 
-		// Initial load
-		refreshNotificationData();
-
-		// Set up interval for auto-refresh every 30 seconds
-		const intervalId = setInterval(refreshNotificationData, 30000);
-
-		return () => clearInterval(intervalId);
+		syncNotificationData();
 	}, [connected, appId, refreshAllMessages]);
-
-	// 🔥 Listen for new messages from socket to immediately update notification
-	useEffect(() => {
-		if (!socket || !connected) return;
-
-		const handleNewMessage = (msg: any) => {
-			// Immediately trigger refresh when new message arrives
-			if (msg && (msg.guestSessionId || msg.guestPhone || msg.userId)) {
-				console.log('📬 [Notification] New message received, triggering refresh');
-				refreshAllMessages().catch(err => 
-					console.error('❌ [Notification] Failed to refresh on new message:', err)
-				);
-			}
-		};
-
-		// Listen for both 'message' and 'notification' events
-		socket.on('message', handleNewMessage);
-		socket.on('notification', handleNewMessage);
-
-		return () => {
-			if (socket) {
-				(socket as any).off?.('message', handleNewMessage);
-				(socket as any).off?.('notification', handleNewMessage);
-			}
-		};
-	}, [socket, connected, refreshAllMessages]);
 	
 	// No longer tracking 'csm' room unread separately; system messages count is derived from broadcast messages for current app
 

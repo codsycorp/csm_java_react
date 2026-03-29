@@ -20,13 +20,16 @@ import net.phanmemmottrieu.service.AIProviderFactory;
 import net.phanmemmottrieu.util.PortKillerUtil;
 
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
+import java.text.Normalizer;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
@@ -82,12 +85,13 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final ScheduledExecutorService chatAiScheduler = Executors.newScheduledThreadPool(2);
-    private final Map<String, ScheduledFuture<?>> pendingGuestWelcomeTasks = new ConcurrentHashMap<>();
+    private final Map<String, Future<?>> pendingGuestWelcomeTasks = new ConcurrentHashMap<>();
     private final Map<String, ScheduledFuture<?>> pendingGuestNoReplyTasks = new ConcurrentHashMap<>();
     private final Map<UUID, String> sessionGuestPhones = new ConcurrentHashMap<>();
     private final Map<UUID, String> sessionGuestSessionIds = new ConcurrentHashMap<>();
+    private static final String POLITE_GENERIC_WELCOME = "Xin chao anh/chị, em rat vui duoc ho tro. Anh/chị vui long cho em biet nhu cau dang quan tam va cach lien he de ben em tu van nhanh va chinh xac hon a.";
 
-    private static final long AI_TRIGGER_DELAY_MS = 60_000L;
+    private static final long AI_FOLLOWUP_DELAY_MS = 60_000L;
     private static final String AI_ASSISTANT_USER_ID = "ai_assistant";
     private static final String AI_ASSISTANT_USERNAME = "Tu van vien";
 
@@ -125,7 +129,7 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
 
     private void cancelGuestWelcomeTask(String appId, String guestIdentity) {
         String key = guestKey(appId, guestIdentity);
-        ScheduledFuture<?> future = pendingGuestWelcomeTasks.remove(key);
+        Future<?> future = pendingGuestWelcomeTasks.remove(key);
         if (future != null) {
             future.cancel(false);
         }
@@ -183,11 +187,13 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
         String guestDescription = (guestPhone == null || guestPhone.isBlank())
                 ? "Khach moi chua de lai so dien thoai"
                 : "Khach co phone=" + guestPhone;
-        return "Ban la nhan vien CSKH chat website appId=" + appId + ". "
-                + guestDescription + " da vao chat hon 1 phut nhung chua nhan tin. "
-                + "Hay viet DUY NHAT 1 tin nhan tieng Viet tu nhien, than thien, ngan gon (toi da 180 ky tu), "
-                + "khong may moc, de chao va kheo hoi ten, cach lien he va san pham/nhu cau dang quan tam. "
-                + "Khong nhac den AI, khong dung markdown, chi tra ve cau tra loi.";
+        return "Ban la nhan vien cham soc khach hang website appId=" + appId + ". "
+            + guestDescription + " vua mo cua so chat va chua gui tin nhan. "
+                + "Hay viet DUY NHAT 1 tin nhan tieng Viet lich su, chuyen nghiep, than thien, ngan gon (toi da 180 ky tu). "
+                + "Muc tieu: chao khach, hoi nhu cau can ho tro va xin thong tin lien he mot cach tinh te. "
+                + "KHONG dung placeholder nhu [Ten ban], [Ten cong ty]. "
+                + "KHONG tu xung ten nhan vien/cong ty neu khong co du lieu xac thuc. "
+                + "Khong nhac den AI, khong markdown, chi tra ve noi dung tin nhan.";
     }
 
     private String buildNoHumanReplyPrompt(String appId, String guestPhone, String guestMessage) {
@@ -201,9 +207,40 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                 + "Giong nguoi that dang cham soc, khong robot, khong markdown.";
     }
 
+    private String sanitizeGuestWelcomeText(String messageText, String eventType) {
+        if (messageText == null) return "";
+        String normalized = messageText.replaceAll("\\s+", " ").trim();
+        if (normalized.isEmpty()) return normalized;
+
+        if (eventType == null || !eventType.startsWith("ai_auto_welcome")) {
+            return normalized;
+        }
+
+        String folded = Normalizer.normalize(normalized, Normalizer.Form.NFD)
+                .replaceAll("\\p{M}+", "")
+                .toLowerCase(Locale.ROOT);
+
+        boolean hasBracketPlaceholder = normalized.matches(".*\\[[^\\]]{1,40}\\].*");
+        boolean hasTemplateToken = folded.contains("ten ban")
+                || folded.contains("ten cong ty")
+                || folded.contains("name")
+                || folded.contains("company");
+
+        if (hasBracketPlaceholder || hasTemplateToken) {
+            return POLITE_GENERIC_WELCOME;
+        }
+
+        return normalized;
+    }
+
     private void dispatchAiMessageToGuest(String appId, String guestIdentity, String guestPhone, String messageText, String eventType) {
         if (appId == null || appId.isBlank() || guestIdentity == null || guestIdentity.isBlank() || messageText == null || messageText.isBlank()) {
             return;
+        }
+
+        String safeMessageText = sanitizeGuestWelcomeText(messageText, eventType);
+        if (safeMessageText.isBlank()) {
+            safeMessageText = POLITE_GENERIC_WELCOME;
         }
 
         String privateRoom = "guest:" + appId + ";" + guestIdentity;
@@ -218,7 +255,7 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
         aiMsg.setGuestPhone(guestPhone);
         aiMsg.setGuestSessionId(guestIdentity);
         aiMsg.setEventType(eventType);
-        aiMsg.setMessage(messageText.length() > 280 ? messageText.substring(0, 280) : messageText);
+        aiMsg.setMessage(safeMessageText.length() > 280 ? safeMessageText.substring(0, 280) : safeMessageText);
         aiMsg.setTimestamp(System.currentTimeMillis());
 
         chatPersistenceService.saveMessage(aiMsg);
@@ -228,7 +265,7 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
         logger.info("🤖 AI auto reply sent - appId={}, guestIdentity={}, guestPhone={}, eventType={}", appId, guestIdentity, guestPhone, eventType);
     }
 
-    private void scheduleWelcomeIfGuestSilent(String appId, String guestIdentity, String guestPhone) {
+    private void triggerWelcomeOnGuestJoin(String appId, String guestIdentity, String guestPhone) {
         if (appId == null || appId.isBlank() || guestIdentity == null || guestIdentity.isBlank()) return;
         if (guestPhone != null && !guestPhone.isBlank()) {
             logger.info("⏭️ Skip AI welcome because guest already has phone - appId={}, guestIdentity={}, guestPhone={}", appId, guestIdentity, guestPhone);
@@ -248,12 +285,12 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
         cancelGuestWelcomeTask(appId, guestIdentity);
 
         String key = guestKey(appId, guestIdentity);
-        final String fallbackWelcome = "Em chao anh/chị. Mình cho em xin ten, so dien thoai va san pham anh/chị dang quan tam de em ho tro nhanh nha.";
-        ScheduledFuture<?> future = chatAiScheduler.schedule(() -> {
+        final String fallbackWelcome = POLITE_GENERIC_WELCOME;
+        Future<?> future = chatAiScheduler.submit(() -> {
             try {
                 java.util.List<ChatMessage> latestHistory = chatPersistenceService.getHistoryByGuestIdentity(appId, guestIdentity, guestPhone, 5);
                 if (latestHistory != null && !latestHistory.isEmpty()) {
-                    logger.info("⏭️ Cancel scheduled AI welcome because guest has started chatting - appId={}, guestIdentity={}, historyCount={}", appId, guestIdentity, latestHistory.size());
+                    logger.info("⏭️ Skip immediate AI welcome because guest already has history - appId={}, guestIdentity={}, historyCount={}", appId, guestIdentity, latestHistory.size());
                     return;
                 }
 
@@ -268,7 +305,7 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
             } finally {
                 pendingGuestWelcomeTasks.remove(key);
             }
-        }, AI_TRIGGER_DELAY_MS, TimeUnit.MILLISECONDS);
+        });
 
         pendingGuestWelcomeTasks.put(key, future);
     }
@@ -292,7 +329,7 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
             } finally {
                 pendingGuestNoReplyTasks.remove(key);
             }
-        }, AI_TRIGGER_DELAY_MS, TimeUnit.MILLISECONDS);
+        }, AI_FOLLOWUP_DELAY_MS, TimeUnit.MILLISECONDS);
 
         pendingGuestNoReplyTasks.put(key, future);
     }
@@ -583,7 +620,7 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                            username, privateRoom, masterRoom, appId, guestIdentity, guestPhone);
                 server.getRoomOperations(privateRoom).sendEvent("user_joined", username);
 
-                scheduleWelcomeIfGuestSilent(appId, guestIdentity, guestPhone);
+                triggerWelcomeOnGuestJoin(appId, guestIdentity, guestPhone);
             } else if (userId != null && !userId.isEmpty()) {
                 // Authenticated user joins app room (can chat with other users)
                 String appRoom = "app:" + appId;

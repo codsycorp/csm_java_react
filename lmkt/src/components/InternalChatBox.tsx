@@ -33,7 +33,6 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
   const { 
     messages: allMessages, 
     sendMessage: sendMessageContext, 
-    loadHistory, 
     markAsRead, 
     unreadCounts,
     connected,
@@ -66,14 +65,13 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
   useEffect(() => {
     if (visible) {
       openChatContext(roomKey);
-      loadHistory(roomKey, isGuest ? effectiveGuestSessionId : username);
     }
     return () => {
       if (visible) {
         closeChatContext(roomKey);
       }
     };
-  }, [visible, roomKey, isGuest, effectiveGuestSessionId, username, openChatContext, closeChatContext, loadHistory]);
+  }, [visible, roomKey, openChatContext, closeChatContext]);
 
   const handleMouseDown = (e: React.MouseEvent) => {
     setIsDragging(true);
@@ -130,13 +128,6 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
       }
     });
   }, [messages]);
-
-  // Mark as read khi chat box mở
-  useEffect(() => {
-    if (visible) {
-      markAsRead(roomKey);
-    }
-  }, [visible, roomKey, markAsRead]);
 
   // Handle input with typing indicator
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {

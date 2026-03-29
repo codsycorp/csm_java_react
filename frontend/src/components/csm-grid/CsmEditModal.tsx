@@ -22,6 +22,7 @@ import CsmDynamicGrid from "./CsmDynamicGrid";
 import { useAppStore } from "#src/store/app";
 import { usePermissionStore } from "#src/store";
 import { getTableData } from "./CsmApi";
+import { normalizeComboOptions } from "./combo-utils";
 
 // Helper: safeEval for trigger execution (same as CsmDynamicGrid)
 // CRITICAL: Handle both side-effect triggers (alert, console.log) and return-value triggers
@@ -699,6 +700,52 @@ const { TextArea } = Input;
 
 export type Row = Record<string, any>;
 
+type SelectOption = {
+  label: React.ReactNode;
+  value: any;
+};
+
+function buildSelectOptions(
+  rawOptions: { label: string; value: any }[] | undefined,
+  enumObj: Record<string, { text: string }> | undefined,
+  localizeLabel?: (value: unknown) => string
+): SelectOption[] {
+  const options = rawOptions
+    ? rawOptions
+    : enumObj
+      ? Object.entries(enumObj).map(([value, enumValue]) => ({
+          label: (enumValue as { text: string }).text,
+          value,
+        }))
+      : [];
+
+  const normalized = normalizeComboOptions(options);
+
+  return normalized.map((opt) => ({
+    value: opt.value,
+    label: localizeLabel ? localizeLabel(opt.label) : opt.label,
+  }));
+}
+
+function normalizeSelectValue(value: any, options: SelectOption[]): any {
+  if (value == null || value === "") return value;
+
+  const normalizeOne = (input: any) => {
+    const directMatch = options.find((option) => option.value === input);
+    if (directMatch) return directMatch.value;
+
+    const inputText = String(input).trim();
+    const looseMatch = options.find((option) => String(option.value).trim() === inputText);
+    return looseMatch ? looseMatch.value : input;
+  };
+
+  if (Array.isArray(value)) {
+    return value.map(normalizeOne);
+  }
+
+  return normalizeOne(value);
+}
+
 // Key-value editor for JSON fields
 function JSONKeyValueEditor({ name, form }: { name: string; form: any }) {
   const getPairs = useCallback(() => {
@@ -1359,34 +1406,12 @@ function getFieldComponent(
   
   // Kiểu Select/CBO (combobox) - kiểm tra indexOf('co') như Vue (line 245, 565, 796...)
   if (types.indexOf('co') !== -1) {
-    // Ưu tiên dùng selectOptions (giữ nguyên kiểu value), fallback valueEnum
     const rawOptions = selectOptions?.[key];
     const enumObj = selectEnums?.[key];
-    
-    // console.log(`[CsmEditModal] Building select options for ${key}:`, {
-    //   types: f.f_types,
-    //   hasRawOptions: !!rawOptions,
-    //   hasEnumObj: !!enumObj,
-    //   rawOptions,
-    //   enumObj
-    // });
-    
-    const options = rawOptions
-      ? rawOptions
-      : enumObj
-        ? Object.entries(enumObj).map(([value, enumValue]) => ({
-            label: (enumValue as { text: string }).text,
-            value: value
-          }))
-        : [];
-    const localizedOptions = options.map((opt: any) => ({
-      ...opt,
-      label: localizeLabel(opt?.label),
-    }));
-    
-    // console.log(`[CsmEditModal] Final options for ${key}:`, options);
-    
-    const selectValue = form.getFieldValue(key) ?? initialVal;
+    const localizedOptions = buildSelectOptions(rawOptions, enumObj, localizeLabel);
+    const rawSelectValue = form.getFieldValue(key) ?? initialVal;
+    const selectValue = normalizeSelectValue(rawSelectValue, localizedOptions);
+
     return <Form.Item key={key} name={key} label={f.f_header} initialValue={initialVal}>
       <Select 
         style={{ width: '100%' }} 
@@ -1727,6 +1752,18 @@ export function CsmEditModal({
             convertedValues[key] = Array.from(new Set(merged));
           }
         }
+
+        if (types.indexOf('co') !== -1) {
+          const normalizedOptions = buildSelectOptions(
+            selectOptions?.[key],
+            selectEnums?.[key],
+            (label) => {
+              const text = String(label == null ? '' : label);
+              return text.includes('.') ? t(text) : text;
+            }
+          );
+          convertedValues[key] = normalizeSelectValue(convertedValues[key], normalizedOptions);
+        }
       });
       
       // Parse JSON for detail grid fields (master-detail nodes)
@@ -1767,7 +1804,7 @@ export function CsmEditModal({
     } else {
       // ...existing code...
     }
-  }, [form, open, record, dynamicFields]);
+  }, [form, open, record, dynamicFields, selectEnums, selectOptions, t]);
 
   // Phân loại field: đa ngôn ngữ & chung
   const langs = ['vi', 'en', 'zh'];
@@ -2274,15 +2311,11 @@ export function CsmEditModal({
                     if (types.indexOf('co') !== -1) {
                       const rawOptions = selectOptions?.[actualFieldName];
                       const enumObj = selectEnums?.[actualFieldName];
-                      const options = rawOptions
-                        ? rawOptions
-                        : enumObj
-                          ? Object.entries(enumObj).map(([value, enumValue]) => ({
-                              label: (enumValue as { text: string }).text,
-                              value: value
-                            }))
-                          : [];
-                      const selectValue = form.getFieldValue(actualFieldName) ?? fieldValue;
+                      const options = buildSelectOptions(rawOptions, enumObj);
+                      const selectValue = normalizeSelectValue(
+                        form.getFieldValue(actualFieldName) ?? fieldValue,
+                        options
+                      );
                       return (
                         <Form.Item key={actualFieldName} name={actualFieldName} label={field.f_header}>
                           <Select
@@ -2293,7 +2326,7 @@ export function CsmEditModal({
                             value={selectValue}
                             onChange={val => form.setFieldsValue({ [actualFieldName]: val })}
                             filterOption={(input, option) =>
-                              (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
+                              String(option?.label ?? '').toLowerCase().includes(input.toLowerCase())
                             }
                           />
                         </Form.Item>

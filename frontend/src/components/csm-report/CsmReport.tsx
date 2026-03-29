@@ -13,6 +13,7 @@ import html2pdf from "html2pdf.js";
 
 import { csmDecrypt } from "../csm-grid/CsmCrypto";
 import { getTableData, type Where } from "../csm-grid/CsmApi";
+import { normalizeComboOptions, parseStaticComboQuery } from "../csm-grid/combo-utils";
 import { useAppStore } from "#src/store";
 import LunarCalendar from "#src/utils/lunarCalendar";
 import DateUtils from "#src/utils/dateUtils";
@@ -111,44 +112,55 @@ export default function CsmReport({ appId, m_configs, decrypt }: CsmReportProps)
     setOptionsSelect(prev => ({ ...prev, [key]: { options: [] } }));
     if (!f_cbo_query) return;
 
-    // Decrypt first if needed (like CsmDynamicGrid)
-    const body = (f_cbo_query.indexOf("return ") === -1 ? "return " : "") + f_cbo_query;
-    let code = body;
+    let resolvedQuery = String(f_cbo_query);
     if (decrypt) {
       try {
-        const dec = decrypt(body);
-        if (dec) code = dec;
+        const dec = decrypt(resolvedQuery);
+        if (dec) resolvedQuery = dec;
       } catch (err) {
         console.warn("Decrypt error:", err);
       }
     }
 
-    // Eval with proper context (like CsmDynamicGrid)
-    const fn = safeEval(["seft", "data"], code);
-    if (!fn) {
-      console.warn("Failed to eval f_cbo_query for", f_name);
-      return;
-    }
-
     try {
-      const objQa: any = fn({ m_configs }, databaseRef.current) || {};
+      let objQa: any = null;
+      const staticParsed = parseStaticComboQuery(resolvedQuery);
+
+      if (staticParsed) {
+        if (Array.isArray(staticParsed)) {
+          objQa = { options: staticParsed, query: [] };
+        } else if (staticParsed && typeof staticParsed === "object") {
+          if (Array.isArray(staticParsed.options) || Array.isArray(staticParsed.query)) {
+            objQa = staticParsed;
+          } else {
+            objQa = {
+              options: Object.entries(staticParsed).map(([ma, ten]) => ({ ma, ten })),
+              query: [],
+            };
+          }
+        }
+      }
+
+      if (!objQa) {
+        const codeBody = resolvedQuery.includes("return ") ? resolvedQuery : `return (${resolvedQuery})`;
+        const fn = safeEval(["seft", "data"], codeBody);
+        if (!fn) {
+          console.warn("Failed to eval f_cbo_query for", f_name);
+          return;
+        }
+        objQa = fn({ m_configs }, databaseRef.current) || {};
+      }
       
       // Skip grid select
       if (objQa.hasOwnProperty("f_grid") && objQa.hasOwnProperty("f_grid_fields")) {
         setOptions(tb_name, f_name, objQa);
         return;
       }
-      
-      // Must have options and query
-      if (!objQa.hasOwnProperty("options") || !objQa.hasOwnProperty("query")) {
-        console.warn("Invalid objQa for", f_name, objQa);
-        return;
-      }
 
       let options: any[] = [];
 
       // Case 1: query API get-table-data (like CsmDynamicGrid)
-      if (Array.isArray(objQa.query) && objQa.query.length === 1) {
+      if (Array.isArray(objQa.query) && objQa.query.length > 0) {
         const queryItem = objQa.query[0];
         const obj_name = queryItem.obj_name || "";
         const fieldsQ = queryItem.fields || [];
@@ -213,7 +225,14 @@ export default function CsmReport({ appId, m_configs, decrypt }: CsmReportProps)
 
       // Case 2: static options
       if (options.length === 0 && Array.isArray(objQa.options) && objQa.options.length > 0) {
-        options = objQa.options;
+        options = normalizeComboOptions(objQa.options).map((item) => ({ ma: item.value, ten: item.label }));
+      }
+
+      if (options.length === 0 && objQa && typeof objQa === "object" && !Array.isArray(objQa)) {
+        const keyValues = Object.entries(objQa)
+          .filter(([k]) => k !== "query" && k !== "options")
+          .map(([ma, ten]) => ({ ma, ten }));
+        options = normalizeComboOptions(keyValues).map((item) => ({ ma: item.value, ten: item.label }));
       }
 
       if (options.length === 0) {
@@ -222,7 +241,9 @@ export default function CsmReport({ appId, m_configs, decrypt }: CsmReportProps)
       }
 
       // Sort and set
-      const sorted = [...options].sort((a: any, b: any) => {
+      const sorted = normalizeComboOptions(options)
+        .map((item) => ({ ma: item.value, ten: item.label }))
+        .sort((a: any, b: any) => {
         const aText = String(a.ten || a.label || "");
         const bText = String(b.ten || b.label || "");
         return aText.localeCompare(bText);
@@ -288,19 +309,17 @@ export default function CsmReport({ appId, m_configs, decrypt }: CsmReportProps)
     }
     if (types.includes("co")) {
       const opt = optionsSelect[getKey(tableName, name)] || { options: [] };
+      const normalizedOptions = normalizeComboOptions(opt.options || []);
       return (
         <Form.Item key={name} name={name.toLowerCase()} label={label}>
           <Select
             style={{ width }}
             allowClear
             showSearch
-            optionFilterProp="children"
+            optionFilterProp="label"
             placeholder={`Chọn ${label}`}
-          >
-            {(opt.options || []).map((o: Option) => (
-              <Select.Option key={String(o.ma)} value={o.ma}>{o.ten}</Select.Option>
-            ))}
-          </Select>
+            options={normalizedOptions.map((o) => ({ value: o.value, label: o.label }))}
+          />
         </Form.Item>
       );
     }

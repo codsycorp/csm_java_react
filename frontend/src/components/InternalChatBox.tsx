@@ -123,14 +123,13 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
   useEffect(() => {
     if (visible) {
       openChatContext(roomKey);
-      loadHistory(roomKey, isGuest ? (effectiveGuestSessionId || effectiveGuestPhone || storedGuestPhone) : roomKey);
     }
     return () => {
       if (visible) {
         closeChatContext(roomKey);
       }
     };
-  }, [visible, roomKey, isGuest, effectiveGuestSessionId, effectiveGuestPhone, storedGuestPhone, openChatContext, closeChatContext, loadHistory]);
+  }, [visible, roomKey, openChatContext, closeChatContext]);
 
   const handleMouseDown = (e: React.MouseEvent) => {
     setIsDragging(true);

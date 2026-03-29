@@ -59,6 +59,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
   const [typingUsers, setTypingUsers] = useState<Record<string, string[]>>({});
   const [activeChats, setActiveChats] = useState<string[]>([]);
   const [isInitialized, setIsInitialized] = useState(false);
+  const isInitializingRef = useRef(false);
   
   const { socket, connected } = useSocket();
   const user = useUserStore();
@@ -151,7 +152,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
     // LMKT: Only guest mode - load chat history for guest
     try {
       // In lmkt, only guest mode exists - always use loadGuestChatHistory
-      const phone = guestPhoneOverride || guestIdentity || ensureGuestSessionId();
+      const phone = guestIdentityOverride || guestIdentity || ensureGuestSessionId();
       
       if (!phone) {
         console.log('📥 [ChatHistory] Guest phone not available yet, skipping history load');
@@ -476,6 +477,10 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
   // Load initial history khi connect - LMKT: Guest only
   useEffect(() => {
     if (connected && appId && guestIdentity && !isInitialized) {
+      if (isInitializingRef.current) {
+        return;
+      }
+      isInitializingRef.current = true;
       const initializeChat = async () => {
         try {
           // LMKT: Only guest mode - restore chat history + unread from localStorage
@@ -494,6 +499,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
         } catch (error) {
           console.warn('Failed to initialize chat:', error);
         } finally {
+          isInitializingRef.current = false;
           setIsInitialized(true);
         }
       };

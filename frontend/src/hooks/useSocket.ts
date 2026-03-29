@@ -29,6 +29,185 @@ interface UseSocketOptions {
 	onUpdate?: (event: SocketUpdateEvent) => void;
 }
 
+let sharedSocket: LegacySocket | null = null;
+let sharedSocketUrl = "";
+let sharedSocketRefCount = 0;
+let sharedConnected = false;
+let sharedHadConnectionIssue = false;
+const connectedSubscribers = new Set<(connected: boolean) => void>();
+const updateSubscribers = new Set<(event: SocketUpdateEvent) => void>();
+
+function notifyConnected(connected: boolean) {
+	sharedConnected = connected;
+	connectedSubscribers.forEach((listener) => {
+		try {
+			listener(connected);
+		} catch {
+			// Ignore listener errors to keep manager stable
+		}
+	});
+}
+
+function processSocketUpdate(data: SocketUpdateEvent) {
+	const userAppId = (useUserStore.getState().app_id || "").trim();
+	const currentAppId = (useAppStore.getState().currentAppId || "").trim();
+	const fallbackAppId = (useAppStore.getState().getCurrentAppId() || "").trim();
+	const activeAppId = userAppId || currentAppId || fallbackAppId;
+
+	const isSystemTable = data.table?.startsWith('sys_') || data.table?.startsWith('csm_') || data.table?.startsWith('wu_');
+	const belongsToCurrentApp = data.appId === activeAppId;
+
+	if (isSystemTable || belongsToCurrentApp) {
+		if (data.table) {
+			const currentTableData = useAppStore.getState().database[data.table];
+			const inferredPkFields = Object.keys(data.primaryKeys || {}).filter(Boolean);
+			const tableSnapshot = currentTableData || {
+				id: data.table,
+				rows: [],
+				fieldsPK: inferredPkFields.length ? inferredPkFields : ['id'],
+				app_id: data.appId,
+			};
+			const pkFields = tableSnapshot.fieldsPK || ['id'];
+			let updatedRows = [...(tableSnapshot.rows || [])];
+
+			const getRowId = (row: Record<string, any> | undefined | null) => {
+				if (!row) return null;
+				const id = row.id;
+				return id !== undefined && id !== null ? String(id) : null;
+			};
+
+			const getPkValues = (row: Record<string, any> | undefined | null) => {
+				if (!row) return null;
+				const values: Record<string, any> = {};
+				pkFields.forEach((pk) => {
+					if (row[pk] !== undefined) {
+						values[pk] = row[pk];
+					}
+				});
+				return Object.keys(values).length ? values : null;
+			};
+
+			const primaryKeyMatch = (row: Record<string, any>, pkValues: Record<string, any> | null) => {
+				if (!pkValues) return false;
+				return pkFields.every((pk) => row[pk] === pkValues[pk]);
+			};
+
+			const eventRowId = getRowId(data.dataRow) ?? (data.primaryKeys?.id != null ? String(data.primaryKeys.id) : null);
+			const eventPkValues = data.primaryKeys || getPkValues(data.dataRow);
+			const findIndexById = () => (eventRowId ? updatedRows.findIndex((r) => getRowId(r) === eventRowId) : -1);
+
+			if (data.action === 'create') {
+				if (data.dataRow) {
+					const idxById = findIndexById();
+					if (idxById === -1) {
+						updatedRows.push(data.dataRow);
+					} else {
+						updatedRows[idxById] = { ...updatedRows[idxById], ...data.dataRow };
+					}
+				}
+			} else if (data.action === 'update') {
+				if (data.dataRow) {
+					const idxById = findIndexById();
+					if (idxById !== -1) {
+						updatedRows[idxById] = { ...updatedRows[idxById], ...data.dataRow };
+					} else if (eventPkValues) {
+						const idxByPk = updatedRows.findIndex((row) => primaryKeyMatch(row, eventPkValues));
+						if (idxByPk !== -1) {
+							updatedRows[idxByPk] = { ...updatedRows[idxByPk], ...data.dataRow };
+						} else {
+							updatedRows.push(data.dataRow);
+						}
+					} else {
+						updatedRows.push(data.dataRow);
+					}
+				}
+			} else if (data.action === 'delete') {
+				if (eventRowId) {
+					updatedRows = updatedRows.filter((row) => getRowId(row) !== eventRowId);
+				} else if (eventPkValues) {
+					updatedRows = updatedRows.filter((row) => !primaryKeyMatch(row, eventPkValues));
+				}
+			}
+
+			useAppStore.getState().setTableData(data.table, {
+				...tableSnapshot,
+				rows: updatedRows,
+			});
+		}
+	}
+
+	updateSubscribers.forEach((listener) => {
+		try {
+			listener(data);
+		} catch {
+			// Ignore listener errors
+		}
+	});
+}
+
+function ensureSharedSocket(apiUrl: string) {
+	if (sharedSocket && sharedSocketUrl === apiUrl) {
+		return sharedSocket;
+	}
+
+	if (sharedSocket && sharedSocketUrl !== apiUrl) {
+		try {
+			sharedSocket.disconnect();
+		} catch {
+			// ignore
+		}
+		sharedSocket = null;
+		sharedSocketUrl = "";
+		notifyConnected(false);
+	}
+
+	const socket = io(apiUrl, {
+		transports: ["websocket", "polling"],
+		reconnection: true,
+		reconnectionDelay: 1000,
+		reconnectionDelayMax: 5000,
+		reconnectionAttempts: Number.MAX_SAFE_INTEGER,
+	});
+
+	sharedSocket = socket;
+	sharedSocketUrl = apiUrl;
+
+	socket.on("connect", () => {
+		if (sharedHadConnectionIssue) {
+			console.clear();
+			console.info('[Socket] Reconnected successfully. Cleared previous connection logs.');
+			sharedHadConnectionIssue = false;
+		}
+		notifyConnected(true);
+	});
+
+	socket.on("disconnect", () => {
+		sharedHadConnectionIssue = true;
+		notifyConnected(false);
+	});
+
+	socket.on("connect_error", (error) => {
+		sharedHadConnectionIssue = true;
+		console.error('[Socket] Connection error:', error);
+	});
+
+	const manager = (socket as any).io;
+	if (manager?.on) {
+		manager.on('reconnect_attempt', () => {
+			sharedHadConnectionIssue = true;
+		});
+		manager.on('reconnect_failed', () => {
+			sharedHadConnectionIssue = true;
+		});
+	}
+
+	socket.on("csm_msg_update", (data: SocketUpdateEvent) => {
+		processSocketUpdate(data);
+	});
+
+	return socket;
+}
+
 export function useSocket(options: UseSocketOptions = {}) {
 	const { enabled = true, onUpdate } = options;
 	const socketRef = useRef<LegacySocket | null>(null);
@@ -41,173 +220,55 @@ export function useSocket(options: UseSocketOptions = {}) {
 		|| useAppStore.getState().getCurrentAppId();
 	const isAdmin = useUserStore((state) => !!state.roles?.includes("admin") || !!state.dev);
 
-	// Keep latest onUpdate without recreating socket listeners
-	const onUpdateRef = useRef<typeof onUpdate>();
-	useEffect(() => { onUpdateRef.current = onUpdate; }, [onUpdate]);
 	useEffect(() => {
 		const envRealtimeUrl = import.meta.env.VITE_REALTIME_BASE_URL;
 		const apiUrl = envRealtimeUrl?.trim().replace(/\/$/, "");
-		console.log(`[Socket] 🔌 useSocket init - enabled: ${enabled}, apiUrl: ${apiUrl}, appId: ${appId}`);
 		
 		if (!enabled || !apiUrl) {
-			console.log(`[Socket] ⛔ Socket disabled or no apiUrl`);
-			return;
-		}
-
-		if (socketRef.current) {
-			console.log(`[Socket] ⚠️ Socket already exists, skipping reconnection`);
-			return;
-		}
-
-		console.log(`[Socket] 🔗 Creating new socket connection to ${apiUrl}`);
-		const socket = io(apiUrl, {
-			transports: ["websocket", "polling"],
-			reconnection: true,
-			reconnectionDelay: 1000,
-			reconnectionDelayMax: 5000,
-			reconnectionAttempts: 5,
-		});
-
-		socketRef.current = socket;
-
-		socket.on("connect", () => {
-			console.log(`[Socket] ✅ Connected! Socket ID: ${socket.id}`);
-			setConnected(true);
-			if (appId) {
-				socket.emit("join_room", appId);
-				console.log(`[Socket] 📍 Attempting to join room: ${appId}`);
-			}
-			if (isAdmin) {
-				socket.emit("join_room", "csm");
-				console.log(`[Socket] 👑 Admin/Dev detected. Joining admin room 'csm'.`);
-			}
-		});
-
-		socket.on("disconnect", (reason) => {
 			setConnected(false);
-		});
+			return;
+		}
 
-		socket.on("connect_error", (error) => {
-			console.error('[Socket] Connection error:', error);
-		});
+		const handleConnectedChange = (value: boolean) => {
+			setConnected(value);
+		};
 
-		console.log('[Socket] 🔧 Registering csm_msg_update listener');
-		socket.on("csm_msg_update", (data: SocketUpdateEvent) => {
-			console.log('[Socket Global] 🎯 Received update:', data);
-			
-			// 🔥 CRITICAL: Accept updates for all tables - system tables (sys_, csm_, wu_) and app-specific tables
-			// The store's setTableData() will only update if the table exists in currentTableData
-			const isSystemTable = data.table?.startsWith('sys_') || data.table?.startsWith('csm_') || data.table?.startsWith('wu_');
-			const belongsToCurrentApp = data.appId === appId;
-			const shouldProcess = isSystemTable || belongsToCurrentApp;
-			
-			if (!shouldProcess) {
-				console.log(`[Socket Global] ⏭️ Skipping update: table '${data.table}' belongs to app '${data.appId}', current app is '${appId}'`);
-				return;
-			}
-			
-			console.log(`[Socket Global] ✅ Processing update for ${isSystemTable ? 'system table' : 'app table'} '${data.table}'`);
-			
-			if (data.table) {
-				const currentTableData = useAppStore.getState().database[data.table];
-				const inferredPkFields = Object.keys(data.primaryKeys || {}).filter(Boolean);
-				const tableSnapshot = currentTableData || {
-					id: data.table,
-					rows: [],
-					fieldsPK: inferredPkFields.length ? inferredPkFields : ['id'],
-					app_id: data.appId,
-				};
-				const pkFields = tableSnapshot.fieldsPK || ['id'];
-				let updatedRows = [...(tableSnapshot.rows || [])];
+		connectedSubscribers.add(handleConnectedChange);
+		if (onUpdate) {
+			updateSubscribers.add(onUpdate);
+		}
 
-				const getRowId = (row: Record<string, any> | undefined | null) => {
-					if (!row) return null;
-					const id = row.id;
-					return id !== undefined && id !== null ? String(id) : null;
-				};
-
-				const getPkValues = (row: Record<string, any> | undefined | null) => {
-					if (!row) return null;
-					const values: Record<string, any> = {};
-					pkFields.forEach(pk => {
-						if (row[pk] !== undefined) {
-							values[pk] = row[pk];
-						}
-					});
-					return Object.keys(values).length ? values : null;
-				};
-
-				const primaryKeyMatch = (row: Record<string, any>, pkValues: Record<string, any> | null) => {
-					if (!pkValues) return false;
-					return pkFields.every(pk => row[pk] === pkValues[pk]);
-				};
-
-				const eventRowId = getRowId(data.dataRow) ?? (data.primaryKeys?.id != null ? String(data.primaryKeys.id) : null);
-				const eventPkValues = data.primaryKeys || getPkValues(data.dataRow);
-				const findIndexById = () => (eventRowId ? updatedRows.findIndex(r => getRowId(r) === eventRowId) : -1);
-
-				if (data.action === 'create') {
-					if (data.dataRow) {
-						const idxById = findIndexById();
-						if (idxById === -1) {
-							updatedRows.push(data.dataRow);
-							console.log(`[Socket Global] ✅ Inserted row to ${data.table}`);
-						} else {
-							updatedRows[idxById] = { ...updatedRows[idxById], ...data.dataRow };
-							console.log(`[Socket Global] ✅ Merged row in ${data.table} (create->merge)`);
-						}
-					}
-				} else if (data.action === 'update') {
-					if (data.dataRow) {
-						const idxById = findIndexById();
-						if (idxById !== -1) {
-							updatedRows[idxById] = { ...updatedRows[idxById], ...data.dataRow };
-							console.log(`[Socket Global] ✅ Updated row in ${data.table} by id`);
-						} else if (eventPkValues) {
-							const idxByPk = updatedRows.findIndex(row => primaryKeyMatch(row, eventPkValues));
-							if (idxByPk !== -1) {
-								updatedRows[idxByPk] = { ...updatedRows[idxByPk], ...data.dataRow };
-								console.log(`[Socket Global] ✅ Updated row in ${data.table} by pk`);
-							} else {
-								updatedRows.push(data.dataRow);
-								console.log(`[Socket Global] ✅ Inserted row to ${data.table} (update fallback)`);
-							}
-						} else {
-							updatedRows.push(data.dataRow);
-							console.log(`[Socket Global] ✅ Inserted row to ${data.table} (update fallback no keys)`);
-						}
-					}
-				} else if (data.action === 'delete') {
-					if (eventRowId) {
-						updatedRows = updatedRows.filter(row => getRowId(row) !== eventRowId);
-						console.log(`[Socket Global] ✅ Deleted row from ${data.table} by id`);
-					} else if (eventPkValues) {
-						updatedRows = updatedRows.filter(row => !primaryKeyMatch(row, eventPkValues));
-						console.log(`[Socket Global] ✅ Deleted row from ${data.table} by pk`);
-					}
-				}
-
-				useAppStore.getState().setTableData(data.table, {
-					...tableSnapshot,
-					rows: updatedRows
-				});
-				console.log(`[Socket Global] ✅ Global database updated for ${data.table}, ${updatedRows.length} rows`);
-			}
-			
-			onUpdateRef.current?.(data);
-		});
+		const socket = ensureSharedSocket(apiUrl);
+		socketRef.current = socket;
+		sharedSocketRefCount += 1;
+		setConnected(sharedConnected);
 
 		return () => {
-			try { socket.disconnect(); } catch {}
+			connectedSubscribers.delete(handleConnectedChange);
+			if (onUpdate) {
+				updateSubscribers.delete(onUpdate);
+			}
+
+			sharedSocketRefCount = Math.max(0, sharedSocketRefCount - 1);
+			if (sharedSocketRefCount === 0 && sharedSocket) {
+				try {
+					sharedSocket.disconnect();
+				} catch {
+					// ignore
+				}
+				sharedSocket = null;
+				sharedSocketUrl = "";
+				notifyConnected(false);
+			}
 			socketRef.current = null;
 		};
-	}, [enabled, isAdmin, appId]);
+	}, [enabled, onUpdate]);
 
 	const lastJoinedRoomRef = useRef<string | null>(null);
 	useEffect(() => {
 		if (!enabled) return;
 		if (!appId) return;
-		const socket = socketRef.current;
+		const socket = socketRef.current || sharedSocket;
 		if (!socket) return;
 		if (lastJoinedRoomRef.current === appId) return;
 		socket.emit("join_room", appId);
@@ -218,7 +279,7 @@ export function useSocket(options: UseSocketOptions = {}) {
 	}, [enabled, appId, isAdmin]);
 
 	return {
-		socket: socketRef.current,
+		socket: socketRef.current || sharedSocket,
 		connected,
 	};
 }

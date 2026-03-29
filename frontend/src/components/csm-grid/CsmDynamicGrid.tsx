@@ -14,6 +14,7 @@ import { read, utils } from "xlsx";
 import { useAppStore } from "#src/store/app";
 import { useUserStore } from "#src/store/user";
 import { PERMISSION_BITS, hasAnyPermissionBit, hasPermissionBit, parseMenuBitIndex, toPermissionBigInt } from "#src/utils/permission-bitfield";
+import dayjs from "dayjs";
 
 // Minimal types (kept local to avoid wider type churn)
 type Row = Record<string, any>;
@@ -131,6 +132,148 @@ function safeEval<TArgs extends any[], TReturn>(args: string[], body: string): (
 		console.error("[safeEval] Body (first 500 chars):", body.substring(0, 500));
 		return null;
 	}
+}
+
+function buildInlineValidationRules(field: TableField): any[] {
+	const types = String(field.f_types || "").toLowerCase();
+	const tokens = types.split(/[\s,;|]+/).filter(Boolean);
+	const key = String(field.f_name || "").toLowerCase();
+	const rules: any[] = [];
+
+	const isRequired = tokens.includes("rq") || tokens.includes("required") || tokens.includes("notnull") || tokens.includes("nn");
+	const isNumber = /price|number|int|float|double|money|currency/.test(types);
+	const isDate = /^date$/.test(types);
+	const isDateTime = /datetime/.test(types);
+	const isTime = /^time$/.test(types);
+	const isEmail = tokens.includes("email") || key.includes("email");
+	const isPhone = tokens.includes("phone") || tokens.includes("mobile") || tokens.includes("tel") || key.includes("phone") || key.includes("mobile") || key.includes("tel");
+
+	if (isRequired) {
+		rules.push({
+			required: true,
+			message: `${field.f_header || field.f_name} là bắt buộc`,
+		});
+	}
+
+	if (isNumber) {
+		rules.push({
+			validator: (_: any, value: any) => {
+				if (value == null || value === "") return Promise.resolve();
+				const parsed = typeof value === "number" ? value : Number(String(value).replace(/,/g, "").trim());
+				if (Number.isNaN(parsed)) return Promise.reject(new Error(`${field.f_header || field.f_name} phải là số`));
+				return Promise.resolve();
+			},
+		});
+
+		const minRaw = Number((field as any).f_min ?? (field as any).min);
+		const maxRaw = Number((field as any).f_max ?? (field as any).max);
+		if (Number.isFinite(minRaw)) {
+			rules.push({
+				validator: (_: any, value: any) => {
+					if (value == null || value === "") return Promise.resolve();
+					const parsed = typeof value === "number" ? value : Number(String(value).replace(/,/g, "").trim());
+					if (Number.isNaN(parsed) || parsed < minRaw) {
+						return Promise.reject(new Error(`${field.f_header || field.f_name} phải >= ${minRaw}`));
+					}
+					return Promise.resolve();
+				},
+			});
+		}
+		if (Number.isFinite(maxRaw)) {
+			rules.push({
+				validator: (_: any, value: any) => {
+					if (value == null || value === "") return Promise.resolve();
+					const parsed = typeof value === "number" ? value : Number(String(value).replace(/,/g, "").trim());
+					if (Number.isNaN(parsed) || parsed > maxRaw) {
+						return Promise.reject(new Error(`${field.f_header || field.f_name} phải <= ${maxRaw}`));
+					}
+					return Promise.resolve();
+				},
+			});
+		}
+	}
+
+	if (isEmail) {
+		rules.push({
+			validator: (_: any, value: any) => {
+				if (value == null || value === "") return Promise.resolve();
+				return validateEmail(String(value).trim())
+					? Promise.resolve()
+					: Promise.reject(new Error(`${field.f_header || field.f_name} không đúng định dạng email`));
+			},
+		});
+	}
+
+	if (isPhone) {
+		rules.push({
+			validator: (_: any, value: any) => {
+				if (value == null || value === "") return Promise.resolve();
+				return validatePhone(String(value).trim())
+					? Promise.resolve()
+					: Promise.reject(new Error(`${field.f_header || field.f_name} không đúng định dạng số điện thoại`));
+			},
+		});
+	}
+
+	const maxLenRaw = Number((field as any).f_len ?? (field as any).maxlength ?? (field as any).max_length);
+	if (Number.isFinite(maxLenRaw) && maxLenRaw > 0 && !isNumber && !isDate && !isDateTime && !isTime) {
+		rules.push({
+			max: maxLenRaw,
+			message: `${field.f_header || field.f_name} tối đa ${maxLenRaw} ký tự`,
+		});
+	}
+
+	return rules;
+}
+
+function normalizeInlineRowValues(input: Row, fields: TableField[]): Row {
+	const normalized: Row = { ...input };
+
+	fields.forEach((field) => {
+		const key = field.f_name;
+		if (!(key in normalized)) return;
+
+		const raw = normalized[key];
+		const types = String(field.f_types || "").toLowerCase();
+		const isNumber = /price|number|int|float|double|money|currency/.test(types);
+		const isDate = /^date$/.test(types);
+		const isDateTime = /datetime/.test(types);
+		const isTime = /^time$/.test(types);
+
+		if (dayjs.isDayjs(raw)) {
+			if (isDate) {
+				normalized[key] = raw.format("YYYY-MM-DD");
+				return;
+			}
+			if (isTime) {
+				normalized[key] = raw.format("HH:mm:ss");
+				return;
+			}
+			if (isDateTime) {
+				normalized[key] = raw.toISOString();
+				return;
+			}
+		}
+
+		if (isNumber) {
+			if (raw === "") {
+				normalized[key] = null;
+				return;
+			}
+			if (typeof raw === "string") {
+				const parsed = Number(raw.replace(/,/g, "").trim());
+				if (!Number.isNaN(parsed)) {
+					normalized[key] = parsed;
+				}
+			}
+		}
+
+		if (/img|image|avatar|cover|album|images|gallery/.test(types) && Array.isArray(raw)) {
+			normalized[key] = JSON.stringify(raw);
+		}
+	});
+
+	return normalized;
 }
 
 export function CsmDynamicGrid({
@@ -1548,6 +1691,60 @@ export function CsmDynamicGrid({
 
 				// Enable editing for this column
 				col.editable = () => true;
+
+				const validationRules = buildInlineValidationRules(field);
+				if (validationRules.length > 0) {
+					col.formItemProps = () => ({ rules: validationRules });
+				}
+
+				const minRaw = Number((field as any).f_min ?? (field as any).min);
+				const maxRaw = Number((field as any).f_max ?? (field as any).max);
+				const decimals = Number((field as any).f_dec ?? 0);
+				const typeTokens = types.split(/[\s,;|]+/).filter(Boolean);
+				const isNumberField = /price|number|int|float|double|money|currency/.test(types);
+				const isSelectField = typeTokens.includes('co') || /cbo|select/.test(types);
+				const isDateField = /^date$/.test(types);
+				const isDateTimeField = /datetime/.test(types);
+				const isTimeField = /^time$/.test(types);
+
+				if (isNumberField) {
+					col.fieldProps = {
+						...(col.fieldProps as Record<string, any> || {}),
+						precision: Number.isFinite(decimals) && decimals > 0 ? decimals : 0,
+						...(Number.isFinite(minRaw) ? { min: minRaw } : {}),
+						...(Number.isFinite(maxRaw) ? { max: maxRaw } : {}),
+					};
+				}
+
+				if (isSelectField) {
+					col.fieldProps = {
+						...(col.fieldProps as Record<string, any> || {}),
+						showSearch: true,
+						allowClear: true,
+						optionFilterProp: "label",
+					};
+				}
+
+				if (isDateField) {
+					col.fieldProps = {
+						...(col.fieldProps as Record<string, any> || {}),
+						format: "DD/MM/YYYY",
+					};
+				}
+
+				if (isDateTimeField) {
+					col.fieldProps = {
+						...(col.fieldProps as Record<string, any> || {}),
+						format: "DD/MM/YYYY HH:mm:ss",
+					};
+				}
+
+				if (isTimeField) {
+					col.fieldProps = {
+						...(col.fieldProps as Record<string, any> || {}),
+						format: "HH:mm:ss",
+					};
+				}
 			});
 		}
 		
@@ -2341,16 +2538,19 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 					let oldRow: Row | undefined = data.find((row: Row) => getRowKey(row) === String(rowKey));
 					
 					const safeNewData = oldRow?.id && newData.id == null ? { ...newData, id: oldRow.id } : newData;
+					const normalizedInput = normalizeInlineRowValues(safeNewData, m_configs.table || []);
 					
 					// Detail grid: chỉ update local state, KHÔNG gọi API
 					// Giống Vue: detail grid chỉ lưu khi master save
 					if (isDetailGrid) {
 						// Run UPDATE trigger TRƯỚC KHI save (Vue compatibility)
-						const updatedDataFromTrigger = runUpdateTrigger(safeNewData);
-						const processedData = await runBeforeSaveTrigger(updatedDataFromTrigger);
+						const updatedDataFromTrigger = runUpdateTrigger(normalizedInput);
+						const triggerNormalized = normalizeInlineRowValues(updatedDataFromTrigger, m_configs.table || []);
+						const processedData = await runBeforeSaveTrigger(triggerNormalized);
 						if (processedData === false) {
 							return;
 						}
+						const normalizedProcessed = normalizeInlineRowValues(processedData, m_configs.table || []);
 						
 						// Update local state AND database object
 						let updatedData: Row[] = [];
@@ -2359,7 +2559,7 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 								const isUpdatedRow = getRowKey(row) === String(rowKey);
 								
 								if (isUpdatedRow) {
-									return { ...row, ...processedData };
+									return { ...row, ...normalizedProcessed };
 								}
 								return row;
 							});
@@ -2381,7 +2581,7 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 						}
 						
 						message.success('Đã lưu thay đổi');
-						runSideEffectTrigger("update_db", processedData);
+						runSideEffectTrigger("update_db", normalizedProcessed);
 						// Notify parent để sync vào form (sẽ đọc database[tableName])
 						console.log(`[CsmDynamicGrid] Calling onDataChange for ${tableName}`);
 						onDataChange?.();
@@ -2396,17 +2596,19 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 					
 					try {
 						// Run UPDATE trigger TRƯỚC KHI save (Vue compatibility)
-						const updatedDataFromTrigger = runUpdateTrigger(safeNewData);
-						const processedData = await runBeforeSaveTrigger(updatedDataFromTrigger);
+						const updatedDataFromTrigger = runUpdateTrigger(normalizedInput);
+						const triggerNormalized = normalizeInlineRowValues(updatedDataFromTrigger, m_configs.table || []);
+						const processedData = await runBeforeSaveTrigger(triggerNormalized);
 						if (processedData === false) {
 							return;
 						}
+						const normalizedProcessed = normalizeInlineRowValues(processedData, m_configs.table || []);
 						
 						await updateTableData<Row>({
 							app_id: appId,
 							obj_name: tableName,
 							command: 'update',
-							obj_update: processedData,
+							obj_update: normalizedProcessed,
 							pk_fields: pkFields,
 							where: oldRow && pkFields.every((field) => oldRow?.[field] != null)
 								? Object.fromEntries(pkFields.map((field) => [field, oldRow[field]]))
@@ -2419,7 +2621,7 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 								const isUpdatedRow = getRowKey(row) === String(rowKey);
 								
 								if (isUpdatedRow) {
-									return { ...row, ...processedData };
+									return { ...row, ...normalizedProcessed };
 								}
 								return row;
 							});
@@ -2429,7 +2631,7 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 						});
 						
 						message.success('Đã lưu thay đổi');
-						runSideEffectTrigger("update_db", processedData);
+						runSideEffectTrigger("update_db", normalizedProcessed);
 					} catch (error) {
 						message.error('Lưu thất bại: ' + (error as Error).message);
 					}

@@ -47,6 +47,7 @@ import { buildDetailGridSelectEnums, CsmEditModal } from "#src/components/csm-gr
 import type { MConfig, TableField } from "#src/components/csm-grid/CsmDynamicGrid";
 import { getTableData, updateTableData } from "#src/components/csm-grid/CsmApi";
 import { csmDecrypt } from "#src/components/csm-grid/CsmCrypto";
+import { extractComboQueriesFromField, normalizeComboOptions } from "#src/components/csm-grid/combo-utils";
 import { useUserStore } from "#src/store";
 
 const { RangePicker } = DatePicker;
@@ -54,6 +55,7 @@ const { RangePicker } = DatePicker;
 type RowData = Record<string, any>;
 type Granularity = "hour" | "day" | "week" | "month" | "year";
 type BoardView = "kanban" | "timeline" | "report";
+type BoardDatabase = Record<string, { rows: any[]; fieldsPK?: string[] }>;
 
 export const KANBAN_CONFIG_TEMPLATE = `{
   "tableName": "crm_tasks",
@@ -537,6 +539,7 @@ export default function CsmKanbanBoard({
 	const [viewMode, setViewMode] = useState<BoardView>(config.defaultView || "kanban");
 	const [granularity, setGranularity] = useState<Granularity>(config.timeline?.defaultGranularity || "day");
 	const [range, setRange] = useState<[Dayjs, Dayjs]>(getPresetRange(config.timeline?.defaultRangePreset));
+	const [comboTables, setComboTables] = useState<BoardDatabase>({});
 
 	const sensors = useSensors(
 		useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -574,11 +577,70 @@ export default function CsmKanbanBoard({
 		setViewMode((current) => (config.views?.[current] === false ? (config.views?.kanban ? "kanban" : config.views?.timeline ? "timeline" : "report") : current));
 	}, [config.views]);
 
-	const selectEnums = useMemo(() => buildDetailGridSelectEnums(fields, database || {}, effectiveDecrypt, {
+	useEffect(() => {
+		let cancelled = false;
+		const comboFields = fields.filter((field) => String(field.f_types || "").toLowerCase().includes("co") && field.f_cbo_query);
+		if (comboFields.length === 0) return;
+
+		const querySpecs = comboFields.flatMap((field) => extractComboQueriesFromField(field, effectiveDecrypt, effectiveAppId));
+		if (querySpecs.length === 0) return;
+
+		const uniqueSpecs = querySpecs.filter((spec, index, all) => {
+			const key = `${spec.appId}::${spec.tableName}::${JSON.stringify(spec.where || {})}`;
+			return index === all.findIndex((candidate) => `${candidate.appId}::${candidate.tableName}::${JSON.stringify(candidate.where || {})}` === key);
+		});
+
+		Promise.all(
+			uniqueSpecs.map(async (spec) => {
+				try {
+					const response = await getTableData<any>({
+						app_id: spec.appId,
+						obj_name: spec.tableName,
+						...(spec.where ? { where: spec.where } : {}),
+					});
+					return {
+						tableName: spec.tableName,
+						rows: Array.isArray((response as any)?.rows) ? (response as any).rows : [],
+					};
+				} catch {
+					return { tableName: spec.tableName, rows: [] as any[] };
+				}
+			})
+		).then((items) => {
+			if (cancelled) return;
+			setComboTables((prev) => {
+				const next = { ...prev };
+				items.forEach((item) => {
+					next[item.tableName] = { rows: item.rows };
+				});
+				return next;
+			});
+		});
+
+		return () => {
+			cancelled = true;
+		};
+	}, [effectiveAppId, effectiveDecrypt, fields]);
+
+	const databaseForSelect = useMemo(() => ({ ...(database || {}), ...comboTables }), [comboTables, database]);
+
+	const selectEnums = useMemo(() => buildDetailGridSelectEnums(fields, databaseForSelect, effectiveDecrypt, {
 		appId: effectiveAppId,
 		m_configs: mConfigs,
 		context: {},
-	}), [database, effectiveAppId, effectiveDecrypt, fields, mConfigs]);
+	}), [databaseForSelect, effectiveAppId, effectiveDecrypt, fields, mConfigs]);
+
+	const selectOptions = useMemo(() => {
+		const result: Record<string, Array<{ label: string; value: any }>> = {};
+		Object.entries(selectEnums || {}).forEach(([fieldName, enumObj]) => {
+			const options = Object.entries(enumObj || {}).map(([value, meta]: any) => ({
+				value,
+				label: String(meta?.text ?? value),
+			}));
+			result[fieldName] = normalizeComboOptions(options);
+		});
+		return result;
+	}, [selectEnums]);
 
 	const filteredRows = useMemo(() => {
 		const q = search.trim().toLowerCase();
@@ -1059,6 +1121,7 @@ export default function CsmKanbanBoard({
 							record={editingRecord}
 							onSubmit={handleSubmit}
 							selectEnums={selectEnums}
+							selectOptions={selectOptions}
 							database={database}
 							appId={effectiveAppId}
 							permissions={permissions}

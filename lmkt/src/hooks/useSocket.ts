@@ -33,6 +33,7 @@ export function useSocket(options: UseSocketOptions = {}) {
 	const { enabled = true, onUpdate } = options;
 	const socketRef = useRef<LegacySocket | null>(null);
 	const [connected, setConnected] = useState(false);
+	const hadConnectionIssueRef = useRef(false);
 	const currentAppId = useAppStore((state) => state.currentAppId);
 	const userAppId = useUserStore((state) => state.app_id);
 	// Prefer user's app_id to avoid default 'csm' overriding
@@ -64,14 +65,18 @@ export function useSocket(options: UseSocketOptions = {}) {
 			       reconnection: true,
 			       reconnectionDelay: 1000,
 			       reconnectionDelayMax: 5000,
-			       reconnectionAttempts: 5,
+			       reconnectionAttempts: Number.MAX_SAFE_INTEGER,
 		       });
 
 		       socketRef.current = socket;
 
 		       // Connection events
 		       socket.on("connect", () => {
-				   // [Socket] Connected
+				   if (hadConnectionIssueRef.current) {
+					   console.clear();
+					   console.info('[Socket] Reconnected successfully. Cleared previous connection logs.');
+					   hadConnectionIssueRef.current = false;
+				   }
 			       setConnected(true);
 			       // Join initial app room if available
 			       if (appId) {
@@ -86,13 +91,24 @@ export function useSocket(options: UseSocketOptions = {}) {
 		       });
 
 		       socket.on("disconnect", (reason) => {
-				   // [Socket] Disconnected
+				   hadConnectionIssueRef.current = true;
 			       setConnected(false);
 		       });
 
 		       socket.on("connect_error", (error) => {
-				   // [Socket] Connection error
+				   hadConnectionIssueRef.current = true;
+				   console.error('[Socket] Connection error:', error);
 		       });
+
+		       const manager = (socket as any).io;
+		       if (manager?.on) {
+			       manager.on('reconnect_attempt', () => {
+				       hadConnectionIssueRef.current = true;
+			       });
+			       manager.on('reconnect_failed', () => {
+				       hadConnectionIssueRef.current = true;
+			       });
+		       }
 
 		       // Listen for data update events
 		       socket.on("csm_msg_update", (data: SocketUpdateEvent) => {
@@ -205,16 +221,6 @@ export function useSocket(options: UseSocketOptions = {}) {
 					   // [Socket] Joined admin/dev room
 		       }
 	       }, [enabled, appId, isAdmin]);
-
-	// Add detailed logging for room assignment
-	if (!appId) {
-		console.warn("[Socket] No appId available for room assignment.");
-	} else {
-		console.info(`[Socket] Attempting to join room: ${appId}`);
-	}
-	if (isAdmin) {
-		console.info("[Socket] Admin/Dev detected. Joining admin room 'csm'.");
-	}
 
 	return {
 		socket: socketRef.current,

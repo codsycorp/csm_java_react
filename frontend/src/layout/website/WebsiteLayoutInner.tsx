@@ -32,6 +32,7 @@ interface WebsiteLayoutProps {
 
 export default function WebsiteLayoutInner({ children, selectedKey, menuItems, title, breadcrumb }: WebsiteLayoutProps) {
   const AUTO_OPEN_COOLDOWN_MS = 30_000;
+  const GUEST_AUTO_OPEN_EVENT_TYPES = new Set(['ai_auto_welcome', 'ai_auto_welcome_fallback']);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [openMenuKeys, setOpenMenuKeys] = useState<string[]>([]);
   const [chatOpen, setChatOpen] = useState(false);
@@ -95,15 +96,18 @@ export default function WebsiteLayoutInner({ children, selectedKey, menuItems, t
 
   useEffect(() => {
     if (!isGuest) return;
+    ensureGuestSessionId();
+  }, [isGuest, ensureGuestSessionId]);
 
-    const guestAutoOpenEventTypes = new Set(['ai_auto_welcome', 'ai_auto_welcome_fallback']);
+  useEffect(() => {
+    if (!isGuest) return;
 
     const handleAutoOpen = (event: Event) => {
       const detail = (event as CustomEvent).detail || {};
       const eventType = typeof detail.eventType === 'string' ? detail.eventType.trim() : '';
       const source = typeof detail.source === 'string' ? detail.source.trim() : '';
       const isAdminMessage = detail.isAdmin === true;
-      const shouldOpenForWelcome = guestAutoOpenEventTypes.has(eventType);
+      const shouldOpenForWelcome = GUEST_AUTO_OPEN_EVENT_TYPES.has(eventType);
       const shouldOpenForAdminReply = source === 'message' && isAdminMessage;
       if (!shouldOpenForWelcome && !shouldOpenForAdminReply) return;
 
@@ -132,6 +136,27 @@ export default function WebsiteLayoutInner({ children, selectedKey, menuItems, t
       window.removeEventListener('csm-chat-auto-open', handleAutoOpen as EventListener);
     };
   }, [isGuest, appId, getEffectiveGuestPhone, ensureGuestSessionId]);
+
+  useEffect(() => {
+    if (!isGuest || chatOpen) return;
+
+    const guestIdentity = ensureGuestSessionId();
+    if (!guestIdentity) return;
+
+    const phone = getEffectiveGuestPhone();
+    if (phone) return;
+
+    const guestMessages = messages[guestIdentity] || [];
+    const latestSystemWelcome = [...guestMessages].reverse().find((msg: any) => {
+      const eventType = typeof msg?.eventType === 'string' ? msg.eventType.trim() : '';
+      return msg?.isAdmin === true && GUEST_AUTO_OPEN_EVENT_TYPES.has(eventType);
+    });
+
+    if (!latestSystemWelcome) return;
+
+    setShowNameInput(false);
+    setChatOpen(true);
+  }, [isGuest, chatOpen, messages, ensureGuestSessionId, getEffectiveGuestPhone]);
 
   
   // Get system preferences from admin store
