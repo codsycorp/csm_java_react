@@ -5,6 +5,38 @@
 
 import { getChatHistory, getChatHistoryGuest, getChatHistoryApp, getChatGuestsList, getChatHistoryWithAppId, markChatAsReadGuest, markChatAsReadAll, deleteChatMessage } from '#src/components/csm-grid/CsmApi';
 
+const CHAT_HISTORY_TTL_MS = 1500;
+const chatHistoryInFlight = new Map<string, Promise<any>>();
+const chatHistoryCache = new Map<string, { expiresAt: number; data: any }>();
+
+async function guardedHistoryRequest<T>(key: string, fetcher: () => Promise<T>, fallback: T): Promise<T> {
+  const now = Date.now();
+  const cached = chatHistoryCache.get(key);
+  if (cached && cached.expiresAt > now) {
+    return cached.data as T;
+  }
+
+  const inFlight = chatHistoryInFlight.get(key);
+  if (inFlight) {
+    return inFlight as Promise<T>;
+  }
+
+  const promise = (async () => {
+    try {
+      const data = await fetcher();
+      chatHistoryCache.set(key, { expiresAt: Date.now() + CHAT_HISTORY_TTL_MS, data });
+      return data;
+    } catch {
+      return fallback;
+    } finally {
+      chatHistoryInFlight.delete(key);
+    }
+  })();
+
+  chatHistoryInFlight.set(key, promise);
+  return promise;
+}
+
 /**
  * Load danh sách tất cả apps từ sys_apps (cho CSM admin broadcast)
  */
@@ -32,50 +64,59 @@ export async function loadAppsList() {
  * Load lịch sử chat cho guest user
  */
 export async function loadGuestChatHistory(appId: string, guestIdentity: string, limit: number = 100, guestPhone?: string) {
-  try {
-    const response = await getChatHistoryGuest(appId, guestIdentity, limit, guestPhone);
-    if (response?.success && response.data?.messages) {
-      return response.data.messages;
+  const key = `guest:${appId}:${guestIdentity}:${guestPhone || ''}:${limit}`;
+  return guardedHistoryRequest(key, async () => {
+    try {
+      const response = await getChatHistoryGuest(appId, guestIdentity, limit, guestPhone);
+      if (response?.success && response.data?.messages) {
+        return response.data.messages;
+      }
+      return [];
+    } catch (error) {
+      console.warn('Failed to load guest chat history:', error);
+      return [];
     }
-    return [];
-  } catch (error) {
-    console.warn('Failed to load guest chat history:', error);
-    return [];
-  }
+  }, []);
 }
 
 /**
  * Load lịch sử chat cho admin (theo room)
  */
 export async function loadAdminChatHistory(room: string, limit: number = 100, appId?: string) {
-  try {
-    const response = appId
-      ? await getChatHistoryWithAppId(room, appId, limit)
-      : await getChatHistory(room, limit);
-    if (response?.success && response.data?.messages) {
-      return response.data.messages;
+  const key = `admin:${appId || 'default'}:${room}:${limit}`;
+  return guardedHistoryRequest(key, async () => {
+    try {
+      const response = appId
+        ? await getChatHistoryWithAppId(room, appId, limit)
+        : await getChatHistory(room, limit);
+      if (response?.success && response.data?.messages) {
+        return response.data.messages;
+      }
+      return [];
+    } catch (error) {
+      console.warn('Failed to load admin chat history:', error);
+      return [];
     }
-    return [];
-  } catch (error) {
-    console.warn('Failed to load admin chat history:', error);
-    return [];
-  }
+  }, []);
 }
 
 /**
  * Load tất cả chat history trong app (admin view)
  */
 export async function loadAllAppChatHistory(appId: string, limit: number = 200) {
-  try {
-    const response = await getChatHistoryApp(appId, limit);
-    if (response?.success && response.data) {
-      return response.data;
+  const key = `app:${appId}:${limit}`;
+  return guardedHistoryRequest(key, async () => {
+    try {
+      const response = await getChatHistoryApp(appId, limit);
+      if (response?.success && response.data) {
+        return response.data;
+      }
+      return {};
+    } catch (error) {
+      console.warn('Failed to load app chat history:', error);
+      return {};
     }
-    return {};
-  } catch (error) {
-    console.warn('Failed to load app chat history:', error);
-    return {};
-  }
+  }, {});
 }
 
 /**

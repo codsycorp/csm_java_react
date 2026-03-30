@@ -2866,6 +2866,7 @@ public class WebSpringController {
                         ));
                         Map<String, Object> catResult = recordManager.filter(app_id, tbl_services, catFilter);
                         List<Map<String, Object>> catRows = (List<Map<String, Object>>) catResult.getOrDefault("rows", new ArrayList<>());
+                        Set<String> seenCategoryKeys = new HashSet<>();
                         for (Map<String, Object> row : catRows) {
                             logger.info("Xử lý danh mục SSR: {}", row);
                             Map<String, Object> catObj = new HashMap<>();
@@ -2902,7 +2903,7 @@ public class WebSpringController {
                             String group_slug = safeStr(row.get("group_slug"));
                             String attributes_icon = safeStr(row.get("attributes_icon"));
                             String attributes_description = safeStr(row.get(langCat.equals("vi") ? "attributes_description" : "attributes_description_" + langCat));
-                            
+
                             // 🔴 NEW: Extract dynamic code name từ web_services row
                             String dynamicCodeName = safeStr(row.get("dynamic_code_name"));
                             
@@ -2916,9 +2917,20 @@ public class WebSpringController {
                             } else if (is_service_raw instanceof Number) {
                                 is_service = ((Number) is_service_raw).intValue() == 1;
                             }
+
+                            // Deduplicate SSR categories by stable business key to avoid double objects.
+                            String dedupeKey = (service_code.isEmpty() ? slug : service_code)
+                                    + "|" + group_slug
+                                    + "|" + (is_service ? "1" : "0")
+                                    + "|" + langCat;
+                            if (!seenCategoryKeys.add(dedupeKey)) {
+                                logger.debug("⚠️ SSR category duplicate skipped: {}", dedupeKey);
+                                continue;
+                            }
                             
                             // ✅ GỬI TẤT CẢ CÁC TRƯỜNG DỊCH: category, category_en, category_zh, attributes_description_en, attributes_description_zh
                             catObj.put("slug", slug);
+                            catObj.put("service_code", service_code);
                             catObj.put("is_service", is_service); // ✅ GỬI is_service FIELD ĐỊ FRONTEND BIẾT LÀ SERVICE HAY MENU
                             catObj.put("is_group_slug", is_group_slug);
                             catObj.put("is_group_slug_default", is_group_slug_default);

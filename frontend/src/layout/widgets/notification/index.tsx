@@ -13,7 +13,6 @@ import { useMemo, useState, useEffect, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { createUseStyles } from "react-jss";
 import { useAppStore } from "#src/store/app";
-import { useSocket } from "#src/hooks/useSocket";
 import { useUserStore } from "#src/store/user";
 import type { ChatMessage } from "#src/model/ChatMessage";
 import { Input, Button, Avatar } from "antd";
@@ -99,8 +98,7 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 	// CRITICAL: Use same pattern as permission.ts and ChatHistoryContext for getting effective appId
 	// Priority: user.app_id (from login) > store.currentAppId (from AppStore) > fallback to "csm"
 	const appId = (user.app_id || "").trim() || useAppStore.getState().getCurrentAppId() || "csm";
-    const { socket, connected } = useSocket();
-	const { sendMessage: sendChatMessage, unreadCounts: contextUnreadCounts, messages: contextMessages, refreshAllMessages, markAsRead } = useChatHistory();
+	const { sendMessage: sendChatMessage, unreadCounts: contextUnreadCounts, messages: contextMessages, markAsRead } = useChatHistory();
 
 	const formatGuestLabel = useCallback((guestKey: string, guestPhone?: string, username?: string, isAdminMessage?: boolean) => {
 		const phone = String(guestPhone || '').trim();
@@ -113,40 +111,8 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 		return shortId ? `Khách ${shortId}` : 'Khách mới';
 	}, []);
 
-	// Load guest list from backend API when component mounts or appId changes
-	useEffect(() => {
-		if (!connected) return;
-		
-		// Load guest list từ backend API (giống logic trong ChatHistoryContext)
-		const loadGuestList = async () => {
-			try {
-				console.log(`📱 [Notification] Loading guests list for appId="${appId}"`);
-				const guestsList = await (window as any).loadChatGuestsList?.(appId) || [];
-				console.log(`📱 [Notification] Loaded ${guestsList.length} guests:`, guestsList);
-			} catch (error) {
-				console.error('❌ [Notification] Failed to load guests list:', error);
-			}
-		};
-		
-		loadGuestList();
-	}, [connected, appId]);
-
-	// Socket-first: only do one sync when connected/app changes.
-	// Realtime updates are handled by ChatHistoryContext socket listeners.
-	useEffect(() => {
-		if (!connected) return;
-
-		const syncNotificationData = async () => {
-			try {
-				console.log(`🔄 [Notification] Initial sync for appId="${appId}"`);
-				await refreshAllMessages();
-			} catch (error) {
-				console.error('❌ [Notification] Initial sync failed:', error);
-			}
-		};
-
-		syncNotificationData();
-	}, [connected, appId, refreshAllMessages]);
+	// Notification popup relies on ChatHistoryContext initialization + realtime socket updates.
+	// Avoid extra refresh calls here to prevent chat-history request storms.
 	
 	// No longer tracking 'csm' room unread separately; system messages count is derived from broadcast messages for current app
 
@@ -292,19 +258,9 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 	}, [appId, openChatAndMarkRead, formatGuestLabel]);
 
 	// Force refresh when opening notification popup
-	const handleOpenChange = useCallback(async (visible: boolean) => {
+	const handleOpenChange = useCallback((visible: boolean) => {
 		action.set(visible);
-		
-		if (visible && connected) {
-			// Force refresh notification data when opening popup
-			try {
-				console.log(`🔄 [Notification] Force refresh on open for appId="${appId}"`);
-				await refreshAllMessages();
-			} catch (error) {
-				console.error('❌ [Notification] Force refresh failed:', error);
-			}
-		}
-	}, [connected, appId, action, refreshAllMessages]);
+	}, [action]);
 
 	const close = () => { action.set(false); };
 	const handleViewAll = () => { onEventChange && onEventChange("viewAll"); close(); };
