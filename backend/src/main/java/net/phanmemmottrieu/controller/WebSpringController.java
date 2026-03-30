@@ -1771,6 +1771,12 @@ public class WebSpringController {
                         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                                 .body("Lỗi máy chủ khi đọc tài nguyên.".getBytes(StandardCharsets.UTF_8));
                     }
+                } else if (isStaticFile(normalizedPath)) {
+                    // Static asset không tồn tại: trả về 404 để tránh rơi xuống nhánh SSR HTML.
+                    logger.warn("⚠️ Static file not found, returning 404 instead of SSR: {}", normalizedPath);
+                    return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                            .contentType(MediaType.TEXT_PLAIN)
+                            .body(new byte[0]);
                 }
             }
 
@@ -2428,11 +2434,11 @@ public class WebSpringController {
                     logger.info("✅ SSR CONDITIONS MET: appType={}, app_id={}, tbl_services={}, tbl_service_detail={}, rp_index={}, path={}",
                             appType, rp_index, app_id, tbl_services, tbl_service_detail, normalizedPath);
                     
-                    // 🔴 BULKHEAD: Check SSR semaphore - fallback to skeleton HTML nếu quá tải (>128 concurrent)
+                    // 🔴 BULKHEAD: Check SSR semaphore - fallback to skeleton HTML nếu quá tải (>80 concurrent)
                     if (!ssrSemaphore.tryAcquire()) {
-                        logger.warn("⚠️ SSR semaphore exhausted (128 concurrent limit) - returning skeleton HTML for path: {}", normalizedPath);
+                        logger.warn("⚠️ SSR semaphore exhausted (80 concurrent limit) - returning skeleton HTML for path: {}", normalizedPath);
                         response.set("code", 200);
-                        response.setHtmlBody("<html><head><meta charset='UTF-8'><title>Loading...</title><style>.sk{animation:pulse 1.5s infinite;background:#f0f0f0;height:20px;margin:10px;border-radius:4px}</style></head><body><div class='sk'></div><div class='sk' style='width:80%'></div><div class='sk' style='width:60%'></div><script>setTimeout(function(){location.reload()},2000)</script></body></html>");
+                        response.setHtmlBody("<html><head><meta charset='UTF-8'><title>Loading...</title><style>body{font-family:Arial,sans-serif;margin:0;padding:24px;background:#fafafa;color:#333}.sk{animation:pulse 1.5s infinite;background:#f0f0f0;height:20px;margin:10px 0;border-radius:4px}@keyframes pulse{0%{opacity:1}50%{opacity:.55}100%{opacity:1}}.hint{font-size:13px;color:#666;margin-top:12px}</style></head><body><div class='sk'></div><div class='sk' style='width:80%'></div><div class='sk' style='width:60%'></div><div class='hint'>Server đang bận, vui lòng thử lại sau ít giây.</div></body></html>");
                         return buildResponseEntity(response, null);
                     }
                     

@@ -1312,6 +1312,9 @@ const WuServicesPage: React.FC = () => {
     if (isGroupRoute && allCategories.length > 0) {
       const defaultServiceSlug = allCategories[0].key;
       const targetUrl = `/${defaultServiceSlug}`;
+      if (window.location.pathname === targetUrl) {
+        return;
+      }
       console.log(`🔄 Redirecting group route /${slug} to default service: ${targetUrl}`);
       window.location.href = targetUrl;
     }

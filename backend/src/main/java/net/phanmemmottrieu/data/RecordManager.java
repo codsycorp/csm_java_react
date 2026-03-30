@@ -1,7 +1,6 @@
 package net.phanmemmottrieu.data;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.exc.MismatchedInputException;
 
@@ -68,15 +67,6 @@ public class RecordManager {
     private static final int DEFAULT_FILTER_TAKE = 500;
     private static final int MAX_FILTER_TAKE = 5000;
     private static final int MAX_SAFE_JSON_RECORD_BYTES = 32 * 1024 * 1024;
-    private static final int ACCOUNT_SELECTIVE_PARSE_THRESHOLD_BYTES = 64 * 1024;
-    private static final Set<String> ACCOUNT_SELECTIVE_FIELDS = Set.of(
-        "id", "email", "pass", "username", "phoneNumber", "actived", "app_token",
-        "full_name", "refresh", "refresh_token", "refresh_token_ip", "refresh_token_ua",
-        "refresh_token_expiry", "permissions", "menusPermissions", "permissionBitfield",
-        "permissionSchemaVersion", "dataScope", "dept_id", "branch_id", "department_id",
-        "team_id", "login_version", "loginVersion", "parent_account_id", "login_identifier",
-        "group_id", "app_id"
-    );
     private static final ScheduledExecutorService batchExecutor = 
         new java.util.concurrent.ScheduledThreadPoolExecutor(
             Math.max(2, Runtime.getRuntime().availableProcessors() / 2),
@@ -2388,13 +2378,6 @@ public class RecordManager {
             return null;
         }
 
-        if (shouldUseSelectiveAccountParse(tableName, key, valueBytes.length)) {
-            Map<String, Object> selectiveRecord = deserializeSelectiveAccountRecord(valueBytes, key, tableName, isMetaKey);
-            if (selectiveRecord != null) {
-                return selectiveRecord;
-            }
-        }
-
         try {
             // Bước 1: Thử deserialize trực tiếp thành Map
             return objectMapper.readValue(valueBytes, Map.class);
@@ -2434,62 +2417,6 @@ public class RecordManager {
         }
     }
 
-    private boolean shouldUseSelectiveAccountParse(String tableName, String key, int valueLength) {
-        if (valueLength < ACCOUNT_SELECTIVE_PARSE_THRESHOLD_BYTES) {
-            return false;
-        }
-        if ("csm_accounts".equals(tableName) || "csm_group_members".equals(tableName)) {
-            return true;
-        }
-        return key != null && (key.contains("csm_accounts") || key.contains("csm_group_members"));
-    }
-
-    private Map<String, Object> deserializeSelectiveAccountRecord(byte[] valueBytes, String key, String tableName, boolean isMetaKey) {
-        try (com.fasterxml.jackson.core.JsonParser parser = objectMapper.getFactory().createParser(valueBytes)) {
-            if (parser.nextToken() != JsonToken.START_OBJECT) {
-                return null;
-            }
-
-            Map<String, Object> record = new HashMap<>();
-            while (parser.nextToken() != JsonToken.END_OBJECT) {
-                String fieldName = parser.getCurrentName();
-                JsonToken valueToken = parser.nextToken();
-                if (fieldName == null || valueToken == null) {
-                    continue;
-                }
-
-                if (!ACCOUNT_SELECTIVE_FIELDS.contains(fieldName)) {
-                    if (valueToken == JsonToken.START_ARRAY || valueToken == JsonToken.START_OBJECT) {
-                        parser.skipChildren();
-                    }
-                    continue;
-                }
-
-                record.put(fieldName, readJsonValue(parser, valueToken));
-            }
-
-            if (!isMetaKey) {
-                logger.warn("⚠️ Selective-parse record key '{}' ở bảng '{}' ({} bytes) để tránh OOM khi đọc full JSON user record.",
-                        key, tableName, valueBytes.length);
-            }
-            return record;
-        } catch (Exception e) {
-            logger.warn("⚠️ Selective parse thất bại cho key '{}' ở bảng '{}': {}", key, tableName, e.getMessage());
-            return null;
-        }
-    }
-
-    private Object readJsonValue(com.fasterxml.jackson.core.JsonParser parser, JsonToken valueToken) throws IOException {
-        return switch (valueToken) {
-            case VALUE_STRING -> parser.getValueAsString();
-            case VALUE_TRUE, VALUE_FALSE -> parser.getBooleanValue();
-            case VALUE_NUMBER_INT, VALUE_NUMBER_FLOAT -> parser.getNumberValue();
-            case VALUE_NULL -> null;
-            case START_ARRAY, START_OBJECT -> parser.readValueAs(Object.class);
-            default -> parser.readValueAs(Object.class);
-        };
-    }
-    
     // --- HÀM FIND ĐÃ ĐƯỢC CẬP NHẬT (KHÔNG DÙNG COLUMNFAMILYHANDLE) ---
     public Map<String, Object> find(String appId, String tableName, SearchFilter filter) {
         RocksDB db = null;
