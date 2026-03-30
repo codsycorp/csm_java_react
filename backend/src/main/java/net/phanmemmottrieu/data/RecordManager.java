@@ -1546,6 +1546,22 @@ public class RecordManager {
         String indexKey = appId + "_" + tableName;
         luceneIndexLocks.putIfAbsent(indexKey, new Object());
         synchronized (luceneIndexLocks.get(indexKey)) {
+            // 0. Hủy toàn bộ batch pending/timer của index này để tránh flush lại dữ liệu cũ.
+            Timer timer = batchFlushTimers.remove(indexKey);
+            if (timer != null) {
+                try {
+                    timer.cancel();
+                } catch (Exception e) {
+                    logger.warn("Lỗi cancel batch timer khi xóa lucene index {}: {}", indexKey, e.getMessage());
+                }
+            }
+            UpdateBatchBuffer pendingBuffer = updateBatchBuffers.remove(indexKey);
+            if (pendingBuffer != null) {
+                synchronized (pendingBuffer.lock) {
+                    pendingBuffer.updates.clear();
+                }
+            }
+
             // 1. Đóng và xóa IndexWriter
             IndexWriter writer = indexWriterCache.remove(indexKey);
             if (writer != null) {

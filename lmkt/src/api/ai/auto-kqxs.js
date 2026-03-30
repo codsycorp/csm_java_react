@@ -261,7 +261,7 @@
       btnResult: "Kết Quả",
       btnStat: "Thống Kê",
       btnStatNew: "Thống Kê Mới",
-      btnExportExcel: "Xuất Excel",
+      btnExportExcel: "Chụp tab",
       btnCaptureTab: "Chụp tab",
       btnExportTable: "Xuất bảng",
       btnCaptureTable: "Chụp bảng",
@@ -324,7 +324,7 @@
       btnResult: "Results",
       btnStat: "Statistics",
       btnStatNew: "New Statistics",
-      btnExportExcel: "Export Excel",
+      btnExportExcel: "Capture tab",
       btnCaptureTab: "Capture tab",
       btnExportTable: "Export table",
       btnCaptureTable: "Capture table",
@@ -387,7 +387,7 @@
       btnResult: "开奖结果",
       btnStat: "统计",
       btnStatNew: "新统计",
-      btnExportExcel: "导出 Excel",
+      btnExportExcel: "截图当前页签",
       btnCaptureTab: "截图当前页签",
       btnExportTable: "导出表格",
       btnCaptureTable: "截图表格",
@@ -2374,8 +2374,11 @@
         out.push({
           id: idPrefix + "_" + i,
           so1: left ? left.so : "",
+          vach1: "",
           val1: left ? left[valueKey] : "",
+          vach: "",
           so2: right ? right.so : "",
+          vach2: "",
           val2: right ? right[valueKey] : ""
         });
       }
@@ -2581,10 +2584,13 @@
     }
 
     var pairColumns = [
-      { title: "", dataIndex: "so1", key: "so1", width: 50 },
-      { title: "", dataIndex: "val1", key: "val1", width: 50 },
-      { title: "", dataIndex: "so2", key: "so2", width: 50 },
-      { title: "", dataIndex: "val2", key: "val2", width: 50 }
+      { title: "", dataIndex: "so1", key: "so1", width: 40, className: "kqxs-side-so-col" },
+      { title: "", dataIndex: "vach1", key: "vach1", width: 20, className: "kqxs-vach-col" },
+      { title: "", dataIndex: "val1", key: "val1", width: 40 },
+      { title: "", dataIndex: "vach", key: "vach", width: 20, className: "kqxs-vach-col" },
+      { title: "", dataIndex: "so2", key: "so2", width: 40, className: "kqxs-side-so-col" },
+      { title: "", dataIndex: "vach2", key: "vach2", width: 20, className: "kqxs-vach-col" },
+      { title: "", dataIndex: "val2", key: "val2", width: 40 }
     ];
 
     var thongkeComboColumns = [
@@ -2714,6 +2720,20 @@
       return comboLabel;
     }
 
+    function buildLichSuSoChuTitle(comboLabel) {
+      var base = normalizeKqTitleLabel(comboLabel);
+      if (Number(dem_lon_hon) > 0 && so_chu.length > 0) {
+        return base + "(" + so_chu.join("-") + ")";
+      }
+      return base;
+    }
+
+    function buildThongKeMoiKqTitle(comboLabel) {
+      var thuFromDate = days[chuyenNgay(den_ngay, "dd/mm/yyyy").getDay()];
+      var daiLabel = normalizeKqTitleLabel(comboLabel);
+      return String(thuFromDate || "") + " " + String(den_ngay || "") + " " + String(daiLabel || "");
+    }
+
     function buildComboDisplay(comboKey) {
       var ids = String(comboKey || "").split(",").map(function (x) { return String(x || "").trim(); }).filter(Boolean);
       var dsData = (du_lieu_dai_mien[mien] && du_lieu_dai_mien[mien].data) || [];
@@ -2759,6 +2779,7 @@
 
         if (tabId === "lich_su_so_chu") {
           if (activeAction !== "tk" || !lichSuSoChuRows.length) return;
+          var lichSuTitle = buildLichSuSoChuTitle(String((tabDef && tabDef.ten_dai) || tabDef.text || "Lịch Sử Sổ Chủ"));
           items.push({
             key: "lich_su_so_chu",
             label: String(tabDef.text || "Lịch Sử Số Chủ"),
@@ -2771,7 +2792,12 @@
               dataSource: lichSuSoChuRows,
               pagination: false,
               size: "small",
-              scroll: { x: 400 }
+              scroll: { x: 400 },
+              title: function () {
+                return renderTableTitleWithExport(lichSuTitle, function (evt) {
+                  captureTableFromActionEvent(evt, "kqxs_lich_su_so_chu");
+                });
+              }
             }))
           });
           return;
@@ -2786,7 +2812,7 @@
         var comboDisplay = buildComboDisplay(comboKey);
         var comboTenDai = String((tabDef && tabDef.ten_dai) || comboDisplay.ten_dai || comboDisplay.text || "");
         var mainTitle = buildMainThongKeTitle(comboTenDai);
-        var kqTitle = String(thu_tuan || "") + " " + String(den_ngay || "") + " " + comboTenDai;
+        var kqTitle = buildThongKeMoiKqTitle(comboTenDai);
 
         if (!isKqTab) {
           items.push({
@@ -3308,8 +3334,7 @@
     }
 
     async function xuatExcel() {
-      var payload = buildExportPayload();
-      await exportPayloadToFile(payload);
+      await captureActiveTabContent();
     }
 
     function themedSelectProps(extra) {
@@ -3467,7 +3492,7 @@
       + ".kqxs-react-auto .kqxs-kq-row { display: flex; flex-wrap: nowrap; gap: 12px; align-items: flex-start; overflow-x: auto; padding-bottom: 2px; }"
       + ".kqxs-react-auto .kqxs-kq-col { flex: 0 0 auto; min-width: max-content; }"
       + ".kqxs-react-auto .kqxs-kq-col-main { flex: 0 0 auto; min-width: 602px; }"
-      + ".kqxs-react-auto .kqxs-kq-col-side { flex: 0 0 auto; min-width: 320px; width: max-content; }"
+      + ".kqxs-react-auto .kqxs-kq-col-side { flex: 0 0 auto; min-width: 230px; width: max-content; }"
       + ".kqxs-react-auto .kqxs-kq-zone { border: 1px solid #3a3a3a; border-radius: 0; padding: 0; background: color-mix(in srgb, var(--kqxs-card-bg, #fff) 95%, #111722); }"
       + ".kqxs-react-auto .kqxs-kq-zone + .kqxs-kq-zone { box-shadow: none; }"
       + ".kqxs-react-auto .kqxs-kq-zone .ant-table { border: 1px solid #3a3a3a !important; background: transparent !important; }"
@@ -3475,6 +3500,7 @@
       + ".kqxs-react-auto .kqxs-kq-zone .ant-table-thead > tr > th { background: color-mix(in srgb, var(--kqxs-input-bg, #fff) 92%, var(--kqxs-primary, #1677ff)) !important; color: var(--kqxs-text, #1f1f1f) !important; border-color: var(--kqxs-border, #d9d9d9) !important; font-size: 10pt !important; font-weight: 700 !important; padding: 2px 4px !important; }"
       + ".kqxs-react-auto .kqxs-kq-zone .ant-table-tbody > tr > td { background: color-mix(in srgb, var(--kqxs-card-bg, #fff) 96%, var(--kqxs-page-bg, #f5f7fb)) !important; color: var(--kqxs-text, #1f1f1f) !important; border-color: var(--kqxs-border, #d9d9d9) !important; }"
       + ".kqxs-react-auto .kqxs-kq-zone .ant-table-cell { text-align: center !important; padding: 2px 4px !important; font-family: 'Times New Roman', Times, serif !important; font-size: 16px !important; }"
+      + ".kqxs-react-auto .kqxs-kq-zone .ant-table-cell.kqxs-side-so-col { font-weight: 700 !important; }"
       + ".kqxs-react-auto .kqxs-kq-zone .ant-table-title { text-align: center !important; font-size: 12pt !important; text-transform: none !important; color: var(--kqxs-text, #1f1f1f) !important; background: transparent !important; padding: 4px 8px !important; }"
       + ".kqxs-react-auto .ant-table-tbody > tr > td.to_mau_zone { background: " + (chon_mau || "#cc9108") + " !important; }"
       + ".kqxs-react-auto .ant-table-thead > tr > th.matrix_group_start, .kqxs-react-auto .ant-table-tbody > tr > td.matrix_group_start { border-left: 3px solid var(--kqxs-border, #d9d9d9) !important; }"
