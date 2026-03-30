@@ -1290,7 +1290,38 @@
     var _aj = useState("ketqua"), subTab = _aj[0], setSubTab = _aj[1];
     var _ak = useState("kq"), activeAction = _ak[0], setActiveAction = _ak[1];
     var _al = useState([]), thongkeTabItems = _al[0], setThongkeTabItems = _al[1];
+    var _am = useState({
+      so_ky: so_ky,
+      lay_so_ky: lay_so_ky,
+      dem_be_hon: dem_be_hon,
+      kxh_phai_lonhon: kxh_phai_lonhon,
+      dem_nho_hon: dem_nho_hon,
+      dem_lon_hon: dem_lon_hon,
+      dem_to_nho_hon: dem_to_nho_hon,
+      sap_xep: sap_xep,
+      thu_tuan: thu_tuan,
+      den_ngay: den_ngay,
+      so_chu: so_chu.slice(),
+      hasSoChuSource: ds_dai_chon_so_chu.length > 0
+    }), appliedThongKe = _am[0], setAppliedThongKe = _am[1];
     var taiDuLieuReqRef = useRef(0);
+
+    function snapshotThongKeInputs() {
+      return {
+        so_ky: Number(so_ky || 0),
+        lay_so_ky: Number(lay_so_ky || 0),
+        dem_be_hon: Number(dem_be_hon || 0),
+        kxh_phai_lonhon: Number(kxh_phai_lonhon || 0),
+        dem_nho_hon: Number(dem_nho_hon || 0),
+        dem_lon_hon: Number(dem_lon_hon || 0),
+        dem_to_nho_hon: Number(dem_to_nho_hon || 0),
+        sap_xep: Number(sap_xep || 0),
+        thu_tuan: String(thu_tuan || ""),
+        den_ngay: String(den_ngay || ""),
+        so_chu: (so_chu || []).slice(),
+        hasSoChuSource: (ds_dai_chon_so_chu || []).length > 0
+      };
+    }
 
     var tt = useMemo(function () {
       return UI_TEXT[uiLang] || UI_TEXT.vi;
@@ -1660,7 +1691,14 @@
         }
       });
 
-      historyRows.sort(function (a, b) { return Number(a.stt) - Number(b.stt); });
+      historyRows.sort(function (a, b) {
+        var ngayA = String(a.ngay || "").trim();
+        var ngayB = String(b.ngay || "").trim();
+        return chuyenNgay(ngayB, "dd/mm/yyyy") - chuyenNgay(ngayA, "dd/mm/yyyy");
+      });
+      historyRows.forEach(function (row, idx) {
+        row.stt = idx + 1;
+      });
       return { allowedDateSet: allowedDateSet, historyRows: historyRows };
     }
 
@@ -2014,13 +2052,13 @@
       setProgress(15);
 
       try {
+        var appliedSnapshot = snapshotThongKeInputs();
         var loadedDataMien = await lay_ds_dai(dsDaiCanTai);
         // Vue chỉ chạy luồng số chủ khi có cả dãy số chủ và danh sách đài số chủ.
         var useSoChuSource = so_chu.length > 0 && ds_dai_chon_so_chu.length > 0;
         var soChuCtx = useSoChuSource ? xayDungNguCanhSoChu(loadedDataMien) : { allowedDateSet: null, historyRows: [] };
         var thongKeSource = useSoChuSource ? ds_dai_chon_so_chu : ds_dai_chon;
-        var includeKqTabs = (Number(lay_so_ky || 0) + Number(dem_be_hon || 0) + Number(kxh_phai_lonhon || 0) + Number(dem_nho_hon || 0) > 0)
-          || (Number(dem_lon_hon || 0) > 0 && so_chu.length > 0 && useSoChuSource);
+        var includeKqTabs = (Number(lay_so_ky || 0) + Number(dem_be_hon || 0) + Number(kxh_phai_lonhon || 0) + Number(dem_nho_hon || 0) + Number(dem_lon_hon || 0) > 0);
         var thongKeResult = await buildThongKeData(false, soChuCtx.allowedDateSet, thongKeSource, loadedDataMien);
         var rows = (thongKeResult && Array.isArray(thongKeResult.rows)) ? thongKeResult.rows : [];
         var mangDaiTabs = (thongKeResult && Array.isArray(thongKeResult.mang_dai)) ? thongKeResult.mang_dai : thongKeSource;
@@ -2028,6 +2066,7 @@
         setThongkeTabItems(tabItems);
         setLichSuSoChuRows(soChuCtx.historyRows || []);
         setThongkeRows(rows);
+        setAppliedThongKe(appliedSnapshot);
         setProgress(100);
       } catch (e) {
         console.error(e);
@@ -2050,6 +2089,7 @@
       setProgress(15);
 
       try {
+        var appliedSnapshot = snapshotThongKeInputs();
         var loadedDataMien = await lay_ds_dai(dsDaiCanTai);
         var thongKeResult = await buildThongKeData(true, null, null, loadedDataMien);
         var rows = (thongKeResult && Array.isArray(thongKeResult.rows)) ? thongKeResult.rows : [];
@@ -2058,6 +2098,7 @@
         setThongkeTabItems(tabItems);
         setLichSuSoChuRows([]);
         setThongkeRows(rows);
+        setAppliedThongKe(appliedSnapshot);
         setProgress(100);
       } catch (e) {
         console.error(e);
@@ -2394,7 +2435,7 @@
       var rows = Array.isArray(list) ? list.slice() : [];
       var half = Math.ceil(rows.length / 2);
       var out = [];
-      var maxCot = Math.max(1, Number(lay_so_ky || 1));
+      var maxCot = Math.max(1, Number(appliedThongKe.lay_so_ky || 1));
 
       function pickKyVals(src) {
         var vals = [];
@@ -2412,7 +2453,7 @@
       function mapOne(src) {
         if (!src) return { so: "", kyVals: new Array(maxCot).fill(""), ket_qua: "", to_mau: false };
         var demVal = Number(src.dem || 0);
-        var toMau = Number(dem_be_hon) > 0 && demVal <= Number(dem_be_hon);
+        var toMau = Number(appliedThongKe.dem_be_hon) > 0 && demVal <= Number(appliedThongKe.dem_be_hon);
         // Vue: ket_qua mặc định là '*', chỉ thay bằng dem khi thỏa mãn dem_be_hon
         return {
           so: src.so,
@@ -2449,6 +2490,13 @@
       var sorted = source.sort(function (a, b) { return Number(a.so || 0) - Number(b.so || 0); });
       var matrixRows = [];
       var groupCount = 0;
+      var soChuList = (appliedThongKe.so_chu || []).map(function (s) {
+        return String(s || "").trim();
+      }).filter(Boolean);
+      var soChuSet = {};
+      soChuList.forEach(function (s) {
+        soChuSet[s] = true;
+      });
       sorted.forEach(function (obj, idx) {
         var group = Math.floor(idx / 20) + 1;
         var rowIdx = idx % 20;
@@ -2459,10 +2507,18 @@
         rec["tong" + group] = obj.tong;
         rec["dem" + group] = obj.dem;
         rec["kxh" + group] = obj.kxh;
-        if (activeAction === "tk" && Number(dem_lon_hon) > 0 && so_chu.length > 0 && ds_dai_chon_so_chu.length > 0) {
-          rec["hl" + group] = Number(obj.dem || 0) >= Number(dem_lon_hon || 0);
-        } else if (Number(dem_to_nho_hon) > 0) {
-          rec["hl" + group] = Number(obj.dem || 0) <= Number(dem_to_nho_hon || 0);
+        var soKey = String(obj && obj.so != null ? obj.so : "").padStart(2, "0");
+        var matchSoChu = soChuList.length ? !!soChuSet[soKey] : true;
+        if (activeAction === "tk" && Number(appliedThongKe.dem_lon_hon) > 0) {
+          var demVal = Number(obj.dem || 0);
+          var tongVal = Number(obj.tong || 0);
+          var kxhVal = Number(obj.kxh || 0);
+          var passNguong = demVal === Number(appliedThongKe.dem_lon_hon || 0);
+          var passKxhLonHonDem = kxhVal > demVal;
+          var passDemBangTong = demVal === tongVal;
+          rec["hl" + group] = matchSoChu && passNguong && passKxhLonHonDem && passDemBangTong;
+        } else if (Number(appliedThongKe.dem_to_nho_hon) > 0) {
+          rec["hl" + group] = Number(obj.dem || 0) <= Number(appliedThongKe.dem_to_nho_hon || 0);
         } else {
           rec["hl" + group] = false;
         }
@@ -2488,19 +2544,19 @@
         });
 
         var laySoKyRows = [];
-        if (Number(lay_so_ky) > 0) {
+        if (Number(appliedThongKe.lay_so_ky) > 0) {
           laySoKyRows = rows.filter(function (r) { return !!r.has_ky_chot; });
         }
 
-        var kxhRows = Number(kxh_phai_lonhon) > 0
-          ? rows.filter(function (r) { return Number(r.kxh) >= Number(kxh_phai_lonhon); })
+        var kxhRows = Number(appliedThongKe.kxh_phai_lonhon) > 0
+          ? rows.filter(function (r) { return Number(r.kxh) >= Number(appliedThongKe.kxh_phai_lonhon); })
           : [];
 
-        var demNhoRows = Number(dem_nho_hon) > 0
-          ? rows.filter(function (r) { return Number(r.k_so_ky || 0) === 0 && Number(r.dem) <= Number(dem_nho_hon); })
+        var demNhoRows = Number(appliedThongKe.dem_nho_hon) > 0
+          ? rows.filter(function (r) { return Number(r.k_so_ky || 0) === 0 && Number(r.dem) <= Number(appliedThongKe.dem_nho_hon); })
           : [];
 
-        if (Number(dem_nho_hon) > 0 && demNhoRows.length === 0) {
+        if (Number(appliedThongKe.dem_nho_hon) > 0 && demNhoRows.length === 0) {
           demNhoRows = [{ so: "0", dem: 0 }];
         }
 
@@ -2516,10 +2572,10 @@
           matrixGroupCount: matrix.groupCount
         };
       });
-    }, [thongkeRows, lay_so_ky, dem_be_hon, kxh_phai_lonhon, dem_nho_hon, dem_lon_hon, dem_to_nho_hon, so_chu]);
+    }, [thongkeRows, appliedThongKe, activeAction]);
 
     function buildLaySoKyColumns() {
-      var maxCot = Math.max(1, Number(lay_so_ky || 1));
+      var maxCot = Math.max(1, Number(appliedThongKe.lay_so_ky || 1));
       var cols = [
         {
           title: "",
@@ -2606,72 +2662,87 @@
       { title: tt.colSo, dataIndex: "so", key: "so", width: 80 }
     ].concat(buildKyColumns());
 
-    function buildMatrixColumns(groupCount) {
-      var cols = [];
-      for (var g = 1; g <= groupCount; g += 1) {
-        (function (groupIndex) {
-        cols.push({
-          title: "Số",
-          dataIndex: "so" + groupIndex,
-          key: "so" + groupIndex,
-          width: 70,
-          className: groupIndex > 1 ? "matrix_group_start" : "",
+    function buildMatrixColumns(groupCount, middleTitle, rightTitle) {
+      function makeSepCol(key) {
+        return {
+          title: "",
+          dataIndex: key,
+          key: key,
+          width: 20,
+          className: "kqxs-vach-col matrix_group_start",
+          render: function () { return ""; }
+        };
+      }
+
+      function makeLeaf(groupIndex, field, title, width, isBold) {
+        var dataKey = field + groupIndex;
+        var cls = isBold ? "kqxs-side-so-col" : "";
+        return {
+          title: title,
+          dataIndex: dataKey,
+          key: dataKey,
+          width: width,
+          className: cls,
           onCell: function (rec) {
-            var cls = "";
-            if (groupIndex > 1) cls += "matrix_group_start ";
-            if (rec && rec["hl" + groupIndex]) cls += "to_mau_zone";
-            cls = cls.trim();
-            return cls ? { className: cls } : {};
+            var c = cls;
+            if (rec && rec["hl" + groupIndex]) c = (c ? c + " " : "") + "to_mau_zone";
+            return c ? { className: c } : {};
           },
           render: function (v) {
-            if (!v) return "";
-            return String(v);
+            if (field === "so") return v ? String(v) : "";
+            return v;
           }
-        });
-        cols.push({
-          title: "T",
-          dataIndex: "tong" + groupIndex,
-          key: "tong" + groupIndex,
-          width: 60,
-          className: groupIndex > 1 ? "matrix_group_start" : "",
-          onCell: function (rec) {
-            var cls = "";
-            if (groupIndex > 1) cls += "matrix_group_start ";
-            if (rec && rec["hl" + groupIndex]) cls += "to_mau_zone";
-            cls = cls.trim();
-            return cls ? { className: cls } : {};
-          }
-        });
-        cols.push({
-          title: "SL",
-          dataIndex: "dem" + groupIndex,
-          key: "dem" + groupIndex,
-          width: 60,
-          className: groupIndex > 1 ? "matrix_group_start" : "",
-          onCell: function (rec) {
-            var cls = "";
-            if (groupIndex > 1) cls += "matrix_group_start ";
-            if (rec && rec["hl" + groupIndex]) cls += "to_mau_zone";
-            cls = cls.trim();
-            return cls ? { className: cls } : {};
-          }
-        });
-        cols.push({
-          title: "KXH",
-          dataIndex: "kxh" + groupIndex,
-          key: "kxh" + groupIndex,
-          width: 60,
-          className: groupIndex > 1 ? "matrix_group_start" : "",
-          onCell: function (rec) {
-            var cls = "";
-            if (groupIndex > 1) cls += "matrix_group_start ";
-            if (rec && rec["hl" + groupIndex]) cls += "to_mau_zone";
-            cls = cls.trim();
-            return cls ? { className: cls } : {};
-          }
-        });
-        })(g);
+        };
       }
+
+      function makeGroupChildren(groupIndex, sepKey, showTitles) {
+        var out = [];
+        if (sepKey) out.push(makeSepCol(sepKey));
+        var st = showTitles ? "STT" : "";
+        var tg = showTitles ? "Tổng" : "";
+        var dm = showTitles ? "SL" : "";
+        var kx = showTitles ? "KXH" : "";
+        out.push(makeLeaf(groupIndex, "so", st, 55, true));
+        out.push(makeLeaf(groupIndex, "tong", tg, 55, false));
+        out.push(makeLeaf(groupIndex, "dem", dm, 55, false));
+        out.push(makeLeaf(groupIndex, "kxh", kx, 55, false));
+        return out;
+      }
+
+      var total = Math.max(1, Number(groupCount || 5));
+      var cols = [
+        makeLeaf(1, "so", "STT", 60, true),
+        makeLeaf(1, "tong", "Tổng", 60, false),
+        makeLeaf(1, "dem", "SL", 60, false),
+        makeLeaf(1, "kxh", "KXH", 60, false)
+      ];
+
+      if (total === 1) return cols;
+
+      if (total >= 2) {
+        cols.push({ title: "", key: "matrix_block_2", children: makeGroupChildren(2, "vach_a", false) });
+      }
+
+      if (total >= 3) {
+        var middleChildren = [];
+        for (var g = 3; g <= Math.max(3, total - 1); g += 1) {
+          if (g >= total) break;
+          var sepKey = g === 3 ? "vach_b" : ("vach_m_" + g);
+          middleChildren = middleChildren.concat(makeGroupChildren(g, sepKey, false));
+        }
+        if (middleChildren.length) {
+          cols.push({ title: String(middleTitle || ""), key: "matrix_middle_block", children: middleChildren });
+        }
+      }
+
+      if (total >= 3) {
+        cols.push({
+          title: String(rightTitle || ""),
+          key: "matrix_right_block",
+          children: makeGroupChildren(total, "vach_d", false)
+        });
+      }
+
       return cols;
     }
 
@@ -2700,43 +2771,56 @@
 
     function buildLaySoKyTitle(comboLabel) {
       var base = normalizeKqTitleLabel(comboLabel);
-      var range = Number(sap_xep) === 0
-        ? ("1-" + String(so_ky) + "-" + String(lay_so_ky))
-        : (String(so_ky) + "-1-" + String(lay_so_ky));
-      return base + " " + range + " " + String(thu_tuan || "") + " " + String(den_ngay || "");
+      var range = "1-" + String(appliedThongKe.so_ky) + "-" + String(appliedThongKe.lay_so_ky);
+      return base + " " + range + " " + String(appliedThongKe.thu_tuan || "") + " " + String(appliedThongKe.den_ngay || "");
     }
 
     function buildKxhTitle(comboLabel) {
       var base = normalizeKqTitleLabel(comboLabel);
-      var range = "1-" + String(so_ky) + "-" + String(kxh_phai_lonhon);
+      var range = "1-" + String(appliedThongKe.so_ky) + "-" + String(appliedThongKe.kxh_phai_lonhon);
       return base + " " + range;
     }
 
     function buildDemNhoHonTitle(comboLabel) {
       var base = normalizeKqTitleLabel(comboLabel);
-      var range = "1-" + String(so_ky) + "-" + String(dem_nho_hon);
+      var range = "1-" + String(appliedThongKe.so_ky) + "-" + String(appliedThongKe.dem_nho_hon);
       return base + " " + range;
     }
 
+    function buildMatrixTitle(comboLabel) {
+      var base = normalizeKqTitleLabel(comboLabel);
+      var threshold = Number(appliedThongKe.dem_lon_hon || 0);
+      if (Number(appliedThongKe.so_ky) > 0) {
+        if (Number(appliedThongKe.sap_xep) === 0) {
+          var format = base + " " + String(appliedThongKe.so_ky) + "-1";
+          return threshold > 0 ? format + "-" + String(threshold) : format;
+        }
+        var format1 = base + " 1-" + String(appliedThongKe.so_ky);
+        return threshold > 0 ? format1 + "-" + String(threshold) : format1;
+      }
+      return base;
+    }
+
     function buildMainThongKeTitle(comboLabel) {
-      if (Number(dem_lon_hon) > 0 && so_chu.length > 0) {
-        return comboLabel + "(" + so_chu.join("-") + ")";
+      if (Number(appliedThongKe.dem_lon_hon) > 0 && (appliedThongKe.so_chu || []).length > 0) {
+        return comboLabel + "(" + (appliedThongKe.so_chu || []).join("-") + ")";
       }
       return comboLabel;
     }
 
     function buildLichSuSoChuTitle(comboLabel) {
       var base = normalizeKqTitleLabel(comboLabel);
-      if (Number(dem_lon_hon) > 0 && so_chu.length > 0) {
-        return base + "(" + so_chu.join("-") + ")";
+      if (Number(appliedThongKe.dem_lon_hon) > 0 && (appliedThongKe.so_chu || []).length > 0) {
+        return base + "(" + (appliedThongKe.so_chu || []).join("-") + ")";
       }
       return base;
     }
 
     function buildThongKeMoiKqTitle(comboLabel) {
-      var thuFromDate = days[chuyenNgay(den_ngay, "dd/mm/yyyy").getDay()];
+      var appliedDate = String(appliedThongKe.den_ngay || den_ngay || "");
+      var thuFromDate = days[chuyenNgay(appliedDate, "dd/mm/yyyy").getDay()];
       var daiLabel = normalizeKqTitleLabel(comboLabel);
-      return String(thuFromDate || "") + " " + String(den_ngay || "") + " " + String(daiLabel || "");
+      return String(thuFromDate || "") + " " + String(appliedDate || "") + " " + String(daiLabel || "");
     }
 
     function buildComboDisplay(comboKey) {
@@ -2840,7 +2924,7 @@
                 scroll: { x: 1200 },
                 rowClassName: function (rec) {
                   if (activeAction === "tkm" && rec && rec.thoa_man) return "to_mau";
-                  if (activeAction === "tk" && Number(dem_lon_hon) > 0 && so_chu.length > 0 && ds_dai_chon_so_chu.length > 0 && so_chu.indexOf(String(rec && rec.so || "")) >= 0) return "to_mau";
+                  if (activeAction === "tk" && Number(appliedThongKe.dem_lon_hon) > 0 && (appliedThongKe.so_chu || []).length > 0 && (appliedThongKe.so_chu || []).indexOf(String(rec && rec.so || "")) >= 0) return "to_mau";
                   return "";
                 }
               })
@@ -2866,59 +2950,78 @@
             }
           }));
         } else {
-          kqChildren = h("div", { className: "kqxs-kq-row" }, [
-                Number(lay_so_ky) > 0 && grp.laySoKyRows.length
-                  ? h("div", { key: "lsk_" + grp.combo, className: "kqxs-kq-col kqxs-kq-col-main kqxs-kq-zone" }, h(Table, {
-                      rowKey: "id",
-                      columns: buildLaySoKyColumns(),
-                      dataSource: grp.laySoKyRows,
-                      size: "small",
-                      pagination: false,
-                      bordered: true,
-                      scroll: { x: "max-content" },
-                      title: function () {
-                        var titleText = buildLaySoKyTitle(comboTenDai);
-                        return renderTableTitleWithExport(titleText, function (evt) {
-                          captureTableFromActionEvent(evt, "kqxs_lay_so_ky_" + String(grp.combo || ""));
-                        });
-                      }
-                    }))
-                  : null,
-                Number(kxh_phai_lonhon) > 0
-                  ? h("div", { key: "kxh_" + grp.combo, className: "kqxs-kq-col kqxs-kq-col-side kqxs-kq-zone" }, h(Table, {
-                      rowKey: "id",
-                      columns: pairColumns,
-                      dataSource: grp.kxhPairRows,
-                      size: "small",
-                      pagination: false,
-                      bordered: true,
-                      scroll: { x: "max-content" },
-                      title: function () {
-                        var titleText = buildKxhTitle(comboTenDai);
-                        return renderTableTitleWithExport(titleText, function (evt) {
-                          captureTableFromActionEvent(evt, "kqxs_kq_kxh_" + String(grp.combo || ""));
-                        });
-                      }
-                    }))
-                  : null,
-                Number(dem_nho_hon) > 0
-                  ? h("div", { key: "dnh_" + grp.combo, className: "kqxs-kq-col kqxs-kq-col-side kqxs-kq-zone" }, h(Table, {
-                      rowKey: "id",
-                      columns: pairColumns,
-                      dataSource: grp.demNhoPairRows,
-                      size: "small",
-                      pagination: false,
-                      bordered: true,
-                      scroll: { x: "max-content" },
-                      title: function () {
-                        var titleText = buildDemNhoHonTitle(comboTenDai);
-                        return renderTableTitleWithExport(titleText, function (evt) {
-                          captureTableFromActionEvent(evt, "kqxs_kq_dem_" + String(grp.combo || ""));
-                        });
-                      }
-                    }))
-                  : null
-              ]);
+          if (Number(appliedThongKe.dem_lon_hon) > 0 && Number(appliedThongKe.sap_xep) === 0) {
+            var matrixTitle = buildMatrixTitle(comboTenDai);
+            var matrixDateTitle = (String(appliedThongKe.thu_tuan || "") + " " + String(appliedThongKe.den_ngay || "")).trim();
+            kqChildren = h("div", { className: "kqxs-kq-pane" }, h(Table, {
+              rowKey: "id",
+              columns: buildMatrixColumns(grp.matrixGroupCount || 5, matrixTitle, matrixDateTitle),
+              dataSource: grp.matrixRows || [],
+              size: "small",
+              pagination: false,
+              bordered: true,
+              scroll: { x: 1400 },
+              title: function () {
+                return renderTableTitleWithExport(matrixTitle, function (evt) {
+                  captureTableFromActionEvent(evt, "kqxs_kq_matrix_" + String(grp.combo || ""));
+                });
+              }
+            }));
+          } else {
+            kqChildren = h("div", { className: "kqxs-kq-row" }, [
+                  Number(appliedThongKe.lay_so_ky) > 0 && grp.laySoKyRows.length
+                    ? h("div", { key: "lsk_" + grp.combo, className: "kqxs-kq-col kqxs-kq-col-main kqxs-kq-zone" }, h(Table, {
+                        rowKey: "id",
+                        columns: buildLaySoKyColumns(),
+                        dataSource: grp.laySoKyRows,
+                        size: "small",
+                        pagination: false,
+                        bordered: true,
+                        scroll: { x: "max-content" },
+                        title: function () {
+                          var titleText = buildLaySoKyTitle(comboTenDai);
+                          return renderTableTitleWithExport(titleText, function (evt) {
+                            captureTableFromActionEvent(evt, "kqxs_lay_so_ky_" + String(grp.combo || ""));
+                          });
+                        }
+                      }))
+                    : null,
+                  Number(appliedThongKe.kxh_phai_lonhon) > 0
+                    ? h("div", { key: "kxh_" + grp.combo, className: "kqxs-kq-col kqxs-kq-col-side kqxs-kq-zone" }, h(Table, {
+                        rowKey: "id",
+                        columns: pairColumns,
+                        dataSource: grp.kxhPairRows,
+                        size: "small",
+                        pagination: false,
+                        bordered: true,
+                        scroll: { x: "max-content" },
+                        title: function () {
+                          var titleText = buildKxhTitle(comboTenDai);
+                          return renderTableTitleWithExport(titleText, function (evt) {
+                            captureTableFromActionEvent(evt, "kqxs_kq_kxh_" + String(grp.combo || ""));
+                          });
+                        }
+                      }))
+                    : null,
+                  Number(appliedThongKe.dem_nho_hon) > 0
+                    ? h("div", { key: "dnh_" + grp.combo, className: "kqxs-kq-col kqxs-kq-col-side kqxs-kq-zone" }, h(Table, {
+                        rowKey: "id",
+                        columns: pairColumns,
+                        dataSource: grp.demNhoPairRows,
+                        size: "small",
+                        pagination: false,
+                        bordered: true,
+                        scroll: { x: "max-content" },
+                        title: function () {
+                          var titleText = buildDemNhoHonTitle(comboTenDai);
+                          return renderTableTitleWithExport(titleText, function (evt) {
+                            captureTableFromActionEvent(evt, "kqxs_kq_dem_" + String(grp.combo || ""));
+                          });
+                        }
+                      }))
+                    : null
+                ]);
+          }
         }
 
         items.push({
