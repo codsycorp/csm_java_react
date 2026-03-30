@@ -2105,6 +2105,13 @@ public class WebSpringController {
                         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                                 .body("Dữ liệu base64 rỗng".getBytes(StandardCharsets.UTF_8));
                     }
+                    // 🔴 GUARD: Reject oversized base64 payloads (8MB decoded limit)
+                    long approxDecodedBytes = (base64Image.length() * 3L) / 4L;
+                    if (approxDecodedBytes > 8 * 1024 * 1024) {
+                        logger.warn("⛔ Base64 upload rejected: exceeds 8MB limit (appId={}, size={}MB)", finalAppId, approxDecodedBytes / (1024 * 1024));
+                        return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
+                                .body("File quá lớn. Giới hạn: 8MB cho base64 upload.".getBytes(StandardCharsets.UTF_8));
+                    }
                     try {
                         // Tách tên file và đuôi file
                         int lastDotIndex = name.lastIndexOf('.');
@@ -2125,7 +2132,6 @@ public class WebSpringController {
                         String finalFileName = sanitizedName + fileExtension;
 
                         // Tránh cấp phát byte[] lớn cho video: decode Base64 theo stream để giảm áp lực RAM
-                        long approxDecodedBytes = (base64Image.length() * 3L) / 4L;
                         logger.info("⬆️ Upload base64 request appId={} file={} approxSize={}MB", finalAppId, finalFileName,
                             Math.max(1L, approxDecodedBytes / (1024 * 1024)));
 
@@ -2171,11 +2177,26 @@ public class WebSpringController {
                                 .body("Tên file là bắt buộc khi upload từ link.".getBytes(StandardCharsets.UTF_8));
                     }
                     try {
-                        byte[] buffer = new java.net.URL(link).openStream().readAllBytes();
-                        // Sanitize the filename using xoa_dau
+                        // 🔴 GUARD: Stream download with 32MB limit to avoid loading entire file in RAM
                         String sanitizedName = xoa_dau(name);
                         Path targetFilePath = uploadRootPath.resolve(sanitizedName);
-                        Files.write(targetFilePath, buffer);
+                        long maxLinkBytes = 32 * 1024 * 1024;
+                        long downloadedBytes = 0;
+                        byte[] buffer = new byte[8192]; // 8KB chunks
+                        int bytesRead;
+                        try (java.io.InputStream in = new java.net.URL(link).openStream();
+                             java.io.OutputStream out = Files.newOutputStream(targetFilePath, java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.TRUNCATE_EXISTING)) {
+                            while ((bytesRead = in.read(buffer)) != -1) {
+                                downloadedBytes += bytesRead;
+                                if (downloadedBytes > maxLinkBytes) {
+                                    logger.warn("⛔ Link upload rejected: exceeds 32MB limit (appId={}, url={})", finalAppId, link);
+                                    Files.deleteIfExists(targetFilePath);
+                                    return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
+                                            .body("File từ link quá lớn. Giới hạn: 32MB. Sử dụng multipart cho file lớn hơn.".getBytes(StandardCharsets.UTF_8));
+                                }
+                                out.write(buffer, 0, bytesRead);
+                            }
+                        }
 
                         String thumbUrl = processUploadedMediaArtifacts(finalAppId, sanitizedName, targetFilePath);
 
@@ -3460,9 +3481,7 @@ public class WebSpringController {
                                 + " không tồn tại hoặc không hợp lệ.</h2></body></html>");
                     }
                     } finally {
-                        // \ud83d\udd34 ALWAYS release semaphore permit để tránh deadlock
-                        ssrSemaphore.release();
-                        logger.debug("ud83dudfe2 SSR semaphore released, available permits: {}", ssrSemaphore.availablePermits());
+                        // 🔴 REMOVED: Duplicate release was here - now only release in outer finally below
                     }
                 } // ===== KẾT THÚC BỔ SUNG LOGIC CHO SSR VỚI REACT =====
                 else {

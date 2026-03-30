@@ -1,0 +1,1 @@
+import{j as r}from"./ui-core.C7EBaH09.js";import i from"./index.I-VPID8y.js";import"./index.Cmij7D_g.js";import"./CsmKanbanBoard.D3nJ0pIi.js";import"./index.BXWlNTjp.js";import"./index.CcGcFu0b.js";import"./system-user-menu-config.X6qPwiF9.js";function o(){return r.jsx(i,{})}export{o as default};

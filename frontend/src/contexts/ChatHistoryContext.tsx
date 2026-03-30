@@ -74,7 +74,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
     () => (user.app_id || "").trim() || useAppStore.getState().getCurrentAppId() || "csm",
     [user.app_id]
   );
-  const { guestPhone, guestSessionId, ensureGuestSessionId, isGuest } = useGuestPhone();
+  const { guestPhone, guestSessionId, isGuest } = useGuestPhone();
   const isAdminUser = !!user.dev || !!user.roles?.includes('admin');
   const chatActor: ChatActor = isGuest ? 'guest' : (isAdminUser ? 'admin' : 'user');
   
@@ -94,6 +94,18 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
   
   // Ref to track loadHistory callback to avoid circular dependency
   const loadHistoryRef = useRef<typeof loadHistory | null>(null);
+  const loadHistoryInFlightRef = useRef<Record<string, Promise<void>>>({});
+  const loadHistoryBackoffUntilRef = useRef<Record<string, number>>({});
+  const localHistoryHydratedRef = useRef<Record<string, boolean>>({});
+  const markAsReadInFlightRef = useRef<Record<string, boolean>>({});
+  const markAsReadBackoffUntilRef = useRef<Record<string, number>>({});
+  const markAsReadLastAttemptRef = useRef<Record<string, number>>({});
+  const readUpdateReloadLastRunRef = useRef<Record<string, number>>({});
+
+  const LOAD_HISTORY_ERROR_BACKOFF_MS = 5000;
+  const MARK_AS_READ_ERROR_BACKOFF_MS = 5000;
+  const MARK_AS_READ_THROTTLE_MS = 2000;
+  const READ_UPDATE_RELOAD_THROTTLE_MS = 3000;
 
   const emitAutoOpenChat = useCallback((detail: {
     targetRoom: string;
@@ -122,8 +134,46 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
   }, [appId]);
 
   const resolveGuestIdentity = useCallback((guestIdentityOverride?: string) => {
-    return (guestIdentityOverride || guestIdentity || ensureGuestSessionId() || '').trim();
-  }, [guestIdentity, ensureGuestSessionId]);
+    const override = (guestIdentityOverride || '').trim();
+    if (override) return override;
+
+    const fromState = (guestIdentity || '').trim();
+    if (fromState) return fromState;
+
+    if (typeof window !== 'undefined') {
+      const fromStorage = (
+        localStorage.getItem(`csm_guest_session_${appId}`)
+        || localStorage.getItem(`csm_guest_phone_${appId}`)
+        || ''
+      ).trim();
+      if (fromStorage) return fromStorage;
+    }
+
+    return '';
+  }, [guestIdentity, appId]);
+
+  const updateRoomMessages = useCallback((room: string, nextMessages: ChatMessage[]) => {
+    setMessages(prev => {
+      const current = prev[room] || [];
+      const unchanged =
+        current.length === nextMessages.length
+        && current.every((msg, idx) => {
+          const next = nextMessages[idx];
+          return (
+            msg?.timestamp === next?.timestamp
+            && msg?.message === next?.message
+            && msg?.userId === next?.userId
+            && msg?.username === next?.username
+          );
+        });
+
+      if (unchanged) {
+        return prev;
+      }
+
+      return { ...prev, [room]: nextMessages };
+    });
+  }, []);
 
   const resolveGuestApiRoom = useCallback((identity: string) => {
     return `guest:${appId};${identity}`;
@@ -266,14 +316,37 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
   
   // Load history from server
   const loadHistory = useCallback(async (room: string, guestIdentityOverride?: string) => {
+    const identityKey = chatActor === 'guest'
+      ? resolveGuestIdentity(guestIdentityOverride)
+      : (guestIdentityOverride || '').trim();
+    const requestKey = `${room}::${identityKey}`;
+    const now = Date.now();
+    const backoffUntil = loadHistoryBackoffUntilRef.current[requestKey] || 0;
+
+    if (now < backoffUntil) {
+      return;
+    }
+
+    const inFlight = loadHistoryInFlightRef.current[requestKey];
+    if (inFlight) {
+      return inFlight;
+    }
+
+    const executeLoad = (async () => {
     // ONLY guest loads from localStorage for offline support
     // Admin ALWAYS loads fresh from server for real-time data
-    if (isGuest) {
+    if (isGuest && !localHistoryHydratedRef.current[room]) {
+      localHistoryHydratedRef.current[room] = true;
       const localMessages = loadFromLocalStorage(room);
       if (localMessages.length > 0) {
         console.log(`💾 [ChatHistory] Guest restored ${localMessages.length} messages from localStorage for room: ${room}`);
-        setMessages(prev => ({ ...prev, [room]: localMessages }));
+        updateRoomMessages(room, localMessages);
       }
+    }
+
+    // Only call server when socket is connected.
+    if (!connected || !socket) {
+      return;
     }
     
     // Then load from server (always for both guest and admin)
@@ -286,7 +359,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
         history = await (window as any).loadGuestChatHistory?.(appId, identity, 100, guestPhone) || [];
         if (history && Array.isArray(history) && history.length > 0) {
           console.log(`📥 [ChatHistory] Loaded ${history.length} messages from server for guest ${identity}`);
-          setMessages(prev => ({ ...prev, [room]: history }));
+          updateRoomMessages(room, history);
           saveToLocalStorage(room, history);
         }
       } else if (chatActor === 'admin') {
@@ -294,24 +367,34 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
         if (target.mode === 'admin-app') {
           const appHistory = await (window as any).loadAllAppChatHistory?.(appId, 200) || {};
           console.log('📥 [ChatHistory] loadAllAppChatHistory response:', appHistory);
-          const msgs = appHistory.messages || [];
+          const msgs = (appHistory.messages || []).filter((msg: ChatMessage) => msg?.appId === appId);
           console.log(`📥 [ChatHistory] Admin loaded ${msgs.length} messages for appId "${appId}"`);
           if (msgs.length > 0) {
             console.log('📥 [ChatHistory] Sample messages:', msgs.slice(0, 2));
-            setMessages(prev => ({ ...prev, [appId]: msgs }));
           }
+          updateRoomMessages(appId, msgs);
         } else {
           history = await (window as any).loadAdminChatHistory?.(target.apiRoom, 100, appId) || [];
-          if (history && Array.isArray(history) && history.length > 0) {
-            console.log(`📥 [ChatHistory] Admin loaded ${history.length} messages from server for ${target.mode}`);
-            setMessages(prev => ({ ...prev, [target.uiRoom]: history }));
+          const filteredHistory = target.mode === 'admin-system'
+            ? history
+            : (history || []).filter((msg: ChatMessage) => msg?.appId === appId);
+          if (filteredHistory && Array.isArray(filteredHistory) && filteredHistory.length > 0) {
+            console.log(`📥 [ChatHistory] Admin loaded ${filteredHistory.length} messages from server for ${target.mode}`);
           }
+          updateRoomMessages(target.uiRoom, filteredHistory || []);
         }
       }
     } catch (error) {
+      loadHistoryBackoffUntilRef.current[requestKey] = Date.now() + LOAD_HISTORY_ERROR_BACKOFF_MS;
       console.warn('Failed to load chat history from server:', error);
     }
-  }, [isGuest, chatActor, resolveGuestIdentity, guestPhone, appId, loadFromLocalStorage, saveToLocalStorage, resolveAdminHistoryTarget]);
+    })();
+
+    loadHistoryInFlightRef.current[requestKey] = executeLoad;
+    await executeLoad.finally(() => {
+      delete loadHistoryInFlightRef.current[requestKey];
+    });
+  }, [isGuest, chatActor, resolveGuestIdentity, guestPhone, appId, loadFromLocalStorage, saveToLocalStorage, resolveAdminHistoryTarget, connected, socket, updateRoomMessages]);
   
   // Update loadHistory ref whenever it changes (for initialization to use latest)
   useEffect(() => {
@@ -363,11 +446,26 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
   
   // Mark as read with refresh
   const markAsRead = useCallback((room: string) => {
-    if (!socket) return;
+    if (!socket || !connected) return;
     
     console.log(`📖 [ChatHistory] Marking room as read: ${room}`);
 
     const target = resolveReadRoom(room);
+    const markKey = `${target.mode}:${target.uiRoom}:${target.identity || ''}`;
+    const now = Date.now();
+    const backoffUntil = markAsReadBackoffUntilRef.current[markKey] || 0;
+    const lastAttempt = markAsReadLastAttemptRef.current[markKey] || 0;
+
+    if (markAsReadInFlightRef.current[markKey]) {
+      return;
+    }
+
+    if (now < backoffUntil || now - lastAttempt < MARK_AS_READ_THROTTLE_MS) {
+      return;
+    }
+
+    markAsReadLastAttemptRef.current[markKey] = now;
+    markAsReadInFlightRef.current[markKey] = true;
 
     if (target.mode === 'guest' && target.identity) {
       (window as any).markGuestMessagesAsRead?.(appId, target.identity).then(() => {
@@ -376,7 +474,10 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
           console.warn("Failed to reload history after marking as read", err);
         });
       }).catch((err: any) => {
+        markAsReadBackoffUntilRef.current[markKey] = Date.now() + MARK_AS_READ_ERROR_BACKOFF_MS;
         console.warn("Failed to mark guest messages as read", err);
+      }).finally(() => {
+        delete markAsReadInFlightRef.current[markKey];
       });
     } else if (chatActor !== 'guest' && user.userId) {
       (window as any).markAllMessagesAsRead?.(target.apiRoom, user.userId).then(() => {
@@ -385,8 +486,13 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
           console.warn("Failed to reload history after marking as read", err);
         });
       }).catch((err: any) => {
+        markAsReadBackoffUntilRef.current[markKey] = Date.now() + MARK_AS_READ_ERROR_BACKOFF_MS;
         console.warn("Failed to mark admin messages as read", err);
+      }).finally(() => {
+        delete markAsReadInFlightRef.current[markKey];
       });
+    } else {
+      delete markAsReadInFlightRef.current[markKey];
     }
     
     // Clear unread count
@@ -401,16 +507,18 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
       }
       return updated;
     });
-  }, [socket, appId, user.userId, loadHistoryRef, resolveReadRoom, chatActor]);
+  }, [socket, connected, appId, user.userId, loadHistoryRef, resolveReadRoom, chatActor]);
   
   // Open/close chat
   const openChat = useCallback((room: string) => {
-    setActiveChats(prev => [...new Set([...prev, room])]);
-    loadHistory(room);
-  }, [loadHistory]);
+    setActiveChats(prev => (prev.includes(room) ? prev : [...prev, room]));
+    if (connected && socket) {
+      loadHistory(room);
+    }
+  }, [loadHistory, connected, socket]);
   
   const closeChat = useCallback((room: string) => {
-    setActiveChats(prev => prev.filter(r => r !== room));
+    setActiveChats(prev => (prev.includes(room) ? prev.filter(r => r !== room) : prev));
   }, []);
   
   // Clear messages when appId changes (user switches app or logs in to different app)
@@ -659,6 +767,12 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
     const handleReadUpdate = (data: any) => {
       const { room, userId: readerId, action } = data;
       if (action === 'markAllAsRead' && room) {
+        const now = Date.now();
+        const lastReloadAt = readUpdateReloadLastRunRef.current[room] || 0;
+        if (now - lastReloadAt < READ_UPDATE_RELOAD_THROTTLE_MS) {
+          return;
+        }
+        readUpdateReloadLastRunRef.current[room] = now;
         console.log(`🔄 [ChatHistory] Received read update for room ${room} by ${readerId}`);
         // Reload history for the updated room to get latest readBy status
         loadHistory(room).catch(err => console.warn('Failed to reload after read update:', err));
@@ -738,13 +852,21 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
             // 2. Load danh sách tất cả guests đã chat trong app này
             try {
               console.log(`📱 [ChatHistory] About to call loadChatGuestsList with appId="${appId}"`);
-              const guestsList = await (window as any).loadChatGuestsList?.(appId) || [];
-              console.log(`📱 [ChatHistory] Loaded guests list for appId "${appId}":`, guestsList);
+              const rawGuestsList = await (window as any).loadChatGuestsList?.(appId) || [];
+              const guestsList = (Array.isArray(rawGuestsList) ? rawGuestsList : [])
+                .map((entry: any) => {
+                  if (typeof entry === 'string') return entry.trim();
+                  const candidate = entry?.guestSessionId || entry?.guestPhone || entry?.guestIdentity || entry?.room || '';
+                  return typeof candidate === 'string' ? candidate.trim() : '';
+                })
+                .filter((value: string) => !!value);
+              const uniqueGuests = Array.from(new Set(guestsList));
+              console.log(`📱 [ChatHistory] Loaded guests list for appId "${appId}":`, uniqueGuests);
               
               // 3. Load lịch sử chat cho từng guest
-              if (guestsList && Array.isArray(guestsList) && guestsList.length > 0) {
-                console.log(`📱 [ChatHistory] Loading history for ${guestsList.length} guests...`);
-                for (const guestIdentityValue of guestsList) {
+              if (uniqueGuests.length > 0) {
+                console.log(`📱 [ChatHistory] Loading history for ${uniqueGuests.length} guests...`);
+                for (const guestIdentityValue of uniqueGuests) {
                   try {
                     console.log(`📱 [ChatHistory] Loading history for guest: ${guestIdentityValue}`);
                     await loadHistoryRef.current?.(guestIdentityValue, guestIdentityValue);
@@ -810,8 +932,24 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
       
       // For admin users, reload all guests list which will refresh all messages
       if (!isGuest && user.userId) {
-        const guestsList = await (window as any).loadChatGuestsList?.(appId) || [];
-        console.log(`✅ [ChatHistory] Refreshed ${guestsList.length} conversations`);
+        await loadHistoryRef.current?.('csm');
+        await loadHistoryRef.current?.(appId);
+
+        const rawGuestsList = await (window as any).loadChatGuestsList?.(appId) || [];
+        const guestsList = (Array.isArray(rawGuestsList) ? rawGuestsList : [])
+          .map((entry: any) => {
+            if (typeof entry === 'string') return entry.trim();
+            const candidate = entry?.guestSessionId || entry?.guestPhone || entry?.guestIdentity || entry?.room || '';
+            return typeof candidate === 'string' ? candidate.trim() : '';
+          })
+          .filter((value: string) => !!value);
+        const uniqueGuests = Array.from(new Set(guestsList));
+
+        for (const guestIdentityValue of uniqueGuests) {
+          await loadHistoryRef.current?.(guestIdentityValue, guestIdentityValue);
+        }
+
+        console.log(`✅ [ChatHistory] Refreshed ${uniqueGuests.length} guest conversations for appId="${appId}"`);
         
         // Recalculate unread counts
         setMessages(prevMessages => {

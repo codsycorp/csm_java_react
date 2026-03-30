@@ -10,6 +10,7 @@ DB_PATH="csm_datas/database"
 LOG_DIR="logs"
 LOG_FILE="$LOG_DIR/console.log"
 GC_LOG="$LOG_DIR/gc.log"
+MAINTENANCE_PID_FILE="$LOG_DIR/log-maintenance.pid"
 MAX_LOG_SIZE=$((100 * 1024 * 1024)) # 100MB
 
 # Log retention/cap (can override via env)
@@ -55,11 +56,11 @@ if [ -z "${HEAP_SIZE:-}" ]; then
         if [ "$total_mem_mb" -lt 3500 ]; then
             HEAP_SIZE="1g"
         elif [ "$total_mem_mb" -lt 7000 ]; then
-            HEAP_SIZE="2g"
-        elif [ "$total_mem_mb" -lt 12000 ]; then
             HEAP_SIZE="3g"
-        else
+        elif [ "$total_mem_mb" -lt 12000 ]; then
             HEAP_SIZE="4g"
+        else
+            HEAP_SIZE="6g"
         fi
     else
         HEAP_SIZE="2g"
@@ -69,8 +70,49 @@ fi
 # Init heap smaller than max to reduce RSS pressure on low-RAM systems
 HEAP_INIT="${HEAP_INIT:-512m}"
 DIRECT_MEMORY_SIZE="${DIRECT_MEMORY_SIZE:-256m}"
+TOMCAT_MAX_THREADS="${TOMCAT_MAX_THREADS:-80}"
+TOMCAT_MAX_CONNECTIONS="${TOMCAT_MAX_CONNECTIONS:-300}"
+TOMCAT_ACCEPT_COUNT="${TOMCAT_ACCEPT_COUNT:-100}"
 
-log() { echo "[$(date +'%Y-%m-%d %H:%M:%S')] $*"; }
+log() {
+    local msg="[$(date +'%Y-%m-%d %H:%M:%S')] $*"
+    mkdir -p "$LOG_DIR" 2>/dev/null || true
+    echo "$msg"
+    echo "$msg" >> "$LOG_FILE" 2>/dev/null || true
+}
+
+start_log_maintenance_worker() {
+    mkdir -p "$LOG_DIR"
+
+    if [ -f "$MAINTENANCE_PID_FILE" ]; then
+        local old_pid
+        old_pid=$(cat "$MAINTENANCE_PID_FILE" 2>/dev/null || true)
+        if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
+            log "✓ Log maintenance worker already running (PID: $old_pid)"
+            return 0
+        fi
+        rm -f "$MAINTENANCE_PID_FILE" 2>/dev/null || true
+    fi
+
+    (
+        trap 'rm -f "$MAINTENANCE_PID_FILE" 2>/dev/null || true; exit 0' INT TERM EXIT
+        echo $$ > "$MAINTENANCE_PID_FILE"
+        while true; do
+            sleep 3600
+            rotate_logs
+            cleanup_logs_dir
+
+            if [ -d "$LOG_DIR" ]; then
+                find "$LOG_DIR" -name "gc.log*" -mtime +"$LOG_RETENTION_DAYS" -delete 2>/dev/null || true
+                find "$LOG_DIR" -name "hs_err_pid*.log" -mtime +"$LOG_RETENTION_DAYS" -delete 2>/dev/null || true
+            fi
+        done
+    ) >/dev/null 2>&1 &
+
+    local worker_pid=$!
+    echo "$worker_pid" > "$MAINTENANCE_PID_FILE"
+    log "✓ Started log maintenance worker (PID: $worker_pid)"
+}
 
 rotate_logs() {
     mkdir -p "$LOG_DIR"
@@ -97,7 +139,8 @@ rotate_logs() {
     find "$LOG_DIR" -maxdepth 1 -name "console.log.*" -mtime +"$LOG_RETENTION_DAYS" -delete 2>/dev/null || true
 
     # Keep only last 10 log files
-    local log_count=$(ls -1 "$LOG_DIR"/console.log.* 2>/dev/null | wc -l)
+    local log_count
+    log_count=$(ls -1 "$LOG_DIR"/console.log.* 2>/dev/null | wc -l || true)
     if [ "$log_count" -gt 10 ]; then
         log "Cleaning old logs (keeping last 10, deleting $((log_count - 10)))"
         ls -1 "$LOG_DIR"/console.log.* 2>/dev/null | sort | head -n -10 | xargs rm -f 2>/dev/null || true
@@ -119,7 +162,7 @@ cleanup_logs_dir() {
 
     # Keep a bounded number of rotated app logs
     local app_log_count
-    app_log_count=$(ls -1 "$LOG_DIR"/application.log.* 2>/dev/null | wc -l)
+    app_log_count=$(ls -1 "$LOG_DIR"/application.log.* 2>/dev/null | wc -l || true)
     if [ "$app_log_count" -gt "$APP_LOG_MAX_FILES" ]; then
         local delete_count=$((app_log_count - APP_LOG_MAX_FILES))
         log "Cleaning old application logs (keeping $APP_LOG_MAX_FILES, deleting $delete_count)"
@@ -265,14 +308,14 @@ for ((i=1; i<=max_verify_attempts; i++)); do
     fi
 done
 
-jarCount=$(ls ${JAR_PREFIX}*.jar 2>/dev/null | wc -l | tr -d ' ')
+jarCount=$(ls ${JAR_PREFIX}*.jar 2>/dev/null | wc -l | tr -d ' ' || true)
 if [ "$jarCount" -gt 1 ]; then
     log "ERROR: Multiple jar files found:"
     ls ${JAR_PREFIX}*.jar
     exit 1
 fi
 
-jarName=$(ls ${JAR_PREFIX}*.jar 2>/dev/null)
+jarName=$(ls ${JAR_PREFIX}*.jar 2>/dev/null || true)
 if [ -z "$jarName" ]; then
     log "ERROR: No jar file found"
     exit 1
@@ -323,6 +366,9 @@ nohup java \
     --spring.profiles.active=prod \
     --server.port=$APP_PORT \
     --logging.file.name="$LOG_DIR/application.log" \
+    --server.tomcat.threads.max="$TOMCAT_MAX_THREADS" \
+    --server.tomcat.max-connections="$TOMCAT_MAX_CONNECTIONS" \
+    --server.tomcat.accept-count="$TOMCAT_ACCEPT_COUNT" \
     --logging.logback.rollingpolicy.file-name-pattern="$LOG_DIR/application.log.%d{yyyy-MM-dd}.%i.gz" \
     --logging.logback.rollingpolicy.max-file-size="$APP_LOG_MAX_FILE_SIZE" \
     --logging.logback.rollingpolicy.max-history="$APP_LOG_MAX_HISTORY" \
@@ -354,17 +400,5 @@ else
     exit 1
 fi
 
-# Background hourly log maintenance
-(
-    while true; do
-        sleep 3600
-        rotate_logs
-        cleanup_logs_dir
-        
-        # Cleanup old GC logs
-        if [ -d "$LOG_DIR" ]; then
-            find "$LOG_DIR" -name "gc.log*" -mtime +"$LOG_RETENTION_DAYS" -delete 2>/dev/null || true
-            find "$LOG_DIR" -name "hs_err_pid*.log" -mtime +"$LOG_RETENTION_DAYS" -delete 2>/dev/null || true
-        fi
-    done
-) >/dev/null 2>&1 &
+# Start at most one background hourly log maintenance worker
+start_log_maintenance_worker

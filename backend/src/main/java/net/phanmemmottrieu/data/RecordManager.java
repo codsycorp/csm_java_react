@@ -1,6 +1,7 @@
 package net.phanmemmottrieu.data;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.exc.MismatchedInputException;
 
@@ -66,6 +67,16 @@ public class RecordManager {
     private static final long BATCH_TIMEOUT_MS = 100;  // Or flush after 100ms
     private static final int DEFAULT_FILTER_TAKE = 500;
     private static final int MAX_FILTER_TAKE = 5000;
+    private static final int MAX_SAFE_JSON_RECORD_BYTES = 32 * 1024 * 1024;
+    private static final int ACCOUNT_SELECTIVE_PARSE_THRESHOLD_BYTES = 64 * 1024;
+    private static final Set<String> ACCOUNT_SELECTIVE_FIELDS = Set.of(
+        "id", "email", "pass", "username", "phoneNumber", "actived", "app_token",
+        "full_name", "refresh", "refresh_token", "refresh_token_ip", "refresh_token_ua",
+        "refresh_token_expiry", "permissions", "menusPermissions", "permissionBitfield",
+        "permissionSchemaVersion", "dataScope", "dept_id", "branch_id", "department_id",
+        "team_id", "login_version", "loginVersion", "parent_account_id", "login_identifier",
+        "group_id", "app_id"
+    );
     private static final ScheduledExecutorService batchExecutor = 
         new java.util.concurrent.ScheduledThreadPoolExecutor(
             Math.max(2, Runtime.getRuntime().availableProcessors() / 2),
@@ -1546,22 +1557,6 @@ public class RecordManager {
         String indexKey = appId + "_" + tableName;
         luceneIndexLocks.putIfAbsent(indexKey, new Object());
         synchronized (luceneIndexLocks.get(indexKey)) {
-            // 0. Hủy toàn bộ batch pending/timer của index này để tránh flush lại dữ liệu cũ.
-            Timer timer = batchFlushTimers.remove(indexKey);
-            if (timer != null) {
-                try {
-                    timer.cancel();
-                } catch (Exception e) {
-                    logger.warn("Lỗi cancel batch timer khi xóa lucene index {}: {}", indexKey, e.getMessage());
-                }
-            }
-            UpdateBatchBuffer pendingBuffer = updateBatchBuffers.remove(indexKey);
-            if (pendingBuffer != null) {
-                synchronized (pendingBuffer.lock) {
-                    pendingBuffer.updates.clear();
-                }
-            }
-
             // 1. Đóng và xóa IndexWriter
             IndexWriter writer = indexWriterCache.remove(indexKey);
             if (writer != null) {
@@ -2380,12 +2375,25 @@ public class RecordManager {
      * @return A Map<String, Object> representing the record, or null if unprocessable.
           * @throws IOException 
           */
-         private Map<String, Object> deserializeValueToMap(byte[] valueBytes, String key) throws IOException {
+         private Map<String, Object> deserializeValueToMap(byte[] valueBytes, String key, String tableName) throws IOException {
         if (valueBytes == null || valueBytes.length == 0) {
             return null;
         }
 
         boolean isMetaKey = key != null && key.startsWith("__meta_");
+
+        if (valueBytes.length > MAX_SAFE_JSON_RECORD_BYTES) {
+            logger.error("❌ Bỏ qua record key '{}' vì kích thước {} bytes vượt ngưỡng an toàn {} bytes.",
+                    key, valueBytes.length, MAX_SAFE_JSON_RECORD_BYTES);
+            return null;
+        }
+
+        if (shouldUseSelectiveAccountParse(tableName, key, valueBytes.length)) {
+            Map<String, Object> selectiveRecord = deserializeSelectiveAccountRecord(valueBytes, key, tableName, isMetaKey);
+            if (selectiveRecord != null) {
+                return selectiveRecord;
+            }
+        }
 
         try {
             // Bước 1: Thử deserialize trực tiếp thành Map
@@ -2425,6 +2433,62 @@ public class RecordManager {
             return null;
         }
     }
+
+    private boolean shouldUseSelectiveAccountParse(String tableName, String key, int valueLength) {
+        if (valueLength < ACCOUNT_SELECTIVE_PARSE_THRESHOLD_BYTES) {
+            return false;
+        }
+        if ("csm_accounts".equals(tableName) || "csm_group_members".equals(tableName)) {
+            return true;
+        }
+        return key != null && (key.contains("csm_accounts") || key.contains("csm_group_members"));
+    }
+
+    private Map<String, Object> deserializeSelectiveAccountRecord(byte[] valueBytes, String key, String tableName, boolean isMetaKey) {
+        try (com.fasterxml.jackson.core.JsonParser parser = objectMapper.getFactory().createParser(valueBytes)) {
+            if (parser.nextToken() != JsonToken.START_OBJECT) {
+                return null;
+            }
+
+            Map<String, Object> record = new HashMap<>();
+            while (parser.nextToken() != JsonToken.END_OBJECT) {
+                String fieldName = parser.getCurrentName();
+                JsonToken valueToken = parser.nextToken();
+                if (fieldName == null || valueToken == null) {
+                    continue;
+                }
+
+                if (!ACCOUNT_SELECTIVE_FIELDS.contains(fieldName)) {
+                    if (valueToken == JsonToken.START_ARRAY || valueToken == JsonToken.START_OBJECT) {
+                        parser.skipChildren();
+                    }
+                    continue;
+                }
+
+                record.put(fieldName, readJsonValue(parser, valueToken));
+            }
+
+            if (!isMetaKey) {
+                logger.warn("⚠️ Selective-parse record key '{}' ở bảng '{}' ({} bytes) để tránh OOM khi đọc full JSON user record.",
+                        key, tableName, valueBytes.length);
+            }
+            return record;
+        } catch (Exception e) {
+            logger.warn("⚠️ Selective parse thất bại cho key '{}' ở bảng '{}': {}", key, tableName, e.getMessage());
+            return null;
+        }
+    }
+
+    private Object readJsonValue(com.fasterxml.jackson.core.JsonParser parser, JsonToken valueToken) throws IOException {
+        return switch (valueToken) {
+            case VALUE_STRING -> parser.getValueAsString();
+            case VALUE_TRUE, VALUE_FALSE -> parser.getBooleanValue();
+            case VALUE_NUMBER_INT, VALUE_NUMBER_FLOAT -> parser.getNumberValue();
+            case VALUE_NULL -> null;
+            case START_ARRAY, START_OBJECT -> parser.readValueAs(Object.class);
+            default -> parser.readValueAs(Object.class);
+        };
+    }
     
     // --- HÀM FIND ĐÃ ĐƯỢC CẬP NHẬT (KHÔNG DÙNG COLUMNFAMILYHANDLE) ---
     public Map<String, Object> find(String appId, String tableName, SearchFilter filter) {
@@ -2458,7 +2522,7 @@ public class RecordManager {
                 if (valueBytes != null) {
                     try {
                         // Sử dụng hàm deserializeValueToMap đã được cải tiến để xử lý lỗi kiểu dữ liệu
-                        Map<String, Object> record = deserializeValueToMap(valueBytes, currentKeyForLog);
+                        Map<String, Object> record = deserializeValueToMap(valueBytes, currentKeyForLog, tableName);
                         
                         if (record != null && recordMatchesFilterObject(record, filter)) {
                             // Nếu tìm thấy và khớp, trả về ngay lập tức
@@ -2584,7 +2648,7 @@ public class RecordManager {
                 for (String k : candidates) {
                     byte[] vb = db.get(k.getBytes(StandardCharsets.UTF_8));
                     if (vb != null) {
-                        Map<String, Object> record = deserializeValueToMap(vb, k);
+                        Map<String, Object> record = deserializeValueToMap(vb, k, tableName);
                         if (record != null && recordMatchesFilterObject(record, filter)) return record;
                     }
                 }
@@ -2633,7 +2697,7 @@ public class RecordManager {
                     try {
                         byte[] vb = db.get(k.getBytes(StandardCharsets.UTF_8));
                         if (vb != null) {
-                            Map<String, Object> record = deserializeValueToMap(vb, k);
+                            Map<String, Object> record = deserializeValueToMap(vb, k, tableName);
                             if (record != null && recordMatchesFilterObject(record, filter)) return record;
                         }
                     } catch (RocksDBException ex) {

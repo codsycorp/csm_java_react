@@ -148,6 +148,10 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
         setMessages(prev => ({ ...prev, [room]: localMessages }));
       }
     }
+
+    if (!connected || !socket) {
+      return;
+    }
     
     // LMKT: Only guest mode - load chat history for guest
     try {
@@ -168,7 +172,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
     } catch (error) {
       console.warn('Failed to load chat history from server:', error);
     }
-  }, [isGuest, guestIdentity, ensureGuestSessionId, guestPhone, appId, loadFromLocalStorage, saveToLocalStorage]);
+  }, [isGuest, guestIdentity, ensureGuestSessionId, guestPhone, appId, loadFromLocalStorage, saveToLocalStorage, connected, socket]);
   
   // Update loadHistory ref whenever it changes (for initialization to use latest)
   useEffect(() => {
@@ -240,7 +244,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
   
   // Mark as read - LMKT: Guest only
   const markAsRead = useCallback((room: string) => {
-    if (!socket || !guestIdentity) return;
+    if (!socket || !connected || !guestIdentity) return;
     
     // LMKT: Only guest mode
     (window as any).markGuestMessagesAsRead?.(appId, guestIdentity).catch((err: any) => {
@@ -257,13 +261,15 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
       }
       return updated;
     });
-  }, [socket, guestIdentity, appId]);
+  }, [socket, connected, guestIdentity, appId]);
   
   // Open/close chat
   const openChat = useCallback((room: string) => {
     setActiveChats(prev => [...new Set([...prev, room])]);
-    loadHistory(room);
-  }, [loadHistory]);
+    if (connected && socket) {
+      loadHistory(room);
+    }
+  }, [loadHistory, connected, socket]);
   
   const closeChat = useCallback((room: string) => {
     setActiveChats(prev => prev.filter(r => r !== room));

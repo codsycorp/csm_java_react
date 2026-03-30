@@ -1,0 +1,1 @@
+import{r as o}from"./index.Cmij7D_g.js";function e(e){return o.get("home/pie",{searchParams:e}).json()}function n(e){return o.post("home/line",{json:e}).json()}function s(e){return o.get("home/googlebot",{searchParams:e}).json()}function t(e){return o.post("home/googlebot/delete",{json:e}).json()}export{n as a,e as b,t as d,s as f};

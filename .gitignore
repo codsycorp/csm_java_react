@@ -32,6 +32,9 @@ backend/csm_datas/lucene_index/
 logs/
 *.log.*
 
+# JVM heap dumps
+*.hprof
+
 # Environment & Config files with sensitive data
 .env
 .env.*

@@ -23,6 +23,7 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
   const appId = (user.app_id || "").trim() || useAppStore.getState().getCurrentAppId() || "csm";
   const chatRoom = room || appId;
   const listRef = useRef<HTMLDivElement>(null);
+  const lastMarkReadRef = useRef<{ room: string; at: number } | null>(null);
   const [position, setPosition] = useState({ x: 20 + (index || 0) * 320, y: 20 });
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
@@ -116,6 +117,12 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
   // Mark as read khi chat box mở
   useEffect(() => {
     if (visible) {
+      const now = Date.now();
+      const last = lastMarkReadRef.current;
+      if (last && last.room === roomKey && now - last.at < 2000) {
+        return;
+      }
+      lastMarkReadRef.current = { room: roomKey, at: now };
       markAsRead(roomKey);
     }
   }, [visible, roomKey, markAsRead]);

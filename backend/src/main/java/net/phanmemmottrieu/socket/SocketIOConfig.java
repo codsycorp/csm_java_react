@@ -92,6 +92,7 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
     private static final String POLITE_GENERIC_WELCOME = "Xin chao anh/chị, em rat vui duoc ho tro. Anh/chị vui long cho em biet nhu cau dang quan tam va cach lien he de ben em tu van nhanh va chinh xac hon a.";
 
     private static final long AI_FOLLOWUP_DELAY_MS = 60_000L;
+    private static final long AUTO_WELCOME_SUPPRESSION_WINDOW_MS = 3 * 60_000L;
     private static final String AI_ASSISTANT_USER_ID = "ai_assistant";
     private static final String AI_ASSISTANT_USERNAME = "Tu van vien";
 
@@ -310,8 +311,66 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
         pendingGuestWelcomeTasks.put(key, future);
     }
 
+    private boolean isLikelyAutoContactMessage(String guestMessage) {
+        if (guestMessage == null || guestMessage.isBlank()) {
+            return false;
+        }
+
+        String normalized = Normalizer.normalize(guestMessage, Normalizer.Form.NFD)
+                .replaceAll("\\p{M}+", "")
+                .toLowerCase(Locale.ROOT)
+                .replaceAll("\\s+", " ")
+                .trim();
+
+        boolean hasLink = normalized.contains("http://") || normalized.contains("https://") || normalized.contains("www.");
+        boolean hasContactToken = normalized.contains("so dien thoai")
+                || normalized.contains("phone")
+                || normalized.contains("email")
+                || normalized.contains("toi quan tam den tin nay")
+                || normalized.contains("i'm interested in this post")
+                || normalized.contains("toi quan tam den bai viet")
+                || normalized.contains("my phone number");
+
+        return hasLink && hasContactToken;
+    }
+
+    private boolean hasRecentAutoWelcome(String appId, String guestIdentity, String guestPhone, long withinMs) {
+        try {
+            java.util.List<ChatMessage> history = chatPersistenceService.getHistoryByGuestIdentity(appId, guestIdentity, guestPhone, 20);
+            if (history == null || history.isEmpty()) {
+                return false;
+            }
+
+            long now = System.currentTimeMillis();
+            for (int i = history.size() - 1; i >= 0; i--) {
+                ChatMessage msg = history.get(i);
+                if (msg == null) {
+                    continue;
+                }
+                String eventType = msg.getEventType();
+                Long ts = msg.getTimestamp();
+                if (eventType != null && eventType.startsWith("ai_auto_welcome") && ts != null && now - ts <= withinMs) {
+                    return true;
+                }
+            }
+        } catch (Exception e) {
+            logger.warn("Unable to inspect recent auto welcome for appId={}, guestIdentity={}, error={}", appId, guestIdentity, e.getMessage());
+        }
+
+        return false;
+    }
+
     private void scheduleAutoReplyIfNoHuman(String appId, String guestIdentity, String guestPhone, String guestMessage) {
         if (appId == null || appId.isBlank() || guestIdentity == null || guestIdentity.isBlank()) return;
+
+        // The web client may auto-send a contact/link message right after join.
+        // If a welcome was just sent, skip no-reply follow-up to avoid 2 greeting-like AI messages.
+        if (isLikelyAutoContactMessage(guestMessage)
+                && hasRecentAutoWelcome(appId, guestIdentity, guestPhone, AUTO_WELCOME_SUPPRESSION_WINDOW_MS)) {
+            logger.info("⏭️ Skip AI no-reply follow-up for auto-contact message - appId={}, guestIdentity={}", appId, guestIdentity);
+            return;
+        }
+
         cancelGuestNoReplyTask(appId, guestIdentity);
 
         String key = guestKey(appId, guestIdentity);
