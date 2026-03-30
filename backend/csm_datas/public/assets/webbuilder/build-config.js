@@ -28,7 +28,6 @@ var CKBUILDER_CONFIG = {
 	skin: 'moono-lisa',
 	preset: 'standard',
 	ignore: [
-		'.DS_Store',
 		'.bender',
 		'.editorconfig',
 		'.gitattributes',

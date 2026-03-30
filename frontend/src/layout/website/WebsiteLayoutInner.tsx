@@ -1,5 +1,5 @@
 import MobileBottomNav from "./MobileBottomNav";
-import React, { ReactNode, useState, useEffect, useRef, useMemo } from "react";
+import React, { ReactNode, useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { theme, ConfigProvider, Menu, Drawer, Space, Button, Modal, Input } from "antd";
 import styles from "./websiteLayout.module.css";
 import WebsiteFooter from "./WebsiteFooter";
@@ -61,6 +61,12 @@ export default function WebsiteLayoutInner({ children, selectedKey, menuItems, t
   // Ref để lưu pending message (tin nhắn cần gửi sau khi có phone)
   const pendingMessageRef = useRef<string | null>(null);
   const autoOpenCooldownRef = useRef<Record<string, number>>({});
+  const manualChatCloseAtRef = useRef(0);
+
+  const closeGuestChat = useCallback(() => {
+    manualChatCloseAtRef.current = Date.now();
+    setChatOpen(false);
+  }, []);
 
   // Helper function to check if current URL is already in chat history
   const hasCurrentUrlInMessages = React.useCallback((currentUrl: string, room: string): boolean => {
@@ -106,10 +112,16 @@ export default function WebsiteLayoutInner({ children, selectedKey, menuItems, t
       const detail = (event as CustomEvent).detail || {};
       const eventType = typeof detail.eventType === 'string' ? detail.eventType.trim() : '';
       const source = typeof detail.source === 'string' ? detail.source.trim() : '';
+      const eventTimestamp = Number(detail.eventTimestamp || 0);
       const isAdminMessage = detail.isAdmin === true;
       const shouldOpenForWelcome = GUEST_AUTO_OPEN_EVENT_TYPES.has(eventType);
       const shouldOpenForAdminReply = source === 'message' && isAdminMessage;
       if (!shouldOpenForWelcome && !shouldOpenForAdminReply) return;
+
+      // Respect manual close: only reopen for truly newer socket events.
+      if (Number.isFinite(eventTimestamp) && eventTimestamp > 0 && eventTimestamp <= manualChatCloseAtRef.current) {
+        return;
+      }
 
       const targetAppId = typeof detail.appId === 'string' ? detail.appId.trim() : '';
       if (targetAppId && targetAppId !== appId) return;
@@ -136,27 +148,6 @@ export default function WebsiteLayoutInner({ children, selectedKey, menuItems, t
       window.removeEventListener('csm-chat-auto-open', handleAutoOpen as EventListener);
     };
   }, [isGuest, appId, getEffectiveGuestPhone, ensureGuestSessionId]);
-
-  useEffect(() => {
-    if (!isGuest || chatOpen) return;
-
-    const guestIdentity = ensureGuestSessionId();
-    if (!guestIdentity) return;
-
-    const phone = getEffectiveGuestPhone();
-    if (phone) return;
-
-    const guestMessages = messages[guestIdentity] || [];
-    const latestSystemWelcome = [...guestMessages].reverse().find((msg: any) => {
-      const eventType = typeof msg?.eventType === 'string' ? msg.eventType.trim() : '';
-      return msg?.isAdmin === true && GUEST_AUTO_OPEN_EVENT_TYPES.has(eventType);
-    });
-
-    if (!latestSystemWelcome) return;
-
-    setShowNameInput(false);
-    setChatOpen(true);
-  }, [isGuest, chatOpen, messages, ensureGuestSessionId, getEffectiveGuestPhone]);
 
   
   // Get system preferences from admin store
@@ -525,7 +516,7 @@ export default function WebsiteLayoutInner({ children, selectedKey, menuItems, t
       {chatOpen && (
         <InternalChatBox
           visible={true}
-          onClose={() => setChatOpen(false)}
+          onClose={closeGuestChat}
           room={guestSessionId || undefined}
         />
       )}

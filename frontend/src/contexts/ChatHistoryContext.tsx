@@ -115,6 +115,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
     guestSessionId?: string;
     eventType?: string;
     isAdmin?: boolean;
+    eventTimestamp?: number;
     source: 'message' | 'notification';
   }) => {
     if (typeof window === 'undefined') return;
@@ -625,6 +626,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
             guestSessionId: msg.guestSessionId,
             eventType: msg.eventType,
             isAdmin: !!msg.isAdmin,
+            eventTimestamp: msg.timestamp,
             source: 'message',
           });
         }
@@ -691,6 +693,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
             guestSessionId: msg.guestSessionId,
             eventType: msg.eventType,
             isAdmin: !!msg.isAdmin,
+            eventTimestamp: msg.timestamp,
             source: 'notification',
           });
         }
