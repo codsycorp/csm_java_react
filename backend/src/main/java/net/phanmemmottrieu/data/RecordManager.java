@@ -69,6 +69,8 @@ public class RecordManager {
     private static final int MAX_SAFE_JSON_RECORD_BYTES = 32 * 1024 * 1024;
     // Guard: only one async Lucene rebuild per table at a time
     private static final ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicBoolean> tableRepairScheduled = new ConcurrentHashMap<>();
+    // Schema cache: avoid hitting Lucene on every write just to look up table field lists
+    private static final ConcurrentHashMap<String, List<String>> tableSchemaCache = new ConcurrentHashMap<>();
     private static final java.util.concurrent.ExecutorService repairExecutor =
         java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
             Thread t = new Thread(r, "LuceneRepair-Worker");
@@ -219,6 +221,26 @@ public class RecordManager {
         this.DIR_PATH = injectedDirPath; // Gán giá trị đã inject cho DIR_PATH
         logger.info("Đường dẫn dữ liệu đã được khởi tạo: {}", this.DIR_PATH);
         Runtime.getRuntime().addShutdownHook(new Thread(() -> shutdownAllDatabases()));
+
+        // Background periodic Lucene commit — keeps writes durable without blocking every write request.
+        // NRT SearcherManager already makes writes visible immediately via maybeRefresh();
+        // this commit is only needed for crash-safety (survive restart from RocksDB rebuild).
+        batchExecutor.scheduleWithFixedDelay(() -> {
+            for (Map.Entry<String, IndexWriter> entry : indexWriterCache.entrySet()) {
+                IndexWriter w = entry.getValue();
+                if (w == null || !w.isOpen()) continue;
+                try {
+                    if (w.hasUncommittedChanges()) {
+                        w.commit();
+                        SearcherManager sm = searcherManagerCache.get(entry.getKey());
+                        if (sm != null) sm.maybeRefresh();
+                        logger.debug("Background commit flushed for {}", entry.getKey());
+                    }
+                } catch (Exception e) {
+                    logger.warn("Background Lucene commit failed for {}: {}", entry.getKey(), e.getMessage());
+                }
+            }
+        }, 10, 10, java.util.concurrent.TimeUnit.SECONDS);
 
         // Clean up RocksDB log files in all database folders
         String dbRoot = this.DIR_PATH + "/database";
@@ -751,12 +773,15 @@ public class RecordManager {
         }
     }
     
-    public List<String> getTableSearchKeys(String appId, String tableName,String fieldType) {
+    public List<String> getTableSearchKeys(String appId, String tableName, String fieldType) {
         if ("index".equalsIgnoreCase(tableName)) {
-            return List.of("id"); // Mặc định khóa chính của bảng 'index' là 'id'
+            return List.of("id");
         }
-    
-        // Tạo filter để tìm đúng bảng trong bảng 'index'
+        // Cache schema per (appId, tableName, fieldType) — table structure rarely changes.
+        String cacheKey = appId + "_" + tableName + "_" + fieldType;
+        List<String> cached = tableSchemaCache.get(cacheKey);
+        if (cached != null) return cached;
+
         SearchFilter filter = new SearchFilter();
         filter.setField("id");
         filter.setType("eq");
@@ -764,26 +789,25 @@ public class RecordManager {
         try {
             Map<String, Object> tableStruct = find(appId, "index", filter);
             if (tableStruct == null) {
-                logger.error("Không tìm thấy cấu trúc bảng '{}' trong bảng 'index'.", tableName);
+                logger.warn("Không tìm thấy cấu trúc bảng '{}' trong bảng 'index'.", tableName);
                 return List.of();
             }
-    
             Object structObj = tableStruct.get("struct");
             if (structObj instanceof Map<?, ?> structMapRaw) {
                 Object pkObj = structMapRaw.get(fieldType);
                 if (pkObj instanceof List<?> list) {
-                    return list.stream()
+                    List<String> result = list.stream()
                             .filter(o -> o instanceof String)
                             .map(Object::toString)
                             .toList();
+                    tableSchemaCache.put(cacheKey, result);
+                    return result;
                 }
             }
-    
         } catch (Exception e) {
-            logger.error("❌ Lỗi khi lấy fieldsPK cho bảng {}: {}", tableName, e.getMessage(), e);
+            logger.error("❌ Lỗi khi lấy {} cho bảng {}: {}", fieldType, tableName, e.getMessage(), e);
         }
-    
-        return List.of(); // fallback nếu lỗi
+        return List.of();
     }
         
     // Manages a single, shared IndexWriter instance per index
@@ -1163,27 +1187,8 @@ public class RecordManager {
      * @throws IOException if an error occurs during indexing.
      */
     public void indexRecord(String appId, String tableName, String key, Map<String, Object> record) throws IOException {
-        // Ensure all fields in table structure are present in the record (fill missing with empty string)
-        try {
-            SearchFilter filterI = new SearchFilter();
-            filterI.setField("id");
-            filterI.setType("eq");
-            filterI.setValue(tableName);
-            Map<String, Object> tableStruct = find(appId, "index", filterI);
-            if (tableStruct != null && tableStruct.get("struct") instanceof Map) {
-                Map<String, Object> structMap = (Map<String, Object>) tableStruct.get("struct");
-                List<String> allFields = (List<String>) structMap.get("fields");
-                if (allFields != null) {
-                    for (String f : allFields) {
-                        if (!record.containsKey(f)) {
-                            record.put(f, "");
-                        }
-                    }
-                }
-            }
-        } catch (Exception e) {
-            logger.warn("Không thể bổ sung đầy đủ trường cho record trước khi index: {}", e.getMessage());
-        }
+        // NOTE: field-filling removed — Lucene only needs configured search fields, not all fields.
+        // Querying the schema table on every write caused 3 recursive Lucene lookups per record.
         String indexKey = appId + "_" + tableName;
         // Đảm bảo luceneIndexLocks là một ConcurrentHashMap<String, Object>
         // Ví dụ: private final ConcurrentHashMap<String, Object> luceneIndexLocks = new ConcurrentHashMap<>();
@@ -1280,7 +1285,7 @@ public class RecordManager {
         synchronized (luceneIndexLocks.get(indexKey)) {
             IndexWriter writer = getOrCreateSharedIndexWriter(appId, tableName);
             writer.deleteDocuments(new Term("_key", key));
-            logger.info("Queued deletion for key: {} from index {}.", key, indexKey);
+            logger.debug("Queued deletion for key: {} from index {}.", key, indexKey);
     
             // Kích hoạt làm mới SearcherManager để cập nhật tức thời sau khi xóa
             try {
@@ -1691,22 +1696,24 @@ public class RecordManager {
                 }
                 db.write(writeOptions, writeBatch);
                 logger.info("✅ Đã tạo/cập nhật bản ghi thành công với key: {}", keyToPersist);
-                
+
+                // Invalidate schema cache when the "index" table (table metadata) is modified
+                if ("index".equalsIgnoreCase(tableName)) {
+                    String tableId = String.valueOf(record.getOrDefault("id", ""));
+                    if (!tableId.isBlank()) {
+                        tableSchemaCache.remove(appId + "_" + tableId + "_fieldsSearch");
+                        tableSchemaCache.remove(appId + "_" + tableId + "_fieldsPK");
+                        tableSchemaCache.remove(appId + "_" + tableId + "_fields");
+                        logger.debug("Invalidated schema cache for table: {}", tableId);
+                    }
+                }
+
                 if ("update".equals(command) && keyById != null && !keyById.equals(keyToPersist)) {
                     deleteFromIndex(appId, tableName, keyById);
                 }
 
-                // ✅ Lưu vào chỉ mục Lucene
+                // ✅ Lưu vào chỉ mục Lucene (NRT: visible immediately via maybeRefresh in indexRecord)
                 indexRecord(appId, tableName, keyToPersist, record);
-                
-                // ✅ Force commit để đảm bảo Lucene index được cập nhật ngay lập tức
-                try {
-                    commitLuceneIndex(appId, tableName);
-                    logger.debug("✅ Đã commit Lucene index sau khi tạo/cập nhật bản ghi: {}", keyToPersist);
-                } catch (IOException e) {
-                    logger.error("❌ Lỗi khi commit Lucene index sau tạo/cập nhật: {}", e.getMessage(), e);
-                    throw e;
-                }
             }
         } catch (IllegalArgumentException e) {
             logger.error("Lỗi dữ liệu khi tạo bản ghi: {}", e.getMessage());
@@ -1728,17 +1735,8 @@ public class RecordManager {
             db.write(writeOptions, writeBatch);
             logger.info("✅ Đã tạo bản ghi thành công với UUID key: {}", key);
 
-            // ✅ Ghi vào chỉ mục Lucene
+            // ✅ Ghi vào chỉ mục Lucene (NRT: background periodic commit handles durability)
             indexRecord(appId, tableName, key, record);
-            
-            // ✅ Force commit để đảm bảo Lucene index được cập nhật ngay lập tức
-            try {
-                commitLuceneIndex(appId, tableName);
-                logger.debug("✅ Đã commit Lucene index sau khi tạo bản ghi UUID: {}", key);
-            } catch (IOException e) {
-                logger.error("❌ Lỗi khi commit Lucene index sau tạo UUID: {}", e.getMessage(), e);
-                throw e;
-            }
         }
     }
 
@@ -1792,15 +1790,7 @@ public class RecordManager {
                 }
             }
                 
-            if (deletedAny) {
-                // ✅ Force commit để đảm bảo Lucene index được cập nhật ngay lập tức
-                try {
-                    commitLuceneIndex(appId, tableName);
-                    logger.info("✅ Đã commit Lucene index sau khi xóa bản ghi: {}", keyToDelete);
-                } catch (IOException e) {
-                    logger.error("❌ Lỗi khi commit Lucene index sau xóa: {}", e.getMessage(), e);
-                }
-            } else {
+            if (!deletedAny) {
                 logger.warn("⚠️ Không tìm thấy bản ghi để xóa với key: {} (canonical={})", keyToDelete, canonicalKey);
             }
         } catch (IllegalArgumentException e) {
