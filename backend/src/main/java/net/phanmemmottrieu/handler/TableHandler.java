@@ -1098,8 +1098,25 @@ public class TableHandler {
             }
         }
 
-        Map<String, Object> filterResult = recordManager.filter(appId, tblname, filters);
-        List<Map<String, Object>> records = (List<Map<String, Object>>) filterResult.getOrDefault("rows", new ArrayList<>());
+        Map<String, Object> filterResult = new HashMap<>();
+        List<Map<String, Object>> records = new ArrayList<>();
+
+        // Với update/delete, ưu tiên tìm đúng 1 bản ghi theo e_where trước (nhanh và ổn định hơn).
+        if ("update".equals(command) || "delete".equals(command)) {
+            Map<String, Object> foundRecord = recordManager.find(appId, tblname, filters);
+            if (foundRecord != null && !foundRecord.isEmpty()) {
+                records.add(foundRecord);
+            }
+        }
+
+        // Fallback về filter khi không tìm được bản ghi đơn hoặc với luồng create.
+        if (records.isEmpty()) {
+            filterResult = recordManager.filter(appId, tblname, filters);
+            records = (List<Map<String, Object>>) filterResult.getOrDefault("rows", new ArrayList<>());
+        } else {
+            filterResult.put("rows", records);
+            filterResult.put("totalCount", (long) records.size());
+        }
 
         if (enforceAccountAppScope) {
             records = records.stream()
@@ -1113,6 +1130,28 @@ public class TableHandler {
         }
         autoFillPermissionSchemaValues(appId, tblname, records, true);
         records = applyDataScopeRowFilter(tblname, records, accessContext);
+
+        // Nếu filter gốc quá chặt, fallback theo identity rút ra từ e_where để tìm lại dòng gốc.
+        if (("update".equals(command) || "delete".equals(command)) && records.isEmpty()) {
+            SearchFilter identityFallback = buildIdentityFallbackFilter(filters);
+            if (identityFallback != null) {
+                Map<String, Object> fallbackResult = recordManager.filter(appId, tblname, identityFallback);
+                records = (List<Map<String, Object>>) fallbackResult.getOrDefault("rows", new ArrayList<>());
+                if (enforceAccountAppScope) {
+                    records = records.stream()
+                        .filter(row -> accessContext.appId.equals(String.valueOf(row.get("app_id"))))
+                        .collect(java.util.stream.Collectors.toList());
+                }
+                if (isSubUserTable && isAdminNonDev) {
+                    records = records.stream()
+                        .filter(row -> isOwnedSubUserRow(row, accessContext))
+                        .collect(java.util.stream.Collectors.toList());
+                }
+                autoFillPermissionSchemaValues(appId, tblname, records, true);
+                records = applyDataScopeRowFilter(tblname, records, accessContext);
+                logger.info("Fallback lookup by identity for {}.{} -> {} row(s)", appId, tblname, records.size());
+            }
+        }
 
         // Ưu tiên update theo id: nếu e_where quá chặt làm rỗng, fallback query theo id để ghi đè đúng bản ghi.
         if ("update".equals(command) && records.isEmpty() && objUpdate.get("id") != null) {
@@ -1135,6 +1174,17 @@ public class TableHandler {
             logger.info("Fallback lookup by id for update {}.{} id={} -> {} row(s)", appId, tblname, objUpdate.get("id"), records.size());
         }
 
+        if ("update".equals(command)) {
+            Object idObj = objUpdate.get("id");
+            if ((idObj == null || String.valueOf(idObj).isBlank()) && records.size() == 1) {
+                Object matchedId = records.get(0).get("id");
+                if (matchedId != null && !String.valueOf(matchedId).isBlank()) {
+                    objUpdate.put("id", matchedId);
+                    logger.info("Hydrate obj_update.id from matched record for {}.{}: {}", appId, tblname, matchedId);
+                }
+            }
+        }
+
         Map<String, Object> primaryKeysAndValues = new HashMap<>();
         logger.info("Kiem tra su kien command {} du lieu {}",command,filterResult);
         // Populate primaryKeysAndValues
@@ -1152,7 +1202,9 @@ public class TableHandler {
                 if (createGuardError != null) {
                     return errorResponse(createGuardError);
                 }
-                ensureRowId(objUpdate);
+                if (!hasNonBlank(objUpdate.get("id"))) {
+                    return errorResponse("Thiếu id khi tạo mới dữ liệu");
+                }
                 List<String> missingCreatePk = missingPrimaryKeyFields(objUpdate, effectivePkFields);
                 if (!missingCreatePk.isEmpty()) {
                     return errorResponse("Thiếu khóa chính: " + String.join(", ", missingCreatePk));
@@ -1255,7 +1307,9 @@ public class TableHandler {
                     }
                 } else if (!newPkValues.isEmpty() && newPkValues.keySet().containsAll(effectivePkFields)) {
                     // Trường hợp upsert (không tìm thấy bản ghi nhưng đủ khóa chính)
-                    ensureRowId(objUpdate);
+                    if (!hasNonBlank(objUpdate.get("id"))) {
+                        return errorResponse("Thiếu id khi tạo mới dữ liệu");
+                    }
                     if (recordManager.existsByPrimaryKey(appId, tblname, objUpdate, effectivePkFields)) {
                         SearchFilter conflictFilter = buildPrimaryKeyFilter(objUpdate, effectivePkFields);
                         if (conflictFilter != null) {
@@ -1285,10 +1339,15 @@ public class TableHandler {
                     socketIOConfig.sendUpdateNotification(appId, tblname, "create", extractPrimaryKeyValues(objUpdate, effectivePkFields), objUpdate);
                     msg.put("updated_row", objUpdate);
                     msg.put("socket_actions", List.of("create"));
+                } else {
+                    return errorResponse("Không tìm thấy bản ghi để cập nhật");
                 }
                 break;
     
             case "delete":
+                if (records.isEmpty()) {
+                    return errorResponse("Không tìm thấy bản ghi để xóa");
+                }
                 for (Map<String, Object> row : records) {
                     Map<String, Object> rowPrimaryKeys = extractPrimaryKeyValues(row, effectivePkFields);
                     recordManager.deleteRecord(appId, tblname, row);
@@ -1313,6 +1372,69 @@ public class TableHandler {
     
         return successResponse("Thao tác thành công", msg);
     }    
+
+        private SearchFilter buildIdentityFallbackFilter(SearchFilter sourceFilter) {
+            Map<String, Object> eqValues = new HashMap<>();
+            collectEqValues(sourceFilter, eqValues);
+            if (eqValues.isEmpty()) {
+                return null;
+            }
+
+            List<SearchFilter> identityConds = new ArrayList<>();
+            String[] preferredIdentityFields = new String[] {"id", "email", "phoneNumber", "username", "login_identifier"};
+            for (String field : preferredIdentityFields) {
+                Object value = eqValues.get(field);
+                if (value == null || String.valueOf(value).isBlank()) {
+                    continue;
+                }
+                SearchFilter cond = new SearchFilter();
+                cond.setField(field);
+                cond.setType("eq");
+                cond.setValue(value);
+                identityConds.add(cond);
+                // Ưu tiên id hoặc email là đủ mạnh để xác định bản ghi.
+                if ("id".equals(field) || "email".equals(field)) {
+                    break;
+                }
+            }
+
+            Object appIdVal = eqValues.get("app_id");
+            if (appIdVal != null && !String.valueOf(appIdVal).isBlank()) {
+                SearchFilter appScopeCond = new SearchFilter();
+                appScopeCond.setField("app_id");
+                appScopeCond.setType("eq");
+                appScopeCond.setValue(appIdVal);
+                identityConds.add(appScopeCond);
+            }
+
+            if (identityConds.isEmpty()) {
+                return null;
+            }
+            if (identityConds.size() == 1) {
+                return identityConds.get(0);
+            }
+
+            SearchFilter fallback = new SearchFilter();
+            fallback.setOperator("AND");
+            fallback.setConditions(identityConds);
+            return fallback;
+        }
+
+        private void collectEqValues(SearchFilter filter, Map<String, Object> output) {
+            if (filter == null || output == null) {
+                return;
+            }
+            if (filter.getConditions() != null && !filter.getConditions().isEmpty()) {
+                for (SearchFilter sub : filter.getConditions()) {
+                    collectEqValues(sub, output);
+                }
+                return;
+            }
+            if (!"eq".equalsIgnoreCase(filter.getType()) || filter.getField() == null || filter.getField().isBlank()) {
+                return;
+            }
+            output.putIfAbsent(filter.getField(), filter.getValue());
+        }
     
     private Map<String, Object> handleSelectTableOperation(String appId, String tblname,Map<String, Object> msg, SearchFilter filters, Map<String, Object> structMap) {
         Map<String, Object> filterResult = null;

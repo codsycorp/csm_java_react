@@ -17,7 +17,12 @@ import jakarta.servlet.http.HttpServletResponse;
 public class CsrfProtectionFilter extends OncePerRequestFilter {
     private static final String CSRF_HEADER = "X-CSRF-Token";
     private static final String CSRF_COOKIE = "CSRF-TOKEN";
+    private static final String CLIENT_ID_HEADER = "X-Client-Id";
     private static final Logger logger = LoggerFactory.getLogger(CsrfProtectionFilter.class);
+
+    private boolean isGetTableDataRequest(String uri) {
+        return "/api/get-table-data".equals(uri) || "/get-table-data".equals(uri);
+    }
 
     private String readCsrfCookie(HttpServletRequest request) {
         if (request.getCookies() == null) return null;
@@ -102,6 +107,7 @@ public class CsrfProtectionFilter extends OncePerRequestFilter {
         String method = request.getMethod();
         String uri = request.getRequestURI();
         logger.info("CsrfFilter - URI: {}, Method: {}", uri, method);
+        boolean isGetTableDataRequest = isGetTableDataRequest(uri);
 
         boolean isApi = isApiRequest(request);
         if (!isApi) {
@@ -131,6 +137,13 @@ public class CsrfProtectionFilter extends OncePerRequestFilter {
         }
 
         if (hasAuthHeader(request)) {
+            if (isGetTableDataRequest) {
+                logger.info("[GET_TABLE_DATA][CSRF] Skip CSRF due to auth header: clientId={}, hasCsmToken={}, hasAuthorization={}, hasRefreshHeader={}",
+                        request.getHeader(CLIENT_ID_HEADER),
+                        request.getHeader("csm-token") != null && !request.getHeader("csm-token").isBlank(),
+                        request.getHeader("Authorization") != null && !request.getHeader("Authorization").isBlank(),
+                        request.getHeader("X-Refresh-Token") != null && !request.getHeader("X-Refresh-Token").isBlank());
+            }
             filterChain.doFilter(request, response);
             return;
         }
@@ -139,6 +152,14 @@ public class CsrfProtectionFilter extends OncePerRequestFilter {
         if (method.equalsIgnoreCase("POST") || method.equalsIgnoreCase("PUT") || method.equalsIgnoreCase("DELETE")) {
             String csrfTokenHeader = request.getHeader(CSRF_HEADER);
             if (csrfTokenHeader == null || csrfCookie == null || !csrfTokenHeader.equals(csrfCookie)) {
+                if (isGetTableDataRequest) {
+                    logger.warn("[GET_TABLE_DATA][CSRF] Blocking request: clientId={}, csrfHeaderPresent={}, csrfCookiePresent={}, referer={}, origin={}",
+                            request.getHeader(CLIENT_ID_HEADER),
+                            csrfTokenHeader != null && !csrfTokenHeader.isBlank(),
+                            csrfCookie != null && !csrfCookie.isBlank(),
+                            request.getHeader("Referer"),
+                            request.getHeader("Origin"));
+                }
                 logger.warn("❌ CSRF failed: header='{}', cookie='{}', method={}, uri={}", csrfTokenHeader, csrfCookie, method, uri);
                 // Phát CSRF cookie mới để client lấy cho lần sau
                 String newToken = UUID.randomUUID().toString();

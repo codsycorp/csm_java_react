@@ -18,6 +18,7 @@ import java.util.Map;
 @Component
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private static final Logger LOGGER = LoggerFactory.getLogger(JwtAuthenticationFilter.class);
+    private static final String CLIENT_ID_HEADER = "X-Client-Id";
 
     @Autowired
     private net.phanmemmottrieu.service.UserService userService;
@@ -39,16 +40,22 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             filterChain.doFilter(request, response);
             return;
         }
+        boolean isGetTableDataRequest = isGetTableDataRequest(request);
         String authHeader = request.getHeader("Authorization");
         if (authHeader != null && authHeader.startsWith("Bearer ")) {
             String token = authHeader.substring(7);
             if (!jwtUtil.validateToken(token)) {
+                logGetTableDataSecurity(request, "reject-invalid-bearer");
                 sendJsonError(response, 401, "Invalid or expired JWT token");
                 return;
             }
             if (!setAuthenticationFromToken(token)) {
+                logGetTableDataSecurity(request, "reject-bearer-auth-resolution");
                 sendJsonError(response, 401, "Invalid or expired JWT token");
                 return;
+            }
+            if (isGetTableDataRequest) {
+                logGetTableDataSecurity(request, "allow-bearer");
             }
             filterChain.doFilter(request, response);
             return;
@@ -57,12 +64,17 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         String csmToken = request.getHeader("csm-token");
         if (csmToken != null && !csmToken.isBlank()) {
             if (!jwtUtil.validateToken(csmToken)) {
+                logGetTableDataSecurity(request, "reject-invalid-csm-token");
                 sendJsonError(response, 401, "Invalid or expired JWT token");
                 return;
             }
             if (!setAuthenticationFromToken(csmToken)) {
+                logGetTableDataSecurity(request, "reject-csm-token-auth-resolution");
                 sendJsonError(response, 401, "Invalid or expired JWT token");
                 return;
+            }
+            if (isGetTableDataRequest) {
+                logGetTableDataSecurity(request, "allow-csm-token");
             }
             filterChain.doFilter(request, response);
             return;
@@ -108,6 +120,9 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                             user, null, java.util.Collections.emptyList()
                         )
                     );
+                    if (isGetTableDataRequest) {
+                        logGetTableDataSecurity(request, "allow-refresh-token");
+                    }
                     filterChain.doFilter(request, response);
                     return;
                 } else {
@@ -128,11 +143,15 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                     // Let the request continue so user can login again with new credentials
                     if (!requiresAuth(request)) {
                         // Clear the invalid token and let request proceed
+                        if (isGetTableDataRequest) {
+                            logGetTableDataSecurity(request, "skip-invalid-refresh-public-endpoint");
+                        }
                         filterChain.doFilter(request, response);
                         return;
                     }
                     
                     // For protected endpoints, reject with 401
+                    logGetTableDataSecurity(request, "reject-invalid-refresh-token");
                     sendJsonError(response, 401, "Invalid or expired refresh token");
                     return;
                 }
@@ -141,8 +160,12 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
 
         if (requiresAuth(request)) {
+            logGetTableDataSecurity(request, "reject-missing-auth");
             sendJsonError(response, 401, "Missing Authorization header");
             return;
+        }
+        if (isGetTableDataRequest) {
+            logGetTableDataSecurity(request, "allow-public");
         }
         filterChain.doFilter(request, response);
     }
@@ -183,6 +206,38 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         String uri = request.getRequestURI();
         String host = request.getHeader("Host");
         return (host != null && host.startsWith("api.")) || uri.startsWith("/api/");
+    }
+
+    private boolean isGetTableDataRequest(HttpServletRequest request) {
+        String uri = request.getRequestURI();
+        return "/api/get-table-data".equals(uri) || "/get-table-data".equals(uri);
+    }
+
+    private void logGetTableDataSecurity(HttpServletRequest request, String stage) {
+        if (!isGetTableDataRequest(request)) {
+            return;
+        }
+        LOGGER.info("[GET_TABLE_DATA][JWT] stage={}, clientId={}, hasCsmToken={}, hasAuthorization={}, hasRefreshHeader={}, hasRefreshCookie={}, referer={}, origin={}",
+                stage,
+                request.getHeader(CLIENT_ID_HEADER),
+                request.getHeader("csm-token") != null && !request.getHeader("csm-token").isBlank(),
+                request.getHeader("Authorization") != null && !request.getHeader("Authorization").isBlank(),
+                request.getHeader("X-Refresh-Token") != null && !request.getHeader("X-Refresh-Token").isBlank(),
+                hasRefreshCookie(request),
+                request.getHeader("Referer"),
+                request.getHeader("Origin"));
+    }
+
+    private boolean hasRefreshCookie(HttpServletRequest request) {
+        if (request.getCookies() == null) {
+            return false;
+        }
+        for (jakarta.servlet.http.Cookie cookie : request.getCookies()) {
+            if ("refreshToken".equals(cookie.getName()) && cookie.getValue() != null && !cookie.getValue().isBlank()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private boolean requiresAuth(HttpServletRequest request) {

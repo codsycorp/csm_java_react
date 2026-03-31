@@ -840,6 +840,9 @@ public class RecordManager {
 
             logger.info("Starting to populate Lucene index for {} from RocksDB.", indexKey);
 
+            // Always clear existing docs before repopulating to prevent duplicate Lucene documents.
+            writer.deleteAll();
+
             iterator = db.newIterator();
             iterator.seekToFirst();
             List<Document> buffer = new ArrayList<>();
@@ -959,14 +962,6 @@ public class RecordManager {
         synchronized (luceneIndexLocks.get(indexKey)) { // Synchronize for bulk indexing
             try {
                 db = getDatabaseWithBloomFilter(appId, tableName); // Giả định hàm này trả về RocksDB instance
-                Path indexPath = Paths.get(DIR_PATH, "lucene_index", appId, tableName); // Giả định DIR_PATH đã định nghĩa
-                File indexDir = indexPath.toFile();
-
-                // Check if the directory exists and has files (indicating an existing index)
-                if (indexDir.exists() && indexDir.isDirectory() && Objects.requireNonNull(indexDir.listFiles()).length > 0) {
-                    logger.info("Lucene index đã tồn tại cho bảng '{}'. Bỏ qua việc lập chỉ mục lại.", tableName);
-                    return;
-                }
 
                 // Mặc dù bạn đã chuyển sang dùng 'id' làm khóa RocksDB,
                 // việc getTablePrimaryKeys vẫn có thể cần nếu bạn muốn index các trường khác ngoài 'id'
@@ -978,6 +973,10 @@ public class RecordManager {
 
                 // Use the shared IndexWriter
                 IndexWriter writer = getOrCreateSharedIndexWriter(appId, tableName); // Giả định hàm này trả về IndexWriter
+
+                // Rebuild mode: clear the whole Lucene index first to avoid stale/duplicate docs.
+                writer.deleteAll();
+                logger.info("Đang rebuild sạch Lucene index cho bảng '{}'.", tableName);
 
                 RocksIterator iterator = db.newIterator();
                 iterator.seekToFirst();
@@ -1654,18 +1653,27 @@ public class RecordManager {
                 record.put("id", UUID.randomUUID().toString());
             }
 
-            String key = generateKey(appId, tableName, record, primaryKeys);
-            byte[] keyBytes = key.getBytes(StandardCharsets.UTF_8);
+            String canonicalKey = generateKey(appId, tableName, record, primaryKeys);
+            String keyById = resolveStorageKeyById(db, appId, tableName, record);
+            String keyToPersist = keyById != null ? keyById : resolveExistingStorageKey(db, appId, tableName, canonicalKey);
+            byte[] keyBytes = keyToPersist.getBytes(StandardCharsets.UTF_8);
 
             byte[] existing = db.get(keyBytes);
             if (existing != null) {
                 command="update";
-                logger.warn("Ghi đè bản ghi đã tồn tại với key: {}", key);
+                logger.warn("Ghi đè bản ghi đã tồn tại với key: {}", keyToPersist);
             }
             else
                 command="create";
             try (WriteBatch writeBatch = new WriteBatch();
                 WriteOptions writeOptions = new WriteOptions()) {
+
+                if ("update".equals(command) && keyById != null && !keyById.equals(canonicalKey)) {
+                    writeBatch.delete(keyById.getBytes(StandardCharsets.UTF_8));
+                    keyToPersist = canonicalKey;
+                    keyBytes = keyToPersist.getBytes(StandardCharsets.UTF_8);
+                    logger.info("Chuẩn hóa key theo id cho {}.{}: oldKey={} -> canonicalKey={}", appId, tableName, keyById, canonicalKey);
+                }
 
                 writeBatch.put(keyBytes, objectMapper.writeValueAsBytes(record));
                 // Chỉ tăng meta count khi tạo mới, không khi cập nhật
@@ -1673,25 +1681,30 @@ public class RecordManager {
                     incrementMetaCount(db, 1);
                 }
                 db.write(writeOptions, writeBatch);
-                logger.info("✅ Đã tạo/cập nhật bản ghi thành công với key: {}", key);
+                logger.info("✅ Đã tạo/cập nhật bản ghi thành công với key: {}", keyToPersist);
                 
+                if ("update".equals(command) && keyById != null && !keyById.equals(keyToPersist)) {
+                    deleteFromIndex(appId, tableName, keyById);
+                }
+
                 // ✅ Lưu vào chỉ mục Lucene
-                indexRecord(appId, tableName, key, record);
+                indexRecord(appId, tableName, keyToPersist, record);
                 
                 // ✅ Force commit để đảm bảo Lucene index được cập nhật ngay lập tức
                 try {
                     commitLuceneIndex(appId, tableName);
-                    logger.debug("✅ Đã commit Lucene index sau khi tạo/cập nhật bản ghi: {}", key);
+                    logger.debug("✅ Đã commit Lucene index sau khi tạo/cập nhật bản ghi: {}", keyToPersist);
                 } catch (IOException e) {
                     logger.error("❌ Lỗi khi commit Lucene index sau tạo/cập nhật: {}", e.getMessage(), e);
+                    throw e;
                 }
             }
         } catch (IllegalArgumentException e) {
             logger.error("Lỗi dữ liệu khi tạo bản ghi: {}", e.getMessage());
-            // throw e;
+            throw e;
         } catch (Exception e) {
             logger.error("❌ Lỗi khi tạo bản ghi cho bảng {}: {}", tableName, e.getMessage(), e);
-            // throw new RuntimeException("Lỗi hệ thống khi tạo bản ghi", e);
+            throw new RuntimeException("Lỗi hệ thống khi tạo bản ghi", e);
         }
         return command;
     }
@@ -1715,6 +1728,7 @@ public class RecordManager {
                 logger.debug("✅ Đã commit Lucene index sau khi tạo bản ghi UUID: {}", key);
             } catch (IOException e) {
                 logger.error("❌ Lỗi khi commit Lucene index sau tạo UUID: {}", e.getMessage(), e);
+                throw e;
             }
         }
     }
@@ -1731,20 +1745,45 @@ public class RecordManager {
                 primaryKeys = getTableSearchKeys(appId, tableName,"fieldsPK");
             }
     
-            String keyToDelete = generateKey(appId, tableName, record, primaryKeys);
-            byte[] keyBytes = keyToDelete.getBytes(StandardCharsets.UTF_8);
-    
-            byte[] value = db.get(keyBytes);
-            if (value != null) {
+            String canonicalKey = generateKey(appId, tableName, record, primaryKeys);
+            String keyById = resolveStorageKeyById(db, appId, tableName, record);
+            String keyToDelete = keyById != null ? keyById : resolveExistingStorageKey(db, appId, tableName, canonicalKey);
+
+            Set<String> storageKeysToDelete = new LinkedHashSet<>();
+            if (keyById != null) {
+                storageKeysToDelete.addAll(findStorageKeysById(db, appId, tableName, String.valueOf(record.get("id"))));
+            }
+            storageKeysToDelete.add(keyToDelete);
+            storageKeysToDelete.addAll(buildLegacyKeyCandidates(appId, tableName, canonicalKey));
+
+            boolean deletedAny = false;
+            for (String storageKey : storageKeysToDelete) {
+                if (storageKey == null || storageKey.isBlank()) {
+                    continue;
+                }
+                byte[] keyBytes = storageKey.getBytes(StandardCharsets.UTF_8);
+                byte[] value = db.get(keyBytes);
+                if (value == null) {
+                    continue;
+                }
                 try (WriteOptions writeOptions = new WriteOptions()) {
                     db.delete(writeOptions, keyBytes); // Sử dụng phương thức delete với WriteOptions
                     decrementMetaCount(db, 1);
-                    logger.info("✅ Đã xóa bản ghi từ RocksDB: {}", keyToDelete);
+                    deletedAny = true;
+                    logger.info("✅ Đã xóa bản ghi từ RocksDB: {}", storageKey);
                 }
     
                 // ✅ Xóa khỏi Lucene index
-                deleteFromIndex(appId, tableName, keyToDelete);
+                deleteFromIndex(appId, tableName, storageKey);
+            }
+
+            for (String candidate : buildLegacyKeyCandidates(appId, tableName, canonicalKey)) {
+                if (candidate != null && !candidate.isBlank()) {
+                    deleteFromIndex(appId, tableName, candidate);
+                }
+            }
                 
+            if (deletedAny) {
                 // ✅ Force commit để đảm bảo Lucene index được cập nhật ngay lập tức
                 try {
                     commitLuceneIndex(appId, tableName);
@@ -1753,7 +1792,7 @@ public class RecordManager {
                     logger.error("❌ Lỗi khi commit Lucene index sau xóa: {}", e.getMessage(), e);
                 }
             } else {
-                logger.warn("⚠️ Không tìm thấy bản ghi để xóa với key: {}", keyToDelete);
+                logger.warn("⚠️ Không tìm thấy bản ghi để xóa với key: {} (canonical={})", keyToDelete, canonicalKey);
             }
         } catch (IllegalArgumentException e) {
             logger.error("Lỗi dữ liệu khi xóa bản ghi: {}", e.getMessage());
@@ -1845,16 +1884,21 @@ public class RecordManager {
      */
     public List<String> searchKeys(String appId, String tableName, SearchFilter filters) {
         // Tự động chuẩn hóa điều kiện ngày trước khi truy vấn
-        List<String> keys = new ArrayList<>();
+        LinkedHashSet<String> uniqueKeys = new LinkedHashSet<>();
+        LinkedHashSet<String> staleKeys = new LinkedHashSet<>();
         String indexKey = appId + "_" + tableName;
         // The original method signature had indexPath, but getSearcherManager only needs appId and tableName
         // Path indexPath = Paths.get(DIR_PATH, "lucene_index", appId, tableName); 
         IndexSearcher searcher = null; 
+        RocksDB db = null;
 
         try {
             // Updated call to match the existing getSearcherManager signature
             SearcherManager searcherManager = getSearcherManager(appId, tableName); 
+            // Force refresh to minimize read-after-write lag in NRT mode.
+            searcherManager.maybeRefreshBlocking();
             searcher = searcherManager.acquire(); 
+            db = getDatabaseWithBloomFilter(appId, tableName);
 
             Query query = buildLuceneQuery(filters); 
             TopDocs docs = searcher.search(query, 10000);
@@ -1863,14 +1907,38 @@ public class RecordManager {
                 Document doc = searcher.doc(scoreDoc.doc);
                 String key = doc.get("_key");
                 if (key != null) {
-                    keys.add(key);
+                    try {
+                        byte[] value = db.get(key.getBytes(StandardCharsets.UTF_8));
+                        if (value != null) {
+                            uniqueKeys.add(key);
+                        } else {
+                            staleKeys.add(key);
+                        }
+                    } catch (Exception ex) {
+                        logger.warn("Failed to verify RocksDB value for Lucene key {} in {}: {}", key, indexKey, ex.getMessage());
+                    }
                 } else {
                     logger.warn("Document {} found without '_key' field in index {}.", scoreDoc.doc, indexKey);
                 }
             }
+            int duplicateCount = docs.scoreDocs.length - uniqueKeys.size();
+            if (duplicateCount > 0) {
+                logger.warn("Detected {} duplicate Lucene docs (same _key) for {}.{}; auto-deduped query result.", duplicateCount, appId, tableName);
+            }
+
+            if (!staleKeys.isEmpty()) {
+                logger.warn("Detected {} stale Lucene keys for {}.{}; removing stale docs from index.", staleKeys.size(), appId, tableName);
+                for (String staleKey : staleKeys) {
+                    deleteFromIndex(appId, tableName, staleKey);
+                }
+                commitLuceneIndex(appId, tableName);
+            }
+
+            List<String> keys = new ArrayList<>(uniqueKeys);
             // Ensure deterministic ordering across requests (independent of Lucene score/docId changes).
             keys.sort(RECORD_KEY_COMPARATOR_DESC);
             logger.debug("Found {} keys {} in table {} for app {}.", keys.size(),keys, tableName, appId);
+            return keys;
 
         } catch (IOException e) {
             logger.error("IOException during key search for appId {}, tableName {}: {}", appId, tableName, e.getMessage(), e);
@@ -1888,7 +1956,94 @@ public class RecordManager {
                 }
             }
         }
+        return Collections.emptyList();
+    }
+
+    private List<String> scanMatchingKeysFromRocksDB(String appId, String tableName, SearchFilter filters, RocksDB db) {
+        if (db == null) {
+            return Collections.emptyList();
+        }
+
+        List<String> keys = new ArrayList<>();
+        try (RocksIterator iterator = db.newIterator()) {
+            iterator.seekToFirst();
+            while (iterator.isValid()) {
+                String key = new String(iterator.key(), StandardCharsets.UTF_8);
+                if (key.startsWith("__meta_")) {
+                    iterator.next();
+                    continue;
+                }
+
+                byte[] valueBytes = iterator.value();
+                if (valueBytes == null) {
+                    iterator.next();
+                    continue;
+                }
+
+                try {
+                    Map<String, Object> record = objectMapper.readValue(valueBytes, Map.class);
+                    if (recordMatchesFilterObject(record, filters)) {
+                        keys.add(key);
+                    }
+                } catch (Exception ex) {
+                    logger.warn("Skip unreadable record during fallback scan for key {}: {}", key, ex.getMessage());
+                }
+                iterator.next();
+            }
+        } catch (Exception ex) {
+            logger.error("Fallback RocksDB scan failed for {}.{}: {}", appId, tableName, ex.getMessage(), ex);
+        }
+
+        keys.sort(RECORD_KEY_COMPARATOR_DESC);
         return keys;
+    }
+
+    private void repairLuceneIndexForKeys(String appId, String tableName, List<String> keys, RocksDB db) {
+        if (keys == null || keys.isEmpty() || db == null) {
+            return;
+        }
+
+        int repaired = 0;
+        for (String key : keys) {
+            if (key == null || key.isBlank()) {
+                continue;
+            }
+            try {
+                byte[] valueBytes = db.get(key.getBytes(StandardCharsets.UTF_8));
+                if (valueBytes == null) {
+                    continue;
+                }
+                Map<String, Object> record = objectMapper.readValue(valueBytes, Map.class);
+                indexRecord(appId, tableName, key, record);
+                repaired++;
+            } catch (Exception ex) {
+                logger.warn("Failed to repair Lucene doc for key {} in {}.{}: {}", key, appId, tableName, ex.getMessage());
+            }
+        }
+
+        if (repaired > 0) {
+            try {
+                commitLuceneIndex(appId, tableName);
+                logger.info("Repaired {} Lucene docs from RocksDB for {}.{}", repaired, appId, tableName);
+            } catch (Exception ex) {
+                logger.error("Failed to commit repaired Lucene docs for {}.{}: {}", appId, tableName, ex.getMessage(), ex);
+            }
+        }
+    }
+
+    private List<String> searchKeysConsistent(String appId, String tableName, SearchFilter filters, RocksDB db) {
+        List<String> keys = searchKeys(appId, tableName, filters);
+        if (keys != null && !keys.isEmpty()) {
+            return keys;
+        }
+
+        List<String> fallbackKeys = scanMatchingKeysFromRocksDB(appId, tableName, filters, db);
+        if (!fallbackKeys.isEmpty()) {
+            logger.warn("Lucene miss detected for {}.{} with matching RocksDB rows; using fallback scan and repairing index.", appId, tableName);
+            repairLuceneIndexForKeys(appId, tableName, fallbackKeys, db);
+            return fallbackKeys;
+        }
+        return Collections.emptyList();
     }
     /**
      * Iterates through all RocksDB instances (appId/tableName combinations)
@@ -2356,6 +2511,86 @@ public class RecordManager {
             throw new RuntimeException("Error encoding value: " + input, e);
         }
     }  
+
+    private List<String> buildLegacyKeyCandidates(String appId, String tableName, String canonicalKey) {
+        List<String> candidates = new ArrayList<>();
+        if (canonicalKey == null || canonicalKey.isBlank()) {
+            return candidates;
+        }
+        candidates.add(canonicalKey);
+        candidates.add(tableName + "_" + canonicalKey);
+        candidates.add(appId + "_" + tableName + "_" + canonicalKey);
+        return candidates;
+    }
+
+    private String resolveExistingStorageKey(RocksDB db, String appId, String tableName, String canonicalKey) {
+        if (db == null || canonicalKey == null || canonicalKey.isBlank()) {
+            return canonicalKey;
+        }
+        try {
+            for (String candidate : buildLegacyKeyCandidates(appId, tableName, canonicalKey)) {
+                byte[] existing = db.get(candidate.getBytes(StandardCharsets.UTF_8));
+                if (existing != null) {
+                    return candidate;
+                }
+            }
+        } catch (Exception e) {
+            logger.warn("Không thể resolve storage key cho {}.{} canonicalKey={}: {}", appId, tableName, canonicalKey, e.getMessage());
+        }
+        return canonicalKey;
+    }
+
+    private String resolveStorageKeyById(RocksDB db, String appId, String tableName, Map<String, Object> record) {
+        if (db == null || record == null) {
+            return null;
+        }
+        Object idObj = record.get("id");
+        if (idObj == null || String.valueOf(idObj).isBlank()) {
+            return null;
+        }
+        try {
+            List<String> keys = findStorageKeysById(db, appId, tableName, String.valueOf(idObj));
+            if (!keys.isEmpty()) {
+                return keys.get(0);
+            }
+        } catch (Exception e) {
+            logger.warn("Không thể resolve key theo id cho {}.{} id={}: {}", appId, tableName, idObj, e.getMessage());
+        }
+        return null;
+    }
+
+    private List<String> findStorageKeysById(RocksDB db, String appId, String tableName, String idValue) {
+        if (db == null || idValue == null || idValue.isBlank()) {
+            return Collections.emptyList();
+        }
+
+        SearchFilter idFilter = new SearchFilter();
+        idFilter.setField("id");
+        idFilter.setType("eq");
+        idFilter.setValue(idValue);
+
+        List<String> keysFromLucene = searchKeys(appId, tableName, idFilter);
+        if (keysFromLucene == null || keysFromLucene.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        List<String> existingKeys = new ArrayList<>();
+        for (String key : keysFromLucene) {
+            if (key == null || key.isBlank()) {
+                continue;
+            }
+            try {
+                byte[] value = db.get(key.getBytes(StandardCharsets.UTF_8));
+                if (value != null) {
+                    existingKeys.add(key);
+                }
+            } catch (Exception e) {
+                logger.debug("Bỏ qua key theo id không đọc được {}: {}", key, e.getMessage());
+            }
+        }
+        return existingKeys;
+    }
+
     // --- Phương thức deserializeValueToMap (không thay đổi) ---
     /**
      * Helper method to deserialize byte array to Map, handling primitive types.
@@ -2653,6 +2888,7 @@ public class RecordManager {
     
     public Map<String, Object> filter(String appId, String tableName, SearchFilter searchFilter) {
         List<Map<String, Object>> results = new ArrayList<>();
+        Set<String> seenDedupKeys = new HashSet<>();
         RocksDB db = null;
         long totalCount = 0L; // Tổng số bản ghi, nếu có metadata
     
@@ -2687,7 +2923,7 @@ public class RecordManager {
             // --- BẮT ĐẦU TÌM KIẾM CÁC KEY PHÙ HỢP (Luôn dùng Lucene hoặc tương tự) ---
             // Hàm này (searchKeys) nên trả về các key đã được lọc và sắp xếp.
             // Giả định searchKeys không ném IOException hoặc RocksDBException
-            List<String> allKeys = searchKeys(appId, tableName, searchFilter);
+            List<String> allKeys = searchKeysConsistent(appId, tableName, searchFilter, db);
     
             if (allKeys == null || allKeys.isEmpty()) {
                 logger.debug("Không tìm thấy key nào phù hợp cho appId: {}, tableName: {}, filter: {}", appId, tableName, searchFilter);
@@ -2710,7 +2946,10 @@ public class RecordManager {
                     if (valueBytes != null) {
                         // Deserialize dữ liệu JSON thành Map
                         Map<String, Object> record = objectMapper.readValue(valueBytes, Map.class);
-                        results.add(record);
+                        String dedupKey = buildRecordDedupKey(appId, tableName, record, key);
+                        if (seenDedupKeys.add(dedupKey)) {
+                            results.add(record);
+                        }
                     } else {
                         logger.warn("Giá trị rỗng cho key '{}' trong RocksDB. Có thể key tồn tại trong Lucene nhưng không có trong RocksDB. (appId: {}, tableName: {})", key, appId, tableName);
                     }
@@ -2816,6 +3055,7 @@ public class RecordManager {
         String lastKey
     ) {
         List<Map<String, Object>> rows = new ArrayList<>();
+        Set<String> seenDedupKeys = new HashSet<>();
         String nextCursor = null;
         long totalCount = 0;
         RocksDB db = null;
@@ -2832,7 +3072,7 @@ public class RecordManager {
 
             // --- BẮT ĐẦU TÌM KIẾM CÁC KEY PHÙ HỢP ---
             // Hàm này (searchKeys) nên trả về các key đã được lọc và sắp xếp.
-            List<String> allKeys = searchKeys(appId, tableName, searchFilter);
+            List<String> allKeys = searchKeysConsistent(appId, tableName, searchFilter, db);
 
             if (allKeys == null || allKeys.isEmpty()) {
                 logger.debug("Không tìm thấy key nào phù hợp cho appId: {}, tableName: {}, filter: {}", appId, tableName, searchFilter);
@@ -2921,7 +3161,10 @@ public class RecordManager {
                         if (valueBytes != null) {
                             // Deserialize dữ liệu JSON thành Map
                             Map<String, Object> record = objectMapper.readValue(valueBytes, Map.class);
-                            rows.add(record);
+                            String dedupKey = buildRecordDedupKey(appId, tableName, record, key);
+                            if (seenDedupKeys.add(dedupKey)) {
+                                rows.add(record);
+                            }
                             // nextCursor tạm thời là key hiện tại, sẽ được cập nhật lại sau vòng lặp
                         } else {
                             logger.warn("Giá trị rỗng cho key '{}' trong RocksDB.", key);
@@ -3013,6 +3256,7 @@ public class RecordManager {
         int limit
     ) {
         List<Map<String, Object>> rows = new ArrayList<>();
+        Set<String> seenDedupKeys = new HashSet<>();
         String nextCursor = null;
         String pageCursor = null;
         long totalCount = 0;
@@ -3026,7 +3270,7 @@ public class RecordManager {
             }
 
             // Lấy tất cả key đã lọc theo searchFilter
-            List<String> allKeys = searchKeys(appId, tableName, searchFilter);
+            List<String> allKeys = searchKeysConsistent(appId, tableName, searchFilter, db);
             if (allKeys == null || allKeys.isEmpty()) {
                 Map<String, Object> emptyResult = new HashMap<>();
                 emptyResult.put("rows", Collections.emptyList());
@@ -3062,7 +3306,10 @@ public class RecordManager {
                         byte[] valueBytes = iterator.value();
                         if (valueBytes != null) {
                             Map<String, Object> record = objectMapper.readValue(valueBytes, Map.class);
-                            rows.add(record);
+                            String dedupKey = buildRecordDedupKey(appId, tableName, record, key);
+                            if (seenDedupKeys.add(dedupKey)) {
+                                rows.add(record);
+                            }
                         }
                     }
                 } catch (Exception ex) {
@@ -3097,6 +3344,30 @@ public class RecordManager {
         result.put("nextCursor", nextCursor);
         result.put("pageCursor", pageCursor);
         return result;
+    }
+
+    private String buildRecordDedupKey(String appId, String tableName, Map<String, Object> record, String fallbackKey) {
+        if (record == null) {
+            return fallbackKey != null ? fallbackKey : "";
+        }
+
+        try {
+            List<String> primaryKeys = getTableSearchKeys(appId, tableName, "fieldsPK");
+            if (primaryKeys != null && !primaryKeys.isEmpty()) {
+                String canonical = generateKey(appId, tableName, record, primaryKeys);
+                if (canonical != null && !canonical.isBlank()) {
+                    return canonical;
+                }
+            }
+        } catch (Exception ignored) {
+            // Fallback below if PK cannot be resolved for this table.
+        }
+
+        Object idObj = record.get("id");
+        if (idObj != null && !String.valueOf(idObj).isBlank()) {
+            return "id:" + idObj;
+        }
+        return fallbackKey != null ? fallbackKey : String.valueOf(record.hashCode());
     }
 
     public static boolean recordMatchesFilterObject(Map<String, Object> record, SearchFilter filter) {

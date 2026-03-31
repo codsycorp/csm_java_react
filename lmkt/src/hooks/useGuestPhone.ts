@@ -20,6 +20,51 @@ export const useGuestPhone = () => {
     [user.app_id, storeAppId]
   );
   const isGuest = !user.userId;
+  const CLIENT_ID_COOKIE = "csm_client_id";
+  const CLIENT_ID_STORAGE_KEY = "csm_client_id";
+  const LEGACY_SHARED_GUEST_KEY = "csm_guest_session_shared";
+
+  const readCookie = (name: string) => {
+    if (typeof document === 'undefined') return "";
+    const match = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`));
+    return match ? decodeURIComponent(match[1]) : "";
+  };
+
+  const getCookieDomain = () => {
+    if (typeof window === 'undefined') return "";
+    const hostname = window.location.hostname.trim().toLowerCase();
+    if (!hostname || hostname === 'localhost' || /^\d+\.\d+\.\d+\.\d+$/.test(hostname)) {
+      return "";
+    }
+    const parts = hostname.split('.');
+    if (parts.length < 2) return "";
+    if (hostname.endsWith('.com.vn') && parts.length >= 3) {
+      return `.${parts.slice(-3).join('.')}`;
+    }
+    return `.${parts.slice(-2).join('.')}`;
+  };
+
+  const writeClientCookie = (value: string) => {
+    if (typeof document === 'undefined' || !value) return;
+    const maxAge = 365 * 24 * 60 * 60;
+    const secure = typeof window !== 'undefined' && window.location.protocol === 'https:' ? '; Secure' : '';
+    const domain = getCookieDomain();
+    const domainPart = domain ? `; Domain=${domain}` : '';
+    document.cookie = `${CLIENT_ID_COOKIE}=${encodeURIComponent(value)}; Path=/; Max-Age=${maxAge}; SameSite=Lax${secure}${domainPart}`;
+  };
+
+  const persistSharedClientId = (value: string) => {
+    if (!value) return "";
+    try {
+      localStorage.setItem(CLIENT_ID_STORAGE_KEY, value);
+      localStorage.setItem(LEGACY_SHARED_GUEST_KEY, value);
+      localStorage.setItem(`csm_guest_session_${appId}`, value);
+    } catch {
+      // ignore storage failures and still try cookie persistence
+    }
+    writeClientCookie(value);
+    return value;
+  };
   
   const getStoredPhone = () => {
     if (!isGuest) return "";
@@ -43,7 +88,27 @@ export const useGuestPhone = () => {
     const randomPart = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
       ? crypto.randomUUID()
       : `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
-    return `guest_${appId}_${randomPart}`;
+    return `csm-${randomPart}`;
+  };
+
+  const getSharedClientId = () => {
+    if (!isGuest) return "";
+    const fromCookie = readCookie(CLIENT_ID_COOKIE);
+    if (fromCookie) {
+      return persistSharedClientId(fromCookie);
+    }
+    try {
+      const fromStorage = localStorage.getItem(CLIENT_ID_STORAGE_KEY)
+        || localStorage.getItem(LEGACY_SHARED_GUEST_KEY)
+        || localStorage.getItem(`csm_guest_session_${appId}`)
+        || "";
+      if (fromStorage) {
+        return persistSharedClientId(fromStorage);
+      }
+    } catch {
+      // ignore and generate below
+    }
+    return persistSharedClientId(createGuestSessionId());
   };
 
   const getStoredGuestSessionId = () => {
@@ -51,12 +116,21 @@ export const useGuestPhone = () => {
     try {
       const storageKey = `csm_guest_session_${appId}`;
       const existing = localStorage.getItem(storageKey) || "";
-      if (existing) return existing;
-      const created = createGuestSessionId();
+      const sharedClientId = getSharedClientId();
+      if (existing && !sharedClientId) {
+        return persistSharedClientId(existing);
+      }
+      if (sharedClientId) {
+        if (existing !== sharedClientId) {
+          localStorage.setItem(storageKey, sharedClientId);
+        }
+        return sharedClientId;
+      }
+      const created = persistSharedClientId(createGuestSessionId());
       localStorage.setItem(storageKey, created);
       return created;
     } catch {
-      return "";
+      return getSharedClientId();
     }
   };
   

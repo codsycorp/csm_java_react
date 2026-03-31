@@ -15,7 +15,6 @@ import net.phanmemmottrieu.service.AutoIndexService;
 import net.phanmemmottrieu.service.GoogleBotVisitService;
 import net.phanmemmottrieu.cache.PaginationCacheManager;
 import net.phanmemmottrieu.cache.ServiceDataCacheManager;
-import java.util.concurrent.Semaphore;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.Executors;
@@ -91,10 +90,6 @@ public class WebSpringController {
     // --- Add TemplateEngine for Thymeleaf ---
     private final TemplateEngine templateEngine;
     // --- End TemplateEngine ---
-    
-    // 🔴 FIXED: Reduced from 256 to 80 concurrent SSR renders for 5.76GB RAM server
-    // Fair semaphore: đảm bảo FIFO, tránh starvation cho requests chậm
-    private final Semaphore ssrSemaphore = new Semaphore(80, true);
     
     // 🔴 SERVICE DATA CACHE MANAGER: Cache sitemap/category/detail paths với TTL 60-120s
     private ServiceDataCacheManager serviceDataCacheManager;
@@ -1405,18 +1400,7 @@ public class WebSpringController {
         response.set("requestId", UUID.randomUUID().toString());
         response.setIsApi(false);
         
-        // 🔴 CRITICAL FIX: Enforce semaphore to limit concurrent processing (max 80 threads)
-        boolean acquired = false;
         try {
-            acquired = ssrSemaphore.tryAcquire(5, TimeUnit.SECONDS);
-            if (!acquired) {
-                logger.warn("⚠️ Server overloaded - Semaphore timeout (80/80 slots busy)");
-                return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                    .header("Retry-After", "10")
-                    .contentType(MediaType.TEXT_HTML)
-                    .body("<html><body><h2>Server đang quá tải - Vui lòng thử lại sau 10s</h2></body></html>".getBytes());
-            }
-            
             // Check if this is an API request (host api.* OR URI /api/)
             String host = request.getHeader("Host");
             String uri = request.getRequestURI();
@@ -2433,14 +2417,6 @@ public class WebSpringController {
                 if (shouldAttemptSSR) {
                     logger.info("✅ SSR CONDITIONS MET: appType={}, app_id={}, tbl_services={}, tbl_service_detail={}, rp_index={}, path={}",
                             appType, rp_index, app_id, tbl_services, tbl_service_detail, normalizedPath);
-                    
-                    // 🔴 BULKHEAD: Check SSR semaphore - fallback to skeleton HTML nếu quá tải (>80 concurrent)
-                    if (!ssrSemaphore.tryAcquire()) {
-                        logger.warn("⚠️ SSR semaphore exhausted (80 concurrent limit) - returning skeleton HTML for path: {}", normalizedPath);
-                        response.set("code", 200);
-                        response.setHtmlBody("<html><head><meta charset='UTF-8'><title>Loading...</title><style>body{font-family:Arial,sans-serif;margin:0;padding:24px;background:#fafafa;color:#333}.sk{animation:pulse 1.5s infinite;background:#f0f0f0;height:20px;margin:10px 0;border-radius:4px}@keyframes pulse{0%{opacity:1}50%{opacity:.55}100%{opacity:1}}.hint{font-size:13px;color:#666;margin-top:12px}</style></head><body><div class='sk'></div><div class='sk' style='width:80%'></div><div class='sk' style='width:60%'></div><div class='hint'>Server đang bận, vui lòng thử lại sau ít giây.</div></body></html>");
-                        return buildResponseEntity(response, null);
-                    }
                     
                     try {
                     // domain = "phanmemmottrieu.net"; // FOR TESTING ONLY, FIX LATER
@@ -3545,10 +3521,6 @@ public class WebSpringController {
             response.set("code", 500);
             response.setHtmlBody("<html><body><h2>Lỗi hệ thống nội bộ: " + e.getMessage() + "</h2></body></html>");
         } finally {
-            // 🔴 CRITICAL: Always release semaphore permit
-            if (acquired) {
-                ssrSemaphore.release();
-            }
         }
 
         return buildResponseEntity(response, null);
