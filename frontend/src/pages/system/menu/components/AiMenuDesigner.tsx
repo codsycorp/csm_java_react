@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Button, Card, Collapse, Divider, Input, message, Radio, Select, Space } from "antd";
+import { Alert, Button, Card, Collapse, Divider, Input, message, Radio, Select, Space, Switch, Tag } from "antd";
 import type { RadioChangeEvent } from "antd";
 import { useTranslation } from "react-i18next";
 
@@ -413,6 +413,53 @@ function createMenuExample(): MenuItemType[] {
   ];
 }
 
+function uniqueStrings(items: string[], limit = 20): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const raw of items) {
+    const value = String(raw || "").trim();
+    if (!value) continue;
+    const key = value.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(value);
+    if (result.length >= limit) break;
+  }
+  return result;
+}
+
+function extractRequirementTables(text: string, limit = 24): string[] {
+  const raw = String(text || "");
+  const tokens = raw.match(/\b[a-z][a-z0-9]*_[a-z0-9_]+\b/gi) || [];
+  const blacklist = new Set([
+    "type_form", "table_name", "menu_id", "parent_id", "field_root", "report_name",
+    "dynamic_link_url", "auto_code_name", "table_pagesize", "row_type_edit",
+    "f_name", "f_header", "f_types", "f_cbo_query", "f_pkid", "f_show",
+  ]);
+  return uniqueStrings(tokens.filter((t) => !blacklist.has(t.toLowerCase())), limit);
+}
+
+function extractRequirementModules(text: string, limit = 12): string[] {
+  const lines = String(text || "")
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  const modules: string[] = [];
+  for (const line of lines) {
+    if (/^(\d+[\).]|[-*•])\s+/.test(line)) {
+      const normalized = line.replace(/^(\d+[\).]|[-*•])\s+/, "").trim();
+      if (normalized.length >= 4 && normalized.length <= 120) {
+        modules.push(normalized);
+      }
+    }
+    if (/^[^:]{4,80}:\s*$/.test(line)) {
+      modules.push(line.replace(/:\s*$/, "").trim());
+    }
+  }
+  return uniqueStrings(modules, limit);
+}
+
 function buildPromptWithRequirement(
   appId: string | undefined,
   requestText: string,
@@ -423,17 +470,23 @@ function buildPromptWithRequirement(
   const referenceMenus = Array.isArray(currentMenus) && currentMenus.length > 0
     ? currentMenus
     : createMenuExample();
-  const mainPrompt = trimToMax(AI_PROMPTS.MAIN_MENU_DESIGNER || "", 5200);
-  const extractorPrompt = trimToMax(AI_PROMPTS.REQUIREMENT_EXTRACTOR || "", 2200);
-  const selectorGuide = trimToMax(AI_PROMPTS.TYPE_SELECTION_GUIDE || "", 2200);
-  const requestCore = trimToMax(requestText || "", 2800);
-  const compactMenuContext = buildCompactMenuContext(referenceMenus, 180);
+  const enforcerPrompt = trimToMax(AI_PROMPTS.EXTRACTION_AND_VALIDATION || "", 5000);
+  const sysArchContext = trimToMax(AI_PROMPTS.SYSTEM_ARCHITECTURE || "", 8000);
+  const mainPrompt = trimToMax(AI_PROMPTS.MAIN_MENU_DESIGNER || "", 5500);
+  const extractorPrompt = trimToMax(AI_PROMPTS.REQUIREMENT_EXTRACTOR || "", 1200);
+  const selectorGuide = trimToMax(AI_PROMPTS.TYPE_SELECTION_GUIDE || "", 1500);
+  const requestCore = trimToMax(requestText || "", 2600);
+  const compactMenuContext = buildCompactMenuContext(referenceMenus, 150);
   const typeCatalog = buildMenuTypeCatalog();
   const sampleMenuContext = sampleMenus && sampleMenus.length > 0
-    ? buildCompactMenuContext(sampleMenus, 120)
+    ? buildCompactMenuContext(sampleMenus, 100)
     : null;
 
-  const prompt = `${mainPrompt}
+  const prompt = `${enforcerPrompt}
+
+${sysArchContext}
+
+${mainPrompt}
 
 ${extractorPrompt}
 
@@ -441,10 +494,14 @@ ${selectorGuide}
 
 ## TRACH NHIEM CUA BAN
 1) Phan tich yeu cau khach hang
-2) Chon menu type phu hop (${scope === "minimal" ? "uu tien type 1/3" : "co the dung 1/2/3/4/6"})
+2) Chon menu type phu hop (${scope === "minimal" ? "uu tien type 1/2/6, chi dung 3/4 khi yeu cau ro" : "co the dung 1/2/3/4/6"})
 3) Tao JSON hop le theo MenuItemType
 4) Neu can, ghi chu gia dinh vao notes
 5) Neu da co menu cu: chuan hoa theo schema he thong hien tai, giu ID/path/menu_id on dinh toi da
+6) KHONG tu them module/tinh nang khong co trong yeu cau (vd dashboard, KPI, bao cao tong hop, kanban, auto_code)
+7) KHONG duoc bo sot dau muc yeu cau: moi module/chuc nang khach hang neu ra phai co menu tuong ung.
+8) Khong duoc gom tat ca thanh 1-2 menu tong quat neu yeu cau co nhieu module nghiep vu.
+9) So menu chuc nang (node la type_form!=0) phai phan anh day du cac nhom nghiep vu duoc neu trong yeu cau.
 
 ## APP_ID DANG THIET KE
 ${String(appId || "")}
@@ -461,6 +518,7 @@ ${requestCore}
 ## SCHEMA GUARDRAIL (BAT BUOC)
 - CHI dung table field theo format f_*: f_name, f_header, f_types, f_pkid, f_show, f_width, f_dec.
 - KHONG dung field generic: field, label, type, primaryKey, required, editable.
+- KHONG dung key "fields" o cap menu. BAT BUOC dung key "table" cho danh sach cot.
 - Trigger phai nam trong object "trigger": { "before_save": "...", "after_save": "..." }
 - KHONG dung key trigger_* o cap menu (vd: trigger_before_save, trigger_after_save).
 - GIA TRI trigger phai la JS code body thuc thi duoc voi dung chu ky:
@@ -471,15 +529,26 @@ ${requestCore}
   Ten template co san: validate_order_debt_limit, update_order_total, validate_order_item_stock,
   recalculate_order_total, validate_delivery_item_stock, update_stock_on_delivery,
   validate_receipt_item_quantity, update_stock_on_receipt.
-- Field select/combo (f_types co/coro/cbo) BAT BUOC co f_cbo_query KHONG RONG. Cac dang hop le:
-  + Shorthand static:   "static:Gia tri 1,Gia tri 2,Gia tri 3"
-  + Static JSON day du:  "{\\"options\\":[{\\"ma\\":\\"1\\",\\"ten\\":\\"Ten\\"}],\\"query\\":[]}"
-  + Shorthand SQL:       "SELECT id, ten_truong FROM ten_bang"
-  + Query JSON day du:   "{\\"options\\":[],\\"query\\":[{\\"obj_name\\":\\"ten_bang\\",\\"fields\\":[\\"id\\",\\"ten\\"],\\"obj_where\\":{\\"field\\":\\"id\\",\\"type\\":\\"like\\",\\"value\\":\\"\\"}}]}"
-  TUYET DOI KHONG: f_cbo_query rong ("") cho combo field.
+- Field select/combo (f_types co/coro/cbo) BAT BUOC co f_cbo_query KHONG RONG.
+  f_cbo_query phai la STRING va chi dung cac dang runtime sau:
+  + DANG 1 (query DB): "{\\"query\\":[{\\"obj_name\\":\\"ten_bang\\",\\"fields\\":[\\"id\\",\\"ten\\"],\\"obj_where\\":\\"\\"}],\\"options\\":[]}"
+  + DANG 2 (options tinh): "{\\"query\\":[],\\"options\\":[{\\"ma\\":\\"v1\\",\\"ten\\":\\"Nhan 1\\"}]}"
+  + DANG 3 (JS tinh toan): "var opts=[];...;return {f_grid:true,f_grid_fields:true,options:opts}"
+  + DANG 4 (JS doc data store): "var rows=data[\\"ten_bang\\"].rows||[];...;return {f_grid:true,f_grid_fields:true,options:opts}"
+  TUYET DOI KHONG de f_cbo_query rong ("") cho combo field.
 - parentId CUA MENU CON PHAI = id cua menu cha. KHONG de tat ca parentId = "" roi de children:[] rong o cha.
   Dung: {"id":"dm_root","type_form":0,"children":[{"id":"dm_kh","parentId":"dm_root","type_form":1,...}]}
   SAI:  {"id":"dm_root","type_form":0,"children":[]}, {"id":"dm_kh","parentId":"","type_form":1,...}
+- Rule click menu:
+  + Node nhom (type_form=0) phai co children[] khong rong.
+  + Node la (menu chuc nang) KHONG duoc de type_form=0.
+  + type_form=1/2/6 bat buoc co table_name.
+  + type_form=3 bat buoc co dynamic_link_url.
+  + type_form=4 bat buoc co auto_code_name.
+- Rule report noi bo:
+  + Bao cao noi bo dung report_name + trigger.report_db (route /system/grid/:menuId).
+  + KHONG duoc bien bao cao noi bo thanh type_form=3 + dynamic_link_url '/reports/...'.
+  + Neu co report_name thi uu tien type_form=1 (hoac type_form dang duoc yeu cau), KHONG dung type_form=3.
 - Neu yeu cau nghiep vu co ket noi master-detail, bao cao, combo phu thuoc: phai tao du trigger va f_cbo_query tuong ung.
 - Menu type 1/2/6 KHONG can path dieu huong. Neu AI tao path cho cac type nay, hay de rong hoac bo qua.
 - CRM/quan ly cong viec phai thiet ke bang nhieu menu nho: type 1/2/3/4/6 va report, khong dung workspace tong hop.
@@ -487,8 +556,18 @@ ${requestCore}
 - Neu yeu cau la bao cao/dashboard tong hop cua he thong, uu tien su dung report_name + trigger.report_db + cac field loc trong table de runtime CsmReport tu render.
 - KHONG tu tao path/URL co dinh kieu crm/reports/dashboard, reports/dashboard, /dashboard cho menu report noi bo.
 - Chi dung dynamic_link_url khi thuc su can dieu huong sang mot URL/route ben ngoai co san.
+- Semantic field mapping:
+  + cac field gia/ngan sach/chi phi/doanh thu/tong_tien -> f_types="price"
+  + field trang_thai/loai/nguon/muc_do -> f_types="coro" + f_cbo_query
 
-## OUTPUT SHAPE (LEGACY COMPAT)
+## CHECKLIST TU KIEM TRA TRUOC KHI TRA KET QUA
+- Doi chieu tung dau muc yeu cau khach hang -> da co menu/field/trigger tuong ung chua.
+- So luong menu chuc nang da du theo so nhom nghiep vu khach hang yeu cau (khong tra ve qua it).
+- Khong co menu type_form=0 dang la node la.
+- Khong co menu report noi bo bi doi sang dynamic_link_url.
+- Cac field tien te/ngan sach da dung f_types="price".
+
+## OUTPUT SHAPE (SCHEMA)
 - Moi menu item uu tien co day du key: id, label, trigger, m_icons, field_root, report_name,
   orientation, p_width, p_height, m_show, g_readonly, table_name, type_menu, type_form,
   row_type_edit, dev, prefix_pk, table_pagesize, menu_id, parentId, children.
@@ -509,38 +588,60 @@ function buildRefinementPrompt(
   scope: "minimal" | "complete" = "complete",
   currentMenus?: MenuItemType[],
   sampleMenus?: MenuItemType[],
+  isSampleBase?: boolean,
 ): string {
   const referenceMenus = Array.isArray(currentMenus) && currentMenus.length > 0
     ? currentMenus
     : createMenuExample();
 
-  const mainPrompt = trimToMax(AI_PROMPTS.MAIN_MENU_DESIGNER || "", 5200);
-  const extractorPrompt = trimToMax(AI_PROMPTS.REQUIREMENT_EXTRACTOR || "", 2200);
-  const selectorGuide = trimToMax(AI_PROMPTS.TYPE_SELECTION_GUIDE || "", 2200);
+  const enforcerPrompt = trimToMax(AI_PROMPTS.EXTRACTION_AND_VALIDATION || "", 4500);
+  const sysArchContext = trimToMax(AI_PROMPTS.SYSTEM_ARCHITECTURE || "", 7000);
+  const mainPrompt = trimToMax(AI_PROMPTS.MAIN_MENU_DESIGNER || "", 5000);
+  const extractorPrompt = trimToMax(AI_PROMPTS.REQUIREMENT_EXTRACTOR || "", 1000);
+  const selectorGuide = trimToMax(AI_PROMPTS.TYPE_SELECTION_GUIDE || "", 1400);
 
-  const requestCore = trimToMax(baseRequest || "(khong co)", 2600);
-  const refineCore = trimToMax(refineRequest || "", 1800);
-  const currentMenuContext = buildCompactMenuContext(referenceMenus, 180);
-  const previousMenuContext = buildPreviousResultContext(previousResultJson, 90);
-  const strictScope = scope === "minimal" ? "uu tien type 1/3" : "duoc dung day du type 1/2/3/4/6";
+  const requestCore = trimToMax(baseRequest || "(khong co)", 2400);
+  const refineCore = trimToMax(refineRequest || "", 1600);
+  const currentMenuContext = buildCompactMenuContext(referenceMenus, 120);
+  const previousMenuContext = buildPreviousResultContext(previousResultJson, 80);
+  const strictScope = scope === "minimal" ? "uu tien type 1/2/6, chi dung 3/4 khi yeu cau ro" : "duoc dung day du type 1/2/3/4/6";
   const typeCatalog = buildMenuTypeCatalog();
   const sampleMenuContext = sampleMenus && sampleMenus.length > 0
-    ? buildCompactMenuContext(sampleMenus, 120)
+    ? buildCompactMenuContext(sampleMenus, 100)
     : null;
 
-  const prompt = `${mainPrompt}
-
-${extractorPrompt}
-
-${selectorGuide}
-
-## NHIEM VU REFINE (TOI UU TOKEN)
+  const taskHeader = isSampleBase
+    ? `## NHIEM VU ADAPT MENU MAU THEO YEU CAU MOI
+Day la menu thuc te tu mot ung dung khac. Hay chinh sua, adapt va mo rong de phu hop voi nghiep vu khach hang moi:
+1) GIU NGUYEN nhung phan tot: table_name, f_* fields hop le, trigger logic dung, cau truc cha-con.
+2) CHINH SUA theo yeu cau: doi label, them/bo/doi ten truong, cap nhat logic nghiep vu trigger.
+3) THEM MOI chuc nang ma khach hang can nhung menu mau chua co.
+4) Dam bao schema MenuItemType hop le va ${strictScope}.
+5) Tra ve TOAN BO menu sau khi adapt (khong tra ve delta).`
+    : `## NHIEM VU REFINE (TOI UU TOKEN)
 Ban da co ket qua menu lan truoc. Hay cap nhat theo yeu cau moi voi nguyen tac:
 1) Giu on dinh phan dung, chi sua phan can thay doi.
 2) Van tra ve TOAN BO menu sau khi cap nhat (khong tra ve delta).
 3) Dam bao schema MenuItemType hop le va ${strictScope}.
 4) Neu thong tin chua du, dua ra gia dinh hop ly va ghi vao warnings.
 5) Chuan hoa lai cac menu cu chua dung schema (field generic, trigger sai cho, combo sai format).
+6) KHONG don gian hoa qua muc: giu day du cac module nghiep vu theo yeu cau goc + yeu cau bo sung.`;
+
+  const previousResultLabel = isSampleBase
+    ? "## MENU MAU DUNG LAM GOC (CHINH SUA/ADAPT THEO YEU CAU MOI)"
+    : "## TOM TAT KET QUA AI LAN TRUOC (COMPACT)";
+
+  const prompt = `${enforcerPrompt}
+
+${sysArchContext}
+
+${mainPrompt}
+
+${extractorPrompt}
+
+${selectorGuide}
+
+${taskHeader}
 
 ## APP_ID DANG THIET KE
 ${String(appId || "")}
@@ -557,12 +658,13 @@ ${refineCore}
 ## MENU HE THONG HIEN TAI (COMPACT REFERENCE)
 ${currentMenuContext}
 ${sampleMenuContext ? `\n## MENU MAU THAM KHAO TU CHUONG TRINH KHAC\nDay la menu thuc te da trien khai tu mot chuong trinh khac de ban tham khao cau truc, pattern, va logic nghiep vu:\n${sampleMenuContext}\n` : ""}
-## TOM TAT KET QUA AI LAN TRUOC (COMPACT)
+${previousResultLabel}
 ${previousMenuContext}
 
 ## SCHEMA GUARDRAIL (BAT BUOC)
 - CHI dung table field theo format f_*: f_name, f_header, f_types, f_pkid, f_show, f_width, f_dec.
 - KHONG dung field generic: field, label, type, primaryKey, required, editable.
+- KHONG dung key "fields" o cap menu. BAT BUOC dung key "table" cho danh sach cot.
 - Trigger phai nam trong object "trigger": { "before_save": "...", "after_save": "..." }
 - KHONG dung key trigger_* o cap menu (vd: trigger_before_save, trigger_after_save).
 - GIA TRI trigger phai la JS code body thuc thi duoc voi dung chu ky:
@@ -572,23 +674,45 @@ ${previousMenuContext}
 - KHONG tra ve comment placeholder nhu "/* Validate */ return data". Viet code that hoac ten template co san:
   validate_order_debt_limit, update_order_total, validate_order_item_stock, recalculate_order_total,
   validate_delivery_item_stock, update_stock_on_delivery, validate_receipt_item_quantity, update_stock_on_receipt.
-- Field select/combo (f_types co/coro/cbo) BAT BUOC co f_cbo_query KHONG RONG. Cac dang hop le:
-  + Shorthand static:   "static:Gia tri 1,Gia tri 2,Gia tri 3"
-  + Static JSON day du:  "{\\"options\\":[{\\"ma\\":\\"1\\",\\"ten\\":\\"Ten\\"}],\\"query\\":[]}"
-  + Shorthand SQL:       "SELECT id, ten_truong FROM ten_bang"
-  + Query JSON day du:   "{\\"options\\":[],\\"query\\":[{\\"obj_name\\":\\"ten_bang\\",\\"fields\\":[\\"id\\",\\"ten\\"],\\"obj_where\\":{\\"field\\":\\"id\\",\\"type\\":\\"like\\",\\"value\\":\\"\\"}}]}"
-  TUYET DOI KHONG: f_cbo_query rong ("") cho combo field.
+- Field select/combo (f_types co/coro/cbo) BAT BUOC co f_cbo_query KHONG RONG.
+  f_cbo_query phai la STRING va chi dung cac dang runtime sau:
+  + DANG 1 (query DB): "{\\"query\\":[{\\"obj_name\\":\\"ten_bang\\",\\"fields\\":[\\"id\\",\\"ten\\"],\\"obj_where\\":\\"\\"}],\\"options\\":[]}"
+  + DANG 2 (options tinh): "{\\"query\\":[],\\"options\\":[{\\"ma\\":\\"v1\\",\\"ten\\":\\"Nhan 1\\"}]}"
+  + DANG 3 (JS tinh toan): "var opts=[];...;return {f_grid:true,f_grid_fields:true,options:opts}"
+  + DANG 4 (JS doc data store): "var rows=data[\\"ten_bang\\"].rows||[];...;return {f_grid:true,f_grid_fields:true,options:opts}"
+  TUYET DOI KHONG de f_cbo_query rong ("") cho combo field.
 - parentId CUA MENU CON PHAI = id cua menu cha. KHONG de tat ca parentId = "" roi de children:[] rong o cha.
   Dung: {"id":"dm_root","type_form":0,"children":[{"id":"dm_kh","parentId":"dm_root","type_form":1,...}]}
   SAI:  {"id":"dm_root","type_form":0,"children":[]}, {"id":"dm_kh","parentId":"","type_form":1,...}
+- Rule click menu:
+  + Node nhom (type_form=0) phai co children[] khong rong.
+  + Node la (menu chuc nang) KHONG duoc de type_form=0.
+  + type_form=1/2/6 bat buoc co table_name.
+  + type_form=3 bat buoc co dynamic_link_url.
+  + type_form=4 bat buoc co auto_code_name.
+- Rule report noi bo:
+  + Bao cao noi bo dung report_name + trigger.report_db (route /system/grid/:menuId).
+  + KHONG duoc bien bao cao noi bo thanh type_form=3 + dynamic_link_url '/reports/...'.
+  + Neu co report_name thi uu tien type_form=1 (hoac type_form dang duoc yeu cau), KHONG dung type_form=3.
 - Neu refine tu menu cu: giu id/menu_id/path/menu cha-con toi da, chi thay doi phan duoc yeu cau.
 - Menu type 1/2/6 KHONG can path dieu huong. Neu co path o cac type nay, hay loai bo.
 - CRM/quan ly cong viec phai doi thanh cac menu nho bang type 1/2/3/4/6 va report.
 - Type 6 (Kanban Board) can uu tien kanban_config chuyen biet.
 - Neu menu mang tinh chat bao cao/dashboard tong hop thi uu tien report_name + trigger.report_db thay vi path crm/reports/dashboard.
 - Neu AI xuat menu ten Dashboard/Bao cao tong hop/KPI ma lai khong co report_name hoac auto_code_name thi phai tu sua lai truoc khi tra ket qua.
+- KHONG tu them module/tinh nang khong co trong yeu cau goc + yeu cau bo sung.
+- Semantic field mapping:
+  + cac field gia/ngan sach/chi phi/doanh thu/tong_tien -> f_types="price"
+  + field trang_thai/loai/nguon/muc_do -> f_types="coro" + f_cbo_query
 
-## OUTPUT SHAPE (LEGACY COMPAT)
+## CHECKLIST TU KIEM TRA TRUOC KHI TRA KET QUA
+- Doi chieu tung dau muc yeu cau goc + yeu cau bo sung -> da co menu/field/trigger tuong ung chua.
+- So luong menu chuc nang da du theo so nhom nghiep vu duoc yeu cau (khong tra ve qua it).
+- Khong co menu type_form=0 dang la node la.
+- Khong co menu report noi bo bi doi sang dynamic_link_url.
+- Cac field tien te/ngan sach da dung f_types="price".
+
+## OUTPUT SHAPE (SCHEMA)
 - Moi menu item uu tien co day du key: id, label, trigger, m_icons, field_root, report_name,
   orientation, p_width, p_height, m_show, g_readonly, table_name, type_menu, type_form,
   row_type_edit, dev, prefix_pk, table_pagesize, menu_id, parentId, children.
@@ -670,6 +794,18 @@ function normalizeTableField(field: any): any {
     normalized.f_types = raw.editable === false ? "coro" : "co";
   }
 
+  // Auto-detect: if f_types is a plain text type but f_cbo_query has a real value,
+  // the AI forgot to set the correct combo type — upgrade to coro automatically.
+  const PLAIN_TEXT_TYPES = /^(ed|txt|text|ro|string)?$/i;
+  if (PLAIN_TEXT_TYPES.test(String(normalized.f_types || "ed"))) {
+    const rawCboQuery = normalized.f_cbo_query ?? raw.cbo_query ?? raw.options ?? raw.foreignKey;
+    const hasCboValue = rawCboQuery != null && rawCboQuery !== ""
+      && !(typeof rawCboQuery === "object" && !Array.isArray(rawCboQuery) && Object.keys(rawCboQuery).length === 0);
+    if (hasCboValue) {
+      normalized.f_types = raw.editable === false ? "coro" : "coro";
+    }
+  }
+
   if (/co|coro|cbo/i.test(String(normalized.f_types || ""))) {
     normalized.f_cbo_query = normalizeComboQueryValue(
       normalized.f_cbo_query ?? raw.cbo_query ?? raw.options ?? raw.foreignKey,
@@ -744,7 +880,11 @@ function inferTypeForm(node: any): number {
   const fromType = toFiniteNumber(node?.type);
 
   const tableName = String(node?.table_name || "").trim();
-  const tableFields = Array.isArray(node?.table) ? node.table : [];
+  const tableFields = Array.isArray(node?.table)
+    ? node.table
+    : Array.isArray(node?.fields)
+      ? node.fields
+      : [];
   const children = Array.isArray(node?.children)
     ? node.children
     : Array.isArray(node?.nodes)
@@ -760,8 +900,7 @@ function inferTypeForm(node: any): number {
   // Container node: has children but no own table payload.
   if (hasChildren && !tableName && tableFields.length === 0) return 0;
 
-  // Legacy AI often returns `type` đúng nhưng `type_form` bị default = 1.
-  // Khi `type_form`=1/2 mà không có table payload, ưu tiên `type` nếu hợp lệ.
+  // Khi type_form=1/2 mà không có table payload, ưu tiên field "type" nếu hợp lệ.
   if ((explicit === 1 || explicit === 2) && !tableName && tableFields.length === 0 && isSupportedTypeForm(fromType) && fromType !== explicit) {
     return fromType;
   }
@@ -769,7 +908,7 @@ function inferTypeForm(node: any): number {
   // Prefer explicit type_form when valid.
   if (isSupportedTypeForm(explicit)) return explicit;
 
-  // Fallback to legacy AI "type" if looks like type_form.
+  // Fallback: dùng field "type" nếu trông giống type_form.
   if (isSupportedTypeForm(fromType)) return fromType;
 
   if (hasChildren && tableName) return 2;
@@ -805,6 +944,40 @@ function normalizeNodeByTypeForm(node: any, typeForm: number): void {
   }
 }
 
+const KANBAN_STAGE_COLORS = ["blue", "orange", "green", "red", "purple", "cyan", "gold"];
+
+function normalizeKanbanConfig(raw: any): any {
+  if (!raw || typeof raw !== "object") return raw ?? {};
+  const normalized = { ...raw };
+
+  // Normalize stages: string[] → {id,label,color}[]
+  if (Array.isArray(normalized.stages)) {
+    normalized.stages = normalized.stages.map((s: any, i: number) => {
+      if (s && typeof s === "object" && s.id !== undefined) return s; // already correct
+      const label = String(s ?? "");
+      const id = label.toLowerCase().replace(/[^a-z0-9]/g, "_").replace(/_+/g, "_").replace(/^_|_$/g, "") || `stage_${i}`;
+      return { id, label, color: KANBAN_STAGE_COLORS[i % KANBAN_STAGE_COLORS.length] };
+    });
+  }
+
+  // Normalize fields shorthand: string[] → proper config keys
+  if (Array.isArray(normalized.fields)) {
+    const [pkField, titleField, stageField, dueDateField] = normalized.fields;
+    if (!normalized.pkField && pkField) normalized.pkField = pkField;
+    if (!normalized.titleField && titleField) normalized.titleField = titleField;
+    if (!normalized.stageField && stageField) normalized.stageField = stageField;
+    if (!normalized.dueDateField && dueDateField) normalized.dueDateField = dueDateField;
+    delete normalized.fields;
+  }
+
+  // Ensure tableName from table_name sibling if missing
+  if (!normalized.tableName && normalized.table_name) {
+    normalized.tableName = normalized.table_name;
+  }
+
+  return normalized;
+}
+
 function normalizeAiMenuNode(input: any): MenuItemType {
   const node: any = input && typeof input === "object" ? { ...input } : {};
 
@@ -817,8 +990,15 @@ function normalizeAiMenuNode(input: any): MenuItemType {
     type_form: resolvedTypeForm,
   };
 
-  if (Array.isArray(node.table)) {
-    normalized.table = node.table.map(normalizeTableField);
+  const sourceFields = Array.isArray(node.table)
+    ? node.table
+    : Array.isArray(node.fields)
+      ? node.fields
+      : [];
+
+  if (sourceFields.length > 0) {
+    normalized.table = sourceFields.map(normalizeTableField);
+    delete normalized.fields;
   }
 
   const trigger = normalizeTriggerShape(node);
@@ -838,6 +1018,14 @@ function normalizeAiMenuNode(input: any): MenuItemType {
     normalized.children = node.nodes.map(normalizeAiMenuNode);
   }
 
+  // Normalize kanban_config stages and fields shorthand
+  if (resolvedTypeForm === 6 && normalized.kanban_config != null) {
+    normalized.kanban_config = normalizeKanbanConfig(normalized.kanban_config);
+    if (!normalized.kanban_config.tableName && normalized.table_name) {
+      normalized.kanban_config.tableName = normalized.table_name;
+    }
+  }
+
   normalizeNodeByTypeForm(normalized, resolvedTypeForm);
 
   return normalized as MenuItemType;
@@ -847,7 +1035,7 @@ function normalizeAiMenuSchema(menus: MenuItemType[]): MenuItemType[] {
   return (Array.isArray(menus) ? menus : []).map((menu) => normalizeAiMenuNode(menu));
 }
 
-function ensureLegacyFieldShape(field: any, index: number, menuId: string): any {
+function normalizeFieldShape(field: any, index: number, menuId: string): any {
   const fName = String(field?.f_name || field?.field || `field_${index + 1}`);
   return {
     id: field?.id || `${menuId}@@@@@${fName}`,
@@ -871,7 +1059,7 @@ function ensureLegacyFieldShape(field: any, index: number, menuId: string): any 
   };
 }
 
-function applyLegacyMenuShape(menus: MenuItemType[]): MenuItemType[] {
+function applyMenuShape(menus: MenuItemType[]): MenuItemType[] {
   const walk = (nodes: MenuItemType[], parentId: string, pathPrefix: string): MenuItemType[] => {
     return (Array.isArray(nodes) ? nodes : []).map((rawNode, index) => {
       const menuId = rawNode.id ? String(rawNode.id) : `${Date.now()}_${Math.random().toString(16).slice(2, 14)}`;
@@ -880,9 +1068,13 @@ function applyLegacyMenuShape(menus: MenuItemType[]): MenuItemType[] {
         ? ((rawNode as any).children as MenuItemType[])
         : [];
 
-      const table = Array.isArray((rawNode as any).table)
-        ? ((rawNode as any).table as any[]).map((f, idx) => ensureLegacyFieldShape(f, idx, menuId))
-        : [];
+      const sourceFields = Array.isArray((rawNode as any).table)
+        ? ((rawNode as any).table as any[])
+        : Array.isArray((rawNode as any).fields)
+          ? ((rawNode as any).fields as any[])
+          : [];
+
+      const table = sourceFields.map((f, idx) => normalizeFieldShape(f, idx, menuId));
 
       const typeForm = inferTypeForm(rawNode);
       
@@ -912,8 +1104,10 @@ function applyLegacyMenuShape(menus: MenuItemType[]): MenuItemType[] {
         // Explicit support for Type 3 (Dynamic Link) and Type 4 (Dynamic Code)
         ...(typeForm === 3 && { dynamic_link_url: (rawNode as any).dynamic_link_url ?? "" }),
         ...(typeForm === 4 && { auto_code_name: (rawNode as any).auto_code_name ?? "" }),
-        ...(typeForm === 6 && { kanban_config: (rawNode as any).kanban_config ?? {} }),
+        ...(typeForm === 6 && { kanban_config: normalizeKanbanConfig((rawNode as any).kanban_config ?? {}) }),
       };
+
+      delete (node as any).fields;
 
       normalizeNodeByTypeForm(node, typeForm);
 
@@ -1071,8 +1265,8 @@ function ensureMenuDefaults(menu: MenuItemType): MenuItemType {
 
 function normalizeMenuList(menus: MenuItemType[]) {
   const schemaNormalized = normalizeAiMenuSchema(menus);
-  const legacyShaped = applyLegacyMenuShape(schemaNormalized);
-  return legacyShaped.map(ensureMenuDefaults);
+  const shaped = applyMenuShape(schemaNormalized);
+  return shaped.map(ensureMenuDefaults);
 }
 
 function hasMeaningfulValue(value: any): boolean {
@@ -1225,6 +1419,34 @@ function extractAiPayload(response: any) {
   return payload && typeof payload === "object" ? payload : null;
 }
 
+function isLikelyMenuNode(value: any): boolean {
+  if (!isPlainObject(value)) return false;
+  const hasId = typeof value.id === "string" && value.id.trim().length > 0;
+  const hasMenuShape =
+    Object.prototype.hasOwnProperty.call(value, "type_form")
+    || Object.prototype.hasOwnProperty.call(value, "table_name")
+    || Array.isArray((value as any).table)
+    || Array.isArray((value as any).children);
+  return !!hasId && !!hasMenuShape;
+}
+
+function extractMenuListFromPayload(payload: any): MenuItemType[] {
+  if (!payload) return [];
+
+  if (Array.isArray(payload?.menu)) return payload.menu as MenuItemType[];
+  if (isLikelyMenuNode(payload?.menu)) return [payload.menu as MenuItemType];
+  if (Array.isArray(payload)) return payload as MenuItemType[];
+  if (isLikelyMenuNode(payload)) return [payload as MenuItemType];
+
+  const nestedData = payload?.data;
+  if (Array.isArray(nestedData?.menu)) return nestedData.menu as MenuItemType[];
+  if (isLikelyMenuNode(nestedData?.menu)) return [nestedData.menu as MenuItemType];
+  if (Array.isArray(nestedData)) return nestedData as MenuItemType[];
+  if (isLikelyMenuNode(nestedData)) return [nestedData as MenuItemType];
+
+  return [];
+}
+
 function isComboType(rawType: any): boolean {
   return /co|coro|cbo/i.test(String(rawType || ""));
 }
@@ -1304,24 +1526,14 @@ function validateMenusForApply(menus: MenuItemType[]): MenuValidationIssue[] {
         });
       }
 
-      // Report runtime (CsmReport): can run without table_name, but must have report_name + trigger.report_db.
-      if (isReportRuntime) {
-        if (!reportName) {
-          issues.push({
-            severity: "error",
-            rule: "report_name_required_for_report_runtime",
-            path,
-            message: "Menu bao cao runtime thieu report_name (duong dan file .docx).",
-          });
-        }
-        if (!hasReportDbTrigger) {
-          issues.push({
-            severity: "error",
-            rule: "report_db_required_for_report_runtime",
-            path,
-            message: "Menu bao cao runtime thieu trigger.report_db de tao du lieu bao cao.",
-          });
-        }
+      // Report runtime (CsmReport): must have trigger.report_db to supply data; report_name can be added later by user.
+      if (isReportRuntime && !hasReportDbTrigger) {
+        issues.push({
+          severity: "warning",
+          rule: "report_db_recommended_for_report_runtime",
+          path,
+          message: "Menu bao cao runtime nen co trigger.report_db de cap du lieu bao cao.",
+        });
       }
 
       if (typeForm === 3 && !String((node as any).dynamic_link_url || (node as any).v_link || "").trim()) {
@@ -1459,6 +1671,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
   const [sampleMenuLoading, setSampleMenuLoading] = useState(false);
   const [sampleMenuParsed, setSampleMenuParsed] = useState<MenuItemType[] | null>(null);
   const [sampleMenuError, setSampleMenuError] = useState<string | null>(null);
+  const [sampleUseAsBase, setSampleUseAsBase] = useState(false);
 
   const menuValidationIssues = useMemo(() => {
     return validateMenusForApply(aiMenus || []);
@@ -1481,10 +1694,15 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
   }, [requestText, storedRequest]);
 
   const sampleAppOptions = useMemo(() => {
+    const toLabel = (raw: any, fallback: string): string => {
+      if (!raw) return fallback;
+      if (typeof raw === "object") return String(raw.vi || raw.en || raw.zh || fallback);
+      return String(raw);
+    };
     const rows = [
       { label: "CSM", value: "csm" },
       ...((sampleAppList || []).map((app) => ({
-        label: app?.app_name || app?.app_id,
+        label: toLabel(app?.app_name, app?.app_id || ""),
         value: app?.app_id,
       }))),
     ].filter((opt) => !!opt.value);
@@ -1609,11 +1827,12 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     setSampleAppId(undefined);
     setSampleMenuParsed(null);
     setSampleMenuError(null);
+    setSampleUseAsBase(false);
   };
 
   const runGenerate = async (
     inputRequest: string,
-    scope: "minimal" | "complete" = "minimal",
+    scope: "minimal" | "complete" = "complete",
     promptOverride?: string,
   ) => {
     if (!appId) {
@@ -1655,7 +1874,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
         return;
       }
 
-      const menuPayload = Array.isArray(payload.menu) ? payload.menu : Array.isArray(payload) ? payload : [];
+      const menuPayload = extractMenuListFromPayload(payload);
       if (menuPayload.length === 0) {
         message.warning(t("system.menu.aiDesigner.emptyMenu") || "AI chưa trả về danh sách menu");
       }
@@ -1663,8 +1882,16 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
       const normalized = normalizeMenuList(menuPayload);
       const output = {
         menu: normalized,
-        notes: Array.isArray(payload.notes) ? payload.notes : [],
-        warnings: Array.isArray(payload.warnings) ? payload.warnings : [],
+        notes: Array.isArray(payload?.notes)
+          ? payload.notes
+          : Array.isArray(payload?.data?.notes)
+            ? payload.data.notes
+            : [],
+        warnings: Array.isArray(payload?.warnings)
+          ? payload.warnings
+          : Array.isArray(payload?.data?.warnings)
+            ? payload.data.warnings
+            : [],
       };
 
       setAiMenus(normalized);
@@ -1715,7 +1942,22 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
   };
 
   const handleGenerate = async () => {
-    await runGenerate(mergedRequestText, "complete");
+    if (sampleUseAsBase && sampleMenuParsed && sampleMenuParsed.length > 0) {
+      const baseJson = JSON.stringify({ menu: sampleMenuParsed }, null, 2);
+      const prompt = buildRefinementPrompt(
+        appId,
+        "",
+        mergedRequestText,
+        baseJson,
+        "complete",
+        currentMenus,
+        undefined,
+        true,
+      );
+      await runGenerate(mergedRequestText, "complete", prompt);
+    } else {
+      await runGenerate(mergedRequestText, "complete");
+    }
   };
 
   const handleApply = async () => {
@@ -1774,15 +2016,15 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
           items={[{
             key: "sample_menu",
             label: sampleMenuParsed
-              ? `Menu mẫu tham khảo ✓ (${sampleMenuParsed.length} menu gốc từ ${sampleAppLabel || sampleAppId || "app da chon"})`
-              : "Menu mẫu tham khảo (tùy chọn) — chọn ứng dụng để AI học theo",
+              ? `Menu mẫu ✓ ${sampleUseAsBase ? "[Dùng làm gốc]" : "[Tham khảo]"} — ${sampleMenuParsed.length} menu từ ${sampleAppLabel || sampleAppId || "app đã chọn"}`
+              : "Menu mẫu tham khảo (tùy chọn) — chọn ứng dụng để AI học theo hoặc chỉnh sửa",
             children: (
               <Space direction="vertical" style={{ width: "100%" }}>
                 <Alert
                   type="info"
                   showIcon
                   message="Chọn ứng dụng để tự động lấy menu mẫu"
-                  description="Hệ thống sẽ tự tải menu của ứng dụng được chọn và đưa vào prompt làm mẫu tham khảo cho AI."
+                  description="Chọn ứng dụng để tải menu mẫu. Chế độ Tham khảo: AI học theo cấu trúc để tự thiết kế mới. Chế độ Dùng làm gốc: AI lấy đúng menu này và adapt theo yêu cầu khách hàng mới."
                 />
                 <Space>
                   <Select
@@ -1808,11 +2050,26 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                   )}
                 </Space>
                 {sampleMenuParsed && (
-                  <Alert
-                    type="success"
-                    showIcon
-                    message={`Đã nạp ${sampleMenuParsed.length} menu gốc từ ${sampleAppLabel || sampleAppId} — AI sẽ dùng làm tham khảo khi tạo menu mới`}
-                  />
+                  <>
+                    <Alert
+                      type="success"
+                      showIcon
+                      message={`Đã nạp ${sampleMenuParsed.length} menu gốc từ ${sampleAppLabel || sampleAppId}`}
+                    />
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", borderRadius: 6, border: `1px solid ${sampleUseAsBase ? "var(--ant-color-primary-border)" : "var(--ant-color-border)"}`, background: sampleUseAsBase ? "var(--ant-color-primary-bg)" : "var(--ant-color-fill-quaternary)" }}>
+                      <Switch
+                        checked={sampleUseAsBase}
+                        onChange={setSampleUseAsBase}
+                        checkedChildren="Dùng làm gốc"
+                        unCheckedChildren="Chỉ tham khảo"
+                      />
+                      <span style={{ fontSize: 13 }}>
+                        {sampleUseAsBase
+                          ? <><strong>Chỉnh sửa từ menu mẫu</strong> — AI lấy menu này làm gốc, adapt theo yêu cầu khách hàng<Tag color="blue" style={{ marginLeft: 6 }}>Gốc</Tag></>
+                          : <><strong>Chỉ tham khảo cấu trúc</strong> — AI tự thiết kế mới, dùng menu mẫu như hướng dẫn</>}
+                      </span>
+                    </div>
+                  </>
                 )}
                 {sampleMenuError && (
                   <Alert
@@ -1912,6 +2169,13 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                 message={t("system.menu.aiDesigner.refineHintTitle") || "Bạn có thể yêu cầu AI chỉnh sửa thêm"}
                 description={t("system.menu.aiDesigner.refineHintDesc") || "Nhập thay đổi mong muốn, AI sẽ dựa trên kết quả đã tạo và phân tích lại toàn bộ menu theo đúng nghiệp vụ."}
               />
+              {sampleMenuParsed && (
+                <Alert
+                  type="info"
+                  showIcon
+                  message={`Menu mẫu từ ${sampleAppLabel || sampleAppId} đang được đưa vào prompt bổ sung ${sampleUseAsBase ? "(chế độ gốc: AI tiếp tục chỉnh sửa trên menu đó)" : "(chế độ tham khảo)"}`}
+                />
+              )}
               <TextArea
                 value={refineText}
                 onChange={(e) => setRefineText(e.target.value)}
@@ -1927,6 +2191,106 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
       </Card>
     </>
   );
+}
+
+/**
+ * VALIDATOR: Validate menu output against requirement for undersimplification
+ * Returns warnings if output doesn't match requirement module count
+ */
+function validateMenuCoverage(
+  requirementText: string,
+  menus: MenuItemType[],
+): { hasCoverageProblem: boolean; warnings: string[] } {
+  const warnings: string[] = [];
+  const detectedModules = extractRequirementModules(requirementText, 20);
+  const detectedTables = extractRequirementTables(requirementText, 40);
+
+  // Count functional menus (type_form != 0)
+  const countFunctionalMenus = (items: MenuItemType[]): number => {
+    let count = 0;
+    items.forEach((item) => {
+      if (item.type_form !== 0) count++;
+      if (item.children && item.children.length > 0) {
+        count += countFunctionalMenus(item.children);
+      }
+    });
+    return count;
+  };
+
+  const functionalMenuCount = countFunctionalMenus(menus);
+  const expectedFromModules = detectedModules.length;
+  const expectedFromTables = detectedTables.length > 0 ? Math.ceil(detectedTables.length * 0.6) : 0;
+  const expectedMinMenuCount = Math.max(2, expectedFromModules, expectedFromTables);
+
+  // Coverage validation
+  if (expectedMinMenuCount >= 3 && functionalMenuCount < expectedMinMenuCount) {
+    warnings.push(
+      `⚠️ UNDERSIMPLIFICATION DETECTED: Requirement implies at least ${expectedMinMenuCount} functional menus ` +
+        `(modules=${detectedModules.length}, tables=${detectedTables.length}) but output only has ${functionalMenuCount}. ` +
+        `Expected minimum: ${expectedMinMenuCount} menus. Please verify all modules are covered.`
+    );
+    return { hasCoverageProblem: true, warnings };
+  }
+
+  // Schema validation warnings
+  const validateSchemaCompliance = (items: MenuItemType[]): string[] => {
+    const schemaWarnings: string[] = [];
+    items.forEach((item) => {
+      const typeForm = Number(item.type_form ?? 0);
+      // Check if type_form 1/2/6 has table_name
+      if ([1, 2, 6].includes(typeForm) && !item.table_name) {
+        schemaWarnings.push(
+          `⚠️ SCHEMA: Menu "${item.label}" has type_form=${typeForm} but missing table_name`
+        );
+      }
+      // Check if type_form 3 has dynamic_link_url
+      if (typeForm === 3 && !item.dynamic_link_url) {
+        schemaWarnings.push(
+          `⚠️ SCHEMA: Menu "${item.label}" has type_form=3 but missing dynamic_link_url`
+        );
+      }
+      // Check if type_form 4 has auto_code_name
+      if (typeForm === 4 && !item.auto_code_name) {
+        schemaWarnings.push(
+          `⚠️ SCHEMA: Menu "${item.label}" has type_form=4 but missing auto_code_name`
+        );
+      }
+      // Check for fields without f_ prefix
+      if (item.table && Array.isArray(item.table)) {
+        item.table.forEach((field) => {
+          const hasGenericKey = field?.field || field?.label || field?.type || field?.primaryKey || field?.required;
+          if (hasGenericKey) {
+            schemaWarnings.push(
+              `⚠️ SCHEMA: Menu "${item.label}" has field using generic keys (field/label/type/primaryKey/required).`
+            );
+          }
+        });
+      }
+      // Check combo fields for empty f_cbo_query
+      if (item.table && Array.isArray(item.table)) {
+        item.table.forEach((field) => {
+          if (/co|coro|cbo/.test(String(field.f_types || "")) && !field.f_cbo_query) {
+            schemaWarnings.push(
+              `⚠️ SCHEMA: Combo field "${field.f_name}" in menu "${item.label}" missing f_cbo_query`
+            );
+          }
+        });
+      }
+      // Recurse into children
+      if (item.children && item.children.length > 0) {
+        schemaWarnings.push(...validateSchemaCompliance(item.children));
+      }
+    });
+    return schemaWarnings;
+  };
+
+  const schemaWarnings = validateSchemaCompliance(menus);
+  warnings.push(...schemaWarnings);
+
+  return {
+    hasCoverageProblem: warnings.length > 0,
+    warnings,
+  };
 }
 
 export default AiMenuDesigner;

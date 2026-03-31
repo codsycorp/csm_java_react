@@ -25,6 +25,33 @@ public class AuthHandler {
     private final UserService userService; // Thêm UserService
     private final net.phanmemmottrieu.security.JwtUtil jwtUtil;
 
+    private String normalizeClientIp(String ip) {
+        if (ip == null) {
+            return "";
+        }
+        String normalized = ip.trim();
+        if ("::1".equals(normalized) || "0:0:0:0:0:0:0:1".equals(normalized)) {
+            return "127.0.0.1";
+        }
+        return normalized;
+    }
+
+    private String normalizeUserAgent(String ua) {
+        if (ua == null) {
+            return "";
+        }
+        return ua.trim();
+    }
+
+    private boolean userAgentMatches(String currentUa, String savedUa) {
+        String current = normalizeUserAgent(currentUa);
+        String saved = normalizeUserAgent(savedUa);
+        if (current.isEmpty() || saved.isEmpty()) {
+            return false;
+        }
+        return current.equals(saved);
+    }
+
     @Autowired
     public AuthHandler(RecordManager recordManager, UserService userService, net.phanmemmottrieu.security.JwtUtil jwtUtil) {
         this.recordManager = recordManager;
@@ -135,8 +162,8 @@ public class AuthHandler {
 
             // Sinh refresh token ngẫu nhiên
             String refreshToken = UUID.randomUUID().toString() + UUID.randomUUID().toString();
-            String ip = params.getOrDefault("_client_ip", "").toString();
-            String ua = params.getOrDefault("_user_agent", "").toString();
+            String ip = normalizeClientIp(params.getOrDefault("_client_ip", "").toString());
+            String ua = normalizeUserAgent(params.getOrDefault("_user_agent", "").toString());
             long expiry = System.currentTimeMillis() + 7 * 24 * 60 * 60 * 1000L; // 7 ngày
 
             // Lưu refresh token vào DB
@@ -161,6 +188,12 @@ public class AuthHandler {
             result.put("app_id", user.getAppId());
             result.put("refreshToken", refreshToken);
             result.put("dev", user.getDev()); // Thêm dev flag
+            result.put("userId", user.getId());
+            result.put("username", user.getUsername());
+            result.put("email", user.getEmail());
+            result.put("phoneNumber", user.getPhoneNumber());
+            result.put("full_name", user.getFullName());
+            result.put("avatar", user.getAvatar());
 
             // Tính toán danh sách route động theo quyền/người dùng
             try {
@@ -401,8 +434,8 @@ public class AuthHandler {
     public void handleRefreshToken(StandardResponse response, Map<String, Object> params) {
         // Chỉ nhận refresh token từ cookie (giả định đã được truyền vào params)
         String refreshToken = (String) params.get("refreshToken");
-        String ip = params.getOrDefault("_client_ip", "").toString();
-        String ua = params.getOrDefault("_user_agent", "").toString();
+        String ip = normalizeClientIp(params.getOrDefault("_client_ip", "").toString());
+        String ua = normalizeUserAgent(params.getOrDefault("_user_agent", "").toString());
         if (refreshToken == null || refreshToken.isEmpty()) {
             response.set("code", 400);
             response.set("message", "Missing refresh token");
@@ -418,7 +451,7 @@ public class AuthHandler {
             return;
         }
         // Kiểm tra IP, User-Agent, expiry
-        if (!ip.equals(user.getRefreshTokenIp()) || !ua.equals(user.getRefreshTokenUa())) {
+        if (!ip.equals(normalizeClientIp(user.getRefreshTokenIp())) || !userAgentMatches(ua, user.getRefreshTokenUa())) {
             response.set("code", 401);
             response.set("message", "Refresh token không hợp lệ (IP/UA)");
             response.set("success", false);

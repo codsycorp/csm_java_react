@@ -10,8 +10,6 @@ import { Menu } from "antd";
 import { useContext, useEffect, useMemo, useState } from "react";
 import { useMatches, useLocation } from "react-router";
 
-import { findChildrenLen } from "./utils";
-
 interface LayoutMenuProps {
 	mode?: MenuProps["mode"]
 	/**
@@ -47,6 +45,27 @@ export default function LayoutMenu({
 	const openKeysStorageKey = useMemo(() => {
 		return `layout_menu_open_keys:${effectiveAppId}:${mode}`;
 	}, [effectiveAppId, mode]);
+
+	const expandableKeySet = useMemo(() => {
+		const keys = new Set<string>();
+		const walk = (items: MenuItemType[]) => {
+			for (const item of items) {
+				const key = String(item?.key || "");
+				const children = Array.isArray(item?.children)
+					? (item.children as MenuItemType[])
+					: [];
+				if (key && children.length > 0) {
+					keys.add(key);
+				}
+				if (children.length > 0) {
+					walk(children);
+				}
+			}
+		};
+
+		walk(menus);
+		return keys;
+	}, [menus]);
 
 	const getSelectedKeys = useMemo(() => {
 		const homePath = import.meta.env.VITE_BASE_HOME_PATH || "/home";
@@ -103,7 +122,7 @@ export default function LayoutMenu({
 	const handleOpenChange: MenuProps["onOpenChange"] = (keys) => {
 		const normalizedKeys = (Array.isArray(keys) ? keys : [])
 			.map(key => String(key))
-			.filter(key => !!key && !!findChildrenLen(menus, key));
+			.filter(key => !!key && expandableKeySet.has(key));
 		setOpenKeys(normalizedKeys);
 	};
 
@@ -130,14 +149,14 @@ export default function LayoutMenu({
 			if (!Array.isArray(parsed)) return;
 			const restored = parsed
 				.map((key: unknown) => String(key || ""))
-				.filter((key: string) => !!key && !!findChildrenLen(menus, key));
+				.filter((key: string) => !!key && expandableKeySet.has(key));
 			if (restored.length > 0) {
 				setOpenKeys(restored);
 			}
 		} catch {
 			// Ignore broken storage payload.
 		}
-	}, [autoOpenMenu, openKeysStorageKey, menus]);
+	}, [autoOpenMenu, openKeysStorageKey, expandableKeySet]);
 
 	useEffect(() => {
 		if (!autoOpenMenu) return;
@@ -152,9 +171,9 @@ export default function LayoutMenu({
 		// Keep user-expanded branches and ensure current branch is always expanded.
 		setOpenKeys((prev) => {
 			const merged = Array.from(new Set([...prev, ...keyPath.slice(0, -1)]));
-			return merged.filter((key) => !!findChildrenLen(menus, key));
+			return merged.filter((key) => expandableKeySet.has(key));
 		});
-	}, [autoOpenMenu, sidebarCollapsed, selectedKey, menus, matches]);
+	}, [autoOpenMenu, sidebarCollapsed, selectedKey, menus, matches, expandableKeySet]);
 
 	return (
 		<Menu

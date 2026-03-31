@@ -106,6 +106,7 @@ public class SecurityConfig {
             "csm-token",
             "X-Refresh-Token",
             "csm-Lang",
+            "X-Client-Id",
             "X-Requested-With",
             "Accept"
         ));

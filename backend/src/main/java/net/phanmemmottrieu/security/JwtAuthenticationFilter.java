@@ -65,19 +65,18 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         if (csmToken != null && !csmToken.isBlank()) {
             if (!jwtUtil.validateToken(csmToken)) {
                 logGetTableDataSecurity(request, "reject-invalid-csm-token");
-                sendJsonError(response, 401, "Invalid or expired JWT token");
+                // Invalid JWT format/signature: still allow refresh-token fallback path below.
+            } else if (setAuthenticationFromToken(csmToken)) {
+                if (isGetTableDataRequest) {
+                    logGetTableDataSecurity(request, "allow-csm-token");
+                }
+                filterChain.doFilter(request, response);
                 return;
+            } else {
+                // Token is syntactically valid but user resolution/version check may lag right after login.
+                // Continue to refresh-token fallback path below instead of hard-failing immediately.
+                LOGGER.warn("[JWT] csm-token auth resolution failed, fallback to refresh-token path: uri={}", request.getRequestURI());
             }
-            if (!setAuthenticationFromToken(csmToken)) {
-                logGetTableDataSecurity(request, "reject-csm-token-auth-resolution");
-                sendJsonError(response, 401, "Invalid or expired JWT token");
-                return;
-            }
-            if (isGetTableDataRequest) {
-                logGetTableDataSecurity(request, "allow-csm-token");
-            }
-            filterChain.doFilter(request, response);
-            return;
         }
 
         // Nếu không có Authorization header, kiểm tra cookie refreshToken hoặc X-Refresh-Token header (for nwjs)
@@ -102,12 +101,12 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             net.phanmemmottrieu.model.User user = userService.findUserByRefreshToken(refreshToken);
             if (user != null) {
                 // SECURITY: Validate IP and User-Agent to prevent session hijacking
-                String currentIp = getClientIp(request);
-                String currentUa = request.getHeader("User-Agent");
+                String currentIp = normalizeClientIp(getClientIp(request));
+                String currentUa = normalizeUserAgent(request.getHeader("User-Agent"));
                 
                 // Check if IP and UA match the ones stored when token was created
-                boolean ipMatch = user.getRefreshTokenIp() != null && user.getRefreshTokenIp().equals(currentIp);
-                boolean uaMatch = user.getRefreshTokenUa() != null && user.getRefreshTokenUa().equals(currentUa);
+                boolean ipMatch = user.getRefreshTokenIp() != null && normalizeClientIp(user.getRefreshTokenIp()).equals(currentIp);
+                boolean uaMatch = user.getRefreshTokenUa() != null && userAgentMatches(currentUa, user.getRefreshTokenUa());
                 
                 // Check if token is expired
                 boolean tokenValid = user.getRefreshTokenExpiry() != null && 
@@ -188,6 +187,33 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         
         // Fallback to remote address
         return request.getRemoteAddr();
+    }
+
+    private String normalizeClientIp(String ip) {
+        if (ip == null) {
+            return "";
+        }
+        String normalized = ip.trim();
+        if ("::1".equals(normalized) || "0:0:0:0:0:0:0:1".equals(normalized)) {
+            return "127.0.0.1";
+        }
+        return normalized;
+    }
+
+    private String normalizeUserAgent(String ua) {
+        if (ua == null) {
+            return "";
+        }
+        return ua.trim();
+    }
+
+    private boolean userAgentMatches(String currentUa, String savedUa) {
+        String current = normalizeUserAgent(currentUa);
+        String saved = normalizeUserAgent(savedUa);
+        if (current.isEmpty() || saved.isEmpty()) {
+            return false;
+        }
+        return current.equals(saved);
     }
 
     private void sendJsonError(HttpServletResponse response, int status, String message) throws IOException {
@@ -304,8 +330,13 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             int currentVersion = user.getLoginVersion() != null ? user.getLoginVersion() : 0;
             // Legacy compatibility: chỉ enforce khi DB có login version hợp lệ (>0)
             if (currentVersion > 0 && tokenVersion != currentVersion) {
-                LOGGER.warn("[JWT] Version mismatch for user {}: token ver={}, DB ver={}", subject, tokenVersion, currentVersion);
-                return false;
+                int delta = Math.abs(tokenVersion - currentVersion);
+                if (delta <= 1) {
+                    LOGGER.warn("[JWT] Version mismatch tolerated for user {}: token ver={}, DB ver={}", subject, tokenVersion, currentVersion);
+                } else {
+                    LOGGER.warn("[JWT] Version mismatch for user {}: token ver={}, DB ver={}", subject, tokenVersion, currentVersion);
+                    return false;
+                }
             }
             org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(
                 new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(

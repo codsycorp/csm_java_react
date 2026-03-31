@@ -98,13 +98,35 @@ export function PasswordLogin() {
 			// Đợi một chút để persist middleware flushed
 			return new Promise(resolve => setTimeout(resolve, 100)).then(() => {
 				console.log("[LOGIN] Token stored in auth store, calling fetchUserInfo()");
-				return fetchUserInfo().then((response: any) => {
-					const userInfoResult = response?.result;
+				const freshToken = String(loginRes?.result?.token || "").trim();
+				const userInfoHeaders = freshToken
+					? { "csm-token": freshToken }
+					: undefined;
+				const loginFallbackUser = {
+					userId: loginRes?.result?.userId,
+					username: loginRes?.result?.username,
+					email: loginRes?.result?.email,
+					phoneNumber: loginRes?.result?.phoneNumber,
+					full_name: loginRes?.result?.full_name,
+					avatar: loginRes?.result?.avatar,
+					roles: Array.isArray(loginRes?.result?.permissions) ? loginRes.result.permissions : [],
+					permissions: Array.isArray(loginRes?.result?.permissions) ? loginRes.result.permissions : [],
+					menusPermissions: Array.isArray(loginRes?.result?.menusPermissions) ? loginRes.result.menusPermissions : [],
+					permissionBitfield: loginRes?.result?.permissionBitfield,
+					permissionSchemaVersion: loginRes?.result?.permissionSchemaVersion,
+					dataScope: loginRes?.result?.dataScope,
+					app_id: loginRes?.result?.app_id,
+					app_token: loginRes?.result?.app_token,
+					dev: loginRes?.result?.dev,
+				};
+
+				return fetchUserInfo(userInfoHeaders).then((response: any) => {
+					const userInfoResult = response?.result || loginFallbackUser;
 					if (userInfoResult) {
 						useUserStore.setState({ ...userInfoResult });
 					}
 					if (!userInfoResult || !userInfoResult.userId) {
-						console.error("[LOGIN] Failed to get user info after login");
+						console.error("[LOGIN] Failed to sync user-info and no fallback user data");
 						useAuthStore.getState().reset();
 						navigate("/error/500");
 						throw new Error("Failed to get user info");
@@ -125,17 +147,40 @@ export function PasswordLogin() {
 					console.log(`[LOGIN] Set appId to '${resolvedAppId}' (resolved), redirect='${redirect || ""}'`);
 
 					return { loginRes, userInfoResult, resolvedAppId };
+				}).catch((syncError: any) => {
+					const fallbackUserInfo = loginFallbackUser;
+					if (!fallbackUserInfo?.userId) {
+						throw syncError;
+					}
+					console.warn("[LOGIN] user-info sync failed, continue with login payload fallback:", syncError);
+					useUserStore.setState({ ...fallbackUserInfo });
+
+					const devNormalized = resolveDevFlag(loginRes?.result?.dev ?? fallbackUserInfo.dev, fallbackUserInfo.roles);
+					useUserStore.setState({ dev: devNormalized });
+					persistDevLocalFlag(devNormalized);
+
+					const redirect = searchParams.get("redirect");
+					const loginAppId = String(loginRes?.result?.app_id || "").trim();
+					const profileAppId = String(fallbackUserInfo.app_id || "").trim();
+					const resolvedAppId = profileAppId || loginAppId || "csm";
+
+					setCurrentAppId(resolvedAppId);
+					useUserStore.setState({ app_id: resolvedAppId });
+					console.log(`[LOGIN] Continue with fallback user payload, appId='${resolvedAppId}', redirect='${redirect || ""}'`);
+
+					return { loginRes, userInfoResult: fallbackUserInfo, resolvedAppId };
 				});
 			});
 		})
 		.then(({ loginRes, userInfoResult, resolvedAppId }) => {
 				if (isDynamicRoutingEnabled) {
 					const routesFromLogin = loginRes?.result?.asyncRoutes;
+					const freshToken = String(loginRes?.result?.token || "").trim();
 					const devFromLogin = resolveDevFlag(loginRes?.result?.dev ?? userInfoResult.dev, userInfoResult.roles);
 					if (routesFromLogin && Array.isArray(routesFromLogin) && routesFromLogin.length > 0) {
 						return applyAsyncRoutesFromLogin(routesFromLogin, resolvedAppId, devFromLogin).then(() => ({ loginRes, userInfoResult }));
 					} else {
-						return handleAsyncRoutes(resolvedAppId).then(() => ({ loginRes, userInfoResult }));
+						return handleAsyncRoutes(resolvedAppId, freshToken).then(() => ({ loginRes, userInfoResult }));
 					}
 				}
 				return { loginRes, userInfoResult };

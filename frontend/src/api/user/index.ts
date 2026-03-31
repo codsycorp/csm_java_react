@@ -15,8 +15,8 @@ export function fetchLogout() {
 	return request.post("logout").json();
 }
 
-export function fetchAsyncRoutes() {
-	return request.get("get-async-routes").json<ApiResponse<AppRouteRecordRaw[]>>();
+export function fetchAsyncRoutes(headers?: HeadersInit) {
+	return request.get("get-async-routes", headers ? { headers } : undefined).json<ApiResponse<AppRouteRecordRaw[]>>();
 }
 
 export function fetchUserInfo(headers?: HeadersInit) {

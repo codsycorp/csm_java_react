@@ -318,6 +318,18 @@ export function CsmDynamicGrid({
 	allowReadonlyExport?: boolean
 }) {
 	const { t, i18n } = useTranslation();
+	const saveActionLabel = useMemo(() => {
+		const lang = String(i18n.language || "").toLowerCase();
+		if (lang.startsWith("zh")) return "保存";
+		if (lang.startsWith("vi")) return "Lưu";
+		return "Save";
+	}, [i18n.language]);
+	const cancelActionLabel = useMemo(() => {
+		const lang = String(i18n.language || "").toLowerCase();
+		if (lang.startsWith("zh")) return "取消";
+		if (lang.startsWith("vi")) return "Hủy";
+		return "Cancel";
+	}, [i18n.language]);
 	const actionRef = useRef<ActionType>();
 	const [data, setData] = useState<Row[]>([]);
 	const [selectedKeys, setSelectedKeys] = useState<React.Key[]>([]);
@@ -2637,7 +2649,15 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 						message.error('Lưu thất bại: ' + (error as Error).message);
 					}
 				},
-				actionRender: (row: any, config: any, defaultDom: any) => [defaultDom.save, defaultDom.cancel],
+				actionRender: (_row: any, _config: any, defaultDom: any) => {
+					const saveNode = React.isValidElement(defaultDom?.save)
+						? React.cloneElement(defaultDom.save as React.ReactElement<any>, undefined, saveActionLabel)
+						: defaultDom?.save;
+					const cancelNode = React.isValidElement(defaultDom?.cancel)
+						? React.cloneElement(defaultDom.cancel as React.ReactElement<any>, undefined, cancelActionLabel)
+						: defaultDom?.cancel;
+					return [saveNode, cancelNode];
+				},
 			},
 		} : {}),
 		rowSelection: {

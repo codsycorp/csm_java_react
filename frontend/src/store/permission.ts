@@ -9,6 +9,7 @@ import { ROOT_ROUTE_ID } from "#src/router/constants";
 import { rootChildRoutes, routes } from "#src/router/routes";
 import { addAsyncRoutes, ascending, flattenRoutes, getMenuItems } from "#src/router/utils";
 import { useAppStore } from "./app";
+import { useAuthStore } from "./auth";
 import { useUserStore } from "./user";
 import { create } from "zustand";
 import { resolveDevFlag } from "#src/utils/dev-flag";
@@ -293,7 +294,7 @@ const initialState: InitialStateType = {
 type PermissionState = typeof initialState;
 
 interface PermissionAction {
-	handleAsyncRoutes: (appIdParam?: string) => Promise<InitialStateType>
+	handleAsyncRoutes: (appIdParam?: string, authToken?: string) => Promise<InitialStateType>
 	applyAsyncRoutesFromLogin: (routesFromLogin: AppRouteRecordRaw[], appIdParam?: string, devFlag?: boolean) => Promise<InitialStateType>
 	reset: () => void
 };
@@ -301,8 +302,14 @@ interface PermissionAction {
 export const usePermissionStore = create<PermissionState & PermissionAction>(set => ({
 	...initialState,
 
-	handleAsyncRoutes: async (appIdParam?: string) => {
-		const { result } = await fetchAsyncRoutes();
+	handleAsyncRoutes: async (appIdParam?: string, authToken?: string) => {
+		const tokenFromArg = String(authToken || "").trim();
+		const tokenFromStore = String(useAuthStore.getState().token || "").trim();
+		const effectiveToken = tokenFromArg || tokenFromStore;
+		const asyncRouteHeaders = effectiveToken
+			? { "csm-token": effectiveToken }
+			: undefined;
+		const { result } = await fetchAsyncRoutes(asyncRouteHeaders);
 		// 为动态路由添加前端组件
 		const dynamicRoutes = addAsyncRoutes(result);
 		const newRoutes = ascending([...rootChildRoutes, ...dynamicRoutes]);

@@ -634,6 +634,29 @@ function getLangText(lang: string, texts: { vi: string; en: string; zh: string }
   return texts.vi;
 }
 
+function resolveMultilingualText(raw: any, fallback = "", langInput?: string): string {
+  if (raw == null || raw === "") return String(fallback || "");
+  if (typeof raw === "string" || typeof raw === "number") return String(raw);
+
+  if (typeof raw === "object") {
+    const lang = String(langInput || (typeof navigator !== "undefined" ? navigator.language : "vi") || "vi").toLowerCase();
+    const vi = raw.vi ?? raw.vn;
+    const en = raw.en;
+    const zh = raw.zh ?? raw.cn;
+
+    const preferred = lang.startsWith("en") ? en : lang.startsWith("zh") ? zh : vi;
+    if (preferred != null && preferred !== "") return String(preferred);
+    if (vi != null && vi !== "") return String(vi);
+    if (en != null && en !== "") return String(en);
+    if (zh != null && zh !== "") return String(zh);
+
+    const firstScalar = Object.values(raw).find((v) => typeof v === "string" || typeof v === "number");
+    if (firstScalar != null) return String(firstScalar);
+  }
+
+  return String(fallback || "");
+}
+
 // Helper encode HTML - csmEncrypt đã tự làm encodeURIComponent bên trong rồi!
 // CHỈ cần gọi csmEncrypt(plainHTML)
 function encodeHtmlField(html: string): string {
@@ -711,10 +734,13 @@ function buildSelectOptions(
   localizeLabel?: (value: unknown) => string
 ): SelectOption[] {
   const options = rawOptions
-    ? rawOptions
+    ? rawOptions.map((item: any) => ({
+        value: item?.value ?? item?.ma ?? item?.id ?? item?.key,
+        label: resolveMultilingualText(item?.label ?? item?.ten ?? item?.text, item?.value ?? item?.ma ?? item?.id ?? item?.key),
+      }))
     : enumObj
       ? Object.entries(enumObj).map(([value, enumValue]) => ({
-          label: (enumValue as { text: string }).text,
+          label: resolveMultilingualText((enumValue as any)?.text, value),
           value,
         }))
       : [];
@@ -844,17 +870,18 @@ function MultilingualTabs({ fields, form }: { fields: TableField[]; form: any })
               const tabFields = Object.entries(baseMap).map(([base, langObj]) => {
                 const field = langObj[lang];
                 if (!field) return null;
+                const fieldLabel = resolveMultilingualText(field.f_header, field.f_name, lang);
                 const types = (field.f_types || '').toLowerCase();
                 if (/html|richtext/.test(types)) {
-                  return <Form.Item key={field.f_name} name={field.f_name} label={field.f_header}><HtmlEditor /></Form.Item>;
+                  return <Form.Item key={field.f_name} name={field.f_name} label={fieldLabel}><HtmlEditor /></Form.Item>;
                 }
                 if (/textarea|memo/.test(types)) {
-                  return <Form.Item key={field.f_name} name={field.f_name} label={field.f_header}><TextArea rows={6} /></Form.Item>;
+                  return <Form.Item key={field.f_name} name={field.f_name} label={fieldLabel}><TextArea rows={6} /></Form.Item>;
                 }
                 if (types === 'image') {
                   const MediaUploader = lazy(() => import('./MediaUploader').then(mod => ({ default: mod.MediaUploader })));
                   return (
-                    <Form.Item key={field.f_name} name={field.f_name} label={field.f_header}>
+                    <Form.Item key={field.f_name} name={field.f_name} label={fieldLabel}>
                       <Suspense fallback={<span>Đang tải...</span>}>
                         <MediaUploader />
                       </Suspense>
@@ -862,9 +889,9 @@ function MultilingualTabs({ fields, form }: { fields: TableField[]; form: any })
                   );
                 }
                 if (types === 'multi_tag') {
-                  return <Form.Item key={field.f_name} name={field.f_name} label={field.f_header}><Select mode="tags" style={{ width: '100%' }} tokenSeparators={[',']} /></Form.Item>;
+                  return <Form.Item key={field.f_name} name={field.f_name} label={fieldLabel}><Select mode="tags" style={{ width: '100%' }} tokenSeparators={[',']} /></Form.Item>;
                 }
-                return <Form.Item key={field.f_name} name={field.f_name} label={field.f_header}><Input id={field.f_name} /> </Form.Item>;
+                return <Form.Item key={field.f_name} name={field.f_name} label={fieldLabel}><Input id={field.f_name} /> </Form.Item>;
               });
               if (tabFields.filter(Boolean).length === 0) {
                 return <div style={{ color: '#aaa', fontStyle: 'italic', padding: '16px 0' }}>Không có dữ liệu cho ngôn ngữ này</div>;
@@ -894,6 +921,7 @@ function getFieldComponent(
   const types = (f.f_types || "ed").toLowerCase(); // default to 'ed' (text input)
   const key = f.f_name;
   const lang = (navigator.language || 'vi').toLowerCase();
+  const fieldLabel = resolveMultilingualText((f as any).f_header, f.f_name, lang);
   const initialVal = fieldValues?.[key];
   
   // Kiểu Readonly: chứa 'ro' trong f_types - chỉ hiển thị, không cho edit
@@ -922,7 +950,7 @@ function getFieldComponent(
   };
 
   const localizeLabel = (raw: unknown) => {
-    const text = String(raw == null ? "" : raw).trim();
+    const text = resolveMultilingualText(raw, "", lang).trim();
     if (!text) return "";
     if (text.includes(".")) {
       return translate ? translate(text, text) : text;
@@ -935,7 +963,7 @@ function getFieldComponent(
     const mapNode = (node: any): any => {
       const rawValue = String(node?.path || node?.id || node?.key || node?.name || "").trim();
       if (!rawValue) return null;
-      const rawTitle = String(node?.label || node?.title || node?.name || node?.path || node?.id || rawValue);
+      const rawTitle = resolveMultilingualText(node?.label || node?.title || node?.name, rawValue, lang);
       const children = Array.isArray(node?.children)
         ? node.children.map((child: any) => mapNode(child)).filter(Boolean)
         : undefined;
@@ -980,7 +1008,7 @@ function getFieldComponent(
       // Và nọ đã là dữ liệu giải mã (qua decodeHtmlField)
       // Nên không cần mã hóa lại
       return (
-        <Form.Item key={key} name={key} label={f.f_header}>
+        <Form.Item key={key} name={key} label={fieldLabel}>
           <HtmlEditorField />
         </Form.Item>
       );
@@ -1057,7 +1085,7 @@ function getFieldComponent(
     }
     // initialValue được set từ form.setFieldsValue() trước khi component render
     return (
-      <Form.Item key={key} name={key} label={f.f_header}>
+      <Form.Item key={key} name={key} label={fieldLabel}>
         <CodeEditorField />
       </Form.Item>
     );
@@ -1090,7 +1118,7 @@ function getFieldComponent(
         }
       }
       return (
-        <Form.Item key={key} name={key} label={f.f_header} initialValue={initialVal}>
+        <Form.Item key={key} name={key} label={fieldLabel} initialValue={initialVal}>
           <JSONKeyValueEditor name={key} form={form} />
         </Form.Item>
       );
@@ -1099,7 +1127,7 @@ function getFieldComponent(
   // Kiểu số: price, number, int, float, double, money, currency
   if (/price|number|int|float|double|money|currency/.test(types)) {
     const dec = parseInt(String((f as TableField & { f_dec?: number | string }).f_dec || 0));
-    return <Form.Item key={key} name={key} label={f.f_header} initialValue={initialVal}>
+    return <Form.Item key={key} name={key} label={fieldLabel} initialValue={initialVal}>
       <InputNumber 
         style={{ width: '100%' }} 
         precision={dec > 0 ? dec : 0}
@@ -1112,35 +1140,35 @@ function getFieldComponent(
   
   // Kiểu DateTime
   if (/datetime/.test(types)) {
-    return <Form.Item key={key} name={key} label={f.f_header} initialValue={initialVal}>
+    return <Form.Item key={key} name={key} label={fieldLabel} initialValue={initialVal}>
       <DatePicker showTime format="DD/MM/YYYY HH:mm:ss" style={{ width: '100%' }} disabled={isReadonly} />
     </Form.Item>;
   }
   
   // Kiểu Date (chỉ ngày)
   if (/^date$/.test(types)) {
-    return <Form.Item key={key} name={key} label={f.f_header} initialValue={initialVal}>
+    return <Form.Item key={key} name={key} label={fieldLabel} initialValue={initialVal}>
       <DatePicker format="DD/MM/YYYY" style={{ width: '100%' }} disabled={isReadonly} />
     </Form.Item>;
   }
   
   // Kiểu Time (chỉ giờ)
   if (/^time$/.test(types)) {
-    return <Form.Item key={key} name={key} label={f.f_header} initialValue={initialVal}>
+    return <Form.Item key={key} name={key} label={fieldLabel} initialValue={initialVal}>
       <TimePicker format="HH:mm:ss" style={{ width: '100%' }} disabled={isReadonly} />
     </Form.Item>;
   }
   
   // Kiểu Check/Boolean: check, bool, switch, checkbox
   if (/check|bool|switch|checkbox/.test(types)) {
-    return <Form.Item key={key} name={key} label={f.f_header} valuePropName="checked" initialValue={initialVal}>
+    return <Form.Item key={key} name={key} label={fieldLabel} valuePropName="checked" initialValue={initialVal}>
       <Switch disabled={isReadonly} />
     </Form.Item>;
   }
   
   // Kiểu Textarea/Memo
   if (/textarea|memo/.test(types)) {
-    return <Form.Item key={key} name={key} label={f.f_header} initialValue={initialVal}>
+    return <Form.Item key={key} name={key} label={fieldLabel} initialValue={initialVal}>
       <Input.TextArea rows={6} disabled={isReadonly} />
     </Form.Item>;
   }
@@ -1149,7 +1177,7 @@ function getFieldComponent(
   if (/^file$/.test(types)) {
     const value = form.getFieldValue(key) || initialVal;
     return (
-      <Form.Item key={key} name={key} label={f.f_header} initialValue={initialVal}>
+      <Form.Item key={key} name={key} label={fieldLabel} initialValue={initialVal}>
         <Input 
           type="file" 
           onChange={(e) => {
@@ -1166,7 +1194,7 @@ function getFieldComponent(
         {value && (
           <div style={{ marginTop: 8 }}>
             <a href={value} target="_blank" rel="noopener noreferrer" download>
-              📎 Download {f.f_header}
+              📎 Download {fieldLabel}
             </a>
           </div>
         )}
@@ -1179,7 +1207,7 @@ function getFieldComponent(
     const isVideo = types === 'video_inline' || types === 'album_video_inline';
     const value = form.getFieldValue(key) || initialVal;
     return (
-      <Form.Item key={key} name={key} label={f.f_header} initialValue={initialVal}>
+      <Form.Item key={key} name={key} label={fieldLabel} initialValue={initialVal}>
         <InlineImageUploader value={value} onChange={(url) => form.setFieldsValue({ [key]: url })} multiple={isAlbum} acceptVideo={isVideo} />
       </Form.Item>
     );
@@ -1218,7 +1246,7 @@ function getFieldComponent(
     }
     
     return (
-      <Form.Item key={key} name={key} label={f.f_header} initialValue={initialVal}>
+      <Form.Item key={key} name={key} label={fieldLabel} initialValue={initialVal}>
         <VideoField />
       </Form.Item>
     );
@@ -1252,7 +1280,7 @@ function getFieldComponent(
     }
     
     return (
-      <Form.Item key={key} name={key} label={f.f_header} initialValue={initialVal}>
+      <Form.Item key={key} name={key} label={fieldLabel} initialValue={initialVal}>
         <ImageField />
       </Form.Item>
     );
@@ -1294,7 +1322,7 @@ function getFieldComponent(
     }
 
     return (
-      <Form.Item key={key} name={key} label={f.f_header} initialValue={currentValue}>
+      <Form.Item key={key} name={key} label={fieldLabel} initialValue={currentValue}>
         <AlbumField />
       </Form.Item>
     );
@@ -1350,7 +1378,7 @@ function getFieldComponent(
     }
     
     return (
-      <Form.Item key={key} name={key} label={f.f_header} initialValue={initialVal}>
+      <Form.Item key={key} name={key} label={fieldLabel} initialValue={initialVal}>
         <AlbumVideoField />
       </Form.Item>
     );
@@ -1369,7 +1397,7 @@ function getFieldComponent(
       const value = String(opt ?? "");
       return { value, label: localizeLabel(value) };
     });
-    return <Form.Item key={key} name={key} label={f.f_header} initialValue={initialVal}>
+    return <Form.Item key={key} name={key} label={fieldLabel} initialValue={initialVal}>
       <Select
         mode="tags"
         style={{ width: '100%' }}
@@ -1384,7 +1412,7 @@ function getFieldComponent(
   if (types.indexOf('menu_tree') !== -1) {
     const treeData = buildMenuPermissionTreeData();
     const selectedValues = parseStringArray(form.getFieldValue(key) ?? initialVal);
-    return <Form.Item key={key} name={key} label={f.f_header} initialValue={selectedValues}>
+    return <Form.Item key={key} name={key} label={fieldLabel} initialValue={selectedValues}>
       <TreeSelect
         treeData={treeData}
         value={selectedValues}
@@ -1412,7 +1440,7 @@ function getFieldComponent(
     const rawSelectValue = form.getFieldValue(key) ?? initialVal;
     const selectValue = normalizeSelectValue(rawSelectValue, localizedOptions);
 
-    return <Form.Item key={key} name={key} label={f.f_header} initialValue={initialVal}>
+    return <Form.Item key={key} name={key} label={fieldLabel} initialValue={initialVal}>
       <Select 
         style={{ width: '100%' }} 
         options={localizedOptions}
@@ -1428,13 +1456,13 @@ function getFieldComponent(
   
   // Kiểu Password
   if (/password/.test(types)) {
-    return <Form.Item key={key} name={key} label={f.f_header} initialValue={initialVal}>
+    return <Form.Item key={key} name={key} label={fieldLabel} initialValue={initialVal}>
       <Input.Password disabled={isReadonly} />
     </Form.Item>;
   }
   
   // Mặc định: ed (text input)
-  return <Form.Item key={key} name={key} label={f.f_header} initialValue={initialVal}>
+  return <Form.Item key={key} name={key} label={fieldLabel} initialValue={initialVal}>
     <Input id={key} disabled={isReadonly} />
   </Form.Item>;
 }
@@ -2191,6 +2219,7 @@ export function CsmEditModal({
                     if (!field) return null;
                     
                     const types = (field.f_types || '').toLowerCase();
+                    const fieldLabel = resolveMultilingualText(field.f_header, actualFieldName, lang);
                     const formValues = form.getFieldsValue();
                     const fieldValue = formValues[actualFieldName];
                     
@@ -2215,7 +2244,7 @@ export function CsmEditModal({
                         return <HtmlEditor value={value} onChange={handleHtmlChange} />;
                       }
                       return (
-                        <Form.Item key={actualFieldName} name={actualFieldName} label={field.f_header} initialValue={csmEncrypt('')}>
+                        <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel} initialValue={csmEncrypt('')}>
                           <HtmlEditorField />
                         </Form.Item>
                       );
@@ -2224,7 +2253,7 @@ export function CsmEditModal({
                     // Textarea/Memo
                     if (/textarea|memo/.test(types)) {
                       return (
-                        <Form.Item key={actualFieldName} name={actualFieldName} label={field.f_header}>
+                        <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
                           <TextArea rows={6} />
                         </Form.Item>
                       );
@@ -2234,7 +2263,7 @@ export function CsmEditModal({
                     if (/img|image|avatar|cover/.test(types)) {
                       const MediaUploader = React.lazy(() => import('./MediaUploader').then(mod => ({ default: mod.MediaUploader })));
                       return (
-                        <Form.Item key={actualFieldName} name={actualFieldName} label={field.f_header}>
+                        <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
                           <Suspense fallback={<span>Đang tải...</span>}>
                             <MediaUploader />
                           </Suspense>
@@ -2246,7 +2275,7 @@ export function CsmEditModal({
                     if (types === 'album' || types === 'images' || types === 'gallery') {
                       const MediaUploader = React.lazy(() => import('./MediaUploader').then(mod => ({ default: mod.MediaUploader })));
                       return (
-                        <Form.Item key={actualFieldName} name={actualFieldName} label={field.f_header}>
+                        <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
                           <Suspense fallback={<span>Đang tải...</span>}>
                             <MediaUploader multiple={true} />
                           </Suspense>
@@ -2257,7 +2286,7 @@ export function CsmEditModal({
                     // Multi Tag
                     if (types === 'multi_tag') {
                       return (
-                        <Form.Item key={actualFieldName} name={actualFieldName} label={field.f_header}>
+                        <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
                           <Select mode="tags" style={{ width: '100%' }} tokenSeparators={[',']} />
                         </Form.Item>
                       );
@@ -2267,7 +2296,7 @@ export function CsmEditModal({
                     if (/price|number|int|float|double|money|currency/.test(types)) {
                       const dec = parseInt(String((field as any).f_dec || 0));
                       return (
-                        <Form.Item key={actualFieldName} name={actualFieldName} label={field.f_header}>
+                        <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
                           <InputNumber
                             style={{ width: '100%' }}
                             precision={dec}
@@ -2281,7 +2310,7 @@ export function CsmEditModal({
                     // Boolean/Switch
                     if (/check|bool|switch|checkbox/.test(types)) {
                       return (
-                        <Form.Item key={actualFieldName} name={actualFieldName} label={field.f_header} valuePropName="checked">
+                        <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel} valuePropName="checked">
                           <Switch />
                         </Form.Item>
                       );
@@ -2290,7 +2319,7 @@ export function CsmEditModal({
                     // Date
                     if (/^date$/.test(types)) {
                       return (
-                        <Form.Item key={actualFieldName} name={actualFieldName} label={field.f_header}>
+                        <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
                           <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" />
                         </Form.Item>
                       );
@@ -2299,7 +2328,7 @@ export function CsmEditModal({
                     // DateTime
                     if (/datetime/.test(types)) {
                       return (
-                        <Form.Item key={actualFieldName} name={actualFieldName} label={field.f_header}>
+                        <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
                           <DatePicker showTime style={{ width: '100%' }} format="YYYY-MM-DD HH:mm:ss" />
                         </Form.Item>
                       );
@@ -2308,7 +2337,7 @@ export function CsmEditModal({
                     // Time
                     if (/^time$/.test(types)) {
                       return (
-                        <Form.Item key={actualFieldName} name={actualFieldName} label={field.f_header}>
+                        <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
                           <TimePicker style={{ width: '100%' }} format="HH:mm:ss" />
                         </Form.Item>
                       );
@@ -2324,11 +2353,11 @@ export function CsmEditModal({
                         options
                       );
                       return (
-                        <Form.Item key={actualFieldName} name={actualFieldName} label={field.f_header}>
+                        <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
                           <Select
                             showSearch
                             allowClear
-                            placeholder={`Chọn ${field.f_header}`}
+                            placeholder={`Chọn ${fieldLabel}`}
                             options={options}
                             value={selectValue}
                             onChange={val => form.setFieldsValue({ [actualFieldName]: val })}
@@ -2342,7 +2371,7 @@ export function CsmEditModal({
                     
                     // Default: text input
                     return (
-                      <Form.Item key={actualFieldName} name={actualFieldName} label={field.f_header}>
+                      <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
                         <Input id={actualFieldName} />
                       </Form.Item>
                     );
@@ -2350,7 +2379,8 @@ export function CsmEditModal({
                 {/* Render các block đặc biệt như seo_multi, content_multi */}
                 {specialBlocks.map(block => {
                   const fieldName = block.f_name + (lang === 'vi' ? '' : `_${lang}`);
-                  const label = block.f_header + (lang === 'vi' ? '' : ` (${lang.toUpperCase()})`);
+                  const baseLabel = resolveMultilingualText(block.f_header, block.f_name, lang);
+                  const label = baseLabel + (lang === 'vi' ? '' : ` (${lang.toUpperCase()})`);
                   const types = (block.f_types || '').toLowerCase();
                   // Nếu block là content_multi thì dùng HTML editor với mã hóa/giải mã đúng
                   if (types === 'content_multi' || /html|richtext/.test(types) || types === 'edt') {
