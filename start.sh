@@ -56,7 +56,7 @@ if [ -z "${HEAP_SIZE:-}" ]; then
         if [ "$total_mem_mb" -lt 3500 ]; then
             HEAP_SIZE="1g"
         elif [ "$total_mem_mb" -lt 7000 ]; then
-            HEAP_SIZE="3g"
+            HEAP_SIZE="2g"
         elif [ "$total_mem_mb" -lt 12000 ]; then
             HEAP_SIZE="4g"
         else
@@ -69,10 +69,11 @@ fi
 
 # Init heap smaller than max to reduce RSS pressure on low-RAM systems
 HEAP_INIT="${HEAP_INIT:-512m}"
-DIRECT_MEMORY_SIZE="${DIRECT_MEMORY_SIZE:-256m}"
-TOMCAT_MAX_THREADS="${TOMCAT_MAX_THREADS:-80}"
-TOMCAT_MAX_CONNECTIONS="${TOMCAT_MAX_CONNECTIONS:-300}"
-TOMCAT_ACCEPT_COUNT="${TOMCAT_ACCEPT_COUNT:-100}"
+DIRECT_MEMORY_SIZE="${DIRECT_MEMORY_SIZE:-192m}"
+TOMCAT_MAX_THREADS="${TOMCAT_MAX_THREADS:-48}"
+TOMCAT_MAX_CONNECTIONS="${TOMCAT_MAX_CONNECTIONS:-240}"
+TOMCAT_ACCEPT_COUNT="${TOMCAT_ACCEPT_COUNT:-80}"
+ENABLE_ALWAYS_PRETOUCH="${ENABLE_ALWAYS_PRETOUCH:-false}"
 
 log() {
     local msg="[$(date +'%Y-%m-%d %H:%M:%S')] $*"
@@ -326,6 +327,11 @@ log "Starting $jarName on port $APP_PORT with performance optimizations..."
 # Create logs directory for GC and error logs
 mkdir -p "$LOG_DIR"
 
+PRETOUCH_FLAG=""
+if [ "$ENABLE_ALWAYS_PRETOUCH" = "true" ]; then
+    PRETOUCH_FLAG="-XX:+AlwaysPreTouch"
+fi
+
 # 🔥 OPTIMIZED JVM SETTINGS FOR HIGH CONCURRENCY & LOW LATENCY
 # G1GC: Generational Garbage Collector for low pause times (<200ms)
 # Memory: Configurable heap with proper metaspace
@@ -348,7 +354,7 @@ nohup java \
     -XX:+UseCompressedClassPointers \
     -XX:+TieredCompilation \
     -XX:+DisableExplicitGC \
-    -XX:+AlwaysPreTouch \
+    $PRETOUCH_FLAG \
     -XX:+HeapDumpOnOutOfMemoryError \
     -XX:HeapDumpPath="$LOG_DIR/heapdump.hprof" \
     -XX:ErrorFile="$LOG_DIR/hs_err_pid%p.log" \

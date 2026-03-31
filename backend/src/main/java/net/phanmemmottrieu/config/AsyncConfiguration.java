@@ -14,16 +14,21 @@ import java.util.concurrent.ThreadPoolExecutor;
 @EnableScheduling
 public class AsyncConfiguration {
 
+    private int cpu() {
+        return Math.max(2, Runtime.getRuntime().availableProcessors());
+    }
+
     /**
      * Main async executor for general background tasks
      * OPTIMIZED for high concurrency
      */
     @Bean(name = "asyncExecutor")
     public Executor asyncExecutor() {
+        int cpu = cpu();
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(16);           // Up from 8 - more parallel tasks
-        executor.setMaxPoolSize(64);            // Up from 32 - handle bursts
-        executor.setQueueCapacity(1000);        // Up from 500 - larger queue
+        executor.setCorePoolSize(Math.min(8, cpu * 2));
+        executor.setMaxPoolSize(Math.min(24, cpu * 4));
+        executor.setQueueCapacity(300);
         executor.setThreadNamePrefix("async-");
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
         executor.setWaitForTasksToCompleteOnShutdown(true);
@@ -39,10 +44,11 @@ public class AsyncConfiguration {
      */
     @Bean(name = "indexExecutor")
     public Executor indexExecutor() {
+        int cpu = cpu();
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(2);
-        executor.setMaxPoolSize(4);
-        executor.setQueueCapacity(200);
+        executor.setCorePoolSize(Math.min(2, cpu));
+        executor.setMaxPoolSize(Math.min(4, Math.max(2, cpu)));
+        executor.setQueueCapacity(100);
         executor.setThreadNamePrefix("index-");
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.DiscardPolicy());
         executor.setWaitForTasksToCompleteOnShutdown(true);
@@ -57,10 +63,11 @@ public class AsyncConfiguration {
      */
     @Bean(name = "fastExecutor")
     public Executor fastExecutor() {
+        int cpu = cpu();
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(8);
-        executor.setMaxPoolSize(16);
-        executor.setQueueCapacity(100);
+        executor.setCorePoolSize(Math.min(4, cpu));
+        executor.setMaxPoolSize(Math.min(8, cpu * 2));
+        executor.setQueueCapacity(80);
         executor.setThreadNamePrefix("fast-");
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
         executor.setKeepAliveSeconds(30);

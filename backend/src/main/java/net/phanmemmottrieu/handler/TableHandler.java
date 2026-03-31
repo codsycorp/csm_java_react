@@ -1216,14 +1216,6 @@ public class TableHandler {
                     command = recordManager.createRecord(appId, tblname, objUpdate, effectivePkFields);
                     enqueueServiceInvalidation(appId, tblname, objUpdate);
                     msg.put("command", command);
-                    // 🔥 CRITICAL: Flush pending batch updates to ensure Lucene searcher is refreshed before socket notification
-                    recordManager.flushPendingBatchUpdates(appId, tblname);
-                    // 🔥 CRITICAL: Force commit Lucene index before socket notification
-                    try {
-                        recordManager.commitLuceneIndex(appId, tblname);
-                    } catch (IOException e) {
-                        logger.error("Error committing Lucene index for create: {}", e.getMessage());
-                    }
                     // Gửi full data row để client có thể insert trực tiếp
                     socketIOConfig.sendUpdateNotification(appId, tblname, "create", extractPrimaryKeyValues(objUpdate, effectivePkFields), objUpdate);
                     break;
@@ -1261,7 +1253,8 @@ public class TableHandler {
 
                         String oldKey = recordManager.buildPrimaryKeyKey(appId, tblname, row, effectivePkFields);
                         String newKey = recordManager.buildPrimaryKeyKey(appId, tblname, newRow, effectivePkFields);
-                        if (newKey != null && !newKey.equals(oldKey) && recordManager.existsByPrimaryKey(appId, tblname, newRow, effectivePkFields)) {
+                        boolean primaryKeyChanged = oldKey != null && newKey != null && !newKey.equals(oldKey);
+                        if (primaryKeyChanged && recordManager.existsByPrimaryKey(appId, tblname, newRow, effectivePkFields)) {
                             // FORCE-REPLACE MODE: xóa các bản ghi đang giữ PK mới (khác id hiện tại),
                             // sau đó tạo lại newRow để đảm bảo update theo id luôn thành công.
                             SearchFilter conflictFilter = buildPrimaryKeyFilter(newRow, effectivePkFields);
@@ -1284,26 +1277,27 @@ public class TableHandler {
                         Map<String, Object> oldKeys = extractPrimaryKeyValues(row, effectivePkFields);
                         Map<String, Object> newKeys = extractPrimaryKeyValues(newRow, effectivePkFields);
 
-                        recordManager.deleteRecord(appId, tblname, row);
-                        enqueueServiceInvalidation(appId, tblname, row);
-                        socketIOConfig.sendUpdateNotification(appId, tblname, "delete", oldKeys, row);
+                        if (primaryKeyChanged) {
+                            // Chỉ khi đổi khóa chính mới cần replace bằng delete+create.
+                            recordManager.deleteRecord(appId, tblname, row);
+                            enqueueServiceInvalidation(appId, tblname, row);
+                            socketIOConfig.sendUpdateNotification(appId, tblname, "delete", oldKeys, row);
 
-                        command = recordManager.createRecord(appId, tblname, newRow, effectivePkFields);
-                        enqueueServiceInvalidation(appId, tblname, newRow);
-
-                        // 🔥 CRITICAL: Flush + commit Lucene trước khi broadcast bản ghi mới
-                        recordManager.flushPendingBatchUpdates(appId, tblname);
-                        try {
-                            recordManager.commitLuceneIndex(appId, tblname);
-                        } catch (IOException e) {
-                            logger.error("Error committing Lucene index for replace-update: {}", e.getMessage());
+                            command = recordManager.createRecord(appId, tblname, newRow, effectivePkFields);
+                            enqueueServiceInvalidation(appId, tblname, newRow);
+                            socketIOConfig.sendUpdateNotification(appId, tblname, "create", newKeys, newRow);
+                            msg.put("command", "update");
+                            msg.put("updated_row", newRow);
+                            msg.put("socket_actions", List.of("delete", "create"));
+                        } else {
+                            // PK không đổi: cập nhật in-place để nhanh hơn và tránh lệch action phía client.
+                            command = recordManager.createRecord(appId, tblname, newRow, effectivePkFields);
+                            enqueueServiceInvalidation(appId, tblname, newRow);
+                            socketIOConfig.sendUpdateNotification(appId, tblname, "update", newKeys, newRow);
+                            msg.put("command", "update");
+                            msg.put("updated_row", newRow);
+                            msg.put("socket_actions", List.of("update"));
                         }
-
-                        // Gửi create cho row mới để client insert/reconcile nhất quán
-                        socketIOConfig.sendUpdateNotification(appId, tblname, "create", newKeys, newRow);
-                        msg.put("command", "update");
-                        msg.put("updated_row", newRow);
-                        msg.put("socket_actions", List.of("delete", "create"));
                     }
                 } else if (!newPkValues.isEmpty() && newPkValues.keySet().containsAll(effectivePkFields)) {
                     // Trường hợp upsert (không tìm thấy bản ghi nhưng đủ khóa chính)
@@ -1327,14 +1321,6 @@ public class TableHandler {
                     command = recordManager.createRecord(appId, tblname, objUpdate, effectivePkFields);
                     enqueueServiceInvalidation(appId, tblname, objUpdate);
                     msg.put("command", command);
-                    // 🔥 CRITICAL: Flush pending batch updates to ensure Lucene searcher is refreshed before socket notification
-                    recordManager.flushPendingBatchUpdates(appId, tblname);
-                    // 🔥 CRITICAL: Force commit Lucene index before socket notification
-                    try {
-                        recordManager.commitLuceneIndex(appId, tblname);
-                    } catch (IOException e) {
-                        logger.error("Error committing Lucene index for upsert: {}", e.getMessage());
-                    }
                     // Gửi create với full data
                     socketIOConfig.sendUpdateNotification(appId, tblname, "create", extractPrimaryKeyValues(objUpdate, effectivePkFields), objUpdate);
                     msg.put("updated_row", objUpdate);
@@ -1352,14 +1338,6 @@ public class TableHandler {
                     Map<String, Object> rowPrimaryKeys = extractPrimaryKeyValues(row, effectivePkFields);
                     recordManager.deleteRecord(appId, tblname, row);
                     enqueueServiceInvalidation(appId, tblname, row);
-                    // 🔥 CRITICAL: Flush pending batch updates to ensure Lucene searcher is refreshed before socket notification
-                    recordManager.flushPendingBatchUpdates(appId, tblname);
-                    // 🔥 CRITICAL: Force commit Lucene index before socket notification
-                    try {
-                        recordManager.commitLuceneIndex(appId, tblname);
-                    } catch (IOException e) {
-                        logger.error("Error committing Lucene index for delete: {}", e.getMessage());
-                    }
                     // Gửi delete với data row để client biết xóa row nào
                     socketIOConfig.sendUpdateNotification(appId, tblname, "delete", rowPrimaryKeys, row);
                 }

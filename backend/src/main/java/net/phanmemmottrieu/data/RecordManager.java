@@ -1895,8 +1895,8 @@ public class RecordManager {
         try {
             // Updated call to match the existing getSearcherManager signature
             SearcherManager searcherManager = getSearcherManager(appId, tableName); 
-            // Force refresh to minimize read-after-write lag in NRT mode.
-            searcherManager.maybeRefreshBlocking();
+            // Non-blocking refresh to keep query latency stable under load.
+            searcherManager.maybeRefresh();
             searcher = searcherManager.acquire(); 
             db = getDatabaseWithBloomFilter(appId, tableName);
 
@@ -1928,10 +1928,18 @@ public class RecordManager {
 
             if (!staleKeys.isEmpty()) {
                 logger.warn("Detected {} stale Lucene keys for {}.{}; removing stale docs from index.", staleKeys.size(), appId, tableName);
-                for (String staleKey : staleKeys) {
-                    deleteFromIndex(appId, tableName, staleKey);
+                String staleIndexKey = appId + "_" + tableName;
+                luceneIndexLocks.putIfAbsent(staleIndexKey, new Object());
+                synchronized (luceneIndexLocks.get(staleIndexKey)) {
+                    IndexWriter writer = getOrCreateSharedIndexWriter(appId, tableName);
+                    for (String staleKey : staleKeys) {
+                        writer.deleteDocuments(new Term("_key", staleKey));
+                    }
+                    SearcherManager sm = searcherManagerCache.get(staleIndexKey);
+                    if (sm != null) {
+                        sm.maybeRefresh();
+                    }
                 }
-                commitLuceneIndex(appId, tableName);
             }
 
             List<String> keys = new ArrayList<>(uniqueKeys);
@@ -2022,12 +2030,7 @@ public class RecordManager {
         }
 
         if (repaired > 0) {
-            try {
-                commitLuceneIndex(appId, tableName);
-                logger.info("Repaired {} Lucene docs from RocksDB for {}.{}", repaired, appId, tableName);
-            } catch (Exception ex) {
-                logger.error("Failed to commit repaired Lucene docs for {}.{}: {}", appId, tableName, ex.getMessage(), ex);
-            }
+            logger.info("Repaired {} Lucene docs from RocksDB for {}.{}", repaired, appId, tableName);
         }
     }
 
