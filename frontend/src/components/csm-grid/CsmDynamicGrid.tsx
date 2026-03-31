@@ -332,6 +332,7 @@ export function CsmDynamicGrid({
 	const [selectedDetailRow, setSelectedDetailRow] = useState<Row | null>(null); // For detail tabs panel
 	const [editorOpen, setEditorOpen] = useState(false);
 	const [editingRecord, setEditingRecord] = useState<Row | null>(null);
+	const submitInFlightRef = useRef(false);
 	const [searchTerm, setSearchTerm] = useState("");
 	const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
 	
@@ -2901,6 +2902,11 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 				menusPermissions,
 				decrypt,
 				onSubmit: async (values: Row) => {
+					if (submitInFlightRef.current) {
+						return;
+					}
+					submitInFlightRef.current = true;
+					try {
 					const beforeSaveValues = await runBeforeSaveTrigger(values);
 					if (beforeSaveValues === false) {
 						return;
@@ -3010,6 +3016,9 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 					
 					setEditorOpen(false);
 					runSideEffectTrigger("update_db", payloadValues);
+					} finally {
+						submitInFlightRef.current = false;
+					}
 				},
 			})
 		);

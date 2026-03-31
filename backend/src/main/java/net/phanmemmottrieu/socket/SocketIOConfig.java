@@ -445,6 +445,9 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
             notificationData.put("appId",appId); // ID ứng dụng
             notificationData.put("table", tableName);     // Tên bảng (compatible với frontend interface)
             notificationData.put("action", action);       // Hành động (compatible với frontend interface)
+            // Legacy aliases để tương thích client Vue cũ (csm_grid.vue dùng obj_name/cmd/data)
+            notificationData.put("obj_name", tableName);
+            notificationData.put("cmd", action);
 
             // Xử lý tin nhắn mô tả hành động
             String messageText = "Table '" + tableName + "' has been ";
@@ -460,6 +463,7 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
             // ✅ Gửi full data row để client có thể update/insert/delete trực tiếp
             if (dataRow != null && !dataRow.isEmpty()) {
                 notificationData.put("dataRow", dataRow);
+                notificationData.put("data", dataRow);
             }
             
             notificationData.put("success", true); // Thêm trường success nếu cần ở client

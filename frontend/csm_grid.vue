@@ -3123,8 +3123,11 @@
                   operator: 'AND',
                   conditions: []
                 };
+                if(objRowData["id"]!==undefined && objRowData["id"]!==null && (objRowData["id"]+"").trim()!=='')
+                  e_where_lunence.conditions.push({ field: 'id', type: 'eq', value: objRowData["id"]});
                 seft.database[seft.L_table_name[0]].fieldsPK.forEach(function(objPK){
-                  e_where_lunence.conditions.push({ field: objPK.trim(), type: 'eq', value: oldRowData[objPK]});
+                  if(e_where_lunence.conditions.length===0)
+                    e_where_lunence.conditions.push({ field: objPK.trim(), type: 'eq', value: oldRowData[objPK]});
                   var field=seft.m_configs.table.find(f=>f.f_name.toLowerCase()===objPK.toLowerCase());
                   if(field.f_types.indexOf('num')!==-1||field.f_types.indexOf('price')!==-1||field.f_types.indexOf('ron')!==-1)
                     objKeys+=" && obj."+objPK+"==="+oldRowData[objPK];
@@ -3176,8 +3179,11 @@
                       operator: 'AND',
                       conditions: []
                     };
+                    if(dlRow["id"]!==undefined && dlRow["id"]!==null && (dlRow["id"]+"").trim()!=='')
+                      e_where_lunenceRM.conditions.push({ field: 'id', type: 'eq', value: dlRow["id"]});
                     seft.database[seft.L_table_name[0]].fieldsPK.forEach(function(objPK){
-                      e_where_lunenceRM.conditions.push({ field: objPK.trim(), type: 'eq', value: dlRow[objPK]});
+                      if(e_where_lunenceRM.conditions.length===0)
+                        e_where_lunenceRM.conditions.push({ field: objPK.trim(), type: 'eq', value: dlRow[objPK]});
                     });
                     console.log(dlRow,e_where_lunenceRM);
                     seft.csm_obj_updates({app_id:seft.database[seft.L_table_name[0]].app_id,obj_name:seft.L_table_name[0],obj_update:dlRow,command:"delete",e_where:e_where_lunenceRM},function(msg){

@@ -228,12 +228,22 @@ public class TableHandler {
         response.set("code", 200);
         response.set("message", success ? "ok" : String.valueOf(result.getOrDefault("message", "error")));
         response.set("success", success);
-    
-        // Gộp tất cả key-value từ result vào response
-        for (Map.Entry<String, Object> entry : result.entrySet()) {
-            response.set(entry.getKey(), entry.getValue());
-        }
+
+        // Chỉ trả các trường cần thiết, tránh echo toàn bộ request (token/header/filter nhạy cảm).
+        copyIfPresent(response, result, "error");
+        copyIfPresent(response, result, "requestId");
+        copyIfPresent(response, result, "command");
+        copyIfPresent(response, result, "socket_actions");
+        copyIfPresent(response, result, "updated_row");
+        copyIfPresent(response, result, "obj_name");
+        copyIfPresent(response, result, "app_id");
     }    
+
+    private void copyIfPresent(StandardResponse response, Map<String, Object> source, String key) {
+        if (source != null && source.containsKey(key)) {
+            response.set(key, source.get(key));
+        }
+    }
 
     private Map<String, Object> handleTableOperation(Map<String, Object> msg, boolean isUpdate) {
         try {
@@ -1101,21 +1111,26 @@ public class TableHandler {
         Map<String, Object> filterResult = new HashMap<>();
         List<Map<String, Object>> records = new ArrayList<>();
 
-        // Với update/delete, ưu tiên tìm đúng 1 bản ghi theo e_where trước (nhanh và ổn định hơn).
-        if ("update".equals(command) || "delete".equals(command)) {
-            Map<String, Object> foundRecord = recordManager.find(appId, tblname, filters);
-            if (foundRecord != null && !foundRecord.isEmpty()) {
-                records.add(foundRecord);
-            }
+        Object objUpdateId = objUpdate.get("id");
+        boolean hasUpdateId = hasNonBlank(objUpdateId);
+
+        // Ưu tiên query theo id cho update/delete để định vị đúng bản ghi nhanh nhất trên Lucene.
+        if (("update".equals(command) || "delete".equals(command)) && hasUpdateId) {
+            SearchFilter idFirstFilter = new SearchFilter();
+            idFirstFilter.setField("id");
+            idFirstFilter.setType("eq");
+            idFirstFilter.setValue(objUpdateId);
+            filterResult = recordManager.filter(appId, tblname, idFirstFilter);
+            records = (List<Map<String, Object>>) filterResult.getOrDefault("rows", new ArrayList<>());
+            logger.debug("Primary lookup by id for {}.{} id={} -> {} row(s)", appId, tblname, objUpdateId, records.size());
         }
 
-        // Fallback về filter khi không tìm được bản ghi đơn hoặc với luồng create.
+        // Fallback về filter gốc nếu không có id hoặc lookup theo id không ra dữ liệu.
         if (records.isEmpty()) {
+            // Dùng trực tiếp filter() (Lucene) thay vì find() để tránh full-scan RocksDB trên bảng lớn.
+            // find() có fallback duyệt toàn bộ bản ghi O(N) khi PK lookup thất bại, gây timeout trên bảng lớn.
             filterResult = recordManager.filter(appId, tblname, filters);
             records = (List<Map<String, Object>>) filterResult.getOrDefault("rows", new ArrayList<>());
-        } else {
-            filterResult.put("rows", records);
-            filterResult.put("totalCount", (long) records.size());
         }
 
         if (enforceAccountAppScope) {
@@ -1244,11 +1259,8 @@ public class TableHandler {
                         newRow.putAll(objUpdate);
                         ensureRowId(newRow);
 
-                        if (!effectivePkFields.isEmpty()) {
-                            List<String> missingPk = missingPrimaryKeyFields(newRow, effectivePkFields);
-                            if (!missingPk.isEmpty()) {
-                                return errorResponse("Thiếu khóa chính: " + String.join(", ", missingPk));
-                            }
+                        if (!effectivePkFields.isEmpty() && !hasAnyPrimaryKeyValue(newRow, effectivePkFields)) {
+                            return errorResponse("Thiếu khóa chính: cần ít nhất 1 trong các trường " + String.join(", ", effectivePkFields));
                         }
 
                         String oldKey = recordManager.buildPrimaryKeyKey(appId, tblname, row, effectivePkFields);
@@ -1299,7 +1311,7 @@ public class TableHandler {
                             msg.put("socket_actions", List.of("update"));
                         }
                     }
-                } else if (!newPkValues.isEmpty() && newPkValues.keySet().containsAll(effectivePkFields)) {
+                } else if (hasAnyPrimaryKeyValue(objUpdate, effectivePkFields)) {
                     // Trường hợp upsert (không tìm thấy bản ghi nhưng đủ khóa chính)
                     if (!hasNonBlank(objUpdate.get("id"))) {
                         return errorResponse("Thiếu id khi tạo mới dữ liệu");
@@ -1664,6 +1676,18 @@ public class TableHandler {
             }
         }
         return missing;
+    }
+
+    private boolean hasAnyPrimaryKeyValue(Map<String, Object> record, List<String> pkFields) {
+        if (record == null || pkFields == null || pkFields.isEmpty()) {
+            return false;
+        }
+        for (String pkField : pkFields) {
+            if (hasNonBlank(record.get(pkField))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private Map<String, Object> extractPrimaryKeyValues(Map<String, Object> record, List<String> pkFields) {

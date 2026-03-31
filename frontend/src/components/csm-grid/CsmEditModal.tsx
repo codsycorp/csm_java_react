@@ -1471,6 +1471,7 @@ export function CsmEditModal({
   decrypt?: (s: string) => string;
 }) {
   const [form] = Form.useForm();
+  const [submitting, setSubmitting] = useState(false);
   const [formUpdated, setFormUpdated] = useState(0);
   const [valuesReady, setValuesReady] = useState(false);
   const modalContentRef = useRef<HTMLDivElement>(null);
@@ -1835,6 +1836,7 @@ export function CsmEditModal({
     <Modal
       open={open}
       onCancel={() => {
+        if (submitting) return;
         form.resetFields();
         onOpenChange(false);
       }}
@@ -1844,11 +1846,14 @@ export function CsmEditModal({
       centered
       destroyOnClose={true}
       footer={[
-        <Button key="cancel" onClick={() => {
+        <Button key="cancel" disabled={submitting} onClick={() => {
+          if (submitting) return;
           form.resetFields();
           onOpenChange(false);
         }}>Hủy</Button>,
-        <Button key="submit" type="primary" loading={false} onClick={() => {
+        <Button key="submit" type="primary" loading={submitting} disabled={submitting} onClick={() => {
+          if (submitting) return;
+          setSubmitting(true);
           form.validateFields().then(async (values) => {
             const encodedValues = { ...values };
             dynamicFields.forEach(f => {
@@ -1934,7 +1939,9 @@ export function CsmEditModal({
             await onSubmit(finalValues as Row);
             form.resetFields();
             onOpenChange(false);
-          }).catch(err => console.error('Validation error:', err));
+          }).catch(err => console.error('Validation error:', err)).finally(() => {
+            setSubmitting(false);
+          });
         }}>Lưu</Button>,
       ]}
       styles={{ body: { maxHeight: "75vh", overflowY: "auto", padding: "8px 12px" } }}
