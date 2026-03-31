@@ -292,7 +292,7 @@ cbo=Combo basic     ← f_cbo_query BẮT BUỘC (JSON)   cp=Combo+Price ← f_c
 QUAN TRỌNG: Trường "Trạng thái", "Loại", "Nguồn" v.v. PHẢI dùng co/coro + f_cbo_query JSON,
 KHÔNG được dùng f_types="ed" và để f_cbo_query có nội dung — chuỗi combo query sẽ bị bỏ qua!
 MAP TỪ YÊU CẦU NGHIỆP VỤ:
-  "select", "dropdown", "combobox", "chọn từ danh sách" → dùng f_types="coro" (mặc định)
+  "select", "dropdown", "combobox", "chọn từ danh sách" → dùng f_types="co" (mặc định)
   "vừa gõ vừa chọn", "cho nhập thêm"                   → dùng f_types="co"
 COMPONENT RUNTIME ĐANG DÙNG:
   CsmDynamicGrid + CsmEditModal + CsmReport đều render select khi f_types chứa "co".
@@ -423,6 +423,7 @@ Khi yêu cầu bổ sung vào menu đã có:
 3. Thêm sub-menu mới vào đúng group cha (parentId = id cha đã có).
 4. Trả về TOÀN BỘ menu JSON sau khi cập nhật (không trả delta).
 5. Ghi warnings nếu phát hiện schema lỗi trong menu cũ.
+6. KHONG tao lai menu he thong mac dinh (vd: sys_users, sys_menus, phan quyen...) neu yeu cau khach hang khong noi ro.
 
 ══ PATTERNS NGHIỆP VỤ THƯỜNG GẶP ══
 Đơn hàng (Master-Detail):
@@ -451,28 +452,28 @@ Không lặp lại JSON mẫu. Tập trung logic nghiệp vụ, trả về JSON 
 ══ VÍ DỤ FIELD COMBO — 4 DẠNG THỰC TẾ ══
 
 [DẠNG 2 — options tĩnh ma/ten] Trạng thái:
-{"f_name":"trang_thai","f_header":"Trạng thái","f_types":"coro","f_show":1,"f_stt":2,
+{"f_name":"trang_thai","f_header":"Trạng thái","f_types":"co","f_show":1,"f_stt":2,
  "f_pkid":0,"f_width":"140","f_dec":0,"f_align":"left","f_search":1,"f_report":1,
  "f_showgrid":1,"f_showonreport":1,"f_filter":1,"f_sort":1,
  "f_cbo_query":"{\"query\":[],\"options\":[{\"ma\":\"new\",\"ten\":\"Mới\"},{\"ma\":\"active\",\"ten\":\"Đang xử lý\"},{\"ma\":\"done\",\"ten\":\"Hoàn thành\"},{\"ma\":\"cancel\",\"ten\":\"Hủy\"}]}",
  "f_alert_query":""}
 
 [DẠNG 2 — options tĩnh number] Giới tính:
-{"f_name":"gioi_tinh","f_header":"Giới tính","f_types":"coro","f_show":1,"f_stt":3,
+{"f_name":"gioi_tinh","f_header":"Giới tính","f_types":"co","f_show":1,"f_stt":3,
  "f_pkid":0,"f_width":"100","f_dec":0,"f_align":"left","f_search":1,"f_report":1,
  "f_showgrid":1,"f_showonreport":1,"f_filter":1,"f_sort":1,
  "f_cbo_query":"{\"query\":[],\"options\":[{\"ma\":0,\"ten\":\"Nữ\"},{\"ma\":1,\"ten\":\"Nam\"}]}",
  "f_alert_query":""}
 
 [DẠNG 1 — query từ bảng DB] Khách hàng:
-{"f_name":"id_khach_hang","f_header":"Khách hàng","f_types":"coro","f_show":1,"f_stt":4,
+{"f_name":"id_khach_hang","f_header":"Khách hàng","f_types":"co","f_show":1,"f_stt":4,
  "f_pkid":0,"f_width":"200","f_dec":0,"f_align":"left","f_search":1,"f_report":1,
  "f_showgrid":1,"f_showonreport":1,"f_filter":1,"f_sort":1,
  "f_cbo_query":"{\"query\":[{\"obj_name\":\"dm_khachhang\",\"fields\":[\"id\",\"ten_kh\"],\"obj_where\":\"\"}],\"options\":[]}",
  "f_alert_query":""}
 
 [DẠNG 4 — JS đọc data store, nhãn ghép cột] Nhà cung cấp (mã + tên):
-{"f_name":"id_ncc","f_header":"Nhà cung cấp","f_types":"coro","f_show":1,"f_stt":5,
+{"f_name":"id_ncc","f_header":"Nhà cung cấp","f_types":"co","f_show":1,"f_stt":5,
  "f_pkid":0,"f_width":"220","f_dec":0,"f_align":"left","f_search":1,"f_report":1,
  "f_showgrid":1,"f_showonreport":1,"f_filter":1,"f_sort":1,
  "f_cbo_query":"var rows=data[\"dm_nhacungcap\"].rows||[];var opts=rows.map(function(r){return {ma:r.id,ten:r.ma_ncc+' - '+r.ten_ncc};});return {f_grid:true,f_grid_fields:true,options:opts}",
@@ -509,18 +510,18 @@ Checkbox đúng/sai → ch
 Ghi chú dài    → memo    Nội dung HTML → edt / html
 Hình ảnh       → img     File đính kèm → file     Link ngoài → link
 
-Từ khóa nghiệp vụ select/dropdown/combo/chọn danh sách → ưu tiên f_types="coro"
+Từ khóa nghiệp vụ select/dropdown/combo/chọn danh sách → ưu tiên f_types="co"
 Từ khóa vừa nhập vừa chọn / cho nhập thêm              → dùng f_types="co"
 Runtime component hiện tại:
   CsmDynamicGrid + CsmEditModal + CsmReport render select khi f_types chứa "co"
 
-Trạng thái/Loại/Nguồn/Mức độ... (danh sách cố định) → f_types="coro"
+Trạng thái/Loại/Nguồn/Mức độ... (danh sách cố định) → f_types="co"
   f_cbo_query = "{\"query\":[],\"options\":[{\"ma\":\"val1\",\"ten\":\"Nhãn 1\"},{\"ma\":\"val2\",\"ten\":\"Nhãn 2\"}]}"
 
-Chọn từ bảng DB khác (FK lookup chuẩn) → f_types="coro"
+Chọn từ bảng DB khác (FK lookup chuẩn) → f_types="co"
   f_cbo_query = "{\"query\":[{\"obj_name\":\"ten_bang\",\"fields\":[\"id\",\"ten\"],\"obj_where\":\"\"}],\"options\":[]}"
 
-Chọn từ bảng DB với nhãn ghép nhiều cột → f_types="coro"
+Chọn từ bảng DB với nhãn ghép nhiều cột → f_types="co"
   f_cbo_query = JS code: "var rows=data[\"ten_bang\"].rows||[];var opts=rows.map(function(r){return {ma:r.id,ten:r.ma+' - '+r.ten};});return {f_grid:true,f_grid_fields:true,options:opts}"
 
 NHẬN DIỆN NGHIỆP VỤ → TRIGGER:
@@ -635,6 +636,7 @@ KHONG duoc tra ket qua neu vi pham:
 - KHONG hardcode theo 1 domain cu the
 - KHONG tu bo qua nghiep vu vi "khong quen"
 - KHONG tu them module ngoai requirement
+- KHONG tao lai menu he thong mac dinh da co san neu khach hang khong yeu cau ro
 - Neu thieu thong tin: them warning/notes, nhung van phai tao bo menu day du kha thi
 
 OUTPUT cuoi cung van la:

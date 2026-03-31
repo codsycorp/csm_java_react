@@ -502,6 +502,7 @@ ${selectorGuide}
 7) KHONG duoc bo sot dau muc yeu cau: moi module/chuc nang khach hang neu ra phai co menu tuong ung.
 8) Khong duoc gom tat ca thanh 1-2 menu tong quat neu yeu cau co nhieu module nghiep vu.
 9) So menu chuc nang (node la type_form!=0) phai phan anh day du cac nhom nghiep vu duoc neu trong yeu cau.
+10) KHONG tao lai menu he thong co san (sys_users, sys_menus, phan quyen...) neu khach hang khong yeu cau ro.
 
 ## APP_ID DANG THIET KE
 ${String(appId || "")}
@@ -558,7 +559,7 @@ ${requestCore}
 - Chi dung dynamic_link_url khi thuc su can dieu huong sang mot URL/route ben ngoai co san.
 - Semantic field mapping:
   + cac field gia/ngan sach/chi phi/doanh thu/tong_tien -> f_types="price"
-  + field trang_thai/loai/nguon/muc_do -> f_types="coro" + f_cbo_query
+  + field trang_thai/loai/nguon/muc_do -> f_types="co" + f_cbo_query
 
 ## CHECKLIST TU KIEM TRA TRUOC KHI TRA KET QUA
 - Doi chieu tung dau muc yeu cau khach hang -> da co menu/field/trigger tuong ung chua.
@@ -625,7 +626,8 @@ Ban da co ket qua menu lan truoc. Hay cap nhat theo yeu cau moi voi nguyen tac:
 3) Dam bao schema MenuItemType hop le va ${strictScope}.
 4) Neu thong tin chua du, dua ra gia dinh hop ly va ghi vao warnings.
 5) Chuan hoa lai cac menu cu chua dung schema (field generic, trigger sai cho, combo sai format).
-6) KHONG don gian hoa qua muc: giu day du cac module nghiep vu theo yeu cau goc + yeu cau bo sung.`;
+6) KHONG don gian hoa qua muc: giu day du cac module nghiep vu theo yeu cau goc + yeu cau bo sung.
+7) KHONG tao lai menu he thong co san (sys_users, sys_menus, phan quyen...) neu khach hang khong yeu cau ro.`;
 
   const previousResultLabel = isSampleBase
     ? "## MENU MAU DUNG LAM GOC (CHINH SUA/ADAPT THEO YEU CAU MOI)"
@@ -703,7 +705,7 @@ ${previousMenuContext}
 - KHONG tu them module/tinh nang khong co trong yeu cau goc + yeu cau bo sung.
 - Semantic field mapping:
   + cac field gia/ngan sach/chi phi/doanh thu/tong_tien -> f_types="price"
-  + field trang_thai/loai/nguon/muc_do -> f_types="coro" + f_cbo_query
+  + field trang_thai/loai/nguon/muc_do -> f_types="co" + f_cbo_query
 
 ## CHECKLIST TU KIEM TRA TRUOC KHI TRA KET QUA
 - Doi chieu tung dau muc yeu cau goc + yeu cau bo sung -> da co menu/field/trigger tuong ung chua.
@@ -795,14 +797,14 @@ function normalizeTableField(field: any): any {
   }
 
   // Auto-detect: if f_types is a plain text type but f_cbo_query has a real value,
-  // the AI forgot to set the correct combo type — upgrade to coro automatically.
+  // the AI forgot to set the correct combo type — upgrade to co by default.
   const PLAIN_TEXT_TYPES = /^(ed|txt|text|ro|string)?$/i;
   if (PLAIN_TEXT_TYPES.test(String(normalized.f_types || "ed"))) {
     const rawCboQuery = normalized.f_cbo_query ?? raw.cbo_query ?? raw.options ?? raw.foreignKey;
     const hasCboValue = rawCboQuery != null && rawCboQuery !== ""
       && !(typeof rawCboQuery === "object" && !Array.isArray(rawCboQuery) && Object.keys(rawCboQuery).length === 0);
     if (hasCboValue) {
-      normalized.f_types = raw.editable === false ? "coro" : "coro";
+      normalized.f_types = raw.editable === false ? "coro" : "co";
     }
   }
 
