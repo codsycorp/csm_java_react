@@ -67,6 +67,15 @@ public class RecordManager {
     private static final int DEFAULT_FILTER_TAKE = 500;
     private static final int MAX_FILTER_TAKE = 5000;
     private static final int MAX_SAFE_JSON_RECORD_BYTES = 32 * 1024 * 1024;
+    // Guard: only one async Lucene rebuild per table at a time
+    private static final ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicBoolean> tableRepairScheduled = new ConcurrentHashMap<>();
+    private static final java.util.concurrent.ExecutorService repairExecutor =
+        java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "LuceneRepair-Worker");
+            t.setDaemon(true);
+            return t;
+        });
+
     private static final ScheduledExecutorService batchExecutor = 
         new java.util.concurrent.ScheduledThreadPoolExecutor(
             Math.max(2, Runtime.getRuntime().availableProcessors() / 2),
@@ -1246,7 +1255,7 @@ public class RecordManager {
             // updateDocument sẽ thay thế tài liệu hiện có với cùng Term (_key, key)
             writer.updateDocument(new Term("_key", key), doc);
 
-            logger.info("Queued record for indexing with key: {}", key);
+            logger.debug("Queued record for indexing with key: {}", key);
 
             // Kích hoạt làm mới SearcherManager để cập nhật tức thời
             try {
@@ -2042,11 +2051,55 @@ public class RecordManager {
 
         List<String> fallbackKeys = scanMatchingKeysFromRocksDB(appId, tableName, filters, db);
         if (!fallbackKeys.isEmpty()) {
-            logger.warn("Lucene miss detected for {}.{} with matching RocksDB rows; using fallback scan and repairing index.", appId, tableName);
-            repairLuceneIndexForKeys(appId, tableName, fallbackKeys, db);
+            // Only trigger ONE async full-table rebuild per table; skip if already scheduled.
+            String tableKey = appId + ":" + tableName;
+            tableRepairScheduled.putIfAbsent(tableKey, new java.util.concurrent.atomic.AtomicBoolean(false));
+            if (tableRepairScheduled.get(tableKey).compareAndSet(false, true)) {
+                logger.warn("Lucene miss for {}.{} — scheduling async full index rebuild.", appId, tableName);
+                repairExecutor.submit(() -> {
+                    try {
+                        rebuildFullLuceneIndex(appId, tableName, db);
+                    } catch (Exception ex) {
+                        logger.error("Async Lucene rebuild failed for {}.{}: {}", appId, tableName, ex.getMessage(), ex);
+                    } finally {
+                        tableRepairScheduled.get(tableKey).set(false);
+                    }
+                });
+            }
             return fallbackKeys;
         }
         return Collections.emptyList();
+    }
+
+    /** Rebuild the entire Lucene index for a table from RocksDB. Called async; must not block HTTP threads. */
+    private void rebuildFullLuceneIndex(String appId, String tableName, RocksDB db) {
+        if (db == null) return;
+        List<String> allKeys = new ArrayList<>();
+        try (RocksIterator iterator = db.newIterator()) {
+            iterator.seekToFirst();
+            while (iterator.isValid()) {
+                String key = new String(iterator.key(), java.nio.charset.StandardCharsets.UTF_8);
+                if (!key.startsWith("__meta_")) {
+                    allKeys.add(key);
+                }
+                iterator.next();
+            }
+        } catch (Exception ex) {
+            logger.error("Failed to iterate RocksDB for Lucene rebuild of {}.{}: {}", appId, tableName, ex.getMessage(), ex);
+            return;
+        }
+        logger.info("Starting full Lucene rebuild for {}.{}: {} records.", appId, tableName, allKeys.size());
+        repairLuceneIndexForKeys(appId, tableName, allKeys, db);
+        try {
+            IndexWriter writer = getOrCreateSharedIndexWriter(appId, tableName);
+            writer.commit();
+            String indexKey = appId + "_" + tableName;
+            SearcherManager sm = searcherManagerCache.get(indexKey);
+            if (sm != null) sm.maybeRefresh();
+            logger.info("Full Lucene rebuild complete for {}.{}: {} records.", appId, tableName, allKeys.size());
+        } catch (IOException ex) {
+            logger.error("Failed to commit after Lucene rebuild for {}.{}: {}", appId, tableName, ex.getMessage(), ex);
+        }
     }
     /**
      * Iterates through all RocksDB instances (appId/tableName combinations)
