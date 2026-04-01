@@ -543,7 +543,15 @@ function buildPromptWithRequirement(
   const mainPrompt = trimToMax(AI_PROMPTS.MAIN_MENU_DESIGNER || "", 5500);
   const extractorPrompt = trimToMax(AI_PROMPTS.REQUIREMENT_EXTRACTOR || "", 1200);
   const selectorGuide = trimToMax(AI_PROMPTS.TYPE_SELECTION_GUIDE || "", 1500);
-  const requestCore = trimToMax(requestText || "", 2600);
+  const requestCore = trimToMax(requestText || "", 10000);
+  const detectedModules = extractRequirementModules(requestText || "", 20);
+  const detectedTables = extractRequirementTables(requestText || "", 30);
+  const moduleChecklist = detectedModules.length > 0
+    ? detectedModules.map((item, idx) => `${idx + 1}. ${item}`).join("\n")
+    : "(khong trich xuat duoc module ro rang; AI phai tu phan tich day du theo yeu cau goc)";
+  const tableChecklist = detectedTables.length > 0
+    ? detectedTables.map((item, idx) => `${idx + 1}. ${item}`).join("\n")
+    : "(khong co ten bang ro rang trong yeu cau)";
   const compactMenuContext = buildCompactMenuContext(referenceMenus, 150);
   const typeCatalog = buildMenuTypeCatalog();
   const sampleMenuContext = sampleMenus && sampleMenus.length > 0
@@ -583,6 +591,17 @@ ${compactMenuContext}
 ${sampleMenuContext ? `\n## MENU MAU THAM KHAO TU CHUONG TRINH KHAC\nDay la menu thuc te da trien khai tu mot chuong trinh khac de ban tham khao cau truc, pattern, va logic nghiep vu:\n${sampleMenuContext}\n` : ""}
 ## YEU CAU KHACH HANG
 ${requestCore}
+
+## CHECKLIST MODULE BAT BUOC BAO PHU (TRICH TU YEU CAU)
+${moduleChecklist}
+
+## CHECKLIST BANG/ENTITY THAM KHAO (TRICH TU YEU CAU)
+${tableChecklist}
+
+## YEU CAU BAO PHU
+- Bat buoc doi chieu tung module trong checklist va tao menu/chuc nang tuong ung.
+- Neu thieu thong tin chi tiet cho mot module, van phai tao khung menu/table hop ly cho module do, khong duoc bo qua.
+- Trong notes, liet ke module nao da duoc bao phu de de doi chieu.
 
 ## SCHEMA GUARDRAIL (BAT BUOC)
 - CHI dung table field theo format f_*: f_name, f_header, f_types, f_pkid, f_show, f_width, f_dec.
@@ -643,10 +662,14 @@ ${requestCore}
 - Moi field trong table uu tien co key: id, f_name, f_pkid, f_sort, f_align, f_stt, f_header,
   f_filter, f_width, f_sorting, f_types, f_show, f_cbo_query, f_dec, f_showgrid, f_showonreport, f_alert_query.
 
+## DINH DANG DAU RA BAT BUOC
+{ "menu": [...], "notes": [...], "warnings": [...] }
+TUYET DOI KHONG tra ve JSON array don thuan ([ ... ]) hay chuoi text. Chi tra ve JSON object { "menu": [...] } duy nhat.
+
 ## LUU Y TOKEN
 Khong lap lai JSON mau dai. Tap trung logic nghiep vu va tra ve JSON menu hoan chinh, dung schema.`;
 
-  return trimToMax(prompt, 18000);
+  return trimToMax(prompt, 26000);
 }
 
 function buildRefinementPrompt(
@@ -669,8 +692,16 @@ function buildRefinementPrompt(
   const extractorPrompt = trimToMax(AI_PROMPTS.REQUIREMENT_EXTRACTOR || "", 1000);
   const selectorGuide = trimToMax(AI_PROMPTS.TYPE_SELECTION_GUIDE || "", 1400);
 
-  const requestCore = trimToMax(baseRequest || "(khong co)", 2400);
-  const refineCore = trimToMax(refineRequest || "", 1600);
+  const requestCore = trimToMax(baseRequest || "(khong co)", 9000);
+  const refineCore = trimToMax(refineRequest || "", 4000);
+  const detectedModules = extractRequirementModules(`${baseRequest || ""}\n${refineRequest || ""}`, 25);
+  const detectedTables = extractRequirementTables(`${baseRequest || ""}\n${refineRequest || ""}`, 40);
+  const moduleChecklist = detectedModules.length > 0
+    ? detectedModules.map((item, idx) => `${idx + 1}. ${item}`).join("\n")
+    : "(khong trich xuat duoc module ro rang; AI phai tu phan tich day du theo yeu cau)";
+  const tableChecklist = detectedTables.length > 0
+    ? detectedTables.map((item, idx) => `${idx + 1}. ${item}`).join("\n")
+    : "(khong co ten bang ro rang trong yeu cau)";
   const currentMenuContext = buildCompactMenuContext(referenceMenus, 120);
   const previousMenuContext = buildPreviousResultContext(previousResultJson, 80);
   const previousMenuContextFull = isSampleBase
@@ -727,6 +758,17 @@ ${requestCore}
 
 ## YEU CAU BO SUNG MOI (UU TIEN CAO NHAT)
 ${refineCore}
+
+## CHECKLIST MODULE BAT BUOC BAO PHU (TRICH TU YEU CAU GOC + BO SUNG)
+${moduleChecklist}
+
+## CHECKLIST BANG/ENTITY THAM KHAO (TRICH TU YEU CAU GOC + BO SUNG)
+${tableChecklist}
+
+## YEU CAU BAO PHU
+- Bat buoc doi chieu tung module trong checklist va tao/giu menu/chuc nang tuong ung.
+- Khong duoc lam mat module da co neu yeu cau bo sung khong yeu cau loai bo.
+- Trong warnings/notes, neu module nao chua du thong tin thi ghi ro gia dinh da dung.
 
 ## MENU HE THONG HIEN TAI (COMPACT REFERENCE)
 ${currentMenuContext}
@@ -799,7 +841,7 @@ ${isSampleBase ? previousMenuContextFull : previousMenuContext}
 Khong lap lai JSON mau dai. Chi tap trung logic nghiep vu va tra ve JSON menu hoan chinh, dung schema.
 `;
 
-  return isSampleBase ? prompt : trimToMax(prompt, 22000);
+  return isSampleBase ? prompt : trimToMax(prompt, 30000);
 }
 
 function trimToMax(text: string, maxChars: number): string {
@@ -1753,6 +1795,100 @@ function validateMenusForApply(menus: MenuItemType[]): MenuValidationIssue[] {
   return issues;
 }
 
+function detectSevereAiOutputIssues(menus: MenuItemType[], requestText: string): string[] {
+  const issues: string[] = [];
+  const allNodes = flattenMenuNodes(Array.isArray(menus) ? menus : [], 500);
+  const functionalNodes = allNodes.filter((node) => Number((node as any).type_form || 0) !== 0);
+  const normalizeText = (v: any) => String(v || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const nodeSignals = functionalNodes.map((node) => {
+    const label = (node as any).label || (node as any).label_vi || (node as any).name || "";
+    const tableName = (node as any).table_name || "";
+    return normalizeText(`${label} ${tableName}`);
+  });
+
+  if (!Array.isArray(menus) || menus.length === 0) {
+    issues.push("Khong co menu nao duoc tao.");
+    return issues;
+  }
+
+  const requiredModules = extractRequirementModules(requestText || "", 20);
+  if (requiredModules.length >= 2) {
+    const expectedMin = Math.max(2, Math.min(requiredModules.length, 8));
+    if (functionalNodes.length < expectedMin) {
+      issues.push(`So menu chuc nang qua it (${functionalNodes.length}/${expectedMin}) so voi yeu cau.`);
+    }
+
+    const missingModules: string[] = [];
+    for (const moduleName of requiredModules) {
+      const moduleNorm = normalizeText(moduleName);
+      const moduleTokens = moduleNorm.split(/\s+/).filter((token) => token.length >= 3);
+      const covered = nodeSignals.some((signal) => {
+        if (signal.includes(moduleNorm)) return true;
+        if (moduleTokens.length === 0) return false;
+        const matched = moduleTokens.filter((token) => signal.includes(token)).length;
+        return matched >= Math.max(1, Math.ceil(moduleTokens.length * 0.5));
+      });
+      if (!covered) {
+        missingModules.push(moduleName);
+      }
+    }
+
+    if (missingModules.length > 0) {
+      issues.push(`Thieu bao phu module: ${missingModules.slice(0, 8).join(", ")}.`);
+    }
+  }
+
+  let unknownFieldCount = 0;
+  let totalFieldCount = 0;
+
+  for (const node of functionalNodes) {
+    const typeForm = Number((node as any).type_form || 0);
+    const tableName = String((node as any).table_name || "").trim();
+    const fields = Array.isArray((node as any).table) ? ((node as any).table as any[]) : [];
+
+    if ((typeForm === 1 || typeForm === 2 || typeForm === 6) && !tableName) {
+      issues.push(`Menu ${String((node as any).label || (node as any).id || "(unknown)")} thieu table_name.`);
+    }
+
+    if ((typeForm === 1 || typeForm === 2 || typeForm === 6) && fields.length === 0) {
+      issues.push(`Menu ${String((node as any).label || (node as any).id || "(unknown)")} khong co field trong table.`);
+    }
+
+    for (const field of fields) {
+      totalFieldCount += 1;
+      const fName = String(field?.f_name || "").trim().toLowerCase();
+      if (!fName || fName === "field_unknown" || fName.includes("unknown")) {
+        unknownFieldCount += 1;
+      }
+    }
+  }
+
+  if (unknownFieldCount > 0) {
+    issues.push(`Co ${unknownFieldCount} field placeholder (field_unknown/unknown).`);
+  }
+
+  if (totalFieldCount > 0 && (unknownFieldCount / totalFieldCount) >= 0.35) {
+    issues.push("Ti le field placeholder qua cao, output chua dat chat luong de ap dung.");
+  }
+
+  return uniqueStrings(issues, 10);
+}
+
+function buildAutoRepairRefineText(issues: string[]): string {
+  const lines = (Array.isArray(issues) ? issues : []).map((item) => `- ${item}`);
+  return [
+    "KET QUA TRUOC CHUA DAT CHAT LUONG. HAY SUA LAI TOAN BO MENU.",
+    "YEU CAU BAT BUOC:",
+    "- KHONG duoc dung field_unknown hoac bat ky placeholder unknown nao.",
+    "- Bao phu day du cac module nghiep vu trong yeu cau.",
+    "- Bat buoc map day du checklist module yeu cau vao menu/chuc nang tuong ung.",
+    "- Moi menu type 1/2/6 phai co table_name + table fields hop le.",
+    "- Trigger/f_cbo_query phai hop le theo schema guardrail.",
+    "LOI PHAT HIEN:",
+    ...(lines.length > 0 ? lines : ["- Output cu qua so sai schema nghiep vu."]),
+  ].join("\n");
+}
+
 export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerProps) {
   const { t } = useTranslation();
   const [requestText, setRequestText] = useState("");
@@ -1932,6 +2068,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     inputRequest: string,
     scope: "minimal" | "complete" = "complete",
     promptOverride?: string,
+    attempt: number = 0,
   ) => {
     if (!appId) {
       message.warning(t("system.menu.pleaseSelectApp") || "Vui lòng chọn app");
@@ -2024,6 +2161,38 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
             ? payload.data.warnings
             : [],
       };
+
+      const severeIssues = detectSevereAiOutputIssues(normalized, inputRequest);
+      if (severeIssues.length > 0 && attempt < 1) {
+        const autoRefineText = buildAutoRepairRefineText(severeIssues);
+        const autoRepairPrompt = buildRefinementPrompt(
+          appId,
+          inputRequest,
+          autoRefineText,
+          JSON.stringify(output),
+          "complete",
+          currentMenus,
+          sampleMenuParsed || undefined,
+        );
+
+        setAiProgress({
+          status: "running",
+          stage: "refining",
+          message: "Ket qua AI lan 1 chua dat. Dang tu dong sua va tao lai...",
+          current: 0,
+          total: 1,
+          percent: 0,
+        });
+        setAiResultText(JSON.stringify({
+          success: false,
+          stage: "refining",
+          message: "KQ lan 1 chua dat chat luong, dang auto-refine.",
+          issues: severeIssues,
+        }, null, 2));
+
+        await runGenerate(inputRequest, scope, autoRepairPrompt, attempt + 1);
+        return;
+      }
 
       setAiMenus(normalized);
       setAiResultText(JSON.stringify(output, null, 2));
@@ -2376,11 +2545,9 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
   );
 }
 
-/**
- * VALIDATOR: Validate menu output against requirement for undersimplification
- * Returns warnings if output doesn't match requirement module count
- */
-function validateMenuCoverage(
+/** @deprecated Use detectSevereAiOutputIssues instead */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function _validateMenuCoverage(
   requirementText: string,
   menus: MenuItemType[],
 ): { hasCoverageProblem: boolean; warnings: string[] } {

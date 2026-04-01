@@ -683,13 +683,65 @@ public class ApiSpringController {
         if (prompt.length() > geminiMaxPromptChars) {
             logger.warn("Prompt size exceeded Gemini limit ({}>{}) chars. Routing to GitHub Models fallback.",
                     prompt.length(), geminiMaxPromptChars);
-            return this.gitHubModelsService.generateContent(prompt, progressListener);
+            if (progressListener != null) {
+                progressListener.onProgress(createAiJobProgress("github_models", "Đang gọi GitHub Models", 0, 1, null));
+            }
+
+            String githubRaw = this.gitHubModelsService.generateContent(prompt, progressListener);
+            if (shouldFallbackToGemini(githubRaw)) {
+                logger.warn("GitHub Models hit quota/rate limit. Auto fallback to Gemini provider flow.");
+                if (progressListener != null) {
+                    progressListener.onProgress(createAiJobProgress("gemini_fallback", "GitHub Models hết quota, đang chuyển sang Gemini", 0, 1, null));
+                }
+                return this.aiProviderFactory.generateContent(prompt);
+            }
+            return githubRaw;
         }
 
         if (progressListener != null) {
             progressListener.onProgress(createAiJobProgress("gemini", "Đang gọi Gemini", 0, 1, null));
         }
         return this.aiProviderFactory.generateContent(prompt);
+    }
+
+    private boolean shouldFallbackToGemini(String rawContent) {
+        if (rawContent == null || rawContent.trim().isEmpty()) {
+            return false;
+        }
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> parsed = objectMapper.readValue(rawContent, Map.class);
+
+            if (Boolean.FALSE.equals(parsed.get("success"))) {
+                String errorCode = String.valueOf(parsed.getOrDefault("errorCode", ""));
+                String message = String.valueOf(parsed.getOrDefault("message", ""));
+                return isRateOrQuotaFailure(errorCode, message);
+            }
+
+            if (Boolean.TRUE.equals(parsed.get("error"))) {
+                String errorCode = String.valueOf(parsed.getOrDefault("errorCode", ""));
+                String message = String.valueOf(parsed.getOrDefault("message", ""));
+                return isRateOrQuotaFailure(errorCode, message);
+            }
+        } catch (Exception ignored) {
+            return false;
+        }
+        return false;
+    }
+
+    private boolean isRateOrQuotaFailure(String errorCode, String message) {
+        String code = errorCode == null ? "" : errorCode.toLowerCase();
+        String msg = message == null ? "" : message.toLowerCase();
+
+        return code.contains("quota")
+                || code.contains("rate")
+                || code.contains("429")
+                || msg.contains("quota")
+                || msg.contains("rate limit")
+                || msg.contains("too many requests")
+                || msg.contains("per 86400s")
+                || msg.contains("userbymodelbyday")
+                || msg.contains("rate limit exceeded");
     }
 
     private void populateAiResponseFromRawContent(StandardResponse response, String rawContent) {
@@ -778,7 +830,26 @@ public class ApiSpringController {
                     logger.info("✅ Successfully processed JSON object content from provider: {} - returning as data field", provider);
                     return;
                 }
-                
+
+                // Content is a JSON array (List) - wrap in {menu:[...]} structure
+                if (contentObj instanceof java.util.List) {
+                    try {
+                        @SuppressWarnings("unchecked")
+                        java.util.List<Object> contentList = (java.util.List<Object>) contentObj;
+                        Map<String, Object> wrappedData = new java.util.HashMap<>();
+                        wrappedData.put("menu", contentList);
+                        response.set("code", 200);
+                        response.set("success", true);
+                        response.set("data", wrappedData);
+                        response.set("provider", provider);
+                        response.set("message", "Thành công");
+                        logger.info("✅ AI returned JSON array from provider: {} - wrapped as {{menu:[]}} structure", provider);
+                        return;
+                    } catch (Exception listEx) {
+                        logger.warn("Failed to wrap List content from provider {}: {}", provider, listEx.getMessage());
+                    }
+                }
+
                 // Content is string - try to parse it
                 String contentStr = contentObj.toString();
                 logger.info("🔍 Processing string content from provider: {}, length: {} chars", provider, contentStr.length());
@@ -1201,16 +1272,31 @@ public class ApiSpringController {
         if (jsonStr == null || jsonStr.trim().isEmpty()) {
             return null;
         }
-        
+
         try {
             @SuppressWarnings("unchecked")
             Map<String, Object> result = objectMapper.readValue(jsonStr, Map.class);
             logger.info("[{}] ✅ Successfully parsed JSON (keys: {})", provider, result.keySet());
             return result;
         } catch (JsonProcessingException e) {
-            logger.debug("[{}] Failed to parse JSON: {}. First 200 chars: {}", 
-                provider, e.getMessage(), 
+            logger.debug("[{}] Failed to parse JSON as Map: {}. First 200 chars: {}",
+                provider, e.getMessage(),
                 jsonStr.substring(0, Math.min(200, jsonStr.length())));
+
+            // Try parsing as a JSON array -> wrap in {menu:[...]}
+            String trimmed = jsonStr.trim();
+            if (trimmed.startsWith("[")) {
+                try {
+                    @SuppressWarnings("unchecked")
+                    java.util.List<Object> list = objectMapper.readValue(trimmed, java.util.List.class);
+                    Map<String, Object> wrapped = new java.util.HashMap<>();
+                    wrapped.put("menu", list);
+                    logger.info("[{}] ✅ Parsed JSON array and wrapped as {{menu:[]}} (size: {})", provider, list.size());
+                    return wrapped;
+                } catch (JsonProcessingException ea) {
+                    logger.debug("[{}] Array parse failed: {}", provider, ea.getMessage());
+                }
+            }
 
             String normalized = normalizeJsonString(jsonStr);
             if (!normalized.equals(jsonStr)) {

@@ -1,11 +1,16 @@
 package net.phanmemmottrieu.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -41,6 +46,9 @@ public class GitHubModelsService {
 
   @Value("${github.models.model:gpt-4o-mini}")
   private String model;
+
+  @Value("${github.models.models:}")
+  private String models;
 
   @Value("${github.models.max-output-tokens:8192}")
   private int maxOutputTokens;
@@ -84,10 +92,20 @@ public class GitHubModelsService {
   @Value("${github.models.tpm-limit:38000}")
   private int tpmLimit;
 
+  @Value("${github.models.temperature.direct:0.2}")
+  private double directTemperature;
+
+  @Value("${github.models.temperature.chunk-summary:0.1}")
+  private double chunkSummaryTemperature;
+
+  @Value("${github.models.temperature.merge:0.2}")
+  private double mergeTemperature;
+
   private final Semaphore requestSemaphore = new Semaphore(1, true);
   private volatile long lastRequestAtMs = 0L;
   private volatile long currentWindowStartMs = 0L;
   private volatile int currentWindowEstimatedTokens = 0;
+  private final AtomicInteger modelCursor = new AtomicInteger(0);
 
   @Value("${github.models.token:}")
   private String token;
@@ -130,7 +148,8 @@ public class GitHubModelsService {
             "GITHUB_DIRECT_PROMPT_TOO_LARGE");
       }
       emitProgress(progressListener, progressPayload("direct_call", "Đang gửi yêu cầu trực tiếp tới GitHub Models", 0, 1, null));
-      String rawBody = callChatCompletion(prompt, maxOutputTokens, 0.7, progressListener, progressPayload("direct_call", "Đang chờ phản hồi từ GitHub Models", 1, 1, null));
+        String rawBody = callChatCompletion(prompt, maxOutputTokens, directTemperature, progressListener,
+          progressPayload("direct_call", "Đang chờ phản hồi từ GitHub Models", 1, 1, null));
       if (rawBody == null || rawBody.trim().isEmpty()) {
         return createErrorJson("GitHub Models trả về response rỗng", "GITHUB_EMPTY_RESPONSE");
       }
@@ -168,7 +187,7 @@ public class GitHubModelsService {
         extra.put("phase", "chunk-summary");
         emitProgress(progressListener, progressPayload("chunking", "Đang phân tích từng phần của prompt", idx - 1, chunks.size(), extra));
         String chunkPrompt = buildChunkSummaryPrompt(idx, chunks.size(), chunk);
-        String chunkRaw = callChatCompletion(chunkPrompt, chunkSummaryMaxTokens, 0.2, progressListener,
+        String chunkRaw = callChatCompletion(chunkPrompt, chunkSummaryMaxTokens, chunkSummaryTemperature, progressListener,
             progressPayload("chunking", "Đang xử lý chunk " + idx + "/" + chunks.size(), idx, chunks.size(), extra));
         if (chunkRaw == null || chunkRaw.isBlank()) {
           return createErrorJson("Chunk " + idx + " trả về rỗng", "GITHUB_CHUNK_EMPTY_RESPONSE");
@@ -185,7 +204,7 @@ public class GitHubModelsService {
       List<String> reducedSummaries = reduceSummaries(chunkSummaries, progressListener);
       emitProgress(progressListener, progressPayload("final_merge", "Đang tổng hợp kết quả cuối", 0, 1, null));
       String mergedPrompt = buildMergedPrompt(buildTaskHint(prompt), reducedSummaries);
-      String mergedRaw = callChatCompletion(mergedPrompt, maxOutputTokens, 0.6, progressListener,
+        String mergedRaw = callChatCompletion(mergedPrompt, maxOutputTokens, mergeTemperature, progressListener,
           progressPayload("final_merge", "Đang chờ phản hồi tổng hợp cuối", 1, 1, null));
       if (mergedRaw == null || mergedRaw.isBlank()) {
         return createErrorJson("Tổng hợp chunk trả về rỗng", "GITHUB_MERGE_EMPTY_RESPONSE");
@@ -224,23 +243,51 @@ public class GitHubModelsService {
           "Prompt request quá lớn cho model (" + prompt.length() + ">" + requestMaxChars + " ký tự)");
     }
 
-    HttpHeaders headers = new HttpHeaders();
-    headers.setContentType(MediaType.APPLICATION_JSON);
-    headers.setBearerAuth(token.trim());
+    List<String> candidateModels = resolveCandidateModels();
+    String lastFailure = null;
 
-    Map<String, Object> body = new HashMap<>();
-    body.put("model", model);
-    body.put("messages", List.of(Map.of("role", "user", "content", prompt)));
-    body.put("temperature", temperature);
-    body.put("top_p", 0.95);
-    body.put("max_tokens", maxTokens);
+    for (String candidateModel : candidateModels) {
+      HttpHeaders headers = new HttpHeaders();
+      headers.setContentType(MediaType.APPLICATION_JSON);
+      headers.setBearerAuth(token.trim());
 
-    HttpEntity<Map<String, Object>> request = new HttpEntity<>(body, headers);
-    return executeWithRetry(request, prompt, maxTokens, progressListener, progressMeta);
+      Map<String, Object> body = new HashMap<>();
+      body.put("model", candidateModel);
+      body.put("messages", List.of(Map.of("role", "user", "content", prompt)));
+      body.put("temperature", temperature);
+      body.put("top_p", 0.95);
+      body.put("max_tokens", maxTokens);
+
+      HttpEntity<Map<String, Object>> request = new HttpEntity<>(body, headers);
+      try {
+        return executeWithRetry(request, prompt, maxTokens, progressListener,
+            mergeProgress(progressMeta, Map.of("model", candidateModel)), candidateModel);
+      } catch (HttpClientErrorException.BadRequest badRequest) {
+        if (isUnknownModelError(badRequest)) {
+          String msg = "Model '" + candidateModel + "' không khả dụng hoặc sai tên. Đang thử model tiếp theo.";
+          log.warn(msg);
+          lastFailure = msg;
+          continue;
+        }
+        throw badRequest;
+      } catch (IllegalStateException rateLimitedEx) {
+        String msg = rateLimitedEx.getMessage() == null ? "unknown error" : rateLimitedEx.getMessage();
+        if (msg.contains("rate limit") || msg.contains("quota")) {
+          log.warn("Model '{}' tạm không dùng được ({}). Đang thử model tiếp theo.", candidateModel, msg);
+          lastFailure = msg;
+          continue;
+        }
+        throw rateLimitedEx;
+      }
+    }
+
+    throw new IllegalStateException(lastFailure != null
+        ? "Tất cả GitHub models đều thất bại. Lỗi cuối: " + lastFailure
+        : "Tất cả GitHub models đều thất bại");
   }
 
   private String executeWithRetry(HttpEntity<Map<String, Object>> request, String prompt, int maxTokens,
-      ProgressListener progressListener, Map<String, Object> progressMeta) {
+      ProgressListener progressListener, Map<String, Object> progressMeta, String modelName) {
     int estimatedTokens = estimateTokens(prompt, maxTokens);
     acquirePermit();
     try {
@@ -251,13 +298,19 @@ public class GitHubModelsService {
           ResponseEntity<String> response = restTemplate.postForEntity(apiUrl, request, String.class);
           return response.getBody();
         } catch (HttpClientErrorException.TooManyRequests ex) {
-          long waitMs = computeRetryWaitMs(attempt);
-          log.warn("GitHub Models 429 rate limit (attempt {}/{}). Waiting {} ms before retry.",
-              attempt, retryMaxAttempts, waitMs);
+          if (isDailyQuotaExceeded(ex)) {
+            String msg = "GitHub Models daily quota reached for model '" + modelName + "'";
+            log.warn(msg);
+            throw new IllegalStateException(msg);
+          }
+          long waitMs = computeRetryWaitMs(attempt, ex);
+          log.warn("GitHub Models 429 rate limit for model '{}' (attempt {}/{}). Waiting {} ms before retry.",
+              modelName, attempt, retryMaxAttempts, waitMs);
           emitProgress(progressListener, mergeProgress(progressMeta, Map.of(
               "stage", "waiting_rate_limit",
               "message", "Đang chờ quota GitHub Models",
               "attempt", attempt,
+              "model", modelName,
               "waitingMs", waitMs)));
           sleepQuietly(waitMs);
         } catch (HttpClientErrorException ex) {
@@ -267,7 +320,61 @@ public class GitHubModelsService {
     } finally {
       requestSemaphore.release();
     }
-    throw new IllegalStateException("GitHub Models rate limit exceeded after retries");
+    throw new IllegalStateException("GitHub Models rate limit exceeded after retries for model '" + modelName + "'");
+  }
+
+  private List<String> resolveCandidateModels() {
+    Set<String> ordered = new LinkedHashSet<>();
+    String primary = model == null ? "" : model.trim();
+    if (!primary.isEmpty()) {
+      ordered.add(primary);
+    }
+
+    if (models != null && !models.isBlank()) {
+      String[] parts = models.split(",");
+      for (String part : parts) {
+        String candidate = part == null ? "" : part.trim();
+        if (!candidate.isEmpty()) {
+          ordered.add(candidate);
+        }
+      }
+    }
+
+    if (ordered.isEmpty()) {
+      ordered.add("gpt-4o-mini");
+    }
+
+    List<String> list = new ArrayList<>(ordered);
+    if (list.size() <= 1) {
+      return list;
+    }
+
+    int start = Math.floorMod(modelCursor.getAndIncrement(), list.size());
+    List<String> rotated = new ArrayList<>(list.size());
+    for (int i = 0; i < list.size(); i++) {
+      rotated.add(list.get((start + i) % list.size()));
+    }
+    return rotated;
+  }
+
+  private boolean isUnknownModelError(HttpClientErrorException.BadRequest ex) {
+    String body = ex.getResponseBodyAsString();
+    if (body == null || body.isBlank()) {
+      return false;
+    }
+    String normalized = body.toLowerCase();
+    return normalized.contains("unknown_model") || normalized.contains("unknown model");
+  }
+
+  private boolean isDailyQuotaExceeded(HttpClientErrorException.TooManyRequests ex) {
+    String body = ex.getResponseBodyAsString();
+    if (body == null || body.isBlank()) {
+      return false;
+    }
+    String normalized = body.toLowerCase();
+    return normalized.contains("userbymodelbyday")
+        || normalized.contains("per 86400s")
+        || normalized.contains("daily");
   }
 
   private void acquirePermit() {
@@ -318,6 +425,52 @@ public class GitHubModelsService {
     return Math.min(240000L, base * factor);
   }
 
+  private long computeRetryWaitMs(int attempt, HttpClientErrorException.TooManyRequests ex) {
+    long exponentialWaitMs = computeRetryWaitMs(attempt);
+    long headerSuggestedMs = extractRetryAfterMs(ex);
+    if (headerSuggestedMs <= 0L) {
+      return exponentialWaitMs;
+    }
+    return Math.max(exponentialWaitMs, headerSuggestedMs);
+  }
+
+  private long extractRetryAfterMs(HttpClientErrorException.TooManyRequests ex) {
+    try {
+      HttpHeaders headers = ex.getResponseHeaders();
+      if (headers == null) {
+        return 0L;
+      }
+
+      String retryAfterMsHeader = headers.getFirst("x-ms-retry-after-ms");
+      if (retryAfterMsHeader != null && !retryAfterMsHeader.isBlank()) {
+        long ms = Long.parseLong(retryAfterMsHeader.trim());
+        return Math.max(0L, ms + 1000L);
+      }
+
+      String retryAfterHeader = headers.getFirst("Retry-After");
+      if (retryAfterHeader != null && !retryAfterHeader.isBlank()) {
+        String value = retryAfterHeader.trim();
+        if (value.matches("^\\d+$")) {
+          return Math.max(0L, (Long.parseLong(value) * 1000L) + 1000L);
+        }
+
+        ZonedDateTime retryAt = ZonedDateTime.parse(value, DateTimeFormatter.RFC_1123_DATE_TIME);
+        long waitMs = retryAt.toInstant().toEpochMilli() - System.currentTimeMillis();
+        return Math.max(0L, waitMs + 1000L);
+      }
+
+      String resetEpochHeader = headers.getFirst("x-ratelimit-reset");
+      if (resetEpochHeader != null && !resetEpochHeader.isBlank() && resetEpochHeader.matches("^\\d+$")) {
+        long resetMs = Long.parseLong(resetEpochHeader.trim()) * 1000L;
+        long waitMs = resetMs - System.currentTimeMillis();
+        return Math.max(0L, waitMs + 1000L);
+      }
+    } catch (Exception headerParseEx) {
+      log.debug("Unable to parse retry-after headers from GitHub Models 429: {}", headerParseEx.getMessage());
+    }
+    return 0L;
+  }
+
   private void sleepQuietly(long ms) {
     long wait = Math.max(0L, ms);
     if (wait == 0L) {
@@ -355,7 +508,7 @@ public class GitHubModelsService {
     return "Bạn là bộ nén ngữ cảnh chính xác cho tác vụ AI.\\n"
         + "Mục tiêu: trích xuất thông tin cốt lõi từ CHUNK để phục vụ trả lời yêu cầu cuối.\\n"
         + "Yêu cầu output: chỉ trả về JSON hợp lệ, không markdown.\\n"
-      + "Giữ output NGẮN GỌN (<= 1200 ký tự).\\n"
+        + "Không tự giới hạn độ dài một cách máy móc; ưu tiên đầy đủ nghiệp vụ, schema và ràng buộc quan trọng.\\n"
         + "Schema JSON: {\\n"
         + "  \"chunkIndex\": " + index + ",\\n"
         + "  \"totalChunks\": " + total + ",\\n"
@@ -380,9 +533,10 @@ public class GitHubModelsService {
     sb.append("=== MO TA NHIEM VU (RUT GON) ===\\n");
     sb.append(taskHint);
     sb.append("\\n\\n=== TOM TAT CAC CHUNK ===\\n");
+    int perChunkSummaryCap = Math.max(2600, Math.min(8000, Math.max(3000, requestMaxChars / 3)));
     for (int i = 0; i < chunkSummaries.size(); i++) {
       sb.append("[CHUNK ").append(i + 1).append("]\\n");
-      sb.append(trimToMax(chunkSummaries.get(i), 1400)).append("\\n\\n");
+      sb.append(trimToMax(chunkSummaries.get(i), perChunkSummaryCap)).append("\\n\\n");
     }
     return trimToMax(sb.toString(), requestMaxChars - 500);
   }
@@ -391,17 +545,18 @@ public class GitHubModelsService {
     List<String> current = new ArrayList<>(summaries);
     int level = 1;
 
-    while (current.size() > 1 && totalLength(current) > Math.max(4000, requestMaxChars - 6000)) {
+    while (current.size() > 1 && totalLength(current) > Math.max(8000, requestMaxChars - 3000)) {
       List<String> next = new ArrayList<>();
       List<String> batch = new ArrayList<>();
       int batchChars = 0;
-      int maxBatchChars = Math.max(6000, requestMaxChars - 9000);
+      int maxBatchChars = Math.max(10000, requestMaxChars - 4000);
       int maxBatchItems = Math.max(2, mergeBatchSize);
       int completedBatches = 0;
       int estimatedBatchTotal = Math.max(1, (int) Math.ceil((double) current.size() / maxBatchItems));
+      int perItemSummaryCap = Math.max(2600, Math.min(8000, Math.max(3000, requestMaxChars / 3)));
 
       for (String item : current) {
-        String safeItem = trimToMax(item, 1800);
+        String safeItem = trimToMax(item, perItemSummaryCap);
         int itemLen = safeItem.length();
         boolean wouldOverflowChars = batchChars + itemLen > maxBatchChars;
         boolean wouldOverflowItems = batch.size() >= maxBatchItems;
@@ -436,7 +591,7 @@ public class GitHubModelsService {
 
   private String mergeSummaryBatch(List<String> batch, int level, ProgressListener progressListener, int batchIndex, int batchTotal) {
     String prompt = buildSummaryMergePrompt(batch, level);
-    String raw = callChatCompletion(prompt, chunkSummaryMaxTokens, 0.2, progressListener,
+    String raw = callChatCompletion(prompt, chunkSummaryMaxTokens, chunkSummaryTemperature, progressListener,
         progressPayload("reducing", "Đang gộp summary level " + level + " (" + batchIndex + "/" + batchTotal + ")",
             batchIndex, batchTotal, Map.of("level", level)));
     if (raw == null || raw.isBlank()) {
@@ -446,17 +601,19 @@ public class GitHubModelsService {
     if (content == null || content.isBlank()) {
       throw new IllegalStateException("Không trích xuất được merge summary ở level " + level);
     }
-    return trimToMax(content.trim(), 1800);
+    int mergeResultCap = Math.max(2600, Math.min(9000, Math.max(3500, requestMaxChars / 2)));
+    return trimToMax(content.trim(), mergeResultCap);
   }
 
   private String buildSummaryMergePrompt(List<String> batch, int level) {
     StringBuilder sb = new StringBuilder();
     sb.append("Bạn hãy gộp các summary thành 1 summary ngắn gọn, không mất ràng buộc quan trọng.\\n");
-    sb.append("Output chỉ JSON hợp lệ, tối đa 1200 ký tự.\\n");
+    sb.append("Output chỉ JSON hợp lệ; ưu tiên giữ đủ các facts/constraints/fields quan trọng.\\n");
     sb.append("Schema: {\"level\":").append(level).append(",\"facts\":[],\"constraints\":[],\"fields\":[]}\\n");
     sb.append("=== INPUT SUMMARIES ===\\n");
+    int perSummaryCap = Math.max(2600, Math.min(8000, Math.max(3000, requestMaxChars / 3)));
     for (int i = 0; i < batch.size(); i++) {
-      sb.append("[S").append(i + 1).append("] ").append(trimToMax(batch.get(i), 1800)).append("\\n");
+      sb.append("[S").append(i + 1).append("] ").append(trimToMax(batch.get(i), perSummaryCap)).append("\\n");
     }
     return trimToMax(sb.toString(), requestMaxChars - 500);
   }
@@ -486,7 +643,21 @@ public class GitHubModelsService {
     if (maxChars <= 0 || text.length() <= maxChars) {
       return text;
     }
-    return text.substring(0, maxChars);
+
+    int markerLen = 30;
+    if (maxChars <= markerLen + 10) {
+      return text.substring(0, maxChars);
+    }
+
+    int keepHead = Math.max(1, (int) Math.floor(maxChars * 0.65));
+    int keepTail = Math.max(1, maxChars - keepHead - markerLen);
+    if (keepHead + keepTail + markerLen > maxChars) {
+      keepTail = Math.max(1, maxChars - keepHead - markerLen);
+    }
+
+    String head = text.substring(0, keepHead).trim();
+    String tail = text.substring(Math.max(0, text.length() - keepTail)).trim();
+    return head + "\\n...[TRUNCATED_FOR_BUDGET]...\\n" + tail;
   }
 
   private String extractContentSafely(String rawBody) {
