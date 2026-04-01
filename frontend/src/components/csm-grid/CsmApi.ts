@@ -362,6 +362,7 @@ export async function getChatHistory(room: string, limit: number = 50): Promise<
 			.post("chat-history", {
 				json: { room, limit },
 				ignoreLoading: true,
+				retry: 0,
 			})
 			.json();
 	} catch (error: any) {
@@ -385,6 +386,7 @@ export async function getChatHistoryWithAppId(
 			.post("chat-history", {
 				json: { room, appId, app_id: appId, limit },
 				ignoreLoading: true,
+				retry: 0,
 			})
 			.json();
 	} catch (error: any) {
@@ -424,6 +426,7 @@ export async function getChatHistoryGuest(
 					limit,
 				},
 				ignoreLoading: true,
+				retry: 0,
 			})
 			.json();
 	} catch (error: any) {
@@ -449,6 +452,7 @@ export async function getChatHistoryApp(appId: string, limit: number = 200): Pro
 			.post("chat-history-app", {
 				json: { appId, limit },
 				ignoreLoading: true,
+				retry: 0,
 			})
 			.json();
 	} catch (error: any) {
@@ -473,6 +477,7 @@ export async function getChatGuestsList(appId: string): Promise<GoogleIndexRespo
 			.post("chat-guests-list", {
 				json: { appId },
 				ignoreLoading: true,
+				retry: 0,
 			})
 			.json();
 	} catch (error: any) {
@@ -504,6 +509,7 @@ export async function markChatAsReadGuest(appId: string, guestPhone: string): Pr
 					guestPhone: looksLikePhone ? trimmedIdentity : undefined,
 				},
 				ignoreLoading: true,
+				retry: 0,
 			})
 			.json();
 	} catch (error: any) {
@@ -529,6 +535,7 @@ export async function markChatAsReadAll(room: string, userId: string): Promise<G
 			.post("chat-mark-all-read", {
 				json: { room, userId },
 				ignoreLoading: true,
+				retry: 0,
 			})
 			.json();
 	} catch (error: any) {

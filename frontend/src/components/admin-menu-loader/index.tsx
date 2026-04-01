@@ -70,7 +70,11 @@ function SystemContent({ menu }: { menu: MenuConfig }) {
  * Report content placeholder
  */
 function ReportContent({ menu, appId, decrypt }: { menu: MenuConfig; appId?: string; decrypt?: (s: string) => string }) {
-	return <CsmReport m_configs={menu as any} appId={appId} decrypt={decrypt} />;
+	return (
+		<div className="h-full w-full min-h-0 min-w-0 overflow-hidden">
+			<CsmReport m_configs={menu as any} appId={appId} decrypt={decrypt} />
+		</div>
+	);
 }
 
 /**
@@ -86,21 +90,27 @@ function GridContent({
 	onDataChange,
 }: MenuContentRendererProps) {
 	return (
-		<CsmDynamicGrid
-			appId={appId}
-			m_configs={menu as any}
-			database={database}
-			permissions={permissions}
-			menusPermissions={menusPermissions}
-			menuId={menu.id}
-			decrypt={decrypt}
-			onDataChange={onDataChange}
-		/>
+		<div className="h-full w-full min-h-0 min-w-0 overflow-hidden">
+			<CsmDynamicGrid
+				appId={appId}
+				m_configs={menu as any}
+				database={database}
+				permissions={permissions}
+				menusPermissions={menusPermissions}
+				menuId={menu.id}
+				decrypt={decrypt}
+				onDataChange={onDataChange}
+			/>
+		</div>
 	);
 }
 
 function CrmContent({ menu, appId, database, onDataChange }: MenuContentRendererProps) {
-	return <CsmCrmWorkspace appId={appId} menuData={menu as any} database={database} onDataChange={onDataChange} />;
+	return (
+		<div className="h-full w-full min-h-0 min-w-0 overflow-hidden">
+			<CsmCrmWorkspace appId={appId} menuData={menu as any} database={database} onDataChange={onDataChange} />
+		</div>
+	);
 }
 
 /**

@@ -374,6 +374,19 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
             console.log('📥 [ChatHistory] Sample messages:', msgs.slice(0, 2));
           }
           updateRoomMessages(appId, msgs);
+
+          // Hydrate per-guest rooms directly from app history to reduce extra HTTP calls
+          const perGuest = new Map<string, ChatMessage[]>();
+          msgs.forEach((msg: ChatMessage) => {
+            const guestKey = (msg?.guestSessionId || msg?.guestPhone || '').trim();
+            if (!guestKey) return;
+            const current = perGuest.get(guestKey) || [];
+            current.push(msg);
+            perGuest.set(guestKey, current);
+          });
+          perGuest.forEach((guestMsgs, guestKey) => {
+            updateRoomMessages(guestKey, guestMsgs);
+          });
         } else {
           history = await (window as any).loadAdminChatHistory?.(target.apiRoom, 100, appId) || [];
           const filteredHistory = target.mode === 'admin-system'
@@ -770,6 +783,10 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
     const handleReadUpdate = (data: any) => {
       const { room, userId: readerId, action } = data;
       if (action === 'markAllAsRead' && room) {
+        // Admin side: tránh vòng lặp markAsRead -> read_update -> reload history -> request storm
+        if (chatActor === 'admin') {
+          return;
+        }
         const now = Date.now();
         const lastReloadAt = readUpdateReloadLastRunRef.current[room] || 0;
         if (now - lastReloadAt < READ_UPDATE_RELOAD_THROTTLE_MS) {
@@ -866,18 +883,10 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
               const uniqueGuests = Array.from(new Set(guestsList));
               console.log(`📱 [ChatHistory] Loaded guests list for appId "${appId}":`, uniqueGuests);
               
-              // 3. Load lịch sử chat cho từng guest
+              // 3. Không load lịch sử từng guest hàng loạt để tránh spam chat-history.
+              // Chỉ giữ danh sách định danh guest; lịch sử guest sẽ load lazy khi admin mở cửa sổ chat tương ứng.
               if (uniqueGuests.length > 0) {
-                console.log(`📱 [ChatHistory] Loading history for ${uniqueGuests.length} guests...`);
-                for (const guestIdentityValue of uniqueGuests) {
-                  try {
-                    console.log(`📱 [ChatHistory] Loading history for guest: ${guestIdentityValue}`);
-                    await loadHistoryRef.current?.(guestIdentityValue, guestIdentityValue);
-                  } catch (error) {
-                    console.warn(`Failed to load history for guest ${guestIdentityValue}:`, error);
-                  }
-                }
-                console.log('📱 [ChatHistory] Finished loading all guest histories');
+                console.log(`📱 [ChatHistory] Loaded ${uniqueGuests.length} guest identities (lazy guest history loading enabled)`);
               } else {
                 console.warn('📱 [ChatHistory] No guests found or invalid guests list');
               }
@@ -948,11 +957,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
           .filter((value: string) => !!value);
         const uniqueGuests = Array.from(new Set(guestsList));
 
-        for (const guestIdentityValue of uniqueGuests) {
-          await loadHistoryRef.current?.(guestIdentityValue, guestIdentityValue);
-        }
-
-        console.log(`✅ [ChatHistory] Refreshed ${uniqueGuests.length} guest conversations for appId="${appId}"`);
+        console.log(`✅ [ChatHistory] Refreshed app/system chat and ${uniqueGuests.length} guest identities for appId="${appId}" (guest history lazy)`);
         
         // Recalculate unread counts
         setMessages(prevMessages => {

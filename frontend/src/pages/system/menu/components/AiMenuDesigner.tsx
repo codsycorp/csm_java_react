@@ -603,6 +603,73 @@ ${tableChecklist}
 - Neu thieu thong tin chi tiet cho mot module, van phai tao khung menu/table hop ly cho module do, khong duoc bo qua.
 - Trong notes, liet ke module nao da duoc bao phu de de doi chieu.
 
+## HỌC CẤU TRÚC NESTED CÂY MENU (RẤT QUAN TRỌNG)
+VÍ DỤ: Tổ chức menu lẩu các cấp (KHÔNG phải flat array):
+
+{
+  "menu": [
+    {
+      "id": "dm_category",           ← CẤP 1: NHÓM (type_form=0)
+      "label": "Danh mục",
+      "type_form": 0,
+      "children": [                   ← CHILDREN: CẤP 2
+        {
+          "id": "dm_kh",
+          "parentId": "dm_category",
+          "label": "Khách hàng",
+          "type_form": 1,
+          "table_name": "dm_khachhang",
+          "table": [...fields...]
+          ← KHÔNG có children (là leaf node)
+        },
+        {
+          "id": "bh_dh",
+          "parentId": "dm_category",
+          "label": "Đơn hàng",
+          "type_form": 2,             ← Master-Detail
+          "table_name": "bh_donhang",
+          "table": [...fields...],
+          "children": [               ← CẤP 3: CHILDREN MỘ MASTER
+            {
+              "id": "bh_ct",
+              "parentId": "bh_dh",
+              "label": "Chi tiết đơn",
+              "type_form": 1,
+              "table_name": "bh_donhang_ct",
+              "table": [...fields...]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "bc_reports",             ← CẤP 1 THỨ 2
+      "label": "Báo cáo",
+      "type_form": 0,
+      "children": [
+        {
+          "id": "bc_doanh_thu",
+          "parentId": "bc_reports",
+          "label": "Doanh thu theo tháng",
+          "type_form": 1,
+          "table_name": "tmp_revenue",
+          "report_name": "revenue_monthly",
+          "trigger": { "report_db": "SELECT * FROM tmp_revenue" },
+          "table": [...fields...]
+        }
+      ]
+    }
+  ]
+}
+
+NGUYÊN TẮC:
+1. Root level: Các nhóm (type_form=0) hoặc menu chức năng độc lập
+2. Mỗi menu CÓ CHILDREN phải set "children": [...]
+3. Mỗi menu con PHẢI có "parentId" = id của menu cha
+4. Có thể lồng sâu: cha.children[0].children[1].children [...]
+5. KHÔNG để children rỗng [] - nếu không có con, xóa key "children" luôn
+6. Đối với Master-Detail (type_form=2), children sẽ thành tab trong detail
+
 ## SCHEMA GUARDRAIL (BAT BUOC)
 - CHI dung table field theo format f_*: f_name, f_header, f_types, f_pkid, f_show, f_width, f_dec.
 - KHONG dung field generic: field, label, type, primaryKey, required, editable.
@@ -640,7 +707,9 @@ ${tableChecklist}
 - Neu yeu cau nghiep vu co ket noi master-detail, bao cao, combo phu thuoc: phai tao du trigger va f_cbo_query tuong ung.
 - Menu type 1/2/6 KHONG can path dieu huong. Neu AI tao path cho cac type nay, hay de rong hoac bo qua.
 - CRM/quan ly cong viec phai thiet ke bang nhieu menu nho: type 1/2/3/4/6 va report, khong dung workspace tong hop.
-- Type 6 (Kanban Board): uu tien co kanban_config hop le (JSON object), table_name, id/status/title fields theo config.
+- Type 6 (Kanban Board): BAT BUOC co kanban_config + table_name + table fields khop voi config.
+  Toi thieu phai co pkField/titleField/stageField trong ca kanban_config va table.
+  Neu nghiep vu co nguoi phu trach/do uu tien/han xu ly/mo ta thi bo sung assigneeField/priorityField/dueDateField/descriptionField tuong ung.
 - Neu yeu cau la bao cao/dashboard tong hop cua he thong, uu tien su dung report_name + trigger.report_db + cac field loc trong table de runtime CsmReport tu render.
 - KHONG tu tao path/URL co dinh kieu crm/reports/dashboard, reports/dashboard, /dashboard cho menu report noi bo.
 - Chi dung dynamic_link_url khi thuc su can dieu huong sang mot URL/route ben ngoai co san.
@@ -812,7 +881,9 @@ ${isSampleBase ? previousMenuContextFull : previousMenuContext}
 - Neu refine tu menu cu: giu id/menu_id/path/menu cha-con toi da, chi thay doi phan duoc yeu cau.
 - Menu type 1/2/6 KHONG can path dieu huong. Neu co path o cac type nay, hay loai bo.
 - CRM/quan ly cong viec phai doi thanh cac menu nho bang type 1/2/3/4/6 va report.
-- Type 6 (Kanban Board) can uu tien kanban_config chuyen biet.
+- Type 6 (Kanban Board) BAT BUOC co bo field theo nghiep vu:
+  + Toi thieu: pkField/titleField/stageField
+  + Theo nghiep vu: assigneeField (nguoi phu trach), priorityField (do uu tien), dueDateField (han xu ly), descriptionField (mo ta)
 - Neu menu mang tinh chat bao cao/dashboard tong hop thi uu tien report_name + trigger.report_db thay vi path crm/reports/dashboard.
 - Neu AI xuat menu ten Dashboard/Bao cao tong hop/KPI ma lai khong co report_name hoac auto_code_name thi phai tu sua lai truoc khi tra ket qua.
 - KHONG tu them module/tinh nang khong co trong yeu cau goc + yeu cau bo sung.
@@ -826,6 +897,7 @@ ${isSampleBase ? previousMenuContextFull : previousMenuContext}
 - Khong co menu type_form=0 dang la node la.
 - Khong co menu report noi bo bi doi sang dynamic_link_url.
 - Cac field tien te/ngan sach da dung f_types="price".
+- CẤU TRÚC MENU PHẢI NESTED (HỌC LẠI NẾU CẦN): Không để children rỗng []. Nếu menu có con, set "children" với array các menu con. Mỗi menu con phải có "parentId" = id cha.
 
 ## OUTPUT SHAPE (SCHEMA)
 - Moi menu item uu tien co day du key: id, label, trigger, m_icons, field_root, report_name,
@@ -1054,6 +1126,70 @@ function normalizeNodeByTypeForm(node: any, typeForm: number): void {
 }
 
 const KANBAN_STAGE_COLORS = ["blue", "orange", "green", "red", "purple", "cyan", "gold"];
+const KANBAN_PRIORITY_OPTIONS = ["low", "medium", "high", "urgent"];
+const KANBAN_FIELD_ROLE_CANDIDATES: Record<string, string[]> = {
+  pkField: ["id", "task_id", "ticket_id", "job_id", "code"],
+  titleField: ["title", "name", "task_name", "subject", "ten_cv", "ten_cong_viec"],
+  stageField: ["status", "stage", "state", "trang_thai"],
+  descriptionField: ["description", "note", "notes", "mo_ta", "dien_giai"],
+  assigneeField: ["owner_id", "assignee_id", "assigned_to", "staff_id", "user_id", "nguoi_phu_trach"],
+  priorityField: ["priority", "muc_do", "do_uu_tien", "level"],
+  dueDateField: ["due_at", "due_date", "deadline", "han_xu_ly", "ngay_hen"],
+};
+
+function resolveExistingFieldNameByCandidates(fields: any[], candidates: string[]): string | undefined {
+  const list = Array.isArray(fields) ? fields : [];
+  for (const candidate of candidates) {
+    const hit = list.find((field) => String(field?.f_name || "").trim().toLowerCase() === candidate.toLowerCase());
+    if (hit?.f_name) return String(hit.f_name);
+  }
+  return undefined;
+}
+
+function buildKanbanFieldStub(fieldName: string, role: string): any {
+  const isStage = role === "stageField";
+  const isPriority = role === "priorityField";
+  const isDueDate = role === "dueDateField";
+  const fTypes = isStage || isPriority ? "co" : (isDueDate ? "date" : "ed");
+  const headerMap: Record<string, string> = {
+    pkField: "ID",
+    titleField: "Tiêu đề",
+    stageField: "Trạng thái",
+    descriptionField: "Mô tả",
+    assigneeField: "Người phụ trách",
+    priorityField: "Độ ưu tiên",
+    dueDateField: "Hạn xử lý",
+  };
+
+  const stub: any = {
+    f_name: fieldName,
+    f_header: headerMap[role] || fieldName,
+    f_types: fTypes,
+    f_pkid: role === "pkField" ? 1 : 0,
+    f_show: 1,
+    f_width: role === "descriptionField" ? "240" : "150",
+  };
+
+  if (isStage) {
+    stub.f_cbo_query = JSON.stringify({
+      query: [],
+      options: [
+        { ma: "todo", ten: "Chưa xử lý" },
+        { ma: "in_progress", ten: "Đang xử lý" },
+        { ma: "done", ten: "Hoàn thành" },
+      ],
+    });
+  }
+
+  if (isPriority) {
+    stub.f_cbo_query = JSON.stringify({
+      query: [],
+      options: KANBAN_PRIORITY_OPTIONS.map((value) => ({ ma: value, ten: value })),
+    });
+  }
+
+  return stub;
+}
 
 function normalizeKanbanConfig(raw: any): any {
   if (!raw || typeof raw !== "object") return raw ?? {};
@@ -1085,6 +1221,57 @@ function normalizeKanbanConfig(raw: any): any {
   }
 
   return normalized;
+}
+
+function ensureKanbanSchemaCompleteness(node: any): void {
+  if (!node || Number(node?.type_form || 0) !== 6) return;
+
+  const tableFields: any[] = Array.isArray(node.table) ? [...node.table] : [];
+  const config = normalizeKanbanConfig(node.kanban_config && typeof node.kanban_config === "object" ? node.kanban_config : {});
+
+  if (!config.tableName && node.table_name) config.tableName = node.table_name;
+
+  const ensureConfigField = (role: keyof typeof KANBAN_FIELD_ROLE_CANDIDATES, fallback: string) => {
+    const configured = String(config[role] || "").trim();
+    if (configured) return configured;
+
+    const fromTable = resolveExistingFieldNameByCandidates(tableFields, KANBAN_FIELD_ROLE_CANDIDATES[role]);
+    const resolved = fromTable || fallback;
+    config[role] = resolved;
+    return resolved;
+  };
+
+  const fieldRoles: Array<{ role: keyof typeof KANBAN_FIELD_ROLE_CANDIDATES; fallback: string; required: boolean }> = [
+    { role: "pkField", fallback: "id", required: true },
+    { role: "titleField", fallback: "title", required: true },
+    { role: "stageField", fallback: "status", required: true },
+    { role: "descriptionField", fallback: "description", required: false },
+    { role: "assigneeField", fallback: "owner_id", required: false },
+    { role: "priorityField", fallback: "priority", required: false },
+    { role: "dueDateField", fallback: "due_at", required: false },
+  ];
+
+  fieldRoles.forEach(({ role, fallback, required }) => {
+    const configured = String(config[role] || "").trim();
+    const resolved = configured || ensureConfigField(role, fallback);
+    if (!resolved) return;
+
+    const hasField = tableFields.some((field) => String(field?.f_name || "").trim().toLowerCase() === resolved.toLowerCase());
+    if (!hasField && (required || configured)) {
+      tableFields.push(buildKanbanFieldStub(resolved, role));
+    }
+  });
+
+  if (!Array.isArray(config.stages) || config.stages.length === 0) {
+    config.stages = [
+      { id: "todo", label: "Chưa xử lý", color: KANBAN_STAGE_COLORS[0] },
+      { id: "in_progress", label: "Đang xử lý", color: KANBAN_STAGE_COLORS[1] },
+      { id: "done", label: "Hoàn thành", color: KANBAN_STAGE_COLORS[2] },
+    ];
+  }
+
+  node.kanban_config = config;
+  node.table = tableFields;
 }
 
 function normalizeAiMenuNode(input: any): MenuItemType {
@@ -1133,6 +1320,10 @@ function normalizeAiMenuNode(input: any): MenuItemType {
     if (!normalized.kanban_config.tableName && normalized.table_name) {
       normalized.kanban_config.tableName = normalized.table_name;
     }
+  }
+
+  if (resolvedTypeForm === 6) {
+    ensureKanbanSchemaCompleteness(normalized);
   }
 
   normalizeNodeByTypeForm(normalized, resolvedTypeForm);
@@ -1711,6 +1902,40 @@ function validateMenusForApply(menus: MenuItemType[]): MenuValidationIssue[] {
         });
       }
 
+      if (typeForm === 6) {
+        const cfg = ((node as any).kanban_config && typeof (node as any).kanban_config === "object")
+          ? (node as any).kanban_config
+          : {};
+        const fieldNames = new Set(fields.map((f: any) => String(f?.f_name || "").trim().toLowerCase()).filter(Boolean));
+        const requiredRoles: Array<{ key: string; label: string }> = [
+          { key: "pkField", label: "pkField" },
+          { key: "titleField", label: "titleField" },
+          { key: "stageField", label: "stageField" },
+        ];
+
+        requiredRoles.forEach(({ key, label }) => {
+          const value = String(cfg?.[key] || "").trim();
+          if (!value) {
+            issues.push({
+              severity: "warning",
+              rule: "kanban_core_field_missing_in_config",
+              path,
+              message: `Kanban config thiếu ${label}.`,
+            });
+            return;
+          }
+
+          if (!fieldNames.has(value.toLowerCase())) {
+            issues.push({
+              severity: "error",
+              rule: "kanban_core_field_missing_in_table",
+              path,
+              message: `Kanban config tham chiếu ${label}='${value}' nhưng table chưa có field tương ứng.`,
+            });
+          }
+        });
+      }
+
       if ((typeForm === 1 || typeForm === 2 || typeForm === 6) && String((node as any).path || "").trim()) {
         issues.push({
           severity: "warning",
@@ -1800,6 +2025,7 @@ function detectSevereAiOutputIssues(menus: MenuItemType[], requestText: string):
   const allNodes = flattenMenuNodes(Array.isArray(menus) ? menus : [], 500);
   const functionalNodes = allNodes.filter((node) => Number((node as any).type_form || 0) !== 0);
   const normalizeText = (v: any) => String(v || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const requestNorm = normalizeText(requestText || "");
   const nodeSignals = functionalNodes.map((node) => {
     const label = (node as any).label || (node as any).label_vi || (node as any).name || "";
     const tableName = (node as any).table_name || "";
@@ -1860,6 +2086,43 @@ function detectSevereAiOutputIssues(menus: MenuItemType[], requestText: string):
       if (!fName || fName === "field_unknown" || fName.includes("unknown")) {
         unknownFieldCount += 1;
       }
+    }
+
+    if (typeForm === 6) {
+      const cfg = ((node as any).kanban_config && typeof (node as any).kanban_config === "object")
+        ? (node as any).kanban_config
+        : {};
+      const fieldSet = new Set(fields.map((f: any) => String(f?.f_name || "").trim().toLowerCase()).filter(Boolean));
+      const label = String((node as any).label || (node as any).id || "(unknown)");
+
+      const coreRoles: Array<{ key: string; fallback: string; roleLabel: string }> = [
+        { key: "pkField", fallback: "id", roleLabel: "ID" },
+        { key: "titleField", fallback: "title", roleLabel: "Tiêu đề" },
+        { key: "stageField", fallback: "status", roleLabel: "Trạng thái" },
+      ];
+
+      coreRoles.forEach(({ key, fallback, roleLabel }) => {
+        const fieldName = String(cfg?.[key] || fallback).trim();
+        if (!fieldName || !fieldSet.has(fieldName.toLowerCase())) {
+          issues.push(`Kanban ${label} thieu field loi ${roleLabel} (${fieldName || key}).`);
+        }
+      });
+
+      const optionalByKeyword: Array<{ key: string; fallback: string; roleLabel: string; keywords: string[] }> = [
+        { key: "assigneeField", fallback: "owner_id", roleLabel: "Nguoi phu trach", keywords: ["nguoi phu trach", "phu trach", "assignee", "owner"] },
+        { key: "priorityField", fallback: "priority", roleLabel: "Do uu tien", keywords: ["uu tien", "priority", "muc do", "khan"] },
+        { key: "dueDateField", fallback: "due_at", roleLabel: "Han xu ly", keywords: ["han", "deadline", "due", "qua han", "den han"] },
+        { key: "descriptionField", fallback: "description", roleLabel: "Mo ta", keywords: ["mo ta", "ghi chu", "note", "description"] },
+      ];
+
+      optionalByKeyword.forEach(({ key, fallback, roleLabel, keywords }) => {
+        const neededByBusiness = keywords.some((kw) => requestNorm.includes(kw));
+        if (!neededByBusiness) return;
+        const fieldName = String(cfg?.[key] || fallback).trim();
+        if (!fieldName || !fieldSet.has(fieldName.toLowerCase())) {
+          issues.push(`Kanban ${label} thieu field ${roleLabel} theo nghiep vu (${fieldName || key}).`);
+        }
+      });
     }
   }
 

@@ -5,8 +5,10 @@ import org.springframework.cache.CacheManager;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import net.phanmemmottrieu.service.ChatCleanupService;
 
 import java.lang.management.ManagementFactory;
 import java.lang.management.MemoryMXBean;
@@ -27,6 +29,9 @@ public class MonitoringController {
     
     @Autowired(required = false)
     private CacheManager cacheManager;
+    
+    @Autowired(required = false)
+    private ChatCleanupService chatCleanupService;
 
     /**
      * Health check endpoint
@@ -142,5 +147,34 @@ public class MonitoringController {
         stats.put("thread_states", stateCount);
         
         return ResponseEntity.ok(stats);
+    }
+    
+    /**
+     * Get chat cleanup configuration and stats
+     */
+    @GetMapping("/chat/cleanup/config")
+    public ResponseEntity<Map<String, Object>> getChatCleanupConfig() {
+        if (chatCleanupService == null) {
+            Map<String, Object> result = new HashMap<>();
+            result.put("error", "ChatCleanupService not available");
+            return ResponseEntity.ok(result);
+        }
+        
+        return ResponseEntity.ok(chatCleanupService.getCleanupConfig());
+    }
+    
+    /**
+     * Trigger chat cleanup manually
+     * Useful for testing or manual maintenance
+     */
+    @PostMapping("/chat/cleanup/trigger")
+    public ResponseEntity<Map<String, Object>> triggerChatCleanup() {
+        if (chatCleanupService == null) {
+            Map<String, Object> result = new HashMap<>();
+            result.put("error", "ChatCleanupService not available");
+            return ResponseEntity.ok(result);
+        }
+        
+        return ResponseEntity.ok(chatCleanupService.triggerCleanupNow());
     }
 }

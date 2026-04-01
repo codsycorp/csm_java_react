@@ -1,6 +1,7 @@
 package net.phanmemmottrieu.socket;
 import net.phanmemmottrieu.data.ChatHistoryManager;
-
+import net.phanmemmottrieu.data.ChatActivityTracker;
+import net.phanmemmottrieu.data.ChatRoomManager;
 
 import com.corundumstudio.socketio.SocketIOServer;
 import com.corundumstudio.socketio.SocketIOClient;
@@ -728,6 +729,13 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                 }
             roomSessions.computeIfAbsent(room, r -> new CopyOnWriteArraySet<>()).add(sessionId);
             client.joinRoom(room);
+            
+            // 📍 Record activity when joining room
+            String appId = appIdFromRoom != null ? appIdFromRoom : (sessionAppIds.get(sessionId) != null ? sessionAppIds.get(sessionId) : "csm");
+            ChatRoomManager.addUserToRoom(appId, room, username);
+            ChatActivityTracker.recordRoomActivity(appId, room);
+            ChatActivityTracker.recordUserActivity(appId, username);
+            
             logger.info("🚪 " + username + " joined room " + room + " via join_room");
         });
 
@@ -873,6 +881,15 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                                 
                                 // 2. Database với guest phone tracking (ChatPersistenceService)
                                 chatPersistenceService.saveMessage(data);
+                                
+                                // 📍 Record activity when message is sent
+                                ChatActivityTracker.recordRoomActivity(appId, room);
+                                if (userId != null) {
+                                    ChatActivityTracker.recordUserActivity(appId, userId);
+                                }
+                                if (guestPhone != null && !guestPhone.isEmpty()) {
+                                    ChatActivityTracker.recordUserActivity(appId, guestPhone);
+                                }
                                 
                                 // 🆕 CRM AUTO-TRACKING: Tự động tạo customer khi guest chat
                                 if (guestPhone != null && !guestPhone.isEmpty() && appId != null && !appId.isEmpty()) {

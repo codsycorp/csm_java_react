@@ -193,7 +193,7 @@ export function buildDetailGridSelectEnums(
   fields.forEach((f: any) => {
     const types = (f.f_types || '').toLowerCase();
     const typeTokens = types.split(/[,\s;|]+/).filter(Boolean);
-    const isCombo = typeTokens.includes('co') || /cbo|select/.test(types);
+    const isCombo = typeTokens.includes('co') || typeTokens.includes('coro') || typeTokens.includes('cbo') || /cbo|coro|select/.test(types);
     if (!isCombo) return;
 
     const rawQuery = f.f_cbo_query;

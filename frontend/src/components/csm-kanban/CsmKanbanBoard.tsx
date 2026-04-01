@@ -55,7 +55,7 @@ const { RangePicker } = DatePicker;
 type RowData = Record<string, any>;
 type Granularity = "hour" | "day" | "week" | "month" | "year";
 type BoardView = "kanban" | "timeline" | "report";
-type BoardDatabase = Record<string, { rows: any[]; fieldsPK?: string[] }>;
+type BoardDatabase = Record<string, { rows: any[]; fieldsPK?: string[]; fields?: any[] }>;
 
 export const KANBAN_CONFIG_TEMPLATE = `{
   "tableName": "crm_tasks",
@@ -129,7 +129,7 @@ export interface KanbanConfig {
 export interface CsmKanbanBoardProps {
 	appId?: string;
 	menuData?: Record<string, any>;
-	database?: Record<string, { rows: any[]; fieldsPK?: string[] }>;
+	database?: Record<string, { rows: any[]; fieldsPK?: string[]; fields?: any[] }>;
 	onDataChange?: () => void;
 	config?: KanbanConfig;
 	permissions?: number;
@@ -375,24 +375,173 @@ function buildWhereFromRow(row: RowData, pkFields: string[]) {
 	return where;
 }
 
-function inferFieldTypeFromValue(value: any): string {
-	if (value == null) return "txt";
-	if (typeof value === "number") return "num";
+function inferFieldTypeFromValue(value: any, fieldName?: string): string {
+	const key = String(fieldName || "").toLowerCase();
 	if (typeof value === "boolean") return "ch";
+	if (typeof value === "number") {
+		if (/price|amount|total|cost|budget|revenue|money|gia|tien|tong/.test(key)) return "price";
+		return "nummeric";
+	}
+	if (/status|type|priority|state|trang_thai|loai|muc_do/.test(key)) return "co";
+	if (/date|ngay/.test(key)) return "date";
+	if (/time|gio/.test(key)) return "datetime";
+	if (value == null) return "ed";
 	const text = String(value);
 	if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(text)) return "datetime";
 	if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return "date";
-	return "txt";
+	if (/^-?\d+(\.\d+)?$/.test(text)) return /price|amount|total|cost|budget|revenue|money|gia|tien|tong/.test(key) ? "price" : "nummeric";
+	return "ed";
 }
 
-function toFallbackField(fieldName: string, index: number, sampleRow?: RowData): TableField {
+function isComboFieldType(rawType: any): boolean {
+	return /\bco\b|\bcoro\b|\bcbo\b|select/i.test(String(rawType || ""));
+}
+
+function normalizeSelectOption(option: any): { ma: any; ten: string } {
+	if (option && typeof option === "object" && !Array.isArray(option)) {
+		const ma = option.ma ?? option.value ?? option.id ?? "";
+		const ten = option.ten ?? option.label ?? option.text ?? option.name ?? String(ma || "");
+		return { ma, ten: String(ten) };
+	}
+	return {
+		ma: option,
+		ten: String(option ?? ""),
+	};
+}
+
+function normalizeComboQueryValue(rawValue: any, fieldName: string, fieldType: string): string {
+	if (!isComboFieldType(fieldType)) return String(rawValue ?? "");
+
+	const fallback = JSON.stringify({ options: [], query: [] });
+	if (rawValue == null || rawValue === "") return fallback;
+
+	if (Array.isArray(rawValue)) {
+		return JSON.stringify({
+			options: rawValue.map(normalizeSelectOption),
+			query: [],
+		});
+	}
+
+	if (rawValue && typeof rawValue === "object") {
+		if (Array.isArray(rawValue.options) || Array.isArray(rawValue.query)) {
+			return JSON.stringify({
+				...rawValue,
+				options: Array.isArray(rawValue.options) ? rawValue.options.map(normalizeSelectOption) : [],
+				query: Array.isArray(rawValue.query) ? rawValue.query : [],
+			});
+		}
+
+		if (typeof rawValue.obj_name === "string" && rawValue.obj_name.trim()) {
+			return JSON.stringify({
+				options: [],
+				query: [{
+					obj_name: rawValue.obj_name.trim(),
+					fields: Array.isArray(rawValue.fields) && rawValue.fields.length > 0 ? rawValue.fields : ["id", "name"],
+					obj_where: rawValue.obj_where || { field: "id", type: "like", value: "" },
+					...(rawValue.app_id ? { app_id: rawValue.app_id } : {}),
+				}],
+			});
+		}
+
+		return fallback;
+	}
+
+	const text = String(rawValue || "").trim();
+	if (!text) return fallback;
+
+	if (/^static:/i.test(text)) {
+		const vals = text.slice(7).split(",").map((v) => v.trim()).filter(Boolean);
+		return JSON.stringify({
+			options: vals.map((v) => ({ ma: v, ten: v })),
+			query: [],
+		});
+	}
+
+	if (/^select\s+/i.test(text)) {
+		const m = text.match(/^select\s+(.+?)\s+from\s+([a-z0-9_]+)/i);
+		if (m) {
+			const rawFields = m[1].split(",").map((f) => f.trim().split(/\s+|\./g).pop() || f.trim()).filter(Boolean);
+			return JSON.stringify({
+				options: [],
+				query: [{
+					obj_name: m[2],
+					fields: rawFields.length >= 2 ? [rawFields[0], rawFields[1]] : ["id", "name"],
+					obj_where: { field: "id", type: "like", value: "" },
+				}],
+			});
+		}
+	}
+
+	if (/^[a-z0-9_]+$/i.test(text) && !text.includes("return")) {
+		return JSON.stringify({
+			options: [],
+			query: [{
+				obj_name: text,
+				fields: ["id", "name"],
+				obj_where: { field: "id", type: "like", value: "" },
+			}],
+		});
+	}
+
+	if (text.startsWith("{") || text.startsWith("[")) {
+		try {
+			const parsed = JSON.parse(text);
+			return normalizeComboQueryValue(parsed, fieldName, fieldType);
+		} catch {
+			return text;
+		}
+	}
+
+	return text;
+}
+
+function normalizeSchemaFields(schemaFields: any[]): TableField[] {
+	return (Array.isArray(schemaFields) ? schemaFields : [])
+		.map((field, index) => {
+			const fName = String(field?.f_name || field?.name || field?.field || "").trim();
+			if (!fName) return null;
+			const rawType = String(field?.f_types || field?.type || "").trim();
+			const mappedType = rawType
+				? (/^num$/i.test(rawType) ? "nummeric" : rawType)
+				: inferFieldTypeFromValue(undefined, fName);
+			const normalizedComboQuery = isComboFieldType(mappedType)
+				? normalizeComboQueryValue(field?.f_cbo_query, fName, mappedType)
+				: String(field?.f_cbo_query ?? "");
+
+			return {
+				f_name: fName,
+				f_header: String(field?.f_header || field?.label || field?.title || fName),
+				f_show: Number(field?.f_show ?? 1),
+				f_stt: Number(field?.f_stt ?? index + 1),
+				f_types: mappedType,
+				...(isComboFieldType(mappedType) ? { f_cbo_query: normalizedComboQuery } : {}),
+			} as TableField;
+		})
+		.filter((item): item is TableField => !!item);
+}
+
+function toFallbackField(fieldName: string, index: number, sampleRows: RowData[] = []): TableField {
+	const sampleRow = sampleRows.length > 0 ? sampleRows[0] : undefined;
 	const value = sampleRow ? sampleRow[fieldName] : undefined;
+	const inferredType = inferFieldTypeFromValue(value, fieldName);
+
+	let comboQuery = "";
+	if (isComboFieldType(inferredType)) {
+		const rawOptions = Array.from(new Set(sampleRows
+			.map((row) => row?.[fieldName])
+			.filter((item) => item !== undefined && item !== null && String(item).trim() !== "")))
+			.slice(0, 50)
+			.map((item) => ({ ma: item, ten: String(item) }));
+		comboQuery = normalizeComboQueryValue(rawOptions, fieldName, inferredType);
+	}
+
 	return {
 		f_name: fieldName,
 		f_header: fieldName,
 		f_show: 1,
 		f_stt: index + 1,
-		f_types: inferFieldTypeFromValue(value),
+		f_types: inferredType,
+		...(comboQuery ? { f_cbo_query: comboQuery } : {}),
 	};
 }
 
@@ -471,6 +620,12 @@ export default function CsmKanbanBoard({
 	const fields = useMemo<TableField[]>(() => {
 		if (Array.isArray(menuData?.table) && menuData.table.length > 0) return menuData.table;
 
+		const schemaFields = config.tableName ? database?.[config.tableName]?.fields : undefined;
+		if (Array.isArray(schemaFields) && schemaFields.length > 0) {
+			const normalized = normalizeSchemaFields(schemaFields);
+			if (normalized.length > 0) return normalized;
+		}
+
 		const dbRows = config.tableName && database?.[config.tableName]?.rows
 			? database[config.tableName].rows
 			: [];
@@ -487,11 +642,10 @@ export default function CsmKanbanBoard({
 			config.labelField,
 		].filter((item): item is string => !!item && String(item).trim().length > 0);
 
-		const fallbackNames = preferred.length > 0
-			? Array.from(new Set(preferred))
-			: (sampleRow ? Object.keys(sampleRow).slice(0, 12) : []);
+		const sampleKeys = sampleRow ? Object.keys(sampleRow) : [];
+		const fallbackNames = Array.from(new Set([...preferred, ...sampleKeys])).slice(0, 20);
 
-		return fallbackNames.map((name, index) => toFallbackField(name, index, sampleRow));
+		return fallbackNames.map((name, index) => toFallbackField(name, index, dbRows));
 	}, [
 		config.assigneeField,
 		config.descriptionField,

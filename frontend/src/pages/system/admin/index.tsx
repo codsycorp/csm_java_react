@@ -813,10 +813,22 @@ export default function AdminPage() {
 		/>
 	) : null;
 
+	const adminContentWrapperStyle: React.CSSProperties = {
+		height: "100%",
+		width: "100%",
+		display: "flex",
+		flexDirection: "column",
+		minHeight: 0,
+		minWidth: 0,
+		overflow: "hidden",
+		padding: 16,
+		boxSizing: "border-box",
+	};
+
 	// Render standalone Kanban board (type_form = 6 or kanban_config present)
 	if (typeForm === 6 || (runtimeMenuData as any).kanban_config) {
 		return (
-			<div style={{ height: "100%" }}>
+			<div style={adminContentWrapperStyle}>
 				{mismatchAlertNode}
 				<CsmKanbanBoard
 					appId={effectiveAppId}
@@ -835,7 +847,7 @@ export default function AdminPage() {
 	const hasAutoCodeName = !!(runtimeMenuData as any).auto_code_name || typeForm === 4;
 	if (hasAutoCodeName) {
 		return (
-			<div style={{ padding: 16, height: "100%" }}>
+			<div style={adminContentWrapperStyle}>
 				{mismatchAlertNode}
 				<DynamicCodeMenu menuId={menuId} menuData={runtimeMenuData} />
 			</div>
@@ -845,7 +857,7 @@ export default function AdminPage() {
 	// Render report before grid when both fields exist.
 	if (runtimeMenuData.report_name) {
 		return (
-			<div style={{ padding: 16, height: "100%" }}>
+			<div style={adminContentWrapperStyle}>
 				{mismatchAlertNode}
 				<CsmReport
 					appId={effectiveAppId}
@@ -1061,7 +1073,7 @@ export default function AdminPage() {
 		   const hasNodes = Array.isArray(nodes) && nodes.length > 0;
 		if (Number(m_configs.type_form) === 2 && hasNodes) {
 			return (
-				<div style={{ padding: 16, height: "100%" }}>
+				<div style={adminContentWrapperStyle}>
 					{mismatchAlertNode}
 					<CsmMasterDetail
 						appId={effectiveAppId}
@@ -1079,7 +1091,7 @@ export default function AdminPage() {
 
 		// Otherwise render single grid
 		return (
-			<div style={{ padding: 16, height: "100%" }}>
+			<div style={adminContentWrapperStyle}>
 				{mismatchAlertNode}
 				<CsmDynamicGrid
 					m_configs={m_configs}

@@ -1,6 +1,7 @@
 import { GlobalSpin, Scrollbar } from "#src/components";
 import { removeTrailingSlash } from "#src/router/utils";
 import { usePermissionStore, usePreferencesStore, useTabsStore } from "#src/store";
+import { cn } from "#src/utils";
 import { theme } from "antd";
 import KeepAlive, { useKeepaliveRef } from "keepalive-for-react";
 import { useEffect, useMemo } from "react";
@@ -12,7 +13,7 @@ export default function LayoutContent() {
 	const {
 		token: { colorBgLayout },
 	} = theme.useToken();
-	const { pathname, search } = useLocation();
+	const { pathname } = useLocation();
 	const outlet = useOutlet();
 	const aliveRef = useKeepaliveRef();
 	const isRefresh = useTabsStore(state => state.isRefresh);
@@ -86,25 +87,27 @@ export default function LayoutContent() {
 
 	return (
 		<main
-			className="overflow-y-auto overflow-x-hidden flex-grow"
+			className="flex h-full w-full min-h-0 min-w-0 flex-1 overflow-hidden"
 			style={
 				{
 					backgroundColor: colorBgLayout,
 				}
 			}
 		>
-			<Scrollbar>
-				<GlobalSpin>
+			<Scrollbar className="h-full w-full min-h-0 min-w-0">
+				<GlobalSpin className="h-full w-full min-h-0 min-w-0">
 					<KeepAlive
 						max={20}
 						transition
 						duration={300}
-						cacheNodeClassName={transitionEnable ? `keepalive-${transitionName}` : undefined}
+						cacheNodeClassName={cn("h-full w-full min-h-0 min-w-0", transitionEnable ? `keepalive-${transitionName}` : undefined)}
 						exclude={keepAliveExclude}
 						activeCacheKey={cacheKey}
 						aliveRef={aliveRef}
 					>
-						{outlet}
+						<div className="h-full w-full min-h-0 min-w-0 overflow-hidden">
+							{outlet}
+						</div>
 					</KeepAlive>
 				</GlobalSpin>
 			</Scrollbar>
