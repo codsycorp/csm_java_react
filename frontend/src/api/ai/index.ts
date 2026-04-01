@@ -66,9 +66,99 @@ Dựa vào các dữ liệu đầu vào, hãy viết một bài viết hoàn ch�
 }
 `;
 
-// Allow a longer timeout for AI generation to avoid client-side cancellation
-// Tăng từ 30s -> 120s để AI có đủ thời gian xử lý prompt phức tạp với hình ảnh và đa ngôn ngữ
-export const AI_TIMEOUT_MS = Number(import.meta.env.VITE_AI_TIMEOUT_MS) || 120000;
+// Long-running AI generation can take several minutes with server-side chunk/retry flow.
+// Set VITE_AI_TIMEOUT_MS=0 to disable client timeout for this endpoint.
+const AI_TIMEOUT_ENV = Number(import.meta.env.VITE_AI_TIMEOUT_MS);
+const AI_TIMEOUT_FALLBACK_MS = 30 * 60 * 1000;
+export const AI_TIMEOUT_MS = Number.isFinite(AI_TIMEOUT_ENV) && AI_TIMEOUT_ENV > 0
+	? AI_TIMEOUT_ENV
+	: AI_TIMEOUT_FALLBACK_MS;
+const AI_REQUEST_TIMEOUT: number | false = Number.isFinite(AI_TIMEOUT_ENV) && AI_TIMEOUT_ENV === 0
+	? false
+	: AI_TIMEOUT_MS;
+const AI_ASYNC_THRESHOLD_CHARS = Number(import.meta.env.VITE_AI_ASYNC_THRESHOLD_CHARS) || 200000;
+const AI_ASYNC_POLL_INTERVAL_MS = Number(import.meta.env.VITE_AI_ASYNC_POLL_INTERVAL_MS) || 4000;
+const AI_ASYNC_MAX_WAIT_MS = Number(import.meta.env.VITE_AI_ASYNC_MAX_WAIT_MS) || 45 * 60 * 1000;
+
+export type AiProgressPayload = Record<string, any>;
+
+type GenerateSeoContentOptions = {
+	onProgress?: (progress: AiProgressPayload) => void;
+};
+
+async function generateSeoContentWithPromptAsync(prompt: string, options?: GenerateSeoContentOptions): Promise<ApiResponse<any>> {
+	const submitResponse = await request
+		.post("ai-generate-seo-content", {
+			json: {
+				prompt,
+				mode: "submit",
+				async: true,
+			},
+			timeout: AI_REQUEST_TIMEOUT,
+		})
+		.json<ApiResponse<any>>();
+
+	const submitPayload = (submitResponse?.result || (submitResponse as any)?.data || {}) as Record<string, any>;
+	const jobId = submitPayload?.jobId;
+	if (submitPayload?.progress) {
+		options?.onProgress?.({ jobId, status: submitPayload?.status || "queued", ...submitPayload.progress });
+	}
+	if (!jobId) {
+		return {
+			code: -1,
+			result: {} as any,
+			message: submitResponse?.message || "Không lấy được jobId từ submit async AI",
+			success: false,
+		};
+	}
+
+	const startedAt = Date.now();
+	while (Date.now() - startedAt < AI_ASYNC_MAX_WAIT_MS) {
+		const statusResponse = await request
+			.post("ai-generate-seo-content", {
+				json: {
+					mode: "status",
+					jobId,
+				},
+				timeout: AI_REQUEST_TIMEOUT,
+			})
+			.json<ApiResponse<any>>();
+
+		const statusPayload = (statusResponse?.result || (statusResponse as any)?.data || {}) as Record<string, any>;
+		if (statusPayload?.progress) {
+			options?.onProgress?.({
+				jobId,
+				status: statusPayload?.status,
+				elapsedMs: statusPayload?.elapsedMs,
+				...statusPayload.progress,
+			});
+		}
+
+		const status = String(statusPayload?.status || "").toLowerCase();
+		if (status === "completed" || status === "failed") {
+			const finalResult = statusPayload?.result;
+			if (finalResult && typeof finalResult === "object") {
+				return finalResult as ApiResponse<any>;
+			}
+			return {
+				code: -1,
+				result: {} as any,
+				message: "Async AI job kết thúc nhưng thiếu dữ liệu result",
+				success: false,
+			};
+		}
+
+		const pollAfterMs = Number(statusPayload?.pollAfterMs) || AI_ASYNC_POLL_INTERVAL_MS;
+		await new Promise((resolve) => setTimeout(resolve, Math.max(1000, pollAfterMs)));
+	}
+
+	return {
+		code: -1,
+		result: {} as any,
+		message: "Hết thời gian chờ xử lý async AI",
+		success: false,
+	};
+}
 
 /**
  * Format SEO prompt với các tham số
@@ -128,7 +218,7 @@ export async function generateSeoContent(params: SeoContentParams, customPrompt?
 		const response = await request
 			.post("ai-generate-seo-content", {
 				json: requestBody,
-				timeout: AI_TIMEOUT_MS,
+				timeout: AI_REQUEST_TIMEOUT,
 			})
 			.json<ApiResponse<SeoContentResult>>();
 		
@@ -166,16 +256,20 @@ export async function generateSeoContent(params: SeoContentParams, customPrompt?
  * // result.data có thể chứa thêm keywords, author ngoài 3 trường chuẩn
  * ```
  */
-export async function generateSeoContentWithPrompt(prompt: string) {
+export async function generateSeoContentWithPrompt(prompt: string, options?: GenerateSeoContentOptions) {
 	const requestBody: GenerateSeoContentRequest = {
 		prompt: prompt
 	};
 	
 	try {
+		if (prompt.length >= AI_ASYNC_THRESHOLD_CHARS) {
+			return await generateSeoContentWithPromptAsync(prompt, options);
+		}
+
 		const response = await request
 			.post("ai-generate-seo-content", {
 				json: requestBody,
-				timeout: AI_TIMEOUT_MS,
+				timeout: AI_REQUEST_TIMEOUT,
 			})
 			.json<ApiResponse<any>>(); // any để chấp nhận custom fields
 		

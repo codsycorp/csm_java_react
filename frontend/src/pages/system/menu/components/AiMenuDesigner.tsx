@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Button, Card, Collapse, Divider, Input, message, Radio, Select, Space, Switch, Tag } from "antd";
+import { Alert, Button, Card, Collapse, Divider, Input, Progress, message, Radio, Select, Space, Switch, Tag } from "antd";
 import type { RadioChangeEvent } from "antd";
+import CodeMirror from "@uiw/react-codemirror";
+import { json } from "@codemirror/lang-json";
+import { vscodeDark } from "@uiw/codemirror-theme-vscode";
 import { useTranslation } from "react-i18next";
 
 import type { MenuItemType } from "#src/api/system/menu";
@@ -37,7 +40,72 @@ type MenuValidationIssue = {
   message: string;
 };
 
+type AiProgressState = {
+  jobId?: string;
+  status?: string;
+  stage?: string;
+  message?: string;
+  current?: number;
+  total?: number;
+  percent?: number;
+  elapsedMs?: number;
+  waitingMs?: number;
+  level?: number;
+};
+
 const AI_REQUEST_TABLE = "csm_ai_menu_requests";
+
+function formatDurationMs(value: number | undefined): string {
+  const totalMs = Number(value || 0);
+  if (!Number.isFinite(totalMs) || totalMs <= 0) return "00:00";
+  const totalSeconds = Math.floor(totalMs / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) {
+    return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  }
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+function describeAiProgress(progress: AiProgressState | null): string {
+  if (!progress) return "";
+  if (progress.message) return progress.message;
+  const stage = String(progress.stage || progress.status || "running");
+  switch (stage) {
+    case "queued": return "Đang xếp hàng xử lý AI";
+    case "preparing": return "Đang chuẩn bị yêu cầu AI";
+    case "chunking": return "Đang chia và phân tích từng phần prompt";
+    case "reducing": return "Đang gộp tóm tắt các phần";
+    case "final_merge": return "Đang tổng hợp kết quả cuối";
+    case "waiting_rate_limit": return "Đang chờ quota GitHub Models";
+    case "parsing": return "Đang phân tích kết quả AI";
+    case "completed": return "Đã hoàn tất";
+    case "failed": return "Xử lý thất bại";
+    default: return "Đang xử lý AI";
+  }
+}
+
+function buildAiProgressResultText(progress: AiProgressState | null): string {
+  if (!progress) return "";
+
+  return JSON.stringify({
+    success: progress.status === "completed",
+    status: progress.status || "running",
+    stage: progress.stage || progress.status || "running",
+    message: describeAiProgress(progress),
+    progress: {
+      current: Number(progress.current ?? 0),
+      total: Number(progress.total ?? 1),
+      percent: Number(progress.percent ?? 0),
+      elapsedMs: Number(progress.elapsedMs ?? 0),
+      waitingMs: Number(progress.waitingMs ?? 0),
+      ...(progress.level != null ? { level: Number(progress.level) } : {}),
+      ...(progress.jobId ? { jobId: progress.jobId } : {}),
+    },
+    note: "Live status only. Final JSON menu payload will replace this block when AI completes.",
+  }, null, 2);
+}
 
 const TRIGGER_CODE_TEMPLATES: Record<string, string> = {
   validate_order_debt_limit: `const customerId = data.id_khachhang || data.id_kh || data.khachhang_id;
@@ -605,6 +673,9 @@ function buildRefinementPrompt(
   const refineCore = trimToMax(refineRequest || "", 1600);
   const currentMenuContext = buildCompactMenuContext(referenceMenus, 120);
   const previousMenuContext = buildPreviousResultContext(previousResultJson, 80);
+  const previousMenuContextFull = isSampleBase
+    ? buildFullMenuContextFromJson(previousResultJson)
+    : "";
   const strictScope = scope === "minimal" ? "uu tien type 1/2/6, chi dung 3/4 khi yeu cau ro" : "duoc dung day du type 1/2/3/4/6";
   const typeCatalog = buildMenuTypeCatalog();
   const sampleMenuContext = sampleMenus && sampleMenus.length > 0
@@ -630,7 +701,7 @@ Ban da co ket qua menu lan truoc. Hay cap nhat theo yeu cau moi voi nguyen tac:
 7) KHONG tao lai menu he thong co san (sys_users, sys_menus, phan quyen...) neu khach hang khong yeu cau ro.`;
 
   const previousResultLabel = isSampleBase
-    ? "## MENU MAU DUNG LAM GOC (CHINH SUA/ADAPT THEO YEU CAU MOI)"
+    ? "## MENU MAU DUNG LAM GOC (FULL JSON - UU TIEN CAO NHAT)"
     : "## TOM TAT KET QUA AI LAN TRUOC (COMPACT)";
 
   const prompt = `${enforcerPrompt}
@@ -661,7 +732,7 @@ ${refineCore}
 ${currentMenuContext}
 ${sampleMenuContext ? `\n## MENU MAU THAM KHAO TU CHUONG TRINH KHAC\nDay la menu thuc te da trien khai tu mot chuong trinh khac de ban tham khao cau truc, pattern, va logic nghiep vu:\n${sampleMenuContext}\n` : ""}
 ${previousResultLabel}
-${previousMenuContext}
+${isSampleBase ? previousMenuContextFull : previousMenuContext}
 
 ## SCHEMA GUARDRAIL (BAT BUOC)
 - CHI dung table field theo format f_*: f_name, f_header, f_types, f_pkid, f_show, f_width, f_dec.
@@ -728,7 +799,7 @@ ${previousMenuContext}
 Khong lap lai JSON mau dai. Chi tap trung logic nghiep vu va tra ve JSON menu hoan chinh, dung schema.
 `;
 
-  return trimToMax(prompt, 22000);
+  return isSampleBase ? prompt : trimToMax(prompt, 22000);
 }
 
 function trimToMax(text: string, maxChars: number): string {
@@ -741,12 +812,6 @@ function trimToMax(text: string, maxChars: number): string {
   const head = raw.slice(0, keepHead).trim();
   const tail = raw.slice(Math.max(0, raw.length - keepTail)).trim();
   return `${head}\n...[truncated for token budget]...\n${tail}`;
-}
-
-function estimateTokenCount(text: string): number {
-  const raw = String(text || "");
-  // Practical approximation for mixed Vietnamese/English prompts.
-  return Math.ceil(raw.length / 4);
 }
 
 function mapGenericTypeToFTypes(input: any): string {
@@ -1221,6 +1286,36 @@ function buildPreviousResultContext(previousResultJson: string, maxNodes: number
   }
 }
 
+function buildFullMenuContextFromJson(previousResultJson: string, maxChars?: number): string {
+  const raw = String(previousResultJson || "").trim();
+  if (!raw) return "(khong co menu goc)";
+
+  try {
+    const parsed = JSON.parse(raw);
+    const menuList = Array.isArray(parsed?.menu)
+      ? parsed.menu
+      : Array.isArray(parsed)
+        ? parsed
+        : [];
+
+    if (!Array.isArray(menuList) || menuList.length === 0) {
+      return typeof maxChars === "number" && maxChars > 0 ? trimToMax(raw, maxChars) : raw;
+    }
+
+    const normalized = normalizeMenuList(menuList as MenuItemType[]);
+    const payload = {
+      menu: normalized,
+      notes: Array.isArray((parsed as any)?.notes) ? (parsed as any).notes : [],
+      warnings: Array.isArray((parsed as any)?.warnings) ? (parsed as any).warnings : [],
+    };
+
+    const fullJson = JSON.stringify(payload, null, 2);
+    return typeof maxChars === "number" && maxChars > 0 ? trimToMax(fullJson, maxChars) : fullJson;
+  } catch {
+    return typeof maxChars === "number" && maxChars > 0 ? trimToMax(raw, maxChars) : raw;
+  }
+}
+
 function ensureMenuDefaults(menu: MenuItemType): MenuItemType {
   const next: MenuItemType = { ...menu };
 
@@ -1674,6 +1769,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
   const [sampleMenuParsed, setSampleMenuParsed] = useState<MenuItemType[] | null>(null);
   const [sampleMenuError, setSampleMenuError] = useState<string | null>(null);
   const [sampleUseAsBase, setSampleUseAsBase] = useState(false);
+  const [aiProgress, setAiProgress] = useState<AiProgressState | null>(null);
 
   const menuValidationIssues = useMemo(() => {
     return validateMenusForApply(aiMenus || []);
@@ -1847,13 +1943,19 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     }
 
     const prompt = promptOverride || buildPromptWithRequirement(appId, inputRequest, scope, currentMenus, sampleMenuParsed || undefined);
-    const estimatedTokens = estimateTokenCount(prompt);
-    if (estimatedTokens > 6000) {
-      message.warning(
-        `Prompt dang lon (~${estimatedTokens} tokens uoc luong). Neu goi mien phi bi gioi han, hay rut gon yeu cau.`,
-      );
-    }
     setLoading(true);
+    setAiMenus(null);
+    const preparingProgress: AiProgressState = {
+      status: "preparing",
+      stage: "preparing",
+      message: "Đang chuẩn bị và gửi yêu cầu AI",
+      current: 0,
+      total: 1,
+      percent: 0,
+      elapsedMs: 0,
+    };
+    setAiProgress(preparingProgress);
+    setAiResultText(buildAiProgressResultText(preparingProgress));
 
     try {
       const command = recordId ? "update" : "create";
@@ -1868,11 +1970,38 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
       );
       setStoredRequest(inputRequest);
 
-      const res = await generateSeoContentWithPrompt(prompt);
+      const res = await generateSeoContentWithPrompt(prompt, {
+        onProgress: (progress) => {
+          const nextProgress: AiProgressState = {
+            jobId: progress?.jobId,
+            status: progress?.status,
+            stage: progress?.stage,
+            message: progress?.message,
+            current: Number(progress?.current ?? 0),
+            total: Number(progress?.total ?? 1),
+            percent: Number(progress?.percent ?? 0),
+            elapsedMs: Number(progress?.elapsedMs ?? 0),
+            waitingMs: Number(progress?.waitingMs ?? 0),
+            level: progress?.level != null ? Number(progress.level) : undefined,
+          };
+          setAiProgress(nextProgress);
+          setAiResultText((prev) => {
+            const nextText = buildAiProgressResultText(nextProgress);
+            return nextText || prev;
+          });
+        },
+      });
       const payload = extractAiPayload(res);
       if (!payload) {
         message.error(t("system.menu.aiDesigner.invalidJson") || "AI trả về không đúng JSON");
         setAiResultText(String(res?.message || "AI error"));
+        setAiProgress((prev) => ({
+          ...(prev || {}),
+          status: "failed",
+          stage: "failed",
+          message: String(res?.message || "AI error"),
+          percent: prev?.percent ?? 0,
+        }));
         return;
       }
 
@@ -1908,9 +2037,25 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
         "update",
       );
 
+      setAiProgress((prev) => ({
+        ...(prev || {}),
+        status: "completed",
+        stage: "completed",
+        message: `Đã hoàn tất tạo ${normalized.length} menu/chức năng`,
+        current: 1,
+        total: 1,
+        percent: 100,
+      }));
+
       message.success(t("system.menu.aiDesigner.generateSuccess") || "Đã tạo menu bằng AI");
     } catch (error) {
       console.error("AI menu generation failed:", error);
+      setAiProgress((prev) => ({
+        ...(prev || {}),
+        status: "failed",
+        stage: "failed",
+        message: error instanceof Error ? error.message : "Lỗi gọi AI",
+      }));
       message.error(t("system.menu.aiDesigner.generateFailed") || "Lỗi gọi AI");
     } finally {
       setLoading(false);
@@ -1953,7 +2098,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
         baseJson,
         "complete",
         currentMenus,
-        undefined,
+        sampleMenuParsed || undefined,
         true,
       );
       await runGenerate(mergedRequestText, "complete", prompt);
@@ -2122,7 +2267,32 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
           )}
         </Space>
 
-        {aiResultText && (
+        {aiProgress && (
+          <Alert
+            type={aiProgress.status === "failed" ? "error" : aiProgress.status === "completed" ? "success" : "info"}
+            showIcon
+            style={{ marginBottom: 16 }}
+            message={describeAiProgress(aiProgress)}
+            description={
+              <Space direction="vertical" style={{ width: "100%" }}>
+                <Progress
+                  percent={Math.max(0, Math.min(100, Number(aiProgress.percent ?? 0)))}
+                  status={aiProgress.status === "failed" ? "exception" : aiProgress.status === "completed" ? "success" : "active"}
+                />
+                <div style={{ fontSize: 12 }}>
+                  Stage: {aiProgress.stage || aiProgress.status || "running"}
+                  {aiProgress.current != null && aiProgress.total != null ? ` | Step: ${aiProgress.current}/${aiProgress.total}` : ""}
+                  {aiProgress.level != null ? ` | Level: ${aiProgress.level}` : ""}
+                  {aiProgress.elapsedMs ? ` | Elapsed: ${formatDurationMs(aiProgress.elapsedMs)}` : ""}
+                  {aiProgress.waitingMs ? ` | Waiting: ${formatDurationMs(aiProgress.waitingMs)}` : ""}
+                  {aiProgress.jobId ? ` | Job: ${aiProgress.jobId}` : ""}
+                </div>
+              </Space>
+            }
+          />
+        )}
+
+        {(aiResultText || aiProgress) && (
           <>
             <Divider orientation="left">{t("system.menu.aiDesigner.resultTitle") || "Ket qua tu AI"}</Divider>
 
@@ -2156,13 +2326,24 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                 />
               )}
 
-              <TextArea
-                value={aiResultText}
-                placeholder={t("system.menu.aiDesigner.resultPlaceholder") || "Kết quả AI sẽ hiển thị ở đây (JSON format)"}
-                rows={15}
-                readOnly
-                style={{ fontFamily: "Monaco, Consolas, monospace", fontSize: 12 }}
-              />
+              <div style={{ border: "1px solid #d9d9d9", borderRadius: 6, overflow: "hidden" }}>
+                <CodeMirror
+                  value={aiResultText || buildAiProgressResultText(aiProgress)}
+                  height="360px"
+                  theme={vscodeDark}
+                  extensions={[json()]}
+                  editable={false}
+                  basicSetup={{
+                    lineNumbers: true,
+                    foldGutter: true,
+                    highlightActiveLineGutter: true,
+                    highlightActiveLine: true,
+                    bracketMatching: true,
+                    closeBrackets: true,
+                  }}
+                  placeholder={t("system.menu.aiDesigner.resultPlaceholder") || "Kết quả AI sẽ hiển thị ở đây (JSON format)"}
+                />
+              </div>
 
               <Divider orientation="left">{t("system.menu.aiDesigner.refineTitle") || "Yêu cầu bổ sung / chỉnh sửa"}</Divider>
               <Alert

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -28,11 +29,11 @@ import net.phanmemmottrieu.handler.TableHandler;
 import net.phanmemmottrieu.handler.CRMHandler;
 import net.phanmemmottrieu.model.StandardResponse;
 import net.phanmemmottrieu.service.AIProviderFactory;
-import net.phanmemmottrieu.service.GeminiService;
 import net.phanmemmottrieu.service.WebScraperService;
 import net.phanmemmottrieu.service.GoogleIndexService;
 import net.phanmemmottrieu.service.GoogleIndexQueueService;
 import net.phanmemmottrieu.service.ChatPersistenceService;
+import net.phanmemmottrieu.service.GitHubModelsService;
 import net.phanmemmottrieu.service.XTwitterService;
 import com.corundumstudio.socketio.SocketIOServer;
 import net.phanmemmottrieu.model.UrlSubmissionQueue;
@@ -44,6 +45,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 @RestController
 public class ApiSpringController {
@@ -63,9 +67,25 @@ public class ApiSpringController {
     private final GoogleIndexService googleIndexService;
     private final GoogleIndexQueueService googleIndexQueueService;
     private final ChatPersistenceService chatPersistenceService;
+    private final GitHubModelsService gitHubModelsService;
     private final SocketIOServer socketIOServer;
     private final XTwitterService xTwitterService;
     private final CRMHandler crmHandler;
+
+    @Value("${ai.prompt.max-chars:3000000}")
+    private int maxPromptChars;
+
+    @Value("${ai.prompt.gemini-max-chars:500000}")
+    private int geminiMaxPromptChars;
+
+    @Value("${ai.async.job-ttl-ms:3600000}")
+    private long aiAsyncJobTtlMs;
+
+    @Value("${ai.async.poll-min-ms:3000}")
+    private long aiAsyncPollMinMs;
+
+    private final ExecutorService aiAsyncExecutor = Executors.newFixedThreadPool(2);
+    private final ConcurrentHashMap<String, Map<String, Object>> aiAsyncJobs = new ConcurrentHashMap<>();
 
     // Tiêm tất cả các Handler thông qua constructor
     @Autowired
@@ -82,6 +102,7 @@ public class ApiSpringController {
             GoogleIndexService googleIndexService,
             GoogleIndexQueueService googleIndexQueueService,
             ChatPersistenceService chatPersistenceService,
+            GitHubModelsService gitHubModelsService,
             SocketIOServer socketIOServer,
             XTwitterService xTwitterService,
             CRMHandler crmHandler
@@ -99,6 +120,7 @@ public class ApiSpringController {
         this.googleIndexService = googleIndexService;
         this.googleIndexQueueService = googleIndexQueueService;
         this.chatPersistenceService = chatPersistenceService;
+        this.gitHubModelsService = gitHubModelsService;
         this.socketIOServer = socketIOServer;
         this.xTwitterService = xTwitterService;
         this.crmHandler = crmHandler;
@@ -603,7 +625,23 @@ public class ApiSpringController {
      * @param params   Map chứa các tham số đầu vào, bao gồm "prompt".
      */
     public void getObjectFromAI(StandardResponse response, Map<String, Object> params) {
+        String mode = String.valueOf(params.getOrDefault("mode", "sync")).trim().toLowerCase();
+        if ("status".equals(mode)) {
+            handleAiAsyncStatus(response, params);
+            return;
+        }
+
         String prompt = (String) params.get("prompt");
+        boolean asyncRequested = "submit".equals(mode)
+                || Boolean.TRUE.equals(params.get("async"))
+                || "true".equalsIgnoreCase(String.valueOf(params.get("async")));
+
+        if (asyncRequested) {
+            handleAiAsyncSubmit(response, prompt);
+            return;
+        }
+
+        String rawContent;
 
         if (prompt == null || prompt.isEmpty()) {
             response.set("code", 200);
@@ -612,25 +650,22 @@ public class ApiSpringController {
             return;
         }
 
-        // Validate prompt size - max 500,000 characters (Gemini 1M tokens)
-        if (prompt.length() > 500000) {
+        // Global guardrail for request size handled by this endpoint.
+        if (prompt.length() > maxPromptChars) {
             response.set("code", 200);
             response.set("success", false);
-            response.set("message", "Prompt quá dài (tối đa 500,000 ký tự), hiện tại: " + prompt.length() + " ký tự");
-            logger.warn("Prompt size exceeded: {} characters", prompt.length());
+            response.set("message", "Prompt quá dài (tối đa " + maxPromptChars + " ký tự), hiện tại: " + prompt.length());
+            response.set("errorCode", "PROMPT_EXCEEDS_ENDPOINT_LIMIT");
             return;
         }
 
-        String rawContent;
         try {
-            // Chỉ sử dụng Gemini theo AIProviderFactory
-            rawContent = this.aiProviderFactory.generateContent(prompt);
+            rawContent = fetchAiRawContent(prompt, null);
         } catch (RuntimeException e) {
-            // Bắt các lỗi từ GeminiService và gán vào StandardResponse
             response.set("code", 200);
             response.set("success", false);
             response.set("message", "Lỗi khi tương tác với dịch vụ AI: " + e.getMessage());
-            logger.error("Runtime exception in GeminiService: {}", e.getMessage(), e);
+            logger.error("Runtime exception in AI provider: {}", e.getMessage(), e);
             return;
         }
 
@@ -640,6 +675,24 @@ public class ApiSpringController {
             response.set("message", "Không nhận được nội dung hợp lệ từ dịch vụ AI.");
             return;
         }
+
+        populateAiResponseFromRawContent(response, rawContent);
+    }
+
+    private String fetchAiRawContent(String prompt, GitHubModelsService.ProgressListener progressListener) {
+        if (prompt.length() > geminiMaxPromptChars) {
+            logger.warn("Prompt size exceeded Gemini limit ({}>{}) chars. Routing to GitHub Models fallback.",
+                    prompt.length(), geminiMaxPromptChars);
+            return this.gitHubModelsService.generateContent(prompt, progressListener);
+        }
+
+        if (progressListener != null) {
+            progressListener.onProgress(createAiJobProgress("gemini", "Đang gọi Gemini", 0, 1, null));
+        }
+        return this.aiProviderFactory.generateContent(prompt);
+    }
+
+    private void populateAiResponseFromRawContent(StandardResponse response, String rawContent) {
 
         // Try to parse as JSON first (GeminiService now returns JSON for both success and error)
         ObjectMapper objectMapper = new ObjectMapper();
@@ -652,6 +705,24 @@ public class ApiSpringController {
             // Parse JSON directly from rawContent
             @SuppressWarnings("unchecked")
             Map<String, Object> parsedResult = objectMapper.readValue(rawContent, Map.class);
+
+            Object topLevelSuccess = parsedResult.get("success");
+            if (topLevelSuccess instanceof Boolean && !((Boolean) topLevelSuccess)) {
+                response.set("code", 200);
+                response.set("success", false);
+                response.set("data", parsedResult);
+                response.set("message", String.valueOf(parsedResult.getOrDefault("message", "Lỗi từ dịch vụ AI")));
+                Object topLevelErrorCode = parsedResult.get("errorCode");
+                if (topLevelErrorCode != null) {
+                    response.set("errorCode", topLevelErrorCode);
+                }
+                Object topLevelProvider = parsedResult.get("provider");
+                if (topLevelProvider != null) {
+                    response.set("provider", topLevelProvider);
+                }
+                logger.warn("AI provider returned top-level failure: {}", parsedResult);
+                return;
+            }
             
             // Check if this is an error response from AI service
             if (parsedResult.containsKey("error") && (Boolean) parsedResult.get("error")) {
@@ -683,6 +754,22 @@ public class ApiSpringController {
                     // Content is already parsed JSON object - return as data
                     @SuppressWarnings("unchecked")
                     Map<String, Object> parsedData = (Map<String, Object>) contentObj;
+
+                    Object nestedSuccess = parsedData.get("success");
+                    if (nestedSuccess instanceof Boolean && !((Boolean) nestedSuccess)) {
+                        response.set("code", 200);
+                        response.set("success", false);
+                        response.set("data", parsedData);
+                        response.set("provider", provider);
+                        response.set("message", String.valueOf(parsedData.getOrDefault("message", "Lỗi từ nhà cung cấp AI")));
+                        Object nestedErrorCode = parsedData.get("errorCode");
+                        if (nestedErrorCode != null) {
+                            response.set("errorCode", nestedErrorCode);
+                        }
+                        logger.warn("❌ Provider {} returned nested error object: {}", provider, parsedData);
+                        return;
+                    }
+
                     response.set("code", 200);
                     response.set("success", true);
                     response.set("data", parsedData);
@@ -819,6 +906,161 @@ public class ApiSpringController {
                 }
             }
         }
+    }
+
+    private void handleAiAsyncSubmit(StandardResponse response, String prompt) {
+        if (prompt == null || prompt.isEmpty()) {
+            response.set("code", 200);
+            response.set("success", false);
+            response.set("message", "Thiếu tham số 'prompt' để tạo nội dung AI.");
+            return;
+        }
+
+        if (prompt.length() > maxPromptChars) {
+            response.set("code", 200);
+            response.set("success", false);
+            response.set("message", "Prompt quá dài (tối đa " + maxPromptChars + " ký tự), hiện tại: " + prompt.length());
+            response.set("errorCode", "PROMPT_EXCEEDS_ENDPOINT_LIMIT");
+            return;
+        }
+
+        cleanupExpiredAiJobs();
+
+        String jobId = "ai-job-" + UUID.randomUUID();
+        Map<String, Object> job = new ConcurrentHashMap<>();
+        long now = System.currentTimeMillis();
+        job.put("jobId", jobId);
+        job.put("status", "queued");
+        job.put("createdAt", now);
+        job.put("updatedAt", now);
+        job.put("pollAfterMs", aiAsyncPollMinMs);
+        job.put("progress", createAiJobProgress("queued", "Đang xếp hàng xử lý AI", 0, 1, null));
+        aiAsyncJobs.put(jobId, job);
+
+        aiAsyncExecutor.submit(() -> {
+            try {
+                job.put("status", "running");
+                job.put("updatedAt", System.currentTimeMillis());
+                updateAiAsyncJobProgress(job, createAiJobProgress("starting", "Bắt đầu xử lý yêu cầu AI", 0, 1, null));
+
+                StandardResponse syncResponse = new StandardResponse();
+                String rawContent = fetchAiRawContent(prompt, progress -> updateAiAsyncJobProgress(job, progress));
+                if (rawContent == null || rawContent.isBlank()) {
+                    syncResponse.set("code", 200);
+                    syncResponse.set("success", false);
+                    syncResponse.set("message", "Không nhận được nội dung hợp lệ từ dịch vụ AI.");
+                } else {
+                    updateAiAsyncJobProgress(job, createAiJobProgress("parsing", "Đang phân tích kết quả AI", 1, 1, null));
+                    populateAiResponseFromRawContent(syncResponse, rawContent);
+                }
+
+                Map<String, Object> resultPayload = new HashMap<>(syncResponse.getPropertiesMap());
+                boolean ok = Boolean.TRUE.equals(resultPayload.get("success"));
+                job.put("status", ok ? "completed" : "failed");
+                job.put("result", resultPayload);
+                job.put("updatedAt", System.currentTimeMillis());
+                job.put("completedAt", System.currentTimeMillis());
+                updateAiAsyncJobProgress(job, createAiJobProgress(ok ? "completed" : "failed",
+                        ok ? "Đã hoàn tất tạo menu AI" : String.valueOf(resultPayload.getOrDefault("message", "AI xử lý thất bại")),
+                        1, 1, null));
+            } catch (Exception e) {
+                logger.error("Async AI job failed: {}", jobId, e);
+                job.put("status", "failed");
+                job.put("updatedAt", System.currentTimeMillis());
+                job.put("completedAt", System.currentTimeMillis());
+                updateAiAsyncJobProgress(job, createAiJobProgress("failed", "Lỗi xử lý async AI: " + e.getMessage(), 1, 1, null));
+                job.put("result", Map.of(
+                        "code", 200,
+                        "success", false,
+                        "message", "Lỗi xử lý async AI: " + e.getMessage(),
+                        "errorCode", "ASYNC_AI_JOB_ERROR"));
+            }
+        });
+
+        response.set("code", 200);
+        response.set("success", true);
+        response.set("message", "Đã nhận yêu cầu AI, đang xử lý nền");
+        response.set("data", Map.of(
+                "jobId", jobId,
+                "status", "queued",
+            "pollAfterMs", aiAsyncPollMinMs,
+            "progress", job.get("progress")));
+    }
+
+    private void handleAiAsyncStatus(StandardResponse response, Map<String, Object> params) {
+        cleanupExpiredAiJobs();
+        String jobId = String.valueOf(params.getOrDefault("jobId", "")).trim();
+        if (jobId.isEmpty()) {
+            response.set("code", 200);
+            response.set("success", false);
+            response.set("message", "Thiếu tham số jobId");
+            response.set("errorCode", "ASYNC_JOB_ID_REQUIRED");
+            return;
+        }
+
+        Map<String, Object> job = aiAsyncJobs.get(jobId);
+        if (job == null) {
+            response.set("code", 200);
+            response.set("success", false);
+            response.set("message", "Không tìm thấy job hoặc job đã hết hạn");
+            response.set("errorCode", "ASYNC_JOB_NOT_FOUND");
+            return;
+        }
+
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("jobId", jobId);
+        payload.put("status", job.getOrDefault("status", "unknown"));
+        payload.put("createdAt", job.get("createdAt"));
+        payload.put("updatedAt", job.get("updatedAt"));
+        payload.put("pollAfterMs", job.getOrDefault("pollAfterMs", aiAsyncPollMinMs));
+        payload.put("elapsedMs", System.currentTimeMillis() - ((Number) job.getOrDefault("createdAt", System.currentTimeMillis())).longValue());
+        if (job.containsKey("progress")) {
+            payload.put("progress", job.get("progress"));
+        }
+        if (job.containsKey("completedAt")) {
+            payload.put("completedAt", job.get("completedAt"));
+        }
+        if (job.containsKey("result")) {
+            payload.put("result", job.get("result"));
+        }
+
+        response.set("code", 200);
+        response.set("success", true);
+        response.set("message", "OK");
+        response.set("data", payload);
+    }
+
+    private void cleanupExpiredAiJobs() {
+        long now = System.currentTimeMillis();
+        long ttl = Math.max(60000L, aiAsyncJobTtlMs);
+        aiAsyncJobs.entrySet().removeIf(entry -> {
+            Object createdObj = entry.getValue().get("createdAt");
+            long createdAt = (createdObj instanceof Number) ? ((Number) createdObj).longValue() : now;
+            return now - createdAt > ttl;
+        });
+    }
+
+    private void updateAiAsyncJobProgress(Map<String, Object> job, Map<String, Object> progress) {
+        if (job == null || progress == null) {
+            return;
+        }
+        job.put("progress", new HashMap<>(progress));
+        job.put("updatedAt", System.currentTimeMillis());
+    }
+
+    private Map<String, Object> createAiJobProgress(String stage, String message, int current, int total, Map<String, Object> extra) {
+        Map<String, Object> progress = new HashMap<>();
+        progress.put("stage", stage);
+        progress.put("message", message);
+        progress.put("current", Math.max(0, current));
+        progress.put("total", Math.max(1, total));
+        int safeTotal = Math.max(1, total);
+        int safeCurrent = Math.max(0, Math.min(current, safeTotal));
+        progress.put("percent", Math.max(0, Math.min(100, (int) Math.round((safeCurrent * 100.0) / safeTotal))));
+        if (extra != null && !extra.isEmpty()) {
+            progress.putAll(extra);
+        }
+        return progress;
     }
 
     /**
