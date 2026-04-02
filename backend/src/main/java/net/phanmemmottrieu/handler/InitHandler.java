@@ -772,7 +772,8 @@ public class InitHandler {
                         buildFieldConfig("phoneNumber", "common.phoneNumber", 1, "string", "left"),
                         buildFieldConfig("full_name", "common.fullName", 1, "string", "left"),
                         buildFieldConfig("user_address", "common.address", 1, "string", "left"),
-                        buildFieldConfig("app_id", "common.appId", 1, "string", "left"),
+                        buildFieldConfig("app_id", "common.appId", 1, "co", "left",
+                                Map.of("f_cbo_query", "{\"query\":[{\"obj_name\":\"sys_apps\",\"app_id\":\"csm\",\"fields\":[\"id\",\"name\"]}]}")),
                         buildFieldConfig("app_token", "common.appToken", 1, "string", "left"),
                         buildFieldConfig("pass", "common.password", 1, "password", "left"),
                         buildFieldConfig("roles", "Roles", 1, "string", "left"),
@@ -811,6 +812,12 @@ public class InitHandler {
                 field.put("f_show", show);
                 field.put("f_types", type);
                 field.put("f_align", align);
+                return field;
+        }
+
+        private Map<String, Object> buildFieldConfig(String name, String header, int show, String type, String align, Map<String, Object> extra) {
+                Map<String, Object> field = buildFieldConfig(name, header, show, type, align);
+                if (extra != null) field.putAll(extra);
                 return field;
         }
 

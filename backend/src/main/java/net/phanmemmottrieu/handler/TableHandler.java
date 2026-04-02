@@ -10,6 +10,7 @@ import net.phanmemmottrieu.data.SearchFilter;
 import net.phanmemmottrieu.model.StandardResponse;
 import net.phanmemmottrieu.model.User;
 import net.phanmemmottrieu.socket.SocketIOConfig;
+import net.phanmemmottrieu.util.AppTokenHelper;
 import net.phanmemmottrieu.util.PermissionBitfieldUtil;
 
 import org.slf4j.Logger;
@@ -30,6 +31,29 @@ public class TableHandler {
     private static final List<String> OWNER_SCOPE_FIELDS = List.of("created_by", "create_by", "owner_id", "owner", "user_id", "userid", "account_id", "parent_account_id");
     private static final List<String> DEPARTMENT_SCOPE_FIELDS = List.of("dept_id", "department_id", "team_id", "group_id", "org_unit_id");
     private static final List<String> BRANCH_SCOPE_FIELDS = List.of("branch_id", "site_id", "region_id");
+    private static final List<String> DEFAULT_FULL_MENU_PERMISSIONS = List.of("/dashboard", "/home", "/system/user", "/system/menu", "/system/dept", "/crm");
+    // Các trường admin KHÔNG được phép sửa (chỉ được sửa những trường cá nhân như password, avatar, email, etc.)
+    private static final List<String> ADMIN_SELF_EDIT_RESTRICTED_FIELDS = List.of(
+        "id", "username",              // Nhận dạng hệ thống
+        "app_id", "appId",             // App
+        "roles", "permissions",        // Quyền hạn
+        "menusPermissions",             // Menu
+        "dev",                          // Dev
+        "actived",                      // Status
+        "permissionBitfield", "permissionSchemaVersion", "dataScope",  // Schema
+        "dept_id", "branch_id", "department_id", "team_id", "group_id"   // Tổ chức
+    );
+    // Các trường sub-user KHÔNG được phép sửa (chỉ được sửa những trường cá nhân như password, etc.)
+    private static final List<String> SUBUSER_SELF_EDIT_RESTRICTED_FIELDS = List.of(
+        "id", "login_identifier",      // Nhận dạng hệ thống
+        "parent_account_id",           // Tài khoản cha
+        "group_id",                    // Nhóm
+        "roles", "permissions",        // Quyền hạn
+        "menusPermissions",            // Menu
+        "actived",                     // Status
+        "permissionBitfield", "permissionSchemaVersion", "dataScope",  // Schema
+        "dept_id", "branch_id", "department_id", "team_id"   // Tổ chức
+    );
     private static final Map<String, List<String>> AUTO_PERMISSION_SCHEMA_FIELDS = createAutoPermissionSchemaFields();
     private static final Map<String, List<String>> DEFAULT_TABLE_PK_FIELDS = createDefaultTablePkFields();
     private static final Map<String, List<String>> DEFAULT_TABLE_FIELDS = createDefaultTableFields();
@@ -322,55 +346,23 @@ public class TableHandler {
             return existingFilter;
         }
 
-        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-        if (authentication == null || !authentication.isAuthenticated() || authentication.getPrincipal() == null ||
-            "anonymousUser".equals(authentication.getPrincipal())) {
+        UserAccessContext access = resolveCurrentUserAccessContext();
+        if (access.isDev || access.ownerCandidates.isEmpty()) {
             return existingFilter;
         }
 
-        Object principal = authentication.getPrincipal();
-        List<String> roles = null;
-        Boolean dev = false;
-        String userAppId = null;
-
-        if (principal instanceof User) {
-            User user = (User) principal;
-            roles = user.getPermissions();
-            dev = user.getDev() != null ? user.getDev() : false;
-            userAppId = user.getAppId();
-        } else if (principal instanceof Map<?, ?>) {
-            Map<?, ?> principalMap = (Map<?, ?>) principal;
-            Object rolesObj = principalMap.get("roles");
-            if (rolesObj instanceof List<?>) {
-                roles = ((List<?>) rolesObj).stream().filter(String.class::isInstance).map(String.class::cast).collect(java.util.stream.Collectors.toList());
-            }
-            Object devObj = principalMap.get("dev");
-            if (devObj instanceof Boolean) {
-                dev = (Boolean) devObj;
-            }
-            Object appIdObj = principalMap.get("app_id");
-            if (appIdObj != null) {
-                userAppId = String.valueOf(appIdObj);
-            }
-        }
-
-        boolean isAdmin = roles != null && roles.stream().anyMatch(r -> "admin".equalsIgnoreCase(r));
-        if (!isAdmin || Boolean.TRUE.equals(dev) || userAppId == null || userAppId.isBlank()) {
+        SearchFilter ownerScope = buildFieldScopeFilter(access.ownerCandidates, "parent_account_id");
+        if (ownerScope == null) {
             return existingFilter;
         }
-
-        SearchFilter appScope = new SearchFilter();
-        appScope.setField("app_id");
-        appScope.setType("eq");
-        appScope.setValue(userAppId);
 
         if (isEmptyFilter(existingFilter)) {
-            return appScope;
+            return ownerScope;
         }
 
         SearchFilter merged = new SearchFilter();
         merged.setOperator("AND");
-        merged.setConditions(new ArrayList<>(List.of(existingFilter, appScope)));
+        merged.setConditions(new ArrayList<>(List.of(existingFilter, ownerScope)));
         return merged;
     }
 
@@ -384,7 +376,7 @@ public class TableHandler {
             return existingFilter;
         }
 
-        SearchFilter ownerScope = buildParentAccountScopeFilter(access.parentAccountCandidates);
+        SearchFilter ownerScope = buildFieldScopeFilter(access.parentAccountCandidates, "parent_account_id");
         if (ownerScope == null) {
             return existingFilter;
         }
@@ -398,12 +390,12 @@ public class TableHandler {
         return merged;
     }
 
-    private SearchFilter buildParentAccountScopeFilter(Set<String> parentCandidates) {
+    private SearchFilter buildFieldScopeFilter(Set<String> candidates, String fieldName) {
         List<SearchFilter> conditions = new ArrayList<>();
-        for (String candidate : parentCandidates) {
+        for (String candidate : candidates) {
             if (candidate == null || candidate.isBlank()) continue;
             SearchFilter cond = new SearchFilter();
-            cond.setField("parent_account_id");
+            cond.setField(fieldName);
             cond.setType("eq");
             cond.setValue(candidate);
             conditions.add(cond);
@@ -418,6 +410,18 @@ public class TableHandler {
         filter.setOperator("OR");
         filter.setConditions(conditions);
         return filter;
+    }
+
+    private boolean isOwnedManagedAccountRow(Map<String, Object> row, UserAccessContext access) {
+        if (row == null || access == null || access.ownerCandidates.isEmpty()) {
+            return false;
+        }
+        Object parentObj = row.get("parent_account_id");
+        if (parentObj == null) {
+            return false;
+        }
+        String parent = String.valueOf(parentObj);
+        return access.ownerCandidates.contains(parent);
     }
 
     private boolean isOwnedSubUserRow(Map<String, Object> row, UserAccessContext access) {
@@ -502,7 +506,7 @@ public class TableHandler {
         map.put("csm_accounts", List.of(
             "id", "username", "pass", "app_token", "refresh", "email", "avatar", "phoneNumber",
             "description", "roles", "actived", "permissions", "menusPermissions", "group_rights",
-            "full_name", "user_address", "app_id", "permissionBitfield", "permissionSchemaVersion", "dataScope",
+            "full_name", "user_address", "app_id", "parent_account_id", "permissionBitfield", "permissionSchemaVersion", "dataScope",
             "dept_id", "branch_id", "department_id", "team_id"
         ));
         map.put("csm_group_members", List.of(
@@ -639,7 +643,9 @@ public class TableHandler {
                 Collections.emptySet(),
                 Collections.emptySet(),
                 Collections.emptySet(),
-                "NONE"
+                "NONE",
+                Collections.emptyList(),
+                Collections.emptyList()
             );
         }
 
@@ -648,10 +654,10 @@ public class TableHandler {
         List<String> menusPermissions = null;
         Boolean dev = false;
         String userAppId = null;
-        Set<String> parentCandidates = new HashSet<>();
-        Set<String> ownerCandidates = new HashSet<>();
-        Set<String> departmentCandidates = new HashSet<>();
-        Set<String> branchCandidates = new HashSet<>();
+        Set<String> parentCandidates = new LinkedHashSet<>();
+        Set<String> ownerCandidates = new LinkedHashSet<>();
+        Set<String> departmentCandidates = new LinkedHashSet<>();
+        Set<String> branchCandidates = new LinkedHashSet<>();
 
         if (principal instanceof User) {
             User user = (User) principal;
@@ -669,7 +675,6 @@ public class TableHandler {
             collectCandidate(ownerCandidates, user.getUsername());
             collectCandidate(ownerCandidates, user.getEmail());
             collectCandidate(ownerCandidates, user.getPhoneNumber());
-            collectCandidate(ownerCandidates, user.getAppId());
         } else if (principal instanceof Map<?, ?>) {
             Map<?, ?> principalMap = (Map<?, ?>) principal;
             roles = toStringList(principalMap.get("roles"));
@@ -697,7 +702,6 @@ public class TableHandler {
             collectCandidate(ownerCandidates, principalMap.get("username"));
             collectCandidate(ownerCandidates, principalMap.get("email"));
             collectCandidate(ownerCandidates, principalMap.get("phoneNumber"));
-            collectCandidate(ownerCandidates, principalMap.get("app_id"));
 
             collectCandidate(departmentCandidates, principalMap.get("dept_id"));
             collectCandidate(departmentCandidates, principalMap.get("deptId"));
@@ -723,7 +727,9 @@ public class TableHandler {
             ownerCandidates,
             departmentCandidates,
             branchCandidates,
-            dataScope
+            dataScope,
+            roles,
+            menusPermissions
         );
     }
 
@@ -864,6 +870,277 @@ public class TableHandler {
         return out;
     }
 
+    /**
+     * Xác thực admin có thể tự sửa thông tin cá nhân trên bảng csm_accounts.
+     * Validation này chạy SAU khi records đã tìm được (update flow).
+     * 
+     * @return null nếu hợp lệ, hoặc thông báo lỗi
+     */
+    private String validateAdminSelfEditOnRecords(String command, Map<String, Object> objUpdate, 
+                                                   List<Map<String, Object>> records, UserAccessContext accessContext) {
+        // Cho update: kiểm tra records có thuộc user hiện tại không
+        if ("update".equals(command)) {
+            if (records.isEmpty()) {
+                return "Không tìm thấy bản ghi để cập nhật";
+            }
+            
+            String currentUserId = accessContext.ownerCandidates.stream().findFirst().orElse("");
+            if (currentUserId.isBlank()) {
+                return "Không xác định được ID của user hiện tại";
+            }
+            
+            // Kiểm tra tất cả records có thuộc user hiện tại không
+            for (Map<String, Object> row : records) {
+                Object rowId = row.get("id");
+                String rowIdStr = (rowId != null) ? String.valueOf(rowId).trim() : "";
+                if (!currentUserId.equalsIgnoreCase(rowIdStr)) {
+                    return "Admin chỉ được cập nhật thông tin của chính mình, không được sửa record của người khác";
+                }
+            }
+            
+            // Kiểm tra các trường bị cấm
+            for (String restrictedField : ADMIN_SELF_EDIT_RESTRICTED_FIELDS) {
+                if (objUpdate.containsKey(restrictedField)) {
+                    Object requestedValue = objUpdate.get(restrictedField);
+                    if (requestedValue != null && !String.valueOf(requestedValue).isBlank()) {
+                        if (!isRestrictedFieldActuallyChanged(restrictedField, requestedValue, records)) {
+                            continue;
+                        }
+                        return "Admin không được thay đổi trường hệ thống: " + restrictedField + 
+                               ". Bạn chỉ được sửa: password, avatar, email, phone, full_name, address, description";
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Xác thực sub-user có thể tự sửa thông tin cá nhân trên bảng csm_group_members.
+     * Validation này chạy SAU khi records đã tìm được (update flow).
+     * 
+     * @return null nếu hợp lệ, hoặc thông báo lỗi
+     */
+    private String validateSubUserSelfEditOnRecords(String command, Map<String, Object> objUpdate, 
+                                                     List<Map<String, Object>> records, UserAccessContext accessContext) {
+        // Cho update: kiểm tra records có thuộc user hiện tại không
+        if ("update".equals(command)) {
+            if (records.isEmpty()) {
+                return "Không tìm thấy bản ghi để cập nhật";
+            }
+            
+            String currentUserId = accessContext.ownerCandidates.stream().findFirst().orElse("");
+            if (currentUserId.isBlank()) {
+                return "Không xác định được ID của sub-user hiện tại";
+            }
+            
+            // Kiểm tra tất cả records có thuộc user hiện tại không
+            for (Map<String, Object> row : records) {
+                Object rowId = row.get("id");
+                String rowIdStr = (rowId != null) ? String.valueOf(rowId).trim() : "";
+                if (!currentUserId.equalsIgnoreCase(rowIdStr)) {
+                    return "Sub-user chỉ được cập nhật thông tin của chính mình, không được sửa record của người khác";
+                }
+            }
+            
+            // Kiểm tra các trường bị cấm
+            for (String restrictedField : SUBUSER_SELF_EDIT_RESTRICTED_FIELDS) {
+                if (objUpdate.containsKey(restrictedField)) {
+                    Object requestedValue = objUpdate.get(restrictedField);
+                    if (requestedValue != null && !String.valueOf(requestedValue).isBlank()) {
+                        if (!isRestrictedFieldActuallyChanged(restrictedField, requestedValue, records)) {
+                            continue;
+                        }
+                        return "Sub-user không được thay đổi trường hệ thống: " + restrictedField + 
+                               ". Bạn chỉ được sửa: password/pass và các thông tin cá nhân khác";
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    private boolean isRestrictedFieldActuallyChanged(String fieldName, Object requestedValue, List<Map<String, Object>> records) {
+        String requested = String.valueOf(requestedValue).trim();
+        for (Map<String, Object> row : records) {
+            String stored = row.get(fieldName) == null ? "" : String.valueOf(row.get(fieldName)).trim();
+            if (!Objects.equals(stored, requested)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static String safeStr(Object val) {
+        return val == null ? "" : String.valueOf(val).trim();
+    }
+
+    private static int dataScopeRank(String scope) {
+        String normalized = safeStr(scope).toUpperCase(Locale.ROOT);
+        return switch (normalized) {
+            case "OWNER" -> 1;
+            case "DEPARTMENT" -> 2;
+            case "BRANCH" -> 3;
+            case "ALL" -> 4;
+            default -> 0;
+        };
+    }
+
+    private static String minDataScope(String requested, String allowed) {
+        String[] scopes = {"NONE", "OWNER", "DEPARTMENT", "BRANCH", "ALL"};
+        int idx = Math.min(dataScopeRank(requested), dataScopeRank(allowed));
+        return scopes[Math.max(0, Math.min(idx, scopes.length - 1))];
+    }
+
+    private static List<String> intersectPreserveOrder(List<String> requested, List<String> allowed) {
+        List<String> safeRequested = requested == null ? Collections.emptyList() : requested;
+        List<String> safeAllowed = allowed == null ? Collections.emptyList() : allowed;
+        Set<String> allowedSet = new LinkedHashSet<>();
+        for (String item : safeAllowed) {
+            String normalized = safeStr(item).toLowerCase(Locale.ROOT);
+            if (!normalized.isEmpty()) {
+                allowedSet.add(normalized);
+            }
+        }
+        if (allowedSet.isEmpty()) {
+            return new ArrayList<>();
+        }
+        List<String> result = new ArrayList<>();
+        Set<String> seen = new LinkedHashSet<>();
+        for (String item : safeRequested) {
+            String normalized = safeStr(item).toLowerCase(Locale.ROOT);
+            if (!normalized.isEmpty() && allowedSet.contains(normalized) && seen.add(normalized)) {
+                result.add(safeStr(item));
+            }
+        }
+        return result;
+    }
+
+    private void normalizeManagedAccountPermissions(Map<String, Object> objUpdate, UserAccessContext accessContext) {
+        if (objUpdate == null || accessContext == null) {
+            return;
+        }
+
+        if (accessContext.isDev) {
+            objUpdate.put("roles", new ArrayList<>(List.of("admin")));
+            objUpdate.put("permissions", new ArrayList<>(List.of("admin", "scope:all")));
+            List<String> inheritedMenus = accessContext.menusPermissions == null ? Collections.emptyList() : accessContext.menusPermissions;
+            objUpdate.put("menusPermissions", new ArrayList<>(inheritedMenus.isEmpty() ? DEFAULT_FULL_MENU_PERMISSIONS : inheritedMenus));
+            objUpdate.put("dataScope", "ALL");
+            return;
+        }
+
+        if (accessContext.preferredOwner != null && !accessContext.preferredOwner.isBlank()) {
+            objUpdate.put("parent_account_id", accessContext.preferredOwner);
+        }
+        if (accessContext.appId != null && !accessContext.appId.isBlank()) {
+            objUpdate.put("app_id", accessContext.appId);
+        }
+
+        List<String> requestedPermissions = toStringList(objUpdate.get("permissions"));
+        List<String> requestedMenus = toStringList(objUpdate.get("menusPermissions"));
+        List<String> allowedPermissions = accessContext.permissions == null ? Collections.emptyList() : accessContext.permissions;
+        List<String> allowedMenus = accessContext.menusPermissions == null ? Collections.emptyList() : accessContext.menusPermissions;
+
+        objUpdate.put("permissions", intersectPreserveOrder(requestedPermissions, allowedPermissions));
+        objUpdate.put("menusPermissions", intersectPreserveOrder(requestedMenus, allowedMenus));
+        objUpdate.put("dataScope", minDataScope(safeStr(objUpdate.get("dataScope")), accessContext.dataScope));
+    }
+
+    /**
+     * For csm_accounts (dev creating main account):
+     * Auto-encrypt pass and generate app_token if not already set.
+     */
+    private void autoGenerateAccountCredentials(Map<String, Object> objUpdate, UserAccessContext accessContext) {
+        String loginId = safeStr(objUpdate.get("username"));
+        if (loginId.isEmpty()) loginId = safeStr(objUpdate.get("email"));
+        if (loginId.isEmpty()) return;
+
+        if (!accessContext.isDev && accessContext.appId != null && !accessContext.appId.isBlank()) {
+            objUpdate.put("app_id", accessContext.appId);
+        }
+
+        // Auto-encrypt pass if provided as plain text
+        String passRaw = safeStr(objUpdate.get("pass"));
+        if (!passRaw.isEmpty()) {
+            try {
+                String combined = passRaw.contains("_____") ? passRaw : (loginId + "_____" + passRaw);
+                objUpdate.put("pass", recordManager.csm_encrypt(combined));
+            } catch (Exception e) {
+                logger.warn("[autoGenerateAccountCredentials] Failed to encrypt pass: {}", e.getMessage());
+            }
+        }
+
+        // Auto-generate app_token if not already set
+        String existingToken = safeStr(objUpdate.get("app_token"));
+        if (existingToken.isEmpty()) {
+            try {
+                String effectiveAppId = safeStr(objUpdate.get("app_id"));
+                if (effectiveAppId.isEmpty()) effectiveAppId = accessContext.appId != null ? accessContext.appId : "csm";
+                @SuppressWarnings("unchecked")
+                List<String> rolesList = (objUpdate.get("roles") instanceof List) ? (List<String>) objUpdate.get("roles") : null;
+                String role = (rolesList != null && !rolesList.isEmpty()) ? String.valueOf(rolesList.get(0)) : "admin";
+                String rawToken = AppTokenHelper.buildRawToken(effectiveAppId, loginId, role, AppTokenHelper.resolveAccessRight(role));
+                String generatedToken = recordManager.csm_encrypt(rawToken);
+                objUpdate.put("app_token", generatedToken);
+                if (!objUpdate.containsKey("refresh") || safeStr(objUpdate.get("refresh")).isEmpty()) {
+                    objUpdate.put("refresh", generatedToken);
+                }
+                if (!objUpdate.containsKey("app_id") || safeStr(objUpdate.get("app_id")).isEmpty()) {
+                    objUpdate.put("app_id", effectiveAppId);
+                }
+            } catch (Exception e) {
+                logger.warn("[autoGenerateAccountCredentials] Failed to generate app_token: {}", e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * For csm_group_members (admin creating sub-user):
+     * Auto-encrypt pass and generate app_token from admin's context.
+     */
+    private void autoGenerateSubUserCredentials(Map<String, Object> objUpdate, UserAccessContext accessContext) {
+        // Auto-set parent_account_id if not set
+        if (safeStr(objUpdate.get("parent_account_id")).isEmpty() && accessContext.appId != null) {
+            objUpdate.put("parent_account_id", accessContext.appId);
+        }
+
+        String loginId = safeStr(objUpdate.get("login_identifier"));
+        if (loginId.isEmpty()) return;
+
+        // Auto-encrypt pass if provided as plain text
+        String passRaw = safeStr(objUpdate.get("pass"));
+        if (!passRaw.isEmpty()) {
+            try {
+                String combined = passRaw.contains("_____") ? passRaw : (loginId + "_____" + passRaw);
+                objUpdate.put("pass", recordManager.csm_encrypt(combined));
+            } catch (Exception e) {
+                logger.warn("[autoGenerateSubUserCredentials] Failed to encrypt pass: {}", e.getMessage());
+            }
+        }
+
+        // Auto-generate app_token if not already set
+        String existingToken = safeStr(objUpdate.get("app_token"));
+        if (existingToken.isEmpty()) {
+            try {
+                String effectiveAppId = accessContext.appId != null ? accessContext.appId : "csm";
+                String rawToken = AppTokenHelper.buildRawToken(effectiveAppId, loginId, "user", AppTokenHelper.resolveAccessRight("user"));
+                String generatedToken = recordManager.csm_encrypt(rawToken);
+                objUpdate.put("app_token", generatedToken);
+                if (!objUpdate.containsKey("refresh") || safeStr(objUpdate.get("refresh")).isEmpty()) {
+                    objUpdate.put("refresh", generatedToken);
+                }
+            } catch (Exception e) {
+                logger.warn("[autoGenerateSubUserCredentials] Failed to generate app_token: {}", e.getMessage());
+            }
+        }
+
+        // Auto-set app_id from context if not set
+        if (safeStr(objUpdate.get("app_id")).isEmpty() && accessContext.appId != null) {
+            objUpdate.put("app_id", accessContext.appId);
+        }
+    }
+
     private static final class UserAccessContext {
         private final boolean isAdmin;
         private final boolean isDev;
@@ -873,6 +1150,8 @@ public class TableHandler {
         private final Set<String> departmentCandidates;
         private final Set<String> branchCandidates;
         private final String dataScope;
+        private final List<String> permissions;
+        private final List<String> menusPermissions;
         private final String preferredOwner;
         private final String preferredDepartment;
         private final String preferredBranch;
@@ -885,7 +1164,9 @@ public class TableHandler {
             Set<String> ownerCandidates,
             Set<String> departmentCandidates,
             Set<String> branchCandidates,
-            String dataScope
+            String dataScope,
+            List<String> permissions,
+            List<String> menusPermissions
         ) {
             this.isAdmin = isAdmin;
             this.isDev = isDev;
@@ -895,6 +1176,8 @@ public class TableHandler {
             this.departmentCandidates = departmentCandidates != null ? departmentCandidates : Collections.emptySet();
             this.branchCandidates = branchCandidates != null ? branchCandidates : Collections.emptySet();
             this.dataScope = dataScope != null ? dataScope : "NONE";
+            this.permissions = permissions != null ? new ArrayList<>(permissions) : Collections.emptyList();
+            this.menusPermissions = menusPermissions != null ? new ArrayList<>(menusPermissions) : Collections.emptyList();
             this.preferredOwner = this.ownerCandidates.stream().findFirst().orElse("");
             this.preferredDepartment = this.departmentCandidates.stream().findFirst().orElse("");
             this.preferredBranch = this.branchCandidates.stream().findFirst().orElse("");
@@ -1061,12 +1344,6 @@ public class TableHandler {
         boolean isAdminNonDev = accessContext.isAdmin && !accessContext.isDev;
         boolean isSubUserTable = "csm_group_members".equals(tblname);
 
-        // Admin (non-dev) không được thao tác ghi trên bảng user hệ thống.
-        // Họ chỉ nên quản lý sub-user ở bảng/luồng riêng.
-        if (isSystemUsersTable && isAdminNonDev) {
-            return errorResponse("Admin không có quyền thêm/sửa/xóa trên bảng user hệ thống (csm_accounts)");
-        }
-
         if (isSubUserTable && isAdminNonDev) {
             Object parentObj = objUpdate.get("parent_account_id");
             if ("create".equals(command)) {
@@ -1133,9 +1410,16 @@ public class TableHandler {
             records = (List<Map<String, Object>>) filterResult.getOrDefault("rows", new ArrayList<>());
         }
 
+        boolean enforceManagedAccountOwnership = isSystemUsersTable && !accessContext.isDev;
+
         if (enforceAccountAppScope) {
             records = records.stream()
                 .filter(row -> accessContext.appId.equals(String.valueOf(row.get("app_id"))))
+                .collect(java.util.stream.Collectors.toList());
+        }
+        if (enforceManagedAccountOwnership) {
+            records = records.stream()
+                .filter(row -> isOwnedManagedAccountRow(row, accessContext))
                 .collect(java.util.stream.Collectors.toList());
         }
         if (isSubUserTable && isAdminNonDev) {
@@ -1155,6 +1439,11 @@ public class TableHandler {
                 if (enforceAccountAppScope) {
                     records = records.stream()
                         .filter(row -> accessContext.appId.equals(String.valueOf(row.get("app_id"))))
+                        .collect(java.util.stream.Collectors.toList());
+                }
+                if (enforceManagedAccountOwnership) {
+                    records = records.stream()
+                        .filter(row -> isOwnedManagedAccountRow(row, accessContext))
                         .collect(java.util.stream.Collectors.toList());
                 }
                 if (isSubUserTable && isAdminNonDev) {
@@ -1213,6 +1502,24 @@ public class TableHandler {
     
         switch (command) {
             case "create":
+                // ✅ Chỉ admin mới được tạo sub-user trên bảng csm_group_members
+                if (isSubUserTable && !isAdminNonDev) {
+                    return errorResponse("Sub-user không có quyền tạo sub-user mới trên bảng csm_group_members");
+                }
+
+                if (isSystemUsersTable && !hasNonBlank(objUpdate.get("pass"))) {
+                    return errorResponse("Thiếu mật khẩu khi tạo tài khoản");
+                }
+                
+                // ✅ Auto-generate encrypted credentials for user account tables
+                if (isSystemUsersTable) {
+                    normalizeManagedAccountPermissions(objUpdate, accessContext);
+                    autoGenerateAccountCredentials(objUpdate, accessContext);
+                }
+                if (isSubUserTable && isAdminNonDev) {
+                    autoGenerateSubUserCredentials(objUpdate, accessContext);
+                }
+
                 String createGuardError = applyDataScopeCreateGuard(tblname, objUpdate, accessContext);
                 if (createGuardError != null) {
                     return errorResponse(createGuardError);
@@ -1237,6 +1544,20 @@ public class TableHandler {
                     // Không break -> sẽ chạy tiếp xuống "update"
                 }
             case "update":
+                // ✅ Validation self-edit cho admin/sub-user (SAU khi records đã hydrate)
+                if (isSystemUsersTable && isAdminNonDev) {
+                    String selfEditError = validateAdminSelfEditOnRecords("update", objUpdate, records, accessContext);
+                    if (selfEditError != null) {
+                        return errorResponse(selfEditError);
+                    }
+                }
+                if (isSubUserTable && !isAdminNonDev) {
+                    String selfEditError = validateSubUserSelfEditOnRecords("update", objUpdate, records, accessContext);
+                    if (selfEditError != null) {
+                        return errorResponse(selfEditError);
+                    }
+                }
+                
                 Map<String, Object> newPkValues = new HashMap<>();
                 for (String pkField : effectivePkFields) {
                     if (objUpdate.containsKey(pkField)) {
@@ -1338,6 +1659,16 @@ public class TableHandler {
                 break;
     
             case "delete":
+                // ✅ Cấm admin/sub-user xóa user
+                if ((isSystemUsersTable && isAdminNonDev) || (isSubUserTable && !isAdminNonDev)) {
+                    if (isSystemUsersTable && isAdminNonDev) {
+                        return errorResponse("Admin không có quyền xóa người dùng trên bảng csm_accounts");
+                    }
+                    if (isSubUserTable && !isAdminNonDev) {
+                        return errorResponse("Sub-user không có quyền xóa sub-user trên bảng csm_group_members");
+                    }
+                }
+                
                 if (records.isEmpty()) {
                     return errorResponse("Không tìm thấy bản ghi để xóa");
                 }

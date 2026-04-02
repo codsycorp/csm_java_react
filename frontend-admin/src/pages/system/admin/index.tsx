@@ -6,7 +6,7 @@ import { normalizeMenuRuntimeConfig } from "#src/components/csm-crm/crm-config";
 import DynamicCodeMenu from "#src/pages/system/dynamic-code";
 import { useAppStore, useUserStore, usePermissionStore, useTabsStore } from "#src/store";
 import { resolveDevFlag } from "#src/utils/dev-flag";
-import { buildSystemUserMenuConfig, PERMISSION_GROUP_BEFORE_SAVE, PERMISSION_TOKEN_OPTIONS, ACTION_PRESET_OPTIONS_JSON, MENU_PERMISSION_OPTIONS, DATA_SCOPE_OPTIONS_JSON } from "./system-user-menu-config";
+import { adaptSystemUserConfigForActor, buildSystemUserMenuConfig, PERMISSION_GROUP_BEFORE_SAVE, PERMISSION_TOKEN_OPTIONS, ACTION_PRESET_OPTIONS_JSON, MENU_PERMISSION_OPTIONS, DATA_SCOPE_OPTIONS_JSON, type SystemUserActorType } from "./system-user-menu-config";
 import { Empty, Spin, Alert } from "antd";
 import { useEffect, useState, useCallback, useMemo } from "react";
 import { useParams, useLocation } from "react-router";
@@ -66,17 +66,22 @@ const SYSTEM_ROUTE_TABLE_SCHEMAS: Record<string, TableBootstrapDefinition[]> = {
 	],
 	"/system/user": [
 		{
-			tableName: "csm_group_members",
+			tableName: "csm_accounts",
 			struct: buildStruct(
 				{
 					id: "",
 					parent_account_id: "",
-					login_identifier: "",
-					group_id: "",
+					username: "",
+					email: "",
+					phoneNumber: "",
+					full_name: "",
+					user_address: "",
+					app_id: "",
 					app_token: "",
 					refresh: "",
 					pass: "",
 					actived: true,
+					roles: "[]",
 					permissions: "[]",
 					menusPermissions: "[]",
 					permissionBitfield: "0",
@@ -87,8 +92,8 @@ const SYSTEM_ROUTE_TABLE_SCHEMAS: Record<string, TableBootstrapDefinition[]> = {
 					department_id: "",
 					team_id: "",
 				},
-				["id", "login_identifier"],
-				["id", "login_identifier", "parent_account_id", "group_id", "dept_id", "branch_id"],
+				["id", "username", "email", "phoneNumber", "app_id", "app_token"],
+				["id", "username", "email", "phoneNumber", "full_name", "app_id", "parent_account_id", "dept_id", "branch_id"],
 			),
 		},
 	],
@@ -241,21 +246,6 @@ function buildRoleMenuFields(
 }
 
 const SYSTEM_FRIENDLY_VISIBLE_FIELDS: Record<string, string[]> = {
-	csm_accounts: [
-		"id",
-		"username",
-		"full_name",
-		"email",
-		"phoneNumber",
-		"permissionGroups",
-		"permissionsAdd",
-		"permissionsDeny",
-		"menusPermissionsAdd",
-		"menusPermissionsDeny",
-		"dataScope",
-		"permissionBitfield",
-		"actived",
-	],
 	csm_group_members: [
 		"id",
 		"login_identifier",
@@ -289,11 +279,61 @@ const SYSTEM_FRIENDLY_VISIBLE_FIELDS: Record<string, string[]> = {
 	],
 };
 
-function applyFriendlyFieldPolicy(tableName: string | undefined, rawFields: any[]) {
+const SYSTEM_USER_VISIBLE_FIELDS_BY_ACTOR: Record<SystemUserActorType, string[]> = {
+	dev: [
+		"id",
+		"username",
+		"full_name",
+		"email",
+		"phoneNumber",
+		"user_address",
+		"app_id",
+		"pass",
+		"actived",
+	],
+	admin: [
+		"id",
+		"username",
+		"full_name",
+		"email",
+		"phoneNumber",
+		"user_address",
+		"app_id",
+		"pass",
+		"permissionGroups",
+		"permissionsAdd",
+		"permissionsDeny",
+		"menusPermissionsAdd",
+		"menusPermissionsDeny",
+		"dataScope",
+		"actived",
+	],
+	"sub-user": [
+		"id",
+		"username",
+		"full_name",
+		"email",
+		"phoneNumber",
+		"user_address",
+		"app_id",
+		"pass",
+		"permissionGroups",
+		"permissionsAdd",
+		"permissionsDeny",
+		"menusPermissionsAdd",
+		"menusPermissionsDeny",
+		"dataScope",
+		"actived",
+	],
+};
+
+function applyFriendlyFieldPolicy(tableName: string | undefined, rawFields: any[], actorType?: SystemUserActorType) {
 	if (!tableName || !Array.isArray(rawFields) || rawFields.length === 0) {
 		return rawFields;
 	}
-	const visibleFields = SYSTEM_FRIENDLY_VISIBLE_FIELDS[tableName];
+	const visibleFields = tableName === "csm_accounts"
+		? SYSTEM_USER_VISIBLE_FIELDS_BY_ACTOR[actorType || "admin"]
+		: SYSTEM_FRIENDLY_VISIBLE_FIELDS[tableName];
 	if (!visibleFields || visibleFields.length === 0) {
 		return rawFields;
 	}
@@ -375,6 +415,7 @@ export default function AdminPage() {
 	const runtimeDataScope = (isDevUser || isAdminUser || isLegacyPermissionProfile)
 		? "ALL"
 		: resolvePermissionDataScope(runtimePermissionBits);
+	const systemUserActorType: SystemUserActorType = isDevUser ? "dev" : (isAdminUser ? "admin" : "sub-user");
 
 	const buildUserMenuByRole = useCallback((base: any = {}): any => {
 		if (!isSystemUserRoute) {
@@ -382,40 +423,21 @@ export default function AdminPage() {
 		}
 
 		const resolvedAppId = (base?.app_id && String(base.app_id).trim()) || appId;
+		const runtimeConfig = buildSystemUserMenuConfig({
+			...base,
+			id: "user",
+			path: "/system/user",
+			label: t("common.menu.user"),
+			label_en: "System User Management",
+			label_zh: "系统用户管理",
+			table_name: "csm_accounts",
+			app_id: resolvedAppId,
+			type_form: 1,
+			row_type_edit: 0,
+			g_readonly: false,
+		}, "main", resolvedAppId, t);
 
-		if (isDevUser) {
-			return normalizeMenuRuntimeConfig(buildSystemUserMenuConfig({
-				...base,
-				id: "user",
-				path: "/system/user",
-				label: t("common.menu.user"),
-				label_en: "System User Management",
-				label_zh: "系统用户管理",
-				table_name: "csm_accounts",
-				app_id: resolvedAppId,
-				type_form: 1,
-				row_type_edit: 0,
-				g_readonly: false,
-			}, "main", resolvedAppId, t));
-		}
-
-		if (isAdminUser) {
-			return normalizeMenuRuntimeConfig(buildSystemUserMenuConfig({
-				...base,
-				id: "user",
-				path: "/system/user",
-				label: t("common.menu.userSub"),
-				label_en: "Sub-user Management",
-				label_zh: "子账号管理",
-				table_name: "csm_group_members",
-				app_id: resolvedAppId,
-				type_form: 1,
-				row_type_edit: 0,
-				g_readonly: false,
-			}, "sub", resolvedAppId, t));
-		}
-
-		return base;
+		return normalizeMenuRuntimeConfig(adaptSystemUserConfigForActor(runtimeConfig, systemUserActorType));
 	}, [isSystemUserRoute, isDevUser, isAdminUser, t, appId]);
 
 	const normalizeKnownSystemMenu = useCallback((menu: any = {}): any => {
@@ -903,7 +925,7 @@ export default function AdminPage() {
 			}
 		};
 
-		m_configs.table = applyFriendlyFieldPolicy(runtimeMenuData.table_name, m_configs.table as any) as any;
+		m_configs.table = applyFriendlyFieldPolicy(runtimeMenuData.table_name, m_configs.table as any, systemUserActorType) as any;
 
 		// If columns are missing, auto-generate sensible defaults for known tables
 		if ((!m_configs.table || m_configs.table.length === 0) && runtimeMenuData.table_name) {
@@ -964,10 +986,7 @@ export default function AdminPage() {
 					? ["id", "role_code", "role_name", "description", "permissionPreset", "permissions", "menusPermissions", "dataScope", "permissionBitfield", "status"]
 					: runtimeMenuData.table_name === "csm_depts"
 						? ["id", "parent_dept_id", "dept_code", "dept_name", "dept_full_name", "description", "manager_user_id", "is_global", "status", "create_time", "update_time"]
-						: [
-							"id", "username", "email", "phoneNumber", "full_name", "user_address", "app_id", "app_token", "pass", "roles", "actived",
-							"permissionGroups", "permissionsAdd", "permissionsDeny", "menusPermissionsAdd", "menusPermissionsDeny", "dataScope", "permissionBitfield",
-						];
+						: SYSTEM_USER_VISIBLE_FIELDS_BY_ACTOR[systemUserActorType];
 			DEFAULT_HEADERS.parent_account_id = "common.parentAccountId";
 			DEFAULT_HEADERS.login_identifier = "common.loginIdentifier";
 			DEFAULT_HEADERS.group_id = "common.groupId";
@@ -979,7 +998,7 @@ export default function AdminPage() {
 				f_types: k === "id" ? "number" : "string",
 				f_align: k === "id" ? "right" : "left",
 			}));
-			m_configs.table = applyFriendlyFieldPolicy(runtimeMenuData.table_name, fields as any) as any;
+			m_configs.table = applyFriendlyFieldPolicy(runtimeMenuData.table_name, fields as any, systemUserActorType) as any;
 		}
 		
 		// Debug log to check if backend returned type_form and row_type_edit

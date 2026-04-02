@@ -16,6 +16,15 @@ export default function Profile() {
 	const currentUser = useUserStore();
 	const [loading, setLoading] = useState(false);
 	const [passwordForm] = Form.useForm();
+
+	const isUpdateSuccess = (response: any) => {
+		if (!response) return false;
+		if (response.success === true) return true;
+		if (Number(response.code) === 200) return true;
+		if (response.data === "success") return true;
+		if (String(response.message || "").toLowerCase() === "ok") return true;
+		return false;
+	};
 	
 	const getAvatarURL = () => {
 		if (currentUser) {
@@ -53,7 +62,7 @@ export default function Profile() {
 				pk_fields: [pkField], // CsmApi will build e_where from this
 			});
 			
-			if (response.data === "success") {
+			if (isUpdateSuccess(response)) {
 				message.success(t('personal-center.updateSuccess'));
 				// Update user store
 				useUserStore.setState({
@@ -64,7 +73,7 @@ export default function Profile() {
 					description: values.description,
 				});
 			} else {
-				message.error(t('personal-center.updateFailed'));
+				message.error(response?.message || t('personal-center.updateFailed'));
 			}
 		} catch (error: any) {
 			message.error(error.message || t('personal-center.updateFailed'));
@@ -100,11 +109,11 @@ export default function Profile() {
 				pk_fields: [pkField], // CsmApi will build e_where from this
 			});
 			
-			if (response.data === "success") {
+			if (isUpdateSuccess(response)) {
 				message.success(t('personal-center.passwordChangeSuccess'));
 				passwordForm.resetFields();
 			} else {
-				message.error(t('personal-center.passwordChangeFailed'));
+				message.error(response?.message || t('personal-center.passwordChangeFailed'));
 			}
 		} catch (error: any) {
 			message.error(error.message || t('personal-center.passwordChangeFailed'));

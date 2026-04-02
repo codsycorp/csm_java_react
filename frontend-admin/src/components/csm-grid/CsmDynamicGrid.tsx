@@ -3094,12 +3094,14 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 					});
 					
 					// Update local state và run after trigger
+					// NOTE: For "create", we do NOT add the row locally here.
+					// The backend sends a socket "create" event before returning the HTTP response.
+					// The socket event updates database[tableName], which triggers the useEffect to reload
+					// rows. Adding the row locally too would cause a duplicate (race condition).
 					setData((prev) => {
 						if (effectiveCommand === "create") {
-							const next = [...prev, payloadValues];
-							// Run afterAdd trigger với toàn bộ mảng mới
-							runAfterTrigger('afterAdd', next);
-							return next;
+							// Skip local add — socket event + useEffect will handle it
+							return prev;
 						} else if (targetRowForUpdate) {
 							const editingRowKey = getRowKey(targetRowForUpdate);
 							const idx = prev.findIndex(row => {

@@ -182,11 +182,11 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 	// CRITICAL: Đây là thông báo hệ thống từ admin CSM broadcast đến app của user
 	const systemMessages = useMemo(() => {
 		const appRoomMsgs = contextMessages[appId] || [];
-		return appRoomMsgs.filter((msg: any) => 
-			msg.eventType === 'broadcast_notification' && 
-			msg.appId === 'csm' && // From CSM admin
-			msg.to === appId // To current app
-		);
+		return appRoomMsgs.filter((msg: any) => {
+			const isBroadcast = msg.eventType === 'broadcast_notification' && msg.to === appId;
+			const isGuestAutoWelcomeAlert = msg.eventType === 'guest_auto_welcome_alert' && msg.appId === appId;
+			return isBroadcast || isGuestAutoWelcomeAlert;
+		});
 	}, [contextMessages, appId]);
 
 	const systemMessagesUnread = useMemo(() => {

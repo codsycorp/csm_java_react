@@ -72,28 +72,52 @@ public class AuthHandler {
         // principal có thể là UserDetails hoặc Map tuỳ custom
         Object principal = authentication.getPrincipal();
         Map<String, Object> userInfo = null;
+
+        // Luôn cố lấy dữ liệu mới nhất từ DB để tránh stale profile sau khi update.
+        Optional<User> freshUserOpt = Optional.empty();
+        if (principal instanceof net.phanmemmottrieu.model.User) {
+            net.phanmemmottrieu.model.User principalUser = (net.phanmemmottrieu.model.User) principal;
+            if (principalUser.getId() != null && !principalUser.getId().isBlank()) {
+                freshUserOpt = userService.findUserById(principalUser.getId());
+            }
+            String appToken = principalUser.getAppToken();
+            if (appToken != null && !appToken.isBlank()) {
+                Optional<User> byAppToken = userService.findUserByAppToken(appToken);
+                if (byAppToken.isPresent()) {
+                    freshUserOpt = byAppToken;
+                }
+            }
+        } else if (principal instanceof java.util.Map<?, ?> principalMap) {
+            Object principalUserIdObj = principalMap.containsKey("userId") ? principalMap.get("userId") : null;
+            String principalUserId = principalUserIdObj == null ? "" : String.valueOf(principalUserIdObj).trim();
+            if (principalUserId.isEmpty()) {
+                Object idObj = principalMap.containsKey("id") ? principalMap.get("id") : null;
+                principalUserId = idObj == null ? "" : String.valueOf(idObj).trim();
+            }
+            if (!principalUserId.isEmpty()) {
+                freshUserOpt = userService.findUserById(principalUserId);
+            }
+
+            Object appTokenObj = principalMap.containsKey("app_token") ? principalMap.get("app_token") : null;
+            String appToken = appTokenObj == null ? "" : String.valueOf(appTokenObj).trim();
+            if (!appToken.isEmpty()) {
+                Optional<User> byAppToken = userService.findUserByAppToken(appToken);
+                if (byAppToken.isPresent()) {
+                    freshUserOpt = byAppToken;
+                }
+            }
+        }
+
+        if (freshUserOpt.isPresent()) {
+            userInfo = toUserInfoMap(freshUserOpt.get());
+        }
+
+        if (userInfo == null) {
         if (principal instanceof java.util.Map) {
             userInfo = (Map<String, Object>) principal;
         } else if (principal instanceof net.phanmemmottrieu.model.User) {
             net.phanmemmottrieu.model.User u = (net.phanmemmottrieu.model.User) principal;
-            userInfo = new java.util.HashMap<>();
-            userInfo.put("userId", u.getId());
-            userInfo.put("username", u.getUsername());
-            userInfo.put("email", u.getEmail());
-            userInfo.put("phoneNumber", u.getPhoneNumber());
-            userInfo.put("full_name", u.getFullName());
-            userInfo.put("avatar", u.getAvatar());
-            userInfo.put("roles", u.getPermissions()); // dùng permissions như roles
-            userInfo.put("permissions", u.getPermissions());
-            userInfo.put("menusPermissions", u.getMenusPermissions());
-            userInfo.put("permissionBitfield", u.getPermissionBitfield());
-            userInfo.put("permissionSchemaVersion", u.getPermissionSchemaVersion());
-            userInfo.put("dataScope", u.getDataScope());
-            userInfo.put("dept_id", u.getDeptId());
-            userInfo.put("branch_id", u.getBranchId());
-            userInfo.put("app_id", u.getAppId());
-            userInfo.put("app_token", u.getAppToken());
-            userInfo.put("dev", u.getDev()); // Thêm dev flag
+            userInfo = toUserInfoMap(u);
         } else if (principal instanceof org.springframework.security.core.userdetails.UserDetails) {
             // Nếu dùng UserDetails, chỉ trả về username
             userInfo = new java.util.HashMap<>();
@@ -103,11 +127,34 @@ public class AuthHandler {
             userInfo = new java.util.HashMap<>();
             userInfo.put("principal", principal.toString());
         }
+        }
         response.set("code", 200);
         enrichUserInfoWithBitfield(userInfo);
         response.set("result", userInfo);
         response.set("message", "ok");
         response.set("success", true);
+    }
+
+    private Map<String, Object> toUserInfoMap(net.phanmemmottrieu.model.User u) {
+        Map<String, Object> userInfo = new java.util.HashMap<>();
+        userInfo.put("userId", u.getId());
+        userInfo.put("username", u.getUsername());
+        userInfo.put("email", u.getEmail());
+        userInfo.put("phoneNumber", u.getPhoneNumber());
+        userInfo.put("full_name", u.getFullName());
+        userInfo.put("avatar", u.getAvatar());
+        userInfo.put("roles", u.getPermissions()); // dùng permissions như roles
+        userInfo.put("permissions", u.getPermissions());
+        userInfo.put("menusPermissions", u.getMenusPermissions());
+        userInfo.put("permissionBitfield", u.getPermissionBitfield());
+        userInfo.put("permissionSchemaVersion", u.getPermissionSchemaVersion());
+        userInfo.put("dataScope", u.getDataScope());
+        userInfo.put("dept_id", u.getDeptId());
+        userInfo.put("branch_id", u.getBranchId());
+        userInfo.put("app_id", u.getAppId());
+        userInfo.put("app_token", u.getAppToken());
+        userInfo.put("dev", u.getDev());
+        return userInfo;
     }
 
     public void handleLogin(StandardResponse response, Map<String, Object> params) {

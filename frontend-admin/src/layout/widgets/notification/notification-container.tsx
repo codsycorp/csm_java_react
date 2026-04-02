@@ -26,41 +26,8 @@ export function NotificationContainer({ ...restProps }: ButtonProps) {
 		       });
 	       }, []);
 
-	       // Load lịch sử chat từ guest users khi admin đăng nhập - reload khi socket reconnect
-	       useEffect(() => {
-		       if (!socket || !connected || !isAdmin || !appId) return;
-		       const getGuestKey = (msg: ChatMessage) => (msg.guestSessionId || msg.guestPhone || '').trim();
-		       
-		       // Load tất cả chat history của appId này
-		       socket.emit("chat_history_app", appId, (data: string) => {
-			       try {
-				       const history: ChatMessage[] = JSON.parse(data);
-				       // Chuyển đổi sang notifications
-				       const chatNotifs = history
-					       .filter(msg => getGuestKey(msg) && !msg.isAdmin) // Chỉ lấy tin từ guest
-					       .map(msg => ({
-						       avatar: msg.avatar || '',
-						       date: new Date(msg.timestamp || Date.now()).toLocaleString(),
-						       isRead: msg.readBy?.includes(user.userId || '') || false,
-						       message: msg.message,
-						       title: msg.guestPhone || msg.username || 'Khách mới',
-						       type: 'chat' as const,
-						       roomId: msg.room,
-						       fromUserId: msg.userId,
-						       guestPhone: msg.guestPhone,
-						       guestSessionId: msg.guestSessionId,
-						       appId: msg.appId,
-					       }));
-				       // Chỉ giữ lại non-chat notifications và merge với chat mới
-				       setNotifications(prev => {
-					       const nonChatNotifs = prev.filter(n => n.type !== 'chat');
-					       return [...chatNotifs, ...nonChatNotifs];
-				       });
-			       } catch (e) {
-				       console.error('Error loading chat history', e);
-			       }
-		       });
-	       }, [socket, connected, isAdmin, appId, user.userId]);
+	       // Initial chat history is now delivered from backend via socket snapshot in ChatHistoryContext.
+	       // Keep NotificationContainer focused on realtime incremental updates only.
 
 	       // Lắng nghe tin nhắn chat mới từ guest users
 	       useEffect(() => {

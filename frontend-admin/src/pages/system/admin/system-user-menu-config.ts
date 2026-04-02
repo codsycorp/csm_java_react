@@ -18,6 +18,8 @@ export interface SystemUserModesConfig {
 	sub?: SystemUserMenuModeConfig;
 }
 
+export type SystemUserActorType = "dev" | "admin" | "sub-user";
+
 export const PERMISSION_TOKEN_OPTIONS = [
 	{ value: "admin", label: "system.userPermission.option.admin" },
 	{ value: "dev", label: "system.userPermission.option.dev" },
@@ -53,6 +55,30 @@ export const MENU_PERMISSION_OPTIONS = [
 	{ value: "/crm", label: "system.userPermission.menu.crm" },
 ];
 
+const SYSTEM_USER_PERMISSION_FIELD_NAMES = new Set([
+	"roles",
+	"permissionPreset",
+	"permissionGroups",
+	"permissions",
+	"permissionsAdd",
+	"permissionsDeny",
+	"menusPermissions",
+	"menusPermissionsAdd",
+	"menusPermissionsDeny",
+	"permissionBitfield",
+	"permissionSchemaVersion",
+	"dataScope",
+	"dept_id",
+	"branch_id",
+]);
+
+const SYSTEM_USER_INTERNAL_FIELD_NAMES = new Set([
+	"parent_account_id",
+	"app_token",
+	"permissionBitfield",
+	"permissionSchemaVersion",
+]);
+
 export const ACTION_PRESET_OPTIONS_JSON = JSON.stringify({
 	options: [
 		{ value: "", label: "system.userPermission.preset.custom" },
@@ -80,6 +106,17 @@ const DEPT_SELECT_QUERY_JSON = JSON.stringify({
 			obj_name: "csm_depts",
 			fields: ["id", "dept_name"],
 			obj_where: { field: "id", type: "like", value: "" },
+		},
+	],
+});
+
+// Query sys_apps table (always from csm app) to populate app_id dropdown
+const APP_ID_QUERY_JSON = JSON.stringify({
+	query: [
+		{
+			obj_name: "sys_apps",
+			app_id: "csm",
+			fields: ["id", "app_name"],
 		},
 	],
 });
@@ -121,13 +158,14 @@ function buildTagField(
 
 export const SYSTEM_ACCOUNT_DEFAULT_FIELDS: TableField[] = [
 	{ f_name: "id", f_header: "ID", f_show: 1, f_types: "number", f_align: "right" },
+	{ f_name: "parent_account_id", f_header: "common.parentAccountId", f_show: 0, f_types: "string", f_align: "left" },
 	{ f_name: "username", f_header: "common.username", f_show: 1, f_types: "string", f_align: "left" },
 	{ f_name: "email", f_header: "common.email", f_show: 1, f_types: "string", f_align: "left" },
 	{ f_name: "phoneNumber", f_header: "common.phoneNumber", f_show: 1, f_types: "string", f_align: "left" },
 	{ f_name: "full_name", f_header: "common.fullName", f_show: 1, f_types: "string", f_align: "left" },
 	{ f_name: "user_address", f_header: "common.address", f_show: 1, f_types: "string", f_align: "left" },
-	{ f_name: "app_id", f_header: "common.appId", f_show: 1, f_types: "string", f_align: "left" },
-	{ f_name: "app_token", f_header: "common.appToken", f_show: 1, f_types: "string", f_align: "left" },
+	{ f_name: "app_id", f_header: "common.appId", f_show: 1, f_types: "co", f_align: "left", f_cbo_query: APP_ID_QUERY_JSON } as any,
+	{ f_name: "app_token", f_header: "common.appToken", f_show: 0, f_types: "string", f_align: "left" },
 	{ f_name: "pass", f_header: "common.password", f_show: 1, f_types: "password", f_align: "left" },
 	{ f_name: "roles", f_header: "system.userPermission.fields.roles", f_show: 0, f_types: "co", f_align: "left", f_cbo_query: ROLE_SELECT_QUERY_JSON },
 	{ f_name: "permissionPreset", f_header: "system.userPermission.fields.permissionPreset", f_show: 0, f_types: "co", f_align: "left", f_cbo_query: ACTION_PRESET_OPTIONS_JSON },
@@ -159,7 +197,7 @@ export const SYSTEM_ACCOUNT_DEFAULT_FIELDS: TableField[] = [
 		f_align: "left",
 		f_options: MENU_PERMISSION_OPTIONS,
 	} as any,
-	{ f_name: "permissionBitfield", f_header: "system.userPermission.fields.permissionBitfield", f_show: 1, f_types: "string", f_align: "left" },
+	{ f_name: "permissionBitfield", f_header: "system.userPermission.fields.permissionBitfield", f_show: 0, f_types: "string", f_align: "left" },
 	{ f_name: "permissionSchemaVersion", f_header: "system.userPermission.fields.permissionSchemaVersion", f_show: 0, f_types: "string", f_align: "left" },
 	{ f_name: "dataScope", f_header: "system.userPermission.fields.dataScope", f_show: 1, f_types: "co", f_align: "left", f_cbo_query: DATA_SCOPE_OPTIONS_JSON },
 	{ f_name: "dept_id", f_header: "system.userPermission.fields.deptId", f_show: 0, f_types: "co", f_align: "left", f_cbo_query: DEPT_SELECT_QUERY_JSON },
@@ -213,6 +251,35 @@ export const SUB_USER_DEFAULT_FIELDS: TableField[] = [
 
 export const SYSTEM_ACCOUNT_BEFORE_SAVE = `
 function beforeSave(row, seft) {
+	function isDevActor() {
+		return Boolean(seft?.user?.dev);
+	}
+
+	function getCurrentAppId() {
+		return String(seft?.user?.app_id || seft?.appId || "").trim();
+	}
+
+	function getDefaultFullMenus() {
+		return ["/dashboard", "/home", "/system/user", "/system/menu", "/system/dept", "/crm"];
+	}
+
+	function rankScope(scope) {
+		const normalized = String(scope || "").trim().toUpperCase();
+		const map = { NONE: 0, OWNER: 1, DEPARTMENT: 2, BRANCH: 3, ALL: 4 };
+		return map[normalized] ?? 0;
+	}
+
+	function minScope(left, right) {
+		const values = ["NONE", "OWNER", "DEPARTMENT", "BRANCH", "ALL"];
+		return values[Math.min(rankScope(left), rankScope(right))] || "NONE";
+	}
+
+	function intersectPreserveOrder(source, allowed) {
+		const allowedSet = new Set(uniqueList(allowed).map((item) => String(item || "").trim().toLowerCase()));
+		if (allowedSet.size === 0) return [];
+		return uniqueList(source).filter((item) => allowedSet.has(String(item || "").trim().toLowerCase()));
+	}
+
 	function getLang() {
 		const fromI18n = String(seft?.i18n?.language || seft?.language || "").toLowerCase();
 		const fromNavigator = String((typeof navigator !== "undefined" && navigator.language) || "").toLowerCase();
@@ -389,12 +456,25 @@ function beforeSave(row, seft) {
 		return [];
 	}
 
-	const resolvedAppId = String(row.app_id || seft.appId || "").trim();
+	const actorIsDev = isDevActor();
+	const currentActorAppId = getCurrentAppId();
+	const resolvedAppId = actorIsDev
+		? String(row.app_id || seft.appId || "").trim()
+		: currentActorAppId;
 	if (!resolvedAppId) {
 		window.$message?.error(tr({
 			vi: "Vui lòng chọn app_id trước khi tạo tài khoản",
 			en: "Please select app_id before creating account",
 			zh: "创建账号前请先选择 app_id",
+		}));
+		return false;
+	}
+	const currentPass = String(row.pass || "").trim();
+	if (!currentPass) {
+		window.$message?.error(tr({
+			vi: "Vui lòng nhập mật khẩu cho tài khoản",
+			en: "Password is required",
+			zh: "请填写账号密码",
 		}));
 		return false;
 	}
@@ -408,15 +488,14 @@ function beforeSave(row, seft) {
 		return false;
 	}
 	row.app_id = resolvedAppId;
-	const normalizedRoles = normalizeList(row.roles);
-	row.roles = normalizedRoles;
-	const roleValue = normalizedRoles.length > 0
-		? String(normalizedRoles[0] || "admin").trim() || "admin"
+	const normalizedRoles = actorIsDev ? ["admin"] : normalizeList(row.roles);
+	row.roles = normalizedRoles.length > 0 ? normalizedRoles : ["admin"];
+	const roleValue = row.roles.length > 0
+		? String(row.roles[0] || "admin").trim() || "admin"
 		: "admin";
 	const accessRight = roleValue.toLowerCase() === "dev" ? "1" : "0";
 	row.app_token = seft.csmEncrypt([resolvedAppId, primaryIdentifier, roleValue, accessRight].join("_____"));
 	row.refresh = row.app_token;
-	const currentPass = String(row.pass || "").trim();
 	if (currentPass) {
 		const decryptedPass = String(seft.csmDecrypt(currentPass) || "");
 		if (!decryptedPass.startsWith(primaryIdentifier + "_____")) {
@@ -431,22 +510,38 @@ function beforeSave(row, seft) {
 	row.menusPermissionsAdd = normalizeList(row.menusPermissionsAdd);
 	row.menusPermissionsDeny = normalizeList(row.menusPermissionsDeny);
 	row.permissionPreset = String(row.permissionPreset || "").trim();
+	const parentPermissions = normalizeList(seft?.user?.permissions);
+	const parentMenus = normalizeList(seft?.user?.menusPermissions);
+	const parentScope = String(seft?.user?.dataScope || "ALL").trim().toUpperCase() || "ALL";
 
-	const fromGroups = buildGroupPermissions(row.permissionGroups);
-	const fromPreset = buildPresetPermissions(row.permissionPreset);
-	const basePermissionAllow = fromGroups.length > 0
-		? uniqueList([...(fromGroups || []), ...(fromPreset || [])])
-		: uniqueList([...(row.permissions || []), ...(fromPreset || [])]);
-	const mergedPermissionAllow = uniqueList([...(basePermissionAllow || []), ...(row.permissionsAdd || [])]);
-	row.permissions = listMinus(mergedPermissionAllow, row.permissionsDeny);
+	if (actorIsDev) {
+		row.permissions = ["admin", "scope:all"];
+		row.menusPermissions = parentMenus.length > 0 ? parentMenus : getDefaultFullMenus();
+		row.permissionGroups = [];
+		row.permissionsAdd = [];
+		row.permissionsDeny = [];
+		row.menusPermissionsAdd = [];
+		row.menusPermissionsDeny = [];
+		row.permissionPreset = "";
+		row.dataScope = "ALL";
+	} else {
+		row.dataScope = minScope(row.dataScope || parentScope, parentScope);
+		const fromGroups = buildGroupPermissions(row.permissionGroups);
+		const fromPreset = buildPresetPermissions(row.permissionPreset);
+		const basePermissionAllow = fromGroups.length > 0
+			? uniqueList([...(fromGroups || []), ...(fromPreset || [])])
+			: uniqueList([...(row.permissions || []), ...(fromPreset || [])]);
+		const mergedPermissionAllow = uniqueList([...(basePermissionAllow || []), ...(row.permissionsAdd || [])]);
+		row.permissions = intersectPreserveOrder(listMinus(mergedPermissionAllow, row.permissionsDeny), parentPermissions);
 
-	const groupMenus = buildGroupMenus(row.permissionGroups);
-	const presetMenus = buildPresetMenus(row.permissionPreset);
-	const baseMenuAllow = groupMenus.length > 0
-		? uniqueList([...(groupMenus || []), ...(presetMenus || [])])
-		: uniqueList([...(row.menusPermissions || []), ...(presetMenus || [])]);
-	const mergedMenuAllow = uniqueList([...(baseMenuAllow || []), ...(row.menusPermissionsAdd || [])]);
-	row.menusPermissions = listMinus(mergedMenuAllow, row.menusPermissionsDeny);
+		const groupMenus = buildGroupMenus(row.permissionGroups);
+		const presetMenus = buildPresetMenus(row.permissionPreset);
+		const baseMenuAllow = groupMenus.length > 0
+			? uniqueList([...(groupMenus || []), ...(presetMenus || [])])
+			: uniqueList([...(row.menusPermissions || []), ...(presetMenus || [])]);
+		const mergedMenuAllow = uniqueList([...(baseMenuAllow || []), ...(row.menusPermissionsAdd || [])]);
+		row.menusPermissions = intersectPreserveOrder(listMinus(mergedMenuAllow, row.menusPermissionsDeny), parentMenus);
+	}
 
 	applyDataScopeToPermissions(row);
 	row.permissionBitfield = String(toBitfield(row));
@@ -913,5 +1008,26 @@ export function buildSystemUserMenuConfig(base: any, mode: "main" | "sub", resol
 			main: normalizedMain,
 			sub: normalizedSub,
 		},
+	};
+}
+
+export function adaptSystemUserConfigForActor(
+	config: SystemUserMenuModeConfig,
+	actorType: SystemUserActorType,
+): SystemUserMenuModeConfig {
+	if (!config || config.table_name !== "csm_accounts") {
+		return config;
+	}
+	return {
+		...config,
+		table: Array.isArray(config.table)
+			? config.table.map((field: any) => (
+				SYSTEM_USER_INTERNAL_FIELD_NAMES.has(String(field?.f_name || ""))
+					? { ...field, f_show: 0 }
+					: (actorType === "dev" && SYSTEM_USER_PERMISSION_FIELD_NAMES.has(String(field?.f_name || ""))
+						? { ...field, f_show: 0 }
+						: field)
+			))
+			: config.table,
 	};
 }

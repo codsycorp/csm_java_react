@@ -95,10 +95,17 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
     private final Map<String, String> appSupportDisplayNames = new ConcurrentHashMap<>();
     // Track when welcomes were sent to app+phone combinations to prevent duplicates across identity resolution changes
     private final Map<String, Long> welcomeTimestampByAppPhone = new ConcurrentHashMap<>();
+    // Track welcome timestamps by app+guestIdentity (for guests without phone) to prevent repeated auto-welcome
+    private final Map<String, Long> welcomeTimestampByGuestKey = new ConcurrentHashMap<>();
+    // Keep auto-sent backend messages in memory until guest replies, then persist to DB.
+    private final Map<String, java.util.List<ChatMessage>> pendingAutoMessagesByGuest = new ConcurrentHashMap<>();
+    private final Map<String, Long> pendingAutoMessagesUpdatedAt = new ConcurrentHashMap<>();
     private static final String POLITE_GENERIC_WELCOME = "Chao anh/chị, em la tu van vien ho tro. Anh/chị dang quan tam thong tin nao de em ho tro nhanh va dung nhu cau a? Neu thuan tien, anh/chị de lai so dien thoai hoac Zalo de ben em lien he lai.";
 
     private static final long AUTO_WELCOME_DELAY_MS = 60_000L;
     private static final long AUTO_WELCOME_COOLDOWN_MS = 24 * 60 * 60 * 1000L;
+    private static final long PENDING_AUTO_MESSAGE_TTL_MS = 6 * 60 * 60 * 1000L;
+    private static final int MAX_PENDING_AUTO_MESSAGES_PER_GUEST = 3;
     private static final String AI_ASSISTANT_USER_ID = "ai_assistant";
     private static final String DEFAULT_SUPPORT_USERNAME = "Tu van vien";
 
@@ -229,6 +236,25 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
         return DEFAULT_SUPPORT_USERNAME;
     }
 
+    private void pushAdminChatHistorySnapshot(SocketIOClient client, String appId, int limit) {
+        if (client == null || appId == null || appId.isBlank()) {
+            return;
+        }
+
+        try {
+            var history = ChatHistoryManager.getHistoryByAppId(appId.trim(), limit);
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("appId", appId.trim());
+            payload.put("limit", limit);
+            payload.put("timestamp", System.currentTimeMillis());
+            payload.put("messages", history);
+            client.sendEvent("chat_history_app_snapshot", payload);
+            logger.info("📦 Sent admin chat snapshot appId={} size={} session={}", appId, history.size(), client.getSessionId());
+        } catch (Exception e) {
+            logger.error("❌ Failed to send admin chat snapshot for appId {}: {}", appId, e.getMessage(), e);
+        }
+    }
+
     private boolean isSafeSupportDisplayName(String username) {
         if (username == null) {
             return false;
@@ -298,6 +324,117 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
         ScheduledFuture<?> future = pendingGuestNoReplyTasks.remove(key);
         if (future != null) {
             future.cancel(false);
+        }
+    }
+
+    private void queuePendingAutoMessage(String appId, String guestIdentity, ChatMessage autoMessage) {
+        if (appId == null || appId.isBlank() || guestIdentity == null || guestIdentity.isBlank() || autoMessage == null) {
+            return;
+        }
+
+        String key = guestKey(appId, guestIdentity);
+        java.util.List<ChatMessage> queue = pendingAutoMessagesByGuest.computeIfAbsent(key, k -> new java.util.ArrayList<>());
+        synchronized (queue) {
+            if (queue.size() >= MAX_PENDING_AUTO_MESSAGES_PER_GUEST) {
+                queue.remove(0);
+            }
+            queue.add(autoMessage);
+        }
+        pendingAutoMessagesUpdatedAt.put(key, System.currentTimeMillis());
+    }
+
+    private void flushPendingAutoMessagesOnGuestReply(String appId, String guestIdentity) {
+        if (appId == null || appId.isBlank() || guestIdentity == null || guestIdentity.isBlank()) {
+            return;
+        }
+
+        String key = guestKey(appId, guestIdentity);
+        java.util.List<ChatMessage> queue = pendingAutoMessagesByGuest.remove(key);
+        pendingAutoMessagesUpdatedAt.remove(key);
+
+        if (queue == null || queue.isEmpty()) {
+            return;
+        }
+
+        java.util.List<ChatMessage> toPersist;
+        synchronized (queue) {
+            toPersist = new java.util.ArrayList<>(queue);
+            queue.clear();
+        }
+
+        toPersist.sort((a, b) -> Long.compare(
+                a.getTimestamp() == null ? 0L : a.getTimestamp(),
+                b.getTimestamp() == null ? 0L : b.getTimestamp()
+        ));
+
+        int saved = 0;
+        for (ChatMessage msg : toPersist) {
+            try {
+                chatPersistenceService.saveMessage(msg);
+                saved++;
+            } catch (Exception e) {
+                logger.warn("Failed to persist buffered auto message for key {}: {}", key, e.getMessage());
+            }
+        }
+
+        if (saved > 0) {
+            logger.info("💾 Flushed {} buffered auto message(s) to DB after guest reply - appId={}, guestIdentity={}", saved, appId, guestIdentity);
+        }
+    }
+
+    private void notifyAdminsInApp(String appId, String eventName, Object payload) {
+        if (appId == null || appId.isBlank() || eventName == null || eventName.isBlank() || payload == null) {
+            return;
+        }
+
+        String appRoom = "app:" + appId;
+        Set<UUID> sessions = roomSessions.get(appRoom);
+        if (sessions == null || sessions.isEmpty()) {
+            return;
+        }
+
+        for (UUID sid : sessions) {
+            if (!Boolean.TRUE.equals(sessionAdminFlags.get(sid))) {
+                continue;
+            }
+            SocketIOClient adminClient = server.getClient(sid);
+            if (adminClient == null) {
+                continue;
+            }
+            try {
+                adminClient.sendEvent(eventName, payload);
+            } catch (Exception e) {
+                logger.debug("Failed to notify admin session {} via {}: {}", sid, eventName, e.getMessage());
+            }
+        }
+    }
+
+    private void cleanupTransientGuestSessionData(String appId, String guestIdentity, String guestPhone) {
+        if (appId == null || appId.isBlank() || guestIdentity == null || guestIdentity.isBlank()) {
+            return;
+        }
+
+        String key = guestKey(appId, guestIdentity);
+        boolean hadPendingAutoMessages = pendingAutoMessagesByGuest.remove(key) != null;
+        pendingAutoMessagesUpdatedAt.remove(key);
+        welcomeTimestampByGuestKey.remove(key);
+
+        String appPhone = appPhoneKey(appId, guestPhone);
+        if (appPhone != null) {
+            welcomeTimestampByAppPhone.remove(appPhone);
+        }
+
+        if (hadPendingAutoMessages) {
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("appId", appId);
+            payload.put("guestSessionId", guestIdentity);
+            payload.put("guestPhone", guestPhone);
+            payload.put("eventTypePrefix", "ai_auto_welcome");
+            payload.put("reason", "guest_disconnect_without_contact");
+            payload.put("timestamp", System.currentTimeMillis());
+            notifyAdminsInApp(appId, "chat_guest_cleanup", payload);
+
+            logger.info("🧹 Immediate transient guest cleanup - appId={}, guestIdentity={}, guestPhone={}", appId, guestIdentity, guestPhone);
         }
     }
 
@@ -425,9 +562,25 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
         aiMsg.setMessage(safeMessageText.length() > 280 ? safeMessageText.substring(0, 280) : safeMessageText);
         aiMsg.setTimestamp(System.currentTimeMillis());
 
-        chatPersistenceService.saveMessage(aiMsg);
+        queuePendingAutoMessage(appId, guestIdentity, aiMsg);
         server.getRoomOperations(privateRoom).sendEvent("message", aiMsg);
         server.getRoomOperations(masterRoom).sendEvent("message", aiMsg);
+
+        ChatMessage adminAlert = new ChatMessage();
+        adminAlert.setRoom(masterRoom);
+        adminAlert.setUsername("He thong");
+        adminAlert.setUserId(AI_ASSISTANT_USER_ID);
+        adminAlert.setIsAdmin(true);
+        adminAlert.setAppId(appId);
+        adminAlert.setGuestPhone(guestPhone);
+        adminAlert.setGuestSessionId(guestIdentity);
+        adminAlert.setEventType("guest_auto_welcome_alert");
+        adminAlert.setMessage("Khach moi vua vao, he thong da gui loi chao tu dong. Admin co the chu dong tu van ngay.");
+        adminAlert.setTimestamp(aiMsg.getTimestamp());
+
+        notifyAdminsInApp(appId, "notification", adminAlert);
+
+        welcomeTimestampByGuestKey.put(guestKey(appId, guestIdentity), aiMsg.getTimestamp());
 
         logger.info("🤖 AI auto reply sent - appId={}, guestIdentity={}, guestPhone={}, eventType={}", appId, guestIdentity, guestPhone, eventType);
     }
@@ -499,6 +652,17 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
     }
 
     private boolean hasRecentAutoWelcome(String appId, String guestIdentity, String guestPhone, long withinMs) {
+        String guestKey = guestKey(appId, guestIdentity);
+        Long guestWelcomeAt = welcomeTimestampByGuestKey.get(guestKey);
+        if (guestWelcomeAt != null && System.currentTimeMillis() - guestWelcomeAt <= withinMs) {
+            return true;
+        }
+
+        Long pendingAt = pendingAutoMessagesUpdatedAt.get(guestKey);
+        if (pendingAt != null && System.currentTimeMillis() - pendingAt <= withinMs) {
+            return true;
+        }
+
         try {
             java.util.List<ChatMessage> history = chatPersistenceService.getHistoryByGuestIdentity(appId, guestIdentity, guestPhone, 20);
             if (history == null || history.isEmpty()) {
@@ -732,12 +896,17 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
             String appId = sessionAppIds.remove(sessionId);
             String guestPhone = sessionGuestPhones.remove(sessionId);
             String guestSessionId = sessionGuestSessionIds.remove(sessionId);
-            sessionAdminFlags.remove(sessionId);
+            Boolean wasAdmin = sessionAdminFlags.remove(sessionId);
 
             String guestIdentity = firstNonBlank(guestSessionId, guestPhone);
             if (appId != null && guestIdentity != null) {
                 cancelGuestWelcomeTask(appId, guestIdentity);
                 cancelGuestNoReplyTask(appId, guestIdentity);
+
+                // If a guest disconnects without leaving contact info, drop transient auto messages immediately.
+                if (!Boolean.TRUE.equals(wasAdmin) && (guestPhone == null || guestPhone.isBlank())) {
+                    cleanupTransientGuestSessionData(appId, guestIdentity, guestPhone);
+                }
             }
 
             if (username != null) {
@@ -789,6 +958,7 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                 client.joinRoom(masterRoom);
                 logger.info("🚪 Admin {} joined master room {} (appId: {})", username, masterRoom, appId);
                 server.getRoomOperations(masterRoom).sendEvent("user_joined", username);
+                pushAdminChatHistorySnapshot(client, appId, 500);
             } else if (firstNonBlank(guestSessionId, guestPhone) != null) {
                             sessionAdminFlags.put(sessionId, false);
                 // Guest joins private room + master room for admin monitoring
@@ -861,6 +1031,24 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
             trackSessionRoom(sessionId, room);
             client.joinRoom(room);
             logger.info("🚪 " + username + " joined room " + room + " via join_room");
+
+            String appId = parseAppIdFromRoom(room);
+            if (Boolean.TRUE.equals(sessionAdminFlags.get(sessionId)) && appId != null && !appId.isBlank()) {
+                pushAdminChatHistorySnapshot(client, appId, 500);
+            }
+        });
+
+        server.addEventListener("request_chat_history_app_snapshot", String.class, (client, appId, ackSender) -> {
+            String sessionAppId = sessionAppIds.get(client.getSessionId());
+            String effectiveAppId = firstNonBlank(appId, sessionAppId);
+            pushAdminChatHistorySnapshot(client, effectiveAppId, 500);
+
+            if (ackSender != null) {
+                try {
+                    ackSender.sendAckData("{\"success\":true,\"appId\":\"" + (effectiveAppId == null ? "" : effectiveAppId) + "\"}");
+                } catch (Exception ignored) {
+                }
+            }
         });
 
                             server.addEventListener("chat", ChatMessage.class, (client, data, ackSender) -> {
@@ -993,6 +1181,7 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                                 }
 
                                 if (userId == null && guestIdentity != null && !guestIdentity.isEmpty()) {
+                                    flushPendingAutoMessagesOnGuestReply(appId, guestIdentity);
                                     // This is a guest message - ensure username is set to a stable label
                                     String guestLabel = firstNonBlank(guestPhone, guestIdentity, username, "Guest");
                                     if (username == null || username.isEmpty() || username.equals("Guest")) {
@@ -1490,6 +1679,7 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
             try {
                 long now = System.currentTimeMillis();
                 long staleThresholdMs = now - AUTO_WELCOME_COOLDOWN_MS;
+                long pendingStaleThresholdMs = now - PENDING_AUTO_MESSAGE_TTL_MS;
                 
                 int removedCount = 0;
                 for (Map.Entry<String, Long> entry : welcomeTimestampByAppPhone.entrySet()) {
@@ -1498,10 +1688,33 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                         removedCount++;
                     }
                 }
+
+                int removedGuestKeyCount = 0;
+                for (Map.Entry<String, Long> entry : welcomeTimestampByGuestKey.entrySet()) {
+                    if (entry.getValue() < staleThresholdMs) {
+                        welcomeTimestampByGuestKey.remove(entry.getKey());
+                        removedGuestKeyCount++;
+                    }
+                }
+
+                int removedPending = 0;
+                for (Map.Entry<String, Long> entry : pendingAutoMessagesUpdatedAt.entrySet()) {
+                    if (entry.getValue() < pendingStaleThresholdMs) {
+                        String key = entry.getKey();
+                        pendingAutoMessagesUpdatedAt.remove(key);
+                        pendingAutoMessagesByGuest.remove(key);
+                        removedPending++;
+                    }
+                }
                 
-                if (removedCount > 0) {
-                    logger.info("🧹 Cleaned up {} stale welcome timestamps, map size now: {}", 
-                               removedCount, welcomeTimestampByAppPhone.size());
+                if (removedCount > 0 || removedGuestKeyCount > 0 || removedPending > 0) {
+                    logger.info("🧹 Cleanup done: appPhone={} guestKey={} pending={} | sizes appPhone={} guestKey={} pending={}",
+                               removedCount,
+                               removedGuestKeyCount,
+                               removedPending,
+                               welcomeTimestampByAppPhone.size(),
+                               welcomeTimestampByGuestKey.size(),
+                               pendingAutoMessagesByGuest.size());
                 }
             } catch (Exception e) {
                 logger.warn("Error during welcome timestamp cleanup: {}", e.getMessage());
