@@ -1480,6 +1480,33 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
     @PostConstruct
     public void postConstruct() {
         logger.info("✅ SocketIOConfig loaded and PostConstruct called. Port {}",socketPort);
+        // Schedule cleanup of stale welcome timestamps to prevent unbounded memory growth
+        scheduleWelcomeTimestampCleanup();
+    }
+
+    private void scheduleWelcomeTimestampCleanup() {
+        // Run cleanup every hour to remove welcome timestamps older than 24h
+        chatAiScheduler.scheduleAtFixedRate(() -> {
+            try {
+                long now = System.currentTimeMillis();
+                long staleThresholdMs = now - AUTO_WELCOME_COOLDOWN_MS;
+                
+                int removedCount = 0;
+                for (Map.Entry<String, Long> entry : welcomeTimestampByAppPhone.entrySet()) {
+                    if (entry.getValue() < staleThresholdMs) {
+                        welcomeTimestampByAppPhone.remove(entry.getKey());
+                        removedCount++;
+                    }
+                }
+                
+                if (removedCount > 0) {
+                    logger.info("🧹 Cleaned up {} stale welcome timestamps, map size now: {}", 
+                               removedCount, welcomeTimestampByAppPhone.size());
+                }
+            } catch (Exception e) {
+                logger.warn("Error during welcome timestamp cleanup: {}", e.getMessage());
+            }
+        }, 1, 60, TimeUnit.MINUTES); // Start after 1 min, run every 60 min (1 hour)
     }
     
     @PreDestroy
