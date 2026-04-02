@@ -45,7 +45,7 @@ const useStyles = createUseStyles(({ token }) => (
 				boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
 			},
 			display: 'flex',
-			alignItems: 'center',
+		import { useMemo, useState, useEffect, useCallback } from "react";
 			gap: 12,
 		},
 		username: {
@@ -86,11 +86,9 @@ interface Props extends ButtonProps {
 
 
 export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications, setNotifications, onEventChange, ...restProps }) => {
-	const AUTO_OPEN_COOLDOWN_MS = 30_000;
 	const [open, action] = useToggle();
 	const [input, setInput] = useState("");
 	const [openChats, setOpenChats] = useState<{room: string, username: string}[]>([]);
-	const autoOpenCooldownRef = useRef<Record<string, number>>({});
 	const classes = useStyles();
 	const { t } = useTranslation();
 	const { token } = theme.useToken();
@@ -121,7 +119,6 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 	// Group 2: Guests - messages có guestPhone (khách vãng lai)
 	const { internalUsersWithUnread, guestUsersWithUnread } = useMemo(() => {
 		const internalMap = new Map<string, { username: string; avatar?: string; unread: number }>();
-		const guestMap = new Map<string, { key: string; label: string; unread: number }>();
 		
 		// Duyệt TẤT CẢ rooms trong contextMessages để không bỏ lỡ tin của guests
 		Object.entries(contextMessages).forEach(([roomKey, msgs]) => {
@@ -146,42 +143,28 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 						const guestLabel = formatGuestLabel(guestKey, msg.guestPhone, msg.username, msg.isAdmin);
 						const existing = guestMap.get(guestKey) || { key: guestKey, label: guestLabel, unread: 0 };
 						existing.label = guestLabel || existing.label;
-						if (isUnread && !msg.isAdmin) existing.unread++;
+				const normalizedRoom = (room || '').trim();
+				const normalizedUsername = (username || normalizedRoom).trim();
+				if (!normalizedRoom) return;
+
+				setOpenChats(prev => {
+					const exists = prev.some(chat => chat.room === normalizedRoom);
+					if (exists) {
+						return prev.map(chat =>
+							chat.room === normalizedRoom
+								? { ...chat, username: normalizedUsername || chat.username }
+								: chat
+						);
+					}
+					return [...prev, { room: normalizedRoom, username: normalizedUsername || normalizedRoom }];
+				});
+
 						guestMap.set(guestKey, existing);
 					}
 				} 
 				// THEN: Check internal user (userId or username) - must NOT have guestPhone
 				else if (msg.userId || msg.username) {
 					const username = (msg.username || msg.to || '').trim();
-					if (!username) return;
-					const currentUser = (user.username || '').trim();
-					if (username === currentUser) return; // Skip self-messages
-					const existing = internalMap.get(username) || { username, avatar: msg.avatar, unread: 0 };
-					if (isUnread) existing.unread++;
-					internalMap.set(username, existing);
-				}
-			});
-		});
-		
-		const internalUsersWithUnread = Array.from(internalMap.values())
-			.filter(item => item.unread > 0)
-			.sort((a, b) => b.unread - a.unread);
-		const guestUsersWithUnread = Array.from(guestMap.values())
-			.filter(item => item.unread > 0)
-			.sort((a, b) => b.unread - a.unread);
-		
-		console.log(`👥 [Notification] Parsed ${internalUsersWithUnread.length} internal users & ${guestUsersWithUnread.length} guests`);
-		console.log(`📊 [Notification] Internal users:`, internalUsersWithUnread.map(u => u.username));
-		console.log(`📱 [Notification] Guests:`, guestUsersWithUnread.map(g => g.key));
-		
-		return { internalUsersWithUnread, guestUsersWithUnread };
-	}, [contextMessages, appId, user.userId, user.username, formatGuestLabel]);
-
-	const totalGuestUnread = useMemo(() => guestUsersWithUnread.reduce((sum, g) => sum + g.unread, 0), [guestUsersWithUnread]);
-	const totalInternalUnread = useMemo(() => internalUsersWithUnread.reduce((sum, u) => sum + u.unread, 0), [internalUsersWithUnread]);
-	
-	// System messages: broadcast notifications từ CSM admin (appId='csm') gửi đến app hiện tại
-	// CRITICAL: Đây là thông báo hệ thống từ admin CSM broadcast đến app của user
 	const systemMessages = useMemo(() => {
 		const appRoomMsgs = contextMessages[appId] || [];
 		return appRoomMsgs.filter((msg: any) => 
@@ -228,35 +211,6 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 		});
 	}, [openChats, markAsRead]);
 
-	useEffect(() => {
-		const handleAutoOpen = (event: Event) => {
-			const detail = (event as CustomEvent).detail || {};
-			const targetAppId = typeof detail.appId === 'string' ? detail.appId.trim() : '';
-			if (targetAppId && targetAppId !== appId) return;
-
-			const room = typeof detail.targetRoom === 'string' ? detail.targetRoom.trim() : '';
-			if (!room) return;
-
-			const now = Date.now();
-			const lastOpenedAt = autoOpenCooldownRef.current[room] || 0;
-			if (now - lastOpenedAt < AUTO_OPEN_COOLDOWN_MS) return;
-			autoOpenCooldownRef.current[room] = now;
-
-			const candidateUsername = typeof detail.guestPhone === 'string' && detail.guestPhone.trim()
-				? detail.guestPhone.trim()
-				: (typeof detail.guestSessionId === 'string' && detail.guestSessionId.trim()
-					? formatGuestLabel(detail.guestSessionId.trim(), detail.guestPhone, detail.username, detail.isAdmin === true)
-					: (typeof detail.username === 'string' && detail.username.trim() ? detail.username.trim() : room));
-
-			openChatAndMarkRead(room, candidateUsername);
-		};
-
-		window.addEventListener('csm-chat-auto-open', handleAutoOpen as EventListener);
-		return () => {
-			window.removeEventListener('csm-chat-auto-open', handleAutoOpen as EventListener);
-		};
-	}, [appId, openChatAndMarkRead, formatGuestLabel]);
-
 	// Force refresh when opening notification popup
 	const handleOpenChange = useCallback((visible: boolean) => {
 		action.set(visible);
@@ -300,7 +254,7 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 											<Avatar src={u.avatar} icon={<UserOutlined />} size="small" />
 											<div style={{ flex: 1 }}>
 												<div className={classes.username}>{u.username}</div>
-												<div style={{ fontSize: 12, color: '#8c8c8c' }}>{t('common.notification.sameApp', 'Cùng appId')}</div>
+							onClose={() => setOpenChats(prev => prev.filter(item => item.room !== chat.room))}
 											</div>
 											{u.unread > 0 && <span className={classes.unreadBadge}>{u.unread}</span>}
 										</div>

@@ -618,7 +618,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
           ? (!msg.isAdmin && !msg.userId && (msg.guestSessionId === guestIdentity || msg.guestPhone === guestPhone))
           : (msg.userId === user.userId);
 
-        if (!activeChats.includes(targetRoom) && !isOwnMessage) {
+        if (isGuest && !activeChats.includes(targetRoom) && !isOwnMessage) {
           emitAutoOpenChat({
             targetRoom,
             appId,
@@ -685,7 +685,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
         const updated = [...roomMessages, msg];
         saveToLocalStorage(targetRoom, updated);
 
-        if (!activeChats.includes(targetRoom)) {
+        if (isGuest && !activeChats.includes(targetRoom)) {
           emitAutoOpenChat({
             targetRoom,
             appId,
