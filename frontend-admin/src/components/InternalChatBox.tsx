@@ -86,7 +86,7 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
 
   // Consistent room key for guests: use session id; for admin guest chats use room, for internal chats keep username
   const roomKey = isGuest
-    ? (effectiveGuestSessionId || effectiveGuestPhone || storedGuestPhone || chatRoom)
+    ? (effectiveGuestSessionId || chatRoom)
     : (isGuestConversation ? room : (username || chatRoom));
 
   // Get messages for this specific chat
@@ -207,7 +207,7 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
     setInput(e.target.value);
     
     // Emit typing event if socket connected
-    const guestIdentifier = effectiveGuestSessionId || effectiveGuestPhone || storedGuestPhone;
+    const guestIdentifier = effectiveGuestSessionId;
     const roomIdentifier = isGuest ? guestIdentifier : roomKey;
     
     if (connected && roomIdentifier) {
@@ -229,7 +229,7 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
       
       // 🔴 CRITICAL: For guest users, MUST pass guestPhone as room identifier
       // The context's sendMessage will detect it and construct proper room
-      const guestIdentifier = effectiveGuestSessionId || effectiveGuestPhone || storedGuestPhone;
+      const guestIdentifier = effectiveGuestSessionId;
       const roomIdentifier = isGuest ? guestIdentifier : roomKey;
 
       // Guest chỉ cần session id, không bắt buộc phone

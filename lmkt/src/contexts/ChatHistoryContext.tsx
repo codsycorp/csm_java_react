@@ -104,8 +104,8 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
   }, []);
   
   const guestIdentity = useMemo(
-    () => (guestSessionId || guestPhone || "").trim(),
-    [guestSessionId, guestPhone]
+    () => (guestSessionId || "").trim(),
+    [guestSessionId]
   );
 
   // Helper: Get localStorage key
@@ -191,7 +191,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
     if (room && room !== appId && !room.includes(':')) {
       effectiveIdentity = room;
     } else if (!effectiveIdentity && typeof window !== 'undefined') {
-      const stored = localStorage.getItem(`csm_guest_session_${appId}`) || localStorage.getItem(`csm_guest_phone_${appId}`);
+      const stored = localStorage.getItem(`csm_guest_session_${appId}`);
       if (stored) {
         effectiveIdentity = stored;
         console.log(`📱 [ChatHistory] Using stored guest identity from localStorage: ${effectiveIdentity}`);

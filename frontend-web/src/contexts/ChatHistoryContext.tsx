@@ -123,8 +123,8 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
   }, []);
   
   const guestIdentity = useMemo(
-    () => (guestSessionId || guestPhone || "").trim(),
-    [guestSessionId, guestPhone]
+    () => (guestSessionId || "").trim(),
+    [guestSessionId]
   );
 
   const isPhoneLike = useCallback((val?: string) => !!val && /^(\+?\d[\d\s\-]{7,})$/.test(val), []);
@@ -144,7 +144,6 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
     if (typeof window !== 'undefined') {
       const fromStorage = (
         localStorage.getItem(`csm_guest_session_${appId}`)
-        || localStorage.getItem(`csm_guest_phone_${appId}`)
         || ''
       ).trim();
       if (fromStorage) return fromStorage;
@@ -590,8 +589,10 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
         targetRoom = guestIdentity || appId;
       } else {
         // Admin: nhận msg từ guest hoặc msg của mình
-        if (msg.guestSessionId || msg.guestPhone) {
-          targetRoom = (msg.guestSessionId || msg.guestPhone)!;
+        if (msg.guestSessionId) {
+          targetRoom = msg.guestSessionId;
+        } else if (msg.guestPhone) {
+          targetRoom = `phone:${msg.guestPhone}`;
         } else if (msg.to && msg.userId !== user.userId) {
           // Msg tới người khác
           return;
