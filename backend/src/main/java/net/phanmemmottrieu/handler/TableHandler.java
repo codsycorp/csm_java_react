@@ -411,6 +411,13 @@ public class TableHandler {
     }
 
     private List<Map<String, Object>> filterManagedAccountDescendants(List<Map<String, Object>> rows, UserAccessContext access) {
+        return filterManagedAccountDescendants("", rows, access);
+    }
+
+    private List<Map<String, Object>> filterManagedAccountDescendants(String tableName, List<Map<String, Object>> rows, UserAccessContext access) {
+        if (!"csm_accounts".equals(tableName)) {
+            return rows;
+        }
         if (rows == null || rows.isEmpty() || access == null || access.isDev) {
             return rows;
         }
@@ -1850,7 +1857,7 @@ public class TableHandler {
                 @SuppressWarnings("unchecked")
                 List<Map<String, Object>> rows = (List<Map<String, Object>>) rowsObj;
                 autoFillPermissionSchemaValues(appId, tblname, rows, true);
-                rows = filterManagedAccountDescendants(rows, resolveCurrentUserAccessContext());
+                rows = filterManagedAccountDescendants(tblname, rows, resolveCurrentUserAccessContext());
                 rows = applyDataScopeRowFilter(tblname, rows, resolveCurrentUserAccessContext());
                 paginated.put("rows", rows);
             }
@@ -1869,7 +1876,7 @@ public class TableHandler {
                 @SuppressWarnings("unchecked")
                 List<Map<String, Object>> rows = (List<Map<String, Object>>) rowsObj;
                 autoFillPermissionSchemaValues(appId, tblname, rows, true);
-                rows = filterManagedAccountDescendants(rows, resolveCurrentUserAccessContext());
+                rows = filterManagedAccountDescendants(tblname, rows, resolveCurrentUserAccessContext());
                 rows = applyDataScopeRowFilter(tblname, rows, resolveCurrentUserAccessContext());
                 paginated.put("rows", rows);
             }
@@ -1881,7 +1888,7 @@ public class TableHandler {
              
         List<Map<String, Object>> data = (List<Map<String, Object>>) filterResult.getOrDefault("rows", new ArrayList<>());
         autoFillPermissionSchemaValues(appId, tblname, data, true);
-        data = filterManagedAccountDescendants(data, resolveCurrentUserAccessContext());
+        data = filterManagedAccountDescendants(tblname, data, resolveCurrentUserAccessContext());
         data = applyDataScopeRowFilter(tblname, data, resolveCurrentUserAccessContext());
     
         Map<String, Object> result = new HashMap<>();
