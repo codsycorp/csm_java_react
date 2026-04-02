@@ -346,24 +346,10 @@ public class TableHandler {
             return existingFilter;
         }
 
-        UserAccessContext access = resolveCurrentUserAccessContext();
-        if (access.isDev || access.ownerCandidates.isEmpty()) {
-            return existingFilter;
-        }
-
-        SearchFilter ownerScope = buildFieldScopeFilter(access.ownerCandidates, "parent_account_id");
-        if (ownerScope == null) {
-            return existingFilter;
-        }
-
-        if (isEmptyFilter(existingFilter)) {
-            return ownerScope;
-        }
-
-        SearchFilter merged = new SearchFilter();
-        merged.setOperator("AND");
-        merged.setConditions(new ArrayList<>(List.of(existingFilter, ownerScope)));
-        return merged;
+        // Multi-level hierarchy (parent -> child -> grandchild) cannot be expressed with a single
+        // parent_account_id equality filter at query time. We keep raw filter and apply recursive
+        // descendant ownership filtering after fetching rows.
+        return existingFilter;
     }
 
     private SearchFilter applyAdminSubUserListScope(String tableName, SearchFilter existingFilter, boolean isUpdate) {
@@ -413,15 +399,85 @@ public class TableHandler {
     }
 
     private boolean isOwnedManagedAccountRow(Map<String, Object> row, UserAccessContext access) {
-        if (row == null || access == null || access.ownerCandidates.isEmpty()) {
+        if (row == null || access == null) {
             return false;
         }
-        Object parentObj = row.get("parent_account_id");
-        if (parentObj == null) {
+        Set<String> visibleIds = buildManagedAccountVisibleIdSet(List.of(row), access);
+        String rowId = normalizedIdentity(row.get("id"));
+        if (rowId.isBlank()) {
             return false;
         }
-        String parent = String.valueOf(parentObj);
-        return access.ownerCandidates.contains(parent);
+        return visibleIds.contains(rowId);
+    }
+
+    private List<Map<String, Object>> filterManagedAccountDescendants(List<Map<String, Object>> rows, UserAccessContext access) {
+        if (rows == null || rows.isEmpty() || access == null || access.isDev) {
+            return rows;
+        }
+        Set<String> visibleIds = buildManagedAccountVisibleIdSet(rows, access);
+        if (visibleIds.isEmpty()) {
+            return new ArrayList<>();
+        }
+        return rows.stream()
+            .filter(row -> visibleIds.contains(normalizedIdentity(row.get("id"))))
+            .collect(java.util.stream.Collectors.toList());
+    }
+
+    private Set<String> resolveManagedAccountVisibleIdSet(String appId, UserAccessContext access) {
+        if (access == null || access.isDev) {
+            return Collections.emptySet();
+        }
+        SearchFilter allFilter = new SearchFilter();
+        allFilter.setField("id");
+        allFilter.setType("like");
+        allFilter.setValue("");
+        Map<String, Object> allRowsResult = recordManager.filter(appId, "csm_accounts", allFilter);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> allRows = (List<Map<String, Object>>) allRowsResult.getOrDefault("rows", new ArrayList<>());
+        return buildManagedAccountVisibleIdSet(allRows, access);
+    }
+
+    private Set<String> buildManagedAccountVisibleIdSet(List<Map<String, Object>> rows, UserAccessContext access) {
+        if (rows == null || rows.isEmpty() || access == null || access.ownerCandidates.isEmpty()) {
+            return Collections.emptySet();
+        }
+
+        Set<String> reachableParents = new LinkedHashSet<>(access.ownerCandidates);
+        Set<String> visibleIds = new LinkedHashSet<>();
+
+        boolean changed = true;
+        while (changed) {
+            changed = false;
+            for (Map<String, Object> row : rows) {
+                if (row == null) continue;
+                String parent = normalizedIdentity(row.get("parent_account_id"));
+                if (parent.isBlank() || !reachableParents.contains(parent)) {
+                    continue;
+                }
+                String rowId = normalizedIdentity(row.get("id"));
+                if (rowId.isBlank()) {
+                    continue;
+                }
+                if (visibleIds.add(rowId)) {
+                    changed = true;
+                }
+
+                int beforeSize = reachableParents.size();
+                collectCandidate(reachableParents, row.get("id"));
+                collectCandidate(reachableParents, row.get("username"));
+                collectCandidate(reachableParents, row.get("email"));
+                collectCandidate(reachableParents, row.get("phoneNumber"));
+                if (reachableParents.size() != beforeSize) {
+                    changed = true;
+                }
+            }
+        }
+
+        return visibleIds;
+    }
+
+    private String normalizedIdentity(Object raw) {
+        return raw == null ? "" : String.valueOf(raw).trim().toLowerCase(Locale.ROOT);
     }
 
     private boolean isOwnedSubUserRow(Map<String, Object> row, UserAccessContext access) {
@@ -434,6 +490,20 @@ public class TableHandler {
         }
         String parent = String.valueOf(parentObj);
         return access.parentAccountCandidates.contains(parent);
+    }
+
+    private boolean allRowsBelongToCurrentOwner(List<Map<String, Object>> records, UserAccessContext access) {
+        if (records == null || records.isEmpty() || access == null || access.ownerCandidates.isEmpty()) {
+            return false;
+        }
+        for (Map<String, Object> row : records) {
+            if (row == null) return false;
+            String rowId = normalizedIdentity(row.get("id"));
+            if (rowId.isBlank() || !access.ownerCandidates.contains(rowId)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private boolean isEmptyFilter(SearchFilter filter) {
@@ -1366,7 +1436,6 @@ public class TableHandler {
         }
 
         boolean enforceAccountAppScope = isSystemUsersTable
-            && accessContext.isAdmin
             && !accessContext.isDev
             && accessContext.appId != null
             && !accessContext.appId.isBlank();
@@ -1417,9 +1486,11 @@ public class TableHandler {
                 .filter(row -> accessContext.appId.equals(String.valueOf(row.get("app_id"))))
                 .collect(java.util.stream.Collectors.toList());
         }
+        Set<String> managedVisibleIds = null;
         if (enforceManagedAccountOwnership) {
+            managedVisibleIds = resolveManagedAccountVisibleIdSet(appId, accessContext);
             records = records.stream()
-                .filter(row -> isOwnedManagedAccountRow(row, accessContext))
+                .filter(row -> managedVisibleIds.contains(normalizedIdentity(row.get("id"))))
                 .collect(java.util.stream.Collectors.toList());
         }
         if (isSubUserTable && isAdminNonDev) {
@@ -1442,8 +1513,11 @@ public class TableHandler {
                         .collect(java.util.stream.Collectors.toList());
                 }
                 if (enforceManagedAccountOwnership) {
+                    Set<String> effectiveManagedVisibleIds = managedVisibleIds != null
+                        ? managedVisibleIds
+                        : resolveManagedAccountVisibleIdSet(appId, accessContext);
                     records = records.stream()
-                        .filter(row -> isOwnedManagedAccountRow(row, accessContext))
+                        .filter(row -> effectiveManagedVisibleIds.contains(normalizedIdentity(row.get("id"))))
                         .collect(java.util.stream.Collectors.toList());
                 }
                 if (isSubUserTable && isAdminNonDev) {
@@ -1468,6 +1542,14 @@ public class TableHandler {
             if (enforceAccountAppScope) {
                 records = records.stream()
                     .filter(row -> accessContext.appId.equals(String.valueOf(row.get("app_id"))))
+                    .collect(java.util.stream.Collectors.toList());
+            }
+            if (enforceManagedAccountOwnership) {
+                Set<String> effectiveManagedVisibleIds = managedVisibleIds != null
+                    ? managedVisibleIds
+                    : resolveManagedAccountVisibleIdSet(appId, accessContext);
+                records = records.stream()
+                    .filter(row -> effectiveManagedVisibleIds.contains(normalizedIdentity(row.get("id"))))
                     .collect(java.util.stream.Collectors.toList());
             }
             if (isSubUserTable && isAdminNonDev) {
@@ -1545,7 +1627,7 @@ public class TableHandler {
                 }
             case "update":
                 // ✅ Validation self-edit cho admin/sub-user (SAU khi records đã hydrate)
-                if (isSystemUsersTable && isAdminNonDev) {
+                if (isSystemUsersTable && isAdminNonDev && allRowsBelongToCurrentOwner(records, accessContext)) {
                     String selfEditError = validateAdminSelfEditOnRecords("update", objUpdate, records, accessContext);
                     if (selfEditError != null) {
                         return errorResponse(selfEditError);
@@ -1556,6 +1638,12 @@ public class TableHandler {
                     if (selfEditError != null) {
                         return errorResponse(selfEditError);
                     }
+                }
+
+                // Ensure child account edits never exceed current user's app and permission/data scope.
+                if (isSystemUsersTable && !accessContext.isDev && !allRowsBelongToCurrentOwner(records, accessContext)) {
+                    normalizeManagedAccountPermissions(objUpdate, accessContext);
+                    autoGenerateAccountCredentials(objUpdate, accessContext);
                 }
                 
                 Map<String, Object> newPkValues = new HashMap<>();
@@ -1767,6 +1855,7 @@ public class TableHandler {
                 @SuppressWarnings("unchecked")
                 List<Map<String, Object>> rows = (List<Map<String, Object>>) rowsObj;
                 autoFillPermissionSchemaValues(appId, tblname, rows, true);
+                rows = filterManagedAccountDescendants(rows, resolveCurrentUserAccessContext());
                 rows = applyDataScopeRowFilter(tblname, rows, resolveCurrentUserAccessContext());
                 paginated.put("rows", rows);
             }
@@ -1785,6 +1874,7 @@ public class TableHandler {
                 @SuppressWarnings("unchecked")
                 List<Map<String, Object>> rows = (List<Map<String, Object>>) rowsObj;
                 autoFillPermissionSchemaValues(appId, tblname, rows, true);
+                rows = filterManagedAccountDescendants(rows, resolveCurrentUserAccessContext());
                 rows = applyDataScopeRowFilter(tblname, rows, resolveCurrentUserAccessContext());
                 paginated.put("rows", rows);
             }
@@ -1796,6 +1886,7 @@ public class TableHandler {
              
         List<Map<String, Object>> data = (List<Map<String, Object>>) filterResult.getOrDefault("rows", new ArrayList<>());
         autoFillPermissionSchemaValues(appId, tblname, data, true);
+        data = filterManagedAccountDescendants(data, resolveCurrentUserAccessContext());
         data = applyDataScopeRowFilter(tblname, data, resolveCurrentUserAccessContext());
     
         Map<String, Object> result = new HashMap<>();
