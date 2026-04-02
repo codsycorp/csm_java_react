@@ -107,6 +107,89 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
     () => (guestSessionId || "").trim(),
     [guestSessionId]
   );
+  const WELCOME_CLIENT_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+  const WELCOME_EVENT_TYPES = useMemo(
+    () => new Set(['ai_auto_welcome', 'ai_auto_welcome_fallback']),
+    []
+  );
+
+  const getWelcomeDedupStorageKey = useCallback((identity?: string) => {
+    const stableIdentity = (identity || guestIdentity || '').trim();
+    if (!stableIdentity) {
+      return '';
+    }
+    return `csm_welcome_seen_${appId}_${stableIdentity}`;
+  }, [appId, guestIdentity]);
+
+  const hasRecentWelcomeInClient = useCallback((identity?: string, incomingTs?: number) => {
+    if (!isGuest || typeof window === 'undefined') {
+      return false;
+    }
+
+    const key = getWelcomeDedupStorageKey(identity);
+    if (!key) {
+      return false;
+    }
+
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) {
+        return false;
+      }
+
+      const lastTs = Number(raw);
+      if (!Number.isFinite(lastTs) || lastTs <= 0) {
+        localStorage.removeItem(key);
+        return false;
+      }
+
+      const incoming = Number(incomingTs || Date.now());
+      return incoming - lastTs < WELCOME_CLIENT_COOLDOWN_MS;
+    } catch {
+      return false;
+    }
+  }, [isGuest, getWelcomeDedupStorageKey]);
+
+  const markWelcomeSeenInClient = useCallback((identity?: string, incomingTs?: number) => {
+    if (!isGuest || typeof window === 'undefined') {
+      return;
+    }
+
+    const key = getWelcomeDedupStorageKey(identity);
+    if (!key) {
+      return;
+    }
+
+    try {
+      localStorage.setItem(key, String(Number(incomingTs || Date.now())));
+    } catch {
+      // ignore storage failures
+    }
+  }, [isGuest, getWelcomeDedupStorageKey]);
+
+  const collapseWelcomeDuplicates = useCallback((input: ChatMessage[]) => {
+    if (!Array.isArray(input) || input.length <= 1) {
+      return input;
+    }
+
+    let latestWelcome: ChatMessage | null = null;
+    const nonWelcome: ChatMessage[] = [];
+
+    input.forEach((msg) => {
+      const eventType = (msg?.eventType || '').trim();
+      if (!WELCOME_EVENT_TYPES.has(eventType)) {
+        nonWelcome.push(msg);
+        return;
+      }
+
+      if (!latestWelcome || (msg?.timestamp || 0) >= (latestWelcome.timestamp || 0)) {
+        latestWelcome = msg;
+      }
+    });
+
+    const merged = latestWelcome ? [...nonWelcome, latestWelcome] : nonWelcome;
+    return merged.sort((a, b) => (a?.timestamp || 0) - (b?.timestamp || 0));
+  }, [WELCOME_EVENT_TYPES]);
 
   // Helper: Get localStorage key
   const getStorageKey = useCallback((room: string) => {
@@ -145,8 +228,9 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
     if (isGuest) {
       const localMessages = loadFromLocalStorage(room);
       if (localMessages.length > 0) {
-        console.log(`💾 [ChatHistory] Guest restored ${localMessages.length} messages from localStorage for room: ${room}`);
-        setMessages(prev => ({ ...prev, [room]: localMessages }));
+        const normalizedLocalMessages = collapseWelcomeDuplicates(localMessages);
+        console.log(`💾 [ChatHistory] Guest restored ${normalizedLocalMessages.length} messages from localStorage for room: ${room}`);
+        setMessages(prev => ({ ...prev, [room]: normalizedLocalMessages }));
       }
     }
 
@@ -166,14 +250,15 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
       
       const history = await (window as any).loadGuestChatHistory?.(appId, phone, 100, guestPhone) || [];
       if (history && Array.isArray(history) && history.length > 0) {
-        console.log(`📥 [ChatHistory] Loaded ${history.length} messages from server for guest ${phone}`);
-        setMessages(prev => ({ ...prev, [room]: history }));
-        saveToLocalStorage(room, history);
+        const normalizedHistory = collapseWelcomeDuplicates(history);
+        console.log(`📥 [ChatHistory] Loaded ${normalizedHistory.length} messages from server for guest ${phone}`);
+        setMessages(prev => ({ ...prev, [room]: normalizedHistory }));
+        saveToLocalStorage(room, normalizedHistory);
       }
     } catch (error) {
       console.warn('Failed to load chat history from server:', error);
     }
-  }, [isGuest, guestIdentity, ensureGuestSessionId, guestPhone, appId, loadFromLocalStorage, saveToLocalStorage, connected, socket]);
+  }, [isGuest, guestIdentity, ensureGuestSessionId, guestPhone, appId, loadFromLocalStorage, saveToLocalStorage, connected, socket, collapseWelcomeDuplicates]);
   
   // Update loadHistory ref whenever it changes (for initialization to use latest)
   useEffect(() => {
@@ -335,9 +420,23 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
       
       setMessages(prev => {
         const roomMessages = prev[targetRoom] || [];
+        const incomingEventType = (msg.eventType || '').trim();
+        const isWelcomeEvent = WELCOME_EVENT_TYPES.has(incomingEventType);
+
+        if (isWelcomeEvent) {
+          const dedupeIdentity = (msg.guestSessionId || guestIdentity || '').trim();
+          if (hasRecentWelcomeInClient(dedupeIdentity, msg.timestamp)) {
+            return prev;
+          }
+          markWelcomeSeenInClient(dedupeIdentity, msg.timestamp);
+        }
+
+        const normalizedRoomMessages = isWelcomeEvent
+          ? roomMessages.filter(m => !WELCOME_EVENT_TYPES.has((m.eventType || '').trim()))
+          : roomMessages;
         
         // Check duplicate
-        const isDuplicate = roomMessages.some(m =>
+        const isDuplicate = normalizedRoomMessages.some(m =>
           m.message === msg.message &&
           m.username === msg.username &&
           Math.abs((m.timestamp || 0) - (msg.timestamp || 0)) < 1000
@@ -345,7 +444,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
         
         if (isDuplicate) return prev;
         
-        const updated = [...roomMessages, msg];
+        const updated = [...normalizedRoomMessages, msg];
         saveToLocalStorage(targetRoom, updated);
 
         const isOwnMessage = !msg.isAdmin && !msg.userId && (msg.guestSessionId === guestIdentity || msg.guestPhone === guestPhone);
@@ -481,7 +580,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
       socket.off?.("notification", handleNotification);
       socket.off?.("user_typing", handleTyping);
     };
-  }, [socket, guestIdentity, guestPhone, appId, activeChats, saveToLocalStorage, loadHistory, emitAutoOpenChat]);
+  }, [socket, guestIdentity, guestPhone, appId, activeChats, saveToLocalStorage, loadHistory, emitAutoOpenChat, WELCOME_EVENT_TYPES, hasRecentWelcomeInClient, markWelcomeSeenInClient]);
   
   // Load initial history khi connect - LMKT: Guest only
   useEffect(() => {
