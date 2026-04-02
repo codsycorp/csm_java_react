@@ -1,0 +1,36 @@
+{
+  "title": "系统登录",
+  "subtitle": "欢迎回来", 
+  "username": "用户名",
+  "usernamePlaceholder": "请输入用户名",
+  "usernameRequired": "请输入用户名",
+  "password": "密码",
+  "passwordPlaceholder": "请输入密码",
+  "passwordRequired": "请输入密码", 
+  "rememberMe": "记住我",
+  "forgotPassword": "忘记密码？",
+  "loginButton": "登录",
+  "registerText": "还没有账户？",
+  "registerLink": "立即注册",
+  "welcomeBack": "欢迎回来！",
+  "loginSuccess": "登录成功",
+  "loginFailed": "登录失败",
+  "registerSuccess": "注册成功",
+  "registerFailed": "注册失败",
+  "appTokenPlaceholder": "输入推荐码 (app_token)",
+  "appTokenRequired": "请输入推荐码 (app_token)",
+  "appTokenInvalid": "推荐码无效",
+  "systemName": "CSM系统",
+  "brandTitle": "CSM System",
+  "brandSubtitle": "智能企业管理系统，采用先进技术，为您提供卓越的用户体验和最高级别的安全保障。",
+  "features": {
+    "security": "多层安全保护，采用先进加密技术",
+    "performance": "高性能，快速处理，稳定可靠",
+    "responsive": "响应式界面，兼容所有设备"
+  },
+  "validation": {
+    "usernameMin": "用户名至少需要3个字符",
+    "passwordMin": "密码至少需要6个字符",
+    "invalidCredentials": "用户名或密码错误"
+  }
+}

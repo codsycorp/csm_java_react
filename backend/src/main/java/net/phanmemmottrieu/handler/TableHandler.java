@@ -225,7 +225,7 @@ public class TableHandler {
             success = false;
         }
 
-        response.set("code", 200);
+        response.set("code", success ? 200 : 400);
         response.set("message", success ? "ok" : String.valueOf(result.getOrDefault("message", "error")));
         response.set("success", success);
 
@@ -1217,12 +1217,9 @@ public class TableHandler {
                 if (createGuardError != null) {
                     return errorResponse(createGuardError);
                 }
-                if (!hasNonBlank(objUpdate.get("id"))) {
-                    return errorResponse("Thiếu id khi tạo mới dữ liệu");
-                }
-                List<String> missingCreatePk = missingPrimaryKeyFields(objUpdate, effectivePkFields);
-                if (!missingCreatePk.isEmpty()) {
-                    return errorResponse("Thiếu khóa chính: " + String.join(", ", missingCreatePk));
+                ensureRowId(objUpdate);
+                if (!effectivePkFields.isEmpty() && !hasAnyPrimaryKeyValue(objUpdate, effectivePkFields)) {
+                    return errorResponse("Thiếu khóa chính: cần ít nhất 1 trong các trường " + String.join(", ", effectivePkFields));
                 }
                 if (recordManager.existsByPrimaryKey(appId, tblname, objUpdate, effectivePkFields)) {
                     return errorResponse("Trùng khóa chính khi tạo dữ liệu");
@@ -1313,9 +1310,7 @@ public class TableHandler {
                     }
                 } else if (hasAnyPrimaryKeyValue(objUpdate, effectivePkFields)) {
                     // Trường hợp upsert (không tìm thấy bản ghi nhưng đủ khóa chính)
-                    if (!hasNonBlank(objUpdate.get("id"))) {
-                        return errorResponse("Thiếu id khi tạo mới dữ liệu");
-                    }
+                    ensureRowId(objUpdate);
                     if (recordManager.existsByPrimaryKey(appId, tblname, objUpdate, effectivePkFields)) {
                         SearchFilter conflictFilter = buildPrimaryKeyFilter(objUpdate, effectivePkFields);
                         if (conflictFilter != null) {

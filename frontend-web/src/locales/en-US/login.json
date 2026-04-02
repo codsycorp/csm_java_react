@@ -1,0 +1,36 @@
+{
+  "title": "System Login",
+  "subtitle": "Welcome back",
+  "username": "Username",
+  "usernamePlaceholder": "Enter username",
+  "usernameRequired": "Please enter username",
+  "password": "Password",
+  "passwordPlaceholder": "Enter password", 
+  "passwordRequired": "Please enter password",
+  "rememberMe": "Remember me",
+  "forgotPassword": "Forgot password?",
+  "loginButton": "Sign In",
+  "registerText": "Don't have an account?",
+  "registerLink": "Sign up now",
+  "welcomeBack": "Welcome back!",
+  "loginSuccess": "Login successful",
+  "loginFailed": "Login failed",
+  "registerSuccess": "Register successful",
+  "registerFailed": "Register failed",
+  "appTokenPlaceholder": "Enter referral token (app_token)",
+  "appTokenRequired": "Please enter referral token (app_token)",
+  "appTokenInvalid": "Invalid referral token",
+  "systemName": "CSM System",
+  "brandTitle": "CSM System",
+  "brandSubtitle": "Smart enterprise management system with advanced technology, delivering excellent user experience and maximum security.",
+  "features": {
+    "security": "Multi-layer security with advanced encryption technology",
+    "performance": "High performance, fast processing and stability",
+    "responsive": "Responsive interface, compatible with all devices"
+  },
+  "validation": {
+    "usernameMin": "Username must be at least 3 characters",
+    "passwordMin": "Password must be at least 6 characters", 
+    "invalidCredentials": "Invalid username or password"
+  }
+}

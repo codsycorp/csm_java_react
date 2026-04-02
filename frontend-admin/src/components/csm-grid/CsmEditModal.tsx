@@ -1,0 +1,2446 @@
+import CodeMirror from '@uiw/react-codemirror';
+import { javascript } from '@codemirror/lang-javascript';
+import { html } from '@codemirror/lang-html';
+import { css } from '@codemirror/lang-css';
+import { python } from '@codemirror/lang-python';
+import { sql } from '@codemirror/lang-sql';
+import { xml } from '@codemirror/lang-xml';
+import { vscodeDark } from '@uiw/codemirror-theme-vscode';
+import React, { useEffect, useMemo, useState, Suspense, lazy, useCallback, useRef } from "react";
+import { Form, Input, Button, Select, Divider, Typography, InputNumber, DatePicker, TimePicker, Switch, Modal, Tabs, Space, TreeSelect } from "antd";
+import { DeleteOutlined } from "@ant-design/icons";
+import { csmEncrypt, csmDecrypt } from "./CsmCrypto";
+import { INT, jdFromDate, jdToDate, NewMoon, KinhDoMatTroi, SunLongitude, getSunLongitude, getNewMoonDay, getLunarMonth11, getLeapMonthOffset, duong_qua_am, am_qua_duong, LunarCalendar } from "#src/utils/lunarCalendar";
+import { dateFormat, chuyenNgay, TruNgayRaSoNgay, CongNgay, CongGio, validateEmail, validatePhone, DateUtils } from "#src/utils/dateUtils";
+import dayjs from "dayjs";
+import { useTranslation } from "react-i18next";
+import type { MConfig, TableField } from "./CsmDynamicGrid";
+import { useEnterToTab } from "#src/hooks/useEnterToTab";
+import { HtmlEditor } from "./HtmlEditor";
+import { InlineImageUploader } from "./InlineImageUploader";
+import CsmDynamicGrid from "./CsmDynamicGrid";
+import { useAppStore } from "#src/store/app";
+import { usePermissionStore } from "#src/store";
+import { useUserStore } from "#src/store/user";
+import { getTableData } from "./CsmApi";
+import { normalizeComboOptions } from "./combo-utils";
+
+// Helper: safeEval for trigger execution (same as CsmDynamicGrid)
+// CRITICAL: Handle both side-effect triggers (alert, console.log) and return-value triggers
+function safeEval<TArgs extends any[], TReturn>(args: string[], body: string): ((...a: TArgs) => TReturn) | null {
+	try {
+		// Check if body looks encrypted (Base64-like pattern)
+		// Encrypted trigger code usually looks like: YWxl2nQ8... (mix of letters, numbers, special chars)
+		const looksEncrypted = /^[A-Za-z0-9_\-\/]+$/.test(body) && body.length > 50 && !body.includes('\n') && !body.includes('return');
+		if (looksEncrypted) {
+			console.error("[safeEval] Code looks encrypted but was not decrypted properly:", body.substring(0, 100));
+			return null;
+		}
+
+		const trimmed = body.trim();
+		// Check if it's a function declaration or IIFE
+		const isIIFE = trimmed.startsWith('(function') || trimmed.startsWith('(() =>') || trimmed.startsWith('(async') || trimmed.startsWith('(async () =>');
+		const isFuncDecl = trimmed.startsWith('function ');
+		// Check for explicit return or side effects like alert, console
+		const hasReturn = trimmed.includes('return ');
+		const hasSideEffects = /\b(alert|console\.|debugger|throw|window\.)/.test(trimmed);
+		
+		// If it's IIFE, function declaration, has explicit return, or has side effects - use as-is
+		// Otherwise wrap in return statement for expression evaluation
+		const code = (isIIFE || isFuncDecl || hasReturn || hasSideEffects) ? body : `return (${body})`;
+		
+		console.log("[safeEval] Code preparation:", { 
+			isIIFE, 
+			isFuncDecl, 
+			hasReturn, 
+			hasSideEffects,
+			originalLength: body.length,
+			willWrap: !(isIIFE || isFuncDecl || hasReturn || hasSideEffects),
+			looksEncrypted
+		});
+		
+		return new Function(...args, code) as any;
+	} catch (err) {
+		console.error("[safeEval] Error creating function:", err);
+		console.error("[safeEval] Args:", args);
+		console.error("[safeEval] Body (first 500 chars):", body.substring(0, 500));
+		return null;
+	}
+}
+
+// ============================================================================
+// GLOBAL CACHE: Tự động fetch missing tables cho combo queries
+// ============================================================================
+const globalTableFetchCache = new Map<string, Promise<any>>();
+
+function resolveMediaUrl(pathValue: string): string {
+  if (!pathValue) return "";
+  if (/^(https?:)?\/\//i.test(pathValue)) return pathValue;
+  if (pathValue.startsWith("data:") || pathValue.startsWith("blob:")) return pathValue;
+  return pathValue.startsWith("/") ? pathValue : `/${pathValue}`;
+}
+
+/**
+ * Fetch table data nếu chưa có trong database
+ * Returns true nếu đang fetch, false nếu đã có data
+ */
+async function ensureTableInDatabase(
+  tableName: string,
+  appId: string,
+  database: any,
+  whereClause?: any
+): Promise<boolean> {
+  // Include where clause in cache key to handle different filters on same table
+  const whereSuffix = whereClause ? `::${JSON.stringify(whereClause)}` : '';
+  const cacheKey = `${appId}::${tableName}${whereSuffix}`;
+  
+  // ✅ IMPORTANT: If whereClause exists, ALWAYS fetch (API requires obj_where to return data)
+  // Don't check existing data because previous fetch might have different/no where clause
+  if (!whereClause) {
+    // Only check existing data if no where clause
+    const existing = database[tableName];
+    if (existing && (Array.isArray(existing) || (existing.rows && Array.isArray(existing.rows)))) {
+      const rowCount = Array.isArray(existing) ? existing.length : existing.rows?.length || 0;
+      if (rowCount > 0) {
+        console.log(`✓ [AutoFetch] Table ${tableName} already in database (${rowCount} rows)`);
+        return false; // Already have data
+      }
+    }
+  } else {
+    console.log(`🔍 [AutoFetch] Query has where clause, will fetch ${tableName} with filter (ignore existing data)`);
+  }
+
+  // Check if currently fetching this specific query (same table + same where)
+  if (globalTableFetchCache.has(cacheKey)) {
+    // Already fetching, wait for it
+    console.log(`⏳ [AutoFetch] Already fetching ${tableName} with same where clause, waiting...`);
+    try {
+      await globalTableFetchCache.get(cacheKey);
+      return true; // Was fetching
+    } catch (err) {
+      console.warn(`[ensureTableInDatabase] Failed to fetch ${tableName}:`, err);
+      globalTableFetchCache.delete(cacheKey);
+      return true;
+    }
+  }
+
+  // Start fetching
+  console.log(`🔄 [AutoFetch] Fetching missing table: ${tableName} (app: ${appId})`, whereClause ? 'with where:' : '', whereClause);
+  
+  // Build request params - include where if provided
+  const requestParams: any = {
+    app_id: appId,
+    obj_name: tableName,
+  };
+  if (whereClause) {
+    requestParams.where = whereClause;
+  }
+  
+  const fetchPromise = getTableData<any>(requestParams)
+    .then((response) => {
+      const rows = response?.rows || [];
+      console.log(`✅ [AutoFetch] Fetched ${tableName}: ${rows.length} rows`);
+      // Mutate database object directly (will trigger re-render in parent)
+      database[tableName] = {
+        rows,
+        total: response?.total || rows.length,
+      };
+      globalTableFetchCache.delete(cacheKey);
+      return rows;
+    })
+    .catch((err) => {
+      console.error(`❌ [AutoFetch] Failed to fetch ${tableName}:`, err);
+      globalTableFetchCache.delete(cacheKey);
+      // Set empty data để avoid repeated failures
+      database[tableName] = { rows: [], total: 0 };
+      throw err;
+    });
+
+  globalTableFetchCache.set(cacheKey, fetchPromise);
+  
+  // Kick off fetch but don't wait
+  fetchPromise.catch(() => {}); // Ignore error (already logged)
+  
+  return true; // Started fetching
+}
+
+// Helper: Build selectEnums từ trigger f_cbo_query (Vue compatible)
+// Giống CsmDynamicGrid.selectEnums nhưng dành cho detail grid
+// Detail grid không có database table riêng nên phải build từ trigger
+export function buildDetailGridSelectEnums(
+  fields: any[],
+  database: any,
+  decrypt?: (s: string) => string,
+  seft?: any
+): Record<string, any> {
+  const result: Record<string, any> = {};
+  const seftContext = seft || { m_configs: { table: fields }, context: {} };
+
+  const toEnumObj = (options: any[]): Record<string, { text: string }> => {
+    const enumObj: Record<string, { text: string }> = {};
+    options.forEach((opt: any) => {
+      let value: any;
+      let label: any;
+      if (Array.isArray(opt)) {
+        value = opt[0];
+        label = opt[1] ?? opt[0];
+      } else if (opt && typeof opt === "object") {
+        value = opt.ma ?? opt.value ?? opt.id ?? opt.key;
+        label = opt.ten ?? opt.label ?? opt.text ?? String(value ?? '');
+      } else {
+        value = opt;
+        label = String(opt);
+      }
+      if (value !== undefined && value !== null && value !== "") {
+        enumObj[String(value)] = { text: String(label) };
+      }
+    });
+    return enumObj;
+  };
+
+  fields.forEach((f: any) => {
+    const types = (f.f_types || '').toLowerCase();
+    const typeTokens = types.split(/[,\s;|]+/).filter(Boolean);
+    const isCombo = typeTokens.includes('co') || /cbo|select/.test(types);
+    if (!isCombo) return;
+
+    const rawQuery = f.f_cbo_query;
+    if (!rawQuery) return;
+
+    let q = rawQuery;
+    if (decrypt) {
+      try {
+        q = decrypt(rawQuery);
+      } catch {}
+    }
+
+    try {
+      // f_grid:table:display:value
+      if (q.startsWith('f_grid:')) {
+        const parts = q.split(':');
+        const [_, tableName, displayField = 'ten', valueField = 'id'] = parts;
+        if (database?.[tableName]?.rows) {
+          const options = database[tableName].rows.map((row: any) => ({
+            ma: row[valueField] ?? row.id,
+            ten: row[displayField] ?? ''
+          }));
+          const enumObj = toEnumObj(options);
+          if (Object.keys(enumObj).length > 0) result[f.f_name] = enumObj;
+        }
+        return;
+      }
+
+      // query:code
+      if (q.startsWith('query:')) {
+        let code = q.substring(6);
+        if (decrypt) {
+          try { code = decrypt(code); } catch {}
+        }
+        const fn = new Function('seft', 'db', `return (${code})`);
+        const queryResult = fn(seftContext, database);
+        if (Array.isArray(queryResult)) {
+          const options = queryResult.map((item: any) => ({
+            ma: item.ma ?? item.id ?? item.value ?? item,
+            ten: item.ten ?? item.name ?? item.label ?? item.text ?? String(item)
+          }));
+          const enumObj = toEnumObj(options);
+          if (Object.keys(enumObj).length > 0) result[f.f_name] = enumObj;
+        }
+        return;
+      }
+
+      const trimmedQ = q.trim();
+      if (trimmedQ.startsWith('{') || trimmedQ.startsWith('[')) {
+        let parsed: any;
+        try {
+          // Try strict JSON parse first
+          parsed = JSON.parse(trimmedQ);
+        } catch (jsonErr) {
+          console.warn(`[buildDetailGridSelectEnums] JSON.parse failed for ${f.f_name}, trying JS object literal fallback...`);
+          // Fallback: Try parsing as JavaScript object literal using Function()
+          // This handles cases like: {field: "value"} instead of {"field": "value"}
+          try {
+            const evalFn = new Function(`return (${trimmedQ})`);
+            parsed = evalFn();
+            console.log(`[buildDetailGridSelectEnums] Successfully parsed JS object literal for ${f.f_name}`);
+          } catch (evalErr) {
+            console.error(`[buildDetailGridSelectEnums] Both JSON.parse and JS eval failed for ${f.f_name}:`, evalErr);
+            console.error(`[buildDetailGridSelectEnums] Query was:`, trimmedQ);
+            // Skip this field if parsing fails
+            return;
+          }
+        }
+
+        // Handle query array in JSON
+        if (parsed && typeof parsed === 'object' && Array.isArray(parsed.query) && parsed.query.length > 0) {
+          const allOptions: any[] = [];
+          parsed.query.forEach((querySpec: any) => {
+            if (!querySpec?.obj_name || !database) return;
+            const tableName = querySpec.obj_name;
+            const fields = querySpec.fields || [];
+            const appId = querySpec.app_id || seftContext?.appId || 'csm';
+            // Default obj_where if not provided or invalid
+            // Check for: undefined, null, empty string, empty object, or object without required fields
+            let whereClause = querySpec.obj_where;
+            const isInvalidWhere = !whereClause 
+              || (typeof whereClause === 'string' && !whereClause.trim())
+              || (typeof whereClause === 'object' && (!whereClause.field || !whereClause.type));
+            
+            if (isInvalidWhere) {
+              whereClause = {field: 'id', type: 'like', value: ""};
+              console.log(`[buildDetailGridSelectEnums] Using default where clause for ${tableName}:`, whereClause);
+            }
+            
+            const tableData = database[tableName];
+            const tableExists = tableData && (Array.isArray(tableData) || (tableData.rows && Array.isArray(tableData.rows)));
+            const rowCount = tableExists ? (Array.isArray(tableData) ? tableData.length : tableData.rows?.length || 0) : 0;
+            const hasData = tableExists && rowCount > 0;
+            
+            // Build cache key to check if already fetching
+            const whereSuffix = whereClause ? `::${JSON.stringify(whereClause)}` : '';
+            const cacheKey = `${appId}::${tableName}${whereSuffix}`;
+            
+            // 🔄 AUTO-FETCH: If query has where clause and no data, ALWAYS fetch with it
+            // But check if already fetching to prevent infinite loop
+            if (whereClause && !hasData) {
+              // Check if already fetching this specific query
+              if (globalTableFetchCache.has(cacheKey)) {
+                console.log(`⏳ [ComboQuery] Already fetching ${tableName} with this where clause, waiting...`);
+                return; // Skip, will have data on next render after fetch completes
+              }
+              
+              console.log(`⚠️ [ComboQuery] Query has where clause but no data, fetching table "${tableName}" with filter...`);
+              // Kick off fetch with where clause (fire-and-forget) - will populate database when done
+              ensureTableInDatabase(tableName, appId, database, whereClause).catch(err => {
+                console.error(`Failed to auto-fetch table ${tableName}:`, err);
+              });
+              // Return early for this query - will have data on next render after fetch completes
+              return;
+            }
+            
+            // No where clause or already have data: check if need to fetch
+            if (!whereClause && !hasData) {
+              // Check if already fetching
+              if (globalTableFetchCache.has(cacheKey)) {
+                console.log(`⏳ [ComboQuery] Already fetching ${tableName}, waiting...`);
+                return; // Skip, will have data on next render
+              }
+              
+              console.warn(`⚠️ [ComboQuery] Table "${tableName}" ${tableExists ? 'exists but empty' : 'not found'}. Auto-fetching...`);
+              // Kick off fetch without where clause
+              ensureTableInDatabase(tableName, appId, database).catch(err => {
+                console.error(`Failed to auto-fetch table ${tableName}:`, err);
+              });
+              // Return early for this query - will have data on next render after fetch completes
+              return;
+            }
+            
+            // Have data (from fetch with where clause or without), build options
+            const rows = Array.isArray(tableData) ? tableData : (tableData as any)?.rows || [];
+            if (!Array.isArray(rows)) return;
+
+            let filteredData = rows;
+            if (whereClause) {
+              try {
+                // Support both object and string format for obj_where
+                if (typeof whereClause === 'object' && whereClause.field && whereClause.type) {
+                  // Object format: { field: "p_type", type: "eq", value: 1 }
+                  const field = whereClause.field;
+                  const type = whereClause.type;
+                  const value = whereClause.value;
+                  filteredData = rows.filter((row: any) => {
+                    const rowValue = row[field];
+                    switch (type) {
+                      case 'eq': return rowValue == value;
+                      case 'ne': return rowValue != value;
+                      case 'gt': return rowValue > value;
+                      case 'gte': return rowValue >= value;
+                      case 'lt': return rowValue < value;
+                      case 'lte': return rowValue <= value;
+                      case 'like': return String(rowValue || '').toLowerCase().includes(String(value || '').toLowerCase());
+                      case 'in': return Array.isArray(value) && value.includes(rowValue);
+                      default: return true;
+                    }
+                  });
+                } else if (typeof whereClause === 'string') {
+                  // String format: "row.p_type === 1"
+                  const whereFn = safeEval(['row'], `return ${whereClause}`);
+                  if (whereFn) filteredData = rows.filter((row: any) => whereFn(row));
+                }
+              } catch (error) {
+                console.warn('Failed to apply obj_where filter:', error);
+              }
+            }
+
+            filteredData.forEach((row: any) => {
+              if (fields.length >= 2) {
+                allOptions.push({ ma: row[fields[0]], ten: row[fields[1]] });
+              } else if (fields.length === 1) {
+                allOptions.push({ ma: row[fields[0]], ten: row[fields[0]] });
+              }
+            });
+          });
+
+          allOptions.sort((a, b) => String(a.ten || '').localeCompare(String(b.ten || '')));
+          const enumObj = toEnumObj(allOptions);
+          if (Object.keys(enumObj).length > 0) {
+            result[f.f_name] = enumObj;
+            return;
+          }
+        }
+
+        // Handle options array in JSON
+        let options: any[] = [];
+        if (Array.isArray(parsed)) options = parsed;
+        else if (parsed && typeof parsed === 'object' && Array.isArray(parsed.options)) options = parsed.options;
+
+        if (options.length > 0) {
+          options.sort((a, b) => {
+            const aLabel = Array.isArray(a)
+              ? String(a[1] ?? a[0] ?? '')
+              : String(a?.ten ?? a?.label ?? a?.text ?? a?.ma ?? a?.value ?? a?.id ?? a ?? '');
+            const bLabel = Array.isArray(b)
+              ? String(b[1] ?? b[0] ?? '')
+              : String(b?.ten ?? b?.label ?? b?.text ?? b?.ma ?? b?.value ?? b?.id ?? b ?? '');
+            return aLabel.localeCompare(bLabel);
+          });
+          const enumObj = toEnumObj(options);
+          if (Object.keys(enumObj).length > 0) result[f.f_name] = enumObj;
+        }
+        return;
+      }
+
+      // Dynamic code
+      // IMPORTANT: Check if raw q is encrypted BEFORE wrapping with "return "
+      // Because if we wrap encrypted string as "return (encrypted...)", it looks like JS!
+      let rawCode = q;
+      
+      // Try to detect if it's encrypted (Base64-like pattern, long, no JS keywords)
+      const hasJSSyntax = /[{}()\[\];:,.\s]|return|function|const|let|var|if|for|while|=>|alert|console/.test(rawCode);
+      const hasBase64Pattern = /[A-Za-z0-9_\-\/]{50,}/.test(rawCode);
+      const looksEncrypted = !hasJSSyntax && hasBase64Pattern;
+      
+      if (looksEncrypted && decrypt) {
+        try {
+          const decrypted = decrypt(rawCode);
+          rawCode = decrypted;
+        } catch (err) {
+          console.error(`[buildDetailGridSelectEnums] Decrypt failed for encrypted code in ${f.f_name}:`, err);
+          return;
+        }
+      }
+      
+      // Now add return prefix if needed
+      const body = (rawCode.includes("return ") ? "" : "return ") + rawCode;
+      const fn = safeEval(["seft", "data"], body) as ((seft: any, data: any) => any) | null;
+      if (!fn) return;
+      const objQa = fn(seftContext, database);
+      if (!objQa || !objQa.options || !Array.isArray(objQa.options)) return;
+      const options = objQa.options;
+      options.sort((a: any, b: any) => {
+        const aLabel = a?.ten ?? a?.label ?? a?.text ?? String(a);
+        const bLabel = b?.ten ?? b?.label ?? b?.text ?? String(b);
+        return String(aLabel).localeCompare(String(bLabel));
+      });
+      const enumObj = toEnumObj(options);
+      if (Object.keys(enumObj).length > 0) result[f.f_name] = enumObj;
+    } catch (err) {
+      console.error(`[buildDetailGridSelectEnums] Error parsing ${f.f_name}:`, err);
+    }
+  });
+
+  return result;
+}
+
+// Detail Grid Tab Component - Đọc/ghi dữ liệu trực tiếp từ/vào trường form master
+// Giống hệt logic Vue: seft.select_row[mn.table_name]
+// detailFieldName = node.table_name = tên trường trong master record (VD: "chi_tiet_don_hang", "items")
+// Dữ liệu lưu dưới dạng JSON array trong trường đó
+function DetailGridTab({ node, record, appId, permissions, menusPermissions, decrypt, form, detailFieldName, menuId }: any) {
+  const setTableData = useAppStore(state => state.setTableData);
+  const database = useAppStore(state => state.database);
+  
+  // 🔄 Track database version để force re-compute selectEnums khi missing tables được fetch
+  const [databaseVersion, setDatabaseVersion] = useState(0);
+  
+  // Poll for completed table fetches and trigger re-compute
+  useEffect(() => {
+    if (globalTableFetchCache.size === 0) return;
+    
+    const checkInterval = setInterval(() => {
+      // If all fetches completed, increment version to trigger re-compute
+      if (globalTableFetchCache.size === 0) {
+        console.log('✅ [DetailGridTab] All table fetches completed, triggering re-compute...');
+        setDatabaseVersion(v => v + 1);
+        clearInterval(checkInterval);
+      }
+    }, 500);
+    
+    return () => clearInterval(checkInterval);
+  }, [globalTableFetchCache.size]);
+  
+  // Helper: parse detail data từ string hoặc array
+  const parseDetailData = (data: any): Row[] => {
+    if (Array.isArray(data)) return data;
+    if (typeof data === 'string' && data.trim()) {
+      try {
+        const trimmed = data.trim();
+        if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
+          const parsed = JSON.parse(trimmed);
+          return Array.isArray(parsed) ? parsed : [];
+        }
+      } catch (e) {
+        console.warn(`Failed to parse detail data for ${detailFieldName}:`, e);
+      }
+    }
+    return [];
+  };
+  
+  // Khởi tạo & sync chi tiết từ form field hoặc record
+  // Trigger: khi record thay đổi (chọn dòng master khác) hoặc form field thay đổi
+  useEffect(() => {
+    // Lấy từ form trước (ưu tiên)
+    let detailData = form.getFieldValue(detailFieldName);
+    
+    // Fallback: lấy từ record
+    if (!detailData && record) {
+      detailData = record[detailFieldName];
+    }
+    
+    // Parse dữ liệu
+    const parsedData = parseDetailData(detailData);
+    
+    console.log(`[DetailGridTab] Syncing ${detailFieldName}:`, {
+      hasFormValue: !!form.getFieldValue(detailFieldName),
+      hasRecord: !!record,
+      dataLength: parsedData.length,
+      recordId: record?.id
+    });
+    
+    // Sync to AppStore for CsmDynamicGrid
+    setTableData(detailFieldName, {
+      id: detailFieldName,
+      rows: parsedData,
+      app_id: appId,
+    });
+  }, [record?.id, detailFieldName, appId, setTableData]); // Depend on record.id, not record
+  
+  // Lắng nghe thay đổi từ database (khi grid update) và sync ngược vào form
+  // GIỐNG VUE: objRowData[mn.table_name]=seft.select_row[mn.table_name]||[];
+  useEffect(() => {
+    const tableData = database[detailFieldName];
+    if (tableData && Array.isArray(tableData.rows)) {
+      const currentFormValue = form.getFieldValue(detailFieldName);
+      const needsUpdate = !currentFormValue || 
+                         !Array.isArray(currentFormValue) || 
+                         currentFormValue.length !== tableData.rows.length ||
+                         JSON.stringify(currentFormValue) !== JSON.stringify(tableData.rows);
+      
+      if (needsUpdate) {
+        console.log(`[DetailGridTab] Syncing database → form for ${detailFieldName}:`, {
+          from: currentFormValue?.length || 0,
+          to: tableData.rows.length
+        });
+        form.setFieldsValue({ [detailFieldName]: tableData.rows });
+      }
+    }
+  }, [database[detailFieldName], detailFieldName, form]);
+  
+  // Wrapper để truyền vào CsmDynamicGrid:
+  // Trigger code chỉ cần decrypt bằng csmDecrypt, không cần fallback hay decodeURIComponent
+  // Priority: decrypt prop từ parent > csmDecrypt fallback
+  const gridDecrypt = decrypt || csmDecrypt;
+  
+    // Debug: xem detail grid config có gì
+  useEffect(() => {
+    console.log(`[DetailGridTab] Node config for ${detailFieldName}:`, {
+      node_id: node?.id,
+      node_table_name: node?.table_name,
+      node_label: node?.label,
+      table_fields_count: node?.table?.length,
+      table_fields: node?.table?.map((f: any) => ({
+        f_name: f.f_name,
+        f_types: f.f_types,
+        f_cbo_query: f.f_cbo_query ? '(exists)' : '(empty)',
+      })),
+      trigger_keys: Object.keys(node?.trigger || {}),
+    });
+  }, [node, detailFieldName]);
+  
+  // Build selectEnums từ trigger f_cbo_query (tránh phụ thuộc vào database table)
+  const detailGridSelectEnums = useMemo(() => {
+    const seftContext = {
+      appId, // 🔄 Pass appId for auto-fetch logic
+      m_configs: node,
+      context: {},
+      // Lunar calendar utilities
+      INT,
+      jdFromDate,
+      jdToDate,
+      NewMoon,
+      KinhDoMatTroi,
+      SunLongitude,
+      getSunLongitude,
+      getNewMoonDay,
+      getLunarMonth11,
+      getLeapMonthOffset,
+      duong_qua_am,
+      am_qua_duong,
+      LunarCalendar,
+      // Date utilities
+      dateFormat,
+      chuyenNgay,
+      TruNgayRaSoNgay,
+      CongNgay,
+      CongGio,
+      validateEmail,
+      validatePhone,
+      DateUtils,
+    };
+    return buildDetailGridSelectEnums(node?.table || [], database, decrypt, seftContext);
+  }, [node?.table, database, decrypt, node, databaseVersion, appId]); // 🔄 Re-compute when databaseVersion changes (after table fetches)
+  
+  return (
+    <div style={{ minHeight: 'auto', padding: '8px 0' }}>
+      <CsmDynamicGrid
+        appId={appId}
+        database={database}
+        permissions={permissions}
+        menusPermissions={menusPermissions}
+        menuId={menuId ?? node?.menu_id}
+        decrypt={gridDecrypt}
+        m_configs={{
+          ...node,
+          table_name: detailFieldName, // Tên trường chứa detail data (không phải tên bảng database!)
+          table: node.table,
+          type_form: 1, // Single grid
+          row_type_edit: 1, // Inline editing
+          selectEnumsOverride: detailGridSelectEnums, // Override selectEnums from trigger
+        } as any}
+        isDetailGrid={true} // Đánh dấu detail grid - không load từ database riêng
+        onDataChange={() => {
+          // Khi grid thay đổi, force sync database → form ngay lập tức
+          const tableData = database[detailFieldName];
+          if (tableData && Array.isArray(tableData.rows)) {
+            console.log(`[DetailGridTab] onDataChange: Syncing ${detailFieldName} → form (${tableData.rows.length} rows)`);
+            form.setFieldsValue({ [detailFieldName]: tableData.rows });
+          } else {
+            console.warn(`[DetailGridTab] onDataChange: No data for ${detailFieldName}`, tableData);
+          }
+        }}
+      />
+    </div>
+  );
+}
+
+// Helper lấy text đa ngôn ngữ
+function getLangText(lang: string, texts: { vi: string; en: string; zh: string }) {
+  if (!lang) lang = (typeof navigator !== 'undefined' ? navigator.language : 'vi') || 'vi';
+  lang = lang.toLowerCase();
+  if (lang.startsWith('en')) return texts.en;
+  if (lang.startsWith('zh')) return texts.zh;
+  return texts.vi;
+}
+
+function resolveMultilingualText(raw: any, fallback = "", langInput?: string): string {
+  if (raw == null || raw === "") return String(fallback || "");
+  if (typeof raw === "string" || typeof raw === "number") return String(raw);
+
+  if (typeof raw === "object") {
+    const lang = String(langInput || (typeof navigator !== "undefined" ? navigator.language : "vi") || "vi").toLowerCase();
+    const vi = raw.vi ?? raw.vn;
+    const en = raw.en;
+    const zh = raw.zh ?? raw.cn;
+
+    const preferred = lang.startsWith("en") ? en : lang.startsWith("zh") ? zh : vi;
+    if (preferred != null && preferred !== "") return String(preferred);
+    if (vi != null && vi !== "") return String(vi);
+    if (en != null && en !== "") return String(en);
+    if (zh != null && zh !== "") return String(zh);
+
+    const firstScalar = Object.values(raw).find((v) => typeof v === "string" || typeof v === "number");
+    if (firstScalar != null) return String(firstScalar);
+  }
+
+  return String(fallback || "");
+}
+
+// Helper encode HTML - csmEncrypt đã tự làm encodeURIComponent bên trong rồi!
+// CHỈ cần gọi csmEncrypt(plainHTML)
+function encodeHtmlField(html: string): string {
+  if (!html) return html;
+  try {
+    return csmEncrypt(String(html));
+  } catch (e) {
+    console.warn('⚠️ encodeHtmlField failed:', e);
+    return html;
+  }
+}
+
+// Helper decode HTML - csmDecrypt đã tự làm decodeURIComponent bên trong rồi!
+// Nếu decrypt fail (dữ liệu cũ), fallback về decodeURIComponent
+function decodeHtmlField(html: string): string {
+  if (!html) return html;
+  
+  // Nếu input chứa %, chắc chắn là dữ liệu cũ (URL-encoded), SKIP decrypt
+  if (html.includes('%')) {
+    // console.log('📄 [CsmEditModal] Input contains %, skipping decrypt (old URL-encoded data)');
+    try {
+      const decoded = decodeURIComponent(html);
+      // console.log('✅ [CsmEditModal] decodeURIComponent success');
+      return decoded;
+    } catch (e) {
+      console.warn('⚠️ [CsmEditModal] decodeURIComponent failed:', e);
+      return html;
+    }
+  }
+  
+  // Kiểm tra nếu input là plain HTML/tiếng Việt - KHÔNG decrypt
+  const hasHtmlTags = /<[a-z][\s\S]*>/i.test(html);
+  const hasVietnamese = /[\u00C0-\u1EF9]/i.test(html); // Tiếng Việt Unicode range
+  
+  if (hasHtmlTags || hasVietnamese) {
+    // Chắc chắn là plain text/HTML, KHÔNG phải encrypted
+    // console.log('✅ [CsmEditModal] Input is plain HTML or Vietnamese text (not encrypted), using as-is');
+    return html;
+  }
+  
+  // Thử decrypt (cho dữ liệu MỚI - encrypted)
+  try {
+    const decrypted = csmDecrypt(String(html));
+    // Kiểm tra nếu decrypt thành công: chứa HTML tags hợp lệ
+    if (decrypted && typeof decrypted === 'string' && decrypted.length > 0) {
+      // Nếu chứa HTML tag thì OK
+      if (/<[a-z][\s\S]*>/i.test(decrypted)) {
+        // console.log('✅ [CsmEditModal] Using decrypted result (contains valid HTML)');
+        return decrypted;
+      }
+      // console.warn('⚠️ [CsmEditModal] Decrypt result doesn\'t contain HTML tags, likely corrupted');
+    }
+  } catch (e) {
+    console.warn('❌ [CsmEditModal] csmDecrypt failed:', (e as any).message);
+  }
+  
+  // Fallback: return nguyên bản
+  // console.log('🔙 [CsmEditModal] Using original input');
+  return html;
+}
+
+const { Title } = Typography;
+const { TextArea } = Input;
+
+export type Row = Record<string, any>;
+
+type SelectOption = {
+  label: React.ReactNode;
+  value: any;
+};
+
+function buildSelectOptions(
+  rawOptions: { label: string; value: any }[] | undefined,
+  enumObj: Record<string, { text: string }> | undefined,
+  localizeLabel?: (value: unknown) => string
+): SelectOption[] {
+  const options = rawOptions
+    ? rawOptions.map((item: any) => ({
+        value: item?.value ?? item?.ma ?? item?.id ?? item?.key,
+        label: resolveMultilingualText(item?.label ?? item?.ten ?? item?.text, item?.value ?? item?.ma ?? item?.id ?? item?.key),
+      }))
+    : enumObj
+      ? Object.entries(enumObj).map(([value, enumValue]) => ({
+          label: resolveMultilingualText((enumValue as any)?.text, value),
+          value,
+        }))
+      : [];
+
+  const normalized = normalizeComboOptions(options);
+
+  return normalized.map((opt) => ({
+    value: opt.value,
+    label: localizeLabel ? localizeLabel(opt.label) : opt.label,
+  }));
+}
+
+function normalizeSelectValue(value: any, options: SelectOption[]): any {
+  if (value == null || value === "") return value;
+
+  const normalizeOne = (input: any) => {
+    const directMatch = options.find((option) => option.value === input);
+    if (directMatch) return directMatch.value;
+
+    const inputText = String(input).trim();
+    const looseMatch = options.find((option) => String(option.value).trim() === inputText);
+    return looseMatch ? looseMatch.value : input;
+  };
+
+  if (Array.isArray(value)) {
+    return value.map(normalizeOne);
+  }
+
+  return normalizeOne(value);
+}
+
+// Key-value editor for JSON fields
+function JSONKeyValueEditor({ name, form }: { name: string; form: any }) {
+  const getPairs = useCallback(() => {
+    const val = form.getFieldValue(name) || {};
+    if (typeof val === 'string') {
+      try {
+        const parsed = JSON.parse(val);
+        if (Array.isArray(parsed)) {
+          return parsed.map((v, i) => ({ k: i, v }));
+        }
+        if (typeof parsed === 'object') {
+          return Object.entries(parsed).map(([k, v]) => ({ k, v }));
+        }
+        return [{ k: '', v: parsed }];
+      } catch {
+        return [{ k: '', v: val }];
+      }
+    }
+    if (Array.isArray(val)) {
+      return val.map((v, i) => ({ k: i, v }));
+    }
+    if (val && typeof val === 'object') {
+      return Object.entries(val).map(([k, v]) => ({ k, v }));
+    }
+    return [{ k: '', v: val }];
+  }, [form, name]);
+  const [pairs, setPairs] = useState(getPairs);
+  useEffect(() => { setPairs(getPairs()); }, [getPairs]);
+  const commit = (next: Array<{ k: any; v: any }>) => {
+    setPairs(next);
+    let obj: any;
+    if (next.every(p => typeof p.k === 'number' || p.k === '' || !p.k)) {
+      obj = next.map(p => p.v);
+    } else {
+      obj = {};
+      next.forEach(p => { if (p.k) obj[p.k] = p.v; });
+    }
+    form.setFieldsValue({ [name]: obj });
+  };
+  return (
+    <div>
+      {pairs.map((p: any, idx: number) => (
+        <div key={idx} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 8, marginBottom: 8 }}>
+          <Input id={`${name}-key-${idx}`} placeholder="Key" value={p.k} onChange={e => { const next = [...pairs]; next[idx] = { ...next[idx], k: e.target.value }; commit(next); }} />
+          <Input id={`${name}-value-${idx}`} placeholder="Value" value={p.v} onChange={e => { const next = [...pairs]; next[idx] = { ...next[idx], v: e.target.value }; commit(next); }} />
+          <Button danger size="small" onClick={() => { const next = pairs.filter((_: any, i: number) => i !== idx); commit(next); }}>Xóa</Button>
+        </div>
+      ))}
+      <Button type="dashed" block onClick={() => commit([...pairs, { k: '', v: '' }])}>Thêm cặp</Button>
+    </div>
+  );
+}
+
+// Multilingual field tabs
+function MultilingualTabs({ fields, form }: { fields: TableField[]; form: any }) {
+  // Gom trường theo ngôn ngữ: trường gốc là tiếng Việt, các trường có hậu tố là ngôn ngữ tương ứng
+  const langs = ['vi', 'en', 'zh'];
+  const defaultLang = 'vi';
+  const currentAppId = useUserStore(state => state.app_id) || 'csm';
+
+  // Gom các trường thành nhóm theo base name
+  const baseMap: Record<string, Record<string, TableField>> = {};
+  fields.forEach(f => {
+    // Tách base name và lang
+    const match = f.f_name.match(/^(.*?)(_([a-z]{2}))?$/);
+    let base = f.f_name;
+    let lang = 'vi';
+    if (match) {
+      base = match[1];
+      if (match[3] && langs.includes(match[3])) {
+        lang = match[3];
+      }
+    }
+    if (!baseMap[base]) baseMap[base] = {};
+    // Nếu là trường gốc (không hậu tố) và có _en hoặc _zh thì gán cho 'vi'
+    if (match && !match[2]) {
+      const hasEn = !!fields.find(ff => ff.f_name === `${base}_en`);
+      const hasZh = !!fields.find(ff => ff.f_name === `${base}_zh`);
+      if (hasEn || hasZh) {
+        baseMap[base]['vi'] = f;
+      } else {
+        baseMap[base][lang] = f;
+      }
+    } else if (match) {
+      baseMap[base][lang] = f;
+    }
+  });
+
+  // Chỉ lấy các base có ít nhất một trường thuộc ngôn ngữ
+  return (
+    <Form.Item label="Nội dung đa ngôn ngữ" style={{ marginBottom: 24 }}>
+      <Tabs defaultActiveKey={defaultLang}>
+        {langs.map(lang => (
+          <Tabs.TabPane tab={lang === 'vi' ? '🇻🇳 Tiếng Việt' : lang === 'en' ? '🇬🇧 English' : '🇨🇳 中文'} key={lang}>
+            {(() => {
+              // Render các trường thuộc ngôn ngữ tab
+              const tabFields = Object.entries(baseMap).map(([base, langObj]) => {
+                const field = langObj[lang];
+                if (!field) return null;
+                const fieldLabel = resolveMultilingualText(field.f_header, field.f_name, lang);
+                const types = (field.f_types || '').toLowerCase();
+                if (/html|richtext/.test(types)) {
+                  return <Form.Item key={field.f_name} name={field.f_name} label={fieldLabel}><HtmlEditor /></Form.Item>;
+                }
+                if (/textarea|memo/.test(types)) {
+                  return <Form.Item key={field.f_name} name={field.f_name} label={fieldLabel}><TextArea rows={6} /></Form.Item>;
+                }
+                if (types === 'image') {
+                  const MediaUploader = lazy(() => import('./MediaUploader').then(mod => ({ default: mod.MediaUploader })));
+                  return (
+                    <Form.Item key={field.f_name} name={field.f_name} label={fieldLabel}>
+                      <Suspense fallback={<span>Đang tải...</span>}>
+                        <MediaUploader appId={currentAppId} />
+                      </Suspense>
+                    </Form.Item>
+                  );
+                }
+                if (types === 'multi_tag') {
+                  return <Form.Item key={field.f_name} name={field.f_name} label={fieldLabel}><Select mode="tags" style={{ width: '100%' }} tokenSeparators={[',']} /></Form.Item>;
+                }
+                return <Form.Item key={field.f_name} name={field.f_name} label={fieldLabel}><Input id={field.f_name} /> </Form.Item>;
+              });
+              if (tabFields.filter(Boolean).length === 0) {
+                return <div style={{ color: '#aaa', fontStyle: 'italic', padding: '16px 0' }}>Không có dữ liệu cho ngôn ngữ này</div>;
+              }
+              return tabFields;
+            })()}
+          </Tabs.TabPane>
+        ))}
+      </Tabs>
+    </Form.Item>
+  );
+}
+
+function getFieldComponent(
+  f: TableField,
+  form: any,
+  selectEnums?: Record<string, any>,
+  fieldValues?: Record<string, any>,
+  selectOptions?: Record<string, { label: string; value: any }[]>,
+  m_configs?: MConfig,
+  appId?: string,
+  permissions?: number,
+  menusPermissions?: Record<string | number, number>,
+  decrypt?: (s: string) => string,
+  translate?: (key: string, defaultValue?: string) => string
+) {
+  const types = (f.f_types || "ed").toLowerCase(); // default to 'ed' (text input)
+  const key = f.f_name;
+  const lang = (navigator.language || 'vi').toLowerCase();
+  const fieldLabel = resolveMultilingualText((f as any).f_header, f.f_name, lang);
+  const initialVal = fieldValues?.[key];
+  
+  // Kiểu Readonly: chứa 'ro' trong f_types - chỉ hiển thị, không cho edit
+  const isReadonly = types.indexOf('ro') !== -1;
+
+  const parseStringArray = (raw: any): string[] => {
+    if (Array.isArray(raw)) {
+      return Array.from(new Set(raw.map((item) => String(item || "").trim()).filter(Boolean)));
+    }
+    if (typeof raw === "string") {
+      const text = raw.trim();
+      if (!text) return [];
+      if ((text.startsWith("[") && text.endsWith("]")) || (text.startsWith("{") && text.endsWith("}"))) {
+        try {
+          const parsed = JSON.parse(text);
+          if (Array.isArray(parsed)) {
+            return Array.from(new Set(parsed.map((item) => String(item || "").trim()).filter(Boolean)));
+          }
+        } catch {
+          // Fallback to delimiter split below.
+        }
+      }
+      return Array.from(new Set(text.split(/[;,\n]/g).map((item) => item.trim()).filter(Boolean)));
+    }
+    return [];
+  };
+
+  const localizeLabel = (raw: unknown) => {
+    const text = resolveMultilingualText(raw, "", lang).trim();
+    if (!text) return "";
+    if (text.includes(".")) {
+      return translate ? translate(text, text) : text;
+    }
+    return text;
+  };
+
+  const buildMenuPermissionTreeData = () => {
+    const sourceMenus = usePermissionStore.getState().apiWholeMenus || [];
+    const mapNode = (node: any): any => {
+      const rawValue = String(node?.path || node?.id || node?.key || node?.name || "").trim();
+      if (!rawValue) return null;
+      const rawTitle = resolveMultilingualText(node?.label || node?.title || node?.name, rawValue, lang);
+      const children = Array.isArray(node?.children)
+        ? node.children.map((child: any) => mapNode(child)).filter(Boolean)
+        : undefined;
+      return {
+        title: rawTitle,
+        value: rawValue,
+        key: rawValue,
+        children: children && children.length > 0 ? children : undefined,
+      };
+    };
+    return sourceMenus.map((item: any) => mapNode(item)).filter(Boolean);
+  };
+  
+    // Kiểu HTML/RichText hoặc edt
+    if (/html|richtext/.test(types) || types === 'edt') {
+      // Always decrypt before passing to HtmlEditor, always encrypt on change
+      function HtmlEditorField() {
+        const formValue = form.getFieldValue(key);
+        const hasFormValue = formValue !== undefined && formValue !== null && formValue !== '';
+        const value = React.useMemo(() => {
+          // Nếu form có giá trị, giải mã (hỗ trợ cả dữ liệu cũ lẫn mới)
+          if (hasFormValue && typeof formValue === 'string') {
+            return decodeHtmlField(formValue);
+          }
+          // Nếu không có form value, dùng initialVal (CẦN giải mã!)
+          if (initialVal && typeof initialVal === 'string') {
+            return decodeHtmlField(initialVal);
+          }
+          return '';
+        }, [formValue, hasFormValue]);
+        const handleHtmlChange = React.useCallback((val: string) => {
+          // Mã hóa khi thay đổi: encodeURIComponent → csmEncrypt
+          const encoded = encodeHtmlField(val);
+          const current = form.getFieldValue(key);
+          if (encoded !== current) {
+            form.setFieldsValue({ [key]: encoded });
+          }
+        }, [form, key]);
+        return <HtmlEditor value={value} onChange={handleHtmlChange} appId={appId} />;
+      }
+      // initialValue sẽ được set tớ form.setFieldsValue() trước khi component render
+      // Và nọ đã là dữ liệu giải mã (qua decodeHtmlField)
+      // Nên không cần mã hóa lại
+      return (
+        <Form.Item key={key} name={key} label={fieldLabel}>
+          <HtmlEditorField />
+        </Form.Item>
+      );
+  }
+  
+  // Kiểu Code Editor: codejs, codejava, codehtml, ... (dùng CodeMirror như TriggerEditor)
+  if (/code/.test(types)) {
+    function getLanguageExtension(mode: string) {
+      switch (mode) {
+        case 'html': return html();
+        case 'css': return css();
+        case 'python': return python();
+        case 'sql': return sql();
+        case 'xml': return xml();
+        case 'javascript':
+        default:
+          return javascript();
+      }
+    }
+
+    function CodeEditorField() {
+      const formValue = form.getFieldValue(key);
+      const hasFormValue = formValue !== undefined && formValue !== null && formValue !== '';
+      const value = React.useMemo(() => {
+        // Nếu form có giá trị, giải mã (hỗ trợ cả dữ liệu cũ lẫn mới)
+        if (hasFormValue && typeof formValue === 'string') {
+          return decodeHtmlField(formValue);
+        }
+        // Nếu không có form value, dùng initialVal (đã được giải mã rồi)
+        if (initialVal && typeof initialVal === 'string') {
+          return initialVal;
+        }
+        return '';
+      }, [formValue, hasFormValue]);
+      // Chọn mode dựa trên types
+      let codeMode = 'javascript';
+      if (/python/.test(types)) codeMode = 'python';
+      else if (/html/.test(types)) codeMode = 'html';
+      else if (/css/.test(types)) codeMode = 'css';
+      else if (/sql/.test(types)) codeMode = 'sql';
+      else if (/xml/.test(types)) codeMode = 'xml';
+
+      const handleCodeChange = React.useCallback((val: string) => {
+        // Mã hóa khi thay đổi: encodeURIComponent → csmEncrypt
+        const encoded = encodeHtmlField(val);
+        const current = form.getFieldValue(key);
+        if (encoded !== current) {
+          form.setFieldsValue({ [key]: encoded });
+        }
+      }, [form, key]);
+
+      return (
+        <div style={{ border: '1px solid #d9d9d9', borderRadius: 4, overflow: 'hidden', width: '100%' }}>
+          <CodeMirror
+            value={value}
+            height="400px"
+            width="100%"
+            theme={vscodeDark}
+            extensions={[getLanguageExtension(codeMode)]}
+            onChange={handleCodeChange}
+            basicSetup={{
+              lineNumbers: true,
+              foldGutter: true,
+              highlightActiveLineGutter: true,
+              highlightActiveLine: true,
+              autocompletion: true,
+              bracketMatching: true,
+              closeBrackets: true,
+            }}
+            readOnly={isReadonly}
+          />
+        </div>
+      );
+    }
+    // initialValue được set từ form.setFieldsValue() trước khi component render
+    return (
+      <Form.Item key={key} name={key} label={fieldLabel}>
+        <CodeEditorField />
+      </Form.Item>
+    );
+  }
+  
+  // Kiểu JSON
+    // Kiểu JSON: nếu là bảng chi tiết (array field) thì render DetailGridTab (subgrid)
+    if (types === 'json') {
+      // Đối với kiểu json, không cần có field trong fields cha, chỉ cần match với table_name của node con
+      const detailFieldName = key;
+      if (typeof m_configs === 'object' && Array.isArray(m_configs.nodes)) {
+        const detailNode = m_configs.nodes.find(
+          (n: any) => n.table_name === key || n.id === key
+        );
+        if (detailNode) {
+          return (
+            <DetailGridTab
+              key={key}
+              node={detailNode}
+              record={fieldValues}
+              appId={appId}
+              permissions={permissions}
+              menusPermissions={menusPermissions}
+              decrypt={decrypt}
+              form={form}
+              detailFieldName={detailFieldName}
+              menuId={(m_configs as any)?.menu_id ?? detailNode?.menu_id}
+            />
+          );
+        }
+      }
+      return (
+        <Form.Item key={key} name={key} label={fieldLabel} initialValue={initialVal}>
+          <JSONKeyValueEditor name={key} form={form} />
+        </Form.Item>
+      );
+    }
+  
+  // Kiểu số: price, number, int, float, double, money, currency
+  if (/price|number|int|float|double|money|currency/.test(types)) {
+    const dec = parseInt(String((f as TableField & { f_dec?: number | string }).f_dec || 0));
+    return <Form.Item key={key} name={key} label={fieldLabel} initialValue={initialVal}>
+      <InputNumber 
+        style={{ width: '100%' }} 
+        precision={dec > 0 ? dec : 0}
+        formatter={value => `${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
+        parser={value => value!.replace(/\$\s?|(,*)/g, '')}
+        disabled={isReadonly}
+      />
+    </Form.Item>;
+  }
+  
+  // Kiểu DateTime
+  if (/datetime/.test(types)) {
+    return <Form.Item key={key} name={key} label={fieldLabel} initialValue={initialVal}>
+      <DatePicker showTime format="DD/MM/YYYY HH:mm:ss" style={{ width: '100%' }} disabled={isReadonly} />
+    </Form.Item>;
+  }
+  
+  // Kiểu Date (chỉ ngày)
+  if (/^date$/.test(types)) {
+    return <Form.Item key={key} name={key} label={fieldLabel} initialValue={initialVal}>
+      <DatePicker format="DD/MM/YYYY" style={{ width: '100%' }} disabled={isReadonly} />
+    </Form.Item>;
+  }
+  
+  // Kiểu Time (chỉ giờ)
+  if (/^time$/.test(types)) {
+    return <Form.Item key={key} name={key} label={fieldLabel} initialValue={initialVal}>
+      <TimePicker format="HH:mm:ss" style={{ width: '100%' }} disabled={isReadonly} />
+    </Form.Item>;
+  }
+  
+  // Kiểu Check/Boolean: check, bool, switch, checkbox
+  if (/check|bool|switch|checkbox/.test(types)) {
+    return <Form.Item key={key} name={key} label={fieldLabel} valuePropName="checked" initialValue={initialVal}>
+      <Switch disabled={isReadonly} />
+    </Form.Item>;
+  }
+  
+  // Kiểu Textarea/Memo
+  if (/textarea|memo/.test(types)) {
+    return <Form.Item key={key} name={key} label={fieldLabel} initialValue={initialVal}>
+      <Input.TextArea rows={6} disabled={isReadonly} />
+    </Form.Item>;
+  }
+  
+  // Kiểu File Upload
+  if (/^file$/.test(types)) {
+    const value = form.getFieldValue(key) || initialVal;
+    return (
+      <Form.Item key={key} name={key} label={fieldLabel} initialValue={initialVal}>
+        <Input 
+          type="file" 
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) {
+              const reader = new FileReader();
+              reader.onloadend = () => {
+                form.setFieldsValue({ [key]: reader.result });
+              };
+              reader.readAsDataURL(file);
+            }
+          }}
+        />
+        {value && (
+          <div style={{ marginTop: 8 }}>
+            <a href={resolveMediaUrl(String(value))} target="_blank" rel="noopener noreferrer" download>
+              📎 Download {fieldLabel}
+            </a>
+          </div>
+        )}
+      </Form.Item>
+    );
+  }
+  // Kiểu Image/Video Inline Upload: image_inline, album_inline, video_inline, album_video_inline (cho phép upload ngay trong form)
+  if (types === 'image_inline' || types === 'album_inline' || types === 'video_inline' || types === 'album_video_inline') {
+    const isAlbum = types === 'album_inline' || types === 'album_video_inline';
+    const isVideo = types === 'video_inline' || types === 'album_video_inline';
+    const value = form.getFieldValue(key) || initialVal;
+    return (
+      <Form.Item key={key} name={key} label={fieldLabel} initialValue={initialVal}>
+        <InlineImageUploader value={value} onChange={(url) => form.setFieldsValue({ [key]: url })} multiple={isAlbum} acceptVideo={isVideo} appId={appId} />
+      </Form.Item>
+    );
+  }
+  // Kiểu Video: video, videos, media
+  if (/^video$|^videos$|^media$/.test(types)) {
+    const formValue = form.getFieldValue(key);
+    const currentValue = (formValue !== undefined && formValue !== null && formValue !== '') ? formValue : initialVal;
+    const MediaUploader = lazy(() => import('./MediaUploader').then(mod => ({ default: mod.MediaUploader })));
+    
+    function VideoField() {
+      const [videoUrl, setVideoUrl] = React.useState(currentValue || '');
+      React.useEffect(() => {
+        setVideoUrl(currentValue || '');
+      }, [currentValue]);
+      
+      const handleVideoChange = React.useCallback((urls: string | string[]) => {
+        const url = Array.isArray(urls) ? urls[0] : urls;
+        setVideoUrl(url);
+        form.setFieldsValue({ [key]: url });
+      }, []);
+      
+      return (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          {videoUrl && (
+            <div style={{ position: 'relative' }}>
+              <video src={resolveMediaUrl(videoUrl)} style={{ maxWidth: 120, maxHeight: 100, borderRadius: 8, border: '1px solid #eee' }} />
+              <div style={{ marginTop: 4, fontSize: 12, color: '#999' }}>Preview</div>
+            </div>
+          )}
+          <Suspense fallback={<span>Đang tải...</span>}>
+            <MediaUploader value={videoUrl} onChange={handleVideoChange} type="video" appId={appId || "csm"} />
+          </Suspense>
+        </div>
+      );
+    }
+    
+    return (
+      <Form.Item key={key} name={key} label={fieldLabel} initialValue={initialVal}>
+        <VideoField />
+      </Form.Item>
+    );
+  }
+  // Kiểu Image: img, image, avatar, cover
+  if (/img|image|avatar|cover/.test(types)) {
+    const formValue = form.getFieldValue(key);
+    const currentValue = (formValue !== undefined && formValue !== null && formValue !== '') ? formValue : initialVal;
+    const MediaUploader = lazy(() => import('./MediaUploader').then(mod => ({ default: mod.MediaUploader })));
+    
+    function ImageField() {
+      const [imageUrl, setImageUrl] = React.useState(currentValue || '');
+      React.useEffect(() => {
+        setImageUrl(currentValue || '');
+      }, [currentValue]);
+      
+      const handleImageChange = React.useCallback((urls: string | string[]) => {
+        const url = Array.isArray(urls) ? urls[0] : urls;
+        setImageUrl(url);
+        form.setFieldsValue({ [key]: url });
+      }, []);
+      
+      return (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          {imageUrl && <img src={resolveMediaUrl(imageUrl)} alt="Ảnh" style={{ maxWidth: 100, maxHeight: 100, borderRadius: 8, border: '1px solid #eee' }} />}
+          <Suspense fallback={<span>Đang tải...</span>}>
+            <MediaUploader value={imageUrl} onChange={handleImageChange} appId={appId || "csm"} />
+          </Suspense>
+        </div>
+      );
+    }
+    
+    return (
+      <Form.Item key={key} name={key} label={fieldLabel} initialValue={initialVal}>
+        <ImageField />
+      </Form.Item>
+    );
+  }
+  if (types === 'album' || types === 'images' || types === 'gallery') {
+    const formValue = form.getFieldValue(key);
+    const normalizedInitial = (() => {
+      if (Array.isArray(initialVal)) return initialVal;
+      if (typeof initialVal === 'string') {
+        try {
+          const parsed = JSON.parse(initialVal);
+          return Array.isArray(parsed) ? parsed : (initialVal ? [initialVal] : []);
+        } catch {
+          return initialVal ? [initialVal] : [];
+        }
+      }
+      return [];
+    })();
+    const currentValue = Array.isArray(formValue) ? formValue : normalizedInitial;
+    const MediaUploader = lazy(() => import('./MediaUploader').then(mod => ({ default: mod.MediaUploader })));
+
+    function AlbumField() {
+      const [mediaUrls, setMediaUrls] = React.useState<string[]>(currentValue || []);
+      React.useEffect(() => {
+        setMediaUrls(currentValue || []);
+      }, [currentValue]);
+
+      const handleMediaChange = React.useCallback((urls: string | string[]) => {
+        const next = Array.isArray(urls) ? urls : (urls ? [urls] : []);
+        setMediaUrls(next);
+        form.setFieldsValue({ [key]: next });
+      }, []);
+
+      return (
+        <Suspense fallback={<span>Đang tải...</span>}>
+          <MediaUploader value={mediaUrls} onChange={handleMediaChange} type="both" multiple={true} appId={appId || "csm"} />
+        </Suspense>
+      );
+    }
+
+    return (
+      <Form.Item key={key} name={key} label={fieldLabel} initialValue={currentValue}>
+        <AlbumField />
+      </Form.Item>
+    );
+  }
+  // Kiểu Album Video: album_video (multiple videos)
+  if (types === 'album_video' || types === 'videos_album') {
+    const formValue = form.getFieldValue(key);
+    const currentValue = Array.isArray(formValue) ? formValue : (initialVal && Array.isArray(initialVal) ? initialVal : []);
+    const MediaUploader = lazy(() => import('./MediaUploader').then(mod => ({ default: mod.MediaUploader })));
+    
+    function AlbumVideoField() {
+      const [videos, setVideos] = React.useState(currentValue || []);
+      React.useEffect(() => {
+        setVideos(currentValue || []);
+      }, [currentValue]);
+      
+      const handleVideoAdd = React.useCallback((urls: string | string[]) => {
+        const url = Array.isArray(urls) ? urls[0] : urls;
+        if (url && url !== '') {
+          const newVideos = [...videos, url];
+          setVideos(newVideos);
+          form.setFieldsValue({ [key]: newVideos });
+        }
+      }, [videos]);
+      
+      const handleVideoRemove = React.useCallback((idx: number) => {
+        const newVideos = videos.filter((_: string, i: number) => i !== idx);
+        setVideos(newVideos);
+        form.setFieldsValue({ [key]: newVideos });
+      }, [videos]);
+      
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            {videos.map((vid: string, idx: number) => (
+              <div key={idx} style={{ position: 'relative', display: 'inline-block' }}>
+                <video src={resolveMediaUrl(vid)} style={{ width: 100, height: 100, objectFit: 'cover', borderRadius: 8 }} />
+                <Button
+                  danger
+                  size="small"
+                  icon={<DeleteOutlined />}
+                  style={{ position: 'absolute', top: 4, right: 4 }}
+                  onClick={() => handleVideoRemove(idx)}
+                />
+              </div>
+            ))}
+          </div>
+          <Suspense fallback={<span>Đang tải...</span>}>
+            <MediaUploader value={undefined} onChange={handleVideoAdd} type="video" multiple={false} appId={appId || "csm"} />
+          </Suspense>
+        </div>
+      );
+    }
+    
+    return (
+      <Form.Item key={key} name={key} label={fieldLabel} initialValue={initialVal}>
+        <AlbumVideoField />
+      </Form.Item>
+    );
+  }
+  // Kiểu Multi Tag
+  if (types === 'multi_tag') {
+    const rawTagOptions = Array.isArray((f as any).f_options)
+      ? (f as any).f_options
+      : (Array.isArray(selectOptions?.[key]) ? selectOptions?.[key] : []);
+    const tagOptions = rawTagOptions.map((opt: any) => {
+      if (opt && typeof opt === "object") {
+        const value = opt.value ?? opt.ma ?? opt.id ?? opt.key;
+        const label = localizeLabel(opt.label ?? opt.ten ?? opt.text ?? value);
+        return { ...opt, value, label };
+      }
+      const value = String(opt ?? "");
+      return { value, label: localizeLabel(value) };
+    });
+    return <Form.Item key={key} name={key} label={fieldLabel} initialValue={initialVal}>
+      <Select
+        mode="tags"
+        style={{ width: '100%' }}
+        tokenSeparators={[',']}
+        options={tagOptions}
+        optionFilterProp="label"
+      />
+    </Form.Item>;
+  }
+
+  // Kiểu cây menu phân quyền (new permission model)
+  if (types.indexOf('menu_tree') !== -1) {
+    const treeData = buildMenuPermissionTreeData();
+    const selectedValues = parseStringArray(form.getFieldValue(key) ?? initialVal);
+    return <Form.Item key={key} name={key} label={fieldLabel} initialValue={selectedValues}>
+      <TreeSelect
+        treeData={treeData}
+        value={selectedValues}
+        style={{ width: '100%' }}
+        treeCheckable
+        showSearch
+        allowClear
+        disabled={isReadonly}
+        placeholder={translate ? translate("system.userPermission.fields.menusPermissions", "Select menu permissions") : "Select menu permissions"}
+        onChange={(nextValue) => {
+          const normalized = Array.isArray(nextValue)
+            ? nextValue.map((item) => String(item || '').trim()).filter(Boolean)
+            : [];
+          form.setFieldsValue({ [key]: Array.from(new Set(normalized)) });
+        }}
+      />
+    </Form.Item>;
+  }
+  
+  // Kiểu Select/CBO (combobox) - kiểm tra indexOf('co') như Vue (line 245, 565, 796...)
+  if (types.indexOf('co') !== -1) {
+    const rawOptions = selectOptions?.[key];
+    const enumObj = selectEnums?.[key];
+    const localizedOptions = buildSelectOptions(rawOptions, enumObj, localizeLabel);
+    const rawSelectValue = form.getFieldValue(key) ?? initialVal;
+    const selectValue = normalizeSelectValue(rawSelectValue, localizedOptions);
+
+    return <Form.Item key={key} name={key} label={fieldLabel} initialValue={initialVal}>
+      <Select 
+        style={{ width: '100%' }} 
+        options={localizedOptions}
+        showSearch
+        optionFilterProp="label"
+        allowClear
+        disabled={isReadonly}
+        value={selectValue}
+        onChange={val => form.setFieldsValue({ [key]: val })}
+      />
+    </Form.Item>;
+  }
+  
+  // Kiểu Password
+  if (/password/.test(types)) {
+    return <Form.Item key={key} name={key} label={fieldLabel} initialValue={initialVal}>
+      <Input.Password disabled={isReadonly} />
+    </Form.Item>;
+  }
+  
+  // Mặc định: ed (text input)
+  return <Form.Item key={key} name={key} label={fieldLabel} initialValue={initialVal}>
+    <Input id={key} disabled={isReadonly} />
+  </Form.Item>;
+}
+
+export function CsmEditModal({
+  open,
+  onOpenChange,
+  title,
+  m_configs,
+  fields,
+  record,
+  onSubmit,
+  selectEnums,
+  selectOptions,
+  database,
+  appId,
+  permissions,
+  menusPermissions,
+  decrypt,
+}: {
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+  title: string;
+  m_configs: MConfig;
+  fields: TableField[];
+  record?: Row | null;
+  onSubmit: (values: Row) => Promise<void> | void;
+  selectEnums?: Record<string, Record<string, { text: string }>>;
+  selectOptions?: Record<string, { label: string; value: any }[]>;
+  database?: Record<string, { rows: Row[] }>;
+  appId?: string;
+  permissions?: number;
+  menusPermissions?: Record<string | number, number>;
+  decrypt?: (s: string) => string;
+}) {
+  const [form] = Form.useForm();
+  const [submitting, setSubmitting] = useState(false);
+  const [formUpdated, setFormUpdated] = useState(0);
+  const [valuesReady, setValuesReady] = useState(false);
+  const modalContentRef = useRef<HTMLDivElement>(null);
+  const { t } = useTranslation();
+  const user = useUserStore();
+  const currentAppId = appId || user.app_id || "csm";
+  
+  // Track if we're currently updating from trigger to prevent recursion
+  const isUpdatingFromTrigger = useRef(false);
+  const updateTriggerTimer = useRef<NodeJS.Timeout | null>(null);
+
+  // Helper: Create seft context with all utility functions
+  const createSeftContext = useCallback(() => ({
+    m_configs,
+    database,
+    // Lunar calendar utilities
+    INT,
+    jdFromDate,
+    jdToDate,
+    NewMoon,
+    KinhDoMatTroi,
+    SunLongitude,
+    getSunLongitude,
+    getNewMoonDay,
+    getLunarMonth11,
+    getLeapMonthOffset,
+    duong_qua_am,
+    am_qua_duong,
+    LunarCalendar,
+    // Date utilities
+    dateFormat,
+    chuyenNgay,
+    TruNgayRaSoNgay,
+    CongNgay,
+    CongGio,
+    validateEmail,
+    validatePhone,
+    DateUtils,
+  }), [m_configs, database]);
+  const applyRowTrigger = useCallback((triggerName: string, data: any) => {
+    let triggerCode = (m_configs.trigger as any)?.[triggerName];
+    if (!triggerCode) {
+      console.log(`[CsmEditModal.applyRowTrigger] No trigger code for: ${triggerName}`);
+      return null;
+    }
+
+    if (decrypt) {
+      try {
+        triggerCode = decrypt(triggerCode);
+      } catch (err) {
+        console.error(`[CsmEditModal.applyRowTrigger] Failed to decrypt ${triggerName}:`, err);
+        return null;
+      }
+    }
+
+    console.log(`[CsmEditModal.applyRowTrigger] Executing ${triggerName} trigger`);
+    console.log(`[CsmEditModal.applyRowTrigger] Trigger code (first 200 chars):`, triggerCode.substring(0, 200));
+
+    const fn = safeEval(["seft", "data", "bang"], triggerCode) as ((seft: any, data: any, bang: any) => any) | null;
+    if (!fn) {
+      console.error(`[CsmEditModal.applyRowTrigger] Failed to create function for: ${triggerName}`);
+      return null;
+    }
+
+    const seftContext = createSeftContext();
+    try {
+      const result = fn(seftContext, JSON.parse(JSON.stringify(data)), database);
+      console.log(`[CsmEditModal.applyRowTrigger] ${triggerName} result:`, result);
+      return result;
+    } catch (err) {
+      console.error(`[CsmEditModal.applyRowTrigger] Error executing ${triggerName}:`, err);
+      return null;
+    }
+  }, [m_configs, database, decrypt]);
+  
+  // Helper: Run UPDATE trigger realtime (debounced)
+  const runUpdateTriggerRealtime = useCallback((changedValues: any, allValues: any) => {
+    console.log('[CsmEditModal.runUpdateTriggerRealtime] Triggered with changed values:', changedValues);
+    
+    // Prevent recursion: don't run trigger if we're already updating from trigger
+    if (isUpdatingFromTrigger.current) {
+      console.log('[CsmEditModal.runUpdateTriggerRealtime] Skipping - already updating from trigger');
+      return;
+    }
+    
+    // Clear previous timer
+    if (updateTriggerTimer.current) {
+      clearTimeout(updateTriggerTimer.current);
+    }
+    
+    // Debounce 300ms để tránh chạy quá nhiều lần khi user đang nhập
+    updateTriggerTimer.current = setTimeout(() => {
+      if (!m_configs.trigger?.update && !m_configs.trigger?.barcode) {
+        console.log('[CsmEditModal.runUpdateTriggerRealtime] No update or barcode triggers configured');
+        return;
+      }
+      
+      try {
+        const currentValues = form.getFieldsValue();
+        console.log('[CsmEditModal.runUpdateTriggerRealtime] Current form values:', currentValues);
+        
+        let updatedData = currentValues;
+        
+        if (m_configs.trigger?.update) {
+          console.log('[CsmEditModal.runUpdateTriggerRealtime] Applying update trigger');
+          const updateResult = applyRowTrigger("update", updatedData);
+          if (updateResult && typeof updateResult === "object") {
+            updatedData = { ...updatedData, ...updateResult };
+            console.log('[CsmEditModal.runUpdateTriggerRealtime] Update trigger returned:', updateResult);
+          }
+        }
+        
+        if (m_configs.trigger?.barcode) {
+          console.log('[CsmEditModal.runUpdateTriggerRealtime] Applying barcode trigger');
+          const barcodeResult = applyRowTrigger("barcode", updatedData);
+          if (barcodeResult && typeof barcodeResult === "object") {
+            updatedData = { ...updatedData, ...barcodeResult };
+            console.log('[CsmEditModal.runUpdateTriggerRealtime] Barcode trigger returned:', barcodeResult);
+          }
+        }
+        
+        // Set flag to prevent recursion
+        isUpdatingFromTrigger.current = true;
+        
+        // Merge updated fields back to form (chỉ update các field có thay đổi)
+        const fieldsToUpdate: any = {};
+        Object.keys(updatedData || {}).forEach(key => {
+          if (updatedData[key] !== currentValues[key]) {
+            fieldsToUpdate[key] = updatedData[key];
+          }
+        });
+        
+        if (Object.keys(fieldsToUpdate).length > 0) {
+          console.log('[CsmEditModal.runUpdateTriggerRealtime] Updating form fields:', fieldsToUpdate);
+          form.setFieldsValue(fieldsToUpdate);
+        } else {
+          console.log('[CsmEditModal.runUpdateTriggerRealtime] No fields to update');
+        }
+        
+        // Reset flag after a short delay
+        setTimeout(() => {
+          isUpdatingFromTrigger.current = false;
+        }, 100);
+      } catch (err) {
+        console.error('[CsmEditModal.runUpdateTriggerRealtime] Error:', err);
+        isUpdatingFromTrigger.current = false;
+      }
+    }, 300); // Debounce 300ms
+  }, [m_configs, database, decrypt, form, applyRowTrigger]);
+  
+  // Cleanup timer on unmount
+  useEffect(() => {
+    return () => {
+      if (updateTriggerTimer.current) {
+        clearTimeout(updateTriggerTimer.current);
+      }
+    };
+  }, []);
+  
+  // Debug: log selectEnums when modal opens
+  useEffect(() => {
+    if (open) {
+      console.log('[CsmEditModal] Modal opened with selectEnums:', selectEnums);
+      console.log('[CsmEditModal] Database available:', !!database);
+      console.log('[CsmEditModal] Decrypt available:', !!decrypt);
+      console.log('[CsmEditModal] Fields with "co" type:', 
+        m_configs?.table?.filter(f => (f.f_types || '').toLowerCase().indexOf('co') !== -1).map(f => ({
+          name: f.f_name,
+          types: f.f_types,
+          has_cbo_query: !!f.f_cbo_query,
+          has_enum: !!selectEnums?.[f.f_name],
+          cbo_query_preview: f.f_cbo_query ? (
+            f.f_cbo_query.length > 100 ? f.f_cbo_query.substring(0, 100) + '...' : f.f_cbo_query
+          ) : 'N/A'
+        }))
+      );
+    }
+  }, [open, selectEnums, m_configs, database, decrypt]);
+  
+  // Enable EnterToTab for form inputs
+  useEnterToTab(modalContentRef);
+
+  // Lấy fields động từ m_configs.table
+  const dynamicFields: TableField[] = useMemo(() => {
+    return Array.isArray(m_configs?.table)
+      ? m_configs.table
+          .filter(f => Number(f.f_show) === 1 && f.f_name !== 'id') // Hide 'id' field
+          .sort((a, b) => Number(a.f_stt || 0) - Number(b.f_stt || 0))
+      : [];
+  }, [m_configs]);
+
+  useEffect(() => {
+    if (!open) {
+      // Reset form when modal closes
+      form.resetFields();
+      setValuesReady(false);
+      return;
+    }
+    setValuesReady(false);
+    if (record) {
+      // Đảm bảo tất cả các trường đa ngôn ngữ đều có giá trị (nếu thiếu thì gán rỗng)
+      const initialValues = { ...record };
+      const allFieldNames = dynamicFields.map(f => f.f_name);
+      allFieldNames.forEach(name => {
+        if (initialValues[name] === undefined) initialValues[name] = "";
+      });
+      // Nếu trường gốc (không hậu tố) rỗng, tự động lấy giá trị từ các trường cùng base có hậu tố (_en, _zh, ...)
+      dynamicFields.forEach(f => {
+        const match = f.f_name.match(/^(.*?)(_([a-z]{2}))?$/);
+        if (match && !match[2]) { // trường gốc
+          const base = match[1];
+          if (initialValues[base] === undefined || initialValues[base] === "") {
+            const candidates = dynamicFields.filter(ff => ff.f_name.startsWith(base + "_") && initialValues[ff.f_name]);
+            const val = candidates.map(ff => initialValues[ff.f_name]).find(v => v !== undefined && v !== "");
+            if (val !== undefined) initialValues[base] = val;
+          }
+        }
+      });
+      // Convert date fields to dayjs objects
+      const convertedValues = { ...initialValues };
+      const parseMediaArray = (input: any): string[] => {
+        if (!input) return [];
+        if (Array.isArray(input)) return input.filter((v) => typeof v === 'string' && v.trim() !== '').map((v) => String(v));
+        if (typeof input === 'string') {
+          const s = input.trim();
+          if (!s) return [];
+          if (s.startsWith('[') || s.startsWith('{')) {
+            try {
+              const parsed = JSON.parse(s);
+              if (Array.isArray(parsed)) return parsed.filter((v) => typeof v === 'string' && v.trim() !== '').map((v) => String(v));
+              if (typeof parsed === 'string' && parsed.trim()) return [parsed.trim()];
+            } catch {
+              // Keep fallback below
+            }
+          }
+          return [s];
+        }
+        return [];
+      };
+      dynamicFields.forEach(f => {
+        const types = (f.f_types || '').toLowerCase();
+        const key = f.f_name;
+        if (/date|datetime|time/.test(types) && convertedValues[key]) {
+          try {
+            convertedValues[key] = dayjs(convertedValues[key]);
+          } catch (e) {
+            console.warn(`Failed to convert date for field ${key}:`, e);
+          }
+        }
+        // Đảm bảo các trường html/richtext/edt luôn là decrypted khi set vào form
+        if ((/html|richtext/.test(types) || types === 'edt') && typeof convertedValues[key] === 'string') {
+          convertedValues[key] = decodeHtmlField(convertedValues[key]);
+        }
+        // Parse JSON for image/album fields - only if it's a JSON array string
+        if (/img|image|avatar|cover|album|images|gallery/.test(types) && typeof convertedValues[key] === 'string') {
+          const strValue = String(convertedValues[key]).trim();
+          // Only parse if it looks like JSON (starts with [ or {)
+          if (strValue.startsWith('[') || strValue.startsWith('{')) {
+            try {
+              convertedValues[key] = JSON.parse(strValue);
+            } catch (e) {
+              console.warn(`Failed to parse JSON for image field ${key}:`, e);
+              // Keep as string if parse fails
+            }
+          }
+          // If it's a plain URL string, keep it as is (MediaUploader will handle it)
+        }
+
+        // Migrate legacy video/videos fields into unified album media field.
+        if (types === 'album' || types === 'images' || types === 'gallery') {
+          const merged = [
+            ...parseMediaArray(convertedValues[key]),
+            ...parseMediaArray(convertedValues[`${key}_video`]),
+            ...parseMediaArray(convertedValues[`${key}_videos`]),
+            ...parseMediaArray(convertedValues.video),
+            ...parseMediaArray(convertedValues.videos),
+            ...parseMediaArray(convertedValues.video_url),
+            ...parseMediaArray(convertedValues.video_urls),
+          ];
+          if (merged.length > 0) {
+            convertedValues[key] = Array.from(new Set(merged));
+          }
+        }
+
+        if (types.indexOf('co') !== -1) {
+          const normalizedOptions = buildSelectOptions(
+            selectOptions?.[key],
+            selectEnums?.[key],
+            (label) => {
+              const text = String(label == null ? '' : label);
+              return text.includes('.') ? t(text) : text;
+            }
+          );
+          convertedValues[key] = normalizeSelectValue(convertedValues[key], normalizedOptions);
+        }
+      });
+      
+      // Parse JSON for detail grid fields (master-detail nodes)
+      const isMasterDetail = Number(m_configs.type_form) === 2;
+      const nodes = (m_configs as any).nodes || [];
+      if (isMasterDetail && Array.isArray(nodes)) {
+        nodes.forEach((node: any) => {
+          const detailFieldName = node.table_name;
+          const detailValue = convertedValues[detailFieldName];
+          
+          // Parse JSON string to array
+          if (typeof detailValue === 'string' && detailValue.trim()) {
+            try {
+              convertedValues[detailFieldName] = JSON.parse(detailValue);
+            } catch (e) {
+              console.warn(`Failed to parse JSON for detail field ${detailFieldName}:`, e);
+              convertedValues[detailFieldName] = [];
+            }
+          } else if (!Array.isArray(detailValue)) {
+            // Ensure it's always an array
+            convertedValues[detailFieldName] = [];
+          }
+        });
+      }
+      
+      form.setFieldsValue(convertedValues);
+      // Force re-render to ensure Form items display the values
+      const timer = setTimeout(() => {
+        setTimeout(() => {
+          setFormUpdated(prev => prev + 1);
+          form.setFieldsValue(convertedValues);
+          setTimeout(() => {
+            setValuesReady(true);
+          }, 0);
+        }, 0);
+      }, 0);
+      return () => clearTimeout(timer);
+    } else {
+      // ...existing code...
+    }
+  }, [form, open, record, dynamicFields, selectEnums, selectOptions, t]);
+
+  // Phân loại field: đa ngôn ngữ & chung
+  const langs = ['vi', 'en', 'zh'];
+  // Các field đa ngôn ngữ: có hậu tố _en/_zh hoặc là block seo_multi/content_multi
+  // Trường đa ngôn ngữ: có hậu tố _en/_zh (hoặc _vi) hoặc là block seo_multi/content_multi
+  const isMultilangField = (f: TableField) => {
+    // Kiểm tra hậu tố _en, _zh, _vi
+    if (/_((vi|en|zh))$/.test(f.f_name)) return true;
+    if (["seo_multi", "content_multi"].includes(f.f_types || "")) return true;
+    // Kiểm tra xem có phiên bản _en hoặc _zh không
+    const base = f.f_name;
+    const hasEn = !!dynamicFields.find(ff => ff.f_name === `${base}_en`);
+    const hasZh = !!dynamicFields.find(ff => ff.f_name === `${base}_zh`);
+    // Nếu có variant _en hoặc _zh thì trường gốc cũng là multilang
+    return hasEn || hasZh;
+  };
+  // Đảm bảo không lặp lại các trường: mỗi field chỉ xuất hiện ở 1 nơi
+  // Tạo set các tên trường đa ngôn ngữ
+  const multilangFieldNames = new Set(
+    dynamicFields.filter(isMultilangField).map(f => f.f_name)
+  );
+  const multilangFields = dynamicFields.filter(f => multilangFieldNames.has(f.f_name));
+  const commonFields = dynamicFields.filter(f => !multilangFieldNames.has(f.f_name));
+  
+  // ...existing code...
+
+  return (
+    <Modal
+      open={open}
+      onCancel={() => {
+        if (submitting) return;
+        form.resetFields();
+        onOpenChange(false);
+      }}
+      title={title}
+      width="95%"
+      style={{ maxWidth: 1200 }}
+      centered
+      destroyOnClose={true}
+      footer={[
+        <Button key="cancel" disabled={submitting} onClick={() => {
+          if (submitting) return;
+          form.resetFields();
+          onOpenChange(false);
+        }}>Hủy</Button>,
+        <Button key="submit" type="primary" loading={submitting} disabled={submitting} onClick={() => {
+          if (submitting) return;
+          setSubmitting(true);
+          form.validateFields().then(async (values) => {
+            const encodedValues = { ...values };
+            dynamicFields.forEach(f => {
+              const types = (f.f_types || '').toLowerCase();
+              // Convert dayjs objects back to ISO string for dates
+              if (/date|datetime|time/.test(types) && encodedValues[f.f_name]) {
+                if (encodedValues[f.f_name]?.format) {
+                  encodedValues[f.f_name] = encodedValues[f.f_name].toISOString();
+                }
+              }
+              // HTML/richtext/edt fields lưu nhập mã hóa trong HtmlEditorField (handleHtmlChange)
+              // Nên không cần mã hóa lại ở đây - chỉ lấy giá trị như là
+              // Stringify image/album fields
+              if (/img|image|avatar|cover|album|images|gallery/.test(types)) {
+                if (Array.isArray(encodedValues[f.f_name])) {
+                  encodedValues[f.f_name] = JSON.stringify(encodedValues[f.f_name]);
+                }
+              }
+            });
+            
+            // Run UPDATE/BARCODE triggers TRƯỚC KHI stringify và save (Vue compatibility)
+            // Trigger có thể tính toán các field tự động (tổng tiền, thuế, ngày CT, barcode, ...)
+            let finalValues = { ...encodedValues };
+            try {
+              if (m_configs.trigger?.update) {
+                console.log('[CsmEditModal] Applying update trigger on save');
+                const updateResult = applyRowTrigger("update", finalValues);
+                if (updateResult && typeof updateResult === "object") {
+                  finalValues = { ...finalValues, ...updateResult };
+                  console.log('[CsmEditModal] Update trigger applied:', updateResult);
+                }
+              }
+              if (m_configs.trigger?.barcode) {
+                console.log('[CsmEditModal] Applying barcode trigger on save');
+                const barcodeResult = applyRowTrigger("barcode", finalValues);
+                if (barcodeResult && typeof barcodeResult === "object") {
+                  finalValues = { ...finalValues, ...barcodeResult };
+                  console.log('[CsmEditModal] Barcode trigger applied:', barcodeResult);
+                }
+              }
+            } catch (err) {
+              console.error('[CsmEditModal] Trigger error on save:', err);
+            }
+            
+            // Stringify detail grid fields (master-detail nodes) để lưu vào database
+            const isMasterDetail = Number(m_configs.type_form) === 2;
+            const nodes = (m_configs as any).nodes || [];
+            if (isMasterDetail && Array.isArray(nodes)) {
+              console.log('[CsmEditModal] Master-Detail save: processing detail grids');
+              nodes.forEach((node: any) => {
+                const detailFieldName = node.table_name;
+                // CRITICAL: Get current detail data from form field (already synced from database)
+                // Form field is the single source of truth (like Vue's select_row[mn.table_name])
+                const currentFormValue = form.getFieldValue(detailFieldName);
+                const detailValue = currentFormValue || [];
+                
+                console.log(`[CsmEditModal] Saving ${detailFieldName}:`, {
+                  rowCount: Array.isArray(detailValue) ? detailValue.length : 0,
+                  rawValue: detailValue,
+                  detailFieldName: detailFieldName,
+                  type: typeof detailValue,
+                  sampleRow: Array.isArray(detailValue) && detailValue.length > 0 ? detailValue[2] : null
+                });
+                
+                // Stringify array to JSON for storage
+                if (Array.isArray(detailValue)) {
+                  finalValues[detailFieldName] = JSON.stringify(detailValue);
+                  console.log(`[CsmEditModal] Stringified ${detailFieldName}: ${finalValues[detailFieldName].substring(0, 100)}...`);
+                } else if (typeof detailValue === 'string') {
+                  // Already stringified, keep as is
+                  finalValues[detailFieldName] = detailValue;
+                  console.log(`[CsmEditModal] ${detailFieldName} already stringified`);
+                } else {
+                  // Empty or invalid, set to empty array
+                  finalValues[detailFieldName] = '[]';
+                  console.log(`[CsmEditModal] ${detailFieldName} set to empty array`);
+                }
+              });
+            }
+            
+            console.log('[CsmEditModal] Final values to submit:', finalValues);
+            
+            await onSubmit(finalValues as Row);
+            form.resetFields();
+            onOpenChange(false);
+          }).catch(err => console.error('Validation error:', err)).finally(() => {
+            setSubmitting(false);
+          });
+        }}>Lưu</Button>,
+      ]}
+      styles={{ body: { maxHeight: "75vh", overflowY: "auto", padding: "8px 12px" } }}
+    >
+      <div ref={modalContentRef}>
+        <Form
+          key={`form-${record?.id || 'new'}`}
+          form={form}
+          layout="vertical"
+          onValuesChange={runUpdateTriggerRealtime}
+        >
+      {/* Thêm hidden fields cho các trường chi tiết (detail tabs) để lưu dữ liệu */}
+      {(() => {
+        const isMasterDetail = Number(m_configs.type_form) === 2;
+        const nodes = (m_configs as any).nodes || [];
+        if (!isMasterDetail || !Array.isArray(nodes) || nodes.length === 0) return null;
+        
+        return nodes.map((node: any) => {
+          const detailFieldName = node.table_name;
+          return (
+            <Form.Item key={detailFieldName} name={detailFieldName} hidden noStyle>
+              <Input type="hidden" />
+            </Form.Item>
+          );
+        });
+      })()}
+      
+      {commonFields.length > 0 && (
+        <>
+          {/* Show "Thông tin chung" divider only if there are multilingual fields or detail tabs */}
+          {(multilangFields.length > 0 || (m_configs as any).nodes?.length > 0) && (
+            <Divider orientation="left" style={{ marginTop: 0, marginBottom: 6 }}>
+              <Title level={5} style={{ margin: 0, fontSize: 13 }}>Thông tin chung</Title>
+            </Divider>
+          )}
+          {/* Tối ưu layout: responsive grid với gap nhỏ hơn, fewer margins */}
+          {(() => {
+            const formValues = form.getFieldsValue();
+            // Phân loại full width và grid fields
+            const fullWidthFields = commonFields.filter(f => {
+              const types = (f.f_types || '').toLowerCase();
+              return /html|richtext/.test(types) || /code/.test(types) || types === 'edt';
+            });
+            const gridFields = commonFields.filter(f => {
+              const types = (f.f_types || '').toLowerCase();
+              return !(/html|richtext/.test(types) || /code/.test(types) || types === 'edt');
+            });
+            return (
+              <>
+                {/* Responsive grid: 3 cột desktop, 2 cột tablet, 1 cột mobile */}
+                {gridFields.length > 0 && (
+                  <Form.Item style={{ marginBottom: 4 }}>
+                    <div style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+                      gap: 8,
+                      width: '100%'
+                    }}>
+                      {gridFields.map((f, i) => (
+                        <div key={`${f.f_name}-${formUpdated}`} style={{ minWidth: 0 }}>
+                          {getFieldComponent(
+                            f,
+                            form,
+                            selectEnums,
+                            formValues,
+                            selectOptions,
+                            m_configs,
+                            appId,
+                            permissions,
+                            menusPermissions,
+                            (val: string) => {
+                              let decoded = val;
+                              try {
+                                decoded = csmDecrypt(val);
+                                if (/%/.test(decoded)) {
+                                  decoded = decodeURIComponent(decoded);
+                                }
+                              } catch {}
+                              return decoded;
+                            },
+                            (key: string, defaultValue?: string) => t(key, defaultValue || "")
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </Form.Item>
+                )}
+                {/* Full width fields: HTML editor, rich text, code */}
+                {fullWidthFields.length > 0 && fullWidthFields.map((f, i) => (
+                  <div key={`${f.f_name}-fullwidth-${formUpdated}`} style={{ marginBottom: 4 }}>
+                    {getFieldComponent(
+                      f,
+                      form,
+                      selectEnums,
+                      formValues,
+                      selectOptions,
+                      m_configs,
+                      appId,
+                      permissions,
+                      menusPermissions,
+                      (val: string) => {
+                        let decoded = val;
+                        try {
+                          decoded = csmDecrypt(val);
+                          if (/%/.test(decoded)) {
+                            decoded = decodeURIComponent(decoded);
+                          }
+                        } catch {}
+                        return decoded;
+                      },
+                      (key: string, defaultValue?: string) => t(key, defaultValue || "")
+                    )}
+                  </div>
+                ))}
+              </>
+            );
+          })()}
+        </>
+      )}
+
+      {/* Hiển thị Detail Tabs nếu Master-Detail (type_form=2) và có nodes */}
+      {(() => {
+        const isMasterDetail = Number(m_configs.type_form) === 2;
+        const nodes = (m_configs as any).nodes || [];
+        const hasNodes = Array.isArray(nodes) && nodes.length > 0;
+        // ...existing code...
+        
+        if (!isMasterDetail || !hasNodes) return null;
+        
+        // Master-Detail: Render detail grids for each tab
+        return (
+          <div style={{ marginBottom: 4, marginTop: 8 }}>
+            <Divider orientation="left" style={{ marginTop: 0, marginBottom: 6 }}>
+              <Title level={5} style={{ margin: 0, fontSize: 13 }}>Chi tiết</Title>
+            </Divider>
+            <Tabs 
+              defaultActiveKey="0" 
+              type="card" 
+              size="small"
+              destroyInactiveTabPane={false}
+              tabBarStyle={{ marginBottom: 6 }}
+            >
+              {nodes.map((node: any, idx: number) => {
+                const nodeLabel = (node.label && node.label.split(".").slice(-1)[0]) || node.label || t('common.detail', { index: idx + 1 });
+                const detailFieldName = node.table_name;
+                
+                return (
+                  <Tabs.TabPane tab={nodeLabel} key={String(idx)}>
+                    <div style={{ maxHeight: 400, overflowY: 'auto' }}>
+                      <DetailGridTab
+                        node={node}
+                        record={record}
+                        appId={appId}
+                        permissions={permissions}
+                        menusPermissions={menusPermissions}
+                        decrypt={decrypt}
+                        form={form}
+                        detailFieldName={detailFieldName}
+                        menuId={(m_configs as any)?.menu_id ?? node?.menu_id}
+                      />
+                    </div>
+                  </Tabs.TabPane>
+                );
+              })}
+            </Tabs>
+          </div>
+        );
+      })()}
+
+      {/* Các block/trường đa ngôn ngữ: hiển thị trong tab, chuyển tab chỉ đổi dữ liệu ngôn ngữ */}
+      {multilangFields.length > 0 && (
+        <>
+          <Divider orientation="left" style={{ marginTop: 12, marginBottom: 6 }}>
+        <Title level={5} style={{ margin: 0, fontSize: 13 }}>Nội dung đa ngôn ngữ</Title>
+      </Divider>
+      {/* Tabs đa ngôn ngữ: gom các trường có hậu tố _vi (hoặc không có hậu tố, tự hiểu là tiếng Việt), _en, _zh... */}
+      {/* Tabs đa ngôn ngữ: chỉ chứa các trường có _en hoặc _zh, và trường gốc nếu có các biến này */}
+      <div key={`multilang-tabs-${formUpdated}`}>
+      {(() => {
+        // Gom các trường theo base name và ngôn ngữ, loại bỏ i18n_content
+        const baseMap: Record<string, Record<string, TableField>> = {};
+        const specialBlocks: TableField[] = dynamicFields.filter(f => ["seo_multi", "content_multi"].includes(f.f_types || ""));
+        dynamicFields.forEach(f => {
+          // Bỏ qua i18n_content
+          if (f.f_name === 'i18n_content') return;
+          const match = f.f_name.match(/^(.*?)(_([a-z]{2}))?$/);
+          let base = f.f_name;
+          let fLang = 'vi';
+          if (match) {
+            base = match[1];
+            if (match[3] && langs.includes(match[3])) {
+              fLang = match[3];
+            }
+          }
+          if (!baseMap[base]) baseMap[base] = {};
+          baseMap[base][fLang] = f;
+        });
+        // Lấy các base nếu có:
+        // 1. Trường gốc tồn tại (vi) + có ít nhất một biến _en hoặc _zh
+        // 2. Hoặc chỉ có _en/_zh mà không có gốc (vi)
+        const multiBases = Object.entries(baseMap)
+          .filter(([base, langObj]) => {
+            if (base === 'i18n_content') return false;
+            // Nếu có cả base (vi) và ít nhất một biến khác (en, zh) thì lấy
+            if (langObj['vi'] && (langObj['en'] || langObj['zh'])) return true;
+            // Hoặc nếu chỉ có en/zh mà không có vi thì cũng lấy
+            if (!langObj['vi'] && (langObj['en'] || langObj['zh'])) return true;
+            return false;
+          })
+          .map(([base]) => base);
+        if (multiBases.length === 0 && specialBlocks.length === 0) return null;
+        return (
+          <Tabs 
+            defaultActiveKey="vi" 
+            style={{ marginBottom: 8 }} 
+            key={`tabs-inner-${formUpdated}`}
+            size="small"
+            destroyInactiveTabPane={false}
+            tabBarStyle={{ marginBottom: 6 }}
+          >
+            {langs.map(lang => (
+              <Tabs.TabPane tab={lang === 'vi' ? '🇻🇳 Tiếng Việt' : lang === 'en' ? '🇬🇧 English' : '🇨🇳 中文'} key={lang}>
+                <div style={{ marginBottom: 0 }}>
+                {/* Render các trường đa ngôn ngữ thông thường */}
+                {multiBases.map(base => {
+                    let field: TableField | undefined;
+                    let actualFieldName: string;
+                    
+                    if (lang === 'vi') {
+                      // Nếu có field vi thì dùng, nếu không thì fallback lấy trường gốc (base) nào đó
+                      field = baseMap[base]['vi'];
+                      // Nếu không có vi, tìm field nào trong base này
+                      if (!field && baseMap[base]) {
+                        field = Object.values(baseMap[base])[0];
+                      }
+                      actualFieldName = field?.f_name || base;
+                    } else {
+                      field = baseMap[base][lang];
+                      // Nếu không có ngôn ngữ yêu cầu, tạo tên field theo pattern base_lang
+                      actualFieldName = field?.f_name || `${base}_${lang}`;
+                      // Nếu không có field cho ngôn ngữ này, dùng cấu hình từ field gốc
+                      if (!field && baseMap[base]['vi']) {
+                        field = baseMap[base]['vi'];
+                      }
+                    }
+                    
+                    if (!field) return null;
+                    
+                    const types = (field.f_types || '').toLowerCase();
+                    const fieldLabel = resolveMultilingualText(field.f_header, actualFieldName, lang);
+                    const formValues = form.getFieldsValue();
+                    const fieldValue = formValues[actualFieldName];
+                    
+                    // HTML/RichText Editor
+                    if (/html|richtext/.test(types) || types === 'edt') {
+                      // Always decrypt before passing to HtmlEditor, always encrypt on change
+                      function HtmlEditorField() {
+                        const encryptedValue = form.getFieldValue(actualFieldName) ?? '';
+                        const value = React.useMemo(() => {
+                          if (typeof encryptedValue === 'string' && encryptedValue !== '') {
+                            return decodeHtmlField(encryptedValue);
+                          }
+                          return String(encryptedValue ?? '');
+                        }, [encryptedValue]);
+                        const handleHtmlChange = React.useCallback((val: string) => {
+                          const encrypted = encodeHtmlField(val);
+                          const current = form.getFieldValue(actualFieldName);
+                          if (encrypted !== current) {
+                            form.setFieldsValue({ [actualFieldName]: encrypted });
+                          }
+                        }, [form, actualFieldName]);
+                        return <HtmlEditor value={value} onChange={handleHtmlChange} appId={currentAppId} />;
+                      }
+                      return (
+                        <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel} initialValue={csmEncrypt('')}>
+                          <HtmlEditorField />
+                        </Form.Item>
+                      );
+                    }
+                    
+                    // Textarea/Memo
+                    if (/textarea|memo/.test(types)) {
+                      return (
+                        <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
+                          <TextArea rows={6} />
+                        </Form.Item>
+                      );
+                    }
+                    
+                    // Image Upload
+                    if (/img|image|avatar|cover/.test(types)) {
+                      const MediaUploader = React.lazy(() => import('./MediaUploader').then(mod => ({ default: mod.MediaUploader })));
+                      return (
+                        <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
+                          <Suspense fallback={<span>Đang tải...</span>}>
+                            <MediaUploader appId={currentAppId} />
+                          </Suspense>
+                        </Form.Item>
+                      );
+                    }
+                    
+                    // Album/Gallery
+                    if (types === 'album' || types === 'images' || types === 'gallery') {
+                      const MediaUploader = React.lazy(() => import('./MediaUploader').then(mod => ({ default: mod.MediaUploader })));
+                      return (
+                        <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
+                          <Suspense fallback={<span>Đang tải...</span>}>
+                            <MediaUploader multiple={true} appId={currentAppId} />
+                          </Suspense>
+                        </Form.Item>
+                      );
+                    }
+                    
+                    // Multi Tag
+                    if (types === 'multi_tag') {
+                      return (
+                        <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
+                          <Select mode="tags" style={{ width: '100%' }} tokenSeparators={[',']} />
+                        </Form.Item>
+                      );
+                    }
+                    
+                    // Number fields
+                    if (/price|number|int|float|double|money|currency/.test(types)) {
+                      const dec = parseInt(String((field as any).f_dec || 0));
+                      return (
+                        <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
+                          <InputNumber
+                            style={{ width: '100%' }}
+                            precision={dec}
+                            formatter={value => /money|currency|price/.test(types) && value ? `${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',') : `${value}`}
+                            parser={value => value!.replace(/\$\s?|(,*)/g, '')}
+                          />
+                        </Form.Item>
+                      );
+                    }
+                    
+                    // Boolean/Switch
+                    if (/check|bool|switch|checkbox/.test(types)) {
+                      return (
+                        <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel} valuePropName="checked">
+                          <Switch />
+                        </Form.Item>
+                      );
+                    }
+                    
+                    // Date
+                    if (/^date$/.test(types)) {
+                      return (
+                        <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
+                          <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" />
+                        </Form.Item>
+                      );
+                    }
+                    
+                    // DateTime
+                    if (/datetime/.test(types)) {
+                      return (
+                        <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
+                          <DatePicker showTime style={{ width: '100%' }} format="YYYY-MM-DD HH:mm:ss" />
+                        </Form.Item>
+                      );
+                    }
+                    
+                    // Time
+                    if (/^time$/.test(types)) {
+                      return (
+                        <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
+                          <TimePicker style={{ width: '100%' }} format="HH:mm:ss" />
+                        </Form.Item>
+                      );
+                    }
+                    
+                    // Select/Combobox
+                    if (types.indexOf('co') !== -1) {
+                      const rawOptions = selectOptions?.[actualFieldName];
+                      const enumObj = selectEnums?.[actualFieldName];
+                      const options = buildSelectOptions(rawOptions, enumObj);
+                      const selectValue = normalizeSelectValue(
+                        form.getFieldValue(actualFieldName) ?? fieldValue,
+                        options
+                      );
+                      return (
+                        <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
+                          <Select
+                            showSearch
+                            allowClear
+                            placeholder={`Chọn ${fieldLabel}`}
+                            options={options}
+                            value={selectValue}
+                            onChange={val => form.setFieldsValue({ [actualFieldName]: val })}
+                            filterOption={(input, option) =>
+                              String(option?.label ?? '').toLowerCase().includes(input.toLowerCase())
+                            }
+                          />
+                        </Form.Item>
+                      );
+                    }
+                    
+                    // Default: text input
+                    return (
+                      <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
+                        <Input id={actualFieldName} />
+                      </Form.Item>
+                    );
+                  })}
+                {/* Render các block đặc biệt như seo_multi, content_multi */}
+                {specialBlocks.map(block => {
+                  const fieldName = block.f_name + (lang === 'vi' ? '' : `_${lang}`);
+                  const baseLabel = resolveMultilingualText(block.f_header, block.f_name, lang);
+                  const label = baseLabel + (lang === 'vi' ? '' : ` (${lang.toUpperCase()})`);
+                  const types = (block.f_types || '').toLowerCase();
+                  // Nếu block là content_multi thì dùng HTML editor với mã hóa/giải mã đúng
+                  if (types === 'content_multi' || /html|richtext/.test(types) || types === 'edt') {
+                    function HtmlEditorField() {
+                      const encryptedValue = form.getFieldValue(fieldName) ?? '';
+                      const value = React.useMemo(() => {
+                        if (typeof encryptedValue === 'string' && encryptedValue !== '') {
+                          return decodeHtmlField(encryptedValue);
+                        }
+                        return String(encryptedValue ?? '');
+                      }, [encryptedValue]);
+                      const handleHtmlChange = React.useCallback((val: string) => {
+                        // Mã hóa khi thay đổi: encodeURIComponent → csmEncrypt
+                        const encoded = encodeHtmlField(val);
+                        const current = form.getFieldValue(fieldName);
+                        if (encoded !== current) {
+                          form.setFieldsValue({ [fieldName]: encoded });
+                        }
+                      }, [form, fieldName]);
+                      return <HtmlEditor value={value} onChange={handleHtmlChange} appId={currentAppId} />;
+                    }
+                    return (
+                      <Form.Item key={fieldName} name={fieldName} label={label} initialValue={csmEncrypt('')}>
+                        <HtmlEditorField />
+                      </Form.Item>
+                    );
+                  }
+                  // Mặc định dùng textarea
+                  return (
+                    <Form.Item key={fieldName} name={fieldName} label={label}>
+                      <TextArea rows={6} />
+                    </Form.Item>
+                  );
+                })}
+                {(multiBases.length === 0 && specialBlocks.length === 0) && <div style={{ color: '#aaa', fontStyle: 'italic', padding: '16px 0' }}>Không có dữ liệu cho ngôn ngữ này</div>}
+                </div>
+              </Tabs.TabPane>
+            ))}
+          </Tabs>
+        );
+      })()}
+      </div>
+        </>
+      )}
+      </Form>
+      </div>
+    </Modal>
+  );
+}
+
+export default CsmEditModal;
+export { DetailGridTab };

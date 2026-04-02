@@ -1943,7 +1943,7 @@ public class WebSpringController {
                 }
             } // --- END /images.shtml logic ---
             // --- START /upload.shtml logic ---
-            else if (linkP.equals("/upload.shtml")) {
+            else if (linkP.equals("/upload.shtml") || linkP.equals("/upload") || linkP.equals("/upload/")) {
                 // *** THAY ĐỔI TẠI ĐÂY: Lấy tham số từ requestParams ***
                 String appId = (String) requestParams.get("app_id");
                 String cmd = (String) requestParams.get("cmd");
@@ -2333,8 +2333,7 @@ public class WebSpringController {
                 domainFallbackRFilter.setOperator("AND");
                 domainFallbackRFilter.setConditions(List.of(
                     RecordManager.createCondition("domain_name", "eq", domain),
-                    RecordManager.createCondition("f_case", "eq", ""),  // ✅ Router fallback có f_case rỗng
-                    RecordManager.createCondition("app_type", "eq", "web"),
+                    RecordManager.createCondition("f_case", "eq", ""),  // 
                     RecordManager.createCondition("rp_index", "isnotnull", null),
                     RecordManager.createCondition("rp_index", "noteq", ""),
                     RecordManager.createCondition("run", "eq", 1)));
@@ -2409,10 +2408,9 @@ public class WebSpringController {
                     f_do, p_type, appType, rp_index, app_id, tbl_services, tbl_service_detail, normalizedPath);
                 
                 // ===== BỔ SUNG LOGIC CHO SSR VỚI REACT TẠI ĐÂY =====
-                // SSR is enabled if appType="web" AND we have sufficient data for querying
-                // rp_index is optional (for React template path), but app_id + tbl_services + tbl_service_detail are critical
-                boolean shouldAttemptSSR = "web".equalsIgnoreCase(appType) && !app_id.isEmpty() && !tbl_services.isEmpty()
-                    && !tbl_service_detail.isEmpty();
+                // SSR is enabled if rp_index is set (route points to a React template).
+                // app_id + tbl_services + tbl_service_detail are used for service data querying only (optional, fallback to empty).
+                boolean shouldAttemptSSR = !rp_index.isEmpty();
                 
                 if (shouldAttemptSSR) {
                     logger.info("✅ SSR CONDITIONS MET: appType={}, app_id={}, tbl_services={}, tbl_service_detail={}, rp_index={}, path={}",
@@ -2497,6 +2495,13 @@ public class WebSpringController {
                     
                     logger.info("🔐 SSR: service_type={}, page={}, pageSize={}, take={}, lastkey={}, q={}, path={}", service_type, ssr_page, ssr_pageSize, ssr_take, ssr_lastkey, ssr_q, normalizedPath);
                     
+                    boolean hasServiceData = !app_id.isEmpty() && !tbl_services.isEmpty() && !tbl_service_detail.isEmpty();
+                    
+                    // === SSR DATA QUERYING ===
+                    // Query database for service data with service_type + pagination + search
+                    Map<String, Object> ssrServiceData = new HashMap<>();
+                    
+                    if (hasServiceData) {
                     // === SERVICE_TYPE VALIDATION ===
                     // Try to derive service_type from URL slug if not provided (e.g., /bat-dong-san.shtml -> bat-dong-san)
                     String slugFromPath = "";
@@ -2535,10 +2540,6 @@ public class WebSpringController {
                     
                     logger.info("✅ SSR: service_type={} validated successfully", service_type);
                     // === END SERVICE_TYPE VALIDATION ===
-                    
-                    // === SSR DATA QUERYING ===
-                    // Query database for service data with service_type + pagination + search
-                    Map<String, Object> ssrServiceData = new HashMap<>();
                     
                     // ✅ PAGINATION STRATEGY (Hybrid):
                     // - Ưu tiên cursor để giảm IO khi đi tuần tự (page 1 -> 2 -> 3).
@@ -2796,6 +2797,7 @@ public class WebSpringController {
                     } // End cache check
                     
                     logger.debug("🔍 SSR: ssrServiceData prepared, totalCount={}, page={}, pageSize={}", ssrServiceData.get("totalCount"), ssrServiceData.get("page"), ssrServiceData.get("pageSize"));
+                    } // End if (hasServiceData)
                     // === END SSR DATA QUERYING ===
                     
                     // === END SSR SECURITY LOGIC ===

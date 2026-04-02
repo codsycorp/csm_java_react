@@ -1,0 +1,134 @@
+/**
+ * Responsive table styles for better mobile experience
+ * Includes safe-area-inset support for devices with notches
+ */
+
+/* Safe area support for notched devices (iPhone X+, Android) */
+@supports (padding: max(0px)) {
+  body {
+    padding-left: max(0px, env(safe-area-inset-left));
+    padding-right: max(0px, env(safe-area-inset-right));
+    padding-top: max(0px, env(safe-area-inset-top));
+  }
+}
+
+/* Mobile-first table adjustments */
+@media (max-width: 768px) {
+  /* Reduce table cell padding on mobile */
+  :global(.ant-table) {
+    font-size: 12px;
+  }
+
+  :global(.ant-table-cell) {
+    padding: 8px 4px !important;
+  }
+
+  :global(.ant-table-small) > :global(.ant-table-thead) > :global(tr) > :global(.ant-table-cell) {
+    padding: 4px 2px !important;
+  }
+
+  /* Reduce spaces in table actions */
+  :global(.ant-space-item) {
+    margin-right: 2px !important;
+  }
+
+  :global(.ant-space-small) > :global(.ant-space-item) {
+    margin-right: 0 !important;
+  }
+
+  /* Make buttons smaller on mobile */
+  :global(.ant-btn-sm) {
+    padding: 0 4px;
+    font-size: 11px;
+  }
+
+  /* Hide less important columns on mobile (handled by responsive property) */
+  /* Ant Design handles this automatically with responsive property */
+
+  /* Adjust card padding */
+  :global(.ant-card) {
+    padding: 8px !important;
+  }
+
+  :global(.ant-card-head) {
+    padding: 8px !important;
+  }
+
+  :global(.ant-card-body) {
+    padding: 8px !important;
+  }
+
+  /* Improve list spacing */
+  :global(.ant-list-item) {
+    padding: 8px 0 !important;
+  }
+
+  /* Reduce gap in spaces */
+  :global(.ant-space) {
+    gap: 4px !important;
+  }
+}
+
+/* Tablets (768px - 1024px) */
+@media (min-width: 768px) and (max-width: 1024px) {
+  :global(.ant-table-cell) {
+    padding: 10px 8px !important;
+  }
+
+  :global(.ant-card) {
+    padding: 12px !important;
+  }
+}
+
+/* Large screens (1024px and up) */
+@media (min-width: 1024px) {
+  :global(.ant-table-cell) {
+    padding: 12px !important;
+  }
+
+  :global(.ant-card) {
+    padding: 16px !important;
+  }
+}
+
+/* Ensure tables scroll properly on mobile */
+:global(.ant-table-wrapper) {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scroll-behavior: smooth;
+}
+
+/* Touch-friendly button sizes on mobile */
+@media (max-width: 768px) {
+  :global(.ant-btn) {
+    min-height: 32px;
+    /* Improve touch targets */
+    padding: 4px 12px;
+  }
+
+  :global(.ant-btn-sm) {
+    min-height: 28px;
+  }
+
+  /* Prevent zoom on input focus (iOS issue) */
+  input,
+  textarea,
+  select {
+    font-size: 16px;
+  }
+}
+
+/* Improve scrolling on iOS (smooth momentum scroll) */
+main,
+[role="main"],
+.ant-layout-content {
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Prevent layout shift when scrollbars appear */
+html {
+  overflow-y: scroll;
+  /* For notched devices */
+  scroll-padding-bottom: max(0px, env(safe-area-inset-bottom));
+}
+
