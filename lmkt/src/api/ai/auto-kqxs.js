@@ -1920,6 +1920,11 @@
       var mang_dl_dai = {};
       var maxSoKy = Math.max(1, Number(so_ky || 1));
 
+      // Bước 1: Gom tất cả các batch (theo thu) của từng đài vào rawByStation TRƯỚC khi slice.
+      // Giống Vue: mang_dl_dai[STT] chứa toàn bộ dữ liệu các thu ghép lại, sau đó mới sort+dedup+
+      // đếm kỳ theo thứ tự ngày. Nếu slice sớm theo từng batch, các batch thứ 2, 3... sẽ bị
+      // đẩy ra ngoài giới hạn idx < maxSoKy và bị bỏ qua hoàn toàn trong vòng lặp combo.
+      var rawByStation = {};
       for (var i = 0; i < selected.length; i += 1) {
         var dai = selected[i];
         var rows = (dai.data || []).slice();
@@ -1939,12 +1944,15 @@
               && chuyenNgay(String(obj.field_ngay || "").trim(), "yyyymmdd") < chuyenNgay(den, "dd/mm/yyyy");
           });
         }
-        rows = locVaSapXepNgay(rows);
-        rows = rows.slice(0, maxSoKy);
-
-        if (!mang_dl_dai[dai.stt]) mang_dl_dai[dai.stt] = [];
-        mang_dl_dai[dai.stt] = mang_dl_dai[dai.stt].concat(rows);
+        if (!rawByStation[dai.stt]) rawByStation[dai.stt] = [];
+        rawByStation[dai.stt] = rawByStation[dai.stt].concat(rows);
       }
+      // Bước 2: Hợp nhất toàn bộ batch của từng đài: dedup theo ngày, sort giảm dần, rồi mới
+      // slice đến maxSoKy. Đảm bảo đúng với Vue — các ngày T2, T4, T7... của cùng một đài
+      // được xếp theo thứ tự thời gian trước khi đếm kỳ 1, kỳ 2, kỳ 3...
+      Object.keys(rawByStation).forEach(function (stt) {
+        mang_dl_dai[stt] = locVaSapXepNgay(rawByStation[stt]).slice(0, maxSoKy);
+      });
 
       var mang_dai = Object.keys(mang_dl_dai);
       var mang_cac_dai = [];
@@ -1956,22 +1964,17 @@
       getUniqueCombinations(mang_dai, Number(loai_tk)).forEach(function (combo) {
         if (combo.length > 1) mang_cac_dai.push(combo);
       });
-      var outRows = [];
 
-      for (var c = 0; c < mang_cac_dai.length; c += 1) {
-        var combo = mang_cac_dai[c];
-        var mapSo = {};
-
-        // Khởi tạo đủ 100 số (00–99) như Vue's dsThongKe — đảm bảo bảng chính luôn hiện đủ
-        var comboKey = combo.join("_");
+      function createEmptySoMap(prefix) {
+        var out = {};
         for (var s = 0; s < 100; s += 1) {
           var soStr = String(s).padStart(2, "0");
           var kyInit = [];
           for (var q = 0; q < maxSoKy; q += 1) kyInit.push(0);
-          mapSo[soStr] = {
-            id: comboKey + "_" + soStr,
+          out[soStr] = {
+            id: String(prefix || "") + "_" + soStr,
             so: soStr,
-            to_hop: combo.join(","),
+            to_hop: "",
             ky: kyInit,
             tong: 0,
             dem: 0,
@@ -1980,35 +1983,48 @@
             thoa_man: false
           };
         }
+        return out;
+      }
+
+      // Tính thống kê theo từng đài một lần, sau đó tab tổ hợp chỉ cộng lại từ kết quả này.
+      // Cách này giúp KQ 1&2 luôn khớp với logic của từng tab đơn 1, 2 như Vue kỳ vọng.
+      var stationSoStats = {};
+      mang_dai.forEach(function (stt) {
+        var soMap = createEmptySoMap("s_" + String(stt));
+        var rows = mang_dl_dai[stt] || [];
+        rows.forEach(function (r, idx) {
+          if (idx >= maxSoKy) return;
+          var soArr = getRowTwoDigits(r);
+          soArr.forEach(function (so) {
+            if (!soMap[so]) return;
+            soMap[so].ky[idx] = Number(soMap[so].ky[idx] || 0) + 1;
+          });
+        });
+        stationSoStats[stt] = soMap;
+      });
+
+      var outRows = [];
+
+      for (var c = 0; c < mang_cac_dai.length; c += 1) {
+        var combo = mang_cac_dai[c];
+        var comboKey = combo.join("_");
+        var mapSo = createEmptySoMap(comboKey);
 
         combo.forEach(function (stt) {
-          var rows = mang_dl_dai[stt] || [];
-          rows.forEach(function (r, idx) {
-            if (idx >= maxSoKy) return;
-            var soArr = getRowTwoDigits(r);
-            soArr.forEach(function (so) {
-              if (!mapSo[so]) {
-                var ky = [];
-                for (var q = 0; q < maxSoKy; q += 1) ky.push(0);
-                mapSo[so] = {
-                  id: combo.join("_") + "_" + so,
-                  so: so,
-                  to_hop: combo.join(","),
-                  ky: ky,
-                  tong: 0,
-                  dem: 0,
-                  kxh: 0,
-                  max_kxh: 0,
-                  thoa_man: false
-                };
-              }
-              mapSo[so].ky[idx] = Number(mapSo[so].ky[idx] || 0) + 1;
-            });
+          var stationMap = stationSoStats[stt] || {};
+          Object.keys(mapSo).forEach(function (soKey) {
+            var src = stationMap[soKey];
+            if (!src || !src.ky) return;
+            for (var k = 0; k < maxSoKy; k += 1) {
+              mapSo[soKey].ky[k] = Number(mapSo[soKey].ky[k] || 0) + Number(src.ky[k] || 0);
+            }
           });
         });
 
         Object.keys(mapSo).forEach(function (k) {
           var row = mapSo[k];
+          row.to_hop = combo.join(",");
+          row.id = comboKey + "_" + row.so;
           var m = calcThongKeMetrics(row.ky || []);
           var kSoKy = Number((row.ky && row.ky[Math.max(0, maxSoKy - 1)]) || 0);
           row.tong = m.tong;
@@ -2440,9 +2456,17 @@
       function pickKyVals(src) {
         var vals = [];
         var kyArr = (src && src.ky) || [];
-        // Keep the same traversal behavior as legacy Vue implementation.
-        for (var i = 0; i < kyArr.length; i += 1) {
-          var v = Number(kyArr[i] || 0);
+        // Theo Vue: khi sap_xep=0 lấy từ kỳ 1 -> kỳ N; khi sap_xep=1 lấy từ kỳ N -> kỳ 1.
+        // Điều này ảnh hưởng trực tiếp bảng con lay_so_ky ở tab KQ (ví dụ tiêu đề 28-1-3).
+        var idxList = [];
+        if (Number(appliedThongKe.sap_xep) === 0) {
+          for (var i = 0; i < kyArr.length; i += 1) idxList.push(i);
+        } else {
+          for (var j = kyArr.length - 1; j >= 0; j -= 1) idxList.push(j);
+        }
+
+        for (var p = 0; p < idxList.length; p += 1) {
+          var v = Number(kyArr[idxList[p]] || 0);
           if (v > 0) vals.push(v);
           if (vals.length >= maxCot) break;
         }
@@ -2513,10 +2537,8 @@
           var demVal = Number(obj.dem || 0);
           var tongVal = Number(obj.tong || 0);
           var kxhVal = Number(obj.kxh || 0);
-          var passNguong = demVal === Number(appliedThongKe.dem_lon_hon || 0);
-          var passKxhLonHonDem = kxhVal > demVal;
-          var passDemBangTong = demVal === tongVal;
-          rec["hl" + group] = matchSoChu && passNguong && passKxhLonHonDem && passDemBangTong;
+          var passNguong = demVal >= Number(appliedThongKe.dem_lon_hon || 0);
+          rec["hl" + group] = matchSoChu && passNguong;
         } else if (Number(appliedThongKe.dem_to_nho_hon) > 0) {
           rec["hl" + group] = Number(obj.dem || 0) <= Number(appliedThongKe.dem_to_nho_hon || 0);
         } else {
@@ -2771,19 +2793,25 @@
 
     function buildLaySoKyTitle(comboLabel) {
       var base = normalizeKqTitleLabel(comboLabel);
-      var range = "1-" + String(appliedThongKe.so_ky) + "-" + String(appliedThongKe.lay_so_ky);
+      var range = Number(appliedThongKe.sap_xep) === 0
+        ? ("1-" + String(appliedThongKe.so_ky) + "-" + String(appliedThongKe.lay_so_ky))
+        : (String(appliedThongKe.so_ky) + "-1-" + String(appliedThongKe.lay_so_ky));
       return base + " " + range + " " + String(appliedThongKe.thu_tuan || "") + " " + String(appliedThongKe.den_ngay || "");
     }
 
     function buildKxhTitle(comboLabel) {
       var base = normalizeKqTitleLabel(comboLabel);
-      var range = "1-" + String(appliedThongKe.so_ky) + "-" + String(appliedThongKe.kxh_phai_lonhon);
+      var range = Number(appliedThongKe.sap_xep) === 0
+        ? ("1-" + String(appliedThongKe.so_ky) + "-" + String(appliedThongKe.kxh_phai_lonhon))
+        : (String(appliedThongKe.so_ky) + "-1-" + String(appliedThongKe.kxh_phai_lonhon));
       return base + " " + range;
     }
 
     function buildDemNhoHonTitle(comboLabel) {
       var base = normalizeKqTitleLabel(comboLabel);
-      var range = "1-" + String(appliedThongKe.so_ky) + "-" + String(appliedThongKe.dem_nho_hon);
+      var range = Number(appliedThongKe.sap_xep) === 0
+        ? ("1-" + String(appliedThongKe.so_ky) + "-" + String(appliedThongKe.dem_nho_hon))
+        : (String(appliedThongKe.so_ky) + "-1-" + String(appliedThongKe.dem_nho_hon));
       return base + " " + range;
     }
 
@@ -2792,10 +2820,10 @@
       var threshold = Number(appliedThongKe.dem_lon_hon || 0);
       if (Number(appliedThongKe.so_ky) > 0) {
         if (Number(appliedThongKe.sap_xep) === 0) {
-          var format = base + " " + String(appliedThongKe.so_ky) + "-1";
+          var format = base + " 1-" + String(appliedThongKe.so_ky);
           return threshold > 0 ? format + "-" + String(threshold) : format;
         }
-        var format1 = base + " 1-" + String(appliedThongKe.so_ky);
+        var format1 = base + " " + String(appliedThongKe.so_ky) + "-1";
         return threshold > 0 ? format1 + "-" + String(threshold) : format1;
       }
       return base;
