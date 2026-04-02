@@ -1486,9 +1486,10 @@ public class TableHandler {
                 .filter(row -> accessContext.appId.equals(String.valueOf(row.get("app_id"))))
                 .collect(java.util.stream.Collectors.toList());
         }
-        Set<String> managedVisibleIds = null;
+        final Set<String> managedVisibleIds = enforceManagedAccountOwnership
+            ? resolveManagedAccountVisibleIdSet(appId, accessContext)
+            : Collections.emptySet();
         if (enforceManagedAccountOwnership) {
-            managedVisibleIds = resolveManagedAccountVisibleIdSet(appId, accessContext);
             records = records.stream()
                 .filter(row -> managedVisibleIds.contains(normalizedIdentity(row.get("id"))))
                 .collect(java.util.stream.Collectors.toList());
@@ -1513,11 +1514,8 @@ public class TableHandler {
                         .collect(java.util.stream.Collectors.toList());
                 }
                 if (enforceManagedAccountOwnership) {
-                    Set<String> effectiveManagedVisibleIds = managedVisibleIds != null
-                        ? managedVisibleIds
-                        : resolveManagedAccountVisibleIdSet(appId, accessContext);
                     records = records.stream()
-                        .filter(row -> effectiveManagedVisibleIds.contains(normalizedIdentity(row.get("id"))))
+                        .filter(row -> managedVisibleIds.contains(normalizedIdentity(row.get("id"))))
                         .collect(java.util.stream.Collectors.toList());
                 }
                 if (isSubUserTable && isAdminNonDev) {
@@ -1545,11 +1543,8 @@ public class TableHandler {
                     .collect(java.util.stream.Collectors.toList());
             }
             if (enforceManagedAccountOwnership) {
-                Set<String> effectiveManagedVisibleIds = managedVisibleIds != null
-                    ? managedVisibleIds
-                    : resolveManagedAccountVisibleIdSet(appId, accessContext);
                 records = records.stream()
-                    .filter(row -> effectiveManagedVisibleIds.contains(normalizedIdentity(row.get("id"))))
+                    .filter(row -> managedVisibleIds.contains(normalizedIdentity(row.get("id"))))
                     .collect(java.util.stream.Collectors.toList());
             }
             if (isSubUserTable && isAdminNonDev) {
