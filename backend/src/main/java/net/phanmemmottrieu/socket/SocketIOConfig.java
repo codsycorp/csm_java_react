@@ -90,12 +90,14 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
     private final Map<String, ScheduledFuture<?>> pendingGuestNoReplyTasks = new ConcurrentHashMap<>();
     private final Map<UUID, String> sessionGuestPhones = new ConcurrentHashMap<>();
     private final Map<UUID, String> sessionGuestSessionIds = new ConcurrentHashMap<>();
-    private static final String POLITE_GENERIC_WELCOME = "Xin chao anh/chị, em rat vui duoc ho tro. Anh/chị vui long cho em biet nhu cau dang quan tam va cach lien he de ben em tu van nhanh va chinh xac hon a.";
+    private final Map<UUID, Boolean> sessionAdminFlags = new ConcurrentHashMap<>();
+    private final Map<String, String> appSupportDisplayNames = new ConcurrentHashMap<>();
+    private static final String POLITE_GENERIC_WELCOME = "Chao anh/chị, em la tu van vien ho tro. Anh/chị dang quan tam thong tin nao de em ho tro nhanh va dung nhu cau a? Neu thuan tien, anh/chị de lai so dien thoai hoac Zalo de ben em lien he lai.";
 
-    private static final long AI_FOLLOWUP_DELAY_MS = 60_000L;
-    private static final long AUTO_WELCOME_SUPPRESSION_WINDOW_MS = 3 * 60_000L;
+    private static final long AUTO_WELCOME_DELAY_MS = 60_000L;
+    private static final long AUTO_WELCOME_COOLDOWN_MS = 24 * 60 * 60 * 1000L;
     private static final String AI_ASSISTANT_USER_ID = "ai_assistant";
-    private static final String AI_ASSISTANT_USERNAME = "Tu van vien";
+    private static final String DEFAULT_SUPPORT_USERNAME = "Tu van vien";
 
     // Extract appId from room patterns: guest:{appId};{phone}, app:{appId}, user:{appId};..., private:{appId};...
     private String parseAppIdFromRoom(String room) {
@@ -127,6 +129,61 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
             }
         }
         return null;
+    }
+
+    private String resolveSupportDisplayName(String appId) {
+        String remembered = appSupportDisplayNames.get(appId);
+        if (isSafeSupportDisplayName(remembered)) {
+            return remembered.trim();
+        }
+
+        String appRoom = "app:" + appId;
+        Set<UUID> sessions = roomSessions.get(appRoom);
+        if (sessions != null && !sessions.isEmpty()) {
+            for (UUID sid : sessions) {
+                if (!Boolean.TRUE.equals(sessionAdminFlags.get(sid))) {
+                    continue;
+                }
+                String username = sessionUsernames.get(sid);
+                if (isSafeSupportDisplayName(username)) {
+                    String normalized = username.trim();
+                    appSupportDisplayNames.put(appId, normalized);
+                    return normalized;
+                }
+            }
+        }
+
+        return DEFAULT_SUPPORT_USERNAME;
+    }
+
+    private boolean isSafeSupportDisplayName(String username) {
+        if (username == null) {
+            return false;
+        }
+
+        String normalized = username.trim();
+        if (normalized.isBlank() || normalized.length() < 2 || normalized.length() > 40) {
+            return false;
+        }
+
+        String folded = Normalizer.normalize(normalized, Normalizer.Form.NFD)
+                .replaceAll("\\p{M}+", "")
+                .toLowerCase(Locale.ROOT);
+
+        boolean hasEmailPattern = folded.contains("@");
+        boolean hasPhonePattern = normalized.matches("^\\+?\\d[\\d\\s\\-.]{7,}$");
+        boolean hasUuidPattern = normalized.matches("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$");
+        boolean isTechnicalToken = folded.contains("admin")
+                || folded.contains("root")
+                || folded.contains("system")
+                || folded.contains("bot")
+                || folded.contains("support")
+                || folded.contains("test")
+                || folded.contains("dev")
+                || folded.contains("staging")
+                || folded.contains("prod");
+
+        return !(hasEmailPattern || hasPhonePattern || hasUuidPattern || isTechnicalToken);
     }
 
     private void trackSessionRoom(UUID sessionId, String room) {
@@ -218,21 +275,12 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
         return "Ban la nhan vien cham soc khach hang website appId=" + appId + ". "
             + guestDescription + " vua mo cua so chat va chua gui tin nhan. "
                 + "Hay viet DUY NHAT 1 tin nhan tieng Viet lich su, chuyen nghiep, than thien, ngan gon (toi da 180 ky tu). "
-                + "Muc tieu: chao khach, hoi nhu cau can ho tro va xin thong tin lien he mot cach tinh te. "
+                + "Muc tieu: chao khach, hoi nhu cau can ho tro, sau do moi xin thong tin lien he mot cach tinh te. "
+                + "Xung ho tu nhien theo kieu em/anh chi, khong qua than mat. "
+                + "TUYET DOI KHONG nhac den appId, ma app, ma he thong, thong tin ky thuat hoac noi bo. "
                 + "KHONG dung placeholder nhu [Ten ban], [Ten cong ty]. "
                 + "KHONG tu xung ten nhan vien/cong ty neu khong co du lieu xac thuc. "
                 + "Khong nhac den AI, khong markdown, chi tra ve noi dung tin nhan.";
-    }
-
-    private String buildNoHumanReplyPrompt(String appId, String guestPhone, String guestMessage) {
-        String guestDescription = (guestPhone == null || guestPhone.isBlank())
-                ? "Khach moi chua de lai so dien thoai"
-                : "Khach phone=" + guestPhone;
-        return "Ban la nhan vien CSKH website appId=" + appId + ". "
-                + guestDescription + " vua nhan: \"" + (guestMessage == null ? "" : guestMessage) + "\". "
-                + "Da 1 phut chua co nguoi tra loi. Hay viet DUY NHAT 1 tin nhan tieng Viet tu nhien, ngan gon (toi da 220 ky tu), "
-                + "tra loi dung van de khach vua hoi va kheo xin ten, cach lien he va san pham/nhu cau quan tam neu phu hop. "
-                + "Giong nguoi that dang cham soc, khong robot, khong markdown.";
     }
 
     private String sanitizeGuestWelcomeText(String messageText, String eventType) {
@@ -253,8 +301,13 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                 || folded.contains("ten cong ty")
                 || folded.contains("name")
                 || folded.contains("company");
+        boolean hasTechnicalSelfIntro = folded.contains("appid")
+            || folded.contains("app id")
+            || folded.contains("nhan vien ho tro tu")
+            || folded.contains("nhan vien ho tro den tu")
+            || folded.contains("minh la nhan vien ho tro tu");
 
-        if (hasBracketPlaceholder || hasTemplateToken) {
+        if (hasBracketPlaceholder || hasTemplateToken || hasTechnicalSelfIntro) {
             return POLITE_GENERIC_WELCOME;
         }
 
@@ -276,7 +329,7 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
 
         ChatMessage aiMsg = new ChatMessage();
         aiMsg.setRoom(privateRoom);
-        aiMsg.setUsername(AI_ASSISTANT_USERNAME);
+        aiMsg.setUsername(resolveSupportDisplayName(appId));
         aiMsg.setUserId(AI_ASSISTANT_USER_ID);
         aiMsg.setIsAdmin(true);
         aiMsg.setAppId(appId);
@@ -314,11 +367,16 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
 
         String key = guestKey(appId, guestIdentity);
         final String fallbackWelcome = POLITE_GENERIC_WELCOME;
-        Future<?> future = chatAiScheduler.submit(() -> {
+        Future<?> future = chatAiScheduler.schedule(() -> {
             try {
                 java.util.List<ChatMessage> latestHistory = chatPersistenceService.getHistoryByGuestIdentity(appId, guestIdentity, guestPhone, 5);
                 if (latestHistory != null && !latestHistory.isEmpty()) {
                     logger.info("⏭️ Skip immediate AI welcome because guest already has history - appId={}, guestIdentity={}, historyCount={}", appId, guestIdentity, latestHistory.size());
+                    return;
+                }
+
+                if (hasRecentAutoWelcome(appId, guestIdentity, guestPhone, AUTO_WELCOME_COOLDOWN_MS)) {
+                    logger.info("⏭️ Skip delayed AI welcome because a welcome was recently sent - appId={}, guestIdentity={}", appId, guestIdentity);
                     return;
                 }
 
@@ -333,32 +391,9 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
             } finally {
                 pendingGuestWelcomeTasks.remove(key);
             }
-        });
+        }, AUTO_WELCOME_DELAY_MS, TimeUnit.MILLISECONDS);
 
         pendingGuestWelcomeTasks.put(key, future);
-    }
-
-    private boolean isLikelyAutoContactMessage(String guestMessage) {
-        if (guestMessage == null || guestMessage.isBlank()) {
-            return false;
-        }
-
-        String normalized = Normalizer.normalize(guestMessage, Normalizer.Form.NFD)
-                .replaceAll("\\p{M}+", "")
-                .toLowerCase(Locale.ROOT)
-                .replaceAll("\\s+", " ")
-                .trim();
-
-        boolean hasLink = normalized.contains("http://") || normalized.contains("https://") || normalized.contains("www.");
-        boolean hasContactToken = normalized.contains("so dien thoai")
-                || normalized.contains("phone")
-                || normalized.contains("email")
-                || normalized.contains("toi quan tam den tin nay")
-                || normalized.contains("i'm interested in this post")
-                || normalized.contains("toi quan tam den bai viet")
-                || normalized.contains("my phone number");
-
-        return hasLink && hasContactToken;
     }
 
     private boolean hasRecentAutoWelcome(String appId, String guestIdentity, String guestPhone, long withinMs) {
@@ -385,39 +420,6 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
         }
 
         return false;
-    }
-
-    private void scheduleAutoReplyIfNoHuman(String appId, String guestIdentity, String guestPhone, String guestMessage) {
-        if (appId == null || appId.isBlank() || guestIdentity == null || guestIdentity.isBlank()) return;
-
-        // The web client may auto-send a contact/link message right after join.
-        // If a welcome was just sent, skip no-reply follow-up to avoid 2 greeting-like AI messages.
-        if (isLikelyAutoContactMessage(guestMessage)
-                && hasRecentAutoWelcome(appId, guestIdentity, guestPhone, AUTO_WELCOME_SUPPRESSION_WINDOW_MS)) {
-            logger.info("⏭️ Skip AI no-reply follow-up for auto-contact message - appId={}, guestIdentity={}", appId, guestIdentity);
-            return;
-        }
-
-        cancelGuestNoReplyTask(appId, guestIdentity);
-
-        String key = guestKey(appId, guestIdentity);
-        final String fallbackFollowup = "Em da tiep nhan thong tin roi. Anh/chị cho em xin ten, so dien thoai va san pham dang quan tam de ben em lien he tu van ngay.";
-        ScheduledFuture<?> future = chatAiScheduler.schedule(() -> {
-            try {
-                String prompt = buildNoHumanReplyPrompt(appId, guestPhone, guestMessage);
-                String aiRaw = aiProviderFactory.generateContent(prompt);
-                String text = extractAiText(aiRaw,
-                        fallbackFollowup);
-                dispatchAiMessageToGuest(appId, guestIdentity, guestPhone, text, "ai_auto_followup");
-            } catch (Exception e) {
-                logger.warn("Failed to send AI follow-up for {}:{} - {}", appId, guestIdentity, e.getMessage());
-                dispatchAiMessageToGuest(appId, guestIdentity, guestPhone, fallbackFollowup, "ai_auto_followup_fallback");
-            } finally {
-                pendingGuestNoReplyTasks.remove(key);
-            }
-        }, AI_FOLLOWUP_DELAY_MS, TimeUnit.MILLISECONDS);
-
-        pendingGuestNoReplyTasks.put(key, future);
     }
 
     // --- Hàm notifySignInToRoom được thêm vào đây ---
@@ -628,6 +630,7 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
             String appId = sessionAppIds.remove(sessionId);
             String guestPhone = sessionGuestPhones.remove(sessionId);
             String guestSessionId = sessionGuestSessionIds.remove(sessionId);
+            sessionAdminFlags.remove(sessionId);
 
             String guestIdentity = firstNonBlank(guestSessionId, guestPhone);
             if (appId != null && guestIdentity != null) {
@@ -671,8 +674,13 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
             // - Admin: join "app:{appId}" (master room - see all messages + can broadcast)
             
             String userId = data.getUserId();
+                        sessionAdminFlags.remove(sessionId);
             
             if (isAdmin != null && isAdmin) {
+                            sessionAdminFlags.put(sessionId, true);
+                            if (appId != null && !appId.isBlank() && username != null && !username.isBlank()) {
+                                appSupportDisplayNames.put(appId, username.trim());
+                            }
                 // Admin joins master room to see all guest + user messages
                 String masterRoom = "app:" + appId;
                 trackSessionRoom(sessionId, masterRoom);
@@ -680,6 +688,7 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                 logger.info("🚪 Admin {} joined master room {} (appId: {})", username, masterRoom, appId);
                 server.getRoomOperations(masterRoom).sendEvent("user_joined", username);
             } else if (firstNonBlank(guestSessionId, guestPhone) != null) {
+                            sessionAdminFlags.put(sessionId, false);
                 // Guest joins private room + master room for admin monitoring
                 String guestIdentity = firstNonBlank(guestSessionId, guestPhone);
                 String privateRoom = "guest:" + appId + ";" + guestIdentity;
@@ -699,6 +708,7 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
 
                 triggerWelcomeOnGuestJoin(appId, guestIdentity, guestPhone);
             } else if (userId != null && !userId.isEmpty()) {
+                sessionAdminFlags.put(sessionId, false);
                 // Authenticated user joins app room (can chat with other users)
                 String appRoom = "app:" + appId;
                 trackSessionRoom(sessionId, appRoom);
@@ -706,6 +716,7 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                 logger.info("🚪 User {} (ID: {}) joined app room {} (appId: {})", username, userId, appRoom, appId);
                 server.getRoomOperations(appRoom).sendEvent("user_joined", username);
             } else {
+                sessionAdminFlags.put(sessionId, false);
                 // Fallback: join room as-is (backward compatibility)
                 trackSessionRoom(sessionId, room);
                 client.joinRoom(room);
@@ -824,7 +835,6 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                                     String targetGuestIdentity = firstNonBlank(guestSessionId, parseGuestPhoneFromRoom(room), guestPhone);
                                     if (targetGuestIdentity != null && !targetGuestIdentity.isBlank()) {
                                         cancelGuestWelcomeTask(appId, targetGuestIdentity);
-                                        scheduleAutoReplyIfNoHuman(appId, targetGuestIdentity, guestPhone, message);
                                     }
                                 } else {
                                     // Authenticated user: cho phép chat trong app của mình
