@@ -3077,7 +3077,12 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 					} else if (effectiveCommand === "create") {
 						// Use NEW PK values from form so backend can check duplicates via Lucene
 						const newPkEntries = pkFields
-							.filter((field) => values?.[field] != null && String(values[field]).trim() !== "")
+							.filter((field) => {
+								if (tableName === "csm_accounts" && (field === "app_id" || field === "app_token")) {
+									return false;
+								}
+								return values?.[field] != null && String(values[field]).trim() !== "";
+							})
 							.map((field) => [field, values[field]]);
 						if (newPkEntries.length > 0) {
 							whereValues = Object.fromEntries(newPkEntries);

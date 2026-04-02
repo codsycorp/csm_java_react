@@ -116,7 +116,7 @@ const APP_ID_QUERY_JSON = JSON.stringify({
 		{
 			obj_name: "sys_apps",
 			app_id: "csm",
-			fields: ["id", "app_name"],
+			fields: ["app_id", "app_name"],
 		},
 	],
 });
@@ -1022,7 +1022,8 @@ export function adaptSystemUserConfigForActor(
 		...config,
 		table: Array.isArray(config.table)
 			? config.table.map((field: any) => (
-				SYSTEM_USER_INTERNAL_FIELD_NAMES.has(String(field?.f_name || ""))
+				(SYSTEM_USER_INTERNAL_FIELD_NAMES.has(String(field?.f_name || ""))
+					|| (actorType !== "dev" && String(field?.f_name || "") === "app_id"))
 					? { ...field, f_show: 0 }
 					: (actorType === "dev" && SYSTEM_USER_PERMISSION_FIELD_NAMES.has(String(field?.f_name || ""))
 						? { ...field, f_show: 0 }
