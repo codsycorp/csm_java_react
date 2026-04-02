@@ -64,6 +64,7 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
     private volatile boolean isServerRunning = false;
 
     private final Map<String, Set<UUID>> roomSessions = new ConcurrentHashMap<>();
+    private final Map<UUID, Set<String>> sessionRooms = new ConcurrentHashMap<>();
     private final Map<UUID, String> sessionUsernames = new ConcurrentHashMap<>();
     private final Map<UUID, String> sessionAppIds = new ConcurrentHashMap<>();
     private static final Logger logger = LoggerFactory.getLogger(SocketIOConfig.class);
@@ -126,6 +127,32 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
             }
         }
         return null;
+    }
+
+    private void trackSessionRoom(UUID sessionId, String room) {
+        if (sessionId == null || room == null || room.isBlank()) return;
+        roomSessions.computeIfAbsent(room, r -> new CopyOnWriteArraySet<>()).add(sessionId);
+        sessionRooms.computeIfAbsent(sessionId, s -> new CopyOnWriteArraySet<>()).add(room);
+    }
+
+    private void untrackSessionRooms(UUID sessionId, String username) {
+        Set<String> rooms = sessionRooms.remove(sessionId);
+        if (rooms == null || rooms.isEmpty()) return;
+
+        for (String room : rooms) {
+            Set<UUID> sessions = roomSessions.get(room);
+            if (sessions == null) continue;
+
+            boolean removed = sessions.remove(sessionId);
+            if (removed && username != null) {
+                logger.info("❌ User {} left room {}", username, room);
+                server.getRoomOperations(room).sendEvent("user_left", username);
+            }
+
+            if (sessions.isEmpty()) {
+                roomSessions.remove(room, sessions);
+            }
+        }
     }
 
     private void cancelGuestWelcomeTask(String appId, String guestIdentity) {
@@ -436,9 +463,9 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
             
             // 🔥 CRITICAL LOG: Ensure room exists and has clients
             int roomSize = server.getRoomOperations(appId).getClients().size();
-            logger.info("📤 sendUpdateNotification to room '{}': table='{}', action='{}', roomSize={}, hasPrimaryKeys={}, hasDataRow={}",
-                       appId, tableName, action, roomSize, (primaryKeysAndValues != null && !primaryKeysAndValues.isEmpty()), 
-                       (dataRow != null && !dataRow.isEmpty()));
+            logger.debug("📤 sendUpdateNotification to room '{}': table='{}', action='{}', roomSize={}, hasPrimaryKeys={}, hasDataRow={}",
+                        appId, tableName, action, roomSize, (primaryKeysAndValues != null && !primaryKeysAndValues.isEmpty()),
+                        (dataRow != null && !dataRow.isEmpty()));
 
             // Tạo một Map để chứa tất cả thông tin bạn muốn gửi đi
             Map<String, Object> notificationData = new HashMap<>();
@@ -472,8 +499,8 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
             // Gửi sự kiện "csm_msg_update" cùng với Map notificationData
             roomOperations.sendEvent("csm_msg_update", notificationData);
 
-            logger.info("✅ Sent 'csm_msg_update' event to room '{}' for table '{}' with action '{}'. Primary Keys: {}, Has DataRow: {}",
-                            appId, tableName, action, primaryKeysAndValues, (dataRow != null && !dataRow.isEmpty()));
+            logger.debug("✅ Sent 'csm_msg_update' event to room '{}' for table '{}' with action '{}'. Has DataRow: {}",
+                         appId, tableName, action, (dataRow != null && !dataRow.isEmpty()));
         } catch (Exception e) {
             logger.error("❌ Error sending update notification for table {} in app {}: {}", tableName, appId, e.getMessage(), e);
         }
@@ -484,38 +511,30 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                                 // Lấy danh sách user nội bộ/app
                                 server.addEventListener("chat_list_users", String.class, (client, appId, ackSender) -> {
                                     try {
-                                        // Lấy tất cả user có app_id = appId
+                                        // Tránh N+1 query theo từng user key: query rows trực tiếp theo app_id với giới hạn an toàn.
                                         net.phanmemmottrieu.data.SearchFilter filter = new net.phanmemmottrieu.data.SearchFilter();
                                         filter.setField("app_id");
                                         filter.setType("eq");
                                         filter.setValue(appId);
-                                        
-                                        // Get all user keys matching the filter
-                                        java.util.List<String> userKeys = recordManager.searchKeys("csm", "csm_accounts", filter);
-                                        
-                                        // Fetch each user record using find by id
+
+                                        Map<String, Object> result = recordManager.filterWithPagination("csm", "csm_accounts", filter, 500, null);
+                                        Object rowsObj = result != null ? result.get("rows") : null;
                                         java.util.List<Map<String, Object>> simplified = new java.util.ArrayList<>();
-                                        for (String key : userKeys) {
-                                            try {
-                                                // Create filter for id field
-                                                net.phanmemmottrieu.data.SearchFilter idFilter = new net.phanmemmottrieu.data.SearchFilter();
-                                                idFilter.setField("id");
-                                                idFilter.setType("eq");
-                                                idFilter.setValue(key);
-                                                
-                                                Map<String, Object> user = recordManager.find("csm", "csm_accounts", idFilter);
-                                                if (user != null && !user.isEmpty()) {
-                                                    Map<String, Object> u = new java.util.HashMap<>();
-                                                    u.put("username", user.getOrDefault("username", ""));
-                                                    u.put("email", user.getOrDefault("email", ""));
-                                                    u.put("phone", user.getOrDefault("phone", ""));
-                                                    u.put("avatar", user.getOrDefault("avatar", ""));
-                                                    u.put("userId", user.getOrDefault("id", ""));
-                                                    simplified.add(u);
-                                                }
-                                            } catch (Exception e) {
-                                                // Skip invalid user
-                                                logger.warn("Failed to fetch user {}: {}", key, e.getMessage());
+
+                                        if (rowsObj instanceof java.util.List<?> rows) {
+                                            for (Object rowObj : rows) {
+                                                if (!(rowObj instanceof java.util.Map<?, ?> rowMap)) continue;
+
+                                                @SuppressWarnings("unchecked")
+                                                java.util.Map<String, Object> user = (java.util.Map<String, Object>) rowMap;
+
+                                                java.util.Map<String, Object> u = new java.util.HashMap<>();
+                                                u.put("username", user.getOrDefault("username", ""));
+                                                u.put("email", user.getOrDefault("email", ""));
+                                                u.put("phone", user.getOrDefault("phone", ""));
+                                                u.put("avatar", user.getOrDefault("avatar", ""));
+                                                u.put("userId", user.getOrDefault("id", ""));
+                                                simplified.add(u);
                                             }
                                         }
                                         
@@ -617,14 +636,9 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
             }
 
             if (username != null) {
-                for (Map.Entry<String, Set<UUID>> entry : roomSessions.entrySet()) {
-                    String room = entry.getKey();
-                    Set<UUID> sessions = entry.getValue();
-                    if (sessions.remove(sessionId)) {
-                        logger.info("❌ User " + username + " left room " + room);
-                        server.getRoomOperations(room).sendEvent("user_left", username);
-                    }
-                }
+                untrackSessionRooms(sessionId, username);
+            } else {
+                untrackSessionRooms(sessionId, null);
             }
             if (appId != null) {
                 logger.info("❌ Client disconnected from app room: " + appId + " (Session: " + sessionId + ")");
@@ -661,7 +675,7 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
             if (isAdmin != null && isAdmin) {
                 // Admin joins master room to see all guest + user messages
                 String masterRoom = "app:" + appId;
-                roomSessions.computeIfAbsent(masterRoom, r -> new CopyOnWriteArraySet<>()).add(sessionId);
+                trackSessionRoom(sessionId, masterRoom);
                 client.joinRoom(masterRoom);
                 logger.info("🚪 Admin {} joined master room {} (appId: {})", username, masterRoom, appId);
                 server.getRoomOperations(masterRoom).sendEvent("user_joined", username);
@@ -673,8 +687,8 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                 sessionGuestPhones.put(sessionId, guestPhone);
                 sessionGuestSessionIds.put(sessionId, guestIdentity);
                 
-                roomSessions.computeIfAbsent(privateRoom, r -> new CopyOnWriteArraySet<>()).add(sessionId);
-                roomSessions.computeIfAbsent(masterRoom, r -> new CopyOnWriteArraySet<>()).add(sessionId);
+                trackSessionRoom(sessionId, privateRoom);
+                trackSessionRoom(sessionId, masterRoom);
                 
                 client.joinRoom(privateRoom);
                 client.joinRoom(masterRoom);
@@ -687,13 +701,13 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
             } else if (userId != null && !userId.isEmpty()) {
                 // Authenticated user joins app room (can chat with other users)
                 String appRoom = "app:" + appId;
-                roomSessions.computeIfAbsent(appRoom, r -> new CopyOnWriteArraySet<>()).add(sessionId);
+                trackSessionRoom(sessionId, appRoom);
                 client.joinRoom(appRoom);
                 logger.info("🚪 User {} (ID: {}) joined app room {} (appId: {})", username, userId, appRoom, appId);
                 server.getRoomOperations(appRoom).sendEvent("user_joined", username);
             } else {
                 // Fallback: join room as-is (backward compatibility)
-                roomSessions.computeIfAbsent(room, r -> new CopyOnWriteArraySet<>()).add(sessionId);
+                trackSessionRoom(sessionId, room);
                 client.joinRoom(room);
                 logger.info("🚪 {} joined room {} (appId: {}) [fallback]", username, room, appId);
                 server.getRoomOperations(room).sendEvent("user_joined", username);
@@ -726,7 +740,7 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                                     appIdFromRoom, room);
                     }
                 }
-            roomSessions.computeIfAbsent(room, r -> new CopyOnWriteArraySet<>()).add(sessionId);
+            trackSessionRoom(sessionId, room);
             client.joinRoom(room);
             logger.info("🚪 " + username + " joined room " + room + " via join_room");
         });
@@ -867,12 +881,10 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                                 logger.info("💾 [Chat] Saving message - appId={}, room={}, guestPhone={}, guestSessionId={}, to={}", 
                                            data.getAppId(), data.getRoom(), data.getGuestPhone(), data.getGuestSessionId(), data.getTo());
                                 
-                                // Lưu lịch sử chat vào các layers:
-                                // 1. Memory cache (ChatHistoryManager)
+                                // Lưu lịch sử chat qua ChatHistoryManager.
+                                // ChatHistoryManager đã delegate xuống ChatPersistenceService,
+                                // nên không gọi save thêm lần nữa để tránh lưu trùng.
                                 ChatHistoryManager.saveMessage(data);
-                                
-                                // 2. Database với guest phone tracking (ChatPersistenceService)
-                                chatPersistenceService.saveMessage(data);
                                 
                                 // 🆕 CRM AUTO-TRACKING: Tự động tạo customer khi guest chat
                                 if (guestPhone != null && !guestPhone.isEmpty() && appId != null && !appId.isEmpty()) {
@@ -1184,6 +1196,7 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                                 }
 
                                 if (response.isSuccess() && appId != null && !appId.isEmpty()) {
+                                    trackSessionRoom(client.getSessionId(), appId);
                                     client.joinRoom(appId);
                                     notifySignInToRoom(appId,client.getSessionId().toString(),displayIdentifier);
                                     sessionAppIds.put(client.getSessionId(), appId);

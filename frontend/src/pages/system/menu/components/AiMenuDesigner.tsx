@@ -403,84 +403,6 @@ function normalizeTriggerCodeValue(triggerKey: string, rawValue: any): any {
   return value;
 }
 
-function createMenuExample(): MenuItemType[] {
-  return [
-    {
-      id: "dm_1",
-      label: "Danh mục",
-      m_icons: "fa fa-database",
-      m_show: true,
-      menu_id: "1",
-      children: [
-        {
-          id: "dm_kh",
-          parentId: "dm_1",
-          label: "Khách hàng",
-          m_icons: "fa fa-users",
-          m_show: true,
-          menu_id: "1.1",
-          type_form: 1,
-          table_name: "dm_khachhang",
-          table_pagesize: 50,
-          trigger: {
-            before_save: "validate_customer",
-            after_save: "update_customer_stats"
-          },
-          table: [
-            { f_name: "id", f_header: "ID", f_types: "ed", f_pkid: 0, f_show: 1, f_width: "150" },
-            { f_name: "ma_kh", f_header: "Mã KH", f_types: "ed", f_pkid: 1, f_show: 1, f_width: "120" },
-            { f_name: "ten_kh", f_header: "Tên KH", f_types: "ed", f_pkid: 0, f_show: 1, f_width: "250" }
-          ]
-        },
-        {
-          id: "bh_dh",
-          parentId: "dm_1",
-          label: "Đơn hàng",
-          m_icons: "fa fa-shopping-cart",
-          m_show: true,
-          menu_id: "1.2",
-          type_form: 2,
-          table_name: "bh_donhang",
-          table_pagesize: 50,
-          field_root: "id_don_hang",
-          trigger: {
-            before_save: "validate_order",
-            after_save: "calculate_order_total",
-            before_delete: "check_order_status"
-          },
-          table: [
-            { f_name: "id", f_header: "ID", f_types: "ed", f_pkid: 0, f_show: 1, f_width: "150" },
-            { f_name: "ma_dh", f_header: "Mã ĐH", f_types: "ro", f_pkid: 1, f_show: 1, f_width: "120" },
-            { f_name: "ngay_ct", f_header: "Ngày CT", f_types: "date", f_pkid: 0, f_show: 1, f_width: "100" },
-            { f_name: "tong_tien", f_header: "Tổng tiền", f_types: "nummeric", f_pkid: 0, f_show: 1, f_width: "120", f_dec: 2 }
-          ],
-          children: [
-            {
-              id: "bh_dh_ct",
-              parentId: "bh_dh",
-              label: "Chi tiết ĐH",
-              m_show: true,
-              menu_id: "1.2.1",
-              table_name: "bh_donhang_ct",
-              trigger: {
-                after_save: "update_order_total",
-                after_delete: "recalculate_order_total"
-              },
-              table: [
-                { f_name: "id", f_header: "ID", f_types: "ed", f_pkid: 0, f_show: 1, f_width: "150" },
-                { f_name: "id_sp", f_header: "Sản phẩm", f_types: "co", f_pkid: 1, f_show: 1, f_width: "250", f_cbo_query: "{\"query\":[{\"obj_name\":\"dm_sanpham\",\"fields\":[\"id\",\"ten_sp\"]}]}" },
-                { f_name: "so_luong", f_header: "SL", f_types: "nummeric", f_pkid: 0, f_show: 1, f_width: "100", f_dec: 2 },
-                { f_name: "don_gia", f_header: "Đơn giá", f_types: "nummeric", f_pkid: 0, f_show: 1, f_width: "120", f_dec: 2 },
-                { f_name: "thanh_tien", f_header: "Thành tiền", f_types: "nummeric", f_pkid: 0, f_show: 1, f_width: "120", f_dec: 2 }
-              ]
-            }
-          ]
-        }
-      ]
-    }
-  ];
-}
-
 function uniqueStrings(items: string[], limit = 20): string[] {
   const seen = new Set<string>();
   const result: string[] = [];
@@ -537,7 +459,7 @@ function buildPromptWithRequirement(
 ): string {
   const referenceMenus = Array.isArray(currentMenus) && currentMenus.length > 0
     ? currentMenus
-    : createMenuExample();
+    : [];
   const enforcerPrompt = trimToMax(AI_PROMPTS.EXTRACTION_AND_VALIDATION || "", 5000);
   const sysArchContext = trimToMax(AI_PROMPTS.SYSTEM_ARCHITECTURE || "", 8000);
   const mainPrompt = trimToMax(AI_PROMPTS.MAIN_MENU_DESIGNER || "", 5500);
@@ -552,8 +474,11 @@ function buildPromptWithRequirement(
   const tableChecklist = detectedTables.length > 0
     ? detectedTables.map((item, idx) => `${idx + 1}. ${item}`).join("\n")
     : "(khong co ten bang ro rang trong yeu cau)";
-  const compactMenuContext = buildCompactMenuContext(referenceMenus, 150);
+  const compactMenuContext = referenceMenus.length > 0
+    ? buildCompactMenuContext(referenceMenus, 150)
+    : "(khong co menu he thong hien tai de tham chieu)";
   const typeCatalog = buildMenuTypeCatalog();
+  const menuOrgGuide = buildMenuOrganizationGuide();
   const sampleMenuContext = sampleMenus && sampleMenus.length > 0
     ? buildCompactMenuContext(sampleMenus, 100)
     : null;
@@ -578,13 +503,15 @@ ${selectorGuide}
 7) KHONG duoc bo sot dau muc yeu cau: moi module/chuc nang khach hang neu ra phai co menu tuong ung.
 8) Khong duoc gom tat ca thanh 1-2 menu tong quat neu yeu cau co nhieu module nghiep vu.
 9) So menu chuc nang (node la type_form!=0) phai phan anh day du cac nhom nghiep vu duoc neu trong yeu cau.
-10) KHONG tao lai menu he thong co san (sys_users, sys_menus, phan quyen...) neu khach hang khong yeu cau ro.
 
 ## APP_ID DANG THIET KE
 ${String(appId || "")}
 
 ## BO MENU TYPE HE THONG DANG CO
 ${typeCatalog}
+
+## NGUYEN TAC TO CHUC MENU (NGAN GON - BAT BUOC)
+${menuOrgGuide}
 
 ## MENU HE THONG HIEN TAI (COMPACT REFERENCE)
 ${compactMenuContext}
@@ -638,11 +565,8 @@ ${tableChecklist}
   + KHONG duoc bien bao cao noi bo thanh type_form=3 + dynamic_link_url '/reports/...'.
   + Neu co report_name thi uu tien type_form=1 (hoac type_form dang duoc yeu cau), KHONG dung type_form=3.
 - Neu yeu cau nghiep vu co ket noi master-detail, bao cao, combo phu thuoc: phai tao du trigger va f_cbo_query tuong ung.
-- Menu type 1/2/6 KHONG can path dieu huong. Neu AI tao path cho cac type nay, hay de rong hoac bo qua.
-- CRM/quan ly cong viec phai thiet ke bang nhieu menu nho: type 1/2/3/4/6 va report, khong dung workspace tong hop.
 - Type 6 (Kanban Board): uu tien co kanban_config hop le (JSON object), table_name, id/status/title fields theo config.
 - Neu yeu cau la bao cao/dashboard tong hop cua he thong, uu tien su dung report_name + trigger.report_db + cac field loc trong table de runtime CsmReport tu render.
-- KHONG tu tao path/URL co dinh kieu crm/reports/dashboard, reports/dashboard, /dashboard cho menu report noi bo.
 - Chi dung dynamic_link_url khi thuc su can dieu huong sang mot URL/route ben ngoai co san.
 - Semantic field mapping:
   + cac field gia/ngan sach/chi phi/doanh thu/tong_tien -> f_types="price"
@@ -684,7 +608,7 @@ function buildRefinementPrompt(
 ): string {
   const referenceMenus = Array.isArray(currentMenus) && currentMenus.length > 0
     ? currentMenus
-    : createMenuExample();
+    : [];
 
   const enforcerPrompt = trimToMax(AI_PROMPTS.EXTRACTION_AND_VALIDATION || "", 4500);
   const sysArchContext = trimToMax(AI_PROMPTS.SYSTEM_ARCHITECTURE || "", 7000);
@@ -702,14 +626,17 @@ function buildRefinementPrompt(
   const tableChecklist = detectedTables.length > 0
     ? detectedTables.map((item, idx) => `${idx + 1}. ${item}`).join("\n")
     : "(khong co ten bang ro rang trong yeu cau)";
-  const currentMenuContext = buildCompactMenuContext(referenceMenus, 120);
+  const currentMenuContext = referenceMenus.length > 0
+    ? buildCompactMenuContext(referenceMenus, 120)
+    : "(khong co menu he thong hien tai de tham chieu)";
   const previousMenuContext = buildPreviousResultContext(previousResultJson, 80);
   const previousMenuContextFull = isSampleBase
     ? buildFullMenuContextFromJson(previousResultJson)
     : "";
   const strictScope = scope === "minimal" ? "uu tien type 1/2/6, chi dung 3/4 khi yeu cau ro" : "duoc dung day du type 1/2/3/4/6";
   const typeCatalog = buildMenuTypeCatalog();
-  const sampleMenuContext = sampleMenus && sampleMenus.length > 0
+  const menuOrgGuide = buildMenuOrganizationGuide();
+  const sampleMenuContext = !isSampleBase && sampleMenus && sampleMenus.length > 0
     ? buildCompactMenuContext(sampleMenus, 100)
     : null;
 
@@ -729,7 +656,7 @@ Ban da co ket qua menu lan truoc. Hay cap nhat theo yeu cau moi voi nguyen tac:
 4) Neu thong tin chua du, dua ra gia dinh hop ly va ghi vao warnings.
 5) Chuan hoa lai cac menu cu chua dung schema (field generic, trigger sai cho, combo sai format).
 6) KHONG don gian hoa qua muc: giu day du cac module nghiep vu theo yeu cau goc + yeu cau bo sung.
-7) KHONG tao lai menu he thong co san (sys_users, sys_menus, phan quyen...) neu khach hang khong yeu cau ro.`;
+7) Giu on dinh id/menu_id/path/parentId khi refine, chi sua phan duoc yeu cau.`;
 
   const previousResultLabel = isSampleBase
     ? "## MENU MAU DUNG LAM GOC (FULL JSON - UU TIEN CAO NHAT)"
@@ -752,6 +679,9 @@ ${String(appId || "")}
 
 ## BO MENU TYPE HE THONG DANG CO
 ${typeCatalog}
+
+## NGUYEN TAC TO CHUC MENU (NGAN GON - BAT BUOC)
+${menuOrgGuide}
 
 ## YEU CAU GOC (RUT GON)
 ${requestCore}
@@ -810,8 +740,6 @@ ${isSampleBase ? previousMenuContextFull : previousMenuContext}
   + KHONG duoc bien bao cao noi bo thanh type_form=3 + dynamic_link_url '/reports/...'.
   + Neu co report_name thi uu tien type_form=1 (hoac type_form dang duoc yeu cau), KHONG dung type_form=3.
 - Neu refine tu menu cu: giu id/menu_id/path/menu cha-con toi da, chi thay doi phan duoc yeu cau.
-- Menu type 1/2/6 KHONG can path dieu huong. Neu co path o cac type nay, hay loai bo.
-- CRM/quan ly cong viec phai doi thanh cac menu nho bang type 1/2/3/4/6 va report.
 - Type 6 (Kanban Board) can uu tien kanban_config chuyen biet.
 - Neu menu mang tinh chat bao cao/dashboard tong hop thi uu tien report_name + trigger.report_db thay vi path crm/reports/dashboard.
 - Neu AI xuat menu ten Dashboard/Bao cao tong hop/KPI ma lai khong co report_name hoac auto_code_name thi phai tu sua lai truoc khi tra ket qua.
@@ -1265,16 +1193,28 @@ function flattenMenuNodes(menus: MenuItemType[], maxNodes: number): MenuItemType
 
 function buildMenuTypeCatalog(): string {
   return [
-    "- type_form=0: Nhom menu (khong CRUD, chi de to chuc cay)",
-    "- type_form=1: Luoi dong / Data Grid (table_name + table)",
-    "- type_form=2: Master-Detail (master + children tabs)",
-    "- type_form=3: Dynamic Link (dynamic_link_url)",
-    "- type_form=4: Dynamic Code (auto_code_name)",
-    "- type_form=6: Kanban Board (kanban_config + table_name)",
-    "- report runtime: menu co report_name + trigger.report_db se duoc render bang CsmReport, khong can route crm/reports/dashboard",
-    "- Quy uoc: type 1/2/6 khong can path; dieu huong runtime theo /system/grid/:menuId",
-    "- Neu yeu cau la bao cao/dashboard tong hop thi uu tien report_name + trigger.report_db; chi dung type_form=4 khi can man hinh tuong tac phuc tap",
-    "- Khuyen nghi thiet ke CRM/quan ly cong viec bang nhieu menu nho: type 1/2/4/6/report",
+    "- 0=Group: chi de to chuc cay menu, khong CRUD.",
+    "- 1=Grid, 2=Master-Detail, 6=Kanban: bat buoc co table_name.",
+    "- 3=Dynamic Link: bat buoc co dynamic_link_url.",
+    "- 4=Dynamic Code: bat buoc co auto_code_name.",
+    "- Bao cao noi bo: report_name + trigger.report_db (khong doi sang type 3).",
+    "- Node group (type 0) phai co children; menu con phai parentId dung cha.",
+    "- Field combo (co/coro/cbo) bat buoc co f_cbo_query string khong rong.",
+    "- Trigger chi dat trong object trigger; khong dung trigger_* o cap menu.",
+    "- Type 1/2/6 thuong khong can path (runtime /system/grid/:menuId).",
+    "- Khong tu them module ngoai yeu cau; khong tao lai menu he thong co san.",
+  ].join("\n");
+}
+
+function buildMenuOrganizationGuide(): string {
+  return [
+    "1) Chia theo nhom nghiep vu: moi nhom la 1 node type_form=0, ben trong la menu chuc nang.",
+    "2) Menu chuc nang khong duoc de type_form=0; chon type dung muc dich 1/2/3/4/6.",
+    "3) CRUD uu tien type 1/2; Kanban dung type 6; chi dung 3/4 khi yeu cau ro.",
+    "4) Bao cao noi bo phai dung report_name + trigger.report_db, khong dung dynamic_link_url.",
+    "5) Table field theo schema f_* va dung key table (khong dung fields).",
+    "6) Giu on dinh id/menu_id/path/parentId khi refine, chi sua phan duoc yeu cau.",
+    "7) He thong da co san menu Quan tri: nguoi dung, vai tro/phan quyen, menu he thong, nhom quyen. Khong thiet ke lai neu khach hang khong yeu cau ro.",
   ].join("\n");
 }
 

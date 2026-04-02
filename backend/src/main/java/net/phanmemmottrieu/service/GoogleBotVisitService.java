@@ -10,9 +10,11 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.PriorityQueue;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.stream.Collectors;
+import java.util.HashSet;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,6 +31,7 @@ public class GoogleBotVisitService {
     private static final String APP_ID = "csm";
     private static final String TABLE = "googlebot_visits";
     private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ISO_LOCAL_DATE.withZone(ZoneId.of("UTC"));
+    private static final int PAGE_SIZE = 500;
 
     private final RecordManager recordManager;
     private final AtomicBoolean tableReady = new AtomicBoolean(false);
@@ -75,44 +78,88 @@ public class GoogleBotVisitService {
         ensureTable();
         int cappedLimit = Math.max(1, Math.min(limit, 200));
         int cappedOffset = Math.max(0, offset);
-        
-        Map<String, Object> scanResult = recordManager.fullScan(APP_ID, TABLE);
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> rows = (List<Map<String, Object>>) scanResult.getOrDefault("rows", Collections.emptyList());
 
-        List<Map<String, Object>> normalized = rows.stream()
-            .map(this::normalizeRow)
-            .filter(map -> map.get("id") != null)
-            .sorted(Comparator.comparingLong((Map<String, Object> m) -> (Long) m.getOrDefault("ts", 0L)).reversed())
-            .collect(Collectors.toList());
-
-        // Apply offset and limit to the latest visits
-        List<Map<String, Object>> latest = normalized.stream()
-            .skip(cappedOffset)
-            .limit(cappedLimit)
-            .collect(Collectors.toList());
+        final int topWindowSize = Math.max(1, cappedOffset + cappedLimit);
+        PriorityQueue<Map<String, Object>> topWindow = new PriorityQueue<>(
+            Comparator.comparingLong((Map<String, Object> m) -> (Long) m.getOrDefault("ts", 0L))
+        );
 
         Map<String, Map<String, Object>> daily = new LinkedHashMap<>();
-        for (Map<String, Object> row : normalized) {
-            String dateKey = (String) row.getOrDefault("dateKey", "");
-            if (dateKey.isEmpty()) {
-                continue;
+        int totalVisits = 0;
+
+        String cursor = null;
+        Set<String> seenCursors = new HashSet<>();
+        while (true) {
+            Map<String, Object> page = recordManager.filterWithPagination(APP_ID, TABLE, null, PAGE_SIZE, cursor);
+            List<Map<String, Object>> rows = safeRows(page);
+            if (rows.isEmpty()) {
+                break;
             }
-            Map<String, Object> summary = daily.computeIfAbsent(dateKey, key -> {
-                Map<String, Object> item = new HashMap<>();
-                item.put("date", key);
-                item.put("count", 0L);
-                item.put("lastVisitAt", row.get("visitedAt"));
-                return item;
-            });
-            long count = ((Number) summary.getOrDefault("count", 0L)).longValue();
-            summary.put("count", count + 1);
+
+            for (Map<String, Object> rawRow : rows) {
+                Map<String, Object> row = normalizeRow(rawRow);
+                if (row.get("id") == null || String.valueOf(row.get("id")).isBlank()) {
+                    continue;
+                }
+
+                totalVisits++;
+                long ts = (Long) row.getOrDefault("ts", 0L);
+
+                String dateKey = (String) row.getOrDefault("dateKey", "");
+                if (!dateKey.isEmpty()) {
+                    Map<String, Object> summary = daily.computeIfAbsent(dateKey, key -> {
+                        Map<String, Object> item = new HashMap<>();
+                        item.put("date", key);
+                        item.put("count", 0L);
+                        item.put("lastVisitAt", row.get("visitedAt"));
+                        item.put("lastTs", ts);
+                        return item;
+                    });
+                    long count = ((Number) summary.getOrDefault("count", 0L)).longValue();
+                    summary.put("count", count + 1);
+
+                    long currentLastTs = ((Number) summary.getOrDefault("lastTs", 0L)).longValue();
+                    if (ts > currentLastTs) {
+                        summary.put("lastTs", ts);
+                        summary.put("lastVisitAt", row.get("visitedAt"));
+                    }
+                }
+
+                if (topWindow.size() < topWindowSize) {
+                    topWindow.offer(row);
+                } else {
+                    long minTs = (Long) topWindow.peek().getOrDefault("ts", 0L);
+                    if (ts > minTs) {
+                        topWindow.poll();
+                        topWindow.offer(row);
+                    }
+                }
+            }
+
+            cursor = nextCursor(page, seenCursors);
+            if (cursor == null) {
+                break;
+            }
+        }
+
+        List<Map<String, Object>> latestPool = new ArrayList<>(topWindow);
+        latestPool.sort(Comparator.comparingLong((Map<String, Object> m) -> (Long) m.getOrDefault("ts", 0L)).reversed());
+
+        List<Map<String, Object>> latest = new ArrayList<>();
+        for (int i = cappedOffset; i < latestPool.size() && latest.size() < cappedLimit; i++) {
+            latest.add(latestPool.get(i));
+        }
+
+        List<Map<String, Object>> byDate = new ArrayList<>();
+        for (Map<String, Object> summary : daily.values()) {
+            summary.remove("lastTs");
+            byDate.add(summary);
         }
 
         Map<String, Object> result = new HashMap<>();
-        result.put("totalVisits", normalized.size());
+        result.put("totalVisits", totalVisits);
         result.put("latest", latest);
-        result.put("byDate", new ArrayList<>(daily.values()));
+        result.put("byDate", byDate);
         return result;
     }
 
@@ -121,14 +168,27 @@ public class GoogleBotVisitService {
         int deleted = 0;
         try {
             if (deleteAll) {
-                Map<String, Object> scanResult = recordManager.fullScan(APP_ID, TABLE);
-                @SuppressWarnings("unchecked")
-                List<Map<String, Object>> rows = (List<Map<String, Object>>) scanResult.getOrDefault("rows", Collections.emptyList());
-                for (Map<String, Object> row : rows) {
-                    Object idObj = row.get("id");
-                    if (idObj != null) {
+                while (true) {
+                    Map<String, Object> page = recordManager.filterWithPagination(APP_ID, TABLE, null, PAGE_SIZE, null);
+                    List<Map<String, Object>> rows = safeRows(page);
+                    if (rows.isEmpty()) {
+                        break;
+                    }
+
+                    int deletedInBatch = 0;
+                    for (Map<String, Object> row : rows) {
+                        Object idObj = row.get("id");
+                        if (idObj == null) {
+                            continue;
+                        }
                         recordManager.deleteRecord(APP_ID, TABLE, Map.of("id", idObj.toString()));
                         deleted++;
+                        deletedInBatch++;
+                    }
+
+                    if (deletedInBatch == 0) {
+                        logger.warn("Stop deleteAll because batch contains no deletable ids");
+                        break;
                     }
                 }
             } else if (ids != null) {
@@ -225,5 +285,47 @@ public class GoogleBotVisitService {
 
     private String safe(String value) {
         return value == null ? "" : value.trim();
+    }
+
+    private List<Map<String, Object>> safeRows(Map<String, Object> pageResult) {
+        if (pageResult == null) {
+            return Collections.emptyList();
+        }
+        Object rowsObj = pageResult.get("rows");
+        if (!(rowsObj instanceof List<?> list)) {
+            return Collections.emptyList();
+        }
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (Object item : list) {
+            if (item instanceof Map<?, ?> map) {
+                Map<String, Object> casted = new HashMap<>();
+                for (Map.Entry<?, ?> entry : map.entrySet()) {
+                    if (entry.getKey() != null) {
+                        casted.put(entry.getKey().toString(), entry.getValue());
+                    }
+                }
+                rows.add(casted);
+            }
+        }
+        return rows;
+    }
+
+    private String nextCursor(Map<String, Object> pageResult, Set<String> seenCursors) {
+        if (pageResult == null) {
+            return null;
+        }
+        Object nextCursorObj = pageResult.get("nextCursor");
+        if (nextCursorObj == null) {
+            return null;
+        }
+        String cursor = String.valueOf(nextCursorObj);
+        if (cursor.isBlank()) {
+            return null;
+        }
+        if (!seenCursors.add(cursor)) {
+            logger.warn("Detected repeated nextCursor while scanning googlebot visits. Stop pagination to avoid loop.");
+            return null;
+        }
+        return cursor;
     }
 }
