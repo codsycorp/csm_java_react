@@ -628,13 +628,17 @@ public class TableHandler {
         map.put("csm_user_roles", List.of("id", "user_id", "role_id", "create_time"));
         map.put("csm_accounts", List.of(
             "id", "username", "pass", "app_token", "refresh", "email", "avatar", "phoneNumber",
+            "refresh_token", "refresh_token_ip", "refresh_token_ua", "refresh_token_expiry", "login_version", "loginVersion",
             "description", "roles", "actived", "permissions", "menusPermissions", "group_rights",
             "full_name", "user_address", "app_id", "parent_account_id", "permissionBitfield", "permissionSchemaVersion", "dataScope",
             "dept_id", "branch_id", "department_id", "team_id"
         ));
         map.put("csm_group_members", List.of(
-            "id", "parent_account_id", "login_identifier", "group_id", "app_token", "refresh", "pass", "actived",
-            "permissions", "menusPermissions", "permissionBitfield", "permissionSchemaVersion", "dataScope",
+            "id", "parent_account_id", "login_identifier", "username", "email", "phoneNumber", "full_name", "user_address", "avatar",
+            "group_rights", "group_id", "app_id", "app_token", "source_app_token", "refresh_token", "refresh",
+            "refresh_token_ip", "refresh_token_ua", "refresh_token_expiry", "login_version", "loginVersion", "pass", "actived",
+            "permissions", "menusPermissions", "permissionsAdd", "permissionsDeny", "menusPermissionsAdd", "menusPermissionsDeny",
+            "permissionBitfield", "permissionSchemaVersion", "dataScope",
             "dept_id", "branch_id", "department_id", "team_id"
         ));
         map.put("routers", List.of("path", "component", "layout", "handle", "children"));

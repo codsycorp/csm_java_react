@@ -214,22 +214,18 @@ public class AuthHandler {
             long expiry = System.currentTimeMillis() + 7 * 24 * 60 * 60 * 1000L; // 7 ngày
 
             // Lưu refresh token vào DB
-            Map<String, Object> updateFields = new HashMap<>();
-            updateFields.put("refresh_token", refreshToken);
-            updateFields.put("refresh_token_ip", ip);
-            updateFields.put("refresh_token_ua", ua);
-            updateFields.put("refresh_token_expiry", expiry);
-            updateFields.put("login_version", nextLoginVersion);
-            updateFields.put("loginVersion", nextLoginVersion);
-            // Cập nhật theo user id để tránh ảnh hưởng nhầm tài khoản khác.
-            userService.updateUserFieldById(user.getId(), updateFields);
+            userService.updateSessionToken(user, refreshToken, ip, ua, expiry, nextLoginVersion);
             // Log xác nhận lưu refresh_token
             logger.info("[LOGIN] Saved refreshToken for user {}={} (refreshToken={}, ip={}, ua={})", 
                        "id", user.getId(), refreshToken.substring(0, Math.min(10, refreshToken.length())) + "...", ip, ua);
 
             // Chuẩn bị dữ liệu trả về: token + routes + quyền
             Map<String, Object> result = new HashMap<>();
-            String jwtToken = jwtUtil.generateToken(user.getId(), nextLoginVersion);
+            String tokenSubject = user.getId();
+            if (user.getAppToken() != null && !user.getAppToken().isBlank()) {
+                tokenSubject = user.getAppToken();
+            }
+            String jwtToken = jwtUtil.generateToken(tokenSubject, nextLoginVersion);
             result.put("token", jwtToken);
             result.put("app_token", user.getAppToken());
             result.put("app_id", user.getAppId());
@@ -459,13 +455,7 @@ public class AuthHandler {
         try {
             if (authentication != null && authentication.getPrincipal() instanceof User) {
                 User user = (User) authentication.getPrincipal();
-                Map<String, Object> updateFields = new HashMap<>();
-                updateFields.put("refresh_token", null);
-                updateFields.put("refresh_token_ip", null);
-                updateFields.put("refresh_token_ua", null);
-                updateFields.put("refresh_token_expiry", null);
-
-                userService.updateUserFieldById(user.getId(), updateFields);
+                userService.clearSessionToken(user);
                 logger.info("[LOGOUT] Invalidated refreshToken for user id={}", user.getId());
             }
         } catch (Exception e) {
@@ -514,16 +504,14 @@ public class AuthHandler {
         // Sinh access token mới và refresh token mới
         String newRefreshToken = UUID.randomUUID().toString() + UUID.randomUUID().toString();
         long newExpiry = System.currentTimeMillis() + 7 * 24 * 60 * 60 * 1000L;
-        Map<String, Object> updateFields = new HashMap<>();
-        updateFields.put("refresh_token", newRefreshToken);
-        updateFields.put("refresh_token_ip", ip);
-        updateFields.put("refresh_token_ua", ua);
-        updateFields.put("refresh_token_expiry", newExpiry);
-        updateFields.put("login_version", loginVersion);
-        userService.updateUserFieldById(user.getId(), updateFields);
+        userService.updateSessionToken(user, newRefreshToken, ip, ua, newExpiry, loginVersion);
         logger.info("[REFRESH] Đã lưu refresh_token {} cho user id={} (ip={}, ua={})", newRefreshToken, user.getId(), ip, ua);
 
-        String jwtToken = jwtUtil.generateToken(user.getId(), loginVersion);
+        String tokenSubject = user.getId();
+        if (user.getAppToken() != null && !user.getAppToken().isBlank()) {
+            tokenSubject = user.getAppToken();
+        }
+        String jwtToken = jwtUtil.generateToken(tokenSubject, loginVersion);
         response.set("code", 200);
         Map<String, Object> result = new HashMap<>();
         result.put("token", jwtToken);

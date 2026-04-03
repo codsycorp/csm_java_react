@@ -718,9 +718,17 @@ public class InitHandler {
                 Map<String, Object> existingSchema = recordManager.find("csm", "index", checkFilter);
                 
                 if (existingSchema != null && !existingSchema.isEmpty()) {
-                        // Schema đã tồn tại → skip initialization để giữ lại dữ liệu người dùng
+                        // Schema đã tồn tại: vẫn đồng bộ lại index struct để bổ sung field mới,
+                        // nhưng không đụng dữ liệu người dùng.
                         org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(InitHandler.class);
-                        logger.info("✅ User table schemas already initialized, skipping to preserve user data");
+                        initializeDataTables("csm", "csm_accounts", getAccountSchemaPkFields(), getAccountSchemaFields());
+                        initializeDataTables("csm", "csm_group_members", getSubAccountSchemaPkFields(), getSubAccountSchemaFields());
+                        try {
+                                recordManager.indexExistingRecords("csm", "csm_group_members");
+                        } catch (Exception ex) {
+                                logger.warn("Unable to rebuild csm_group_members index during schema sync: {}", ex.getMessage());
+                        }
+                        logger.info("✅ User table schemas already initialized, schema synced for latest fields");
                         return false; // Not first-time init
                 }
                 
@@ -736,29 +744,14 @@ public class InitHandler {
                 // - email, username, phoneNumber: Login identifiers (findUserByEmail/Username/Phone)
                 // - app_token, refresh_token, refresh: Session/token lookups (findUserByAppToken, findUserByRefreshToken)
                 // PROTECTED: app_token, refresh_token, refresh have strict-no-scan (block RocksDB fallback scan on Lucene miss)
-                initializeDataTables("csm", "csm_accounts",
-                                List.of("id", "email", "username", "phoneNumber", "app_token", "refresh_token", "refresh"), List.of(
-                                                "id", "username", "pass", "app_token", "refresh_token", "refresh", "email",
-                                                "avatar",
-                                                "phoneNumber", "description",
-                                                "roles", "actived", "permissions", "menusPermissions",
-                                                "group_rights",
-                                                "full_name", "user_address", "app_id",
-                                                "permissionBitfield", "permissionSchemaVersion", "dataScope",
-                                                "dept_id", "branch_id", "department_id", "team_id"));
+                initializeDataTables("csm", "csm_accounts", getAccountSchemaPkFields(), getAccountSchemaFields());
                 
                 // 🔒 fieldsSearch for csm_group_members: Sub-account login + session
                 // - id: Primary key
                 // - login_identifier: Sub-account login (like email/username/phone for sub-users)
                 // - app_token, refresh: Sub-account session tokens (for sub-user session refresh)
                 // PROTECTED: app_token, refresh have strict-no-scan (block expensive scans on lookup failures)
-                initializeDataTables("csm", "csm_group_members",
-                                List.of("id", "login_identifier", "app_token", "refresh"), List.of(
-                                                "id", "parent_account_id", "login_identifier", "group_id",
-                                                "app_token", "refresh", "pass", "actived",
-                                                "permissions", "menusPermissions",
-                                                "permissionBitfield", "permissionSchemaVersion", "dataScope",
-                                                "dept_id", "branch_id", "department_id", "team_id"));
+                initializeDataTables("csm", "csm_group_members", getSubAccountSchemaPkFields(), getSubAccountSchemaFields());
                 
                 logger.info("✅ User table schemas initialized successfully");
                 return true; // First-time init completed
@@ -792,8 +785,15 @@ public class InitHandler {
                         buildFieldConfig("id", "ID", 1, "number", "right"),
                         buildFieldConfig("parent_account_id", "common.parentAccountId", 1, "string", "left"),
                         buildFieldConfig("login_identifier", "common.loginIdentifier", 1, "string", "left"),
+                        buildFieldConfig("username", "common.username", 1, "string", "left"),
+                        buildFieldConfig("email", "common.email", 1, "string", "left"),
+                        buildFieldConfig("phoneNumber", "common.phoneNumber", 1, "string", "left"),
+                        buildFieldConfig("full_name", "common.fullName", 1, "string", "left"),
                         buildFieldConfig("group_id", "common.groupId", 1, "string", "left"),
                         buildFieldConfig("app_token", "common.appToken", 1, "string", "left"),
+                        buildFieldConfig("refresh_token", "Refresh Token", 1, "string", "left"),
+                        buildFieldConfig("refresh", "Refresh Alias", 1, "string", "left"),
+                        buildFieldConfig("login_version", "Login Version", 1, "number", "right"),
                         buildFieldConfig("pass", "common.password", 1, "password", "left"),
                         buildFieldConfig("permissions", "Permissions", 1, "string", "left"),
                         buildFieldConfig("menusPermissions", "Menu Permissions", 1, "string", "left"),
@@ -803,6 +803,36 @@ public class InitHandler {
                         buildFieldConfig("dept_id", "Dept ID", 1, "string", "left"),
                         buildFieldConfig("branch_id", "Branch ID", 1, "string", "left"),
                         buildFieldConfig("actived", "common.active", 1, "checkbox", "left"));
+        }
+
+        private List<String> getAccountSchemaPkFields() {
+                return List.of("id", "email", "username", "phoneNumber", "app_token", "refresh_token", "refresh");
+        }
+
+        private List<String> getAccountSchemaFields() {
+                return List.of(
+                                "id", "username", "pass", "app_token", "refresh_token", "refresh",
+                                "refresh_token_ip", "refresh_token_ua", "refresh_token_expiry", "login_version", "loginVersion",
+                                "email", "avatar", "phoneNumber", "description", "roles", "actived",
+                                "permissions", "menusPermissions", "group_rights", "full_name", "user_address", "app_id", "source_app_token",
+                                "permissionBitfield", "permissionSchemaVersion", "dataScope",
+                                "dept_id", "branch_id", "department_id", "team_id");
+        }
+
+        private List<String> getSubAccountSchemaPkFields() {
+                return List.of("id", "login_identifier", "app_token", "refresh_token", "refresh");
+        }
+
+        private List<String> getSubAccountSchemaFields() {
+                return List.of(
+                                "id", "parent_account_id", "login_identifier", "username", "email", "phoneNumber",
+                                "full_name", "user_address", "avatar", "group_rights", "group_id",
+                                "app_id", "app_token", "source_app_token",
+                                "refresh_token", "refresh", "refresh_token_ip", "refresh_token_ua", "refresh_token_expiry",
+                                "login_version", "loginVersion", "pass", "actived",
+                                "permissions", "menusPermissions", "permissionsAdd", "permissionsDeny", "menusPermissionsAdd", "menusPermissionsDeny",
+                                "permissionBitfield", "permissionSchemaVersion", "dataScope",
+                                "dept_id", "branch_id", "department_id", "team_id");
         }
 
         private Map<String, Object> buildFieldConfig(String name, String header, int show, String type, String align) {

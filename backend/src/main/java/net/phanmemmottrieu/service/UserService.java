@@ -34,6 +34,11 @@ public class UserService {
         if (userRecord != null && !userRecord.isEmpty()) {
             return Optional.of(mapRecordToUser(userRecord));
         }
+
+        Map<String, Object> subUserRecord = recordManager.find(CSM_APP_ID, SUB_ACCOUNTS_TABLE, filter);
+        if (subUserRecord != null && !subUserRecord.isEmpty()) {
+            return mapSubUserRecordToUser(subUserRecord);
+        }
         return Optional.empty();
     }
 
@@ -284,6 +289,50 @@ public class UserService {
             logger.info("[findUserByRefreshToken] Found user: {} (email: {})", user.getUsername(), user.getEmail());
             return user;
         }
+
+        // Fallback for sub-user sessions stored in csm_group_members.
+        SearchFilter subFilter = new SearchFilter();
+        subFilter.setField("refresh_token");
+        subFilter.setType("eq");
+        subFilter.setValue(refreshToken);
+        Map<String, Object> subUserRecord = recordManager.find(CSM_APP_ID, SUB_ACCOUNTS_TABLE, subFilter);
+
+        if (subUserRecord == null || subUserRecord.isEmpty()) {
+            subFilter.setField("refresh");
+            subUserRecord = recordManager.find(CSM_APP_ID, SUB_ACCOUNTS_TABLE, subFilter);
+        }
+
+        if (subUserRecord != null && !subUserRecord.isEmpty()) {
+            Object expiryObj = subUserRecord.get("refresh_token_expiry");
+            long expiry = 0;
+            if (expiryObj instanceof Number) {
+                expiry = ((Number) expiryObj).longValue();
+            } else if (expiryObj instanceof String) {
+                try {
+                    expiry = Long.parseLong((String) expiryObj);
+                } catch (NumberFormatException e) {
+                    logger.warn("[findUserByRefreshToken] Cannot parse sub-user refresh_token_expiry: {}", expiryObj);
+                    return null;
+                }
+            }
+
+            if (expiry > 0 && expiry <= System.currentTimeMillis()) {
+                logger.warn("[findUserByRefreshToken] Sub-user refresh token expired for login_identifier={}", subUserRecord.get("login_identifier"));
+                return null;
+            }
+
+            Optional<User> subUserOpt = mapSubUserRecordToUser(subUserRecord);
+            if (subUserOpt.isPresent()) {
+                User subUser = subUserOpt.get();
+                if (subUser.getRefreshToken() == null || !refreshToken.equals(subUser.getRefreshToken())) {
+                    logger.warn("[findUserByRefreshToken] Reject stale sub-user refresh token for login_identifier={}", subUserRecord.get("login_identifier"));
+                    return null;
+                }
+                logger.info("[findUserByRefreshToken] Found sub-user by refresh token: {}", subUserRecord.get("login_identifier"));
+                return subUser;
+            }
+        }
+
         logger.warn("[findUserByRefreshToken] No user found with refreshToken");
         return null;
     }
@@ -303,7 +352,111 @@ public class UserService {
         if (userRecord != null && !userRecord.isEmpty()) {
             return Optional.of(mapRecordToUser(userRecord));
         }
+
+        Map<String, Object> subUserRecord = recordManager.find(CSM_APP_ID, SUB_ACCOUNTS_TABLE, filter);
+        if (subUserRecord != null && !subUserRecord.isEmpty()) {
+            return mapSubUserRecordToUser(subUserRecord);
+        }
+
         return Optional.empty();
+    }
+
+    public boolean isSubUserByAppToken(String appToken) {
+        if (appToken == null || appToken.isBlank()) {
+            return false;
+        }
+        SearchFilter filter = new SearchFilter();
+        filter.setField("app_token");
+        filter.setType("eq");
+        filter.setValue(appToken);
+        Map<String, Object> subUserRecord = recordManager.find(CSM_APP_ID, SUB_ACCOUNTS_TABLE, filter);
+        return subUserRecord != null && !subUserRecord.isEmpty();
+    }
+
+    public void updateSessionToken(User user, String refreshToken, String ip, String ua, long expiry, int loginVersion) {
+        if (user == null) {
+            return;
+        }
+
+        Map<String, Object> updateFields = new HashMap<>();
+        updateFields.put("refresh_token", refreshToken);
+        updateFields.put("refresh", refreshToken);
+        updateFields.put("refresh_token_ip", ip);
+        updateFields.put("refresh_token_ua", ua);
+        updateFields.put("refresh_token_expiry", expiry);
+        updateFields.put("login_version", loginVersion);
+        updateFields.put("loginVersion", loginVersion);
+
+        String appToken = user.getAppToken();
+        if (isSubUserByAppToken(appToken)) {
+            SearchFilter filter = new SearchFilter();
+            filter.setField("app_token");
+            filter.setType("eq");
+            filter.setValue(appToken);
+            Map<String, Object> subUserRecord = recordManager.find(CSM_APP_ID, SUB_ACCOUNTS_TABLE, filter);
+            if (subUserRecord != null && !subUserRecord.isEmpty()) {
+                subUserRecord.putAll(updateFields);
+                recordManager.createRecord(CSM_APP_ID, SUB_ACCOUNTS_TABLE, subUserRecord, Arrays.asList("id", "login_identifier"));
+            }
+            return;
+        }
+
+        if (appToken != null && !appToken.isBlank()) {
+            SearchFilter filter = new SearchFilter();
+            filter.setField("app_token");
+            filter.setType("eq");
+            filter.setValue(appToken);
+            Map<String, Object> accountRecord = recordManager.find(CSM_APP_ID, ACCOUNTS_TABLE, filter);
+            if (accountRecord != null && !accountRecord.isEmpty()) {
+                accountRecord.putAll(updateFields);
+                recordManager.createRecord(CSM_APP_ID, ACCOUNTS_TABLE, accountRecord, Arrays.asList("app_token"));
+                return;
+            }
+        }
+
+        updateUserFieldById(user.getId(), updateFields);
+    }
+
+    public void clearSessionToken(User user) {
+        if (user == null) {
+            return;
+        }
+
+        Map<String, Object> updateFields = new HashMap<>();
+        updateFields.put("refresh_token", null);
+        updateFields.put("refresh", null);
+        updateFields.put("refresh_token_ip", null);
+        updateFields.put("refresh_token_ua", null);
+        updateFields.put("refresh_token_expiry", null);
+
+        String appToken = user.getAppToken();
+        if (isSubUserByAppToken(appToken)) {
+            SearchFilter filter = new SearchFilter();
+            filter.setField("app_token");
+            filter.setType("eq");
+            filter.setValue(appToken);
+            Map<String, Object> subUserRecord = recordManager.find(CSM_APP_ID, SUB_ACCOUNTS_TABLE, filter);
+            if (subUserRecord != null && !subUserRecord.isEmpty()) {
+                subUserRecord.putAll(updateFields);
+                recordManager.createRecord(CSM_APP_ID, SUB_ACCOUNTS_TABLE, subUserRecord, Arrays.asList("id", "login_identifier"));
+            }
+            return;
+        }
+
+        if (appToken != null && !appToken.isBlank()) {
+            SearchFilter filter = new SearchFilter();
+            filter.setField("app_token");
+            filter.setType("eq");
+            filter.setValue(appToken);
+            Map<String, Object> accountRecord = recordManager.find(CSM_APP_ID, ACCOUNTS_TABLE, filter);
+            if (accountRecord != null && !accountRecord.isEmpty()) {
+                accountRecord.putAll(updateFields);
+                recordManager.createRecord(CSM_APP_ID, ACCOUNTS_TABLE, accountRecord, Arrays.asList("app_token"));
+                return;
+            }
+        }
+
+        updateUserFieldById(user.getId(), updateFields);
     }
 
     /**
@@ -462,7 +615,67 @@ public class UserService {
             return Optional.empty();
         }
 
+        subUserRecord = ensureSubUserCanonicalFields(subUserRecord, parentAccountRecord);
+
         User user = mapMainAccountToUser(parentAccountRecord, false);
+
+        // Session and permission isolation: sub-user must keep its own identity,
+        // never share the parent id in principal context.
+        Object subUserIdObj = subUserRecord.get("id");
+        if (subUserIdObj instanceof String subUserId && !subUserId.isBlank()) {
+            user.setId(subUserId);
+        }
+        Object loginIdentifierObj = subUserRecord.get("login_identifier");
+        if (loginIdentifierObj instanceof String loginIdentifier && !loginIdentifier.isBlank()) {
+            user.setUsername(loginIdentifier);
+            if (user.getEmail() == null || user.getEmail().isBlank()) {
+                user.setEmail(loginIdentifier);
+            }
+        }
+
+        Object subEmailObj = subUserRecord.get("email");
+        if (subEmailObj instanceof String subEmail && !subEmail.isBlank()) {
+            user.setEmail(subEmail);
+        }
+
+        Object subUsernameObj = subUserRecord.get("username");
+        if (subUsernameObj instanceof String subUsername && !subUsername.isBlank()) {
+            user.setUsername(subUsername);
+        }
+
+        Object subPhoneObj = subUserRecord.get("phoneNumber");
+        if (subPhoneObj instanceof String) {
+            user.setPhoneNumber((String) subPhoneObj);
+        }
+
+        Object subFullNameObj = subUserRecord.get("full_name");
+        if (subFullNameObj instanceof String subFullName && !subFullName.isBlank()) {
+            user.setFullName(subFullName);
+        }
+
+        Object subAvatarObj = subUserRecord.get("avatar");
+        if (subAvatarObj instanceof String subAvatar) {
+            user.setAvatar(subAvatar);
+        }
+
+        Object subAddressObj = subUserRecord.get("user_address");
+        if (subAddressObj instanceof String) {
+            user.setUserAddress((String) subAddressObj);
+        } else if (subAddressObj instanceof List<?>) {
+            user.setUserAddress(GSON.toJson(subAddressObj));
+        }
+
+        Object subActivedObj = subUserRecord.get("actived");
+        if (subActivedObj instanceof Boolean) {
+            user.setActived((Boolean) subActivedObj);
+        }
+
+        Object subPassObj = subUserRecord.get("pass");
+        if (subPassObj instanceof String) {
+            user.setPassword((String) subPassObj);
+        }
+
+        user.setGroupRights(toMapListFlexible(subUserRecord.get("group_rights")));
 
         // Sub-user permissions must be deterministic: bitfield -> (permissions, menus) is source of truth.
         // Add/deny fields are applied as final overlays so persisted rules are always enforced.
@@ -490,6 +703,49 @@ public class UserService {
         Object subRefreshObj = subUserRecord.get("refresh");
         if (subRefreshObj instanceof String subRefresh && !subRefresh.isBlank()) {
             user.setRefreshToken(subRefresh);
+        } else {
+            Object subRefreshTokenObj = subUserRecord.get("refresh_token");
+            if (subRefreshTokenObj instanceof String subRefreshToken && !subRefreshToken.isBlank()) {
+                user.setRefreshToken(subRefreshToken);
+            }
+        }
+
+        Object subRefreshIpObj = subUserRecord.get("refresh_token_ip");
+        if (subRefreshIpObj instanceof String) {
+            user.setRefreshTokenIp((String) subRefreshIpObj);
+        }
+
+        Object subRefreshUaObj = subUserRecord.get("refresh_token_ua");
+        if (subRefreshUaObj instanceof String) {
+            user.setRefreshTokenUa((String) subRefreshUaObj);
+        }
+
+        Object subRefreshExpiryObj = subUserRecord.get("refresh_token_expiry");
+        if (subRefreshExpiryObj instanceof Number) {
+            user.setRefreshTokenExpiry(((Number) subRefreshExpiryObj).longValue());
+        } else if (subRefreshExpiryObj instanceof String) {
+            try {
+                user.setRefreshTokenExpiry(Long.parseLong((String) subRefreshExpiryObj));
+            } catch (NumberFormatException ignore) {
+                user.setRefreshTokenExpiry(null);
+            }
+        }
+
+        Object subLoginVersionObj = subUserRecord.get("login_version");
+        if (subLoginVersionObj == null) {
+            subLoginVersionObj = subUserRecord.get("loginVersion");
+        }
+        if (subLoginVersionObj instanceof Number) {
+            user.setLoginVersion(((Number) subLoginVersionObj).intValue());
+        } else if (subLoginVersionObj instanceof String) {
+            try {
+                user.setLoginVersion(Integer.parseInt((String) subLoginVersionObj));
+            } catch (NumberFormatException ignore) {
+                user.setLoginVersion(0);
+            }
+        } else {
+            // Never inherit parent loginVersion for sub-user sessions.
+            user.setLoginVersion(0);
         }
 
         Object subPermissionBitfield = subUserRecord.get("permissionBitfield");
@@ -575,6 +831,99 @@ public class UserService {
         user.setDataScope(PermissionBitfieldUtil.resolveDataScope(normalizedBitfield));
 
         return Optional.of(user);
+    }
+
+    private Map<String, Object> ensureSubUserCanonicalFields(Map<String, Object> subUserRecord, Map<String, Object> parentAccountRecord) {
+        if (subUserRecord == null || subUserRecord.isEmpty()) {
+            return subUserRecord;
+        }
+
+        boolean changed = false;
+        String loginIdentifier = String.valueOf(subUserRecord.getOrDefault("login_identifier", "")).trim();
+        String appToken = String.valueOf(subUserRecord.getOrDefault("app_token", "")).trim();
+
+        if (!subUserRecord.containsKey("username") || String.valueOf(subUserRecord.get("username")).isBlank()) {
+            subUserRecord.put("username", loginIdentifier);
+            changed = true;
+        }
+        if (!subUserRecord.containsKey("email") || String.valueOf(subUserRecord.get("email")).isBlank()) {
+            subUserRecord.put("email", loginIdentifier);
+            changed = true;
+        }
+        if (!subUserRecord.containsKey("phoneNumber")) {
+            subUserRecord.put("phoneNumber", "");
+            changed = true;
+        }
+        if (!subUserRecord.containsKey("full_name") || String.valueOf(subUserRecord.get("full_name")).isBlank()) {
+            subUserRecord.put("full_name", loginIdentifier);
+            changed = true;
+        }
+        if (!subUserRecord.containsKey("user_address")) {
+            subUserRecord.put("user_address", "");
+            changed = true;
+        }
+        if (!subUserRecord.containsKey("avatar")) {
+            subUserRecord.put("avatar", "");
+            changed = true;
+        }
+        if (!subUserRecord.containsKey("group_rights")) {
+            subUserRecord.put("group_rights", new ArrayList<>());
+            changed = true;
+        }
+
+        Object refreshTokenObj = subUserRecord.get("refresh_token");
+        String refreshToken = refreshTokenObj == null ? "" : String.valueOf(refreshTokenObj).trim();
+        Object refreshObj = subUserRecord.get("refresh");
+        String refresh = refreshObj == null ? "" : String.valueOf(refreshObj).trim();
+        if (refreshToken.isBlank()) {
+            subUserRecord.put("refresh_token", !refresh.isBlank() ? refresh : appToken);
+            changed = true;
+        }
+        if (refresh.isBlank()) {
+            String normalizedRefreshToken = String.valueOf(subUserRecord.getOrDefault("refresh_token", "")).trim();
+            subUserRecord.put("refresh", !normalizedRefreshToken.isBlank() ? normalizedRefreshToken : appToken);
+            changed = true;
+        }
+        if (!subUserRecord.containsKey("refresh_token_ip")) {
+            subUserRecord.put("refresh_token_ip", "");
+            changed = true;
+        }
+        if (!subUserRecord.containsKey("refresh_token_ua")) {
+            subUserRecord.put("refresh_token_ua", "");
+            changed = true;
+        }
+        if (!subUserRecord.containsKey("refresh_token_expiry")) {
+            subUserRecord.put("refresh_token_expiry", 0L);
+            changed = true;
+        }
+
+        if (!subUserRecord.containsKey("login_version")) {
+            Object legacyLoginVersion = subUserRecord.getOrDefault("loginVersion", 0);
+            subUserRecord.put("login_version", legacyLoginVersion);
+            changed = true;
+        }
+        if (!subUserRecord.containsKey("loginVersion")) {
+            Object canonicalLoginVersion = subUserRecord.getOrDefault("login_version", 0);
+            subUserRecord.put("loginVersion", canonicalLoginVersion);
+            changed = true;
+        }
+
+        if (!subUserRecord.containsKey("source_app_token")) {
+            String parentAppToken = String.valueOf(parentAccountRecord.getOrDefault("app_token", ""));
+            subUserRecord.put("source_app_token", parentAppToken);
+            changed = true;
+        }
+        if (!subUserRecord.containsKey("app_id") || String.valueOf(subUserRecord.get("app_id")).isBlank()) {
+            String parentAppId = String.valueOf(parentAccountRecord.getOrDefault("app_id", ""));
+            subUserRecord.put("app_id", parentAppId);
+            changed = true;
+        }
+
+        if (changed) {
+            recordManager.createRecord(CSM_APP_ID, SUB_ACCOUNTS_TABLE, subUserRecord, Arrays.asList("id", "login_identifier"));
+        }
+
+        return subUserRecord;
     }
 
     private Map<String, Object> findRoleByCode(String roleCode) {
@@ -1054,7 +1403,21 @@ public class UserService {
             );
             String subUserAppToken = recordManager.csm_encrypt(subUserAppTokenRawData);
             subUserData.put("app_token", subUserAppToken);
+            subUserData.put("source_app_token", parentAppToken);
             subUserData.put("refresh", subUserAppToken);
+            subUserData.put("refresh_token", subUserAppToken);
+            subUserData.put("refresh_token_ip", "");
+            subUserData.put("refresh_token_ua", "");
+            subUserData.put("refresh_token_expiry", 0L);
+            subUserData.put("login_version", 0);
+            subUserData.put("loginVersion", 0);
+            subUserData.put("email", String.valueOf(subUserRequest.getOrDefault("email", loginIdentifier)));
+            subUserData.put("username", String.valueOf(subUserRequest.getOrDefault("username", loginIdentifier)));
+            subUserData.put("phoneNumber", String.valueOf(subUserRequest.getOrDefault("phoneNumber", "")));
+            subUserData.put("full_name", String.valueOf(subUserRequest.getOrDefault("full_name", loginIdentifier)));
+            subUserData.put("user_address", String.valueOf(subUserRequest.getOrDefault("user_address", "")));
+            subUserData.put("avatar", String.valueOf(subUserRequest.getOrDefault("avatar", "")));
+            subUserData.put("group_rights", new ArrayList<>());
 
             List<String> permissions = toStringListFlexible(subUserRequest.get("permissions"));
             List<String> menusPermissions = toStringListFlexible(subUserRequest.get("menusPermissions"));
