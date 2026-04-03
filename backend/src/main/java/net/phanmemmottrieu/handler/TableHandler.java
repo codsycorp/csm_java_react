@@ -1148,7 +1148,8 @@ public class TableHandler {
             objUpdate.put("roles", new ArrayList<>(List.of("admin")));
             objUpdate.put("permissions", new ArrayList<>(List.of("admin", "scope:all")));
             List<String> inheritedMenus = accessContext.menusPermissions == null ? Collections.emptyList() : accessContext.menusPermissions;
-            objUpdate.put("menusPermissions", new ArrayList<>(inheritedMenus.isEmpty() ? DEFAULT_FULL_MENU_PERMISSIONS : inheritedMenus));
+            // Do NOT auto-fill with DEFAULT_FULL_MENU_PERMISSIONS; menus must be explicit
+            objUpdate.put("menusPermissions", new ArrayList<>(inheritedMenus));
             objUpdate.put("dataScope", "ALL");
             return;
         }

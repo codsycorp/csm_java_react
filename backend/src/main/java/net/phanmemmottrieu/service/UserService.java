@@ -687,36 +687,24 @@ public class UserService {
         }
         user.setDev(isDev);
         
-        // Auto-generate permissions and menusPermissions based on user type
+        // Set roles based on user type
         if (isDev) {
             // Dev users: role="dev" (cao hơn admin)
             List<String> devRoles = new ArrayList<>();
             devRoles.add("dev");
             user.setPermissions(devRoles);
-            
-            // Auto-generate menusPermissions from app_id if empty
+            // menusPermissions must come from record explicitly
             if (permissions.isEmpty()) {
-                if (appId != null && !appId.isEmpty()) {
-                    List<String> autoMenus = new ArrayList<>();
-                    autoMenus.add(appId);
-                    user.setMenusPermissions(autoMenus);
-                    logger.info("[mapMainAccountToUser] Dev user {} assigned role=dev with auto-menusPermissions=[{}]", user.getEmail(), appId);
-                }
+                logger.warn("[mapMainAccountToUser] Dev user {} has empty permissions from record", user.getEmail());
             }
         } else if (isMainAccount) {
             // Main account users (csm_accounts): role="admin"
             List<String> adminRoles = new ArrayList<>();
             adminRoles.add("admin");
             user.setPermissions(adminRoles);
-            
-            // Auto-generate menusPermissions from app_id if empty
+            // menusPermissions must come from record explicitly
             if (menusPermissions.isEmpty()) {
-                if (appId != null && !appId.isEmpty()) {
-                    List<String> autoMenus = new ArrayList<>();
-                    autoMenus.add(appId);
-                    user.setMenusPermissions(autoMenus);
-                    logger.info("[mapMainAccountToUser] Main account user {} assigned role=admin with auto-menusPermissions=[{}]", user.getEmail(), appId);
-                }
+                logger.warn("[mapMainAccountToUser] Main account user {} has empty menusPermissions from record", user.getEmail());
             }
         }
 
