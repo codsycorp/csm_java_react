@@ -421,7 +421,7 @@ export default function AdminPage() {
 			return base;
 		}
 
-		const resolvedAppId = (base?.app_id && String(base.app_id).trim()) || appId;
+		const resolvedAppId = "csm";
 		const actorMode: "main" | "sub" = isDevUser ? "main" : "sub";
 		const actorTableName = actorMode === "main" ? "csm_accounts" : "csm_group_members";
 		const runtimeConfig = buildSystemUserMenuConfig({

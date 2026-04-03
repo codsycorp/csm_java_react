@@ -55,7 +55,7 @@ const { RangePicker } = DatePicker;
 type RowData = Record<string, any>;
 type Granularity = "hour" | "day" | "week" | "month" | "year";
 type BoardView = "kanban" | "timeline" | "report";
-type BoardDatabase = Record<string, { rows: any[]; fieldsPK?: string[] }>;
+type BoardDatabase = Record<string, { rows: any[]; fieldsPK?: string[]; fields?: TableField[] }>;
 
 export const KANBAN_CONFIG_TEMPLATE = `{
   "tableName": "crm_tasks",
@@ -468,8 +468,11 @@ export default function CsmKanbanBoard({
 	const titleField = config.titleField || "title";
 	const stageField = config.stageField || "status";
 	const stages = config.stages || [];
+	const [rows, setRows] = useState<RowData[]>([]);
+	const [remoteFields, setRemoteFields] = useState<TableField[]>([]);
 	const fields = useMemo<TableField[]>(() => {
 		if (Array.isArray(menuData?.table) && menuData.table.length > 0) return menuData.table;
+		if (Array.isArray(remoteFields) && remoteFields.length > 0) return remoteFields;
 
 		const dbRows = config.tableName && database?.[config.tableName]?.rows
 			? database[config.tableName].rows
@@ -501,6 +504,7 @@ export default function CsmKanbanBoard({
 		config.tableName,
 		database,
 		menuData?.table,
+		remoteFields,
 		pkField,
 		stageField,
 		titleField,
@@ -530,7 +534,6 @@ export default function CsmKanbanBoard({
 	}), [config.tableName, fields, menuData, menuId, pkFields, t]);
 	const boardTriggers = useMemo<BoardTriggerMap>(() => ((menuData?.trigger || {}) as BoardTriggerMap), [menuData?.trigger]);
 
-	const [rows, setRows] = useState<RowData[]>([]);
 	const [loading, setLoading] = useState(false);
 	const [search, setSearch] = useState("");
 	const [selectedCardId, setSelectedCardId] = useState<string>("");
@@ -556,6 +559,10 @@ export default function CsmKanbanBoard({
 			});
 			const data = (resp as any)?.rows || (resp as any)?.data || [];
 			setRows(Array.isArray(data) ? data : []);
+					const structFields = (resp as any)?.fields;
+					if (Array.isArray(structFields) && structFields.length > 0) {
+						setRemoteFields(structFields as TableField[]);
+					}
 		} catch (err: any) {
 			message.error(err?.message || t("kanban.loadError"));
 		} finally {
@@ -568,6 +575,9 @@ export default function CsmKanbanBoard({
 		const dbEntry = database?.[config.tableName];
 		if (dbEntry?.rows) {
 			setRows(dbEntry.rows);
+					if (Array.isArray((dbEntry as any).fields) && (dbEntry as any).fields.length > 0) {
+						setRemoteFields((dbEntry as any).fields as TableField[]);
+					}
 		} else {
 			loadData();
 		}
@@ -642,18 +652,36 @@ export default function CsmKanbanBoard({
 		return result;
 	}, [selectEnums]);
 
+	const getRowFieldValue = useCallback((row: RowData, fieldName?: string) => {
+		if (!row || !fieldName) return undefined;
+		if (Object.prototype.hasOwnProperty.call(row, fieldName)) return row[fieldName];
+		const lower = String(fieldName).toLowerCase();
+		const matchedKey = Object.keys(row).find((key) => key.toLowerCase() === lower);
+		return matchedKey ? row[matchedKey] : undefined;
+	}, []);
+
+	const getLinkedLabel = useCallback((fieldName: string | undefined, value: any) => {
+		if (!fieldName || value == null) return "";
+		const enumObj = (selectEnums as Record<string, any>)[fieldName];
+		if (enumObj && Object.prototype.hasOwnProperty.call(enumObj, String(value))) {
+			const text = enumObj[String(value)]?.text;
+			if (text != null && text !== "") return String(text);
+		}
+		return String(value);
+	}, [selectEnums]);
+
 	const filteredRows = useMemo(() => {
 		const q = search.trim().toLowerCase();
 		if (!q) return rows;
 		return rows.filter((row) => [
-			row[titleField],
-			config.descriptionField ? row[config.descriptionField] : undefined,
-			config.assigneeField ? row[config.assigneeField] : undefined,
-			config.labelField ? row[config.labelField] : undefined,
+			getLinkedLabel(config.titleField, getRowFieldValue(row, config.titleField)),
+			config.descriptionField ? getLinkedLabel(config.descriptionField, getRowFieldValue(row, config.descriptionField)) : undefined,
+			config.assigneeField ? getLinkedLabel(config.assigneeField, getRowFieldValue(row, config.assigneeField)) : undefined,
+			config.labelField ? getLinkedLabel(config.labelField, getRowFieldValue(row, config.labelField)) : undefined,
 		]
 			.filter((item) => item !== undefined && item !== null)
 			.some((item) => String(item).toLowerCase().includes(q)));
-	}, [config.assigneeField, config.descriptionField, config.labelField, rows, search, titleField]);
+	}, [config.assigneeField, config.descriptionField, config.labelField, config.titleField, getLinkedLabel, getRowFieldValue, rows, search]);
 
 	const byStage = useMemo(() => {
 		const map = new Map<string, RowData[]>();
@@ -974,12 +1002,15 @@ export default function CsmKanbanBoard({
 														{stageRows.map((row) => {
 															const cardId = String(row[pkField]);
 															const selected = selectedCardId === cardId;
-															const desc = config.descriptionField ? row[config.descriptionField] : undefined;
-															const assignee = config.assigneeField ? row[config.assigneeField] : undefined;
-															const priority = config.priorityField ? row[config.priorityField] : undefined;
-															const dueAt = config.dueDateField ? row[config.dueDateField] : undefined;
-															const label = config.labelField ? row[config.labelField] : undefined;
-															const overdue = dueAt ? isOverdue(dueAt, row[stageField]) : false;
+															const titleValue = getRowFieldValue(row, config.titleField || titleField);
+															const desc = config.descriptionField ? getRowFieldValue(row, config.descriptionField) : undefined;
+															const assignee = config.assigneeField ? getRowFieldValue(row, config.assigneeField) : undefined;
+															const priority = config.priorityField ? getRowFieldValue(row, config.priorityField) : undefined;
+															const dueAt = config.dueDateField ? getRowFieldValue(row, config.dueDateField) : undefined;
+															const label = config.labelField ? getRowFieldValue(row, config.labelField) : undefined;
+															const stageValue = getRowFieldValue(row, stageField);
+															const overdue = dueAt ? isOverdue(dueAt, String(stageValue || "")) : false;
+															const priorityText = config.priorityField ? getLinkedLabel(config.priorityField, priority) : "";
 															return (
 																<DraggableCard id={cardId} key={cardId}>
 																	<Card
@@ -999,7 +1030,7 @@ export default function CsmKanbanBoard({
 																		<Space direction="vertical" size={6} style={{ width: "100%" }}>
 																			<Row gutter={8} justify="space-between" align="top">
 																				<Col flex="auto">
-																					<Typography.Text strong style={{ fontSize: 13 }}>{String(row[titleField] || t("kanban.noName"))}</Typography.Text>
+																					<Typography.Text strong style={{ fontSize: 13 }}>{String(titleValue || t("kanban.noName"))}</Typography.Text>
 																				</Col>
 																				<Col>
 																					<Space size={2}>
@@ -1014,7 +1045,7 @@ export default function CsmKanbanBoard({
 																				</Typography.Text>
 																			)}
 																			<Space size={4} wrap>
-																				{priority && <Badge color={priorityColor(String(priority))} text={<Typography.Text style={{ fontSize: 11 }}>{getPriorityLabel(String(priority))}</Typography.Text>} />}
+																				{priority && <Badge color={priorityColor(String(priorityText || priority))} text={<Typography.Text style={{ fontSize: 11 }}>{getPriorityLabel(String(priorityText || priority))}</Typography.Text>} />}
 																				{label && <Tag style={{ fontSize: 11, margin: 0 }}>{String(label)}</Tag>}
 																				{dueAt && <Typography.Text type={overdue ? "danger" : "secondary"} style={{ fontSize: 11 }}>{overdue ? `${t("kanban.overdue")} • ` : ""}{formatDate(dueAt, lang, true)}</Typography.Text>}
 																				{assignee && <Typography.Text type="secondary" style={{ fontSize: 11 }}>@{String(assignee)}</Typography.Text>}
@@ -1063,14 +1094,14 @@ export default function CsmKanbanBoard({
 																		<Row justify="space-between" gutter={8}>
 																			<Col flex="auto">
 																				<Space direction="vertical" size={2}>
-																					<Typography.Text strong>{String(row[titleField] || t("kanban.noName"))}</Typography.Text>
+																					<Typography.Text strong>{String(getRowFieldValue(row, config.titleField || titleField) || t("kanban.noName"))}</Typography.Text>
 																					<Typography.Text type="secondary">{formatDate(row[timelineField], lang, true) || t("kanban.noDate")}</Typography.Text>
 																				</Space>
 																			</Col>
 																			<Col>
 																				<Space size={4}>
-																					<Tag color={priorityColor(String(config.priorityField ? row[config.priorityField] : ""))}>{config.priorityField ? getPriorityLabel(String(row[config.priorityField])) : t("kanban.reportItem")}</Tag>
-																					<Tag>{stages.find((stage) => stage.id === String(row[stageField]))?.label || String(row[stageField] || "")}</Tag>
+																					<Tag color={priorityColor(String(config.priorityField ? getLinkedLabel(config.priorityField, getRowFieldValue(row, config.priorityField)) : ""))}>{config.priorityField ? getPriorityLabel(String(getLinkedLabel(config.priorityField, getRowFieldValue(row, config.priorityField)))) : t("kanban.reportItem")}</Tag>
+																					<Tag>{stages.find((stage) => stage.id === String(getRowFieldValue(row, stageField)))?.label || String(getRowFieldValue(row, stageField) || "")}</Tag>
 																				</Space>
 																			</Col>
 																		</Row>

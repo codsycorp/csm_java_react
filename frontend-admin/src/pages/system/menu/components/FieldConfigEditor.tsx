@@ -168,6 +168,7 @@ export function FieldConfigEditor({ value, onChange }: FieldConfigEditorProps) {
             f_header: fieldName,
             f_types: "ed",
             f_show: 1,
+            f_required: 0,
             f_search: 0,
             f_report: 0,
             f_fixcol: 0,
@@ -199,7 +200,7 @@ export function FieldConfigEditor({ value, onChange }: FieldConfigEditorProps) {
     setEditing(record || null);
     setOpen(true);
     setTimeout(() => {
-      form.setFieldsValue(record || { f_show: 1, f_stt: (data.length || 0) + 1, f_types: "ed" });
+      form.setFieldsValue(record || { f_show: 1, f_required: 0, f_stt: (data.length || 0) + 1, f_types: "ed" });
     }, 0);
   };
 
@@ -219,6 +220,7 @@ export function FieldConfigEditor({ value, onChange }: FieldConfigEditorProps) {
       ...editing,
       ...vals,
       f_show: toFlag(vals.f_show),
+      f_required: toFlag((vals as any).f_required),
       f_search: toFlag(vals.f_search),
       f_report: toFlag(vals.f_report),
       f_fixcol: toFlag(vals.f_fixcol),
@@ -391,6 +393,12 @@ export function FieldConfigEditor({ value, onChange }: FieldConfigEditorProps) {
       render: (v: any) => (Number(v) === 1 ? t('system.menu.field.yes') : t('system.menu.field.no')),
     },
     {
+      title: "Bắt buộc",
+      dataIndex: "f_required",
+      width: 80,
+      render: (v: any) => (Number(v) === 1 ? t('system.menu.field.yes') : t('system.menu.field.no')),
+    },
+    {
       title: t('system.menu.field.action'),
       width: 160,
       render: (_: any, record: TableField, index: number) => {
@@ -539,6 +547,11 @@ export function FieldConfigEditor({ value, onChange }: FieldConfigEditorProps) {
           <Row gutter={12}>
             <Col span={6}>
               <Form.Item name="f_show" label="Hiện" valuePropName="checked" initialValue={true}>
+                <Switch />
+              </Form.Item>
+            </Col>
+            <Col span={6}>
+              <Form.Item name="f_required" label="Bắt buộc nhập" valuePropName="checked" initialValue={false}>
                 <Switch />
               </Form.Item>
             </Col>

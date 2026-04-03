@@ -665,6 +665,105 @@ function resolveMultilingualText(raw: any, fallback = "", langInput?: string): s
   return String(fallback || "");
 }
 
+function resolveFieldLabel(field: TableField, langInput?: string, translate?: any): string {
+  const lang = String(langInput || (typeof navigator !== "undefined" ? navigator.language : "vi") || "vi").toLowerCase();
+  const rawHeaderByLang = lang.startsWith("en")
+    ? ((field as any).f_header_en ?? (field as any).f_header)
+    : lang.startsWith("zh")
+      ? ((field as any).f_header_zh ?? (field as any).f_header)
+      : ((field as any).f_header_vi ?? (field as any).f_header);
+
+  const resolved = resolveMultilingualText(rawHeaderByLang, field.f_name, lang);
+  if (resolved.includes(".")) {
+    return translate ? translate(resolved, { defaultValue: resolved }) : resolved;
+  }
+  return resolved;
+}
+
+function isRequiredByConfig(field: TableField): boolean {
+  const requiredFlag = Number((field as any).f_required ?? (field as any).required ?? (field as any).f_buocnhap);
+  if (requiredFlag === 1) return true;
+  const types = String(field.f_types || "").toLowerCase();
+  const tokens = types.split(/[\s,;|]+/).filter(Boolean);
+  return tokens.includes("rq") || tokens.includes("required") || tokens.includes("notnull") || tokens.includes("nn");
+}
+
+function isEmptyRequiredValue(value: any): boolean {
+  if (value == null) return true;
+  if (typeof value === "string") return value.trim() === "";
+  if (Array.isArray(value)) return value.length === 0;
+  if (dayjs.isDayjs(value)) return !value.isValid();
+  if (typeof value === "object") {
+    return Object.keys(value).length === 0;
+  }
+  return false;
+}
+
+function resolveNumberLocale(langInput?: string): string {
+  const lang = String(langInput || (typeof navigator !== "undefined" ? navigator.language : "vi") || "vi").toLowerCase();
+  if (lang.startsWith("zh")) return "zh-CN";
+  if (lang.startsWith("vi")) return "vi-VN";
+  return "en-US";
+}
+
+function getLocaleNumberSeparators(locale: string): { group: string; decimal: string } {
+  try {
+    const parts = new Intl.NumberFormat(locale).formatToParts(12345.6);
+    const group = parts.find((part) => part.type === "group")?.value || ",";
+    const decimal = parts.find((part) => part.type === "decimal")?.value || ".";
+    return { group, decimal };
+  } catch {
+    return { group: ",", decimal: "." };
+  }
+}
+
+function parseNumberByLocale(input: any, locale: string): number {
+  if (typeof input === "number") return input;
+  if (input == null) return NaN;
+
+  const { group, decimal } = getLocaleNumberSeparators(locale);
+  const raw = String(input)
+    .trim()
+    .replace(/\s+/g, "")
+    .replace(new RegExp(`[^0-9\\-\\${group}\\${decimal}]`, "g"), "");
+
+  if (!raw) return NaN;
+  const normalized = raw
+    .replace(new RegExp(`\\${group}`, "g"), "")
+    .replace(new RegExp(`\\${decimal}`, "g"), ".");
+
+  return Number(normalized);
+}
+
+function formatNumberByLocale(value: any, locale: string, decimals: number): string {
+  if (value == null || value === "") return "";
+  const parsed = typeof value === "number" ? value : parseNumberByLocale(value, locale);
+  if (!Number.isFinite(parsed)) return String(value ?? "");
+  const precision = Number.isFinite(decimals) && decimals > 0 ? decimals : 0;
+  return new Intl.NumberFormat(locale, {
+    minimumFractionDigits: precision,
+    maximumFractionDigits: precision,
+  }).format(parsed);
+}
+
+function encodeHtmlValue(raw: string): string {
+  if (raw == null) return "";
+  try {
+    return encodeURIComponent(String(raw));
+  } catch {
+    return String(raw);
+  }
+}
+
+function decodeHtmlValue(raw: string): string {
+  if (raw == null) return "";
+  try {
+    return decodeURIComponent(String(raw));
+  } catch {
+    return String(raw);
+  }
+}
+
 // Helper encode HTML - csmEncrypt đã tự làm encodeURIComponent bên trong rồi!
 // CHỈ cần gọi csmEncrypt(plainHTML)
 function encodeHtmlField(html: string): string {
@@ -882,7 +981,12 @@ function MultilingualTabs({ fields, form }: { fields: TableField[]; form: any })
                 const fieldLabel = resolveMultilingualText(field.f_header, field.f_name, lang);
                 const types = (field.f_types || '').toLowerCase();
                 if (/html|richtext/.test(types)) {
-                  return <Form.Item key={field.f_name} name={field.f_name} label={fieldLabel}><HtmlEditor /></Form.Item>;
+                  const value = decodeHtmlValue(String(form.getFieldValue(field.f_name) ?? ''));
+                  return (
+                    <Form.Item key={field.f_name} name={field.f_name} label={fieldLabel}>
+                      <HtmlEditor value={value} onChange={(val: string) => form.setFieldsValue({ [field.f_name]: val })} appId={currentAppId} />
+                    </Form.Item>
+                  );
                 }
                 if (/textarea|memo/.test(types)) {
                   return <Form.Item key={field.f_name} name={field.f_name} label={fieldLabel}><TextArea rows={6} /></Form.Item>;
@@ -925,12 +1029,14 @@ function getFieldComponent(
   permissions?: number,
   menusPermissions?: Record<string | number, number>,
   decrypt?: (s: string) => string,
-  translate?: (key: string, defaultValue?: string) => string
+  translate?: (key: string, defaultValue?: string) => string,
+  currentLang?: string
 ) {
   const types = (f.f_types || "ed").toLowerCase(); // default to 'ed' (text input)
   const key = f.f_name;
-  const lang = (navigator.language || 'vi').toLowerCase();
-  const fieldLabel = resolveMultilingualText((f as any).f_header, f.f_name, lang);
+  const lang = String(currentLang || navigator.language || 'vi').toLowerCase();
+  const numberLocale = resolveNumberLocale(lang);
+  const fieldLabel = resolveFieldLabel(f, lang, translate);
   const initialVal = fieldValues?.[key];
   
   // Kiểu Readonly: chứa 'ro' trong f_types - chỉ hiển thị, không cho edit
@@ -986,41 +1092,21 @@ function getFieldComponent(
     return sourceMenus.map((item: any) => mapNode(item)).filter(Boolean);
   };
   
-    // Kiểu HTML/RichText hoặc edt
-    if (/html|richtext/.test(types) || types === 'edt') {
-      // Always decrypt before passing to HtmlEditor, always encrypt on change
-      function HtmlEditorField() {
-        const formValue = form.getFieldValue(key);
-        const hasFormValue = formValue !== undefined && formValue !== null && formValue !== '';
-        const value = React.useMemo(() => {
-          // Nếu form có giá trị, giải mã (hỗ trợ cả dữ liệu cũ lẫn mới)
-          if (hasFormValue && typeof formValue === 'string') {
-            return decodeHtmlField(formValue);
-          }
-          // Nếu không có form value, dùng initialVal (CẦN giải mã!)
-          if (initialVal && typeof initialVal === 'string') {
-            return decodeHtmlField(initialVal);
-          }
-          return '';
-        }, [formValue, hasFormValue]);
-        const handleHtmlChange = React.useCallback((val: string) => {
-          // Mã hóa khi thay đổi: encodeURIComponent → csmEncrypt
-          const encoded = encodeHtmlField(val);
-          const current = form.getFieldValue(key);
-          if (encoded !== current) {
-            form.setFieldsValue({ [key]: encoded });
-          }
-        }, [form, key]);
-        return <HtmlEditor value={value} onChange={handleHtmlChange} appId={appId} />;
-      }
-      // initialValue sẽ được set tớ form.setFieldsValue() trước khi component render
-      // Và nọ đã là dữ liệu giải mã (qua decodeHtmlField)
-      // Nên không cần mã hóa lại
-      return (
-        <Form.Item key={key} name={key} label={fieldLabel}>
-          <HtmlEditorField />
-        </Form.Item>
-      );
+  // Kiểu HTML/RichText dùng HtmlEditor thuần (không mã hóa/giải mã)
+  if (/html|richtext/.test(types)) {
+    const value = decodeHtmlValue(String(form.getFieldValue(key) ?? initialVal ?? ''));
+    return (
+      <Form.Item key={key} name={key} label={fieldLabel}>
+        <HtmlEditor value={value} onChange={(val: string) => form.setFieldsValue({ [key]: val })} appId={appId} />
+      </Form.Item>
+    );
+  }
+
+  // edt dùng TextArea
+  if (types === 'edt') {
+    return <Form.Item key={key} name={key} label={fieldLabel} initialValue={initialVal}>
+      <Input.TextArea rows={8} disabled={isReadonly} />
+    </Form.Item>;
   }
   
   // Kiểu Code Editor: codejs, codejava, codehtml, ... (dùng CodeMirror như TriggerEditor)
@@ -1140,8 +1226,11 @@ function getFieldComponent(
       <InputNumber 
         style={{ width: '100%' }} 
         precision={dec > 0 ? dec : 0}
-        formatter={value => `${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}
-        parser={value => value!.replace(/\$\s?|(,*)/g, '')}
+        formatter={(value) => formatNumberByLocale(value, numberLocale, dec > 0 ? dec : 0)}
+        parser={(value) => {
+          const parsed = parseNumberByLocale(value, numberLocale);
+          return Number.isFinite(parsed) ? String(parsed) : "";
+        }}
         disabled={isReadonly}
       />
     </Form.Item>;
@@ -1512,7 +1601,7 @@ export function CsmEditModal({
   const [formUpdated, setFormUpdated] = useState(0);
   const [valuesReady, setValuesReady] = useState(false);
   const modalContentRef = useRef<HTMLDivElement>(null);
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const user = useUserStore();
   const currentAppId = appId || user.app_id || "csm";
   
@@ -1758,9 +1847,9 @@ export function CsmEditModal({
             console.warn(`Failed to convert date for field ${key}:`, e);
           }
         }
-        // Đảm bảo các trường html/richtext/edt luôn là decrypted khi set vào form
-        if ((/html|richtext/.test(types) || types === 'edt') && typeof convertedValues[key] === 'string') {
-          convertedValues[key] = decodeHtmlField(convertedValues[key]);
+        // Keep html/edt values as plain text (no decrypt transform)
+        if (/html|richtext/.test(types) && typeof convertedValues[key] === 'string') {
+          convertedValues[key] = decodeHtmlValue(convertedValues[key]);
         }
         // Parse JSON for image/album fields - only if it's a JSON array string
         if (/img|image|avatar|cover|album|images|gallery/.test(types) && typeof convertedValues[key] === 'string') {
@@ -1894,6 +1983,31 @@ export function CsmEditModal({
           if (submitting) return;
           setSubmitting(true);
           form.validateFields().then(async (values) => {
+            const missingRequiredField = dynamicFields.find((f) => {
+              if (!isRequiredByConfig(f)) return false;
+              return isEmptyRequiredValue(values?.[f.f_name]);
+            });
+
+            if (missingRequiredField) {
+              const missingLabel = resolveFieldLabel(missingRequiredField, i18n.language, t);
+              const warningTitle = getLangText(i18n.language, {
+                vi: "Thiếu dữ liệu bắt buộc",
+                en: "Missing required data",
+                zh: "缺少必填数据",
+              });
+              const warningContent = getLangText(i18n.language, {
+                vi: `Vui lòng nhập trường: ${missingLabel}`,
+                en: `Please fill in field: ${missingLabel}`,
+                zh: `请填写字段：${missingLabel}`,
+              });
+              form.scrollToField(missingRequiredField.f_name, { behavior: "smooth", block: "center" } as any);
+              Modal.warning({
+                title: warningTitle,
+                content: warningContent,
+              });
+              return;
+            }
+
             const encodedValues = { ...values };
             dynamicFields.forEach(f => {
               const types = (f.f_types || '').toLowerCase();
@@ -1903,8 +2017,9 @@ export function CsmEditModal({
                   encodedValues[f.f_name] = encodedValues[f.f_name].toISOString();
                 }
               }
-              // HTML/richtext/edt fields lưu nhập mã hóa trong HtmlEditorField (handleHtmlChange)
-              // Nên không cần mã hóa lại ở đây - chỉ lấy giá trị như là
+              if (/html|richtext/.test(types) && typeof encodedValues[f.f_name] === 'string') {
+                encodedValues[f.f_name] = encodeHtmlValue(encodedValues[f.f_name]);
+              }
               // Stringify image/album fields
               if (/img|image|avatar|cover|album|images|gallery/.test(types)) {
                 if (Array.isArray(encodedValues[f.f_name])) {
@@ -2061,7 +2176,8 @@ export function CsmEditModal({
                               } catch {}
                               return decoded;
                             },
-                            (key: string, defaultValue?: string) => t(key, defaultValue || "")
+                            (key: string, defaultValue?: string) => t(key, defaultValue || ""),
+                            i18n.language
                           )}
                         </div>
                       ))}
@@ -2091,7 +2207,8 @@ export function CsmEditModal({
                         } catch {}
                         return decoded;
                       },
-                      (key: string, defaultValue?: string) => t(key, defaultValue || "")
+                      (key: string, defaultValue?: string) => t(key, defaultValue || ""),
+                      i18n.language
                     )}
                   </div>
                 ))}
@@ -2235,28 +2352,19 @@ export function CsmEditModal({
                     const fieldValue = formValues[actualFieldName];
                     
                     // HTML/RichText Editor
-                    if (/html|richtext/.test(types) || types === 'edt') {
-                      // Always decrypt before passing to HtmlEditor, always encrypt on change
-                      function HtmlEditorField() {
-                        const encryptedValue = form.getFieldValue(actualFieldName) ?? '';
-                        const value = React.useMemo(() => {
-                          if (typeof encryptedValue === 'string' && encryptedValue !== '') {
-                            return decodeHtmlField(encryptedValue);
-                          }
-                          return String(encryptedValue ?? '');
-                        }, [encryptedValue]);
-                        const handleHtmlChange = React.useCallback((val: string) => {
-                          const encrypted = encodeHtmlField(val);
-                          const current = form.getFieldValue(actualFieldName);
-                          if (encrypted !== current) {
-                            form.setFieldsValue({ [actualFieldName]: encrypted });
-                          }
-                        }, [form, actualFieldName]);
-                        return <HtmlEditor value={value} onChange={handleHtmlChange} appId={currentAppId} />;
-                      }
+                    if (/html|richtext/.test(types)) {
+                      const value = decodeHtmlValue(String(form.getFieldValue(actualFieldName) ?? fieldValue ?? ''));
                       return (
-                        <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel} initialValue={csmEncrypt('')}>
-                          <HtmlEditorField />
+                        <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
+                          <HtmlEditor value={value} onChange={(val: string) => form.setFieldsValue({ [actualFieldName]: val })} appId={currentAppId} />
+                        </Form.Item>
+                      );
+                    }
+
+                    if (types === 'edt') {
+                      return (
+                        <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
+                          <TextArea rows={6} />
                         </Form.Item>
                       );
                     }
@@ -2393,33 +2501,16 @@ export function CsmEditModal({
                   const baseLabel = resolveMultilingualText(block.f_header, block.f_name, lang);
                   const label = baseLabel + (lang === 'vi' ? '' : ` (${lang.toUpperCase()})`);
                   const types = (block.f_types || '').toLowerCase();
-                  // Nếu block là content_multi thì dùng HTML editor với mã hóa/giải mã đúng
-                  if (types === 'content_multi' || /html|richtext/.test(types) || types === 'edt') {
-                    function HtmlEditorField() {
-                      const encryptedValue = form.getFieldValue(fieldName) ?? '';
-                      const value = React.useMemo(() => {
-                        if (typeof encryptedValue === 'string' && encryptedValue !== '') {
-                          return decodeHtmlField(encryptedValue);
-                        }
-                        return String(encryptedValue ?? '');
-                      }, [encryptedValue]);
-                      const handleHtmlChange = React.useCallback((val: string) => {
-                        // Mã hóa khi thay đổi: encodeURIComponent → csmEncrypt
-                        const encoded = encodeHtmlField(val);
-                        const current = form.getFieldValue(fieldName);
-                        if (encoded !== current) {
-                          form.setFieldsValue({ [fieldName]: encoded });
-                        }
-                      }, [form, fieldName]);
-                      return <HtmlEditor value={value} onChange={handleHtmlChange} appId={currentAppId} />;
-                    }
+                  // content_multi/html/richtext dùng HtmlEditor thuần
+                  if (types === 'content_multi' || /html|richtext/.test(types)) {
+                    const value = decodeHtmlValue(String(form.getFieldValue(fieldName) ?? ''));
                     return (
-                      <Form.Item key={fieldName} name={fieldName} label={label} initialValue={csmEncrypt('')}>
-                        <HtmlEditorField />
+                      <Form.Item key={fieldName} name={fieldName} label={label}>
+                        <HtmlEditor value={value} onChange={(val: string) => form.setFieldsValue({ [fieldName]: val })} appId={currentAppId} />
                       </Form.Item>
                     );
                   }
-                  // Mặc định dùng textarea
+                  // edt và mặc định dùng textarea
                   return (
                     <Form.Item key={fieldName} name={fieldName} label={label}>
                       <TextArea rows={6} />

@@ -368,7 +368,7 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 			const explicitAllowedKeys = new Set(
 				normalizedMenuTokens.filter(token => !isLegacyAppScopeToken(token, effectiveAppId))
 			);
-			const shouldBypassMenuFilter = isDev || hasLegacyAppOnly || (isAdmin && explicitAllowedKeys.size === 0);
+			const shouldBypassMenuFilter = isDev || hasLegacyAppOnly;
 			const allowedRoutePaths = buildAllowedPathSet(routesForMenu);
 			console.log("[MENU-FILTER] handleAsyncRoutes", {
 				effectiveAppId,
@@ -493,7 +493,7 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 			);
 			const isDev = resolveDevFlag(devFlag ?? userState.dev, userState.roles);
 			const isAdmin = !isDev && (userState.roles || []).some(r => r.trim().toLowerCase() === 'admin');
-			const shouldBypassMenuFilter = isDev || hasLegacyAppOnly || (isAdmin && explicitAllowedKeys.size === 0);
+			const shouldBypassMenuFilter = isDev || hasLegacyAppOnly;
 			const routesForMenu = (isDev
 				? newRoutes.map(r => r.path === '/system'
 					? {

@@ -10,7 +10,7 @@ import { useSocket } from "#src/hooks/useSocket";
 import type { ActionType, ProColumns } from "@ant-design/pro-components";
 import { Button, Input, Space, Tooltip, message, Modal, Tabs, Divider } from "antd";
 import { PlusOutlined, ImportOutlined, ExportOutlined, SearchOutlined } from "@ant-design/icons";
-import { read, utils } from "xlsx";
+import { read, utils, writeFile } from "xlsx";
 import { useAppStore } from "#src/store/app";
 import { useUserStore } from "#src/store/user";
 import { PERMISSION_BITS, hasAnyPermissionBit, hasPermissionBit, parseMenuBitIndex, toPermissionBigInt } from "#src/utils/permission-bitfield";
@@ -35,6 +35,7 @@ export interface TableField {
 	f_search?: number | string;
 	f_fixcol?: number | string;
 	f_pkid?: number | string;
+	f_required?: number | string;
 	f_align?: "left" | "right" | "center" | string;
 	width?: number | string;
 	// Grouping / template
@@ -151,13 +152,90 @@ function safeEval<TArgs extends any[], TReturn>(args: string[], body: string): (
 	}
 }
 
+function resolveNumberLocale(langInput?: string): string {
+	const lang = String(langInput || (typeof navigator !== "undefined" ? navigator.language : "vi") || "vi").toLowerCase();
+	if (lang.startsWith("zh")) return "zh-CN";
+	if (lang.startsWith("vi")) return "vi-VN";
+	return "en-US";
+}
+
+function getLocaleNumberSeparators(locale: string): { group: string; decimal: string } {
+	try {
+		const parts = new Intl.NumberFormat(locale).formatToParts(12345.6);
+		const group = parts.find((part) => part.type === "group")?.value || ",";
+		const decimal = parts.find((part) => part.type === "decimal")?.value || ".";
+		return { group, decimal };
+	} catch {
+		return { group: ",", decimal: "." };
+	}
+}
+
+function parseFlexibleNumberInput(input: any, locale?: string): number {
+	if (typeof input === "number") return input;
+	if (input == null) return NaN;
+	let text = String(input).trim();
+	if (!text) return NaN;
+
+	if (locale) {
+		const { group, decimal } = getLocaleNumberSeparators(locale);
+		text = text
+			.replace(/\s+/g, "")
+			.replace(new RegExp(`[^0-9\\-\\${group}\\${decimal}]`, "g"), "")
+			.replace(new RegExp(`\\${group}`, "g"), "")
+			.replace(new RegExp(`\\${decimal}`, "g"), ".");
+		return Number(text);
+	}
+
+	text = text.replace(/\s+/g, "").replace(/[^0-9,.-]/g, "");
+	const lastComma = text.lastIndexOf(",");
+	const lastDot = text.lastIndexOf(".");
+	let normalized = text;
+
+	if (lastComma >= 0 && lastDot >= 0) {
+		const decimalSep = lastComma > lastDot ? "," : ".";
+		const groupSep = decimalSep === "," ? "." : ",";
+		normalized = normalized.replace(new RegExp(`\\${groupSep}`, "g"), "");
+		normalized = normalized.replace(new RegExp(`\\${decimalSep}`, "g"), ".");
+	} else if (lastComma >= 0) {
+		const parts = normalized.split(",");
+		if (parts.length > 2) {
+			normalized = parts.join("");
+		} else {
+			const fraction = parts[1] || "";
+			normalized = fraction.length === 3 ? parts.join("") : `${parts[0]}.${fraction}`;
+		}
+	} else if (lastDot >= 0) {
+		const parts = normalized.split(".");
+		if (parts.length > 2) {
+			normalized = parts.join("");
+		} else {
+			const fraction = parts[1] || "";
+			normalized = fraction.length === 3 ? parts.join("") : `${parts[0]}.${fraction}`;
+		}
+	}
+
+	return Number(normalized);
+}
+
+function formatLocalizedNumber(value: any, locale: string, decimals: number): string {
+	if (value == null || value === "") return "";
+	const parsed = typeof value === "number" ? value : parseFlexibleNumberInput(value);
+	if (!Number.isFinite(parsed)) return String(value ?? "");
+	const precision = Number.isFinite(decimals) && decimals > 0 ? decimals : 0;
+	return new Intl.NumberFormat(locale, {
+		minimumFractionDigits: precision,
+		maximumFractionDigits: precision,
+	}).format(parsed);
+}
+
 function buildInlineValidationRules(field: TableField): any[] {
 	const types = String(field.f_types || "").toLowerCase();
 	const tokens = types.split(/[\s,;|]+/).filter(Boolean);
 	const key = String(field.f_name || "").toLowerCase();
 	const rules: any[] = [];
 
-	const isRequired = tokens.includes("rq") || tokens.includes("required") || tokens.includes("notnull") || tokens.includes("nn");
+	const requiredFlag = Number((field as any).f_required ?? (field as any).required ?? (field as any).f_buocnhap);
+	const isRequired = requiredFlag === 1 || tokens.includes("rq") || tokens.includes("required") || tokens.includes("notnull") || tokens.includes("nn");
 	const isNumber = /price|number|int|float|double|money|currency/.test(types);
 	const isDate = /^date$/.test(types);
 	const isDateTime = /datetime/.test(types);
@@ -176,7 +254,7 @@ function buildInlineValidationRules(field: TableField): any[] {
 		rules.push({
 			validator: (_: any, value: any) => {
 				if (value == null || value === "") return Promise.resolve();
-				const parsed = typeof value === "number" ? value : Number(String(value).replace(/,/g, "").trim());
+				const parsed = parseFlexibleNumberInput(value);
 				if (Number.isNaN(parsed)) return Promise.reject(new Error(`${field.f_header || field.f_name} phải là số`));
 				return Promise.resolve();
 			},
@@ -188,7 +266,7 @@ function buildInlineValidationRules(field: TableField): any[] {
 			rules.push({
 				validator: (_: any, value: any) => {
 					if (value == null || value === "") return Promise.resolve();
-					const parsed = typeof value === "number" ? value : Number(String(value).replace(/,/g, "").trim());
+					const parsed = parseFlexibleNumberInput(value);
 					if (Number.isNaN(parsed) || parsed < minRaw) {
 						return Promise.reject(new Error(`${field.f_header || field.f_name} phải >= ${minRaw}`));
 					}
@@ -200,7 +278,7 @@ function buildInlineValidationRules(field: TableField): any[] {
 			rules.push({
 				validator: (_: any, value: any) => {
 					if (value == null || value === "") return Promise.resolve();
-					const parsed = typeof value === "number" ? value : Number(String(value).replace(/,/g, "").trim());
+					const parsed = parseFlexibleNumberInput(value);
 					if (Number.isNaN(parsed) || parsed > maxRaw) {
 						return Promise.reject(new Error(`${field.f_header || field.f_name} phải <= ${maxRaw}`));
 					}
@@ -278,7 +356,7 @@ function normalizeInlineRowValues(input: Row, fields: TableField[]): Row {
 				return;
 			}
 			if (typeof raw === "string") {
-				const parsed = Number(raw.replace(/,/g, "").trim());
+				const parsed = parseFlexibleNumberInput(raw);
 				if (!Number.isNaN(parsed)) {
 					normalized[key] = parsed;
 				}
@@ -342,6 +420,7 @@ export function CsmDynamicGrid({
 	allowReadonlyExport?: boolean
 }) {
 	const { t, i18n } = useTranslation();
+	const numberLocale = useMemo(() => resolveNumberLocale(i18n.language), [i18n.language]);
 	const saveActionLabel = useMemo(() => {
 		const lang = String(i18n.language || "").toLowerCase();
 		if (lang.startsWith("zh")) return "保存";
@@ -355,6 +434,7 @@ export function CsmDynamicGrid({
 		return "Cancel";
 	}, [i18n.language]);
 	const actionRef = useRef<ActionType>();
+	const hotkeyScopeRef = useRef<HTMLDivElement>(null);
 	const [data, setData] = useState<Row[]>([]);
 	const [selectedKeys, setSelectedKeys] = useState<React.Key[]>([]);
 	const [editableKeys, setEditableKeys] = useState<React.Key[]>([]);
@@ -1288,7 +1368,7 @@ export function CsmDynamicGrid({
 	// Map backend fields to ProColumns with f_types rules
 	const baseColumns: ProColumns<Row>[] = useMemo(() => {
 		const shown = (m_configs.table || [])
-			.filter((f) => Number(f.f_show) === 1 && f.f_name !== 'id')
+			.filter((f) => Number(f.f_show) === 1 && f.f_name !== 'id' && !/richtext|html/.test(String(f.f_types || '').toLowerCase()))
 			.sort((a, b) => Number(a.f_stt || 0) - Number(b.f_stt || 0));
 
 		const cols: ProColumns<Row>[] = shown.map((f) => {
@@ -1309,7 +1389,7 @@ export function CsmDynamicGrid({
 			const types = (f.f_types || "").toLowerCase();
 			const typeTokens = types.split(/[,\s;|]+/).filter(Boolean);
 			const key = f.f_name;
-			const isNumber = /number|int|float|double|money|currency/.test(types);
+			const isNumber = /price|number|int|float|double|money|currency/.test(types);
 			const isDate = /\bdate\b/.test(types) && !/datetime/.test(types);
 			const isDateTime = /datetime/.test(types);
 			const isTime = /\btime\b/.test(types) && !/datetime/.test(types);
@@ -1360,6 +1440,15 @@ export function CsmDynamicGrid({
 				col.valueType = "select";
 				const ve = selectEnums[f.f_name];
 				if (ve) col.valueEnum = ve as any;
+			}
+
+			if (isNumber) {
+				const decimals = Number((f as any).f_dec ?? 0);
+				col.render = (_dom, entity) => {
+					const raw = entity[f.f_name];
+					if (raw == null || raw === "") return "";
+					return formatLocalizedNumber(raw, numberLocale, Number.isFinite(decimals) && decimals > 0 ? decimals : 0);
+				};
 			}
 
 			if (isFile) {
@@ -1711,7 +1800,7 @@ export function CsmDynamicGrid({
 			return col;
 		});
 		return cols;
-	}, [m_configs.table, selectEnums, i18n.language]);
+	}, [m_configs.table, selectEnums, i18n.language, numberLocale]);
 
   // Apply datacolumntemplate trigger (mutates columns)
 	const columns = useMemo<ProColumns<Row>[]>(() => {
@@ -1769,6 +1858,11 @@ export function CsmDynamicGrid({
 					col.fieldProps = {
 						...(col.fieldProps as Record<string, any> || {}),
 						precision: Number.isFinite(decimals) && decimals > 0 ? decimals : 0,
+						formatter: (value: any) => formatLocalizedNumber(value, numberLocale, Number.isFinite(decimals) && decimals > 0 ? decimals : 0),
+						parser: (value: any) => {
+							const parsed = parseFlexibleNumberInput(value, numberLocale);
+							return Number.isFinite(parsed) ? String(parsed) : "";
+						},
 						...(Number.isFinite(minRaw) ? { min: minRaw } : {}),
 						...(Number.isFinite(maxRaw) ? { max: maxRaw } : {}),
 					};
@@ -1922,7 +2016,7 @@ export function CsmDynamicGrid({
 			});
 		}
 		return cols;
-	}, [baseColumns, m_configs, database, context, canEdit, canDelete, canAdd, onEdit, onDelete, decrypt, appId, tableName, enableInlineCellEdit]);
+	}, [baseColumns, m_configs, database, context, canEdit, canDelete, canAdd, onEdit, onDelete, decrypt, appId, tableName, enableInlineCellEdit, numberLocale]);
 
 	// Apply datarowtemplate trigger (Vue parity: Function("container", "item", code))
 	const rowTemplateFn = useMemo(() => {
@@ -2148,89 +2242,88 @@ export function CsmDynamicGrid({
 		}
 	}, [pendingEditableRowId, searchedData, getRowKey]);
 
-	// Phím tắt cơ bản tương tự Vue: Ctrl+S (save), F4 (add), F3 (edit), F8 (delete)
+	// Phím tắt theo cách tổ chức Vue: Ctrl+S (save), F4 (add), F3 (edit), F8 (delete)
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
+			const activeElement = document.activeElement as HTMLElement | null;
+			const inGridScope = !!(activeElement && hotkeyScopeRef.current?.contains(activeElement));
+			const modalOpen = editorOpen;
+			if (!inGridScope && !modalOpen) return;
+
 			if (e.ctrlKey && e.key.toLowerCase() === "s") {
 				e.preventDefault();
+				if (modalOpen) {
+					const modalSaveBtn = Array.from(document.querySelectorAll(".ant-modal .ant-btn-primary"))
+						.find((btn) => !(btn as HTMLButtonElement).disabled) as HTMLButtonElement | undefined;
+					modalSaveBtn?.click();
+					return;
+				}
+				if (enableInlineCellEdit && editableKeys.length > 0) {
+					const anyAction = actionRef.current as any;
+					if (typeof anyAction?.saveEditable === "function") {
+						editableKeys.forEach((rowKey) => {
+							void anyAction.saveEditable(rowKey);
+						});
+						return;
+					}
+					const localSaveBtn = hotkeyScopeRef.current
+						? (hotkeyScopeRef.current.querySelector(".ant-btn-primary") as HTMLButtonElement | null)
+						: null;
+					localSaveBtn?.click();
+				}
 				return;
 			}
 			if (e.key === "F4" && canAdd) {
 				e.preventDefault();
-				onAdd?.();
+				handleAdd();
 			}
 			if (e.key === "F3" && canEdit && _selectedRow) {
 				e.preventDefault();
-				setEditingRecord(_selectedRow);
-				setEditorOpen(true);
-				onEdit?.(_selectedRow);
+				handleEdit(_selectedRow);
 			}
 			if (e.key === "F8" && canDelete && _selectedRow) {
 				e.preventDefault();
 				// eslint-disable-next-line no-alert
 				const ok = window.confirm("Bạn có chắc muốn xóa bản ghi này?");
-				if (ok && appId) {
-					const pkFields = m_configs.struct?.fieldsPK || ["id"];
-					const obj_update: any = {};
-					const whereOld: any = {};
-					
-					for (const pkField of pkFields) {
-						const oldVal = (_selectedRow as any)[pkField];
-						if (oldVal !== undefined && oldVal !== null) {
-							obj_update[pkField] = oldVal;
-							whereOld[pkField] = oldVal;
-						}
-					}
-					
-					// Check if at least one primary key is present
-					if (Object.keys(whereOld).length === 0) {
-						console.error("❌ No primary key values found:", pkFields);
-						message.error(`Thiếu giá trị khóa chính: ${pkFields.join(", ")}`);
-						return;
-					}
-					
-					updateTableData<Row>({ 
-						app_id: appId, 
-						obj_name: tableName, 
-						command: "delete", 
-						obj_update,
-						pk_fields: pkFields,
-						where: whereOld
-					})
-						.then(() => {
-							// Update local state immediately
-							const selectedRowKey = getRowKey(_selectedRow);
-							const nextRows = data.filter(row => getRowKey(row) !== selectedRowKey);
-							setData(nextRows);
-							syncMasterTableRows(nextRows);
-							message.success("Đã xóa thành công");
-							onDelete?.(_selectedRow);
-						})
-						.catch((err) => {
-							console.error("Delete error:", err);
-							message.error("Xóa thất bại: " + (err as Error)?.message);
-						});
-				}
+				if (ok) void handleDelete(_selectedRow);
 			}
 		};
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
-	}, [canAdd, canEdit, canDelete, onAdd, onEdit, onDelete, _selectedRow, appId, tableName, pkFields, getRowKey]);
+	}, [canAdd, canEdit, canDelete, _selectedRow, enableInlineCellEdit, editableKeys, editorOpen, handleAdd, handleEdit, handleDelete]);
 
-	// Export CSV
+	// Export Excel (.xlsx by default, .xls when configured)
 	const handleExport = () => {
-		const headers = baseColumns.map((c) => (typeof c.title === "string" ? c.title : String(c.key || c.dataIndex || "")));
-		const fields = baseColumns.map((c) => String(c.dataIndex ?? c.key ?? ""));
-		const rows = [headers.join(",")].concat(
-			searchedData.map((r) => fields.map((f) => JSON.stringify(r[f] ?? "")).join(",")),
+		const exportColumns = baseColumns.filter((c) => {
+			const field = String(c.dataIndex ?? c.key ?? "").trim();
+			return field.length > 0;
+		});
+		if (exportColumns.length === 0) {
+			message.warning("Không có cột dữ liệu để xuất");
+			return;
+		}
+
+		const headers = exportColumns.map((c) => (typeof c.title === "string" ? c.title : String(c.key || c.dataIndex || "")));
+		const fields = exportColumns.map((c) => String(c.dataIndex ?? c.key ?? ""));
+		const bodyRows = searchedData.map((row) =>
+			fields.map((field) => {
+				const value = row[field];
+				if (value == null) return "";
+				if (typeof value === "object") return JSON.stringify(value);
+				return value;
+			}),
 		);
-		const blob = new Blob([rows.join("\n")], { type: "text/csv;charset=utf-8;" });
-		const url = URL.createObjectURL(blob);
-		const a = document.createElement("a");
-		a.href = url;
-		a.download = `${m_configs.label || "export"}.csv`;
-		a.click();
-		URL.revokeObjectURL(url);
+
+		const worksheet = utils.aoa_to_sheet([headers, ...bodyRows]);
+		const workbook = utils.book_new();
+		const rawSheetName = String(m_configs.label || m_configs.table_name || "Data");
+		const sheetName = rawSheetName.replace(/[\\/?*\[\]:]/g, "_").slice(0, 31) || "Data";
+		utils.book_append_sheet(workbook, worksheet, sheetName);
+
+		const requestedType = String((m_configs as any)?.export_book_type || (m_configs as any)?.export_type || "xlsx").toLowerCase();
+		const bookType = requestedType === "xls" ? "xls" : "xlsx";
+		const fileNameBase = String(m_configs.label || "export").replace(/[\\/?*\[\]:]/g, "_");
+		writeFile(workbook, `${fileNameBase}.${bookType}`, { bookType });
 	};
 
 	// Import CSV, Excel (.xls, .xlsx) with trigger support
@@ -2387,7 +2480,7 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 	};
 
 	// Default handlers if not provided
-	const handleAdd = () => {
+	function handleAdd() {
 		// If inline editing, add new empty row to table
 		if (enableInlineCellEdit) {
 			// Generate unique ID: appId_timestamp_randomString to avoid collisions
@@ -2440,8 +2533,8 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 			setEditorOpen(true);
 			onAdd?.();
 		}
-	};
-	const handleEdit = (record: Row) => {
+	}
+	function handleEdit(record: Row) {
 		// If inline editing is enabled, activate inline edit mode for the row
 		if (enableInlineCellEdit) {
 			const rowKey = getRowKey(record);
@@ -2466,7 +2559,7 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 			setEditorOpen(true);
 			onEdit?.(record);
 		}
-	};
+	}
 	const handleClone = (record: Row) => {
 		const currentPkFields = getPrimaryKeyFields(m_configs);
 		// Clear all PK fields so cloned row must use a new key.
@@ -2478,7 +2571,7 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 		setCloneData(cloned);
 		setEditorOpen(true);
 	};
-	const handleDelete = async (record: Row) => {
+	async function handleDelete(record: Row) {
 		try {
 			// Detail grid hoặc không có table_name: chỉ xóa từ state local, KHÔNG gọi API
 			// Giống Vue: detail grid chỉ update khi master save
@@ -2551,7 +2644,7 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 			console.error("Delete error:", err);
 			message.error("Xóa thất bại: " + (err as Error).message);
 		}
-	};
+	}
 
 	const tableProps: any = {
 		rowKey: (record: Row) => {
@@ -3134,7 +3227,7 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 		);
 	}
 
-	return React.createElement(React.Fragment, null, ...children);
+	return React.createElement("div", { ref: hotkeyScopeRef }, ...children);
 }
 
 export default CsmDynamicGrid;

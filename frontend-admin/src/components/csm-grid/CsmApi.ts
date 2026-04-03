@@ -784,6 +784,9 @@ export async function updateTableData<T extends Record<string, any>>(params: {
 		.post<ApiResponse<string>>("update-table-data", { json: payload, ignoreLoading: true })
 		.json<ApiResponse<string>>();
 	clearGetTableDataCache();
+	if (res && (res as any).success === false) {
+		throw new Error(String((res as any).message || "Lưu dữ liệu thất bại"));
+	}
 	return res;
 }
 

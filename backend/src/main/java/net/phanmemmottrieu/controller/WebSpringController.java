@@ -3414,6 +3414,12 @@ public class WebSpringController {
                             String dynamicCodeTemplatesJson = SHARED_OBJECT_MAPPER.writeValueAsString(dynamicCodeTemplatesMap);
                             String ssrDynamicCodeScript = "<script>window.__SSR_DYNAMIC_CODE_TEMPLATES__ = " + dynamicCodeTemplatesJson + ";</script>";
                             
+                            // Inject app config (f_logo, f_title) từ sys_la_routers vào window.__APP_CONFIG__
+                            String appConfigFLogo = safeStr(selectedRoute.get("f_logo"));
+                            String appConfigFTitle = safeStr(selectedRoute.get("f_title"));
+                            String appConfigJson = SHARED_OBJECT_MAPPER.writeValueAsString(Map.of("f_logo", appConfigFLogo, "f_title", appConfigFTitle));
+                            String appConfigScript = "<script>window.__APP_CONFIG__ = " + appConfigJson.replace("</", "<\\/") + ";</script>";
+                            
                             // Find </head> and </body> once
                             int headIdx = lower.indexOf("</head>");
                             int bodyIdx = lower.indexOf("</body>");
@@ -3432,10 +3438,10 @@ public class WebSpringController {
                             try {
                                 String injectedHtml;
                                 if (headIdx >= 0) {
-                                    injectedHtml = finalHtmlResponse.substring(0, headIdx) + preloadImageTag + ssrScript + ssrCategoriesScript + ssrRoutesScript + ssrDynamicCodeScript + finalHtmlResponse.substring(headIdx);
+                                    injectedHtml = finalHtmlResponse.substring(0, headIdx) + preloadImageTag + appConfigScript + ssrScript + ssrCategoriesScript + ssrRoutesScript + ssrDynamicCodeScript + finalHtmlResponse.substring(headIdx);
                                     logger.info("✅ SSR: Injected scripts before </head>");
                                 } else if (bodyIdx >= 0) {
-                                    injectedHtml = finalHtmlResponse.substring(0, bodyIdx) + preloadImageTag + ssrScript + ssrCategoriesScript + ssrRoutesScript + ssrDynamicCodeScript + finalHtmlResponse.substring(bodyIdx);
+                                    injectedHtml = finalHtmlResponse.substring(0, bodyIdx) + preloadImageTag + appConfigScript + ssrScript + ssrCategoriesScript + ssrRoutesScript + ssrDynamicCodeScript + finalHtmlResponse.substring(bodyIdx);
                                     logger.info("✅ SSR: Injected scripts before </body>");
                                 } else {
                                     logger.warn("⚠️ No </head> or </body> found");

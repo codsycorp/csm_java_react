@@ -117,6 +117,8 @@ public class UserService {
     private static final Gson GSON = new Gson(); // Khởi tạo đối tượng Gson một lần
     private static final String MAIN_ACCOUNT_ROLE = "admin";
     private static final String SUB_USER_ROLE = "user";
+    private static final Map<Integer, String> ACTION_BIT_TO_TOKEN = createActionBitToToken();
+    private static final Map<Integer, String> MENU_BIT_TO_TOKEN = createMenuBitToToken();
 
     @Autowired
     public UserService(RecordManager recordManager) {
@@ -462,23 +464,14 @@ public class UserService {
 
         User user = mapMainAccountToUser(parentAccountRecord, false);
 
-        // Sub-user: ưu tiên quyền trực tiếp trong bản ghi sub-user; fallback tối thiểu là role=user.
-        List<String> subUserRoles = toStringListFlexible(subUserRecord.get("permissions"));
-        if (subUserRoles.isEmpty()) {
-            subUserRoles.add("user");
-        }
-        user.setPermissions(subUserRoles);
-
-        // Set menusPermissions from sub-user record
-        List<String> subUserMenus = toStringListFlexible(subUserRecord.get("menusPermissions"));
-        
-        // Do not auto-expand menus by app_id, otherwise sub-user may accidentally get broad access.
-        if (subUserMenus.isEmpty()) {
-            logger.warn("[mapSubUserRecordToUser] Sub-user {} has empty menusPermissions from record/group", subUserRecord.get("login_identifier"));
-        }
-        
-        user.setMenusPermissions(subUserMenus);
-        logger.info("[mapSubUserRecordToUser] Sub-user {} assigned role=user with menusPermissions={}", user.getEmail(), subUserMenus);
+        // Sub-user permissions must be deterministic: bitfield -> (permissions, menus) is source of truth.
+        // Add/deny fields are applied as final overlays so persisted rules are always enforced.
+        List<String> directPermissions = toStringListFlexible(subUserRecord.get("permissions"));
+        List<String> directMenus = toStringListFlexible(subUserRecord.get("menusPermissions"));
+        List<String> permissionsAdd = toStringListFlexible(subUserRecord.get("permissionsAdd"));
+        List<String> permissionsDeny = toStringListFlexible(subUserRecord.get("permissionsDeny"));
+        List<String> menusAdd = toStringListFlexible(subUserRecord.get("menusPermissionsAdd"));
+        List<String> menusDeny = toStringListFlexible(subUserRecord.get("menusPermissionsDeny"));
 
         // Ưu tiên dùng app_token của chính sub-user để phản ánh đúng principal/role trong token.
         Object subAppTokenObj = subUserRecord.get("app_token");
@@ -500,9 +493,6 @@ public class UserService {
         }
 
         Object subPermissionBitfield = subUserRecord.get("permissionBitfield");
-        if (subPermissionBitfield != null) {
-            user.setPermissionBitfield(String.valueOf(subPermissionBitfield));
-        }
         Object subPermissionSchemaVersion = subUserRecord.get("permissionSchemaVersion");
         if (subPermissionSchemaVersion != null) {
             user.setPermissionSchemaVersion(String.valueOf(subPermissionSchemaVersion));
@@ -520,27 +510,64 @@ public class UserService {
             user.setBranchId(String.valueOf(subBranchId));
         }
         
-        // Also can get permissions from group if subUserRecord has group_id
+        // Resolve sub-user permissions from csm_roles first so system permission groups
+        // are authoritative even when legacy parent group_rights is stale.
         String subUserGroupId = (String) subUserRecord.get("group_id");
-        if (subUserGroupId != null) {
+        if (subUserGroupId != null && !subUserGroupId.isBlank()) {
+            Map<String, Object> matchingRole = findRoleByCode(subUserGroupId);
+            if (matchingRole != null && !matchingRole.isEmpty()) {
+                List<String> rolePerms = toStringListFlexible(matchingRole.get("permissions"));
+                if (!rolePerms.isEmpty()) directPermissions = rolePerms;
+                List<String> roleMenuPerms = toStringListFlexible(matchingRole.get("menusPermissions"));
+                if (!roleMenuPerms.isEmpty()) directMenus = roleMenuPerms;
+                logger.info("[mapSubUserRecordToUser] Applied csm_roles permissions for sub-user {} group_id={}", subUserRecord.get("login_identifier"), subUserGroupId);
+            }
+
             List<Map<String, Object>> parentGroupRights = toMapListFlexible(parentAccountRecord.get("group_rights"));
             Optional<Map<String, Object>> matchingGroup = parentGroupRights.stream()
                 .filter(g -> subUserGroupId.equals(g.get("group_id")))
                 .findFirst();
 
-            if (matchingGroup.isPresent()) {
+            if ((directMenus == null || directMenus.isEmpty() || directPermissions == null || directPermissions.isEmpty()) && matchingGroup.isPresent()) {
                 List<String> groupPerms = toStringListFlexible(matchingGroup.get().get("permissions"));
                 if (!groupPerms.isEmpty()) {
-                    user.setPermissions(groupPerms);
+                    directPermissions = groupPerms;
                 }
                 List<String> groupMenuPerms = toStringListFlexible(matchingGroup.get().get("menusPermissions"));
                 if (!groupMenuPerms.isEmpty()) {
-                    user.setMenusPermissions(groupMenuPerms);
+                    directMenus = groupMenuPerms;
                 }
-            } else {
+            } else if (matchingRole == null || matchingRole.isEmpty()) {
                 logger.warn("Sub-user belongs to group '{}' but group not found in parent account's group_rights. Using direct sub-user menusPermissions from record if available.", subUserGroupId);
             }
         }
+
+        Long bitfieldFromRecord = parseBitfieldToLong(subPermissionBitfield);
+        List<String> effectivePermissions;
+        List<String> effectiveMenus;
+        if (bitfieldFromRecord != null) {
+            effectivePermissions = permissionsFromBitfield(bitfieldFromRecord);
+            effectiveMenus = menusFromBitfield(bitfieldFromRecord);
+        } else {
+            effectivePermissions = new ArrayList<>(directPermissions == null ? Collections.emptyList() : directPermissions);
+            effectiveMenus = new ArrayList<>(directMenus == null ? Collections.emptyList() : directMenus);
+        }
+
+        effectivePermissions = mergeUniqueCaseInsensitive(effectivePermissions, permissionsAdd);
+        effectivePermissions = subtractCaseInsensitive(effectivePermissions, permissionsDeny);
+        effectiveMenus = mergeUniqueCaseInsensitive(effectiveMenus, menusAdd);
+        effectiveMenus = subtractCaseInsensitive(effectiveMenus, menusDeny);
+
+        // Never elevate sub-user by role token.
+        effectivePermissions = subtractCaseInsensitive(effectivePermissions, Arrays.asList("admin", "dev"));
+        if (effectivePermissions.isEmpty()) {
+            effectivePermissions.add("view");
+            effectivePermissions.add("scope:owner");
+        }
+
+        user.setPermissions(effectivePermissions);
+        user.setMenusPermissions(effectiveMenus);
+        logger.info("[mapSubUserRecordToUser] Effective permissions for {} => perms={}, menus={}", subUserRecord.get("login_identifier"), effectivePermissions, effectiveMenus);
 
         long normalizedBitfield = PermissionBitfieldUtil.buildBitfield(user.getPermissions(), user.getMenusPermissions(), user.getDev());
         user.setPermissionBitfield(String.valueOf(normalizedBitfield));
@@ -548,6 +575,27 @@ public class UserService {
         user.setDataScope(PermissionBitfieldUtil.resolveDataScope(normalizedBitfield));
 
         return Optional.of(user);
+    }
+
+    private Map<String, Object> findRoleByCode(String roleCode) {
+        if (roleCode == null || roleCode.isBlank()) {
+            return null;
+        }
+
+        SearchFilter roleCodeFilter = new SearchFilter();
+        roleCodeFilter.setField("role_code");
+        roleCodeFilter.setType("eq");
+        roleCodeFilter.setValue(roleCode);
+        Map<String, Object> roleRecord = recordManager.find(CSM_APP_ID, "csm_roles", roleCodeFilter);
+        if (roleRecord != null && !roleRecord.isEmpty()) {
+            return roleRecord;
+        }
+
+        SearchFilter roleIdFilter = new SearchFilter();
+        roleIdFilter.setField("id");
+        roleIdFilter.setType("eq");
+        roleIdFilter.setValue(roleCode);
+        return recordManager.find(CSM_APP_ID, "csm_roles", roleIdFilter);
     }
 
     public User mapRecordToUser(Map<String, Object> userRecord) {
@@ -1008,20 +1056,58 @@ public class UserService {
             subUserData.put("app_token", subUserAppToken);
             subUserData.put("refresh", subUserAppToken);
 
-            // Xử lý permissions và menusPermissions (nếu được cung cấp trực tiếp cho tài khoản con)
-            Object permissionsObj = subUserRequest.get("permissions");
-            if (permissionsObj instanceof List) {
-                subUserData.put("permissions", permissionsObj);
-            } else {
-                subUserData.put("permissions", new ArrayList<>());
+            List<String> permissions = toStringListFlexible(subUserRequest.get("permissions"));
+            List<String> menusPermissions = toStringListFlexible(subUserRequest.get("menusPermissions"));
+            List<String> permissionsAdd = toStringListFlexible(subUserRequest.get("permissionsAdd"));
+            List<String> permissionsDeny = toStringListFlexible(subUserRequest.get("permissionsDeny"));
+            List<String> menusPermissionsAdd = toStringListFlexible(subUserRequest.get("menusPermissionsAdd"));
+            List<String> menusPermissionsDeny = toStringListFlexible(subUserRequest.get("menusPermissionsDeny"));
+
+            if ((permissions.isEmpty() || menusPermissions.isEmpty()) && subUserGroupId != null && !subUserGroupId.isBlank()) {
+                Map<String, Object> roleRecord = findRoleByCode(subUserGroupId);
+                if (roleRecord != null && !roleRecord.isEmpty()) {
+                    if (permissions.isEmpty()) {
+                        permissions = toStringListFlexible(roleRecord.get("permissions"));
+                    }
+                    if (menusPermissions.isEmpty()) {
+                        menusPermissions = toStringListFlexible(roleRecord.get("menusPermissions"));
+                    }
+                }
             }
 
-            Object menusPermissionsObj = subUserRequest.get("menusPermissions");
-            if (menusPermissionsObj instanceof List) {
-                subUserData.put("menusPermissions", menusPermissionsObj);
+            Long providedBitfield = parseBitfieldToLong(subUserRequest.get("permissionBitfield"));
+            List<String> effectivePermissions;
+            List<String> effectiveMenus;
+            if (providedBitfield != null) {
+                effectivePermissions = permissionsFromBitfield(providedBitfield);
+                effectiveMenus = menusFromBitfield(providedBitfield);
             } else {
-                subUserData.put("menusPermissions", new ArrayList<>());
+                effectivePermissions = new ArrayList<>(permissions);
+                effectiveMenus = new ArrayList<>(menusPermissions);
             }
+
+            effectivePermissions = mergeUniqueCaseInsensitive(effectivePermissions, permissionsAdd);
+            effectivePermissions = subtractCaseInsensitive(effectivePermissions, permissionsDeny);
+            effectiveMenus = mergeUniqueCaseInsensitive(effectiveMenus, menusPermissionsAdd);
+            effectiveMenus = subtractCaseInsensitive(effectiveMenus, menusPermissionsDeny);
+            effectivePermissions = subtractCaseInsensitive(effectivePermissions, Arrays.asList("admin", "dev"));
+
+            long normalizedBitfield = PermissionBitfieldUtil.buildBitfield(effectivePermissions, effectiveMenus, false);
+
+            subUserData.put("permissions", effectivePermissions);
+            subUserData.put("menusPermissions", effectiveMenus);
+            subUserData.put("permissionsAdd", permissionsAdd);
+            subUserData.put("permissionsDeny", permissionsDeny);
+            subUserData.put("menusPermissionsAdd", menusPermissionsAdd);
+            subUserData.put("menusPermissionsDeny", menusPermissionsDeny);
+            subUserData.put("permissionBitfield", String.valueOf(normalizedBitfield));
+            subUserData.put("permissionSchemaVersion", String.valueOf(subUserRequest.getOrDefault("permissionSchemaVersion", "v2")));
+            subUserData.put("dataScope", PermissionBitfieldUtil.resolveDataScope(normalizedBitfield));
+            subUserData.put("app_id", parentAppId);
+            if (subUserRequest.containsKey("dept_id")) subUserData.put("dept_id", subUserRequest.get("dept_id"));
+            if (subUserRequest.containsKey("branch_id")) subUserData.put("branch_id", subUserRequest.get("branch_id"));
+            if (subUserRequest.containsKey("department_id")) subUserData.put("department_id", subUserRequest.get("department_id"));
+            if (subUserRequest.containsKey("team_id")) subUserData.put("team_id", subUserRequest.get("team_id"));
 
             // Các trường khóa chính cho bảng csm_group_members là "id" và "login_identifier"
             // "login_identifier" nên được lập chỉ mục duy nhất để đảm bảo truy vấn hiệu quả
@@ -1132,6 +1218,117 @@ public class UserService {
             return out;
         }
         return new ArrayList<>();
+    }
+
+    private static Map<Integer, String> createActionBitToToken() {
+        Map<Integer, String> map = new HashMap<>();
+        map.put(PermissionBitfieldUtil.ACTION_VIEW, "view");
+        map.put(PermissionBitfieldUtil.ACTION_EDIT, "edit");
+        map.put(PermissionBitfieldUtil.ACTION_CREATE, "create");
+        map.put(PermissionBitfieldUtil.ACTION_DELETE, "delete");
+        map.put(PermissionBitfieldUtil.ACTION_EXPORT, "export");
+        return map;
+    }
+
+    private static Map<Integer, String> createMenuBitToToken() {
+        Map<Integer, String> map = new HashMap<>();
+        map.put(0, "/home");
+        map.put(1, "/system/user");
+        map.put(2, "/system/role");
+        map.put(3, "/system/menu");
+        map.put(4, "/system/dept");
+        map.put(5, "/system/developer");
+        map.put(6, "/system/broadcast");
+        map.put(7, "/system/report");
+        map.put(8, "/crm");
+        return map;
+    }
+
+    private Long parseBitfieldToLong(Object raw) {
+        if (raw == null) return null;
+        try {
+            String text = String.valueOf(raw).trim();
+            if (text.isEmpty()) return null;
+            return Long.parseLong(text);
+        } catch (Exception ignore) {
+            return null;
+        }
+    }
+
+    private List<String> permissionsFromBitfield(long bitfield) {
+        List<String> out = new ArrayList<>();
+        ACTION_BIT_TO_TOKEN.forEach((bit, token) -> {
+            if (PermissionBitfieldUtil.hasBit(bitfield, bit)) {
+                out.add(token);
+            }
+        });
+        String scope = PermissionBitfieldUtil.resolveDataScope(bitfield);
+        switch (scope) {
+            case "ALL" -> out.add("scope:all");
+            case "BRANCH" -> out.add("scope:branch");
+            case "DEPARTMENT" -> out.add("scope:department");
+            case "OWNER" -> out.add("scope:owner");
+            default -> {
+            }
+        }
+        return out;
+    }
+
+    private List<String> menusFromBitfield(long bitfield) {
+        List<String> out = new ArrayList<>();
+        MENU_BIT_TO_TOKEN.forEach((bit, token) -> {
+            if (PermissionBitfieldUtil.hasBit(bitfield, bit)) {
+                out.add(token);
+            }
+        });
+        return out;
+    }
+
+    private List<String> mergeUniqueCaseInsensitive(List<String> base, List<String> extra) {
+        List<String> result = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        if (base != null) {
+            for (String item : base) {
+                if (item == null) continue;
+                String value = item.trim();
+                if (value.isEmpty()) continue;
+                String key = value.toLowerCase(Locale.ROOT);
+                if (seen.add(key)) result.add(value);
+            }
+        }
+        if (extra != null) {
+            for (String item : extra) {
+                if (item == null) continue;
+                String value = item.trim();
+                if (value.isEmpty()) continue;
+                String key = value.toLowerCase(Locale.ROOT);
+                if (seen.add(key)) result.add(value);
+            }
+        }
+        return result;
+    }
+
+    private List<String> subtractCaseInsensitive(List<String> source, List<String> deny) {
+        if (source == null) return new ArrayList<>();
+        if (deny == null || deny.isEmpty()) return new ArrayList<>(source);
+        Set<String> denySet = new HashSet<>();
+        for (String item : deny) {
+            if (item == null) continue;
+            String value = item.trim();
+            if (!value.isEmpty()) {
+                denySet.add(value.toLowerCase(Locale.ROOT));
+            }
+        }
+        List<String> result = new ArrayList<>();
+        for (String item : source) {
+            if (item == null) continue;
+            String value = item.trim();
+            if (value.isEmpty()) continue;
+            if (!denySet.contains(value.toLowerCase(Locale.ROOT))) {
+                result.add(value);
+            }
+        }
+        return result;
     }
 
     private List<Map<String, Object>> toMapListFlexible(Object raw) {
