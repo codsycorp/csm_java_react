@@ -472,13 +472,9 @@ public class UserService {
         // Set menusPermissions from sub-user record
         List<String> subUserMenus = toStringListFlexible(subUserRecord.get("menusPermissions"));
         
-        // If no menus from record, auto-generate from app_id
+        // Do not auto-expand menus by app_id, otherwise sub-user may accidentally get broad access.
         if (subUserMenus.isEmpty()) {
-            String appId = user.getAppId();
-            if (appId != null && !appId.isEmpty()) {
-                subUserMenus.add(appId);
-                logger.info("[mapSubUserRecordToUser] Auto-generated menusPermissions=[{}] for sub-user {}", appId, user.getEmail());
-            }
+            logger.warn("[mapSubUserRecordToUser] Sub-user {} has empty menusPermissions from record/group", subUserRecord.get("login_identifier"));
         }
         
         user.setMenusPermissions(subUserMenus);

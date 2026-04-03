@@ -1768,30 +1768,6 @@ public class TableHandler {
                             msg.put("socket_actions", List.of("update"));
                         }
                     }
-                } else if (hasAnyPrimaryKeyValue(objUpdate, effectivePkFields)) {
-                    // Trường hợp upsert (không tìm thấy bản ghi nhưng đủ khóa chính)
-                    ensureRowId(objUpdate);
-                    if (recordManager.existsByPrimaryKey(appId, tblname, objUpdate, effectivePkFields)) {
-                        SearchFilter conflictFilter = buildPrimaryKeyFilter(objUpdate, effectivePkFields);
-                        if (conflictFilter != null) {
-                            Map<String, Object> conflictRes = recordManager.filter(appId, tblname, conflictFilter);
-                            List<Map<String, Object>> conflictRows = (List<Map<String, Object>>) conflictRes.getOrDefault("rows", new ArrayList<>());
-                            for (Map<String, Object> conflictRow : conflictRows) {
-                                Map<String, Object> conflictKeys = extractPrimaryKeyValues(conflictRow, effectivePkFields);
-                                recordManager.deleteRecord(appId, tblname, conflictRow);
-                                enqueueServiceInvalidation(appId, tblname, conflictRow);
-                                socketIOConfig.sendUpdateNotification(appId, tblname, "delete", conflictKeys, conflictRow);
-                                logger.warn("Force-replace upsert collision: deleted row id={} table={}", conflictRow.get("id"), tblname);
-                            }
-                        }
-                    }
-                    command = recordManager.createRecord(appId, tblname, objUpdate, effectivePkFields);
-                    enqueueServiceInvalidation(appId, tblname, objUpdate);
-                    msg.put("command", command);
-                    // Gửi create với full data
-                    socketIOConfig.sendUpdateNotification(appId, tblname, "create", extractPrimaryKeyValues(objUpdate, effectivePkFields), objUpdate);
-                    msg.put("updated_row", objUpdate);
-                    msg.put("socket_actions", List.of("create"));
                 } else {
                     return errorResponse("Không tìm thấy bản ghi để cập nhật");
                 }
