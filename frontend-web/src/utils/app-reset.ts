@@ -54,9 +54,6 @@ export function clearAllClientState() {
   try { localStorage.removeItem("user-info"); } catch {}
   try { localStorage.removeItem("refreshToken"); } catch {} // For nwjs
 
-  // Clear website/admin mode flag
-  try { sessionStorage.removeItem("forceAdminMode"); } catch {}
-
   // Clear guest token if any
   try { clearGuestToken(); } catch {}
 
@@ -80,9 +77,7 @@ export function forceLogoutAndReload(reason?: string) {
 
   const pathname = typeof window !== "undefined" ? window.location.pathname : "";
   const isWebsitePath = /^\/wu_/i.test(pathname) || pathname === "/";
-  const isAdminPath = /^(\/home|\/system\b|\/personal-center\b|\/about\b)/.test(pathname);
-  const isForcedAdmin = typeof window !== "undefined" && window.sessionStorage.getItem("forceAdminMode") === "true";
-  const shouldRedirectToLogin = !isWebsitePath && (isForcedAdmin || isAdminPath);
+  const shouldRedirectToLogin = !isWebsitePath;
 
   if (!shouldRedirectToLogin) {
     return;
@@ -115,11 +110,7 @@ export function forceLogoutAndReload(reason?: string) {
   setTimeout(() => {
     try {
       const base = import.meta.env.BASE_URL || "/";
-      // Preserve a safe redirect only when on admin routes
-      const redirect = 
-        typeof window !== "undefined" && /^(\/home|\/system\b|\/personal-center\b)/.test(window.location.pathname)
-          ? "?redirect=admin" : "";
-      window.location.replace(`${base}login${redirect}`);
+      window.location.replace(`${base}login`);
     } catch {
       // Fallback to reload
       try { window.location.reload(); } catch {}

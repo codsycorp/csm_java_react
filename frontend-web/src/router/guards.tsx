@@ -43,8 +43,8 @@ export function RouterGuards() {
 	if (routeHandle?.roles && Array.isArray(routeHandle.roles)) {
 		// Check if user is logged in (has userId)
 		   if (!userId) {
-			   console.warn("🔒 Access denied: User not logged in, redirecting to /login?redirect=admin");
-			   return <Navigate to="/login?redirect=admin" replace />;
+			   console.warn("🔒 Access denied: User not logged in, redirecting to /login");
+			   return <Navigate to="/login" replace />;
 		   }
 		
 		// Dev role has absolute access to ALL routes (highest privilege)

@@ -1277,9 +1277,18 @@ public class TableHandler {
         if (accessContext.isDev) {
             objUpdate.put("roles", new ArrayList<>(List.of("admin")));
             objUpdate.put("permissions", new ArrayList<>(List.of("admin", "scope:all")));
-            List<String> inheritedMenus = accessContext.menusPermissions == null ? Collections.emptyList() : accessContext.menusPermissions;
-            // Do NOT auto-fill with DEFAULT_FULL_MENU_PERMISSIONS; menus must be explicit
-            objUpdate.put("menusPermissions", new ArrayList<>(inheritedMenus));
+            // Dev tạo tài khoản chính phải có full scope theo app_id đích.
+            // Dùng legacy full-app token để frontend/backend đều hiểu là toàn quyền menu app.
+            String targetAppId = safeStr(objUpdate.get("app_id"));
+            if (targetAppId.isEmpty()) {
+                targetAppId = accessContext.appId == null ? "" : accessContext.appId;
+            }
+            if (!targetAppId.isBlank()) {
+                objUpdate.put("menusPermissions", new ArrayList<>(List.of(targetAppId.trim())));
+            } else {
+                List<String> inheritedMenus = accessContext.menusPermissions == null ? Collections.emptyList() : accessContext.menusPermissions;
+                objUpdate.put("menusPermissions", new ArrayList<>(inheritedMenus));
+            }
             objUpdate.put("dataScope", "ALL");
             return;
         }
@@ -1291,13 +1300,60 @@ public class TableHandler {
             objUpdate.put("app_id", accessContext.appId);
         }
 
+        List<String> permissionGroups = toStringList(objUpdate.get("permissionGroups"));
+        List<String> groupedPermissions = new ArrayList<>();
+        List<String> groupedMenus = new ArrayList<>();
+        for (String groupRef : permissionGroups) {
+            Map<String, Object> roleRecord = findRoleRecordByCodeOrId(groupRef);
+            if (roleRecord == null || roleRecord.isEmpty()) {
+                continue;
+            }
+            groupedPermissions = mergeUniqueCaseInsensitive(groupedPermissions, toStringList(roleRecord.get("permissions")));
+            groupedMenus = mergeUniqueCaseInsensitive(groupedMenus, toStringList(roleRecord.get("menusPermissions")));
+        }
+
         List<String> requestedPermissions = toStringList(objUpdate.get("permissions"));
         List<String> requestedMenus = toStringList(objUpdate.get("menusPermissions"));
+        List<String> permissionsAdd = toStringList(objUpdate.get("permissionsAdd"));
+        List<String> permissionsDeny = toStringList(objUpdate.get("permissionsDeny"));
+        List<String> menusAdd = toStringList(objUpdate.get("menusPermissionsAdd"));
+        List<String> menusDeny = toStringList(objUpdate.get("menusPermissionsDeny"));
+
+        List<String> basePermissions = (!permissionGroups.isEmpty() && !groupedPermissions.isEmpty()) ? groupedPermissions : requestedPermissions;
+        List<String> baseMenus = (!permissionGroups.isEmpty() && !groupedMenus.isEmpty()) ? groupedMenus : requestedMenus;
+
+        List<String> resolvedPermissions = mergeUniqueCaseInsensitive(basePermissions, permissionsAdd);
+        resolvedPermissions = subtractCaseInsensitive(resolvedPermissions, permissionsDeny);
+
+        List<String> resolvedMenus = mergeUniqueCaseInsensitive(baseMenus, menusAdd);
+        resolvedMenus = subtractCaseInsensitive(resolvedMenus, menusDeny);
+
         List<String> allowedPermissions = accessContext.permissions == null ? Collections.emptyList() : accessContext.permissions;
         List<String> allowedMenus = accessContext.menusPermissions == null ? Collections.emptyList() : accessContext.menusPermissions;
 
-        objUpdate.put("permissions", intersectPreserveOrder(requestedPermissions, allowedPermissions));
-        objUpdate.put("menusPermissions", intersectPreserveOrder(requestedMenus, allowedMenus));
+        objUpdate.put("permissions", intersectPreserveOrder(resolvedPermissions, allowedPermissions));
+
+        // Nếu admin có "legacy full-app-scope" (menusPermissions chỉ chứa appId),
+        // họ được phép gán bất kỳ menu nào của app cho người dùng con — không cần intersect.
+        String contextAppId = accessContext.appId == null ? "" : accessContext.appId.trim().toLowerCase(Locale.ROOT);
+        boolean adminHasFullAppScope = !contextAppId.isEmpty() && allowedMenus.stream().anyMatch(m -> {
+            String normalized = safeStr(m).toLowerCase(Locale.ROOT).trim();
+            return normalized.equals(contextAppId)
+                || normalized.equals("app:" + contextAppId)
+                || normalized.equals("/" + contextAppId);
+        });
+        if (adminHasFullAppScope) {
+            // Giữ nguyên các menu được yêu cầu (loại bỏ rỗng)
+            List<String> safeRequested = new ArrayList<>();
+            for (String m : resolvedMenus) {
+                String v = safeStr(m).trim();
+                if (!v.isEmpty()) safeRequested.add(v);
+            }
+            objUpdate.put("menusPermissions", safeRequested);
+        } else {
+            objUpdate.put("menusPermissions", intersectPreserveOrder(resolvedMenus, allowedMenus));
+        }
+
         objUpdate.put("dataScope", minDataScope(safeStr(objUpdate.get("dataScope")), accessContext.dataScope));
     }
 

@@ -82,22 +82,9 @@ function findDefaultServiceForGroup(groupSlug: string): any {
 
 // Check if website mode is enabled
 export function isWebsiteMode() {
-	// Nếu có forceAdminMode flag được set, luôn tuân theo nó
-	const forceAdminMode = window.sessionStorage.getItem("forceAdminMode");
-	// [PROD] Removed debug log: isWebsiteMode check
-	if (forceAdminMode === "true") {
-		// [PROD] Removed debug log: Admin mode
-		return false;  // Admin mode
-	}
-	if (forceAdminMode === "false") {
-		// [PROD] Removed debug log: Website mode
-		return true;   // Website mode
-	}
-	// Nếu chưa set, kiểm tra env; nếu env cũng không có, mặc định WEBSITE mode
+	// Frontend web chỉ chạy website mode.
 	const isWebDefault = import.meta.env.VITE_ISRUNWEB === "true";
-	// [PROD] Removed debug log: Default Website mode
-	// Cho người dùng đã đăng nhập, nếu không có cài đặt, mặc định là website mode
-	return isWebDefault !== false;  // Default to true (website) if not explicitly set
+	return isWebDefault !== false;
 }
 
 // Check if current path is a website route
@@ -176,18 +163,7 @@ export const routerBeforeEach: (reactRouter: ReactRouterType) => BlockerFunction
 	const isWebsite = isWebsiteMode();
 	const isWebRoute = isWebsiteRoute(pathnameWithoutBase);
 
-	// Tự động bật/tắt admin mode theo đường dẫn
-	if (isWebRoute) {
-		// Nếu đang ở admin mode mà chuyển sang website route, reset về website mode
-		if (window.sessionStorage.getItem("forceAdminMode") === "true") {
-			window.sessionStorage.setItem("forceAdminMode", "false");
-		}
-	} else if (/^(\/home|\/system\b|\/personal-center\b|\/about\b)/.test(pathnameWithoutBase)) {
-		// Nếu đang ở website mode mà chuyển sang admin route, set admin mode
-		if (window.sessionStorage.getItem("forceAdminMode") !== "true") {
-			window.sessionStorage.setItem("forceAdminMode", "true");
-		}
-	}
+	// Frontend web không dùng admin mode.
 
 	// Bổ sung kiểm tra chi tiết dịch vụ: /:category/:slug (clean URLs, no .shtml)
 	// CHỈ validate category exists trong SSR, KHÔNG validate slug vì slug là dynamic từ database
@@ -274,24 +250,15 @@ export const routerBeforeEach: (reactRouter: ReactRouterType) => BlockerFunction
 
 	/* 根路由处理 */
 	if (pathname === import.meta.env.BASE_URL && pathnameWithoutBase === "/") {
-		// Luôn ép về website mode khi vào root path
-		if (window.sessionStorage.getItem("forceAdminMode") !== "false") {
-			window.sessionStorage.setItem("forceAdminMode", "false");
-		}
-		console.warn("🏠 Always staying on website home at root '/', force website mode");
+		console.warn("🏠 Always staying on website home at root '/'");
 		return false;
 	}
 
 	/* 已登录访问登录页，跳转到首页 */
 	if (pathnameWithoutBase === "/login") {
 		const redirectParam = nextLocation.search.match(/[?&]redirect=([^&]*)/)?.[1];
-		
-		// 如果有redirect=admin参数，跳转到admin home
-		if (redirectParam === "admin") {
-			const adminHomePath = import.meta.env.VITE_BASE_HOME_PATH || "/home";
-			reactRouter.navigate(adminHomePath, { replace: true });
-		}
-		else if (redirectParam && redirectParam.startsWith("/")) {
+
+		if (redirectParam && redirectParam.startsWith("/")) {
 			// 如果有其他redirect参数，跳转到指定路径
 			reactRouter.navigate(redirectParam, { replace: true });
 		}
@@ -300,11 +267,6 @@ export const routerBeforeEach: (reactRouter: ReactRouterType) => BlockerFunction
 			if (pathname !== "/" && pathname !== import.meta.env.BASE_URL) {
 				reactRouter.navigate("/", { replace: true });
 			}
-		}
-		else {
-			// 在admin模式下，跳转到admin首页
-			const adminHomePath = import.meta.env.VITE_BASE_HOME_PATH || "/home";
-			reactRouter.navigate(adminHomePath, { replace: true });
 		}
 		return true;
 	}
@@ -509,9 +471,6 @@ export async function routerInitReady(reactRouter: ReactRouterType) {
 	// 判断路由跳转逻辑，需要在获取动态路由之后，防止路由跳转直接进入 getBlocker 中然后发送请求，但是 getBlocker 不支持异步
 	/* Nếu là root path thì luôn ép về website mode */
 	if (pathname === import.meta.env.BASE_URL) {
-		if (window.sessionStorage.getItem("forceAdminMode") !== "false") {
-			window.sessionStorage.setItem("forceAdminMode", "false");
-		}
 		// Nếu đã ở / thì không cần chuyển hướng nữa
 		if (pathnameWithoutBase === "/") {
 			return;
@@ -522,22 +481,9 @@ export async function routerInitReady(reactRouter: ReactRouterType) {
 
 	/* 已登录时匹配 login 路由，跳转到首页 */
 	if (pathnameWithoutBase === "/login") {
-		// Kiểm tra redirect parameter
-		const redirectParam = new URLSearchParams(search).get("redirect");
-		
-		if (redirectParam === "admin") {
-			// Redirect đến admin home
-			const adminHomePath = import.meta.env.VITE_BASE_HOME_PATH || "/home";
-			reactRouter.navigate(adminHomePath, { replace: true });
-		}
-		else if (isWebsiteMode()) {
+		if (isWebsiteMode()) {
 			// 在网站模式下，跳转到网站首页
 			reactRouter.navigate("/", { replace: true });
-		}
-		else {
-			// Admin mode, redirect to admin home
-			const adminHomePath = import.meta.env.VITE_BASE_HOME_PATH || "/home";
-			reactRouter.navigate(adminHomePath, { replace: true });
 		}
 		return;
 	}

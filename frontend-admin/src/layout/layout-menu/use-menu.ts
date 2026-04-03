@@ -130,23 +130,17 @@ export function useMenu() {
 		       i18nLang.toLowerCase().startsWith('zh') ? 'zh' : 'vi';
 	}, [i18n?.language]);
 	
-	// Dùng apiWholeMenus nếu có (chứa toàn bộ data từ API bao gồm table_name)
-	// Cần thêm `key` field để compatible với Ant Design Menu
-	// ONLY keep fields that Ant Design Menu or app logic needs
+	// IMPORTANT: Luôn render từ wholeMenus (đã được permission store lọc theo menusPermissions).
+	// Không dùng apiWholeMenus để render, vì apiWholeMenus có thể là dữ liệu thô và làm lộ full menu app.
+	// apiWholeMenus chỉ dùng làm metadata lookup khi click menu/runtime grid.
 	const menusForTranslation = useMemo(() => {
-		if (apiWholeMenus && apiWholeMenus.length > 0) {
+		const sourceMenus = wholeMenus || [];
+		if (sourceMenus.length > 0) {
 			// Thêm key field, nhưng xoá tất cả fields không cần thiết để không render
 			const addKeysAndClean = (menus: any[]): any[] => {
 				return menus.map(menu => {
-					// Preserve ONLY these fields:
-					// - key, path, id: for routing
-					// - label/label_* and name/name_*: for translation
-					// - children: for tree structure
-					// - icon, disabled: for Ant Design Menu
-					// - table_name, report_name, type_form: for app logic
-					// - auto_code: for auto-setup menu execution
 					const cleaned: any = {
-						key: menu.path || menu.id || "",
+						key: menu.path || menu.id || menu.key || "",
 						path: menu.path,
 						id: menu.id,
 						label: menu.label,
@@ -166,17 +160,15 @@ export function useMenu() {
 						type_form: menu.type_form,
 						auto_code: menu.auto_code,
 					};
-					
-					// Recursively clean children
+
 					if (cleaned.children && cleaned.children.length > 0) {
 						cleaned.children = addKeysAndClean(cleaned.children);
 					}
-					
+
 					return cleaned;
 				});
 			};
-			// Chuẩn hoá menus từ API
-			const cleanedMenus = addKeysAndClean(apiWholeMenus);
+			const cleanedMenus = addKeysAndClean(sourceMenus);
 
 			// Đảm bảo luôn có menu "Developer" dưới System cho mọi app (frontend-only)
 			const ensureSystemDeveloper = (menus: any[]): any[] => {
@@ -228,8 +220,8 @@ export function useMenu() {
 
 			return ensureSystemDeveloper(cleanedMenus);
 		}
-		return wholeMenus;
-	}, [apiWholeMenus, wholeMenus]);
+		return sourceMenus;
+	}, [wholeMenus]);
 	
 	const translatedMenus = useMemo(() => {
 		return translateMenus(menusForTranslation, t, currentLanguage);

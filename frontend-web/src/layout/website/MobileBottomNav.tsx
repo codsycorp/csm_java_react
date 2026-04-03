@@ -69,7 +69,7 @@ export default function MobileBottomNav({ selectedKey }: MobileBottomNavProps) {
         </Dropdown>
       ) : (
         <a
-          href="/login?redirect=admin"
+          href="/login"
           className={styles.mobileBottomNavItem}
         >
           <span className={styles.mobileBottomNavIcon}>

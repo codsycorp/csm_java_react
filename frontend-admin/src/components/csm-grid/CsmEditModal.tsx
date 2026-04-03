@@ -706,6 +706,22 @@ function resolveNumberLocale(langInput?: string): string {
   return "en-US";
 }
 
+function resolveDateLocaleFormat(langInput?: string): {
+  date: string;
+  datetime: string;
+  time: string;
+} {
+  const lang = String(langInput || (typeof navigator !== "undefined" ? navigator.language : "vi") || "vi").toLowerCase();
+  if (lang.startsWith("en")) {
+    return { date: "MM/DD/YYYY", datetime: "MM/DD/YYYY HH:mm:ss", time: "HH:mm:ss" };
+  }
+  if (lang.startsWith("zh")) {
+    return { date: "YYYY/MM/DD", datetime: "YYYY/MM/DD HH:mm:ss", time: "HH:mm:ss" };
+  }
+  // vi (default)
+  return { date: "DD/MM/YYYY", datetime: "DD/MM/YYYY HH:mm:ss", time: "HH:mm:ss" };
+}
+
 function getLocaleNumberSeparators(locale: string): { group: string; decimal: string } {
   try {
     const parts = new Intl.NumberFormat(locale).formatToParts(12345.6);
@@ -1036,6 +1052,7 @@ function getFieldComponent(
   const key = f.f_name;
   const lang = String(currentLang || navigator.language || 'vi').toLowerCase();
   const numberLocale = resolveNumberLocale(lang);
+  const dateLocaleFormat = resolveDateLocaleFormat(lang);
   const fieldLabel = resolveFieldLabel(f, lang, translate);
   const initialVal = fieldValues?.[key];
   
@@ -1239,21 +1256,21 @@ function getFieldComponent(
   // Kiểu DateTime
   if (/datetime/.test(types)) {
     return <Form.Item key={key} name={key} label={fieldLabel} initialValue={initialVal}>
-      <DatePicker showTime format="DD/MM/YYYY HH:mm:ss" style={{ width: '100%' }} disabled={isReadonly} />
+      <DatePicker showTime format={dateLocaleFormat.datetime} style={{ width: '100%' }} disabled={isReadonly} />
     </Form.Item>;
   }
   
   // Kiểu Date (chỉ ngày)
   if (/^date$/.test(types)) {
     return <Form.Item key={key} name={key} label={fieldLabel} initialValue={initialVal}>
-      <DatePicker format="DD/MM/YYYY" style={{ width: '100%' }} disabled={isReadonly} />
+      <DatePicker format={dateLocaleFormat.date} style={{ width: '100%' }} disabled={isReadonly} />
     </Form.Item>;
   }
   
   // Kiểu Time (chỉ giờ)
   if (/^time$/.test(types)) {
     return <Form.Item key={key} name={key} label={fieldLabel} initialValue={initialVal}>
-      <TimePicker format="HH:mm:ss" style={{ width: '100%' }} disabled={isReadonly} />
+      <TimePicker format={dateLocaleFormat.time} style={{ width: '100%' }} disabled={isReadonly} />
     </Form.Item>;
   }
   
@@ -2437,27 +2454,30 @@ export function CsmEditModal({
                     
                     // Date
                     if (/^date$/.test(types)) {
+                      const fmt = resolveDateLocaleFormat(i18n.language);
                       return (
                         <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
-                          <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" />
+                          <DatePicker style={{ width: '100%' }} format={fmt.date} />
                         </Form.Item>
                       );
                     }
                     
                     // DateTime
                     if (/datetime/.test(types)) {
+                      const fmt = resolveDateLocaleFormat(i18n.language);
                       return (
                         <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
-                          <DatePicker showTime style={{ width: '100%' }} format="YYYY-MM-DD HH:mm:ss" />
+                          <DatePicker showTime style={{ width: '100%' }} format={fmt.datetime} />
                         </Form.Item>
                       );
                     }
                     
                     // Time
                     if (/^time$/.test(types)) {
+                      const fmt = resolveDateLocaleFormat(i18n.language);
                       return (
                         <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
-                          <TimePicker style={{ width: '100%' }} format="HH:mm:ss" />
+                          <TimePicker style={{ width: '100%' }} format={fmt.time} />
                         </Form.Item>
                       );
                     }

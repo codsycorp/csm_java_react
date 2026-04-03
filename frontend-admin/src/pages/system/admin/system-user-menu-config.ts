@@ -280,6 +280,15 @@ function beforeSave(row, seft) {
 		return uniqueList(source).filter((item) => allowedSet.has(String(item || "").trim().toLowerCase()));
 	}
 
+	function hasLegacyAppScope(menusList, appId) {
+		if (!appId) return false;
+		const appKey = String(appId).trim().toLowerCase();
+		return uniqueList(menusList).some((token) => {
+			const t = String(token || "").trim().toLowerCase();
+			return t === appKey || t === "app:" + appKey || t === "/" + appKey;
+		});
+	}
+
 	function getLang() {
 		const fromI18n = String(seft?.i18n?.language || seft?.language || "").toLowerCase();
 		const fromNavigator = String((typeof navigator !== "undefined" && navigator.language) || "").toLowerCase();
@@ -521,7 +530,7 @@ function beforeSave(row, seft) {
 
 	if (actorIsDev) {
 		row.permissions = ["admin", "scope:all"];
-		row.menusPermissions = parentMenus.length > 0 ? parentMenus : getDefaultFullMenus();
+		row.menusPermissions = resolvedAppId ? [resolvedAppId] : (parentMenus.length > 0 ? parentMenus : getDefaultFullMenus());
 		row.permissionGroups = [];
 		row.permissionsAdd = [];
 		row.permissionsDeny = [];
@@ -531,21 +540,36 @@ function beforeSave(row, seft) {
 		row.dataScope = "ALL";
 	} else {
 		row.dataScope = minScope(row.dataScope || parentScope, parentScope);
-		const fromGroups = buildGroupPermissions(row.permissionGroups);
-		const fromPreset = buildPresetPermissions(row.permissionPreset);
-		const basePermissionAllow = fromGroups.length > 0
-			? uniqueList([...(fromGroups || []), ...(fromPreset || [])])
-			: uniqueList([...(row.permissions || []), ...(fromPreset || [])]);
-		const mergedPermissionAllow = uniqueList([...(basePermissionAllow || []), ...(row.permissionsAdd || [])]);
-		row.permissions = intersectPreserveOrder(listMinus(mergedPermissionAllow, row.permissionsDeny), parentPermissions);
+		const hasPermissionGroups = row.permissionGroups.length > 0;
+		const fromPreset = hasPermissionGroups ? [] : buildPresetPermissions(row.permissionPreset);
+		const presetMenus = hasPermissionGroups ? [] : buildPresetMenus(row.permissionPreset);
 
-		const groupMenus = buildGroupMenus(row.permissionGroups);
-		const presetMenus = buildPresetMenus(row.permissionPreset);
-		const baseMenuAllow = groupMenus.length > 0
-			? uniqueList([...(groupMenus || []), ...(presetMenus || [])])
-			: uniqueList([...(row.menusPermissions || []), ...(presetMenus || [])]);
-		const mergedMenuAllow = uniqueList([...(baseMenuAllow || []), ...(row.menusPermissionsAdd || [])]);
-		row.menusPermissions = intersectPreserveOrder(listMinus(mergedMenuAllow, row.menusPermissionsDeny), parentMenus);
+		row.permissionsAdd = listMinus(row.permissionsAdd, row.permissionsDeny);
+		row.menusPermissionsAdd = listMinus(row.menusPermissionsAdd, row.menusPermissionsDeny);
+
+		if (hasPermissionGroups) {
+			// Khi đã chọn nhóm quyền từ /system/dept, để backend resolve theo csm_roles.
+			// Frontend chỉ giữ delta add/deny để tránh thao tác dư thừa/chồng chéo.
+			row.permissions = [];
+			row.menusPermissions = [];
+			row.permissionPreset = "";
+		} else {
+			const basePermissionAllow = uniqueList([...(row.permissions || []), ...(fromPreset || [])]);
+			const mergedPermissionAllow = uniqueList([...(basePermissionAllow || []), ...(row.permissionsAdd || [])]);
+			row.permissions = listMinus(mergedPermissionAllow, row.permissionsDeny);
+
+			const baseMenuAllow = uniqueList([...(row.menusPermissions || []), ...(presetMenus || [])]);
+			const mergedMenuAllow = uniqueList([...(baseMenuAllow || []), ...(row.menusPermissionsAdd || [])]);
+			row.menusPermissions = listMinus(mergedMenuAllow, row.menusPermissionsDeny);
+		}
+
+		// Chặn vượt quyền theo quyền parent hiện tại.
+		row.permissions = intersectPreserveOrder(row.permissions, parentPermissions);
+		const finalMenuAllow = row.menusPermissions;
+		// Nếu admin có "legacy full-app-scope" (menusPermissions=[appId]), cho phép gán bất kỳ menu app nào
+		row.menusPermissions = hasLegacyAppScope(parentMenus, currentActorAppId)
+			? uniqueList(finalMenuAllow)
+			: intersectPreserveOrder(finalMenuAllow, parentMenus);
 	}
 
 	applyDataScopeToPermissions(row);
@@ -911,11 +935,16 @@ function beforeSave(row, seft) {
 	row.menusPermissions = normalizeList(row.menusPermissions);
 	row.permissionPreset = String(row.permissionPreset || "").trim();
 
-	// Preset is a quick-start baseline — merge into explicit lists
-	const fromPreset = buildPresetPermissions(row.permissionPreset);
-	const fromPresetMenus = buildPresetMenus(row.permissionPreset);
-	row.permissions = uniqueList([...row.permissions, ...fromPreset]);
-	row.menusPermissions = uniqueList([...row.menusPermissions, ...fromPresetMenus]);
+	// Nếu đã chọn tay permissions/menus thì ưu tiên dữ liệu đã chọn,
+	// preset chỉ dùng để khởi tạo nhanh khi danh sách còn trống.
+	if (row.permissions.length === 0) {
+		const fromPreset = buildPresetPermissions(row.permissionPreset);
+		row.permissions = uniqueList([...fromPreset]);
+	}
+	if (row.menusPermissions.length === 0) {
+		const fromPresetMenus = buildPresetMenus(row.permissionPreset);
+		row.menusPermissions = uniqueList([...fromPresetMenus]);
+	}
 
 	// Single number representing all permissions for this group
 	row.permissionBitfield = String(toBitfield(row));

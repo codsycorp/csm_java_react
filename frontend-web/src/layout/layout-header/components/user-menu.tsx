@@ -20,10 +20,6 @@ export function UserMenu({ ...restProps }: ButtonProps) {
 
 	const onClick: MenuProps["onClick"] = async ({ key }) => {
 		if (key === "logout") {
-			// Check if currently in admin area
-			const currentPath = window.location.pathname;
-			const isInAdmin = currentPath.includes("/home") || currentPath.includes("/system") || currentPath.includes("/personal-center");
-			
 			// Clear permission store NGAY LẬP TỨC để xóa menu
 			usePermissionStore.getState().reset();
 			
@@ -31,8 +27,7 @@ export function UserMenu({ ...restProps }: ButtonProps) {
 			await logout();
 			
 			// Force reload to login page to completely unmount everything
-			const loginUrl = isInAdmin ? "/login?redirect=admin" : "/login";
-			window.location.href = loginUrl;
+			window.location.href = "/login";
 		}
 		if (key === "personal-center") {
 			navigate("/personal-center/my-profile");

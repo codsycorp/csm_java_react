@@ -15,38 +15,13 @@ import { create } from "zustand";
 import { resolveDevFlag } from "#src/utils/dev-flag";
 import { getTableData, type Where } from "#src/components/csm-grid/CsmApi";
 
-/**
- * 将平面的 API 菜单列表转换为树形结构的布局菜单格式
- * 支持两种格式：
- * 1. 基于 parentId 的平面列表
- * 2. 基于 nodes 字段的已有树形结构
- */
-
-/**
- * 从菜单标签中移除前缀（只保留最后一个点之后的内容）
- * @param label 原始标签，例如 "B.01. Quản Lý Người Dùng" 或 "01.19. Báo Cáo" 或 "A. Cài Đặt"
- * @returns 清理后的标签，例如 "Quản Lý Người Dùng" 或 "Báo Cáo" 或 "Cài Đặt"
- */
 function stripMenuPrefixFromLabel(label: string): string {
 	if (!label || typeof label !== 'string') {
 		return label;
 	}
-	
-	// 移除所有开头的 "数字/字母.数字. " 或 "字母. " 等前缀
-	// 只保留最后一个点之后的内容
-	// 例如: "B.01. Quản Lý" → "Quản Lý"
-	//      "01.19. Báo Cáo" → "Báo Cáo"
-	//      "A. Cài Đặt" → "Cài Đặt"
-	//      "01.02.03. Test" → "Test"
 	return label.replace(/^.*?\.\s+/, '').trim();
 }
 
-/**
- * 从平面菜单列表（带 parentId）构建树形结构
- * @param flatMenus 平面的菜单列表
- * @param parentId 当前父菜单的 ID（用于递归）
- * @returns 树形结构的菜单列表
- */
 function buildMenuTree(flatMenus: ApiMenuItemType[], parentId: string = ""): ApiMenuItemType[] {
 	const result = flatMenus
 		.filter(menu => (menu.parentId || "") === parentId)
@@ -57,9 +32,6 @@ function buildMenuTree(flatMenus: ApiMenuItemType[], parentId: string = ""): Api
 				children: children.length > 0 ? children : undefined
 			};
 		});
-	
-	// ...existing code...
-	
 	return result;
 }
 
@@ -90,8 +62,12 @@ function isMenuAllowedByLegacyAccess(menu: any, allowedKeys: Set<string>, allowe
 	const path = normalizeAccessKey(menu?.path || menu?.key);
 	const id = normalizeAccessKey(menu?.id);
 	const name = normalizeAccessKey(menu?.name);
+	const isSystemPath = path.startsWith("/system");
+	const isAlwaysVisible = path === "/" || path === "/home" || path === "/auto-setup" || id === "home" || id === "auto";
 
-	if (path && allowedPaths.has(path)) return true;
+	if (isAlwaysVisible) return true;
+
+	if (isSystemPath && path && allowedPaths.has(path)) return true;
 	if (path && allowedKeys.has(path)) return true;
 	if (id && allowedKeys.has(id)) return true;
 	if (name && allowedKeys.has(name)) return true;
@@ -144,19 +120,12 @@ function filterMenuTreeByLegacyAccess(items: any[], allowedKeys: Set<string>, al
 	}, []);
 }
 
-/**
- * Load all database tables from menu tree structure
- * @param menuTree API menu tree
- * @param appId Current app ID
- */
 async function loadDatabaseFromMenus(menuTree: ApiMenuItemType[], appId: string): Promise<void> {
-	// Collect all unique table names from menu tree
 	const tableNames = new Set<string>();
-	
+
 	function collectTableNames(menus: ApiMenuItemType[]) {
 		menus.forEach(menu => {
 			if (menu.table_name) {
-				// table_name can be comma-separated: "table1,table2,table3"
 				const tables = menu.table_name.split(/,/g).filter(t => t.trim() !== "");
 				tables.forEach(t => tableNames.add(t.trim()));
 			}
@@ -165,17 +134,14 @@ async function loadDatabaseFromMenus(menuTree: ApiMenuItemType[], appId: string)
 			}
 		});
 	}
-	
+
 	collectTableNames(menuTree);
-	
-	
-	// Default WHERE condition to get all rows
+
 	const defaultWhere: Where = {
 		operator: "AND",
 		conditions: [{ field: "id", type: "like", value: "" }]
 	};
-	
-	// Load all tables in parallel
+
 	const loadPromises = Array.from(tableNames).map(async (tableName) => {
 		try {
 			const res = await getTableData<any>({
@@ -183,10 +149,8 @@ async function loadDatabaseFromMenus(menuTree: ApiMenuItemType[], appId: string)
 				obj_name: tableName,
 				where: defaultWhere,
 			});
-			
+
 			const rows = res?.rows || [];
-			
-			// Store in AppStore
 			useAppStore.getState().setTableData(tableName, {
 				id: tableName,
 				rows,
@@ -195,7 +159,7 @@ async function loadDatabaseFromMenus(menuTree: ApiMenuItemType[], appId: string)
 		} catch (error) {
 		}
 	});
-	
+
 	await Promise.all(loadPromises);
 }
 
@@ -203,33 +167,20 @@ export function transformApiMenusToLayoutMenus(apiMenus: (ApiMenuItemType & { ch
 	const result: MenuItemType[] = [];
 
 	apiMenus.forEach((apiMenu) => {
-		// Skip auto-setup menu when no auto_code is provided
 		const maybeAutoPath = (apiMenu.path || "").toLowerCase();
 		const maybeAutoId = (apiMenu.id || "").toLowerCase();
 		const maybeAutoName = (apiMenu.name || "").toLowerCase();
 		const autoCode = (apiMenu as any).auto_code;
 		const isAutoMenu = maybeAutoPath === "/auto-setup" || maybeAutoId === "auto" || maybeAutoName.includes("auto");
 		if (isAutoMenu && (!autoCode || String(autoCode).trim() === "")) {
-			return; // do not include this menu item
+			return;
 		}
-		// ONLY preserve fields that Ant Design Menu understands or app logic needs
-		// DO NOT spread all API fields - this prevents unwanted rendering
 		const menuItem: any = {
-			// Ant Design Menu fields
 			key: apiMenu.path || apiMenu.id || "",
-			// Use original label (will be translated in translateMenus)
 			label: stripMenuPrefixFromLabel(apiMenu.label || apiMenu.name || ""),
 			disabled: apiMenu.status === 0 || apiMenu.m_show === false,
-			
-			// Preserve multilingual labels for use during rendering
 			label_en: apiMenu.label_en ? stripMenuPrefixFromLabel(apiMenu.label_en) : undefined,
 			label_zh: apiMenu.label_zh ? stripMenuPrefixFromLabel(apiMenu.label_zh) : undefined,
-			
-			// Only include icon if it's a React component, not a string
-			// String icon names will be rendered as text and break the UI
-			// So we skip the icon field entirely for safety
-			
-			// Preserve these fields for app logic (NOT for rendering)
 			id: apiMenu.id,
 			path: apiMenu.path,
 			table_name: apiMenu.table_name,
@@ -257,7 +208,6 @@ export function transformApiMenusToLayoutMenus(apiMenus: (ApiMenuItemType & { ch
 			auto_code: (apiMenu as any).auto_code,
 		};
 
-		// Recursively transform children
 		if (apiMenu.children && apiMenu.children.length > 0) {
 			menuItem.children = transformApiMenusToLayoutMenus(apiMenu.children as any);
 		}
@@ -269,17 +219,11 @@ export function transformApiMenusToLayoutMenus(apiMenus: (ApiMenuItemType & { ch
 }
 
 interface InitialStateType {
-	// 静态路由生成的菜单
 	constantMenus: MenuItemType[]
-	// 静态路由（前端）和动态路由（后端）生成的菜单
 	wholeMenus: MenuItemType[]
-	// API 返回的原始菜单数据（保留 table_name, report_name 等自定义字段）
 	apiWholeMenus: ApiMenuItemType[]
-	// 有权限的 React Router 路由
 	routeList: AppRouteRecordRaw[]
-	// 扁平化后的路由，路由 id 作为索引 key
 	flatRouteList: Record<string, AppRouteRecordRaw>
-	// 表示 hasFetchedDynamicRoutes 是否被请求过
 	hasFetchedDynamicRoutes: boolean
 }
 const initialState: InitialStateType = {
@@ -310,23 +254,16 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 			? { "csm-token": effectiveToken }
 			: undefined;
 		const { result } = await fetchAsyncRoutes(asyncRouteHeaders);
-		// 为动态路由添加前端组件
 		const dynamicRoutes = addAsyncRoutes(result);
 		const newRoutes = ascending([...rootChildRoutes, ...dynamicRoutes]);
 
 		const constantMenus = getMenuItems((router.routes[0].children || []) as AppRouteRecordRaw[]);
-
-		/* 添加动态路由到前端根路由 */
 		router.patchRoutes(ROOT_ROUTE_ID, dynamicRoutes);
-
 		const flatRouteList = flattenRoutes(newRoutes);
 
-		// Dev flag to decide whether to keep system menus
 		const userState = useUserStore.getState();
 		const isDev = resolveDevFlag(userState.dev, userState.roles);
 		const isAdmin = !isDev && (userState.roles || []).some(r => r.trim().toLowerCase() === 'admin');
-		// Nếu dev, bỏ roles trên nhánh /system để giữ đầy đủ menu hệ thống
-		// Nếu admin, chỉ giữ sub-menus có roles chứa 'admin'
 		const routesForMenu = (isDev
 			? newRoutes.map(r => r.path === "/system"
 				? {
@@ -351,13 +288,12 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 					: r)
 				: newRoutes) as AppRouteRecordRaw[];
 
-		let routeMenus: MenuItemType[] = getMenuItems(routesForMenu);
+		const routeMenus: MenuItemType[] = getMenuItems(routesForMenu);
 		const homeMenu = routeMenus.find(m => m.key === "/home");
 		const systemMenusFromRoute = routeMenus.filter(m => m.key === "/system");
 		let wholeMenus: MenuItemType[] = [];
 		let apiWholeMenus: ApiMenuItemType[] = [];
 		try {
-			// 获取当前应用 ID - 优先使用登录用户 app_id，其次参数，再次 store
 			const effectiveAppId = (appIdParam || "").trim()
 				|| (useUserStore.getState().app_id || "").trim()
 				|| useAppStore.getState().getCurrentAppId();
@@ -370,19 +306,7 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 			);
 			const shouldBypassMenuFilter = isDev || hasLegacyAppOnly;
 			const allowedRoutePaths = buildAllowedPathSet(routesForMenu);
-			console.log("[MENU-FILTER] handleAsyncRoutes", {
-				effectiveAppId,
-				roles: userState.roles,
-				isDev,
-				isAdmin,
-				userMenusPermissions,
-				hasLegacyAppOnly,
-				explicitAllowedCount: explicitAllowedKeys.size,
-				allowedRoutePathCount: allowedRoutePaths.size,
-				shouldBypassMenuFilter,
-			});
 			const apiMenuResponse = await fetchNavigationMenus(effectiveAppId);
-			// ...existing code (API menu processing, tree transform, etc)...
 			if (apiMenuResponse?.result?.list && apiMenuResponse.result.list.length > 0) {
 				let apiMenuList = apiMenuResponse.result.list;
 				const hasParentId = apiMenuList.some((m: ApiMenuItemType) => 'parentId' in m);
@@ -391,18 +315,13 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 					apiMenuList = buildMenuTree(apiMenuList);
 				}
 				apiWholeMenus = apiMenuList;
-				
-				// Load database from menu tree (don't await to avoid blocking menu rendering)
-				loadDatabaseFromMenus(apiMenuList, effectiveAppId).catch(err => {
+
+				loadDatabaseFromMenus(apiMenuList, effectiveAppId).catch(() => {
 				});
-				
+
 				const apiMenus = transformApiMenusToLayoutMenus(apiMenuList as (ApiMenuItemType & { children?: MenuItemType[] })[]);
 				const sanitizedApiMenus = isAdmin ? pruneDevOnlySystemMenusForAdmin(apiMenus) : apiMenus;
-				// Giữ auto-setup nếu có auto_code; loại bỏ chỉ khi không có auto_code
 				const filterAutoSetup = (m: any) => !(m.key === "/auto-setup" && !m.auto_code);
-				// isDev hoặc hasLegacyAppOnly (menusPermissions=[appId] = tài khoản chính, full quyền app)
-				// thì bypass filter → hiện toàn bộ menu app
-				// Ngược lại lọc theo các path/id cụ thể trong menusPermissions
 				const filteredByLegacyAccess = shouldBypassMenuFilter
 					? sanitizedApiMenus
 					: filterMenuTreeByLegacyAccess(
@@ -410,9 +329,10 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 						explicitAllowedKeys,
 						allowedRoutePaths,
 					);
-				const apiMenusFiltered = filteredByLegacyAccess.filter(m => m.key !== "/system" && m.key !== "/home").filter(filterAutoSetup);
+				const apiMenusFiltered = filteredByLegacyAccess
+					.filter(m => m.key !== "/system" && m.key !== "/home" && m.key !== "/" && String((m as any).id || "") !== "home")
+					.filter(filterAutoSetup);
 				if (isDev || isAdmin) {
-					// dev/admin luôn có system routes; API business menus đã được filter ở trên
 					wholeMenus = [
 						...(homeMenu ? [homeMenu] : []),
 						...systemMenusFromRoute,
@@ -426,7 +346,6 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 					];
 				}
 			} else {
-				// API trả về rỗng: chỉ giữ system menu nếu dev hoặc admin, ngược lại không menu
 				if (isDev || isAdmin) {
 					wholeMenus = [
 						...(homeMenu ? [homeMenu] : []),
@@ -437,7 +356,6 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 				}
 			}
 		} catch (error) {
-			// Nếu API 请求失败: dev/admin giữ system, user không menu
 			if (isDev || isAdmin) {
 				wholeMenus = [
 					...(homeMenu ? [homeMenu] : []),
@@ -460,24 +378,16 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 		return newState;
 	},
 
-	// Áp dụng routes nhận từ login, không gọi API get-async-routes
 	applyAsyncRoutesFromLogin: async (routesFromLogin: AppRouteRecordRaw[], appIdParam?: string, devFlag?: boolean) => {
-		// Chuẩn hóa và gắn Component/lazy tương ứng
 		const dynamicRoutes = addAsyncRoutes(routesFromLogin);
 		const newRoutes = ascending([...rootChildRoutes, ...dynamicRoutes]);
 
 		const constantMenus = getMenuItems((router.routes[0].children || []) as AppRouteRecordRaw[]);
-
-		// Thêm dynamic routes vào Router
 		router.patchRoutes(ROOT_ROUTE_ID, dynamicRoutes);
-
 		const flatRouteList = flattenRoutes(newRoutes);
-
-		// Luôn tạo menu từ routes trước (bao gồm cả system routes)
 		let wholeMenus = getMenuItems(newRoutes);
 		let apiWholeMenus: ApiMenuItemType[] = [];
-		
-		// Thử lấy menu điều hướng API để có đủ metadata
+
 		try {
 			const effectiveAppId = (appIdParam || "").trim()
 				|| (useUserStore.getState().app_id || "").trim()
@@ -518,17 +428,6 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 						: r)
 					: newRoutes) as AppRouteRecordRaw[];
 			const allowedRoutePaths = buildAllowedPathSet(routesForMenu);
-			console.log("[MENU-FILTER] applyAsyncRoutesFromLogin", {
-				effectiveAppId,
-				roles: userState.roles,
-				isDev,
-				isAdmin,
-				userMenusPermissions,
-				hasLegacyAppOnly,
-				explicitAllowedCount: explicitAllowedKeys.size,
-				allowedRoutePathCount: allowedRoutePaths.size,
-				shouldBypassMenuFilter,
-			});
 			const routeMenus = getMenuItems(routesForMenu);
 			const homeMenu = routeMenus.find(m => m.key === '/home');
 			const systemMenus = routeMenus.filter(m => m.key === '/system');
@@ -540,17 +439,11 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 					apiMenuList = buildMenuTree(apiMenuList);
 				}
 				apiWholeMenus = apiMenuList;
-				
-				// Load database from menu tree (don't await to avoid blocking menu rendering)
-				loadDatabaseFromMenus(apiMenuList, effectiveAppId).catch(err => {
+				loadDatabaseFromMenus(apiMenuList, effectiveAppId).catch(() => {
 				});
-				
 				const apiMenus = transformApiMenusToLayoutMenus(apiMenuList as (ApiMenuItemType & { children?: MenuItemType[] })[]);
 				const sanitizedApiMenus = isAdmin ? pruneDevOnlySystemMenusForAdmin(apiMenus) : apiMenus;
 				const filterAutoSetup = (m: any) => !(m.key === '/auto-setup' && !m.auto_code);
-				// isDev hoặc hasLegacyAppOnly (menusPermissions=[appId] = tài khoản chính, full quyền app)
-				// thì bypass filter → hiện toàn bộ menu app
-				// Ngược lại lọc theo các path/id cụ thể trong menusPermissions
 				const filteredByLegacyAccess = shouldBypassMenuFilter
 					? sanitizedApiMenus
 					: filterMenuTreeByLegacyAccess(
@@ -558,9 +451,10 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 						explicitAllowedKeys,
 						allowedRoutePaths,
 					);
-				const apiMenusFiltered = filteredByLegacyAccess.filter(m => m.key !== '/system' && m.key !== '/home').filter(filterAutoSetup);
+				const apiMenusFiltered = filteredByLegacyAccess
+					.filter(m => m.key !== '/system' && m.key !== '/home' && m.key !== '/' && String((m as any).id || '') !== 'home')
+					.filter(filterAutoSetup);
 				if (isDev || isAdmin) {
-					// dev/admin luôn có system routes; API business menus đã được filter ở trên
 					wholeMenus = [
 						...(homeMenu ? [homeMenu] : []),
 						...systemMenus,
@@ -574,13 +468,11 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 					];
 				}
 			} else if (isDev || isAdmin) {
-				// API rỗng và dev/admin: chỉ giữ home + system
 				wholeMenus = [
 					...(homeMenu ? [homeMenu] : []),
 					...systemMenus,
 				];
 			} else {
-				// API rỗng và không dev/admin: chỉ giữ home (nếu có)
 				wholeMenus = homeMenu ? [homeMenu] : [];
 			}
 		} catch {
@@ -631,7 +523,6 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 	},
 
 	reset: () => {
-		/* 移除动态路由 */
 		router._internalSetRoutes(routes);
 		set(initialState);
 	},

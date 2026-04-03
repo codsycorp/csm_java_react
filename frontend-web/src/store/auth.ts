@@ -66,10 +66,6 @@ export const useAuthStore = create<AuthState & AuthAction>()(
 				csrfToken: undefined,
 			});
 			
-			/**
-			 * Clear admin mode flag
-			 */
-			window.sessionStorage.removeItem('forceAdminMode');
 			localStorage.removeItem('user_dev');
 			
 			/**
