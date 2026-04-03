@@ -89,10 +89,12 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 	const [open, action] = useToggle();
 	const [input, setInput] = useState("");
 	const [openChats, setOpenChats] = useState<{room: string, username: string}[]>([]);
+	const [selectedAppFilter, setSelectedAppFilter] = useState<string>("all");
 	const classes = useStyles();
 	const { t } = useTranslation();
 	const { token } = theme.useToken();
 	const user = useUserStore();
+	const isDevUser = !!user.dev;
 	// CRITICAL: Use same pattern as permission.ts and ChatHistoryContext for getting effective appId
 	// Priority: user.app_id (from login) > store.currentAppId (from AppStore) > fallback to "csm"
 	const appId = (user.app_id || "").trim() || useAppStore.getState().getCurrentAppId() || "csm";
@@ -118,8 +120,8 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 	// Group 1: Internal users - chat giữa các user trong cùng app (userId hoặc username, nhưng không phải guest, không phải broadcast)
 	// Group 2: Guests - messages có guestPhone (khách vãng lai)
 	const { internalUsersWithUnread, guestUsersWithUnread } = useMemo(() => {
-		const internalMap = new Map<string, { username: string; avatar?: string; unread: number }>();
-		const guestMap = new Map<string, { key: string; label: string; unread: number }>();
+		const internalMap = new Map<string, { key: string; room: string; username: string; avatar?: string; unread: number; lastTs: number; appId?: string }>();
+		const guestMap = new Map<string, { key: string; room: string; label: string; unread: number; lastTs: number; appId?: string }>();
 		
 		// Duyệt TẤT CẢ rooms trong contextMessages để không bỏ lỡ tin của guests
 		Object.entries(contextMessages).forEach(([roomKey, msgs]) => {
@@ -130,7 +132,7 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 				}
 				
 				// Admin chỉ nhận tin thuộc app hiện tại
-				if (msg.appId && msg.appId !== appId) {
+				if (!isDevUser && msg.appId && msg.appId !== appId) {
 					return;
 				}
 				
@@ -141,11 +143,23 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 				if (msg.guestSessionId || msg.guestPhone) {
 					const guestKey = String(msg.guestSessionId || msg.guestPhone).trim();
 					if (guestKey) {
+						const guestRoom = String(roomKey || '').startsWith('guest:')
+							? String(roomKey)
+							: `guest:${(msg.appId || appId || '').trim()};${guestKey}`;
 						const guestLabel = formatGuestLabel(guestKey, msg.guestPhone, msg.username, msg.isAdmin);
-						const existing = guestMap.get(guestKey) || { key: guestKey, label: guestLabel, unread: 0 };
+						const existing = guestMap.get(guestRoom) || {
+							key: guestRoom,
+							room: guestRoom,
+							label: guestLabel,
+							unread: 0,
+							lastTs: 0,
+							appId: (msg.appId || '').trim(),
+						};
 						existing.label = guestLabel || existing.label;
+						existing.appId = (msg.appId || existing.appId || '').trim();
+						existing.lastTs = Math.max(existing.lastTs || 0, Number(msg.timestamp || 0));
 						if (isUnread && !msg.isAdmin) existing.unread++;
-						guestMap.set(guestKey, existing);
+						guestMap.set(guestRoom, existing);
 					}
 				} 
 				// THEN: Check internal user (userId or username) - must NOT have guestPhone
@@ -154,42 +168,118 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 					if (!username) return;
 					const currentUser = (user.username || '').trim();
 					if (username === currentUser) return; // Skip self-messages
-					const existing = internalMap.get(username) || { username, avatar: msg.avatar, unread: 0 };
+					const appToken = (msg.appId || appId || '').trim();
+					const internalRoom = String(roomKey || '').trim() || `user:${appToken};${username}`;
+					const internalKey = isDevUser ? `${appToken}::${username}` : username;
+					const existing = internalMap.get(internalKey) || {
+						key: internalKey,
+						room: internalRoom,
+						username,
+						avatar: msg.avatar,
+						unread: 0,
+						lastTs: 0,
+						appId: appToken,
+					};
+					existing.lastTs = Math.max(existing.lastTs || 0, Number(msg.timestamp || 0));
+					existing.appId = (msg.appId || existing.appId || '').trim();
+					existing.room = internalRoom || existing.room;
 					if (isUnread) existing.unread++;
-					internalMap.set(username, existing);
+					internalMap.set(internalKey, existing);
 				}
 			});
 		});
 		
 		const internalUsersWithUnread = Array.from(internalMap.values())
-			.filter(item => item.unread > 0)
-			.sort((a, b) => b.unread - a.unread);
+			.sort((a, b) => (b.unread - a.unread) || (b.lastTs - a.lastTs));
 		const guestUsersWithUnread = Array.from(guestMap.values())
-			.filter(item => item.unread > 0)
-			.sort((a, b) => b.unread - a.unread);
+			.sort((a, b) => (b.unread - a.unread) || (b.lastTs - a.lastTs));
 		
 		console.log(`👥 [Notification] Parsed ${internalUsersWithUnread.length} internal users & ${guestUsersWithUnread.length} guests`);
 		console.log(`📊 [Notification] Internal users:`, internalUsersWithUnread.map(u => u.username));
 		console.log(`📱 [Notification] Guests:`, guestUsersWithUnread.map(g => g.key));
 		
 		return { internalUsersWithUnread, guestUsersWithUnread };
-	}, [contextMessages, appId, user.userId, user.username, formatGuestLabel]);
+	}, [contextMessages, appId, user.userId, user.username, formatGuestLabel, isDevUser]);
 
 	const totalGuestUnread = useMemo(() => guestUsersWithUnread.reduce((sum, g) => sum + g.unread, 0), [guestUsersWithUnread]);
 	const totalInternalUnread = useMemo(() => internalUsersWithUnread.reduce((sum, u) => sum + u.unread, 0), [internalUsersWithUnread]);
+
+	const appFilterOptions = useMemo(() => {
+		const set = new Set<string>();
+		if (appId) set.add(appId);
+		internalUsersWithUnread.forEach((u: any) => {
+			if (u?.appId) set.add(String(u.appId));
+		});
+		guestUsersWithUnread.forEach((g: any) => {
+			if (g?.appId) set.add(String(g.appId));
+		});
+		Object.values(contextMessages).flat().forEach((msg: any) => {
+			if (msg?.eventType === 'broadcast_notification' && msg?.to) {
+				set.add(String(msg.to));
+			}
+			if (msg?.appId) {
+				set.add(String(msg.appId));
+			}
+		});
+		return Array.from(set).filter(Boolean).sort();
+	}, [appId, internalUsersWithUnread, guestUsersWithUnread, contextMessages]);
+
+	useEffect(() => {
+		if (!isDevUser) {
+			setSelectedAppFilter(appId || "all");
+			return;
+		}
+		if (selectedAppFilter !== "all" && !appFilterOptions.includes(selectedAppFilter)) {
+			setSelectedAppFilter("all");
+		}
+	}, [isDevUser, appId, selectedAppFilter, appFilterOptions]);
+
+	const displayedInternalUsers = useMemo(() => {
+		if (!isDevUser || selectedAppFilter === "all") {
+			return internalUsersWithUnread;
+		}
+		return internalUsersWithUnread.filter((u: any) => String(u?.appId || "") === selectedAppFilter);
+	}, [internalUsersWithUnread, isDevUser, selectedAppFilter]);
+
+	const displayedGuestUsers = useMemo(() => {
+		if (!isDevUser || selectedAppFilter === "all") {
+			return guestUsersWithUnread;
+		}
+		return guestUsersWithUnread.filter((g: any) => String(g?.appId || "") === selectedAppFilter);
+	}, [guestUsersWithUnread, isDevUser, selectedAppFilter]);
 	
 	// System messages: broadcast notifications từ CSM admin (appId='csm') gửi đến app hiện tại
 	// CRITICAL: Đây là thông báo hệ thống từ admin CSM broadcast đến app của user
 	const systemMessages = useMemo(() => {
-		const appRoomMsgs = contextMessages[appId] || [];
-		return appRoomMsgs.filter((msg: any) => {
-			const isBroadcast = msg.eventType === 'broadcast_notification' && msg.to === appId;
-			const isGuestAutoWelcomeAlert = msg.eventType === 'guest_auto_welcome_alert' && msg.appId === appId;
-			return isBroadcast || isGuestAutoWelcomeAlert;
+		const allMsgs = Object.values(contextMessages).flat();
+		return allMsgs.filter((msg: any) => {
+			if (msg.eventType !== 'broadcast_notification') {
+				return false;
+			}
+			if (isDevUser) {
+				return true;
+			}
+			return msg.to === appId;
 		});
-	}, [contextMessages, appId]);
+	}, [contextMessages, appId, isDevUser]);
+
+	const displayedSystemMessages = useMemo(() => {
+		if (!isDevUser || selectedAppFilter === "all") {
+			return systemMessages;
+		}
+		return systemMessages.filter((msg: any) => String(msg?.to || msg?.appId || "") === selectedAppFilter);
+	}, [systemMessages, isDevUser, selectedAppFilter]);
 
 	const systemMessagesUnread = useMemo(() => {
+		let count = 0;
+		displayedSystemMessages.forEach((msg: any) => {
+			const hasRead = Array.isArray(msg.readBy) && user.userId ? msg.readBy.includes(user.userId) : false;
+			if (!hasRead) count++;
+		});
+		return count;
+	}, [displayedSystemMessages, user.userId]);
+
+	const totalSystemUnreadGlobal = useMemo(() => {
 		let count = 0;
 		systemMessages.forEach((msg: any) => {
 			const hasRead = Array.isArray(msg.readBy) && user.userId ? msg.readBy.includes(user.userId) : false;
@@ -198,8 +288,8 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 		return count;
 	}, [systemMessages, user.userId]);
 
-	// Total system unread = broadcast notifications unread for this appId
-	const totalSystemUnread = useMemo(() => systemMessagesUnread, [systemMessagesUnread]);
+	// Total system unread for bell badge (global, not affected by local filter selection).
+	const totalSystemUnread = useMemo(() => totalSystemUnreadGlobal, [totalSystemUnreadGlobal]);
 
 	// Ensure any chat opened from notification is immediately marked as read
 	const openChatAndMarkRead = useCallback((room: string, username?: string) => {
@@ -275,16 +365,33 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 							<div style={{ fontWeight: 600, color: token.colorText }}>Thông báo</div>
 						</div>
 						<div style={{ padding: '12px 16px' }}>
+							{isDevUser && appFilterOptions.length > 1 && (
+								<div style={{ marginBottom: 10 }}>
+									<div style={{ fontSize: 12, color: token.colorTextSecondary, marginBottom: 4 }}>
+										Lọc theo app
+									</div>
+									<select
+										value={selectedAppFilter}
+										onChange={(e) => setSelectedAppFilter(e.target.value)}
+										style={{ width: '100%', padding: '6px 8px', borderRadius: 6, border: `1px solid ${token.colorBorder}` }}
+									>
+										<option value="all">Tất cả app</option>
+										{appFilterOptions.map((opt) => (
+											<option key={opt} value={opt}>{opt}</option>
+										))}
+									</select>
+								</div>
+							)}
 							{/* Section 1: Internal Users (same appId) - unified from contextMessages[appId] */}
-							{internalUsersWithUnread.length > 0 && (
+							{displayedInternalUsers.length > 0 && (
 								<>
 									<div style={{ fontWeight: 600, color: token.colorTextSecondary, marginBottom: 6 }}>{t('common.notification.internalUsers', 'Người dùng nội bộ')}</div>
-									{internalUsersWithUnread.map(u => (
-										<div key={u.username} className={classes.userItem} onClick={() => openChatAndMarkRead(appId, u.username)}>
+									{displayedInternalUsers.map(u => (
+										<div key={u.key} className={classes.userItem} onClick={() => openChatAndMarkRead(u.room, u.username)}>
 											<Avatar src={u.avatar} icon={<UserOutlined />} size="small" />
 											<div style={{ flex: 1 }}>
 												<div className={classes.username}>{u.username}</div>
-												<div style={{ fontSize: 12, color: '#8c8c8c' }}>{t('common.notification.sameApp', 'Cùng appId')}</div>
+												<div style={{ fontSize: 12, color: '#8c8c8c' }}>{isDevUser ? `${t('common.notification.sameApp', 'Cùng appId')} • ${(u.appId || 'n/a')}` : t('common.notification.sameApp', 'Cùng appId')}</div>
 											</div>
 											{u.unread > 0 && <span className={classes.unreadBadge}>{u.unread}</span>}
 										</div>
@@ -294,15 +401,15 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 							)}
 
 							{/* Section 2: Guest Users - unified from contextMessages[appId] */}
-							{guestUsersWithUnread.length > 0 && (
+							{displayedGuestUsers.length > 0 && (
 								<>
 									<div style={{ fontWeight: 600, color: token.colorTextSecondary, marginBottom: 6 }}>{t('common.notification.guests', 'Khách vãng lai')}</div>
-									{guestUsersWithUnread.map(g => (
-										<div key={g.key} className={classes.userItem} onClick={() => openChatAndMarkRead(g.key, g.label)}>
+									{displayedGuestUsers.map(g => (
+										<div key={g.key} className={classes.userItem} onClick={() => openChatAndMarkRead(g.room, g.label)}>
 											<Avatar icon={<UserOutlined />} size="small" />
 											<div style={{ flex: 1 }}>
 												<div className={classes.username}>{g.label}</div>
-												<div style={{ fontSize: 12, color: '#8c8c8c' }}>{t('common.notification.guestDesc', 'Khách của web/app')}</div>
+												<div style={{ fontSize: 12, color: '#8c8c8c' }}>{isDevUser ? `${t('common.notification.guestDesc', 'Khách của web/app')} • ${(g.appId || 'n/a')}` : t('common.notification.guestDesc', 'Khách của web/app')}</div>
 											</div>
 											{g.unread > 0 && <span className={classes.unreadBadge}>{g.unread}</span>}
 										</div>
@@ -312,16 +419,16 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 							)}
 
 							{/* Section 3: System Messages (Broadcast to this appId) */}
-							{systemMessages.length > 0 && (
+							{displayedSystemMessages.length > 0 && (
 								<>
 									<div style={{ fontWeight: 600, color: token.colorTextSecondary, marginBottom: 6 }}>{t('common.notification.systemMessages', 'Tin nhắn hệ thống')}</div>
 									
 									{/* Show system notifications for this appId (broadcast) */}
-									<div className={classes.userItem} onClick={() => openChatAndMarkRead(appId, 'Thông báo hệ thống')}>
+									<div className={classes.userItem} onClick={() => openChatAndMarkRead((isDevUser && selectedAppFilter !== 'all') ? selectedAppFilter : appId, 'Thông báo hệ thống')}>
 										<Avatar icon={<BellOutlined />} size="small" style={{ backgroundColor: '#52c41a' }} />
 										<div style={{ flex: 1 }}>
 											<div className={classes.username}>Thông báo hệ thống</div>
-											<div style={{ fontSize: 12, color: '#8c8c8c' }}>Thông báo gửi đến ứng dụng của bạn</div>
+											<div style={{ fontSize: 12, color: '#8c8c8c' }}>{isDevUser && selectedAppFilter !== 'all' ? `Thông báo gửi đến ứng dụng: ${selectedAppFilter}` : 'Thông báo gửi đến ứng dụng của bạn'}</div>
 										</div>
 										{systemMessagesUnread > 0 && <span className={classes.unreadBadge}>{systemMessagesUnread}</span>}
 									</div>
@@ -331,7 +438,7 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 							)}
 							
 							{/* Show placeholder if all sections empty */}
-							{(internalUsersWithUnread.length === 0 && guestUsersWithUnread.length === 0 && systemMessages.length === 0 && totalSystemUnread === 0) && (
+							{(displayedInternalUsers.length === 0 && displayedGuestUsers.length === 0 && displayedSystemMessages.length === 0 && systemMessagesUnread === 0) && (
 								<div style={{ textAlign: 'center', padding: '20px', color: token.colorTextSecondary }}>
 									Chưa có tin nhắn
 								</div>

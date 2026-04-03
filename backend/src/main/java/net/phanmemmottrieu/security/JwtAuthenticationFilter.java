@@ -320,6 +320,23 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 return false;
             }
 
+            // JWT subject của hệ thống thường là app_token (không phải id/email).
+            // Với một số bản ghi stale khi lookup theo userId, cần ưu tiên resolve lại theo subject này.
+            if (subject.contains("_____") || (subject.length() > 40 && subject.indexOf('.') < 0)) {
+                net.phanmemmottrieu.model.User bySubjectToken = userService.findUserByAppToken(subject).orElse(null);
+                if (bySubjectToken != null) {
+                    if (tokenUserId != null && !tokenUserId.isBlank()) {
+                        String resolvedId = bySubjectToken.getId();
+                        if (resolvedId == null || !tokenUserId.equals(resolvedId)) {
+                            LOGGER.warn("[JWT] Subject app_token resolved to different user, reject token subject={} tokenUid={} resolvedUid={}",
+                                subject, tokenUserId, resolvedId);
+                            return false;
+                        }
+                    }
+                    user = bySubjectToken;
+                }
+            }
+
             String appToken = user.getAppToken();
             boolean subjectMatchesUser =
                 (appToken != null && subject.equals(appToken)) ||

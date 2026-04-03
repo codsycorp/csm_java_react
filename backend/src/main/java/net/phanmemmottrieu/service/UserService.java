@@ -939,8 +939,8 @@ public class UserService {
         logger.info("[mapSubUserRecordToUser] Effective permissions for {} => perms={}, menus={}", subUserRecord.get("login_identifier"), effectivePermissions, effectiveMenus);
 
         long normalizedBitfield = PermissionBitfieldUtil.buildBitfield(user.getPermissions(), user.getMenusPermissions(), user.getDev());
-        user.setPermissionBitfield(String.valueOf(normalizedBitfield));
-        user.setPermissionSchemaVersion("v2");
+        user.setPermissionBitfield(PermissionBitfieldUtil.toCompactToken(normalizedBitfield));
+        user.setPermissionSchemaVersion("v3");
         user.setDataScope(PermissionBitfieldUtil.resolveDataScope(normalizedBitfield));
 
         return Optional.of(user);
@@ -1219,8 +1219,8 @@ public class UserService {
         }
 
         long permissionBitfield = PermissionBitfieldUtil.buildBitfield(user.getPermissions(), user.getMenusPermissions(), user.getDev());
-        user.setPermissionBitfield(String.valueOf(permissionBitfield));
-        user.setPermissionSchemaVersion("v2");
+        user.setPermissionBitfield(PermissionBitfieldUtil.toCompactToken(permissionBitfield));
+        user.setPermissionSchemaVersion("v3");
         user.setDataScope(PermissionBitfieldUtil.resolveDataScope(permissionBitfield));
         // Sub-users will have their roles set in mapSubUserRecordToUser
         
@@ -1596,6 +1596,37 @@ public class UserService {
             effectiveMenus = subtractCaseInsensitive(effectiveMenus, menusPermissionsDeny);
             effectivePermissions = subtractCaseInsensitive(effectivePermissions, Arrays.asList("admin", "dev"));
 
+            List<String> parentPermissions = toStringListFlexible(parentUserRecord.get("permissions"));
+            List<String> parentMenus = toStringListFlexible(parentUserRecord.get("menusPermissions"));
+            Long parentBitfield = parseBitfieldToLong(parentUserRecord.get("permissionBitfield"));
+            if (parentBitfield != null) {
+                if (parentPermissions.isEmpty()) {
+                    parentPermissions = permissionsFromBitfield(parentBitfield);
+                }
+                if (parentMenus.isEmpty()) {
+                    parentMenus = menusFromBitfield(parentBitfield);
+                }
+            }
+            if (!parentPermissions.isEmpty()) {
+                effectivePermissions = intersectPreserveOrder(effectivePermissions, parentPermissions);
+            }
+            if (!hasLegacyAppScope(parentMenus, parentAppId) && !parentMenus.isEmpty()) {
+                effectiveMenus = intersectPreserveOrder(effectiveMenus, parentMenus);
+            }
+
+            String requestedScope = String.valueOf(subUserRequest.getOrDefault("dataScope", "")).trim();
+            String parentScope = String.valueOf(parentUserRecord.getOrDefault("dataScope", "")).trim();
+            if ((parentScope == null || parentScope.isBlank()) && parentBitfield != null) {
+                parentScope = PermissionBitfieldUtil.resolveDataScope(parentBitfield);
+            }
+            String clampedScope = minDataScope(requestedScope, parentScope);
+            effectivePermissions = applyScopeToken(effectivePermissions, clampedScope);
+
+            if (effectivePermissions.isEmpty()) {
+                effectivePermissions = new ArrayList<>(List.of("view", "scope:owner"));
+                clampedScope = "OWNER";
+            }
+
             long normalizedBitfield = PermissionBitfieldUtil.buildBitfield(effectivePermissions, effectiveMenus, false);
 
             subUserData.put("permissions", effectivePermissions);
@@ -1604,9 +1635,9 @@ public class UserService {
             subUserData.put("permissionsDeny", permissionsDeny);
             subUserData.put("menusPermissionsAdd", menusPermissionsAdd);
             subUserData.put("menusPermissionsDeny", menusPermissionsDeny);
-            subUserData.put("permissionBitfield", String.valueOf(normalizedBitfield));
-            subUserData.put("permissionSchemaVersion", String.valueOf(subUserRequest.getOrDefault("permissionSchemaVersion", "v2")));
-            subUserData.put("dataScope", PermissionBitfieldUtil.resolveDataScope(normalizedBitfield));
+            subUserData.put("permissionBitfield", PermissionBitfieldUtil.toCompactToken(normalizedBitfield));
+            subUserData.put("permissionSchemaVersion", String.valueOf(subUserRequest.getOrDefault("permissionSchemaVersion", "v3")));
+            subUserData.put("dataScope", clampedScope.isBlank() ? PermissionBitfieldUtil.resolveDataScope(normalizedBitfield) : clampedScope);
             subUserData.put("app_id", parentAppId);
             if (subUserRequest.containsKey("dept_id")) subUserData.put("dept_id", subUserRequest.get("dept_id"));
             if (subUserRequest.containsKey("branch_id")) subUserData.put("branch_id", subUserRequest.get("branch_id"));
@@ -1750,13 +1781,9 @@ public class UserService {
 
     private Long parseBitfieldToLong(Object raw) {
         if (raw == null) return null;
-        try {
-            String text = String.valueOf(raw).trim();
-            if (text.isEmpty()) return null;
-            return Long.parseLong(text);
-        } catch (Exception ignore) {
-            return null;
-        }
+        String text = String.valueOf(raw).trim();
+        if (text.isEmpty()) return null;
+        return PermissionBitfieldUtil.parseSecurityToken(text);
     }
 
     private List<String> permissionsFromBitfield(long bitfield) {
@@ -1810,6 +1837,85 @@ public class UserService {
             }
         }
         return result;
+    }
+
+    private List<String> intersectPreserveOrder(List<String> source, List<String> allowed) {
+        if (source == null || source.isEmpty()) {
+            return new ArrayList<>();
+        }
+        Set<String> allowedSet = new LinkedHashSet<>();
+        for (String item : allowed == null ? Collections.<String>emptyList() : allowed) {
+            if (item == null) continue;
+            String value = item.trim().toLowerCase(Locale.ROOT);
+            if (!value.isEmpty()) {
+                allowedSet.add(value);
+            }
+        }
+        if (allowedSet.isEmpty()) {
+            return new ArrayList<>();
+        }
+        List<String> result = new ArrayList<>();
+        Set<String> seen = new LinkedHashSet<>();
+        for (String item : source) {
+            if (item == null) continue;
+            String value = item.trim();
+            if (value.isEmpty()) continue;
+            String key = value.toLowerCase(Locale.ROOT);
+            if (allowedSet.contains(key) && seen.add(key)) {
+                result.add(value);
+            }
+        }
+        return result;
+    }
+
+    private boolean hasLegacyAppScope(List<String> menus, String appId) {
+        String appKey = appId == null ? "" : appId.trim().toLowerCase(Locale.ROOT);
+        if (appKey.isEmpty()) {
+            return false;
+        }
+        if (menus == null) {
+            return false;
+        }
+        for (String menu : menus) {
+            String normalized = menu == null ? "" : menu.trim().toLowerCase(Locale.ROOT);
+            if (normalized.equals(appKey)
+                || normalized.equals("app:" + appKey)
+                || normalized.equals("/" + appKey)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private int dataScopeRank(String scope) {
+        String normalized = scope == null ? "" : scope.trim().toUpperCase(Locale.ROOT);
+        return switch (normalized) {
+            case "ALL" -> 4;
+            case "BRANCH" -> 3;
+            case "DEPARTMENT" -> 2;
+            case "OWNER" -> 1;
+            default -> 0;
+        };
+    }
+
+    private String minDataScope(String requested, String allowed) {
+        String[] scopes = {"NONE", "OWNER", "DEPARTMENT", "BRANCH", "ALL"};
+        int idx = Math.min(dataScopeRank(requested), dataScopeRank(allowed));
+        return scopes[Math.max(0, Math.min(idx, scopes.length - 1))];
+    }
+
+    private List<String> applyScopeToken(List<String> permissions, String scope) {
+        List<String> out = subtractCaseInsensitive(permissions, List.of("scope:owner", "scope:department", "scope:branch", "scope:all"));
+        String normalized = scope == null ? "" : scope.trim().toUpperCase(Locale.ROOT);
+        switch (normalized) {
+            case "OWNER" -> out = mergeUniqueCaseInsensitive(out, List.of("scope:owner"));
+            case "DEPARTMENT" -> out = mergeUniqueCaseInsensitive(out, List.of("scope:department"));
+            case "BRANCH" -> out = mergeUniqueCaseInsensitive(out, List.of("scope:branch"));
+            case "ALL" -> out = mergeUniqueCaseInsensitive(out, List.of("scope:all"));
+            default -> {
+            }
+        }
+        return out;
     }
 
     private List<String> subtractCaseInsensitive(List<String> source, List<String> deny) {

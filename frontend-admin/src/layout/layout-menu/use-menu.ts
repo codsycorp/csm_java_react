@@ -4,6 +4,7 @@ import { useCurrentRoute } from "#src/hooks";
 import { removeTrailingSlash } from "#src/router/utils";
 import { usePermissionStore, useUserStore, useAppStore } from "#src/store";
 import { resolveDevFlag } from "#src/utils/dev-flag";
+import { toPermissionBigInt, isSuperPermissionProfile } from "#src/utils/permission-bitfield";
 
 import { getTableData, updateTableData } from "#src/components/csm-grid/CsmApi";
 import { csmEncrypt, csmDecrypt } from "#src/components/csm-grid/CsmCrypto";
@@ -229,7 +230,10 @@ export function useMenu() {
 
 		// Xác định quyền dev/admin từ user store
 		const isDev = useUserStore(state => resolveDevFlag(state.dev, state.roles));
-		const isAdmin = useUserStore(state => (state.roles || []).some(r => r.trim().toLowerCase() === "admin"));
+		const isAdmin = useUserStore(state => {
+			const permissionBits = toPermissionBigInt((state as any).permissionBitfield);
+			return !isDev && isSuperPermissionProfile(permissionBits);
+		});
 
 	const { pathname } = useCurrentRoute();
 	/**
@@ -248,20 +252,7 @@ export function useMenu() {
 			? translatedMenus.filter(item => item?.key !== '/system' && item?.path !== '/system' && item?.id !== 'system')
 			: translatedMenus;
 
-		// Với admin (không phải dev): loại bỏ triệt để các mục dev-only trong nhánh /system
-		const filteredForRole = (canSeeSystemMenus && !isDev)
-			? filteredForDev.map((item: any) => {
-				if (item?.key !== '/system' && item?.path !== '/system' && item?.id !== 'system') {
-					return item;
-				}
-				const devOnlyPaths = new Set(['/system/menu', '/system/developer', '/system/broadcast']);
-				const children = Array.isArray(item.children) ? item.children : [];
-				return {
-					...item,
-					children: children.filter((child: any) => !devOnlyPaths.has(child?.key || child?.path || '')),
-				};
-			})
-			: filteredForDev;
+		const filteredForRole = filteredForDev;
 
 		const result = autoFixMenu(filteredForRole, isDev);
 		const preserveMenuIds = (items: any[]): any[] => {

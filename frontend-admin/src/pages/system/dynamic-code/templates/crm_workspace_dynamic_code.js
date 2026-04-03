@@ -2897,7 +2897,7 @@
         .filter(Boolean);
       return new Set(normalized);
     }, [seft?.user?.permissions, seft?.user?.roles]);
-    const hasSuperPermission = runtimePermissions === -1 || roleSet.has("admin") || roleSet.has("dev");
+    const hasSuperPermission = runtimePermissions === -1;
     const effectivePermissionMask = hasMenuPermissionScope ? runtimeMenuMask : Math.max(0, runtimePermissions);
     const canCreateByPermission = hasSuperPermission || (effectivePermissionMask & 2) !== 0;
     const canEditByPermission = hasSuperPermission || (effectivePermissionMask & 4) !== 0;
@@ -3174,7 +3174,7 @@
       setOnboardingStepIndex(0);
     }
 
-    const canManageAnyTask = (roleSet.has("admin") || roleSet.has("dev") || roleSet.has("manager") || roleSet.has("leader") || roleSet.has("team_leader") || runtimePermissions === -1)
+    const canManageAnyTask = (hasSuperPermission || roleSet.has("manager") || roleSet.has("leader") || roleSet.has("team_leader"))
       && canEditByPermission;
 
     function isOverdueTask(task) {
@@ -3191,7 +3191,7 @@
     }
 
     function canManageBasketAdminActions() {
-      return (roleSet.has("admin") || roleSet.has("dev") || runtimePermissions === -1) && canEditByPermission;
+      return hasSuperPermission && canEditByPermission;
     }
 
     function canManageInventoryRow(row) {

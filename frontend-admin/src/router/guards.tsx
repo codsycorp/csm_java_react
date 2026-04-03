@@ -2,6 +2,7 @@ import { usePreferences } from "#src/hooks";
 import PageError from "#src/pages/error/page-error";
 import { isString, toggleHtmlClass } from "#src/utils";
 import { resolveDevFlag } from "#src/utils/dev-flag";
+import { toPermissionBigInt, isSuperPermissionProfile } from "#src/utils/permission-bitfield";
 import { useAuthStore, useUserStore } from "#src/store";
 
 import { useEffect } from "react";
@@ -23,7 +24,9 @@ export function RouterGuards() {
 	const userId = useUserStore(state => state.userId);
 	const userRoles = useUserStore(state => state.roles);
 	const devFlag = useUserStore(state => state.dev);
+	const permissionBitfield = useUserStore(state => (state as any).permissionBitfield);
 	const isDev = resolveDevFlag(devFlag, userRoles);
+	const isTokenAdmin = isSuperPermissionProfile(toPermissionBigInt(permissionBitfield));
 
 	/* tailwind theme */
 	useEffect(() => {
@@ -71,9 +74,13 @@ export function RouterGuards() {
 			);
 		}
 		
-		const hasRequiredRole = routeHandle.roles.some((requiredRole: string) => 
-			userRoles.includes(requiredRole)
-		);
+		const hasRequiredRole = routeHandle.roles.some((requiredRole: string) => {
+			const normalized = String(requiredRole || "").trim().toLowerCase();
+			if (normalized === "admin") {
+				return isTokenAdmin;
+			}
+			return userRoles.includes(requiredRole);
+		});
 		
 		if (!hasRequiredRole) {
 			console.warn("🔒 Access denied: User roles", userRoles, "don't match required roles", routeHandle.roles);

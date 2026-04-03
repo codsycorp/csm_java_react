@@ -14,6 +14,7 @@ import { useUserStore } from '#src/store/user';
 import { useAppStore } from '#src/store/app';
 import { useGuestPhone } from '#src/hooks/useGuestPhone';
 import type { ChatMessage } from '#src/model/ChatMessage';
+import { toPermissionBigInt, isSuperPermissionProfile } from '#src/utils/permission-bitfield';
 
 type ChatActor = 'guest' | 'admin' | 'user';
 
@@ -82,7 +83,8 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
     [user.app_id]
   );
   const { guestPhone, guestSessionId, isGuest } = useGuestPhone();
-  const isAdminUser = !!user.dev || !!user.roles?.includes('admin');
+  const isAdminUser = !!user.dev || isSuperPermissionProfile(toPermissionBigInt((user as any).permissionBitfield));
+  const isDevUser = !!user.dev;
   const chatActor: ChatActor = isGuest ? 'guest' : (isAdminUser ? 'admin' : 'user');
   
   // Debug logging for appId
@@ -139,6 +141,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
 
   const isGuestConversationKey = useCallback((value?: string) => {
     if (!value) return false;
+    if (value.startsWith('guest:')) return true;
     return value !== appId && value !== 'csm' && !value.includes(':');
   }, [appId]);
 
@@ -222,9 +225,8 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
   const mapApiRoomToUiRoom = useCallback((apiRoom?: string) => {
     const room = (apiRoom || '').trim();
     if (!room) return '';
-    const guestPrefix = `guest:${appId};`;
-    if (room.startsWith(guestPrefix)) {
-      return room.slice(guestPrefix.length).trim();
+    if (room.startsWith('guest:')) {
+      return room;
     }
     if (room === `app:${appId}`) return appId;
     return room;
@@ -236,14 +238,15 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
 
     const normalized = snapshotMessages
       .filter((msg: ChatMessage) => !!msg)
-      .filter((msg: ChatMessage) => !msg.appId || msg.appId === effectiveAppId);
+      .filter((msg: ChatMessage) => isDevUser || !msg.appId || msg.appId === effectiveAppId);
 
     const guestBuckets: Record<string, ChatMessage[]> = {};
     normalized.forEach((msg: ChatMessage) => {
       const guestKey = String(msg.guestSessionId || msg.guestPhone || '').trim();
       if (!guestKey) return;
-      if (!guestBuckets[guestKey]) guestBuckets[guestKey] = [];
-      guestBuckets[guestKey].push(msg);
+      const guestRoom = `guest:${(msg.appId || effectiveAppId || appId).trim()};${guestKey}`;
+      if (!guestBuckets[guestRoom]) guestBuckets[guestRoom] = [];
+      guestBuckets[guestRoom].push(msg);
     });
 
     setMessages(prev => ({
@@ -258,11 +261,13 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
         const unread = msgs.filter((msg: ChatMessage) => !msg.readBy || !msg.readBy.includes(user.userId)).length;
         if (unread > 0) nextUnread[guestKey] = unread;
       });
-      const appUnread = normalized.filter((msg: ChatMessage) => !msg.readBy || !msg.readBy.includes(user.userId)).length;
-      if (appUnread > 0) nextUnread[effectiveAppId] = appUnread;
+      if (!isDevUser) {
+        const appUnread = normalized.filter((msg: ChatMessage) => !msg.readBy || !msg.readBy.includes(user.userId)).length;
+        if (appUnread > 0) nextUnread[effectiveAppId] = appUnread;
+      }
       setUnreadCounts(nextUnread);
     }
-  }, [appId, user.userId]);
+  }, [appId, user.userId, isDevUser]);
 
   const resolveOutgoingRoom = useCallback((room: string, to?: string) => {
     const targetGuestIdentity = chatActor === 'admin' && isGuestConversationKey(room) ? room : undefined;
@@ -278,6 +283,13 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
     }
 
     if (chatActor === 'admin') {
+      if (room.startsWith('guest:')) {
+        const identity = room.split(';').slice(1).join(';').trim();
+        return {
+          actualRoom: room,
+          targetGuestIdentity: identity || undefined,
+        };
+      }
       if (targetGuestIdentity) {
         return {
           actualRoom: resolveGuestApiRoom(targetGuestIdentity),
@@ -321,6 +333,14 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
     }
 
     if (chatActor === 'admin' && isGuestConversationKey(room)) {
+      if (room.startsWith('guest:')) {
+        return {
+          mode: 'admin-guest' as const,
+          uiRoom: room,
+          identity: room.split(';').slice(1).join(';').trim(),
+          apiRoom: room,
+        };
+      }
       return {
         mode: 'admin-guest' as const,
         uiRoom: room,
@@ -627,7 +647,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
         const isSystemMessage = msg.room === 'csm';
         const belongsToCurrentApp = msg.appId === appId;
         
-        if (!isSystemMessage && !belongsToCurrentApp) {
+        if (!isDevUser && !isSystemMessage && !belongsToCurrentApp) {
           console.log(`🚫 [ChatHistory] Rejected message from different appId: ${msg.appId} (current: ${appId})`);
           return;
         }
@@ -645,9 +665,9 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
       } else {
         // Admin: nhận msg từ guest hoặc msg của mình
         if (msg.guestSessionId) {
-          targetRoom = msg.guestSessionId;
+          targetRoom = `guest:${(msg.appId || appId).trim()};${msg.guestSessionId}`;
         } else if (msg.guestPhone) {
-          targetRoom = `phone:${msg.guestPhone}`;
+          targetRoom = `guest:${(msg.appId || appId).trim()};${msg.guestPhone}`;
         } else if (msg.to && msg.userId !== user.userId) {
           // Msg tới người khác
           return;
@@ -739,13 +759,13 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
       console.log('📢 Received broadcast notification:', msg);
       
       // Only show if message belongs to current app
-      if (msg.appId !== appId) {
+      if (!isDevUser && msg.appId !== appId) {
         console.log(`🚫 Rejected notification from different appId: ${msg.appId} (current: ${appId})`);
         return;
       }
       
       // Show notification in app room
-      const targetRoom = appId;
+      const targetRoom = (msg.appId || appId || '').trim() || appId;
       
       setMessages(prev => {
         const roomMessages = prev[targetRoom] || [];
@@ -959,7 +979,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
       socket.off?.("chat_read_update", handleReadUpdate);
       socket.off?.("user_typing", handleTyping);
     };
-  }, [socket, isGuest, guestIdentity, guestPhone, appId, user.userId, activeChats, saveToLocalStorage, loadHistory, emitAutoOpenChat, applyAdminSnapshot, mapApiRoomToUiRoom]);
+  }, [socket, isGuest, guestIdentity, guestPhone, appId, user.userId, activeChats, saveToLocalStorage, loadHistory, emitAutoOpenChat, applyAdminSnapshot, mapApiRoomToUiRoom, isDevUser]);
   
   // Load initial history khi connect
   useEffect(() => {
@@ -1032,7 +1052,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
         return;
       }
       
-      const isAdmin = !!user.dev || (user.roles && user.roles.includes("admin"));
+      const isAdmin = !!user.dev || isSuperPermissionProfile(toPermissionBigInt((user as any).permissionBitfield));
       if (!isAdmin || appId !== 'csm') {
         reject(new Error('Only CSM admins can broadcast notifications'));
         return;

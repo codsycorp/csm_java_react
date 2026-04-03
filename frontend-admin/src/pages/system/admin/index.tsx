@@ -12,7 +12,7 @@ import { useEffect, useState, useCallback, useMemo } from "react";
 import { useParams, useLocation } from "react-router";
 import { getTableData, createTableStruct, type CreateTableStruct } from "#src/components/csm-grid/CsmApi";
 import { useTranslation } from "react-i18next";
-import { toPermissionBigInt, resolvePermissionDataScope } from "#src/utils/permission-bitfield";
+import { toPermissionBigInt, resolvePermissionDataScope, isSuperPermissionProfile } from "#src/utils/permission-bitfield";
 // Import hàm hỗ trợ đa ngôn ngữ
 import { getLocalizedField, SupportedLanguage } from "#src/utils/i18nHelper";
 
@@ -54,7 +54,7 @@ const SYSTEM_ROUTE_TABLE_SCHEMAS: Record<string, TableBootstrapDefinition[]> = {
 					description: "",
 					status: 1,
 					permissionBitfield: "0",
-					permissionSchemaVersion: "v2",
+					permissionSchemaVersion: "v3",
 					dataScope: "NONE",
 					create_time: 0,
 					update_time: 0,
@@ -85,7 +85,7 @@ const SYSTEM_ROUTE_TABLE_SCHEMAS: Record<string, TableBootstrapDefinition[]> = {
 					permissions: "[]",
 					menusPermissions: "[]",
 					permissionBitfield: "0",
-					permissionSchemaVersion: "v2",
+					permissionSchemaVersion: "v3",
 					dataScope: "NONE",
 					dept_id: "",
 					branch_id: "",
@@ -193,10 +193,17 @@ const DEPT_MENU_FIELD_KEYS = [
 	{ f_name: "description", key: "system.dept.fields.description", f_types: "string", f_align: "left" },
 	{ f_name: "manager_user_id", key: "system.dept.fields.managerUser", f_types: "string", f_align: "left" },
 	{ f_name: "is_global", key: "system.dept.fields.isGlobal", f_types: "checkbox", f_align: "center" },
-	{ f_name: "status", key: "system.dept.fields.status", f_types: "number", f_align: "right" },
+	{ f_name: "status", key: "system.dept.fields.status", f_types: "co", f_align: "center" },
 	{ f_name: "create_time", key: "system.dept.fields.createTime", f_types: "number", f_align: "right" },
 	{ f_name: "update_time", key: "system.dept.fields.updateTime", f_types: "number", f_align: "right" },
 ];
+
+const STATUS_OPTIONS_JSON = JSON.stringify({
+	options: [
+		{ value: "1", label: "Hoạt động" },
+		{ value: "0", label: "Ngưng" },
+	],
+});
 
 function buildDeptMenuFields(
 	t: (key: string) => string,
@@ -212,6 +219,7 @@ function buildDeptMenuFields(
 		f_show: 1,
 		f_types: field.f_types,
 		f_align: field.f_align,
+		...(field.f_name === "status" ? { f_cbo_query: STATUS_OPTIONS_JSON } : {}),
 	}));
 }
 
@@ -237,7 +245,7 @@ function buildRoleMenuFields(
 		{ f_name: "dataScope", ...h("system.userPermission.fields.dataScope"), f_show: 1, f_types: "co", f_align: "left", f_cbo_query: DATA_SCOPE_OPTIONS_JSON },
 		{ f_name: "permissionBitfield", ...h("system.userPermission.fields.permissionBitfield"), f_show: 0, f_types: "string", f_align: "left" },
 		{ f_name: "permissionSchemaVersion", ...h("system.userPermission.fields.permissionSchemaVersion"), f_show: 0, f_types: "string", f_align: "left" },
-		{ f_name: "status", ...h("common.status"), f_show: 1, f_types: "number", f_align: "right" },
+		{ f_name: "status", ...h("common.status"), f_show: 1, f_types: "co", f_align: "center", f_cbo_query: STATUS_OPTIONS_JSON },
 		{ f_name: "is_global", ...h("system.dept.fields.isGlobal"), f_show: 0, f_types: "checkbox", f_align: "center" },
 		{ f_name: "department_id", ...h("system.userPermission.fields.deptId"), f_show: 0, f_types: "string", f_align: "left" },
 		{ f_name: "create_time", ...h("common.createTime"), f_show: 0, f_types: "number", f_align: "right" },
@@ -370,7 +378,8 @@ export default function AdminPage() {
 	// Prefer reactive currentAppId from AppStore; fallback to user.app_id
 	const currentAppId = useAppStore(state => state.currentAppId);
 	const userAppId = useUserStore(state => state.app_id);
-	const userRoles = useUserStore(state => state.roles || []);
+	const userRolesRaw = useUserStore(state => state.roles as any);
+	const userRoles = normalizeStringList(userRolesRaw);
 	const devFlag = useUserStore(state => state.dev);
 	const userId = useUserStore(state => state.userId);
 	const username = useUserStore(state => state.username);
@@ -379,9 +388,8 @@ export default function AdminPage() {
 	const userPermissionsRaw = useUserStore(state => state.permissions as any);
 	const userMenusPermissionsRaw = useUserStore(state => state.menusPermissions as any);
 	const userPermissionBitfieldRaw = useUserStore(state => (state as any).permissionBitfield as any);
-	const userPermissionSchemaVersion = useUserStore(state => (state as any).permissionSchemaVersion as any);
 	const isDevUser = resolveDevFlag(devFlag, userRoles);
-	const isAdminUser = !isDevUser && userRoles.some(r => typeof r === "string" && r.trim().toLowerCase() === "admin");
+	const isAdminUser = !isDevUser && isSuperPermissionProfile(toPermissionBigInt(userPermissionBitfieldRaw));
 	const isSystemUserRoute = (menuId === "user") || (location.pathname === "/system/user");
 	// Prefer logged-in user's app_id; fallback to selected app or localStorage default
 	const appId = (userAppId && userAppId.trim())
@@ -405,13 +413,12 @@ export default function AdminPage() {
 	const runtimePermissionBits = (isDevUser || isAdminUser)
 		? null
 		: (toPermissionBigInt(userPermissionBitfieldRaw) ?? toPermissionBigInt(userPermissionsRaw));
-	const hasPermissionSchemaV2 = String(userPermissionSchemaVersion || "").trim().toLowerCase() === "v2";
-	const isLegacyPermissionProfile = !isDevUser && !isAdminUser && !hasPermissionSchemaV2 && runtimePermissionBits === null;
-	const runtimePermissions = (isDevUser || isAdminUser || isLegacyPermissionProfile)
+	const hasMissingPermissionProfile = !isDevUser && !isAdminUser && runtimePermissionBits === null;
+	const runtimePermissions = (isDevUser || isAdminUser || hasMissingPermissionProfile)
 		? -1
 		: (parsePermissionMask(runtimePermissionBits) ?? -1);
 	const runtimeMenusPermissions = parseMenusPermissions(userMenusPermissionsRaw);
-	const runtimeDataScope = (isDevUser || isAdminUser || isLegacyPermissionProfile)
+	const runtimeDataScope = (isDevUser || isAdminUser || hasMissingPermissionProfile)
 		? "ALL"
 		: resolvePermissionDataScope(runtimePermissionBits);
 	const systemUserActorType: SystemUserActorType = isDevUser ? "dev" : (isAdminUser ? "admin" : "sub-user");

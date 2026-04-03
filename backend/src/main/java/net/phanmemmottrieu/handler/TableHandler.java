@@ -32,6 +32,11 @@ public class TableHandler {
     private static final List<String> DEPARTMENT_SCOPE_FIELDS = List.of("dept_id", "department_id", "team_id", "group_id", "org_unit_id");
     private static final List<String> BRANCH_SCOPE_FIELDS = List.of("branch_id", "site_id", "region_id");
     private static final List<String> DEFAULT_FULL_MENU_PERMISSIONS = List.of("/dashboard", "/home", "/system/user", "/system/menu", "/system/dept", "/crm");
+    private static final Map<Integer, String> CORE_MENU_BIT_TO_TOKEN = createCoreMenuBitToToken();
+    private static final Set<String> ACTION_SCOPE_TOKENS = Set.of(
+        "view", "create", "edit", "delete", "export",
+        "scope:owner", "scope:department", "scope:branch", "scope:all"
+    );
     // Các trường admin KHÔNG được phép sửa (chỉ được sửa những trường cá nhân như password, avatar, email, etc.)
     private static final List<String> ADMIN_SELF_EDIT_RESTRICTED_FIELDS = List.of(
         "id", "username",              // Nhận dạng hệ thống
@@ -317,7 +322,7 @@ public class TableHandler {
 
 //            OSSUtil.log("Lấy dữ liệu "+appId+" trên bảng "+tblname+" với điều kiện "+filtersObjs+" so với điều kiện của nó là:"+msg.get("e_where"));
             if ("index".equals(tblname)) {
-                return handleIndexTableOperation(appId, msg, filtersObjs, isUpdate);
+                return handleIndexTableOperation(appId, msg, filtersObjs, isUpdate, accessContext);
             }
 //            OSSUtil.log("Lấy Cấu trúc cho bảng "+tblname+"Với điều kiện là "+findKey);
             // logger.info("Bắt đầu tìm cấu trúc chương trình {} với bảng:{}",msg.get("app_id").toString(),msg.get("obj_name").toString());
@@ -646,6 +651,19 @@ public class TableHandler {
         return map;
     }
 
+    private static Map<Integer, String> createCoreMenuBitToToken() {
+        Map<Integer, String> map = new HashMap<>();
+        map.put(0, "/dashboard");
+        map.put(1, "/system/user");
+        map.put(3, "/system/menu");
+        map.put(4, "/system/dept");
+        map.put(5, "/system/developer");
+        map.put(6, "/system/broadcast");
+        map.put(7, "/system/report");
+        map.put(8, "/crm");
+        return map;
+    }
+
     private Map<String, Object> ensureTableStructReadyForOperation(
         String appId,
         String tableName,
@@ -842,10 +860,24 @@ public class TableHandler {
             collectCandidate(branchCandidates, principalMap.get("region_id"));
         }
 
-        boolean isAdmin = roles != null && roles.stream().anyMatch(r -> "admin".equalsIgnoreCase(r));
-        String dataScope = PermissionBitfieldUtil.resolveDataScope(
-            PermissionBitfieldUtil.buildBitfield(roles, menusPermissions, dev)
-        );
+        Object permissionBitfieldRaw = null;
+        if (principal instanceof User userPrincipal) {
+            permissionBitfieldRaw = userPrincipal.getPermissionBitfield();
+        } else if (principal instanceof Map<?, ?> principalMap) {
+            permissionBitfieldRaw = principalMap.get("permissionBitfield");
+        }
+        Long parsedToken = PermissionBitfieldUtil.parseSecurityToken(safeStr(permissionBitfieldRaw));
+
+        List<String> effectivePermissions = roles == null ? new ArrayList<>() : new ArrayList<>(roles);
+        if (parsedToken != null) {
+            effectivePermissions = permissionsFromToken(parsedToken);
+        }
+
+        boolean isAdmin = (roles != null && roles.stream().anyMatch(r -> "admin".equalsIgnoreCase(r)))
+            || hasAdminPrivilegeFromToken(parsedToken);
+        String dataScope = parsedToken != null
+            ? PermissionBitfieldUtil.resolveDataScope(parsedToken)
+            : PermissionBitfieldUtil.resolveDataScope(PermissionBitfieldUtil.buildBitfield(effectivePermissions, menusPermissions, dev));
         return new UserAccessContext(
             isAdmin,
             Boolean.TRUE.equals(dev),
@@ -855,7 +887,7 @@ public class TableHandler {
             departmentCandidates,
             branchCandidates,
             dataScope,
-            roles,
+            effectivePermissions,
             menusPermissions
         );
     }
@@ -1123,6 +1155,76 @@ public class TableHandler {
         return out;
     }
 
+    private List<String> permissionsFromToken(long bitfield) {
+        List<String> out = new ArrayList<>();
+        if (PermissionBitfieldUtil.hasBit(bitfield, PermissionBitfieldUtil.ACTION_VIEW)) out.add("view");
+        if (PermissionBitfieldUtil.hasBit(bitfield, PermissionBitfieldUtil.ACTION_CREATE)) out.add("create");
+        if (PermissionBitfieldUtil.hasBit(bitfield, PermissionBitfieldUtil.ACTION_EDIT)) out.add("edit");
+        if (PermissionBitfieldUtil.hasBit(bitfield, PermissionBitfieldUtil.ACTION_DELETE)) out.add("delete");
+        if (PermissionBitfieldUtil.hasBit(bitfield, PermissionBitfieldUtil.ACTION_EXPORT)) out.add("export");
+
+        String scope = PermissionBitfieldUtil.resolveDataScope(bitfield);
+        switch (scope) {
+            case "OWNER" -> out.add("scope:owner");
+            case "DEPARTMENT" -> out.add("scope:department");
+            case "BRANCH" -> out.add("scope:branch");
+            case "ALL" -> out.add("scope:all");
+            default -> {
+            }
+        }
+        return out;
+    }
+
+    private List<String> coreMenusFromToken(long bitfield) {
+        List<String> out = new ArrayList<>();
+        for (Map.Entry<Integer, String> entry : CORE_MENU_BIT_TO_TOKEN.entrySet()) {
+            if (PermissionBitfieldUtil.hasBit(bitfield, entry.getKey())) {
+                out.add(entry.getValue());
+            }
+        }
+        return out;
+    }
+
+    private boolean hasAdminPrivilegeFromToken(Long parsedToken) {
+        if (parsedToken == null) {
+            return false;
+        }
+        long bitfield = parsedToken;
+        return PermissionBitfieldUtil.hasBit(bitfield, PermissionBitfieldUtil.ACTION_VIEW)
+            && PermissionBitfieldUtil.hasBit(bitfield, PermissionBitfieldUtil.ACTION_CREATE)
+            && PermissionBitfieldUtil.hasBit(bitfield, PermissionBitfieldUtil.ACTION_EDIT)
+            && PermissionBitfieldUtil.hasBit(bitfield, PermissionBitfieldUtil.ACTION_DELETE)
+            && PermissionBitfieldUtil.hasBit(bitfield, PermissionBitfieldUtil.ACTION_EXPORT)
+            && "ALL".equalsIgnoreCase(PermissionBitfieldUtil.resolveDataScope(bitfield));
+    }
+
+    private void syncProjectionFromToken(Map<String, Object> row, long bitfield) {
+        if (row == null) {
+            return;
+        }
+
+        List<String> projectedPermissions = permissionsFromToken(bitfield);
+        List<String> existingPermissions = toStringList(row.get("permissions"));
+        List<String> customPermissionTokens = subtractCaseInsensitive(existingPermissions, new ArrayList<>(ACTION_SCOPE_TOKENS));
+        row.put("permissions", mergeUniqueCaseInsensitive(customPermissionTokens, projectedPermissions));
+
+        List<String> projectedCoreMenus = coreMenusFromToken(bitfield);
+        List<String> existingMenus = toStringList(row.get("menusPermissions"));
+        Set<String> coreMenuSet = new HashSet<>();
+        for (String menu : CORE_MENU_BIT_TO_TOKEN.values()) {
+            coreMenuSet.add(menu.toLowerCase(Locale.ROOT));
+        }
+        List<String> customMenus = new ArrayList<>();
+        for (String menu : existingMenus) {
+            String normalized = safeStr(menu).toLowerCase(Locale.ROOT);
+            if (!normalized.isEmpty() && !coreMenuSet.contains(normalized)) {
+                customMenus.add(menu);
+            }
+        }
+        row.put("menusPermissions", mergeUniqueCaseInsensitive(customMenus, projectedCoreMenus));
+        row.put("dataScope", PermissionBitfieldUtil.resolveDataScope(bitfield));
+    }
+
     /**
      * Xác thực admin có thể tự sửa thông tin cá nhân trên bảng csm_accounts.
      * Validation này chạy SAU khi records đã tìm được (update flow).
@@ -1357,6 +1459,101 @@ public class TableHandler {
         objUpdate.put("dataScope", minDataScope(safeStr(objUpdate.get("dataScope")), accessContext.dataScope));
     }
 
+    private boolean hasPermissionMutationPayload(Map<String, Object> objUpdate) {
+        if (objUpdate == null || objUpdate.isEmpty()) {
+            return false;
+        }
+        return objUpdate.containsKey("group_id")
+            || objUpdate.containsKey("permissionGroups")
+            || objUpdate.containsKey("permissions")
+            || objUpdate.containsKey("menusPermissions")
+            || objUpdate.containsKey("permissionsAdd")
+            || objUpdate.containsKey("permissionsDeny")
+            || objUpdate.containsKey("menusPermissionsAdd")
+            || objUpdate.containsKey("menusPermissionsDeny")
+            || objUpdate.containsKey("dataScope");
+    }
+
+    private void normalizeManagedSubUserPermissions(Map<String, Object> objUpdate, UserAccessContext accessContext) {
+        if (objUpdate == null || accessContext == null) {
+            return;
+        }
+
+        if (accessContext.preferredOwner != null && !accessContext.preferredOwner.isBlank()) {
+            objUpdate.put("parent_account_id", accessContext.preferredOwner);
+        }
+        if (accessContext.appId != null && !accessContext.appId.isBlank()) {
+            objUpdate.put("app_id", accessContext.appId);
+        }
+
+        List<String> permissionGroups = toStringList(objUpdate.get("permissionGroups"));
+        String groupId = safeStr(objUpdate.get("group_id"));
+        if (!groupId.isBlank()) {
+            permissionGroups = mergeUniqueCaseInsensitive(permissionGroups, List.of(groupId));
+            objUpdate.put("permissionGroups", permissionGroups);
+        }
+
+        List<String> groupedPermissions = new ArrayList<>();
+        List<String> groupedMenus = new ArrayList<>();
+        for (String groupRef : permissionGroups) {
+            Map<String, Object> roleRecord = findRoleRecordByCodeOrId(groupRef);
+            if (roleRecord == null || roleRecord.isEmpty()) {
+                continue;
+            }
+            groupedPermissions = mergeUniqueCaseInsensitive(groupedPermissions, toStringList(roleRecord.get("permissions")));
+            groupedMenus = mergeUniqueCaseInsensitive(groupedMenus, toStringList(roleRecord.get("menusPermissions")));
+        }
+
+        List<String> requestedPermissions = toStringList(objUpdate.get("permissions"));
+        List<String> requestedMenus = toStringList(objUpdate.get("menusPermissions"));
+        List<String> permissionsAdd = toStringList(objUpdate.get("permissionsAdd"));
+        List<String> permissionsDeny = toStringList(objUpdate.get("permissionsDeny"));
+        List<String> menusAdd = toStringList(objUpdate.get("menusPermissionsAdd"));
+        List<String> menusDeny = toStringList(objUpdate.get("menusPermissionsDeny"));
+
+        List<String> basePermissions = (!permissionGroups.isEmpty() && !groupedPermissions.isEmpty()) ? groupedPermissions : requestedPermissions;
+        List<String> baseMenus = (!permissionGroups.isEmpty() && !groupedMenus.isEmpty()) ? groupedMenus : requestedMenus;
+
+        List<String> resolvedPermissions = mergeUniqueCaseInsensitive(basePermissions, permissionsAdd);
+        resolvedPermissions = subtractCaseInsensitive(resolvedPermissions, permissionsDeny);
+        resolvedPermissions = subtractCaseInsensitive(resolvedPermissions, List.of("admin", "dev"));
+
+        List<String> resolvedMenus = mergeUniqueCaseInsensitive(baseMenus, menusAdd);
+        resolvedMenus = subtractCaseInsensitive(resolvedMenus, menusDeny);
+
+        List<String> allowedPermissions = accessContext.permissions == null ? Collections.emptyList() : accessContext.permissions;
+        List<String> allowedMenus = accessContext.menusPermissions == null ? Collections.emptyList() : accessContext.menusPermissions;
+
+        if (!accessContext.isDev) {
+            resolvedPermissions = intersectPreserveOrder(resolvedPermissions, allowedPermissions);
+
+            String contextAppId = accessContext.appId == null ? "" : accessContext.appId.trim().toLowerCase(Locale.ROOT);
+            boolean ownerHasLegacyFullApp = !contextAppId.isEmpty() && allowedMenus.stream().anyMatch(m -> {
+                String normalized = safeStr(m).toLowerCase(Locale.ROOT).trim();
+                return normalized.equals(contextAppId)
+                    || normalized.equals("app:" + contextAppId)
+                    || normalized.equals("/" + contextAppId);
+            });
+
+            if (!ownerHasLegacyFullApp) {
+                resolvedMenus = intersectPreserveOrder(resolvedMenus, allowedMenus);
+            }
+        }
+
+        String requestedScope = safeStr(objUpdate.get("dataScope"));
+        String clampedScope = minDataScope(requestedScope, accessContext.dataScope);
+        resolvedPermissions = applyScopeToken(resolvedPermissions, clampedScope);
+
+        if (resolvedPermissions.isEmpty()) {
+            resolvedPermissions = new ArrayList<>(List.of("view", "scope:owner"));
+            clampedScope = "OWNER";
+        }
+
+        objUpdate.put("permissions", resolvedPermissions);
+        objUpdate.put("menusPermissions", resolvedMenus);
+        objUpdate.put("dataScope", clampedScope);
+    }
+
     /**
      * For csm_accounts (dev creating main account):
      * Auto-encrypt pass and generate app_token if not already set.
@@ -1511,10 +1708,10 @@ public class TableHandler {
         List<String> menusPermissions = toStringList(objUpdate.get("menusPermissions"));
         long bitfield = PermissionBitfieldUtil.buildBitfield(permissions, menusPermissions, false);
         if (!hasNonBlank(objUpdate.get("permissionBitfield"))) {
-            objUpdate.put("permissionBitfield", String.valueOf(bitfield));
+            objUpdate.put("permissionBitfield", PermissionBitfieldUtil.toCompactToken(bitfield));
         }
         if (!hasNonBlank(objUpdate.get("permissionSchemaVersion"))) {
-            objUpdate.put("permissionSchemaVersion", "v2");
+            objUpdate.put("permissionSchemaVersion", "v3");
         }
         if (!hasNonBlank(objUpdate.get("dataScope"))) {
             objUpdate.put("dataScope", PermissionBitfieldUtil.resolveDataScope(bitfield));
@@ -1564,7 +1761,7 @@ public class TableHandler {
         }
     }
 
-    private Map<String, Object> handleIndexTableOperation(String appId, Map<String, Object> msg, SearchFilter filters, boolean isUpdate) throws Exception {
+    private Map<String, Object> handleIndexTableOperation(String appId, Map<String, Object> msg, SearchFilter filters, boolean isUpdate, UserAccessContext accessContext) throws Exception {
         Map<String, Object> filterResult = null;
         Integer take = parseIntegerParam(msg.get("take"));
         Integer offset = parseIntegerParam(msg.get("offset"));
@@ -1642,6 +1839,12 @@ public class TableHandler {
         }
     
         switch (command) {
+            case "migrate_permission_tokens":
+                if (accessContext == null || !accessContext.isDev) {
+                    return errorResponse("Chỉ tài khoản dev được phép chạy migrate_permission_tokens");
+                }
+                return migratePermissionTokensToLatestSchema(appId, msg);
+
             case "create": 
                 if (objUpdate.get("id") == null || objUpdate.get("id").toString().isBlank()) {
                     return errorResponse("Thiếu giá trị khóa chính 'id'");
@@ -1709,6 +1912,40 @@ public class TableHandler {
                 return errorResponse("Lệnh không hợp lệ cho bảng index");
         }
         return successResponse("Thao tác thành công",msg);
+    }
+
+    private Map<String, Object> migratePermissionTokensToLatestSchema(String appId, Map<String, Object> msg) {
+        if (!"csm".equals(appId)) {
+            return errorResponse("migrate_permission_tokens chỉ áp dụng cho app_id=csm");
+        }
+
+        List<String> targetTables = List.of("csm_accounts", "csm_group_members", "csm_roles", "csm_user_depts");
+        Map<String, Object> summary = new LinkedHashMap<>();
+        SearchFilter allFilter = new SearchFilter();
+        allFilter.setField("id");
+        allFilter.setType("like");
+        allFilter.setValue("");
+
+        int totalRows = 0;
+        for (String table : targetTables) {
+            Map<String, Object> result = recordManager.filter(appId, table, allFilter);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> rows = (List<Map<String, Object>>) result.getOrDefault("rows", new ArrayList<>());
+            int count = rows.size();
+            totalRows += count;
+            if (count > 0) {
+                autoFillPermissionSchemaValues(appId, table, rows, true);
+            }
+            summary.put(table, count);
+        }
+
+        Map<String, Object> response = successResponse("Migrate permission tokens thành công", msg);
+        response.put("migratedTables", targetTables);
+        response.put("tableRowCounts", summary);
+        response.put("totalRowsProcessed", totalRows);
+        response.put("permissionSchemaVersion", "v3");
+        response.put("tokenEncoding", "base36");
+        return response;
     }
     
     private Map<String, Object> handleUpdateTableOperation(String appId, String tblname, Map<String, Object> msg, SearchFilter filters, List<String> pkFields) throws Exception {
@@ -1908,6 +2145,7 @@ public class TableHandler {
                     autoGenerateAccountCredentials(objUpdate, accessContext);
                 }
                 if (isSubUserTable && (isAdminNonDev || accessContext.isDev)) {
+                    normalizeManagedSubUserPermissions(objUpdate, accessContext);
                     autoGenerateSubUserCredentials(objUpdate, accessContext);
                 }
 
@@ -1956,6 +2194,10 @@ public class TableHandler {
                     if (selfEditError != null) {
                         return errorResponse(selfEditError);
                     }
+                }
+
+                if (isSubUserTable && hasPermissionMutationPayload(objUpdate)) {
+                    normalizeManagedSubUserPermissions(objUpdate, accessContext);
                 }
 
                 // Ensure child account edits never exceed current user's app and permission/data scope.
@@ -2544,16 +2786,31 @@ public class TableHandler {
                     changed = true;
                 }
 
-                if (!Objects.equals(String.valueOf(row.getOrDefault("permissionBitfield", "")), String.valueOf(bitfield))) {
-                    row.put("permissionBitfield", String.valueOf(bitfield));
+                String compactBitfield = PermissionBitfieldUtil.toCompactToken(bitfield);
+                if (!Objects.equals(String.valueOf(row.getOrDefault("permissionBitfield", "")), compactBitfield)) {
+                    row.put("permissionBitfield", compactBitfield);
                     changed = true;
                 }
-                if (!Objects.equals(String.valueOf(row.getOrDefault("permissionSchemaVersion", "")), "v2")) {
-                    row.put("permissionSchemaVersion", "v2");
+                if (!Objects.equals(String.valueOf(row.getOrDefault("permissionSchemaVersion", "")), "v3")) {
+                    row.put("permissionSchemaVersion", "v3");
                     changed = true;
                 }
                 if (!Objects.equals(String.valueOf(row.getOrDefault("dataScope", "")), dataScope)) {
                     row.put("dataScope", dataScope);
+                    changed = true;
+                }
+
+                List<String> beforeSyncPermissions = toStringList(row.get("permissions"));
+                List<String> beforeSyncMenus = toStringList(row.get("menusPermissions"));
+                String beforeSyncScope = safeStr(row.get("dataScope"));
+                syncProjectionFromToken(row, bitfield);
+                if (!Objects.equals(beforeSyncPermissions, toStringList(row.get("permissions")))) {
+                    changed = true;
+                }
+                if (!Objects.equals(beforeSyncMenus, toStringList(row.get("menusPermissions")))) {
+                    changed = true;
+                }
+                if (!Objects.equals(beforeSyncScope, safeStr(row.get("dataScope")))) {
                     changed = true;
                 }
 
@@ -2576,25 +2833,50 @@ public class TableHandler {
                     roleDataScope = PermissionBitfieldUtil.resolveDataScope(roleBitfield);
                 }
 
-                if (!Objects.equals(String.valueOf(row.getOrDefault("permissionBitfield", "")), String.valueOf(roleBitfield))) {
-                    row.put("permissionBitfield", String.valueOf(roleBitfield));
+                String compactRoleBitfield = PermissionBitfieldUtil.toCompactToken(roleBitfield);
+                if (!Objects.equals(String.valueOf(row.getOrDefault("permissionBitfield", "")), compactRoleBitfield)) {
+                    row.put("permissionBitfield", compactRoleBitfield);
                     changed = true;
                 }
-                if (!Objects.equals(String.valueOf(row.getOrDefault("permissionSchemaVersion", "")), "v2")) {
-                    row.put("permissionSchemaVersion", "v2");
+                if (!Objects.equals(String.valueOf(row.getOrDefault("permissionSchemaVersion", "")), "v3")) {
+                    row.put("permissionSchemaVersion", "v3");
                     changed = true;
                 }
                 if (!Objects.equals(String.valueOf(row.getOrDefault("dataScope", "")), roleDataScope)) {
                     row.put("dataScope", roleDataScope);
                     changed = true;
                 }
-            } else if ("csm_user_depts".equals(tableName)) {
-                if (!hasNonBlank(row.get("permissionBitfield"))) {
-                    row.put("permissionBitfield", "0");
+
+                List<String> beforeSyncRolePermissions = toStringList(row.get("permissions"));
+                List<String> beforeSyncRoleMenus = toStringList(row.get("menusPermissions"));
+                String beforeSyncRoleScope = safeStr(row.get("dataScope"));
+                syncProjectionFromToken(row, roleBitfield);
+                if (!Objects.equals(beforeSyncRolePermissions, toStringList(row.get("permissions")))) {
                     changed = true;
                 }
-                if (!Objects.equals(String.valueOf(row.getOrDefault("permissionSchemaVersion", "")), "v2")) {
-                    row.put("permissionSchemaVersion", "v2");
+                if (!Objects.equals(beforeSyncRoleMenus, toStringList(row.get("menusPermissions")))) {
+                    changed = true;
+                }
+                if (!Objects.equals(beforeSyncRoleScope, safeStr(row.get("dataScope")))) {
+                    changed = true;
+                }
+            } else if ("csm_user_depts".equals(tableName)) {
+                String emptyToken = PermissionBitfieldUtil.toCompactToken(
+                    PermissionBitfieldUtil.buildBitfield(Collections.emptyList(), Collections.emptyList(), false)
+                );
+                String currentTokenRaw = safeStr(row.get("permissionBitfield"));
+                Long normalizedParsedToken = hasNonBlank(currentTokenRaw)
+                    ? PermissionBitfieldUtil.parseSecurityToken(currentTokenRaw)
+                    : null;
+                String normalizedToken = normalizedParsedToken == null
+                    ? emptyToken
+                    : PermissionBitfieldUtil.toCompactToken(normalizedParsedToken);
+                if (!Objects.equals(currentTokenRaw, normalizedToken)) {
+                    row.put("permissionBitfield", normalizedToken);
+                    changed = true;
+                }
+                if (!Objects.equals(String.valueOf(row.getOrDefault("permissionSchemaVersion", "")), "v3")) {
+                    row.put("permissionSchemaVersion", "v3");
                     changed = true;
                 }
                 if (!hasNonBlank(row.get("dataScope"))) {

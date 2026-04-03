@@ -271,8 +271,8 @@ public class AuthHandler {
                 result.put("permissions", user.getPermissions());
                 result.put("menusPermissions", user.getMenusPermissions());
                 long permissionBitfield = PermissionBitfieldUtil.buildBitfield(user.getPermissions(), user.getMenusPermissions(), user.getDev());
-                result.put("permissionBitfield", String.valueOf(permissionBitfield));
-                result.put("permissionSchemaVersion", "v2");
+                result.put("permissionBitfield", PermissionBitfieldUtil.toCompactToken(permissionBitfield));
+                result.put("permissionSchemaVersion", "v3");
                 result.put("dataScope", PermissionBitfieldUtil.resolveDataScope(permissionBitfield));
             } catch (Exception ex) {
                 logger.error("[LOGIN] Lỗi khi tính asyncRoutes/permissions: {}", ex.getMessage(), ex);
@@ -412,8 +412,8 @@ public class AuthHandler {
         Boolean devFlag = parseBoolean(userInfo.get("dev"));
 
         long permissionBitfield = PermissionBitfieldUtil.buildBitfield(permissions, menusPermissions, devFlag);
-        userInfo.put("permissionBitfield", String.valueOf(permissionBitfield));
-        userInfo.put("permissionSchemaVersion", "v2");
+        userInfo.put("permissionBitfield", PermissionBitfieldUtil.toCompactToken(permissionBitfield));
+        userInfo.put("permissionSchemaVersion", "v3");
         userInfo.put("dataScope", PermissionBitfieldUtil.resolveDataScope(permissionBitfield));
     }
 

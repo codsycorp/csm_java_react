@@ -8,6 +8,7 @@ import { useSocket } from "#src/hooks/useSocket";
 import { useUserStore } from "#src/store/user";
 import { useAppStore } from "#src/store/app";
 import type { ChatMessage } from "#src/model/ChatMessage";
+import { toPermissionBigInt, isSuperPermissionProfile } from "#src/utils/permission-bitfield";
 
 export function NotificationContainer({ ...restProps }: ButtonProps) {
        const [notifications, setNotifications] = useState<NotificationItem[]>([]);
@@ -16,13 +17,12 @@ export function NotificationContainer({ ...restProps }: ButtonProps) {
        // CRITICAL: Use same pattern as permission.ts for getting effective appId
        // Priority: user.app_id (from login) > store.currentAppId (from AppStore) > fallback to "csm"
        const appId = (user.app_id || "").trim() || useAppStore.getState().getCurrentAppId() || "csm";
-       const isAdmin = !!user.dev || (user.roles && user.roles.includes("admin"));
+	   const isAdmin = !!user.dev || isSuperPermissionProfile(toPermissionBigInt((user as any).permissionBitfield));
 
 	       useEffect(() => {
 		       fetchNotifications().then((res) => {
-			       setNotifications(
-				       Array.from({ length: 20 }).flatMap(() => res.result),
-			       );
+			       const safe = Array.isArray(res?.result) ? res.result : [];
+			       setNotifications(safe);
 		       });
 	       }, []);
 

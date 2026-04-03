@@ -17,6 +17,7 @@ import { message as antMessage, Button, Input, Select, Card, Space, theme, List,
 import { SendOutlined, AppstoreOutlined, InfoCircleOutlined, DeleteOutlined, HistoryOutlined, SearchOutlined } from '@ant-design/icons';
 import { useTranslation } from 'react-i18next';
 import { deleteChatMessage } from '#src/components/csm-grid/CsmApi';
+import { toPermissionBigInt, isSuperPermissionProfile } from '#src/utils/permission-bitfield';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import 'dayjs/locale/vi';
@@ -56,7 +57,7 @@ export const BroadcastNotification: React.FC = () => {
   
   // Check if user is CSM admin
   const { token } = theme.useToken();
-  const isCSMAdmin = user.app_id === 'csm' && (user.dev || user.roles?.includes('admin'));
+  const isCSMAdmin = user.app_id === 'csm' && (user.dev || isSuperPermissionProfile(toPermissionBigInt((user as any).permissionBitfield)));
   
   // Load apps list from database (already loaded when menu is rendered)
   useEffect(() => {

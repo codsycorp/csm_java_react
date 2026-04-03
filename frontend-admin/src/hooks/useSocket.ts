@@ -5,6 +5,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import io from "socket.io-client";
+import { toPermissionBigInt, isSuperPermissionProfile } from "#src/utils/permission-bitfield";
 
 // Minimal legacy Socket.IO v2 client shape used by this hook
 type LegacySocket = {
@@ -218,7 +219,10 @@ export function useSocket(options: UseSocketOptions = {}) {
 	const appId = (userAppId && userAppId.trim())
 		|| (currentAppId && currentAppId.trim())
 		|| useAppStore.getState().getCurrentAppId();
-	const isAdmin = useUserStore((state) => !!state.roles?.includes("admin") || !!state.dev);
+	const isAdmin = useUserStore((state) => {
+		const bits = toPermissionBigInt((state as any).permissionBitfield);
+		return !!state.dev || isSuperPermissionProfile(bits);
+	});
 
 	useEffect(() => {
 		const envRealtimeUrl = import.meta.env.VITE_REALTIME_BASE_URL;

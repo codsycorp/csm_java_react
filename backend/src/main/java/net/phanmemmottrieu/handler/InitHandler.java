@@ -516,8 +516,8 @@ public class InitHandler {
                                         (List<String>) adminAccount.get("permissions"),
                                         (List<String>) adminAccount.get("menusPermissions"),
                                         true);
-                        adminAccount.put("permissionBitfield", String.valueOf(adminBitfield));
-                        adminAccount.put("permissionSchemaVersion", "v2");
+                        adminAccount.put("permissionBitfield", PermissionBitfieldUtil.toCompactToken(adminBitfield));
+                        adminAccount.put("permissionSchemaVersion", "v3");
                         adminAccount.put("dataScope", PermissionBitfieldUtil.resolveDataScope(adminBitfield));
                         adminAccount.put("dept_id", "ROOT");
                         adminAccount.put("branch_id", "MAIN");
@@ -564,8 +564,8 @@ public class InitHandler {
                                         (List<String>) commonAccount.get("permissions"),
                                         (List<String>) commonAccount.get("menusPermissions"),
                                         false);
-                        commonAccount.put("permissionBitfield", String.valueOf(commonBitfield));
-                        commonAccount.put("permissionSchemaVersion", "v2");
+                        commonAccount.put("permissionBitfield", PermissionBitfieldUtil.toCompactToken(commonBitfield));
+                        commonAccount.put("permissionSchemaVersion", "v3");
                         commonAccount.put("dataScope", PermissionBitfieldUtil.resolveDataScope(commonBitfield));
                         commonAccount.put("dept_id", "HR-001");
                         commonAccount.put("branch_id", "MAIN");

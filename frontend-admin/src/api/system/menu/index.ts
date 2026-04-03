@@ -5,6 +5,7 @@ import { csmDecrypt } from "#src/components/csm-grid/CsmCrypto";
 import { createTableStruct, getTableData } from "#src/components/csm-grid/CsmApi";
 import { useUserStore } from "#src/store";
 import { resolveDevFlag } from "#src/utils/dev-flag";
+import { toPermissionBigInt, isSuperPermissionProfile } from "#src/utils/permission-bitfield";
 
 export * from "./types";
 
@@ -519,9 +520,9 @@ export async function fetchNavigationMenus(appIdParam?: string) {
 	let isDev = false;
 	try {
 		const userState = useUserStore.getState();
-		const userRoles = userState.roles;
+		const userRoles = Array.isArray(userState.roles) ? userState.roles : [];
 		isDev = resolveDevFlag(userState.dev, userRoles);
-		isAdmin = Array.isArray(userRoles) && userRoles.includes("admin") && !isDev;
+		isAdmin = !isDev && isSuperPermissionProfile(toPermissionBigInt((userState as any).permissionBitfield));
 
 	} catch (error) {
 		console.warn("Failed to detect admin role from store:", error);

@@ -17,6 +17,7 @@ import CsmCrmWorkspace from "../csm-crm/CsmCrmWorkspace";
 import CsmDynamicGrid from "../csm-grid/CsmDynamicGrid";
 import CsmReport from "../csm-report/CsmReport";
 import { useUserStore } from "#src/store";
+import { toPermissionBigInt, isSuperPermissionProfile } from "#src/utils/permission-bitfield";
 import { router } from "#src/router";
 import type { MenuConfig } from "./index";
 
@@ -210,9 +211,9 @@ export function AdminWorkspace({
 
 	// Build sidebar menu structure with nested submenu support
 	const sidebarMenuItems: MenuProps["items"] = useMemo(() => {
-		// Get current user roles for permission check
-		const userRoles = useUserStore.getState().roles || [];
-		const isAdmin = Array.isArray(userRoles) && userRoles.includes("admin");
+		// Token-first privilege check for admin-level system menu visibility.
+		const userState = useUserStore.getState();
+		const isAdmin = isSuperPermissionProfile(toPermissionBigInt((userState as any).permissionBitfield));
 
 		// Get root level menus - items without parentId (real root) OR parentId points to non-existent menu
 		const allMenuIds = new Set(allMenus.map(m => m.id));

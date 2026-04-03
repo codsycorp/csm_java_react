@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from "react";
-import { UserOutlined, SendOutlined, CloseOutlined, MinusOutlined, DeleteOutlined } from "@ant-design/icons";
+import React, { useState, useEffect, useRef, useCallback } from "react";
+import { UserOutlined, SendOutlined, CloseOutlined, MinusOutlined, DeleteOutlined, PushpinOutlined } from "@ant-design/icons";
 import { Input, Button, List, Avatar, theme, Tooltip, Popconfirm } from "antd";
 import { useTranslation } from "react-i18next";
 import { useChatHistory } from "#src/contexts/ChatHistoryContext";
@@ -16,6 +16,7 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
   const [input, setInput] = useState("");
   const [isMobile, setIsMobile] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
+  const [isPinned, setIsPinned] = useState(false);
   const [deletedMessageIds, setDeletedMessageIds] = useState<Set<string>>(new Set());
   const user = useUserStore();
   // CRITICAL: Use same pattern as permission.ts for getting effective appId
@@ -89,6 +90,9 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
     ? (effectiveGuestSessionId || chatRoom)
     : (isGuestConversation ? room : (username || chatRoom));
 
+  const pinnedStorageKey = `csm_chat_pin_${roomKey}`;
+  const pinnedPosStorageKey = `csm_chat_pin_pos_${roomKey}`;
+
   // Get messages for this specific chat
   const messages = allMessages[roomKey] || [];
   const unreadCount = unreadCounts[roomKey] || 0;
@@ -140,12 +144,15 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
   }, [visible, roomKey]);
 
   const handleMouseDown = (e: React.MouseEvent) => {
+    if (isPinned) {
+      return;
+    }
     setIsDragging(true);
     setDragStart({ x: e.clientX - position.x, y: e.clientY - position.y });
   };
 
   const handleMouseMove = (e: MouseEvent) => {
-    if (isDragging) {
+    if (isDragging && !isPinned) {
       setPosition({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y });
     }
   };
@@ -166,18 +173,59 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [isDragging]);
+  }, [isDragging, isPinned]);
 
   // Center the chat box when it becomes visible; still draggable afterwards
   useEffect(() => {
     if (!visible) return;
+    if (isPinned) {
+      try {
+        const raw = localStorage.getItem(pinnedPosStorageKey);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (typeof parsed?.x === 'number' && typeof parsed?.y === 'number') {
+            setPosition({ x: parsed.x, y: parsed.y });
+            return;
+          }
+        }
+      } catch {
+        // Ignore persisted position parse errors.
+      }
+    }
     const width = 300;
     const height = 400;
     const padding = 16;
     const nextX = Math.max(padding, (window.innerWidth - width) / 2);
     const nextY = Math.max(padding, (window.innerHeight - height) / 2);
     setPosition({ x: nextX, y: nextY });
-  }, [visible]);
+  }, [visible, isPinned, pinnedPosStorageKey]);
+
+  useEffect(() => {
+    try {
+      const savedPinned = localStorage.getItem(pinnedStorageKey);
+      setIsPinned(savedPinned === '1');
+    } catch {
+      setIsPinned(false);
+    }
+  }, [pinnedStorageKey]);
+
+  useEffect(() => {
+    try {
+      if (isPinned) {
+        localStorage.setItem(pinnedStorageKey, '1');
+        localStorage.setItem(pinnedPosStorageKey, JSON.stringify(position));
+      } else {
+        localStorage.removeItem(pinnedStorageKey);
+        localStorage.removeItem(pinnedPosStorageKey);
+      }
+    } catch {
+      // Ignore localStorage errors.
+    }
+  }, [isPinned, position, pinnedStorageKey, pinnedPosStorageKey]);
+
+  const togglePinned = useCallback(() => {
+    setIsPinned(prev => !prev);
+  }, []);
 
   // Mark as read when chat box opens (consolidated single effect)
   useEffect(() => {
@@ -524,7 +572,7 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
               alignItems: 'center',
               background: `linear-gradient(135deg, ${token.colorPrimaryBg} 0%, ${token.colorBgTextHover} 100%)`,
               borderRadius: '12px 12px 0 0',
-              cursor: 'move',
+              cursor: isPinned ? 'default' : 'move',
               userSelect: 'none',
             }}
             onMouseDown={handleMouseDown}
@@ -533,6 +581,13 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
               {username ? t('common.chat.with', { name: username }) : t('common.chat.withAdmin')}
             </span>
             <div style={{ display: 'flex', gap: 8 }}>
+              <Button
+                type="text"
+                icon={<PushpinOutlined rotate={isPinned ? 45 : 0} />}
+                size="small"
+                onClick={togglePinned}
+                title={isPinned ? t('common.chat.unpin', 'Bỏ ghim') : t('common.chat.pin', 'Ghim vị trí')}
+              />
               <Button
                 type="text"
                 icon={<MinusOutlined />}

@@ -13,6 +13,7 @@ import { useAuthStore } from "./auth";
 import { useUserStore } from "./user";
 import { create } from "zustand";
 import { resolveDevFlag } from "#src/utils/dev-flag";
+import { toPermissionBigInt, isSuperPermissionProfile } from "#src/utils/permission-bitfield";
 import { getTableData, type Where } from "#src/components/csm-grid/CsmApi";
 
 function stripMenuPrefixFromLabel(label: string): string {
@@ -38,6 +39,39 @@ function buildMenuTree(flatMenus: ApiMenuItemType[], parentId: string = ""): Api
 function normalizeAccessKey(raw: unknown): string {
 	if (raw == null) return "";
 	return String(raw).trim().toLowerCase();
+}
+
+function toTokenList(raw: unknown): string[] {
+	if (Array.isArray(raw)) {
+		return raw.map(item => String(item || '').trim()).filter(Boolean);
+	}
+	if (typeof raw === 'string') {
+		const text = raw.trim();
+		if (!text) return [];
+		if (text.startsWith('[') || text.startsWith('{')) {
+			try {
+				return toTokenList(JSON.parse(text));
+			} catch {
+				return [];
+			}
+		}
+		return text.split(/[;,\n]/g).map(item => item.trim()).filter(Boolean);
+	}
+	if (raw && typeof raw === 'object') {
+		return Object.values(raw as Record<string, unknown>)
+			.map(item => String(item || '').trim())
+			.filter(Boolean);
+	}
+	return [];
+}
+
+function resolvePrivilegeFlags(userState: any, devOverride?: boolean): { isDev: boolean; isAdmin: boolean } {
+	const isDev = typeof devOverride === "boolean"
+		? devOverride
+		: resolveDevFlag(userState?.dev, userState?.roles);
+	const permissionBits = toPermissionBigInt(userState?.permissionBitfield);
+	const isAdmin = !isDev && isSuperPermissionProfile(permissionBits);
+	return { isDev, isAdmin };
 }
 
 function buildAllowedPathSet(routesForMenu: AppRouteRecordRaw[]): Set<string> {
@@ -103,6 +137,23 @@ function pruneDevOnlySystemMenusForAdmin(items: any[]): any[] {
 	}, []);
 }
 
+function pruneSystemMenusFromApiForAdmin(items: any[]): any[] {
+	return (items || []).reduce((acc: any[], item: any) => {
+		const path = normalizeAccessKey(item?.path || item?.key);
+		if (path.startsWith('/system')) {
+			return acc;
+		}
+		const nextChildren = Array.isArray(item?.children)
+			? pruneSystemMenusFromApiForAdmin(item.children)
+			: undefined;
+		acc.push({
+			...item,
+			children: nextChildren && nextChildren.length > 0 ? nextChildren : undefined,
+		});
+		return acc;
+	}, []);
+}
+
 function filterMenuTreeByLegacyAccess(items: any[], allowedKeys: Set<string>, allowedPaths: Set<string>): any[] {
 	return (items || []).reduce((acc: any[], item: any) => {
 		const filteredChildren = item?.children && item.children.length > 0
@@ -118,6 +169,23 @@ function filterMenuTreeByLegacyAccess(items: any[], allowedKeys: Set<string>, al
 		});
 		return acc;
 	}, []);
+}
+
+function moveSystemMenuLast(items: MenuItemType[]): MenuItemType[] {
+	if (!Array.isArray(items) || items.length === 0) {
+		return [];
+	}
+	const systemMenus: MenuItemType[] = [];
+	const otherMenus: MenuItemType[] = [];
+	for (const item of items) {
+		const key = normalizeAccessKey((item as any)?.key || (item as any)?.path);
+		if (key === '/system') {
+			systemMenus.push(item);
+		} else {
+			otherMenus.push(item);
+		}
+	}
+	return [...otherMenus, ...systemMenus];
 }
 
 async function loadDatabaseFromMenus(menuTree: ApiMenuItemType[], appId: string): Promise<void> {
@@ -262,8 +330,7 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 		const flatRouteList = flattenRoutes(newRoutes);
 
 		const userState = useUserStore.getState();
-		const isDev = resolveDevFlag(userState.dev, userState.roles);
-		const isAdmin = !isDev && (userState.roles || []).some(r => r.trim().toLowerCase() === 'admin');
+		const { isDev, isAdmin } = resolvePrivilegeFlags(userState);
 		const routesForMenu = (isDev
 			? newRoutes.map(r => r.path === "/system"
 				? {
@@ -304,7 +371,7 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 			const explicitAllowedKeys = new Set(
 				normalizedMenuTokens.filter(token => !isLegacyAppScopeToken(token, effectiveAppId))
 			);
-			const shouldBypassMenuFilter = isDev || hasLegacyAppOnly;
+			const shouldBypassMenuFilter = isDev || isAdmin || hasLegacyAppOnly;
 			const allowedRoutePaths = buildAllowedPathSet(routesForMenu);
 			const apiMenuResponse = await fetchNavigationMenus(effectiveAppId);
 			if (apiMenuResponse?.result?.list && apiMenuResponse.result.list.length > 0) {
@@ -320,7 +387,9 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 				});
 
 				const apiMenus = transformApiMenusToLayoutMenus(apiMenuList as (ApiMenuItemType & { children?: MenuItemType[] })[]);
-				const sanitizedApiMenus = isAdmin ? pruneDevOnlySystemMenusForAdmin(apiMenus) : apiMenus;
+				const sanitizedApiMenus = isAdmin
+					? pruneSystemMenusFromApiForAdmin(apiMenus)
+					: apiMenus;
 				const filterAutoSetup = (m: any) => !(m.key === "/auto-setup" && !m.auto_code);
 				const filteredByLegacyAccess = shouldBypassMenuFilter
 					? sanitizedApiMenus
@@ -368,7 +437,7 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 
 		const newState = {
 			constantMenus,
-			wholeMenus,
+			wholeMenus: moveSystemMenuLast(wholeMenus),
 			apiWholeMenus,
 			routeList: newRoutes,
 			flatRouteList,
@@ -401,9 +470,8 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 			const explicitAllowedKeys = new Set(
 				normalizedMenuTokens.filter(token => !isLegacyAppScopeToken(token, effectiveAppId))
 			);
-			const isDev = resolveDevFlag(devFlag ?? userState.dev, userState.roles);
-			const isAdmin = !isDev && (userState.roles || []).some(r => r.trim().toLowerCase() === 'admin');
-			const shouldBypassMenuFilter = isDev || hasLegacyAppOnly;
+			const { isDev, isAdmin } = resolvePrivilegeFlags(userState, devFlag ?? userState.dev);
+			const shouldBypassMenuFilter = isDev || isAdmin || hasLegacyAppOnly;
 			const routesForMenu = (isDev
 				? newRoutes.map(r => r.path === '/system'
 					? {
@@ -442,7 +510,9 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 				loadDatabaseFromMenus(apiMenuList, effectiveAppId).catch(() => {
 				});
 				const apiMenus = transformApiMenusToLayoutMenus(apiMenuList as (ApiMenuItemType & { children?: MenuItemType[] })[]);
-				const sanitizedApiMenus = isAdmin ? pruneDevOnlySystemMenusForAdmin(apiMenus) : apiMenus;
+				const sanitizedApiMenus = isAdmin
+					? pruneSystemMenusFromApiForAdmin(apiMenus)
+					: apiMenus;
 				const filterAutoSetup = (m: any) => !(m.key === '/auto-setup' && !m.auto_code);
 				const filteredByLegacyAccess = shouldBypassMenuFilter
 					? sanitizedApiMenus
@@ -477,8 +547,7 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 			}
 		} catch {
 			const userState = useUserStore.getState();
-			const isDev = resolveDevFlag(devFlag ?? userState.dev, userState.roles);
-			const isAdmin = !isDev && (userState.roles || []).some(r => r.trim().toLowerCase() === 'admin');
+			const { isDev, isAdmin } = resolvePrivilegeFlags(userState, devFlag ?? userState.dev);
 			const routesForMenu = (isDev
 				? newRoutes.map(r => r.path === '/system'
 					? {
@@ -512,7 +581,7 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 
 		const newState = {
 			constantMenus,
-			wholeMenus,
+			wholeMenus: moveSystemMenuLast(wholeMenus),
 			apiWholeMenus,
 			routeList: newRoutes,
 			flatRouteList,

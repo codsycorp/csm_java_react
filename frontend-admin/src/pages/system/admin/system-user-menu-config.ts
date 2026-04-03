@@ -398,11 +398,11 @@ function beforeSave(row, seft) {
 
 	function toBitfield(row) {
 		const actionBitMap = {
-			view: 31,
-			edit: 32,
-			create: 33,
-			delete: 34,
-			export: 35,
+			view: 0,
+			create: 1,
+			edit: 2,
+			delete: 3,
+			export: 4,
 		};
 		const menuBitMap = {
 			dashboard: 0,
@@ -425,26 +425,29 @@ function beforeSave(row, seft) {
 			"/crm": 8,
 		};
 		const scopeBitMap = {
-			OWNER: 41,
-			DEPARTMENT: 42,
-			BRANCH: 43,
-			ALL: 44,
+			OWNER: 0,
+			DEPARTMENT: 1,
+			BRANCH: 2,
+			ALL: 3,
 		};
-		let bits = 0n;
+		const TOKEN_SIGNATURE = 0x43534d33n;
+		let menuMask = 0n;
+		let actionMask = 0n;
+		let scopeMask = 0n;
 		uniqueList(row.permissions).forEach((token) => {
 			const normalized = String(token || "").trim().toLowerCase();
 			const bit = actionBitMap[normalized];
-			if (typeof bit === "number") bits = bits | (1n << BigInt(bit));
+			if (typeof bit === "number") actionMask = actionMask | (1n << BigInt(bit));
 		});
 		uniqueList(row.menusPermissions).forEach((token) => {
 			const normalized = String(token || "").trim().toLowerCase();
 			const bit = menuBitMap[normalized];
-			if (typeof bit === "number") bits = bits | (1n << BigInt(bit));
+			if (typeof bit === "number" && bit <= 15) menuMask = menuMask | (1n << BigInt(bit));
 		});
 		const dataScope = String(row.dataScope || "").trim().toUpperCase();
 		const scopeBit = scopeBitMap[dataScope];
-		if (typeof scopeBit === "number") bits = bits | (1n << BigInt(scopeBit));
-		return bits;
+		if (typeof scopeBit === "number") scopeMask = scopeMask | (1n << BigInt(scopeBit));
+		return (menuMask << 48n) | (actionMask << 40n) | (scopeMask << 32n) | TOKEN_SIGNATURE;
 	}
 
 	function normalizeList(value) {
@@ -573,8 +576,8 @@ function beforeSave(row, seft) {
 	}
 
 	applyDataScopeToPermissions(row);
-	row.permissionBitfield = String(toBitfield(row));
-	row.permissionSchemaVersion = "v2";
+	row.permissionBitfield = toBitfield(row).toString(36).toUpperCase();
+	row.permissionSchemaVersion = "v3";
 	if (row.actived == null) row.actived = true;
 	return row;
 }
@@ -582,6 +585,36 @@ function beforeSave(row, seft) {
 
 export const SUB_USER_BEFORE_SAVE = `
 function beforeSave(row, seft) {
+	function isDevActor() {
+		return Boolean(seft?.user?.dev);
+	}
+
+	function rankScope(scope) {
+		const normalized = String(scope || "").trim().toUpperCase();
+		const map = { NONE: 0, OWNER: 1, DEPARTMENT: 2, BRANCH: 3, ALL: 4 };
+		return map[normalized] ?? 0;
+	}
+
+	function minScope(left, right) {
+		const values = ["NONE", "OWNER", "DEPARTMENT", "BRANCH", "ALL"];
+		return values[Math.min(rankScope(left), rankScope(right))] || "NONE";
+	}
+
+	function intersectPreserveOrder(source, allowed) {
+		const allowedSet = new Set(uniqueList(allowed).map((item) => String(item || "").trim().toLowerCase()));
+		if (allowedSet.size === 0) return [];
+		return uniqueList(source).filter((item) => allowedSet.has(String(item || "").trim().toLowerCase()));
+	}
+
+	function hasLegacyAppScope(menusList, appId) {
+		if (!appId) return false;
+		const appKey = String(appId).trim().toLowerCase();
+		return uniqueList(menusList).some((token) => {
+			const t = String(token || "").trim().toLowerCase();
+			return t === appKey || t === "app:" + appKey || t === "/" + appKey;
+		});
+	}
+
 	function getLang() {
 		const fromI18n = String(seft?.i18n?.language || seft?.language || "").toLowerCase();
 		const fromNavigator = String((typeof navigator !== "undefined" && navigator.language) || "").toLowerCase();
@@ -691,11 +724,11 @@ function beforeSave(row, seft) {
 
 	function toBitfield(row) {
 		const actionBitMap = {
-			view: 31,
-			edit: 32,
-			create: 33,
-			delete: 34,
-			export: 35,
+			view: 0,
+			create: 1,
+			edit: 2,
+			delete: 3,
+			export: 4,
 		};
 		const menuBitMap = {
 			dashboard: 0,
@@ -718,26 +751,29 @@ function beforeSave(row, seft) {
 			"/crm": 8,
 		};
 		const scopeBitMap = {
-			OWNER: 41,
-			DEPARTMENT: 42,
-			BRANCH: 43,
-			ALL: 44,
+			OWNER: 0,
+			DEPARTMENT: 1,
+			BRANCH: 2,
+			ALL: 3,
 		};
-		let bits = 0n;
+		const TOKEN_SIGNATURE = 0x43534d33n;
+		let menuMask = 0n;
+		let actionMask = 0n;
+		let scopeMask = 0n;
 		uniqueList(row.permissions).forEach((token) => {
 			const normalized = String(token || "").trim().toLowerCase();
 			const bit = actionBitMap[normalized];
-			if (typeof bit === "number") bits = bits | (1n << BigInt(bit));
+			if (typeof bit === "number") actionMask = actionMask | (1n << BigInt(bit));
 		});
 		uniqueList(row.menusPermissions).forEach((token) => {
 			const normalized = String(token || "").trim().toLowerCase();
 			const bit = menuBitMap[normalized];
-			if (typeof bit === "number") bits = bits | (1n << BigInt(bit));
+			if (typeof bit === "number" && bit <= 15) menuMask = menuMask | (1n << BigInt(bit));
 		});
 		const dataScope = String(row.dataScope || "").trim().toUpperCase();
 		const scopeBit = scopeBitMap[dataScope];
-		if (typeof scopeBit === "number") bits = bits | (1n << BigInt(scopeBit));
-		return bits;
+		if (typeof scopeBit === "number") scopeMask = scopeMask | (1n << BigInt(scopeBit));
+		return (menuMask << 48n) | (actionMask << 40n) | (scopeMask << 32n) | TOKEN_SIGNATURE;
 	}
 
 	function normalizeList(value) {
@@ -803,6 +839,10 @@ function beforeSave(row, seft) {
 		}
 	}
 	row.permissionGroups = normalizeList(row.permissionGroups);
+	const groupId = String(row.group_id || "").trim();
+	if (groupId) {
+		row.permissionGroups = uniqueList([...(row.permissionGroups || []), groupId]);
+	}
 	row.permissions = normalizeList(row.permissions);
 	row.permissionsAdd = normalizeList(row.permissionsAdd);
 	row.permissionsDeny = normalizeList(row.permissionsDeny);
@@ -810,6 +850,11 @@ function beforeSave(row, seft) {
 	row.menusPermissionsAdd = normalizeList(row.menusPermissionsAdd);
 	row.menusPermissionsDeny = normalizeList(row.menusPermissionsDeny);
 	row.permissionPreset = String(row.permissionPreset || "").trim();
+	const parentPermissions = normalizeList(seft?.user?.permissions);
+	const parentMenus = normalizeList(seft?.user?.menusPermissions);
+	const parentScope = String(seft?.user?.dataScope || "OWNER").trim().toUpperCase() || "OWNER";
+	const actorIsDev = isDevActor();
+	row.dataScope = actorIsDev ? String(row.dataScope || parentScope).trim().toUpperCase() : minScope(row.dataScope || parentScope, parentScope);
 
 	const fromGroups = buildGroupPermissions(row.permissionGroups);
 	const fromPreset = buildPresetPermissions(row.permissionPreset);
@@ -827,9 +872,16 @@ function beforeSave(row, seft) {
 	const mergedMenuAllow = uniqueList([...(baseMenuAllow || []), ...(row.menusPermissionsAdd || [])]);
 	row.menusPermissions = listMinus(mergedMenuAllow, row.menusPermissionsDeny);
 
+	if (!actorIsDev) {
+		row.permissions = intersectPreserveOrder(row.permissions, parentPermissions);
+		row.menusPermissions = hasLegacyAppScope(parentMenus, sourceAppId)
+			? uniqueList(row.menusPermissions)
+			: intersectPreserveOrder(row.menusPermissions, parentMenus);
+	}
+
 	applyDataScopeToPermissions(row);
-	row.permissionBitfield = String(toBitfield(row));
-	row.permissionSchemaVersion = "v2";
+	row.permissionBitfield = toBitfield(row).toString(36).toUpperCase();
+	row.permissionSchemaVersion = "v3";
 	if (row.actived == null) row.actived = true;
 	return row;
 }
@@ -895,7 +947,7 @@ function beforeSave(row, seft) {
 		return uniqueList(map[normalized] || []);
 	}
 	function toBitfield(row) {
-		const actionBitMap = { view: 31, edit: 32, create: 33, delete: 34, export: 35 };
+		const actionBitMap = { view: 0, create: 1, edit: 2, delete: 3, export: 4 };
 		const menuBitMap = {
 			dashboard: 0, "/dashboard": 0, home: 0, "/home": 0,
 			user: 1, "/system/user": 1,
@@ -906,19 +958,22 @@ function beforeSave(row, seft) {
 			report: 7, "/system/report": 7,
 			crm: 8, "/crm": 8,
 		};
-		const scopeBitMap = { OWNER: 41, DEPARTMENT: 42, BRANCH: 43, ALL: 44 };
-		let bits = 0n;
+		const scopeBitMap = { OWNER: 0, DEPARTMENT: 1, BRANCH: 2, ALL: 3 };
+		const TOKEN_SIGNATURE = 0x43534d33n;
+		let menuMask = 0n;
+		let actionMask = 0n;
+		let scopeMask = 0n;
 		uniqueList(row.permissions).forEach((token) => {
 			const bit = actionBitMap[String(token || "").trim().toLowerCase()];
-			if (typeof bit === "number") bits = bits | (1n << BigInt(bit));
+			if (typeof bit === "number") actionMask = actionMask | (1n << BigInt(bit));
 		});
 		uniqueList(row.menusPermissions).forEach((token) => {
 			const bit = menuBitMap[String(token || "").trim().toLowerCase()];
-			if (typeof bit === "number") bits = bits | (1n << BigInt(bit));
+			if (typeof bit === "number" && bit <= 15) menuMask = menuMask | (1n << BigInt(bit));
 		});
 		const scopeBit = scopeBitMap[String(row.dataScope || "").trim().toUpperCase()];
-		if (typeof scopeBit === "number") bits = bits | (1n << BigInt(scopeBit));
-		return bits;
+		if (typeof scopeBit === "number") scopeMask = scopeMask | (1n << BigInt(scopeBit));
+		return (menuMask << 48n) | (actionMask << 40n) | (scopeMask << 32n) | TOKEN_SIGNATURE;
 	}
 
 	const roleCode = String(row.role_code || "").trim();
@@ -947,8 +1002,8 @@ function beforeSave(row, seft) {
 	}
 
 	// Single number representing all permissions for this group
-	row.permissionBitfield = String(toBitfield(row));
-	row.permissionSchemaVersion = "v2";
+	row.permissionBitfield = toBitfield(row).toString(36).toUpperCase();
+	row.permissionSchemaVersion = "v3";
 	if (row.status == null) row.status = 1;
 	return row;
 }
