@@ -979,15 +979,141 @@ public class TableHandler {
     }
 
     private List<String> toStringList(Object raw) {
-        if (!(raw instanceof List<?> list)) {
+        if (raw == null) {
             return Collections.emptyList();
         }
+        if (raw instanceof List<?> list) {
+            List<String> out = new ArrayList<>();
+            for (Object item : list) {
+                if (item == null) continue;
+                if (item instanceof Map<?, ?> mapItem) {
+                    Object valueObj = mapItem.get("value");
+                    if (valueObj == null) valueObj = mapItem.get("id");
+                    if (valueObj == null) valueObj = mapItem.get("key");
+                    if (valueObj == null) valueObj = mapItem.get("code");
+                    String value = safeStr(valueObj);
+                    if (!value.isBlank()) {
+                        out.add(value);
+                    }
+                    continue;
+                }
+                String value = String.valueOf(item).trim();
+                if (!value.isBlank()) {
+                    out.add(value);
+                }
+            }
+            return out;
+        }
+        if (raw instanceof String text) {
+            String trimmed = text.trim();
+            if (trimmed.isEmpty()) {
+                return Collections.emptyList();
+            }
+            if ((trimmed.startsWith("[") && trimmed.endsWith("]")) || (trimmed.startsWith("{") && trimmed.endsWith("}"))) {
+                try {
+                    Object parsed = objectMapper.readValue(trimmed, Object.class);
+                    return toStringList(parsed);
+                } catch (Exception ignore) {
+                }
+            }
+            String[] parts = trimmed.split("[,;\\n]");
+            List<String> out = new ArrayList<>();
+            for (String part : parts) {
+                String value = safeStr(part);
+                if (!value.isBlank()) {
+                    out.add(value);
+                }
+            }
+            return out;
+        }
+        return Collections.emptyList();
+    }
+
+    private Map<String, Object> findRoleRecordByCodeOrId(String roleRef) {
+        String role = safeStr(roleRef);
+        if (role.isEmpty()) {
+            return Collections.emptyMap();
+        }
+
+        SearchFilter roleCodeFilter = new SearchFilter();
+        roleCodeFilter.setField("role_code");
+        roleCodeFilter.setType("eq");
+        roleCodeFilter.setValue(role);
+        Map<String, Object> byRoleCode = recordManager.find("csm", "csm_roles", roleCodeFilter);
+        if (byRoleCode != null && !byRoleCode.isEmpty()) {
+            return byRoleCode;
+        }
+
+        SearchFilter idFilter = new SearchFilter();
+        idFilter.setField("id");
+        idFilter.setType("eq");
+        idFilter.setValue(role);
+        Map<String, Object> byId = recordManager.find("csm", "csm_roles", idFilter);
+        return byId == null ? Collections.emptyMap() : byId;
+    }
+
+    private List<String> mergeUniqueCaseInsensitive(List<String> base, List<String> extra) {
+        LinkedHashMap<String, String> merged = new LinkedHashMap<>();
+        List<String> safeBase = base == null ? Collections.emptyList() : base;
+        List<String> safeExtra = extra == null ? Collections.emptyList() : extra;
+        for (String value : safeBase) {
+            String normalized = safeStr(value);
+            if (!normalized.isEmpty()) {
+                merged.putIfAbsent(normalized.toLowerCase(Locale.ROOT), normalized);
+            }
+        }
+        for (String value : safeExtra) {
+            String normalized = safeStr(value);
+            if (!normalized.isEmpty()) {
+                merged.putIfAbsent(normalized.toLowerCase(Locale.ROOT), normalized);
+            }
+        }
+        return new ArrayList<>(merged.values());
+    }
+
+    private List<String> subtractCaseInsensitive(List<String> source, List<String> deny) {
+        Set<String> denySet = new LinkedHashSet<>();
+        List<String> safeDeny = deny == null ? Collections.emptyList() : deny;
+        for (String value : safeDeny) {
+            String normalized = safeStr(value).toLowerCase(Locale.ROOT);
+            if (!normalized.isEmpty()) {
+                denySet.add(normalized);
+            }
+        }
+        if (denySet.isEmpty()) {
+            return source == null ? Collections.emptyList() : new ArrayList<>(source);
+        }
+        List<String> safeSource = source == null ? Collections.emptyList() : source;
         List<String> out = new ArrayList<>();
-        for (Object item : list) {
-            if (item == null) continue;
-            String value = String.valueOf(item).trim();
-            if (!value.isBlank()) {
-                out.add(value);
+        for (String value : safeSource) {
+            String normalized = safeStr(value);
+            if (normalized.isEmpty()) {
+                continue;
+            }
+            if (!denySet.contains(normalized.toLowerCase(Locale.ROOT))) {
+                out.add(normalized);
+            }
+        }
+        return out;
+    }
+
+    private String normalizeScopeName(String rawScope) {
+        String scope = safeStr(rawScope).toUpperCase(Locale.ROOT);
+        return switch (scope) {
+            case "ALL", "BRANCH", "DEPARTMENT", "OWNER" -> scope;
+            default -> "NONE";
+        };
+    }
+
+    private List<String> applyScopeToken(List<String> permissions, String scope) {
+        List<String> out = subtractCaseInsensitive(permissions, List.of("scope:owner", "scope:department", "scope:branch", "scope:all"));
+        String normalizedScope = normalizeScopeName(scope);
+        switch (normalizedScope) {
+            case "OWNER" -> out = mergeUniqueCaseInsensitive(out, List.of("scope:owner"));
+            case "DEPARTMENT" -> out = mergeUniqueCaseInsensitive(out, List.of("scope:department"));
+            case "BRANCH" -> out = mergeUniqueCaseInsensitive(out, List.of("scope:branch"));
+            case "ALL" -> out = mergeUniqueCaseInsensitive(out, List.of("scope:all"));
+            default -> {
             }
         }
         return out;
@@ -2202,11 +2328,75 @@ public class TableHandler {
             }
 
             if ("csm_accounts".equals(tableName) || "csm_group_members".equals(tableName)) {
-                List<String> permissions = toStringList(row.get("permissions"));
-                List<String> menusPermissions = toStringList(row.get("menusPermissions"));
+                List<String> directPermissions = toStringList(row.get("permissions"));
+                List<String> directMenus = toStringList(row.get("menusPermissions"));
+                List<String> permissionsAdd = toStringList(row.get("permissionsAdd"));
+                List<String> permissionsDeny = toStringList(row.get("permissionsDeny"));
+                List<String> menusAdd = toStringList(row.get("menusPermissionsAdd"));
+                List<String> menusDeny = toStringList(row.get("menusPermissionsDeny"));
+
+                List<String> groupRefs = new ArrayList<>();
+                groupRefs.addAll(toStringList(row.get("permissionGroups")));
+                String groupId = safeStr(row.get("group_id"));
+                if (!groupId.isEmpty()) {
+                    groupRefs.add(groupId);
+                }
+
+                List<String> groupPermissions = new ArrayList<>();
+                List<String> groupMenus = new ArrayList<>();
+                String groupScope = "";
+                for (String groupRef : groupRefs) {
+                    Map<String, Object> roleRecord = findRoleRecordByCodeOrId(groupRef);
+                    if (roleRecord.isEmpty()) {
+                        continue;
+                    }
+                    groupPermissions = mergeUniqueCaseInsensitive(groupPermissions, toStringList(roleRecord.get("permissions")));
+                    groupMenus = mergeUniqueCaseInsensitive(groupMenus, toStringList(roleRecord.get("menusPermissions")));
+                    if (groupScope.isEmpty()) {
+                        groupScope = safeStr(roleRecord.get("dataScope"));
+                    }
+                }
+
+                List<String> effectivePermissions;
+                List<String> effectiveMenus;
+                if ("csm_group_members".equals(tableName) && !groupPermissions.isEmpty()) {
+                    effectivePermissions = new ArrayList<>(groupPermissions);
+                    effectiveMenus = new ArrayList<>(groupMenus);
+                } else {
+                    effectivePermissions = directPermissions.isEmpty() ? new ArrayList<>(groupPermissions) : new ArrayList<>(directPermissions);
+                    effectiveMenus = directMenus.isEmpty() ? new ArrayList<>(groupMenus) : new ArrayList<>(directMenus);
+                }
+
+                effectivePermissions = mergeUniqueCaseInsensitive(effectivePermissions, permissionsAdd);
+                effectivePermissions = subtractCaseInsensitive(effectivePermissions, permissionsDeny);
+                effectiveMenus = mergeUniqueCaseInsensitive(effectiveMenus, menusAdd);
+                effectiveMenus = subtractCaseInsensitive(effectiveMenus, menusDeny);
+
+                if ("csm_group_members".equals(tableName)) {
+                    effectivePermissions = subtractCaseInsensitive(effectivePermissions, List.of("admin", "dev"));
+                }
+
+                String selectedScope = safeStr(row.get("dataScope"));
+                if (selectedScope.isEmpty()) {
+                    selectedScope = groupScope;
+                }
+                effectivePermissions = applyScopeToken(effectivePermissions, selectedScope);
+
                 boolean dev = extractDevFlagFromAppToken(row.get("app_token"));
-                long bitfield = PermissionBitfieldUtil.buildBitfield(permissions, menusPermissions, dev);
-                String dataScope = PermissionBitfieldUtil.resolveDataScope(bitfield);
+                long bitfield = PermissionBitfieldUtil.buildBitfield(effectivePermissions, effectiveMenus, dev);
+                String dataScope = normalizeScopeName(selectedScope);
+                if ("NONE".equals(dataScope)) {
+                    dataScope = PermissionBitfieldUtil.resolveDataScope(bitfield);
+                }
+
+                if (!Objects.equals(toStringList(row.get("permissions")), effectivePermissions)) {
+                    row.put("permissions", effectivePermissions);
+                    changed = true;
+                }
+                if (!Objects.equals(toStringList(row.get("menusPermissions")), effectiveMenus)) {
+                    row.put("menusPermissions", effectiveMenus);
+                    changed = true;
+                }
 
                 if (!Objects.equals(String.valueOf(row.getOrDefault("permissionBitfield", "")), String.valueOf(bitfield))) {
                     row.put("permissionBitfield", String.valueOf(bitfield));
@@ -2230,16 +2420,26 @@ public class TableHandler {
                     changed = true;
                 }
             } else if ("csm_roles".equals(tableName)) {
-                if (!hasNonBlank(row.get("permissionBitfield"))) {
-                    row.put("permissionBitfield", "0");
+                List<String> rolePermissions = toStringList(row.get("permissions"));
+                List<String> roleMenus = toStringList(row.get("menusPermissions"));
+                String roleScope = safeStr(row.get("dataScope"));
+                rolePermissions = applyScopeToken(rolePermissions, roleScope);
+                long roleBitfield = PermissionBitfieldUtil.buildBitfield(rolePermissions, roleMenus, false);
+                String roleDataScope = normalizeScopeName(roleScope);
+                if ("NONE".equals(roleDataScope)) {
+                    roleDataScope = PermissionBitfieldUtil.resolveDataScope(roleBitfield);
+                }
+
+                if (!Objects.equals(String.valueOf(row.getOrDefault("permissionBitfield", "")), String.valueOf(roleBitfield))) {
+                    row.put("permissionBitfield", String.valueOf(roleBitfield));
                     changed = true;
                 }
                 if (!Objects.equals(String.valueOf(row.getOrDefault("permissionSchemaVersion", "")), "v2")) {
                     row.put("permissionSchemaVersion", "v2");
                     changed = true;
                 }
-                if (!hasNonBlank(row.get("dataScope"))) {
-                    row.put("dataScope", "NONE");
+                if (!Objects.equals(String.valueOf(row.getOrDefault("dataScope", "")), roleDataScope)) {
+                    row.put("dataScope", roleDataScope);
                     changed = true;
                 }
             } else if ("csm_user_depts".equals(tableName)) {

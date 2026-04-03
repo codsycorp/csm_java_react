@@ -197,7 +197,7 @@ export const SYSTEM_ACCOUNT_DEFAULT_FIELDS: TableField[] = [
 		f_align: "left",
 		f_options: MENU_PERMISSION_OPTIONS,
 	} as any,
-	{ f_name: "permissionBitfield", f_header: "system.userPermission.fields.permissionBitfield", f_show: 0, f_types: "string", f_align: "left" },
+	{ f_name: "permissionBitfield", f_header: "system.userPermission.fields.permissionBitfield", f_show: 0, f_types: "string_ro", f_align: "left" },
 	{ f_name: "permissionSchemaVersion", f_header: "system.userPermission.fields.permissionSchemaVersion", f_show: 0, f_types: "string", f_align: "left" },
 	{ f_name: "dataScope", f_header: "system.userPermission.fields.dataScope", f_show: 1, f_types: "co", f_align: "left", f_cbo_query: DATA_SCOPE_OPTIONS_JSON },
 	{ f_name: "dept_id", f_header: "system.userPermission.fields.deptId", f_show: 0, f_types: "co", f_align: "left", f_cbo_query: DEPT_SELECT_QUERY_JSON },
@@ -241,7 +241,7 @@ export const SUB_USER_DEFAULT_FIELDS: TableField[] = [
 		f_align: "left",
 		f_options: MENU_PERMISSION_OPTIONS,
 	} as any,
-	{ f_name: "permissionBitfield", f_header: "system.userPermission.fields.permissionBitfield", f_show: 1, f_types: "string", f_align: "left" },
+	{ f_name: "permissionBitfield", f_header: "system.userPermission.fields.permissionBitfield", f_show: 1, f_types: "string_ro", f_align: "left" },
 	{ f_name: "permissionSchemaVersion", f_header: "system.userPermission.fields.permissionSchemaVersion", f_show: 0, f_types: "string", f_align: "left" },
 	{ f_name: "dataScope", f_header: "system.userPermission.fields.dataScope", f_show: 1, f_types: "co", f_align: "left", f_cbo_query: DATA_SCOPE_OPTIONS_JSON },
 	{ f_name: "dept_id", f_header: "system.userPermission.fields.deptId", f_show: 0, f_types: "co", f_align: "left", f_cbo_query: DEPT_SELECT_QUERY_JSON },
@@ -440,7 +440,12 @@ function beforeSave(row, seft) {
 
 	function normalizeList(value) {
 		if (Array.isArray(value)) {
-			return value.map((item) => String(item || "").trim()).filter(Boolean);
+			return value.map((item) => {
+				if (item && typeof item === "object") {
+					return String(item.value ?? item.id ?? item.key ?? item.code ?? "").trim();
+				}
+				return String(item || "").trim();
+			}).filter(Boolean);
 		}
 		if (typeof value === "string") {
 			const raw = value.trim();
@@ -713,7 +718,12 @@ function beforeSave(row, seft) {
 
 	function normalizeList(value) {
 		if (Array.isArray(value)) {
-			return value.map((item) => String(item || "").trim()).filter(Boolean);
+			return value.map((item) => {
+				if (item && typeof item === "object") {
+					return String(item.value ?? item.id ?? item.key ?? item.code ?? "").trim();
+				}
+				return String(item || "").trim();
+			}).filter(Boolean);
 		}
 		if (typeof value === "string") {
 			const raw = value.trim();
@@ -819,7 +829,14 @@ function beforeSave(row, seft) {
 		return Array.from(new Set((items || []).map((item) => String(item || "").trim()).filter(Boolean)));
 	}
 	function normalizeList(value) {
-		if (Array.isArray(value)) return value.map((item) => String(item || "").trim()).filter(Boolean);
+		if (Array.isArray(value)) {
+			return value.map((item) => {
+				if (item && typeof item === "object") {
+					return String(item.value ?? item.id ?? item.key ?? item.code ?? "").trim();
+				}
+				return String(item || "").trim();
+			}).filter(Boolean);
+		}
 		if (typeof value === "string") {
 			const raw = value.trim();
 			if (!raw) return [];
