@@ -428,7 +428,7 @@ export default function AdminPage() {
 			return base;
 		}
 
-		const resolvedAppId = "csm";
+		const resolvedAppId = (appId && String(appId).trim()) || "csm";
 		const actorMode: "main" | "sub" = isDevUser ? "main" : "sub";
 		const actorTableName = actorMode === "main" ? "csm_accounts" : "csm_group_members";
 		const runtimeConfig = buildSystemUserMenuConfig({
@@ -455,8 +455,11 @@ export default function AdminPage() {
 				id: "permission-group",
 				path: "/system/dept",
 				label: t("common.menu.permissionGroup"),
+				label_vi: t("common.menu.permissionGroup"),
+				label_en: tEn("common.menu.permissionGroup"),
+				label_zh: tZh("common.menu.permissionGroup"),
 				table_name: "csm_roles",
-				app_id: (menu?.app_id && String(menu.app_id).trim()) || appId,
+				app_id: appId,
 				type_form: 1,
 				row_type_edit: 0,
 				g_readonly: false,
@@ -515,6 +518,15 @@ export default function AdminPage() {
 				label: resolveDisplayLabel(roleMenu),
 			});
 			setMenuData(withLabel);
+			const cleanLabel = resolveDisplayLabel(withLabel);
+			addTab(location.pathname, {
+				key: location.pathname,
+				label: cleanLabel,
+				closable: true,
+				draggable: true,
+				historyState: { search: location.search, hash: location.hash },
+			});
+			useTabsStore.getState().setActiveKey(location.pathname);
 			setLoading(false);
 			if (selectedMenuIdForTab === menuId) {
 				useUserStore.getState().setSelectedMenuIdForTab("");
@@ -546,7 +558,7 @@ export default function AdminPage() {
 						   path: "/system/user",
 						   label: t("common.menu.user"),
 						   table_name: "csm_accounts",
-						   app_id: "csm",
+						   app_id: appId,
 						   type_form: 1,
 						   row_type_edit: 0,
 						   g_readonly: false,
@@ -556,10 +568,11 @@ export default function AdminPage() {
 						   id: "permission-group",
 						   path: "/system/dept",
 						   label: t("common.menu.permissionGroup"),
-						   label_en: "Permission Group Management",
-						   label_zh: "权限组管理",
+						   label_vi: t("common.menu.permissionGroup"),
+						   label_en: tEn("common.menu.permissionGroup"),
+						   label_zh: tZh("common.menu.permissionGroup"),
 						   table_name: "csm_roles",
-						   app_id: "csm",
+						   app_id: appId,
 						   type_form: 1,
 						   row_type_edit: 0,
 						   g_readonly: false,

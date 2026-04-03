@@ -297,6 +297,11 @@ public class TableHandler {
                 return errorResponse(tableAccessError);
             }
 
+            String permissionGroupAppBoundaryError = validatePermissionGroupAppBoundary(appId, tblname, accessContext);
+            if (permissionGroupAppBoundaryError != null) {
+                return errorResponse(permissionGroupAppBoundaryError);
+            }
+
             // Chuẩn hóa e_where thành Map<String, Object>
             Object eWhereObj = msg.getOrDefault("e_where", new HashMap<>());
             SearchFilter filtersObjs;
@@ -371,6 +376,27 @@ public class TableHandler {
         }
         if ("csm_accounts".equals(tableName) && !accessContext.isDev) {
             return "Bảng csm_accounts chỉ dành cho tài khoản dev. Admin/Sub-user vui lòng thao tác trên csm_group_members.";
+        }
+        return null;
+    }
+
+    private String validatePermissionGroupAppBoundary(String appId, String tableName, UserAccessContext accessContext) {
+        if (accessContext == null || accessContext.isDev) {
+            return null;
+        }
+        if (!"csm_roles".equals(tableName)) {
+            return null;
+        }
+        String contextAppId = safeStr(accessContext.appId);
+        if (contextAppId.isEmpty()) {
+            return null;
+        }
+        String targetAppId = safeStr(appId);
+        if (targetAppId.isEmpty()) {
+            return null;
+        }
+        if (!contextAppId.equals(targetAppId)) {
+            return "Bạn chỉ được quản lý Nhóm quyền trong app_id của chính mình.";
         }
         return null;
     }
