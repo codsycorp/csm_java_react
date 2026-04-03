@@ -1091,7 +1091,11 @@ public class TableHandler {
         return Collections.emptyList();
     }
 
-    private Map<String, Object> findRoleRecordByCodeOrId(String roleRef) {
+    private Map<String, Object> findRoleRecordByCodeOrId(String appId, String roleRef) {
+        String effectiveAppId = safeStr(appId);
+        if (effectiveAppId.isEmpty()) {
+            effectiveAppId = "csm";
+        }
         String role = safeStr(roleRef);
         if (role.isEmpty()) {
             return Collections.emptyMap();
@@ -1101,7 +1105,7 @@ public class TableHandler {
         roleCodeFilter.setField("role_code");
         roleCodeFilter.setType("eq");
         roleCodeFilter.setValue(role);
-        Map<String, Object> byRoleCode = recordManager.find("csm", "csm_roles", roleCodeFilter);
+        Map<String, Object> byRoleCode = recordManager.find(effectiveAppId, "csm_roles", roleCodeFilter);
         if (byRoleCode != null && !byRoleCode.isEmpty()) {
             return byRoleCode;
         }
@@ -1110,7 +1114,7 @@ public class TableHandler {
         idFilter.setField("id");
         idFilter.setType("eq");
         idFilter.setValue(role);
-        Map<String, Object> byId = recordManager.find("csm", "csm_roles", idFilter);
+        Map<String, Object> byId = recordManager.find(effectiveAppId, "csm_roles", idFilter);
         return byId == null ? Collections.emptyMap() : byId;
     }
 
@@ -1157,6 +1161,50 @@ public class TableHandler {
             }
         }
         return out;
+    }
+
+    private List<String> presetPermissions(String rawPreset) {
+        String preset = safeStr(rawPreset).toLowerCase(Locale.ROOT);
+        return switch (preset) {
+            case "viewer" -> List.of("view");
+            case "editor" -> List.of("view", "create", "edit");
+            case "full_crud" -> List.of("view", "create", "edit", "delete");
+            case "full_crud_export" -> List.of("view", "create", "edit", "delete", "export");
+            case "admin_full" -> List.of("admin", "view", "create", "edit", "delete", "export", "scope:all");
+            default -> Collections.emptyList();
+        };
+    }
+
+    private List<String> presetMenus(String rawPreset) {
+        String preset = safeStr(rawPreset).toLowerCase(Locale.ROOT);
+        return switch (preset) {
+            case "viewer" -> List.of("/home");
+            case "editor", "full_crud", "full_crud_export" -> List.of("/dashboard", "/home", "/crm");
+            case "admin_full" -> List.of("/system/user", "/system/menu", "/system/dept", "/dashboard", "/home", "/crm");
+            default -> Collections.emptyList();
+        };
+    }
+
+    private boolean isSubsetCaseInsensitive(List<String> subset, List<String> superset) {
+        List<String> safeSubset = subset == null ? Collections.emptyList() : subset;
+        if (safeSubset.isEmpty()) {
+            return true;
+        }
+        Set<String> normalizedSuperset = new LinkedHashSet<>();
+        List<String> safeSuperset = superset == null ? Collections.emptyList() : superset;
+        for (String value : safeSuperset) {
+            String normalized = safeStr(value).toLowerCase(Locale.ROOT);
+            if (!normalized.isBlank()) {
+                normalizedSuperset.add(normalized);
+            }
+        }
+        for (String value : safeSubset) {
+            String normalized = safeStr(value).toLowerCase(Locale.ROOT);
+            if (!normalized.isBlank() && !normalizedSuperset.contains(normalized)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private String normalizeScopeName(String rawScope) {
@@ -1432,7 +1480,7 @@ public class TableHandler {
         List<String> groupedPermissions = new ArrayList<>();
         List<String> groupedMenus = new ArrayList<>();
         for (String groupRef : permissionGroups) {
-            Map<String, Object> roleRecord = findRoleRecordByCodeOrId(groupRef);
+            Map<String, Object> roleRecord = findRoleRecordByCodeOrId(accessContext.appId, groupRef);
             if (roleRecord == null || roleRecord.isEmpty()) {
                 continue;
             }
@@ -1442,6 +1490,15 @@ public class TableHandler {
 
         List<String> requestedPermissions = toStringList(objUpdate.get("permissions"));
         List<String> requestedMenus = toStringList(objUpdate.get("menusPermissions"));
+        String requestedPreset = safeStr(objUpdate.get("permissionPreset"));
+        List<String> presetPermissions = presetPermissions(requestedPreset);
+        List<String> presetMenus = presetMenus(requestedPreset);
+        if (requestedPermissions.isEmpty() && !presetPermissions.isEmpty()) {
+            requestedPermissions = new ArrayList<>(presetPermissions);
+        }
+        if (requestedMenus.isEmpty() && !presetMenus.isEmpty()) {
+            requestedMenus = new ArrayList<>(presetMenus);
+        }
         List<String> permissionsAdd = toStringList(objUpdate.get("permissionsAdd"));
         List<String> permissionsDeny = toStringList(objUpdate.get("permissionsDeny"));
         List<String> menusAdd = toStringList(objUpdate.get("menusPermissionsAdd"));
@@ -1483,6 +1540,16 @@ public class TableHandler {
         }
 
         objUpdate.put("dataScope", minDataScope(safeStr(objUpdate.get("dataScope")), accessContext.dataScope));
+
+        if (!requestedPreset.isBlank()) {
+            List<String> finalPermissions = toStringList(objUpdate.get("permissions"));
+            List<String> finalMenus = toStringList(objUpdate.get("menusPermissions"));
+            boolean presetOutOfParent = !isSubsetCaseInsensitive(presetPermissions, finalPermissions)
+                || !isSubsetCaseInsensitive(presetMenus, finalMenus);
+            if (presetOutOfParent) {
+                objUpdate.put("permissionPreset", "");
+            }
+        }
     }
 
     private boolean hasPermissionMutationPayload(Map<String, Object> objUpdate) {
@@ -1522,7 +1589,7 @@ public class TableHandler {
         List<String> groupedPermissions = new ArrayList<>();
         List<String> groupedMenus = new ArrayList<>();
         for (String groupRef : permissionGroups) {
-            Map<String, Object> roleRecord = findRoleRecordByCodeOrId(groupRef);
+            Map<String, Object> roleRecord = findRoleRecordByCodeOrId(accessContext.appId, groupRef);
             if (roleRecord == null || roleRecord.isEmpty()) {
                 continue;
             }
@@ -1532,6 +1599,15 @@ public class TableHandler {
 
         List<String> requestedPermissions = toStringList(objUpdate.get("permissions"));
         List<String> requestedMenus = toStringList(objUpdate.get("menusPermissions"));
+        String requestedPreset = safeStr(objUpdate.get("permissionPreset"));
+        List<String> presetPermissions = presetPermissions(requestedPreset);
+        List<String> presetMenus = presetMenus(requestedPreset);
+        if (requestedPermissions.isEmpty() && !presetPermissions.isEmpty()) {
+            requestedPermissions = new ArrayList<>(presetPermissions);
+        }
+        if (requestedMenus.isEmpty() && !presetMenus.isEmpty()) {
+            requestedMenus = new ArrayList<>(presetMenus);
+        }
         List<String> permissionsAdd = toStringList(objUpdate.get("permissionsAdd"));
         List<String> permissionsDeny = toStringList(objUpdate.get("permissionsDeny"));
         List<String> menusAdd = toStringList(objUpdate.get("menusPermissionsAdd"));
@@ -1578,6 +1654,16 @@ public class TableHandler {
         objUpdate.put("permissions", resolvedPermissions);
         objUpdate.put("menusPermissions", resolvedMenus);
         objUpdate.put("dataScope", clampedScope);
+
+        if (!requestedPreset.isBlank()) {
+            List<String> finalPermissions = toStringList(objUpdate.get("permissions"));
+            List<String> finalMenus = toStringList(objUpdate.get("menusPermissions"));
+            boolean presetOutOfParent = !isSubsetCaseInsensitive(presetPermissions, finalPermissions)
+                || !isSubsetCaseInsensitive(presetMenus, finalMenus);
+            if (presetOutOfParent) {
+                objUpdate.put("permissionPreset", "");
+            }
+        }
     }
 
     /**
@@ -1733,15 +1819,9 @@ public class TableHandler {
         List<String> permissions = toStringList(objUpdate.get("permissions"));
         List<String> menusPermissions = toStringList(objUpdate.get("menusPermissions"));
         long bitfield = PermissionBitfieldUtil.buildBitfield(permissions, menusPermissions, false);
-        if (!hasNonBlank(objUpdate.get("permissionBitfield"))) {
-            objUpdate.put("permissionBitfield", PermissionBitfieldUtil.toCompactToken(bitfield));
-        }
-        if (!hasNonBlank(objUpdate.get("permissionSchemaVersion"))) {
-            objUpdate.put("permissionSchemaVersion", "v3");
-        }
-        if (!hasNonBlank(objUpdate.get("dataScope"))) {
-            objUpdate.put("dataScope", PermissionBitfieldUtil.resolveDataScope(bitfield));
-        }
+        objUpdate.put("permissionBitfield", PermissionBitfieldUtil.toCompactToken(bitfield));
+        objUpdate.put("permissionSchemaVersion", "v3");
+        objUpdate.put("dataScope", PermissionBitfieldUtil.resolveDataScope(bitfield));
     }
 
     private static final class UserAccessContext {
@@ -2760,7 +2840,7 @@ public class TableHandler {
                 List<String> groupMenus = new ArrayList<>();
                 String groupScope = "";
                 for (String groupRef : groupRefs) {
-                    Map<String, Object> roleRecord = findRoleRecordByCodeOrId(groupRef);
+                    Map<String, Object> roleRecord = findRoleRecordByCodeOrId(appId, groupRef);
                     if (roleRecord.isEmpty()) {
                         continue;
                     }

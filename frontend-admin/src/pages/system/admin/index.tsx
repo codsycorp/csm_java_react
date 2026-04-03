@@ -8,7 +8,7 @@ import { useAppStore, useUserStore, usePermissionStore, useTabsStore } from "#sr
 import { resolveDevFlag } from "#src/utils/dev-flag";
 import { adaptSystemUserConfigForActor, buildSystemUserMenuConfig, PERMISSION_GROUP_BEFORE_SAVE, PERMISSION_TOKEN_OPTIONS, ACTION_PRESET_OPTIONS_JSON, MENU_PERMISSION_OPTIONS, DATA_SCOPE_OPTIONS_JSON, type SystemUserActorType } from "./system-user-menu-config";
 import { Empty, Spin, Alert } from "antd";
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useParams, useLocation } from "react-router";
 import { getTableData, createTableStruct, type CreateTableStruct } from "#src/components/csm-grid/CsmApi";
 import { useTranslation } from "react-i18next";
@@ -184,6 +184,12 @@ function parseMenusPermissions(raw: unknown): Record<string | number, number> {
 	return output;
 }
 
+function normalizeTableNames(raw: unknown): string[] {
+	const value = String(raw || "").trim().toLowerCase();
+	if (!value) return [];
+	return Array.from(new Set(value.split(",").map((item) => item.trim()).filter(Boolean)));
+}
+
 const DEPT_MENU_FIELD_KEYS = [
 	{ f_name: "id", key: "system.dept.fields.id", f_types: "string", f_align: "left" },
 	{ f_name: "parent_dept_id", key: "system.dept.fields.parentDeptId", f_types: "string", f_align: "left" },
@@ -204,6 +210,68 @@ const STATUS_OPTIONS_JSON = JSON.stringify({
 		{ value: "0", label: "Ngưng" },
 	],
 });
+
+const PRESET_RULES: Record<string, { permissions: string[]; menus: string[] }> = {
+	viewer: { permissions: ["view"], menus: ["/home"] },
+	editor: { permissions: ["view", "create", "edit"], menus: ["/dashboard", "/home", "/crm"] },
+	full_crud: { permissions: ["view", "create", "edit", "delete"], menus: ["/dashboard", "/home", "/crm"] },
+	full_crud_export: { permissions: ["view", "create", "edit", "delete", "export"], menus: ["/dashboard", "/home", "/crm"] },
+	admin_full: {
+		permissions: ["admin", "view", "create", "edit", "delete", "export", "scope:all"],
+		menus: ["/system/user", "/system/menu", "/system/dept", "/dashboard", "/home", "/crm"],
+	},
+};
+
+function normalizeScopeValue(scope: unknown): "NONE" | "OWNER" | "DEPARTMENT" | "BRANCH" | "ALL" {
+	const value = String(scope || "").trim().toUpperCase();
+	if (value === "OWNER" || value === "DEPARTMENT" || value === "BRANCH" || value === "ALL") return value;
+	return "NONE";
+}
+
+function scopeRank(scope: "NONE" | "OWNER" | "DEPARTMENT" | "BRANCH" | "ALL"): number {
+	switch (scope) {
+		case "OWNER": return 1;
+		case "DEPARTMENT": return 2;
+		case "BRANCH": return 3;
+		case "ALL": return 4;
+		default: return 0;
+	}
+}
+
+function parseOptionsFromQuery(json: string): Array<{ value: string; label: string }> {
+	try {
+		const parsed = JSON.parse(json);
+		if (Array.isArray(parsed?.options)) return parsed.options;
+	} catch {
+		return [];
+	}
+	return [];
+}
+
+function normalizeMenuTokens(raw: unknown): string[] {
+	if (Array.isArray(raw)) return normalizeStringList(raw);
+	if (raw && typeof raw === "object") {
+		const keys = Object.keys(raw as Record<string, unknown>);
+		if (keys.length > 0) return Array.from(new Set(keys.map((item) => String(item || "").trim()).filter(Boolean)));
+	}
+	return normalizeStringList(raw);
+}
+
+function tokenMatchesMenu(target: string, allowedSet: Set<string>): boolean {
+	if (allowedSet.has(target)) return true;
+	if (target.startsWith("/") && allowedSet.has(target.slice(1))) return true;
+	if (!target.startsWith("/") && allowedSet.has("/" + target)) return true;
+	return false;
+}
+
+function hasLegacyFullAppScope(menus: string[], appId: string): boolean {
+	const app = String(appId || "").trim().toLowerCase();
+	if (!app) return false;
+	return menus.some((token) => {
+		const value = String(token || "").trim().toLowerCase();
+		return value === app || value === "app:" + app || value === "/" + app;
+	});
+}
 
 function buildDeptMenuFields(
 	t: (key: string) => string,
@@ -227,6 +295,10 @@ function buildRoleMenuFields(
 	t: (key: string) => string,
 	tEn: (key: string) => string,
 	tZh: (key: string) => string,
+	permissionOptions: Array<{ value: string; label: string }>,
+	menuOptions: Array<{ value: string; label: string }>,
+	presetOptionsQuery: string,
+	dataScopeOptionsQuery: string,
 ) {
 	const h = (key: string) => ({
 		f_header: t(key),
@@ -239,10 +311,10 @@ function buildRoleMenuFields(
 		{ f_name: "role_code", ...h("system.role.id"), f_show: 1, f_types: "string", f_align: "left" },
 		{ f_name: "role_name", ...h("system.role.name"), f_show: 1, f_types: "string", f_align: "left" },
 		{ f_name: "description", ...h("common.description"), f_show: 1, f_types: "string", f_align: "left" },
-		{ f_name: "permissionPreset", ...h("system.userPermission.fields.permissionPreset"), f_show: 1, f_types: "co", f_align: "left", f_cbo_query: ACTION_PRESET_OPTIONS_JSON },
-		{ f_name: "permissions", ...h("system.userPermission.fields.permissions"), f_show: 1, f_types: "multi_tag", f_align: "left", f_options: PERMISSION_TOKEN_OPTIONS },
-		{ f_name: "menusPermissions", ...h("system.userPermission.fields.menusPermissions"), f_show: 1, f_types: "menu_tree", f_align: "left", f_options: MENU_PERMISSION_OPTIONS },
-		{ f_name: "dataScope", ...h("system.userPermission.fields.dataScope"), f_show: 1, f_types: "co", f_align: "left", f_cbo_query: DATA_SCOPE_OPTIONS_JSON },
+		{ f_name: "permissionPreset", ...h("system.userPermission.fields.permissionPreset"), f_show: 1, f_types: "co", f_align: "left", f_cbo_query: presetOptionsQuery },
+		{ f_name: "permissions", ...h("system.userPermission.fields.permissions"), f_show: 1, f_types: "multi_tag", f_align: "left", f_options: permissionOptions },
+		{ f_name: "menusPermissions", ...h("system.userPermission.fields.menusPermissions"), f_show: 1, f_types: "menu_tree", f_align: "left", f_options: menuOptions },
+		{ f_name: "dataScope", ...h("system.userPermission.fields.dataScope"), f_show: 1, f_types: "co", f_align: "left", f_cbo_query: dataScopeOptionsQuery },
 		{ f_name: "permissionBitfield", ...h("system.userPermission.fields.permissionBitfield"), f_show: 0, f_types: "string", f_align: "left" },
 		{ f_name: "permissionSchemaVersion", ...h("system.userPermission.fields.permissionSchemaVersion"), f_show: 0, f_types: "string", f_align: "left" },
 		{ f_name: "status", ...h("common.status"), f_show: 1, f_types: "co", f_align: "center", f_cbo_query: STATUS_OPTIONS_JSON },
@@ -407,6 +479,7 @@ export default function AdminPage() {
 	const [dbLoading, setDbLoading] = useState(false);
 	const [dbError, setDbError] = useState<string | null>(null);
 	const [reloadTrigger, setReloadTrigger] = useState(0);
+	const mismatchLogRef = useRef("");
 
 	const userSubOwnerCandidates = [userAppId, userId, username, email, phoneNumber]
 		.filter((v): v is string => typeof v === "string" && v.trim().length > 0);
@@ -422,6 +495,70 @@ export default function AdminPage() {
 		? "ALL"
 		: resolvePermissionDataScope(runtimePermissionBits);
 	const systemUserActorType: SystemUserActorType = isDevUser ? "dev" : (isAdminUser ? "admin" : "sub-user");
+
+	const roleFieldConstraints = useMemo(() => {
+		if (isDevUser) {
+			return {
+				permissionOptions: PERMISSION_TOKEN_OPTIONS,
+				menuOptions: MENU_PERMISSION_OPTIONS,
+				presetOptionsQuery: ACTION_PRESET_OPTIONS_JSON,
+				dataScopeOptionsQuery: DATA_SCOPE_OPTIONS_JSON,
+			};
+		}
+
+		const actorPermissions = normalizeStringList(userPermissionsRaw).map((item) => item.toLowerCase());
+		const actorMenus = normalizeMenuTokens(userMenusPermissionsRaw).map((item) => item.toLowerCase());
+		const actorScope = normalizeScopeValue(runtimeDataScope);
+		const permissionSet = new Set(actorPermissions);
+		const menuSet = new Set(actorMenus);
+		const allowAllMenus = hasLegacyFullAppScope(actorMenus, appId || "");
+
+		const permissionOptions = PERMISSION_TOKEN_OPTIONS.filter((option) => {
+			const value = String(option.value || "").trim().toLowerCase();
+			if (!value || value === "dev" || value === "admin") return false;
+			if (value.startsWith("scope:")) {
+				const scope = normalizeScopeValue(value.replace("scope:", ""));
+				return scopeRank(scope) <= scopeRank(actorScope);
+			}
+			return permissionSet.has(value);
+		});
+
+		const menuOptions = allowAllMenus
+			? MENU_PERMISSION_OPTIONS
+			: MENU_PERMISSION_OPTIONS.filter((option) => tokenMatchesMenu(String(option.value || "").trim().toLowerCase(), menuSet));
+
+		const scopeOptions = parseOptionsFromQuery(DATA_SCOPE_OPTIONS_JSON).filter((option) => {
+			const scope = normalizeScopeValue(option?.value);
+			if (scope === "NONE") return true;
+			return scopeRank(scope) <= scopeRank(actorScope);
+		});
+
+		const presetOptions = parseOptionsFromQuery(ACTION_PRESET_OPTIONS_JSON).filter((option) => {
+			const preset = String(option?.value || "").trim().toLowerCase();
+			if (!preset) return true;
+			const definition = PRESET_RULES[preset];
+			if (!definition) return false;
+			const permissionOk = definition.permissions.every((token) => {
+				const value = token.toLowerCase();
+				if (value === "dev" || value === "admin") return false;
+				if (value.startsWith("scope:")) {
+					const scope = normalizeScopeValue(value.replace("scope:", ""));
+					return scopeRank(scope) <= scopeRank(actorScope);
+				}
+				return permissionSet.has(value);
+			});
+			if (!permissionOk) return false;
+			if (allowAllMenus) return true;
+			return definition.menus.every((menu) => tokenMatchesMenu(menu.toLowerCase(), menuSet));
+		});
+
+		return {
+			permissionOptions,
+			menuOptions,
+			presetOptionsQuery: JSON.stringify({ options: presetOptions }),
+			dataScopeOptionsQuery: JSON.stringify({ options: scopeOptions }),
+		};
+	}, [isDevUser, userPermissionsRaw, userMenusPermissionsRaw, runtimeDataScope, appId]);
 
 	const buildUserMenuByRole = useCallback((base: any = {}): any => {
 		if (!isSystemUserRoute) {
@@ -439,14 +576,20 @@ export default function AdminPage() {
 			label_en: "System User Management",
 			label_zh: "系统用户管理",
 			table_name: actorTableName,
-			app_id: resolvedAppId,
+			app_id: "csm",
 			type_form: 1,
 			row_type_edit: 0,
 			g_readonly: false,
 		}, actorMode, resolvedAppId, t);
 
-		return normalizeMenuRuntimeConfig(adaptSystemUserConfigForActor(runtimeConfig, systemUserActorType));
-	}, [isSystemUserRoute, isDevUser, isAdminUser, t, appId, systemUserActorType]);
+		return normalizeMenuRuntimeConfig(adaptSystemUserConfigForActor(runtimeConfig, systemUserActorType, {
+			permissions: userPermissionsRaw,
+			menusPermissions: userMenusPermissionsRaw,
+			dataScope: runtimeDataScope,
+			appId: resolvedAppId,
+			isDev: isDevUser,
+		}));
+	}, [isSystemUserRoute, isDevUser, isAdminUser, t, appId, systemUserActorType, userPermissionsRaw, userMenusPermissionsRaw, runtimeDataScope]);
 
 	const normalizeKnownSystemMenu = useCallback((menu: any = {}): any => {
 		if (location.pathname === "/system/dept") {
@@ -463,7 +606,15 @@ export default function AdminPage() {
 				type_form: 1,
 				row_type_edit: 0,
 				g_readonly: false,
-				table: buildRoleMenuFields(t, tEn, tZh),
+				table: buildRoleMenuFields(
+					t,
+					tEn,
+					tZh,
+					roleFieldConstraints.permissionOptions,
+					roleFieldConstraints.menuOptions,
+					roleFieldConstraints.presetOptionsQuery,
+					roleFieldConstraints.dataScopeOptionsQuery,
+				),
 				trigger: { beforeSave: PERMISSION_GROUP_BEFORE_SAVE },
 				struct: {
 					fieldsPK: ["id", "role_code"],
@@ -472,7 +623,7 @@ export default function AdminPage() {
 		}
 
 		return normalizeMenuRuntimeConfig(menu);
-	}, [location.pathname, t, tEn, tZh, appId]);
+	}, [location.pathname, t, tEn, tZh, appId, roleFieldConstraints]);
 
 	// Centralized refresh hook for dynamic grid/report/crm widgets.
 	const handleDataChange = useCallback(() => {
@@ -507,6 +658,30 @@ export default function AdminPage() {
 		return typeof rawLabel === "string" ? rawLabel.replace(/^[\d\.\s]+/, "").trim() : rawLabel;
 	};
 
+	const enforceCanonicalSystemRouteMenu = useCallback((rawMenu: any = {}): any => {
+		const normalized = normalizeMenuRuntimeConfig(rawMenu || {});
+		if (location.pathname === "/system/dept") {
+			return normalizeMenuRuntimeConfig({
+				...normalized,
+				id: "permission-group",
+				path: "/system/dept",
+				table_name: "csm_roles",
+				app_id: normalized.app_id || appId,
+			});
+		}
+		if (location.pathname === "/system/user") {
+			const actorTableName = isDevUser ? "csm_accounts" : "csm_group_members";
+			return normalizeMenuRuntimeConfig({
+				...normalized,
+				id: "user",
+				path: "/system/user",
+				table_name: actorTableName,
+				app_id: "csm",
+			});
+		}
+		return normalized;
+	}, [location.pathname, isDevUser, appId]);
+
 	// Find menu in tree or get from location state
 	useEffect(() => {
 		// Try to get menu data from navigation state first (faster)
@@ -517,8 +692,9 @@ export default function AdminPage() {
 				...roleMenu,
 				label: resolveDisplayLabel(roleMenu),
 			});
-			setMenuData(withLabel);
-			const cleanLabel = resolveDisplayLabel(withLabel);
+			const canonicalMenu = enforceCanonicalSystemRouteMenu(withLabel);
+			setMenuData(canonicalMenu);
+			const cleanLabel = resolveDisplayLabel(canonicalMenu);
 			addTab(location.pathname, {
 				key: location.pathname,
 				label: cleanLabel,
@@ -576,7 +752,15 @@ export default function AdminPage() {
 						   type_form: 1,
 						   row_type_edit: 0,
 						   g_readonly: false,
-						   table: buildRoleMenuFields(t, tEn, tZh),
+						   table: buildRoleMenuFields(
+							   t,
+							   tEn,
+							   tZh,
+							   roleFieldConstraints.permissionOptions,
+							   roleFieldConstraints.menuOptions,
+							   roleFieldConstraints.presetOptionsQuery,
+							   roleFieldConstraints.dataScopeOptionsQuery,
+						   ),
 						   trigger: { beforeSave: PERMISSION_GROUP_BEFORE_SAVE },
 						   struct: {
 							   fieldsPK: ["id", "role_code"],
@@ -591,12 +775,13 @@ export default function AdminPage() {
 			}
 			const roleMenu = found ? buildUserMenuByRole(found) : found;
 			const withLabel = roleMenu ? normalizeKnownSystemMenu({ ...roleMenu, label: resolveDisplayLabel(roleMenu) }) : roleMenu;
-			setMenuData(withLabel);
+			const canonicalMenu = enforceCanonicalSystemRouteMenu(withLabel);
+			setMenuData(canonicalMenu);
 			setLoading(false);
 			
 			// Update tab label when loaded from tree (e.g., after page reload)
-			if (withLabel?.label) {
-				const cleanLabel = resolveDisplayLabel(withLabel);
+			if (canonicalMenu?.label) {
+				const cleanLabel = resolveDisplayLabel(canonicalMenu);
 				addTab(location.pathname, {
 					key: location.pathname,
 					label: cleanLabel,
@@ -612,7 +797,7 @@ export default function AdminPage() {
 				useUserStore.getState().setSelectedMenuIdForTab("");
 			}
 		}
-	}, [menuId, apiWholeMenus, selectedMenuIdForTab, location.state, location.pathname, location.search, location.hash, addTab, buildUserMenuByRole, normalizeKnownSystemMenu, t, appId, tEn, tZh]);
+	}, [menuId, apiWholeMenus, selectedMenuIdForTab, location.state, location.pathname, location.search, location.hash, addTab, buildUserMenuByRole, normalizeKnownSystemMenu, t, appId, tEn, tZh, roleFieldConstraints, enforceCanonicalSystemRouteMenu]);
 
 	// Di chuyển hàm loadTableData ra ngoài useEffect để có thể tái sử dụng
 	const loadTableData = async () => {
@@ -804,6 +989,42 @@ export default function AdminPage() {
 		};
 	}, [i18n, menuData]);
 
+	// Keep hook dependencies stable even before menu data is ready.
+	const runtimeMenuData = menuData ? normalizeMenuRuntimeConfig(menuData) : null;
+	const effectiveAppId = runtimeMenuData?.app_id || appId;
+	const typeForm = Number(runtimeMenuData?.type_form || 1);
+	const tableNameByPath: Record<string, string[]> = {
+		"/system/user": ["csm_accounts", "csm_group_members"],
+		"/system/dept": ["csm_roles"],
+	};
+	const expectedTableNames = (tableNameByPath[location.pathname] || []).map((item) => item.toLowerCase());
+	const currentTableName = String(runtimeMenuData?.table_name || "").trim();
+	const currentTableNames = normalizeTableNames(runtimeMenuData?.table_name);
+	const hasSystemMenuTableMismatch = expectedTableNames.length > 0
+		&& currentTableNames.length > 0
+		&& !currentTableNames.some((name) => expectedTableNames.includes(name));
+
+	useEffect(() => {
+		if (!hasSystemMenuTableMismatch) {
+			mismatchLogRef.current = "";
+			return;
+		}
+		const currentKey = currentTableNames.join(",");
+		const expectedKey = expectedTableNames.join(",");
+		const mismatchKey = `${location.pathname}|${currentKey}|${expectedKey}|${String(runtimeMenuData?.id || "")}`;
+		if (mismatchLogRef.current === mismatchKey) {
+			return;
+		}
+		mismatchLogRef.current = mismatchKey;
+		console.warn("[system-menu-config-mismatch]", {
+			path: location.pathname,
+			menuId: runtimeMenuData?.id,
+			menuLabel: runtimeMenuData?.label,
+			currentTableNames,
+			expectedTableNames,
+		});
+	}, [hasSystemMenuTableMismatch, location.pathname, currentTableNames, expectedTableNames, runtimeMenuData?.id, runtimeMenuData?.label]);
+
 	if (loading || dbLoading) {
 		return (
 			<div style={{ padding: 24, textAlign: "center" }}>
@@ -815,7 +1036,7 @@ export default function AdminPage() {
 		);
 	}
 
-	if (!menuData) {
+	if (!runtimeMenuData) {
 		return <Empty description={t("system.admin.menuNotFound")} />;
 	}
 
@@ -832,17 +1053,6 @@ export default function AdminPage() {
 		);
 	}
 
-	// Use menu-specific app_id if available, otherwise fall back to global appId
-	const runtimeMenuData = normalizeMenuRuntimeConfig(menuData);
-	const effectiveAppId = runtimeMenuData.app_id || appId;
-	const typeForm = Number(runtimeMenuData.type_form || 1);
-	const tableNameByPath: Record<string, string[]> = {
-		"/system/user": ["csm_accounts", "csm_group_members"],
-		"/system/dept": ["csm_roles"],
-	};
-	const expectedTableNames = tableNameByPath[location.pathname] || [];
-	const currentTableName = String(runtimeMenuData.table_name || "").trim();
-	const hasSystemMenuTableMismatch = expectedTableNames.length > 0 && !!currentTableName && !expectedTableNames.includes(currentTableName);
 	const mismatchAlertNode = hasSystemMenuTableMismatch ? (
 		<Alert
 			type="warning"

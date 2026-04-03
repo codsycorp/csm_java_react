@@ -20,6 +20,14 @@ export interface SystemUserModesConfig {
 
 export type SystemUserActorType = "dev" | "admin" | "sub-user";
 
+export interface SystemUserPermissionContext {
+	permissions?: unknown;
+	menusPermissions?: unknown;
+	dataScope?: string;
+	appId?: string;
+	isDev?: boolean;
+}
+
 export const PERMISSION_TOKEN_OPTIONS = [
 	{ value: "admin", label: "system.userPermission.option.admin" },
 	{ value: "dev", label: "system.userPermission.option.dev" },
@@ -140,6 +148,71 @@ export const DATA_SCOPE_OPTIONS_JSON = JSON.stringify({
 		{ value: "ALL", label: "system.userPermission.scope.all" },
 	],
 });
+
+const PERMISSION_PRESET_DEFINITIONS: Record<string, { permissions: string[]; menus: string[] }> = {
+	viewer: { permissions: ["view"], menus: ["/home"] },
+	editor: { permissions: ["view", "create", "edit"], menus: ["/dashboard", "/home", "/crm"] },
+	full_crud: { permissions: ["view", "create", "edit", "delete"], menus: ["/dashboard", "/home", "/crm"] },
+	full_crud_export: { permissions: ["view", "create", "edit", "delete", "export"], menus: ["/dashboard", "/home", "/crm"] },
+	admin_full: {
+		permissions: ["admin", "view", "create", "edit", "delete", "export", "scope:all"],
+		menus: ["/system/user", "/system/menu", "/system/dept", "/dashboard", "/home", "/crm"],
+	},
+};
+
+function normalizeStringList(raw: unknown): string[] {
+	if (Array.isArray(raw)) {
+		return Array.from(new Set(raw.map((item) => String(item || "").trim()).filter(Boolean)));
+	}
+	if (raw && typeof raw === "object") {
+		return Array.from(new Set(Object.values(raw as Record<string, unknown>).map((item) => String(item || "").trim()).filter(Boolean)));
+	}
+	if (typeof raw === "string") {
+		const text = raw.trim();
+		if (!text) return [];
+		if (text.startsWith("[") || text.startsWith("{")) {
+			try {
+				return normalizeStringList(JSON.parse(text));
+			} catch {
+				return [];
+			}
+		}
+		return Array.from(new Set(text.split(/[;,\n]/g).map((item) => item.trim()).filter(Boolean)));
+	}
+	return [];
+}
+
+function normalizeScope(scope: unknown): "NONE" | "OWNER" | "DEPARTMENT" | "BRANCH" | "ALL" {
+	const value = String(scope || "").trim().toUpperCase();
+	if (value === "OWNER" || value === "DEPARTMENT" || value === "BRANCH" || value === "ALL") return value;
+	return "NONE";
+}
+
+function scopeRank(scope: "NONE" | "OWNER" | "DEPARTMENT" | "BRANCH" | "ALL"): number {
+	switch (scope) {
+		case "OWNER": return 1;
+		case "DEPARTMENT": return 2;
+		case "BRANCH": return 3;
+		case "ALL": return 4;
+		default: return 0;
+	}
+}
+
+function tokenMatchesMenu(target: string, allowedSet: Set<string>): boolean {
+	if (allowedSet.has(target)) return true;
+	if (target.startsWith("/") && allowedSet.has(target.slice(1))) return true;
+	if (!target.startsWith("/") && allowedSet.has("/" + target)) return true;
+	return false;
+}
+
+function hasLegacyFullAppScope(menus: string[], appId: string): boolean {
+	const normalizedAppId = String(appId || "").trim().toLowerCase();
+	if (!normalizedAppId) return false;
+	return menus.some((token) => {
+		const value = String(token || "").trim().toLowerCase();
+		return value === normalizedAppId || value === "app:" + normalizedAppId || value === "/" + normalizedAppId;
+	});
+}
 
 function buildTagField(
 	f_name: string,
@@ -856,21 +929,28 @@ function beforeSave(row, seft) {
 	const actorIsDev = isDevActor();
 	row.dataScope = actorIsDev ? String(row.dataScope || parentScope).trim().toUpperCase() : minScope(row.dataScope || parentScope, parentScope);
 
-	const fromGroups = buildGroupPermissions(row.permissionGroups);
-	const fromPreset = buildPresetPermissions(row.permissionPreset);
-	const basePermissionAllow = fromGroups.length > 0
-		? uniqueList([...(fromGroups || []), ...(fromPreset || [])])
-		: uniqueList([...(row.permissions || []), ...(fromPreset || [])]);
-	const mergedPermissionAllow = uniqueList([...(basePermissionAllow || []), ...(row.permissionsAdd || [])]);
-	row.permissions = listMinus(mergedPermissionAllow, row.permissionsDeny);
+	const hasPermissionGroups = row.permissionGroups.length > 0;
+	const fromPreset = hasPermissionGroups ? [] : buildPresetPermissions(row.permissionPreset);
+	const presetMenus = hasPermissionGroups ? [] : buildPresetMenus(row.permissionPreset);
 
-	const groupMenus = buildGroupMenus(row.permissionGroups);
-	const presetMenus = buildPresetMenus(row.permissionPreset);
-	const baseMenuAllow = groupMenus.length > 0
-		? uniqueList([...(groupMenus || []), ...(presetMenus || [])])
-		: uniqueList([...(row.menusPermissions || []), ...(presetMenus || [])]);
-	const mergedMenuAllow = uniqueList([...(baseMenuAllow || []), ...(row.menusPermissionsAdd || [])]);
-	row.menusPermissions = listMinus(mergedMenuAllow, row.menusPermissionsDeny);
+	row.permissionsAdd = listMinus(row.permissionsAdd, row.permissionsDeny);
+	row.menusPermissionsAdd = listMinus(row.menusPermissionsAdd, row.menusPermissionsDeny);
+
+	if (hasPermissionGroups) {
+		// Khi đã chọn mã quyền/nhóm quyền thì backend sẽ resolve từ csm_roles
+		// và ghi ra permissionBitfield cuối cùng. Frontend chỉ gửi delta add/deny.
+		row.permissions = [];
+		row.menusPermissions = [];
+		row.permissionPreset = "";
+	} else {
+		const basePermissionAllow = uniqueList([...(row.permissions || []), ...(fromPreset || [])]);
+		const mergedPermissionAllow = uniqueList([...(basePermissionAllow || []), ...(row.permissionsAdd || [])]);
+		row.permissions = listMinus(mergedPermissionAllow, row.permissionsDeny);
+
+		const baseMenuAllow = uniqueList([...(row.menusPermissions || []), ...(presetMenus || [])]);
+		const mergedMenuAllow = uniqueList([...(baseMenuAllow || []), ...(row.menusPermissionsAdd || [])]);
+		row.menusPermissions = listMinus(mergedMenuAllow, row.menusPermissionsDeny);
+	}
 
 	if (!actorIsDev) {
 		row.permissions = intersectPreserveOrder(row.permissions, parentPermissions);
@@ -1115,21 +1195,95 @@ export function buildSystemUserMenuConfig(base: any, mode: "main" | "sub", resol
 export function adaptSystemUserConfigForActor(
 	config: SystemUserMenuModeConfig,
 	actorType: SystemUserActorType,
+	permissionContext?: SystemUserPermissionContext,
 ): SystemUserMenuModeConfig {
 	if (!config || config.table_name !== "csm_accounts") {
 		return config;
 	}
+
+	const actorPermissions = normalizeStringList(permissionContext?.permissions).map((item) => item.toLowerCase());
+	const actorMenus = normalizeStringList(permissionContext?.menusPermissions).map((item) => item.toLowerCase());
+	const actorScope = normalizeScope(permissionContext?.dataScope);
+	const actorAppId = String(permissionContext?.appId || "").trim().toLowerCase();
+	const isDevContext = Boolean(permissionContext?.isDev);
+
+	const allowedPermissionSet = new Set(actorPermissions);
+	const allowedMenuSet = new Set(actorMenus);
+	const allowAllMenus = isDevContext || hasLegacyFullAppScope(actorMenus, actorAppId);
+
+	const filteredPermissionOptions = isDevContext
+		? PERMISSION_TOKEN_OPTIONS
+		: PERMISSION_TOKEN_OPTIONS.filter((option) => {
+			const value = String(option.value || "").trim().toLowerCase();
+			if (!value) return false;
+			if (value === "dev") return false;
+			if (value === "admin" && actorType !== "dev") return false;
+			if (value.startsWith("scope:")) {
+				const scope = normalizeScope(value.replace("scope:", ""));
+				return scopeRank(scope) <= scopeRank(actorScope);
+			}
+			return allowedPermissionSet.has(value);
+		});
+
+	const filteredMenuOptions = allowAllMenus
+		? MENU_PERMISSION_OPTIONS
+		: MENU_PERMISSION_OPTIONS.filter((option) => tokenMatchesMenu(String(option.value || "").trim().toLowerCase(), allowedMenuSet));
+
+	const filteredDataScopeOptions = JSON.parse(DATA_SCOPE_OPTIONS_JSON).options.filter((option: any) => {
+		const scope = normalizeScope(option?.value);
+		if (isDevContext) return true;
+		if (scope === "NONE") return true;
+		return scopeRank(scope) <= scopeRank(actorScope);
+	});
+
+	const filteredPresetOptions = JSON.parse(ACTION_PRESET_OPTIONS_JSON).options.filter((option: any) => {
+		const presetValue = String(option?.value || "").trim().toLowerCase();
+		if (!presetValue) return true;
+		const definition = PERMISSION_PRESET_DEFINITIONS[presetValue];
+		if (!definition) return false;
+		const permissionOk = definition.permissions.every((token) => {
+			const normalized = token.toLowerCase();
+			if (normalized === "dev") return false;
+			if (normalized === "admin" && actorType !== "dev") return false;
+			if (normalized.startsWith("scope:")) {
+				const scope = normalizeScope(normalized.replace("scope:", ""));
+				return scopeRank(scope) <= scopeRank(actorScope);
+			}
+			return isDevContext || allowedPermissionSet.has(normalized);
+		});
+		if (!permissionOk) return false;
+		if (allowAllMenus) return true;
+		return definition.menus.every((menu) => tokenMatchesMenu(menu.toLowerCase(), allowedMenuSet));
+	});
+
+	const filteredDataScopeQuery = JSON.stringify({ options: filteredDataScopeOptions });
+	const filteredPresetQuery = JSON.stringify({ options: filteredPresetOptions });
+
 	return {
 		...config,
 		table: Array.isArray(config.table)
-			? config.table.map((field: any) => (
-				(SYSTEM_USER_INTERNAL_FIELD_NAMES.has(String(field?.f_name || ""))
-					|| (actorType !== "dev" && String(field?.f_name || "") === "app_id"))
-					? { ...field, f_show: 0 }
-					: (actorType === "dev" && SYSTEM_USER_PERMISSION_FIELD_NAMES.has(String(field?.f_name || ""))
-						? { ...field, f_show: 0 }
-						: field)
-			))
+			? config.table.map((field: any) => {
+				const fName = String(field?.f_name || "");
+				const hiddenByActor = SYSTEM_USER_INTERNAL_FIELD_NAMES.has(fName)
+					|| (actorType !== "dev" && fName === "app_id")
+					|| (actorType === "dev" && SYSTEM_USER_PERMISSION_FIELD_NAMES.has(fName));
+				if (hiddenByActor) {
+					return { ...field, f_show: 0 };
+				}
+				if (fName === "permissionPreset") {
+					return { ...field, f_cbo_query: filteredPresetQuery };
+				}
+				if (fName === "dataScope") {
+					return { ...field, f_cbo_query: filteredDataScopeQuery };
+				}
+				if (fName === "permissions" || fName === "permissionsAdd" || fName === "permissionsDeny") {
+					return { ...field, f_options: filteredPermissionOptions };
+				}
+				if (fName === "menusPermissions" || fName === "menusPermissionsAdd" || fName === "menusPermissionsDeny") {
+					return { ...field, f_options: filteredMenuOptions };
+				}
+				return field;
+			})
 			: config.table,
 	};
 }

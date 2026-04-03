@@ -21,6 +21,8 @@ import org.slf4j.LoggerFactory;
 @Component
 public class AuthHandler {
     private static final Logger logger = LoggerFactory.getLogger(AuthHandler.class);
+    private static final Map<Integer, String> ACTION_BIT_TO_TOKEN = createActionBitToToken();
+    private static final Map<Integer, String> MENU_BIT_TO_TOKEN = createMenuBitToToken();
     private final RecordManager recordManager;
     private final UserService userService; // Thêm UserService
     private final net.phanmemmottrieu.security.JwtUtil jwtUtil;
@@ -407,14 +409,112 @@ public class AuthHandler {
             return;
         }
 
-        List<String> permissions = toStringList(userInfo.get("permissions"));
-        List<String> menusPermissions = toStringList(userInfo.get("menusPermissions"));
+        List<String> permissions = mergeUniqueCaseInsensitive(
+            toStringList(userInfo.get("permissions")),
+            permissionsFromBitfield(userInfo.get("permissionBitfield"))
+        );
+        List<String> menusPermissions = mergeUniqueCaseInsensitive(
+            toStringList(userInfo.get("menusPermissions")),
+            menusFromBitfield(userInfo.get("permissionBitfield"))
+        );
         Boolean devFlag = parseBoolean(userInfo.get("dev"));
 
         long permissionBitfield = PermissionBitfieldUtil.buildBitfield(permissions, menusPermissions, devFlag);
+        userInfo.put("roles", permissions);
+        userInfo.put("permissions", permissions);
+        userInfo.put("menusPermissions", menusPermissions);
         userInfo.put("permissionBitfield", PermissionBitfieldUtil.toCompactToken(permissionBitfield));
         userInfo.put("permissionSchemaVersion", "v3");
         userInfo.put("dataScope", PermissionBitfieldUtil.resolveDataScope(permissionBitfield));
+    }
+
+    private List<String> permissionsFromBitfield(Object rawBitfield) {
+        Long parsedBitfield = PermissionBitfieldUtil.parseSecurityToken(rawBitfield == null ? null : String.valueOf(rawBitfield));
+        if (parsedBitfield == null) {
+            return Collections.emptyList();
+        }
+
+        List<String> out = new ArrayList<>();
+        for (Map.Entry<Integer, String> entry : ACTION_BIT_TO_TOKEN.entrySet()) {
+            if (PermissionBitfieldUtil.hasBit(parsedBitfield, entry.getKey())) {
+                out.add(entry.getValue());
+            }
+        }
+
+        String scope = PermissionBitfieldUtil.resolveDataScope(parsedBitfield);
+        switch (scope) {
+            case "ALL" -> out.add("scope:all");
+            case "BRANCH" -> out.add("scope:branch");
+            case "DEPARTMENT" -> out.add("scope:department");
+            case "OWNER" -> out.add("scope:owner");
+            default -> {
+            }
+        }
+        return out;
+    }
+
+    private List<String> menusFromBitfield(Object rawBitfield) {
+        Long parsedBitfield = PermissionBitfieldUtil.parseSecurityToken(rawBitfield == null ? null : String.valueOf(rawBitfield));
+        if (parsedBitfield == null) {
+            return Collections.emptyList();
+        }
+
+        List<String> out = new ArrayList<>();
+        for (Map.Entry<Integer, String> entry : MENU_BIT_TO_TOKEN.entrySet()) {
+            if (PermissionBitfieldUtil.hasBit(parsedBitfield, entry.getKey())) {
+                out.add(entry.getValue());
+            }
+        }
+        return out;
+    }
+
+    private List<String> mergeUniqueCaseInsensitive(List<String> base, List<String> extra) {
+        LinkedHashMap<String, String> merged = new LinkedHashMap<>();
+        List<String> safeBase = base == null ? Collections.emptyList() : base;
+        List<String> safeExtra = extra == null ? Collections.emptyList() : extra;
+        for (String value : safeBase) {
+            if (value == null) {
+                continue;
+            }
+            String normalized = value.trim();
+            if (!normalized.isEmpty()) {
+                merged.putIfAbsent(normalized.toLowerCase(Locale.ROOT), normalized);
+            }
+        }
+        for (String value : safeExtra) {
+            if (value == null) {
+                continue;
+            }
+            String normalized = value.trim();
+            if (!normalized.isEmpty()) {
+                merged.putIfAbsent(normalized.toLowerCase(Locale.ROOT), normalized);
+            }
+        }
+        return new ArrayList<>(merged.values());
+    }
+
+    private static Map<Integer, String> createActionBitToToken() {
+        Map<Integer, String> map = new LinkedHashMap<>();
+        map.put(PermissionBitfieldUtil.ACTION_VIEW, "view");
+        map.put(PermissionBitfieldUtil.ACTION_CREATE, "create");
+        map.put(PermissionBitfieldUtil.ACTION_EDIT, "edit");
+        map.put(PermissionBitfieldUtil.ACTION_DELETE, "delete");
+        map.put(PermissionBitfieldUtil.ACTION_EXPORT, "export");
+        return map;
+    }
+
+    private static Map<Integer, String> createMenuBitToToken() {
+        Map<Integer, String> map = new LinkedHashMap<>();
+        map.put(0, "/home");
+        map.put(1, "/system/user");
+        map.put(2, "/system/role");
+        map.put(3, "/system/menu");
+        map.put(4, "/system/dept");
+        map.put(5, "/system/developer");
+        map.put(6, "/system/broadcast");
+        map.put(7, "/system/report");
+        map.put(8, "/crm");
+        return map;
     }
 
     private List<String> toStringList(Object raw) {
