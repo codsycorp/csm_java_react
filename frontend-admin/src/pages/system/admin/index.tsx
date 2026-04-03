@@ -248,7 +248,6 @@ function buildRoleMenuFields(
 const SYSTEM_FRIENDLY_VISIBLE_FIELDS: Record<string, string[]> = {
 	csm_group_members: [
 		"id",
-		"parent_account_id",
 		"login_identifier",
 		"pass",
 		"group_id",

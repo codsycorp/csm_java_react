@@ -526,8 +526,23 @@ public class TableHandler {
         if (parentObj == null) {
             return false;
         }
-        String parent = String.valueOf(parentObj);
-        return access.parentAccountCandidates.contains(parent);
+        return containsIdentifierCandidateIgnoreCase(access.parentAccountCandidates, String.valueOf(parentObj));
+    }
+
+    private boolean containsIdentifierCandidateIgnoreCase(Set<String> candidates, String value) {
+        if (candidates == null || candidates.isEmpty() || value == null) {
+            return false;
+        }
+        String normalizedValue = value.trim();
+        if (normalizedValue.isEmpty()) {
+            return false;
+        }
+        for (String candidate : candidates) {
+            if (candidate != null && candidate.equalsIgnoreCase(normalizedValue)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private boolean allRowsBelongToCurrentOwner(List<Map<String, Object>> records, UserAccessContext access) {
@@ -1436,23 +1451,20 @@ public class TableHandler {
         boolean isAdminNonDev = accessContext.isAdmin && !accessContext.isDev;
         boolean isSubUserTable = "csm_group_members".equals(tblname);
 
-        if (isSubUserTable && (isAdminNonDev || accessContext.isDev)) {
+        if (isSubUserTable && !accessContext.isDev) {
             Object parentObj = objUpdate.get("parent_account_id");
             if ("create".equals(command)) {
-                if (parentObj == null || String.valueOf(parentObj).isBlank()) {
-                    String preferredParent = accessContext.appId;
-                    if (preferredParent == null || preferredParent.isBlank()) {
-                        preferredParent = accessContext.parentAccountCandidates.stream().findFirst().orElse("");
-                    }
-                    if (preferredParent == null || preferredParent.isBlank()) {
-                        return errorResponse("Không xác định được parent_account_id để tạo sub-user");
-                    }
-                    objUpdate.put("parent_account_id", preferredParent);
-                } else if (!accessContext.parentAccountCandidates.contains(String.valueOf(parentObj))) {
-                    return errorResponse("Admin/Dev chỉ được tạo sub-user thuộc tài khoản của chính mình");
+                // Admin/Sub-user: luôn tự gán parent_account_id theo tài khoản đăng nhập, không cho chọn tay.
+                String preferredParent = accessContext.appId;
+                if (preferredParent == null || preferredParent.isBlank()) {
+                    preferredParent = accessContext.parentAccountCandidates.stream().findFirst().orElse("");
                 }
+                if (preferredParent == null || preferredParent.isBlank()) {
+                    return errorResponse("Không xác định được parent_account_id để tạo sub-user");
+                }
+                objUpdate.put("parent_account_id", preferredParent);
             } else if (parentObj != null && !String.valueOf(parentObj).isBlank()
-                && !accessContext.parentAccountCandidates.contains(String.valueOf(parentObj))) {
+                && !containsIdentifierCandidateIgnoreCase(accessContext.parentAccountCandidates, String.valueOf(parentObj))) {
                 return errorResponse("Không được chuyển sub-user sang parent_account_id khác");
             }
         }
@@ -1601,9 +1613,10 @@ public class TableHandler {
     
         switch (command) {
             case "create":
-                // ✅ Chỉ admin hoặc dev mới được tạo sub-user trên bảng csm_group_members
-                if (isSubUserTable && !isAdminNonDev && !accessContext.isDev) {
-                    return errorResponse("Sub-user không có quyền tạo sub-user mới trên bảng csm_group_members");
+                // ✅ Sub-user table: dev/admin/sub-user đều có thể tạo, nhưng parent_account_id
+                // sẽ được ép theo tài khoản đăng nhập ở block phía trên.
+                if (isSubUserTable && accessContext == null) {
+                    return errorResponse("Không xác định được ngữ cảnh người dùng để tạo sub-user");
                 }
 
                 // Chặn trùng định danh xuyên bảng user chính/user con.
