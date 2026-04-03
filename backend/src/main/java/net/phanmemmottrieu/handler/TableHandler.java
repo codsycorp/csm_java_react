@@ -759,8 +759,35 @@ public class TableHandler {
             changed = true;
         }
 
+        List<String> fieldsSearch = readStructStringList(structMap, "fieldsSearch", "fieldsearch", "fieldssearch");
+        List<String> requiredSearchFields = buildRequiredSearchFieldsForTable(tableName);
+        boolean needsSearchHeal = fieldsSearch.isEmpty() || !containsAllCaseInsensitive(fieldsSearch, requiredSearchFields);
+        if (needsSearchHeal) {
+            if (fieldsSearch.isEmpty()) {
+                fieldsSearch = new ArrayList<>(fields);
+                changed = true;
+            }
+            for (String required : requiredSearchFields) {
+                if (!containsCaseInsensitive(fieldsSearch, required)) {
+                    fieldsSearch.add(required);
+                    changed = true;
+                }
+            }
+        }
+
         structMap.put("fieldsPK", fieldsPk);
         structMap.put("fields", fields);
+        if (needsSearchHeal || structMap.get("fieldsSearch") == null) {
+            structMap.put("fieldsSearch", fieldsSearch);
+            // Keep compatibility with legacy key names while canonical key is fieldsSearch.
+            if (structMap.get("fieldsearch") == null) {
+                structMap.put("fieldsearch", fieldsSearch);
+            }
+            if (structMap.get("fieldssearch") == null) {
+                structMap.put("fieldssearch", fieldsSearch);
+            }
+            changed = true;
+        }
         structRecord.put("struct", structMap);
 
         if (changed || existingStructRecord == null || existingStructRecord.get("struct") == null) {
@@ -786,6 +813,62 @@ public class TableHandler {
             }
         }
         return out;
+    }
+
+    private List<String> readStructStringList(Map<String, Object> structMap, String... keys) {
+        if (structMap == null || keys == null || keys.length == 0) {
+            return new ArrayList<>();
+        }
+        for (String key : keys) {
+            if (key == null || key.isBlank()) {
+                continue;
+            }
+            List<String> values = toMutableStringList(structMap.get(key));
+            if (!values.isEmpty()) {
+                return values;
+            }
+        }
+        return new ArrayList<>();
+    }
+
+    private List<String> buildRequiredSearchFieldsForTable(String tableName) {
+        List<String> required = new ArrayList<>();
+        required.add("id");
+        if (!isDataScopeExemptTable(tableName)) {
+            required.addAll(OWNER_SCOPE_FIELDS);
+            required.addAll(DEPARTMENT_SCOPE_FIELDS);
+            required.addAll(BRANCH_SCOPE_FIELDS);
+        }
+        return required;
+    }
+
+    private boolean containsCaseInsensitive(List<String> source, String target) {
+        if (source == null || source.isEmpty() || target == null || target.isBlank()) {
+            return false;
+        }
+        String expected = target.trim().toLowerCase(Locale.ROOT);
+        for (String item : source) {
+            if (item == null) continue;
+            if (expected.equals(item.trim().toLowerCase(Locale.ROOT))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean containsAllCaseInsensitive(List<String> source, List<String> required) {
+        if (required == null || required.isEmpty()) {
+            return true;
+        }
+        if (source == null || source.isEmpty()) {
+            return false;
+        }
+        for (String item : required) {
+            if (!containsCaseInsensitive(source, item)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private Integer parseIntegerParam(Object raw) {
@@ -846,6 +929,9 @@ public class TableHandler {
             collectCandidate(ownerCandidates, user.getUsername());
             collectCandidate(ownerCandidates, user.getEmail());
             collectCandidate(ownerCandidates, user.getPhoneNumber());
+
+            collectCandidate(departmentCandidates, user.getDeptId());
+            collectCandidate(branchCandidates, user.getBranchId());
         } else if (principal instanceof Map<?, ?>) {
             Map<?, ?> principalMap = (Map<?, ?>) principal;
             roles = toStringList(principalMap.get("roles"));
@@ -974,14 +1060,23 @@ public class TableHandler {
         String fallbackValue,
         String errorMessage
     ) {
+        if (fields == null || fields.isEmpty()) {
+            return errorMessage;
+        }
+
+        String normalizedFallback = fallbackValue == null ? "" : fallbackValue.trim().toLowerCase(Locale.ROOT);
+        String preferredValue = !normalizedFallback.isBlank()
+            ? fallbackValue
+            : (allowedValues == null || allowedValues.isEmpty() ? "" : allowedValues.iterator().next());
+
         for (String field : fields) {
             if (!row.containsKey(field)) {
                 continue;
             }
             Object current = row.get(field);
             if (current == null || String.valueOf(current).isBlank()) {
-                if (fallbackValue != null && !fallbackValue.isBlank()) {
-                    row.put(field, fallbackValue);
+                if (preferredValue != null && !preferredValue.isBlank()) {
+                    row.put(field, preferredValue);
                     return null;
                 }
                 return errorMessage;
@@ -993,12 +1088,22 @@ public class TableHandler {
             }
             return null;
         }
+
+        // Missing all scope carrier fields: inject canonical scope field so row is always filterable.
+        if (preferredValue != null && !preferredValue.isBlank()) {
+            String canonicalField = fields.get(0);
+            row.put(canonicalField, preferredValue);
+            return null;
+        }
         return null;
     }
 
     private boolean matchesByFields(Map<String, Object> row, List<String> fields, Set<String> allowedValues) {
         if (row == null || fields == null || fields.isEmpty()) {
             return true;
+        }
+        if (allowedValues == null || allowedValues.isEmpty()) {
+            return false;
         }
         String foundValue = null;
         for (String field : fields) {
@@ -1009,7 +1114,8 @@ public class TableHandler {
             }
         }
         if (foundValue == null) {
-            return true;
+            // No scope carrier field on row => deny by default to avoid cross-user data leak.
+            return false;
         }
         return allowedValues.contains(foundValue);
     }
@@ -2335,6 +2441,12 @@ public class TableHandler {
                         // Luôn thay thế bản ghi theo chiến lược delete + create để đồng bộ khóa/Lucene/socket nhất quán.
                         Map<String, Object> newRow = new HashMap<>(row);
                         newRow.putAll(objUpdate);
+
+                        String updateGuardError = applyDataScopeCreateGuard(tblname, newRow, accessContext);
+                        if (updateGuardError != null) {
+                            return errorResponse(updateGuardError);
+                        }
+
                         ensureRowId(newRow);
 
                         if (!effectivePkFields.isEmpty() && !hasAnyPrimaryKeyValue(newRow, effectivePkFields)) {
