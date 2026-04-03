@@ -13,8 +13,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import com.google.gson.Gson;
+import com.google.gson.reflect.TypeToken;
 
 import java.util.*;
+import java.lang.reflect.Type;
 
 @Service
 public class UserService {
@@ -461,22 +463,14 @@ public class UserService {
         User user = mapMainAccountToUser(parentAccountRecord, false);
 
         // Sub-user: ưu tiên quyền trực tiếp trong bản ghi sub-user; fallback tối thiểu là role=user.
-        List<String> subUserRoles = new ArrayList<>();
-        Object subUserPermissionsObj = subUserRecord.get("permissions");
-        if (subUserPermissionsObj instanceof List) {
-            subUserRoles = (List<String>) subUserPermissionsObj;
-        }
+        List<String> subUserRoles = toStringListFlexible(subUserRecord.get("permissions"));
         if (subUserRoles.isEmpty()) {
             subUserRoles.add("user");
         }
         user.setPermissions(subUserRoles);
 
         // Set menusPermissions from sub-user record
-        List<String> subUserMenus = new ArrayList<>();
-        Object subUserMenusPermissions = subUserRecord.get("menusPermissions");
-        if (subUserMenusPermissions instanceof List) {
-            subUserMenus = (List<String>) subUserMenusPermissions;
-        }
+        List<String> subUserMenus = toStringListFlexible(subUserRecord.get("menusPermissions"));
         
         // If no menus from record, auto-generate from app_id
         if (subUserMenus.isEmpty()) {
@@ -533,19 +527,19 @@ public class UserService {
         // Also can get permissions from group if subUserRecord has group_id
         String subUserGroupId = (String) subUserRecord.get("group_id");
         if (subUserGroupId != null) {
-            List<Map<String, Object>> parentGroupRights = (List<Map<String, Object>>) parentAccountRecord.getOrDefault("group_rights", new ArrayList<>());
+            List<Map<String, Object>> parentGroupRights = toMapListFlexible(parentAccountRecord.get("group_rights"));
             Optional<Map<String, Object>> matchingGroup = parentGroupRights.stream()
                 .filter(g -> subUserGroupId.equals(g.get("group_id")))
                 .findFirst();
 
             if (matchingGroup.isPresent()) {
-                Object groupPerms = matchingGroup.get().get("permissions");
-                if (groupPerms instanceof List) {
-                    user.setPermissions((List<String>) groupPerms);
+                List<String> groupPerms = toStringListFlexible(matchingGroup.get().get("permissions"));
+                if (!groupPerms.isEmpty()) {
+                    user.setPermissions(groupPerms);
                 }
-                Object groupMenuPerms = matchingGroup.get().get("menusPermissions");
-                if (groupMenuPerms instanceof List) {
-                    user.setMenusPermissions((List<String>) groupMenuPerms);
+                List<String> groupMenuPerms = toStringListFlexible(matchingGroup.get().get("menusPermissions"));
+                if (!groupMenuPerms.isEmpty()) {
+                    user.setMenusPermissions(groupMenuPerms);
                 }
             } else {
                 logger.warn("Sub-user belongs to group '{}' but group not found in parent account's group_rights. Using direct sub-user menusPermissions from record if available.", subUserGroupId);
@@ -645,23 +639,11 @@ public class UserService {
             }
         }
 
-        Object permissionsObj = userRecord.get("permissions");
-        List<String> permissions = new ArrayList<>();
-        if (permissionsObj instanceof List) {
-            permissions = (List<String>) permissionsObj;
-            user.setPermissions(permissions);
-        } else {
-            user.setPermissions(permissions);
-        }
+        List<String> permissions = toStringListFlexible(userRecord.get("permissions"));
+        user.setPermissions(permissions);
 
-        Object menusPermissionsObj = userRecord.get("menusPermissions");
-        List<String> menusPermissions = new ArrayList<>();
-        if (menusPermissionsObj instanceof List) {
-            menusPermissions = (List<String>) menusPermissionsObj;
-            user.setMenusPermissions(menusPermissions);
-        } else {
-            user.setMenusPermissions(menusPermissions);
-        }
+        List<String> menusPermissions = toStringListFlexible(userRecord.get("menusPermissions"));
+        user.setMenusPermissions(menusPermissions);
 
         user.setPermissionBitfield(String.valueOf(userRecord.getOrDefault("permissionBitfield", "")));
         user.setPermissionSchemaVersion(String.valueOf(userRecord.getOrDefault("permissionSchemaVersion", "")));
@@ -669,12 +651,7 @@ public class UserService {
         user.setDeptId(String.valueOf(userRecord.getOrDefault("dept_id", "")));
         user.setBranchId(String.valueOf(userRecord.getOrDefault("branch_id", "")));
 
-        Object groupRightsObj = userRecord.get("group_rights");
-        if (groupRightsObj instanceof List) {
-            user.setGroupRights((List<Map<String, Object>>) groupRightsObj);
-        } else {
-            user.setGroupRights(new ArrayList<>());
-        }
+        user.setGroupRights(toMapListFlexible(userRecord.get("group_rights")));
 
         Object loginVersionObj = userRecord.get("login_version");
         if (loginVersionObj == null) {
@@ -1122,6 +1099,90 @@ public class UserService {
             response.setMessage("Đã xảy ra lỗi trong quá trình tạo tài khoản con: " + e.getMessage());
         }
         return response;
+    }
+
+    private List<String> toStringListFlexible(Object raw) {
+        if (raw == null) {
+            return new ArrayList<>();
+        }
+        if (raw instanceof List<?> rawList) {
+            List<String> out = new ArrayList<>();
+            for (Object item : rawList) {
+                if (item == null) continue;
+                String value = String.valueOf(item).trim();
+                if (!value.isEmpty()) {
+                    out.add(value);
+                }
+            }
+            return out;
+        }
+        if (raw instanceof String rawStr) {
+            String text = rawStr.trim();
+            if (text.isEmpty()) {
+                return new ArrayList<>();
+            }
+            try {
+                Type type = new TypeToken<List<String>>() {}.getType();
+                List<String> parsed = GSON.fromJson(text, type);
+                if (parsed != null) {
+                    List<String> out = new ArrayList<>();
+                    for (String item : parsed) {
+                        if (item == null) continue;
+                        String value = item.trim();
+                        if (!value.isEmpty()) {
+                            out.add(value);
+                        }
+                    }
+                    return out;
+                }
+            } catch (Exception ignore) {
+                // fall through
+            }
+            List<String> out = new ArrayList<>();
+            for (String part : text.split("[,;\\n]")) {
+                String value = part.trim();
+                if (!value.isEmpty()) {
+                    out.add(value);
+                }
+            }
+            return out;
+        }
+        return new ArrayList<>();
+    }
+
+    private List<Map<String, Object>> toMapListFlexible(Object raw) {
+        if (raw == null) {
+            return new ArrayList<>();
+        }
+        if (raw instanceof List<?> rawList) {
+            List<Map<String, Object>> out = new ArrayList<>();
+            for (Object item : rawList) {
+                if (item instanceof Map<?, ?> rawMap) {
+                    Map<String, Object> casted = new HashMap<>();
+                    for (Map.Entry<?, ?> entry : rawMap.entrySet()) {
+                        if (entry.getKey() != null) {
+                            casted.put(String.valueOf(entry.getKey()), entry.getValue());
+                        }
+                    }
+                    out.add(casted);
+                }
+            }
+            return out;
+        }
+        if (raw instanceof String rawStr) {
+            String text = rawStr.trim();
+            if (text.isEmpty()) {
+                return new ArrayList<>();
+            }
+            try {
+                Type type = new TypeToken<List<Map<String, Object>>>() {}.getType();
+                List<Map<String, Object>> parsed = GSON.fromJson(text, type);
+                return parsed != null ? parsed : new ArrayList<>();
+            } catch (Exception ignore) {
+                return new ArrayList<>();
+            }
+        }
+        return new ArrayList<>();
     }
 
     private boolean identifierExistsInSubAccounts(String identifier) {
