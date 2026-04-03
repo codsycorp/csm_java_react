@@ -1606,6 +1606,12 @@ public class TableHandler {
                     return errorResponse("Sub-user không có quyền tạo sub-user mới trên bảng csm_group_members");
                 }
 
+                // Chặn trùng định danh xuyên bảng user chính/user con.
+                String uniqueIdentifierError = validateUniqueUserIdentifiersOnCreate(appId, tblname, objUpdate);
+                if (uniqueIdentifierError != null) {
+                    return errorResponse(uniqueIdentifierError);
+                }
+
                 if (isSystemUsersTable && !hasNonBlank(objUpdate.get("pass"))) {
                     return errorResponse("Thiếu mật khẩu khi tạo tài khoản");
                 }
@@ -1812,6 +1818,72 @@ public class TableHandler {
     
         return successResponse("Thao tác thành công", msg);
     }    
+
+    private String validateUniqueUserIdentifiersOnCreate(String appId, String tableName, Map<String, Object> objUpdate) {
+        if (objUpdate == null) {
+            return null;
+        }
+        if (!"csm_accounts".equals(tableName) && !"csm_group_members".equals(tableName)) {
+            return null;
+        }
+
+        Set<String> identifiers = new LinkedHashSet<>();
+        if ("csm_accounts".equals(tableName)) {
+            addIdentifierCandidate(identifiers, objUpdate.get("username"));
+            addIdentifierCandidate(identifiers, objUpdate.get("email"));
+            addIdentifierCandidate(identifiers, objUpdate.get("phoneNumber"));
+        } else {
+            addIdentifierCandidate(identifiers, objUpdate.get("login_identifier"));
+        }
+
+        if (identifiers.isEmpty()) {
+            return null;
+        }
+
+        for (String identifier : identifiers) {
+            if (identifierExistsInSubUsers(appId, identifier)) {
+                return "Định danh '" + identifier + "' đã tồn tại trong danh sách người dùng con.";
+            }
+            if (identifierExistsInMainAccounts(appId, identifier)) {
+                return "Định danh '" + identifier + "' đã tồn tại trong danh sách người dùng chính.";
+            }
+        }
+        return null;
+    }
+
+    private void addIdentifierCandidate(Set<String> target, Object raw) {
+        if (target == null || raw == null) {
+            return;
+        }
+        String value = String.valueOf(raw).trim();
+        if (!value.isEmpty()) {
+            target.add(value);
+        }
+    }
+
+    private boolean identifierExistsInSubUsers(String appId, String identifier) {
+        SearchFilter filter = new SearchFilter();
+        filter.setField("login_identifier");
+        filter.setType("eq");
+        filter.setValue(identifier);
+        Map<String, Object> row = recordManager.find(appId, "csm_group_members", filter);
+        return row != null && !row.isEmpty();
+    }
+
+    private boolean identifierExistsInMainAccounts(String appId, String identifier) {
+        String[] fields = new String[] {"username", "email", "phoneNumber"};
+        for (String field : fields) {
+            SearchFilter filter = new SearchFilter();
+            filter.setField(field);
+            filter.setType("eq");
+            filter.setValue(identifier);
+            Map<String, Object> row = recordManager.find(appId, "csm_accounts", filter);
+            if (row != null && !row.isEmpty()) {
+                return true;
+            }
+        }
+        return false;
+    }
 
         private SearchFilter buildIdentityFallbackFilter(SearchFilter sourceFilter) {
             Map<String, Object> eqValues = new HashMap<>();

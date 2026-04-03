@@ -812,6 +812,14 @@ public class UserService {
             return response;
         }
 
+        // Chặn trùng định danh với bảng tài khoản con.
+        if (identifierExistsInSubAccounts(primaryLoginIdentifier)) {
+            response.setErrorCode(2);
+            response.setErrorErr("Định danh '" + primaryLoginIdentifier + "' đã tồn tại trong danh sách người dùng con.");
+            logger.warn("Registration failed: Identifier already exists in sub accounts - {}", primaryLoginIdentifier);
+            return response;
+        }
+
         String newAppToken = UUID.randomUUID().toString();
         String appId = null;
 
@@ -996,6 +1004,13 @@ public class UserService {
             return response;
         }
 
+        // Chặn trùng định danh giữa tài khoản con và tài khoản chính.
+        if (identifierExistsInMainAccounts(loginIdentifier)) {
+            response.setSuccess(false);
+            response.setMessage("Định danh đăng nhập '" + loginIdentifier + "' đã tồn tại trong danh sách người dùng chính.");
+            return response;
+        }
+
         try {
             Map<String, Object> subUserData = new HashMap<>();
             String subUserId = UUID.randomUUID().toString();
@@ -1107,5 +1122,35 @@ public class UserService {
             response.setMessage("Đã xảy ra lỗi trong quá trình tạo tài khoản con: " + e.getMessage());
         }
         return response;
+    }
+
+    private boolean identifierExistsInSubAccounts(String identifier) {
+        if (identifier == null || identifier.isBlank()) {
+            return false;
+        }
+        SearchFilter filter = new SearchFilter();
+        filter.setField("login_identifier");
+        filter.setType("eq");
+        filter.setValue(identifier);
+        Map<String, Object> row = recordManager.find(CSM_APP_ID, SUB_ACCOUNTS_TABLE, filter);
+        return row != null && !row.isEmpty();
+    }
+
+    private boolean identifierExistsInMainAccounts(String identifier) {
+        if (identifier == null || identifier.isBlank()) {
+            return false;
+        }
+        String[] fields = new String[] {"username", "email", "phoneNumber"};
+        for (String field : fields) {
+            SearchFilter filter = new SearchFilter();
+            filter.setField(field);
+            filter.setType("eq");
+            filter.setValue(identifier);
+            Map<String, Object> row = recordManager.find(CSM_APP_ID, ACCOUNTS_TABLE, filter);
+            if (row != null && !row.isEmpty()) {
+                return true;
+            }
+        }
+        return false;
     }
 }
