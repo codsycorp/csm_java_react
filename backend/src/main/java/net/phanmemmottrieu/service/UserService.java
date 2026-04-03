@@ -53,7 +53,6 @@ public class UserService {
             String encodedPasswordForComparison = recordManager.csm_encrypt(combinedPasswordInput);
             if (user.getActived() && encodedPasswordForComparison.equals(user.getPassword())) {
                 logger.info("Đăng nhập thành công với tài khoản chính (Email): {}", loginIdentifier);
-                user.setPermissions(null);
                 return Optional.of(user);
             }
         }
@@ -66,7 +65,6 @@ public class UserService {
             String encodedPasswordForComparison = recordManager.csm_encrypt(combinedPasswordInput);
             if (user.getActived() && encodedPasswordForComparison.equals(user.getPassword())) {
                 logger.info("Đăng nhập thành công với tài khoản chính (Username): {}", loginIdentifier);
-                user.setPermissions(null);
                 return Optional.of(user);
             }
         }
@@ -79,7 +77,6 @@ public class UserService {
             String encodedPasswordForComparison = recordManager.csm_encrypt(combinedPasswordInput);
             if (user.getActived() && encodedPasswordForComparison.equals(user.getPassword())) {
                 logger.info("Đăng nhập thành công với tài khoản chính (Phone Number): {}", loginIdentifier);
-                user.setPermissions(null);
                 return Optional.of(user);
             }
         }
@@ -463,9 +460,15 @@ public class UserService {
 
         User user = mapMainAccountToUser(parentAccountRecord, false);
 
-        // Sub-user: Override role to "user" and set menusPermissions from sub-user record
+        // Sub-user: ưu tiên quyền trực tiếp trong bản ghi sub-user; fallback tối thiểu là role=user.
         List<String> subUserRoles = new ArrayList<>();
-        subUserRoles.add("user");
+        Object subUserPermissionsObj = subUserRecord.get("permissions");
+        if (subUserPermissionsObj instanceof List) {
+            subUserRoles = (List<String>) subUserPermissionsObj;
+        }
+        if (subUserRoles.isEmpty()) {
+            subUserRoles.add("user");
+        }
         user.setPermissions(subUserRoles);
 
         // Set menusPermissions from sub-user record
@@ -486,6 +489,25 @@ public class UserService {
         
         user.setMenusPermissions(subUserMenus);
         logger.info("[mapSubUserRecordToUser] Sub-user {} assigned role=user with menusPermissions={}", user.getEmail(), subUserMenus);
+
+        // Ưu tiên dùng app_token của chính sub-user để phản ánh đúng principal/role trong token.
+        Object subAppTokenObj = subUserRecord.get("app_token");
+        if (subAppTokenObj instanceof String subAppToken && !subAppToken.isBlank()) {
+            user.setAppToken(subAppToken);
+            try {
+                String[] tokenParts = recordManager.csm_decrypt(subAppToken).split("_____");
+                if (tokenParts.length > 0 && tokenParts[0] != null && !tokenParts[0].isBlank()) {
+                    user.setAppId(tokenParts[0]);
+                }
+            } catch (Exception e) {
+                logger.warn("[mapSubUserRecordToUser] Cannot parse sub-user app_token for {}: {}", subUserRecord.get("login_identifier"), e.getMessage());
+            }
+        }
+
+        Object subRefreshObj = subUserRecord.get("refresh");
+        if (subRefreshObj instanceof String subRefresh && !subRefresh.isBlank()) {
+            user.setRefreshToken(subRefresh);
+        }
 
         Object subPermissionBitfield = subUserRecord.get("permissionBitfield");
         if (subPermissionBitfield != null) {
@@ -517,6 +539,10 @@ public class UserService {
                 .findFirst();
 
             if (matchingGroup.isPresent()) {
+                Object groupPerms = matchingGroup.get().get("permissions");
+                if (groupPerms instanceof List) {
+                    user.setPermissions((List<String>) groupPerms);
+                }
                 Object groupMenuPerms = matchingGroup.get().get("menusPermissions");
                 if (groupMenuPerms instanceof List) {
                     user.setMenusPermissions((List<String>) groupMenuPerms);
@@ -792,10 +818,25 @@ public class UserService {
         try {
             if (sourceAppToken != null && !sourceAppToken.isEmpty()) {
                 String decryptedSourceAppToken = recordManager.csm_decrypt(sourceAppToken);
-                appId = decryptedSourceAppToken.split("_____")[0];
-            } else {
-                appId = "ohno";
-                logger.warn("No sourceAppToken provided or empty. Using default_app_id: {}", appId);
+                String[] parts = decryptedSourceAppToken.split("_____");
+                if (parts.length > 0) {
+                    appId = parts[0] != null ? parts[0].trim() : "";
+                }
+            }
+
+            // Fallback hợp lệ khi không có app_token: nhận app_id trực tiếp từ request.
+            if (appId == null || appId.isBlank()) {
+                Object appIdObj = userRequest.get("app_id");
+                if (appIdObj != null) {
+                    appId = String.valueOf(appIdObj).trim();
+                }
+            }
+
+            if (appId == null || appId.isBlank()) {
+                response.setErrorCode(4);
+                response.setErrorErr("Thiếu app_id hợp lệ để tạo app_token.");
+                logger.warn("Registration failed: missing valid app_id from app_token/app_id field.");
+                return response;
             }
 
             String newUserAppTokenRawData = AppTokenHelper.buildRawToken(
@@ -835,7 +876,7 @@ public class UserService {
         userData.put("actived", true);
         userData.put("app_token", newAppToken);
         userData.put("app_id", appId);
-        userData.put("permissions", Arrays.asList("user"));
+        userData.put("permissions", Arrays.asList(MAIN_ACCOUNT_ROLE));
         userData.put("menusPermissions", Arrays.asList("home", "profile"));
         userData.put("group_rights", new ArrayList<>());
         userData.put("source_app_token", sourceAppToken);

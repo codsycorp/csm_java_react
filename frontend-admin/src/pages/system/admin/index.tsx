@@ -421,6 +421,8 @@ export default function AdminPage() {
 		}
 
 		const resolvedAppId = (base?.app_id && String(base.app_id).trim()) || appId;
+		const actorMode: "main" | "sub" = isDevUser ? "main" : "sub";
+		const actorTableName = actorMode === "main" ? "csm_accounts" : "csm_group_members";
 		const runtimeConfig = buildSystemUserMenuConfig({
 			...base,
 			id: "user",
@@ -428,15 +430,15 @@ export default function AdminPage() {
 			label: t("common.menu.user"),
 			label_en: "System User Management",
 			label_zh: "系统用户管理",
-			table_name: "csm_accounts",
+			table_name: actorTableName,
 			app_id: resolvedAppId,
 			type_form: 1,
 			row_type_edit: 0,
 			g_readonly: false,
-		}, "main", resolvedAppId, t);
+		}, actorMode, resolvedAppId, t);
 
 		return normalizeMenuRuntimeConfig(adaptSystemUserConfigForActor(runtimeConfig, systemUserActorType));
-	}, [isSystemUserRoute, isDevUser, isAdminUser, t, appId]);
+	}, [isSystemUserRoute, isDevUser, isAdminUser, t, appId, systemUserActorType]);
 
 	const normalizeKnownSystemMenu = useCallback((menu: any = {}): any => {
 		if (location.pathname === "/system/dept") {

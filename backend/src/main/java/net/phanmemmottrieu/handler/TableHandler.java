@@ -249,6 +249,17 @@ public class TableHandler {
             success = false;
         }
 
+        // Giải mã pass trong updated_row trước khi trả về client để lưới hiển thị đúng
+        if (success) {
+            String tblname = msg.get("obj_name") != null ? String.valueOf(msg.get("obj_name")) : "";
+            Object updatedRowObj = result.get("updated_row");
+            if (updatedRowObj instanceof Map<?, ?>) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> updatedRow = (Map<String, Object>) updatedRowObj;
+                decryptPassForDisplay(tblname, List.of(updatedRow));
+            }
+        }
+
         response.set("code", success ? 200 : 400);
         response.set("message", success ? "ok" : String.valueOf(result.getOrDefault("message", "error")));
         response.set("success", success);
@@ -273,6 +284,14 @@ public class TableHandler {
         try {
             String appId = msg.get("app_id").toString();
             String tblname = msg.get("obj_name").toString();
+            UserAccessContext accessContext = resolveCurrentUserAccessContext();
+
+            // Policy: csm_accounts is dev-only. Admin/sub-user must operate on csm_group_members.
+            String tableAccessError = validateSystemUserTableAccess(tblname, accessContext);
+            if (tableAccessError != null) {
+                return errorResponse(tableAccessError);
+            }
+
             // Chuẩn hóa e_where thành Map<String, Object>
             Object eWhereObj = msg.getOrDefault("e_where", new HashMap<>());
             SearchFilter filtersObjs;
@@ -341,6 +360,16 @@ public class TableHandler {
         }
     }
 
+    private String validateSystemUserTableAccess(String tableName, UserAccessContext accessContext) {
+        if (tableName == null || accessContext == null) {
+            return null;
+        }
+        if ("csm_accounts".equals(tableName) && !accessContext.isDev) {
+            return "Bảng csm_accounts chỉ dành cho tài khoản dev. Admin/Sub-user vui lòng thao tác trên csm_group_members.";
+        }
+        return null;
+    }
+
     private SearchFilter applyAdminUserListScope(String tableName, SearchFilter existingFilter, boolean isUpdate) {
         if (isUpdate || !"csm_accounts".equals(tableName)) {
             return existingFilter;
@@ -358,7 +387,9 @@ public class TableHandler {
         }
 
         UserAccessContext access = resolveCurrentUserAccessContext();
-        if (!access.isAdmin || access.isDev || access.parentAccountCandidates.isEmpty()) {
+        // Apply parent_account_id scope for all authenticated users (both admin and dev).
+        // Dev should only see sub-users belonging to their own account, not all tenants'.
+        if (access.parentAccountCandidates.isEmpty()) {
             return existingFilter;
         }
 
@@ -1137,16 +1168,8 @@ public class TableHandler {
             objUpdate.put("app_id", accessContext.appId);
         }
 
-        // Auto-encrypt pass if provided as plain text
-        String passRaw = safeStr(objUpdate.get("pass"));
-        if (!passRaw.isEmpty()) {
-            try {
-                String combined = passRaw.contains("_____") ? passRaw : (loginId + "_____" + passRaw);
-                objUpdate.put("pass", recordManager.csm_encrypt(combined));
-            } catch (Exception e) {
-                logger.warn("[autoGenerateAccountCredentials] Failed to encrypt pass: {}", e.getMessage());
-            }
-        }
+        // Auto-encrypt pass (dung helper chong double-encryption)
+        ensurePassEncrypted("csm_accounts", objUpdate, Collections.emptyList());
 
         // Auto-generate app_token if not already set
         String existingToken = safeStr(objUpdate.get("app_token"));
@@ -1185,16 +1208,8 @@ public class TableHandler {
         String loginId = safeStr(objUpdate.get("login_identifier"));
         if (loginId.isEmpty()) return;
 
-        // Auto-encrypt pass if provided as plain text
-        String passRaw = safeStr(objUpdate.get("pass"));
-        if (!passRaw.isEmpty()) {
-            try {
-                String combined = passRaw.contains("_____") ? passRaw : (loginId + "_____" + passRaw);
-                objUpdate.put("pass", recordManager.csm_encrypt(combined));
-            } catch (Exception e) {
-                logger.warn("[autoGenerateSubUserCredentials] Failed to encrypt pass: {}", e.getMessage());
-            }
-        }
+        // Auto-encrypt pass (dung helper chong double-encryption)
+        ensurePassEncrypted("csm_group_members", objUpdate, Collections.emptyList());
 
         // Auto-generate app_token if not already set
         String existingToken = safeStr(objUpdate.get("app_token"));
@@ -1421,7 +1436,7 @@ public class TableHandler {
         boolean isAdminNonDev = accessContext.isAdmin && !accessContext.isDev;
         boolean isSubUserTable = "csm_group_members".equals(tblname);
 
-        if (isSubUserTable && isAdminNonDev) {
+        if (isSubUserTable && (isAdminNonDev || accessContext.isDev)) {
             Object parentObj = objUpdate.get("parent_account_id");
             if ("create".equals(command)) {
                 if (parentObj == null || String.valueOf(parentObj).isBlank()) {
@@ -1434,7 +1449,7 @@ public class TableHandler {
                     }
                     objUpdate.put("parent_account_id", preferredParent);
                 } else if (!accessContext.parentAccountCandidates.contains(String.valueOf(parentObj))) {
-                    return errorResponse("Admin chỉ được tạo sub-user thuộc tài khoản của chính mình");
+                    return errorResponse("Admin/Dev chỉ được tạo sub-user thuộc tài khoản của chính mình");
                 }
             } else if (parentObj != null && !String.valueOf(parentObj).isBlank()
                 && !accessContext.parentAccountCandidates.contains(String.valueOf(parentObj))) {
@@ -1501,7 +1516,7 @@ public class TableHandler {
                 .filter(row -> managedVisibleIds.contains(normalizedIdentity(row.get("id"))))
                 .collect(java.util.stream.Collectors.toList());
         }
-        if (isSubUserTable && isAdminNonDev) {
+        if (isSubUserTable && (isAdminNonDev || accessContext.isDev)) {
             records = records.stream()
                 .filter(row -> isOwnedSubUserRow(row, accessContext))
                 .collect(java.util.stream.Collectors.toList());
@@ -1525,7 +1540,7 @@ public class TableHandler {
                         .filter(row -> managedVisibleIds.contains(normalizedIdentity(row.get("id"))))
                         .collect(java.util.stream.Collectors.toList());
                 }
-                if (isSubUserTable && isAdminNonDev) {
+                if (isSubUserTable && (isAdminNonDev || accessContext.isDev)) {
                     records = records.stream()
                         .filter(row -> isOwnedSubUserRow(row, accessContext))
                         .collect(java.util.stream.Collectors.toList());
@@ -1554,7 +1569,7 @@ public class TableHandler {
                     .filter(row -> managedVisibleIds.contains(normalizedIdentity(row.get("id"))))
                     .collect(java.util.stream.Collectors.toList());
             }
-            if (isSubUserTable && isAdminNonDev) {
+            if (isSubUserTable && (isAdminNonDev || accessContext.isDev)) {
                 records = records.stream()
                     .filter(row -> isOwnedSubUserRow(row, accessContext))
                     .collect(java.util.stream.Collectors.toList());
@@ -1586,8 +1601,8 @@ public class TableHandler {
     
         switch (command) {
             case "create":
-                // ✅ Chỉ admin mới được tạo sub-user trên bảng csm_group_members
-                if (isSubUserTable && !isAdminNonDev) {
+                // ✅ Chỉ admin hoặc dev mới được tạo sub-user trên bảng csm_group_members
+                if (isSubUserTable && !isAdminNonDev && !accessContext.isDev) {
                     return errorResponse("Sub-user không có quyền tạo sub-user mới trên bảng csm_group_members");
                 }
 
@@ -1600,7 +1615,7 @@ public class TableHandler {
                     normalizeManagedAccountPermissions(objUpdate, accessContext);
                     autoGenerateAccountCredentials(objUpdate, accessContext);
                 }
-                if (isSubUserTable && isAdminNonDev) {
+                if (isSubUserTable && (isAdminNonDev || accessContext.isDev)) {
                     autoGenerateSubUserCredentials(objUpdate, accessContext);
                 }
 
@@ -1628,6 +1643,15 @@ public class TableHandler {
                     // Không break -> sẽ chạy tiếp xuống "update"
                 }
             case "update":
+                // Không cho phép cập nhật sub-user qua bảng csm_accounts (tránh ghi nhầm bảng chính).
+                if (isSystemUsersTable) {
+                    boolean containsSubUserRow = records.stream()
+                        .anyMatch(row -> "user".equalsIgnoreCase(extractRoleFromAppToken(row.get("app_token"))));
+                    if (containsSubUserRow) {
+                        return errorResponse("Bản ghi này là tài khoản con. Vui lòng cập nhật tại bảng csm_group_members (chế độ sub-user).");
+                    }
+                }
+
                 // ✅ Validation self-edit cho admin/sub-user (SAU khi records đã hydrate)
                 if (isSystemUsersTable && isAdminNonDev && allRowsBelongToCurrentOwner(records, accessContext)) {
                     String selfEditError = validateAdminSelfEditOnRecords("update", objUpdate, records, accessContext);
@@ -1647,7 +1671,13 @@ public class TableHandler {
                     normalizeManagedAccountPermissions(objUpdate, accessContext);
                     autoGenerateAccountCredentials(objUpdate, accessContext);
                 }
-                
+
+                // Ma hoa pass cho MOI truong hop update tren bang user/sub-user
+                // (ke ca dev tu sua, admin tu sua, hoac admin sua sub-user)
+                if (isSystemUsersTable || isSubUserTable) {
+                    ensurePassEncrypted(tblname, objUpdate, records);
+                }
+
                 Map<String, Object> newPkValues = new HashMap<>();
                 for (String pkField : effectivePkFields) {
                     if (objUpdate.containsKey(pkField)) {
@@ -1750,11 +1780,11 @@ public class TableHandler {
     
             case "delete":
                 // ✅ Cấm admin/sub-user xóa user
-                if ((isSystemUsersTable && isAdminNonDev) || (isSubUserTable && !isAdminNonDev)) {
+                if ((isSystemUsersTable && isAdminNonDev) || (isSubUserTable && !isAdminNonDev && !accessContext.isDev)) {
                     if (isSystemUsersTable && isAdminNonDev) {
                         return errorResponse("Admin không có quyền xóa người dùng trên bảng csm_accounts");
                     }
-                    if (isSubUserTable && !isAdminNonDev) {
+                    if (isSubUserTable && !isAdminNonDev && !accessContext.isDev) {
                         return errorResponse("Sub-user không có quyền xóa sub-user trên bảng csm_group_members");
                     }
                 }
@@ -1768,6 +1798,10 @@ public class TableHandler {
                     enqueueServiceInvalidation(appId, tblname, row);
                     // Gửi delete với data row để client biết xóa row nào
                     socketIOConfig.sendUpdateNotification(appId, tblname, "delete", rowPrimaryKeys, row);
+                    // Cascade: xóa toàn bộ sub-user thuộc tài khoản này
+                    if ("csm_accounts".equals(tblname)) {
+                        cascadeDeleteSubUsers(appId, row);
+                    }
                 }
                 msg.put("command", "delete");
                 break;
@@ -1859,6 +1893,8 @@ public class TableHandler {
                 autoFillPermissionSchemaValues(appId, tblname, rows, true);
                 rows = filterManagedAccountDescendants(tblname, rows, resolveCurrentUserAccessContext());
                 rows = applyDataScopeRowFilter(tblname, rows, resolveCurrentUserAccessContext());
+                rows = filterMainAccountRows(tblname, rows);
+                decryptPassForDisplay(tblname, rows);
                 paginated.put("rows", rows);
             }
             return paginated;
@@ -1878,6 +1914,8 @@ public class TableHandler {
                 autoFillPermissionSchemaValues(appId, tblname, rows, true);
                 rows = filterManagedAccountDescendants(tblname, rows, resolveCurrentUserAccessContext());
                 rows = applyDataScopeRowFilter(tblname, rows, resolveCurrentUserAccessContext());
+                rows = filterMainAccountRows(tblname, rows);
+                decryptPassForDisplay(tblname, rows);
                 paginated.put("rows", rows);
             }
             return paginated;
@@ -1890,6 +1928,8 @@ public class TableHandler {
         autoFillPermissionSchemaValues(appId, tblname, data, true);
         data = filterManagedAccountDescendants(tblname, data, resolveCurrentUserAccessContext());
         data = applyDataScopeRowFilter(tblname, data, resolveCurrentUserAccessContext());
+        data = filterMainAccountRows(tblname, data);
+        decryptPassForDisplay(tblname, data);
     
         Map<String, Object> result = new HashMap<>();
         result.put("id", tblname);
@@ -1898,6 +1938,147 @@ public class TableHandler {
         result.put("rows", data);
     
         return result;
+    }
+
+    /**
+     * Ma hoa truong pass trong objUpdate neu chua duoc ma hoa.
+     * Phat hien double-encryption bang cach thu giai ma va kiem tra "_____" separator.
+     * Dung chung cho ca create lan update de pass luon duoc luu dung chuan.
+     *
+     * @param tableName       ten bang ("csm_accounts" hoac "csm_group_members")
+     * @param objUpdate       du lieu dang ghi
+     * @param existingRecords ban ghi hien co de lay loginId neu objUpdate khong co
+     */
+    private void ensurePassEncrypted(String tableName, Map<String, Object> objUpdate, List<Map<String, Object>> existingRecords) {
+        String passVal = safeStr(objUpdate.get("pass"));
+        if (passVal.isEmpty()) return;
+
+        // Kiem tra da ma hoa chua: thu giai ma, neu ket qua chua "_____" thi da ma hoa dung chuan
+        try {
+            String decrypted = recordManager.csm_decrypt(passVal);
+            if (decrypted.contains("_____")) {
+                return; // Da ma hoa, khong lam gi them
+            }
+        } catch (Exception ignored) {
+            // Khong giai ma duoc -> la plain text, tiep tuc
+        }
+
+        // Lay loginId: uu tien tu objUpdate, fallback sang existing record
+        String loginId = "";
+        if ("csm_accounts".equals(tableName)) {
+            loginId = safeStr(objUpdate.get("username"));
+            if (loginId.isEmpty()) loginId = safeStr(objUpdate.get("email"));
+            if (loginId.isEmpty() && !existingRecords.isEmpty()) {
+                Map<String, Object> first = existingRecords.get(0);
+                loginId = safeStr(first.get("username"));
+                if (loginId.isEmpty()) loginId = safeStr(first.get("email"));
+            }
+        } else if ("csm_group_members".equals(tableName)) {
+            loginId = safeStr(objUpdate.get("login_identifier"));
+            if (loginId.isEmpty() && !existingRecords.isEmpty()) {
+                loginId = safeStr(existingRecords.get(0).get("login_identifier"));
+            }
+        }
+        if (loginId.isEmpty()) return;
+
+        try {
+            objUpdate.put("pass", recordManager.csm_encrypt(loginId + "_____" + passVal));
+        } catch (Exception e) {
+            logger.warn("[ensurePassEncrypted] Failed to encrypt pass for {}: {}", tableName, e.getMessage());
+        }
+    }
+
+    /**
+     * Chỉ giữ lại bản ghi user chính cho bảng csm_accounts.
+     * Những bản ghi có app_token role=user được xem là sub-user và sẽ không hiển thị ở danh sách user chính.
+     */
+    private List<Map<String, Object>> filterMainAccountRows(String tableName, List<Map<String, Object>> rows) {
+        if (!"csm_accounts".equals(tableName) || rows == null || rows.isEmpty()) {
+            return rows;
+        }
+        return rows.stream()
+            .filter(row -> !"user".equalsIgnoreCase(extractRoleFromAppToken(row.get("app_token"))))
+            .collect(java.util.stream.Collectors.toList());
+    }
+
+    private String extractRoleFromAppToken(Object rawAppToken) {
+        if (rawAppToken == null) {
+            return "";
+        }
+        String appToken = String.valueOf(rawAppToken).trim();
+        if (appToken.isEmpty()) {
+            return "";
+        }
+        try {
+            String decrypted = recordManager.csm_decrypt(appToken);
+            String[] parts = decrypted.split("_____");
+            if (parts.length < 3) {
+                return "";
+            }
+            return parts[2] == null ? "" : parts[2].trim();
+        } catch (Exception ignore) {
+            return "";
+        }
+    }
+
+    /**
+     * Giải mã trường pass để hiển thị lên lưới (chỉ áp dụng cho csm_accounts và csm_group_members).
+     * Mật khẩu được lưu dạng encrypt(loginId + "_____" + rawPassword);
+     * sau khi giải mã sẽ lấy phần sau "_____" để trả về mật khẩu gốc.
+     */
+    private void decryptPassForDisplay(String tableName, List<Map<String, Object>> rows) {
+        if (rows == null || rows.isEmpty()) return;
+        if (!"csm_accounts".equals(tableName) && !"csm_group_members".equals(tableName)) return;
+        for (Map<String, Object> row : rows) {
+            Object pass = row.get("pass");
+            if (pass == null || String.valueOf(pass).isBlank()) continue;
+            try {
+                String decrypted = recordManager.csm_decrypt(String.valueOf(pass));
+                int sepIdx = decrypted.indexOf("_____");
+                if (sepIdx >= 0) {
+                    row.put("pass", decrypted.substring(sepIdx + 5));
+                } else {
+                    row.put("pass", decrypted);
+                }
+            } catch (Exception e) {
+                // Nếu giải mã thất bại, giữ nguyên giá trị
+            }
+        }
+    }
+
+    /**
+     * Xóa cascade tất cả sub-user trong csm_group_members khi xóa tài khoản cha.
+     */
+    private void cascadeDeleteSubUsers(String appId, Map<String, Object> deletedAccountRow) {
+        Set<String> identifiers = new LinkedHashSet<>();
+        for (String field : new String[]{"id", "app_id", "username", "email", "phoneNumber"}) {
+            Object val = deletedAccountRow.get(field);
+            if (val != null && !String.valueOf(val).isBlank()) {
+                identifiers.add(String.valueOf(val).trim());
+            }
+        }
+        if (identifiers.isEmpty()) return;
+
+        SearchFilter subUserFilter = buildFieldScopeFilter(identifiers, "parent_account_id");
+        if (subUserFilter == null) return;
+
+        try {
+            Map<String, Object> subUserResult = recordManager.filter(appId, "csm_group_members", subUserFilter);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> subUsers = (List<Map<String, Object>>) subUserResult.getOrDefault("rows", new ArrayList<>());
+            List<String> subUserPkFields = DEFAULT_TABLE_PK_FIELDS.getOrDefault("csm_group_members", List.of("id"));
+            for (Map<String, Object> subUser : subUsers) {
+                Map<String, Object> subPkValues = extractPrimaryKeyValues(subUser, subUserPkFields);
+                recordManager.deleteRecord(appId, "csm_group_members", subUser);
+                enqueueServiceInvalidation(appId, "csm_group_members", subUser);
+                socketIOConfig.sendUpdateNotification(appId, "csm_group_members", "delete", subPkValues, subUser);
+            }
+            if (!subUsers.isEmpty()) {
+                logger.info("[cascadeDeleteSubUsers] Đã xóa {} sub-user thuộc tài khoản {}", subUsers.size(), deletedAccountRow.get("id"));
+            }
+        } catch (Exception e) {
+            logger.warn("[cascadeDeleteSubUsers] Lỗi khi xóa sub-user cascade cho tài khoản {}: {}", deletedAccountRow.get("id"), e.getMessage());
+        }
     }
 
     private void ensureAutoPermissionSchemaForTable(String appId, String tableName, Map<String, Object> structRecord, Map<String, Object> structMap) {
