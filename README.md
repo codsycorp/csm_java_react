@@ -200,7 +200,8 @@ sudo certbot --nginx -d phanmemmottrieu.net -d www.phanmemmottrieu.net -d api.ph
   -k "system-images;android-30;google_apis;x86_64" \
   -d "pixel"
 ~/Library/Android/sdk/emulator/emulator -avd Pixel_5_API_30
-
+# Kiểm tra dung lượng các thư mục trên server
+sudo du -sh /root/la_server/* | sort -rh | head -n 15
 # Cấu hình dịch vụ test API FIDOVN
 # house.phanmemmottrieu.net
 # job.phanmemmottrieu.net
