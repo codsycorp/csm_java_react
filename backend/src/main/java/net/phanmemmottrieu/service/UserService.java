@@ -165,6 +165,35 @@ public class UserService {
         }
     }
 
+    /**
+     * Cập nhật sub-user theo ID trong bảng csm_group_members.
+     */
+    public boolean updateSubUserFieldById(String userId, Map<String, Object> updateFields) {
+        if (userId == null || userId.isBlank()) return false;
+        SearchFilter filter = new SearchFilter();
+        filter.setField("id");
+        filter.setType("eq");
+        filter.setValue(userId);
+        Map<String, Object> subUserRecord = recordManager.find(CSM_APP_ID, SUB_ACCOUNTS_TABLE, filter);
+        if (subUserRecord == null || subUserRecord.isEmpty()) {
+            logger.warn("[updateSubUserFieldById] Sub-user not found by id={}", userId);
+            return false;
+        }
+
+        subUserRecord.putAll(updateFields);
+        recordManager.createRecord(CSM_APP_ID, SUB_ACCOUNTS_TABLE, subUserRecord, Arrays.asList("id", "login_identifier"));
+
+        Object refreshTokenObj = subUserRecord.get("refresh_token");
+        if (refreshTokenObj != null && !String.valueOf(refreshTokenObj).isBlank()) {
+            recordManager.createRecord(CSM_APP_ID, SUB_ACCOUNTS_TABLE, subUserRecord, Arrays.asList("refresh_token"));
+        }
+        Object refreshObj = subUserRecord.get("refresh");
+        if (refreshObj != null && !String.valueOf(refreshObj).isBlank()) {
+            recordManager.createRecord(CSM_APP_ID, SUB_ACCOUNTS_TABLE, subUserRecord, Arrays.asList("refresh"));
+        }
+        return true;
+    }
+
     private void applyUserRecordUpdate(Map<String, Object> userRecord, String key, String value, Map<String, Object> updateFields) {
         // Lấy cấu trúc bảng để biết các trường PK
         SearchFilter tableFilter = new SearchFilter();
@@ -348,7 +377,26 @@ public class UserService {
         filter.setField("app_token");
         filter.setType("eq");
         filter.setValue(appToken);
-        Map<String, Object> userRecord = recordManager.find(CSM_APP_ID, ACCOUNTS_TABLE, filter);
+        Map<String, Object> filteredAccounts = recordManager.filter(CSM_APP_ID, ACCOUNTS_TABLE, filter);
+        List<Map<String, Object>> accountRows = new ArrayList<>();
+        if (filteredAccounts != null && filteredAccounts.get("rows") instanceof List<?>) {
+            for (Object rowObj : (List<?>) filteredAccounts.get("rows")) {
+                if (rowObj instanceof Map<?, ?> rawMap) {
+                    Map<String, Object> row = new HashMap<>();
+                    for (Map.Entry<?, ?> entry : rawMap.entrySet()) {
+                        if (entry.getKey() != null) {
+                            row.put(String.valueOf(entry.getKey()), entry.getValue());
+                        }
+                    }
+                    accountRows.add(row);
+                }
+            }
+        }
+
+        Map<String, Object> userRecord = pickBestAccountRecord(accountRows);
+        if (userRecord == null || userRecord.isEmpty()) {
+            userRecord = recordManager.find(CSM_APP_ID, ACCOUNTS_TABLE, filter);
+        }
         if (userRecord != null && !userRecord.isEmpty()) {
             return Optional.of(mapRecordToUser(userRecord));
         }
@@ -359,6 +407,79 @@ public class UserService {
         }
 
         return Optional.empty();
+    }
+
+    private Map<String, Object> pickBestAccountRecord(List<Map<String, Object>> rows) {
+        if (rows == null || rows.isEmpty()) {
+            return null;
+        }
+
+        Map<String, Object> best = null;
+        int bestVersion = Integer.MIN_VALUE;
+        long bestExpiry = Long.MIN_VALUE;
+
+        for (Map<String, Object> row : rows) {
+            if (row == null || row.isEmpty()) {
+                continue;
+            }
+
+            int version = parseIntSafe(row.get("login_version"));
+            if (version == 0) {
+                version = parseIntSafe(row.get("loginVersion"));
+            }
+
+            long expiry = parseLongSafe(row.get("refresh_token_expiry"));
+            boolean hasStableId = row.get("id") != null && !String.valueOf(row.get("id")).isBlank();
+
+            boolean better = false;
+            if (best == null) {
+                better = true;
+            } else if (version > bestVersion) {
+                better = true;
+            } else if (version == bestVersion && expiry > bestExpiry) {
+                better = true;
+            } else if (version == bestVersion && expiry == bestExpiry && hasStableId) {
+                Object bestId = best.get("id");
+                boolean bestHasStableId = bestId != null && !String.valueOf(bestId).isBlank();
+                better = !bestHasStableId;
+            }
+
+            if (better) {
+                best = row;
+                bestVersion = version;
+                bestExpiry = expiry;
+            }
+        }
+
+        return best;
+    }
+
+    private int parseIntSafe(Object raw) {
+        if (raw instanceof Number) {
+            return ((Number) raw).intValue();
+        }
+        if (raw instanceof String) {
+            try {
+                return Integer.parseInt(((String) raw).trim());
+            } catch (Exception ignore) {
+                return 0;
+            }
+        }
+        return 0;
+    }
+
+    private long parseLongSafe(Object raw) {
+        if (raw instanceof Number) {
+            return ((Number) raw).longValue();
+        }
+        if (raw instanceof String) {
+            try {
+                return Long.parseLong(((String) raw).trim());
+            } catch (Exception ignore) {
+                return 0L;
+            }
+        }
+        return 0L;
     }
 
     public boolean isSubUserByAppToken(String appToken) {
@@ -387,17 +508,13 @@ public class UserService {
         updateFields.put("login_version", loginVersion);
         updateFields.put("loginVersion", loginVersion);
 
+        if (updateSubUserFieldById(user.getId(), updateFields)) {
+            return;
+        }
+
         String appToken = user.getAppToken();
         if (isSubUserByAppToken(appToken)) {
-            SearchFilter filter = new SearchFilter();
-            filter.setField("app_token");
-            filter.setType("eq");
-            filter.setValue(appToken);
-            Map<String, Object> subUserRecord = recordManager.find(CSM_APP_ID, SUB_ACCOUNTS_TABLE, filter);
-            if (subUserRecord != null && !subUserRecord.isEmpty()) {
-                subUserRecord.putAll(updateFields);
-                recordManager.createRecord(CSM_APP_ID, SUB_ACCOUNTS_TABLE, subUserRecord, Arrays.asList("id", "login_identifier"));
-            }
+            updateSubUserFieldById(user.getId(), updateFields);
             return;
         }
 
@@ -429,17 +546,13 @@ public class UserService {
         updateFields.put("refresh_token_ua", null);
         updateFields.put("refresh_token_expiry", null);
 
+        if (updateSubUserFieldById(user.getId(), updateFields)) {
+            return;
+        }
+
         String appToken = user.getAppToken();
         if (isSubUserByAppToken(appToken)) {
-            SearchFilter filter = new SearchFilter();
-            filter.setField("app_token");
-            filter.setType("eq");
-            filter.setValue(appToken);
-            Map<String, Object> subUserRecord = recordManager.find(CSM_APP_ID, SUB_ACCOUNTS_TABLE, filter);
-            if (subUserRecord != null && !subUserRecord.isEmpty()) {
-                subUserRecord.putAll(updateFields);
-                recordManager.createRecord(CSM_APP_ID, SUB_ACCOUNTS_TABLE, subUserRecord, Arrays.asList("id", "login_identifier"));
-            }
+            updateSubUserFieldById(user.getId(), updateFields);
             return;
         }
 
@@ -1168,6 +1281,34 @@ public class UserService {
             response.setErrorErr("Số điện thoại này đã được đăng ký.");
             logger.warn("Registration failed: Phone number already exists - {}", phone);
             return response;
+        }
+
+        // Kiểm tra trùng chéo định danh giữa các cột username/email/phoneNumber
+        // để tránh sinh app_token trùng khi principal trùng chuỗi định danh.
+        Set<String> inputIdentifiers = new LinkedHashSet<>();
+        if (email != null && !email.isBlank()) {
+            inputIdentifiers.add(email.trim());
+        }
+        if (username != null && !username.isBlank()) {
+            inputIdentifiers.add(username.trim());
+        }
+        if (phone != null && !phone.isBlank()) {
+            inputIdentifiers.add(phone.trim());
+        }
+
+        for (String identifier : inputIdentifiers) {
+            if (identifierExistsInMainAccounts(identifier)) {
+                response.setErrorCode(2);
+                response.setErrorErr("Định danh '" + identifier + "' đã tồn tại trong danh sách người dùng chính.");
+                logger.warn("Registration failed: identifier already exists in main accounts - {}", identifier);
+                return response;
+            }
+            if (identifierExistsInSubAccounts(identifier)) {
+                response.setErrorCode(2);
+                response.setErrorErr("Định danh '" + identifier + "' đã tồn tại trong danh sách người dùng con.");
+                logger.warn("Registration failed: identifier already exists in sub accounts - {}", identifier);
+                return response;
+            }
         }
 
         // Chặn trùng định danh với bảng tài khoản con.

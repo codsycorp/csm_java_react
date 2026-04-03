@@ -1377,6 +1377,92 @@ public class TableHandler {
         if (safeStr(objUpdate.get("app_id")).isEmpty() && accessContext.appId != null) {
             objUpdate.put("app_id", accessContext.appId);
         }
+
+        // Canonical profile/session fields for csm_group_members
+        if (safeStr(objUpdate.get("username")).isEmpty()) {
+            objUpdate.put("username", loginId);
+        }
+        if (safeStr(objUpdate.get("email")).isEmpty()) {
+            objUpdate.put("email", loginId);
+        }
+        if (!objUpdate.containsKey("phoneNumber")) {
+            objUpdate.put("phoneNumber", "");
+        }
+        if (safeStr(objUpdate.get("full_name")).isEmpty()) {
+            objUpdate.put("full_name", loginId);
+        }
+        if (!objUpdate.containsKey("user_address")) {
+            objUpdate.put("user_address", "");
+        }
+        if (!objUpdate.containsKey("avatar")) {
+            objUpdate.put("avatar", "");
+        }
+        if (!objUpdate.containsKey("group_rights")) {
+            objUpdate.put("group_rights", new ArrayList<>());
+        }
+        if (!objUpdate.containsKey("source_app_token")) {
+            objUpdate.put("source_app_token", "");
+        }
+
+        String appToken = safeStr(objUpdate.get("app_token"));
+        String refresh = safeStr(objUpdate.get("refresh"));
+        String refreshToken = safeStr(objUpdate.get("refresh_token"));
+        if (refreshToken.isEmpty()) {
+            refreshToken = !refresh.isEmpty() ? refresh : appToken;
+            objUpdate.put("refresh_token", refreshToken);
+        }
+        if (refresh.isEmpty()) {
+            objUpdate.put("refresh", refreshToken);
+        }
+        if (!objUpdate.containsKey("refresh_token_ip")) {
+            objUpdate.put("refresh_token_ip", "");
+        }
+        if (!objUpdate.containsKey("refresh_token_ua")) {
+            objUpdate.put("refresh_token_ua", "");
+        }
+        if (!objUpdate.containsKey("refresh_token_expiry")) {
+            objUpdate.put("refresh_token_expiry", 0L);
+        }
+        if (!objUpdate.containsKey("login_version")) {
+            objUpdate.put("login_version", 0);
+        }
+        if (!objUpdate.containsKey("loginVersion")) {
+            objUpdate.put("loginVersion", objUpdate.get("login_version"));
+        }
+        if (!objUpdate.containsKey("actived")) {
+            objUpdate.put("actived", true);
+        }
+        if (!objUpdate.containsKey("permissions")) {
+            objUpdate.put("permissions", new ArrayList<>());
+        }
+        if (!objUpdate.containsKey("menusPermissions")) {
+            objUpdate.put("menusPermissions", new ArrayList<>());
+        }
+        if (!objUpdate.containsKey("permissionsAdd")) {
+            objUpdate.put("permissionsAdd", new ArrayList<>());
+        }
+        if (!objUpdate.containsKey("permissionsDeny")) {
+            objUpdate.put("permissionsDeny", new ArrayList<>());
+        }
+        if (!objUpdate.containsKey("menusPermissionsAdd")) {
+            objUpdate.put("menusPermissionsAdd", new ArrayList<>());
+        }
+        if (!objUpdate.containsKey("menusPermissionsDeny")) {
+            objUpdate.put("menusPermissionsDeny", new ArrayList<>());
+        }
+
+        List<String> permissions = toStringList(objUpdate.get("permissions"));
+        List<String> menusPermissions = toStringList(objUpdate.get("menusPermissions"));
+        long bitfield = PermissionBitfieldUtil.buildBitfield(permissions, menusPermissions, false);
+        if (!hasNonBlank(objUpdate.get("permissionBitfield"))) {
+            objUpdate.put("permissionBitfield", String.valueOf(bitfield));
+        }
+        if (!hasNonBlank(objUpdate.get("permissionSchemaVersion"))) {
+            objUpdate.put("permissionSchemaVersion", "v2");
+        }
+        if (!hasNonBlank(objUpdate.get("dataScope"))) {
+            objUpdate.put("dataScope", PermissionBitfieldUtil.resolveDataScope(bitfield));
+        }
     }
 
     private static final class UserAccessContext {

@@ -32,6 +32,17 @@ public class JwtUtil {
                 .compact();
     }
 
+    public String generateToken(String subject, String userId, int loginVersion) {
+        return Jwts.builder()
+                .setSubject(subject)
+                .claim("uid", userId)
+                .claim("ver", loginVersion)
+                .setIssuedAt(new Date())
+                .setExpiration(new Date(System.currentTimeMillis() + jwtExpirationMs))
+                .signWith(secretKey)
+                .compact();
+    }
+
     public boolean validateToken(String token) {
         try {
             Jwts.parser().verifyWith(secretKey).build().parseSignedClaims(token);
@@ -60,6 +71,15 @@ public class JwtUtil {
             }
         }
         return 0;
+    }
+
+    public String getUserIdFromToken(String token) {
+        Claims claims = Jwts.parser().verifyWith(secretKey).build().parseSignedClaims(token).getPayload();
+        Object uid = claims.get("uid");
+        if (uid == null) {
+            return "";
+        }
+        return String.valueOf(uid).trim();
     }
 
     private byte[] deriveKeyBytes(String secret) {

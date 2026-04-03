@@ -301,14 +301,21 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             if (subject == null || subject.isBlank()) {
                 return false;
             }
+            String tokenUserId = jwtUtil.getUserIdFromToken(token);
             int tokenVersion = jwtUtil.getLoginVersionFromToken(token);
-            net.phanmemmottrieu.model.User user = userService.findUserById(subject).orElseGet(() ->
-                userService.findUserByEmail(subject)
-                    .or(() -> userService.findUserByUsername(subject))
-                    .or(() -> userService.findUserByPhoneNumber(subject))
-                    .or(() -> userService.findUserByAppToken(subject))
-                    .orElse(null)
-            );
+            net.phanmemmottrieu.model.User user = null;
+            if (tokenUserId != null && !tokenUserId.isBlank()) {
+                user = userService.findUserById(tokenUserId).orElse(null);
+            }
+            if (user == null) {
+                user = userService.findUserById(subject).orElseGet(() ->
+                    userService.findUserByEmail(subject)
+                        .or(() -> userService.findUserByUsername(subject))
+                        .or(() -> userService.findUserByPhoneNumber(subject))
+                        .or(() -> userService.findUserByAppToken(subject))
+                        .orElse(null)
+                );
+            }
             if (user == null) {
                 return false;
             }
@@ -336,15 +343,10 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 }
             }
             int currentVersion = user.getLoginVersion() != null ? user.getLoginVersion() : 0;
-            // Legacy compatibility: chỉ enforce khi DB có login version hợp lệ (>0)
+            // Strict single-session: any version mismatch must be rejected.
             if (currentVersion > 0 && tokenVersion != currentVersion) {
-                int delta = Math.abs(tokenVersion - currentVersion);
-                if (delta <= 1) {
-                    LOGGER.warn("[JWT] Version mismatch tolerated for user {}: token ver={}, DB ver={}", subject, tokenVersion, currentVersion);
-                } else {
-                    LOGGER.warn("[JWT] Version mismatch for user {}: token ver={}, DB ver={}", subject, tokenVersion, currentVersion);
-                    return false;
-                }
+                LOGGER.warn("[JWT] Version mismatch for user {}: token ver={}, DB ver={}", subject, tokenVersion, currentVersion);
+                return false;
             }
             org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(
                 new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(

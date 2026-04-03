@@ -225,7 +225,7 @@ public class AuthHandler {
             if (user.getAppToken() != null && !user.getAppToken().isBlank()) {
                 tokenSubject = user.getAppToken();
             }
-            String jwtToken = jwtUtil.generateToken(tokenSubject, nextLoginVersion);
+            String jwtToken = jwtUtil.generateToken(tokenSubject, user.getId(), nextLoginVersion);
             result.put("token", jwtToken);
             result.put("app_token", user.getAppToken());
             result.put("app_id", user.getAppId());
@@ -511,7 +511,7 @@ public class AuthHandler {
         if (user.getAppToken() != null && !user.getAppToken().isBlank()) {
             tokenSubject = user.getAppToken();
         }
-        String jwtToken = jwtUtil.generateToken(tokenSubject, loginVersion);
+        String jwtToken = jwtUtil.generateToken(tokenSubject, user.getId(), loginVersion);
         response.set("code", 200);
         Map<String, Object> result = new HashMap<>();
         result.put("token", jwtToken);

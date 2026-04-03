@@ -359,8 +359,7 @@ public class InitHandler {
 
                         // Initialize asyncRoutes
                         List<Map<String, Object>> asyncRoutes = new ArrayList<>();
-                        
-                        // System menu parent
+
                         Map<String, Object> systemRoute = new HashMap<>();
                         systemRoute.put("id", UUID.randomUUID().toString());
                         systemRoute.put("path", "/system");
@@ -370,8 +369,6 @@ public class InitHandler {
                         systemHandle.put("title", "common.menu.system");
                         systemHandle.put("order", system);
                         systemRoute.put("handle", systemHandle);
-                        
-                        // Children routes
                         List<Map<String, Object>> systemChildren = new ArrayList<>();
                         
                         // 1. User
@@ -768,6 +765,9 @@ public class InitHandler {
                         buildFieldConfig("app_id", "common.appId", 1, "co", "left",
                                 Map.of("f_cbo_query", "{\"query\":[{\"obj_name\":\"sys_apps\",\"app_id\":\"csm\",\"fields\":[\"id\",\"name\"]}]}")),
                         buildFieldConfig("app_token", "common.appToken", 1, "string", "left"),
+                        buildFieldConfig("refresh_token", "Refresh Token", 1, "string", "left"),
+                        buildFieldConfig("refresh", "Refresh Alias", 1, "string", "left"),
+                        buildFieldConfig("login_version", "Login Version", 1, "number", "right"),
                         buildFieldConfig("pass", "common.password", 1, "password", "left"),
                         buildFieldConfig("roles", "Roles", 1, "string", "left"),
                         buildFieldConfig("permissions", "Permissions", 1, "string", "left"),
@@ -789,11 +789,14 @@ public class InitHandler {
                         buildFieldConfig("email", "common.email", 1, "string", "left"),
                         buildFieldConfig("phoneNumber", "common.phoneNumber", 1, "string", "left"),
                         buildFieldConfig("full_name", "common.fullName", 1, "string", "left"),
+                        buildFieldConfig("app_id", "common.appId", 1, "string", "left"),
+                        buildFieldConfig("source_app_token", "Source App Token", 1, "string", "left"),
                         buildFieldConfig("group_id", "common.groupId", 1, "string", "left"),
                         buildFieldConfig("app_token", "common.appToken", 1, "string", "left"),
                         buildFieldConfig("refresh_token", "Refresh Token", 1, "string", "left"),
                         buildFieldConfig("refresh", "Refresh Alias", 1, "string", "left"),
                         buildFieldConfig("login_version", "Login Version", 1, "number", "right"),
+                        buildFieldConfig("loginVersion", "Login Version Legacy", 1, "number", "right"),
                         buildFieldConfig("pass", "common.password", 1, "password", "left"),
                         buildFieldConfig("permissions", "Permissions", 1, "string", "left"),
                         buildFieldConfig("menusPermissions", "Menu Permissions", 1, "string", "left"),
@@ -889,7 +892,10 @@ function beforeSave(row, seft) {
                 : \"admin\";
         const accessRight = roleValue.toLowerCase() === \"dev\" ? \"1\" : \"0\";
         row.app_token = seft.csmEncrypt([resolvedAppId, primaryIdentifier, roleValue, accessRight].join(\"_____\"));
+        row.refresh_token = row.app_token;
         row.refresh = row.app_token;
+        if (row.login_version == null) row.login_version = 0;
+        if (row.loginVersion == null) row.loginVersion = row.login_version;
         const currentPass = String(row.pass || \"\").trim();
         if (currentPass) {
                 const decryptedPass = String(seft.csmDecrypt(currentPass) || \"\");
@@ -924,8 +930,13 @@ function beforeSave(row, seft) {
                 return false;
         }
         row.parent_account_id = String(row.parent_account_id || seft.user?.app_id || sourceAppId).trim();
+        row.app_id = sourceAppId;
+        row.source_app_token = sourceAppToken;
         row.app_token = seft.csmEncrypt([sourceAppId, loginIdentifier, \"user\", \"0\"].join(\"_____\"));
+        row.refresh_token = row.app_token;
         row.refresh = row.app_token;
+        if (row.login_version == null) row.login_version = 0;
+        if (row.loginVersion == null) row.loginVersion = row.login_version;
         const currentPass = String(row.pass || \"\").trim();
         if (currentPass) {
                 const decryptedPass = String(seft.csmDecrypt(currentPass) || \"\");
