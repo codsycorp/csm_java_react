@@ -479,7 +479,19 @@ export async function fetchNavigationMenus(appIdParam?: string) {
 			menuData = menuData ? [menuData] : [];
 		}
 
-		// Keep menu structure exactly as stored; do not auto inject auto-setup entry.
+		// Always evaluate auto menu independently from index.menu existence.
+		// If sys_autos has valid auto setup code for current app, inject it even when menuData is empty.
+		try {
+			const autoMenu = await loadAutoMenuItem(targetAppId);
+			if (autoMenu) {
+				const hasAuto = menuData.some(item => (item?.path || "") === "/auto-setup" || (item?.id || "") === "auto");
+				if (!hasAuto) {
+					menuData.push(autoMenu);
+				}
+			}
+		} catch (autoErr) {
+			console.warn("Failed to evaluate auto menu in navigation:", autoErr);
+		}
 		
 		// Normalize nodes → children field for consistent tree structure
 		menuData = menuData.map(item => normalizeMenuNodes(item));

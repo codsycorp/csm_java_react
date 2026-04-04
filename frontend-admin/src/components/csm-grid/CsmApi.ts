@@ -774,15 +774,32 @@ export async function updateTableData<T extends Record<string, any>>(params: {
 	
 	console.log("📤 updateTableData request:", {
 		command: params.command,
+		obj_name: params.obj_name,
 		pk_fields: params.pk_fields,
 		e_where: payload.e_where,
 		obj_update: params.obj_update,
 		full_payload: payload
 	});
+	try {
+		console.log("📤 updateTableData request JSON:", JSON.stringify({
+			command: params.command,
+			obj_name: params.obj_name,
+			pk_fields: params.pk_fields,
+			e_where: payload.e_where,
+			obj_update: params.obj_update,
+		}));
+	} catch {
+		// Ignore serialization errors in debug logging
+	}
 	
 	const res = await request
 		.post<ApiResponse<string>>("update-table-data", { json: payload, ignoreLoading: true })
 		.json<ApiResponse<string>>();
+	try {
+		console.log("📥 updateTableData response JSON:", JSON.stringify(res));
+	} catch {
+		// Ignore serialization errors in debug logging
+	}
 	clearGetTableDataCache();
 	if (res && (res as any).success === false) {
 		throw new Error(String((res as any).message || "Lưu dữ liệu thất bại"));

@@ -1109,7 +1109,11 @@ export default function AdminPage() {
 			};
 
 			if (isSystemUserRoute && isAdminUser && primaryTable === "csm_group_members") {
-				const ownerConditions = [resolvedUserAppId]
+				const ownerCandidates = Array.from(new Set([
+					resolvedUserAppId,
+					...userSubOwnerCandidates,
+				]));
+				const ownerConditions = ownerCandidates
 					.filter((owner) => typeof owner === "string" && owner.trim().length > 0)
 					.map(owner => ({
 					field: "parent_account_id",

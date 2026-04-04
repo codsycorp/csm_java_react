@@ -396,6 +396,190 @@ function normalizeInlineRowValues(input: Row, fields: TableField[]): Row {
 	return normalized;
 }
 
+function parseComboQueryConfig(rawQuery: unknown, decryptFn?: (s: string) => string): any {
+	const text = String(rawQuery || "").trim();
+	if (!text) return null;
+
+	const candidates = [text];
+	if (decryptFn) {
+		try {
+			const decrypted = decryptFn(text);
+			if (decrypted && decrypted !== text) {
+				candidates.unshift(String(decrypted));
+			}
+		} catch {
+			// Keep raw text when decrypt fails.
+		}
+	}
+
+	for (const candidate of candidates) {
+		const trimmed = String(candidate || "").trim();
+		if (!trimmed) continue;
+		try {
+			return JSON.parse(trimmed);
+		} catch {
+			try {
+				return new Function(`return (${trimmed})`)();
+			} catch {
+				// Try next candidate
+			}
+		}
+	}
+
+	return null;
+}
+
+function getComboRows(database: Database | undefined, tableName: string): any[] {
+	const source = (database as any)?.[tableName];
+	if (Array.isArray(source)) return source;
+	if (Array.isArray(source?.rows)) return source.rows;
+	return [];
+}
+
+function collectComboCandidates(input: any, valueField: string, labelField: string): string[] {
+	if (input == null) return [];
+	if (Array.isArray(input)) {
+		return Array.from(new Set(input.flatMap((item) => collectComboCandidates(item, valueField, labelField)).filter(Boolean)));
+	}
+	if (typeof input === "object") {
+		const obj = input as Record<string, any>;
+		const values = [
+			obj?.[valueField],
+			obj?.value,
+			obj?.id,
+			obj?.key,
+			obj?.code,
+			labelField ? obj?.[labelField] : "",
+			obj?.label,
+			obj?.name,
+			obj?.text,
+		].map((v) => String(v || "").trim()).filter(Boolean);
+		return Array.from(new Set(values));
+	}
+	const text = String(input || "").trim();
+	return text ? [text] : [];
+}
+
+function resolveComboSingleValue(input: any, querySpecs: any[], database: Database | undefined): { value: string; hasAnyRows: boolean } {
+	let hasAnyRows = false;
+	for (const querySpec of querySpecs) {
+		const tableName = String(querySpec?.obj_name || "").trim();
+		if (!tableName) continue;
+		const fields = Array.isArray(querySpec?.fields) ? querySpec.fields : [];
+		const valueField = String(fields[0] || "id").trim() || "id";
+		const labelField = String(fields[1] || "").trim();
+		const rows = getComboRows(database, tableName);
+		if (!Array.isArray(rows) || rows.length === 0) continue;
+		hasAnyRows = true;
+
+		const candidates = collectComboCandidates(input, valueField, labelField);
+		for (const candidate of candidates) {
+			const byValue = rows.find((row) => String(row?.[valueField] || "").trim() === candidate);
+			if (byValue) return { value: String(byValue?.[valueField] || "").trim(), hasAnyRows: true };
+
+			if (labelField) {
+				const byLabel = rows.find((row) => String(row?.[labelField] || "").trim() === candidate);
+				if (byLabel) return { value: String(byLabel?.[valueField] || "").trim(), hasAnyRows: true };
+			}
+		}
+	}
+
+	return { value: "", hasAnyRows };
+}
+
+function normalizeComboFieldByQuery(
+	input: any,
+	rawQuery: unknown,
+	database: Database | undefined,
+	decryptFn?: (s: string) => string,
+): any {
+	const parsed = parseComboQueryConfig(rawQuery, decryptFn);
+	const querySpecs = Array.isArray(parsed?.query) ? parsed.query : [];
+	if (querySpecs.length === 0) return input;
+
+	if (Array.isArray(input)) {
+		let hasAnyRows = false;
+		const nextValues = input
+			.map((item) => {
+				const resolved = resolveComboSingleValue(item, querySpecs, database);
+				hasAnyRows = hasAnyRows || resolved.hasAnyRows;
+				return resolved.value;
+			})
+			.filter(Boolean);
+		if (!hasAnyRows) return input;
+		return Array.from(new Set(nextValues));
+	}
+
+	const resolved = resolveComboSingleValue(input, querySpecs, database);
+	if (!resolved.hasAnyRows) return input;
+	return resolved.value;
+}
+
+function normalizeRowComboFieldsByQuery(
+	rowData: Row,
+	fields: TableField[],
+	database: Database | undefined,
+	decryptFn?: (s: string) => string,
+): Row {
+	const next: Row = { ...rowData };
+	const fieldNameSet = new Set((fields || []).map((field) => String(field?.f_name || "").trim()).filter(Boolean));
+	fields.forEach((field) => {
+		const fieldName = String(field?.f_name || "").trim();
+		if (!fieldName || !(fieldName in next)) return;
+		const types = String(field?.f_types || "").toLowerCase();
+		if (types.indexOf("co") === -1) return;
+		if (!field?.f_cbo_query) return;
+
+		next[fieldName] = normalizeComboFieldByQuery(next[fieldName], field.f_cbo_query, database, decryptFn);
+	});
+
+	const shouldSyncGroupAliases = ["group_id", "permissionGroups", "group_rights", "groupRights"].some(
+		(name) => fieldNameSet.has(name) || Object.prototype.hasOwnProperty.call(next, name),
+	);
+	if (shouldSyncGroupAliases) {
+		const toList = (value: any): string[] => {
+			if (Array.isArray(value)) return value.map((item) => String(item || "").trim()).filter(Boolean);
+			if (value && typeof value === "object") {
+				return Object.values(value).map((item) => String(item || "").trim()).filter(Boolean);
+			}
+			if (typeof value === "string") {
+				const raw = value.trim();
+				if (!raw) return [];
+				if (raw.startsWith("[") || raw.startsWith("{")) {
+					try {
+						return toList(JSON.parse(raw));
+					} catch {
+						return [];
+					}
+				}
+				return raw.split(/[;,\n]/g).map((item) => item.trim()).filter(Boolean);
+			}
+			return [];
+		};
+
+		const candidates = [
+			String(next.group_id || "").trim(),
+			toList(next.permissionGroups)[0] || "",
+			toList(next.group_rights)[0] || "",
+			toList(next.groupRights)[0] || "",
+		].map((item) => String(item || "").trim()).filter(Boolean);
+		const selectedGroupId = candidates[0] || "";
+		if (selectedGroupId) {
+			next.group_id = selectedGroupId;
+			if (fieldNameSet.has("permissionGroups") || Object.prototype.hasOwnProperty.call(next, "permissionGroups")) {
+				next.permissionGroups = [selectedGroupId];
+			}
+			if (fieldNameSet.has("group_rights") || Object.prototype.hasOwnProperty.call(next, "group_rights")) {
+				next.group_rights = [selectedGroupId];
+			}
+			if (fieldNameSet.has("groupRights") || Object.prototype.hasOwnProperty.call(next, "groupRights")) {
+				next.groupRights = [selectedGroupId];
+			}
+		}
+	}
+	return next;
+}
+
 /** Resolve a stored path to a URL usable as img/video src */
 function resolveMediaUrl(pathValue: string): string {
 	if (!pathValue) return "";
@@ -873,17 +1057,19 @@ export function CsmDynamicGrid({
 
 	const runBeforeSaveTrigger = useCallback(async (rowData: Row): Promise<Row | false> => {
 		const trigger = m_configs.trigger?.beforeSave;
-		if (!trigger) return rowData;
+		if (!trigger) {
+			return normalizeRowComboFieldsByQuery(rowData, m_configs.table || [], database, decrypt || csmDecrypt);
+		}
 
 		const seftContext = createSeftContext();
 		const inputRow = JSON.parse(JSON.stringify(rowData || {}));
 
 		const normalizeResult = (result: any): Row | false => {
 			if (result === false) return false;
-			if (result && typeof result === "object") {
-				return { ...rowData, ...result };
-			}
-			return rowData;
+			const merged = result && typeof result === "object"
+				? { ...rowData, ...result }
+				: rowData;
+			return normalizeRowComboFieldsByQuery(merged, m_configs.table || [], database, decrypt || csmDecrypt);
 		};
 
 		if (typeof trigger === "function") {
@@ -899,12 +1085,23 @@ export function CsmDynamicGrid({
 			// Keep raw code when trigger is not encrypted.
 		}
 
-		const compileAttempts = [
-			`const __beforeSave = (${code}); return __beforeSave(row, seft, data);`,
-			code,
+		const compileAttempts: Array<{ body: string; label: string }> = [
+			{
+				label: "shimmed-wrapper",
+				body: [
+					"var validateOrgLink = typeof validateOrgLink === 'function' ? validateOrgLink : function () { return true; };",
+					"var findRow = typeof findRow === 'function' ? findRow : function () { return null; };",
+					"var resolveComboValueByQuery = typeof resolveComboValueByQuery === 'function' ? resolveComboValueByQuery : function (_field, value) { return value == null ? '' : String(value); };",
+					`const __beforeSave = (${code}); return __beforeSave(row, seft, data);`,
+				].join("\n"),
+			},
+			{ label: "plain-wrapper", body: `const __beforeSave = (${code}); return __beforeSave(row, seft, data);` },
+			{ label: "raw-code", body: code },
 		];
 
-		for (const body of compileAttempts) {
+		let lastError: unknown = null;
+		for (const attempt of compileAttempts) {
+			const body = attempt.body;
 			const fn = safeEval<[Row, any, Database], any>(["row", "seft", "data"], body);
 			if (!fn) continue;
 
@@ -912,12 +1109,16 @@ export function CsmDynamicGrid({
 				const result = await fn(inputRow, seftContext, database);
 				return normalizeResult(result);
 			} catch (err) {
-				console.error("beforeSave trigger error:", err);
+				lastError = err;
 			}
 		}
 
-		return rowData;
-	}, [m_configs.trigger, createSeftContext, database, decrypt]);
+		if (lastError) {
+			console.error("beforeSave trigger error (all attempts failed):", lastError);
+		}
+
+		return normalizeRowComboFieldsByQuery(rowData, m_configs.table || [], database, decrypt || csmDecrypt);
+	}, [m_configs.trigger, m_configs.table, createSeftContext, database, decrypt]);
 
 	// Helper: Run after trigger (afterAdd, afterEdit, afterDelete)
 	// Truyền toàn bộ mảng dữ liệu sau khi thay đổi để trigger có thể sync
@@ -2258,7 +2459,7 @@ export function CsmDynamicGrid({
 			const deptCandidates = [userDeptId]
 				.filter((v): v is string => typeof v === "string" && v.trim().length > 0)
 				.map(v => v.trim().toLowerCase());
-			const deptFields = ["dept_id", "department_id", "team_id", "group_id", "org_unit_id"];
+			const deptFields = ["dept_id", "department_id", "team_id", "org_unit_id"];
 
 			sourceRows = filtered.filter((row) => {
 				const existingDeptField = deptFields.find((field) => row?.[field] != null && String(row[field]).trim() !== "");
@@ -3133,11 +3334,31 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 					}
 					submitInFlightRef.current = true;
 					try {
+					const beforeSaveInputSnapshot = JSON.parse(JSON.stringify(values || {}));
 					const beforeSaveValues = await runBeforeSaveTrigger(values);
 					if (beforeSaveValues === false) {
 						return;
 					}
 					values = beforeSaveValues;
+					try {
+						const comboFields = (m_configs.table || [])
+							.filter((field) => String(field?.f_types || "").toLowerCase().indexOf("co") !== -1)
+							.map((field) => String(field?.f_name || "").trim())
+							.filter(Boolean);
+						const comboBefore: Record<string, any> = {};
+						const comboAfter: Record<string, any> = {};
+						comboFields.forEach((name) => {
+							comboBefore[name] = beforeSaveInputSnapshot?.[name];
+							comboAfter[name] = values?.[name];
+						});
+						console.log("[CsmDynamicGrid] beforeSave combo diff", {
+							tableName,
+							comboBefore,
+							comboAfter,
+						});
+					} catch (debugErr) {
+						console.warn("[CsmDynamicGrid] beforeSave combo diff log failed", debugErr);
+					}
 
 					// Nếu không có table_name: chỉ lưu vào state local
 					if (!hasTableName) {
@@ -3239,7 +3460,7 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 						}
 					}
 
-					await updateTableData<Row>({ 
+					const updateResponse = await updateTableData<Row>({ 
 						app_id: appId, 
 						obj_name: tableName, 
 						command: effectiveCommand as any, 
@@ -3247,6 +3468,23 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 						pk_fields: pkFields,
 						where: whereValues
 					});
+					const responseAny = updateResponse as any;
+					const serverUpdatedRow = (responseAny?.updated_row && typeof responseAny.updated_row === "object")
+						? responseAny.updated_row
+						: (responseAny?.data?.updated_row && typeof responseAny.data.updated_row === "object"
+							? responseAny.data.updated_row
+							: null);
+					if (serverUpdatedRow && payloadValues?.group_id && serverUpdatedRow?.group_id && String(payloadValues.group_id) !== String(serverUpdatedRow.group_id)) {
+						console.warn("[CsmDynamicGrid] backend rewrote group_id", {
+							payload_group_id: payloadValues.group_id,
+							response_group_id: serverUpdatedRow.group_id,
+							response_permissionGroups: serverUpdatedRow.permissionGroups,
+							response_group_rights: serverUpdatedRow.group_rights,
+						});
+					}
+					const effectiveUpdatedValues = serverUpdatedRow
+						? { ...payloadValues, ...serverUpdatedRow }
+						: payloadValues;
 					
 					// Update local state và run after trigger
 					// NOTE: For "create", we do NOT add the row locally here.
@@ -3264,7 +3502,7 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 							});
 							if (idx >= 0) {
 								const next = [...prev];
-								next[idx] = { ...next[idx], ...payloadValues };
+								next[idx] = { ...next[idx], ...effectiveUpdatedValues };
 								// Run afterEdit trigger với toàn bộ mảng đã sửa
 								runAfterTrigger('afterEdit', next);
 								return next;
@@ -3275,7 +3513,9 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 					});
 					
 					setEditorOpen(false);
-					runSideEffectTrigger("update_db", payloadValues);
+					message.success(cmd === "create" ? t("common.addSuccess") : t("common.updateSuccess"));
+					runSideEffectTrigger("update_db", effectiveUpdatedValues);
+					onAdd?.();
 					} finally {
 						submitInFlightRef.current = false;
 					}

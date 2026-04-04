@@ -283,6 +283,7 @@ export const SYSTEM_ACCOUNT_DEFAULT_FIELDS: TableField[] = [
 	{ f_name: "full_name", f_header: "common.fullName", f_show: 1, f_types: "string", f_align: "left" },
 	{ f_name: "user_address", f_header: "common.address", f_show: 1, f_types: "string", f_align: "left" },
 	{ f_name: "app_id", f_header: "common.appId", f_show: 1, f_types: "co", f_align: "left", f_cbo_query: APP_ID_QUERY_JSON } as any,
+	{ f_name: "dev", f_header: "system.userPermission.option.dev", f_show: 1, f_types: "checkbox", f_align: "left" },
 	{ f_name: "app_token", f_header: "common.appToken", f_show: 0, f_types: "string", f_align: "left" },
 	{ f_name: "pass", f_header: "common.password", f_show: 1, f_types: "password", f_align: "left" },
 	{ f_name: "roles", f_header: "system.userPermission.fields.roles", f_show: 0, f_types: "co", f_align: "left", f_cbo_query: ROLE_SELECT_QUERY_JSON },
@@ -591,6 +592,70 @@ function beforeSave(row, seft) {
 		}
 		return [];
 	}
+	function findFieldConfig(fieldName) {
+		const fields = Array.isArray(seft?.m_configs?.table) ? seft.m_configs.table : [];
+		return fields.find((f) => String(f?.f_name || "").trim() === String(fieldName || "").trim()) || null;
+	}
+	function getRowsFromTable(tableName) {
+		const data = seft?.database?.[tableName];
+		if (Array.isArray(data)) return data;
+		if (Array.isArray(data?.rows)) return data.rows;
+		return [];
+	}
+	function resolveComboValueByQuery(fieldName, input) {
+		const rawValue = String(input || "").trim();
+		if (!rawValue) return "";
+
+		const field = findFieldConfig(fieldName);
+		const rawQuery = String(field?.f_cbo_query || "").trim();
+		if (!rawQuery) return rawValue;
+
+		let parsed = null;
+		try {
+			parsed = JSON.parse(rawQuery);
+		} catch (e) {
+			return rawValue;
+		}
+
+		const query = Array.isArray(parsed?.query) ? parsed.query : [];
+		for (let i = 0; i < query.length; i++) {
+			const q = query[i] || {};
+			const tableName = String(q?.obj_name || "").trim();
+			const fields = Array.isArray(q?.fields) ? q.fields : [];
+			const valueField = String(fields[0] || "id").trim() || "id";
+			const labelField = String(fields[1] || "").trim();
+			if (!tableName) continue;
+
+			const rows = getRowsFromTable(tableName);
+			if (!Array.isArray(rows) || rows.length === 0) continue;
+
+			const byValue = rows.find((r) => String(r?.[valueField] || "").trim() === rawValue);
+			if (byValue) return String(byValue?.[valueField] || "").trim();
+
+			if (labelField) {
+				const byLabel = rows.find((r) => String(r?.[labelField] || "").trim() === rawValue);
+				if (byLabel) return String(byLabel?.[valueField] || "").trim();
+			}
+		}
+
+		return "";
+	}
+	function resolveValidRoleId(input) {
+		const value = String(input || "").trim();
+		if (!value) return "";
+		const rows = Array.isArray(seft?.database?.csm_roles)
+			? seft.database.csm_roles
+			: (Array.isArray(seft?.database?.csm_roles?.rows) ? seft.database.csm_roles.rows : []);
+		if (!Array.isArray(rows) || rows.length === 0) return value;
+
+		const matched = rows.find((r) => {
+			const id = String(r?.id || "").trim();
+			const code = String(r?.role_code || "").trim();
+			return value === id || value === code;
+		});
+		if (!matched) return "";
+		return String(matched?.id || "").trim();
+	}
 	function findRow(tableName, fieldName, value) {
 		const rows = Array.isArray(seft?.database?.[tableName])
 			? seft.database[tableName]
@@ -696,12 +761,20 @@ function beforeSave(row, seft) {
 		return false;
 	}
 	row.app_id = resolvedAppId;
-	const normalizedRoles = actorIsDev ? ["admin"] : normalizeList(row.roles);
+	row.dev = Boolean(row.dev);
+	const targetIsDev = Boolean(row.dev);
+	const normalizedRoles = actorIsDev
+		? ["admin"]
+		: normalizeList(row.roles)
+			.map((item) => resolveComboValueByQuery("roles", item))
+			.filter(Boolean);
 	row.roles = normalizedRoles.length > 0 ? normalizedRoles : ["admin"];
-	const roleValue = row.roles.length > 0
-		? String(row.roles[0] || "admin").trim() || "admin"
-		: "admin";
-	const accessRight = roleValue.toLowerCase() === "dev" ? "1" : "0";
+	const roleValue = targetIsDev
+		? "dev"
+		: (row.roles.length > 0
+			? String(row.roles[0] || "admin").trim() || "admin"
+			: "admin");
+	const accessRight = targetIsDev ? "1" : "0";
 	row.app_token = seft.csmEncrypt([resolvedAppId, primaryIdentifier, roleValue, accessRight].join("_____"));
 	row.refresh = row.app_token;
 	if (currentPass) {
@@ -710,7 +783,9 @@ function beforeSave(row, seft) {
 			row.pass = seft.csmEncrypt(primaryIdentifier + "_____" + currentPass);
 		}
 	}
-	row.permissionGroups = normalizeList(row.permissionGroups);
+	row.permissionGroups = normalizeList(row.permissionGroups)
+		.map((item) => resolveComboValueByQuery("permissionGroups", item))
+		.filter(Boolean);
 	row.permissions = normalizeList(row.permissions);
 	row.permissionsAdd = normalizeList(row.permissionsAdd);
 	row.permissionsDeny = normalizeList(row.permissionsDeny);
@@ -723,7 +798,9 @@ function beforeSave(row, seft) {
 	const parentScope = String(seft?.user?.dataScope || "ALL").trim().toUpperCase() || "ALL";
 
 	if (actorIsDev) {
-		row.permissions = ["admin", "scope:all"];
+		row.permissions = targetIsDev
+			? ["dev", "admin", "scope:all"]
+			: ["admin", "scope:all"];
 		row.menusPermissions = resolvedAppId ? [resolvedAppId] : (parentMenus.length > 0 ? parentMenus : getDefaultFullMenus());
 		row.permissionGroups = [];
 		row.permissionsAdd = [];
@@ -993,6 +1070,80 @@ function beforeSave(row, seft) {
 		return [];
 	}
 
+	function findFieldConfig(fieldName) {
+		const fields = Array.isArray(seft?.m_configs?.table) ? seft.m_configs.table : [];
+		return fields.find((f) => String(f?.f_name || "").trim() === String(fieldName || "").trim()) || null;
+	}
+
+	function getRowsFromTable(tableName) {
+		const data = seft?.database?.[tableName];
+		if (Array.isArray(data)) return data;
+		if (Array.isArray(data?.rows)) return data.rows;
+		return [];
+	}
+
+	function normalizeComboInput(input, valueField, labelField) {
+		if (input && typeof input === "object") {
+			const obj = input;
+			const candidates = [
+				obj?.[valueField],
+				obj?.value,
+				obj?.id,
+				obj?.key,
+				obj?.code,
+				labelField ? obj?.[labelField] : "",
+				obj?.label,
+				obj?.name,
+				obj?.text,
+			];
+			for (let i = 0; i < candidates.length; i++) {
+				const value = String(candidates[i] || "").trim();
+				if (value) return value;
+			}
+			return "";
+		}
+		return String(input || "").trim();
+	}
+
+	function resolveComboValueByQuery(fieldName, input) {
+		const field = findFieldConfig(fieldName);
+		const rawQuery = String(field?.f_cbo_query || "").trim();
+		if (!rawQuery) return String(input || "").trim();
+
+		let parsed = null;
+		try {
+			parsed = JSON.parse(rawQuery);
+		} catch (e) {
+			return String(input || "").trim();
+		}
+
+		const query = Array.isArray(parsed?.query) ? parsed.query : [];
+		for (let i = 0; i < query.length; i++) {
+			const q = query[i] || {};
+			const tableName = String(q?.obj_name || "").trim();
+			const fields = Array.isArray(q?.fields) ? q.fields : [];
+			const valueField = String(fields[0] || "id").trim() || "id";
+			const labelField = String(fields[1] || "").trim();
+			if (!tableName) continue;
+
+			const rows = getRowsFromTable(tableName);
+			if (!Array.isArray(rows) || rows.length === 0) continue;
+
+			const rawValue = normalizeComboInput(input, valueField, labelField);
+			if (!rawValue) return "";
+
+			const byValue = rows.find((r) => String(r?.[valueField] || "").trim() === rawValue);
+			if (byValue) return String(byValue?.[valueField] || "").trim();
+
+			if (labelField) {
+				const byLabel = rows.find((r) => String(r?.[labelField] || "").trim() === rawValue);
+				if (byLabel) return String(byLabel?.[valueField] || "").trim();
+			}
+		}
+
+		return "";
+	}
+
 	const sourceAppToken = String(seft.user?.app_token || "").trim();
 	if (!sourceAppToken) {
 		window.$message?.error(tr({
@@ -1032,11 +1183,14 @@ function beforeSave(row, seft) {
 			row.pass = seft.csmEncrypt(loginIdentifier + "_____" + currentPass);
 		}
 	}
-	row.permissionGroups = normalizeList(row.permissionGroups);
-	const groupId = String(row.group_id || "").trim();
-	if (groupId) {
-		row.permissionGroups = uniqueList([...(row.permissionGroups || []), groupId]);
-	}
+	const rawPermissionGroups = normalizeList(row.permissionGroups);
+	const groupIdFromField = resolveComboValueByQuery("group_id", row.group_id);
+	const groupIdFromGroups = rawPermissionGroups
+		.map((item) => resolveComboValueByQuery("group_id", item))
+		.find(Boolean) || "";
+	const normalizedGroupId = groupIdFromField || groupIdFromGroups;
+	row.group_id = normalizedGroupId;
+	row.permissionGroups = normalizedGroupId ? [normalizedGroupId] : [];
 	row.permissions = normalizeList(row.permissions);
 	row.permissionsAdd = normalizeList(row.permissionsAdd);
 	row.permissionsDeny = normalizeList(row.permissionsDeny);

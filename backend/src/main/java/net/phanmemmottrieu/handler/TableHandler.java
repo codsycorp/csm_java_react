@@ -30,7 +30,7 @@ public class TableHandler {
     private final RecordManager recordManager; // Khai báo một trường để giữ instance của RecordManager
     private static final ObjectMapper objectMapper = new ObjectMapper();
     private static final List<String> OWNER_SCOPE_FIELDS = List.of("created_by", "create_by", "owner_id", "owner", "user_id", "userid", "account_id", "parent_account_id");
-    private static final List<String> DEPARTMENT_SCOPE_FIELDS = List.of("dept_id", "department_id", "team_id", "group_id", "org_unit_id");
+    private static final List<String> DEPARTMENT_SCOPE_FIELDS = List.of("dept_id", "department_id", "team_id", "org_unit_id");
     private static final List<String> BRANCH_SCOPE_FIELDS = List.of("branch_id", "site_id", "region_id");
     private static final List<String> DEFAULT_FULL_MENU_PERMISSIONS = List.of("/dashboard", "/home", "/system/user", "/system/menu", "/system/dept", "/crm");
     private static final Map<Integer, String> CORE_MENU_BIT_TO_TOKEN = createCoreMenuBitToToken();
@@ -741,7 +741,7 @@ public class TableHandler {
             "refresh_token", "refresh_token_ip", "refresh_token_ua", "refresh_token_expiry", "login_version", "loginVersion",
             "description", "roles", "actived", "permissions", "menusPermissions", "group_rights",
             "full_name", "user_address", "app_id", "parent_account_id", "permissionBitfield", "permissionSchemaVersion", "dataScope",
-            "dept_id", "branch_id", "department_id", "team_id"
+            "dept_id", "branch_id", "department_id", "team_id", "dev"
         ));
         map.put("csm_group_members", List.of(
             "id", "parent_account_id", "login_identifier", "username", "email", "phoneNumber", "full_name", "user_address", "avatar",
@@ -1123,7 +1123,6 @@ public class TableHandler {
             collectCandidate(departmentCandidates, principalUserMap.get("deptId"));
             collectCandidate(departmentCandidates, principalUserMap.get("department_id"));
             collectCandidate(departmentCandidates, principalUserMap.get("team_id"));
-            collectCandidate(departmentCandidates, principalUserMap.get("group_id"));
 
             collectCandidate(branchCandidates, principalUserMap.get("branch_id"));
             collectCandidate(branchCandidates, principalUserMap.get("branchId"));
@@ -1542,6 +1541,54 @@ public class TableHandler {
         return byId == null ? Collections.emptyMap() : byId;
     }
 
+    private Map<String, Object> findRoleRecordByCodeOrIdCached(String appId, String roleRef, Map<String, Map<String, Object>> cache) {
+        if (cache == null) {
+            return findRoleRecordByCodeOrId(appId, roleRef);
+        }
+        String key = safeStr(roleRef).toLowerCase(Locale.ROOT);
+        if (key.isBlank()) {
+            return Collections.emptyMap();
+        }
+        Map<String, Object> cached = cache.get(key);
+        if (cached != null) {
+            return cached;
+        }
+        Map<String, Object> resolved = findRoleRecordByCodeOrId(appId, roleRef);
+        Map<String, Object> safeResolved = resolved == null ? Collections.emptyMap() : resolved;
+        cache.put(key, safeResolved);
+        return safeResolved;
+    }
+
+    private void normalizePermissionGroupAliases(Map<String, Object> objUpdate) {
+        if (objUpdate == null || objUpdate.isEmpty()) {
+            return;
+        }
+
+        List<String> permissionGroups = toStringList(objUpdate.get("permissionGroups"));
+        List<String> groupRights = mergeUniqueCaseInsensitive(
+            toStringList(objUpdate.get("group_rights")),
+            toStringList(objUpdate.get("groupRights"))
+        );
+
+        String groupId = safeStr(objUpdate.get("group_id"));
+        if (groupId.isBlank()) {
+            if (!permissionGroups.isEmpty()) {
+                groupId = permissionGroups.get(0);
+            } else if (!groupRights.isEmpty()) {
+                groupId = groupRights.get(0);
+            }
+        }
+
+        if (!groupId.isBlank()) {
+            objUpdate.put("group_id", groupId);
+            permissionGroups = mergeUniqueCaseInsensitive(permissionGroups, List.of(groupId));
+        }
+
+        if (!permissionGroups.isEmpty()) {
+            objUpdate.put("permissionGroups", permissionGroups);
+        }
+    }
+
     private List<String> mergeUniqueCaseInsensitive(List<String> base, List<String> extra) {
         LinkedHashMap<String, String> merged = new LinkedHashMap<>();
         List<String> safeBase = base == null ? Collections.emptyList() : base;
@@ -1884,9 +1931,17 @@ public class TableHandler {
             return;
         }
 
+        normalizePermissionGroupAliases(objUpdate);
+
         if (accessContext.isDev) {
-            objUpdate.put("roles", new ArrayList<>(List.of("admin")));
-            objUpdate.put("permissions", new ArrayList<>(List.of("admin", "scope:all")));
+            boolean targetIsDev = Boolean.TRUE.equals(objUpdate.get("dev"));
+            objUpdate.put("dev", targetIsDev);
+            objUpdate.put("roles", new ArrayList<>(List.of(targetIsDev ? "dev" : "admin")));
+            objUpdate.put("permissions", new ArrayList<>(
+                targetIsDev
+                    ? List.of("dev", "admin", "scope:all")
+                    : List.of("admin", "scope:all", "view", "create", "edit", "delete", "export")
+            ));
             // Dev tạo tài khoản chính phải có full scope theo app_id đích.
             // Dùng legacy full-app token để frontend/backend đều hiểu là toàn quyền menu app.
             String targetAppId = safeStr(objUpdate.get("app_id"));
@@ -1917,8 +1972,9 @@ public class TableHandler {
         String groupScope = "";
         String groupDept = "";
         String groupBranch = "";
+        Map<String, Map<String, Object>> roleCache = new HashMap<>();
         for (String groupRef : permissionGroups) {
-            Map<String, Object> roleRecord = findRoleRecordByCodeOrId(accessContext.appId, groupRef);
+            Map<String, Object> roleRecord = findRoleRecordByCodeOrIdCached(accessContext.appId, groupRef, roleCache);
             if (roleRecord == null || roleRecord.isEmpty()) {
                 continue;
             }
@@ -2019,6 +2075,8 @@ public class TableHandler {
         }
         return objUpdate.containsKey("group_id")
             || objUpdate.containsKey("permissionGroups")
+            || objUpdate.containsKey("group_rights")
+            || objUpdate.containsKey("groupRights")
             || objUpdate.containsKey("permissions")
             || objUpdate.containsKey("menusPermissions")
             || objUpdate.containsKey("permissionsAdd")
@@ -2032,6 +2090,8 @@ public class TableHandler {
         if (objUpdate == null || accessContext == null) {
             return;
         }
+
+        normalizePermissionGroupAliases(objUpdate);
 
         if (accessContext.preferredOwner != null && !accessContext.preferredOwner.isBlank()) {
             objUpdate.put("parent_account_id", accessContext.preferredOwner);
@@ -2053,8 +2113,9 @@ public class TableHandler {
         String groupScope = "";
         String groupDept = "";
         String groupBranch = "";
+        Map<String, Map<String, Object>> roleCache = new HashMap<>();
         for (String groupRef : permissionGroups) {
-            Map<String, Object> roleRecord = findRoleRecordByCodeOrId(accessContext.appId, groupRef);
+            Map<String, Object> roleRecord = findRoleRecordByCodeOrIdCached(accessContext.appId, groupRef, roleCache);
             if (roleRecord == null || roleRecord.isEmpty()) {
                 continue;
             }
@@ -3499,6 +3560,7 @@ public class TableHandler {
         }
 
         List<Map<String, Object>> changedRows = new ArrayList<>();
+        Map<String, Map<String, Object>> roleCache = new HashMap<>();
         for (Map<String, Object> row : rows) {
             if (row == null) continue;
             boolean changed = false;
@@ -3529,7 +3591,7 @@ public class TableHandler {
                 List<String> groupMenus = new ArrayList<>();
                 String groupScope = "";
                 for (String groupRef : groupRefs) {
-                    Map<String, Object> roleRecord = findRoleRecordByCodeOrId(appId, groupRef);
+                    Map<String, Object> roleRecord = findRoleRecordByCodeOrIdCached(appId, groupRef, roleCache);
                     if (roleRecord.isEmpty()) {
                         continue;
                     }
