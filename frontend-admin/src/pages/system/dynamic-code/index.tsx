@@ -912,17 +912,16 @@ ${resolvedContainerSelector} select {
       const email = currentUser?.email;
       const username = currentUser?.username;
       const phoneNumber = currentUser?.phoneNumber || currentUser?.phone_number;
-      const loginIdentifier = currentUser?.login_identifier;
 
       const isMainAccount = Boolean(currentUser?.dev) || hasRole(currentUser, "admin") || hasRole(currentUser, "dev");
       const preferredTable = isMainAccount ? "csm_accounts" : "csm_group_members";
 
-      const preferredPkField = isMainAccount
-        ? (userId ? "id" : (email ? "email" : (username ? "username" : (phoneNumber ? "phoneNumber" : "app_token"))))
-        : (userId ? "id" : (loginIdentifier ? "login_identifier" : (appToken ? "app_token" : "id")));
-      const preferredPkValue = isMainAccount
-        ? (userId || email || username || phoneNumber || appToken)
-        : (userId || loginIdentifier || appToken || email || username || phoneNumber);
+      // Keep consistent with Profile page update flow:
+      // prefer id/email/username/phoneNumber for both account types.
+      const preferredPkField = userId
+        ? "id"
+        : (email ? "email" : (username ? "username" : (phoneNumber ? "phoneNumber" : "app_token")));
+      const preferredPkValue = userId || email || username || phoneNumber || appToken || currentUser?.login_identifier;
 
       return { preferredTable, preferredPkField, preferredPkValue };
     };
@@ -932,12 +931,12 @@ ${resolvedContainerSelector} select {
       const candidates = [
         { field: target.preferredPkField, value: target.preferredPkValue },
         { field: "id", value: currentUser?.userId || currentUser?.id || currentUser?.user_id || currentUser?.account_id },
-        { field: "app_token", value: currentUser?.app_token || currentUser?.appToken },
-        { field: "login_identifier", value: currentUser?.login_identifier },
         { field: "email", value: currentUser?.email },
         { field: "username", value: currentUser?.username },
         { field: "phoneNumber", value: currentUser?.phoneNumber || currentUser?.phone_number },
         { field: "phone_number", value: currentUser?.phone_number || currentUser?.phoneNumber },
+        { field: "app_token", value: currentUser?.app_token || currentUser?.appToken },
+        { field: "login_identifier", value: currentUser?.login_identifier },
       ];
 
       const seen = new Set<string>();
@@ -1030,43 +1029,51 @@ ${resolvedContainerSelector} select {
       const tableOrder = target.preferredTable === "csm_group_members"
         ? ["csm_group_members", "csm_accounts"]
         : ["csm_accounts", "csm_group_members"];
-      const currentAppToken = String(currentUser?.app_token || currentUser?.appToken || "").trim();
 
-      for (const tableName of tableOrder) {
-        for (const identity of identities) {
-          try {
-            const response = await (window as any).csmApi.getTableData({
-              app_id: "csm",
-              obj_name: tableName,
-              where: {
-                field: identity.field,
-                type: "eq",
-                value: identity.value,
-              },
-              take: 20,
-            });
+      const appIdCandidates = [
+        String(effectiveAppId || "").trim(),
+        String(currentUser?.app_id || "").trim(),
+        String(currentUser?.parent_account_id || "").trim(),
+        "csm",
+      ].filter((value, index, arr) => Boolean(value) && arr.indexOf(value) === index);
 
-            const rows = (response as any)?.rows || (response as any)?.data || [];
-            if (!Array.isArray(rows) || rows.length === 0) {
-              continue;
+      for (const requestAppId of appIdCandidates) {
+        for (const tableName of tableOrder) {
+          for (const identity of identities) {
+            try {
+              const response = await (window as any).csmApi.getTableData({
+                app_id: requestAppId,
+                obj_name: tableName,
+                where: {
+                  field: identity.field,
+                  type: "eq",
+                  value: identity.value,
+                },
+                take: 20,
+              });
+
+              const rows = (response as any)?.rows || (response as any)?.data || [];
+              if (!Array.isArray(rows) || rows.length === 0) {
+                continue;
+              }
+
+              const row = pickBestMatchedRow(rows, currentUser);
+              if (!row) continue;
+
+              const stableId = row?.id;
+              const pkField = stableId ? "id" : identity.field;
+              const pkValue = stableId || identity.value;
+
+              return {
+                row,
+                pkField,
+                pkValue,
+                tableName,
+                requestAppId,
+              };
+            } catch {
+              // Try next candidate.
             }
-
-            const row = pickBestMatchedRow(rows, currentUser);
-            if (!row) continue;
-
-            const stableId = row?.id;
-            const pkField = stableId ? "id" : identity.field;
-            const pkValue = stableId || identity.value;
-
-            return {
-              row,
-              pkField,
-              pkValue,
-              tableName,
-              requestAppId: "csm",
-            };
-          } catch {
-            // Try next candidate.
           }
         }
       }
