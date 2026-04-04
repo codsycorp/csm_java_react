@@ -306,6 +306,12 @@ public class TableHandler {
             String appId = msg.get("app_id").toString();
             String tblname = msg.get("obj_name").toString();
             UserAccessContext accessContext = resolveCurrentUserAccessContext();
+            String requiredAction = resolveRequiredAction(msg, isUpdate);
+
+            String actionPermissionError = validateActionPermissionForCurrentUser(accessContext, requiredAction);
+            if (actionPermissionError != null) {
+                return errorResponse(actionPermissionError);
+            }
 
             // Chuẩn hóa e_where thành SearchFilter trước để áp dụng security policy theo ngữ cảnh request.
             Object eWhereObj = msg.getOrDefault("e_where", new HashMap<>());
@@ -334,7 +340,7 @@ public class TableHandler {
             // Security scope: admin (non-dev) chỉ xem users cùng app_id khi đọc bảng csm_accounts.
             filtersObjs = applyAdminUserListScope(tblname, filtersObjs, isUpdate);
             // Security scope: admin (non-dev) chỉ xem sub-user thuộc mình trong bảng csm_group_members.
-            filtersObjs = applyAdminSubUserListScope(tblname, filtersObjs, isUpdate);
+            filtersObjs = applyAdminSubUserListScope(tblname, filtersObjs, isUpdate, accessContext);
 
 //            OSSUtil.log("Lấy dữ liệu "+appId+" trên bảng "+tblname+" với điều kiện "+filtersObjs+" so với điều kiện của nó là:"+msg.get("e_where"));
             if ("index".equals(tblname)) {
@@ -373,13 +379,65 @@ public class TableHandler {
                 logger.error("Không thể chuyển đổi SearchFilter thành JSON để log: {}", e.getMessage());
             }
             return isUpdate ?
-                handleUpdateTableOperation(appId, tblname, msg, filtersObjs, primaryKeyFields)
-                : handleSelectTableOperation(appId, tblname,msg, filtersObjs, structMap);
+                handleUpdateTableOperation(appId, tblname, msg, filtersObjs, primaryKeyFields, accessContext)
+                : handleSelectTableOperation(appId, tblname,msg, filtersObjs, structMap, accessContext);
 
         } catch (Exception e) {
             logger.info("Lỗi thao tác chương trình {} với bảng:{} với lỗi:{}",msg.get("app_id").toString(),msg.get("obj_name").toString(),e.getMessage());
             return errorResponse("Lỗi thao tác bảng: " + e.getMessage());
         }
+    }
+
+    private String resolveRequiredAction(Map<String, Object> msg, boolean isUpdate) {
+        if (!isUpdate) {
+            return "view";
+        }
+
+        String command = safeStr(msg == null ? null : msg.get("command")).toLowerCase(Locale.ROOT);
+        return switch (command) {
+            case "create" -> "create";
+            case "update" -> "edit";
+            case "delete" -> "delete";
+            default -> "";
+        };
+    }
+
+    private String validateActionPermissionForCurrentUser(UserAccessContext accessContext, String requiredAction) {
+        if (accessContext == null || requiredAction == null || requiredAction.isBlank()) {
+            return null;
+        }
+
+        // Dev keeps full operational abilities. Admin/sub-user must follow granted action permissions.
+        if (accessContext.isDev) {
+            return null;
+        }
+
+        if (hasActionPermission(accessContext.permissions, requiredAction)) {
+            return null;
+        }
+
+        return switch (requiredAction) {
+            case "view" -> "Bạn không có quyền xem dữ liệu (view)";
+            case "create" -> "Bạn không có quyền tạo dữ liệu (create)";
+            case "edit" -> "Bạn không có quyền cập nhật dữ liệu (edit)";
+            case "delete" -> "Bạn không có quyền xóa dữ liệu (delete)";
+            default -> "Bạn không có quyền thực hiện thao tác này";
+        };
+    }
+
+    private boolean hasActionPermission(List<String> permissions, String action) {
+        if (permissions == null || permissions.isEmpty() || action == null || action.isBlank()) {
+            return false;
+        }
+
+        String expected = action.trim().toLowerCase(Locale.ROOT);
+        for (String permission : permissions) {
+            String normalized = safeStr(permission).toLowerCase(Locale.ROOT);
+            if (normalized.equals(expected) || normalized.equals("admin")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private String validateSystemUserTableAccess(String tableName, UserAccessContext accessContext, boolean isUpdate, Map<String, Object> msg, SearchFilter filters) {
@@ -486,15 +544,14 @@ public class TableHandler {
         return existingFilter;
     }
 
-    private SearchFilter applyAdminSubUserListScope(String tableName, SearchFilter existingFilter, boolean isUpdate) {
+    private SearchFilter applyAdminSubUserListScope(String tableName, SearchFilter existingFilter, boolean isUpdate, UserAccessContext access) {
         if (isUpdate || !"csm_group_members".equals(tableName)) {
             return existingFilter;
         }
 
-        UserAccessContext access = resolveCurrentUserAccessContext();
         // Apply parent_account_id scope for all authenticated users (both admin and dev).
         // Dev should only see sub-users belonging to their own account, not all tenants'.
-        if (access.parentAccountCandidates.isEmpty()) {
+        if (access == null || access.parentAccountCandidates.isEmpty()) {
             return existingFilter;
         }
 
@@ -593,6 +650,26 @@ public class TableHandler {
             changed = false;
             for (Map<String, Object> row : rows) {
                 if (row == null) continue;
+
+                // Always keep current account identity visible, even if parent_account_id is empty
+                // or does not point back to one of reachable parents.
+                if (isSelfManagedAccountRow(row, access)) {
+                    String selfRowId = normalizedIdentity(row.get("id"));
+                    if (!selfRowId.isBlank() && visibleIds.add(selfRowId)) {
+                        changed = true;
+                    }
+
+                    int beforeSelfSize = reachableParents.size();
+                    collectCandidate(reachableParents, row.get("id"));
+                    collectCandidate(reachableParents, row.get("username"));
+                    collectCandidate(reachableParents, row.get("email"));
+                    collectCandidate(reachableParents, row.get("phoneNumber"));
+                    collectCandidate(reachableParents, row.get("app_token"));
+                    if (reachableParents.size() != beforeSelfSize) {
+                        changed = true;
+                    }
+                }
+
                 String parent = normalizedIdentity(row.get("parent_account_id"));
                 if (parent.isBlank() || !reachableParents.contains(parent)) {
                     continue;
@@ -617,6 +694,25 @@ public class TableHandler {
         }
 
         return visibleIds;
+    }
+
+    private boolean isSelfManagedAccountRow(Map<String, Object> row, UserAccessContext access) {
+        if (row == null || access == null || access.ownerCandidates == null || access.ownerCandidates.isEmpty()) {
+            return false;
+        }
+        return matchesOwnerCandidate(access.ownerCandidates, row.get("id"))
+            || matchesOwnerCandidate(access.ownerCandidates, row.get("username"))
+            || matchesOwnerCandidate(access.ownerCandidates, row.get("email"))
+            || matchesOwnerCandidate(access.ownerCandidates, row.get("phoneNumber"))
+            || matchesOwnerCandidate(access.ownerCandidates, row.get("app_token"));
+    }
+
+    private boolean matchesOwnerCandidate(Set<String> candidates, Object raw) {
+        if (candidates == null || candidates.isEmpty()) {
+            return false;
+        }
+        String normalized = normalizedIdentity(raw);
+        return !normalized.isBlank() && candidates.contains(normalized);
     }
 
     private String normalizedIdentity(Object raw) {
@@ -1064,6 +1160,7 @@ public class TableHandler {
         List<String> menusPermissions = null;
         Boolean dev = false;
         String userAppId = null;
+        String appTokenRole = "";
         Set<String> parentCandidates = new LinkedHashSet<>();
         Set<String> ownerCandidates = new LinkedHashSet<>();
         Set<String> departmentCandidates = new LinkedHashSet<>();
@@ -1086,6 +1183,7 @@ public class TableHandler {
             collectCandidate(ownerCandidates, user.getEmail());
             collectCandidate(ownerCandidates, user.getPhoneNumber());
             collectCandidate(ownerCandidates, user.getAppToken());
+            appTokenRole = extractRoleFromAppToken(user.getAppToken());
 
             collectCandidate(departmentCandidates, user.getDeptId());
             collectCandidate(branchCandidates, user.getBranchId());
@@ -1118,6 +1216,10 @@ public class TableHandler {
             collectCandidate(ownerCandidates, principalUserMap.get("phoneNumber"));
             collectCandidate(ownerCandidates, principalUserMap.get("app_token"));
             collectCandidate(ownerCandidates, principalUserMap.get("appToken"));
+            appTokenRole = extractRoleFromAppToken(principalUserMap.get("app_token"));
+            if (appTokenRole.isBlank()) {
+                appTokenRole = extractRoleFromAppToken(principalUserMap.get("appToken"));
+            }
 
             collectCandidate(departmentCandidates, principalUserMap.get("dept_id"));
             collectCandidate(departmentCandidates, principalUserMap.get("deptId"));
@@ -1145,11 +1247,21 @@ public class TableHandler {
             effectivePermissions = mergeUniqueCaseInsensitive(effectivePermissions, List.of("dev", "admin", "scope:all"));
         }
 
-        boolean isAdmin = (roles != null && roles.stream().anyMatch(r -> "admin".equalsIgnoreCase(r)))
+        boolean isSubUserToken = "user".equalsIgnoreCase(appTokenRole);
+        boolean isAdminByDefaultPolicy = !Boolean.TRUE.equals(dev) && !isSubUserToken;
+
+        boolean isAdmin = isAdminByDefaultPolicy
+            || (roles != null && roles.stream().anyMatch(r -> "admin".equalsIgnoreCase(r)))
+            || "admin".equalsIgnoreCase(appTokenRole)
             || hasAdminPrivilegeFromToken(parsedToken);
         String dataScope = parsedToken != null
             ? PermissionBitfieldUtil.resolveDataScope(parsedToken)
             : PermissionBitfieldUtil.resolveDataScope(PermissionBitfieldUtil.buildBitfield(effectivePermissions, menusPermissions, dev));
+        if (!Boolean.TRUE.equals(dev) && isAdmin && hasLegacyFullAppScope(menusPermissions, userAppId)) {
+            // Main admin with app-wide menu token is treated as full data scope within their app.
+            dataScope = "ALL";
+            effectivePermissions = mergeUniqueCaseInsensitive(effectivePermissions, List.of("admin", "scope:all"));
+        }
         if (Boolean.TRUE.equals(dev)) {
             dataScope = "ALL";
         }
@@ -1165,6 +1277,19 @@ public class TableHandler {
             effectivePermissions,
             menusPermissions
         );
+    }
+
+    private boolean hasLegacyFullAppScope(List<String> menusPermissions, String appId) {
+        String normalizedAppId = safeStr(appId).toLowerCase(Locale.ROOT);
+        if (normalizedAppId.isBlank() || menusPermissions == null || menusPermissions.isEmpty()) {
+            return false;
+        }
+        return menusPermissions.stream().anyMatch(menu -> {
+            String normalized = safeStr(menu).toLowerCase(Locale.ROOT);
+            return normalized.equals(normalizedAppId)
+                || normalized.equals("app:" + normalizedAppId)
+                || normalized.equals("/" + normalizedAppId);
+        });
     }
 
     private List<Map<String, Object>> applyDataScopeRowFilter(String tableName, List<Map<String, Object>> rows, UserAccessContext access) {
@@ -2601,7 +2726,7 @@ public class TableHandler {
         return response;
     }
     
-    private Map<String, Object> handleUpdateTableOperation(String appId, String tblname, Map<String, Object> msg, SearchFilter filters, List<String> pkFields) throws Exception {
+    private Map<String, Object> handleUpdateTableOperation(String appId, String tblname, Map<String, Object> msg, SearchFilter filters, List<String> pkFields, UserAccessContext accessContext) throws Exception {
         List<String> effectivePkFields = (pkFields != null) ? pkFields : Collections.emptyList();
         String command = msg.get("command").toString().toLowerCase(Locale.ROOT);
         Map<String, Object> objUpdate = (Map<String, Object>) msg.get("obj_update");
@@ -2613,7 +2738,6 @@ public class TableHandler {
             objUpdate.put("user_address", objUpdate.get("user_adress"));
         }
 
-        UserAccessContext accessContext = resolveCurrentUserAccessContext();
         boolean isSystemUsersTable = "csm_accounts".equals(tblname);
         boolean isAdminNonDev = accessContext.isAdmin && !accessContext.isDev;
         boolean isSubUserTable = "csm_group_members".equals(tblname);
@@ -3122,7 +3246,7 @@ public class TableHandler {
             output.putIfAbsent(filter.getField(), filter.getValue());
         }
     
-    private Map<String, Object> handleSelectTableOperation(String appId, String tblname,Map<String, Object> msg, SearchFilter filters, Map<String, Object> structMap) {
+    private Map<String, Object> handleSelectTableOperation(String appId, String tblname,Map<String, Object> msg, SearchFilter filters, Map<String, Object> structMap, UserAccessContext accessContext) {
         Map<String, Object> filterResult = null;
         Integer take = parseIntegerParam(msg.get("take"));
         Integer offset = parseIntegerParam(msg.get("offset"));
@@ -3181,8 +3305,9 @@ public class TableHandler {
         List<Map<String, Object>> data = (List<Map<String, Object>>) filterResult.getOrDefault("rows", new ArrayList<>());
         autoFillPermissionSchemaValues(appId, tblname, data, true);
         migrateLegacyScopeSyntaxOnce(appId, tblname, data);
-        data = filterManagedAccountDescendants(tblname, data, resolveCurrentUserAccessContext());
-        data = applyDataScopeRowFilter(tblname, data, resolveCurrentUserAccessContext());
+        UserAccessContext effectiveAccessContext = accessContext != null ? accessContext : resolveCurrentUserAccessContext();
+        data = filterManagedAccountDescendants(tblname, data, effectiveAccessContext);
+        data = applyDataScopeRowFilter(tblname, data, effectiveAccessContext);
         data = filterMainAccountRows(tblname, data);
         if ("csm_accounts".equals(tblname)) {
             data = maskSelfAccountRowsForNonDev(data, resolveCurrentUserAccessContext());

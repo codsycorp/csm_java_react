@@ -1434,6 +1434,7 @@ export default function AdminPage() {
 				email: "common.email",
 				avatar: "common.picture",
 				phoneNumber: "common.phoneNumber",
+				dev: "system.userPermission.option.dev",
 				description: "common.description",
 				roles: "system.userPermission.fields.roles",
 				permissionPreset: "system.userPermission.fields.permissionPreset",
@@ -1494,7 +1495,8 @@ export default function AdminPage() {
 			const normalizedKeys = Array.from(new Set(keys.length ? keys : fallbackKeys));
 			const fields = normalizedKeys.map((k) => ({
 				f_name: k,
-				f_header: t(DEFAULT_HEADERS[k] || k), // Sử dụng hàm `t` để dịch tiêu đề cột
+				// Keep i18n keys so labels render correctly in all languages.
+				f_header: DEFAULT_HEADERS[k] || k,
 				f_show: 1,
 				f_types: k === "id" ? "number" : "string",
 				f_align: k === "id" ? "right" : "left",

@@ -361,6 +361,7 @@ export function useMenu() {
 					command: (params?.command as any) || "update",
 					obj_update: params?.obj_update || params?.obj || {},
 					pk_fields: params?.pk_fields,
+					where: params?.e_where || params?.where,
 				} as any)
 					.then(res => fn?.(res))
 					.catch(error => fn?.({ success: false, error: (error as any)?.message || error }));

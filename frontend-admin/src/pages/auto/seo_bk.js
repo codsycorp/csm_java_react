@@ -2799,7 +2799,7 @@ window.reloadQueueFromData = function() {
 let currentIndex = 0;
 
 // Hàm lấy dữ liệu từ biến dataUserOption (source of truth)
-// dataUserOption được khởi tạo từ seft.Uinfos.userAddress hoặc từ import excel
+// dataUserOption được khởi tạo từ csmUserData/csmCurrentUser hoặc từ import excel
 window.getDataUserOption = function (forceRefresh = false) {
   // Nếu forceRefresh = true, fetch lại từ database
   if (forceRefresh && window.csmUserData && typeof window.csmUserData.fetchFromDatabase === 'function') {

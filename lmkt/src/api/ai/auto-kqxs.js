@@ -2189,13 +2189,30 @@
         var data = Object.assign({}, objKQ);
         data.id = tableName + "_" + String(data.field_ngay || "").trim();
         data.thu = days[chuyenNgay(String(data.field_ngay || ""), "yyyymmdd").getDay()];
-        await updateRows({
+        var whereByNgay = { field: "field_ngay", type: "eq", value: data.field_ngay };
+        var updateRs = await updateRows({
           app_id: "kqxs",
           obj_name: tableName,
           command: "update",
           obj_update: data,
-          e_where: { field: "field_ngay", type: "eq", value: data.field_ngay }
+          pk_fields: ["field_ngay"],
+          e_where: whereByNgay
         });
+        var notFound = !updateRs
+          || updateRs.success === false
+          || updateRs.error === true
+          || Number(updateRs.code || 0) === 400;
+        var notFoundMessage = String((updateRs && (updateRs.message || updateRs.error)) || "");
+        if (notFound && /khong tim thay ban ghi de cap nhat|không tìm thấy bản ghi để cập nhật/i.test(notFoundMessage)) {
+          await updateRows({
+            app_id: "kqxs",
+            obj_name: tableName,
+            command: "create",
+            obj_update: data,
+            pk_fields: ["field_ngay"],
+            e_where: whereByNgay
+          });
+        }
       }
 
       async function parseMienNamTrung(html, isMienTrung) {

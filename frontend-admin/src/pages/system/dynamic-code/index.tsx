@@ -345,6 +345,48 @@ declare global {
   }
 }
 
+function parseUserAddressValue(raw: any): any[] {
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === "string" && raw.trim()) {
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+function syncRuntimeUserAddress(userAddress: any[]): any[] {
+  const normalized = Array.isArray(userAddress) ? userAddress : [];
+
+  if (typeof window === "undefined") {
+    return normalized;
+  }
+
+  const serialized = JSON.stringify(normalized);
+  window.csmCurrentUser = window.csmCurrentUser || {};
+  window.csmCurrentUser.user_address = serialized;
+  window.csmCurrentUser.user_adress = serialized;
+
+  if ((window as any).seft) {
+    (window as any).seft.Uinfos = (window as any).seft.Uinfos || {};
+    (window as any).seft.Uinfos.userAddress = normalized;
+
+    if ((window as any).seft.user) {
+      (window as any).seft.user.user_address = serialized;
+      (window as any).seft.user.user_adress = serialized;
+    }
+  }
+
+  try {
+    localStorage.setItem("user_address", serialized);
+  } catch {}
+
+  return normalized;
+}
+
 // ============================================================================
 // Helper Functions (from AutoSetup.tsx)
 // ============================================================================
@@ -814,7 +856,21 @@ ${resolvedContainerSelector} select {
   // fetchFromDatabase can resolve pkValue when called immediately from auto-upload scripts.
   if (typeof window !== "undefined") {
     const latestUser = JSON.parse(JSON.stringify(user));
-    if (!window.csmCurrentUser || !(window.csmCurrentUser as any).email) {
+    const runtimeUser = (window.csmCurrentUser as any) || {};
+    const hasStableIdentity = Boolean(
+      runtimeUser.userId
+      || runtimeUser.id
+      || runtimeUser.user_id
+      || runtimeUser.account_id
+      || runtimeUser.app_token
+      || runtimeUser.appToken
+      || runtimeUser.login_identifier
+      || runtimeUser.email
+      || runtimeUser.username
+      || runtimeUser.phoneNumber
+      || runtimeUser.phone_number,
+    );
+    if (!hasStableIdentity) {
       window.csmCurrentUser = latestUser;
     }
   }
@@ -822,19 +878,6 @@ ${resolvedContainerSelector} select {
   // Initialize/refresh window.csmUserData for auto-upload-lmkt.js compatibility.
   // Always refresh to avoid stale closures (old app_id/user after permission/session changes).
   if (typeof window !== "undefined") {
-    const parseUserAddress = (raw: any): any[] => {
-      if (Array.isArray(raw)) return raw;
-      if (typeof raw === "string" && raw.trim()) {
-        try {
-          const parsed = JSON.parse(raw);
-          return Array.isArray(parsed) ? parsed : [];
-        } catch {
-          return [];
-        }
-      }
-      return [];
-    };
-
     const stableStringify = (value: any): string => {
       const sortObject = (input: any): any => {
         if (Array.isArray(input)) {
@@ -909,6 +952,75 @@ ${resolvedContainerSelector} select {
       });
     };
 
+    const normalizeCompare = (value: any): string => String(value ?? "").trim().toLowerCase();
+
+    const scoreUserRow = (row: any, currentUser: any): number => {
+      if (!row || typeof row !== "object") return -1;
+
+      const rowToken = String(row?.app_token || "").trim();
+      const currentToken = String(currentUser?.app_token || currentUser?.appToken || "").trim();
+      if (currentToken && rowToken && rowToken !== currentToken) {
+        return -1;
+      }
+
+      let score = 0;
+
+      const currentIds = [
+        currentUser?.userId,
+        currentUser?.id,
+        currentUser?.user_id,
+        currentUser?.account_id,
+      ].map(normalizeCompare).filter(Boolean);
+      if (currentIds.length > 0 && currentIds.includes(normalizeCompare(row?.id))) score += 1000;
+
+      if (currentToken && rowToken && currentToken === rowToken) score += 700;
+
+      const currentLoginIdentifier = normalizeCompare(currentUser?.login_identifier);
+      if (currentLoginIdentifier && currentLoginIdentifier === normalizeCompare(row?.login_identifier)) score += 500;
+
+      const currentEmail = normalizeCompare(currentUser?.email);
+      if (currentEmail && currentEmail === normalizeCompare(row?.email)) score += 350;
+
+      const currentUsername = normalizeCompare(currentUser?.username);
+      if (currentUsername && currentUsername === normalizeCompare(row?.username)) score += 250;
+
+      const currentPhone = normalizeCompare(currentUser?.phoneNumber || currentUser?.phone_number);
+      const rowPhone = normalizeCompare(row?.phoneNumber || row?.phone_number);
+      if (currentPhone && currentPhone === rowPhone) score += 200;
+
+      const currentParent = normalizeCompare(currentUser?.parent_account_id || currentUser?.app_id);
+      const rowParent = normalizeCompare(row?.parent_account_id);
+      if (currentParent && rowParent && currentParent === rowParent) score += 120;
+
+      return score;
+    };
+
+    const pickBestMatchedRow = (rows: any[], currentUser: any): any | null => {
+      if (!Array.isArray(rows) || rows.length === 0) return null;
+
+      let best: any = null;
+      let bestScore = -1;
+
+      for (const row of rows) {
+        const score = scoreUserRow(row, currentUser);
+        if (score > bestScore) {
+          best = row;
+          bestScore = score;
+        }
+      }
+
+      return bestScore >= 0 ? best : null;
+    };
+
+    const isUpdateSuccessResponse = (response: any): boolean => {
+      if (!response) return false;
+      if (response.success === true) return true;
+      if (Number(response.code) === 200) return true;
+      if (response.data === "success") return true;
+      if (String(response.message || "").toLowerCase() === "ok") return true;
+      return false;
+    };
+
     const fetchAccountRow = async (): Promise<{ row: any; pkField: string; pkValue: any; tableName: string; requestAppId: string } | null> => {
       const currentUser = (window as any).csmCurrentUser || {};
       const identities = getIdentityCandidates(currentUser);
@@ -931,7 +1043,7 @@ ${resolvedContainerSelector} select {
                 type: "eq",
                 value: identity.value,
               },
-              take: 1,
+              take: 20,
             });
 
             const rows = (response as any)?.rows || (response as any)?.data || [];
@@ -939,15 +1051,8 @@ ${resolvedContainerSelector} select {
               continue;
             }
 
-            const row = rows[0] || {};
-
-            // Guard against collisions when identity is not token-based.
-            if (currentAppToken && identity.field !== "app_token") {
-              const rowToken = String(row?.app_token || "").trim();
-              if (rowToken && rowToken !== currentAppToken) {
-                continue;
-              }
-            }
+            const row = pickBestMatchedRow(rows, currentUser);
+            if (!row) continue;
 
             const stableId = row?.id;
             const pkField = stableId ? "id" : identity.field;
@@ -972,14 +1077,11 @@ ${resolvedContainerSelector} select {
     const getUserAddressFallback = (): any[] => {
       try {
         const currentUser = (window as any).csmCurrentUser || {};
-        const fromCurrentUser = parseUserAddress(currentUser.user_address ?? currentUser.user_adress);
+        const fromCurrentUser = parseUserAddressValue(currentUser.user_address ?? currentUser.user_adress);
         if (fromCurrentUser.length > 0) return fromCurrentUser;
 
-        const fromSeft = parseUserAddress((window as any).seft?.Uinfos?.userAddress);
-        if (fromSeft.length > 0) return fromSeft;
-
         const localRaw = localStorage.getItem("user_address");
-        return parseUserAddress(localRaw);
+        return parseUserAddressValue(localRaw);
       } catch {
         return [];
       }
@@ -1011,9 +1113,7 @@ ${resolvedContainerSelector} select {
             if (!account) {
               const fallbackData = getUserAddressFallback();
               if (Array.isArray(fallbackData) && fallbackData.length > 0) {
-                (window as any).csmCurrentUser = (window as any).csmCurrentUser || {};
-                (window as any).csmCurrentUser.user_address = JSON.stringify(fallbackData);
-                localStorage.setItem("user_address", JSON.stringify(fallbackData));
+                syncRuntimeUserAddress(fallbackData);
                 if (typeof callback === "function") callback(true, fallbackData, "Restricted by policy, using self data");
                 return;
               }
@@ -1021,13 +1121,8 @@ ${resolvedContainerSelector} select {
               return;
             }
 
-            const userAddress = parseUserAddress(account.row?.user_address ?? account.row?.user_adress);
-
-            (window as any).csmCurrentUser = (window as any).csmCurrentUser || {};
-            (window as any).csmCurrentUser.user_address = JSON.stringify(userAddress);
-            (window as any).csmCurrentUser.user_adress = (window as any).csmCurrentUser.user_address;
-
-            localStorage.setItem("user_address", JSON.stringify(userAddress));
+            const userAddress = parseUserAddressValue(account.row?.user_address ?? account.row?.user_adress);
+            syncRuntimeUserAddress(userAddress);
 
             if (typeof callback === "function") callback(true, userAddress);
           } catch (error: any) {
@@ -1045,10 +1140,7 @@ ${resolvedContainerSelector} select {
             console.log("Dữ liệu user_address đưa vào là:", newUserData);
             let arr = Array.isArray(newUserData) ? newUserData : [];
             const nextSerialized = stableStringify(arr);
-            (window as any).csmCurrentUser = (window as any).csmCurrentUser || {};
-            (window as any).csmCurrentUser.user_address = JSON.stringify(arr);
-            (window as any).csmCurrentUser.user_adress = (window as any).csmCurrentUser.user_address;
-            localStorage.setItem("user_address", JSON.stringify(arr));
+            syncRuntimeUserAddress(arr);
 
             const account = await fetchAccountRow();
             if (!account) {
@@ -1063,7 +1155,7 @@ ${resolvedContainerSelector} select {
               [account.pkField]: account.pkValue
             };
 
-            const currentUserAddress = parseUserAddress(account.row?.user_address ?? account.row?.user_adress);
+            const currentUserAddress = parseUserAddressValue(account.row?.user_address ?? account.row?.user_adress);
             const currentSerialized = stableStringify(currentUserAddress);
             if (currentSerialized === nextSerialized) {
               console.log("ℹ️ [csmUserData.set] Skipped database update because user_address is unchanged");
@@ -1087,7 +1179,7 @@ ${resolvedContainerSelector} select {
                 pk_fields: [account.pkField],
               });
               
-              if (response?.success) {
+              if (isUpdateSuccessResponse(response)) {
                 console.log("✅ Updated user_address to database successfully");
                 if (typeof callback === "function") callback(true);
               } else {
@@ -1112,7 +1204,12 @@ ${resolvedContainerSelector} select {
   // Sync current user to window
   useEffect(() => {
     if (typeof window !== "undefined") {
-      window.csmCurrentUser = JSON.parse(JSON.stringify(user));
+      const nextUser = JSON.parse(JSON.stringify(user));
+      const nextAddress = parseUserAddressValue(nextUser?.user_address ?? nextUser?.user_adress);
+      const existingAddress = parseUserAddressValue((window.csmCurrentUser as any)?.user_address ?? (window.csmCurrentUser as any)?.user_adress);
+
+      window.csmCurrentUser = nextUser;
+      syncRuntimeUserAddress(nextAddress.length > 0 ? nextAddress : existingAddress);
     }
   }, [user]);
 
@@ -1363,7 +1460,7 @@ ${resolvedContainerSelector} select {
     const currentUserAny = (window as any).csmCurrentUser || user || {};
     if (!Array.isArray(userAddress)) {
       try {
-        const fromCurrent = currentUserAny?.user_address;
+        const fromCurrent = currentUserAny?.user_address ?? currentUserAny?.user_adress;
         userAddress = typeof fromCurrent === "string" ? JSON.parse(fromCurrent) : fromCurrent;
       } catch {
         userAddress = undefined;
@@ -1444,6 +1541,7 @@ ${resolvedContainerSelector} select {
           command: (params?.command as any) || "update",
           obj_update: params?.obj_update || params?.obj || {},
           pk_fields: params?.pk_fields,
+          where: params?.e_where || params?.where,
         } as any)
           .then((res: any) => fn?.(res))
           .catch((error: any) => fn?.({ success: false, error: (error as any)?.message || error }));
@@ -1487,6 +1585,7 @@ ${resolvedContainerSelector} select {
               command: (params?.command as any) || "update",
               obj_update: params?.obj_update || params?.obj || {},
               pk_fields: params?.pk_fields,
+              where: params?.e_where || params?.where,
             } as any)
               .then((res: any) => callback(res))
               .catch((error: any) => callback({ success: false, error: (error as any)?.message || error }));
@@ -1561,15 +1660,12 @@ ${resolvedContainerSelector} select {
 
     try {
       const currentUserAny = (window as any).csmCurrentUser || user || {};
-      const currentAddress = currentUserAny?.user_address;
-      const parsedAddress = Array.isArray(currentAddress)
-        ? currentAddress
-        : (typeof currentAddress === "string" && currentAddress.trim()
-          ? JSON.parse(currentAddress)
-          : undefined);
+      const parsedAddress = parseUserAddressValue(currentUserAny?.user_address ?? currentUserAny?.user_adress);
+      (window as any).seft.Uinfos = (window as any).seft.Uinfos || {};
+      (window as any).seft.Uinfos.userAddress = parsedAddress;
 
-      if (Array.isArray(parsedAddress) && parsedAddress.length > 0) {
-        localStorage.setItem("user_address", JSON.stringify(parsedAddress));
+      if (Array.isArray(parsedAddress)) {
+        syncRuntimeUserAddress(parsedAddress);
       }
     } catch {
       // Keep compatibility sync best-effort only.
