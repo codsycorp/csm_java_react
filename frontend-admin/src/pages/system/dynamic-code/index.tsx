@@ -1252,6 +1252,11 @@ ${resolvedContainerSelector} select {
   // CRITICAL: Expose dependencies IMMEDIATELY (not in useEffect) to ensure they're available when code executes
   // ============================================
   if (typeof window !== 'undefined') {
+    (window as any).__csmDynamicUiRuntime = {
+      language: i18n?.language || i18nInstance.language || "vi",
+      isDark: Boolean(isDark),
+    };
+
     // Notification helpers - always available
     if (!(window as any).thongbao) {
       (window as any).thongbao = (msg: string) => notification.success({ message: msg });
@@ -1282,12 +1287,23 @@ ${resolvedContainerSelector} select {
     if (!Object.getOwnPropertyDescriptor(window, 'antd')) {
       Object.defineProperty(window, 'antd', {
         get() {
+          const runtimeUi = ((window as any).__csmDynamicUiRuntime || {}) as { language?: string; isDark?: boolean };
+          const runtimeLanguage = runtimeUi.language || (window as any)?.i18n?.language || i18nInstance.language || "vi";
+          const languageKey = String(runtimeLanguage || "vi").trim();
+          const baseLanguageKey = languageKey.includes("-") ? languageKey.split("-")[0] : languageKey;
+          const localeMap = (ANT_DESIGN_LOCALE as any) || {};
+          const antdLocale = localeMap[languageKey] || localeMap[baseLanguageKey] || localeMap.vi || Object.values(localeMap)[0];
+          const runtimeIsDark = Boolean(
+            runtimeUi.isDark
+            ?? (window as any)?.csmTheme?.isDark
+          );
+
           return {
             notification, Table, Tabs, Button, Input, InputNumber, Select, Card, Space, Popconfirm, ConfigProvider, DatePicker, Row, Col, Switch, Progress, Tag, dayjs, CsmDynamicGrid,
             CsmCrmWorkspace,
             CsmKanbanBoard,
-            antdLocale: ANT_DESIGN_LOCALE[language],
-            antdThemeConfig: isDark ? customAntdDarkTheme : customAntdLightTheme,
+            antdLocale,
+            antdThemeConfig: runtimeIsDark ? customAntdDarkTheme : customAntdLightTheme,
             googleIndexUrl: (CsmApi as any).googleIndexUrl,
             checkGoogleIndexQuota: (CsmApi as any).checkGoogleIndexQuota,
             checkGoogleIndexStatus: (CsmApi as any).checkGoogleIndexStatus,

@@ -5032,11 +5032,17 @@ function mainAppCode() {
     }
 
     const antdLib = resolveWindowModule(window.antd) || {};
-    const { Card, Input, Select, Button, Space, Tabs } = antdLib;
+    const { Card, Input, Select, Button, Space, Tabs, ConfigProvider } = antdLib;
     if (!Card || !Input || !Select || !Button || !Space || !Tabs) {
       console.error('Ant Design components not available');
       return null;
     }
+
+    const runtimeTheme = window.csmTheme || {};
+    const isDark = runtimeTheme.isDark === true;
+    const panelBg = (typeof runtimeTheme.getBackgroundColor === 'function' ? runtimeTheme.getBackgroundColor() : '') || (isDark ? '#141414' : '#ffffff');
+    const panelText = (typeof runtimeTheme.getTextColor === 'function' ? runtimeTheme.getTextColor() : '') || (isDark ? '#ffffff' : '#1f1f1f');
+    const panelBorder = (typeof runtimeTheme.getBorderColor === 'function' ? runtimeTheme.getBorderColor() : '') || (isDark ? '#303030' : '#d9d9d9');
 
     console.log('Creating React elements...');
 
@@ -5123,7 +5129,12 @@ function mainAppCode() {
     // Render with Tabs
     const content = React.createElement(Card, {
       title: 'Quản lý SEO Automation',
-      style: { margin: 8 }
+      style: {
+        margin: 8,
+        background: panelBg,
+        color: panelText,
+        borderColor: panelBorder
+      }
     },
       React.createElement(Tabs, {
         defaultActiveKey: '2',
@@ -5142,88 +5153,169 @@ function mainAppCode() {
       })
     );
 
+    if (typeof ConfigProvider === 'function') {
+      const providerProps = {};
+      if (antdLib.antdLocale) providerProps.locale = antdLib.antdLocale;
+      if (antdLib.antdThemeConfig) providerProps.theme = antdLib.antdThemeConfig;
+      return React.createElement(ConfigProvider, providerProps, content);
+    }
+
     return content;
   };
 
-  // Render React components - delay để ensure window.ReactDOM đã được expose
-  setTimeout(function () {
-    console.log('=== Starting render ===');
-    console.log('window.React:', !!window.React);
-    console.log('window.ReactDOM:', !!window.ReactDOM);
-    console.log('window.antd:', !!window.antd);
-    console.log('window.renderSettingPanel:', !!window.renderSettingPanel);
+  window.__seoRenderRuntime = window.__seoRenderRuntime || {
+    panelRoot: null,
+    panelContainer: null,
+    gridRoot: null,
+    gridContainer: null,
+    pendingRenderTimer: null,
+    listenersBound: false,
+    uiChangeHandler: null,
+    recovering: false,
+    recoverObserver: null
+  };
 
+  window.renderSeoApp = function (reason) {
     try {
+      const runtime = window.__seoRenderRuntime || {};
+      const React = window.React;
+      const ReactDOM = window.ReactDOM;
+      if (!React || !ReactDOM || typeof ReactDOM.createRoot !== 'function') {
+        console.error('❌ window.ReactDOM/window.React chưa sẵn sàng');
+        return;
+      }
+
+      if (typeof window.renderSettingPanel !== 'function') {
+        console.error('❌ window.renderSettingPanel chưa sẵn sàng');
+        return;
+      }
+
       const container = document.querySelector('#context-auto');
-      console.log('Container found:', !!container);
-
       if (!container) {
-        console.error('❌ Container #context-auto not found');
+        if (!runtime.recovering) {
+          runtime.recovering = true;
+          setTimeout(function () {
+            runtime.recovering = false;
+            window.renderSeoApp('container-retry');
+          }, 250);
+        }
         return;
       }
 
-      if (!window.ReactDOM || !window.React) {
-        console.error('❌ window.ReactDOM hoặc window.React chưa được expose');
-        return;
+      if (!runtime.panelRoot || runtime.panelContainer !== container) {
+        runtime.panelRoot = ReactDOM.createRoot(container);
+        runtime.panelContainer = container;
       }
 
-      if (!window.renderSettingPanel) {
-        console.error('❌ window.renderSettingPanel not defined');
-        return;
-      }
-
-      console.log('Creating root...');
-      const root = window.ReactDOM.createRoot(container);
-
-      console.log('Creating component...');
-      const component = window.renderSettingPanel();
-
-      if (!component) {
+      const panel = window.renderSettingPanel();
+      if (!panel) {
         console.error('❌ renderSettingPanel returned null/undefined');
         return;
       }
 
-      console.log('Rendering component...');
-      root.render(component);
-      console.log('✅ renderSettingPanel đã render thành công');
+      runtime.panelRoot.render(panel);
+      console.log('[renderSeoApp] ✅ Render panel xong. reason =', reason || 'initial');
 
-      // Render CsmDynamicGrid vào tab 2
-      setTimeout(function () {
+      const renderGridWithRetry = function (attempt) {
+        const maxAttempts = 20;
         const gridContainer = document.getElementById('keyword-grid-container');
-        if (gridContainer) {
-          console.log('Rendering CsmDynamicGrid...');
-          const gridRoot = window.ReactDOM.createRoot(gridContainer);
-          const gridElement = window.renderKeywordGrid();
-
-          if (!gridElement) {
-            console.error('❌ renderKeywordGrid returned null/undefined');
-            return;
+        if (!gridContainer) {
+          if (attempt < maxAttempts) {
+            setTimeout(function () {
+              renderGridWithRetry(attempt + 1);
+            }, 100);
           }
-
-          const I18nextProvider =
-            resolveWindowModule(window.I18nextProvider) ||
-            resolveWindowModule(window.reactI18next)?.I18nextProvider ||
-            resolveWindowModule(window.ReactI18next)?.I18nextProvider;
-          const providerReady = !!I18nextProvider && !!window.i18n;
-          gridRoot.render(
-            providerReady
-              ? window.React.createElement(
-                  I18nextProvider,
-                  { i18n: window.i18n },
-                  gridElement
-                )
-              : gridElement
-          );
-          if (!providerReady) {
-            console.warn('⚠️ I18nextProvider hoặc i18n chưa sẵn sàng, render grid không bọc provider');
-          }
-          console.log('✅ CsmDynamicGrid đã render thành công');
+          return;
         }
-      }, 5000);
+
+        if (!runtime.gridRoot || runtime.gridContainer !== gridContainer) {
+          runtime.gridRoot = ReactDOM.createRoot(gridContainer);
+          runtime.gridContainer = gridContainer;
+        }
+
+        const gridElement = window.renderKeywordGrid();
+        if (!gridElement) {
+          console.error('❌ renderKeywordGrid returned null/undefined');
+          return;
+        }
+
+        const antdLib = resolveWindowModule(window.antd) || {};
+        const ConfigProvider = antdLib.ConfigProvider;
+        const I18nextProvider =
+          resolveWindowModule(window.I18nextProvider) ||
+          resolveWindowModule(window.reactI18next)?.I18nextProvider ||
+          resolveWindowModule(window.ReactI18next)?.I18nextProvider;
+
+        const providerReady = !!I18nextProvider && !!window.i18n;
+        let wrappedGrid = providerReady
+          ? React.createElement(I18nextProvider, { i18n: window.i18n }, gridElement)
+          : gridElement;
+
+        if (!providerReady) {
+          console.warn('⚠️ I18nextProvider hoặc i18n chưa sẵn sàng, render grid không bọc provider');
+        }
+
+        if (typeof ConfigProvider === 'function') {
+          const providerProps = {};
+          if (antdLib.antdLocale) providerProps.locale = antdLib.antdLocale;
+          if (antdLib.antdThemeConfig) providerProps.theme = antdLib.antdThemeConfig;
+          wrappedGrid = React.createElement(ConfigProvider, providerProps, wrappedGrid);
+        }
+
+        runtime.gridRoot.render(wrappedGrid);
+        console.log('[renderSeoApp] ✅ Render grid xong. reason =', reason || 'initial');
+      };
+
+      renderGridWithRetry(0);
+      window.__seoRenderRuntime = runtime;
     } catch (err) {
-      console.error('❌ Lỗi khi render:', err);
-      console.error('Stack:', err.stack);
+      console.error('❌ Lỗi khi render SEO app:', err);
+      console.error('Stack:', err && err.stack ? err.stack : err);
     }
+  };
+
+  if (!window.__seoRenderRuntime.listenersBound) {
+    const onRuntimeUiChange = function (event) {
+      const runtime = window.__seoRenderRuntime || {};
+      if (runtime.pendingRenderTimer) {
+        clearTimeout(runtime.pendingRenderTimer);
+      }
+      runtime.pendingRenderTimer = setTimeout(function () {
+        window.renderSeoApp('runtime-ui-change');
+      }, 120);
+      window.__seoRenderRuntime = runtime;
+      console.log('[renderSeoApp] Runtime UI change event:', event && event.type ? event.type : 'unknown');
+    };
+
+    window.addEventListener('csm:theme-change', onRuntimeUiChange);
+    window.addEventListener('csm:locale-change', onRuntimeUiChange);
+    window.addEventListener('focus', onRuntimeUiChange);
+    document.addEventListener('visibilitychange', function () {
+      if (!document.hidden) onRuntimeUiChange({ type: 'visibilitychange' });
+    });
+    window.__seoRenderRuntime.uiChangeHandler = onRuntimeUiChange;
+    window.__seoRenderRuntime.listenersBound = true;
+  }
+
+  if (!window.__seoRenderRuntime.recoverObserver) {
+    const recoverObserver = new MutationObserver(function () {
+      const runtime = window.__seoRenderRuntime || {};
+      const container = document.querySelector('#context-auto');
+      if (!container) return;
+      if (runtime.panelContainer !== container) {
+        if (runtime.pendingRenderTimer) clearTimeout(runtime.pendingRenderTimer);
+        runtime.pendingRenderTimer = setTimeout(function () {
+          window.renderSeoApp('container-changed');
+        }, 80);
+        window.__seoRenderRuntime = runtime;
+      }
+    });
+    recoverObserver.observe(document.body, { childList: true, subtree: true });
+    window.__seoRenderRuntime.recoverObserver = recoverObserver;
+  }
+
+  setTimeout(function () {
+    window.renderSeoApp('initial');
   }, 500);
 
   setTimeout(function () {
