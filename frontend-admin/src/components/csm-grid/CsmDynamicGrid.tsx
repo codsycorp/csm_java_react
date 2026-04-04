@@ -578,7 +578,7 @@ export function CsmDynamicGrid({
 						if (!querySpec?.obj_name) return;
 						
 						const tableName = querySpec.obj_name;
-						const queryAppId = querySpec.app_id || appId || userAppId || 'csm';
+						const queryAppId = querySpec.app_id || userAppId || appId || 'csm';
 						let whereClause = querySpec.obj_where;
 						
 						// Default obj_where if not provided or invalid
@@ -634,8 +634,8 @@ export function CsmDynamicGrid({
 		queryAppId?: string,
 		whereClause?: any
 	): Promise<boolean> => {
-		// Fallback appId: query.app_id > props.appId > user.app_id
-		const effectiveAppId = queryAppId || appId || userAppId || 'csm';
+		// Fallback appId: query.app_id > logged-in user.app_id > props.appId
+		const effectiveAppId = queryAppId || userAppId || appId || 'csm';
 		
 		// Include where clause in cache key to handle different filters on same table
 		const whereSuffix = whereClause ? `::${JSON.stringify(whereClause)}` : '';
@@ -826,8 +826,7 @@ export function CsmDynamicGrid({
 		try {
 			code = effectiveDecrypt(code);
 		} catch (err) {
-			console.error(`Decrypt error for ${triggerName} trigger:`, err);
-			return rowData;
+			console.warn(`Decrypt failed for ${triggerName} trigger, using raw code:`, err);
 		}
 		const fn = safeEval(["seft", "data", "bang"], code) as ((seft: any, data: Row, bang: Database) => any) | null;
 		if (!fn) return rowData;
@@ -854,8 +853,7 @@ export function CsmDynamicGrid({
 		try {
 			code = effectiveDecrypt(code);
 		} catch (err) {
-			console.error(`Decrypt error for ${triggerName} trigger:`, err);
-			return;
+			console.warn(`Decrypt failed for ${triggerName} trigger, using raw code:`, err);
 		}
 		const fn = safeEval(["seft", "data", "bang"], code) as ((seft: any, data: Row, bang: Database) => any) | null;
 		if (!fn) return;

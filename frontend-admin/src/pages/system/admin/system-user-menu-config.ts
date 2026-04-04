@@ -104,7 +104,7 @@ const ROLE_SELECT_QUERY_JSON = JSON.stringify({
 	query: [
 		{
 			obj_name: "csm_roles",
-			fields: ["role_code", "role_name"],
+			fields: ["id", "role_name"],
 			obj_where: { field: "id", type: "like", value: "" },
 		},
 	],
@@ -178,7 +178,7 @@ export const PERMISSION_GROUP_QUERY_JSON = JSON.stringify({
 	query: [
 		{
 			obj_name: "csm_roles",
-			fields: ["role_code", "role_name"],
+			fields: ["id", "role_name"],
 			obj_where: { field: "id", type: "like", value: "" },
 		},
 	],
@@ -587,7 +587,7 @@ function beforeSave(row, seft) {
 					return parsed.map((item) => String(item || "").trim()).filter(Boolean);
 				}
 			} catch (error) {}
-			return raw.split(/[,;\n]/g).map((item) => item.trim()).filter(Boolean);
+			return raw.split(/[,;\\n]/g).map((item) => item.trim()).filter(Boolean);
 		}
 		return [];
 	}
@@ -988,7 +988,7 @@ function beforeSave(row, seft) {
 					return parsed.map((item) => String(item || "").trim()).filter(Boolean);
 				}
 			} catch (error) {}
-			return raw.split(/[,;\n]/g).map((item) => item.trim()).filter(Boolean);
+			return raw.split(/[,;\\n]/g).map((item) => item.trim()).filter(Boolean);
 		}
 		return [];
 	}
@@ -1089,6 +1089,223 @@ function beforeSave(row, seft) {
 	if (row.actived == null) row.actived = true;
 	return row;
 }
+`;
+
+export const SYSTEM_USER_UPDATE_TRIGGER = `
+function uniqueList(items) {
+	return Array.from(new Set((items || []).map((item) => String(item || "").trim()).filter(Boolean)));
+}
+
+function normalizeList(value) {
+	if (Array.isArray(value)) {
+		return value.map((item) => {
+			if (item && typeof item === "object") {
+				return String(item.value ?? item.id ?? item.key ?? item.code ?? "").trim();
+			}
+			return String(item || "").trim();
+		}).filter(Boolean);
+	}
+	if (typeof value === "string") {
+		const raw = value.trim();
+		if (!raw) return [];
+		try {
+			const parsed = JSON.parse(raw);
+			if (Array.isArray(parsed)) return parsed.map((item) => String(item || "").trim()).filter(Boolean);
+		} catch (e) {}
+		return raw.split(/[,;\\n]/g).map((item) => item.trim()).filter(Boolean);
+	}
+	return [];
+}
+
+function listMinus(source, denied) {
+	const denySet = new Set(uniqueList(denied).map((item) => item.toLowerCase()));
+	return uniqueList(source).filter((item) => !denySet.has(item.toLowerCase()));
+}
+
+function buildPresetPermissions(preset) {
+	const normalized = String(preset || "").trim().toLowerCase();
+	const map = {
+		viewer: ["view"],
+		editor: ["view", "create", "edit"],
+		full_crud: ["view", "create", "edit", "delete"],
+		full_crud_export: ["view", "create", "edit", "delete", "export"],
+		admin_full: ["admin", "view", "create", "edit", "delete", "export", "scope:all"],
+	};
+	return uniqueList(map[normalized] || []);
+}
+
+function buildPresetMenus(preset) {
+	const normalized = String(preset || "").trim().toLowerCase();
+	const map = {
+		viewer: ["/home"],
+		editor: ["/dashboard", "/home", "/crm"],
+		full_crud: ["/dashboard", "/home", "/crm"],
+		full_crud_export: ["/dashboard", "/home", "/crm"],
+		admin_full: ["/system/user", "/system/menu", "/system/dept", "/dashboard", "/home", "/crm"],
+	};
+	return uniqueList(map[normalized] || []);
+}
+
+function buildGroupPermissionsFallback(groups) {
+	const map = {
+		admin: ["admin", "view", "create", "edit", "delete", "export", "scope:all"],
+		system_admin: ["admin", "view", "create", "edit", "delete", "export", "scope:all"],
+		dept_manager: ["view", "create", "edit", "export", "scope:department"],
+		manager: ["view", "create", "edit", "export", "scope:department"],
+		staff: ["view", "create", "edit", "scope:owner"],
+		user: ["view", "scope:owner"],
+		common: ["view", "scope:owner"],
+		viewer: ["view", "scope:owner"],
+	};
+	const normalizedGroups = uniqueList(groups).map((item) => item.toLowerCase());
+	const collected = [];
+	normalizedGroups.forEach((groupName) => {
+		const values = map[groupName];
+		if (Array.isArray(values)) collected.push(...values);
+	});
+	return uniqueList(collected);
+}
+
+function buildGroupMenusFallback(groups) {
+	const map = {
+		admin: ["/system/user", "/system/menu", "/system/dept", "/dashboard", "/home", "/crm"],
+		system_admin: ["/system/user", "/system/menu", "/system/dept", "/dashboard", "/home", "/crm"],
+		dept_manager: ["/system/user", "/dashboard", "/home", "/crm"],
+		manager: ["/system/user", "/dashboard", "/home", "/crm"],
+		staff: ["/dashboard", "/home", "/crm"],
+		user: ["/home"],
+		common: ["/home"],
+		viewer: ["/dashboard", "/home"],
+	};
+	const normalizedGroups = uniqueList(groups).map((item) => item.toLowerCase());
+	const collected = [];
+	normalizedGroups.forEach((groupName) => {
+		const values = map[groupName];
+		if (Array.isArray(values)) collected.push(...values);
+	});
+	return uniqueList(collected);
+}
+
+function resolveGroupBaseFromDatabase(groups, seft) {
+	const rows = Array.isArray(seft?.database?.csm_roles)
+		? seft.database.csm_roles
+		: (Array.isArray(seft?.database?.csm_roles?.rows) ? seft.database.csm_roles.rows : []);
+	if (!Array.isArray(rows) || rows.length === 0) {
+		return { permissions: [], menus: [] };
+	}
+
+	const normalizedGroups = uniqueList(groups).map((item) => String(item || "").trim().toLowerCase());
+	const permissions = [];
+	const menus = [];
+
+	normalizedGroups.forEach((groupId) => {
+		const matched = rows.find((r) => {
+			const id = String(r?.id || "").trim().toLowerCase();
+			const roleCode = String(r?.role_code || "").trim().toLowerCase();
+			return groupId === id || groupId === roleCode;
+		});
+		if (!matched) return;
+		permissions.push(...normalizeList(matched.permissions));
+		menus.push(...normalizeList(matched.menusPermissions));
+	});
+
+	return { permissions: uniqueList(permissions), menus: uniqueList(menus) };
+}
+
+function applyDataScope(perms, scope) {
+	const selectedScope = String(scope || "").trim().toUpperCase();
+	const scopeMap = {
+		OWNER: "scope:owner",
+		DEPARTMENT: "scope:department",
+		BRANCH: "scope:branch",
+		ALL: "scope:all",
+	};
+	const scopeToken = scopeMap[selectedScope] || "";
+	const cleaned = uniqueList(perms).filter((token) => {
+		const t = String(token || "").trim().toLowerCase();
+		return t !== "scope:owner" && t !== "scope:department" && t !== "scope:branch" && t !== "scope:all";
+	});
+	if (scopeToken) cleaned.push(scopeToken);
+	return uniqueList(cleaned);
+}
+
+function toBitfield(permissions, menusPermissions, dataScope) {
+	const actionBitMap = { view: 0, create: 1, edit: 2, delete: 3, export: 4 };
+	const menuBitMap = {
+		dashboard: 0, "/dashboard": 0,
+		home: 0, "/home": 0,
+		user: 1, "/system/user": 1,
+		menu: 3, "/system/menu": 3,
+		dept: 4, "/system/dept": 4,
+		developer: 5, "/system/developer": 5,
+		broadcast: 6, "/system/broadcast": 6,
+		report: 7, "/system/report": 7,
+		crm: 8, "/crm": 8,
+	};
+	const scopeBitMap = { OWNER: 0, DEPARTMENT: 1, BRANCH: 2, ALL: 3 };
+	const TOKEN_SIGNATURE = 0x43534d33n;
+	let menuMask = 0n;
+	let actionMask = 0n;
+	let scopeMask = 0n;
+
+	uniqueList(permissions).forEach((token) => {
+		const bit = actionBitMap[String(token || "").trim().toLowerCase()];
+		if (typeof bit === "number") actionMask = actionMask | (1n << BigInt(bit));
+	});
+	uniqueList(menusPermissions).forEach((token) => {
+		const bit = menuBitMap[String(token || "").trim().toLowerCase()];
+		if (typeof bit === "number" && bit <= 15) menuMask = menuMask | (1n << BigInt(bit));
+	});
+
+	const scopeBit = scopeBitMap[String(dataScope || "").trim().toUpperCase()];
+	if (typeof scopeBit === "number") scopeMask = scopeMask | (1n << BigInt(scopeBit));
+	return (menuMask << 48n) | (actionMask << 40n) | (scopeMask << 32n) | TOKEN_SIGNATURE;
+}
+
+const row = data || {};
+row.permissionGroups = normalizeList(row.permissionGroups);
+row.permissions = normalizeList(row.permissions);
+row.permissionsAdd = normalizeList(row.permissionsAdd);
+row.permissionsDeny = normalizeList(row.permissionsDeny);
+row.menusPermissions = normalizeList(row.menusPermissions);
+row.menusPermissionsAdd = normalizeList(row.menusPermissionsAdd);
+row.menusPermissionsDeny = normalizeList(row.menusPermissionsDeny);
+row.permissionPreset = String(row.permissionPreset || "").trim();
+
+row.permissionsAdd = listMinus(row.permissionsAdd, row.permissionsDeny);
+row.menusPermissionsAdd = listMinus(row.menusPermissionsAdd, row.menusPermissionsDeny);
+
+const hasPermissionGroups = row.permissionGroups.length > 0;
+const fromPreset = hasPermissionGroups ? [] : buildPresetPermissions(row.permissionPreset);
+const presetMenus = hasPermissionGroups ? [] : buildPresetMenus(row.permissionPreset);
+
+let effectivePermissions = [];
+let effectiveMenus = [];
+
+if (hasPermissionGroups) {
+	const dbBase = resolveGroupBaseFromDatabase(row.permissionGroups, seft);
+	const fallbackPermissions = buildGroupPermissionsFallback(row.permissionGroups);
+	const fallbackMenus = buildGroupMenusFallback(row.permissionGroups);
+	const basePermissions = dbBase.permissions.length > 0 ? dbBase.permissions : fallbackPermissions;
+	const baseMenus = dbBase.menus.length > 0 ? dbBase.menus : fallbackMenus;
+
+	effectivePermissions = listMinus(uniqueList([...(basePermissions || []), ...(row.permissionsAdd || [])]), row.permissionsDeny);
+	effectiveMenus = listMinus(uniqueList([...(baseMenus || []), ...(row.menusPermissionsAdd || [])]), row.menusPermissionsDeny);
+} else {
+	const basePermissionAllow = uniqueList([...(row.permissions || []), ...(fromPreset || [])]);
+	const mergedPermissionAllow = uniqueList([...(basePermissionAllow || []), ...(row.permissionsAdd || [])]);
+	effectivePermissions = listMinus(mergedPermissionAllow, row.permissionsDeny);
+
+	const baseMenuAllow = uniqueList([...(row.menusPermissions || []), ...(presetMenus || [])]);
+	const mergedMenuAllow = uniqueList([...(baseMenuAllow || []), ...(row.menusPermissionsAdd || [])]);
+	effectiveMenus = listMinus(mergedMenuAllow, row.menusPermissionsDeny);
+}
+
+effectivePermissions = applyDataScope(effectivePermissions, row.dataScope);
+row.permissionBitfield = toBitfield(effectivePermissions, effectiveMenus, row.dataScope).toString(36).toUpperCase();
+row.permissionSchemaVersion = "v3";
+
+return row;
 `;
 
 export const PERMISSION_GROUP_BEFORE_SAVE = `
@@ -1322,7 +1539,7 @@ export function getDefaultSystemUserModeConfig(
 	return {
 		table_name: mode === "main" ? "csm_accounts" : "csm_group_members",
 		table: mergeMenuTableFields([], defaultFields, t),
-		trigger: { beforeSave: defaultBeforeSave },
+		trigger: { beforeSave: defaultBeforeSave, update: SYSTEM_USER_UPDATE_TRIGGER },
 		type_form: 1,
 		row_type_edit: 0,
 		g_readonly: false,
@@ -1344,6 +1561,7 @@ function normalizeModeConfig(
 		trigger: {
 			...rawTrigger,
 			beforeSave: rawTrigger.beforeSave || (fallback.trigger as any)?.beforeSave,
+			update: rawTrigger.update || (fallback.trigger as any)?.update,
 		},
 		type_form: rawMode?.type_form ?? fallback.type_form,
 		row_type_edit: rawMode?.row_type_edit ?? fallback.row_type_edit,

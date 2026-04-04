@@ -1728,8 +1728,7 @@ export function CsmEditModal({
       try {
         triggerCode = decrypt(triggerCode);
       } catch (err) {
-        console.error(`[CsmEditModal.applyRowTrigger] Failed to decrypt ${triggerName}:`, err);
-        return null;
+      console.warn(`[CsmEditModal.applyRowTrigger] Decrypt failed for ${triggerName}, using raw trigger code`, err);
       }
     }
 
