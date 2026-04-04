@@ -61,6 +61,10 @@ public class TableHandler {
         "dept_id", "branch_id", "department_id", "team_id"   // Tổ chức
     );
     private static final Map<String, List<String>> AUTO_PERMISSION_SCHEMA_FIELDS = createAutoPermissionSchemaFields();
+    private static final List<String> GENERIC_BUSINESS_PERMISSION_FIELDS = List.of(
+        "permissionBitfield", "permissionSchemaVersion", "dataScope",
+        "created_by", "dept_id", "branch_id"
+    );
     private static final Map<String, List<String>> DEFAULT_TABLE_PK_FIELDS = createDefaultTablePkFields();
     private static final Map<String, List<String>> DEFAULT_TABLE_FIELDS = createDefaultTableFields();
     private static final Set<String> LEGACY_SCOPE_MIGRATED_TABLES = ConcurrentHashMap.newKeySet();
@@ -1281,7 +1285,7 @@ public class TableHandler {
             }
 
             String normalized = String.valueOf(current).trim().toLowerCase(Locale.ROOT);
-            if (allowedValues.isEmpty() || !allowedValues.contains(normalized)) {
+            if (allowedValues == null || allowedValues.isEmpty() || !allowedValues.contains(normalized)) {
                 return errorMessage;
             }
             return null;
@@ -2745,6 +2749,7 @@ public class TableHandler {
                 if (createGuardError != null) {
                     return errorResponse(createGuardError);
                 }
+                ensureBusinessPermissionSchemaValues(tblname, objUpdate, accessContext);
                 ensureRowId(objUpdate);
                 if (!effectivePkFields.isEmpty() && !hasAnyPrimaryKeyValue(objUpdate, effectivePkFields)) {
                     return errorResponse("Thiếu khóa chính: cần ít nhất 1 trong các trường " + String.join(", ", effectivePkFields));
@@ -2830,6 +2835,8 @@ public class TableHandler {
                         if (updateGuardError != null) {
                             return errorResponse(updateGuardError);
                         }
+
+                        ensureBusinessPermissionSchemaValues(tblname, newRow, accessContext);
 
                         ensureRowId(newRow);
 
@@ -3361,10 +3368,10 @@ public class TableHandler {
     }
 
     private void ensureAutoPermissionSchemaForTable(String appId, String tableName, Map<String, Object> structRecord, Map<String, Object> structMap) {
-        if (!"csm".equals(appId) || structRecord == null || structMap == null) {
+        if (structRecord == null || structMap == null) {
             return;
         }
-        List<String> requiredFields = AUTO_PERMISSION_SCHEMA_FIELDS.get(tableName);
+        List<String> requiredFields = getAutoPermissionSchemaFields(appId, tableName);
         if (requiredFields == null || requiredFields.isEmpty()) {
             return;
         }
@@ -3406,6 +3413,80 @@ public class TableHandler {
         structMap.remove("fieldssearch");
         structRecord.put("struct", structMap);
         recordManager.createRecord(appId, "index", structRecord, List.of("id"));
+    }
+
+    private List<String> getAutoPermissionSchemaFields(String appId, String tableName) {
+        if (tableName == null || tableName.isBlank()) {
+            return Collections.emptyList();
+        }
+
+        List<String> systemFields = AUTO_PERMISSION_SCHEMA_FIELDS.get(tableName);
+        if (systemFields != null && !systemFields.isEmpty()) {
+            return systemFields;
+        }
+
+        if (!isDataScopeExemptTable(tableName)) {
+            return GENERIC_BUSINESS_PERMISSION_FIELDS;
+        }
+
+        return Collections.emptyList();
+    }
+
+    private String resolveBusinessRowDataScope(Map<String, Object> row, UserAccessContext accessContext) {
+        String existingScope = normalizeScopeName(safeStr(row == null ? null : row.get("dataScope")));
+        if (!existingScope.isBlank() && !"NONE".equals(existingScope)) {
+            return existingScope;
+        }
+
+        if (row != null) {
+            if (hasNonBlank(row.get("branch_id"))) {
+                return "BRANCH";
+            }
+            if (hasNonBlank(row.get("dept_id"))) {
+                return "DEPARTMENT";
+            }
+            if (hasNonBlank(row.get("created_by"))) {
+                return "OWNER";
+            }
+        }
+
+        String accessScope = normalizeScopeName(accessContext == null ? "" : accessContext.dataScope);
+        if (!accessScope.isBlank()) {
+            return accessScope;
+        }
+
+        return (accessContext != null && accessContext.preferredOwner != null && !accessContext.preferredOwner.isBlank())
+            ? "OWNER"
+            : "NONE";
+    }
+
+    private List<String> buildBusinessRowPermissionSeed(String dataScope) {
+        List<String> permissions = new ArrayList<>(List.of("view", "edit"));
+        return applyScopeToken(permissions, dataScope);
+    }
+
+    private void ensureBusinessPermissionSchemaValues(String tableName, Map<String, Object> row, UserAccessContext accessContext) {
+        if (row == null || isDataScopeExemptTable(tableName)) {
+            return;
+        }
+
+        stampHierarchyScopeFields(row, accessContext);
+
+        String resolvedScope = resolveBusinessRowDataScope(row, accessContext);
+        if (!hasNonBlank(row.get("permissionSchemaVersion"))) {
+            row.put("permissionSchemaVersion", "v3");
+        }
+        if (!hasNonBlank(row.get("dataScope")) && !resolvedScope.isBlank()) {
+            row.put("dataScope", resolvedScope);
+        }
+        if (!hasNonBlank(row.get("permissionBitfield"))) {
+            long bitfield = PermissionBitfieldUtil.buildBitfield(
+                buildBusinessRowPermissionSeed(resolvedScope),
+                Collections.emptyList(),
+                accessContext != null && accessContext.isDev
+            );
+            row.put("permissionBitfield", PermissionBitfieldUtil.toCompactToken(bitfield));
+        }
     }
 
     private void autoFillPermissionSchemaValues(String appId, String tableName, List<Map<String, Object>> rows, boolean persist) {

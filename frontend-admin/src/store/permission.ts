@@ -147,7 +147,8 @@ function isMenuAllowedByLegacyAccess(menu: any, allowedKeys: Set<string>, allowe
 	const id = normalizeAccessKey(menu?.id);
 	const name = normalizeAccessKey(menu?.name);
 	const isSystemPath = path.startsWith("/system");
-	const isAlwaysVisible = path === "/" || path === "/home" || path === "/auto-setup" || id === "home" || id === "auto";
+	const hasAutoCode = !!(menu?.auto_code);
+	const isAlwaysVisible = path === "/" || path === "/home" || path === "/auto-setup" || id === "home" || id === "auto" || hasAutoCode;
 
 	if (isAlwaysVisible) return true;
 

@@ -858,17 +858,55 @@ ${resolvedContainerSelector} select {
       }
     };
 
+    const hasRole = (currentUser: any, role: string): boolean => {
+      const roles = Array.isArray(currentUser?.roles) ? currentUser.roles : [];
+      return roles.some((r: any) => String(r || "").toLowerCase() === role.toLowerCase());
+    };
+
+    const resolveProfileTarget = (currentUser: any): { preferredTable: string; preferredPkField: string; preferredPkValue: any } => {
+      const userId = currentUser?.userId || currentUser?.id || currentUser?.user_id || currentUser?.account_id;
+      const appToken = currentUser?.app_token || currentUser?.appToken;
+      const email = currentUser?.email;
+      const username = currentUser?.username;
+      const phoneNumber = currentUser?.phoneNumber || currentUser?.phone_number;
+      const loginIdentifier = currentUser?.login_identifier;
+
+      const isMainAccount = Boolean(currentUser?.dev) || hasRole(currentUser, "admin") || hasRole(currentUser, "dev");
+      const preferredTable = isMainAccount ? "csm_accounts" : "csm_group_members";
+
+      const preferredPkField = isMainAccount
+        ? (userId ? "id" : (email ? "email" : (username ? "username" : (phoneNumber ? "phoneNumber" : "app_token"))))
+        : (userId ? "id" : (loginIdentifier ? "login_identifier" : (appToken ? "app_token" : "id")));
+      const preferredPkValue = isMainAccount
+        ? (userId || email || username || phoneNumber || appToken)
+        : (userId || loginIdentifier || appToken || email || username || phoneNumber);
+
+      return { preferredTable, preferredPkField, preferredPkValue };
+    };
+
     const getIdentityCandidates = (currentUser: any) => {
+      const target = resolveProfileTarget(currentUser);
       const candidates = [
+        { field: target.preferredPkField, value: target.preferredPkValue },
+        { field: "id", value: currentUser?.userId || currentUser?.id || currentUser?.user_id || currentUser?.account_id },
+        { field: "app_token", value: currentUser?.app_token || currentUser?.appToken },
         { field: "login_identifier", value: currentUser?.login_identifier },
         { field: "email", value: currentUser?.email },
         { field: "username", value: currentUser?.username },
-        { field: "phone_number", value: currentUser?.phone_number || currentUser?.phoneNumber },
         { field: "phoneNumber", value: currentUser?.phoneNumber || currentUser?.phone_number },
-        { field: "app_token", value: currentUser?.app_token || currentUser?.appToken },
-        { field: "id", value: currentUser?.id || currentUser?.user_id || currentUser?.account_id },
+        { field: "phone_number", value: currentUser?.phone_number || currentUser?.phoneNumber },
       ];
-      return candidates.filter((x) => x.value !== undefined && x.value !== null && String(x.value).trim() !== "");
+
+      const seen = new Set<string>();
+      return candidates.filter((x) => {
+        if (x.value === undefined || x.value === null) return false;
+        const value = String(x.value).trim();
+        if (!value) return false;
+        const key = `${x.field}::${value}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
     };
 
     const fetchAccountRow = async (): Promise<{ row: any; pkField: string; pkValue: any; tableName: string; requestAppId: string } | null> => {
@@ -876,56 +914,56 @@ ${resolvedContainerSelector} select {
       const identities = getIdentityCandidates(currentUser);
       if (identities.length === 0) return null;
 
-      // Main account records are stored in csm_accounts (app_id context = csm).
-      for (const identity of identities) {
-        try {
-          const response = await (window as any).csmApi.getTableData({
-            app_id: "csm",
-            obj_name: "csm_accounts",
-            where: {
-              field: identity.field,
-              type: "eq",
-              value: identity.value,
-            },
-            take: 1,
-          });
+      const target = resolveProfileTarget(currentUser);
+      const tableOrder = target.preferredTable === "csm_group_members"
+        ? ["csm_group_members", "csm_accounts"]
+        : ["csm_accounts", "csm_group_members"];
+      const currentAppToken = String(currentUser?.app_token || currentUser?.appToken || "").trim();
 
-          const rows = (response as any)?.rows || (response as any)?.data || [];
-          if (Array.isArray(rows) && rows.length > 0) {
-            return { row: rows[0], pkField: identity.field, pkValue: identity.value, tableName: "csm_accounts", requestAppId: "csm" };
+      for (const tableName of tableOrder) {
+        for (const identity of identities) {
+          try {
+            const response = await (window as any).csmApi.getTableData({
+              app_id: "csm",
+              obj_name: tableName,
+              where: {
+                field: identity.field,
+                type: "eq",
+                value: identity.value,
+              },
+              take: 1,
+            });
+
+            const rows = (response as any)?.rows || (response as any)?.data || [];
+            if (!Array.isArray(rows) || rows.length === 0) {
+              continue;
+            }
+
+            const row = rows[0] || {};
+
+            // Guard against collisions when identity is not token-based.
+            if (currentAppToken && identity.field !== "app_token") {
+              const rowToken = String(row?.app_token || "").trim();
+              if (rowToken && rowToken !== currentAppToken) {
+                continue;
+              }
+            }
+
+            const stableId = row?.id;
+            const pkField = stableId ? "id" : identity.field;
+            const pkValue = stableId || identity.value;
+
+            return {
+              row,
+              pkField,
+              pkValue,
+              tableName,
+              requestAppId: "csm",
+            };
+          } catch {
+            // Try next candidate.
           }
-        } catch {
-          // Try next candidate.
         }
-      }
-
-      // Sub-user records are stored in csm_group_members under the shared csm app.
-      for (const identity of identities) {
-      try {
-        const response = await (window as any).csmApi.getTableData({
-        app_id: "csm",
-        obj_name: "csm_group_members",
-        where: {
-          field: identity.field,
-          type: "eq",
-          value: identity.value,
-        },
-        take: 1,
-        });
-
-        const rows = (response as any)?.rows || (response as any)?.data || [];
-        if (Array.isArray(rows) && rows.length > 0) {
-        return {
-          row: rows[0],
-          pkField: identity.field,
-          pkValue: identity.value,
-          tableName: "csm_group_members",
-          requestAppId: "csm",
-        };
-        }
-      } catch {
-        // Try next candidate.
-      }
       }
 
       return null;
@@ -987,6 +1025,7 @@ ${resolvedContainerSelector} select {
 
             (window as any).csmCurrentUser = (window as any).csmCurrentUser || {};
             (window as any).csmCurrentUser.user_address = JSON.stringify(userAddress);
+            (window as any).csmCurrentUser.user_adress = (window as any).csmCurrentUser.user_address;
 
             localStorage.setItem("user_address", JSON.stringify(userAddress));
 
@@ -1008,6 +1047,7 @@ ${resolvedContainerSelector} select {
             const nextSerialized = stableStringify(arr);
             (window as any).csmCurrentUser = (window as any).csmCurrentUser || {};
             (window as any).csmCurrentUser.user_address = JSON.stringify(arr);
+            (window as any).csmCurrentUser.user_adress = (window as any).csmCurrentUser.user_address;
             localStorage.setItem("user_address", JSON.stringify(arr));
 
             const account = await fetchAccountRow();

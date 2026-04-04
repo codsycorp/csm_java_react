@@ -654,7 +654,10 @@ export async function fetchMenuList(appIdParam?: string) {
 	try {
 		let menuData = await loadMenuStruct(appIdParam);
 
-		// Keep menu structure exactly as stored; do not auto inject auto-setup entry.
+		// IMPORTANT: Remove /auto-setup menu from editor view
+		// /auto-setup is a global framework feature (not per-app), loaded from sys_autos
+		// It should not appear in the menu admin editor, only in runtime sidebar
+		menuData = filterOutAutoMenu(menuData);
 
 		return {
 			code: 200,
