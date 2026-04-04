@@ -479,20 +479,7 @@ export async function fetchNavigationMenus(appIdParam?: string) {
 			menuData = menuData ? [menuData] : [];
 		}
 
-		// 1. Remove any auto-setup menu from backend first (before checking loadAutoMenuItem)
-		menuData = filterOutAutoMenu(menuData);
-
-		// Append auto setup menu from sys_autos if available
-		const autoMenuItem = await loadAutoMenuItem(targetAppId);
-		if (autoMenuItem) {
-			const hasAutoMenu = menuData.some(item => item.id === autoMenuItem.id || item.path === autoMenuItem.path);
-			if (!hasAutoMenu) {
-				menuData.push(autoMenuItem);
-			}
-		} else {
-			// If auto menu is not available, ensure no auto-setup entries remain
-			menuData = filterOutAutoMenu(menuData);
-		}
+		// Keep menu structure exactly as stored; do not auto inject auto-setup entry.
 		
 		// Normalize nodes → children field for consistent tree structure
 		menuData = menuData.map(item => normalizeMenuNodes(item));
@@ -667,18 +654,7 @@ export async function fetchMenuList(appIdParam?: string) {
 	try {
 		let menuData = await loadMenuStruct(appIdParam);
 
-		// Append Auto Setup menu (from sys_autos) when available and not present
-		try {
-			const autoMenuItem = await loadAutoMenuItem(appIdParam);
-			if (autoMenuItem) {
-				const hasAuto = menuData.some(item => (item.id || "") === (autoMenuItem.id || "") || (item.path || "") === (autoMenuItem.path || ""));
-				if (!hasAuto) {
-					menuData.push(autoMenuItem);
-				}
-			}
-		} catch (e) {
-			console.warn("Failed to append auto setup menu in fetchMenuList:", e);
-		}
+		// Keep menu structure exactly as stored; do not auto inject auto-setup entry.
 
 		return {
 			code: 200,

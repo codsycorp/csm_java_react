@@ -84,6 +84,22 @@ export default function Menu() {
 	const normalizeMenus = (list: any[]): any[] => {
 		if (!Array.isArray(list)) return [];
 
+		const resolveOrderValue = (value: unknown): number => {
+			if (value === null || value === undefined || value === "") return Number.MAX_SAFE_INTEGER;
+			const num = Number(value);
+			return Number.isFinite(num) ? num : Number.MAX_SAFE_INTEGER;
+		};
+
+		const compareMenuOrder = (a: any, b: any): number => {
+			const orderDiff = resolveOrderValue(a?.order) - resolveOrderValue(b?.order);
+			if (orderDiff !== 0) return orderDiff;
+			const labelA = String(a?.label || a?.name || a?.id || "").toLowerCase();
+			const labelB = String(b?.label || b?.name || b?.id || "").toLowerCase();
+			if (labelA < labelB) return -1;
+			if (labelA > labelB) return 1;
+			return 0;
+		};
+
 		const hasParentId = list.some((m) => "parentId" in m);
 		const hasChildren = list.some((m) => Array.isArray((m as any).children) && (m as any).children.length > 0);
 		const hasNodes = list.some((m) => Array.isArray((m as any).nodes) && (m as any).nodes.length > 0);
@@ -113,10 +129,10 @@ export default function Menu() {
 			processedList = list;
 		}
 
-		// Sort menu by label like Vue sortAllMenu
+		// Sort by configured order first, then label as deterministic fallback.
 		const sortMenu = (menus: any[]): any[] => {
-			return menus
-				.sort((a, b) => (a.label > b.label) ? 1 : ((b.label > a.label) ? -1 : 0))
+			return [...menus]
+				.sort(compareMenuOrder)
 				.map(item => ({
 					...item,
 					children: item.children ? sortMenu(item.children) : undefined,
@@ -200,7 +216,253 @@ export default function Menu() {
 		return "";
 	};
 
+	const resolveOrderValue = (value: unknown): number => {
+		if (value === null || value === undefined || value === "") return Number.MAX_SAFE_INTEGER;
+		const parsed = Number(value);
+		return Number.isFinite(parsed) ? parsed : Number.MAX_SAFE_INTEGER;
+	};
+
+	const reorderMenuTree = (
+		items: any[],
+		targetId: string,
+		direction: "up" | "down" | "top" | "bottom",
+	): { next: any[]; moved: boolean } => {
+		const sortSiblings = (siblings: any[]) => {
+			return [...siblings].sort((a, b) => {
+				const diff = resolveOrderValue(a?.order) - resolveOrderValue(b?.order);
+				if (diff !== 0) return diff;
+				const labelA = String(a?.label || a?.name || a?.id || "").toLowerCase();
+				const labelB = String(b?.label || b?.name || b?.id || "").toLowerCase();
+				if (labelA < labelB) return -1;
+				if (labelA > labelB) return 1;
+				return 0;
+			});
+		};
+
+		const normalizeSiblingOrder = (siblings: any[]) => {
+			return siblings.map((item, index) => ({
+				...item,
+				order: (index + 1) * 10,
+			}));
+		};
+
+		const walk = (siblings: any[]): { nodes: any[]; moved: boolean } => {
+			const sorted = sortSiblings(siblings).map((item) => ({
+				...item,
+				children: Array.isArray(item?.children) ? [...item.children] : item.children,
+			}));
+
+			const index = sorted.findIndex((item) => String(item?.id || "") === targetId);
+			if (index >= 0) {
+				const targetIndex = direction === "up"
+					? index - 1
+					: direction === "down"
+						? index + 1
+						: direction === "top"
+							? 0
+							: sorted.length - 1;
+				if (targetIndex < 0 || targetIndex >= sorted.length) {
+					return { nodes: normalizeSiblingOrder(sorted), moved: false };
+				}
+				if (targetIndex === index) {
+					return { nodes: normalizeSiblingOrder(sorted), moved: false };
+				}
+				const swapped = [...sorted];
+				const [movedItem] = swapped.splice(index, 1);
+				swapped.splice(targetIndex, 0, movedItem);
+				return { nodes: normalizeSiblingOrder(swapped), moved: true };
+			}
+
+			let moved = false;
+			const updated = sorted.map((item) => {
+				if (!Array.isArray(item?.children) || item.children.length === 0) return item;
+				const result = walk(item.children);
+				if (result.moved) moved = true;
+				return {
+					...item,
+					children: result.nodes,
+				};
+			});
+
+			return { nodes: normalizeSiblingOrder(updated), moved };
+		};
+
+		const result = walk(Array.isArray(items) ? items : []);
+		return { next: result.nodes, moved: result.moved };
+	};
+
+	const normalizeTreeOrder = (items: any[]): any[] => {
+		const sortSiblings = (siblings: any[]): any[] => {
+			const sorted = [...siblings].sort((a, b) => {
+				const diff = resolveOrderValue(a?.order) - resolveOrderValue(b?.order);
+				if (diff !== 0) return diff;
+				const labelA = String(a?.label || a?.name || a?.id || "").toLowerCase();
+				const labelB = String(b?.label || b?.name || b?.id || "").toLowerCase();
+				if (labelA < labelB) return -1;
+				if (labelA > labelB) return 1;
+				return 0;
+			});
+			return sorted.map((item, index): any => ({
+				...item,
+				order: (index + 1) * 10,
+				children: Array.isArray(item?.children) ? sortSiblings(item.children) : item.children,
+			}));
+		};
+
+		return sortSiblings(Array.isArray(items) ? items : []);
+	};
+
+	const persistMenuOrder = async (nextMenu: any[]) => {
+		setMenuData(nextMenu);
+		buildFlatParentMenus(nextMenu);
+
+		try {
+			await saveMenuStruct(selectedApp, nextMenu);
+			await handleAsyncRoutes(selectedApp);
+			window.$message?.success(t("system.menu.reorderSuccess") || "Đã cập nhật thứ tự menu");
+		} catch (error) {
+			console.error("Failed to save menu order:", error);
+			window.$message?.error(t("system.menu.reorderFailed") || "Lưu thứ tự menu thất bại");
+			await refreshTable();
+		}
+	};
+
+	const removeMenuNode = (items: any[], targetId: string): { next: any[]; removed: any | null } => {
+		const siblings = [...items];
+		const index = siblings.findIndex((item) => String(item?.id || "") === targetId);
+		if (index >= 0) {
+			const [removed] = siblings.splice(index, 1);
+			return { next: siblings, removed };
+		}
+
+		for (let i = 0; i < siblings.length; i += 1) {
+			const item = siblings[i];
+			if (!Array.isArray(item?.children) || item.children.length === 0) continue;
+			const result = removeMenuNode(item.children, targetId);
+			if (result.removed) {
+				siblings[i] = {
+					...item,
+					children: result.next,
+				};
+				return { next: siblings, removed: result.removed };
+			}
+		}
+
+		return { next: siblings, removed: null };
+	};
+
+	const findMenuNode = (items: any[], targetId: string): any | null => {
+		for (const item of items) {
+			if (String(item?.id || "") === targetId) return item;
+			if (Array.isArray(item?.children) && item.children.length > 0) {
+				const found = findMenuNode(item.children, targetId);
+				if (found) return found;
+			}
+		}
+		return null;
+	};
+
+	const insertMenuNode = (
+		items: any[],
+		targetId: string,
+		dragNode: any,
+		dropToGap: boolean,
+		relativeDropPosition: number,
+	): any[] => {
+		if (!dropToGap) {
+			const walk = (siblings: any[]): any[] => {
+				return siblings.map((item) => {
+					if (String(item?.id || "") === targetId) {
+						const nextChildren = Array.isArray(item?.children) ? [...item.children, dragNode] : [dragNode];
+						return {
+							...item,
+							children: nextChildren,
+						};
+					}
+					if (!Array.isArray(item?.children) || item.children.length === 0) return item;
+					return {
+						...item,
+						children: walk(item.children),
+					};
+				});
+			};
+			return walk(items);
+		}
+
+		const parentId = findParentId(items, targetId);
+		const targetIndexBySiblings = (siblings: any[]) => siblings.findIndex((item) => String(item?.id || "") === targetId);
+
+		if (!parentId) {
+			const siblings = [...items];
+			const targetIndex = targetIndexBySiblings(siblings);
+			const insertIndex = relativeDropPosition < 0 ? targetIndex : targetIndex + 1;
+			siblings.splice(Math.max(0, insertIndex), 0, dragNode);
+			return siblings;
+		}
+
+		const walk = (siblings: any[]): any[] => {
+			return siblings.map((item) => {
+				if (String(item?.id || "") !== parentId) {
+					if (!Array.isArray(item?.children) || item.children.length === 0) return item;
+					return {
+						...item,
+						children: walk(item.children),
+					};
+				}
+
+				const nextChildren = Array.isArray(item?.children) ? [...item.children] : [];
+				const targetIndex = targetIndexBySiblings(nextChildren);
+				const insertIndex = relativeDropPosition < 0 ? targetIndex : targetIndex + 1;
+				nextChildren.splice(Math.max(0, insertIndex), 0, dragNode);
+				return {
+					...item,
+					children: nextChildren,
+				};
+			});
+		};
+
+		return walk(items);
+	};
+
 	const actionRef = useRef<ActionType>(null);
+
+	const handleMoveMenuOrder = async (menuId: string, direction: "up" | "down" | "top" | "bottom") => {
+		if (!selectedApp) {
+			window.$message?.warning(t("system.menu.pleaseSelectApp"));
+			return;
+		}
+
+		const { next, moved } = reorderMenuTree(menuData, menuId, direction);
+		if (!moved) {
+			window.$message?.info(t("system.menu.reorderBoundary") || "Menu đã ở vị trí giới hạn");
+			return;
+		}
+
+		await persistMenuOrder(next);
+	};
+
+	const handleDragDropMenuOrder = async (payload: { dragId: string; targetId: string; dropToGap: boolean; relativeDropPosition: number }) => {
+		if (!selectedApp) {
+			window.$message?.warning(t("system.menu.pleaseSelectApp"));
+			return;
+		}
+		if (!payload.dragId || !payload.targetId || payload.dragId === payload.targetId) return;
+
+		const removedResult = removeMenuNode(menuData, payload.dragId);
+		if (!removedResult.removed) return;
+		const dragNode = { ...removedResult.removed };
+
+		if (payload.dropToGap) {
+			const parentId = findParentId(removedResult.next, payload.targetId);
+			dragNode.parentId = parentId || "";
+		} else {
+			dragNode.parentId = payload.targetId;
+		}
+
+		const inserted = insertMenuNode(removedResult.next, payload.targetId, dragNode, payload.dropToGap, payload.relativeDropPosition);
+		const normalized = normalizeTreeOrder(inserted);
+		await persistMenuOrder(normalized);
+	};
 
 	// Load app list
 	useEffect(() => {
@@ -218,11 +480,16 @@ export default function Menu() {
 	};
 
 	const buildFlatParentMenus = (menuList: any[]) => {
+		const currentLang = String(i18n.language || "vi").toLowerCase();
 		setFlatParentMenus(
 			flattenMenus(menuList)
 				.map((item: MenuItemType) => {
 					let displayName = "" as string;
-					if (typeof (item as any).label === 'string') {
+					if (currentLang.startsWith("en") && typeof (item as any).label_en === "string" && (item as any).label_en) {
+						displayName = (item as any).label_en;
+					} else if (currentLang.startsWith("zh") && typeof (item as any).label_zh === "string" && (item as any).label_zh) {
+						displayName = (item as any).label_zh;
+					} else if (typeof (item as any).label === 'string') {
 						const lbl = (item as any).label as string;
 						displayName = lbl.includes('.') ? t(lbl) : lbl;
 					} else if (typeof (item as any).name === 'string') {
@@ -274,6 +541,7 @@ export default function Menu() {
 			const rawMenuList = responseData?.result?.list || [];
 			const normalized = normalizeMenus(rawMenuList);
 			setMenuData(normalized);
+			buildFlatParentMenus(normalized);
 		} catch (error) {
 
 			window.$message?.error(t("common.deleteFailed"));
@@ -313,7 +581,7 @@ export default function Menu() {
 			mode: "all",
 			copyStrategy: "merge",
 			selectedMenuIds: [],
-			targetAppIds: [selectedApp],
+			targetAppIds: [],
 		});
 		setCopyOpen(true);
 	};
@@ -324,10 +592,15 @@ export default function Menu() {
 			const mode: "all" | "selected" = values.mode;
 			const copyStrategy: "merge" | "replace" = values.copyStrategy || "merge";
 			const selectedMenuIds: string[] = values.selectedMenuIds || [];
-			const targetAppIds: string[] = values.targetAppIds || [];
+			const targetAppIdsRaw: string[] = values.targetAppIds || [];
+			const targetAppIds = Array.from(new Set(
+				targetAppIdsRaw
+					.map(item => String(item || "").trim())
+					.filter(Boolean)
+			)).filter(item => item !== selectedApp);
 
 			if (!targetAppIds.length) {
-				window.$message?.warning("Vui lòng chọn ít nhất 1 chương trình đích");
+				window.$message?.warning(t("system.menu.copyTargetRequired") || "Vui lòng chọn ít nhất 1 chương trình đích khác chương trình nguồn");
 				return;
 			}
 
@@ -336,18 +609,31 @@ export default function Menu() {
 				: pickSelectedSubtrees(menuData, new Set(selectedMenuIds));
 
 			if (!sourceTrees.length) {
-				window.$message?.warning("Không có menu nguồn để copy");
+				window.$message?.warning(t("system.menu.copySourceEmpty") || "Không có menu nguồn để copy");
 				return;
 			}
 
 			setCopySubmitting(true);
+			const failedTargets: string[] = [];
 
 			for (const targetAppId of targetAppIds) {
 				// Clone with new IDs so copied menus are independent per program.
 				const copiedTree = cloneMenusForTargetApp(sourceTrees, targetAppId);
 
+				const ensureSaveSuccess = (result: any) => {
+					const code = Number(result?.code ?? 200);
+					if (result?.success === false || code >= 400) {
+						throw new Error(result?.message || `Save menu failed for app ${targetAppId}`);
+					}
+				};
+
 				if (copyStrategy === "replace") {
-					await saveMenuStruct(targetAppId, copiedTree);
+					try {
+						const saveRes = await saveMenuStruct(targetAppId, copiedTree);
+						ensureSaveSuccess(saveRes);
+					} catch (error) {
+						failedTargets.push(targetAppId);
+					}
 					continue;
 				}
 
@@ -356,28 +642,59 @@ export default function Menu() {
 				const targetTree = normalizeMenus(rawTargetList);
 				const mergedTree = [...targetTree, ...copiedTree];
 
-				await saveMenuStruct(targetAppId, mergedTree);
+				try {
+					const saveRes = await saveMenuStruct(targetAppId, mergedTree);
+					ensureSaveSuccess(saveRes);
+				} catch (error) {
+					failedTargets.push(targetAppId);
+				}
 			}
 
 			if (targetAppIds.includes(selectedApp)) {
 				await refreshTable();
 			}
 
-			setCopyOpen(false);
-			window.$message?.success(`Đã copy ${mode === "all" ? "toàn bộ" : "menu đã chọn"} theo chế độ ${copyStrategy === "replace" ? "thay thế toàn bộ" : "gộp thêm"} sang ${targetAppIds.length} chương trình`);
+			const successCount = targetAppIds.length - failedTargets.length;
+			if (successCount > 0) {
+				setCopyOpen(false);
+				window.$message?.success(
+					t("system.menu.copySuccessSummary", {
+						copiedType: mode === "all" ? (t("system.menu.copyModeAll") || "toàn bộ") : (t("system.menu.copyModeSelected") || "menu đã chọn"),
+						strategy: copyStrategy === "replace" ? (t("system.menu.copyStrategyReplace") || "thay thế toàn bộ") : (t("system.menu.copyStrategyMerge") || "gộp thêm"),
+						count: successCount,
+					}) || `Đã copy menu sang ${successCount} chương trình`
+				);
+			}
+			if (failedTargets.length > 0) {
+				window.$message?.error(
+					t("system.menu.copyFailedTargets", { targets: failedTargets.join(", ") }) || `Copy thất bại ở: ${failedTargets.join(", ")}`
+				);
+			}
 		} catch (error: any) {
 			if (error?.errorFields) return;
 			console.error("Failed to copy menus:", error);
-			window.$message?.error("Copy menu thất bại");
+			window.$message?.error(t("system.menu.copyFailed") || "Copy menu thất bại");
 		} finally {
 			setCopySubmitting(false);
 		}
 	};
 
-	const menuOptions = flattenMenus(menuData).map((item: any) => ({
-		label: item.label || item.name || item.id,
-		value: item.id,
-	}));
+	const menuOptions = flattenMenus(menuData).map((item: any) => {
+		const currentLang = String(i18n.language || "vi").toLowerCase();
+		const baseLabel = currentLang.startsWith("en")
+			? (item.label_en || item.label || item.name || item.id)
+			: currentLang.startsWith("zh")
+				? (item.label_zh || item.label || item.name || item.id)
+				: (item.label || item.name || item.id);
+		const translatedBase = typeof baseLabel === "string" && baseLabel.includes(".") ? t(baseLabel) : baseLabel;
+		const extras: string[] = [];
+		if (item.label_en) extras.push(`EN: ${item.label_en}`);
+		if (item.label_zh) extras.push(`ZH: ${item.label_zh}`);
+		return {
+			label: extras.length > 0 ? `${translatedBase} (${extras.join(" | ")})` : translatedBase,
+			value: item.id,
+		};
+	});
 
 	return (
 		<BasicContent className="h-full">
@@ -406,7 +723,7 @@ export default function Menu() {
 			<Row gutter={[16, 16]} className="mb-4">
 				<Col>
 					<Button onClick={openCopyModal} disabled={!selectedApp}>
-						Copy menu sang chương trình khác
+						{t("system.menu.copyMenuToOtherApp") || "Copy menu sang chương trình khác"}
 					</Button>
 				</Col>
 			</Row>
@@ -418,14 +735,14 @@ export default function Menu() {
 						type="primary"
 						onClick={() => {
 							if (!selectedApp) {
-								window.alert("Vui lòng điền Mã chương trình");
+								window.$message?.warning(t("system.menu.pleaseSelectApp") || "Vui lòng chọn ứng dụng");
 								return;
 							}
 							const result = csmEncrypt(selectedApp + "_____phanmemmottrieu@gmail.com_____phanmemmottrieu@gmail.com_____0");
 							setReferralToken(result);
 						}}
 					>
-						Tạo mã giới thiệu
+						{t("system.menu.generateReferralCode") || "Tạo mã giới thiệu"}
 					</Button>
 				</Col>
 				{referralToken && (
@@ -452,11 +769,11 @@ export default function Menu() {
 								if (input) {
 									input.select();
 									document.execCommand('copy');
-									window.$message?.success('Đã copy mã giới thiệu!');
+									window.$message?.success(t("system.menu.referralCodeCopied") || "Đã copy mã giới thiệu!");
 								}
 							}}
 						>
-							Copy
+							{t("system.menu.copy") || "Copy"}
 						</Button>
 					</Col>
 				)}
@@ -501,6 +818,11 @@ export default function Menu() {
 												setDetailData({ ...record, ...(fullDetails || {}), parentId });
 											}}
 											onDelete={(id) => handleDeleteRow(id)}
+												onMoveUp={(id) => handleMoveMenuOrder(id, "up")}
+												onMoveDown={(id) => handleMoveMenuOrder(id, "down")}
+												onMoveTop={(id) => handleMoveMenuOrder(id, "top")}
+												onMoveBottom={(id) => handleMoveMenuOrder(id, "bottom")}
+												onDragDrop={handleDragDropMenuOrder}
 											onAdd={(parentId) => {
 												setIsOpen(true);
 												setTitle(t("system.menu.addMenu"));
@@ -573,6 +895,11 @@ export default function Menu() {
 								setDetailData({ ...record, ...(fullDetails || {}), parentId });
 							}}
 							onDelete={(id) => handleDeleteRow(id)}
+							onMoveUp={(id) => handleMoveMenuOrder(id, "up")}
+							onMoveDown={(id) => handleMoveMenuOrder(id, "down")}
+							onMoveTop={(id) => handleMoveMenuOrder(id, "top")}
+							onMoveBottom={(id) => handleMoveMenuOrder(id, "bottom")}
+							onDragDrop={handleDragDropMenuOrder}
 							onAdd={(parentId) => {
 								setIsOpen(true);
 								setTitle(t("system.menu.addMenu"));
@@ -597,25 +924,25 @@ export default function Menu() {
 
 				<Modal
 					open={copyOpen}
-					title="Copy menu giữa các chương trình"
+					title={t("system.menu.copyModalTitle") || "Copy menu giữa các chương trình"}
 					onCancel={() => setCopyOpen(false)}
 					onOk={handleConfirmCopy}
 					confirmLoading={copySubmitting}
-					okText="Thực hiện copy"
+					okText={t("system.menu.copyModalConfirm") || "Thực hiện copy"}
 					cancelText={t("common.cancel")}
 				>
 					<Form form={copyForm} layout="vertical">
-						<Form.Item name="mode" label="Phạm vi copy" initialValue="all">
+						<Form.Item name="mode" label={t("system.menu.copyScopeLabel") || "Phạm vi copy"} initialValue="all">
 							<Radio.Group>
-								<Radio value="all">Toàn bộ menu chương trình nguồn</Radio>
-								<Radio value="selected">Chỉ menu được chọn</Radio>
+								<Radio value="all">{t("system.menu.copyScopeAll") || "Toàn bộ menu chương trình nguồn"}</Radio>
+								<Radio value="selected">{t("system.menu.copyScopeSelected") || "Chỉ menu được chọn"}</Radio>
 							</Radio.Group>
 						</Form.Item>
 
-						<Form.Item name="copyStrategy" label="Cách ghi vào chương trình đích" initialValue="merge">
+						<Form.Item name="copyStrategy" label={t("system.menu.copyStrategyLabel") || "Cách ghi vào chương trình đích"} initialValue="merge">
 							<Radio.Group>
-								<Radio value="merge">Gộp thêm vào menu hiện có của chương trình đích</Radio>
-								<Radio value="replace">Thay thế toàn bộ menu chương trình đích bằng menu nguồn</Radio>
+								<Radio value="merge">{t("system.menu.copyStrategyMergeDescription") || "Gộp thêm vào menu hiện có của chương trình đích"}</Radio>
+								<Radio value="replace">{t("system.menu.copyStrategyReplaceDescription") || "Thay thế toàn bộ menu chương trình đích bằng menu nguồn"}</Radio>
 							</Radio.Group>
 						</Form.Item>
 
@@ -626,10 +953,10 @@ export default function Menu() {
 								return (
 									<Form.Item
 										name="selectedMenuIds"
-										label="Chọn menu cần copy"
-										rules={[{ required: true, message: "Vui lòng chọn ít nhất 1 menu" }]}
+										label={t("system.menu.copySelectMenusLabel") || "Chọn menu cần copy"}
+										rules={[{ required: true, message: t("system.menu.copySelectMenusRequired") || "Vui lòng chọn ít nhất 1 menu" }]}
 									>
-										<Select mode="multiple" showSearch options={menuOptions} placeholder="Chọn menu..." />
+										<Select mode="multiple" showSearch options={menuOptions} placeholder={t("system.menu.copySelectMenusPlaceholder") || "Chọn menu..."} />
 									</Form.Item>
 								);
 							}}
@@ -637,8 +964,8 @@ export default function Menu() {
 
 						<Form.Item
 							name="targetAppIds"
-							label="Chương trình đích"
-							rules={[{ required: true, message: "Vui lòng chọn ít nhất 1 chương trình đích" }]}
+							label={t("system.menu.copyTargetAppsLabel") || "Chương trình đích"}
+							rules={[{ required: true, message: t("system.menu.copyTargetAppsRequired") || "Vui lòng chọn ít nhất 1 chương trình đích" }]}
 						>
 							<Select
 								mode="multiple"
@@ -650,14 +977,12 @@ export default function Menu() {
 										value: app.app_id,
 									})),
 								]}
-								placeholder="Chọn 1 hoặc nhiều chương trình..."
+								placeholder={t("system.menu.copyTargetAppsPlaceholder") || "Chọn 1 hoặc nhiều chương trình..."}
 							/>
 						</Form.Item>
 
 						<div style={{ color: "#8c8c8c", fontSize: 12 }}>
-							Menu copy sang app đích sẽ được tạo ID mới để tránh đè dữ liệu. Cấu hình Kanban/report/trigger được giữ nguyên,
-							nhưng dữ liệu CRUD/tìm kiếm vẫn chạy độc lập theo từng app_id. Nếu chọn "Thay thế toàn bộ",
-							menu hiện tại của chương trình đích sẽ bị ghi đè hoàn toàn.
+							{t("system.menu.copyInfo") || "Menu copy sang app đích sẽ được tạo ID mới để tránh đè dữ liệu. Cấu hình Kanban/report/trigger được giữ nguyên, nhưng dữ liệu CRUD/tìm kiếm vẫn chạy độc lập theo từng app_id. Nếu chọn \"Thay thế toàn bộ\", menu hiện tại của chương trình đích sẽ bị ghi đè hoàn toàn."}
 						</div>
 					</Form>
 				</Modal>

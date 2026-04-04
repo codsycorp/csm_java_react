@@ -79,6 +79,36 @@ const routes: AppRouteRecordRaw[] = [
 				},
 			},
 			{
+				path: "/system/departments",
+				Component: AdminPage,
+				handle: {
+					keepAlive: false,
+					icon: "ApartmentOutlined",
+					title: "common.menu.dept",
+					roles: ["admin", "dev"],
+					permissions: [
+						"permission:button:add",
+						"permission:button:update",
+						"permission:button:delete",
+					],
+				},
+			},
+			{
+				path: "/system/branches",
+				Component: AdminPage,
+				handle: {
+					keepAlive: false,
+					icon: "ClusterOutlined",
+					title: "common.menu.branch",
+					roles: ["admin", "dev"],
+					permissions: [
+						"permission:button:add",
+						"permission:button:update",
+						"permission:button:delete",
+					],
+				},
+			},
+			{
 				path: "/system/broadcast",
 				Component: Broadcast,
 				handle: {

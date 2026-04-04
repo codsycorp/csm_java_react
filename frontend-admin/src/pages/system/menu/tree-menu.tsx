@@ -91,7 +91,65 @@ function flattenMenus(menus: MenuTreeItem[]): MenuTreeItem[] {
 	return result;
 }
 
-function toTreeNodes(data: MenuTreeItem[], t: (key: string) => string, parentPath = "", usedKeys = new Map<string, number>()): TreeDataNode[] {
+function resolveOrderValue(value: unknown): number {
+	if (value === null || value === undefined || value === "") return Number.MAX_SAFE_INTEGER;
+	const num = Number(value);
+	return Number.isFinite(num) ? num : Number.MAX_SAFE_INTEGER;
+}
+
+function sortMenusByOrder(items: MenuTreeItem[]): MenuTreeItem[] {
+	return [...(items || [])]
+		.sort((a, b) => {
+			const orderDiff = resolveOrderValue(a?.order) - resolveOrderValue(b?.order);
+			if (orderDiff !== 0) return orderDiff;
+			const labelA = String(a?.label || a?.name || a?.id || "").toLowerCase();
+			const labelB = String(b?.label || b?.name || b?.id || "").toLowerCase();
+			if (labelA < labelB) return -1;
+			if (labelA > labelB) return 1;
+			return 0;
+		})
+		.map((item) => ({
+			...item,
+			children: Array.isArray(item?.children) ? sortMenusByOrder(item.children) : item.children,
+		}));
+}
+
+const ID_TO_I18N_KEY: Record<string, string> = {
+	"system": "common.menu.system",
+	"user": "common.menu.user",
+	"menu": "common.menu.menu",
+	"developer": "common.menu.developer",
+	"dept": "common.menu.permissionGroup",
+};
+
+function getMenuLabel(menu: MenuTreeItem, lang: string = "vi", t?: (key: string) => string): string {
+	const lowerLang = String(lang || "vi").toLowerCase();
+	const currentLang = lowerLang.startsWith("en") ? "en" : lowerLang.startsWith("zh") ? "zh" : "vi";
+
+	if (currentLang === "en" && menu.label_en) return menu.label_en;
+	if (currentLang === "zh" && menu.label_zh) return menu.label_zh;
+
+	if (menu.label) {
+		if (t && menu.label.includes(".")) return t(menu.label);
+		return menu.label;
+	}
+	if (menu.name) {
+		if (t && menu.name.includes(".")) return t(menu.name);
+		return menu.name;
+	}
+	if (menu.id && t && ID_TO_I18N_KEY[menu.id]) {
+		return t(ID_TO_I18N_KEY[menu.id]);
+	}
+	return menu.id || "";
+}
+
+function toTreeNodes(
+	data: MenuTreeItem[],
+	t: (key: string) => string,
+	lang: string,
+	parentPath = "",
+	usedKeys = new Map<string, number>(),
+): TreeDataNode[] {
 	
 	return data.map((item, index) => {
 		// Create unique key
@@ -108,15 +166,11 @@ function toTreeNodes(data: MenuTreeItem[], t: (key: string) => string, parentPat
 		}
 		
 		return {
-			// Display label if available (translate if i18n key), otherwise name (translate if key), otherwise id
-			title: (item.label && item.label.includes('.'))
-				? t(item.label)
-				: (item.name && item.name.includes('.'))
-					? t(item.name)
-					: (item.label || item.name || item.id),
+			// Display multilingual label based on current language.
+			title: getMenuLabel(item, lang, t),
 			key: uniqueKey,
 			// Use children field (unified)
-			children: item.children ? toTreeNodes(item.children, t, `${parentPath}/${item.id}`, usedKeys) : undefined,
+			children: item.children ? toTreeNodes(item.children, t, lang, `${parentPath}/${item.id}`, usedKeys) : undefined,
 		};
 	});
 }
@@ -207,7 +261,7 @@ function addMenuToTree(menus: MenuTreeItem[], newMenu: MenuTreeItem): void {
 }
 
 export default function MenuTree({ appId: initialAppId = "" }: { appId?: string }) {
-	const { t } = useTranslation();
+	const { t, i18n } = useTranslation();
 	const [selectedKeys, setSelectedKeys] = useState<React.Key[]>([]);
 	const [expandedKeys, setExpandedKeys] = useState<React.Key[]>([]);
 	const [treeData, setTreeData] = useState<TreeDataNode[]>([]);
@@ -279,6 +333,8 @@ export default function MenuTree({ appId: initialAppId = "" }: { appId?: string 
 			} else {
 				// console.log("⚠️ Data format unknown - no parentId and no children");
 			}
+
+			processedList = sortMenusByOrder(processedList);
 			
 			// Flatten for flatMenus
 			const flattened = flattenMenus(processedList);
@@ -286,13 +342,13 @@ export default function MenuTree({ appId: initialAppId = "" }: { appId?: string 
 			setFullMenuList(processedList);
 			
 			// Directly convert to tree nodes for Ant Design Tree
-			const tree = toTreeNodes(processedList, t);
+			const tree = toTreeNodes(processedList, t, i18n.language);
 			setTreeData(tree);
 			setExpandedKeys(tree.map((n) => n.key));
 		} finally {
 			setLoading(false);
 		}
-	}, [appId]);
+	}, [appId, i18n.language, t]);
 
 	useEffect(() => {
 		loadApps();
@@ -331,11 +387,11 @@ export default function MenuTree({ appId: initialAppId = "" }: { appId?: string 
 	// Rebuild tree data when fullMenuList changes
 	useEffect(() => {
 		if (fullMenuList.length > 0) {
-			const tree = toTreeNodes(fullMenuList, t);
+			const tree = toTreeNodes(fullMenuList, t, i18n.language);
 			setTreeData(tree);
 			setExpandedKeys(tree.map(n => n.key));
 		}
-	}, [fullMenuList, t]);
+	}, [fullMenuList, i18n.language, t]);
 
 	// Save menu to backend
 	const saveMenuApp = useCallback(async () => {
@@ -523,7 +579,7 @@ export default function MenuTree({ appId: initialAppId = "" }: { appId?: string 
 				...getAllMenus(fullMenuList)
 					.filter((m) => m.id !== menuId)
 					.map((m) => ({
-						label: m.label || m.name || m.id,
+						label: getMenuLabel(m, i18n.language, t),
 						key: `move_${m.id}`,
 						onClick: () => handleMove(menuId, m.id),
 					})),
@@ -573,24 +629,6 @@ export default function MenuTree({ appId: initialAppId = "" }: { appId?: string 
 									disabled={!appId}
 								>
 									{t("system.menu.saveMenu")}
-								</BasicButton>
-								<BasicButton
-									onClick={() => {
-										// Dynamically import to initialize sample menu data
-										if (appId) {
-											import("#src/pages/system/menu/init-menu-data").then(({ initializeMenuForApp }) => {
-												initializeMenuForApp(appId).then(() => {
-													window.$message?.success("Menu data initialized!");
-													loadMenus();
-												}).catch((error: any) => {
-													window.$message?.error(`Failed to initialize menu: ${error.message}`);
-												});
-											});
-										}
-									}}
-									disabled={!appId}
-								>
-									Init Sample Data
 								</BasicButton>
 							</div>
 						</div>

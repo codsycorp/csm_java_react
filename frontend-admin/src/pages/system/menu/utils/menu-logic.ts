@@ -104,7 +104,10 @@ export function getMenuDisplayConfig(menu: MenuItemType | Partial<MenuItemType>)
 /**
  * Format thông tin menu để hiển thị tag/badge
  */
-export function getMenuConfigDisplay(menu: MenuItemType | Partial<MenuItemType>): {
+export function getMenuConfigDisplay(
+  menu: MenuItemType | Partial<MenuItemType>,
+  translate?: (key: string, options?: Record<string, any>) => string,
+): {
   typeFormLabel: string;
   rowEditLabel: string;
   configBadge: string;
@@ -113,17 +116,22 @@ export function getMenuConfigDisplay(menu: MenuItemType | Partial<MenuItemType>)
   const rowTypeEdit = Number(menu.row_type_edit || 0);
 
   const typeFormMap: Record<number, string> = {
-    1: "Dạng bảng",
-    2: "Form Master-Detail",
+    1: translate ? (translate("system.menu.typeForm.grid") || "Dạng bảng") : "Dạng bảng",
+    2: translate ? (translate("system.menu.typeForm.masterDetail") || "Form Master-Detail") : "Form Master-Detail",
+    3: translate ? (translate("system.menu.typeForm.dynamicLink") || "Liên kết động") : "Liên kết động",
+    4: translate ? (translate("system.menu.typeForm.dynamicCode") || "Dynamic Code") : "Dynamic Code",
+    6: translate ? (translate("system.menu.typeForm.kanbanBoard") || "Kanban Board") : "Kanban Board",
   };
 
   const rowEditMap: Record<number, string> = {
-    0: "Form",
-    1: "Inline",
+    0: translate ? (translate("system.menu.rowTypeEdit.form") || "Form") : "Form",
+    1: translate ? (translate("system.menu.rowTypeEdit.inline") || "Inline") : "Inline",
   };
 
   const isMasterDetail = isMasterDetailMenu(menu);
-  const configBadge = isMasterDetail ? "Master-Detail" : "Bảng";
+  const configBadge = isMasterDetail
+    ? (translate ? (translate("system.menu.badge.masterDetail") || "Master-Detail") : "Master-Detail")
+    : (translate ? (translate("system.menu.badge.grid") || "Bảng") : "Bảng");
 
   return {
     typeFormLabel: typeFormMap[typeForm] || "N/A",

@@ -4,10 +4,11 @@ import type { MenuItemType } from "./types";
 import { useDeviceType } from "#src/hooks";
 import { LayoutContext } from "#src/layout/container-layout/layout-context";
 import { removeTrailingSlash } from "#src/router/utils";
-import { useAppStore, useUserStore } from "#src/store";
+import { useAppStore, usePreferencesStore, useUserStore } from "#src/store";
 
 import { Menu } from "antd";
 import { useContext, useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useMatches, useLocation } from "react-router";
 
 interface LayoutMenuProps {
@@ -29,11 +30,13 @@ export default function LayoutMenu({
 }: LayoutMenuProps) {
 	const matches = useMatches();
 	const location = useLocation();
+	const { t } = useTranslation();
 	const { sidebarCollapsed } = useContext(LayoutContext);
 	const [openKeys, setOpenKeys] = useState<string[]>([]);
 	const { isMobile } = useDeviceType();
 	const currentAppId = useAppStore(state => state.currentAppId);
 	const userAppId = useUserStore(state => state.app_id);
+	const language = usePreferencesStore(state => state.language);
 
 	const effectiveAppId = useMemo(() => {
 		const fromUser = String(userAppId || "").trim();
@@ -80,6 +83,42 @@ export default function LayoutMenu({
 	}, [location.pathname]);
 
 	const selectedKey = useMemo(() => String(getSelectedKeys[0] || ""), [getSelectedKeys]);
+
+	const localizedMenus = useMemo<MenuItemType[]>(() => {
+		const localizeLabelValue = (item: MenuItemType) => {
+			const fallbackLabel = item.label ?? item.name;
+			const localizedLabel = language === "en-US"
+				? (item.label_en ?? item.name_en ?? fallbackLabel)
+				: language === "zh-CN"
+					? (item.label_zh ?? item.name_zh ?? fallbackLabel)
+					: fallbackLabel;
+
+			if (typeof localizedLabel === "string" && localizedLabel.includes(".")) {
+				const translated = t(localizedLabel);
+				if (translated !== localizedLabel) {
+					return translated;
+				}
+			}
+
+			return localizedLabel;
+		};
+
+		const localizeItems = (items: MenuItemType[]): MenuItemType[] => {
+			return items.map((item) => {
+				const children = Array.isArray(item.children)
+					? localizeItems(item.children as MenuItemType[])
+					: item.children;
+
+				return {
+					...item,
+					label: localizeLabelValue(item),
+					children,
+				};
+			});
+		};
+
+		return localizeItems(menus);
+	}, [menus, language, t]);
 
 	const findMenuKeyPath = (
 		items: MenuItemType[],
@@ -187,7 +226,7 @@ export default function LayoutMenu({
 			style={{ height: isMobile ? "100%" : "initial" }}
 			mode={mode}
 			// theme="dark"
-			items={menus}
+			items={localizedMenus}
 			{...menuOpenProps}
 			selectedKeys={getSelectedKeys}
 			onSelect={({ key }) => handleMenuSelect?.(key, mode)}

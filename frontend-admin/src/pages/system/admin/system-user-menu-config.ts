@@ -57,6 +57,8 @@ export const MENU_PERMISSION_OPTIONS = [
 	{ value: "/home", label: "system.userPermission.menu.homePath" },
 	{ value: "/system/user", label: "system.userPermission.menu.systemUser" },
 	{ value: "/system/dept", label: "system.userPermission.menu.systemDept" },
+	{ value: "/system/departments", label: "system.userPermission.menu.systemDepartments" },
+	{ value: "/system/branches", label: "system.userPermission.menu.systemBranches" },
 	{ value: "/system/menu", label: "system.userPermission.menu.systemMenu" },
 	{ value: "/system/developer", label: "system.userPermission.menu.systemDeveloper" },
 	{ value: "/system/broadcast", label: "system.userPermission.menu.systemBroadcast" },
@@ -118,6 +120,16 @@ export const DEPT_SELECT_QUERY_JSON = JSON.stringify({
 	],
 });
 
+export const BRANCH_SELECT_QUERY_JSON = JSON.stringify({
+	query: [
+		{
+			obj_name: "csm_branches",
+			fields: ["id", "branch_name"],
+			obj_where: { field: "id", type: "like", value: "" },
+		},
+	],
+});
+
 export const ROLE_LEVEL_OPTIONS_JSON = JSON.stringify({
 	options: [
 		{ value: "manager", label: "system.userPermission.level.manager" },
@@ -164,7 +176,7 @@ const PERMISSION_PRESET_DEFINITIONS: Record<string, { permissions: string[]; men
 	full_crud_export: { permissions: ["view", "create", "edit", "delete", "export"], menus: ["/dashboard", "/home", "/crm"] },
 	admin_full: {
 		permissions: ["admin", "view", "create", "edit", "delete", "export", "scope:all"],
-		menus: ["/system/user", "/system/menu", "/system/dept", "/dashboard", "/home", "/crm"],
+		menus: ["/system/user", "/system/dept", "/system/departments", "/system/branches", "/system/menu", "/dashboard", "/home", "/crm"],
 	},
 };
 
@@ -282,7 +294,7 @@ export const SYSTEM_ACCOUNT_DEFAULT_FIELDS: TableField[] = [
 	{ f_name: "permissionSchemaVersion", f_header: "system.userPermission.fields.permissionSchemaVersion", f_show: 0, f_types: "string", f_align: "left" },
 	{ f_name: "dataScope", f_header: "system.userPermission.fields.dataScope", f_show: 1, f_types: "co", f_align: "left", f_cbo_query: DATA_SCOPE_OPTIONS_JSON },
 	{ f_name: "dept_id", f_header: "system.userPermission.fields.deptId", f_show: 0, f_types: "co", f_align: "left", f_cbo_query: DEPT_SELECT_QUERY_JSON },
-	{ f_name: "branch_id", f_header: "system.userPermission.fields.branchId", f_show: 0, f_types: "co", f_align: "left", f_cbo_query: DEPT_SELECT_QUERY_JSON },
+	{ f_name: "branch_id", f_header: "system.userPermission.fields.branchId", f_show: 0, f_types: "co", f_align: "left", f_cbo_query: BRANCH_SELECT_QUERY_JSON },
 	{ f_name: "actived", f_header: "common.active", f_show: 1, f_types: "checkbox", f_align: "left" },
 ];
 
@@ -326,7 +338,7 @@ export const SUB_USER_DEFAULT_FIELDS: TableField[] = [
 	{ f_name: "permissionSchemaVersion", f_header: "system.userPermission.fields.permissionSchemaVersion", f_show: 0, f_types: "string", f_align: "left" },
 	{ f_name: "dataScope", f_header: "system.userPermission.fields.dataScope", f_show: 1, f_types: "co", f_align: "left", f_cbo_query: DATA_SCOPE_OPTIONS_JSON },
 	{ f_name: "dept_id", f_header: "system.userPermission.fields.deptId", f_show: 0, f_types: "co", f_align: "left", f_cbo_query: DEPT_SELECT_QUERY_JSON },
-	{ f_name: "branch_id", f_header: "system.userPermission.fields.branchId", f_show: 0, f_types: "co", f_align: "left", f_cbo_query: DEPT_SELECT_QUERY_JSON },
+	{ f_name: "branch_id", f_header: "system.userPermission.fields.branchId", f_show: 0, f_types: "co", f_align: "left", f_cbo_query: BRANCH_SELECT_QUERY_JSON },
 	{ f_name: "actived", f_header: "common.active", f_show: 1, f_types: "checkbox", f_align: "left" },
 ];
 
@@ -341,7 +353,7 @@ function beforeSave(row, seft) {
 	}
 
 	function getDefaultFullMenus() {
-		return ["/dashboard", "/home", "/system/user", "/system/menu", "/system/dept", "/crm"];
+		return ["/dashboard", "/home", "/system/user", "/system/dept", "/system/departments", "/system/branches", "/system/menu", "/crm"];
 	}
 
 	function rankScope(scope) {

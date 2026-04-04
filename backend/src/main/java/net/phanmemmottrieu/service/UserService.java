@@ -1247,12 +1247,21 @@ public class UserService {
             }
             user.setDataScope("ALL");
         } else if (isMainAccount) {
-            if (user.getPermissions() == null || user.getPermissions().isEmpty()) {
-                user.setPermissions(new ArrayList<>(List.of("admin")));
+            // Main account users always have full admin-level access to their app_id.
+            // Ensure permissions include admin + scope:all + full action set so the
+            // frontend isSuperPermissionProfile() check passes and they can see all
+            // system management menus (Người dùng, Nhóm quyền, etc.).
+            List<String> adminPermissions = mergeUniqueCaseInsensitive(
+                user.getPermissions(),
+                List.of("admin", "scope:all", "view", "create", "edit", "delete", "export")
+            );
+            user.setPermissions(adminPermissions);
+
+            String currentAppId = String.valueOf(user.getAppId() == null ? "" : user.getAppId()).trim();
+            if (!currentAppId.isBlank() && (user.getMenusPermissions() == null || user.getMenusPermissions().isEmpty())) {
+                user.setMenusPermissions(new ArrayList<>(List.of(currentAppId)));
             }
-            if (menusPermissions.isEmpty()) {
-                logger.warn("[mapMainAccountToUser] Main account user {} has empty menusPermissions from record", user.getEmail());
-            }
+            user.setDataScope("ALL");
         }
 
         long permissionBitfield = PermissionBitfieldUtil.buildBitfield(user.getPermissions(), user.getMenusPermissions(), user.getDev());

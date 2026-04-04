@@ -6,7 +6,7 @@ import { normalizeMenuRuntimeConfig } from "#src/components/csm-crm/crm-config";
 import DynamicCodeMenu from "#src/pages/system/dynamic-code";
 import { useAppStore, useUserStore, usePermissionStore, useTabsStore } from "#src/store";
 import { resolveDevFlag } from "#src/utils/dev-flag";
-import { adaptSystemUserConfigForActor, buildSystemUserMenuConfig, PERMISSION_GROUP_BEFORE_SAVE, PERMISSION_TOKEN_OPTIONS, ACTION_PRESET_OPTIONS_JSON, MENU_PERMISSION_OPTIONS, DATA_SCOPE_OPTIONS_JSON, DEPT_SELECT_QUERY_JSON, ROLE_LEVEL_OPTIONS_JSON, type SystemUserActorType } from "./system-user-menu-config";
+import { adaptSystemUserConfigForActor, buildSystemUserMenuConfig, PERMISSION_GROUP_BEFORE_SAVE, PERMISSION_TOKEN_OPTIONS, ACTION_PRESET_OPTIONS_JSON, MENU_PERMISSION_OPTIONS, DATA_SCOPE_OPTIONS_JSON, DEPT_SELECT_QUERY_JSON, BRANCH_SELECT_QUERY_JSON, ROLE_LEVEL_OPTIONS_JSON, type SystemUserActorType } from "./system-user-menu-config";
 import { Empty, Spin, Alert } from "antd";
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useParams, useLocation } from "react-router";
@@ -67,6 +67,51 @@ const SYSTEM_ROUTE_TABLE_SCHEMAS: Record<string, TableBootstrapDefinition[]> = {
 			),
 		},
 	],
+	"/system/departments": [
+		{
+			tableName: "csm_depts",
+			struct: buildStruct(
+				{
+					id: "",
+					parent_dept_id: "",
+					dept_code: "",
+					dept_name: "",
+					dept_full_name: "",
+					description: "",
+					manager_user_id: "",
+					is_global: 0,
+					status: 1,
+					create_time: 0,
+					update_time: 0,
+				},
+				["id", "dept_code"],
+				["id", "dept_code", "dept_name", "dept_full_name", "description"],
+			),
+		},
+	],
+	"/system/branches": [
+		{
+			tableName: "csm_branches",
+			struct: buildStruct(
+				{
+					id: "",
+					parent_branch_id: "",
+					branch_code: "",
+					branch_name: "",
+					branch_full_name: "",
+					dept_id: "",
+					description: "",
+					manager_user_id: "",
+					is_global: 0,
+					status: 1,
+					create_time: 0,
+					update_time: 0,
+				},
+				["id", "branch_code"],
+				["id", "branch_code", "branch_name", "branch_full_name", "dept_id", "description"],
+			),
+		},
+	],
 	"/system/user": [
 		{
 			tableName: "csm_accounts",
@@ -97,6 +142,51 @@ const SYSTEM_ROUTE_TABLE_SCHEMAS: Record<string, TableBootstrapDefinition[]> = {
 				},
 				["id", "username", "email", "phoneNumber"],
 				["id", "username", "email", "phoneNumber", "full_name", "app_id", "parent_account_id", "dept_id", "branch_id"],
+			),
+		},
+		{
+			tableName: "csm_group_members",
+			struct: buildStruct(
+				{
+					id: "",
+					parent_account_id: "",
+					login_identifier: "",
+					username: "",
+					email: "",
+					phoneNumber: "",
+					full_name: "",
+					user_address: "",
+					avatar: "",
+					group_rights: "[]",
+					group_id: "",
+					app_id: "",
+					app_token: "",
+					source_app_token: "",
+					refresh_token: "",
+					refresh: "",
+					refresh_token_ip: "",
+					refresh_token_ua: "",
+					refresh_token_expiry: "",
+					login_version: 0,
+					loginVersion: 0,
+					pass: "",
+					actived: true,
+					permissions: "[]",
+					menusPermissions: "[]",
+					permissionsAdd: "[]",
+					permissionsDeny: "[]",
+					menusPermissionsAdd: "[]",
+					menusPermissionsDeny: "[]",
+					permissionBitfield: "0",
+					permissionSchemaVersion: "v3",
+					dataScope: "NONE",
+					dept_id: "",
+					branch_id: "",
+					department_id: "",
+					team_id: "",
+				},
+				["id", "login_identifier"],
+				["id", "login_identifier", "username", "email", "phoneNumber", "full_name", "group_id", "dept_id", "branch_id"],
 			),
 		},
 	],
@@ -207,10 +297,25 @@ const DEPT_MENU_FIELD_KEYS = [
 	{ f_name: "update_time", key: "system.dept.fields.updateTime", f_types: "number", f_align: "right" },
 ];
 
+const BRANCH_MENU_FIELD_KEYS = [
+	{ f_name: "id", key: "system.branch.fields.id", f_types: "string", f_align: "left" },
+	{ f_name: "parent_branch_id", key: "system.branch.fields.parentBranchId", f_types: "string", f_align: "left" },
+	{ f_name: "branch_code", key: "system.branch.fields.code", f_types: "string", f_align: "left" },
+	{ f_name: "branch_name", key: "system.branch.fields.name", f_types: "string", f_align: "left" },
+	{ f_name: "branch_full_name", key: "system.branch.fields.fullName", f_types: "string", f_align: "left" },
+	{ f_name: "dept_id", key: "system.userPermission.fields.deptId", f_types: "co", f_align: "left" },
+	{ f_name: "description", key: "system.branch.fields.description", f_types: "string", f_align: "left" },
+	{ f_name: "manager_user_id", key: "system.branch.fields.managerUser", f_types: "string", f_align: "left" },
+	{ f_name: "is_global", key: "system.branch.fields.isGlobal", f_types: "checkbox", f_align: "center" },
+	{ f_name: "status", key: "system.branch.fields.status", f_types: "co", f_align: "center" },
+	{ f_name: "create_time", key: "system.branch.fields.createTime", f_types: "number", f_align: "right" },
+	{ f_name: "update_time", key: "system.branch.fields.updateTime", f_types: "number", f_align: "right" },
+];
+
 const STATUS_OPTIONS_JSON = JSON.stringify({
 	options: [
-		{ value: "1", label: "Hoạt động" },
-		{ value: "0", label: "Ngưng" },
+		{ value: "1", label: "common.activated" },
+		{ value: "0", label: "common.deactivated" },
 	],
 });
 
@@ -221,7 +326,7 @@ const PRESET_RULES: Record<string, { permissions: string[]; menus: string[] }> =
 	full_crud_export: { permissions: ["view", "create", "edit", "delete", "export"], menus: ["/dashboard", "/home", "/crm"] },
 	admin_full: {
 		permissions: ["admin", "view", "create", "edit", "delete", "export", "scope:all"],
-		menus: ["/system/user", "/system/menu", "/system/dept", "/dashboard", "/home", "/crm"],
+		menus: ["/system/user", "/system/dept", "/system/departments", "/system/branches", "/system/menu", "/dashboard", "/home", "/crm"],
 	},
 };
 
@@ -294,6 +399,25 @@ function buildDeptMenuFields(
 	}));
 }
 
+function buildBranchMenuFields(
+	t: (key: string) => string,
+	tEn: (key: string) => string,
+	tZh: (key: string) => string,
+) {
+	return BRANCH_MENU_FIELD_KEYS.map((field) => ({
+		f_name: field.f_name,
+		f_header: t(field.key),
+		f_header_vi: t(field.key),
+		f_header_en: tEn(field.key),
+		f_header_zh: tZh(field.key),
+		f_show: 1,
+		f_types: field.f_types,
+		f_align: field.f_align,
+		...(field.f_name === "status" ? { f_cbo_query: STATUS_OPTIONS_JSON } : {}),
+		...(field.f_name === "dept_id" ? { f_cbo_query: DEPT_SELECT_QUERY_JSON } : {}),
+	}));
+}
+
 function buildRoleMenuFields(
 	t: (key: string) => string,
 	tEn: (key: string) => string,
@@ -320,7 +444,7 @@ function buildRoleMenuFields(
 		{ f_name: "dataScope", ...h("system.userPermission.fields.dataScope"), f_show: 1, f_types: "co", f_align: "left", f_cbo_query: dataScopeOptionsQuery },
 		{ f_name: "role_level", ...h("system.userPermission.fields.roleLevel"), f_show: 1, f_types: "co", f_align: "left", f_cbo_query: ROLE_LEVEL_OPTIONS_JSON },
 		{ f_name: "dept_id", ...h("system.userPermission.fields.deptId"), f_show: 1, f_types: "co", f_align: "left", f_cbo_query: DEPT_SELECT_QUERY_JSON },
-		{ f_name: "branch_id", ...h("system.userPermission.fields.branchId"), f_show: 1, f_types: "co", f_align: "left", f_cbo_query: DEPT_SELECT_QUERY_JSON },
+		{ f_name: "branch_id", ...h("system.userPermission.fields.branchId"), f_show: 1, f_types: "co", f_align: "left", f_cbo_query: BRANCH_SELECT_QUERY_JSON },
 		{ f_name: "permissionBitfield", ...h("system.userPermission.fields.permissionBitfield"), f_show: 0, f_types: "string", f_align: "left" },
 		{ f_name: "permissionSchemaVersion", ...h("system.userPermission.fields.permissionSchemaVersion"), f_show: 0, f_types: "string", f_align: "left" },
 		{ f_name: "status", ...h("common.status"), f_show: 1, f_types: "co", f_align: "center", f_cbo_query: STATUS_OPTIONS_JSON },
@@ -364,6 +488,15 @@ const SYSTEM_FRIENDLY_VISIBLE_FIELDS: Record<string, string[]> = {
 		"dept_code",
 		"dept_name",
 		"parent_dept_id",
+		"manager_user_id",
+		"status",
+	],
+	csm_branches: [
+		"id",
+		"branch_code",
+		"branch_name",
+		"parent_branch_id",
+		"dept_id",
 		"manager_user_id",
 		"status",
 	],
@@ -631,6 +764,48 @@ export default function AdminPage() {
 			});
 		}
 
+		if (location.pathname === "/system/departments") {
+			return normalizeMenuRuntimeConfig({
+				...menu,
+				id: "departments",
+				path: "/system/departments",
+				label: t("common.menu.dept"),
+				label_vi: t("common.menu.dept"),
+				label_en: tEn("common.menu.dept"),
+				label_zh: tZh("common.menu.dept"),
+				table_name: "csm_depts",
+				app_id: appId,
+				type_form: 1,
+				row_type_edit: 0,
+				g_readonly: false,
+				table: buildDeptMenuFields(t, tEn, tZh),
+				struct: {
+					fieldsPK: ["id", "dept_code"],
+				},
+			});
+		}
+
+		if (location.pathname === "/system/branches") {
+			return normalizeMenuRuntimeConfig({
+				...menu,
+				id: "branches",
+				path: "/system/branches",
+				label: t("common.menu.branch"),
+				label_vi: t("common.menu.branch"),
+				label_en: tEn("common.menu.branch"),
+				label_zh: tZh("common.menu.branch"),
+				table_name: "csm_branches",
+				app_id: appId,
+				type_form: 1,
+				row_type_edit: 0,
+				g_readonly: false,
+				table: buildBranchMenuFields(t, tEn, tZh),
+				struct: {
+					fieldsPK: ["id", "branch_code"],
+				},
+			});
+		}
+
 		return normalizeMenuRuntimeConfig(menu);
 	}, [location.pathname, t, tEn, tZh, appId, roleFieldConstraints]);
 
@@ -652,6 +827,10 @@ export default function AdminPage() {
 		"/system/dept": "common.menu.permissionGroup",
 		"dept": "common.menu.permissionGroup",
 		"permission-group": "common.menu.permissionGroup",
+		"/system/departments": "common.menu.dept",
+		"departments": "common.menu.dept",
+		"/system/branches": "common.menu.branch",
+		"branches": "common.menu.branch",
 	};
 
 	const resolveDisplayLabel = (menu: any): string => {
@@ -686,6 +865,24 @@ export default function AdminPage() {
 				path: "/system/user",
 				table_name: actorTableName,
 				app_id: "csm",
+			});
+		}
+		if (location.pathname === "/system/departments") {
+			return normalizeMenuRuntimeConfig({
+				...normalized,
+				id: "departments",
+				path: "/system/departments",
+				table_name: "csm_depts",
+				app_id: normalized.app_id || appId,
+			});
+		}
+		if (location.pathname === "/system/branches") {
+			return normalizeMenuRuntimeConfig({
+				...normalized,
+				id: "branches",
+				path: "/system/branches",
+				table_name: "csm_branches",
+				app_id: normalized.app_id || appId,
 			});
 		}
 		return normalized;
@@ -742,8 +939,8 @@ export default function AdminPage() {
 						   id: "user",
 						   path: "/system/user",
 						   label: t("common.menu.user"),
-						   table_name: "csm_accounts",
-						   app_id: appId,
+						   table_name: isDevUser ? "csm_accounts" : "csm_group_members",
+						   app_id: "csm",
 						   type_form: 1,
 						   row_type_edit: 0,
 						   g_readonly: false,
@@ -773,6 +970,40 @@ export default function AdminPage() {
 						   trigger: { beforeSave: PERMISSION_GROUP_BEFORE_SAVE },
 						   struct: {
 							   fieldsPK: ["id", "role_code"],
+						   },
+					   },
+					   "/system/departments": {
+						   id: "departments",
+						   path: "/system/departments",
+						   label: t("common.menu.dept"),
+						   label_vi: t("common.menu.dept"),
+						   label_en: tEn("common.menu.dept"),
+						   label_zh: tZh("common.menu.dept"),
+						   table_name: "csm_depts",
+						   app_id: appId,
+						   type_form: 1,
+						   row_type_edit: 0,
+						   g_readonly: false,
+						   table: buildDeptMenuFields(t, tEn, tZh),
+						   struct: {
+							   fieldsPK: ["id", "dept_code"],
+						   },
+					   },
+					   "/system/branches": {
+						   id: "branches",
+						   path: "/system/branches",
+						   label: t("common.menu.branch"),
+						   label_vi: t("common.menu.branch"),
+						   label_en: tEn("common.menu.branch"),
+						   label_zh: tZh("common.menu.branch"),
+						   table_name: "csm_branches",
+						   app_id: appId,
+						   type_form: 1,
+						   row_type_edit: 0,
+						   g_readonly: false,
+						   table: buildBranchMenuFields(t, tEn, tZh),
+						   struct: {
+							   fieldsPK: ["id", "branch_code"],
 						   },
 					   },
 					   // Add more fallbacks here if needed
@@ -1005,6 +1236,8 @@ export default function AdminPage() {
 	const tableNameByPath: Record<string, string[]> = {
 		"/system/user": ["csm_accounts", "csm_group_members"],
 		"/system/dept": ["csm_roles"],
+		"/system/departments": ["csm_depts"],
+		"/system/branches": ["csm_branches"],
 	};
 	const expectedTableNames = (tableNameByPath[location.pathname] || []).map((item) => item.toLowerCase());
 	const currentTableName = String(runtimeMenuData?.table_name || "").trim();
@@ -1226,10 +1459,16 @@ export default function AdminPage() {
 					? ["id", "role_code", "role_name", "description", "permissionPreset", "permissions", "menusPermissions", "dataScope", "permissionBitfield", "status"]
 					: runtimeMenuData.table_name === "csm_depts"
 						? ["id", "parent_dept_id", "dept_code", "dept_name", "dept_full_name", "description", "manager_user_id", "is_global", "status", "create_time", "update_time"]
+						: runtimeMenuData.table_name === "csm_branches"
+							? ["id", "parent_branch_id", "branch_code", "branch_name", "branch_full_name", "dept_id", "description", "manager_user_id", "is_global", "status", "create_time", "update_time"]
 						: SYSTEM_USER_VISIBLE_FIELDS_BY_ACTOR[systemUserActorType];
 			DEFAULT_HEADERS.parent_account_id = "common.parentAccountId";
 			DEFAULT_HEADERS.login_identifier = "common.loginIdentifier";
 			DEFAULT_HEADERS.group_id = "common.groupId";
+			DEFAULT_HEADERS.parent_branch_id = "system.branch.fields.parentBranchId";
+			DEFAULT_HEADERS.branch_code = "system.branch.fields.code";
+			DEFAULT_HEADERS.branch_name = "system.branch.fields.name";
+			DEFAULT_HEADERS.branch_full_name = "system.branch.fields.fullName";
 			const normalizedKeys = Array.from(new Set(keys.length ? keys : fallbackKeys));
 			const fields = normalizedKeys.map((k) => ({
 				f_name: k,

@@ -2,6 +2,7 @@ import type { ParamsType, ProTableProps } from "@ant-design/pro-components";
 
 import type { TablePaginationConfig } from "antd";
 
+import { usePreferencesStore } from "#src/store";
 import { cn } from "#src/utils/cn";
 import { DownOutlined, LoadingOutlined, RightOutlined } from "@ant-design/icons";
 import { ProTable } from "@ant-design/pro-components";
@@ -38,6 +39,7 @@ export function BasicTable<
 ) {
 	const classes = useStyles();
 	const { t } = useTranslation();
+	const language = usePreferencesStore(state => state.language);
 	const { autoHeight = true, offsetBottom } = props;
 	const tableWrapperRef = useRef<HTMLDivElement>(null);
 	const size = useSize(tableWrapperRef);
@@ -127,10 +129,20 @@ export function BasicTable<
 	return (
 		<div className="h-full" ref={tableWrapperRef}>
 			<ProTable
+				key={`basic-table-${language}`}
 				cardBordered
 				rowKey={(record, index) => (record as any)?.id || `row-${index}`}
 				dateFormatter="string"
 				{...props}
+				search={
+					props.search === false
+						? false
+						: {
+							searchText: t("common.search"),
+							resetText: t("common.reset"),
+							...((typeof props.search === "object" && props.search) ? props.search : {}),
+						}
+				}
 				options={
 					props.options === false
 						? false

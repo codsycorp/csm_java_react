@@ -1358,8 +1358,8 @@ export function CsmDynamicGrid({
 					
 					// Vue parity: Sort by 'ten' field alphabetically (before building enumObj)
 					options.sort((a, b) => {
-						const aLabel = a?.ten ?? a?.label ?? a?.text ?? String(a);
-						const bLabel = b?.ten ?? b?.label ?? b?.text ?? String(b);
+						const aLabel = localizeOptionLabel(a?.ten ?? a?.label ?? a?.text ?? String(a));
+						const bLabel = localizeOptionLabel(b?.ten ?? b?.label ?? b?.text ?? String(b));
 						return String(aLabel).localeCompare(String(bLabel));
 					});
 					
@@ -1371,15 +1371,15 @@ export function CsmDynamicGrid({
 						if (Array.isArray(opt)) {
 							// Format: [value, label]
 							value = opt[0];
-							label = opt[1] ?? opt[0];
+							label = localizeOptionLabel(opt[1] ?? opt[0]);
 						} else if (opt && typeof opt === "object") {
 							// Format: { ma, ten } (Vue format) - prioritize ma/ten first!
 							value = opt.ma ?? opt.value ?? opt.id ?? opt.key;
-							label = opt.ten ?? opt.label ?? opt.text ?? String(value);
+							label = localizeOptionLabel(opt.ten ?? opt.label ?? opt.text ?? String(value));
 						} else {
 							// Simple value: "option"
 							value = String(opt);
-							label = String(opt);
+							label = localizeOptionLabel(String(opt));
 						}
 						if (value != null && value !== "") {
 							enumObj[String(value)] = { text: String(label) };
@@ -1951,7 +1951,7 @@ export function CsmDynamicGrid({
 
 		if (canEdit || canDelete) {
 			cols.push({
-				title: "Hành động",
+				title: t("common.action"),
 				key: "action",
 				valueType: "option",
 				width: 200,
@@ -1962,21 +1962,21 @@ export function CsmDynamicGrid({
 					if (canEdit) {
 						children.push(React.createElement(Button, { type: "link", style: { padding: 0, marginRight: 8 }, onClick: () => {
 							handleEdit(record);
-						}, key: "edit" }, "Sửa"));
+						}, key: "edit" }, t("common.edit")));
 					}
 					if (canAdd) {
 						children.push(React.createElement(Button, { type: "link", style: { padding: 0, marginRight: 8, color: "#52c41a" }, onClick: () => {
 							handleClone(record);
-						}, key: "clone" }, "Nhân bản"));
+						}, key: "clone" }, t("common.clone")));
 					}
 					if (canDelete) {
 						children.push(React.createElement(Button, { type: "link", danger: true, style: { padding: 0 }, onClick: () => {
 							Modal.confirm({
-								title: "Xác nhận xóa",
-								content: "Bạn có chắc muốn xóa bản ghi này?",
-								okText: "Xóa",
+								title: t("common.confirmDeleteTitle"),
+								content: t("common.deleteRecordConfirm"),
+								okText: t("common.delete"),
 								okType: "danger",
-								cancelText: "Hủy",
+								cancelText: t("common.cancel"),
 								onOk: async () => {
 									// Detail grid: chỉ xóa local, không gọi API
 									// Giống Vue: chỉ lưu khi master save
@@ -1987,7 +1987,7 @@ export function CsmDynamicGrid({
 											runAfterTrigger('afterDelete', next);
 											return next;
 										});
-										message.success("Đã xóa thành công");
+										message.success(t("common.deleteSuccess"));
 										onDelete?.(record);
 										if (isDetailGrid) {
 											onDataChange?.();
@@ -1996,7 +1996,7 @@ export function CsmDynamicGrid({
 									}
 									
 									if (!appId) {
-										message.error("Thiếu app_id");
+										message.error(t("common.missingAppId"));
 										return;
 									}
 									
@@ -2036,15 +2036,15 @@ export function CsmDynamicGrid({
 										setData(nextRows);
 										syncMasterTableRows(nextRows);
 										
-										message.success("Đã xóa thành công");
+										message.success(t("common.deleteSuccess"));
 										onDelete?.(record);
 									} catch (err) {
 										console.error("❌ Delete error:", err);
-										message.error("Xóa thất bại: " + (err as Error).message);
+										message.error(`${t("common.fail")}: ${(err as Error).message}`);
 									}
 								}
 							});
-						}, key: "del" }, "Xóa"));
+						}, key: "del" }, t("common.delete")));
 					}
 					return React.createElement("span", null, ...children);
 				},
@@ -2343,7 +2343,7 @@ export function CsmDynamicGrid({
 			if (e.key === "F8" && canDelete && _selectedRow) {
 				e.preventDefault();
 				// eslint-disable-next-line no-alert
-				const ok = window.confirm("Bạn có chắc muốn xóa bản ghi này?");
+				const ok = window.confirm(t("common.deleteRecordConfirm"));
 				if (ok) void handleDelete(_selectedRow);
 			}
 		};
@@ -2642,7 +2642,7 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 					runAfterTrigger('afterDelete', next);
 					return next;
 				});
-				message.success("Đã xóa thành công");
+				message.success(t("common.deleteSuccess"));
 				onDelete?.(record);
 				runSideEffectTrigger("delete_db", record);
 				// Notify parent để sync vào form (nếu là detail grid)
@@ -2653,7 +2653,7 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 			}
 			
 			if (!appId) {
-				message.error("Thiếu app_id");
+				message.error(t("common.missingAppId"));
 				return;
 			}
 			
@@ -2939,7 +2939,7 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 				items.push(
 					React.createElement(Input, {
 						key: "search",
-						placeholder: `Tìm kiếm trong ${derivedSearchFields.length} trường...`,
+						placeholder: t("common.searchInFields", { count: derivedSearchFields.length }),
 						prefix: React.createElement(SearchOutlined, { style: { color: "#bfbfbf" } }),
 						value: searchTerm,
 						onChange: (e: any) => setSearchTerm(e.target.value),
@@ -2951,13 +2951,13 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 			const buttons = [];
 			if (canAdd) {
 				buttons.push(
-					React.createElement(Tooltip, { key: "add-tooltip", title: "Phím tắt: F4" },
+					React.createElement(Tooltip, { key: "add-tooltip", title: t("common.shortcutAddF4") },
 						React.createElement(Button, { 
 							key: "add", 
 							type: "primary", 
 							icon: React.createElement(PlusOutlined),
 							onClick: handleAdd
-						}, "Thêm mới")
+						}, t("common.add"))
 					)
 				);
 			}
@@ -2972,14 +2972,14 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 							if (selectedRows.length === 0) return;
 							
 							Modal.confirm({
-								title: "Xác nhận xóa",
-								content: `Bạn có chắc muốn xóa ${selectedRows.length} bản ghi đã chọn?`,
-								okText: "Xóa",
+								title: t("common.confirmDeleteTitle"),
+								content: t("common.deleteSelectedConfirm", { count: selectedRows.length }),
+								okText: t("common.delete"),
 								okType: "danger",
-								cancelText: "Hủy",
+								cancelText: t("common.cancel"),
 								onOk: async () => {
 									if (!appId) {
-										message.error("Thiếu app_id");
+										message.error(t("common.missingAppId"));
 										return;
 									}
 									
@@ -3119,7 +3119,7 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 				key: "editor",
 				open: editorOpen,
 				onOpenChange: (o: boolean) => { setEditorOpen(o); if (!o) setCloneData(null); },
-				title: editingRecord ? "Chỉnh sửa" : (cloneData ? "Nhân bản" : "Thêm mới"),
+				title: editingRecord ? t("common.edit") : (cloneData ? t("common.clone") : t("common.add")),
 				m_configs,
 				fields: m_configs.table,
 				record: editingRecord ?? cloneData,
@@ -3186,7 +3186,7 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 						});
 						
 						setEditorOpen(false);
-						message.success(cmd === "create" ? "Đã thêm mới" : "Đã cập nhật");
+						message.success(cmd === "create" ? t("common.addSuccess") : t("common.updateSuccess"));
 						runSideEffectTrigger("update_db", values);
 						onAdd?.();
 						return;

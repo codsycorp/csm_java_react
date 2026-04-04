@@ -256,7 +256,7 @@ export function Detail({
   setFullMenuList,
 }: DetailProps) {
   // Log treeData để kiểm tra giá trị truyền vào
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const formRef = useRef<FormInstance>(null);
   const [tableRows, setTableRows] = useState<TableField[]>([]);
   const [triggerConfig, setTriggerConfig] = useState<TriggerConfig | Record<string, any>>({});
@@ -1006,7 +1006,13 @@ export function Detail({
                 ...flatParentMenus
                   .filter(menu => menu.id !== detailData.id) // Loại trừ chính menu đang edit
                   .map(menu => ({
-                    label: `${getMenuLabel(menu, 'vi', t)}`,
+                    label: (() => {
+                      const baseLabel = getMenuLabel(menu, i18n.language, t);
+                      const extra: string[] = [];
+                      if (menu.label_en) extra.push(`EN: ${menu.label_en}`);
+                      if (menu.label_zh) extra.push(`ZH: ${menu.label_zh}`);
+                      return extra.length > 0 ? `${baseLabel} (${extra.join(" | ")})` : baseLabel;
+                    })(),
                     value: menu.id,
                   }))
               ]}

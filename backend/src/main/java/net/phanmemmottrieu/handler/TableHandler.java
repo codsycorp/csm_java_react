@@ -679,7 +679,7 @@ public class TableHandler {
             "dept_id", "branch_id", "department_id", "team_id"
         ));
         map.put("csm_roles", List.of(
-            "permissionBitfield", "permissionSchemaVersion", "dataScope"
+            "permissionBitfield", "permissionSchemaVersion", "dataScope", "dept_id", "branch_id", "role_level"
         ));
         map.put("csm_user_depts", List.of(
             "permissionBitfield", "permissionSchemaVersion", "dataScope", "branch_id"
@@ -690,6 +690,7 @@ public class TableHandler {
     private static Map<String, List<String>> createDefaultTablePkFields() {
         Map<String, List<String>> map = new HashMap<>();
         map.put("csm_depts", List.of("id", "dept_code"));
+        map.put("csm_branches", List.of("id", "branch_code"));
         map.put("csm_roles", List.of("id", "role_code"));
         map.put("csm_permissions", List.of("id", "permission_code"));
         map.put("csm_role_permissions", List.of("id", "role_id", "permission_id"));
@@ -708,9 +709,13 @@ public class TableHandler {
             "id", "parent_dept_id", "dept_code", "dept_name", "dept_full_name",
             "description", "manager_user_id", "is_global", "status", "create_time", "update_time"
         ));
+        map.put("csm_branches", List.of(
+            "id", "parent_branch_id", "branch_code", "branch_name", "branch_full_name",
+            "dept_id", "description", "manager_user_id", "is_global", "status", "create_time", "update_time"
+        ));
         map.put("csm_roles", List.of(
-            "id", "role_code", "role_name", "is_global", "department_id",
-            "description", "status", "permissionBitfield", "permissionSchemaVersion", "dataScope",
+            "id", "role_code", "role_name", "is_global", "department_id", "dept_id", "branch_id", "role_level",
+            "description", "permissions", "menusPermissions", "status", "permissionBitfield", "permissionSchemaVersion", "dataScope",
             "create_time", "update_time"
         ));
         map.put("csm_permissions", List.of(
@@ -2715,6 +2720,10 @@ public class TableHandler {
                 // Ma hoa pass cho MOI truong hop update tren bang user/sub-user
                 // (ke ca dev tu sua, admin tu sua, hoac admin sua sub-user)
                 if (isSystemUsersTable || isSubUserTable) {
+                    String pwChangeError = handlePasswordChangePayload(tblname, objUpdate, records);
+                    if (pwChangeError != null) {
+                        return errorResponse(pwChangeError);
+                    }
                     ensurePassEncrypted(tblname, objUpdate, records);
                 }
 
@@ -3049,6 +3058,63 @@ public class TableHandler {
      * @param objUpdate       du lieu dang ghi
      * @param existingRecords ban ghi hien co de lay loginId neu objUpdate khong co
      */
+    /**
+     * Xử lý đổi mật khẩu từ profile page.
+     * Frontend gửi _changePassword=true, _oldPassword, _newPassword thay vì gán trực tiếp vào "pass".
+     * Method này xác thực mật khẩu cũ, sau đó đặt "pass" = mật khẩu mới (plain) để ensurePassEncrypted xử lý tiếp.
+     * Trả về null nếu OK, hoặc thông báo lỗi nếu xác thực thất bại.
+     */
+    private String handlePasswordChangePayload(String tableName, Map<String, Object> objUpdate, List<Map<String, Object>> existingRecords) {
+        Object changeFlag = objUpdate.remove("_changePassword");
+        String oldPw = safeStr(objUpdate.remove("_oldPassword"));
+        String newPw = safeStr(objUpdate.remove("_newPassword"));
+
+        boolean isChangeRequest = Boolean.TRUE.equals(changeFlag) || "true".equalsIgnoreCase(safeStr(changeFlag));
+        if (!isChangeRequest) {
+            return null; // Không phải yêu cầu đổi mật khẩu, bỏ qua
+        }
+
+        if (newPw.isEmpty()) {
+            return "Mật khẩu mới không được để trống";
+        }
+
+        // Lấy loginId từ bản ghi hiện tại để tạo chuỗi encrypt
+        String loginId = "";
+        if (!existingRecords.isEmpty()) {
+            Map<String, Object> first = existingRecords.get(0);
+            if ("csm_accounts".equals(tableName)) {
+                loginId = safeStr(first.get("username"));
+                if (loginId.isEmpty()) loginId = safeStr(first.get("email"));
+                if (loginId.isEmpty()) loginId = safeStr(first.get("phoneNumber"));
+            } else if ("csm_group_members".equals(tableName)) {
+                loginId = safeStr(first.get("login_identifier"));
+            }
+        }
+
+        if (loginId.isEmpty()) {
+            return "Không xác định được tài khoản để đổi mật khẩu";
+        }
+
+        // Xác thực mật khẩu cũ (nếu có trong record và client cũng cung cấp)
+        if (!existingRecords.isEmpty() && !oldPw.isEmpty()) {
+            String storedPass = safeStr(existingRecords.get(0).get("pass"));
+            if (!storedPass.isEmpty()) {
+                try {
+                    String expectedEncrypted = recordManager.csm_encrypt(loginId + "_____" + oldPw);
+                    if (!expectedEncrypted.equals(storedPass)) {
+                        return "Mật khẩu cũ không chính xác";
+                    }
+                } catch (Exception e) {
+                    logger.warn("[handlePasswordChangePayload] Không xác thực được mật khẩu cũ: {}", e.getMessage());
+                }
+            }
+        }
+
+        // Đặt pass = mật khẩu mới (plain text); ensurePassEncrypted sẽ mã hóa
+        objUpdate.put("pass", newPw);
+        return null;
+    }
+
     private void ensurePassEncrypted(String tableName, Map<String, Object> objUpdate, List<Map<String, Object>> existingRecords) {
         String passVal = safeStr(objUpdate.get("pass"));
         if (passVal.isEmpty()) return;

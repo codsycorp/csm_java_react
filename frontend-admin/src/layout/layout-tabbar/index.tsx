@@ -209,6 +209,18 @@ export default function LayoutTabbar() {
 	 * Priority: navigation state > menu tree (for dynamic grids) > route definition
 	 */
 	const deriveTabLabel = useCallback((path: string, locationState: any): string => {
+		const SYSTEM_TAB_LABEL_MAP: Record<string, string> = {
+			"/system/dept": "common.menu.permissionGroup",
+			"/system/departments": "common.menu.dept",
+			"/system/branches": "common.menu.branch",
+			"/system/user": "common.menu.user",
+		};
+
+		const canonicalSystemLabelKey = SYSTEM_TAB_LABEL_MAP[path];
+		if (canonicalSystemLabelKey) {
+			return t(canonicalSystemLabelKey);
+		}
+
 		// 1. Check navigation state first (passed from menu click)
 		if (locationState?.menuLabel) {
 			return locationState.menuLabel;

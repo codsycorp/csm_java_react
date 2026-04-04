@@ -36,6 +36,29 @@ function buildMenuTree(flatMenus: ApiMenuItemType[], parentId: string = ""): Api
 	return result;
 }
 
+function resolveOrderValue(value: unknown): number {
+	if (value === null || value === undefined || value === "") return Number.MAX_SAFE_INTEGER;
+	const parsed = Number(value);
+	return Number.isFinite(parsed) ? parsed : Number.MAX_SAFE_INTEGER;
+}
+
+function sortApiMenuTreeByOrder(items: ApiMenuItemType[]): ApiMenuItemType[] {
+	return [...(items || [])]
+		.sort((a, b) => {
+			const diff = resolveOrderValue((a as any)?.order) - resolveOrderValue((b as any)?.order);
+			if (diff !== 0) return diff;
+			const labelA = String((a as any)?.label || (a as any)?.name || (a as any)?.id || "").toLowerCase();
+			const labelB = String((b as any)?.label || (b as any)?.name || (b as any)?.id || "").toLowerCase();
+			if (labelA < labelB) return -1;
+			if (labelA > labelB) return 1;
+			return 0;
+		})
+		.map((item) => ({
+			...item,
+			children: Array.isArray(item?.children) ? sortApiMenuTreeByOrder(item.children as ApiMenuItemType[]) : item?.children,
+		}));
+}
+
 function normalizeAccessKey(raw: unknown): string {
 	if (raw == null) return "";
 	return String(raw).trim().toLowerCase();
@@ -273,6 +296,9 @@ export function transformApiMenusToLayoutMenus(apiMenus: (ApiMenuItemType & { ch
 		const menuItem: any = {
 			key: apiMenu.path || apiMenu.id || "",
 			label: stripMenuPrefixFromLabel(apiMenu.label || apiMenu.name || ""),
+			name: apiMenu.name ? stripMenuPrefixFromLabel(apiMenu.name) : undefined,
+			name_en: apiMenu.name_en ? stripMenuPrefixFromLabel(apiMenu.name_en) : undefined,
+			name_zh: apiMenu.name_zh ? stripMenuPrefixFromLabel(apiMenu.name_zh) : undefined,
 			disabled: apiMenu.status === 0 || apiMenu.m_show === false,
 			label_en: apiMenu.label_en ? stripMenuPrefixFromLabel(apiMenu.label_en) : undefined,
 			label_zh: apiMenu.label_zh ? stripMenuPrefixFromLabel(apiMenu.label_zh) : undefined,
@@ -408,6 +434,7 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 				if (hasParentId && !hasChildren) {
 					apiMenuList = buildMenuTree(apiMenuList);
 				}
+				apiMenuList = sortApiMenuTreeByOrder(apiMenuList);
 				apiWholeMenus = apiMenuList;
 
 				loadDatabaseFromMenus(apiMenuList, effectiveAppId).catch(() => {
@@ -461,8 +488,6 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 				wholeMenus = homeMenu ? [homeMenu] : [];
 			}
 		}
-
-		wholeMenus = ensureAutoSetupMenuForDesktop(wholeMenus, routeMenus);
 
 		const newState = {
 			constantMenus,
@@ -536,6 +561,7 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 				if (hasParentId && !hasChildren) {
 					apiMenuList = buildMenuTree(apiMenuList);
 				}
+				apiMenuList = sortApiMenuTreeByOrder(apiMenuList);
 				apiWholeMenus = apiMenuList;
 				loadDatabaseFromMenus(apiMenuList, effectiveAppId).catch(() => {
 				});
@@ -608,8 +634,6 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 				? [...(homeMenu ? [homeMenu] : []), ...systemMenus]
 				: (homeMenu ? [homeMenu] : []);
 		}
-
-		wholeMenus = ensureAutoSetupMenuForDesktop(wholeMenus, baseRouteMenus);
 
 		const newState = {
 			constantMenus,

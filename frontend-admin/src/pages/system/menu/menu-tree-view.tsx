@@ -1,10 +1,10 @@
 import type { MenuItemType } from "#src/api/system/menu";
 import type { TFunction } from "i18next";
 import { BasicButton } from "#src/components";
-import { PlusCircleOutlined, MinusCircleOutlined } from "@ant-design/icons";
+import { PlusCircleOutlined, MinusCircleOutlined, UpOutlined, DownOutlined, VerticalAlignTopOutlined, VerticalAlignBottomOutlined } from "@ant-design/icons";
 import { Tag, Popconfirm, Space, Tree } from "antd";
 import useToken from "antd/es/theme/useToken";
-import type { TreeDataNode } from "antd";
+import type { TreeDataNode, TreeProps } from "antd";
 import { getMenuConfigDisplay } from "./utils/menu-logic";
 import MenuConfigBadge from "./components/MenuConfigBadge";
 
@@ -57,6 +57,11 @@ interface MenuTreeViewProps {
 	lang?: string;
 	onEdit: (record: MenuItemType) => void;
 	onDelete: (id: string) => void;
+	onMoveUp?: (id: string) => void;
+	onMoveDown?: (id: string) => void;
+	onMoveTop?: (id: string) => void;
+	onMoveBottom?: (id: string) => void;
+	onDragDrop?: (payload: { dragId: string; targetId: string; dropToGap: boolean; relativeDropPosition: number }) => void;
 	onAdd: (parentId?: string) => void;
 	hasAuth: (action: string) => boolean;
 	loading?: boolean;
@@ -68,6 +73,10 @@ function convertToTreeData(
 	lang: string,
 	onEdit: (record: MenuItemType) => void,
 	onDelete: (id: string) => void,
+	onMoveUp: ((id: string) => void) | undefined,
+	onMoveDown: ((id: string) => void) | undefined,
+	onMoveTop: ((id: string) => void) | undefined,
+	onMoveBottom: ((id: string) => void) | undefined,
 	onAdd: (parentId?: string) => void,
 	hasAuth: (action: string) => boolean,
 	token: ReturnType<typeof useToken>[1],
@@ -87,6 +96,7 @@ function convertToTreeData(
 
 		return {
 			key: uniqueKey,
+			rawId: item.id,
 			title: (
 				<div className="flex items-center justify-between w-full gap-2 py-1">
 					<div className="flex-1 flex items-center gap-4">
@@ -154,6 +164,50 @@ function convertToTreeData(
 						<BasicButton
 							type="text"
 							size="small"
+							disabled={!hasAuth("update")}
+							icon={<VerticalAlignTopOutlined />}
+							onClick={(e) => {
+								e.stopPropagation();
+								onMoveTop?.(item.id);
+							}}
+							title={t("system.menu.moveTop") || "Move to top"}
+						/>
+						<BasicButton
+							type="text"
+							size="small"
+							disabled={!hasAuth("update")}
+							icon={<UpOutlined />}
+							onClick={(e) => {
+								e.stopPropagation();
+								onMoveUp?.(item.id);
+							}}
+							title={t("system.menu.moveUp") || "Move up"}
+						/>
+						<BasicButton
+							type="text"
+							size="small"
+							disabled={!hasAuth("update")}
+							icon={<DownOutlined />}
+							onClick={(e) => {
+								e.stopPropagation();
+								onMoveDown?.(item.id);
+							}}
+							title={t("system.menu.moveDown") || "Move down"}
+						/>
+						<BasicButton
+							type="text"
+							size="small"
+							disabled={!hasAuth("update")}
+							icon={<VerticalAlignBottomOutlined />}
+							onClick={(e) => {
+								e.stopPropagation();
+								onMoveBottom?.(item.id);
+							}}
+							title={t("system.menu.moveBottom") || "Move to bottom"}
+						/>
+						<BasicButton
+							type="text"
+							size="small"
 							disabled={!hasAuth("add")}
 							icon={<PlusCircleOutlined />}
 							onClick={(e) => {
@@ -203,6 +257,10 @@ function convertToTreeData(
 						lang,
 						onEdit,
 						onDelete,
+						onMoveUp,
+						onMoveDown,
+						onMoveTop,
+						onMoveBottom,
 						onAdd,
 						hasAuth,
 						token,
@@ -219,12 +277,34 @@ export function MenuTreeView({
 	lang = "vi",
 	onEdit,
 	onDelete,
+	onMoveUp,
+	onMoveDown,
+	onMoveTop,
+	onMoveBottom,
+	onDragDrop,
 	onAdd,
 	hasAuth,
 	loading = false,
 }: MenuTreeViewProps) {
 	const [, token] = useToken();
-	const treeData = convertToTreeData(data, t, lang, onEdit, onDelete, onAdd, hasAuth, token);
+	const treeData = convertToTreeData(data, t, lang, onEdit, onDelete, onMoveUp, onMoveDown, onMoveTop, onMoveBottom, onAdd, hasAuth, token);
+
+	const handleDrop: TreeProps["onDrop"] = (info) => {
+		if (!onDragDrop) return;
+		const dragId = String((info.dragNode as any)?.rawId || (info.dragNode as any)?.key || "");
+		const targetId = String((info.node as any)?.rawId || (info.node as any)?.key || "");
+		if (!dragId || !targetId || dragId === targetId) return;
+		const pos = String((info.node as any)?.pos || "");
+		const posArr = pos.split("-");
+		const lastPos = Number(posArr[posArr.length - 1] || 0);
+		const relativeDropPosition = (info as any).dropPosition - lastPos;
+		onDragDrop({
+			dragId,
+			targetId,
+			dropToGap: !!(info as any).dropToGap,
+			relativeDropPosition,
+		});
+	};
 
 	return (
 		<div className="w-full">
@@ -301,6 +381,8 @@ export function MenuTreeView({
 						defaultExpandAll
 						showLine
 						blockNode
+						draggable={{ icon: false }}
+						onDrop={handleDrop}
 						className="[&_.ant-tree-node-content-wrapper]:!bg-transparent [&_.ant-tree-node-content-wrapper]:!pl-0"
 					/>
 				)}
