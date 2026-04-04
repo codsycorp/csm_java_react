@@ -1178,12 +1178,19 @@ public class UserService {
         }
 
         List<String> permissions = toStringListFlexible(userRecord.get("permissions"));
-        user.setPermissions(permissions);
-
         List<String> menusPermissions = toStringListFlexible(userRecord.get("menusPermissions"));
+
+        String rawPermissionBitfield = String.valueOf(userRecord.getOrDefault("permissionBitfield", ""));
+        Long parsedPermissionBitfield = parseBitfieldToLong(rawPermissionBitfield);
+        if (parsedPermissionBitfield != null) {
+            permissions = mergeUniqueCaseInsensitive(permissions, permissionsFromBitfield(parsedPermissionBitfield));
+            menusPermissions = mergeUniqueCaseInsensitive(menusPermissions, menusFromBitfield(parsedPermissionBitfield));
+        }
+
+        user.setPermissions(permissions);
         user.setMenusPermissions(menusPermissions);
 
-        user.setPermissionBitfield(String.valueOf(userRecord.getOrDefault("permissionBitfield", "")));
+        user.setPermissionBitfield(rawPermissionBitfield);
         user.setPermissionSchemaVersion(String.valueOf(userRecord.getOrDefault("permissionSchemaVersion", "")));
         user.setDataScope(String.valueOf(userRecord.getOrDefault("dataScope", "")));
         user.setDeptId(String.valueOf(userRecord.getOrDefault("dept_id", "")));
@@ -1229,22 +1236,20 @@ public class UserService {
         }
         user.setDev(isDev);
         
-        // Set roles based on user type
+        // Keep persisted permissions as source of truth; only add legacy fallback when missing.
         if (isDev) {
-            // Dev users: role="dev" (cao hơn admin)
-            List<String> devRoles = new ArrayList<>();
-            devRoles.add("dev");
-            user.setPermissions(devRoles);
-            // menusPermissions must come from record explicitly
-            if (permissions.isEmpty()) {
-                logger.warn("[mapMainAccountToUser] Dev user {} has empty permissions from record", user.getEmail());
+            List<String> devPermissions = mergeUniqueCaseInsensitive(user.getPermissions(), List.of("dev", "admin", "scope:all"));
+            user.setPermissions(devPermissions);
+
+            String currentAppId = String.valueOf(user.getAppId() == null ? "" : user.getAppId()).trim();
+            if (!currentAppId.isBlank()) {
+                user.setMenusPermissions(new ArrayList<>(List.of(currentAppId)));
             }
+            user.setDataScope("ALL");
         } else if (isMainAccount) {
-            // Main account users (csm_accounts): role="admin"
-            List<String> adminRoles = new ArrayList<>();
-            adminRoles.add("admin");
-            user.setPermissions(adminRoles);
-            // menusPermissions must come from record explicitly
+            if (user.getPermissions() == null || user.getPermissions().isEmpty()) {
+                user.setPermissions(new ArrayList<>(List.of("admin")));
+            }
             if (menusPermissions.isEmpty()) {
                 logger.warn("[mapMainAccountToUser] Main account user {} has empty menusPermissions from record", user.getEmail());
             }

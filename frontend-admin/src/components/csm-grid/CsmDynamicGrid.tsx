@@ -170,6 +170,31 @@ function getLocaleNumberSeparators(locale: string): { group: string; decimal: st
 	}
 }
 
+function normalizeScope(scope: unknown): "NONE" | "OWNER" | "DEPARTMENT" | "BRANCH" | "ALL" {
+	const value = String(scope || "").trim().toUpperCase();
+	if (value === "OWNER" || value === "DEPARTMENT" || value === "BRANCH" || value === "ALL") return value;
+	return "NONE";
+}
+
+function scopeRank(scope: "NONE" | "OWNER" | "DEPARTMENT" | "BRANCH" | "ALL"): number {
+	switch (scope) {
+		case "OWNER": return 1;
+		case "DEPARTMENT": return 2;
+		case "BRANCH": return 3;
+		case "ALL": return 4;
+		default: return 0;
+	}
+}
+
+function minScope(
+	requested: "NONE" | "OWNER" | "DEPARTMENT" | "BRANCH" | "ALL",
+	allowed: "NONE" | "OWNER" | "DEPARTMENT" | "BRANCH" | "ALL",
+): "NONE" | "OWNER" | "DEPARTMENT" | "BRANCH" | "ALL" {
+	const values: Array<"NONE" | "OWNER" | "DEPARTMENT" | "BRANCH" | "ALL"> = ["NONE", "OWNER", "DEPARTMENT", "BRANCH", "ALL"];
+	const idx = Math.min(scopeRank(requested), scopeRank(allowed));
+	return values[Math.max(0, Math.min(idx, values.length - 1))];
+}
+
 function parseFlexibleNumberInput(input: any, locale?: string): number {
 	if (typeof input === "number") return input;
 	if (input == null) return NaN;
@@ -467,10 +492,20 @@ export function CsmDynamicGrid({
 	const username = useUserStore(state => state.username);
 	const userEmail = useUserStore(state => state.email);
 	const phoneNumber = useUserStore(state => state.phoneNumber);
+	const userDeptId = useUserStore(state => state.dept_id);
+	const userBranchId = useUserStore(state => state.branch_id);
+	const isDev = useUserStore(state => Boolean(state.dev));
 	const database = useMemo(
 		() => ({ ..._unusedDatabaseProp, ...globalDatabase }),
 		[globalDatabase, _unusedDatabaseProp]
 	);
+	const effectiveScope = useMemo(() => {
+		if (isDev) return "ALL";
+		const userScope = normalizeScope(dataScope);
+		const menuScope = normalizeScope((m_configs as any)?.data_scope_override || (m_configs as any)?.dataScopeOverride || "NONE");
+		if (menuScope === "NONE") return userScope;
+		return minScope(menuScope, userScope);
+	}, [isDev, dataScope, m_configs]);
 	// Helpers
 	const tableName = (m_configs.table_name || "").split(",")[0];
 	const hasTableName = Boolean(tableName);
@@ -2209,7 +2244,7 @@ export function CsmDynamicGrid({
 	const searchedData = useMemo(() => {
 		let sourceRows = filtered;
 
-		if ((dataScope || "").toUpperCase() === "OWNER") {
+		if (effectiveScope === "OWNER") {
 			const ownerCandidates = [userId, username, userEmail, phoneNumber, userAppId]
 				.filter((v): v is string => typeof v === "string" && v.trim().length > 0)
 				.map(v => v.trim().toLowerCase());
@@ -2220,6 +2255,30 @@ export function CsmDynamicGrid({
 				if (!existingOwnerField) return true;
 				const ownerValue = String(row[existingOwnerField] || "").trim().toLowerCase();
 				return ownerCandidates.includes(ownerValue);
+			});
+		} else if (effectiveScope === "DEPARTMENT") {
+			const deptCandidates = [userDeptId]
+				.filter((v): v is string => typeof v === "string" && v.trim().length > 0)
+				.map(v => v.trim().toLowerCase());
+			const deptFields = ["dept_id", "department_id", "team_id", "group_id", "org_unit_id"];
+
+			sourceRows = filtered.filter((row) => {
+				const existingDeptField = deptFields.find((field) => row?.[field] != null && String(row[field]).trim() !== "");
+				if (!existingDeptField) return true;
+				const deptValue = String(row[existingDeptField] || "").trim().toLowerCase();
+				return deptCandidates.includes(deptValue);
+			});
+		} else if (effectiveScope === "BRANCH") {
+			const branchCandidates = [userBranchId]
+				.filter((v): v is string => typeof v === "string" && v.trim().length > 0)
+				.map(v => v.trim().toLowerCase());
+			const branchFields = ["branch_id", "site_id", "region_id"];
+
+			sourceRows = filtered.filter((row) => {
+				const existingBranchField = branchFields.find((field) => row?.[field] != null && String(row[field]).trim() !== "");
+				if (!existingBranchField) return true;
+				const branchValue = String(row[existingBranchField] || "").trim().toLowerCase();
+				return branchCandidates.includes(branchValue);
 			});
 		}
 
@@ -2232,7 +2291,7 @@ export function CsmDynamicGrid({
 				return String(val).toLowerCase().includes(term);
 			});
 		});
-	}, [filtered, enableSearch, searchTerm, derivedSearchFields, dataScope, userId, username, userEmail, phoneNumber, userAppId]);
+	}, [filtered, enableSearch, searchTerm, derivedSearchFields, effectiveScope, userId, username, userEmail, phoneNumber, userAppId, userDeptId, userBranchId]);
 
 	// Auto-enable edit mode for newly added rows
 	useEffect(() => {

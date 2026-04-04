@@ -108,13 +108,21 @@ const ROLE_SELECT_QUERY_JSON = JSON.stringify({
 	],
 });
 
-const DEPT_SELECT_QUERY_JSON = JSON.stringify({
+export const DEPT_SELECT_QUERY_JSON = JSON.stringify({
 	query: [
 		{
 			obj_name: "csm_depts",
 			fields: ["id", "dept_name"],
 			obj_where: { field: "id", type: "like", value: "" },
 		},
+	],
+});
+
+export const ROLE_LEVEL_OPTIONS_JSON = JSON.stringify({
+	options: [
+		{ value: "manager", label: "system.userPermission.level.manager" },
+		{ value: "team_lead", label: "system.userPermission.level.teamLead" },
+		{ value: "staff", label: "system.userPermission.level.staff" },
 	],
 });
 
@@ -1055,6 +1063,13 @@ function beforeSave(row, seft) {
 		if (typeof scopeBit === "number") scopeMask = scopeMask | (1n << BigInt(scopeBit));
 		return (menuMask << 48n) | (actionMask << 40n) | (scopeMask << 32n) | TOKEN_SIGNATURE;
 	}
+	function scopeFromRoleLevel(level) {
+		const normalized = String(level || "").trim().toLowerCase();
+		if (normalized === "manager") return "BRANCH";
+		if (normalized === "team_lead") return "DEPARTMENT";
+		if (normalized === "staff") return "OWNER";
+		return "NONE";
+	}
 
 	const roleCode = String(row.role_code || "").trim();
 	if (!roleCode) {
@@ -1069,6 +1084,12 @@ function beforeSave(row, seft) {
 	row.permissions = normalizeList(row.permissions);
 	row.menusPermissions = normalizeList(row.menusPermissions);
 	row.permissionPreset = String(row.permissionPreset || "").trim();
+	row.role_level = String(row.role_level || "").trim().toLowerCase();
+
+	const mappedScope = scopeFromRoleLevel(row.role_level);
+	if (!String(row.dataScope || "").trim() && mappedScope !== "NONE") {
+		row.dataScope = mappedScope;
+	}
 
 	// Nếu đã chọn tay permissions/menus thì ưu tiên dữ liệu đã chọn,
 	// preset chỉ dùng để khởi tạo nhanh khi danh sách còn trống.

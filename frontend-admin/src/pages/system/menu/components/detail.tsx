@@ -582,7 +582,7 @@ export function Detail({
       width={{ xl: 800, md: 500 }}
       onFinish={onFinish}
       key={detailData.id || 'new'}
-      initialValues={detailData}
+      initialValues={{ data_scope_override: "NONE", ...detailData }}
     >
 
     {/* Group các trường đa ngôn ngữ */}
@@ -1049,6 +1049,31 @@ export function Detail({
             />
             <div style={{ marginTop: 4, fontSize: 12, color: '#8c8c8c' }}>
               Tên bảng trong cơ sở dữ liệu
+            </div>
+          </div>
+
+          <div>
+            <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
+              Phạm vi dữ liệu cho bảng
+            </div>
+            <ProFormSelect
+              name="data_scope_override"
+              noStyle
+              fieldProps={{
+                placeholder: 'Mặc định theo tài khoản đăng nhập',
+                allowClear: false,
+                size: 'large',
+                style: { width: '100%' },
+              }}
+              options={[
+                { label: 'Mặc định theo tài khoản', value: 'NONE' },
+                { label: 'Chỉ dữ liệu cá nhân', value: 'OWNER' },
+                { label: 'Theo phòng ban', value: 'DEPARTMENT' },
+                { label: 'Theo chi nhánh', value: 'BRANCH' },
+              ]}
+            />
+            <div style={{ marginTop: 4, fontSize: 12, color: '#8c8c8c' }}>
+              Áp cho toàn bộ bảng/menu này, và không thể vượt quá quyền dữ liệu gốc của user.
             </div>
           </div>
 

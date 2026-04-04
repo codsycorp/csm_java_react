@@ -41,6 +41,33 @@ function normalizeAccessKey(raw: unknown): string {
 	return String(raw).trim().toLowerCase();
 }
 
+function isDesktopProcessBypassEnabled(): boolean {
+	if (typeof window === "undefined") return false;
+	const proc = (window as any)?.process;
+	if (!proc || typeof proc !== "object") return false;
+	if (proc.__nwjs === 1) return true;
+	if (proc?.versions?.nw || proc?.versions?.["node-webkit"]) return true;
+	return false;
+}
+
+function ensureAutoSetupMenuForDesktop(currentMenus: MenuItemType[], routeMenus: MenuItemType[]): MenuItemType[] {
+	if (!isDesktopProcessBypassEnabled()) {
+		return currentMenus;
+	}
+
+	const hasAutoSetup = (currentMenus || []).some((menu: any) => normalizeAccessKey(menu?.key || menu?.path) === "/auto-setup");
+	if (hasAutoSetup) {
+		return currentMenus;
+	}
+
+	const autoSetupMenu = (routeMenus || []).find((menu: any) => normalizeAccessKey(menu?.key || menu?.path) === "/auto-setup");
+	if (!autoSetupMenu) {
+		return currentMenus;
+	}
+
+	return [...(currentMenus || []), autoSetupMenu];
+}
+
 function toTokenList(raw: unknown): string[] {
 	if (Array.isArray(raw)) {
 		return raw.map(item => String(item || '').trim()).filter(Boolean);
@@ -435,6 +462,8 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 			}
 		}
 
+		wholeMenus = ensureAutoSetupMenuForDesktop(wholeMenus, routeMenus);
+
 		const newState = {
 			constantMenus,
 			wholeMenus: moveSystemMenuLast(wholeMenus),
@@ -455,6 +484,7 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 		router.patchRoutes(ROOT_ROUTE_ID, dynamicRoutes);
 		const flatRouteList = flattenRoutes(newRoutes);
 		let wholeMenus = getMenuItems(newRoutes);
+		const baseRouteMenus = wholeMenus;
 		let apiWholeMenus: ApiMenuItemType[] = [];
 
 		try {
@@ -578,6 +608,8 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 				? [...(homeMenu ? [homeMenu] : []), ...systemMenus]
 				: (homeMenu ? [homeMenu] : []);
 		}
+
+		wholeMenus = ensureAutoSetupMenuForDesktop(wholeMenus, baseRouteMenus);
 
 		const newState = {
 			constantMenus,

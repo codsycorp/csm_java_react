@@ -17,6 +17,7 @@
 			"roles": "角色",
 			"permissionPreset": "权限模板",
 			"permissionGroups": "权限组",
+			"roleLevel": "级别",
 			"permissions": "操作权限",
 			"permissionsAdd": "补充",
 			"permissionsDeny": "排除",
@@ -49,6 +50,11 @@
 			"department": "部门",
 			"branch": "分支",
 			"all": "全部"
+		},
+		"level": {
+			"manager": "管理层",
+			"teamLead": "组长",
+			"staff": "员工"
 		},
 		"option": {
 			"admin": "管理员",

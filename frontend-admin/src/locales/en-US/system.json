@@ -17,6 +17,7 @@
 			"roles": "Roles",
 			"permissionPreset": "Preset",
 			"permissionGroups": "Groups",
+			"roleLevel": "Role Level",
 			"permissions": "Actions",
 			"permissionsAdd": "Add",
 			"permissionsDeny": "Deny",
@@ -49,6 +50,11 @@
 			"department": "Department",
 			"branch": "Branch",
 			"all": "All data"
+		},
+		"level": {
+			"manager": "Manager",
+			"teamLead": "Team Lead",
+			"staff": "Staff"
 		},
 		"option": {
 			"admin": "Admin",

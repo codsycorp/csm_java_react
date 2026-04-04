@@ -46,5 +46,6 @@ export interface MenuItemType {
 	crm_config?: Record<string, any> | string // Legacy CRM composite config JSON
 	kanban_config?: Record<string, any> | string // Kanban board configuration JSON
 	system_user_modes?: Record<string, any> | string // Role-specific config for /system/user
+	data_scope_override?: "NONE" | "OWNER" | "DEPARTMENT" | "BRANCH" | "ALL" | string // Table-level scope cap for this menu
 	[key: string]: any // 允许其他字段
 }

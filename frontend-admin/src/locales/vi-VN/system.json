@@ -17,6 +17,7 @@
 			"roles": "Vai trò",
 			"permissionPreset": "Mẫu quyền",
 			"permissionGroups": "Nhóm quyền",
+			"roleLevel": "Cấp bậc",
 			"permissions": "Quyền thao tác",
 			"permissionsAdd": "Bổ sung",
 			"permissionsDeny": "Loại trừ",
@@ -49,6 +50,11 @@
 			"department": "Phòng ban",
 			"branch": "Chi nhánh",
 			"all": "Tất cả"
+		},
+		"level": {
+			"manager": "Quản lý",
+			"teamLead": "Trưởng nhóm",
+			"staff": "Nhân viên"
 		},
 		"option": {
 			"admin": "Quản trị",

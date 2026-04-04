@@ -17,6 +17,21 @@ export default function Profile() {
 	const [loading, setLoading] = useState(false);
 	const [passwordForm] = Form.useForm();
 
+	const hasRole = (role: string) =>
+		(currentUser.roles || []).some(r => String(r || "").toLowerCase() === role.toLowerCase());
+
+	const resolveProfileTarget = () => {
+		const isMainAccount = Boolean(currentUser.dev) || hasRole("admin") || hasRole("dev");
+		const objName = isMainAccount ? "csm_accounts" : "csm_group_members";
+
+		const pkField = currentUser.userId
+			? "id"
+			: (currentUser.email ? "email" : (currentUser.username ? "username" : "phoneNumber"));
+		const pkValue = currentUser.userId || currentUser.email || currentUser.username || currentUser.phoneNumber;
+
+		return { objName, pkField, pkValue };
+	};
+
 	const isUpdateSuccess = (response: any) => {
 		if (!response) return false;
 		if (response.success === true) return true;
@@ -40,13 +55,16 @@ export default function Profile() {
 	const handleFinish = async (values: any) => {
 		setLoading(true);
 		try {
-			// Determine primary key field (email, username, or phoneNumber)
-			const pkField = currentUser.email ? "email" : (currentUser.username ? "username" : "phoneNumber");
-			const pkValue = currentUser.email || currentUser.username || currentUser.phoneNumber;
+			const { objName, pkField, pkValue } = resolveProfileTarget();
+			if (!pkField || !pkValue) {
+				message.error(t('personal-center.updateFailed'));
+				return;
+			}
 			
 			// Build update object with PK included (required by CsmApi)
 			const updateData: any = {
 				[pkField]: pkValue, // Include PK in obj_update
+				id: currentUser.userId || pkValue,
 				email: values.email,
 				phoneNumber: values.phoneNumber,
 				full_name: values.full_name,
@@ -56,7 +74,7 @@ export default function Profile() {
 			
 			const response = await updateTableData({
 				app_id: "csm",
-				obj_name: "csm_accounts",
+				obj_name: objName,
 				command: "update",
 				obj_update: updateData,
 				pk_fields: [pkField], // CsmApi will build e_where from this
@@ -90,18 +108,21 @@ export default function Profile() {
 
 		setLoading(true);
 		try {
-			// Determine primary key
-			const pkField = currentUser.email ? "email" : (currentUser.username ? "username" : "phoneNumber");
-			const pkValue = currentUser.email || currentUser.username || currentUser.phoneNumber;
+			const { objName, pkField, pkValue } = resolveProfileTarget();
+			if (!pkField || !pkValue) {
+				message.error(t('personal-center.passwordChangeFailed'));
+				return;
+			}
 			
 			// Send oldPassword and newPassword to backend for verification and encryption
 			// Include PK in obj_update as required by CsmApi
 			const response = await updateTableData({
 				app_id: "csm",
-				obj_name: "csm_accounts",
+				obj_name: objName,
 				command: "update",
 				obj_update: {
 					[pkField]: pkValue, // Include PK in obj_update
+					id: currentUser.userId || pkValue,
 					_oldPassword: values.oldPassword,
 					_newPassword: values.newPassword,
 					_changePassword: true, // Flag to indicate password change
