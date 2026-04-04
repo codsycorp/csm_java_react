@@ -19250,12 +19250,17 @@ function validateCsmUserDataReady() {
   const hasGet = typeof window.csmUserData.get === 'function';
   const hasSet = typeof window.csmUserData.set === 'function';
   
-  if (!hasFetch || !hasGet || !hasSet) {
-    console.warn('[Zalo Storage] ⚠️ csmUserData missing methods:', { hasFetch, hasGet, hasSet });
+  // Keep compatible with seo.js flow: get/set are required, fetchFromDatabase is optional.
+  if (!hasGet || !hasSet) {
+    console.warn('[Zalo Storage] ⚠️ csmUserData missing required methods:', { hasFetch, hasGet, hasSet });
     return false;
   }
   
-  console.log('[Zalo Storage] ✅ csmUserData ready (fetch, get, set available)');
+  if (!hasFetch) {
+    console.warn('[Zalo Storage] ⚠️ csmUserData.fetchFromDatabase not available - running with get/set + fallback');
+  }
+
+  console.log('[Zalo Storage] ✅ csmUserData ready (get/set available)');
   return true;
 }
 
@@ -19642,14 +19647,26 @@ function fetchDataOptionUserFromServer(callback) {
     console.log('[Zalo] Fetching dataOptionUser from server...');
     window.csmUserData.fetchFromDatabase(function(success, data, error) {
       if (success && Array.isArray(data)) {
-        console.log('[Zalo] ✅ Fetched', data.length, 'items from server');
-        callback(true, data, null);
+        const usableRecords = normalizeDataOptionUserRecords(data);
+        window.dataUserOption = CSM_LOW_MEMORY_MODE ? usableRecords : data;
+        if (CSM_ALLOW_LOCAL_DATAOPTIONUSER_CACHE) {
+          try { localStorage.setItem('user_address', JSON.stringify(window.dataUserOption)); } catch {}
+          try { localStorage.setItem('dataOptionUser', JSON.stringify(window.dataUserOption)); } catch {}
+        }
+        console.log('[Zalo] ✅ Fetched', data.length, 'items from server (usable:', usableRecords.length, ')');
+        callback(true, window.dataUserOption, null);
       } else {
         console.warn('[Zalo] ❌ Failed to fetch from server:', error, '- trying direct csm_accounts query...');
         fetchDataOptionUserDirectFromServer().then((direct) => {
           if (direct.success && Array.isArray(direct.data)) {
-            console.log('[Zalo] ✅ Direct fetch success:', direct.data.length, 'items');
-            callback(true, direct.data, null);
+            const usableRecords = normalizeDataOptionUserRecords(direct.data);
+            window.dataUserOption = CSM_LOW_MEMORY_MODE ? usableRecords : direct.data;
+            if (CSM_ALLOW_LOCAL_DATAOPTIONUSER_CACHE) {
+              try { localStorage.setItem('user_address', JSON.stringify(window.dataUserOption)); } catch {}
+              try { localStorage.setItem('dataOptionUser', JSON.stringify(window.dataUserOption)); } catch {}
+            }
+            console.log('[Zalo] ✅ Direct fetch success:', direct.data.length, 'items (usable:', usableRecords.length, ')');
+            callback(true, window.dataUserOption, null);
           } else {
             callback(false, null, error || direct.error || 'User not found');
           }
@@ -19743,9 +19760,15 @@ function saveDataOptionUser(data, callback, options = {}) {
       
       if (success) {
         console.log('✅ [SaveDataOptionUser] SERVER SAVE THÀNH CÔNG!');
+        window.dataUserOption = finalData;
         if (CSM_ALLOW_LOCAL_DATAOPTIONUSER_CACHE) {
           console.log('📍 Backup vào localStorage...');
-          // Optional: also sync to localStorage as backup
+          // Keep same behavior as seo.js: mirror to user_address + dataOptionUser.
+          try {
+            localStorage.setItem('user_address', JSON.stringify(finalData));
+          } catch (e) {
+            console.warn('⚠️ localStorage user_address backup THẤT BẠI:', e);
+          }
           try {
             localStorage.setItem('dataOptionUser', JSON.stringify(finalData));
             console.log('✅ localStorage backup THÀNH CÔNG');
@@ -19776,7 +19799,9 @@ function saveDataOptionUser(data, callback, options = {}) {
     console.log('   typeof window.csmUserData.set =', typeof window.csmUserData?.set);
     
     try {
+      localStorage.setItem('user_address', JSON.stringify(finalData));
       localStorage.setItem('dataOptionUser', JSON.stringify(finalData));
+      window.dataUserOption = finalData;
       console.log('✅ [SaveDataOptionUser] localStorage SAVE THÀNH CÔNG (FALLBACK MODE)');
       if (callback) callback(true, null);
     } catch (e) {
