@@ -789,7 +789,6 @@ public class InitHandler {
                         buildFieldConfig("email", "common.email", 1, "string", "left"),
                         buildFieldConfig("phoneNumber", "common.phoneNumber", 1, "string", "left"),
                         buildFieldConfig("full_name", "common.fullName", 1, "string", "left"),
-                        buildFieldConfig("app_id", "common.appId", 1, "string", "left"),
                         buildFieldConfig("source_app_token", "Source App Token", 1, "string", "left"),
                         buildFieldConfig("group_id", "common.groupId", 1, "string", "left"),
                         buildFieldConfig("app_token", "common.appToken", 1, "string", "left"),
@@ -830,7 +829,7 @@ public class InitHandler {
                 return List.of(
                                 "id", "parent_account_id", "login_identifier", "username", "email", "phoneNumber",
                                 "full_name", "user_address", "avatar", "group_rights", "group_id",
-                                "app_id", "app_token", "source_app_token",
+                                "app_token", "source_app_token",
                                 "refresh_token", "refresh", "refresh_token_ip", "refresh_token_ua", "refresh_token_expiry",
                                 "login_version", "loginVersion", "pass", "actived",
                                 "permissions", "menusPermissions", "permissionsAdd", "permissionsDeny", "menusPermissionsAdd", "menusPermissionsDeny",

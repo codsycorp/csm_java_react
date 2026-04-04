@@ -738,7 +738,7 @@ public class TableHandler {
         ));
         map.put("csm_group_members", List.of(
             "id", "parent_account_id", "login_identifier", "username", "email", "phoneNumber", "full_name", "user_address", "avatar",
-            "group_rights", "group_id", "app_id", "app_token", "source_app_token", "refresh_token", "refresh",
+            "group_rights", "group_id", "app_token", "source_app_token", "refresh_token", "refresh",
             "refresh_token_ip", "refresh_token_ua", "refresh_token_expiry", "login_version", "loginVersion", "pass", "actived",
             "permissions", "menusPermissions", "permissionsAdd", "permissionsDeny", "menusPermissionsAdd", "menusPermissionsDeny",
             "permissionBitfield", "permissionSchemaVersion", "dataScope",
@@ -2143,10 +2143,9 @@ public class TableHandler {
             }
         }
 
-        // Auto-set app_id from context if not set
-        if (safeStr(objUpdate.get("app_id")).isEmpty() && accessContext.appId != null) {
-            objUpdate.put("app_id", accessContext.appId);
-        }
+        // csm_group_members is isolated by app context (request app_id),
+        // so app_id is not a business field in sub-user rows.
+        objUpdate.remove("app_id");
 
         // Canonical profile/session fields for csm_group_members
         if (safeStr(objUpdate.get("username")).isEmpty()) {
@@ -2465,6 +2464,10 @@ public class TableHandler {
         Map<String, Object> objUpdate = (Map<String, Object>) msg.get("obj_update");
         if (objUpdate == null) {
             return errorResponse("Thiếu dữ liệu cập nhật");
+        }
+
+        if (!objUpdate.containsKey("user_address") && objUpdate.containsKey("user_adress")) {
+            objUpdate.put("user_address", objUpdate.get("user_adress"));
         }
 
         UserAccessContext accessContext = resolveCurrentUserAccessContext();

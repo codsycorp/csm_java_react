@@ -159,7 +159,6 @@ const SYSTEM_ROUTE_TABLE_SCHEMAS: Record<string, TableBootstrapDefinition[]> = {
 					avatar: "",
 					group_rights: "[]",
 					group_id: "",
-					app_id: "",
 					app_token: "",
 					source_app_token: "",
 					refresh_token: "",
@@ -459,6 +458,7 @@ const SYSTEM_FRIENDLY_VISIBLE_FIELDS: Record<string, string[]> = {
 	csm_group_members: [
 		"id",
 		"login_identifier",
+		"user_address",
 		"pass",
 		"group_id",
 		"permissionsAdd",
@@ -718,7 +718,7 @@ export default function AdminPage() {
 			label_en: "System User Management",
 			label_zh: "系统用户管理",
 			table_name: actorTableName,
-			app_id: "csm",
+			app_id: resolvedAppId,
 			type_form: 1,
 			row_type_edit: 0,
 			g_readonly: false,
@@ -864,7 +864,7 @@ export default function AdminPage() {
 				id: "user",
 				path: "/system/user",
 				table_name: actorTableName,
-				app_id: "csm",
+				app_id: normalized.app_id || appId,
 			});
 		}
 		if (location.pathname === "/system/departments") {
@@ -940,7 +940,7 @@ export default function AdminPage() {
 						   path: "/system/user",
 						   label: t("common.menu.user"),
 						   table_name: isDevUser ? "csm_accounts" : "csm_group_members",
-						   app_id: "csm",
+						   app_id: appId,
 						   type_form: 1,
 						   row_type_edit: 0,
 						   g_readonly: false,
@@ -1044,14 +1044,24 @@ export default function AdminPage() {
 		const runtimeMenu = menuData ? normalizeMenuRuntimeConfig(menuData) : null;
 		if (!runtimeMenu) return;
 
-		const ensureSystemRouteTables = async (effectiveAppId: string) => {
+		const resolvedUserAppId = (appId && String(appId).trim()) || "csm";
+		const resolveTableAppId = (tableName: string): string => {
+			if (isSystemUserRoute) {
+				if (tableName === "csm_accounts") return "csm";
+				if (tableName === "csm_group_members") return resolvedUserAppId;
+			}
+			return runtimeMenu.app_id || resolvedUserAppId;
+		};
+
+		const ensureSystemRouteTables = async () => {
 			const definitions = SYSTEM_ROUTE_TABLE_SCHEMAS[location.pathname] || [];
 			if (definitions.length === 0) return;
 
 			for (const definition of definitions) {
+				const tableAppId = resolveTableAppId(definition.tableName);
 				try {
 					const indexRes = await getTableData<any>({
-						app_id: effectiveAppId,
+						app_id: tableAppId,
 						obj_name: "index",
 						where: { field: "id", type: "eq", value: definition.tableName },
 						take: 1,
@@ -1066,7 +1076,7 @@ export default function AdminPage() {
 				}
 
 				await createTableStruct({
-					app_id: effectiveAppId,
+					app_id: tableAppId,
 					obj_table: {
 						id: definition.tableName,
 						struct: definition.struct,
@@ -1088,13 +1098,11 @@ export default function AdminPage() {
 		try {
 			const tableList = Array.from(allMenuTables);
 			const primaryTable = tableList[0];
+			const primaryTableAppId = resolveTableAppId(primaryTable);
 			const defaultFilter = {
 				operator: "AND" as const,
 				conditions: [{ field: "id", type: "like", value: "" }]
 			};
-
-			// Use menu-specific app_id if available, otherwise fall back to global appId
-			const effectiveAppId = runtimeMenu.app_id || appId;
 
 			if (isSystemUserRoute && isAdminUser && primaryTable === "csm_group_members") {
 				const ownerConditions = userSubOwnerCandidates.map(owner => ({
@@ -1105,25 +1113,12 @@ export default function AdminPage() {
 				if (ownerConditions.length > 0) {
 					(defaultFilter.conditions as any[]).push({ operator: "OR", conditions: ownerConditions });
 				}
-				// Filter by app_id to show only users of current app
-				(defaultFilter.conditions as any[]).push({
-					field: "app_id",
-					type: "eq",
-					value: effectiveAppId
-				});
-			} else if (isSystemUserRoute && primaryTable === "csm_group_members") {
-				// For non-admin users, still filter by current app_id
-				(defaultFilter.conditions as any[]).push({
-					field: "app_id",
-					type: "eq",
-					value: effectiveAppId
-				});
 			}
 
-			await ensureSystemRouteTables(effectiveAppId);
+			await ensureSystemRouteTables();
 
 			const response = await getTableData<any>({
-				app_id: effectiveAppId,
+				app_id: primaryTableAppId,
 				obj_name: primaryTable,
 				where: defaultFilter
 			});
@@ -1150,7 +1145,9 @@ export default function AdminPage() {
 			if (tableList.length > 1) {
 				for (const t of tableList.slice(1)) {
 					try {
-						const resT = await getTableData<any>({ app_id: effectiveAppId, obj_name: t, where: defaultFilter });
+						const tableAppId = resolveTableAppId(t);
+						const tableFilter: any = JSON.parse(JSON.stringify(defaultFilter));
+						const resT = await getTableData<any>({ app_id: tableAppId, obj_name: t, where: tableFilter });
 						const rowsT = (resT as any).rows || (resT as any).data || [];
 						const pkT = (resT as any).fieldsPK || ["id"];
 						newDatabase[t] = { rows: rowsT, fieldsPK: pkT };
@@ -1180,10 +1177,12 @@ export default function AdminPage() {
 			// Load dependency tables
 			for (const depTable of dependencyTables) {
 				try {
+					const tableAppId = resolveTableAppId(depTable);
+					const tableFilter: any = JSON.parse(JSON.stringify(defaultFilter));
 					const depResponse = await getTableData<any>({
-						app_id: effectiveAppId,
+						app_id: tableAppId,
 						obj_name: depTable,
-						where: defaultFilter
+						where: tableFilter
 					});
 					const depRows = (depResponse as any).rows || (depResponse as any).data || [];
 					const depFieldsPK = (depResponse as any).fieldsPK || ["id"];

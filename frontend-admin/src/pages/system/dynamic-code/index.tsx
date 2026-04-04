@@ -860,6 +860,7 @@ ${resolvedContainerSelector} select {
 
     const getIdentityCandidates = (currentUser: any) => {
       const candidates = [
+        { field: "login_identifier", value: currentUser?.login_identifier },
         { field: "email", value: currentUser?.email },
         { field: "username", value: currentUser?.username },
         { field: "phone_number", value: currentUser?.phone_number || currentUser?.phoneNumber },
@@ -877,18 +878,42 @@ ${resolvedContainerSelector} select {
       return Array.from(new Set(appIds));
     };
 
-    const fetchAccountRow = async (): Promise<{ row: any; pkField: string; pkValue: any } | null> => {
+    const fetchAccountRow = async (): Promise<{ row: any; pkField: string; pkValue: any; tableName: string; requestAppId: string } | null> => {
       const currentUser = (window as any).csmCurrentUser || {};
       const identities = getIdentityCandidates(currentUser);
       if (identities.length === 0) return null;
 
+      // Main account records are stored in csm_accounts (app_id context = csm).
+      for (const identity of identities) {
+        try {
+          const response = await (window as any).csmApi.getTableData({
+            app_id: "csm",
+            obj_name: "csm_accounts",
+            where: {
+              field: identity.field,
+              type: "eq",
+              value: identity.value,
+            },
+            take: 1,
+          });
+
+          const rows = (response as any)?.rows || (response as any)?.data || [];
+          if (Array.isArray(rows) && rows.length > 0) {
+            return { row: rows[0], pkField: identity.field, pkValue: identity.value, tableName: "csm_accounts", requestAppId: "csm" };
+          }
+        } catch {
+          // Try next candidate.
+        }
+      }
+
+      // Sub-user records are stored in csm_group_members (app context of logged-in user).
       const appIds = getAppIdCandidates(currentUser);
       for (const app_id of appIds) {
         for (const identity of identities) {
           try {
             const response = await (window as any).csmApi.getTableData({
               app_id,
-              obj_name: "csm_accounts",
+              obj_name: "csm_group_members",
               where: {
                 field: identity.field,
                 type: "eq",
@@ -899,7 +924,13 @@ ${resolvedContainerSelector} select {
 
             const rows = (response as any)?.rows || (response as any)?.data || [];
             if (Array.isArray(rows) && rows.length > 0) {
-              return { row: rows[0], pkField: identity.field, pkValue: identity.value };
+              return {
+                row: rows[0],
+                pkField: identity.field,
+                pkValue: identity.value,
+                tableName: "csm_group_members",
+                requestAppId: String(app_id || effectiveAppId || "csm"),
+              };
             }
           } catch {
             // Try next candidate.
@@ -913,7 +944,7 @@ ${resolvedContainerSelector} select {
     const getUserAddressFallback = (): any[] => {
       try {
         const currentUser = (window as any).csmCurrentUser || {};
-        const fromCurrentUser = parseUserAddress(currentUser.user_address);
+        const fromCurrentUser = parseUserAddress(currentUser.user_address ?? currentUser.user_adress);
         if (fromCurrentUser.length > 0) return fromCurrentUser;
 
         const fromSeft = parseUserAddress((window as any).seft?.Uinfos?.userAddress);
@@ -938,7 +969,7 @@ ${resolvedContainerSelector} select {
         },
 
         /**
-         * Fetch user_address from csm_accounts database
+         * Fetch user_address from csm_accounts or csm_group_members
          */
         fetchFromDatabase: async function(callback?: (success: boolean, data?: any[], error?: string) => void): Promise<void> {
           try {
@@ -962,7 +993,7 @@ ${resolvedContainerSelector} select {
               return;
             }
 
-            const userAddress = parseUserAddress(account.row?.user_address);
+            const userAddress = parseUserAddress(account.row?.user_address ?? account.row?.user_adress);
 
             (window as any).csmCurrentUser = (window as any).csmCurrentUser || {};
             (window as any).csmCurrentUser.user_address = JSON.stringify(userAddress);
@@ -978,7 +1009,7 @@ ${resolvedContainerSelector} select {
         },
 
         /**
-         * Set user_address and update to csm_accounts database
+         * Set user_address and update to csm_accounts or csm_group_members
          */
         set: async function(newUserData: any[], callback?: (success: boolean, error?: string) => void): Promise<void> {
           try {
@@ -1002,7 +1033,7 @@ ${resolvedContainerSelector} select {
               [account.pkField]: account.pkValue
             };
 
-            const currentUserAddress = parseUserAddress(account.row?.user_address);
+            const currentUserAddress = parseUserAddress(account.row?.user_address ?? account.row?.user_adress);
             const currentSerialized = stableStringify(currentUserAddress);
             if (currentSerialized === nextSerialized) {
               console.log("ℹ️ [csmUserData.set] Skipped database update because user_address is unchanged");
@@ -1015,11 +1046,12 @@ ${resolvedContainerSelector} select {
             } else {
               updateData.user_address = null;
             }
+            updateData.user_adress = updateData.user_address;
             
             if (window.csmApi && (window.csmApi as any).updateTableData) {
               const response = await (window.csmApi as any).updateTableData({
-                app_id: String(account.row?.app_id || effectiveAppId || "csm"),
-                obj_name: "csm_accounts",
+                app_id: String(account.requestAppId || account.row?.app_id || effectiveAppId || "csm"),
+                obj_name: account.tableName,
                 command: "update",
                 obj_update: updateData,
                 pk_fields: [account.pkField],

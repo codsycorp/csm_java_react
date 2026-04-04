@@ -315,6 +315,7 @@ export const SUB_USER_DEFAULT_FIELDS: TableField[] = [
 	{ f_name: "id", f_header: "ID", f_show: 1, f_types: "number", f_align: "right" },
 	{ f_name: "parent_account_id", f_header: "common.parentAccountId", f_show: 1, f_types: "string", f_align: "left" },
 	{ f_name: "login_identifier", f_header: "common.loginIdentifier", f_show: 1, f_types: "string", f_align: "left" },
+	{ f_name: "user_address", f_header: "common.address", f_show: 1, f_types: "string", f_align: "left" },
 	{ f_name: "group_id", f_header: "common.groupId", f_show: 1, f_types: "co", f_align: "left", f_cbo_query: PERMISSION_GROUP_QUERY_JSON },
 	{ f_name: "app_token", f_header: "common.appToken", f_show: 1, f_types: "string", f_align: "left" },
 	{ f_name: "pass", f_header: "common.password", f_show: 1, f_types: "password", f_align: "left" },
