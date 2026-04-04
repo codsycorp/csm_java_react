@@ -130,6 +130,19 @@ export const BRANCH_SELECT_QUERY_JSON = JSON.stringify({
 	],
 });
 
+// Cascading branch query - filtered by dept_id from parent field
+export const BRANCH_SELECT_QUERY_BY_DEPT_JSON = JSON.stringify({
+	query: [
+		{
+			obj_name: "csm_branches",
+			fields: ["id", "branch_name", "dept_id"],
+			obj_where: { field: "dept_id", type: "eq", value: "{dept_id}" },
+		},
+	],
+	// Marks this query as cascading from dept_id field
+	cascadeFrom: "dept_id",
+});
+
 export const ROLE_LEVEL_OPTIONS_JSON = JSON.stringify({
 	options: [
 		{ value: "manager", label: "system.userPermission.level.manager" },
