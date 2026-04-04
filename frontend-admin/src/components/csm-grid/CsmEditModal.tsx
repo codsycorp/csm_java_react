@@ -876,6 +876,67 @@ function buildSelectOptions(
   }));
 }
 
+function resolveCascadeSelectOptions(
+  field: TableField,
+  form: any,
+  database: Record<string, any> | undefined,
+  decrypt?: (s: string) => string,
+  localizeLabel?: (value: unknown) => string,
+): { options: SelectOption[] | null; cascadeFrom?: string; hasParentValue: boolean } {
+  const rawQuery = String(field?.f_cbo_query || "").trim();
+  if (!rawQuery) return { options: null, hasParentValue: true };
+
+  let resolvedQuery = rawQuery;
+  if (decrypt) {
+    try {
+      resolvedQuery = decrypt(rawQuery) || rawQuery;
+    } catch {
+      resolvedQuery = rawQuery;
+    }
+  }
+
+  let parsed: any = null;
+  try {
+    parsed = JSON.parse(resolvedQuery);
+  } catch {
+    try {
+      parsed = new Function(`return (${resolvedQuery})`)();
+    } catch {
+      parsed = null;
+    }
+  }
+
+  const cascadeFrom = String(parsed?.cascadeFrom || "").trim();
+  if (!cascadeFrom) return { options: null, hasParentValue: true };
+
+  const parentValue = form.getFieldValue(cascadeFrom);
+  if (parentValue == null || String(parentValue).trim() === "") {
+    return { options: [], cascadeFrom, hasParentValue: false };
+  }
+
+  const querySpec = Array.isArray(parsed?.query) ? parsed.query[0] : null;
+  const tableName = String(querySpec?.obj_name || "").trim();
+  const valueField = String(querySpec?.fields?.[0] || "id").trim() || "id";
+  const labelField = String(querySpec?.fields?.[1] || valueField).trim() || valueField;
+  const cascadeField = String(parsed?.cascadeField || querySpec?.obj_where?.field || "").trim();
+  const rowsSource = tableName ? database?.[tableName] : null;
+  const rows = Array.isArray(rowsSource) ? rowsSource : (Array.isArray(rowsSource?.rows) ? rowsSource.rows : []);
+  if (!cascadeField || !Array.isArray(rows) || rows.length === 0) {
+    return { options: [], cascadeFrom, hasParentValue: true };
+  }
+
+  const normalizedParent = String(parentValue).trim();
+  const options = rows
+    .filter((row: any) => String(row?.[cascadeField] || "").trim() === normalizedParent)
+    .map((row: any) => ({
+      value: row?.[valueField],
+      label: localizeLabel ? localizeLabel(resolveMultilingualText(row?.[labelField], row?.[valueField])) : resolveMultilingualText(row?.[labelField], row?.[valueField]),
+    }))
+    .filter((option) => option.value != null && String(option.value).trim() !== "");
+
+  return { options, cascadeFrom, hasParentValue: true };
+}
+
 function normalizeSelectValue(value: any, options: SelectOption[]): any {
   if (value == null || value === "") return value;
 
@@ -1040,6 +1101,7 @@ function getFieldComponent(
   selectEnums?: Record<string, any>,
   fieldValues?: Record<string, any>,
   selectOptions?: Record<string, { label: string; value: any }[]>,
+  database?: Record<string, any>,
   m_configs?: MConfig,
   appId?: string,
   permissions?: number,
@@ -1551,7 +1613,8 @@ function getFieldComponent(
   if (types.indexOf('co') !== -1) {
     const rawOptions = selectOptions?.[key];
     const enumObj = selectEnums?.[key];
-    const localizedOptions = buildSelectOptions(rawOptions, enumObj, localizeLabel);
+    const cascadeConfig = resolveCascadeSelectOptions(f, form, database, decrypt, localizeLabel);
+    const localizedOptions = cascadeConfig.options ?? buildSelectOptions(rawOptions, enumObj, localizeLabel);
     const rawSelectValue = form.getFieldValue(key) ?? initialVal;
     const selectValue = normalizeSelectValue(rawSelectValue, localizedOptions);
 
@@ -1562,7 +1625,7 @@ function getFieldComponent(
         showSearch
         optionFilterProp="label"
         allowClear
-        disabled={isReadonly}
+        disabled={isReadonly || (Boolean(cascadeConfig.cascadeFrom) && !cascadeConfig.hasParentValue)}
         value={selectValue}
         onChange={val => form.setFieldsValue({ [key]: val })}
       />
@@ -2179,6 +2242,7 @@ export function CsmEditModal({
                             selectEnums,
                             formValues,
                             selectOptions,
+                            database,
                             m_configs,
                             appId,
                             permissions,
@@ -2210,6 +2274,7 @@ export function CsmEditModal({
                       selectEnums,
                       formValues,
                       selectOptions,
+                      database,
                       m_configs,
                       appId,
                       permissions,

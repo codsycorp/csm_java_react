@@ -64,6 +64,7 @@ public class TableHandler {
     private static final Map<String, List<String>> DEFAULT_TABLE_PK_FIELDS = createDefaultTablePkFields();
     private static final Map<String, List<String>> DEFAULT_TABLE_FIELDS = createDefaultTableFields();
     private static final Set<String> LEGACY_SCOPE_MIGRATED_TABLES = ConcurrentHashMap.newKeySet();
+    private static final Set<String> SEARCH_INDEX_SYNCED_TABLES = ConcurrentHashMap.newKeySet();
     
     @Autowired
     private SocketIOConfig socketIOConfig; // Inject SocketIOConfig
@@ -177,6 +178,7 @@ public class TableHandler {
         // Lấy id và struct từ obj_table
         String id = objTable.get("id").toString();
         Map<String, Object> struct = (Map<String, Object>) objTable.get("struct");
+        struct = normalizeStructForStorage(id, struct);
     
         // Tạo một Map mới chỉ chứa id và struct để lưu vào recordManager
         Map<String, Object> recordParams = new HashMap<>();
@@ -357,6 +359,7 @@ public class TableHandler {
             if (structMap == null) {
                 return errorResponse("Không tìm thấy cấu trúc bảng");
             }
+            ensureOneTimeSearchIndexSync(appId, tblname);
             ensureAutoPermissionSchemaForTable(appId, tblname, findStruct, structMap);
             List<String> primaryKeyFields = toMutableStringList(structMap.get("fieldsPK"));
             try {
@@ -851,13 +854,12 @@ public class TableHandler {
         structMap.put("fields", fields);
         if (needsSearchHeal || structMap.get("fieldsSearch") == null) {
             structMap.put("fieldsSearch", fieldsSearch);
-            // Keep compatibility with legacy key names while canonical key is fieldsSearch.
-            if (structMap.get("fieldsearch") == null) {
-                structMap.put("fieldsearch", fieldsSearch);
-            }
-            if (structMap.get("fieldssearch") == null) {
-                structMap.put("fieldssearch", fieldsSearch);
-            }
+            changed = true;
+        }
+        if (structMap.remove("fieldsearch") != null) {
+            changed = true;
+        }
+        if (structMap.remove("fieldssearch") != null) {
             changed = true;
         }
         structRecord.put("struct", structMap);
@@ -865,6 +867,14 @@ public class TableHandler {
         if (changed || existingStructRecord == null || existingStructRecord.get("struct") == null) {
             logger.warn("Auto-heal cấu trúc bảng {}.{} vì thiếu/không hợp lệ struct trong index", appId, tableName);
             recordManager.createRecord(appId, "index", structRecord, List.of("id"));
+            if (needsSearchHeal) {
+                try {
+                    // Rebuild Lucene index ngay sau khi mở rộng fieldsSearch để truy vấn mới có hiệu lực.
+                    recordManager.indexExistingRecords(appId, tableName);
+                } catch (Exception ex) {
+                    logger.warn("Auto-heal fieldsSearch thành công nhưng chưa thể rebuild index cho {}.{}: {}", appId, tableName, ex.getMessage());
+                }
+            }
         }
 
         return structMap;
@@ -903,15 +913,85 @@ public class TableHandler {
         return new ArrayList<>();
     }
 
+    private Map<String, Object> normalizeStructForStorage(String tableName, Map<String, Object> rawStruct) {
+        Map<String, Object> normalized = new HashMap<>();
+        if (rawStruct != null) {
+            for (Map.Entry<String, Object> entry : rawStruct.entrySet()) {
+                if (entry.getKey() == null) {
+                    continue;
+                }
+                normalized.put(String.valueOf(entry.getKey()), entry.getValue());
+            }
+        }
+
+        List<String> fieldsPk = toMutableStringList(normalized.get("fieldsPK"));
+        if (fieldsPk.isEmpty()) {
+            fieldsPk = new ArrayList<>(DEFAULT_TABLE_PK_FIELDS.getOrDefault(tableName, List.of("id")));
+        }
+
+        List<String> fields = toMutableStringList(normalized.get("fields"));
+        if (fields.isEmpty()) {
+            fields = new ArrayList<>(DEFAULT_TABLE_FIELDS.getOrDefault(tableName, new ArrayList<>(fieldsPk)));
+        }
+        for (String pkField : fieldsPk) {
+            if (!containsCaseInsensitive(fields, pkField)) {
+                fields.add(pkField);
+            }
+        }
+
+        List<String> fieldsSearch = readStructStringList(normalized, "fieldsSearch", "fieldsearch", "fieldssearch");
+        if (fieldsSearch.isEmpty()) {
+            fieldsSearch = new ArrayList<>(fields);
+        }
+        for (String required : buildRequiredSearchFieldsForTable(tableName)) {
+            if (!containsCaseInsensitive(fieldsSearch, required)) {
+                fieldsSearch.add(required);
+            }
+        }
+
+        normalized.put("fieldsPK", fieldsPk);
+        normalized.put("fields", fields);
+        normalized.put("fieldsSearch", fieldsSearch);
+        normalized.remove("fieldsearch");
+        normalized.remove("fieldssearch");
+        return normalized;
+    }
+
     private List<String> buildRequiredSearchFieldsForTable(String tableName) {
         List<String> required = new ArrayList<>();
         required.add("id");
+        if ("csm_group_members".equals(tableName)) {
+            required.add("login_identifier");
+            required.add("parent_account_id");
+        }
         if (!isDataScopeExemptTable(tableName)) {
             required.addAll(OWNER_SCOPE_FIELDS);
             required.addAll(DEPARTMENT_SCOPE_FIELDS);
             required.addAll(BRANCH_SCOPE_FIELDS);
         }
         return required;
+    }
+
+    private void ensureOneTimeSearchIndexSync(String appId, String tableName) {
+        if (appId == null || appId.isBlank() || tableName == null || tableName.isBlank()) {
+            return;
+        }
+        if (!"csm_group_members".equals(tableName)) {
+            return;
+        }
+
+        String syncKey = appId + "::" + tableName;
+        if (!SEARCH_INDEX_SYNCED_TABLES.add(syncKey)) {
+            return;
+        }
+
+        try {
+            recordManager.indexExistingRecords(appId, tableName);
+            logger.info("Đã đồng bộ lại Lucene index một lần cho bảng {}.{}", appId, tableName);
+        } catch (Exception ex) {
+            SEARCH_INDEX_SYNCED_TABLES.remove(syncKey);
+            logger.warn("Không thể đồng bộ Lucene index một lần cho bảng {}.{}: {}", appId, tableName, ex.getMessage());
+        }
     }
 
     private boolean containsCaseInsensitive(List<String> source, String target) {
@@ -1006,52 +1086,50 @@ public class TableHandler {
             collectCandidate(departmentCandidates, user.getDeptId());
             collectCandidate(branchCandidates, user.getBranchId());
         } else if (principal instanceof Map<?, ?>) {
-            Map<?, ?> principalMap = (Map<?, ?>) principal;
-            roles = toStringList(principalMap.get("roles"));
-            menusPermissions = toStringList(principalMap.get("menusPermissions"));
-            Object devObj = principalMap.get("dev");
+            Map<?, ?> principalUserMap = (Map<?, ?>) principal;
+            roles = toStringList(principalUserMap.get("roles"));
+            menusPermissions = toStringList(principalUserMap.get("menusPermissions"));
+            Object devObj = principalUserMap.get("dev");
             if (devObj instanceof Boolean) {
                 dev = (Boolean) devObj;
             }
-            Object appIdObj = principalMap.get("app_id");
+            Object appIdObj = principalUserMap.get("app_id");
             if (appIdObj != null) {
                 userAppId = String.valueOf(appIdObj);
                 if (!userAppId.isBlank()) parentCandidates.add(userAppId);
             }
-            Object idObj = principalMap.get("id");
+            Object idObj = principalUserMap.get("id");
             if (idObj != null && !String.valueOf(idObj).isBlank()) parentCandidates.add(String.valueOf(idObj));
-            Object usernameObj = principalMap.get("username");
+            Object usernameObj = principalUserMap.get("username");
             if (usernameObj != null && !String.valueOf(usernameObj).isBlank()) parentCandidates.add(String.valueOf(usernameObj));
-            Object emailObj = principalMap.get("email");
+            Object emailObj = principalUserMap.get("email");
             if (emailObj != null && !String.valueOf(emailObj).isBlank()) parentCandidates.add(String.valueOf(emailObj));
-            Object phoneObj = principalMap.get("phoneNumber");
+            Object phoneObj = principalUserMap.get("phoneNumber");
             if (phoneObj != null && !String.valueOf(phoneObj).isBlank()) parentCandidates.add(String.valueOf(phoneObj));
 
-            collectCandidate(ownerCandidates, principalMap.get("id"));
-            collectCandidate(ownerCandidates, principalMap.get("userId"));
-            collectCandidate(ownerCandidates, principalMap.get("username"));
-            collectCandidate(ownerCandidates, principalMap.get("email"));
-            collectCandidate(ownerCandidates, principalMap.get("phoneNumber"));
-            collectCandidate(ownerCandidates, principalMap.get("app_token"));
-            collectCandidate(ownerCandidates, principalMap.get("appToken"));
+            collectCandidate(ownerCandidates, principalUserMap.get("id"));
+            collectCandidate(ownerCandidates, principalUserMap.get("userId"));
+            collectCandidate(ownerCandidates, principalUserMap.get("username"));
+            collectCandidate(ownerCandidates, principalUserMap.get("email"));
+            collectCandidate(ownerCandidates, principalUserMap.get("phoneNumber"));
+            collectCandidate(ownerCandidates, principalUserMap.get("app_token"));
+            collectCandidate(ownerCandidates, principalUserMap.get("appToken"));
 
-            collectCandidate(departmentCandidates, principalMap.get("dept_id"));
-            collectCandidate(departmentCandidates, principalMap.get("deptId"));
-            collectCandidate(departmentCandidates, principalMap.get("department_id"));
-            collectCandidate(departmentCandidates, principalMap.get("team_id"));
-            collectCandidate(departmentCandidates, principalMap.get("group_id"));
+            collectCandidate(departmentCandidates, principalUserMap.get("dept_id"));
+            collectCandidate(departmentCandidates, principalUserMap.get("deptId"));
+            collectCandidate(departmentCandidates, principalUserMap.get("department_id"));
+            collectCandidate(departmentCandidates, principalUserMap.get("team_id"));
+            collectCandidate(departmentCandidates, principalUserMap.get("group_id"));
 
-            collectCandidate(branchCandidates, principalMap.get("branch_id"));
-            collectCandidate(branchCandidates, principalMap.get("branchId"));
-            collectCandidate(branchCandidates, principalMap.get("site_id"));
-            collectCandidate(branchCandidates, principalMap.get("region_id"));
+            collectCandidate(branchCandidates, principalUserMap.get("branch_id"));
+            collectCandidate(branchCandidates, principalUserMap.get("branchId"));
         }
 
         Object permissionBitfieldRaw = null;
         if (principal instanceof User userPrincipal) {
             permissionBitfieldRaw = userPrincipal.getPermissionBitfield();
-        } else if (principal instanceof Map<?, ?> principalMap) {
-            permissionBitfieldRaw = principalMap.get("permissionBitfield");
+        } else if (principal instanceof Map<?, ?> principalTokenMap) {
+            permissionBitfieldRaw = principalTokenMap.get("permissionBitfield");
         }
         Long parsedToken = PermissionBitfieldUtil.parseSecurityToken(safeStr(permissionBitfieldRaw));
 
@@ -3324,12 +3402,8 @@ public class TableHandler {
 
         structMap.put("fields", fields);
         structMap.put("fieldsSearch", fieldsSearch);
-        if (structMap.get("fieldsearch") == null) {
-            structMap.put("fieldsearch", fieldsSearch);
-        }
-        if (structMap.get("fieldssearch") == null) {
-            structMap.put("fieldssearch", fieldsSearch);
-        }
+        structMap.remove("fieldsearch");
+        structMap.remove("fieldssearch");
         structRecord.put("struct", structMap);
         recordManager.createRecord(appId, "index", structRecord, List.of("id"));
     }

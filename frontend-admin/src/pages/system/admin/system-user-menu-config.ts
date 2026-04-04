@@ -114,10 +114,22 @@ export const DEPT_SELECT_QUERY_JSON = JSON.stringify({
 	query: [
 		{
 			obj_name: "csm_depts",
-			fields: ["id", "dept_name"],
+			fields: ["id", "dept_name", "branch_id"],
 			obj_where: { field: "id", type: "like", value: "" },
 		},
 	],
+});
+
+export const DEPT_SELECT_QUERY_BY_BRANCH_JSON = JSON.stringify({
+	query: [
+		{
+			obj_name: "csm_depts",
+			fields: ["id", "dept_name", "branch_id"],
+			obj_where: { field: "id", type: "like", value: "" },
+		},
+	],
+	cascadeFrom: "branch_id",
+	cascadeField: "branch_id",
 });
 
 export const BRANCH_SELECT_QUERY_JSON = JSON.stringify({
@@ -306,8 +318,8 @@ export const SYSTEM_ACCOUNT_DEFAULT_FIELDS: TableField[] = [
 	{ f_name: "permissionBitfield", f_header: "system.userPermission.fields.permissionBitfield", f_show: 0, f_types: "string_ro", f_align: "left" },
 	{ f_name: "permissionSchemaVersion", f_header: "system.userPermission.fields.permissionSchemaVersion", f_show: 0, f_types: "string", f_align: "left" },
 	{ f_name: "dataScope", f_header: "system.userPermission.fields.dataScope", f_show: 1, f_types: "co", f_align: "left", f_cbo_query: DATA_SCOPE_OPTIONS_JSON },
-	{ f_name: "dept_id", f_header: "system.userPermission.fields.deptId", f_show: 0, f_types: "co", f_align: "left", f_cbo_query: DEPT_SELECT_QUERY_JSON },
 	{ f_name: "branch_id", f_header: "system.userPermission.fields.branchId", f_show: 0, f_types: "co", f_align: "left", f_cbo_query: BRANCH_SELECT_QUERY_JSON },
+	{ f_name: "dept_id", f_header: "system.userPermission.fields.deptId", f_show: 0, f_types: "co", f_align: "left", f_cbo_query: DEPT_SELECT_QUERY_BY_BRANCH_JSON },
 	{ f_name: "actived", f_header: "common.active", f_show: 1, f_types: "checkbox", f_align: "left" },
 ];
 
@@ -351,8 +363,8 @@ export const SUB_USER_DEFAULT_FIELDS: TableField[] = [
 	{ f_name: "permissionBitfield", f_header: "system.userPermission.fields.permissionBitfield", f_show: 1, f_types: "string_ro", f_align: "left" },
 	{ f_name: "permissionSchemaVersion", f_header: "system.userPermission.fields.permissionSchemaVersion", f_show: 0, f_types: "string", f_align: "left" },
 	{ f_name: "dataScope", f_header: "system.userPermission.fields.dataScope", f_show: 1, f_types: "co", f_align: "left", f_cbo_query: DATA_SCOPE_OPTIONS_JSON },
-	{ f_name: "dept_id", f_header: "system.userPermission.fields.deptId", f_show: 0, f_types: "co", f_align: "left", f_cbo_query: DEPT_SELECT_QUERY_JSON },
 	{ f_name: "branch_id", f_header: "system.userPermission.fields.branchId", f_show: 0, f_types: "co", f_align: "left", f_cbo_query: BRANCH_SELECT_QUERY_JSON },
+	{ f_name: "dept_id", f_header: "system.userPermission.fields.deptId", f_show: 0, f_types: "co", f_align: "left", f_cbo_query: DEPT_SELECT_QUERY_BY_BRANCH_JSON },
 	{ f_name: "actived", f_header: "common.active", f_show: 1, f_types: "checkbox", f_align: "left" },
 ];
 
@@ -579,6 +591,78 @@ function beforeSave(row, seft) {
 		}
 		return [];
 	}
+	function findRow(tableName, fieldName, value) {
+		const rows = Array.isArray(seft?.database?.[tableName])
+			? seft.database[tableName]
+			: (Array.isArray(seft?.database?.[tableName]?.rows) ? seft.database[tableName].rows : []);
+		const lookup = String(value || "").trim();
+		if (!lookup) return null;
+		return rows.find((item) => String(item?.[fieldName] || "").trim() === lookup) || null;
+	}
+	function validateOrgLink(row) {
+		const branchId = String(row.branch_id || "").trim();
+		const deptId = String(row.dept_id || "").trim();
+		const deptRow = deptId ? findRow("csm_depts", "id", deptId) : null;
+		if (deptId && !deptRow) {
+			window.$message?.error(tr({ vi: "Phòng ban đã chọn không tồn tại", en: "Selected department does not exist", zh: "所选部门不存在" }));
+			return false;
+		}
+		const deptBranchId = String(deptRow?.branch_id || "").trim();
+		if (deptBranchId) {
+			if (!branchId) {
+				row.branch_id = deptBranchId;
+			} else if (branchId !== deptBranchId) {
+				window.$message?.error(tr({ vi: "Phòng ban không thuộc chi nhánh đã chọn", en: "Department does not belong to the selected branch", zh: "该部门不属于所选分支" }));
+				return false;
+			}
+		}
+		const scope = String(row.dataScope || "").trim().toUpperCase();
+		if (scope === "BRANCH" && !String(row.branch_id || "").trim()) {
+			window.$message?.error(tr({ vi: "Phạm vi Chi nhánh yêu cầu chọn Chi nhánh", en: "Branch scope requires a branch", zh: "分支范围必须选择分支" }));
+			return false;
+		}
+		if (scope === "DEPARTMENT" && !String(row.dept_id || "").trim()) {
+			window.$message?.error(tr({ vi: "Phạm vi Phòng ban yêu cầu chọn Phòng ban", en: "Department scope requires a department", zh: "部门范围必须选择部门" }));
+			return false;
+		}
+		return true;
+	}
+	function findRow(tableName, fieldName, value) {
+		const rows = Array.isArray(seft?.database?.[tableName])
+			? seft.database[tableName]
+			: (Array.isArray(seft?.database?.[tableName]?.rows) ? seft.database[tableName].rows : []);
+		const lookup = String(value || "").trim();
+		if (!lookup) return null;
+		return rows.find((item) => String(item?.[fieldName] || "").trim() === lookup) || null;
+	}
+	function validateOrgLink(row) {
+		const branchId = String(row.branch_id || "").trim();
+		const deptId = String(row.dept_id || "").trim();
+		const deptRow = deptId ? findRow("csm_depts", "id", deptId) : null;
+		if (deptId && !deptRow) {
+			window.$message?.error(tr({ vi: "Phòng ban đã chọn không tồn tại", en: "Selected department does not exist", zh: "所选部门不存在" }));
+			return false;
+		}
+		const deptBranchId = String(deptRow?.branch_id || "").trim();
+		if (deptBranchId) {
+			if (!branchId) {
+				row.branch_id = deptBranchId;
+			} else if (branchId !== deptBranchId) {
+				window.$message?.error(tr({ vi: "Phòng ban không thuộc chi nhánh đã chọn", en: "Department does not belong to the selected branch", zh: "该部门不属于所选分支" }));
+				return false;
+			}
+		}
+		const scope = String(row.dataScope || "").trim().toUpperCase();
+		if (scope === "BRANCH" && !String(row.branch_id || "").trim()) {
+			window.$message?.error(tr({ vi: "Phạm vi Chi nhánh yêu cầu chọn Chi nhánh", en: "Branch scope requires a branch", zh: "分支范围必须选择分支" }));
+			return false;
+		}
+		if (scope === "DEPARTMENT" && !String(row.dept_id || "").trim()) {
+			window.$message?.error(tr({ vi: "Phạm vi Phòng ban yêu cầu chọn Phòng ban", en: "Department scope requires a department", zh: "部门范围必须选择部门" }));
+			return false;
+		}
+		return true;
+	}
 
 	const actorIsDev = isDevActor();
 	const currentActorAppId = getCurrentAppId();
@@ -683,6 +767,9 @@ function beforeSave(row, seft) {
 	}
 
 	applyDataScopeToPermissions(row);
+	if (!validateOrgLink(row)) {
+		return false;
+	}
 	row.permissionBitfield = toBitfield(row).toString(36).toUpperCase();
 	row.permissionSchemaVersion = "v3";
 	if (row.actived == null) row.actived = true;
@@ -994,6 +1081,9 @@ function beforeSave(row, seft) {
 	}
 
 	applyDataScopeToPermissions(row);
+	if (!validateOrgLink(row)) {
+		return false;
+	}
 	row.permissionBitfield = toBitfield(row).toString(36).toUpperCase();
 	row.permissionSchemaVersion = "v3";
 	if (row.actived == null) row.actived = true;
@@ -1096,6 +1186,42 @@ function beforeSave(row, seft) {
 		if (normalized === "staff") return "OWNER";
 		return "NONE";
 	}
+	function findRow(tableName, fieldName, value) {
+		const rows = Array.isArray(seft?.database?.[tableName])
+			? seft.database[tableName]
+			: (Array.isArray(seft?.database?.[tableName]?.rows) ? seft.database[tableName].rows : []);
+		const lookup = String(value || "").trim();
+		if (!lookup) return null;
+		return rows.find((item) => String(item?.[fieldName] || "").trim() === lookup) || null;
+	}
+	function validateOrgLink(row) {
+		const branchId = String(row.branch_id || "").trim();
+		const deptId = String(row.dept_id || "").trim();
+		const deptRow = deptId ? findRow("csm_depts", "id", deptId) : null;
+		if (deptId && !deptRow) {
+			window.$message?.error(tr({ vi: "Phòng ban đã chọn không tồn tại", en: "Selected department does not exist", zh: "所选部门不存在" }));
+			return false;
+		}
+		const deptBranchId = String(deptRow?.branch_id || "").trim();
+		if (deptBranchId) {
+			if (!branchId) {
+				row.branch_id = deptBranchId;
+			} else if (branchId !== deptBranchId) {
+				window.$message?.error(tr({ vi: "Phòng ban không thuộc chi nhánh đã chọn", en: "Department does not belong to the selected branch", zh: "该部门不属于所选分支" }));
+				return false;
+			}
+		}
+		const scope = String(row.dataScope || "").trim().toUpperCase();
+		if (scope === "BRANCH" && !String(row.branch_id || "").trim()) {
+			window.$message?.error(tr({ vi: "Phạm vi Chi nhánh yêu cầu chọn Chi nhánh", en: "Branch scope requires a branch", zh: "分支范围必须选择分支" }));
+			return false;
+		}
+		if (scope === "DEPARTMENT" && !String(row.dept_id || "").trim()) {
+			window.$message?.error(tr({ vi: "Phạm vi Phòng ban yêu cầu chọn Phòng ban", en: "Department scope requires a department", zh: "部门范围必须选择部门" }));
+			return false;
+		}
+		return true;
+	}
 
 	const roleCode = String(row.role_code || "").trim();
 	if (!roleCode) {
@@ -1126,6 +1252,9 @@ function beforeSave(row, seft) {
 	if (row.menusPermissions.length === 0) {
 		const fromPresetMenus = buildPresetMenus(row.permissionPreset);
 		row.menusPermissions = uniqueList([...fromPresetMenus]);
+	}
+	if (!validateOrgLink(row)) {
+		return false;
 	}
 
 	// Single number representing all permissions for this group
@@ -1227,11 +1356,15 @@ export function buildSystemUserMenuConfig(base: any, mode: "main" | "sub", resol
 	const normalizedMain = normalizeModeConfig(modes.main, "main", t);
 	const normalizedSub = normalizeModeConfig(modes.sub, "sub", t);
 	const selectedMode = mode === "main" ? normalizedMain : normalizedSub;
+	const selectedTableName = String(selectedMode?.table_name || base?.table_name || "").trim();
+	const canonicalAppId = selectedTableName === "csm_accounts" || selectedTableName === "csm_group_members"
+		? "csm"
+		: ((base?.app_id && String(base.app_id).trim()) || resolvedAppId);
 
 	return {
 		...base,
 		...selectedMode,
-		app_id: (base?.app_id && String(base.app_id).trim()) || resolvedAppId,
+		app_id: canonicalAppId,
 		system_user_modes: {
 			main: normalizedMain,
 			sub: normalizedSub,

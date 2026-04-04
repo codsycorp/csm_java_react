@@ -871,13 +871,6 @@ ${resolvedContainerSelector} select {
       return candidates.filter((x) => x.value !== undefined && x.value !== null && String(x.value).trim() !== "");
     };
 
-    const getAppIdCandidates = (currentUser: any) => {
-      const appIds = [currentUser?.app_id, effectiveAppId, appId, "csm"]
-        .filter(Boolean)
-        .map((x) => String(x));
-      return Array.from(new Set(appIds));
-    };
-
     const fetchAccountRow = async (): Promise<{ row: any; pkField: string; pkValue: any; tableName: string; requestAppId: string } | null> => {
       const currentUser = (window as any).csmCurrentUser || {};
       const identities = getIdentityCandidates(currentUser);
@@ -906,36 +899,33 @@ ${resolvedContainerSelector} select {
         }
       }
 
-      // Sub-user records are stored in csm_group_members (app context of logged-in user).
-      const appIds = getAppIdCandidates(currentUser);
-      for (const app_id of appIds) {
-        for (const identity of identities) {
-          try {
-            const response = await (window as any).csmApi.getTableData({
-              app_id,
-              obj_name: "csm_group_members",
-              where: {
-                field: identity.field,
-                type: "eq",
-                value: identity.value,
-              },
-              take: 1,
-            });
+      // Sub-user records are stored in csm_group_members under the shared csm app.
+      for (const identity of identities) {
+      try {
+        const response = await (window as any).csmApi.getTableData({
+        app_id: "csm",
+        obj_name: "csm_group_members",
+        where: {
+          field: identity.field,
+          type: "eq",
+          value: identity.value,
+        },
+        take: 1,
+        });
 
-            const rows = (response as any)?.rows || (response as any)?.data || [];
-            if (Array.isArray(rows) && rows.length > 0) {
-              return {
-                row: rows[0],
-                pkField: identity.field,
-                pkValue: identity.value,
-                tableName: "csm_group_members",
-                requestAppId: String(app_id || effectiveAppId || "csm"),
-              };
-            }
-          } catch {
-            // Try next candidate.
-          }
+        const rows = (response as any)?.rows || (response as any)?.data || [];
+        if (Array.isArray(rows) && rows.length > 0) {
+        return {
+          row: rows[0],
+          pkField: identity.field,
+          pkValue: identity.value,
+          tableName: "csm_group_members",
+          requestAppId: "csm",
+        };
         }
+      } catch {
+        // Try next candidate.
+      }
       }
 
       return null;
@@ -1050,7 +1040,7 @@ ${resolvedContainerSelector} select {
             
             if (window.csmApi && (window.csmApi as any).updateTableData) {
               const response = await (window.csmApi as any).updateTableData({
-                app_id: String(account.requestAppId || account.row?.app_id || effectiveAppId || "csm"),
+              app_id: String(account.requestAppId || "csm"),
                 obj_name: account.tableName,
                 command: "update",
                 obj_update: updateData,

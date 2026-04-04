@@ -6,7 +6,7 @@ import { normalizeMenuRuntimeConfig } from "#src/components/csm-crm/crm-config";
 import DynamicCodeMenu from "#src/pages/system/dynamic-code";
 import { useAppStore, useUserStore, usePermissionStore, useTabsStore } from "#src/store";
 import { resolveDevFlag } from "#src/utils/dev-flag";
-import { adaptSystemUserConfigForActor, buildSystemUserMenuConfig, PERMISSION_GROUP_BEFORE_SAVE, PERMISSION_TOKEN_OPTIONS, ACTION_PRESET_OPTIONS_JSON, MENU_PERMISSION_OPTIONS, DATA_SCOPE_OPTIONS_JSON, DEPT_SELECT_QUERY_JSON, BRANCH_SELECT_QUERY_JSON, ROLE_LEVEL_OPTIONS_JSON, type SystemUserActorType } from "./system-user-menu-config";
+import { adaptSystemUserConfigForActor, buildSystemUserMenuConfig, PERMISSION_GROUP_BEFORE_SAVE, PERMISSION_TOKEN_OPTIONS, ACTION_PRESET_OPTIONS_JSON, MENU_PERMISSION_OPTIONS, DATA_SCOPE_OPTIONS_JSON, DEPT_SELECT_QUERY_JSON, DEPT_SELECT_QUERY_BY_BRANCH_JSON, BRANCH_SELECT_QUERY_JSON, ROLE_LEVEL_OPTIONS_JSON, type SystemUserActorType } from "./system-user-menu-config";
 import { Empty, Spin, Alert } from "antd";
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useParams, useLocation } from "react-router";
@@ -63,7 +63,7 @@ const SYSTEM_ROUTE_TABLE_SCHEMAS: Record<string, TableBootstrapDefinition[]> = {
 					update_time: 0,
 				},
 				["id", "role_code"],
-				["id", "role_code", "role_name", "description", "status", "dataScope"],
+				["id", "role_code", "role_name", "description", "status", "dataScope", "dept_id", "branch_id"],
 			),
 		},
 	],
@@ -74,6 +74,7 @@ const SYSTEM_ROUTE_TABLE_SCHEMAS: Record<string, TableBootstrapDefinition[]> = {
 				{
 					id: "",
 					parent_dept_id: "",
+					branch_id: "",
 					dept_code: "",
 					dept_name: "",
 					dept_full_name: "",
@@ -85,7 +86,7 @@ const SYSTEM_ROUTE_TABLE_SCHEMAS: Record<string, TableBootstrapDefinition[]> = {
 					update_time: 0,
 				},
 				["id", "dept_code"],
-				["id", "dept_code", "dept_name", "dept_full_name", "description"],
+				["id", "dept_code", "dept_name", "dept_full_name", "branch_id", "description"],
 			),
 		},
 	],
@@ -185,7 +186,7 @@ const SYSTEM_ROUTE_TABLE_SCHEMAS: Record<string, TableBootstrapDefinition[]> = {
 					team_id: "",
 				},
 				["id", "login_identifier"],
-				["id", "login_identifier", "username", "email", "phoneNumber", "full_name", "group_id", "dept_id", "branch_id"],
+				["id", "login_identifier", "username", "email", "phoneNumber", "full_name", "parent_account_id", "group_id", "dept_id", "branch_id"],
 			),
 		},
 	],
@@ -285,6 +286,7 @@ function normalizeTableNames(raw: unknown): string[] {
 const DEPT_MENU_FIELD_KEYS = [
 	{ f_name: "id", key: "system.dept.fields.id", f_types: "string", f_align: "left" },
 	{ f_name: "parent_dept_id", key: "system.dept.fields.parentDeptId", f_types: "string", f_align: "left" },
+	{ f_name: "branch_id", key: "system.userPermission.fields.branchId", f_types: "co", f_align: "left" },
 	{ f_name: "dept_code", key: "system.dept.fields.code", f_types: "string", f_align: "left" },
 	{ f_name: "dept_name", key: "system.dept.fields.name", f_types: "string", f_align: "left" },
 	{ f_name: "dept_full_name", key: "system.dept.fields.fullName", f_types: "string", f_align: "left" },
@@ -395,6 +397,7 @@ function buildDeptMenuFields(
 		f_types: field.f_types,
 		f_align: field.f_align,
 		...(field.f_name === "status" ? { f_cbo_query: STATUS_OPTIONS_JSON } : {}),
+		...(field.f_name === "branch_id" ? { f_cbo_query: BRANCH_SELECT_QUERY_JSON } : {}),
 	}));
 }
 
@@ -442,8 +445,8 @@ function buildRoleMenuFields(
 		{ f_name: "menusPermissions", ...h("system.userPermission.fields.menusPermissions"), f_show: 1, f_types: "menu_tree", f_align: "left", f_options: menuOptions },
 		{ f_name: "dataScope", ...h("system.userPermission.fields.dataScope"), f_show: 1, f_types: "co", f_align: "left", f_cbo_query: dataScopeOptionsQuery },
 		{ f_name: "role_level", ...h("system.userPermission.fields.roleLevel"), f_show: 1, f_types: "co", f_align: "left", f_cbo_query: ROLE_LEVEL_OPTIONS_JSON },
-		{ f_name: "dept_id", ...h("system.userPermission.fields.deptId"), f_show: 1, f_types: "co", f_align: "left", f_cbo_query: DEPT_SELECT_QUERY_JSON },
 		{ f_name: "branch_id", ...h("system.userPermission.fields.branchId"), f_show: 1, f_types: "co", f_align: "left", f_cbo_query: BRANCH_SELECT_QUERY_JSON },
+		{ f_name: "dept_id", ...h("system.userPermission.fields.deptId"), f_show: 1, f_types: "co", f_align: "left", f_cbo_query: DEPT_SELECT_QUERY_BY_BRANCH_JSON },
 		{ f_name: "permissionBitfield", ...h("system.userPermission.fields.permissionBitfield"), f_show: 0, f_types: "string", f_align: "left" },
 		{ f_name: "permissionSchemaVersion", ...h("system.userPermission.fields.permissionSchemaVersion"), f_show: 0, f_types: "string", f_align: "left" },
 		{ f_name: "status", ...h("common.status"), f_show: 1, f_types: "co", f_align: "center", f_cbo_query: STATUS_OPTIONS_JSON },
@@ -485,6 +488,7 @@ const SYSTEM_FRIENDLY_VISIBLE_FIELDS: Record<string, string[]> = {
 	],
 	csm_depts: [
 		"id",
+		"branch_id",
 		"dept_code",
 		"dept_name",
 		"parent_dept_id",
@@ -718,7 +722,7 @@ export default function AdminPage() {
 			label_en: "System User Management",
 			label_zh: "系统用户管理",
 			table_name: actorTableName,
-			app_id: resolvedAppId,
+			app_id: "csm",
 			type_form: 1,
 			row_type_edit: 0,
 			g_readonly: false,
@@ -864,7 +868,7 @@ export default function AdminPage() {
 				id: "user",
 				path: "/system/user",
 				table_name: actorTableName,
-				app_id: normalized.app_id || appId,
+				app_id: "csm",
 			});
 		}
 		if (location.pathname === "/system/departments") {
@@ -940,7 +944,7 @@ export default function AdminPage() {
 						   path: "/system/user",
 						   label: t("common.menu.user"),
 						   table_name: isDevUser ? "csm_accounts" : "csm_group_members",
-						   app_id: appId,
+						   app_id: "csm",
 						   type_form: 1,
 						   row_type_edit: 0,
 						   g_readonly: false,
@@ -1048,7 +1052,7 @@ export default function AdminPage() {
 		const resolveTableAppId = (tableName: string): string => {
 			if (isSystemUserRoute) {
 				if (tableName === "csm_accounts") return "csm";
-				if (tableName === "csm_group_members") return resolvedUserAppId;
+				if (tableName === "csm_group_members") return "csm";
 			}
 			return runtimeMenu.app_id || resolvedUserAppId;
 		};
@@ -1105,7 +1109,9 @@ export default function AdminPage() {
 			};
 
 			if (isSystemUserRoute && isAdminUser && primaryTable === "csm_group_members") {
-				const ownerConditions = userSubOwnerCandidates.map(owner => ({
+				const ownerConditions = [resolvedUserAppId]
+					.filter((owner) => typeof owner === "string" && owner.trim().length > 0)
+					.map(owner => ({
 					field: "parent_account_id",
 					type: "eq",
 					value: owner,
@@ -1470,7 +1476,7 @@ export default function AdminPage() {
 				: runtimeMenuData.table_name === "csm_roles"
 					? ["id", "role_code", "role_name", "description", "permissionPreset", "permissions", "menusPermissions", "dataScope", "permissionBitfield", "status"]
 					: runtimeMenuData.table_name === "csm_depts"
-						? ["id", "parent_dept_id", "dept_code", "dept_name", "dept_full_name", "description", "manager_user_id", "is_global", "status", "create_time", "update_time"]
+						? ["id", "parent_dept_id", "branch_id", "dept_code", "dept_name", "dept_full_name", "description", "manager_user_id", "is_global", "status", "create_time", "update_time"]
 						: runtimeMenuData.table_name === "csm_branches"
 							? ["id", "parent_branch_id", "branch_code", "branch_name", "branch_full_name", "dept_id", "description", "manager_user_id", "is_global", "status", "create_time", "update_time"]
 						: SYSTEM_USER_VISIBLE_FIELDS_BY_ACTOR[systemUserActorType];
