@@ -1093,6 +1093,9 @@ export default function AdminPage() {
 				conditions: [{ field: "id", type: "like", value: "" }]
 			};
 
+			// Use menu-specific app_id if available, otherwise fall back to global appId
+			const effectiveAppId = runtimeMenu.app_id || appId;
+
 			if (isSystemUserRoute && isAdminUser && primaryTable === "csm_group_members") {
 				const ownerConditions = userSubOwnerCandidates.map(owner => ({
 					field: "parent_account_id",
@@ -1102,10 +1105,20 @@ export default function AdminPage() {
 				if (ownerConditions.length > 0) {
 					(defaultFilter.conditions as any[]).push({ operator: "OR", conditions: ownerConditions });
 				}
+				// Filter by app_id to show only users of current app
+				(defaultFilter.conditions as any[]).push({
+					field: "app_id",
+					type: "eq",
+					value: effectiveAppId
+				});
+			} else if (isSystemUserRoute && primaryTable === "csm_group_members") {
+				// For non-admin users, still filter by current app_id
+				(defaultFilter.conditions as any[]).push({
+					field: "app_id",
+					type: "eq",
+					value: effectiveAppId
+				});
 			}
-
-			// Use menu-specific app_id if available, otherwise fall back to global appId
-			const effectiveAppId = runtimeMenu.app_id || appId;
 
 			await ensureSystemRouteTables(effectiveAppId);
 
