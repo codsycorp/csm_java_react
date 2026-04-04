@@ -1492,7 +1492,20 @@ public class RecordManager {
     
                 String dbPath = DIR_PATH + "/database/" + appId + "/" + tableName;
                 Files.createDirectories(Paths.get(dbPath));
-                RocksDB db = RocksDB.open(options, dbPath);
+
+                RocksDB db;
+                try {
+                    db = RocksDB.open(options, dbPath);
+                } catch (RocksDBException openEx) {
+                    if (shouldAutoRecoverRocksDb(tableName) && isRecoverableOpenError(openEx)) {
+                        logger.error("❌ RocksDB bị lỗi/corrupt cho {} tại {}. Thử tự phục hồi...", dbKey, dbPath, openEx);
+                        quarantineCorruptedRocksDirectory(dbPath, dbKey);
+                        db = RocksDB.open(options, dbPath);
+                        logger.warn("⚠️ RocksDB {} đã được tự phục hồi bằng cách tạo DB mới", dbKey);
+                    } else {
+                        throw openEx;
+                    }
+                }
     
                 RocksDBWrapper newWrapper = new RocksDBWrapper(db, options, tableConfig, bloomFilter);
                 dbMap.put(dbKey, newWrapper);
@@ -1503,7 +1516,42 @@ public class RecordManager {
                 throw new RuntimeException("Lỗi khi mở RocksDB", e);
             }
         }
-    }      
+    }
+
+    private boolean shouldAutoRecoverRocksDb(String tableName) {
+        // index table stores search metadata and can be rebuilt safely.
+        return "index".equalsIgnoreCase(String.valueOf(tableName));
+    }
+
+    private boolean isRecoverableOpenError(Throwable throwable) {
+        if (!(throwable instanceof RocksDBException)) {
+            return false;
+        }
+        String message = String.valueOf(throwable.getMessage()).toLowerCase(Locale.ROOT);
+        return message.contains("corruption")
+                || message.contains("manifest")
+                || message.contains("no such file or directory")
+                || message.contains("while open a file for random read");
+    }
+
+    private void quarantineCorruptedRocksDirectory(String dbPath, String dbKey) throws IOException {
+        Path source = Paths.get(dbPath);
+        if (!Files.exists(source)) {
+            Files.createDirectories(source);
+            return;
+        }
+
+        Path quarantine = Paths.get(dbPath + ".corrupt-" + System.currentTimeMillis());
+        try {
+            Files.move(source, quarantine);
+            logger.error("⚠️ Đã cô lập thư mục RocksDB lỗi cho {} sang {}", dbKey, quarantine);
+        } catch (IOException moveError) {
+            logger.warn("Không thể move thư mục RocksDB lỗi cho {}. Thử xóa thư mục cũ để tạo lại. Lỗi: {}", dbKey, moveError.getMessage());
+            deleteDirectory(source.toFile());
+        }
+
+        Files.createDirectories(source);
+    }
 
     /**
      * Phương thức đếm số lượng record thực tế trong RocksDB.
