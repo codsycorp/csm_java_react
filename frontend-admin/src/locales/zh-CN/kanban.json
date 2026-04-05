@@ -54,6 +54,16 @@
   "configMissing": "看板未配置。请在菜单中添加 kanban_config 字段（JSON）或传入 config 属性。",
   "overdue": "超期",
   "wipExceeded": "超出 WIP 限制",
+  "kpi": {
+    "totalTasks": "任务总数",
+    "doneTasks": "已完成",
+    "openTasks": "进行中",
+    "overdueOpen": "超期未完成",
+    "completionRate": "完成率 (%)",
+    "onTimeRate": "准时率 (%)",
+    "avgLeadDays": "平均 Lead Time（天）",
+    "avgCycleDays": "平均 Cycle Time（天）"
+  },
   "priority": {
     "urgent": "紧急",
     "high": "高",

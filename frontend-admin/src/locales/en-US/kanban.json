@@ -54,6 +54,16 @@
   "configMissing": "Kanban is not configured. Add a kanban_config field (JSON) to the menu or pass the config prop.",
   "overdue": "Overdue",
   "wipExceeded": "WIP limit exceeded",
+  "kpi": {
+    "totalTasks": "Total tasks",
+    "doneTasks": "Done",
+    "openTasks": "Open",
+    "overdueOpen": "Overdue open",
+    "completionRate": "Completion rate (%)",
+    "onTimeRate": "On-time rate (%)",
+    "avgLeadDays": "Avg lead time (days)",
+    "avgCycleDays": "Avg cycle time (days)"
+  },
   "priority": {
     "urgent": "Urgent",
     "high": "High",

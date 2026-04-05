@@ -24,6 +24,7 @@ import { usePermissionStore } from "#src/store";
 import { useUserStore } from "#src/store/user";
 import { getTableData } from "./CsmApi";
 import { normalizeComboOptions } from "./combo-utils";
+import { formatDateForStorage, parseDateValueToDayjs, resolveDateLocaleFormat } from "#src/utils/dateControl";
 
 // Helper: safeEval for trigger execution (same as CsmDynamicGrid)
 // CRITICAL: Handle both side-effect triggers (alert, console.log) and return-value triggers
@@ -704,22 +705,6 @@ function resolveNumberLocale(langInput?: string): string {
   if (lang.startsWith("zh")) return "zh-CN";
   if (lang.startsWith("vi")) return "vi-VN";
   return "en-US";
-}
-
-function resolveDateLocaleFormat(langInput?: string): {
-  date: string;
-  datetime: string;
-  time: string;
-} {
-  const lang = String(langInput || (typeof navigator !== "undefined" ? navigator.language : "vi") || "vi").toLowerCase();
-  if (lang.startsWith("en")) {
-    return { date: "MM/DD/YYYY", datetime: "MM/DD/YYYY HH:mm:ss", time: "HH:mm:ss" };
-  }
-  if (lang.startsWith("zh")) {
-    return { date: "YYYY/MM/DD", datetime: "YYYY/MM/DD HH:mm:ss", time: "HH:mm:ss" };
-  }
-  // vi (default)
-  return { date: "DD/MM/YYYY", datetime: "DD/MM/YYYY HH:mm:ss", time: "HH:mm:ss" };
 }
 
 function getLocaleNumberSeparators(locale: string): { group: string; decimal: string } {
@@ -1920,10 +1905,10 @@ export function CsmEditModal({
         const types = (f.f_types || '').toLowerCase();
         const key = f.f_name;
         if (/date|datetime|time/.test(types) && convertedValues[key]) {
-          try {
-            convertedValues[key] = dayjs(convertedValues[key]);
-          } catch (e) {
-            console.warn(`Failed to convert date for field ${key}:`, e);
+          const kind = /datetime/.test(types) ? "datetime" : /^time$/.test(types) ? "time" : "date";
+          const parsedValue = parseDateValueToDayjs(convertedValues[key], kind);
+          if (parsedValue) {
+            convertedValues[key] = parsedValue;
           }
         }
         // Keep html/edt values as plain text (no decrypt transform)
@@ -2090,11 +2075,9 @@ export function CsmEditModal({
             const encodedValues = { ...values };
             dynamicFields.forEach(f => {
               const types = (f.f_types || '').toLowerCase();
-              // Convert dayjs objects back to ISO string for dates
               if (/date|datetime|time/.test(types) && encodedValues[f.f_name]) {
-                if (encodedValues[f.f_name]?.format) {
-                  encodedValues[f.f_name] = encodedValues[f.f_name].toISOString();
-                }
+                const kind = /datetime/.test(types) ? "datetime" : /^time$/.test(types) ? "time" : "date";
+                encodedValues[f.f_name] = formatDateForStorage(encodedValues[f.f_name], kind);
               }
               if (/html|richtext/.test(types) && typeof encodedValues[f.f_name] === 'string') {
                 encodedValues[f.f_name] = encodeHtmlValue(encodedValues[f.f_name]);

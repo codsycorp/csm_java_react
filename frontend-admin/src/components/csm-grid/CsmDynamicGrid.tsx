@@ -14,6 +14,7 @@ import { read, utils, writeFile } from "xlsx";
 import { useAppStore } from "#src/store/app";
 import { useUserStore } from "#src/store/user";
 import { PERMISSION_BITS, hasAnyPermissionBit, hasPermissionBit, parseMenuBitIndex, toPermissionBigInt } from "#src/utils/permission-bitfield";
+import { formatDateForDisplay, formatDateForStorage, resolveDateLocaleFormat } from "#src/utils/dateControl";
 import dayjs from "dayjs";
 
 // Minimal types (kept local to avoid wider type churn)
@@ -362,17 +363,26 @@ function normalizeInlineRowValues(input: Row, fields: TableField[]): Row {
 
 		if (dayjs.isDayjs(raw)) {
 			if (isDate) {
-				normalized[key] = raw.format("YYYY-MM-DD");
+				normalized[key] = formatDateForStorage(raw, "date");
 				return;
 			}
 			if (isTime) {
-				normalized[key] = raw.format("HH:mm:ss");
+				normalized[key] = formatDateForStorage(raw, "time");
 				return;
 			}
 			if (isDateTime) {
-				normalized[key] = raw.toISOString();
+				normalized[key] = formatDateForStorage(raw, "datetime");
 				return;
 			}
+		}
+
+		if ((isDate || isDateTime || isTime) && typeof raw === "string" && raw.trim() !== "") {
+			normalized[key] = isDate
+				? formatDateForStorage(raw, "date")
+				: isDateTime
+					? formatDateForStorage(raw, "datetime")
+					: formatDateForStorage(raw, "time");
+			return;
 		}
 
 		if (isNumber) {
@@ -630,6 +640,7 @@ export function CsmDynamicGrid({
 }) {
 	const { t, i18n } = useTranslation();
 	const numberLocale = useMemo(() => resolveNumberLocale(i18n.language), [i18n.language]);
+	const dateLocaleFormat = useMemo(() => resolveDateLocaleFormat(i18n.language), [i18n.language]);
 	const saveActionLabel = useMemo(() => {
 		const lang = String(i18n.language || "").toLowerCase();
 		if (lang.startsWith("zh")) return "保存";
@@ -1685,6 +1696,18 @@ export function CsmDynamicGrid({
 				};
 			}
 
+			if (isDate) {
+				col.render = (_dom, entity) => formatDateForDisplay(entity[f.f_name], "date", i18n.language);
+			}
+
+			if (isDateTime) {
+				col.render = (_dom, entity) => formatDateForDisplay(entity[f.f_name], "datetime", i18n.language);
+			}
+
+			if (isTime) {
+				col.render = (_dom, entity) => formatDateForDisplay(entity[f.f_name], "time", i18n.language);
+			}
+
 			if (isFile) {
 				// Hiển thị link download cho file
 				col.render = (dom, entity) => {
@@ -2114,21 +2137,21 @@ export function CsmDynamicGrid({
 				if (isDateField) {
 					col.fieldProps = {
 						...(col.fieldProps as Record<string, any> || {}),
-						format: "DD/MM/YYYY",
+						format: dateLocaleFormat.date,
 					};
 				}
 
 				if (isDateTimeField) {
 					col.fieldProps = {
 						...(col.fieldProps as Record<string, any> || {}),
-						format: "DD/MM/YYYY HH:mm:ss",
+						format: dateLocaleFormat.datetime,
 					};
 				}
 
 				if (isTimeField) {
 					col.fieldProps = {
 						...(col.fieldProps as Record<string, any> || {}),
-						format: "HH:mm:ss",
+						format: dateLocaleFormat.time,
 					};
 				}
 			});
@@ -2250,7 +2273,7 @@ export function CsmDynamicGrid({
 			});
 		}
 		return cols;
-	}, [baseColumns, m_configs, database, context, canEdit, canDelete, canAdd, onEdit, onDelete, decrypt, appId, tableName, enableInlineCellEdit, numberLocale]);
+	}, [baseColumns, m_configs, database, context, canEdit, canDelete, canAdd, onEdit, onDelete, decrypt, appId, tableName, enableInlineCellEdit, numberLocale, dateLocaleFormat]);
 
 	// Apply datarowtemplate trigger (Vue parity: Function("container", "item", code))
 	const rowTemplateFn = useMemo(() => {

@@ -1020,7 +1020,7 @@ ${resolvedContainerSelector} select {
       return false;
     };
 
-    const fetchAccountRow = async (): Promise<{ row: any; pkField: string; pkValue: any; tableName: string; requestAppId: string } | null> => {
+    const fetchAccountRow = async (): Promise<{ row: any; pkField: string; pkValue: any; tableName: string } | null> => {
       const currentUser = (window as any).csmCurrentUser || {};
       const identities = getIdentityCandidates(currentUser);
       if (identities.length === 0) return null;
@@ -1030,50 +1030,40 @@ ${resolvedContainerSelector} select {
         ? ["csm_group_members", "csm_accounts"]
         : ["csm_accounts", "csm_group_members"];
 
-      const appIdCandidates = [
-        String(effectiveAppId || "").trim(),
-        String(currentUser?.app_id || "").trim(),
-        String(currentUser?.parent_account_id || "").trim(),
-        "csm",
-      ].filter((value, index, arr) => Boolean(value) && arr.indexOf(value) === index);
+      for (const tableName of tableOrder) {
+        for (const identity of identities) {
+          try {
+            const response = await (window as any).csmApi.getTableData({
+              app_id: "csm",
+              obj_name: tableName,
+              where: {
+                field: identity.field,
+                type: "eq",
+                value: identity.value,
+              },
+              take: 20,
+            });
 
-      for (const requestAppId of appIdCandidates) {
-        for (const tableName of tableOrder) {
-          for (const identity of identities) {
-            try {
-              const response = await (window as any).csmApi.getTableData({
-                app_id: requestAppId,
-                obj_name: tableName,
-                where: {
-                  field: identity.field,
-                  type: "eq",
-                  value: identity.value,
-                },
-                take: 20,
-              });
-
-              const rows = (response as any)?.rows || (response as any)?.data || [];
-              if (!Array.isArray(rows) || rows.length === 0) {
-                continue;
-              }
-
-              const row = pickBestMatchedRow(rows, currentUser);
-              if (!row) continue;
-
-              const stableId = row?.id;
-              const pkField = stableId ? "id" : identity.field;
-              const pkValue = stableId || identity.value;
-
-              return {
-                row,
-                pkField,
-                pkValue,
-                tableName,
-                requestAppId,
-              };
-            } catch {
-              // Try next candidate.
+            const rows = (response as any)?.rows || (response as any)?.data || [];
+            if (!Array.isArray(rows) || rows.length === 0) {
+              continue;
             }
+
+            const row = pickBestMatchedRow(rows, currentUser);
+            if (!row) continue;
+
+            const stableId = row?.id;
+            const pkField = stableId ? "id" : identity.field;
+            const pkValue = stableId || identity.value;
+
+            return {
+              row,
+              pkField,
+              pkValue,
+              tableName,
+            };
+          } catch {
+            // Try next candidate.
           }
         }
       }
@@ -1149,54 +1139,113 @@ ${resolvedContainerSelector} select {
             const nextSerialized = stableStringify(arr);
             syncRuntimeUserAddress(arr);
 
-            const account = await fetchAccountRow();
-            if (!account) {
-              // Keep backend security unchanged: if csm_accounts is restricted, save locally and continue.
-              console.warn("[csmUserData.set] csm_accounts restricted or not accessible, saved to local fallback only");
-              if (typeof callback === "function") callback(true, "Saved locally (restricted backend access)");
-              return;
-            }
-            
-            // Prepare update data
-            const updateData: any = {
-              [account.pkField]: account.pkValue
+            const buildUpdateData = (pkField: string, pkValue: any): any => {
+              const payload: any = {
+                [pkField]: pkValue,
+              };
+
+              // Keep compatibility with mixed schema naming.
+              if (pkField === "phoneNumber") payload.phone_number = pkValue;
+              if (pkField === "phone_number") payload.phoneNumber = pkValue;
+
+              if (Array.isArray(arr) && arr.length > 0) {
+                payload.user_address = JSON.stringify(arr);
+              } else {
+                payload.user_address = null;
+              }
+              payload.user_adress = payload.user_address;
+              return payload;
             };
 
-            const currentUserAddress = parseUserAddressValue(account.row?.user_address ?? account.row?.user_adress);
-            const currentSerialized = stableStringify(currentUserAddress);
-            if (currentSerialized === nextSerialized) {
-              console.log("ℹ️ [csmUserData.set] Skipped database update because user_address is unchanged");
-              if (typeof callback === "function") callback(true);
+            const updateApi = (window.csmApi as any)?.updateTableData;
+
+            const tryUpdate = async (target: { tableName: string; pkField: string; pkValue: any }) => {
+              if (!updateApi) return null;
+
+              const response = await updateApi({
+                app_id: "csm",
+                obj_name: target.tableName,
+                command: "update",
+                obj_update: buildUpdateData(target.pkField, target.pkValue),
+                pk_fields: [target.pkField],
+              });
+
+              return response;
+            };
+
+            const account = await fetchAccountRow();
+            if (!updateApi) {
+              if (typeof callback === "function") callback(false, "updateTableData API not available");
               return;
             }
 
-            if (Array.isArray(arr) && arr.length > 0) {
-              updateData.user_address = JSON.stringify(arr);
-            } else {
-              updateData.user_address = null;
-            }
-            updateData.user_adress = updateData.user_address;
-            
-            if (window.csmApi && (window.csmApi as any).updateTableData) {
-              const response = await (window.csmApi as any).updateTableData({
-              app_id: String(account.requestAppId || "csm"),
-                obj_name: account.tableName,
-                command: "update",
-                obj_update: updateData,
-                pk_fields: [account.pkField],
+            if (account) {
+              const currentUserAddress = parseUserAddressValue(account.row?.user_address ?? account.row?.user_adress);
+              const currentSerialized = stableStringify(currentUserAddress);
+              if (currentSerialized === nextSerialized) {
+                console.log("ℹ️ [csmUserData.set] Skipped database update because user_address is unchanged");
+                if (typeof callback === "function") callback(true);
+                return;
+              }
+
+              const response = await tryUpdate({
+                tableName: account.tableName,
+                pkField: account.pkField,
+                pkValue: account.pkValue,
               });
-              
+
               if (isUpdateSuccessResponse(response)) {
                 console.log("✅ Updated user_address to database successfully");
                 if (typeof callback === "function") callback(true);
-              } else {
-                const errorMsg = response?.message || response?.error || "Update failed";
-                console.error("❌ Failed to update user_address:", errorMsg);
-                if (typeof callback === "function") callback(false, errorMsg);
+                return;
               }
-            } else {
-              if (typeof callback === "function") callback(false, "updateTableData API not available");
+
+              const errorMsg = (response as any)?.message || (response as any)?.error || "Update failed";
+              console.error("❌ Failed to update user_address:", errorMsg);
+              if (typeof callback === "function") callback(false, errorMsg);
+              return;
             }
+
+            // If account lookup fails (restricted query policy / missing read permission),
+            // still attempt a direct update using profile-like PK candidates.
+            const currentUser = (window as any).csmCurrentUser || {};
+            const target = resolveProfileTarget(currentUser);
+            const tableOrder = target.preferredTable === "csm_group_members"
+              ? ["csm_group_members", "csm_accounts"]
+              : ["csm_accounts", "csm_group_members"];
+            const identities = getIdentityCandidates(currentUser);
+
+            const fallbackTargets: Array<{ tableName: string; pkField: string; pkValue: any }> = [];
+            const pushTarget = (item: { tableName: string; pkField: string; pkValue: any }) => {
+              if (item.pkValue === undefined || item.pkValue === null) return;
+              const key = `${item.tableName}|${item.pkField}|${String(item.pkValue)}`;
+              if (fallbackTargets.some((x) => `${x.tableName}|${x.pkField}|${String(x.pkValue)}` === key)) return;
+              fallbackTargets.push(item);
+            };
+
+            for (const tableName of tableOrder) {
+              pushTarget({ tableName, pkField: target.preferredPkField, pkValue: target.preferredPkValue });
+              for (const identity of identities) {
+                pushTarget({ tableName, pkField: identity.field, pkValue: identity.value });
+              }
+            }
+
+            for (const targetItem of fallbackTargets) {
+              try {
+                const response = await tryUpdate(targetItem);
+                if (isUpdateSuccessResponse(response)) {
+                  console.log("✅ [csmUserData.set] Updated user_address via fallback target", targetItem);
+                  if (typeof callback === "function") callback(true);
+                  return;
+                }
+              } catch {
+                // Keep trying next fallback target.
+              }
+            }
+
+            // Keep backend security unchanged: if all update attempts fail, save locally and continue.
+            console.warn("[csmUserData.set] Could not update backend, saved to local fallback only");
+            if (typeof callback === "function") callback(true, "Saved locally (restricted backend access)");
           } catch (error: any) {
             const errorMsg = error?.message || String(error);
             console.error("❌ Error setting user_address:", errorMsg);

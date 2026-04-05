@@ -53,6 +53,18 @@ type AiProgressState = {
   level?: number;
 };
 
+type CoverageEntry = {
+  item: string;
+  menus: string[];
+  status: "covered" | "partial" | "missing";
+};
+
+type AiOutputMeta = {
+  coverageModules: CoverageEntry[];
+  coverageTables: CoverageEntry[];
+  unresolvedAssumptions: string[];
+};
+
 const AI_REQUEST_TABLE = "csm_ai_menu_requests";
 
 function formatDurationMs(value: number | undefined): string {
@@ -565,7 +577,14 @@ ${tableChecklist}
   + KHONG duoc bien bao cao noi bo thanh type_form=3 + dynamic_link_url '/reports/...'.
   + Neu co report_name thi uu tien type_form=1 (hoac type_form dang duoc yeu cau), KHONG dung type_form=3.
 - Neu yeu cau nghiep vu co ket noi master-detail, bao cao, combo phu thuoc: phai tao du trigger va f_cbo_query tuong ung.
-- Type 6 (Kanban Board): uu tien co kanban_config hop le (JSON object), table_name, id/status/title fields theo config.
+- Type 6 (Kanban Board): BAT BUOC theo luong moi:
+  + Co linked_data_menu_id tro toi menu task nguon co table_name/table.
+  + Co kanban_config hop le (JSON object) va tableName phai dong bo voi table_name.
+  + Co stageField/titleField/dueDateField va kpi.progressField hop le.
+  + Neu dung 2 bang thi BAT BUOC co linked_progress_menu_id va progressTracking.mode="separate_table".
+  + progressTracking (2 bang) phai co taskRefField/stageField/progressField/changedAtField.
+  + Uu tien dat appendOnly=true, writeBackMainTable=true cho progressTracking.
+- data_scope_override chi duoc dung 1 trong: NONE | ALL | OWNER | DEPARTMENT | BRANCH.
 - Neu yeu cau la bao cao/dashboard tong hop cua he thong, uu tien su dung report_name + trigger.report_db + cac field loc trong table de runtime CsmReport tu render.
 - Chi dung dynamic_link_url khi thuc su can dieu huong sang mot URL/route ben ngoai co san.
 - Semantic field mapping:
@@ -578,16 +597,22 @@ ${tableChecklist}
 - Khong co menu type_form=0 dang la node la.
 - Khong co menu report noi bo bi doi sang dynamic_link_url.
 - Cac field tien te/ngan sach da dung f_types="price".
+- Menu type 6 co day du linked_data_menu_id va (neu 2 bang) linked_progress_menu_id + progressTracking.
 
 ## OUTPUT SHAPE (SCHEMA)
 - Moi menu item uu tien co day du key: id, label, trigger, m_icons, field_root, report_name,
-  orientation, p_width, p_height, m_show, g_readonly, table_name, type_menu, type_form,
+  orientation, p_width, p_height, m_show, g_readonly, data_scope_override, table_name, type_menu, type_form,
   row_type_edit, dev, prefix_pk, table_pagesize, menu_id, parentId, children.
+- Rieng menu type_form=6 uu tien co them: linked_data_menu_id, linked_progress_menu_id (neu 2 bang),
+  kanban_progress_tracking_mode, kanban_stage_field, kanban_title_field, kanban_due_date_field,
+  kanban_progress_field, kanban_progress_task_ref_field, kanban_progress_stage_log_field,
+  kanban_progress_percent_log_field, kanban_progress_time_field, kanban_progress_note_field,
+  kanban_progress_actor_field, kanban_done_stage_ids.
 - Moi field trong table uu tien co key: id, f_name, f_pkid, f_sort, f_align, f_stt, f_header,
   f_filter, f_width, f_sorting, f_types, f_show, f_cbo_query, f_dec, f_showgrid, f_showonreport, f_alert_query.
 
 ## DINH DANG DAU RA BAT BUOC
-{ "menu": [...], "notes": [...], "warnings": [...] }
+{ "menu": [...], "notes": [...], "warnings": [...], "coverage_modules": [...], "coverage_tables": [...], "unresolved_assumptions": [...] }
 TUYET DOI KHONG tra ve JSON array don thuan ([ ... ]) hay chuoi text. Chi tra ve JSON object { "menu": [...] } duy nhat.
 
 ## LUU Y TOKEN
@@ -740,7 +765,14 @@ ${isSampleBase ? previousMenuContextFull : previousMenuContext}
   + KHONG duoc bien bao cao noi bo thanh type_form=3 + dynamic_link_url '/reports/...'.
   + Neu co report_name thi uu tien type_form=1 (hoac type_form dang duoc yeu cau), KHONG dung type_form=3.
 - Neu refine tu menu cu: giu id/menu_id/path/menu cha-con toi da, chi thay doi phan duoc yeu cau.
-- Type 6 (Kanban Board) can uu tien kanban_config chuyen biet.
+- Type 6 (Kanban Board) BAT BUOC theo luong moi:
+  + Co linked_data_menu_id tro toi menu task nguon co table_name/table.
+  + Co kanban_config hop le (JSON object) va tableName dong bo voi table_name.
+  + Co stageField/titleField/dueDateField va kpi.progressField hop le.
+  + Neu dung 2 bang thi BAT BUOC co linked_progress_menu_id va progressTracking.mode="separate_table".
+  + progressTracking (2 bang) phai co taskRefField/stageField/progressField/changedAtField.
+  + Uu tien dat appendOnly=true, writeBackMainTable=true cho progressTracking.
+- data_scope_override chi duoc dung 1 trong: NONE | ALL | OWNER | DEPARTMENT | BRANCH.
 - Neu menu mang tinh chat bao cao/dashboard tong hop thi uu tien report_name + trigger.report_db thay vi path crm/reports/dashboard.
 - Neu AI xuat menu ten Dashboard/Bao cao tong hop/KPI ma lai khong co report_name hoac auto_code_name thi phai tu sua lai truoc khi tra ket qua.
 - KHONG tu them module/tinh nang khong co trong yeu cau goc + yeu cau bo sung.
@@ -754,16 +786,22 @@ ${isSampleBase ? previousMenuContextFull : previousMenuContext}
 - Khong co menu type_form=0 dang la node la.
 - Khong co menu report noi bo bi doi sang dynamic_link_url.
 - Cac field tien te/ngan sach da dung f_types="price".
+- Menu type 6 co day du linked_data_menu_id va (neu 2 bang) linked_progress_menu_id + progressTracking.
 
 ## OUTPUT SHAPE (SCHEMA)
 - Moi menu item uu tien co day du key: id, label, trigger, m_icons, field_root, report_name,
-  orientation, p_width, p_height, m_show, g_readonly, table_name, type_menu, type_form,
+  orientation, p_width, p_height, m_show, g_readonly, data_scope_override, table_name, type_menu, type_form,
   row_type_edit, dev, prefix_pk, table_pagesize, menu_id, parentId, children.
+- Rieng menu type_form=6 uu tien co them: linked_data_menu_id, linked_progress_menu_id (neu 2 bang),
+  kanban_progress_tracking_mode, kanban_stage_field, kanban_title_field, kanban_due_date_field,
+  kanban_progress_field, kanban_progress_task_ref_field, kanban_progress_stage_log_field,
+  kanban_progress_percent_log_field, kanban_progress_time_field, kanban_progress_note_field,
+  kanban_progress_actor_field, kanban_done_stage_ids.
 - Moi field trong table uu tien co key: id, f_name, f_pkid, f_sort, f_align, f_stt, f_header,
   f_filter, f_width, f_sorting, f_types, f_show, f_cbo_query, f_dec, f_showgrid, f_showonreport, f_alert_query.
 
 ## DINH DANG DAU RA BAT BUOC
-{ "menu": [...], "notes": [...], "warnings": [...] }
+{ "menu": [...], "notes": [...], "warnings": [...], "coverage_modules": [...], "coverage_tables": [...], "unresolved_assumptions": [...] }
 
 ## LUU Y TOKEN
 Khong lap lai JSON mau dai. Chi tap trung logic nghiep vu va tra ve JSON menu hoan chinh, dung schema.
@@ -1195,6 +1233,7 @@ function buildMenuTypeCatalog(): string {
   return [
     "- 0=Group: chi de to chuc cay menu, khong CRUD.",
     "- 1=Grid, 2=Master-Detail, 6=Kanban: bat buoc co table_name.",
+    "- Type 6 theo luong moi: co linked_data_menu_id; neu 2 bang thi co linked_progress_menu_id + progressTracking.",
     "- 3=Dynamic Link: bat buoc co dynamic_link_url.",
     "- 4=Dynamic Code: bat buoc co auto_code_name.",
     "- Bao cao noi bo: report_name + trigger.report_db (khong doi sang type 3).",
@@ -1202,6 +1241,7 @@ function buildMenuTypeCatalog(): string {
     "- Field combo (co/coro/cbo) bat buoc co f_cbo_query string khong rong.",
     "- Trigger chi dat trong object trigger; khong dung trigger_* o cap menu.",
     "- Type 1/2/6 thuong khong can path (runtime /system/grid/:menuId).",
+    "- data_scope_override hop le: NONE | ALL | OWNER | DEPARTMENT | BRANCH.",
     "- Khong tu them module ngoai yeu cau; khong tao lai menu he thong co san.",
   ].join("\n");
 }
@@ -1211,6 +1251,8 @@ function buildMenuOrganizationGuide(): string {
     "1) Chia theo nhom nghiep vu: moi nhom la 1 node type_form=0, ben trong la menu chuc nang.",
     "2) Menu chuc nang khong duoc de type_form=0; chon type dung muc dich 1/2/3/4/6.",
     "3) CRUD uu tien type 1/2; Kanban dung type 6; chi dung 3/4 khi yeu cau ro.",
+    "3.1) Kanban luong moi: lien ket menu task bang linked_data_menu_id; neu 2 bang thi lien ket them linked_progress_menu_id.",
+    "3.2) Kanban 2 bang can progressTracking.mode=separate_table va mapping taskRef/stage/progress/changedAt.",
     "4) Bao cao noi bo phai dung report_name + trigger.report_db, khong dung dynamic_link_url.",
     "5) Table field theo schema f_* va dung key table (khong dung fields).",
     "6) Giu on dinh id/menu_id/path/parentId khi refine, chi sua phan duoc yeu cau.",
@@ -1829,6 +1871,38 @@ function buildAutoRepairRefineText(issues: string[]): string {
   ].join("\n");
 }
 
+function normalizeCoverageEntries(raw: any, keyName: "module" | "table"): CoverageEntry[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item) => {
+      const value = String(item?.[keyName] || item?.item || "").trim();
+      if (!value) return null;
+
+      const menus = Array.isArray(item?.menus)
+        ? item.menus.map((m: any) => String(m || "").trim()).filter(Boolean)
+        : [];
+
+      const rawStatus = String(item?.status || (menus.length > 0 ? "covered" : "missing")).toLowerCase();
+      const status = (rawStatus === "covered" || rawStatus === "partial" || rawStatus === "missing")
+        ? rawStatus
+        : (menus.length > 0 ? "covered" : "missing");
+
+      return { item: value, menus, status } as CoverageEntry;
+    })
+    .filter((entry): entry is CoverageEntry => !!entry);
+}
+
+function extractAiOutputMeta(payload: any): AiOutputMeta {
+  const source = payload?.data && typeof payload.data === "object" ? payload.data : payload;
+  return {
+    coverageModules: normalizeCoverageEntries(source?.coverage_modules, "module"),
+    coverageTables: normalizeCoverageEntries(source?.coverage_tables, "table"),
+    unresolvedAssumptions: Array.isArray(source?.unresolved_assumptions)
+      ? source.unresolved_assumptions.map((x: any) => String(x || "").trim()).filter(Boolean)
+      : [],
+  };
+}
+
 export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerProps) {
   const { t } = useTranslation();
   const [requestText, setRequestText] = useState("");
@@ -1846,6 +1920,11 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
   const [sampleMenuError, setSampleMenuError] = useState<string | null>(null);
   const [sampleUseAsBase, setSampleUseAsBase] = useState(false);
   const [aiProgress, setAiProgress] = useState<AiProgressState | null>(null);
+  const [aiOutputMeta, setAiOutputMeta] = useState<AiOutputMeta>({
+    coverageModules: [],
+    coverageTables: [],
+    unresolvedAssumptions: [],
+  });
 
   const menuValidationIssues = useMemo(() => {
     return validateMenusForApply(aiMenus || []);
@@ -1858,6 +1937,36 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     () => menuValidationIssues.filter((item) => item.severity === "warning"),
     [menuValidationIssues],
   );
+
+  const expectedModules = useMemo(() => extractRequirementModules(storedRequest || requestText || "", 20), [storedRequest, requestText]);
+  const expectedTables = useMemo(() => extractRequirementTables(storedRequest || requestText || "", 30), [storedRequest, requestText]);
+
+  const applyGuardIssues = useMemo(() => {
+    const issues: string[] = [];
+    const unresolvedThreshold = 2;
+
+    if (aiOutputMeta.unresolvedAssumptions.length > unresolvedThreshold) {
+      issues.push(`AI còn ${aiOutputMeta.unresolvedAssumptions.length} unresolved assumptions (ngưỡng cho phép: ${unresolvedThreshold}).`);
+    }
+
+    if (expectedModules.length >= 2 && aiOutputMeta.coverageModules.length === 0) {
+      issues.push("Thiếu coverage_modules dù requirement có nhiều module.");
+    }
+
+    if (expectedTables.length >= 1 && aiOutputMeta.coverageTables.length === 0) {
+      issues.push("Thiếu coverage_tables dù requirement có bảng/entity rõ ràng.");
+    }
+
+    if (aiOutputMeta.coverageModules.some((entry) => entry.status === "missing")) {
+      issues.push("coverage_modules còn trạng thái missing.");
+    }
+
+    if (aiOutputMeta.coverageTables.some((entry) => entry.status === "missing")) {
+      issues.push("coverage_tables còn trạng thái missing.");
+    }
+
+    return issues;
+  }, [aiOutputMeta.coverageModules, aiOutputMeta.coverageTables, aiOutputMeta.unresolvedAssumptions.length, expectedModules.length, expectedTables.length]);
 
   const hasStoredRequest = storedRequest.trim().length > 0;
 
@@ -2022,6 +2131,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     const prompt = promptOverride || buildPromptWithRequirement(appId, inputRequest, scope, currentMenus, sampleMenuParsed || undefined);
     setLoading(true);
     setAiMenus(null);
+    setAiOutputMeta({ coverageModules: [], coverageTables: [], unresolvedAssumptions: [] });
     const preparingProgress: AiProgressState = {
       status: "preparing",
       stage: "preparing",
@@ -2088,6 +2198,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
       }
 
       const normalized = normalizeMenuList(menuPayload);
+      const outputMeta = extractAiOutputMeta(payload);
       const output = {
         menu: normalized,
         notes: Array.isArray(payload?.notes)
@@ -2100,6 +2211,17 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
           : Array.isArray(payload?.data?.warnings)
             ? payload.data.warnings
             : [],
+        coverage_modules: outputMeta.coverageModules.map((entry) => ({
+          module: entry.item,
+          menus: entry.menus,
+          status: entry.status,
+        })),
+        coverage_tables: outputMeta.coverageTables.map((entry) => ({
+          table: entry.item,
+          menus: entry.menus,
+          status: entry.status,
+        })),
+        unresolved_assumptions: outputMeta.unresolvedAssumptions,
       };
 
       const severeIssues = detectSevereAiOutputIssues(normalized, inputRequest);
@@ -2135,6 +2257,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
       }
 
       setAiMenus(normalized);
+  setAiOutputMeta(outputMeta);
       setAiResultText(JSON.stringify(output, null, 2));
 
       await saveRequestRecord(
@@ -2224,6 +2347,11 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
 
     if (menuValidationErrors.length > 0) {
       message.error(`Khong the ap dung vi con ${menuValidationErrors.length} loi schema/nghiep vu.`);
+      return;
+    }
+
+    if (applyGuardIssues.length > 0) {
+      message.error(`Khong the ap dung: ${applyGuardIssues[0]}`);
       return;
     }
 
@@ -2367,7 +2495,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                 type="primary"
                 onClick={handleApply}
                 size="large"
-                disabled={menuValidationErrors.length > 0}
+                disabled={menuValidationErrors.length > 0 || applyGuardIssues.length > 0}
                 style={{ background: "#52c41a", borderColor: "#52c41a" }}
               >
                 {`${t("system.menu.aiDesigner.applySystem") || "Ap dung vao He thong"} (${aiMenus.length} menu)`}
@@ -2429,6 +2557,63 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                       ))}
                       {menuValidationIssues.length > 50 && (
                         <div>...con {menuValidationIssues.length - 50} muc nua</div>
+                      )}
+                    </div>
+                  }
+                />
+              )}
+
+              {applyGuardIssues.length > 0 && (
+                <Alert
+                  type="error"
+                  showIcon
+                  message="AI coverage gate: chưa đủ điều kiện áp dụng"
+                  description={
+                    <div style={{ maxHeight: 180, overflow: "auto", paddingRight: 8 }}>
+                      {applyGuardIssues.map((issue, idx) => (
+                        <div key={`apply_guard_${idx}`} style={{ marginBottom: 6 }}>
+                          - {issue}
+                        </div>
+                      ))}
+                    </div>
+                  }
+                />
+              )}
+
+              {(aiOutputMeta.coverageModules.length > 0 || aiOutputMeta.coverageTables.length > 0 || aiOutputMeta.unresolvedAssumptions.length > 0) && (
+                <Alert
+                  type="info"
+                  showIcon
+                  message={`Coverage: modules=${aiOutputMeta.coverageModules.length}, tables=${aiOutputMeta.coverageTables.length}, unresolved=${aiOutputMeta.unresolvedAssumptions.length}`}
+                  description={
+                    <div style={{ maxHeight: 220, overflow: "auto", paddingRight: 8 }}>
+                      {aiOutputMeta.coverageModules.length > 0 && (
+                        <div style={{ marginBottom: 10 }}>
+                          <strong>coverage_modules</strong>
+                          {aiOutputMeta.coverageModules.slice(0, 20).map((entry, idx) => (
+                            <div key={`cm_${idx}`}>
+                              - {entry.item}: {entry.status} {entry.menus.length > 0 ? `(${entry.menus.join(", ")})` : ""}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {aiOutputMeta.coverageTables.length > 0 && (
+                        <div style={{ marginBottom: 10 }}>
+                          <strong>coverage_tables</strong>
+                          {aiOutputMeta.coverageTables.slice(0, 20).map((entry, idx) => (
+                            <div key={`ct_${idx}`}>
+                              - {entry.item}: {entry.status} {entry.menus.length > 0 ? `(${entry.menus.join(", ")})` : ""}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {aiOutputMeta.unresolvedAssumptions.length > 0 && (
+                        <div>
+                          <strong>unresolved_assumptions</strong>
+                          {aiOutputMeta.unresolvedAssumptions.slice(0, 20).map((entry, idx) => (
+                            <div key={`ua_${idx}`}>- {entry}</div>
+                          ))}
+                        </div>
                       )}
                     </div>
                   }

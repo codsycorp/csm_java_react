@@ -386,6 +386,26 @@ Mẫu đầy đủ:
 {"id":"done","label":"Hoàn thành","color":"green"}]}
 Màu hợp lệ: blue, orange, green, red, purple, cyan, gold, default.
 
+KANBAN AUTO-CONTRACT (không cần user nhắc lại nhiều lần):
+- Nếu requirement có từ khóa: "kanban", "board", "pipeline", "stage", "kéo-thả", "workflow theo trạng thái"
+  -> BẮT BUỘC tạo ít nhất 1 menu type_form=6.
+- Menu type_form=6 BẮT BUỘC có: table_name, table[] và kanban_config object hợp lệ.
+- Map field bắt buộc trong kanban_config:
+  + pkField, titleField, stageField phải tồn tại trong table[].
+  + dueDateField/assigneeField/priorityField nếu có thì cũng phải map vào field có thật.
+- Governance (khi bài toán có kiểm soát luồng):
+  + governance.strictMode=true
+  + governance.allowedTransitions: map trạng thái hợp lệ
+  + governance.requiredOnStage: field bắt buộc theo từng stage
+- KPI (khi có yêu cầu đo hiệu suất/tiến độ):
+  + kpi.enabled=true
+  + kpi.doneStageIds, kpi.createdAtField, kpi.startedAtField, kpi.completedAtField
+- Date storage compatibility (để runtime parse đúng):
+  + date=YYYYMMDD, datetime=YYYYMMDDHHmmss, time=HHmmss.
+- Nếu có menu template/liên kết menu dữ liệu thì đặt trong kanban_config:
+  + templateMenuId, linkedDataMenuId
+- KHÔNG dùng dynamic_link_url/auto_code_name cho menu Kanban.
+
 ══ REPORT RUNTIME ══
 report_name:string      Path file .docx template (VD: "/reports/bao_cao_doanh_so.docx")
 trigger.report_db       Chuỗi JS code thực thi. Ví dụ: "(seft,db)=>{ return db['orders']?.rows || []; }"
@@ -436,7 +456,14 @@ Dashboard tổng hợp tĩnh: report_name + trigger.report_db (không cần path
 Dashboard animation/widget realtime: type_form=4, auto_code_name=tên_trong_sys_autos
 
 ══ OUTPUT FORMAT ══
-{"menu":[...MenuItemType...],"notes":["..."],"warnings":["..."]}
+{
+  "menu":[...MenuItemType...],
+  "notes":["..."],
+  "warnings":["..."],
+  "coverage_modules":[{"module":"...","menus":["menu_id_1","menu_id_2"],"status":"covered|partial|missing"}],
+  "coverage_tables":[{"table":"...","menus":["menu_id_1"],"status":"covered|partial|missing"}],
+  "unresolved_assumptions":["..."]
+}
 Mỗi menu item đầy đủ: id, parentId, type_form, label, m_icons, m_show, g_readonly,
   table_name, table[], trigger{}, field_root, report_name, orientation, p_width, p_height,
   table_pagesize, menu_id, row_type_edit, kanban_config, auto_code_name, dynamic_link_url,
@@ -448,6 +475,12 @@ Ràng buộc thêm cho output:
 Mỗi field: id, f_name, f_header, f_types, f_show, f_stt, f_pkid, f_width, f_dec, f_align,
   f_search, f_report, f_showgrid, f_showonreport, f_filter, f_sort, f_cbo_query, f_alert_query.
 Không lặp lại JSON mẫu. Tập trung logic nghiệp vụ, trả về JSON menu hoàn chỉnh.
+
+Yêu cầu coverage bắt buộc:
+- coverage_modules phải map toàn bộ module chính trong requirement.
+- coverage_tables phải map toàn bộ bảng/entity đã trích xuất từ requirement.
+- unresolved_assumptions chỉ liệt kê các điểm thiếu thông tin thực sự chưa thể suy ra.
+- Không để coverage rỗng nếu requirement có từ 2 module hoặc có bảng/entity rõ ràng.
 
 ══ VÍ DỤ FIELD COMBO — 4 DẠNG THỰC TẾ ══
 

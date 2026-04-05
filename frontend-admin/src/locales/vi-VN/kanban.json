@@ -54,6 +54,16 @@
   "configMissing": "Chưa cấu hình Kanban. Hãy thêm trường kanban_config (JSON) vào menu hoặc truyền prop config.",
   "overdue": "Quá hạn",
   "wipExceeded": "Quá giới hạn WIP",
+  "kpi": {
+    "totalTasks": "Tổng công việc",
+    "doneTasks": "Hoàn thành",
+    "openTasks": "Đang mở",
+    "overdueOpen": "Quá hạn đang mở",
+    "completionRate": "Tỷ lệ hoàn thành (%)",
+    "onTimeRate": "Đúng hạn (%)",
+    "avgLeadDays": "Lead Time TB (ngày)",
+    "avgCycleDays": "Cycle Time TB (ngày)"
+  },
   "priority": {
     "urgent": "Khẩn cấp",
     "high": "Cao",

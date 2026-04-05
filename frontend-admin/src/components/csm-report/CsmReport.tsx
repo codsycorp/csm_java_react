@@ -18,6 +18,8 @@ import { useAppStore } from "#src/store";
 import LunarCalendar from "#src/utils/lunarCalendar";
 import DateUtils from "#src/utils/dateUtils";
 import { useEnterToTab } from "#src/hooks/useEnterToTab";
+import { formatDateForStorage, resolveDateLocaleFormat } from "#src/utils/dateControl";
+import { useTranslation } from "react-i18next";
 
 type Row = Record<string, any>;
 type Database = Record<string, { rows: Row[] }>;
@@ -62,6 +64,8 @@ function safeEval<TArgs extends any[], TReturn>(args: string[], body: string): (
 }
 
 export default function CsmReport({ appId, m_configs, decrypt }: CsmReportProps) {
+  const { i18n } = useTranslation();
+  const dateLocaleFormat = useMemo(() => resolveDateLocaleFormat(i18n.language), [i18n.language]);
   const [form] = Form.useForm();
   const [optionsSelect, setOptionsSelect] = useState<Record<string, any>>({});
   const [reportSrc, setReportSrc] = useState<string>("");
@@ -282,21 +286,21 @@ export default function CsmReport({ appId, m_configs, decrypt }: CsmReportProps)
     if (types.includes("datetime")) {
       return (
         <Form.Item key={name} name={name.toLowerCase()} label={label}>
-          <DatePicker showTime format="DD/MM/YYYY HH:mm:ss" style={{ width }} />
+          <DatePicker showTime format={dateLocaleFormat.datetime} style={{ width }} />
         </Form.Item>
       );
     }
     if (types.includes("date")) {
       return (
         <Form.Item key={name} name={name.toLowerCase()} label={label}>
-          <DatePicker format="DD/MM/YYYY" style={{ width }} />
+          <DatePicker format={dateLocaleFormat.date} style={{ width }} />
         </Form.Item>
       );
     }
     if (types.includes("time")) {
       return (
         <Form.Item key={name} name={name.toLowerCase()} label={label}>
-          <TimePicker format="HH:mm:ss" style={{ width }} />
+          <TimePicker format={dateLocaleFormat.time} style={{ width }} />
         </Form.Item>
       );
     }
@@ -429,7 +433,11 @@ export default function CsmReport({ appId, m_configs, decrypt }: CsmReportProps)
         if (!k) return;
         if (vals[k] !== undefined) {
           const v = vals[k];
-          if (dayjs.isDayjs(v)) dataForm[k] = v.format(elF.f_types.includes("datetime") ? "DD/MM/YYYY HH:mm:ss" : elF.f_types.includes("date") ? "DD/MM/YYYY" : "HH:mm:ss");
+          if (dayjs.isDayjs(v)) {
+            const types = String(elF.f_types || "").toLowerCase();
+            const kind = types.includes("datetime") ? "datetime" : /^time$/.test(types) ? "time" : "date";
+            dataForm[k] = formatDateForStorage(v, kind);
+          }
           else dataForm[k] = v;
         }
       });

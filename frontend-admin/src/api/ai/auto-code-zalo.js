@@ -96,7 +96,13 @@ async function uploadMultipleImages(base64Images) {
  * Tạo unique ID
  */
 function generateId() {
-  const now = new Date().toISOString().replace(/[-:T.Z]/g, "");
+  const now = new Date()
+    .toISOString()
+    .replaceAll("-", "")
+    .replaceAll(":", "")
+    .replaceAll("T", "")
+    .replaceAll(".", "")
+    .replaceAll("Z", "");
   const random = Math.random().toString(36).substring(2, 14);
   return `web_${now}_${random}`;
 }

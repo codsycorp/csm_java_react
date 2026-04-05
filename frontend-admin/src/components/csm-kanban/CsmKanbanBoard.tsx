@@ -48,6 +48,7 @@ import type { MConfig, TableField } from "#src/components/csm-grid/CsmDynamicGri
 import { getTableData, updateTableData } from "#src/components/csm-grid/CsmApi";
 import { csmDecrypt } from "#src/components/csm-grid/CsmCrypto";
 import { extractComboQueriesFromField, normalizeComboOptions } from "#src/components/csm-grid/combo-utils";
+import { parseDateValueToDayjs } from "#src/utils/dateControl";
 import { useUserStore } from "#src/store";
 
 const { RangePicker } = DatePicker;
@@ -78,6 +79,27 @@ export const KANBAN_CONFIG_TEMPLATE = `{
     "defaultGranularity": "day",
     "defaultRangePreset": "30d"
   },
+	"governance": {
+		"strictMode": true,
+		"allowedTransitions": {
+			"todo": ["in_progress"],
+			"in_progress": ["review", "todo"],
+			"review": ["done", "in_progress"],
+			"done": []
+		},
+		"requiredOnStage": {
+			"in_progress": ["owner_id", "start_at"],
+			"review": ["owner_id", "due_at"],
+			"done": ["completed_at"]
+		}
+	},
+	"kpi": {
+		"enabled": true,
+		"doneStageIds": ["done"],
+		"createdAtField": "created_at",
+		"startedAtField": "start_at",
+		"completedAtField": "completed_at"
+	},
   "stages": [
     { "id": "todo", "label": "Chưa xử lý", "color": "blue" },
     { "id": "in_progress", "label": "Đang xử lý", "color": "orange" },
@@ -108,6 +130,36 @@ export interface TimelineConfig {
 	defaultRangePreset?: "today" | "7d" | "30d" | "90d" | "year";
 }
 
+export interface GovernanceConfig {
+	strictMode?: boolean;
+	allowedTransitions?: Record<string, string[]>;
+	requiredOnStage?: Record<string, string[]>;
+}
+
+export interface KanbanKpiConfig {
+	enabled?: boolean;
+	doneStageIds?: string[];
+	createdAtField?: string;
+	startedAtField?: string;
+	completedAtField?: string;
+	progressField?: string;
+	progressByStage?: Record<string, number>;
+	autoUpdateProgressOnStageChange?: boolean;
+}
+
+export interface ProgressTrackingConfig {
+	mode?: "single_table" | "separate_table";
+	progressTableName?: string;
+	taskRefField?: string;
+	stageField?: string;
+	progressField?: string;
+	changedAtField?: string;
+	noteField?: string;
+	actorField?: string;
+	appendOnly?: boolean;
+	writeBackMainTable?: boolean;
+}
+
 export interface KanbanConfig {
 	tableName?: string;
 	appId?: string;
@@ -123,6 +175,10 @@ export interface KanbanConfig {
 	defaultView?: BoardView;
 	views?: Partial<Record<BoardView, boolean>>;
 	timeline?: TimelineConfig;
+	governance?: GovernanceConfig;
+	kpi?: KanbanKpiConfig;
+	progressTracking?: ProgressTrackingConfig;
+	linkedProgressMenuId?: string;
 	take?: number;
 }
 
@@ -243,6 +299,23 @@ function priorityColor(value: string | undefined): string {
 
 function toTimestamp(value: any): number {
 	if (!value) return 0;
+
+	const parseCompact = (raw: any): number => {
+		const digits = String(raw ?? "").trim().replace(/\D/g, "");
+		if (digits.length === 8) {
+			const parsed = parseDateValueToDayjs(digits, "date");
+			return parsed?.isValid() ? parsed.valueOf() : 0;
+		}
+		if (digits.length === 14) {
+			const parsed = parseDateValueToDayjs(digits, "datetime");
+			return parsed?.isValid() ? parsed.valueOf() : 0;
+		}
+		return 0;
+	};
+
+	const compactTs = parseCompact(value);
+	if (compactTs > 0) return compactTs;
+
 	if (typeof value === "number") return value > 1e12 ? value : value * 1000;
 	const numeric = Number(value);
 	if (Number.isFinite(numeric) && numeric > 0) return numeric > 1e12 ? numeric : numeric * 1000;
@@ -250,9 +323,11 @@ function toTimestamp(value: any): number {
 	return parsed.isValid() ? parsed.valueOf() : 0;
 }
 
-function isOverdue(value: any, status?: string): boolean {
+function isOverdue(value: any, status?: string, isDoneStage?: (stageValue: any) => boolean): boolean {
 	const ts = toTimestamp(value);
-	return ts > 0 && ts < Date.now() && String(status || "").toLowerCase() !== "done";
+	if (!(ts > 0 && ts < Date.now())) return false;
+	if (typeof isDoneStage === "function") return !isDoneStage(status);
+	return String(status || "").toLowerCase() !== "done";
 }
 
 function formatDate(value: any, lang: string, withTime = false): string {
@@ -375,6 +450,13 @@ function buildWhereFromRow(row: RowData, pkFields: string[]) {
 	return where;
 }
 
+function hasMeaningfulValue(value: any): boolean {
+	if (value == null) return false;
+	if (typeof value === "string") return value.trim() !== "";
+	if (Array.isArray(value)) return value.length > 0;
+	return true;
+}
+
 function inferFieldTypeFromValue(value: any): string {
 	if (value == null) return "txt";
 	if (typeof value === "number") return "num";
@@ -456,6 +538,33 @@ export default function CsmKanbanBoard({
 			defaultGranularity: rawConfig?.timeline?.defaultGranularity || "day",
 			defaultRangePreset: rawConfig?.timeline?.defaultRangePreset || "30d",
 		},
+		governance: {
+			strictMode: rawConfig?.governance?.strictMode ?? false,
+			allowedTransitions: rawConfig?.governance?.allowedTransitions || {},
+			requiredOnStage: rawConfig?.governance?.requiredOnStage || {},
+		},
+		kpi: {
+			enabled: rawConfig?.kpi?.enabled ?? true,
+			doneStageIds: rawConfig?.kpi?.doneStageIds || ["done"],
+			createdAtField: rawConfig?.kpi?.createdAtField || "created_at",
+			startedAtField: rawConfig?.kpi?.startedAtField || "start_at",
+			completedAtField: rawConfig?.kpi?.completedAtField || "completed_at",
+			progressField: rawConfig?.kpi?.progressField,
+			progressByStage: rawConfig?.kpi?.progressByStage || {},
+			autoUpdateProgressOnStageChange: rawConfig?.kpi?.autoUpdateProgressOnStageChange ?? true,
+		},
+		progressTracking: {
+			mode: rawConfig?.progressTracking?.mode || "single_table",
+			progressTableName: rawConfig?.progressTracking?.progressTableName,
+			taskRefField: rawConfig?.progressTracking?.taskRefField || "task_id",
+			stageField: rawConfig?.progressTracking?.stageField || "status",
+			progressField: rawConfig?.progressTracking?.progressField || rawConfig?.kpi?.progressField || "progress_percent",
+			changedAtField: rawConfig?.progressTracking?.changedAtField || "updated_at",
+			noteField: rawConfig?.progressTracking?.noteField || "note",
+			actorField: rawConfig?.progressTracking?.actorField || "updated_by",
+			appendOnly: rawConfig?.progressTracking?.appendOnly ?? true,
+			writeBackMainTable: rawConfig?.progressTracking?.writeBackMainTable ?? true,
+		},
 		take: rawConfig?.take || 500,
 	}), [menuData?.table_name, rawConfig, t]);
 
@@ -469,6 +578,7 @@ export default function CsmKanbanBoard({
 	const stageField = config.stageField || "status";
 	const stages = config.stages || [];
 	const [rows, setRows] = useState<RowData[]>([]);
+	const [progressLogRows, setProgressLogRows] = useState<RowData[]>([]);
 	const [remoteFields, setRemoteFields] = useState<TableField[]>([]);
 	const fields = useMemo<TableField[]>(() => {
 		if (Array.isArray(menuData?.table) && menuData.table.length > 0) return menuData.table;
@@ -532,6 +642,7 @@ export default function CsmKanbanBoard({
 		row_type_edit: Number(menuData?.row_type_edit ?? 0),
 		nodes: menuData?.nodes,
 	}), [config.tableName, fields, menuData, menuId, pkFields, t]);
+	const mainFieldSet = useMemo(() => new Set((fields || []).map((field) => String(field.f_name || "").trim()).filter(Boolean)), [fields]);
 	const boardTriggers = useMemo<BoardTriggerMap>(() => ((menuData?.trigger || {}) as BoardTriggerMap), [menuData?.trigger]);
 
 	const [loading, setLoading] = useState(false);
@@ -559,6 +670,17 @@ export default function CsmKanbanBoard({
 			});
 			const data = (resp as any)?.rows || (resp as any)?.data || [];
 			setRows(Array.isArray(data) ? data : []);
+			if (config.progressTracking?.mode === "separate_table" && config.progressTracking.progressTableName) {
+				const progressResp = await getTableData<any>({
+					app_id: effectiveAppId,
+					obj_name: config.progressTracking.progressTableName,
+					take: Math.max((config.take || 500) * 4, 2000),
+				});
+				const progressData = (progressResp as any)?.rows || (progressResp as any)?.data || [];
+				setProgressLogRows(Array.isArray(progressData) ? progressData : []);
+			} else {
+				setProgressLogRows([]);
+			}
 					const structFields = (resp as any)?.fields;
 					if (Array.isArray(structFields) && structFields.length > 0) {
 						setRemoteFields(structFields as TableField[]);
@@ -568,20 +690,62 @@ export default function CsmKanbanBoard({
 		} finally {
 			setLoading(false);
 		}
-	}, [config.tableName, config.take, effectiveAppId, t]);
+	}, [config.progressTracking?.mode, config.progressTracking?.progressTableName, config.tableName, config.take, effectiveAppId, t]);
 
 	useEffect(() => {
 		if (!config.tableName) return;
 		const dbEntry = database?.[config.tableName];
 		if (dbEntry?.rows) {
 			setRows(dbEntry.rows);
+			if (config.progressTracking?.mode === "separate_table" && config.progressTracking.progressTableName) {
+				const progressEntry = database?.[config.progressTracking.progressTableName];
+				setProgressLogRows(Array.isArray(progressEntry?.rows) ? progressEntry.rows : []);
+			}
 					if (Array.isArray((dbEntry as any).fields) && (dbEntry as any).fields.length > 0) {
 						setRemoteFields((dbEntry as any).fields as TableField[]);
 					}
 		} else {
 			loadData();
 		}
-	}, [config.tableName, database, loadData]);
+	}, [config.progressTracking?.mode, config.progressTracking?.progressTableName, config.tableName, database, loadData]);
+
+	const mergedRows = useMemo<RowData[]>(() => {
+		if (config.progressTracking?.mode !== "separate_table") return rows;
+		const progressTableName = String(config.progressTracking?.progressTableName || "").trim();
+		if (!progressTableName) return rows;
+
+		const taskRefField = String(config.progressTracking?.taskRefField || "task_id").trim();
+		const logStageField = String(config.progressTracking?.stageField || "status").trim();
+		const logProgressField = String(config.progressTracking?.progressField || config.kpi?.progressField || "progress_percent").trim();
+		const logChangedAtField = String(config.progressTracking?.changedAtField || "updated_at").trim();
+		if (!taskRefField) return rows;
+
+		const latestByTask = new Map<string, RowData>();
+		for (const logRow of progressLogRows) {
+			const ref = String(logRow?.[taskRefField] ?? "").trim();
+			if (!ref) continue;
+			const current = latestByTask.get(ref);
+			if (!current) {
+				latestByTask.set(ref, logRow);
+				continue;
+			}
+			const currentTs = toTimestamp(current?.[logChangedAtField]);
+			const candidateTs = toTimestamp(logRow?.[logChangedAtField]);
+			if (candidateTs >= currentTs) latestByTask.set(ref, logRow);
+		}
+
+		return rows.map((row) => {
+			const key = String(row?.[pkField] ?? "").trim();
+			const latest = key ? latestByTask.get(key) : undefined;
+			if (!latest) return row;
+			const merged = { ...row };
+			if (logStageField && latest[logStageField] != null) merged[stageField] = latest[logStageField];
+			if (config.kpi?.progressField && logProgressField && latest[logProgressField] != null) {
+				merged[config.kpi.progressField] = latest[logProgressField];
+			}
+			return merged;
+		});
+	}, [config.kpi?.progressField, config.progressTracking?.changedAtField, config.progressTracking?.mode, config.progressTracking?.progressField, config.progressTracking?.progressTableName, config.progressTracking?.stageField, config.progressTracking?.taskRefField, pkField, progressLogRows, rows, stageField]);
 
 	useEffect(() => {
 		setViewMode((current) => (config.views?.[current] === false ? (config.views?.kanban ? "kanban" : config.views?.timeline ? "timeline" : "report") : current));
@@ -672,8 +836,8 @@ export default function CsmKanbanBoard({
 
 	const filteredRows = useMemo(() => {
 		const q = search.trim().toLowerCase();
-		if (!q) return rows;
-		return rows.filter((row) => [
+		if (!q) return mergedRows;
+		return mergedRows.filter((row) => [
 			getLinkedLabel(config.titleField, getRowFieldValue(row, config.titleField)),
 			config.descriptionField ? getLinkedLabel(config.descriptionField, getRowFieldValue(row, config.descriptionField)) : undefined,
 			config.assigneeField ? getLinkedLabel(config.assigneeField, getRowFieldValue(row, config.assigneeField)) : undefined,
@@ -681,7 +845,7 @@ export default function CsmKanbanBoard({
 		]
 			.filter((item) => item !== undefined && item !== null)
 			.some((item) => String(item).toLowerCase().includes(q)));
-	}, [config.assigneeField, config.descriptionField, config.labelField, config.titleField, getLinkedLabel, getRowFieldValue, rows, search]);
+	}, [config.assigneeField, config.descriptionField, config.labelField, config.titleField, getLinkedLabel, getRowFieldValue, mergedRows, search]);
 
 	const byStage = useMemo(() => {
 		const map = new Map<string, RowData[]>();
@@ -695,9 +859,173 @@ export default function CsmKanbanBoard({
 	}, [filteredRows, stageField, stages]);
 
 	const selectedCard = useMemo(
-		() => rows.find((row) => String(row[pkField]) === selectedCardId) || null,
-		[pkField, rows, selectedCardId],
+		() => mergedRows.find((row) => String(row[pkField]) === selectedCardId) || null,
+		[mergedRows, pkField, selectedCardId],
 	);
+
+	const stageIdSet = useMemo(() => new Set(stages.map((stage) => String(stage.id))), [stages]);
+	const doneStageIds = useMemo(
+		() => new Set((config.kpi?.doneStageIds || ["done"]).map((item) => String(item || "").trim()).filter(Boolean)),
+		[config.kpi?.doneStageIds],
+	);
+	const isDoneStage = useCallback((stageValue: any) => doneStageIds.has(String(stageValue || "").trim()), [doneStageIds]);
+
+	const applyStageProgressUpdate = useCallback((input: RowData, targetStage: string): RowData => {
+		if (!input || !config.kpi?.autoUpdateProgressOnStageChange) return input;
+		const next = { ...input };
+		const nowCompact = dayjs().format("YYYYMMDDHHmmss");
+		const done = isDoneStage(targetStage);
+
+		const progressField = String(config.kpi?.progressField || "").trim();
+		if (progressField) {
+			const progressMap = config.kpi?.progressByStage || {};
+			const mapped = Number(progressMap[String(targetStage || "").trim()]);
+			if (Number.isFinite(mapped)) {
+				next[progressField] = Math.max(0, Math.min(100, Math.round(mapped)));
+			} else if (done) {
+				next[progressField] = 100;
+			}
+		}
+
+		const startedAtField = String(config.kpi?.startedAtField || "").trim();
+		const completedAtField = String(config.kpi?.completedAtField || "").trim();
+
+		if (!done && startedAtField && !next[startedAtField]) {
+			next[startedAtField] = nowCompact;
+		}
+		if (done && completedAtField && !next[completedAtField]) {
+			next[completedAtField] = nowCompact;
+		}
+
+		return next;
+	}, [config.kpi?.autoUpdateProgressOnStageChange, config.kpi?.completedAtField, config.kpi?.progressByStage, config.kpi?.progressField, config.kpi?.startedAtField, isDoneStage]);
+
+	const appendProgressLog = useCallback(async (targetRow: RowData, options?: { fromStage?: string; toStage?: string; note?: string }) => {
+		if (config.progressTracking?.mode !== "separate_table") return;
+		const progressTableName = String(config.progressTracking?.progressTableName || "").trim();
+		if (!progressTableName) return;
+
+		const taskRefField = String(config.progressTracking?.taskRefField || "task_id").trim();
+		const stageLogField = String(config.progressTracking?.stageField || "status").trim();
+		const progressLogField = String(config.progressTracking?.progressField || config.kpi?.progressField || "progress_percent").trim();
+		const changedAtField = String(config.progressTracking?.changedAtField || "updated_at").trim();
+		const noteField = String(config.progressTracking?.noteField || "note").trim();
+		const actorField = String(config.progressTracking?.actorField || "updated_by").trim();
+
+		const taskRefValue = targetRow?.[pkField];
+		if (taskRefValue == null || taskRefValue === "") return;
+
+		const payload: Record<string, any> = { [taskRefField]: taskRefValue };
+		if (stageLogField) payload[stageLogField] = options?.toStage ?? targetRow?.[stageField];
+		if (progressLogField && config.kpi?.progressField) payload[progressLogField] = targetRow?.[config.kpi.progressField];
+		if (changedAtField) payload[changedAtField] = dayjs().format("YYYYMMDDHHmmss");
+		if (noteField) {
+			const defaultNote = options?.fromStage && options?.toStage && options.fromStage !== options.toStage
+				? `stage:${options.fromStage}->${options.toStage}`
+				: "kanban_update";
+			payload[noteField] = options?.note || defaultNote;
+		}
+		if (actorField) {
+			const actorValue = (user as any)?.username || (user as any)?.user_name || (user as any)?.id || "system";
+			payload[actorField] = actorValue;
+		}
+
+		await updateTableData({
+			app_id: effectiveAppId,
+			obj_name: progressTableName,
+			command: "create",
+			obj_update: payload,
+		});
+	}, [config.kpi?.progressField, config.progressTracking?.actorField, config.progressTracking?.changedAtField, config.progressTracking?.mode, config.progressTracking?.noteField, config.progressTracking?.progressField, config.progressTracking?.progressTableName, config.progressTracking?.stageField, config.progressTracking?.taskRefField, effectiveAppId, pkField, stageField, user]);
+
+	const getRequiredFieldsForStage = useCallback((stageId: string): string[] => {
+		const requiredMap = config.governance?.requiredOnStage || {};
+		const direct = Array.isArray(requiredMap[stageId]) ? requiredMap[stageId] : [];
+		return direct.map((field) => String(field || "").trim()).filter(Boolean);
+	}, [config.governance?.requiredOnStage]);
+
+	const findMissingRequiredFields = useCallback((input: RowData, targetStage: string): string[] => {
+		const required = getRequiredFieldsForStage(targetStage);
+		if (!required.length) return [];
+		return required.filter((field) => !hasMeaningfulValue(input?.[field]));
+	}, [getRequiredFieldsForStage]);
+
+	const formatMetricDays = useCallback((ms: number): number => {
+		if (!Number.isFinite(ms) || ms <= 0) return 0;
+		return Number((ms / (24 * 60 * 60 * 1000)).toFixed(2));
+	}, []);
+
+	const boardPerformance = useMemo(() => {
+		const total = mergedRows.length;
+		if (!config.kpi?.enabled) {
+			return {
+				enabled: false,
+				total,
+				doneCount: 0,
+				inProgressCount: 0,
+				overdueOpenCount: 0,
+				onTimeRate: 0,
+				completionRate: 0,
+				avgLeadDays: 0,
+				avgCycleDays: 0,
+			};
+		}
+
+		const createdAtField = String(config.kpi?.createdAtField || "created_at");
+		const startedAtField = String(config.kpi?.startedAtField || "start_at");
+		const completedAtField = String(config.kpi?.completedAtField || "completed_at");
+
+		const doneRows = mergedRows.filter((row) => isDoneStage(row[stageField]));
+		const inProgressCount = mergedRows.filter((row) => !isDoneStage(row[stageField])).length;
+		const overdueOpenCount = mergedRows.filter((row) => !isDoneStage(row[stageField]) && isOverdue(row[config.dueDateField || "due_at"], row[stageField])).length;
+
+		const leadDurations = doneRows
+			.map((row) => {
+				const createdTs = toTimestamp(row[createdAtField]);
+				const completedTs = toTimestamp(row[completedAtField]);
+				if (!createdTs || !completedTs || completedTs < createdTs) return 0;
+				return completedTs - createdTs;
+			})
+			.filter((duration) => duration > 0);
+
+		const cycleDurations = doneRows
+			.map((row) => {
+				const startedTs = toTimestamp(row[startedAtField]);
+				const completedTs = toTimestamp(row[completedAtField]);
+				if (!startedTs || !completedTs || completedTs < startedTs) return 0;
+				return completedTs - startedTs;
+			})
+			.filter((duration) => duration > 0);
+
+		const onTimeDoneCount = doneRows.filter((row) => {
+			const dueTs = toTimestamp(row[config.dueDateField || "due_at"]);
+			const completedTs = toTimestamp(row[completedAtField]);
+			if (!dueTs || !completedTs) return false;
+			return completedTs <= dueTs;
+		}).length;
+
+		const doneCount = doneRows.length;
+		const completionRate = total > 0 ? Number(((doneCount / total) * 100).toFixed(2)) : 0;
+		const onTimeRate = doneCount > 0 ? Number(((onTimeDoneCount / doneCount) * 100).toFixed(2)) : 0;
+		const avgLeadDays = leadDurations.length > 0
+			? formatMetricDays(leadDurations.reduce((sum, item) => sum + item, 0) / leadDurations.length)
+			: 0;
+		const avgCycleDays = cycleDurations.length > 0
+			? formatMetricDays(cycleDurations.reduce((sum, item) => sum + item, 0) / cycleDurations.length)
+			: 0;
+
+		return {
+			enabled: true,
+			total,
+			doneCount,
+			inProgressCount,
+			overdueOpenCount,
+			onTimeRate,
+			completionRate,
+			avgLeadDays,
+			avgCycleDays,
+		};
+	}, [config.dueDateField, config.kpi?.completedAtField, config.kpi?.createdAtField, config.kpi?.enabled, config.kpi?.startedAtField, formatMetricDays, isDoneStage, mergedRows, stageField]);
 
 	const openCreate = useCallback(() => {
 		setEditingRecord(null);
@@ -767,6 +1095,33 @@ export default function CsmKanbanBoard({
 		if (!config.tableName) return;
 		const isEdit = Boolean(editingRecord);
 		let payload = isEdit ? { ...editingRecord, ...values } : { ...values };
+		const previousStage = String(editingRecord?.[stageField] || "");
+		const targetStage = String(payload?.[stageField] || editingRecord?.[stageField] || stages[0]?.id || "");
+		payload = applyStageProgressUpdate(payload, targetStage);
+
+		if (config.governance?.strictMode) {
+			if (isEdit && editingRecord) {
+				const fromStage = String(editingRecord?.[stageField] || "");
+				const toStage = targetStage;
+				if (fromStage && toStage && fromStage !== toStage) {
+					const allowedTransitions = config.governance?.allowedTransitions || {};
+					const allowed = Array.isArray(allowedTransitions[fromStage]) ? allowedTransitions[fromStage] : [];
+					if (allowed.length > 0 && !allowed.includes(toStage)) {
+						message.error(t("kanban.invalidTransition") || `Không được chuyển trạng thái từ ${fromStage} sang ${toStage}`);
+						return;
+					}
+				}
+			}
+
+			if (targetStage && stageIdSet.has(targetStage)) {
+				const missingFields = findMissingRequiredFields(payload, targetStage);
+				if (missingFields.length > 0) {
+					message.error(t("kanban.requiredFieldsMissing") || `Thiếu dữ liệu bắt buộc ở trạng thái ${targetStage}: ${missingFields.join(", ")}`);
+					return;
+				}
+			}
+		}
+
 		const triggerContext: BoardSaveContext = {
 			appId: effectiveAppId,
 			config,
@@ -796,6 +1151,17 @@ export default function CsmKanbanBoard({
 		if (!isEdit && typeof boardTriggers.afterAdd === "function") {
 			await boardTriggers.afterAdd(payload, triggerContext);
 		}
+		if (config.progressTracking?.mode === "separate_table") {
+			try {
+				await appendProgressLog(payload, {
+					fromStage: previousStage,
+					toStage: targetStage,
+					note: isEdit ? "edit_from_modal" : "create_from_modal",
+				});
+			} catch (err: any) {
+				message.warning(err?.message || t("kanban.updateError"));
+			}
+		}
 		setRows((prev) => {
 			if (!isEdit) return [...prev, payload];
 			return prev.map((row) => (String(row[pkField]) === String(editingRecord?.[pkField]) ? { ...row, ...payload } : row));
@@ -804,32 +1170,74 @@ export default function CsmKanbanBoard({
 		setEditorOpen(false);
 		onDataChange?.();
 		message.success(isEdit ? t("kanban.saveSuccess") : t("kanban.createSuccess"));
-	}, [boardTriggers, config, config.tableName, editingRecord, effectiveAppId, onDataChange, pkField, pkFields, rows, t]);
+	}, [appendProgressLog, applyStageProgressUpdate, boardTriggers, config, config.tableName, editingRecord, effectiveAppId, findMissingRequiredFields, onDataChange, pkField, pkFields, rows, stageField, stageIdSet, stages, t]);
 
 	const handleDragEnd = useCallback(async (event: DragEndEvent) => {
 		const activeId = String(event.active.id || "");
 		const overId = String(event.over?.id || "");
 		if (!activeId || !overId || activeId === overId || !config.tableName) return;
-		const targetRow = rows.find((row) => String(row[pkField]) === activeId);
+		const targetRow = mergedRows.find((row) => String(row[pkField]) === activeId);
 		const targetStage = stages.find((stage) => stage.id === overId);
 		if (!targetRow || !targetStage) return;
-		const updated = { ...targetRow, [stageField]: targetStage.id };
+
+		const stagedUpdate = applyStageProgressUpdate({ ...targetRow, [stageField]: targetStage.id }, targetStage.id);
+
+		if (config.governance?.strictMode) {
+			const fromStage = String(targetRow?.[stageField] || "");
+			const toStage = String(targetStage.id || "");
+			const allowedTransitions = config.governance?.allowedTransitions || {};
+			const allowed = Array.isArray(allowedTransitions[fromStage]) ? allowedTransitions[fromStage] : [];
+			if (allowed.length > 0 && !allowed.includes(toStage)) {
+				message.error(t("kanban.invalidTransition") || `Không được chuyển trạng thái từ ${fromStage} sang ${toStage}`);
+				return;
+			}
+
+			const missingFields = findMissingRequiredFields(stagedUpdate, toStage);
+			if (missingFields.length > 0) {
+				message.error(t("kanban.requiredFieldsMissing") || `Thiếu dữ liệu bắt buộc ở trạng thái ${toStage}: ${missingFields.join(", ")}`);
+				return;
+			}
+		}
+
+		const updated = stagedUpdate;
 		setRows((prev) => prev.map((row) => (String(row[pkField]) === activeId ? updated : row)));
 		try {
-			await updateTableData({
-				app_id: effectiveAppId,
-				obj_name: config.tableName,
-				command: "update",
-				obj_update: { ...buildWhereFromRow(targetRow, pkFields), [stageField]: targetStage.id },
-				pk_fields: pkFields,
-				where: buildWhereFromRow(targetRow, pkFields),
-			});
+			const objUpdate: Record<string, any> = {
+				...buildWhereFromRow(targetRow, pkFields),
+			};
+			if (mainFieldSet.has(stageField)) {
+				objUpdate[stageField] = targetStage.id;
+			}
+			const progressField = String(config.kpi?.progressField || "").trim();
+			const startedAtField = String(config.kpi?.startedAtField || "").trim();
+			const completedAtField = String(config.kpi?.completedAtField || "").trim();
+			if (progressField && mainFieldSet.has(progressField) && updated[progressField] !== targetRow[progressField]) objUpdate[progressField] = updated[progressField];
+			if (startedAtField && mainFieldSet.has(startedAtField) && updated[startedAtField] !== targetRow[startedAtField]) objUpdate[startedAtField] = updated[startedAtField];
+			if (completedAtField && mainFieldSet.has(completedAtField) && updated[completedAtField] !== targetRow[completedAtField]) objUpdate[completedAtField] = updated[completedAtField];
+
+			if (Object.keys(objUpdate).length > 0) {
+				await updateTableData({
+					app_id: effectiveAppId,
+					obj_name: config.tableName,
+					command: "update",
+					obj_update: objUpdate,
+					pk_fields: pkFields,
+					where: buildWhereFromRow(targetRow, pkFields),
+				});
+			}
+			if (config.progressTracking?.mode === "separate_table") {
+				await appendProgressLog(updated, {
+					fromStage: String(targetRow?.[stageField] || ""),
+					toStage: String(targetStage.id || ""),
+					note: "drag_drop",
+				});
+			}
 			onDataChange?.();
 		} catch (err: any) {
 			setRows((prev) => prev.map((row) => (String(row[pkField]) === activeId ? targetRow : row)));
 			message.error(err?.message || t("kanban.updateError"));
 		}
-	}, [config.tableName, effectiveAppId, onDataChange, pkField, pkFields, rows, stageField, stages, t]);
+	}, [appendProgressLog, applyStageProgressUpdate, config.governance?.allowedTransitions, config.governance?.strictMode, config.kpi?.completedAtField, config.kpi?.progressField, config.kpi?.startedAtField, config.progressTracking?.mode, config.tableName, effectiveAppId, findMissingRequiredFields, mainFieldSet, mergedRows, onDataChange, pkField, pkFields, rows, stageField, stages, t]);
 
 	const availableViews = useMemo(() => {
 		const options: Array<{ value: BoardView; label: React.ReactNode }> = [];
@@ -863,14 +1271,14 @@ export default function CsmKanbanBoard({
 				start: bucketStart,
 				end: bucketEnd,
 				rows: bucketRows,
-				overdue: bucketRows.filter((row) => isOverdue(row[timelineField], row[stageField])).length,
-				done: bucketRows.filter((row) => String(row[stageField]).toLowerCase() === "done").length,
-				open: bucketRows.filter((row) => String(row[stageField]).toLowerCase() !== "done").length,
+				overdue: bucketRows.filter((row) => isOverdue(row[timelineField], row[stageField], isDoneStage)).length,
+				done: bucketRows.filter((row) => isDoneStage(row[stageField])).length,
+				open: bucketRows.filter((row) => !isDoneStage(row[stageField])).length,
 			});
 			if (granularity === "year" && bucketStart.isSame(end, "year")) break;
 		}
 		return buckets;
-	}, [filteredRows, granularity, lang, range, stageField, timelineField, timelineSecondaryField]);
+	}, [filteredRows, granularity, isDoneStage, lang, range, stageField, timelineField, timelineSecondaryField]);
 
 	const timelineStats = useMemo(() => ({
 		totalBuckets: timelineBuckets.length,
@@ -934,6 +1342,21 @@ export default function CsmKanbanBoard({
 							</Col>
 						</Row>
 					</Card>
+
+					{boardPerformance.enabled && (
+						<Card size="small" style={{ borderRadius: 14 }}>
+							<Row gutter={[12, 12]}>
+								<Col><Statistic title={t("kanban.kpi.totalTasks") || "Tổng công việc"} value={boardPerformance.total} /></Col>
+								<Col><Statistic title={t("kanban.kpi.doneTasks") || "Hoàn thành"} value={boardPerformance.doneCount} /></Col>
+								<Col><Statistic title={t("kanban.kpi.openTasks") || "Đang mở"} value={boardPerformance.inProgressCount} /></Col>
+								<Col><Statistic title={t("kanban.kpi.overdueOpen") || "Quá hạn đang mở"} value={boardPerformance.overdueOpenCount} /></Col>
+								<Col><Statistic title={t("kanban.kpi.completionRate") || "Tỷ lệ hoàn thành (%)"} value={boardPerformance.completionRate} precision={2} /></Col>
+								<Col><Statistic title={t("kanban.kpi.onTimeRate") || "Đúng hạn (%)"} value={boardPerformance.onTimeRate} precision={2} /></Col>
+								<Col><Statistic title={t("kanban.kpi.avgLeadDays") || "Lead Time TB (ngày)"} value={boardPerformance.avgLeadDays} precision={2} /></Col>
+								<Col><Statistic title={t("kanban.kpi.avgCycleDays") || "Cycle Time TB (ngày)"} value={boardPerformance.avgCycleDays} precision={2} /></Col>
+							</Row>
+						</Card>
+					)}
 
 					{(viewMode === "timeline" || viewMode === "report") && (
 						<Card size="small" style={{ borderRadius: 14 }}>
@@ -1009,7 +1432,7 @@ export default function CsmKanbanBoard({
 															const dueAt = config.dueDateField ? getRowFieldValue(row, config.dueDateField) : undefined;
 															const label = config.labelField ? getRowFieldValue(row, config.labelField) : undefined;
 															const stageValue = getRowFieldValue(row, stageField);
-															const overdue = dueAt ? isOverdue(dueAt, String(stageValue || "")) : false;
+															const overdue = dueAt ? isOverdue(dueAt, String(stageValue || ""), isDoneStage) : false;
 															const priorityText = config.priorityField ? getLinkedLabel(config.priorityField, priority) : "";
 															return (
 																<DraggableCard id={cardId} key={cardId}>
