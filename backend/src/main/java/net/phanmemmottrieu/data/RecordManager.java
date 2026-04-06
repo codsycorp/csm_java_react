@@ -65,7 +65,6 @@ public class RecordManager {
     private static final long BATCH_TIMEOUT_MS = 100;  // Or flush after 100ms
     private static final int DEFAULT_FILTER_TAKE = 500;
     private static final int MAX_FILTER_TAKE = 1000;
-    private static final int MAX_UNPAGINATED_FILTER_ROWS = 2000;
     private static final int MAX_LUCENE_SEARCH_HITS = 2000;
     private static final long MAX_RESPONSE_PAYLOAD_BYTES = 64L * 1024L * 1024L;
     private static final int MAX_FALLBACK_SCAN_KEYS = 500;
@@ -75,6 +74,12 @@ public class RecordManager {
     private static final int MAX_SAFE_FIND_RECORD_BYTES = 4 * 1024 * 1024;
     private static final long MAX_FIND_SCAN_BYTES = 16L * 1024L * 1024L;
     private static final int MAX_CONCURRENT_FIND_SCANS = 2;
+    private static final int MAX_LUCENE_KEY_COLLECTION = 2000000;
+    private static final int SMART_SCAN_BACKPRESSURE_STEP = 2000;
+    private static final long SMART_SCAN_LOW_HEAP_BYTES = 256L * 1024L * 1024L;
+    private static final int SMART_SCAN_SLEEP_MS = 1;
+    private static final int SMART_SCAN_SLEEP_MS_LOW_HEAP = 8;
+
     private static final Set<String> STRICT_NO_SCAN_FIND_FIELDS = Set.of("refresh_token", "refresh", "app_token");
     private static final java.util.concurrent.Semaphore findScanConcurrencyGuard =
             new java.util.concurrent.Semaphore(MAX_CONCURRENT_FIND_SCANS, true);
@@ -217,6 +222,26 @@ public class RecordManager {
         }
 
         return 0L;
+    }
+
+    private static void applySmartBackpressure(int processed) {
+        if (processed <= 0 || (processed % SMART_SCAN_BACKPRESSURE_STEP) != 0) {
+            return;
+        }
+
+        Runtime rt = Runtime.getRuntime();
+        long usedHeap = rt.totalMemory() - rt.freeMemory();
+        long freeHeap = rt.maxMemory() - usedHeap;
+        int sleepMs = freeHeap < SMART_SCAN_LOW_HEAP_BYTES ? SMART_SCAN_SLEEP_MS_LOW_HEAP : SMART_SCAN_SLEEP_MS;
+        if (sleepMs <= 0) {
+            return;
+        }
+
+        try {
+            Thread.sleep(sleepMs);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     private String DIR_PATH; // <--- BỎ TỪ KHÓA 'static'
@@ -1950,28 +1975,66 @@ public class RecordManager {
             searcher = searcherManager.acquire(); 
             db = getDatabaseWithBloomFilter(appId, tableName);
 
-            Query query = buildLuceneQuery(filters); 
-            TopDocs docs = searcher.search(query, MAX_LUCENE_SEARCH_HITS);
+            Query query = buildLuceneQuery(filters);
+            ScoreDoc lastScoreDoc = null;
+            int fetchedDocs = 0;
+            int duplicateCount = 0;
+            int processedDocs = 0;
 
-            for (ScoreDoc scoreDoc : docs.scoreDocs) {
-                Document doc = searcher.doc(scoreDoc.doc);
-                String key = doc.get("_key");
-                if (key != null) {
+            while (true) {
+                TopDocs docs = (lastScoreDoc == null)
+                        ? searcher.search(query, MAX_LUCENE_SEARCH_HITS)
+                        : searcher.searchAfter(lastScoreDoc, query, MAX_LUCENE_SEARCH_HITS);
+
+                if (docs == null || docs.scoreDocs == null || docs.scoreDocs.length == 0) {
+                    break;
+                }
+
+                for (ScoreDoc scoreDoc : docs.scoreDocs) {
+                    processedDocs++;
+                    applySmartBackpressure(processedDocs);
+
+                    Document doc = searcher.doc(scoreDoc.doc);
+                    String key = doc.get("_key");
+                    if (key == null) {
+                        logger.warn("Document {} found without '_key' field in index {}.", scoreDoc.doc, indexKey);
+                        continue;
+                    }
+
                     try {
                         byte[] value = db.get(key.getBytes(StandardCharsets.UTF_8));
-                        if (value != null) {
-                            uniqueKeys.add(key);
-                        } else {
+                        if (value == null) {
                             staleKeys.add(key);
+                            continue;
                         }
                     } catch (Exception ex) {
                         logger.warn("Failed to verify RocksDB value for Lucene key {} in {}: {}", key, indexKey, ex.getMessage());
+                        continue;
                     }
-                } else {
-                    logger.warn("Document {} found without '_key' field in index {}.", scoreDoc.doc, indexKey);
+
+                    if (uniqueKeys.contains(key)) {
+                        // Lucene duplicate (_key) detected; keep newest by doc order and cleanup later.
+                        duplicateCount++;
+                        staleKeys.add(key);
+                    } else {
+                        uniqueKeys.add(key);
+                    }
+                }
+
+                fetchedDocs += docs.scoreDocs.length;
+                lastScoreDoc = docs.scoreDocs[docs.scoreDocs.length - 1];
+
+                if (docs.scoreDocs.length < MAX_LUCENE_SEARCH_HITS) {
+                    break;
+                }
+
+                if (fetchedDocs >= MAX_LUCENE_KEY_COLLECTION) {
+                    logger.warn("Lucene key collection reached safety limit {} for {}.{}, stopping additional searchAfter pages.",
+                            MAX_LUCENE_KEY_COLLECTION, appId, tableName);
+                    break;
                 }
             }
-            int duplicateCount = docs.scoreDocs.length - uniqueKeys.size();
+
             if (duplicateCount > 0) {
                 logger.warn("Detected {} duplicate Lucene docs (same _key) for {}.{}; auto-deduped query result.", duplicateCount, appId, tableName);
             }
@@ -1995,7 +2058,7 @@ public class RecordManager {
             List<String> keys = new ArrayList<>(uniqueKeys);
             // Ensure deterministic ordering across requests (independent of Lucene score/docId changes).
             keys.sort(RECORD_KEY_COMPARATOR_DESC);
-            logger.debug("Found {} keys {} in table {} for app {}.", keys.size(),keys, tableName, appId);
+            logger.debug("Found {} keys in table {} for app {}.", keys.size(), tableName, appId);
             return keys;
 
         } catch (IOException e) {
@@ -3206,7 +3269,9 @@ public class RecordManager {
         Set<String> seenDedupKeys = new HashSet<>();
         RocksDB db = null;
         long totalCount = 0L; // Tổng số bản ghi, nếu có metadata
+        long filteredCount = 0L;
         boolean truncated = false;
+        String nextCursor = null;
         long payloadBytes = 0L;
     
         try {
@@ -3224,7 +3289,7 @@ public class RecordManager {
             // dùng đường RocksDB trực tiếp để tránh chi phí Lucene + allKeys trên RAM.
             if (searchFilter == null || isDirectRocksDbBypassFilter(searchFilter)) {
                 logger.info("Bypass Lucene in filter() for {}.{} due to full-fetch like-empty condition", appId, tableName);
-                return filterWithPaginationNoFilter(appId, tableName, MAX_UNPAGINATED_FILTER_ROWS, null, db);
+                return filterWithPaginationNoFilter(appId, tableName, null, null, db);
             }
     
             // --- BẮT ĐẦU ĐỌC TỔNG SỐ BẢN GHI (Metadata) ---
@@ -3253,17 +3318,21 @@ public class RecordManager {
                 logger.debug("Không tìm thấy key nào phù hợp cho appId: {}, tableName: {}, filter: {}", appId, tableName, searchFilter);
                 return Map.of(
                     "rows", Collections.emptyList(),
-                    "totalCount", totalCount // Giữ lại totalCount từ metadata nếu không có kết quả lọc
+                    "totalCount", totalCount,
+                    "nextCursor", null,
+                    "truncated", false
                 );
             }
+            filteredCount = allKeys.size();
             // --- KẾT THÚC TÌM KIẾM CÁC KEY PHÙ HỢP ---
     
             // --- BẮT ĐẦU ĐỌC DỮ LIỆU TỪ ROCKSDB SỬ DỤNG ITERATOR (hoặc get từng key) ---
             // Có thể dùng db.multiGet() để đọc nhiều key hiệu quả hơn nếu số lượng key lớn
             // và RocksDB phiên bản của bạn hỗ trợ tốt multiGet với Bloom Filter.
             // Hiện tại, giữ nguyên logic đọc từng key như bản gốc của bạn.
-            int safeLimit = Math.min(MAX_UNPAGINATED_FILTER_ROWS, allKeys.size());
+            int safeLimit = allKeys.size();
             for (int i = 0; i < safeLimit; i++) {
+                applySmartBackpressure(i + 1);
                 String key = allKeys.get(i);
                 try {
                     // LỖI SIGSEGV CỦA BẠN SẼ XẢY RA TRONG HÀM db.get() NÀY.
@@ -3272,6 +3341,7 @@ public class RecordManager {
                     if (valueBytes != null) {
                         if (!results.isEmpty() && payloadBytes + valueBytes.length > MAX_RESPONSE_PAYLOAD_BYTES) {
                             truncated = true;
+                            nextCursor = key;
                             logger.warn("Filter result truncated by payload budget for {}.{} ({} bytes)", appId, tableName, MAX_RESPONSE_PAYLOAD_BYTES);
                             break;
                         }
@@ -3296,9 +3366,12 @@ public class RecordManager {
                 }
             }
 
-            if (allKeys.size() > safeLimit) {
+            if (allKeys.size() >= MAX_LUCENE_KEY_COLLECTION) {
                 truncated = true;
-                logger.warn("Filter result truncated by row limit for {}.{}: {} -> {}", appId, tableName, allKeys.size(), safeLimit);
+                if (nextCursor == null && !allKeys.isEmpty()) {
+                    nextCursor = allKeys.get(allKeys.size() - 1);
+                }
+                logger.warn("Filter may be incomplete due to Lucene key safety limit {} for {}.{}", MAX_LUCENE_KEY_COLLECTION, appId, tableName);
             }
             // --- KẾT THÚC ĐỌC DỮ LIỆU TỪ ROCKSDB ---
     
@@ -3338,8 +3411,9 @@ public class RecordManager {
         // Nếu "totalCount" là tổng số bản ghi TRONG TOÀN BỘ DB (trước khi phân trang/lọc),
         // thì dùng biến totalCount đã đọc từ metadata.
         // Nếu "totalCount" là tổng số bản ghi ĐÃ LỌC, thì dùng results.size().
-        result.put("totalCount", (long) results.size()); // Tổng số bản ghi thực tế của kết quả ĐÃ LỌC
+        result.put("totalCount", filteredCount);
         result.put("truncated", truncated);
+        result.put("nextCursor", nextCursor);
         // Hoặc: result.put("totalCount", totalCount); // Tổng số bản ghi TỪ METADATA (nếu có)
         return result;
     }
@@ -3609,12 +3683,14 @@ public class RecordManager {
         long payloadBytes = 0L;
         boolean truncatedByPayload = false;
 
+        boolean unlimited = (take == null || take <= 0) && (lastKey == null || lastKey.isEmpty());
         int requestedTake = (take != null && take > 0) ? take : DEFAULT_FILTER_TAKE;
-        int numToTake = Math.min(requestedTake, MAX_FILTER_TAKE);
+        int numToTake = unlimited ? Integer.MAX_VALUE : Math.min(requestedTake, MAX_FILTER_TAKE);
 
         boolean startCollecting = (lastKey == null || lastKey.isEmpty());
         boolean cursorFoundByMatch = false;
         int eligibleIndex = 0;
+        int scanned = 0;
 
         RocksIterator iterator = null;
         try {
@@ -3622,6 +3698,9 @@ public class RecordManager {
             iterator.seekToLast();
 
             while (iterator.isValid()) {
+                scanned++;
+                applySmartBackpressure(scanned);
+
                 String key = new String(iterator.key(), StandardCharsets.UTF_8);
                 if (!key.startsWith("__meta_")) {
                     totalCount++;
@@ -3643,6 +3722,7 @@ public class RecordManager {
                                 if (valueBytes != null) {
                                     if (!rows.isEmpty() && payloadBytes + valueBytes.length > MAX_RESPONSE_PAYLOAD_BYTES) {
                                         truncatedByPayload = true;
+                                        nextCursor = key;
                                         break;
                                     }
                                     payloadBytes += valueBytes.length;

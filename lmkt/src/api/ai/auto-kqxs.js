@@ -506,6 +506,9 @@
       lgThAutoRunFull: "Chạy Auto Loại Tìm x Nhóm",
       lgThAutoQueryTypes: "Loại Tìm",
       lgThAutoGroups: "Nhóm Số",
+      lgThAutoExpandGroups: "Mở rộng nhóm",
+      lgThAutoCollapseGroups: "Thu nhóm",
+      lgThAutoCheckWholeGroup: "Chọn toàn nhóm",
       lgThAutoSourceMode: "Nguồn Nhóm/Cách",
       lgThAutoSingle: "Lẻ 1 số",
       lgThAutoDao: "Đảo/Thuận",
@@ -687,6 +690,9 @@
       lgThAutoRunFull: "Run Auto Query-Type x Group",
       lgThAutoQueryTypes: "Query Types",
       lgThAutoGroups: "Number Groups",
+      lgThAutoExpandGroups: "Expand Groups",
+      lgThAutoCollapseGroups: "Collapse Groups",
+      lgThAutoCheckWholeGroup: "Select Whole Group",
       lgThAutoSourceMode: "Group Source",
       lgThAutoSingle: "Singles",
       lgThAutoDao: "Reverse Pairs",
@@ -868,6 +874,9 @@
       lgThAutoRunFull: "运行自动类型 x 分组",
       lgThAutoQueryTypes: "查询类型",
       lgThAutoGroups: "号码分组",
+      lgThAutoExpandGroups: "展开分组",
+      lgThAutoCollapseGroups: "收起分组",
+      lgThAutoCheckWholeGroup: "整组全选",
       lgThAutoSourceMode: "分组来源",
       lgThAutoSingle: "单号",
       lgThAutoDao: "正反对",
@@ -1054,8 +1063,22 @@
   function fetchRows(params) {
     return new Promise(function (resolve) {
       try {
-        seft.csm_obj_tables(params, function (rs) {
-          resolve((rs && rs.rows) || []);
+        var baseParams = Object.assign({}, params || {});
+        function markIncomplete(reason) {
+          if (dataFetchIntegrityRef && dataFetchIntegrityRef.current) {
+            dataFetchIntegrityRef.current.incomplete = true;
+            dataFetchIntegrityRef.current.reason = String(reason || "du_lieu_bi_cat");
+          }
+        }
+
+        seft.csm_obj_tables(baseParams, function (rs) {
+          var rows = (rs && rs.rows) || [];
+          var truncated = !!(rs && (rs.truncated === true || (rs.raw && rs.raw.truncated === true)));
+          var hasCursor = !!(rs && ((rs.nextCursor != null && rs.nextCursor !== "") || (rs.raw && rs.raw.nextCursor != null && rs.raw.nextCursor !== "")));
+          if (truncated || hasCursor) {
+            markIncomplete(hasCursor ? "backend_tra_ve_cursor" : "backend_truncated_khong_co_cursor");
+          }
+          resolve(rows);
         });
       } catch (e) {
         console.error("fetchRows error", e);
@@ -1296,26 +1319,98 @@
     var he = Number(heThong || 2) === 3 ? 3 : 2;
     var list = Array.isArray(rows) ? rows : [];
     var out = [];
+    var groupMap = {};
+    
     for (var i = 0; i < list.length; i += 1) {
       var row = list[i] || {};
       var maDuoi = Number(row.MaDuoi || row.ma_duoi || row.maduoi || 0);
       if (maDuoi && maDuoi !== he) continue;
+      
       var kieuTim = String(row.KieuTim || row.kieu_tim || row.kieutim || "").trim();
       var noiDung = String(row.NoiDung || row.noi_dung || row.noidung || row.DongNghia || row.dong_nghia || "").trim();
+      
+      if (!kieuTim || !noiDung) continue;
+      
       var tokens = tokenizeLegacyGroupNumbers(noiDung, heThong);
       if (!tokens.length) continue;
-      var shortLabel = kieuTim.replace(/^TR_/i, "").replace(/\.+$/, "").trim();
-      var text = shortLabel || ("Nhóm " + (i + 1));
-      var idSeed = (kieuTim || ("nhom_" + i)).replace(/[^a-zA-Z0-9_]+/g, "_");
+      
+      if (!groupMap[kieuTim]) {
+        groupMap[kieuTim] = {
+          kieuTim: kieuTim,
+          allTokens: [],
+          firstIndex: i,
+          text: ""
+        };
+      }
+      if (!groupMap[kieuTim].text) {
+        var shortLabelCurrent = kieuTim.replace(/^TR_/i, "").replace(/\.+$/, "").trim();
+        groupMap[kieuTim].text = shortLabelCurrent || ("Nhóm " + (i + 1));
+      }
+      tokens.forEach(function (t) {
+        if (groupMap[kieuTim].allTokens.indexOf(t) < 0) {
+          groupMap[kieuTim].allTokens.push(t);
+        }
+      });
+    }
+
+    Object.keys(groupMap).forEach(function (kieuTimKey) {
+      var group = groupMap[kieuTimKey];
+      var tokens = group.allTokens.sort(function (a, b) {
+        return Number(a) - Number(b);
+      });
+      var idSeed = (group.kieuTim || ("nhom_" + group.firstIndex)).replace(/[^a-zA-Z0-9_]+/g, "_");
       out.push({
-        id: "api_" + idSeed + "_" + i,
-        text: text,
+        id: "api_nhom_" + idSeed,
+        text: group.text,
+        kieuTim: group.kieuTim,
+        groupSize: tokens.length,
+        sortIndex: group.firstIndex,
         children: tokens.map(function (token) { return { id: token, text: token }; }),
         cachIds: tokens.join(","),
         tCach: tokens.join(" ")
       });
+    });
+
+    return out.sort(function (a, b) {
+      var sizeA = Number(a.groupSize || 0);
+      var sizeB = Number(b.groupSize || 0);
+      if (sizeA !== sizeB) return sizeA - sizeB;
+      var idxA = Number(a.sortIndex || 0);
+      var idxB = Number(b.sortIndex || 0);
+      if (idxA !== idxB) return idxA - idxB;
+      return String(a.text || "").localeCompare(String(b.text || ""), "vi", { numeric: true, sensitivity: "base" });
+    });
+  }
+
+  function getLegacyThGroupSize(group) {
+    if (group && Number(group.groupSize || 0) > 0) return Number(group.groupSize || 0);
+    if (group && Array.isArray(group.children) && group.children.length > 0) return group.children.length;
+    var ids = String((group && group.cachIds) || "").split(",").map(function (s) { return String(s || "").trim(); }).filter(Boolean);
+    return ids.length;
+  }
+
+  function buildLegacyThGroupBuckets(groups) {
+    var list = Array.isArray(groups) ? groups : [];
+    var bucketMap = {};
+    for (var i = 0; i < list.length; i += 1) {
+      var group = list[i];
+      var size = getLegacyThGroupSize(group);
+      var key = String(size || 0);
+      if (!bucketMap[key]) {
+        bucketMap[key] = {
+          key: key,
+          size: size,
+          text: "Nhóm " + String(size || 0) + " số",
+          groups: []
+        };
+      }
+      bucketMap[key].groups.push(group);
     }
-    return out;
+    return Object.keys(bucketMap).map(function (key) {
+      return bucketMap[key];
+    }).sort(function (a, b) {
+      return Number(a.size || 0) - Number(b.size || 0);
+    });
   }
 
   function formatSoChuInput(value) {
@@ -2030,6 +2125,8 @@
     var _ath29 = useState(false), legacyThUseTrietSource = _ath29[0], setLegacyThUseTrietSource = _ath29[1];
     var _ath30 = useState(false), legacyThApiLoading = _ath30[0], setLegacyThApiLoading = _ath30[1];
     var _ath31 = useState(""), legacyThApiStatus = _ath31[0], setLegacyThApiStatus = _ath31[1];
+    var _ath32 = useState(false), legacyThBucketsOpen = _ath32[0], setLegacyThBucketsOpen = _ath32[1];
+    var _ath33 = useState(false), legacyThTrietBucketsOpen = _ath33[0], setLegacyThTrietBucketsOpen = _ath33[1];
     var _am = useState({
       so_ky: so_ky,
       lay_so_ky: lay_so_ky,
@@ -2045,9 +2142,21 @@
       hasSoChuSource: ds_dai_chon_so_chu.length > 0
     }), appliedThongKe = _am[0], setAppliedThongKe = _am[1];
     var taiDuLieuReqRef = useRef(0);
+    var taiDuLieuCacheRef = useRef({});
+    var taiDuLieuPendingRef = useRef({});
+    var taiDuLieuXemKqCacheRef = useRef({});
+    var taiDuLieuXemKqPendingRef = useRef({});
+    var dataFetchIntegrityRef = useRef({ incomplete: false, reason: "" });
     var filterResetReadyRef = useRef(false);
     var autoDailyUpdatingRef = useRef(false);
     var legacyThAutoStopRef = useRef(false);
+
+    function ensureDataFetchComplete() {
+      if (!dataFetchIntegrityRef.current || !dataFetchIntegrityRef.current.incomplete) return true;
+      var reason = String(dataFetchIntegrityRef.current.reason || "du_lieu_bi_cat");
+      canhbao("Dữ liệu truy xuất chưa đầy đủ (" + reason + "). Vui lòng thu hẹp thời gian hoặc kiểm tra phân trang backend.");
+      return false;
+    }
 
     function snapshotThongKeInputs() {
       return {
@@ -2250,6 +2359,20 @@
       if (checked && next.indexOf(value) < 0) next.push(value);
       if (!checked) next = next.filter(function (item) { return item !== value; });
       return next;
+    }
+
+    function toggleLegacyThSelectionMany(list, values, checked) {
+      var next = Array.isArray(list) ? list.slice() : [];
+      var items = Array.isArray(values) ? values.slice() : [];
+      var removeMap = {};
+      items.forEach(function (v) { removeMap[String(v)] = true; });
+      if (checked) {
+        items.forEach(function (v) {
+          if (next.indexOf(v) < 0) next.push(v);
+        });
+        return next;
+      }
+      return next.filter(function (item) { return !removeMap[String(item)]; });
     }
 
     function sortLegacyThAutoRowsForDisplay(rows) {
@@ -2480,6 +2603,10 @@
       setDsDaiChonSoChu([]);
       setDsDaiChonXemKetQua([]);
       setXuLyKetQua([]);
+      taiDuLieuCacheRef.current = {};
+      taiDuLieuPendingRef.current = {};
+      taiDuLieuXemKqCacheRef.current = {};
+      taiDuLieuXemKqPendingRef.current = {};
     }, [mien, loai_tim, den_ngay]);
 
     // Auto-load Loại Tìm / Nhóm Số / Nhóm Triệt from API whenever legacyHeThong changes (also on mount).
@@ -3594,66 +3721,112 @@
       return items;
     }
 
-    async function lay_ds_dai(dsDaiDaLoc) {
-      var reqId = taiDuLieuReqRef.current + 1;
-      taiDuLieuReqRef.current = reqId;
-
+    function tao_khoa_cache_ds_dai(dsDaiDaLoc) {
       var dsDai = Array.isArray(dsDaiDaLoc) ? dsDaiDaLoc.slice() : [];
+      var dsKey = dsDai.map(function (d) {
+        return [String(d.du_lieu_dai || ""), String(d.thu || ""), String(d.stt || "")].join("#");
+      }).sort().join("|");
+      return [String(mien || ""), String(tu_ngay || ""), String(den_ngay || ""), dsKey].join("||");
+    }
+
+    function chuan_hoa_rows_dai(rows, obj) {
+      return rows.filter(function (kq) {
+        return Boolean(kq && kq.field_ngay);
+      }).map(function (kq) {
+        var n = Object.assign({}, kq);
+        var ngay = String(n.field_ngay || "").trim();
+        n.field_ngay = ngay;
+        if (!n.thu && ngay) n.thu = days[chuyenNgay(ngay, "yyyymmdd").getDay()];
+        n._source_table = String(obj.du_lieu_dai || "");
+        n._mien = String(mien || "");
+        n._stt = String(obj.stt || "");
+        return n;
+      });
+    }
+
+    async function lay_ds_dai_core(dsDaiDaLoc, opt) {
+      var options = opt || {};
+      var shouldAbort = typeof options.shouldAbort === "function" ? options.shouldAbort : function () { return false; };
+      var setState = options.setState === true;
+      var dsDai = Array.isArray(dsDaiDaLoc) ? dsDaiDaLoc.slice() : [];
+
+      dataFetchIntegrityRef.current.incomplete = false;
+      dataFetchIntegrityRef.current.reason = "";
+
       if (!dsDai.length) {
         var emptyNext = {};
         emptyNext[mien] = { data: [] };
-        setDuLieuDaiMien(emptyNext);
+        if (setState && !shouldAbort()) setDuLieuDaiMien(emptyNext);
         return emptyNext;
       }
 
-      var theoDai = {};
-      var dataMien = [];
-      for (var i = 0; i < dsDai.length; i += 1) {
-        if (reqId !== taiDuLieuReqRef.current) return;
-        var obj = dsDai[i];
-        if (!theoDai[obj.du_lieu_dai]) {
-          var rows = await fetchRows({
-            app_id: "kqxs",
-            obj_name: obj.du_lieu_dai,
-            e_where: {
-              operator: "AND",
-              conditions: [
-                { field: "field_ngay", type: "gte", value: dateFormat(chuyenNgay(String(tu_ngay || "").trim(), "dd/mm/yyyy"), "yyyymmdd") },
-                { field: "field_ngay", type: "lte", value: dateFormat(chuyenNgay(String(den_ngay || "").trim(), "dd/mm/yyyy"), "yyyymmdd") }
-              ]
+      var cacheKey = tao_khoa_cache_ds_dai(dsDai);
+      if (taiDuLieuCacheRef.current[cacheKey]) {
+        var cached = taiDuLieuCacheRef.current[cacheKey];
+        if (setState && !shouldAbort()) setDuLieuDaiMien(cached);
+        return cached;
+      }
+
+      if (!taiDuLieuPendingRef.current[cacheKey]) {
+        taiDuLieuPendingRef.current[cacheKey] = (async function () {
+          var theoDai = {};
+          var dataMien = [];
+
+          for (var i = 0; i < dsDai.length; i += 1) {
+            if (shouldAbort()) return null;
+            var obj = dsDai[i];
+
+            if (!theoDai[obj.du_lieu_dai]) {
+              var rows = await fetchRows({
+                app_id: "kqxs",
+                obj_name: obj.du_lieu_dai,
+                e_where: {
+                  operator: "AND",
+                  conditions: [
+                    { field: "field_ngay", type: "gte", value: dateFormat(chuyenNgay(String(tu_ngay || "").trim(), "dd/mm/yyyy"), "yyyymmdd") },
+                    { field: "field_ngay", type: "lte", value: dateFormat(chuyenNgay(String(den_ngay || "").trim(), "dd/mm/yyyy"), "yyyymmdd") }
+                  ]
+                }
+              });
+              if (shouldAbort()) return null;
+              theoDai[obj.du_lieu_dai] = chuan_hoa_rows_dai(rows, obj);
             }
-          });
 
-          if (reqId !== taiDuLieuReqRef.current) return;
+            dataMien.push({
+              stt: obj.stt,
+              thu: obj.thu,
+              ten_dai: obj.ten_dai,
+              dai: obj.du_lieu_dai,
+              data: theoDai[obj.du_lieu_dai]
+            });
+          }
 
-          theoDai[obj.du_lieu_dai] = rows.filter(function (kq) {
-            return Boolean(kq && kq.field_ngay);
-          }).map(function (kq) {
-            var n = Object.assign({}, kq);
-            var ngay = String(n.field_ngay || "").trim();
-            n.field_ngay = ngay;
-            if (!n.thu && ngay) n.thu = days[chuyenNgay(ngay, "yyyymmdd").getDay()];
-            n._source_table = String(obj.du_lieu_dai || "");
-            n._mien = String(mien || "");
-            n._stt = String(obj.stt || "");
-            return n;
-          });
-        }
-
-        dataMien.push({
-          stt: obj.stt,
-          thu: obj.thu,
-          ten_dai: obj.ten_dai,
-          dai: obj.du_lieu_dai,
-          data: theoDai[obj.du_lieu_dai]
+          var next = {};
+          next[mien] = { data: dataMien };
+          taiDuLieuCacheRef.current[cacheKey] = next;
+          return next;
+        })().finally(function () {
+          delete taiDuLieuPendingRef.current[cacheKey];
         });
       }
 
-      if (reqId !== taiDuLieuReqRef.current) return;
-      var next = {};
-      next[mien] = { data: dataMien };
-      setDuLieuDaiMien(next);
-      return next;
+      var loaded = await taiDuLieuPendingRef.current[cacheKey];
+      if (!loaded) return;
+      if (setState && !shouldAbort()) setDuLieuDaiMien(loaded);
+      return loaded;
+    }
+
+    async function lay_ds_dai(dsDaiDaLoc) {
+      var reqId = taiDuLieuReqRef.current + 1;
+      taiDuLieuReqRef.current = reqId;
+      return lay_ds_dai_core(dsDaiDaLoc, {
+        setState: true,
+        shouldAbort: function () { return reqId !== taiDuLieuReqRef.current; }
+      });
+    }
+
+    async function lay_ds_dai_xem_kq(dsDaiDaLoc) {
+      return lay_ds_dai_core(dsDaiDaLoc, { setState: false });
     }
 
     async function xem_ket_qua() {
@@ -3664,67 +3837,86 @@
 
       setActiveAction("kq");
       setSubTab("ketqua");
-
       setIsXemthuong(true);
-      setLoading(true);
-      setProgress(10);
+      setDsDaiChonXemKetQua([]);
 
       try {
-        var loadedDataMien = await lay_ds_dai(dsDaiCanTai);
+        var loadedDataMien = await lay_ds_dai_xem_kq(dsDaiCanTai);
+        if (!ensureDataFetchComplete()) return;
+        var dsData = (loadedDataMien[mien] && loadedDataMien[mien].data) || [];
         var ymd = Number(dateFormat(chuyenNgay(den_ngay, "dd/mm/yyyy"), "yyyymmdd"));
-        var selected = layNguonDaChon(loadedDataMien);
-
         var cards = [];
         var xuLy = [];
+        var dsDaiChonSorted = (ds_dai_chon || []).slice().sort(function (a, b) {
+          return Number(a) - Number(b);
+        });
 
         for (var s = 0; s < 10; s += 1) {
           xuLy.push({ id: "h_" + s, chuc: s });
         }
 
-        for (var i = 0; i < selected.length; i += 1) {
-          var dai = selected[i];
-          var dataDai = (dai.data || []).slice();
-          if (loai_tim === 1) {
-            dataDai = dataDai.filter(function (d) { return d.thu === dai.thu; });
-          }
-          var obRow = dataDai.filter(function (obj) {
-            return Number(String(obj.field_ngay || "").trim()) <= ymd;
-          }).sort(function (a, b) {
-            return Number(String(b.field_ngay || "").trim()) - Number(String(a.field_ngay || "").trim());
+        dsDaiChonSorted.forEach(function (sttRaw) {
+          var stt = Number(sttRaw);
+          var bestMatch = null;
+
+          dsData.filter(function (dm) {
+            return Number(dm.stt) === stt && String(dm.thu || "") === String(thu_tuan || "");
+          }).forEach(function (dlD) {
+            var dataDai = Array.isArray(dlD.data) ? dlD.data.slice().filter(function (d) {
+              return String(d.thu || "") === String(dlD.thu || "");
+            }) : [];
+
+            if (Number(loai_tim) === 0) {
+              dataDai = Array.isArray(dlD.data) ? dlD.data.slice() : [];
+            }
+
+            var obRow = dataDai.filter(function (obj) {
+              return Number(String((obj && obj.field_ngay) || "").trim()) <= ymd;
+            }).sort(function (a, b) {
+              return Number(String((b && b.field_ngay) || "").trim()) - Number(String((a && a.field_ngay) || "").trim());
+            });
+
+            if (!obRow.length) return;
+            var candidate = obRow[0];
+            var candidateYmd = Number(String((candidate && candidate.field_ngay) || "").trim());
+            if (!bestMatch || candidateYmd > bestMatch.ymd) {
+              bestMatch = { row: candidate, ymd: candidateYmd, ten_dai: dlD.ten_dai };
+            }
           });
 
-          if (!obRow.length) continue;
-          var kq = obRow[0];
+          if (!bestMatch || !bestMatch.row) return;
+          var kq = bestMatch.row;
+          for (var idx = 0; idx < 10; idx += 1) {
+            var rowKey = "dai_" + String(stt);
+            if (!xuLy[idx][rowKey]) xuLy[idx][rowKey] = "";
+          }
+
+          Object.keys(kq).forEach(function (tk) {
+            if (tk === "_id" || tk === "id" || tk === "thu" || tk === "field_ngay") return;
+            var val = String(kq[tk] || "").trim();
+            if (!val) return;
+            var so = val.slice(-2);
+            if (!/^\d{2}$/.test(so)) return;
+            var chuc = Number(so.slice(0, 1));
+            var donvi = so.slice(1);
+            var key = "dai_" + String(stt);
+            if (!xuLy[chuc][key]) xuLy[chuc][key] = "";
+            xuLy[chuc][key] += (xuLy[chuc][key] ? "," : "") + donvi;
+          });
+
           cards.push({
-            stt: Number(dai.stt),
-            ten_dai: dai.ten_dai,
+            stt: stt,
+            ten_dai: bestMatch.ten_dai,
             ngay: dateFormat(chuyenNgay(kq.field_ngay, "yyyymmdd"), "dd/mm/yyyy"),
-            thu: dai.thu,
             data: kq
           });
-
-          getRowTwoDigits(kq, { heThong: 2, mien: mien, sourceTable: dai.dai }).forEach(function (so) {
-            var chuc = Number(so[0]);
-            var donvi = so[1];
-            var key = "dai_" + String(dai.stt);
-            var row = xuLy[chuc] || { chuc: chuc };
-            if (!row[key]) row[key] = "";
-            row[key] += (row[key] ? "," : "") + donvi;
-            xuLy[chuc] = row;
-          });
-
-          setProgress(Math.min(95, 10 + Math.floor((i + 1) * 80 / selected.length)));
-        }
+        });
 
         setDsDaiChonXemKetQua(cards);
         setXuLyKetQua(xuLy);
-        setProgress(100);
       } catch (e) {
         console.error(e);
         canhbao("Đang cập nhật bản mới vui lòng thử lại sau!");
-      } finally {
-        setLoading(false);
-        setTimeout(function () { setProgress(0); }, 600);
       }
     }
 
@@ -3891,6 +4083,7 @@
       try {
         var appliedSnapshot = snapshotThongKeInputs();
         var loadedDataMien = await lay_ds_dai(dsDaiCanTai);
+        if (!ensureDataFetchComplete()) return;
         // Vue chỉ chạy luồng số chủ khi có cả dãy số chủ và danh sách đài số chủ.
         var useSoChuSource = so_chu.length > 0 && ds_dai_chon_so_chu.length > 0;
         var soChuCtx = useSoChuSource ? xayDungNguCanhSoChu(loadedDataMien) : { allowedDateSet: null, historyRows: [] };
@@ -3928,6 +4121,7 @@
       try {
         var appliedSnapshot = snapshotThongKeInputs();
         var loadedDataMien = await lay_ds_dai(dsDaiCanTai);
+        if (!ensureDataFetchComplete()) return;
         var thongKeResult = await buildThongKeData(true, null, null, loadedDataMien);
         var rows = (thongKeResult && Array.isArray(thongKeResult.rows)) ? thongKeResult.rows : [];
         var mangDaiTabs = (thongKeResult && Array.isArray(thongKeResult.mang_dai)) ? thongKeResult.mang_dai : ds_dai_chon;
@@ -6304,12 +6498,28 @@
                     legacyKttFieldLabels[k] || k
                   ]);
                 }))
+              ]),
+              h(Col, { xs: 24, md: 12, key: "lg_actions" }, [
+                h("div", { style: { marginBottom: 6, fontWeight: 600 } }, tt.lgBtnCfgOpen.replace(" ▼", "")),
+                h(Space, { wrap: true }, [
+                  allowUpdateActions ? h(Button, {
+                    key: "up_in_cfg",
+                    className: "kqxs-action-btn",
+                    onClick: chay_cap_nhat,
+                    loading: loading
+                  }, tt.btnUpdate) : null,
+                  allowUpdateActions ? h(Button, {
+                    key: "xsk_in_cfg",
+                    className: "kqxs-action-btn",
+                    onClick: function () { return cap_nhat_xskt(chuyenNgay(den_ngay, "dd/mm/yyyy")); },
+                    loading: loading
+                  }, tt.btnUpdateXskt) : null
+                ])
               ])
             ])
           : null,
 
         h(Space, { wrap: true, style: { marginTop: 12 } }, [
-          allowUpdateActions ? h(Button, { key: "up", className: "kqxs-action-btn", onClick: chay_cap_nhat, loading: loading }, tt.btnUpdate) : null,
           h(Button, {
             key: "kq",
             className: "kqxs-action-btn" + (activeAction === "kq" ? " kqxs-action-btn-active" : ""),
@@ -6351,13 +6561,7 @@
             className: "kqxs-action-btn",
             onClick: function () { setLegacyConfigOpen(!legacyConfigOpen); },
             loading: loading
-          }, legacyConfigOpen ? tt.lgBtnCfgClose : tt.lgBtnCfgOpen),
-          allowUpdateActions ? h(Button, {
-            key: "xsk",
-            className: "kqxs-action-btn",
-            onClick: function () { return cap_nhat_xskt(chuyenNgay(den_ngay, "dd/mm/yyyy")); },
-            loading: loading
-          }, tt.btnUpdateXskt) : null
+          }, legacyConfigOpen ? tt.lgBtnCfgClose : tt.lgBtnCfgOpen)
         ]),
 
         h("div", { style: { marginTop: 8 } }, h(Progress, { percent: progress, status: loading ? "active" : "normal" }))
@@ -6369,14 +6573,14 @@
         activeAction === "kq"
           ? h("div", null, [
               ds_dai_chon_xem_ket_qua.length
-                ? h(Row, { gutter: 12, className: "kqxs-result-row" }, ds_dai_chon_xem_ket_qua.map(function (dai) {
+                ? h(Row, { gutter: 12, className: "kqxs-result-row" }, ds_dai_chon_xem_ket_qua.map(function (dai, daiIdx) {
                     var prizeRows = getPrizeRowsForCard(dai);
 
                     var colSpan = 24;
                     var daiCount = Math.max(1, ds_dai_chon_xem_ket_qua.length);
                     if (daiCount >= 2) colSpan = 12;
 
-                    return h(Col, { xs: 24, md: colSpan, className: "kqxs-result-col", key: String(dai.stt) },
+                    return h(Col, { xs: 24, md: colSpan, className: "kqxs-result-col", key: String(dai.stt) + "_" + String(dai.ten_dai || "") + "_" + String(dai.ngay || "") + "_" + String(daiIdx) },
                       h(Card, { className: "kqxs-result-card", size: "small", title: (dai.ten_dai || "") + " - " + (dai.ngay || "") },
                         prizeRows.map(function (row) {
                           var vals = (row.vals || []).filter(function (v) { return String(v || "").trim() !== ""; });
@@ -6481,109 +6685,113 @@
                   h(Row, { gutter: 12 }, [
                     h(Col, { xs: 24, md: 8, key: "th-auto-query" }, [
                       h("div", { style: { fontSize: 12, fontWeight: "bold", color: theme.text, marginBottom: 4 } }, tt.lgThAutoQueryTypes + " (" + legacyThSelectedQueryTypes.length + "/" + legacyThQueryTypeOptions.length + ")"),
-                      h("div", { style: { maxHeight: 220, overflow: "auto", border: "1px solid " + theme.border, borderRadius: 4, background: theme.cardBg } },
+                      h("div", { style: { maxHeight: 220, overflow: "auto", border: "1px solid " + theme.border, borderRadius: 4, background: theme.cardBg, padding: "4px 0" } },
                         legacyThApiLoading
                           ? h("div", { style: { padding: 8, fontSize: 12, color: theme.muted } }, "Đang tải...")
                           : !legacyThQueryTypeOptions.length
                             ? h("div", { style: { padding: 8, fontSize: 12, color: theme.muted } }, "Chưa có dữ liệu")
-                            : Tree
-                              ? h(Tree, {
-                                  checkable: true, selectable: false, blockNode: true,
-                                  treeData: legacyThQueryTypeOptions.map(function (item) { return { key: item.value, title: item.text }; }),
-                                  checkedKeys: legacyThSelectedQueryTypes,
-                                  onCheck: function (keys) {
-                                    var arr = Array.isArray(keys) ? keys : (keys && keys.checked ? keys.checked : []);
-                                    setLegacyThSelectedQueryTypes(arr.map(String));
-                                  },
-                                  style: { background: "transparent", color: theme.text, fontSize: 12, padding: "4px 0" }
-                                })
-                              : legacyThQueryTypeOptions.map(function (item, idx) {
-                                  return h("label", { key: idx, style: { display: "block", fontSize: 12, color: theme.text, padding: "2px 8px" } }, [
-                                    h("input", { type: "checkbox", checked: legacyThSelectedQueryTypes.indexOf(item.value) >= 0,
-                                      onChange: function (e) { var c = !!(e && e.target && e.target.checked); setLegacyThSelectedQueryTypes(function (p) { return toggleLegacyThSelection(p, item.value, c); }); } }),
-                                    " " + (item.text || item.value)
-                                  ]);
-                                })
+                            : legacyThQueryTypeOptions.map(function (item, idx) {
+                                return h("label", { key: idx, style: { display: "flex", alignItems: "center", fontSize: 12, color: theme.text, padding: "3px 8px", gap: 6, cursor: "pointer" } }, [
+                                  h("input", { type: "checkbox", checked: legacyThSelectedQueryTypes.indexOf(item.value) >= 0,
+                                    onChange: function (e) { var c = !!(e && e.target && e.target.checked); setLegacyThSelectedQueryTypes(function (p) { return toggleLegacyThSelection(p, item.value, c); }); },
+                                    style: { cursor: "pointer", margin: 0 } }),
+                                  item.text || item.value
+                                ]);
+                              })
                       )
                     ]),
                     h(Col, { xs: 24, md: 8, key: "th-auto-group" }, [
                       h("div", { style: { fontSize: 12, fontWeight: "bold", color: theme.text, marginBottom: 4 } }, tt.lgThAutoGroups + " (" + legacyThSelectedGroups.length + "/" + legacyThGroupOptions.length + ")"),
-                      h("div", { style: { maxHeight: 220, overflow: "auto", border: "1px solid " + theme.border, borderRadius: 4, background: theme.cardBg } },
+                      h("div", { style: { maxHeight: 220, overflow: "auto", border: "1px solid " + theme.border, borderRadius: 4, background: theme.cardBg, padding: "4px 0" } },
                         legacyThApiLoading
                           ? h("div", { style: { padding: 8, fontSize: 12, color: theme.muted } }, "Đang tải...")
                           : !legacyThGroupOptions.length
                             ? h("div", { style: { padding: 8, fontSize: 12, color: theme.muted } }, "Chưa có dữ liệu")
-                            : Tree
-                              ? h(Tree, {
-                                  checkable: true, selectable: false, blockNode: true,
-                                  treeData: legacyThGroupOptions.map(function (g) {
-                                    return { key: g.id, title: g.text + (g.children && g.children.length ? " (" + g.children.length + ")" : ""),
-                                      children: (g.children || []).map(function (c) { return { key: g.id + "__" + c.id, title: c.text }; }) };
-                                  }),
-                                  checkedKeys: (function () {
-                                    var keys = [];
-                                    legacyThGroupOptions.forEach(function (g) {
-                                      if (legacyThSelectedGroups.indexOf(g.id) >= 0) {
-                                        keys.push(g.id);
-                                        (g.children || []).forEach(function (c) { keys.push(g.id + "__" + c.id); });
-                                      }
-                                    });
-                                    return keys;
-                                  }()),
-                                  onCheck: function (keys) {
-                                    var arr = Array.isArray(keys) ? keys : (keys && keys.checked ? keys.checked : []);
-                                    var gids = legacyThGroupOptions.filter(function (g) { return arr.indexOf(g.id) >= 0; }).map(function (g) { return g.id; });
-                                    setLegacyThSelectedGroups(gids);
-                                  },
-                                  style: { background: "transparent", color: theme.text, fontSize: 12, padding: "4px 0" }
-                                })
-                              : legacyThGroupOptions.map(function (group) {
-                                  return h("label", { key: group.id, style: { display: "block", fontSize: 12, color: theme.text, padding: "2px 8px" } }, [
-                                    h("input", { type: "checkbox", checked: legacyThSelectedGroups.indexOf(group.id) >= 0,
-                                      onChange: function (e) { var c = !!(e && e.target && e.target.checked); setLegacyThSelectedGroups(function (p) { return toggleLegacyThSelection(p, group.id, c); }); } }),
-                                    " " + group.text + (group.children && group.children.length ? " (" + group.children.length + ")" : "")
-                                  ]);
-                                })
+                            : buildLegacyThGroupBuckets(legacyThGroupOptions).map(function (bucket) {
+                                return h("details", { key: "bucket_" + bucket.key, open: true, style: { marginBottom: 4 } }, [
+                                  h("summary", { style: { cursor: "pointer", userSelect: "none", padding: "3px 6px", listStyle: "none", fontSize: 12, fontWeight: "bold", color: theme.text, background: theme.isDark ? "#182235" : "#eef4ff", borderRadius: 4 } },
+                                    bucket.text + " (" + bucket.groups.length + " cách)"
+                                  ),
+                                  h("div", { style: { paddingLeft: 10, paddingTop: 4 } },
+                                    bucket.groups.map(function (group) {
+                                      var hasChildren = !!(group.children && group.children.length);
+                                      var groupChecked = legacyThSelectedGroups.indexOf(group.id) >= 0;
+                                      return h("details", { key: group.id, open: false, style: { marginBottom: 2 } }, [
+                                        h("summary", { style: { cursor: "pointer", userSelect: "none", padding: "2px 4px", listStyle: "none", fontSize: 12 } }, [
+                                          h("label", { style: { display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" } }, [
+                                            h("input", { type: "checkbox", checked: groupChecked,
+                                              onChange: function (e) { var c = !!(e && e.target && e.target.checked); setLegacyThSelectedGroups(function (p) { return toggleLegacyThSelection(p, group.id, c); }); },
+                                              style: { cursor: "pointer", margin: 0 } }),
+                                            h("span", { style: { fontWeight: 600, color: theme.text } }, group.text)
+                                          ])
+                                        ]),
+                                        hasChildren ? h("div", { style: { paddingLeft: 16, marginBottom: 2 } },
+                                          (group.children || []).map(function (child) {
+                                            return h("div", { key: child.id, style: { fontSize: 11, color: theme.text, padding: "1px 4px" } }, child.text);
+                                          })
+                                        ) : null
+                                      ]);
+                                    })
+                                  )
+                                ]);
+                              })
                       )
                     ]),
                     h(Col, { xs: 24, md: 8, key: "th-auto-group-triet" }, [
-                      h("div", { style: { fontSize: 12, fontWeight: "bold", color: theme.text, marginBottom: 4 } }, (tt.lgThAutoGroupsTriet || "Nhóm Số Triệt") + " (" + legacyThSelectedGroupsTriet.length + "/" + legacyThGroupTrietOptions.length + ")"),
-                      h("div", { style: { maxHeight: 220, overflow: "auto", border: "1px solid " + theme.border, borderRadius: 4, background: theme.isDark ? "#111827" : "#fffaf0" } },
+                      h("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 4 } }, [
+                        h("div", { style: { fontSize: 12, fontWeight: "bold", color: theme.text } }, (tt.lgThAutoGroupsTriet || "Nhóm Số Triệt") + " (" + legacyThSelectedGroupsTriet.length + "/" + legacyThGroupTrietOptions.length + ")"),
+                        h(Button, { size: "small", onClick: function () { setLegacyThTrietBucketsOpen(!legacyThTrietBucketsOpen); } }, legacyThTrietBucketsOpen ? tt.lgThAutoCollapseGroups : tt.lgThAutoExpandGroups)
+                      ]),
+                      h("div", { style: { maxHeight: 220, overflow: "auto", border: "1px solid " + theme.border, borderRadius: 4, background: theme.isDark ? "#111827" : "#fffaf0", padding: "4px 0" } },
                         legacyThApiLoading
                           ? h("div", { style: { padding: 8, fontSize: 12, color: theme.muted } }, "Đang tải...")
                           : !legacyThGroupTrietOptions.length
                             ? h("div", { style: { padding: 8, fontSize: 12, color: theme.muted } }, "Chưa có dữ liệu")
-                            : Tree
-                              ? h(Tree, {
-                                  checkable: true, selectable: false, blockNode: true,
-                                  treeData: legacyThGroupTrietOptions.map(function (g) {
-                                    return { key: g.id, title: g.text + (g.children && g.children.length ? " (" + g.children.length + ")" : ""),
-                                      children: (g.children || []).map(function (c) { return { key: g.id + "__" + c.id, title: c.text }; }) };
-                                  }),
-                                  checkedKeys: (function () {
-                                    var keys = [];
-                                    legacyThGroupTrietOptions.forEach(function (g) {
-                                      if (legacyThSelectedGroupsTriet.indexOf(g.id) >= 0) {
-                                        keys.push(g.id);
-                                        (g.children || []).forEach(function (c) { keys.push(g.id + "__" + c.id); });
-                                      }
-                                    });
-                                    return keys;
-                                  }()),
-                                  onCheck: function (keys) {
-                                    var arr = Array.isArray(keys) ? keys : (keys && keys.checked ? keys.checked : []);
-                                    var gids = legacyThGroupTrietOptions.filter(function (g) { return arr.indexOf(g.id) >= 0; }).map(function (g) { return g.id; });
-                                    setLegacyThSelectedGroupsTriet(gids);
-                                  },
-                                  style: { background: "transparent", color: theme.text, fontSize: 12, padding: "4px 0" }
-                                })
-                              : legacyThGroupTrietOptions.map(function (group) {
-                                  return h("label", { key: group.id, style: { display: "block", fontSize: 12, color: theme.text, padding: "2px 8px" } }, [
-                                    h("input", { type: "checkbox", checked: legacyThSelectedGroupsTriet.indexOf(group.id) >= 0,
-                                      onChange: function (e) { var c = !!(e && e.target && e.target.checked); setLegacyThSelectedGroupsTriet(function (p) { return toggleLegacyThSelection(p, group.id, c); }); } }),
-                                    " " + group.text + (group.children && group.children.length ? " (" + group.children.length + ")" : "")
-                                  ]);
-                                })
+                            : buildLegacyThGroupBuckets(legacyThGroupTrietOptions).map(function (bucket) {
+                                var bucketGroupIds = (bucket.groups || []).map(function (g) { return g.id; });
+                                var bucketSelectedCount = bucketGroupIds.filter(function (id) { return legacyThSelectedGroupsTriet.indexOf(id) >= 0; }).length;
+                                var bucketChecked = bucketGroupIds.length > 0 && bucketSelectedCount === bucketGroupIds.length;
+                                return h("details", { key: "bucket_triet_" + bucket.key, open: legacyThTrietBucketsOpen, style: { marginBottom: 4 } }, [
+                                  h("summary", { style: { cursor: "pointer", userSelect: "none", padding: "3px 6px", listStyle: "none", fontSize: 12, fontWeight: "bold", color: theme.text, background: theme.isDark ? "#182235" : "#fff4db", borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 } }, [
+                                    h("span", null, bucket.text + " (" + bucket.groups.length + " nhóm)"),
+                                    h("label", { onClick: function (e) { e.stopPropagation(); }, style: { display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 500, cursor: "pointer" } }, [
+                                      h("input", {
+                                        type: "checkbox",
+                                        checked: bucketChecked,
+                                        onChange: function (e) {
+                                          var c = !!(e && e.target && e.target.checked);
+                                          setLegacyThSelectedGroupsTriet(function (p) {
+                                            return toggleLegacyThSelectionMany(p, bucketGroupIds, c);
+                                          });
+                                        },
+                                        style: { cursor: "pointer", margin: 0 }
+                                      }),
+                                      tt.lgThAutoCheckWholeGroup
+                                    ])
+                                  ]),
+                                  h("div", { style: { paddingLeft: 10, paddingTop: 4 } },
+                                    bucket.groups.map(function (group) {
+                                      var hasChildren = !!(group.children && group.children.length);
+                                      var groupChecked = legacyThSelectedGroupsTriet.indexOf(group.id) >= 0;
+                                      return h("details", { key: group.id, open: false, style: { marginBottom: 2 } }, [
+                                        h("summary", { style: { cursor: "pointer", userSelect: "none", padding: "2px 4px", listStyle: "none", fontSize: 12 } }, [
+                                          h("label", { style: { display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" } }, [
+                                            h("input", { type: "checkbox", checked: groupChecked,
+                                              onChange: function (e) { var c = !!(e && e.target && e.target.checked); setLegacyThSelectedGroupsTriet(function (p) { return toggleLegacyThSelection(p, group.id, c); }); },
+                                              style: { cursor: "pointer", margin: 0 } }),
+                                            h("span", { style: { fontWeight: 600, color: theme.text } }, group.text)
+                                          ])
+                                        ]),
+                                        hasChildren ? h("div", { style: { paddingLeft: 16, marginBottom: 2 } },
+                                          (group.children || []).map(function (child) {
+                                            return h("div", { key: child.id, style: { fontSize: 11, color: theme.text, padding: "1px 4px" } }, child.text);
+                                          })
+                                        ) : null
+                                      ]);
+                                    })
+                                  )
+                                ]);
+                              })
                       )
                     ])
                   ])
