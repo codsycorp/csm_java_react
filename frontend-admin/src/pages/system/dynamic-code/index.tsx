@@ -22,7 +22,7 @@ import { useTranslation, I18nextProvider } from "react-i18next";
 import { useParams, useLocation, useNavigate } from "react-router";
 import * as React from "react";
 import * as ReactDOM from "react-dom/client";
-import { Spin, Empty, Alert, notification, Table, Tabs, Button, Input, InputNumber, Select, Card, Space, Popconfirm, ConfigProvider, DatePicker, Row, Col, Switch, Progress, Tag } from "antd";
+import { Spin, Empty, Alert, notification, message, Table, Tabs, Button, Input, InputNumber, Select, Card, Space, Popconfirm, ConfigProvider, DatePicker, Row, Col, Switch, Progress, Tag, Tree, Modal, Form, Checkbox, Radio, Tooltip, Popover, Dropdown, Menu, Collapse, Pagination, Breadcrumb, Segmented, Steps, Timeline, Result, Divider, Typography, List, Badge, Rate, Slider, Upload, TimePicker, Cascader, TreeSelect, AutoComplete, Transfer, Statistic } from "antd";
 import dayjs from "dayjs";
 import i18nInstance from "i18next";
 
@@ -1355,11 +1355,22 @@ ${resolvedContainerSelector} select {
           );
 
           return {
-            notification, Table, Tabs, Button, Input, InputNumber, Select, Card, Space, Popconfirm, ConfigProvider, DatePicker, Row, Col, Switch, Progress, Tag, dayjs, CsmDynamicGrid,
+            // UI Components
+            notification, message, Table, Tabs, Button, Input, InputNumber, Select, Card, Space, Popconfirm, Modal, Form, ConfigProvider, 
+            DatePicker, TimePicker, Row, Col, Switch, Progress, Tag, Tree, Checkbox, Radio, Tooltip, Popover, 
+            Dropdown, Menu, Collapse, Pagination, Breadcrumb, Segmented, Steps, Timeline, Result, Divider, Typography,
+            List, Badge, Rate, Slider, Upload, Cascader, TreeSelect, AutoComplete, Transfer, Statistic, Empty, Spin, Alert, dayjs,
+            
+            // Custom components
+            CsmDynamicGrid,
             CsmCrmWorkspace,
             CsmKanbanBoard,
+            
+            // Theme & Localization
             antdLocale,
             antdThemeConfig: runtimeIsDark ? customAntdDarkTheme : customAntdLightTheme,
+            
+            // Google Index APIs
             googleIndexUrl: (CsmApi as any).googleIndexUrl,
             checkGoogleIndexQuota: (CsmApi as any).checkGoogleIndexQuota,
             checkGoogleIndexStatus: (CsmApi as any).checkGoogleIndexStatus,

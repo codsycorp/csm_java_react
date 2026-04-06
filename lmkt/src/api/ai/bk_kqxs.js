@@ -65,20 +65,6 @@
     });
   }
 
-  function FallbackCheckbox(props) {
-    return h("label", { style: Object.assign({ display: "inline-flex", alignItems: "center", gap: 6 }, props && props.style ? props.style : {}) }, [
-      h("input", {
-        type: "checkbox",
-        checked: !!(props && props.checked),
-        disabled: !!(props && props.disabled),
-        onChange: function (e) {
-          if (props && typeof props.onChange === "function") props.onChange(e);
-        }
-      }),
-      props ? props.children : null
-    ]);
-  }
-
   function FallbackProgress(props) {
     var pct = Number((props && props.percent) || 0);
     return h("progress", { value: pct, max: 100, style: { width: "100%" } }, String(pct));
@@ -102,14 +88,6 @@
   var Progress = antdRef.Progress || FallbackProgress;
   var Tag = antdRef.Tag || FallbackTag;
   var Switch = antdRef.Switch || FallbackSwitch;
-  var Checkbox = antdRef.Checkbox || FallbackCheckbox;
-  
-  function FallbackTree(props) {
-    return h("div", { style: { border: "1px solid var(--kqxs-border, #d9d9d9)", borderRadius: 6, padding: 12 } }, 
-      "Tree component not available"
-    );
-  }
-  var Tree = antdRef.Tree || FallbackTree;
 
   function FallbackColorPicker(props) {
     return h("input", {
@@ -142,17 +120,6 @@
     if (v.indexOf("zh") === 0 || v.indexOf("cn") === 0) return "zh";
     if (v.indexOf("en") === 0) return "en";
     return "vi";
-  }
-
-  function toSinhThreshold(value, fallbackValue) {
-    var parsed = parseInt(value, 10);
-    if (!isFinite(parsed) || isNaN(parsed) || parsed <= 0) parsed = parseInt(fallbackValue, 10);
-    if (!isFinite(parsed) || isNaN(parsed) || parsed <= 0) parsed = 1;
-    var mod = ((parsed % 4) + 4) % 4;
-    if (mod === 1) return parsed;
-    if (mod === 0) return parsed + 1;
-    if (mod === 2) return parsed + 3;
-    return parsed + 2;
   }
 
   function detectUILanguage() {
@@ -386,26 +353,26 @@
       selectStationSoChu: "Chọn Đài Số Chủ",
       tkType: "Loại TK",
       searchType: "Loại Tìm",
-      soKy: "Tổng Số Kỳ Thống Kê",
-      laySoKy: "Lấy Bao Nhiêu Kỳ",
-      demLe: "Lọc: Ra ≤ (lần)",
-      kxhMin: "Lọc: KXH ≥ (kỳ)",
-      demKq3Le: "Lọc: KQ3 ≤ (lần)",
-      lsBatDau: "Bắt Đầu Từ Kỳ Thứ",
-      demGe: "Lọc: Ra ≥ (lần)",
-      demToNhoHon: "Lọc: To/Nhỏ ≤",
-      kxhTu: "KXH Từ Kỳ",
-      kxhDen: "KXH Đến Kỳ",
-      locSau: "Lọc Sâu KXH",
-      soChu: "Số Chủ / Dự Đoán",
+      soKy: "Số Kỳ",
+      laySoKy: "Lấy Số Kỳ",
+      demLe: "Đếm <=",
+      kxhMin: "KXH >=",
+      demKq3Le: "Đếm KQ3 <=",
+      lsBatDau: "LS Bắt Đầu",
+      demGe: "Đếm >=",
+      demToNhoHon: "Đếm to nhỏ <=",
+      kxhTu: "KXH Từ",
+      kxhDen: "KXH Đến",
+      locSau: "Lọc sâu",
+      soChu: "Số Chủ",
       btnUpdate: "Cập nhật kết quả",
-      btnResult: "① Xem Kết Quả",
-      btnStat: "② Thống Kê Cơ Bản",
-      btnStatNew: "③ Thống Kê Nâng Cao",
-      btnExportExcel: "Xuất Excel",
-      btnCaptureTab: "Chụp Tab",
-      btnExportTable: "Xuất Bảng",
-      btnCaptureTable: "Chụp Bảng",
+      btnResult: "Kết Quả",
+      btnStat: "Thống Kê",
+      btnStatNew: "Thống Kê Mới",
+      btnExportExcel: "Chụp tab",
+      btnCaptureTab: "Chụp tab",
+      btnExportTable: "Xuất bảng",
+      btnCaptureTable: "Chụp bảng",
       btnUpdateXskt: "Cập nhật XSKT",
       tabResult: "Kết Quả",
       tabStat: "Thống Kê",
@@ -423,137 +390,19 @@
       colSo: "Số",
       colToHop: "Tổ hợp",
       colTong: "Tổng",
-      colDem: "Số Lần Ra",
-      colKxh: "Kỳ Không Hiện",
-      colMaxKxh: "KXH Lâu Nhất",
+      colDem: "Số Lần",
+      colKxh: "KXH",
+      colMaxKxh: "Lâu Nhất",
       mienNam: "Miền Nam",
       mienTrung: "Miền Trung",
       mienBac: "Miền Bắc",
-      tk1: "Thống Kê 1 Đài",
-      tk2: "Thống Kê 2 Đài",
-      tk3: "Thống Kê 3 Đài",
+      tk1: "KQ 1 Đài",
+      tk2: "KQ 2 Đài",
+      tk3: "KQ 3 Đài",
       theoNgay: "Theo Ngày",
       theoKy: "Theo Kỳ",
-      sxMoi: "Mới Nhất Đứng Trước",
-      sxCu: "Cũ Nhất Đứng Trước",
-      lgHeThong: "Hệ Số Bắc (2 hoặc 3)",
-      lgCdMode: "Kiểu Xét Kết Quả",
-      lgCdAll: "Tất Cả (Đầu + Đuôi)",
-      lgCdC: "Chính (Đầu)",
-      lgCdD: "Đảo (Đuôi)",
-      lgCdPair: "Số Cặp (Đầu-Đuôi)",
-      lgGhTu: "Lấy Từ Vị Trí (1–60)",
-      lgGhDen: "Lấy Đến Vị Trí (1–60)",
-      lgNgayChay: "Số Ngày Xét (0 = Tất Cả)",
-      lgSlrOptions: "Tùy Chọn Thêm",
-      lgTheoThu: "Chỉ Cùng Thứ Trong Tuần",
-      lgChkHieu: "Bỏ Số Đôi Kép (11, 22, ...)",
-      lgKttFields: "Ô Hiển Thị (KTT)",
-      lgBtnRun: "Chạy Phân Tích",
-      lgBtnCfgOpen: "Cấu Hình Nâng Cao ▼",
-      lgBtnCfgClose: "Đóng Cấu Hình ▲",
-      lgToolKtt: "① Kiểm Tra Tổng Hợp",
-      lgToolSlr: "② Số Lâu Ra Nam-Bắc",
-      lgToolNb: "③ Thống Kê Nam-Bắc",
-      lgKttLegendD: "D – Đài Chính",
-      lgKttLegendP: "P – Đài Phụ",
-      lgKttLegendT: "T – Đài Nam 3",
-      lgKttLegendB: "B – Đài Bắc",
-      lgKttLegendMatch: "▲ Trùng Số Dự Đoán",
-      lgKttFieldDdau: "D đầu (Đài Chính)",
-      lgKttFieldDduoi: "D đuôi (Đài Chính)",
-      lgKttFieldPdau: "P đầu (Đài Phụ)",
-      lgKttFieldPduoi: "P đuôi (Đài Phụ)",
-      lgKttFieldTdau: "T đầu (Đài Nam 3)",
-      lgKttFieldTduoi: "T đuôi (Đài Nam 3)",
-      lgKttFieldBdau: "B đầu (Đài Bắc)",
-      lgKttFieldBduoi: "B đuôi (Đài Bắc)",
-      lgSlrColSo: "Số",
-      lgSlrColGap: "Lâu Ra (ngày / kỳ / thứ)",
-      lgSlrColFirst: "Vị Trí Trúng Đầu Tiên",
-      lgToolTh: "④ Tổng Hợp Các Số",
-      lgThBoSo: "Bộ Số",
-      lgThNgayCX: "Ngày CX",
-      lgThKyCX: "Kỳ CX",
-      lgThLauNgay: "Lâu Ngày",
-      lgThLauKy: "Lâu Kỳ",
-      lgThNgayCxNb: "Ngày CX NB",
-      lgThNgayCx3nb: "Ngày CX 3NB",
-      lgThNgayCx2d: "Ngày CX 2Đ",
-      lgThNgayCx3d: "Ngày CX 3Đ",
-      lgThNgayCxD3: "Ngày CX Đ3",
-      lgThNgayCxMb: "Ngày CX MB",
-      lgThNgayCxDc: "Ngày CX ĐC",
-      lgThNgayCxDp: "Ngày CX ĐP",
-      lgThLauNnb: "Lâu N. NB",
-      lgThLauN3nb: "Lâu N. 3NB",
-      lgThLauN2d: "Lâu N. 2Đ",
-      lgThLauN3d: "Lâu N. 3Đ",
-      lgThLauNd3: "Lâu N. Đ3",
-      lgThLauNmb: "Lâu N. MB",
-      lgThLauNdc: "Lâu N. ĐC",
-      lgThLauNdp: "Lâu N. ĐP",
-      lgThTong28n: "Tổng 28N",
-      lgThTuan1: "Tuần 1",
-      lgThTuan12: "Tuần 1+2",
-      lgTh8t2dai: "8T 2đài",
-      lgTh8tD3: "8T Đ3",
-      lgThCountBoSo: "bộ số",
-      lgThIntersectTitle: "Thứ Tự Trùng",
-      lgThAutoSource: "Nguồn Auto Loại Tìm x Nhóm",
-      lgThAutoLoad: "Tải Loại Tìm / Nhóm",
-      lgThAutoApiSource: "Dùng API get-table-data",
-      lgThAutoRunFull: "Chạy Auto Loại Tìm x Nhóm",
-      lgThAutoQueryTypes: "Loại Tìm",
-      lgThAutoGroups: "Nhóm Số",
-      lgThAutoSourceMode: "Nguồn Nhóm/Cách",
-      lgThAutoSingle: "Lẻ 1 số",
-      lgThAutoDao: "Đảo/Thuận",
-      lgThAutoBand: "Dải số",
-      lgThAutoCustom: "Tự nhập",
-      lgThAutoCustomGroups: "Danh sách cách tự nhập",
-      lgThAutoSelectAll: "Chọn hết",
-      lgThAutoClearAll: "Bỏ hết",
-      lgThAutoInvert: "Đảo chọn",
-      lgThAutoStop: "Dừng",
-      lgThAutoProgress: "Tiến trình Auto",
-      lgThAutoTaskCount: "Số task",
-      lgThAutoStopped: "Đã dừng tại task",
-      lgThAutoTriet: "Nhóm Triệt",
-      lgThAutoTrietDuoi: "Đuổi 6 ngày cuối",
-      lgThAutoGroupsTriet: "Nhóm Số Triệt",
-      lgThAutoSummary: "Tóm Tắt Auto",
-      lgThKetQua: "Kết Quả (KTN)",
-      lgThKtn: "Lookback Tuần (KTN)",
-      lgThKtd: "Lookback Kỳ (KTD)",
-      lgThL2c: "Lookback Ngày (L2C)",
-      lgThTky: "Lookback Kỳ LanDai (TKY)",
-      lgThTnd: "Lookback Ngày D+P (TND)",
-      lgThAutoRun: "Lọc Tự Động (C1–C6)",
-      lgThAutoC1Ngay: "C1 Ngày: Top N lâu nhất",
-      lgThAutoC1Ky: "C1 Kỳ: Top N lâu nhất",
-      lgThAutoC2NgayCX: "C2 Ngày CX (vd: 5,6,7)",
-      lgThAutoC3KyCX: "C3 Kỳ CX (vd: 5,6,7)",
-      lgThAutoC4NgayGap: "C4: Ngày CX > Lâu Ngày + N",
-      lgThAutoC5KyGap: "C5: Kỳ CX > Lâu Kỳ + N",
-      lgThAutoC6Both: "C6: Ngày CX ≥ Lâu Ngày VÀ Kỳ CX ≥ Lâu Kỳ",
-      lgThAutoResult: "Kết Quả Lọc Tự Động",
-      lgThResultSet: "Chọn Dòng Kết Quả",
-      lgThSeriesKqt: "Kết quả Tuần",
-      lgThSeriesKqn: "Kết quả Ngày",
-      lgThSeriesKtd: "Kết quả Tuần Đài",
-      lgThSeriesKqd: "Kết quả Đài",
-      lgThSeriesN2d: "Kết quả Tuần Đài Nam 2",
-      lgThSeriesB2d: "Kết quả Tuần Đài Bắc",
-      lgThSeriesT2d: "Kết quả Tuần Đài Nam 3",
-      lgThSeriesN3d: "Kết quả Tuần 3 Đài Nam",
-      lgThSeriesN2c: "Kết quả Ngày Nam 2",
-      lgThSeriesB2c: "Kết quả Ngày Bắc",
-      lgThSeriesT2c: "Kết quả Ngày Nam 3",
-      lgThSeriesN3c: "Kết quả Ngày 3 Đài Nam",
-      lgThSeriesB3c: "Kết quả Ngày Tổng Hợp",
-      lgThSeriesL2c: "Kết quả Lô 2 Đài Nam + Bắc",
-      lgThSeriesL3c: "Kết quả Lô 3 Đài Nam"
+      sxMoi: "Ngày mới đứng trước",
+      sxCu: "Ngày cũ đứng trước"
     },
     en: {
       title: "Lo Statistics",
@@ -567,26 +416,26 @@
       selectStationSoChu: "Select Number-Owner Stations",
       tkType: "Statistic Type",
       searchType: "Search Mode",
-      soKy: "Total Periods",
-      laySoKy: "Periods to Take",
-      demLe: "Filter: Hits ≤ N",
-      kxhMin: "Filter: No-show ≥ N",
-      demKq3Le: "Filter: KQ3 Hits ≤ N",
-      lsBatDau: "Start from Period #",
-      demGe: "Filter: Hits ≥ N",
-      demToNhoHon: "Filter: Big/Small ≤ N",
-      kxhTu: "Gap Range From",
-      kxhDen: "Gap Range To",
-      locSau: "Deep Gap Filter",
-      soChu: "Target Numbers",
+      soKy: "Periods",
+      laySoKy: "Take Periods",
+      demLe: "Count <=",
+      kxhMin: "KXH >=",
+      demKq3Le: "KQ3 Count <=",
+      lsBatDau: "History Start",
+      demGe: "Count >=",
+      demToNhoHon: "Big/Small Count <=",
+      kxhTu: "KXH From",
+      kxhDen: "KXH To",
+      locSau: "Deep Filter",
+      soChu: "Number Owner",
       btnUpdate: "Update Results",
-      btnResult: "① View Results",
-      btnStat: "② Basic Statistics",
-      btnStatNew: "③ Advanced Statistics",
-      btnExportExcel: "Export Excel",
-      btnCaptureTab: "Capture Tab",
-      btnExportTable: "Export Table",
-      btnCaptureTable: "Capture Table",
+      btnResult: "Results",
+      btnStat: "Statistics",
+      btnStatNew: "New Statistics",
+      btnExportExcel: "Capture tab",
+      btnCaptureTab: "Capture tab",
+      btnExportTable: "Export table",
+      btnCaptureTable: "Capture table",
       btnUpdateXskt: "Update XSKT",
       tabResult: "Results",
       tabStat: "Statistics",
@@ -604,137 +453,19 @@
       colSo: "Number",
       colToHop: "Combination",
       colTong: "Total",
-      colDem: "Hit Count",
-      colKxh: "No-show Streak",
-      colMaxKxh: "Longest Gap",
+      colDem: "Count",
+      colKxh: "KXH",
+      colMaxKxh: "Longest",
       mienNam: "South",
       mienTrung: "Central",
       mienBac: "North",
-      tk1: "1-Station Stats",
-      tk2: "2-Station Stats",
-      tk3: "3-Station Stats",
+      tk1: "1-station stats",
+      tk2: "2-station stats",
+      tk3: "3-station stats",
       theoNgay: "By Date",
       theoKy: "By Period",
-      sxMoi: "Newest First",
-      sxCu: "Oldest First",
-      lgHeThong: "North System (2 or 3)",
-      lgCdMode: "Result Type",
-      lgCdAll: "All (Head + Tail)",
-      lgCdC: "Main (Head)",
-      lgCdD: "Reverse (Tail)",
-      lgCdPair: "Pair (Head-Tail)",
-      lgGhTu: "Rank From (1–60)",
-      lgGhDen: "Rank To (1–60)",
-      lgNgayChay: "History Days (0 = All)",
-      lgSlrOptions: "Extra Options",
-      lgTheoThu: "Same Weekday Only",
-      lgChkHieu: "Exclude Doubles (11, 22, ...)",
-      lgKttFields: "Visible Fields (KTT)",
-      lgBtnRun: "Run Analysis",
-      lgBtnCfgOpen: "Advanced Config ▼",
-      lgBtnCfgClose: "Close Config ▲",
-      lgToolKtt: "① General Check (KTT)",
-      lgToolSlr: "② Long-gap Numbers (SLR)",
-      lgToolNb: "③ Summary Statistics (NB)",
-      lgKttLegendD: "D – Main Station",
-      lgKttLegendP: "P – Sub Station",
-      lgKttLegendT: "T – 3rd South Station",
-      lgKttLegendB: "B – North Station",
-      lgKttLegendMatch: "▲ Matches Prediction",
-      lgKttFieldDdau: "D Head (Main Station)",
-      lgKttFieldDduoi: "D Tail (Main Station)",
-      lgKttFieldPdau: "P Head (Sub Station)",
-      lgKttFieldPduoi: "P Tail (Sub Station)",
-      lgKttFieldTdau: "T Head (3rd South Station)",
-      lgKttFieldTduoi: "T Tail (3rd South Station)",
-      lgKttFieldBdau: "B Head (North Station)",
-      lgKttFieldBduoi: "B Tail (North Station)",
-      lgSlrColSo: "Number",
-      lgSlrColGap: "Gap (day / period / weekday)",
-      lgSlrColFirst: "First Hit Position",
-      lgToolTh: "④ Number Combo Summary",
-      lgThBoSo: "Number",
-      lgThNgayCX: "Days Gone",
-      lgThKyCX: "Periods Gone",
-      lgThLauNgay: "Max Day Gap",
-      lgThLauKy: "Max Period Gap",
-      lgThNgayCxNb: "Days Gone NB",
-      lgThNgayCx3nb: "Days Gone 3NB",
-      lgThNgayCx2d: "Days Gone 2S",
-      lgThNgayCx3d: "Days Gone 3S",
-      lgThNgayCxD3: "Days Gone S3",
-      lgThNgayCxMb: "Days Gone North",
-      lgThNgayCxDc: "Days Gone Main",
-      lgThNgayCxDp: "Days Gone Sub",
-      lgThLauNnb: "Max NB Gap",
-      lgThLauN3nb: "Max 3NB Gap",
-      lgThLauN2d: "Max 2S Gap",
-      lgThLauN3d: "Max 3S Gap",
-      lgThLauNd3: "Max S3 Gap",
-      lgThLauNmb: "Max North Gap",
-      lgThLauNdc: "Max Main Gap",
-      lgThLauNdp: "Max Sub Gap",
-      lgThTong28n: "Total 28D",
-      lgThTuan1: "Week 1",
-      lgThTuan12: "Week 1+2",
-      lgTh8t2dai: "8W 2-station",
-      lgTh8tD3: "8W S3",
-      lgThCountBoSo: "sets",
-      lgThIntersectTitle: "Overlap Order",
-      lgThAutoSource: "Auto Query-Type x Group Sources",
-      lgThAutoLoad: "Load Query Types / Groups",
-      lgThAutoApiSource: "Use get-table-data API",
-      lgThAutoRunFull: "Run Auto Query-Type x Group",
-      lgThAutoQueryTypes: "Query Types",
-      lgThAutoGroups: "Number Groups",
-      lgThAutoSourceMode: "Group Source",
-      lgThAutoSingle: "Singles",
-      lgThAutoDao: "Reverse Pairs",
-      lgThAutoBand: "Bands",
-      lgThAutoCustom: "Custom",
-      lgThAutoCustomGroups: "Custom Group List",
-      lgThAutoSelectAll: "Select All",
-      lgThAutoClearAll: "Clear",
-      lgThAutoInvert: "Invert",
-      lgThAutoStop: "Stop",
-      lgThAutoProgress: "Auto Progress",
-      lgThAutoTaskCount: "Tasks",
-      lgThAutoStopped: "Stopped at task",
-      lgThAutoTriet: "Triet Groups",
-      lgThAutoTrietDuoi: "Chase Last 6 Days",
-      lgThAutoGroupsTriet: "Triet Number Groups",
-      lgThAutoSummary: "Auto Summary",
-      lgThKetQua: "Result (KTN)",
-      lgThKtn: "Lookback Weeks (KTN)",
-      lgThKtd: "Lookback Periods (KTD)",
-      lgThL2c: "Lookback Days (L2C)",
-      lgThTky: "Lookback Periods LanDai (TKY)",
-      lgThTnd: "Lookback Days D+P (TND)",
-      lgThAutoRun: "Auto Filter (C1–C6)",
-      lgThAutoC1Ngay: "C1 Day: Top N longest",
-      lgThAutoC1Ky: "C1 Period: Top N longest",
-      lgThAutoC2NgayCX: "C2 Days Gone (e.g. 5,6,7)",
-      lgThAutoC3KyCX: "C3 Periods Gone (e.g. 5,6,7)",
-      lgThAutoC4NgayGap: "C4: Days Gone > Max Day Gap + N",
-      lgThAutoC5KyGap: "C5: Periods Gone > Max Period Gap + N",
-      lgThAutoC6Both: "C6: Days Gone ≥ Max Day AND Periods Gone ≥ Max Period",
-      lgThAutoResult: "Auto Filter Results",
-      lgThResultSet: "Result Lines",
-      lgThSeriesKqt: "Weekly Result",
-      lgThSeriesKqn: "Daily Result",
-      lgThSeriesKtd: "Weekly Station Result",
-      lgThSeriesKqd: "Station Result",
-      lgThSeriesN2d: "Weekly South-2 Result",
-      lgThSeriesB2d: "Weekly North Result",
-      lgThSeriesT2d: "Weekly South-3 Result",
-      lgThSeriesN3d: "Weekly South-3-Station Result",
-      lgThSeriesN2c: "Daily South-2 Result",
-      lgThSeriesB2c: "Daily North Result",
-      lgThSeriesT2c: "Daily South-3 Result",
-      lgThSeriesN3c: "Daily South-3-Station Result",
-      lgThSeriesB3c: "Daily Combined Result",
-      lgThSeriesL2c: "Lo 2 South + North Result",
-      lgThSeriesL3c: "Lo 3 South Result"
+      sxMoi: "Newest first",
+      sxCu: "Oldest first"
     },
     zh: {
       title: "号码统计",
@@ -748,24 +479,24 @@
       selectStationSoChu: "选择号码来源彩台",
       tkType: "统计类型",
       searchType: "查询模式",
-      soKy: "统计总期数",
+      soKy: "期数",
       laySoKy: "取期数",
-      demLe: "筛选：出现 ≤ N 次",
-      kxhMin: "筛选：未出现 ≥ N 期",
-      demKq3Le: "筛选：KQ3 ≤ N 次",
-      lsBatDau: "从第几期开始",
-      demGe: "筛选：出现 ≥ N 次",
-      demToNhoHon: "筛选：大小 ≤ N",
-      kxhTu: "间隔区间起",
-      kxhDen: "间隔区间止",
-      locSau: "深度筛选间隔",
-      soChu: "目标号码",
+      demLe: "计数 <=",
+      kxhMin: "KXH >=",
+      demKq3Le: "KQ3计数 <=",
+      lsBatDau: "历史起点",
+      demGe: "计数 >=",
+      demToNhoHon: "大小计数 <=",
+      kxhTu: "KXH 起",
+      kxhDen: "KXH 止",
+      locSau: "深度筛选",
+      soChu: "号码来源",
       btnUpdate: "更新结果",
-      btnResult: "① 查看开奖结果",
-      btnStat: "② 基础统计",
-      btnStatNew: "③ 高级统计",
-      btnExportExcel: "导出 Excel",
-      btnCaptureTab: "截图页签",
+      btnResult: "开奖结果",
+      btnStat: "统计",
+      btnStatNew: "新统计",
+      btnExportExcel: "截图当前页签",
+      btnCaptureTab: "截图当前页签",
       btnExportTable: "导出表格",
       btnCaptureTable: "截图表格",
       btnUpdateXskt: "更新 XSKT",
@@ -785,9 +516,9 @@
       colSo: "号码",
       colToHop: "组合",
       colTong: "总数",
-      colDem: "出现次数",
-      colKxh: "未出现期数",
-      colMaxKxh: "最长间隔",
+      colDem: "次数",
+      colKxh: "KXH",
+      colMaxKxh: "最长",
       mienNam: "南部",
       mienTrung: "中部",
       mienBac: "北部",
@@ -797,125 +528,7 @@
       theoNgay: "按日期",
       theoKy: "按期",
       sxMoi: "最新在前",
-      sxCu: "最旧在前",
-      lgHeThong: "北部号系（2或3位）",
-      lgCdMode: "统计类型",
-      lgCdAll: "全部（头 + 尾）",
-      lgCdC: "正号（头）",
-      lgCdD: "倒号（尾）",
-      lgCdPair: "对子（头-尾）",
-      lgGhTu: "排名起始（1–60）",
-      lgGhDen: "排名截止（1–60）",
-      lgNgayChay: "历史天数（0 = 全部）",
-      lgSlrOptions: "附加选项",
-      lgTheoThu: "仅限同一星期",
-      lgChkHieu: "排除重复对（11, 22, ...）",
-      lgKttFields: "显示字段（KTT）",
-      lgBtnRun: "运行分析",
-      lgBtnCfgOpen: "高级配置 ▼",
-      lgBtnCfgClose: "关闭配置 ▲",
-      lgToolKtt: "① 综合检验",
-      lgToolSlr: "② 长间隔号码统计",
-      lgToolNb: "③ 南北统计汇总",
-      lgKttLegendD: "D – 主台",
-      lgKttLegendP: "P – 副台",
-      lgKttLegendT: "T – 南部3台",
-      lgKttLegendB: "B – 北台",
-      lgKttLegendMatch: "▲ 匹配预测号码",
-      lgKttFieldDdau: "D 头位（主台）",
-      lgKttFieldDduoi: "D 尾位（主台）",
-      lgKttFieldPdau: "P 头位（副台）",
-      lgKttFieldPduoi: "P 尾位（副台）",
-      lgKttFieldTdau: "T 头位（南部3台）",
-      lgKttFieldTduoi: "T 尾位（南部3台）",
-      lgKttFieldBdau: "B 头位（北台）",
-      lgKttFieldBduoi: "B 尾位（北台）",
-      lgSlrColSo: "号码",
-      lgSlrColGap: "间隔（天 / 期 / 周）",
-      lgSlrColFirst: "首次出现位置",
-      lgToolTh: "④ 号码组合汇总",
-      lgThBoSo: "号码组",
-      lgThNgayCX: "未出现天数",
-      lgThKyCX: "未出现期数",
-      lgThLauNgay: "最大天间隔",
-      lgThLauKy: "最大期间隔",
-      lgThNgayCxNb: "NB未出现天数",
-      lgThNgayCx3nb: "3NB未出现天数",
-      lgThNgayCx2d: "2台未出现天数",
-      lgThNgayCx3d: "3台未出现天数",
-      lgThNgayCxD3: "南3未出现天数",
-      lgThNgayCxMb: "北部未出现天数",
-      lgThNgayCxDc: "主台未出现天数",
-      lgThNgayCxDp: "副台未出现天数",
-      lgThLauNnb: "NB最大间隔",
-      lgThLauN3nb: "3NB最大间隔",
-      lgThLauN2d: "2台最大间隔",
-      lgThLauN3d: "3台最大间隔",
-      lgThLauNd3: "南3最大间隔",
-      lgThLauNmb: "北部最大间隔",
-      lgThLauNdc: "主台最大间隔",
-      lgThLauNdp: "副台最大间隔",
-      lgThTong28n: "28天总计",
-      lgThTuan1: "第1周",
-      lgThTuan12: "第1+2周",
-      lgTh8t2dai: "8周2台",
-      lgTh8tD3: "8周南3",
-      lgThCountBoSo: "组",
-      lgThIntersectTitle: "重复顺序",
-      lgThAutoSource: "自动类型 x 分组来源",
-      lgThAutoLoad: "加载类型 / 分组",
-      lgThAutoApiSource: "使用 get-table-data API",
-      lgThAutoRunFull: "运行自动类型 x 分组",
-      lgThAutoQueryTypes: "查询类型",
-      lgThAutoGroups: "号码分组",
-      lgThAutoSourceMode: "分组来源",
-      lgThAutoSingle: "单号",
-      lgThAutoDao: "正反对",
-      lgThAutoBand: "区间",
-      lgThAutoCustom: "自定义",
-      lgThAutoCustomGroups: "自定义组合列表",
-      lgThAutoSelectAll: "全选",
-      lgThAutoClearAll: "清空",
-      lgThAutoInvert: "反选",
-      lgThAutoStop: "停止",
-      lgThAutoProgress: "自动进度",
-      lgThAutoTaskCount: "任务数",
-      lgThAutoStopped: "已停止于任务",
-      lgThAutoTriet: "淘汰分组",
-      lgThAutoTrietDuoi: "追最近6天",
-      lgThAutoGroupsTriet: "淘汰号码分组",
-      lgThAutoSummary: "自动汇总",
-      lgThKetQua: "结果（KTN）",
-      lgThKtn: "回溯周数 (KTN)",
-      lgThKtd: "回溯期数 (KTD)",
-      lgThL2c: "回溯天数 (L2C)",
-      lgThTky: "LanDai回溯期数 (TKY)",
-      lgThTnd: "D+P回溯天数 (TND)",
-      lgThAutoRun: "自动筛选 (C1–C6)",
-      lgThAutoC1Ngay: "C1 天：最长N个",
-      lgThAutoC1Ky: "C1 期：最长N个",
-      lgThAutoC2NgayCX: "C2 未出现天数（例: 5,6,7）",
-      lgThAutoC3KyCX: "C3 未出现期数（例: 5,6,7）",
-      lgThAutoC4NgayGap: "C4: 未出现天数 > 最大间隔 + N",
-      lgThAutoC5KyGap: "C5: 未出现期数 > 最大间隔 + N",
-      lgThAutoC6Both: "C6: 天数 ≥ 最大天间隔 且 期数 ≥ 最大期间隔",
-      lgThAutoResult: "自动筛选结果",
-      lgThResultSet: "结果行选择",
-      lgThSeriesKqt: "周结果",
-      lgThSeriesKqn: "日结果",
-      lgThSeriesKtd: "台周结果",
-      lgThSeriesKqd: "台结果",
-      lgThSeriesN2d: "南部2台周结果",
-      lgThSeriesB2d: "北部周结果",
-      lgThSeriesT2d: "南部3台周结果",
-      lgThSeriesN3d: "南部3台周合计",
-      lgThSeriesN2c: "南部2台日结果",
-      lgThSeriesB2c: "北部日结果",
-      lgThSeriesT2c: "南部3台日结果",
-      lgThSeriesN3c: "南部3台日合计",
-      lgThSeriesB3c: "综合日结果",
-      lgThSeriesL2c: "南北2台Lô结果",
-      lgThSeriesL3c: "南部3台Lô结果"
+      sxCu: "最旧在前"
     }
   };
 
@@ -1114,208 +727,6 @@
 
   function randomId(prefix) {
     return String(prefix || "id") + "_" + Date.now() + "_" + Math.random().toString(36).slice(2, 10);
-  }
-
-  // Static TongHop auto query-type definitions (replaces DB-driven CboLoaiTim.php)
-  var LEGACY_TH_AUTO_QUERY_TYPE_DEFS = [
-    { value: "D_-P_-T_-B_", text: "4 Nhóm (D+P+T+B)" },
-    { value: "D_-P_-T_",    text: "3 Nam D+P+T" },
-    { value: "D_-P_-B_",    text: "3 NB D+P+B" },
-    { value: "D_-T_-B_",    text: "3 D+T+B" },
-    { value: "P_-T_-B_",    text: "3 P+T+B" },
-    { value: "D_-P_",       text: "2 Nam D+P" },
-    { value: "D_-B_",       text: "2 D+B" },
-    { value: "P_-B_",       text: "2 P+B" },
-    { value: "D_",          text: "Đài Chính D" },
-    { value: "P_",          text: "Đài Phụ P" },
-    { value: "T_",          text: "Đài T (Nam 3)" },
-    { value: "B_",          text: "Đài Bắc B" }
-  ];
-
-  function buildLegacyThSingleItems(heThong) {
-    var he = Number(heThong || 2) === 3 ? 3 : 2;
-    var items = [];
-    var max = he === 2 ? 100 : 1000;
-    for (var i = 0; i < max; i += 1) items.push(String(i).padStart(he, "0"));
-    return items;
-  }
-
-  function buildLegacyThDaoItems(heThong) {
-    var he = Number(heThong || 2) === 3 ? 3 : 2;
-    var source = buildLegacyThSingleItems(he);
-    var seen = {};
-    var items = [];
-    source.forEach(function (value) {
-      var reverse = value.split("").reverse().join("");
-      var normalized = [value, reverse].sort().join(" ");
-      if (seen[normalized]) return;
-      seen[normalized] = true;
-      items.push(normalized);
-    });
-    return items.sort();
-  }
-
-  function parseLegacyThCustomGroups(text, heThong) {
-    var he = Number(heThong || 2) === 3 ? 3 : 2;
-    var lines = String(text || "").split(/\r?\n/).map(function (line) { return String(line || "").trim(); }).filter(Boolean);
-    var groups = [];
-    lines.forEach(function (line, idx) {
-      var label = "Cách " + (idx + 1);
-      var body = line;
-      var colonPos = line.indexOf(":");
-      if (colonPos > 0) {
-        label = String(line.substring(0, colonPos) || "").trim() || label;
-        body = String(line.substring(colonPos + 1) || "").trim();
-      }
-      var tokens = body.replace(/[;,|]+/g, " ").split(/\s+/).map(function (token) {
-        return String(token || "").trim();
-      }).filter(function (token) {
-        return new RegExp("^\\d{" + he + "}$").test(token);
-      });
-      if (!tokens.length) return;
-      groups.push({
-        id: "custom_" + idx,
-        text: label,
-        children: tokens.map(function (token) { return { id: token, text: token }; }),
-        cachIds: tokens.join(","),
-        tCach: tokens.join(" ")
-      });
-    });
-    return groups;
-  }
-
-  // Generate number group definitions from client-side rules (replaces DB-driven tree_nhomso.php)
-  function buildLegacyThAutoGroupDefs(heThong, mode, customText) {
-    var he = Number(heThong || 2) === 3 ? 3 : 2;
-    var sourceMode = String(mode || "dao").trim();
-    var groups = [];
-    if (sourceMode === "custom") return parseLegacyThCustomGroups(customText, he);
-    if (sourceMode === "single") {
-      var singles = buildLegacyThSingleItems(he);
-      return [{
-        id: "single_all",
-        text: he === 2 ? "Nhóm 1 số" : "Nhóm 1 bộ 3 số",
-        children: singles.map(function (item) { return { id: item, text: item }; }),
-        cachIds: singles.join(","),
-        tCach: singles.join(" ")
-      }];
-    }
-    if (sourceMode === "dao") {
-      var daoItems = buildLegacyThDaoItems(he);
-      var chunkSize = he === 2 ? 20 : 25;
-      for (var di = 0; di < daoItems.length; di += chunkSize) {
-        var part = daoItems.slice(di, di + chunkSize);
-        groups.push({
-          id: "dao_" + Math.floor(di / chunkSize),
-          text: "Nhóm đảo " + (Math.floor(di / chunkSize) + 1),
-          children: part.map(function (item) { return { id: item, text: item }; }),
-          cachIds: part.join(","),
-          tCach: part.join(" | ")
-        });
-      }
-      return groups;
-    }
-    if (he === 2) {
-      for (var start = 0; start <= 90; start += 10) {
-        var end = start + 9;
-        var nums = [];
-        for (var n = start; n <= end; n++) nums.push(String(n).padStart(2, "0"));
-        groups.push({
-          id: String(start / 10),
-          text: "Nhóm " + String(start).padStart(2, "0") + "-" + String(end).padStart(2, "0"),
-          children: nums.map(function (s) { return { id: s, text: s }; }),
-          cachIds: nums.join(","),
-          tCach: nums.join(",")
-        });
-      }
-    } else {
-      for (var start3 = 0; start3 <= 900; start3 += 100) {
-        var end3 = start3 + 99;
-        var nums3 = [];
-        for (var n3 = start3; n3 <= end3; n3++) nums3.push(String(n3).padStart(3, "0"));
-        groups.push({
-          id: String(start3 / 100),
-          text: "Nhóm " + String(start3).padStart(3, "0") + "-" + String(end3).padStart(3, "0"),
-          children: nums3.map(function (s) { return { id: s, text: s }; }),
-          cachIds: nums3.join(","),
-          tCach: nums3.join(",")
-        });
-      }
-    }
-    return groups;
-  }
-
-  function tokenizeLegacyGroupNumbers(rawText, heThong) {
-    var he = Number(heThong || 2) === 3 ? 3 : 2;
-    var regex = he === 3 ? /\d{3}/g : /\d{2}/g;
-    var tokens = String(rawText || "").replace(/[^0-9]+/g, " ").match(regex) || [];
-    var seen = {};
-    var out = [];
-    tokens.forEach(function (token) {
-      var normalized = String(token || "").padStart(he, "0");
-      if (normalized.length !== he) return;
-      if (seen[normalized]) return;
-      seen[normalized] = true;
-      out.push(normalized);
-    });
-    return out;
-  }
-
-  function parseLegacyLoaiTimFieldPart(rawLoai) {
-    var loai = String(rawLoai || "").trim();
-    if (!loai) return "";
-    var parts = loai.split(",");
-    var fieldPart = String(parts.length > 1 ? parts[1] : parts[0] || "").trim();
-    if (!fieldPart) return "";
-    return fieldPart.replace(/\s+/g, "");
-  }
-
-  function buildLegacyThQueryTypeOptionsFromLoaiTimRows(rows, heThong) {
-    var he = Number(heThong || 2) === 3 ? 3 : 2;
-    var list = Array.isArray(rows) ? rows : [];
-    var seen = {};
-    var out = [];
-    for (var i = 0; i < list.length; i += 1) {
-      var row = list[i] || {};
-      var maDuoi = Number(row.MaDuoi || row.ma_duoi || row.maduoi || 0);
-      if (maDuoi && maDuoi !== he) continue;
-      var maLoai = String(row.MaLoai || row.ma_loai || row.maloai || "").trim();
-      var value = parseLegacyLoaiTimFieldPart(maLoai);
-      if (!value) continue;
-      if (seen[value]) continue;
-      seen[value] = true;
-      var text = String(row.MoTa || row.mo_ta || row.mota || value).trim() || value;
-      out.push({ value: value, text: text });
-    }
-    return out.sort(function (a, b) {
-      return String(a.text || "").localeCompare(String(b.text || ""), "vi", { numeric: true, sensitivity: "base" });
-    });
-  }
-
-  function buildLegacyThGroupOptionsFromTimKiemRows(rows, heThong) {
-    var he = Number(heThong || 2) === 3 ? 3 : 2;
-    var list = Array.isArray(rows) ? rows : [];
-    var out = [];
-    for (var i = 0; i < list.length; i += 1) {
-      var row = list[i] || {};
-      var maDuoi = Number(row.MaDuoi || row.ma_duoi || row.maduoi || 0);
-      if (maDuoi && maDuoi !== he) continue;
-      var kieuTim = String(row.KieuTim || row.kieu_tim || row.kieutim || "").trim();
-      var noiDung = String(row.NoiDung || row.noi_dung || row.noidung || row.DongNghia || row.dong_nghia || "").trim();
-      var tokens = tokenizeLegacyGroupNumbers(noiDung, heThong);
-      if (!tokens.length) continue;
-      var shortLabel = kieuTim.replace(/^TR_/i, "").replace(/\.+$/, "").trim();
-      var text = shortLabel || ("Nhóm " + (i + 1));
-      var idSeed = (kieuTim || ("nhom_" + i)).replace(/[^a-zA-Z0-9_]+/g, "_");
-      out.push({
-        id: "api_" + idSeed + "_" + i,
-        text: text,
-        children: tokens.map(function (token) { return { id: token, text: token }; }),
-        cachIds: tokens.join(","),
-        tCach: tokens.join(" ")
-      });
-    }
-    return out;
   }
 
   function formatSoChuInput(value) {
@@ -1983,53 +1394,6 @@
     var _aj = useState("ketqua"), subTab = _aj[0], setSubTab = _aj[1];
     var _ak = useState("kq"), activeAction = _ak[0], setActiveAction = _ak[1];
     var _al = useState([]), thongkeTabItems = _al[0], setThongkeTabItems = _al[1];
-    var _an = useState(2), legacyHeThong = _an[0], setLegacyHeThong = _an[1];
-    var _ao = useState({ D_dau: true, D_duoi: true, P_dau: true, P_duoi: true, T_dau: true, T_duoi: true, B_dau: true, B_duoi: true }), legacyLocMap = _ao[0], setLegacyLocMap = _ao[1];
-    var _ap = useState("C_D"), legacyCdMode = _ap[0], setLegacyCdMode = _ap[1];
-    var _aq = useState(1), legacyRankFrom = _aq[0], setLegacyRankFrom = _aq[1];
-    var _ar = useState(10), legacyRankTo = _ar[0], setLegacyRankTo = _ar[1];
-    var _ab1 = useState(200), legacyNgayChay = _ab1[0], setLegacyNgayChay = _ab1[1];
-    var _ab2 = useState(false), legacyTheoThu = _ab2[0], setLegacyTheoThu = _ab2[1];
-    var _ab3 = useState(true), legacyChkHieu = _ab3[0], setLegacyChkHieu = _ab3[1];
-    var _av = useState("ktt"), legacyTool = _av[0], setLegacyTool = _av[1];
-    var _aw = useState(false), legacyConfigOpen = _aw[0], setLegacyConfigOpen = _aw[1];
-    var _as = useState([]), legacyKttRows = _as[0], setLegacyKttRows = _as[1];
-    var _ax = useState({}), legacyKttMatchSet = _ax[0], setLegacyKttMatchSet = _ax[1];
-    var _at = useState([]), legacySlrRows = _at[0], setLegacySlrRows = _at[1];
-    var _au = useState([]), legacyNbRows = _au[0], setLegacyNbRows = _au[1];
-    var _ath1 = useState([]), legacyThRows = _ath1[0], setLegacyThRows = _ath1[1];
-    var _ath2 = useState([]), legacyThAutoRows = _ath2[0], setLegacyThAutoRows = _ath2[1];
-    var _ath3 = useState(toSinhThreshold(12, 12)), legacyThKtn = _ath3[0], setLegacyThKtn = _ath3[1];
-    var _ath4 = useState(toSinhThreshold(12, 12)), legacyThKtd = _ath4[0], setLegacyThKtd = _ath4[1];
-    var _ath5 = useState(toSinhThreshold(12, 12)), legacyThL2c = _ath5[0], setLegacyThL2c = _ath5[1];
-    var _ath6 = useState(toSinhThreshold(52, 52)), legacyThTky = _ath6[0], setLegacyThTky = _ath6[1];
-    var _ath7 = useState(toSinhThreshold(7, 7)), legacyThTnd = _ath7[0], setLegacyThTnd = _ath7[1];
-    var _ath8 = useState(""), legacyThAutoC1Ngay = _ath8[0], setLegacyThAutoC1Ngay = _ath8[1];
-    var _ath9 = useState(""), legacyThAutoC1Ky = _ath9[0], setLegacyThAutoC1Ky = _ath9[1];
-    var _ath10 = useState(""), legacyThAutoC2NgayCX = _ath10[0], setLegacyThAutoC2NgayCX = _ath10[1];
-    var _ath11 = useState(""), legacyThAutoC2KyCX = _ath11[0], setLegacyThAutoC2KyCX = _ath11[1];
-    var _ath12 = useState(""), legacyThAutoC4NgayGap = _ath12[0], setLegacyThAutoC4NgayGap = _ath12[1];
-    var _ath13 = useState(""), legacyThAutoC5KyGap = _ath13[0], setLegacyThAutoC5KyGap = _ath13[1];
-    var _ath14 = useState(false), legacyThAutoC6Both = _ath14[0], setLegacyThAutoC6Both = _ath14[1];
-    var _ath15 = useState(""), legacyThIntersect = _ath15[0], setLegacyThIntersect = _ath15[1];
-    var _ath16 = useState({ KQT: true, KQN: false, KTD: false, KQD: false, N2D: false, B2D: false, T2D: false, N3D: false, N2C: false, B2C: false, T2C: false, N3C: false, B3C: false, L2C: false, L3C: false }), legacyThResultMask = _ath16[0], setLegacyThResultMask = _ath16[1];
-    var _ath17 = useState(LEGACY_TH_AUTO_QUERY_TYPE_DEFS.slice()), legacyThQueryTypeOptions = _ath17[0], setLegacyThQueryTypeOptions = _ath17[1];
-    var _ath18 = useState([LEGACY_TH_AUTO_QUERY_TYPE_DEFS[0].value]), legacyThSelectedQueryTypes = _ath18[0], setLegacyThSelectedQueryTypes = _ath18[1];
-    var _ath19 = useState(buildLegacyThAutoGroupDefs(2, "dao", "")), legacyThGroupOptions = _ath19[0], setLegacyThGroupOptions = _ath19[1];
-    var _ath20 = useState(buildLegacyThAutoGroupDefs(2, "dao", "").map(function (g) { return g.id; })), legacyThSelectedGroups = _ath20[0], setLegacyThSelectedGroups = _ath20[1];
-    var _ath20b = useState([]), legacyThGroupTrietOptions = _ath20b[0], setLegacyThGroupTrietOptions = _ath20b[1];
-    var _ath20c = useState([]), legacyThSelectedGroupsTriet = _ath20c[0], setLegacyThSelectedGroupsTriet = _ath20c[1];
-    var _ath21 = useState("dao"), legacyThGroupSourceMode = _ath21[0], setLegacyThGroupSourceMode = _ath21[1];
-    var _ath22 = useState(""), legacyThCustomGroupsText = _ath22[0], setLegacyThCustomGroupsText = _ath22[1];
-    var _ath23 = useState(""), legacyThAutoSummary = _ath23[0], setLegacyThAutoSummary = _ath23[1];
-    var _ath24 = useState(false), legacyThAutoRunning = _ath24[0], setLegacyThAutoRunning = _ath24[1];
-    var _ath25 = useState(""), legacyThAutoStatus = _ath25[0], setLegacyThAutoStatus = _ath25[1];
-    var _ath26 = useState(0), legacyThAutoTaskDone = _ath26[0], setLegacyThAutoTaskDone = _ath26[1];
-    var _ath27 = useState(0), legacyThAutoTaskTotal = _ath27[0], setLegacyThAutoTaskTotal = _ath27[1];
-    var _ath28 = useState(true), legacyThUseApiSource = _ath28[0], setLegacyThUseApiSource = _ath28[1];
-    var _ath29 = useState(false), legacyThUseTrietSource = _ath29[0], setLegacyThUseTrietSource = _ath29[1];
-    var _ath30 = useState(false), legacyThApiLoading = _ath30[0], setLegacyThApiLoading = _ath30[1];
-    var _ath31 = useState(""), legacyThApiStatus = _ath31[0], setLegacyThApiStatus = _ath31[1];
     var _am = useState({
       so_ky: so_ky,
       lay_so_ky: lay_so_ky,
@@ -2047,7 +1411,6 @@
     var taiDuLieuReqRef = useRef(0);
     var filterResetReadyRef = useRef(false);
     var autoDailyUpdatingRef = useRef(false);
-    var legacyThAutoStopRef = useRef(false);
 
     function snapshotThongKeInputs() {
       return {
@@ -2069,321 +1432,6 @@
     var tt = useMemo(function () {
       return UI_TEXT[uiLang] || UI_TEXT.vi;
     }, [uiLang]);
-
-    var legacyKttFieldLabels = useMemo(function () {
-      return {
-        D_dau: tt.lgKttFieldDdau,
-        D_duoi: tt.lgKttFieldDduoi,
-        P_dau: tt.lgKttFieldPdau,
-        P_duoi: tt.lgKttFieldPduoi,
-        T_dau: tt.lgKttFieldTdau,
-        T_duoi: tt.lgKttFieldTduoi,
-        B_dau: tt.lgKttFieldBdau,
-        B_duoi: tt.lgKttFieldBduoi
-      };
-    }, [tt]);
-
-    var legacyThResultItems = useMemo(function () {
-      return [
-        { key: "KQT", code: "KTN", field: "serKQT", label: tt.lgThSeriesKqt },
-        { key: "KQN", code: "KQN", field: "serKQN", label: tt.lgThSeriesKqn },
-        { key: "KTD", code: "KTD", field: "serKTD", label: tt.lgThSeriesKtd },
-        { key: "KQD", code: "KQD", field: "serKQD", label: tt.lgThSeriesKqd },
-        { key: "N2D", code: "N2D", field: "serD2D", label: tt.lgThSeriesN2d },
-        { key: "B2D", code: "B2D", field: "serB2D", label: tt.lgThSeriesB2d },
-        { key: "T2D", code: "T2D", field: "serT2D", label: tt.lgThSeriesT2d },
-        { key: "N3D", code: "N3D", field: "serN3D", label: tt.lgThSeriesN3d },
-        { key: "N2C", code: "N2C", field: "serD2C", label: tt.lgThSeriesN2c },
-        { key: "B2C", code: "B2C", field: "serB2C", label: tt.lgThSeriesB2c },
-        { key: "T2C", code: "T2C", field: "serT2C", label: tt.lgThSeriesT2c },
-        { key: "N3C", code: "N3C", field: "serN3C", label: tt.lgThSeriesN3c },
-        { key: "B3C", code: "B3C", field: "serB3C", label: tt.lgThSeriesB3c },
-        { key: "L2C", code: "L2C", field: "serLKD2C", label: tt.lgThSeriesL2c },
-        { key: "L3C", code: "L3C", field: "serL3C", label: tt.lgThSeriesL3c }
-      ];
-    }, [tt]);
-
-    function buildLegacyThResultText(rec) {
-      var lines = [];
-      legacyThResultItems.forEach(function (item) {
-        if (!legacyThResultMask[item.key]) return;
-        lines.push(item.code + ": " + (rec[item.field] || "-"));
-      });
-      return lines.length ? lines.join("\n") : "-";
-    }
-
-    function getLegacyThFilterConfig() {
-      var c1NgayTop = parseInt(legacyThAutoC1Ngay, 10) || 0;
-      var c1KyTop = parseInt(legacyThAutoC1Ky, 10) || 0;
-      var c2NgayCX = String(legacyThAutoC2NgayCX || "").split(",").map(function (s) {
-        return parseInt(String(s || "").trim(), 10);
-      }).filter(function (n) { return !isNaN(n) && n > 0; });
-      var c2KyCX = String(legacyThAutoC2KyCX || "").split(",").map(function (s) {
-        return parseInt(String(s || "").trim(), 10);
-      }).filter(function (n) { return !isNaN(n) && n > 0; });
-      var c4NgayGap = String(legacyThAutoC4NgayGap || "").trim() === "" ? -1 : (parseInt(legacyThAutoC4NgayGap, 10) || 0);
-      var c5KyGap = String(legacyThAutoC5KyGap || "").trim() === "" ? -1 : (parseInt(legacyThAutoC5KyGap, 10) || 0);
-      return {
-        c1NgayTop: c1NgayTop,
-        c1KyTop: c1KyTop,
-        c2NgayCX: c2NgayCX,
-        c2KyCX: c2KyCX,
-        c4NgayGap: c4NgayGap,
-        c5KyGap: c5KyGap,
-        c6Both: !!legacyThAutoC6Both
-      };
-    }
-
-    function hasLegacyThAutoFilter(cfg) {
-      var filterCfg = cfg || getLegacyThFilterConfig();
-      return filterCfg.c1NgayTop > 0 || filterCfg.c1KyTop > 0 || filterCfg.c2NgayCX.length > 0 || filterCfg.c2KyCX.length > 0 || filterCfg.c4NgayGap >= 0 || filterCfg.c5KyGap >= 0 || filterCfg.c6Both;
-    }
-
-    function buildLegacyThIntersectText(rows) {
-      var counts = {};
-      (rows || []).forEach(function (row) {
-        var tokens = String((row && row.boSo) || "").split(/[\s,]+/).filter(Boolean);
-        tokens.forEach(function (token) {
-          counts[token] = (counts[token] || 0) + 1;
-        });
-      });
-      var maxC = 0;
-      Object.keys(counts).forEach(function (key) {
-        if (counts[key] > maxC) maxC = counts[key];
-      });
-      var lines = [];
-      for (var c = maxC; c >= 1; c -= 1) {
-        var arr = Object.keys(counts).filter(function (key) { return counts[key] === c; }).sort();
-        if (arr.length) lines.push("Lần " + c + ": " + arr.join(" "));
-      }
-      return lines.join("\n");
-    }
-
-    function filterLegacyThRowsWithConfig(rows, filterCfg) {
-      var sourceRows = Array.isArray(rows) ? rows.slice() : [];
-      var cfg = filterCfg || getLegacyThFilterConfig();
-      if (!hasLegacyThAutoFilter(cfg)) return [];
-
-      var c1NgayMap = {};
-      var c1KyMap = {};
-      if (cfg.c1NgayTop > 0) {
-        sourceRows.slice().sort(function (a, b) {
-          return (Number(b.ngayCXHT) || 0) - (Number(a.ngayCXHT) || 0);
-        }).slice(0, cfg.c1NgayTop).forEach(function (row) {
-          c1NgayMap[row.key] = 1;
-        });
-      }
-      if (cfg.c1KyTop > 0) {
-        sourceRows.slice().sort(function (a, b) {
-          return (Number(b.kyCXHT) || 0) - (Number(a.kyCXHT) || 0);
-        }).slice(0, cfg.c1KyTop).forEach(function (row) {
-          c1KyMap[row.key] = 1;
-        });
-      }
-
-      return sourceRows.filter(function (row) {
-        var matchC1 = !!c1NgayMap[row.key] || !!c1KyMap[row.key];
-        var matchC2 = cfg.c2NgayCX.length > 0 && cfg.c2NgayCX.indexOf(Number(row.ngayCXHT) || 0) >= 0;
-        var matchC3 = cfg.c2KyCX.length > 0 && cfg.c2KyCX.indexOf(Number(row.kyCXHT) || 0) >= 0;
-        var matchC4 = cfg.c4NgayGap >= 0 && (Number(row.ngayCXHT) || 0) > ((Number(row.lauNgay) || 0) + cfg.c4NgayGap);
-        var matchC5 = cfg.c5KyGap >= 0 && (Number(row.kyCXHT) || 0) > ((Number(row.lauKy) || 0) + cfg.c5KyGap);
-        var matchC6 = !!cfg.c6Both && (Number(row.ngayCXHT) || 0) >= (Number(row.lauNgay) || 0) && (Number(row.kyCXHT) || 0) >= (Number(row.lauKy) || 0);
-        return matchC1 || matchC2 || matchC3 || matchC4 || matchC5 || matchC6;
-      });
-    }
-
-    function buildLegacyThAutoSummaryText(rows, filterCfg) {
-      var cfg = filterCfg || getLegacyThFilterConfig();
-      if (!rows || !rows.length) return "";
-      var grouped = {};
-      var repeated = {};
-      rows.forEach(function (row) {
-        var q = String(row.autoQueryTypeText || "").trim() || "?";
-        var g = String(row.autoGroupText || "").trim() || "?";
-        var bo = String(row.boSo || "").trim() || "?";
-        if (!grouped[q]) grouped[q] = {};
-        if (!grouped[q][g]) grouped[q][g] = {};
-        if (!grouped[q][g][bo]) grouped[q][g][bo] = [];
-        grouped[q][g][bo].push(row);
-        if (!repeated[bo]) repeated[bo] = [];
-        repeated[bo].push(q + " | " + g + " | " + (row.noiDung || ""));
-      });
-
-      var lines = [];
-      lines.push("Auto rows: " + rows.length);
-      lines.push("Filter: " + [
-        cfg.c1NgayTop > 0 ? ("C1N=" + cfg.c1NgayTop) : "",
-        cfg.c1KyTop > 0 ? ("C1K=" + cfg.c1KyTop) : "",
-        cfg.c2NgayCX.length ? ("C2=" + cfg.c2NgayCX.join(",")) : "",
-        cfg.c2KyCX.length ? ("C3=" + cfg.c2KyCX.join(",")) : "",
-        cfg.c4NgayGap >= 0 ? ("C4=" + cfg.c4NgayGap) : "",
-        cfg.c5KyGap >= 0 ? ("C5=" + cfg.c5KyGap) : "",
-        cfg.c6Both ? "C6=1" : ""
-      ].filter(Boolean).join(" | "));
-
-      Object.keys(grouped).sort().forEach(function (queryType) {
-        lines.push("[" + queryType + "]");
-        Object.keys(grouped[queryType]).sort().forEach(function (groupText) {
-          var boMap = grouped[queryType][groupText];
-          var details = Object.keys(boMap).sort().map(function (boSo) {
-            return boSo + "(" + boMap[boSo].length + ")";
-          });
-          lines.push("- " + groupText + ": " + details.join(", "));
-        });
-      });
-
-      var repeatedLines = Object.keys(repeated).sort().filter(function (boSo) {
-        return repeated[boSo].length > 1;
-      }).map(function (boSo) {
-        return boSo + ": " + repeated[boSo].join(" || ");
-      });
-      if (repeatedLines.length) {
-        lines.push("");
-        lines.push("Repeated:");
-        lines = lines.concat(repeatedLines);
-      }
-      return lines.join("\n");
-    }
-
-    function toggleLegacyThSelection(list, value, checked) {
-      var next = Array.isArray(list) ? list.slice() : [];
-      if (checked && next.indexOf(value) < 0) next.push(value);
-      if (!checked) next = next.filter(function (item) { return item !== value; });
-      return next;
-    }
-
-    function sortLegacyThAutoRowsForDisplay(rows) {
-      return (Array.isArray(rows) ? rows.slice() : []).sort(function (a, b) {
-        var aq = String(a.autoQueryTypeText || "");
-        var bq = String(b.autoQueryTypeText || "");
-        if (aq !== bq) return aq.localeCompare(bq, "vi", { numeric: true, sensitivity: "base" });
-        var ag = String(a.autoGroupText || "");
-        var bg = String(b.autoGroupText || "");
-        if (ag !== bg) return ag.localeCompare(bg, "vi", { numeric: true, sensitivity: "base" });
-        var an = Number(a.ngayCXHT) || 0;
-        var bn = Number(b.ngayCXHT) || 0;
-        if (bn !== an) return bn - an;
-        var ak = Number(a.kyCXHT) || 0;
-        var bk = Number(b.kyCXHT) || 0;
-        if (bk !== ak) return bk - ak;
-        return String(a.boSo || "").localeCompare(String(b.boSo || ""), "vi", { numeric: true, sensitivity: "base" });
-      });
-    }
-
-    function extractRowsFromTableDataPayload(payload, tableName) {
-      if (Array.isArray(payload)) return payload;
-      if (!payload || typeof payload !== "object") return [];
-      if (Array.isArray(payload.rows)) return payload.rows;
-      if (payload.data) {
-        if (Array.isArray(payload.data)) return payload.data;
-        if (payload.data && Array.isArray(payload.data.rows)) return payload.data.rows;
-        if (payload.data && tableName && Array.isArray(payload.data[tableName])) return payload.data[tableName];
-      }
-      if (tableName && Array.isArray(payload[tableName])) return payload[tableName];
-      return [];
-    }
-
-    async function fetchRowsFromGetTableData(tableName, heThong) {
-      var token = "";
-      try {
-        var raw = localStorage.getItem("access-token");
-        if (raw) {
-          var parsed = JSON.parse(raw);
-          token = String((parsed && parsed.state && parsed.state.token) || "");
-        }
-      } catch (_e) {}
-
-      var headers = { "Content-Type": "application/json", "Accept": "application/json" };
-      if (token) headers["csm-token"] = token;
-
-      var endpointCandidates = ["/api/get-table-data", "api/get-table-data"];
-      var bodyCandidates = [
-        { app_id: "kqxs", table: tableName, tableName: tableName, filters: { MaDuoi: Number(heThong || 2) } },
-        { app_id: "kqxs", obj_name: tableName, e_where: { field: "MaDuoi", type: "eq", value: Number(heThong || 2) } },
-        { app_id: "kqxs", obj_name: tableName, e_where: { field: "id", type: "like", value: "" } }
-      ];
-
-      for (var ei = 0; ei < endpointCandidates.length; ei += 1) {
-        for (var bi = 0; bi < bodyCandidates.length; bi += 1) {
-          try {
-            var resp = await fetch(endpointCandidates[ei], {
-              method: "POST",
-              credentials: "include",
-              headers: headers,
-              body: JSON.stringify(bodyCandidates[bi])
-            });
-            if (!resp || !resp.ok) continue;
-            var payload = await resp.json();
-            var rows = extractRowsFromTableDataPayload(payload, tableName);
-            if (rows.length) return rows;
-          } catch (_err) {}
-        }
-      }
-
-      // Fallback to SDK wrapper if direct endpoint is not available.
-      return await fetchRows({
-        app_id: "kqxs",
-        obj_name: tableName,
-        e_where: { field: "id", type: "like", value: "" }
-      });
-    }
-
-    async function reloadLegacyThApiSource() {
-      setLegacyThApiLoading(true);
-      setLegacyThApiStatus("Đang tải Loại Tìm/Nhóm từ get-table-data...");
-      try {
-        var he = Number(legacyHeThong || 2) === 3 ? 3 : 2;
-        var rs = await Promise.all([
-          fetchRowsFromGetTableData("kqxs_loaitim", he),
-          fetchRowsFromGetTableData("kqxs_timkiem", he),
-          fetchRowsFromGetTableData("kqxs_timkiemtr", he)
-        ]);
-        var loaiRows = rs[0] || [];
-        var groupRows = rs[1] || [];
-        var groupTrietRows = rs[2] || [];
-
-        var queryTypeOptions = buildLegacyThQueryTypeOptionsFromLoaiTimRows(loaiRows, he);
-        if (!queryTypeOptions.length) queryTypeOptions = LEGACY_TH_AUTO_QUERY_TYPE_DEFS.slice();
-        setLegacyThQueryTypeOptions(queryTypeOptions);
-        setLegacyThSelectedQueryTypes(function (prev) {
-          var map = {};
-          queryTypeOptions.forEach(function (item) { map[item.value] = true; });
-          var kept = (Array.isArray(prev) ? prev : []).filter(function (value) { return !!map[value]; });
-          return kept.length ? kept : (queryTypeOptions.length ? [queryTypeOptions[0].value] : []);
-        });
-
-        var groups = buildLegacyThGroupOptionsFromTimKiemRows(groupRows, he);
-        if (!groups.length) groups = buildLegacyThAutoGroupDefs(he, "dao", "");
-        setLegacyThGroupOptions(groups);
-        setLegacyThSelectedGroups(function (prev) {
-          var selectedMap = {};
-          (Array.isArray(prev) ? prev : []).forEach(function (id) { selectedMap[id] = true; });
-          var kept = groups.filter(function (g) { return !!selectedMap[g.id]; }).map(function (g) { return g.id; });
-          return kept.length ? kept : [];
-        });
-
-        var groupsTriet = buildLegacyThGroupOptionsFromTimKiemRows(groupTrietRows, he);
-        setLegacyThGroupTrietOptions(groupsTriet);
-        setLegacyThSelectedGroupsTriet(function (prev) {
-          var selectedMap = {};
-          (Array.isArray(prev) ? prev : []).forEach(function (id) { selectedMap[id] = true; });
-          var kept = groupsTriet.filter(function (g) { return !!selectedMap[g.id]; }).map(function (g) { return g.id; });
-          return kept.length ? kept : [];
-        });
-
-        setLegacyThApiStatus("Đã tải: " + queryTypeOptions.length + " loại tìm, " + groups.length + " nhóm số, " + groupsTriet.length + " nhóm triệt.");
-      } catch (err) {
-        console.error(err);
-        setLegacyThApiStatus("Không tải được dữ liệu get-table-data, đã dùng nguồn dự phòng.");
-      } finally {
-        setLegacyThApiLoading(false);
-      }
-    }
-
-    function stopLegacyTongHopFullAuto() {
-      legacyThAutoStopRef.current = true;
-      setLegacyThAutoStatus(tt.lgThAutoStopped + " " + Math.min(legacyThAutoTaskDone + 1, legacyThAutoTaskTotal) + "/" + legacyThAutoTaskTotal);
-    }
 
     var ds_thu = useMemo(function () {
       var labels = {
@@ -2425,18 +1473,6 @@
       }
       return dsMien;
     }, [danh_sach_dai, mien, thu_tuan, loai_tim]);
-
-    // All stations in the current region — no loai_tim filter.
-    // Legacy tools (KTT, SLR, NamBac, TongHop) must load ALL station data
-    // across ALL days; they must NOT inherit ThongKe's "theo ky" (loai_tim===1) filter.
-    var dsDaiLegacyCanTai = useMemo(function () {
-      return danh_sach_dai.filter(function (d) { return d.mien === mien; })
-        .sort(function (a, b) {
-          var ka = String(a.thu || "") + "_" + String(a.stt || "");
-          var kb = String(b.thu || "") + "_" + String(b.stt || "");
-          return ka < kb ? -1 : ka > kb ? 1 : 0;
-        });
-    }, [danh_sach_dai, mien]);
 
     var dsDaiThu = useMemo(function () {
       return dsDaiMienThu.map(function (d) {
@@ -2482,10 +1518,6 @@
       setXuLyKetQua([]);
     }, [mien, loai_tim, den_ngay]);
 
-    // Auto-load Loại Tìm / Nhóm Số / Nhóm Triệt from API whenever legacyHeThong changes (also on mount).
-    useEffect(function () {
-      reloadLegacyThApiSource();
-    }, [legacyHeThong]);
     useEffect(function () {
       setCookie("chon_mau", chon_mau, 365);
     }, [chon_mau]);
@@ -2510,38 +1542,6 @@
         window.removeEventListener("csm:theme-change", onThemeChanged);
       };
     }, []);
-
-    useEffect(function () {
-      window.__kqxsLegacyCompat = {
-        isMienBacRow: isMienBacRow,
-        getRowTwoDigits: getRowTwoDigits,
-        inferLegacyRole: inferLegacyRole,
-        buildLegacyTongHopViewModel: function (opts) {
-          var cfg = Object.assign({}, opts || {});
-          if (!cfg.dataMien) cfg.dataMien = ((du_lieu_dai_mien[mien] && du_lieu_dai_mien[mien].data) || []);
-          if (!cfg.fromDate) cfg.fromDate = tu_ngay;
-          if (!cfg.toDate) cfg.toDate = den_ngay;
-          return buildLegacyTongHopViewModel(cfg);
-        },
-        buildLegacySoLauRaViewModel: function (opts) {
-          var cfg = Object.assign({}, opts || {});
-
-          if (!cfg.fromDate) cfg.fromDate = tu_ngay;
-          if (!cfg.toDate) cfg.toDate = den_ngay;
-          return buildLegacySoLauRaViewModel(cfg);
-        },
-        buildLegacyNamBacSummary: function (opts) {
-          var cfg = Object.assign({}, opts || {});
-          if (!cfg.dataMien) cfg.dataMien = ((du_lieu_dai_mien[mien] && du_lieu_dai_mien[mien].data) || []);
-          if (!cfg.fromDate) cfg.fromDate = tu_ngay;
-          if (!cfg.toDate) cfg.toDate = den_ngay;
-          return buildLegacyNamBacSummary(cfg);
-        }
-      };
-      return function () {
-        try { delete window.__kqxsLegacyCompat; } catch (_e) {}
-      };
-    }, [du_lieu_dai_mien, mien, tu_ngay, den_ngay]);
 
     useEffect(function () {
       if (!allowUpdateActions) return;
@@ -2684,56 +1684,15 @@
       return out;
     }
 
-    function isMienBacRow(row, opt) {
-      var cfg = opt || {};
-      var tableName = String((cfg.sourceTable || (row && row._source_table) || "")).toLowerCase();
-      if (/mienbac/.test(tableName)) return true;
-      var mienCode = String((cfg.mien || (row && row._mien) || "")).toUpperCase();
-      if (mienCode === "MB") return true;
-      return false;
-    }
-
-    function getRowTwoDigits(row, opt) {
+    function getRowTwoDigits(row) {
       var out = [];
-      var cfg = opt || {};
-      if (!cfg.useNorthRules) {
-        Object.keys(row || {}).forEach(function (f) {
-          if (!/^field_(duoi|dau|so\d+)$/.test(f)) return;
-          var val = String((row && row[f]) || "").trim();
-          if (!val) return;
-          var so = val.slice(-2);
-          if (/^\d{2}$/.test(so)) out.push(so);
-        });
-        return out;
-      }
-
-      var heThong = Number(cfg.heThong || 2) === 3 ? 3 : 2;
-      var isBac = isMienBacRow(row, cfg);
-
-      function pushVal(v) {
-        var val = String(v || "").trim();
+      Object.keys(row || {}).forEach(function (f) {
+        if (!/^field_(duoi|dau|so\d+)$/.test(f)) return;
+        var val = String(row[f] || "").trim();
         if (!val) return;
         var so = val.slice(-2);
         if (/^\d{2}$/.test(so)) out.push(so);
-      }
-
-      // Tất cả đài đều dùng đầu/đuôi.
-      pushVal(row && row.field_dau);
-      pushVal(row && row.field_duoi);
-
-      // Chỉ miền Bắc mới lấy thêm bộ số phụ thuộc hệ số.
-      if (isBac) {
-        if (heThong === 3) {
-          pushVal(row && row.field_so5);
-          pushVal(row && row.field_so6);
-          pushVal(row && row.field_so7);
-        } else {
-          pushVal(row && row.field_so2);
-          pushVal(row && row.field_so3);
-          pushVal(row && row.field_so4);
-        }
-      }
-
+      });
       return out;
     }
 
@@ -2775,575 +1734,6 @@
       }
 
       return normalizeStationTableName(raw);
-    }
-
-    function inferLegacyRole(meta) {
-      var item = meta || {};
-      var name = stripVietnamese(String(item.ten_dai || "")).toLowerCase();
-      var table = String(item.dai || item.du_lieu_dai || "").toLowerCase();
-      if (/mienbac|bac/.test(table) || /mienbac|bac/.test(name)) return "B";
-      if (/daichinh|chinh/.test(table) || /chinh/.test(name)) return "D";
-      if (/daiphu|phu/.test(table) || /phu/.test(name)) return "P";
-      if (/dai3|thu3|nam3|mndai3/.test(table) || /3/.test(name)) return "T";
-      return "";
-    }
-
-    function normalizeLegacyDateYmd(v) {
-      var s = String(v || "").trim();
-      if (!s) return "";
-      if (/^\d{8}$/.test(s)) return s;
-      if (/^\d{2}\/\d{2}\/\d{4}$/.test(s)) return dateFormat(chuyenNgay(s, "dd/mm/yyyy"), "yyyymmdd");
-      if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s.replace(/-/g, "");
-      return s.replace(/\D/g, "").slice(0, 8);
-    }
-
-    function buildLegacyDateTimeline(fromDate, toDate, stepDays) {
-      var fromYmd = normalizeLegacyDateYmd(fromDate);
-      var toYmd = normalizeLegacyDateYmd(toDate);
-      if (!fromYmd || !toYmd) return [];
-      var out = [];
-      var cur = chuyenNgay(toYmd, "yyyymmdd");
-      var stop = chuyenNgay(fromYmd, "yyyymmdd");
-      var step = Math.max(1, Number(stepDays || 1));
-      while (cur >= stop) {
-        out.push(dateFormat(cur, "yyyymmdd"));
-        cur = chuyenNgay(CongNgay(dateFormat(cur, "dd/mm/yyyy"), -step, "dd/mm/yyyy"), "dd/mm/yyyy");
-      }
-      return out;
-    }
-
-    function buildLegacyTongHopViewModel(opts) {
-      var cfg = opts || {};
-      var dataMien = Array.isArray(cfg.dataMien) ? cfg.dataMien : [];
-      var heThong = Number(cfg.heThong || 2) === 3 ? 3 : 2;
-      var locList = Array.isArray(cfg.locList) ? cfg.locList.slice() : [];
-      var locSet = {};
-      locList.forEach(function (k) { locSet[String(k)] = true; });
-
-      var byDate = {};
-      dataMien.forEach(function (dai) {
-        var role = inferLegacyRole(dai);
-        if (!role) return;
-        (dai.data || []).forEach(function (row) {
-          var ymd = normalizeLegacyDateYmd(row && row.field_ngay);
-          if (!ymd) return;
-          if (!byDate[ymd]) byDate[ymd] = { ID: ymd, Ngay: dateFormat(chuyenNgay(ymd, "yyyymmdd"), "dd/mm/yyyy") };
-          var bucket = byDate[ymd];
-          if (role === "D" || role === "P" || role === "T") {
-            bucket[role + "_dau"] = String(row.field_dau || "").trim();
-            bucket[role + "_duoi"] = String(row.field_duoi || "").trim();
-          } else if (role === "B") {
-            bucket.B_duoi = String(row.field_duoi || "").trim();
-            if (heThong === 3) {
-              bucket.B_dau = String(row.field_so5 || "").trim();
-              bucket.B_so2 = String(row.field_so6 || "").trim();
-              bucket.B_so3 = String(row.field_so7 || "").trim();
-              bucket.B_so4 = "";
-            } else {
-              bucket.B_dau = String(row.field_dau || "").trim();
-              bucket.B_so2 = String(row.field_so2 || "").trim();
-              bucket.B_so3 = String(row.field_so3 || "").trim();
-              bucket.B_so4 = String(row.field_so4 || "").trim();
-            }
-          }
-        });
-      });
-
-      var timeline = buildLegacyDateTimeline(cfg.fromDate, cfg.toDate, Number(cfg.stepDays || 1));
-      var rows = timeline.map(function (ymd) {
-        var row = byDate[ymd];
-        if (!row) {
-          row = {
-            ID: ymd,
-            Ngay: dateFormat(chuyenNgay(ymd, "yyyymmdd"), "dd/mm/yyyy"),
-            D_dau: "?", D_duoi: "?", P_dau: "?", P_duoi: "?", T_dau: "?", T_duoi: "?",
-            B_dau: "?", B_so2: "?", B_so3: "?", B_so4: heThong === 3 ? "" : "?", B_duoi: "?"
-          };
-        }
-        if (locList.length) {
-          var copy = Object.assign({}, row);
-          ["D_dau", "D_duoi", "P_dau", "P_duoi", "T_dau", "T_duoi", "B_dau", "B_so2", "B_so3", "B_so4", "B_duoi"].forEach(function (k) {
-            if (!locSet[k]) copy[k] = "";
-          });
-          return copy;
-        }
-        return row;
-      });
-
-      return rows;
-    }
-
-    function buildLegacySoLauRaViewModel(opts) {
-      var cfg = opts || {};
-      var allRows = buildLegacyTongHopViewModel(cfg);
-      var mode = String(cfg.mode || "C_D").toUpperCase(); // C, D, 2C, C_D (Tất cả)
-      var gt = Math.max(1, Number(cfg.rankFrom || 1));
-      var gd = Math.max(gt, Number(cfg.rankTo || 10));
-
-      // Lọc theo thứ: chỉ giữ các ngày có cùng thứ với ngày cuối (toDate)
-      var rows = allRows;
-      if (cfg.theoThu && allRows.length > 0) {
-        var toYmd = normalizeLegacyDateYmd(cfg.toDate);
-        var targetDow = -1;
-        if (toYmd && toYmd.length >= 8) {
-          var ty = parseInt(toYmd.substring(0, 4), 10);
-          var tm = parseInt(toYmd.substring(4, 6), 10) - 1;
-          var td = parseInt(toYmd.substring(6, 8), 10);
-          targetDow = new Date(ty, tm, td).getDay();
-        }
-        if (targetDow >= 0) {
-          rows = allRows.filter(function (r) {
-            var ymd = normalizeLegacyDateYmd(r.ID);
-            if (!ymd || ymd.length < 8) return false;
-            var ry = parseInt(ymd.substring(0, 4), 10);
-            var rm = parseInt(ymd.substring(4, 6), 10) - 1;
-            var rd = parseInt(ymd.substring(6, 8), 10);
-            return new Date(ry, rm, rd).getDay() === targetDow;
-          });
-        }
-      }
-
-      // Giới hạn số ngày lookback (cboSoNgayChay)
-      var maxDays = Number(cfg.ngayChay || 0);
-      if (maxDays > 0 && rows.length > maxDays) rows = rows.slice(0, maxDays);
-
-      function dayTokens(r) {
-        var vals = [];
-        if (mode === "C" || mode === "C_D") {
-          vals = vals.concat([r.D_dau, r.P_dau, r.T_dau, r.B_dau, r.B_so2, r.B_so3, r.B_so4]);
-        }
-        if (mode === "D" || mode === "C_D") {
-          vals = vals.concat([r.D_duoi, r.P_duoi, r.T_duoi, r.B_duoi]);
-        }
-        if (mode === "2C") {
-          vals = vals.concat([r.D_dau, r.D_duoi, r.P_dau, r.P_duoi, r.T_dau, r.T_duoi, r.B_dau, r.B_duoi]);
-        }
-        return vals.map(function (v) { return String(v || "").slice(-2); }).filter(function (s) { return /^\d{2}$/.test(s); });
-      }
-
-      var history = rows.map(dayTokens);
-      var out = [];
-      for (var i = 0; i < 100; i += 1) {
-        var so = String(i).padStart(2, "0");
-        // Lọc hiệu: bỏ số có 2 chữ số giống nhau (00, 11, 22,...)
-        if (cfg.chkHieu) {
-          var d1 = Math.floor(i / 10), d2 = i % 10;
-          if (d1 === d2) continue;
-        }
-        var gap = 0;
-        var firstHit = -1;
-        for (var d = 0; d < history.length; d += 1) {
-          if (history[d].indexOf(so) >= 0) {
-            firstHit = d;
-            break;
-          }
-          gap += 1;
-        }
-        out.push({ so: so, gap: gap, first_hit_idx: firstHit });
-      }
-      out.sort(function (a, b) { return b.gap - a.gap || Number(a.so) - Number(b.so); });
-      return out.slice(gt - 1, gd);
-    }
-
-    function buildLegacyNamBacSummary(opts) {
-      var cfg = opts || {};
-      var rows = buildLegacyTongHopViewModel(cfg);
-      var boSoRaw = Array.isArray(cfg.boSoList) ? cfg.boSoList.slice() : [];
-      var boSoList = boSoRaw.map(function (v) { return String(v || "").trim(); }).filter(Boolean);
-      if (!boSoList.length) {
-        for (var i = 0; i < 100; i += 1) boSoList.push(String(i).padStart(2, "0"));
-      }
-
-      function buildTokenSet(value) {
-        var set = {};
-        var tokens = String(value || "").match(/\d{2}/g) || [];
-        for (var i = 0; i < tokens.length; i += 1) set[tokens[i]] = true;
-        return set;
-      }
-
-      function hitFieldsBySet(day, tokenSet, fields) {
-        for (var fi = 0; fi < fields.length; fi += 1) {
-          var v = String(day[fields[fi]] || "").slice(-2);
-          if (tokenSet[v]) return true;
-        }
-        return false;
-      }
-
-      var metricDefs = {
-        DAU_CP: ["D_dau", "P_dau"],
-        DAU_C: ["D_dau"],
-        DAU_P: ["P_dau"],
-        DAU_T: ["T_dau"],
-        DAU_B: ["B_dau", "B_so2", "B_so3", "B_so4"],
-        DUOI_CP: ["D_duoi", "P_duoi"],
-        DUOI_C: ["D_duoi"],
-        DUOI_P: ["P_duoi"],
-        DUOI_T: ["T_duoi"],
-        DUOI_B: ["B_duoi"],
-        DAU_C_DUOI_P: ["D_dau", "P_duoi"],
-        DAU_P_DUOI_C: ["P_dau", "D_duoi"],
-        DD_4_NHOM: ["D_dau", "D_duoi", "P_dau", "P_duoi", "T_dau", "T_duoi", "B_dau", "B_so2", "B_so3", "B_so4", "B_duoi"],
-        DD_3_NAM_B_DAU: ["D_dau", "D_duoi", "P_dau", "P_duoi", "T_dau", "T_duoi", "B_dau", "B_so2", "B_so3", "B_so4"],
-        DD_3_NAM: ["D_dau", "D_duoi", "P_dau", "P_duoi", "T_dau", "T_duoi"],
-        DD_3_NB: ["D_dau", "D_duoi", "P_dau", "P_duoi", "B_dau", "B_so2", "B_so3", "B_so4", "B_duoi"],
-        DD_2_NAM_B_DAU: ["D_dau", "D_duoi", "P_dau", "P_duoi", "B_dau", "B_so2", "B_so3", "B_so4"],
-        DD_2_NAM: ["D_dau", "D_duoi", "P_dau", "P_duoi"],
-        DD_C: ["D_dau", "D_duoi"],
-        DD_P: ["P_dau", "P_duoi"],
-        DD_T: ["T_dau", "T_duoi"],
-        DD_B: ["B_dau", "B_so2", "B_so3", "B_so4", "B_duoi"],
-        BL_4_NHOM: ["D_dau", "D_duoi", "P_dau", "P_duoi", "T_dau", "T_duoi", "B_dau", "B_so2", "B_so3", "B_so4", "B_duoi"],
-        BL_3_NAM: ["D_dau", "D_duoi", "P_dau", "P_duoi", "T_dau", "T_duoi"],
-        BL_3_NB: ["D_dau", "D_duoi", "P_dau", "P_duoi", "B_dau", "B_so2", "B_so3", "B_so4", "B_duoi"],
-        BL_2_NAM: ["D_dau", "D_duoi", "P_dau", "P_duoi"],
-        BL_C: ["D_dau", "D_duoi"],
-        BL_P: ["P_dau", "P_duoi"],
-        BL_T: ["T_dau", "T_duoi"],
-        BL_B: ["B_dau", "B_so2", "B_so3", "B_so4", "B_duoi"]
-      };
-
-      var metricKeys = Object.keys(metricDefs);
-      return boSoList.map(function (boSoLabel) {
-        var item = { so: boSoLabel };
-        var found = {};
-        var tokenSet = buildTokenSet(boSoLabel);
-
-        metricKeys.forEach(function (k) {
-          item[k] = 0;
-          found[k] = false;
-        });
-
-        for (var r = 0; r < rows.length; r += 1) {
-          var day = rows[r] || {};
-          var allFound = true;
-
-          for (var mk = 0; mk < metricKeys.length; mk += 1) {
-            var key = metricKeys[mk];
-            if (found[key]) continue;
-            if (hitFieldsBySet(day, tokenSet, metricDefs[key])) {
-              found[key] = true;
-            } else {
-              item[key] += 1;
-            }
-            if (!found[key]) allFound = false;
-          }
-
-          if (allFound) break;
-        }
-
-        return item;
-      });
-    }
-
-    // Tổng Hợp metrics: replicates TongHop.php logic client-side.
-    // opts: { dataMien, fromDate, toDate, heThong, fieldsLoc[], cachList[], ktn, ktd, l2c, tky, tnd }
-    // Returns array of metric objects, one per cachList item.
-    function buildTongHopMetrics(opts) {
-      var cfg = opts || {};
-      var heThong = Number(cfg.heThong || 2) === 3 ? 3 : 2;
-      var fieldsLoc = Array.isArray(cfg.fieldsLoc) ? cfg.fieldsLoc : ["D_", "P_", "T_", "B_"];
-      var cachList = Array.isArray(cfg.cachList) ? cfg.cachList : [];
-      var ktn = toSinhThreshold(cfg.ktn, 12);
-      var ktd = toSinhThreshold(cfg.ktd, 12);
-      var l2c = toSinhThreshold(cfg.l2c, 12);
-      var tky = toSinhThreshold(cfg.tky, 52);
-      var tnd = toSinhThreshold(cfg.tnd, 7);
-      var chiTietNgay = toSinhThreshold(16, 16);
-      var chiTietTuan = toSinhThreshold(17, 17);
-      var tongNgaySinh = toSinhThreshold(28, 28);
-      var tuan2DaiSinh = toSinhThreshold(7, 7);
-      var tuanD3Sinh = toSinhThreshold(7, 7);
-      var tuan21Sinh = toSinhThreshold(21, 21);
-
-      // buildLegacyTongHopViewModel returns DESC order (toDate first) already
-      var rows = buildLegacyTongHopViewModel({
-        dataMien: cfg.dataMien,
-        fromDate: cfg.fromDate,
-        toDate: cfg.toDate,
-        heThong: heThong,
-        stepDays: 1
-      });
-
-      var ALL_FIELDS = ["D_dau","D_duoi","P_dau","P_duoi","T_dau","T_duoi","B_dau","B_so2","B_so3","B_so4","B_duoi"];
-
-      function fieldMatchesLoc(fn) {
-        for (var fi = 0; fi < fieldsLoc.length; fi++) {
-          if (fn.indexOf(fieldsLoc[fi]) >= 0) return true;
-        }
-        return false;
-      }
-
-      function tailOf(value) {
-        var s = String(value || "").trim();
-        if (!s || s === "?" || !/\d/.test(s)) return "";
-        return s.slice(-heThong);
-      }
-
-      // Determine toDate weekday (same approach as PHP $Thu = weekday of $Den)
-      var toYmd = normalizeLegacyDateYmd(cfg.toDate);
-      var targetDow = -1;
-      if (toYmd && toYmd.length >= 8) {
-        targetDow = new Date(
-          parseInt(toYmd.substring(0,4),10),
-          parseInt(toYmd.substring(4,6),10)-1,
-          parseInt(toYmd.substring(6,8),10)
-        ).getDay();
-      }
-
-      function getDow(ymd) {
-        if (!ymd || ymd.length < 8) return -1;
-        return new Date(
-          parseInt(ymd.substring(0,4),10),
-          parseInt(ymd.substring(4,6),10)-1,
-          parseInt(ymd.substring(6,8),10)
-        ).getDay();
-      }
-
-      var results = [];
-
-      for (var k = 0; k < cachList.length; k++) {
-        var NoiDung = String(cachList[k] || "").toLowerCase().trim();
-        if (!NoiDung) continue;
-
-        var count = 0, countD = 0, countB = 0, countA = 0, countT = 0, count3D = 0;
-        var kqtArr = [], kqnArr = [], ktdArr = [], kqdArr = [];
-        var d2dArr = [], b2dArr = [], t2dArr = [], n3dArr = [];
-        var d2cArr = [], b2cArr = [], t2cArr = [], n3cArr = [], b3cArr = [], lkd2cArr = [], l3cArr = [];
-
-        var CT = 2, CTuan = 0, CTuanA = 0, CTuanD = 0, CTuanT = 0;
-        var CNgay = 1, CNgayB = 1, CNgayA = 1, CNgayA3 = 1, CNgayT = 1, CNgayA4 = 1, CNgayA5 = 1;
-        var CDai = 1;
-        var CTA = 2, CTD = 2, CTT = 2;
-
-        var LauNgay = 0, LauNgayNB = 0, NgayCXHT = -1, NgayCXHTNB = -1;
-        var NgayCXMB = 0, LauNgayMB = 0, NgayCXHTMB = -1;
-        var NgayCX3NB = 0, LauNgay3NB = 0, NgayCXHT3NB = -1;
-        var NgayCXT = 0, LauNgayT = 0, NgayCXHTT = -1;
-        var NgayCX3D = 0, LauNgay3D = 0, NgayCXHT3D = -1;
-        var NgayCXDC = 0, LauNgayDC = 0, NgayCXHTDC = -1;
-        var NgayCXDP = 0, LauNgayDP = 0, NgayCXHTDP = -1;
-        var NgayCX2D = 0, LauNgay2D = 0, NgayCXHT2D = -1;
-        var NgayCX = 0, NgayCXNB = 0, LauKy = 0, KyCXHT = -1, KyCX = 0;
-        var LanTuan1C = 0, LanTuan2C = 0, LanTuan4C = 0;
-        var LanDai = 0, LanTuan = 0, LanTuan21 = 0;
-        var LanTuanD2D = 0, LanNgayD2C = 0, LanTuanD3 = 0, LanNgayD3 = 0, LanKTD = 0;
-        var LanTongNgaySinh = 0;
-        var LanL2C = 0, LanL3C = 0, LanLB3C = 0;
-
-        for (var r = 0; r < rows.length; r++) {
-          var row = rows[r];
-          var rowYmd = normalizeLegacyDateYmd(row.ID);
-          var flgD = (targetDow >= 0 && getDow(rowYmd) === targetDow);
-
-          var CoNgay = 0, CoNgayB = 0, CoNgayA = 0;
-          var CoNgayDC = 0, CoNgayDP = 0, CoNgay2D = 0, CoNgayMB = 0;
-          var CoNgayT = 0, CoNgay3D = 0, CoNgayB3C = 0, CoNgayA3 = 0;
-          var CoDai = 0, CoD2D = 0;
-
-          // Main count: filtered by fieldsLoc (mirrors PHP first loop)
-          for (var cl = 0; cl < ALL_FIELDS.length; cl++) {
-            var fn = ALL_FIELDS[cl];
-            if (!fieldMatchesLoc(fn)) continue;
-            var tv = tailOf(row[fn]);
-            if (!tv || tv.length < heThong) continue;
-            if (NoiDung.indexOf(tv) >= 0) {
-              count++;
-              CoNgay++;
-              if (flgD) { CoDai++; countD++; }
-            }
-          }
-
-          // Sub-group counts: hardcoded prefixes (mirrors PHP second loop)
-          for (var c2 = 0; c2 < ALL_FIELDS.length; c2++) {
-            var fn2 = ALL_FIELDS[c2];
-            var tv2 = tailOf(row[fn2]);
-            if (!tv2 || tv2.length < heThong) continue;
-            if (NoiDung.indexOf(tv2) < 0) continue;
-            var isD2 = fn2.indexOf("D_") >= 0;
-            var isP2 = fn2.indexOf("P_") >= 0;
-            var isT2 = fn2.indexOf("T_") >= 0;
-            var isB2 = fn2.indexOf("B_") >= 0;
-            if (isD2 || isP2) { countA++; CoNgayA++; if (flgD) CoD2D++; }
-            if (isB2) { CoNgayB++; if (flgD) countB++; }
-            if (isD2 || isP2 || isB2) {
-              CoNgayA3++;
-              if (isD2) CoNgayDC++;
-              if (isP2) CoNgayDP++;
-              if (isD2 || isP2) CoNgay2D++;
-              if (isB2) CoNgayMB++;
-            }
-            if (isT2) { countT++; CoNgayT++; }
-            if (isD2 || isP2 || isT2) CoNgay3D++;
-            if (isD2 || isP2 || isT2 || isB2) CoNgayB3C++;
-          }
-
-          // Gap tracking (main filter)
-          if (CoNgay === 0) { NgayCX++; } else {
-            if (NgayCXHT === -1) NgayCXHT = NgayCX; else if (NgayCX > LauNgay) LauNgay = NgayCX;
-            NgayCX = 0;
-          }
-          if (flgD) {
-            if (CoDai === 0) { KyCX++; } else {
-              if (KyCXHT === -1) KyCXHT = KyCX; else if (KyCX > LauKy) LauKy = KyCX;
-              KyCX = 0;
-            }
-          }
-          // NB (D+P+B) gap
-          if (CoNgayA3 === 0) { NgayCXNB++; } else {
-            if (NgayCXHTNB === -1) NgayCXHTNB = NgayCXNB; else if (NgayCXNB > LauNgayNB) LauNgayNB = NgayCXNB;
-            NgayCXNB = 0;
-          }
-          if (CoNgayDC === 0) { NgayCXDC++; } else {
-            if (NgayCXHTDC === -1) NgayCXHTDC = NgayCXDC; else if (NgayCXDC > LauNgayDC) LauNgayDC = NgayCXDC;
-            NgayCXDC = 0;
-          }
-          if (CoNgayDP === 0) { NgayCXDP++; } else {
-            if (NgayCXHTDP === -1) NgayCXHTDP = NgayCXDP; else if (NgayCXDP > LauNgayDP) LauNgayDP = NgayCXDP;
-            NgayCXDP = 0;
-          }
-          if (CoNgayMB === 0) { NgayCXMB++; } else {
-            if (NgayCXHTMB === -1) NgayCXHTMB = NgayCXMB; else if (NgayCXMB > LauNgayMB) LauNgayMB = NgayCXMB;
-            NgayCXMB = 0;
-          }
-          if (CoNgayB3C === 0) { NgayCX3NB++; } else {
-            if (NgayCXHT3NB === -1) NgayCXHT3NB = NgayCX3NB; else if (NgayCX3NB > LauNgay3NB) LauNgay3NB = NgayCX3NB;
-            NgayCX3NB = 0;
-          }
-          if (CoNgayT === 0) { NgayCXT++; } else {
-            if (NgayCXHTT === -1) NgayCXHTT = NgayCXT; else if (NgayCXT > LauNgayT) LauNgayT = NgayCXT;
-            NgayCXT = 0;
-          }
-          if (CoNgay3D === 0) { NgayCX3D++; } else {
-            if (NgayCXHT3D === -1) NgayCXHT3D = NgayCX3D; else if (NgayCX3D > LauNgay3D) LauNgay3D = NgayCX3D;
-            NgayCX3D = 0;
-          }
-          if (CoNgay2D === 0) { NgayCX2D++; } else {
-            if (NgayCXHT2D === -1) NgayCXHT2D = NgayCX2D; else if (NgayCX2D > LauNgay2D) LauNgay2D = NgayCX2D;
-            NgayCX2D = 0;
-          }
-
-          // KQD weekly (same weekday only)
-          if (flgD) {
-            if (CDai < chiTietNgay) kqdArr.unshift(String(CoDai));
-            if (CDai < tky) LanDai += CoDai;
-            CDai++;
-          }
-
-          // CT weekly (6-day weeks; CT=2 start matches PHP $CT=2)
-          if (CT === 7) {
-            CT = 1;
-            if (CTuan === 0) LanTuan1C = count;
-            else if (CTuan === 1) LanTuan2C = LanTuan1C + count;
-            else if (CTuan === 2) LanTuan4C = LanTuan2C + count;
-            else if (CTuan === 3) LanTuan4C += count;
-            if (CTuan < chiTietTuan) kqtArr.unshift(String(count));
-            if (CTuan < ktn) LanTuan += count;
-            if (CTuan < tuan21Sinh) LanTuan21 += count;
-            count = 0;
-            CTuan++;
-          } else { CT++; }
-
-          if (CNgay < chiTietNgay) kqnArr.unshift(String(CoNgay));
-          if (CNgayA3 < chiTietNgay) lkd2cArr.unshift(String(CoNgayA3));
-          if (CNgayT < chiTietNgay) t2cArr.unshift(String(CoNgayT));
-          if (CNgayA4 < chiTietNgay) n3cArr.unshift(String(CoNgay3D));
-          if (CNgayA5 < chiTietNgay) b3cArr.unshift(String(CoNgayB3C));
-          if (CNgayA4 < chiTietNgay) l3cArr.unshift(String(CoNgay3D));
-          if (CNgayA3 < l2c) LanL2C += CoNgayA3;
-          if (CNgayA4 < l2c) LanL3C += CoNgay3D;
-          if (CNgayA5 < l2c) LanLB3C += CoNgayB3C;
-          if (CNgay <= tongNgaySinh) LanTongNgaySinh += CoNgay;
-          CNgay++;
-
-          if (CTA === 7) {
-            CTA = 1;
-            if (CTuanA < chiTietTuan) d2dArr.unshift(String(countA));
-            if (CTuanA < tuan2DaiSinh) LanTuanD2D += countA;
-            countA = 0;
-            CTuanA++;
-          } else { CTA++; }
-
-          count3D += CoNgay3D;
-          if (CTT === 7) {
-            CTT = 1;
-            if (CTuanT < chiTietTuan) t2dArr.unshift(String(countT));
-            if (CTuanT < chiTietTuan) n3dArr.unshift(String(count3D));
-            if (CTuanT < tuanD3Sinh) LanTuanD3 += countT;
-            countT = 0;
-            count3D = 0;
-            CTuanT++;
-          } else { CTT++; }
-
-          if (flgD) {
-            if (CTD === 7) {
-              CTD = 1;
-              if (CTuanD < chiTietTuan) ktdArr.unshift(String(countD));
-              if (CTuanD < ktd) LanKTD += countD;
-              if (CTuanD < chiTietTuan) b2dArr.unshift(String(countB));
-              countD = 0;
-              countB = 0;
-              CTuanD++;
-            } else { CTD++; }
-          }
-
-          if (CNgayA < chiTietNgay) d2cArr.unshift(String(CoNgayA));
-          if (CNgayA < tnd) LanNgayD2C += CoNgayA;
-          if (CNgayT < tnd) LanNgayD3 += CoNgayT;
-          if (CNgayB < chiTietNgay) b2cArr.unshift(String(CoNgayB));
-          CNgayB++;
-          CNgayA++;
-          CNgayA3++;
-          CNgayT++;
-          CNgayA4++;
-          CNgayA5++;
-        }
-
-        // Fix: if never found any occurrence, use current running gap
-        if (NgayCXHT === -1) NgayCXHT = NgayCX;
-        if (NgayCXHTNB === -1) NgayCXHTNB = NgayCXNB;
-        if (NgayCXHTDC === -1) NgayCXHTDC = NgayCXDC;
-        if (NgayCXHTDP === -1) NgayCXHTDP = NgayCXDP;
-        if (NgayCXHTMB === -1) NgayCXHTMB = NgayCXMB;
-        if (NgayCXHT3NB === -1) NgayCXHT3NB = NgayCX3NB;
-        if (NgayCXHTT === -1) NgayCXHTT = NgayCXT;
-        if (NgayCXHT3D === -1) NgayCXHT3D = NgayCX3D;
-        if (NgayCXHT2D === -1) NgayCXHT2D = NgayCX2D;
-        if (KyCXHT === -1) KyCXHT = KyCX;
-
-        results.push({
-          key: String(k),
-          boSo: cachList[k],
-          noiDung: NoiDung,
-          ketQua: "KTN: " + kqtArr.join(" "),
-          ngayCXHT: NgayCXHT, kyCXHT: KyCXHT, lauNgay: LauNgay,
-          lanL2C: LanL2C, lanL3C: LanL3C, lanLB3C: LanLB3C, lanTuan4C: LanTuan4C,
-          lanTongNgaySinh: LanTongNgaySinh,
-          lauKy: LauKy,
-          lauNgayDC: LauNgayDC, ngayCXHTDC: NgayCXHTDC,
-          lauNgayDP: LauNgayDP, ngayCXHTDP: NgayCXHTDP,
-          lauNgayT: LauNgayT, ngayCXHTT: NgayCXHTT,
-          lauNgay2D: LauNgay2D, ngayCXHT2D: NgayCXHT2D,
-          lauNgay3D: LauNgay3D, ngayCXHT3D: NgayCXHT3D,
-          lauNgayNB: LauNgayNB, ngayCXHTNB: NgayCXHTNB,
-          lauNgay3NB: LauNgay3NB, ngayCXHT3NB: NgayCXHT3NB,
-          lauNgayMB: LauNgayMB, ngayCXHTMB: NgayCXHTMB,
-          lanTuan1C: LanTuan1C, lanTuan2C: LanTuan2C,
-          lanDai: LanDai, lanTuan: LanTuan, lanTuan21: LanTuan21,
-          lanTuanD2D: LanTuanD2D, lanNgayD2C: LanNgayD2C,
-          lanTuanD3: LanTuanD3, lanNgayD3: LanNgayD3,
-          lanKTD: LanKTD,
-          serKQT: kqtArr.join(" "), serKQN: kqnArr.join(" "),
-          serKTD: ktdArr.join(" "), serKQD: kqdArr.join(" "),
-          serD2D: d2dArr.join(" "), serB2D: b2dArr.join(" "),
-          serT2D: t2dArr.join(" "), serN3D: n3dArr.join(" "),
-          serD2C: d2cArr.join(" "), serB2C: b2cArr.join(" "),
-          serT2C: t2cArr.join(" "), serN3C: n3cArr.join(" "),
-          serB3C: b3cArr.join(" "), serLKD2C: lkd2cArr.join(" "),
-          serL3C: l3cArr.join(" ")
-        });
-      }
-
-      return results;
     }
 
     function calcThongKeMetrics(kyCounts) {
@@ -3633,9 +2023,6 @@
             var ngay = String(n.field_ngay || "").trim();
             n.field_ngay = ngay;
             if (!n.thu && ngay) n.thu = days[chuyenNgay(ngay, "yyyymmdd").getDay()];
-            n._source_table = String(obj.du_lieu_dai || "");
-            n._mien = String(mien || "");
-            n._stt = String(obj.stt || "");
             return n;
           });
         }
@@ -3703,7 +2090,12 @@
             data: kq
           });
 
-          getRowTwoDigits(kq, { heThong: 2, mien: mien, sourceTable: dai.dai }).forEach(function (so) {
+          Object.keys(kq).forEach(function (f) {
+            if (!/^field_(duoi|dau|so\d+)$/.test(f)) return;
+            var val = String(kq[f] || "").trim();
+            if (!val) return;
+            var so = val.slice(-2);
+            if (!/^\d{2}$/.test(so)) return;
             var chuc = Number(so[0]);
             var donvi = so[1];
             var key = "dai_" + String(dai.stt);
@@ -3879,7 +2271,7 @@
 
     async function chay_thong_ke() {
       if (ds_dai_chon.length === 0) return canhbao("Vui lòng Chọn Đài trước");
-      if (TruNgayRaSoNgay(den_ngay, tu_ngay, "dd/mm/yyyy") < 29) return canhbao("Vui lòng lại thời gian dài hơn 29 ngày");
+      if (TruNgayRaSoNgay(den_ngay, tu_ngay, "dd/mm/yyyy") < 28) return canhbao("Vui lòng lại thời gian dài hơn 28 ngày");
       if (ds_dai_chon.length < loai_tk) return canhbao("Vui lòng chọn thêm đài cần xem cho Chọn Đài");
 
       setActiveAction("tk");
@@ -3916,7 +2308,7 @@
 
     async function thong_ke_moi() {
       if (ds_dai_chon.length === 0) return canhbao("Vui lòng Chọn Đài trước");
-      if (TruNgayRaSoNgay(den_ngay, tu_ngay, "dd/mm/yyyy") < 29) return canhbao("Vui lòng lại thời gian dài hơn 29 ngày");
+      if (TruNgayRaSoNgay(den_ngay, tu_ngay, "dd/mm/yyyy") < 28) return canhbao("Vui lòng lại thời gian dài hơn 28 ngày");
       if (ds_dai_chon.length < loai_tk) return canhbao("Vui lòng chọn thêm đài cần xem cho Chọn Đài");
 
       setActiveAction("tkm");
@@ -4233,331 +2625,6 @@
       }
     }
 
-    function getLegacyLocList() {
-      var out = [];
-      Object.keys(legacyLocMap || {}).forEach(function (k) {
-        if (legacyLocMap[k]) out.push(k);
-      });
-      if ((legacyLocMap || {}).B_dau) {
-        out.push("B_so2", "B_so3", "B_so4");
-      }
-      var unique = {};
-      var clean = [];
-      out.forEach(function (k) {
-        if (!unique[k]) {
-          unique[k] = true;
-          clean.push(k);
-        }
-      });
-      return clean;
-    }
-
-    function getLegacyTongHopFieldPrefixes() {
-      var prefixMap = { D_dau: "D_", D_duoi: "D_", P_dau: "P_", P_duoi: "P_", T_dau: "T_", T_duoi: "T_", B_dau: "B_", B_duoi: "B_" };
-      var seen = {};
-      var out = [];
-      Object.keys(legacyLocMap || {}).forEach(function (k) {
-        if (!legacyLocMap[k]) return;
-        var prefix = prefixMap[k];
-        if (prefix && !seen[prefix]) {
-          seen[prefix] = true;
-          out.push(prefix);
-        }
-      });
-      return out.length ? out : ["D_", "P_", "T_", "B_"];
-    }
-
-    async function runLegacyKiemTraTongHop() {
-      if (!dsDaiLegacyCanTai.length) {
-        canhbao("Vui lòng chọn miền và đài trước");
-        return;
-      }
-      setLoading(true);
-      setProgress(15);
-      try {
-        var loaded = await lay_ds_dai(dsDaiLegacyCanTai);
-        var dataMien = (loaded && loaded[mien] && loaded[mien].data) || [];
-        var locList = getLegacyLocList();
-        var rows = buildLegacyTongHopViewModel({
-          dataMien: dataMien,
-          fromDate: tu_ngay,
-          toDate: den_ngay,
-          heThong: legacyHeThong,
-          locList: locList,
-          stepDays: 1
-        });
-        var matchNums = parseSoChuMasked(so_chu_input);
-        var matchSet = {};
-        matchNums.forEach(function (n) { matchSet[n] = true; });
-        setLegacyKttMatchSet(matchSet);
-        setLegacyKttRows(rows);
-        setActiveAction("legacy_ktt");
-        setSubTab("legacy_ktt");
-        setProgress(100);
-      } catch (e) {
-        console.error(e);
-        canhbao("Không thể chạy KiemTraTongHop");
-      } finally {
-        setLoading(false);
-        setTimeout(function () { setProgress(0); }, 600);
-      }
-    }
-
-    async function runLegacySoLauRa() {
-      if (!dsDaiLegacyCanTai.length) {
-        canhbao("Vui lòng chọn miền và đài trước");
-        return;
-      }
-      setLoading(true);
-      setProgress(15);
-      try {
-        var loaded = await lay_ds_dai(dsDaiLegacyCanTai);
-        var dataMien = (loaded && loaded[mien] && loaded[mien].data) || [];
-        var rows = buildLegacySoLauRaViewModel({
-          dataMien: dataMien,
-          fromDate: tu_ngay,
-          toDate: den_ngay,
-          heThong: legacyHeThong,
-          mode: legacyCdMode,
-          rankFrom: legacyRankFrom,
-          rankTo: legacyRankTo,
-          ngayChay: legacyNgayChay,
-          chkHieu: legacyChkHieu,
-          theoThu: legacyTheoThu,
-          stepDays: legacyTheoThu ? 7 : 1
-        });
-        setLegacySlrRows(rows);
-        setActiveAction("legacy_slr");
-        setSubTab("legacy_slr");
-        setProgress(100);
-      } catch (e) {
-        console.error(e);
-        canhbao("Không thể chạy SoLauRaNamBac");
-      } finally {
-        setLoading(false);
-        setTimeout(function () { setProgress(0); }, 600);
-      }
-    }
-
-    async function runLegacyNamBac() {
-      if (!dsDaiLegacyCanTai.length) {
-        canhbao("Vui lòng chọn miền và đài trước");
-        return;
-      }
-      setLoading(true);
-      setProgress(15);
-      try {
-        var loaded = await lay_ds_dai(dsDaiLegacyCanTai);
-        var dataMien = (loaded && loaded[mien] && loaded[mien].data) || [];
-        var rows = buildLegacyNamBacSummary({
-          dataMien: dataMien,
-          fromDate: tu_ngay,
-          toDate: den_ngay,
-          heThong: legacyHeThong,
-          boSoList: parseSoChuMasked(so_chu_input),
-          stepDays: 1
-        });
-        setLegacyNbRows(rows);
-        setActiveAction("legacy_nb");
-        setSubTab("legacy_nb");
-        setProgress(100);
-      } catch (e) {
-        console.error(e);
-        canhbao("Không thể chạy NamBac summary");
-      } finally {
-        setLoading(false);
-        setTimeout(function () { setProgress(0); }, 600);
-      }
-    }
-
-    async function runLegacyTongHop() {
-      if (!dsDaiLegacyCanTai.length) {
-        canhbao("Vui lòng chọn miền và đài trước");
-        return;
-      }
-      var cachList = parseSoChuMasked(so_chu_input);
-      if (!cachList.length) {
-        canhbao("Vui lòng nhập bộ số cần phân tích (Số Chủ)");
-        return;
-      }
-      setLoading(true);
-      setProgress(15);
-      try {
-        var loaded = await lay_ds_dai(dsDaiLegacyCanTai);
-        var dataMien = (loaded && loaded[mien] && loaded[mien].data) || [];
-        var rows = buildTongHopMetrics({
-          dataMien: dataMien,
-          fromDate: tu_ngay,
-          toDate: den_ngay,
-          heThong: legacyHeThong,
-          fieldsLoc: getLegacyTongHopFieldPrefixes(),
-          cachList: cachList,
-          ktn: legacyThKtn,
-          ktd: legacyThKtd,
-          l2c: legacyThL2c,
-          tky: legacyThTky,
-          tnd: legacyThTnd
-        });
-        setLegacyThRows(rows);
-        setLegacyThAutoRows([]);
-        setLegacyThIntersect("");
-        setActiveAction("legacy_th");
-        setSubTab("legacy_th");
-        setProgress(100);
-      } catch (e) {
-        console.error(e);
-        canhbao("Không thể chạy Tổng Hợp");
-      } finally {
-        setLoading(false);
-        setTimeout(function () { setProgress(0); }, 600);
-      }
-    }
-
-    function runLegacyTongHopAutoFilter() {
-      if (!legacyThRows.length) {
-        canhbao("Vui lòng chạy Tổng Hợp trước");
-        return;
-      }
-      var filterCfg = getLegacyThFilterConfig();
-      if (!hasLegacyThAutoFilter(filterCfg)) {
-        canhbao("Vui lòng nhập ít nhất 1 điều kiện lọc (C1–C6)");
-        return;
-      }
-      var filtered = filterLegacyThRowsWithConfig(legacyThRows, filterCfg);
-      setLegacyThAutoRows(filtered);
-      setLegacyThIntersect(buildLegacyThIntersectText(filtered));
-      setLegacyThAutoSummary("");
-    }
-
-    async function runLegacyTongHopFullAuto() {
-      if (!legacyThSelectedQueryTypes.length) {
-        canhbao("Vui lòng chọn ít nhất 1 Loại Tìm");
-        return;
-      }
-      var chosenGroupsNormal = legacyThGroupOptions.filter(function (g) { return legacyThSelectedGroups.indexOf(g.id) >= 0; });
-      var chosenGroupsTriet = legacyThGroupTrietOptions.filter(function (g) { return legacyThSelectedGroupsTriet.indexOf(g.id) >= 0; });
-      var chosenGroups = chosenGroupsNormal.concat(chosenGroupsTriet);
-      if (!chosenGroups.length) {
-        canhbao("Vui lòng chọn ít nhất 1 Nhóm số hoặc Nhóm Triệt");
-        return;
-      }
-      var filterCfg = getLegacyThFilterConfig();
-      if (!hasLegacyThAutoFilter(filterCfg)) {
-        canhbao("Vui lòng nhập ít nhất 1 điều kiện lọc (C1–C6)");
-        return;
-      }
-      if (!dsDaiLegacyCanTai.length) {
-        canhbao("Vui lòng chọn miền và đài trước");
-        return;
-      }
-
-      setLoading(true);
-      setLegacyThAutoRunning(true);
-      legacyThAutoStopRef.current = false;
-      setProgress(10);
-      try {
-        var loaded = await lay_ds_dai(dsDaiLegacyCanTai);
-        var dataMien = (loaded && loaded[mien] && loaded[mien].data) || [];
-        var allRows = [];
-        var rowSignatures = {};
-        var totalTasks = legacyThSelectedQueryTypes.length * Math.max(1, chosenGroups.length);
-        var taskStep = 0;
-        setLegacyThAutoTaskDone(0);
-        setLegacyThAutoTaskTotal(totalTasks);
-        setLegacyThAutoStatus("Khởi tạo " + totalTasks + " task...");
-        setLegacyThAutoRows([]);
-        setLegacyThAutoSummary("");
-        setLegacyThIntersect("");
-
-        for (var qi = 0; qi < legacyThSelectedQueryTypes.length; qi += 1) {
-          var queryValue = legacyThSelectedQueryTypes[qi];
-          var queryType = legacyThQueryTypeOptions.find(function (item) { return item.value === queryValue; }) || { value: queryValue, text: queryValue };
-          var queryFieldPrefixes = String(queryValue || "").split("-").map(function (s) { return String(s || "").trim(); }).filter(Boolean);
-          if (!queryFieldPrefixes.length) queryFieldPrefixes = ["D_", "P_", "T_", "B_"];
-
-          for (var gi = 0; gi < chosenGroups.length; gi += 1) {
-            if (legacyThAutoStopRef.current) break;
-            taskStep += 1;
-            setLegacyThAutoTaskDone(taskStep);
-            setProgress(Math.min(95, 10 + Math.round((taskStep / totalTasks) * 80)));
-            var group = chosenGroups[gi];
-            setLegacyThAutoStatus("Đang chạy " + taskStep + "/" + totalTasks + ": " + queryType.text + " | " + group.text);
-            var cachIdentifiers = String(group.cachIds || "").split(",").map(function (x) { return String(x || "").trim(); }).filter(Boolean);
-            var metrics = buildTongHopMetrics({
-              dataMien: dataMien,
-              fromDate: tu_ngay,
-              toDate: den_ngay,
-              heThong: legacyHeThong,
-              fieldsLoc: queryFieldPrefixes,
-              cachList: cachIdentifiers,
-              ktn: legacyThKtn,
-              ktd: legacyThKtd,
-              l2c: legacyThL2c,
-              tky: legacyThTky,
-              tnd: legacyThTnd
-            });
-            var filteredRows = filterLegacyThRowsWithConfig(metrics, filterCfg);
-            filteredRows.forEach(function (row, rowIdx) {
-              var nextRow = Object.assign({}, row, {
-                key: "th_auto_" + qi + "_" + gi + "_" + rowIdx + "_" + String(row.key || row.boSo || row.noiDung || "row"),
-                autoQueryTypeValue: queryType.value,
-                autoQueryTypeText: queryType.text,
-                autoGroupId: group.id,
-                autoGroupText: group.text,
-                noiDung: "[" + queryType.text + " | " + group.text + "] " + (row.boSo || row.noiDung || "")
-              });
-              var signature = [nextRow.autoQueryTypeValue, nextRow.autoGroupId, nextRow.boSo, nextRow.noiDung, nextRow.ngayCXHT, nextRow.kyCXHT].join("||");
-              if (rowSignatures[signature]) return;
-              rowSignatures[signature] = true;
-              allRows.push(nextRow);
-            });
-
-            if (taskStep % 4 === 0) {
-              setLegacyThAutoRows(sortLegacyThAutoRowsForDisplay(allRows));
-              await sleepMs(0);
-            }
-          }
-
-          if (legacyThAutoStopRef.current) break;
-        }
-
-        var finalRows = sortLegacyThAutoRowsForDisplay(allRows);
-        setLegacyThAutoRows(finalRows);
-        setLegacyThIntersect(buildLegacyThIntersectText(finalRows));
-        setLegacyThAutoSummary(buildLegacyThAutoSummaryText(finalRows, filterCfg));
-        setLegacyThAutoStatus(legacyThAutoStopRef.current
-          ? (tt.lgThAutoStopped + " " + Math.min(taskStep, totalTasks) + "/" + totalTasks)
-          : ("Hoàn tất " + totalTasks + "/" + totalTasks));
-        setActiveAction("legacy_th");
-        setSubTab("legacy_th");
-        setProgress(100);
-      } catch (e) {
-        console.error(e);
-        canhbao("Không thể chạy Auto Tổng Hợp");
-        setLegacyThAutoStatus("Lỗi chạy Auto Tổng Hợp");
-      } finally {
-        legacyThAutoStopRef.current = false;
-        setLegacyThAutoRunning(false);
-        setLoading(false);
-        setTimeout(function () { setProgress(0); }, 600);
-      }
-    }
-
-    async function runLegacySelected() {
-      if (legacyTool === "ktt") return runLegacyKiemTraTongHop();
-      if (legacyTool === "slr") return runLegacySoLauRa();
-      if (legacyTool === "th") {
-        var cachListCheck = parseSoChuMasked(so_chu_input);
-        if (!cachListCheck.length) {
-          setActiveAction("legacy_th");
-          setSubTab("legacy_th");
-          return;
-        }
-        return runLegacyTongHop();
-      }
-      return runLegacyNamBac();
-    }
-
     function buildKyColumns(totalKyInput, sapXepInput) {
       var cols = [];
       var totalKy = Math.max(1, Number(totalKyInput || 1));
@@ -4621,196 +2688,17 @@
         };
       }));
 
-    var kttHasMatch = Object.keys(legacyKttMatchSet).length > 0;
-    function kttCellRender(val) {
-      var v = String(val || "");
-      var last2 = v.slice(-2);
-      var hit = kttHasMatch && /^\d{2}$/.test(last2) && legacyKttMatchSet[last2];
-      if (v === "?") return h("span", { style: { color: theme.muted, fontWeight: "bold" } }, "?");
-      if (hit) return h("span", { style: { color: "#f00", fontWeight: "bold", fontSize: "1.1em" } }, last2);
-      return h("span", null, last2 || v);
+    function getComboLabel(combo) {
+      var dsData = (du_lieu_dai_mien[mien] && du_lieu_dai_mien[mien].data) || [];
+      var lookup = {};
+      dsData.forEach(function (d) {
+        lookup[String(d.stt)] = d.ten_dai || String(d.stt);
+      });
+      return String(combo || "").split(",").map(function (stt) {
+        var key = String(stt || "").trim();
+        return lookup[key] || key;
+      }).join(" & ");
     }
-    // Lấy thứ trong tuần (0=CN,1=T2,...,6=T7) từ ymd=yyyymmdd
-    function kttWeekdayFromYmd(ymd) {
-      if (!ymd || ymd.length < 8) return 0;
-      var y = parseInt(ymd.substring(0, 4), 10);
-      var m = parseInt(ymd.substring(4, 6), 10) - 1;
-      var d = parseInt(ymd.substring(6, 8), 10);
-      return new Date(y, m, d).getDay();
-    }
-    var KTT_COLS = [
-      { name: "CN", dow: 0 },
-      { name: "T7", dow: 6 },
-      { name: "T6", dow: 5 },
-      { name: "T5", dow: 4 },
-      { name: "T4", dow: 3 },
-      { name: "T3", dow: 2 },
-      { name: "T2", dow: 1 }
-    ];
-    // Màu ô theo theme: pastel sáng cho light mode, tinted mờ cho dark mode
-    var KTT_COLORS = theme.isDark
-      ? { D: "rgba(33,150,243,0.18)", P: "rgba(255,193,7,0.18)", T: "rgba(0,188,212,0.18)", B: "rgba(255,152,0,0.18)" }
-      : { D: "#E3F2FD", P: "#FFFACD", T: "#E0F7FA", B: "#FFE0B2" };
-    var kttMatchBg  = theme.isDark ? "rgba(255,80,80,0.28)" : "#ffcccc";
-    var kttMatchClr = theme.isDark ? "#ff8080" : "#cc0000";
-    var kttNormalClr = theme.text;
-    var kttRowBorder = "1px solid " + (theme.isDark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.07)");
-    function kttCellNode(val, bgColor) {
-      var v = String(val || "");
-      var last2 = v === "?" ? "?" : v.slice(-2);
-      var hit = kttHasMatch && /^\d{2}$/.test(last2) && legacyKttMatchSet[last2];
-      var bg = hit ? kttMatchBg : bgColor;
-      var color = v === "?" ? theme.muted : (hit ? kttMatchClr : kttNormalClr);
-      var fw = hit ? "bold" : "normal";
-      return h("div", {
-        style: {
-          flex: 1, textAlign: "center", fontSize: 11, lineHeight: "18px",
-          background: bg, color: color, fontWeight: fw,
-          borderRight: kttRowBorder, overflow: "hidden", whiteSpace: "nowrap"
-        }
-      }, last2 || "");
-    }
-    var kttCardBorder = "1px solid " + theme.border;
-    var kttDateHeaderBg = theme.isDark ? "rgba(255,255,255,0.08)" : "#f0f0f0";
-    function kttCardNode(row) {
-      var he2 = legacyHeThong !== 3;
-      return h("div", {
-        key: row.ID,
-        style: {
-          width: 140, marginBottom: 4, border: kttCardBorder,
-          borderRadius: 3, overflow: "hidden", background: theme.cardBg
-        }
-      }, [
-        // Hàng 1: ngày
-        h("div", { style: { textAlign: "center", fontSize: 11, color: theme.text, background: kttDateHeaderBg, borderBottom: kttCardBorder, padding: "1px 0" } }, row.Ngay || ""),
-        // Hàng 2: D_dau | D_duoi | P_dau | P_duoi
-        h("div", { style: { display: "flex", borderBottom: kttRowBorder } }, [
-          kttCellNode(row.D_dau, KTT_COLORS.D),
-          kttCellNode(row.D_duoi, KTT_COLORS.D),
-          kttCellNode(row.P_dau, KTT_COLORS.P),
-          kttCellNode(row.P_duoi, KTT_COLORS.P)
-        ]),
-        // Hàng 3: T_dau | T_duoi | B_duoi (B_duoi chiếm 50%)
-        h("div", { style: { display: "flex", borderBottom: kttRowBorder } }, [
-          kttCellNode(row.T_dau, KTT_COLORS.T),
-          kttCellNode(row.T_duoi, KTT_COLORS.T),
-          h("div", { style: { flex: 2, display: "flex" } }, [
-            kttCellNode(row.B_duoi, KTT_COLORS.B)
-          ])
-        ]),
-        // Hàng 4: B_dau | B_so2 | B_so3 | B_so4 (ẩn B_so4 với Hệ 3)
-        h("div", { style: { display: "flex" } }, [
-          kttCellNode(row.B_dau, KTT_COLORS.B),
-          kttCellNode(row.B_so2, KTT_COLORS.B),
-          kttCellNode(row.B_so3, KTT_COLORS.B),
-          he2 ? kttCellNode(row.B_so4, KTT_COLORS.B) : null
-        ])
-      ]);
-    }
-
-    var legacySlrColumns = [
-      { title: tt.lgSlrColSo, dataIndex: "so", key: "so", width: 80 },
-      { title: tt.lgSlrColGap, dataIndex: "gap", key: "gap", width: 160 },
-      { title: tt.lgSlrColFirst, dataIndex: "first_hit_idx", key: "first_hit_idx", width: 160 }
-    ];
-
-    var legacyNbColumns = [
-      { title: "Bộ số", dataIndex: "so", key: "so", width: 80 },
-      { title: "Đầu chính phụ", dataIndex: "DAU_CP", key: "DAU_CP", width: 100 },
-      { title: "Đầu chính", dataIndex: "DAU_C", key: "DAU_C", width: 90 },
-      { title: "Đầu phụ", dataIndex: "DAU_P", key: "DAU_P", width: 90 },
-      { title: "Đầu Nam 3", dataIndex: "DAU_T", key: "DAU_T", width: 90 },
-      { title: "Đầu Bắc", dataIndex: "DAU_B", key: "DAU_B", width: 90 },
-      { title: "Đuôi chính phụ", dataIndex: "DUOI_CP", key: "DUOI_CP", width: 110 },
-      { title: "Đuôi chính", dataIndex: "DUOI_C", key: "DUOI_C", width: 90 },
-      { title: "Đuôi phụ", dataIndex: "DUOI_P", key: "DUOI_P", width: 90 },
-      { title: "Đuôi Nam 3", dataIndex: "DUOI_T", key: "DUOI_T", width: 90 },
-      { title: "Đuôi Bắc", dataIndex: "DUOI_B", key: "DUOI_B", width: 90 },
-      { title: "Đầu C - Đuôi P", dataIndex: "DAU_C_DUOI_P", key: "DAU_C_DUOI_P", width: 120 },
-      { title: "Đầu P - Đuôi C", dataIndex: "DAU_P_DUOI_C", key: "DAU_P_DUOI_C", width: 120 },
-      { title: "Đầu đuôi 4 nhóm", dataIndex: "DD_4_NHOM", key: "DD_4_NHOM", width: 120 },
-      { title: "Đầu đuôi 3 Nam + đầu B", dataIndex: "DD_3_NAM_B_DAU", key: "DD_3_NAM_B_DAU", width: 150 },
-      { title: "Đầu đuôi 3 Nam", dataIndex: "DD_3_NAM", key: "DD_3_NAM", width: 120 },
-      { title: "Đầu đuôi 3 NB", dataIndex: "DD_3_NB", key: "DD_3_NB", width: 120 },
-      { title: "Đầu đuôi 2 Nam + đầu B", dataIndex: "DD_2_NAM_B_DAU", key: "DD_2_NAM_B_DAU", width: 150 },
-      { title: "Đầu đuôi 2 Nam", dataIndex: "DD_2_NAM", key: "DD_2_NAM", width: 120 },
-      { title: "Đầu đuôi chính", dataIndex: "DD_C", key: "DD_C", width: 110 },
-      { title: "Đầu đuôi phụ", dataIndex: "DD_P", key: "DD_P", width: 110 },
-      { title: "Đầu đuôi Nam 3", dataIndex: "DD_T", key: "DD_T", width: 110 },
-      { title: "Đầu đuôi Bắc", dataIndex: "DD_B", key: "DD_B", width: 110 },
-      { title: "Bao lô 4 nhóm", dataIndex: "BL_4_NHOM", key: "BL_4_NHOM", width: 120 },
-      { title: "Bao lô 3 Nam", dataIndex: "BL_3_NAM", key: "BL_3_NAM", width: 120 },
-      { title: "Bao lô 3 NB", dataIndex: "BL_3_NB", key: "BL_3_NB", width: 120 },
-      { title: "Bao lô 2 Nam", dataIndex: "BL_2_NAM", key: "BL_2_NAM", width: 120 },
-      { title: "Bao lô chính", dataIndex: "BL_C", key: "BL_C", width: 100 },
-      { title: "Bao lô phụ", dataIndex: "BL_P", key: "BL_P", width: 100 },
-      { title: "Bao lô Nam 3", dataIndex: "BL_T", key: "BL_T", width: 110 },
-      { title: "Bao lô Bắc", dataIndex: "BL_B", key: "BL_B", width: 100 }
-    ];
-
-    var sinhThKtn = toSinhThreshold(legacyThKtn, 12);
-    var sinhThKtd = toSinhThreshold(legacyThKtd, 12);
-    var sinhThL2c = toSinhThreshold(legacyThL2c, 12);
-    var sinhThTky = toSinhThreshold(legacyThTky, 52);
-    var sinhThTnd = toSinhThreshold(legacyThTnd, 7);
-    var sinhTongNgay = toSinhThreshold(28, 28);
-    var sinhTuan2Dai = toSinhThreshold(7, 7);
-    var sinhTuanD3 = toSinhThreshold(7, 7);
-
-    var legacyThColumns = [
-      { title: tt.lgThBoSo, dataIndex: "boSo", key: "boSo", width: 80, fixed: "left",
-        render: function (v) { return h("b", null, v); } },
-      { title: tt.lgThNgayCX, dataIndex: "ngayCXHT", key: "ngayCXHT", width: 72, sorter: function (a, b) { return a.ngayCXHT - b.ngayCXHT; }, defaultSortOrder: "descend",
-        render: function (v, rec) {
-          var over = rec.lauNgay > 0 && v >= rec.lauNgay;
-          return h("span", { style: { color: over ? "#d4380d" : "inherit", fontWeight: over ? "bold" : "normal" } }, v);
-        }
-      },
-      { title: tt.lgThKyCX, dataIndex: "kyCXHT", key: "kyCXHT", width: 68, sorter: function (a, b) { return a.kyCXHT - b.kyCXHT; },
-        render: function (v, rec) {
-          var over = rec.lauKy > 0 && v >= rec.lauKy;
-          return h("span", { style: { color: over ? "#d46b08" : "inherit", fontWeight: over ? "bold" : "normal" } }, v);
-        }
-      },
-      { title: tt.lgThLauNgay, dataIndex: "lauNgay", key: "lauNgay", width: 82, sorter: function (a, b) { return a.lauNgay - b.lauNgay; } },
-      { title: tt.lgThLauKy, dataIndex: "lauKy", key: "lauKy", width: 70, sorter: function (a, b) { return a.lauKy - b.lauKy; } },
-      { title: tt.lgThNgayCxNb, dataIndex: "ngayCXHTNB", key: "ngayCXHTNB", width: 88 },
-      { title: tt.lgThNgayCx3nb, dataIndex: "ngayCXHT3NB", key: "ngayCXHT3NB", width: 93 },
-      { title: tt.lgThNgayCx2d, dataIndex: "ngayCXHT2D", key: "ngayCXHT2D", width: 82 },
-      { title: tt.lgThNgayCx3d, dataIndex: "ngayCXHT3D", key: "ngayCXHT3D", width: 82 },
-      { title: tt.lgThNgayCxD3, dataIndex: "ngayCXHTT", key: "ngayCXHTT", width: 82 },
-      { title: tt.lgThNgayCxMb, dataIndex: "ngayCXHTMB", key: "ngayCXHTMB", width: 82 },
-      { title: tt.lgThNgayCxDc, dataIndex: "ngayCXHTDC", key: "ngayCXHTDC", width: 82 },
-      { title: tt.lgThNgayCxDp, dataIndex: "ngayCXHTDP", key: "ngayCXHTDP", width: 82 },
-      { title: tt.lgThLauNnb, dataIndex: "lauNgayNB", key: "lauNgayNB", width: 80 },
-      { title: tt.lgThLauN3nb, dataIndex: "lauNgay3NB", key: "lauNgay3NB", width: 82 },
-      { title: tt.lgThLauN2d, dataIndex: "lauNgay2D", key: "lauNgay2D", width: 78 },
-      { title: tt.lgThLauN3d, dataIndex: "lauNgay3D", key: "lauNgay3D", width: 78 },
-      { title: tt.lgThLauNd3, dataIndex: "lauNgayT", key: "lauNgayT", width: 75 },
-      { title: tt.lgThLauNmb, dataIndex: "lauNgayMB", key: "lauNgayMB", width: 75 },
-      { title: tt.lgThLauNdc, dataIndex: "lauNgayDC", key: "lauNgayDC", width: 75 },
-      { title: tt.lgThLauNdp, dataIndex: "lauNgayDP", key: "lauNgayDP", width: 75 },
-      { title: "L2C", dataIndex: "lanL2C", key: "lanL2C", width: 55, sorter: function (a, b) { return a.lanL2C - b.lanL2C; } },
-      { title: "L3C", dataIndex: "lanL3C", key: "lanL3C", width: 55 },
-      { title: "LB3C", dataIndex: "lanLB3C", key: "lanLB3C", width: 60 },
-      { title: "Tổng " + sinhTongNgay + " ngày", dataIndex: "lanTongNgaySinh", key: "lanTongNgaySinh", width: 86 },
-      { title: tt.lgThTuan1, dataIndex: "lanTuan1C", key: "lanTuan1C", width: 62 },
-      { title: tt.lgThTuan12, dataIndex: "lanTuan2C", key: "lanTuan2C", width: 68 },
-      { title: "Tổng " + sinhThTky + " kỳ", dataIndex: "lanDai", key: "lanDai", width: 86, sorter: function (a, b) { return a.lanDai - b.lanDai; } },
-      { title: "Tổng " + sinhThKtn + " tuần", dataIndex: "lanTuan", key: "lanTuan", width: 92, sorter: function (a, b) { return a.lanTuan - b.lanTuan; } },
-      { title: sinhTuan2Dai + " tuần 2đài", dataIndex: "lanTuanD2D", key: "lanTuanD2D", width: 82 },
-      { title: sinhThTnd + " ngày 2đài", dataIndex: "lanNgayD2C", key: "lanNgayD2C", width: 86 },
-      { title: sinhTuanD3 + " tuần Đ3", dataIndex: "lanTuanD3", key: "lanTuanD3", width: 78 },
-      { title: sinhThTnd + " ngày Đ3", dataIndex: "lanNgayD3", key: "lanNgayD3", width: 78 },
-      { title: sinhThKtd + " KTD", dataIndex: "lanKTD", key: "lanKTD", width: 68, sorter: function (a, b) { return a.lanKTD - b.lanKTD; } },
-      { title: tt.lgThKetQua, dataIndex: "ketQua", key: "ketQua", width: 260,
-        render: function (v, rec) {
-          return h("div", { style: { fontSize: 11, whiteSpace: "pre", lineHeight: "1.4" } }, buildLegacyThResultText(rec));
-        }
-      },
-      { title: "Tổng 21 tuần", dataIndex: "lanTuan21", key: "lanTuan21", width: 92, sorter: function (a, b) { return a.lanTuan21 - b.lanTuan21; } },
-      { title: "Cách", dataIndex: "noiDung", key: "noiDung", width: 160 }
-    ];
 
     function buildPairRows(list, valueKey, idPrefix) {
       var rows = Array.isArray(list) ? list.slice() : [];
@@ -6218,96 +4106,6 @@
           ])
         ]),
 
-        legacyConfigOpen
-          ? h(Row, { gutter: 12, style: { marginTop: 10 } }, [
-              h(Col, { xs: 12, md: 3, key: "lg1" }, [
-                h("div", { style: { marginBottom: 6 } }, tt.lgHeThong),
-                h(Select, themedSelectProps({
-                  value: legacyHeThong,
-                  options: [{ value: 2, label: "Hệ 2 số" }, { value: 3, label: "Hệ 3 số" }],
-                  onChange: function (v) { setLegacyHeThong(toNumberSafe(v, 2)); }
-                }))
-              ]),
-              h(Col, { xs: 12, md: 3, key: "lg2" }, [
-                h("div", { style: { marginBottom: 6 } }, tt.lgCdMode),
-                h(Select, themedSelectProps({
-                  value: legacyCdMode,
-                  options: [
-                    { value: "C_D", label: tt.lgCdAll },
-                    { value: "C", label: tt.lgCdC },
-                    { value: "D", label: tt.lgCdD },
-                    { value: "2C", label: tt.lgCdPair }
-                  ],
-                  onChange: function (v) {
-                    var mode = String(v || "C_D");
-                    setLegacyCdMode(mode);
-                    if (mode === "2C") setLegacyRankTo(5);
-                    else if (legacyRankTo === 5) setLegacyRankTo(10);
-                  }
-                }))
-              ]),
-              h(Col, { xs: 12, md: 3, key: "lg3" }, [
-                h("div", { style: { marginBottom: 6 } }, tt.lgGhTu),
-                h(InputNumber, themedNumberProps({ value: legacyRankFrom, min: 1, max: 60, onChange: function (v) { setLegacyRankFrom(Math.min(60, Math.max(1, toNumberSafe(v, 1)))); } }))
-              ]),
-              h(Col, { xs: 12, md: 3, key: "lg4" }, [
-                h("div", { style: { marginBottom: 6 } }, tt.lgGhDen),
-                h(InputNumber, themedNumberProps({ value: legacyRankTo, min: 1, max: 60, onChange: function (v) { setLegacyRankTo(Math.min(60, Math.max(1, toNumberSafe(v, 10)))); } }))
-              ]),
-              h(Col, { xs: 12, md: 3, key: "lg6" }, [
-                h("div", { style: { marginBottom: 6 } }, tt.lgNgayChay),
-                h(InputNumber, themedNumberProps({ value: legacyNgayChay, min: 0, max: 999, onChange: function (v) { setLegacyNgayChay(Math.min(999, Math.max(0, toNumberSafe(v, 200)))); } }))
-              ]),
-              h(Col, { xs: 12, md: 6, key: "lg7" }, [
-                h("div", { style: { marginBottom: 6 } }, tt.lgSlrOptions),
-                h(Space, { wrap: true }, [
-                  h("label", { key: "theo_thu", style: { marginRight: 12 } }, [
-                    h("input", {
-                      type: "checkbox",
-                      checked: !!legacyTheoThu,
-                      onChange: function (e) {
-                        var v = !!(e && e.target && e.target.checked);
-                        setLegacyTheoThu(v);
-                      }
-                    }),
-                    " ", tt.lgTheoThu
-                  ]),
-                  h("label", { key: "chk_hieu", style: { marginRight: 12 } }, [
-                    h("input", {
-                      type: "checkbox",
-                      checked: !!legacyChkHieu,
-                      onChange: function (e) {
-                        setLegacyChkHieu(!!(e && e.target && e.target.checked));
-                      }
-                    }),
-                    " ", tt.lgChkHieu
-                  ])
-                ])
-              ]),
-              h(Col, { xs: 24, md: 12, key: "lg5" }, [
-                h("div", { style: { marginBottom: 6 } }, tt.lgKttFields),
-                h(Space, { wrap: true }, ["D_dau", "D_duoi", "P_dau", "P_duoi", "T_dau", "T_duoi", "B_dau", "B_duoi"].map(function (k) {
-                  return h("label", { key: k, style: { marginRight: 8 } }, [
-                    h("input", {
-                      type: "checkbox",
-                      checked: !!legacyLocMap[k],
-                      onChange: function (e) {
-                        var checked = !!(e && e.target && e.target.checked);
-                        setLegacyLocMap(function (prev) {
-                          var next = Object.assign({}, prev || {});
-                          next[k] = checked;
-                          return next;
-                        });
-                      }
-                    }),
-                    " ",
-                    legacyKttFieldLabels[k] || k
-                  ]);
-                }))
-              ])
-            ])
-          : null,
-
         h(Space, { wrap: true, style: { marginTop: 12 } }, [
           allowUpdateActions ? h(Button, { key: "up", className: "kqxs-action-btn", onClick: chay_cap_nhat, loading: loading }, tt.btnUpdate) : null,
           h(Button, {
@@ -6328,30 +4126,6 @@
             onClick: thong_ke_moi,
             loading: loading
           }, tt.btnStatNew),
-          h(Select, themedSelectProps({
-            key: "legacy_tool",
-            value: legacyTool,
-            style: { minWidth: 190 },
-            options: [
-              { value: "ktt", label: tt.lgToolKtt },
-              { value: "slr", label: tt.lgToolSlr },
-              { value: "nb", label: tt.lgToolNb },
-              { value: "th", label: tt.lgToolTh }
-            ],
-            onChange: function (v) { setLegacyTool(String(v || "ktt")); }
-          })),
-          h(Button, {
-            key: "legacy_run",
-            className: "kqxs-action-btn" + ((legacyTool === "ktt" && activeAction === "legacy_ktt") || (legacyTool === "slr" && activeAction === "legacy_slr") || (legacyTool === "nb" && activeAction === "legacy_nb") || (legacyTool === "th" && activeAction === "legacy_th") ? " kqxs-action-btn-active" : ""),
-            onClick: runLegacySelected,
-            loading: loading
-          }, tt.lgBtnRun),
-          h(Button, {
-            key: "legacy_cfg",
-            className: "kqxs-action-btn",
-            onClick: function () { setLegacyConfigOpen(!legacyConfigOpen); },
-            loading: loading
-          }, legacyConfigOpen ? tt.lgBtnCfgClose : tt.lgBtnCfgOpen),
           allowUpdateActions ? h(Button, {
             key: "xsk",
             className: "kqxs-action-btn",
@@ -6402,269 +4176,6 @@
                     h(Table, { rowKey: "id", columns: ketquaColumns, dataSource: xu_ly_ket_qua, pagination: false, size: "small", scroll: { x: 900 } }))
                 : null
             ])
-          : activeAction === "legacy_ktt"
-            ? h(Card, { size: "small", title: tt.lgToolKtt + " – " + tt.lgHeThong + ": " + legacyHeThong, style: { background: theme.cardBg, color: theme.text, borderColor: theme.border } }, [
-                // Legend màu
-                h("div", { style: { display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" } }, [
-                  h("span", { style: { background: KTT_COLORS.D, color: theme.text, padding: "2px 8px", border: "1px solid " + theme.border, fontSize: 12 } }, tt.lgKttLegendD),
-                  h("span", { style: { background: KTT_COLORS.P, color: theme.text, padding: "2px 8px", border: "1px solid " + theme.border, fontSize: 12 } }, tt.lgKttLegendP),
-                  h("span", { style: { background: KTT_COLORS.T, color: theme.text, padding: "2px 8px", border: "1px solid " + theme.border, fontSize: 12 } }, tt.lgKttLegendT),
-                  h("span", { style: { background: KTT_COLORS.B, color: theme.text, padding: "2px 8px", border: "1px solid " + theme.border, fontSize: 12 } }, tt.lgKttLegendB),
-                  h("span", { style: { background: kttMatchBg, color: kttMatchClr, padding: "2px 8px", border: "1px solid " + theme.border, fontSize: 12, fontWeight: "bold" } }, tt.lgKttLegendMatch)
-                ]),
-                // Card grid 7 cột theo thứ
-                h("div", { style: { display: "flex", gap: 8, overflowX: "auto", alignItems: "flex-start" } },
-                  KTT_COLS.map(function (col) {
-                    var colRows = legacyKttRows.filter(function (r) {
-                      return kttWeekdayFromYmd(normalizeLegacyDateYmd(r.ID)) === col.dow;
-                    });
-                    return h("div", { key: col.name, style: { flex: "0 0 140px" } }, [
-                      h("div", { style: { textAlign: "center", fontWeight: "bold", fontSize: 12, marginBottom: 4, background: kttDateHeaderBg, color: theme.text, borderRadius: 3, padding: "2px 0" } }, col.name),
-                      colRows.map(kttCardNode)
-                    ]);
-                  })
-                )
-              ])
-          : activeAction === "legacy_slr"
-            ? h(Card, { size: "small", title: tt.lgToolSlr, style: { background: theme.cardBg, color: theme.text, borderColor: theme.border } },
-              h(Table, {
-                rowKey: function (r) { return String((r && r.so) || randomId("legacy_slr")); },
-                columns: legacySlrColumns,
-                dataSource: legacySlrRows,
-                pagination: { pageSize: 50, showSizeChanger: true },
-                size: "small"
-              }))
-          : activeAction === "legacy_nb"
-            ? h(Card, { size: "small", title: tt.lgToolNb, style: { background: theme.cardBg, color: theme.text, borderColor: theme.border } },
-              h(Table, {
-                rowKey: function (r) { return String((r && r.so) || randomId("legacy_nb")); },
-                columns: legacyNbColumns,
-                dataSource: legacyNbRows,
-                pagination: { pageSize: 50, showSizeChanger: true },
-                size: "small",
-                scroll: { x: 1000 }
-              }))
-          : activeAction === "legacy_th"
-            ? h(Card, { size: "small", title: tt.lgToolTh, style: { background: theme.cardBg, color: theme.text, borderColor: theme.border } }, [
-                // Config params row
-                h("div", { key: "th-cfg", style: { display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10, alignItems: "center" } }, [
-                  h("span", { style: { fontSize: 12, color: theme.muted } }, tt.lgThKtn + ":"),
-                  h(InputNumber, { size: "small", min: 1, max: 200, value: legacyThKtn, onChange: function (v) { setLegacyThKtn(toSinhThreshold(v, 12)); }, style: { width: 64 } }),
-                  h("span", { style: { fontSize: 12, color: theme.muted } }, tt.lgThKtd + ":"),
-                  h(InputNumber, { size: "small", min: 1, max: 200, value: legacyThKtd, onChange: function (v) { setLegacyThKtd(toSinhThreshold(v, 12)); }, style: { width: 64 } }),
-                  h("span", { style: { fontSize: 12, color: theme.muted } }, tt.lgThL2c + ":"),
-                  h(InputNumber, { size: "small", min: 1, max: 200, value: legacyThL2c, onChange: function (v) { setLegacyThL2c(toSinhThreshold(v, 12)); }, style: { width: 64 } }),
-                  h("span", { style: { fontSize: 12, color: theme.muted } }, tt.lgThTky + ":"),
-                  h(InputNumber, { size: "small", min: 1, max: 500, value: legacyThTky, onChange: function (v) { setLegacyThTky(toSinhThreshold(v, 52)); }, style: { width: 72 } }),
-                  h("span", { style: { fontSize: 12, color: theme.muted } }, tt.lgThTnd + ":"),
-                  h(InputNumber, { size: "small", min: 1, max: 200, value: legacyThTnd, onChange: function (v) { setLegacyThTnd(toSinhThreshold(v, 7)); }, style: { width: 64 } })
-                ]),
-                h("div", { key: "th-auto-source", style: { marginBottom: 10, padding: "8px 10px", background: theme.isDark ? "#111827" : "#f8fafc", border: "1px solid " + theme.border, borderRadius: 4 } }, [
-                  h("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", marginBottom: 8 } }, [
-                    h(Button, { size: "small", loading: legacyThApiLoading, onClick: reloadLegacyThApiSource }, tt.lgThAutoLoad || "Tải lại"),
-                    legacyThApiStatus ? h("span", { style: { fontSize: 11, color: theme.muted } }, legacyThApiStatus) : null,
-                    h(Tag, { color: "blue", style: { marginInlineEnd: 0 } }, tt.lgThAutoTaskCount + ": " + (legacyThSelectedQueryTypes.length * (legacyThSelectedGroups.length + legacyThSelectedGroupsTriet.length))),
-                    h(Button, { size: "small", onClick: function () { setLegacyThSelectedQueryTypes(legacyThQueryTypeOptions.map(function (item) { return item.value; })); } }, tt.lgThAutoSelectAll + " " + tt.lgThAutoQueryTypes),
-                    h(Button, { size: "small", onClick: function () { setLegacyThSelectedQueryTypes([]); } }, tt.lgThAutoClearAll + " " + tt.lgThAutoQueryTypes),
-                    h(Button, { size: "small", onClick: function () { setLegacyThSelectedGroups(legacyThGroupOptions.map(function (g) { return g.id; })); } }, tt.lgThAutoSelectAll + " " + tt.lgThAutoGroups),
-                    h(Button, { size: "small", onClick: function () { setLegacyThSelectedGroups([]); } }, tt.lgThAutoClearAll + " " + tt.lgThAutoGroups),
-                    h(Button, { size: "small", onClick: function () { setLegacyThSelectedGroupsTriet(legacyThGroupTrietOptions.map(function (g) { return g.id; })); } }, tt.lgThAutoSelectAll + " " + (tt.lgThAutoGroupsTriet || "Triệt")),
-                    h(Button, { size: "small", onClick: function () { setLegacyThSelectedGroupsTriet([]); } }, tt.lgThAutoClearAll + " " + (tt.lgThAutoGroupsTriet || "Triệt")),
-                    h(Button, { size: "small", type: "primary", onClick: runLegacyTongHopFullAuto, disabled: legacyThAutoRunning || legacyThApiLoading || !legacyThSelectedQueryTypes.length || (!legacyThSelectedGroups.length && !legacyThSelectedGroupsTriet.length) }, tt.lgThAutoRunFull),
-                    legacyThAutoRunning ? h(Button, { size: "small", danger: true, onClick: stopLegacyTongHopFullAuto }, tt.lgThAutoStop) : null
-                  ]),
-                  legacyThAutoRunning || legacyThAutoStatus ? h("div", { style: { marginBottom: 8, padding: 8, borderRadius: 4, border: "1px solid " + theme.border, background: theme.isDark ? "#0f172a" : "#eef6ff" } }, [
-                    h("div", { style: { fontSize: 12, fontWeight: "bold", color: theme.text, marginBottom: 4 } }, tt.lgThAutoProgress + ":"),
-                    h("div", { style: { fontSize: 12, color: theme.text, marginBottom: 6 } }, legacyThAutoStatus || "-"),
-                    h(Progress, { percent: legacyThAutoTaskTotal > 0 ? Math.round((legacyThAutoTaskDone / legacyThAutoTaskTotal) * 100) : 0, size: "small", status: legacyThAutoRunning ? "active" : "normal" })
-                  ]) : null,
-                  h(Row, { gutter: 12 }, [
-                    h(Col, { xs: 24, md: 8, key: "th-auto-query" }, [
-                      h("div", { style: { fontSize: 12, fontWeight: "bold", color: theme.text, marginBottom: 4 } }, tt.lgThAutoQueryTypes + " (" + legacyThSelectedQueryTypes.length + "/" + legacyThQueryTypeOptions.length + ")"),
-                      h("div", { style: { maxHeight: 220, overflow: "auto", border: "1px solid " + theme.border, borderRadius: 4, background: theme.cardBg } },
-                        legacyThApiLoading
-                          ? h("div", { style: { padding: 8, fontSize: 12, color: theme.muted } }, "Đang tải...")
-                          : !legacyThQueryTypeOptions.length
-                            ? h("div", { style: { padding: 8, fontSize: 12, color: theme.muted } }, "Chưa có dữ liệu")
-                            : Tree
-                              ? h(Tree, {
-                                  checkable: true, selectable: false, blockNode: true,
-                                  treeData: legacyThQueryTypeOptions.map(function (item) { return { key: item.value, title: item.text }; }),
-                                  checkedKeys: legacyThSelectedQueryTypes,
-                                  onCheck: function (keys) {
-                                    var arr = Array.isArray(keys) ? keys : (keys && keys.checked ? keys.checked : []);
-                                    setLegacyThSelectedQueryTypes(arr.map(String));
-                                  },
-                                  style: { background: "transparent", color: theme.text, fontSize: 12, padding: "4px 0" }
-                                })
-                              : legacyThQueryTypeOptions.map(function (item, idx) {
-                                  return h("label", { key: idx, style: { display: "block", fontSize: 12, color: theme.text, padding: "2px 8px" } }, [
-                                    h("input", { type: "checkbox", checked: legacyThSelectedQueryTypes.indexOf(item.value) >= 0,
-                                      onChange: function (e) { var c = !!(e && e.target && e.target.checked); setLegacyThSelectedQueryTypes(function (p) { return toggleLegacyThSelection(p, item.value, c); }); } }),
-                                    " " + (item.text || item.value)
-                                  ]);
-                                })
-                      )
-                    ]),
-                    h(Col, { xs: 24, md: 8, key: "th-auto-group" }, [
-                      h("div", { style: { fontSize: 12, fontWeight: "bold", color: theme.text, marginBottom: 4 } }, tt.lgThAutoGroups + " (" + legacyThSelectedGroups.length + "/" + legacyThGroupOptions.length + ")"),
-                      h("div", { style: { maxHeight: 220, overflow: "auto", border: "1px solid " + theme.border, borderRadius: 4, background: theme.cardBg } },
-                        legacyThApiLoading
-                          ? h("div", { style: { padding: 8, fontSize: 12, color: theme.muted } }, "Đang tải...")
-                          : !legacyThGroupOptions.length
-                            ? h("div", { style: { padding: 8, fontSize: 12, color: theme.muted } }, "Chưa có dữ liệu")
-                            : Tree
-                              ? h(Tree, {
-                                  checkable: true, selectable: false, blockNode: true,
-                                  treeData: legacyThGroupOptions.map(function (g) {
-                                    return { key: g.id, title: g.text + (g.children && g.children.length ? " (" + g.children.length + ")" : ""),
-                                      children: (g.children || []).map(function (c) { return { key: g.id + "__" + c.id, title: c.text }; }) };
-                                  }),
-                                  checkedKeys: (function () {
-                                    var keys = [];
-                                    legacyThGroupOptions.forEach(function (g) {
-                                      if (legacyThSelectedGroups.indexOf(g.id) >= 0) {
-                                        keys.push(g.id);
-                                        (g.children || []).forEach(function (c) { keys.push(g.id + "__" + c.id); });
-                                      }
-                                    });
-                                    return keys;
-                                  }()),
-                                  onCheck: function (keys) {
-                                    var arr = Array.isArray(keys) ? keys : (keys && keys.checked ? keys.checked : []);
-                                    var gids = legacyThGroupOptions.filter(function (g) { return arr.indexOf(g.id) >= 0; }).map(function (g) { return g.id; });
-                                    setLegacyThSelectedGroups(gids);
-                                  },
-                                  style: { background: "transparent", color: theme.text, fontSize: 12, padding: "4px 0" }
-                                })
-                              : legacyThGroupOptions.map(function (group) {
-                                  return h("label", { key: group.id, style: { display: "block", fontSize: 12, color: theme.text, padding: "2px 8px" } }, [
-                                    h("input", { type: "checkbox", checked: legacyThSelectedGroups.indexOf(group.id) >= 0,
-                                      onChange: function (e) { var c = !!(e && e.target && e.target.checked); setLegacyThSelectedGroups(function (p) { return toggleLegacyThSelection(p, group.id, c); }); } }),
-                                    " " + group.text + (group.children && group.children.length ? " (" + group.children.length + ")" : "")
-                                  ]);
-                                })
-                      )
-                    ]),
-                    h(Col, { xs: 24, md: 8, key: "th-auto-group-triet" }, [
-                      h("div", { style: { fontSize: 12, fontWeight: "bold", color: theme.text, marginBottom: 4 } }, (tt.lgThAutoGroupsTriet || "Nhóm Số Triệt") + " (" + legacyThSelectedGroupsTriet.length + "/" + legacyThGroupTrietOptions.length + ")"),
-                      h("div", { style: { maxHeight: 220, overflow: "auto", border: "1px solid " + theme.border, borderRadius: 4, background: theme.isDark ? "#111827" : "#fffaf0" } },
-                        legacyThApiLoading
-                          ? h("div", { style: { padding: 8, fontSize: 12, color: theme.muted } }, "Đang tải...")
-                          : !legacyThGroupTrietOptions.length
-                            ? h("div", { style: { padding: 8, fontSize: 12, color: theme.muted } }, "Chưa có dữ liệu")
-                            : Tree
-                              ? h(Tree, {
-                                  checkable: true, selectable: false, blockNode: true,
-                                  treeData: legacyThGroupTrietOptions.map(function (g) {
-                                    return { key: g.id, title: g.text + (g.children && g.children.length ? " (" + g.children.length + ")" : ""),
-                                      children: (g.children || []).map(function (c) { return { key: g.id + "__" + c.id, title: c.text }; }) };
-                                  }),
-                                  checkedKeys: (function () {
-                                    var keys = [];
-                                    legacyThGroupTrietOptions.forEach(function (g) {
-                                      if (legacyThSelectedGroupsTriet.indexOf(g.id) >= 0) {
-                                        keys.push(g.id);
-                                        (g.children || []).forEach(function (c) { keys.push(g.id + "__" + c.id); });
-                                      }
-                                    });
-                                    return keys;
-                                  }()),
-                                  onCheck: function (keys) {
-                                    var arr = Array.isArray(keys) ? keys : (keys && keys.checked ? keys.checked : []);
-                                    var gids = legacyThGroupTrietOptions.filter(function (g) { return arr.indexOf(g.id) >= 0; }).map(function (g) { return g.id; });
-                                    setLegacyThSelectedGroupsTriet(gids);
-                                  },
-                                  style: { background: "transparent", color: theme.text, fontSize: 12, padding: "4px 0" }
-                                })
-                              : legacyThGroupTrietOptions.map(function (group) {
-                                  return h("label", { key: group.id, style: { display: "block", fontSize: 12, color: theme.text, padding: "2px 8px" } }, [
-                                    h("input", { type: "checkbox", checked: legacyThSelectedGroupsTriet.indexOf(group.id) >= 0,
-                                      onChange: function (e) { var c = !!(e && e.target && e.target.checked); setLegacyThSelectedGroupsTriet(function (p) { return toggleLegacyThSelection(p, group.id, c); }); } }),
-                                    " " + group.text + (group.children && group.children.length ? " (" + group.children.length + ")" : "")
-                                  ]);
-                                })
-                      )
-                    ])
-                  ])
-                ]),
-                 // Auto filter row
-                h("div", { key: "th-auto", style: { display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 8, alignItems: "center", padding: "6px 8px", background: theme.isDark ? "#1a2535" : "#f0f5ff", borderRadius: 4, border: "1px solid " + theme.border } }, [
-                  h("span", { style: { fontSize: 12, fontWeight: "bold", color: theme.text, marginRight: 4 } }, tt.lgThAutoRun + ":"),
-                  h("span", { style: { fontSize: 11, color: theme.muted } }, tt.lgThAutoC1Ngay + ":"),
-                  h(Input, { size: "small", placeholder: "N", value: legacyThAutoC1Ngay, onChange: function (e) { setLegacyThAutoC1Ngay(e.target.value); }, style: { width: 55 } }),
-                  h("span", { style: { fontSize: 11, color: theme.muted } }, tt.lgThAutoC1Ky + ":"),
-                  h(Input, { size: "small", placeholder: "N", value: legacyThAutoC1Ky, onChange: function (e) { setLegacyThAutoC1Ky(e.target.value); }, style: { width: 55 } }),
-                  h("span", { style: { fontSize: 11, color: theme.muted } }, tt.lgThAutoC2NgayCX + ":"),
-                  h(Input, { size: "small", placeholder: "5,6,7", value: legacyThAutoC2NgayCX, onChange: function (e) { setLegacyThAutoC2NgayCX(e.target.value); }, style: { width: 90 } }),
-                  h("span", { style: { fontSize: 11, color: theme.muted } }, tt.lgThAutoC3KyCX + ":"),
-                  h(Input, { size: "small", placeholder: "5,6,7", value: legacyThAutoC2KyCX, onChange: function (e) { setLegacyThAutoC2KyCX(e.target.value); }, style: { width: 90 } }),
-                  h("span", { style: { fontSize: 11, color: theme.muted } }, tt.lgThAutoC4NgayGap + ":"),
-                  h(Input, { size: "small", placeholder: "0", value: legacyThAutoC4NgayGap, onChange: function (e) { setLegacyThAutoC4NgayGap(e.target.value); }, style: { width: 55 } }),
-                  h("span", { style: { fontSize: 11, color: theme.muted } }, tt.lgThAutoC5KyGap + ":"),
-                  h(Input, { size: "small", placeholder: "0", value: legacyThAutoC5KyGap, onChange: function (e) { setLegacyThAutoC5KyGap(e.target.value); }, style: { width: 55 } }),
-                  h(Checkbox, { checked: legacyThAutoC6Both, onChange: function (e) { setLegacyThAutoC6Both(e.target.checked); }, style: { fontSize: 11, color: theme.text } }, tt.lgThAutoC6Both),
-                  h(Button, { size: "small", type: "primary", onClick: runLegacyTongHopAutoFilter, style: { marginLeft: 8 } }, tt.lgThAutoRun)
-                ]),
-                h("div", { key: "th-kq-mask", style: { display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 8, alignItems: "center", padding: "6px 8px", background: theme.isDark ? "#161b22" : "#fafafa", borderRadius: 4, border: "1px solid " + theme.border } }, [
-                  h("span", { style: { fontSize: 12, fontWeight: "bold", color: theme.text, marginRight: 4 } }, tt.lgThResultSet + ":"),
-                  legacyThResultItems.map(function (item) {
-                    return h("label", { key: "th-mask-" + item.key, style: { display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, color: theme.text, marginRight: 4 } }, [
-                      h("input", {
-                        type: "checkbox",
-                        checked: !!legacyThResultMask[item.key],
-                        onChange: function (e) {
-                          var checked = !!(e && e.target && e.target.checked);
-                          setLegacyThResultMask(function (prev) {
-                            var next = Object.assign({}, prev || {});
-                            next[item.key] = checked;
-                            return next;
-                          });
-                        }
-                      }),
-                      item.code
-                    ]);
-                  })
-                ]),
-                // Main results table
-                h("div", { key: "th-main-lbl", style: { fontSize: 12, fontWeight: "bold", color: theme.text, marginBottom: 4 } },
-                  tt.lgToolTh + " – " + legacyThRows.length + " " + tt.lgThCountBoSo),
-                h(Table, {
-                  key: "th-main-table",
-                  rowKey: "key",
-                  columns: legacyThColumns,
-                  dataSource: legacyThRows,
-                  pagination: { pageSize: 50, showSizeChanger: true },
-                  size: "small",
-                  scroll: { x: 1800 },
-                  rowClassName: function (rec) {
-                    if (rec.lauNgay > 0 && rec.ngayCXHT >= rec.lauNgay) return "th-row-overdue-ngay";
-                    if (rec.lauKy > 0 && rec.kyCXHT >= rec.lauKy) return "th-row-overdue-ky";
-                    return "";
-                  }
-                }),
-                // Auto filter results
-                legacyThAutoRows.length > 0 ? h(Card, { key: "th-auto-result", size: "small", style: { marginTop: 12, background: theme.cardBg, color: theme.text, borderColor: theme.border },
-                  title: tt.lgThAutoResult + " – " + legacyThAutoRows.length + " " + tt.lgThCountBoSo }, [
-                  h(Table, {
-                    key: "th-auto-table",
-                    rowKey: "key",
-                    columns: legacyThColumns,
-                    dataSource: legacyThAutoRows,
-                    pagination: { pageSize: 30, showSizeChanger: true },
-                    size: "small",
-                    scroll: { x: 1800 }
-                  }),
-                  legacyThAutoSummary ? h("div", { key: "th-auto-summary", style: { marginTop: 8, padding: "8px 10px", background: theme.isDark ? "#101010" : "#fafafa", border: "1px solid " + theme.border, borderRadius: 4 } }, [
-                    h("div", { style: { fontSize: 12, fontWeight: "bold", marginBottom: 4, color: theme.text } }, tt.lgThAutoSummary + ":"),
-                    h("pre", { style: { fontSize: 12, color: theme.text, margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" } }, legacyThAutoSummary)
-                  ]) : null,
-                  legacyThIntersect ? h("div", { key: "th-intersect", style: { marginTop: 8, padding: "8px 10px", background: theme.isDark ? "#141414" : "#fafafa", border: "1px solid " + theme.border, borderRadius: 4 } }, [
-                    h("div", { style: { fontSize: 12, fontWeight: "bold", marginBottom: 4, color: theme.text } }, tt.lgThIntersectTitle + ":"),
-                    h("pre", { style: { fontSize: 12, color: theme.text, margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" } }, legacyThIntersect)
-                  ]) : null
-                ]) : null
-              ])
           : thongkeTabs.length
             ? h(Tabs, {
               className: "kqxs-thongke-tabs",
@@ -6680,81 +4191,6 @@
       ])
     ]);
   }
-
-  // ============================================================================
-  // HELPER: Create Tree Checkbox Panel
-  // ============================================================================
-  // Usage from auto_code:
-  //   window.TreeCheckboxPanel = createTreeCheckboxPanel;
-  //   var panel = createTreeCheckboxPanel(treeData, handleCheck, options);
-  // ============================================================================
-  
-  function createTreeCheckboxPanel(treeDataArg, onCheckCallbackArg, optionsArg) {
-    var React = window.React;
-    var useState = React.useState;
-    var useMemo = React.useMemo;
-    
-    var treeData = treeDataArg || [];
-    var onCheckCallback = typeof onCheckCallbackArg === "function" ? onCheckCallbackArg : function() {};
-    var opts = optionsArg || {};
-    
-    function TreeCheckboxPanel(props) {
-      var checkedState = useState(opts.defaultChecked || []);
-      var checkedKeys = checkedState[0];
-      var setCheckedKeys = checkedState[1];
-      
-      var expandedState = useState(opts.defaultExpanded || []);
-      var expandedKeys = expandedState[0];
-      var setExpandedKeys = expandedState[1];
-
-      function handleCheck(selectedKeys, info) {
-        setCheckedKeys(selectedKeys);
-        onCheckCallback(selectedKeys, info);
-      }
-
-      function handleExpand(expandedKeysInfo) {
-        setExpandedKeys(expandedKeysInfo);
-      }
-
-      function handleClearAll() {
-        setCheckedKeys([]);
-        onCheckCallback([], null);
-      }
-
-      return h(Card, { 
-        title: opts.title || "Chọn danh mục",
-        style: opts.cardStyle,
-        extra: h(Button, { 
-          size: "small",
-          onClick: handleClearAll,
-          style: { marginRight: 8 }
-        }, "Xóa tất cả")
-      }, [
-        h(Tree, {
-          key: "tree",
-          checkable: true,
-          defaultExpandAll: opts.expandAll !== false,
-          expandedKeys: expandedKeys,
-          onExpand: handleExpand,
-          checkedKeys: checkedKeys,
-          onCheck: handleCheck,
-          treeData: treeData,
-          multiple: true,
-          disabled: opts.disabled || false,
-          style: opts.treeStyle || { padding: "12px 0" }
-        }),
-        
-        h("div", { key: "summary", style: { marginTop: 16, padding: "8px 0", borderTop: "1px solid #f0f0f0" } },
-          "Đã chọn: " + checkedKeys.length + " mục"
-        )
-      ]);
-    }
-    
-    return TreeCheckboxPanel;
-  }
-  
-  // Export to window for use in auto_code
-  window.createTreeCheckboxPanel = createTreeCheckboxPanel;
 
   var containerId = window.csmDynamicCodeContainerId || "dynamic-code-root";
   var container = document.getElementById(containerId) || document.getElementById("dynamic-code-root") || document.getElementById("context-auto");
