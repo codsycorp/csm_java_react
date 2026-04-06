@@ -710,67 +710,7 @@ export async function updateTableData<T extends Record<string, any>>(params: {
 	pk_fields?: string[] // Primary key field names
 	where?: Record<string, any> // Giá trị PK cũ (nếu cần)
 }) {
-	const payload: any = {
-		app_id: params.app_id,
-		obj_name: params.obj_name,
-		command: params.command,
-		obj_update: params.obj_update,
-	};
-
-	// Only create command gets mandatory id assignment.
-	if (params.command === "create") {
-		const idVal = payload.obj_update?.id;
-		if (idVal == null || String(idVal).trim() === "") {
-			const generatedId = (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function")
-				? crypto.randomUUID()
-				: `_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
-			payload.obj_update = { ...payload.obj_update, id: generatedId };
-			// Keep caller object in sync so local grid can render the new row immediately.
-			try {
-				(params.obj_update as any).id = generatedId;
-			} catch {
-				// ignore if caller object is immutable
-			}
-		}
-	}
-	
-	// Always add e_where with primary key conditions for all commands
-	// Backend uses e_where to check existing records and determine action
-	const whereSource: Record<string, any> = params.where ? params.where : {};
-	const updateSource: Record<string, any> = params.obj_update ? params.obj_update : {};
-	// Keep old-PK values from where, but still allow fallback to obj_update.id.
-	const pkSource: Record<string, any> = params.where
-		? { ...updateSource, ...whereSource }
-		: updateSource;
-	const stableId = params.command === "create"
-		? payload.obj_update?.id
-		: (whereSource.id !== undefined ? whereSource.id : updateSource.id);
-	if (params.pk_fields && params.pk_fields.length > 0) {
-		const conditions: any[] = [];
-		for (const pkField of params.pk_fields) {
-			if (pkSource[pkField] !== undefined) {
-				conditions.push({
-					field: pkField,
-					type: "eq",
-					value: pkSource[pkField]
-				});
-			}
-		}
-		// Include id when provided; create always has id after normalization above.
-		if (stableId !== undefined && !conditions.some(c => c.field === "id")) {
-			conditions.push({
-				field: "id",
-				type: "eq",
-				value: stableId
-			});
-		}
-		// Build e_where with correct format: operator (uppercase) + conditions
-		if (conditions.length > 0) {
-			payload.e_where = conditions.length === 1 
-				? conditions[0]
-				: { operator: "AND", conditions };
-		}
-	}
+	const payload = buildUpdateTablePayload(params);
 	
 	console.log("📤 updateTableData request:", {
 		command: params.command,
@@ -804,6 +744,117 @@ export async function updateTableData<T extends Record<string, any>>(params: {
 	if (res && (res as any).success === false) {
 		throw new Error(String((res as any).message || "Lưu dữ liệu thất bại"));
 	}
+	return res;
+}
+
+function buildUpdateTablePayload<T extends Record<string, any>>(params: {
+	app_id: string
+	obj_name: string
+	command: "create" | "update" | "delete"
+	obj_update: T
+	pk_fields?: string[]
+	where?: Record<string, any>
+}) {
+	const payload: any = {
+		app_id: params.app_id,
+		obj_name: params.obj_name,
+		command: params.command,
+		obj_update: params.obj_update,
+	};
+
+	if (params.command === "create") {
+		const idVal = payload.obj_update?.id;
+		if (idVal == null || String(idVal).trim() === "") {
+			const generatedId = (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function")
+				? crypto.randomUUID()
+				: `_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+			payload.obj_update = { ...payload.obj_update, id: generatedId };
+			try {
+				(params.obj_update as any).id = generatedId;
+			} catch {
+				// ignore if caller object is immutable
+			}
+		}
+	}
+
+	const whereSource: Record<string, any> = params.where ? params.where : {};
+	const updateSource: Record<string, any> = params.obj_update ? params.obj_update : {};
+	const pkSource: Record<string, any> = params.where
+		? { ...updateSource, ...whereSource }
+		: updateSource;
+	const stableId = params.command === "create"
+		? payload.obj_update?.id
+		: (whereSource.id !== undefined ? whereSource.id : updateSource.id);
+
+	if (params.pk_fields && params.pk_fields.length > 0) {
+		const conditions: any[] = [];
+		for (const pkField of params.pk_fields) {
+			if (pkSource[pkField] !== undefined) {
+				conditions.push({
+					field: pkField,
+					type: "eq",
+					value: pkSource[pkField]
+				});
+			}
+		}
+		if (stableId !== undefined && !conditions.some(c => c.field === "id")) {
+			conditions.push({
+				field: "id",
+				type: "eq",
+				value: stableId
+			});
+		}
+		if (conditions.length > 0) {
+			payload.e_where = conditions.length === 1
+				? conditions[0]
+				: { operator: "AND", conditions };
+		}
+	}
+
+	return payload;
+}
+
+export async function bulkUpdateTableData<T extends Record<string, any>>(params: {
+	app_id: string
+	obj_name: string
+	operations: Array<{
+		command: "create" | "update" | "delete"
+		obj_update: T
+		where?: Record<string, any>
+	}>
+	pk_fields?: string[]
+	continue_on_error?: boolean
+}) {
+	const operations = (params.operations || []).map((operation) => {
+		const built = buildUpdateTablePayload({
+			app_id: params.app_id,
+			obj_name: params.obj_name,
+			command: operation.command,
+			obj_update: operation.obj_update,
+			pk_fields: params.pk_fields,
+			where: operation.where,
+		});
+		return {
+			command: built.command,
+			obj_update: built.obj_update,
+			e_where: built.e_where,
+			pk_fields: params.pk_fields,
+		};
+	});
+
+	const payload: any = {
+		app_id: params.app_id,
+		obj_name: params.obj_name,
+		pk_fields: params.pk_fields,
+		continue_on_error: params.continue_on_error !== false,
+		operations,
+	};
+
+	const res = await request
+		.post<ApiResponse<any>>("bulk-update-table-data", { json: payload, ignoreLoading: true })
+		.json<ApiResponse<any>>();
+
+	clearGetTableDataCache();
 	return res;
 }
 

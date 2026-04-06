@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { BasicTable } from "#src/components/basic-table";
-import { updateTableData, getTableData } from "./CsmApi";
+import { updateTableData, getTableData, bulkUpdateTableData } from "./CsmApi";
 import CsmEditModal, { DetailGridTab } from "./CsmEditModal";
 import { csmDecrypt, csmEncrypt } from "./CsmCrypto";
 import { INT, jdFromDate, jdToDate, NewMoon, KinhDoMatTroi, SunLongitude, getSunLongitude, getNewMoonDay, getLunarMonth11, getLeapMonthOffset, duong_qua_am, am_qua_duong, LunarCalendar } from "#src/utils/lunarCalendar";
@@ -2758,6 +2758,40 @@ export function CsmDynamicGrid({
 					const progressKey = `import-progress-${Date.now()}`;
 					const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+					const parseRetryAfterMs = (error: unknown): number | undefined => {
+						const err = error as any;
+						const headerValue = err?.response?.headers?.get?.("retry-after")
+							?? err?.response?.headers?.["retry-after"]
+							?? err?.headers?.get?.("retry-after")
+							?? err?.headers?.["retry-after"];
+						if (headerValue == null) return undefined;
+
+						const retryAfterRaw = String(headerValue).trim();
+						if (!retryAfterRaw) return undefined;
+
+						const retryAfterSeconds = Number(retryAfterRaw);
+						if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+							return Math.ceil(retryAfterSeconds * 1000);
+						}
+
+						const retryAt = Date.parse(retryAfterRaw);
+						if (Number.isFinite(retryAt)) {
+							const delta = retryAt - Date.now();
+							return delta > 0 ? delta : 0;
+						}
+
+						return undefined;
+					};
+
+					const isRateLimitedError = (error: unknown): boolean => {
+						const err = error as any;
+						const status = Number(err?.response?.status ?? err?.status ?? 0);
+						if (status === 429) return true;
+
+						const msg = String(err?.message ?? err ?? "").toLowerCase();
+						return msg.includes("429") || msg.includes("rate limit") || msg.includes("too many requests");
+					};
+
 					const isRowEmpty = (row: Row): boolean => {
 						return Object.values(row || {}).every((value) => {
 							if (value == null) return true;
@@ -2773,7 +2807,7 @@ export function CsmDynamicGrid({
 						return pkFields.map((field) => `${field}:${normalizePrimaryKeyValue(row[field])}`).join("|");
 					};
 
-					const withRetry = async <T,>(task: () => Promise<T>, retries = 2): Promise<T> => {
+					const withRetry = async <T,>(task: () => Promise<T>, retries = 4): Promise<T> => {
 						let lastError: unknown;
 						for (let attempt = 0; attempt <= retries; attempt++) {
 							try {
@@ -2781,7 +2815,9 @@ export function CsmDynamicGrid({
 							} catch (error) {
 								lastError = error;
 								if (attempt >= retries) break;
-								const backoffMs = 250 + attempt * 400;
+								const retryAfterMs = parseRetryAfterMs(error);
+								const limited = isRateLimitedError(error);
+								const backoffMs = retryAfterMs ?? (limited ? (1400 + attempt * 1200) : (450 + attempt * 550));
 								await sleep(backoffMs);
 							}
 						}
@@ -2817,9 +2853,12 @@ export function CsmDynamicGrid({
 					let completed = 0;
 					let successCount = 0;
 					let failedCount = 0;
-					let pointer = 0;
 					const savedItems: Row[] = [];
-					const maxConcurrency = Math.min(4, Math.max(2, total >= 100 ? 4 : 2));
+					const batchSize = total >= 1000 ? 40 : total >= 400 ? 30 : 20;
+					const minBatchIntervalMs = total >= 1000 ? 450 : 320;
+					const pauseEveryBatches = total >= 1000 ? 8 : 6;
+					const pauseMs = total >= 1000 ? 1800 : 1300;
+					let nextAllowedAt = Date.now();
 
 					message.open({
 						key: progressKey,
@@ -2837,13 +2876,15 @@ export function CsmDynamicGrid({
 						});
 					};
 
-					const worker = async () => {
-						while (true) {
-							const currentIndex = pointer;
-							pointer += 1;
-							if (currentIndex >= total) return;
+					for (let batchStart = 0, batchNo = 0; batchStart < total; batchStart += batchSize, batchNo++) {
+						const waitMs = nextAllowedAt - Date.now();
+						if (waitMs > 0) {
+							await sleep(waitMs);
+						}
+						nextAllowedAt = Date.now() + minBatchIntervalMs;
 
-							const item = dedupedItems[currentIndex];
+						const batchItems = dedupedItems.slice(batchStart, Math.min(batchStart + batchSize, total));
+						const operations = batchItems.map((item) => {
 							const itemPkKey = buildPkKey(item);
 							const existingRow = itemPkKey ? existingByPk.get(itemPkKey) : undefined;
 							const command: "create" | "update" = existingRow ? "update" : "create";
@@ -2860,35 +2901,71 @@ export function CsmDynamicGrid({
 								}
 							}
 
-							try {
-								await withRetry(() => updateTableData({
-									app_id: appId,
-									obj_name: tableName,
+							return {
+								item,
+								existingRow,
+								request: {
 									command,
 									obj_update: item,
-									pk_fields: pkFields,
 									where: Object.keys(whereOld).length > 0 ? whereOld : undefined,
-								}), 2);
-								successCount += 1;
-								savedItems.push(item);
+								},
+							};
+						});
 
-								const finalPkKey = buildPkKey(item);
-								if (finalPkKey) {
-									existingByPk.set(finalPkKey, { ...(existingRow || {}), ...item });
-								}
-							} catch (err) {
+						let batchResponse: any = null;
+						try {
+							batchResponse = await withRetry(() => bulkUpdateTableData({
+								app_id: appId,
+								obj_name: tableName,
+								pk_fields: pkFields,
+								continue_on_error: true,
+								operations: operations.map((op) => op.request),
+							}), 4);
+						} catch (err) {
+							for (const op of operations) {
 								failedCount += 1;
-								console.error("Import row save error:", err, item);
-							} finally {
 								completed += 1;
-								if (completed % 5 === 0 || completed === total) {
-									updateProgress();
+								console.error("Import batch save error:", err, op.item);
+							}
+							if (completed % 5 === 0 || completed === total) {
+								updateProgress();
+							}
+							continue;
+						}
+
+						const itemResults = Array.isArray(batchResponse?.results) ? batchResponse.results : [];
+						for (let i = 0; i < operations.length; i++) {
+							const op = operations[i];
+							const result = itemResults[i] || {};
+							const itemSuccess = result.success !== false;
+							const updatedItem = (result.updated_row && typeof result.updated_row === "object")
+								? ({ ...op.item, ...(result.updated_row as Row) } as Row)
+								: op.item;
+
+							if (itemSuccess) {
+								successCount += 1;
+								savedItems.push(updatedItem);
+
+								const finalPkKey = buildPkKey(updatedItem);
+								if (finalPkKey) {
+									existingByPk.set(finalPkKey, { ...(op.existingRow || {}), ...updatedItem });
 								}
+							} else {
+								failedCount += 1;
+								console.error("Import row save error:", result?.message || "Unknown error", op.item);
+							}
+
+							completed += 1;
+							if (completed % 5 === 0 || completed === total) {
+								updateProgress();
 							}
 						}
-					};
 
-					await Promise.all(Array.from({ length: maxConcurrency }, () => worker()));
+						if (batchStart + batchSize < total && (batchNo + 1) % pauseEveryBatches === 0) {
+							await sleep(pauseMs);
+							nextAllowedAt = Date.now() + minBatchIntervalMs;
+						}
+					}
 					message.destroy(progressKey);
 
 					// Update local state: upsert saved rows

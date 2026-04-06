@@ -3103,6 +3103,7 @@
       var mode = String(cfg.mode || "C_D").toUpperCase(); // C, D, 2C, C_D (Tất cả)
       var gt = Math.max(1, Number(cfg.rankFrom || 1));
       var gd = Math.max(gt, Number(cfg.rankTo || 10));
+      var heThong = Number(cfg.heThong || 2) === 3 ? 3 : 2;
 
       // Lọc theo thứ: chỉ giữ các ngày có cùng thứ với ngày cuối (toDate)
       var rows = allRows;
@@ -3140,33 +3141,87 @@
           vals = vals.concat([r.D_duoi, r.P_duoi, r.T_duoi, r.B_duoi]);
         }
         if (mode === "2C") {
-          vals = vals.concat([r.D_dau, r.D_duoi, r.P_dau, r.P_duoi, r.T_dau, r.T_duoi, r.B_dau, r.B_duoi]);
+          vals = vals.concat([r.D_dau, r.D_duoi, r.P_dau, r.P_duoi, r.T_dau, r.T_duoi, r.B_dau, r.B_so2, r.B_so3, r.B_so4, r.B_duoi]);
         }
         return vals.map(function (v) { return String(v || "").slice(-2); }).filter(function (s) { return /^\d{2}$/.test(s); });
       }
 
-      var history = rows.map(dayTokens);
-      var out = [];
-      for (var i = 0; i < 100; i += 1) {
-        var so = String(i).padStart(2, "0");
-        // Lọc hiệu: bỏ số có 2 chữ số giống nhau (00, 11, 22,...)
-        if (cfg.chkHieu) {
-          var d1 = Math.floor(i / 10), d2 = i % 10;
-          if (d1 === d2) continue;
+      var history = rows.map(function (r) {
+        var arr = dayTokens(r);
+        var set = {};
+        for (var i = 0; i < arr.length; i += 1) set[arr[i]] = true;
+        return set;
+      });
+
+      function buildCandidates() {
+        // Legacy PHP (CD=2C) lấy từ timkiem với LENGTH(trim(NoiDung))=5,
+        // tương đương danh sách cặp đảo chuẩn "ab ba".
+        if (mode === "2C") {
+          if (heThong !== 2) return [];
+          return buildLegacyThDaoItems(2).map(function (pairText) {
+            var parts = String(pairText || "").trim().split(/\s+/).filter(Boolean);
+            return {
+              key: pairText,
+              tokens: parts.slice(0, 2)
+            };
+          }).filter(function (it) {
+            return it.tokens.length >= 1;
+          });
         }
+
+        var out = [];
+        for (var s = 0; s < 100; s += 1) {
+          var so = String(s).padStart(2, "0");
+          // Legacy PHP: H==0 (unchecked) filters out equal digits, checked keeps all.
+          if (!cfg.chkHieu) {
+            var d1 = Math.floor(s / 10), d2 = s % 10;
+            if (d1 === d2) continue;
+          }
+          // Legacy ranking in SoLauRaNamBac.php is based on key itself; CD mode affects display layer.
+          out.push({ key: so, tokens: [so], matchTokens: [so] });
+        }
+        return out;
+      }
+
+      function dayHitsCandidate(daySet, candidate) {
+        var toks = (candidate && candidate.matchTokens) || (candidate && candidate.tokens) || [];
+        for (var ti = 0; ti < toks.length; ti += 1) {
+          if (daySet[toks[ti]]) return true;
+        }
+        return false;
+      }
+
+      var candidates = buildCandidates();
+      var out = [];
+      for (var ci = 0; ci < candidates.length; ci += 1) {
+        var cand = candidates[ci];
         var gap = 0;
         var firstHit = -1;
         for (var d = 0; d < history.length; d += 1) {
-          if (history[d].indexOf(so) >= 0) {
+          if (dayHitsCandidate(history[d], cand)) {
             firstHit = d;
             break;
           }
           gap += 1;
         }
-        out.push({ so: so, gap: gap, first_hit_idx: firstHit });
+        // PHP keeps NgayCXHT as -1 when no hit in lookback window.
+        var gapForRank = firstHit >= 0 ? gap : -1;
+        out.push({ so: cand.key, gap: gapForRank, first_hit_idx: firstHit });
       }
       out.sort(function (a, b) { return b.gap - a.gap || Number(a.so) - Number(b.so); });
-      return out.slice(gt - 1, gd);
+
+      // Keep the same tie behavior as PHP: include all rows tied with the last rank value.
+      var fromIdx = Math.max(0, gt - 1);
+      var toIdx = Math.max(fromIdx, gd - 1);
+      if (!out.length || fromIdx >= out.length) return [];
+      var base = out.slice(fromIdx, Math.min(out.length, toIdx + 1));
+      if (!base.length) return [];
+      var lastGap = Number(base[base.length - 1].gap);
+      for (var ex = toIdx + 1; ex < out.length; ex += 1) {
+        if (Number(out[ex].gap) !== lastGap) break;
+        base.push(out[ex]);
+      }
+      return base;
     }
 
     function buildLegacyNamBacSummary(opts) {
@@ -3272,8 +3327,9 @@
       var l2c = toSinhThreshold(cfg.l2c, 12);
       var tky = toSinhThreshold(cfg.tky, 52);
       var tnd = toSinhThreshold(cfg.tnd, 7);
-      var chiTietNgay = toSinhThreshold(16, 16);
-      var chiTietTuan = toSinhThreshold(17, 17);
+      // TongHop.php uses fixed 21 thresholds for detail windows.
+      var chiTietNgay = toSinhThreshold(21, 21);
+      var chiTietTuan = toSinhThreshold(21, 21);
       var tongNgaySinh = toSinhThreshold(28, 28);
       var tuan2DaiSinh = toSinhThreshold(7, 7);
       var tuanD3Sinh = toSinhThreshold(7, 7);
@@ -4640,12 +4696,22 @@
       try {
         var loaded = await lay_ds_dai(dsDaiLegacyCanTai);
         var dataMien = (loaded && loaded[mien] && loaded[mien].data) || [];
+        var boSoFromGroups = [];
+        var selectedGroupMap = {};
+        (legacyThSelectedGroups || []).forEach(function (gid) { selectedGroupMap[String(gid)] = true; });
+        (legacyThGroupOptions || []).forEach(function (g) {
+          if (!selectedGroupMap[String(g.id)]) return;
+          var text = String((g && g.cachIds) || "").split(",").map(function (x) { return String(x || "").trim(); }).filter(Boolean).join(" ");
+          if (text) boSoFromGroups.push(text);
+        });
+        var boSoFromInput = parseSoChuMasked(so_chu_input);
+        var boSoSource = boSoFromGroups.length ? boSoFromGroups : boSoFromInput;
         var rows = buildLegacyNamBacSummary({
           dataMien: dataMien,
           fromDate: tu_ngay,
           toDate: den_ngay,
           heThong: legacyHeThong,
-          boSoList: parseSoChuMasked(so_chu_input),
+          boSoList: boSoSource,
           stepDays: 1
         });
         setLegacyNbRows(rows);

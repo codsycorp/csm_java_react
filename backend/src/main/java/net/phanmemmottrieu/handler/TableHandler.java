@@ -295,6 +295,140 @@ public class TableHandler {
         copyIfPresent(response, result, "app_id");
     }    
 
+    public void handleBulkUpdateTableData(StandardResponse response, Map<String, Object> msg) {
+        if (msg == null) {
+            response.set("code", 400);
+            response.set("success", false);
+            response.set("error", true);
+            response.set("message", "Thiếu payload bulk update");
+            response.set("total", 0);
+            response.set("successCount", 0);
+            response.set("failedCount", 0);
+            response.set("results", new ArrayList<>());
+            return;
+        }
+
+        Object operationsObj = msg == null ? null : msg.get("operations");
+        if (!(operationsObj instanceof List<?> rawOperations) || rawOperations.isEmpty()) {
+            response.set("code", 400);
+            response.set("success", false);
+            response.set("error", true);
+            response.set("message", "Thiếu danh sách operations để bulk update");
+            response.set("total", 0);
+            response.set("successCount", 0);
+            response.set("failedCount", 0);
+            response.set("results", new ArrayList<>());
+            return;
+        }
+
+        String defaultAppId = safeStr(msg.get("app_id"));
+        String defaultObjName = safeStr(msg.get("obj_name"));
+        Object defaultPkFields = msg.get("pk_fields");
+        boolean continueOnError = true;
+        Object continueOnErrorObj = msg.get("continue_on_error");
+        if (continueOnErrorObj != null) {
+            continueOnError = Boolean.parseBoolean(String.valueOf(continueOnErrorObj));
+        }
+
+        List<Map<String, Object>> results = new ArrayList<>();
+        int successCount = 0;
+        int failedCount = 0;
+
+        for (int i = 0; i < rawOperations.size(); i++) {
+            Object rawOperation = rawOperations.get(i);
+            Map<String, Object> operation = toStringKeyMap(rawOperation);
+
+            Map<String, Object> opResult = new HashMap<>();
+            opResult.put("index", i);
+
+            if (operation == null || operation.isEmpty()) {
+                failedCount++;
+                opResult.put("success", false);
+                opResult.put("error", true);
+                opResult.put("message", "Operation không hợp lệ");
+                results.add(opResult);
+                if (!continueOnError) {
+                    break;
+                }
+                continue;
+            }
+
+            Map<String, Object> singleMsg = new HashMap<>(operation);
+            if (!singleMsg.containsKey("app_id") && !defaultAppId.isBlank()) {
+                singleMsg.put("app_id", defaultAppId);
+            }
+            if (!singleMsg.containsKey("obj_name") && !defaultObjName.isBlank()) {
+                singleMsg.put("obj_name", defaultObjName);
+            }
+            if (!singleMsg.containsKey("pk_fields") && defaultPkFields != null) {
+                singleMsg.put("pk_fields", defaultPkFields);
+            }
+
+            Map<String, Object> opUpdate = toStringKeyMap(singleMsg.get("obj_update"));
+            if (opUpdate == null) {
+                failedCount++;
+                opResult.put("success", false);
+                opResult.put("error", true);
+                opResult.put("message", "Thiếu obj_update hợp lệ");
+                results.add(opResult);
+                if (!continueOnError) {
+                    break;
+                }
+                continue;
+            }
+            singleMsg.put("obj_update", opUpdate);
+
+            try {
+                Map<String, Object> singleResult = handleTableOperation(singleMsg, true);
+                boolean itemSuccess = !Boolean.TRUE.equals(singleResult.get("error"))
+                    && !Boolean.FALSE.equals(singleResult.get("success"));
+
+                opResult.put("success", itemSuccess);
+                opResult.put("command", singleResult.getOrDefault("command", singleMsg.get("command")));
+                opResult.put("message", String.valueOf(singleResult.getOrDefault("message", itemSuccess ? "ok" : "error")));
+                opResult.put("updated_row", singleResult.getOrDefault("updated_row", singleMsg.get("obj_update")));
+
+                if (itemSuccess) {
+                    successCount++;
+                } else {
+                    failedCount++;
+                    opResult.put("error", true);
+                }
+
+                results.add(opResult);
+
+                if (!itemSuccess && !continueOnError) {
+                    break;
+                }
+            } catch (Exception ex) {
+                failedCount++;
+                opResult.put("success", false);
+                opResult.put("error", true);
+                opResult.put("message", "Lỗi thao tác bulk item: " + ex.getMessage());
+                opResult.put("updated_row", singleMsg.get("obj_update"));
+                results.add(opResult);
+                if (!continueOnError) {
+                    break;
+                }
+            }
+        }
+
+        int total = rawOperations.size();
+        boolean allSuccess = failedCount == 0;
+        boolean partialSuccess = successCount > 0 && failedCount > 0;
+
+        response.set("code", allSuccess ? 200 : (partialSuccess ? 207 : 400));
+        response.set("success", allSuccess);
+        response.set("partial", partialSuccess);
+        response.set("message", allSuccess
+            ? "Bulk update thành công"
+            : (partialSuccess ? "Bulk update hoàn tất với một số lỗi" : "Bulk update thất bại"));
+        response.set("total", total);
+        response.set("successCount", successCount);
+        response.set("failedCount", failedCount);
+        response.set("results", results);
+    }
+
     private void copyIfPresent(StandardResponse response, Map<String, Object> source, String key) {
         if (source != null && source.containsKey(key)) {
             response.set(key, source.get(key));
