@@ -1413,6 +1413,49 @@
     });
   }
 
+  function buildLegacyGroupTreeModel(groups, keyPrefix) {
+    var buckets = buildLegacyThGroupBuckets(groups || []);
+    var allBucketKeys = [];
+    var allGroupKeys = [];
+    var bucketToGroupKeys = {};
+
+    var treeData = buckets.map(function (bucket) {
+      var bucketKey = String(keyPrefix || "group") + "_bucket_" + String(bucket.key || "0");
+      allBucketKeys.push(bucketKey);
+
+      var groupNodes = (bucket.groups || []).map(function (group) {
+        var groupId = String(group && group.id != null ? group.id : "");
+        var groupKey = String(keyPrefix || "group") + "_group_" + groupId;
+        allGroupKeys.push(groupKey);
+
+        return {
+          key: groupKey,
+          title: String((group && group.text) || groupId),
+          isLeaf: true,
+          selectable: false,
+          disableCheckbox: false
+        };
+      });
+
+      bucketToGroupKeys[bucketKey] = groupNodes.map(function (node) { return node.key; });
+
+      return {
+        key: bucketKey,
+        title: String((bucket && bucket.text) || "Nhóm"),
+        selectable: true,
+        disableCheckbox: false,
+        children: groupNodes
+      };
+    });
+
+    return {
+      treeData: treeData,
+      allBucketKeys: allBucketKeys,
+      allGroupKeys: allGroupKeys,
+      bucketToGroupKeys: bucketToGroupKeys
+    };
+  }
+
   function formatSoChuInput(value) {
     var digits = String(value || "").replace(/\D/g, "").slice(0, 18);
     var pairs = digits.match(/\d{1,2}/g) || [];
@@ -2125,8 +2168,8 @@
     var _ath29 = useState(false), legacyThUseTrietSource = _ath29[0], setLegacyThUseTrietSource = _ath29[1];
     var _ath30 = useState(false), legacyThApiLoading = _ath30[0], setLegacyThApiLoading = _ath30[1];
     var _ath31 = useState(""), legacyThApiStatus = _ath31[0], setLegacyThApiStatus = _ath31[1];
-    var _ath32 = useState(false), legacyThBucketsOpen = _ath32[0], setLegacyThBucketsOpen = _ath32[1];
-    var _ath33 = useState(false), legacyThTrietBucketsOpen = _ath33[0], setLegacyThTrietBucketsOpen = _ath33[1];
+    var _ath32 = useState([]), legacyThExpandedGroupKeys = _ath32[0], setLegacyThExpandedGroupKeys = _ath32[1];
+    var _ath33 = useState([]), legacyThExpandedTrietGroupKeys = _ath33[0], setLegacyThExpandedTrietGroupKeys = _ath33[1];
     var _am = useState({
       so_ky: so_ky,
       lay_so_ky: lay_so_ky,
@@ -2391,6 +2434,60 @@
         if (bk !== ak) return bk - ak;
         return String(a.boSo || "").localeCompare(String(b.boSo || ""), "vi", { numeric: true, sensitivity: "base" });
       });
+    }
+
+    var legacyThGroupTreeModel = useMemo(function () {
+      return buildLegacyGroupTreeModel(legacyThGroupOptions, "main");
+    }, [legacyThGroupOptions]);
+
+    var legacyThTrietGroupTreeModel = useMemo(function () {
+      return buildLegacyGroupTreeModel(legacyThGroupTrietOptions, "triet");
+    }, [legacyThGroupTrietOptions]);
+
+    function groupIdsToTreeKeys(ids, prefix) {
+      return (Array.isArray(ids) ? ids : []).map(function (id) {
+        return String(prefix || "group") + "_group_" + String(id);
+      });
+    }
+
+    function treeKeysToGroupIds(keys, prefix) {
+      var needle = String(prefix || "group") + "_group_";
+      var out = [];
+      var seen = {};
+      (Array.isArray(keys) ? keys : []).forEach(function (key) {
+        var s = String(key || "");
+        if (s.indexOf(needle) !== 0) return;
+        var id = s.slice(needle.length);
+        if (!id || seen[id]) return;
+        seen[id] = true;
+        out.push(id);
+      });
+      return out;
+    }
+
+    function toggleExpandedKey(expandedKeys, key) {
+      var list = Array.isArray(expandedKeys) ? expandedKeys.slice() : [];
+      var idx = list.indexOf(key);
+      if (idx >= 0) {
+        list.splice(idx, 1);
+      } else {
+        list.push(key);
+      }
+      return list;
+    }
+
+    function getCheckedTreeKeys(model, selectedIds, prefix) {
+      var selectedMap = {};
+      (Array.isArray(selectedIds) ? selectedIds : []).forEach(function (id) {
+        selectedMap[String(id)] = true;
+      });
+
+      var groupKeys = [];
+      (model && Array.isArray(model.allGroupKeys) ? model.allGroupKeys : []).forEach(function (key) {
+        var groupId = String(key).replace(String(prefix || "group") + "_group_", "");
+        if (selectedMap[groupId]) groupKeys.push(key);
+      });
+      return groupKeys;
     }
 
     function extractRowsFromTableDataPayload(payload, tableName) {
@@ -6269,6 +6366,13 @@
       + ".kqxs-react-auto .kqxs-capture-toolbar { position: absolute; right: 8px; top: 8px; z-index: 10; }"
       + ".kqxs-react-auto .kqxs-capture-toolbar .ant-btn { box-shadow: 0 1px 4px rgba(0,0,0,0.28); }"
       + ".kqxs-react-auto .kqxs-vach-col { background: var(--kqxs-vach-bg, color-mix(in srgb, var(--kqxs-warning, #faad14) 60%, var(--kqxs-card-bg, #fff))) !important; }"
+      + ".kqxs-react-auto .ant-tree { background: transparent !important; color: var(--kqxs-text, #1f1f1f) !important; }"
+      + ".kqxs-react-auto .ant-tree .ant-tree-node-content-wrapper { color: var(--kqxs-text, #1f1f1f) !important; border-radius: 4px !important; }"
+      + ".kqxs-react-auto .ant-tree .ant-tree-node-content-wrapper:hover { background: color-mix(in srgb, var(--kqxs-primary, #1677ff) 10%, transparent) !important; }"
+      + ".kqxs-react-auto .ant-tree .ant-tree-node-selected, .kqxs-react-auto .ant-tree .ant-tree-node-content-wrapper.ant-tree-node-selected { background: color-mix(in srgb, var(--kqxs-primary, #1677ff) 14%, transparent) !important; }"
+      + ".kqxs-react-auto .ant-tree .ant-tree-switcher, .kqxs-react-auto .ant-tree .ant-tree-switcher-icon { color: var(--kqxs-muted, #666) !important; }"
+      + ".kqxs-react-auto .ant-tree .ant-tree-checkbox-inner { background: var(--kqxs-input-bg, #fff) !important; border-color: var(--kqxs-border, #d9d9d9) !important; }"
+      + ".kqxs-react-auto .ant-tree .ant-tree-checkbox-checked .ant-tree-checkbox-inner { background: var(--kqxs-primary, #1677ff) !important; border-color: var(--kqxs-primary, #1677ff) !important; }"
       + "@media (max-width: 1200px) {"
       + ".kqxs-react-auto .kqxs-kq-col-main, .kqxs-react-auto .kqxs-kq-col-side { flex: 1 1 100%; max-width: 100%; min-width: 0; }"
       + ".kqxs-react-auto .kqxs-capture-toolbar { position: static; margin-bottom: 6px; display: flex; justify-content: flex-end; }"
@@ -6701,96 +6805,64 @@
                       )
                     ]),
                     h(Col, { xs: 24, md: 8, key: "th-auto-group" }, [
-                      h("div", { style: { fontSize: 12, fontWeight: "bold", color: theme.text, marginBottom: 4 } }, tt.lgThAutoGroups + " (" + legacyThSelectedGroups.length + "/" + legacyThGroupOptions.length + ")"),
+                      h("div", { style: { marginBottom: 4 } },
+                        h("div", { style: { fontSize: 12, fontWeight: "bold", color: theme.text } }, tt.lgThAutoGroups + " (" + legacyThSelectedGroups.length + "/" + legacyThGroupOptions.length + ")")
+                      ),
                       h("div", { style: { maxHeight: 220, overflow: "auto", border: "1px solid " + theme.border, borderRadius: 4, background: theme.cardBg, padding: "4px 0" } },
                         legacyThApiLoading
                           ? h("div", { style: { padding: 8, fontSize: 12, color: theme.muted } }, "Đang tải...")
                           : !legacyThGroupOptions.length
                             ? h("div", { style: { padding: 8, fontSize: 12, color: theme.muted } }, "Chưa có dữ liệu")
-                            : buildLegacyThGroupBuckets(legacyThGroupOptions).map(function (bucket) {
-                                return h("details", { key: "bucket_" + bucket.key, open: true, style: { marginBottom: 4 } }, [
-                                  h("summary", { style: { cursor: "pointer", userSelect: "none", padding: "3px 6px", listStyle: "none", fontSize: 12, fontWeight: "bold", color: theme.text, background: theme.isDark ? "#182235" : "#eef4ff", borderRadius: 4 } },
-                                    bucket.text + " (" + bucket.groups.length + " cách)"
-                                  ),
-                                  h("div", { style: { paddingLeft: 10, paddingTop: 4 } },
-                                    bucket.groups.map(function (group) {
-                                      var hasChildren = !!(group.children && group.children.length);
-                                      var groupChecked = legacyThSelectedGroups.indexOf(group.id) >= 0;
-                                      return h("details", { key: group.id, open: false, style: { marginBottom: 2 } }, [
-                                        h("summary", { style: { cursor: "pointer", userSelect: "none", padding: "2px 4px", listStyle: "none", fontSize: 12 } }, [
-                                          h("label", { style: { display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" } }, [
-                                            h("input", { type: "checkbox", checked: groupChecked,
-                                              onChange: function (e) { var c = !!(e && e.target && e.target.checked); setLegacyThSelectedGroups(function (p) { return toggleLegacyThSelection(p, group.id, c); }); },
-                                              style: { cursor: "pointer", margin: 0 } }),
-                                            h("span", { style: { fontWeight: 600, color: theme.text } }, group.text)
-                                          ])
-                                        ]),
-                                        hasChildren ? h("div", { style: { paddingLeft: 16, marginBottom: 2 } },
-                                          (group.children || []).map(function (child) {
-                                            return h("div", { key: child.id, style: { fontSize: 11, color: theme.text, padding: "1px 4px" } }, child.text);
-                                          })
-                                        ) : null
-                                      ]);
-                                    })
-                                  )
-                                ]);
+                            : h(Tree, {
+                                checkable: true,
+                                selectable: true,
+                                defaultExpandAll: false,
+                                expandedKeys: legacyThExpandedGroupKeys,
+                                checkedKeys: getCheckedTreeKeys(legacyThGroupTreeModel, legacyThSelectedGroups, "main"),
+                                treeData: legacyThGroupTreeModel.treeData,
+                                onExpand: function (keys) { setLegacyThExpandedGroupKeys(Array.isArray(keys) ? keys : []); },
+                                onSelect: function (_keys, info) {
+                                  if (!info || !info.node || !Array.isArray(info.node.children) || !info.node.children.length) return;
+                                  var key = String(info.node.key || "");
+                                  setLegacyThExpandedGroupKeys(function (prev) { return toggleExpandedKey(prev, key); });
+                                },
+                                onCheck: function (checkedKeys) {
+                                  var keys = Array.isArray(checkedKeys) ? checkedKeys : ((checkedKeys && checkedKeys.checked) || []);
+                                  setLegacyThSelectedGroups(treeKeysToGroupIds(keys, "main"));
+                                },
+                                showLine: { showLeafIcon: false },
+                                style: { padding: "2px 6px", color: theme.text, background: "transparent" }
                               })
                       )
                     ]),
                     h(Col, { xs: 24, md: 8, key: "th-auto-group-triet" }, [
-                      h("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 4 } }, [
-                        h("div", { style: { fontSize: 12, fontWeight: "bold", color: theme.text } }, (tt.lgThAutoGroupsTriet || "Nhóm Số Triệt") + " (" + legacyThSelectedGroupsTriet.length + "/" + legacyThGroupTrietOptions.length + ")"),
-                        h(Button, { size: "small", onClick: function () { setLegacyThTrietBucketsOpen(!legacyThTrietBucketsOpen); } }, legacyThTrietBucketsOpen ? tt.lgThAutoCollapseGroups : tt.lgThAutoExpandGroups)
-                      ]),
+                      h("div", { style: { marginBottom: 4 } },
+                        h("div", { style: { fontSize: 12, fontWeight: "bold", color: theme.text } }, (tt.lgThAutoGroupsTriet || "Nhóm Số Triệt") + " (" + legacyThSelectedGroupsTriet.length + "/" + legacyThGroupTrietOptions.length + ")")
+                      ),
                       h("div", { style: { maxHeight: 220, overflow: "auto", border: "1px solid " + theme.border, borderRadius: 4, background: theme.isDark ? "#111827" : "#fffaf0", padding: "4px 0" } },
                         legacyThApiLoading
                           ? h("div", { style: { padding: 8, fontSize: 12, color: theme.muted } }, "Đang tải...")
                           : !legacyThGroupTrietOptions.length
                             ? h("div", { style: { padding: 8, fontSize: 12, color: theme.muted } }, "Chưa có dữ liệu")
-                            : buildLegacyThGroupBuckets(legacyThGroupTrietOptions).map(function (bucket) {
-                                var bucketGroupIds = (bucket.groups || []).map(function (g) { return g.id; });
-                                var bucketSelectedCount = bucketGroupIds.filter(function (id) { return legacyThSelectedGroupsTriet.indexOf(id) >= 0; }).length;
-                                var bucketChecked = bucketGroupIds.length > 0 && bucketSelectedCount === bucketGroupIds.length;
-                                return h("details", { key: "bucket_triet_" + bucket.key, open: legacyThTrietBucketsOpen, style: { marginBottom: 4 } }, [
-                                  h("summary", { style: { cursor: "pointer", userSelect: "none", padding: "3px 6px", listStyle: "none", fontSize: 12, fontWeight: "bold", color: theme.text, background: theme.isDark ? "#182235" : "#fff4db", borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 } }, [
-                                    h("span", null, bucket.text + " (" + bucket.groups.length + " nhóm)"),
-                                    h("label", { onClick: function (e) { e.stopPropagation(); }, style: { display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, fontWeight: 500, cursor: "pointer" } }, [
-                                      h("input", {
-                                        type: "checkbox",
-                                        checked: bucketChecked,
-                                        onChange: function (e) {
-                                          var c = !!(e && e.target && e.target.checked);
-                                          setLegacyThSelectedGroupsTriet(function (p) {
-                                            return toggleLegacyThSelectionMany(p, bucketGroupIds, c);
-                                          });
-                                        },
-                                        style: { cursor: "pointer", margin: 0 }
-                                      }),
-                                      tt.lgThAutoCheckWholeGroup
-                                    ])
-                                  ]),
-                                  h("div", { style: { paddingLeft: 10, paddingTop: 4 } },
-                                    bucket.groups.map(function (group) {
-                                      var hasChildren = !!(group.children && group.children.length);
-                                      var groupChecked = legacyThSelectedGroupsTriet.indexOf(group.id) >= 0;
-                                      return h("details", { key: group.id, open: false, style: { marginBottom: 2 } }, [
-                                        h("summary", { style: { cursor: "pointer", userSelect: "none", padding: "2px 4px", listStyle: "none", fontSize: 12 } }, [
-                                          h("label", { style: { display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" } }, [
-                                            h("input", { type: "checkbox", checked: groupChecked,
-                                              onChange: function (e) { var c = !!(e && e.target && e.target.checked); setLegacyThSelectedGroupsTriet(function (p) { return toggleLegacyThSelection(p, group.id, c); }); },
-                                              style: { cursor: "pointer", margin: 0 } }),
-                                            h("span", { style: { fontWeight: 600, color: theme.text } }, group.text)
-                                          ])
-                                        ]),
-                                        hasChildren ? h("div", { style: { paddingLeft: 16, marginBottom: 2 } },
-                                          (group.children || []).map(function (child) {
-                                            return h("div", { key: child.id, style: { fontSize: 11, color: theme.text, padding: "1px 4px" } }, child.text);
-                                          })
-                                        ) : null
-                                      ]);
-                                    })
-                                  )
-                                ]);
+                            : h(Tree, {
+                                checkable: true,
+                                selectable: true,
+                                defaultExpandAll: false,
+                                expandedKeys: legacyThExpandedTrietGroupKeys,
+                                checkedKeys: getCheckedTreeKeys(legacyThTrietGroupTreeModel, legacyThSelectedGroupsTriet, "triet"),
+                                treeData: legacyThTrietGroupTreeModel.treeData,
+                                onExpand: function (keys) { setLegacyThExpandedTrietGroupKeys(Array.isArray(keys) ? keys : []); },
+                                onSelect: function (_keys, info) {
+                                  if (!info || !info.node || !Array.isArray(info.node.children) || !info.node.children.length) return;
+                                  var key = String(info.node.key || "");
+                                  setLegacyThExpandedTrietGroupKeys(function (prev) { return toggleExpandedKey(prev, key); });
+                                },
+                                onCheck: function (checkedKeys) {
+                                  var keys = Array.isArray(checkedKeys) ? checkedKeys : ((checkedKeys && checkedKeys.checked) || []);
+                                  setLegacyThSelectedGroupsTriet(treeKeysToGroupIds(keys, "triet"));
+                                },
+                                showLine: { showLeafIcon: false },
+                                style: { padding: "2px 6px", color: theme.text, background: "transparent" }
                               })
                       )
                     ])
