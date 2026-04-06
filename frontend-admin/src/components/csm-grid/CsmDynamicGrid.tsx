@@ -2608,6 +2608,7 @@ export function CsmDynamicGrid({
 	};
 
 	// Import CSV, Excel (.xls, .xlsx) with trigger support
+	// Vue parity: Excel columns mapped by position (f_stt order), then save each row to server via updateTableData
 	const handleImport = async () => {
 		const input = document.createElement("input");
 		input.type = "file";
@@ -2620,8 +2621,14 @@ export function CsmDynamicGrid({
 				const fileExt = file.name.split(".").pop()?.toLowerCase();
 				let items: Row[] = [];
 
+				// Fields for Excel positional mapping: same filter as export (f_show=1, not id, not richtext)
+				// This matches the columns written by handleExport so col 0 → first visible field
+				const importFields = (m_configs.table || [])
+					.filter((f) => Number(f.f_show) === 1 && String(f.f_name).toLowerCase() !== 'id' && !/richtext|html/.test(String(f.f_types || '').toLowerCase()))
+					.sort((a, b) => Number(a.f_stt ?? 0) - Number(b.f_stt ?? 0));
+
 				if (fileExt === "csv") {
-					// Handle CSV file
+					// CSV: map by header name (more flexible for exported/external files)
 					const text = await file.text();
 					const lines = text.split(/\r?\n/).filter(Boolean);
 					if (lines.length < 2) {
@@ -2640,7 +2647,7 @@ export function CsmDynamicGrid({
 						return obj;
 					});
 				} else if (["xls", "xlsx"].includes(fileExt || "")) {
-					// Handle Excel file (.xls or .xlsx)
+					// Excel: map columns by position to f_stt-sorted fields (Vue parity)
 					const arrayBuffer = await file.arrayBuffer();
 					const workbook = read(arrayBuffer, { type: "array" });
 					const worksheet = workbook.Sheets[workbook.SheetNames[0]];
@@ -2648,28 +2655,49 @@ export function CsmDynamicGrid({
 						message.error("Sheet trống");
 						return;
 					}
-					// Convert sheet to JSON with trimmed header names
-					const rawItems = utils.sheet_to_json<Row>(worksheet, {
-						defval: "",
-						header: 1
-					}) as unknown as Row[];
+					// header:1 = array-of-arrays format
+					const rawRows = utils.sheet_to_json<any[]>(worksheet, { defval: "", header: 1 });
 
-					// First row is header
-					if (rawItems.length < 2) {
+					// First row is the header row (skip it, map by column position)
+					if (rawRows.length < 2) {
 						message.error("File Excel rỗng");
 						return;
 					}
 
-					const header = (rawItems[0] as string[]).map((h) =>
-						String(h).trim().replace(/^\"|\"$/g, "")
-					);
-
-					items = rawItems.slice(1).map((row) => {
+					items = rawRows.slice(1).map((rowArray) => {
+						const cols = Array.isArray(rowArray) ? rowArray : Object.values(rowArray);
 						const obj: Row = {};
-						const rowArray = Array.isArray(row) ? row : Object.values(row as object);
-						header.forEach((h, i) => {
-							let v = (rowArray[i] ?? "");
-							obj[h] = String(v).trim();
+						importFields.forEach((field, colIdx) => {
+							const fieldName = field.f_name.toLowerCase();
+							const rawVal = cols[colIdx] ?? "";
+							const types = String(field.f_types || "").toLowerCase();
+							let val: any = String(rawVal).trim();
+
+							// Number type conversion (Vue: 1*val)
+							if (/price|num|ron/.test(types)) {
+								val = parseFlexibleNumberInput(rawVal) || 0;
+							}
+							// Combo type: resolve display label → stored id/value
+							else if (types.includes("co") && field.f_cbo_query) {
+								const parsed = parseComboQueryConfig(field.f_cbo_query, decrypt || csmDecrypt);
+								const querySpecs = Array.isArray(parsed?.query) ? parsed.query : [];
+								for (const spec of querySpecs) {
+									const tbl = String(spec?.obj_name || "").trim();
+									if (!tbl) continue;
+									const fields = Array.isArray(spec?.fields) ? spec.fields : [];
+									const valueField = String(fields[0] || "id").trim() || "id";
+									const labelField = String(fields[1] || "").trim();
+									const rows = getComboRows(database, tbl);
+									if (labelField && rows.length > 0) {
+										const found = rows.find((r) => String(r[labelField] || "").trim() === val);
+										if (found) {
+											val = found[valueField];
+											break;
+										}
+									}
+								}
+							}
+							obj[fieldName] = val;
 						});
 						return obj;
 					});
@@ -2683,30 +2711,17 @@ export function CsmDynamicGrid({
 					return;
 				}
 
-				// Check if custom beforeImport trigger exists
-console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.keys(m_configs.trigger || {}));
-			console.log("[CsmDynamicGrid] IMPORT START - trigger.beforeImport exists?", !!m_configs.trigger?.beforeImport);
-			console.log("[CsmDynamicGrid] IMPORT START - trigger.afterImport exists?", !!m_configs.trigger?.afterImport);
-			
-			let finalItems = items;
+				// Run beforeImport trigger (can transform/filter items)
+				let finalItems = items;
 				if (m_configs.trigger?.beforeImport) {
 					let code = m_configs.trigger.beforeImport;
-					
-					// Use provided decrypt OR fall back to csmDecrypt
 					const effectiveDecrypt = decrypt || csmDecrypt;
-					try {
-						code = effectiveDecrypt(code);
-					} catch (err) {
-						console.error("Decrypt error for beforeImport:", err);
-					}
-
+					try { code = effectiveDecrypt(code); } catch { /* not encrypted */ }
 					const fn = safeEval(["items", "seft", "data"], code) as ((items: Row[], seft: any, data: Database) => Row[] | Promise<Row[]>) | null;
 					if (fn) {
 						try {
-							const result = await fn(items, { m_configs, context }, database);
-							if (Array.isArray(result)) {
-								finalItems = result;
-							}
+							const result = await fn(items, createSeftContext(), database);
+							if (Array.isArray(result)) finalItems = result;
 						} catch (err) {
 							console.error("beforeImport trigger error:", err);
 							message.error("Lỗi xử lý beforeImport: " + (err as Error).message);
@@ -2720,38 +2735,188 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 					return;
 				}
 
-				// Run custom afterImport trigger if provided (for side effects like syncing storage/backend)
-				console.log("[CsmDynamicGrid] AFTER beforeImport - checking afterImport trigger...");
+				// Run update trigger on each row (Vue parity: calculate derived fields before save)
+				finalItems = finalItems.map((item) => runUpdateTrigger(item));
+
+				// Run afterImport trigger (side effects, e.g. custom server logic)
 				if (m_configs.trigger?.afterImport) {
-					console.log("[CsmDynamicGrid] ✅ afterImport trigger found, executing...");
 					let code = m_configs.trigger.afterImport;
-					
-					// Use provided decrypt OR fall back to csmDecrypt
 					const effectiveDecrypt = decrypt || csmDecrypt;
-					try {
-						code = effectiveDecrypt(code);
-					} catch (err) {
-						console.error("Decrypt error for afterImport:", err);
-					}
+					try { code = effectiveDecrypt(code); } catch { /* not encrypted */ }
 					const fn = safeEval(["items", "seft", "data"], code) as ((items: Row[], seft: any, data: Database) => any) | null;
 					if (fn) {
 						try {
-							console.log("[CsmDynamicGrid] Calling afterImport with finalItems.length:", finalItems.length);
-							await fn(finalItems, { m_configs, context }, database);
-							console.log("[CsmDynamicGrid] ✅ afterImport completed successfully");
+							await fn(finalItems, createSeftContext(), database);
 						} catch (err) {
 							console.error("afterImport trigger error:", err);
 						}
-					} else {
-						console.warn("[CsmDynamicGrid] ⚠️ afterImport safeEval returned null");
 					}
-				} else {
-					console.warn("[CsmDynamicGrid] ⚠️ afterImport trigger NOT FOUND in m_configs.trigger");
 				}
 
-				// Merge imported data with current data
-				setData((prev) => [...prev, ...finalItems]);
-				message.success(`Đã import ${finalItems.length} bản ghi`);
+				// Save each row to server or just update local state
+				if (hasTableName && appId) {
+					const progressKey = `import-progress-${Date.now()}`;
+					const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+					const isRowEmpty = (row: Row): boolean => {
+						return Object.values(row || {}).every((value) => {
+							if (value == null) return true;
+							if (typeof value === "number") return Number.isNaN(value);
+							if (typeof value === "boolean") return false;
+							if (Array.isArray(value)) return value.length === 0;
+							return String(value).trim() === "";
+						});
+					};
+
+					const buildPkKey = (row: Row): string => {
+						if (!hasCompletePrimaryKeyValues(row, pkFields)) return "";
+						return pkFields.map((field) => `${field}:${normalizePrimaryKeyValue(row[field])}`).join("|");
+					};
+
+					const withRetry = async <T,>(task: () => Promise<T>, retries = 2): Promise<T> => {
+						let lastError: unknown;
+						for (let attempt = 0; attempt <= retries; attempt++) {
+							try {
+								return await task();
+							} catch (error) {
+								lastError = error;
+								if (attempt >= retries) break;
+								const backoffMs = 250 + attempt * 400;
+								await sleep(backoffMs);
+							}
+						}
+						throw lastError;
+					};
+
+					const nonEmptyItems = finalItems.filter((row) => !isRowEmpty(row));
+					if (nonEmptyItems.length === 0) {
+						message.warning("Không có dữ liệu hợp lệ để import");
+						return;
+					}
+
+					// Dedupe by primary key: keep last row for same PK to avoid duplicate writes/overload
+					const dedupedItems: Row[] = [];
+					const dedupeIndexByPk = new Map<string, number>();
+					for (const row of nonEmptyItems) {
+						const pkKey = buildPkKey(row);
+						if (pkKey && dedupeIndexByPk.has(pkKey)) {
+							dedupedItems[dedupeIndexByPk.get(pkKey)!] = row;
+						} else {
+							dedupedItems.push(row);
+							if (pkKey) dedupeIndexByPk.set(pkKey, dedupedItems.length - 1);
+						}
+					}
+
+					const total = dedupedItems.length;
+					const existingByPk = new Map<string, Row>();
+					for (const row of data) {
+						const pkKey = buildPkKey(row);
+						if (pkKey) existingByPk.set(pkKey, row);
+					}
+
+					let completed = 0;
+					let successCount = 0;
+					let failedCount = 0;
+					let pointer = 0;
+					const savedItems: Row[] = [];
+					const maxConcurrency = Math.min(4, Math.max(2, total >= 100 ? 4 : 2));
+
+					message.open({
+						key: progressKey,
+						type: "loading",
+						content: `Đang import 0/${total}...`,
+						duration: 0,
+					});
+
+					const updateProgress = () => {
+						message.open({
+							key: progressKey,
+							type: "loading",
+							content: `Đang import ${completed}/${total} (thành công: ${successCount}, lỗi: ${failedCount})...`,
+							duration: 0,
+						});
+					};
+
+					const worker = async () => {
+						while (true) {
+							const currentIndex = pointer;
+							pointer += 1;
+							if (currentIndex >= total) return;
+
+							const item = dedupedItems[currentIndex];
+							const itemPkKey = buildPkKey(item);
+							const existingRow = itemPkKey ? existingByPk.get(itemPkKey) : undefined;
+							const command: "create" | "update" = existingRow ? "update" : "create";
+
+							if (existingRow && existingRow.id !== undefined) {
+								item.id = existingRow.id;
+							}
+
+							const whereOld: Record<string, any> = {};
+							const whereSource = existingRow || item;
+							for (const pkField of pkFields) {
+								if (whereSource?.[pkField] !== undefined && String(whereSource[pkField]).trim() !== "") {
+									whereOld[pkField] = whereSource[pkField];
+								}
+							}
+
+							try {
+								await withRetry(() => updateTableData({
+									app_id: appId,
+									obj_name: tableName,
+									command,
+									obj_update: item,
+									pk_fields: pkFields,
+									where: Object.keys(whereOld).length > 0 ? whereOld : undefined,
+								}), 2);
+								successCount += 1;
+								savedItems.push(item);
+
+								const finalPkKey = buildPkKey(item);
+								if (finalPkKey) {
+									existingByPk.set(finalPkKey, { ...(existingRow || {}), ...item });
+								}
+							} catch (err) {
+								failedCount += 1;
+								console.error("Import row save error:", err, item);
+							} finally {
+								completed += 1;
+								if (completed % 5 === 0 || completed === total) {
+									updateProgress();
+								}
+							}
+						}
+					};
+
+					await Promise.all(Array.from({ length: maxConcurrency }, () => worker()));
+					message.destroy(progressKey);
+
+					// Update local state: upsert saved rows
+					if (savedItems.length > 0) {
+						const mergeRows = (rows: Row[], incoming: Row[]) => {
+							const next = [...rows];
+							for (const item of incoming) {
+								const idx = next.findIndex((r) => hasSamePrimaryKeyValues(r, item, pkFields));
+								if (idx >= 0) next[idx] = { ...next[idx], ...item };
+								else next.push(item);
+							}
+							return next;
+						};
+
+						setData((prev) => mergeRows(prev, savedItems));
+						syncMasterTableRows(mergeRows(data, savedItems));
+					}
+
+					if (failedCount === 0) {
+						message.success(`Import hoàn tất: ${successCount}/${total} dòng`);
+					} else {
+						message.warning(`Import hoàn tất: ${successCount}/${total} dòng thành công, lỗi ${failedCount} dòng`);
+					}
+				} else {
+					// Detail grid or no table_name: only update local state
+					setData((prev) => [...prev, ...finalItems]);
+					message.success(`Đã import ${finalItems.length} bản ghi`);
+				}
 			} catch (error) {
 				console.error("Import error:", error);
 				message.error("Lỗi import: " + (error as Error).message);
@@ -3184,7 +3349,7 @@ console.log("[CsmDynamicGrid] IMPORT START - m_configs.trigger keys:", Object.ke
 				);
 			}
 			// Add batch delete button when rows are selected
-			if (canDelete && selectedKeys.length > 0 && !enableInlineCellEdit) {
+			if (canDelete && selectedKeys.length > 0) {
 				buttons.push(
 					React.createElement(Button, { 
 						key: "batch-delete",
