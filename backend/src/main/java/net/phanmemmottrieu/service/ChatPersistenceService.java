@@ -285,6 +285,12 @@ public class ChatPersistenceService {
             record.put("avatar", message.getAvatar());
             record.put("isAdmin", message.getIsAdmin());
             record.put("eventType", message.getEventType());
+            if (message.getAttachments() != null && !message.getAttachments().isEmpty()) {
+                record.put("attachments", objectMapper.writeValueAsString(message.getAttachments()));
+            }
+            if (message.getCheckinMeta() != null && !message.getCheckinMeta().isEmpty()) {
+                record.put("checkinMeta", objectMapper.writeValueAsString(message.getCheckinMeta()));
+            }
             
             if (message.getReadBy() != null) {
                 record.put("readBy", String.join(",", message.getReadBy()));
@@ -591,6 +597,26 @@ public class ChatPersistenceService {
         msg.setGuestSessionId((String) row.get("guestSessionId"));
         msg.setAvatar((String) row.get("avatar"));
         msg.setEventType((String) row.get("eventType"));
+
+        Object attachmentsObj = row.get("attachments");
+        if (attachmentsObj instanceof String attachmentsStr && attachmentsStr != null && !attachmentsStr.isBlank()) {
+            try {
+                @SuppressWarnings("unchecked")
+                List<Map<String, Object>> attachments = objectMapper.readValue(attachmentsStr, List.class);
+                msg.setAttachments(attachments);
+            } catch (Exception ignored) {
+            }
+        }
+
+        Object checkinObj = row.get("checkinMeta");
+        if (checkinObj instanceof String checkinStr && checkinStr != null && !checkinStr.isBlank()) {
+            try {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> checkinMeta = objectMapper.readValue(checkinStr, Map.class);
+                msg.setCheckinMeta(checkinMeta);
+            } catch (Exception ignored) {
+            }
+        }
         
         Long parsedTimestamp = parseTimestamp(row.get("timestamp"));
         if (parsedTimestamp != null) {
@@ -655,6 +681,26 @@ public class ChatPersistenceService {
         msg.setGuestPhone((String) record.get("guestPhone"));
         msg.setGuestSessionId((String) record.get("guestSessionId"));
         msg.setEventType((String) record.get("eventType"));
+
+        Object attachmentsObj = record.get("attachments");
+        if (attachmentsObj instanceof String attachmentsStr && attachmentsStr != null && !attachmentsStr.isBlank()) {
+            try {
+                @SuppressWarnings("unchecked")
+                List<Map<String, Object>> attachments = objectMapper.readValue(attachmentsStr, List.class);
+                msg.setAttachments(attachments);
+            } catch (Exception ignored) {
+            }
+        }
+
+        Object checkinObj = record.get("checkinMeta");
+        if (checkinObj instanceof String checkinStr && checkinStr != null && !checkinStr.isBlank()) {
+            try {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> checkinMeta = objectMapper.readValue(checkinStr, Map.class);
+                msg.setCheckinMeta(checkinMeta);
+            } catch (Exception ignored) {
+            }
+        }
         
         Long parsedTimestamp = parseTimestamp(record.get("timestamp"));
         if (parsedTimestamp != null) {
@@ -773,6 +819,81 @@ public class ChatPersistenceService {
         }
 
         return null;
+    }
+
+    /**
+     * Thu hoi tin nhan (soft recall) trong khoang thoi gian cho phep.
+     * Khong xoa lich su; chi danh dau eventType=message_recalled va an noi dung/media.
+     */
+    public synchronized Map<String, Object> recallMessage(String appId, long timestamp, String requesterUserId, long recallWindowMs) {
+        String dbAppId = normalizeAppId(appId);
+        Map<String, Object> result = new HashMap<>();
+        result.put("success", false);
+        result.put("reason", "unknown");
+
+        try {
+            ensureChatTable(dbAppId);
+            Map<String, Object> record = findMessageRecordByTimestamp(dbAppId, timestamp);
+            if (record == null) {
+                result.put("reason", "not_found");
+                return result;
+            }
+
+            String ownerUserId = String.valueOf(record.getOrDefault("userId", "")).trim();
+            String requester = String.valueOf(requesterUserId == null ? "" : requesterUserId).trim();
+            if (requester.isEmpty() || ownerUserId.isEmpty() || !ownerUserId.equals(requester)) {
+                result.put("reason", "forbidden");
+                return result;
+            }
+
+            Long messageTs = parseTimestamp(record.get("timestamp"));
+            if (messageTs == null) {
+                result.put("reason", "invalid_timestamp");
+                return result;
+            }
+
+            long now = System.currentTimeMillis();
+            if (recallWindowMs > 0 && (now - messageTs) > recallWindowMs) {
+                result.put("reason", "expired");
+                result.put("expiredByMs", (now - messageTs) - recallWindowMs);
+                return result;
+            }
+
+            String currentEvent = String.valueOf(record.getOrDefault("eventType", "")).trim();
+            if (!"message_recalled".equals(currentEvent)) {
+                record.put("eventType", "message_recalled");
+                record.put("message", "Tin nhan da duoc thu hoi");
+                record.put("attachments", "");
+                record.put("checkinMeta", "");
+                record.put("recalledAt", now);
+                recordManager.createRecord(dbAppId, CHAT_TABLE, record);
+            }
+
+            synchronized (chatCache) {
+                for (ChatMessage msg : chatCache) {
+                    if (msg.getTimestamp() == null) continue;
+                    if (!msg.getTimestamp().equals(timestamp)) continue;
+                    if (!normalizeAppId(msg.getAppId()).equals(dbAppId)) continue;
+                    msg.setEventType("message_recalled");
+                    msg.setMessage("Tin nhan da duoc thu hoi");
+                    msg.setAttachments(null);
+                    msg.setCheckinMeta(null);
+                }
+            }
+
+            result.put("success", true);
+            result.put("reason", "ok");
+            result.put("timestamp", timestamp);
+            result.put("room", String.valueOf(record.getOrDefault("room", "")));
+            result.put("appId", dbAppId);
+            result.put("userId", requester);
+            result.put("recalledAt", now);
+            return result;
+        } catch (Exception e) {
+            logger.error("❌ Error recalling message appId={}, ts={}, requester={}: {}", dbAppId, timestamp, requesterUserId, e.getMessage(), e);
+            result.put("reason", "exception");
+            return result;
+        }
     }
 
     @PreDestroy

@@ -51,6 +51,7 @@ const KNOWN_MENU_BITS: Record<string, number> = {
 	"/system/user": 1,
 	role: 2,
 	"/system/role": 2,
+	"/system/roles": 2,
 	menu: 3,
 	"/system/menu": 3,
 	dept: 4,

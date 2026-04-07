@@ -9,10 +9,11 @@
  * - Hỗ trợ đa ngôn ngữ (vi-VN, en-US, zh-CN)
  */
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useChatHistory } from '#src/contexts/ChatHistoryContext';
 import { useUserStore } from '#src/store/user';
 import { useAppStore } from '#src/store/app';
+import { useSocket } from '#src/hooks/useSocket';
 import { message as antMessage, Button, Input, Select, Card, Space, theme, List, Typography, Popconfirm, Empty, Tag } from 'antd';
 import { SendOutlined, AppstoreOutlined, InfoCircleOutlined, DeleteOutlined, HistoryOutlined, SearchOutlined } from '@ant-design/icons';
 import { useTranslation } from 'react-i18next';
@@ -43,6 +44,15 @@ interface BroadcastMessage {
   appId: string; // sender appId (csm)
 }
 
+interface OnlineAdminUser {
+  clientId: string;
+  userId?: string;
+  username: string;
+  appId: string;
+  online?: boolean;
+  lastSeenAt?: number;
+}
+
 export const BroadcastNotification: React.FC = () => {
   const { t } = useTranslation();
   const [apps, setApps] = useState<App[]>([]);
@@ -50,14 +60,22 @@ export const BroadcastNotification: React.FC = () => {
   const [notificationMessage, setNotificationMessage] = useState<string>('');
   const [sending, setSending] = useState(false);
   const [searchText, setSearchText] = useState<string>('');
+  const [onlineAdmins, setOnlineAdmins] = useState<OnlineAdminUser[]>([]);
+  const [selectedAdmin, setSelectedAdmin] = useState<OnlineAdminUser | null>(null);
+  const [directMessage, setDirectMessage] = useState('');
+  const [loadingOnlineAdmins, setLoadingOnlineAdmins] = useState(false);
   
-  const { broadcastNotification, messages } = useChatHistory();
+  const { broadcastNotification, messages, sendMessage, openChat, markAsRead, typingUsers, connected } = useChatHistory();
+  const { socket } = useSocket({ enabled: true });
   const user = useUserStore();
   const { database } = useAppStore();
+  const currentAppId = (user.app_id || '').trim() || useAppStore.getState().getCurrentAppId() || 'csm';
   
   // Check if user is CSM admin
   const { token } = theme.useToken();
   const isCSMAdmin = user.app_id === 'csm' && (user.dev || isSuperPermissionProfile(toPermissionBigInt((user as any).permissionBitfield)));
+  const isDevUser = !!user.dev;
+  const allowDevAdminChat = isDevUser && currentAppId !== 'csm';
   
   // Load apps list from database (already loaded when menu is rendered)
   useEffect(() => {
@@ -71,6 +89,93 @@ export const BroadcastNotification: React.FC = () => {
       }
     }
   }, [isCSMAdmin, database]);
+
+  const loadOnlineAdmins = useCallback(() => {
+    if (!allowDevAdminChat || !socket || !connected || !currentAppId) return;
+
+    setLoadingOnlineAdmins(true);
+    socket.emit('chat_list_app_users_presence', currentAppId, (raw: any) => {
+      try {
+        const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        const rows = Array.isArray(parsed) ? parsed : [];
+        const normalized = rows
+          .map((item: any) => ({
+            clientId: String(item?.clientId || item?.userId || item?.username || '').trim(),
+            userId: String(item?.userId || '').trim() || undefined,
+            username: String(item?.username || '').trim(),
+            appId: String(item?.appId || currentAppId).trim(),
+            online: Boolean(item?.online),
+            lastSeenAt: Number(item?.lastSeenAt || 0) || 0,
+          }))
+          .filter((item: OnlineAdminUser) => !!item.clientId && !!item.username)
+          .filter((item: OnlineAdminUser) => {
+            if (item.userId && user.userId) return item.userId !== user.userId;
+            return item.username !== user.username;
+          });
+
+        setOnlineAdmins(normalized);
+      } catch {
+        setOnlineAdmins([]);
+      } finally {
+        setLoadingOnlineAdmins(false);
+      }
+    });
+  }, [allowDevAdminChat, socket, connected, currentAppId, user.userId, user.username]);
+
+  useEffect(() => {
+    if (!allowDevAdminChat || !socket || !connected) return;
+
+    loadOnlineAdmins();
+    const handlePresence = (payload: any) => {
+      const payloadAppId = String(payload?.appId || '').trim();
+      if (payloadAppId && payloadAppId !== currentAppId) return;
+      loadOnlineAdmins();
+    };
+    socket.on('chat_user_presence', handlePresence);
+
+    return () => {
+      socket.off?.('chat_user_presence', handlePresence);
+    };
+  }, [allowDevAdminChat, socket, connected, currentAppId, loadOnlineAdmins]);
+
+  const privateRoom = useMemo(() => {
+    if (!selectedAdmin) return '';
+    const me = String(user.userId || '').trim();
+    const peer = String(selectedAdmin.userId || '').trim();
+    if (me && peer) {
+      const ids = [me, peer].sort();
+      return `private:${currentAppId};${ids.join(';')}`;
+    }
+
+    const mine = String(user.username || '').trim();
+    const theirs = String(selectedAdmin.username || '').trim();
+    if (mine && theirs) {
+      const ids = [mine, theirs].sort();
+      return `private:${currentAppId};${ids.join(';')}`;
+    }
+    return '';
+  }, [selectedAdmin, user.userId, user.username, currentAppId]);
+
+  const privateMessages = useMemo(() => {
+    if (!privateRoom) return [];
+    return (messages[privateRoom] || []).slice().sort((a: any, b: any) => (a.timestamp || 0) - (b.timestamp || 0));
+  }, [messages, privateRoom]);
+
+  useEffect(() => {
+    if (!privateRoom) return;
+    openChat(privateRoom);
+    markAsRead(privateRoom);
+  }, [privateRoom, openChat, markAsRead]);
+
+  const sendDirectMessage = () => {
+    const text = directMessage.trim();
+    if (!text || !privateRoom || !selectedAdmin) return;
+    const toIdentity = selectedAdmin.userId || selectedAdmin.username;
+    sendMessage(privateRoom, text, toIdentity);
+    setDirectMessage('');
+  };
+
+  const privateTypingUsers = privateRoom ? (typingUsers[privateRoom] || []).filter((u) => u !== user.username) : [];
   
   // Load ALL sent broadcast messages from context (for all apps)
   const allBroadcasts = useMemo(() => {
@@ -148,7 +253,7 @@ export const BroadcastNotification: React.FC = () => {
     return app?.app_name || appId;
   };
   
-  if (!isCSMAdmin) {
+  if (!isCSMAdmin && !allowDevAdminChat) {
     return (
       <Card title={t('system.broadcast.title')}>
         <p>{t('system.broadcast.admin_only')}</p>
@@ -158,6 +263,92 @@ export const BroadcastNotification: React.FC = () => {
   
   return (
     <Space direction="vertical" style={{ width: '100%' }} size="large">
+      {allowDevAdminChat && (
+        <Card title={t('system.broadcast.dev_chat.title', 'Chat riêng Dev - Admin')} style={{ maxWidth: 1000 }}>
+          <Space direction="vertical" style={{ width: '100%' }} size="middle">
+            <div style={{ color: token.colorTextSecondary }}>
+              {t('system.broadcast.dev_chat.desc', 'Danh sách admin đang online theo app hiện tại. Chọn một admin để chat realtime và lưu lịch sử lâu dài.')}
+            </div>
+
+            <Space wrap style={{ width: '100%' }}>
+              <Select
+                style={{ minWidth: 360 }}
+                loading={loadingOnlineAdmins}
+                value={selectedAdmin?.clientId}
+                placeholder={t('system.broadcast.dev_chat.select_admin', 'Chọn admin đang online')}
+                onChange={(clientId) => {
+                  const next = onlineAdmins.find((item) => item.clientId === clientId) || null;
+                  setSelectedAdmin(next);
+                }}
+                options={onlineAdmins.map((item) => ({
+                  value: item.clientId,
+                  label: `${item.username}${item.online ? ' - Online' : ''}${!item.online && item.lastSeenAt ? ` - Offline` : ''}${item.userId ? ` (${item.userId})` : ''}`,
+                }))}
+              />
+              <Button onClick={loadOnlineAdmins} disabled={!connected}>
+                {t('system.broadcast.dev_chat.refresh', 'Làm mới online')}
+              </Button>
+              <Tag color={connected ? 'green' : 'red'}>
+                {connected ? t('system.broadcast.dev_chat.realtime_on', 'Realtime: Online') : t('system.broadcast.dev_chat.realtime_off', 'Realtime: Offline')}
+              </Tag>
+            </Space>
+
+            <Card size="small" bodyStyle={{ maxHeight: 340, overflowY: 'auto' }}>
+              {privateMessages.length === 0 ? (
+                <Empty description={t('system.broadcast.dev_chat.no_history', 'Chưa có lịch sử chat')} />
+              ) : (
+                <List
+                  dataSource={privateMessages}
+                  renderItem={(item: any) => {
+                    const isMine = item.userId === user.userId || item.username === user.username;
+                    return (
+                      <List.Item style={{ justifyContent: isMine ? 'flex-end' : 'flex-start' }}>
+                        <div style={{ maxWidth: '80%', textAlign: isMine ? 'right' : 'left' }}>
+                          <div style={{ fontSize: 12, color: token.colorTextSecondary }}>
+                            {isMine ? t('common.chat.you', 'Bạn') : item.username} - {dayjs(item.timestamp || Date.now()).format('DD/MM HH:mm:ss')}
+                          </div>
+                          <div
+                            style={{
+                              display: 'inline-block',
+                              marginTop: 4,
+                              padding: '8px 10px',
+                              borderRadius: 8,
+                              background: isMine ? token.colorPrimaryBg : token.colorFillAlter,
+                            }}
+                          >
+                            {item.message}
+                          </div>
+                        </div>
+                      </List.Item>
+                    );
+                  }}
+                />
+              )}
+            </Card>
+
+            {privateTypingUsers.length > 0 && (
+              <div style={{ color: token.colorTextSecondary, fontStyle: 'italic' }}>
+                {privateTypingUsers.join(', ')} {t('system.broadcast.dev_chat.typing', 'đang nhập...')}
+              </div>
+            )}
+
+            <Space.Compact style={{ width: '100%' }}>
+              <Input
+                value={directMessage}
+                placeholder={t('system.broadcast.dev_chat.input', 'Nhập tin nhắn chat riêng...')}
+                onChange={(e) => setDirectMessage(e.target.value)}
+                onPressEnter={sendDirectMessage}
+                disabled={!selectedAdmin}
+              />
+              <Button type="primary" icon={<SendOutlined />} onClick={sendDirectMessage} disabled={!selectedAdmin || !directMessage.trim()}>
+                {t('system.broadcast.dev_chat.send', 'Gửi')}
+              </Button>
+            </Space.Compact>
+          </Space>
+        </Card>
+      )}
+
+      {isCSMAdmin && (
       <Card 
         title={
           <span>
@@ -239,8 +430,10 @@ export const BroadcastNotification: React.FC = () => {
           </div>
         </Space>
       </Card>
+      )}
       
       {/* Sent Messages History */}
+      {isCSMAdmin && (
       <Card
         title={
           <Space>
@@ -331,6 +524,7 @@ export const BroadcastNotification: React.FC = () => {
           />
         </Space>
       </Card>
+      )}
     </Space>
   );
 };

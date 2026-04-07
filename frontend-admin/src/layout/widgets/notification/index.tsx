@@ -409,7 +409,7 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 											<Avatar icon={<UserOutlined />} size="small" />
 											<div style={{ flex: 1 }}>
 												<div className={classes.username}>{g.label}</div>
-												<div style={{ fontSize: 12, color: '#8c8c8c' }}>{isDevUser ? `${t('common.notification.guestDesc', 'Khách của web/app')} • ${(g.appId || 'n/a')}` : t('common.notification.guestDesc', 'Khách của web/app')}</div>
+												<div style={{ fontSize: 12, color: '#8c8c8c' }}>{isDevUser ? `${t('common.notification.guestDesc', 'Khách của web/app')} • Online${g.unread > 0 ? ` • ${g.unread} tin` : ''} • ${(g.appId || 'n/a')}` : `${t('common.notification.guestDesc', 'Khách của web/app')} • Online${g.unread > 0 ? ` • ${g.unread} tin` : ''}`}</div>
 											</div>
 											{g.unread > 0 && <span className={classes.unreadBadge}>{g.unread}</span>}
 										</div>

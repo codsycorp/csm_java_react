@@ -14,7 +14,7 @@ import { read, utils, writeFile } from "xlsx";
 import { useAppStore } from "#src/store/app";
 import { useUserStore } from "#src/store/user";
 import { PERMISSION_BITS, hasAnyPermissionBit, hasPermissionBit, parseMenuBitIndex, toPermissionBigInt } from "#src/utils/permission-bitfield";
-import { formatDateForDisplay, formatDateForStorage, resolveDateLocaleFormat } from "#src/utils/dateControl";
+import { formatDateForDisplay, formatDateForStorage, parseDateValueToDayjs, resolveDateLocaleFormat } from "#src/utils/dateControl";
 import dayjs from "dayjs";
 
 // Minimal types (kept local to avoid wider type churn)
@@ -32,12 +32,17 @@ export interface TableField {
 	f_types?: string;
 	f_report?: number | string;
 	f_cbo_query?: string;
+	f_options?: Array<{ value: string; label: string }> | string;
 	f_format?: string;
 	f_search?: number | string;
+	f_filter?: number | string;
+	f_sort?: number | string;
+	f_sorting?: string;
 	f_fixcol?: number | string;
 	f_pkid?: number | string;
 	f_required?: number | string;
 	f_align?: "left" | "right" | "center" | string;
+	f_width?: number | string;
 	width?: number | string;
 	// Grouping / template
 	f_group_header_template?: string;
@@ -252,6 +257,173 @@ function formatLocalizedNumber(value: any, locale: string, decimals: number): st
 		minimumFractionDigits: precision,
 		maximumFractionDigits: precision,
 	}).format(parsed);
+}
+
+function isJsonType(types: string): boolean {
+	return /(^|[\s,;|])(json|jsonb|object|obj)([\s,;|]|$)/.test(types);
+}
+
+function comparePrimitive(a: any, b: any): number {
+	if (a == null || a === "") return b == null || b === "" ? 0 : -1;
+	if (b == null || b === "") return 1;
+	if (typeof a === "number" && typeof b === "number") return a - b;
+	return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" });
+}
+
+function parseDateSortValue(input: unknown, kind: "date" | "datetime" | "time"): number {
+	const parsed = parseDateValueToDayjs(input, kind);
+	return parsed?.isValid() ? parsed.valueOf() : Number.NaN;
+}
+
+function evaluateNumberFilterExpression(expression: string, rawValue: unknown, locale: string): boolean {
+	const source = String(expression || "").trim();
+	if (!source) return true;
+	const left = parseFlexibleNumberInput(rawValue, locale);
+	if (!Number.isFinite(left)) return false;
+
+	const rangeMatch = source.match(/^(.+)\.\.(.+)$/);
+	if (rangeMatch) {
+		const min = parseFlexibleNumberInput(rangeMatch[1], locale);
+		const max = parseFlexibleNumberInput(rangeMatch[2], locale);
+		if (!Number.isFinite(min) || !Number.isFinite(max)) return false;
+		return left >= Math.min(min, max) && left <= Math.max(min, max);
+	}
+
+	const opMatch = source.match(/^(<=|>=|=|<|>)\s*(.+)$/);
+	if (opMatch) {
+		const right = parseFlexibleNumberInput(opMatch[2], locale);
+		if (!Number.isFinite(right)) return false;
+		switch (opMatch[1]) {
+			case "<": return left < right;
+			case "<=": return left <= right;
+			case ">": return left > right;
+			case ">=": return left >= right;
+			default: return left === right;
+		}
+	}
+
+	const right = parseFlexibleNumberInput(source, locale);
+	if (!Number.isFinite(right)) return String(rawValue ?? "").toLowerCase().includes(source.toLowerCase());
+	return left === right;
+}
+
+function evaluateDateFilterExpression(expression: string, rawValue: unknown, kind: "date" | "datetime" | "time"): boolean {
+	const source = String(expression || "").trim();
+	if (!source) return true;
+	const left = parseDateValueToDayjs(rawValue, kind);
+	if (!left) return false;
+
+	const opMatch = source.match(/^(<=|>=|=|<|>)\s*(.+)$/);
+	const rightRaw = opMatch ? opMatch[2] : source;
+	const right = parseDateValueToDayjs(rightRaw, kind);
+	if (!right) {
+		return String(rawValue ?? "").toLowerCase().includes(source.toLowerCase());
+	}
+
+	if (opMatch) {
+		switch (opMatch[1]) {
+			case "<": return left.valueOf() < right.valueOf();
+			case "<=": return left.valueOf() <= right.valueOf();
+			case ">": return left.valueOf() > right.valueOf();
+			case ">=": return left.valueOf() >= right.valueOf();
+			default:
+				if (kind === "date") return left.startOf("day").valueOf() === right.startOf("day").valueOf();
+				return left.valueOf() === right.valueOf();
+		}
+	}
+
+	if (kind === "date") return left.startOf("day").valueOf() === right.startOf("day").valueOf();
+	if (kind === "time") return left.format("HH:mm:ss") === right.format("HH:mm:ss");
+	return left.valueOf() === right.valueOf();
+}
+
+function parseFreeSearchTokens(input: string): string[] {
+	const tokens = String(input || "").match(/"[^"]+"|\S+/g) || [];
+	return tokens.map((token) => token.replace(/^"|"$/g, "").trim()).filter(Boolean);
+}
+
+function parseFieldOptions(raw: unknown): Array<{ value: string; label: string }> {
+	if (!raw) return [];
+	let source: unknown = raw;
+	if (typeof source === "string") {
+		const text = source.trim();
+		if (!text) return [];
+		try {
+			source = JSON.parse(text);
+		} catch {
+			return [];
+		}
+	}
+	if (!Array.isArray(source)) return [];
+	return source
+		.map((item: any) => {
+			if (item == null) return null;
+			if (typeof item === "string" || typeof item === "number") {
+				const value = String(item).trim();
+				if (!value) return null;
+				return { value, label: value };
+			}
+			const value = String(item?.value ?? item?.id ?? item?.key ?? "").trim();
+			const label = String(item?.label ?? item?.text ?? item?.name ?? value).trim();
+			if (!value) return null;
+			return { value, label: label || value };
+		})
+		.filter((item): item is { value: string; label: string } => Boolean(item));
+}
+
+function rowContainsSelectFilterValue(cellValue: unknown, selected: string): boolean {
+	const target = String(selected || "").trim();
+	if (!target) return false;
+	if (Array.isArray(cellValue)) {
+		return cellValue.some((item) => String(item ?? "").trim() === target);
+	}
+	if (typeof cellValue === "string") {
+		const trimmed = cellValue.trim();
+		if (!trimmed) return false;
+		if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
+			try {
+				return rowContainsSelectFilterValue(JSON.parse(trimmed), target);
+			} catch {
+				return trimmed === target;
+			}
+		}
+		if (trimmed.includes(",")) {
+			return trimmed.split(",").map((item) => item.trim()).includes(target);
+		}
+		return trimmed === target;
+	}
+	return String(cellValue ?? "").trim() === target;
+}
+
+function isEnabledFlag(raw: unknown): boolean {
+	if (raw === true || raw === 1) return true;
+	const text = String(raw ?? "").trim().toLowerCase();
+	return text === "1" || text === "true" || text === "yes" || text === "y" || text === "on";
+}
+
+function resolveConfiguredSortState(field: TableField): { enabled: boolean; defaultOrder?: "ascend" | "descend" } {
+	const rawSort = String((field as any).f_sort ?? "").trim().toLowerCase();
+	const rawSorting = String((field as any).f_sorting ?? "").trim().toLowerCase();
+	const explicitOrder = rawSorting === "asc" ? "ascend" : rawSorting === "desc" ? "descend" : undefined;
+
+	if (rawSort === "asc" || rawSort === "desc") {
+		return { enabled: true, defaultOrder: rawSort === "desc" ? "descend" : "ascend" };
+	}
+	if (isEnabledFlag((field as any).f_sort)) {
+		return { enabled: true, defaultOrder: explicitOrder };
+	}
+	if (rawSort === "") {
+		return { enabled: false, defaultOrder: explicitOrder };
+	}
+	return { enabled: false, defaultOrder: explicitOrder };
+}
+
+function resolveConfiguredColumnWidth(field: TableField): number | undefined {
+	const widthRaw = (field as any).f_width ?? field.width;
+	if (widthRaw == null || widthRaw === "") return undefined;
+	const parsed = Number(widthRaw);
+	if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
+	return parsed;
 }
 
 function buildInlineValidationRules(field: TableField): any[] {
@@ -604,6 +776,8 @@ export function CsmDynamicGrid({
 	permissions,
 	menusPermissions,
 	menuId,
+	gridInstanceKey,
+	shareTableState = false,
 	dataScope,
 	decrypt,
 	onAdd,
@@ -624,6 +798,8 @@ export function CsmDynamicGrid({
 	permissions?: number | string | bigint
 	menusPermissions?: Record<string | number, number>
 	menuId?: string | number
+	gridInstanceKey?: string
+	shareTableState?: boolean
 	dataScope?: string
 	decrypt?: (s: string) => string
 	onAdd?: () => void
@@ -707,8 +883,12 @@ export function CsmDynamicGrid({
 	const [, setUpdateTrigger] = useState(0);
 	const pkFields = useMemo(() => getPrimaryKeyFields(m_configs), [m_configs.struct?.fieldsPK]);
 	const getRowKey = useCallback((row: Row | null | undefined) => buildRowKey(row, pkFields), [pkFields]);
+	const effectiveGridInstanceKey = useMemo(
+		() => String(gridInstanceKey || `${appId || ""}::${menuId || ""}::${m_configs?.id || ""}::${m_configs?.table_name || ""}`),
+		[gridInstanceKey, appId, menuId, m_configs?.id, m_configs?.table_name],
+	);
 	const syncMasterTableRows = useCallback((nextRows: Row[]) => {
-		if (isDetailGrid || !tableName) return;
+		if (!shareTableState || isDetailGrid || !tableName) return;
 		const currentStoreTable = useAppStore.getState().database[tableName];
 		const fallbackTable = database[tableName];
 		const sourceTable = currentStoreTable || fallbackTable;
@@ -719,7 +899,23 @@ export function CsmDynamicGrid({
 			rows: nextRows,
 			app_id: sourceTable?.app_id || appId,
 		});
-	}, [appId, database, isDetailGrid, pkFields, setTableData, tableName]);
+	}, [appId, database, isDetailGrid, pkFields, setTableData, tableName, shareTableState]);
+
+	// Reset volatile UI state whenever grid instance changes (tab/menu isolation).
+	useEffect(() => {
+		setSelectedKeys([]);
+		setEditableKeys([]);
+		setPendingEditableRowId(null);
+		setSelectedRow(null);
+		setSelectedDetailRow(null);
+		setEditingRecord(null);
+		setCloneData(null);
+		setEditorOpen(false);
+		setSearchTerm("");
+		setDatabaseVersion(0);
+		hasFetchedComboTables.current = false;
+		globalTableFetchCache.clear();
+	}, [effectiveGridInstanceKey, globalTableFetchCache]);
 
 	// Enable socket for real-time database updates
 	useSocket({ enabled: true });
@@ -1613,7 +1809,13 @@ export function CsmDynamicGrid({
 	// Map backend fields to ProColumns with f_types rules
 	const baseColumns: ProColumns<Row>[] = useMemo(() => {
 		const shown = (m_configs.table || [])
-			.filter((f) => Number(f.f_show) === 1 && f.f_name !== 'id' && !/richtext|html/.test(String(f.f_types || '').toLowerCase()))
+			.filter((f) => {
+				const types = String(f.f_types || '').toLowerCase();
+				return Number(f.f_show) === 1
+					&& f.f_name !== 'id'
+					&& !/richtext|html/.test(types)
+					&& !isJsonType(types);
+			})
 			.sort((a, b) => Number(a.f_stt || 0) - Number(b.f_stt || 0));
 
 		const cols: ProColumns<Row>[] = shown.map((f) => {
@@ -1639,6 +1841,7 @@ export function CsmDynamicGrid({
 			const isDateTime = /datetime/.test(types);
 			const isTime = /\btime\b/.test(types) && !/datetime/.test(types);
 			const isSelect = typeTokens.includes('co') || /cbo|select/.test(types);
+			const isMultiSelect = /multi_tag|menu_tree|multi_select/.test(types);
 			const isSwitch = /bool|switch|checkbox/.test(types);
 			const isTextArea = /textarea|memo/.test(types);
 			const isRichText = /richtext|html/.test(types);
@@ -1668,11 +1871,97 @@ export function CsmDynamicGrid({
 				title: headerText,
 				dataIndex: f.f_name,
 				key: f.f_name,
-				width: f.width,
+				width: resolveConfiguredColumnWidth(f),
 				align: resolvedAlign ?? (isNumber ? "right" : "left"),
 				// Add responsive property to hide less important columns on mobile
 				responsive: (isImage || isVideo || isAlbumMedia) ? ['lg'] : isRichText ? ['md'] : isTextArea ? ['md'] : undefined,
 			};
+			const sortState = resolveConfiguredSortState(f);
+			const enableColumnSort = sortState.enabled;
+			const enableColumnFilter = (f as any).f_filter != null
+				? isEnabledFlag((f as any).f_filter)
+				: isEnabledFlag((f as any).f_search);
+
+			if (enableColumnSort) {
+				col.sorter = (a: Row, b: Row) => {
+					if (isNumber) {
+						const left = parseFlexibleNumberInput(a?.[f.f_name], numberLocale);
+						const right = parseFlexibleNumberInput(b?.[f.f_name], numberLocale);
+						return comparePrimitive(Number.isFinite(left) ? left : null, Number.isFinite(right) ? right : null);
+					}
+					if (isDate) {
+						return comparePrimitive(parseDateSortValue(a?.[f.f_name], "date"), parseDateSortValue(b?.[f.f_name], "date"));
+					}
+					if (isDateTime) {
+						return comparePrimitive(parseDateSortValue(a?.[f.f_name], "datetime"), parseDateSortValue(b?.[f.f_name], "datetime"));
+					}
+					if (isTime) {
+						return comparePrimitive(parseDateSortValue(a?.[f.f_name], "time"), parseDateSortValue(b?.[f.f_name], "time"));
+					}
+					if (isSelect && selectEnums[f.f_name]) {
+						const left = selectEnums[f.f_name]?.[String(a?.[f.f_name] ?? "")]?.text ?? a?.[f.f_name];
+						const right = selectEnums[f.f_name]?.[String(b?.[f.f_name] ?? "")]?.text ?? b?.[f.f_name];
+						return comparePrimitive(left, right);
+					}
+					return comparePrimitive(a?.[f.f_name], b?.[f.f_name]);
+				};
+				if (sortState.defaultOrder) {
+					col.defaultSortOrder = sortState.defaultOrder;
+				}
+			}
+
+			if (enableColumnFilter) {
+				if ((isSelect || isMultiSelect) && (selectEnums[f.f_name] || parseFieldOptions((f as any).f_options).length > 0)) {
+					const optionsValueEnum = parseFieldOptions((f as any).f_options).reduce<Record<string, { text: string }>>((acc, opt) => {
+						acc[opt.value] = { text: opt.label.includes(".") ? t(opt.label) : opt.label };
+						return acc;
+					}, {});
+					const ve = Object.keys(optionsValueEnum).length > 0 ? optionsValueEnum : selectEnums[f.f_name];
+					col.filters = Object.entries(ve).map(([value, item]) => ({ text: item.text, value }));
+					col.onFilter = (filterValue: React.Key | boolean, record: Row) => {
+						return rowContainsSelectFilterValue(record?.[f.f_name], String(filterValue ?? ""));
+					};
+				} else {
+					col.filterDropdown = ({ setSelectedKeys, selectedKeys, confirm, clearFilters }: any) => {
+						const value = String(selectedKeys?.[0] ?? "");
+						return React.createElement("div", { style: { padding: 8, width: 220 } },
+							React.createElement(Input, {
+								value,
+								onChange: (e: any) => setSelectedKeys(e.target.value ? [e.target.value] : []),
+								onPressEnter: () => confirm(),
+								placeholder: isNumber
+									? "=100 | >100 | 10..50"
+									: (isDate || isDateTime || isTime)
+										? "=20260131 | >20260131"
+										: (t("common.search") as string),
+								allowClear: true,
+								style: { marginBottom: 8 },
+							}),
+							React.createElement(Space, { size: 8 },
+								React.createElement(Button, { type: "primary", size: "small", onClick: () => confirm() }, t("common.search")),
+								React.createElement(Button, {
+									size: "small",
+									onClick: () => {
+										clearFilters?.();
+										confirm({ closeDropdown: true });
+									},
+								}, t("common.reset")),
+							),
+						);
+					};
+					col.filterIcon = (filtered: boolean) => React.createElement(SearchOutlined, { style: { color: filtered ? "#1677ff" : undefined } });
+					col.onFilter = (filterValue: React.Key | boolean, record: Row) => {
+						const expression = String(filterValue ?? "").trim();
+						if (!expression) return true;
+						const raw = record?.[f.f_name];
+						if (isNumber) return evaluateNumberFilterExpression(expression, raw, numberLocale);
+						if (isDate) return evaluateDateFilterExpression(expression, raw, "date");
+						if (isDateTime) return evaluateDateFilterExpression(expression, raw, "datetime");
+						if (isTime) return evaluateDateFilterExpression(expression, raw, "time");
+						return String(raw ?? "").toLowerCase().includes(expression.toLowerCase());
+					};
+				}
+			}
 
 			if (isNumber) col.valueType = "digit";
 			else if (isDateTime) col.valueType = "dateTime";
@@ -1681,10 +1970,44 @@ export function CsmDynamicGrid({
 			else if (isTextArea) col.valueType = "textarea";
 			else if (isRichText) col.valueType = "text"; // plain text for grid, editor in modal
 			else if (isSwitch) col.valueType = "switch";
-			else if (isSelect) {
+			else if (isSelect || isMultiSelect) {
 				col.valueType = "select";
-				const ve = selectEnums[f.f_name];
+				const optionsValueEnum = parseFieldOptions((f as any).f_options).reduce<Record<string, { text: string }>>((acc, opt) => {
+					acc[opt.value] = { text: opt.label.includes(".") ? t(opt.label) : opt.label };
+					return acc;
+				}, {});
+				const ve = Object.keys(optionsValueEnum).length > 0 ? optionsValueEnum : selectEnums[f.f_name];
 				if (ve) col.valueEnum = ve as any;
+				if (isMultiSelect) {
+					col.render = (_dom, entity) => {
+						const raw = entity[f.f_name];
+						if (raw == null || raw === "") return "";
+						const valueEnum = (ve || {}) as Record<string, { text: string }>;
+						const toLabels = (arr: any[]) => arr
+							.map((item) => {
+								const key = String(item ?? "").trim();
+								if (!key) return "";
+								return valueEnum[key]?.text || key;
+							})
+							.filter(Boolean);
+						if (Array.isArray(raw)) return toLabels(raw).join(", ");
+						if (typeof raw === "string") {
+							const trimmed = raw.trim();
+							if (!trimmed) return "";
+							if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
+								try {
+									const parsed = JSON.parse(trimmed);
+									if (Array.isArray(parsed)) return toLabels(parsed).join(", ");
+								} catch {
+									return trimmed;
+								}
+							}
+							if (trimmed.includes(",")) return toLabels(trimmed.split(",").map((item) => item.trim())).join(", ");
+							return valueEnum[trimmed]?.text || trimmed;
+						}
+						return String(raw);
+					};
+				}
 			}
 
 			if (isNumber) {
@@ -2057,7 +2380,7 @@ export function CsmDynamicGrid({
 			return col;
 		});
 		return cols;
-	}, [m_configs.table, selectEnums, i18n.language, numberLocale]);
+	}, [m_configs.table, selectEnums, i18n.language, numberLocale, t]);
 
   // Apply datacolumntemplate trigger (mutates columns)
 	const columns = useMemo<ProColumns<Row>[]>(() => {
@@ -2106,7 +2429,8 @@ export function CsmDynamicGrid({
 				const decimals = Number((field as any).f_dec ?? 0);
 				const typeTokens = types.split(/[\s,;|]+/).filter(Boolean);
 				const isNumberField = /price|number|int|float|double|money|currency/.test(types);
-				const isSelectField = typeTokens.includes('co') || /cbo|select/.test(types);
+				const isSelectField = typeTokens.includes('co') || /cbo|select|multi_tag|menu_tree|multi_select/.test(types);
+				const isMultiSelectField = /multi_tag|menu_tree|multi_select/.test(types);
 				const isDateField = /^date$/.test(types);
 				const isDateTimeField = /datetime/.test(types);
 				const isTimeField = /^time$/.test(types);
@@ -2128,6 +2452,7 @@ export function CsmDynamicGrid({
 				if (isSelectField) {
 					col.fieldProps = {
 						...(col.fieldProps as Record<string, any> || {}),
+						...(isMultiSelectField ? { mode: "multiple" } : {}),
 						showSearch: true,
 						allowClear: true,
 						optionFilterProp: "label",
@@ -2453,18 +2778,179 @@ export function CsmDynamicGrid({
 	// Derived searchable fields
 	const derivedSearchFields = useMemo(() => {
 		if (Array.isArray(searchFields) && searchFields.length) return searchFields;
-		return (m_configs.table || [])
+		const configured = (m_configs.table || [])
+			.filter(f => Number(f.f_show) === 1 && isEnabledFlag((f as any).f_search))
+			.map(f => f.f_name);
+		if (configured.length > 0) return configured;
+		const heuristic = (m_configs.table || [])
 			.filter(f => Number(f.f_show) === 1)
 			.map(f => f.f_name)
 			.filter(name => {
-				// Heuristic: only simple text-like fields
 				const tf = (m_configs.table.find(f => f.f_name === name)?.f_types || "").toLowerCase();
-				return /ed|text|textarea|html|slug|name|title|excerpt|code|status/.test(tf);
+				return /ed|text|textarea|html|slug|name|title|excerpt|code|status|cbo|select|co|multi_tag|menu_tree|multi_select|bool|switch|checkbox|check|int|float|double|number|money|currency|date|datetime|time/.test(tf);
 			});
+		if (heuristic.length > 0) return heuristic;
+
+		// Final fallback: search across all visible columns to avoid "search has no effect" on schema-heavy tables.
+		return (m_configs.table || [])
+			.filter(f => Number(f.f_show) === 1)
+			.map(f => f.f_name)
+			.filter(Boolean);
 	}, [searchFields, m_configs.table]);
 
 	const searchedData = useMemo(() => {
 		let sourceRows = filtered;
+		const fieldMap = new Map<string, TableField>();
+		(m_configs.table || []).forEach((f) => {
+			fieldMap.set(String(f.f_name || "").toLowerCase(), f);
+		});
+
+		const fieldValueEnumMap = new Map<string, Record<string, string>>();
+		(m_configs.table || []).forEach((f) => {
+			const enumFromSelect = selectEnums?.[f.f_name] || {};
+			const enumFromOptions = parseFieldOptions((f as any).f_options).reduce<Record<string, string>>((acc, opt) => {
+				acc[String(opt.value)] = String(opt.label);
+				return acc;
+			}, {});
+			const combined: Record<string, string> = {};
+			Object.entries(enumFromOptions).forEach(([k, v]) => {
+				combined[String(k)] = String(v);
+			});
+			Object.entries(enumFromSelect).forEach(([k, v]) => {
+				const text = typeof v === "object" && v && "text" in v ? (v as any).text : v;
+				combined[String(k)] = String(text ?? "");
+			});
+			fieldValueEnumMap.set(f.f_name, combined);
+		});
+
+		const truthyTokens = new Set(["true", "1", "yes", "y", "on", "checked", "check", "co", "có", "dung", "đúng"]);
+		const falsyTokens = new Set(["false", "0", "no", "n", "off", "unchecked", "khong", "không", "sai"]);
+
+		const collectPrimitiveTerms = (raw: unknown, out: Set<string>, depth = 0) => {
+			if (depth > 3 || raw == null) return;
+			if (Array.isArray(raw)) {
+				raw.forEach((item) => collectPrimitiveTerms(item, out, depth + 1));
+				return;
+			}
+			if (typeof raw === "object") {
+				const obj = raw as Record<string, unknown>;
+				const preferredKeys = ["value", "id", "key", "code", "label", "text", "name", "title", "ten", "ma"];
+				preferredKeys.forEach((key) => collectPrimitiveTerms(obj[key], out, depth + 1));
+				Object.values(obj).slice(0, 6).forEach((value) => collectPrimitiveTerms(value, out, depth + 1));
+				return;
+			}
+
+			const text = String(raw).trim();
+			if (!text) return;
+			out.add(text.toLowerCase());
+
+			if ((text.startsWith("[") || text.startsWith("{"))) {
+				try {
+					collectPrimitiveTerms(JSON.parse(text), out, depth + 1);
+				} catch {
+					// Ignore invalid JSON-like strings.
+				}
+			}
+
+			if (text.includes(",")) {
+				text.split(",").map((item) => item.trim()).filter(Boolean).forEach((item) => out.add(item.toLowerCase()));
+			}
+		};
+
+		const resolveFieldSearchTerms = (row: Row, field: TableField): string[] => {
+			const value = row?.[field.f_name];
+			const types = String(field.f_types || "").toLowerCase();
+			const typeTokens = types.split(/[\s,;|]+/).filter(Boolean);
+			const isSwitch = /bool|switch|checkbox|check/.test(types);
+			const isSelectLike = typeTokens.includes("co") || /cbo|select|multi_tag|menu_tree|multi_select|tree/.test(types);
+			const valueEnum = fieldValueEnumMap.get(field.f_name) || {};
+			const terms = new Set<string>();
+
+			collectPrimitiveTerms(value, terms);
+
+			if (isSwitch) {
+				const normalized = String(value ?? "").trim().toLowerCase();
+				if (truthyTokens.has(normalized) || value === true || value === 1) {
+					["true", "1", "yes", "on", "checked", "co", "có", "đúng"].forEach((token) => terms.add(token));
+				}
+				if (falsyTokens.has(normalized) || value === false || value === 0) {
+					["false", "0", "no", "off", "unchecked", "khong", "không", "sai"].forEach((token) => terms.add(token));
+				}
+			}
+
+			if (isSelectLike && Object.keys(valueEnum).length > 0) {
+				Array.from(terms).forEach((token) => {
+					const label = valueEnum[token] || valueEnum[String(token)] || valueEnum[String(token).trim()];
+					if (label) terms.add(String(label).toLowerCase());
+				});
+			}
+
+			return Array.from(terms).filter(Boolean);
+		};
+
+		const matchTokenOnField = (row: Row, field: TableField, op: string, rawNeedle: string): boolean => {
+			const value = row?.[field.f_name];
+			const types = String(field.f_types || "").toLowerCase();
+			const needle = String(rawNeedle || "").trim();
+			if (!needle) return true;
+
+			const isNumber = /price|number|int|float|double|money|currency/.test(types);
+			const isDate = /\bdate\b/.test(types) && !/datetime/.test(types);
+			const isDateTime = /datetime/.test(types);
+			const isTime = /\btime\b/.test(types) && !/datetime/.test(types);
+
+			if (isNumber) {
+				const expr = op === ":" ? `=${needle}` : `${op}${needle}`;
+				return evaluateNumberFilterExpression(expr, value, numberLocale);
+			}
+			if (isDate) {
+				const expr = op === ":" ? `=${needle}` : `${op}${needle}`;
+				return evaluateDateFilterExpression(expr, value, "date");
+			}
+			if (isDateTime) {
+				const expr = op === ":" ? `=${needle}` : `${op}${needle}`;
+				return evaluateDateFilterExpression(expr, value, "datetime");
+			}
+			if (isTime) {
+				const expr = op === ":" ? `=${needle}` : `${op}${needle}`;
+				return evaluateDateFilterExpression(expr, value, "time");
+			}
+
+			const normalizedNeedle = needle.toLowerCase();
+			const terms = resolveFieldSearchTerms(row, field);
+			if (op === "=") return terms.some((term) => term === normalizedNeedle);
+			return terms.some((term) => term.includes(normalizedNeedle));
+		};
+
+		const matchesFreeSearch = (row: Row, rawSearch: string): boolean => {
+			const tokens = parseFreeSearchTokens(rawSearch);
+			if (tokens.length === 0) return true;
+			const activeSearchFields = derivedSearchFields.length > 0 ? derivedSearchFields : Object.keys(row || {});
+
+			for (const token of tokens) {
+				const fieldExpr = token.match(/^([^:<>=!\s]+)\s*(<=|>=|=|<|>|:)\s*(.+)$/);
+				if (fieldExpr) {
+					const field = fieldMap.get(String(fieldExpr[1] || "").toLowerCase());
+					if (!field) return false;
+					if (!matchTokenOnField(row, field, fieldExpr[2], fieldExpr[3])) return false;
+					continue;
+				}
+
+				const freeTerm = token.toLowerCase();
+				const matched = activeSearchFields.some((fieldName) => {
+					const field = fieldMap.get(String(fieldName || "").toLowerCase());
+					if (field) {
+						return resolveFieldSearchTerms(row, field).some((term) => term.includes(freeTerm));
+					}
+					const val = row?.[fieldName];
+					if (val == null) return false;
+					return String(val).toLowerCase().includes(freeTerm);
+				});
+				if (!matched) return false;
+			}
+
+			return true;
+		};
 
 		if (effectiveScope === "OWNER") {
 			const ownerCandidates = [userId, username, userEmail, phoneNumber, userAppId]
@@ -2505,15 +2991,8 @@ export function CsmDynamicGrid({
 		}
 
 		if (!enableSearch || !searchTerm.trim()) return sourceRows;
-		const term = searchTerm.trim().toLowerCase();
-		return sourceRows.filter(row => {
-			return derivedSearchFields.some(field => {
-				const val = row[field];
-				if (val == null) return false;
-				return String(val).toLowerCase().includes(term);
-			});
-		});
-	}, [filtered, enableSearch, searchTerm, derivedSearchFields, effectiveScope, userId, username, userEmail, phoneNumber, userAppId, userDeptId, userBranchId]);
+		return sourceRows.filter((row) => matchesFreeSearch(row, searchTerm));
+	}, [filtered, enableSearch, searchTerm, derivedSearchFields, effectiveScope, m_configs.table, numberLocale, selectEnums, userId, username, userEmail, phoneNumber, userAppId, userDeptId, userBranchId]);
 
 	// Auto-enable edit mode for newly added rows
 	useEffect(() => {
@@ -3175,10 +3654,15 @@ export function CsmDynamicGrid({
 		},
 		actionRef,
 		columns,
+		columnsState: {
+			persistenceType: "localStorage",
+			persistenceKey: `csm-grid-columns::${effectiveGridInstanceKey}`,
+		},
 		dataSource: searchedData,
 		pagination: disablePagination ? false : { pageSize: Number(m_configs.table_pagesize) || 10 },
-		// Responsive scroll: on mobile, use auto; on desktop, use max-content for horizontal scroll
-		scroll: isMobile ? { x: 'auto', y: 'calc(100vh - 400px)' } : { x: 'max-content', y: 'calc(100vh - 400px)' },
+		// Let BasicTable auto-height handle vertical fit inside parent; keep horizontal scroll responsive.
+		scroll: isMobile ? { x: 'auto' } : { x: 'max-content' },
+		sticky: true,
 		...(enableInlineCellEdit && canEdit ? {
 			editable: {
 				type: 'multiple' as const,
@@ -3536,7 +4020,7 @@ export function CsmDynamicGrid({
 		headerTitle: false,
 	};
 
-	const children: React.ReactNode[] = [React.createElement(BasicTable as any, { key: "table", ...tableProps })];
+	const children: React.ReactNode[] = [React.createElement(BasicTable as any, { key: "table", autoHeight: true, ...tableProps })];
 	
 	// Add detail panel when a master row is selected and it has detail nodes (Master-Detail structure)
 	const isMasterDetail = !isDetailGrid && Number(m_configs.type_form) === 2;

@@ -579,6 +579,18 @@
 		"note_all_users": "Thông báo sẽ được gửi đến TẤT CẢ người dùng đang đăng nhập vào app được chọn",
 		"note_one_way": "Đây là tin nhắn một chiều - người dùng không thể trả lời",
 		"note_persistent": "Thông báo sẽ được lưu vào database và hiển thị trong chat history",
-		"note_realtime": "Người dùng nhận được thông báo realtime nếu đang online"
+		"note_realtime": "Người dùng nhận được thông báo realtime nếu đang online",
+		"dev_chat": {
+			"title": "Chat riêng Dev - Admin",
+			"desc": "Danh sách admin đang online theo app hiện tại. Chọn một admin để chat realtime và lưu lịch sử lâu dài.",
+			"select_admin": "Chọn admin đang online",
+			"refresh": "Làm mới online",
+			"realtime_on": "Realtime: Online",
+			"realtime_off": "Realtime: Offline",
+			"no_history": "Chưa có lịch sử chat",
+			"typing": "đang nhập...",
+			"input": "Nhập tin nhắn chat riêng...",
+			"send": "Gửi"
+		}
 	}
 }

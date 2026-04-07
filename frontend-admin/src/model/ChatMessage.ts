@@ -15,4 +15,17 @@ export interface ChatMessage {
   guestPhone?: string; // Số điện thoại của khách (dùng làm identifier)
   guestSessionId?: string; // Định danh phiên chat ẩn danh của khách
   timestamp?: number; // Thời gian gửi tin nhắn (milliseconds)
+  attachments?: Array<{
+    name: string;
+    url: string;
+    type?: string;
+    size?: number;
+    thumb?: string;
+  }>;
+  checkinMeta?: {
+    timestamp?: number;
+    latitude?: number;
+    longitude?: number;
+    address?: string;
+  };
 }

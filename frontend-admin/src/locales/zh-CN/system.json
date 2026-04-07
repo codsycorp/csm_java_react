@@ -582,6 +582,18 @@
 		"note_all_users": "通知将发送给当前登录所选应用的所有用户",
 		"note_one_way": "这是单向消息 - 用户无法回复",
 		"note_persistent": "通知将保存到数据库并在聊天记录中显示",
-		"note_realtime": "如果用户在线，将实时收到通知"
+		"note_realtime": "如果用户在线，将实时收到通知",
+		"dev_chat": {
+			"title": "开发者与管理员私聊",
+			"desc": "下面显示当前应用在线管理员。选择一位管理员即可实时私聊，并保留长期聊天记录。",
+			"select_admin": "选择在线管理员",
+			"refresh": "刷新在线列表",
+			"realtime_on": "实时：在线",
+			"realtime_off": "实时：离线",
+			"no_history": "暂无聊天记录",
+			"typing": "正在输入...",
+			"input": "输入私聊消息...",
+			"send": "发送"
+		}
 	}
 }

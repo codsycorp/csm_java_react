@@ -24,6 +24,8 @@ public class ChatMessage {
     private String guestPhone; // Số điện thoại của khách (dùng làm identifier cho guest user)
     private String guestSessionId; // Định danh phiên chat ẩn danh của khách
     private Long timestamp; // Thời gian gửi tin nhắn (milliseconds)
+    private List<Map<String, Object>> attachments;
+    private Map<String, Object> checkinMeta;
 
     // Getters and Setters
     public String getUserId() { return userId; }
@@ -127,5 +129,21 @@ public class ChatMessage {
 
     public void setTimestamp(Long timestamp) {
         this.timestamp = timestamp;
+    }
+
+    public List<Map<String, Object>> getAttachments() {
+        return attachments;
+    }
+
+    public void setAttachments(List<Map<String, Object>> attachments) {
+        this.attachments = attachments;
+    }
+
+    public Map<String, Object> getCheckinMeta() {
+        return checkinMeta;
+    }
+
+    public void setCheckinMeta(Map<String, Object> checkinMeta) {
+        this.checkinMeta = checkinMeta;
     }
 }

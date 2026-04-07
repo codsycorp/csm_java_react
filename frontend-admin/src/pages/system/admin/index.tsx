@@ -67,6 +67,58 @@ const SYSTEM_ROUTE_TABLE_SCHEMAS: Record<string, TableBootstrapDefinition[]> = {
 			),
 		},
 	],
+	"/system/role": [
+		{
+			tableName: "csm_roles",
+			struct: buildStruct(
+				{
+					id: "",
+					role_code: "",
+					role_name: "",
+					is_global: 0,
+					dept_id: "",
+					branch_id: "",
+					role_level: "staff",
+					department_id: "",
+					description: "",
+					status: 1,
+					permissionBitfield: "0",
+					permissionSchemaVersion: "v3",
+					dataScope: "NONE",
+					create_time: 0,
+					update_time: 0,
+				},
+				["id", "role_code"],
+				["id", "role_code", "role_name", "description", "status", "dataScope", "dept_id", "branch_id"],
+			),
+		},
+	],
+	"/system/roles": [
+		{
+			tableName: "csm_roles",
+			struct: buildStruct(
+				{
+					id: "",
+					role_code: "",
+					role_name: "",
+					is_global: 0,
+					dept_id: "",
+					branch_id: "",
+					role_level: "staff",
+					department_id: "",
+					description: "",
+					status: 1,
+					permissionBitfield: "0",
+					permissionSchemaVersion: "v3",
+					dataScope: "NONE",
+					create_time: 0,
+					update_time: 0,
+				},
+				["id", "role_code"],
+				["id", "role_code", "role_name", "description", "status", "dataScope", "dept_id", "branch_id"],
+			),
+		},
+	],
 	"/system/departments": [
 		{
 			tableName: "csm_depts",
@@ -728,6 +780,23 @@ export default function AdminPage() {
 			g_readonly: false,
 		}, actorMode, resolvedAppId, t);
 
+		// Respect menu-declared field config for fixed system routes when provided.
+		if (Array.isArray(base?.table) && base.table.length > 0) {
+			runtimeConfig.table = base.table;
+		}
+		if (base?.trigger && typeof base.trigger === "object") {
+			runtimeConfig.trigger = {
+				...(runtimeConfig.trigger || {}),
+				...base.trigger,
+			};
+		}
+		if (base?.struct && typeof base.struct === "object") {
+			runtimeConfig.struct = {
+				...(runtimeConfig.struct || {}),
+				...base.struct,
+			};
+		}
+
 		return normalizeMenuRuntimeConfig(adaptSystemUserConfigForActor(runtimeConfig, systemUserActorType, {
 			permissions: userPermissionsRaw,
 			menusPermissions: userMenusPermissionsRaw,
@@ -738,7 +807,51 @@ export default function AdminPage() {
 	}, [isSystemUserRoute, isDevUser, isAdminUser, t, appId, systemUserActorType, userPermissionsRaw, userMenusPermissionsRaw, runtimeDataScope]);
 
 	const normalizeKnownSystemMenu = useCallback((menu: any = {}): any => {
+		if (location.pathname === "/system/role" || location.pathname === "/system/roles") {
+			const configuredTable = Array.isArray(menu?.table) && menu.table.length > 0 ? menu.table : buildRoleMenuFields(
+				t,
+				tEn,
+				tZh,
+				roleFieldConstraints.permissionOptions,
+				roleFieldConstraints.menuOptions,
+				roleFieldConstraints.presetOptionsQuery,
+				roleFieldConstraints.dataScopeOptionsQuery,
+			);
+			return normalizeMenuRuntimeConfig({
+				...menu,
+				id: "permission-group",
+				path: location.pathname,
+				label: t("common.menu.permissionGroup"),
+				label_vi: t("common.menu.permissionGroup"),
+				label_en: tEn("common.menu.permissionGroup"),
+				label_zh: tZh("common.menu.permissionGroup"),
+				table_name: "csm_roles",
+				app_id: appId,
+				type_form: 1,
+				row_type_edit: 0,
+				g_readonly: false,
+				table: configuredTable,
+				trigger: {
+					beforeSave: PERMISSION_GROUP_BEFORE_SAVE,
+					...(menu?.trigger && typeof menu.trigger === "object" ? menu.trigger : {}),
+				},
+				struct: {
+					...(menu?.struct || {}),
+					fieldsPK: ["id", "role_code"],
+				},
+			});
+		}
+
 		if (location.pathname === "/system/dept") {
+			const configuredTable = Array.isArray(menu?.table) && menu.table.length > 0 ? menu.table : buildRoleMenuFields(
+				t,
+				tEn,
+				tZh,
+				roleFieldConstraints.permissionOptions,
+				roleFieldConstraints.menuOptions,
+				roleFieldConstraints.presetOptionsQuery,
+				roleFieldConstraints.dataScopeOptionsQuery,
+			);
 			return normalizeMenuRuntimeConfig({
 				...menu,
 				id: "permission-group",
@@ -752,23 +865,20 @@ export default function AdminPage() {
 				type_form: 1,
 				row_type_edit: 0,
 				g_readonly: false,
-				table: buildRoleMenuFields(
-					t,
-					tEn,
-					tZh,
-					roleFieldConstraints.permissionOptions,
-					roleFieldConstraints.menuOptions,
-					roleFieldConstraints.presetOptionsQuery,
-					roleFieldConstraints.dataScopeOptionsQuery,
-				),
-				trigger: { beforeSave: PERMISSION_GROUP_BEFORE_SAVE },
+				table: configuredTable,
+				trigger: {
+					beforeSave: PERMISSION_GROUP_BEFORE_SAVE,
+					...(menu?.trigger && typeof menu.trigger === "object" ? menu.trigger : {}),
+				},
 				struct: {
+					...(menu?.struct || {}),
 					fieldsPK: ["id", "role_code"],
 				},
 			});
 		}
 
 		if (location.pathname === "/system/departments") {
+			const configuredTable = Array.isArray(menu?.table) && menu.table.length > 0 ? menu.table : buildDeptMenuFields(t, tEn, tZh);
 			return normalizeMenuRuntimeConfig({
 				...menu,
 				id: "departments",
@@ -782,14 +892,16 @@ export default function AdminPage() {
 				type_form: 1,
 				row_type_edit: 0,
 				g_readonly: false,
-				table: buildDeptMenuFields(t, tEn, tZh),
+				table: configuredTable,
 				struct: {
+					...(menu?.struct || {}),
 					fieldsPK: ["id", "dept_code"],
 				},
 			});
 		}
 
 		if (location.pathname === "/system/branches") {
+			const configuredTable = Array.isArray(menu?.table) && menu.table.length > 0 ? menu.table : buildBranchMenuFields(t, tEn, tZh);
 			return normalizeMenuRuntimeConfig({
 				...menu,
 				id: "branches",
@@ -803,8 +915,9 @@ export default function AdminPage() {
 				type_form: 1,
 				row_type_edit: 0,
 				g_readonly: false,
-				table: buildBranchMenuFields(t, tEn, tZh),
+				table: configuredTable,
 				struct: {
+					...(menu?.struct || {}),
 					fieldsPK: ["id", "branch_code"],
 				},
 			});
@@ -831,6 +944,10 @@ export default function AdminPage() {
 		"/system/dept": "common.menu.permissionGroup",
 		"dept": "common.menu.permissionGroup",
 		"permission-group": "common.menu.permissionGroup",
+		"/system/role": "common.menu.permissionGroup",
+		"role": "common.menu.permissionGroup",
+		"/system/roles": "common.menu.permissionGroup",
+		"roles": "common.menu.permissionGroup",
 		"/system/departments": "common.menu.dept",
 		"departments": "common.menu.dept",
 		"/system/branches": "common.menu.branch",
@@ -852,6 +969,15 @@ export default function AdminPage() {
 
 	const enforceCanonicalSystemRouteMenu = useCallback((rawMenu: any = {}): any => {
 		const normalized = normalizeMenuRuntimeConfig(rawMenu || {});
+		if (location.pathname === "/system/role" || location.pathname === "/system/roles") {
+			return normalizeMenuRuntimeConfig({
+				...normalized,
+				id: "permission-group",
+				path: location.pathname,
+				table_name: "csm_roles",
+				app_id: normalized.app_id || appId,
+			});
+		}
 		if (location.pathname === "/system/dept") {
 			return normalizeMenuRuntimeConfig({
 				...normalized,
@@ -953,6 +1079,58 @@ export default function AdminPage() {
 					   "/system/dept": {
 						   id: "permission-group",
 						   path: "/system/dept",
+						   label: t("common.menu.permissionGroup"),
+						   label_vi: t("common.menu.permissionGroup"),
+						   label_en: tEn("common.menu.permissionGroup"),
+						   label_zh: tZh("common.menu.permissionGroup"),
+						   table_name: "csm_roles",
+						   app_id: appId,
+						   type_form: 1,
+						   row_type_edit: 0,
+						   g_readonly: false,
+						   table: buildRoleMenuFields(
+							   t,
+							   tEn,
+							   tZh,
+							   roleFieldConstraints.permissionOptions,
+							   roleFieldConstraints.menuOptions,
+							   roleFieldConstraints.presetOptionsQuery,
+							   roleFieldConstraints.dataScopeOptionsQuery,
+						   ),
+						   trigger: { beforeSave: PERMISSION_GROUP_BEFORE_SAVE },
+						   struct: {
+							   fieldsPK: ["id", "role_code"],
+						   },
+					   },
+					   "/system/role": {
+						   id: "permission-group",
+						   path: "/system/role",
+						   label: t("common.menu.permissionGroup"),
+						   label_vi: t("common.menu.permissionGroup"),
+						   label_en: tEn("common.menu.permissionGroup"),
+						   label_zh: tZh("common.menu.permissionGroup"),
+						   table_name: "csm_roles",
+						   app_id: appId,
+						   type_form: 1,
+						   row_type_edit: 0,
+						   g_readonly: false,
+						   table: buildRoleMenuFields(
+							   t,
+							   tEn,
+							   tZh,
+							   roleFieldConstraints.permissionOptions,
+							   roleFieldConstraints.menuOptions,
+							   roleFieldConstraints.presetOptionsQuery,
+							   roleFieldConstraints.dataScopeOptionsQuery,
+						   ),
+						   trigger: { beforeSave: PERMISSION_GROUP_BEFORE_SAVE },
+						   struct: {
+							   fieldsPK: ["id", "role_code"],
+						   },
+					   },
+					   "/system/roles": {
+						   id: "permission-group",
+						   path: "/system/roles",
 						   label: t("common.menu.permissionGroup"),
 						   label_vi: t("common.menu.permissionGroup"),
 						   label_en: tEn("common.menu.permissionGroup"),
@@ -1258,6 +1436,8 @@ export default function AdminPage() {
 	const tableNameByPath: Record<string, string[]> = {
 		"/system/user": ["csm_accounts", "csm_group_members"],
 		"/system/dept": ["csm_roles"],
+		"/system/role": ["csm_roles"],
+		"/system/roles": ["csm_roles"],
 		"/system/departments": ["csm_depts"],
 		"/system/branches": ["csm_branches"],
 	};
@@ -1379,11 +1559,20 @@ export default function AdminPage() {
 		let rowTypeEdit: 0 | 1 = runtimeMenuData.row_type_edit ?? 0;
 		
 		// Check localStorage for overrides (for testing purposes)
-		// Can be set via: localStorage.setItem(`${menuId}:type_form`, "1")
-		// localStorage.setItem(`${menuId}:row_type_edit`, "1")
+		// Can be set via: localStorage.setItem(`${menuStorageScope}:type_form`, "1")
+		// localStorage.setItem(`${menuStorageScope}:row_type_edit`, "1")
 		try {
-			const storedTypeForm = localStorage.getItem(`${menuId}:type_form`);
-			const storedRowTypeEdit = localStorage.getItem(`${menuId}:row_type_edit`);
+			const menuStorageScope = String(
+				runtimeMenuData?.id
+					|| runtimeMenuData?.path
+					|| location.pathname
+					|| menuId
+					|| "system-grid"
+			).trim();
+			const storedTypeForm = localStorage.getItem(`${menuStorageScope}:type_form`)
+				?? localStorage.getItem(`${menuId}:type_form`);
+			const storedRowTypeEdit = localStorage.getItem(`${menuStorageScope}:row_type_edit`)
+				?? localStorage.getItem(`${menuId}:row_type_edit`);
 			if (storedTypeForm === "" || storedTypeForm === "1" || storedTypeForm === "2") {
 				typeForm = storedTypeForm as "" | 1 | 2;
 			}
@@ -1604,6 +1793,7 @@ export default function AdminPage() {
 			<div style={{ padding: 16, height: "100%" }}>
 				{mismatchAlertNode}
 				<CsmDynamicGrid
+					gridInstanceKey={`${location.pathname}::${String(runtimeMenuData.id || "")}`}
 					m_configs={m_configs}
 					database={database}
 					appId={effectiveAppId}

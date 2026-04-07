@@ -23,7 +23,16 @@ interface ChatHistoryContextValue {
   messages: Record<string, ChatMessage[]>; // key: room hoặc guestPhone
   
   // Actions
-  sendMessage: (room: string, message: string, to?: string) => void;
+  sendMessage: (
+    room: string,
+    message: string,
+    to?: string,
+    extra?: {
+      attachments?: ChatMessage['attachments'];
+      checkinMeta?: ChatMessage['checkinMeta'];
+      eventType?: string;
+    }
+  ) => void;
   loadHistory: (room: string, guestPhone?: string) => Promise<void>;
   markAsRead: (room: string) => void;
   broadcastNotification: (targetAppId: string, message: string) => Promise<boolean>; // CSM admin broadcast
@@ -42,6 +51,7 @@ interface ChatHistoryContextValue {
   activeChats: string[]; // list of room/guestPhone đang mở
   openChat: (room: string) => void;
   closeChat: (room: string) => void;
+  recallMessage: (room: string, timestamp: number) => Promise<boolean>;
 }
 
 type AdminChatHistorySnapshot = {
@@ -84,8 +94,9 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
   );
   const { guestPhone, guestSessionId, isGuest } = useGuestPhone();
   const isAdminUser = !!user.dev || isSuperPermissionProfile(toPermissionBigInt((user as any).permissionBitfield));
+  const isPortalUser = !isGuest && !!String(user.userId || '').trim();
   const isDevUser = !!user.dev;
-  const chatActor: ChatActor = isGuest ? 'guest' : (isAdminUser ? 'admin' : 'user');
+  const chatActor: ChatActor = isGuest ? 'guest' : (isPortalUser ? 'admin' : 'user');
   
   // Debug logging for appId
   useEffect(() => {
@@ -283,6 +294,12 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
     }
 
     if (chatActor === 'admin') {
+      if (room.startsWith('private:')) {
+        return {
+          actualRoom: room,
+          targetGuestIdentity: undefined,
+        };
+      }
       if (room.startsWith('guest:')) {
         const identity = room.split(';').slice(1).join(';').trim();
         return {
@@ -467,24 +484,38 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
   }, [loadHistory]);
   
   // Send message
-  const sendMessage = useCallback((room: string, message: string, to?: string) => {
-    if (!socket || !message.trim()) return;
+  const sendMessage = useCallback((
+    room: string,
+    message: string,
+    to?: string,
+    extra?: {
+      attachments?: ChatMessage['attachments'];
+      checkinMeta?: ChatMessage['checkinMeta'];
+      eventType?: string;
+    }
+  ) => {
+    const hasText = !!message.trim();
+    const hasMedia = Array.isArray(extra?.attachments) && extra!.attachments!.length > 0;
+    if (!socket || (!hasText && !hasMedia)) return;
     const { actualRoom, targetGuestIdentity } = resolveOutgoingRoom(room, to);
+    const forcePrivateInternal = chatActor === 'admin' && room.startsWith('private:') && !!to;
     
     const msg: ChatMessage = {
       room: actualRoom,
       username: chatActor === 'guest' ? (guestPhone || "Guest") : (user.username || "Admin"),
       userId: user.userId,
       avatar: user.avatar,
-      isAdmin: isAdminUser,
+      isAdmin: forcePrivateInternal ? false : isAdminUser,
       message: message.trim(),
-      eventType: undefined,
+      eventType: extra?.eventType,
       readBy: [],
       appId,
       to,
       guestPhone: chatActor === 'guest' ? (guestPhone || "") : undefined,
       guestSessionId: chatActor === 'guest' ? (targetGuestIdentity || "") : (targetGuestIdentity || undefined),
       timestamp: Date.now(),
+      attachments: extra?.attachments,
+      checkinMeta: extra?.checkinMeta,
     };
     
     // Add to local state - use UI room for grouping
@@ -584,6 +615,9 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
   const openChat = useCallback((room: string) => {
     setActiveChats(prev => (prev.includes(room) ? prev : [...prev, room]));
     if (connected && socket) {
+      if (room.startsWith('private:')) {
+        socket.emit('join_room', room);
+      }
       loadHistory(room);
     }
   }, [loadHistory, connected, socket]);
@@ -591,6 +625,26 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
   const closeChat = useCallback((room: string) => {
     setActiveChats(prev => (prev.includes(room) ? prev.filter(r => r !== room) : prev));
   }, []);
+
+  const recallMessage = useCallback(async (room: string, timestamp: number): Promise<boolean> => {
+    if (!socket || !connected || !timestamp) return false;
+    const payload = {
+      room,
+      appId,
+      timestamp,
+    };
+
+    return await new Promise<boolean>((resolve) => {
+      socket.emit('chat_recall_message', payload, (ack: any) => {
+        try {
+          const parsed = typeof ack === 'string' ? JSON.parse(ack) : ack;
+          resolve(Boolean(parsed?.success));
+        } catch {
+          resolve(false);
+        }
+      });
+    });
+  }, [socket, connected, appId]);
   
   // Clear messages when appId changes (user switches app or logs in to different app)
   useEffect(() => {
@@ -668,9 +722,8 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
           targetRoom = `guest:${(msg.appId || appId).trim()};${msg.guestSessionId}`;
         } else if (msg.guestPhone) {
           targetRoom = `guest:${(msg.appId || appId).trim()};${msg.guestPhone}`;
-        } else if (msg.to && msg.userId !== user.userId) {
-          // Msg tới người khác
-          return;
+        } else if (String(msg.room || '').startsWith('private:')) {
+          targetRoom = msg.room;
         }
       }
       
@@ -943,6 +996,32 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
 
     socket.on("chat_read_update", handleReadUpdate);
 
+    const handleMessageRecalled = (payload: any) => {
+      const targetTs = Number(payload?.timestamp || 0);
+      if (!targetTs) return;
+      setMessages(prev => {
+        const next: Record<string, ChatMessage[]> = { ...prev };
+        let changed = false;
+        Object.entries(prev).forEach(([roomKey, msgs]) => {
+          const updated = (msgs || []).map((msg) => {
+            if (Number(msg?.timestamp || 0) !== targetTs) return msg;
+            changed = true;
+            return {
+              ...msg,
+              eventType: 'message_recalled',
+              message: 'Tin nhan da duoc thu hoi',
+              attachments: [],
+              checkinMeta: undefined,
+            } as ChatMessage;
+          });
+          next[roomKey] = updated;
+        });
+        return changed ? next : prev;
+      });
+    };
+
+    socket.on('chat_message_recalled', handleMessageRecalled);
+
     // Listen for typing indicators
     const handleTyping = (data: any) => {
       const { room, username, isTyping } = data;
@@ -977,6 +1056,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
       socket.off?.("chat_message_deleted", handleMessageDeleted);
       socket.off?.('chat_guest_cleanup', handleGuestCleanup);
       socket.off?.("chat_read_update", handleReadUpdate);
+      socket.off?.('chat_message_recalled', handleMessageRecalled);
       socket.off?.("user_typing", handleTyping);
     };
   }, [socket, isGuest, guestIdentity, guestPhone, appId, user.userId, activeChats, saveToLocalStorage, loadHistory, emitAutoOpenChat, applyAdminSnapshot, mapApiRoomToUiRoom, isDevUser]);
@@ -1102,6 +1182,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
     activeChats,
     openChat,
     closeChat,
+    recallMessage,
   };
   
   return (

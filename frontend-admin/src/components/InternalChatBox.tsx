@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { UserOutlined, SendOutlined, CloseOutlined, MinusOutlined, DeleteOutlined, PushpinOutlined } from "@ant-design/icons";
-import { Input, Button, List, Avatar, theme, Tooltip, Popconfirm } from "antd";
+import { UserOutlined, SendOutlined, CloseOutlined, MinusOutlined, DeleteOutlined, PushpinOutlined, PaperClipOutlined, CameraOutlined, EyeOutlined, CheckOutlined, CheckCircleOutlined, FileOutlined } from "@ant-design/icons";
+import { Input, Button, List, Avatar, theme, Tooltip, Popconfirm, Tag } from "antd";
 import { useTranslation } from "react-i18next";
 import { useChatHistory } from "#src/contexts/ChatHistoryContext";
 import { useUserStore } from "#src/store/user";
@@ -8,6 +8,23 @@ import { useAppStore } from "#src/store/app";
 import { useGuestPhone } from "#src/hooks/useGuestPhone";
 import type { ChatMessage } from "#src/model/ChatMessage";
 import FloatingChatButton from "./FloatingChatButton";
+
+const UPLOAD_ENDPOINT = "/upload.shtml";
+const RECALL_WINDOW_MS = 2 * 60 * 1000;
+
+function resolveMediaUrl(pathValue?: string): string {
+  if (!pathValue) return "";
+  if (/^https?:\/\//i.test(pathValue)) return pathValue;
+  return pathValue.startsWith("/") ? pathValue : `/${pathValue}`;
+}
+
+function inferAttachmentType(fileName?: string, mime?: string): "image" | "video" | "file" {
+  const lowerName = String(fileName || "").toLowerCase();
+  const lowerMime = String(mime || "").toLowerCase();
+  if (lowerMime.startsWith("image/") || /\.(png|jpe?g|gif|webp|bmp|svg|avif)$/.test(lowerName)) return "image";
+  if (lowerMime.startsWith("video/") || /\.(mp4|webm|ogg|mov|m4v|mkv|avi)$/.test(lowerName)) return "video";
+  return "file";
+}
 
 
 
@@ -18,6 +35,10 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
   const [isMinimized, setIsMinimized] = useState(false);
   const [isPinned, setIsPinned] = useState(false);
   const [deletedMessageIds, setDeletedMessageIds] = useState<Set<string>>(new Set());
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [uploadingMedia, setUploadingMedia] = useState(false);
+  const filePickerRef = useRef<HTMLInputElement>(null);
+  const checkinPickerRef = useRef<HTMLInputElement>(null);
   const user = useUserStore();
   // CRITICAL: Use same pattern as permission.ts for getting effective appId
   // Priority: user.app_id (from login) > store.currentAppId (from AppStore) > fallback to "csm"
@@ -37,6 +58,7 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
     sendMessage: sendMessageContext, 
     loadHistory, 
     markAsRead, 
+    recallMessage,
     unreadCounts,
     connected,
     openChat: openChatContext,
@@ -89,6 +111,7 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
   const roomKey = isGuest
     ? (effectiveGuestSessionId || chatRoom)
     : (isGuestConversation ? room : (username || chatRoom));
+  const localHiddenStorageKey = `csm_chat_hidden_${String(user.userId || effectiveGuestSessionId || 'guest')}_${roomKey}`;
 
   const pinnedStorageKey = `csm_chat_pin_${roomKey}`;
   const pinnedPosStorageKey = `csm_chat_pin_pos_${roomKey}`;
@@ -100,26 +123,58 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
   // Filter out deleted messages
   const visibleMessages = messages.filter((msg: ChatMessage) => !deletedMessageIds.has(msg.timestamp?.toString() || ''));
 
-  // Handle delete message
-  const handleDeleteMessage = async (msgTimestamp?: number) => {
+  // Local-only hide: affects only the current viewer window/history state.
+  const handleDeleteMessage = useCallback((msgTimestamp?: number) => {
     if (!msgTimestamp) return;
-    
+    setDeletedMessageIds(prev => {
+      const next = new Set(prev);
+      next.add(String(msgTimestamp));
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
     try {
-      // 🔥 CRITICAL: Pass correct appId - use appId from user login or store
-      console.log(`🗑️ [InternalChatBox] Deleting message - appId=${appId}, timestamp=${msgTimestamp}`);
-      const data = await (window as any).deleteChatMessage?.(msgTimestamp, appId);
-      
-      if (data?.success || data?.code === 200) {
-        // Remove from UI
-        setDeletedMessageIds(prev => new Set(prev).add(msgTimestamp.toString()));
-        console.log('✅ Message deleted successfully');
-      } else {
-        console.error('❌ Failed to delete message:', data?.message);
+      const raw = localStorage.getItem(localHiddenStorageKey);
+      if (!raw) {
+        setDeletedMessageIds(new Set());
+        return;
       }
-    } catch (error) {
-      console.error('❌ Error deleting message:', error);
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        setDeletedMessageIds(new Set(parsed.map((x) => String(x))));
+      } else {
+        setDeletedMessageIds(new Set());
+      }
+    } catch {
+      setDeletedMessageIds(new Set());
     }
-  };
+  }, [localHiddenStorageKey]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(localHiddenStorageKey, JSON.stringify(Array.from(deletedMessageIds)));
+    } catch {
+      // ignore localStorage errors
+    }
+  }, [deletedMessageIds, localHiddenStorageKey]);
+
+  const canRecall = useCallback((item: ChatMessage, isMyMessage: boolean) => {
+    if (!isMyMessage) return false;
+    if (item.eventType === 'message_recalled') return false;
+    const ts = Number(item.timestamp || 0);
+    if (!ts) return false;
+    return (Date.now() - ts) <= RECALL_WINDOW_MS;
+  }, []);
+
+  const handleRecallMessage = useCallback(async (item: ChatMessage) => {
+    const ts = Number(item.timestamp || 0);
+    if (!ts) return;
+    const ok = await recallMessage(roomKey, ts);
+    if (!ok) {
+      console.warn('Recall message failed', ts);
+    }
+  }, [recallMessage, roomKey]);
 
   // Detect mobile
   useEffect(() => {
@@ -267,31 +322,147 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
     }
   };
 
-  const sendMessage = () => {
-    if (input.trim()) {
-      // Lần đầu gửi tin, lưu URL hiện tại nếu chưa có
-      const urlToSend = getChatUrlToSend();
-      if (urlToSend) {
-        setChatUrl(urlToSend);
-      }
-      
-      // 🔴 CRITICAL: For guest users, MUST pass guestPhone as room identifier
-      // The context's sendMessage will detect it and construct proper room
-      const guestIdentifier = effectiveGuestSessionId;
-      const roomIdentifier = isGuest ? guestIdentifier : roomKey;
+  const uploadFileToServer = useCallback(async (file: File): Promise<{ name: string; url: string; type: string; size: number; thumb?: string }> => {
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("name", file.name);
 
-      // Guest chỉ cần session id, không bắt buộc phone
-      if (isGuest && !roomIdentifier) {
-        console.warn("Guest identity is missing; cannot send message.");
-        return;
+    const response = await fetch(`${UPLOAD_ENDPOINT}?app_id=${encodeURIComponent(appId)}`, {
+      method: "POST",
+      body: formData,
+    });
+    if (!response.ok) {
+      throw new Error(`Upload failed: ${response.status}`);
+    }
+
+    const text = await response.text();
+    let parsed: any = null;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = { path: text };
+    }
+    const mediaType = inferAttachmentType(file.name, file.type);
+    return {
+      name: file.name,
+      url: String(parsed?.path || parsed?.url || "").trim(),
+      type: mediaType,
+      size: Number(file.size || 0),
+      thumb: String(parsed?.thumb || "").trim() || undefined,
+    };
+  }, [appId]);
+
+  const reverseGeocodeAddress = useCallback(async (lat: number, lon: number): Promise<string> => {
+    try {
+      const resp = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}`);
+      if (!resp.ok) return "";
+      const data = await resp.json();
+      return String(data?.display_name || "").trim();
+    } catch {
+      return "";
+    }
+  }, []);
+
+  const drawCheckinOverlay = useCallback(async (file: File, overlayLines: string[]): Promise<File> => {
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(new Error("read-file-failed"));
+      reader.readAsDataURL(file);
+    });
+
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = () => reject(new Error("image-load-failed"));
+      el.src = dataUrl;
+    });
+
+    const canvas = document.createElement("canvas");
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return file;
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+    const padding = Math.max(14, Math.round(canvas.width * 0.015));
+    const fontSize = Math.max(16, Math.round(canvas.width * 0.022));
+    const lineHeight = Math.round(fontSize * 1.35);
+    const lines = overlayLines.filter(Boolean);
+    const boxHeight = padding * 2 + lineHeight * lines.length;
+
+    ctx.fillStyle = "rgba(0,0,0,0.45)";
+    ctx.fillRect(0, canvas.height - boxHeight, canvas.width, boxHeight);
+    ctx.fillStyle = "#ffffff";
+    ctx.font = `${fontSize}px sans-serif`;
+    ctx.textBaseline = "top";
+    lines.forEach((line, idx) => {
+      ctx.fillText(line, padding, canvas.height - boxHeight + padding + idx * lineHeight);
+    });
+
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.9));
+    if (!blob) return file;
+    return new File([blob], `checkin-${Date.now()}.jpg`, { type: "image/jpeg" });
+  }, []);
+
+  const buildOwnMessageStatus = useCallback((item: ChatMessage) => {
+    const readBy = Array.isArray(item.readBy) ? item.readBy : [];
+    const seenByPeer = readBy.some((reader) => !!reader && reader !== user.userId);
+    if (seenByPeer) {
+      return { label: t('common.chat.read', 'Đã xem'), icon: <EyeOutlined /> };
+    }
+    if (connected) {
+      return { label: t('common.chat.received', 'Đã nhận'), icon: <CheckCircleOutlined /> };
+    }
+    return { label: t('common.chat.sent', 'Đã gửi'), icon: <CheckOutlined /> };
+  }, [user.userId, connected, t]);
+
+  const sendMessage = async () => {
+    const text = input.trim();
+    const hasMedia = pendingFiles.length > 0;
+    if (!text && !hasMedia) return;
+
+    const urlToSend = getChatUrlToSend();
+    if (urlToSend) {
+      setChatUrl(urlToSend);
+    }
+
+    const guestIdentifier = effectiveGuestSessionId;
+    const roomIdentifier = isGuest ? guestIdentifier : roomKey;
+    if (isGuest && !roomIdentifier) {
+      console.warn("Guest identity is missing; cannot send message.");
+      return;
+    }
+
+    try {
+      setUploadingMedia(true);
+      let attachments: ChatMessage['attachments'] = undefined;
+      if (hasMedia) {
+        const uploaded = await Promise.all(pendingFiles.map((file) => uploadFileToServer(file)));
+        attachments = uploaded.map((item) => ({
+          name: item.name,
+          url: item.url,
+          type: item.type,
+          size: item.size,
+          thumb: item.thumb,
+        }));
       }
-      
+
       sendMessageContext(
         roomIdentifier,
-        input,
-        isGuest ? undefined : (isGuestConversation ? undefined : username)
+        text,
+        isGuest ? undefined : (isGuestConversation ? undefined : username),
+        {
+          attachments,
+          eventType: attachments && attachments.length > 0 ? "chat_media" : undefined,
+        },
       );
       setInput("");
+      setPendingFiles([]);
+    } catch (error) {
+      console.error("send chat media error", error);
+    } finally {
+      setUploadingMedia(false);
     }
   };
 
@@ -310,6 +481,135 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
       hour: '2-digit',
       minute: '2-digit',
     });
+  };
+
+  const handlePickFiles = () => {
+    filePickerRef.current?.click();
+  };
+
+  const handleSelectFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selected = Array.from(e.target.files || []);
+    if (selected.length > 0) {
+      setPendingFiles((prev) => [...prev, ...selected]);
+    }
+    e.target.value = "";
+  };
+
+  const handleCheckinPick = () => {
+    checkinPickerRef.current?.click();
+  };
+
+  const handleCheckinFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    try {
+      setUploadingMedia(true);
+      const now = Date.now();
+      const timeText = new Date(now).toLocaleString('vi-VN');
+
+      const geo = await new Promise<GeolocationPosition | null>((resolve) => {
+        if (!navigator.geolocation) {
+          resolve(null);
+          return;
+        }
+        navigator.geolocation.getCurrentPosition((pos) => resolve(pos), () => resolve(null), {
+          enableHighAccuracy: true,
+          timeout: 7000,
+          maximumAge: 30_000,
+        });
+      });
+
+      const latitude = geo?.coords?.latitude;
+      const longitude = geo?.coords?.longitude;
+      const coordText = (latitude != null && longitude != null)
+        ? `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`
+        : "Khong co toa do";
+      const address = (latitude != null && longitude != null)
+        ? (await reverseGeocodeAddress(latitude, longitude))
+        : "";
+
+      const mergedFile = await drawCheckinOverlay(file, [
+        `Check-in: ${timeText}`,
+        `Toa do: ${coordText}`,
+        `Dia chi: ${address || 'Khong xac dinh'}`,
+      ]);
+      const uploaded = await uploadFileToServer(mergedFile);
+
+      const roomIdentifier = isGuest ? effectiveGuestSessionId : roomKey;
+      sendMessageContext(
+        roomIdentifier,
+        "Check-in",
+        isGuest ? undefined : (isGuestConversation ? undefined : username),
+        {
+          eventType: "chat_checkin",
+          attachments: [{
+            name: uploaded.name,
+            url: uploaded.url,
+            type: "image",
+            size: uploaded.size,
+            thumb: uploaded.thumb,
+          }],
+          checkinMeta: {
+            timestamp: now,
+            latitude,
+            longitude,
+            address,
+          },
+        },
+      );
+    } catch (error) {
+      console.error("checkin upload error", error);
+    } finally {
+      setUploadingMedia(false);
+    }
+  };
+
+  const renderMessageAttachments = (item: ChatMessage) => {
+    const attachments = Array.isArray(item.attachments) ? item.attachments : [];
+    if (attachments.length === 0) return null;
+    return (
+      <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {attachments.map((att, idx) => {
+          const kind = inferAttachmentType(att?.name, att?.type);
+          const attUrl = resolveMediaUrl(att?.url || "");
+          if (!attUrl) return null;
+
+          if (kind === 'image') {
+            return (
+              <img
+                key={`${attUrl}-${idx}`}
+                src={attUrl}
+                alt={att?.name || 'media'}
+                style={{ width: 180, maxWidth: '100%', borderRadius: 8, cursor: 'pointer', border: `1px solid ${token.colorBorder}` }}
+                onClick={() => window.open(attUrl, '_blank', 'noopener,noreferrer')}
+              />
+            );
+          }
+          if (kind === 'video') {
+            return (
+              <video
+                key={`${attUrl}-${idx}`}
+                src={attUrl}
+                controls
+                style={{ width: 220, maxWidth: '100%', borderRadius: 8, border: `1px solid ${token.colorBorder}` }}
+              />
+            );
+          }
+          return (
+            <a
+              key={`${attUrl}-${idx}`}
+              href={attUrl}
+              target="_blank"
+              rel="noreferrer"
+              style={{ fontSize: 12 }}
+            >
+              <FileOutlined /> {att?.name || 'file'}
+            </a>
+          );
+        })}
+      </div>
+    );
   };
 
   // Mobile: show floating button + modal
@@ -416,6 +716,7 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
                     })();
 
                     const showUnreadEmphasis = !isMyMessage && !isReadForCurrent;
+                    const ownStatus = buildOwnMessageStatus(item);
 
                     return (
                       <List.Item
@@ -438,9 +739,9 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
                                     [{t('common.chat.admin')}]
                                   </span>
                                 )}
-                                {isMyMessage && item.readBy && item.readBy.length > 0 && (
+                                {isMyMessage && (
                                   <span style={{ color: token.colorSuccess, marginLeft: 8, fontSize: 10 }}>
-                                    ✓ {t('common.chat.read')}
+                                    {ownStatus.icon} {ownStatus.label}
                                   </span>
                                 )}
                                 {!isMyMessage && !isReadForCurrent && (
@@ -456,16 +757,53 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
                               )}
                             </div>
                           }
-                          description={<span style={{ fontSize: 13, color: showUnreadEmphasis ? token.colorText : token.colorTextSecondary, fontWeight: showUnreadEmphasis ? 600 : 400 }}>
-                            {item.message}
-                          </span>}
+                          description={
+                            <div>
+                              <span style={{ fontSize: 13, color: showUnreadEmphasis ? token.colorText : token.colorTextSecondary, fontWeight: showUnreadEmphasis ? 600 : 400 }}>
+                                {item.message}
+                              </span>
+                              {renderMessageAttachments(item)}
+                              {item.checkinMeta && (
+                                <div style={{ marginTop: 6 }}>
+                                  <Tag color="blue">📍 Check-in</Tag>
+                                  <div style={{ fontSize: 11, color: token.colorTextSecondary }}>
+                                    {item.checkinMeta?.timestamp ? new Date(item.checkinMeta.timestamp).toLocaleString('vi-VN') : ''}
+                                  </div>
+                                  <div style={{ fontSize: 11, color: token.colorTextSecondary }}>
+                                    {`${item.checkinMeta?.latitude || ''}, ${item.checkinMeta?.longitude || ''}`.trim().replace(/^,\s*|,\s*$/g, '')}
+                                  </div>
+                                  <div style={{ fontSize: 11, color: token.colorTextSecondary }}>
+                                    {item.checkinMeta?.address || ''}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          }
                         />
                         {/* Only show delete button for logged-in admin users */}
-                        {!isGuest && user.userId && (
-                          <Tooltip title={t('common.chat.deleteMessage', 'Xoá tin nhắn')}>
+                        {!isGuest && user.userId && canRecall(item, isMyMessage) && (
+                          <Tooltip title={t('common.chat.recallMessage', 'Thu hồi tin nhắn')}>
                             <Popconfirm
-                              title={t('common.chat.deleteMessageTitle', 'Xoá tin nhắn')}
-                              description={t('common.chat.deleteMessageDesc', 'Bạn có chắc chắn muốn xoá tin nhắn này?')}
+                              title={t('common.chat.recallMessageTitle', 'Thu hồi tin nhắn')}
+                              description={t('common.chat.recallMessageDesc', 'Tin nhắn sẽ được thu hồi với tất cả người trong cuộc chat.')}
+                              onConfirm={() => handleRecallMessage(item)}
+                              okText={t('common.confirm', 'Xác nhận')}
+                              cancelText={t('common.cancel', 'Hủy')}
+                            >
+                              <Button
+                                type="text"
+                                size="small"
+                                icon={<EyeOutlined />}
+                                style={{ opacity: 0.7 }}
+                              />
+                            </Popconfirm>
+                          </Tooltip>
+                        )}
+                        {!isGuest && user.userId && !isMyMessage && (
+                          <Tooltip title={t('common.chat.deleteLocalMessage', 'Xoá phía tôi')}>
+                            <Popconfirm
+                              title={t('common.chat.deleteLocalMessageTitle', 'Xoá phía tôi')}
+                              description={t('common.chat.deleteLocalMessageDesc', 'Tin nhắn sẽ chỉ bị ẩn trong cửa sổ chat của bạn.')}
                               onConfirm={() => handleDeleteMessage(item.timestamp)}
                               okText={t('common.confirm', 'Xác nhận')}
                               cancelText={t('common.cancel', 'Hủy')}
@@ -500,6 +838,21 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
               )}
 
               {/* Input */}
+              <div style={{ padding: '8px 12px 0 12px', borderTop: `1px solid ${token.colorBorder}`, background: token.colorBgElevated, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <Button size="small" icon={<PaperClipOutlined />} onClick={handlePickFiles} disabled={uploadingMedia}>
+                  Media
+                </Button>
+                <Button size="small" icon={<CameraOutlined />} onClick={handleCheckinPick} disabled={uploadingMedia}>
+                  Check-in
+                </Button>
+                {uploadingMedia && <Tag color="processing">Dang tai len...</Tag>}
+                {pendingFiles.slice(0, 3).map((f, idx) => (
+                  <Tag key={`${f.name}-${idx}`} closable onClose={() => setPendingFiles((prev) => prev.filter((_, i) => i !== idx))}>
+                    {f.name}
+                  </Tag>
+                ))}
+                {pendingFiles.length > 3 && <Tag>+{pendingFiles.length - 3}</Tag>}
+              </div>
               <Input.Group compact style={{ padding: 12, borderTop: `1px solid ${token.colorBorder}`, background: token.colorBgElevated }}>
                 <Input
                   style={{ width: 'calc(100% - 44px)' }}
@@ -509,8 +862,10 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
                   placeholder={t('common.chat.messagePlaceholder')}
                   size="large"
                 />
-                <Button type="primary" icon={<SendOutlined />} onClick={sendMessage} size="large" />
+                <Button type="primary" icon={<SendOutlined />} onClick={sendMessage} size="large" loading={uploadingMedia} />
               </Input.Group>
+              <input ref={filePickerRef} type="file" multiple accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.zip,.rar" style={{ display: 'none' }} onChange={handleSelectFiles} />
+              <input ref={checkinPickerRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={handleCheckinFile} />
             </div>
           </div>
         )}
@@ -617,6 +972,7 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
                   return false;
                 })();
                 const showUnreadEmphasis = !isMyMessage && !isReadForCurrent;
+                const ownStatus = buildOwnMessageStatus(item);
 
                 return (
                   <List.Item
@@ -639,9 +995,9 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
                                 [{t('common.chat.admin')}]
                               </span>
                             )}
-                            {isMyMessage && item.readBy && item.readBy.length > 0 && (
+                            {isMyMessage && (
                               <span style={{ color: token.colorSuccess, marginLeft: 8, fontSize: 10 }}>
-                                ✓ {t('common.chat.read')}
+                                {ownStatus.icon} {ownStatus.label}
                               </span>
                             )}
                             {!isMyMessage && !isReadForCurrent && (
@@ -658,17 +1014,52 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
                         </div>
                       }
                       description={
-                        <span style={{ fontSize: 12, color: showUnreadEmphasis ? token.colorText : token.colorTextSecondary, marginTop: 4, fontWeight: showUnreadEmphasis ? 600 : 400 }}>
-                          {item.message}
-                        </span>
+                        <div>
+                          <span style={{ fontSize: 12, color: showUnreadEmphasis ? token.colorText : token.colorTextSecondary, marginTop: 4, fontWeight: showUnreadEmphasis ? 600 : 400 }}>
+                            {item.message}
+                          </span>
+                          {renderMessageAttachments(item)}
+                          {item.checkinMeta && (
+                            <div style={{ marginTop: 6 }}>
+                              <Tag color="blue">📍 Check-in</Tag>
+                              <div style={{ fontSize: 11, color: token.colorTextSecondary }}>
+                                {item.checkinMeta?.timestamp ? new Date(item.checkinMeta.timestamp).toLocaleString('vi-VN') : ''}
+                              </div>
+                              <div style={{ fontSize: 11, color: token.colorTextSecondary }}>
+                                {`${item.checkinMeta?.latitude || ''}, ${item.checkinMeta?.longitude || ''}`.trim().replace(/^,\s*|,\s*$/g, '')}
+                              </div>
+                              <div style={{ fontSize: 11, color: token.colorTextSecondary }}>
+                                {item.checkinMeta?.address || ''}
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       }
                     />
                     {/* Only show delete button for logged-in admin users */}
-                    {!isGuest && user.userId && (
-                      <Tooltip title={t('common.chat.deleteMessage', 'Xoá tin nhắn')}>
+                    {!isGuest && user.userId && canRecall(item, isMyMessage) && (
+                      <Tooltip title={t('common.chat.recallMessage', 'Thu hồi tin nhắn')}>
                         <Popconfirm
-                          title={t('common.chat.deleteMessageTitle', 'Xoá tin nhắn')}
-                          description={t('common.chat.deleteMessageDesc', 'Bạn có chắc chắn muốn xoá tin nhắn này?')}
+                          title={t('common.chat.recallMessageTitle', 'Thu hồi tin nhắn')}
+                          description={t('common.chat.recallMessageDesc', 'Tin nhắn sẽ được thu hồi với tất cả người trong cuộc chat.')}
+                          onConfirm={() => handleRecallMessage(item)}
+                          okText={t('common.confirm', 'Xác nhận')}
+                          cancelText={t('common.cancel', 'Hủy')}
+                        >
+                          <Button
+                            type="text"
+                            size="small"
+                            icon={<EyeOutlined />}
+                            style={{ opacity: 0.7, transition: 'opacity 0.2s' }}
+                          />
+                        </Popconfirm>
+                      </Tooltip>
+                    )}
+                    {!isGuest && user.userId && !isMyMessage && (
+                      <Tooltip title={t('common.chat.deleteLocalMessage', 'Xoá phía tôi')}>
+                        <Popconfirm
+                          title={t('common.chat.deleteLocalMessageTitle', 'Xoá phía tôi')}
+                          description={t('common.chat.deleteLocalMessageDesc', 'Tin nhắn sẽ chỉ bị ẩn trong cửa sổ chat của bạn.')}
                           onConfirm={() => handleDeleteMessage(item.timestamp)}
                           okText={t('common.confirm', 'Xác nhận')}
                           cancelText={t('common.cancel', 'Hủy')}
@@ -703,6 +1094,21 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
           )}
 
           {/* Input */}
+          <div style={{ padding: '8px 12px 0 12px', borderTop: `1px solid ${token.colorBorder}`, background: token.colorBgElevated, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <Button size="small" icon={<PaperClipOutlined />} onClick={handlePickFiles} disabled={uploadingMedia}>
+              Media
+            </Button>
+            <Button size="small" icon={<CameraOutlined />} onClick={handleCheckinPick} disabled={uploadingMedia}>
+              Check-in
+            </Button>
+            {uploadingMedia && <Tag color="processing">Dang tai len...</Tag>}
+            {pendingFiles.slice(0, 3).map((f, idx) => (
+              <Tag key={`${f.name}-${idx}`} closable onClose={() => setPendingFiles((prev) => prev.filter((_, i) => i !== idx))}>
+                {f.name}
+              </Tag>
+            ))}
+            {pendingFiles.length > 3 && <Tag>+{pendingFiles.length - 3}</Tag>}
+          </div>
           <Input.Group compact style={{ padding: 12, borderTop: `1px solid ${token.colorBorder}`, background: token.colorBgElevated }}>
             <Input
               style={{ width: 'calc(100% - 48px)' }}
@@ -713,8 +1119,10 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
               size="small"
               autoFocus
             />
-            <Button type="primary" icon={<SendOutlined />} onClick={sendMessage} size="small" />
+            <Button type="primary" icon={<SendOutlined />} onClick={sendMessage} size="small" loading={uploadingMedia} />
           </Input.Group>
+          <input ref={filePickerRef} type="file" multiple accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.zip,.rar" style={{ display: 'none' }} onChange={handleSelectFiles} />
+          <input ref={checkinPickerRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={handleCheckinFile} />
         </div>
       )}
     </>

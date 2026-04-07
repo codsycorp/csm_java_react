@@ -79,6 +79,33 @@ const routes: AppRouteRecordRaw[] = [
 				},
 			},
 			{
+				path: "/system/role",
+				Component: AdminPage,
+				handle: {
+					hideInMenu: true,
+					currentActiveMenu: "/system/dept",
+					keepAlive: false,
+					icon: "SafetyOutlined",
+					title: "common.menu.permissionGroup",
+					roles: ["admin", "dev"],
+					permissions: [
+						"permission:button:add",
+						"permission:button:update",
+						"permission:button:delete",
+					],
+				},
+			},
+			{
+				path: "/system/roles",
+				Component: AdminPage,
+				handle: {
+					hideInMenu: true,
+					title: "common.menu.permissionGroup",
+					currentActiveMenu: "/system/role",
+					roles: ["admin", "dev"],
+				},
+			},
+			{
 				path: "/system/departments",
 				Component: AdminPage,
 				handle: {

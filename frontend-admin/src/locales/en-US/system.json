@@ -582,6 +582,18 @@
 		"note_all_users": "Notification will be sent to ALL users currently logged into the selected app",
 		"note_one_way": "This is a one-way message - users cannot reply",
 		"note_persistent": "Notification will be saved to database and displayed in chat history",
-		"note_realtime": "Users receive notification in realtime if they are online"
+		"note_realtime": "Users receive notification in realtime if they are online",
+		"dev_chat": {
+			"title": "Private Dev - Admin Chat",
+			"desc": "Online admins in the current app are listed below. Select one admin for realtime direct chat with long-term history.",
+			"select_admin": "Select an online admin",
+			"refresh": "Refresh online list",
+			"realtime_on": "Realtime: Online",
+			"realtime_off": "Realtime: Offline",
+			"no_history": "No chat history yet",
+			"typing": "is typing...",
+			"input": "Enter a private message...",
+			"send": "Send"
+		}
 	}
 }
