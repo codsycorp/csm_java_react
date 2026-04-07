@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { UserOutlined, SendOutlined, CloseOutlined, MinusOutlined, DeleteOutlined, PushpinOutlined, PaperClipOutlined, CameraOutlined, EyeOutlined, CheckOutlined, CheckCircleOutlined, FileOutlined } from "@ant-design/icons";
-import { Input, Button, List, Avatar, theme, Tooltip, Popconfirm, Tag } from "antd";
+import { Input, Button, List, Avatar, theme, Tooltip, Popconfirm, Tag, message } from "antd";
 import { useTranslation } from "react-i18next";
 import { useChatHistory } from "#src/contexts/ChatHistoryContext";
 import { useUserStore } from "#src/store/user";
@@ -15,6 +15,7 @@ const RECALL_WINDOW_MS = 2 * 60 * 1000;
 function resolveMediaUrl(pathValue?: string): string {
   if (!pathValue) return "";
   if (/^https?:\/\//i.test(pathValue)) return pathValue;
+  if (/^data:/i.test(pathValue)) return pathValue;
   return pathValue.startsWith("/") ? pathValue : `/${pathValue}`;
 }
 
@@ -37,8 +38,12 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
   const [deletedMessageIds, setDeletedMessageIds] = useState<Set<string>>(new Set());
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [uploadingMedia, setUploadingMedia] = useState(false);
+  const [requestingCheckinPermission, setRequestingCheckinPermission] = useState(false);
+  const [checkinCaptureOpen, setCheckinCaptureOpen] = useState(false);
+  const [checkinGeo, setCheckinGeo] = useState<{ latitude: number; longitude: number; address: string } | null>(null);
   const filePickerRef = useRef<HTMLInputElement>(null);
-  const checkinPickerRef = useRef<HTMLInputElement>(null);
+  const checkinVideoRef = useRef<HTMLVideoElement>(null);
+  const checkinStreamRef = useRef<MediaStream | null>(null);
   const user = useUserStore();
   // CRITICAL: Use same pattern as permission.ts for getting effective appId
   // Priority: user.app_id (from login) > store.currentAppId (from AppStore) > fallback to "csm"
@@ -405,6 +410,82 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
     return new File([blob], `checkin-${Date.now()}.jpg`, { type: "image/jpeg" });
   }, []);
 
+  const fileToDataUrl = useCallback(async (file: File): Promise<string> => {
+    return await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(new Error("read-checkin-dataurl-failed"));
+      reader.readAsDataURL(file);
+    });
+  }, []);
+
+  const stopCheckinStream = useCallback(() => {
+    if (checkinStreamRef.current) {
+      checkinStreamRef.current.getTracks().forEach((track) => track.stop());
+      checkinStreamRef.current = null;
+    }
+    if (checkinVideoRef.current) {
+      checkinVideoRef.current.srcObject = null;
+    }
+  }, []);
+
+  const requestCameraPermission = useCallback(async (): Promise<MediaStream | null> => {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      message.error(t('common.chat.checkinCameraUnsupported', 'Thiet bi/Trinh duyet khong ho tro truy cap camera'));
+      return null;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' } },
+      });
+      return stream;
+    } catch (error) {
+      console.warn('camera permission denied', error);
+      return null;
+    }
+  }, [t]);
+
+  const requestLocationPermission = useCallback(async (): Promise<{ latitude: number; longitude: number; address: string } | null> => {
+    if (!navigator.geolocation) {
+      message.error(t('common.chat.checkinLocationUnsupported', 'Thiet bi/Trinh duyet khong ho tro vi tri'));
+      return null;
+    }
+
+    const geo = await new Promise<GeolocationPosition | null>((resolve) => {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => resolve(pos),
+        () => resolve(null),
+        {
+          enableHighAccuracy: true,
+          timeout: 10000,
+          maximumAge: 0,
+        },
+      );
+    });
+
+    const latitude = geo?.coords?.latitude;
+    const longitude = geo?.coords?.longitude;
+    if (latitude == null || longitude == null) {
+      return null;
+    }
+
+    const address = await reverseGeocodeAddress(latitude, longitude);
+    return { latitude, longitude, address };
+  }, [t, reverseGeocodeAddress]);
+
+  const closeCheckinCapture = useCallback(() => {
+    setCheckinCaptureOpen(false);
+    setCheckinGeo(null);
+    stopCheckinStream();
+  }, [stopCheckinStream]);
+
+  useEffect(() => {
+    return () => {
+      stopCheckinStream();
+    };
+  }, [stopCheckinStream]);
+
   const buildOwnMessageStatus = useCallback((item: ChatMessage) => {
     const readBy = Array.isArray(item.readBy) ? item.readBy : [];
     const seenByPeer = readBy.some((reader) => !!reader && reader !== user.userId);
@@ -483,6 +564,13 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
     });
   };
 
+  const isFreshMessage = useCallback((rawTimestamp?: number) => {
+    if (!rawTimestamp) return false;
+    const normalizedTimestamp = rawTimestamp < 1000000000000 ? rawTimestamp * 1000 : rawTimestamp;
+    if (!Number.isFinite(normalizedTimestamp)) return false;
+    return (Date.now() - normalizedTimestamp) <= 8000;
+  }, []);
+
   const handlePickFiles = () => {
     filePickerRef.current?.click();
   };
@@ -495,46 +583,88 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
     e.target.value = "";
   };
 
-  const handleCheckinPick = () => {
-    checkinPickerRef.current?.click();
+  const handleCheckinPick = async () => {
+    if (uploadingMedia || requestingCheckinPermission) return;
+
+    try {
+      setRequestingCheckinPermission(true);
+      const [cameraStream, location] = await Promise.all([
+        requestCameraPermission(),
+        requestLocationPermission(),
+      ]);
+
+      if (!cameraStream || !location) {
+        if (cameraStream) {
+          cameraStream.getTracks().forEach((track) => track.stop());
+        }
+        const missing = [
+          !cameraStream ? t('common.chat.camera', 'camera') : '',
+          !location ? t('common.chat.location', 'vi tri') : '',
+        ].filter(Boolean).join(' + ');
+        message.warning(
+          t('common.chat.checkinPermissionRequired', 'Can cap quyen {{missing}} de tao anh check-in dung logic')
+            .replace('{{missing}}', missing || 'camera + vi tri')
+        );
+        return;
+      }
+
+      checkinStreamRef.current = cameraStream;
+      setCheckinGeo(location);
+      setCheckinCaptureOpen(true);
+
+      setTimeout(() => {
+        if (checkinVideoRef.current) {
+          checkinVideoRef.current.srcObject = cameraStream;
+          checkinVideoRef.current.play().catch(() => {
+            // Ignore autoplay/play interruption and let user click capture again.
+          });
+        }
+      }, 0);
+    } finally {
+      setRequestingCheckinPermission(false);
+    }
   };
 
-  const handleCheckinFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (!file) return;
+  const handleCaptureCheckin = async () => {
+    const video = checkinVideoRef.current;
+    if (!video || video.videoWidth <= 0 || video.videoHeight <= 0) {
+      message.error(t('common.chat.checkinCameraNotReady', 'Camera chua san sang, vui long thu lai'));
+      return;
+    }
+    if (!checkinGeo) {
+      message.error(t('common.chat.checkinNeedLocation', 'Khong lay duoc vi tri. Vui long cap quyen vi tri va thu lai'));
+      return;
+    }
+
     try {
       setUploadingMedia(true);
+
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        throw new Error('checkin-canvas-context-missing');
+      }
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const rawBlob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.92));
+      if (!rawBlob) {
+        throw new Error('checkin-capture-blob-empty');
+      }
+
+      const capturedFile = new File([rawBlob], `checkin-raw-${Date.now()}.jpg`, { type: 'image/jpeg' });
       const now = Date.now();
       const timeText = new Date(now).toLocaleString('vi-VN');
-
-      const geo = await new Promise<GeolocationPosition | null>((resolve) => {
-        if (!navigator.geolocation) {
-          resolve(null);
-          return;
-        }
-        navigator.geolocation.getCurrentPosition((pos) => resolve(pos), () => resolve(null), {
-          enableHighAccuracy: true,
-          timeout: 7000,
-          maximumAge: 30_000,
-        });
-      });
-
-      const latitude = geo?.coords?.latitude;
-      const longitude = geo?.coords?.longitude;
-      const coordText = (latitude != null && longitude != null)
-        ? `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`
-        : "Khong co toa do";
-      const address = (latitude != null && longitude != null)
-        ? (await reverseGeocodeAddress(latitude, longitude))
-        : "";
-
-      const mergedFile = await drawCheckinOverlay(file, [
+      const coordText = `${checkinGeo.latitude.toFixed(6)}, ${checkinGeo.longitude.toFixed(6)}`;
+      const mergedFile = await drawCheckinOverlay(capturedFile, [
         `Check-in: ${timeText}`,
         `Toa do: ${coordText}`,
-        `Dia chi: ${address || 'Khong xac dinh'}`,
+        `Dia chi: ${checkinGeo.address || 'Khong xac dinh'}`,
       ]);
-      const uploaded = await uploadFileToServer(mergedFile);
+      const dataUrl = await fileToDataUrl(mergedFile);
+      if (!dataUrl) {
+        throw new Error("checkin-dataurl-empty");
+      }
 
       const roomIdentifier = isGuest ? effectiveGuestSessionId : roomKey;
       sendMessageContext(
@@ -544,22 +674,23 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
         {
           eventType: "chat_checkin",
           attachments: [{
-            name: uploaded.name,
-            url: uploaded.url,
+            name: mergedFile.name,
+            url: dataUrl,
             type: "image",
-            size: uploaded.size,
-            thumb: uploaded.thumb,
+            size: Number(mergedFile.size || 0),
           }],
           checkinMeta: {
             timestamp: now,
-            latitude,
-            longitude,
-            address,
+            latitude: checkinGeo.latitude,
+            longitude: checkinGeo.longitude,
+            address: checkinGeo.address,
           },
         },
       );
+
+      closeCheckinCapture();
     } catch (error) {
-      console.error("checkin upload error", error);
+      console.error("checkin capture error", error);
     } finally {
       setUploadingMedia(false);
     }
@@ -568,46 +699,61 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
   const renderMessageAttachments = (item: ChatMessage) => {
     const attachments = Array.isArray(item.attachments) ? item.attachments : [];
     if (attachments.length === 0) return null;
+
+    const imageItems: Array<{ key: string; url: string; name: string }> = [];
+    const videoItems: Array<{ key: string; url: string; name: string }> = [];
+    const fileItems: Array<{ key: string; url: string; name: string }> = [];
+
+    attachments.forEach((att, idx) => {
+      const kind = inferAttachmentType(att?.name, att?.type);
+      const attUrl = resolveMediaUrl(att?.url || "");
+      if (!attUrl) return;
+      const key = `${attUrl}-${idx}`;
+      const name = att?.name || 'file';
+      if (kind === 'image') {
+        imageItems.push({ key, url: attUrl, name });
+      } else if (kind === 'video') {
+        videoItems.push({ key, url: attUrl, name });
+      } else {
+        fileItems.push({ key, url: attUrl, name });
+      }
+    });
+
     return (
       <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 6 }}>
-        {attachments.map((att, idx) => {
-          const kind = inferAttachmentType(att?.name, att?.type);
-          const attUrl = resolveMediaUrl(att?.url || "");
-          if (!attUrl) return null;
-
-          if (kind === 'image') {
-            return (
+        {imageItems.length > 0 && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 6, maxWidth: 240 }}>
+            {imageItems.map((att) => (
               <img
-                key={`${attUrl}-${idx}`}
-                src={attUrl}
-                alt={att?.name || 'media'}
-                style={{ width: 180, maxWidth: '100%', borderRadius: 8, cursor: 'pointer', border: `1px solid ${token.colorBorder}` }}
-                onClick={() => window.open(attUrl, '_blank', 'noopener,noreferrer')}
+                key={att.key}
+                src={att.url}
+                alt={att.name}
+                style={{ width: '100%', borderRadius: 8, cursor: 'pointer', border: `1px solid ${token.colorBorder}`, objectFit: 'cover' }}
+                onClick={() => window.open(att.url, '_blank', 'noopener,noreferrer')}
               />
-            );
-          }
-          if (kind === 'video') {
-            return (
-              <video
-                key={`${attUrl}-${idx}`}
-                src={attUrl}
-                controls
-                style={{ width: 220, maxWidth: '100%', borderRadius: 8, border: `1px solid ${token.colorBorder}` }}
-              />
-            );
-          }
-          return (
-            <a
-              key={`${attUrl}-${idx}`}
-              href={attUrl}
-              target="_blank"
-              rel="noreferrer"
-              style={{ fontSize: 12 }}
-            >
-              <FileOutlined /> {att?.name || 'file'}
-            </a>
-          );
-        })}
+            ))}
+          </div>
+        )}
+        {videoItems.map((att) => (
+          <video
+            key={att.key}
+            src={att.url}
+            controls
+            style={{ width: 240, maxWidth: '100%', borderRadius: 8, border: `1px solid ${token.colorBorder}` }}
+          />
+        ))}
+        {fileItems.map((att) => (
+          <a
+            key={att.key}
+            href={att.url}
+            target="_blank"
+            rel="noreferrer"
+            style={{ fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 8px', border: `1px solid ${token.colorBorder}`, borderRadius: 8, width: 'fit-content', maxWidth: '100%' }}
+          >
+            <FileOutlined />
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 170 }}>{att.name}</span>
+          </a>
+        ))}
       </div>
     );
   };
@@ -651,6 +797,10 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
               @keyframes slideUp {
                 from { transform: translateY(100%); opacity: 0; }
                 to { transform: translateY(0); opacity: 1; }
+              }
+              @keyframes csmChatMessageIn {
+                from { opacity: 0; transform: translateY(6px) scale(0.995); }
+                to { opacity: 1; transform: translateY(0) scale(1); }
               }
             `}</style>
             <div
@@ -717,15 +867,29 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
 
                     const showUnreadEmphasis = !isMyMessage && !isReadForCurrent;
                     const ownStatus = buildOwnMessageStatus(item);
+                    const isRecalledMessage = item.eventType === 'message_recalled';
+                    const isCheckinMessage = item.eventType === 'chat_checkin' || !!item.checkinMeta;
+                    const isNewMessage = isFreshMessage(item.timestamp);
+
+                    const bubbleBackground = isRecalledMessage
+                      ? token.colorFillAlter
+                      : (isMyMessage ? token.colorBgTextHover : (showUnreadEmphasis ? token.colorPrimaryBg : undefined));
+
+                    const bubbleBorderLeft = isRecalledMessage
+                      ? `3px dashed ${token.colorTextTertiary}`
+                      : (showUnreadEmphasis ? `3px solid ${token.colorPrimary}` : (isCheckinMessage ? `3px solid ${token.colorInfo}` : undefined));
 
                     return (
                       <List.Item
                         style={{
-                          background: isMyMessage ? token.colorBgTextHover : showUnreadEmphasis ? token.colorPrimaryBg : undefined,
+                          background: bubbleBackground,
                           padding: '8px 4px',
                           marginBottom: 8,
                           borderRadius: 4,
-                          borderLeft: showUnreadEmphasis ? `3px solid ${token.colorPrimary}` : undefined,
+                          borderLeft: bubbleBorderLeft,
+                          opacity: isRecalledMessage ? 0.88 : 1,
+                          animation: isNewMessage ? 'csmChatMessageIn 180ms ease-out' : undefined,
+                          transformOrigin: isMyMessage ? 'right center' : 'left center',
                         }}
                       >
                         <List.Item.Meta
@@ -739,27 +903,27 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
                                     [{t('common.chat.admin')}]
                                   </span>
                                 )}
-                                {isMyMessage && (
-                                  <span style={{ color: token.colorSuccess, marginLeft: 8, fontSize: 10 }}>
-                                    {ownStatus.icon} {ownStatus.label}
-                                  </span>
-                                )}
                                 {!isMyMessage && !isReadForCurrent && (
                                   <span style={{ color: token.colorPrimary, marginLeft: 8, fontSize: 10 }}>
                                     • {t('common.chat.unread', 'Chưa đọc')}
                                   </span>
                                 )}
                               </span>
-                              {messageTime && (
-                                <span style={{ fontSize: 10, color: token.colorTextSecondary, fontWeight: 400, whiteSpace: 'nowrap' }}>
-                                  {messageTime}
-                                </span>
-                              )}
+                              <span style={{ fontSize: 10, color: token.colorTextSecondary, fontWeight: 400, whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                                {messageTime || ''}
+                                {isMyMessage && (
+                                  <Tooltip title={ownStatus.label}>
+                                    <span style={{ color: token.colorSuccess, display: 'inline-flex', alignItems: 'center' }}>
+                                      {ownStatus.icon}
+                                    </span>
+                                  </Tooltip>
+                                )}
+                              </span>
                             </div>
                           }
                           description={
                             <div>
-                              <span style={{ fontSize: 13, color: showUnreadEmphasis ? token.colorText : token.colorTextSecondary, fontWeight: showUnreadEmphasis ? 600 : 400 }}>
+                              <span style={{ fontSize: 13, color: showUnreadEmphasis ? token.colorText : token.colorTextSecondary, fontWeight: showUnreadEmphasis ? 600 : 400, fontStyle: isRecalledMessage ? 'italic' : 'normal' }}>
                                 {item.message}
                               </span>
                               {renderMessageAttachments(item)}
@@ -842,10 +1006,11 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
                 <Button size="small" icon={<PaperClipOutlined />} onClick={handlePickFiles} disabled={uploadingMedia}>
                   Media
                 </Button>
-                <Button size="small" icon={<CameraOutlined />} onClick={handleCheckinPick} disabled={uploadingMedia}>
+                <Button size="small" icon={<CameraOutlined />} onClick={handleCheckinPick} disabled={uploadingMedia || requestingCheckinPermission || checkinCaptureOpen}>
                   Check-in
                 </Button>
                 {uploadingMedia && <Tag color="processing">Dang tai len...</Tag>}
+                {requestingCheckinPermission && <Tag color="gold">Dang xin quyen camera + vi tri...</Tag>}
                 {pendingFiles.slice(0, 3).map((f, idx) => (
                   <Tag key={`${f.name}-${idx}`} closable onClose={() => setPendingFiles((prev) => prev.filter((_, i) => i !== idx))}>
                     {f.name}
@@ -865,7 +1030,39 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
                 <Button type="primary" icon={<SendOutlined />} onClick={sendMessage} size="large" loading={uploadingMedia} />
               </Input.Group>
               <input ref={filePickerRef} type="file" multiple accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.zip,.rar" style={{ display: 'none' }} onChange={handleSelectFiles} />
-              <input ref={checkinPickerRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={handleCheckinFile} />
+            </div>
+          </div>
+        )}
+
+        {checkinCaptureOpen && (
+          <div
+            style={{
+              position: 'fixed',
+              inset: 0,
+              background: 'rgba(0,0,0,0.6)',
+              zIndex: 3100,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 16,
+            }}
+          >
+            <div style={{ width: '100%', maxWidth: 520, background: token.colorBgContainer, borderRadius: 12, overflow: 'hidden', border: `1px solid ${token.colorBorder}` }}>
+              <div style={{ padding: '10px 12px', borderBottom: `1px solid ${token.colorBorder}`, fontWeight: 600 }}>
+                Check-in Camera
+              </div>
+              <div style={{ padding: 12 }}>
+                <video ref={checkinVideoRef} autoPlay playsInline muted style={{ width: '100%', borderRadius: 10, background: '#000', minHeight: 220, objectFit: 'cover' }} />
+                {checkinGeo && (
+                  <div style={{ marginTop: 8, fontSize: 12, color: token.colorTextSecondary }}>
+                    {`Toa do: ${checkinGeo.latitude.toFixed(6)}, ${checkinGeo.longitude.toFixed(6)}`}
+                  </div>
+                )}
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '0 12px 12px' }}>
+                <Button onClick={closeCheckinCapture} disabled={uploadingMedia}>Huy</Button>
+                <Button type="primary" onClick={handleCaptureCheckin} loading={uploadingMedia}>Chup va gui</Button>
+              </div>
             </div>
           </div>
         )}
@@ -876,6 +1073,12 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
   // Desktop: show floating window
   return (
     <>
+      <style>{`
+        @keyframes csmChatMessageIn {
+          from { opacity: 0; transform: translateY(6px) scale(0.995); }
+          to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+      `}</style>
       {/* Floating Chat Button (Desktop fallback khi minimize) */}
       {isMinimized && visible && (
         <FloatingChatButton
@@ -973,15 +1176,29 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
                 })();
                 const showUnreadEmphasis = !isMyMessage && !isReadForCurrent;
                 const ownStatus = buildOwnMessageStatus(item);
+                const isRecalledMessage = item.eventType === 'message_recalled';
+                const isCheckinMessage = item.eventType === 'chat_checkin' || !!item.checkinMeta;
+                const isNewMessage = isFreshMessage(item.timestamp);
+
+                const bubbleBackground = isRecalledMessage
+                  ? token.colorFillAlter
+                  : (isMyMessage ? token.colorBgTextHover : (showUnreadEmphasis ? token.colorPrimaryBg : undefined));
+
+                const bubbleBorderLeft = isRecalledMessage
+                  ? `3px dashed ${token.colorTextTertiary}`
+                  : (showUnreadEmphasis ? `3px solid ${token.colorPrimary}` : (isCheckinMessage ? `3px solid ${token.colorInfo}` : undefined));
 
                 return (
                   <List.Item
                     style={{
-                      background: isMyMessage ? token.colorBgTextHover : showUnreadEmphasis ? token.colorPrimaryBg : undefined,
+                      background: bubbleBackground,
                       padding: '8px 4px',
                       marginBottom: 6,
                       borderRadius: 4,
-                      borderLeft: showUnreadEmphasis ? `3px solid ${token.colorPrimary}` : undefined,
+                      borderLeft: bubbleBorderLeft,
+                      opacity: isRecalledMessage ? 0.88 : 1,
+                      animation: isNewMessage ? 'csmChatMessageIn 180ms ease-out' : undefined,
+                      transformOrigin: isMyMessage ? 'right center' : 'left center',
                     }}
                   >
                     <List.Item.Meta
@@ -995,27 +1212,27 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
                                 [{t('common.chat.admin')}]
                               </span>
                             )}
-                            {isMyMessage && (
-                              <span style={{ color: token.colorSuccess, marginLeft: 8, fontSize: 10 }}>
-                                {ownStatus.icon} {ownStatus.label}
-                              </span>
-                            )}
                             {!isMyMessage && !isReadForCurrent && (
                               <span style={{ color: token.colorPrimary, marginLeft: 8, fontSize: 10 }}>
                                 • {t('common.chat.unread', 'Chưa đọc')}
                               </span>
                             )}
                           </span>
-                          {messageTime && (
-                            <span style={{ fontSize: 10, color: token.colorTextSecondary, fontWeight: 400, whiteSpace: 'nowrap' }}>
-                              {messageTime}
-                            </span>
-                          )}
+                          <span style={{ fontSize: 10, color: token.colorTextSecondary, fontWeight: 400, whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                            {messageTime || ''}
+                            {isMyMessage && (
+                              <Tooltip title={ownStatus.label}>
+                                <span style={{ color: token.colorSuccess, display: 'inline-flex', alignItems: 'center' }}>
+                                  {ownStatus.icon}
+                                </span>
+                              </Tooltip>
+                            )}
+                          </span>
                         </div>
                       }
                       description={
                         <div>
-                          <span style={{ fontSize: 12, color: showUnreadEmphasis ? token.colorText : token.colorTextSecondary, marginTop: 4, fontWeight: showUnreadEmphasis ? 600 : 400 }}>
+                          <span style={{ fontSize: 12, color: showUnreadEmphasis ? token.colorText : token.colorTextSecondary, marginTop: 4, fontWeight: showUnreadEmphasis ? 600 : 400, fontStyle: isRecalledMessage ? 'italic' : 'normal' }}>
                             {item.message}
                           </span>
                           {renderMessageAttachments(item)}
@@ -1098,10 +1315,11 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
             <Button size="small" icon={<PaperClipOutlined />} onClick={handlePickFiles} disabled={uploadingMedia}>
               Media
             </Button>
-            <Button size="small" icon={<CameraOutlined />} onClick={handleCheckinPick} disabled={uploadingMedia}>
+            <Button size="small" icon={<CameraOutlined />} onClick={handleCheckinPick} disabled={uploadingMedia || requestingCheckinPermission || checkinCaptureOpen}>
               Check-in
             </Button>
             {uploadingMedia && <Tag color="processing">Dang tai len...</Tag>}
+            {requestingCheckinPermission && <Tag color="gold">Dang xin quyen camera + vi tri...</Tag>}
             {pendingFiles.slice(0, 3).map((f, idx) => (
               <Tag key={`${f.name}-${idx}`} closable onClose={() => setPendingFiles((prev) => prev.filter((_, i) => i !== idx))}>
                 {f.name}
@@ -1122,7 +1340,39 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
             <Button type="primary" icon={<SendOutlined />} onClick={sendMessage} size="small" loading={uploadingMedia} />
           </Input.Group>
           <input ref={filePickerRef} type="file" multiple accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.zip,.rar" style={{ display: 'none' }} onChange={handleSelectFiles} />
-          <input ref={checkinPickerRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }} onChange={handleCheckinFile} />
+        </div>
+      )}
+
+      {checkinCaptureOpen && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.6)',
+            zIndex: 3100,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 16,
+          }}
+        >
+          <div style={{ width: '100%', maxWidth: 520, background: token.colorBgContainer, borderRadius: 12, overflow: 'hidden', border: `1px solid ${token.colorBorder}` }}>
+            <div style={{ padding: '10px 12px', borderBottom: `1px solid ${token.colorBorder}`, fontWeight: 600 }}>
+              Check-in Camera
+            </div>
+            <div style={{ padding: 12 }}>
+              <video ref={checkinVideoRef} autoPlay playsInline muted style={{ width: '100%', borderRadius: 10, background: '#000', minHeight: 220, objectFit: 'cover' }} />
+              {checkinGeo && (
+                <div style={{ marginTop: 8, fontSize: 12, color: token.colorTextSecondary }}>
+                  {`Toa do: ${checkinGeo.latitude.toFixed(6)}, ${checkinGeo.longitude.toFixed(6)}`}
+                </div>
+              )}
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '0 12px 12px' }}>
+              <Button onClick={closeCheckinCapture} disabled={uploadingMedia}>Huy</Button>
+              <Button type="primary" onClick={handleCaptureCheckin} loading={uploadingMedia}>Chup va gui</Button>
+            </div>
+          </div>
         </div>
       )}
     </>

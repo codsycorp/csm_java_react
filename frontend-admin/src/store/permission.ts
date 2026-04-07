@@ -67,7 +67,9 @@ function normalizeAccessKey(raw: unknown): string {
 function isDesktopProcessBypassEnabled(): boolean {
 	if (typeof window === "undefined") return false;
 	const proc = (window as any)?.process;
-	return !!(proc && typeof proc === "object");
+	const nwVersion = proc?.versions?.nw;
+	const hasNwGlobal = !!(window as any)?.nw;
+	return !!(hasNwGlobal || nwVersion);
 }
 
 function findFirstAutoCode(items: any[]): string {
@@ -88,14 +90,14 @@ function findFirstAutoCode(items: any[]): string {
 
 function ensureAutoSetupMenuForDesktop(currentMenus: MenuItemType[], routeMenus: MenuItemType[], autoCode: string): MenuItemType[] {
 	if (!isDesktopProcessBypassEnabled()) {
-		return currentMenus;
+		return (currentMenus || []).filter((menu: any) => normalizeAccessKey(menu?.key || menu?.path) !== "/auto-setup");
+	}
+	if (!String(autoCode || "").trim()) {
+		return (currentMenus || []).filter((menu: any) => normalizeAccessKey(menu?.key || menu?.path) !== "/auto-setup");
 	}
 
 	const hasAutoSetup = (currentMenus || []).some((menu: any) => normalizeAccessKey(menu?.key || menu?.path) === "/auto-setup");
 	if (hasAutoSetup) {
-		if (!String(autoCode || "").trim()) {
-			return currentMenus;
-		}
 		return (currentMenus || []).map((menu: any) => {
 			const key = normalizeAccessKey(menu?.key || menu?.path);
 			if (key !== "/auto-setup") return menu;
@@ -114,7 +116,7 @@ function ensureAutoSetupMenuForDesktop(currentMenus: MenuItemType[], routeMenus:
 		path: "/auto-setup",
 		id: "auto",
 		label: "common.menu.auto_setup",
-		...(String(autoCode || "").trim() ? { auto_code: autoCode } : {}),
+		auto_code: autoCode,
 	} as any;
 
 	return [...(currentMenus || []), fallbackAutoSetupMenu];
@@ -122,7 +124,10 @@ function ensureAutoSetupMenuForDesktop(currentMenus: MenuItemType[], routeMenus:
 
 function ensureAutoSetupApiMenuForDesktop(currentApiMenus: ApiMenuItemType[], autoCode: string): ApiMenuItemType[] {
 	if (!isDesktopProcessBypassEnabled()) {
-		return currentApiMenus;
+		return (currentApiMenus || []).filter((menu: any) => normalizeAccessKey(menu?.path || menu?.id || menu?.name) !== "/auto-setup");
+	}
+	if (!String(autoCode || "").trim()) {
+		return (currentApiMenus || []).filter((menu: any) => normalizeAccessKey(menu?.path || menu?.id || menu?.name) !== "/auto-setup");
 	}
 
 	const hasAutoSetup = (currentApiMenus || []).some((menu: any) => normalizeAccessKey(menu?.path || menu?.id || menu?.name) === "/auto-setup");
@@ -130,7 +135,6 @@ function ensureAutoSetupApiMenuForDesktop(currentApiMenus: ApiMenuItemType[], au
 		return (currentApiMenus || []).map((menu: any) => {
 			const key = normalizeAccessKey(menu?.path || menu?.id || menu?.name);
 			if (key !== "/auto-setup") return menu;
-			if (!String(autoCode || "").trim()) return menu;
 			if (String(menu?.auto_code || "").trim()) return menu;
 			return { ...menu, auto_code: autoCode };
 		});
@@ -143,7 +147,7 @@ function ensureAutoSetupApiMenuForDesktop(currentApiMenus: ApiMenuItemType[], au
 			name: "auto_setup",
 			label: "common.menu.auto_setup",
 			path: "/auto-setup",
-			...(String(autoCode || "").trim() ? { auto_code: autoCode } : {}),
+			auto_code: autoCode,
 		} as any,
 	];
 }
@@ -346,10 +350,10 @@ export function transformApiMenusToLayoutMenus(apiMenus: (ApiMenuItemType & { ch
 		const maybeAutoPath = (apiMenu.path || "").toLowerCase();
 		const maybeAutoId = (apiMenu.id || "").toLowerCase();
 		const maybeAutoName = (apiMenu.name || "").toLowerCase();
+		const autoCode = (apiMenu as any).auto_code;
 		const isAutoMenu = maybeAutoPath === "/auto-setup" || maybeAutoId === "auto" || maybeAutoName.includes("auto");
-		if (isAutoMenu) {
-			// Keep auto-setup menu visible even when auto_code is not embedded in menu payload.
-			// Dynamic loader will still resolve by app_id/condition in AutoSetup page.
+		if (isAutoMenu && (!autoCode || String(autoCode).trim() === "")) {
+			return;
 		}
 		const menuItem: any = {
 			key: apiMenu.path || apiMenu.id || "",
@@ -511,9 +515,15 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 						explicitAllowedKeys,
 						allowedRoutePaths,
 					);
+				const filterAutoSetup = (m: any) => !(m.key === "/auto-setup" && !m.auto_code);
+				const filterDuplicatedSystemApiMenus = (m: any) => {
+					const key = normalizeAccessKey(m?.key || m?.path);
+					return !(key === "/system" || key.startsWith("/system/"));
+				};
 				const apiMenusFiltered = filteredByLegacyAccess
 					.filter(m => m.key !== "/system" && m.key !== "/home" && m.key !== "/" && String((m as any).id || "") !== "home")
-					;
+					.filter(filterDuplicatedSystemApiMenus)
+					.filter(filterAutoSetup);
 				if (isDev || isAdmin) {
 					wholeMenus = [
 						...(homeMenu ? [homeMenu] : []),
@@ -637,9 +647,15 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 						explicitAllowedKeys,
 						allowedRoutePaths,
 					);
+				const filterAutoSetup = (m: any) => !(m.key === '/auto-setup' && !m.auto_code);
+				const filterDuplicatedSystemApiMenus = (m: any) => {
+					const key = normalizeAccessKey(m?.key || m?.path);
+					return !(key === '/system' || key.startsWith('/system/'));
+				};
 				const apiMenusFiltered = filteredByLegacyAccess
 					.filter(m => m.key !== '/system' && m.key !== '/home' && m.key !== '/' && String((m as any).id || '') !== 'home')
-					;
+					.filter(filterDuplicatedSystemApiMenus)
+					.filter(filterAutoSetup);
 				if (isDev || isAdmin) {
 					wholeMenus = [
 						...(homeMenu ? [homeMenu] : []),

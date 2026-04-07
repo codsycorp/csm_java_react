@@ -246,6 +246,31 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
         return false;
     }
 
+    private boolean isPortalUsernameOnline(String appId, String username, UUID excludeSessionId) {
+        if (appId == null || appId.isBlank() || username == null || username.isBlank()) {
+            return false;
+        }
+        String target = username.trim();
+        for (Map.Entry<UUID, String> entry : sessionUsernames.entrySet()) {
+            UUID sid = entry.getKey();
+            if (excludeSessionId != null && excludeSessionId.equals(sid)) {
+                continue;
+            }
+            String sidUsername = entry.getValue();
+            if (sidUsername == null || !sidUsername.trim().equalsIgnoreCase(target)) {
+                continue;
+            }
+            if (!appId.equals(sessionAppIds.get(sid))) {
+                continue;
+            }
+            if (!Boolean.TRUE.equals(sessionPortalFlags.get(sid))) {
+                continue;
+            }
+            return true;
+        }
+        return false;
+    }
+
     private void emitUserPresenceChanged(String appId, String userId, String username, boolean online, Long lastSeenAt) {
         if (appId == null || appId.isBlank() || userId == null || userId.isBlank()) {
             return;
@@ -950,15 +975,19 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                                                 java.util.Map<String, Object> user = (java.util.Map<String, Object>) rowMap;
 
                                                 String userId = String.valueOf(user.getOrDefault("id", "")).trim();
-                                                if (userId.isEmpty()) continue;
+                                                String username = String.valueOf(user.getOrDefault("username", "")).trim();
+                                                if (userId.isEmpty() && username.isEmpty()) continue;
 
                                                 boolean online = isPortalUserOnline(appId, userId, null);
+                                                if (!online && !username.isBlank()) {
+                                                    online = isPortalUsernameOnline(appId, username, null);
+                                                }
                                                 Long lastSeen = userLastSeenByAppAndUser.getOrDefault(presenceKey(appId, userId), 0L);
 
                                                 Map<String, Object> item = new HashMap<>();
                                                 item.put("appId", appId);
                                                 item.put("userId", userId);
-                                                item.put("username", user.getOrDefault("username", ""));
+                                                item.put("username", username);
                                                 item.put("avatar", user.getOrDefault("avatar", ""));
                                                 item.put("online", online);
                                                 item.put("lastSeenAt", online ? 0L : (lastSeen == null ? 0L : lastSeen));

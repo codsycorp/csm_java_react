@@ -9,11 +9,12 @@ import { BellOutlined } from "@ant-design/icons";
 import { useToggle } from "ahooks";
 import { Popover, theme, Divider } from "antd";
 import { clsx } from "clsx";
-import { useMemo, useState, useEffect, useCallback } from "react";
+import { useMemo, useState, useEffect, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { createUseStyles } from "react-jss";
 import { useAppStore } from "#src/store/app";
 import { useUserStore } from "#src/store/user";
+import { useSocket } from "#src/hooks/useSocket";
 import type { ChatMessage } from "#src/model/ChatMessage";
 import { Input, Button, Avatar } from "antd";
 import { SendOutlined, UserOutlined } from "@ant-design/icons";
@@ -34,8 +35,19 @@ const useStyles = createUseStyles(({ token }) => (
 				overflowY: "auto",
 			},
 		},
+		notificationContent: {
+			maxHeight: 460,
+			overflowY: "auto",
+			overflowX: "hidden",
+		},
+		userList: {
+			maxHeight: 220,
+			overflowY: "auto",
+			overflowX: "hidden",
+			paddingRight: 4,
+		},
 		userItem: {
-			padding: '12px 16px',
+			padding: '10px 12px',
 			borderRadius: 8,
 			margin: '4px 8px',
 			transition: 'all 0.2s ease',
@@ -90,6 +102,9 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 	const [input, setInput] = useState("");
 	const [openChats, setOpenChats] = useState<{room: string, username: string}[]>([]);
 	const [selectedAppFilter, setSelectedAppFilter] = useState<string>("all");
+	const [showAllInternal, setShowAllInternal] = useState(false);
+	const [showAllGuests, setShowAllGuests] = useState(false);
+	const [badgePulse, setBadgePulse] = useState(false);
 	const classes = useStyles();
 	const { t } = useTranslation();
 	const { token } = theme.useToken();
@@ -99,6 +114,8 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 	// Priority: user.app_id (from login) > store.currentAppId (from AppStore) > fallback to "csm"
 	const appId = (user.app_id || "").trim() || useAppStore.getState().getCurrentAppId() || "csm";
 	const { sendMessage: sendChatMessage, unreadCounts: contextUnreadCounts, messages: contextMessages, markAsRead } = useChatHistory();
+	const { socket, connected } = useSocket({ enabled: true });
+	const [appUsersPresence, setAppUsersPresence] = useState<Array<{ userId?: string; username: string; appId: string; online: boolean; lastSeenAt: number }>>([]);
 
 	const formatGuestLabel = useCallback((guestKey: string, guestPhone?: string, username?: string, isAdminMessage?: boolean) => {
 		const phone = String(guestPhone || '').trim();
@@ -111,6 +128,26 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 		return shortId ? `Khách ${shortId}` : 'Khách mới';
 	}, []);
 
+	const isSameOrBroadcastVariant = useCallback((left?: string, right?: string) => {
+		const a = String(left || '').trim();
+		const b = String(right || '').trim();
+		if (!a || !b) return false;
+		if (a === b) return true;
+		const plainA = a.startsWith('broadcast_') ? a.slice('broadcast_'.length) : a;
+		const plainB = b.startsWith('broadcast_') ? b.slice('broadcast_'.length) : b;
+		return plainA === plainB;
+	}, []);
+
+	const toRelatedAppIds = useCallback((value?: string) => {
+		const raw = String(value || '').trim();
+		if (!raw) return [] as string[];
+		if (raw.startsWith('broadcast_')) {
+			const base = raw.slice('broadcast_'.length);
+			return Array.from(new Set([raw, base].filter(Boolean)));
+		}
+		return Array.from(new Set([raw, `broadcast_${raw}`]));
+	}, []);
+
 	// Notification popup relies on ChatHistoryContext initialization + realtime socket updates.
 	// Avoid extra refresh calls here to prevent chat-history request storms.
 	
@@ -121,7 +158,7 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 	// Group 2: Guests - messages có guestPhone (khách vãng lai)
 	const { internalUsersWithUnread, guestUsersWithUnread } = useMemo(() => {
 		const internalMap = new Map<string, { key: string; room: string; username: string; avatar?: string; unread: number; lastTs: number; appId?: string }>();
-		const guestMap = new Map<string, { key: string; room: string; label: string; unread: number; lastTs: number; appId?: string }>();
+		const guestMap = new Map<string, { key: string; room: string; label: string; unread: number; pendingForApp: number; lastTs: number; appId?: string }>();
 		
 		// Duyệt TẤT CẢ rooms trong contextMessages để không bỏ lỡ tin của guests
 		Object.entries(contextMessages).forEach(([roomKey, msgs]) => {
@@ -136,8 +173,13 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 					return;
 				}
 				
-				const hasRead = Array.isArray(msg.readBy) && user.userId ? msg.readBy.includes(user.userId) : false;
+				const userIdToken = String(user.userId || '').trim();
+				const usernameToken = String(user.username || '').trim();
+				const hasRead = Array.isArray(msg.readBy)
+					? msg.readBy.map((v: any) => String(v || '').trim()).some((reader: string) => reader === userIdToken || reader === usernameToken)
+					: false;
 				const isUnread = !hasRead;
+				const readByList = Array.isArray(msg.readBy) ? msg.readBy.map((v: any) => String(v || '').trim()).filter(Boolean) : [];
 				
 				// PRIORITY: Check guestPhone FIRST - guest messages go to guests section
 				if (msg.guestSessionId || msg.guestPhone) {
@@ -152,6 +194,7 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 							room: guestRoom,
 							label: guestLabel,
 							unread: 0,
+							pendingForApp: 0,
 							lastTs: 0,
 							appId: (msg.appId || '').trim(),
 						};
@@ -159,6 +202,12 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 						existing.appId = (msg.appId || existing.appId || '').trim();
 						existing.lastTs = Math.max(existing.lastTs || 0, Number(msg.timestamp || 0));
 						if (isUnread && !msg.isAdmin) existing.unread++;
+
+						const isGuestAuthored = !msg.isAdmin && (!msg.userId || String(msg.userId).trim() === '');
+						const hasPortalReader = readByList.some((readerId: string) => !readerId.startsWith('guest:') && readerId !== guestKey);
+						if (isGuestAuthored && !hasPortalReader) {
+							existing.pendingForApp++;
+						}
 						guestMap.set(guestRoom, existing);
 					}
 				} 
@@ -235,11 +284,141 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 	}, [isDevUser, appId, selectedAppFilter, appFilterOptions]);
 
 	const displayedInternalUsers = useMemo(() => {
+		const unreadByUser = new Map<string, { unread: number; room?: string; avatar?: string; appId?: string }>();
+		internalUsersWithUnread.forEach((u: any) => {
+			const appToken = String(u?.appId || appId || '').trim();
+			const userToken = String(u?.username || '').trim();
+			if (!userToken) return;
+			unreadByUser.set(`${appToken}::${userToken}`, {
+				unread: Number(u?.unread || 0),
+				room: String(u?.room || ''),
+				avatar: u?.avatar,
+				appId: appToken,
+			});
+		});
+
+		const effectiveFilterApp = (!isDevUser || selectedAppFilter === 'all')
+			? String(appId || '').trim()
+			: String(selectedAppFilter || '').trim();
+
+		const roster = (appUsersPresence || [])
+			.filter((u) => {
+				const sameUserId = !!(user.userId && u.userId && String(u.userId) === String(user.userId));
+				const sameUsername = !!(user.username && u.username && String(u.username) === String(user.username));
+				if (sameUserId || sameUsername) return false;
+				if (!effectiveFilterApp) return true;
+				return String(u.appId || '') === effectiveFilterApp;
+			})
+			.map((u) => {
+				const key = `${String(u.appId || '').trim()}::${String(u.username || '').trim()}`;
+				const unreadMeta = unreadByUser.get(key);
+				return {
+					key,
+					username: u.username,
+					appId: u.appId,
+					online: !!u.online,
+					lastTs: Number(u.lastSeenAt || 0),
+					unread: Number(unreadMeta?.unread || 0),
+					avatar: unreadMeta?.avatar,
+					room: unreadMeta?.room || `user:${u.appId};${u.username}`,
+				};
+			})
+			.sort((a, b) => {
+				if (a.online !== b.online) return a.online ? -1 : 1;
+				if (a.unread !== b.unread) return b.unread - a.unread;
+				return (b.lastTs || 0) - (a.lastTs || 0);
+			});
+
+		if (roster.length > 0) {
+			return roster;
+		}
+
 		if (!isDevUser || selectedAppFilter === "all") {
 			return internalUsersWithUnread;
 		}
 		return internalUsersWithUnread.filter((u: any) => String(u?.appId || "") === selectedAppFilter);
-	}, [internalUsersWithUnread, isDevUser, selectedAppFilter]);
+	}, [internalUsersWithUnread, isDevUser, selectedAppFilter, appUsersPresence, appId, user.userId, user.username]);
+
+	useEffect(() => {
+		if (!socket || !connected) return;
+
+		const effectiveFilterApp = (!isDevUser || selectedAppFilter === 'all')
+			? String(appId || '').trim()
+			: String(selectedAppFilter || '').trim();
+		if (!effectiveFilterApp) return;
+
+		const loadPresenceRoster = () => {
+			const candidates = toRelatedAppIds(effectiveFilterApp);
+			if (candidates.length === 0) {
+				setAppUsersPresence([]);
+				return;
+			}
+
+			let remaining = candidates.length;
+			const collected: any[] = [];
+			const done = () => {
+				remaining -= 1;
+				if (remaining > 0) return;
+
+				const merged = new Map<string, { userId?: string; username: string; appId: string; online: boolean; lastSeenAt: number }>();
+				collected
+					.map((item: any) => ({
+						userId: String(item?.userId || '').trim() || undefined,
+						username: String(item?.username || '').trim(),
+						appId: String(item?.appId || effectiveFilterApp).trim(),
+						online: item?.online === true || item?.online === 'true' || item?.online === 1,
+						lastSeenAt: Number(item?.lastSeenAt || 0) || 0,
+					}))
+					.filter((item: any) => !!item.username)
+					.filter((item: any) => {
+						const sameUserId = !!(user.userId && item.userId && String(item.userId) === String(user.userId));
+						const sameUsername = !!(user.username && item.username && String(item.username) === String(user.username));
+						return !(sameUserId || sameUsername);
+					})
+					.forEach((item: any) => {
+						const key = (item.userId || item.username).toString();
+						const existing = merged.get(key);
+						if (!existing) {
+							merged.set(key, item);
+							return;
+						}
+						merged.set(key, {
+							...existing,
+							online: existing.online || item.online,
+							lastSeenAt: Math.max(existing.lastSeenAt || 0, item.lastSeenAt || 0),
+							appId: existing.appId || item.appId,
+						});
+					});
+
+				setAppUsersPresence(Array.from(merged.values()));
+			};
+
+			candidates.forEach((candidateAppId) => {
+				socket.emit('chat_list_app_users_presence', candidateAppId, (raw: any) => {
+					try {
+						const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+						const rows = Array.isArray(parsed) ? parsed : [];
+						collected.push(...rows);
+					} catch {
+						// ignore single candidate failure; merge whatever is available
+					}
+					done();
+				});
+			});
+		};
+
+		loadPresenceRoster();
+		const handlePresenceChanged = (payload: any) => {
+			const payloadApp = String(payload?.appId || '').trim();
+			if (payloadApp && !isSameOrBroadcastVariant(payloadApp, effectiveFilterApp)) return;
+			loadPresenceRoster();
+		};
+		socket.on('chat_user_presence', handlePresenceChanged);
+
+		return () => {
+			socket.off?.('chat_user_presence', handlePresenceChanged);
+		};
+	}, [socket, connected, appId, isDevUser, selectedAppFilter, user.userId, user.username, toRelatedAppIds, isSameOrBroadcastVariant]);
 
 	const displayedGuestUsers = useMemo(() => {
 		if (!isDevUser || selectedAppFilter === "all") {
@@ -247,6 +426,23 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 		}
 		return guestUsersWithUnread.filter((g: any) => String(g?.appId || "") === selectedAppFilter);
 	}, [guestUsersWithUnread, isDevUser, selectedAppFilter]);
+
+	useEffect(() => {
+		setShowAllInternal(false);
+		setShowAllGuests(false);
+	}, [selectedAppFilter, open]);
+
+	const visibleInternalUsers = useMemo(
+		() => (showAllInternal ? displayedInternalUsers : displayedInternalUsers.slice(0, 30)),
+		[displayedInternalUsers, showAllInternal]
+	);
+	const hiddenInternalCount = Math.max(0, displayedInternalUsers.length - visibleInternalUsers.length);
+
+	const visibleGuestUsers = useMemo(
+		() => (showAllGuests ? displayedGuestUsers : displayedGuestUsers.slice(0, 20)),
+		[displayedGuestUsers, showAllGuests]
+	);
+	const hiddenGuestCount = Math.max(0, displayedGuestUsers.length - visibleGuestUsers.length);
 	
 	// System messages: broadcast notifications từ CSM admin (appId='csm') gửi đến app hiện tại
 	// CRITICAL: Đây là thông báo hệ thống từ admin CSM broadcast đến app của user
@@ -273,23 +469,47 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 	const systemMessagesUnread = useMemo(() => {
 		let count = 0;
 		displayedSystemMessages.forEach((msg: any) => {
-			const hasRead = Array.isArray(msg.readBy) && user.userId ? msg.readBy.includes(user.userId) : false;
+			const userIdToken = String(user.userId || '').trim();
+			const usernameToken = String(user.username || '').trim();
+			const hasRead = Array.isArray(msg.readBy)
+				? msg.readBy.map((v: any) => String(v || '').trim()).some((reader: string) => reader === userIdToken || reader === usernameToken)
+				: false;
 			if (!hasRead) count++;
 		});
 		return count;
-	}, [displayedSystemMessages, user.userId]);
+	}, [displayedSystemMessages, user.userId, user.username]);
 
 	const totalSystemUnreadGlobal = useMemo(() => {
 		let count = 0;
 		systemMessages.forEach((msg: any) => {
-			const hasRead = Array.isArray(msg.readBy) && user.userId ? msg.readBy.includes(user.userId) : false;
+			const userIdToken = String(user.userId || '').trim();
+			const usernameToken = String(user.username || '').trim();
+			const hasRead = Array.isArray(msg.readBy)
+				? msg.readBy.map((v: any) => String(v || '').trim()).some((reader: string) => reader === userIdToken || reader === usernameToken)
+				: false;
 			if (!hasRead) count++;
 		});
 		return count;
-	}, [systemMessages, user.userId]);
+	}, [systemMessages, user.userId, user.username]);
 
 	// Total system unread for bell badge (global, not affected by local filter selection).
 	const totalSystemUnread = useMemo(() => totalSystemUnreadGlobal, [totalSystemUnreadGlobal]);
+	const totalUnread = useMemo(
+		() => totalSystemUnread + totalGuestUnread + totalInternalUnread,
+		[totalSystemUnread, totalGuestUnread, totalInternalUnread]
+	);
+	const prevTotalUnreadRef = useRef(0);
+
+	useEffect(() => {
+		const prev = prevTotalUnreadRef.current;
+		if (totalUnread > prev) {
+			setBadgePulse(true);
+			const timer = setTimeout(() => setBadgePulse(false), 450);
+			prevTotalUnreadRef.current = totalUnread;
+			return () => clearTimeout(timer);
+		}
+		prevTotalUnreadRef.current = totalUnread;
+	}, [totalUnread]);
 
 	// Ensure any chat opened from notification is immediately marked as read
 	const openChatAndMarkRead = useCallback((room: string, username?: string) => {
@@ -341,7 +561,6 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 	const handleMakeAll = () => { onEventChange && onEventChange("makeAll"); };
 	const handleClear = () => { onEventChange && onEventChange("clear"); };
 	const handleClick = (item: NotificationItem) => { onEventChange && onEventChange("read", item); };
-	const dot = useMemo(() => { return !!notifications?.filter((item: NotificationItem) => !item.isRead).length; }, [notifications]);
 
 	const sendMessage = () => {
 		if (input.trim()) {
@@ -352,6 +571,7 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 
 	return (
 		<>
+			<style>{`@keyframes csmBadgePulseOnce { 0% { transform: scale(1); } 40% { transform: scale(1.18); } 100% { transform: scale(1); } }`}</style>
 			<Popover
 				placement="bottomLeft"
 				overlayClassName={clsx(classes.notification, "w-72 md:w-96 !right-3")}
@@ -364,11 +584,11 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 						<div className="flex items-center justify-between mb-2" style={{ padding: '12px 16px', background: token.colorBgContainer, borderBottom: `1px solid ${token.colorBorder}` }}>
 							<div style={{ fontWeight: 600, color: token.colorText }}>Thông báo</div>
 						</div>
-						<div style={{ padding: '12px 16px' }}>
+						<div className={classes.notificationContent} style={{ padding: '12px 16px' }}>
 							{isDevUser && appFilterOptions.length > 1 && (
 								<div style={{ marginBottom: 10 }}>
 									<div style={{ fontSize: 12, color: token.colorTextSecondary, marginBottom: 4 }}>
-										Lọc theo app
+										Ứng dụng hiển thị
 									</div>
 									<select
 										value={selectedAppFilter}
@@ -386,16 +606,31 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 							{displayedInternalUsers.length > 0 && (
 								<>
 									<div style={{ fontWeight: 600, color: token.colorTextSecondary, marginBottom: 6 }}>{t('common.notification.internalUsers', 'Người dùng nội bộ')}</div>
-									{displayedInternalUsers.map(u => (
-										<div key={u.key} className={classes.userItem} onClick={() => openChatAndMarkRead(u.room, u.username)}>
-											<Avatar src={u.avatar} icon={<UserOutlined />} size="small" />
-											<div style={{ flex: 1 }}>
+									<div className={classes.userList}>
+										{visibleInternalUsers.map(u => (
+											<div key={u.key} className={classes.userItem} onClick={() => openChatAndMarkRead(u.room, u.username)}>
+												<Avatar src={u.avatar} icon={<UserOutlined />} size="small" />
+												<div style={{ flex: 1, minWidth: 0 }}>
 												<div className={classes.username}>{u.username}</div>
-												<div style={{ fontSize: 12, color: '#8c8c8c' }}>{isDevUser ? `${t('common.notification.sameApp', 'Cùng appId')} • ${(u.appId || 'n/a')}` : t('common.notification.sameApp', 'Cùng appId')}</div>
+												<div style={{ fontSize: 12, color: '#8c8c8c', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{(() => {
+													const hasPresenceState = typeof (u as any).online === 'boolean';
+													const presenceText = hasPresenceState ? ((u as any).online ? 'Online' : 'Offline') : '';
+													return isDevUser
+														? `${t('common.notification.sameApp', 'Cùng appId')} • ${(u.appId || 'n/a')}${presenceText ? ` • ${presenceText}` : ''}`
+														: `${t('common.notification.sameApp', 'Cùng appId')}${presenceText ? ` • ${presenceText}` : ''}`;
+												})()}</div>
+												</div>
+												{u.unread > 0 && <span className={classes.unreadBadge}>{u.unread}</span>}
 											</div>
-											{u.unread > 0 && <span className={classes.unreadBadge}>{u.unread}</span>}
+										))}
+									</div>
+									{hiddenInternalCount > 0 && (
+										<div style={{ textAlign: 'center', marginTop: 6 }}>
+											<Button type="link" size="small" onClick={() => setShowAllInternal(true)}>
+												Xem thêm {hiddenInternalCount} người dùng
+											</Button>
 										</div>
-									))}
+									)}
 									<Divider style={{ margin: '8px 0' }} />
 								</>
 							)}
@@ -404,16 +639,25 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 							{displayedGuestUsers.length > 0 && (
 								<>
 									<div style={{ fontWeight: 600, color: token.colorTextSecondary, marginBottom: 6 }}>{t('common.notification.guests', 'Khách vãng lai')}</div>
-									{displayedGuestUsers.map(g => (
-										<div key={g.key} className={classes.userItem} onClick={() => openChatAndMarkRead(g.room, g.label)}>
-											<Avatar icon={<UserOutlined />} size="small" />
-											<div style={{ flex: 1 }}>
+									<div className={classes.userList}>
+										{visibleGuestUsers.map(g => (
+											<div key={g.key} className={classes.userItem} onClick={() => openChatAndMarkRead(g.room, g.label)}>
+												<Avatar icon={<UserOutlined />} size="small" />
+												<div style={{ flex: 1, minWidth: 0 }}>
 												<div className={classes.username}>{g.label}</div>
-												<div style={{ fontSize: 12, color: '#8c8c8c' }}>{isDevUser ? `${t('common.notification.guestDesc', 'Khách của web/app')} • Online${g.unread > 0 ? ` • ${g.unread} tin` : ''} • ${(g.appId || 'n/a')}` : `${t('common.notification.guestDesc', 'Khách của web/app')} • Online${g.unread > 0 ? ` • ${g.unread} tin` : ''}`}</div>
+												<div style={{ fontSize: 12, color: '#8c8c8c', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{isDevUser ? `${t('common.notification.guestDesc', 'Khách của web/app')} • Online${g.unread > 0 ? ` • ${g.unread} tin` : ''}${g.pendingForApp > 0 ? ` • chưa ai cùng app xem: ${g.pendingForApp}` : ''} • ${(g.appId || 'n/a')}` : `${t('common.notification.guestDesc', 'Khách của web/app')} • Online${g.unread > 0 ? ` • ${g.unread} tin` : ''}${g.pendingForApp > 0 ? ` • chưa ai cùng app xem: ${g.pendingForApp}` : ''}`}</div>
+												</div>
+												{g.unread > 0 && <span className={classes.unreadBadge}>{g.unread}</span>}
 											</div>
-											{g.unread > 0 && <span className={classes.unreadBadge}>{g.unread}</span>}
+										))}
+									</div>
+									{hiddenGuestCount > 0 && (
+										<div style={{ textAlign: 'center', marginTop: 6 }}>
+											<Button type="link" size="small" onClick={() => setShowAllGuests(true)}>
+												Xem thêm {hiddenGuestCount} khách
+											</Button>
 										</div>
-									))}
+									)}
 									<Divider style={{ margin: '8px 0' }} />
 								</>
 							)}
@@ -455,10 +699,10 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 						className={cn("relative group", restProps.className)}
 						icon={<BellOutlined className="group-hover:animate-wiggle" />}
 					>
-						{dotProp ?? dot ? <span className="bg-blue-600 absolute right-2 top-1.5 h-2 w-2 rounded"></span> : null}
+						{null}
 					</BasicButton>
-				{(totalSystemUnread + totalGuestUnread + totalInternalUnread) > 0 && (
-					<span className="bg-red-500 animate-pulse absolute -right-2 -top-2 h-4 w-4 rounded-full flex items-center justify-center text-xs text-white font-bold z-10 border-2 border-white">{totalSystemUnread + totalGuestUnread + totalInternalUnread}</span>
+				{totalUnread > 0 && (
+					<span className="bg-red-500 absolute -right-2 -top-2 h-4 min-w-4 px-1 rounded-full flex items-center justify-center text-xs text-white font-bold z-10 border-2 border-white" style={{ animation: badgePulse ? 'csmBadgePulseOnce 450ms ease-out' : undefined }}>{totalUnread > 99 ? '99+' : totalUnread}</span>
 					)}
 				</div>
 			</Popover>

@@ -442,11 +442,6 @@ public class TableHandler {
             UserAccessContext accessContext = resolveCurrentUserAccessContext();
             String requiredAction = resolveRequiredAction(msg, isUpdate);
 
-            String actionPermissionError = validateActionPermissionForCurrentUser(accessContext, requiredAction);
-            if (actionPermissionError != null) {
-                return errorResponse(actionPermissionError);
-            }
-
             // Chuẩn hóa e_where thành SearchFilter trước để áp dụng security policy theo ngữ cảnh request.
             Object eWhereObj = msg.getOrDefault("e_where", new HashMap<>());
             SearchFilter filtersObjs;
@@ -458,6 +453,25 @@ public class TableHandler {
                 filtersObjs = (SearchFilter) eWhereObj;
             } else {
                 filtersObjs = null;
+            }
+
+            boolean allowScopedAutoSetupTemplateRead = isAllowedAutoSetupTemplateReadRequest(
+                appId,
+                tblname,
+                isUpdate,
+                filtersObjs,
+                accessContext
+            );
+
+            if (allowScopedAutoSetupTemplateRead) {
+                filtersObjs = applyAutoSetupTemplateScope(filtersObjs, accessContext);
+            }
+
+            if (!allowScopedAutoSetupTemplateRead) {
+                String actionPermissionError = validateActionPermissionForCurrentUser(accessContext, requiredAction);
+                if (actionPermissionError != null) {
+                    return errorResponse(actionPermissionError);
+                }
             }
 
             // Policy: csm_accounts is dev-only. Admin/sub-user must operate on csm_group_members.
@@ -557,6 +571,124 @@ public class TableHandler {
             case "delete" -> "Bạn không có quyền xóa dữ liệu (delete)";
             default -> "Bạn không có quyền thực hiện thao tác này";
         };
+    }
+
+    /**
+     * Allow read-only access to auto-setup template in csm.sys_autos for the current app.
+     * This is intentionally narrow and does not open generic sys_autos access.
+     */
+    private boolean isAllowedAutoSetupTemplateReadRequest(
+        String appId,
+        String tableName,
+        boolean isUpdate,
+        SearchFilter filters,
+        UserAccessContext accessContext
+    ) {
+        if (isUpdate) {
+            return false;
+        }
+        if (accessContext == null) {
+            return false;
+        }
+
+        String normalizedAppId = safeStr(appId);
+        String normalizedTable = safeStr(tableName);
+        if (!"csm".equals(normalizedAppId) || !"sys_autos".equals(normalizedTable)) {
+            return false;
+        }
+
+        // Dev can read by default and is already privileged.
+        if (accessContext.isDev) {
+            return true;
+        }
+
+        String userAppId = safeStr(accessContext.appId);
+        if (userAppId.isBlank()) {
+            return false;
+        }
+
+        Map<String, Object> eqValues = new HashMap<>();
+        collectEqValues(filters, eqValues);
+        String pType = safeStr(eqValues.get("p_type"));
+        String pName = safeStr(eqValues.get("p_name"));
+        if (!"0".equals(pType)) {
+            return false;
+        }
+
+        // Auto-code list loader in frontend requests only p_type=0 (without p_name).
+        // Keep it allowed, then enforce app scope by injecting p_name filter server-side.
+        if (pName.isBlank()) {
+            return true;
+        }
+        return isSameOrBroadcastVariant(userAppId, pName);
+    }
+
+    private SearchFilter applyAutoSetupTemplateScope(SearchFilter existingFilter, UserAccessContext accessContext) {
+        String userAppId = safeStr(accessContext == null ? null : accessContext.appId);
+        if (userAppId.isBlank()) {
+            return existingFilter;
+        }
+
+        String primary = userAppId;
+        String variant;
+        if (primary.startsWith("broadcast_")) {
+            variant = primary.substring("broadcast_".length());
+        } else {
+            variant = "broadcast_" + primary;
+        }
+
+        List<SearchFilter> appVariants = new ArrayList<>();
+        SearchFilter pNamePrimary = new SearchFilter();
+        pNamePrimary.setField("p_name");
+        pNamePrimary.setType("eq");
+        pNamePrimary.setValue(primary);
+        appVariants.add(pNamePrimary);
+
+        if (!variant.isBlank() && !variant.equals(primary)) {
+            SearchFilter pNameVariant = new SearchFilter();
+            pNameVariant.setField("p_name");
+            pNameVariant.setType("eq");
+            pNameVariant.setValue(variant);
+            appVariants.add(pNameVariant);
+        }
+
+        SearchFilter pNameScope;
+        if (appVariants.size() == 1) {
+            pNameScope = appVariants.get(0);
+        } else {
+            pNameScope = new SearchFilter();
+            pNameScope.setOperator("OR");
+            pNameScope.setConditions(appVariants);
+        }
+
+        if (isEmptyFilter(existingFilter)) {
+            return pNameScope;
+        }
+
+        SearchFilter merged = new SearchFilter();
+        merged.setOperator("AND");
+        merged.setConditions(new ArrayList<>(List.of(existingFilter, pNameScope)));
+        return merged;
+    }
+
+    private boolean isSameOrBroadcastVariant(String userAppId, String requestedAppId) {
+        String user = safeStr(userAppId);
+        String requested = safeStr(requestedAppId);
+        if (user.isBlank() || requested.isBlank()) {
+            return false;
+        }
+        if (user.equals(requested)) {
+            return true;
+        }
+
+        final String broadcastPrefix = "broadcast_";
+        if (user.startsWith(broadcastPrefix)) {
+            return user.substring(broadcastPrefix.length()).equals(requested);
+        }
+        if (requested.startsWith(broadcastPrefix)) {
+            return requested.substring(broadcastPrefix.length()).equals(user);
+        }
+        return false;
     }
 
     private boolean hasActionPermission(List<String> permissions, String action) {
@@ -1319,6 +1451,10 @@ public class TableHandler {
             collectCandidate(ownerCandidates, user.getAppToken());
             appTokenRole = extractRoleFromAppToken(user.getAppToken());
 
+            if (userAppId == null || userAppId.isBlank()) {
+                userAppId = extractAppIdFromEncryptedAppToken(user.getAppToken());
+            }
+
             collectCandidate(departmentCandidates, user.getDeptId());
             collectCandidate(branchCandidates, user.getBranchId());
         } else if (principal instanceof Map<?, ?>) {
@@ -1353,6 +1489,19 @@ public class TableHandler {
             appTokenRole = extractRoleFromAppToken(principalUserMap.get("app_token"));
             if (appTokenRole.isBlank()) {
                 appTokenRole = extractRoleFromAppToken(principalUserMap.get("appToken"));
+            }
+
+            if (userAppId == null || userAppId.isBlank()) {
+                userAppId = extractAppIdFromEncryptedAppToken(principalUserMap.get("app_token"));
+            }
+            if (userAppId == null || userAppId.isBlank()) {
+                userAppId = extractAppIdFromEncryptedAppToken(principalUserMap.get("appToken"));
+            }
+            if (userAppId == null || userAppId.isBlank()) {
+                userAppId = extractAppIdFromEncryptedAppToken(principalUserMap.get("source_app_token"));
+            }
+            if (userAppId == null || userAppId.isBlank()) {
+                userAppId = extractAppIdFromEncryptedAppToken(principalUserMap.get("sourceAppToken"));
             }
 
             collectCandidate(departmentCandidates, principalUserMap.get("dept_id"));
@@ -1411,6 +1560,30 @@ public class TableHandler {
             effectivePermissions,
             menusPermissions
         );
+    }
+
+    private String extractAppIdFromEncryptedAppToken(Object rawToken) {
+        String token = safeStr(rawToken);
+        if (token.isBlank()) {
+            return "";
+        }
+
+        try {
+            // Common case: token is encrypted at rest.
+            String decrypted = recordManager.csm_decrypt(token);
+            String[] parts = decrypted.split("_____");
+            if (parts.length > 0) {
+                return safeStr(parts[0]);
+            }
+        } catch (Exception ignore) {
+            // Fallback: token might already be raw plaintext.
+        }
+
+        String[] rawParts = token.split("_____");
+        if (rawParts.length > 0) {
+            return safeStr(rawParts[0]);
+        }
+        return "";
     }
 
     private boolean hasLegacyFullAppScope(List<String> menusPermissions, String appId) {
