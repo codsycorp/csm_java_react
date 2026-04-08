@@ -959,12 +959,8 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                                 // Danh sách user của app + trạng thái online/offline realtime (admin-page users)
                                 server.addEventListener("chat_list_app_users_presence", String.class, (client, appId, ackSender) -> {
                                     try {
-                                        net.phanmemmottrieu.data.SearchFilter filter = new net.phanmemmottrieu.data.SearchFilter();
-                                        filter.setField("app_id");
-                                        filter.setType("eq");
-                                        filter.setValue(appId);
-
-                                        Map<String, Object> result = recordManager.filterWithPagination("csm", "csm_accounts", filter, 1000, null);
+                                        final boolean requestAllApps = "all".equalsIgnoreCase(String.valueOf(appId).trim());
+                                        Map<String, Object> result = recordManager.filterWithPagination("csm", "csm_accounts", null, 5000, null);
                                         Object rowsObj = result != null ? result.get("rows") : null;
                                         java.util.List<Map<String, Object>> roster = new java.util.ArrayList<>();
 
@@ -974,21 +970,43 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                                                 @SuppressWarnings("unchecked")
                                                 java.util.Map<String, Object> user = (java.util.Map<String, Object>) rowMap;
 
+                                                String accountAppId = String.valueOf(user.getOrDefault("app_id", "")).trim();
+                                                String accountToken = String.valueOf(user.getOrDefault("app_token", "")).trim();
+                                                String accountTokenAppId = "";
+                                                if (!accountToken.isBlank()) {
+                                                    try {
+                                                        String[] tokenParts = recordManager.csm_decrypt(accountToken).split("_____");
+                                                        if (tokenParts.length > 0 && tokenParts[0] != null) {
+                                                            accountTokenAppId = tokenParts[0].trim();
+                                                        }
+                                                    } catch (Exception ignored) {
+                                                    }
+                                                }
+                                                boolean sameApp = (!accountAppId.isBlank() && accountAppId.equals(appId))
+                                                        || (!accountTokenAppId.isBlank() && accountTokenAppId.equals(appId));
+                                                boolean isDevAccount = Boolean.TRUE.equals(user.get("dev"));
+                                                if (!(requestAllApps || sameApp || isDevAccount)) continue;
+
+                                                String effectiveUserAppId = !accountAppId.isBlank()
+                                                        ? accountAppId
+                                                        : (!accountTokenAppId.isBlank() ? accountTokenAppId : appId);
+
                                                 String userId = String.valueOf(user.getOrDefault("id", "")).trim();
                                                 String username = String.valueOf(user.getOrDefault("username", "")).trim();
                                                 if (userId.isEmpty() && username.isEmpty()) continue;
 
-                                                boolean online = isPortalUserOnline(appId, userId, null);
+                                                boolean online = isPortalUserOnline(effectiveUserAppId, userId, null);
                                                 if (!online && !username.isBlank()) {
-                                                    online = isPortalUsernameOnline(appId, username, null);
+                                                    online = isPortalUsernameOnline(effectiveUserAppId, username, null);
                                                 }
-                                                Long lastSeen = userLastSeenByAppAndUser.getOrDefault(presenceKey(appId, userId), 0L);
+                                                Long lastSeen = userLastSeenByAppAndUser.getOrDefault(presenceKey(effectiveUserAppId, userId), 0L);
 
                                                 Map<String, Object> item = new HashMap<>();
-                                                item.put("appId", appId);
+                                                item.put("appId", effectiveUserAppId);
                                                 item.put("userId", userId);
                                                 item.put("username", username);
                                                 item.put("avatar", user.getOrDefault("avatar", ""));
+                                                item.put("isDev", isDevAccount);
                                                 item.put("online", online);
                                                 item.put("lastSeenAt", online ? 0L : (lastSeen == null ? 0L : lastSeen));
                                                 roster.add(item);
@@ -1008,9 +1026,36 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
 
                                                 String subAppId = String.valueOf(subUser.getOrDefault("app_id", "")).trim();
                                                 String parentAccountId = String.valueOf(subUser.getOrDefault("parent_account_id", "")).trim();
+                                                String subToken = String.valueOf(subUser.getOrDefault("app_token", "")).trim();
+                                                String sourceToken = String.valueOf(subUser.getOrDefault("source_app_token", "")).trim();
+
+                                                String subTokenAppId = "";
+                                                if (!subToken.isBlank()) {
+                                                    try {
+                                                        String[] tokenParts = recordManager.csm_decrypt(subToken).split("_____");
+                                                        if (tokenParts.length > 0 && tokenParts[0] != null) {
+                                                            subTokenAppId = tokenParts[0].trim();
+                                                        }
+                                                    } catch (Exception ignored) {
+                                                    }
+                                                }
+
+                                                String sourceTokenAppId = "";
+                                                if (!sourceToken.isBlank()) {
+                                                    try {
+                                                        String[] tokenParts = recordManager.csm_decrypt(sourceToken).split("_____");
+                                                        if (tokenParts.length > 0 && tokenParts[0] != null) {
+                                                            sourceTokenAppId = tokenParts[0].trim();
+                                                        }
+                                                    } catch (Exception ignored) {
+                                                    }
+                                                }
+
                                                 boolean sameApp = (!subAppId.isBlank() && subAppId.equals(appId))
-                                                        || (!parentAccountId.isBlank() && parentAccountId.equals(appId));
-                                                if (!sameApp) continue;
+                                                        || (!parentAccountId.isBlank() && parentAccountId.equals(appId))
+                                                        || (!subTokenAppId.isBlank() && subTokenAppId.equals(appId))
+                                                        || (!sourceTokenAppId.isBlank() && sourceTokenAppId.equals(appId));
+                                                if (!(requestAllApps || sameApp)) continue;
 
                                                 String subUserId = String.valueOf(subUser.getOrDefault("id", "")).trim();
                                                 String subUsername = firstNonBlank(
@@ -1036,14 +1081,20 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                                             );
                                             if (subUsername == null || subUsername.isBlank()) subUsername = "SubUser";
 
-                                            boolean subOnline = isPortalUserOnline(appId, subUserId, null);
+                                            String effectiveSubAppId = firstNonBlank(
+                                                    String.valueOf(subUser.getOrDefault("app_id", "")).trim(),
+                                                    String.valueOf(subUser.getOrDefault("parent_account_id", "")).trim(),
+                                                    appId
+                                            );
+
+                                            boolean subOnline = isPortalUserOnline(effectiveSubAppId, subUserId, null);
                                             if (!subOnline && !subUsername.isBlank()) {
-                                                subOnline = isPortalUsernameOnline(appId, subUsername, null);
+                                                subOnline = isPortalUsernameOnline(effectiveSubAppId, subUsername, null);
                                             }
-                                            Long subLastSeen = userLastSeenByAppAndUser.getOrDefault(presenceKey(appId, subUserId), 0L);
+                                            Long subLastSeen = userLastSeenByAppAndUser.getOrDefault(presenceKey(effectiveSubAppId, subUserId), 0L);
 
                                             Map<String, Object> subItem = new HashMap<>();
-                                            subItem.put("appId", appId);
+                                            subItem.put("appId", effectiveSubAppId);
                                             subItem.put("userId", subUserId);
                                             subItem.put("username", subUsername);
                                             subItem.put("avatar", subUser.getOrDefault("avatar", ""));
@@ -1052,6 +1103,18 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                                             subItem.put("lastSeenAt", subOnline ? 0L : (subLastSeen == null ? 0L : subLastSeen));
                                             roster.add(subItem);
                                         }
+
+                                        // Không trả về chính người đang đăng nhập trong danh sách roster.
+                                        UUID requesterSessionId = client.getSessionId();
+                                        String requesterUserId = String.valueOf(sessionUserIds.getOrDefault(requesterSessionId, "")).trim();
+                                        String requesterUsername = String.valueOf(sessionUsernames.getOrDefault(requesterSessionId, "")).trim();
+                                        roster.removeIf(item -> {
+                                            String itemUserId = String.valueOf(item.getOrDefault("userId", "")).trim();
+                                            String itemUsername = String.valueOf(item.getOrDefault("username", "")).trim();
+                                            boolean sameUserId = !requesterUserId.isBlank() && !itemUserId.isBlank() && requesterUserId.equals(itemUserId);
+                                            boolean sameUsername = !requesterUsername.isBlank() && !itemUsername.isBlank() && requesterUsername.equalsIgnoreCase(itemUsername);
+                                            return sameUserId || sameUsername;
+                                        });
 
                                         roster.sort((a, b) -> {
                                             boolean ao = Boolean.TRUE.equals(a.get("online"));

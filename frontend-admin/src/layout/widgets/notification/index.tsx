@@ -366,11 +366,7 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 		const loadPresenceRoster = () => {
 			// Dev "all" mode: query all known app IDs from received messages + own appId
 			const candidates = (isDevUser && selectedAppFilter === 'all')
-				? Array.from(new Set(
-					[effectiveFilterApp, ...appFilterOptions]
-						.filter(Boolean)
-						.flatMap(aId => toRelatedAppIds(aId))
-				  ))
+				? ['all']
 				: toRelatedAppIds(effectiveFilterApp);
 			if (candidates.length === 0) {
 				setAppUsersPresence([]);
@@ -434,6 +430,10 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 
 		loadPresenceRoster();
 		const handlePresenceChanged = (payload: any) => {
+			if (isDevUser && selectedAppFilter === 'all') {
+				loadPresenceRoster();
+				return;
+			}
 			const payloadApp = String(payload?.appId || '').trim();
 			if (payloadApp && !isSameOrBroadcastVariant(payloadApp, effectiveFilterApp)) return;
 			loadPresenceRoster();
