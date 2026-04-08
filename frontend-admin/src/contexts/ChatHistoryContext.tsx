@@ -475,11 +475,23 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
 
         if (target.mode === 'admin-system') {
           history = await (window as any).loadAdminChatHistory?.(target.apiRoom, 100, appId) || [];
-          updateRoomMessages(target.uiRoom, history || []);
+          const existingSystem = messagesRef.current[target.uiRoom] || [];
+          if (Array.isArray(history) && history.length === 0 && existingSystem.length > 0) {
+            // Do not wipe visible messages when backend has not indexed this room yet.
+            updateRoomMessages(target.uiRoom, existingSystem);
+          } else {
+            updateRoomMessages(target.uiRoom, history || []);
+          }
         } else {
           // For internal direct rooms (private/user/app), always pull server history so offline->online resumes immediately.
           history = await (window as any).loadAdminChatHistory?.(target.apiRoom, 100, appId) || [];
-          updateRoomMessages(target.uiRoom, history || []);
+          const existingRoomMessages = messagesRef.current[target.uiRoom] || [];
+          if (Array.isArray(history) && history.length === 0 && existingRoomMessages.length > 0) {
+            // Keep current room content instead of flashing to empty state.
+            updateRoomMessages(target.uiRoom, existingRoomMessages);
+          } else {
+            updateRoomMessages(target.uiRoom, history || []);
+          }
         }
       }
     } catch (error) {

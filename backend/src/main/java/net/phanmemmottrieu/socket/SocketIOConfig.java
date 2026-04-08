@@ -960,15 +960,41 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                                 server.addEventListener("chat_list_app_users_presence", String.class, (client, appId, ackSender) -> {
                                     try {
                                         final boolean requestAllApps = "all".equalsIgnoreCase(String.valueOf(appId).trim());
-                                        Map<String, Object> result = recordManager.filterWithPagination("csm", "csm_accounts", null, 5000, null);
-                                        Object rowsObj = result != null ? result.get("rows") : null;
+                                        java.util.List<java.util.Map<String, Object>> accountCandidates = new java.util.ArrayList<>();
+                                        if (!requestAllApps) {
+                                            net.phanmemmottrieu.data.SearchFilter accountFilter = new net.phanmemmottrieu.data.SearchFilter();
+                                            accountFilter.setField("app_id");
+                                            accountFilter.setType("eq");
+                                            accountFilter.setValue(appId);
+                                            Map<String, Object> scopedAccounts = recordManager.filterWithPagination("csm", "csm_accounts", accountFilter, 2000, null);
+                                            Object scopedRowsObj = scopedAccounts != null ? scopedAccounts.get("rows") : null;
+                                            if (scopedRowsObj instanceof java.util.List<?> scopedRows) {
+                                                for (Object rowObj : scopedRows) {
+                                                    if (rowObj instanceof java.util.Map<?, ?> rowMap) {
+                                                        @SuppressWarnings("unchecked")
+                                                        java.util.Map<String, Object> row = (java.util.Map<String, Object>) rowMap;
+                                                        accountCandidates.add(row);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        if (requestAllApps || accountCandidates.isEmpty()) {
+                                            Map<String, Object> result = recordManager.filterWithPagination("csm", "csm_accounts", null, 5000, null);
+                                            Object rowsObj = result != null ? result.get("rows") : null;
+                                            if (rowsObj instanceof java.util.List<?> rows) {
+                                                for (Object rowObj : rows) {
+                                                    if (rowObj instanceof java.util.Map<?, ?> rowMap) {
+                                                        @SuppressWarnings("unchecked")
+                                                        java.util.Map<String, Object> row = (java.util.Map<String, Object>) rowMap;
+                                                        accountCandidates.add(row);
+                                                    }
+                                                }
+                                            }
+                                        }
+
                                         java.util.List<Map<String, Object>> roster = new java.util.ArrayList<>();
 
-                                        if (rowsObj instanceof java.util.List<?> rows) {
-                                            for (Object rowObj : rows) {
-                                                if (!(rowObj instanceof java.util.Map<?, ?> rowMap)) continue;
-                                                @SuppressWarnings("unchecked")
-                                                java.util.Map<String, Object> user = (java.util.Map<String, Object>) rowMap;
+                                        for (java.util.Map<String, Object> user : accountCandidates) {
 
                                                 String accountAppId = String.valueOf(user.getOrDefault("app_id", "")).trim();
                                                 String accountToken = String.valueOf(user.getOrDefault("app_token", "")).trim();
@@ -1010,19 +1036,60 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                                                 item.put("online", online);
                                                 item.put("lastSeenAt", online ? 0L : (lastSeen == null ? 0L : lastSeen));
                                                 roster.add(item);
-                                            }
                                         }
 
                                         // Thêm người dùng con (csm_group_members) thuộc cùng app_id.
                                         // Hỗ trợ dữ liệu cũ có thể thiếu app_id bằng fallback parent_account_id.
                                         java.util.Map<String, java.util.Map<String, Object>> subUsersByKey = new java.util.LinkedHashMap<>();
-                                        Map<String, Object> subResult = recordManager.filterWithPagination("csm", "csm_group_members", null, 5000, null);
-                                        Object subRowsObj = subResult != null ? subResult.get("rows") : null;
-                                        if (subRowsObj instanceof java.util.List<?> subRows) {
-                                            for (Object subRowObj : subRows) {
-                                                if (!(subRowObj instanceof java.util.Map<?, ?> subRowMap)) continue;
-                                                @SuppressWarnings("unchecked")
-                                                java.util.Map<String, Object> subUser = (java.util.Map<String, Object>) subRowMap;
+                                        java.util.List<java.util.Map<String, Object>> subCandidates = new java.util.ArrayList<>();
+                                        if (!requestAllApps) {
+                                            net.phanmemmottrieu.data.SearchFilter subAppFilter = new net.phanmemmottrieu.data.SearchFilter();
+                                            subAppFilter.setField("app_id");
+                                            subAppFilter.setType("eq");
+                                            subAppFilter.setValue(appId);
+                                            Map<String, Object> bySubApp = recordManager.filterWithPagination("csm", "csm_group_members", subAppFilter, 3000, null);
+                                            Object bySubAppRowsObj = bySubApp != null ? bySubApp.get("rows") : null;
+                                            if (bySubAppRowsObj instanceof java.util.List<?> bySubAppRows) {
+                                                for (Object subRowObj : bySubAppRows) {
+                                                    if (subRowObj instanceof java.util.Map<?, ?> subRowMap) {
+                                                        @SuppressWarnings("unchecked")
+                                                        java.util.Map<String, Object> subUser = (java.util.Map<String, Object>) subRowMap;
+                                                        subCandidates.add(subUser);
+                                                    }
+                                                }
+                                            }
+
+                                            net.phanmemmottrieu.data.SearchFilter parentFilter = new net.phanmemmottrieu.data.SearchFilter();
+                                            parentFilter.setField("parent_account_id");
+                                            parentFilter.setType("eq");
+                                            parentFilter.setValue(appId);
+                                            Map<String, Object> byParent = recordManager.filterWithPagination("csm", "csm_group_members", parentFilter, 3000, null);
+                                            Object byParentRowsObj = byParent != null ? byParent.get("rows") : null;
+                                            if (byParentRowsObj instanceof java.util.List<?> byParentRows) {
+                                                for (Object subRowObj : byParentRows) {
+                                                    if (subRowObj instanceof java.util.Map<?, ?> subRowMap) {
+                                                        @SuppressWarnings("unchecked")
+                                                        java.util.Map<String, Object> subUser = (java.util.Map<String, Object>) subRowMap;
+                                                        subCandidates.add(subUser);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        if (requestAllApps || subCandidates.isEmpty()) {
+                                            Map<String, Object> subResult = recordManager.filterWithPagination("csm", "csm_group_members", null, 5000, null);
+                                            Object subRowsObj = subResult != null ? subResult.get("rows") : null;
+                                            if (subRowsObj instanceof java.util.List<?> subRows) {
+                                                for (Object subRowObj : subRows) {
+                                                    if (subRowObj instanceof java.util.Map<?, ?> subRowMap) {
+                                                        @SuppressWarnings("unchecked")
+                                                        java.util.Map<String, Object> subUser = (java.util.Map<String, Object>) subRowMap;
+                                                        subCandidates.add(subUser);
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        for (java.util.Map<String, Object> subUser : subCandidates) {
 
                                                 String subAppId = String.valueOf(subUser.getOrDefault("app_id", "")).trim();
                                                 String parentAccountId = String.valueOf(subUser.getOrDefault("parent_account_id", "")).trim();
@@ -1068,7 +1135,6 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
 
                                                 String dedupKey = !subUserId.isEmpty() ? ("id:" + subUserId) : ("u:" + subUsername.toLowerCase(java.util.Locale.ROOT));
                                                 subUsersByKey.putIfAbsent(dedupKey, subUser);
-                                            }
                                         }
 
                                         for (java.util.Map<String, Object> subUser : subUsersByKey.values()) {

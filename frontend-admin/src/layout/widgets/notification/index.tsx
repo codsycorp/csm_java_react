@@ -113,6 +113,7 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 	// CRITICAL: Use same pattern as permission.ts and ChatHistoryContext for getting effective appId
 	// Priority: user.app_id (from login) > store.currentAppId (from AppStore) > fallback to "csm"
 	const appId = (user.app_id || "").trim() || useAppStore.getState().getCurrentAppId() || "csm";
+	const initializedDevFilterRef = useRef(false);
 	const { sendMessage: sendChatMessage, unreadCounts: contextUnreadCounts, messages: contextMessages, markAsRead } = useChatHistory();
 	const { socket, connected } = useSocket({ enabled: true });
 	const [appUsersPresence, setAppUsersPresence] = useState<Array<{ userId?: string; username: string; appId: string; online: boolean; lastSeenAt: number; isSubUser?: boolean }>>([]);
@@ -275,6 +276,14 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 		});
 		return Array.from(set).filter(Boolean).sort();
 	}, [appId, internalUsersWithUnread, guestUsersWithUnread, contextMessages]);
+
+	useEffect(() => {
+		if (!isDevUser) return;
+		if (initializedDevFilterRef.current) return;
+		if (!appId) return;
+		initializedDevFilterRef.current = true;
+		setSelectedAppFilter(appId);
+	}, [isDevUser, appId]);
 
 	useEffect(() => {
 		if (!isDevUser) {
