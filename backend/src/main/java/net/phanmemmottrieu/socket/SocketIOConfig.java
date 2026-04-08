@@ -1395,6 +1395,11 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                                 String guestPhone = data.getGuestPhone();
                                 String guestSessionId = data.getGuestSessionId();
                                 String appId = data.getAppId();
+                                String parsedGuestFromRoom = parseGuestPhoneFromRoom(room);
+                                String guestIdentityHint = firstNonBlank(guestSessionId, guestPhone, parsedGuestFromRoom);
+                                boolean guestContext = (room != null && room.startsWith("guest:"))
+                                    || userId == null
+                                    || (guestIdentityHint != null && !guestIdentityHint.isBlank());
 
                                 // 🔥 CRITICAL: Normalize appId FIRST before any processing
                                 // Priority: appId from message > sessionAppIds > parsed room > fallback to "csm"
@@ -1430,13 +1435,15 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                                 if (isAdmin != null && isAdmin) {
                                     // Admin luôn được phép
                                     allow = true;
-                                    String targetGuestIdentity = resolveCanonicalGuestIdentity(
-                                            appId,
-                                            guestSessionId,
-                                            firstNonBlank(guestPhone, parseGuestPhoneFromRoom(room)),
-                                            client.getSessionId());
-                                    if (targetGuestIdentity != null && !targetGuestIdentity.isBlank()) {
-                                        cancelGuestNoReplyTask(appId, targetGuestIdentity);
+                                    if (guestContext) {
+                                        String targetGuestIdentity = resolveCanonicalGuestIdentity(
+                                                appId,
+                                                guestSessionId,
+                                                firstNonBlank(guestPhone, parsedGuestFromRoom),
+                                                client.getSessionId());
+                                        if (targetGuestIdentity != null && !targetGuestIdentity.isBlank()) {
+                                            cancelGuestNoReplyTask(appId, targetGuestIdentity);
+                                        }
                                     }
                                 } else if (userId == null) {
                                     // Guest: chỉ cho phép gửi vào phòng của mình hoặc phòng app
@@ -1469,7 +1476,7 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                                     String targetGuestIdentity = resolveCanonicalGuestIdentity(
                                             appId,
                                             guestSessionId,
-                                            firstNonBlank(guestPhone, parseGuestPhoneFromRoom(room)),
+                                            firstNonBlank(guestPhone, parsedGuestFromRoom),
                                             client.getSessionId());
                                     if (targetGuestIdentity != null && !targetGuestIdentity.isBlank()) {
                                         cancelGuestWelcomeTask(appId, targetGuestIdentity);
@@ -1478,13 +1485,15 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                                     // Authenticated user: cho phép chat trong app của mình
                                     allow = true;
 
-                                    String targetGuestIdentity = resolveCanonicalGuestIdentity(
-                                            appId,
-                                            guestSessionId,
-                                            firstNonBlank(guestPhone, parseGuestPhoneFromRoom(room)),
-                                            client.getSessionId());
-                                    if (targetGuestIdentity != null && !targetGuestIdentity.isBlank()) {
-                                        cancelGuestNoReplyTask(appId, targetGuestIdentity);
+                                    if (guestContext) {
+                                        String targetGuestIdentity = resolveCanonicalGuestIdentity(
+                                                appId,
+                                                guestSessionId,
+                                                firstNonBlank(guestPhone, parsedGuestFromRoom),
+                                                client.getSessionId());
+                                        if (targetGuestIdentity != null && !targetGuestIdentity.isBlank()) {
+                                            cancelGuestNoReplyTask(appId, targetGuestIdentity);
+                                        }
                                     }
                                 }
                                 if (!allow) {
@@ -1504,15 +1513,22 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                                 }
                                 
                                 // Normalize guest message data BEFORE saving
-                                String guestIdentity = resolveCanonicalGuestIdentity(
-                                        appId,
-                                        guestSessionId,
-                                        firstNonBlank(guestPhone, parseGuestPhoneFromRoom(room)),
-                                        client.getSessionId());
-                                if (guestIdentity != null && !guestIdentity.isEmpty()) {
-                                    data.setGuestSessionId(guestIdentity);
-                                    sessionGuestSessionIds.put(client.getSessionId(), guestIdentity);
-                                    rememberGuestPhoneIdentity(appId, guestPhone, guestIdentity);
+                                String guestIdentity = null;
+                                if (guestContext) {
+                                    guestIdentity = resolveCanonicalGuestIdentity(
+                                            appId,
+                                            guestSessionId,
+                                            firstNonBlank(guestPhone, parsedGuestFromRoom),
+                                            client.getSessionId());
+                                    if (guestIdentity != null && !guestIdentity.isEmpty()) {
+                                        data.setGuestSessionId(guestIdentity);
+                                        sessionGuestSessionIds.put(client.getSessionId(), guestIdentity);
+                                        rememberGuestPhoneIdentity(appId, guestPhone, guestIdentity);
+                                    }
+                                } else {
+                                    // Internal chat must never carry guest markers.
+                                    data.setGuestSessionId(null);
+                                    data.setGuestPhone(null);
                                 }
 
                                 if (userId == null && guestIdentity != null && !guestIdentity.isEmpty()) {
