@@ -306,6 +306,8 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 				const sameUserId = !!(user.userId && u.userId && String(u.userId) === String(user.userId));
 				const sameUsername = !!(user.username && u.username && String(u.username) === String(user.username));
 				if (sameUserId || sameUsername) return false;
+				// dev "all" mode: show all apps — candidates already queried all known appIds
+				if (isDevUser && selectedAppFilter === 'all') return true;
 				if (!effectiveFilterApp) return true;
 				return String(u.appId || '') === effectiveFilterApp;
 			})
@@ -338,7 +340,7 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 			return internalUsersWithUnread;
 		}
 		return internalUsersWithUnread.filter((u: any) => String(u?.appId || "") === selectedAppFilter);
-	}, [internalUsersWithUnread, isDevUser, selectedAppFilter, appUsersPresence, appId, user.userId, user.username]);
+	}, [internalUsersWithUnread, isDevUser, selectedAppFilter, appUsersPresence, appId, user.userId, user.username, appFilterOptions]);
 
 	useEffect(() => {
 		if (!socket || !connected) return;
@@ -349,7 +351,14 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 		if (!effectiveFilterApp) return;
 
 		const loadPresenceRoster = () => {
-			const candidates = toRelatedAppIds(effectiveFilterApp);
+			// Dev "all" mode: query all known app IDs from received messages + own appId
+			const candidates = (isDevUser && selectedAppFilter === 'all')
+				? Array.from(new Set(
+					[effectiveFilterApp, ...appFilterOptions]
+						.filter(Boolean)
+						.flatMap(aId => toRelatedAppIds(aId))
+				  ))
+				: toRelatedAppIds(effectiveFilterApp);
 			if (candidates.length === 0) {
 				setAppUsersPresence([]);
 				return;
@@ -421,7 +430,7 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 		return () => {
 			socket.off?.('chat_user_presence', handlePresenceChanged);
 		};
-	}, [socket, connected, appId, isDevUser, selectedAppFilter, user.userId, user.username, toRelatedAppIds, isSameOrBroadcastVariant]);
+	}, [socket, connected, appId, isDevUser, selectedAppFilter, appFilterOptions, user.userId, user.username, toRelatedAppIds, isSameOrBroadcastVariant]);
 
 	const displayedGuestUsers = useMemo(() => {
 		if (!isDevUser || selectedAppFilter === "all") {

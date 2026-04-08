@@ -678,19 +678,20 @@ public class InitHandler {
 
         private void initializeDataTables(String app_id, String table_name, List<String> prkeys, List<String> keys)
                         throws Exception {
-                // Tạo parametMap
-                Map<String, Object> parametMap = new HashMap<>();
-                // parametMap.put("app_id", app_id);
-                Map<String, Object> structMap = new HashMap<>();
-                List<String> fieldsPK = prkeys;
-                List<String> fields = keys;
+                initializeDataTables(app_id, table_name, prkeys, keys, null);
+        }
 
-                // Đưa vào structMap
-                structMap.put("fieldsPK", fieldsPK);
-                structMap.put("fields", fields);
+        private void initializeDataTables(String app_id, String table_name, List<String> prkeys, List<String> keys, List<String> searchFields)
+                        throws Exception {
+                Map<String, Object> parametMap = new HashMap<>();
+                Map<String, Object> structMap = new HashMap<>();
+                structMap.put("fieldsPK", prkeys);
+                structMap.put("fields", keys);
+                if (searchFields != null && !searchFields.isEmpty()) {
+                        structMap.put("fieldsSearch", searchFields);
+                }
                 parametMap.put("struct", structMap);
                 parametMap.put("id", table_name);
-                // logger.info("parametMap: " + parametMap);
                 recordManager.createRecord(app_id, "index", parametMap, List.of("id"));
         }
 
@@ -718,13 +719,18 @@ public class InitHandler {
                         // Schema đã tồn tại: vẫn đồng bộ lại index struct để bổ sung field mới,
                         // nhưng không đụng dữ liệu người dùng.
                         org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(InitHandler.class);
-                        initializeDataTables("csm", "csm_accounts", getAccountSchemaPkFields(), getAccountSchemaFields());
-                        initializeDataTables("csm", "csm_group_members", getSubAccountSchemaPkFields(), getSubAccountSchemaFields());
+                                initializeDataTables("csm", "csm_accounts", getAccountSchemaPkFields(), getAccountSchemaFields(), getAccountSearchFields());
+                                initializeDataTables("csm", "csm_group_members", getSubAccountSchemaPkFields(), getSubAccountSchemaFields(), getSubAccountSearchFields());
                         try {
                                 recordManager.indexExistingRecords("csm", "csm_group_members");
                         } catch (Exception ex) {
                                 logger.warn("Unable to rebuild csm_group_members index during schema sync: {}", ex.getMessage());
                         }
+                                try {
+                                        recordManager.indexExistingRecords("csm", "csm_accounts");
+                                } catch (Exception ex) {
+                                        logger.warn("Unable to rebuild csm_accounts index during schema sync: {}", ex.getMessage());
+                                }
                         logger.info("✅ User table schemas already initialized, schema synced for latest fields");
                         return false; // Not first-time init
                 }
@@ -741,14 +747,14 @@ public class InitHandler {
                 // - email, username, phoneNumber: Login identifiers (findUserByEmail/Username/Phone)
                 // - app_token, refresh_token, refresh: Session/token lookups (findUserByAppToken, findUserByRefreshToken)
                 // PROTECTED: app_token, refresh_token, refresh have strict-no-scan (block RocksDB fallback scan on Lucene miss)
-                initializeDataTables("csm", "csm_accounts", getAccountSchemaPkFields(), getAccountSchemaFields());
+                        initializeDataTables("csm", "csm_accounts", getAccountSchemaPkFields(), getAccountSchemaFields(), getAccountSearchFields());
                 
                 // 🔒 fieldsSearch for csm_group_members: Sub-account login + session
                 // - id: Primary key
                 // - login_identifier: Sub-account login (like email/username/phone for sub-users)
                 // - app_token, refresh: Sub-account session tokens (for sub-user session refresh)
                 // PROTECTED: app_token, refresh have strict-no-scan (block expensive scans on lookup failures)
-                initializeDataTables("csm", "csm_group_members", getSubAccountSchemaPkFields(), getSubAccountSchemaFields());
+                        initializeDataTables("csm", "csm_group_members", getSubAccountSchemaPkFields(), getSubAccountSchemaFields(), getSubAccountSearchFields());
                 
                 logger.info("✅ User table schemas initialized successfully");
                 return true; // First-time init completed
@@ -829,7 +835,7 @@ public class InitHandler {
                 return List.of(
                                 "id", "parent_account_id", "login_identifier", "username", "email", "phoneNumber",
                                 "full_name", "user_address", "avatar", "group_rights", "group_id",
-                                "app_token", "source_app_token",
+                                        "app_token", "source_app_token", "app_id",
                                 "refresh_token", "refresh", "refresh_token_ip", "refresh_token_ua", "refresh_token_expiry",
                                 "login_version", "loginVersion", "pass", "actived",
                                 "permissions", "menusPermissions", "permissionsAdd", "permissionsDeny", "menusPermissionsAdd", "menusPermissionsDeny",
@@ -838,6 +844,18 @@ public class InitHandler {
         }
 
         private Map<String, Object> buildFieldConfig(String name, String header, int show, String type, String align) {
+                        private List<String> getAccountSearchFields() {
+                                // Lucene-indexed fields for csm_accounts: login identifiers + session tokens + app_id for presence queries
+                                return List.of("id", "email", "username", "phoneNumber", "app_token", "refresh_token", "refresh", "app_id");
+                        }
+
+                        private List<String> getSubAccountSearchFields() {
+                                // Lucene-indexed fields for csm_group_members: login + session tokens + app_id + parent_account_id
+                                // app_id and parent_account_id added so filterWithPagination(app_id eq X) works in chat presence roster
+                                return List.of("id", "login_identifier", "app_token", "refresh_token", "refresh", "app_id", "parent_account_id");
+                        }
+
+                        private Map<String, Object> buildFieldConfig(String name, String header, int show, String type, String align) {
                 Map<String, Object> field = new HashMap<>();
                 field.put("f_name", name);
                 field.put("f_header", header);
