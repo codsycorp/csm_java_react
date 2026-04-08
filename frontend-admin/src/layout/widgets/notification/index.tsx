@@ -7,7 +7,7 @@ import { cn } from "#src/utils";
 
 import { BellOutlined } from "@ant-design/icons";
 import { useToggle } from "ahooks";
-import { Popover, theme, Divider } from "antd";
+import { Popover, theme, Divider, Badge } from "antd";
 import { clsx } from "clsx";
 import { useMemo, useState, useEffect, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
@@ -115,7 +115,7 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 	const appId = (user.app_id || "").trim() || useAppStore.getState().getCurrentAppId() || "csm";
 	const { sendMessage: sendChatMessage, unreadCounts: contextUnreadCounts, messages: contextMessages, markAsRead } = useChatHistory();
 	const { socket, connected } = useSocket({ enabled: true });
-	const [appUsersPresence, setAppUsersPresence] = useState<Array<{ userId?: string; username: string; appId: string; online: boolean; lastSeenAt: number }>>([]);
+	const [appUsersPresence, setAppUsersPresence] = useState<Array<{ userId?: string; username: string; appId: string; online: boolean; lastSeenAt: number; isSubUser?: boolean }>>([]);
 
 	const formatGuestLabel = useCallback((guestKey: string, guestPhone?: string, username?: string, isAdminMessage?: boolean) => {
 		const phone = String(guestPhone || '').trim();
@@ -219,7 +219,7 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 					if (username === currentUser) return; // Skip self-messages
 					const appToken = (msg.appId || appId || '').trim();
 					const internalRoom = String(roomKey || '').trim() || `user:${appToken};${username}`;
-					const internalKey = isDevUser ? `${appToken}::${username}` : username;
+					const internalKey = `${appToken}::${username}`;
 					const existing = internalMap.get(internalKey) || {
 						key: internalKey,
 						room: internalRoom,
@@ -321,6 +321,7 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 					unread: Number(unreadMeta?.unread || 0),
 					avatar: unreadMeta?.avatar,
 					room: unreadMeta?.room || `user:${u.appId};${u.username}`,
+					isSubUser: u.isSubUser || false,
 				};
 			})
 			.sort((a, b) => {
@@ -360,7 +361,7 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 				remaining -= 1;
 				if (remaining > 0) return;
 
-				const merged = new Map<string, { userId?: string; username: string; appId: string; online: boolean; lastSeenAt: number }>();
+				const merged = new Map<string, { userId?: string; username: string; appId: string; online: boolean; lastSeenAt: number; isSubUser?: boolean }>();
 				collected
 					.map((item: any) => ({
 						userId: String(item?.userId || '').trim() || undefined,
@@ -368,6 +369,7 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 						appId: String(item?.appId || effectiveFilterApp).trim(),
 						online: item?.online === true || item?.online === 'true' || item?.online === 1,
 						lastSeenAt: Number(item?.lastSeenAt || 0) || 0,
+						isSubUser: item?.isSubUser === true,
 					}))
 					.filter((item: any) => !!item.username)
 					.filter((item: any) => {
@@ -387,6 +389,7 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 							online: existing.online || item.online,
 							lastSeenAt: Math.max(existing.lastSeenAt || 0, item.lastSeenAt || 0),
 							appId: existing.appId || item.appId,
+							isSubUser: existing.isSubUser || item.isSubUser,
 						});
 					});
 
@@ -609,15 +612,17 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 									<div className={classes.userList}>
 										{visibleInternalUsers.map(u => (
 											<div key={u.key} className={classes.userItem} onClick={() => openChatAndMarkRead(u.room, u.username)}>
-												<Avatar src={u.avatar} icon={<UserOutlined />} size="small" />
+												<Badge dot={typeof (u as any).online === 'boolean'} color={(u as any).online ? '#52c41a' : '#bfbfbf'} offset={[-3, 22]}>
+													<Avatar src={u.avatar} icon={<UserOutlined />} size="small" />
+												</Badge>
 												<div style={{ flex: 1, minWidth: 0 }}>
 												<div className={classes.username}>{u.username}</div>
 												<div style={{ fontSize: 12, color: '#8c8c8c', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{(() => {
-													const hasPresenceState = typeof (u as any).online === 'boolean';
-													const presenceText = hasPresenceState ? ((u as any).online ? 'Online' : 'Offline') : '';
+													const userTypeLabel = (u as any).isSubUser ? 'Người dùng con' : t('common.notification.sameApp', 'Nội bộ');
+													const presenceLabel = typeof (u as any).online === 'boolean' ? ((u as any).online ? 'Online' : 'Offline') : '';
 													return isDevUser
-														? `${t('common.notification.sameApp', 'Cùng appId')} • ${(u.appId || 'n/a')}${presenceText ? ` • ${presenceText}` : ''}`
-														: `${t('common.notification.sameApp', 'Cùng appId')}${presenceText ? ` • ${presenceText}` : ''}`;
+														? `${userTypeLabel} • ${(u.appId || 'n/a')}${presenceLabel ? ` • ${presenceLabel}` : ''}`
+														: `${userTypeLabel}${presenceLabel ? ` • ${presenceLabel}` : ''}`;
 												})()}</div>
 												</div>
 												{u.unread > 0 && <span className={classes.unreadBadge}>{u.unread}</span>}
@@ -642,7 +647,9 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 									<div className={classes.userList}>
 										{visibleGuestUsers.map(g => (
 											<div key={g.key} className={classes.userItem} onClick={() => openChatAndMarkRead(g.room, g.label)}>
-												<Avatar icon={<UserOutlined />} size="small" />
+												<Badge dot color="#fa8c16" offset={[-3, 22]}>
+													<Avatar icon={<UserOutlined />} size="small" />
+												</Badge>
 												<div style={{ flex: 1, minWidth: 0 }}>
 												<div className={classes.username}>{g.label}</div>
 												<div style={{ fontSize: 12, color: '#8c8c8c', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{isDevUser ? `${t('common.notification.guestDesc', 'Khách của web/app')} • Online${g.unread > 0 ? ` • ${g.unread} tin` : ''}${g.pendingForApp > 0 ? ` • chưa ai cùng app xem: ${g.pendingForApp}` : ''} • ${(g.appId || 'n/a')}` : `${t('common.notification.guestDesc', 'Khách của web/app')} • Online${g.unread > 0 ? ` • ${g.unread} tin` : ''}${g.pendingForApp > 0 ? ` • chưa ai cùng app xem: ${g.pendingForApp}` : ''}`}</div>

@@ -62,7 +62,7 @@ public class RecordManager {
     private static final ConcurrentHashMap<String, UpdateBatchBuffer> updateBatchBuffers = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<String, ScheduledFuture<?>> batchFlushTasks = new ConcurrentHashMap<>();
     private static final int BATCH_SIZE = 50;  // Batch updates in groups of 50
-    private static final long BATCH_TIMEOUT_MS = 100;  // Or flush after 100ms
+    private static final long BATCH_TIMEOUT_MS = 50;   // Flush after 50ms (reduced from 100ms for near-real-time search consistency)
     private static final int DEFAULT_FILTER_TAKE = 500;
     private static final int MAX_FILTER_TAKE = 1000;
     private static final int MAX_LUCENE_SEARCH_HITS = 2000;

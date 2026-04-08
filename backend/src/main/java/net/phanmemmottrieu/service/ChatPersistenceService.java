@@ -822,6 +822,72 @@ public class ChatPersistenceService {
     }
 
     /**
+     * Xóa toàn bộ tin nhắn của một người dùng (theo userId hoặc username) khỏi chat_messages.
+     * Được gọi khi xóa tài khoản để dọn dẹp lịch sử chat liên quan.
+     *
+     * @return số tin nhắn đã xóa
+     */
+    public int deleteMessagesByUser(String appId, String userId, String username) {
+        if ((userId == null || userId.isBlank()) && (username == null || username.isBlank())) {
+            return 0;
+        }
+        String dbAppId = normalizeAppId(appId);
+        int deleted = 0;
+        try {
+            ensureChatTable(dbAppId);
+
+            List<SearchFilter> orConds = new ArrayList<>();
+            if (userId != null && !userId.isBlank()) {
+                orConds.add(buildEqFilter("userId", userId.trim()));
+            }
+            if (username != null && !username.isBlank()) {
+                orConds.add(buildEqFilter("username", username.trim()));
+            }
+
+            SearchFilter filter;
+            if (orConds.size() == 1) {
+                filter = orConds.get(0);
+            } else {
+                filter = new SearchFilter();
+                filter.setOperator("OR");
+                filter.setConditions(orConds);
+            }
+
+            Map<String, Object> result = recordManager.filter(dbAppId, CHAT_TABLE, filter);
+            Object rowsObj = result != null ? result.get("rows") : null;
+            if (rowsObj instanceof List<?> rows) {
+                for (Object rowObj : rows) {
+                    if (!(rowObj instanceof Map<?, ?> rowMap)) continue;
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> rec = (Map<String, Object>) rowMap;
+                    recordManager.deleteRecord(dbAppId, CHAT_TABLE, rec);
+                    deleted++;
+                }
+            }
+
+            // Dọn cache
+            final String uid = userId != null ? userId.trim() : "";
+            final String uname = username != null ? username.trim() : "";
+            synchronized (chatCache) {
+                chatCache.removeIf(msg ->
+                    normalizeAppId(msg.getAppId()).equals(dbAppId) && (
+                        (!uid.isEmpty() && uid.equals(msg.getUserId())) ||
+                        (!uname.isEmpty() && uname.equalsIgnoreCase(msg.getUsername()))
+                    )
+                );
+            }
+
+            if (deleted > 0) {
+                logger.info("🗑️ Đã xóa {} tin nhắn chat của userId={} username={} trong appId={}", deleted, userId, username, dbAppId);
+            }
+            return deleted;
+        } catch (Exception e) {
+            logger.error("❌ Lỗi khi xóa tin nhắn của userId={} username={} appId={}: {}", userId, username, appId, e.getMessage());
+            return 0;
+        }
+    }
+
+    /**
      * Thu hoi tin nhan (soft recall) trong khoang thoi gian cho phep.
      * Khong xoa lich su; chi danh dau eventType=message_recalled va an noi dung/media.
      */

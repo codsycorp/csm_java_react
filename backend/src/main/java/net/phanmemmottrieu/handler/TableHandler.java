@@ -73,6 +73,8 @@ public class TableHandler {
     @Autowired
     private SocketIOConfig socketIOConfig; // Inject SocketIOConfig
 
+    @Autowired
+    private net.phanmemmottrieu.service.ChatPersistenceService chatPersistenceService;
 
     @Autowired
     public TableHandler(RecordManager recordManager, SocketIOServer socketIOServer) {
@@ -3253,6 +3255,8 @@ public class TableHandler {
                     command = recordManager.createRecord(appId, tblname, objUpdate, effectivePkFields);
                     enqueueServiceInvalidation(appId, tblname, objUpdate);
                     msg.put("command", command);
+                    // Flush Lucene batch trước thông báo để client query ngay không bị stale
+                    recordManager.flushPendingBatchUpdates(appId, tblname);
                     // Gửi full data row để client có thể insert trực tiếp
                     socketIOConfig.sendUpdateNotification(appId, tblname, "create", extractPrimaryKeyValues(objUpdate, effectivePkFields), objUpdate);
                     break;
@@ -3353,6 +3357,7 @@ public class TableHandler {
                                     Map<String, Object> conflictKeys = extractPrimaryKeyValues(conflictRow, effectivePkFields);
                                     recordManager.deleteRecord(appId, tblname, conflictRow);
                                     enqueueServiceInvalidation(appId, tblname, conflictRow);
+                                    recordManager.flushPendingBatchUpdates(appId, tblname);
                                     socketIOConfig.sendUpdateNotification(appId, tblname, "delete", conflictKeys, conflictRow);
                                     logger.warn("Force-replace PK collision: deleted conflicting row id={} table={}", conflictRow.get("id"), tblname);
                                 }
@@ -3366,10 +3371,12 @@ public class TableHandler {
                             // Chỉ khi đổi khóa chính mới cần replace bằng delete+create.
                             recordManager.deleteRecord(appId, tblname, row);
                             enqueueServiceInvalidation(appId, tblname, row);
+                            recordManager.flushPendingBatchUpdates(appId, tblname);
                             socketIOConfig.sendUpdateNotification(appId, tblname, "delete", oldKeys, row);
 
                             command = recordManager.createRecord(appId, tblname, newRow, effectivePkFields);
                             enqueueServiceInvalidation(appId, tblname, newRow);
+                            recordManager.flushPendingBatchUpdates(appId, tblname);
                             socketIOConfig.sendUpdateNotification(appId, tblname, "create", newKeys, newRow);
                             msg.put("command", "update");
                             msg.put("updated_row", newRow);
@@ -3378,6 +3385,7 @@ public class TableHandler {
                             // PK không đổi: cập nhật in-place để nhanh hơn và tránh lệch action phía client.
                             command = recordManager.createRecord(appId, tblname, newRow, effectivePkFields);
                             enqueueServiceInvalidation(appId, tblname, newRow);
+                            recordManager.flushPendingBatchUpdates(appId, tblname);
                             socketIOConfig.sendUpdateNotification(appId, tblname, "update", newKeys, newRow);
                             msg.put("command", "update");
                             msg.put("updated_row", newRow);
@@ -3407,11 +3415,26 @@ public class TableHandler {
                     Map<String, Object> rowPrimaryKeys = extractPrimaryKeyValues(row, effectivePkFields);
                     recordManager.deleteRecord(appId, tblname, row);
                     enqueueServiceInvalidation(appId, tblname, row);
+                    // Flush Lucene trước khi gửi socket để search không bị stale
+                    recordManager.flushPendingBatchUpdates(appId, tblname);
                     // Gửi delete với data row để client biết xóa row nào
                     socketIOConfig.sendUpdateNotification(appId, tblname, "delete", rowPrimaryKeys, row);
-                    // Cascade: xóa toàn bộ sub-user thuộc tài khoản này
+                    // Cascade: xóa toàn bộ sub-user thuộc tài khoản này và dọn tin nhắn chat
                     if ("csm_accounts".equals(tblname)) {
                         cascadeDeleteSubUsers(appId, row);
+                        // Dọn tin nhắn của tài khoản chính
+                        String mainUserId = safeStr(row.get("id"));
+                        String mainUsername = safeStr(row.get("username"));
+                        String mainAppId = safeStr(row.get("app_id"));
+                        if (mainAppId.isEmpty()) mainAppId = appId;
+                        chatPersistenceService.deleteMessagesByUser(mainAppId, mainUserId, mainUsername);
+                    } else if ("csm_group_members".equals(tblname)) {
+                        // Dọn tin nhắn của người dùng con bị xóa
+                        String subUserId = safeStr(row.get("id"));
+                        String subUsername = safeStr(row.get("login_identifier"));
+                        String subAppId = safeStr(row.get("app_id"));
+                        if (subAppId.isEmpty()) subAppId = appId;
+                        chatPersistenceService.deleteMessagesByUser(subAppId, subUserId, subUsername);
                     }
                 }
                 msg.put("command", "delete");
@@ -3851,6 +3874,12 @@ public class TableHandler {
                 recordManager.deleteRecord(appId, "csm_group_members", subUser);
                 enqueueServiceInvalidation(appId, "csm_group_members", subUser);
                 socketIOConfig.sendUpdateNotification(appId, "csm_group_members", "delete", subPkValues, subUser);
+                // Dọn tin nhắn chat của sub-user này
+                String subUserId = safeStr(subUser.get("id"));
+                String subUsername = safeStr(subUser.get("login_identifier"));
+                String subAppId = safeStr(subUser.get("app_id"));
+                if (subAppId.isEmpty()) subAppId = appId;
+                chatPersistenceService.deleteMessagesByUser(subAppId, subUserId, subUsername);
             }
             if (!subUsers.isEmpty()) {
                 logger.info("[cascadeDeleteSubUsers] Đã xóa {} sub-user thuộc tài khoản {}", subUsers.size(), deletedAccountRow.get("id"));
