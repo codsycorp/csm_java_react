@@ -842,20 +842,18 @@ public class InitHandler {
                                 "permissionBitfield", "permissionSchemaVersion", "dataScope",
                                 "dept_id", "branch_id", "department_id", "team_id");
         }
+        private List<String> getAccountSearchFields() {
+                // Lucene-indexed fields for csm_accounts: login identifiers + session tokens + app_id for presence queries
+                return List.of("id", "email", "username", "phoneNumber", "app_token", "refresh_token", "refresh", "app_id");
+        }
+
+        private List<String> getSubAccountSearchFields() {
+                // Lucene-indexed fields for csm_group_members: login + session tokens + app_id + parent_account_id
+                // app_id and parent_account_id added so filterWithPagination(app_id eq X) works in chat presence roster
+                return List.of("id", "login_identifier", "app_token", "refresh_token", "refresh", "app_id", "parent_account_id");
+        }
 
         private Map<String, Object> buildFieldConfig(String name, String header, int show, String type, String align) {
-                        private List<String> getAccountSearchFields() {
-                                // Lucene-indexed fields for csm_accounts: login identifiers + session tokens + app_id for presence queries
-                                return List.of("id", "email", "username", "phoneNumber", "app_token", "refresh_token", "refresh", "app_id");
-                        }
-
-                        private List<String> getSubAccountSearchFields() {
-                                // Lucene-indexed fields for csm_group_members: login + session tokens + app_id + parent_account_id
-                                // app_id and parent_account_id added so filterWithPagination(app_id eq X) works in chat presence roster
-                                return List.of("id", "login_identifier", "app_token", "refresh_token", "refresh", "app_id", "parent_account_id");
-                        }
-
-                        private Map<String, Object> buildFieldConfig(String name, String header, int show, String type, String align) {
                 Map<String, Object> field = new HashMap<>();
                 field.put("f_name", name);
                 field.put("f_header", header);

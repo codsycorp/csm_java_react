@@ -300,6 +300,12 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
           targetGuestIdentity: undefined,
         };
       }
+      if (room.startsWith('user:')) {
+        return {
+          actualRoom: room,
+          targetGuestIdentity: undefined,
+        };
+      }
       if (room.startsWith('guest:')) {
         const identity = room.split(';').slice(1).join(';').trim();
         return {
@@ -314,6 +320,15 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
         };
       }
       if (to) {
+        if (user.userId) {
+          const ids = [String(user.userId), String(to)].filter(Boolean).sort();
+          if (ids.length === 2) {
+            return {
+              actualRoom: `private:${appId};${ids.join(';')}`,
+              targetGuestIdentity: undefined,
+            };
+          }
+        }
         return {
           actualRoom: `user:${appId};${to}`,
           targetGuestIdentity: undefined,
@@ -462,8 +477,9 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
           history = await (window as any).loadAdminChatHistory?.(target.apiRoom, 100, appId) || [];
           updateRoomMessages(target.uiRoom, history || []);
         } else {
-          const uiRoom = target.uiRoom;
-          updateRoomMessages(uiRoom, messagesRef.current[uiRoom] || []);
+          // For internal direct rooms (private/user/app), always pull server history so offline->online resumes immediately.
+          history = await (window as any).loadAdminChatHistory?.(target.apiRoom, 100, appId) || [];
+          updateRoomMessages(target.uiRoom, history || []);
         }
       }
     } catch (error) {

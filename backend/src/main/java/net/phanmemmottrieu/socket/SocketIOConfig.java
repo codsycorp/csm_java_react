@@ -1509,15 +1509,26 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                                         logger.info("✉️ Admin {} → Guest {} (room: {})", username, guestIdentity, privateRoom);
                                         server.getRoomOperations(privateRoom).sendEvent("message", data);
                                     } else if (to != null && !to.isEmpty()) {
-                                        // Admin → specific User: send to user's private chat room
-                                        String userRoom = "user:" + appId + ";" + to;
-                                        logger.info("✉️ Admin {} → User {} (room: {})", username, to, userRoom);
-                                        server.getRoomOperations(userRoom).sendEvent("message", data);
-                                        // Also send to app room so other admins/users can see
+                                        // Admin → specific User: canonical private room by pair userIds to avoid stream mixups.
+                                        String directRoom = room;
+                                        if (directRoom == null || directRoom.isBlank() || !directRoom.startsWith("private:")) {
+                                            if (userId != null && !userId.isBlank()) {
+                                                String[] ids = new String[]{userId, to};
+                                                java.util.Arrays.sort(ids);
+                                                directRoom = "private:" + appId + ";" + String.join(";", ids);
+                                            } else {
+                                                directRoom = "user:" + appId + ";" + to;
+                                            }
+                                        }
+                                        data.setRoom(directRoom);
+                                        logger.info("✉️ Admin {} → User {} (room: {})", username, to, directRoom);
+                                        server.getRoomOperations(directRoom).sendEvent("message", data);
+                                        // Mirror to app room so participants not yet in direct room still get realtime notification.
                                         server.getRoomOperations("app:" + appId).sendEvent("message", data);
                                     } else {
                                         // Admin → Broadcast to all users in app
                                         String masterRoom = "app:" + appId;
+                                        data.setRoom(masterRoom);
                                         logger.info("📢 Admin {} broadcasting to app: {}", username, appId);
                                         server.getRoomOperations(masterRoom).sendEvent("message", data);
                                     }

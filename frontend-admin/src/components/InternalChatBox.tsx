@@ -30,7 +30,7 @@ function inferAttachmentType(fileName?: string, mime?: string): "image" | "video
 
 
 
-const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username?: string, room?: string, index?: number}> = ({ visible, onClose, username, room, index }) => {
+const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username?: string, room?: string, targetUserId?: string, index?: number}> = ({ visible, onClose, username, room, targetUserId, index }) => {
   const [input, setInput] = useState("");
   const [isMobile, setIsMobile] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
@@ -111,11 +111,12 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
     : "";
 
   const isGuestConversation = !isGuest && !!room && room !== appId && room !== 'csm' && !room.includes(':');
+  const isStructuredRoom = !!room && room.includes(':');
 
-  // Consistent room key for guests: use session id; for admin guest chats use room, for internal chats keep username
+  // Consistent room key for guests: use session id; for portal users keep structured room key (private/user/app/guest)
   const roomKey = isGuest
     ? (effectiveGuestSessionId || chatRoom)
-    : (isGuestConversation ? room : (username || chatRoom));
+    : (isStructuredRoom ? room : (isGuestConversation ? room : (username || chatRoom)));
   const localHiddenStorageKey = `csm_chat_hidden_${String(user.userId || effectiveGuestSessionId || 'guest')}_${roomKey}`;
 
   const pinnedStorageKey = `csm_chat_pin_${roomKey}`;
@@ -321,7 +322,7 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
     if (connected && roomIdentifier) {
       const actualRoom = isGuest && guestIdentifier
         ? `guest:${appId};${guestIdentifier}`
-        : (isGuestConversation ? `guest:${appId};${roomKey}` : (username ? `user:${appId};${username}` : `app:${appId}`));
+        : (isStructuredRoom ? roomKey : (isGuestConversation ? `guest:${appId};${roomKey}` : (username ? `user:${appId};${username}` : `app:${appId}`)));
       
       (window as any).emitTyping?.(actualRoom, isGuest ? (effectiveGuestPhone || guestIdentifier) : username, appId);
     }
@@ -532,7 +533,7 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
       sendMessageContext(
         roomIdentifier,
         text,
-        isGuest ? undefined : (isGuestConversation ? undefined : username),
+        isGuest ? undefined : (isGuestConversation ? undefined : targetUserId),
         {
           attachments,
           eventType: attachments && attachments.length > 0 ? "chat_media" : undefined,
@@ -670,7 +671,7 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
       sendMessageContext(
         roomIdentifier,
         "Check-in",
-        isGuest ? undefined : (isGuestConversation ? undefined : username),
+        isGuest ? undefined : (isGuestConversation ? undefined : targetUserId),
         {
           eventType: "chat_checkin",
           attachments: [{

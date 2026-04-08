@@ -100,7 +100,7 @@ interface Props extends ButtonProps {
 export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications, setNotifications, onEventChange, ...restProps }) => {
 	const [open, action] = useToggle();
 	const [input, setInput] = useState("");
-	const [openChats, setOpenChats] = useState<{room: string, username: string}[]>([]);
+	const [openChats, setOpenChats] = useState<{room: string, username: string, targetUserId?: string}[]>([]);
 	const [selectedAppFilter, setSelectedAppFilter] = useState<string>("all");
 	const [showAllInternal, setShowAllInternal] = useState(false);
 	const [showAllGuests, setShowAllGuests] = useState(false);
@@ -157,7 +157,7 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 	// Group 1: Internal users - chat giữa các user trong cùng app (userId hoặc username, nhưng không phải guest, không phải broadcast)
 	// Group 2: Guests - messages có guestPhone (khách vãng lai)
 	const { internalUsersWithUnread, guestUsersWithUnread } = useMemo(() => {
-		const internalMap = new Map<string, { key: string; room: string; username: string; avatar?: string; unread: number; lastTs: number; appId?: string }>();
+		const internalMap = new Map<string, { key: string; room: string; username: string; userId?: string; avatar?: string; unread: number; lastTs: number; appId?: string }>();
 		const guestMap = new Map<string, { key: string; room: string; label: string; unread: number; pendingForApp: number; lastTs: number; appId?: string }>();
 		
 		// Duyệt TẤT CẢ rooms trong contextMessages để không bỏ lỡ tin của guests
@@ -214,16 +214,18 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 				// THEN: Check internal user (userId or username) - must NOT have guestPhone
 				else if (msg.userId || msg.username) {
 					const username = (msg.username || msg.to || '').trim();
+					const senderId = String(msg.userId || '').trim();
 					if (!username) return;
 					const currentUser = (user.username || '').trim();
 					if (username === currentUser) return; // Skip self-messages
 					const appToken = (msg.appId || appId || '').trim();
 					const internalRoom = String(roomKey || '').trim() || `user:${appToken};${username}`;
-					const internalKey = `${appToken}::${username}`;
+					const internalKey = senderId ? `${appToken}::${senderId}` : `${appToken}::${username}`;
 					const existing = internalMap.get(internalKey) || {
 						key: internalKey,
 						room: internalRoom,
 						username,
+						userId: senderId || undefined,
 						avatar: msg.avatar,
 						unread: 0,
 						lastTs: 0,
@@ -232,6 +234,7 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 					existing.lastTs = Math.max(existing.lastTs || 0, Number(msg.timestamp || 0));
 					existing.appId = (msg.appId || existing.appId || '').trim();
 					existing.room = internalRoom || existing.room;
+					existing.userId = existing.userId || (senderId || undefined);
 					if (isUnread) existing.unread++;
 					internalMap.set(internalKey, existing);
 				}
@@ -284,16 +287,18 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 	}, [isDevUser, appId, selectedAppFilter, appFilterOptions]);
 
 	const displayedInternalUsers = useMemo(() => {
-		const unreadByUser = new Map<string, { unread: number; room?: string; avatar?: string; appId?: string }>();
+		const unreadByUser = new Map<string, { unread: number; room?: string; avatar?: string; appId?: string; userId?: string }>();
 		internalUsersWithUnread.forEach((u: any) => {
 			const appToken = String(u?.appId || appId || '').trim();
 			const userToken = String(u?.username || '').trim();
 			if (!userToken) return;
-			unreadByUser.set(`${appToken}::${userToken}`, {
+			const keyByUserId = String(u?.userId || '').trim();
+			unreadByUser.set(keyByUserId ? `${appToken}::${keyByUserId}` : `${appToken}::${userToken}`, {
 				unread: Number(u?.unread || 0),
 				room: String(u?.room || ''),
 				avatar: u?.avatar,
 				appId: appToken,
+				userId: keyByUserId || undefined,
 			});
 		});
 
@@ -312,17 +317,25 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 				return String(u.appId || '') === effectiveFilterApp;
 			})
 			.map((u) => {
-				const key = `${String(u.appId || '').trim()}::${String(u.username || '').trim()}`;
-				const unreadMeta = unreadByUser.get(key);
+				const appToken = String(u.appId || '').trim();
+				const userToken = String(u.username || '').trim();
+				const targetUserId = String(u.userId || '').trim() || undefined;
+				const key = `${appToken}::${targetUserId || userToken}`;
+				const unreadMeta = unreadByUser.get(key) || unreadByUser.get(`${appToken}::${userToken}`);
+				const selfUserId = String(user.userId || '').trim();
+				const privateRoom = (selfUserId && targetUserId)
+					? `private:${appToken};${[selfUserId, targetUserId].sort().join(';')}`
+					: `user:${u.appId};${u.username}`;
 				return {
 					key,
 					username: u.username,
+					targetUserId,
 					appId: u.appId,
 					online: !!u.online,
 					lastTs: Number(u.lastSeenAt || 0),
 					unread: Number(unreadMeta?.unread || 0),
 					avatar: unreadMeta?.avatar,
-					room: unreadMeta?.room || `user:${u.appId};${u.username}`,
+					room: privateRoom,
 					isSubUser: u.isSubUser || false,
 				};
 			})
@@ -524,9 +537,10 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 	}, [totalUnread]);
 
 	// Ensure any chat opened from notification is immediately marked as read
-	const openChatAndMarkRead = useCallback((room: string, username?: string) => {
+	const openChatAndMarkRead = useCallback((room: string, username?: string, targetUserId?: string) => {
 		const normalizedRoom = (room || '').trim();
 		const normalizedUsername = (username || normalizedRoom).trim();
+		const normalizedTargetUserId = String(targetUserId || '').trim() || undefined;
 		if (!normalizedRoom) return;
 
 		setOpenChats(prev => {
@@ -534,11 +548,11 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 			if (exists) {
 				return prev.map(chat =>
 					chat.room === normalizedRoom
-						? { ...chat, username: normalizedUsername || chat.username }
+						? { ...chat, username: normalizedUsername || chat.username, targetUserId: normalizedTargetUserId || chat.targetUserId }
 						: chat
 				);
 			}
-			return [...prev, { room: normalizedRoom, username: normalizedUsername || normalizedRoom }];
+			return [...prev, { room: normalizedRoom, username: normalizedUsername || normalizedRoom, targetUserId: normalizedTargetUserId }];
 		});
 
 		const key = (username || room || "").trim();
@@ -620,7 +634,7 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 									<div style={{ fontWeight: 600, color: token.colorTextSecondary, marginBottom: 6 }}>{t('common.notification.internalUsers', 'Người dùng nội bộ')}</div>
 									<div className={classes.userList}>
 										{visibleInternalUsers.map(u => (
-											<div key={u.key} className={classes.userItem} onClick={() => openChatAndMarkRead(u.room, u.username)}>
+											<div key={u.key} className={classes.userItem} onClick={() => openChatAndMarkRead(u.room, u.username, (u as any).targetUserId)}>
 												<Badge dot={typeof (u as any).online === 'boolean'} color={(u as any).online ? '#52c41a' : '#bfbfbf'} offset={[-3, 22]}>
 													<Avatar src={u.avatar} icon={<UserOutlined />} size="small" />
 												</Badge>
@@ -728,6 +742,7 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 					visible={true}
 					onClose={() => setOpenChats(prev => prev.filter(item => item.room !== chat.room))}
 					username={chat.username}
+					targetUserId={chat.targetUserId}
 					room={chat.room}
 					index={index}
 				/>
