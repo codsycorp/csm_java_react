@@ -465,7 +465,8 @@ public class TableHandler {
                 accessContext
             );
 
-            if (allowScopedAutoSetupTemplateRead) {
+            // Dev users already have full privilege — skip the appId scope restriction.
+            if (allowScopedAutoSetupTemplateRead && (accessContext == null || !accessContext.isDev)) {
                 filtersObjs = applyAutoSetupTemplateScope(filtersObjs, accessContext);
             }
 
