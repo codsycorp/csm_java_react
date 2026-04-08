@@ -372,18 +372,15 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
     return `chat_history_${room}_${isGuest ? guestIdentity : user.userId || 'admin'}`;
   }, [isGuest, guestIdentity, user.userId]);
   
-  // Helper: Save to localStorage (ONLY for guest, not admin)
+  // Helper: Save to localStorage
   const saveToLocalStorage = useCallback((room: string, msgs: ChatMessage[]) => {
-    // Admin always loads fresh from server - no localStorage caching
-    if (!isGuest) return;
-    
     try {
       const key = getStorageKey(room);
-      localStorage.setItem(key, JSON.stringify(msgs.slice(-100))); // Keep last 100 for guest
+      localStorage.setItem(key, JSON.stringify(msgs.slice(-100))); // Keep last 100 messages
     } catch (error) {
       console.warn('Failed to save chat to localStorage:', error);
     }
-  }, [getStorageKey, isGuest]);
+  }, [getStorageKey]);
   
   // Helper: Load from localStorage
   const loadFromLocalStorage = useCallback((room: string): ChatMessage[] => {
@@ -416,14 +413,13 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
     }
 
     const executeLoad = (async () => {
-    // ONLY guest loads from localStorage for offline support
-    // Admin ALWAYS loads fresh from server for real-time data
-    if (isGuest && !localHistoryHydratedRef.current[room]) {
+    // Load from localStorage for offline support (both guest and admin)
+    if (!localHistoryHydratedRef.current[room]) {
       localHistoryHydratedRef.current[room] = true;
       const localMessages = loadFromLocalStorage(room);
       if (localMessages.length > 0) {
         const normalizedLocalMessages = collapseWelcomeDuplicates(localMessages);
-        console.log(`💾 [ChatHistory] Guest restored ${normalizedLocalMessages.length} messages from localStorage for room: ${room}`);
+        console.log(`💾 [ChatHistory] Restored ${normalizedLocalMessages.length} messages from localStorage for room: ${room}`);
         updateRoomMessages(room, normalizedLocalMessages);
       }
     }
@@ -458,6 +454,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
             console.log('📥 [ChatHistory] Sample messages:', msgs.slice(0, 2));
           }
           updateRoomMessages(appId, msgs);
+          saveToLocalStorage(appId, msgs);
         } else {
           history = await (window as any).loadAdminChatHistory?.(target.apiRoom, 100, appId) || [];
           const filteredHistory = target.mode === 'admin-system'
@@ -466,7 +463,9 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
           if (filteredHistory && Array.isArray(filteredHistory) && filteredHistory.length > 0) {
             console.log(`📥 [ChatHistory] Admin loaded ${filteredHistory.length} messages from server for ${target.mode}`);
           }
-          updateRoomMessages(target.uiRoom, collapseWelcomeDuplicates(filteredHistory || []));
+          const normalizedHistory = collapseWelcomeDuplicates(filteredHistory || []);
+          updateRoomMessages(target.uiRoom, normalizedHistory);
+          saveToLocalStorage(target.uiRoom, normalizedHistory);
         }
       }
     } catch (error) {

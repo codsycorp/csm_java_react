@@ -252,19 +252,39 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
       .filter((msg: ChatMessage) => isDevUser || !msg.appId || msg.appId === effectiveAppId);
 
     const guestBuckets: Record<string, ChatMessage[]> = {};
+    const privateBuckets: Record<string, ChatMessage[]> = {};
     normalized.forEach((msg: ChatMessage) => {
       const guestKey = String(msg.guestSessionId || msg.guestPhone || '').trim();
-      if (!guestKey) return;
+      if (!guestKey) {
+        // Bucket private room messages (portal user ↔ portal user)
+        const msgRoom = (msg.room || '').trim();
+        if (msgRoom.startsWith('private:')) {
+          if (!privateBuckets[msgRoom]) privateBuckets[msgRoom] = [];
+          privateBuckets[msgRoom].push(msg);
+        }
+        return;
+      }
       const guestRoom = `guest:${(msg.appId || effectiveAppId || appId).trim()};${guestKey}`;
       if (!guestBuckets[guestRoom]) guestBuckets[guestRoom] = [];
       guestBuckets[guestRoom].push(msg);
     });
 
-    setMessages(prev => ({
-      ...prev,
-      [effectiveAppId]: normalized,
-      ...guestBuckets,
-    }));
+    setMessages(prev => {
+      // For private room buckets: only replace if snapshot has >= messages (avoids wiping freshly-loaded history)
+      const mergedPrivate: Record<string, ChatMessage[]> = {};
+      Object.entries(privateBuckets).forEach(([room, msgs]) => {
+        const existing = prev[room] || [];
+        if (msgs.length >= existing.length) {
+          mergedPrivate[room] = msgs;
+        }
+      });
+      return {
+        ...prev,
+        [effectiveAppId]: normalized,
+        ...guestBuckets,
+        ...mergedPrivate,
+      };
+    });
 
     if (user.userId) {
       const nextUnread: Record<string, number> = {};
@@ -394,18 +414,15 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
     return `chat_history_${room}_${isGuest ? guestIdentity : user.userId || 'admin'}`;
   }, [isGuest, guestIdentity, user.userId]);
   
-  // Helper: Save to localStorage (ONLY for guest, not admin)
+  // Helper: Save to localStorage
   const saveToLocalStorage = useCallback((room: string, msgs: ChatMessage[]) => {
-    // Admin always loads fresh from server - no localStorage caching
-    if (!isGuest) return;
-    
     try {
       const key = getStorageKey(room);
-      localStorage.setItem(key, JSON.stringify(msgs.slice(-100))); // Keep last 100 for guest
+      localStorage.setItem(key, JSON.stringify(msgs.slice(-100))); // Keep last 100 messages
     } catch (error) {
       console.warn('Failed to save chat to localStorage:', error);
     }
-  }, [getStorageKey, isGuest]);
+  }, [getStorageKey]);
   
   // Helper: Load from localStorage
   const loadFromLocalStorage = useCallback((room: string): ChatMessage[] => {
@@ -438,13 +455,12 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
     }
 
     const executeLoad = (async () => {
-    // ONLY guest loads from localStorage for offline support
-    // Admin ALWAYS loads fresh from server for real-time data
-    if (isGuest && !localHistoryHydratedRef.current[room]) {
+    // Load from localStorage for offline support (both guest and admin)
+    if (!localHistoryHydratedRef.current[room]) {
       localHistoryHydratedRef.current[room] = true;
       const localMessages = loadFromLocalStorage(room);
       if (localMessages.length > 0) {
-        console.log(`💾 [ChatHistory] Guest restored ${localMessages.length} messages from localStorage for room: ${room}`);
+        console.log(`💾 [ChatHistory] Restored ${localMessages.length} messages from localStorage for room: ${room}`);
         updateRoomMessages(room, localMessages);
       }
     }
@@ -481,6 +497,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
             updateRoomMessages(target.uiRoom, existingSystem);
           } else {
             updateRoomMessages(target.uiRoom, history || []);
+            saveToLocalStorage(target.uiRoom, history || []);
           }
         } else {
           // For internal direct rooms (private/user/app), always pull server history so offline->online resumes immediately.
@@ -491,6 +508,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
             updateRoomMessages(target.uiRoom, existingRoomMessages);
           } else {
             updateRoomMessages(target.uiRoom, history || []);
+            saveToLocalStorage(target.uiRoom, history || []);
           }
         }
       }
@@ -654,6 +672,29 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
     setActiveChats(prev => (prev.includes(room) ? prev.filter(r => r !== room) : prev));
   }, []);
 
+  // Re-join private rooms and reload history for active chats on (re)connect.
+  // This ensures that if openChat() was called before the socket was ready,
+  // or if the user was viewing a chat when the connection dropped and came back,
+  // messages are always loaded and private room membership is restored.
+  const joinedActiveRoomsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!socket || !connected) {
+      joinedActiveRoomsRef.current.clear();
+      return;
+    }
+    activeChats.forEach(room => {
+      if (joinedActiveRoomsRef.current.has(room)) return;
+      joinedActiveRoomsRef.current.add(room);
+      if (room.startsWith('private:')) {
+        socket.emit('join_room', room);
+      }
+      // Small delay so the join/snapshot can process first
+      setTimeout(() => {
+        loadHistoryRef.current?.(room);
+      }, 400);
+    });
+  }, [socket, connected, activeChats]);
+
   const recallMessage = useCallback(async (room: string, timestamp: number): Promise<boolean> => {
     if (!socket || !connected || !timestamp) return false;
     const payload = {
@@ -752,6 +793,10 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
           targetRoom = `guest:${(msg.appId || appId).trim()};${msg.guestPhone}`;
         } else if (String(msg.room || '').startsWith('private:')) {
           targetRoom = msg.room;
+        } else if (targetRoom === `app:${appId}`) {
+          // Normalize app:appId → appId so internal group chat messages are stored
+          // under the same key that InternalChatBox looks up (roomKey = appId).
+          targetRoom = appId;
         }
       }
       
@@ -1089,7 +1134,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
     };
   }, [socket, isGuest, guestIdentity, guestPhone, appId, user.userId, activeChats, saveToLocalStorage, loadHistory, emitAutoOpenChat, applyAdminSnapshot, mapApiRoomToUiRoom, isDevUser]);
   
-  // Load initial history khi connect
+  // Load initial history for ALL rooms with messages in localStorage (not just activeChats)
   useEffect(() => {
     if (connected && appId && !isInitialized) {
       if (isInitializingRef.current) {
@@ -1099,11 +1144,33 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
       console.log(`📌 [ChatHistory] Starting initialization with connected=${connected}, appId="${appId}", isGuest=${isGuest}, userId=${user.userId}, isInitialized=${isInitialized}`);
       const initializeChat = async () => {
         try {
+          // Hydrate all rooms with messages from localStorage for this user
+          const userKey = isGuest ? guestIdentity : (user.userId || 'admin');
+          const hydratedRooms = new Set<string>();
+          for (let i = 0; i < localStorage.length; ++i) {
+            const key = localStorage.key(i) || "";
+            if (key.startsWith("chat_history_") && key.endsWith(String(userKey))) {
+              // Extract room name
+              const room = key.substring("chat_history_".length, key.length - String(userKey).length - 1);
+              if (room) {
+                hydratedRooms.add(room);
+                const msgs = loadFromLocalStorage(room);
+                if (msgs && msgs.length > 0) {
+                  setMessages(prev => ({ ...prev, [room]: msgs }));
+                }
+              }
+            }
+          }
+
+          // Also hydrate activeChats (in case any new rooms are opened)
+          for (const room of activeChats) {
+            if (!hydratedRooms.has(room)) {
+              await loadHistoryRef.current?.(room);
+            }
+          }
+
+          // Guest: restore unread counts from localStorage
           if (isGuest && guestIdentity) {
-            // Guest: restore chat history + unread từ localStorage
-            await loadHistoryRef.current?.(guestIdentity, guestIdentity);
-            
-            // Load unread counts từ localStorage cho guest
             try {
               const unreadKey = `chat_unread_${appId}`;
               const stored = localStorage.getItem(unreadKey);
@@ -1113,8 +1180,10 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
             } catch (e) {
               console.warn('Failed to restore unread counts for guest:', e);
             }
-          } else if (!isGuest && user.userId) {
-            // Admin: request server-pushed snapshot over socket, avoid repeated HTTP pulls.
+          }
+
+          // Admin: request snapshot to sync all rooms from server
+          if (!isGuest && user.userId) {
             socket?.emit('request_chat_history_app_snapshot', appId);
           }
         } catch (error) {
@@ -1124,10 +1193,9 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
           setIsInitialized(true);
         }
       };
-      
       initializeChat();
     }
-  }, [connected, appId, isGuest, guestIdentity, user.userId, isInitialized, socket]);
+  }, [connected, appId, isGuest, guestIdentity, user.userId, isInitialized, socket, activeChats, loadFromLocalStorage]);
   
   // Refresh all messages - force reload from backend
   const refreshAllMessages = useCallback(async () => {

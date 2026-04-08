@@ -3052,7 +3052,65 @@ export function CsmDynamicGrid({
 		return () => window.removeEventListener("keydown", onKey);
 	}, [canAdd, canEdit, canDelete, _selectedRow, enableInlineCellEdit, editableKeys, editorOpen, handleAdd, handleEdit, handleDelete]);
 
-	// Export Excel (.xlsx by default, .xls when configured)
+	// Multi-column sort state
+	const [sorters, setSorters] = useState<{ field: string; order: 'ascend' | 'descend' }[]>([]);
+
+	// Multi-column sort handler
+	const handleTableChange = (pagination: any, filters: any, sorter: any, extra: any) => {
+		// sorter: {field, order} | array
+		let nextSorters: { field: string; order: 'ascend' | 'descend' }[] = [];
+		if (Array.isArray(sorter)) {
+			nextSorters = sorter.filter(s => s.order).map(s => ({ field: s.field, order: s.order }));
+		} else if (sorter && sorter.field && sorter.order) {
+			nextSorters = [{ field: sorter.field, order: sorter.order }];
+		}
+		setSorters(nextSorters);
+	};
+
+	// Multi-column sort logic
+	const sortedData = useMemo(() => {
+		if (!sorters.length) return searchedData;
+		const fieldsMap = new Map<string, TableField>();
+		(m_configs.table || []).forEach(f => fieldsMap.set(f.f_name, f));
+		const selectEnumsRef = selectEnums;
+		return [...searchedData].sort((a, b) => {
+			for (const sorter of sorters) {
+				const field = sorter.field;
+				const order = sorter.order === 'ascend' ? 1 : -1;
+				const f = fieldsMap.get(field);
+				if (!f) continue;
+				const types = (f.f_types || '').toLowerCase();
+				const isNumber = /price|number|int|float|double|money|currency/.test(types);
+				const isDate = /\bdate\b/.test(types) && !/datetime/.test(types);
+				const isDateTime = /datetime/.test(types);
+				const isTime = /\btime\b/.test(types) && !/datetime/.test(types);
+				const typeTokens = types.split(/[\s,;|]+/).filter(Boolean);
+				const isSelect = typeTokens.includes('co') || /cbo|select/.test(types);
+				let cmp = 0;
+				if (isNumber) {
+					const left = parseFlexibleNumberInput(a?.[field], numberLocale);
+					const right = parseFlexibleNumberInput(b?.[field], numberLocale);
+					cmp = comparePrimitive(Number.isFinite(left) ? left : null, Number.isFinite(right) ? right : null);
+				} else if (isDate) {
+					cmp = comparePrimitive(parseDateSortValue(a?.[field], 'date'), parseDateSortValue(b?.[field], 'date'));
+				} else if (isDateTime) {
+					cmp = comparePrimitive(parseDateSortValue(a?.[field], 'datetime'), parseDateSortValue(b?.[field], 'datetime'));
+				} else if (isTime) {
+					cmp = comparePrimitive(parseDateSortValue(a?.[field], 'time'), parseDateSortValue(b?.[field], 'time'));
+				} else if (isSelect && selectEnumsRef[field]) {
+					const left = selectEnumsRef[field]?.[String(a?.[field] ?? "")]?.text ?? a?.[field];
+					const right = selectEnumsRef[field]?.[String(b?.[field] ?? "")]?.text ?? b?.[field];
+					cmp = comparePrimitive(left, right);
+				} else {
+					cmp = comparePrimitive(a?.[field], b?.[field]);
+				}
+				if (cmp !== 0) return cmp * order;
+			}
+			return 0;
+		});
+	}, [searchedData, sorters, m_configs.table, selectEnums, numberLocale]);
+
+	// Export Excel (.xlsx by default, .xls when configured) - xuất đúng thứ tự sort
 	const handleExport = () => {
 		const exportColumns = baseColumns.filter((c) => {
 			const field = String(c.dataIndex ?? c.key ?? "").trim();
@@ -3065,7 +3123,7 @@ export function CsmDynamicGrid({
 
 		const headers = exportColumns.map((c) => (typeof c.title === "string" ? c.title : String(c.key || c.dataIndex || "")));
 		const fields = exportColumns.map((c) => String(c.dataIndex ?? c.key ?? ""));
-		const bodyRows = searchedData.map((row) =>
+		const bodyRows = sortedData.map((row) =>
 			fields.map((field) => {
 				const value = row[field];
 				if (value == null) return "";
@@ -3658,7 +3716,8 @@ export function CsmDynamicGrid({
 			persistenceType: "localStorage",
 			persistenceKey: `csm-grid-columns::${effectiveGridInstanceKey}`,
 		},
-		dataSource: searchedData,
+		dataSource: sortedData,
+			onChange: handleTableChange,
 		pagination: disablePagination ? false : { pageSize: Number(m_configs.table_pagesize) || 10 },
 		// Let BasicTable auto-height handle vertical fit inside parent; keep horizontal scroll responsive.
 		scroll: isMobile ? { x: 'auto' } : { x: 'max-content' },
@@ -4020,7 +4079,75 @@ export function CsmDynamicGrid({
 		headerTitle: false,
 	};
 
-	const children: React.ReactNode[] = [React.createElement(BasicTable as any, { key: "table", autoHeight: true, ...tableProps })];
+
+	// Hướng dẫn đa ngôn ngữ
+	const gridHintText = useMemo(() => {
+		const lang = String(i18n.language || '').toLowerCase();
+		if (lang.startsWith('zh')) {
+			return {
+				tip: '提示:',
+				content: '按住',
+				shift: 'Shift',
+				content2: '并点击表头可多列排序。导出 Excel 时会保持当前顺序。'
+			};
+		}
+		if (lang.startsWith('en')) {
+			return {
+				tip: 'Tip:',
+				content: 'Hold ',
+				shift: 'Shift',
+				content2: 'and click column headers to sort by multiple columns. Export to Excel will keep this order.'
+			};
+		}
+		// Mặc định: tiếng Việt
+		return {
+			tip: 'Mẹo:',
+			content: 'Giữ ',
+			shift: 'Shift',
+			content2: 'và bấm tiêu đề cột để sắp xếp nhiều cột cùng lúc. Khi xuất Excel sẽ giữ đúng thứ tự này.'
+		};
+	}, [i18n.language]);
+
+	// Nhỏ gọn, chuyên nghiệp, đặt góc phải
+	const gridHint = React.createElement(
+		'div',
+		{
+			style: {
+				position: 'absolute',
+				top: 8,
+				right: 16,
+				zIndex: 10,
+				background: '#f9fafb',
+				color: '#555',
+				borderRadius: 4,
+				padding: '2px 10px',
+				fontSize: 13,
+				boxShadow: '0 1px 4px rgba(0,0,0,0.03)',
+				display: 'flex',
+				alignItems: 'center',
+				gap: 6,
+				pointerEvents: 'none',
+				fontWeight: 400,
+			},
+		},
+		React.createElement('span', { style: { color: '#1890ff', fontSize: 15, display: 'flex', alignItems: 'center' } },
+			React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 20 20', fill: 'none', style: { marginRight: 2 } },
+				React.createElement('circle', { cx: 10, cy: 10, r: 9, stroke: '#1890ff', strokeWidth: 1.5, fill: '#e6f4ff' }),
+				React.createElement('text', { x: 10, y: 15, textAnchor: 'middle', fontSize: 13, fill: '#1890ff', fontWeight: 600 }, 'i')
+			)
+		),
+		React.createElement('span', null,
+			gridHintText.content,
+			React.createElement('b', null, gridHintText.shift),
+			' ',
+			gridHintText.content2
+		),
+	);
+
+	const children: React.ReactNode[] = [
+		React.createElement('div', { key: 'grid-hint-container', style: { position: 'relative', minHeight: 0 } }, gridHint),
+		React.createElement(BasicTable as any, { key: "table", autoHeight: true, ...tableProps })
+	];
 	
 	// Add detail panel when a master row is selected and it has detail nodes (Master-Detail structure)
 	const isMasterDetail = !isDetailGrid && Number(m_configs.type_form) === 2;
