@@ -635,7 +635,7 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 									<div className={classes.userList}>
 										{visibleInternalUsers.map(u => (
 											<div key={u.key} className={classes.userItem} onClick={() => openChatAndMarkRead(u.room, u.username, (u as any).targetUserId)}>
-												<Badge dot={typeof (u as any).online === 'boolean'} color={(u as any).online ? '#52c41a' : '#bfbfbf'} offset={[-3, 22]}>
+												<Badge dot={typeof (u as any).online === 'boolean'} color={(u as any).online ? '#16a34a' : '#ef4444'} offset={[-3, 22]}>
 													<Avatar src={u.avatar} icon={<UserOutlined />} size="small" />
 												</Badge>
 												<div style={{ flex: 1, minWidth: 0 }}>

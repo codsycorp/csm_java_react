@@ -995,36 +995,62 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                                             }
                                         }
 
-                                        // Thêm người dùng con (csm_group_members) thuộc cùng app_id
-                                        net.phanmemmottrieu.data.SearchFilter subFilter = new net.phanmemmottrieu.data.SearchFilter();
-                                        subFilter.setField("app_id");
-                                        subFilter.setType("eq");
-                                        subFilter.setValue(appId);
-                                        Map<String, Object> subResult = recordManager.filterWithPagination("csm", "csm_group_members", subFilter, 1000, null);
+                                        // Thêm người dùng con (csm_group_members) thuộc cùng app_id.
+                                        // Hỗ trợ dữ liệu cũ có thể thiếu app_id bằng fallback parent_account_id.
+                                        java.util.Map<String, java.util.Map<String, Object>> subUsersByKey = new java.util.LinkedHashMap<>();
+                                        Map<String, Object> subResult = recordManager.filterWithPagination("csm", "csm_group_members", null, 5000, null);
                                         Object subRowsObj = subResult != null ? subResult.get("rows") : null;
                                         if (subRowsObj instanceof java.util.List<?> subRows) {
                                             for (Object subRowObj : subRows) {
                                                 if (!(subRowObj instanceof java.util.Map<?, ?> subRowMap)) continue;
                                                 @SuppressWarnings("unchecked")
                                                 java.util.Map<String, Object> subUser = (java.util.Map<String, Object>) subRowMap;
+
+                                                String subAppId = String.valueOf(subUser.getOrDefault("app_id", "")).trim();
+                                                String parentAccountId = String.valueOf(subUser.getOrDefault("parent_account_id", "")).trim();
+                                                boolean sameApp = (!subAppId.isBlank() && subAppId.equals(appId))
+                                                        || (!parentAccountId.isBlank() && parentAccountId.equals(appId));
+                                                if (!sameApp) continue;
+
                                                 String subUserId = String.valueOf(subUser.getOrDefault("id", "")).trim();
-                                                String subUsername = String.valueOf(subUser.getOrDefault("login_identifier", "")).trim();
-                                                if (subUserId.isEmpty() && subUsername.isEmpty()) continue;
-                                                boolean subOnline = isPortalUserOnline(appId, subUserId, null);
-                                                if (!subOnline && !subUsername.isBlank()) {
-                                                    subOnline = isPortalUsernameOnline(appId, subUsername, null);
-                                                }
-                                                Long subLastSeen = userLastSeenByAppAndUser.getOrDefault(presenceKey(appId, subUserId), 0L);
-                                                Map<String, Object> subItem = new HashMap<>();
-                                                subItem.put("appId", appId);
-                                                subItem.put("userId", subUserId);
-                                                subItem.put("username", subUsername);
-                                                subItem.put("avatar", subUser.getOrDefault("avatar", ""));
-                                                subItem.put("isSubUser", true);
-                                                subItem.put("online", subOnline);
-                                                subItem.put("lastSeenAt", subOnline ? 0L : (subLastSeen == null ? 0L : subLastSeen));
-                                                roster.add(subItem);
+                                                String subUsername = firstNonBlank(
+                                                        String.valueOf(subUser.getOrDefault("login_identifier", "")).trim(),
+                                                        String.valueOf(subUser.getOrDefault("username", "")).trim(),
+                                                        String.valueOf(subUser.getOrDefault("email", "")).trim(),
+                                                        String.valueOf(subUser.getOrDefault("phoneNumber", "")).trim()
+                                                );
+                                                if (subUserId.isEmpty() && (subUsername == null || subUsername.isBlank())) continue;
+
+                                                String dedupKey = !subUserId.isEmpty() ? ("id:" + subUserId) : ("u:" + subUsername.toLowerCase(java.util.Locale.ROOT));
+                                                subUsersByKey.putIfAbsent(dedupKey, subUser);
                                             }
+                                        }
+
+                                        for (java.util.Map<String, Object> subUser : subUsersByKey.values()) {
+                                            String subUserId = String.valueOf(subUser.getOrDefault("id", "")).trim();
+                                            String subUsername = firstNonBlank(
+                                                    String.valueOf(subUser.getOrDefault("login_identifier", "")).trim(),
+                                                    String.valueOf(subUser.getOrDefault("username", "")).trim(),
+                                                    String.valueOf(subUser.getOrDefault("email", "")).trim(),
+                                                    String.valueOf(subUser.getOrDefault("phoneNumber", "")).trim()
+                                            );
+                                            if (subUsername == null || subUsername.isBlank()) subUsername = "SubUser";
+
+                                            boolean subOnline = isPortalUserOnline(appId, subUserId, null);
+                                            if (!subOnline && !subUsername.isBlank()) {
+                                                subOnline = isPortalUsernameOnline(appId, subUsername, null);
+                                            }
+                                            Long subLastSeen = userLastSeenByAppAndUser.getOrDefault(presenceKey(appId, subUserId), 0L);
+
+                                            Map<String, Object> subItem = new HashMap<>();
+                                            subItem.put("appId", appId);
+                                            subItem.put("userId", subUserId);
+                                            subItem.put("username", subUsername);
+                                            subItem.put("avatar", subUser.getOrDefault("avatar", ""));
+                                            subItem.put("isSubUser", true);
+                                            subItem.put("online", subOnline);
+                                            subItem.put("lastSeenAt", subOnline ? 0L : (subLastSeen == null ? 0L : subLastSeen));
+                                            roster.add(subItem);
                                         }
 
                                         roster.sort((a, b) -> {
