@@ -16,7 +16,7 @@ const routes: AppRouteRecordRaw[] = [
 			order: home,
 			title: $t("common.menu.home"),
 			icon: createElement(HomeFilled),
-			keepAlive: false,
+			// keepAlive: true (default)
 		},
 		children: [
 			{
@@ -25,7 +25,7 @@ const routes: AppRouteRecordRaw[] = [
 				handle: {
 					title: $t("common.menu.home"),
 					icon: createElement(HomeFilled),
-					keepAlive: false,
+					// keepAlive: true (default)
 				},
 			},
 		],

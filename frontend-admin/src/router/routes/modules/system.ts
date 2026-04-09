@@ -19,6 +19,7 @@ const routes: AppRouteRecordRaw[] = [
 			title: "common.menu.system",
 			order: system,
 			roles: ["admin", "dev"],
+			// keepAlive: true (default)
 		},
 		children: [
 			{
@@ -33,6 +34,7 @@ const routes: AppRouteRecordRaw[] = [
 						"permission:button:update",
 						"permission:button:delete",
 					],
+					// keepAlive: true (default)
 				},
 			},
 			{
@@ -47,6 +49,7 @@ const routes: AppRouteRecordRaw[] = [
 						"permission:button:update",
 						"permission:button:delete",
 					],
+					// keepAlive: true (default)
 				},
 			},
 			{
@@ -61,13 +64,13 @@ const routes: AppRouteRecordRaw[] = [
 						"permission:button:update",
 						"permission:button:delete",
 					],
+					// keepAlive: true (default)
 				},
 			},
 			{
 				path: "/system/dept",
 				Component: AdminPage,
 				handle: {
-					keepAlive: false,
 					icon: "SafetyOutlined",
 					title: "common.menu.permissionGroup",
 					roles: ["admin", "dev"],
@@ -76,6 +79,7 @@ const routes: AppRouteRecordRaw[] = [
 						"permission:button:update",
 						"permission:button:delete",
 					],
+					// keepAlive: true (default)
 				},
 			},
 			{
@@ -84,7 +88,6 @@ const routes: AppRouteRecordRaw[] = [
 				handle: {
 					hideInMenu: true,
 					currentActiveMenu: "/system/dept",
-					keepAlive: false,
 					icon: "SafetyOutlined",
 					title: "common.menu.permissionGroup",
 					roles: ["admin", "dev"],
@@ -93,6 +96,7 @@ const routes: AppRouteRecordRaw[] = [
 						"permission:button:update",
 						"permission:button:delete",
 					],
+					// keepAlive: true (default)
 				},
 			},
 			{
@@ -103,13 +107,13 @@ const routes: AppRouteRecordRaw[] = [
 					title: "common.menu.permissionGroup",
 					currentActiveMenu: "/system/role",
 					roles: ["admin", "dev"],
+					// keepAlive: true (default)
 				},
 			},
 			{
 				path: "/system/departments",
 				Component: AdminPage,
 				handle: {
-					keepAlive: false,
 					icon: "ApartmentOutlined",
 					title: "common.menu.dept",
 					roles: ["admin", "dev"],
@@ -118,13 +122,13 @@ const routes: AppRouteRecordRaw[] = [
 						"permission:button:update",
 						"permission:button:delete",
 					],
+					// keepAlive: true (default)
 				},
 			},
 			{
 				path: "/system/branches",
 				Component: AdminPage,
 				handle: {
-					keepAlive: false,
 					icon: "ClusterOutlined",
 					title: "common.menu.branch",
 					roles: ["admin", "dev"],
@@ -133,6 +137,7 @@ const routes: AppRouteRecordRaw[] = [
 						"permission:button:update",
 						"permission:button:delete",
 					],
+					// keepAlive: true (default)
 				},
 			},
 			{
@@ -142,6 +147,7 @@ const routes: AppRouteRecordRaw[] = [
 					icon: "BellOutlined",
 					title: "common.menu.broadcast",
 					roles: ["dev"],
+					// keepAlive: true (default)
 				},
 			},
 			{
@@ -153,9 +159,10 @@ const routes: AppRouteRecordRaw[] = [
 					hideInMenu: true,
 					title: "",
 					currentActiveMenu: "/system",
+					// keepAlive: true (default)
 				},
 			},
-			],
+		],
 		},
 	];
 
