@@ -194,10 +194,12 @@ export default function LayoutTabbar() {
 			return locationState.menuLabel;
 		}
 
-		// 2. For dynamic grid routes, derive from menu tree
-		const dynamicMatch = path.match(/\/system\/grid\/(.+)$/);
-		if (dynamicMatch && apiWholeMenus) {
-			const menuId = dynamicMatch[1];
+
+		// 2. For dynamic grid/report routes, derive from menu tree
+		const gridMatch = path.match(/\/system\/grid\/(.+)$/);
+		const reportMatch = path.match(/\/system\/report\/(.+)$/);
+		const menuId = gridMatch?.[1] || reportMatch?.[1];
+		if (menuId && apiWholeMenus) {
 			const findMenuInTree = (menus: any[], targetId: string): any => {
 				const targetStr = String(targetId);
 				for (const menu of menus) {
