@@ -766,6 +766,10 @@ export default function DynamicCodeMenu({
   const preferences = usePreferences();
   const { isDark, themeColorPrimary, language } = preferences;
   const executedRef = useRef(false);
+    // Reset executedRef when language changes to force re-execute dynamic code
+    useEffect(() => {
+      executedRef.current = false;
+    }, [i18n.language]);
   const runtimeRef = useRef<ScopedRuntime | null>(null);
   
   const [autoCode, setAutoCode] = useState<string | undefined>(undefined);
