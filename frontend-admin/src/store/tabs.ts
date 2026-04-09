@@ -21,8 +21,20 @@ export interface TabItemProps extends Omit<TabPaneProps, "tab"> {
 	historyState?: Record<string, any>
 }
 
+// Mở rộng TabStateType để cho phép các props động cho tab động
 export interface TabStateType extends Omit<TabItemProps, "label"> {
-	label: string
+	label: string;
+	// Các props động cho tab động
+	menuData?: any;
+	m_configs?: any;
+	type_form?: any;
+	table_name?: string;
+	report_name?: string;
+	kanban_config?: any;
+	auto_code_name?: string;
+	auto_code?: string;
+	appId?: string;
+	menuId?: string;
 }
 
 /**

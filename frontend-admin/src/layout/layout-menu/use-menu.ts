@@ -1,8 +1,12 @@
+import React from "react";
 import type { MenuProps } from "antd";
 
 import { useCurrentRoute } from "#src/hooks";
 import { removeTrailingSlash } from "#src/router/utils";
-import { usePermissionStore, useUserStore, useAppStore } from "#src/store";
+import { usePermissionStore, useUserStore, useAppStore, useTabsStore } from "#src/store";
+import { patchDynamicRoutesWithComponent } from "#src/router/patchDynamicRoutes";
+import CsmDynamicGrid from "#src/components/csm-grid/CsmDynamicGrid";
+import { flattenRoutes } from "#src/router/utils";
 import { resolveDevFlag } from "#src/utils/dev-flag";
 import { toPermissionBigInt, isSuperPermissionProfile } from "#src/utils/permission-bitfield";
 
@@ -108,6 +112,7 @@ function autoFixMenu(menus: any[], isDev: boolean = false): any[] {
 }
 
 export function useMenu() {
+	const { addTab, setActiveKey } = useTabsStore();
 	const wholeMenus = usePermissionStore(state => state.wholeMenus);
 	const apiWholeMenus = usePermissionStore(state => state.apiWholeMenus);
 	const { isMixedNav, isTwoColumnNav } = useLayout();
@@ -390,8 +395,8 @@ export function useMenu() {
 	 * 菜单点击事件处理
 	 */
 	const handleMenuSelect = (key: string, mode: MenuProps["mode"]) => {
-		// Normalize home: if backend menu points to "/", route to configured admin home instead of public website
-		const normalizedKey = key === "/" ? (import.meta.env.VITE_BASE_HOME_PATH || "/home") : key;
+		// '/' luôn là Home, không chuyển sang '/home' nữa
+		const normalizedKey = key === "/home" ? "/" : key;
 		
 		// 💡 Find menu in processedMenus first to get menuId (original ID before autoFixMenu transform)
 		const findMenuInProcessedMenus = (menus: any[], targetKey: string): any => {
@@ -418,132 +423,172 @@ export function useMenu() {
 			return m?.[1] ? String(m[1]) : "";
 		})();
 		
-		// Find the menu in API menus (which have table_name, report_name fields)
-		const findMenuInTree = (menus: any[], targetId: string, targetKey?: string): any => {
-			for (const menu of menus) {
-				const menuId = String(menu?.id || "");
-				const menuKey = String(menu?.key || "");
-				const menuPath = String(menu?.path || "");
-				const normalizedTargetId = String(targetId || "");
-				const normalizedTargetKey = String(targetKey || "");
-				if (
-					menuId === normalizedTargetId
-					|| menuKey === normalizedTargetKey
-					|| menuPath === normalizedTargetKey
-					|| (normalizedTargetId && menuPath === `/system/${normalizedTargetId}`)
-				) {
-					return menu;
-				}
-				if (menu.children && menu.children.length > 0) {
-					const found = findMenuInTree(menu.children, targetId, targetKey);
-					if (found) return found;
-				}
-			}
-			return null;
-		};
-		
-		const selectedApiMenu = (
-			findMenuInTree(apiWholeMenus, String(menuIdToSearch || ""), normalizedKey)
-			|| (legacyMenuIdFromKey ? findMenuInTree(apiWholeMenus, legacyMenuIdFromKey, normalizedKey) : null)
-			|| (menuIdSegmentFromKey ? findMenuInTree(apiWholeMenus, menuIdSegmentFromKey, normalizedKey) : null)
-		) as any;
 
-		// If menu is marked as auto setup (sys_autos), navigate to dedicated runner page
-		if (selectedApiMenu?.auto_code) {
-			const rawLabel = selectedApiMenu.label || selectedApiMenu.title || 'Auto Setup';
-			const menuLabel = String(rawLabel).replace(/^.*?\.\s+/, '').trim();
-			console.log('[AUTO_SETUP] Menu selected:', { menuIdToSearch, selectedApiMenu, autoCode: selectedApiMenu.auto_code });
-			// Save to sessionStorage to preserve across navigation
-			sessionStorage.setItem('auto_setup_code', String(selectedApiMenu.auto_code));
-			sessionStorage.setItem('auto_setup_label', menuLabel);
-			navigate('/auto-setup', { state: { autoCode: String(selectedApiMenu.auto_code), menuLabel } });
-			return;
-		} else if (selectedApiMenu?.id === "auto" || selectedApiMenu?.path === "/auto-setup") {
-			console.warn('[AUTO_SETUP] Auto menu selected but NO auto_code found:', selectedApiMenu);
-		}
+		   // Find the menu in API menus (which have table_name, report_name fields)
+		   const findMenuInTree = (menus: any[], targetId: string, targetKey?: string): any => {
+			   for (const menu of menus) {
+				   const menuId = String(menu?.id || "");
+				   const menuKey = String(menu?.key || "");
+				   const menuPath = String(menu?.path || "");
+				   const normalizedTargetId = String(targetId || "");
+				   const normalizedTargetKey = String(targetKey || "");
+				   if (
+					   menuId === normalizedTargetId
+					   || menuKey === normalizedTargetKey
+					   || menuPath === normalizedTargetKey
+					   || (normalizedTargetId && menuPath === `/system/${normalizedTargetId}`)
+				   ) {
+					   return menu;
+				   }
+				   if (menu.children && menu.children.length > 0) {
+					   const found = findMenuInTree(menu.children, targetId, targetKey);
+					   if (found) return found;
+				   }
+			   }
+			   return null;
+		   };
 
-		// Runtime menus (grid/report/kanban/dynamic code) always route to /system/grid/:menuId first.
-		// This prevents accidental external redirect when menu data has stale type_form=3 but still has runtime payload.
-		const hasRuntimePayload = !!(
-			selectedApiMenu && (
-				selectedApiMenu.table_name
-				|| selectedApiMenu.report_name
-				|| selectedApiMenu.auto_code_name
-				|| Number(selectedApiMenu.type_form) === 4
-				|| Number(selectedApiMenu.type_form) === 6
-				|| selectedApiMenu.kanban_config
-			)
-		);
+		   const selectedApiMenu = (
+			   findMenuInTree(apiWholeMenus, String(menuIdToSearch || ""), normalizedKey)
+			   || (legacyMenuIdFromKey ? findMenuInTree(apiWholeMenus, legacyMenuIdFromKey, normalizedKey) : null)
+			   || (menuIdSegmentFromKey ? findMenuInTree(apiWholeMenus, menuIdSegmentFromKey, normalizedKey) : null)
+		   ) as any;
 
-		if (selectedApiMenu && hasRuntimePayload) {
-			const menuId = String(selectedApiMenu.id || selectedApiMenu.key);
-			const rawLabel = selectedApiMenu.label || selectedApiMenu.title || 'Dynamic Grid';
-			const menuLabel = String(rawLabel).replace(/^.*?\.\s+/, '').trim();
+		   // --- Xác định path động cho các loại menu động ---
+		   let dynamicPath = normalizedKey;
+		   let dynamicLabel = selectedProcessedMenu?.label || normalizedKey;
+		   let needPatchDynamicRoute = false;
 
-			// Update store BEFORE navigation
-			useUserStore.getState().setSelectedMenuIdForTab(menuId);
+		   if (selectedApiMenu) {
+			   // Grid
+			   if (
+				   selectedApiMenu.table_name || Number(selectedApiMenu.type_form) === 4
+			   ) {
+				   dynamicPath = `/system/grid/${selectedApiMenu.id || selectedApiMenu.key}`;
+				   dynamicLabel = selectedApiMenu.label || selectedApiMenu.title || 'Dynamic Grid';
+				   needPatchDynamicRoute = true;
+			   }
+			   // Report
+			   else if (
+				   selectedApiMenu.report_name || Number(selectedApiMenu.type_form) === 6
+			   ) {
+				   dynamicPath = `/system/report/${selectedApiMenu.id || selectedApiMenu.key}`;
+				   dynamicLabel = selectedApiMenu.label || selectedApiMenu.title || 'Dynamic Report';
+				   needPatchDynamicRoute = true;
+			   }
+			   // Kanban
+			   else if (selectedApiMenu.kanban_config) {
+				   dynamicPath = `/system/kanban/${selectedApiMenu.id || selectedApiMenu.key}`;
+				   dynamicLabel = selectedApiMenu.label || selectedApiMenu.title || 'Dynamic Kanban';
+				   needPatchDynamicRoute = true;
+			   }
+			   // Dynamic code
+			   else if (selectedApiMenu.auto_code) {
+				   dynamicPath = `/auto-setup`;
+				   dynamicLabel = selectedApiMenu.label || selectedApiMenu.title || 'Auto Setup';
+				   needPatchDynamicRoute = true;
+			   }
+		   }
 
-			// Navigate to dynamic grid route - AdminPage decides render type by runtime menu metadata.
-			navigate(`/system/grid/${menuId}`, {
-				state: {
-					menuLabel,
-					menuData: selectedApiMenu
-				}
-			});
-			return;
-		}
+		   // Patch dynamic route nếu cần
+		   if (needPatchDynamicRoute) {
+			   const permissionStore = usePermissionStore.getState();
+			   const flatRouteList = permissionStore.flatRouteList;
+			   if (!flatRouteList[dynamicPath]) {
+				   // Patch đúng loại route và Component, truyền đủ menuId, m_configs, decrypt, ...
+				   let patchObj: any = { path: dynamicPath };
+				   // Common props for all dynamic menu components
+				   const commonProps = {
+					   menuId: selectedApiMenu.id || selectedApiMenu.key,
+					   m_configs: selectedApiMenu,
+					   decrypt: typeof csmDecrypt === "function" ? csmDecrypt : undefined,
+				   };
+				   if (selectedApiMenu.table_name || Number(selectedApiMenu.type_form) === 4) {
+					   patchObj.type_form = selectedApiMenu.type_form;
+					   patchObj.table_name = selectedApiMenu.table_name;
+					   patchObj.Component = (props: any) => React.createElement(CsmDynamicGrid, { ...props, ...commonProps });
+				   } else if (selectedApiMenu.report_name || Number(selectedApiMenu.type_form) === 6) {
+					   patchObj.type_form = selectedApiMenu.type_form;
+					   patchObj.report_name = selectedApiMenu.report_name;
+					   // CsmReport expects appId, m_configs, decrypt
+					   patchObj.Component = (props: any) => {
+						   const CsmReport = require("@/components/csm-report/CsmReport").default;
+						   return React.createElement(CsmReport, { ...props, appId, m_configs: selectedApiMenu, decrypt: commonProps.decrypt });
+					   };
+				   } else if (selectedApiMenu.kanban_config) {
+					   patchObj.kanban_config = selectedApiMenu.kanban_config;
+					   // CsmKanbanBoard expects appId, menuId, config, decrypt
+					   patchObj.Component = (props: any) => {
+						   const CsmKanbanBoard = require("@/components/csm-kanban/CsmKanbanBoard").default;
+						   return React.createElement(CsmKanbanBoard, { ...props, appId, menuId: commonProps.menuId, config: selectedApiMenu.kanban_config, decrypt: commonProps.decrypt });
+					   };
+				   } else if (selectedApiMenu.auto_code) {
+					   patchObj.auto_code = selectedApiMenu.auto_code;
+					   patchObj.Component = null; // auto-setup vẫn để null để render dynamic-code
+				   } else {
+					   patchObj.Component = null;
+				   }
+				   // Patch route động vào flatRouteList tạm thời (không mutate global store)
+				   const patched = patchDynamicRoutesWithComponent([patchObj]);
+				   const patchedFlat = flattenRoutes(patched);
+				   // Merge vào flatRouteList hiện tại để đảm bảo lookup đúng
+				   const newFlatRouteList = { ...flatRouteList, ...patchedFlat };
+				   usePermissionStore.setState({ flatRouteList: newFlatRouteList });
+			   }
+		   }
 
-		// Handle Dynamic Link (type_form = 3) only when it is a pure link menu.
-		if (selectedApiMenu && Number(selectedApiMenu.type_form) === 3) {
-			const linkUrl = selectedApiMenu.dynamic_link_url || selectedApiMenu.v_link || "";
-			if (!linkUrl) {
-				console.warn('[DYNAMIC_LINK] Menu has no link URL configured:', selectedApiMenu);
-				return;
-			}
 
-			if (/^https?:/.test(linkUrl)) {
-				window.open(linkUrl, '_blank');
-			} else if (linkUrl.startsWith('/')) {
-				navigate(linkUrl, { state: { menuLabel: selectedApiMenu.label, menuData: selectedApiMenu } });
-			} else {
-				navigate(linkUrl, { state: { menuLabel: selectedApiMenu.label, menuData: selectedApiMenu } });
-			}
-			return;
-		}
+	   // Nếu là dynamic link (type_form === 3)
+		   if (selectedApiMenu && Number(selectedApiMenu.type_form) === 3) {
+			   const linkUrl = selectedApiMenu.dynamic_link_url || selectedApiMenu.v_link || "";
+			   if (!linkUrl) {
+				   console.warn('[DYNAMIC_LINK] Menu has no link URL configured:', selectedApiMenu);
+				   return;
+			   }
+			   if (/^https?:/.test(linkUrl)) {
+				   window.open(linkUrl, '_blank');
+			   } else {
+				   addTab(linkUrl, {
+					   key: linkUrl,
+					   label: selectedApiMenu.label,
+					   closable: true,
+					   draggable: true,
+				   });
+				   setActiveKey(linkUrl);
+			   }
+			   return;
+		   }
 
-		// Legacy fallback: keys like "home/menu_123" or "menu_123" should map to runtime grid route.
-		if (!selectedApiMenu && menuIdSegmentFromKey) {
-			useUserStore.getState().setSelectedMenuIdForTab(menuIdSegmentFromKey);
-			navigate(`/system/grid/${menuIdSegmentFromKey}`, {
-				state: {
-					menuLabel: selectedProcessedMenu?.label || selectedProcessedMenu?.title || menuIdSegmentFromKey,
-				}
-			});
-			return;
-		}
-		
-		/* 1. 非混合导航模式 2. 混合导航模式下的侧边导航 */
-		if (!shouldSplitMenuItems || mode !== "horizontal") {
-			// eslint-disable-next-line regexp/no-unused-capturing-group
-			if (/http(s)?:/.test(normalizedKey)) {
-				window.open(normalizedKey);
-			}
-			else {
-				navigate(normalizedKey);
-			}
-		}
-		else {
-			/* 混合导航模式下的顶部导航 */
-			const rootMenu = translatedMenus.find(item => item?.key === normalizedKey);
-			const targetMenu = findDeepestFirstItem(rootMenu?.children ?? []);
-			/* 点击顶部的导航默认跳转到菜单下的第一个子项 */
-			if (!targetMenu || !targetMenu.key) {
-				navigate(normalizedKey);
-			}
-			else {
-				navigate(targetMenu.key);
-			}
-		}
+		   // External link (http/https)
+		   if (/^https?:/.test(dynamicPath)) {
+			   window.open(dynamicPath, '_blank');
+			   return;
+		   }
+
+		   // Nếu là menu động (grid/report/kanban/dynamic-code) thì lưu lại menuId cho tab
+		   if (selectedApiMenu && needPatchDynamicRoute) {
+			   useUserStore.getState().setSelectedMenuIdForTab(selectedApiMenu.id || selectedApiMenu.key);
+		   }
+		   // SPA: chỉ set tab state, path trên URL giữ nguyên
+		   // Lưu đầy đủ thông tin menuData/m_configs/component vào tab state để reload không mất props
+		   addTab(dynamicPath, {
+			   key: dynamicPath,
+			   label: String(dynamicLabel).replace(/^.*?\.\s+/, '').trim(),
+			   closable: true,
+			   draggable: true,
+			   // Patch thêm các props động để tabbar khôi phục đúng
+			   menuData: selectedApiMenu,
+			   m_configs: selectedApiMenu,
+			   type_form: selectedApiMenu.type_form,
+			   table_name: selectedApiMenu.table_name,
+			   report_name: selectedApiMenu.report_name,
+			   kanban_config: selectedApiMenu.kanban_config,
+			   auto_code_name: selectedApiMenu.auto_code_name,
+			   auto_code: selectedApiMenu.auto_code,
+		   });
+		   setActiveKey(dynamicPath);
+		   // Không gọi navigate, không đổi path
+		   return;
 	};
 
 	/**

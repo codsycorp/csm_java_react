@@ -36,7 +36,7 @@ export default function LayoutTabbar() {
 	const { flatRouteList, hasFetchedDynamicRoutes, apiWholeMenus } = usePermissionStore();
 	const selectedMenuIdForTab = useUserStore(state => state.selectedMenuIdForTab);
 	const { activeKey, isRefresh, setActiveKey, setIsRefresh, openTabs, addTab, insertBeforeTab } = useTabsStore();
-	const homePath = import.meta.env.VITE_BASE_HOME_PATH || "/home";
+	const homePath = "/home";
 	const closingKeyRef = useRef<string | null>(null);
 	
 	// Get store instance for direct access (not reactive)
@@ -53,7 +53,7 @@ export default function LayoutTabbar() {
 	// }, [openTabs]);
 
 	const tabItems: TabItemProps[] = Array.from(openTabs.values()).map(item => {
-		const isHome = item.key === (import.meta.env.VITE_BASE_HOME_PATH || "/home");
+		const isHome = item.key === "/";
 		return {
 			...item,
 			closable: isHome ? false : (item.closable ?? true),
@@ -84,44 +84,44 @@ export default function LayoutTabbar() {
 	 * @param {string} key - 被选中的标签页的key
 	 */
 	const handleChangeTabs = useCallback((key: string) => {
-		const historyState = openTabs.get(key)?.historyState || { search: "", hash: "" };
-		navigate(key + historyState.search + historyState.hash);
-	}, [openTabs]);
+		// Nếu user click vào '/home', chuyển thành '/'
+		const normalizedKey = key === "/home" ? "/" : key;
+		setActiveKey(normalizedKey);
+	}, [setActiveKey]);
 
 	/**
 	 * 处理标签页编辑（关闭）
 	 * @param {React.MouseEvent | React.KeyboardEvent | string} key - 被编辑的标签页的key
 	 * @param {string} action - 编辑动作，这里只处理 "remove"
 	 */
-	const handleEditTabs = useCallback<Required<TabsProps>["onEdit"]>((key, action) => {
-		if (action === "remove") {
-			const closingKey = key as string;
-			const home = import.meta.env.VITE_BASE_HOME_PATH || "/home";
-			const state = useTabsStore.getState();
+	 const handleEditTabs = useCallback<Required<TabsProps>["onEdit"]>((key, action) => {
+	 	if (action === "remove") {
+	 		const closingKey = key as string;
+	 		const home = "/home";
+	 		const state = useTabsStore.getState();
 
-			// Cannot close home
-			if (closingKey === home) return;
+	 		// Cannot close home
+	 		if (closingKey === home) return;
 
-			const newTabs = new Map(state.openTabs);
-			newTabs.delete(closingKey);
-			if (!newTabs.has(home) && state.openTabs.has(home)) {
-				newTabs.set(home, state.openTabs.get(home)!);
-			}
+	 		const newTabs = new Map(state.openTabs);
+	 		newTabs.delete(closingKey);
+	 		if (!newTabs.has(home) && state.openTabs.has(home)) {
+	 			newTabs.set(home, state.openTabs.get(home)!);
+	 		}
 
-			let nextKey = state.activeKey;
-			if (state.activeKey === closingKey || !newTabs.has(state.activeKey)) {
-				const keys = Array.from(newTabs.keys());
-				nextKey = keys.at(-1) || home;
-			}
+	 		let nextKey = state.activeKey;
+	 		if (state.activeKey === closingKey || !newTabs.has(state.activeKey)) {
+	 			const keys = Array.from(newTabs.keys());
+	 			nextKey = keys.at(-1) || home;
+	 		}
 
-			// mark closing to avoid re-adding on same-location effect
-			closingKeyRef.current = closingKey;
+	 		// mark closing to avoid re-adding on same-location effect
+	 		closingKeyRef.current = closingKey;
 
-			useTabsStore.setState({ openTabs: newTabs, activeKey: nextKey });
-			const nextHistory = newTabs.get(nextKey)?.historyState || { search: "", hash: "" };
-			navigate(nextKey + nextHistory.search + nextHistory.hash);
-		}
-	}, [navigate]);
+	 		useTabsStore.setState({ openTabs: newTabs, activeKey: nextKey });
+	 		// KHÔNG gọi navigate, chỉ set state
+	 	}
+	 }, []);
 
 	/**
 	 * 自定义渲染标签栏，添加右键菜单功能
@@ -168,41 +168,9 @@ export default function LayoutTabbar() {
 	/**
 	 * 活动标签页被关闭，自动导航到合适路由
 	 */
-	useEffect(() => {
-		/**
-		 * 以下动作会触发活动标签页被关闭：
-		 * 1. 关闭当前标签页
-		 * 2. 当使用 关闭左边/右边/其他/所有标签页 功能，激活的标签页被关闭
-		 *
-		 * 初次进入应用，activeKey 值为空，不触发自动导航
-		 */
-		const historyState = openTabs.get(activeKey)?.historyState || { search: "", hash: "" };
-		const activeFullPath = activeKey + historyState.search + historyState.hash;
-		const currentFullpath = location.pathname + location.search + location.hash;
-		if (activeKey.length > 0 && activeFullPath !== currentFullpath) {
-			navigate(activeFullPath);
-		}
-	}, [activeKey]);
+	 // ĐÃ LOẠI BỎ navigate khi chuyển tab để SPA không đổi path
 
-	/**
-	 * 用户刷新当前页面，但不是默认 Tab 页面时，需要添加默认 Tab
-	 */
-	useEffect(() => {
-		// 检查默认 Tab 是否缺失
-		const isDefaultTabMissing = !Array.from(openTabs.keys()).includes(import.meta.env.VITE_BASE_HOME_PATH);
-		// 检查动态路由是否加载完成
-		const isDynamicRoutingReady = !isDynamicRoutingEnabled || hasFetchedDynamicRoutes;
-
-		if (isDefaultTabMissing && isDynamicRoutingReady) {
-			const routeTitle = flatRouteList[import.meta.env.VITE_BASE_HOME_PATH]?.handle?.title;
-			insertBeforeTab(import.meta.env.VITE_BASE_HOME_PATH, {
-				key: import.meta.env.VITE_BASE_HOME_PATH,
-				label: isValidElement(routeTitle) ? routeTitle?.props?.children : routeTitle,
-				closable: false,
-				draggable: false,
-			});
-		}
-	}, [openTabs, insertBeforeTab, hasFetchedDynamicRoutes, flatRouteList]);
+	// ĐÃ ĐỒNG BỘ SPA: Không tự động addTab Home ở đây nữa
 
 	/**
 	 * Helper function to derive tab label from various sources
@@ -290,38 +258,23 @@ export default function LayoutTabbar() {
 	 * 监听路由变化，添加标签页和激活标签页
 	 */
 	useEffect(() => {
-		const homePath = import.meta.env.VITE_BASE_HOME_PATH || "/home";
+		// '/' luôn là Home, không còn '/home'
 		const activePath = location.pathname;
-		const normalizedPathRaw = removeTrailingSlash(activePath);
-		const normalizedPath = normalizedPathRaw === "/" ? homePath : normalizedPathRaw;
+		const normalizedPath = activePath === "/home" ? "/" : removeTrailingSlash(activePath);
 
-		// If this navigation is the tab we just closed, skip adding it back
 		if (closingKeyRef.current && closingKeyRef.current === normalizedPath) {
 			closingKeyRef.current = null;
 			return;
 		}
 
-		// Always set active key to ensure tab is activated immediately
 		setActiveKey(normalizedPath);
+	}, [location, setActiveKey]);
 
-		// Derive the label using our centralized helper
-		const tabLabel = deriveTabLabel(normalizedPath, location.state);
+	// ĐÃ ĐỒNG BỘ SPA: Không tự động mở tab Home khi vào app, chỉ mở khi click menu
 
-		// Add or update the tab with the derived label
-		const tabData = {
-			key: normalizedPath,
-			label: tabLabel,
-			historyState: {
-				search: location.search,
-				hash: location.hash,
-			},
-			closable: normalizedPath !== homePath,
-			draggable: normalizedPath !== homePath,
-		};
-		
-		// Always call addTab to ensure label is updated if changed
-		addTab(normalizedPath, tabData);
-	}, [location, setActiveKey, addTab, deriveTabLabel]);	return (
+	// ĐÃ ĐỒNG BỘ SPA: Không tự động mở tab Home khi vào '/', chỉ mở khi click menu
+
+	return (
 		<div className={classes.tabsContainer}>
 			<Tabs
 				className={clsx(

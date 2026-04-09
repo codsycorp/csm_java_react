@@ -1,19 +1,23 @@
+import React from "react";
+import { patchDynamicRoutesWithComponent } from "#src/router/patchDynamicRoutes";
 import { GlobalSpin, Scrollbar } from "#src/components";
 import { removeTrailingSlash } from "#src/router/utils";
 import { usePermissionStore, usePreferencesStore, useTabsStore } from "#src/store";
 import { theme } from "antd";
 import KeepAlive, { useKeepaliveRef } from "keepalive-for-react";
-import { useEffect, useMemo } from "react";
-import { useLocation, useOutlet } from "react-router";
+import { useEffect, useMemo, useState } from "react";
+import { useLocation } from "react-router";
 
 export interface LayoutContentProps { }
+
+
+
 
 export default function LayoutContent() {
 	const {
 		token: { colorBgLayout },
 	} = theme.useToken();
-	const { pathname, search } = useLocation();
-	const outlet = useOutlet();
+	const { pathname } = useLocation();
 	const aliveRef = useKeepaliveRef();
 	const isRefresh = useTabsStore(state => state.isRefresh);
 	const openTabs = useTabsStore(state => state.openTabs);
@@ -21,26 +25,46 @@ export default function LayoutContent() {
 	const flatRouteList = usePermissionStore(state => state.flatRouteList);
 	const transitionName = usePreferencesStore(state => state.transitionName);
 	const transitionEnable = usePreferencesStore(state => state.transitionEnable);
-
-	/**
-	 * to distinguish different pages to cache
-	 */
-	// Use normalized pathname only so cache keys are stable and aligned with tab keys.
-	// Sử dụng activeKey của tabbar để cache từng tab riêng biệt
 	const activeKey = useTabsStore(state => state.activeKey);
-	const cacheKey = useMemo(() => {
-		// Nếu chưa có tabbar, fallback về pathname
-		if (!tabbarEnable || !activeKey) {
-			const homePath = import.meta.env.VITE_BASE_HOME_PATH || "/home";
-			const normalized = removeTrailingSlash(pathname);
-			return normalized === "/" ? homePath : normalized;
-		}
-		return activeKey;
-	}, [activeKey, tabbarEnable, pathname]);
 
-	/**
-	 * 当使用关闭当前标签页、关闭右侧标签页、关闭左侧标签页、关闭其他标签页、关闭所有标签页功能时，需要清除这个标签页的缓存
-	 */
+	// SPA: Luôn dùng activeKey làm cacheKey cho SPA tab
+	const cacheKey = useMemo(() => {
+		return activeKey || "/home";
+	}, [activeKey]);
+
+	// SPA: render component theo tab đang active, không phụ thuộc router path
+
+
+	const tab = openTabs.get(activeKey);
+	let route = flatRouteList[activeKey];
+	let PatchedComponent: any = null;
+	if (route && tab) {
+		// Patch lại route động mỗi lần render để lấy đúng Component
+		const patched = patchDynamicRoutesWithComponent([{ ...route, ...tab }]);
+		if (patched && patched[0] && patched[0].Component) {
+			PatchedComponent = patched[0].Component;
+		}
+	}
+	if (!PatchedComponent) {
+		// Fallback về Home nếu không có component động
+		route = flatRouteList["/home"];
+		PatchedComponent = route && route.Component ? route.Component : null;
+	}
+	// Log props để debug (luôn log khi render)
+	if (PatchedComponent && tab) {
+		// eslint-disable-next-line no-console
+		console.log('TabComponent render:', {
+			PatchedComponent,
+			tab,
+			activeKey,
+			flatRouteList
+		});
+	}
+	const TabComponent = PatchedComponent && tab
+		? () => React.createElement(PatchedComponent, { ...tab })
+		: null;
+
+	// KeepAlive logic giữ nguyên
 	useEffect(() => {
 		const cacheNodes = aliveRef.current?.getCacheNodes?.();
 		cacheNodes?.forEach((node) => {
@@ -50,14 +74,10 @@ export default function LayoutContent() {
 		});
 	}, [openTabs, cacheKey]);
 
-	/**
-	 * 关闭多 tab 功能，清空所有的缓存页面
-	 */
 	useEffect(() => {
 		if (!tabbarEnable) {
 			const cacheNodes = aliveRef.current?.getCacheNodes?.();
 			cacheNodes?.forEach((node) => {
-				/* 不包含当前页面 */
 				if (node.cacheKey !== cacheKey) {
 					aliveRef.current?.destroy(node.cacheKey);
 				}
@@ -65,39 +85,28 @@ export default function LayoutContent() {
 		}
 	}, [tabbarEnable, cacheKey]);
 
-	/* KeepAlive 的刷新 */
 	useEffect(() => {
-		/* 仅在启用标签栏时生效 */
 		if (tabbarEnable && isRefresh) {
 			aliveRef.current?.refresh();
 		}
 	}, [isRefresh]);
 
-	/* 路由设置 keepAlive = false 则不缓存页面 */
 	const keepAliveExclude = useMemo(() => {
-		/**
-		 * 如果不开启多 tab 功能，则不需要 KeepAlive 功能
-		 * 为了保留页面的切换动画，只需要把所有的路由放到 exclude 数组中
-		 */
 		if (!tabbarEnable) {
 			return Object.keys(flatRouteList);
 		}
-		return Object.entries(flatRouteList).reduce<string[]>((acc, [key, value]) => {
-			if (value.handle.keepAlive === false) {
-				acc.push(key);
-			}
-			return acc;
-		}, []);
+		   return Object.entries(flatRouteList).reduce<string[]>((acc, [key, value]) => {
+			   if (value && value.handle && value.handle.keepAlive === false) {
+				   acc.push(key);
+			   }
+			   return acc;
+		   }, []);
 	}, [flatRouteList, tabbarEnable]);
 
 	return (
 		<main
 			className="overflow-y-auto overflow-x-hidden flex-grow"
-			style={
-				{
-					backgroundColor: colorBgLayout,
-				}
-			}
+			style={{ backgroundColor: colorBgLayout }}
 		>
 			<Scrollbar>
 				<GlobalSpin>
@@ -110,7 +119,7 @@ export default function LayoutContent() {
 						activeCacheKey={cacheKey}
 						aliveRef={aliveRef}
 					>
-						{outlet}
+						{TabComponent ? <TabComponent /> : null}
 					</KeepAlive>
 				</GlobalSpin>
 			</Scrollbar>

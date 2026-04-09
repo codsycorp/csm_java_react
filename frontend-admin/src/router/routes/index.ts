@@ -28,11 +28,22 @@ const dynamicRoutes: AppRouteRecordRaw[] = mergeRouteModules(dynamicRouteFiles);
 /** 静态路由 */
 const staticRoutes: AppRouteRecordRaw[] = mergeRouteModules(staticRouteFiles);
 
-/** 根路由下的子路由 */
+
+// Đảm bảo '/' luôn là Home
+import { lazy } from "react";
+const Home = lazy(() => import("#src/pages/home"));
 const rootChildRoutes = ascending([
-	...coreRouteRootChildren,
-	...dynamicRoutes,
-	...staticRoutes,
+   {
+	   path: "/",
+	   Component: Home,
+	   handle: {
+		   title: "Home",
+		   icon: undefined,
+	   },
+   },
+   ...coreRouteRootChildren,
+   ...dynamicRoutes,
+   ...staticRoutes,
 ]);
 
 coreRoutes[0].children = rootChildRoutes;

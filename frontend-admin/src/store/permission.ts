@@ -7,6 +7,7 @@ import { fetchNavigationMenus } from "#src/api/system/menu";
 import { router } from "#src/router";
 import { ROOT_ROUTE_ID } from "#src/router/constants";
 import { rootChildRoutes, routes } from "#src/router/routes";
+import { patchDynamicRoutesWithComponent } from "#src/router/patchDynamicRoutes";
 import { addAsyncRoutes, ascending, flattenRoutes, getMenuItems } from "#src/router/utils";
 import { useAppStore } from "./app";
 import { useAuthStore } from "./auth";
@@ -209,7 +210,7 @@ function isMenuAllowedByLegacyAccess(menu: any, allowedKeys: Set<string>, allowe
 	const name = normalizeAccessKey(menu?.name);
 	const isSystemPath = path.startsWith("/system");
 	const hasAutoCode = !!(menu?.auto_code);
-	const isAlwaysVisible = path === "/" || path === "/home" || path === "/auto-setup" || id === "home" || id === "auto" || hasAutoCode;
+	const isAlwaysVisible = path === "/home" || path === "/auto-setup" || id === "home" || id === "auto" || hasAutoCode;
 
 	if (isAlwaysVisible) return true;
 
@@ -437,7 +438,8 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 			? { "csm-token": effectiveToken }
 			: undefined;
 		const { result } = await fetchAsyncRoutes(asyncRouteHeaders);
-		const dynamicRoutes = addAsyncRoutes(result);
+		let dynamicRoutes = addAsyncRoutes(result);
+		dynamicRoutes = patchDynamicRoutesWithComponent(dynamicRoutes);
 		const newRoutes = ascending([...rootChildRoutes, ...dynamicRoutes]);
 
 		const constantMenus = getMenuItems((router.routes[0].children || []) as AppRouteRecordRaw[]);
@@ -521,7 +523,7 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 					return !(key === "/system" || key.startsWith("/system/"));
 				};
 				const apiMenusFiltered = filteredByLegacyAccess
-					.filter(m => m.key !== "/system" && m.key !== "/home" && m.key !== "/" && String((m as any).id || "") !== "home")
+					.filter(m => m.key !== "/system" && m.key !== "/home" && String((m as any).id || "") !== "home")
 					.filter(filterDuplicatedSystemApiMenus)
 					.filter(filterAutoSetup);
 				if (isDev || isAdmin) {
@@ -571,7 +573,8 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 	},
 
 	applyAsyncRoutesFromLogin: async (routesFromLogin: AppRouteRecordRaw[], appIdParam?: string, devFlag?: boolean) => {
-		const dynamicRoutes = addAsyncRoutes(routesFromLogin);
+		let dynamicRoutes = addAsyncRoutes(routesFromLogin);
+		dynamicRoutes = patchDynamicRoutesWithComponent(dynamicRoutes);
 		const newRoutes = ascending([...rootChildRoutes, ...dynamicRoutes]);
 
 		const constantMenus = getMenuItems((router.routes[0].children || []) as AppRouteRecordRaw[]);
@@ -653,7 +656,7 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 					return !(key === '/system' || key.startsWith('/system/'));
 				};
 				const apiMenusFiltered = filteredByLegacyAccess
-					.filter(m => m.key !== '/system' && m.key !== '/home' && m.key !== '/' && String((m as any).id || '') !== 'home')
+					.filter(m => m.key !== '/system' && m.key !== '/home' && String((m as any).id || '') !== 'home')
 					.filter(filterDuplicatedSystemApiMenus)
 					.filter(filterAutoSetup);
 				if (isDev || isAdmin) {

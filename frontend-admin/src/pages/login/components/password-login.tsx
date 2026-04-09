@@ -200,15 +200,9 @@ export function PasswordLogin() {
 				return { loginRes, userInfoResult };
 			})
 			.then(({ loginRes, userInfoResult }) => {
-				const adminHomePath = import.meta.env.VITE_BASE_HOME_PATH || "/home";
-				const redirect = searchParams.get("redirect");
-				const safeAdminRedirect = normalizeAdminRedirect(redirect);
+				// Luôn điều hướng về /home sau đăng nhập, bỏ qua redirect param
 				window.sessionStorage.setItem("forceAdminMode", "true");
-				if (redirect === "admin") {
-					navigate(adminHomePath, { replace: true });
-					return;
-				}
-				navigate(safeAdminRedirect || adminHomePath, { replace: true });
+				navigate("/home", { replace: true });
 			})
 			.catch(async (error: any) => {
 				console.error("[LOGIN] Login error:", error);

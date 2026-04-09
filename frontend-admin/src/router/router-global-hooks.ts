@@ -80,13 +80,7 @@ export const routerBeforeEach: (reactRouter: ReactRouterType) => BlockerFunction
 
 	/* --------------- 以下为已登录的处理逻辑 ------------------ */
 
-	/* 根路由处理 */
-	if (pathname === import.meta.env.BASE_URL && pathnameWithoutBase === "/") {
-		const adminHomePath = import.meta.env.VITE_BASE_HOME_PATH || "/home";
-		window.sessionStorage.setItem("forceAdminMode", "true");
-		reactRouter.navigate(adminHomePath, { replace: true });
-		return true;
-	}
+	// Đã đăng nhập, nếu là root path '/', cho phép truy cập bình thường (không tự động chuyển về /home)
 
 	/* 已登录访问登录页，跳转到首页 */
 	if (pathnameWithoutBase === "/login") {
