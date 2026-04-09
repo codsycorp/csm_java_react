@@ -587,26 +587,32 @@ public class TableHandler {
         SearchFilter filters,
         UserAccessContext accessContext
     ) {
+        logger.info("[AutoSetupDebug] ENTER isAllowedAutoSetupTemplateReadRequest appId={}, tableName={}, isUpdate={}, accessContext={}", appId, tableName, isUpdate, accessContext);
         if (isUpdate) {
+            logger.info("[AutoSetupDebug] RETURN false: isUpdate=true");
             return false;
         }
         if (accessContext == null) {
+            logger.info("[AutoSetupDebug] RETURN false: accessContext is null");
             return false;
         }
 
         String normalizedAppId = safeStr(appId);
         String normalizedTable = safeStr(tableName);
         if (!"csm".equals(normalizedAppId) || !"sys_autos".equals(normalizedTable)) {
+            logger.info("[AutoSetupDebug] RETURN false: not csm.sys_autos (appId={}, tableName={})", normalizedAppId, normalizedTable);
             return false;
         }
 
         // Dev can read by default and is already privileged.
         if (accessContext.isDev) {
+            logger.info("[AutoSetupDebug] RETURN true: isDev");
             return true;
         }
 
         String userAppId = safeStr(accessContext.appId);
         if (userAppId.isBlank()) {
+            logger.warn("[AutoSetupDebug] RETURN false: userAppId is blank. accessContext: {}", accessContext);
             return false;
         }
 
@@ -614,16 +620,22 @@ public class TableHandler {
         collectEqValues(filters, eqValues);
         String pType = safeStr(eqValues.get("p_type"));
         String pName = safeStr(eqValues.get("p_name"));
+        logger.info("[AutoSetupDebug] appId={}, userAppId={}, pType={}, pName={}, accessContext={}", normalizedAppId, userAppId, pType, pName, accessContext);
         if (!"0".equals(pType)) {
+            logger.info("[AutoSetupDebug] RETURN false: p_type != 0 (p_type={})", pType);
             return false;
         }
 
         // Auto-code list loader in frontend requests only p_type=0 (without p_name).
         // Keep it allowed, then enforce app scope by injecting p_name filter server-side.
         if (pName.isBlank()) {
+            logger.info("[AutoSetupDebug] RETURN true: p_name is blank");
             return true;
         }
-        return isSameOrBroadcastVariant(userAppId, pName);
+        boolean result = isSameOrBroadcastVariant(userAppId, pName);
+        logger.info("[AutoSetupDebug] isSameOrBroadcastVariant({}, {}) = {}", userAppId, pName, result);
+        logger.info("[AutoSetupDebug] RETURN {}: isSameOrBroadcastVariant", result);
+        return result;
     }
 
     private SearchFilter applyAutoSetupTemplateScope(SearchFilter existingFilter, UserAccessContext accessContext) {
@@ -641,6 +653,7 @@ public class TableHandler {
         }
 
         List<SearchFilter> appVariants = new ArrayList<>();
+
         SearchFilter pNamePrimary = new SearchFilter();
         pNamePrimary.setField("p_name");
         pNamePrimary.setType("eq");
@@ -1885,7 +1898,8 @@ public class TableHandler {
             || "csm_user_roles".equals(tableName)
             || "csm_user_depts".equals(tableName)
             || "csm_depts".equals(tableName)
-            || "csm_menu".equals(tableName);
+            || "csm_menu".equals(tableName)
+            || "sys_autos".equals(tableName);
     }
 
     private void collectCandidate(Set<String> target, Object raw) {
@@ -3634,23 +3648,40 @@ public class TableHandler {
         }
              
         List<Map<String, Object>> data = (List<Map<String, Object>>) filterResult.getOrDefault("rows", new ArrayList<>());
+        logger.info("[AutoSetupDebug] [{}] rows after filter: {}", tblname, data.size());
         autoFillPermissionSchemaValues(appId, tblname, data, true);
         migrateLegacyScopeSyntaxOnce(appId, tblname, data);
         UserAccessContext effectiveAccessContext = accessContext != null ? accessContext : resolveCurrentUserAccessContext();
         data = filterManagedAccountDescendants(tblname, data, effectiveAccessContext);
+        logger.info("[AutoSetupDebug] [{}] rows after filterManagedAccountDescendants: {}", tblname, data.size());
         data = applyDataScopeRowFilter(tblname, data, effectiveAccessContext);
+        logger.info("[AutoSetupDebug] [{}] rows after applyDataScopeRowFilter: {}", tblname, data.size());
         data = filterMainAccountRows(tblname, data);
+        logger.info("[AutoSetupDebug] [{}] rows after filterMainAccountRows: {}", tblname, data.size());
         if ("csm_accounts".equals(tblname)) {
             data = maskSelfAccountRowsForNonDev(data, resolveCurrentUserAccessContext());
+            logger.info("[AutoSetupDebug] [{}] rows after maskSelfAccountRowsForNonDev: {}", tblname, data.size());
+        }
+        // Chỉ cho phép non-dev lấy sys_autos với p_type=0 và (p_name=app_id hoặc p_name=broadcast_app_id)
+        if ("sys_autos".equals(tblname) && accessContext != null && !accessContext.isDev) {
+            String appIdNorm = appId == null ? "" : appId.trim();
+            String broadcastAppId = "broadcast_" + appIdNorm;
+            data = data.stream().filter(row -> {
+                Object pType = row.get("p_type");
+                Object pName = row.get("p_name");
+                return "0".equals(String.valueOf(pType)) &&
+                    (appIdNorm.equals(String.valueOf(pName)) || broadcastAppId.equals(String.valueOf(pName)));
+            }).collect(java.util.stream.Collectors.toList());
+            logger.info("[AutoSetupDebug] [sys_autos] rows after non-dev filter: {}", data.size());
         }
         decryptPassForDisplay(tblname, data);
-    
+
         Map<String, Object> result = new HashMap<>();
         result.put("id", tblname);
         result.put("fieldsPK", structMap.get("fieldsPK"));
         result.put("fields", structMap.get("fields"));
         result.put("rows", data);
-    
+
         return result;
     }
 
