@@ -26,11 +26,17 @@ export default function LayoutContent() {
 	 * to distinguish different pages to cache
 	 */
 	// Use normalized pathname only so cache keys are stable and aligned with tab keys.
+	// Sử dụng activeKey của tabbar để cache từng tab riêng biệt
+	const activeKey = useTabsStore(state => state.activeKey);
 	const cacheKey = useMemo(() => {
-		const homePath = import.meta.env.VITE_BASE_HOME_PATH || "/home";
-		const normalized = removeTrailingSlash(pathname);
-		return normalized === "/" ? homePath : normalized;
-	}, [pathname]);
+		// Nếu chưa có tabbar, fallback về pathname
+		if (!tabbarEnable || !activeKey) {
+			const homePath = import.meta.env.VITE_BASE_HOME_PATH || "/home";
+			const normalized = removeTrailingSlash(pathname);
+			return normalized === "/" ? homePath : normalized;
+		}
+		return activeKey;
+	}, [activeKey, tabbarEnable, pathname]);
 
 	/**
 	 * 当使用关闭当前标签页、关闭右侧标签页、关闭左侧标签页、关闭其他标签页、关闭所有标签页功能时，需要清除这个标签页的缓存
