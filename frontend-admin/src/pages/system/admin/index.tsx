@@ -1,3 +1,19 @@
+// Patch lại label đa ngữ cho menuData theo i18n hiện tại
+function patchMenuI18n(menu: any, t: (k: string) => string, tEn: (k: string) => string, tZh: (k: string) => string): any {
+	if (!menu || typeof menu !== 'object') return menu;
+	const patched = { ...menu };
+	// Nếu label là key thì dịch, nếu là chuỗi thường thì giữ nguyên
+	const isKey = (v: any) => typeof v === 'string' && v.includes('.');
+	if (isKey(menu.label)) patched.label = t(menu.label);
+	if (isKey(menu.label_vi)) patched.label_vi = t(menu.label_vi);
+	if (isKey(menu.label_en)) patched.label_en = tEn(menu.label_en);
+	if (isKey(menu.label_zh)) patched.label_zh = tZh(menu.label_zh);
+	// Nếu không có label_en/zh/vi thì fallback từ label
+	if (!patched.label_vi) patched.label_vi = patched.label;
+	if (!patched.label_en) patched.label_en = patched.label;
+	if (!patched.label_zh) patched.label_zh = patched.label;
+	return patched;
+}
 import CsmDynamicGrid from "#src/components/csm-grid/CsmDynamicGrid";
 import CsmMasterDetail from "#src/components/csm-grid/CsmMasterDetail";
 import CsmReport from "#src/components/csm-report/CsmReport";
@@ -1261,7 +1277,7 @@ export default function AdminPage() {
 	}, [i18n, menuData]);
 
 	// Keep hook dependencies stable even before menu data is ready.
-	const runtimeMenuData = menuData ? normalizeMenuRuntimeConfig(menuData) : null;
+	const runtimeMenuData = menuData ? patchMenuI18n(normalizeMenuRuntimeConfig(menuData), t, tEn, tZh) : null;
 	const effectiveAppId = runtimeMenuData?.app_id || appId;
 	const typeForm = Number(runtimeMenuData?.type_form || 1);
 	const tableNameByMenuId: Record<string, string[]> = {
