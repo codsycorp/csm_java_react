@@ -52,16 +52,27 @@ export function patchDynamicRoutesWithComponent(routes: any[]): any[] {
       let staticConfigs = SYSTEM_ROUTE_TABLE_SCHEMAS?.[route.path];
       switch (route.path) {
         case "/system/user":
-          Component = (props: any) => React.createElement(User, {
-            ...props,
-            m_configs: staticConfigs,
-          });
+          Component = (props: any) => {
+            // Always inject staticConfigs, merge if props.m_configs exists
+            const mergedConfigs = Array.isArray(staticConfigs)
+              ? staticConfigs
+              : (props.m_configs ? { ...staticConfigs, ...props.m_configs } : staticConfigs);
+            return React.createElement(User, {
+              ...props,
+              m_configs: mergedConfigs,
+            });
+          };
           break;
         case "/system/dept":
-          Component = (props: any) => React.createElement(AdminPage, {
-            ...props,
-            m_configs: staticConfigs,
-          });
+          Component = (props: any) => {
+            const mergedConfigs = Array.isArray(staticConfigs)
+              ? staticConfigs
+              : (props.m_configs ? { ...staticConfigs, ...props.m_configs } : staticConfigs);
+            return React.createElement(AdminPage, {
+              ...props,
+              m_configs: mergedConfigs,
+            });
+          };
           break;
         case "/system/menu": Component = Menu; break;
         case "/system/developer": Component = Developer; break;
