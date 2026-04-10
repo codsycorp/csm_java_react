@@ -52,13 +52,20 @@ export default function LayoutTabbar() {
 	
 	const [items, onClickMenu] = useDropdownMenu();
 
-	// Debug: Log openTabs to see what's stored
-	// useEffect(() => {
-	// 	console.log('📊 [openTabs State]', Array.from(openTabs.entries()).map(([key, value]) => ({
-	// 		path: key,
-	// 		label: value.label
-	// 	})));
-	// }, [openTabs]);
+
+	// Always ensure Home tab exists after login or restore
+	useEffect(() => {
+		const hasHome = openTabs.has("/");
+		if (!hasHome) {
+			addTab("/", {
+				key: "/",
+				label: t("common.menu.home"),
+				closable: false,
+				draggable: false,
+			});
+			setActiveKey("/");
+		}
+	}, [openTabs, addTab, setActiveKey, t]);
 
 	const tabItems: TabItemProps[] = Array.from(openTabs.values()).map(item => {
 		const isHome = item.key === "homepage";

@@ -30,18 +30,6 @@ export default function LayoutContent() {
 		console.log('[LayoutContent] userId:', userId, 'openTabs:', openTabs, 'pathname:', pathname);
 	}, [userId, openTabs, pathname]);
 
-	// Khi vào layout admin, nếu chưa có tab nào thì add tab Trang chủ với key 'homepage'
-	useEffect(() => {
-		if (openTabs && openTabs.size === 0) {
-			useTabsStore.getState().addTab("homepage", {
-				key: "homepage",
-				   label: i18n.t("menu.home"),
-				closable: false,
-				draggable: false,
-			});
-			useTabsStore.getState().setActiveKey("homepage");
-		}
-	}, [openTabs, i18n]);
 
 	// SPA: Luôn dùng activeKey làm cacheKey cho SPA tab
 	const cacheKey = useMemo(() => {
