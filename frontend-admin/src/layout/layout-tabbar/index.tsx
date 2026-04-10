@@ -68,7 +68,7 @@ export default function LayoutTabbar() {
 			draggable: isHome ? false : (item.draggable ?? true),
 			       label: (
 				       <div className="relative flex items-center gap-1">
-					       {isHome ? t("menu.home") : (isString(item.label) ? item.label : item.label)}
+					       {isHome ? t("common.menu.home") : (isString(item.label) ? item.label : item.label)}
 				       </div>
 			       ),
 		};
