@@ -1037,36 +1037,40 @@ export default function AdminPage() {
 
 	// Refactor: Lấy menuData từ tab state hoặc menuId props, không dùng location.pathname
 	useEffect(() => {
-	  // Ưu tiên lấy menuData từ tab state (store) nếu có
-	const tabsStore = useTabsStore.getState();
-	// openTabs là Map<string, TabStateType>
-	const activeTab = tabsStore.openTabs?.get?.(tabsStore.activeKey) as any;
-	let menuDataFromTab = activeTab?.menuData || activeTab?.m_configs;
-	if (menuDataFromTab) {
-		setMenuData(menuDataFromTab);
-		setLoading(false);
-		return;
-	}
-	  // Nếu không có, fallback lấy từ menuId param (cũ)
-	  const findMenuInTree = (menus: any[], targetId: string): any => {
-	    for (const menu of menus) {
-	      if (menu.id === targetId || menu.key === targetId || menu.path === targetId) return menu;
-	      if (menu.children?.length) {
-	        const found = findMenuInTree(menu.children, targetId);
-	        if (found) return found;
-	      }
-	    }
-	    return null;
-	  };
-	  const targetId = menuId;
-	  if (targetId) {
-	    let found = apiWholeMenus.length > 0 ? findMenuInTree(apiWholeMenus, targetId) : null;
-	    if (found) {
-	      setMenuData(found);
-	      setLoading(false);
-	    }
-	  }
-	}, [menuId, apiWholeMenus]);
+		// Ưu tiên lấy menuData từ tab state (store) nếu có
+		const tabsStore = useTabsStore.getState();
+		const activeTab = tabsStore.openTabs?.get?.(tabsStore.activeKey) as any;
+		let menuDataFromTab = activeTab?.menuData || activeTab?.m_configs;
+		const isSameMenu = (a: any, b: any) => {
+			if (!a || !b) return false;
+			return (a.id === b.id && a.path === b.path);
+		};
+		if (menuDataFromTab && !isSameMenu(menuDataFromTab, menuData)) {
+			setMenuData(menuDataFromTab);
+			setLoading(false);
+			return;
+		}
+		// Nếu không có, fallback lấy từ menuId param (cũ)
+		const findMenuInTree = (menus: any[], targetId: string): any => {
+			for (const menu of menus) {
+				if (menu.id === targetId || menu.key === targetId || menu.path === targetId) return menu;
+				if (menu.children?.length) {
+					const found = findMenuInTree(menu.children, targetId);
+					if (found) return found;
+				}
+			}
+			return null;
+		};
+		const targetId = menuId;
+		if (targetId) {
+			let found = apiWholeMenus.length > 0 ? findMenuInTree(apiWholeMenus, targetId) : null;
+			if (found && !isSameMenu(found, menuData)) {
+				setMenuData(found);
+				setLoading(false);
+			}
+		}
+		// Nếu không tìm thấy menuData thì không set lại liên tục
+	}, [menuId, apiWholeMenus, menuData]);
 
 	// Di chuyển hàm loadTableData ra ngoài useEffect để có thể tái sử dụng
 	const loadTableData = async () => {
