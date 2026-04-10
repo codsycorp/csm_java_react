@@ -210,7 +210,7 @@ function isMenuAllowedByLegacyAccess(menu: any, allowedKeys: Set<string>, allowe
 	const name = normalizeAccessKey(menu?.name);
 	const isSystemPath = path.startsWith("/system");
 	const hasAutoCode = !!(menu?.auto_code);
-	const isAlwaysVisible = path === "/" || path === "/home" || path === "/auto-setup" || id === "home" || id === "auto" || hasAutoCode;
+	const isAlwaysVisible = path === "/" || path === "homepage" || path === "/auto-setup" || id === "home" || id === "auto" || hasAutoCode;
 	if (isAlwaysVisible) return true;
 
 	if (isAlwaysVisible) return true;
@@ -492,7 +492,7 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 				: newRoutes) as AppRouteRecordRaw[];
 
 		const routeMenus: MenuItemType[] = getMenuItems(routesForMenu);
-		const homeMenu = routeMenus.find(m => m.key === "/home");
+		const homeMenu = routeMenus.find(m => m.key === "homepage");
 		const systemMenusFromRoute = routeMenus.filter(m => m.key === "/system");
 		let wholeMenus: MenuItemType[] = [];
 		let apiWholeMenus: ApiMenuItemType[] = [];
@@ -542,7 +542,7 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 					return !(key === "/system" || key.startsWith("/system/"));
 				};
 				const apiMenusFiltered = filteredByLegacyAccess
-					.filter(m => m.key !== "/system" && m.key !== "/home" && String((m as any).id || "") !== "home")
+					.filter(m => m.key !== "/system" && m.key !== "homepage" && String((m as any).id || "") !== "homepage")
 					.filter(filterDuplicatedSystemApiMenus)
 					.filter(filterAutoSetup);
 				if (isDev || isAdmin) {
@@ -644,7 +644,7 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 					: newRoutes) as AppRouteRecordRaw[];
 			const allowedRoutePaths = buildAllowedPathSet(routesForMenu);
 			const routeMenus = getMenuItems(routesForMenu);
-			const homeMenu = routeMenus.find(m => m.key === '/home');
+			const homeMenu = routeMenus.find(m => m.key === 'homepage');
 			const systemMenus = routeMenus.filter(m => m.key === '/system');
 			if (apiMenuResponse?.result?.list && apiMenuResponse.result.list.length > 0) {
 				let apiMenuList = apiMenuResponse.result.list;
@@ -675,7 +675,7 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 					return !(key === '/system' || key.startsWith('/system/'));
 				};
 				const apiMenusFiltered = filteredByLegacyAccess
-					.filter(m => m.key !== '/system' && m.key !== '/home' && String((m as any).id || '') !== 'home')
+					.filter(m => m.key !== '/system' && m.key !== 'homepage' && String((m as any).id || '') !== 'homepage')
 					.filter(filterDuplicatedSystemApiMenus)
 					.filter(filterAutoSetup);
 				if (isDev || isAdmin) {
@@ -726,7 +726,7 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 						: r)
 					: newRoutes) as AppRouteRecordRaw[];
 			const routeMenus = getMenuItems(routesForMenu);
-			const homeMenu = routeMenus.find(m => m.key === '/home');
+			const homeMenu = routeMenus.find(m => m.key === 'homepage');
 			const systemMenus = routeMenus.filter(m => m.key === '/system');
 			wholeMenus = (isDev || isAdmin)
 				? [...(homeMenu ? [homeMenu] : []), ...systemMenus]

@@ -1,26 +1,26 @@
 import { ROOT_ROUTE_ID } from "#src/router/constants";
-import { RouterGuards } from "#src/router/guards";
 import { addIdToRoutes } from "#src/router/utils";
-
+import { ContainerLayout } from "#src/layout";
 import { lazy } from "react";
-
 import authRoutes from "./auth";
 import errorRoutes from "./error";
 
-const NotFound = lazy(() => import("#src/pages/error/404"));
+const Home = lazy(() => import("#src/pages/homepage"));
 
-/** 核心路由，根路由的 children */
-export const coreRouteRootChildren = addIdToRoutes([...authRoutes, ...errorRoutes]);
+// Route cho layout admin (chỉ các route quản trị)
+export const adminLayoutChildren = addIdToRoutes([
+	{ index: true, Component: Home, handle: { title: "Home", icon: undefined } },
+	// ...các route quản trị khác sẽ được merge ở index.ts
+]);
+
+// Route hệ thống (login, error, ...), KHÔNG bọc ContainerLayout
 export const coreRoutes: any = [
+	...addIdToRoutes(authRoutes),
+	...addIdToRoutes(errorRoutes),
 	{
 		path: "/",
 		id: ROOT_ROUTE_ID,
-		Component: RouterGuards,
-		children: coreRouteRootChildren,
-	},
-	{
-		path: "*",
-		id: "404",
-		Component: NotFound,
+		Component: ContainerLayout,
+		children: adminLayoutChildren,
 	},
 ];

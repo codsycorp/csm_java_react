@@ -51,12 +51,19 @@ export const useAuthStore = create<AuthState & AuthAction>()(
 			/**
 			 * 1. 退出登录
 			 */
-
-			await fetchLogout();
+			try {
+				await fetchLogout();
+			} catch (err: any) {
+				// Nếu là 401 thì chỉ log cảnh báo, không throw
+				if (err?.response?.status === 401) {
+					console.warn("[Auth] Ignore 401 on logout: session/token already expired.");
+				} else {
+					console.error("[Auth] Logout error:", err);
+				}
+			}
 			/**
 			 * 2. 清空 token 等其他信息
 			 */
-
 			get().reset();
 		},
 

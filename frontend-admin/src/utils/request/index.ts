@@ -210,8 +210,8 @@ const defaultConfig: Options = {
 									   console.warn("[Auth] Refresh failed during login bootstrap:", error);
 								   }
 							   }
-
-							   console.warn("[Auth] Ignoring stale 401 on login page without clearing fresh login state:", request.url);
+							   // Đã ở trang login, không log lỗi, không throw, chỉ return response
+							   // console.warn("[Auth] Ignoring stale 401 on login page without clearing fresh login state:", request.url);
 							   return response;
 						   }
 					   

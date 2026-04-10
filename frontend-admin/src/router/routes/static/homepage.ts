@@ -6,11 +6,11 @@ import { home } from "#src/router/extra-info";
 import { HomeFilled } from "@ant-design/icons";
 import { createElement, lazy } from "react";
 
-const Home = lazy(() => import("#src/pages/home"));
+const Home = lazy(() => import("#src/pages/homepage/index.js"));
 
 const routes: AppRouteRecordRaw[] = [
 	{
-		path: "/home",
+		path: "homepage",
 		Component: ContainerLayout,
 		handle: {
 			order: home,

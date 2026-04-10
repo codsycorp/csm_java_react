@@ -14,7 +14,7 @@ import { replaceBaseWithRoot } from "./utils";
 // 不需要登录路由的路由白名单
 const baseNoLoginWhiteList = Array.from(ROUTE_WHITE_LIST).filter(item => item !== LOGIN);
 
-const ADMIN_REDIRECT_PREFIXES = ["/home", "/system", "/personal-center", "/about", "/iframe", "/route-nest", "/auto-setup"];
+const ADMIN_REDIRECT_PREFIXES = ["homepage", "/system", "/personal-center", "/about", "/iframe", "/route-nest", "/auto-setup"];
 
 function normalizeAdminRedirect(rawRedirect: string | null | undefined): string | null {
 	if (!rawRedirect) return null;
@@ -86,7 +86,7 @@ export const routerBeforeEach: (reactRouter: ReactRouterType) => BlockerFunction
 	if (pathnameWithoutBase === "/login") {
 		const redirectParam = nextLocation.search.match(/[?&]redirect=([^&]*)/)?.[1];
 		const safeAdminRedirect = normalizeAdminRedirect(redirectParam);
-		const adminHomePath = import.meta.env.VITE_BASE_HOME_PATH || "/home";
+		const adminHomePath = import.meta.env.VITE_BASE_HOME_PATH || "/";
 		
 		// 如果有redirect=admin参数，跳转到admin home
 		if (redirectParam === "admin") {
@@ -244,7 +244,7 @@ export async function routerInitReady(reactRouter: ReactRouterType) {
 		// Kiểm tra redirect parameter
 		const redirectParam = new URLSearchParams(search).get("redirect");
 		const safeAdminRedirect = normalizeAdminRedirect(redirectParam);
-		const adminHomePath = import.meta.env.VITE_BASE_HOME_PATH || "/home";
+		const adminHomePath = import.meta.env.VITE_BASE_HOME_PATH || "/";
 		
 		if (redirectParam === "admin") {
 			// Redirect đến admin home

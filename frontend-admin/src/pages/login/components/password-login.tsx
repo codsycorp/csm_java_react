@@ -200,9 +200,9 @@ export function PasswordLogin() {
 				return { loginRes, userInfoResult };
 			})
 			.then(({ loginRes, userInfoResult }) => {
-				// Luôn điều hướng về /home sau đăng nhập, bỏ qua redirect param
+				// Luôn điều hướng về / (root) sau đăng nhập, bỏ qua redirect param
 				window.sessionStorage.setItem("forceAdminMode", "true");
-				navigate("/home", { replace: true });
+				navigate("/", { replace: true });
 			})
 			.catch(async (error: any) => {
 				console.error("[LOGIN] Login error:", error);

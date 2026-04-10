@@ -84,19 +84,7 @@ export default function App() {
 		i18n.changeLanguage(language);
 	}, [language, i18n.changeLanguage]);
 
-	// Đảm bảo luôn mở tab Trang Chủ khi login thành công hoặc reload mà chưa có tab nào
-	useReactEffect(() => {
-		const { openTabs, addTab, setActiveKey } = useTabsStore.getState();
-		if (!openTabs || openTabs.size === 0) {
-			addTab("/", {
-				key: "/",
-				label: i18n.t("common.menu.home"),
-				closable: false,
-				draggable: false,
-			});
-			setActiveKey("/");
-		}
-	}, []);
+	// ĐÃ LOẠI BỎ auto addTab Trang Chủ ở đây, sẽ add sau khi layout admin render thành công
 
 	/**
 	 * Change theme when the system theme changes

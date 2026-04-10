@@ -111,7 +111,7 @@ export function forceLogoutAndReload(reason?: string) {
       const base = import.meta.env.BASE_URL || "/";
       // Preserve a safe redirect only when on admin routes
       const redirect = 
-        typeof window !== "undefined" && /^(\/home|\/system\b|\/personal-center\b)/.test(window.location.pathname)
+        typeof window !== "undefined" && /^(\/homepage|\/system\b|\/personal-center\b)/.test(window.location.pathname)
           ? "?redirect=admin" : "";
       window.location.replace(`${base}login${redirect}`);
     } catch {

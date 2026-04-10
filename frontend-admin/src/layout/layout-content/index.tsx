@@ -1,21 +1,19 @@
+import { useTranslation } from "react-i18next";
 import React,{ useEffect, useMemo } from "react";
 import { csmDecrypt } from "#src/components/csm-grid/CsmCrypto";
 import { patchDynamicRoutesWithComponent } from "#src/router/patchDynamicRoutes";
 import { GlobalSpin, Scrollbar } from "#src/components";
 import { usePermissionStore, usePreferencesStore, useTabsStore } from "#src/store";
+import { useUserStore } from "#src/store/user";
 import { theme } from "antd";
 import KeepAlive, { useKeepaliveRef } from "keepalive-for-react";
 import { useLocation } from "react-router";
 
+
 export interface LayoutContentProps { }
 
-
-
-
 export default function LayoutContent() {
-	const {
-		token: { colorBgLayout },
-	} = theme.useToken();
+	const { token: { colorBgLayout } } = theme.useToken();
 	const { pathname } = useLocation();
 	const aliveRef = useKeepaliveRef();
 	const isRefresh = useTabsStore(state => state.isRefresh);
@@ -25,10 +23,29 @@ export default function LayoutContent() {
 	const transitionName = usePreferencesStore(state => state.transitionName);
 	const transitionEnable = usePreferencesStore(state => state.transitionEnable);
 	const activeKey = useTabsStore(state => state.activeKey);
+	const { i18n } = useTranslation();
+	const userId = useUserStore(state => state.userId);
+	useEffect(() => {
+		// eslint-disable-next-line no-console
+		console.log('[LayoutContent] userId:', userId, 'openTabs:', openTabs, 'pathname:', pathname);
+	}, [userId, openTabs, pathname]);
+
+	// Khi vào layout admin, nếu chưa có tab nào thì add tab Trang chủ với key '/'
+	useEffect(() => {
+		if (openTabs && openTabs.size === 0) {
+			useTabsStore.getState().addTab("/", {
+				key: "/",
+				label: i18n.t("common.menu.home"),
+				closable: false,
+				draggable: false,
+			});
+			useTabsStore.getState().setActiveKey("/");
+		}
+	}, [openTabs, i18n]);
 
 	// SPA: Luôn dùng activeKey làm cacheKey cho SPA tab
 	const cacheKey = useMemo(() => {
-		return activeKey || "/home";
+		return activeKey || "homepage";
 	}, [activeKey]);
 
 	// SPA: render component theo tab đang active, không phụ thuộc router path
@@ -71,7 +88,7 @@ export default function LayoutContent() {
 	if (!PatchedComponent) {
 		// Fallback về Home nếu không có component động
 		// Ưu tiên lấy đúng key đang có trong openTabs/flatRouteList
-		let homeKey = "/";
+		let homeKey = "homepage";
 		if (!flatRouteList[homeKey] && flatRouteList["/home"]) homeKey = "/home";
 		route = flatRouteList[homeKey];
 		PatchedComponent = route && route.Component ? route.Component : null;

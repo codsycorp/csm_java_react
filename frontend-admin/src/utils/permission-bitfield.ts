@@ -45,8 +45,8 @@ export type PermissionDataScope = "NONE" | "OWNER" | "DEPARTMENT" | "BRANCH" | "
 const KNOWN_MENU_BITS: Record<string, number> = {
 	dashboard: 0,
 	"/dashboard": 0,
-	home: 0,
-	"/home": 0,
+	homepage: 0,
+	"/homepage": 0,
 	user: 1,
 	"/system/user": 1,
 	role: 2,

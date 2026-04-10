@@ -118,7 +118,7 @@ export const useTabsStore = create<TabsState & TabsAction>()(
 					const newTabs = new Map(state.openTabs);
 					
 					// ALWAYS use new tabProps, but preserve closable/draggable for home
-					const isHome = routePath === (import.meta.env.VITE_BASE_HOME_PATH || "/home");
+					const isHome = routePath === (import.meta.env.VITE_BASE_HOME_PATH || "homepage");
 					newTabs.set(routePath, {
 						...tabProps,
 						// Preserve home's non-closable/draggable properties
@@ -134,7 +134,7 @@ export const useTabsStore = create<TabsState & TabsAction>()(
 			 */
 			removeTab: (routePath: string) => {
 				set((state) => {
-					const homePath = import.meta.env.VITE_BASE_HOME_PATH;
+					const homePath = import.meta.env.VITE_BASE_HOME_PATH || "homepage";
 
 					// 如果是首页，不允许关闭
 					if (routePath === homePath) {
@@ -205,7 +205,7 @@ export const useTabsStore = create<TabsState & TabsAction>()(
 			closeLeftTabs: (routePath: string) => {
 				set((state) => {
 					const newTabs = new Map();
-					const homePath = import.meta.env.VITE_BASE_HOME_PATH;
+					const homePath = import.meta.env.VITE_BASE_HOME_PATH || "homepage";
 					let found = false;
 					let newActiveKey = state.activeKey;
 					let activeKeyOnRight = false;
@@ -244,7 +244,7 @@ export const useTabsStore = create<TabsState & TabsAction>()(
 			closeOtherTabs: (routePath: string) => {
 				set((state) => {
 					const newTabs = new Map();
-					const homePath = import.meta.env.VITE_BASE_HOME_PATH;
+					const homePath = import.meta.env.VITE_BASE_HOME_PATH || "homepage";
 
 					// 保留首页标签
 					newTabs.set(homePath, state.openTabs.get(homePath)!);
@@ -270,7 +270,7 @@ export const useTabsStore = create<TabsState & TabsAction>()(
 			closeAllTabs: () => {
 				set((state) => {
 					const newTabs = new Map();
-					const homePath = import.meta.env.VITE_BASE_HOME_PATH;
+					const homePath = import.meta.env.VITE_BASE_HOME_PATH || "homepage";
 					newTabs.set(homePath, state.openTabs.get(homePath)!);
 					return { openTabs: newTabs, activeKey: homePath };
 				});
@@ -337,7 +337,7 @@ export const useTabsStore = create<TabsState & TabsAction>()(
 					if (!str || !isPersist)
 						return null;
 					const existingValue = JSON.parse(str);
-					const homePath = import.meta.env.VITE_BASE_HOME_PATH || "/home";
+					const homePath = import.meta.env.VITE_BASE_HOME_PATH || "homepage";
 
 					// Normalize restored openTabs to avoid duplicate home tabs (/ vs /home) and ensure home is not closable
 					const normalizedEntries: [string, any][] = [];

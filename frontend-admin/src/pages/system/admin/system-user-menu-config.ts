@@ -53,8 +53,7 @@ const PERMISSION_GROUP_OPTIONS = [
 export const MENU_PERMISSION_OPTIONS = [
 	{ value: "dashboard", label: "system.userPermission.menu.dashboard" },
 	{ value: "/dashboard", label: "system.userPermission.menu.dashboardPath" },
-	{ value: "home", label: "system.userPermission.menu.home" },
-	{ value: "/home", label: "system.userPermission.menu.homePath" },
+	{ value: "homepage", label: "system.userPermission.menu.home" },
 	{ value: "/system/user", label: "system.userPermission.menu.systemUser" },
 	{ value: "/system/dept", label: "system.userPermission.menu.systemDept" },
 	{ value: "/system/departments", label: "system.userPermission.menu.systemDepartments" },
@@ -195,13 +194,13 @@ export const DATA_SCOPE_OPTIONS_JSON = JSON.stringify({
 });
 
 const PERMISSION_PRESET_DEFINITIONS: Record<string, { permissions: string[]; menus: string[] }> = {
-	viewer: { permissions: ["view"], menus: ["/home"] },
-	editor: { permissions: ["view", "create", "edit"], menus: ["/dashboard", "/home", "/crm"] },
-	full_crud: { permissions: ["view", "create", "edit", "delete"], menus: ["/dashboard", "/home", "/crm"] },
-	full_crud_export: { permissions: ["view", "create", "edit", "delete", "export"], menus: ["/dashboard", "/home", "/crm"] },
+	viewer: { permissions: ["view"], menus: ["homepage"] },
+	editor: { permissions: ["view", "create", "edit"], menus: ["/dashboard", "homepage", "/crm"] },
+	full_crud: { permissions: ["view", "create", "edit", "delete"], menus: ["/dashboard", "homepage", "/crm"] },
+	full_crud_export: { permissions: ["view", "create", "edit", "delete", "export"], menus: ["/dashboard", "homepage", "/crm"] },
 	admin_full: {
 		permissions: ["admin", "view", "create", "edit", "delete", "export", "scope:all"],
-		menus: ["/system/user", "/system/dept", "/system/departments", "/system/branches", "/system/menu", "/dashboard", "/home", "/crm"],
+		menus: ["/system/user", "/system/dept", "/system/departments", "/system/branches", "/system/menu", "/dashboard", "homepage", "/crm"],
 	},
 };
 
@@ -380,7 +379,7 @@ function beforeSave(row, seft) {
 	}
 
 	function getDefaultFullMenus() {
-		return ["/dashboard", "/home", "/system/user", "/system/dept", "/system/departments", "/system/branches", "/system/menu", "/crm"];
+		return ["/dashboard", "homepage", "/system/user", "/system/dept", "/system/departments", "/system/branches", "/system/menu", "/crm"];
 	}
 
 	function rankScope(scope) {
@@ -474,14 +473,14 @@ function beforeSave(row, seft) {
 
 	function buildGroupMenus(groups) {
 		const map = {
-			admin: ["/system/user", "/system/menu", "/system/dept", "/dashboard", "/home", "/crm"],
-			system_admin: ["/system/user", "/system/menu", "/system/dept", "/dashboard", "/home", "/crm"],
-			dept_manager: ["/system/user", "/dashboard", "/home", "/crm"],
-			manager: ["/system/user", "/dashboard", "/home", "/crm"],
-			staff: ["/dashboard", "/home", "/crm"],
-			user: ["/home"],
-			common: ["/home"],
-			viewer: ["/dashboard", "/home"],
+			admin: ["/system/user", "/system/menu", "/system/dept", "/dashboard", "homepage", "/crm"],
+			system_admin: ["/system/user", "/system/menu", "/system/dept", "/dashboard", "homepage", "/crm"],
+			dept_manager: ["/system/user", "/dashboard", "homepage", "/crm"],
+			manager: ["/system/user", "/dashboard", "homepage", "/crm"],
+			staff: ["/dashboard", "homepage", "/crm"],
+			user: ["homepage"],
+			common: ["homepage"],
+			viewer: ["/dashboard", "homepage"],
 		};
 		const normalizedGroups = uniqueList(groups).map((item) => item.toLowerCase());
 		const collected = [];
@@ -507,11 +506,11 @@ function beforeSave(row, seft) {
 	function buildPresetMenus(preset) {
 		const normalized = String(preset || "").trim().toLowerCase();
 		const map = {
-			viewer: ["/home"],
-			editor: ["/dashboard", "/home", "/crm"],
-			full_crud: ["/dashboard", "/home", "/crm"],
-			full_crud_export: ["/dashboard", "/home", "/crm"],
-			admin_full: ["/system/user", "/system/menu", "/system/dept", "/dashboard", "/home", "/crm"],
+			viewer: ["homepage"],
+			editor: ["/dashboard", "homepage", "/crm"],
+			full_crud: ["/dashboard", "homepage", "/crm"],
+			full_crud_export: ["/dashboard", "homepage", "/crm"],
+			admin_full: ["/system/user", "/system/menu", "/system/dept", "/dashboard", "homepage", "/crm"],
 		};
 		return uniqueList(map[normalized] || []);
 	}
@@ -527,8 +526,8 @@ function beforeSave(row, seft) {
 		const menuBitMap = {
 			dashboard: 0,
 			"/dashboard": 0,
-			home: 0,
-			"/home": 0,
+			homepage: 0,
+			"homepage": 0,
 			user: 1,
 			"/system/user": 1,
 			menu: 3,
@@ -951,14 +950,14 @@ function beforeSave(row, seft) {
 
 	function buildGroupMenus(groups) {
 		const map = {
-			admin: ["/system/user", "/system/menu", "/system/dept", "/dashboard", "/home", "/crm"],
-			system_admin: ["/system/user", "/system/menu", "/system/dept", "/dashboard", "/home", "/crm"],
-			dept_manager: ["/system/user", "/dashboard", "/home", "/crm"],
-			manager: ["/system/user", "/dashboard", "/home", "/crm"],
-			staff: ["/dashboard", "/home", "/crm"],
-			user: ["/home"],
-			common: ["/home"],
-			viewer: ["/dashboard", "/home"],
+			admin: ["/system/user", "/system/menu", "/system/dept", "/dashboard", "homepage", "/crm"],
+			system_admin: ["/system/user", "/system/menu", "/system/dept", "/dashboard", "homepage", "/crm"],
+			dept_manager: ["/system/user", "/dashboard", "homepage", "/crm"],
+			manager: ["/system/user", "/dashboard", "homepage", "/crm"],
+			staff: ["/dashboard", "homepage", "/crm"],
+			user: ["homepage"],
+			common: ["homepage"],
+			viewer: ["/dashboard", "homepage"],
 		};
 		const normalizedGroups = uniqueList(groups).map((item) => item.toLowerCase());
 		const collected = [];
@@ -984,11 +983,11 @@ function beforeSave(row, seft) {
 	function buildPresetMenus(preset) {
 		const normalized = String(preset || "").trim().toLowerCase();
 		const map = {
-			viewer: ["/home"],
-			editor: ["/dashboard", "/home", "/crm"],
-			full_crud: ["/dashboard", "/home", "/crm"],
-			full_crud_export: ["/dashboard", "/home", "/crm"],
-			admin_full: ["/system/user", "/system/menu", "/system/dept", "/dashboard", "/home", "/crm"],
+			viewer: ["homepage"],
+			editor: ["/dashboard", "homepage", "/crm"],
+			full_crud: ["/dashboard", "homepage", "/crm"],
+			full_crud_export: ["/dashboard", "homepage", "/crm"],
+			admin_full: ["/system/user", "/system/menu", "/system/dept", "/dashboard", "homepage", "/crm"],
 		};
 		return uniqueList(map[normalized] || []);
 	}
@@ -1004,8 +1003,8 @@ function beforeSave(row, seft) {
 		const menuBitMap = {
 			dashboard: 0,
 			"/dashboard": 0,
-			home: 0,
-			"/home": 0,
+			homepage: 0,
+			"/homepage": 0,
 			user: 1,
 			"/system/user": 1,
 			menu: 3,
@@ -1291,11 +1290,11 @@ function buildPresetPermissions(preset) {
 function buildPresetMenus(preset) {
 	const normalized = String(preset || "").trim().toLowerCase();
 	const map = {
-		viewer: ["/home"],
-		editor: ["/dashboard", "/home", "/crm"],
-		full_crud: ["/dashboard", "/home", "/crm"],
-		full_crud_export: ["/dashboard", "/home", "/crm"],
-		admin_full: ["/system/user", "/system/menu", "/system/dept", "/dashboard", "/home", "/crm"],
+		viewer: ["homepage"],
+		editor: ["/dashboard", "homepage", "/crm"],
+		full_crud: ["/dashboard", "homepage", "/crm"],
+		full_crud_export: ["/dashboard", "homepage", "/crm"],
+		admin_full: ["/system/user", "/system/menu", "/system/dept", "/dashboard", "homepage", "/crm"],
 	};
 	return uniqueList(map[normalized] || []);
 }
@@ -1322,14 +1321,14 @@ function buildGroupPermissionsFallback(groups) {
 
 function buildGroupMenusFallback(groups) {
 	const map = {
-		admin: ["/system/user", "/system/menu", "/system/dept", "/dashboard", "/home", "/crm"],
-		system_admin: ["/system/user", "/system/menu", "/system/dept", "/dashboard", "/home", "/crm"],
-		dept_manager: ["/system/user", "/dashboard", "/home", "/crm"],
-		manager: ["/system/user", "/dashboard", "/home", "/crm"],
-		staff: ["/dashboard", "/home", "/crm"],
-		user: ["/home"],
-		common: ["/home"],
-		viewer: ["/dashboard", "/home"],
+		admin: ["/system/user", "/system/menu", "/system/dept", "/dashboard", "homepage", "/crm"],
+		system_admin: ["/system/user", "/system/menu", "/system/dept", "/dashboard", "homepage", "/crm"],
+		dept_manager: ["/system/user", "/dashboard", "homepage", "/crm"],
+		manager: ["/system/user", "/dashboard", "homepage", "/crm"],
+		staff: ["/dashboard", "homepage", "/crm"],
+		user: ["homepage"],
+		common: ["homepage"],
+		viewer: ["/dashboard", "homepage"],
 	};
 	const normalizedGroups = uniqueList(groups).map((item) => item.toLowerCase());
 	const collected = [];
@@ -1387,7 +1386,7 @@ function toBitfield(permissions, menusPermissions, dataScope) {
 	const actionBitMap = { view: 0, create: 1, edit: 2, delete: 3, export: 4 };
 	const menuBitMap = {
 		dashboard: 0, "/dashboard": 0,
-		home: 0, "/home": 0,
+		homepage: 0, "/homepage": 0,
 		user: 1, "/system/user": 1,
 		menu: 3, "/system/menu": 3,
 		dept: 4, "/system/dept": 4,
@@ -1513,18 +1512,18 @@ function beforeSave(row, seft) {
 	function buildPresetMenus(preset) {
 		const normalized = String(preset || "").trim().toLowerCase();
 		const map = {
-			viewer: ["/home"],
-			editor: ["/dashboard", "/home", "/crm"],
-			full_crud: ["/dashboard", "/home", "/crm"],
-			full_crud_export: ["/dashboard", "/home", "/crm"],
-			admin_full: ["/system/user", "/system/menu", "/system/dept", "/dashboard", "/home", "/crm"],
+			viewer: ["homepage"],
+			editor: ["/dashboard", "homepage", "/crm"],
+			full_crud: ["/dashboard", "homepage", "/crm"],
+			full_crud_export: ["/dashboard", "homepage", "/crm"],
+			admin_full: ["/system/user", "/system/menu", "/system/dept", "/dashboard", "homepage", "/crm"],
 		};
 		return uniqueList(map[normalized] || []);
 	}
 	function toBitfield(row) {
 		const actionBitMap = { view: 0, create: 1, edit: 2, delete: 3, export: 4 };
 		const menuBitMap = {
-			dashboard: 0, "/dashboard": 0, home: 0, "/home": 0,
+			dashboard: 0, "/dashboard": 0, homepage: 0, "/homepage": 0,
 			user: 1, "/system/user": 1,
 			menu: 3, "/system/menu": 3,
 			dept: 4, "/system/dept": 4, "permission-group": 4,

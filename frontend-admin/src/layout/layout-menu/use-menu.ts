@@ -395,17 +395,17 @@ export function useMenu() {
 	 * 菜单点击事件处理
 	 */
 	const handleMenuSelect = (key: string, mode: MenuProps["mode"]) => {
-		// Home: luôn dùng '/' làm key, không bao giờ dùng '/home'
+		// Home: luôn dùng 'homepage' làm key
 		let normalizedKey = key;
-		if (key === "/home" || key === "/") {
+		if (key === "homepage") {
 			normalizedKey = "/";
-			addTab("/", {
-				key: "/",
+			addTab("homepage", {
+				key: "homepage",
 				label: t("common.menu.home"),
 				closable: false,
 				draggable: false,
 			});
-			setActiveKey("/");
+			setActiveKey("homepage");
 			return;
 		}
 
