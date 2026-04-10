@@ -1,11 +1,9 @@
-import React from "react";
+import React,{ useEffect, useMemo } from "react";
 import { patchDynamicRoutesWithComponent } from "#src/router/patchDynamicRoutes";
 import { GlobalSpin, Scrollbar } from "#src/components";
-import { removeTrailingSlash } from "#src/router/utils";
 import { usePermissionStore, usePreferencesStore, useTabsStore } from "#src/store";
 import { theme } from "antd";
 import KeepAlive, { useKeepaliveRef } from "keepalive-for-react";
-import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "react-router";
 
 export interface LayoutContentProps { }
@@ -35,33 +33,62 @@ export default function LayoutContent() {
 	// SPA: render component theo tab đang active, không phụ thuộc router path
 
 
+
+
 	const tab = openTabs.get(activeKey);
 	let route = flatRouteList[activeKey];
 	let PatchedComponent: any = null;
+
+	// Memo hóa props cho các tab tĩnh để tránh tạo object mới mỗi lần render
+	const staticSystemPaths = useMemo(() => ([
+		"/system/user", "/system/menu", "/system/developer", "/system/broadcast",
+		"/system/dept", "/system/role", "/system/roles", "/system/departments", "/system/branches", "/system/grid/:menuId"
+	]), []);
+	const staticTabPropsMap = useMemo(() => {
+		const map = new Map<string, { key: string; label: any }>();
+		for (const path of staticSystemPaths) {
+			const staticTab = openTabs.get(path);
+			if (staticTab) {
+				map.set(path, { key: staticTab.key, label: staticTab.label });
+			}
+		}
+		return map;
+	}, [openTabs, staticSystemPaths]);
+
+	let tabProps: any = tab;
+
 	if (route && tab) {
-		// Patch lại route động mỗi lần render để lấy đúng Component
+		// Patch lại route động mỗi lần render để lấy đúng Component (chuẩn SPA)
 		const patched = patchDynamicRoutesWithComponent([{ ...route, ...tab }]);
 		if (patched && patched[0] && patched[0].Component) {
 			PatchedComponent = patched[0].Component;
+			// Với các tab hệ thống, luôn truyền toàn bộ tab object (tabProps = tab) để AdminPage nhận đủ props động
+			// Không dùng staticTabPropsMap cho các tab hệ thống nữa
+			// tabProps = tab luôn đúng cho SPA/tabbar
 		}
 	}
 	if (!PatchedComponent) {
 		// Fallback về Home nếu không có component động
-		route = flatRouteList["/home"];
+		// Ưu tiên lấy đúng key đang có trong openTabs/flatRouteList
+		let homeKey = "/";
+		if (!flatRouteList[homeKey] && flatRouteList["/home"]) homeKey = "/home";
+		route = flatRouteList[homeKey];
 		PatchedComponent = route && route.Component ? route.Component : null;
+		// Lấy đúng tabProps cho Home
+		tabProps = openTabs.get(homeKey) || tab;
 	}
 	// Log props để debug (luôn log khi render)
-	if (PatchedComponent && tab) {
+	if (PatchedComponent && tabProps) {
 		// eslint-disable-next-line no-console
 		console.log('TabComponent render:', {
 			PatchedComponent,
-			tab,
+			tab: tabProps,
 			activeKey,
 			flatRouteList
 		});
 	}
-	const TabComponent = PatchedComponent && tab
-		? () => React.createElement(PatchedComponent, { ...tab })
+	const TabComponent = PatchedComponent && tabProps
+		? () => React.createElement(PatchedComponent, { ...tabProps })
 		: null;
 
 	// KeepAlive logic giữ nguyên

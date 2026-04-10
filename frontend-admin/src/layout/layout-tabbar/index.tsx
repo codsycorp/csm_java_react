@@ -20,6 +20,14 @@ import { TabOptions } from "./components/tab-options";
 import { TabActionKeys, useDropdownMenu } from "./hooks/use-dropdown-menu";
 import { useStyles } from "./style";
 
+// Helper: ưu tiên chọn tab Home nếu có
+function getDefaultTabKey(openTabs: Map<string, any>) {
+	if (openTabs.has("/")) return "/";
+	if (openTabs.has("/home")) return "/home";
+	const first = openTabs.keys().next();
+	return first && typeof first.value === "string" ? first.value : "";
+}
+
 /**
  * LayoutTabbar 组件
  * 用于渲染和管理应用程序的标签页导航
@@ -275,6 +283,14 @@ export default function LayoutTabbar() {
 	// ĐÃ ĐỒNG BỘ SPA: Không tự động mở tab Home khi vào app, chỉ mở khi click menu
 
 	// ĐÃ ĐỒNG BỘ SPA: Không tự động mở tab Home khi vào '/', chỉ mở khi click menu
+
+	// Khi reload lại trang, nếu activeKey rỗng hoặc không tồn tại trong openTabs thì tự động setActiveKey về tab đầu tiên (ưu tiên / hoặc /home)
+	useEffect(() => {
+		if (!activeKey || !openTabs.has(activeKey)) {
+			const defaultKey = getDefaultTabKey(openTabs);
+			if (defaultKey) setActiveKey(defaultKey);
+		}
+	}, [activeKey, openTabs, setActiveKey]);
 
 	return (
 		<div className={classes.tabsContainer}>

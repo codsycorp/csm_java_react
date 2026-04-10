@@ -11,10 +11,16 @@ import { Suspense, useCallback, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { RouterProvider } from "react-router/dom";
 
+
 import { router } from "./router";
 import { customAntdDarkTheme, customAntdLightTheme } from "./styles/theme/antd/antd-theme";
+import { ChatHistoryProvider } from "#src/contexts/ChatHistoryContext";
 import "dayjs/locale/zh-cn";
 import "dayjs/locale/vi";
+
+// Thêm import cho tabbar store
+import { useTabsStore } from "#src/store/tabs";
+import { useEffect as useReactEffect } from "react";
 
 export default function App() {
 	const { i18n } = useTranslation();
@@ -78,6 +84,20 @@ export default function App() {
 		i18n.changeLanguage(language);
 	}, [language, i18n.changeLanguage]);
 
+	// Đảm bảo luôn mở tab Trang Chủ khi login thành công hoặc reload mà chưa có tab nào
+	useReactEffect(() => {
+		const { openTabs, addTab, setActiveKey } = useTabsStore.getState();
+		if (!openTabs || openTabs.size === 0) {
+			addTab("/", {
+				key: "/",
+				label: i18n.t("common.menu.home"),
+				closable: false,
+				draggable: false,
+			});
+			setActiveKey("/");
+		}
+	}, []);
+
 	/**
 	 * Change theme when the system theme changes
 	 */
@@ -131,32 +151,34 @@ export default function App() {
 	}, [colorBlindMode, colorGrayMode]);
 
 	return (
-		<ConfigProvider
-			input={{ autoComplete: "off" }}
-			locale={getAntdLocale()}
-			theme={{
-				cssVar: true,
-				hashed: false,
-				algorithm:
-					isDark
-						? antdTheme.darkAlgorithm
-						: antdTheme.defaultAlgorithm,
-				...(isDark ? customAntdDarkTheme : customAntdLightTheme),
-				token: {
-					...(isDark ? customAntdDarkTheme.token : customAntdLightTheme.token),
-					borderRadius: themeRadius,
-					colorPrimary: themeColorPrimary,
-				},
-			}}
-		>
-			<AntdApp>
-				<JSSThemeProvider>
-					<Suspense fallback={null}>
-						{import.meta.env.VITE_APP_VERSION_MONITOR === "Y" ? <AppVersionMonitor /> : null}
-						<RouterProvider router={router} />
-					</Suspense>
-				</JSSThemeProvider>
-			</AntdApp>
-		</ConfigProvider>
+		   <ConfigProvider
+			   input={{ autoComplete: "off" }}
+			   locale={getAntdLocale()}
+			   theme={{
+				   cssVar: true,
+				   hashed: false,
+				   algorithm:
+					   isDark
+						   ? antdTheme.darkAlgorithm
+						   : antdTheme.defaultAlgorithm,
+				   ...(isDark ? customAntdDarkTheme : customAntdLightTheme),
+				   token: {
+					   ...(isDark ? customAntdDarkTheme.token : customAntdLightTheme.token),
+					   borderRadius: themeRadius,
+					   colorPrimary: themeColorPrimary,
+				   },
+			   }}
+		   >
+			   <ChatHistoryProvider>
+				   <AntdApp>
+					   <JSSThemeProvider>
+						   <Suspense fallback={null}>
+							   {import.meta.env.VITE_APP_VERSION_MONITOR === "Y" ? <AppVersionMonitor /> : null}
+							   <RouterProvider router={router} />
+						   </Suspense>
+					   </JSSThemeProvider>
+				   </AntdApp>
+			   </ChatHistoryProvider>
+		   </ConfigProvider>
 	);
 }
