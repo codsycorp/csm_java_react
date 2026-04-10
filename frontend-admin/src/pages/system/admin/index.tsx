@@ -56,7 +56,7 @@ function buildStruct(defaultValue: Record<string, any>, fieldsPK: string[], fiel
 	};
 }
 
-const SYSTEM_ROUTE_TABLE_SCHEMAS: Record<string, TableBootstrapDefinition[]> = {
+export const SYSTEM_ROUTE_TABLE_SCHEMAS: Record<string, TableBootstrapDefinition[]> = {
 	"/system/dept": [
 		{
 			tableName: "csm_roles",
