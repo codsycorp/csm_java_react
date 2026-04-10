@@ -66,11 +66,11 @@ export default function LayoutTabbar() {
 			...item,
 			closable: isHome ? false : (item.closable ?? true),
 			draggable: isHome ? false : (item.draggable ?? true),
-			label: (
-				<div className="relative flex items-center gap-1">
-					{isHome ? t("home") : (isString(item.label) ? item.label : item.label)}
-				</div>
-			),
+			       label: (
+				       <div className="relative flex items-center gap-1">
+					       {isHome ? t("menu.home") : (isString(item.label) ? item.label : item.label)}
+				       </div>
+			       ),
 		};
 	});
 

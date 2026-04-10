@@ -38,17 +38,30 @@ export function BreadcrumbViews() {
 		}
 	}
 
-	// Nếu có label từ tabbar, chỉ hiện 1 breadcrumb
-	if (tabLabel) {
-		return (
-			<Breadcrumb
-				className="hidden md:block"
-				separator="->"
-				itemRender={itemRender}
-				items={[{ title: tabLabel, path: activeKey }]}
-			/>
-		);
-	}
+
+	       // Nếu có label từ tabbar, chỉ hiện 1 breadcrumb
+	       if (tabLabel) {
+		       return (
+			       <Breadcrumb
+				       className="hidden md:block"
+				       separator="->"
+				       itemRender={itemRender}
+				       items={[{ title: tabLabel, path: activeKey }]}
+			       />
+		       );
+	       }
+
+	       // Nếu là homepage, luôn dịch đúng label
+	       if (activeKey === "homepage") {
+		       return (
+			       <Breadcrumb
+				       className="hidden md:block"
+				       separator="->"
+				       itemRender={itemRender}
+				       items={[{ title: t("menu.home"), path: "homepage" }]}
+			       />
+		       );
+	       }
 
 	// Fallback: vẫn dùng matches nếu không có tab (trường hợp đặc biệt)
 	return (

@@ -35,7 +35,7 @@ export default function LayoutContent() {
 		if (openTabs && openTabs.size === 0) {
 			useTabsStore.getState().addTab("homepage", {
 				key: "homepage",
-				label: i18n.t("home"),
+				   label: i18n.t("menu.home"),
 				closable: false,
 				draggable: false,
 			});
