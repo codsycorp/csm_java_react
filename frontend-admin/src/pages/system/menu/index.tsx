@@ -506,7 +506,7 @@ export default function Menu() {
 		);
 	};
 
-	// Reload menu data when selectedApp changes
+	// Reload menu data when selectedApp changes (local only, do NOT affect global sidebar/tabbar)
 	useEffect(() => {
 		if (!selectedApp) return;
 
@@ -527,10 +527,7 @@ export default function Menu() {
 		};
 
 		loadMenuData();
-		// Update global app store and reload sidebar menu
-		setCurrentAppId(selectedApp);
-		handleAsyncRoutes(selectedApp);
-	}, [selectedApp, t, setCurrentAppId, handleAsyncRoutes]);
+	}, [selectedApp, t]);
 
 	const handleDeleteRow = async (id: string) => {
 		try {
@@ -561,13 +558,18 @@ export default function Menu() {
 		buildFlatParentMenus(normalized);
 	};
 
-	const handleApplyAiMenu = async (menus: MenuItemType[]) => {
+	// Khi user muốn áp dụng menu mới cho sidebar/app global, mới gọi setCurrentAppId & handleAsyncRoutes
+	const handleApplyAiMenu = async (menus: MenuItemType[], applyToSidebar = false) => {
 		if (!selectedApp) {
 			window.$message?.warning(t("system.menu.pleaseSelectApp"));
 			return;
 		}
 		await saveMenuStruct(selectedApp, menus);
 		await refreshTable();
+		if (applyToSidebar) {
+			setCurrentAppId(selectedApp);
+			handleAsyncRoutes(selectedApp);
+		}
 		window.$message?.success(t("system.menu.savedSuccess"));
 	};
 
