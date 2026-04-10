@@ -30,16 +30,16 @@ export default function LayoutContent() {
 		console.log('[LayoutContent] userId:', userId, 'openTabs:', openTabs, 'pathname:', pathname);
 	}, [userId, openTabs, pathname]);
 
-	// Khi vào layout admin, nếu chưa có tab nào thì add tab Trang chủ với key '/'
+	// Khi vào layout admin, nếu chưa có tab nào thì add tab Trang chủ với key 'homepage'
 	useEffect(() => {
 		if (openTabs && openTabs.size === 0) {
-			useTabsStore.getState().addTab("/", {
-				key: "/",
-				label: i18n.t("common.menu.home"),
+			useTabsStore.getState().addTab("homepage", {
+				key: "homepage",
+				label: i18n.t("home"),
 				closable: false,
 				draggable: false,
 			});
-			useTabsStore.getState().setActiveKey("/");
+			useTabsStore.getState().setActiveKey("homepage");
 		}
 	}, [openTabs, i18n]);
 

@@ -389,13 +389,13 @@ const STATUS_OPTIONS_JSON = JSON.stringify({
 });
 
 const PRESET_RULES: Record<string, { permissions: string[]; menus: string[] }> = {
-	viewer: { permissions: ["view"], menus: ["/home"] },
-	editor: { permissions: ["view", "create", "edit"], menus: ["/dashboard", "/home", "/crm"] },
-	full_crud: { permissions: ["view", "create", "edit", "delete"], menus: ["/dashboard", "/home", "/crm"] },
-	full_crud_export: { permissions: ["view", "create", "edit", "delete", "export"], menus: ["/dashboard", "/home", "/crm"] },
+	viewer: { permissions: ["view"], menus: ["homepage"] },
+	editor: { permissions: ["view", "create", "edit"], menus: ["/dashboard", "homepage", "/crm"] },
+	full_crud: { permissions: ["view", "create", "edit", "delete"], menus: ["/dashboard", "homepage", "/crm"] },
+	full_crud_export: { permissions: ["view", "create", "edit", "delete", "export"], menus: ["/dashboard", "homepage", "/crm"] },
 	admin_full: {
 		permissions: ["admin", "view", "create", "edit", "delete", "export", "scope:all"],
-		menus: ["/system/user", "/system/dept", "/system/departments", "/system/branches", "/system/menu", "/dashboard", "/home", "/crm"],
+		menus: ["/system/user", "/system/dept", "/system/departments", "/system/branches", "/system/menu", "/dashboard", "homepage", "/crm"],
 	},
 };
 

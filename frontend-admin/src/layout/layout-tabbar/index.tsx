@@ -61,14 +61,14 @@ export default function LayoutTabbar() {
 	// }, [openTabs]);
 
 	const tabItems: TabItemProps[] = Array.from(openTabs.values()).map(item => {
-		const isHome = item.key === "/";
+		const isHome = item.key === "homepage";
 		return {
 			...item,
 			closable: isHome ? false : (item.closable ?? true),
 			draggable: isHome ? false : (item.draggable ?? true),
 			label: (
 				<div className="relative flex items-center gap-1">
-					{isString(item.label) ? item.label : item.label}
+					{isHome ? t("home") : (isString(item.label) ? item.label : item.label)}
 				</div>
 			),
 		};

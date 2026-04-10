@@ -14,7 +14,7 @@ const routes: AppRouteRecordRaw[] = [
 		Component: ContainerLayout,
 		handle: {
 			order: home,
-			title: $t("common.menu.home"),
+			title: $t("home"),
 			icon: createElement(HomeFilled),
 			// keepAlive: true (default)
 		},
@@ -23,7 +23,7 @@ const routes: AppRouteRecordRaw[] = [
 				index: true,
 				Component: Home,
 				handle: {
-					title: $t("common.menu.home"),
+					title: $t("home"),
 					icon: createElement(HomeFilled),
 					// keepAlive: true (default)
 				},
