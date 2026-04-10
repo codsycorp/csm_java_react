@@ -1183,7 +1183,7 @@ export default function AdminPage() {
 			await ensureSystemRouteTables();
 
 			const response = await getTableData<any>({
-				app_id: primaryTableAppId,
+				app_id: (primaryTable === "csm_accounts" || primaryTable === "csm_group_members") ? "csm" : primaryTableAppId,
 				obj_name: primaryTable,
 				where: defaultFilter
 			});
@@ -1212,7 +1212,7 @@ export default function AdminPage() {
 					try {
 						const tableAppId = resolveTableAppId(t);
 						const tableFilter: any = JSON.parse(JSON.stringify(defaultFilter));
-						const resT = await getTableData<any>({ app_id: tableAppId, obj_name: t, where: tableFilter });
+						const resT = await getTableData<any>({ app_id: (t === "csm_accounts" || t === "csm_group_members") ? "csm" : tableAppId, obj_name: t, where: tableFilter });
 						const rowsT = (resT as any).rows || (resT as any).data || [];
 						const pkT = (resT as any).fieldsPK || ["id"];
 						newDatabase[t] = { rows: rowsT, fieldsPK: pkT };
@@ -1245,7 +1245,7 @@ export default function AdminPage() {
 					const tableAppId = resolveTableAppId(depTable);
 					const tableFilter: any = JSON.parse(JSON.stringify(defaultFilter));
 					const depResponse = await getTableData<any>({
-						app_id: tableAppId,
+						app_id: (depTable === "csm_accounts" || depTable === "csm_group_members") ? "csm" : tableAppId,
 						obj_name: depTable,
 						where: tableFilter
 					});
