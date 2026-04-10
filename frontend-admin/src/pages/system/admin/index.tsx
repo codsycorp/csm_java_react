@@ -660,7 +660,7 @@ export default function AdminPage() {
 	const userPermissionBitfieldRaw = useUserStore(state => (state as any).permissionBitfield as any);
 	const isDevUser = resolveDevFlag(devFlag, userRoles);
 	const isAdminUser = !isDevUser && isSuperPermissionProfile(toPermissionBigInt(userPermissionBitfieldRaw));
-	const isSystemUserRoute = (menuId === "user") || (location.pathname === "/system/user");
+	const isSystemUserRoute = (menuId === "user");
 	// Prefer logged-in user's app_id; fallback to selected app or localStorage default
 	const appId = (userAppId && userAppId.trim())
 		|| (currentAppId && currentAppId.trim())
@@ -807,7 +807,7 @@ export default function AdminPage() {
 	}, [isSystemUserRoute, isDevUser, isAdminUser, t, appId, systemUserActorType, userPermissionsRaw, userMenusPermissionsRaw, runtimeDataScope]);
 
 	const normalizeKnownSystemMenu = useCallback((menu: any = {}): any => {
-		if (location.pathname === "/system/role" || location.pathname === "/system/roles") {
+		if (menuId === "role" || menuId === "roles") {
 			const configuredTable = Array.isArray(menu?.table) && menu.table.length > 0 ? menu.table : buildRoleMenuFields(
 				t,
 				tEn,
@@ -820,7 +820,7 @@ export default function AdminPage() {
 			return normalizeMenuRuntimeConfig({
 				...menu,
 				id: "permission-group",
-				path: location.pathname,
+				path: `/system/${menuId}`,
 				label: t("common.menu.permissionGroup"),
 				label_vi: t("common.menu.permissionGroup"),
 				label_en: tEn("common.menu.permissionGroup"),
@@ -842,7 +842,7 @@ export default function AdminPage() {
 			});
 		}
 
-		if (location.pathname === "/system/dept") {
+		if (menuId === "dept") {
 			const configuredTable = Array.isArray(menu?.table) && menu.table.length > 0 ? menu.table : buildRoleMenuFields(
 				t,
 				tEn,
@@ -877,7 +877,7 @@ export default function AdminPage() {
 			});
 		}
 
-		if (location.pathname === "/system/departments") {
+		if (menuId === "departments") {
 			const configuredTable = Array.isArray(menu?.table) && menu.table.length > 0 ? menu.table : buildDeptMenuFields(t, tEn, tZh);
 			return normalizeMenuRuntimeConfig({
 				...menu,
@@ -900,7 +900,7 @@ export default function AdminPage() {
 			});
 		}
 
-		if (location.pathname === "/system/branches") {
+		if (menuId === "branches") {
 			const configuredTable = Array.isArray(menu?.table) && menu.table.length > 0 ? menu.table : buildBranchMenuFields(t, tEn, tZh);
 			return normalizeMenuRuntimeConfig({
 				...menu,
@@ -924,7 +924,7 @@ export default function AdminPage() {
 		}
 
 		return normalizeMenuRuntimeConfig(menu);
-	}, [location.pathname, t, tEn, tZh, appId, roleFieldConstraints]);
+	}, [menuId, t, tEn, tZh, appId, roleFieldConstraints]);
 
 	// Centralized refresh hook for dynamic grid/report/crm widgets.
 	const handleDataChange = useCallback(() => {
@@ -969,16 +969,16 @@ export default function AdminPage() {
 
 	const enforceCanonicalSystemRouteMenu = useCallback((rawMenu: any = {}): any => {
 		const normalized = normalizeMenuRuntimeConfig(rawMenu || {});
-		if (location.pathname === "/system/role" || location.pathname === "/system/roles") {
+		if (menuId === "role" || menuId === "roles") {
 			return normalizeMenuRuntimeConfig({
 				...normalized,
 				id: "permission-group",
-				path: location.pathname,
+				path: `/system/${menuId}`,
 				table_name: "csm_roles",
 				app_id: normalized.app_id || appId,
 			});
 		}
-		if (location.pathname === "/system/dept") {
+		if (menuId === "dept") {
 			return normalizeMenuRuntimeConfig({
 				...normalized,
 				id: "permission-group",
@@ -987,7 +987,7 @@ export default function AdminPage() {
 				app_id: normalized.app_id || appId,
 			});
 		}
-		if (location.pathname === "/system/user") {
+		if (menuId === "user") {
 			const actorTableName = isDevUser ? "csm_accounts" : "csm_group_members";
 			return normalizeMenuRuntimeConfig({
 				...normalized,
@@ -997,7 +997,7 @@ export default function AdminPage() {
 				app_id: "csm",
 			});
 		}
-		if (location.pathname === "/system/departments") {
+		if (menuId === "departments") {
 			return normalizeMenuRuntimeConfig({
 				...normalized,
 				id: "departments",
@@ -1006,7 +1006,7 @@ export default function AdminPage() {
 				app_id: normalized.app_id || appId,
 			});
 		}
-		if (location.pathname === "/system/branches") {
+		if (menuId === "branches") {
 			return normalizeMenuRuntimeConfig({
 				...normalized,
 				id: "branches",
@@ -1016,210 +1016,41 @@ export default function AdminPage() {
 			});
 		}
 		return normalized;
-	}, [location.pathname, isDevUser, appId]);
+	}, [menuId, isDevUser, appId]);
 
-	// Find menu in tree or get from location state
+
+	// Refactor: Lấy menuData từ tab state hoặc menuId props, không dùng location.pathname
 	useEffect(() => {
-		// Try to get menu data from navigation state first (faster)
-		const locationState = location.state as any;
-		if (locationState?.menuData) {
-			const roleMenu = buildUserMenuByRole(locationState.menuData);
-			const withLabel = normalizeKnownSystemMenu({
-				...roleMenu,
-				label: resolveDisplayLabel(roleMenu),
-			});
-			const canonicalMenu = enforceCanonicalSystemRouteMenu(withLabel);
-			setMenuData(canonicalMenu);
-			const cleanLabel = resolveDisplayLabel(canonicalMenu);
-			addTab(location.pathname, {
-				key: location.pathname,
-				label: cleanLabel,
-				closable: true,
-				draggable: true,
-				historyState: { search: location.search, hash: location.hash },
-			});
-			useTabsStore.getState().setActiveKey(location.pathname);
-			setLoading(false);
-			if (selectedMenuIdForTab === menuId) {
-				useUserStore.getState().setSelectedMenuIdForTab("");
-			}
-			return;
-		}
-
-		// Fallback: search in tree
-		const findMenuInTree = (menus: any[], targetId: string): any => {
-			for (const menu of menus) {
-				// Match by id, key, or path to support routes like /system/user
-				if (menu.id === targetId || menu.key === targetId || menu.path === targetId) return menu;
-				if (menu.children?.length) {
-					const found = findMenuInTree(menu.children, targetId);
-					if (found) return found;
-				}
-			}
-			return null;
-		};
-		// Use menuId from params if available, else fallback to current pathname
-		const targetId = menuId || location.pathname;
-		if (targetId) {
-			let found = apiWholeMenus.length > 0 ? findMenuInTree(apiWholeMenus, targetId) : null;
-			// If not found or missing table_name, apply known fallbacks
-			if (!found || !found.table_name) {
-				   const FALLBACK_MENU_MAP: Record<string, any> = {
-					   "/system/user": {
-						   id: "user",
-						   path: "/system/user",
-						   label: t("common.menu.user"),
-						   table_name: isDevUser ? "csm_accounts" : "csm_group_members",
-						   app_id: "csm",
-						   type_form: 1,
-						   row_type_edit: 0,
-						   g_readonly: false,
-					   },
-
-					   "/system/dept": {
-						   id: "permission-group",
-						   path: "/system/dept",
-						   label: t("common.menu.permissionGroup"),
-						   label_vi: t("common.menu.permissionGroup"),
-						   label_en: tEn("common.menu.permissionGroup"),
-						   label_zh: tZh("common.menu.permissionGroup"),
-						   table_name: "csm_roles",
-						   app_id: appId,
-						   type_form: 1,
-						   row_type_edit: 0,
-						   g_readonly: false,
-						   table: buildRoleMenuFields(
-							   t,
-							   tEn,
-							   tZh,
-							   roleFieldConstraints.permissionOptions,
-							   roleFieldConstraints.menuOptions,
-							   roleFieldConstraints.presetOptionsQuery,
-							   roleFieldConstraints.dataScopeOptionsQuery,
-						   ),
-						   trigger: { beforeSave: PERMISSION_GROUP_BEFORE_SAVE },
-						   struct: {
-							   fieldsPK: ["id", "role_code"],
-						   },
-					   },
-					   "/system/role": {
-						   id: "permission-group",
-						   path: "/system/role",
-						   label: t("common.menu.permissionGroup"),
-						   label_vi: t("common.menu.permissionGroup"),
-						   label_en: tEn("common.menu.permissionGroup"),
-						   label_zh: tZh("common.menu.permissionGroup"),
-						   table_name: "csm_roles",
-						   app_id: appId,
-						   type_form: 1,
-						   row_type_edit: 0,
-						   g_readonly: false,
-						   table: buildRoleMenuFields(
-							   t,
-							   tEn,
-							   tZh,
-							   roleFieldConstraints.permissionOptions,
-							   roleFieldConstraints.menuOptions,
-							   roleFieldConstraints.presetOptionsQuery,
-							   roleFieldConstraints.dataScopeOptionsQuery,
-						   ),
-						   trigger: { beforeSave: PERMISSION_GROUP_BEFORE_SAVE },
-						   struct: {
-							   fieldsPK: ["id", "role_code"],
-						   },
-					   },
-					   "/system/roles": {
-						   id: "permission-group",
-						   path: "/system/roles",
-						   label: t("common.menu.permissionGroup"),
-						   label_vi: t("common.menu.permissionGroup"),
-						   label_en: tEn("common.menu.permissionGroup"),
-						   label_zh: tZh("common.menu.permissionGroup"),
-						   table_name: "csm_roles",
-						   app_id: appId,
-						   type_form: 1,
-						   row_type_edit: 0,
-						   g_readonly: false,
-						   table: buildRoleMenuFields(
-							   t,
-							   tEn,
-							   tZh,
-							   roleFieldConstraints.permissionOptions,
-							   roleFieldConstraints.menuOptions,
-							   roleFieldConstraints.presetOptionsQuery,
-							   roleFieldConstraints.dataScopeOptionsQuery,
-						   ),
-						   trigger: { beforeSave: PERMISSION_GROUP_BEFORE_SAVE },
-						   struct: {
-							   fieldsPK: ["id", "role_code"],
-						   },
-					   },
-					   "/system/departments": {
-						   id: "departments",
-						   path: "/system/departments",
-						   label: t("common.menu.dept"),
-						   label_vi: t("common.menu.dept"),
-						   label_en: tEn("common.menu.dept"),
-						   label_zh: tZh("common.menu.dept"),
-						   table_name: "csm_depts",
-						   app_id: appId,
-						   type_form: 1,
-						   row_type_edit: 0,
-						   g_readonly: false,
-						   table: buildDeptMenuFields(t, tEn, tZh),
-						   struct: {
-							   fieldsPK: ["id", "dept_code"],
-						   },
-					   },
-					   "/system/branches": {
-						   id: "branches",
-						   path: "/system/branches",
-						   label: t("common.menu.branch"),
-						   label_vi: t("common.menu.branch"),
-						   label_en: tEn("common.menu.branch"),
-						   label_zh: tZh("common.menu.branch"),
-						   table_name: "csm_branches",
-						   app_id: appId,
-						   type_form: 1,
-						   row_type_edit: 0,
-						   g_readonly: false,
-						   table: buildBranchMenuFields(t, tEn, tZh),
-						   struct: {
-							   fieldsPK: ["id", "branch_code"],
-						   },
-					   },
-					   // Add more fallbacks here if needed
-				   };
-				   const fb = FALLBACK_MENU_MAP[targetId];
-				   if (fb) {
-					   found = fb;
-				   }
-			}
-			const roleMenu = found ? buildUserMenuByRole(found) : found;
-			const withLabel = roleMenu ? normalizeKnownSystemMenu({ ...roleMenu, label: resolveDisplayLabel(roleMenu) }) : roleMenu;
-			const canonicalMenu = enforceCanonicalSystemRouteMenu(withLabel);
-			setMenuData(canonicalMenu);
-			setLoading(false);
-			
-			// Update tab label when loaded from tree (e.g., after page reload)
-			if (canonicalMenu?.label) {
-				const cleanLabel = resolveDisplayLabel(canonicalMenu);
-				addTab(location.pathname, {
-					key: location.pathname,
-					label: cleanLabel,
-					closable: true,
-					draggable: true,
-					historyState: { search: location.search, hash: location.hash },
-				});
-				useTabsStore.getState().setActiveKey(location.pathname); // Kích hoạt tab ngay sau khi thêm
-			}
-			
-			// Clear stored menuId
-			if (selectedMenuIdForTab === menuId) {
-				useUserStore.getState().setSelectedMenuIdForTab("");
-			}
-		}
-	}, [menuId, apiWholeMenus, selectedMenuIdForTab, location.state, location.pathname, location.search, location.hash, addTab, buildUserMenuByRole, normalizeKnownSystemMenu, t, appId, tEn, tZh, roleFieldConstraints, enforceCanonicalSystemRouteMenu]);
+	  // Ưu tiên lấy menuData từ tab state (store) nếu có
+	const tabsStore = useTabsStore.getState();
+	// openTabs là Map<string, TabStateType>
+	const activeTab = tabsStore.openTabs?.get?.(tabsStore.activeKey) as any;
+	let menuDataFromTab = activeTab?.menuData || activeTab?.m_configs;
+	if (menuDataFromTab) {
+		setMenuData(menuDataFromTab);
+		setLoading(false);
+		return;
+	}
+	  // Nếu không có, fallback lấy từ menuId param (cũ)
+	  const findMenuInTree = (menus: any[], targetId: string): any => {
+	    for (const menu of menus) {
+	      if (menu.id === targetId || menu.key === targetId || menu.path === targetId) return menu;
+	      if (menu.children?.length) {
+	        const found = findMenuInTree(menu.children, targetId);
+	        if (found) return found;
+	      }
+	    }
+	    return null;
+	  };
+	  const targetId = menuId;
+	  if (targetId) {
+	    let found = apiWholeMenus.length > 0 ? findMenuInTree(apiWholeMenus, targetId) : null;
+	    if (found) {
+	      setMenuData(found);
+	      setLoading(false);
+	    }
+	  }
+	}, [menuId, apiWholeMenus]);
 
 	// Di chuyển hàm loadTableData ra ngoài useEffect để có thể tái sử dụng
 	const loadTableData = async () => {
@@ -1433,15 +1264,15 @@ export default function AdminPage() {
 	const runtimeMenuData = menuData ? normalizeMenuRuntimeConfig(menuData) : null;
 	const effectiveAppId = runtimeMenuData?.app_id || appId;
 	const typeForm = Number(runtimeMenuData?.type_form || 1);
-	const tableNameByPath: Record<string, string[]> = {
-		"/system/user": ["csm_accounts", "csm_group_members"],
-		"/system/dept": ["csm_roles"],
-		"/system/role": ["csm_roles"],
-		"/system/roles": ["csm_roles"],
-		"/system/departments": ["csm_depts"],
-		"/system/branches": ["csm_branches"],
+	const tableNameByMenuId: Record<string, string[]> = {
+		user: ["csm_accounts", "csm_group_members"],
+		dept: ["csm_roles"],
+		role: ["csm_roles"],
+		roles: ["csm_roles"],
+		departments: ["csm_depts"],
+		branches: ["csm_branches"],
 	};
-	const expectedTableNames = (tableNameByPath[location.pathname] || []).map((item) => item.toLowerCase());
+	const expectedTableNames = (tableNameByMenuId[menuId || ""] || []).map((item) => item.toLowerCase());
 	const currentTableName = String(runtimeMenuData?.table_name || "").trim();
 	const currentTableNames = normalizeTableNames(runtimeMenuData?.table_name);
 	const hasSystemMenuTableMismatch = expectedTableNames.length > 0
@@ -1455,19 +1286,18 @@ export default function AdminPage() {
 		}
 		const currentKey = currentTableNames.join(",");
 		const expectedKey = expectedTableNames.join(",");
-		const mismatchKey = `${location.pathname}|${currentKey}|${expectedKey}|${String(runtimeMenuData?.id || "")}`;
+		const mismatchKey = `${menuId}|${currentKey}|${expectedKey}|${String(runtimeMenuData?.id || "")}`;
 		if (mismatchLogRef.current === mismatchKey) {
 			return;
 		}
 		mismatchLogRef.current = mismatchKey;
 		console.warn("[system-menu-config-mismatch]", {
-			path: location.pathname,
 			menuId: runtimeMenuData?.id,
 			menuLabel: runtimeMenuData?.label,
 			currentTableNames,
 			expectedTableNames,
 		});
-	}, [hasSystemMenuTableMismatch, location.pathname, currentTableNames, expectedTableNames, runtimeMenuData?.id, runtimeMenuData?.label]);
+	}, [hasSystemMenuTableMismatch, menuId, currentTableNames, expectedTableNames, runtimeMenuData?.id, runtimeMenuData?.label]);
 
 	if (loading || dbLoading) {
 		return (
@@ -1503,8 +1333,8 @@ export default function AdminPage() {
 			showIcon
 			message={t("system.menu.configMismatch.title") || "Menu configuration mismatch"}
 			description={
-				(t("system.menu.configMismatch.desc") || "The current route and table configuration are inconsistent.")
-					+ ` path=${location.pathname}, table=${currentTableName}, expected=${expectedTableNames.join(" | ")}`
+				(t("system.menu.configMismatch.desc") || "The current menu and table configuration are inconsistent.")
+				+ ` menuId=${menuId}, table=${currentTableName}, expected=${expectedTableNames.join(" | ")}`
 			}
 			style={{ marginBottom: 12 }}
 		/>
@@ -1793,7 +1623,7 @@ export default function AdminPage() {
 			<div style={{ padding: 16, height: "100%" }}>
 				{mismatchAlertNode}
 				<CsmDynamicGrid
-					gridInstanceKey={`${location.pathname}::${String(runtimeMenuData.id || "")}`}
+					gridInstanceKey={`${menuId}::${String(runtimeMenuData.id || "")}`}
 					m_configs={m_configs}
 					database={database}
 					appId={effectiveAppId}
