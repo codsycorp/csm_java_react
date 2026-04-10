@@ -1,0 +1,430 @@
+diff --git a/frontend-admin/src/router/patchDynamicRoutes.ts b/frontend-admin/src/router/patchDynamicRoutes.ts
+new file mode 100644
+index 00000000..cc97589d
+--- /dev/null
++++ b/frontend-admin/src/router/patchDynamicRoutes.ts
+@@ -0,0 +1,110 @@
++import React, { lazy } from "react";
++
++// Import các component động
++const User = lazy(() => import("#src/pages/system/user"));
++const Menu = lazy(() => import("#src/pages/system/menu"));
++const AdminPage = lazy(() => import("#src/pages/system/admin"));
++const Developer = lazy(() => import("#src/pages/system/developer"));
++const Broadcast = lazy(() => import("#src/pages/system/broadcast"));
++const CsmDynamicGrid = lazy(() => import("#src/components/csm-grid/CsmDynamicGrid"));
++const CsmMasterDetail = lazy(() => import("#src/components/csm-grid/CsmMasterDetail"));
++const CsmReport = lazy(() => import("#src/components/csm-report/CsmReport"));
++const CsmKanbanBoard = lazy(() => import("#src/components/csm-kanban/CsmKanbanBoard"));
++const DynamicCodeMenu = lazy(() => import("#src/pages/system/dynamic-code"));
++
++// Hàm mapping path + thuộc tính menu sang Component
++export function patchDynamicRoutesWithComponent(routes: any[]): any[] {
++  if (!Array.isArray(routes)) return routes;
++  return routes.map(route => {
++    let Component = route.Component;
++    // Mapping theo path tĩnh
++    switch (route.path) {
++      case "/system/user": Component = User; break;
++      case "/system/menu": Component = Menu; break;
++      case "/system/developer": Component = Developer; break;
++      case "/system/broadcast": Component = Broadcast; break;
++      case "/system/dept":
++      case "/system/role":
++      case "/system/roles":
++      case "/system/departments":
++      case "/system/branches":
++      case "/system/grid/:menuId":
++        Component = AdminPage; break;
++    }
++    // Mapping động theo thuộc tính menu
++    // Patch props cho các component động, kiểm tra kỹ các trường động
++    const appId = route.appId || route.app_id || '';
++    const menuId = route.menuId || route.id || route.key || '';
++    const menuData = route.menuData || route.m_configs || route || {};
++    // Kanban config: đảm bảo là object
++    let kanbanConfig = route.kanban_config;
++    if (typeof kanbanConfig === 'string') {
++      try { kanbanConfig = JSON.parse(kanbanConfig); } catch { kanbanConfig = {}; }
++    }
++    if (!kanbanConfig || typeof kanbanConfig !== 'object') kanbanConfig = {};
++    // Report config: đảm bảo m_configs là object
++    let reportConfigs = route.m_configs || route.menuData || route || {};
++    // Dynamic code
++    let autoCodeName = route.auto_code_name || route.autoCodeName || '';
++    let autoCode = route.auto_code || route.autoCode || '';
++
++
++    if (route.type_form === 1 || route.type_form === 2) {
++      Component = (props: any) => React.createElement(CsmDynamicGrid, {
++        ...props,
++        appId,
++        menuId,
++        menuData,
++        m_configs: menuData,
++        decrypt: props.decrypt,
++      });
++    }
++    if (route.type_form === 3) {
++      Component = (props: any) => React.createElement(CsmMasterDetail, {
++        ...props,
++        appId,
++        menuId,
++        menuData,
++        m_configs: menuData,
++        decrypt: props.decrypt,
++      });
++    }
++    if (route.report_name) {
++      Component = (props: any) => React.createElement(CsmReport, {
++        ...props,
++        appId,
++        menuId,
++        menuData,
++        m_configs: reportConfigs,
++        decrypt: props.decrypt,
++      });
++    }
++    // Ưu tiên Kanban nếu type_form === 6 hoặc có kanban_config
++    if (route.type_form === 6 || (kanbanConfig && Object.keys(kanbanConfig).length > 0)) {
++      Component = (props: any) => React.createElement(CsmKanbanBoard, {
++        ...props,
++        appId,
++        menuId,
++        menuData,
++        m_configs: menuData,
++        config: kanbanConfig,
++        decrypt: props.decrypt,
++      });
++    } else if (autoCodeName || autoCode) {
++      // Chỉ render DynamicCodeMenu nếu KHÔNG phải Kanban
++      Component = (props: any) => React.createElement(DynamicCodeMenu, {
++        ...props,
++        appId,
++        menuId,
++        menuData,
++        m_configs: menuData,
++        autoCodeName,
++        auto_code: autoCode,
++        decrypt: props.decrypt,
++      });
++    }
++    // Đệ quy cho children
++    const children = route.children ? patchDynamicRoutesWithComponent(route.children) : undefined;
++    return { ...route, Component, children };
++  });
++}
+diff --git a/frontend-admin/src/router/router-global-hooks.ts b/frontend-admin/src/router/router-global-hooks.ts
+index a41f2ee0..b7542e41 100755
+--- a/frontend-admin/src/router/router-global-hooks.ts
++++ b/frontend-admin/src/router/router-global-hooks.ts
+@@ -80,13 +80,7 @@ export const routerBeforeEach: (reactRouter: ReactRouterType) => BlockerFunction
+ 
+ 	/* --------------- 以下为已登录的处理逻辑 ------------------ */
+ 
+-	/* 根路由处理 */
+-	if (pathname === import.meta.env.BASE_URL && pathnameWithoutBase === "/") {
+-		const adminHomePath = import.meta.env.VITE_BASE_HOME_PATH || "/home";
+-		window.sessionStorage.setItem("forceAdminMode", "true");
+-		reactRouter.navigate(adminHomePath, { replace: true });
+-		return true;
+-	}
++	// Đã đăng nhập, nếu là root path '/', cho phép truy cập bình thường (không tự động chuyển về /home)
+ 
+ 	/* 已登录访问登录页，跳转到首页 */
+ 	if (pathnameWithoutBase === "/login") {
+diff --git a/frontend-admin/src/store/permission.ts b/frontend-admin/src/store/permission.ts
+index 30f31b72..e9e2398a 100644
+--- a/frontend-admin/src/store/permission.ts
++++ b/frontend-admin/src/store/permission.ts
+@@ -7,6 +7,7 @@ import { fetchNavigationMenus } from "#src/api/system/menu";
+ import { router } from "#src/router";
+ import { ROOT_ROUTE_ID } from "#src/router/constants";
+ import { rootChildRoutes, routes } from "#src/router/routes";
++import { patchDynamicRoutesWithComponent } from "#src/router/patchDynamicRoutes";
+ import { addAsyncRoutes, ascending, flattenRoutes, getMenuItems } from "#src/router/utils";
+ import { useAppStore } from "./app";
+ import { useAuthStore } from "./auth";
+@@ -36,6 +37,29 @@ function buildMenuTree(flatMenus: ApiMenuItemType[], parentId: string = ""): Api
+ 	return result;
+ }
+ 
++function resolveOrderValue(value: unknown): number {
++	if (value === null || value === undefined || value === "") return Number.MAX_SAFE_INTEGER;
++	const parsed = Number(value);
++	return Number.isFinite(parsed) ? parsed : Number.MAX_SAFE_INTEGER;
++}
++
++function sortApiMenuTreeByOrder(items: ApiMenuItemType[]): ApiMenuItemType[] {
++	return [...(items || [])]
++		.sort((a, b) => {
++			const diff = resolveOrderValue((a as any)?.order) - resolveOrderValue((b as any)?.order);
++			if (diff !== 0) return diff;
++			const labelA = String((a as any)?.label || (a as any)?.name || (a as any)?.id || "").toLowerCase();
++			const labelB = String((b as any)?.label || (b as any)?.name || (b as any)?.id || "").toLowerCase();
++			if (labelA < labelB) return -1;
++			if (labelA > labelB) return 1;
++			return 0;
++		})
++		.map((item) => ({
++			...item,
++			children: Array.isArray(item?.children) ? sortApiMenuTreeByOrder(item.children as ApiMenuItemType[]) : item?.children,
++		}));
++}
++
+ function normalizeAccessKey(raw: unknown): string {
+ 	if (raw == null) return "";
+ 	return String(raw).trim().toLowerCase();
+@@ -44,28 +68,89 @@ function normalizeAccessKey(raw: unknown): string {
+ function isDesktopProcessBypassEnabled(): boolean {
+ 	if (typeof window === "undefined") return false;
+ 	const proc = (window as any)?.process;
+-	if (!proc || typeof proc !== "object") return false;
+-	if (proc.__nwjs === 1) return true;
+-	if (proc?.versions?.nw || proc?.versions?.["node-webkit"]) return true;
+-	return false;
++	const nwVersion = proc?.versions?.nw;
++	const hasNwGlobal = !!(window as any)?.nw;
++	return !!(hasNwGlobal || nwVersion);
+ }
+ 
+-function ensureAutoSetupMenuForDesktop(currentMenus: MenuItemType[], routeMenus: MenuItemType[]): MenuItemType[] {
++function findFirstAutoCode(items: any[]): string {
++	for (const item of items || []) {
++		const autoCode = String(item?.auto_code || "").trim();
++		if (autoCode) {
++			return autoCode;
++		}
++		if (Array.isArray(item?.children) && item.children.length > 0) {
++			const nested = findFirstAutoCode(item.children);
++			if (nested) {
++				return nested;
++			}
++		}
++	}
++	return "";
++}
++
++function ensureAutoSetupMenuForDesktop(currentMenus: MenuItemType[], routeMenus: MenuItemType[], autoCode: string): MenuItemType[] {
+ 	if (!isDesktopProcessBypassEnabled()) {
+-		return currentMenus;
++		return (currentMenus || []).filter((menu: any) => normalizeAccessKey(menu?.key || menu?.path) !== "/auto-setup");
++	}
++	if (!String(autoCode || "").trim()) {
++		return (currentMenus || []).filter((menu: any) => normalizeAccessKey(menu?.key || menu?.path) !== "/auto-setup");
+ 	}
+ 
+ 	const hasAutoSetup = (currentMenus || []).some((menu: any) => normalizeAccessKey(menu?.key || menu?.path) === "/auto-setup");
+ 	if (hasAutoSetup) {
+-		return currentMenus;
++		return (currentMenus || []).map((menu: any) => {
++			const key = normalizeAccessKey(menu?.key || menu?.path);
++			if (key !== "/auto-setup") return menu;
++			if (String(menu?.auto_code || "").trim()) return menu;
++			return { ...menu, auto_code: autoCode };
++		}) as MenuItemType[];
+ 	}
+ 
+ 	const autoSetupMenu = (routeMenus || []).find((menu: any) => normalizeAccessKey(menu?.key || menu?.path) === "/auto-setup");
+-	if (!autoSetupMenu) {
+-		return currentMenus;
++	if (autoSetupMenu) {
++		return [...(currentMenus || []), { ...autoSetupMenu, auto_code: autoCode } as MenuItemType];
++	}
++
++	const fallbackAutoSetupMenu: MenuItemType = {
++		key: "/auto-setup",
++		path: "/auto-setup",
++		id: "auto",
++		label: "common.menu.auto_setup",
++		auto_code: autoCode,
++	} as any;
++
++	return [...(currentMenus || []), fallbackAutoSetupMenu];
++}
++
++function ensureAutoSetupApiMenuForDesktop(currentApiMenus: ApiMenuItemType[], autoCode: string): ApiMenuItemType[] {
++	if (!isDesktopProcessBypassEnabled()) {
++		return (currentApiMenus || []).filter((menu: any) => normalizeAccessKey(menu?.path || menu?.id || menu?.name) !== "/auto-setup");
++	}
++	if (!String(autoCode || "").trim()) {
++		return (currentApiMenus || []).filter((menu: any) => normalizeAccessKey(menu?.path || menu?.id || menu?.name) !== "/auto-setup");
+ 	}
+ 
+-	return [...(currentMenus || []), autoSetupMenu];
++	const hasAutoSetup = (currentApiMenus || []).some((menu: any) => normalizeAccessKey(menu?.path || menu?.id || menu?.name) === "/auto-setup");
++	if (hasAutoSetup) {
++		return (currentApiMenus || []).map((menu: any) => {
++			const key = normalizeAccessKey(menu?.path || menu?.id || menu?.name);
++			if (key !== "/auto-setup") return menu;
++			if (String(menu?.auto_code || "").trim()) return menu;
++			return { ...menu, auto_code: autoCode };
++		});
++	}
++
++	return [
++		...(currentApiMenus || []),
++		{
++			id: "auto",
++			name: "auto_setup",
++			label: "common.menu.auto_setup",
++			path: "/auto-setup",
++			auto_code: autoCode,
++		} as any,
++	];
+ }
+ 
+ function toTokenList(raw: unknown): string[] {
+@@ -124,7 +209,8 @@ function isMenuAllowedByLegacyAccess(menu: any, allowedKeys: Set<string>, allowe
+ 	const id = normalizeAccessKey(menu?.id);
+ 	const name = normalizeAccessKey(menu?.name);
+ 	const isSystemPath = path.startsWith("/system");
+-	const isAlwaysVisible = path === "/" || path === "/home" || path === "/auto-setup" || id === "home" || id === "auto";
++	const hasAutoCode = !!(menu?.auto_code);
++	const isAlwaysVisible = path === "/home" || path === "/auto-setup" || id === "home" || id === "auto" || hasAutoCode;
+ 
+ 	if (isAlwaysVisible) return true;
+ 
+@@ -273,6 +359,9 @@ export function transformApiMenusToLayoutMenus(apiMenus: (ApiMenuItemType & { ch
+ 		const menuItem: any = {
+ 			key: apiMenu.path || apiMenu.id || "",
+ 			label: stripMenuPrefixFromLabel(apiMenu.label || apiMenu.name || ""),
++			name: apiMenu.name ? stripMenuPrefixFromLabel(apiMenu.name) : undefined,
++			name_en: apiMenu.name_en ? stripMenuPrefixFromLabel(apiMenu.name_en) : undefined,
++			name_zh: apiMenu.name_zh ? stripMenuPrefixFromLabel(apiMenu.name_zh) : undefined,
+ 			disabled: apiMenu.status === 0 || apiMenu.m_show === false,
+ 			label_en: apiMenu.label_en ? stripMenuPrefixFromLabel(apiMenu.label_en) : undefined,
+ 			label_zh: apiMenu.label_zh ? stripMenuPrefixFromLabel(apiMenu.label_zh) : undefined,
+@@ -349,7 +438,8 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
+ 			? { "csm-token": effectiveToken }
+ 			: undefined;
+ 		const { result } = await fetchAsyncRoutes(asyncRouteHeaders);
+-		const dynamicRoutes = addAsyncRoutes(result);
++		let dynamicRoutes = addAsyncRoutes(result);
++		dynamicRoutes = patchDynamicRoutesWithComponent(dynamicRoutes);
+ 		const newRoutes = ascending([...rootChildRoutes, ...dynamicRoutes]);
+ 
+ 		const constantMenus = getMenuItems((router.routes[0].children || []) as AppRouteRecordRaw[]);
+@@ -387,6 +477,7 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
+ 		const systemMenusFromRoute = routeMenus.filter(m => m.key === "/system");
+ 		let wholeMenus: MenuItemType[] = [];
+ 		let apiWholeMenus: ApiMenuItemType[] = [];
++		let firstAutoCode = "";
+ 		try {
+ 			const effectiveAppId = (appIdParam || "").trim()
+ 				|| (useUserStore.getState().app_id || "").trim()
+@@ -408,7 +499,9 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
+ 				if (hasParentId && !hasChildren) {
+ 					apiMenuList = buildMenuTree(apiMenuList);
+ 				}
++				apiMenuList = sortApiMenuTreeByOrder(apiMenuList);
+ 				apiWholeMenus = apiMenuList;
++				firstAutoCode = findFirstAutoCode(apiMenuList as any[]);
+ 
+ 				loadDatabaseFromMenus(apiMenuList, effectiveAppId).catch(() => {
+ 				});
+@@ -417,7 +510,6 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
+ 				const sanitizedApiMenus = isAdmin
+ 					? pruneSystemMenusFromApiForAdmin(apiMenus)
+ 					: apiMenus;
+-				const filterAutoSetup = (m: any) => !(m.key === "/auto-setup" && !m.auto_code);
+ 				const filteredByLegacyAccess = shouldBypassMenuFilter
+ 					? sanitizedApiMenus
+ 					: filterMenuTreeByLegacyAccess(
+@@ -425,8 +517,14 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
+ 						explicitAllowedKeys,
+ 						allowedRoutePaths,
+ 					);
++				const filterAutoSetup = (m: any) => !(m.key === "/auto-setup" && !m.auto_code);
++				const filterDuplicatedSystemApiMenus = (m: any) => {
++					const key = normalizeAccessKey(m?.key || m?.path);
++					return !(key === "/system" || key.startsWith("/system/"));
++				};
+ 				const apiMenusFiltered = filteredByLegacyAccess
+-					.filter(m => m.key !== "/system" && m.key !== "/home" && m.key !== "/" && String((m as any).id || "") !== "home")
++					.filter(m => m.key !== "/system" && m.key !== "/home" && String((m as any).id || "") !== "home")
++					.filter(filterDuplicatedSystemApiMenus)
+ 					.filter(filterAutoSetup);
+ 				if (isDev || isAdmin) {
+ 					wholeMenus = [
+@@ -462,12 +560,10 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
+ 			}
+ 		}
+ 
+-		wholeMenus = ensureAutoSetupMenuForDesktop(wholeMenus, routeMenus);
+-
+ 		const newState = {
+ 			constantMenus,
+-			wholeMenus: moveSystemMenuLast(wholeMenus),
+-			apiWholeMenus,
++			wholeMenus: moveSystemMenuLast(ensureAutoSetupMenuForDesktop(wholeMenus, routeMenus, firstAutoCode)),
++			apiWholeMenus: ensureAutoSetupApiMenuForDesktop(apiWholeMenus, firstAutoCode),
+ 			routeList: newRoutes,
+ 			flatRouteList,
+ 			hasFetchedDynamicRoutes: true,
+@@ -477,7 +573,8 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
+ 	},
+ 
+ 	applyAsyncRoutesFromLogin: async (routesFromLogin: AppRouteRecordRaw[], appIdParam?: string, devFlag?: boolean) => {
+-		const dynamicRoutes = addAsyncRoutes(routesFromLogin);
++		let dynamicRoutes = addAsyncRoutes(routesFromLogin);
++		dynamicRoutes = patchDynamicRoutesWithComponent(dynamicRoutes);
+ 		const newRoutes = ascending([...rootChildRoutes, ...dynamicRoutes]);
+ 
+ 		const constantMenus = getMenuItems((router.routes[0].children || []) as AppRouteRecordRaw[]);
+@@ -486,6 +583,7 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
+ 		let wholeMenus = getMenuItems(newRoutes);
+ 		const baseRouteMenus = wholeMenus;
+ 		let apiWholeMenus: ApiMenuItemType[] = [];
++		let firstAutoCode = "";
+ 
+ 		try {
+ 			const effectiveAppId = (appIdParam || "").trim()
+@@ -536,14 +634,15 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
+ 				if (hasParentId && !hasChildren) {
+ 					apiMenuList = buildMenuTree(apiMenuList);
+ 				}
++				apiMenuList = sortApiMenuTreeByOrder(apiMenuList);
+ 				apiWholeMenus = apiMenuList;
++				firstAutoCode = findFirstAutoCode(apiMenuList as any[]);
+ 				loadDatabaseFromMenus(apiMenuList, effectiveAppId).catch(() => {
+ 				});
+ 				const apiMenus = transformApiMenusToLayoutMenus(apiMenuList as (ApiMenuItemType & { children?: MenuItemType[] })[]);
+ 				const sanitizedApiMenus = isAdmin
+ 					? pruneSystemMenusFromApiForAdmin(apiMenus)
+ 					: apiMenus;
+-				const filterAutoSetup = (m: any) => !(m.key === '/auto-setup' && !m.auto_code);
+ 				const filteredByLegacyAccess = shouldBypassMenuFilter
+ 					? sanitizedApiMenus
+ 					: filterMenuTreeByLegacyAccess(
+@@ -551,8 +650,14 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
+ 						explicitAllowedKeys,
+ 						allowedRoutePaths,
+ 					);
++				const filterAutoSetup = (m: any) => !(m.key === '/auto-setup' && !m.auto_code);
++				const filterDuplicatedSystemApiMenus = (m: any) => {
++					const key = normalizeAccessKey(m?.key || m?.path);
++					return !(key === '/system' || key.startsWith('/system/'));
++				};
+ 				const apiMenusFiltered = filteredByLegacyAccess
+-					.filter(m => m.key !== '/system' && m.key !== '/home' && m.key !== '/' && String((m as any).id || '') !== 'home')
++					.filter(m => m.key !== '/system' && m.key !== '/home' && String((m as any).id || '') !== 'home')
++					.filter(filterDuplicatedSystemApiMenus)
+ 					.filter(filterAutoSetup);
+ 				if (isDev || isAdmin) {
+ 					wholeMenus = [
+@@ -609,12 +714,10 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
+ 				: (homeMenu ? [homeMenu] : []);
+ 		}
+ 
+-		wholeMenus = ensureAutoSetupMenuForDesktop(wholeMenus, baseRouteMenus);
+-
+ 		const newState = {
+ 			constantMenus,
+-			wholeMenus: moveSystemMenuLast(wholeMenus),
+-			apiWholeMenus,
++			wholeMenus: moveSystemMenuLast(ensureAutoSetupMenuForDesktop(wholeMenus, baseRouteMenus, firstAutoCode)),
++			apiWholeMenus: ensureAutoSetupApiMenuForDesktop(apiWholeMenus, firstAutoCode),
+ 			routeList: newRoutes,
+ 			flatRouteList,
+ 			hasFetchedDynamicRoutes: true,

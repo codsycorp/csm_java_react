@@ -395,8 +395,21 @@ export function useMenu() {
 	 * 菜单点击事件处理
 	 */
 	const handleMenuSelect = (key: string, mode: MenuProps["mode"]) => {
-		// '/' luôn là Home, không chuyển sang '/home' nữa
-		const normalizedKey = key === "/home" ? "/" : key;
+		// Home: luôn dùng '/' làm key, không bao giờ dùng '/home'
+		let normalizedKey = key;
+		if (key === "/home" || key === "/") {
+			normalizedKey = "/";
+			addTab("/", {
+				key: "/",
+				label: t("common.menu.home"),
+				closable: false,
+				draggable: false,
+			});
+			setActiveKey("/");
+			return;
+		}
+
+				// ĐÃ XOÁ fallback cứng table_name cho /system/user,... Chỉ lấy menuData đúng từ apiWholeMenus/store, quyền dev/admin xử lý ở tầng store/permission.ts
 		
 		// 💡 Find menu in processedMenus first to get menuId (original ID before autoFixMenu transform)
 		const findMenuInProcessedMenus = (menus: any[], targetKey: string): any => {
@@ -448,11 +461,55 @@ export function useMenu() {
 			   return null;
 		   };
 
-		   const selectedApiMenu = (
+		   let selectedApiMenu = (
 			   findMenuInTree(apiWholeMenus, String(menuIdToSearch || ""), normalizedKey)
 			   || (legacyMenuIdFromKey ? findMenuInTree(apiWholeMenus, legacyMenuIdFromKey, normalizedKey) : null)
 			   || (menuIdSegmentFromKey ? findMenuInTree(apiWholeMenus, menuIdSegmentFromKey, normalizedKey) : null)
 		   ) as any;
+
+		   // Khôi phục logic fallback menu hệ thống như file cũ trên git
+		   if (normalizedKey.startsWith("/system/")) {
+			   const userState = useUserStore.getState();
+			   const isDev = resolveDevFlag(userState.dev, userState.roles);
+			   const permissionBits = toPermissionBigInt(userState.permissionBitfield);
+			   const isAdmin = !isDev && isSuperPermissionProfile(permissionBits);
+			   const systemMenuFallbacks: Record<string, { label: string; table_name: string; type_form: number }> = {
+				   "/system/user": { label: t("common.menu.user"), table_name: isDev ? "csm_accounts" : (isAdmin ? "csm_group_members" : ""), type_form: 1 },
+				   "/system/dept": { label: t("common.menu.permissionGroup"), table_name: "csm_roles", type_form: 1 },
+				   "/system/departments": { label: t("common.menu.dept"), table_name: "csm_depts", type_form: 1 },
+				   "/system/branches": { label: t("common.menu.branch"), table_name: "csm_branches", type_form: 1 }
+			   };
+			   const fallback = systemMenuFallbacks[normalizedKey] || {
+				   label: normalizedKey.replace("/system/", "System: "),
+				   table_name: "",
+				   type_form: 1,
+			   };
+			   let finalMenuData = selectedApiMenu;
+			   if (!finalMenuData) {
+				   finalMenuData = {
+					   key: normalizedKey,
+					   label: fallback.label,
+					   table_name: fallback.table_name,
+					   type_form: fallback.type_form,
+					   id: normalizedKey,
+				   };
+			   } else {
+				   if (!finalMenuData.table_name) finalMenuData.table_name = fallback.table_name;
+				   if (!finalMenuData.type_form) finalMenuData.type_form = fallback.type_form;
+				   if (!finalMenuData.label) finalMenuData.label = fallback.label;
+			   }
+			   addTab(normalizedKey, {
+				   key: normalizedKey,
+				   label: finalMenuData.label || fallback.label,
+				   closable: true,
+				   draggable: true,
+				   menuData: finalMenuData,
+				   table_name: finalMenuData.table_name,
+				   type_form: finalMenuData.type_form,
+			   });
+			   setActiveKey(normalizedKey);
+			   return;
+		   }
 
 		   // --- Xác định path động cho các loại menu động ---
 		   let dynamicPath = normalizedKey;

@@ -30,7 +30,13 @@ function removeDuplicates(menus: MenuItemType[]): MenuItemType[] {
  * @param menuItem Menu item
  * @returns Converted menu item with children field
  */
+// Memoization cache for normalizeMenuNodes
+const _normalizeMenuNodesCache = new WeakMap<any, MenuItemType>();
 function normalizeMenuNodes(menuItem: any, level = 0): MenuItemType {
+	if (typeof menuItem !== "object" || menuItem === null) return menuItem;
+	if (_normalizeMenuNodesCache.has(menuItem)) {
+		return _normalizeMenuNodesCache.get(menuItem)!;
+	}
 	const normalized = { ...menuItem };
 	// Sửa label: chỉ lấy phần sau dấu chấm cuối cùng nếu có
 	if (typeof normalized.label === "string" && normalized.label.includes(".")) {
@@ -47,6 +53,7 @@ function normalizeMenuNodes(menuItem: any, level = 0): MenuItemType {
 		normalized.children = normalized.nodes.map((node: any) => normalizeMenuNodes(node, level + 1));
 		delete normalized.nodes; // Remove nodes field
 	}
+	_normalizeMenuNodesCache.set(menuItem, normalized);
 	return normalized;
 }
 
@@ -495,6 +502,15 @@ export async function fetchNavigationMenus(appIdParam?: string) {
 		
 		// Normalize nodes → children field for consistent tree structure
 		menuData = menuData.map(item => normalizeMenuNodes(item));
+		if (process.env.NODE_ENV !== 'production') {
+			// Debug: log menuData after normalization
+			// Only log for system menu
+			if (menuData.some(item => item.path === '/system' || item.id === 'system')) {
+				// Avoid logging large trees in production
+				// eslint-disable-next-line no-console
+				console.debug('[menu] Normalized menuData:', JSON.stringify(menuData, null, 2));
+			}
+		}
 		
 		// IMPORTANT: Keep tree structure intact - do NOT flatten
 		// The tree will be rebuilt in permission.ts buildMenuTree() if needed

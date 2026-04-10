@@ -1046,7 +1046,13 @@ export default function AdminPage() {
 			return (a.id === b.id && a.path === b.path);
 		};
 		if (menuDataFromTab && !isSameMenu(menuDataFromTab, menuData)) {
-			setMenuData(menuDataFromTab);
+			// Nếu là trang user, luôn ép lại menuData qua buildUserMenuByRole để đảm bảo table_name đúng quyền
+			if (menuId === "user") {
+				const normalizedMenu = buildUserMenuByRole(menuDataFromTab);
+				setMenuData(normalizedMenu);
+			} else {
+				setMenuData(menuDataFromTab);
+			}
 			setLoading(false);
 			return;
 		}
@@ -1064,13 +1070,33 @@ export default function AdminPage() {
 		const targetId = menuId;
 		if (targetId) {
 			let found = apiWholeMenus.length > 0 ? findMenuInTree(apiWholeMenus, targetId) : null;
+			// Fallback cho /system/user nếu không tìm thấy hoặc thiếu table_name
+			if ((!found || !found.table_name) && targetId === "user") {
+				const actorTableName = isDevUser ? "csm_accounts" : "csm_group_members";
+				found = {
+					id: "user",
+					path: "/system/user",
+					label: t("common.menu.user"),
+					table_name: actorTableName,
+					app_id: "csm",
+					type_form: 1,
+					row_type_edit: 0,
+					g_readonly: false,
+				};
+			}
 			if (found && !isSameMenu(found, menuData)) {
-				setMenuData(found);
+				// Nếu là trang user, luôn ép lại menuData qua buildUserMenuByRole để đảm bảo table_name đúng quyền
+				if (menuId === "user") {
+					const normalizedMenu = buildUserMenuByRole(found);
+					setMenuData(normalizedMenu);
+				} else {
+					setMenuData(found);
+				}
 				setLoading(false);
 			}
 		}
 		// Nếu không tìm thấy menuData thì không set lại liên tục
-	}, [menuId, apiWholeMenus, menuData]);
+	}, [menuId, apiWholeMenus, menuData, isDevUser, t]);
 
 	// Di chuyển hàm loadTableData ra ngoài useEffect để có thể tái sử dụng
 	const loadTableData = async () => {
@@ -1359,7 +1385,7 @@ export default function AdminPage() {
 			style={{ marginBottom: 12 }}
 		/>
 	) : null;
-
+console.log("🔍 Rendering menu:", runtimeMenuData);
 	// Render standalone Kanban board (type_form = 6 or kanban_config present)
 	if (typeForm === 6 || (runtimeMenuData as any).kanban_config) {
 		return (

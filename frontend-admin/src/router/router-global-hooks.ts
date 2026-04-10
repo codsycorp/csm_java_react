@@ -232,16 +232,12 @@ export async function routerInitReady(reactRouter: ReactRouterType) {
 
 	/* --------------- Start ------------------ */
 	// 判断路由跳转逻辑，需要在获取动态路由之后，防止路由跳转直接进入 getBlocker 中然后发送请求，但是 getBlocker 不支持异步
-	/* Root path trong admin app: điều hướng về admin home */
-	if (pathname === import.meta.env.BASE_URL) {
-		const adminHomePath = import.meta.env.VITE_BASE_HOME_PATH || "/home";
-		window.sessionStorage.setItem("forceAdminMode", "true");
-		if (pathnameWithoutBase === adminHomePath) {
-			return;
-		}
-		reactRouter.navigate(adminHomePath, { replace: true });
-		return;
-	}
+	       /* Root path trong admin app: cho phép '/' là Home, không tự động chuyển về /home */
+	       if (pathnameWithoutBase === "/") {
+		       window.sessionStorage.setItem("forceAdminMode", "true");
+		       // Không redirect, cho phép '/' là Home
+		       return;
+	       }
 
 	/* 已登录时匹配 login 路由，跳转到首页 */
 	if (pathnameWithoutBase === "/login") {

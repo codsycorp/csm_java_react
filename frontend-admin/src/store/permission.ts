@@ -210,7 +210,8 @@ function isMenuAllowedByLegacyAccess(menu: any, allowedKeys: Set<string>, allowe
 	const name = normalizeAccessKey(menu?.name);
 	const isSystemPath = path.startsWith("/system");
 	const hasAutoCode = !!(menu?.auto_code);
-	const isAlwaysVisible = path === "/home" || path === "/auto-setup" || id === "home" || id === "auto" || hasAutoCode;
+	const isAlwaysVisible = path === "/" || path === "/home" || path === "/auto-setup" || id === "home" || id === "auto" || hasAutoCode;
+	if (isAlwaysVisible) return true;
 
 	if (isAlwaysVisible) return true;
 
@@ -347,6 +348,12 @@ async function loadDatabaseFromMenus(menuTree: ApiMenuItemType[], appId: string)
 export function transformApiMenusToLayoutMenus(apiMenus: (ApiMenuItemType & { children?: MenuItemType[] })[]): MenuItemType[] {
 	const result: MenuItemType[] = [];
 
+	// Lấy quyền hiện tại
+	const userState = useUserStore.getState();
+	const isDev = resolveDevFlag(userState?.dev, userState?.roles);
+	const permissionBits = toPermissionBigInt(userState?.permissionBitfield);
+	const isAdmin = !isDev && isSuperPermissionProfile(permissionBits);
+
 	apiMenus.forEach((apiMenu) => {
 		const maybeAutoPath = (apiMenu.path || "").toLowerCase();
 		const maybeAutoId = (apiMenu.id || "").toLowerCase();
@@ -392,6 +399,12 @@ export function transformApiMenusToLayoutMenus(apiMenus: (ApiMenuItemType & { ch
 			auto_code: (apiMenu as any).auto_code,
 		};
 
+		// Sửa triệt để: ép table_name cho /system/user theo quyền
+		if (menuItem.key === "/system/user") {
+			if (isDev) menuItem.table_name = "csm_accounts";
+			else if (isAdmin) menuItem.table_name = "csm_group_members";
+		}
+
 		if (apiMenu.children && apiMenu.children.length > 0) {
 			menuItem.children = transformApiMenusToLayoutMenus(apiMenu.children as any);
 		}
@@ -415,7 +428,13 @@ const initialState: InitialStateType = {
 	wholeMenus: [],
 	apiWholeMenus: [],
 	routeList: rootChildRoutes,
-	flatRouteList: flattenRoutes(rootChildRoutes),
+	flatRouteList: (() => {
+		const flat = flattenRoutes(rootChildRoutes);
+		if (typeof window !== 'undefined') {
+		  (window as any).__FLAT_ROUTE_LIST__ = flat;
+		}
+		return flat;
+	})(),
 	hasFetchedDynamicRoutes: false,
 };
 
@@ -438,9 +457,9 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 			? { "csm-token": effectiveToken }
 			: undefined;
 		const { result } = await fetchAsyncRoutes(asyncRouteHeaders);
-		let dynamicRoutes = addAsyncRoutes(result);
-		dynamicRoutes = patchDynamicRoutesWithComponent(dynamicRoutes);
-		const newRoutes = ascending([...rootChildRoutes, ...dynamicRoutes]);
+			   let dynamicRoutes = addAsyncRoutes(result);
+			   dynamicRoutes = patchDynamicRoutesWithComponent(dynamicRoutes);
+			   const newRoutes = ascending([...rootChildRoutes, ...dynamicRoutes]);
 
 		const constantMenus = getMenuItems((router.routes[0].children || []) as AppRouteRecordRaw[]);
 		router.patchRoutes(ROOT_ROUTE_ID, dynamicRoutes);

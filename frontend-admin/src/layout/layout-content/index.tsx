@@ -1,4 +1,5 @@
 import React,{ useEffect, useMemo } from "react";
+import { csmDecrypt } from "#src/components/csm-grid/CsmCrypto";
 import { patchDynamicRoutesWithComponent } from "#src/router/patchDynamicRoutes";
 import { GlobalSpin, Scrollbar } from "#src/components";
 import { usePermissionStore, usePreferencesStore, useTabsStore } from "#src/store";
@@ -88,7 +89,7 @@ export default function LayoutContent() {
 		});
 	}
 	const TabComponent = PatchedComponent && tabProps
-		? () => React.createElement(PatchedComponent, { ...tabProps })
+		? () => React.createElement(PatchedComponent, { ...tabProps, decrypt: csmDecrypt })
 		: null;
 
 	// KeepAlive logic giữ nguyên
