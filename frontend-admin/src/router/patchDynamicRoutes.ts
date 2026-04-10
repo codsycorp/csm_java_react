@@ -15,7 +15,25 @@ const DynamicCodeMenu = lazy(() => import("#src/pages/system/dynamic-code"));
 // Map path + menu attributes to Component
 export function patchDynamicRoutesWithComponent(routes: any[]): any[] {
   if (!Array.isArray(routes)) return routes;
-  return routes.map(route => {
+  // Static system paths to always keep static
+  const staticSystemPaths = [
+    "/system/user", "/system/menu", "/system/developer", "/system/broadcast",
+    "/system/dept", "/system/role", "/system/roles", "/system/departments", "/system/branches", "/system/grid/:menuId"
+  ];
+
+  // Filter out any dynamic route that has the same path as a static system path
+  // (only keep the first occurrence, which should be the static one if merged correctly)
+  const seenStatic = new Set();
+  const filteredRoutes = routes.filter(route => {
+    if (staticSystemPaths.includes(route.path)) {
+      if (seenStatic.has(route.path)) return false;
+      seenStatic.add(route.path);
+      return true;
+    }
+    return true;
+  });
+
+  return filteredRoutes.map(route => {
     // Debug: Log route info to diagnose mapping issues
     // eslint-disable-next-line no-console
     console.log('[patchDynamicRoutesWithComponent]', {
@@ -28,11 +46,6 @@ export function patchDynamicRoutesWithComponent(routes: any[]): any[] {
       label: route.label || route.name,
     });
     let Component = route.Component;
-    // Static system paths: always use static component, do NOT wrap in prop-injection
-    const staticSystemPaths = [
-      "/system/user", "/system/menu", "/system/developer", "/system/broadcast",
-      "/system/dept", "/system/role", "/system/roles", "/system/departments", "/system/branches", "/system/grid/:menuId"
-    ];
     if (staticSystemPaths.includes(route.path)) {
       switch (route.path) {
         case "/system/user": Component = User; break;
