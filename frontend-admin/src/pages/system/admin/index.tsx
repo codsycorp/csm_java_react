@@ -1528,14 +1528,20 @@ export default function AdminPage() {
 			DEFAULT_HEADERS.branch_name = "system.branch.fields.name";
 			DEFAULT_HEADERS.branch_full_name = "system.branch.fields.fullName";
 			const normalizedKeys = Array.from(new Set(keys.length ? keys : fallbackKeys));
-			const fields = normalizedKeys.map((k) => ({
-				f_name: k,
-				// Keep i18n keys so labels render correctly in all languages.
-				f_header: DEFAULT_HEADERS[k] || k,
-				f_show: 1,
-				f_types: k === "id" ? "number" : "string",
-				f_align: k === "id" ? "right" : "left",
-			}));
+			const fields = normalizedKeys.map((k) => {
+				const rawHeader = DEFAULT_HEADERS[k] || k;
+				const isKey = typeof rawHeader === 'string' && rawHeader.includes('.');
+				return {
+					f_name: k,
+					f_header: isKey ? t(rawHeader) : rawHeader,
+					f_header_vi: isKey ? t(rawHeader) : rawHeader,
+					f_header_en: isKey ? tEn(rawHeader) : rawHeader,
+					f_header_zh: isKey ? tZh(rawHeader) : rawHeader,
+					f_show: 1,
+					f_types: k === "id" ? "number" : "string",
+					f_align: k === "id" ? "right" : "left",
+				};
+			});
 			m_configs.table = applyFriendlyFieldPolicy(runtimeMenuData.table_name, fields as any, systemUserActorType) as any;
 		}
 		
