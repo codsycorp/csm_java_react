@@ -1,4 +1,6 @@
 import React, { lazy } from "react";
+// Import SYSTEM_ROUTE_TABLE_SCHEMAS for static config injection
+import { SYSTEM_ROUTE_TABLE_SCHEMAS } from "#src/pages/system/admin/index";
 
 // Import dynamic components
 const User = lazy(() => import("#src/pages/system/user"));
@@ -47,12 +49,23 @@ export function patchDynamicRoutesWithComponent(routes: any[]): any[] {
     });
     let Component = route.Component;
     if (staticSystemPaths.includes(route.path)) {
+      let staticConfigs = SYSTEM_ROUTE_TABLE_SCHEMAS?.[route.path];
       switch (route.path) {
-        case "/system/user": Component = User; break;
+        case "/system/user":
+          Component = (props: any) => React.createElement(User, {
+            ...props,
+            m_configs: staticConfigs,
+          });
+          break;
+        case "/system/dept":
+          Component = (props: any) => React.createElement(AdminPage, {
+            ...props,
+            m_configs: staticConfigs,
+          });
+          break;
         case "/system/menu": Component = Menu; break;
         case "/system/developer": Component = Developer; break;
         case "/system/broadcast": Component = Broadcast; break;
-        case "/system/dept":
         case "/system/role":
         case "/system/roles":
         case "/system/departments":
