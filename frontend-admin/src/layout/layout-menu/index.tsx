@@ -71,9 +71,9 @@ export default function LayoutMenu({
 	}, [menus]);
 
 	const getSelectedKeys = useMemo(() => {
-		const homePath = import.meta.env.VITE_BASE_HOME_PATH || "/home";
+		const homePath = "homepage";
 		const pathRaw = removeTrailingSlash(location.pathname);
-		const normalizedPath = pathRaw === "/" ? homePath : pathRaw;
+		const normalizedPath = (pathRaw === "/" || pathRaw === "/home") ? homePath : pathRaw;
 		// For dynamic grid routes, extract menuId and use it as selected key
 		const match = normalizedPath.match(/\/system\/grid\/(.+)$/);
 		if (match) {

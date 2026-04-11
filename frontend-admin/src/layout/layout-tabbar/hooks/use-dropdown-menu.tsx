@@ -13,7 +13,7 @@ import { useCallback, useMemo } from "react";
 
 import { useTranslation } from "react-i18next";
 
-const homePath = "/";
+const homePath = "homepage";
 /**
  * 标签页操作的键值对象
  * @readonly
@@ -61,7 +61,7 @@ export function useDropdownMenu() {
 	const items = useCallback((tabKey: string): MenuProps["items"] => {
 		const isOnlyTab = openTabs.size === 2 && openTabs.has(homePath);
 		const isLastTab = Array.from(openTabs.keys()).pop() === tabKey;
-		const isHomeTab = tabKey === "/" || tabKey === "/home";
+		const isHomeTab = tabKey === homePath || tabKey === "/" || tabKey === "/home";
 		return [
 			{
 				key: TabActionKeys.REFRESH,
