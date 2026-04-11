@@ -363,7 +363,9 @@ function parseUserAddressValue(raw: any): any[] {
   if (typeof raw === "string" && raw.trim()) {
     try {
       const parsed = JSON.parse(raw);
-      return Array.isArray(parsed) ? parsed : [];
+      if (Array.isArray(parsed)) return parsed;
+      // Nếu là object, convert thành array 1 phần tử
+      if (parsed && typeof parsed === 'object') return [parsed];
     } catch {
       return [];
     }
@@ -395,6 +397,7 @@ function syncRuntimeUserAddress(userAddress: any[]): any[] {
 
   try {
     localStorage.setItem("user_address", serialized);
+    localStorage.setItem("user_adress", serialized);
   } catch {}
 
   return normalized;
@@ -1254,6 +1257,7 @@ ${resolvedContainerSelector} select {
        * Lấy user_address (local, sync, không realtime)
        */
       get: function(): any[] {
+        // Ưu tiên user_address, fallback user_adress
         let raw = (window.csmCurrentUser && (window.csmCurrentUser.user_address || window.csmCurrentUser.user_adress));
         if (!raw) {
           try {
@@ -1294,7 +1298,12 @@ ${resolvedContainerSelector} select {
           });
           const rows = (res && (res.rows || res.data)) || [];
           const row = Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
-          const value = row ? parseUserAddressValue(row.user_address || row.user_adress) : [];
+          // Ưu tiên user_address, fallback user_adress
+          let value = [];
+          if (row) {
+            value = parseUserAddressValue(row.user_address);
+            if (value.length === 0) value = parseUserAddressValue(row.user_adress);
+          }
           if (typeof callback === "function") callback(true, value);
         } catch (e) {
           if (typeof callback === "function") callback(false, [], (e as any)?.message || String(e));
