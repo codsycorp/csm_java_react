@@ -30,6 +30,16 @@ import { customAntdDarkTheme, customAntdLightTheme } from "#src/styles/theme/ant
 
 const dynamicReactRoots = new Map<string, ReactDOM.Root>();
 const LEGACY_CONTAINER_IDS = new Set(["context-auto", "dynamic-code-root"]);
+const SYSTEM_USER_TABLES = new Set(["csm_accounts", "csm_group_members"]);
+
+function resolveTableAppId(tableName: unknown, preferredAppId: unknown): string {
+  const normalizedTable = String(tableName || "").trim();
+  if (SYSTEM_USER_TABLES.has(normalizedTable)) {
+    return "csm";
+  }
+  const appId = String(preferredAppId || "").trim();
+  return appId || "csm";
+}
 
 type ScopedRuntime = {
   windowProxy: Window;
@@ -1122,52 +1132,42 @@ ${resolvedContainerSelector} select {
         ? ["csm_group_members", "csm_accounts"]
         : ["csm_accounts", "csm_group_members"];
 
-      // Try the user's own app_id first (needed for csm_group_members sub-user records),
-      // then fall back to "csm" for main accounts.
-      const appIdCandidates = [
-        String(effectiveAppId || "").trim(),
-        String(currentUser?.app_id || "").trim(),
-        String(currentUser?.parent_account_id || "").trim(),
-        "csm",
-      ].filter((value, index, arr) => Boolean(value) && arr.indexOf(value) === index);
+      for (const tableName of tableOrder) {
+        const requestAppId = resolveTableAppId(tableName, effectiveAppId);
+        for (const identity of identities) {
+          try {
+            const response = await (window as any).csmApi.getTableData({
+              app_id: requestAppId,
+              obj_name: tableName,
+              where: {
+                field: identity.field,
+                type: "eq",
+                value: identity.value,
+              },
+              take: 20,
+            });
 
-      for (const requestAppId of appIdCandidates) {
-        for (const tableName of tableOrder) {
-          for (const identity of identities) {
-            try {
-              const response = await (window as any).csmApi.getTableData({
-                app_id: requestAppId,
-                obj_name: tableName,
-                where: {
-                  field: identity.field,
-                  type: "eq",
-                  value: identity.value,
-                },
-                take: 20,
-              });
-
-              const rows = (response as any)?.rows || (response as any)?.data || [];
-              if (!Array.isArray(rows) || rows.length === 0) {
-                continue;
-              }
-
-              const row = pickBestMatchedRow(rows, currentUser);
-              if (!row) continue;
-
-              const stableId = row?.id;
-              const pkField = stableId ? "id" : identity.field;
-              const pkValue = stableId || identity.value;
-
-              return {
-                row,
-                pkField,
-                pkValue,
-                tableName,
-                requestAppId,
-              };
-            } catch {
-              // Try next candidate.
+            const rows = (response as any)?.rows || (response as any)?.data || [];
+            if (!Array.isArray(rows) || rows.length === 0) {
+              continue;
             }
+
+            const row = pickBestMatchedRow(rows, currentUser);
+            if (!row) continue;
+
+            const stableId = row?.id;
+            const pkField = stableId ? "id" : identity.field;
+            const pkValue = stableId || identity.value;
+
+            return {
+              row,
+              pkField,
+              pkValue,
+              tableName,
+              requestAppId,
+            };
+          } catch {
+            // Try next candidate.
           }
         }
       }
@@ -1717,8 +1717,9 @@ ${resolvedContainerSelector} select {
       
       // Database operations
       csm_obj_tables: (params: any, fn?: (res: any) => void) => {
+        const requestAppId = resolveTableAppId(params?.obj_name, params?.app_id || appId);
         getTableData<any>({
-          app_id: params?.app_id || appId,
+          app_id: requestAppId,
           obj_name: params?.obj_name,
           where: params?.e_where || params?.where,
           take: params?.take,
@@ -1738,8 +1739,9 @@ ${resolvedContainerSelector} select {
           fn?.({ success: false, error: "Missing obj_name" });
           return;
         }
+        const requestAppId = resolveTableAppId(params?.obj_name, params?.app_id || appId);
         (CsmApi as any).updateTableData({
-          app_id: params?.app_id || appId,
+          app_id: requestAppId,
           obj_name: params?.obj_name,
           command: (params?.command as any) || "update",
           obj_update: params?.obj_update || params?.obj || {},
@@ -1762,8 +1764,9 @@ ${resolvedContainerSelector} select {
       csm_userinfo_update: (app_token: string, userInfoUp: any, fn?: (res: any) => void) => {
         const self = {
           csm_obj_tables: (params: any, callback: (res: any) => void) => {
+            const requestAppId = resolveTableAppId(params?.obj_name, params?.app_id || appId);
             getTableData<any>({
-              app_id: params?.app_id || appId,
+              app_id: requestAppId,
               obj_name: params?.obj_name,
               where: params?.e_where || params?.where,
               take: params?.take,
@@ -1782,8 +1785,9 @@ ${resolvedContainerSelector} select {
               callback({ success: false, error: "Missing obj_name" });
               return;
             }
+            const requestAppId = resolveTableAppId(params?.obj_name, params?.app_id || appId);
             (CsmApi as any).updateTableData({
-              app_id: params?.app_id || appId,
+              app_id: requestAppId,
               obj_name: params?.obj_name,
               command: (params?.command as any) || "update",
               obj_update: params?.obj_update || params?.obj || {},
@@ -1805,7 +1809,7 @@ ${resolvedContainerSelector} select {
 
         // Implementation matching AutoSetup.tsx
         self.csm_obj_tables({
-          app_id: effectiveAppId,
+          app_id: "csm",
           obj_name: "csm_accounts",
           e_where: {
             field: "app_token",
@@ -1836,7 +1840,7 @@ ${resolvedContainerSelector} select {
           if (userInfoUp.address !== undefined) updateObj.address = userInfoUp.address;
           
           self.csm_obj_updates({
-            app_id: effectiveAppId,
+            app_id: "csm",
             obj_name: "csm_accounts",
             command: "update",
             obj_update: updateObj,

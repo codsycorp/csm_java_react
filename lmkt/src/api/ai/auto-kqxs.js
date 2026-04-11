@@ -2517,8 +2517,8 @@
     var _ao1 = useState(buildLegacyThDefaultQueryTypeDefs(2)[0].value), legacySlrQueryValue = _ao1[0], setLegacySlrQueryValue = _ao1[1];
     var _ap = useState("C_D"), legacyCdMode = _ap[0], setLegacyCdMode = _ap[1];
     var _aq = useState(1), legacyRankFrom = _aq[0], setLegacyRankFrom = _aq[1];
-    var _ar = useState(10), legacyRankTo = _ar[0], setLegacyRankTo = _ar[1];
-    var _ab1 = useState(200), legacyNgayChay = _ab1[0], setLegacyNgayChay = _ab1[1];
+    var _ar = useState(20), legacyRankTo = _ar[0], setLegacyRankTo = _ar[1];
+    var _ab1 = useState(500), legacyNgayChay = _ab1[0], setLegacyNgayChay = _ab1[1];
     var _ab2 = useState(false), legacyTheoThu = _ab2[0], setLegacyTheoThu = _ab2[1];
     var _ab2k = useState(false), legacyTheoKy = _ab2k[0], setLegacyTheoKy = _ab2k[1];
     var _ab3 = useState(true), legacyChkHieu = _ab3[0], setLegacyChkHieu = _ab3[1];
@@ -7326,9 +7326,18 @@
       makeNbCol(tt.lgNbColBlB,        "BL_B",          120,   1)
     ];
 
+
     var legacySlrQueryTypeOptions = (legacyThQueryTypeOptions && legacyThQueryTypeOptions.length)
       ? legacyThQueryTypeOptions
       : buildLegacyThDefaultQueryTypeDefs(legacyHeThong);
+
+    // --- SLR Multi-select Loại Tìm state ---
+    var _slr_qt = useState([
+      (legacySlrQueryTypeOptions && legacySlrQueryTypeOptions[0] && legacySlrQueryTypeOptions[0].value) || 0
+    ]), legacySlrSelectedQueryTypes = _slr_qt[0], setLegacySlrSelectedQueryTypes = _slr_qt[1];
+
+    // --- SLR Auto-run state ---
+    var _slr_autoRunning = useState(false), legacySlrAutoRunning = _slr_autoRunning[0], setLegacySlrAutoRunning = _slr_autoRunning[1];
 
     var legacyNbGroupSizeOptions = Object.keys((legacyThGroupOptions || []).reduce(function (acc, group) {
       var size = Number(group && group.groupSize || 0);
@@ -8879,7 +8888,48 @@
                         ]),
                         h(Col, { xs: 12, md: 4, key: "slrnb_ngay" }, [
                           h("div", { style: { marginBottom: 6, fontWeight: 600 } }, tt.lgNgayChay),
-                          h(InputNumber, themedNumberProps({ value: legacyNgayChay, min: 0, max: 1000, onChange: function (v) { setLegacyNgayChay(toNumberSafe(v, 0)); } }))
+                          h(InputNumber, themedNumberProps({
+                            value: legacyNgayChay,
+                            min: 0,
+                            max: 1000,
+                            onChange: function (v) {
+                              // Giới hạn số ngày xét không vượt quá số ngày thực tế giữa từ ngày và đến ngày
+                              var tu = tu_ngay, den = den_ngay;
+                              var soNgayThucTe = 0;
+                              try {
+                                soNgayThucTe = TruNgayRaSoNgay(den, tu, "dd/mm/yyyy");
+                              } catch (e) {}
+                              var maxNgay = Math.max(0, soNgayThucTe);
+                              var next = toNumberSafe(v, 0);
+                              if (next > maxNgay) next = maxNgay;
+                              setLegacyNgayChay(next);
+                            }
+                          })),
+                          h("div", { style: { marginTop: 8 } }, [
+                            h("div", { style: { fontWeight: 600, marginBottom: 4 } }, tt.lgThAutoQueryTypes || "Loại Tìm"),
+                            h(Select, themedSelectProps({
+                              mode: "multiple",
+                              value: Array.isArray(legacySlrSelectedQueryTypes) ? legacySlrSelectedQueryTypes : [],
+                              options: legacySlrQueryTypeOptions || [{ value: 0, label: tt.theoNgay }, { value: 1, label: tt.theoKy }],
+                              onChange: function(vals) { setLegacySlrSelectedQueryTypes(vals); },
+                              style: { minWidth: 120, maxWidth: 220 }
+                            })),
+                            h(Button, {
+                              key: "slr-auto-run",
+                              className: "kqxs-action-btn kqxs-action-btn-primary",
+                              type: "primary",
+                              onClick: runLegacySlrAutoFilter,
+                              loading: legacySlrAutoRunning,
+                              disabled: legacySlrAutoRunning || !Array.isArray(legacySlrSelectedQueryTypes) || legacySlrSelectedQueryTypes.length === 0,
+                              style: { marginLeft: 8, marginTop: 8 }
+                            }, tt.lgThAutoRun || "Auto Filter (C1–C6)"),
+                            legacySlrAutoRunning ? h(Button, {
+                              key: "slr-auto-stop",
+                              danger: true,
+                              onClick: stopLegacySlrAutoFilter,
+                              style: { marginLeft: 8, marginTop: 8 }
+                            }, tt.lgThAutoStop || "Stop") : null
+                          ])
                         ])
                       ]),
                       h("div", { style: { marginTop: 4, padding: "8px 10px", border: "1px solid " + theme.border, borderRadius: 6, background: "color-mix(in srgb, " + theme.cardBg + " 88%, " + theme.pageBg + " 12%)" } }, [
@@ -9120,7 +9170,16 @@
 
               h(Row, { gutter: 12, style: { marginTop: 10 } }, [
                 h(Col, { xs: 12, md: 3, key: "n1" }, [h("div", { style: { marginBottom: 6 } }, tt.tkType), h(Select, themedSelectProps({ value: loai_tk, options: [{ value: 1, label: tt.tk1 }, { value: 2, label: tt.tk2 }, { value: 3, label: tt.tk3 }], onChange: setLoaiTk }))]),
-                h(Col, { xs: 12, md: 3, key: "n2" }, [h("div", { style: { marginBottom: 6 } }, tt.searchType), h(Select, themedSelectProps({ value: loai_tim, options: [{ value: 0, label: tt.theoNgay }, { value: 1, label: tt.theoKy }], onChange: setLoaiTim }))]),
+                h(Col, { xs: 12, md: 6, key: "n2" }, [
+                  h("div", { style: { marginBottom: 6 } }, tt.searchType),
+                  h(Select, themedSelectProps({
+                    mode: "multiple",
+                    value: Array.isArray(legacySlrSelectedQueryTypes) ? legacySlrSelectedQueryTypes : (typeof loai_tim !== "undefined" ? [loai_tim] : []),
+                    options: legacySlrQueryTypeOptions || [{ value: 0, label: tt.theoNgay }, { value: 1, label: tt.theoKy }],
+                    onChange: function(vals) { setLegacySlrSelectedQueryTypes(vals); },
+                    style: { minWidth: 120, maxWidth: 220 }
+                  }))
+                ]),
                 h(Col, { xs: 12, md: 3, key: "n3" }, [h("div", { style: { marginBottom: 6 } }, tt.soKy), h(InputNumber, themedNumberProps({ value: so_ky, onChange: function (v) { setSoKy(toNumberSafe(v, 0)); } }))]),
                 h(Col, { xs: 12, md: 3, key: "n4" }, [h("div", { style: { marginBottom: 6 } }, tt.laySoKy), h(InputNumber, themedNumberProps({ value: lay_so_ky, onChange: function (v) { setLaySoKy(toNumberSafe(v, 0)); } }))]),
                 h(Col, { xs: 12, md: 3, key: "n5" }, [h("div", { style: { marginBottom: 6 } }, tt.demLe), h(InputNumber, themedNumberProps({ value: dem_be_hon, onChange: function (v) { setDemBeHon(toNumberSafe(v, 0)); } }))]),
@@ -9176,6 +9235,21 @@
                   onClick: thong_ke_moi,
                   loading: loading
                 }, tt.btnStatNew),
+                h(Button, {
+                  key: "slr-auto-run",
+                  className: "kqxs-action-btn kqxs-action-btn-primary",
+                  type: "primary",
+                  onClick: runLegacySlrAutoFilter,
+                  loading: legacySlrAutoRunning,
+                  disabled: legacySlrAutoRunning || !Array.isArray(legacySlrSelectedQueryTypes) || legacySlrSelectedQueryTypes.length === 0,
+                  style: { marginLeft: 8 }
+                }, tt.lgThAutoRun || "Auto Filter (C1–C6)"),
+                legacySlrAutoRunning ? h(Button, {
+                  key: "slr-auto-stop",
+                  danger: true,
+                  onClick: stopLegacySlrAutoFilter,
+                  style: { marginLeft: 8 }
+                }, tt.lgThAutoStop || "Stop") : null,
                 allowUpdateActions ? h(Button, {
                   key: "xsk",
                   className: "kqxs-action-btn",

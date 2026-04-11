@@ -3436,6 +3436,8 @@ public class TableHandler {
             return null;
         }
 
+        String scopeAppId = resolveSystemUserAppId(appId, tableName);
+
         Set<String> identifiers = new LinkedHashSet<>();
         if ("csm_accounts".equals(tableName)) {
             addIdentifierCandidate(identifiers, objUpdate.get("username"));
@@ -3450,14 +3452,21 @@ public class TableHandler {
         }
 
         for (String identifier : identifiers) {
-            if (identifierExistsInSubUsers(appId, identifier)) {
+            if (identifierExistsInSubUsers(scopeAppId, identifier)) {
                 return "Định danh '" + identifier + "' đã tồn tại trong danh sách người dùng con.";
             }
-            if (identifierExistsInMainAccounts(appId, identifier)) {
+            if (identifierExistsInMainAccounts(scopeAppId, identifier)) {
                 return "Định danh '" + identifier + "' đã tồn tại trong danh sách người dùng chính.";
             }
         }
         return null;
+    }
+
+    private String resolveSystemUserAppId(String appId, String tableName) {
+        if ("csm_accounts".equals(tableName) || "csm_group_members".equals(tableName)) {
+            return "csm";
+        }
+        return appId;
     }
 
     private void addIdentifierCandidate(Set<String> target, Object raw) {
