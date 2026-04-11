@@ -1273,17 +1273,23 @@ ${resolvedContainerSelector} select {
           const hasRole = (role: any) => (currentUser.roles || []).some((r: any) => String(r || "").toLowerCase() === String(role).toLowerCase());
           const isDevOrAdminAccount = Boolean(currentUser.dev) || hasRole("admin") || hasRole("dev");
           const objName = isDevOrAdminAccount ? "csm_accounts" : "csm_group_members";
-          const pkField = currentUser.userId
-            ? "id"
-            : (currentUser.email ? "email" : (currentUser.username ? "username" : "phoneNumber"));
-          const pkValue = currentUser.userId || currentUser.email || currentUser.username || currentUser.phoneNumber;
-          if (!pkField || !pkValue) throw new Error("Missing user identity");
+          // Lấy danh sách các trường nhận diện giống update
+          const pkFields = [];
+          if (currentUser.userId) pkFields.push({ field: "id", value: currentUser.userId });
+          if (currentUser.email) pkFields.push({ field: "email", value: currentUser.email });
+          if (currentUser.username) pkFields.push({ field: "username", value: currentUser.username });
+          if (currentUser.phoneNumber) pkFields.push({ field: "phoneNumber", value: currentUser.phoneNumber });
+          if (pkFields.length === 0) throw new Error("Missing user identity");
           const api = window.csmApi && window.csmApi.getTableData;
           if (!api) throw new Error("API not available");
+          // where là OR các trường nhận diện
+          const where = pkFields.length === 1
+            ? { field: pkFields[0].field, type: "eq", value: pkFields[0].value }
+            : { operator: "OR", conditions: pkFields.map(f => ({ field: f.field, type: "eq", value: f.value })) };
           const res = await api({
             app_id: "csm",
             obj_name: objName,
-            where: { field: pkField, type: "eq", value: pkValue },
+            where,
             take: 1,
           });
           const rows = (res && (res.rows || res.data)) || [];
