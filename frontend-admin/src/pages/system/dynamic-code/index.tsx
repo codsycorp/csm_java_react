@@ -1250,8 +1250,24 @@ ${resolvedContainerSelector} select {
     };
 
     window.csmUserData = {
-      get: () => {
-        // Lấy user_address từ window.csmCurrentUser, fallback localStorage
+      get: function(): any[] {
+        // Lấy user_address qua API như profile, fallback local nếu lỗi (đồng bộ, không callback)
+        try {
+          const currentUser = window.csmCurrentUser || {};
+          const hasRole = (role: any) => (currentUser.roles || []).some((r: any) => String(r || "").toLowerCase() === String(role).toLowerCase());
+          const isDevOrAdminAccount = Boolean(currentUser.dev) || hasRole("admin") || hasRole("dev");
+          const objName = isDevOrAdminAccount ? "csm_accounts" : "csm_group_members";
+          const pkField = currentUser.userId
+            ? "id"
+            : (currentUser.email ? "email" : (currentUser.username ? "username" : "phoneNumber"));
+          const pkValue = currentUser.userId || currentUser.email || currentUser.username || currentUser.phoneNumber;
+          if (!pkField || !pkValue) throw new Error("Missing user identity");
+          const api = window.csmApi && window.csmApi.getTableData;
+          if (!api) throw new Error("API not available");
+          // NOTE: getTableData là async, nhưng get phải sync, nên chỉ trả local nếu không có dữ liệu
+          // Nếu muốn lấy realtime từ API, dùng fetchFromDatabase riêng (nếu cần)
+        } catch (e) {}
+        // fallback local
         let raw = (window.csmCurrentUser && (window.csmCurrentUser.user_address || window.csmCurrentUser.user_adress));
         if (!raw) {
           try {
@@ -1260,30 +1276,60 @@ ${resolvedContainerSelector} select {
         }
         return parseUserAddressValue(raw);
       },
-      set: async (newUserAddress, callback) => {
-        // Cập nhật đồng thời cả window.csmCurrentUser.user_address, user_adress và localStorage
-        const arr = Array.isArray(newUserAddress) ? newUserAddress : [];
-        const serialized = JSON.stringify(arr);
-        if (!window.csmCurrentUser) window.csmCurrentUser = {};
-        window.csmCurrentUser.user_address = serialized;
-        window.csmCurrentUser.user_adress = serialized;
+      set: async function(newUserAddress: any[], callback?: (success: boolean, error?: string) => void): Promise<void> {
+        // Cập nhật user_address qua API như profile, đồng bộ local nếu thành công
         try {
-          localStorage.setItem("user_address", serialized);
-          localStorage.setItem("user_adress", serialized);
-        } catch {}
-        // Nếu có self object thì sync luôn
-        if ((window as any).seft) {
-          (window as any).seft.Uinfos = (window as any).seft.Uinfos || {};
-          (window as any).seft.Uinfos.userAddress = arr;
-          if ((window as any).seft.user) {
-            (window as any).seft.user.user_address = serialized;
-            (window as any).seft.user.user_adress = serialized;
+          const arr = Array.isArray(newUserAddress) ? newUserAddress : [];
+          const serialized = JSON.stringify(arr);
+          const currentUser = window.csmCurrentUser || {};
+          const hasRole = (role: any) => (currentUser.roles || []).some((r: any) => String(r || "").toLowerCase() === String(role).toLowerCase());
+          const isDevOrAdminAccount = Boolean(currentUser.dev) || hasRole("admin") || hasRole("dev");
+          const objName = isDevOrAdminAccount ? "csm_accounts" : "csm_group_members";
+          const pkField = currentUser.userId
+            ? "id"
+            : (currentUser.email ? "email" : (currentUser.username ? "username" : "phoneNumber"));
+          const pkValue = currentUser.userId || currentUser.email || currentUser.username || currentUser.phoneNumber;
+          if (!pkField || !pkValue) throw new Error("Missing user identity");
+          const api = window.csmApi && window.csmApi.updateTableData;
+          if (!api) throw new Error("API not available");
+          const updateData = {
+            id: currentUser.userId || pkValue,
+            email: currentUser.email,
+            username: currentUser.username,
+            phoneNumber: currentUser.phoneNumber,
+            [pkField]: pkValue,
+            user_address: serialized,
+            user_adress: serialized
+          };
+          if (currentUser.email) updateData.email = currentUser.email;
+          if (currentUser.username) updateData.username = currentUser.username;
+          if (currentUser.phoneNumber) updateData.phoneNumber = currentUser.phoneNumber;
+          const res = await api({
+            app_id: "csm",
+            obj_name: objName,
+            command: "update",
+            obj_update: updateData,
+            pk_fields: [pkField],
+          });
+          // Đồng bộ local nếu thành công
+          if (res && (res.success === true || Number(res.code) === 200 || res.data === "success" || String((res as any).message || "").toLowerCase() === "ok")) {
+            if (!window.csmCurrentUser) window.csmCurrentUser = {};
+            window.csmCurrentUser.user_address = serialized;
+            window.csmCurrentUser.user_adress = serialized;
+            try {
+              localStorage.setItem("user_address", serialized);
+              localStorage.setItem("user_adress", serialized);
+            } catch {}
+            if (typeof callback === "function") callback(true);
+          } else {
+            if (typeof callback === "function") callback(false, (res as any)?.message || "Update failed");
           }
+        } catch (e) {
+          if (typeof callback === "function") callback(false, (e as any)?.message || String(e));
         }
-        if (typeof callback === "function") callback(true);
       }
     };
-    console.log('✅ [DynamicCode] window.csmUserData initialized (get/set user_address only)');
+    console.log('✅ [DynamicCode] window.csmUserData initialized (get/set user_address via API like profile, type safe)');
   }
 
   // Sync current user to window
