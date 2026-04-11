@@ -102,7 +102,8 @@ export default function LayoutContent() {
 	useEffect(() => {
 		const cacheNodes = aliveRef.current?.getCacheNodes?.();
 		cacheNodes?.forEach((node) => {
-			if (!openTabs.has(node.cacheKey)) {
+			// Không destroy cache của Trang Chủ và AutoSetup
+			if (!openTabs.has(node.cacheKey) && node.cacheKey !== "homepage" && node.cacheKey !== "/auto-setup") {
 				aliveRef.current?.destroy(node.cacheKey);
 			}
 		});
