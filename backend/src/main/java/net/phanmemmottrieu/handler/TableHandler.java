@@ -490,8 +490,24 @@ public class TableHandler {
 
             // Security scope: admin (non-dev) chỉ xem users cùng app_id khi đọc bảng csm_accounts.
             filtersObjs = applyAdminUserListScope(tblname, filtersObjs, isUpdate);
-            // Security scope: admin (non-dev) chỉ xem sub-user thuộc mình trong bảng csm_group_members.
-            filtersObjs = applyAdminSubUserListScope(tblname, filtersObjs, isUpdate, accessContext);
+            // Tuỳ chọn: chỉ trả về sub-user của riêng admin nếu only_my_subusers=true
+            if ("csm_group_members".equals(tblname) && !isUpdate) {
+                Object onlyMySubusers = msg.get("only_my_subusers");
+                if (onlyMySubusers instanceof Boolean && (Boolean) onlyMySubusers) {
+                    UserAccessContext access = accessContext;
+                    if (access != null && access.parentAccountCandidates != null && !access.parentAccountCandidates.isEmpty()) {
+                        SearchFilter myScope = buildFieldScopeFilter(access.parentAccountCandidates, "parent_account_id");
+                        if (filtersObjs == null || isEmptyFilter(filtersObjs)) {
+                            filtersObjs = myScope;
+                        } else {
+                            SearchFilter merged = new SearchFilter();
+                            merged.setOperator("AND");
+                            merged.setConditions(new ArrayList<>(List.of(filtersObjs, myScope)));
+                            filtersObjs = merged;
+                        }
+                    }
+                }
+            }
 
 //            OSSUtil.log("Lấy dữ liệu "+appId+" trên bảng "+tblname+" với điều kiện "+filtersObjs+" so với điều kiện của nó là:"+msg.get("e_where"));
             if ("index".equals(tblname)) {
@@ -786,28 +802,8 @@ public class TableHandler {
     }
 
     private SearchFilter applyAdminSubUserListScope(String tableName, SearchFilter existingFilter, boolean isUpdate, UserAccessContext access) {
-        if (isUpdate || !"csm_group_members".equals(tableName)) {
-            return existingFilter;
-        }
-
-        // Apply parent_account_id scope for all authenticated users (both admin and dev).
-        // Dev should only see sub-users belonging to their own account, not all tenants'.
-        if (access == null || access.parentAccountCandidates.isEmpty()) {
-            return existingFilter;
-        }
-
-        SearchFilter ownerScope = buildFieldScopeFilter(access.parentAccountCandidates, "parent_account_id");
-        if (ownerScope == null) {
-            return existingFilter;
-        }
-        if (isEmptyFilter(existingFilter)) {
-            return ownerScope;
-        }
-
-        SearchFilter merged = new SearchFilter();
-        merged.setOperator("AND");
-        merged.setConditions(new ArrayList<>(List.of(existingFilter, ownerScope)));
-        return merged;
+        // ĐÃ BỎ: Không còn ép scope parent_account_id cho csm_group_members.
+        return existingFilter;
     }
 
     private SearchFilter buildFieldScopeFilter(Set<String> candidates, String fieldName) {

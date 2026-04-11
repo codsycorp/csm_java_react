@@ -1169,21 +1169,10 @@ export default function AdminPage() {
 				conditions: [{ field: "id", type: "like", value: "" }]
 			};
 
+			// Áp dụng quy tắc backend mới: chỉ cần truyền only_my_subusers: true khi là admin và bảng là csm_group_members
+			let onlyMySubusers = false;
 			if (isSystemUserRoute && isAdminUser && primaryTable === "csm_group_members") {
-				const ownerCandidates = Array.from(new Set([
-					resolvedUserAppId,
-					...userSubOwnerCandidates,
-				]));
-				const ownerConditions = ownerCandidates
-					.filter((owner) => typeof owner === "string" && owner.trim().length > 0)
-					.map(owner => ({
-					field: "parent_account_id",
-					type: "eq",
-					value: owner,
-				}));
-				if (ownerConditions.length > 0) {
-					(defaultFilter.conditions as any[]).push({ operator: "OR", conditions: ownerConditions });
-				}
+				onlyMySubusers = true;
 			}
 
 			await ensureSystemRouteTables();
@@ -1191,7 +1180,8 @@ export default function AdminPage() {
 			const response = await getTableData<any>({
 				app_id: (primaryTable === "csm_accounts" || primaryTable === "csm_group_members") ? "csm" : primaryTableAppId,
 				obj_name: primaryTable,
-				where: defaultFilter
+				where: defaultFilter,
+				...(onlyMySubusers ? { only_my_subusers: true } : {})
 			});
 
 			const rows = response.rows || response.data || [];
@@ -1218,7 +1208,12 @@ export default function AdminPage() {
 					try {
 						const tableAppId = resolveTableAppId(t);
 						const tableFilter: any = JSON.parse(JSON.stringify(defaultFilter));
-						const resT = await getTableData<any>({ app_id: (t === "csm_accounts" || t === "csm_group_members") ? "csm" : tableAppId, obj_name: t, where: tableFilter });
+						const resT = await getTableData<any>({
+							app_id: (t === "csm_accounts" || t === "csm_group_members") ? "csm" : tableAppId,
+							obj_name: t,
+							where: tableFilter,
+							...(t === "csm_group_members" && onlyMySubusers ? { only_my_subusers: true } : {})
+						});
 						const rowsT = (resT as any).rows || (resT as any).data || [];
 						const pkT = (resT as any).fieldsPK || ["id"];
 						newDatabase[t] = { rows: rowsT, fieldsPK: pkT };
