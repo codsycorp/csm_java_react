@@ -1250,8 +1250,24 @@ ${resolvedContainerSelector} select {
     };
 
     window.csmUserData = {
+      /**
+       * Lấy user_address (local, sync, không realtime)
+       */
       get: function(): any[] {
-        // Lấy user_address qua API như profile, fallback local nếu lỗi (đồng bộ, không callback)
+        let raw = (window.csmCurrentUser && (window.csmCurrentUser.user_address || window.csmCurrentUser.user_adress));
+        if (!raw) {
+          try {
+            raw = localStorage.getItem("user_address") || localStorage.getItem("user_adress");
+          } catch {}
+        }
+        return parseUserAddressValue(raw);
+      },
+
+      /**
+       * Lấy user_address realtime từ backend qua API (giống profile)
+       * @param callback (ok, data, error) => void
+       */
+      fetchFromDatabase: async function(callback?: (ok: boolean, data?: any[], error?: string) => void): Promise<void> {
         try {
           const currentUser = window.csmCurrentUser || {};
           const hasRole = (role: any) => (currentUser.roles || []).some((r: any) => String(r || "").toLowerCase() === String(role).toLowerCase());
@@ -1264,18 +1280,24 @@ ${resolvedContainerSelector} select {
           if (!pkField || !pkValue) throw new Error("Missing user identity");
           const api = window.csmApi && window.csmApi.getTableData;
           if (!api) throw new Error("API not available");
-          // NOTE: getTableData là async, nhưng get phải sync, nên chỉ trả local nếu không có dữ liệu
-          // Nếu muốn lấy realtime từ API, dùng fetchFromDatabase riêng (nếu cần)
-        } catch (e) {}
-        // fallback local
-        let raw = (window.csmCurrentUser && (window.csmCurrentUser.user_address || window.csmCurrentUser.user_adress));
-        if (!raw) {
-          try {
-            raw = localStorage.getItem("user_address") || localStorage.getItem("user_adress");
-          } catch {}
+          const res = await api({
+            app_id: "csm",
+            obj_name: objName,
+            where: { field: pkField, type: "eq", value: pkValue },
+            take: 1,
+          });
+          const rows = (res && (res.rows || res.data)) || [];
+          const row = Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
+          const value = row ? parseUserAddressValue(row.user_address || row.user_adress) : [];
+          if (typeof callback === "function") callback(true, value);
+        } catch (e) {
+          if (typeof callback === "function") callback(false, [], (e as any)?.message || String(e));
         }
-        return parseUserAddressValue(raw);
       },
+
+      /**
+       * Cập nhật user_address qua API (giống profile)
+       */
       set: async function(newUserAddress: any[], callback?: (success: boolean, error?: string) => void): Promise<void> {
         // Cập nhật user_address qua API như profile, đồng bộ local nếu thành công
         try {
