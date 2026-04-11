@@ -3675,17 +3675,21 @@ public class TableHandler {
             data = maskSelfAccountRowsForNonDev(data, resolveCurrentUserAccessContext());
             logger.info("[AutoSetupDebug] [{}] rows after maskSelfAccountRowsForNonDev: {}", tblname, data.size());
         }
-        // Chỉ cho phép non-dev lấy sys_autos với p_type=0 và (p_name=app_id hoặc p_name=broadcast_app_id)
-        if ("sys_autos".equals(tblname) && accessContext != null && !accessContext.isDev) {
-            String appIdNorm = appId == null ? "" : appId.trim();
-            String broadcastAppId = "broadcast_" + appIdNorm;
+        // Chỉ cho phép non-dev lấy sys_autos với p_type=0 và (p_name=userAppId hoặc p_name=broadcast_userAppId)
+        // Lưu ý: request app_id của frontend luôn là "csm" cho sys_autos, không dùng để scope dữ liệu business app.
+        if ("sys_autos".equals(tblname) && effectiveAccessContext != null && !effectiveAccessContext.isDev) {
+            String userAppIdNorm = safeStr(effectiveAccessContext.appId);
+            String broadcastUserAppId = userAppIdNorm.isBlank() ? "" : "broadcast_" + userAppIdNorm;
             data = data.stream().filter(row -> {
+                if (userAppIdNorm.isBlank()) {
+                    return false;
+                }
                 Object pType = row.get("p_type");
-                Object pName = row.get("p_name");
-                return "0".equals(String.valueOf(pType)) &&
-                    (appIdNorm.equals(String.valueOf(pName)) || broadcastAppId.equals(String.valueOf(pName)));
+                String pName = safeStr(row.get("p_name"));
+                return "0".equals(String.valueOf(pType))
+                    && (userAppIdNorm.equals(pName) || broadcastUserAppId.equals(pName));
             }).collect(java.util.stream.Collectors.toList());
-            logger.info("[AutoSetupDebug] [sys_autos] rows after non-dev filter: {}", data.size());
+            logger.info("[AutoSetupDebug] [sys_autos] rows after non-dev filter (userAppId={}): {}", userAppIdNorm, data.size());
         }
         decryptPassForDisplay(tblname, data);
 
