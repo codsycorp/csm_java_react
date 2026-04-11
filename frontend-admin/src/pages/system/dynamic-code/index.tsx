@@ -138,11 +138,14 @@ function cleanupOwnedContainer(containerId: string) {
   const root = dynamicReactRoots.get(containerId);
   if (root) {
     try {
-      root.unmount();
+      // Defer unmount to avoid React race condition warning
+      setTimeout(() => {
+        try { root.unmount(); } catch (error) { console.warn(`[DynamicCode] Failed to unmount root ${containerId}:`, error); }
+        dynamicReactRoots.delete(containerId);
+      }, 0);
     } catch (error) {
-      console.warn(`[DynamicCode] Failed to unmount root ${containerId}:`, error);
+      console.warn(`[DynamicCode] Failed to schedule unmount root ${containerId}:`, error);
     }
-    dynamicReactRoots.delete(containerId);
   }
 
   const container = document.getElementById(containerId);
