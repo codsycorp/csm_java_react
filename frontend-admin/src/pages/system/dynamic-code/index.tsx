@@ -1028,29 +1028,60 @@ ${resolvedContainerSelector} select {
       return { preferredTable, preferredPkField, preferredPkValue };
     };
 
-    const getIdentityCandidates = (currentUser: any) => {
+    const uniqIdentityCandidates = (candidates: Array<{ field: string; value: any }>) => {
+      const seen = new Set<string>();
+      return candidates.filter((item) => {
+        if (item?.value === undefined || item?.value === null) return false;
+        const value = String(item.value).trim();
+        if (!value) return false;
+        const key = `${item.field}::${value}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    };
+
+    const getProfileIdentityCandidates = (currentUser: any) => {
       const target = resolveProfileTarget(currentUser);
-      const candidates = [
+      return uniqIdentityCandidates([
         { field: target.preferredPkField, value: target.preferredPkValue },
         { field: "id", value: currentUser?.userId || currentUser?.id || currentUser?.user_id || currentUser?.account_id },
         { field: "email", value: currentUser?.email },
         { field: "username", value: currentUser?.username },
         { field: "phoneNumber", value: currentUser?.phoneNumber || currentUser?.phone_number },
+      ]);
+    };
+
+    const getTableIdentityCandidates = (currentUser: any, tableName: string) => {
+      const profileCandidates = getProfileIdentityCandidates(currentUser);
+      if (tableName === "csm_group_members") {
+        return uniqIdentityCandidates([
+          ...profileCandidates,
+          { field: "login_identifier", value: currentUser?.login_identifier || currentUser?.email || currentUser?.username || currentUser?.phoneNumber || currentUser?.phone_number },
+        ]);
+      }
+      return profileCandidates;
+    };
+
+    const buildIdentityLookupWhere = (candidates: Array<{ field: string; value: any }>) => {
+      const conditions = uniqIdentityCandidates(candidates).map((item) => ({
+        field: item.field,
+        type: "eq" as const,
+        value: item.value,
+      }));
+
+      if (conditions.length === 0) return undefined;
+      if (conditions.length === 1) return conditions[0];
+      return { operator: "OR" as const, conditions };
+    };
+
+    const getIdentityCandidates = (currentUser: any) => {
+      return uniqIdentityCandidates([
+        ...getProfileIdentityCandidates(currentUser),
         { field: "phone_number", value: currentUser?.phone_number || currentUser?.phoneNumber },
         { field: "app_token", value: currentUser?.app_token || currentUser?.appToken },
         { field: "login_identifier", value: currentUser?.login_identifier },
-      ];
-
-      const seen = new Set<string>();
-      return candidates.filter((x) => {
-        if (x.value === undefined || x.value === null) return false;
-        const value = String(x.value).trim();
-        if (!value) return false;
-        const key = `${x.field}::${value}`;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
+      ]);
     };
 
     const normalizeCompare = (value: any): string => String(value ?? "").trim().toLowerCase();
@@ -1113,6 +1144,35 @@ ${resolvedContainerSelector} select {
       return bestScore >= 0 ? best : null;
     };
 
+    const resolveMatchedPk = (
+      row: any,
+      currentUser: any,
+      candidates: Array<{ field: string; value: any }>,
+      fallbackField: string,
+      fallbackValue: any,
+    ) => {
+      const stableId = row?.id;
+      if (stableId) {
+        return { pkField: "id", pkValue: stableId };
+      }
+
+      for (const candidate of candidates) {
+        const candidateField = candidate.field === "phone_number" ? "phoneNumber" : candidate.field;
+        const rowValue = candidateField === "phoneNumber"
+          ? (row?.phoneNumber ?? row?.phone_number)
+          : row?.[candidateField];
+        if (normalizeCompare(rowValue) && normalizeCompare(rowValue) === normalizeCompare(candidate.value)) {
+          return { pkField: candidateField, pkValue: candidate.value };
+        }
+      }
+
+      const target = resolveProfileTarget(currentUser);
+      return {
+        pkField: fallbackField || target.preferredPkField,
+        pkValue: fallbackValue ?? target.preferredPkValue,
+      };
+    };
+
     const isUpdateSuccessResponse = (response: any): boolean => {
       if (!response) return false;
       if (response.success === true) return true;
@@ -1124,9 +1184,6 @@ ${resolvedContainerSelector} select {
 
     const fetchAccountRow = async (): Promise<{ row: any; pkField: string; pkValue: any; tableName: string; requestAppId: string } | null> => {
       const currentUser = (window as any).csmCurrentUser || {};
-      const identities = getIdentityCandidates(currentUser);
-      if (identities.length === 0) return null;
-
       const target = resolveProfileTarget(currentUser);
       const tableOrder = target.preferredTable === "csm_group_members"
         ? ["csm_group_members", "csm_accounts"]
@@ -1134,41 +1191,45 @@ ${resolvedContainerSelector} select {
 
       for (const tableName of tableOrder) {
         const requestAppId = resolveTableAppId(tableName, effectiveAppId);
-        for (const identity of identities) {
-          try {
-            const response = await (window as any).csmApi.getTableData({
-              app_id: requestAppId,
-              obj_name: tableName,
-              where: {
-                field: identity.field,
-                type: "eq",
-                value: identity.value,
-              },
-              take: 20,
-            });
+        const tableIdentities = getTableIdentityCandidates(currentUser, tableName);
+        const lookupWhere = buildIdentityLookupWhere(tableIdentities);
+        if (!lookupWhere) {
+          continue;
+        }
 
-            const rows = (response as any)?.rows || (response as any)?.data || [];
-            if (!Array.isArray(rows) || rows.length === 0) {
-              continue;
-            }
+        try {
+          const response = await (window as any).csmApi.getTableData({
+            app_id: requestAppId,
+            obj_name: tableName,
+            where: lookupWhere,
+            take: 20,
+          });
 
-            const row = pickBestMatchedRow(rows, currentUser);
-            if (!row) continue;
-
-            const stableId = row?.id;
-            const pkField = stableId ? "id" : identity.field;
-            const pkValue = stableId || identity.value;
-
-            return {
-              row,
-              pkField,
-              pkValue,
-              tableName,
-              requestAppId,
-            };
-          } catch {
-            // Try next candidate.
+          const rows = (response as any)?.rows || (response as any)?.data || [];
+          if (!Array.isArray(rows) || rows.length === 0) {
+            continue;
           }
+
+          const row = pickBestMatchedRow(rows, currentUser);
+          if (!row) continue;
+
+          const matchedPk = resolveMatchedPk(
+            row,
+            currentUser,
+            tableIdentities,
+            target.preferredPkField,
+            target.preferredPkValue,
+          );
+
+          return {
+            row,
+            pkField: matchedPk.pkField,
+            pkValue: matchedPk.pkValue,
+            tableName,
+            requestAppId,
+          };
+        } catch {
+          // Try next table.
         }
       }
 
@@ -1188,179 +1249,42 @@ ${resolvedContainerSelector} select {
       }
     };
 
-    (window as any).csmUserData = {
-        /**
-         * Get user_address from window.csmCurrentUser
-         */
-        get: function(): any[] {
+    window.csmUserData = {
+      get: () => {
+        // Lấy user_address từ window.csmCurrentUser, fallback localStorage
+        let raw = (window.csmCurrentUser && (window.csmCurrentUser.user_address || window.csmCurrentUser.user_adress));
+        if (!raw) {
           try {
-            return getUserAddressFallback();
+            raw = localStorage.getItem("user_address") || localStorage.getItem("user_adress");
           } catch {}
-          return [];
-        },
-
-        /**
-         * Fetch user_address from csm_accounts or csm_group_members
-         */
-        fetchFromDatabase: async function(callback?: (success: boolean, data?: any[], error?: string) => void): Promise<void> {
-          try {
-            if (!(window as any).csmApi || !(window as any).csmApi.getTableData) {
-              const fallbackData = getUserAddressFallback();
-              if (typeof callback === "function") callback(true, fallbackData, "API not available, using local fallback");
-              return;
-            }
-
-            const account = await fetchAccountRow();
-            if (!account) {
-              const fallbackData = getUserAddressFallback();
-              if (Array.isArray(fallbackData) && fallbackData.length > 0) {
-                syncRuntimeUserAddress(fallbackData);
-                if (typeof callback === "function") callback(true, fallbackData, "Restricted by policy, using self data");
-                return;
-              }
-              if (typeof callback === "function") callback(true, [], "Restricted by policy, no fallback data");
-              return;
-            }
-
-            const userAddress = parseUserAddressValue(account.row?.user_address ?? account.row?.user_adress);
-            syncRuntimeUserAddress(userAddress);
-
-            if (typeof callback === "function") callback(true, userAddress);
-          } catch (error: any) {
-            if (typeof callback === "function") {
-              callback(false, [], error?.message || String(error));
-            }
-          }
-        },
-
-        /**
-         * Set user_address and update to csm_accounts or csm_group_members
-         */
-        set: async function(newUserData: any[], callback?: (success: boolean, error?: string) => void): Promise<void> {
-          try {
-            console.log("Dữ liệu user_address đưa vào là:", newUserData);
-            let arr = Array.isArray(newUserData) ? newUserData : [];
-            const nextSerialized = stableStringify(arr);
-            syncRuntimeUserAddress(arr);
-
-            const buildUpdateData = (pkField: string, pkValue: any): any => {
-              const payload: any = {
-                [pkField]: pkValue,
-              };
-
-              // Keep compatibility with mixed schema naming.
-              if (pkField === "phoneNumber") payload.phone_number = pkValue;
-              if (pkField === "phone_number") payload.phoneNumber = pkValue;
-
-              if (Array.isArray(arr) && arr.length > 0) {
-                payload.user_address = JSON.stringify(arr);
-              } else {
-                payload.user_address = null;
-              }
-              payload.user_adress = payload.user_address;
-              return payload;
-            };
-
-            const updateApi = (window.csmApi as any)?.updateTableData;
-
-            const tryUpdate = async (target: { tableName: string; pkField: string; pkValue: any; requestAppId?: string }) => {
-              if (!updateApi) return null;
-
-              const response = await updateApi({
-                app_id: target.requestAppId || "csm",
-                obj_name: target.tableName,
-                command: "update",
-                obj_update: buildUpdateData(target.pkField, target.pkValue),
-                pk_fields: [target.pkField],
-              });
-
-              return response;
-            };
-
-            const account = await fetchAccountRow();
-            if (!updateApi) {
-              if (typeof callback === "function") callback(false, "updateTableData API not available");
-              return;
-            }
-
-            if (account) {
-              const currentUserAddress = parseUserAddressValue(account.row?.user_address ?? account.row?.user_adress);
-              const currentSerialized = stableStringify(currentUserAddress);
-              if (currentSerialized === nextSerialized) {
-                console.log("ℹ️ [csmUserData.set] Skipped database update because user_address is unchanged");
-                if (typeof callback === "function") callback(true);
-                return;
-              }
-
-              const response = await tryUpdate({
-                tableName: account.tableName,
-                pkField: account.pkField,
-                pkValue: account.pkValue,
-                requestAppId: account.requestAppId,
-              });
-
-              if (isUpdateSuccessResponse(response)) {
-                console.log("✅ Updated user_address to database successfully");
-                if (typeof callback === "function") callback(true);
-                return;
-              }
-
-              const errorMsg = (response as any)?.message || (response as any)?.error || "Update failed";
-              console.error("❌ Failed to update user_address:", errorMsg);
-              if (typeof callback === "function") callback(false, errorMsg);
-              return;
-            }
-
-            // If account lookup fails (restricted query policy / missing read permission),
-            // still attempt a direct update using profile-like PK candidates.
-            const currentUser = (window as any).csmCurrentUser || {};
-            const target = resolveProfileTarget(currentUser);
-            const tableOrder = target.preferredTable === "csm_group_members"
-              ? ["csm_group_members", "csm_accounts"]
-              : ["csm_accounts", "csm_group_members"];
-            const identities = getIdentityCandidates(currentUser);
-
-            const fallbackTargets: Array<{ tableName: string; pkField: string; pkValue: any }> = [];
-            const pushTarget = (item: { tableName: string; pkField: string; pkValue: any }) => {
-              if (item.pkValue === undefined || item.pkValue === null) return;
-              const key = `${item.tableName}|${item.pkField}|${String(item.pkValue)}`;
-              if (fallbackTargets.some((x) => `${x.tableName}|${x.pkField}|${String(x.pkValue)}` === key)) return;
-              fallbackTargets.push(item);
-            };
-
-            for (const tableName of tableOrder) {
-              pushTarget({ tableName, pkField: target.preferredPkField, pkValue: target.preferredPkValue });
-              for (const identity of identities) {
-                pushTarget({ tableName, pkField: identity.field, pkValue: identity.value });
-              }
-            }
-
-            for (const targetItem of fallbackTargets) {
-              try {
-                const response = await tryUpdate(targetItem);
-                if (isUpdateSuccessResponse(response)) {
-                  console.log("✅ [csmUserData.set] Updated user_address via fallback target", targetItem);
-                  if (typeof callback === "function") callback(true);
-                  return;
-                }
-              } catch {
-                // Keep trying next fallback target.
-              }
-            }
-
-            // Keep backend security unchanged: if all update attempts fail, save locally and continue.
-            console.warn("[csmUserData.set] Could not update backend, saved to local fallback only");
-            if (typeof callback === "function") callback(true, "Saved locally (restricted backend access)");
-          } catch (error: any) {
-            const errorMsg = error?.message || String(error);
-            console.error("❌ Error setting user_address:", errorMsg);
-            if (typeof callback === "function") callback(false, errorMsg);
+        }
+        return parseUserAddressValue(raw);
+      },
+      set: async (newUserAddress, callback) => {
+        // Cập nhật đồng thời cả window.csmCurrentUser.user_address, user_adress và localStorage
+        const arr = Array.isArray(newUserAddress) ? newUserAddress : [];
+        const serialized = JSON.stringify(arr);
+        if (!window.csmCurrentUser) window.csmCurrentUser = {};
+        window.csmCurrentUser.user_address = serialized;
+        window.csmCurrentUser.user_adress = serialized;
+        try {
+          localStorage.setItem("user_address", serialized);
+          localStorage.setItem("user_adress", serialized);
+        } catch {}
+        // Nếu có self object thì sync luôn
+        if ((window as any).seft) {
+          (window as any).seft.Uinfos = (window as any).seft.Uinfos || {};
+          (window as any).seft.Uinfos.userAddress = arr;
+          if ((window as any).seft.user) {
+            (window as any).seft.user.user_address = serialized;
+            (window as any).seft.user.user_adress = serialized;
           }
         }
-      };
-
-      console.log('✅ [DynamicCode] window.csmUserData initialized/refreshed (compatible with AutoSetup.tsx)');
-    }
+        if (typeof callback === "function") callback(true);
+      }
+    };
+    console.log('✅ [DynamicCode] window.csmUserData initialized (get/set user_address only)');
+  }
 
   // Sync current user to window
   useEffect(() => {
