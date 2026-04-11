@@ -21,8 +21,8 @@ export default function Profile() {
 		(currentUser.roles || []).some(r => String(r || "").toLowerCase() === role.toLowerCase());
 
 	const resolveProfileTarget = () => {
-		const isDevAccount = Boolean(currentUser.dev) || hasRole("admin") || hasRole("dev");
-		const objName = isDevAccount ? "csm_accounts" : "csm_group_members";
+		const isDevOrAdminAccount = Boolean(currentUser.dev) || hasRole("admin") || hasRole("dev");
+		const objName = isDevOrAdminAccount ? "csm_accounts" : "csm_group_members";
 
 		const pkField = currentUser.userId
 			? "id"
