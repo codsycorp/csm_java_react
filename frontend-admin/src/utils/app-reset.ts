@@ -52,10 +52,38 @@ export function clearAllClientState() {
   // Clear persisted storage keys used by stores (except preferences which we'll restore)
   try { localStorage.removeItem("access-token"); } catch {}
   try { localStorage.removeItem("user-info"); } catch {}
+  try { localStorage.removeItem("user_info"); } catch {}
   try { localStorage.removeItem("refreshToken"); } catch {} // For nwjs
+  try { localStorage.removeItem("app_token"); } catch {}
+  try { localStorage.removeItem("user_address"); } catch {}
+  try { localStorage.removeItem("user_dev"); } catch {}
+  try { localStorage.removeItem("current_app_id"); } catch {}
+  try { localStorage.removeItem("csm_client_id"); } catch {}
 
-  // Clear website/admin mode flag
+  // Clear all chat pin keys (csm_chat_pin_*)
+  try {
+    const chatPinKeys = Object.keys(localStorage).filter(k => k.startsWith("csm_chat_pin_"));
+    chatPinKeys.forEach(k => localStorage.removeItem(k));
+  } catch {}
+
+  // Clear menu open-key state from sessionStorage (keys ending with :openKeys pattern)
+  try {
+    const menuOpenKeys = Object.keys(sessionStorage).filter(k => k.endsWith(":openKeys") || k.includes(":row_type_edit") || k.includes(":type_form"));
+    menuOpenKeys.forEach(k => sessionStorage.removeItem(k));
+  } catch {}
+
+  // Clear website/admin mode flag and session-scoped codes
   try { sessionStorage.removeItem("forceAdminMode"); } catch {}
+  try { sessionStorage.removeItem("auto_setup_code"); } catch {}
+
+  // Clear window-level user globals to prevent stale state leaking to new user
+  try {
+    if (typeof window !== "undefined") {
+      (window as any).csmCurrentUser = null;
+      (window as any).csmUserData = null;
+      (window as any).seft = null;
+    }
+  } catch {}
 
   // Clear guest token if any
   try { clearGuestToken(); } catch {}

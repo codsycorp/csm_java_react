@@ -1112,7 +1112,7 @@ ${resolvedContainerSelector} select {
       return false;
     };
 
-    const fetchAccountRow = async (): Promise<{ row: any; pkField: string; pkValue: any; tableName: string } | null> => {
+    const fetchAccountRow = async (): Promise<{ row: any; pkField: string; pkValue: any; tableName: string; requestAppId: string } | null> => {
       const currentUser = (window as any).csmCurrentUser || {};
       const identities = getIdentityCandidates(currentUser);
       if (identities.length === 0) return null;
@@ -1122,40 +1122,52 @@ ${resolvedContainerSelector} select {
         ? ["csm_group_members", "csm_accounts"]
         : ["csm_accounts", "csm_group_members"];
 
-      for (const tableName of tableOrder) {
-        for (const identity of identities) {
-          try {
-            const response = await (window as any).csmApi.getTableData({
-              app_id: "csm",
-              obj_name: tableName,
-              where: {
-                field: identity.field,
-                type: "eq",
-                value: identity.value,
-              },
-              take: 20,
-            });
+      // Try the user's own app_id first (needed for csm_group_members sub-user records),
+      // then fall back to "csm" for main accounts.
+      const appIdCandidates = [
+        String(effectiveAppId || "").trim(),
+        String(currentUser?.app_id || "").trim(),
+        String(currentUser?.parent_account_id || "").trim(),
+        "csm",
+      ].filter((value, index, arr) => Boolean(value) && arr.indexOf(value) === index);
 
-            const rows = (response as any)?.rows || (response as any)?.data || [];
-            if (!Array.isArray(rows) || rows.length === 0) {
-              continue;
+      for (const requestAppId of appIdCandidates) {
+        for (const tableName of tableOrder) {
+          for (const identity of identities) {
+            try {
+              const response = await (window as any).csmApi.getTableData({
+                app_id: requestAppId,
+                obj_name: tableName,
+                where: {
+                  field: identity.field,
+                  type: "eq",
+                  value: identity.value,
+                },
+                take: 20,
+              });
+
+              const rows = (response as any)?.rows || (response as any)?.data || [];
+              if (!Array.isArray(rows) || rows.length === 0) {
+                continue;
+              }
+
+              const row = pickBestMatchedRow(rows, currentUser);
+              if (!row) continue;
+
+              const stableId = row?.id;
+              const pkField = stableId ? "id" : identity.field;
+              const pkValue = stableId || identity.value;
+
+              return {
+                row,
+                pkField,
+                pkValue,
+                tableName,
+                requestAppId,
+              };
+            } catch {
+              // Try next candidate.
             }
-
-            const row = pickBestMatchedRow(rows, currentUser);
-            if (!row) continue;
-
-            const stableId = row?.id;
-            const pkField = stableId ? "id" : identity.field;
-            const pkValue = stableId || identity.value;
-
-            return {
-              row,
-              pkField,
-              pkValue,
-              tableName,
-            };
-          } catch {
-            // Try next candidate.
           }
         }
       }
@@ -1251,11 +1263,11 @@ ${resolvedContainerSelector} select {
 
             const updateApi = (window.csmApi as any)?.updateTableData;
 
-            const tryUpdate = async (target: { tableName: string; pkField: string; pkValue: any }) => {
+            const tryUpdate = async (target: { tableName: string; pkField: string; pkValue: any; requestAppId?: string }) => {
               if (!updateApi) return null;
 
               const response = await updateApi({
-                app_id: "csm",
+                app_id: target.requestAppId || "csm",
                 obj_name: target.tableName,
                 command: "update",
                 obj_update: buildUpdateData(target.pkField, target.pkValue),
@@ -1284,6 +1296,7 @@ ${resolvedContainerSelector} select {
                 tableName: account.tableName,
                 pkField: account.pkField,
                 pkValue: account.pkValue,
+                requestAppId: account.requestAppId,
               });
 
               if (isUpdateSuccessResponse(response)) {
