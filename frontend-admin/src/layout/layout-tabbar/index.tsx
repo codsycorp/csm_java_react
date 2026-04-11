@@ -22,8 +22,10 @@ import { useStyles } from "./style";
 
 // Helper: ưu tiên chọn tab Home nếu có
 function getDefaultTabKey(openTabs: Map<string, any>) {
-	if (openTabs.has("/")) return "/";
-	if (openTabs.has("/home")) return "/home";
+	const homePath = import.meta.env.VITE_BASE_HOME_PATH || "homepage";
+	if (openTabs.has(homePath)) return homePath;
+	if (openTabs.has("/")) return homePath;
+	if (openTabs.has("/home")) return homePath;
 	const first = openTabs.keys().next();
 	return first && typeof first.value === "string" ? first.value : "";
 }
@@ -44,7 +46,7 @@ export default function LayoutTabbar() {
 	const { flatRouteList, hasFetchedDynamicRoutes, apiWholeMenus } = usePermissionStore();
 	const selectedMenuIdForTab = useUserStore(state => state.selectedMenuIdForTab);
 	const { activeKey, isRefresh, setActiveKey, setIsRefresh, openTabs, addTab, insertBeforeTab } = useTabsStore();
-	const homePath = "/home";
+	const homePath = import.meta.env.VITE_BASE_HOME_PATH || "homepage";
 	const closingKeyRef = useRef<string | null>(null);
 	
 	// Get store instance for direct access (not reactive)
@@ -52,20 +54,47 @@ export default function LayoutTabbar() {
 	
 	const [items, onClickMenu] = useDropdownMenu();
 
-
-	// Always ensure Home tab exists after login or restore
+	// Migrate legacy Home keys ("/", "/home") in runtime state to canonical homePath
 	useEffect(() => {
-		const hasHome = openTabs.has("/");
-		if (!hasHome) {
-			addTab("/", {
-				key: "/",
+		const hasLegacyRoot = openTabs.has("/");
+		const hasLegacyHome = openTabs.has("/home");
+		if (!hasLegacyRoot && !hasLegacyHome) return;
+
+		const migratedTabs = new Map(openTabs);
+		const rootTab = migratedTabs.get("/");
+		const slashHomeTab = migratedTabs.get("/home");
+		const sourceTab = rootTab || slashHomeTab;
+
+		migratedTabs.delete("/");
+		migratedTabs.delete("/home");
+		if (sourceTab) {
+			migratedTabs.set(homePath, {
+				...sourceTab,
+				key: homePath,
 				label: t("common.menu.home"),
 				closable: false,
 				draggable: false,
 			});
-			setActiveKey("/");
 		}
-	}, [openTabs, addTab, setActiveKey, t]);
+
+		const migratedActiveKey = (activeKey === "/" || activeKey === "/home") ? homePath : activeKey;
+		useTabsStore.setState({ openTabs: migratedTabs, activeKey: migratedActiveKey });
+	}, [openTabs, activeKey, homePath, t]);
+
+
+	// Always ensure Home tab exists after login or restore
+	useEffect(() => {
+		const hasHome = openTabs.has(homePath);
+		if (!hasHome) {
+			addTab(homePath, {
+				key: homePath,
+				label: t("common.menu.home"),
+				closable: false,
+				draggable: false,
+			});
+			setActiveKey(homePath);
+		}
+	}, [openTabs, addTab, setActiveKey, t, homePath]);
 
 	const tabItems: TabItemProps[] = Array.from(openTabs.values()).map(item => {
 		const isHome = item.key === "homepage";
@@ -99,10 +128,9 @@ export default function LayoutTabbar() {
 	 * @param {string} key - 被选中的标签页的key
 	 */
 	const handleChangeTabs = useCallback((key: string) => {
-		// Nếu user click vào '/home', chuyển thành '/'
-		const normalizedKey = key === "/home" ? "/" : key;
+		const normalizedKey = (key === "/" || key === "/home") ? homePath : key;
 		setActiveKey(normalizedKey);
-	}, [setActiveKey]);
+	}, [setActiveKey, homePath]);
 
 	/**
 	 * 处理标签页编辑（关闭）
@@ -112,7 +140,7 @@ export default function LayoutTabbar() {
 	 const handleEditTabs = useCallback<Required<TabsProps>["onEdit"]>((key, action) => {
 	 	if (action === "remove") {
 	 		const closingKey = key as string;
-	 		const home = "/home";
+	 		const home = homePath;
 	 		const state = useTabsStore.getState();
 
 	 		// Cannot close home
@@ -136,7 +164,7 @@ export default function LayoutTabbar() {
 	 		useTabsStore.setState({ openTabs: newTabs, activeKey: nextKey });
 	 		// KHÔNG gọi navigate, chỉ set state
 	 	}
-	 }, []);
+	 }, [homePath]);
 
 	/**
 	 * 自定义渲染标签栏，添加右键菜单功能
@@ -278,7 +306,8 @@ export default function LayoutTabbar() {
 	// Chỉ đồng bộ activeKey với pathname khi pathname đổi và tab đã tồn tại trong openTabs
 	useEffect(() => {
 		const activePath = location.pathname;
-		const normalizedPath = activePath === "/home" ? "/" : removeTrailingSlash(activePath);
+		const strippedPath = removeTrailingSlash(activePath);
+		const normalizedPath = (strippedPath === "/" || strippedPath === "/home") ? homePath : strippedPath;
 
 		if (closingKeyRef.current && closingKeyRef.current === normalizedPath) {
 			closingKeyRef.current = null;
@@ -290,7 +319,7 @@ export default function LayoutTabbar() {
 			setActiveKey(normalizedPath);
 		}
 		// Nếu không có thì không làm gì, tránh ghi đè activeKey khi vừa addTab
-	}, [location.pathname, setActiveKey, openTabs]);
+	}, [location.pathname, setActiveKey, openTabs, homePath]);
 
 	// ĐÃ ĐỒNG BỘ SPA: Không tự động mở tab Home khi vào app, chỉ mở khi click menu
 

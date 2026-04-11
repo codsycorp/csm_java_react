@@ -51,6 +51,12 @@ const initialState = {
 	isMaximize: false,
 };
 
+function normalizeHomePath(routePath: string) {
+	const homePath = import.meta.env.VITE_BASE_HOME_PATH || "homepage";
+	if (routePath === "/" || routePath === "/home") return homePath;
+	return routePath;
+}
+
 type TabsState = typeof initialState;
 
 /**
@@ -90,7 +96,7 @@ export const useTabsStore = create<TabsState & TabsAction>()(
 			 * 设置标签页
 			 */
 			setActiveKey: (routePath: string) => {
-				set({ activeKey: routePath });
+				set({ activeKey: normalizeHomePath(routePath) });
 			},
 
 			/**
@@ -114,13 +120,15 @@ export const useTabsStore = create<TabsState & TabsAction>()(
 		 */
 		addTab: (routePath: string, tabProps: TabStateType) => {
 			set((state) => {
-				if (routePath.length) {
+				const normalizedPath = normalizeHomePath(routePath);
+				if (normalizedPath.length) {
 					const newTabs = new Map(state.openTabs);
 					
 					// ALWAYS use new tabProps, but preserve closable/draggable for home
-					const isHome = routePath === (import.meta.env.VITE_BASE_HOME_PATH || "homepage");
-					newTabs.set(routePath, {
+					const isHome = normalizedPath === (import.meta.env.VITE_BASE_HOME_PATH || "homepage");
+					newTabs.set(normalizedPath, {
 						...tabProps,
+						key: normalizedPath,
 						// Preserve home's non-closable/draggable properties
 						closable: isHome ? false : tabProps.closable,
 						draggable: isHome ? false : tabProps.draggable,
@@ -134,6 +142,7 @@ export const useTabsStore = create<TabsState & TabsAction>()(
 			 */
 			removeTab: (routePath: string) => {
 				set((state) => {
+					routePath = normalizeHomePath(routePath);
 					const homePath = import.meta.env.VITE_BASE_HOME_PATH || "homepage";
 
 					// 如果是首页，不允许关闭
@@ -166,6 +175,7 @@ export const useTabsStore = create<TabsState & TabsAction>()(
 			 */
 			closeRightTabs: (routePath: string) => {
 				set((state) => {
+					routePath = normalizeHomePath(routePath);
 					const newTabs = new Map();
 					let found = false;
 					let activeKeyFound = false;
@@ -204,6 +214,7 @@ export const useTabsStore = create<TabsState & TabsAction>()(
 			 */
 			closeLeftTabs: (routePath: string) => {
 				set((state) => {
+					routePath = normalizeHomePath(routePath);
 					const newTabs = new Map();
 					const homePath = import.meta.env.VITE_BASE_HOME_PATH || "homepage";
 					let found = false;
@@ -243,6 +254,7 @@ export const useTabsStore = create<TabsState & TabsAction>()(
 			 */
 			closeOtherTabs: (routePath: string) => {
 				set((state) => {
+					routePath = normalizeHomePath(routePath);
 					const newTabs = new Map();
 					const homePath = import.meta.env.VITE_BASE_HOME_PATH || "homepage";
 
@@ -342,7 +354,7 @@ export const useTabsStore = create<TabsState & TabsAction>()(
 					// Normalize restored openTabs to avoid duplicate home tabs (/ vs /home) and ensure home is not closable
 					const normalizedEntries: [string, any][] = [];
 					for (const [key, value] of existingValue.state.openTabs as [string, any][]) {
-						const normalizedKey = key === "/" ? homePath : key;
+						const normalizedKey = key === "/" || key === "/home" ? homePath : key;
 						const isHome = normalizedKey === homePath;
 						normalizedEntries.push([
 							normalizedKey,
