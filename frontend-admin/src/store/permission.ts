@@ -527,7 +527,10 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 				}
 				apiMenuList = sortApiMenuTreeByOrder(apiMenuList);
 				apiWholeMenus = apiMenuList;
-				firstAutoCode = findFirstAutoCode(apiMenuList as any[]);
+				const firstAutoCodeFromApiMenus = findFirstAutoCode(apiMenuList as any[]);
+				if (!firstAutoCode && firstAutoCodeFromApiMenus) {
+					firstAutoCode = firstAutoCodeFromApiMenus;
+				}
 
 				loadDatabaseFromMenus(apiMenuList, effectiveAppId).catch(() => {
 				});
@@ -671,7 +674,10 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 				}
 				apiMenuList = sortApiMenuTreeByOrder(apiMenuList);
 				apiWholeMenus = apiMenuList;
-				firstAutoCode = findFirstAutoCode(apiMenuList as any[]);
+				const firstAutoCodeFromApiMenus = findFirstAutoCode(apiMenuList as any[]);
+				if (!firstAutoCode && firstAutoCodeFromApiMenus) {
+					firstAutoCode = firstAutoCodeFromApiMenus;
+				}
 				loadDatabaseFromMenus(apiMenuList, effectiveAppId).catch(() => {
 				});
 				const apiMenus = transformApiMenusToLayoutMenus(apiMenuList as (ApiMenuItemType & { children?: MenuItemType[] })[]);
