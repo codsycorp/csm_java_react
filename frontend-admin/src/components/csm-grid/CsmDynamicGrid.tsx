@@ -263,6 +263,26 @@ function isJsonType(types: string): boolean {
 	return /(^|[\s,;|])(json|jsonb|object|obj)([\s,;|]|$)/.test(types);
 }
 
+function isComboLikeType(rawTypes: unknown): boolean {
+	const types = String(rawTypes || "").toLowerCase();
+	const tokens = types.split(/[\s,;|_:-]+/).filter(Boolean);
+	return tokens.includes("co")
+		|| tokens.includes("coro")
+		|| tokens.includes("cbo")
+		|| tokens.includes("cp")
+		|| /cbo|select|multi_tag|multi_select|menu_tree|tag|etag/.test(types);
+}
+
+function isMultiSelectLikeType(rawTypes: unknown): boolean {
+	const types = String(rawTypes || "").toLowerCase();
+	return /multi_tag|menu_tree|multi_select|tag|etag/.test(types);
+}
+
+function isSwitchLikeType(rawTypes: unknown): boolean {
+	const types = String(rawTypes || "").toLowerCase();
+	return /bool|switch|checkbox|check/.test(types);
+}
+
 function comparePrimitive(a: any, b: any): number {
 	if (a == null || a === "") return b == null || b === "" ? 0 : -1;
 	if (b == null || b === "") return 1;
@@ -709,7 +729,7 @@ function normalizeRowComboFieldsByQuery(
 		const fieldName = String(field?.f_name || "").trim();
 		if (!fieldName || !(fieldName in next)) return;
 		const types = String(field?.f_types || "").toLowerCase();
-		if (types.indexOf("co") === -1) return;
+		if (!isComboLikeType(types)) return;
 		if (!field?.f_cbo_query) return;
 
 		next[fieldName] = normalizeComboFieldByQuery(next[fieldName], field.f_cbo_query, database, decryptFn);
@@ -866,6 +886,11 @@ export function CsmDynamicGrid({
 	const userDeptId = useUserStore(state => state.dept_id);
 	const userBranchId = useUserStore(state => state.branch_id);
 	const isDev = useUserStore(state => Boolean(state.dev));
+	const userRoles = useUserStore(state => state.roles || []);
+	const userPermissionBitfield = useUserStore(state => (state as any).permissionBitfield);
+	const userLegacyPermissions = useUserStore(state => (state as any).permissions);
+	const userMenusPermissions = useUserStore(state => (state as any).menusPermissions);
+	const runtimeAppId = String(appId || userAppId || "csm").trim();
 	const database = useMemo(
 		() => ({ ..._unusedDatabaseProp, ...globalDatabase }),
 		[globalDatabase, _unusedDatabaseProp]
@@ -884,8 +909,8 @@ export function CsmDynamicGrid({
 	const pkFields = useMemo(() => getPrimaryKeyFields(m_configs), [m_configs.struct?.fieldsPK]);
 	const getRowKey = useCallback((row: Row | null | undefined) => buildRowKey(row, pkFields), [pkFields]);
 	const effectiveGridInstanceKey = useMemo(
-		() => String(gridInstanceKey || `${appId || ""}::${menuId || ""}::${m_configs?.id || ""}::${m_configs?.table_name || ""}`),
-		[gridInstanceKey, appId, menuId, m_configs?.id, m_configs?.table_name],
+		() => String(gridInstanceKey || `${runtimeAppId || ""}::${menuId || ""}::${m_configs?.id || ""}::${m_configs?.table_name || ""}`),
+		[gridInstanceKey, runtimeAppId, menuId, m_configs?.id, m_configs?.table_name],
 	);
 	const syncMasterTableRows = useCallback((nextRows: Row[]) => {
 		if (!shareTableState || isDetailGrid || !tableName) return;
@@ -897,9 +922,9 @@ export function CsmDynamicGrid({
 			fields: sourceTable?.fields,
 			fieldsPK: sourceTable?.fieldsPK || pkFields,
 			rows: nextRows,
-			app_id: sourceTable?.app_id || appId,
+			app_id: sourceTable?.app_id || runtimeAppId,
 		});
-	}, [appId, database, isDetailGrid, pkFields, setTableData, tableName, shareTableState]);
+	}, [runtimeAppId, database, isDetailGrid, pkFields, setTableData, tableName, shareTableState]);
 
 	// Reset volatile UI state whenever grid instance changes (tab/menu isolation).
 	useEffect(() => {
@@ -931,7 +956,7 @@ export function CsmDynamicGrid({
 		// Collect all combo queries that need table data
 		const comboFields = (m_configs?.table || []).filter((f: TableField) => {
 			const types = (f.f_types || '').toLowerCase();
-			return types.indexOf('co') !== -1; // co = combo
+			return isComboLikeType(types);
 		});
 		
 		const tablesToFetch: Array<{tableName: string; appId: string; whereClause: any}> = [];
@@ -1116,7 +1141,7 @@ export function CsmDynamicGrid({
 		m_configs,
 		context,
 		database,
-		appId,
+		appId: runtimeAppId,
 		user: useUserStore.getState(),
 		csmEncrypt,
 		csmDecrypt,
@@ -1143,7 +1168,7 @@ export function CsmDynamicGrid({
 		validateEmail,
 		validatePhone,
 		DateUtils,
-	}), [m_configs, context, database, appId]);
+	}), [m_configs, context, database, runtimeAppId]);
 
 	useEffect(() => {
 		const handleResize = () => {
@@ -1153,17 +1178,24 @@ export function CsmDynamicGrid({
 		return () => window.removeEventListener('resize', handleResize);
 	}, []);
 
-	const permissionBits = useMemo(() => toPermissionBigInt(permissions), [permissions]);
-	const canAll = permissions === -1 || permissionBits === -1n;
-	const legacyMask = menusPermissions && menuId != null ? Number(menusPermissions[menuId] ?? 0) : 0;
+	const effectivePermissions = permissions ?? userPermissionBitfield ?? userLegacyPermissions;
+	const effectiveMenusPermissions = (menusPermissions && typeof menusPermissions === "object")
+		? menusPermissions
+		: ((userMenusPermissions && typeof userMenusPermissions === "object" && !Array.isArray(userMenusPermissions)) ? userMenusPermissions : undefined);
+	const permissionBits = useMemo(() => toPermissionBigInt(effectivePermissions), [effectivePermissions]);
+	const hasPermissionSource = permissionBits !== null || (effectivePermissions === -1) || (effectiveMenusPermissions != null && Object.keys(effectiveMenusPermissions as any).length > 0);
+	const isPrivilegedUser = isDev || (Array.isArray(userRoles) && userRoles.some((role: any) => /admin|super|root|developer/i.test(String(role || ""))));
+	const permissiveCrudFallback = !hasPermissionSource && isPrivilegedUser;
+	const canAll = effectivePermissions === -1 || permissionBits === -1n || permissiveCrudFallback;
+	const legacyMask = effectiveMenusPermissions && menuId != null ? Number((effectiveMenusPermissions as any)[menuId] ?? 0) : 0;
 	const hasBitfieldActions = hasAnyPermissionBit(permissionBits, PERMISSION_BITS.action.view, PERMISSION_BITS.action.export);
 	const hasBitfieldMenus = hasAnyPermissionBit(permissionBits, PERMISSION_BITS.menu.min, PERMISSION_BITS.menu.max);
 	const menuBitIndex = parseMenuBitIndex(menuId);
-	const menuGrantedByBitfield = !hasBitfieldMenus || (menuBitIndex !== null && hasPermissionBit(permissionBits, menuBitIndex));
+	const menuGrantedByBitfield = !hasBitfieldMenus || menuBitIndex === null || hasPermissionBit(permissionBits, menuBitIndex);
 	const canCreateByBitfield = hasPermissionBit(permissionBits, PERMISSION_BITS.action.create);
 	const canEditByBitfield = hasPermissionBit(permissionBits, PERMISSION_BITS.action.edit);
 	const canDeleteByBitfield = hasPermissionBit(permissionBits, PERMISSION_BITS.action.delete);
-	const isReadonly = !!m_configs.g_readonly;
+	const isReadonly = isEnabledFlag(m_configs.g_readonly);
 	const canAdd = !isReadonly && (canAll || ((legacyMask & 2) !== 0) || (hasBitfieldActions && menuGrantedByBitfield && canCreateByBitfield));
 	const canEdit = !isReadonly && (canAll || ((legacyMask & 4) !== 0) || (hasBitfieldActions && menuGrantedByBitfield && canEditByBitfield));
 	const canDelete = !isReadonly && (canAll || ((legacyMask & 8) !== 0) || (hasBitfieldActions && menuGrantedByBitfield && canDeleteByBitfield));
@@ -1374,7 +1406,10 @@ export function CsmDynamicGrid({
 		}
 		
 		const coFields = (m_configs.table || [])
-			.filter((f) => Number(f.f_show) === 1 && (f.f_types || "").toLowerCase().indexOf('co') !== -1);
+			.filter((f) => {
+				const types = String(f.f_types || "").toLowerCase();
+				return Number(f.f_show) === 1 && isComboLikeType(types);
+			});
 		
 		console.log(`[selectEnums] Found ${coFields.length} fields with 'co' type:`, 
 			coFields.map(f => ({ name: f.f_name, types: f.f_types, has_query: !!f.f_cbo_query }))
@@ -1840,9 +1875,9 @@ export function CsmDynamicGrid({
 			const isDate = /\bdate\b/.test(types) && !/datetime/.test(types);
 			const isDateTime = /datetime/.test(types);
 			const isTime = /\btime\b/.test(types) && !/datetime/.test(types);
-			const isSelect = typeTokens.includes('co') || /cbo|select/.test(types);
-			const isMultiSelect = /multi_tag|menu_tree|multi_select/.test(types);
-			const isSwitch = /bool|switch|checkbox/.test(types);
+			const isSelect = isComboLikeType(types);
+			const isMultiSelect = isMultiSelectLikeType(types);
+			const isSwitch = isSwitchLikeType(types);
 			const isTextArea = /textarea|memo/.test(types);
 			const isRichText = /richtext|html/.test(types);
 			const isPassword = /password/.test(types);
@@ -2429,8 +2464,8 @@ export function CsmDynamicGrid({
 				const decimals = Number((field as any).f_dec ?? 0);
 				const typeTokens = types.split(/[\s,;|]+/).filter(Boolean);
 				const isNumberField = /price|number|int|float|double|money|currency/.test(types);
-				const isSelectField = typeTokens.includes('co') || /cbo|select|multi_tag|menu_tree|multi_select/.test(types);
-				const isMultiSelectField = /multi_tag|menu_tree|multi_select/.test(types);
+						const isSelectField = isComboLikeType(types);
+						const isMultiSelectField = isMultiSelectLikeType(types);
 				const isDateField = /^date$/.test(types);
 				const isDateTimeField = /datetime/.test(types);
 				const isTimeField = /^time$/.test(types);
@@ -2542,7 +2577,7 @@ export function CsmDynamicGrid({
 										return;
 									}
 									
-									if (!appId) {
+									if (!runtimeAppId) {
 										message.error(t("common.missingAppId"));
 										return;
 									}
@@ -2567,8 +2602,8 @@ export function CsmDynamicGrid({
 											return;
 										}
 										
-										await updateTableData<Row>({ 
-											app_id: appId, 
+										await updateTableData<Row>({
+											app_id: runtimeAppId,
 											obj_name: tableName, 
 											command: "delete", 
 											obj_update,
@@ -2787,7 +2822,7 @@ export function CsmDynamicGrid({
 			.map(f => f.f_name)
 			.filter(name => {
 				const tf = (m_configs.table.find(f => f.f_name === name)?.f_types || "").toLowerCase();
-				return /ed|text|textarea|html|slug|name|title|excerpt|code|status|cbo|select|co|multi_tag|menu_tree|multi_select|bool|switch|checkbox|check|int|float|double|number|money|currency|date|datetime|time/.test(tf);
+						return /ed|text|textarea|html|slug|name|title|excerpt|code|status|cbo|select|co|coro|cp|multi_tag|menu_tree|multi_select|tag|etag|bool|switch|checkbox|check|int|float|double|number|money|currency|date|datetime|time/.test(tf);
 			});
 		if (heuristic.length > 0) return heuristic;
 
@@ -2861,8 +2896,8 @@ export function CsmDynamicGrid({
 			const value = row?.[field.f_name];
 			const types = String(field.f_types || "").toLowerCase();
 			const typeTokens = types.split(/[\s,;|]+/).filter(Boolean);
-			const isSwitch = /bool|switch|checkbox|check/.test(types);
-			const isSelectLike = typeTokens.includes("co") || /cbo|select|multi_tag|menu_tree|multi_select|tree/.test(types);
+				const isSwitch = isSwitchLikeType(types);
+				const isSelectLike = isComboLikeType(types) || /tree/.test(types);
 			const valueEnum = fieldValueEnumMap.get(field.f_name) || {};
 			const terms = new Set<string>();
 
@@ -3085,7 +3120,7 @@ export function CsmDynamicGrid({
 				const isDateTime = /datetime/.test(types);
 				const isTime = /\btime\b/.test(types) && !/datetime/.test(types);
 				const typeTokens = types.split(/[\s,;|]+/).filter(Boolean);
-				const isSelect = typeTokens.includes('co') || /cbo|select/.test(types);
+							const isSelect = isComboLikeType(types);
 				let cmp = 0;
 				if (isNumber) {
 					const left = parseFlexibleNumberInput(a?.[field], numberLocale);
@@ -3291,7 +3326,7 @@ export function CsmDynamicGrid({
 				}
 
 				// Save each row to server or just update local state
-				if (hasTableName && appId) {
+				if (hasTableName && runtimeAppId) {
 					const progressKey = `import-progress-${Date.now()}`;
 					const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -3452,7 +3487,7 @@ export function CsmDynamicGrid({
 						let batchResponse: any = null;
 						try {
 							batchResponse = await withRetry(() => bulkUpdateTableData({
-								app_id: appId,
+								app_id: runtimeAppId,
 								obj_name: tableName,
 								pk_fields: pkFields,
 								continue_on_error: true,
@@ -3545,7 +3580,7 @@ export function CsmDynamicGrid({
 		if (enableInlineCellEdit) {
 			// Generate unique ID: appId_timestamp_randomString to avoid collisions
 			const randomSuffix = Math.random().toString(36).substring(2, 9);
-			const newRowId = `${appId}_${Date.now()}_${randomSuffix}`;
+			const newRowId = `${runtimeAppId}_${Date.now()}_${randomSuffix}`;
 			const newRow: Row = { id: newRowId };
 			const fields = (m_configs.table || []).filter(f => Number(f.f_show) === 1);
 			
@@ -3554,7 +3589,7 @@ export function CsmDynamicGrid({
 				const types = (f.f_types || "").toLowerCase();
 				if (/number|int|float|double|money|currency|digit/.test(types)) {
 					newRow[f.f_name] = 0;
-				} else if (/bool|switch|checkbox/.test(types)) {
+				} else if (/bool|switch|checkbox|check/.test(types)) {
 					newRow[f.f_name] = false;
 				} else if (/date|time|datetime/.test(types)) {
 					newRow[f.f_name] = '';
@@ -3653,7 +3688,7 @@ export function CsmDynamicGrid({
 				return;
 			}
 			
-			if (!appId) {
+			if (!runtimeAppId) {
 				message.error(t("common.missingAppId"));
 				return;
 			}
@@ -3680,7 +3715,7 @@ export function CsmDynamicGrid({
 			}
 			
 			await updateTableData<Row>({ 
-				app_id: appId, 
+				app_id: runtimeAppId, 
 				obj_name: tableName, 
 				command: "delete", 
 				obj_update,
@@ -3817,7 +3852,7 @@ export function CsmDynamicGrid({
 					}
 					
 					// Master grid: gọi API để lưu ngay
-					if (!appId) {
+					if (!runtimeAppId) {
 						message.error("Thiếu app_id");
 						return;
 					}
@@ -3833,7 +3868,7 @@ export function CsmDynamicGrid({
 						const normalizedProcessed = normalizeInlineRowValues(processedData, m_configs.table || []);
 						
 						await updateTableData<Row>({
-							app_id: appId,
+							app_id: runtimeAppId,
 							obj_name: tableName,
 							command: 'update',
 							obj_update: normalizedProcessed,
@@ -3985,7 +4020,7 @@ export function CsmDynamicGrid({
 								okType: "danger",
 								cancelText: t("common.cancel"),
 								onOk: async () => {
-									if (!appId) {
+									if (!runtimeAppId) {
 										message.error(t("common.missingAppId"));
 										return;
 									}
@@ -4015,7 +4050,7 @@ export function CsmDynamicGrid({
 											}
 											
 											await updateTableData<Row>({
-												app_id: appId,
+												app_id: runtimeAppId,
 												obj_name: tableName,
 												command: "delete",
 												obj_update,
@@ -4156,7 +4191,7 @@ export function CsmDynamicGrid({
 	
 	// Sync detail data to store when selectedDetailRow changes (must be at component level, not inside conditions)
 	React.useEffect(() => {
-		if (!isMasterDetail || !hasDetailNodes || !selectedDetailRow || !appId) return;
+		if (!isMasterDetail || !hasDetailNodes || !selectedDetailRow || !runtimeAppId) return;
 		
 		detailNodes.forEach((node: any) => {
 			const detailFieldName = node.table_name;
@@ -4177,10 +4212,10 @@ export function CsmDynamicGrid({
 			setTableData(detailFieldName, { 
 				id: detailFieldName, 
 				rows,
-				app_id: appId
+				app_id: runtimeAppId
 			});
 		});
-	}, [selectedDetailRow ? getRowKey(selectedDetailRow) : "", appId, isMasterDetail, hasDetailNodes, detailNodes, getRowKey]);
+	}, [selectedDetailRow ? getRowKey(selectedDetailRow) : "", runtimeAppId, isMasterDetail, hasDetailNodes, detailNodes, getRowKey]);
 	
 	// Detail panel rendering is now only in CsmEditModal, not here
 	// Keep children array with just the table
@@ -4188,7 +4223,7 @@ export function CsmDynamicGrid({
 	// Show edit modal unless we're doing inline cell editing
 	const shouldShowEditModal = !enableInlineCellEdit;
 	
-	if (appId && (canAdd || canEdit) && shouldShowEditModal) {
+	if (runtimeAppId && (canAdd || canEdit) && shouldShowEditModal) {
 		children.push(
 			React.createElement(CsmEditModal as any, {
 				key: "editor",
@@ -4200,7 +4235,7 @@ export function CsmDynamicGrid({
 				record: editingRecord ?? cloneData,
 				selectEnums,
 				database,
-				appId,
+				appId: runtimeAppId,
 				permissions,
 				menusPermissions,
 				decrypt,
@@ -4218,7 +4253,7 @@ export function CsmDynamicGrid({
 					values = beforeSaveValues;
 					try {
 						const comboFields = (m_configs.table || [])
-							.filter((field) => String(field?.f_types || "").toLowerCase().indexOf("co") !== -1)
+							.filter((field) => isComboLikeType(String(field?.f_types || "")))
 							.map((field) => String(field?.f_name || "").trim())
 							.filter(Boolean);
 						const comboBefore: Record<string, any> = {};
@@ -4287,7 +4322,7 @@ export function CsmDynamicGrid({
 						return;
 					}
 					
-					if (!appId) return;
+					if (!runtimeAppId) return;
 					const cmd = editingRecord ? "update" : "create";
 
 					const pkFields = getPrimaryKeyFields(m_configs);
@@ -4337,7 +4372,7 @@ export function CsmDynamicGrid({
 					}
 
 					const updateResponse = await updateTableData<Row>({ 
-						app_id: appId, 
+						app_id: runtimeAppId, 
 						obj_name: tableName, 
 						command: effectiveCommand as any, 
 						obj_update: payloadValues,

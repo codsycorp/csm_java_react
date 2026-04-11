@@ -1,0 +1,215 @@
+diff --git a/frontend-admin/src/layout/layout-content/index.tsx b/frontend-admin/src/layout/layout-content/index.tsx
+index 3458eb0c..543cfa45 100755
+--- a/frontend-admin/src/layout/layout-content/index.tsx
++++ b/frontend-admin/src/layout/layout-content/index.tsx
+@@ -102,7 +102,8 @@ export default function LayoutContent() {
+ 	useEffect(() => {
+ 		const cacheNodes = aliveRef.current?.getCacheNodes?.();
+ 		cacheNodes?.forEach((node) => {
+-			if (!openTabs.has(node.cacheKey)) {
++			// Không destroy cache của Trang Chủ và AutoSetup
++			if (!openTabs.has(node.cacheKey) && node.cacheKey !== "homepage" && node.cacheKey !== "/auto-setup") {
+ 				aliveRef.current?.destroy(node.cacheKey);
+ 			}
+ 		});
+diff --git a/frontend-admin/src/layout/layout-menu/use-menu.ts b/frontend-admin/src/layout/layout-menu/use-menu.ts
+index 39a2c464..e4cefc78 100755
+--- a/frontend-admin/src/layout/layout-menu/use-menu.ts
++++ b/frontend-admin/src/layout/layout-menu/use-menu.ts
+@@ -530,14 +530,22 @@ export function useMenu() {
+ 				   if (!finalMenuData.type_form) finalMenuData.type_form = fallback.type_form;
+ 				   if (!finalMenuData.label) finalMenuData.label = fallback.label;
+ 			   }
++			   // Đảm bảo truyền đủ props động như chuẩn hôm qua
+ 			   addTab(normalizedKey, {
+ 				   key: normalizedKey,
+ 				   label: finalMenuData.label || fallback.label,
+ 				   closable: true,
+ 				   draggable: true,
+ 				   menuData: finalMenuData,
+-				   table_name: finalMenuData.table_name,
+ 				   type_form: finalMenuData.type_form,
++				   table_name: finalMenuData.table_name,
++				   report_name: finalMenuData.report_name,
++				   kanban_config: finalMenuData.kanban_config,
++				   auto_code_name: finalMenuData.auto_code_name,
++				   auto_code: finalMenuData.auto_code,
++				   m_configs: finalMenuData.m_configs,
++				   appId: finalMenuData.appId,
++				   menuId: finalMenuData.menuId || finalMenuData.id || normalizedKey,
+ 			   });
+ 			   setActiveKey(normalizedKey);
+ 			   return;
+diff --git a/frontend-admin/src/layout/layout-tabbar/index.tsx b/frontend-admin/src/layout/layout-tabbar/index.tsx
+index 08dc59b8..5c3f975b 100755
+--- a/frontend-admin/src/layout/layout-tabbar/index.tsx
++++ b/frontend-admin/src/layout/layout-tabbar/index.tsx
+@@ -275,7 +275,7 @@ export default function LayoutTabbar() {
+ 	 * 监听路由变化，添加标签页和激活标签页
+ 	 */
+ 
+-	// Chỉ đồng bộ activeKey với pathname nếu openTabs có tab tương ứng
++	// Chỉ đồng bộ activeKey với pathname khi pathname đổi và tab đã tồn tại trong openTabs
+ 	useEffect(() => {
+ 		const activePath = location.pathname;
+ 		const normalizedPath = activePath === "/home" ? "/" : removeTrailingSlash(activePath);
+@@ -285,14 +285,12 @@ export default function LayoutTabbar() {
+ 			return;
+ 		}
+ 
++		// Chỉ setActiveKey khi pathname đã có trong openTabs, không fallback về tab đầu tiên
+ 		if (openTabs.has(normalizedPath)) {
+ 			setActiveKey(normalizedPath);
+-		} else {
+-			// Nếu không có tab tương ứng, luôn về tab đầu tiên (ưu tiên /)
+-			const defaultKey = getDefaultTabKey(openTabs);
+-			if (defaultKey) setActiveKey(defaultKey);
+ 		}
+-	}, [location, setActiveKey, openTabs]);
++		// Nếu không có thì không làm gì, tránh ghi đè activeKey khi vừa addTab
++	}, [location.pathname, setActiveKey, openTabs]);
+ 
+ 	// ĐÃ ĐỒNG BỘ SPA: Không tự động mở tab Home khi vào app, chỉ mở khi click menu
+ 
+diff --git a/frontend-admin/src/pages/personal-center/profile/index.tsx b/frontend-admin/src/pages/personal-center/profile/index.tsx
+index ddb784e0..3fd8be03 100755
+--- a/frontend-admin/src/pages/personal-center/profile/index.tsx
++++ b/frontend-admin/src/pages/personal-center/profile/index.tsx
+@@ -52,6 +52,7 @@ export default function Profile() {
+ 		return "";
+ 	};
+ 
++
+ 	const handleFinish = async (values: any) => {
+ 		setLoading(true);
+ 		try {
+@@ -60,35 +61,46 @@ export default function Profile() {
+ 				message.error(t('personal-center.updateFailed'));
+ 				return;
+ 			}
+-			
+-			// Build update object with PK included (required by CsmApi)
++
++			// Đảm bảo luôn gửi đủ các trường định danh
+ 			const updateData: any = {
+-				[pkField]: pkValue, // Include PK in obj_update
+ 				id: currentUser.userId || pkValue,
+ 				email: values.email,
++				username: currentUser.username,
+ 				phoneNumber: values.phoneNumber,
+ 				full_name: values.full_name,
+ 				avatar: values.avatar,
+ 				description: values.description,
+ 			};
+-			
++			// Nếu pkField không phải là id/email/username/phoneNumber thì vẫn thêm vào
++			if (!['id','email','username','phoneNumber','phone_number'].includes(pkField)) {
++				updateData[pkField] = pkValue;
++			}
++			// Đảm bảo các trường định danh luôn có mặt nếu có giá trị
++			if (currentUser.email) updateData.email = currentUser.email;
++			if (currentUser.username) updateData.username = currentUser.username;
++			if (currentUser.phoneNumber) updateData.phoneNumber = currentUser.phoneNumber;
++
+ 			const response = await updateTableData({
+ 				app_id: "csm",
+ 				obj_name: objName,
+ 				command: "update",
+ 				obj_update: updateData,
+-				pk_fields: [pkField], // CsmApi will build e_where from this
++				pk_fields: [pkField],
+ 			});
+-			
++
+ 			if (isUpdateSuccess(response)) {
+ 				message.success(t('personal-center.updateSuccess'));
+-				// Update user store
++				// Update user store với đúng trường định danh backend trả về
++				const updatedRow = response?.updated_row || {};
+ 				useUserStore.setState({
+-					email: values.email,
+-					phoneNumber: values.phoneNumber,
+-					full_name: values.full_name,
+-					avatar: values.avatar,
+-					description: values.description,
++					userId: updatedRow.id ?? currentUser.userId,
++					email: updatedRow.email ?? currentUser.email,
++					username: updatedRow.username ?? currentUser.username,
++					phoneNumber: updatedRow.phoneNumber ?? updatedRow.phone_number ?? currentUser.phoneNumber,
++					full_name: updatedRow.full_name ?? values.full_name,
++					avatar: updatedRow.avatar ?? values.avatar,
++					description: updatedRow.description ?? values.description,
+ 				});
+ 				// Đảm bảo tab profile luôn mở và active sau khi cập nhật
+ 				const { addTab, setActiveKey } = require('#src/store').useTabsStore.getState();
+@@ -105,10 +117,11 @@ export default function Profile() {
+ 		} catch (error: any) {
+ 			message.error(error.message || t('personal-center.updateFailed'));
+ 		} finally {
+-				setLoading(false);
++			setLoading(false);
+ 		}
+ 	};
+ 
++
+ 	const handleChangePassword = async (values: any) => {
+ 		if (values.newPassword !== values.confirmPassword) {
+ 			message.error(t('personal-center.passwordNotMatch'));
+@@ -122,25 +135,45 @@ export default function Profile() {
+ 				message.error(t('personal-center.passwordChangeFailed'));
+ 				return;
+ 			}
+-			
+-			// Send oldPassword and newPassword to backend for verification and encryption
+-			// Include PK in obj_update as required by CsmApi
++
++			// Đảm bảo luôn gửi đủ các trường định danh
++			const updateData: any = {
++				id: currentUser.userId || pkValue,
++				email: currentUser.email,
++				username: currentUser.username,
++				phoneNumber: currentUser.phoneNumber,
++				[pkField]: pkValue,
++				_oldPassword: values.oldPassword,
++				_newPassword: values.newPassword,
++				_changePassword: true,
++			};
++			// Nếu pkField không phải là id/email/username/phoneNumber thì vẫn thêm vào
++			if (!['id','email','username','phoneNumber','phone_number'].includes(pkField)) {
++				updateData[pkField] = pkValue;
++			}
++			// Đảm bảo các trường định danh luôn có mặt nếu có giá trị
++			if (currentUser.email) updateData.email = currentUser.email;
++			if (currentUser.username) updateData.username = currentUser.username;
++			if (currentUser.phoneNumber) updateData.phoneNumber = currentUser.phoneNumber;
++
+ 			const response = await updateTableData({
+ 				app_id: "csm",
+ 				obj_name: objName,
+ 				command: "update",
+-				obj_update: {
+-					[pkField]: pkValue, // Include PK in obj_update
+-					id: currentUser.userId || pkValue,
+-					_oldPassword: values.oldPassword,
+-					_newPassword: values.newPassword,
+-					_changePassword: true, // Flag to indicate password change
+-				},
+-				pk_fields: [pkField], // CsmApi will build e_where from this
++				obj_update: updateData,
++				pk_fields: [pkField],
+ 			});
+-			
++
+ 			if (isUpdateSuccess(response)) {
+ 				message.success(t('personal-center.passwordChangeSuccess'));
++				// Update user store với đúng trường định danh backend trả về (nếu có)
++				const updatedRow = response?.updated_row || {};
++				useUserStore.setState({
++					userId: updatedRow.id ?? currentUser.userId,
++					email: updatedRow.email ?? currentUser.email,
++					username: updatedRow.username ?? currentUser.username,
++					phoneNumber: updatedRow.phoneNumber ?? updatedRow.phone_number ?? currentUser.phoneNumber,
++				});
+ 				passwordForm.resetFields();
+ 			} else {
+ 				message.error(response?.message || t('personal-center.passwordChangeFailed'));

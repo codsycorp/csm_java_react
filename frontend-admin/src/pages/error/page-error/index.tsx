@@ -9,13 +9,20 @@ import { useNavigate } from "react-router";
 
 const { VITE_BASE_HOME_PATH } = import.meta.env;
 
+function normalizeHomePath(rawPath: string | undefined): string {
+	const text = String(rawPath || "").trim();
+	if (!text) return "/";
+	if (text.startsWith("http://") || text.startsWith("https://")) return "/";
+	return text.startsWith("/") ? text : `/${text}`;
+}
+
 export default function PageError({ error, resetErrorBoundary }: FallbackProps) {
 	const navigate = useNavigate();
 	const { t } = useTranslation();
 
 	const goHome = () => {
 		resetErrorBoundary();
-		navigate(VITE_BASE_HOME_PATH);
+		navigate(normalizeHomePath(VITE_BASE_HOME_PATH));
 	};
 
 	useEffect(() => {

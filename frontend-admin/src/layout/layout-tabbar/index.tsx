@@ -107,11 +107,11 @@ export default function LayoutTabbar() {
 			...item,
 			closable: isHome ? false : (item.closable ?? true),
 			draggable: isHome ? false : (item.draggable ?? true),
-				       label: (
-					       <div className="relative flex items-center gap-1" onClick={e => e.preventDefault()}>
-						       {isHome ? t("common.menu.home") : (isString(item.label) ? item.label : item.label)}
-					       </div>
-				       ),
+			label: (
+				<div className="relative flex items-center gap-1">
+					{isHome ? t("common.menu.home") : (isString(item.label) ? item.label : item.label)}
+				</div>
+			),
 		};
 	});
 
@@ -308,7 +308,8 @@ export default function LayoutTabbar() {
 	 * 监听路由变化，添加标签页和激活标签页
 	 */
 
-	// Chỉ đồng bộ activeKey với pathname khi pathname đổi và tab đã tồn tại trong openTabs
+	// Chỉ đồng bộ activeKey theo pathname khi URL thực sự đổi.
+	// Không phụ thuộc openTabs để tránh reset activeKey về Home ngay sau khi vừa addTab trong SPA mode.
 	useEffect(() => {
 		const activePath = location.pathname;
 		const strippedPath = removeTrailingSlash(activePath);
@@ -319,15 +320,16 @@ export default function LayoutTabbar() {
 			return;
 		}
 
+		const currentOpenTabs = getTabsStore().openTabs;
 		// Chỉ setActiveKey khi pathname đã có trong openTabs, không fallback về tab đầu tiên
-		if (openTabs.has(normalizedPath)) {
+		if (currentOpenTabs.has(normalizedPath)) {
 			const currentActiveKey = getTabsStore().activeKey;
 			if (currentActiveKey !== normalizedPath) {
 				setActiveKey(normalizedPath);
 			}
 		}
 		// Nếu không có thì không làm gì, tránh ghi đè activeKey khi vừa addTab
-	}, [location.pathname, setActiveKey, openTabs, homePath, getTabsStore]);
+	}, [location.pathname, setActiveKey, homePath, getTabsStore]);
 
 	// ĐÃ ĐỒNG BỘ SPA: Không tự động mở tab Home khi vào app, chỉ mở khi click menu
 

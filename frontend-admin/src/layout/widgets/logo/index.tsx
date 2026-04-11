@@ -33,6 +33,13 @@ function getSSRBrand(): { f_logo?: string; f_title?: string } {
 	return {};
 }
 
+function normalizeHomePath(rawPath: string | undefined): string {
+	const text = String(rawPath || "").trim();
+	if (!text) return "/";
+	if (text.startsWith("http://") || text.startsWith("https://")) return "/";
+	return text.startsWith("/") ? text : `/${text}`;
+}
+
 /**
  * @zh 高度 48px
  * @en The height is 48px
@@ -53,7 +60,7 @@ export function Logo({ sidebarCollapsed, className }: LogoProps) {
 		<div
 			// 和 header 高度保持一致
 			className={clsx("h-12 flex items-center justify-center gap-2 cursor-pointer", className)}
-			onClick={() => navigate(import.meta.env.VITE_BASE_HOME_PATH)}
+			onClick={() => navigate(normalizeHomePath(import.meta.env.VITE_BASE_HOME_PATH))}
 		>
 			<img
 				src={logoSrc}

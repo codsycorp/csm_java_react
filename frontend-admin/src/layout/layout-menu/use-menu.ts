@@ -495,9 +495,17 @@ export function useMenu() {
 			   || (menuIdSegmentFromKey ? findMenuInTree(apiWholeMenus, menuIdSegmentFromKey, normalizedKey) : null)
 		   ) as any;
 
-		   // Fallback menu hệ thống: addTab với path gốc + menuData đầy đủ
-		   // AdminPage đọc menuData từ Zustand tab state (activeTab?.menuData) nên KHÔNG cần dynamic path
-		   if (normalizedKey.startsWith("/system/")) {
+		   // Fallback menu hệ thống: chỉ áp dụng cho nhóm path legacy cần ép m_configs.
+		   // Không apply toàn bộ /system/* để tránh ghi đè các submenu hệ thống có config riêng từ API.
+		   const legacySystemFallbackPaths = new Set([
+			   "/system/user",
+			   "/system/dept",
+			   "/system/departments",
+			   "/system/branches",
+			   "/system/role",
+			   "/system/roles",
+		   ]);
+		   if (legacySystemFallbackPaths.has(normalizedKey)) {
 			   const userState = useUserStore.getState();
 			   const isDev = resolveDevFlag(userState.dev, userState.roles);
 			   const permissionBits = toPermissionBigInt(userState.permissionBitfield);
@@ -505,6 +513,8 @@ export function useMenu() {
 			   const systemMenuFallbacks: Record<string, { label: string; table_name: string; type_form: number }> = {
 				   "/system/user": { label: t("common.menu.user"), table_name: isDev ? "csm_accounts" : (isAdmin ? "csm_group_members" : ""), type_form: 1 },
 				   "/system/dept": { label: t("common.menu.permissionGroup"), table_name: "csm_roles", type_form: 1 },
+				   "/system/role": { label: t("common.menu.permissionGroup"), table_name: "csm_roles", type_form: 1 },
+				   "/system/roles": { label: t("common.menu.permissionGroup"), table_name: "csm_roles", type_form: 1 },
 				   "/system/departments": { label: t("common.menu.dept"), table_name: "csm_depts", type_form: 1 },
 				   "/system/branches": { label: t("common.menu.branch"), table_name: "csm_branches", type_form: 1 }
 			   };

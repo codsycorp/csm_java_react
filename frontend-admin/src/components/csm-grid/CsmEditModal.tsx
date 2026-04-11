@@ -74,6 +74,16 @@ function safeEval<TArgs extends any[], TReturn>(args: string[], body: string): (
 // ============================================================================
 const globalTableFetchCache = new Map<string, Promise<any>>();
 
+function isComboLikeType(rawTypes: unknown): boolean {
+  const types = String(rawTypes || "").toLowerCase();
+  const tokens = types.split(/[\s,;|_:-]+/).filter(Boolean);
+  return tokens.includes("co")
+    || tokens.includes("coro")
+    || tokens.includes("cbo")
+    || tokens.includes("cp")
+    || /cbo|select|multi_tag|multi_select|menu_tree|tag|etag/.test(types);
+}
+
 function resolveMediaUrl(pathValue: string): string {
   if (!pathValue) return "";
   if (/^(https?:)?\/\//i.test(pathValue)) return pathValue;
@@ -201,8 +211,7 @@ export function buildDetailGridSelectEnums(
 
   fields.forEach((f: any) => {
     const types = (f.f_types || '').toLowerCase();
-    const typeTokens = types.split(/[,\s;|]+/).filter(Boolean);
-    const isCombo = typeTokens.includes('co') || /cbo|select/.test(types);
+    const isCombo = isComboLikeType(types);
     if (!isCombo) return;
 
     const rawQuery = f.f_cbo_query;
@@ -1063,7 +1072,7 @@ function MultilingualTabs({ fields, form }: { fields: TableField[]; form: any })
                     </Form.Item>
                   );
                 }
-                if (types === 'multi_tag') {
+                if (/^multi_tag$|^multi_select$|(^|[\s,;|])tag([\s,;|]|$)|(^|[\s,;|])etag([\s,;|]|$)/.test(types)) {
                   return <Form.Item key={field.f_name} name={field.f_name} label={fieldLabel}><Select mode="tags" style={{ width: '100%' }} tokenSeparators={[',']} /></Form.Item>;
                 }
                 return <Form.Item key={field.f_name} name={field.f_name} label={fieldLabel}><Input id={field.f_name} /> </Form.Item>;
@@ -1545,8 +1554,8 @@ function getFieldComponent(
       </Form.Item>
     );
   }
-  // Kiểu Multi Tag
-  if (types === 'multi_tag') {
+  // Kiểu Multi Tag / Tag legacy aliases
+  if (/^multi_tag$|^multi_select$|(^|[\s,;|])tag([\s,;|]|$)|(^|[\s,;|])etag([\s,;|]|$)/.test(types)) {
     const rawTagOptions = Array.isArray((f as any).f_options)
       ? (f as any).f_options
       : (Array.isArray(selectOptions?.[key]) ? selectOptions?.[key] : []);
@@ -1594,8 +1603,8 @@ function getFieldComponent(
     </Form.Item>;
   }
   
-  // Kiểu Select/CBO (combobox) - kiểm tra indexOf('co') như Vue (line 245, 565, 796...)
-  if (types.indexOf('co') !== -1) {
+  // Kiểu Select/CBO (combobox) - hỗ trợ thêm alias select/cbo cho tương thích dữ liệu cũ
+  if (isComboLikeType(types)) {
     const rawOptions = selectOptions?.[key];
     const enumObj = selectEnums?.[key];
     const cascadeConfig = resolveCascadeSelectOptions(f, form, database, decrypt, localizeLabel);
@@ -1828,7 +1837,7 @@ export function CsmEditModal({
       console.log('[CsmEditModal] Database available:', !!database);
       console.log('[CsmEditModal] Decrypt available:', !!decrypt);
       console.log('[CsmEditModal] Fields with "co" type:', 
-        m_configs?.table?.filter(f => (f.f_types || '').toLowerCase().indexOf('co') !== -1).map(f => ({
+        m_configs?.table?.filter(f => isComboLikeType((f.f_types || '').toLowerCase())).map(f => ({
           name: f.f_name,
           types: f.f_types,
           has_cbo_query: !!f.f_cbo_query,
@@ -1946,7 +1955,7 @@ export function CsmEditModal({
           }
         }
 
-        if (types.indexOf('co') !== -1) {
+        if (isComboLikeType(types)) {
           const normalizedOptions = buildSelectOptions(
             selectOptions?.[key],
             selectEnums?.[key],
@@ -2467,7 +2476,7 @@ export function CsmEditModal({
                     }
                     
                     // Multi Tag
-                    if (types === 'multi_tag') {
+                    if (/^multi_tag$|^multi_select$|(^|[\s,;|])tag([\s,;|]|$)|(^|[\s,;|])etag([\s,;|]|$)/.test(types)) {
                       return (
                         <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
                           <Select mode="tags" style={{ width: '100%' }} tokenSeparators={[',']} />
@@ -2530,7 +2539,7 @@ export function CsmEditModal({
                     }
                     
                     // Select/Combobox
-                    if (types.indexOf('co') !== -1) {
+                    if (isComboLikeType(types)) {
                       const rawOptions = selectOptions?.[actualFieldName];
                       const enumObj = selectEnums?.[actualFieldName];
                       const options = buildSelectOptions(rawOptions, enumObj);

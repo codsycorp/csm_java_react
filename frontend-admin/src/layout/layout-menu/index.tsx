@@ -231,7 +231,6 @@ export default function LayoutMenu({
 			   e.domEvent.preventDefault();
 			   e.domEvent.stopPropagation();
 		   }
-		   handleMenuSelect?.(e.key, mode);
 	   };
 
 	return (

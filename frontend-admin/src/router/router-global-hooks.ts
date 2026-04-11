@@ -14,18 +14,26 @@ import { replaceBaseWithRoot } from "./utils";
 // 不需要登录路由的路由白名单
 const baseNoLoginWhiteList = Array.from(ROUTE_WHITE_LIST).filter(item => item !== LOGIN);
 
-const ADMIN_REDIRECT_PREFIXES = ["homepage", "/system", "/personal-center", "/about", "/iframe", "/route-nest", "/auto-setup"];
+const ADMIN_REDIRECT_PREFIXES = ["/homepage", "/system", "/personal-center", "/about", "/iframe", "/route-nest", "/auto-setup"];
 
 function normalizeAdminRedirect(rawRedirect: string | null | undefined): string | null {
 	if (!rawRedirect) return null;
 	const decoded = decodeURIComponent(String(rawRedirect || "").trim());
-	if (!decoded.startsWith("/")) return null;
+	const normalized = decoded.startsWith("/") ? decoded : `/${decoded}`;
+	if (!normalized.startsWith("/")) return null;
 	if (decoded.startsWith("//")) return null;
-	if (decoded === "/") return null;
-	if (ADMIN_REDIRECT_PREFIXES.some(prefix => decoded === prefix || decoded.startsWith(`${prefix}/`) || decoded.startsWith(`${prefix}?`))) {
-		return decoded;
+	if (normalized === "/") return null;
+	if (ADMIN_REDIRECT_PREFIXES.some(prefix => normalized === prefix || normalized.startsWith(`${prefix}/`) || normalized.startsWith(`${prefix}?`))) {
+		return normalized;
 	}
 	return null;
+}
+
+function normalizeHomePath(rawPath: string | undefined): string {
+	const text = String(rawPath || "").trim();
+	if (!text) return "/";
+	if (text.startsWith("http://") || text.startsWith("https://")) return "/";
+	return text.startsWith("/") ? text : `/${text}`;
 }
 
 /**
@@ -80,13 +88,19 @@ export const routerBeforeEach: (reactRouter: ReactRouterType) => BlockerFunction
 
 	/* --------------- 以下为已登录的处理逻辑 ------------------ */
 
+	// Keep root path stable after login; do not auto-redirect to child routes.
+	if (pathnameWithoutBase === "/") {
+		window.sessionStorage.setItem("forceAdminMode", "true");
+		return false;
+	}
+
 	// Đã đăng nhập, nếu là root path '/', cho phép truy cập bình thường (không tự động chuyển về /home)
 
 	/* 已登录访问登录页，跳转到首页 */
 	if (pathnameWithoutBase === "/login") {
 		const redirectParam = nextLocation.search.match(/[?&]redirect=([^&]*)/)?.[1];
 		const safeAdminRedirect = normalizeAdminRedirect(redirectParam);
-		const adminHomePath = import.meta.env.VITE_BASE_HOME_PATH || "/";
+		const adminHomePath = normalizeHomePath(import.meta.env.VITE_BASE_HOME_PATH);
 		
 		// 如果有redirect=admin参数，跳转到admin home
 		if (redirectParam === "admin") {
@@ -116,10 +130,14 @@ export const routerBeforeEach: (reactRouter: ReactRouterType) => BlockerFunction
 		console.warn("✅ Route ignores access check, allowing");
 		return false;
 	}
-	// 如果当前路由有子路由，则跳转到 404 页面
+	// Nếu truy cập route cha có children, chuyển hướng về child đầu tiên hoặc home thay vì 404.
 	if (hasChildren && hasChildren > 0) {
-		console.warn("❌ Route has children but accessed directly, redirecting to 404");
-		reactRouter.navigate("/error/404");
+		const firstChildPath = currentRoute?.route?.children?.find(item => !item.index && typeof item.path === "string")?.path;
+		const fallbackPath = firstChildPath
+			? normalizeHomePath(replaceBaseWithRoot(String(firstChildPath)))
+			: normalizeHomePath(import.meta.env.VITE_BASE_HOME_PATH);
+		console.warn("⚠️ Route has children but accessed directly, redirecting to:", fallbackPath);
+		reactRouter.navigate(fallbackPath, { replace: true });
 		return true;
 	}
 
@@ -244,7 +262,7 @@ export async function routerInitReady(reactRouter: ReactRouterType) {
 		// Kiểm tra redirect parameter
 		const redirectParam = new URLSearchParams(search).get("redirect");
 		const safeAdminRedirect = normalizeAdminRedirect(redirectParam);
-		const adminHomePath = import.meta.env.VITE_BASE_HOME_PATH || "/";
+		const adminHomePath = normalizeHomePath(import.meta.env.VITE_BASE_HOME_PATH);
 		
 		if (redirectParam === "admin") {
 			// Redirect đến admin home
@@ -300,9 +318,13 @@ export async function routerInitReady(reactRouter: ReactRouterType) {
 	if (ignoreAccess === true) {
 		return;
 	}
-	// 如果当前路由有子路由，则跳转到 404 页面
+	// Nếu truy cập route cha có children, chuyển hướng về child đầu tiên hoặc home thay vì 404.
 	if (hasChildren && hasChildren > 0) {
-		return reactRouter.navigate("/error/404");
+		const firstChildPath = currentRoute?.route?.children?.find(item => !item.index && typeof item.path === "string")?.path;
+		const fallbackPath = firstChildPath
+			? normalizeHomePath(replaceBaseWithRoot(String(firstChildPath)))
+			: normalizeHomePath(import.meta.env.VITE_BASE_HOME_PATH);
+		return reactRouter.navigate(fallbackPath, { replace: true });
 	}
 
 	// 路由权限校验
