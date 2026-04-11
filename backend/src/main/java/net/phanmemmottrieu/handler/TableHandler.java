@@ -626,6 +626,12 @@ public class TableHandler {
             return false;
         }
 
+        // Cho phép bất kỳ user nào có app_id truy cập đúng auto_code của app mình hoặc broadcast
+        if (isSameOrBroadcastVariant(userAppId, pName)) {
+            logger.info("[AutoSetupDebug] RETURN true: user có app_id đúng app hoặc broadcast");
+            return true;
+        }
+
         // Auto-code list loader in frontend requests only p_type=0 (without p_name).
         // Keep it allowed, then enforce app scope by injecting p_name filter server-side.
         if (pName.isBlank()) {
@@ -2416,6 +2422,12 @@ public class TableHandler {
         enforceManagedUserOrgScope(objUpdate, accessContext);
 
         List<String> permissionGroups = toStringList(objUpdate.get("permissionGroups"));
+        String groupId = safeStr(objUpdate.get("group_id"));
+        if (!groupId.isBlank()) {
+            permissionGroups = mergeUniqueCaseInsensitive(permissionGroups, List.of(groupId));
+            objUpdate.put("permissionGroups", permissionGroups);
+        }
+
         List<String> groupedPermissions = new ArrayList<>();
         List<String> groupedMenus = new ArrayList<>();
         String groupScope = "";
@@ -2471,6 +2483,7 @@ public class TableHandler {
 
         List<String> resolvedPermissions = mergeUniqueCaseInsensitive(basePermissions, permissionsAdd);
         resolvedPermissions = subtractCaseInsensitive(resolvedPermissions, permissionsDeny);
+        resolvedPermissions = subtractCaseInsensitive(resolvedPermissions, List.of("admin", "dev"));
 
         List<String> resolvedMenus = mergeUniqueCaseInsensitive(baseMenus, menusAdd);
         resolvedMenus = subtractCaseInsensitive(resolvedMenus, menusDeny);

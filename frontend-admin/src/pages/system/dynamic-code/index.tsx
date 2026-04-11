@@ -390,6 +390,30 @@ function syncRuntimeUserAddress(userAddress: any[]): any[] {
 // ============================================================================
 // Helper Functions (from AutoSetup.tsx)
 // ============================================================================
+// Đảm bảo các biến toàn cục luôn sẵn sàng trước khi chạy auto_code
+if (typeof window !== 'undefined') {
+  if (!Object.getOwnPropertyDescriptor(window, 'React')) {
+    Object.defineProperty(window, 'React', {
+      get() { return require('react'); },
+      configurable: true,
+      enumerable: false
+    });
+  }
+  if (!Object.getOwnPropertyDescriptor(window, 'ReactDOM')) {
+    Object.defineProperty(window, 'ReactDOM', {
+      get() { return require('react-dom/client'); },
+      configurable: true,
+      enumerable: false
+    });
+  }
+  if (!Object.getOwnPropertyDescriptor(window, 'antd')) {
+    Object.defineProperty(window, 'antd', {
+      get() { return require('antd'); },
+      configurable: true,
+      enumerable: false
+    });
+  }
+}
 
 /**
  * Base64 encode with UTF-8 support
@@ -730,7 +754,6 @@ async function facebookGetPages(accessToken: string): Promise<FacebookResponse> 
 // ============================================================================
 // Component Props
 // ============================================================================
-
 interface DynamicCodeMenuProps {
   menuId?: string;
   menuData?: any;
