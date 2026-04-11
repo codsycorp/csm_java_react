@@ -610,107 +610,29 @@ public class TableHandler {
             return true;
         }
 
-        String userAppId = safeStr(accessContext.appId);
-        if (userAppId.isBlank()) {
-            logger.warn("[AutoSetupDebug] RETURN false: userAppId is blank. accessContext: {}", accessContext);
-            return false;
-        }
-
         Map<String, Object> eqValues = new HashMap<>();
         collectEqValues(filters, eqValues);
         String pType = safeStr(eqValues.get("p_type"));
         String pName = safeStr(eqValues.get("p_name"));
-        logger.info("[AutoSetupDebug] appId={}, userAppId={}, pType={}, pName={}, accessContext={}", normalizedAppId, userAppId, pType, pName, accessContext);
+        logger.info("[AutoSetupDebug] appId={}, pType={}, pName={}, accessContext={}", normalizedAppId, pType, pName, accessContext);
         if (!"0".equals(pType)) {
             logger.info("[AutoSetupDebug] RETURN false: p_type != 0 (p_type={})", pType);
             return false;
         }
 
-        // Cho phép bất kỳ user nào có app_id truy cập đúng auto_code của app mình hoặc broadcast
-        if (isSameOrBroadcastVariant(userAppId, pName)) {
-            logger.info("[AutoSetupDebug] RETURN true: user có app_id đúng app hoặc broadcast");
-            return true;
+        // Non-dev phải gửi điều kiện p_name rõ ràng từ client (homepage hoặc auto-setup).
+        if (pName.isBlank()) {
+            logger.info("[AutoSetupDebug] RETURN false: non-dev request thiếu p_name");
+            return false;
         }
 
-        // Auto-code list loader in frontend requests only p_type=0 (without p_name).
-        // Keep it allowed, then enforce app scope by injecting p_name filter server-side.
-        if (pName.isBlank()) {
-            logger.info("[AutoSetupDebug] RETURN true: p_name is blank");
-            return true;
-        }
-        boolean result = isSameOrBroadcastVariant(userAppId, pName);
-        logger.info("[AutoSetupDebug] isSameOrBroadcastVariant({}, {}) = {}", userAppId, pName, result);
-        logger.info("[AutoSetupDebug] RETURN {}: isSameOrBroadcastVariant", result);
-        return result;
+        logger.info("[AutoSetupDebug] RETURN true: non-dev request hợp lệ theo điều kiện client (p_type=0, p_name={})", pName);
+        return true;
     }
 
     private SearchFilter applyAutoSetupTemplateScope(SearchFilter existingFilter, UserAccessContext accessContext) {
-        String userAppId = safeStr(accessContext == null ? null : accessContext.appId);
-        if (userAppId.isBlank()) {
-            return existingFilter;
-        }
-
-        String primary = userAppId;
-        String variant;
-        if (primary.startsWith("broadcast_")) {
-            variant = primary.substring("broadcast_".length());
-        } else {
-            variant = "broadcast_" + primary;
-        }
-
-        List<SearchFilter> appVariants = new ArrayList<>();
-
-        SearchFilter pNamePrimary = new SearchFilter();
-        pNamePrimary.setField("p_name");
-        pNamePrimary.setType("eq");
-        pNamePrimary.setValue(primary);
-        appVariants.add(pNamePrimary);
-
-        if (!variant.isBlank() && !variant.equals(primary)) {
-            SearchFilter pNameVariant = new SearchFilter();
-            pNameVariant.setField("p_name");
-            pNameVariant.setType("eq");
-            pNameVariant.setValue(variant);
-            appVariants.add(pNameVariant);
-        }
-
-        SearchFilter pNameScope;
-        if (appVariants.size() == 1) {
-            pNameScope = appVariants.get(0);
-        } else {
-            pNameScope = new SearchFilter();
-            pNameScope.setOperator("OR");
-            pNameScope.setConditions(appVariants);
-        }
-
-        if (isEmptyFilter(existingFilter)) {
-            return pNameScope;
-        }
-
-        SearchFilter merged = new SearchFilter();
-        merged.setOperator("AND");
-        merged.setConditions(new ArrayList<>(List.of(existingFilter, pNameScope)));
-        return merged;
-    }
-
-    private boolean isSameOrBroadcastVariant(String userAppId, String requestedAppId) {
-        String user = safeStr(userAppId);
-        String requested = safeStr(requestedAppId);
-        if (user.isBlank() || requested.isBlank()) {
-            return false;
-        }
-        if (user.equals(requested)) {
-            return true;
-        }
-
-        final String broadcastPrefix = "broadcast_";
-        if (user.startsWith(broadcastPrefix)) {
-            return user.substring(broadcastPrefix.length()).equals(requested);
-        }
-        if (requested.startsWith(broadcastPrefix)) {
-            return requested.substring(broadcastPrefix.length()).equals(user);
-        }
-        return false;
+        // Giữ nguyên điều kiện do client gửi lên; không ép scope theo accessContext.appId.
+        return existingFilter;
     }
 
     private boolean hasActionPermission(List<String> permissions, String action) {
@@ -3675,21 +3597,28 @@ public class TableHandler {
             data = maskSelfAccountRowsForNonDev(data, resolveCurrentUserAccessContext());
             logger.info("[AutoSetupDebug] [{}] rows after maskSelfAccountRowsForNonDev: {}", tblname, data.size());
         }
-        // Chỉ cho phép non-dev lấy sys_autos với p_type=0 và (p_name=userAppId hoặc p_name=broadcast_userAppId)
-        // Lưu ý: request app_id của frontend luôn là "csm" cho sys_autos, không dùng để scope dữ liệu business app.
+        // Chỉ cho phép non-dev lấy sys_autos theo điều kiện client: p_type=0 và p_name đã chỉ định.
+        // app_id request cho sys_autos luôn là "csm".
         if ("sys_autos".equals(tblname) && effectiveAccessContext != null && !effectiveAccessContext.isDev) {
-            String userAppIdNorm = safeStr(effectiveAccessContext.appId);
-            String broadcastUserAppId = userAppIdNorm.isBlank() ? "" : "broadcast_" + userAppIdNorm;
+            Map<String, Object> eqValues = new HashMap<>();
+            collectEqValues(filters, eqValues);
+            String requestedPType = safeStr(eqValues.get("p_type"));
+            String requestedPName = safeStr(eqValues.get("p_name"));
             data = data.stream().filter(row -> {
-                if (userAppIdNorm.isBlank()) {
+                String pType = safeStr(row.get("p_type"));
+                String pName = safeStr(row.get("p_name"));
+                if (!"0".equals(pType)) {
                     return false;
                 }
-                Object pType = row.get("p_type");
-                String pName = safeStr(row.get("p_name"));
-                return "0".equals(String.valueOf(pType))
-                    && (userAppIdNorm.equals(pName) || broadcastUserAppId.equals(pName));
+                if (!requestedPType.isBlank() && !"0".equals(requestedPType)) {
+                    return false;
+                }
+                if (requestedPName.isBlank()) {
+                    return false;
+                }
+                return requestedPName.equals(pName);
             }).collect(java.util.stream.Collectors.toList());
-            logger.info("[AutoSetupDebug] [sys_autos] rows after non-dev filter (userAppId={}): {}", userAppIdNorm, data.size());
+            logger.info("[AutoSetupDebug] [sys_autos] rows after non-dev client-condition filter (p_name={}, p_type={}): {}", requestedPName, requestedPType, data.size());
         }
         decryptPassForDisplay(tblname, data);
 
