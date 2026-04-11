@@ -1577,40 +1577,31 @@ ${resolvedContainerSelector} select {
         const appId = currentUser.app_id || user.app_id || effectiveAppId || "csm";
         const broadcastAppId = `broadcast_${appId}`;
 
-        // Ưu tiên lấy p_name = appId, nếu không có thì mới lấy broadcastAppId
-        let codeRecord: any = undefined;
-        let rows: any[] = [];
-        // 1. Thử lấy với p_name = appId
-        try {
-          const whereApp = andWhere([
-            { field: "p_name", type: "eq", value: appId },
-            { field: "p_type", type: "eq", value: 0 },
-          ]);
-          const resApp = await getTableData<any>({
-            app_id: "csm",
-            obj_name: "sys_autos",
-            where: whereApp,
-            take: 1,
-          });
-          rows = (resApp as any)?.rows || (resApp as any)?.data || [];
-          codeRecord = Array.isArray(rows) ? rows.find((r: any) => r?.p_name === appId) : undefined;
-        } catch {}
+        // Nếu caller truyền autoCodeName rõ ràng thì chỉ load đúng p_name đó
+        // để tách độc lập luồng Home (broadcast_*) và AutoSetup (app_id)
+        const requestedAutoCodeName = String(autoCodeName || "").trim();
+        const candidateNames = requestedAutoCodeName
+          ? [requestedAutoCodeName]
+          : [appId, broadcastAppId];
 
-        // 2. Nếu không có, thử lấy với p_name = broadcastAppId
-        if (!codeRecord) {
+        let codeRecord: any = undefined;
+        for (const candidateName of candidateNames) {
           try {
-            const whereBroadcast = andWhere([
-              { field: "p_name", type: "eq", value: broadcastAppId },
+            const where = andWhere([
+              { field: "p_name", type: "eq", value: candidateName },
               { field: "p_type", type: "eq", value: 0 },
             ]);
-            const resBroadcast = await getTableData<any>({
+            const res = await getTableData<any>({
               app_id: "csm",
               obj_name: "sys_autos",
-              where: whereBroadcast,
+              where,
               take: 1,
             });
-            const rowsBroadcast = (resBroadcast as any)?.rows || (resBroadcast as any)?.data || [];
-            codeRecord = Array.isArray(rowsBroadcast) ? rowsBroadcast.find((r: any) => r?.p_name === broadcastAppId) : undefined;
+            const rows = (res as any)?.rows || (res as any)?.data || [];
+            codeRecord = Array.isArray(rows) ? rows.find((r: any) => r?.p_name === candidateName) : undefined;
+            if (codeRecord) {
+              break;
+            }
           } catch {}
         }
 

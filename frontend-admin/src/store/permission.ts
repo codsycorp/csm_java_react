@@ -3,7 +3,7 @@ import type { AppRouteRecordRaw } from "#src/router/types";
 import type { MenuItemType as ApiMenuItemType } from "#src/api/system/menu";
 
 import { fetchAsyncRoutes } from "#src/api/user";
-import { fetchNavigationMenus, loadAutoMenuItem, loadBroadcastHomeAutoCode } from "#src/api/system/menu";
+import { fetchNavigationMenus, loadAutoMenuItem } from "#src/api/system/menu";
 import { router } from "#src/router";
 import { ROOT_ROUTE_ID } from "#src/router/constants";
 import { rootChildRoutes, routes } from "#src/router/routes";
@@ -479,21 +479,6 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 				: newRoutes) as AppRouteRecordRaw[];
 
 		let routeMenus: MenuItemType[] = getMenuItems(routesForMenu);
-		// Chỉ attach auto_code cho homepage nếu là broadcast_{app_id} (không ảnh hưởng auto-setup)
-		const homepageIdx = routeMenus.findIndex(m => m.key === "homepage");
-		if (homepageIdx !== -1) {
-			const homepageMenu = routeMenus[homepageIdx];
-			if (!homepageMenu.auto_code) {
-				const broadcastAutoCode = await loadBroadcastHomeAutoCode(effectiveAppId);
-				if (broadcastAutoCode) {
-					routeMenus = [
-						...routeMenus.slice(0, homepageIdx),
-						{ ...homepageMenu, auto_code: broadcastAutoCode },
-						...routeMenus.slice(homepageIdx + 1)
-					];
-				}
-			}
-		}
 		const homeMenu = routeMenus.find(m => m.key === "homepage");
 		const systemMenusFromRoute = routeMenus.filter(m => m.key === "/system");
 		let wholeMenus: MenuItemType[] = [];
