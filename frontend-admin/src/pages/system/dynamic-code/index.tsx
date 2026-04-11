@@ -1304,6 +1304,8 @@ ${resolvedContainerSelector} select {
             value = parseUserAddressValue(row.user_address);
             if (value.length === 0) value = parseUserAddressValue(row.user_adress);
           }
+          // Đồng bộ lại vào runtime và localStorage để get() trả về đúng
+          syncRuntimeUserAddress(value);
           if (typeof callback === "function") callback(true, value);
         } catch (e) {
           if (typeof callback === "function") callback(false, [], (e as any)?.message || String(e));
