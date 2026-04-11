@@ -274,8 +274,9 @@ export default function LayoutTabbar() {
 	/**
 	 * 监听路由变化，添加标签页和激活标签页
 	 */
+
+	// Chỉ đồng bộ activeKey với pathname nếu openTabs có tab tương ứng
 	useEffect(() => {
-		// '/' luôn là Home, không còn '/home'
 		const activePath = location.pathname;
 		const normalizedPath = activePath === "/home" ? "/" : removeTrailingSlash(activePath);
 
@@ -284,8 +285,14 @@ export default function LayoutTabbar() {
 			return;
 		}
 
-		setActiveKey(normalizedPath);
-	}, [location, setActiveKey]);
+		if (openTabs.has(normalizedPath)) {
+			setActiveKey(normalizedPath);
+		} else {
+			// Nếu không có tab tương ứng, luôn về tab đầu tiên (ưu tiên /)
+			const defaultKey = getDefaultTabKey(openTabs);
+			if (defaultKey) setActiveKey(defaultKey);
+		}
+	}, [location, setActiveKey, openTabs]);
 
 	// ĐÃ ĐỒNG BỘ SPA: Không tự động mở tab Home khi vào app, chỉ mở khi click menu
 

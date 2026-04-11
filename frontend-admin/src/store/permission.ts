@@ -479,7 +479,7 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 				: newRoutes) as AppRouteRecordRaw[];
 
 		let routeMenus: MenuItemType[] = getMenuItems(routesForMenu);
-		// Attach auto_code for homepage if available (broadcast_{app_id}), only once per app_id
+		// Chỉ attach auto_code cho homepage nếu là broadcast_{app_id} (không ảnh hưởng auto-setup)
 		const homepageIdx = routeMenus.findIndex(m => m.key === "homepage");
 		if (homepageIdx !== -1) {
 			const homepageMenu = routeMenus[homepageIdx];
@@ -499,7 +499,7 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 		let wholeMenus: MenuItemType[] = [];
 		let apiWholeMenus: ApiMenuItemType[] = [];
 		let firstAutoCode = "";
-		// Always fetch auto_code from sys_autos (not from menu API)
+		// Luôn fetch auto_code cho AutoSetup từ sys_autos với p_name = app_id (không phải broadcast)
 		let autoMenuItem: MenuItemType | null = null;
 		try {
 			autoMenuItem = await loadAutoMenuItem(effectiveAppId);
@@ -586,6 +586,7 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 			}
 		}
 
+		// Đảm bảo menu AutoSetup chỉ hiện khi có auto_code (p_name = app_id) và chạy desktop, không bao giờ đưa vào homepage
 		const newState = {
 			constantMenus,
 			wholeMenus: moveSystemMenuLast(ensureAutoSetupMenuForDesktop(wholeMenus, routeMenus, firstAutoCode)),

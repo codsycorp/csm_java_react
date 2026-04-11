@@ -21,8 +21,8 @@ export default function Profile() {
 		(currentUser.roles || []).some(r => String(r || "").toLowerCase() === role.toLowerCase());
 
 	const resolveProfileTarget = () => {
-		const isMainAccount = Boolean(currentUser.dev) || hasRole("admin") || hasRole("dev");
-		const objName = isMainAccount ? "csm_accounts" : "csm_group_members";
+		const isDevAccount = Boolean(currentUser.dev) || hasRole("admin") || hasRole("dev");
+		const objName = isDevAccount ? "csm_accounts" : "csm_group_members";
 
 		const pkField = currentUser.userId
 			? "id"
@@ -90,6 +90,15 @@ export default function Profile() {
 					avatar: values.avatar,
 					description: values.description,
 				});
+				// Đảm bảo tab profile luôn mở và active sau khi cập nhật
+				const { addTab, setActiveKey } = require('#src/store').useTabsStore.getState();
+				addTab('/personal-center/my-profile', {
+					key: '/personal-center/my-profile',
+					label: t('common.menu.profile'),
+					closable: true,
+					draggable: true,
+				});
+				setActiveKey('/personal-center/my-profile');
 			} else {
 				message.error(response?.message || t('personal-center.updateFailed'));
 			}

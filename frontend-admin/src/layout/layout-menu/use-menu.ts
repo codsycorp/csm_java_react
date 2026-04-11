@@ -398,6 +398,36 @@ export function useMenu() {
 	 */
 	const handleMenuSelect = (key: string, mode: MenuProps["mode"]) => {
 		// Home: luôn dùng 'homepage' làm key
+		// SPA: Nếu là các route tĩnh hệ thống thì luôn mở tab
+		const staticTabRoutes: Record<string, string> = {
+			"/personal-center/my-profile": t("common.menu.profile"),
+			"/personal-center/settings": t("common.menu.settings"),
+			"/system/user": t("common.menu.user"),
+			"/system/menu": t("common.menu.menu"),
+			"/system/developer": t("common.menu.developer"),
+			"/system/dept": t("common.menu.permissionGroup"),
+			"/system/branches": t("common.menu.branch"),
+			"/system/departments": t("common.menu.dept"),
+			"/system/roles": t("common.menu.roles"),
+			"/system/role": t("common.menu.role"),
+			"/system/broadcast": t("common.menu.broadcast"),
+			"/about": t("common.menu.about"),
+			"/route-nest/menu1": "Menu 1",
+			"/route-nest/menu1/menu1-1": "Menu 1-1",
+			"/route-nest/menu1/menu1-2": "Menu 1-2",
+			"/route-nest/menu2": "Menu 2",
+			"homepage": t("common.menu.home"),
+		};
+		if (staticTabRoutes[key]) {
+			addTab(key, {
+				key,
+				label: staticTabRoutes[key],
+				closable: key !== "homepage",
+				draggable: key !== "homepage",
+			});
+			setActiveKey(key);
+			return;
+		}
 		let normalizedKey = key;
 		if (key === "homepage") {
 			normalizedKey = "homepage";

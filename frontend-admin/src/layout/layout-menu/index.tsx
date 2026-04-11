@@ -214,22 +214,39 @@ export default function LayoutMenu({
 		});
 	}, [autoOpenMenu, sidebarCollapsed, selectedKey, menus, matches, expandableKeySet]);
 
+
+	   // Chặn hoàn toàn navigate mặc định của Ant Design Menu
+	   // Khi click menu, chỉ mở tab SPA, không đổi URL
+	   const handleMenuClick: MenuProps['onClick'] = (e) => {
+		   if (e.domEvent) {
+			   e.domEvent.preventDefault();
+			   e.domEvent.stopPropagation();
+		   }
+		   handleMenuSelect?.(e.key, mode);
+	   };
+
+	   const handleMenuSelectWrapper: MenuProps['onSelect'] = (e) => {
+		   // Chặn navigate mặc định
+		   if (e.domEvent) {
+			   e.domEvent.preventDefault();
+			   e.domEvent.stopPropagation();
+		   }
+		   handleMenuSelect?.(e.key, mode);
+	   };
+
 	return (
 		<Menu
-			/**
-			 * min-w-0 flex-auto 解决在 Flex 布局中，Menu 没有按照预期响应式省略菜单
-			 * @see https://ant-design.antgroup.com/components/menu#why-menu-do-not-responsive-collapse-in-flex-layout
-			 */
-			className="!border-none min-w-0 flex-auto"
-			inlineIndent={16}
-			{...menuInlineCollapsedProp}
-			style={{ height: isMobile ? "100%" : "initial" }}
-			mode={mode}
-			// theme="dark"
-			items={localizedMenus}
-			{...menuOpenProps}
-			selectedKeys={getSelectedKeys}
-			onSelect={({ key }) => handleMenuSelect?.(key, mode)}
+			 className="!border-none min-w-0 flex-auto"
+			 inlineIndent={16}
+			 {...menuInlineCollapsedProp}
+			 style={{ height: isMobile ? "100%" : "initial", borderRight: 0 }}
+			 mode={mode}
+			 items={localizedMenus}
+			 {...menuOpenProps}
+			 selectedKeys={getSelectedKeys}
+			 onClick={handleMenuClick}
+			 onSelect={handleMenuSelectWrapper}
+			 onOpenChange={setOpenKeys}
 		/>
 	);
-}
+	}
