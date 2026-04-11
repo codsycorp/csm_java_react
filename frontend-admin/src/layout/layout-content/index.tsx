@@ -31,8 +31,9 @@ export default function LayoutContent() {
 	}, [userId, openTabs, pathname]);
 
 
-	// SPA: Luôn dùng activeKey làm cacheKey cho SPA tab
+	// SPA: Luôn dùng activeKey làm cacheKey cho SPA tab, riêng tab Trang Chủ luôn là 'homepage'
 	const cacheKey = useMemo(() => {
+		if (activeKey === "/" || activeKey === "/home" || activeKey === "homepage") return "homepage";
 		return activeKey || "homepage";
 	}, [activeKey]);
 
