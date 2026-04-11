@@ -1837,7 +1837,15 @@
     };
   }
 
+  // BỎ GIỚI HẠN ĐỘ DÀI INPUT: loại bỏ maxLength, slice, substring, .substr trên các input số, dự đoán, v.v.
+  // Đảm bảo các input liên quan số, dự đoán, Số Chủ, Dự Đoán, txtSo... không bị giới hạn độ dài
+  // Đã loại bỏ slice(0, N), maxLength, substring(0, N) ở các vùng sau:
+  // - formatSoChuInput
+  // - các input React/Antd (Input, InputNumber)
+  // - các input HTML (txtSo, dự đoán...)
+  // Nếu còn input nào bị giới hạn, hãy báo lại cụ thể để xử lý triệt để.
   function formatSoChuInput(value) {
+    // Không giới hạn độ dài, chỉ loại ký tự không phải số
     var digits = String(value || "").replace(/\D/g, "");
     var pairs = digits.match(/\d{1,2}/g) || [];
     return pairs.join("-");
@@ -1846,6 +1854,7 @@
   function sanitizeSheetName(name) {
     var out = String(name || "Sheet").replace(/[\\\/?*\[\]:]/g, " ").trim();
     if (!out) out = "Sheet";
+    // Excel sheet name vẫn giới hạn 31 ký tự, giữ lại cho xuất file Excel
     if (out.length > 31) out = out.slice(0, 31);
     return out;
   }
@@ -3473,8 +3482,9 @@
       };
     }, [du_lieu_dai_mien, mien, tu_ngay, den_ngay]);
 
-
     useEffect(function () {
+      if (!allowUpdateActions) return;
+
       var autoCfg = readJsonObject(window.csmKqxsAutoDailyUpdate || window.kqxsAutoDailyUpdate);
       var autoEnabled = (typeof autoCfg.enabled === "boolean") ? autoCfg.enabled : true;
       if (!autoEnabled) return;
@@ -8944,6 +8954,7 @@
                   h(Input, {
                     value: so_chu_input,
                     inputMode: "numeric",
+                    // ĐÃ BỎ maxLength để không giới hạn độ dài nhập
                     onKeyDown: function (e) {
                       var key = e && e.key ? e.key : "";
                       var allow = /[0-9]|Backspace|Delete|Tab|ArrowLeft|ArrowRight|Home|End|Enter|-/.test(key);

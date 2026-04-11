@@ -438,6 +438,7 @@ public class InitHandler {
                         recordManager.createRecord("csm", "index", Map.of("id", "accessRights", "data", asyncRoutes),
                                         List.of("id"));
 
+
                         // Initialize permission system tables
                         initializeDataTables("csm", "csm_depts",
                                         List.of("id", "dept_code"), List.of(
@@ -463,6 +464,17 @@ public class InitHandler {
                         initializeDataTables("csm", "csm_user_roles",
                                         List.of("id", "user_id", "role_id"), List.of(
                                                         "id", "user_id", "role_id", "create_time"));
+
+                        // Add schema/index for sys_autos (auto_code storage)
+                        // PK: id, p_name, p_type; Fields: id, p_name, p_type, auto_code, description, create_time, update_time
+                        // Lucene search fields: p_name, p_type, id
+                        initializeDataTables(
+                                "csm",
+                                "sys_autos",
+                                List.of("id", "p_name", "p_type"),
+                                List.of("id", "p_name", "p_type", "auto_code", "description", "create_time", "update_time"),
+                                List.of("p_name", "p_type", "id")
+                        );
 
                         // 🔒 SCHEMA-ONLY INITIALIZATION for user tables (schemaOnly=true)
                         // chỉ khởi tạo schema LẦN ĐẦU, không khởi tạo lại dữ liệu

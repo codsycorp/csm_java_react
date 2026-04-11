@@ -390,30 +390,6 @@ function syncRuntimeUserAddress(userAddress: any[]): any[] {
 // ============================================================================
 // Helper Functions (from AutoSetup.tsx)
 // ============================================================================
-// Đảm bảo các biến toàn cục luôn sẵn sàng trước khi chạy auto_code
-if (typeof window !== 'undefined') {
-  if (!Object.getOwnPropertyDescriptor(window, 'React')) {
-    Object.defineProperty(window, 'React', {
-      get() { return require('react'); },
-      configurable: true,
-      enumerable: false
-    });
-  }
-  if (!Object.getOwnPropertyDescriptor(window, 'ReactDOM')) {
-    Object.defineProperty(window, 'ReactDOM', {
-      get() { return require('react-dom/client'); },
-      configurable: true,
-      enumerable: false
-    });
-  }
-  if (!Object.getOwnPropertyDescriptor(window, 'antd')) {
-    Object.defineProperty(window, 'antd', {
-      get() { return require('antd'); },
-      configurable: true,
-      enumerable: false
-    });
-  }
-}
 
 /**
  * Base64 encode with UTF-8 support
@@ -754,6 +730,7 @@ async function facebookGetPages(accessToken: string): Promise<FacebookResponse> 
 // ============================================================================
 // Component Props
 // ============================================================================
+
 interface DynamicCodeMenuProps {
   menuId?: string;
   menuData?: any;
@@ -860,45 +837,130 @@ ${resolvedContainerSelector} select {
 `;
   }, [resolvedContainerSelector]);
 
+
   // ============================================
   // SETUP WINDOW OBJECTS - IMMEDIATELY (NOT IN useEffect)
   // ============================================
-  // Setup window.csmApi immediately using Object.defineProperty to avoid conflicts
-  if (typeof window !== "undefined" && !window.csmApi) {
-    Object.defineProperty(window, 'csmApi', {
-      get() {
-        return {
-          ...CsmApi,
-          getTableData: CsmApi.getTableData,
-          updateTableData: (CsmApi as any).updateTableData,
-          andWhere: CsmApi.andWhere,
-        };
-      },
-      configurable: true,
-      enumerable: true
-    });
-  }
-
-  // ✅ CRITICAL FIX: Sync csmCurrentUser BEFORE initializing csmUserData so that
-  // fetchFromDatabase can resolve pkValue when called immediately from auto-upload scripts.
   if (typeof window !== "undefined") {
-    const latestUser = JSON.parse(JSON.stringify(user));
-    const runtimeUser = (window.csmCurrentUser as any) || {};
-    const hasStableIdentity = Boolean(
-      runtimeUser.userId
-      || runtimeUser.id
-      || runtimeUser.user_id
-      || runtimeUser.account_id
-      || runtimeUser.app_token
-      || runtimeUser.appToken
-      || runtimeUser.login_identifier
-      || runtimeUser.email
-      || runtimeUser.username
-      || runtimeUser.phoneNumber
-      || runtimeUser.phone_number,
-    );
-    if (!hasStableIdentity) {
-      window.csmCurrentUser = latestUser;
+    // Expose csmApi immediately
+    if (!window.csmApi) {
+      Object.defineProperty(window, 'csmApi', {
+        get() {
+          return {
+            ...CsmApi,
+            getTableData: CsmApi.getTableData,
+            updateTableData: (CsmApi as any).updateTableData,
+            andWhere: CsmApi.andWhere,
+          };
+        },
+        configurable: true,
+        enumerable: true
+      });
+    }
+
+    // Expose React immediately
+    if (!Object.getOwnPropertyDescriptor(window, 'React')) {
+      Object.defineProperty(window, 'React', {
+        get() { return React; },
+        configurable: true,
+        enumerable: false
+      });
+    }
+    // Expose ReactDOM immediately
+    if (!Object.getOwnPropertyDescriptor(window, 'ReactDOM')) {
+      Object.defineProperty(window, 'ReactDOM', {
+        get() { return ReactDOM; },
+        configurable: true,
+        enumerable: false
+      });
+    }
+    // Expose antd immediately
+    if (!Object.getOwnPropertyDescriptor(window, 'antd')) {
+      Object.defineProperty(window, 'antd', {
+        get() {
+          const runtimeUi = ((window as any).__csmDynamicUiRuntime || {}) as { language?: string; isDark?: boolean };
+          const runtimeLanguage = runtimeUi.language || (window as any)?.i18n?.language || i18nInstance.language || "vi";
+          const languageKey = String(runtimeLanguage || "vi").trim();
+          const baseLanguageKey = languageKey.includes("-") ? languageKey.split("-")[0] : languageKey;
+          const localeMap = (ANT_DESIGN_LOCALE as any) || {};
+          const antdLocale = localeMap[languageKey] || localeMap[baseLanguageKey] || localeMap.vi || Object.values(localeMap)[0];
+          const runtimeIsDark = Boolean(
+            runtimeUi.isDark
+            ?? (window as any)?.csmTheme?.isDark
+          );
+          return {
+            notification, message, Table, Tabs, Button, Input, InputNumber, Select, Card, Space, Popconfirm, Modal, Form, ConfigProvider, 
+            DatePicker, TimePicker, Row, Col, Switch, Progress, Tag, Tree, Checkbox, Radio, Tooltip, Popover, 
+            Dropdown, Menu, Collapse, Pagination, Breadcrumb, Segmented, Steps, Timeline, Result, Divider, Typography,
+            List, Badge, Rate, Slider, Upload, Cascader, TreeSelect, AutoComplete, Transfer, Statistic, Empty, Spin, Alert, dayjs,
+            CsmDynamicGrid,
+            CsmCrmWorkspace,
+            CsmKanbanBoard,
+            antdLocale,
+            antdThemeConfig: runtimeIsDark ? customAntdDarkTheme : customAntdLightTheme,
+            googleIndexUrl: (CsmApi as any).googleIndexUrl,
+            checkGoogleIndexQuota: (CsmApi as any).checkGoogleIndexQuota,
+            checkGoogleIndexStatus: (CsmApi as any).checkGoogleIndexStatus,
+            getGoogleSearchConsoleSites: (CsmApi as any).getGoogleSearchConsoleSites,
+            checkAndAutoPublish: (CsmApi as any).checkAndAutoPublish,
+            addToQueue: (CsmApi as any).addToQueue,
+            addBatchToQueue: (CsmApi as any).addBatchToQueue,
+            getQueueInfo: (CsmApi as any).getQueueInfo,
+            getQueueItems: (CsmApi as any).getQueueItems,
+            processQueue: (CsmApi as any).processQueue,
+            removeFromQueue: (CsmApi as any).removeFromQueue,
+            getUrlHistory: (CsmApi as any).getUrlHistory,
+            getRecentHistory: (CsmApi as any).getRecentHistory,
+          };
+        },
+        configurable: true,
+        enumerable: false
+      });
+    }
+    // Expose notification helpers
+    if (!(window as any).thongbao) {
+      (window as any).thongbao = (msg: string) => notification.success({ message: msg });
+    }
+    if (!(window as any).canhbao) {
+      (window as any).canhbao = (msg: string) => notification.warning({ message: msg });
+    }
+    // Expose I18nextProvider
+    if (!Object.getOwnPropertyDescriptor(window, 'I18nextProvider')) {
+      Object.defineProperty(window, 'I18nextProvider', {
+        get() { return I18nextProvider; },
+        configurable: true,
+        enumerable: false
+      });
+    }
+    // Expose i18n
+    if (!Object.getOwnPropertyDescriptor(window, 'i18n')) {
+      Object.defineProperty(window, 'i18n', {
+        get() { return i18n || i18nInstance; },
+        configurable: true,
+        enumerable: false
+      });
+    }
+    // Expose csmCrypto
+    if (!Object.getOwnPropertyDescriptor(window, 'csmCrypto')) {
+      Object.defineProperty(window, 'csmCrypto', {
+        get() { return { encrypt: csmEncrypt, decrypt: csmDecrypt }; },
+        configurable: true,
+        enumerable: false
+      });
+    }
+    // Expose csmAI
+    if (!Object.getOwnPropertyDescriptor(window, 'csmAI')) {
+      Object.defineProperty(window, 'csmAI', {
+        get() {
+          return {
+            generateSeoContent, csm_ai_generate_seo_content,
+            generateSeoContentWithPrompt, formatSeoPrompt,
+            PROMPT_GENERATE_POST
+          };
+        },
+        configurable: true,
+        enumerable: false
+      });
     }
   }
 
@@ -1507,26 +1569,50 @@ ${resolvedContainerSelector} select {
           return;
         }
 
-        // Load the code template STRICTLY from app_id=csm, table=sys_autos.
-        const where = andWhere([
-          { field: "p_name", type: "eq", value: autoCodeName },
-          { field: "p_type", type: "eq", value: 0 },
-        ]);
+        // Lấy app_id hiện tại
+        const currentUser = (window as any)?.csmCurrentUser || user || {};
+        const appId = currentUser.app_id || user.app_id || effectiveAppId || "csm";
+        const broadcastAppId = `broadcast_${appId}`;
 
-        const response = await getTableData<any>({
-          app_id: "csm",
-          obj_name: "sys_autos",
-          where,
-          take: 1,
-        });
+        // Ưu tiên lấy p_name = appId, nếu không có thì mới lấy broadcastAppId
+        let codeRecord: any = undefined;
+        let rows: any[] = [];
+        // 1. Thử lấy với p_name = appId
+        try {
+          const whereApp = andWhere([
+            { field: "p_name", type: "eq", value: appId },
+            { field: "p_type", type: "eq", value: 0 },
+          ]);
+          const resApp = await getTableData<any>({
+            app_id: "csm",
+            obj_name: "sys_autos",
+            where: whereApp,
+            take: 1,
+          });
+          rows = (resApp as any)?.rows || (resApp as any)?.data || [];
+          codeRecord = Array.isArray(rows) ? rows.find((r: any) => r?.p_name === appId) : undefined;
+        } catch {}
 
-        const rows = (response as any)?.rows || (response as any)?.data || [];
-        const codeRecord = Array.isArray(rows)
-          ? rows.find((r: any) => r?.p_name === autoCodeName)
-          : undefined;
+        // 2. Nếu không có, thử lấy với p_name = broadcastAppId
+        if (!codeRecord) {
+          try {
+            const whereBroadcast = andWhere([
+              { field: "p_name", type: "eq", value: broadcastAppId },
+              { field: "p_type", type: "eq", value: 0 },
+            ]);
+            const resBroadcast = await getTableData<any>({
+              app_id: "csm",
+              obj_name: "sys_autos",
+              where: whereBroadcast,
+              take: 1,
+            });
+            const rowsBroadcast = (resBroadcast as any)?.rows || (resBroadcast as any)?.data || [];
+            codeRecord = Array.isArray(rowsBroadcast) ? rowsBroadcast.find((r: any) => r?.p_name === broadcastAppId) : undefined;
+          } catch {}
+        }
 
         if (!codeRecord?.p_code) {
-          setError(`Code template "${autoCodeName}" not found in sys_autos`);
+          setError(`Không tìm thấy code template cho app_id "${appId}" hoặc broadcast variant trong sys_autos`);
           setAutoCode("");
           return;
         }
@@ -1561,7 +1647,7 @@ ${resolvedContainerSelector} select {
       cancelled = true;
       executedRef.current = false;
     };
-  }, [menuId, location.state, propAutoCodeName, propMenuData, inlineCode]);
+  }, [menuId, location.state, propAutoCodeName, propMenuData, inlineCode, user, effectiveAppId]);
 
   const seft = useMemo(() => {
     const userAddressRaw = localStorage.getItem("user_address");
@@ -1871,11 +1957,6 @@ ${resolvedContainerSelector} select {
     return null;
   }
 
-  // Nếu không loading, không error, autoCode rỗng và noCodeMessage === "" thì return null (giao diện trắng hoàn toàn)
-  if (!loading && !error && autoCode === "" && noCodeMessage === "") {
-    return null;
-  }
-
   return (
     <BasicContent key={i18n.language}>
       <div style={{ padding: rootPadding, width: "100%", maxWidth: "100%", overflowX: "hidden" }}>
@@ -1897,7 +1978,7 @@ ${resolvedContainerSelector} select {
           />
         )}
 
-        {!loading && !error && autoCode === "" && noCodeMessage !== "" && (
+        {!loading && !error && autoCode === "" && (
           <Empty
             description={noCodeMessage || t("system.dynamic_code.no_code", "Không có code để chạy")}
             style={{ marginTop: 40 }}
