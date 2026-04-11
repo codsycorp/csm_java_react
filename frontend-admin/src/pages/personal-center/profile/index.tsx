@@ -52,6 +52,7 @@ export default function Profile() {
 		return "";
 	};
 
+
 	const handleFinish = async (values: any) => {
 		setLoading(true);
 		try {
@@ -60,35 +61,46 @@ export default function Profile() {
 				message.error(t('personal-center.updateFailed'));
 				return;
 			}
-			
-			// Build update object with PK included (required by CsmApi)
+
+			// Đảm bảo luôn gửi đủ các trường định danh
 			const updateData: any = {
-				[pkField]: pkValue, // Include PK in obj_update
 				id: currentUser.userId || pkValue,
 				email: values.email,
+				username: currentUser.username,
 				phoneNumber: values.phoneNumber,
 				full_name: values.full_name,
 				avatar: values.avatar,
 				description: values.description,
 			};
-			
+			// Nếu pkField không phải là id/email/username/phoneNumber thì vẫn thêm vào
+			if (!['id','email','username','phoneNumber','phone_number'].includes(pkField)) {
+				updateData[pkField] = pkValue;
+			}
+			// Đảm bảo các trường định danh luôn có mặt nếu có giá trị
+			if (currentUser.email) updateData.email = currentUser.email;
+			if (currentUser.username) updateData.username = currentUser.username;
+			if (currentUser.phoneNumber) updateData.phoneNumber = currentUser.phoneNumber;
+
 			const response = await updateTableData({
 				app_id: "csm",
 				obj_name: objName,
 				command: "update",
 				obj_update: updateData,
-				pk_fields: [pkField], // CsmApi will build e_where from this
+				pk_fields: [pkField],
 			});
-			
+
 			if (isUpdateSuccess(response)) {
 				message.success(t('personal-center.updateSuccess'));
-				// Update user store
+				// Update user store với đúng trường định danh backend trả về
+				const updatedRow = response?.updated_row || {};
 				useUserStore.setState({
-					email: values.email,
-					phoneNumber: values.phoneNumber,
-					full_name: values.full_name,
-					avatar: values.avatar,
-					description: values.description,
+					userId: updatedRow.id ?? currentUser.userId,
+					email: updatedRow.email ?? currentUser.email,
+					username: updatedRow.username ?? currentUser.username,
+					phoneNumber: updatedRow.phoneNumber ?? updatedRow.phone_number ?? currentUser.phoneNumber,
+					full_name: updatedRow.full_name ?? values.full_name,
+					avatar: updatedRow.avatar ?? values.avatar,
+					description: updatedRow.description ?? values.description,
 				});
 				// Đảm bảo tab profile luôn mở và active sau khi cập nhật
 				const { addTab, setActiveKey } = require('#src/store').useTabsStore.getState();
@@ -105,9 +117,10 @@ export default function Profile() {
 		} catch (error: any) {
 			message.error(error.message || t('personal-center.updateFailed'));
 		} finally {
-				setLoading(false);
+			setLoading(false);
 		}
 	};
+
 
 	const handleChangePassword = async (values: any) => {
 		if (values.newPassword !== values.confirmPassword) {
@@ -122,25 +135,45 @@ export default function Profile() {
 				message.error(t('personal-center.passwordChangeFailed'));
 				return;
 			}
-			
-			// Send oldPassword and newPassword to backend for verification and encryption
-			// Include PK in obj_update as required by CsmApi
+
+			// Đảm bảo luôn gửi đủ các trường định danh
+			const updateData: any = {
+				id: currentUser.userId || pkValue,
+				email: currentUser.email,
+				username: currentUser.username,
+				phoneNumber: currentUser.phoneNumber,
+				[pkField]: pkValue,
+				_oldPassword: values.oldPassword,
+				_newPassword: values.newPassword,
+				_changePassword: true,
+			};
+			// Nếu pkField không phải là id/email/username/phoneNumber thì vẫn thêm vào
+			if (!['id','email','username','phoneNumber','phone_number'].includes(pkField)) {
+				updateData[pkField] = pkValue;
+			}
+			// Đảm bảo các trường định danh luôn có mặt nếu có giá trị
+			if (currentUser.email) updateData.email = currentUser.email;
+			if (currentUser.username) updateData.username = currentUser.username;
+			if (currentUser.phoneNumber) updateData.phoneNumber = currentUser.phoneNumber;
+
 			const response = await updateTableData({
 				app_id: "csm",
 				obj_name: objName,
 				command: "update",
-				obj_update: {
-					[pkField]: pkValue, // Include PK in obj_update
-					id: currentUser.userId || pkValue,
-					_oldPassword: values.oldPassword,
-					_newPassword: values.newPassword,
-					_changePassword: true, // Flag to indicate password change
-				},
-				pk_fields: [pkField], // CsmApi will build e_where from this
+				obj_update: updateData,
+				pk_fields: [pkField],
 			});
-			
+
 			if (isUpdateSuccess(response)) {
 				message.success(t('personal-center.passwordChangeSuccess'));
+				// Update user store với đúng trường định danh backend trả về (nếu có)
+				const updatedRow = response?.updated_row || {};
+				useUserStore.setState({
+					userId: updatedRow.id ?? currentUser.userId,
+					email: updatedRow.email ?? currentUser.email,
+					username: updatedRow.username ?? currentUser.username,
+					phoneNumber: updatedRow.phoneNumber ?? updatedRow.phone_number ?? currentUser.phoneNumber,
+				});
 				passwordForm.resetFields();
 			} else {
 				message.error(response?.message || t('personal-center.passwordChangeFailed'));

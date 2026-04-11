@@ -402,14 +402,10 @@ export function useMenu() {
 		const staticTabRoutes: Record<string, string> = {
 			"/personal-center/my-profile": t("common.menu.profile"),
 			"/personal-center/settings": t("common.menu.settings"),
-			"/system/user": t("common.menu.user"),
+			// /system/user, /system/dept, /system/departments, /system/branches
+			// KHÔNG được đưa vào đây — phải đi qua fallback dynamic để patch CsmDynamicGrid
 			"/system/menu": t("common.menu.menu"),
 			"/system/developer": t("common.menu.developer"),
-			"/system/dept": t("common.menu.permissionGroup"),
-			"/system/branches": t("common.menu.branch"),
-			"/system/departments": t("common.menu.dept"),
-			"/system/roles": t("common.menu.roles"),
-			"/system/role": t("common.menu.role"),
 			"/system/broadcast": t("common.menu.broadcast"),
 			"/about": t("common.menu.about"),
 			"/route-nest/menu1": "Menu 1",
@@ -499,7 +495,8 @@ export function useMenu() {
 			   || (menuIdSegmentFromKey ? findMenuInTree(apiWholeMenus, menuIdSegmentFromKey, normalizedKey) : null)
 		   ) as any;
 
-		   // Khôi phục logic fallback menu hệ thống như file cũ trên git
+		   // Fallback menu hệ thống: addTab với path gốc + menuData đầy đủ
+		   // AdminPage đọc menuData từ Zustand tab state (activeTab?.menuData) nên KHÔNG cần dynamic path
 		   if (normalizedKey.startsWith("/system/")) {
 			   const userState = useUserStore.getState();
 			   const isDev = resolveDevFlag(userState.dev, userState.roles);
@@ -530,6 +527,9 @@ export function useMenu() {
 				   if (!finalMenuData.type_form) finalMenuData.type_form = fallback.type_form;
 				   if (!finalMenuData.label) finalMenuData.label = fallback.label;
 			   }
+			   // addTab với path gốc (normalizedKey) + menuData đầy đủ
+			   // LayoutContent sẽ merge tab + route và patchDynamicRoutesWithComponent trả về đúng component
+			   // AdminPage đọc activeTab?.menuData từ Zustand để lấy table_name, type_form
 			   addTab(normalizedKey, {
 				   key: normalizedKey,
 				   label: finalMenuData.label || fallback.label,
