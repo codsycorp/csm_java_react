@@ -614,6 +614,7 @@ public class TableHandler {
         collectEqValues(filters, eqValues);
         String pType = safeStr(eqValues.get("p_type"));
         String pName = safeStr(eqValues.get("p_name"));
+        String userAppId = safeStr(accessContext.appId);
         logger.info("[AutoSetupDebug] appId={}, pType={}, pName={}, accessContext={}", normalizedAppId, pType, pName, accessContext);
         if (!"0".equals(pType)) {
             logger.info("[AutoSetupDebug] RETURN false: p_type != 0 (p_type={})", pType);
@@ -626,6 +627,16 @@ public class TableHandler {
             return false;
         }
 
+        if (userAppId.isBlank()) {
+            logger.info("[AutoSetupDebug] RETURN false: userAppId trống");
+            return false;
+        }
+
+        if (!isSameOrBroadcastVariant(userAppId, pName)) {
+            logger.info("[AutoSetupDebug] RETURN false: p_name không khớp app user (userAppId={}, pName={})", userAppId, pName);
+            return false;
+        }
+
         logger.info("[AutoSetupDebug] RETURN true: non-dev request hợp lệ theo điều kiện client (p_type=0, p_name={})", pName);
         return true;
     }
@@ -633,6 +644,26 @@ public class TableHandler {
     private SearchFilter applyAutoSetupTemplateScope(SearchFilter existingFilter, UserAccessContext accessContext) {
         // Giữ nguyên điều kiện do client gửi lên; không ép scope theo accessContext.appId.
         return existingFilter;
+    }
+
+    private boolean isSameOrBroadcastVariant(String userAppId, String requestedAppId) {
+        String user = safeStr(userAppId);
+        String requested = safeStr(requestedAppId);
+        if (user.isBlank() || requested.isBlank()) {
+            return false;
+        }
+        if (user.equals(requested)) {
+            return true;
+        }
+
+        final String broadcastPrefix = "broadcast_";
+        if (user.startsWith(broadcastPrefix)) {
+            return user.substring(broadcastPrefix.length()).equals(requested);
+        }
+        if (requested.startsWith(broadcastPrefix)) {
+            return requested.substring(broadcastPrefix.length()).equals(user);
+        }
+        return false;
     }
 
     private boolean hasActionPermission(List<String> permissions, String action) {
@@ -3604,6 +3635,7 @@ public class TableHandler {
             collectEqValues(filters, eqValues);
             String requestedPType = safeStr(eqValues.get("p_type"));
             String requestedPName = safeStr(eqValues.get("p_name"));
+            String userAppIdNorm = safeStr(effectiveAccessContext.appId);
             data = data.stream().filter(row -> {
                 String pType = safeStr(row.get("p_type"));
                 String pName = safeStr(row.get("p_name"));
@@ -3616,9 +3648,12 @@ public class TableHandler {
                 if (requestedPName.isBlank()) {
                     return false;
                 }
+                if (userAppIdNorm.isBlank() || !isSameOrBroadcastVariant(userAppIdNorm, requestedPName)) {
+                    return false;
+                }
                 return requestedPName.equals(pName);
             }).collect(java.util.stream.Collectors.toList());
-            logger.info("[AutoSetupDebug] [sys_autos] rows after non-dev client-condition filter (p_name={}, p_type={}): {}", requestedPName, requestedPType, data.size());
+            logger.info("[AutoSetupDebug] [sys_autos] rows after non-dev client-condition filter (userAppId={}, p_name={}, p_type={}): {}", userAppIdNorm, requestedPName, requestedPType, data.size());
         }
         decryptPassForDisplay(tblname, data);
 
