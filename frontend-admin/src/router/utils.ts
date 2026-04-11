@@ -232,5 +232,8 @@ export function replaceBaseWithRoot(pathname: string) {
  * removeTrailingSlash('/about')  // 返回 '/about'
  */
 export function removeTrailingSlash(pathname: string) {
+	if (pathname === "/") {
+		return "/";
+	}
 	return pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
 }
