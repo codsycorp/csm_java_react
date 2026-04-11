@@ -321,12 +321,13 @@ export default function LayoutTabbar() {
 
 		// Chỉ setActiveKey khi pathname đã có trong openTabs, không fallback về tab đầu tiên
 		if (openTabs.has(normalizedPath)) {
-			if (activeKey !== normalizedPath) {
+			const currentActiveKey = getTabsStore().activeKey;
+			if (currentActiveKey !== normalizedPath) {
 				setActiveKey(normalizedPath);
 			}
 		}
 		// Nếu không có thì không làm gì, tránh ghi đè activeKey khi vừa addTab
-	}, [location.pathname, setActiveKey, openTabs, homePath, activeKey]);
+	}, [location.pathname, setActiveKey, openTabs, homePath, getTabsStore]);
 
 	// ĐÃ ĐỒNG BỘ SPA: Không tự động mở tab Home khi vào app, chỉ mở khi click menu
 
