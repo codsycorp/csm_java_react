@@ -122,14 +122,16 @@ export function patchDynamicRoutesWithComponent(routes: any[]): any[] {
         });
       } else if (autoCodeName || autoCode) {
         // Only render DynamicCodeMenu if NOT Kanban
+        // autoCode = decrypted JS from menu.auto_code → pass as inlineCode (skip API lookup)
+        // autoCodeName = lookup name → pass as autoCodeName
         Component = (props: any) => React.createElement(DynamicCodeMenu, {
           ...props,
           appId,
           menuId,
           menuData,
           m_configs: menuData,
-          autoCodeName,
-          auto_code: autoCode,
+          ...(autoCodeName ? { autoCodeName } : {}),
+          ...(autoCode && !autoCodeName ? { inlineCode: autoCode } : {}),
           decrypt: props.decrypt,
         });
       }
