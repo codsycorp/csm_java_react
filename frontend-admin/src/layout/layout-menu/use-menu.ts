@@ -202,25 +202,27 @@ export function useMenu() {
 				}
 				const systemMenuResolved = findByKeyOrId(cloned, (m) => m.key === '/system' || m.path === '/system' || m.id === 'system');
 				const targetSystem = systemMenuResolved || systemMenu;
-				// Sau khi chắc chắn có system, thêm Developer cho dev user
-				if (targetSystem && isDevUser) {
-					const hasDeveloper = (targetSystem.children || []).some((c: any) => c.key === '/system/developer' || c.path === '/system/developer');
-					if (!hasDeveloper) {
-						if (!targetSystem.children) targetSystem.children = [];
-						targetSystem.children.push({
-							key: '/system/developer',
-							path: '/system/developer',
-							id: 'system_developer',
-							label: 'common.menu.developer',
-							icon: undefined,
-							children: [],
-							// App logic fields (kept for consistency)
-							table_name: undefined,
-							report_name: undefined,
-							type_form: undefined,
-						});
-					}
-				}
+				   // Sau khi chắc chắn có system, thêm Developer cho dev user
+				   if (targetSystem && isDevUser) {
+					   const hasDeveloper = (targetSystem.children || []).some((c: any) => c.key === '/system/developer' || c.path === '/system/developer');
+					   if (!hasDeveloper) {
+						   if (!targetSystem.children) targetSystem.children = [];
+						   targetSystem.children.push({
+							   key: '/system/developer',
+							   path: '/system/developer',
+							   id: 'system_developer',
+							   label: 'common.menu.developer',
+							   icon: undefined,
+							   children: [],
+							   // App logic fields (kept for consistency)
+							   table_name: undefined,
+							   report_name: undefined,
+							   type_form: undefined,
+						   });
+					   }
+				   }
+
+				   // Không thêm menu AutoSetup thủ công ở đây, chỉ lấy từ store/permission.ts (đã kiểm tra môi trường desktop và auto_code)
 				return cloned;
 			};
 
@@ -398,7 +400,7 @@ export function useMenu() {
 		// Home: luôn dùng 'homepage' làm key
 		let normalizedKey = key;
 		if (key === "homepage") {
-			normalizedKey = "/";
+			normalizedKey = "homepage";
 			addTab("homepage", {
 				key: "homepage",
 				label: t("common.menu.home"),

@@ -8,8 +8,8 @@ export default function Home() {
   const userAppId = user.app_id || "csm";
   const location = useLocation();
 
-  // Make containerId unique per tab instance
-  const containerId = `broadcast-auto-root-${userAppId}-${location.key}`;
+  // Dùng containerId cố định để giữ nguyên nội dung khi chuyển tab
+  const containerId = `broadcast-auto-root-${userAppId}`;
 
   return (
     <DynamicCodeMenu

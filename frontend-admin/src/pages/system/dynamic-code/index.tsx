@@ -1848,6 +1848,11 @@ ${resolvedContainerSelector} select {
     return null;
   }
 
+  // Nếu không loading, không error, autoCode rỗng và noCodeMessage === "" thì return null (giao diện trắng hoàn toàn)
+  if (!loading && !error && autoCode === "" && noCodeMessage === "") {
+    return null;
+  }
+
   return (
     <BasicContent key={i18n.language}>
       <div style={{ padding: rootPadding, width: "100%", maxWidth: "100%", overflowX: "hidden" }}>
@@ -1869,7 +1874,7 @@ ${resolvedContainerSelector} select {
           />
         )}
 
-        {!loading && !error && autoCode === "" && (
+        {!loading && !error && autoCode === "" && noCodeMessage !== "" && (
           <Empty
             description={noCodeMessage || t("system.dynamic_code.no_code", "Không có code để chạy")}
             style={{ marginTop: 40 }}

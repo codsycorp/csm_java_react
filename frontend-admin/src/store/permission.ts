@@ -3,7 +3,7 @@ import type { AppRouteRecordRaw } from "#src/router/types";
 import type { MenuItemType as ApiMenuItemType } from "#src/api/system/menu";
 
 import { fetchAsyncRoutes } from "#src/api/user";
-import { fetchNavigationMenus } from "#src/api/system/menu";
+import { fetchNavigationMenus, loadAutoMenuItem, loadBroadcastHomeAutoCode } from "#src/api/system/menu";
 import { router } from "#src/router";
 import { ROOT_ROUTE_ID } from "#src/router/constants";
 import { rootChildRoutes, routes } from "#src/router/routes";
@@ -90,37 +90,21 @@ function findFirstAutoCode(items: any[]): string {
 }
 
 function ensureAutoSetupMenuForDesktop(currentMenus: MenuItemType[], routeMenus: MenuItemType[], autoCode: string): MenuItemType[] {
-	if (!isDesktopProcessBypassEnabled()) {
+	if (!isDesktopProcessBypassEnabled() || !String(autoCode || "").trim()) {
+		// Không đủ điều kiện, xoá AutoSetup nếu có
 		return (currentMenus || []).filter((menu: any) => normalizeAccessKey(menu?.key || menu?.path) !== "/auto-setup");
 	}
-	if (!String(autoCode || "").trim()) {
-		return (currentMenus || []).filter((menu: any) => normalizeAccessKey(menu?.key || menu?.path) !== "/auto-setup");
-	}
 
-	const hasAutoSetup = (currentMenus || []).some((menu: any) => normalizeAccessKey(menu?.key || menu?.path) === "/auto-setup");
-	if (hasAutoSetup) {
-		return (currentMenus || []).map((menu: any) => {
-			const key = normalizeAccessKey(menu?.key || menu?.path);
-			if (key !== "/auto-setup") return menu;
-			if (String(menu?.auto_code || "").trim()) return menu;
-			return { ...menu, auto_code: autoCode };
-		}) as MenuItemType[];
-	}
-
-	const autoSetupMenu = (routeMenus || []).find((menu: any) => normalizeAccessKey(menu?.key || menu?.path) === "/auto-setup");
-	if (autoSetupMenu) {
-		return [...(currentMenus || []), { ...autoSetupMenu, auto_code: autoCode } as MenuItemType];
-	}
-
-	const fallbackAutoSetupMenu: MenuItemType = {
+	// Đảm bảo luôn có menu AutoSetup ở cuối menu, không phụ thuộc vào routeMenus
+	const filteredMenus = (currentMenus || []).filter((menu: any) => normalizeAccessKey(menu?.key || menu?.path) !== "/auto-setup");
+	const autoSetupMenu: MenuItemType = {
 		key: "/auto-setup",
 		path: "/auto-setup",
 		id: "auto",
 		label: "common.menu.auto_setup",
 		auto_code: autoCode,
 	} as any;
-
-	return [...(currentMenus || []), fallbackAutoSetupMenu];
+	return [...filteredMenus, autoSetupMenu];
 }
 
 function ensureAutoSetupApiMenuForDesktop(currentApiMenus: ApiMenuItemType[], autoCode: string): ApiMenuItemType[] {
@@ -465,6 +449,9 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 		router.patchRoutes(ROOT_ROUTE_ID, dynamicRoutes);
 		const flatRouteList = flattenRoutes(newRoutes);
 
+		const effectiveAppId = (appIdParam || "").trim()
+			|| (useUserStore.getState().app_id || "").trim()
+			|| useAppStore.getState().getCurrentAppId();
 		const userState = useUserStore.getState();
 		const { isDev, isAdmin } = resolvePrivilegeFlags(userState);
 		const routesForMenu = (isDev
@@ -491,16 +478,36 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 					: r)
 				: newRoutes) as AppRouteRecordRaw[];
 
-		const routeMenus: MenuItemType[] = getMenuItems(routesForMenu);
+		let routeMenus: MenuItemType[] = getMenuItems(routesForMenu);
+		// Attach auto_code for homepage if available (broadcast_{app_id}), only once per app_id
+		const homepageIdx = routeMenus.findIndex(m => m.key === "homepage");
+		if (homepageIdx !== -1) {
+			const homepageMenu = routeMenus[homepageIdx];
+			if (!homepageMenu.auto_code) {
+				const broadcastAutoCode = await loadBroadcastHomeAutoCode(effectiveAppId);
+				if (broadcastAutoCode) {
+					routeMenus = [
+						...routeMenus.slice(0, homepageIdx),
+						{ ...homepageMenu, auto_code: broadcastAutoCode },
+						...routeMenus.slice(homepageIdx + 1)
+					];
+				}
+			}
+		}
 		const homeMenu = routeMenus.find(m => m.key === "homepage");
 		const systemMenusFromRoute = routeMenus.filter(m => m.key === "/system");
 		let wholeMenus: MenuItemType[] = [];
 		let apiWholeMenus: ApiMenuItemType[] = [];
 		let firstAutoCode = "";
+		// Always fetch auto_code from sys_autos (not from menu API)
+		let autoMenuItem: MenuItemType | null = null;
 		try {
-			const effectiveAppId = (appIdParam || "").trim()
-				|| (useUserStore.getState().app_id || "").trim()
-				|| useAppStore.getState().getCurrentAppId();
+			autoMenuItem = await loadAutoMenuItem(effectiveAppId);
+		} catch {}
+		if (autoMenuItem && autoMenuItem.auto_code) {
+			firstAutoCode = autoMenuItem.auto_code;
+		}
+		try {
 			const userMenusPermissions = Array.isArray(userState.menusPermissions) ? userState.menusPermissions : [];
 			const normalizedMenuTokens = userMenusPermissions.map(normalizeAccessKey).filter(Boolean);
 			const hasLegacyAppOnly = normalizedMenuTokens.length > 0
@@ -603,11 +610,19 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 		const baseRouteMenus = wholeMenus;
 		let apiWholeMenus: ApiMenuItemType[] = [];
 		let firstAutoCode = "";
+		const effectiveAppId = (appIdParam || "").trim()
+			|| (useUserStore.getState().app_id || "").trim()
+			|| useAppStore.getState().getCurrentAppId();
+		// Always fetch auto_code from sys_autos (not from menu API)
+		let autoMenuItem: MenuItemType | null = null;
+		try {
+			autoMenuItem = await loadAutoMenuItem(effectiveAppId);
+		} catch {}
+		if (autoMenuItem && autoMenuItem.auto_code) {
+			firstAutoCode = autoMenuItem.auto_code;
+		}
 
 		try {
-			const effectiveAppId = (appIdParam || "").trim()
-				|| (useUserStore.getState().app_id || "").trim()
-				|| useAppStore.getState().getCurrentAppId();
 			const apiMenuResponse = await fetchNavigationMenus(effectiveAppId);
 			const userState = useUserStore.getState();
 			const userMenusPermissions = Array.isArray(userState.menusPermissions) ? userState.menusPermissions : [];

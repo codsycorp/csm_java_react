@@ -1,3 +1,47 @@
+// Cache for broadcast home auto_code per app_id
+const broadcastHomeAutoCodeCache: Record<string, string | null> = {};
+
+/**
+ * Load auto_code for homepage (broadcast) for current app
+ * p_name = 'broadcast_' + app_id, p_type = 0
+ * Returns decrypted auto_code string or null
+ */
+export async function loadBroadcastHomeAutoCode(appIdParam: string): Promise<string | null> {
+	if (!appIdParam) return null;
+	if (broadcastHomeAutoCodeCache[appIdParam] !== undefined) {
+		// Always return null if cached value is falsy
+		return broadcastHomeAutoCodeCache[appIdParam] || null;
+	}
+	try {
+		const response = await getTableData<any>({
+			app_id: "csm",
+			obj_name: "sys_autos",
+			where: {
+				operator: "AND",
+				conditions: [
+					{ field: "p_name", type: "eq", value: `broadcast_${appIdParam}` },
+					{ field: "p_type", type: "eq", value: 0 },
+				]
+			}
+		});
+		const rows = (response as any)?.rows || (response as any)?.data || [];
+		if (!rows.length) {
+			broadcastHomeAutoCodeCache[appIdParam] = null;
+			return null;
+		}
+		const decryptedCode = rows[0].p_code ? csmDecrypt(rows[0].p_code) : "";
+		if (!decryptedCode) {
+			broadcastHomeAutoCodeCache[appIdParam] = null;
+			return null;
+		}
+		broadcastHomeAutoCodeCache[appIdParam] = decryptedCode;
+		return decryptedCode;
+	} catch (error) {
+		console.warn("Failed to load broadcast home auto_code:", error);
+		broadcastHomeAutoCodeCache[appIdParam] = null;
+		return null;
+	}
+}
 import type { MenuItemType } from "./types";
 import { request } from "#src/utils";
 import { handleTree } from "#src/utils";
@@ -239,7 +283,7 @@ async function ensureMenuTableStructs(appIdParam: string, menus: MenuItemType[])
 /**
  * Load auto setup menu (p_type = 0) from sys_autos for current app
  */
-async function loadAutoMenuItem(appIdParam: string): Promise<MenuItemType | null> {
+export async function loadAutoMenuItem(appIdParam: string): Promise<any | null> {
 	try {
 		const response = await getTableData<any>({
 			app_id: "csm", // sys_autos is stored under app_id=csm
@@ -263,7 +307,8 @@ async function loadAutoMenuItem(appIdParam: string): Promise<MenuItemType | null
 			return null;
 		}
 
-		const autoMenu: MenuItemType = {
+		const autoMenu: any = {
+			key: "/auto-setup",
 			id: "auto",
 			name: "menu.auto",
 			label: "Cài đặt tự động",
@@ -523,7 +568,7 @@ export async function fetchNavigationMenus(appIdParam?: string) {
 		id: "home",
 		name: "menu.home",
 		label: "Trang chủ",
-		path: "/",
+		path: "homepage",
 		// Remove icon field - it's being rendered as text which breaks the UI
 		// icon: "home",
 		menuType: 0,
