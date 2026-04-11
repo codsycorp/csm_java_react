@@ -2524,6 +2524,152 @@
     var _ab3 = useState(true), legacyChkHieu = _ab3[0], setLegacyChkHieu = _ab3[1];
     var _ab4 = useState(""), legacyNbGroupSize = _ab4[0], setLegacyNbGroupSize = _ab4[1];
     var _ab5 = useState(false), legacyNbTheoKy = _ab5[0], setLegacyNbTheoKy = _ab5[1];
+
+    // --- SLR Auto-filter state (C1–C6) ---
+    var _slr_af1 = useState(0), legacySlrAutoC1Gap = _slr_af1[0], setLegacySlrAutoC1Gap = _slr_af1[1];
+    var _slr_af2 = useState(0), legacySlrAutoC1First = _slr_af2[0], setLegacySlrAutoC1First = _slr_af2[1];
+    var _slr_af3 = useState([]), legacySlrAutoC2Gap = _slr_af3[0], setLegacySlrAutoC2Gap = _slr_af3[1];
+    var _slr_af4 = useState([]), legacySlrAutoC3First = _slr_af4[0], setLegacySlrAutoC3First = _slr_af4[1];
+    var _slr_af5 = useState(-1), legacySlrAutoC4Gap = _slr_af5[0], setLegacySlrAutoC4Gap = _slr_af5[1];
+    var _slr_af6 = useState(-1), legacySlrAutoC5First = _slr_af6[0], setLegacySlrAutoC5First = _slr_af6[1];
+    var _slr_af7 = useState(false), legacySlrAutoC6Both = _slr_af7[0], setLegacySlrAutoC6Both = _slr_af7[1];
+    var _slr_autoRows = useState([]), legacySlrAutoRows = _slr_autoRows[0], setLegacySlrAutoRows = _slr_autoRows[1];
+    var _slr_autoSummary = useState(""), legacySlrAutoSummary = _slr_autoSummary[0], setLegacySlrAutoSummary = _slr_autoSummary[1];
+    // --- SLR Auto-Filter by Week Segment state ---
+    var _slr_weekFrom = useState(1), legacySlrWeekFrom = _slr_weekFrom[0], setLegacySlrWeekFrom = _slr_weekFrom[1];
+    var _slr_weekTo = useState(1), legacySlrWeekTo = _slr_weekTo[0], setLegacySlrWeekTo = _slr_weekTo[1];
+
+    // --- SLR Auto-filtered rows by week segment ---
+    var legacySlrAutoFilteredRows = useMemo(function () {
+      var from = Math.min(legacySlrWeekFrom, legacySlrWeekTo);
+      var to = Math.max(legacySlrWeekFrom, legacySlrWeekTo);
+      return (legacySlrAutoRows || []).filter(function (row) {
+        var week = Number(row.gap) || 0;
+        return week >= from && week <= to;
+      });
+    }, [legacySlrAutoRows, legacySlrWeekFrom, legacySlrWeekTo]);
+        // --- SLR Auto-filter config and helpers ---
+        function getLegacySlrFilterConfig() {
+          function parseAutoNumberList(raw) {
+            var text = String(raw || "").trim();
+            if (!text) return [];
+            var seen = {};
+            return text.split(/[\s,;|]+/).map(function (s) {
+              return parseInt(String(s || "").trim(), 10);
+            }).filter(function (n) {
+              if (isNaN(n) || n < 0) return false;
+              if (seen[n]) return false;
+              seen[n] = true;
+              return true;
+            });
+          }
+          return {
+            c1GapTop: parseInt(legacySlrAutoC1Gap, 10) || 0,
+            c1FirstTop: parseInt(legacySlrAutoC1First, 10) || 0,
+            c2Gap: parseAutoNumberList(legacySlrAutoC2Gap),
+            c3First: parseAutoNumberList(legacySlrAutoC3First),
+            c4Gap: String(legacySlrAutoC4Gap || "").trim() === "" ? -1 : (parseInt(legacySlrAutoC4Gap, 10) || 0),
+            c5First: String(legacySlrAutoC5First || "").trim() === "" ? -1 : (parseInt(legacySlrAutoC5First, 10) || 0),
+            c6Both: !!legacySlrAutoC6Both
+          };
+        }
+
+        function hasLegacySlrAutoFilter(cfg) {
+          var filterCfg = cfg || getLegacySlrFilterConfig();
+          return filterCfg.c1GapTop > 0 || filterCfg.c1FirstTop > 0 || filterCfg.c2Gap.length > 0 || filterCfg.c3First.length > 0 || filterCfg.c4Gap >= 0 || filterCfg.c5First >= 0 || filterCfg.c6Both;
+        }
+
+        function filterLegacySlrRowsWithConfig(rows, filterCfg) {
+          var sourceRows = Array.isArray(rows) ? rows.slice() : [];
+          var cfg = filterCfg || getLegacySlrFilterConfig();
+          if (!hasLegacySlrAutoFilter(cfg)) return [];
+
+          var c1GapMap = {};
+          var c1FirstMap = {};
+          if (cfg.c1GapTop > 0) {
+            sourceRows.slice().sort(function (a, b) {
+              return (Number(b.gap) || 0) - (Number(a.gap) || 0);
+            }).slice(0, cfg.c1GapTop).forEach(function (row) {
+              c1GapMap[row.so] = 1;
+            });
+          }
+          if (cfg.c1FirstTop > 0) {
+            sourceRows.slice().sort(function (a, b) {
+              return (Number(b.first_hit_idx) || 0) - (Number(a.first_hit_idx) || 0);
+            }).slice(0, cfg.c1FirstTop).forEach(function (row) {
+              c1FirstMap[row.so] = 1;
+            });
+          }
+
+          return sourceRows.filter(function (row) {
+            var matchC1 = !!c1GapMap[row.so] || !!c1FirstMap[row.so];
+            var matchC2 = cfg.c2Gap.length > 0 && cfg.c2Gap.indexOf(Number(row.gap) || 0) >= 0;
+            var matchC3 = cfg.c3First.length > 0 && cfg.c3First.indexOf(Number(row.first_hit_idx) || 0) >= 0;
+            var matchC4 = cfg.c4Gap >= 0 && ((Number(row.gap) || 0) > ((Number(row.gap) || 0) + cfg.c4Gap));
+            var matchC5 = cfg.c5First >= 0 && ((Number(row.first_hit_idx) || 0) > ((Number(row.first_hit_idx) || 0) + cfg.c5First));
+            var matchC6 = !!cfg.c6Both && ((Number(row.gap) || 0) >= (Number(row.gap) || 0)) && ((Number(row.first_hit_idx) || 0) >= (Number(row.first_hit_idx) || 0));
+            return matchC1 || matchC2 || matchC3 || matchC4 || matchC5 || matchC6;
+          });
+        }
+
+        function buildLegacySlrAutoSummaryText(rows, filterCfg) {
+          var cfg = filterCfg || getLegacySlrFilterConfig();
+          if (!rows || !rows.length) return "";
+          var lines = [];
+          lines.push("Auto rows: " + rows.length);
+          lines.push("Filter: " + [
+            cfg.c1GapTop > 0 ? ("C1G=" + cfg.c1GapTop) : "",
+            cfg.c1FirstTop > 0 ? ("C1F=" + cfg.c1FirstTop) : "",
+            cfg.c2Gap.length ? ("C2=" + cfg.c2Gap.join(",")) : "",
+            cfg.c3First.length ? ("C3=" + cfg.c3First.join(",")) : "",
+            cfg.c4Gap >= 0 ? ("C4=" + cfg.c4Gap) : "",
+            cfg.c5First >= 0 ? ("C5=" + cfg.c5First) : "",
+            cfg.c6Both ? "C6=1" : ""
+          ].filter(Boolean).join(" | "));
+          return lines.join("\n");
+        }
+        // --- SLR Auto-filter runner ---
+        function runLegacySlrAutoFilter(options) {
+          options = options || {};
+          var silent = !!options.silent;
+          if (!legacySlrRows.length) {
+            if (!silent) {
+              canhbao("Vui lòng chạy Số Lâu Ra Nam-Bắc trước");
+            }
+            if (!silent || !legacySlrAutoRows.length) {
+              if (legacySlrAutoRows.length) setLegacySlrAutoRows([]);
+              setLegacySlrAutoSummary("");
+            }
+            return;
+          }
+          var filterCfg = getLegacySlrFilterConfig();
+          if (!hasLegacySlrAutoFilter(filterCfg)) {
+            if (!silent) {
+              canhbao("Vui lòng nhập ít nhất 1 điều kiện lọc (C1–C6)");
+            }
+            if (!silent || !legacySlrAutoRows.length) {
+              if (legacySlrAutoRows.length) setLegacySlrAutoRows([]);
+              setLegacySlrAutoSummary("");
+            }
+            return;
+          }
+          var filtered = filterLegacySlrRowsWithConfig(legacySlrRows, filterCfg);
+          setLegacySlrAutoRows(filtered);
+          setLegacySlrAutoSummary(buildLegacySlrAutoSummaryText(filtered, filterCfg));
+        }
+        // --- SLR Auto-filter effect: auto-run when config or data changes ---
+        useEffect(function () {
+          runLegacySlrAutoFilter({ silent: true });
+        }, [
+          legacySlrRows,
+          legacySlrAutoC1Gap,
+          legacySlrAutoC1First,
+          legacySlrAutoC2Gap,
+          legacySlrAutoC3First,
+          legacySlrAutoC4Gap,
+          legacySlrAutoC5First,
+          legacySlrAutoC6Both
+        ]);
     var _av = useState("th"), legacyTool = _av[0], setLegacyTool = _av[1];
     var _av1 = useState("slr"), legacyMainTab = _av1[0], setLegacyMainTab = _av1[1];
     var _av2 = useState("th"), legacySpecialConfigTab = _av2[0], setLegacySpecialConfigTab = _av2[1];
@@ -3482,8 +3628,8 @@
       };
     }, [du_lieu_dai_mien, mien, tu_ngay, den_ngay]);
 
+
     useEffect(function () {
-      if (!allowUpdateActions) return;
 
       var autoCfg = readJsonObject(window.csmKqxsAutoDailyUpdate || window.kqxsAutoDailyUpdate);
       var autoEnabled = (typeof autoCfg.enabled === "boolean") ? autoCfg.enabled : true;
@@ -8665,6 +8811,30 @@
                             onChange: function (v) { setLegacySlrQueryValue(String(v || "")); }
                           }))
                         ]),
+                          // --- SLR Auto-Filter by Week Segment Controls ---
+                          h(Col, { xs: 24, md: 8, key: "slrnb_week_segment" }, [
+                            h("div", { style: { marginBottom: 6, fontWeight: 600 } }, "Lọc theo đoạn tuần chưa xổ"),
+                            h(InputNumber, themedNumberProps({
+                              min: 1,
+                              max: 20,
+                              value: legacySlrWeekFrom,
+                              placeholder: "Từ tuần (ví dụ 2)",
+                              onChange: function (v) { setLegacySlrWeekFrom(Number(v) || 1); }
+                            })),
+                            h("span", { style: { margin: "0 8px" } }, "-"),
+                            h(InputNumber, themedNumberProps({
+                              min: 1,
+                              max: 20,
+                              value: legacySlrWeekTo,
+                              placeholder: "Đến tuần (ví dụ 3)",
+                              onChange: function (v) { setLegacySlrWeekTo(Number(v) || 1); }
+                            })),
+                            h(Button, {
+                              type: "primary",
+                              style: { marginLeft: 12, minWidth: 90 },
+                              onClick: function () { runLegacySlrAutoFilter(); }
+                            }, "Lọc tự động")
+                          ]),
                         h(Col, { xs: 12, md: 6, key: "slrnb_mode" }, [
                           h("div", { style: { marginBottom: 6, fontWeight: 600 } }, tt.lgCdMode),
                           h(Select, themedSelectProps({
@@ -8682,6 +8852,23 @@
                             }
                           }))
                         ]),
+                          // --- SLR Auto-Filter Results Box ---
+                          h(Row, { style: { marginTop: 12, marginBottom: 8 } }, [
+                            h(Col, { span: 24 }, [
+                              h(Card, {
+                                size: "small",
+                                style: { background: theme.cardBg, color: theme.text, borderColor: theme.border, minHeight: 48, marginBottom: 0 }
+                              }, [
+                                h("div", { style: { fontWeight: 600, fontSize: 15, marginBottom: 4 } }, "Kết quả lọc đoạn tuần:"),
+                                (legacySlrAutoFilteredRows && legacySlrAutoFilteredRows.length)
+                                  ? h("div", null, [
+                                      h("span", { style: { color: theme.primary, fontWeight: 700 } }, legacySlrAutoFilteredRows.map(function (r) { return r.so; }).join(", ")),
+                                      h("span", { style: { marginLeft: 12, color: theme.muted } }, "Tổng Nam: ", legacySlrAutoFilteredRows.reduce(function (acc, r) { return acc + (r.tongNam || 0); }, 0))
+                                    ])
+                                  : h("span", { style: { color: theme.muted } }, "Không có số nào thỏa mãn đoạn tuần đã chọn.")
+                              ])
+                            ])
+                          ]),
                         h(Col, { xs: 12, md: 3, key: "slrnb_from_rank" }, [
                           h("div", { style: { marginBottom: 6, fontWeight: 600 } }, tt.lgGhTu),
                           h(InputNumber, themedNumberProps({ value: legacyRankFrom, min: 1, max: 60, onChange: function (v) { setLegacyRankFrom(toNumberSafe(v, 1)); } }))

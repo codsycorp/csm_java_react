@@ -1004,6 +1004,9 @@ export default function AdminPage() {
 			});
 		}
 		if (menuId === "user") {
+			// QUY TẮC QUAN TRỌNG: Chỉ duy nhất user dev mới thao tác trên bảng chính (csm_accounts),
+			// còn lại (admin, sub-user, user thường) luôn thao tác trên bảng con (csm_group_members).
+			// Mọi thao tác thêm/sửa/xoá/xem đều chỉ tác động lên bảng con nếu không phải dev.
 			const actorTableName = isDevUser ? "csm_accounts" : "csm_group_members";
 			return normalizeMenuRuntimeConfig({
 				...normalized,
@@ -1072,6 +1075,9 @@ export default function AdminPage() {
 			let found = apiWholeMenus.length > 0 ? findMenuInTree(apiWholeMenus, targetId) : null;
 			// Fallback cho /system/user nếu không tìm thấy hoặc thiếu table_name
 			if ((!found || !found.table_name) && targetId === "user") {
+				// QUY TẮC QUAN TRỌNG: Chỉ duy nhất user dev mới thao tác trên bảng chính (csm_accounts),
+				// còn lại (admin, sub-user, user thường) luôn thao tác trên bảng con (csm_group_members).
+				// Mọi thao tác thêm/sửa/xoá/xem đều chỉ tác động lên bảng con nếu không phải dev.
 				const actorTableName = isDevUser ? "csm_accounts" : "csm_group_members";
 				found = {
 					id: "user",
