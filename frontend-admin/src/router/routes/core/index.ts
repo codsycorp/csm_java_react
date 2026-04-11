@@ -10,7 +10,7 @@ const Home = lazy(() => import("#src/pages/homepage"));
 // Route cho layout admin (chỉ các route quản trị)
 export const adminLayoutChildren = addIdToRoutes([
        {
-       	path: "/",
+		path: "homepage",
        	Component: Home,
        	handle: { title: "common.menu.home", icon: undefined },
        },

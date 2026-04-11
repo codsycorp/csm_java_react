@@ -45,6 +45,10 @@ export default function LayoutContent() {
 	const tab = openTabs.get(activeKey);
 	let route = flatRouteList[activeKey];
 	let PatchedComponent: any = null;
+	// Fallback: "homepage" tab key may map to "/" route if path was recently changed
+	if (!route && (activeKey === "homepage" || activeKey === "/home")) {
+		route = flatRouteList["/"];
+	}
 
 	// Memo hóa props cho các tab tĩnh để tránh tạo object mới mỗi lần render
 	const staticSystemPaths = useMemo(() => ([
@@ -79,6 +83,7 @@ export default function LayoutContent() {
 		// Ưu tiên lấy đúng key đang có trong openTabs/flatRouteList
 		let homeKey = "homepage";
 		if (!flatRouteList[homeKey] && flatRouteList["/home"]) homeKey = "/home";
+		if (!flatRouteList[homeKey] && flatRouteList["/"]) homeKey = "/";
 		route = flatRouteList[homeKey];
 		PatchedComponent = route && route.Component ? route.Component : null;
 		// Lấy đúng tabProps cho Home
