@@ -43,7 +43,19 @@ export default function LayoutContent() {
 
 
 	const tab = openTabs.get(activeKey);
-	let route = flatRouteList[activeKey];
+	const resolveRouteByKey = (routeKey: string) => {
+		if (!routeKey) return undefined;
+		const directRoute = flatRouteList[routeKey];
+		if (directRoute) return directRoute;
+		if (/^\/system\/grid\/[^/]+$/.test(routeKey)) {
+			return flatRouteList["/system/grid/:menuId"];
+		}
+		if (/^\/system\/(report|kanban)\/[^/]+$/.test(routeKey)) {
+			return flatRouteList["/system/grid/:menuId"];
+		}
+		return undefined;
+	};
+	let route = resolveRouteByKey(activeKey);
 	let PatchedComponent: any = null;
 	// Fallback: "homepage" tab key may map to "/" route if path was recently changed
 	if (!route && (activeKey === "homepage" || activeKey === "/home")) {

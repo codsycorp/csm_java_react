@@ -1049,20 +1049,29 @@ export default function AdminPage() {
 			return (a.id === b.id && a.path === b.path);
 		};
 		if (menuDataFromTab && !isSameMenu(menuDataFromTab, menuData)) {
-			// Nếu là trang user, luôn ép lại menuData qua buildUserMenuByRole để đảm bảo table_name đúng quyền
-			if (menuId === "user") {
-				const normalizedMenu = buildUserMenuByRole(menuDataFromTab);
-				setMenuData(normalizedMenu);
-			} else {
-				setMenuData(menuDataFromTab);
-			}
+			const roleAdjustedMenu = menuId === "user" ? buildUserMenuByRole(menuDataFromTab) : menuDataFromTab;
+			const withLabel = normalizeKnownSystemMenu({
+				...roleAdjustedMenu,
+				label: resolveDisplayLabel(roleAdjustedMenu),
+			});
+			const canonicalMenu = enforceCanonicalSystemRouteMenu(withLabel);
+			setMenuData(canonicalMenu);
 			setLoading(false);
 			return;
 		}
 		// Nếu không có, fallback lấy từ menuId param (cũ)
 		const findMenuInTree = (menus: any[], targetId: string): any => {
+			const normalizedTargetId = String(targetId || "").trim();
+			const systemPathVariant = normalizedTargetId && !normalizedTargetId.startsWith("/")
+				? `/system/${normalizedTargetId}`
+				: normalizedTargetId;
 			for (const menu of menus) {
-				if (menu.id === targetId || menu.key === targetId || menu.path === targetId) return menu;
+				if (
+					menu.id === normalizedTargetId
+					|| menu.key === normalizedTargetId
+					|| menu.path === normalizedTargetId
+					|| menu.path === systemPathVariant
+				) return menu;
 				if (menu.children?.length) {
 					const found = findMenuInTree(menu.children, targetId);
 					if (found) return found;
@@ -1073,36 +1082,87 @@ export default function AdminPage() {
 		const targetId = menuId;
 		if (targetId) {
 			let found = apiWholeMenus.length > 0 ? findMenuInTree(apiWholeMenus, targetId) : null;
-			// Fallback cho /system/user nếu không tìm thấy hoặc thiếu table_name
-			if ((!found || !found.table_name) && targetId === "user") {
-				// QUY TẮC QUAN TRỌNG: Chỉ duy nhất user dev mới thao tác trên bảng chính (csm_accounts),
-				// còn lại (admin, sub-user, user thường) luôn thao tác trên bảng con (csm_group_members).
-				// Mọi thao tác thêm/sửa/xoá/xem đều chỉ tác động lên bảng con nếu không phải dev.
+			// Fallback cho các menu hệ thống khi không tìm thấy hoặc thiếu table_name
+			if (!found || !found.table_name) {
 				const actorTableName = isDevUser ? "csm_accounts" : "csm_group_members";
-				found = {
-					id: "user",
-					path: "/system/user",
-					label: t("common.menu.user"),
-					table_name: actorTableName,
-					app_id: "csm",
-					type_form: 1,
-					row_type_edit: 0,
-					g_readonly: false,
+				const fallbackMenuById: Record<string, any> = {
+					user: {
+						id: "user",
+						path: "/system/user",
+						label: t("common.menu.user"),
+						table_name: actorTableName,
+						app_id: "csm",
+						type_form: 1,
+						row_type_edit: 0,
+						g_readonly: false,
+					},
+					dept: {
+						id: "permission-group",
+						path: "/system/dept",
+						label: t("common.menu.permissionGroup"),
+						table_name: "csm_roles",
+						app_id: appId,
+						type_form: 1,
+						row_type_edit: 0,
+						g_readonly: false,
+					},
+					role: {
+						id: "permission-group",
+						path: "/system/role",
+						label: t("common.menu.permissionGroup"),
+						table_name: "csm_roles",
+						app_id: appId,
+						type_form: 1,
+						row_type_edit: 0,
+						g_readonly: false,
+					},
+					roles: {
+						id: "permission-group",
+						path: "/system/roles",
+						label: t("common.menu.permissionGroup"),
+						table_name: "csm_roles",
+						app_id: appId,
+						type_form: 1,
+						row_type_edit: 0,
+						g_readonly: false,
+					},
+					departments: {
+						id: "departments",
+						path: "/system/departments",
+						label: t("common.menu.dept"),
+						table_name: "csm_depts",
+						app_id: appId,
+						type_form: 1,
+						row_type_edit: 0,
+						g_readonly: false,
+					},
+					branches: {
+						id: "branches",
+						path: "/system/branches",
+						label: t("common.menu.branch"),
+						table_name: "csm_branches",
+						app_id: appId,
+						type_form: 1,
+						row_type_edit: 0,
+						g_readonly: false,
+					},
 				};
+				const fallback = fallbackMenuById[String(targetId || "")];
+				if (fallback) found = fallback;
 			}
 			if (found && !isSameMenu(found, menuData)) {
-				// Nếu là trang user, luôn ép lại menuData qua buildUserMenuByRole để đảm bảo table_name đúng quyền
-				if (menuId === "user") {
-					const normalizedMenu = buildUserMenuByRole(found);
-					setMenuData(normalizedMenu);
-				} else {
-					setMenuData(found);
-				}
+				const roleAdjustedMenu = menuId === "user" ? buildUserMenuByRole(found) : found;
+				const withLabel = normalizeKnownSystemMenu({
+					...roleAdjustedMenu,
+					label: resolveDisplayLabel(roleAdjustedMenu),
+				});
+				const canonicalMenu = enforceCanonicalSystemRouteMenu(withLabel);
+				setMenuData(canonicalMenu);
 				setLoading(false);
 			}
 		}
 		// Nếu không tìm thấy menuData thì không set lại liên tục
-	}, [menuId, apiWholeMenus, menuData, isDevUser, t]);
+	}, [menuId, apiWholeMenus, menuData, isDevUser, t, appId, buildUserMenuByRole, normalizeKnownSystemMenu, enforceCanonicalSystemRouteMenu]);
 
 	// Di chuyển hàm loadTableData ra ngoài useEffect để có thể tái sử dụng
 	const loadTableData = async () => {
@@ -1119,7 +1179,16 @@ export default function AdminPage() {
 		};
 
 		const ensureSystemRouteTables = async () => {
-			const definitions = SYSTEM_ROUTE_TABLE_SCHEMAS[location.pathname] || [];
+			const menuSchemaPathMap: Record<string, string> = {
+				user: "/system/user",
+				dept: "/system/dept",
+				role: "/system/role",
+				roles: "/system/roles",
+				departments: "/system/departments",
+				branches: "/system/branches",
+			};
+			const schemaPath = menuSchemaPathMap[String(menuId || "")] || location.pathname;
+			const definitions = SYSTEM_ROUTE_TABLE_SCHEMAS[schemaPath] || [];
 			if (definitions.length === 0) return;
 
 			for (const definition of definitions) {
@@ -1470,11 +1539,18 @@ console.log("🔍 Rendering menu:", runtimeMenuData);
 		}
 		
 		// Transform menu data to m_configs format expected by CsmDynamicGrid
+		const configuredTableFromMenu = Array.isArray(runtimeMenuData.table)
+			? runtimeMenuData.table
+				.filter((field: any) => field && typeof field === "object")
+				.map((field: any) => ({ ...field }))
+			: [];
+		const hasConfiguredTableFields = configuredTableFromMenu.some((field: any) => String(field?.f_name || "").trim().length > 0);
+
 		const m_configs = {
 			id: runtimeMenuData.id,
 			label: runtimeMenuData.label,
 			table_name: runtimeMenuData.table_name,
-			table: runtimeMenuData.table || [],
+			table: configuredTableFromMenu,
 			trigger: runtimeMenuData.trigger || {},
 			g_readonly: runtimeMenuData.g_readonly,
 			table_pagesize: runtimeMenuData.table_pagesize,
@@ -1486,7 +1562,10 @@ console.log("🔍 Rendering menu:", runtimeMenuData);
 			}
 		};
 
-		m_configs.table = applyFriendlyFieldPolicy(runtimeMenuData.table_name, m_configs.table as any, systemUserActorType) as any;
+		// CHÍNH SÁCH CỐ ĐỊNH: Nếu menu DB đã có cấu hình cột, giữ nguyên tuyệt đối (không áp policy/fallback).
+		if (!hasConfiguredTableFields) {
+			m_configs.table = applyFriendlyFieldPolicy(runtimeMenuData.table_name, m_configs.table as any, systemUserActorType) as any;
+		}
 
 		// If columns are missing, auto-generate sensible defaults for known tables
 		if ((!m_configs.table || m_configs.table.length === 0) && runtimeMenuData.table_name) {

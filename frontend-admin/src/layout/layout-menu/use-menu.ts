@@ -4,9 +4,6 @@ import type { MenuProps } from "antd";
 import { useCurrentRoute } from "#src/hooks";
 import { removeTrailingSlash } from "#src/router/utils";
 import { usePermissionStore, useUserStore, useAppStore, useTabsStore } from "#src/store";
-import { patchDynamicRoutesWithComponent } from "#src/router/patchDynamicRoutes";
-import CsmDynamicGrid from "#src/components/csm-grid/CsmDynamicGrid";
-import { flattenRoutes } from "#src/router/utils";
 import { resolveDevFlag } from "#src/utils/dev-flag";
 import { toPermissionBigInt, isSuperPermissionProfile } from "#src/utils/permission-bitfield";
 
@@ -15,7 +12,6 @@ import { csmEncrypt, csmDecrypt } from "#src/components/csm-grid/CsmCrypto";
 
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useNavigate } from "react-router";
 
 import { useLayout } from "../hooks";
 import { findDeepestFirstItem, findRootMenuByPath, translateMenus, processMenuChildrenVisibility } from "./utils";
@@ -117,7 +113,6 @@ export function useMenu() {
 	const apiWholeMenus = usePermissionStore(state => state.apiWholeMenus);
 	const { isMixedNav, isTwoColumnNav } = useLayout();
 	const [rootMenuKey, setRootMenuKey] = useState("");
-	const navigate = useNavigate();
 	const { t, i18n } = useTranslation();
 	const appId = useAppStore(state => state.currentAppId);
 	
@@ -553,86 +548,26 @@ export function useMenu() {
 			   return;
 		   }
 
-		   // --- Xác định path động cho các loại menu động ---
+		   // --- Xác định path động theo 1 luồng thống nhất cho SPA ---
 		   let dynamicPath = normalizedKey;
 		   let dynamicLabel = selectedProcessedMenu?.label || normalizedKey;
-		   let needPatchDynamicRoute = false;
+		   let isDynamicMenu = false;
 
 		   if (selectedApiMenu) {
-			   // Grid
-			   if (
-				   selectedApiMenu.table_name || Number(selectedApiMenu.type_form) === 4
-			   ) {
-				   dynamicPath = `/system/grid/${selectedApiMenu.id || selectedApiMenu.key}`;
-				   dynamicLabel = selectedApiMenu.label || selectedApiMenu.title || 'Dynamic Grid';
-				   needPatchDynamicRoute = true;
-			   }
-			   // Report
-			   else if (
-				   selectedApiMenu.report_name || Number(selectedApiMenu.type_form) === 6
-			   ) {
-				   dynamicPath = `/system/report/${selectedApiMenu.id || selectedApiMenu.key}`;
-				   dynamicLabel = selectedApiMenu.label || selectedApiMenu.title || 'Dynamic Report';
-				   needPatchDynamicRoute = true;
-			   }
-			   // Kanban
-			   else if (selectedApiMenu.kanban_config) {
-				   dynamicPath = `/system/kanban/${selectedApiMenu.id || selectedApiMenu.key}`;
-				   dynamicLabel = selectedApiMenu.label || selectedApiMenu.title || 'Dynamic Kanban';
-				   needPatchDynamicRoute = true;
-			   }
-			   // Dynamic code
-			   else if (selectedApiMenu.auto_code) {
-				   dynamicPath = `/auto-setup`;
-				   dynamicLabel = selectedApiMenu.label || selectedApiMenu.title || 'Auto Setup';
-				   needPatchDynamicRoute = true;
-			   }
-		   }
+			   const typeForm = Number(selectedApiMenu.type_form);
+			   const hasGridPayload = Boolean(selectedApiMenu.table_name);
+			   const hasReportPayload = Boolean(selectedApiMenu.report_name);
+			   const hasKanbanPayload = Boolean(selectedApiMenu.kanban_config);
+			   const hasDynamicCodePayload = Boolean(selectedApiMenu.auto_code || selectedApiMenu.auto_code_name);
+			   const isGridRuntimeType = [1, 2, 4, 5, 6].includes(typeForm);
 
-		   // Patch dynamic route nếu cần
-		   if (needPatchDynamicRoute) {
-			   const permissionStore = usePermissionStore.getState();
-			   const flatRouteList = permissionStore.flatRouteList;
-			   if (!flatRouteList[dynamicPath]) {
-				   // Patch đúng loại route và Component, truyền đủ menuId, m_configs, decrypt, ...
-				   let patchObj: any = { path: dynamicPath };
-				   // Common props for all dynamic menu components
-				   const commonProps = {
-					   menuId: selectedApiMenu.id || selectedApiMenu.key,
-					   m_configs: selectedApiMenu,
-					   decrypt: typeof csmDecrypt === "function" ? csmDecrypt : undefined,
-				   };
-				   if (selectedApiMenu.table_name || Number(selectedApiMenu.type_form) === 4) {
-					   patchObj.type_form = selectedApiMenu.type_form;
-					   patchObj.table_name = selectedApiMenu.table_name;
-					   patchObj.Component = (props: any) => React.createElement(CsmDynamicGrid, { ...props, ...commonProps });
-				   } else if (selectedApiMenu.report_name || Number(selectedApiMenu.type_form) === 6) {
-					   patchObj.type_form = selectedApiMenu.type_form;
-					   patchObj.report_name = selectedApiMenu.report_name;
-					   // CsmReport expects appId, m_configs, decrypt
-					   patchObj.Component = (props: any) => {
-						   const CsmReport = require("@/components/csm-report/CsmReport").default;
-						   return React.createElement(CsmReport, { ...props, appId, m_configs: selectedApiMenu, decrypt: commonProps.decrypt });
-					   };
-				   } else if (selectedApiMenu.kanban_config) {
-					   patchObj.kanban_config = selectedApiMenu.kanban_config;
-					   // CsmKanbanBoard expects appId, menuId, config, decrypt
-					   patchObj.Component = (props: any) => {
-						   const CsmKanbanBoard = require("@/components/csm-kanban/CsmKanbanBoard").default;
-						   return React.createElement(CsmKanbanBoard, { ...props, appId, menuId: commonProps.menuId, config: selectedApiMenu.kanban_config, decrypt: commonProps.decrypt });
-					   };
-				   } else if (selectedApiMenu.auto_code) {
-					   patchObj.auto_code = selectedApiMenu.auto_code;
-					   patchObj.Component = null; // auto-setup vẫn để null để render dynamic-code
-				   } else {
-					   patchObj.Component = null;
+			   if (hasGridPayload || hasReportPayload || hasKanbanPayload || hasDynamicCodePayload || isGridRuntimeType) {
+				   const dynamicMenuId = selectedApiMenu.id || selectedApiMenu.key;
+				   if (dynamicMenuId) {
+					   dynamicPath = `/system/grid/${dynamicMenuId}`;
+					   isDynamicMenu = true;
 				   }
-				   // Patch route động vào flatRouteList tạm thời (không mutate global store)
-				   const patched = patchDynamicRoutesWithComponent([patchObj]);
-				   const patchedFlat = flattenRoutes(patched);
-				   // Merge vào flatRouteList hiện tại để đảm bảo lookup đúng
-				   const newFlatRouteList = { ...flatRouteList, ...patchedFlat };
-				   usePermissionStore.setState({ flatRouteList: newFlatRouteList });
+				   dynamicLabel = selectedApiMenu.label || selectedApiMenu.title || selectedProcessedMenu?.label || "Dynamic Menu";
 			   }
 		   }
 
@@ -665,7 +600,7 @@ export function useMenu() {
 		   }
 
 		   // Nếu là menu động (grid/report/kanban/dynamic-code) thì lưu lại menuId cho tab
-		   if (selectedApiMenu && needPatchDynamicRoute) {
+		   if (selectedApiMenu && isDynamicMenu) {
 			   useUserStore.getState().setSelectedMenuIdForTab(selectedApiMenu.id || selectedApiMenu.key);
 		   }
 		   // SPA: chỉ set tab state, path trên URL giữ nguyên
