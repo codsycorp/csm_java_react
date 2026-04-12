@@ -127,13 +127,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 } else {
                     // Invalid refreshToken: clear it from DB
                     try {
-                        java.util.Map<String, Object> updateFields = new java.util.HashMap<>();
-                        updateFields.put("refresh_token", null);
-                        updateFields.put("refresh_token_ip", null);
-                        updateFields.put("refresh_token_ua", null);
-                        updateFields.put("refresh_token_expiry", null);
-                        
-                        userService.updateUserFieldById(user.getId(), updateFields);
+                        userService.clearSessionToken(user);
                     } catch (Exception e) {
                         // Log but don't fail
                     }
@@ -307,20 +301,58 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             if (subject == null || subject.isBlank()) {
                 return false;
             }
+            String tokenUserId = jwtUtil.getUserIdFromToken(token);
             int tokenVersion = jwtUtil.getLoginVersionFromToken(token);
-            net.phanmemmottrieu.model.User user = userService.findUserById(subject).orElseGet(() ->
-                userService.findUserByEmail(subject)
-                    .or(() -> userService.findUserByUsername(subject))
-                    .or(() -> userService.findUserByPhoneNumber(subject))
-                    .orElse(null)
-            );
+            net.phanmemmottrieu.model.User user = null;
+            if (tokenUserId != null && !tokenUserId.isBlank()) {
+                user = userService.findUserById(tokenUserId).orElse(null);
+            }
+            if (user == null) {
+                user = userService.findUserById(subject).orElseGet(() ->
+                    userService.findUserByEmail(subject)
+                        .or(() -> userService.findUserByUsername(subject))
+                        .or(() -> userService.findUserByPhoneNumber(subject))
+                        .or(() -> userService.findUserByAppToken(subject))
+                        .orElse(null)
+                );
+            }
             if (user == null) {
                 return false;
             }
+
+            // JWT subject của hệ thống thường là app_token (không phải id/email).
+            // Với một số bản ghi stale khi lookup theo userId, cần ưu tiên resolve lại theo subject này.
+            if (subject.contains("_____") || (subject.length() > 40 && subject.indexOf('.') < 0)) {
+                net.phanmemmottrieu.model.User bySubjectToken = userService.findUserByAppToken(subject).orElse(null);
+                if (bySubjectToken != null) {
+                    if (tokenUserId != null && !tokenUserId.isBlank()) {
+                        String resolvedId = bySubjectToken.getId();
+                        if (resolvedId == null || !tokenUserId.equals(resolvedId)) {
+                            LOGGER.warn("[JWT] Subject app_token resolved to different user, reject token subject={} tokenUid={} resolvedUid={}",
+                                subject, tokenUserId, resolvedId);
+                            return false;
+                        }
+                    }
+                    user = bySubjectToken;
+                }
+            }
+
+            String appToken = user.getAppToken();
+            boolean subjectMatchesUser =
+                (appToken != null && subject.equals(appToken)) ||
+                (user.getId() != null && subject.equals(user.getId())) ||
+                (user.getEmail() != null && subject.equals(user.getEmail())) ||
+                (user.getUsername() != null && subject.equals(user.getUsername())) ||
+                (user.getPhoneNumber() != null && subject.equals(user.getPhoneNumber()));
+            if (!subjectMatchesUser) {
+                LOGGER.warn("[JWT] Subject mismatch, reject token subject={} resolvedUserId={} resolvedUsername={}",
+                    subject, user.getId(), user.getUsername());
+                return false;
+            }
+
             // CRITICAL FIX: findUserById may return a stale record (old refresh-token-keyed record)
             // with an outdated loginVersion. Re-fetch by app_token (direct key lookup) to get
             // the authoritative, always-fresh record with the correct loginVersion.
-            String appToken = user.getAppToken();
             if (appToken != null && !appToken.isBlank()) {
                 net.phanmemmottrieu.model.User freshUser = userService.findUserByAppToken(appToken).orElse(null);
                 if (freshUser != null) {
@@ -328,15 +360,10 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 }
             }
             int currentVersion = user.getLoginVersion() != null ? user.getLoginVersion() : 0;
-            // Legacy compatibility: chỉ enforce khi DB có login version hợp lệ (>0)
+            // Strict single-session: any version mismatch must be rejected.
             if (currentVersion > 0 && tokenVersion != currentVersion) {
-                int delta = Math.abs(tokenVersion - currentVersion);
-                if (delta <= 1) {
-                    LOGGER.warn("[JWT] Version mismatch tolerated for user {}: token ver={}, DB ver={}", subject, tokenVersion, currentVersion);
-                } else {
-                    LOGGER.warn("[JWT] Version mismatch for user {}: token ver={}, DB ver={}", subject, tokenVersion, currentVersion);
-                    return false;
-                }
+                LOGGER.warn("[JWT] Version mismatch for user {}: token ver={}, DB ver={}", subject, tokenVersion, currentVersion);
+                return false;
             }
             org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(
                 new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(

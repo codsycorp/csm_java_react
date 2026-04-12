@@ -21,6 +21,8 @@ import org.slf4j.LoggerFactory;
 @Component
 public class AuthHandler {
     private static final Logger logger = LoggerFactory.getLogger(AuthHandler.class);
+    private static final Map<Integer, String> ACTION_BIT_TO_TOKEN = createActionBitToToken();
+    private static final Map<Integer, String> MENU_BIT_TO_TOKEN = createMenuBitToToken();
     private final RecordManager recordManager;
     private final UserService userService; // Thêm UserService
     private final net.phanmemmottrieu.security.JwtUtil jwtUtil;
@@ -72,28 +74,52 @@ public class AuthHandler {
         // principal có thể là UserDetails hoặc Map tuỳ custom
         Object principal = authentication.getPrincipal();
         Map<String, Object> userInfo = null;
+
+        // Luôn cố lấy dữ liệu mới nhất từ DB để tránh stale profile sau khi update.
+        Optional<User> freshUserOpt = Optional.empty();
+        if (principal instanceof net.phanmemmottrieu.model.User) {
+            net.phanmemmottrieu.model.User principalUser = (net.phanmemmottrieu.model.User) principal;
+            if (principalUser.getId() != null && !principalUser.getId().isBlank()) {
+                freshUserOpt = userService.findUserById(principalUser.getId());
+            }
+            String appToken = principalUser.getAppToken();
+            if (appToken != null && !appToken.isBlank()) {
+                Optional<User> byAppToken = userService.findUserByAppToken(appToken);
+                if (byAppToken.isPresent()) {
+                    freshUserOpt = byAppToken;
+                }
+            }
+        } else if (principal instanceof java.util.Map<?, ?> principalMap) {
+            Object principalUserIdObj = principalMap.containsKey("userId") ? principalMap.get("userId") : null;
+            String principalUserId = principalUserIdObj == null ? "" : String.valueOf(principalUserIdObj).trim();
+            if (principalUserId.isEmpty()) {
+                Object idObj = principalMap.containsKey("id") ? principalMap.get("id") : null;
+                principalUserId = idObj == null ? "" : String.valueOf(idObj).trim();
+            }
+            if (!principalUserId.isEmpty()) {
+                freshUserOpt = userService.findUserById(principalUserId);
+            }
+
+            Object appTokenObj = principalMap.containsKey("app_token") ? principalMap.get("app_token") : null;
+            String appToken = appTokenObj == null ? "" : String.valueOf(appTokenObj).trim();
+            if (!appToken.isEmpty()) {
+                Optional<User> byAppToken = userService.findUserByAppToken(appToken);
+                if (byAppToken.isPresent()) {
+                    freshUserOpt = byAppToken;
+                }
+            }
+        }
+
+        if (freshUserOpt.isPresent()) {
+            userInfo = toUserInfoMap(freshUserOpt.get());
+        }
+
+        if (userInfo == null) {
         if (principal instanceof java.util.Map) {
             userInfo = (Map<String, Object>) principal;
         } else if (principal instanceof net.phanmemmottrieu.model.User) {
             net.phanmemmottrieu.model.User u = (net.phanmemmottrieu.model.User) principal;
-            userInfo = new java.util.HashMap<>();
-            userInfo.put("userId", u.getId());
-            userInfo.put("username", u.getUsername());
-            userInfo.put("email", u.getEmail());
-            userInfo.put("phoneNumber", u.getPhoneNumber());
-            userInfo.put("full_name", u.getFullName());
-            userInfo.put("avatar", u.getAvatar());
-            userInfo.put("roles", u.getPermissions()); // dùng permissions như roles
-            userInfo.put("permissions", u.getPermissions());
-            userInfo.put("menusPermissions", u.getMenusPermissions());
-            userInfo.put("permissionBitfield", u.getPermissionBitfield());
-            userInfo.put("permissionSchemaVersion", u.getPermissionSchemaVersion());
-            userInfo.put("dataScope", u.getDataScope());
-            userInfo.put("dept_id", u.getDeptId());
-            userInfo.put("branch_id", u.getBranchId());
-            userInfo.put("app_id", u.getAppId());
-            userInfo.put("app_token", u.getAppToken());
-            userInfo.put("dev", u.getDev()); // Thêm dev flag
+            userInfo = toUserInfoMap(u);
         } else if (principal instanceof org.springframework.security.core.userdetails.UserDetails) {
             // Nếu dùng UserDetails, chỉ trả về username
             userInfo = new java.util.HashMap<>();
@@ -103,11 +129,34 @@ public class AuthHandler {
             userInfo = new java.util.HashMap<>();
             userInfo.put("principal", principal.toString());
         }
+        }
         response.set("code", 200);
         enrichUserInfoWithBitfield(userInfo);
         response.set("result", userInfo);
         response.set("message", "ok");
         response.set("success", true);
+    }
+
+    private Map<String, Object> toUserInfoMap(net.phanmemmottrieu.model.User u) {
+        Map<String, Object> userInfo = new java.util.HashMap<>();
+        userInfo.put("userId", u.getId());
+        userInfo.put("username", u.getUsername());
+        userInfo.put("email", u.getEmail());
+        userInfo.put("phoneNumber", u.getPhoneNumber());
+        userInfo.put("full_name", u.getFullName());
+        userInfo.put("avatar", u.getAvatar());
+        userInfo.put("roles", u.getPermissions()); // dùng permissions như roles
+        userInfo.put("permissions", u.getPermissions());
+        userInfo.put("menusPermissions", u.getMenusPermissions());
+        userInfo.put("permissionBitfield", u.getPermissionBitfield());
+        userInfo.put("permissionSchemaVersion", u.getPermissionSchemaVersion());
+        userInfo.put("dataScope", u.getDataScope());
+        userInfo.put("dept_id", u.getDeptId());
+        userInfo.put("branch_id", u.getBranchId());
+        userInfo.put("app_id", u.getAppId());
+        userInfo.put("app_token", u.getAppToken());
+        userInfo.put("dev", u.getDev());
+        return userInfo;
     }
 
     public void handleLogin(StandardResponse response, Map<String, Object> params) {
@@ -167,22 +216,18 @@ public class AuthHandler {
             long expiry = System.currentTimeMillis() + 7 * 24 * 60 * 60 * 1000L; // 7 ngày
 
             // Lưu refresh token vào DB
-            Map<String, Object> updateFields = new HashMap<>();
-            updateFields.put("refresh_token", refreshToken);
-            updateFields.put("refresh_token_ip", ip);
-            updateFields.put("refresh_token_ua", ua);
-            updateFields.put("refresh_token_expiry", expiry);
-            updateFields.put("login_version", nextLoginVersion);
-            updateFields.put("loginVersion", nextLoginVersion);
-            // Cập nhật theo user id để tránh ảnh hưởng nhầm tài khoản khác.
-            userService.updateUserFieldById(user.getId(), updateFields);
+            userService.updateSessionToken(user, refreshToken, ip, ua, expiry, nextLoginVersion);
             // Log xác nhận lưu refresh_token
             logger.info("[LOGIN] Saved refreshToken for user {}={} (refreshToken={}, ip={}, ua={})", 
                        "id", user.getId(), refreshToken.substring(0, Math.min(10, refreshToken.length())) + "...", ip, ua);
 
             // Chuẩn bị dữ liệu trả về: token + routes + quyền
             Map<String, Object> result = new HashMap<>();
-            String jwtToken = jwtUtil.generateToken(user.getId(), nextLoginVersion);
+            String tokenSubject = user.getId();
+            if (user.getAppToken() != null && !user.getAppToken().isBlank()) {
+                tokenSubject = user.getAppToken();
+            }
+            String jwtToken = jwtUtil.generateToken(tokenSubject, user.getId(), nextLoginVersion);
             result.put("token", jwtToken);
             result.put("app_token", user.getAppToken());
             result.put("app_id", user.getAppId());
@@ -228,8 +273,8 @@ public class AuthHandler {
                 result.put("permissions", user.getPermissions());
                 result.put("menusPermissions", user.getMenusPermissions());
                 long permissionBitfield = PermissionBitfieldUtil.buildBitfield(user.getPermissions(), user.getMenusPermissions(), user.getDev());
-                result.put("permissionBitfield", String.valueOf(permissionBitfield));
-                result.put("permissionSchemaVersion", "v2");
+                result.put("permissionBitfield", PermissionBitfieldUtil.toCompactToken(permissionBitfield));
+                result.put("permissionSchemaVersion", "v3");
                 result.put("dataScope", PermissionBitfieldUtil.resolveDataScope(permissionBitfield));
             } catch (Exception ex) {
                 logger.error("[LOGIN] Lỗi khi tính asyncRoutes/permissions: {}", ex.getMessage(), ex);
@@ -364,14 +409,112 @@ public class AuthHandler {
             return;
         }
 
-        List<String> permissions = toStringList(userInfo.get("permissions"));
-        List<String> menusPermissions = toStringList(userInfo.get("menusPermissions"));
+        List<String> permissions = mergeUniqueCaseInsensitive(
+            toStringList(userInfo.get("permissions")),
+            permissionsFromBitfield(userInfo.get("permissionBitfield"))
+        );
+        List<String> menusPermissions = mergeUniqueCaseInsensitive(
+            toStringList(userInfo.get("menusPermissions")),
+            menusFromBitfield(userInfo.get("permissionBitfield"))
+        );
         Boolean devFlag = parseBoolean(userInfo.get("dev"));
 
         long permissionBitfield = PermissionBitfieldUtil.buildBitfield(permissions, menusPermissions, devFlag);
-        userInfo.put("permissionBitfield", String.valueOf(permissionBitfield));
-        userInfo.put("permissionSchemaVersion", "v2");
+        userInfo.put("roles", permissions);
+        userInfo.put("permissions", permissions);
+        userInfo.put("menusPermissions", menusPermissions);
+        userInfo.put("permissionBitfield", PermissionBitfieldUtil.toCompactToken(permissionBitfield));
+        userInfo.put("permissionSchemaVersion", "v3");
         userInfo.put("dataScope", PermissionBitfieldUtil.resolveDataScope(permissionBitfield));
+    }
+
+    private List<String> permissionsFromBitfield(Object rawBitfield) {
+        Long parsedBitfield = PermissionBitfieldUtil.parseSecurityToken(rawBitfield == null ? null : String.valueOf(rawBitfield));
+        if (parsedBitfield == null) {
+            return Collections.emptyList();
+        }
+
+        List<String> out = new ArrayList<>();
+        for (Map.Entry<Integer, String> entry : ACTION_BIT_TO_TOKEN.entrySet()) {
+            if (PermissionBitfieldUtil.hasBit(parsedBitfield, entry.getKey())) {
+                out.add(entry.getValue());
+            }
+        }
+
+        String scope = PermissionBitfieldUtil.resolveDataScope(parsedBitfield);
+        switch (scope) {
+            case "ALL" -> out.add("scope:all");
+            case "BRANCH" -> out.add("scope:branch");
+            case "DEPARTMENT" -> out.add("scope:department");
+            case "OWNER" -> out.add("scope:owner");
+            default -> {
+            }
+        }
+        return out;
+    }
+
+    private List<String> menusFromBitfield(Object rawBitfield) {
+        Long parsedBitfield = PermissionBitfieldUtil.parseSecurityToken(rawBitfield == null ? null : String.valueOf(rawBitfield));
+        if (parsedBitfield == null) {
+            return Collections.emptyList();
+        }
+
+        List<String> out = new ArrayList<>();
+        for (Map.Entry<Integer, String> entry : MENU_BIT_TO_TOKEN.entrySet()) {
+            if (PermissionBitfieldUtil.hasBit(parsedBitfield, entry.getKey())) {
+                out.add(entry.getValue());
+            }
+        }
+        return out;
+    }
+
+    private List<String> mergeUniqueCaseInsensitive(List<String> base, List<String> extra) {
+        LinkedHashMap<String, String> merged = new LinkedHashMap<>();
+        List<String> safeBase = base == null ? Collections.emptyList() : base;
+        List<String> safeExtra = extra == null ? Collections.emptyList() : extra;
+        for (String value : safeBase) {
+            if (value == null) {
+                continue;
+            }
+            String normalized = value.trim();
+            if (!normalized.isEmpty()) {
+                merged.putIfAbsent(normalized.toLowerCase(Locale.ROOT), normalized);
+            }
+        }
+        for (String value : safeExtra) {
+            if (value == null) {
+                continue;
+            }
+            String normalized = value.trim();
+            if (!normalized.isEmpty()) {
+                merged.putIfAbsent(normalized.toLowerCase(Locale.ROOT), normalized);
+            }
+        }
+        return new ArrayList<>(merged.values());
+    }
+
+    private static Map<Integer, String> createActionBitToToken() {
+        Map<Integer, String> map = new LinkedHashMap<>();
+        map.put(PermissionBitfieldUtil.ACTION_VIEW, "view");
+        map.put(PermissionBitfieldUtil.ACTION_CREATE, "create");
+        map.put(PermissionBitfieldUtil.ACTION_EDIT, "edit");
+        map.put(PermissionBitfieldUtil.ACTION_DELETE, "delete");
+        map.put(PermissionBitfieldUtil.ACTION_EXPORT, "export");
+        return map;
+    }
+
+    private static Map<Integer, String> createMenuBitToToken() {
+        Map<Integer, String> map = new LinkedHashMap<>();
+        map.put(0, "/home");
+        map.put(1, "/system/user");
+        map.put(2, "/system/role");
+        map.put(3, "/system/menu");
+        map.put(4, "/system/dept");
+        map.put(5, "/system/developer");
+        map.put(6, "/system/broadcast");
+        map.put(7, "/system/report");
+        map.put(8, "/crm");
+        return map;
     }
 
     private List<String> toStringList(Object raw) {
@@ -412,13 +555,7 @@ public class AuthHandler {
         try {
             if (authentication != null && authentication.getPrincipal() instanceof User) {
                 User user = (User) authentication.getPrincipal();
-                Map<String, Object> updateFields = new HashMap<>();
-                updateFields.put("refresh_token", null);
-                updateFields.put("refresh_token_ip", null);
-                updateFields.put("refresh_token_ua", null);
-                updateFields.put("refresh_token_expiry", null);
-
-                userService.updateUserFieldById(user.getId(), updateFields);
+                userService.clearSessionToken(user);
                 logger.info("[LOGOUT] Invalidated refreshToken for user id={}", user.getId());
             }
         } catch (Exception e) {
@@ -467,16 +604,14 @@ public class AuthHandler {
         // Sinh access token mới và refresh token mới
         String newRefreshToken = UUID.randomUUID().toString() + UUID.randomUUID().toString();
         long newExpiry = System.currentTimeMillis() + 7 * 24 * 60 * 60 * 1000L;
-        Map<String, Object> updateFields = new HashMap<>();
-        updateFields.put("refresh_token", newRefreshToken);
-        updateFields.put("refresh_token_ip", ip);
-        updateFields.put("refresh_token_ua", ua);
-        updateFields.put("refresh_token_expiry", newExpiry);
-        updateFields.put("login_version", loginVersion);
-        userService.updateUserFieldById(user.getId(), updateFields);
+        userService.updateSessionToken(user, newRefreshToken, ip, ua, newExpiry, loginVersion);
         logger.info("[REFRESH] Đã lưu refresh_token {} cho user id={} (ip={}, ua={})", newRefreshToken, user.getId(), ip, ua);
 
-        String jwtToken = jwtUtil.generateToken(user.getId(), loginVersion);
+        String tokenSubject = user.getId();
+        if (user.getAppToken() != null && !user.getAppToken().isBlank()) {
+            tokenSubject = user.getAppToken();
+        }
+        String jwtToken = jwtUtil.generateToken(tokenSubject, user.getId(), loginVersion);
         response.set("code", 200);
         Map<String, Object> result = new HashMap<>();
         result.put("token", jwtToken);

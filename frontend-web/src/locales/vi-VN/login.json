@@ -1,0 +1,36 @@
+{
+  "title": "Đăng nhập hệ thống",
+  "subtitle": "Chào mừng bạn trở lại",
+  "username": "Tên đăng nhập",
+  "usernamePlaceholder": "Nhập tên đăng nhập",
+  "usernameRequired": "Vui lòng nhập tên đăng nhập",
+  "password": "Mật khẩu", 
+  "passwordPlaceholder": "Nhập mật khẩu",
+  "passwordRequired": "Vui lòng nhập mật khẩu",
+  "rememberMe": "Ghi nhớ đăng nhập",
+  "forgotPassword": "Quên mật khẩu?",
+  "loginButton": "Đăng nhập",
+  "registerText": "Chưa có tài khoản?",
+  "registerLink": "Đăng ký ngay",
+  "welcomeBack": "Chào mừng trở lại!",
+  "loginSuccess": "Đăng nhập thành công",
+  "loginFailed": "Đăng nhập thất bại",
+  "registerSuccess": "Đăng ký thành công",
+  "registerFailed": "Đăng ký thất bại",
+  "appTokenPlaceholder": "Nhập mã giới thiệu (app_token)",
+  "appTokenRequired": "Vui lòng nhập mã giới thiệu (app_token)!",
+  "appTokenInvalid": "Mã giới thiệu không hợp lệ!",
+  "systemName": "Hệ thống CSM",
+  "brandTitle": "CSM System",
+  "brandSubtitle": "Hệ thống quản lý doanh nghiệp thông minh với công nghệ tiên tiến, mang đến trải nghiệm người dùng tuyệt vời và bảo mật tối đa.",
+  "features": {
+    "security": "Bảo mật đa lớp với công nghệ mã hóa tiên tiến",
+    "performance": "Hiệu suất cao, xử lý nhanh chóng và ổn định", 
+    "responsive": "Giao diện responsive, tương thích mọi thiết bị"
+  },
+  "validation": {
+    "usernameMin": "Tên đăng nhập phải có ít nhất 3 ký tự",
+    "passwordMin": "Mật khẩu phải có ít nhất 6 ký tự",
+    "invalidCredentials": "Tên đăng nhập hoặc mật khẩu không đúng"
+  }
+}

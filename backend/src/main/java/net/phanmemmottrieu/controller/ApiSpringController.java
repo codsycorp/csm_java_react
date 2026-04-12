@@ -353,6 +353,9 @@ public class ApiSpringController {
                 case "/update-table-data":
                     tableHandler.handleUpdateTableData(response, params);
                     break;
+                case "/bulk-update-table-data":
+                    tableHandler.handleBulkUpdateTableData(response, params);
+                    break;
                 case "/update-table-data-index":
                     tableHandler.handleIndexExistingRecords(response, params);
                     break;

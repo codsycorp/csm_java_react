@@ -2445,7 +2445,6 @@ const WuServicesPage: React.FC = () => {
                 />
               )}
 
-              <div id={`wu-dynamic-code-${category.key}`} style={{ marginTop: 16 }} />
             </>;
           })()}
         </header>
@@ -2521,49 +2520,6 @@ const WuServicesPage: React.FC = () => {
     setTotal(0);
     setLoading(false);
   }, [activeTabKey]);
-
-  useEffect(() => {
-    if (!activeTabKey) return;
-
-    const categoryMeta = getHeaderMeta(activeTabKey) as ServiceCategory;
-    const codeName = String(categoryMeta.dynamicCodeName || '').trim();
-
-    if (!codeName || typeof window === 'undefined') return;
-
-    const codeMap = (window as any).__SSR_DYNAMIC_CODE_TEMPLATES__;
-    const code = codeMap && typeof codeMap === 'object' && typeof codeMap[codeName] === 'string'
-      ? codeMap[codeName]
-      : null;
-
-    if (!code) return;
-
-    const containerId = `wu-dynamic-code-${activeTabKey}`;
-    const timerId = window.setTimeout(() => {
-      const container = document.getElementById(containerId);
-      if (!container) return;
-
-      container.innerHTML = '';
-      try {
-        const fn = new Function(
-          'seft',
-          `try{\n${code}\n} catch (dynamicErr) { console.error('[WU_DYNAMIC_CODE] Error:', dynamicErr); }`
-        );
-        fn({
-          app_id: 'lmkt',
-          categoryKey: activeTabKey,
-          containerId,
-          getContainer: () => document.getElementById(containerId),
-          navigate,
-          t,
-          i18n: i18nInstance,
-        });
-      } catch (err) {
-        console.error('[WU_DYNAMIC_CODE] Invalid code:', err);
-      }
-    }, 0);
-
-    return () => window.clearTimeout(timerId);
-  }, [activeTabKey, navigate, t]);
 
   // Lấy category đang active
   const activeCategory = allCategories.find(c => c.key === activeTabKey) || allCategories[0] || { key: '', title: '', color: '', icon: null, description: '' };

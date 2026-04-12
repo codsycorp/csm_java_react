@@ -11,6 +11,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import net.phanmemmottrieu.data.RecordManager;
+import net.phanmemmottrieu.data.SearchFilter;
 import net.phanmemmottrieu.model.StandardResponse;
 import net.phanmemmottrieu.util.AppTokenHelper;
 import net.phanmemmottrieu.util.PermissionBitfieldUtil;
@@ -50,7 +51,6 @@ public class InitHandler {
                         role2.put("remark", "普通角色拥有部分权限");
                         roleList.add(role2);
                         // RecordManager.deleteRocksDB("csm", "index");
-                        recordManager.deleteRocksDB("csm", "csm_accounts");
                         recordManager.createRecord("csm", "index", Map.of("id", "roleList", "data", roleList),
                                         List.of("id"));
 
@@ -359,8 +359,7 @@ public class InitHandler {
 
                         // Initialize asyncRoutes
                         List<Map<String, Object>> asyncRoutes = new ArrayList<>();
-                        
-                        // System menu parent
+
                         Map<String, Object> systemRoute = new HashMap<>();
                         systemRoute.put("id", UUID.randomUUID().toString());
                         systemRoute.put("path", "/system");
@@ -370,8 +369,6 @@ public class InitHandler {
                         systemHandle.put("title", "common.menu.system");
                         systemHandle.put("order", system);
                         systemRoute.put("handle", systemHandle);
-                        
-                        // Children routes
                         List<Map<String, Object>> systemChildren = new ArrayList<>();
                         
                         // 1. User
@@ -441,6 +438,7 @@ public class InitHandler {
                         recordManager.createRecord("csm", "index", Map.of("id", "accessRights", "data", asyncRoutes),
                                         List.of("id"));
 
+
                         // Initialize permission system tables
                         initializeDataTables("csm", "csm_depts",
                                         List.of("id", "dept_code"), List.of(
@@ -467,30 +465,36 @@ public class InitHandler {
                                         List.of("id", "user_id", "role_id"), List.of(
                                                         "id", "user_id", "role_id", "create_time"));
 
-                        initializeDataTables("csm", "csm_accounts",
-                                        List.of("email", "username", "phoneNumber", "app_id","app_token", "id"), List.of(
-                                                        "id", "username", "pass", "app_token", "refresh", "email",
-                                                        "avatar",
-                                                        "phoneNumber", "description",
-                                                        "roles", "actived", "permissions", "menusPermissions",
-                                                        "group_rights",
-                                                        "full_name", "user_address", "app_id",
-                                                        "permissionBitfield", "permissionSchemaVersion", "dataScope",
-                                                        "dept_id", "branch_id", "department_id", "team_id"));
-                        initializeDataTables("csm", "csm_group_members",
-                                        List.of("id", "login_identifier"), List.of(
-                                                        "id", "parent_account_id", "login_identifier", "group_id",
-                                                        "app_token", "refresh", "pass", "actived",
-                                                        "permissions", "menusPermissions",
-                                                        "permissionBitfield", "permissionSchemaVersion", "dataScope",
-                                                        "dept_id", "branch_id", "department_id", "team_id"));
+                        // Add schema/index for sys_autos (auto_code storage)
+                        // PK: id, p_name, p_type; Fields: id, p_name, p_type, auto_code, description, create_time, update_time
+                        // Lucene search fields: p_name, p_type, id
+                        initializeDataTables(
+                                "csm",
+                                "sys_autos",
+                                List.of("id", "p_name", "p_type"),
+                                List.of("id", "p_name", "p_type", "auto_code", "description", "create_time", "update_time"),
+                                List.of("p_name", "p_type", "id")
+                        );
+
+                        // 🔒 SCHEMA-ONLY INITIALIZATION for user tables (schemaOnly=true)
+                        // chỉ khởi tạo schema LẦN ĐẦU, không khởi tạo lại dữ liệu
+                        // initializeDataTables() sẽ check xem schema đã tồn tại hay chưa trước khi tạo
+                        boolean isUserSchemaFirstInit = initializeUserTableSchemas();
+
                         initializeDataTables("csm", "routers", List.of("path"),
                                         List.of("path", "component", "layout", "handle", "children"));
                         initializeDataTables("csm", "index", List.of("id"), List.of("id", "struct"));
 
                         String defaultAppId = "csm";
 
-                        // 2. Đồng bộ tạo tài khoản Admin
+                        // ⚠️ ONLY create admin/common users on first schema initialization
+                        // Lần khởi động tiếp theo: schema đã tồn tại → skip user creation
+                        org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(InitHandler.class);
+                        if (!isUserSchemaFirstInit) {
+                                logger.info("ℹ️ User tables already initialized, skipping default user creation");
+                        } else {
+                                logger.info("🔓 First-time initialization: creating default admin/common users...");
+                                
                         Map<String, Object> adminAccount = new HashMap<>();
                         adminAccount.put("id", UUID.randomUUID().toString());
                         adminAccount.put("username", "admin");
@@ -524,8 +528,8 @@ public class InitHandler {
                                         (List<String>) adminAccount.get("permissions"),
                                         (List<String>) adminAccount.get("menusPermissions"),
                                         true);
-                        adminAccount.put("permissionBitfield", String.valueOf(adminBitfield));
-                        adminAccount.put("permissionSchemaVersion", "v2");
+                        adminAccount.put("permissionBitfield", PermissionBitfieldUtil.toCompactToken(adminBitfield));
+                        adminAccount.put("permissionSchemaVersion", "v3");
                         adminAccount.put("dataScope", PermissionBitfieldUtil.resolveDataScope(adminBitfield));
                         adminAccount.put("dept_id", "ROOT");
                         adminAccount.put("branch_id", "MAIN");
@@ -572,8 +576,8 @@ public class InitHandler {
                                         (List<String>) commonAccount.get("permissions"),
                                         (List<String>) commonAccount.get("menusPermissions"),
                                         false);
-                        commonAccount.put("permissionBitfield", String.valueOf(commonBitfield));
-                        commonAccount.put("permissionSchemaVersion", "v2");
+                        commonAccount.put("permissionBitfield", PermissionBitfieldUtil.toCompactToken(commonBitfield));
+                        commonAccount.put("permissionSchemaVersion", "v3");
                         commonAccount.put("dataScope", PermissionBitfieldUtil.resolveDataScope(commonBitfield));
                         commonAccount.put("dept_id", "HR-001");
                         commonAccount.put("branch_id", "MAIN");
@@ -677,6 +681,7 @@ public class InitHandler {
                         commonUserDept.put("join_date", System.currentTimeMillis());
                         commonUserDept.put("create_time", System.currentTimeMillis());
                         recordManager.createRecord("csm", "csm_user_depts", commonUserDept, List.of("id", "user_id", "dept_id"));
+                        } // End of: if (isUserSchemaFirstInit)
 
                 } catch (Exception e) {
                         // logger("Error creating default data: " + e.getMessage());
@@ -685,93 +690,218 @@ public class InitHandler {
 
         private void initializeDataTables(String app_id, String table_name, List<String> prkeys, List<String> keys)
                         throws Exception {
-                // Tạo parametMap
-                Map<String, Object> parametMap = new HashMap<>();
-                // parametMap.put("app_id", app_id);
-                Map<String, Object> structMap = new HashMap<>();
-                List<String> fieldsPK = prkeys;
-                List<String> fields = keys;
+                initializeDataTables(app_id, table_name, prkeys, keys, null);
+        }
 
-                // Đưa vào structMap
-                structMap.put("fieldsPK", fieldsPK);
-                structMap.put("fields", fields);
+        private void initializeDataTables(String app_id, String table_name, List<String> prkeys, List<String> keys, List<String> searchFields)
+                        throws Exception {
+                Map<String, Object> parametMap = new HashMap<>();
+                Map<String, Object> structMap = new HashMap<>();
+                structMap.put("fieldsPK", prkeys);
+                structMap.put("fields", keys);
+                if (searchFields != null && !searchFields.isEmpty()) {
+                        structMap.put("fieldsSearch", searchFields);
+                }
                 parametMap.put("struct", structMap);
                 parametMap.put("id", table_name);
-                // logger.info("parametMap: " + parametMap);
                 recordManager.createRecord(app_id, "index", parametMap, List.of("id"));
         }
 
-                private List<Map<String, Object>> buildSystemAccountFields() {
-                                return List.of(
-                                                                buildFieldConfig("id", "ID", 1, "number", "right"),
-                                                                buildFieldConfig("username", "common.username", 1, "string", "left"),
-                                                                buildFieldConfig("email", "common.email", 1, "string", "left"),
-                                                                buildFieldConfig("phoneNumber", "common.phoneNumber", 1, "string", "left"),
-                                                                buildFieldConfig("full_name", "common.fullName", 1, "string", "left"),
-                                                                buildFieldConfig("user_address", "common.address", 1, "string", "left"),
-                                                                buildFieldConfig("app_id", "common.appId", 1, "string", "left"),
-                                                                buildFieldConfig("app_token", "common.appToken", 1, "string", "left"),
-                                                                buildFieldConfig("pass", "common.password", 1, "password", "left"),
-                                                                buildFieldConfig("roles", "Roles", 1, "string", "left"),
-                                                                buildFieldConfig("permissions", "Permissions", 1, "string", "left"),
-                                                                buildFieldConfig("menusPermissions", "Menu Permissions", 1, "string", "left"),
-                                                                buildFieldConfig("permissionBitfield", "Permission Bitfield", 1, "string", "left"),
-                                                                buildFieldConfig("permissionSchemaVersion", "Permission Schema", 1, "string", "left"),
-                                                                buildFieldConfig("dataScope", "Data Scope", 1, "string", "left"),
-                                                                buildFieldConfig("dept_id", "Dept ID", 1, "string", "left"),
-                                                                buildFieldConfig("branch_id", "Branch ID", 1, "string", "left"),
-                                                                buildFieldConfig("actived", "common.active", 1, "checkbox", "left"));
+        /**
+         * Initialize schemas for user tables chỉ LẦN ĐẦU (check if schema already exists)
+         * Để tránh xóa dữ liệu người dùng trên mỗi lần restart backend
+         * 
+         * Schema initialization logic:
+         * 1. Check if csm_accounts schema exists in "index" table
+         * 2. If not exists → initialize both user table schemas + return true (first-time init)
+         * 3. If exists → skip (schema already set up, preserve user data) + return false
+         * 
+         * @return true if schemas were newly initialized (first-time), false if already existed
+         */
+        private boolean initializeUserTableSchemas() throws Exception {
+                SearchFilter checkFilter = new SearchFilter();
+                checkFilter.setField("id");
+                checkFilter.setType("eq");
+                checkFilter.setValue("csm_accounts");
+                
+                // Check xem schema đã tồn tại hay chưa
+                Map<String, Object> existingSchema = recordManager.find("csm", "index", checkFilter);
+                
+                if (existingSchema != null && !existingSchema.isEmpty()) {
+                        // Schema đã tồn tại: vẫn đồng bộ lại index struct để bổ sung field mới,
+                        // nhưng không đụng dữ liệu người dùng.
+                        org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(InitHandler.class);
+                                initializeDataTables("csm", "csm_accounts", getAccountSchemaPkFields(), getAccountSchemaFields(), getAccountSearchFields());
+                                initializeDataTables("csm", "csm_group_members", getSubAccountSchemaPkFields(), getSubAccountSchemaFields(), getSubAccountSearchFields());
+                        try {
+                                recordManager.indexExistingRecords("csm", "csm_group_members");
+                        } catch (Exception ex) {
+                                logger.warn("Unable to rebuild csm_group_members index during schema sync: {}", ex.getMessage());
+                        }
+                                try {
+                                        recordManager.indexExistingRecords("csm", "csm_accounts");
+                                } catch (Exception ex) {
+                                        logger.warn("Unable to rebuild csm_accounts index during schema sync: {}", ex.getMessage());
+                                }
+                        logger.info("✅ User table schemas already initialized, schema synced for latest fields");
+                        return false; // Not first-time init
                 }
+                
+                // Schema chưa tồn tại → khởi tạo lần đầu
+                org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(InitHandler.class);
+                logger.info("🔒 Initializing user table schemas for the first time...");
+                
+                // Xóa dữ liệu cũ nếu tồn tại (lần đầu setup)
+                recordManager.deleteRocksDB("csm", "csm_accounts");
+                
+                // 🔒 fieldsSearch for csm_accounts: Login + Session management fields
+                // - id: Primary key
+                // - email, username, phoneNumber: Login identifiers (findUserByEmail/Username/Phone)
+                // - app_token, refresh_token, refresh: Session/token lookups (findUserByAppToken, findUserByRefreshToken)
+                // PROTECTED: app_token, refresh_token, refresh have strict-no-scan (block RocksDB fallback scan on Lucene miss)
+                        initializeDataTables("csm", "csm_accounts", getAccountSchemaPkFields(), getAccountSchemaFields(), getAccountSearchFields());
+                
+                // 🔒 fieldsSearch for csm_group_members: Sub-account login + session
+                // - id: Primary key
+                // - login_identifier: Sub-account login (like email/username/phone for sub-users)
+                // - app_token, refresh: Sub-account session tokens (for sub-user session refresh)
+                // PROTECTED: app_token, refresh have strict-no-scan (block expensive scans on lookup failures)
+                        initializeDataTables("csm", "csm_group_members", getSubAccountSchemaPkFields(), getSubAccountSchemaFields(), getSubAccountSearchFields());
+                
+                logger.info("✅ User table schemas initialized successfully");
+                return true; // First-time init completed
+        }
 
-                private List<Map<String, Object>> buildSubUserFields() {
-                                return List.of(
-                                                                buildFieldConfig("id", "ID", 1, "number", "right"),
-                                                                buildFieldConfig("parent_account_id", "common.parentAccountId", 1, "string", "left"),
-                                                                buildFieldConfig("login_identifier", "common.loginIdentifier", 1, "string", "left"),
-                                                                buildFieldConfig("group_id", "common.groupId", 1, "string", "left"),
-                                                                buildFieldConfig("app_token", "common.appToken", 1, "string", "left"),
-                                                                buildFieldConfig("pass", "common.password", 1, "password", "left"),
-                                                                buildFieldConfig("permissions", "Permissions", 1, "string", "left"),
-                                                                buildFieldConfig("menusPermissions", "Menu Permissions", 1, "string", "left"),
-                                                                buildFieldConfig("permissionBitfield", "Permission Bitfield", 1, "string", "left"),
-                                                                buildFieldConfig("permissionSchemaVersion", "Permission Schema", 1, "string", "left"),
-                                                                buildFieldConfig("dataScope", "Data Scope", 1, "string", "left"),
-                                                                buildFieldConfig("dept_id", "Dept ID", 1, "string", "left"),
-                                                                buildFieldConfig("branch_id", "Branch ID", 1, "string", "left"),
-                                                                buildFieldConfig("actived", "common.active", 1, "checkbox", "left"));
-                }
+        private List<Map<String, Object>> buildSystemAccountFields() {
+                return List.of(
+                        buildFieldConfig("id", "ID", 1, "number", "right"),
+                        buildFieldConfig("username", "common.username", 1, "string", "left"),
+                        buildFieldConfig("email", "common.email", 1, "string", "left"),
+                        buildFieldConfig("phoneNumber", "common.phoneNumber", 1, "string", "left"),
+                        buildFieldConfig("full_name", "common.fullName", 1, "string", "left"),
+                        buildFieldConfig("user_address", "common.address", 1, "string", "left"),
+                        buildFieldConfig("app_id", "common.appId", 1, "co", "left",
+                                Map.of("f_cbo_query", "{\"query\":[{\"obj_name\":\"sys_apps\",\"app_id\":\"csm\",\"fields\":[\"id\",\"name\"]}]}")),
+                        buildFieldConfig("app_token", "common.appToken", 1, "string", "left"),
+                        buildFieldConfig("refresh_token", "Refresh Token", 1, "string", "left"),
+                        buildFieldConfig("refresh", "Refresh Alias", 1, "string", "left"),
+                        buildFieldConfig("login_version", "Login Version", 1, "number", "right"),
+                        buildFieldConfig("pass", "common.password", 1, "password", "left"),
+                        buildFieldConfig("roles", "Roles", 1, "string", "left"),
+                        buildFieldConfig("permissions", "Permissions", 1, "string", "left"),
+                        buildFieldConfig("menusPermissions", "Menu Permissions", 1, "string", "left"),
+                        buildFieldConfig("permissionBitfield", "Permission Bitfield", 1, "string", "left"),
+                        buildFieldConfig("permissionSchemaVersion", "Permission Schema", 1, "string", "left"),
+                        buildFieldConfig("dataScope", "Data Scope", 1, "string", "left"),
+                        buildFieldConfig("dept_id", "Dept ID", 1, "string", "left"),
+                        buildFieldConfig("branch_id", "Branch ID", 1, "string", "left"),
+                        buildFieldConfig("actived", "common.active", 1, "checkbox", "left"));
+        }
 
-                private Map<String, Object> buildFieldConfig(String name, String header, int show, String type, String align) {
-                                Map<String, Object> field = new HashMap<>();
-                                field.put("f_name", name);
-                                field.put("f_header", header);
-                                field.put("f_show", show);
-                                field.put("f_types", type);
-                                field.put("f_align", align);
-                                return field;
-                }
+        private List<Map<String, Object>> buildSubUserFields() {
+                return List.of(
+                        buildFieldConfig("id", "ID", 1, "number", "right"),
+                        buildFieldConfig("parent_account_id", "common.parentAccountId", 1, "string", "left"),
+                        buildFieldConfig("login_identifier", "common.loginIdentifier", 1, "string", "left"),
+                        buildFieldConfig("username", "common.username", 1, "string", "left"),
+                        buildFieldConfig("email", "common.email", 1, "string", "left"),
+                        buildFieldConfig("phoneNumber", "common.phoneNumber", 1, "string", "left"),
+                        buildFieldConfig("full_name", "common.fullName", 1, "string", "left"),
+                        buildFieldConfig("source_app_token", "Source App Token", 1, "string", "left"),
+                        buildFieldConfig("group_id", "common.groupId", 1, "string", "left"),
+                        buildFieldConfig("app_token", "common.appToken", 1, "string", "left"),
+                        buildFieldConfig("refresh_token", "Refresh Token", 1, "string", "left"),
+                        buildFieldConfig("refresh", "Refresh Alias", 1, "string", "left"),
+                        buildFieldConfig("login_version", "Login Version", 1, "number", "right"),
+                        buildFieldConfig("loginVersion", "Login Version Legacy", 1, "number", "right"),
+                        buildFieldConfig("pass", "common.password", 1, "password", "left"),
+                        buildFieldConfig("permissions", "Permissions", 1, "string", "left"),
+                        buildFieldConfig("menusPermissions", "Menu Permissions", 1, "string", "left"),
+                        buildFieldConfig("permissionBitfield", "Permission Bitfield", 1, "string", "left"),
+                        buildFieldConfig("permissionSchemaVersion", "Permission Schema", 1, "string", "left"),
+                        buildFieldConfig("dataScope", "Data Scope", 1, "string", "left"),
+                        buildFieldConfig("dept_id", "Dept ID", 1, "string", "left"),
+                        buildFieldConfig("branch_id", "Branch ID", 1, "string", "left"),
+                        buildFieldConfig("actived", "common.active", 1, "checkbox", "left"));
+        }
 
-                private Map<String, Object> buildSystemUserModes() {
-                                Map<String, Object> modes = new HashMap<>();
-                                modes.put("main", buildSystemUserMode("csm_accounts", buildSystemAccountFields(), buildMainAccountBeforeSaveScript()));
-                                modes.put("sub", buildSystemUserMode("csm_group_members", buildSubUserFields(), buildSubUserBeforeSaveScript()));
-                                return modes;
-                }
+        private List<String> getAccountSchemaPkFields() {
+                return List.of("id", "email", "username", "phoneNumber", "app_token", "refresh_token", "refresh");
+        }
 
-                private Map<String, Object> buildSystemUserMode(String tableName, List<Map<String, Object>> table,
-                                                String beforeSaveScript) {
-                                Map<String, Object> mode = new HashMap<>();
-                                mode.put("table_name", tableName);
-                                mode.put("table", table);
-                                mode.put("trigger", Map.of("beforeSave", beforeSaveScript));
-                                mode.put("type_form", 1);
-                                mode.put("row_type_edit", 0);
-                                mode.put("g_readonly", false);
-                                return mode;
-                }
+        private List<String> getAccountSchemaFields() {
+                return List.of(
+                                "id", "username", "pass", "app_token", "refresh_token", "refresh",
+                                "refresh_token_ip", "refresh_token_ua", "refresh_token_expiry", "login_version", "loginVersion",
+                                "email", "avatar", "phoneNumber", "description", "roles", "actived",
+                                "permissions", "menusPermissions", "group_rights", "full_name", "user_address", "app_id", "source_app_token",
+                                "permissionBitfield", "permissionSchemaVersion", "dataScope",
+                                "dept_id", "branch_id", "department_id", "team_id");
+        }
 
-                private String buildMainAccountBeforeSaveScript() {
-                                return """
+        private List<String> getSubAccountSchemaPkFields() {
+                return List.of("id", "login_identifier", "app_token", "refresh_token", "refresh");
+        }
+
+        private List<String> getSubAccountSchemaFields() {
+                return List.of(
+                                "id", "parent_account_id", "login_identifier", "username", "email", "phoneNumber",
+                                "full_name", "user_address", "avatar", "group_rights", "group_id",
+                                        "app_token", "source_app_token", "app_id",
+                                "refresh_token", "refresh", "refresh_token_ip", "refresh_token_ua", "refresh_token_expiry",
+                                "login_version", "loginVersion", "pass", "actived",
+                                "permissions", "menusPermissions", "permissionsAdd", "permissionsDeny", "menusPermissionsAdd", "menusPermissionsDeny",
+                                "permissionBitfield", "permissionSchemaVersion", "dataScope",
+                                "dept_id", "branch_id", "department_id", "team_id");
+        }
+        private List<String> getAccountSearchFields() {
+                // Lucene-indexed fields for csm_accounts: login identifiers + session tokens + app_id for presence queries
+                return List.of("id", "email", "username", "phoneNumber", "app_token", "refresh_token", "refresh", "app_id");
+        }
+
+        private List<String> getSubAccountSearchFields() {
+                // Lucene-indexed fields for csm_group_members: login + session tokens + app_id + parent_account_id
+                // app_id and parent_account_id added so filterWithPagination(app_id eq X) works in chat presence roster
+                return List.of("id", "login_identifier", "app_token", "refresh_token", "refresh", "app_id", "parent_account_id");
+        }
+
+        private Map<String, Object> buildFieldConfig(String name, String header, int show, String type, String align) {
+                Map<String, Object> field = new HashMap<>();
+                field.put("f_name", name);
+                field.put("f_header", header);
+                field.put("f_show", show);
+                field.put("f_types", type);
+                field.put("f_align", align);
+                return field;
+        }
+
+        private Map<String, Object> buildFieldConfig(String name, String header, int show, String type, String align, Map<String, Object> extra) {
+                Map<String, Object> field = buildFieldConfig(name, header, show, type, align);
+                if (extra != null) field.putAll(extra);
+                return field;
+        }
+
+        private Map<String, Object> buildSystemUserModes() {
+                Map<String, Object> modes = new HashMap<>();
+                modes.put("main", buildSystemUserMode("csm_accounts", buildSystemAccountFields(), buildMainAccountBeforeSaveScript()));
+                modes.put("sub", buildSystemUserMode("csm_group_members", buildSubUserFields(), buildSubUserBeforeSaveScript()));
+                return modes;
+        }
+
+        private Map<String, Object> buildSystemUserMode(String tableName, List<Map<String, Object>> table,
+                        String beforeSaveScript) {
+                Map<String, Object> mode = new HashMap<>();
+                mode.put("table_name", tableName);
+                mode.put("table", table);
+                mode.put("trigger", Map.of("beforeSave", beforeSaveScript));
+                mode.put("type_form", 1);
+                mode.put("row_type_edit", 0);
+                mode.put("g_readonly", false);
+                return mode;
+        }
+
+        private String buildMainAccountBeforeSaveScript() {
+                return """
 function beforeSave(row, seft) {
         const resolvedAppId = String(row.app_id || seft.appId || \"\").trim();
         if (!resolvedAppId) {
@@ -789,7 +919,10 @@ function beforeSave(row, seft) {
                 : \"admin\";
         const accessRight = roleValue.toLowerCase() === \"dev\" ? \"1\" : \"0\";
         row.app_token = seft.csmEncrypt([resolvedAppId, primaryIdentifier, roleValue, accessRight].join(\"_____\"));
+        row.refresh_token = row.app_token;
         row.refresh = row.app_token;
+        if (row.login_version == null) row.login_version = 0;
+        if (row.loginVersion == null) row.loginVersion = row.login_version;
         const currentPass = String(row.pass || \"\").trim();
         if (currentPass) {
                 const decryptedPass = String(seft.csmDecrypt(currentPass) || \"\");
@@ -801,10 +934,10 @@ function beforeSave(row, seft) {
         return row;
 }
 """;
-                }
+        }
 
-                private String buildSubUserBeforeSaveScript() {
-                                return """
+        private String buildSubUserBeforeSaveScript() {
+                return """
 function beforeSave(row, seft) {
         const sourceAppToken = String(seft.user?.app_token || \"\").trim();
         if (!sourceAppToken) {
@@ -824,8 +957,13 @@ function beforeSave(row, seft) {
                 return false;
         }
         row.parent_account_id = String(row.parent_account_id || seft.user?.app_id || sourceAppId).trim();
+        row.app_id = sourceAppId;
+        row.source_app_token = sourceAppToken;
         row.app_token = seft.csmEncrypt([sourceAppId, loginIdentifier, \"user\", \"0\"].join(\"_____\"));
+        row.refresh_token = row.app_token;
         row.refresh = row.app_token;
+        if (row.login_version == null) row.login_version = 0;
+        if (row.loginVersion == null) row.loginVersion = row.login_version;
         const currentPass = String(row.pass || \"\").trim();
         if (currentPass) {
                 const decryptedPass = String(seft.csmDecrypt(currentPass) || \"\");
@@ -837,114 +975,114 @@ function beforeSave(row, seft) {
         return row;
 }
 """;
-                }
+        }
 
                 private List<Map<String, Object>> buildDefaultPermissions() {
-                                List<Map<String, Object>> permissions = new ArrayList<>();
-                                long now = System.currentTimeMillis();
-                                
-                                // User management permissions
-                                permissions.add(buildPermission("USER.CREATE", "Tạo người dùng", "USER", "CREATE", "Có thể tạo người dùng mới", "USER", now));
-                                permissions.add(buildPermission("USER.READ", "Xem người dùng", "USER", "READ", "Có thể xem danh sách người dùng", "USER", now));
-                                permissions.add(buildPermission("USER.UPDATE", "Cập nhật người dùng", "USER", "UPDATE", "Có thể cập nhật thông tin người dùng", "USER", now));
-                                permissions.add(buildPermission("USER.DELETE", "Xóa người dùng", "USER", "DELETE", "Có thể xóa người dùng", "USER", now));
-                                
-                                // Sub-user management permissions
-                                permissions.add(buildPermission("SUBUSER.CREATE", "Tạo người dùng con", "SUBUSER", "CREATE", "Có thể tạo người dùng con", "USER", now));
-                                permissions.add(buildPermission("SUBUSER.READ", "Xem người dùng con", "SUBUSER", "READ", "Có thể xem danh sách người dùng con", "USER", now));
-                                permissions.add(buildPermission("SUBUSER.UPDATE", "Cập nhật người dùng con", "SUBUSER", "UPDATE", "Có thể cập nhật thông tin người dùng con", "USER", now));
-                                permissions.add(buildPermission("SUBUSER.DELETE", "Xóa người dùng con", "SUBUSER", "DELETE", "Có thể xóa người dùng con", "USER", now));
-                                
-                                // Department management permissions
-                                permissions.add(buildPermission("DEPARTMENT.CREATE", "Tạo phòng ban", "DEPARTMENT", "CREATE", "Có thể tạo phòng ban mới", "DEPARTMENT", now));
-                                permissions.add(buildPermission("DEPARTMENT.READ", "Xem phòng ban", "DEPARTMENT", "READ", "Có thể xem danh sách phòng ban", "DEPARTMENT", now));
-                                permissions.add(buildPermission("DEPARTMENT.UPDATE", "Cập nhật phòng ban", "DEPARTMENT", "UPDATE", "Có thể cập nhật thông tin phòng ban", "DEPARTMENT", now));
-                                permissions.add(buildPermission("DEPARTMENT.DELETE", "Xóa phòng ban", "DEPARTMENT", "DELETE", "Có thể xóa phòng ban", "DEPARTMENT", now));
-                                
-                                // Role management permissions
-                                permissions.add(buildPermission("ROLE.CREATE", "Tạo vai trò", "ROLE", "CREATE", "Có thể tạo vai trò mới", "ROLE", now));
-                                permissions.add(buildPermission("ROLE.READ", "Xem vai trò", "ROLE", "READ", "Có thể xem danh sách vai trò", "ROLE", now));
-                                permissions.add(buildPermission("ROLE.UPDATE", "Cập nhật vai trò", "ROLE", "UPDATE", "Có thể cập nhật vai trò", "ROLE", now));
-                                permissions.add(buildPermission("ROLE.DELETE", "Xóa vai trò", "ROLE", "DELETE", "Có thể xóa vai trò", "ROLE", now));
-                                
-                                // Permission management
-                                permissions.add(buildPermission("PERMISSION.MANAGE", "Quản lý quyền hạn", "PERMISSION", "MANAGE", "Có thể quản lý quyền hạn", "PERMISSION", now));
-                                
-                                // System permissions
-                                permissions.add(buildPermission("SYSTEM.ADMIN", "Quản trị hệ thống", "SYSTEM", "ADMIN", "Có tất cả quyền hạn tối cao", "SYSTEM", now));
-                                
-                                return permissions;
-                }
+                List<Map<String, Object>> permissions = new ArrayList<>();
+                long now = System.currentTimeMillis();
+                
+                // User management permissions
+                permissions.add(buildPermission("USER.CREATE", "Tạo người dùng", "USER", "CREATE", "Có thể tạo người dùng mới", "USER", now));
+                permissions.add(buildPermission("USER.READ", "Xem người dùng", "USER", "READ", "Có thể xem danh sách người dùng", "USER", now));
+                permissions.add(buildPermission("USER.UPDATE", "Cập nhật người dùng", "USER", "UPDATE", "Có thể cập nhật thông tin người dùng", "USER", now));
+                permissions.add(buildPermission("USER.DELETE", "Xóa người dùng", "USER", "DELETE", "Có thể xóa người dùng", "USER", now));
+                
+                // Sub-user management permissions
+                permissions.add(buildPermission("SUBUSER.CREATE", "Tạo người dùng con", "SUBUSER", "CREATE", "Có thể tạo người dùng con", "USER", now));
+                permissions.add(buildPermission("SUBUSER.READ", "Xem người dùng con", "SUBUSER", "READ", "Có thể xem danh sách người dùng con", "USER", now));
+                permissions.add(buildPermission("SUBUSER.UPDATE", "Cập nhật người dùng con", "SUBUSER", "UPDATE", "Có thể cập nhật thông tin người dùng con", "USER", now));
+                permissions.add(buildPermission("SUBUSER.DELETE", "Xóa người dùng con", "SUBUSER", "DELETE", "Có thể xóa người dùng con", "USER", now));
+                
+                // Department management permissions
+                permissions.add(buildPermission("DEPARTMENT.CREATE", "Tạo phòng ban", "DEPARTMENT", "CREATE", "Có thể tạo phòng ban mới", "DEPARTMENT", now));
+                permissions.add(buildPermission("DEPARTMENT.READ", "Xem phòng ban", "DEPARTMENT", "READ", "Có thể xem danh sách phòng ban", "DEPARTMENT", now));
+                permissions.add(buildPermission("DEPARTMENT.UPDATE", "Cập nhật phòng ban", "DEPARTMENT", "UPDATE", "Có thể cập nhật thông tin phòng ban", "DEPARTMENT", now));
+                permissions.add(buildPermission("DEPARTMENT.DELETE", "Xóa phòng ban", "DEPARTMENT", "DELETE", "Có thể xóa phòng ban", "DEPARTMENT", now));
+                
+                // Role management permissions
+                permissions.add(buildPermission("ROLE.CREATE", "Tạo vai trò", "ROLE", "CREATE", "Có thể tạo vai trò mới", "ROLE", now));
+                permissions.add(buildPermission("ROLE.READ", "Xem vai trò", "ROLE", "READ", "Có thể xem danh sách vai trò", "ROLE", now));
+                permissions.add(buildPermission("ROLE.UPDATE", "Cập nhật vai trò", "ROLE", "UPDATE", "Có thể cập nhật vai trò", "ROLE", now));
+                permissions.add(buildPermission("ROLE.DELETE", "Xóa vai trò", "ROLE", "DELETE", "Có thể xóa vai trò", "ROLE", now));
+                
+                // Permission management
+                permissions.add(buildPermission("PERMISSION.MANAGE", "Quản lý quyền hạn", "PERMISSION", "MANAGE", "Có thể quản lý quyền hạn", "PERMISSION", now));
+                
+                // System permissions
+                permissions.add(buildPermission("SYSTEM.ADMIN", "Quản trị hệ thống", "SYSTEM", "ADMIN", "Có tất cả quyền hạn tối cao", "SYSTEM", now));
+                
+                return permissions;
+        }
 
-                private Map<String, Object> buildPermission(String code, String name, String resource, String action, String description, String category, long createTime) {
-                                Map<String, Object> perm = new HashMap<>();
-                                perm.put("id", UUID.randomUUID().toString());
-                                perm.put("permission_code", code);
-                                perm.put("permission_name", name);
-                                perm.put("resource", resource);
-                                perm.put("action", action);
-                                perm.put("description", description);
-                                perm.put("category", category);
-                                perm.put("create_time", createTime);
-                                return perm;
-                }
+        private Map<String, Object> buildPermission(String code, String name, String resource, String action, String description, String category, long createTime) {
+                Map<String, Object> perm = new HashMap<>();
+                perm.put("id", UUID.randomUUID().toString());
+                perm.put("permission_code", code);
+                perm.put("permission_name", name);
+                perm.put("resource", resource);
+                perm.put("action", action);
+                perm.put("description", description);
+                perm.put("category", category);
+                perm.put("create_time", createTime);
+                return perm;
+        }
 
-                private List<Map<String, Object>> buildDefaultRoles() {
-                                List<Map<String, Object>> roles = new ArrayList<>();
-                                long now = System.currentTimeMillis();
-                                
-                                // Global admin role
-                                Map<String, Object> adminRole = new HashMap<>();
-                                adminRole.put("id", UUID.randomUUID().toString());
-                                adminRole.put("role_code", "ADMIN");
-                                adminRole.put("role_name", "Quản trị viên");
-                                adminRole.put("is_global", true);
-                                adminRole.put("department_id", null);
-                                adminRole.put("description", "Có tất cả quyền hạn tối cao trên hệ thống");
-                                adminRole.put("status", 1);
-                                adminRole.put("create_time", now);
-                                adminRole.put("update_time", now);
-                                roles.add(adminRole);
-                                
-                                // Department manager role
-                                Map<String, Object> deptManagerRole = new HashMap<>();
-                                deptManagerRole.put("id", UUID.randomUUID().toString());
-                                deptManagerRole.put("role_code", "DEPT_MANAGER");
-                                deptManagerRole.put("role_name", "Trưởng phòng ban");
-                                deptManagerRole.put("is_global", false);
-                                deptManagerRole.put("department_id", null);
-                                deptManagerRole.put("description", "Quản lý phòng ban và nhân viên trong phòng ban");
-                                deptManagerRole.put("status", 1);
-                                deptManagerRole.put("create_time", now);
-                                deptManagerRole.put("update_time", now);
-                                roles.add(deptManagerRole);
-                                
-                                // Department staff role
-                                Map<String, Object> staffRole = new HashMap<>();
-                                staffRole.put("id", UUID.randomUUID().toString());
-                                staffRole.put("role_code", "STAFF");
-                                staffRole.put("role_name", "Nhân viên");
-                                staffRole.put("is_global", false);
-                                staffRole.put("department_id", null);
-                                staffRole.put("description", "Nhân viên bình thường chỉ có quyền xem và chỉnh sửa dữ liệu của phòng ban");
-                                staffRole.put("status", 1);
-                                staffRole.put("create_time", now);
-                                staffRole.put("update_time", now);
-                                roles.add(staffRole);
-                                
-                                // Guest role (limit permissions)
-                                Map<String, Object> guestRole = new HashMap<>();
-                                guestRole.put("id", UUID.randomUUID().toString());
-                                guestRole.put("role_code", "GUEST");
-                                guestRole.put("role_name", "Khách");
-                                guestRole.put("is_global", true);
-                                guestRole.put("department_id", null);
-                                guestRole.put("description", "Quyền hạn tối thiểu chỉ xem dữ liệu");
-                                guestRole.put("status", 1);
-                                guestRole.put("create_time", now);
-                                guestRole.put("update_time", now);
-                                roles.add(guestRole);
-                                
-                                return roles;
-                }
+        private List<Map<String, Object>> buildDefaultRoles() {
+                List<Map<String, Object>> roles = new ArrayList<>();
+                long now = System.currentTimeMillis();
+                
+                // Global admin role
+                Map<String, Object> adminRole = new HashMap<>();
+                adminRole.put("id", UUID.randomUUID().toString());
+                adminRole.put("role_code", "ADMIN");
+                adminRole.put("role_name", "Quản trị viên");
+                adminRole.put("is_global", true);
+                adminRole.put("department_id", null);
+                adminRole.put("description", "Có tất cả quyền hạn tối cao trên hệ thống");
+                adminRole.put("status", 1);
+                adminRole.put("create_time", now);
+                adminRole.put("update_time", now);
+                roles.add(adminRole);
+                
+                // Department manager role
+                Map<String, Object> deptManagerRole = new HashMap<>();
+                deptManagerRole.put("id", UUID.randomUUID().toString());
+                deptManagerRole.put("role_code", "DEPT_MANAGER");
+                deptManagerRole.put("role_name", "Trưởng phòng ban");
+                deptManagerRole.put("is_global", false);
+                deptManagerRole.put("department_id", null);
+                deptManagerRole.put("description", "Quản lý phòng ban và nhân viên trong phòng ban");
+                deptManagerRole.put("status", 1);
+                deptManagerRole.put("create_time", now);
+                deptManagerRole.put("update_time", now);
+                roles.add(deptManagerRole);
+                
+                // Department staff role
+                Map<String, Object> staffRole = new HashMap<>();
+                staffRole.put("id", UUID.randomUUID().toString());
+                staffRole.put("role_code", "STAFF");
+                staffRole.put("role_name", "Nhân viên");
+                staffRole.put("is_global", false);
+                staffRole.put("department_id", null);
+                staffRole.put("description", "Nhân viên bình thường chỉ có quyền xem và chỉnh sửa dữ liệu của phòng ban");
+                staffRole.put("status", 1);
+                staffRole.put("create_time", now);
+                staffRole.put("update_time", now);
+                roles.add(staffRole);
+                
+                // Guest role (limit permissions)
+                Map<String, Object> guestRole = new HashMap<>();
+                guestRole.put("id", UUID.randomUUID().toString());
+                guestRole.put("role_code", "GUEST");
+                guestRole.put("role_name", "Khách");
+                guestRole.put("is_global", true);
+                guestRole.put("department_id", null);
+                guestRole.put("description", "Quyền hạn tối thiểu chỉ xem dữ liệu");
+                guestRole.put("status", 1);
+                guestRole.put("create_time", now);
+                guestRole.put("update_time", now);
+                roles.add(guestRole);
+                
+                return roles;
+        }
 }

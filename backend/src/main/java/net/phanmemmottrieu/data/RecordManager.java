@@ -29,7 +29,6 @@ import java.util.stream.Collectors;
 import javax.annotation.PreDestroy;
 
 import java.util.*;
-import java.util.Timer;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -61,12 +60,34 @@ public class RecordManager {
     // 🚀 PERFORMANCE OPTIMIZATION: Update Batching
     // Batch updates to reduce commit frequency and improve throughput
     private static final ConcurrentHashMap<String, UpdateBatchBuffer> updateBatchBuffers = new ConcurrentHashMap<>();
-    private static final ConcurrentHashMap<String, Timer> batchFlushTimers = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<String, ScheduledFuture<?>> batchFlushTasks = new ConcurrentHashMap<>();
     private static final int BATCH_SIZE = 50;  // Batch updates in groups of 50
-    private static final long BATCH_TIMEOUT_MS = 100;  // Or flush after 100ms
+    private static final long BATCH_TIMEOUT_MS = 50;   // Flush after 50ms (reduced from 100ms for near-real-time search consistency)
     private static final int DEFAULT_FILTER_TAKE = 500;
-    private static final int MAX_FILTER_TAKE = 5000;
+    private static final int MAX_FILTER_TAKE = 1000;
+    private static final int MAX_LUCENE_SEARCH_HITS = 2000;
+    private static final long MAX_RESPONSE_PAYLOAD_BYTES = 64L * 1024L * 1024L;
+    private static final int MAX_FALLBACK_SCAN_KEYS = 500;
+    private static final int REBUILD_REPAIR_BATCH_SIZE = 2000;
     private static final int MAX_SAFE_JSON_RECORD_BYTES = 32 * 1024 * 1024;
+    private static final int MAX_FIND_SCAN_RECORDS = 2000;
+    private static final int MAX_SAFE_FIND_RECORD_BYTES = 4 * 1024 * 1024;
+    private static final long MAX_FIND_SCAN_BYTES = 16L * 1024L * 1024L;
+    private static final int MAX_CONCURRENT_FIND_SCANS = 2;
+    private static final int MAX_LUCENE_KEY_COLLECTION = 2000000;
+    private static final int SMART_SCAN_BACKPRESSURE_STEP = 2000;
+    private static final long SMART_SCAN_LOW_HEAP_BYTES = 256L * 1024L * 1024L;
+    private static final int SMART_SCAN_SLEEP_MS = 1;
+    private static final int SMART_SCAN_SLEEP_MS_LOW_HEAP = 8;
+
+    private static final Set<String> STRICT_NO_SCAN_FIND_FIELDS = Set.of("refresh_token", "refresh", "app_token");
+    private static final java.util.concurrent.Semaphore findScanConcurrencyGuard =
+            new java.util.concurrent.Semaphore(MAX_CONCURRENT_FIND_SCANS, true);
+    private static final ConcurrentHashMap<String, java.util.concurrent.atomic.LongAdder> luceneSearchTotal = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<String, java.util.concurrent.atomic.LongAdder> luceneSearchHit = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<String, java.util.concurrent.atomic.LongAdder> luceneSearchMiss = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<String, java.util.concurrent.atomic.LongAdder> luceneSearchRejected = new ConcurrentHashMap<>();
+    private static final java.util.concurrent.atomic.AtomicBoolean shutdownInProgress = new java.util.concurrent.atomic.AtomicBoolean(false);
     // Guard: only one async Lucene rebuild per table at a time
     private static final ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicBoolean> tableRepairScheduled = new ConcurrentHashMap<>();
     // Schema cache: avoid hitting Lucene on every write just to look up table field lists
@@ -203,6 +224,26 @@ public class RecordManager {
         return 0L;
     }
 
+    private static void applySmartBackpressure(int processed) {
+        if (processed <= 0 || (processed % SMART_SCAN_BACKPRESSURE_STEP) != 0) {
+            return;
+        }
+
+        Runtime rt = Runtime.getRuntime();
+        long usedHeap = rt.totalMemory() - rt.freeMemory();
+        long freeHeap = rt.maxMemory() - usedHeap;
+        int sleepMs = freeHeap < SMART_SCAN_LOW_HEAP_BYTES ? SMART_SCAN_SLEEP_MS_LOW_HEAP : SMART_SCAN_SLEEP_MS;
+        if (sleepMs <= 0) {
+            return;
+        }
+
+        try {
+            Thread.sleep(sleepMs);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
     private String DIR_PATH; // <--- BỎ TỪ KHÓA 'static'
 
     // Spring sẽ inject giá trị từ application.properties vào biến này
@@ -220,7 +261,10 @@ public class RecordManager {
         // Gán DIR_PATH
         this.DIR_PATH = injectedDirPath; // Gán giá trị đã inject cho DIR_PATH
         logger.info("Đường dẫn dữ liệu đã được khởi tạo: {}", this.DIR_PATH);
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> shutdownAllDatabases()));
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            markShutdownAndStopRepairWorker();
+            shutdownAllDatabases();
+        }));
 
         // Background periodic Lucene commit — keeps writes durable without blocking every write request.
         // NRT SearcherManager already makes writes visible immediately via maybeRefresh();
@@ -301,6 +345,19 @@ public class RecordManager {
         dbMap.clear();
         dbLocks.clear();
     }    
+
+    private void markShutdownAndStopRepairWorker() {
+        shutdownInProgress.set(true);
+        try {
+            repairExecutor.shutdown();
+            if (!repairExecutor.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS)) {
+                repairExecutor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            repairExecutor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+    }
     
     // 🚀 PERFORMANCE OPTIMIZATION: Batch flushing methods
     /**
@@ -319,7 +376,7 @@ public class RecordManager {
             // Check if should flush immediately (batch full)
             if (buffer.updates.size() >= BATCH_SIZE) {
                 flushBatchUpdatesSync(indexKey);
-            } else if (batchFlushTimers.get(indexKey) == null) {
+            } else if (batchFlushTasks.get(indexKey) == null) {
                 // Schedule timeout flush if not already scheduled
                 scheduleBatchFlushTimer(indexKey);
             }
@@ -339,7 +396,7 @@ public class RecordManager {
             
             if (buffer.updates.size() >= BATCH_SIZE) {
                 flushBatchUpdatesSync(indexKey);
-            } else if (batchFlushTimers.get(indexKey) == null) {
+            } else if (batchFlushTasks.get(indexKey) == null) {
                 scheduleBatchFlushTimer(indexKey);
             }
         }
@@ -349,21 +406,20 @@ public class RecordManager {
      * Schedule automatic flush after timeout
      */
     private void scheduleBatchFlushTimer(String indexKey) {
-        Timer timer = new Timer("BatchFlush-" + indexKey, true);
-        batchFlushTimers.put(indexKey, timer);
-        
-        timer.schedule(new TimerTask() {
-            @Override
-            public void run() {
+        batchFlushTasks.compute(indexKey, (k, existingTask) -> {
+            if (existingTask != null && !existingTask.isDone()) {
+                return existingTask;
+            }
+            return batchExecutor.schedule(() -> {
                 try {
                     flushBatchUpdatesSync(indexKey);
                 } catch (Exception e) {
                     logger.error("Error flushing batch for {}: {}", indexKey, e.getMessage(), e);
                 } finally {
-                    batchFlushTimers.remove(indexKey);
+                    batchFlushTasks.remove(indexKey);
                 }
-            }
-        }, BATCH_TIMEOUT_MS);
+            }, BATCH_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
+        });
     }
     
     /**
@@ -408,7 +464,7 @@ public class RecordManager {
                         writer.deleteDocuments(new Term("_key", update.key));
                         logger.debug("Batch queued delete for key: {}", update.key);
                     } else {
-                        Document doc = buildLuceneDocument(update.key, update.record);
+                        Document doc = buildLuceneDocument(appId, tableName, update.key, update.record);
                         writer.updateDocument(new Term("_key", update.key), doc);
                         logger.debug("Batch queued update for key: {}", update.key);
                     }
@@ -435,33 +491,170 @@ public class RecordManager {
     /**
      * Build a Lucene Document from key and record data
      */
-    private Document buildLuceneDocument(String key, Map<String, Object> record) {
+    private Document buildLuceneDocument(String appId, String tableName, String key, Map<String, Object> record) {
         Document doc = new Document();
-        
+
         // Store the RocksDB key
         doc.add(new StringField("_key", key, Field.Store.YES));
-        
-        // Index all fields from the record
-        if (record != null) {
-            for (Map.Entry<String, Object> entry : record.entrySet()) {
-                String field = entry.getKey();
-                Object value = entry.getValue();
-                
-                if (value == null) continue;
-                
-                String strValue = value.toString();
-                if (strValue.length() > 32766) continue;  // Skip very long values
-                
-                // Index with .keyword suffix for exact matching
-                doc.add(new StringField(field + ".keyword", strValue.toLowerCase(), Field.Store.NO));
+
+        // Keep Lucene document slim: only id + configured fieldsSearch.
+        addSearchFieldsToDocument(doc, appId, tableName, key, record);
+
+        return doc;
+    }
+
+    private List<String> resolveEffectiveSearchFields(String appId, String tableName) {
+        LinkedHashSet<String> fields = new LinkedHashSet<>();
+        fields.add("id");
+
+        List<String> configured = getTableSearchKeys(appId, tableName, "fieldsSearch");
+        if (configured != null) {
+            for (String field : configured) {
+                if (field == null) continue;
+                String normalized = field.trim();
+                if (normalized.isEmpty()) continue;
+                fields.add(normalized);
             }
         }
-        
-        return doc;
+
+        return new ArrayList<>(fields);
+    }
+
+    private static long bumpMetric(ConcurrentHashMap<String, java.util.concurrent.atomic.LongAdder> metrics, String tableKey) {
+        java.util.concurrent.atomic.LongAdder adder = metrics.computeIfAbsent(tableKey, k -> new java.util.concurrent.atomic.LongAdder());
+        adder.increment();
+        return adder.longValue();
+    }
+
+    private static void collectQueryFields(SearchFilter filter, Set<String> fields) {
+        if (filter == null) return;
+
+        if (filter.getConditions() != null && !filter.getConditions().isEmpty()) {
+            for (SearchFilter sub : filter.getConditions()) {
+                collectQueryFields(sub, fields);
+            }
+            return;
+        }
+
+        String field = filter.getField();
+        if (field != null) {
+            String normalized = field.trim();
+            if (!normalized.isEmpty()) {
+                fields.add(normalized);
+            }
+        }
+    }
+
+    private static SearchFilter unwrapSingleLeafCondition(SearchFilter filter) {
+        if (filter == null) return null;
+
+        if (filter.getConditions() != null && !filter.getConditions().isEmpty()) {
+            if (filter.getConditions().size() != 1) {
+                return null;
+            }
+            return unwrapSingleLeafCondition(filter.getConditions().get(0));
+        }
+        return filter;
+    }
+
+    private static boolean isBlankLikeValue(Object value) {
+        if (value == null) return true;
+        String s = String.valueOf(value).trim();
+        return s.isEmpty()
+                || "*".equals(s)
+                || "%".equals(s)
+                || "**".equals(s)
+                || "%%".equals(s)
+                || "*%".equals(s)
+                || "%*".equals(s);
+    }
+
+    private static boolean isStrictNoScanFindFilter(SearchFilter filter) {
+        SearchFilter leaf = unwrapSingleLeafCondition(filter);
+        if (leaf == null || leaf.getField() == null || leaf.getType() == null) {
+            return false;
+        }
+
+        if (!"eq".equalsIgnoreCase(leaf.getType().trim())) {
+            return false;
+        }
+
+        String normalizedField = leaf.getField().trim().toLowerCase(Locale.ROOT);
+        return STRICT_NO_SCAN_FIND_FIELDS.contains(normalizedField);
+    }
+
+    private boolean isDirectRocksDbBypassFilter(SearchFilter filter) {
+        SearchFilter leaf = unwrapSingleLeafCondition(filter);
+        if (leaf == null) return false;
+
+        String field = leaf.getField();
+        String type = leaf.getType();
+        if (field == null || type == null) return false;
+
+        String normalizedType = type.trim().toLowerCase(Locale.ROOT);
+        if (!"like".equals(normalizedType)) {
+            return false;
+        }
+
+        // Special-case optimization: only bypass Lucene for single-condition `id like ""` style queries.
+        if (!"id".equalsIgnoreCase(field.trim())) {
+            return false;
+        }
+
+        return isBlankLikeValue(leaf.getValue());
+    }
+
+    private boolean isFilterLuceneCompatible(String appId, String tableName, SearchFilter filters) {
+        if (filters == null) {
+            return true;
+        }
+
+        Set<String> queriedFields = new HashSet<>();
+        collectQueryFields(filters, queriedFields);
+        if (queriedFields.isEmpty()) {
+            return true;
+        }
+
+        Set<String> allowedFields = new HashSet<>(resolveEffectiveSearchFields(appId, tableName));
+        allowedFields.add("_key");
+
+        for (String field : queriedFields) {
+            if (!allowedFields.contains(field)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private void addSearchFieldsToDocument(Document doc, String appId, String tableName, String key, Map<String, Object> record) {
+        Map<String, Object> safeRecord = record != null ? record : Collections.emptyMap();
+        List<String> effectiveSearchFields = resolveEffectiveSearchFields(appId, tableName);
+
+        for (String field : effectiveSearchFields) {
+            Object rawValue = "id".equals(field) ? safeRecord.getOrDefault("id", key) : safeRecord.get(field);
+            if (rawValue == null) continue;
+
+            String valueText = String.valueOf(rawValue);
+            if (valueText.length() > 32766) {
+                logger.warn("⚠ Trường '{}' của bản ghi với RocksDB key '{}' quá dài ({} ký tự), bỏ qua lập chỉ mục.",
+                        field, key, valueText.length());
+                continue;
+            }
+
+            String keywordValue = valueText.toLowerCase(Locale.ROOT);
+            if ("id".equals(field)) {
+                doc.add(new StringField("id", valueText, Field.Store.YES));
+                doc.add(new StringField("id.keyword", keywordValue, Field.Store.NO));
+            } else {
+                doc.add(new StringField(field + ".keyword", keywordValue, Field.Store.NO));
+            }
+        }
     }
     
     @PreDestroy // Crucial for automatic resource cleanup on application shutdown
     private void closeAllManagedLuceneResources() {
+        markShutdownAndStopRepairWorker();
+
         // Flush any remaining batched updates before shutdown
         logger.info("Flushing {} batched update buffers before shutdown", updateBatchBuffers.size());
         for (String indexKey : updateBatchBuffers.keySet()) {
@@ -474,10 +667,12 @@ public class RecordManager {
         updateBatchBuffers.clear();
         
         // Cancel any pending timers
-        for (Timer timer : batchFlushTimers.values()) {
-            timer.cancel();
+        for (ScheduledFuture<?> task : batchFlushTasks.values()) {
+            if (task != null) {
+                task.cancel(false);
+            }
         }
-        batchFlushTimers.clear();
+        batchFlushTasks.clear();
         
         // Shutdown batch executor
         try {
@@ -900,43 +1095,8 @@ public class RecordManager {
                     }
                 }
 
-                Document doc = new Document();
-
-                // --- Bổ sung: Index trường 'id' ---
-                Object idVal = record.get("id");
-                if (idVal != null) {
-                    String idStringVal = idVal.toString();
-                    if (idStringVal.length() <= 32766) { // Kiểm tra độ dài
-                        // Thêm trường 'id' với Field.Store.YES để có thể truy xuất trực tiếp
-                        doc.add(new StringField("id", idStringVal, Field.Store.YES));
-                        // Thêm trường 'id.keyword' cho tìm kiếm chính xác (non-analyzed)
-                        doc.add(new StringField("id.keyword", idStringVal, Field.Store.NO));
-                    } else {
-                        logger.warn("⚠ Trường 'id' của bản ghi với RocksDB key '{}' quá dài ({} ký tự), bỏ qua lập chỉ mục cho trường id.", new String(keyBytes, StandardCharsets.UTF_8), idStringVal.length());
-                    }
-                } else {
-                    logger.warn("Không tìm thấy trường 'id' cho bản ghi với khóa RocksDB '{}' trong app: {}, table: {}. Bỏ qua lập chỉ mục cho trường id.", new String(keyBytes, StandardCharsets.UTF_8), appId, tableName);
-                }
-                // --- Kết thúc bổ sung ---
-
-                // Add fields to Lucene document for primary keys (if still relevant)
-                List<String> fieldsSearch = getTableSearchKeys(appId, tableName,"fieldsSearch"); // Get primary keys
-
-                for (String pk : fieldsSearch) {
-                    if ("id".equals(pk)) continue; // đã xử lý riêng rồi
-                    Object val = record.get(pk);
-                    if (val == null) continue;
-                    String stringVal = val.toString();
-                    if (stringVal.length() > 32766) {
-                        logger.warn("⚠ Trường khóa chính '{}' của bản ghi với RocksDB key '{}' quá dài ({} ký tự), bỏ qua lập chỉ mục.", pk, new String(keyBytes, StandardCharsets.UTF_8), stringVal.length());
-                        continue;
-                    }
-                    doc.add(new StringField(pk + ".keyword", stringVal, Field.Store.NO));
-                }
-
-                // Store RocksDB key in index for retrieval
                 String keyStr = new String(keyBytes, StandardCharsets.UTF_8);
-                doc.add(new StringField("_key", keyStr, Field.Store.YES)); // _key field to store original RocksDB key
+                Document doc = buildLuceneDocument(appId, tableName, keyStr, record);
 
                 buffer.add(doc);
                 count++;
@@ -996,13 +1156,8 @@ public class RecordManager {
             try {
                 db = getDatabaseWithBloomFilter(appId, tableName); // Giả định hàm này trả về RocksDB instance
 
-                // Mặc dù bạn đã chuyển sang dùng 'id' làm khóa RocksDB,
-                // việc getTablePrimaryKeys vẫn có thể cần nếu bạn muốn index các trường khác ngoài 'id'
-                // mà trước đây là primary keys logic của bạn.
-                // Nếu bạn chỉ muốn index 'id' và _key, bạn có thể loại bỏ dòng này.
-                List<String> fieldsSearch = getTableSearchKeys(appId, tableName,"fieldsSearch");
-                List<String> primaryKeys = getTableSearchKeys(appId, tableName, "fieldsPK");
-                logger.info("Xem giá trị khoá Search cũ {} và primary keys {} của bảng {} trong chương trình {}", fieldsSearch, primaryKeys, tableName, appId);
+                List<String> fieldsSearch = resolveEffectiveSearchFields(appId, tableName);
+                logger.info("Dùng các trường search {} để build Lucene index cho bảng {} trong app {}", fieldsSearch, tableName, appId);
 
                 // Use the shared IndexWriter
                 IndexWriter writer = getOrCreateSharedIndexWriter(appId, tableName); // Giả định hàm này trả về IndexWriter
@@ -1036,64 +1191,7 @@ public class RecordManager {
                         }
                     }
 
-                    Document doc = new Document();
-
-                    // --- Bổ sung: Index trường 'id' ---
-                    Object idVal = record.get("id");
-                    if (idVal != null) {
-                        String idStringVal = idVal.toString();
-                        if (idStringVal.length() <= 32766) { // Kiểm tra độ dài
-                            // Thêm trường 'id' với Field.Store.YES nếu bạn muốn lấy trực tiếp 'id' từ Lucene Document
-                            // Hoặc Field.Store.NO nếu chỉ dùng để tìm kiếm
-                            doc.add(new StringField("id", idStringVal, Field.Store.YES)); // Index trường 'id'
-                            doc.add(new StringField("id.keyword", idStringVal, Field.Store.NO)); // Thường dùng cho tìm kiếm chính xác
-                        } else {
-                            logger.warn("⚠ Trường 'id' của bản ghi với RocksDB key '{}' quá dài ({} ký tự), bỏ qua lập chỉ mục cho trường id.", key, idStringVal.length());
-                        }
-                    } else {
-                        logger.warn("Không tìm thấy trường 'id' cho bản ghi với RocksDB key '{}' trong app: {}, table: {}. Bỏ qua lập chỉ mục cho trường id.", key, appId, tableName);
-                    }
-                    // --- Kết thúc bổ sung ---
-
-                    // Index các trường khóa chính cũ (fieldsSearch) và các primary keys (fieldsPK)
-                    Set<String> indexed = new HashSet<>();
-                    for (String pk : fieldsSearch) {
-                        if ("id".equals(pk)) continue; // đã xử lý riêng rồi
-                        Object val = record.get(pk);
-                        if (val == null) continue;
-
-                        String stringVal = val.toString();
-                        if (stringVal.length() > 32766) {
-                            logger.warn("⚠ Trường '{}' của bản ghi với RocksDB key '{}' quá dài ({} ký tự), bỏ qua lập chỉ mục.", pk, key, stringVal.length());
-                            continue;
-                        }
-
-                        doc.add(new StringField(pk + ".keyword", stringVal, Field.Store.NO));
-                        indexed.add(pk);
-                    }
-
-                    for (String pk : primaryKeys) {
-                        if ("id".equals(pk) || indexed.contains(pk)) continue;
-                        Object val = record.get(pk);
-                        if (val == null) {
-                            doc.add(new StringField(pk + ".keyword", "", Field.Store.NO));
-                            indexed.add(pk);
-                            continue;
-                        }
-                        String stringVal = val.toString();
-                        if (stringVal.length() > 32766) {
-                            logger.warn("⚠ Trường '{}' của bản ghi với RocksDB key '{}' quá dài ({} ký tự), bỏ qua lập chỉ mục.", pk, key, stringVal.length());
-                            continue;
-                        }
-                        doc.add(new StringField(pk + ".keyword", stringVal, Field.Store.NO));
-                        indexed.add(pk);
-                    }
-
-                    String keyStr = key;
-                    // Đây là khóa RocksDB cũ. Nếu bạn đã chuyển sang dùng 'id' làm khóa RocksDB mới,
-                    // và muốn lưu trữ khóa mới này, bạn có thể thay thế bằng 'newKeyString' nếu có.
-                    // Tuy nhiên, việc lưu '_key' (là RocksDB key) thường hữu ích để ánh xạ ngược lại.
-                    doc.add(new StringField("_key", keyStr, Field.Store.YES));
+                    Document doc = buildLuceneDocument(appId, tableName, key, record);
 
                     buffer.add(doc);
                     count++;
@@ -1196,65 +1294,7 @@ public class RecordManager {
 
         synchronized (luceneIndexLocks.get(indexKey)) { // Đồng bộ hóa cho các thao tác trên từng bản ghi
             IndexWriter writer = getOrCreateSharedIndexWriter(appId, tableName); // Lấy IndexWriter dùng chung
-            List<String> fieldsSearch = getTableSearchKeys(appId, tableName,"fieldsSearch"); // Lấy các khóa chính truyền thống
-            List<String> primaryKeys = getTableSearchKeys(appId, tableName, "fieldsPK"); // Lấy các khóa chính thực tế (fieldsPK)
-            Document doc = new Document();
-
-            // --- Bổ sung: Lập chỉ mục trường 'id' ---
-            Object idVal = record.get("id");
-            if (idVal != null) {
-                String idStringVal = idVal.toString();
-                if (idStringVal.length() <= 32766) { // Kiểm tra độ dài
-                    // Thêm trường 'id' với Field.Store.YES để có thể truy xuất trực tiếp
-                    doc.add(new StringField("id", idStringVal, Field.Store.YES));
-                    // Thêm trường 'id.keyword' cho tìm kiếm chính xác (non-analyzed)
-                    doc.add(new StringField("id.keyword", idStringVal, Field.Store.NO));
-                } else {
-                    logger.warn("⚠ Trường 'id' của bản ghi với RocksDB key '{}' quá dài ({} ký tự), bỏ qua lập chỉ mục cho trường id.", key, idStringVal.length());
-                }
-            } else {
-                logger.warn("Không tìm thấy trường 'id' cho bản ghi với RocksDB key '{}' trong app: {}, table: {}. Bỏ qua lập chỉ mục cho trường id.", key, appId, tableName);
-            }
-            // --- Kết thúc bổ sung ---
-
-
-            // Lập chỉ mục các trường khóa chính (fieldsSearch) và các primary keys (fieldsPK)
-            // Avoid duplicate indexing when a field appears in both lists
-            Set<String> indexed = new HashSet<>();
-            for (String pk : fieldsSearch) {
-                if ("id".equals(pk)) continue; // đã xử lý riêng rồi
-                Object val = record.get(pk);
-                if (val == null) continue;
-                String strVal = val.toString();
-                if (strVal.length() > 32766) {
-                    logger.warn("⚠ Trường '{}' của bản ghi với RocksDB key '{}' quá dài ({} ký tự), bỏ qua lập chỉ mục.", pk, key, strVal.length());
-                    continue;
-                }
-                doc.add(new StringField(pk + ".keyword", strVal, Field.Store.NO));
-                indexed.add(pk);
-            }
-
-            // Index primary keys as well (fieldsPK) to keep old queries working
-            for (String pk : primaryKeys) {
-                if ("id".equals(pk) || indexed.contains(pk)) continue;
-                Object val = record.get(pk);
-                if (val == null) {
-                    // Index empty value explicitly so queries expecting the PK exist can still hit
-                    doc.add(new StringField(pk + ".keyword", "", Field.Store.NO));
-                    indexed.add(pk);
-                    continue;
-                }
-                String strVal = val.toString();
-                if (strVal.length() > 32766) {
-                    logger.warn("⚠ Trường '{}' của bản ghi với RocksDB key '{}' quá dài ({} ký tự), bỏ qua lập chỉ mục.", pk, key, strVal.length());
-                    continue;
-                }
-                doc.add(new StringField(pk + ".keyword", strVal, Field.Store.NO));
-                indexed.add(pk);
-            }
-
-            // Lưu trữ khóa RocksDB trong chỉ mục để truy xuất
-            doc.add(new StringField("_key", key, Field.Store.YES)); // _key field để lưu trữ khóa RocksDB gốc
+            Document doc = buildLuceneDocument(appId, tableName, key, record);
 
 
             // updateDocument sẽ thay thế tài liệu hiện có với cùng Term (_key, key)
@@ -1457,28 +1497,40 @@ public class RecordManager {
                 
                 // Table format: tối ưu cho read-heavy workload (SSR queries)
                 BlockBasedTableConfig tableConfig = new BlockBasedTableConfig()
-                        .setFilterPolicy(bloomFilter)
-                        .setBlockSize(16 * 1024)  // OPTIMIZED: 4KB → 16KB (better for page reads)
-                        .setBlockRestartInterval(16)
-                        .setCacheIndexAndFilterBlocks(true)  // Keep index/filter in cache
-                        .setPinL0FilterAndIndexBlocksInCache(true)  // Pin L0 in memory
-                        .setWholeKeyFiltering(true);  // Better for exact key lookup
+                    .setFilterPolicy(bloomFilter)
+                    .setBlockSize(4 * 1024)
+                    .setBlockRestartInterval(16)
+                    .setCacheIndexAndFilterBlocks(true)
+                    .setPinL0FilterAndIndexBlocksInCache(false)
+                    .setWholeKeyFiltering(true);
     
                 Options options = new Options()
                         .setCreateIfMissing(true)
-                        .setMaxOpenFiles(-1)
+                    .setMaxOpenFiles(2048)
                         .setIncreaseParallelism(Runtime.getRuntime().availableProcessors())
-                        // OPTIMIZED: Memory tuning for concurrent Googlebot crawl
-                        // Auto-detect optimal settings based on existing database format
-                        .setWriteBufferSize(64 * 1024 * 1024)  // 64MB per buffer (was default 4MB)
-                        .setMaxWriteBufferNumber(4)  // Total 256MB write buffer
-                        .setDbWriteBufferSize(128 * 1024 * 1024)  // 128MB total across DBs
+                    // Conservative profile for lower memory footprint under many open DBs.
+                    .setWriteBufferSize(8 * 1024 * 1024)
+                    .setMaxWriteBufferNumber(2)
+                    .setDbWriteBufferSize(32 * 1024 * 1024)
                         .optimizeLevelStyleCompaction()
                         .setTableFormatConfig(tableConfig);
     
                 String dbPath = DIR_PATH + "/database/" + appId + "/" + tableName;
                 Files.createDirectories(Paths.get(dbPath));
-                RocksDB db = RocksDB.open(options, dbPath);
+
+                RocksDB db;
+                try {
+                    db = RocksDB.open(options, dbPath);
+                } catch (RocksDBException openEx) {
+                    if (shouldAutoRecoverRocksDb(tableName) && isRecoverableOpenError(openEx)) {
+                        logger.error("❌ RocksDB bị lỗi/corrupt cho {} tại {}. Thử tự phục hồi...", dbKey, dbPath, openEx);
+                        quarantineCorruptedRocksDirectory(dbPath, dbKey);
+                        db = RocksDB.open(options, dbPath);
+                        logger.warn("⚠️ RocksDB {} đã được tự phục hồi bằng cách tạo DB mới", dbKey);
+                    } else {
+                        throw openEx;
+                    }
+                }
     
                 RocksDBWrapper newWrapper = new RocksDBWrapper(db, options, tableConfig, bloomFilter);
                 dbMap.put(dbKey, newWrapper);
@@ -1489,7 +1541,42 @@ public class RecordManager {
                 throw new RuntimeException("Lỗi khi mở RocksDB", e);
             }
         }
-    }      
+    }
+
+    private boolean shouldAutoRecoverRocksDb(String tableName) {
+        // index table stores search metadata and can be rebuilt safely.
+        return "index".equalsIgnoreCase(String.valueOf(tableName));
+    }
+
+    private boolean isRecoverableOpenError(Throwable throwable) {
+        if (!(throwable instanceof RocksDBException)) {
+            return false;
+        }
+        String message = String.valueOf(throwable.getMessage()).toLowerCase(Locale.ROOT);
+        return message.contains("corruption")
+                || message.contains("manifest")
+                || message.contains("no such file or directory")
+                || message.contains("while open a file for random read");
+    }
+
+    private void quarantineCorruptedRocksDirectory(String dbPath, String dbKey) throws IOException {
+        Path source = Paths.get(dbPath);
+        if (!Files.exists(source)) {
+            Files.createDirectories(source);
+            return;
+        }
+
+        Path quarantine = Paths.get(dbPath + ".corrupt-" + System.currentTimeMillis());
+        try {
+            Files.move(source, quarantine);
+            logger.error("⚠️ Đã cô lập thư mục RocksDB lỗi cho {} sang {}", dbKey, quarantine);
+        } catch (IOException moveError) {
+            logger.warn("Không thể move thư mục RocksDB lỗi cho {}. Thử xóa thư mục cũ để tạo lại. Lỗi: {}", dbKey, moveError.getMessage());
+            deleteDirectory(source.toFile());
+        }
+
+        Files.createDirectories(source);
+    }
 
     /**
      * Phương thức đếm số lượng record thực tế trong RocksDB.
@@ -1617,11 +1704,10 @@ public class RecordManager {
                     String key = generateKey(appId, tableName, record, primaryKeys);
                     writeBatch.put(key.getBytes(java.nio.charset.StandardCharsets.UTF_8),
                                    objectMapper.writeValueAsBytes(record));
-                    indexRecord(appId, tableName, key, record);
+                    queueIndexUpdateForBatch(appId, tableName, key, record);
                 }
                 db.write(writeOptions, writeBatch);
             }
-            commitLuceneIndex(appId, tableName);
             logger.info("✅ batchUpdateRecords: updated {} records in {}.{}", records.size(), appId, tableName);
         } catch (Exception e) {
             logger.error("❌ batchUpdateRecords failed for {}.{}: {}", appId, tableName, e.getMessage(), e);
@@ -1641,19 +1727,7 @@ public class RecordManager {
             } else if ("index".equalsIgnoreCase(tableName)) {
                 primaryKeys = List.of("id");
             } else {
-                SearchFilter filter = new SearchFilter();
-                filter.setField("id");
-                filter.setType("eq");
-                filter.setValue(tableName);
-
-                Map<String, Object> tableStruct = find(appId, "index", filter);
-
-                if (tableStruct == null) {
-                    logger.error("Không tìm thấy cấu trúc bảng '{}' trong bảng 'index'.", tableName);
-                    throw new IllegalArgumentException("Không tìm thấy cấu trúc bảng: " + tableName);
-                }
-                Map<String, Object> structMap = (Map<String, Object>) tableStruct.get("struct");
-                primaryKeys = (List<String>) structMap.get("fieldsPK");
+                primaryKeys = getTableSearchKeys(appId, tableName, "fieldsPK");
 
                 if (primaryKeys == null || primaryKeys.isEmpty()) {
                     logger.warn("Không có khóa chính được định nghĩa cho bảng '{}'. Sử dụng UUID làm khóa.", tableName);
@@ -1709,11 +1783,11 @@ public class RecordManager {
                 }
 
                 if ("update".equals(command) && keyById != null && !keyById.equals(keyToPersist)) {
-                    deleteFromIndex(appId, tableName, keyById);
+                    queueIndexDeleteForBatch(appId, tableName, keyById);
                 }
 
-                // ✅ Lưu vào chỉ mục Lucene (NRT: visible immediately via maybeRefresh in indexRecord)
-                indexRecord(appId, tableName, keyToPersist, record);
+                // Queue Lucene update to reduce per-request write amplification.
+                queueIndexUpdateForBatch(appId, tableName, keyToPersist, record);
             }
         } catch (IllegalArgumentException e) {
             logger.error("Lỗi dữ liệu khi tạo bản ghi: {}", e.getMessage());
@@ -1735,8 +1809,7 @@ public class RecordManager {
             db.write(writeOptions, writeBatch);
             logger.info("✅ Đã tạo bản ghi thành công với UUID key: {}", key);
 
-            // ✅ Ghi vào chỉ mục Lucene (NRT: background periodic commit handles durability)
-            indexRecord(appId, tableName, key, record);
+            queueIndexUpdateForBatch(appId, tableName, key, record);
         }
     }
 
@@ -1780,13 +1853,12 @@ public class RecordManager {
                     logger.info("✅ Đã xóa bản ghi từ RocksDB: {}", storageKey);
                 }
     
-                // ✅ Xóa khỏi Lucene index
-                deleteFromIndex(appId, tableName, storageKey);
+                queueIndexDeleteForBatch(appId, tableName, storageKey);
             }
 
             for (String candidate : buildLegacyKeyCandidates(appId, tableName, canonicalKey)) {
                 if (candidate != null && !candidate.isBlank()) {
-                    deleteFromIndex(appId, tableName, candidate);
+                    queueIndexDeleteForBatch(appId, tableName, candidate);
                 }
             }
                 
@@ -1886,6 +1958,10 @@ public class RecordManager {
         LinkedHashSet<String> uniqueKeys = new LinkedHashSet<>();
         LinkedHashSet<String> staleKeys = new LinkedHashSet<>();
         String indexKey = appId + "_" + tableName;
+        if (!isFilterLuceneCompatible(appId, tableName, filters)) {
+            logger.warn("Rejected Lucene query using non-indexed field(s) for {}.{}; allowed fields are only fieldsSearch + id", appId, tableName);
+            return Collections.emptyList();
+        }
         // The original method signature had indexPath, but getSearcherManager only needs appId and tableName
         // Path indexPath = Paths.get(DIR_PATH, "lucene_index", appId, tableName); 
         IndexSearcher searcher = null; 
@@ -1899,28 +1975,66 @@ public class RecordManager {
             searcher = searcherManager.acquire(); 
             db = getDatabaseWithBloomFilter(appId, tableName);
 
-            Query query = buildLuceneQuery(filters); 
-            TopDocs docs = searcher.search(query, 10000);
+            Query query = buildLuceneQuery(filters);
+            ScoreDoc lastScoreDoc = null;
+            int fetchedDocs = 0;
+            int duplicateCount = 0;
+            int processedDocs = 0;
 
-            for (ScoreDoc scoreDoc : docs.scoreDocs) {
-                Document doc = searcher.doc(scoreDoc.doc);
-                String key = doc.get("_key");
-                if (key != null) {
+            while (true) {
+                TopDocs docs = (lastScoreDoc == null)
+                        ? searcher.search(query, MAX_LUCENE_SEARCH_HITS)
+                        : searcher.searchAfter(lastScoreDoc, query, MAX_LUCENE_SEARCH_HITS);
+
+                if (docs == null || docs.scoreDocs == null || docs.scoreDocs.length == 0) {
+                    break;
+                }
+
+                for (ScoreDoc scoreDoc : docs.scoreDocs) {
+                    processedDocs++;
+                    applySmartBackpressure(processedDocs);
+
+                    Document doc = searcher.doc(scoreDoc.doc);
+                    String key = doc.get("_key");
+                    if (key == null) {
+                        logger.warn("Document {} found without '_key' field in index {}.", scoreDoc.doc, indexKey);
+                        continue;
+                    }
+
                     try {
                         byte[] value = db.get(key.getBytes(StandardCharsets.UTF_8));
-                        if (value != null) {
-                            uniqueKeys.add(key);
-                        } else {
+                        if (value == null) {
                             staleKeys.add(key);
+                            continue;
                         }
                     } catch (Exception ex) {
                         logger.warn("Failed to verify RocksDB value for Lucene key {} in {}: {}", key, indexKey, ex.getMessage());
+                        continue;
                     }
-                } else {
-                    logger.warn("Document {} found without '_key' field in index {}.", scoreDoc.doc, indexKey);
+
+                    if (uniqueKeys.contains(key)) {
+                        // Lucene duplicate (_key) detected; keep newest by doc order and cleanup later.
+                        duplicateCount++;
+                        staleKeys.add(key);
+                    } else {
+                        uniqueKeys.add(key);
+                    }
+                }
+
+                fetchedDocs += docs.scoreDocs.length;
+                lastScoreDoc = docs.scoreDocs[docs.scoreDocs.length - 1];
+
+                if (docs.scoreDocs.length < MAX_LUCENE_SEARCH_HITS) {
+                    break;
+                }
+
+                if (fetchedDocs >= MAX_LUCENE_KEY_COLLECTION) {
+                    logger.warn("Lucene key collection reached safety limit {} for {}.{}, stopping additional searchAfter pages.",
+                            MAX_LUCENE_KEY_COLLECTION, appId, tableName);
+                    break;
                 }
             }
-            int duplicateCount = docs.scoreDocs.length - uniqueKeys.size();
+
             if (duplicateCount > 0) {
                 logger.warn("Detected {} duplicate Lucene docs (same _key) for {}.{}; auto-deduped query result.", duplicateCount, appId, tableName);
             }
@@ -1944,7 +2058,7 @@ public class RecordManager {
             List<String> keys = new ArrayList<>(uniqueKeys);
             // Ensure deterministic ordering across requests (independent of Lucene score/docId changes).
             keys.sort(RECORD_KEY_COMPARATOR_DESC);
-            logger.debug("Found {} keys {} in table {} for app {}.", keys.size(),keys, tableName, appId);
+            logger.debug("Found {} keys in table {} for app {}.", keys.size(), tableName, appId);
             return keys;
 
         } catch (IOException e) {
@@ -1966,7 +2080,7 @@ public class RecordManager {
         return Collections.emptyList();
     }
 
-    private List<String> scanMatchingKeysFromRocksDB(String appId, String tableName, SearchFilter filters, RocksDB db) {
+    private List<String> scanMatchingKeysFromRocksDB(String appId, String tableName, SearchFilter filters, RocksDB db, int maxKeys) {
         if (db == null) {
             return Collections.emptyList();
         }
@@ -1991,6 +2105,10 @@ public class RecordManager {
                     Map<String, Object> record = objectMapper.readValue(valueBytes, Map.class);
                     if (recordMatchesFilterObject(record, filters)) {
                         keys.add(key);
+                        if (keys.size() >= maxKeys) {
+                            logger.warn("Fallback RocksDB scan reached key cap {} for {}.{}", maxKeys, appId, tableName);
+                            break;
+                        }
                     }
                 } catch (Exception ex) {
                     logger.warn("Skip unreadable record during fallback scan for key {}: {}", key, ex.getMessage());
@@ -1999,6 +2117,30 @@ public class RecordManager {
             }
         } catch (Exception ex) {
             logger.error("Fallback RocksDB scan failed for {}.{}: {}", appId, tableName, ex.getMessage(), ex);
+        }
+
+        keys.sort(RECORD_KEY_COMPARATOR_DESC);
+        return keys;
+    }
+
+    private List<String> scanAllDataKeysFromRocksDB(RocksDB db) {
+        if (db == null) {
+            return Collections.emptyList();
+        }
+
+        List<String> keys = new ArrayList<>();
+        try (RocksIterator iterator = db.newIterator()) {
+            iterator.seekToFirst();
+            while (iterator.isValid()) {
+                String key = new String(iterator.key(), StandardCharsets.UTF_8);
+                if (!key.startsWith("__meta_")) {
+                    keys.add(key);
+                }
+                iterator.next();
+            }
+        } catch (Exception ex) {
+            logger.error("Direct RocksDB key scan failed: {}", ex.getMessage(), ex);
+            return Collections.emptyList();
         }
 
         keys.sort(RECORD_KEY_COMPARATOR_DESC);
@@ -2034,43 +2176,117 @@ public class RecordManager {
     }
 
     private List<String> searchKeysConsistent(String appId, String tableName, SearchFilter filters, RocksDB db) {
+        String metricKey = appId + "_" + tableName;
+        bumpMetric(luceneSearchTotal, metricKey);
+
+        if (isDirectRocksDbBypassFilter(filters)) {
+            logger.info("Bypass Lucene search for {}.{} due to single id like/prefix empty filter", appId, tableName);
+            List<String> directKeys = scanAllDataKeysFromRocksDB(db);
+            if (!directKeys.isEmpty()) {
+                bumpMetric(luceneSearchHit, metricKey);
+            } else {
+                bumpMetric(luceneSearchMiss, metricKey);
+            }
+            return directKeys;
+        }
+
+        if (!isFilterLuceneCompatible(appId, tableName, filters)) {
+            long rejected = bumpMetric(luceneSearchRejected, metricKey);
+            if (rejected % 200 == 1) {
+                logger.warn("Lucene compatibility reject stats for {}: rejected={} total={}", metricKey, rejected,
+                        luceneSearchTotal.get(metricKey) != null ? luceneSearchTotal.get(metricKey).longValue() : 0L);
+            }
+            return Collections.emptyList();
+        }
+
         List<String> keys = searchKeys(appId, tableName, filters);
         if (keys != null && !keys.isEmpty()) {
+            bumpMetric(luceneSearchHit, metricKey);
             return keys;
         }
 
-        List<String> fallbackKeys = scanMatchingKeysFromRocksDB(appId, tableName, filters, db);
+        bumpMetric(luceneSearchMiss, metricKey);
+
+        scheduleAsyncLuceneRebuild(appId, tableName);
+
+        // Tránh full-scan fallback cho truy vấn rộng để không gây áp lực heap trong request thread.
+        if (filters == null) {
+            logger.warn("Lucene miss on broad query for {}.{} - skipping fallback full scan", appId, tableName);
+            return Collections.emptyList();
+        }
+
+        Set<String> eqFields = collectEqFields(filters);
+        if (!eqFields.contains("id")) {
+            logger.warn("Lucene miss on non-id query for {}.{} - skipping fallback full scan", appId, tableName);
+            return Collections.emptyList();
+        }
+
+        List<String> fallbackKeys = scanMatchingKeysFromRocksDB(appId, tableName, filters, db, MAX_FALLBACK_SCAN_KEYS);
         if (!fallbackKeys.isEmpty()) {
-            // Only trigger ONE async full-table rebuild per table; skip if already scheduled.
-            String tableKey = appId + ":" + tableName;
-            tableRepairScheduled.putIfAbsent(tableKey, new java.util.concurrent.atomic.AtomicBoolean(false));
-            if (tableRepairScheduled.get(tableKey).compareAndSet(false, true)) {
-                logger.warn("Lucene miss for {}.{} — scheduling async full index rebuild.", appId, tableName);
-                repairExecutor.submit(() -> {
-                    try {
-                        rebuildFullLuceneIndex(appId, tableName, db);
-                    } catch (Exception ex) {
-                        logger.error("Async Lucene rebuild failed for {}.{}: {}", appId, tableName, ex.getMessage(), ex);
-                    } finally {
-                        tableRepairScheduled.get(tableKey).set(false);
-                    }
-                });
-            }
             return fallbackKeys;
         }
         return Collections.emptyList();
     }
 
+    private void scheduleAsyncLuceneRebuild(String appId, String tableName) {
+        if (shutdownInProgress.get() || repairExecutor.isShutdown()) {
+            return;
+        }
+
+        String tableKey = appId + ":" + tableName;
+        tableRepairScheduled.putIfAbsent(tableKey, new java.util.concurrent.atomic.AtomicBoolean(false));
+        if (tableRepairScheduled.get(tableKey).compareAndSet(false, true)) {
+            logger.warn("Lucene miss for {}.{} — scheduling async full index rebuild.", appId, tableName);
+            repairExecutor.submit(() -> {
+                try {
+                    if (shutdownInProgress.get()) {
+                        return;
+                    }
+                    rebuildFullLuceneIndex(appId, tableName);
+                } catch (Exception ex) {
+                    logger.error("Async Lucene rebuild failed for {}.{}: {}", appId, tableName, ex.getMessage(), ex);
+                } finally {
+                    tableRepairScheduled.get(tableKey).set(false);
+                }
+            });
+        }
+    }
+
     /** Rebuild the entire Lucene index for a table from RocksDB. Called async; must not block HTTP threads. */
-    private void rebuildFullLuceneIndex(String appId, String tableName, RocksDB db) {
-        if (db == null) return;
-        List<String> allKeys = new ArrayList<>();
+    private void rebuildFullLuceneIndex(String appId, String tableName) {
+        if (shutdownInProgress.get()) return;
+
+        RocksDB db;
+        try {
+            db = getDatabaseWithBloomFilter(appId, tableName);
+        } catch (Exception ex) {
+            logger.error("Failed to acquire RocksDB for Lucene rebuild of {}.{}: {}", appId, tableName, ex.getMessage(), ex);
+            return;
+        }
+
+        int scanned = 0;
+        int repaired = 0;
+        List<String> batchKeys = new ArrayList<>(REBUILD_REPAIR_BATCH_SIZE);
+
         try (RocksIterator iterator = db.newIterator()) {
             iterator.seekToFirst();
             while (iterator.isValid()) {
+                if (shutdownInProgress.get()) {
+                    return;
+                }
+
                 String key = new String(iterator.key(), java.nio.charset.StandardCharsets.UTF_8);
                 if (!key.startsWith("__meta_")) {
-                    allKeys.add(key);
+                    batchKeys.add(key);
+                    scanned++;
+                    if (batchKeys.size() >= REBUILD_REPAIR_BATCH_SIZE) {
+                        if (shutdownInProgress.get()) {
+                            return;
+                        }
+                        repairLuceneIndexForKeys(appId, tableName, batchKeys, db);
+                        repaired += batchKeys.size();
+                        batchKeys.clear();
+                    }
                 }
                 iterator.next();
             }
@@ -2078,15 +2294,27 @@ public class RecordManager {
             logger.error("Failed to iterate RocksDB for Lucene rebuild of {}.{}: {}", appId, tableName, ex.getMessage(), ex);
             return;
         }
-        logger.info("Starting full Lucene rebuild for {}.{}: {} records.", appId, tableName, allKeys.size());
-        repairLuceneIndexForKeys(appId, tableName, allKeys, db);
+
+        if (!batchKeys.isEmpty()) {
+            if (shutdownInProgress.get()) {
+                return;
+            }
+            repairLuceneIndexForKeys(appId, tableName, batchKeys, db);
+            repaired += batchKeys.size();
+            batchKeys.clear();
+        }
+
+        logger.info("Starting full Lucene rebuild for {}.{}: scanned={}, repaired={}", appId, tableName, scanned, repaired);
         try {
+            if (shutdownInProgress.get()) {
+                return;
+            }
             IndexWriter writer = getOrCreateSharedIndexWriter(appId, tableName);
             writer.commit();
             String indexKey = appId + "_" + tableName;
             SearcherManager sm = searcherManagerCache.get(indexKey);
             if (sm != null) sm.maybeRefresh();
-            logger.info("Full Lucene rebuild complete for {}.{}: {} records.", appId, tableName, allKeys.size());
+            logger.info("Full Lucene rebuild complete for {}.{}: repaired={} records.", appId, tableName, repaired);
         } catch (IOException ex) {
             logger.error("Failed to commit after Lucene rebuild for {}.{}: {}", appId, tableName, ex.getMessage(), ex);
         }
@@ -2702,6 +2930,7 @@ public class RecordManager {
     public Map<String, Object> find(String appId, String tableName, SearchFilter filter) {
         RocksDB db = null;
         RocksIterator iterator = null; // Khai báo iterator ở đây để đảm bảo nó được đóng trong finally
+        boolean scanPermitAcquired = false;
 
         try {
             db = getDatabaseWithBloomFilter(appId, tableName); // Giả định RocksDB instance đã sẵn sàng
@@ -2712,6 +2941,29 @@ public class RecordManager {
             if (pkRecord != null) {
                 return pkRecord;
             }
+
+            // Fast path cho lookup eq phổ biến (refresh/app_token/id) để tránh full-scan dưới tải cao.
+            Map<String, Object> directEqRecord = tryFindByDirectEqKey(db, appId, tableName, filter);
+            if (directEqRecord != null) {
+                return directEqRecord;
+            }
+
+            // Ưu tiên dùng key từ Lucene (nếu có) để chỉ đọc một vài bản ghi thay vì duyệt toàn bộ RocksDB.
+            Map<String, Object> luceneCandidateRecord = tryFindByLuceneKeyCandidates(appId, tableName, filter, db);
+            if (luceneCandidateRecord != null) {
+                return luceneCandidateRecord;
+            }
+
+            if (isStrictNoScanFindFilter(filter)) {
+                logger.warn("find() strict no-scan mode for {}.{} on auth/token field; skip RocksDB fallback scan", appId, tableName);
+                return Collections.emptyMap();
+            }
+
+            if (!findScanConcurrencyGuard.tryAcquire()) {
+                logger.warn("find() fallback scan throttled for {}.{} to protect heap under concurrent load", appId, tableName);
+                return Collections.emptyMap();
+            }
+            scanPermitAcquired = true;
     
             // Nếu không có primary key hoặc tìm theo PK không thấy/không khớp → dùng iterator cẩn thận
             iterator = db.newIterator(); // KHÔNG dùng CFH cho iterator
@@ -2722,24 +2974,33 @@ public class RecordManager {
             // bằng appId và tableName (ví dụ: "appId_tableName_your_key") và
             // recordMatchesFilterObject của bạn có thể lọc ra các bản ghi đúng.
             
-            while (iterator.isValid()) {
+            int scanned = 0;
+            long scannedBytes = 0L;
+            while (iterator.isValid() && scanned < MAX_FIND_SCAN_RECORDS) {
                 byte[] keyBytes = iterator.key();
                 byte[] valueBytes = iterator.value();
                 String currentKeyForLog = new String(keyBytes, StandardCharsets.UTF_8); // Để dùng cho logging
 
                 if (valueBytes != null) {
+                    scannedBytes += valueBytes.length;
+                    if (scannedBytes > MAX_FIND_SCAN_BYTES) {
+                        logger.warn("find() scan byte budget reached for {}.{} ({} bytes), stopping early to protect heap",
+                                appId, tableName, scannedBytes);
+                        break;
+                    }
                     try {
+                        if (valueBytes.length > MAX_SAFE_FIND_RECORD_BYTES) {
+                            logger.warn("Skip key '{}' in find() because record size {} exceeds safe find limit {} bytes",
+                                    currentKeyForLog, valueBytes.length, MAX_SAFE_FIND_RECORD_BYTES);
+                            iterator.next();
+                            scanned++;
+                            continue;
+                        }
+
                         // Sử dụng hàm deserializeValueToMap đã được cải tiến để xử lý lỗi kiểu dữ liệu
                         Map<String, Object> record = deserializeValueToMap(valueBytes, currentKeyForLog, tableName);
                         
                         if (record != null && recordMatchesFilterObject(record, filter)) {
-                            // Nếu tìm thấy và khớp, trả về ngay lập tức
-                            // Đảm bảo đóng iterator khi thoát sớm
-                            try {
-                                iterator.close();
-                            } catch (Exception closeEx) {
-                                logger.error("Error closing RocksIterator early for key {}: {}", currentKeyForLog, closeEx.getMessage());
-                            }
                             return record;
                         }
                     } catch (Exception ex) {
@@ -2749,6 +3010,12 @@ public class RecordManager {
                     }
                 }
                 iterator.next(); // Di chuyển đến bản ghi tiếp theo
+                scanned++;
+            }
+
+            if (scanned >= MAX_FIND_SCAN_RECORDS) {
+                logger.warn("find() scan limit reached for {}.{} ({} records). Preventing unbounded full scan under load.",
+                        appId, tableName, MAX_FIND_SCAN_RECORDS);
             }
             
             return Collections.emptyMap(); // Nếu duyệt hết mà không tìm thấy
@@ -2775,6 +3042,9 @@ public class RecordManager {
                     logger.error("Error closing RocksIterator in find's finally block: {}", e.getMessage());
                 }
             }
+            if (scanPermitAcquired) {
+                findScanConcurrencyGuard.release();
+            }
         }
     } 
     
@@ -2786,22 +3056,9 @@ public class RecordManager {
             if ("index".equalsIgnoreCase(tableName)) {
                 primaryKeys = List.of("id");
             } else {
-                SearchFilter filterI = new SearchFilter();
-                filterI.setField("id");
-                filterI.setType("eq");
-                filterI.setValue(tableName);
-
-                Map<String, Object> tableStruct = find(appId, "index", filterI);
-
-                if (tableStruct == null) {
-                    logger.error("Không tìm thấy cấu trúc bảng '{}' trong bảng 'index'.", tableName);
-                    throw new IllegalArgumentException("Không tìm thấy cấu trúc bảng: " + tableName);
-                }
-                Map<String, Object> structMap = (Map<String, Object>) tableStruct.get("struct");
-                primaryKeys = (List<String>) structMap.get("fieldsPK");
-                List<String> fieldsSearch = (List<String>) structMap.get("fieldsSearch");
+                primaryKeys = getTableSearchKeys(appId, tableName, "fieldsPK");
                 String jsonFilter = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(filter);
-                logger.info("Xem bảng {} với trường khoá chính là {} trường tìm kiếm {} trong {} xét filter {}",tableName, primaryKeys,fieldsSearch,map,jsonFilter);
+                logger.info("Xem bảng {} với trường khoá chính là {} trong {} xét filter {}", tableName, primaryKeys, map, jsonFilter);
 
                 // Build canonical primary key even if only one of the PK fields present
                 // Requirement: if at least one PK present, use it and set remaining PK fields to empty string
@@ -2863,19 +3120,8 @@ public class RecordManager {
                 return null;
             }
 
-            // get table structure to know primary key ordering
-            SearchFilter filterI = new SearchFilter();
-            filterI.setField("id");
-            filterI.setType("eq");
-            filterI.setValue(tableName);
-            Map<String, Object> tableStruct = find(appId, "index", filterI);
-            if (tableStruct == null) return null;
-            Map<String, Object> structMap = (Map<String, Object>) tableStruct.get("struct");
-            if (structMap == null) {
-                logger.debug("Missing struct metadata for {}.{}; skip primary-key variant lookup.", appId, tableName);
-                return null;
-            }
-            List<String> primaryKeys = (List<String>) structMap.get("fieldsPK");
+            // Use cached PK definition to avoid recursive metadata lookups in hot path.
+            List<String> primaryKeys = getTableSearchKeys(appId, tableName, "fieldsPK");
             if (primaryKeys == null || primaryKeys.isEmpty()) return null;
 
             // present-only keys
@@ -2930,13 +3176,103 @@ public class RecordManager {
         } else if ("eq".equalsIgnoreCase(filter.getType()) && filter.getField() != null) {
             result.put(filter.getField(), filter.getValue());
         }
-    }    
+    }
+
+    private Map<String, Object> tryFindByDirectEqKey(RocksDB db, String appId, String tableName, SearchFilter filter) {
+        if (db == null) return null;
+
+        SearchFilter leaf = unwrapSingleLeafCondition(filter);
+        if (leaf == null || leaf.getField() == null || leaf.getType() == null) {
+            return null;
+        }
+        if (!"eq".equalsIgnoreCase(leaf.getType().trim())) {
+            return null;
+        }
+
+        String field = leaf.getField().trim();
+        boolean supportedField = "id".equals(field)
+                || "app_token".equals(field)
+                || "refresh".equals(field)
+                || "refresh_token".equals(field);
+        if (!supportedField) {
+            return null;
+        }
+
+        Object rawValue = leaf.getValue();
+        if (rawValue == null) return null;
+        String value = String.valueOf(rawValue).trim();
+        if (value.isEmpty()) return null;
+
+        String base = urlEncode(value);
+        List<String> candidates = List.of(base, tableName + "_" + base, appId + "_" + tableName + "_" + base);
+        for (String key : candidates) {
+            try {
+                byte[] valueBytes = db.get(key.getBytes(StandardCharsets.UTF_8));
+                if (valueBytes == null) {
+                    continue;
+                }
+                if (valueBytes.length > MAX_SAFE_FIND_RECORD_BYTES) {
+                    logger.warn("Skip direct find key '{}' because record size {} exceeds safe find limit {} bytes", key,
+                            valueBytes.length, MAX_SAFE_FIND_RECORD_BYTES);
+                    continue;
+                }
+                Map<String, Object> record = deserializeValueToMap(valueBytes, key, tableName);
+                if (record != null && recordMatchesFilterObject(record, filter)) {
+                    return record;
+                }
+            } catch (Exception ex) {
+                logger.debug("Direct eq lookup failed for candidate key {}: {}", key, ex.getMessage());
+            }
+        }
+        return null;
+    }
+
+    private Map<String, Object> tryFindByLuceneKeyCandidates(String appId, String tableName, SearchFilter filter, RocksDB db) {
+        SearchFilter leaf = unwrapSingleLeafCondition(filter);
+        if (leaf == null || leaf.getType() == null || !"eq".equalsIgnoreCase(leaf.getType().trim())) {
+            return null;
+        }
+
+        try {
+            List<String> keys = searchKeysConsistent(appId, tableName, filter, db);
+            if (keys == null || keys.isEmpty()) {
+                return null;
+            }
+
+            int maxKeysToCheck = Math.min(20, keys.size());
+            for (int i = 0; i < maxKeysToCheck; i++) {
+                String key = keys.get(i);
+                if (key == null || key.isBlank()) continue;
+
+                byte[] valueBytes = db.get(key.getBytes(StandardCharsets.UTF_8));
+                if (valueBytes == null) continue;
+                if (valueBytes.length > MAX_SAFE_FIND_RECORD_BYTES) {
+                    logger.warn("Skip Lucene candidate key '{}' because record size {} exceeds safe find limit {} bytes", key,
+                            valueBytes.length, MAX_SAFE_FIND_RECORD_BYTES);
+                    continue;
+                }
+
+                Map<String, Object> record = deserializeValueToMap(valueBytes, key, tableName);
+                if (record != null && recordMatchesFilterObject(record, filter)) {
+                    return record;
+                }
+            }
+        } catch (Exception ex) {
+            logger.warn("Lucene-assisted find failed for {}.{}: {}", appId, tableName, ex.getMessage());
+        }
+
+        return null;
+    }
     
     public Map<String, Object> filter(String appId, String tableName, SearchFilter searchFilter) {
         List<Map<String, Object>> results = new ArrayList<>();
         Set<String> seenDedupKeys = new HashSet<>();
         RocksDB db = null;
         long totalCount = 0L; // Tổng số bản ghi, nếu có metadata
+        long filteredCount = 0L;
+        boolean truncated = false;
+        String nextCursor = null;
+        long payloadBytes = 0L;
     
         try {
             // Lấy RocksDB instance từ RocksDBManager hoặc phương thức quản lý DB của bạn
@@ -2947,6 +3283,13 @@ public class RecordManager {
                 // Đây là một lỗi nghiêm trọng, nên throw một ngoại lệ rõ ràng hơn
                 // để caller có thể bắt hoặc để Spring xử lý.
                 throw new IllegalStateException("Không thể lấy RocksDB instance cho bảng: " + tableName + ". Vui lòng kiểm tra cấu hình hoặc quyền truy cập.");
+            }
+
+            // Truy vấn chỉ có 1 điều kiện like rỗng nghĩa là lấy toàn bộ dữ liệu:
+            // dùng đường RocksDB trực tiếp để tránh chi phí Lucene + allKeys trên RAM.
+            if (searchFilter == null || isDirectRocksDbBypassFilter(searchFilter)) {
+                logger.info("Bypass Lucene in filter() for {}.{} due to full-fetch like-empty condition", appId, tableName);
+                return filterWithPaginationNoFilter(appId, tableName, null, null, db);
             }
     
             // --- BẮT ĐẦU ĐỌC TỔNG SỐ BẢN GHI (Metadata) ---
@@ -2975,21 +3318,35 @@ public class RecordManager {
                 logger.debug("Không tìm thấy key nào phù hợp cho appId: {}, tableName: {}, filter: {}", appId, tableName, searchFilter);
                 return Map.of(
                     "rows", Collections.emptyList(),
-                    "totalCount", totalCount // Giữ lại totalCount từ metadata nếu không có kết quả lọc
+                    "totalCount", totalCount,
+                    "nextCursor", null,
+                    "truncated", false
                 );
             }
+            filteredCount = allKeys.size();
             // --- KẾT THÚC TÌM KIẾM CÁC KEY PHÙ HỢP ---
     
             // --- BẮT ĐẦU ĐỌC DỮ LIỆU TỪ ROCKSDB SỬ DỤNG ITERATOR (hoặc get từng key) ---
             // Có thể dùng db.multiGet() để đọc nhiều key hiệu quả hơn nếu số lượng key lớn
             // và RocksDB phiên bản của bạn hỗ trợ tốt multiGet với Bloom Filter.
             // Hiện tại, giữ nguyên logic đọc từng key như bản gốc của bạn.
-            for (String key : allKeys) {
+            int safeLimit = allKeys.size();
+            for (int i = 0; i < safeLimit; i++) {
+                applySmartBackpressure(i + 1);
+                String key = allKeys.get(i);
                 try {
                     // LỖI SIGSEGV CỦA BẠN SẼ XẢY RA TRONG HÀM db.get() NÀY.
                     // try-catch này sẽ bắt được RocksDBException, nhưng không bắt được SIGSEGV.
                     byte[] valueBytes = db.get(key.getBytes(StandardCharsets.UTF_8));
                     if (valueBytes != null) {
+                        if (!results.isEmpty() && payloadBytes + valueBytes.length > MAX_RESPONSE_PAYLOAD_BYTES) {
+                            truncated = true;
+                            nextCursor = key;
+                            logger.warn("Filter result truncated by payload budget for {}.{} ({} bytes)", appId, tableName, MAX_RESPONSE_PAYLOAD_BYTES);
+                            break;
+                        }
+                        payloadBytes += valueBytes.length;
+
                         // Deserialize dữ liệu JSON thành Map
                         Map<String, Object> record = objectMapper.readValue(valueBytes, Map.class);
                         String dedupKey = buildRecordDedupKey(appId, tableName, record, key);
@@ -3007,6 +3364,14 @@ public class RecordManager {
                 } catch (Exception ex) { // Bắt các ngoại lệ khác (general catch-all, nên tránh nếu có thể)
                     logger.warn("Lỗi không xác định khi xử lý key '{}' (appId: {}, tableName: {}): {}", key, appId, tableName, ex.getMessage());
                 }
+            }
+
+            if (allKeys.size() >= MAX_LUCENE_KEY_COLLECTION) {
+                truncated = true;
+                if (nextCursor == null && !allKeys.isEmpty()) {
+                    nextCursor = allKeys.get(allKeys.size() - 1);
+                }
+                logger.warn("Filter may be incomplete due to Lucene key safety limit {} for {}.{}", MAX_LUCENE_KEY_COLLECTION, appId, tableName);
             }
             // --- KẾT THÚC ĐỌC DỮ LIỆU TỪ ROCKSDB ---
     
@@ -3046,7 +3411,9 @@ public class RecordManager {
         // Nếu "totalCount" là tổng số bản ghi TRONG TOÀN BỘ DB (trước khi phân trang/lọc),
         // thì dùng biến totalCount đã đọc từ metadata.
         // Nếu "totalCount" là tổng số bản ghi ĐÃ LỌC, thì dùng results.size().
-        result.put("totalCount", (long) results.size()); // Tổng số bản ghi thực tế của kết quả ĐÃ LỌC
+        result.put("totalCount", filteredCount);
+        result.put("truncated", truncated);
+        result.put("nextCursor", nextCursor);
         // Hoặc: result.put("totalCount", totalCount); // Tổng số bản ghi TỪ METADATA (nếu có)
         return result;
     }
@@ -3104,6 +3471,8 @@ public class RecordManager {
         Set<String> seenDedupKeys = new HashSet<>();
         String nextCursor = null;
         long totalCount = 0;
+        long payloadBytes = 0L;
+        boolean truncatedByPayload = false;
         RocksDB db = null;
         RocksIterator iterator = null;
 
@@ -3114,6 +3483,14 @@ public class RecordManager {
             if (db == null) {
                 // Nếu RocksDBManager không thể mở DB, throw một ngoại lệ rõ ràng hơn.
                 throw new IllegalStateException("Không thể lấy RocksDB instance cho bảng: " + tableName + ". Vui lòng kiểm tra cấu hình hoặc quyền truy cập.");
+            }
+
+            // Fast path cho truy vấn không có filter hoặc id like/prefix rỗng: tránh tạo allKeys trong RAM.
+            if (searchFilter == null || isDirectRocksDbBypassFilter(searchFilter)) {
+                if (searchFilter != null) {
+                    logger.info("Bypass Lucene for {}.{} with single id like/prefix empty filter; using direct RocksDB pagination path", appId, tableName);
+                }
+                return filterWithPaginationNoFilter(appId, tableName, take, lastKey, db);
             }
 
             // --- BẮT ĐẦU TÌM KIẾM CÁC KEY PHÙ HỢP ---
@@ -3205,6 +3582,13 @@ public class RecordManager {
                     if (iterator.isValid() && new String(iterator.key(), StandardCharsets.UTF_8).equals(key)) {
                         byte[] valueBytes = iterator.value();
                         if (valueBytes != null) {
+                            if (!rows.isEmpty() && payloadBytes + valueBytes.length > MAX_RESPONSE_PAYLOAD_BYTES) {
+                                truncatedByPayload = true;
+                                logger.warn("Paginated result truncated by payload budget for {}.{} ({} bytes)", appId, tableName, MAX_RESPONSE_PAYLOAD_BYTES);
+                                break;
+                            }
+                            payloadBytes += valueBytes.length;
+
                             // Deserialize dữ liệu JSON thành Map
                             Map<String, Object> record = objectMapper.readValue(valueBytes, Map.class);
                             String dedupKey = buildRecordDedupKey(appId, tableName, record, key);
@@ -3278,9 +3662,111 @@ public class RecordManager {
         result.put("rows", rows);
         result.put("totalCount", totalCount);
         result.put("nextCursor", nextCursor);
+        result.put("truncated", truncatedByPayload);
         
         logger.info("✅ filterWithPagination RESULT: Retrieved {} rows, totalCount = {}, hasMore = {}, nextCursor = {}", 
             rows.size(), totalCount, (nextCursor != null), nextCursor);
+        return result;
+    }
+
+    private Map<String, Object> filterWithPaginationNoFilter(
+        String appId,
+        String tableName,
+        Integer take,
+        String lastKey,
+        RocksDB db
+    ) {
+        List<Map<String, Object>> rows = new ArrayList<>();
+        Set<String> seenDedupKeys = new HashSet<>();
+        long totalCount = 0L;
+        String nextCursor = null;
+        long payloadBytes = 0L;
+        boolean truncatedByPayload = false;
+
+        boolean unlimited = (take == null || take <= 0) && (lastKey == null || lastKey.isEmpty());
+        int requestedTake = (take != null && take > 0) ? take : DEFAULT_FILTER_TAKE;
+        int numToTake = unlimited ? Integer.MAX_VALUE : Math.min(requestedTake, MAX_FILTER_TAKE);
+
+        boolean startCollecting = (lastKey == null || lastKey.isEmpty());
+        boolean cursorFoundByMatch = false;
+        int eligibleIndex = 0;
+        int scanned = 0;
+
+        RocksIterator iterator = null;
+        try {
+            iterator = db.newIterator();
+            iterator.seekToLast();
+
+            while (iterator.isValid()) {
+                scanned++;
+                applySmartBackpressure(scanned);
+
+                String key = new String(iterator.key(), StandardCharsets.UTF_8);
+                if (!key.startsWith("__meta_")) {
+                    totalCount++;
+
+                    if (!startCollecting) {
+                        if (key.equals(lastKey)) {
+                            startCollecting = true;
+                            cursorFoundByMatch = true;
+                        } else if (RECORD_KEY_COMPARATOR_DESC.compare(key, lastKey) >= 0) {
+                            // Khi lastKey bị thiếu do dữ liệu thay đổi, bắt đầu từ vị trí chèn gần nhất.
+                            startCollecting = true;
+                        }
+                    }
+
+                    if (startCollecting) {
+                        if (eligibleIndex < numToTake) {
+                            try {
+                                byte[] valueBytes = iterator.value();
+                                if (valueBytes != null) {
+                                    if (!rows.isEmpty() && payloadBytes + valueBytes.length > MAX_RESPONSE_PAYLOAD_BYTES) {
+                                        truncatedByPayload = true;
+                                        nextCursor = key;
+                                        break;
+                                    }
+                                    payloadBytes += valueBytes.length;
+
+                                    Map<String, Object> record = objectMapper.readValue(valueBytes, Map.class);
+                                    String dedupKey = buildRecordDedupKey(appId, tableName, record, key);
+                                    if (seenDedupKeys.add(dedupKey)) {
+                                        rows.add(record);
+                                    }
+                                }
+                            } catch (Exception ex) {
+                                logger.warn("Lỗi deserialize dữ liệu cho key '{}': {}", key, ex.getMessage());
+                            }
+                        } else if (nextCursor == null) {
+                            nextCursor = key;
+                        }
+                        eligibleIndex++;
+                    }
+                }
+
+                iterator.prev();
+            }
+
+            if (lastKey != null && !lastKey.isEmpty() && !cursorFoundByMatch && rows.isEmpty()) {
+                logger.warn("Cursor '{}' không còn tồn tại trong {}.{}; trả về trang rỗng.", lastKey, appId, tableName);
+            }
+
+        } finally {
+            if (iterator != null) {
+                try {
+                    iterator.close();
+                } catch (Exception e) {
+                    logger.warn("Lỗi khi đóng RocksIterator: {}", e.getMessage());
+                }
+            }
+        }
+
+        rows.sort(RECORD_ROW_COMPARATOR_DESC);
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("rows", rows);
+        result.put("totalCount", totalCount);
+        result.put("nextCursor", nextCursor);
+        result.put("truncated", truncatedByPayload);
         return result;
     }
 
@@ -3313,6 +3799,53 @@ public class RecordManager {
             db = getDatabaseWithBloomFilter(appId, tableName);
             if (db == null) {
                 throw new IllegalStateException("Không thể lấy RocksDB instance cho bảng: " + tableName);
+            }
+
+            if (isDirectRocksDbBypassFilter(searchFilter)) {
+                int startIndex = Math.max(0, offset);
+                int safeLimit = Math.max(0, limit);
+                int endIndex = startIndex + safeLimit;
+                int eligibleIndex = 0;
+
+                iterator = db.newIterator();
+                iterator.seekToLast();
+                while (iterator.isValid()) {
+                    String key = new String(iterator.key(), StandardCharsets.UTF_8);
+                    if (!key.startsWith("__meta_")) {
+                        totalCount++;
+
+                        if (eligibleIndex >= startIndex && eligibleIndex < endIndex) {
+                            try {
+                                byte[] valueBytes = iterator.value();
+                                if (valueBytes != null) {
+                                    Map<String, Object> record = objectMapper.readValue(valueBytes, Map.class);
+                                    String dedupKey = buildRecordDedupKey(appId, tableName, record, key);
+                                    if (seenDedupKeys.add(dedupKey)) {
+                                        rows.add(record);
+                                        if (pageCursor == null) {
+                                            pageCursor = key;
+                                        }
+                                    }
+                                }
+                            } catch (Exception ex) {
+                                logger.warn("Lỗi khi đọc dữ liệu cho key '{}' ở direct offset path: {}", key, ex.getMessage());
+                            }
+                        } else if (eligibleIndex == endIndex && nextCursor == null) {
+                            nextCursor = key;
+                        }
+
+                        eligibleIndex++;
+                    }
+                    iterator.prev();
+                }
+
+                Map<String, Object> directResult = new HashMap<>();
+                rows.sort(RECORD_ROW_COMPARATOR_DESC);
+                directResult.put("rows", rows);
+                directResult.put("totalCount", totalCount);
+                directResult.put("nextCursor", nextCursor);
+                directResult.put("pageCursor", pageCursor);
+                return directResult;
             }
 
             // Lấy tất cả key đã lọc theo searchFilter

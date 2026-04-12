@@ -1,7 +1,6 @@
 package net.phanmemmottrieu.socket;
 import net.phanmemmottrieu.data.ChatHistoryManager;
-import net.phanmemmottrieu.data.ChatActivityTracker;
-import net.phanmemmottrieu.data.ChatRoomManager;
+
 
 import com.corundumstudio.socketio.SocketIOServer;
 import com.corundumstudio.socketio.SocketIOClient;
@@ -65,8 +64,12 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
     private volatile boolean isServerRunning = false;
 
     private final Map<String, Set<UUID>> roomSessions = new ConcurrentHashMap<>();
+    private final Map<UUID, Set<String>> sessionRooms = new ConcurrentHashMap<>();
     private final Map<UUID, String> sessionUsernames = new ConcurrentHashMap<>();
+    private final Map<UUID, String> sessionUserIds = new ConcurrentHashMap<>();
     private final Map<UUID, String> sessionAppIds = new ConcurrentHashMap<>();
+    private final Map<UUID, Boolean> sessionPortalFlags = new ConcurrentHashMap<>();
+    private final Map<String, Long> userLastSeenByAppAndUser = new ConcurrentHashMap<>();
     private static final Logger logger = LoggerFactory.getLogger(SocketIOConfig.class);
 
     @Autowired
@@ -90,12 +93,25 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
     private final Map<String, ScheduledFuture<?>> pendingGuestNoReplyTasks = new ConcurrentHashMap<>();
     private final Map<UUID, String> sessionGuestPhones = new ConcurrentHashMap<>();
     private final Map<UUID, String> sessionGuestSessionIds = new ConcurrentHashMap<>();
-    private static final String POLITE_GENERIC_WELCOME = "Xin chao anh/chị, em rat vui duoc ho tro. Anh/chị vui long cho em biet nhu cau dang quan tam va cach lien he de ben em tu van nhanh va chinh xac hon a.";
+    private final Map<String, String> guestIdentityByAppAndPhone = new ConcurrentHashMap<>();
+    private final Map<UUID, Boolean> sessionAdminFlags = new ConcurrentHashMap<>();
+    private final Map<String, String> appSupportDisplayNames = new ConcurrentHashMap<>();
+    // Track when welcomes were sent to app+phone combinations to prevent duplicates across identity resolution changes
+    private final Map<String, Long> welcomeTimestampByAppPhone = new ConcurrentHashMap<>();
+    // Track welcome timestamps by app+guestIdentity (for guests without phone) to prevent repeated auto-welcome
+    private final Map<String, Long> welcomeTimestampByGuestKey = new ConcurrentHashMap<>();
+    // Keep auto-sent backend messages in memory until guest replies, then persist to DB.
+    private final Map<String, java.util.List<ChatMessage>> pendingAutoMessagesByGuest = new ConcurrentHashMap<>();
+    private final Map<String, Long> pendingAutoMessagesUpdatedAt = new ConcurrentHashMap<>();
+    private static final String POLITE_GENERIC_WELCOME = "Chao anh/chị, em la tu van vien ho tro. Anh/chị dang quan tam thong tin nao de em ho tro nhanh va dung nhu cau a? Neu thuan tien, anh/chị de lai so dien thoai hoac Zalo de ben em lien he lai.";
+    private static final long CHAT_RECALL_WINDOW_MS = 2 * 60 * 1000L;
 
-    private static final long AI_FOLLOWUP_DELAY_MS = 60_000L;
-    private static final long AUTO_WELCOME_SUPPRESSION_WINDOW_MS = 3 * 60_000L;
+    private static final long AUTO_WELCOME_DELAY_MS = 60_000L;
+    private static final long AUTO_WELCOME_COOLDOWN_MS = 24 * 60 * 60 * 1000L;
+    private static final long PENDING_AUTO_MESSAGE_TTL_MS = 6 * 60 * 60 * 1000L;
+    private static final int MAX_PENDING_AUTO_MESSAGES_PER_GUEST = 3;
     private static final String AI_ASSISTANT_USER_ID = "ai_assistant";
-    private static final String AI_ASSISTANT_USERNAME = "Tu van vien";
+    private static final String DEFAULT_SUPPORT_USERNAME = "Tu van vien";
 
     // Extract appId from room patterns: guest:{appId};{phone}, app:{appId}, user:{appId};..., private:{appId};...
     private String parseAppIdFromRoom(String room) {
@@ -120,6 +136,76 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
         return (appId == null ? "" : appId.trim()) + "::" + (guestIdentity == null ? "" : guestIdentity.trim());
     }
 
+    private String appPhoneKey(String appId, String guestPhone) {
+        String normalizedPhone = normalizeGuestPhone(guestPhone);
+        if (appId == null || appId.isBlank() || normalizedPhone == null || normalizedPhone.isBlank()) {
+            return null;
+        }
+        return appId.trim() + "::" + normalizedPhone;
+    }
+
+    private String normalizeGuestPhone(String guestPhone) {
+        if (guestPhone == null) {
+            return null;
+        }
+        String trimmed = guestPhone.trim();
+        if (trimmed.isEmpty()) {
+            return null;
+        }
+        String digits = trimmed.replaceAll("[^\\d+]", "");
+        if (digits.isEmpty()) {
+            return null;
+        }
+        if (digits.startsWith("++")) {
+            digits = digits.replaceFirst("^\\++", "+");
+        }
+        return digits;
+    }
+
+    private boolean looksLikePhone(String value) {
+        return value != null && value.trim().matches("^\\+?\\d[\\d\\s\\-]{7,}$");
+    }
+
+    private String buildAnonymousGuestIdentity(UUID sessionId) {
+        if (sessionId == null) {
+            return "guest_anonymous";
+        }
+        String compact = sessionId.toString().replace("-", "");
+        String suffix = compact.length() > 16 ? compact.substring(0, 16) : compact;
+        return "guest_" + suffix;
+    }
+
+    private void rememberGuestPhoneIdentity(String appId, String guestPhone, String guestIdentity) {
+        String key = appPhoneKey(appId, guestPhone);
+        if (key == null || guestIdentity == null || guestIdentity.isBlank()) {
+            return;
+        }
+        guestIdentityByAppAndPhone.put(key, guestIdentity.trim());
+    }
+
+    private String resolveCanonicalGuestIdentity(String appId, String guestSessionId, String guestPhone, UUID sessionId) {
+        String fromPayload = guestSessionId == null ? "" : guestSessionId.trim();
+        if (!fromPayload.isBlank() && !looksLikePhone(fromPayload)) {
+            return fromPayload;
+        }
+
+        String mappedByPhone = null;
+        String phoneKey = appPhoneKey(appId, guestPhone);
+        if (phoneKey != null) {
+            mappedByPhone = guestIdentityByAppAndPhone.get(phoneKey);
+            if (mappedByPhone != null && !mappedByPhone.isBlank()) {
+                return mappedByPhone.trim();
+            }
+        }
+
+        String fromSession = sessionId == null ? null : sessionGuestSessionIds.get(sessionId);
+        if (fromSession != null && !fromSession.isBlank()) {
+            return fromSession.trim();
+        }
+
+        return buildAnonymousGuestIdentity(sessionId);
+    }
+
     private String firstNonBlank(String... values) {
         for (String value : values) {
             if (value != null && !value.isBlank()) {
@@ -127,6 +213,209 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
             }
         }
         return null;
+    }
+
+    private String presenceKey(String appId, String userId) {
+        if (appId == null || appId.isBlank() || userId == null || userId.isBlank()) {
+            return null;
+        }
+        return appId.trim() + "::" + userId.trim();
+    }
+
+    private boolean isPortalUserOnline(String appId, String userId, UUID excludeSessionId) {
+        if (appId == null || appId.isBlank() || userId == null || userId.isBlank()) {
+            return false;
+        }
+        for (Map.Entry<UUID, String> entry : sessionUserIds.entrySet()) {
+            UUID sid = entry.getKey();
+            if (excludeSessionId != null && excludeSessionId.equals(sid)) {
+                continue;
+            }
+            String sidUserId = entry.getValue();
+            if (sidUserId == null || !sidUserId.equals(userId)) {
+                continue;
+            }
+            if (!appId.equals(sessionAppIds.get(sid))) {
+                continue;
+            }
+            if (!Boolean.TRUE.equals(sessionPortalFlags.get(sid))) {
+                continue;
+            }
+            return true;
+        }
+        return false;
+    }
+
+    private boolean isPortalUsernameOnline(String appId, String username, UUID excludeSessionId) {
+        if (appId == null || appId.isBlank() || username == null || username.isBlank()) {
+            return false;
+        }
+        String target = username.trim();
+        for (Map.Entry<UUID, String> entry : sessionUsernames.entrySet()) {
+            UUID sid = entry.getKey();
+            if (excludeSessionId != null && excludeSessionId.equals(sid)) {
+                continue;
+            }
+            String sidUsername = entry.getValue();
+            if (sidUsername == null || !sidUsername.trim().equalsIgnoreCase(target)) {
+                continue;
+            }
+            if (!appId.equals(sessionAppIds.get(sid))) {
+                continue;
+            }
+            if (!Boolean.TRUE.equals(sessionPortalFlags.get(sid))) {
+                continue;
+            }
+            return true;
+        }
+        return false;
+    }
+
+    private void emitUserPresenceChanged(String appId, String userId, String username, boolean online, Long lastSeenAt) {
+        if (appId == null || appId.isBlank() || userId == null || userId.isBlank()) {
+            return;
+        }
+        try {
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("appId", appId.trim());
+            payload.put("userId", userId.trim());
+            payload.put("username", firstNonBlank(username, "User"));
+            payload.put("online", online);
+            payload.put("lastSeenAt", lastSeenAt == null ? 0L : lastSeenAt);
+            server.getRoomOperations("app:" + appId.trim()).sendEvent("chat_user_presence", payload);
+        } catch (Exception e) {
+            logger.warn("Failed to emit chat_user_presence appId={} userId={}: {}", appId, userId, e.getMessage());
+        }
+    }
+
+    private void onPortalUserOnline(UUID sessionId, String appId, String userId, String username) {
+        if (sessionId == null || appId == null || appId.isBlank() || userId == null || userId.isBlank()) {
+            return;
+        }
+        boolean hadOtherOnlineSession = isPortalUserOnline(appId, userId, sessionId);
+        String key = presenceKey(appId, userId);
+        if (key != null) {
+            userLastSeenByAppAndUser.put(key, System.currentTimeMillis());
+        }
+        if (!hadOtherOnlineSession) {
+            emitUserPresenceChanged(appId, userId, username, true, 0L);
+        }
+    }
+
+    private void onPortalUserOffline(String appId, String userId, String username) {
+        if (appId == null || appId.isBlank() || userId == null || userId.isBlank()) {
+            return;
+        }
+        boolean stillOnline = isPortalUserOnline(appId, userId, null);
+        if (stillOnline) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        String key = presenceKey(appId, userId);
+        if (key != null) {
+            userLastSeenByAppAndUser.put(key, now);
+        }
+        emitUserPresenceChanged(appId, userId, username, false, now);
+    }
+
+    private String resolveSupportDisplayName(String appId) {
+        String remembered = appSupportDisplayNames.get(appId);
+        if (isSafeSupportDisplayName(remembered)) {
+            return remembered.trim();
+        }
+
+        String appRoom = "app:" + appId;
+        Set<UUID> sessions = roomSessions.get(appRoom);
+        if (sessions != null && !sessions.isEmpty()) {
+            for (UUID sid : sessions) {
+                if (!Boolean.TRUE.equals(sessionAdminFlags.get(sid))) {
+                    continue;
+                }
+                String username = sessionUsernames.get(sid);
+                if (isSafeSupportDisplayName(username)) {
+                    String normalized = username.trim();
+                    appSupportDisplayNames.put(appId, normalized);
+                    return normalized;
+                }
+            }
+        }
+
+        return DEFAULT_SUPPORT_USERNAME;
+    }
+
+    private void pushAdminChatHistorySnapshot(SocketIOClient client, String appId, int limit) {
+        if (client == null || appId == null || appId.isBlank()) {
+            return;
+        }
+
+        try {
+            var history = ChatHistoryManager.getHistoryByAppId(appId.trim(), limit);
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("appId", appId.trim());
+            payload.put("limit", limit);
+            payload.put("timestamp", System.currentTimeMillis());
+            payload.put("messages", history);
+            client.sendEvent("chat_history_app_snapshot", payload);
+            logger.info("📦 Sent admin chat snapshot appId={} size={} session={}", appId, history.size(), client.getSessionId());
+        } catch (Exception e) {
+            logger.error("❌ Failed to send admin chat snapshot for appId {}: {}", appId, e.getMessage(), e);
+        }
+    }
+
+    private boolean isSafeSupportDisplayName(String username) {
+        if (username == null) {
+            return false;
+        }
+
+        String normalized = username.trim();
+        if (normalized.isBlank() || normalized.length() < 2 || normalized.length() > 40) {
+            return false;
+        }
+
+        String folded = Normalizer.normalize(normalized, Normalizer.Form.NFD)
+                .replaceAll("\\p{M}+", "")
+                .toLowerCase(Locale.ROOT);
+
+        boolean hasEmailPattern = folded.contains("@");
+        boolean hasPhonePattern = normalized.matches("^\\+?\\d[\\d\\s\\-.]{7,}$");
+        boolean hasUuidPattern = normalized.matches("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$");
+        boolean isTechnicalToken = folded.contains("admin")
+                || folded.contains("root")
+                || folded.contains("system")
+                || folded.contains("bot")
+                || folded.contains("support")
+                || folded.contains("test")
+                || folded.contains("dev")
+                || folded.contains("staging")
+                || folded.contains("prod");
+
+        return !(hasEmailPattern || hasPhonePattern || hasUuidPattern || isTechnicalToken);
+    }
+
+    private void trackSessionRoom(UUID sessionId, String room) {
+        if (sessionId == null || room == null || room.isBlank()) return;
+        roomSessions.computeIfAbsent(room, r -> new CopyOnWriteArraySet<>()).add(sessionId);
+        sessionRooms.computeIfAbsent(sessionId, s -> new CopyOnWriteArraySet<>()).add(room);
+    }
+
+    private void untrackSessionRooms(UUID sessionId, String username) {
+        Set<String> rooms = sessionRooms.remove(sessionId);
+        if (rooms == null || rooms.isEmpty()) return;
+
+        for (String room : rooms) {
+            Set<UUID> sessions = roomSessions.get(room);
+            if (sessions == null) continue;
+
+            boolean removed = sessions.remove(sessionId);
+            if (removed && username != null) {
+                logger.info("❌ User {} left room {}", username, room);
+                server.getRoomOperations(room).sendEvent("user_left", username);
+            }
+
+            if (sessions.isEmpty()) {
+                roomSessions.remove(room, sessions);
+            }
+        }
     }
 
     private void cancelGuestWelcomeTask(String appId, String guestIdentity) {
@@ -143,6 +432,130 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
         if (future != null) {
             future.cancel(false);
         }
+    }
+
+    private void queuePendingAutoMessage(String appId, String guestIdentity, ChatMessage autoMessage) {
+        if (appId == null || appId.isBlank() || guestIdentity == null || guestIdentity.isBlank() || autoMessage == null) {
+            return;
+        }
+
+        String key = guestKey(appId, guestIdentity);
+        java.util.List<ChatMessage> queue = pendingAutoMessagesByGuest.computeIfAbsent(key, k -> new java.util.ArrayList<>());
+        synchronized (queue) {
+            if (queue.size() >= MAX_PENDING_AUTO_MESSAGES_PER_GUEST) {
+                queue.remove(0);
+            }
+            queue.add(autoMessage);
+        }
+        pendingAutoMessagesUpdatedAt.put(key, System.currentTimeMillis());
+    }
+
+    private void flushPendingAutoMessagesOnGuestReply(String appId, String guestIdentity) {
+        if (appId == null || appId.isBlank() || guestIdentity == null || guestIdentity.isBlank()) {
+            return;
+        }
+
+        String key = guestKey(appId, guestIdentity);
+        java.util.List<ChatMessage> queue = pendingAutoMessagesByGuest.remove(key);
+        pendingAutoMessagesUpdatedAt.remove(key);
+
+        if (queue == null || queue.isEmpty()) {
+            return;
+        }
+
+        java.util.List<ChatMessage> toPersist;
+        synchronized (queue) {
+            toPersist = new java.util.ArrayList<>(queue);
+            queue.clear();
+        }
+
+        toPersist.sort((a, b) -> Long.compare(
+                a.getTimestamp() == null ? 0L : a.getTimestamp(),
+                b.getTimestamp() == null ? 0L : b.getTimestamp()
+        ));
+
+        int saved = 0;
+        for (ChatMessage msg : toPersist) {
+            try {
+                chatPersistenceService.saveMessage(msg);
+                saved++;
+            } catch (Exception e) {
+                logger.warn("Failed to persist buffered auto message for key {}: {}", key, e.getMessage());
+            }
+        }
+
+        if (saved > 0) {
+            logger.info("💾 Flushed {} buffered auto message(s) to DB after guest reply - appId={}, guestIdentity={}", saved, appId, guestIdentity);
+        }
+    }
+
+    private void notifyAdminsInApp(String appId, String eventName, Object payload) {
+        if (appId == null || appId.isBlank() || eventName == null || eventName.isBlank() || payload == null) {
+            return;
+        }
+
+        String appRoom = "app:" + appId;
+        Set<UUID> sessions = roomSessions.get(appRoom);
+        if (sessions == null || sessions.isEmpty()) {
+            return;
+        }
+
+        for (UUID sid : sessions) {
+            if (!Boolean.TRUE.equals(sessionAdminFlags.get(sid))) {
+                continue;
+            }
+            SocketIOClient adminClient = server.getClient(sid);
+            if (adminClient == null) {
+                continue;
+            }
+            try {
+                adminClient.sendEvent(eventName, payload);
+            } catch (Exception e) {
+                logger.debug("Failed to notify admin session {} via {}: {}", sid, eventName, e.getMessage());
+            }
+        }
+    }
+
+    private void cleanupTransientGuestSessionData(String appId, String guestIdentity, String guestPhone) {
+        if (appId == null || appId.isBlank() || guestIdentity == null || guestIdentity.isBlank()) {
+            return;
+        }
+
+        String key = guestKey(appId, guestIdentity);
+        boolean hadPendingAutoMessages = pendingAutoMessagesByGuest.remove(key) != null;
+        pendingAutoMessagesUpdatedAt.remove(key);
+        welcomeTimestampByGuestKey.remove(key);
+
+        String appPhone = appPhoneKey(appId, guestPhone);
+        if (appPhone != null) {
+            welcomeTimestampByAppPhone.remove(appPhone);
+        }
+
+        if (hadPendingAutoMessages) {
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("appId", appId);
+            payload.put("guestSessionId", guestIdentity);
+            payload.put("guestPhone", guestPhone);
+            payload.put("eventTypePrefix", "ai_auto_welcome");
+            payload.put("reason", "guest_disconnect_without_contact");
+            payload.put("timestamp", System.currentTimeMillis());
+            notifyAdminsInApp(appId, "chat_guest_cleanup", payload);
+
+            logger.info("🧹 Immediate transient guest cleanup - appId={}, guestIdentity={}, guestPhone={}", appId, guestIdentity, guestPhone);
+        }
+    }
+
+    private boolean isWelcomeRecentlyScheduledByAppPhone(String appPhoneKey) {
+        if (appPhoneKey == null) {
+            return false;
+        }
+        Long lastWelcomeTime = welcomeTimestampByAppPhone.get(appPhoneKey);
+        if (lastWelcomeTime == null) {
+            return false;
+        }
+        long timeSinceWelcome = System.currentTimeMillis() - lastWelcomeTime;
+        // If less than 24 hours have passed, consider it recently scheduled
+        return timeSinceWelcome < AUTO_WELCOME_COOLDOWN_MS;
     }
 
     private String extractAiText(String raw, String fallbackText) {
@@ -192,21 +605,12 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
         return "Ban la nhan vien cham soc khach hang website appId=" + appId + ". "
             + guestDescription + " vua mo cua so chat va chua gui tin nhan. "
                 + "Hay viet DUY NHAT 1 tin nhan tieng Viet lich su, chuyen nghiep, than thien, ngan gon (toi da 180 ky tu). "
-                + "Muc tieu: chao khach, hoi nhu cau can ho tro va xin thong tin lien he mot cach tinh te. "
+                + "Muc tieu: chao khach, hoi nhu cau can ho tro, sau do moi xin thong tin lien he mot cach tinh te. "
+                + "Xung ho tu nhien theo kieu em/anh chi, khong qua than mat. "
+                + "TUYET DOI KHONG nhac den appId, ma app, ma he thong, thong tin ky thuat hoac noi bo. "
                 + "KHONG dung placeholder nhu [Ten ban], [Ten cong ty]. "
                 + "KHONG tu xung ten nhan vien/cong ty neu khong co du lieu xac thuc. "
                 + "Khong nhac den AI, khong markdown, chi tra ve noi dung tin nhan.";
-    }
-
-    private String buildNoHumanReplyPrompt(String appId, String guestPhone, String guestMessage) {
-        String guestDescription = (guestPhone == null || guestPhone.isBlank())
-                ? "Khach moi chua de lai so dien thoai"
-                : "Khach phone=" + guestPhone;
-        return "Ban la nhan vien CSKH website appId=" + appId + ". "
-                + guestDescription + " vua nhan: \"" + (guestMessage == null ? "" : guestMessage) + "\". "
-                + "Da 1 phut chua co nguoi tra loi. Hay viet DUY NHAT 1 tin nhan tieng Viet tu nhien, ngan gon (toi da 220 ky tu), "
-                + "tra loi dung van de khach vua hoi va kheo xin ten, cach lien he va san pham/nhu cau quan tam neu phu hop. "
-                + "Giong nguoi that dang cham soc, khong robot, khong markdown.";
     }
 
     private String sanitizeGuestWelcomeText(String messageText, String eventType) {
@@ -227,8 +631,13 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                 || folded.contains("ten cong ty")
                 || folded.contains("name")
                 || folded.contains("company");
+        boolean hasTechnicalSelfIntro = folded.contains("appid")
+            || folded.contains("app id")
+            || folded.contains("nhan vien ho tro tu")
+            || folded.contains("nhan vien ho tro den tu")
+            || folded.contains("minh la nhan vien ho tro tu");
 
-        if (hasBracketPlaceholder || hasTemplateToken) {
+        if (hasBracketPlaceholder || hasTemplateToken || hasTechnicalSelfIntro) {
             return POLITE_GENERIC_WELCOME;
         }
 
@@ -250,7 +659,7 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
 
         ChatMessage aiMsg = new ChatMessage();
         aiMsg.setRoom(privateRoom);
-        aiMsg.setUsername(AI_ASSISTANT_USERNAME);
+        aiMsg.setUsername(resolveSupportDisplayName(appId));
         aiMsg.setUserId(AI_ASSISTANT_USER_ID);
         aiMsg.setIsAdmin(true);
         aiMsg.setAppId(appId);
@@ -260,9 +669,25 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
         aiMsg.setMessage(safeMessageText.length() > 280 ? safeMessageText.substring(0, 280) : safeMessageText);
         aiMsg.setTimestamp(System.currentTimeMillis());
 
-        chatPersistenceService.saveMessage(aiMsg);
+        queuePendingAutoMessage(appId, guestIdentity, aiMsg);
         server.getRoomOperations(privateRoom).sendEvent("message", aiMsg);
         server.getRoomOperations(masterRoom).sendEvent("message", aiMsg);
+
+        ChatMessage adminAlert = new ChatMessage();
+        adminAlert.setRoom(masterRoom);
+        adminAlert.setUsername("He thong");
+        adminAlert.setUserId(AI_ASSISTANT_USER_ID);
+        adminAlert.setIsAdmin(true);
+        adminAlert.setAppId(appId);
+        adminAlert.setGuestPhone(guestPhone);
+        adminAlert.setGuestSessionId(guestIdentity);
+        adminAlert.setEventType("guest_auto_welcome_alert");
+        adminAlert.setMessage("Khach moi vua vao, he thong da gui loi chao tu dong. Admin co the chu dong tu van ngay.");
+        adminAlert.setTimestamp(aiMsg.getTimestamp());
+
+        notifyAdminsInApp(appId, "notification", adminAlert);
+
+        welcomeTimestampByGuestKey.put(guestKey(appId, guestIdentity), aiMsg.getTimestamp());
 
         logger.info("🤖 AI auto reply sent - appId={}, guestIdentity={}, guestPhone={}, eventType={}", appId, guestIdentity, guestPhone, eventType);
     }
@@ -271,6 +696,13 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
         if (appId == null || appId.isBlank() || guestIdentity == null || guestIdentity.isBlank()) return;
         if (guestPhone != null && !guestPhone.isBlank()) {
             logger.info("⏭️ Skip AI welcome because guest already has phone - appId={}, guestIdentity={}, guestPhone={}", appId, guestIdentity, guestPhone);
+            return;
+        }
+
+        // Check if a welcome was recently sent to this app+phone combination (independent of identity)
+        String appPhoneKey = appPhoneKey(appId, guestPhone);
+        if (appPhoneKey != null && isWelcomeRecentlyScheduledByAppPhone(appPhoneKey)) {
+            logger.info("⏭️ Skip welcome scheduling: duplicate detected for appId={}, guestPhone={}", appId, guestPhone);
             return;
         }
 
@@ -288,11 +720,17 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
 
         String key = guestKey(appId, guestIdentity);
         final String fallbackWelcome = POLITE_GENERIC_WELCOME;
-        Future<?> future = chatAiScheduler.submit(() -> {
+        final String appPhoneKeyFinal = appPhoneKey;
+        Future<?> future = chatAiScheduler.schedule(() -> {
             try {
                 java.util.List<ChatMessage> latestHistory = chatPersistenceService.getHistoryByGuestIdentity(appId, guestIdentity, guestPhone, 5);
                 if (latestHistory != null && !latestHistory.isEmpty()) {
                     logger.info("⏭️ Skip immediate AI welcome because guest already has history - appId={}, guestIdentity={}, historyCount={}", appId, guestIdentity, latestHistory.size());
+                    return;
+                }
+
+                if (hasRecentAutoWelcome(appId, guestIdentity, guestPhone, AUTO_WELCOME_COOLDOWN_MS)) {
+                    logger.info("⏭️ Skip delayed AI welcome because a welcome was recently sent - appId={}, guestIdentity={}", appId, guestIdentity);
                     return;
                 }
 
@@ -301,41 +739,37 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                 String text = extractAiText(aiRaw,
                         fallbackWelcome);
                 dispatchAiMessageToGuest(appId, guestIdentity, guestPhone, text, "ai_auto_welcome");
+                // Record the welcome send time for app+phone to prevent duplicates across identity changes
+                if (appPhoneKeyFinal != null) {
+                    welcomeTimestampByAppPhone.put(appPhoneKeyFinal, System.currentTimeMillis());
+                }
             } catch (Exception e) {
                 logger.warn("Failed to send AI welcome for {}:{} - {}", appId, guestIdentity, e.getMessage());
                 dispatchAiMessageToGuest(appId, guestIdentity, guestPhone, fallbackWelcome, "ai_auto_welcome_fallback");
+                // Record fallback send time as well
+                if (appPhoneKeyFinal != null) {
+                    welcomeTimestampByAppPhone.put(appPhoneKeyFinal, System.currentTimeMillis());
+                }
             } finally {
                 pendingGuestWelcomeTasks.remove(key);
             }
-        });
+        }, AUTO_WELCOME_DELAY_MS, TimeUnit.MILLISECONDS);
 
         pendingGuestWelcomeTasks.put(key, future);
     }
 
-    private boolean isLikelyAutoContactMessage(String guestMessage) {
-        if (guestMessage == null || guestMessage.isBlank()) {
-            return false;
+    private boolean hasRecentAutoWelcome(String appId, String guestIdentity, String guestPhone, long withinMs) {
+        String guestKey = guestKey(appId, guestIdentity);
+        Long guestWelcomeAt = welcomeTimestampByGuestKey.get(guestKey);
+        if (guestWelcomeAt != null && System.currentTimeMillis() - guestWelcomeAt <= withinMs) {
+            return true;
         }
 
-        String normalized = Normalizer.normalize(guestMessage, Normalizer.Form.NFD)
-                .replaceAll("\\p{M}+", "")
-                .toLowerCase(Locale.ROOT)
-                .replaceAll("\\s+", " ")
-                .trim();
+        Long pendingAt = pendingAutoMessagesUpdatedAt.get(guestKey);
+        if (pendingAt != null && System.currentTimeMillis() - pendingAt <= withinMs) {
+            return true;
+        }
 
-        boolean hasLink = normalized.contains("http://") || normalized.contains("https://") || normalized.contains("www.");
-        boolean hasContactToken = normalized.contains("so dien thoai")
-                || normalized.contains("phone")
-                || normalized.contains("email")
-                || normalized.contains("toi quan tam den tin nay")
-                || normalized.contains("i'm interested in this post")
-                || normalized.contains("toi quan tam den bai viet")
-                || normalized.contains("my phone number");
-
-        return hasLink && hasContactToken;
-    }
-
-    private boolean hasRecentAutoWelcome(String appId, String guestIdentity, String guestPhone, long withinMs) {
         try {
             java.util.List<ChatMessage> history = chatPersistenceService.getHistoryByGuestIdentity(appId, guestIdentity, guestPhone, 20);
             if (history == null || history.isEmpty()) {
@@ -359,39 +793,6 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
         }
 
         return false;
-    }
-
-    private void scheduleAutoReplyIfNoHuman(String appId, String guestIdentity, String guestPhone, String guestMessage) {
-        if (appId == null || appId.isBlank() || guestIdentity == null || guestIdentity.isBlank()) return;
-
-        // The web client may auto-send a contact/link message right after join.
-        // If a welcome was just sent, skip no-reply follow-up to avoid 2 greeting-like AI messages.
-        if (isLikelyAutoContactMessage(guestMessage)
-                && hasRecentAutoWelcome(appId, guestIdentity, guestPhone, AUTO_WELCOME_SUPPRESSION_WINDOW_MS)) {
-            logger.info("⏭️ Skip AI no-reply follow-up for auto-contact message - appId={}, guestIdentity={}", appId, guestIdentity);
-            return;
-        }
-
-        cancelGuestNoReplyTask(appId, guestIdentity);
-
-        String key = guestKey(appId, guestIdentity);
-        final String fallbackFollowup = "Em da tiep nhan thong tin roi. Anh/chị cho em xin ten, so dien thoai va san pham dang quan tam de ben em lien he tu van ngay.";
-        ScheduledFuture<?> future = chatAiScheduler.schedule(() -> {
-            try {
-                String prompt = buildNoHumanReplyPrompt(appId, guestPhone, guestMessage);
-                String aiRaw = aiProviderFactory.generateContent(prompt);
-                String text = extractAiText(aiRaw,
-                        fallbackFollowup);
-                dispatchAiMessageToGuest(appId, guestIdentity, guestPhone, text, "ai_auto_followup");
-            } catch (Exception e) {
-                logger.warn("Failed to send AI follow-up for {}:{} - {}", appId, guestIdentity, e.getMessage());
-                dispatchAiMessageToGuest(appId, guestIdentity, guestPhone, fallbackFollowup, "ai_auto_followup_fallback");
-            } finally {
-                pendingGuestNoReplyTasks.remove(key);
-            }
-        }, AI_FOLLOWUP_DELAY_MS, TimeUnit.MILLISECONDS);
-
-        pendingGuestNoReplyTasks.put(key, future);
     }
 
     // --- Hàm notifySignInToRoom được thêm vào đây ---
@@ -437,9 +838,9 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
             
             // 🔥 CRITICAL LOG: Ensure room exists and has clients
             int roomSize = server.getRoomOperations(appId).getClients().size();
-            logger.info("📤 sendUpdateNotification to room '{}': table='{}', action='{}', roomSize={}, hasPrimaryKeys={}, hasDataRow={}",
-                       appId, tableName, action, roomSize, (primaryKeysAndValues != null && !primaryKeysAndValues.isEmpty()), 
-                       (dataRow != null && !dataRow.isEmpty()));
+            logger.debug("📤 sendUpdateNotification to room '{}': table='{}', action='{}', roomSize={}, hasPrimaryKeys={}, hasDataRow={}",
+                        appId, tableName, action, roomSize, (primaryKeysAndValues != null && !primaryKeysAndValues.isEmpty()),
+                        (dataRow != null && !dataRow.isEmpty()));
 
             // Tạo một Map để chứa tất cả thông tin bạn muốn gửi đi
             Map<String, Object> notificationData = new HashMap<>();
@@ -473,8 +874,8 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
             // Gửi sự kiện "csm_msg_update" cùng với Map notificationData
             roomOperations.sendEvent("csm_msg_update", notificationData);
 
-            logger.info("✅ Sent 'csm_msg_update' event to room '{}' for table '{}' with action '{}'. Primary Keys: {}, Has DataRow: {}",
-                            appId, tableName, action, primaryKeysAndValues, (dataRow != null && !dataRow.isEmpty()));
+            logger.debug("✅ Sent 'csm_msg_update' event to room '{}' for table '{}' with action '{}'. Has DataRow: {}",
+                         appId, tableName, action, (dataRow != null && !dataRow.isEmpty()));
         } catch (Exception e) {
             logger.error("❌ Error sending update notification for table {} in app {}: {}", tableName, appId, e.getMessage(), e);
         }
@@ -485,44 +886,314 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                                 // Lấy danh sách user nội bộ/app
                                 server.addEventListener("chat_list_users", String.class, (client, appId, ackSender) -> {
                                     try {
-                                        // Lấy tất cả user có app_id = appId
+                                        // Tránh N+1 query theo từng user key: query rows trực tiếp theo app_id với giới hạn an toàn.
                                         net.phanmemmottrieu.data.SearchFilter filter = new net.phanmemmottrieu.data.SearchFilter();
                                         filter.setField("app_id");
                                         filter.setType("eq");
                                         filter.setValue(appId);
-                                        
-                                        // Get all user keys matching the filter
-                                        java.util.List<String> userKeys = recordManager.searchKeys("csm", "csm_accounts", filter);
-                                        
-                                        // Fetch each user record using find by id
+
+                                        Map<String, Object> result = recordManager.filterWithPagination("csm", "csm_accounts", filter, 500, null);
+                                        Object rowsObj = result != null ? result.get("rows") : null;
                                         java.util.List<Map<String, Object>> simplified = new java.util.ArrayList<>();
-                                        for (String key : userKeys) {
-                                            try {
-                                                // Create filter for id field
-                                                net.phanmemmottrieu.data.SearchFilter idFilter = new net.phanmemmottrieu.data.SearchFilter();
-                                                idFilter.setField("id");
-                                                idFilter.setType("eq");
-                                                idFilter.setValue(key);
-                                                
-                                                Map<String, Object> user = recordManager.find("csm", "csm_accounts", idFilter);
-                                                if (user != null && !user.isEmpty()) {
-                                                    Map<String, Object> u = new java.util.HashMap<>();
-                                                    u.put("username", user.getOrDefault("username", ""));
-                                                    u.put("email", user.getOrDefault("email", ""));
-                                                    u.put("phone", user.getOrDefault("phone", ""));
-                                                    u.put("avatar", user.getOrDefault("avatar", ""));
-                                                    u.put("userId", user.getOrDefault("id", ""));
-                                                    simplified.add(u);
-                                                }
-                                            } catch (Exception e) {
-                                                // Skip invalid user
-                                                logger.warn("Failed to fetch user {}: {}", key, e.getMessage());
+
+                                        if (rowsObj instanceof java.util.List<?> rows) {
+                                            for (Object rowObj : rows) {
+                                                if (!(rowObj instanceof java.util.Map<?, ?> rowMap)) continue;
+
+                                                @SuppressWarnings("unchecked")
+                                                java.util.Map<String, Object> user = (java.util.Map<String, Object>) rowMap;
+
+                                                java.util.Map<String, Object> u = new java.util.HashMap<>();
+                                                u.put("username", user.getOrDefault("username", ""));
+                                                u.put("email", user.getOrDefault("email", ""));
+                                                u.put("phone", user.getOrDefault("phone", ""));
+                                                u.put("avatar", user.getOrDefault("avatar", ""));
+                                                u.put("userId", user.getOrDefault("id", ""));
+                                                simplified.add(u);
                                             }
                                         }
                                         
                                         ackSender.sendAckData(objectMapper.writeValueAsString(simplified));
                                     } catch (Exception e) {
                                         logger.error("❌ Error listing users for appId {}: {}", appId, e.getMessage());
+                                        ackSender.sendAckData("[]");
+                                    }
+                                });
+
+                                // Lấy danh sách admin/dev đang online theo appId
+                                server.addEventListener("chat_list_online_admins", String.class, (client, appId, ackSender) -> {
+                                    try {
+                                        java.util.List<Map<String, Object>> onlineAdmins = new java.util.ArrayList<>();
+
+                                        for (Map.Entry<UUID, String> entry : sessionAppIds.entrySet()) {
+                                            UUID sessionId = entry.getKey();
+                                            String sessionAppId = entry.getValue();
+                                            if (sessionAppId == null || !sessionAppId.equals(appId)) {
+                                                continue;
+                                            }
+
+                                            if (!Boolean.TRUE.equals(sessionAdminFlags.get(sessionId))) {
+                                                continue;
+                                            }
+
+                                            String username = sessionUsernames.get(sessionId);
+                                            if (username == null || username.isBlank()) {
+                                                continue;
+                                            }
+
+                                            Map<String, Object> item = new HashMap<>();
+                                            item.put("clientId", sessionId.toString());
+                                            item.put("username", username);
+                                            item.put("userId", sessionUserIds.get(sessionId));
+                                            item.put("appId", appId);
+                                            onlineAdmins.add(item);
+                                        }
+
+                                        ackSender.sendAckData(objectMapper.writeValueAsString(onlineAdmins));
+                                    } catch (Exception e) {
+                                        logger.error("❌ Error listing online admins for appId {}: {}", appId, e.getMessage());
+                                        ackSender.sendAckData("[]");
+                                    }
+                                });
+
+                                // Danh sách user của app + trạng thái online/offline realtime (admin-page users)
+                                server.addEventListener("chat_list_app_users_presence", String.class, (client, appId, ackSender) -> {
+                                    try {
+                                        final boolean requestAllApps = "all".equalsIgnoreCase(String.valueOf(appId).trim());
+                                        java.util.List<java.util.Map<String, Object>> accountCandidates = new java.util.ArrayList<>();
+                                        if (!requestAllApps) {
+                                            net.phanmemmottrieu.data.SearchFilter accountFilter = new net.phanmemmottrieu.data.SearchFilter();
+                                            accountFilter.setField("app_id");
+                                            accountFilter.setType("eq");
+                                            accountFilter.setValue(appId);
+                                            Map<String, Object> scopedAccounts = recordManager.filterWithPagination("csm", "csm_accounts", accountFilter, 2000, null);
+                                            Object scopedRowsObj = scopedAccounts != null ? scopedAccounts.get("rows") : null;
+                                            if (scopedRowsObj instanceof java.util.List<?> scopedRows) {
+                                                for (Object rowObj : scopedRows) {
+                                                    if (rowObj instanceof java.util.Map<?, ?> rowMap) {
+                                                        @SuppressWarnings("unchecked")
+                                                        java.util.Map<String, Object> row = (java.util.Map<String, Object>) rowMap;
+                                                        accountCandidates.add(row);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        if (requestAllApps || accountCandidates.isEmpty()) {
+                                            Map<String, Object> result = recordManager.filterWithPagination("csm", "csm_accounts", null, 5000, null);
+                                            Object rowsObj = result != null ? result.get("rows") : null;
+                                            if (rowsObj instanceof java.util.List<?> rows) {
+                                                for (Object rowObj : rows) {
+                                                    if (rowObj instanceof java.util.Map<?, ?> rowMap) {
+                                                        @SuppressWarnings("unchecked")
+                                                        java.util.Map<String, Object> row = (java.util.Map<String, Object>) rowMap;
+                                                        accountCandidates.add(row);
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        java.util.List<Map<String, Object>> roster = new java.util.ArrayList<>();
+
+                                        for (java.util.Map<String, Object> user : accountCandidates) {
+
+                                                String accountAppId = String.valueOf(user.getOrDefault("app_id", "")).trim();
+                                                String accountToken = String.valueOf(user.getOrDefault("app_token", "")).trim();
+                                                String accountTokenAppId = "";
+                                                if (!accountToken.isBlank()) {
+                                                    try {
+                                                        String[] tokenParts = recordManager.csm_decrypt(accountToken).split("_____");
+                                                        if (tokenParts.length > 0 && tokenParts[0] != null) {
+                                                            accountTokenAppId = tokenParts[0].trim();
+                                                        }
+                                                    } catch (Exception ignored) {
+                                                    }
+                                                }
+                                                boolean sameApp = (!accountAppId.isBlank() && accountAppId.equals(appId))
+                                                        || (!accountTokenAppId.isBlank() && accountTokenAppId.equals(appId));
+                                                boolean isDevAccount = Boolean.TRUE.equals(user.get("dev"));
+                                                if (!(requestAllApps || sameApp || isDevAccount)) continue;
+
+                                                String effectiveUserAppId = !accountAppId.isBlank()
+                                                        ? accountAppId
+                                                        : (!accountTokenAppId.isBlank() ? accountTokenAppId : appId);
+
+                                                String userId = String.valueOf(user.getOrDefault("id", "")).trim();
+                                                String username = String.valueOf(user.getOrDefault("username", "")).trim();
+                                                if (userId.isEmpty() && username.isEmpty()) continue;
+
+                                                boolean online = isPortalUserOnline(effectiveUserAppId, userId, null);
+                                                if (!online && !username.isBlank()) {
+                                                    online = isPortalUsernameOnline(effectiveUserAppId, username, null);
+                                                }
+                                                Long lastSeen = userLastSeenByAppAndUser.getOrDefault(presenceKey(effectiveUserAppId, userId), 0L);
+
+                                                Map<String, Object> item = new HashMap<>();
+                                                item.put("appId", effectiveUserAppId);
+                                                item.put("userId", userId);
+                                                item.put("username", username);
+                                                item.put("avatar", user.getOrDefault("avatar", ""));
+                                                item.put("isDev", isDevAccount);
+                                                item.put("online", online);
+                                                item.put("lastSeenAt", online ? 0L : (lastSeen == null ? 0L : lastSeen));
+                                                roster.add(item);
+                                        }
+
+                                        // Thêm người dùng con (csm_group_members) thuộc cùng app_id.
+                                        // Hỗ trợ dữ liệu cũ có thể thiếu app_id bằng fallback parent_account_id.
+                                        java.util.Map<String, java.util.Map<String, Object>> subUsersByKey = new java.util.LinkedHashMap<>();
+                                        java.util.List<java.util.Map<String, Object>> subCandidates = new java.util.ArrayList<>();
+                                        if (!requestAllApps) {
+                                            net.phanmemmottrieu.data.SearchFilter subAppFilter = new net.phanmemmottrieu.data.SearchFilter();
+                                            subAppFilter.setField("app_id");
+                                            subAppFilter.setType("eq");
+                                            subAppFilter.setValue(appId);
+                                            Map<String, Object> bySubApp = recordManager.filterWithPagination("csm", "csm_group_members", subAppFilter, 3000, null);
+                                            Object bySubAppRowsObj = bySubApp != null ? bySubApp.get("rows") : null;
+                                            if (bySubAppRowsObj instanceof java.util.List<?> bySubAppRows) {
+                                                for (Object subRowObj : bySubAppRows) {
+                                                    if (subRowObj instanceof java.util.Map<?, ?> subRowMap) {
+                                                        @SuppressWarnings("unchecked")
+                                                        java.util.Map<String, Object> subUser = (java.util.Map<String, Object>) subRowMap;
+                                                        subCandidates.add(subUser);
+                                                    }
+                                                }
+                                            }
+
+                                            net.phanmemmottrieu.data.SearchFilter parentFilter = new net.phanmemmottrieu.data.SearchFilter();
+                                            parentFilter.setField("parent_account_id");
+                                            parentFilter.setType("eq");
+                                            parentFilter.setValue(appId);
+                                            Map<String, Object> byParent = recordManager.filterWithPagination("csm", "csm_group_members", parentFilter, 3000, null);
+                                            Object byParentRowsObj = byParent != null ? byParent.get("rows") : null;
+                                            if (byParentRowsObj instanceof java.util.List<?> byParentRows) {
+                                                for (Object subRowObj : byParentRows) {
+                                                    if (subRowObj instanceof java.util.Map<?, ?> subRowMap) {
+                                                        @SuppressWarnings("unchecked")
+                                                        java.util.Map<String, Object> subUser = (java.util.Map<String, Object>) subRowMap;
+                                                        subCandidates.add(subUser);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        if (requestAllApps || subCandidates.isEmpty()) {
+                                            Map<String, Object> subResult = recordManager.filterWithPagination("csm", "csm_group_members", null, 5000, null);
+                                            Object subRowsObj = subResult != null ? subResult.get("rows") : null;
+                                            if (subRowsObj instanceof java.util.List<?> subRows) {
+                                                for (Object subRowObj : subRows) {
+                                                    if (subRowObj instanceof java.util.Map<?, ?> subRowMap) {
+                                                        @SuppressWarnings("unchecked")
+                                                        java.util.Map<String, Object> subUser = (java.util.Map<String, Object>) subRowMap;
+                                                        subCandidates.add(subUser);
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        for (java.util.Map<String, Object> subUser : subCandidates) {
+
+                                                String subAppId = String.valueOf(subUser.getOrDefault("app_id", "")).trim();
+                                                String parentAccountId = String.valueOf(subUser.getOrDefault("parent_account_id", "")).trim();
+                                                String subToken = String.valueOf(subUser.getOrDefault("app_token", "")).trim();
+                                                String sourceToken = String.valueOf(subUser.getOrDefault("source_app_token", "")).trim();
+
+                                                String subTokenAppId = "";
+                                                if (!subToken.isBlank()) {
+                                                    try {
+                                                        String[] tokenParts = recordManager.csm_decrypt(subToken).split("_____");
+                                                        if (tokenParts.length > 0 && tokenParts[0] != null) {
+                                                            subTokenAppId = tokenParts[0].trim();
+                                                        }
+                                                    } catch (Exception ignored) {
+                                                    }
+                                                }
+
+                                                String sourceTokenAppId = "";
+                                                if (!sourceToken.isBlank()) {
+                                                    try {
+                                                        String[] tokenParts = recordManager.csm_decrypt(sourceToken).split("_____");
+                                                        if (tokenParts.length > 0 && tokenParts[0] != null) {
+                                                            sourceTokenAppId = tokenParts[0].trim();
+                                                        }
+                                                    } catch (Exception ignored) {
+                                                    }
+                                                }
+
+                                                boolean sameApp = (!subAppId.isBlank() && subAppId.equals(appId))
+                                                        || (!parentAccountId.isBlank() && parentAccountId.equals(appId))
+                                                        || (!subTokenAppId.isBlank() && subTokenAppId.equals(appId))
+                                                        || (!sourceTokenAppId.isBlank() && sourceTokenAppId.equals(appId));
+                                                if (!(requestAllApps || sameApp)) continue;
+
+                                                String subUserId = String.valueOf(subUser.getOrDefault("id", "")).trim();
+                                                String subUsername = firstNonBlank(
+                                                        String.valueOf(subUser.getOrDefault("login_identifier", "")).trim(),
+                                                        String.valueOf(subUser.getOrDefault("username", "")).trim(),
+                                                        String.valueOf(subUser.getOrDefault("email", "")).trim(),
+                                                        String.valueOf(subUser.getOrDefault("phoneNumber", "")).trim()
+                                                );
+                                                if (subUserId.isEmpty() && (subUsername == null || subUsername.isBlank())) continue;
+
+                                                String dedupKey = !subUserId.isEmpty() ? ("id:" + subUserId) : ("u:" + subUsername.toLowerCase(java.util.Locale.ROOT));
+                                                subUsersByKey.putIfAbsent(dedupKey, subUser);
+                                        }
+
+                                        for (java.util.Map<String, Object> subUser : subUsersByKey.values()) {
+                                            String subUserId = String.valueOf(subUser.getOrDefault("id", "")).trim();
+                                            String subUsername = firstNonBlank(
+                                                    String.valueOf(subUser.getOrDefault("login_identifier", "")).trim(),
+                                                    String.valueOf(subUser.getOrDefault("username", "")).trim(),
+                                                    String.valueOf(subUser.getOrDefault("email", "")).trim(),
+                                                    String.valueOf(subUser.getOrDefault("phoneNumber", "")).trim()
+                                            );
+                                            if (subUsername == null || subUsername.isBlank()) subUsername = "SubUser";
+
+                                            String effectiveSubAppId = firstNonBlank(
+                                                    String.valueOf(subUser.getOrDefault("app_id", "")).trim(),
+                                                    String.valueOf(subUser.getOrDefault("parent_account_id", "")).trim(),
+                                                    appId
+                                            );
+
+                                            boolean subOnline = isPortalUserOnline(effectiveSubAppId, subUserId, null);
+                                            if (!subOnline && !subUsername.isBlank()) {
+                                                subOnline = isPortalUsernameOnline(effectiveSubAppId, subUsername, null);
+                                            }
+                                            Long subLastSeen = userLastSeenByAppAndUser.getOrDefault(presenceKey(effectiveSubAppId, subUserId), 0L);
+
+                                            Map<String, Object> subItem = new HashMap<>();
+                                            subItem.put("appId", effectiveSubAppId);
+                                            subItem.put("userId", subUserId);
+                                            subItem.put("username", subUsername);
+                                            subItem.put("avatar", subUser.getOrDefault("avatar", ""));
+                                            subItem.put("isSubUser", true);
+                                            subItem.put("online", subOnline);
+                                            subItem.put("lastSeenAt", subOnline ? 0L : (subLastSeen == null ? 0L : subLastSeen));
+                                            roster.add(subItem);
+                                        }
+
+                                        // Không trả về chính người đang đăng nhập trong danh sách roster.
+                                        UUID requesterSessionId = client.getSessionId();
+                                        String requesterUserId = String.valueOf(sessionUserIds.getOrDefault(requesterSessionId, "")).trim();
+                                        String requesterUsername = String.valueOf(sessionUsernames.getOrDefault(requesterSessionId, "")).trim();
+                                        roster.removeIf(item -> {
+                                            String itemUserId = String.valueOf(item.getOrDefault("userId", "")).trim();
+                                            String itemUsername = String.valueOf(item.getOrDefault("username", "")).trim();
+                                            boolean sameUserId = !requesterUserId.isBlank() && !itemUserId.isBlank() && requesterUserId.equals(itemUserId);
+                                            boolean sameUsername = !requesterUsername.isBlank() && !itemUsername.isBlank() && requesterUsername.equalsIgnoreCase(itemUsername);
+                                            return sameUserId || sameUsername;
+                                        });
+
+                                        roster.sort((a, b) -> {
+                                            boolean ao = Boolean.TRUE.equals(a.get("online"));
+                                            boolean bo = Boolean.TRUE.equals(b.get("online"));
+                                            if (ao != bo) return ao ? -1 : 1;
+                                            String an = String.valueOf(a.getOrDefault("username", ""));
+                                            String bn = String.valueOf(b.getOrDefault("username", ""));
+                                            return an.compareToIgnoreCase(bn);
+                                        });
+
+                                        ackSender.sendAckData(objectMapper.writeValueAsString(roster));
+                                    } catch (Exception e) {
+                                        logger.error("❌ Error listing chat presence users for appId {}: {}", appId, e.getMessage());
                                         ackSender.sendAckData("[]");
                                     }
                                 });
@@ -607,28 +1278,35 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
         server.addDisconnectListener(client -> {
             UUID sessionId = client.getSessionId();
             String username = sessionUsernames.remove(sessionId);
+            String userId = sessionUserIds.remove(sessionId);
             String appId = sessionAppIds.remove(sessionId);
+            Boolean wasPortalUser = sessionPortalFlags.remove(sessionId);
             String guestPhone = sessionGuestPhones.remove(sessionId);
             String guestSessionId = sessionGuestSessionIds.remove(sessionId);
+            Boolean wasAdmin = sessionAdminFlags.remove(sessionId);
 
             String guestIdentity = firstNonBlank(guestSessionId, guestPhone);
             if (appId != null && guestIdentity != null) {
                 cancelGuestWelcomeTask(appId, guestIdentity);
                 cancelGuestNoReplyTask(appId, guestIdentity);
+
+                // If a guest disconnects without leaving contact info, drop transient auto messages immediately.
+                if (!Boolean.TRUE.equals(wasAdmin) && (guestPhone == null || guestPhone.isBlank())) {
+                    cleanupTransientGuestSessionData(appId, guestIdentity, guestPhone);
+                }
             }
 
             if (username != null) {
-                for (Map.Entry<String, Set<UUID>> entry : roomSessions.entrySet()) {
-                    String room = entry.getKey();
-                    Set<UUID> sessions = entry.getValue();
-                    if (sessions.remove(sessionId)) {
-                        logger.info("❌ User " + username + " left room " + room);
-                        server.getRoomOperations(room).sendEvent("user_left", username);
-                    }
-                }
+                untrackSessionRooms(sessionId, username);
+            } else {
+                untrackSessionRooms(sessionId, null);
             }
             if (appId != null) {
                 logger.info("❌ Client disconnected from app room: " + appId + " (Session: " + sessionId + ")");
+            }
+
+            if (Boolean.TRUE.equals(wasPortalUser) && appId != null && userId != null) {
+                onPortalUserOffline(appId, userId, username);
             }
         });
 
@@ -658,24 +1336,43 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
             // - Admin: join "app:{appId}" (master room - see all messages + can broadcast)
             
             String userId = data.getUserId();
+                        sessionAdminFlags.remove(sessionId);
+
+            if (userId != null && !userId.isBlank()) {
+                sessionUserIds.put(sessionId, userId.trim());
+            }
             
             if (isAdmin != null && isAdmin) {
+                            sessionPortalFlags.put(sessionId, true);
+                            sessionAdminFlags.put(sessionId, true);
+                            if (appId != null && !appId.isBlank() && username != null && !username.isBlank()) {
+                                appSupportDisplayNames.put(appId, username.trim());
+                            }
                 // Admin joins master room to see all guest + user messages
                 String masterRoom = "app:" + appId;
-                roomSessions.computeIfAbsent(masterRoom, r -> new CopyOnWriteArraySet<>()).add(sessionId);
+                trackSessionRoom(sessionId, masterRoom);
                 client.joinRoom(masterRoom);
                 logger.info("🚪 Admin {} joined master room {} (appId: {})", username, masterRoom, appId);
                 server.getRoomOperations(masterRoom).sendEvent("user_joined", username);
+                pushAdminChatHistorySnapshot(client, appId, 500);
+                onPortalUserOnline(sessionId, appId, userId, username);
             } else if (firstNonBlank(guestSessionId, guestPhone) != null) {
+                            sessionPortalFlags.put(sessionId, false);
+                            sessionAdminFlags.put(sessionId, false);
                 // Guest joins private room + master room for admin monitoring
-                String guestIdentity = firstNonBlank(guestSessionId, guestPhone);
+                String guestIdentity = resolveCanonicalGuestIdentity(appId, guestSessionId, guestPhone, sessionId);
                 String privateRoom = "guest:" + appId + ";" + guestIdentity;
                 String masterRoom = "app:" + appId;
-                sessionGuestPhones.put(sessionId, guestPhone);
+                if (guestPhone != null && !guestPhone.isBlank()) {
+                    sessionGuestPhones.put(sessionId, guestPhone);
+                } else {
+                    sessionGuestPhones.remove(sessionId);
+                }
                 sessionGuestSessionIds.put(sessionId, guestIdentity);
+                rememberGuestPhoneIdentity(appId, guestPhone, guestIdentity);
                 
-                roomSessions.computeIfAbsent(privateRoom, r -> new CopyOnWriteArraySet<>()).add(sessionId);
-                roomSessions.computeIfAbsent(masterRoom, r -> new CopyOnWriteArraySet<>()).add(sessionId);
+                trackSessionRoom(sessionId, privateRoom);
+                trackSessionRoom(sessionId, masterRoom);
                 
                 client.joinRoom(privateRoom);
                 client.joinRoom(masterRoom);
@@ -686,15 +1383,20 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
 
                 triggerWelcomeOnGuestJoin(appId, guestIdentity, guestPhone);
             } else if (userId != null && !userId.isEmpty()) {
+                sessionPortalFlags.put(sessionId, true);
+                sessionAdminFlags.put(sessionId, false);
                 // Authenticated user joins app room (can chat with other users)
                 String appRoom = "app:" + appId;
-                roomSessions.computeIfAbsent(appRoom, r -> new CopyOnWriteArraySet<>()).add(sessionId);
+                trackSessionRoom(sessionId, appRoom);
                 client.joinRoom(appRoom);
                 logger.info("🚪 User {} (ID: {}) joined app room {} (appId: {})", username, userId, appRoom, appId);
                 server.getRoomOperations(appRoom).sendEvent("user_joined", username);
+                onPortalUserOnline(sessionId, appId, userId, username);
             } else {
+                sessionPortalFlags.put(sessionId, false);
+                sessionAdminFlags.put(sessionId, false);
                 // Fallback: join room as-is (backward compatibility)
-                roomSessions.computeIfAbsent(room, r -> new CopyOnWriteArraySet<>()).add(sessionId);
+                trackSessionRoom(sessionId, room);
                 client.joinRoom(room);
                 logger.info("🚪 {} joined room {} (appId: {}) [fallback]", username, room, appId);
                 server.getRoomOperations(room).sendEvent("user_joined", username);
@@ -727,16 +1429,27 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                                     appIdFromRoom, room);
                     }
                 }
-            roomSessions.computeIfAbsent(room, r -> new CopyOnWriteArraySet<>()).add(sessionId);
+            trackSessionRoom(sessionId, room);
             client.joinRoom(room);
-            
-            // 📍 Record activity when joining room
-            String appId = appIdFromRoom != null ? appIdFromRoom : (sessionAppIds.get(sessionId) != null ? sessionAppIds.get(sessionId) : "csm");
-            ChatRoomManager.addUserToRoom(appId, room, username);
-            ChatActivityTracker.recordRoomActivity(appId, room);
-            ChatActivityTracker.recordUserActivity(appId, username);
-            
             logger.info("🚪 " + username + " joined room " + room + " via join_room");
+
+            String appId = parseAppIdFromRoom(room);
+            if (Boolean.TRUE.equals(sessionAdminFlags.get(sessionId)) && appId != null && !appId.isBlank()) {
+                pushAdminChatHistorySnapshot(client, appId, 500);
+            }
+        });
+
+        server.addEventListener("request_chat_history_app_snapshot", String.class, (client, appId, ackSender) -> {
+            String sessionAppId = sessionAppIds.get(client.getSessionId());
+            String effectiveAppId = firstNonBlank(appId, sessionAppId);
+            pushAdminChatHistorySnapshot(client, effectiveAppId, 500);
+
+            if (ackSender != null) {
+                try {
+                    ackSender.sendAckData("{\"success\":true,\"appId\":\"" + (effectiveAppId == null ? "" : effectiveAppId) + "\"}");
+                } catch (Exception ignored) {
+                }
+            }
         });
 
                             server.addEventListener("chat", ChatMessage.class, (client, data, ackSender) -> {
@@ -748,6 +1461,11 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                                 String guestPhone = data.getGuestPhone();
                                 String guestSessionId = data.getGuestSessionId();
                                 String appId = data.getAppId();
+                                String parsedGuestFromRoom = parseGuestPhoneFromRoom(room);
+                                String guestIdentityHint = firstNonBlank(guestSessionId, guestPhone, parsedGuestFromRoom);
+                                boolean guestContext = (room != null && room.startsWith("guest:"))
+                                    || userId == null
+                                    || (guestIdentityHint != null && !guestIdentityHint.isBlank());
 
                                 // 🔥 CRITICAL: Normalize appId FIRST before any processing
                                 // Priority: appId from message > sessionAppIds > parsed room > fallback to "csm"
@@ -783,9 +1501,15 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                                 if (isAdmin != null && isAdmin) {
                                     // Admin luôn được phép
                                     allow = true;
-                                    String targetGuestIdentity = firstNonBlank(guestSessionId, parseGuestPhoneFromRoom(room), guestPhone);
-                                    if (targetGuestIdentity != null && !targetGuestIdentity.isBlank()) {
-                                        cancelGuestNoReplyTask(appId, targetGuestIdentity);
+                                    if (guestContext) {
+                                        String targetGuestIdentity = resolveCanonicalGuestIdentity(
+                                                appId,
+                                                guestSessionId,
+                                                firstNonBlank(guestPhone, parsedGuestFromRoom),
+                                                client.getSessionId());
+                                        if (targetGuestIdentity != null && !targetGuestIdentity.isBlank()) {
+                                            cancelGuestNoReplyTask(appId, targetGuestIdentity);
+                                        }
                                     }
                                 } else if (userId == null) {
                                     // Guest: chỉ cho phép gửi vào phòng của mình hoặc phòng app
@@ -815,18 +1539,27 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                                         appId = guestAppId;
                                     }
 
-                                    String targetGuestIdentity = firstNonBlank(guestSessionId, parseGuestPhoneFromRoom(room), guestPhone);
+                                    String targetGuestIdentity = resolveCanonicalGuestIdentity(
+                                            appId,
+                                            guestSessionId,
+                                            firstNonBlank(guestPhone, parsedGuestFromRoom),
+                                            client.getSessionId());
                                     if (targetGuestIdentity != null && !targetGuestIdentity.isBlank()) {
                                         cancelGuestWelcomeTask(appId, targetGuestIdentity);
-                                        scheduleAutoReplyIfNoHuman(appId, targetGuestIdentity, guestPhone, message);
                                     }
                                 } else {
                                     // Authenticated user: cho phép chat trong app của mình
                                     allow = true;
 
-                                    String targetGuestIdentity = firstNonBlank(guestSessionId, parseGuestPhoneFromRoom(room), guestPhone);
-                                    if (targetGuestIdentity != null && !targetGuestIdentity.isBlank()) {
-                                        cancelGuestNoReplyTask(appId, targetGuestIdentity);
+                                    if (guestContext) {
+                                        String targetGuestIdentity = resolveCanonicalGuestIdentity(
+                                                appId,
+                                                guestSessionId,
+                                                firstNonBlank(guestPhone, parsedGuestFromRoom),
+                                                client.getSessionId());
+                                        if (targetGuestIdentity != null && !targetGuestIdentity.isBlank()) {
+                                            cancelGuestNoReplyTask(appId, targetGuestIdentity);
+                                        }
                                     }
                                 }
                                 if (!allow) {
@@ -846,12 +1579,26 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                                 }
                                 
                                 // Normalize guest message data BEFORE saving
-                                String guestIdentity = firstNonBlank(guestSessionId, parseGuestPhoneFromRoom(room), guestPhone);
-                                if (guestIdentity != null && !guestIdentity.isEmpty()) {
-                                    data.setGuestSessionId(guestIdentity);
+                                String guestIdentity = null;
+                                if (guestContext) {
+                                    guestIdentity = resolveCanonicalGuestIdentity(
+                                            appId,
+                                            guestSessionId,
+                                            firstNonBlank(guestPhone, parsedGuestFromRoom),
+                                            client.getSessionId());
+                                    if (guestIdentity != null && !guestIdentity.isEmpty()) {
+                                        data.setGuestSessionId(guestIdentity);
+                                        sessionGuestSessionIds.put(client.getSessionId(), guestIdentity);
+                                        rememberGuestPhoneIdentity(appId, guestPhone, guestIdentity);
+                                    }
+                                } else {
+                                    // Internal chat must never carry guest markers.
+                                    data.setGuestSessionId(null);
+                                    data.setGuestPhone(null);
                                 }
 
                                 if (userId == null && guestIdentity != null && !guestIdentity.isEmpty()) {
+                                    flushPendingAutoMessagesOnGuestReply(appId, guestIdentity);
                                     // This is a guest message - ensure username is set to a stable label
                                     String guestLabel = firstNonBlank(guestPhone, guestIdentity, username, "Guest");
                                     if (username == null || username.isEmpty() || username.equals("Guest")) {
@@ -875,21 +1622,10 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                                 logger.info("💾 [Chat] Saving message - appId={}, room={}, guestPhone={}, guestSessionId={}, to={}", 
                                            data.getAppId(), data.getRoom(), data.getGuestPhone(), data.getGuestSessionId(), data.getTo());
                                 
-                                // Lưu lịch sử chat vào các layers:
-                                // 1. Memory cache (ChatHistoryManager)
+                                // Lưu lịch sử chat qua ChatHistoryManager.
+                                // ChatHistoryManager đã delegate xuống ChatPersistenceService,
+                                // nên không gọi save thêm lần nữa để tránh lưu trùng.
                                 ChatHistoryManager.saveMessage(data);
-                                
-                                // 2. Database với guest phone tracking (ChatPersistenceService)
-                                chatPersistenceService.saveMessage(data);
-                                
-                                // 📍 Record activity when message is sent
-                                ChatActivityTracker.recordRoomActivity(appId, room);
-                                if (userId != null) {
-                                    ChatActivityTracker.recordUserActivity(appId, userId);
-                                }
-                                if (guestPhone != null && !guestPhone.isEmpty()) {
-                                    ChatActivityTracker.recordUserActivity(appId, guestPhone);
-                                }
                                 
                                 // 🆕 CRM AUTO-TRACKING: Tự động tạo customer khi guest chat
                                 if (guestPhone != null && !guestPhone.isEmpty() && appId != null && !appId.isEmpty()) {
@@ -944,15 +1680,26 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                                         logger.info("✉️ Admin {} → Guest {} (room: {})", username, guestIdentity, privateRoom);
                                         server.getRoomOperations(privateRoom).sendEvent("message", data);
                                     } else if (to != null && !to.isEmpty()) {
-                                        // Admin → specific User: send to user's private chat room
-                                        String userRoom = "user:" + appId + ";" + to;
-                                        logger.info("✉️ Admin {} → User {} (room: {})", username, to, userRoom);
-                                        server.getRoomOperations(userRoom).sendEvent("message", data);
-                                        // Also send to app room so other admins/users can see
+                                        // Admin → specific User: canonical private room by pair userIds to avoid stream mixups.
+                                        String directRoom = room;
+                                        if (directRoom == null || directRoom.isBlank() || !directRoom.startsWith("private:")) {
+                                            if (userId != null && !userId.isBlank()) {
+                                                String[] ids = new String[]{userId, to};
+                                                java.util.Arrays.sort(ids);
+                                                directRoom = "private:" + appId + ";" + String.join(";", ids);
+                                            } else {
+                                                directRoom = "user:" + appId + ";" + to;
+                                            }
+                                        }
+                                        data.setRoom(directRoom);
+                                        logger.info("✉️ Admin {} → User {} (room: {})", username, to, directRoom);
+                                        server.getRoomOperations(directRoom).sendEvent("message", data);
+                                        // Mirror to app room so participants not yet in direct room still get realtime notification.
                                         server.getRoomOperations("app:" + appId).sendEvent("message", data);
                                     } else {
                                         // Admin → Broadcast to all users in app
                                         String masterRoom = "app:" + appId;
+                                        data.setRoom(masterRoom);
                                         logger.info("📢 Admin {} broadcasting to app: {}", username, appId);
                                         server.getRoomOperations(masterRoom).sendEvent("message", data);
                                     }
@@ -1087,6 +1834,65 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
             }
         });
 
+        // Recall message (soft recall) within allowed time window
+        server.addEventListener("chat_recall_message", java.util.Map.class, (client, rawData, ackSender) -> {
+            try {
+            @SuppressWarnings("unchecked")
+            java.util.Map<String, Object> data = (java.util.Map<String, Object>) rawData;
+                UUID sessionId = client.getSessionId();
+                String sessionUserId = String.valueOf(sessionUserIds.getOrDefault(sessionId, "")).trim();
+                String appId = String.valueOf(data.getOrDefault("appId", "")).trim();
+                String room = String.valueOf(data.getOrDefault("room", "")).trim();
+                Object tsObj = data.get("timestamp");
+
+                if (appId.isEmpty()) {
+                    appId = String.valueOf(sessionAppIds.getOrDefault(sessionId, "")).trim();
+                }
+                if (appId.isEmpty()) {
+                    appId = parseAppIdFromRoom(room);
+                }
+
+                long timestamp;
+                if (tsObj instanceof Number) {
+                    timestamp = ((Number) tsObj).longValue();
+                } else {
+                    timestamp = Long.parseLong(String.valueOf(tsObj));
+                }
+
+                Map<String, Object> recallResult = chatPersistenceService.recallMessage(appId, timestamp, sessionUserId, CHAT_RECALL_WINDOW_MS);
+                boolean success = Boolean.TRUE.equals(recallResult.get("success"));
+
+                if (success) {
+                    Map<String, Object> eventPayload = new HashMap<>();
+                    eventPayload.put("timestamp", timestamp);
+                    eventPayload.put("room", String.valueOf(recallResult.getOrDefault("room", room)));
+                    eventPayload.put("appId", String.valueOf(recallResult.getOrDefault("appId", appId)));
+                    eventPayload.put("userId", sessionUserId);
+                    eventPayload.put("eventType", "message_recalled");
+                    eventPayload.put("message", "Tin nhan da duoc thu hoi");
+                    eventPayload.put("recalledAt", recallResult.getOrDefault("recalledAt", System.currentTimeMillis()));
+
+                    String targetRoom = String.valueOf(eventPayload.get("room"));
+                    if (targetRoom != null && !targetRoom.isBlank()) {
+                        server.getRoomOperations(targetRoom).sendEvent("chat_message_recalled", eventPayload);
+                    }
+
+                    if (ackSender != null) {
+                        ackSender.sendAckData(objectMapper.writeValueAsString(recallResult));
+                    }
+                } else {
+                    if (ackSender != null) {
+                        ackSender.sendAckData(objectMapper.writeValueAsString(recallResult));
+                    }
+                }
+            } catch (Exception e) {
+                logger.error("❌ Error in chat_recall_message handler: {}", e.getMessage(), e);
+                if (ackSender != null) {
+                    ackSender.sendAckData("{\"success\":false,\"reason\":\"exception\"}");
+                }
+            }
+        });
+
         // Lấy lịch sử chat
         server.addEventListener("chat_history", String.class, (client, room, ackSender) -> {
             try {
@@ -1201,10 +2007,14 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
                                 }
 
                                 if (response.isSuccess() && appId != null && !appId.isEmpty()) {
+                                    trackSessionRoom(client.getSessionId(), appId);
                                     client.joinRoom(appId);
                                     notifySignInToRoom(appId,client.getSessionId().toString(),displayIdentifier);
                                     sessionAppIds.put(client.getSessionId(), appId);
                                     sessionUsernames.put(client.getSessionId(), displayIdentifier);
+                                    sessionUserIds.put(client.getSessionId(), user.getId());
+                                    sessionPortalFlags.put(client.getSessionId(), true);
+                                    onPortalUserOnline(client.getSessionId(), appId, user.getId(), displayIdentifier);
                                     logger.info("Client " + client.getSessionId() + " joined app room: " + appId);
                                 }
                             }
@@ -1349,6 +2159,57 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
     @PostConstruct
     public void postConstruct() {
         logger.info("✅ SocketIOConfig loaded and PostConstruct called. Port {}",socketPort);
+        // Schedule cleanup of stale welcome timestamps to prevent unbounded memory growth
+        scheduleWelcomeTimestampCleanup();
+    }
+
+    private void scheduleWelcomeTimestampCleanup() {
+        // Run cleanup every hour to remove welcome timestamps older than 24h
+        chatAiScheduler.scheduleAtFixedRate(() -> {
+            try {
+                long now = System.currentTimeMillis();
+                long staleThresholdMs = now - AUTO_WELCOME_COOLDOWN_MS;
+                long pendingStaleThresholdMs = now - PENDING_AUTO_MESSAGE_TTL_MS;
+                
+                int removedCount = 0;
+                for (Map.Entry<String, Long> entry : welcomeTimestampByAppPhone.entrySet()) {
+                    if (entry.getValue() < staleThresholdMs) {
+                        welcomeTimestampByAppPhone.remove(entry.getKey());
+                        removedCount++;
+                    }
+                }
+
+                int removedGuestKeyCount = 0;
+                for (Map.Entry<String, Long> entry : welcomeTimestampByGuestKey.entrySet()) {
+                    if (entry.getValue() < staleThresholdMs) {
+                        welcomeTimestampByGuestKey.remove(entry.getKey());
+                        removedGuestKeyCount++;
+                    }
+                }
+
+                int removedPending = 0;
+                for (Map.Entry<String, Long> entry : pendingAutoMessagesUpdatedAt.entrySet()) {
+                    if (entry.getValue() < pendingStaleThresholdMs) {
+                        String key = entry.getKey();
+                        pendingAutoMessagesUpdatedAt.remove(key);
+                        pendingAutoMessagesByGuest.remove(key);
+                        removedPending++;
+                    }
+                }
+                
+                if (removedCount > 0 || removedGuestKeyCount > 0 || removedPending > 0) {
+                    logger.info("🧹 Cleanup done: appPhone={} guestKey={} pending={} | sizes appPhone={} guestKey={} pending={}",
+                               removedCount,
+                               removedGuestKeyCount,
+                               removedPending,
+                               welcomeTimestampByAppPhone.size(),
+                               welcomeTimestampByGuestKey.size(),
+                               pendingAutoMessagesByGuest.size());
+                }
+            } catch (Exception e) {
+                logger.warn("Error during welcome timestamp cleanup: {}", e.getMessage());
+            }
+        }, 1, 60, TimeUnit.MINUTES); // Start after 1 min, run every 60 min (1 hour)
     }
     
     @PreDestroy

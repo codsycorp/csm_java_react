@@ -42,6 +42,7 @@ public class ChatPersistenceService {
     
     private static final String CHAT_TABLE = "chat_messages";
     private static final int CACHE_SIZE_LIMIT = 10000; // Giữ 10k messages trong cache
+    private static final int PRELOAD_PAGE_SIZE = 1000;
     private final Set<String> loadedApps = ConcurrentHashMap.newKeySet();
     
     @PostConstruct
@@ -69,77 +70,128 @@ public class ChatPersistenceService {
                 logger.warn("Cannot rebuild Lucene index for chat table (appId={}): {}", dbAppId, e.getMessage());
             }
             
-            // Nạp dữ liệu đã lưu vào cache để client thấy được lịch sử sau khi restart
-            Map<String, Object> scanResult = recordManager.fullScan(dbAppId, CHAT_TABLE);
-            Object rowsObj = scanResult != null ? scanResult.get("rows") : null;
-            if (rowsObj instanceof List<?>) {
-                List<?> rows = (List<?>) rowsObj;
-                List<ChatMessage> loaded = new ArrayList<>();
-                int backfilledCount = 0;
-                long backfillBaseTime = System.currentTimeMillis();
+            // Nạp dữ liệu đã lưu vào cache bằng phân trang để tránh giữ toàn bộ bảng trong RAM
+            PriorityQueue<ChatMessage> latestMessages = new PriorityQueue<>(
+                Comparator.comparingLong(m -> m.getTimestamp() != null ? m.getTimestamp() : 0L)
+            );
+            int backfilledCount = 0;
+            long backfillBaseTime = System.currentTimeMillis();
+            int scannedRows = 0;
+
+            String cursor = null;
+            Set<String> seenCursors = new HashSet<>();
+            while (true) {
+                Map<String, Object> page = recordManager.filterWithPagination(
+                    dbAppId,
+                    CHAT_TABLE,
+                    null,
+                    PRELOAD_PAGE_SIZE,
+                    cursor
+                );
+
+                Object rowsObj = page != null ? page.get("rows") : null;
+                if (!(rowsObj instanceof List<?> rows) || rows.isEmpty()) {
+                    break;
+                }
+
                 for (Object rowObj : rows) {
-                    if (rowObj instanceof Map<?, ?> rowMap) {
-                        @SuppressWarnings("unchecked")
-                        Map<String, Object> row = (Map<String, Object>) rowMap;
+                    if (!(rowObj instanceof Map<?, ?> rowMap)) {
+                        continue;
+                    }
+                    scannedRows++;
 
-                        Long parsedTs = parseTimestamp(row.get("timestamp"));
-                        if (parsedTs == null) {
-                            long fallbackTs = backfillBaseTime + backfilledCount;
-                            row.put("timestamp", fallbackTs);
-                            try {
-                                recordManager.createRecord(dbAppId, CHAT_TABLE, row);
-                                backfilledCount++;
-                            } catch (Exception backfillError) {
-                                logger.warn("Failed to backfill timestamp for chat row in appId {}: {}", dbAppId, backfillError.getMessage());
-                            }
-                        }
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> row = (Map<String, Object>) rowMap;
 
-                        ChatMessage msg = convertMapToChatMessage(row);
-                        if (msg != null) {
-                            // Bảo vệ timestamp để sắp xếp đúng
-                            if (msg.getTimestamp() == null) {
-                                msg.setTimestamp(0L);
-                            }
-                            loaded.add(msg);
+                    Long parsedTs = parseTimestamp(row.get("timestamp"));
+                    if (parsedTs == null) {
+                        long fallbackTs = backfillBaseTime + backfilledCount;
+                        row.put("timestamp", fallbackTs);
+                        try {
+                            recordManager.createRecord(dbAppId, CHAT_TABLE, row);
+                            backfilledCount++;
+                        } catch (Exception backfillError) {
+                            logger.warn("Failed to backfill timestamp for chat row in appId {}: {}", dbAppId, backfillError.getMessage());
                         }
                     }
-                }
 
-                if (backfilledCount > 0) {
-                    logger.info("🛠️ Backfilled missing timestamp for {} chat messages in appId {}", backfilledCount, dbAppId);
-                }
-
-                // Sắp xếp theo timestamp tăng dần và giới hạn dung lượng cache
-                loaded.sort(Comparator.comparingLong(m -> m.getTimestamp() != null ? m.getTimestamp() : 0L));
-                if (loaded.size() > CACHE_SIZE_LIMIT) {
-                    loaded = loaded.subList(loaded.size() - CACHE_SIZE_LIMIT, loaded.size());
-                }
-
-                synchronized (chatCache) {
-                    chatCache.removeIf(msg -> normalizeAppId(msg.getAppId()).equals(dbAppId));
-                    chatCache.addAll(loaded);
-                }
-
-                // Khôi phục danh sách guest phones theo appId
-                guestPhonesByApp.remove(dbAppId);
-                guestSessionsByApp.remove(dbAppId);
-                for (ChatMessage msg : loaded) {
-                    if (msg.getAppId() != null && msg.getGuestPhone() != null && !msg.getGuestPhone().isEmpty()) {
-                        guestPhonesByApp.computeIfAbsent(normalizeAppId(msg.getAppId()), k -> ConcurrentHashMap.newKeySet())
-                            .add(msg.getGuestPhone());
+                    ChatMessage msg = convertMapToChatMessage(row);
+                    if (msg == null) {
+                        continue;
                     }
-                    if (msg.getAppId() != null && msg.getGuestSessionId() != null && !msg.getGuestSessionId().isEmpty()) {
-                        guestSessionsByApp.computeIfAbsent(normalizeAppId(msg.getAppId()), k -> ConcurrentHashMap.newKeySet())
-                            .add(msg.getGuestSessionId());
+                    if (msg.getTimestamp() == null) {
+                        msg.setTimestamp(0L);
+                    }
+
+                    if (latestMessages.size() < CACHE_SIZE_LIMIT) {
+                        latestMessages.offer(msg);
+                    } else {
+                        long currentTs = msg.getTimestamp() != null ? msg.getTimestamp() : 0L;
+                        ChatMessage oldest = latestMessages.peek();
+                        long oldestTs = oldest != null && oldest.getTimestamp() != null ? oldest.getTimestamp() : 0L;
+                        if (currentTs >= oldestTs) {
+                            latestMessages.poll();
+                            latestMessages.offer(msg);
+                        }
                     }
                 }
 
-                logger.info("✅ Loaded {} chat messages from RocksDB into cache for appId {}", loaded.size(), dbAppId);
+                cursor = nextCursor(page, seenCursors, CHAT_TABLE);
+                if (cursor == null) {
+                    break;
+                }
             }
+
+            List<ChatMessage> loaded = new ArrayList<>(latestMessages);
+            loaded.sort(Comparator.comparingLong(m -> m.getTimestamp() != null ? m.getTimestamp() : 0L));
+
+            if (backfilledCount > 0) {
+                logger.info("🛠️ Backfilled missing timestamp for {} chat messages in appId {}", backfilledCount, dbAppId);
+            }
+
+            synchronized (chatCache) {
+                chatCache.removeIf(msg -> normalizeAppId(msg.getAppId()).equals(dbAppId));
+                chatCache.addAll(loaded);
+            }
+
+            // Khôi phục danh sách guest phones theo appId
+            guestPhonesByApp.remove(dbAppId);
+            guestSessionsByApp.remove(dbAppId);
+            for (ChatMessage msg : loaded) {
+                if (msg.getAppId() != null && msg.getGuestPhone() != null && !msg.getGuestPhone().isEmpty()) {
+                    guestPhonesByApp.computeIfAbsent(normalizeAppId(msg.getAppId()), k -> ConcurrentHashMap.newKeySet())
+                        .add(msg.getGuestPhone());
+                }
+                if (msg.getAppId() != null && msg.getGuestSessionId() != null && !msg.getGuestSessionId().isEmpty()) {
+                    guestSessionsByApp.computeIfAbsent(normalizeAppId(msg.getAppId()), k -> ConcurrentHashMap.newKeySet())
+                        .add(msg.getGuestSessionId());
+                }
+            }
+
+            logger.info("✅ Loaded {} chat messages from RocksDB into cache for appId {} (scanned {})", loaded.size(), dbAppId, scannedRows);
             loadedApps.add(dbAppId);
         } catch (Exception e) {
             logger.error("❌ Error initializing chat persistence for appId {}: {}", dbAppId, e.getMessage(), e);
         }
+    }
+
+    private String nextCursor(Map<String, Object> pageResult, Set<String> seenCursors, String tableName) {
+        if (pageResult == null) {
+            return null;
+        }
+        Object nextCursorObj = pageResult.get("nextCursor");
+        if (nextCursorObj == null) {
+            return null;
+        }
+        String cursor = String.valueOf(nextCursorObj);
+        if (cursor.isBlank()) {
+            return null;
+        }
+        if (!seenCursors.add(cursor)) {
+            logger.warn("Detected repeated nextCursor while scanning {}. Stop pagination to avoid loop.", tableName);
+            return null;
+        }
+        return cursor;
     }
 
     /**
@@ -233,6 +285,12 @@ public class ChatPersistenceService {
             record.put("avatar", message.getAvatar());
             record.put("isAdmin", message.getIsAdmin());
             record.put("eventType", message.getEventType());
+            if (message.getAttachments() != null && !message.getAttachments().isEmpty()) {
+                record.put("attachments", objectMapper.writeValueAsString(message.getAttachments()));
+            }
+            if (message.getCheckinMeta() != null && !message.getCheckinMeta().isEmpty()) {
+                record.put("checkinMeta", objectMapper.writeValueAsString(message.getCheckinMeta()));
+            }
             
             if (message.getReadBy() != null) {
                 record.put("readBy", String.join(",", message.getReadBy()));
@@ -539,6 +597,26 @@ public class ChatPersistenceService {
         msg.setGuestSessionId((String) row.get("guestSessionId"));
         msg.setAvatar((String) row.get("avatar"));
         msg.setEventType((String) row.get("eventType"));
+
+        Object attachmentsObj = row.get("attachments");
+        if (attachmentsObj instanceof String attachmentsStr && attachmentsStr != null && !attachmentsStr.isBlank()) {
+            try {
+                @SuppressWarnings("unchecked")
+                List<Map<String, Object>> attachments = objectMapper.readValue(attachmentsStr, List.class);
+                msg.setAttachments(attachments);
+            } catch (Exception ignored) {
+            }
+        }
+
+        Object checkinObj = row.get("checkinMeta");
+        if (checkinObj instanceof String checkinStr && checkinStr != null && !checkinStr.isBlank()) {
+            try {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> checkinMeta = objectMapper.readValue(checkinStr, Map.class);
+                msg.setCheckinMeta(checkinMeta);
+            } catch (Exception ignored) {
+            }
+        }
         
         Long parsedTimestamp = parseTimestamp(row.get("timestamp"));
         if (parsedTimestamp != null) {
@@ -575,29 +653,14 @@ public class ChatPersistenceService {
             }
         }
         
-        // If not in cache, scan database
+        // If not in cache, query via indexed fields (appId + timestamp)
         try {
-            Map<String, Object> scanResult = recordManager.fullScan(dbAppId, CHAT_TABLE);
-            Object rowsObj = scanResult != null ? scanResult.get("rows") : null;
-            
-            if (rowsObj instanceof List<?>) {
-                List<?> rows = (List<?>) rowsObj;
-                for (Object rowObj : rows) {
-                    if (rowObj instanceof Map<?, ?> rowMap) {
-                        @SuppressWarnings("unchecked")
-                        Map<String, Object> record = (Map<String, Object>) rowMap;
-                        
-                        Long recordTs = parseTimestamp(record.get("timestamp"));
-                        
-                        if (recordTs != null && recordTs.equals(timestamp)) {
-                            // Found! Convert to ChatMessage
-                            return convertToChatMessage(record);
-                        }
-                    }
-                }
+            Map<String, Object> record = findMessageRecordByTimestamp(dbAppId, timestamp);
+            if (record != null) {
+                return convertToChatMessage(record);
             }
         } catch (Exception e) {
-            logger.error("Error scanning database for message timestamp {}: {}", timestamp, e.getMessage());
+            logger.error("Error querying message timestamp {} in appId {}: {}", timestamp, dbAppId, e.getMessage());
         }
         
         return null;
@@ -618,6 +681,26 @@ public class ChatPersistenceService {
         msg.setGuestPhone((String) record.get("guestPhone"));
         msg.setGuestSessionId((String) record.get("guestSessionId"));
         msg.setEventType((String) record.get("eventType"));
+
+        Object attachmentsObj = record.get("attachments");
+        if (attachmentsObj instanceof String attachmentsStr && attachmentsStr != null && !attachmentsStr.isBlank()) {
+            try {
+                @SuppressWarnings("unchecked")
+                List<Map<String, Object>> attachments = objectMapper.readValue(attachmentsStr, List.class);
+                msg.setAttachments(attachments);
+            } catch (Exception ignored) {
+            }
+        }
+
+        Object checkinObj = record.get("checkinMeta");
+        if (checkinObj instanceof String checkinStr && checkinStr != null && !checkinStr.isBlank()) {
+            try {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> checkinMeta = objectMapper.readValue(checkinStr, Map.class);
+                msg.setCheckinMeta(checkinMeta);
+            } catch (Exception ignored) {
+            }
+        }
         
         Long parsedTimestamp = parseTimestamp(record.get("timestamp"));
         if (parsedTimestamp != null) {
@@ -668,78 +751,214 @@ public class ChatPersistenceService {
         String dbAppId = normalizeAppId(appId);
         try {
             logger.info("🗑️ Attempting to delete message with timestamp: {} for appId {}", timestamp, dbAppId);
-            
-            // Tìm message trong cache để lấy id (vì timestamp không được index trong Lucene)
-            ChatMessage messageToDelete = null;
-            synchronized (chatCache) {
-                for (ChatMessage msg : chatCache) {
-                    if (msg.getTimestamp() != null && msg.getTimestamp().equals(timestamp)
-                            && normalizeAppId(msg.getAppId()).equals(dbAppId)) {
-                        messageToDelete = msg;
-                        break;
-                    }
+
+            ensureChatTable(dbAppId);
+
+            Map<String, Object> record = findMessageRecordByTimestamp(dbAppId, timestamp);
+            if (record == null) {
+                boolean removedOnlyCache;
+                synchronized (chatCache) {
+                    removedOnlyCache = chatCache.removeIf(msg -> msg.getTimestamp() != null
+                        && msg.getTimestamp().equals(timestamp)
+                        && normalizeAppId(msg.getAppId()).equals(dbAppId));
                 }
+                if (removedOnlyCache) {
+                    logger.info("✅ Removed message from cache only (db record not found): timestamp={}, appId={}", timestamp, dbAppId);
+                } else {
+                    logger.warn("⚠️ Message with timestamp {} not found for appId {}", timestamp, dbAppId);
+                }
+                return removedOnlyCache;
             }
-            
-            if (messageToDelete == null) {
-                logger.warn("⚠️ Message with timestamp {} not found in cache", timestamp);
+
+            Object recordId = record.get("id");
+            if (recordId == null) {
+                logger.error("❌ Found record without id for timestamp {} in appId {}", timestamp, dbAppId);
                 return false;
             }
-            
-            logger.info("📝 Found message in cache: id={} (will be generated), timestamp={}", "N/A", timestamp);
-            
-            // Xoá khỏi cache
-                boolean removed = chatCache.removeIf(msg -> msg.getTimestamp() != null && msg.getTimestamp().equals(timestamp)
+
+            recordManager.deleteRecord(dbAppId, CHAT_TABLE, record);
+
+            synchronized (chatCache) {
+                chatCache.removeIf(msg -> msg.getTimestamp() != null
+                    && msg.getTimestamp().equals(timestamp)
                     && normalizeAppId(msg.getAppId()).equals(dbAppId));
-            logger.info("✅ Removed from cache: {}", removed);
-            
-            // Xoá khỏi database bằng cách scan toàn bộ và tìm theo timestamp
-            // (vì timestamp không nằm trong fieldsSearch nên không filter được)
-                ensureChatTable(dbAppId);
-            
-            // Scan toàn bộ table để tìm message có timestamp khớp
-                Map<String, Object> scanResult = recordManager.fullScan(dbAppId, CHAT_TABLE);
-            Object rowsObj = scanResult != null ? scanResult.get("rows") : null;
-            
-            if (rowsObj instanceof List<?>) {
-                List<?> rows = (List<?>) rowsObj;
-                logger.info("📋 Scanning {} total messages to find timestamp {}", rows.size(), timestamp);
-                
-                for (Object rowObj : rows) {
-                    if (rowObj instanceof Map<?, ?> rowMap) {
-                        @SuppressWarnings("unchecked")
-                        Map<String, Object> record = (Map<String, Object>) rowMap;
-                        
-                        // Kiểm tra timestamp
-                        Long recordTs = parseTimestamp(record.get("timestamp"));
-                        
-                        if (recordTs != null && recordTs.equals(timestamp)) {
-                            // Tìm thấy! Xóa record này
-                            Object recordId = record.get("id");
-                            logger.info("📄 Found matching record: id={}, timestamp={}", recordId, recordTs);
-                            
-                            if (recordId == null) {
-                                logger.error("❌ Record missing 'id' field - cannot delete!");
-                                continue;
-                            }
-                            
-                            // Xóa từ database
-                            recordManager.deleteRecord(dbAppId, CHAT_TABLE, record);
-                            logger.info("✅ Successfully deleted message from database: id={}, timestamp={}", recordId, timestamp);
-                            return true;
-                        }
-                    }
-                }
-                
-                logger.warn("⚠️ Message with timestamp {} not found in database after scanning {} records", timestamp, rows.size());
-            } else {
-                logger.warn("⚠️ fullScan returned no rows");
             }
-            
-            return false;
+
+            logger.info("✅ Successfully deleted message from database/cache: id={}, timestamp={}, appId={}", recordId, timestamp, dbAppId);
+            return true;
         } catch (Exception e) {
             logger.error("❌ Error deleting message: {}", e.getMessage(), e);
             return false;
+        }
+    }
+
+    private Map<String, Object> findMessageRecordByTimestamp(String appId, long timestamp) {
+        SearchFilter byApp = buildEqFilter("appId", appId);
+
+        SearchFilter byTimestamp = buildEqFilter("timestamp", String.valueOf(timestamp));
+
+        SearchFilter root = new SearchFilter();
+        root.setOperator("AND");
+        root.setConditions(Arrays.asList(byApp, byTimestamp));
+
+        Map<String, Object> queryResult = recordManager.filterWithPagination(appId, CHAT_TABLE, root, 5, null);
+        Object rowsObj = queryResult != null ? queryResult.get("rows") : null;
+        if (!(rowsObj instanceof List<?> rows) || rows.isEmpty()) {
+            return null;
+        }
+
+        for (Object rowObj : rows) {
+            if (rowObj instanceof Map<?, ?> rowMap) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> record = (Map<String, Object>) rowMap;
+                Long recordTs = parseTimestamp(record.get("timestamp"));
+                if (recordTs != null && recordTs.equals(timestamp)) {
+                    return record;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Xóa toàn bộ tin nhắn của một người dùng (theo userId hoặc username) khỏi chat_messages.
+     * Được gọi khi xóa tài khoản để dọn dẹp lịch sử chat liên quan.
+     *
+     * @return số tin nhắn đã xóa
+     */
+    public int deleteMessagesByUser(String appId, String userId, String username) {
+        if ((userId == null || userId.isBlank()) && (username == null || username.isBlank())) {
+            return 0;
+        }
+        String dbAppId = normalizeAppId(appId);
+        int deleted = 0;
+        try {
+            ensureChatTable(dbAppId);
+
+            List<SearchFilter> orConds = new ArrayList<>();
+            if (userId != null && !userId.isBlank()) {
+                orConds.add(buildEqFilter("userId", userId.trim()));
+            }
+            if (username != null && !username.isBlank()) {
+                orConds.add(buildEqFilter("username", username.trim()));
+            }
+
+            SearchFilter filter;
+            if (orConds.size() == 1) {
+                filter = orConds.get(0);
+            } else {
+                filter = new SearchFilter();
+                filter.setOperator("OR");
+                filter.setConditions(orConds);
+            }
+
+            Map<String, Object> result = recordManager.filter(dbAppId, CHAT_TABLE, filter);
+            Object rowsObj = result != null ? result.get("rows") : null;
+            if (rowsObj instanceof List<?> rows) {
+                for (Object rowObj : rows) {
+                    if (!(rowObj instanceof Map<?, ?> rowMap)) continue;
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> rec = (Map<String, Object>) rowMap;
+                    recordManager.deleteRecord(dbAppId, CHAT_TABLE, rec);
+                    deleted++;
+                }
+            }
+
+            // Dọn cache
+            final String uid = userId != null ? userId.trim() : "";
+            final String uname = username != null ? username.trim() : "";
+            synchronized (chatCache) {
+                chatCache.removeIf(msg ->
+                    normalizeAppId(msg.getAppId()).equals(dbAppId) && (
+                        (!uid.isEmpty() && uid.equals(msg.getUserId())) ||
+                        (!uname.isEmpty() && uname.equalsIgnoreCase(msg.getUsername()))
+                    )
+                );
+            }
+
+            if (deleted > 0) {
+                logger.info("🗑️ Đã xóa {} tin nhắn chat của userId={} username={} trong appId={}", deleted, userId, username, dbAppId);
+            }
+            return deleted;
+        } catch (Exception e) {
+            logger.error("❌ Lỗi khi xóa tin nhắn của userId={} username={} appId={}: {}", userId, username, appId, e.getMessage());
+            return 0;
+        }
+    }
+
+    /**
+     * Thu hoi tin nhan (soft recall) trong khoang thoi gian cho phep.
+     * Khong xoa lich su; chi danh dau eventType=message_recalled va an noi dung/media.
+     */
+    public synchronized Map<String, Object> recallMessage(String appId, long timestamp, String requesterUserId, long recallWindowMs) {
+        String dbAppId = normalizeAppId(appId);
+        Map<String, Object> result = new HashMap<>();
+        result.put("success", false);
+        result.put("reason", "unknown");
+
+        try {
+            ensureChatTable(dbAppId);
+            Map<String, Object> record = findMessageRecordByTimestamp(dbAppId, timestamp);
+            if (record == null) {
+                result.put("reason", "not_found");
+                return result;
+            }
+
+            String ownerUserId = String.valueOf(record.getOrDefault("userId", "")).trim();
+            String requester = String.valueOf(requesterUserId == null ? "" : requesterUserId).trim();
+            if (requester.isEmpty() || ownerUserId.isEmpty() || !ownerUserId.equals(requester)) {
+                result.put("reason", "forbidden");
+                return result;
+            }
+
+            Long messageTs = parseTimestamp(record.get("timestamp"));
+            if (messageTs == null) {
+                result.put("reason", "invalid_timestamp");
+                return result;
+            }
+
+            long now = System.currentTimeMillis();
+            if (recallWindowMs > 0 && (now - messageTs) > recallWindowMs) {
+                result.put("reason", "expired");
+                result.put("expiredByMs", (now - messageTs) - recallWindowMs);
+                return result;
+            }
+
+            String currentEvent = String.valueOf(record.getOrDefault("eventType", "")).trim();
+            if (!"message_recalled".equals(currentEvent)) {
+                record.put("eventType", "message_recalled");
+                record.put("message", "Tin nhan da duoc thu hoi");
+                record.put("attachments", "");
+                record.put("checkinMeta", "");
+                record.put("recalledAt", now);
+                recordManager.createRecord(dbAppId, CHAT_TABLE, record);
+            }
+
+            synchronized (chatCache) {
+                for (ChatMessage msg : chatCache) {
+                    if (msg.getTimestamp() == null) continue;
+                    if (!msg.getTimestamp().equals(timestamp)) continue;
+                    if (!normalizeAppId(msg.getAppId()).equals(dbAppId)) continue;
+                    msg.setEventType("message_recalled");
+                    msg.setMessage("Tin nhan da duoc thu hoi");
+                    msg.setAttachments(null);
+                    msg.setCheckinMeta(null);
+                }
+            }
+
+            result.put("success", true);
+            result.put("reason", "ok");
+            result.put("timestamp", timestamp);
+            result.put("room", String.valueOf(record.getOrDefault("room", "")));
+            result.put("appId", dbAppId);
+            result.put("userId", requester);
+            result.put("recalledAt", now);
+            return result;
+        } catch (Exception e) {
+            logger.error("❌ Error recalling message appId={}, ts={}, requester={}: {}", dbAppId, timestamp, requesterUserId, e.getMessage(), e);
+            result.put("reason", "exception");
+            return result;
         }
     }
 

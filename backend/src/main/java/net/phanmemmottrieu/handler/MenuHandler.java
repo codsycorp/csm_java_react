@@ -26,19 +26,37 @@ public class MenuHandler {
             org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
         
         List<String> userMenuIds = null;
+        boolean authenticatedUser = false;
+        boolean privilegedUser = false;
         
         if (authentication != null && authentication.isAuthenticated() && 
             authentication.getPrincipal() != null && 
             !"anonymousUser".equals(authentication.getPrincipal())) {
+            authenticatedUser = true;
             
             Object principal = authentication.getPrincipal();
             if (principal instanceof net.phanmemmottrieu.model.User) {
                 net.phanmemmottrieu.model.User user = (net.phanmemmottrieu.model.User) principal;
                 userMenuIds = user.getMenusPermissions();
+                Boolean dev = user.getDev();
+                List<String> permissions = user.getPermissions();
+                privilegedUser = Boolean.TRUE.equals(dev) ||
+                    (permissions != null && permissions.stream().anyMatch(p ->
+                        "admin".equalsIgnoreCase(String.valueOf(p)) || "dev".equalsIgnoreCase(String.valueOf(p))));
             } else if (principal instanceof java.util.Map) {
-                Object menusPerms = ((java.util.Map<?, ?>) principal).get("menusPermissions");
+                java.util.Map<?, ?> principalMap = (java.util.Map<?, ?>) principal;
+                Object menusPerms = principalMap.get("menusPermissions");
                 if (menusPerms instanceof java.util.List<?>) {
                     userMenuIds = (java.util.List<String>) menusPerms;
+                }
+                Object dev = principalMap.get("dev");
+                privilegedUser = dev instanceof Boolean && (Boolean) dev;
+                Object permissionsObj = principalMap.get("permissions");
+                if (!privilegedUser && permissionsObj instanceof java.util.List<?>) {
+                    privilegedUser = ((java.util.List<?>) permissionsObj).stream().anyMatch(p -> {
+                        String role = p == null ? "" : String.valueOf(p);
+                        return "admin".equalsIgnoreCase(role) || "dev".equalsIgnoreCase(role);
+                    });
                 }
             }
         }
@@ -53,10 +71,12 @@ public class MenuHandler {
 
         // Filter menus by user permissions if available
         final List<Map<String, Object>> filteredMenus;
-        if (userMenuIds != null && !userMenuIds.isEmpty()) {
+        if (privilegedUser) {
+            filteredMenus = allMenus;
+        } else if (authenticatedUser) {
             filteredMenus = filterMenusByPermissions(allMenus, userMenuIds);
         } else {
-            filteredMenus = allMenus;
+            filteredMenus = Collections.emptyList();
         }
 
         response.set("code", 200);

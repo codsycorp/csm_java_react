@@ -193,14 +193,15 @@ codium --install-extension redhat.java
 codium --install-extension formulahendry.code-runner
 
 # Tạo lại SSL trên server member.suppercloud
-sudo certbot --nginx -d phanmemmottrieu.net -d www.phanmemmottrieu.net -d api.phanmemmottrieu.net -d php.phanmemmottrieu.net -d kqxs.phanmemmottrieu.net -d static.phanmemmottrieu.net -d realtime.phanmemmottrieu.net -d tanphuice.com -d www.tanphuice.com -d nuocdatanphu.com -d www.nuocdatanphu.com -d h-holding.vn -d www.h-holding.vn -d h-holding.com.vn -d www.h-holding.com.vn -d csmbridge.net -d www.csmbridge.net
+sudo certbot --nginx -d phanmemmottrieu.net -d www.phanmemmottrieu.net -d api.phanmemmottrieu.net -d php.phanmemmottrieu.net -d kqxs.phanmemmottrieu.net -d static.phanmemmottrieu.net -d admin.phanmemmottrieu.net -d realtime.phanmemmottrieu.net -d tanphuice.com -d www.tanphuice.com -d nuocdatanphu.com -d www.nuocdatanphu.com -d h-holding.vn -d www.h-holding.vn -d admin.h-holding.vn -d h-holding.com.vn -d www.h-holding.com.vn -d csmbridge.net -d www.csmbridge.net
 # Mở thiết bị android giả lập
 ~/Library/Android/sdk/cmdline-tools/latest/bin/avdmanager create avd \
   -n Pixel_5_API_30 \
   -k "system-images;android-30;google_apis;x86_64" \
   -d "pixel"
 ~/Library/Android/sdk/emulator/emulator -avd Pixel_5_API_30
-
+# Kiểm tra dung lượng các thư mục trên server
+sudo du -sh /root/la_server/* | sort -rh | head -n 15
 # Cấu hình dịch vụ test API FIDOVN
 # house.phanmemmottrieu.net
 # job.phanmemmottrieu.net

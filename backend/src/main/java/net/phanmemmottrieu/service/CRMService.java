@@ -31,6 +31,7 @@ import net.phanmemmottrieu.data.SearchFilter;
 @Service
 public class CRMService {
     private static final Logger logger = LoggerFactory.getLogger(CRMService.class);
+    private static final int STATS_PAGE_SIZE = 500;
     private final RecordManager recordManager;
     private final GoogleIndexService googleIndexService;
     
@@ -387,9 +388,6 @@ public class CRMService {
             Long toTs = parseDateBoundary(toDate, true);
             boolean hasDateFilter = fromTs != null || toTs != null;
 
-            List<Map<String, Object>> customers = safeRows(recordManager.fullScan(appId, TABLE_CUSTOMERS));
-            List<Map<String, Object>> purchases = safeRows(recordManager.fullScan(appId, TABLE_PURCHASES));
-
             Map<String, Object> stats = new HashMap<>();
 
             Map<String, Integer> byStatus = new HashMap<>();
@@ -398,36 +396,78 @@ public class CRMService {
             int contactedCustomers = 0;
             int convertedCustomers = 0;
 
-            for (Map<String, Object> customer : customers) {
-                long createdAt = asEpochMillis(customer.get("created_at"));
-                if (hasDateFilter && !inRange(createdAt, fromTs, toTs)) {
-                    continue;
+            String customerCursor = null;
+            Set<String> seenCustomerCursors = new HashSet<>();
+            while (true) {
+                Map<String, Object> customerPage = recordManager.filterWithPagination(
+                    appId,
+                    TABLE_CUSTOMERS,
+                    null,
+                    STATS_PAGE_SIZE,
+                    customerCursor
+                );
+                List<Map<String, Object>> customers = safeRows(customerPage);
+                if (customers.isEmpty()) {
+                    break;
                 }
 
-                totalCustomers++;
+                for (Map<String, Object> customer : customers) {
+                    long createdAt = asEpochMillis(customer.get("created_at"));
+                    if (hasDateFilter && !inRange(createdAt, fromTs, toTs)) {
+                        continue;
+                    }
 
-                String status = nonBlankOrDefault(asString(customer.get("status")), "new").toLowerCase();
-                byStatus.put(status, byStatus.getOrDefault(status, 0) + 1);
-                if (isContactedStatus(status)) {
-                    contactedCustomers++;
-                }
-                if ("purchased".equals(status)) {
-                    convertedCustomers++;
+                    totalCustomers++;
+
+                    String status = nonBlankOrDefault(asString(customer.get("status")), "new").toLowerCase();
+                    byStatus.put(status, byStatus.getOrDefault(status, 0) + 1);
+                    if (isContactedStatus(status)) {
+                        contactedCustomers++;
+                    }
+                    if ("purchased".equals(status)) {
+                        convertedCustomers++;
+                    }
+
+                    String source = canonicalSource(customer.get("source"));
+                    bySource.put(source, bySource.getOrDefault(source, 0) + 1);
                 }
 
-                String source = canonicalSource(customer.get("source"));
-                bySource.put(source, bySource.getOrDefault(source, 0) + 1);
+                customerCursor = nextCursor(customerPage, seenCustomerCursors, TABLE_CUSTOMERS);
+                if (customerCursor == null) {
+                    break;
+                }
             }
 
             int totalPurchases = 0;
             double totalRevenue = 0.0;
-            for (Map<String, Object> purchase : purchases) {
-                long purchasedAt = asEpochMillis(firstNonNull(purchase.get("purchased_at"), purchase.get("created_at")));
-                if (hasDateFilter && !inRange(purchasedAt, fromTs, toTs)) {
-                    continue;
+            String purchaseCursor = null;
+            Set<String> seenPurchaseCursors = new HashSet<>();
+            while (true) {
+                Map<String, Object> purchasePage = recordManager.filterWithPagination(
+                    appId,
+                    TABLE_PURCHASES,
+                    null,
+                    STATS_PAGE_SIZE,
+                    purchaseCursor
+                );
+                List<Map<String, Object>> purchases = safeRows(purchasePage);
+                if (purchases.isEmpty()) {
+                    break;
                 }
-                totalPurchases++;
-                totalRevenue += asDouble(purchase.get("price"));
+
+                for (Map<String, Object> purchase : purchases) {
+                    long purchasedAt = asEpochMillis(firstNonNull(purchase.get("purchased_at"), purchase.get("created_at")));
+                    if (hasDateFilter && !inRange(purchasedAt, fromTs, toTs)) {
+                        continue;
+                    }
+                    totalPurchases++;
+                    totalRevenue += asDouble(purchase.get("price"));
+                }
+
+                purchaseCursor = nextCursor(purchasePage, seenPurchaseCursors, TABLE_PURCHASES);
+                if (purchaseCursor == null) {
+                    break;
+                }
             }
 
             stats.put("total_customers", totalCustomers);
@@ -455,48 +495,110 @@ public class CRMService {
             Long toTs = parseDateBoundary(toDate, true);
             boolean hasDateFilter = fromTs != null || toTs != null;
 
-            List<Map<String, Object>> customers = safeRows(recordManager.fullScan(appId, TABLE_CUSTOMERS));
-            List<Map<String, Object>> googleBotRows = safeRows(recordManager.fullScan("csm", TABLE_GOOGLEBOT_VISITS));
-            List<Map<String, Object>> websitePosts = safeRows(recordManager.fullScan(appId, "web_service_detail"));
-
             Map<String, Integer> bySource = new HashMap<>();
             Map<String, Integer> dailyLeadCount = new TreeMap<>();
             int totalVisits = 0;
 
-            for (Map<String, Object> customer : customers) {
-                long createdAt = asEpochMillis(customer.get("created_at"));
-                if (hasDateFilter && !inRange(createdAt, fromTs, toTs)) {
-                    continue;
+            String customerCursor = null;
+            Set<String> seenCustomerCursors = new HashSet<>();
+            while (true) {
+                Map<String, Object> customerPage = recordManager.filterWithPagination(
+                    appId,
+                    TABLE_CUSTOMERS,
+                    null,
+                    STATS_PAGE_SIZE,
+                    customerCursor
+                );
+                List<Map<String, Object>> customers = safeRows(customerPage);
+                if (customers.isEmpty()) {
+                    break;
                 }
 
-                String source = canonicalSource(customer.get("source"));
-                bySource.put(source, bySource.getOrDefault(source, 0) + 1);
+                for (Map<String, Object> customer : customers) {
+                    long createdAt = asEpochMillis(customer.get("created_at"));
+                    if (hasDateFilter && !inRange(createdAt, fromTs, toTs)) {
+                        continue;
+                    }
 
-                if (!"chat".equals(source)) {
-                    totalVisits++;
+                    String source = canonicalSource(customer.get("source"));
+                    bySource.put(source, bySource.getOrDefault(source, 0) + 1);
+
+                    if (!"chat".equals(source)) {
+                        totalVisits++;
+                    }
+
+                    String dayKey = toDateKey(createdAt);
+                    if (!dayKey.isEmpty()) {
+                        dailyLeadCount.put(dayKey, dailyLeadCount.getOrDefault(dayKey, 0) + 1);
+                    }
                 }
 
-                String dayKey = toDateKey(createdAt);
-                if (!dayKey.isEmpty()) {
-                    dailyLeadCount.put(dayKey, dailyLeadCount.getOrDefault(dayKey, 0) + 1);
+                customerCursor = nextCursor(customerPage, seenCustomerCursors, TABLE_CUSTOMERS);
+                if (customerCursor == null) {
+                    break;
                 }
             }
 
             Map<String, Integer> dailyGoogleBot = new TreeMap<>();
             int googleBotVisits = 0;
-            for (Map<String, Object> row : googleBotRows) {
-                long ts = asEpochMillis(firstNonNull(row.get("ts"), row.get("visitedAt")));
-                if (hasDateFilter && !inRange(ts, fromTs, toTs)) {
-                    continue;
-                }
-                googleBotVisits++;
 
-                String dayKey = asString(row.get("dateKey"));
-                if (dayKey == null || dayKey.isBlank()) {
-                    dayKey = toDateKey(ts);
+            String botCursor = null;
+            Set<String> seenBotCursors = new HashSet<>();
+            while (true) {
+                Map<String, Object> botPage = recordManager.filterWithPagination(
+                    "csm",
+                    TABLE_GOOGLEBOT_VISITS,
+                    null,
+                    STATS_PAGE_SIZE,
+                    botCursor
+                );
+                List<Map<String, Object>> googleBotRows = safeRows(botPage);
+                if (googleBotRows.isEmpty()) {
+                    break;
                 }
-                if (!dayKey.isEmpty()) {
-                    dailyGoogleBot.put(dayKey, dailyGoogleBot.getOrDefault(dayKey, 0) + 1);
+
+                for (Map<String, Object> row : googleBotRows) {
+                    long ts = asEpochMillis(firstNonNull(row.get("ts"), row.get("visitedAt")));
+                    if (hasDateFilter && !inRange(ts, fromTs, toTs)) {
+                        continue;
+                    }
+                    googleBotVisits++;
+
+                    String dayKey = asString(row.get("dateKey"));
+                    if (dayKey == null || dayKey.isBlank()) {
+                        dayKey = toDateKey(ts);
+                    }
+                    if (!dayKey.isEmpty()) {
+                        dailyGoogleBot.put(dayKey, dailyGoogleBot.getOrDefault(dayKey, 0) + 1);
+                    }
+                }
+
+                botCursor = nextCursor(botPage, seenBotCursors, TABLE_GOOGLEBOT_VISITS);
+                if (botCursor == null) {
+                    break;
+                }
+            }
+
+            int totalPosts = 0;
+            String postCursor = null;
+            Set<String> seenPostCursors = new HashSet<>();
+            while (true) {
+                Map<String, Object> postPage = recordManager.filterWithPagination(
+                    appId,
+                    "web_service_detail",
+                    null,
+                    STATS_PAGE_SIZE,
+                    postCursor
+                );
+                List<Map<String, Object>> websitePosts = safeRows(postPage);
+                if (websitePosts.isEmpty()) {
+                    break;
+                }
+                totalPosts += websitePosts.size();
+
+                postCursor = nextCursor(postPage, seenPostCursors, "web_service_detail");
+                if (postCursor == null) {
+                    break;
                 }
             }
 
@@ -518,7 +620,7 @@ public class CRMService {
             stats.put("google_bot_visits", googleBotVisits);
             stats.put("daily_stats", dailyStats);
             stats.put("by_source", bySource);
-            stats.put("total_posts", websitePosts.size());
+            stats.put("total_posts", totalPosts);
             stats.put("total_views", 0);
             return stats;
         } catch (Exception e) {
@@ -697,6 +799,25 @@ public class CRMService {
             return rows;
         }
         return new ArrayList<>();
+    }
+
+    private String nextCursor(Map<String, Object> pageResult, Set<String> seenCursors, String tableName) {
+        if (pageResult == null) {
+            return null;
+        }
+        Object nextCursorObj = pageResult.get("nextCursor");
+        if (nextCursorObj == null) {
+            return null;
+        }
+        String cursor = String.valueOf(nextCursorObj);
+        if (cursor.isBlank()) {
+            return null;
+        }
+        if (!seenCursors.add(cursor)) {
+            logger.warn("Detected repeated nextCursor while scanning table {}. Stop pagination to avoid loop.", tableName);
+            return null;
+        }
+        return cursor;
     }
 
     private boolean isContactedStatus(String status) {

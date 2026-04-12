@@ -1,4 +1,6 @@
 packages:
   - 'frontend'
+  - 'frontend-admin'
+  - 'frontend-web'
   - 'backend'
   - 'antdv-pro-feat-js'

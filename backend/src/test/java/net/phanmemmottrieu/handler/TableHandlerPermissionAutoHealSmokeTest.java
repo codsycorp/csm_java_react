@@ -66,7 +66,7 @@ class TableHandlerPermissionAutoHealSmokeTest {
         assertEquals("dept-1", row.get("department_id"));
         assertEquals("dept-1", row.get("team_id"));
 
-        verify(recordManager, times(1)).createRecord(eq("csm"), eq("csm_accounts"), eq(row), any());
+        verify(recordManager, times(1)).batchUpdateRecords(eq("csm"), eq("csm_accounts"), eq(rows), eq(List.of("id")));
     }
 
     @Test

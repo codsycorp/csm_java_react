@@ -18,6 +18,9 @@ import net.phanmemmottrieu.cache.ServiceDataCacheManager;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -55,6 +58,8 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.StandardCopyOption;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -141,6 +146,19 @@ public class WebSpringController {
     private final Map<String, CacheEntry<Boolean>> staticDetectionCache = new java.util.concurrent.ConcurrentHashMap<>();
     // Dedup processing for image optimization (avoid double work on concurrent requests)
     private final Map<String, Object> imageProcessLocks = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final int MAX_IMAGE_PRECOMPUTE_QUEUE = 300;
+    private final ThreadPoolExecutor imagePrecomputeExecutor = new ThreadPoolExecutor(
+            1,
+            1,
+            30,
+            TimeUnit.SECONDS,
+            new LinkedBlockingQueue<>(MAX_IMAGE_PRECOMPUTE_QUEUE),
+            r -> {
+                Thread t = new Thread(r, "image-precompute-worker");
+                t.setDaemon(true);
+                return t;
+            },
+            new ThreadPoolExecutor.AbortPolicy());
     
     // Feed ping control to avoid spamming Google
     private static final Map<String, Long> FEED_PING_CACHE = new java.util.concurrent.ConcurrentHashMap<>();
@@ -1943,7 +1961,7 @@ public class WebSpringController {
                 }
             } // --- END /images.shtml logic ---
             // --- START /upload.shtml logic ---
-            else if (linkP.equals("/upload.shtml")) {
+            else if (linkP.equals("/upload.shtml") || linkP.equals("/upload") || linkP.equals("/upload/")) {
                 // *** THAY ĐỔI TẠI ĐÂY: Lấy tham số từ requestParams ***
                 String appId = (String) requestParams.get("app_id");
                 String cmd = (String) requestParams.get("cmd");
@@ -2051,15 +2069,20 @@ public class WebSpringController {
                         String sanitizedName = xoa_dau(fileNameWithoutExtension);
                         String finalFileName = sanitizedName + fileExtension;
 
-                        Path targetFilePath = uploadRootPath.resolve(finalFileName);
+                        Path targetFilePath = uploadRootPath.resolve("tmp_" + UUID.randomUUID() + fileExtension);
                         try (InputStream in = filePart.getInputStream()) {
                             Files.copy(in, targetFilePath, StandardCopyOption.REPLACE_EXISTING);
                         }
 
-                        String thumbUrl = processUploadedMediaArtifacts(finalAppId, finalFileName, targetFilePath);
+                        StoredUploadResult storedUpload = storeUploadAsContentHash(finalAppId, finalFileName, targetFilePath);
+                        String thumbUrl = "";
+                        if (storedUpload.createdNew) {
+                            thumbUrl = processUploadedMediaArtifacts(finalAppId, storedUpload.fileName, storedUpload.filePath);
+                        }
 
-                        String fileUrl = String.format("app_images/%s/%s", finalAppId, finalFileName);
-                        logger.info("✅ Đã upload multipart file cục bộ: {} ({} bytes)", targetFilePath, filePart.getSize());
+                        String fileUrl = String.format("app_images/%s/%s", finalAppId, storedUpload.fileName);
+                        logger.info("✅ Multipart upload saved: appId={}, file={}, dedupReused={}, size={} bytes",
+                                finalAppId, storedUpload.fileName, !storedUpload.createdNew, filePart.getSize());
                         
                         // Trả về JSON có cả path (video) và thumb (thumbnail nếu có)
                         StringBuilder jsonRespone = new StringBuilder("{");
@@ -2125,17 +2148,22 @@ public class WebSpringController {
                         logger.info("⬆️ Upload base64 request appId={} file={} approxSize={}MB", finalAppId, finalFileName,
                             Math.max(1L, approxDecodedBytes / (1024 * 1024)));
 
-                        Path targetFilePath = uploadRootPath.resolve(finalFileName);
+                        Path targetFilePath = uploadRootPath.resolve("tmp_" + UUID.randomUUID() + fileExtension);
                         try (InputStream base64Stream = Base64.getDecoder().wrap(
                             new ByteArrayInputStream(base64Image.getBytes(StandardCharsets.US_ASCII)))) {
                             Files.copy(base64Stream, targetFilePath, StandardCopyOption.REPLACE_EXISTING);
                         }
 
-                        String thumbUrl = processUploadedMediaArtifacts(finalAppId, finalFileName, targetFilePath);
+                        StoredUploadResult storedUpload = storeUploadAsContentHash(finalAppId, finalFileName, targetFilePath);
+                        String thumbUrl = "";
+                        if (storedUpload.createdNew) {
+                            thumbUrl = processUploadedMediaArtifacts(finalAppId, storedUpload.fileName, storedUpload.filePath);
+                        }
 
                         // Sử dụng finalFileName
-                        String fileUrl = String.format("app_images/%s/%s", finalAppId, finalFileName);
-                        logger.info("✅ Đã upload file base64 cục bộ: {}", targetFilePath);
+                        String fileUrl = String.format("app_images/%s/%s", finalAppId, storedUpload.fileName);
+                        logger.info("✅ Base64 upload saved: appId={}, file={}, dedupReused={}",
+                                finalAppId, storedUpload.fileName, !storedUpload.createdNew);
                         
                         // Trả về JSON có cả path (video) và thumb (thumbnail nếu có)
                         StringBuilder jsonResponse = new StringBuilder("{");
@@ -2169,7 +2197,9 @@ public class WebSpringController {
                     try {
                         // 🔴 GUARD: Stream download with 32MB limit to avoid loading entire file in RAM
                         String sanitizedName = xoa_dau(name);
-                        Path targetFilePath = uploadRootPath.resolve(sanitizedName);
+                        int dotIndex = sanitizedName.lastIndexOf('.');
+                        String linkExt = dotIndex >= 0 ? sanitizedName.substring(dotIndex) : "";
+                        Path targetFilePath = uploadRootPath.resolve("tmp_" + UUID.randomUUID() + linkExt);
                         long maxLinkBytes = 32 * 1024 * 1024;
                         long downloadedBytes = 0;
                         byte[] buffer = new byte[8192]; // 8KB chunks
@@ -2188,11 +2218,16 @@ public class WebSpringController {
                             }
                         }
 
-                        String thumbUrl = processUploadedMediaArtifacts(finalAppId, sanitizedName, targetFilePath);
+                        StoredUploadResult storedUpload = storeUploadAsContentHash(finalAppId, sanitizedName, targetFilePath);
+                        String thumbUrl = "";
+                        if (storedUpload.createdNew) {
+                            thumbUrl = processUploadedMediaArtifacts(finalAppId, storedUpload.fileName, storedUpload.filePath);
+                        }
 
                         // Sử dụng finalAppId
-                        String fileUrl = String.format("app_images/%s/%s", finalAppId, sanitizedName);
-                        logger.info("✅ Đã upload file từ link cục bộ: {}", targetFilePath);
+                        String fileUrl = String.format("app_images/%s/%s", finalAppId, storedUpload.fileName);
+                        logger.info("✅ Link upload saved: appId={}, file={}, dedupReused={}",
+                                finalAppId, storedUpload.fileName, !storedUpload.createdNew);
                         
                         // Trả về JSON có cả path (video) và thumb (thumbnail nếu có)
                         StringBuilder jsonResponse = new StringBuilder("{");
@@ -2333,8 +2368,7 @@ public class WebSpringController {
                 domainFallbackRFilter.setOperator("AND");
                 domainFallbackRFilter.setConditions(List.of(
                     RecordManager.createCondition("domain_name", "eq", domain),
-                    RecordManager.createCondition("f_case", "eq", ""),  // ✅ Router fallback có f_case rỗng
-                    RecordManager.createCondition("app_type", "eq", "web"),
+                    RecordManager.createCondition("f_case", "eq", ""),  // 
                     RecordManager.createCondition("rp_index", "isnotnull", null),
                     RecordManager.createCondition("rp_index", "noteq", ""),
                     RecordManager.createCondition("run", "eq", 1)));
@@ -2409,10 +2443,9 @@ public class WebSpringController {
                     f_do, p_type, appType, rp_index, app_id, tbl_services, tbl_service_detail, normalizedPath);
                 
                 // ===== BỔ SUNG LOGIC CHO SSR VỚI REACT TẠI ĐÂY =====
-                // SSR is enabled if appType="web" AND we have sufficient data for querying
-                // rp_index is optional (for React template path), but app_id + tbl_services + tbl_service_detail are critical
-                boolean shouldAttemptSSR = "web".equalsIgnoreCase(appType) && !app_id.isEmpty() && !tbl_services.isEmpty()
-                    && !tbl_service_detail.isEmpty();
+                // SSR is enabled if rp_index is set (route points to a React template).
+                // app_id + tbl_services + tbl_service_detail are used for service data querying only (optional, fallback to empty).
+                boolean shouldAttemptSSR = !rp_index.isEmpty();
                 
                 if (shouldAttemptSSR) {
                     logger.info("✅ SSR CONDITIONS MET: appType={}, app_id={}, tbl_services={}, tbl_service_detail={}, rp_index={}, path={}",
@@ -2497,6 +2530,13 @@ public class WebSpringController {
                     
                     logger.info("🔐 SSR: service_type={}, page={}, pageSize={}, take={}, lastkey={}, q={}, path={}", service_type, ssr_page, ssr_pageSize, ssr_take, ssr_lastkey, ssr_q, normalizedPath);
                     
+                    boolean hasServiceData = !app_id.isEmpty() && !tbl_services.isEmpty() && !tbl_service_detail.isEmpty();
+                    
+                    // === SSR DATA QUERYING ===
+                    // Query database for service data with service_type + pagination + search
+                    Map<String, Object> ssrServiceData = new HashMap<>();
+                    
+                    if (hasServiceData) {
                     // === SERVICE_TYPE VALIDATION ===
                     // Try to derive service_type from URL slug if not provided (e.g., /bat-dong-san.shtml -> bat-dong-san)
                     String slugFromPath = "";
@@ -2535,10 +2575,6 @@ public class WebSpringController {
                     
                     logger.info("✅ SSR: service_type={} validated successfully", service_type);
                     // === END SERVICE_TYPE VALIDATION ===
-                    
-                    // === SSR DATA QUERYING ===
-                    // Query database for service data with service_type + pagination + search
-                    Map<String, Object> ssrServiceData = new HashMap<>();
                     
                     // ✅ PAGINATION STRATEGY (Hybrid):
                     // - Ưu tiên cursor để giảm IO khi đi tuần tự (page 1 -> 2 -> 3).
@@ -2796,6 +2832,7 @@ public class WebSpringController {
                     } // End cache check
                     
                     logger.debug("🔍 SSR: ssrServiceData prepared, totalCount={}, page={}, pageSize={}", ssrServiceData.get("totalCount"), ssrServiceData.get("page"), ssrServiceData.get("pageSize"));
+                    } // End if (hasServiceData)
                     // === END SSR DATA QUERYING ===
                     
                     // === END SSR SECURITY LOGIC ===
@@ -3412,6 +3449,12 @@ public class WebSpringController {
                             String dynamicCodeTemplatesJson = SHARED_OBJECT_MAPPER.writeValueAsString(dynamicCodeTemplatesMap);
                             String ssrDynamicCodeScript = "<script>window.__SSR_DYNAMIC_CODE_TEMPLATES__ = " + dynamicCodeTemplatesJson + ";</script>";
                             
+                            // Inject app config (f_logo, f_title) từ sys_la_routers vào window.__APP_CONFIG__
+                            String appConfigFLogo = safeStr(selectedRoute.get("f_logo"));
+                            String appConfigFTitle = safeStr(selectedRoute.get("f_title"));
+                            String appConfigJson = SHARED_OBJECT_MAPPER.writeValueAsString(Map.of("f_logo", appConfigFLogo, "f_title", appConfigFTitle));
+                            String appConfigScript = "<script>window.__APP_CONFIG__ = " + appConfigJson.replace("</", "<\\/") + ";</script>";
+                            
                             // Find </head> and </body> once
                             int headIdx = lower.indexOf("</head>");
                             int bodyIdx = lower.indexOf("</body>");
@@ -3430,10 +3473,10 @@ public class WebSpringController {
                             try {
                                 String injectedHtml;
                                 if (headIdx >= 0) {
-                                    injectedHtml = finalHtmlResponse.substring(0, headIdx) + preloadImageTag + ssrScript + ssrCategoriesScript + ssrRoutesScript + ssrDynamicCodeScript + finalHtmlResponse.substring(headIdx);
+                                    injectedHtml = finalHtmlResponse.substring(0, headIdx) + preloadImageTag + appConfigScript + ssrScript + ssrCategoriesScript + ssrRoutesScript + ssrDynamicCodeScript + finalHtmlResponse.substring(headIdx);
                                     logger.info("✅ SSR: Injected scripts before </head>");
                                 } else if (bodyIdx >= 0) {
-                                    injectedHtml = finalHtmlResponse.substring(0, bodyIdx) + preloadImageTag + ssrScript + ssrCategoriesScript + ssrRoutesScript + ssrDynamicCodeScript + finalHtmlResponse.substring(bodyIdx);
+                                    injectedHtml = finalHtmlResponse.substring(0, bodyIdx) + preloadImageTag + appConfigScript + ssrScript + ssrCategoriesScript + ssrRoutesScript + ssrDynamicCodeScript + finalHtmlResponse.substring(bodyIdx);
                                     logger.info("✅ SSR: Injected scripts before </body>");
                                 } else {
                                     logger.warn("⚠️ No </head> or </body> found");
@@ -3541,6 +3584,18 @@ public class WebSpringController {
     private static final boolean SUPPORTS_AVIF = false;
     // Cache version: increment when changing optimization logic to force new files (e.g. PNG→JPEG conversion)
     private static final String CACHE_VERSION = "v4"; // v4: 600px baseline + PNG quality 60% (aggressive)
+
+    private static final class StoredUploadResult {
+        final Path filePath;
+        final String fileName;
+        final boolean createdNew;
+
+        StoredUploadResult(Path filePath, String fileName, boolean createdNew) {
+            this.filePath = filePath;
+            this.fileName = fileName;
+            this.createdNew = createdNew;
+        }
+    }
 
     private ResponseEntity<byte[]> serveOptimizedLegacyImage(String normalizedPath, Map<String, String> queryParams, HttpServletRequest request) {
         try {
@@ -3652,15 +3707,8 @@ public class WebSpringController {
                         contentType = wantsAvif ? "image/avif" : (wantsWebp ? "image/webp" : contentType);
                         targetWidth = desiredWidth;
                     } else {
-                        // If no cached variant exists, precompute a small set once and then retry fetch
-                        precomputeImageVariants(appId, imageName, imageFilePath);
-                        precomputed = tryLoadPrecomputedVariant(appId, safeName, desiredWidth, wantsAvif, wantsWebp);
-                        if (precomputed != null) {
-                            content = precomputed;
-                            transformed = true;
-                            contentType = wantsAvif ? "image/avif" : (wantsWebp ? "image/webp" : contentType);
-                            targetWidth = desiredWidth;
-                        }
+                        // Queue precompute in background to keep request latency/cpu stable under burst traffic.
+                        enqueueImagePrecompute(appId, imageName, imageFilePath);
                     }
 
                     if (transformed) {
@@ -3835,10 +3883,85 @@ public class WebSpringController {
         }
     }
 
+    private void enqueueImagePrecompute(String appId, String imageName, Path imageFilePath) {
+        if (appId == null || appId.isBlank() || imageName == null || imageName.isBlank() || imageFilePath == null) {
+            return;
+        }
+        Path stablePath = imageFilePath.toAbsolutePath().normalize();
+        try {
+            imagePrecomputeExecutor.execute(() -> {
+                try {
+                    precomputeImageVariants(appId, imageName, stablePath);
+                } catch (Exception ex) {
+                    logger.warn("⚠️ Async precompute failed for {}/{}: {}", appId, imageName, ex.getMessage());
+                }
+            });
+        } catch (RejectedExecutionException ex) {
+            logger.warn("⚠️ Precompute queue full, skip async variants for {}/{}", appId, imageName);
+        }
+    }
+
+    private StoredUploadResult storeUploadAsContentHash(String appId, String originalFileName, Path uploadedFilePath) throws IOException {
+        Path uploadRootPath = Paths.get(appDataDir, "public", "app_images", appId);
+        Files.createDirectories(uploadRootPath);
+
+        String extension = "";
+        if (originalFileName != null && !originalFileName.isBlank()) {
+            int dot = originalFileName.lastIndexOf('.');
+            if (dot >= 0 && dot < originalFileName.length() - 1) {
+                extension = originalFileName.substring(dot + 1)
+                        .toLowerCase(Locale.ROOT)
+                        .replaceAll("[^a-z0-9]", "");
+            }
+        }
+
+        String hash = sha256Hex(uploadedFilePath);
+        String canonicalFileName = extension.isBlank() ? hash : (hash + "." + extension);
+        Path canonicalPath = uploadRootPath.resolve(canonicalFileName);
+
+        Path uploadedAbs = uploadedFilePath.toAbsolutePath().normalize();
+        Path canonicalAbs = canonicalPath.toAbsolutePath().normalize();
+        if (uploadedAbs.equals(canonicalAbs)) {
+            return new StoredUploadResult(canonicalPath, canonicalFileName, true);
+        }
+
+        if (Files.exists(canonicalPath)) {
+            Files.deleteIfExists(uploadedFilePath);
+            return new StoredUploadResult(canonicalPath, canonicalFileName, false);
+        }
+
+        Files.move(uploadedFilePath, canonicalPath, StandardCopyOption.REPLACE_EXISTING);
+        return new StoredUploadResult(canonicalPath, canonicalFileName, true);
+    }
+
+    private String sha256Hex(Path filePath) throws IOException {
+        MessageDigest digest;
+        try {
+            digest = MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException e) {
+            throw new IOException("SHA-256 not available", e);
+        }
+
+        byte[] buffer = new byte[8192];
+        try (InputStream in = Files.newInputStream(filePath)) {
+            int read;
+            while ((read = in.read(buffer)) != -1) {
+                digest.update(buffer, 0, read);
+            }
+        }
+
+        byte[] hashBytes = digest.digest();
+        StringBuilder hex = new StringBuilder(hashBytes.length * 2);
+        for (byte b : hashBytes) {
+            hex.append(String.format("%02x", b));
+        }
+        return hex.toString();
+    }
+
     private String processUploadedMediaArtifacts(String appId, String fileName, Path filePath) {
         String ext = getExtension(fileName.toLowerCase(Locale.ROOT));
         if (UPLOAD_IMAGE_EXTENSIONS.contains(ext)) {
-            precomputeImageVariants(appId, fileName, filePath);
+            enqueueImagePrecompute(appId, fileName, filePath);
             return "";
         }
         if (UPLOAD_VIDEO_EXTENSIONS.contains(ext)) {
