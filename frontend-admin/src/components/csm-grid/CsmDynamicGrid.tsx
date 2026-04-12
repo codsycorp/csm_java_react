@@ -871,7 +871,7 @@ export function CsmDynamicGrid({
 	
 	// State để prevent trigger update recursion khi inline edit
 	const [isUpdatingFromTrigger, setIsUpdatingFromTrigger] = useState(false);
-	const updateTriggerTimeoutRef = useRef<NodeJS.Timeout>();
+	const updateTriggerTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
 
 	// SINGLE SOURCE OF TRUTH: Use database from props first (from AdminPage)
 	// Then merge with global database from store for real-time updates

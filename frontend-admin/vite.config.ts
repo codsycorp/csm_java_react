@@ -57,6 +57,7 @@ export default defineVitestConfig(({ mode }) => {
 	resolve: {
 		alias: {
 			"@": path.resolve(__dirname, "./src"),
+			"#src": path.resolve(__dirname, "./src"),
 		},
 	},
 	test: {
