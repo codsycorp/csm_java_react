@@ -9474,7 +9474,8 @@ const ZALO_TIMING = {
 // Mục tiêu: giảm RAM spike khi vừa mở trang và vừa mở Zalo UI.
 const CSM_LOW_MEMORY_MODE = true;
 const CSM_AUTO_CREATE_ZALO_WEBVIEW = !CSM_LOW_MEMORY_MODE;
-const CSM_FETCH_ZALO_CONFIG_ON_UI_LOAD = !CSM_LOW_MEMORY_MODE;
+// Always fetch per-user config on UI load so runtime state follows the logged-in user.
+const CSM_FETCH_ZALO_CONFIG_ON_UI_LOAD = true;
 const CSM_AUTO_INIT_NON_CORE_UI = !CSM_LOW_MEMORY_MODE;
 const CSM_ALLOW_LOCAL_DATAOPTIONUSER_CACHE = !CSM_LOW_MEMORY_MODE;
 const CSM_ENABLE_LOCAL_DB_BACKEND = false;
@@ -13779,9 +13780,21 @@ ${JSON.stringify(zaloConfigs, null, 2)}`;
     if (!CSM_FETCH_ZALO_CONFIG_ON_UI_LOAD) {
       console.log('[Zalo][LowMemory] Skip initial server fetch, render from cached snapshot');
     } else {
-      console.warn('[Zalo] csmUserData not ready, rendering with localStorage data');
+      console.warn('[Zalo] csmUserData not ready, rendering with runtime fallback data');
     }
     renderZaloConfigList();
+  }
+
+  if (!window.__zaloConfigSyncListenerInstalled) {
+    window.__zaloConfigSyncListenerInstalled = true;
+    window.addEventListener('csm:dataOptionUserSynced', () => {
+      try {
+        console.log('[Zalo] csm:dataOptionUserSynced -> rerender config list');
+        renderZaloConfigList();
+      } catch (e) {
+        console.warn('[Zalo] rerender after sync failed:', e?.message || e);
+      }
+    });
   }
   
   // Tự động tạo webview Zalo khi mở giao diện
@@ -19315,50 +19328,16 @@ function parseUserAddressArray(raw) {
   return [];
 }
 
-async function fetchDataOptionUserDirectFromServer() {
-  const api = window.csmApi;
-  const currentUser = window.csmCurrentUser || {};
-
-  if (!api || typeof api.getTableData !== 'function') {
-    return { success: false, data: [], error: 'csmApi.getTableData not available' };
+function getRawDataOptionUserFromCurrentUserAddress() {
+  try {
+    const currentUser = window.csmCurrentUser || {};
+    const raw = currentUser.user_address || currentUser.user_adress;
+    const parsed = parseUserAddressArray(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e) {
+    console.warn('⚠️ [RawDataOptionUser] csmCurrentUser.user_address read failed:', e.message);
+    return [];
   }
-
-  const appIdCandidates = [];
-  if (currentUser.app_id) appIdCandidates.push(String(currentUser.app_id));
-  appIdCandidates.push('csm');
-  const uniqueAppIds = Array.from(new Set(appIdCandidates.filter(Boolean)));
-
-  const identityCandidates = [
-    { field: 'email', value: currentUser.email },
-    { field: 'username', value: currentUser.username },
-    { field: 'phoneNumber', value: currentUser.phoneNumber },
-    { field: 'app_token', value: currentUser.app_token || currentUser.appToken },
-    { field: 'id', value: currentUser.id || currentUser.user_id || currentUser.account_id }
-  ].filter((x) => x.value !== undefined && x.value !== null && String(x.value).trim() !== '');
-
-  for (const app_id of uniqueAppIds) {
-    for (const iden of identityCandidates) {
-      try {
-        const resp = await api.getTableData({
-          app_id,
-          obj_name: 'csm_accounts',
-          where: { field: iden.field, type: 'eq', value: iden.value },
-          take: 1
-        });
-        const rows = resp?.rows || resp?.data || [];
-        if (Array.isArray(rows) && rows.length > 0) {
-          const row = rows[0] || {};
-          const arr = parseUserAddressArray(row.user_address);
-          console.log(`[LoadDataOptionUser][DIRECT] Matched by ${iden.field} in app_id=${app_id}, user_address size=${arr.length}`);
-          return { success: true, data: arr, error: null };
-        }
-      } catch (e) {
-        console.warn(`[LoadDataOptionUser][DIRECT] Query failed (${iden.field}, app_id=${app_id}):`, e?.message || e);
-      }
-    }
-  }
-
-  return { success: false, data: [], error: 'Direct query no matching user' };
 }
 
 function syncDataOptionUserFromServerOnce(reason = 'auto') {
@@ -19380,66 +19359,28 @@ function syncDataOptionUserFromServerOnce(reason = 'auto') {
 
     if (!success || !Array.isArray(data)) {
       console.warn('[LoadDataOptionUser][SYNC] Fetch failed:', error || 'unknown');
-      const tryDirectFetch = async () => {
-        const direct = await fetchDataOptionUserDirectFromServer();
-        if (!direct.success || !Array.isArray(direct.data) || direct.data.length === 0) {
-          const fallbackFromCurrentUser = getRawDataOptionUserFromCurrentUserAddress();
-          if (Array.isArray(fallbackFromCurrentUser) && fallbackFromCurrentUser.length > 0) {
-            const usableRecords = normalizeDataOptionUserRecords(fallbackFromCurrentUser);
-            window.__dataOptionUserServerSyncDone = true;
-            window.dataUserOption = CSM_LOW_MEMORY_MODE ? usableRecords : fallbackFromCurrentUser;
-            if (CSM_ALLOW_LOCAL_DATAOPTIONUSER_CACHE) {
-              try { localStorage.setItem('user_address', JSON.stringify(fallbackFromCurrentUser)); } catch {}
-              try { localStorage.setItem('dataOptionUser', JSON.stringify(fallbackFromCurrentUser)); } catch {}
-            }
-            console.log(`[LoadDataOptionUser][SYNC] Fallback from csmCurrentUser.user_address: ${fallbackFromCurrentUser.length} items`);
-            window.dispatchEvent(new CustomEvent('csm:dataOptionUserSynced', {
-              detail: { source: 'csmCurrentUser.user_address', total: fallbackFromCurrentUser.length, usable: usableRecords.length }
-            }));
-            return;
-          }
-
-          const errorText = String(error || '').toLowerCase();
-          if (errorText.includes('user not found')) {
-            window.__dataOptionUserServerSyncRetryAfter = Date.now() + 30000;
-          }
-          return;
-        }
-
+      const fallbackFromCurrentUser = getRawDataOptionUserFromCurrentUserAddress();
+      if (Array.isArray(fallbackFromCurrentUser) && fallbackFromCurrentUser.length > 0) {
+        const usableRecords = normalizeDataOptionUserRecords(fallbackFromCurrentUser);
         window.__dataOptionUserServerSyncDone = true;
-        const usable = normalizeDataOptionUserRecords(direct.data);
-        window.dataUserOption = CSM_LOW_MEMORY_MODE ? usable : direct.data;
-        if (CSM_ALLOW_LOCAL_DATAOPTIONUSER_CACHE) {
-          try { localStorage.setItem('user_address', JSON.stringify(direct.data)); } catch {}
-          try { localStorage.setItem('dataOptionUser', JSON.stringify(direct.data)); } catch {}
-        }
-        console.log(`[LoadDataOptionUser][SYNC] Direct fetch success: ${direct.data.length} items, usable ${usable.length}`);
+        window.dataUserOption = CSM_LOW_MEMORY_MODE ? usableRecords : fallbackFromCurrentUser;
+        console.log(`[LoadDataOptionUser][SYNC] Fallback from csmCurrentUser.user_address: ${fallbackFromCurrentUser.length} items`);
         window.dispatchEvent(new CustomEvent('csm:dataOptionUserSynced', {
-          detail: { source: 'direct-csm_accounts', total: direct.data.length, usable: usable.length }
+          detail: { source: 'csmCurrentUser.user_address', total: fallbackFromCurrentUser.length, usable: usableRecords.length }
         }));
-      };
+        return;
+      }
 
-      void tryDirectFetch();
+      const errorText = String(error || '').toLowerCase();
+      if (errorText.includes('user not found')) {
+        window.__dataOptionUserServerSyncRetryAfter = Date.now() + 30000;
+      }
       return;
     }
 
     window.__dataOptionUserServerSyncDone = true;
     const records = normalizeDataOptionUserRecords(data);
     window.dataUserOption = CSM_LOW_MEMORY_MODE ? records : (Array.isArray(data) ? data : []);
-
-    if (CSM_ALLOW_LOCAL_DATAOPTIONUSER_CACHE) {
-      try {
-        localStorage.setItem('user_address', JSON.stringify(window.dataUserOption));
-      } catch (e) {
-        console.warn('[LoadDataOptionUser][SYNC] user_address backup failed:', e.message);
-      }
-
-      try {
-        localStorage.setItem('dataOptionUser', JSON.stringify(window.dataUserOption));
-      } catch (e) {
-        console.warn('[LoadDataOptionUser][SYNC] dataOptionUser backup failed:', e.message);
-      }
-    }
 
     console.log(`[LoadDataOptionUser][SYNC] Done: fetched ${data.length} items, usable records ${records.length}`);
     window.dispatchEvent(new CustomEvent('csm:dataOptionUserSynced', {
@@ -19474,36 +19415,6 @@ function getRawDataOptionUserFromWindowDataUserOption() {
   }
 }
 
-function getRawDataOptionUserFromUserAddressStorage() {
-  if (!CSM_ALLOW_LOCAL_DATAOPTIONUSER_CACHE) {
-    return null;
-  }
-  try {
-    const raw = localStorage.getItem('user_address');
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch (e) {
-    console.warn('⚠️ [RawDataOptionUser] user_address parse failed:', e.message);
-    return null;
-  }
-}
-
-function getRawDataOptionUserFromLocalStorage() {
-  if (!CSM_ALLOW_LOCAL_DATAOPTIONUSER_CACHE) {
-    return [];
-  }
-  try {
-    const raw = localStorage.getItem('dataOptionUser');
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch (e) {
-    console.warn('⚠️ [RawDataOptionUser] localStorage parse failed:', e.message);
-    return [];
-  }
-}
-
 function getRawDataOptionUserSnapshot() {
   const fromCsm = getRawDataOptionUserFromCsmUserData();
   if (Array.isArray(fromCsm)) return fromCsm;
@@ -19511,14 +19422,7 @@ function getRawDataOptionUserSnapshot() {
   const fromWindowDataUserOption = getRawDataOptionUserFromWindowDataUserOption();
   if (Array.isArray(fromWindowDataUserOption)) return fromWindowDataUserOption;
 
-  if (!CSM_ALLOW_LOCAL_DATAOPTIONUSER_CACHE) {
-    return [];
-  }
-
-  const fromUserAddress = getRawDataOptionUserFromUserAddressStorage();
-  if (Array.isArray(fromUserAddress)) return fromUserAddress;
-
-  return getRawDataOptionUserFromLocalStorage();
+  return getRawDataOptionUserFromCurrentUserAddress();
 }
 
 // ===== STORAGE HELPERS - LƯU TRỮ DATAOPTIONUSER GIỐNG SEO.JS (VỚI CSMuserdata) =====
@@ -19526,7 +19430,8 @@ function getRawDataOptionUserSnapshot() {
  * Load dataOptionUser từ csmUserData (giống seo.js)
  * ƯுTIÊN: 
  *   1. Lấy từ window.csmUserData.get() (cached from server)
- *   2. Fallback: localStorage
+ *   2. Fallback: window.dataUserOption runtime
+ *   3. Fallback: window.csmCurrentUser.user_address runtime
  * @returns {Array} Mảng object
  */
 function loadDataOptionUser() {
@@ -19585,57 +19490,24 @@ function loadDataOptionUser() {
     console.warn('⚠️ [LoadDataOptionUser] window.dataUserOption fallback failed:', e.message);
   }
 
-  if (!CSM_ALLOW_LOCAL_DATAOPTIONUSER_CACHE) {
-    console.log('   ⚡ Skipping localStorage fallbacks (low-memory mode)');
-    logDataOptionUserSource('none(low-memory)', [], 0);
-    return [];
-  }
-
-  // Fallback #3: localStorage.user_address (tương thích seo.js)
-  console.log('   📍 Trying localStorage user_address fallback...');
+  console.log('   📍 Trying csmCurrentUser.user_address runtime fallback...');
   try {
-    const rawUserAddress = localStorage.getItem('user_address');
-    if (rawUserAddress) {
-      const parsedUserAddress = JSON.parse(rawUserAddress);
-      const arr = Array.isArray(parsedUserAddress) ? parsedUserAddress : [];
-      if (arr.length > 0) {
-        const records = normalizeDataOptionUserRecords(arr);
-        if (records.length > 0) {
-          console.log(`⚠️ [LoadDataOptionUser] Loaded ${records.length} records from localStorage.user_address (filtered from ${arr.length} total items, FALLBACK #3)`);
-          logDataOptionUserSource('localStorage.user_address', records, arr.length);
-          return records;
-        }
-        console.warn('⚠️ [LoadDataOptionUser] user_address có dữ liệu nhưng không có record hợp lệ, thử fallback dataOptionUser...');
+    const arr = getRawDataOptionUserFromCurrentUserAddress();
+    if (Array.isArray(arr) && arr.length > 0) {
+      const records = normalizeDataOptionUserRecords(arr);
+      if (records.length > 0) {
+        console.log(`⚠️ [LoadDataOptionUser] Loaded ${records.length} records from csmCurrentUser.user_address (filtered from ${arr.length} total items, FALLBACK #3)`);
+        logDataOptionUserSource('csmCurrentUser.user_address', records, arr.length);
+        return records;
       }
     }
   } catch (e) {
-    console.warn('⚠️ [LoadDataOptionUser] user_address fallback failed:', e.message);
+    console.warn('⚠️ [LoadDataOptionUser] csmCurrentUser.user_address fallback failed:', e.message);
   }
 
-  // Fallback #4: localStorage.dataOptionUser
-  console.log('   📍 Trying localStorage dataOptionUser fallback...');
-  try {
-    const raw = localStorage.getItem('dataOptionUser');
-    if (!raw) {
-      console.log('❌ [LoadDataOptionUser] localStorage dataOptionUser is empty');
-      return [];
-    }
-    const parsed = JSON.parse(raw);
-
-    const sourceArray = Array.isArray(parsed) ? parsed : [];
-    const records = normalizeDataOptionUserRecords(sourceArray);
-
-    console.log(`⚠️ [LoadDataOptionUser] Loaded ${records.length} records from localStorage.dataOptionUser (filtered from ${sourceArray.length} total items, FALLBACK #4)`);
-    logDataOptionUserSource('localStorage.dataOptionUser', records, sourceArray.length);
-    records.slice(0, 5).forEach((cfg, i) => {
-      console.log(`   [${i}] id: ${cfg.id}, domain: ${cfg.domain}, config_for_zalo: ${cfg.config_for_zalo}`);
-    });
-    return records;
-  } catch (e) {
-    console.error('❌ Lỗi load dataOptionUser from localStorage:', e);
-    logDataOptionUserSource('none(error)', [], 0);
-    return [];
-  }
+  console.log('❌ [LoadDataOptionUser] No per-user runtime data available');
+  logDataOptionUserSource('none(runtime-empty)', [], 0);
+  return [];
 }
 
 /**
@@ -19649,30 +19521,18 @@ function fetchDataOptionUserFromServer(callback) {
       if (success && Array.isArray(data)) {
         const usableRecords = normalizeDataOptionUserRecords(data);
         window.dataUserOption = CSM_LOW_MEMORY_MODE ? usableRecords : data;
-        if (CSM_ALLOW_LOCAL_DATAOPTIONUSER_CACHE) {
-          try { localStorage.setItem('user_address', JSON.stringify(window.dataUserOption)); } catch {}
-          try { localStorage.setItem('dataOptionUser', JSON.stringify(window.dataUserOption)); } catch {}
-        }
         console.log('[Zalo] ✅ Fetched', data.length, 'items from server (usable:', usableRecords.length, ')');
         callback(true, window.dataUserOption, null);
       } else {
-        console.warn('[Zalo] ❌ Failed to fetch from server:', error, '- trying direct csm_accounts query...');
-        fetchDataOptionUserDirectFromServer().then((direct) => {
-          if (direct.success && Array.isArray(direct.data)) {
-            const usableRecords = normalizeDataOptionUserRecords(direct.data);
-            window.dataUserOption = CSM_LOW_MEMORY_MODE ? usableRecords : direct.data;
-            if (CSM_ALLOW_LOCAL_DATAOPTIONUSER_CACHE) {
-              try { localStorage.setItem('user_address', JSON.stringify(window.dataUserOption)); } catch {}
-              try { localStorage.setItem('dataOptionUser', JSON.stringify(window.dataUserOption)); } catch {}
-            }
-            console.log('[Zalo] ✅ Direct fetch success:', direct.data.length, 'items (usable:', usableRecords.length, ')');
-            callback(true, window.dataUserOption, null);
-          } else {
-            callback(false, null, error || direct.error || 'User not found');
-          }
-        }).catch((e) => {
-          callback(false, null, error || e?.message || 'User not found');
-        });
+        const fallback = getRawDataOptionUserFromCurrentUserAddress();
+        if (Array.isArray(fallback) && fallback.length > 0) {
+          const usableRecords = normalizeDataOptionUserRecords(fallback);
+          window.dataUserOption = CSM_LOW_MEMORY_MODE ? usableRecords : fallback;
+          console.warn('[Zalo] ⚠️ Fetch failed, fallback to csmCurrentUser.user_address:', error);
+          callback(true, window.dataUserOption, null);
+          return;
+        }
+        callback(false, null, error || 'User not found');
       }
     });
   } else {
@@ -19761,23 +19621,6 @@ function saveDataOptionUser(data, callback, options = {}) {
       if (success) {
         console.log('✅ [SaveDataOptionUser] SERVER SAVE THÀNH CÔNG!');
         window.dataUserOption = finalData;
-        if (CSM_ALLOW_LOCAL_DATAOPTIONUSER_CACHE) {
-          console.log('📍 Backup vào localStorage...');
-          // Keep same behavior as seo.js: mirror to user_address + dataOptionUser.
-          try {
-            localStorage.setItem('user_address', JSON.stringify(finalData));
-          } catch (e) {
-            console.warn('⚠️ localStorage user_address backup THẤT BẠI:', e);
-          }
-          try {
-            localStorage.setItem('dataOptionUser', JSON.stringify(finalData));
-            console.log('✅ localStorage backup THÀNH CÔNG');
-          } catch (e) {
-            console.warn('⚠️ localStorage backup THẤT BẠI:', e);
-          }
-        } else {
-          console.log('⚡ [SaveDataOptionUser] Skip localStorage backup (low-memory mode)');
-        }
         if (callback) callback(true, null);
       } else {
         console.error('❌ [SaveDataOptionUser] SERVER SAVE THẤT BẠI!');
@@ -19786,28 +19629,9 @@ function saveDataOptionUser(data, callback, options = {}) {
       }
     });
   } else {
-    // Fallback: localStorage only
-    if (!CSM_ALLOW_LOCAL_DATAOPTIONUSER_CACHE) {
-      const err = 'csmUserData unavailable and local cache is disabled in low-memory mode';
-      console.warn(`⚠️ [SaveDataOptionUser] ${err}`);
-      if (callback) callback(false, err);
-      return;
-    }
-
-    console.log('⚠️ Hành động: FALLBACK sang localStorage (window.csmUserData KHÔNG khả dụng!)');
-    console.log('   window.csmUserData =', window.csmUserData);
-    console.log('   typeof window.csmUserData.set =', typeof window.csmUserData?.set);
-    
-    try {
-      localStorage.setItem('user_address', JSON.stringify(finalData));
-      localStorage.setItem('dataOptionUser', JSON.stringify(finalData));
-      window.dataUserOption = finalData;
-      console.log('✅ [SaveDataOptionUser] localStorage SAVE THÀNH CÔNG (FALLBACK MODE)');
-      if (callback) callback(true, null);
-    } catch (e) {
-      console.error('❌ [SaveDataOptionUser] localStorage SAVE THẤT BẠI:', e);
-      if (callback) callback(false, e);
-    }
+    const err = 'csmUserData.set unavailable - refusing localStorage fallback for per-user config data';
+    console.warn(`⚠️ [SaveDataOptionUser] ${err}`);
+    if (callback) callback(false, err);
   }
 }
 
