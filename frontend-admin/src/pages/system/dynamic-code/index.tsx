@@ -395,11 +395,6 @@ function syncRuntimeUserAddress(userAddress: any[]): any[] {
     }
   }
 
-  try {
-    localStorage.setItem("user_address", serialized);
-    localStorage.setItem("user_adress", serialized);
-  } catch {}
-
   return normalized;
 }
 
@@ -1239,31 +1234,12 @@ ${resolvedContainerSelector} select {
       return null;
     };
 
-    const getUserAddressFallback = (): any[] => {
-      try {
-        const currentUser = (window as any).csmCurrentUser || {};
-        const fromCurrentUser = parseUserAddressValue(currentUser.user_address ?? currentUser.user_adress);
-        if (fromCurrentUser.length > 0) return fromCurrentUser;
-
-        const localRaw = localStorage.getItem("user_address");
-        return parseUserAddressValue(localRaw);
-      } catch {
-        return [];
-      }
-    };
-
     window.csmUserData = {
       /**
-       * Lấy user_address (local, sync, không realtime)
+       * Lấy user_address từ runtime memory (source of truth được sync từ API)
        */
       get: function(): any[] {
-        // Ưu tiên user_address, fallback user_adress
-        let raw = (window.csmCurrentUser && (window.csmCurrentUser.user_address || window.csmCurrentUser.user_adress));
-        if (!raw) {
-          try {
-            raw = localStorage.getItem("user_address") || localStorage.getItem("user_adress");
-          } catch {}
-        }
+        const raw = (window.csmCurrentUser && (window.csmCurrentUser.user_address || window.csmCurrentUser.user_adress));
         return parseUserAddressValue(raw);
       },
 
@@ -1304,7 +1280,7 @@ ${resolvedContainerSelector} select {
             value = parseUserAddressValue(row.user_address);
             if (value.length === 0) value = parseUserAddressValue(row.user_adress);
           }
-          // Đồng bộ lại vào runtime và localStorage để get() trả về đúng
+          // Đồng bộ lại vào runtime để get() trả về đúng
           syncRuntimeUserAddress(value);
           if (typeof callback === "function") callback(true, value);
         } catch (e) {
@@ -1316,7 +1292,7 @@ ${resolvedContainerSelector} select {
        * Cập nhật user_address qua API (giống profile)
        */
       set: async function(newUserAddress: any[], callback?: (success: boolean, error?: string) => void): Promise<void> {
-        // Cập nhật user_address qua API như profile, đồng bộ local nếu thành công
+        // Cập nhật user_address qua API như profile, đồng bộ runtime nếu thành công
         try {
           const arr = Array.isArray(newUserAddress) ? newUserAddress : [];
           const serialized = JSON.stringify(arr);
@@ -1350,15 +1326,9 @@ ${resolvedContainerSelector} select {
             obj_update: updateData,
             pk_fields: [pkField],
           });
-          // Đồng bộ local nếu thành công
+          // Đồng bộ runtime nếu thành công
           if (res && (res.success === true || Number(res.code) === 200 || res.data === "success" || String((res as any).message || "").toLowerCase() === "ok")) {
-            if (!window.csmCurrentUser) window.csmCurrentUser = {};
-            window.csmCurrentUser.user_address = serialized;
-            window.csmCurrentUser.user_adress = serialized;
-            try {
-              localStorage.setItem("user_address", serialized);
-              localStorage.setItem("user_adress", serialized);
-            } catch {}
+            syncRuntimeUserAddress(arr);
             if (typeof callback === "function") callback(true);
           } else {
             if (typeof callback === "function") callback(false, (res as any)?.message || "Update failed");
@@ -1368,7 +1338,7 @@ ${resolvedContainerSelector} select {
         }
       }
     };
-    console.log('✅ [DynamicCode] window.csmUserData initialized (get/set user_address via API like profile, type safe)');
+    console.log('✅ [DynamicCode] window.csmUserData initialized (API-first + runtime sync, no localStorage fallback)');
   }
 
   // Sync current user to window

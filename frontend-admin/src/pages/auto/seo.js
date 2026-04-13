@@ -2985,20 +2985,6 @@ window.getDataUserOption = function (forceRefresh = false) {
     return window.dataUserOption;
   }
 
-  // Fallback về localStorage
-  try {
-    const stored = localStorage.getItem('user_address');
-    if (stored) {
-      const arr = JSON.parse(stored);
-      if (Array.isArray(arr)) {
-        window.dataUserOption = arr;
-        return arr;
-      }
-    }
-  } catch (e) {
-    // localStorage không có hoặc không hợp lệ
-  }
-
   window.dataUserOption = [];
   return [];
 };
@@ -4293,14 +4279,7 @@ window.fnCreateTab = function (id_tab, url_open, script_code, multi_tab_name, au
                   }
                 });
               } else {
-                // Fallback: localStorage
-                try {
-                  localStorage.setItem('user_address', JSON.stringify(arrRows));
-                  canhbao("Lưu top google " + gTop);
-                  console.log('[message.save] ✅ Saved to localStorage');
-                } catch (err) {
-                  console.error('[message.save] ❌ localStorage error:', err);
-                }
+                console.warn('[message.save] ⚠️ csmUserData unavailable, skipped persistent save');
               }
             } else {
               console.warn('[message.save] Row not found with keyword:', tu_khoa);
@@ -4542,8 +4521,6 @@ function mainAppCode() {
     if (idxLink !== -1) {
       arrRows[idxLink]['gtop'] = gTop;
       window.dataUserOption = arrRows;
-      // Đồng bộ vào localStorage
-      localStorage.setItem('user_address', JSON.stringify(window.dataUserOption));
       // Đồng bộ vào csmUserData nếu có
       if (window.csmUserData && typeof window.csmUserData.set === 'function') {
         window.csmUserData.set(window.dataUserOption, function (success, error) {
@@ -5344,7 +5321,7 @@ function mainAppCode() {
   // console.log(seft.Uinfos);
   window.dataUserOption = [];
 
-  // Khởi tạo dataUserOption: Fetch từ database trước, fallback về memory/localStorage
+  // Khởi tạo dataUserOption: Fetch từ database trước, fallback về runtime memory
   console.log("[INIT] Đang khởi tạo dataUserOption...");
   if (window.csmUserData && typeof window.csmUserData.fetchFromDatabase === 'function') {
     // Fetch từ database
@@ -5358,8 +5335,8 @@ function mainAppCode() {
           window.renderKeywordGrid();
         }
       } else {
-        // Fallback về memory hoặc localStorage
-        console.log("[INIT] Không fetch được từ database, fallback về memory/localStorage");
+        // Fallback về runtime memory
+        console.log("[INIT] Không fetch được từ database, fallback về memory");
         if (window.csmUserData && typeof window.csmUserData.get === 'function') {
           try {
             let raw = window.csmUserData.get();
@@ -5367,20 +5344,6 @@ function mainAppCode() {
             if (Array.isArray(raw) && raw.length > 0) {
               window.dataUserOption = raw;
               console.log("[INIT] csmUserData.get() trả về array, số lượng:", window.dataUserOption.length);
-            } else {
-              // Thử localStorage
-              try {
-                const stored = localStorage.getItem('user_address');
-                if (stored) {
-                  const arr = JSON.parse(stored);
-                  if (Array.isArray(arr) && arr.length > 0) {
-                    window.dataUserOption = arr;
-                    console.log("[INIT] Lấy từ localStorage thành công, số lượng:", window.dataUserOption.length);
-                  }
-                }
-              } catch (e) {
-                console.warn("[INIT] Không lấy được từ localStorage");
-              }
             }
           } catch (err) {
             if (!(err instanceof SyntaxError)) {
@@ -5716,20 +5679,6 @@ function mainAppCode() {
               return [];
             }
           }
-          // Fallback: localStorage (chỉ dùng khi csmUserData không có)
-          const stored = localStorage.getItem('user_address');
-          if (stored) {
-            try {
-              const data = JSON.parse(stored);
-              if (Array.isArray(data)) {
-                window.dataUserOption = data;
-                console.log('[load_db] Loaded from localStorage, count:', data.length);
-                return data;
-              }
-            } catch (e) {
-              console.error('[load_db] Error parsing localStorage:', e);
-            }
-          }
           window.dataUserOption = [];
           console.log('[load_db] No data found, returning empty array');
           return [];
@@ -5846,13 +5795,7 @@ if (window.csmUserData && typeof window.csmUserData.set === 'function') {
     }
   });
 } else {
-  console.warn('[afterImport] ⚠️ csmUserData not available, using localStorage only');
-}
-try {
-  localStorage.setItem('user_address', JSON.stringify(items));
-  console.log('[afterImport] ✅ Saved to localStorage, count:', items.length);
-} catch (err) {
-  console.error('[afterImport] ❌ localStorage error:', err);
+  console.warn('[afterImport] ⚠️ csmUserData not available, skipped persistent save');
 }
 })();`),
 
@@ -5875,12 +5818,8 @@ if (window.csmUserData && typeof window.csmUserData.set === 'function') {
       console.error('[afterAdd] ❌ csmUserData.set failed:', error);
     }
   });
-}
-try {
-  localStorage.setItem('user_address', JSON.stringify(items));
-  console.log('[afterAdd] ✅ Saved to localStorage');
-} catch (err) {
-  console.error('[afterAdd] localStorage error:', err);
+} else {
+  console.warn('[afterAdd] ⚠️ csmUserData not available, skipped persistent save');
 }
 })();`),
 
@@ -5903,12 +5842,8 @@ if (window.csmUserData && typeof window.csmUserData.set === 'function') {
       console.error('[afterEdit] ❌ csmUserData.set failed:', error);
     }
   });
-}
-try {
-  localStorage.setItem('user_address', JSON.stringify(items));
-  console.log('[afterEdit] ✅ Saved to localStorage');
-} catch (err) {
-  console.error('[afterEdit] localStorage error:', err);
+} else {
+  console.warn('[afterEdit] ⚠️ csmUserData not available, skipped persistent save');
 }
 })();`),
 
@@ -5922,11 +5857,8 @@ if (!Array.isArray(items)) {
 window.dataUserOption = items;
 if (window.csmUserData && typeof window.csmUserData.set === 'function') {
   window.csmUserData.set(items);
-}
-try {
-  localStorage.setItem('user_address', JSON.stringify(items));
-} catch (err) {
-  console.error('[afterDelete] localStorage error:', err);
+} else {
+  console.warn('[afterDelete] ⚠️ csmUserData not available, skipped persistent save');
 }
 })();`)
       }

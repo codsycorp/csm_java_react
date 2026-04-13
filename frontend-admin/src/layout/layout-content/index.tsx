@@ -43,10 +43,19 @@ export default function LayoutContent() {
 
 
 	const tab = openTabs.get(activeKey);
+	const standaloneDynamicRouteKeys = new Set(["homepage", "/home", "/auto-setup"]);
 	const resolveRouteByKey = (routeKey: string) => {
 		if (!routeKey) return undefined;
 		const directRoute = flatRouteList[routeKey];
-		if (directRoute) return directRoute;
+		if (directRoute) {
+			// If this is a parent layout-wrapper route (e.g. /auto-setup → ContainerLayout),
+			// prefer the index child route (/auto-setup/ → AutoSetup) for SPA tab rendering.
+			const indexRoute = flatRouteList[routeKey + "/"];
+			if (indexRoute?.Component) {
+				return { ...directRoute, Component: indexRoute.Component };
+			}
+			return directRoute;
+		}
 		if (/^\/system\/grid\/[^/]+$/.test(routeKey)) {
 			return flatRouteList["/system/grid/:menuId"];
 		}
@@ -64,7 +73,11 @@ export default function LayoutContent() {
 			route = flatRouteList["/"];
 		}
 
-		if (route && tab) {
+		if (route && standaloneDynamicRouteKeys.has(activeKey)) {
+			PatchedComponent = route.Component || null;
+		}
+
+		if (!PatchedComponent && route && tab) {
 			const patched = patchDynamicRoutesWithComponent([{ ...route, ...tab }]);
 			if (patched && patched[0] && patched[0].Component) {
 				PatchedComponent = patched[0].Component;
