@@ -397,6 +397,7 @@ export function useMenu() {
 		const staticTabRoutes: Record<string, string> = {
 			"/personal-center/my-profile": t("common.menu.profile"),
 			"/personal-center/settings": t("common.menu.settings"),
+			"/auto-setup": t("common.menu.auto") || "Auto Setup",
 			// /system/user, /system/dept, /system/departments, /system/branches
 			// KHÔNG được đưa vào đây — phải đi qua fallback dynamic để patch CsmDynamicGrid
 			"/system/menu": t("common.menu.menu"),
