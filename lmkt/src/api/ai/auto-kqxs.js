@@ -2722,6 +2722,7 @@
     var _ath32 = useState([]), legacyThExpandedGroupKeys = _ath32[0], setLegacyThExpandedGroupKeys = _ath32[1];
     var _ath33 = useState([]), legacyThExpandedTrietGroupKeys = _ath33[0], setLegacyThExpandedTrietGroupKeys = _ath33[1];
     var _ath34 = useState(false), legacyThAutoPinnedFullAuto = _ath34[0], setLegacyThAutoPinnedFullAuto = _ath34[1];
+    var _ath35 = useState(""), legacyThSoInput = _ath35[0], setLegacyThSoInput = _ath35[1];
       var _ath_rs1 = useState([]), legacyThManualSelectedRowKeys = _ath_rs1[0], setLegacyThManualSelectedRowKeys = _ath_rs1[1];
       var _ath_rs2 = useState([]), legacyThAutoSelectedRowKeys = _ath_rs2[0], setLegacyThAutoSelectedRowKeys = _ath_rs2[1];
       var _ath_im = useState(""), legacyThIntersectManual = _ath_im[0], setLegacyThIntersectManual = _ath_im[1];
@@ -2807,6 +2808,12 @@
         dem_nho_hon: Number(dem_nho_hon || 0),
         dem_lon_hon: Number(dem_lon_hon || 0),
         dem_to_nho_hon: Number(dem_to_nho_hon || 0),
+        kxh_tu: Number(kxh_tu || 0),
+        kxh_den: Number(kxh_den || 0),
+        kxh_locsau: !!kxh_locsau,
+        loai_tim: Number(loai_tim || 0),
+        loai_tk: Number(loai_tk || 1),
+        mien: String(mien || ""),
         sap_xep: Number(sap_xep || 0),
         thu_tuan: String(thu_tuan || ""),
         den_ngay: String(den_ngay || ""),
@@ -3783,7 +3790,8 @@
       var cfg = opt || {};
       if (!cfg.useNorthRules) {
         Object.keys(row || {}).forEach(function (f) {
-          if (!/^field_(duoi|dau|so\d+)$/.test(f)) return;
+          if (f === "_id" || f === "id" || f === "thu" || f === "field_ngay") return;
+          if (String(f || "").indexOf("_") === 0) return;
           var val = String((row && row[f]) || "").trim();
           if (!val) return;
           var so = val.slice(-2);
@@ -4679,17 +4687,28 @@
 
       var queryFields = getLegacyQueryFieldList(queryValue, heThong);
 
-      function fieldMatchesLoc(fn) {
-        for (var fi = 0; fi < fieldsLoc.length; fi++) {
-          if (fn.indexOf(fieldsLoc[fi]) >= 0) return true;
-        }
-        return false;
-      }
-
       function tailOf(value) {
         var s = String(value || "").trim();
-        if (!s || s === "?" || !/\d/.test(s)) return "";
+        if (!s || s === "?") return "";
         return s.slice(-heThong);
+      }
+
+      // Mirror PHP behavior:
+      // - strrpos(".".$field, $prefix) == true
+      // - strrpos(".".$NoiDung, right($value, $MaDuoi)) == true
+      function fieldMatchesPrefixLikePhp(fieldName, prefix) {
+        var fn = String(fieldName || "");
+        var p = String(prefix || "");
+        if (!fn || !p) return false;
+        return (("." + fn).indexOf(p) == true);
+      }
+
+      function valueMatchesNoiDungLikePhp(noiDung, rawValue) {
+        var nd = String(noiDung || "").trim();
+        if (!nd) return false;
+        var rightVal = tailOf(rawValue);
+        if (!rightVal) return false;
+        return (("." + nd).indexOf(String(rightVal)) == true);
       }
 
       // Determine toDate weekday (same approach as PHP $Thu = weekday of $Den)
@@ -4772,25 +4791,23 @@
           var CoNgayT = 0, CoNgay3D = 0, CoNgayB3C = 0, CoNgayA3 = 0;
           var CoDai = 0, CoD2D = 0;
 
-          // Main count: filtered by fieldsLoc (mirrors PHP first loop)
+          // Main count: nested loops to match legacy PHP exactly.
           for (var cl = 0; cl < queryFields.length; cl++) {
             var fn = queryFields[cl];
-            if (!fieldMatchesLoc(fn)) continue;
-            var tv = tailOf(row[fn]);
-            if (!tv || tv.length < heThong) continue;
-            if (NoiDung.indexOf(tv) >= 0) {
-              count++;
-              CoNgay++;
-              if (flgD) { CoDai++; countD++; }
+            for (var c1 = 0; c1 < fieldsLoc.length; c1++) {
+              if (!fieldMatchesPrefixLikePhp(fn, fieldsLoc[c1])) continue;
+              if (valueMatchesNoiDungLikePhp(NoiDung, row[fn])) {
+                count++;
+                CoNgay++;
+                if (flgD) { CoDai++; countD++; }
+              }
             }
           }
 
           // Sub-group counts: hardcoded prefixes (mirrors PHP second loop)
           for (var c2 = 0; c2 < queryFields.length; c2++) {
             var fn2 = queryFields[c2];
-            var tv2 = tailOf(row[fn2]);
-            if (!tv2 || tv2.length < heThong) continue;
-            if (NoiDung.indexOf(tv2) < 0) continue;
+            if (!valueMatchesNoiDungLikePhp(NoiDung, row[fn2])) continue;
             var isD2 = fn2.indexOf("D_") >= 0;
             var isP2 = fn2.indexOf("P_") >= 0;
             var isT2 = fn2.indexOf("T_") >= 0;
@@ -4982,11 +4999,13 @@
       return results;
     }
 
-    function calcThongKeMetrics(kyCounts) {
+    function calcThongKeMetrics(kyCounts, options) {
       var arr = Array.isArray(kyCounts) ? kyCounts.slice() : [];
+      var opt = options || {};
+      var isThongKeMoiMode = !!opt.isThongKeMoi;
+      var sapXepMode = Number(opt.sap_xep || 0);
       var tong = 0;
       var dem = 0;
-      var kxh = 0;
       var maxKxh = 0;
 
       for (var i = 0; i < arr.length; i += 1) {
@@ -4999,6 +5018,7 @@
 
       var sawHit = false;
       var run = 0;
+      var kxhThongKe = 0;
       for (var j = 0; j < arr.length; j += 1) {
         var vv = Number(arr[j] || 0);
         if (vv > 0) {
@@ -5006,14 +5026,16 @@
           if (run > maxKxh) maxKxh = run;
           run = 0;
         } else {
-          if (!sawHit) kxh += 1;
+          if (!sawHit) kxhThongKe += 1;
           run += 1;
         }
       }
       if (run > maxKxh) maxKxh = run;
 
-      // Mirror Vue's "thoa_man" rule (giống chính xác thong_ke_moi trong Vue)
-      var evalArr = arr.slice(); // Vue iterates k=0..mang_ky.length-1, tức là thứ tự sap_xep 0 (1->N)
+      // Vue thong_ke_moi duyệt mang_ky theo sap_xep:
+      // 0 = k_1..k_n (ngày mới đứng trước), 1 = k_n..k_1 (ngày cũ đứng trước).
+      var evalArr = arr.slice();
+      if (sapXepMode === 1) evalArr.reverse();
       var khoi_dong = -1;
       var so_lan = 0;
       var so_lan_trung = 0;
@@ -5050,11 +5072,14 @@
 
       var thoa_man = (khoi_dong >= Number(kxh_tu || 0) && khoi_dong <= Number(kxh_den || 0) && so_lan > 1);
       if (kxh_locsau && so_lan_trung <= 1) thoa_man = false;
+      var kxhThongKeMoi = khoi_dong > 0 ? khoi_dong : 0;
 
       return {
         tong: tong,
         dem: dem,
-        kxh: kxh,
+        kxh: isThongKeMoiMode ? kxhThongKeMoi : kxhThongKe,
+        kxh_thong_ke: kxhThongKe,
+        kxh_thong_ke_moi: kxhThongKeMoi,
         max_kxh: maxKxh,
         khoi_dong: khoi_dong > 0 ? khoi_dong : 0,
         so_lan: so_lan,
@@ -5069,78 +5094,116 @@
         return { allowedDateSet: null, historyRows: [] };
       }
 
-      var denDate = chuyenNgay(den_ngay, "dd/mm/yyyy");
-      var sources = layNguonTheoDanhSach(ds_dai_chon_so_chu, dataMienOverride);
-      var dateAnyMap = {};
-      var dateHitMap = {};
-      var dateHitForStatsMap = {};
-      var mergedByDate = {};
+      var denDate = chuyenNgay(String(den_ngay || ""), "dd/mm/yyyy");
+      var mapData = dataMienOverride || du_lieu_dai_mien;
+      var dsData = (mapData[mien] && mapData[mien].data) || [];
+      var mangDlLsSoChu = [];
 
-      sources.forEach(function (dai) {
-        var rows = (dai.data || []).slice();
-        if (loai_tim === 0) {
-          rows = rows.filter(function (r) { return String(r.thu || "") === String(dai.thu || ""); });
+      function rowHitAnySoChu(rowObj, onlyMainStations) {
+        var hit = false;
+        Object.keys(rowObj || {}).forEach(function (tk) {
+          if (hit) return;
+          if (tk === "_id" || tk === "id" || tk === "thu" || tk === "field_ngay") return;
+          if (onlyMainStations) {
+            var allow = false;
+            (ds_dai_chon || []).forEach(function (sttRaw) {
+              if (allow) return;
+              var stt = String(sttRaw || "").trim();
+              if (tk.indexOf("d_" + stt + "_") === 0) allow = true;
+            });
+            if (!allow) return;
+          }
+          var val = String(rowObj[tk] || "").trim();
+          if (!val) return;
+          var ok = (so_chu || []).some(function (so) {
+            return val.endsWith(String(so || "").trim());
+          });
+          if (ok) hit = true;
+        });
+        return hit;
+      }
+
+      (ds_dai_chon_so_chu || []).forEach(function (sttRaw) {
+        var stt = String(sttRaw || "").trim();
+        var nguon = [];
+        if (Number(loai_tim || 0) === 1) {
+          nguon = dsData.filter(function (dm) {
+            return String(dm.stt) === stt && String(dm.thu || "") === String(thu_tuan || "");
+          });
         } else {
-          rows = rows.filter(function (r) { return r.thu === thu_tuan; });
+          nguon = dsData.filter(function (dm) {
+            return String(dm.stt) === stt;
+          });
         }
-        rows = rows.filter(function (r) {
-          var ngay = String(r.field_ngay || "").trim();
-          if (!ngay) return false;
-          return chuyenNgay(ngay, "yyyymmdd") < denDate;
-        });
 
-        var byDate = {};
-        rows.forEach(function (r) {
-          var ngay = String(r.field_ngay || "").trim();
-          if (!ngay) return;
-          if (!byDate[ngay]) byDate[ngay] = r;
-        });
+        nguon.forEach(function (dlD) {
+          var rows = (dlD.data || []).slice();
+          rows = rows.filter(function (obj) {
+            var ngay = String((obj && obj.field_ngay) || "").trim();
+            if (!ngay) return false;
+            if (Number(loai_tim || 0) === 1 && String(obj.thu || "") !== String(thu_tuan || "")) return false;
+            return chuyenNgay(ngay, "yyyymmdd") < denDate;
+          }).sort(function (a, b) {
+            return chuyenNgay(String((b && b.field_ngay) || "").trim(), "yyyymmdd") - chuyenNgay(String((a && a.field_ngay) || "").trim(), "yyyymmdd");
+          });
 
-        Object.keys(byDate).forEach(function (ngay) {
-          dateAnyMap[ngay] = true;
-          var values = getRowTwoDigits(byDate[ngay]);
-          if (!mergedByDate[ngay]) mergedByDate[ngay] = { all: [], byStt: {} };
-          mergedByDate[ngay].all = mergedByDate[ngay].all.concat(values);
-          var sttKey = String(dai.stt || "");
-          if (!mergedByDate[ngay].byStt[sttKey]) mergedByDate[ngay].byStt[sttKey] = [];
-          mergedByDate[ngay].byStt[sttKey] = mergedByDate[ngay].byStt[sttKey].concat(values);
-
-          var hit = so_chu.some(function (so) { return values.indexOf(String(so)) >= 0; });
-          if (hit) dateHitMap[ngay] = true;
+          rows.forEach(function (objRow) {
+            var dong = JSON.parse(JSON.stringify(objRow || {}));
+            var ngay = String(dong.field_ngay || "").trim();
+            if (!ngay) return;
+            var idx = mangDlLsSoChu.findIndex(function (n) {
+              return String((n && n.field_ngay) || "").trim() === ngay;
+            });
+            if (idx !== -1) {
+              var objNkq = JSON.parse(JSON.stringify(mangDlLsSoChu[idx] || {}));
+              Object.keys(dong).forEach(function (tk) {
+                if (tk === "_id" || tk === "id" || tk === "thu" || tk === "field_ngay") return;
+                objNkq["d_" + stt + "_" + tk] = String(dong[tk] || "").trim();
+              });
+              mangDlLsSoChu[idx] = objNkq;
+            } else {
+              var objNkqN = {};
+              Object.keys(dong).forEach(function (tk) {
+                if (tk === "_id" || tk === "id" || tk === "thu" || tk === "field_ngay") {
+                  objNkqN[tk] = String(dong[tk] || "").trim();
+                } else {
+                  objNkqN["d_" + stt + "_" + tk] = String(dong[tk] || "").trim();
+                }
+              });
+              mangDlLsSoChu.push(objNkqN);
+            }
+          });
         });
       });
 
-      Object.keys(mergedByDate).forEach(function (ngay) {
-        var merged = mergedByDate[ngay] || { byStt: {} };
-        var hitMainStations = (ds_dai_chon || []).some(function (sttRaw) {
-          var stt = String(sttRaw || "");
-          var vals = merged.byStt[stt] || [];
-          return so_chu.some(function (so) { return vals.indexOf(String(so)) >= 0; });
-        });
-        if (hitMainStations) dateHitForStatsMap[ngay] = true;
+      var kqSoChu = mangDlLsSoChu.filter(function (kq) {
+        return rowHitAnySoChu(kq, true);
       });
 
-      var allowedDateSet = new Set(Object.keys(dateHitForStatsMap));
-      var datesDesc = Object.keys(dateAnyMap).sort(function (a, b) {
-        return chuyenNgay(b, "yyyymmdd") - chuyenNgay(a, "yyyymmdd");
-      });
+      var allowedDateSet = new Set(kqSoChu.map(function (obj) {
+        return String((obj && obj.field_ngay) || "").trim();
+      }).filter(Boolean));
 
       var ghls = 0;
       var maxLs = Number(ls_bat_dau || 0);
       var daGioiHan = false;
       var historyRows = [];
 
-      datesDesc.forEach(function (ngay, idx) {
-        if (dateHitMap[ngay]) {
+      mangDlLsSoChu.sort(function (a, b) {
+        return chuyenNgay(String((b && b.field_ngay) || "").trim(), "yyyymmdd") - chuyenNgay(String((a && a.field_ngay) || "").trim(), "yyyymmdd");
+      }).forEach(function (kq, idx) {
+        var lay = rowHitAnySoChu(kq, false);
+        if (lay) {
           if (ghls >= maxLs) {
             if (maxLs === Number(ls_bat_dau || 0) && !daGioiHan) {
               maxLs = ghls;
               daGioiHan = true;
             }
+            var ngayYmd = String((kq && kq.field_ngay) || "").trim();
             historyRows.push({
-              id: "ls_" + idx + "_" + ngay,
+              id: "ls_" + idx + "_" + ngayYmd,
               stt: historyRows.length + 1,
-              ngay: dateFormat(chuyenNgay(ngay, "yyyymmdd"), "dd/mm/yyyy"),
+              ngay: dateFormat(chuyenNgay(ngayYmd, "yyyymmdd"), "dd/mm/yyyy"),
               so_ky: ghls
             });
           }
@@ -5151,19 +5214,19 @@
       });
 
       historyRows.sort(function (a, b) {
-        var ngayA = String(a.ngay || "").trim();
-        var ngayB = String(b.ngay || "").trim();
-        return chuyenNgay(ngayB, "dd/mm/yyyy") - chuyenNgay(ngayA, "dd/mm/yyyy");
-      });
-      historyRows.forEach(function (row, idx) {
-        row.stt = idx + 1;
-      });
+        return Number(b.stt || 0) - Number(a.stt || 0);
+      }).reverse();
+
       return { allowedDateSet: allowedDateSet, historyRows: historyRows };
     }
 
     function buildThongKeTabItems(dataMienOverride, sourceSttList, includeKqTabs, includeHistoryTab, comboSourceSttList) {
+      var cfgMien = String(mien || "");
+      var cfgLoaiTim = Number(loai_tim || 0);
+      var cfgLoaiTk = Number(loai_tk || 1);
+      var cfgThuTuan = String(thu_tuan || "");
       var mapData = dataMienOverride || du_lieu_dai_mien;
-      var dsData = (mapData[mien] && mapData[mien].data) || [];
+      var dsData = (mapData[cfgMien] && mapData[cfgMien].data) || [];
       var sourceList = (sourceSttList || []).map(function (x) { return String(x); });
       var comboSourceList = (comboSourceSttList || sourceList).map(function (x) { return String(x); });
 
@@ -5174,34 +5237,34 @@
         if (!stt || sttSeen[stt]) return;
         sttSeen[stt] = true;
 
-        if (Number(loai_tim) === 0) {
-          ds_dai_chon_local.push({ stt: stt, dai: mien + stt, ten_dai: mien + stt });
+        if (cfgLoaiTim === 0) {
+          ds_dai_chon_local.push({ stt: stt, dai: cfgMien + stt, ten_dai: cfgMien + stt });
           return;
         }
 
         var dlDT = dsData.find(function (dm) {
-          return String(dm.stt) === stt && String(dm.thu || "") === String(thu_tuan || "");
+          return String(dm.stt) === stt && String(dm.thu || "") === cfgThuTuan;
         });
         if (dlDT) ds_dai_chon_local.push({ stt: stt, dai: dlDT.ten_dai, ten_dai: dlDT.ten_dai });
-        else ds_dai_chon_local.push({ stt: stt, dai: mien + stt, ten_dai: mien + stt });
+        else ds_dai_chon_local.push({ stt: stt, dai: cfgMien + stt, ten_dai: cfgMien + stt });
       });
 
       var ds_dai_chonN = ds_dai_chon_local.slice();
       if (includeKqTabs) {
-        var mang_cac_dai = getUniqueCombinations(comboSourceList, Number(loai_tk || 1));
+        var mang_cac_dai = getUniqueCombinations(comboSourceList, cfgLoaiTk);
         mang_cac_dai.forEach(function (lstDai) {
-          if (Number(loai_tim) === 0) {
+          if (cfgLoaiTim === 0) {
             var stt = lstDai.join("&");
-            var dai = mien + " " + lstDai.join("&");
+            var dai = cfgMien + " " + lstDai.join("&");
             ds_dai_chonN.push({ stt: stt, dai: dai, ten_dai: dai });
           } else if (lstDai.length > 1) {
             var sttN = lstDai.join("&");
-            var daiN = mien + " " + lstDai.join("&");
+            var daiN = cfgMien + " " + lstDai.join("&");
             var tenDaiN = "";
             lstDai.forEach(function (id) {
               var csdai = ds_dai_chon_local.find(function (d) { return String(d.stt) === String(id); });
               if (!csdai) return;
-              tenDaiN += (tenDaiN ? " & " : (mien + " ")) + csdai.ten_dai;
+              tenDaiN += (tenDaiN ? " & " : (cfgMien + " ")) + csdai.ten_dai;
             });
             ds_dai_chonN.push({ stt: sttN, dai: daiN, ten_dai: tenDaiN || daiN });
           }
@@ -5228,6 +5291,61 @@
       }
 
       return items;
+    }
+
+    function assertSoChuThongKeTabsVueParity(tabItems, options) {
+      var opts = options || {};
+      var tabs = Array.isArray(tabItems) ? tabItems : [];
+      var includeKqTabs = !!opts.includeKqTabs;
+      var includeHistoryTab = !!opts.includeHistoryTab;
+      var useSoChuSource = !!opts.useSoChuSource;
+      var issues = [];
+
+      if (!useSoChuSource) return;
+
+      if (includeHistoryTab) {
+        if (!tabs.length || String((tabs[0] && tabs[0].id) || "") !== "lich_su_so_chu") {
+          issues.push("missing_or_misordered_history_tab");
+        }
+      }
+
+      var baseIds = [];
+      tabs.forEach(function (t) {
+        var id = String((t && t.id) || "");
+        if (!id) return;
+        if (id === "lich_su_so_chu") return;
+        if (id.indexOf("kq_") === 0) return;
+        baseIds.push(id);
+      });
+
+      if (includeKqTabs) {
+        baseIds.forEach(function (id) {
+          var kqId = "kq_" + id;
+          var idxBase = tabs.findIndex(function (t) { return String((t && t.id) || "") === id; });
+          var idxKq = tabs.findIndex(function (t) { return String((t && t.id) || "") === kqId; });
+          if (idxBase === -1 || idxKq === -1) {
+            issues.push("missing_pair_for_" + id);
+            return;
+          }
+          if (idxKq !== idxBase + 1) {
+            issues.push("wrong_pair_order_for_" + id);
+          }
+        });
+      } else {
+        var anyKq = tabs.some(function (t) {
+          return String((t && t.id) || "").indexOf("kq_") === 0;
+        });
+        if (anyKq) issues.push("unexpected_kq_tabs_when_includeKqTabs_false");
+      }
+
+      if (issues.length) {
+        console.warn("[KQXS][SoChu][TabParity] mismatch with Vue rules", {
+          issues: issues,
+          includeKqTabs: includeKqTabs,
+          includeHistoryTab: includeHistoryTab,
+          tabIds: tabs.map(function (t) { return String((t && t.id) || ""); })
+        });
+      }
     }
 
     function tao_khoa_cache_ds_dai(dsDaiDaLoc) {
@@ -5448,9 +5566,6 @@
       var maxSoKy = Math.max(1, Number(so_ky || 1));
 
       // Bước 1: Gom tất cả các batch (theo thu) của từng đài vào rawByStation TRƯỚC khi slice.
-      // Giống Vue: mang_dl_dai[STT] chứa toàn bộ dữ liệu các thu ghép lại, sau đó mới sort+dedup+
-      // đếm kỳ theo thứ tự ngày. Nếu slice sớm theo từng batch, các batch thứ 2, 3... sẽ bị
-      // đẩy ra ngoài giới hạn idx < maxSoKy và bị bỏ qua hoàn toàn trong vòng lặp combo.
       var rawByStation = {};
       for (var i = 0; i < selected.length; i += 1) {
         var dai = selected[i];
@@ -5474,20 +5589,16 @@
         if (!rawByStation[dai.stt]) rawByStation[dai.stt] = [];
         rawByStation[dai.stt] = rawByStation[dai.stt].concat(rows);
       }
-      // Bước 2: Hợp nhất toàn bộ batch của từng đài: dedup theo ngày, sort giảm dần, rồi mới
-      // slice đến maxSoKy. Đảm bảo đúng với Vue — các ngày T2, T4, T7... của cùng một đài
-      // được xếp theo thứ tự thời gian trước khi đếm kỳ 1, kỳ 2, kỳ 3...
+      // Bước 2: dedup theo ngày, sort giảm dần, slice đến maxSoKy
       Object.keys(rawByStation).forEach(function (stt) {
         mang_dl_dai[stt] = locVaSapXepNgay(rawByStation[stt]).slice(0, maxSoKy);
       });
 
       var mang_dai = Object.keys(mang_dl_dai);
       var mang_cac_dai = [];
-      // Vue luôn có tab đơn cho từng đài đã chọn
       mang_dai.forEach(function (stt) {
         mang_cac_dai.push([stt]);
       });
-      // Tab tổ hợp theo loai_tk (tránh lặp khi loai_tk = 1)
       getUniqueCombinations(mang_dai, Number(loai_tk)).forEach(function (combo) {
         if (combo.length > 1) mang_cac_dai.push(combo);
       });
@@ -5514,7 +5625,6 @@
       }
 
       // Tính thống kê theo từng đài một lần, sau đó tab tổ hợp chỉ cộng lại từ kết quả này.
-      // Cách này giúp KQ 1&2 luôn khớp với logic của từng tab đơn 1, 2 như Vue kỳ vọng.
       var stationSoStats = {};
       mang_dai.forEach(function (stt) {
         var soMap = createEmptySoMap("s_" + String(stt));
@@ -5552,7 +5662,7 @@
           var row = mapSo[k];
           row.to_hop = combo.join(",");
           row.id = comboKey + "_" + row.so;
-          var m = calcThongKeMetrics(row.ky || []);
+          var m = calcThongKeMetrics(row.ky || [], { isThongKeMoi: isThongKeMoi, sap_xep: sap_xep });
           var kSoKy = Number((row.ky && row.ky[Math.max(0, maxSoKy - 1)]) || 0);
           row.tong = m.tong;
           row.dem = m.dem;
@@ -5566,17 +5676,11 @@
           row.so_lan_trung = m.so_lan_trung;
           row.k_so_ky = kSoKy;
           row.has_ky_chot = kSoKy > 0;
-          // Luôn push tất cả rows (kể cả thong_ke_moi) — giống Vue dsThongKe đủ 100 số
-          // Việc lọc thoa_man cho tab KQ được xử lý ở phần render (giống Vue's hien_kq branch)
           outRows.push(row);
         });
       }
 
-      // Bảng chính luôn hiện đủ tất cả (no pre-filter).
-      // Việc lọc cho từng sub-card (lay_so_ky, kxh, dem_nho_hon, matrix) được xử lý
-      // bởi thongkeGroups useMemo, giống đúng với thiết kế Vue.
       outRows.sort(function (a, b) {
-        // Cả hai nút đều sort theo số tự nhiên 00-99 (giống Vue dsThongKe)
         return Number(a.so || 0) - Number(b.so || 0);
       });
 
@@ -5602,12 +5706,17 @@
         var useSoChuSource = so_chu.length > 0 && ds_dai_chon_so_chu.length > 0;
         var soChuCtx = useSoChuSource ? xayDungNguCanhSoChu(loadedDataMien) : { allowedDateSet: null, historyRows: [] };
         var thongKeSource = useSoChuSource ? ds_dai_chon_so_chu : ds_dai_chon;
-        // Giống chính xác Vue: (lay_so_ky+dem_be_hon+kxh_phai_lonhon+dem_nho_hon>0)||(1*dem_lon_hon>0&&so_chu.length>0)
-        var includeKqTabs = (Number(lay_so_ky || 0) + Number(dem_be_hon || 0) + Number(kxh_phai_lonhon || 0) + Number(dem_nho_hon || 0) > 0) || (Number(dem_lon_hon || 0) > 0 && so_chu.length > 0);
+        var includeKqTabs = (Number(lay_so_ky || 0) + Number(dem_be_hon || 0) + Number(kxh_phai_lonhon || 0) + Number(dem_nho_hon || 0) > 0)
+          || (Number(dem_lon_hon || 0) > 0 && so_chu.length > 0);
         var thongKeResult = await buildThongKeData(false, soChuCtx.allowedDateSet, thongKeSource, loadedDataMien);
         var rows = (thongKeResult && Array.isArray(thongKeResult.rows)) ? thongKeResult.rows : [];
         var mangDaiTabs = (thongKeResult && Array.isArray(thongKeResult.mang_dai)) ? thongKeResult.mang_dai : thongKeSource;
         var tabItems = buildThongKeTabItems(loadedDataMien, thongKeSource, includeKqTabs, useSoChuSource, mangDaiTabs);
+        assertSoChuThongKeTabsVueParity(tabItems, {
+          includeKqTabs: includeKqTabs,
+          includeHistoryTab: useSoChuSource,
+          useSoChuSource: useSoChuSource
+        });
         setThongkeTabItems(tabItems);
         setLichSuSoChuRows(soChuCtx.historyRows || []);
         setThongkeRows(rows);
@@ -6055,7 +6164,7 @@
     }
 
     function buildLegacyTongHopInputCachList() {
-      var nums = parseSoChuMasked(so_chu_input);
+      var nums = parseSoChuMasked(legacyThSoInput);
       if (!nums.length) return [];
       if (!legacyThUseGroupSource) {
         return nums.map(function (num, idx) {
@@ -6070,7 +6179,7 @@
         });
       }
 
-      var rawGroups = String(so_chu_input || "")
+      var rawGroups = String(legacyThSoInput || "")
         .split(/[@\n;]/)
         .map(function (part) { return parseSoChuMasked(part); })
         .filter(function (groupNums) { return Array.isArray(groupNums) && groupNums.length > 0; });
@@ -6687,7 +6796,7 @@
           (function (kyNo) {
             cols.push({
               title: String(kyNo),
-              dataIndex: "k_" + kyNo,
+              dataIndex: "ky",
               key: "k_" + kyNo,
               width: 50,
               render: function (_v, rec) {
@@ -6701,7 +6810,7 @@
           (function (kyNo) {
             cols.push({
               title: String(kyNo),
-              dataIndex: "k_" + kyNo,
+              dataIndex: "ky",
               key: "k_" + kyNo,
               width: 50,
               render: function (_v, rec) {
@@ -7534,6 +7643,13 @@
       var sorted = source.sort(function (a, b) { return Number(a.so || 0) - Number(b.so || 0); });
       var matrixRows = [];
       var groupCount = 0;
+      var soChuList = (appliedThongKe.so_chu || []).map(function (s) {
+        return String(s || "").trim();
+      }).filter(Boolean);
+      var soChuSet = {};
+      soChuList.forEach(function (s) {
+        soChuSet[s] = true;
+      });
       sorted.forEach(function (obj, idx) {
         var group = Math.floor(idx / 20) + 1;
         var rowIdx = idx % 20;
@@ -7544,10 +7660,14 @@
         rec["tong" + group] = obj.tong;
         rec["dem" + group] = obj.dem;
         rec["kxh" + group] = obj.kxh;
+        var soKey = String(obj && obj.so != null ? obj.so : "").padStart(2, "0");
+        var matchSoChu = soChuList.length ? !!soChuSet[soKey] : true;
         if (activeAction === "tk" && Number(appliedThongKe.dem_lon_hon) > 0) {
           var demVal = Number(obj.dem || 0);
+          var tongVal = Number(obj.tong || 0);
+          var kxhVal = Number(obj.kxh || 0);
           var passNguong = demVal >= Number(appliedThongKe.dem_lon_hon || 0);
-          rec["hl" + group] = passNguong;
+          rec["hl" + group] = matchSoChu && passNguong;
         } else if (Number(appliedThongKe.dem_to_nho_hon) > 0) {
           rec["hl" + group] = Number(obj.dem || 0) <= Number(appliedThongKe.dem_to_nho_hon || 0);
         } else {
