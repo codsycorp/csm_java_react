@@ -5585,7 +5585,7 @@
 
     async function chay_thong_ke() {
       if (ds_dai_chon.length === 0) return canhbao("Vui lòng Chọn Đài trước");
-      if (TruNgayRaSoNgay(den_ngay, tu_ngay, "dd/mm/yyyy") < 29) return canhbao("Vui lòng lại thời gian dài hơn 29 ngày");
+      if (TruNgayRaSoNgay(den_ngay, tu_ngay, "dd/mm/yyyy") < 28) return canhbao("Vui lòng lại thời gian dài hơn 28 ngày");
       if (ds_dai_chon.length < loai_tk) return canhbao("Vui lòng chọn thêm đài cần xem cho Chọn Đài");
 
       setActiveAction("tk");
@@ -5602,7 +5602,8 @@
         var useSoChuSource = so_chu.length > 0 && ds_dai_chon_so_chu.length > 0;
         var soChuCtx = useSoChuSource ? xayDungNguCanhSoChu(loadedDataMien) : { allowedDateSet: null, historyRows: [] };
         var thongKeSource = useSoChuSource ? ds_dai_chon_so_chu : ds_dai_chon;
-        var includeKqTabs = (Number(lay_so_ky || 0) + Number(dem_be_hon || 0) + Number(kxh_phai_lonhon || 0) + Number(dem_nho_hon || 0) + Number(dem_lon_hon || 0) > 0);
+        // Giống chính xác Vue: (lay_so_ky+dem_be_hon+kxh_phai_lonhon+dem_nho_hon>0)||(1*dem_lon_hon>0&&so_chu.length>0)
+        var includeKqTabs = (Number(lay_so_ky || 0) + Number(dem_be_hon || 0) + Number(kxh_phai_lonhon || 0) + Number(dem_nho_hon || 0) > 0) || (Number(dem_lon_hon || 0) > 0 && so_chu.length > 0);
         var thongKeResult = await buildThongKeData(false, soChuCtx.allowedDateSet, thongKeSource, loadedDataMien);
         var rows = (thongKeResult && Array.isArray(thongKeResult.rows)) ? thongKeResult.rows : [];
         var mangDaiTabs = (thongKeResult && Array.isArray(thongKeResult.mang_dai)) ? thongKeResult.mang_dai : thongKeSource;
@@ -5623,7 +5624,7 @@
 
     async function thong_ke_moi() {
       if (ds_dai_chon.length === 0) return canhbao("Vui lòng Chọn Đài trước");
-      if (TruNgayRaSoNgay(den_ngay, tu_ngay, "dd/mm/yyyy") < 29) return canhbao("Vui lòng lại thời gian dài hơn 29 ngày");
+      if (TruNgayRaSoNgay(den_ngay, tu_ngay, "dd/mm/yyyy") < 28) return canhbao("Vui lòng lại thời gian dài hơn 28 ngày");
       if (ds_dai_chon.length < loai_tk) return canhbao("Vui lòng chọn thêm đài cần xem cho Chọn Đài");
 
       setActiveAction("tkm");
@@ -7533,13 +7534,6 @@
       var sorted = source.sort(function (a, b) { return Number(a.so || 0) - Number(b.so || 0); });
       var matrixRows = [];
       var groupCount = 0;
-      var soChuList = (appliedThongKe.so_chu || []).map(function (s) {
-        return String(s || "").trim();
-      }).filter(Boolean);
-      var soChuSet = {};
-      soChuList.forEach(function (s) {
-        soChuSet[s] = true;
-      });
       sorted.forEach(function (obj, idx) {
         var group = Math.floor(idx / 20) + 1;
         var rowIdx = idx % 20;
@@ -7550,14 +7544,10 @@
         rec["tong" + group] = obj.tong;
         rec["dem" + group] = obj.dem;
         rec["kxh" + group] = obj.kxh;
-        var soKey = String(obj && obj.so != null ? obj.so : "").padStart(2, "0");
-        var matchSoChu = soChuList.length ? !!soChuSet[soKey] : true;
         if (activeAction === "tk" && Number(appliedThongKe.dem_lon_hon) > 0) {
           var demVal = Number(obj.dem || 0);
-          var tongVal = Number(obj.tong || 0);
-          var kxhVal = Number(obj.kxh || 0);
           var passNguong = demVal >= Number(appliedThongKe.dem_lon_hon || 0);
-          rec["hl" + group] = matchSoChu && passNguong;
+          rec["hl" + group] = passNguong;
         } else if (Number(appliedThongKe.dem_to_nho_hon) > 0) {
           rec["hl" + group] = Number(obj.dem || 0) <= Number(appliedThongKe.dem_to_nho_hon || 0);
         } else {
@@ -7997,7 +7987,7 @@
             }
           }));
         } else {
-          if (Number(appliedThongKe.dem_lon_hon) > 0 && Number(appliedThongKe.sap_xep) === 0) {
+          if (Number(appliedThongKe.dem_lon_hon) > 0) {
             var matrixTitle = buildMatrixTitle(comboTenDai);
             var matrixDateTitle = (String(appliedThongKe.thu_tuan || "") + " " + String(appliedThongKe.den_ngay || "")).trim();
             kqChildren = h("div", { className: "kqxs-kq-pane" }, h(Table, {
@@ -9170,16 +9160,7 @@
 
               h(Row, { gutter: 12, style: { marginTop: 10 } }, [
                 h(Col, { xs: 12, md: 3, key: "n1" }, [h("div", { style: { marginBottom: 6 } }, tt.tkType), h(Select, themedSelectProps({ value: loai_tk, options: [{ value: 1, label: tt.tk1 }, { value: 2, label: tt.tk2 }, { value: 3, label: tt.tk3 }], onChange: setLoaiTk }))]),
-                h(Col, { xs: 12, md: 6, key: "n2" }, [
-                  h("div", { style: { marginBottom: 6 } }, tt.searchType),
-                  h(Select, themedSelectProps({
-                    mode: "multiple",
-                    value: Array.isArray(legacySlrSelectedQueryTypes) ? legacySlrSelectedQueryTypes : (typeof loai_tim !== "undefined" ? [loai_tim] : []),
-                    options: legacySlrQueryTypeOptions || [{ value: 0, label: tt.theoNgay }, { value: 1, label: tt.theoKy }],
-                    onChange: function(vals) { setLegacySlrSelectedQueryTypes(vals); },
-                    style: { minWidth: 120, maxWidth: 220 }
-                  }))
-                ]),
+                h(Col, { xs: 12, md: 3, key: "n2" }, [h("div", { style: { marginBottom: 6 } }, tt.searchType), h(Select, themedSelectProps({ value: loai_tim, options: [{ value: 0, label: tt.theoNgay }, { value: 1, label: tt.theoKy }], onChange: setLoaiTim }))]),
                 h(Col, { xs: 12, md: 3, key: "n3" }, [h("div", { style: { marginBottom: 6 } }, tt.soKy), h(InputNumber, themedNumberProps({ value: so_ky, onChange: function (v) { setSoKy(toNumberSafe(v, 0)); } }))]),
                 h(Col, { xs: 12, md: 3, key: "n4" }, [h("div", { style: { marginBottom: 6 } }, tt.laySoKy), h(InputNumber, themedNumberProps({ value: lay_so_ky, onChange: function (v) { setLaySoKy(toNumberSafe(v, 0)); } }))]),
                 h(Col, { xs: 12, md: 3, key: "n5" }, [h("div", { style: { marginBottom: 6 } }, tt.demLe), h(InputNumber, themedNumberProps({ value: dem_be_hon, onChange: function (v) { setDemBeHon(toNumberSafe(v, 0)); } }))]),
@@ -9235,21 +9216,6 @@
                   onClick: thong_ke_moi,
                   loading: loading
                 }, tt.btnStatNew),
-                h(Button, {
-                  key: "slr-auto-run",
-                  className: "kqxs-action-btn kqxs-action-btn-primary",
-                  type: "primary",
-                  onClick: runLegacySlrAutoFilter,
-                  loading: legacySlrAutoRunning,
-                  disabled: legacySlrAutoRunning || !Array.isArray(legacySlrSelectedQueryTypes) || legacySlrSelectedQueryTypes.length === 0,
-                  style: { marginLeft: 8 }
-                }, tt.lgThAutoRun || "Auto Filter (C1–C6)"),
-                legacySlrAutoRunning ? h(Button, {
-                  key: "slr-auto-stop",
-                  danger: true,
-                  onClick: stopLegacySlrAutoFilter,
-                  style: { marginLeft: 8 }
-                }, tt.lgThAutoStop || "Stop") : null,
                 allowUpdateActions ? h(Button, {
                   key: "xsk",
                   className: "kqxs-action-btn",
