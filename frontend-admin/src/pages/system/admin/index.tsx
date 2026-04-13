@@ -1596,7 +1596,14 @@ export default function AdminPage() {
 
 	// Keep hook dependencies stable even before menu data is ready.
 	const runtimeMenuData = menuData ? patchMenuI18n(normalizeMenuRuntimeConfig(menuData), t, tEn, tZh) : null;
-	const effectiveAppId = runtimeMenuData?.app_id || appId;
+	const runtimeTableNames = String(runtimeMenuData?.table_name || "")
+		.split(",")
+		.map((item) => item.trim().toLowerCase())
+		.filter(Boolean);
+	const isSystemUserTableRuntime = runtimeTableNames.some((name) => name === "csm_accounts" || name === "csm_group_members");
+	const effectiveAppId = (isSystemUserRoute || isSystemUserTableRuntime)
+		? "csm"
+		: (runtimeMenuData?.app_id || appId);
 	const typeForm = Number(runtimeMenuData?.type_form || 1);
 	const expectedTableNames = (SYSTEM_MENU_KEY_TO_EXPECTED_TABLES[normalizedMenuKey] || []).map((item) => item.toLowerCase());
 	const currentTableName = String(runtimeMenuData?.table_name || "").trim();

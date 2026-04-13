@@ -1,5 +1,6 @@
 import { BasicContent, FormAvatarItem } from "#src/components";
 import { useUserStore } from "#src/store";
+import { useTabsStore } from "#src/store/tabs";
 import { updateTableData } from "#src/components/csm-grid/CsmApi";
 
 import {
@@ -20,16 +21,37 @@ export default function Profile() {
 	const hasRole = (role: string) =>
 		(currentUser.roles || []).some(r => String(r || "").toLowerCase() === role.toLowerCase());
 
+	const resolvePrimaryIdentity = () => {
+		const username = String(currentUser.username || "").trim();
+		if (username) return { field: "username", value: username };
+		const email = String(currentUser.email || "").trim();
+		if (email) return { field: "email", value: email };
+		const phoneNumber = String(currentUser.phoneNumber || "").trim();
+		if (phoneNumber) return { field: "phoneNumber", value: phoneNumber };
+		return { field: "", value: "" };
+	};
+
 	const resolveProfileTarget = () => {
 		const isDevOrAdminAccount = Boolean(currentUser.dev) || hasRole("admin") || hasRole("dev");
 		const objName = isDevOrAdminAccount ? "csm_accounts" : "csm_group_members";
+		const userId = String(currentUser.userId || "").trim();
+		const identity = resolvePrimaryIdentity();
+		const loginIdentifier = identity.value;
 
-		const pkField = currentUser.userId
-			? "id"
-			: (currentUser.email ? "email" : (currentUser.username ? "username" : "phoneNumber"));
-		const pkValue = currentUser.userId || currentUser.email || currentUser.username || currentUser.phoneNumber;
+		const pkFields = objName === "csm_group_members"
+			? (userId ? ["id", "login_identifier"] : ["login_identifier"])
+			: (userId ? ["id"] : (identity.field ? [identity.field] : []));
 
-		return { objName, pkField, pkValue };
+		const where: Record<string, any> = {};
+		if (userId) where.id = userId;
+		if (objName === "csm_group_members" && loginIdentifier) {
+			where.login_identifier = loginIdentifier;
+		}
+		if (!userId && objName === "csm_accounts" && identity.field && identity.value) {
+			where[identity.field] = identity.value;
+		}
+
+		return { objName, pkFields, where, loginIdentifier, userId, identityField: identity.field };
 	};
 
 	const isUpdateSuccess = (response: any) => {
@@ -56,37 +78,26 @@ export default function Profile() {
 	const handleFinish = async (values: any) => {
 		setLoading(true);
 		try {
-			const { objName, pkField, pkValue } = resolveProfileTarget();
-			if (!pkField || !pkValue) {
+			const { objName, pkFields, where } = resolveProfileTarget();
+			if (!pkFields?.length || Object.keys(where).length === 0) {
 				message.error(t('personal-center.updateFailed'));
 				return;
 			}
 
-			// Đảm bảo luôn gửi đủ các trường định danh
+			// Chỉ gửi các trường được phép chỉnh sửa trong profile
 			const updateData: any = {
-				id: currentUser.userId || pkValue,
-				email: values.email,
-				username: currentUser.username,
-				phoneNumber: values.phoneNumber,
 				full_name: values.full_name,
 				avatar: values.avatar,
 				description: values.description,
 			};
-			// Nếu pkField không phải là id/email/username/phoneNumber thì vẫn thêm vào
-			if (!['id','email','username','phoneNumber','phone_number'].includes(pkField)) {
-				updateData[pkField] = pkValue;
-			}
-			// Đảm bảo các trường định danh luôn có mặt nếu có giá trị
-			if (currentUser.email) updateData.email = currentUser.email;
-			if (currentUser.username) updateData.username = currentUser.username;
-			if (currentUser.phoneNumber) updateData.phoneNumber = currentUser.phoneNumber;
 
 			const response = await updateTableData({
 				app_id: "csm",
 				obj_name: objName,
 				command: "update",
 				obj_update: updateData,
-				pk_fields: [pkField],
+				pk_fields: pkFields,
+				where,
 			});
 
 			if (isUpdateSuccess(response)) {
@@ -102,8 +113,13 @@ export default function Profile() {
 					avatar: updatedRow.avatar ?? values.avatar,
 					description: updatedRow.description ?? values.description,
 				});
+				try {
+					await useUserStore.getState().getUserInfo();
+				} catch (syncErr) {
+					console.warn('[Profile] Sync user-info after update failed:', syncErr);
+				}
 				// Đảm bảo tab profile luôn mở và active sau khi cập nhật
-				const { addTab, setActiveKey } = require('#src/store').useTabsStore.getState();
+				const { addTab, setActiveKey } = useTabsStore.getState();
 				addTab('/personal-center/my-profile', {
 					key: '/personal-center/my-profile',
 					label: t('common.menu.profile'),
@@ -130,38 +146,28 @@ export default function Profile() {
 
 		setLoading(true);
 		try {
-			const { objName, pkField, pkValue } = resolveProfileTarget();
-			if (!pkField || !pkValue) {
+			const { objName, pkFields, where, loginIdentifier } = resolveProfileTarget();
+			if (!pkFields?.length || Object.keys(where).length === 0) {
 				message.error(t('personal-center.passwordChangeFailed'));
 				return;
 			}
 
-			// Đảm bảo luôn gửi đủ các trường định danh
 			const updateData: any = {
-				id: currentUser.userId || pkValue,
-				email: currentUser.email,
-				username: currentUser.username,
-				phoneNumber: currentUser.phoneNumber,
-				[pkField]: pkValue,
 				_oldPassword: values.oldPassword,
 				_newPassword: values.newPassword,
 				_changePassword: true,
 			};
-			// Nếu pkField không phải là id/email/username/phoneNumber thì vẫn thêm vào
-			if (!['id','email','username','phoneNumber','phone_number'].includes(pkField)) {
-				updateData[pkField] = pkValue;
+			if (objName === "csm_group_members" && loginIdentifier) {
+				updateData.login_identifier = loginIdentifier;
 			}
-			// Đảm bảo các trường định danh luôn có mặt nếu có giá trị
-			if (currentUser.email) updateData.email = currentUser.email;
-			if (currentUser.username) updateData.username = currentUser.username;
-			if (currentUser.phoneNumber) updateData.phoneNumber = currentUser.phoneNumber;
 
 			const response = await updateTableData({
 				app_id: "csm",
 				obj_name: objName,
 				command: "update",
 				obj_update: updateData,
-				pk_fields: [pkField],
+				pk_fields: pkFields,
+				where,
 			});
 
 			if (isUpdateSuccess(response)) {
@@ -219,26 +225,6 @@ export default function Profile() {
 						label={t('personal-center.username')}
 						disabled
 						tooltip={t('personal-center.username') + " không thể thay đổi"}
-					/>
-				)}
-				
-				{currentUser.email && (
-					<ProFormText
-						name="email"
-						label={t('personal-center.email')}
-						rules={[
-							{
-								type: 'email',
-								message: 'Email không hợp lệ!',
-							},
-						]}
-					/>
-				)}
-				
-				{currentUser.phoneNumber && (
-					<ProFormText
-						name="phoneNumber"
-						label={t('personal-center.phoneNumber')}
 					/>
 				)}
 				

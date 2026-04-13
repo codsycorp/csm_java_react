@@ -83,7 +83,7 @@ public class AuthHandler {
                 freshUserOpt = userService.findUserById(principalUser.getId());
             }
             String appToken = principalUser.getAppToken();
-            if (appToken != null && !appToken.isBlank()) {
+            if ((freshUserOpt.isEmpty()) && appToken != null && !appToken.isBlank()) {
                 Optional<User> byAppToken = userService.findUserByAppToken(appToken);
                 if (byAppToken.isPresent()) {
                     freshUserOpt = byAppToken;
@@ -102,7 +102,7 @@ public class AuthHandler {
 
             Object appTokenObj = principalMap.containsKey("app_token") ? principalMap.get("app_token") : null;
             String appToken = appTokenObj == null ? "" : String.valueOf(appTokenObj).trim();
-            if (!appToken.isEmpty()) {
+            if (freshUserOpt.isEmpty() && !appToken.isEmpty()) {
                 Optional<User> byAppToken = userService.findUserByAppToken(appToken);
                 if (byAppToken.isPresent()) {
                     freshUserOpt = byAppToken;

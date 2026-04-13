@@ -28,6 +28,14 @@ export interface SystemUserPermissionContext {
 	isDev?: boolean;
 }
 
+function isSystemUserTableName(tableName: unknown): boolean {
+	const normalizedList = String(tableName || "")
+		.split(",")
+		.map((item) => item.trim().toLowerCase())
+		.filter(Boolean);
+	return normalizedList.some((item) => item === "csm_accounts" || item === "csm_group_members");
+}
+
 export const PERMISSION_TOKEN_OPTIONS = [
 	{ value: "admin", label: "system.userPermission.option.admin" },
 	{ value: "dev", label: "system.userPermission.option.dev" },
@@ -1190,6 +1198,18 @@ function beforeSave(row, seft) {
 		}
 		return String(item?.login_identifier || "").trim() === loginIdentifier;
 	}) || null;
+	const persistedGroupUserId = String(existingGroupUser?.id || "").trim();
+	const persistedLoginIdentifier = String(existingGroupUser?.login_identifier || "").trim();
+	if (groupRowId) {
+		row.id = groupRowId;
+	} else if (persistedGroupUserId) {
+		row.id = persistedGroupUserId;
+	}
+	if (groupRowId && persistedLoginIdentifier) {
+		row.login_identifier = persistedLoginIdentifier;
+	} else {
+		row.login_identifier = loginIdentifier;
+	}
 	const previousGroupPass = String(existingGroupUser?.pass || "").trim();
 	if (!currentPass) {
 		if (previousGroupPass) {
@@ -1785,10 +1805,15 @@ function normalizeModeConfig(
 ): SystemUserMenuModeConfig {
 	const fallback = getDefaultSystemUserModeConfig(mode, t, tEn, tZh);
 	const rawTrigger = rawMode?.trigger && typeof rawMode.trigger === "object" ? rawMode.trigger : {};
+	const normalizedTableName = String(rawMode?.table_name || fallback.table_name || "").trim();
+	const normalizedAppId = isSystemUserTableName(normalizedTableName)
+		? "csm"
+		: String(rawMode?.app_id || "").trim();
 	return {
 		...fallback,
 		...rawMode,
-		table_name: String(rawMode?.table_name || fallback.table_name || "").trim(),
+		table_name: normalizedTableName,
+		app_id: normalizedAppId || undefined,
 		table: mergeMenuTableFields(rawMode?.table, mode === "main" ? SYSTEM_ACCOUNT_DEFAULT_FIELDS : SUB_USER_DEFAULT_FIELDS, t, tEn, tZh),
 		trigger: {
 			...rawTrigger,
@@ -1813,10 +1838,7 @@ export function buildSystemUserMenuConfig(
 	const normalizedMain = normalizeModeConfig(modes.main, "main", t, tEn, tZh);
 	const normalizedSub = normalizeModeConfig(modes.sub, "sub", t, tEn, tZh);
 	const selectedMode = mode === "main" ? normalizedMain : normalizedSub;
-	const selectedTableName = String(selectedMode?.table_name || base?.table_name || "").trim();
-	const canonicalAppId = selectedTableName === "csm_accounts" || selectedTableName === "csm_group_members"
-		? "csm"
-		: ((base?.app_id && String(base.app_id).trim()) || resolvedAppId);
+	const canonicalAppId = "csm";
 
 	return {
 		...base,
