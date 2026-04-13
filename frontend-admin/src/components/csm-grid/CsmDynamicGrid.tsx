@@ -8,13 +8,14 @@ import { INT, jdFromDate, jdToDate, NewMoon, KinhDoMatTroi, SunLongitude, getSun
 import { dateFormat, chuyenNgay, TruNgayRaSoNgay, CongNgay, CongGio, validateEmail, validatePhone, DateUtils } from "#src/utils/dateUtils";
 import { useSocket } from "#src/hooks/useSocket";
 import type { ActionType, ProColumns } from "@ant-design/pro-components";
-import { Button, Input, Space, Tooltip, message, Modal, Tabs, Divider } from "antd";
+import { Button, Input, Space, Tooltip, message, Modal, Tabs, Divider, Tag } from "antd";
 import { PlusOutlined, ImportOutlined, ExportOutlined, SearchOutlined } from "@ant-design/icons";
 import { read, utils, writeFile } from "xlsx";
 import { useAppStore } from "#src/store/app";
 import { useUserStore } from "#src/store/user";
 import { PERMISSION_BITS, hasAnyPermissionBit, hasPermissionBit, parseMenuBitIndex, toPermissionBigInt } from "#src/utils/permission-bitfield";
 import { formatDateForDisplay, formatDateForStorage, parseDateValueToDayjs, resolveDateLocaleFormat } from "#src/utils/dateControl";
+import { resolveComboQueryAppId } from "./combo-utils";
 import dayjs from "dayjs";
 
 // Minimal types (kept local to avoid wider type churn)
@@ -263,6 +264,29 @@ function isJsonType(types: string): boolean {
 	return /(^|[\s,;|])(json|jsonb|object|obj)([\s,;|]|$)/.test(types);
 }
 
+function isCodeLikeType(types: string): boolean {
+	return /(^|[\s,;|_:-])code([\s,;|_:-]|$)|codejs|codejava|codehtml|codesql|codexml|codepython/.test(types);
+}
+
+function resolveEffectiveFieldTypes(field: Partial<TableField> | Record<string, any> | null | undefined): string {
+	const explicit = String(field?.f_types ?? (field as any)?.f_type ?? "").trim().toLowerCase();
+	if (explicit && explicit !== "string" && explicit !== "ed") return explicit;
+
+	const fieldName = String(field?.f_name ?? "").trim().toLowerCase();
+	if (["menuspermissions", "menuspermissionsadd", "menuspermissionsdeny"].includes(fieldName)) return "menu_tree";
+	if (["permissions", "permissionsadd", "permissionsdeny"].includes(fieldName)) return "multi_tag";
+	if (["permissionpreset", "datascope", "role_level", "branch_id", "dept_id", "department_id", "group_id", "roles", "permissiongroups", "status", "app_id"].includes(fieldName)) return "co";
+	if (["is_global", "actived", "active", "dev", "enabled", "disabled"].includes(fieldName) || /^is_/.test(fieldName) || /^has_/.test(fieldName)) return "checkbox";
+
+	if ((field as any)?.f_cbo_query) return "co";
+	if (Array.isArray((field as any)?.f_options) && (field as any).f_options.length > 0) {
+		if (fieldName.includes("menu")) return "menu_tree";
+		if (fieldName.includes("permission")) return "multi_tag";
+	}
+
+	return explicit || "ed";
+}
+
 function isComboLikeType(rawTypes: unknown): boolean {
 	const types = String(rawTypes || "").toLowerCase();
 	const tokens = types.split(/[\s,;|_:-]+/).filter(Boolean);
@@ -362,6 +386,52 @@ function parseFreeSearchTokens(input: string): string[] {
 	return tokens.map((token) => token.replace(/^"|"$/g, "").trim()).filter(Boolean);
 }
 
+// ── Tag color palette for multi-select / single-select display ──────────────
+const TAG_COLOR_PALETTE = [
+	"blue", "green", "orange", "purple", "cyan",
+	"magenta", "gold", "lime", "volcano", "geekblue",
+] as const;
+
+function getAutoTagColor(value: string): string {
+	if (!value) return "default";
+	let hash = 0;
+	for (let i = 0; i < value.length; i++) {
+		hash = ((hash << 5) - hash) + value.charCodeAt(i);
+		hash |= 0;
+	}
+	return TAG_COLOR_PALETTE[Math.abs(hash) % TAG_COLOR_PALETTE.length];
+}
+
+/** Parse raw f_options array preserving optional `color` field for grid rendering. */
+function parseFieldOptionsRaw(raw: unknown): Array<{ value: string; label: string; color?: string }> {
+	if (!raw) return [];
+	let source: unknown = raw;
+	if (typeof source === "string") {
+		const text = source.trim();
+		if (!text) return [];
+		try { source = JSON.parse(text); } catch { return []; }
+	}
+	if (source && typeof source === "object" && Array.isArray((source as any).options)) {
+		source = (source as any).options;
+	}
+	if (!Array.isArray(source)) return [];
+	return (source as any[])
+		.map((item: any) => {
+			if (item == null) return null;
+			if (typeof item === "string" || typeof item === "number") {
+				const value = String(item).trim();
+				if (!value) return null;
+				return { value, label: value };
+			}
+			const value = String(item?.value ?? item?.ma ?? item?.id ?? item?.key ?? "").trim();
+			const label = String(item?.label ?? item?.ten ?? item?.text ?? item?.name ?? value).trim();
+			if (!value) return null;
+			const color: string | undefined = item?.color || item?.colour || undefined;
+			return { value, label: label || value, ...(color ? { color } : {}) };
+		})
+		.filter((item): item is { value: string; label: string; color?: string } => Boolean(item));
+}
+
 function parseFieldOptions(raw: unknown): Array<{ value: string; label: string }> {
 	if (!raw) return [];
 	let source: unknown = raw;
@@ -374,6 +444,9 @@ function parseFieldOptions(raw: unknown): Array<{ value: string; label: string }
 			return [];
 		}
 	}
+	if (source && typeof source === "object" && Array.isArray((source as any).options)) {
+		source = (source as any).options;
+	}
 	if (!Array.isArray(source)) return [];
 	return source
 		.map((item: any) => {
@@ -383,12 +456,99 @@ function parseFieldOptions(raw: unknown): Array<{ value: string; label: string }
 				if (!value) return null;
 				return { value, label: value };
 			}
-			const value = String(item?.value ?? item?.id ?? item?.key ?? "").trim();
-			const label = String(item?.label ?? item?.text ?? item?.name ?? value).trim();
+			const value = String(item?.value ?? item?.ma ?? item?.id ?? item?.key ?? "").trim();
+			const label = String(item?.label ?? item?.ten ?? item?.text ?? item?.name ?? value).trim();
 			if (!value) return null;
 			return { value, label: label || value };
 		})
 		.filter((item): item is { value: string; label: string } => Boolean(item));
+}
+
+function getLegacyFallbackComboQuery(fieldNameRaw: unknown): string {
+	const fieldName = String(fieldNameRaw || "").trim().toLowerCase();
+	if (!fieldName) return "";
+
+	if (fieldName === "permissionpreset") {
+		return JSON.stringify({
+			options: [
+				{ value: "", label: "system.userPermission.preset.custom" },
+				{ value: "viewer", label: "system.userPermission.preset.viewer" },
+				{ value: "editor", label: "system.userPermission.preset.editor" },
+				{ value: "full_crud", label: "system.userPermission.preset.fullCrud" },
+				{ value: "full_crud_export", label: "system.userPermission.preset.fullCrudExport" },
+				{ value: "admin_full", label: "system.userPermission.preset.adminFull" },
+			],
+		});
+	}
+
+	if (fieldName === "datascope") {
+		return JSON.stringify({
+			options: [
+				{ value: "NONE", label: "system.userPermission.scope.none" },
+				{ value: "OWNER", label: "system.userPermission.scope.owner" },
+				{ value: "DEPARTMENT", label: "system.userPermission.scope.department" },
+				{ value: "BRANCH", label: "system.userPermission.scope.branch" },
+				{ value: "ALL", label: "system.userPermission.scope.all" },
+			],
+		});
+	}
+
+	if (fieldName === "role_level") {
+		return JSON.stringify({
+			options: [
+				{ value: "manager", label: "system.userPermission.level.manager" },
+				{ value: "team_lead", label: "system.userPermission.level.teamLead" },
+				{ value: "staff", label: "system.userPermission.level.staff" },
+			],
+		});
+	}
+
+	if (fieldName === "status") {
+		return JSON.stringify({
+			options: [
+				{ value: "1", label: "common.activated" },
+				{ value: "0", label: "common.deactivated" },
+			],
+		});
+	}
+
+	if (fieldName === "branch_id") {
+		return JSON.stringify({
+			query: [
+				{
+					obj_name: "csm_branches",
+					fields: ["id", "branch_name"],
+					obj_where: { field: "id", type: "like", value: "" },
+				},
+			],
+		});
+	}
+
+	if (["dept_id", "department_id"].includes(fieldName)) {
+		return JSON.stringify({
+			query: [
+				{
+					obj_name: "csm_depts",
+					fields: ["id", "dept_name", "branch_id"],
+					obj_where: { field: "id", type: "like", value: "" },
+				},
+			],
+		});
+	}
+
+	if (["group_id", "permissiongroups", "group_rights", "grouprights"].includes(fieldName)) {
+		return JSON.stringify({
+			query: [
+				{
+					obj_name: "csm_roles",
+					fields: ["id", "role_name"],
+					obj_where: { field: "id", type: "like", value: "" },
+				},
+			],
+		});
+	}
+
+	return "";
 }
 
 function rowContainsSelectFilterValue(cellValue: unknown, selected: string): boolean {
@@ -730,9 +890,10 @@ function normalizeRowComboFieldsByQuery(
 		if (!fieldName || !(fieldName in next)) return;
 		const types = String(field?.f_types || "").toLowerCase();
 		if (!isComboLikeType(types)) return;
-		if (!field?.f_cbo_query) return;
+		const comboQuery = String(field?.f_cbo_query || getLegacyFallbackComboQuery(fieldName) || "").trim();
+		if (!comboQuery) return;
 
-		next[fieldName] = normalizeComboFieldByQuery(next[fieldName], field.f_cbo_query, database, decryptFn);
+		next[fieldName] = normalizeComboFieldByQuery(next[fieldName], comboQuery, database, decryptFn);
 	});
 
 	const shouldSyncGroupAliases = ["group_id", "permissionGroups", "group_rights", "groupRights"].some(
@@ -955,14 +1116,14 @@ export function CsmDynamicGrid({
 		
 		// Collect all combo queries that need table data
 		const comboFields = (m_configs?.table || []).filter((f: TableField) => {
-			const types = (f.f_types || '').toLowerCase();
+			const types = resolveEffectiveFieldTypes(f);
 			return isComboLikeType(types);
 		});
 		
 		const tablesToFetch: Array<{tableName: string; appId: string; whereClause: any}> = [];
 		
 		comboFields.forEach((f: TableField) => {
-			const rawQuery = f.f_cbo_query;
+			const rawQuery = String(f.f_cbo_query || getLegacyFallbackComboQuery(f.f_name) || "").trim();
 			if (!rawQuery) return;
 			
 			let q = rawQuery;
@@ -994,7 +1155,7 @@ export function CsmDynamicGrid({
 						if (!querySpec?.obj_name) return;
 						
 						const tableName = querySpec.obj_name;
-						const queryAppId = querySpec.app_id || userAppId || appId || 'csm';
+						const queryAppId = resolveComboQueryAppId(tableName, querySpec.app_id, userAppId || appId || "csm");
 						let whereClause = querySpec.obj_where;
 						
 						// Default obj_where if not provided or invalid
@@ -1043,6 +1204,10 @@ export function CsmDynamicGrid({
 			setDatabaseVersion(v => v + 1);
 		});
 	}, []); // Empty deps = run once on mount
+
+	const resolveQueryAppIdByTable = useCallback((tableName: string, queryAppId?: string): string => {
+		return resolveComboQueryAppId(tableName, queryAppId, userAppId || appId || "csm");
+	}, [userAppId, appId]);
 	
 	// 🔧 Helper: Auto-fetch missing table when combo query needs it
 	const ensureTableInDatabase = useCallback(async (
@@ -1050,8 +1215,8 @@ export function CsmDynamicGrid({
 		queryAppId?: string,
 		whereClause?: any
 	): Promise<boolean> => {
-		// Fallback appId: query.app_id > logged-in user.app_id > props.appId
-		const effectiveAppId = queryAppId || userAppId || appId || 'csm';
+		// Default app scope follows logged-in user, except 2 user tables always in csm
+		const effectiveAppId = resolveQueryAppIdByTable(tableName, queryAppId);
 		
 		// Include where clause in cache key to handle different filters on same table
 		const whereSuffix = whereClause ? `::${JSON.stringify(whereClause)}` : '';
@@ -1134,7 +1299,7 @@ export function CsmDynamicGrid({
 		fetchPromise.catch(() => {}); // Ignore error (already logged)
 		
 		return true; // Started fetching
-	}, [database, appId, userAppId, globalTableFetchCache, setTableData]);
+	}, [database, resolveQueryAppIdByTable, globalTableFetchCache, setTableData]);
 
 	// Helper: Create seft context with all utility functions
 	const createSeftContext = useCallback(() => ({
@@ -1407,18 +1572,33 @@ export function CsmDynamicGrid({
 		
 		const coFields = (m_configs.table || [])
 			.filter((f) => {
-				const types = String(f.f_types || "").toLowerCase();
+				const types = resolveEffectiveFieldTypes(f);
 				return Number(f.f_show) === 1 && isComboLikeType(types);
 			});
 		
-		console.log(`[selectEnums] Found ${coFields.length} fields with 'co' type:`, 
-			coFields.map(f => ({ name: f.f_name, types: f.f_types, has_query: !!f.f_cbo_query }))
+		console.log(`[selectEnums] Found ${coFields.length} combo-like fields:`, 
+			coFields.map(f => ({ name: f.f_name, rawTypes: f.f_types, effectiveTypes: resolveEffectiveFieldTypes(f), has_query: !!f.f_cbo_query }))
 		);
 		
 		coFields.forEach((f) => {
-			let q = f.f_cbo_query || "";
+			const optionsFromField = parseFieldOptions((f as any).f_options);
+			if (optionsFromField.length > 0) {
+				const enumFromOptions: Record<string, { text: string }> = {};
+				optionsFromField.forEach((opt) => {
+					enumFromOptions[String(opt.value)] = { text: localizeOptionLabel(opt.label) };
+				});
+				if (Object.keys(enumFromOptions).length > 0) {
+					map[f.f_name] = enumFromOptions;
+					return;
+				}
+			}
+
+			let q = String(f.f_cbo_query || getLegacyFallbackComboQuery(f.f_name) || "").trim();
 			if (!q) {
-				console.warn(`[selectEnums] Field ${f.f_name} has 'co' type but no f_cbo_query`);
+				const types = resolveEffectiveFieldTypes(f);
+				if (!isMultiSelectLikeType(types)) {
+					console.warn(`[selectEnums] Field ${f.f_name} has combo type but no f_cbo_query/f_options`);
+				}
 				return;
 			}
 			
@@ -1845,10 +2025,12 @@ export function CsmDynamicGrid({
 	const baseColumns: ProColumns<Row>[] = useMemo(() => {
 		const shown = (m_configs.table || [])
 			.filter((f) => {
-				const types = String(f.f_types || '').toLowerCase();
+				const types = resolveEffectiveFieldTypes(f);
 				return Number(f.f_show) === 1
 					&& f.f_name !== 'id'
 					&& !/richtext|html/.test(types)
+					&& !isCodeLikeType(types)
+					&& !/password/.test(types)
 					&& !isJsonType(types);
 			})
 			.sort((a, b) => Number(a.f_stt || 0) - Number(b.f_stt || 0));
@@ -1868,7 +2050,7 @@ export function CsmDynamicGrid({
 			}
 			const headerText = candidates.find((h) => typeof h === "string" && h.trim() !== "") || f.f_name;
 
-			const types = (f.f_types || "").toLowerCase();
+			const types = resolveEffectiveFieldTypes(f);
 			const typeTokens = types.split(/[,\s;|]+/).filter(Boolean);
 			const key = f.f_name;
 			const isNumber = /price|number|int|float|double|money|currency/.test(types);
@@ -2007,40 +2189,103 @@ export function CsmDynamicGrid({
 			else if (isSwitch) col.valueType = "switch";
 			else if (isSelect || isMultiSelect) {
 				col.valueType = "select";
-				const optionsValueEnum = parseFieldOptions((f as any).f_options).reduce<Record<string, { text: string }>>((acc, opt) => {
+				const rawOptionsForRender = parseFieldOptionsRaw((f as any).f_options);
+				const optionsValueEnum = rawOptionsForRender.reduce<Record<string, { text: string }>>((acc, opt) => {
 					acc[opt.value] = { text: opt.label.includes(".") ? t(opt.label) : opt.label };
 					return acc;
 				}, {});
 				const ve = Object.keys(optionsValueEnum).length > 0 ? optionsValueEnum : selectEnums[f.f_name];
 				if (ve) col.valueEnum = ve as any;
+				// Build value → color map from f_options for tag coloring
+				const optionColorMap: Record<string, string> = {};
+				rawOptionsForRender.forEach(({ value, color }) => { if (color) optionColorMap[value] = color; });
+
 				if (isMultiSelect) {
 					col.render = (_dom, entity) => {
 						const raw = entity[f.f_name];
-						if (raw == null || raw === "") return "";
+						if (raw == null || raw === "") return null;
 						const valueEnum = (ve || {}) as Record<string, { text: string }>;
-						const toLabels = (arr: any[]) => arr
-							.map((item) => {
-								const key = String(item ?? "").trim();
-								if (!key) return "";
-								return valueEnum[key]?.text || key;
-							})
-							.filter(Boolean);
-						if (Array.isArray(raw)) return toLabels(raw).join(", ");
+						const normalizeOptionLabel = (input: unknown) => {
+							const text = String(input ?? "").trim();
+							if (!text) return "";
+							return text.includes(".") ? t(text) : text;
+						};
+						// Returns { key: string (original value), label: string (display) }
+						const itemToEntry = (item: any): { key: string; label: string } | null => {
+							if (item == null) return null;
+							if (typeof item === "object") {
+								const valueKey = String(item.value ?? item.ma ?? item.id ?? item.key ?? "").trim();
+								const explicitLabel = normalizeOptionLabel(item.label ?? item.ten ?? item.text ?? item.name ?? "");
+								if (explicitLabel) return { key: valueKey || explicitLabel, label: explicitLabel };
+								if (!valueKey) return null;
+								return { key: valueKey, label: normalizeOptionLabel(valueEnum[valueKey]?.text) || valueKey };
+							}
+							const valueKey = String(item).trim();
+							if (!valueKey) return null;
+							return { key: valueKey, label: normalizeOptionLabel(valueEnum[valueKey]?.text) || valueKey };
+						};
+						const toEntries = (arr: any[]) =>
+							Array.from(
+								new Map(
+									arr.map(itemToEntry).filter(Boolean).map(e => [e!.key, e!])
+								).values()
+							);
+						const renderTags = (entries: Array<{ key: string; label: string }>) => {
+							if (entries.length === 0) return null;
+							return React.createElement(
+								React.Fragment,
+								null,
+								...entries.map(({ key, label }) =>
+									React.createElement(Tag, {
+										key,
+										color: optionColorMap[key] || getAutoTagColor(key),
+										style: { marginBottom: 2, marginRight: 2, fontSize: 12 },
+									}, label)
+								)
+							);
+						};
+
+						if (Array.isArray(raw)) return renderTags(toEntries(raw));
 						if (typeof raw === "string") {
 							const trimmed = raw.trim();
-							if (!trimmed) return "";
+							if (!trimmed) return null;
 							if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
 								try {
 									const parsed = JSON.parse(trimmed);
-									if (Array.isArray(parsed)) return toLabels(parsed).join(", ");
-								} catch {
-									return trimmed;
-								}
+									if (Array.isArray(parsed)) return renderTags(toEntries(parsed));
+									if (parsed && typeof parsed === "object") {
+										const entry = itemToEntry(parsed);
+										return entry ? renderTags([entry]) : null;
+									}
+								} catch { /* fall through */ }
 							}
-							if (trimmed.includes(",")) return toLabels(trimmed.split(",").map((item) => item.trim())).join(", ");
-							return valueEnum[trimmed]?.text || trimmed;
+							if (trimmed.includes(","))
+								return renderTags(toEntries(trimmed.split(",").map(s => s.trim())));
+							const singleEntry = itemToEntry(trimmed);
+							return singleEntry ? renderTags([singleEntry]) : null;
 						}
-						return String(raw);
+						if (typeof raw === "object") {
+							const entry = itemToEntry(raw);
+							return entry ? renderTags([entry]) : null;
+						}
+						const fallbackEntry = itemToEntry(String(raw));
+						return fallbackEntry ? renderTags([fallbackEntry]) : React.createElement(Tag, { color: getAutoTagColor(String(raw)) }, String(raw));
+					};
+				} else if (ve) {
+					// Single-select: render as a colored Tag
+					col.render = (_dom, entity) => {
+						const raw = entity[f.f_name];
+						if (raw == null || raw === "") return null;
+						const valueKey = String(raw).trim();
+						if (!valueKey) return null;
+						const rawLabel = ve[valueKey]?.text;
+						const disp = rawLabel
+							? (rawLabel.includes(".") ? t(rawLabel) : rawLabel)
+							: valueKey;
+						return React.createElement(Tag, {
+							color: optionColorMap[valueKey] || getAutoTagColor(valueKey),
+							style: { fontSize: 12 },
+						}, disp);
 					};
 				}
 			}
@@ -3145,6 +3390,54 @@ export function CsmDynamicGrid({
 		});
 	}, [searchedData, sorters, m_configs.table, selectEnums, numberLocale]);
 
+	const sortableFieldNames = useMemo(() => {
+		return (m_configs.table || [])
+			.filter((field) => resolveConfiguredSortState(field).enabled)
+			.map((field) => String(field.f_name || "").trim())
+			.filter(Boolean);
+	}, [m_configs.table]);
+
+	const sortFieldLabelMap = useMemo(() => {
+		const map = new Map<string, string>();
+		(baseColumns || []).forEach((col) => {
+			const field = String(col.dataIndex ?? col.key ?? "").trim();
+			if (!field) return;
+			const title = typeof col.title === "string" ? col.title : field;
+			map.set(field, title);
+		});
+		return map;
+	}, [baseColumns]);
+
+	const multiSortGuideModel = useMemo(() => {
+		const lang = String(i18n.language || "").toLowerCase();
+		const activeSorters = sorters.filter((item) => item && item.field && item.order);
+		const hasRelatedLogic = sortableFieldNames.length > 1 && activeSorters.length > 0;
+		if (!hasRelatedLogic) return null;
+
+		if (lang.startsWith("zh")) {
+			return {
+				title: "多列排序已启用",
+				description: "可继续按住 Shift 点击其他列头叠加排序；导出 Excel 将保持当前顺序。",
+				asc: "升序",
+				desc: "降序",
+			};
+		}
+		if (lang.startsWith("en")) {
+			return {
+				title: "Multi-column sorting active",
+				description: "Keep holding Shift and click more column headers to extend sorting; Excel export preserves this order.",
+				asc: "Ascending",
+				desc: "Descending",
+			};
+		}
+		return {
+			title: "Đang bật sắp xếp nhiều cột",
+			description: "Tiếp tục giữ Shift và bấm thêm tiêu đề cột để mở rộng sắp xếp; xuất Excel sẽ giữ nguyên thứ tự hiện tại.",
+			asc: "Tăng dần",
+			desc: "Giảm dần",
+		};
+	}, [i18n.language, sorters, sortableFieldNames]);
+
 	// Export Excel (.xlsx by default, .xls when configured) - xuất đúng thứ tự sort
 	const handleExport = () => {
 		const exportColumns = baseColumns.filter((c) => {
@@ -3193,10 +3486,19 @@ export function CsmDynamicGrid({
 				const fileExt = file.name.split(".").pop()?.toLowerCase();
 				let items: Row[] = [];
 
-				// Fields for Excel positional mapping: same filter as export (f_show=1, not id, not richtext)
+				// Fields for Excel positional mapping: same filter as export (f_show=1, not id, not richtext/code/password/json)
 				// This matches the columns written by handleExport so col 0 → first visible field
 				const importFields = (m_configs.table || [])
-					.filter((f) => Number(f.f_show) === 1 && String(f.f_name).toLowerCase() !== 'id' && !/richtext|html/.test(String(f.f_types || '').toLowerCase()))
+					.filter((f) => {
+						if (Number(f.f_show) !== 1) return false;
+						if (String(f.f_name).toLowerCase() === 'id') return false;
+						const types = resolveEffectiveFieldTypes(f);
+						if (/richtext|html/.test(types)) return false;
+						if (isCodeLikeType(types)) return false;
+						if (/password/.test(types)) return false;
+						if (isJsonType(types)) return false;
+						return true;
+					})
 					.sort((a, b) => Number(a.f_stt ?? 0) - Number(b.f_stt ?? 0));
 
 				if (fileExt === "csv") {
@@ -4115,74 +4417,53 @@ export function CsmDynamicGrid({
 	};
 
 
-	// Hướng dẫn đa ngôn ngữ
-	const gridHintText = useMemo(() => {
-		const lang = String(i18n.language || '').toLowerCase();
-		if (lang.startsWith('zh')) {
-			return {
-				tip: '提示:',
-				content: '按住',
-				shift: 'Shift',
-				content2: '并点击表头可多列排序。导出 Excel 时会保持当前顺序。'
-			};
-		}
-		if (lang.startsWith('en')) {
-			return {
-				tip: 'Tip:',
-				content: 'Hold ',
-				shift: 'Shift',
-				content2: 'and click column headers to sort by multiple columns. Export to Excel will keep this order.'
-			};
-		}
-		// Mặc định: tiếng Việt
-		return {
-			tip: 'Mẹo:',
-			content: 'Giữ ',
-			shift: 'Shift',
-			content2: 'và bấm tiêu đề cột để sắp xếp nhiều cột cùng lúc. Khi xuất Excel sẽ giữ đúng thứ tự này.'
-		};
-	}, [i18n.language]);
+	const children: React.ReactNode[] = [];
 
-	// Nhỏ gọn, chuyên nghiệp, đặt góc phải
-	const gridHint = React.createElement(
-		'div',
-		{
-			style: {
-				position: 'absolute',
-				top: 8,
-				right: 16,
-				zIndex: 10,
-				background: '#f9fafb',
-				color: '#555',
-				borderRadius: 4,
-				padding: '2px 10px',
-				fontSize: 13,
-				boxShadow: '0 1px 4px rgba(0,0,0,0.03)',
-				display: 'flex',
-				alignItems: 'center',
-				gap: 6,
-				pointerEvents: 'none',
-				fontWeight: 400,
-			},
-		},
-		React.createElement('span', { style: { color: '#1890ff', fontSize: 15, display: 'flex', alignItems: 'center' } },
-			React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 20 20', fill: 'none', style: { marginRight: 2 } },
-				React.createElement('circle', { cx: 10, cy: 10, r: 9, stroke: '#1890ff', strokeWidth: 1.5, fill: '#e6f4ff' }),
-				React.createElement('text', { x: 10, y: 15, textAnchor: 'middle', fontSize: 13, fill: '#1890ff', fontWeight: 600 }, 'i')
-			)
-		),
-		React.createElement('span', null,
-			gridHintText.content,
-			React.createElement('b', null, gridHintText.shift),
-			' ',
-			gridHintText.content2
-		),
-	);
+	if (multiSortGuideModel) {
+		const activeSorterNodes = sorters
+			.filter((item) => item && item.field && item.order)
+			.map((item, index) => {
+				const label = sortFieldLabelMap.get(item.field) || item.field;
+				const direction = item.order === "ascend" ? multiSortGuideModel.asc : multiSortGuideModel.desc;
+				return React.createElement(
+					"span",
+					{
+						key: `${item.field}-${item.order}-${index}`,
+						style: {
+							padding: "2px 8px",
+							borderRadius: 6,
+							border: "1px solid var(--ant-colorBorderSecondary)",
+							background: "var(--ant-colorBgContainer)",
+							fontSize: 12,
+						},
+					},
+					`${index + 1}. ${label} (${direction})`,
+				);
+			});
 
-	const children: React.ReactNode[] = [
-		React.createElement('div', { key: 'grid-hint-container', style: { position: 'relative', minHeight: 0 } }, gridHint),
+		children.push(
+			React.createElement(
+				"div",
+				{
+					key: "multi-sort-guide",
+					style: {
+						marginBottom: 8,
+						padding: "8px 12px",
+						borderRadius: 8,
+						border: "1px solid var(--ant-colorBorderSecondary)",
+						background: "var(--ant-colorFillAlter)",
+					},
+				},
+				React.createElement("div", { style: { fontWeight: 600, marginBottom: 4 } }, multiSortGuideModel.title),
+				React.createElement("div", { style: { marginBottom: 6 } }, multiSortGuideModel.description),
+				React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6 } }, activeSorterNodes),
+			),
+		);
+	}
+
+	children.push(
 		React.createElement(BasicTable as any, { key: "table", autoHeight: true, ...tableProps })
-	];
+	);
 	
 	// Add detail panel when a master row is selected and it has detail nodes (Master-Detail structure)
 	const isMasterDetail = !isDetailGrid && Number(m_configs.type_form) === 2;

@@ -60,6 +60,9 @@ export function clearAllClientState() {
   try { localStorage.removeItem("current_app_id"); } catch {}
   try { localStorage.removeItem("csm_client_id"); } catch {}
 
+  // Clear persisted tabbar/open-tabs snapshot
+  try { sessionStorage.removeItem("tabbar"); } catch {}
+
   // Clear all chat pin keys (csm_chat_pin_*)
   try {
     const chatPinKeys = Object.keys(localStorage).filter(k => k.startsWith("csm_chat_pin_"));
@@ -94,6 +97,30 @@ export function clearAllClientState() {
       usePreferencesStore.getState().setPreferences(savedPreferences);
     } catch {}
   }
+}
+
+/**
+ * Logout (user-initiated) and hard reload to login page.
+ * Unlike force logout, this flow does not show session-expired warning.
+ */
+export function logoutAndReload() {
+  clearAllClientState();
+
+  if (typeof window !== "undefined") {
+    window.sessionStorage.setItem("forceAdminMode", "true");
+  }
+
+  setTimeout(() => {
+    try {
+      const base = import.meta.env.BASE_URL || "/";
+      const redirect =
+        typeof window !== "undefined" && /^(\/homepage|\/system\b|\/personal-center\b)/.test(window.location.pathname)
+          ? "?redirect=admin" : "";
+      window.location.replace(`${base}login${redirect}`);
+    } catch {
+      try { window.location.reload(); } catch {}
+    }
+  }, 0);
 }
 
 /**

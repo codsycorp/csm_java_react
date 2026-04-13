@@ -503,10 +503,8 @@ export function useMenu() {
 		   if (legacySystemFallbackPaths.has(normalizedKey)) {
 			   const userState = useUserStore.getState();
 			   const isDev = resolveDevFlag(userState.dev, userState.roles);
-			   const permissionBits = toPermissionBigInt(userState.permissionBitfield);
-			   const isAdmin = !isDev && isSuperPermissionProfile(permissionBits);
 			   const systemMenuFallbacks: Record<string, { label: string; table_name: string; type_form: number }> = {
-				   "/system/user": { label: t("common.menu.user"), table_name: isDev ? "csm_accounts" : (isAdmin ? "csm_group_members" : ""), type_form: 1 },
+				   "/system/user": { label: t("common.menu.user"), table_name: isDev ? "csm_accounts" : "csm_group_members", type_form: 1 },
 				   "/system/dept": { label: t("common.menu.permissionGroup"), table_name: "csm_roles", type_form: 1 },
 				   "/system/role": { label: t("common.menu.permissionGroup"), table_name: "csm_roles", type_form: 1 },
 				   "/system/roles": { label: t("common.menu.permissionGroup"), table_name: "csm_roles", type_form: 1 },

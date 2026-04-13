@@ -55,12 +55,36 @@ export default function LayoutContent() {
 		}
 		return undefined;
 	};
-	let route = resolveRouteByKey(activeKey);
-	let PatchedComponent: any = null;
-	// Fallback: "homepage" tab key may map to "/" route if path was recently changed
-	if (!route && (activeKey === "homepage" || activeKey === "/home")) {
-		route = flatRouteList["/"];
-	}
+	const resolvedTabView = useMemo(() => {
+		let route = resolveRouteByKey(activeKey);
+		let PatchedComponent: any = null;
+		let tabProps: any = tab;
+
+		if (!route && (activeKey === "homepage" || activeKey === "/home")) {
+			route = flatRouteList["/"];
+		}
+
+		if (route && tab) {
+			const patched = patchDynamicRoutesWithComponent([{ ...route, ...tab }]);
+			if (patched && patched[0] && patched[0].Component) {
+				PatchedComponent = patched[0].Component;
+			}
+		}
+
+		if (!PatchedComponent) {
+			let homeKey = "homepage";
+			if (!flatRouteList[homeKey] && flatRouteList["/home"]) homeKey = "/home";
+			if (!flatRouteList[homeKey] && flatRouteList["/"]) homeKey = "/";
+			route = flatRouteList[homeKey];
+			PatchedComponent = route && route.Component ? route.Component : null;
+			tabProps = openTabs.get(homeKey) || tab;
+		}
+
+		return {
+			Component: PatchedComponent,
+			tabProps,
+		};
+	}, [activeKey, tab, flatRouteList, openTabs]);
 
 	// Memo hóa props cho các tab tĩnh để tránh tạo object mới mỗi lần render
 	const staticSystemPaths = useMemo(() => ([
@@ -78,29 +102,8 @@ export default function LayoutContent() {
 		return map;
 	}, [openTabs, staticSystemPaths]);
 
-	let tabProps: any = tab;
-
-	if (route && tab) {
-		// Patch lại route động mỗi lần render để lấy đúng Component (chuẩn SPA)
-		const patched = patchDynamicRoutesWithComponent([{ ...route, ...tab }]);
-		if (patched && patched[0] && patched[0].Component) {
-			PatchedComponent = patched[0].Component;
-			// Với các tab hệ thống, luôn truyền toàn bộ tab object (tabProps = tab) để AdminPage nhận đủ props động
-			// Không dùng staticTabPropsMap cho các tab hệ thống nữa
-			// tabProps = tab luôn đúng cho SPA/tabbar
-		}
-	}
-	if (!PatchedComponent) {
-		// Fallback về Home nếu không có component động
-		// Ưu tiên lấy đúng key đang có trong openTabs/flatRouteList
-		let homeKey = "homepage";
-		if (!flatRouteList[homeKey] && flatRouteList["/home"]) homeKey = "/home";
-		if (!flatRouteList[homeKey] && flatRouteList["/"]) homeKey = "/";
-		route = flatRouteList[homeKey];
-		PatchedComponent = route && route.Component ? route.Component : null;
-		// Lấy đúng tabProps cho Home
-		tabProps = openTabs.get(homeKey) || tab;
-	}
+	const PatchedComponent = resolvedTabView.Component;
+	const tabProps = resolvedTabView.tabProps;
 	// Log props để debug (luôn log khi render)
 	if (PatchedComponent && tabProps) {
 		// eslint-disable-next-line no-console
@@ -111,9 +114,10 @@ export default function LayoutContent() {
 			flatRouteList
 		});
 	}
-	const TabComponent = PatchedComponent && tabProps
-		? () => React.createElement(PatchedComponent, { ...tabProps, decrypt: csmDecrypt })
-		: null;
+	const tabElement = useMemo(() => {
+		if (!PatchedComponent || !tabProps) return null;
+		return React.createElement(PatchedComponent, { ...tabProps, decrypt: csmDecrypt, key: cacheKey });
+	}, [PatchedComponent, tabProps, cacheKey]);
 
 	// KeepAlive logic giữ nguyên
 	useEffect(() => {
@@ -171,7 +175,7 @@ export default function LayoutContent() {
 						activeCacheKey={cacheKey}
 						aliveRef={aliveRef}
 					>
-						{TabComponent ? <TabComponent /> : null}
+						{tabElement}
 					</KeepAlive>
 				</GlobalSpin>
 			</Scrollbar>

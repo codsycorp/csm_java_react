@@ -9,6 +9,19 @@ export type ComboQuerySpec = {
   where?: any;
 };
 
+const SYSTEM_USER_TABLES = new Set(["csm_accounts", "csm_group_members"]);
+
+export function resolveComboQueryAppId(tableName: unknown, preferredAppId: unknown, fallbackAppId: unknown): string {
+  const normalizedTable = String(tableName || "").trim().toLowerCase();
+  if (SYSTEM_USER_TABLES.has(normalizedTable)) return "csm";
+
+  const preferred = String(preferredAppId || "").trim();
+  if (preferred) return preferred;
+
+  const fallback = String(fallbackAppId || "").trim();
+  return fallback || "csm";
+}
+
 export function safeEvalWhere(expr: string): any {
   try {
     const body = expr.includes("return ") ? expr : `return (${expr})`;
@@ -84,7 +97,7 @@ export function extractComboQueriesFromField(
       const tableName = String(q?.obj_name || "").trim();
       if (!tableName) return null;
 
-      const appId = String(q?.app_id || fallbackAppId || "").trim() || fallbackAppId;
+      const appId = resolveComboQueryAppId(tableName, q?.app_id, fallbackAppId);
       let where: any = undefined;
 
       if (q?.obj_where && typeof q.obj_where === "object") {

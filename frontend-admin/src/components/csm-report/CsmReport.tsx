@@ -13,7 +13,7 @@ import html2pdf from "html2pdf.js";
 
 import { csmDecrypt } from "../csm-grid/CsmCrypto";
 import { getTableData, type Where } from "../csm-grid/CsmApi";
-import { normalizeComboOptions, parseStaticComboQuery } from "../csm-grid/combo-utils";
+import { normalizeComboOptions, parseStaticComboQuery, resolveComboQueryAppId } from "../csm-grid/combo-utils";
 import { useAppStore } from "#src/store";
 import LunarCalendar from "#src/utils/lunarCalendar";
 import DateUtils from "#src/utils/dateUtils";
@@ -173,13 +173,11 @@ export default function CsmReport({ appId, m_configs, decrypt }: CsmReportProps)
         if (obj_name !== "" && fieldsQ.length === 2) {
           try {
             // Get app_id
-            let queryAppId = queryItem.app_id;
+            let queryAppId = appId;
             if (!queryAppId) {
-              queryAppId = appId;
-              if (!queryAppId) {
-                try { queryAppId = useAppStore.getState().getCurrentAppId(); } catch {}
-              }
+              try { queryAppId = useAppStore.getState().getCurrentAppId(); } catch {}
             }
+            queryAppId = resolveComboQueryAppId(obj_name, queryItem.app_id, queryAppId || "csm");
 
             if (queryAppId) {
               // Default WHERE condition

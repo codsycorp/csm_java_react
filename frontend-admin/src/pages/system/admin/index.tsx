@@ -22,10 +22,10 @@ import { normalizeMenuRuntimeConfig } from "#src/components/csm-crm/crm-config";
 import DynamicCodeMenu from "#src/pages/system/dynamic-code";
 import { useAppStore, useUserStore, usePermissionStore, useTabsStore } from "#src/store";
 import { resolveDevFlag } from "#src/utils/dev-flag";
-import { adaptSystemUserConfigForActor, buildSystemUserMenuConfig, PERMISSION_GROUP_BEFORE_SAVE, PERMISSION_TOKEN_OPTIONS, ACTION_PRESET_OPTIONS_JSON, MENU_PERMISSION_OPTIONS, DATA_SCOPE_OPTIONS_JSON, DEPT_SELECT_QUERY_JSON, DEPT_SELECT_QUERY_BY_BRANCH_JSON, BRANCH_SELECT_QUERY_JSON, ROLE_LEVEL_OPTIONS_JSON, type SystemUserActorType } from "./system-user-menu-config";
+import { adaptSystemUserConfigForActor, buildSystemUserMenuConfig, PERMISSION_GROUP_BEFORE_SAVE, PERMISSION_TOKEN_OPTIONS, ACTION_PRESET_OPTIONS_JSON, MENU_PERMISSION_OPTIONS, DATA_SCOPE_OPTIONS_JSON, DEPT_SELECT_QUERY_JSON, DEPT_SELECT_QUERY_BY_BRANCH_JSON, BRANCH_SELECT_QUERY_JSON, ROLE_LEVEL_OPTIONS_JSON, APP_ID_QUERY_JSON, type SystemUserActorType } from "./system-user-menu-config";
 import { Empty, Spin, Alert } from "antd";
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
-import { useParams, useLocation } from "react-router";
+import { useParams } from "react-router";
 import { getTableData, createTableStruct, type CreateTableStruct } from "#src/components/csm-grid/CsmApi";
 import { useTranslation } from "react-i18next";
 import { toPermissionBigInt, resolvePermissionDataScope, isSuperPermissionProfile } from "#src/utils/permission-bitfield";
@@ -56,7 +56,7 @@ function buildStruct(defaultValue: Record<string, any>, fieldsPK: string[], fiel
 	};
 }
 
-export const SYSTEM_ROUTE_TABLE_SCHEMAS: Record<string, TableBootstrapDefinition[]> = {
+const SYSTEM_ROUTE_TABLE_SCHEMAS: Record<string, TableBootstrapDefinition[]> = {
 	"/system/dept": [
 		{
 			tableName: "csm_roles",
@@ -260,6 +260,35 @@ export const SYSTEM_ROUTE_TABLE_SCHEMAS: Record<string, TableBootstrapDefinition
 	],
 };
 
+const SYSTEM_MENU_KEY_TO_SCHEMA_PATH: Record<string, string> = {
+	user: "/system/user",
+	dept: "/system/dept",
+	role: "/system/role",
+	roles: "/system/roles",
+	departments: "/system/departments",
+	branches: "/system/branches",
+};
+
+const SYSTEM_MENU_KEY_TO_EXPECTED_TABLES: Record<string, string[]> = {
+	user: ["csm_accounts", "csm_group_members"],
+	dept: ["csm_roles"],
+	role: ["csm_roles"],
+	roles: ["csm_roles"],
+	departments: ["csm_depts"],
+	branches: ["csm_branches"],
+};
+
+function normalizeSystemMenuKey(raw: unknown): string {
+	const value = String(raw || "").trim().toLowerCase();
+	if (!value) return "";
+	const normalized = value.startsWith("/system/") ? value.replace(/^\/system\//, "") : value;
+	if (normalized === "users") return "user";
+	if (normalized === "department") return "departments";
+	if (normalized === "branch") return "branches";
+	if (normalized === "permission-group") return "dept";
+	return normalized;
+}
+
 function normalizeStringList(raw: unknown): string[] {
 	if (Array.isArray(raw)) {
 		return Array.from(new Set(raw.map((item) => String(item || "").trim()).filter(Boolean)));
@@ -450,6 +479,189 @@ function hasLegacyFullAppScope(menus: string[], appId: string): boolean {
 	});
 }
 
+/**
+ * Enriches DB-supplied table fields with required f_types / f_cbo_query / f_options
+ * for well-known special field names (e.g. menu_tree, multi_tag, checkbox, status).
+ * DB values for headers, f_show, and f_align are always preserved.
+ * Enrichment is only injected when the DB field is MISSING the property.
+ */
+function enrichRequiredFieldConfigs(
+	fields: any[],
+	knownOverrides: Record<string, Partial<{ f_types: string; f_cbo_query: string; f_options: any[] }>>
+): any[] {
+	if (!Array.isArray(fields) || fields.length === 0) return fields;
+	return fields.map((field) => {
+		const fName = String(field?.f_name || "").trim();
+		const override = knownOverrides[fName];
+		if (!override) return field;
+		const currentType = String(field?.f_types || "").trim().toLowerCase();
+		const currentTypeIsGeneric = !currentType || currentType === "string" || currentType === "ed";
+		return {
+			...field,
+			// Apply f_types override only when DB has no specific type
+			...(override.f_types && currentTypeIsGeneric ? { f_types: override.f_types } : {}),
+			// Inject f_cbo_query only if missing
+			...(override.f_cbo_query && !field.f_cbo_query ? { f_cbo_query: override.f_cbo_query } : {}),
+			// Inject f_options only if missing
+			...(override.f_options && !field.f_options ? { f_options: override.f_options } : {}),
+		};
+	});
+}
+
+function enforceLegacyReadonlySystemUserFields(fields: any[]): any[] {
+	if (!Array.isArray(fields)) return fields;
+	return fields.map((field) => {
+		const fName = String(field?.f_name || "").trim();
+		if (fName === "pass") {
+			return { ...field, f_types: "password" };
+		}
+		if (fName === "user_address") {
+			return { ...field, f_types: "json", f_show: 0 };
+		}
+		if (fName === "app_id") {
+			const currentType = String(field?.f_types || "").trim().toLowerCase();
+			const hasReadonlyCombo = currentType.includes("ro") && currentType.includes("co");
+			const currentQuery = String(field?.f_cbo_query || "").trim();
+			return {
+				...field,
+				f_show: 0,
+				f_types: hasReadonlyCombo ? field.f_types : "co_ro",
+				f_cbo_query: currentQuery || APP_ID_QUERY_JSON,
+			};
+		}
+		if (fName === "parent_account_id") {
+			const currentType = String(field?.f_types || "").trim().toLowerCase();
+			if (currentType.includes("ro")) return field;
+			return { ...field, f_types: "string_ro" };
+		}
+		if (fName === "permissionBitfield") {
+			const currentType = String(field?.f_types || "").trim().toLowerCase();
+			if (currentType.includes("ro")) return field;
+			return { ...field, f_types: "string_ro" };
+		}
+		return field;
+	});
+}
+
+function enforceLegacyReadonlyRoleFields(fields: any[]): any[] {
+	if (!Array.isArray(fields)) return fields;
+	return fields.map((field) => {
+		const fName = String(field?.f_name || "").trim();
+		if (fName === "role_code") {
+			const currentType = String(field?.f_types || "").trim().toLowerCase();
+			if (currentType.includes("ro")) return field;
+			return { ...field, f_types: "string_ro" };
+		}
+		if (fName === "permissionBitfield") {
+			const currentType = String(field?.f_types || "").trim().toLowerCase();
+			if (currentType.includes("ro")) return field;
+			return { ...field, f_types: "string_ro" };
+		}
+		if (fName === "permissionSchemaVersion") {
+			return { ...field, f_show: 0 };
+		}
+		if (fName === "login_version" || fName === "loginVersion") {
+			return { ...field, f_show: 0 };
+		}
+		return field;
+	});
+}
+
+function localizeRoleTableFields(
+	fields: any[],
+	t: (key: string) => string,
+	tEn: (key: string) => string,
+	tZh: (key: string) => string,
+) {
+	if (!Array.isArray(fields)) return fields;
+	// Full i18n key map for every field that can appear in a role / permission-group table
+	const headerKeyMap: Record<string, string> = {
+		role_code:             "system.role.id",
+		role_name:             "system.role.name",
+		description:           "common.description",
+		permissionPreset:      "system.userPermission.fields.permissionPreset",
+		permissions:           "system.userPermission.fields.permissions",
+		permissionsAdd:        "system.userPermission.fields.permissionsAdd",
+		permissionsDeny:       "system.userPermission.fields.permissionsDeny",
+		menusPermissions:      "system.userPermission.fields.menusPermissions",
+		menusPermissionsAdd:   "system.userPermission.fields.menusPermissionsAdd",
+		menusPermissionsDeny:  "system.userPermission.fields.menusPermissionsDeny",
+		dataScope:             "system.userPermission.fields.dataScope",
+		role_level:            "system.userPermission.fields.roleLevel",
+		branch_id:             "system.userPermission.fields.branchId",
+		dept_id:               "system.userPermission.fields.deptId",
+		department_id:         "system.userPermission.fields.deptId",
+		permissionBitfield:    "system.userPermission.fields.permissionBitfield",
+		status:                "common.status",
+		is_global:             "system.dept.fields.isGlobal",
+		create_time:           "common.createTime",
+		update_time:           "common.updateTime",
+	};
+	// Fields that must always be hidden regardless of DB config
+	const forceHiddenFields = new Set([
+		"permissionSchemaVersion",
+		"login_version",
+		"loginVersion",
+	]);
+	return fields.map((field) => {
+		const fName = String(field?.f_name || "").trim();
+		if (forceHiddenFields.has(fName)) {
+			return { ...field, f_show: 0 };
+		}
+		const key = headerKeyMap[fName];
+		if (!key) return field;
+		return {
+			...field,
+			f_header:    t(key),
+			f_header_vi: t(key),
+			f_header_en: tEn(key),
+			f_header_zh: tZh(key),
+		};
+	});
+}
+
+function buildMenuFieldSignature(field: any) {
+	if (!field || typeof field !== "object") return "";
+	return JSON.stringify({
+		f_name: field.f_name ?? "",
+		f_types: field.f_types ?? "",
+		f_show: field.f_show ?? "",
+		f_header: field.f_header ?? "",
+		f_header_vi: field.f_header_vi ?? "",
+		f_header_en: field.f_header_en ?? "",
+		f_header_zh: field.f_header_zh ?? "",
+		f_cbo_query: field.f_cbo_query ?? "",
+		f_options: Array.isArray(field.f_options) ? field.f_options : field.f_options ?? "",
+	});
+}
+
+function buildMenuCompareSignature(menu: any): string {
+	if (!menu || typeof menu !== "object") return "";
+	const normalized = normalizeMenuRuntimeConfig(menu);
+	const tableSignature = Array.isArray(normalized.table)
+		? normalized.table.map(buildMenuFieldSignature)
+		: [];
+	return JSON.stringify({
+		id: normalized.id ?? "",
+		path: normalized.path ?? "",
+		label: normalized.label ?? "",
+		label_vi: normalized.label_vi ?? "",
+		label_en: normalized.label_en ?? "",
+		label_zh: normalized.label_zh ?? "",
+		table_name: normalized.table_name ?? "",
+		app_id: normalized.app_id ?? "",
+		type_form: normalized.type_form ?? "",
+		row_type_edit: normalized.row_type_edit ?? "",
+		g_readonly: normalized.g_readonly ?? "",
+		fieldsPK: Array.isArray(normalized?.struct?.fieldsPK) ? normalized.struct.fieldsPK : [],
+		tableSignature,
+	});
+}
+
+function areMenusEquivalent(left: any, right: any): boolean {
+	return buildMenuCompareSignature(left) === buildMenuCompareSignature(right);
+}
+
 function buildDeptMenuFields(
 	t: (key: string) => string,
 	tEn: (key: string) => string,
@@ -505,7 +717,7 @@ function buildRoleMenuFields(
 	});
 	return [
 		{ f_name: "id", ...h("system.role.id"), f_show: 0, f_types: "string", f_align: "left" },
-		{ f_name: "role_code", ...h("system.role.id"), f_show: 1, f_types: "string", f_align: "left" },
+		{ f_name: "role_code", ...h("system.role.id"), f_show: 1, f_types: "string_ro", f_align: "left" },
 		{ f_name: "role_name", ...h("system.role.name"), f_show: 1, f_types: "string", f_align: "left" },
 		{ f_name: "description", ...h("common.description"), f_show: 1, f_types: "string", f_align: "left" },
 		{ f_name: "permissionPreset", ...h("system.userPermission.fields.permissionPreset"), f_show: 1, f_types: "co", f_align: "left", f_cbo_query: presetOptionsQuery },
@@ -515,7 +727,7 @@ function buildRoleMenuFields(
 		{ f_name: "role_level", ...h("system.userPermission.fields.roleLevel"), f_show: 1, f_types: "co", f_align: "left", f_cbo_query: ROLE_LEVEL_OPTIONS_JSON },
 		{ f_name: "branch_id", ...h("system.userPermission.fields.branchId"), f_show: 1, f_types: "co", f_align: "left", f_cbo_query: BRANCH_SELECT_QUERY_JSON },
 		{ f_name: "dept_id", ...h("system.userPermission.fields.deptId"), f_show: 1, f_types: "co", f_align: "left", f_cbo_query: DEPT_SELECT_QUERY_BY_BRANCH_JSON },
-		{ f_name: "permissionBitfield", ...h("system.userPermission.fields.permissionBitfield"), f_show: 0, f_types: "string", f_align: "left" },
+		{ f_name: "permissionBitfield", ...h("system.userPermission.fields.permissionBitfield"), f_show: 0, f_types: "string_ro", f_align: "left" },
 		{ f_name: "permissionSchemaVersion", ...h("system.userPermission.fields.permissionSchemaVersion"), f_show: 0, f_types: "string", f_align: "left" },
 		{ f_name: "status", ...h("common.status"), f_show: 1, f_types: "co", f_align: "center", f_cbo_query: STATUS_OPTIONS_JSON },
 		{ f_name: "is_global", ...h("system.dept.fields.isGlobal"), f_show: 0, f_types: "checkbox", f_align: "center" },
@@ -529,7 +741,6 @@ const SYSTEM_FRIENDLY_VISIBLE_FIELDS: Record<string, string[]> = {
 	csm_group_members: [
 		"id",
 		"login_identifier",
-		"user_address",
 		"pass",
 		"group_id",
 		"permissionsAdd",
@@ -581,8 +792,6 @@ const SYSTEM_USER_VISIBLE_FIELDS_BY_ACTOR: Record<SystemUserActorType, string[]>
 		"full_name",
 		"email",
 		"phoneNumber",
-		"user_address",
-		"app_id",
 		"pass",
 		"actived",
 	],
@@ -592,7 +801,6 @@ const SYSTEM_USER_VISIBLE_FIELDS_BY_ACTOR: Record<SystemUserActorType, string[]>
 		"full_name",
 		"email",
 		"phoneNumber",
-		"user_address",
 		"pass",
 		"permissionGroups",
 		"permissionsAdd",
@@ -608,7 +816,6 @@ const SYSTEM_USER_VISIBLE_FIELDS_BY_ACTOR: Record<SystemUserActorType, string[]>
 		"full_name",
 		"email",
 		"phoneNumber",
-		"user_address",
 		"pass",
 		"permissionGroups",
 		"permissionsAdd",
@@ -659,7 +866,7 @@ function applyFriendlyFieldPolicy(tableName: string | undefined, rawFields: any[
  */
 export default function AdminPage() {
 	const { menuId } = useParams<{ menuId: string }>();
-	const location = useLocation();
+	const normalizedMenuKey = useMemo(() => normalizeSystemMenuKey(menuId), [menuId]);
 	const apiWholeMenus = usePermissionStore(state => state.apiWholeMenus);
 	// Prefer reactive currentAppId from AppStore; fallback to user.app_id
 	const currentAppId = useAppStore(state => state.currentAppId);
@@ -676,7 +883,7 @@ export default function AdminPage() {
 	const userPermissionBitfieldRaw = useUserStore(state => (state as any).permissionBitfield as any);
 	const isDevUser = resolveDevFlag(devFlag, userRoles);
 	const isAdminUser = !isDevUser && isSuperPermissionProfile(toPermissionBigInt(userPermissionBitfieldRaw));
-	const isSystemUserRoute = (menuId === "user");
+	const isSystemUserRoute = normalizedMenuKey === "user";
 	// Prefer logged-in user's app_id; fallback to selected app or localStorage default
 	const appId = (userAppId && userAppId.trim())
 		|| (currentAppId && currentAppId.trim())
@@ -784,22 +991,42 @@ export default function AdminPage() {
 		const actorTableName = actorMode === "main" ? "csm_accounts" : "csm_group_members";
 		const runtimeConfig = buildSystemUserMenuConfig({
 			...base,
-			id: "user",
-			path: "/system/user",
-			label: t("common.menu.user"),
-			label_en: "System User Management",
-			label_zh: "系统用户管理",
+			id: base?.id || "user",
+			path: base?.path || "/system/user",
+			label: base?.label || t("common.menu.user"),
+			label_en: base?.label_en || "System User Management",
+			label_zh: base?.label_zh || "系统用户管理",
 			table_name: actorTableName,
-			app_id: "csm",
-			type_form: 1,
-			row_type_edit: 0,
-			g_readonly: false,
-		}, actorMode, resolvedAppId, t);
+			app_id: base?.app_id || "csm",
+			type_form: base?.type_form ?? 1,
+			row_type_edit: base?.row_type_edit ?? 0,
+			g_readonly: base?.g_readonly ?? false,
+		}, actorMode, resolvedAppId, t, tEn, tZh);
 
 		// Respect menu-declared field config for fixed system routes when provided.
+		// Apply enrichment so special field types (menu_tree, multi_tag, checkbox, co)
+		// survive even when DB-supplied fields carry only generic f_types.
 		if (Array.isArray(base?.table) && base.table.length > 0) {
-			runtimeConfig.table = base.table;
+			runtimeConfig.table = enrichRequiredFieldConfigs(base.table, {
+				app_id:               { f_types: "co_ro",      f_cbo_query: APP_ID_QUERY_JSON },
+				pass:                 { f_types: "password" },
+				user_address:         { f_types: "json" },
+				menusPermissions:     { f_types: "menu_tree",  f_options: MENU_PERMISSION_OPTIONS },
+				menusPermissionsAdd:  { f_types: "menu_tree",  f_options: MENU_PERMISSION_OPTIONS },
+				menusPermissionsDeny: { f_types: "menu_tree",  f_options: MENU_PERMISSION_OPTIONS },
+				permissions:          { f_types: "multi_tag",  f_options: PERMISSION_TOKEN_OPTIONS },
+				permissionsAdd:       { f_types: "multi_tag",  f_options: PERMISSION_TOKEN_OPTIONS },
+				permissionsDeny:      { f_types: "multi_tag",  f_options: PERMISSION_TOKEN_OPTIONS },
+				permissionPreset:     { f_types: "co",         f_cbo_query: ACTION_PRESET_OPTIONS_JSON },
+				dataScope:            { f_types: "co",         f_cbo_query: DATA_SCOPE_OPTIONS_JSON },
+				branch_id:            { f_types: "co",         f_cbo_query: BRANCH_SELECT_QUERY_JSON },
+				dept_id:              { f_types: "co",         f_cbo_query: DEPT_SELECT_QUERY_BY_BRANCH_JSON },
+				actived:              { f_types: "checkbox" },
+				dev:                  { f_types: "checkbox" },
+			});
 		}
+		runtimeConfig.table = enforceLegacyReadonlySystemUserFields(runtimeConfig.table);
+		runtimeConfig.table = applyFriendlyFieldPolicy(actorTableName, runtimeConfig.table, systemUserActorType);
 		if (base?.trigger && typeof base.trigger === "object") {
 			runtimeConfig.trigger = {
 				...(runtimeConfig.trigger || {}),
@@ -820,11 +1047,11 @@ export default function AdminPage() {
 			appId: resolvedAppId,
 			isDev: isDevUser,
 		}));
-	}, [isSystemUserRoute, isDevUser, isAdminUser, t, appId, systemUserActorType, userPermissionsRaw, userMenusPermissionsRaw, runtimeDataScope]);
+	}, [isSystemUserRoute, isDevUser, isAdminUser, t, tEn, tZh, appId, systemUserActorType, userPermissionsRaw, userMenusPermissionsRaw, runtimeDataScope]);
 
 	const normalizeKnownSystemMenu = useCallback((menu: any = {}): any => {
-		if (menuId === "role" || menuId === "roles") {
-			const configuredTable = Array.isArray(menu?.table) && menu.table.length > 0 ? menu.table : buildRoleMenuFields(
+		if (normalizedMenuKey === "role" || normalizedMenuKey === "roles") {
+			const rawRoleTable = Array.isArray(menu?.table) && menu.table.length > 0 ? menu.table : buildRoleMenuFields(
 				t,
 				tEn,
 				tZh,
@@ -833,19 +1060,27 @@ export default function AdminPage() {
 				roleFieldConstraints.presetOptionsQuery,
 				roleFieldConstraints.dataScopeOptionsQuery,
 			);
+			const configuredTable = localizeRoleTableFields(enforceLegacyReadonlyRoleFields(enrichRequiredFieldConfigs(rawRoleTable, {
+				menusPermissions: { f_types: "menu_tree", f_options: roleFieldConstraints.menuOptions },
+				permissions: { f_types: "multi_tag", f_options: roleFieldConstraints.permissionOptions },
+				permissionPreset: { f_types: "co", f_cbo_query: roleFieldConstraints.presetOptionsQuery },
+				dataScope: { f_types: "co", f_cbo_query: roleFieldConstraints.dataScopeOptionsQuery },
+				role_level: { f_types: "co", f_cbo_query: ROLE_LEVEL_OPTIONS_JSON },
+				branch_id: { f_types: "co", f_cbo_query: BRANCH_SELECT_QUERY_JSON },
+				dept_id: { f_types: "co", f_cbo_query: DEPT_SELECT_QUERY_BY_BRANCH_JSON },
+				status: { f_types: "co", f_cbo_query: STATUS_OPTIONS_JSON },
+				is_global: { f_types: "checkbox" },
+			})), t, tEn, tZh);
 			return normalizeMenuRuntimeConfig({
 				...menu,
-				id: "permission-group",
-				path: `/system/${menuId}`,
-				label: t("common.menu.permissionGroup"),
-				label_vi: t("common.menu.permissionGroup"),
-				label_en: tEn("common.menu.permissionGroup"),
-				label_zh: tZh("common.menu.permissionGroup"),
-				table_name: "csm_roles",
-				app_id: appId,
-				type_form: 1,
-				row_type_edit: 0,
-				g_readonly: false,
+				id: menu?.id || "permission-group",
+				path: menu?.path || `/system/${normalizedMenuKey}`,
+				label: menu?.label || t("common.menu.permissionGroup"),
+				app_id: menu?.app_id || appId,
+				table_name: menu?.table_name || "csm_roles",
+				type_form: menu?.type_form ?? 1,
+				row_type_edit: menu?.row_type_edit ?? 0,
+				g_readonly: menu?.g_readonly ?? false,
 				table: configuredTable,
 				trigger: {
 					beforeSave: PERMISSION_GROUP_BEFORE_SAVE,
@@ -858,8 +1093,8 @@ export default function AdminPage() {
 			});
 		}
 
-		if (menuId === "dept") {
-			const configuredTable = Array.isArray(menu?.table) && menu.table.length > 0 ? menu.table : buildRoleMenuFields(
+		if (normalizedMenuKey === "dept") {
+			const rawDeptRoleTable = Array.isArray(menu?.table) && menu.table.length > 0 ? menu.table : buildRoleMenuFields(
 				t,
 				tEn,
 				tZh,
@@ -868,19 +1103,27 @@ export default function AdminPage() {
 				roleFieldConstraints.presetOptionsQuery,
 				roleFieldConstraints.dataScopeOptionsQuery,
 			);
+			const configuredTable = localizeRoleTableFields(enforceLegacyReadonlyRoleFields(enrichRequiredFieldConfigs(rawDeptRoleTable, {
+				menusPermissions: { f_types: "menu_tree", f_options: roleFieldConstraints.menuOptions },
+				permissions: { f_types: "multi_tag", f_options: roleFieldConstraints.permissionOptions },
+				permissionPreset: { f_types: "co", f_cbo_query: roleFieldConstraints.presetOptionsQuery },
+				dataScope: { f_types: "co", f_cbo_query: roleFieldConstraints.dataScopeOptionsQuery },
+				role_level: { f_types: "co", f_cbo_query: ROLE_LEVEL_OPTIONS_JSON },
+				branch_id: { f_types: "co", f_cbo_query: BRANCH_SELECT_QUERY_JSON },
+				dept_id: { f_types: "co", f_cbo_query: DEPT_SELECT_QUERY_BY_BRANCH_JSON },
+				status: { f_types: "co", f_cbo_query: STATUS_OPTIONS_JSON },
+				is_global: { f_types: "checkbox" },
+			})), t, tEn, tZh);
 			return normalizeMenuRuntimeConfig({
 				...menu,
-				id: "permission-group",
-				path: "/system/dept",
-				label: t("common.menu.permissionGroup"),
-				label_vi: t("common.menu.permissionGroup"),
-				label_en: tEn("common.menu.permissionGroup"),
-				label_zh: tZh("common.menu.permissionGroup"),
-				table_name: "csm_roles",
-				app_id: appId,
-				type_form: 1,
-				row_type_edit: 0,
-				g_readonly: false,
+				id: menu?.id || "permission-group",
+				path: menu?.path || "/system/dept",
+				label: menu?.label || t("common.menu.permissionGroup"),
+				app_id: menu?.app_id || appId,
+				table_name: menu?.table_name || "csm_roles",
+				type_form: menu?.type_form ?? 1,
+				row_type_edit: menu?.row_type_edit ?? 0,
+				g_readonly: menu?.g_readonly ?? false,
 				table: configuredTable,
 				trigger: {
 					beforeSave: PERMISSION_GROUP_BEFORE_SAVE,
@@ -893,21 +1136,26 @@ export default function AdminPage() {
 			});
 		}
 
-		if (menuId === "departments") {
-			const configuredTable = Array.isArray(menu?.table) && menu.table.length > 0 ? menu.table : buildDeptMenuFields(t, tEn, tZh);
+		if (normalizedMenuKey === "departments") {
+			const rawDeptTable = Array.isArray(menu?.table) && menu.table.length > 0 ? menu.table : buildDeptMenuFields(t, tEn, tZh);
+			const configuredTable = enrichRequiredFieldConfigs(rawDeptTable, {
+				branch_id: { f_types: "co", f_cbo_query: BRANCH_SELECT_QUERY_JSON },
+				status: { f_types: "co", f_cbo_query: STATUS_OPTIONS_JSON },
+				is_global: { f_types: "checkbox" },
+			});
 			return normalizeMenuRuntimeConfig({
 				...menu,
-				id: "departments",
-				path: "/system/departments",
-				label: t("common.menu.dept"),
-				label_vi: t("common.menu.dept"),
-				label_en: tEn("common.menu.dept"),
-				label_zh: tZh("common.menu.dept"),
-				table_name: "csm_depts",
-				app_id: appId,
-				type_form: 1,
-				row_type_edit: 0,
-				g_readonly: false,
+				id: menu?.id || "departments",
+				path: menu?.path || "/system/departments",
+				label: menu?.label || t("common.menu.dept"),
+				label_vi: menu?.label_vi || t("common.menu.dept"),
+				label_en: menu?.label_en || tEn("common.menu.dept"),
+				label_zh: menu?.label_zh || tZh("common.menu.dept"),
+				table_name: menu?.table_name || "csm_depts",
+				app_id: menu?.app_id || appId,
+				type_form: menu?.type_form ?? 1,
+				row_type_edit: menu?.row_type_edit ?? 0,
+				g_readonly: menu?.g_readonly ?? false,
 				table: configuredTable,
 				struct: {
 					...(menu?.struct || {}),
@@ -916,21 +1164,26 @@ export default function AdminPage() {
 			});
 		}
 
-		if (menuId === "branches") {
-			const configuredTable = Array.isArray(menu?.table) && menu.table.length > 0 ? menu.table : buildBranchMenuFields(t, tEn, tZh);
+		if (normalizedMenuKey === "branches") {
+			const rawBranchTable = Array.isArray(menu?.table) && menu.table.length > 0 ? menu.table : buildBranchMenuFields(t, tEn, tZh);
+			const configuredTable = enrichRequiredFieldConfigs(rawBranchTable, {
+				dept_id: { f_types: "co", f_cbo_query: DEPT_SELECT_QUERY_JSON },
+				status: { f_types: "co", f_cbo_query: STATUS_OPTIONS_JSON },
+				is_global: { f_types: "checkbox" },
+			});
 			return normalizeMenuRuntimeConfig({
 				...menu,
-				id: "branches",
-				path: "/system/branches",
-				label: t("common.menu.branch"),
-				label_vi: t("common.menu.branch"),
-				label_en: tEn("common.menu.branch"),
-				label_zh: tZh("common.menu.branch"),
-				table_name: "csm_branches",
-				app_id: appId,
-				type_form: 1,
-				row_type_edit: 0,
-				g_readonly: false,
+				id: menu?.id || "branches",
+				path: menu?.path || "/system/branches",
+				label: menu?.label || t("common.menu.branch"),
+				label_vi: menu?.label_vi || t("common.menu.branch"),
+				label_en: menu?.label_en || tEn("common.menu.branch"),
+				label_zh: menu?.label_zh || tZh("common.menu.branch"),
+				table_name: menu?.table_name || "csm_branches",
+				app_id: menu?.app_id || appId,
+				type_form: menu?.type_form ?? 1,
+				row_type_edit: menu?.row_type_edit ?? 0,
+				g_readonly: menu?.g_readonly ?? false,
 				table: configuredTable,
 				struct: {
 					...(menu?.struct || {}),
@@ -939,103 +1192,76 @@ export default function AdminPage() {
 			});
 		}
 
-		return normalizeMenuRuntimeConfig(menu);
-	}, [menuId, t, tEn, tZh, appId, roleFieldConstraints]);
-
-	// Centralized refresh hook for dynamic grid/report/crm widgets.
-	const handleDataChange = useCallback(() => {
-		setReloadTrigger(prev => prev + 1);
-	}, []);
-
-	// Known system menu fallback map for translation when API lacks multilingual fields
-	const SYSTEM_MENU_I18N_MAP: Record<string, string> = {
-		"/system": "common.menu.system",
-		"system": "common.menu.system",
-		"/system/user": "common.menu.user",
-		"user": "common.menu.user",
-		"/system/menu": "common.menu.menu",
-		"menu": "common.menu.menu",
-		"/system/developer": "common.menu.developer",
-		"developer": "common.menu.developer",
-		"/system/dept": "common.menu.permissionGroup",
-		"dept": "common.menu.permissionGroup",
-		"permission-group": "common.menu.permissionGroup",
-		"/system/role": "common.menu.permissionGroup",
-		"role": "common.menu.permissionGroup",
-		"/system/roles": "common.menu.permissionGroup",
-		"roles": "common.menu.permissionGroup",
-		"/system/departments": "common.menu.dept",
-		"departments": "common.menu.dept",
-		"/system/branches": "common.menu.branch",
-		"branches": "common.menu.branch",
-	};
-
-	const resolveDisplayLabel = (menu: any): string => {
-		const rawLabel = menu?.label || menu?.name || menu?.id || "";
-		if (typeof rawLabel === "string" && rawLabel.includes(".")) {
-			return t(rawLabel);
-		}
-		const mappedKey = [menu?.path, menu?.key, menu?.id, menu?.name]
-			.map((k: any) => (typeof k === "string" ? SYSTEM_MENU_I18N_MAP[k] : undefined))
-			.find(Boolean);
-		if (mappedKey) return t(mappedKey);
-		// Strip numerical prefixes like "19. Label"
-		return typeof rawLabel === "string" ? rawLabel.replace(/^[\d\.\s]+/, "").trim() : rawLabel;
-	};
+		const rawLabel = menu?.label ?? menu?.label_vi ?? menu?.name ?? menu?.title ?? "";
+		const normalizedLabel = typeof rawLabel === "string" ? rawLabel.replace(/^[\d\.\s]+/, "").trim() : rawLabel;
+		return normalizeMenuRuntimeConfig({
+			...menu,
+			...(normalizedLabel ? { label: normalizedLabel } : {}),
+		});
+	}, [normalizedMenuKey, t, tEn, tZh, appId, roleFieldConstraints]);
 
 	const enforceCanonicalSystemRouteMenu = useCallback((rawMenu: any = {}): any => {
 		const normalized = normalizeMenuRuntimeConfig(rawMenu || {});
-		if (menuId === "role" || menuId === "roles") {
+		if (normalizedMenuKey === "role" || normalizedMenuKey === "roles") {
 			return normalizeMenuRuntimeConfig({
 				...normalized,
-				id: "permission-group",
-				path: `/system/${menuId}`,
-				table_name: "csm_roles",
+				id: normalized.id || "permission-group",
+				path: normalized.path || `/system/${normalizedMenuKey}`,
+				table_name: normalized.table_name || "csm_roles",
 				app_id: normalized.app_id || appId,
 			});
 		}
-		if (menuId === "dept") {
+		if (normalizedMenuKey === "dept") {
 			return normalizeMenuRuntimeConfig({
 				...normalized,
-				id: "permission-group",
-				path: "/system/dept",
-				table_name: "csm_roles",
+				id: normalized.id || "permission-group",
+				path: normalized.path || "/system/dept",
+				table_name: normalized.table_name || "csm_roles",
 				app_id: normalized.app_id || appId,
 			});
 		}
-		if (menuId === "user") {
+		if (normalizedMenuKey === "user") {
 			// QUY TẮC QUAN TRỌNG: Chỉ duy nhất user dev mới thao tác trên bảng chính (csm_accounts),
 			// còn lại (admin, sub-user, user thường) luôn thao tác trên bảng con (csm_group_members).
 			// Mọi thao tác thêm/sửa/xoá/xem đều chỉ tác động lên bảng con nếu không phải dev.
 			const actorTableName = isDevUser ? "csm_accounts" : "csm_group_members";
 			return normalizeMenuRuntimeConfig({
 				...normalized,
-				id: "user",
-				path: "/system/user",
+				id: normalized.id || "user",
+				path: normalized.path || "/system/user",
 				table_name: actorTableName,
-				app_id: "csm",
+				app_id: normalized.app_id || "csm",
 			});
 		}
-		if (menuId === "departments") {
+		if (normalizedMenuKey === "departments") {
 			return normalizeMenuRuntimeConfig({
 				...normalized,
-				id: "departments",
-				path: "/system/departments",
-				table_name: "csm_depts",
+				id: normalized.id || "departments",
+				path: normalized.path || "/system/departments",
+				table_name: normalized.table_name || "csm_depts",
 				app_id: normalized.app_id || appId,
 			});
 		}
-		if (menuId === "branches") {
+		if (normalizedMenuKey === "branches") {
 			return normalizeMenuRuntimeConfig({
 				...normalized,
-				id: "branches",
-				path: "/system/branches",
-				table_name: "csm_branches",
+				id: normalized.id || "branches",
+				path: normalized.path || "/system/branches",
+				table_name: normalized.table_name || "csm_branches",
 				app_id: normalized.app_id || appId,
 			});
 		}
 		return normalized;
-	}, [menuId, isDevUser, appId]);
+	}, [normalizedMenuKey, isDevUser, appId]);
+
+	const resolveDisplayLabel = useCallback((menu: any = {}): any => {
+		const rawLabel = menu?.label ?? menu?.label_vi ?? menu?.name ?? menu?.title ?? "";
+		return typeof rawLabel === "string" ? rawLabel.replace(/^[\d\.\s]+/, "").trim() : rawLabel;
+	}, []);
+
+	const handleDataChange = useCallback(() => {
+		setReloadTrigger((prev) => prev + 1);
+	}, []);
 
 
 	// Refactor: Lấy menuData từ tab state hoặc menuId props, không dùng location.pathname
@@ -1044,19 +1270,17 @@ export default function AdminPage() {
 		const tabsStore = useTabsStore.getState();
 		const activeTab = tabsStore.openTabs?.get?.(tabsStore.activeKey) as any;
 		let menuDataFromTab = activeTab?.menuData || activeTab?.m_configs;
-		const isSameMenu = (a: any, b: any) => {
-			if (!a || !b) return false;
-			return (a.id === b.id && a.path === b.path);
-		};
-		if (menuDataFromTab && !isSameMenu(menuDataFromTab, menuData)) {
-			const roleAdjustedMenu = menuId === "user" ? buildUserMenuByRole(menuDataFromTab) : menuDataFromTab;
+		if (menuDataFromTab) {
+			const roleAdjustedMenu = normalizedMenuKey === "user" ? buildUserMenuByRole(menuDataFromTab) : menuDataFromTab;
 			const withLabel = normalizeKnownSystemMenu({
 				...roleAdjustedMenu,
 				label: resolveDisplayLabel(roleAdjustedMenu),
 			});
 			const canonicalMenu = enforceCanonicalSystemRouteMenu(withLabel);
-			setMenuData(canonicalMenu);
-			setLoading(false);
+			if (!areMenusEquivalent(canonicalMenu, menuData)) {
+				setMenuData(canonicalMenu);
+			}
+			if (loading) setLoading(false);
 			return;
 		}
 		// Nếu không có, fallback lấy từ menuId param (cũ)
@@ -1147,22 +1371,24 @@ export default function AdminPage() {
 						g_readonly: false,
 					},
 				};
-				const fallback = fallbackMenuById[String(targetId || "")];
+				const fallback = fallbackMenuById[normalizedMenuKey];
 				if (fallback) found = fallback;
 			}
-			if (found && !isSameMenu(found, menuData)) {
-				const roleAdjustedMenu = menuId === "user" ? buildUserMenuByRole(found) : found;
+			if (found) {
+				const roleAdjustedMenu = normalizedMenuKey === "user" ? buildUserMenuByRole(found) : found;
 				const withLabel = normalizeKnownSystemMenu({
 					...roleAdjustedMenu,
 					label: resolveDisplayLabel(roleAdjustedMenu),
 				});
 				const canonicalMenu = enforceCanonicalSystemRouteMenu(withLabel);
-				setMenuData(canonicalMenu);
-				setLoading(false);
+				if (!areMenusEquivalent(canonicalMenu, menuData)) {
+					setMenuData(canonicalMenu);
+				}
+				if (loading) setLoading(false);
 			}
 		}
 		// Nếu không tìm thấy menuData thì không set lại liên tục
-	}, [menuId, apiWholeMenus, menuData, isDevUser, t, appId, buildUserMenuByRole, normalizeKnownSystemMenu, enforceCanonicalSystemRouteMenu]);
+	}, [menuId, normalizedMenuKey, apiWholeMenus, menuData, loading, isDevUser, t, appId, buildUserMenuByRole, normalizeKnownSystemMenu, enforceCanonicalSystemRouteMenu, resolveDisplayLabel]);
 
 	// Di chuyển hàm loadTableData ra ngoài useEffect để có thể tái sử dụng
 	const loadTableData = async () => {
@@ -1179,15 +1405,8 @@ export default function AdminPage() {
 		};
 
 		const ensureSystemRouteTables = async () => {
-			const menuSchemaPathMap: Record<string, string> = {
-				user: "/system/user",
-				dept: "/system/dept",
-				role: "/system/role",
-				roles: "/system/roles",
-				departments: "/system/departments",
-				branches: "/system/branches",
-			};
-			const schemaPath = menuSchemaPathMap[String(menuId || "")] || location.pathname;
+			const schemaPath = SYSTEM_MENU_KEY_TO_SCHEMA_PATH[normalizedMenuKey];
+			if (!schemaPath) return;
 			const definitions = SYSTEM_ROUTE_TABLE_SCHEMAS[schemaPath] || [];
 			if (definitions.length === 0) return;
 
@@ -1338,7 +1557,6 @@ export default function AdminPage() {
 				...newDatabase
 			});
 			
-			console.log('💾 Database updated (local + global store):', Object.keys(newDatabase));
 		} catch (err: any) {
 			const msg = err?.message || "Failed to load table data";
 			setDbError(msg);
@@ -1380,15 +1598,7 @@ export default function AdminPage() {
 	const runtimeMenuData = menuData ? patchMenuI18n(normalizeMenuRuntimeConfig(menuData), t, tEn, tZh) : null;
 	const effectiveAppId = runtimeMenuData?.app_id || appId;
 	const typeForm = Number(runtimeMenuData?.type_form || 1);
-	const tableNameByMenuId: Record<string, string[]> = {
-		user: ["csm_accounts", "csm_group_members"],
-		dept: ["csm_roles"],
-		role: ["csm_roles"],
-		roles: ["csm_roles"],
-		departments: ["csm_depts"],
-		branches: ["csm_branches"],
-	};
-	const expectedTableNames = (tableNameByMenuId[menuId || ""] || []).map((item) => item.toLowerCase());
+	const expectedTableNames = (SYSTEM_MENU_KEY_TO_EXPECTED_TABLES[normalizedMenuKey] || []).map((item) => item.toLowerCase());
 	const currentTableName = String(runtimeMenuData?.table_name || "").trim();
 	const currentTableNames = normalizeTableNames(runtimeMenuData?.table_name);
 	const hasSystemMenuTableMismatch = expectedTableNames.length > 0
@@ -1402,7 +1612,7 @@ export default function AdminPage() {
 		}
 		const currentKey = currentTableNames.join(",");
 		const expectedKey = expectedTableNames.join(",");
-		const mismatchKey = `${menuId}|${currentKey}|${expectedKey}|${String(runtimeMenuData?.id || "")}`;
+		const mismatchKey = `${normalizedMenuKey}|${currentKey}|${expectedKey}|${String(runtimeMenuData?.id || "")}`;
 		if (mismatchLogRef.current === mismatchKey) {
 			return;
 		}
@@ -1413,7 +1623,7 @@ export default function AdminPage() {
 			currentTableNames,
 			expectedTableNames,
 		});
-	}, [hasSystemMenuTableMismatch, menuId, currentTableNames, expectedTableNames, runtimeMenuData?.id, runtimeMenuData?.label]);
+	}, [hasSystemMenuTableMismatch, normalizedMenuKey, currentTableNames, expectedTableNames, runtimeMenuData?.id, runtimeMenuData?.label]);
 
 	if (loading || dbLoading) {
 		return (
@@ -1450,12 +1660,12 @@ export default function AdminPage() {
 			message={t("system.menu.configMismatch.title") || "Menu configuration mismatch"}
 			description={
 				(t("system.menu.configMismatch.desc") || "The current menu and table configuration are inconsistent.")
-				+ ` menuId=${menuId}, table=${currentTableName}, expected=${expectedTableNames.join(" | ")}`
+				+ ` menuId=${normalizedMenuKey || menuId}, table=${currentTableName}, expected=${expectedTableNames.join(" | ")}`
 			}
 			style={{ marginBottom: 12 }}
 		/>
 	) : null;
-console.log("🔍 Rendering menu:", runtimeMenuData);
+
 	// Render standalone Kanban board (type_form = 6 or kanban_config present)
 	if (typeForm === 6 || (runtimeMenuData as any).kanban_config) {
 		return (
@@ -1511,7 +1721,7 @@ console.log("🔍 Rendering menu:", runtimeMenuData);
 			const menuStorageScope = String(
 				runtimeMenuData?.id
 					|| runtimeMenuData?.path
-					|| location.pathname
+					|| (normalizedMenuKey ? `/system/${normalizedMenuKey}` : "")
 					|| menuId
 					|| "system-grid"
 			).trim();
@@ -1564,7 +1774,7 @@ console.log("🔍 Rendering menu:", runtimeMenuData);
 
 		// CHÍNH SÁCH CỐ ĐỊNH: Nếu menu DB đã có cấu hình cột, giữ nguyên tuyệt đối (không áp policy/fallback).
 		if (!hasConfiguredTableFields) {
-			m_configs.table = applyFriendlyFieldPolicy(runtimeMenuData.table_name, m_configs.table as any, systemUserActorType) as any;
+			m_configs.table = configuredTableFromMenu;
 		}
 
 		// If columns are missing, auto-generate sensible defaults for known tables
@@ -1652,7 +1862,32 @@ console.log("🔍 Rendering menu:", runtimeMenuData);
 					f_align: k === "id" ? "right" : "left",
 				};
 			});
-			m_configs.table = applyFriendlyFieldPolicy(runtimeMenuData.table_name, fields as any, systemUserActorType) as any;
+			m_configs.table = fields as any;
+		}
+
+		if (runtimeMenuData.table_name === "csm_accounts" || runtimeMenuData.table_name === "csm_group_members") {
+			m_configs.table = enforceLegacyReadonlySystemUserFields(m_configs.table as any[]);
+			m_configs.table = applyFriendlyFieldPolicy(runtimeMenuData.table_name, m_configs.table as any[], systemUserActorType);
+		}
+		// Bảng nhóm quyền (csm_roles): luôn ẩn các trường nội bộ và đảm bảo nhãn 3 ngôn ngữ đúng,
+		// bất kể bảng đến từ config server hay được tự sinh từ dòng dữ liệu đầu tiên.
+		if (runtimeMenuData.table_name === "csm_roles") {
+			m_configs.table = localizeRoleTableFields(
+				enforceLegacyReadonlyRoleFields(
+					enrichRequiredFieldConfigs(m_configs.table as any[], {
+						menusPermissions:  { f_types: "menu_tree",  f_options: roleFieldConstraints.menuOptions },
+						permissions:       { f_types: "multi_tag",  f_options: roleFieldConstraints.permissionOptions },
+						permissionPreset:  { f_types: "co",         f_cbo_query: roleFieldConstraints.presetOptionsQuery },
+						dataScope:         { f_types: "co",         f_cbo_query: roleFieldConstraints.dataScopeOptionsQuery },
+						role_level:        { f_types: "co",         f_cbo_query: ROLE_LEVEL_OPTIONS_JSON },
+						branch_id:         { f_types: "co",         f_cbo_query: BRANCH_SELECT_QUERY_JSON },
+						dept_id:           { f_types: "co",         f_cbo_query: DEPT_SELECT_QUERY_BY_BRANCH_JSON },
+						status:            { f_types: "co",         f_cbo_query: STATUS_OPTIONS_JSON },
+						is_global:         { f_types: "checkbox" },
+					}),
+				),
+				t, tEn, tZh,
+			);
 		}
 		
 		// Debug log to check if backend returned type_form and row_type_edit

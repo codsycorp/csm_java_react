@@ -3,18 +3,17 @@ import type { ButtonProps } from "antd";
 import { BasicButton } from "#src/components";
 import { useDeviceType, usePreferences } from "#src/hooks";
 import { useAuthStore, usePreferencesStore } from "#src/store";
+import { logoutAndReload } from "#src/utils/app-reset";
 
 import { CopyOutlined, RedoOutlined, SettingOutlined } from "@ant-design/icons";
 import { Badge, Divider, Drawer } from "antd";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useNavigate } from "react-router";
 
 import { Animation, BuiltinTheme, PreferencesLayout, SiteTheme, Tabbar } from "./blocks";
 
 export function Preferences({ ...restProps }: ButtonProps) {
 	const { t } = useTranslation();
-	const navigate = useNavigate();
 	const [isOpen, setIsOpen] = useState(false);
 	const { isMobile } = useDeviceType();
 	const { reset, isDefault } = usePreferences();
@@ -23,8 +22,7 @@ export function Preferences({ ...restProps }: ButtonProps) {
 
 	const clearAndLogout = async () => {
 		await logout();
-		usePreferencesStore.persist.clearStorage();
-		navigate("/login");
+		logoutAndReload();
 	};
 
 	const handleCopyPreferences = async () => {

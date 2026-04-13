@@ -95,6 +95,7 @@ export const useAuthStore = create<AuthState & AuthAction>()(
 		 * @see {@link https://github.com/pmndrs/zustand?tab=readme-ov-file#read-from-state-in-actions | Read from state in actions}
 		 */
 		useUserStore.getState().reset();
+		useTabsStore.getState().resetTabs();
 			/**
 			 * 清空 keepAlive 缓存
 			 * 在 container-layout 组件中，根据 openTabs 自动刷新 keepAlive 缓存
