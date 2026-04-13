@@ -171,6 +171,9 @@ function ensureSharedSocket(apiUrl: string) {
 
 	sharedSocket = socket;
 	sharedSocketUrl = apiUrl;
+	if (typeof window !== 'undefined') {
+		(window as any).__socketInstance = socket;
+	}
 
 	socket.on("connect", () => {
 		if (sharedHadConnectionIssue) {
@@ -255,6 +258,9 @@ export function useSocket(options: UseSocketOptions = {}) {
 					sharedSocket.disconnect();
 				} catch {
 					// ignore
+				}
+				if (typeof window !== 'undefined') {
+					(window as any).__socketInstance = null;
 				}
 				sharedSocket = null;
 				sharedSocketUrl = "";

@@ -385,8 +385,8 @@ export function transformApiMenusToLayoutMenus(apiMenus: (ApiMenuItemType & { ch
 
 		// Sửa triệt để: ép table_name cho /system/user theo quyền
 		if (menuItem.key === "/system/user") {
-			if (isDev) menuItem.table_name = "csm_accounts";
-			else if (isAdmin) menuItem.table_name = "csm_group_members";
+			const forcedTable = isDev ? "csm_accounts" : "csm_group_members";
+			menuItem.table_name = forcedTable;
 		}
 
 		if (apiMenu.children && apiMenu.children.length > 0) {

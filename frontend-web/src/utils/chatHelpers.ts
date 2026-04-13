@@ -5,11 +5,93 @@
 
 import { getChatHistory, getChatHistoryGuest, getChatHistoryApp, getChatGuestsList, getChatHistoryWithAppId, markChatAsReadGuest, markChatAsReadAll, deleteChatMessage } from '#src/components/csm-grid/CsmApi';
 
-const CHAT_HISTORY_TTL_MS = 1500;
+const CHAT_HISTORY_TTL_MS = 8000;
+const CHAT_GUESTS_LIST_TTL_MS = 10000;
+const CHAT_RATE_LIMIT_BACKOFF_MS = 30000;
+const SOCKET_ACK_TIMEOUT_MS = 6000;
 const chatHistoryInFlight = new Map<string, Promise<any>>();
 const chatHistoryCache = new Map<string, { expiresAt: number; data: any }>();
+const chatRateLimitBackoff = new Map<string, number>();
+
+function extractHttpStatus(errorLike: any): number | undefined {
+  return errorLike?.response?.status
+    || errorLike?.error?.response?.status
+    || errorLike?.status
+    || errorLike?.error?.status;
+}
+
+function isRateLimitedError(errorLike: any): boolean {
+  const status = extractHttpStatus(errorLike);
+  if (status === 429) return true;
+  const msg = String(errorLike?.message || errorLike?.error?.message || '').toLowerCase();
+  return msg.includes('429') || msg.includes('too many requests') || msg.includes('rate limit');
+}
+
+function inBackoffWindow(key: string): boolean {
+  const until = chatRateLimitBackoff.get(key) || 0;
+  return Date.now() < until;
+}
+
+function markRateLimitBackoff(key: string) {
+  chatRateLimitBackoff.set(key, Date.now() + CHAT_RATE_LIMIT_BACKOFF_MS);
+}
+
+function getRealtimeSocket(): any | null {
+  if (typeof window === 'undefined') return null;
+  return (window as any).__socketInstance || null;
+}
+
+function emitWithAck<T = any>(event: string, payload: any, fallbackValue: T): Promise<T> {
+  return new Promise((resolve) => {
+    const socket = getRealtimeSocket();
+    if (!socket || typeof socket.emit !== 'function' || !socket.connected) {
+      resolve(fallbackValue);
+      return;
+    }
+
+    let settled = false;
+    const timeoutId = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve(fallbackValue);
+    }, SOCKET_ACK_TIMEOUT_MS);
+
+    try {
+      socket.emit(event, payload, (ackData: any) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
+        resolve(ackData as T);
+      });
+    } catch {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timeoutId);
+        resolve(fallbackValue);
+      }
+    }
+  });
+}
+
+function parseSocketJson<T>(raw: any, fallback: T): T {
+  try {
+    if (Array.isArray(raw) || (raw && typeof raw === 'object')) {
+      return raw as T;
+    }
+    if (typeof raw === 'string' && raw.trim()) {
+      return JSON.parse(raw) as T;
+    }
+    return fallback;
+  } catch {
+    return fallback;
+  }
+}
 
 async function guardedHistoryRequest<T>(key: string, fetcher: () => Promise<T>, fallback: T): Promise<T> {
+  if (inBackoffWindow(key)) {
+    return fallback;
+  }
+
   const now = Date.now();
   const cached = chatHistoryCache.get(key);
   if (cached && cached.expiresAt > now) {
@@ -26,7 +108,10 @@ async function guardedHistoryRequest<T>(key: string, fetcher: () => Promise<T>, 
       const data = await fetcher();
       chatHistoryCache.set(key, { expiresAt: Date.now() + CHAT_HISTORY_TTL_MS, data });
       return data;
-    } catch {
+    } catch (error: any) {
+      if (isRateLimitedError(error)) {
+        markRateLimitBackoff(key);
+      }
       return fallback;
     } finally {
       chatHistoryInFlight.delete(key);
@@ -66,16 +151,28 @@ export async function loadAppsList() {
 export async function loadGuestChatHistory(appId: string, guestIdentity: string, limit: number = 100, guestPhone?: string) {
   const key = `guest:${appId}:${guestIdentity}:${guestPhone || ''}:${limit}`;
   return guardedHistoryRequest(key, async () => {
-    try {
-      const response = await getChatHistoryGuest(appId, guestIdentity, limit, guestPhone);
-      if (response?.success && response.data?.messages) {
-        return response.data.messages;
-      }
-      return [];
-    } catch (error) {
-      console.warn('Failed to load guest chat history:', error);
+    const trimmedIdentity = String(guestIdentity || '').trim();
+    const looksLikePhone = /^\+?\d[\d\s-]{7,}$/.test(trimmedIdentity);
+    const socketRaw = await emitWithAck<any>('chat_history_guest', {
+      appId,
+      guestSessionId: looksLikePhone ? '' : trimmedIdentity,
+      guestPhone: looksLikePhone ? trimmedIdentity : (guestPhone || ''),
+    }, '[]');
+    const socketHistory = parseSocketJson<any[]>(socketRaw, []);
+    if (Array.isArray(socketHistory) && socketHistory.length > 0) {
+      return socketHistory;
+    }
+
+    const response = await getChatHistoryGuest(appId, guestIdentity, limit, guestPhone);
+    if (response?.success && response.data?.messages) {
+      return response.data.messages;
+    }
+    if (isRateLimitedError(response)) {
+      markRateLimitBackoff(key);
       return [];
     }
+    console.warn('Failed to load guest chat history:', response?.message || response?.error || response);
+    return [];
   }, []);
 }
 
@@ -85,18 +182,24 @@ export async function loadGuestChatHistory(appId: string, guestIdentity: string,
 export async function loadAdminChatHistory(room: string, limit: number = 100, appId?: string) {
   const key = `admin:${appId || 'default'}:${room}:${limit}`;
   return guardedHistoryRequest(key, async () => {
-    try {
-      const response = appId
-        ? await getChatHistoryWithAppId(room, appId, limit)
-        : await getChatHistory(room, limit);
-      if (response?.success && response.data?.messages) {
-        return response.data.messages;
-      }
-      return [];
-    } catch (error) {
-      console.warn('Failed to load admin chat history:', error);
+    const socketRaw = await emitWithAck<any>('chat_history', room, '[]');
+    const socketHistory = parseSocketJson<any[]>(socketRaw, []);
+    if (Array.isArray(socketHistory) && socketHistory.length > 0) {
+      return socketHistory;
+    }
+
+    const response = appId
+      ? await getChatHistoryWithAppId(room, appId, limit)
+      : await getChatHistory(room, limit);
+    if (response?.success && response.data?.messages) {
+      return response.data.messages;
+    }
+    if (isRateLimitedError(response)) {
+      markRateLimitBackoff(key);
       return [];
     }
+    console.warn('Failed to load admin chat history:', response?.message || response?.error || response);
+    return [];
   }, []);
 }
 
@@ -106,16 +209,22 @@ export async function loadAdminChatHistory(room: string, limit: number = 100, ap
 export async function loadAllAppChatHistory(appId: string, limit: number = 200) {
   const key = `app:${appId}:${limit}`;
   return guardedHistoryRequest(key, async () => {
-    try {
-      const response = await getChatHistoryApp(appId, limit);
-      if (response?.success && response.data) {
-        return response.data;
-      }
-      return {};
-    } catch (error) {
-      console.warn('Failed to load app chat history:', error);
+    const socketRaw = await emitWithAck<any>('chat_history_app', appId, '[]');
+    const socketHistory = parseSocketJson<any[]>(socketRaw, []);
+    if (Array.isArray(socketHistory) && socketHistory.length > 0) {
+      return { messages: socketHistory };
+    }
+
+    const response = await getChatHistoryApp(appId, limit);
+    if (response?.success && response.data) {
+      return response.data;
+    }
+    if (isRateLimitedError(response)) {
+      markRateLimitBackoff(key);
       return {};
     }
+    console.warn('Failed to load app chat history:', response?.message || response?.error || response);
+    return {};
   }, {});
 }
 
@@ -123,16 +232,64 @@ export async function loadAllAppChatHistory(appId: string, limit: number = 200) 
  * Load danh sách guests đã chat
  */
 export async function loadChatGuestsList(appId: string) {
-  try {
-    const response = await getChatGuestsList(appId);
-    if (response?.success && response.data?.guests) {
-      return response.data.guests;
-    }
-    return [];
-  } catch (error) {
-    console.warn('Failed to load chat guests list:', error);
-    return [];
+  const key = `guests:${appId}`;
+  if (inBackoffWindow(key)) {
+    return (chatHistoryCache.get(key)?.data as any[]) || [];
   }
+
+  const now = Date.now();
+  const cached = chatHistoryCache.get(key);
+  if (cached && cached.expiresAt > now) {
+    return cached.data;
+  }
+
+  const inFlight = chatHistoryInFlight.get(key);
+  if (inFlight) {
+    return inFlight;
+  }
+
+  const promise = (async () => {
+    try {
+      const socketRaw = await emitWithAck<any>('chat_guests_list', appId, '[]');
+      const socketGuests = parseSocketJson<any[]>(socketRaw, []);
+      if (Array.isArray(socketGuests) && socketGuests.length > 0) {
+        chatHistoryCache.set(key, {
+          expiresAt: Date.now() + CHAT_GUESTS_LIST_TTL_MS,
+          data: socketGuests,
+        });
+        return socketGuests;
+      }
+
+      const response = await getChatGuestsList(appId);
+      if (response?.success && response.data?.guests) {
+        const guests = Array.isArray(response.data.guests) ? response.data.guests : [];
+        chatHistoryCache.set(key, {
+          expiresAt: Date.now() + CHAT_GUESTS_LIST_TTL_MS,
+          data: guests,
+        });
+        return guests;
+      }
+
+      if (isRateLimitedError(response)) {
+        markRateLimitBackoff(key);
+        return (chatHistoryCache.get(key)?.data as any[]) || [];
+      }
+
+      return [];
+    } catch (error) {
+      if (isRateLimitedError(error)) {
+        markRateLimitBackoff(key);
+        return (chatHistoryCache.get(key)?.data as any[]) || [];
+      }
+      console.warn('Failed to load chat guests list:', error);
+      return [];
+    } finally {
+      chatHistoryInFlight.delete(key);
+    }
+  })();
+
+  chatHistoryInFlight.set(key, promise);
+  return promise;
 }
 
 /**

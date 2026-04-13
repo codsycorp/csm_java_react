@@ -13,7 +13,7 @@ import html2pdf from "html2pdf.js";
 
 import { csmDecrypt } from "../csm-grid/CsmCrypto";
 import { getTableData, type Where } from "../csm-grid/CsmApi";
-import { normalizeComboOptions, parseStaticComboQuery } from "../csm-grid/combo-utils";
+import { normalizeComboOptions, parseStaticComboQuery, resolveComboQueryAppId } from "../csm-grid/combo-utils";
 import { useAppStore } from "#src/store";
 import LunarCalendar from "#src/utils/lunarCalendar";
 import DateUtils from "#src/utils/dateUtils";
@@ -173,13 +173,11 @@ export default function CsmReport({ appId, m_configs, decrypt }: CsmReportProps)
         if (obj_name !== "" && fieldsQ.length === 2) {
           try {
             // Get app_id
-            let queryAppId = queryItem.app_id;
+            let queryAppId = appId;
             if (!queryAppId) {
-              queryAppId = appId;
-              if (!queryAppId) {
-                try { queryAppId = useAppStore.getState().getCurrentAppId(); } catch {}
-              }
+              try { queryAppId = useAppStore.getState().getCurrentAppId(); } catch {}
             }
+            queryAppId = resolveComboQueryAppId(obj_name, queryItem.app_id, queryAppId || "csm");
 
             if (queryAppId) {
               // Default WHERE condition
@@ -553,8 +551,8 @@ export default function CsmReport({ appId, m_configs, decrypt }: CsmReportProps)
   }
 
   return (
-    <Card title={m_configs.label || m_configs.name || "Báo cáo"} bordered>
-      <div ref={containerRef}>
+    <Card title={m_configs.label || m_configs.name || "Báo cáo"} bordered style={{ height: "100%" }} bodyStyle={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
+      <div ref={containerRef} style={{ flexShrink: 0 }}>
         <Form form={form} layout="vertical">
           <Space wrap>
             {fields.map(renderField)}
@@ -566,8 +564,8 @@ export default function CsmReport({ appId, m_configs, decrypt }: CsmReportProps)
           </div>
         </Form>
       </div>
-      <div style={{ marginTop: 16 }}>
-        <iframe src={reportSrc} title="report" aria-hidden="true" style={{ right: 0, top: 0, bottom: 0, height: "100%", width: "100%", minHeight: 480 }} />
+      <div style={{ marginTop: 16, flex: 1, minHeight: 0, overflow: "hidden" }}>
+        <iframe src={reportSrc} title="report" aria-hidden="true" style={{ right: 0, top: 0, bottom: 0, height: "100%", width: "100%", minHeight: 0, border: 0 }} />
       </div>
     </Card>
   );

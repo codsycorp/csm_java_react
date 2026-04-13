@@ -17,7 +17,8 @@ export function filterVisibleChildren(menu: MenuItemType | Partial<MenuItemType>
     return [];
   }
   // Nếu không phải Master-Detail, hiển thị children bình thường
-  return (menu.nodes || []) as (MenuItemType | Partial<MenuItemType>)[];
+  // Hỗ trợ cả 'children' (từ AI generate) và 'nodes' (từ hệ thống cũ)
+  return ((menu.children || menu.nodes) || []) as (MenuItemType | Partial<MenuItemType>)[];
 }
 
 /**
@@ -28,7 +29,8 @@ export function getDetailTabs(menu: MenuItemType | Partial<MenuItemType>): MenuI
   if (!isMasterDetailMenu(menu)) {
     return [];
   }
-  return (menu.nodes || []) as MenuItemType[];
+  // Hỗ trợ cả 'children' (từ AI generate) và 'nodes' (từ hệ thống cũ)
+  return ((menu.children || menu.nodes) || []) as MenuItemType[];
 }
 
 /**

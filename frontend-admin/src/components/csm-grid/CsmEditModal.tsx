@@ -23,7 +23,7 @@ import { useAppStore } from "#src/store/app";
 import { usePermissionStore } from "#src/store";
 import { useUserStore } from "#src/store/user";
 import { getTableData } from "./CsmApi";
-import { normalizeComboOptions } from "./combo-utils";
+import { normalizeComboOptions, resolveComboQueryAppId } from "./combo-utils";
 import { formatDateForStorage, parseDateValueToDayjs, resolveDateLocaleFormat } from "#src/utils/dateControl";
 
 // Helper: safeEval for trigger execution (same as CsmDynamicGrid)
@@ -73,6 +73,25 @@ function safeEval<TArgs extends any[], TReturn>(args: string[], body: string): (
 // GLOBAL CACHE: Tự động fetch missing tables cho combo queries
 // ============================================================================
 const globalTableFetchCache = new Map<string, Promise<any>>();
+
+function resolveEffectiveFieldTypes(field: Partial<TableField> | Record<string, any> | null | undefined): string {
+  const explicit = String(field?.f_types ?? (field as any)?.f_type ?? "").trim().toLowerCase();
+  if (explicit && explicit !== "string" && explicit !== "ed") return explicit;
+
+  const fieldName = String(field?.f_name ?? "").trim().toLowerCase();
+  if (["menuspermissions", "menuspermissionsadd", "menuspermissionsdeny"].includes(fieldName)) return "menu_tree";
+  if (["permissions", "permissionsadd", "permissionsdeny"].includes(fieldName)) return "multi_tag";
+  if (["permissionpreset", "datascope", "role_level", "branch_id", "dept_id", "department_id", "group_id", "roles", "permissiongroups", "status", "app_id"].includes(fieldName)) return "co";
+  if (["is_global", "actived", "active", "dev", "enabled", "disabled"].includes(fieldName) || /^is_/.test(fieldName) || /^has_/.test(fieldName)) return "checkbox";
+
+  if ((field as any)?.f_cbo_query) return "co";
+  if (Array.isArray((field as any)?.f_options) && (field as any).f_options.length > 0) {
+    if (fieldName.includes("menu")) return "menu_tree";
+    if (fieldName.includes("permission")) return "multi_tag";
+  }
+
+  return explicit || "ed";
+}
 
 function isComboLikeType(rawTypes: unknown): boolean {
   const types = String(rawTypes || "").toLowerCase();
@@ -210,7 +229,7 @@ export function buildDetailGridSelectEnums(
   };
 
   fields.forEach((f: any) => {
-    const types = (f.f_types || '').toLowerCase();
+    const types = resolveEffectiveFieldTypes(f);
     const isCombo = isComboLikeType(types);
     if (!isCombo) return;
 
@@ -288,7 +307,7 @@ export function buildDetailGridSelectEnums(
             if (!querySpec?.obj_name || !database) return;
             const tableName = querySpec.obj_name;
             const fields = querySpec.fields || [];
-            const appId = querySpec.app_id || seftContext?.appId || 'csm';
+            const appId = resolveComboQueryAppId(tableName, querySpec.app_id, seftContext?.appId || 'csm');
             // Default obj_where if not provided or invalid
             // Check for: undefined, null, empty string, empty object, or object without required fields
             let whereClause = querySpec.obj_where;
@@ -1005,6 +1024,7 @@ function JSONKeyValueEditor({ name, form }: { name: string; form: any }) {
 
 // Multilingual field tabs
 function MultilingualTabs({ fields, form }: { fields: TableField[]; form: any }) {
+	const { i18n } = useTranslation();
   // Gom trường theo ngôn ngữ: trường gốc là tiếng Việt, các trường có hậu tố là ngôn ngữ tương ứng
   const langs = ['vi', 'en', 'zh'];
   const defaultLang = 'vi';
@@ -1078,7 +1098,11 @@ function MultilingualTabs({ fields, form }: { fields: TableField[]; form: any })
                 return <Form.Item key={field.f_name} name={field.f_name} label={fieldLabel}><Input id={field.f_name} /> </Form.Item>;
               });
               if (tabFields.filter(Boolean).length === 0) {
-                return <div style={{ color: '#aaa', fontStyle: 'italic', padding: '16px 0' }}>Không có dữ liệu cho ngôn ngữ này</div>;
+				return <div style={{ color: '#aaa', fontStyle: 'italic', padding: '16px 0' }}>{getLangText(i18n.language, {
+					vi: 'Không có dữ liệu cho ngôn ngữ này',
+					en: 'No data available for this language',
+					zh: '该语言暂无数据',
+				})}</div>;
               }
               return tabFields;
             })()}
@@ -1104,7 +1128,7 @@ function getFieldComponent(
   translate?: (key: string, defaultValue?: string) => string,
   currentLang?: string
 ) {
-  const types = (f.f_types || "ed").toLowerCase(); // default to 'ed' (text input)
+  const types = resolveEffectiveFieldTypes(f); // infer special types even when DB sends generic f_types
   const key = f.f_name;
   const lang = String(currentLang || navigator.language || 'vi').toLowerCase();
   const numberLocale = resolveNumberLocale(lang);
@@ -1568,13 +1592,52 @@ function getFieldComponent(
       const value = String(opt ?? "");
       return { value, label: localizeLabel(value) };
     });
-    return <Form.Item key={key} name={key} label={fieldLabel} initialValue={initialVal}>
+
+    const normalizeTagValues = (input: any): string[] => {
+      if (Array.isArray(input)) {
+        return Array.from(new Set(
+          input
+            .map((item) => {
+              if (item && typeof item === "object") {
+                return String(item.value ?? item.ma ?? item.id ?? item.key ?? item.label ?? item.ten ?? item.text ?? "").trim();
+              }
+              return String(item ?? "").trim();
+            })
+            .filter(Boolean),
+        ));
+      }
+      if (typeof input === "string") {
+        const text = input.trim();
+        if (!text) return [];
+        if (text.startsWith("[") || text.startsWith("{")) {
+          try {
+            const parsed = JSON.parse(text);
+            return normalizeTagValues(parsed);
+          } catch {
+            return text.split(",").map((item) => item.trim()).filter(Boolean);
+          }
+        }
+        return text.split(",").map((item) => item.trim()).filter(Boolean);
+      }
+      if (input == null) return [];
+      return [String(input).trim()].filter(Boolean);
+    };
+
+    const normalizedInitial = normalizeTagValues(form.getFieldValue(key) ?? initialVal);
+    const selectMode = tagOptions.length > 0 ? "multiple" : "tags";
+
+    return <Form.Item key={key} name={key} label={fieldLabel} initialValue={normalizedInitial}>
       <Select
-        mode="tags"
+        mode={selectMode as any}
         style={{ width: '100%' }}
         tokenSeparators={[',']}
         options={tagOptions}
         optionFilterProp="label"
+        allowClear
+        onChange={(nextValue) => {
+          const normalized = normalizeTagValues(nextValue);
+          form.setFieldsValue({ [key]: normalized });
+        }}
       />
     </Form.Item>;
   }
@@ -1620,6 +1683,7 @@ function getFieldComponent(
         optionFilterProp="label"
         allowClear
         disabled={isReadonly || (Boolean(cascadeConfig.cascadeFrom) && !cascadeConfig.hasParentValue)}
+        placeholder={translate ? translate("common.select", `Select ${fieldLabel}`) : `Select ${fieldLabel}`}
         value={selectValue}
         onChange={val => form.setFieldsValue({ [key]: val })}
       />
@@ -1837,9 +1901,10 @@ export function CsmEditModal({
       console.log('[CsmEditModal] Database available:', !!database);
       console.log('[CsmEditModal] Decrypt available:', !!decrypt);
       console.log('[CsmEditModal] Fields with "co" type:', 
-        m_configs?.table?.filter(f => isComboLikeType((f.f_types || '').toLowerCase())).map(f => ({
+        m_configs?.table?.filter(f => isComboLikeType(resolveEffectiveFieldTypes(f))).map(f => ({
           name: f.f_name,
           types: f.f_types,
+          effectiveTypes: resolveEffectiveFieldTypes(f),
           has_cbo_query: !!f.f_cbo_query,
           has_enum: !!selectEnums?.[f.f_name],
           cbo_query_preview: f.f_cbo_query ? (
@@ -1911,8 +1976,42 @@ export function CsmEditModal({
         return [];
       };
       dynamicFields.forEach(f => {
-        const types = (f.f_types || '').toLowerCase();
+        const types = resolveEffectiveFieldTypes(f);
         const key = f.f_name;
+        if (/password/.test(types)) {
+          const rawPassword = convertedValues[key];
+          const normalizedRaw = String(rawPassword ?? "").trim();
+          if (!normalizedRaw) {
+            convertedValues[key] = "";
+            return;
+          }
+
+          let decodedPassword = normalizedRaw;
+          try {
+            const decrypted = String(csmDecrypt(normalizedRaw) || "").trim();
+            if (decrypted) decodedPassword = decrypted;
+          } catch {}
+
+          const sep = "_____";
+          const rawSepIndex = normalizedRaw.indexOf(sep);
+          if (rawSepIndex >= 0) {
+            const rawPlain = normalizedRaw.slice(rawSepIndex + sep.length).trim();
+            convertedValues[key] = rawPlain || normalizedRaw;
+            return;
+          }
+
+          const sepIndex = decodedPassword.indexOf(sep);
+          if (sepIndex >= 0) {
+            const plainPart = decodedPassword.slice(sepIndex + sep.length).trim();
+            convertedValues[key] = plainPart || normalizedRaw;
+            return;
+          }
+
+          const encryptedLikeToken = /^[A-Za-z0-9_\-./+=]+$/.test(normalizedRaw) && normalizedRaw.length >= 12;
+          const decryptedLooksReadable = /[\w\s!@#$%^&*()\-+=\[\]{};:'",.<>/?\\|`~]/.test(decodedPassword) && !decodedPassword.includes("\u0000");
+          convertedValues[key] = encryptedLikeToken && decryptedLooksReadable ? decodedPassword : normalizedRaw;
+          return;
+        }
         if (/date|datetime|time/.test(types) && convertedValues[key]) {
           const kind = /datetime/.test(types) ? "datetime" : /^time$/.test(types) ? "time" : "date";
           const parsedValue = parseDateValueToDayjs(convertedValues[key], kind);
@@ -2083,7 +2182,7 @@ export function CsmEditModal({
 
             const encodedValues = { ...values };
             dynamicFields.forEach(f => {
-              const types = (f.f_types || '').toLowerCase();
+              const types = resolveEffectiveFieldTypes(f);
               if (/date|datetime|time/.test(types) && encodedValues[f.f_name]) {
                 const kind = /datetime/.test(types) ? "datetime" : /^time$/.test(types) ? "time" : "date";
                 encodedValues[f.f_name] = formatDateForStorage(encodedValues[f.f_name], kind);
@@ -2207,11 +2306,11 @@ export function CsmEditModal({
             const formValues = form.getFieldsValue();
             // Phân loại full width và grid fields
             const fullWidthFields = commonFields.filter(f => {
-              const types = (f.f_types || '').toLowerCase();
+              const types = resolveEffectiveFieldTypes(f);
               return /html|richtext/.test(types) || /code/.test(types) || types === 'edt';
             });
             const gridFields = commonFields.filter(f => {
-              const types = (f.f_types || '').toLowerCase();
+              const types = resolveEffectiveFieldTypes(f);
               return !(/html|richtext/.test(types) || /code/.test(types) || types === 'edt');
             });
             return (
@@ -2542,7 +2641,10 @@ export function CsmEditModal({
                     if (isComboLikeType(types)) {
                       const rawOptions = selectOptions?.[actualFieldName];
                       const enumObj = selectEnums?.[actualFieldName];
-                      const options = buildSelectOptions(rawOptions, enumObj);
+                      const options = buildSelectOptions(rawOptions, enumObj, (label) => {
+                        const text = String(label == null ? '' : label);
+                        return text.includes('.') ? t(text) : text;
+                      });
                       const selectValue = normalizeSelectValue(
                         form.getFieldValue(actualFieldName) ?? fieldValue,
                         options
@@ -2552,7 +2654,7 @@ export function CsmEditModal({
                           <Select
                             showSearch
                             allowClear
-                            placeholder={`Chọn ${fieldLabel}`}
+                            placeholder={t("common.select", { defaultValue: `Select ${fieldLabel}` })}
                             options={options}
                             value={selectValue}
                             onChange={val => form.setFieldsValue({ [actualFieldName]: val })}

@@ -26,6 +26,7 @@ lmkt/dist/
 # Database & Data files
 backend/csm_datas/database/
 backend/csm_datas/lucene_index/
+backend/csm_datas/public/
 
 # Logs
 *.log

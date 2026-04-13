@@ -26,39 +26,115 @@ const useStyles = createUseStyles(({ token }) => (
 			"& .ant-popover-inner": {
 				padding: 0,
 			},
-			"& .ant-list-footer": {
-				borderTop: `1px solid ${token.colorBorder}`,
-			},
-			"& .ant-list-items": {
-				height: 380,
-				overflowY: "auto",
+			"& .ant-popover-inner-content": {
+				display: 'flex',
+				flexDirection: 'column',
+				maxHeight: '90vh',
 			},
 		},
-		userItem: {
+		notificationWrapper: {
+			display: 'flex',
+			flexDirection: 'column',
+			maxHeight: 'min(90vh, 600px)',
+			minHeight: '100px',
+			'@media (max-width: 640px)': {
+				maxHeight: '70vh',
+			},
+		},
+		notificationHeader: {
+			flexShrink: 0,
 			padding: '12px 16px',
-			borderRadius: 8,
-			margin: '4px 8px',
+			background: token.colorBgContainer,
+			borderBottom: `1px solid ${token.colorBorder}`,
+			fontWeight: 600,
+		},
+		notificationContent: {
+			flex: 1,
+			overflowY: 'auto',
+			overflowX: 'hidden',
+			padding: '12px 0',
+			'&::-webkit-scrollbar': {
+				width: '6px',
+			},
+			'&::-webkit-scrollbar-track': {
+				background: 'transparent',
+			},
+			'&::-webkit-scrollbar-thumb': {
+				background: token.colorBorder,
+				borderRadius: '3px',
+				'&:hover': {
+					background: token.colorBorderBg,
+				},
+			},
+		},
+		notificationSection: {
+			padding: '0 12px',
+			marginBottom: '8px',
+		},
+		notificationSectionTitle: {
+			fontWeight: 600,
+			color: token.colorTextSecondary,
+			marginBottom: 8,
+			paddingLeft: '4px',
+			fontSize: '12px',
+			textTransform: 'uppercase',
+			letterSpacing: '0.5px',
+		},
+		notificationEmpty: {
+			textAlign: 'center',
+			padding: '40px 20px',
+			color: token.colorTextSecondary,
+		},
+		userItem: {
+			padding: '10px 12px',
+			borderRadius: 6,
+			margin: '2px 8px',
 			transition: 'all 0.2s ease',
 			cursor: 'pointer',
 			'&:hover': {
 				backgroundColor: token.colorBgTextHover,
-				boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+				boxShadow: '0 2px 6px rgba(0,0,0,0.08)',
 			},
 			display: 'flex',
 			alignItems: 'center',
-			gap: 12,
+			gap: 10,
+			minHeight: '44px',
 		},
 		username: {
 			fontWeight: 500,
 			color: token.colorText,
+			fontSize: '14px',
+		},
+		userDesc: {
+			fontSize: '12px',
+			color: token.colorTextSecondary,
+			marginTop: '2px',
 		},
 		unreadBadge: {
 			backgroundColor: token.colorError,
 			color: 'white',
 			borderRadius: '50%',
-			padding: '2px 6px',
-			fontSize: 12,
+			minWidth: '24px',
+			height: '24px',
+			display: 'flex',
+			alignItems: 'center',
+			justifyContent: 'center',
+			fontSize: 11,
 			fontWeight: 'bold',
+			flexShrink: 0,
+		},
+		bellBadge: {
+			backgroundColor: '#ff4d4f',
+			color: 'white',
+			borderRadius: '50%',
+			minWidth: '22px',
+			height: '22px',
+			display: 'flex',
+			alignItems: 'center',
+			justifyContent: 'center',
+			fontSize: '11px',
+			fontWeight: 'bold',
+			border: '2px solid white',
 		},
 	}
 ));
@@ -109,6 +185,12 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 
 		const shortId = guestKey.slice(-6);
 		return shortId ? `Khách ${shortId}` : 'Khách mới';
+	}, []);
+
+	const getChatSessionKey = useCallback((room: string, username?: string) => {
+		const normalizedRoom = (room || '').trim();
+		const normalizedUser = (username || normalizedRoom).trim();
+		return `${normalizedRoom}::${normalizedUser}`;
 	}, []);
 
 	// Notification popup relies on ChatHistoryContext initialization + realtime socket updates.
@@ -164,11 +246,9 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 		});
 		
 		const internalUsersWithUnread = Array.from(internalMap.values())
-			.filter(item => item.unread > 0)
-			.sort((a, b) => b.unread - a.unread);
+			.sort((a, b) => (b.unread - a.unread) || a.username.localeCompare(b.username));
 		const guestUsersWithUnread = Array.from(guestMap.values())
-			.filter(item => item.unread > 0)
-			.sort((a, b) => b.unread - a.unread);
+			.sort((a, b) => (b.unread - a.unread) || a.label.localeCompare(b.label));
 		
 		console.log(`👥 [Notification] Parsed ${internalUsersWithUnread.length} internal users & ${guestUsersWithUnread.length} guests`);
 		console.log(`📊 [Notification] Internal users:`, internalUsersWithUnread.map(u => u.username));
@@ -203,9 +283,26 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 	// Total system unread = broadcast notifications unread for this appId
 	const totalSystemUnread = useMemo(() => systemMessagesUnread, [systemMessagesUnread]);
 
+	// Calculate total badge count and log for debugging
+	const totalUnreadCount = useMemo(() => {
+		const total = totalSystemUnread + totalGuestUnread + totalInternalUnread;
+		if (total > 0) {
+			console.log(`🔔 [Notification Badge] Total: ${total} = System:${totalSystemUnread} + Guests:${totalGuestUnread} + Internal:${totalInternalUnread}`);
+			console.log(`📌 [Notification Details] Guests: ${guestUsersWithUnread.map(g => `${g.label}(${g.unread})`).join(', ') || 'none'}`);
+			console.log(`📌 [Notification Details] Internal: ${internalUsersWithUnread.map(u => `${u.username}(${u.unread})`).join(', ') || 'none'}`);
+		}
+		return total;
+	}, [totalSystemUnread, totalGuestUnread, totalInternalUnread, guestUsersWithUnread, internalUsersWithUnread]);
+
 	// Ensure any chat opened from notification is immediately marked as read
 	const openChatAndMarkRead = useCallback((room: string, username?: string) => {
-		setOpenChats([{ room, username: username || room }]);
+		const resolvedUsername = username || room;
+		setOpenChats(prev => {
+			const sessionKey = getChatSessionKey(room, resolvedUsername);
+			const exists = prev.some(item => getChatSessionKey(item.room, item.username) === sessionKey);
+			if (exists) return prev;
+			return [...prev, { room, username: resolvedUsername }];
+		});
 		const key = (username || room || "").trim();
 		if (key) {
 			markAsRead(key);
@@ -213,20 +310,7 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 		if (room && room !== key) {
 			markAsRead(room);
 		}
-	}, [markAsRead]);
-
-	useEffect(() => {
-		if (!openChats.length) return;
-		openChats.forEach(chat => {
-			const key = (chat.username || chat.room || "").trim();
-			if (key) {
-				markAsRead(key);
-			}
-			if (chat.room && chat.room !== key) {
-				markAsRead(chat.room);
-			}
-		});
-	}, [openChats, markAsRead]);
+	}, [markAsRead, getChatSessionKey]);
 
 	useEffect(() => {
 		const handleAutoOpen = (event: Event) => {
@@ -257,7 +341,12 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 		};
 	}, [appId, openChatAndMarkRead, formatGuestLabel]);
 
-	// Force refresh when opening notification popup
+	const formatNotificationBadge = useCallback((count: number): string => {
+		if (count === 0) return '';
+		if (count > 99) return '99+';
+		return String(count);
+	}, []);
+
 	const handleOpenChange = useCallback((visible: boolean) => {
 		action.set(visible);
 	}, [action]);
@@ -280,80 +369,79 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 		<>
 			<Popover
 				placement="bottomLeft"
-				overlayClassName={clsx(classes.notification, "w-72 md:w-96 !right-3")}
+				overlayClassName={clsx(classes.notification, "sm:w-80 md:w-96 lg:w-[420px]")}
 				open={open}
 				arrow={false}
 				trigger="click"
 				onOpenChange={handleOpenChange}
 				content={(
-					<>
-						<div className="flex items-center justify-between mb-2" style={{ padding: '12px 16px', background: token.colorBgContainer, borderBottom: `1px solid ${token.colorBorder}` }}>
-							<div style={{ fontWeight: 600, color: token.colorText }}>Thông báo</div>
+					<div className={classes.notificationWrapper}>
+						<div className={classes.notificationHeader}>
+							Thông báo
 						</div>
-						<div style={{ padding: '12px 16px' }}>
-							{/* Section 1: Internal Users (same appId) - unified from contextMessages[appId] */}
+						<div className={classes.notificationContent}>
+							{/* Section 1: Guest Users (Priority: most important) */}
+							{guestUsersWithUnread.length > 0 && (
+								<div className={classes.notificationSection}>
+									<div className={classes.notificationSectionTitle}>👥 Khách vãng lai ({guestUsersWithUnread.length})</div>
+									{guestUsersWithUnread.map(g => (
+										<div key={g.key} className={classes.userItem} onClick={() => openChatAndMarkRead(g.key, g.label)}>
+											<Avatar icon={<UserOutlined />} size="small" style={{ backgroundColor: '#2563eb' }} />
+											<div style={{ flex: 1, minWidth: 0 }}>
+												<div className={classes.username}>{g.label}</div>
+												<div className={classes.userDesc}>Khách của web/app</div>
+											</div>
+											{g.unread > 0 && <span className={classes.unreadBadge}>{formatNotificationBadge(g.unread)}</span>}
+										</div>
+									))}
+									<Divider style={{ margin: '8px 0' }} />
+								</div>
+							)}
+
+							{/* Section 2: Internal Users (same appId) */}
 							{internalUsersWithUnread.length > 0 && (
-								<>
-									<div style={{ fontWeight: 600, color: token.colorTextSecondary, marginBottom: 6 }}>{t('common.notification.internalUsers', 'Người dùng nội bộ')}</div>
+								<div className={classes.notificationSection}>
+									<div className={classes.notificationSectionTitle}>👨‍💼 Người dùng nội bộ ({internalUsersWithUnread.length})</div>
 									{internalUsersWithUnread.map(u => (
 										<div key={u.username} className={classes.userItem} onClick={() => openChatAndMarkRead(appId, u.username)}>
 											<Avatar src={u.avatar} icon={<UserOutlined />} size="small" />
-											<div style={{ flex: 1 }}>
+											<div style={{ flex: 1, minWidth: 0 }}>
 												<div className={classes.username}>{u.username}</div>
-												<div style={{ fontSize: 12, color: '#8c8c8c' }}>{t('common.notification.sameApp', 'Cùng appId')}</div>
+												<div className={classes.userDesc}>Cùng ứng dụng</div>
 											</div>
-											{u.unread > 0 && <span className={classes.unreadBadge}>{u.unread}</span>}
+											{u.unread > 0 && <span className={classes.unreadBadge}>{formatNotificationBadge(u.unread)}</span>}
 										</div>
 									))}
 									<Divider style={{ margin: '8px 0' }} />
-								</>
-							)}
-
-							{/* Section 2: Guest Users - unified from contextMessages[appId] */}
-							{guestUsersWithUnread.length > 0 && (
-								<>
-									<div style={{ fontWeight: 600, color: token.colorTextSecondary, marginBottom: 6 }}>{t('common.notification.guests', 'Khách vãng lai')}</div>
-									{guestUsersWithUnread.map(g => (
-										<div key={g.key} className={classes.userItem} onClick={() => openChatAndMarkRead(g.key, g.label)}>
-											<Avatar icon={<UserOutlined />} size="small" />
-											<div style={{ flex: 1 }}>
-												<div className={classes.username}>{g.label}</div>
-												<div style={{ fontSize: 12, color: '#8c8c8c' }}>{t('common.notification.guestDesc', 'Khách của web/app')}</div>
-											</div>
-											{g.unread > 0 && <span className={classes.unreadBadge}>{g.unread}</span>}
-										</div>
-									))}
-									<Divider style={{ margin: '8px 0' }} />
-								</>
+								</div>
 							)}
 
 							{/* Section 3: System Messages (Broadcast to this appId) */}
 							{systemMessages.length > 0 && (
-								<>
-									<div style={{ fontWeight: 600, color: token.colorTextSecondary, marginBottom: 6 }}>{t('common.notification.systemMessages', 'Tin nhắn hệ thống')}</div>
-									
-									{/* Show system notifications for this appId (broadcast) */}
+								<div className={classes.notificationSection}>
+									<div className={classes.notificationSectionTitle}>🔔 Thông báo hệ thống</div>
 									<div className={classes.userItem} onClick={() => openChatAndMarkRead(appId, 'Thông báo hệ thống')}>
 										<Avatar icon={<BellOutlined />} size="small" style={{ backgroundColor: '#52c41a' }} />
-										<div style={{ flex: 1 }}>
-											<div className={classes.username}>Thông báo hệ thống</div>
-											<div style={{ fontSize: 12, color: '#8c8c8c' }}>Thông báo gửi đến ứng dụng của bạn</div>
+										<div style={{ flex: 1, minWidth: 0 }}>
+											<div className={classes.username}>Thông báo từ CSM</div>
+											<div className={classes.userDesc}>Gửi đến ứng dụng của bạn</div>
 										</div>
-										{systemMessagesUnread > 0 && <span className={classes.unreadBadge}>{systemMessagesUnread}</span>}
+										{systemMessagesUnread > 0 && <span className={classes.unreadBadge}>{formatNotificationBadge(systemMessagesUnread)}</span>}
 									</div>
-									
 									<Divider style={{ margin: '8px 0' }} />
-								</>
+								</div>
 							)}
 							
-							{/* Show placeholder if all sections empty */}
-							{(internalUsersWithUnread.length === 0 && guestUsersWithUnread.length === 0 && systemMessages.length === 0 && totalSystemUnread === 0) && (
-								<div style={{ textAlign: 'center', padding: '20px', color: token.colorTextSecondary }}>
-									Chưa có tin nhắn
+							{/* Empty state */}
+							{(internalUsersWithUnread.length === 0 && guestUsersWithUnread.length === 0 && systemMessages.length === 0) && (
+								<div className={classes.notificationEmpty}>
+									<BellOutlined style={{ fontSize: '32px', color: token.colorBorder, marginBottom: '12px', display: 'block' }} />
+									<div>Chưa có tin nhắn</div>
+									<div style={{ fontSize: '12px', marginTop: '4px', color: token.colorTextTertiary }}>Tin nhắn sẽ xuất hiện ở đây</div>
 								</div>
 							)}
 						</div>
-					</>
+					</div>
 				)}
 			>
 				<div style={{ position: "relative" }}>
@@ -366,16 +454,18 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 					>
 						{dotProp ?? dot ? <span className="bg-blue-600 absolute right-2 top-1.5 h-2 w-2 rounded"></span> : null}
 					</BasicButton>
-				{(totalSystemUnread + totalGuestUnread + totalInternalUnread) > 0 && (
-					<span className="bg-red-500 animate-pulse absolute -right-2 -top-2 h-4 w-4 rounded-full flex items-center justify-center text-xs text-white font-bold z-10 border-2 border-white">{totalSystemUnread + totalGuestUnread + totalInternalUnread}</span>
+					{totalUnreadCount > 0 && (
+						<span className={clsx(classes.bellBadge, "absolute -right-2 -top-2 z-10 animate-pulse")}>
+							{formatNotificationBadge(totalUnreadCount)}
+						</span>
 					)}
 				</div>
 			</Popover>
 			{openChats.map((chat, index) => (
 				<InternalChatBox
-					key={chat.room}
+					key={getChatSessionKey(chat.room, chat.username)}
 					visible={true}
-					onClose={() => setOpenChats([])}
+					onClose={() => setOpenChats(prev => prev.filter(item => getChatSessionKey(item.room, item.username) !== getChatSessionKey(chat.room, chat.username)))}
 					username={chat.username}
 					room={chat.room}
 					index={index}

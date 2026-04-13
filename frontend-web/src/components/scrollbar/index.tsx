@@ -15,7 +15,7 @@ export const Scrollbar = forwardRef<HTMLElement, SimplebarProps>(({ children, au
 			scrollableNodeProps={{ ref }}
 			clickOnTrack={false}
 			{...other}
-			className={cn("h-full min-h-0 overflow-auto", other.className)}
+			className={cn("h-full w-full min-h-0 overflow-auto", other.className)}
 		>
 			{children}
 		</SimpleBar>

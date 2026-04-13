@@ -163,7 +163,7 @@ export const ROLE_LEVEL_OPTIONS_JSON = JSON.stringify({
 });
 
 // Query sys_apps table (always from csm app) to populate app_id dropdown
-const APP_ID_QUERY_JSON = JSON.stringify({
+export const APP_ID_QUERY_JSON = JSON.stringify({
 	query: [
 		{
 			obj_name: "sys_apps",
@@ -275,13 +275,13 @@ function buildTagField(
 
 export const SYSTEM_ACCOUNT_DEFAULT_FIELDS: TableField[] = [
 	{ f_name: "id", f_header: "ID", f_show: 1, f_types: "number", f_align: "right" },
-	{ f_name: "parent_account_id", f_header: "common.parentAccountId", f_show: 0, f_types: "string", f_align: "left" },
+	{ f_name: "parent_account_id", f_header: "common.parentAccountId", f_show: 0, f_types: "string_ro", f_align: "left" },
 	{ f_name: "username", f_header: "common.username", f_show: 1, f_types: "string", f_align: "left" },
 	{ f_name: "email", f_header: "common.email", f_show: 1, f_types: "string", f_align: "left" },
 	{ f_name: "phoneNumber", f_header: "common.phoneNumber", f_show: 1, f_types: "string", f_align: "left" },
 	{ f_name: "full_name", f_header: "common.fullName", f_show: 1, f_types: "string", f_align: "left" },
-	{ f_name: "user_address", f_header: "common.address", f_show: 1, f_types: "string", f_align: "left" },
-	{ f_name: "app_id", f_header: "common.appId", f_show: 1, f_types: "co", f_align: "left", f_cbo_query: APP_ID_QUERY_JSON } as any,
+	{ f_name: "user_address", f_header: "common.address", f_show: 0, f_types: "json", f_align: "left" },
+	{ f_name: "app_id", f_header: "common.appId", f_show: 0, f_types: "co_ro", f_align: "left", f_cbo_query: APP_ID_QUERY_JSON } as any,
 	{ f_name: "dev", f_header: "system.userPermission.option.dev", f_show: 1, f_types: "checkbox", f_align: "left" },
 	{ f_name: "app_token", f_header: "common.appToken", f_show: 0, f_types: "string", f_align: "left" },
 	{ f_name: "pass", f_header: "common.password", f_show: 1, f_types: "password", f_align: "left" },
@@ -325,9 +325,10 @@ export const SYSTEM_ACCOUNT_DEFAULT_FIELDS: TableField[] = [
 
 export const SUB_USER_DEFAULT_FIELDS: TableField[] = [
 	{ f_name: "id", f_header: "ID", f_show: 1, f_types: "number", f_align: "right" },
-	{ f_name: "parent_account_id", f_header: "common.parentAccountId", f_show: 1, f_types: "string", f_align: "left" },
+	{ f_name: "parent_account_id", f_header: "common.parentAccountId", f_show: 1, f_types: "string_ro", f_align: "left" },
 	{ f_name: "login_identifier", f_header: "common.loginIdentifier", f_show: 1, f_types: "string", f_align: "left" },
-	{ f_name: "user_address", f_header: "common.address", f_show: 1, f_types: "string", f_align: "left" },
+	{ f_name: "user_address", f_header: "common.address", f_show: 0, f_types: "json", f_align: "left" },
+	{ f_name: "app_id", f_header: "common.appId", f_show: 0, f_types: "co_ro", f_align: "left", f_cbo_query: APP_ID_QUERY_JSON } as any,
 	{ f_name: "group_id", f_header: "common.groupId", f_show: 1, f_types: "co", f_align: "left", f_cbo_query: PERMISSION_GROUP_QUERY_JSON },
 	{ f_name: "app_token", f_header: "common.appToken", f_show: 1, f_types: "string", f_align: "left" },
 	{ f_name: "pass", f_header: "common.password", f_show: 1, f_types: "password", f_align: "left" },
@@ -730,26 +731,7 @@ function beforeSave(row, seft) {
 
 	const actorIsDev = isDevActor();
 	const currentActorAppId = getCurrentAppId();
-	const resolvedAppId = actorIsDev
-		? String(row.app_id || seft.appId || "").trim()
-		: currentActorAppId;
-	if (!resolvedAppId) {
-		window.$message?.error(tr({
-			vi: "Vui lòng chọn app_id trước khi tạo tài khoản",
-			en: "Please select app_id before creating account",
-			zh: "创建账号前请先选择 app_id",
-		}));
-		return false;
-	}
-	const currentPass = String(row.pass || "").trim();
-	if (!currentPass) {
-		window.$message?.error(tr({
-			vi: "Vui lòng nhập mật khẩu cho tài khoản",
-			en: "Password is required",
-			zh: "请填写账号密码",
-		}));
-		return false;
-	}
+	const resolvedAppId = String(row.app_id || currentActorAppId || "csm").trim();
 	const primaryIdentifier = String(row.username || row.email || row.phoneNumber || "").trim();
 	if (!primaryIdentifier) {
 		window.$message?.error(tr({
@@ -759,7 +741,30 @@ function beforeSave(row, seft) {
 		}));
 		return false;
 	}
-	row.app_id = resolvedAppId;
+	const currentPass = String(row.pass || "").trim();
+	const accountRows = getRowsFromTable("csm_accounts");
+	const rowId = String(row.id || "").trim();
+	const existingAccount = accountRows.find((item) => {
+		if (rowId) {
+			return String(item?.id || "").trim() === rowId;
+		}
+		const itemIdentifier = String(item?.username || item?.email || item?.phoneNumber || "").trim();
+		return Boolean(itemIdentifier) && itemIdentifier === primaryIdentifier;
+	}) || null;
+	const previousPass = String(existingAccount?.pass || "").trim();
+	if (!currentPass) {
+		if (previousPass) {
+			row.pass = previousPass;
+		} else {
+			window.$message?.error(tr({
+				vi: "Vui lòng nhập mật khẩu cho tài khoản",
+				en: "Password is required",
+				zh: "请填写账号密码",
+			}));
+			return false;
+		}
+	}
+	row.app_id = resolvedAppId || "csm";
 	row.dev = Boolean(row.dev);
 	const targetIsDev = Boolean(row.dev);
 	const normalizedRoles = actorIsDev
@@ -777,10 +782,8 @@ function beforeSave(row, seft) {
 	row.app_token = seft.csmEncrypt([resolvedAppId, primaryIdentifier, roleValue, accessRight].join("_____"));
 	row.refresh = row.app_token;
 	if (currentPass) {
-		const decryptedPass = String(seft.csmDecrypt(currentPass) || "");
-		if (!decryptedPass.startsWith(primaryIdentifier + "_____")) {
-			row.pass = seft.csmEncrypt(primaryIdentifier + "_____" + currentPass);
-		}
+		// Backend chịu trách nhiệm mã hóa pass theo định danh hiện tại.
+		row.pass = currentPass;
 	}
 	row.permissionGroups = normalizeList(row.permissionGroups)
 		.map((item) => resolveComboValueByQuery("permissionGroups", item))
@@ -847,7 +850,9 @@ function beforeSave(row, seft) {
 		return false;
 	}
 	row.permissionBitfield = toBitfield(row).toString(36).toUpperCase();
-	row.permissionSchemaVersion = "v3";
+	if (Object.prototype.hasOwnProperty.call(row, "permissionSchemaVersion")) {
+		delete row.permissionSchemaVersion;
+	}
 	if (row.actived == null) row.actived = true;
 	return row;
 }
@@ -1154,15 +1159,7 @@ function beforeSave(row, seft) {
 	}
 	const decryptedSource = String(seft.csmDecrypt(sourceAppToken) || "");
 	const sourceParts = decryptedSource.split("_____");
-	const sourceAppId = String(sourceParts[0] || seft.user?.app_id || "").trim();
-	if (!sourceAppId) {
-		window.$message?.error(tr({
-			vi: "Không xác định được app_id từ tài khoản hiện tại",
-			en: "Cannot resolve app_id from current account",
-			zh: "无法从当前账号解析 app_id",
-		}));
-		return false;
-	}
+	const sourceAppId = String(sourceParts[0] || seft?.user?.app_id || "").trim() || "csm";
 	const loginIdentifier = String(row.login_identifier || "").trim();
 	if (!loginIdentifier) {
 		window.$message?.error(tr({
@@ -1172,15 +1169,43 @@ function beforeSave(row, seft) {
 		}));
 		return false;
 	}
-	row.parent_account_id = String(seft.user?.app_id || sourceAppId).trim();
-	row.app_token = seft.csmEncrypt([sourceAppId, loginIdentifier, "user", "0"].join("_____"));
-	row.refresh = row.app_token;
+	if (!String(row.app_id || "").trim()) {
+		row.app_id = sourceAppId;
+	}
+	if (!String(row.parent_account_id || "").trim()) {
+		row.parent_account_id = sourceAppId;
+	}
+	if (!String(row.app_token || "").trim()) {
+		row.app_token = seft.csmEncrypt([sourceAppId, loginIdentifier, "user", "0"].join("_____"));
+	}
+	if (!String(row.refresh || "").trim()) {
+		row.refresh = row.app_token;
+	}
 	const currentPass = String(row.pass || "").trim();
-	if (currentPass) {
-		const decryptedPass = String(seft.csmDecrypt(currentPass) || "");
-		if (!decryptedPass.startsWith(loginIdentifier + "_____")) {
-			row.pass = seft.csmEncrypt(loginIdentifier + "_____" + currentPass);
+	const groupRows = getRowsFromTable("csm_group_members");
+	const groupRowId = String(row.id || "").trim();
+	const existingGroupUser = groupRows.find((item) => {
+		if (groupRowId) {
+			return String(item?.id || "").trim() === groupRowId;
 		}
+		return String(item?.login_identifier || "").trim() === loginIdentifier;
+	}) || null;
+	const previousGroupPass = String(existingGroupUser?.pass || "").trim();
+	if (!currentPass) {
+		if (previousGroupPass) {
+			row.pass = previousGroupPass;
+		} else {
+			window.$message?.error(tr({
+				vi: "Vui lòng nhập mật khẩu cho sub-user",
+				en: "Password is required for sub-user",
+				zh: "子账号必须填写密码",
+			}));
+			return false;
+		}
+	}
+	if (currentPass) {
+		// Backend chịu trách nhiệm mã hóa pass theo login_identifier hiện tại.
+		row.pass = currentPass;
 	}
 	const rawPermissionGroups = normalizeList(row.permissionGroups);
 	const groupIdFromField = resolveComboValueByQuery("group_id", row.group_id);
@@ -1238,7 +1263,9 @@ function beforeSave(row, seft) {
 		return false;
 	}
 	row.permissionBitfield = toBitfield(row).toString(36).toUpperCase();
-	row.permissionSchemaVersion = "v3";
+	if (Object.prototype.hasOwnProperty.call(row, "permissionSchemaVersion")) {
+		delete row.permissionSchemaVersion;
+	}
 	if (row.actived == null) row.actived = true;
 	return row;
 }
@@ -1456,7 +1483,9 @@ if (hasPermissionGroups) {
 
 effectivePermissions = applyDataScope(effectivePermissions, row.dataScope);
 row.permissionBitfield = toBitfield(effectivePermissions, effectiveMenus, row.dataScope).toString(36).toUpperCase();
-row.permissionSchemaVersion = "v3";
+if (Object.prototype.hasOwnProperty.call(row, "permissionSchemaVersion")) {
+	delete row.permissionSchemaVersion;
+}
 
 return row;
 `;
@@ -1629,23 +1658,41 @@ function beforeSave(row, seft) {
 
 	// Single number representing all permissions for this group
 	row.permissionBitfield = toBitfield(row).toString(36).toUpperCase();
-	row.permissionSchemaVersion = "v3";
+	if (Object.prototype.hasOwnProperty.call(row, "permissionSchemaVersion")) {
+		delete row.permissionSchemaVersion;
+	}
 	if (row.status == null) row.status = 1;
 	return row;
 }
 `;
 
-export function mergeMenuTableFields(currentFields: any, defaultFields: TableField[], t: (key: string) => string) {
+export function mergeMenuTableFields(
+	currentFields: any,
+	defaultFields: TableField[],
+	t: (key: string) => string,
+	tEn?: (key: string) => string,
+	tZh?: (key: string) => string,
+) {
 	const existingFields = Array.isArray(currentFields) ? [...currentFields] : [];
 	const translateLabel = (label: unknown) => {
 		const text = String(label || "");
 		return text.includes(".") ? t(text) : text;
+	};
+	const translateLabelByLang = (label: unknown, lang: "vi" | "en" | "zh") => {
+		const text = String(label || "");
+		if (!text.includes(".")) return text;
+		if (lang === "en" && typeof tEn === "function") return tEn(text);
+		if (lang === "zh" && typeof tZh === "function") return tZh(text);
+		return t(text);
 	};
 	const treeFieldNames = new Set(["menusPermissions", "menusPermissionsAdd", "menusPermissionsDeny"]);
 	const translateField = (field: any) => ({
 		...field,
 		f_types: treeFieldNames.has(String(field?.f_name || "")) ? "menu_tree" : field?.f_types,
 		f_header: translateLabel(field?.f_header),
+		f_header_vi: String(field?.f_header_vi || "").trim() || translateLabelByLang(field?.f_header, "vi"),
+		f_header_en: String(field?.f_header_en || "").trim() || translateLabelByLang(field?.f_header, "en"),
+		f_header_zh: String(field?.f_header_zh || "").trim() || translateLabelByLang(field?.f_header, "zh"),
 		f_options: Array.isArray(field?.f_options)
 			? field.f_options.map((opt: any) => ({
 				...opt,
@@ -1658,7 +1705,35 @@ export function mergeMenuTableFields(currentFields: any, defaultFields: TableFie
 		.filter((field) => !existingNames.has(field.f_name))
 		.map((field) => translateField(field));
 	const normalizedExistingFields = existingFields.map((field: any) => translateField(field));
-	return [...normalizedExistingFields, ...missingFields];
+	const merged = [...normalizedExistingFields, ...missingFields];
+	const enforced = merged.map((field: any) => {
+		const fName = String(field?.f_name || "").trim();
+		if (!fName) return field;
+		if (fName === "pass") {
+			return { ...field, f_types: "password" };
+		}
+		if (fName === "user_address") {
+			return { ...field, f_types: "json", f_show: 0 };
+		}
+		if (fName === "app_id") {
+			return { ...field, f_types: "co_ro", f_show: 0, f_cbo_query: field?.f_cbo_query || APP_ID_QUERY_JSON };
+		}
+		return field;
+	});
+	if (!enforced.some((field: any) => String(field?.f_name || "").trim() === "app_id")) {
+		enforced.push({
+			f_name: "app_id",
+			f_header: translateLabel("common.appId"),
+			f_header_vi: translateLabelByLang("common.appId", "vi"),
+			f_header_en: translateLabelByLang("common.appId", "en"),
+			f_header_zh: translateLabelByLang("common.appId", "zh"),
+			f_show: 0,
+			f_types: "co_ro",
+			f_align: "left",
+			f_cbo_query: APP_ID_QUERY_JSON,
+		} as any);
+	}
+	return enforced;
 }
 
 function parseObject(raw: unknown): Record<string, any> | undefined {
@@ -1686,12 +1761,14 @@ export function parseSystemUserModes(base: any): SystemUserModesConfig {
 export function getDefaultSystemUserModeConfig(
 	mode: "main" | "sub",
 	t: (key: string) => string,
+	tEn?: (key: string) => string,
+	tZh?: (key: string) => string,
 ): SystemUserMenuModeConfig {
 	const defaultFields = mode === "main" ? SYSTEM_ACCOUNT_DEFAULT_FIELDS : SUB_USER_DEFAULT_FIELDS;
 	const defaultBeforeSave = mode === "main" ? SYSTEM_ACCOUNT_BEFORE_SAVE : SUB_USER_BEFORE_SAVE;
 	return {
 		table_name: mode === "main" ? "csm_accounts" : "csm_group_members",
-		table: mergeMenuTableFields([], defaultFields, t),
+		table: mergeMenuTableFields([], defaultFields, t, tEn, tZh),
 		trigger: { beforeSave: defaultBeforeSave, update: SYSTEM_USER_UPDATE_TRIGGER },
 		type_form: 1,
 		row_type_edit: 0,
@@ -1703,14 +1780,16 @@ function normalizeModeConfig(
 	rawMode: SystemUserMenuModeConfig | undefined,
 	mode: "main" | "sub",
 	t: (key: string) => string,
+	tEn?: (key: string) => string,
+	tZh?: (key: string) => string,
 ): SystemUserMenuModeConfig {
-	const fallback = getDefaultSystemUserModeConfig(mode, t);
+	const fallback = getDefaultSystemUserModeConfig(mode, t, tEn, tZh);
 	const rawTrigger = rawMode?.trigger && typeof rawMode.trigger === "object" ? rawMode.trigger : {};
 	return {
 		...fallback,
 		...rawMode,
 		table_name: String(rawMode?.table_name || fallback.table_name || "").trim(),
-		table: mergeMenuTableFields(rawMode?.table, mode === "main" ? SYSTEM_ACCOUNT_DEFAULT_FIELDS : SUB_USER_DEFAULT_FIELDS, t),
+		table: mergeMenuTableFields(rawMode?.table, mode === "main" ? SYSTEM_ACCOUNT_DEFAULT_FIELDS : SUB_USER_DEFAULT_FIELDS, t, tEn, tZh),
 		trigger: {
 			...rawTrigger,
 			beforeSave: rawTrigger.beforeSave || (fallback.trigger as any)?.beforeSave,
@@ -1722,10 +1801,17 @@ function normalizeModeConfig(
 	};
 }
 
-export function buildSystemUserMenuConfig(base: any, mode: "main" | "sub", resolvedAppId: string, t: (key: string) => string) {
+export function buildSystemUserMenuConfig(
+	base: any,
+	mode: "main" | "sub",
+	resolvedAppId: string,
+	t: (key: string) => string,
+	tEn?: (key: string) => string,
+	tZh?: (key: string) => string,
+) {
 	const modes = parseSystemUserModes(base);
-	const normalizedMain = normalizeModeConfig(modes.main, "main", t);
-	const normalizedSub = normalizeModeConfig(modes.sub, "sub", t);
+	const normalizedMain = normalizeModeConfig(modes.main, "main", t, tEn, tZh);
+	const normalizedSub = normalizeModeConfig(modes.sub, "sub", t, tEn, tZh);
 	const selectedMode = mode === "main" ? normalizedMain : normalizedSub;
 	const selectedTableName = String(selectedMode?.table_name || base?.table_name || "").trim();
 	const canonicalAppId = selectedTableName === "csm_accounts" || selectedTableName === "csm_group_members"
@@ -1816,7 +1902,7 @@ export function adaptSystemUserConfigForActor(
 			? config.table.map((field: any) => {
 				const fName = String(field?.f_name || "");
 				const hiddenByActor = SYSTEM_USER_INTERNAL_FIELD_NAMES.has(fName)
-					|| (actorType !== "dev" && fName === "app_id")
+					|| fName === "app_id"
 					|| (actorType === "dev" && SYSTEM_USER_PERMISSION_FIELD_NAMES.has(fName));
 				if (hiddenByActor) {
 					return { ...field, f_show: 0 };

@@ -4,6 +4,7 @@ import { BasicButton } from "#src/components";
 import { UserCircleIcon } from "#src/icons";
 import { useAuthStore, useUserStore, usePermissionStore, useTabsStore } from "#src/store";
 import { cn, isWindowsOs } from "#src/utils";
+import { logoutAndReload } from "#src/utils/app-reset";
 
 import { LogoutOutlined } from "@ant-design/icons";
 import { useKeyPress } from "ahooks";
@@ -19,16 +20,11 @@ export function UserMenu({ ...restProps }: ButtonProps) {
 
 	const onClick: MenuProps["onClick"] = async ({ key }) => {
 		if (key === "logout") {
-			// Check if currently in admin area
-			const currentPath = window.location.pathname;
-			const isInAdmin = currentPath.includes("homepage") || currentPath.includes("/system") || currentPath.includes("/personal-center");
-			// Clear permission store NGAY LẬP TỨC để xóa menu
+			// Clear permission store immediately to hide menu during logout transition
 			usePermissionStore.getState().reset();
-			// Call logout API
+			// Call logout API then hard reset app state + tabs
 			await logout();
-			// Force reload to login page to completely unmount everything
-			const loginUrl = isInAdmin ? "/login?redirect=admin" : "/login";
-			window.location.href = loginUrl;
+			logoutAndReload();
 		}
 		if (key === "personal-center") {
 			// Mở tab SPA đúng chuẩn, không đổi URL
