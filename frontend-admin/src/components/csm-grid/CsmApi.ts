@@ -1,5 +1,6 @@
 import { request } from "#src/utils";
 import { AI_TIMEOUT_MS } from "#src/api/ai/index";
+import { useUserStore } from "#src/store";
 
 // Định nghĩa kiểu GoogleIndexResponse cho các API Google Index
 export type GoogleIndexResponse = {
@@ -665,11 +666,30 @@ export async function getTableData<T>(params: {
 	limit?: number
 }) {
 	const TABLE_DATA_TIMEOUT_MS = 120000;
+	const shouldForceOnlyMySubusers = (() => {
+		if (params.only_my_subusers) return true;
+		if (params.obj_name !== "csm_group_members") return false;
+		if (typeof window === "undefined") return false;
+		const pathname = String(window.location?.pathname || "").toLowerCase();
+		if (!pathname.includes("/system/user")) return false;
+		try {
+			const userState = useUserStore.getState() as any;
+			const rolesRaw = userState?.roles;
+			const roles = Array.isArray(rolesRaw)
+				? rolesRaw
+				: (typeof rolesRaw === "string" ? rolesRaw.split(/[;,\n]/g) : Object.values(rolesRaw || {}));
+			const normalizedRoles = roles.map((item: any) => String(item || "").trim().toLowerCase()).filter(Boolean);
+			const isDevUser = Boolean(userState?.dev) || normalizedRoles.includes("dev");
+			return !isDevUser;
+		} catch {
+			return false;
+		}
+	})();
 	// In-memory cache to avoid repeated identical requests
 	const cacheKey = (() => {
 		let whereKey = "";
 		try { whereKey = params.where ? JSON.stringify(params.where) : ""; } catch { whereKey = String(params.where); }
-		return `${params.app_id}::${params.obj_name}::${whereKey}::${params.only_my_subusers ? 1 : 0}::${params.take ?? ''}::${params.lastkey ?? ''}::${params.offset ?? ''}::${params.limit ?? ''}`;
+		return `${params.app_id}::${params.obj_name}::${whereKey}::${shouldForceOnlyMySubusers ? 1 : 0}::${params.take ?? ''}::${params.lastkey ?? ''}::${params.offset ?? ''}::${params.limit ?? ''}`;
 	})();
 	const globalAny = window as any;
 	if (!globalAny.__csm_getTableDataCache) {
@@ -685,7 +705,7 @@ export async function getTableData<T>(params: {
 		app_id: params.app_id,
 		obj_name: params.obj_name,
 		...(params.where ? { e_where: params.where } : {}),
-		...(params.only_my_subusers ? { only_my_subusers: true } : {}),
+		...(shouldForceOnlyMySubusers ? { only_my_subusers: true } : {}),
 		...(params.take ? { take: params.take } : {}),
 		...(params.lastkey ? { lastkey: params.lastkey } : {}),
 		...(Number.isInteger(params.offset) ? { offset: params.offset } : {}),
