@@ -25,7 +25,7 @@ import { resolveDevFlag } from "#src/utils/dev-flag";
 import { adaptSystemUserConfigForActor, buildSystemUserMenuConfig, PERMISSION_GROUP_BEFORE_SAVE, PERMISSION_TOKEN_OPTIONS, ACTION_PRESET_OPTIONS_JSON, MENU_PERMISSION_OPTIONS, DATA_SCOPE_OPTIONS_JSON, DEPT_SELECT_QUERY_JSON, DEPT_SELECT_QUERY_BY_BRANCH_JSON, BRANCH_SELECT_QUERY_JSON, ROLE_LEVEL_OPTIONS_JSON, APP_ID_QUERY_JSON, type SystemUserActorType } from "./system-user-menu-config";
 import { Empty, Spin, Alert } from "antd";
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
-import { useParams } from "react-router";
+import { useLocation, useParams } from "react-router";
 import { getTableData, createTableStruct, type CreateTableStruct } from "#src/components/csm-grid/CsmApi";
 import { useTranslation } from "react-i18next";
 import { toPermissionBigInt, resolvePermissionDataScope, isSuperPermissionProfile } from "#src/utils/permission-bitfield";
@@ -866,7 +866,11 @@ function applyFriendlyFieldPolicy(tableName: string | undefined, rawFields: any[
  */
 export default function AdminPage() {
 	const { menuId } = useParams<{ menuId: string }>();
-	const normalizedMenuKey = useMemo(() => normalizeSystemMenuKey(menuId), [menuId]);
+	const location = useLocation();
+	const normalizedMenuKey = useMemo(
+		() => normalizeSystemMenuKey(menuId || location.pathname),
+		[menuId, location.pathname]
+	);
 	const apiWholeMenus = usePermissionStore(state => state.apiWholeMenus);
 	// Prefer reactive currentAppId from AppStore; fallback to user.app_id
 	const currentAppId = useAppStore(state => state.currentAppId);
