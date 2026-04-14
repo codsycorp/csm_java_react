@@ -25,7 +25,7 @@ import { resolveDevFlag } from "#src/utils/dev-flag";
 import { adaptSystemUserConfigForActor, buildSystemUserMenuConfig, PERMISSION_GROUP_BEFORE_SAVE, PERMISSION_TOKEN_OPTIONS, ACTION_PRESET_OPTIONS_JSON, MENU_PERMISSION_OPTIONS, DATA_SCOPE_OPTIONS_JSON, DEPT_SELECT_QUERY_JSON, DEPT_SELECT_QUERY_BY_BRANCH_JSON, BRANCH_SELECT_QUERY_JSON, ROLE_LEVEL_OPTIONS_JSON, APP_ID_QUERY_JSON, type SystemUserActorType } from "./system-user-menu-config";
 import { Empty, Spin, Alert } from "antd";
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
-import { useLocation, useParams } from "react-router";
+import { useParams } from "react-router";
 import { getTableData, createTableStruct, type CreateTableStruct } from "#src/components/csm-grid/CsmApi";
 import { useTranslation } from "react-i18next";
 import { toPermissionBigInt, resolvePermissionDataScope, isSuperPermissionProfile } from "#src/utils/permission-bitfield";
@@ -866,10 +866,23 @@ function applyFriendlyFieldPolicy(tableName: string | undefined, rawFields: any[
  */
 export default function AdminPage() {
 	const { menuId } = useParams<{ menuId: string }>();
-	const location = useLocation();
+	const activeTabKey = useTabsStore(state => state.activeKey);
+	const activeTab = useTabsStore(state => state.openTabs?.get?.(state.activeKey) as any);
+	const selectedMenuIdForTab = useUserStore(state => state.selectedMenuIdForTab);
+	const normalizedMenuSource = useMemo(() => {
+		return activeTab?.menuData?.path
+			|| activeTab?.m_configs?.path
+			|| activeTab?.menuData?.id
+			|| activeTab?.m_configs?.id
+			|| activeTab?.menuId
+			|| selectedMenuIdForTab
+			|| menuId
+			|| activeTabKey
+			|| "";
+	}, [activeTab?.menuData?.path, activeTab?.m_configs?.path, activeTab?.menuData?.id, activeTab?.m_configs?.id, activeTab?.menuId, selectedMenuIdForTab, menuId, activeTabKey]);
 	const normalizedMenuKey = useMemo(
-		() => normalizeSystemMenuKey(menuId || location.pathname),
-		[menuId, location.pathname]
+		() => normalizeSystemMenuKey(normalizedMenuSource),
+		[normalizedMenuSource]
 	);
 	const apiWholeMenus = usePermissionStore(state => state.apiWholeMenus);
 	// Prefer reactive currentAppId from AppStore; fallback to user.app_id
@@ -892,7 +905,6 @@ export default function AdminPage() {
 	const appId = (userAppId && userAppId.trim())
 		|| (currentAppId && currentAppId.trim())
 		|| useAppStore.getState().getCurrentAppId();
-	const selectedMenuIdForTab = useUserStore(state => state.selectedMenuIdForTab);
 	const { addTab } = useTabsStore();
 	const { t, i18n } = useTranslation();
 	const tEn = useMemo(() => i18n.getFixedT("en-US"), [i18n]);
