@@ -1456,7 +1456,9 @@ export default function AdminPage() {
 				operator: "AND" as const,
 				conditions: [{ field: "id", type: "like", value: "" }]
 			};
-			const shouldRestrictSystemSubUsers = isSystemUserRoute && isAdminUser;
+			// Enforce child-user scope for all non-dev actors on /system/user.
+			// This avoids missing backend guard when admin profile bits are not fully populated.
+			const shouldRestrictSystemSubUsers = isSystemUserRoute && !isDevUser;
 			const shouldRequestOnlyMySubusers = (tableName: string) => (
 				shouldRestrictSystemSubUsers && tableName === "csm_group_members"
 			);
