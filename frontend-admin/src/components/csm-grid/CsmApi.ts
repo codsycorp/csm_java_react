@@ -658,6 +658,7 @@ export async function getTableData<T>(params: {
 	app_id: string
 	obj_name: string
 	where?: Where
+	only_my_subusers?: boolean
 	take?: number
 	lastkey?: any
 	offset?: number
@@ -668,7 +669,7 @@ export async function getTableData<T>(params: {
 	const cacheKey = (() => {
 		let whereKey = "";
 		try { whereKey = params.where ? JSON.stringify(params.where) : ""; } catch { whereKey = String(params.where); }
-		return `${params.app_id}::${params.obj_name}::${whereKey}::${params.take ?? ''}::${params.lastkey ?? ''}::${params.offset ?? ''}::${params.limit ?? ''}`;
+		return `${params.app_id}::${params.obj_name}::${whereKey}::${params.only_my_subusers ? 1 : 0}::${params.take ?? ''}::${params.lastkey ?? ''}::${params.offset ?? ''}::${params.limit ?? ''}`;
 	})();
 	const globalAny = window as any;
 	if (!globalAny.__csm_getTableDataCache) {
@@ -684,6 +685,7 @@ export async function getTableData<T>(params: {
 		app_id: params.app_id,
 		obj_name: params.obj_name,
 		...(params.where ? { e_where: params.where } : {}),
+		...(params.only_my_subusers ? { only_my_subusers: true } : {}),
 		...(params.take ? { take: params.take } : {}),
 		...(params.lastkey ? { lastkey: params.lastkey } : {}),
 		...(Number.isInteger(params.offset) ? { offset: params.offset } : {}),
