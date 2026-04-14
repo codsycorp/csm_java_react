@@ -78,7 +78,7 @@ export function patchDynamicRoutesWithComponent(routes: any[]): any[] {
       let autoCodeName = route.auto_code_name || route.autoCodeName || '';
       let autoCode = route.auto_code || route.autoCode || '';
 
-      if (route.type_form === 1 || route.type_form === 2) {
+      if (route.type_form === 1) {
         Component = (props: any) => React.createElement(CsmDynamicGrid, {
           ...props,
           appId,
@@ -88,7 +88,7 @@ export function patchDynamicRoutesWithComponent(routes: any[]): any[] {
           decrypt: props.decrypt,
         });
       }
-      if (route.type_form === 3) {
+      if (route.type_form === 2) {
         Component = (props: any) => React.createElement(CsmMasterDetail, {
           ...props,
           appId,

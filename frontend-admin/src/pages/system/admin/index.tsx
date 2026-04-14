@@ -1702,8 +1702,16 @@ export default function AdminPage() {
 		);
 	}
 
-	// Render report before grid when both fields exist.
-	if (runtimeMenuData.report_name) {
+	// Legacy-compatible grid detection: some menus run as grid via trigger.load_db without table_name.
+	const hasGridLikePayload = Boolean(
+		runtimeMenuData.table_name
+		|| (runtimeMenuData as any)?.trigger?.load_db
+		|| typeForm === 1
+		|| typeForm === 2
+	);
+	// Report should not override grid-like menus that only use report_name for print templates.
+	const isReportMode = !!runtimeMenuData.report_name && (typeForm === 5 || !hasGridLikePayload);
+	if (isReportMode) {
 		return (
 			<div style={{ padding: 16, height: "100%" }}>
 				{mismatchAlertNode}
@@ -1715,8 +1723,8 @@ export default function AdminPage() {
 		);
 	}
 
-	// Render grid
-	if (runtimeMenuData.table_name) {
+	// Render grid (including trigger-only menus without table_name)
+	if (hasGridLikePayload) {
 		// Extract type_form and row_type_edit from backend, with support for override
 		let typeForm: "" | 1 | 2 | 3 | 4 | 5 | 6 = runtimeMenuData.type_form || "";
 		let rowTypeEdit: 0 | 1 = runtimeMenuData.row_type_edit ?? 0;

@@ -278,6 +278,16 @@ export function useMenu() {
 				const cleaned: any = {
 					key: item.key,
 					label: item.label,
+					id: item.id,
+					menuId: item.menuId || item.id,
+					path: item.path,
+					type_form: item.type_form,
+					table_name: item.table_name,
+					report_name: item.report_name,
+					auto_code_name: item.auto_code_name,
+					auto_code: item.auto_code,
+					kanban_config: item.kanban_config,
+					trigger: item.trigger,
 				};
 				if (item.icon && typeof item.icon !== 'string') {
 					cleaned.icon = item.icon;
@@ -481,6 +491,10 @@ export function useMenu() {
 					   const found = findMenuInTree(menu.children, targetId, targetKey);
 					   if (found) return found;
 				   }
+				   if (menu.nodes && menu.nodes.length > 0) {
+					   const found = findMenuInTree(menu.nodes, targetId, targetKey);
+					   if (found) return found;
+				   }
 			   }
 			   return null;
 		   };
@@ -490,6 +504,9 @@ export function useMenu() {
 			   || (legacyMenuIdFromKey ? findMenuInTree(apiWholeMenus, legacyMenuIdFromKey, normalizedKey) : null)
 			   || (menuIdSegmentFromKey ? findMenuInTree(apiWholeMenus, menuIdSegmentFromKey, normalizedKey) : null)
 		   ) as any;
+		   if (!selectedApiMenu && selectedProcessedMenu) {
+			   selectedApiMenu = selectedProcessedMenu;
+		   }
 
 		   // Fallback menu hệ thống: chỉ áp dụng cho nhóm path legacy cần ép m_configs.
 		   // Không apply toàn bộ /system/* để tránh ghi đè các submenu hệ thống có config riêng từ API.
@@ -547,31 +564,47 @@ export function useMenu() {
 			   return;
 		   }
 
-		   // --- Xác định path động theo 1 luồng thống nhất cho SPA ---
-		   let dynamicPath = normalizedKey;
-		   let dynamicLabel = selectedProcessedMenu?.label || normalizedKey;
-		   let isDynamicMenu = false;
+		   const hasRuntimePayload = !!(
+			   selectedApiMenu && (
+				   selectedApiMenu.table_name
+				   || selectedApiMenu.report_name
+				   || selectedApiMenu.auto_code_name
+				   || selectedApiMenu.auto_code
+				   || selectedApiMenu.kanban_config
+				   || selectedApiMenu?.trigger?.load_db
+				   || selectedApiMenu?.trigger?.report_db
+				   || Number(selectedApiMenu.type_form) === 4
+				   || Number(selectedApiMenu.type_form) === 6
+			   )
+		   );
 
-		   if (selectedApiMenu) {
-			   const typeForm = Number(selectedApiMenu.type_form);
-			   const hasGridPayload = Boolean(selectedApiMenu.table_name);
-			   const hasReportPayload = Boolean(selectedApiMenu.report_name);
-			   const hasKanbanPayload = Boolean(selectedApiMenu.kanban_config);
-			   const hasDynamicCodePayload = Boolean(selectedApiMenu.auto_code || selectedApiMenu.auto_code_name);
-			   const isGridRuntimeType = [1, 2, 4, 5, 6].includes(typeForm);
-
-			   if (hasGridPayload || hasReportPayload || hasKanbanPayload || hasDynamicCodePayload || isGridRuntimeType) {
-				   const dynamicMenuId = selectedApiMenu.id || selectedApiMenu.key;
-				   if (dynamicMenuId) {
-					   dynamicPath = `/system/grid/${dynamicMenuId}`;
-					   isDynamicMenu = true;
-				   }
-				   dynamicLabel = selectedApiMenu.label || selectedApiMenu.title || selectedProcessedMenu?.label || "Dynamic Menu";
+		   if (selectedApiMenu && hasRuntimePayload) {
+			   const runtimeMenuId = String(selectedApiMenu.id || selectedApiMenu.key || selectedProcessedMenu?.menuId || selectedProcessedMenu?.id || menuIdToSearch || menuIdSegmentFromKey || "").trim();
+			   if (runtimeMenuId) {
+				   const dynamicPath = `/system/grid/${runtimeMenuId}`;
+				   const dynamicLabel = selectedApiMenu.label || selectedApiMenu.title || selectedProcessedMenu?.label || "Dynamic Menu";
+				   useUserStore.getState().setSelectedMenuIdForTab(runtimeMenuId);
+				   addTab(dynamicPath, {
+					   key: dynamicPath,
+					   label: String(dynamicLabel).replace(/^.*?\.\s+/, '').trim(),
+					   closable: true,
+					   draggable: true,
+					   menuId: runtimeMenuId,
+					   menuData: selectedApiMenu,
+					   m_configs: selectedApiMenu,
+					   type_form: selectedApiMenu.type_form,
+					   table_name: selectedApiMenu.table_name,
+					   report_name: selectedApiMenu.report_name,
+					   kanban_config: selectedApiMenu.kanban_config,
+					   auto_code_name: selectedApiMenu.auto_code_name,
+					   auto_code: selectedApiMenu.auto_code,
+				   });
+				   setActiveKey(dynamicPath);
+				   return;
 			   }
 		   }
 
-
-	   // Nếu là dynamic link (type_form === 3)
+	   // Dynamic link chỉ chạy khi là pure-link.
 		   if (selectedApiMenu && Number(selectedApiMenu.type_form) === 3) {
 			   const linkUrl = selectedApiMenu.dynamic_link_url || selectedApiMenu.v_link || "";
 			   if (!linkUrl) {
@@ -592,35 +625,34 @@ export function useMenu() {
 			   return;
 		   }
 
-		   // External link (http/https)
-		   if (/^https?:/.test(dynamicPath)) {
-			   window.open(dynamicPath, '_blank');
+		   // Legacy fallback: key kiểu menu_xxx vẫn phải mở runtime grid.
+		   if (!selectedApiMenu && menuIdSegmentFromKey) {
+			   const dynamicPath = `/system/grid/${menuIdSegmentFromKey}`;
+			   useUserStore.getState().setSelectedMenuIdForTab(menuIdSegmentFromKey);
+			   addTab(dynamicPath, {
+				   key: dynamicPath,
+				   label: String(selectedProcessedMenu?.label || selectedProcessedMenu?.title || menuIdSegmentFromKey),
+				   closable: true,
+				   draggable: true,
+				   menuId: menuIdSegmentFromKey,
+			   });
+			   setActiveKey(dynamicPath);
 			   return;
 		   }
 
-		   // Nếu là menu động (grid/report/kanban/dynamic-code) thì lưu lại menuId cho tab
-		   if (selectedApiMenu && isDynamicMenu) {
-			   useUserStore.getState().setSelectedMenuIdForTab(selectedApiMenu.id || selectedApiMenu.key);
+		   // External link fallback
+		   if (/^https?:/.test(normalizedKey)) {
+			   window.open(normalizedKey, '_blank');
+			   return;
 		   }
-		   // SPA: chỉ set tab state, path trên URL giữ nguyên
-		   // Lưu đầy đủ thông tin menuData/m_configs/component vào tab state để reload không mất props
-		   addTab(dynamicPath, {
-			   key: dynamicPath,
-			   label: String(dynamicLabel).replace(/^.*?\.\s+/, '').trim(),
+
+		   addTab(normalizedKey, {
+			   key: normalizedKey,
+			   label: String(selectedProcessedMenu?.label || normalizedKey),
 			   closable: true,
 			   draggable: true,
-			   // Patch thêm các props động để tabbar khôi phục đúng
-			   menuData: selectedApiMenu,
-			   m_configs: selectedApiMenu,
-			   type_form: selectedApiMenu.type_form,
-			   table_name: selectedApiMenu.table_name,
-			   report_name: selectedApiMenu.report_name,
-			   kanban_config: selectedApiMenu.kanban_config,
-			   auto_code_name: selectedApiMenu.auto_code_name,
-			   auto_code: selectedApiMenu.auto_code,
 		   });
-		   setActiveKey(dynamicPath);
-		   // Không gọi navigate, không đổi path
+		   setActiveKey(normalizedKey);
 		   return;
 	};
 
