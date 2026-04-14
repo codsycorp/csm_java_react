@@ -87,6 +87,32 @@ function hasAuthState() {
 		return false;
 	}
 }
+
+function shouldForceSubuserScope(payload: any): boolean {
+	if (!payload || typeof payload !== "object") return false;
+	if (payload.only_my_subusers) return false;
+	if (String(payload.obj_name || "").trim() !== "csm_group_members") return false;
+	if (typeof window === "undefined") return false;
+	const pathname = String(window.location?.pathname || "").toLowerCase();
+	if (!pathname.includes("/system/user")) return false;
+	try {
+		const userState = useUserStore.getState() as any;
+		const rolesRaw = userState?.roles;
+		const roles = Array.isArray(rolesRaw)
+			? rolesRaw
+			: (typeof rolesRaw === "string" ? rolesRaw.split(/[;,\n]/g) : Object.values(rolesRaw || {}));
+		const normalizedRoles = roles.map((item: any) => String(item || "").trim().toLowerCase()).filter(Boolean);
+		const isDevUser = Boolean(userState?.dev) || normalizedRoles.includes("dev");
+		return !isDevUser;
+	} catch {
+		return false;
+	}
+}
+
+function withForcedSubuserScope(payload: any): any {
+	if (!shouldForceSubuserScope(payload)) return payload;
+	return { ...payload, only_my_subusers: true };
+}
 // 请求超时时间
 const API_TIMEOUT = Number(import.meta.env.VITE_API_TIMEOUT) || 10000;
 
@@ -102,10 +128,28 @@ const defaultConfig: Options = {
    hooks: {
 	   beforeRequest: [
 		   async (request, options) => {
+				let requestOverride: Request | undefined;
 			   const ignoreLoading = options.ignoreLoading;
 			   if (!ignoreLoading) {
 				   globalProgress.start();
 			   }
+				try {
+					if (request.url.includes("/get-table-data")) {
+						const optionsAny = options as any;
+						if (optionsAny.json && typeof optionsAny.json === "object") {
+							optionsAny.json = withForcedSubuserScope(optionsAny.json);
+						} else if (typeof optionsAny.body === "string") {
+							const parsedBody = JSON.parse(optionsAny.body);
+							const nextPayload = withForcedSubuserScope(parsedBody);
+							if (nextPayload !== parsedBody) {
+								optionsAny.body = JSON.stringify(nextPayload);
+								requestOverride = new Request(request, { body: optionsAny.body });
+							}
+						}
+					}
+				} catch {
+					// Ignore payload rewrite failures and continue with original request.
+				}
 				// Set language header for all requests
 				request.headers.set(LANG_HEADER, usePreferencesStore.getState().language);
 				const clientId = getClientId();
@@ -183,6 +227,7 @@ const defaultConfig: Options = {
 						all_headers: Array.from(request.headers.entries()).map(([k, v]) => ({ key: k, value: v }))
 					});
 				}
+				return requestOverride;
 			},
 		],
 		afterResponse: [
