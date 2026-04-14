@@ -1456,12 +1456,41 @@ export default function AdminPage() {
 				operator: "AND" as const,
 				conditions: [{ field: "id", type: "like", value: "" }]
 			};
+			const shouldRestrictSystemSubUsers = isSystemUserRoute && isAdminUser;
+			const shouldRequestOnlyMySubusers = (tableName: string) => (
+				shouldRestrictSystemSubUsers && tableName === "csm_group_members"
+			);
+			const ownerCandidates = new Set(
+				userSubOwnerCandidates
+					.map((value) => String(value).trim().toLowerCase())
+					.filter(Boolean)
+			);
+			const applySubuserOwnershipFilter = (tableName: string, inputRows: any[]) => {
+				if (!shouldRequestOnlyMySubusers(tableName) || !Array.isArray(inputRows) || inputRows.length === 0) {
+					return inputRows;
+				}
+				if (ownerCandidates.size === 0) {
+					return inputRows;
+				}
 
-			// Áp dụng quy tắc backend mới: chỉ cần truyền only_my_subusers: true khi là admin và bảng là csm_group_members
-			let onlyMySubusers = false;
-			if (isSystemUserRoute && isAdminUser && primaryTable === "csm_group_members") {
-				onlyMySubusers = true;
-			}
+				const ownerFields = ["parent_account_id", "parent_id", "parent_user_id"];
+				const hasOwnerField = inputRows.some((row: any) => ownerFields.some((field) => row?.[field] != null && String(row[field]).trim() !== ""));
+				if (!hasOwnerField) {
+					return inputRows;
+				}
+
+				return inputRows.filter((row: any) => {
+					for (const field of ownerFields) {
+						const rawValue = row?.[field];
+						if (rawValue == null) continue;
+						const normalizedValue = String(rawValue).trim().toLowerCase();
+						if (normalizedValue && ownerCandidates.has(normalizedValue)) {
+							return true;
+						}
+					}
+					return false;
+				});
+			};
 
 			await ensureSystemRouteTables();
 
@@ -1469,10 +1498,11 @@ export default function AdminPage() {
 				app_id: (primaryTable === "csm_accounts" || primaryTable === "csm_group_members") ? "csm" : primaryTableAppId,
 				obj_name: primaryTable,
 				where: defaultFilter,
-				...(onlyMySubusers ? { only_my_subusers: true } : {})
+				...(shouldRequestOnlyMySubusers(primaryTable) ? { only_my_subusers: true } : {})
 			});
 
-			const rows = response.rows || response.data || [];
+			const rawRows = response.rows || response.data || [];
+			const rows = applySubuserOwnershipFilter(primaryTable, rawRows);
 			const fieldsPK = response.fieldsPK || ["id"];
 			const deduped = Array.from(
 				new Map(
@@ -1500,9 +1530,10 @@ export default function AdminPage() {
 							app_id: (t === "csm_accounts" || t === "csm_group_members") ? "csm" : tableAppId,
 							obj_name: t,
 							where: tableFilter,
-							...(t === "csm_group_members" && onlyMySubusers ? { only_my_subusers: true } : {})
+							...(shouldRequestOnlyMySubusers(t) ? { only_my_subusers: true } : {})
 						});
-						const rowsT = (resT as any).rows || (resT as any).data || [];
+						const rawRowsT = (resT as any).rows || (resT as any).data || [];
+						const rowsT = applySubuserOwnershipFilter(t, rawRowsT);
 						const pkT = (resT as any).fieldsPK || ["id"];
 						newDatabase[t] = { rows: rowsT, fieldsPK: pkT };
 						   // ...existing code...
@@ -1536,9 +1567,11 @@ export default function AdminPage() {
 					const depResponse = await getTableData<any>({
 						app_id: (depTable === "csm_accounts" || depTable === "csm_group_members") ? "csm" : tableAppId,
 						obj_name: depTable,
-						where: tableFilter
+						where: tableFilter,
+						...(shouldRequestOnlyMySubusers(depTable) ? { only_my_subusers: true } : {})
 					});
-					const depRows = (depResponse as any).rows || (depResponse as any).data || [];
+					const rawDepRows = (depResponse as any).rows || (depResponse as any).data || [];
+					const depRows = applySubuserOwnershipFilter(depTable, rawDepRows);
 					const depFieldsPK = (depResponse as any).fieldsPK || ["id"];
 					newDatabase[depTable] = { rows: depRows, fieldsPK: depFieldsPK };
 					   // ...existing code...
