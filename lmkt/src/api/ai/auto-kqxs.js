@@ -170,21 +170,33 @@
     try {
       var html = document.documentElement;
       var body = document.body;
+      if (runtimeTheme && typeof runtimeTheme.isDark === "boolean") return runtimeTheme.isDark;
+
       var hints = [
         String(runtimeTheme && runtimeTheme.theme || "").toLowerCase(),
         String(runtimeTheme && runtimeTheme.mode || "").toLowerCase(),
         String(runtimeTheme && runtimeTheme.colorMode || "").toLowerCase(),
         String(html && html.getAttribute ? html.getAttribute("data-theme") : "").toLowerCase(),
         String(html && html.getAttribute ? html.getAttribute("theme") : "").toLowerCase(),
-        String(body && body.getAttribute ? body.getAttribute("data-theme") : "").toLowerCase(),
-        String(window.localStorage.getItem("theme") || "").toLowerCase(),
-        String(window.localStorage.getItem("theme_mode") || "").toLowerCase()
+        String(body && body.getAttribute ? body.getAttribute("data-theme") : "").toLowerCase()
       ].filter(Boolean);
 
-      if (runtimeTheme && runtimeTheme.isDark === true) return true;
-      if (hints.some(function (item) { return item.indexOf("dark") >= 0; })) return true;
-      if (html && html.classList && (html.classList.contains("dark") || html.classList.contains("theme-dark"))) return true;
-      if (body && body.classList && (body.classList.contains("dark") || body.classList.contains("theme-dark"))) return true;
+      function hasClass(el, cls) {
+        return !!(el && el.classList && el.classList.contains(cls));
+      }
+
+      var hasDarkHint = hints.some(function (item) {
+        return item.indexOf("dark") >= 0 || item === "night";
+      }) || hasClass(html, "dark") || hasClass(html, "theme-dark") || hasClass(body, "dark") || hasClass(body, "theme-dark");
+
+      var hasLightHint = hints.some(function (item) {
+        return item.indexOf("light") >= 0 || item === "day";
+      }) || hasClass(html, "light") || hasClass(html, "theme-light") || hasClass(body, "light") || hasClass(body, "theme-light");
+
+      // Ưu tiên cờ light/dark hiện tại trên DOM/runtime, tránh kẹt theo giá trị lưu cũ.
+      if (hasLightHint && !hasDarkHint) return false;
+      if (hasDarkHint && !hasLightHint) return true;
+
       if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) return true;
     } catch (e) {}
     return false;
@@ -353,20 +365,79 @@
     var runtimeTheme = window.csmTheme || {};
     var overrides = getThemeOverrides();
     var isDark = detectSystemDarkMode(runtimeTheme);
+    function parseColorToRgb(color) {
+      var c = String(color || "").trim();
+      if (!c) return null;
+      var m;
+      if ((m = c.match(/^#([0-9a-f]{3})$/i))) {
+        var h = m[1];
+        return {
+          r: parseInt(h.charAt(0) + h.charAt(0), 16),
+          g: parseInt(h.charAt(1) + h.charAt(1), 16),
+          b: parseInt(h.charAt(2) + h.charAt(2), 16)
+        };
+      }
+      if ((m = c.match(/^#([0-9a-f]{6})$/i))) {
+        var hh = m[1];
+        return {
+          r: parseInt(hh.slice(0, 2), 16),
+          g: parseInt(hh.slice(2, 4), 16),
+          b: parseInt(hh.slice(4, 6), 16)
+        };
+      }
+      if ((m = c.match(/^rgba?\(([^)]+)\)$/i))) {
+        var parts = m[1].split(",").map(function (s) { return Number(String(s || "").trim()); });
+        if (parts.length >= 3 && isFinite(parts[0]) && isFinite(parts[1]) && isFinite(parts[2])) {
+          return { r: parts[0], g: parts[1], b: parts[2] };
+        }
+      }
+      return null;
+    }
+    function luminance01(color) {
+      var rgb = parseColorToRgb(color);
+      if (!rgb) return null;
+      return (0.2126 * rgb.r + 0.7152 * rgb.g + 0.0722 * rgb.b) / 255;
+    }
+    function preferBg(color, darkFallback, lightFallback) {
+      var raw = String(color || "").trim();
+      if (!raw) return isDark ? darkFallback : lightFallback;
+      var l = luminance01(raw);
+      if (l == null) return raw;
+      if (isDark && l > 0.75) return darkFallback;
+      if (!isDark && l < 0.20) return lightFallback;
+      return raw;
+    }
+    function preferText(color, darkFallback, lightFallback) {
+      var raw = String(color || "").trim();
+      if (!raw) return isDark ? darkFallback : lightFallback;
+      var l = luminance01(raw);
+      if (l == null) return raw;
+      if (isDark && l < 0.30) return darkFallback;
+      if (!isDark && l > 0.85) return lightFallback;
+      return raw;
+    }
+    var cssPrimary = getCssVar("--ant-color-primary");
+    var cssPageBg = getCssVar("--ant-color-bg-layout");
+    var cssCardBg = getCssVar("--ant-color-bg-container");
+    var cssText = getCssVar("--ant-color-text");
+    var cssMuted = getCssVar("--ant-color-text-secondary");
+    var cssBorder = getCssVar("--ant-color-border");
+    var cssInputBg = getCssVar("--ant-color-bg-container");
+    var cssInputText = getCssVar("--ant-color-text");
     var base = {
       isDark: isDark,
-      primary: getCssVar("--ant-color-primary") || runtimeTheme.themeColorPrimary || "#1677ff",
+      primary: cssPrimary || runtimeTheme.themeColorPrimary || "#1677ff",
       success: getCssVar("--ant-color-success") || "#52c41a",
       warning: getCssVar("--ant-color-warning") || "#faad14",
       error: getCssVar("--ant-color-error") || "#ff4d4f",
-      pageBg: getCssVar("--ant-color-bg-layout") || (isDark ? "#0f1115" : "#f5f7fb"),
-      cardBg: getCssVar("--ant-color-bg-container") || (runtimeTheme.getCardBackground && runtimeTheme.getCardBackground()) || (isDark ? "#141414" : "#ffffff"),
-      text: getCssVar("--ant-color-text") || (runtimeTheme.getTextColor && runtimeTheme.getTextColor()) || (isDark ? "rgba(255,255,255,0.88)" : "#1f1f1f"),
+      pageBg: preferBg(cssPageBg || (runtimeTheme.getLayoutBackground && runtimeTheme.getLayoutBackground()), "#0f1115", "#f5f7fb"),
+      cardBg: preferBg(cssCardBg || (runtimeTheme.getCardBackground && runtimeTheme.getCardBackground()), "#141414", "#ffffff"),
+      text: preferText(cssText || (runtimeTheme.getTextColor && runtimeTheme.getTextColor()), "rgba(255,255,255,0.88)", "#1f1f1f"),
       textInverse: getCssVar("--ant-color-text-light-solid") || "#ffffff",
-      muted: getCssVar("--ant-color-text-secondary") || (runtimeTheme.getSecondaryTextColor && runtimeTheme.getSecondaryTextColor()) || (isDark ? "rgba(255,255,255,0.45)" : "#666666"),
-      border: getCssVar("--ant-color-border") || (runtimeTheme.getBorderColor && runtimeTheme.getBorderColor()) || (isDark ? "#303030" : "#d9d9d9"),
-      inputBg: getCssVar("--ant-color-bg-container") || (isDark ? "#11161f" : "#ffffff"),
-      inputText: getCssVar("--ant-color-text") || (isDark ? "rgba(255,255,255,0.88)" : "#1f1f1f")
+      muted: preferText(cssMuted || (runtimeTheme.getSecondaryTextColor && runtimeTheme.getSecondaryTextColor()), "rgba(255,255,255,0.45)", "#666666"),
+      border: cssBorder || (runtimeTheme.getBorderColor && runtimeTheme.getBorderColor()) || (isDark ? "#303030" : "#d9d9d9"),
+      inputBg: preferBg(cssInputBg, "#11161f", "#ffffff"),
+      inputText: preferText(cssInputText, "rgba(255,255,255,0.88)", "#1f1f1f")
     };
     return Object.assign({}, base, overrides, {
       isDark: typeof overrides.isDark === "boolean" ? overrides.isDark : base.isDark
@@ -376,32 +447,32 @@
   var UI_TEXT = {
     vi: {
       title: "Thống Kê Lô",
-      fromDate: "Từ Ngày (dd/mm/yyyy)",
-      toDate: "Đến Ngày (dd/mm/yyyy)",
+      fromDate: "Từ Ngày",
+      toDate: "Đến Ngày",
       region: "Miền",
       weekday: "Thứ Tuần",
       color: "Màu Tô",
       sapXep: "Sắp Xếp",
       selectStation: "Chọn Đài",
-      selectStationSoChu: "Chọn Đài Số Chủ",
-      tkType: "Loại TK",
+      selectStationSoChu: "Lịch Sử Sổ Chủ",
+      tkType: "Loại Thống Kê",
       searchType: "Loại Tìm",
-      soKy: "Tổng Số Kỳ Thống Kê",
-      laySoKy: "Lấy Bao Nhiêu Kỳ",
-      demLe: "Lọc: Ra ≤ (lần)",
-      kxhMin: "Lọc: KXH ≥ (kỳ)",
-      demKq3Le: "Lọc: KQ3 ≤ (lần)",
-      lsBatDau: "Bắt Đầu Từ Kỳ Thứ",
-      demGe: "Lọc: Ra ≥ (lần)",
-      demToNhoHon: "Lọc: To/Nhỏ ≤",
-      kxhTu: "KXH Từ Kỳ",
-      kxhDen: "KXH Đến Kỳ",
+      soKy: "Chu Kỳ",
+      laySoKy: "Lấy Số Kỳ",
+      demLe: "Đếm KQ1 <=",
+      kxhMin: "KXH KQ2 >=",
+      demKq3Le: "Đếm KQ3 <=",
+      lsBatDau: "Max LSBD >=",
+      demGe: "Đếm Sổ Chủ >=",
+      demToNhoHon: "Đếm Số Lần <=",
+      kxhTu: "KXH Từ >=",
+      kxhDen: "KXH Đến <=",
       locSau: "Lọc Sâu KXH",
-      soChu: "Số Chủ / Dự Đoán",
+      soChu: "Tìm Sổ Chủ",
       btnUpdate: "Cập nhật kết quả",
-      btnResult: "① Xem Kết Quả",
-      btnStat: "② Thống Kê Cơ Bản",
-      btnStatNew: "③ Thống Kê Nâng Cao",
+      btnResult: "Kết Quả",
+      btnStat: "Thống Kê",
+      btnStatNew: "Thống Kê Mới",
       btnExportExcel: "Xuất Excel",
       btnCaptureTab: "Chụp Tab",
       btnExportTable: "Xuất Bảng",
@@ -434,8 +505,8 @@
       tk3: "Thống Kê 3 Đài",
       theoNgay: "Theo Ngày",
       theoKy: "Theo Kỳ",
-      sxMoi: "Mới Nhất Đứng Trước",
-      sxCu: "Cũ Nhất Đứng Trước",
+      sxMoi: "Ngày mới đứng trước",
+      sxCu: "Ngày cũ đứng trước",
       lgHeThong: "Hệ Số Bắc (2 hoặc 3)",
       lgCdMode: "Kiểu Xét Kết Quả",
       lgCdAll: "Tất Cả (Đầu + Đuôi)",
@@ -638,12 +709,12 @@
       searchType: "Search Mode",
       soKy: "Total Periods",
       laySoKy: "Periods to Take",
-      demLe: "Filter: Hits ≤ N",
-      kxhMin: "Filter: No-show ≥ N",
-      demKq3Le: "Filter: KQ3 Hits ≤ N",
+      demLe: "Count KQ1 ≤ N",
+      kxhMin: "No-show ≥ N",
+      demKq3Le: "Count KQ3 ≤ N",
       lsBatDau: "Start from Period #",
-      demGe: "Filter: Hits ≥ N",
-      demToNhoHon: "Filter: Big/Small ≤ N",
+      demGe: "Count ≥ N",
+      demToNhoHon: "Count Small ≤ N",
       kxhTu: "Gap Range From",
       kxhDen: "Gap Range To",
       locSau: "Deep Gap Filter",
@@ -686,12 +757,12 @@
       theoKy: "By Period",
       sxMoi: "Newest First",
       sxCu: "Oldest First",
-      lgHeThong: "North System (2 or 3)",
-      lgCdMode: "Result Type",
+      lgHeThong: "North System (2 or 3 digits)",
+      lgCdMode: "Result Check Mode",
       lgCdAll: "All (Head + Tail)",
       lgCdC: "Main (Head)",
       lgCdD: "Reverse (Tail)",
-      lgCdPair: "Pair (Head-Tail)",
+      lgCdPair: "Pairs (Head-Tail)",
       lgGhTu: "Rank From (1–60)",
       lgGhDen: "Rank To (1–60)",
       lgNgayChay: "History Days (0 = All)",
@@ -720,7 +791,7 @@
       lgKttFieldBdau: "B Head (North Station)",
       lgKttFieldBduoi: "B Tail (North Station)",
       lgSlrColSo: "Number",
-      lgSlrColGap: "Gap (day / period / weekday)",
+      lgSlrColGap: "Gap (days / periods / weekday)",
       lgSlrColFirst: "First Hit Position",
       lgToolTh: "④ Statistics",
       lgToolThTab: "Summary",
@@ -813,7 +884,7 @@
       lgThAutoTaskCount: "Tasks",
       lgThAutoStopped: "Stopped at task",
       lgThAutoTriet: "Triet Groups",
-      lgThAutoTrietDuoi: "Chase Last 6 Days",
+      lgThAutoTrietDuoi: "Follow Last 6 Days",
       lgThAutoGroupsTriet: "Triet Number Groups",
       lgThAutoSummary: "Auto Summary",
       lgThKetQua: "Result",
@@ -839,18 +910,18 @@
       lgThSourceManual: "Source: Manual numbers",
       lgThManualInputCount: "Manual numbers",
       lgThManualGroupCount: "Normal groups",
-      lgThManualTrietCount: "Triet groups",
+      lgThManualTrietCount: "Triet Groups",
       lgThManualRunCount: "Run input",
       lgThAutoFlow: "Auto Flow",
       lgThAutoRunSearch: "⚙ Run Auto Search",
       lgThAutoRun: "Auto Filter (C1–C6)",
       lgThAutoC1Ngay: "C1 Day: Top N longest",
       lgThAutoC1Ky: "C1 Period: Top N longest",
-      lgThAutoC2NgayCX: "C2 Days Gone (e.g. 5,9,13)",
-      lgThAutoC3KyCX: "C3 Periods Gone (e.g. 5,9,13)",
-      lgThAutoC4NgayGap: "C4: Days Gone > Max Day Gap + N",
-      lgThAutoC5KyGap: "C5: Periods Gone > Max Period Gap + N",
-      lgThAutoC6Both: "C6: Days Gone ≥ Max Day AND Periods Gone ≥ Max Period",
+      lgThAutoC2NgayCX: "C2: Days No-show (e.g. 5,9,13)",
+      lgThAutoC3KyCX: "C3: Periods No-show (e.g. 5,9,13)",
+      lgThAutoC4NgayGap: "C4: Days No-show > Max Day Gap + N",
+      lgThAutoC5KyGap: "C5: Periods No-show > Max Period Gap + N",
+      lgThAutoC6Both: "C6: Days No-show ≥ Max Day AND Periods No-show ≥ Max Period",
       lgThAutoResult: "Auto Filter Results",
       lgThResultSet: "Result Lines",
       lgThSelect: "Select",
@@ -888,12 +959,12 @@
       searchType: "查询模式",
       soKy: "统计总期数",
       laySoKy: "取期数",
-      demLe: "筛选：出现 ≤ N 次",
+      demLe: "筛选：KQ1 ≤ N 次",
       kxhMin: "筛选：未出现 ≥ N 期",
       demKq3Le: "筛选：KQ3 ≤ N 次",
       lsBatDau: "从第几期开始",
       demGe: "筛选：出现 ≥ N 次",
-      demToNhoHon: "筛选：大小 ≤ N",
+      demToNhoHon: "筛选：数敖 ≤ N 次",
       kxhTu: "间隔区间起",
       kxhDen: "间隔区间止",
       locSau: "深度筛选间隔",
@@ -937,7 +1008,7 @@
       sxMoi: "最新在前",
       sxCu: "最旧在前",
       lgHeThong: "北部号系（2或3位）",
-      lgCdMode: "统计类型",
+      lgCdMode: "开奖结果检查方式",
       lgCdAll: "全部（头 + 尾）",
       lgCdC: "正号（头）",
       lgCdD: "倒号（尾）",
@@ -1096,8 +1167,8 @@
       lgThAutoRun: "自动筛选 (C1–C6)",
       lgThAutoC1Ngay: "C1 天：最长N个",
       lgThAutoC1Ky: "C1 期：最长N个",
-      lgThAutoC2NgayCX: "C2 未出现天数（例: 5,9,13）",
-      lgThAutoC3KyCX: "C3 未出现期数（例: 5,9,13）",
+      lgThAutoC2NgayCX: "C2 未出现天数（例如：5,9,13）",
+      lgThAutoC3KyCX: "C3 未出现期数（例如：5,9,13）",
       lgThAutoC4NgayGap: "C4: 未出现天数 > 最大间隔 + N",
       lgThAutoC5KyGap: "C5: 未出现期数 > 最大间隔 + N",
       lgThAutoC6Both: "C6: 天数 ≥ 最大天间隔 且 期数 ≥ 最大期间隔",
@@ -1438,6 +1509,24 @@
     var maQuery = he === 3 ? "sp_Get3_DD3" : "sp_Get2_DD3";
     // Match legacy HTML SoLauRaNamBac: CboLoai.setComboValue("sp_Get2_DD3,D_-P_-B_")
     return maQuery + ",D_-P_-B_";
+  }
+
+  function isLegacyDd3NbQueryValue(value, heThong) {
+    var raw = parseLegacyLoaiTimMeta(value, heThong).rawValue;
+    return /,D_-P_-B_$/.test(String(raw || ""));
+  }
+
+  function getLegacySlrPreferredQueryValue(heThong, optionList) {
+    var he = Number(heThong || 2) === 3 ? 3 : 2;
+    var options = Array.isArray(optionList) && optionList.length
+      ? optionList
+      : buildLegacyThDefaultQueryTypeDefs(he);
+    for (var i = 0; i < options.length; i += 1) {
+      var v = String((options[i] && options[i].value) || "").trim();
+      if (!v) continue;
+      if (!isLegacyDd3NbQueryValue(v, he)) return v;
+    }
+    return String((options[0] && options[0].value) || getLegacySlrDefaultQueryValue(he));
   }
 
   // Static TongHop auto query-type definitions (replaces DB-driven CboLoaiTim.php)
@@ -1889,6 +1978,18 @@
     if (value == null) return "";
     if (typeof value === "number" && Number.isFinite(value)) return value;
     if (typeof value === "boolean") return value ? "TRUE" : "FALSE";
+    if (Array.isArray(value)) {
+      return value.map(function (item) { return toExcelCellValue(item); }).join("\n");
+    }
+    if (typeof value === "object") {
+      var extracted = extractExportTextFromNode(value);
+      if (extracted) return extracted;
+      try {
+        return JSON.stringify(value);
+      } catch (_jsonErr) {
+        return "";
+      }
+    }
     return String(value);
   }
 
@@ -1986,6 +2087,49 @@
       && typeof XLSX.writeFile === "function"
       && typeof XLSX.utils.encode_cell === "function"
       && typeof XLSX.utils.encode_range === "function");
+  }
+
+  function withMultiSortColumns(columns) {
+    var src = Array.isArray(columns) ? columns : [];
+    var total = src.length;
+
+    function normalizeSorter(sorter, multiple) {
+      if (!sorter) return sorter;
+      if (typeof sorter === "function") {
+        return { compare: sorter, multiple: multiple };
+      }
+      if (sorter === true) {
+        return { multiple: multiple };
+      }
+      if (typeof sorter === "object") {
+        if (sorter.multiple != null) return sorter;
+        var nextSorter = {};
+        Object.keys(sorter).forEach(function (k) { nextSorter[k] = sorter[k]; });
+        nextSorter.multiple = multiple;
+        return nextSorter;
+      }
+      return sorter;
+    }
+
+    function mapColumns(list) {
+      var len = list.length;
+      return list.map(function (col, idx) {
+        if (!col || typeof col !== "object") return col;
+        var nextCol = {};
+        Object.keys(col).forEach(function (k) { nextCol[k] = col[k]; });
+        var multiple = Math.max(1, len - idx);
+        if (nextCol.sorter) {
+          nextCol.sorter = normalizeSorter(nextCol.sorter, multiple);
+        }
+        if (Array.isArray(nextCol.children) && nextCol.children.length > 0) {
+          nextCol.children = mapColumns(nextCol.children);
+        }
+        return nextCol;
+      });
+    }
+
+    if (!total) return src;
+    return mapColumns(src);
   }
 
   function canWriteXlsx(XLSX) {
@@ -2489,6 +2633,18 @@
     URL.revokeObjectURL(url);
   }
 
+  function downloadArrayBufferAsFile(fileName, bytes, mimeType) {
+    var blob = new Blob([bytes], { type: mimeType || "application/octet-stream" });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
   function KQXSApp() {
     var useState = ReactRef.useState;
     var useEffect = ReactRef.useEffect;
@@ -2540,11 +2696,11 @@
     var _al = useState([]), thongkeTabItems = _al[0], setThongkeTabItems = _al[1];
     var _an = useState(2), legacyHeThong = _an[0], setLegacyHeThong = _an[1];
     var _ao = useState({ D_dau: true, D_duoi: true, P_dau: true, P_duoi: true, T_dau: true, T_duoi: true, B_dau: true, B_duoi: true }), legacyLocMap = _ao[0], setLegacyLocMap = _ao[1];
-    var _ao1 = useState(getLegacySlrDefaultQueryValue(2)), legacySlrQueryValue = _ao1[0], setLegacySlrQueryValue = _ao1[1];
+    var _ao1 = useState(getLegacySlrPreferredQueryValue(2)), legacySlrQueryValue = _ao1[0], setLegacySlrQueryValue = _ao1[1];
     var _ap = useState("C_D"), legacyCdMode = _ap[0], setLegacyCdMode = _ap[1];
     var _aq = useState(1), legacyRankFrom = _aq[0], setLegacyRankFrom = _aq[1];
-    var _ar = useState(10), legacyRankTo = _ar[0], setLegacyRankTo = _ar[1];
-    var _ab1 = useState(200), legacyNgayChay = _ab1[0], setLegacyNgayChay = _ab1[1];
+    var _ar = useState(20), legacyRankTo = _ar[0], setLegacyRankTo = _ar[1];
+    var _ab1 = useState(500), legacyNgayChay = _ab1[0], setLegacyNgayChay = _ab1[1];
     var _ab2 = useState(false), legacyTheoThu = _ab2[0], setLegacyTheoThu = _ab2[1];
     var _ab2k = useState(false), legacyTheoKy = _ab2k[0], setLegacyTheoKy = _ab2k[1];
     var _ab3 = useState(true), legacyChkHieu = _ab3[0], setLegacyChkHieu = _ab3[1];
@@ -2561,188 +2717,605 @@
     var _slr_af7 = useState(false), legacySlrAutoC6Both = _slr_af7[0], setLegacySlrAutoC6Both = _slr_af7[1];
     var _slr_autoRows = useState([]), legacySlrAutoRows = _slr_autoRows[0], setLegacySlrAutoRows = _slr_autoRows[1];
     var _slr_autoSummary = useState(""), legacySlrAutoSummary = _slr_autoSummary[0], setLegacySlrAutoSummary = _slr_autoSummary[1];
-    // --- SLR Auto-Filter by Week Segment state ---
-    var _slr_weekFrom = useState(1), legacySlrWeekFrom = _slr_weekFrom[0], setLegacySlrWeekFrom = _slr_weekFrom[1];
-    var _slr_weekTo = useState(1), legacySlrWeekTo = _slr_weekTo[0], setLegacySlrWeekTo = _slr_weekTo[1];
+    var _slr_autoDebugLogs = useState([]), legacySlrAutoDebugLogs = _slr_autoDebugLogs[0], setLegacySlrAutoDebugLogs = _slr_autoDebugLogs[1];
+    // --- SLR Auto-run custom conditions ---
+    var _slr_autoSttRange = useState(4), legacySlrAutoSttRange = _slr_autoSttRange[0], setLegacySlrAutoSttRange = _slr_autoSttRange[1];
+    var _slr_autoNoHitDays = useState(14), legacySlrAutoNoHitDays = _slr_autoNoHitDays[0], setLegacySlrAutoNoHitDays = _slr_autoNoHitDays[1];
+    var _slr_autoNamWeeks = useState(2), legacySlrAutoNamWeeks = _slr_autoNamWeeks[0], setLegacySlrAutoNamWeeks = _slr_autoNamWeeks[1];
 
-    // --- SLR Auto-filtered rows by week segment ---
+    // --- SLR Auto-filtered rows (kept for display binding) ---
     var legacySlrAutoFilteredRows = useMemo(function () {
-      var from = Math.min(legacySlrWeekFrom, legacySlrWeekTo);
-      var to = Math.max(legacySlrWeekFrom, legacySlrWeekTo);
-      return (legacySlrAutoRows || []).filter(function (row) {
-        var week = Number(row.gap) || 0;
-        return week >= from && week <= to;
-      });
-    }, [legacySlrAutoRows, legacySlrWeekFrom, legacySlrWeekTo]);
-        // --- SLR Auto-filter config and helpers ---
-        function getLegacySlrFilterConfig() {
-          function parseAutoNumberList(raw) {
-            var text = String(raw || "").trim();
-            if (!text) return [];
-            var seen = {};
-            return text.split(/[\s,;|]+/).map(function (s) {
-              return parseInt(String(s || "").trim(), 10);
-            }).filter(function (n) {
-              if (isNaN(n) || n < 0) return false;
-              if (seen[n]) return false;
-              seen[n] = true;
-              return true;
-            });
+      return Array.isArray(legacySlrAutoRows) ? legacySlrAutoRows : [];
+    }, [legacySlrAutoRows]);
+
+        function getLegacySlrHitByMode(row, mode) {
+          var m = String(mode || "C_D").toUpperCase();
+          var rec = row || {};
+          if (m === "C") return Number(rec.cAll || 0);
+          if (m === "D") return Number(rec.dAll || 0);
+          if (m === "2C") return Number(rec.pAll || 0);
+          return Number(rec.cAll || 0) + Number(rec.dAll || 0);
+        }
+
+        function flattenLegacySlrWeekCells(weekRows) {
+          var src = Array.isArray(weekRows) ? weekRows : [];
+          var keys = ["cn", "t7", "t6", "t5", "t4", "t3", "t2"];
+          var out = [];
+          for (var wi = 0; wi < src.length; wi += 1) {
+            var wr = src[wi] || {};
+            for (var ki = 0; ki < keys.length; ki += 1) {
+              var cell = wr[keys[ki]];
+              if (!cell || !cell.date) continue;
+              out.push({
+                weekIdx: wi,
+                key: keys[ki],
+                cell: cell,
+                ymd: normalizeLegacyDateYmd(cell.date)
+              });
+            }
+          }
+          out = out.filter(function (x) { return !!x.ymd; });
+          out.sort(function (a, b) {
+            return String(b.ymd).localeCompare(String(a.ymd), "vi", { numeric: true, sensitivity: "base" });
+          });
+          return out;
+        }
+
+        function getLegacySlrWeekKeyFromDate(dateValue) {
+          var label = legacySlrThuLabelFromYmd(normalizeLegacyDateYmd(dateValue));
+          if (label === "CN") return "cn";
+          if (label === "T7") return "t7";
+          if (label === "T6") return "t6";
+          if (label === "T5") return "t5";
+          if (label === "T4") return "t4";
+          if (label === "T3") return "t3";
+          if (label === "T2") return "t2";
+          return "";
+        }
+
+        function findLegacySlrReferenceCellInfo(weekRows, targetDate) {
+          var src = Array.isArray(weekRows) ? weekRows : [];
+          if (!src.length) return null;
+          var keys = ["cn", "t7", "t6", "t5", "t4", "t3", "t2"];
+          var targetYmd = normalizeLegacyDateYmd(targetDate);
+          if (targetYmd) {
+            for (var wi = 0; wi < src.length; wi += 1) {
+              var wr = src[wi] || {};
+              for (var ki = 0; ki < keys.length; ki += 1) {
+                var key = keys[ki];
+                var cell = wr[key];
+                if (!cell || !cell.date) continue;
+                if (normalizeLegacyDateYmd(cell.date) === targetYmd) {
+                  return { weekIdx: wi, key: key, cell: cell, ymd: targetYmd };
+                }
+              }
+            }
+          }
+          var fallbackKey = getLegacySlrWeekKeyFromDate(targetDate);
+          if (fallbackKey) {
+            for (var fwi = 0; fwi < src.length; fwi += 1) {
+              var fwr = src[fwi] || {};
+              var fcell = fwr[fallbackKey];
+              if (fcell && fcell.date) {
+                return { weekIdx: fwi, key: fallbackKey, cell: fcell, ymd: normalizeLegacyDateYmd(fcell.date) };
+              }
+            }
+          }
+          return null;
+        }
+
+        function buildLegacySlrCellRangeCache(cell, rankTo, mode) {
+          var maxRank = Math.max(1, Number(rankTo || 1));
+          var m = String(mode || "C_D").toUpperCase();
+          var hitMark = new Array(maxRank + 1).fill(0);
+          var namHitMark = new Array(maxRank + 1).fill(0);
+          var presentMark = new Array(maxRank + 1).fill(0);
+          var cNamArr = new Array(maxRank + 1).fill(0);
+          var dNamArr = new Array(maxRank + 1).fill(0);
+          var cBacArr = new Array(maxRank + 1).fill(0);
+          var dBacArr = new Array(maxRank + 1).fill(0);
+          var rows = Array.isArray(cell && cell.rows) ? cell.rows : [];
+          for (var i = 0; i < rows.length; i += 1) {
+            var r = rows[i] || {};
+            var stt = Number(r.stt || 0);
+            if (stt < 1 || stt > maxRank) continue;
+            presentMark[stt] = 1;
+            if (getLegacySlrHitByMode(r, mode) > 0) hitMark[stt] = 1;
+            var namHit = 0;
+            if (m === "C") namHit = Number(r.cNam || 0);
+            else if (m === "D") namHit = Number(r.dNam || 0);
+            else if (m === "2C") namHit = Number(r.pNam || 0);
+            else namHit = Number(r.cNam || 0) + Number(r.dNam || 0);
+            if (namHit > 0) namHitMark[stt] = 1;
+            // actual hit counts for weekly stats display (cNam == pNam for 2C mode)
+            cNamArr[stt] = Number(r.cNam || 0);
+            dNamArr[stt] = Number(r.dNam || 0);
+            cBacArr[stt] = Number(r.cBac || 0);
+            dBacArr[stt] = Number(r.dBac || 0);
+          }
+          var hitPrefix = new Array(maxRank + 1).fill(0);
+          var namHitPrefix = new Array(maxRank + 1).fill(0);
+          var presentPrefix = new Array(maxRank + 1).fill(0);
+          var cNamPrefix = new Array(maxRank + 1).fill(0);
+          var dNamPrefix = new Array(maxRank + 1).fill(0);
+          var cBacPrefix = new Array(maxRank + 1).fill(0);
+          var dBacPrefix = new Array(maxRank + 1).fill(0);
+          for (var ri = 1; ri <= maxRank; ri += 1) {
+            hitPrefix[ri] = hitPrefix[ri - 1] + hitMark[ri];
+            namHitPrefix[ri] = namHitPrefix[ri - 1] + namHitMark[ri];
+            presentPrefix[ri] = presentPrefix[ri - 1] + presentMark[ri];
+            cNamPrefix[ri] = cNamPrefix[ri - 1] + cNamArr[ri];
+            dNamPrefix[ri] = dNamPrefix[ri - 1] + dNamArr[ri];
+            cBacPrefix[ri] = cBacPrefix[ri - 1] + cBacArr[ri];
+            dBacPrefix[ri] = dBacPrefix[ri - 1] + dBacArr[ri];
           }
           return {
-            c1GapTop: parseInt(legacySlrAutoC1Gap, 10) || 0,
-            c1FirstTop: parseInt(legacySlrAutoC1First, 10) || 0,
-            c2Gap: parseAutoNumberList(legacySlrAutoC2Gap),
-            c3First: parseAutoNumberList(legacySlrAutoC3First),
-            c4Gap: String(legacySlrAutoC4Gap || "").trim() === "" ? -1 : (parseInt(legacySlrAutoC4Gap, 10) || 0),
-            c5First: String(legacySlrAutoC5First || "").trim() === "" ? -1 : (parseInt(legacySlrAutoC5First, 10) || 0),
-            c6Both: !!legacySlrAutoC6Both
+            hitPrefix: hitPrefix,
+            namHitPrefix: namHitPrefix,
+            presentPrefix: presentPrefix,
+            cNamPrefix: cNamPrefix,
+            dNamPrefix: dNamPrefix,
+            cBacPrefix: cBacPrefix,
+            dBacPrefix: dBacPrefix
           };
         }
 
-        function hasLegacySlrAutoFilter(cfg) {
-          var filterCfg = cfg || getLegacySlrFilterConfig();
-          return filterCfg.c1GapTop > 0 || filterCfg.c1FirstTop > 0 || filterCfg.c2Gap.length > 0 || filterCfg.c3First.length > 0 || filterCfg.c4Gap >= 0 || filterCfg.c5First >= 0 || filterCfg.c6Both;
+        function isLegacySlrNoHitRangeCached(cache, sttFrom, sttTo) {
+          var from = Math.max(1, Number(sttFrom || 1));
+          var to = Math.max(from, Number(sttTo || from));
+          var needed = to - from + 1;
+          var present = Number((cache.presentPrefix[to] || 0) - (cache.presentPrefix[from - 1] || 0));
+          if (present < needed) return false;
+          var hit = Number((cache.hitPrefix[to] || 0) - (cache.hitPrefix[from - 1] || 0));
+          return hit === 0;
         }
 
-        function filterLegacySlrRowsWithConfig(rows, filterCfg) {
-          var sourceRows = Array.isArray(rows) ? rows.slice() : [];
-          var cfg = filterCfg || getLegacySlrFilterConfig();
-          if (!hasLegacySlrAutoFilter(cfg)) return [];
+        function getLegacySlrNamHitCountRangeCached(cache, sttFrom, sttTo) {
+          var from = Math.max(1, Number(sttFrom || 1));
+          var to = Math.max(from, Number(sttTo || from));
+          return Number((cache.namHitPrefix[to] || 0) - (cache.namHitPrefix[from - 1] || 0));
+        }
 
-          var c1GapMap = {};
-          var c1FirstMap = {};
-          if (cfg.c1GapTop > 0) {
-            sourceRows.slice().sort(function (a, b) {
-              return (Number(b.gap) || 0) - (Number(a.gap) || 0);
-            }).slice(0, cfg.c1GapTop).forEach(function (row) {
-              c1GapMap[row.so] = 1;
-            });
+        function getLegacySlrHitCountRangeCached(cache, sttFrom, sttTo) {
+          var from = Math.max(1, Number(sttFrom || 1));
+          var to = Math.max(from, Number(sttTo || from));
+          return Number((cache.hitPrefix[to] || 0) - (cache.hitPrefix[from - 1] || 0));
+        }
+
+        function getLegacySlrRangeCachedCount(prefix, sttFrom, sttTo) {
+          if (!prefix || !prefix.length) return 0;
+          var f = Math.max(1, Number(sttFrom || 1));
+          var t = Math.max(f, Number(sttTo || f));
+          var maxIdx = prefix.length - 1;
+          t = Math.min(t, maxIdx);
+          return Math.max(0, Number((prefix[t] || 0) - (prefix[Math.min(f - 1, maxIdx)] || 0)));
+        }
+
+        function getLegacySlrTongNamZeroWeekStreak(weekRows) {
+          var src = Array.isArray(weekRows) ? weekRows : [];
+          var streak = 0;
+          var maxStreak = 0;
+          for (var i = 0; i < src.length; i += 1) {
+            var tongNam = Number((src[i] && src[i].tongNam) || 0);
+            if (tongNam === 0) {
+              streak += 1;
+              if (streak > maxStreak) maxStreak = streak;
+            } else {
+              streak = 0;
+            }
           }
-          if (cfg.c1FirstTop > 0) {
-            sourceRows.slice().sort(function (a, b) {
-              return (Number(b.first_hit_idx) || 0) - (Number(a.first_hit_idx) || 0);
-            }).slice(0, cfg.c1FirstTop).forEach(function (row) {
-              c1FirstMap[row.so] = 1;
-            });
-          }
-
-          return sourceRows.filter(function (row) {
-            var matchC1 = !!c1GapMap[row.so] || !!c1FirstMap[row.so];
-            var matchC2 = cfg.c2Gap.length > 0 && cfg.c2Gap.indexOf(Number(row.gap) || 0) >= 0;
-            var matchC3 = cfg.c3First.length > 0 && cfg.c3First.indexOf(Number(row.first_hit_idx) || 0) >= 0;
-            var matchC4 = cfg.c4Gap >= 0 && ((Number(row.gap) || 0) > ((Number(row.gap) || 0) + cfg.c4Gap));
-            var matchC5 = cfg.c5First >= 0 && ((Number(row.first_hit_idx) || 0) > ((Number(row.first_hit_idx) || 0) + cfg.c5First));
-            var matchC6 = !!cfg.c6Both && ((Number(row.gap) || 0) >= (Number(row.gap) || 0)) && ((Number(row.first_hit_idx) || 0) >= (Number(row.first_hit_idx) || 0));
-            return matchC1 || matchC2 || matchC3 || matchC4 || matchC5 || matchC6;
-          });
+          return maxStreak;
         }
 
-        function buildLegacySlrAutoSummaryText(rows, filterCfg) {
-          var cfg = filterCfg || getLegacySlrFilterConfig();
-          if (!rows || !rows.length) return "";
-          var lines = [];
-          lines.push("Auto rows: " + rows.length);
-          lines.push("Filter: " + [
-            cfg.c1GapTop > 0 ? ("C1G=" + cfg.c1GapTop) : "",
-            cfg.c1FirstTop > 0 ? ("C1F=" + cfg.c1FirstTop) : "",
-            cfg.c2Gap.length ? ("C2=" + cfg.c2Gap.join(",")) : "",
-            cfg.c3First.length ? ("C3=" + cfg.c3First.join(",")) : "",
-            cfg.c4Gap >= 0 ? ("C4=" + cfg.c4Gap) : "",
-            cfg.c5First >= 0 ? ("C5=" + cfg.c5First) : "",
-            cfg.c6Both ? "C6=1" : ""
-          ].filter(Boolean).join(" | "));
-          return lines.join("\n");
-        }
-        // --- SLR Auto-filter runner (độc lập với luồng thủ công) ---
+        // --- SLR Auto-filter runner (quét theo Loại Tìm và điều kiện STT/Ngày) ---
         async function runLegacySlrAutoFilter(options) {
           options = options || {};
           var silent = !!options.silent;
+          var completedOk = false;
+          var runLogs = [];
+          function pushAutoLog(message) {
+            var line = "[" + dateFormat(new Date(), "hh:MM:ss") + "] " + String(message || "");
+            runLogs.push(line);
+            if (runLogs.length > 600) runLogs = runLogs.slice(runLogs.length - 600);
+            if (runLogs.length === 1 || runLogs.length % 6 === 0) {
+              setLegacySlrAutoDebugLogs(runLogs.slice());
+            }
+            try { console.log("[SLR-AUTO]", line); } catch (_e) {}
+          }
+
+          pushAutoLog("Bắt đầu chạy tự động SLR");
           setLoading(true);
           setProgress(15);
           try {
             var timkiemRows = [];
             try {
               timkiemRows = await fetchRowsFromGetTableData("kqxs_timkiem", legacyHeThong);
+              pushAutoLog("Tải timkiemRows: " + (timkiemRows && timkiemRows.length || 0) + " dòng");
             } catch (_slrAutoTkErr) {
               timkiemRows = [];
+              pushAutoLog("Không tải được timkiemRows, dùng mảng rỗng");
             }
 
-            var selectedQueryValues = Array.isArray(legacySlrSelectedQueryTypes) && legacySlrSelectedQueryTypes.length
-              ? legacySlrSelectedQueryTypes.slice()
-              : [getLegacySpecialQueryTypeForTab("slr").value];
-            selectedQueryValues = selectedQueryValues.map(function (v) {
-              return parseLegacyLoaiTimMeta(v, legacyHeThong).rawValue;
+            var validOptionValues = (legacySlrQueryTypeOptions || []).map(function (item) {
+              return String((item && item.value) || "");
             }).filter(Boolean);
-            var uniqueMap = {};
-            var mergedRows = [];
+            var rawSelected = Array.isArray(legacySlrSelectedQueryTypes) && legacySlrSelectedQueryTypes.length
+              ? legacySlrSelectedQueryTypes.filter(function (v) {
+                  return validOptionValues.indexOf(String(v || "")) >= 0;
+                })
+              : [];
+            var selectedQueryValues = (rawSelected.length ? rawSelected : [getLegacySpecialQueryTypeForTab("slr").value])
+              .map(function (v) {
+                return parseLegacyLoaiTimMeta(v, legacyHeThong).rawValue;
+              }).filter(Boolean);
+            var resultRows = [];
             var dataByQuery = {};
 
+            var sttWindowSize = Math.max(1, Number(legacySlrAutoSttRange || 4));
+            var noHitDays = Math.max(1, Number(legacySlrAutoNoHitDays || 14));
+            var tongNamWeeks = Math.max(1, Number(legacySlrAutoNamWeeks || 2));
+            var modeNow = String(legacyCdMode || "C_D").toUpperCase();
+            pushAutoLog("Tham số: LoạiTìm=" + selectedQueryValues.length + ", STTWindow=" + sttWindowSize + ", NoHitDays=" + noHitDays + ", NamNoHitWeeks=" + tongNamWeeks + ", Mode=" + modeNow);
+
+            function findNearestHitInfoForRange(cells, cellCaches, sttFrom, sttTo) {
+              for (var idx = 0; idx < cells.length; idx += 1) {
+                var cache = cellCaches[idx] || {};
+                var hitCount = getLegacySlrHitCountRangeCached(cache, sttFrom, sttTo);
+                if (hitCount > 0) {
+                  var cell = cells[idx] && cells[idx].cell || {};
+                  return {
+                    idx: idx,
+                    date: String((cell && cell.date) || "")
+                  };
+                }
+              }
+              return null;
+            }
+
+            function buildAutoRowForSttRange(args) {
+              var sttFrom = Number(args && args.sttFrom || 0);
+              var sttTo = Number(args && args.sttTo || 0);
+              var qv = String(args && args.qv || "");
+              var queryLabel = String(args && args.queryLabel || qv);
+              var weekRows = Array.isArray(args && args.weekRows) ? args.weekRows : [];
+              var cells = Array.isArray(args && args.cells) ? args.cells : [];
+              var cellCaches = Array.isArray(args && args.cellCaches) ? args.cellCaches : [];
+              var noHitDays = Math.max(1, Number(args && args.noHitDays || 1));
+              var tongNamWeeks = Math.max(1, Number(args && args.tongNamWeeks || 1));
+              var modeNow = String(args && args.modeNow || "C_D").toUpperCase();
+              var rankTo = Math.max(sttTo, Number(args && args.rankTo || sttTo));
+              var rowKeyPrefix = String(args && args.rowKeyPrefix || "slr_auto");
+
+              var streak = 0;
+              var endIdx = -1;
+              for (var ci = 0; ci < cells.length; ci += 1) {
+                if (isLegacySlrNoHitRangeCached(cellCaches[ci], sttFrom, sttTo)) {
+                  streak += 1;
+                  if (streak >= noHitDays) {
+                    endIdx = ci;
+                    break;
+                  }
+                } else {
+                  streak = 0;
+                }
+              }
+              if (endIdx < 0) return null;
+
+              var startIdx = endIdx - noHitDays + 1;
+              var matchedWindow = cells.slice(startIdx, endIdx + 1);
+              if (!matchedWindow || !matchedWindow.length) return null;
+
+              var weekNamTotals = {};
+              var weekCNamTotals = {};
+              var weekDNamTotals = {};
+              var weekCBacTotals = {};
+              var weekDBacTotals = {};
+              for (var wi = 0; wi < cells.length; wi += 1) {
+                var wk = Number(cells[wi] && cells[wi].weekIdx || 0);
+                if (!weekNamTotals[wk]) {
+                  weekNamTotals[wk] = 0;
+                  weekCNamTotals[wk] = 0;
+                  weekDNamTotals[wk] = 0;
+                  weekCBacTotals[wk] = 0;
+                  weekDBacTotals[wk] = 0;
+                }
+                var cacheWi = cellCaches[wi];
+                weekNamTotals[wk] += getLegacySlrNamHitCountRangeCached(cacheWi, sttFrom, sttTo);
+                weekCNamTotals[wk] += getLegacySlrRangeCachedCount(cacheWi.cNamPrefix, sttFrom, sttTo);
+                weekDNamTotals[wk] += getLegacySlrRangeCachedCount(cacheWi.dNamPrefix, sttFrom, sttTo);
+                weekCBacTotals[wk] += getLegacySlrRangeCachedCount(cacheWi.cBacPrefix, sttFrom, sttTo);
+                weekDBacTotals[wk] += getLegacySlrRangeCachedCount(cacheWi.dBacPrefix, sttFrom, sttTo);
+              }
+
+              var weekNoHitStreak = 0;
+              var weekNoHitMax = 0;
+              for (var wri = 0; wri < weekRows.length; wri += 1) {
+                var namTotal = Number(weekNamTotals[wri] || 0);
+                if (namTotal === 0) {
+                  weekNoHitStreak += 1;
+                  if (weekNoHitStreak > weekNoHitMax) weekNoHitMax = weekNoHitStreak;
+                } else {
+                  break;
+                }
+              }
+              if (weekNoHitMax < tongNamWeeks) return null;
+
+              var rowWeekSummaryRows = buildLegacySlrAutoWeekSummaryFromTotals(modeNow, weekRows.length, weekCNamTotals, weekDNamTotals, weekCBacTotals, weekDBacTotals);
+              var latestCell = matchedWindow[0].cell || {};
+              var oldestCell = matchedWindow[matchedWindow.length - 1].cell || {};
+              var refCellInfo = findLegacySlrReferenceCellInfo(weekRows, args && args.weekToDate);
+              var refCellIdx = -1;
+              if (refCellInfo) {
+                for (var rci = 0; rci < cells.length; rci += 1) {
+                  if (Number(cells[rci] && cells[rci].weekIdx || -1) === Number(refCellInfo.weekIdx)
+                    && String(cells[rci] && cells[rci].key || "") === String(refCellInfo.key || "")) {
+                    refCellIdx = rci;
+                    break;
+                  }
+                }
+              }
+              if (refCellIdx < 0) refCellIdx = 0;
+              var newestCellCache = cellCaches[refCellIdx] || {};
+              var latestCellData = Object.assign({}, ((refCellInfo && refCellInfo.cell) || (cells[refCellIdx] && cells[refCellIdx].cell) || {}), {
+                mode: modeNow
+              });
+              var latestCellStats = {
+                date: String((latestCellData && latestCellData.date) || ""),
+                cNam: getLegacySlrRangeCachedCount(newestCellCache.cNamPrefix, sttFrom, sttTo),
+                dNam: getLegacySlrRangeCachedCount(newestCellCache.dNamPrefix, sttFrom, sttTo),
+                cBac: getLegacySlrRangeCachedCount(newestCellCache.cBacPrefix, sttFrom, sttTo),
+                dBac: getLegacySlrRangeCachedCount(newestCellCache.dBacPrefix, sttFrom, sttTo)
+              };
+              if (latestCellData && Array.isArray(latestCellData.rows)) {
+                latestCellData.rows = latestCellData.rows.filter(function (rowItem) {
+                  var sttVal = Number(rowItem && rowItem.stt || 0);
+                  return sttVal >= sttFrom && sttVal <= sttTo;
+                });
+              }
+
+              var expandedHint = "";
+              if (sttTo + 1 <= rankTo) {
+                var nearestBase = findNearestHitInfoForRange(cells, cellCaches, sttFrom, sttTo);
+                var nearestExpanded = findNearestHitInfoForRange(cells, cellCaches, sttFrom, sttTo + 1);
+                if (nearestExpanded && (!nearestBase || nearestExpanded.idx < nearestBase.idx)) {
+                  expandedHint = "STT " + sttFrom + "-" + (sttTo + 1) + " Xổ ngày " + String(nearestExpanded.date || "");
+                }
+              }
+
+              return {
+                key: rowKeyPrefix + "_" + qv + "_" + sttFrom + "_" + sttTo,
+                queryValue: qv,
+                queryLabel: queryLabel,
+                sttFrom: sttFrom,
+                sttTo: sttTo,
+                noHitDays: noHitDays,
+                fromDate: String(latestCell.date || ""),
+                toDate: String(oldestCell.date || ""),
+                tongNamWeeks: tongNamWeeks,
+                tongNamZeroWeekStreak: weekNoHitMax,
+                weekSummaryRows: rowWeekSummaryRows,
+                latestCellData: latestCellData,
+                latestCellStats: latestCellStats,
+                mode: modeNow,
+                noHitHintText: expandedHint
+              };
+            }
+
+            function appendMergedSlrRows(baseRows, args) {
+              var rows = Array.isArray(baseRows) ? baseRows.slice() : [];
+              if (rows.length < 2) return rows;
+              var finalRows = [];
+              var i = 0;
+              while (i < rows.length) {
+                var start = i;
+                var end = i;
+                while (end + 1 < rows.length
+                  && String(rows[end + 1].queryValue || "") === String(rows[end].queryValue || "")
+                  && Number(rows[end + 1].sttFrom || 0) === Number(rows[end].sttFrom || 0) + 1
+                  && Number(rows[end + 1].sttTo || 0) === Number(rows[end].sttTo || 0) + 1) {
+                  end += 1;
+                }
+                if (end > start) {
+                  var mergedFrom = Number(rows[start].sttFrom || 0);
+                  var mergedTo = Number(rows[end].sttTo || 0);
+                  var mergedRow = buildAutoRowForSttRange(Object.assign({}, args || {}, {
+                    sttFrom: mergedFrom,
+                    sttTo: mergedTo,
+                    rowKeyPrefix: "slr_auto_merge"
+                  }));
+                  if (mergedRow) {
+                    mergedRow.isMergedAuto = true;
+                    finalRows.push(mergedRow);
+                  } else {
+                    for (var fi = start; fi <= end; fi += 1) {
+                      finalRows.push(rows[fi]);
+                    }
+                  }
+                } else {
+                  finalRows.push(rows[start]);
+                }
+                i = end + 1;
+              }
+              return finalRows;
+            }
+
             for (var qi = 0; qi < selectedQueryValues.length; qi += 1) {
+              if (selectedQueryValues.length > 0) {
+                var loopPct = 15 + Math.round((qi / selectedQueryValues.length) * 75);
+                setProgress(Math.max(15, Math.min(95, loopPct)));
+              }
               var qv = String(selectedQueryValues[qi] || "").trim();
-              if (!qv) continue;
+              if (!qv) {
+                pushAutoLog("Bỏ qua query rỗng tại index " + qi);
+                continue;
+              }
+              pushAutoLog("Loại Tìm " + (qi + 1) + "/" + selectedQueryValues.length + ": " + qv);
               if (!dataByQuery[qv]) {
                 dataByQuery[qv] = await loadLegacySpecialDataByQuery(qv);
               }
               var dataMien = dataByQuery[qv];
-              if (!dataMien || !dataMien.length) continue;
+              if (!dataMien || !dataMien.length) {
+                pushAutoLog("- Rớt: không có dataMien");
+                continue;
+              }
 
               var runtimeCfg = buildLegacySoLauRaRuntimeConfig(dataMien, timkiemRows, qv);
-              var rows = buildLegacySoLauRaViewModel(runtimeCfg.rowsCfg);
+              var rankFrom = Math.max(1, Number(legacyRankFrom || 1));
+              var rankTo = Math.max(rankFrom, Number(legacyRankTo || 20));
+              var maxStart = rankTo - sttWindowSize + 1;
+              if (maxStart < rankFrom) {
+                pushAutoLog("- Rớt: phạm vi STT không hợp lệ (" + rankFrom + "->" + rankTo + ")");
+                continue;
+              }
+
+              var weekRows = buildLegacySoLauRaWeekRows(runtimeCfg.weekCfg);
+              var cells = flattenLegacySlrWeekCells(weekRows);
               var queryItem = (legacySlrQueryTypeOptions || []).find(function (item) {
                 return String(item && item.value) === qv;
               });
               var queryLabel = String((queryItem && queryItem.text) || qv);
 
-              for (var ri = 0; ri < rows.length; ri += 1) {
-                var row = rows[ri] || {};
-                var soKey = String(row.so || "").trim();
-                if (!soKey) continue;
-                var prev = uniqueMap[soKey];
-                var nextRow = Object.assign({}, row, {
-                  so: soKey,
-                  queryValue: qv,
-                  queryLabel: queryLabel
-                });
-                if (!prev) {
-                  uniqueMap[soKey] = nextRow;
+              if (!weekRows.length || !cells.length) {
+                pushAutoLog("- Rớt: weekRows/cells rỗng (weekRows=" + weekRows.length + ", cells=" + cells.length + ")");
+                continue;
+              }
+              pushAutoLog("- weekRows=" + weekRows.length + ", cells=" + cells.length + ", queryLabel=" + queryLabel);
+
+              var cellCaches = cells.map(function (c) {
+                return buildLegacySlrCellRangeCache(c && c.cell, rankTo, modeNow);
+              });
+              var rangeChecked = 0;
+              var rangeMatched = 0;
+              var rangeRejectedByDay = 0;
+              var rangeRejectedByWeek = 0;
+              var bestWeekStreak = 0;
+              var bestDayStreak = 0;
+              var queryRows = [];
+
+              for (var sttFrom = rankFrom; sttFrom <= maxStart; sttFrom += 1) {
+                rangeChecked += 1;
+                var sttTo = sttFrom + sttWindowSize - 1;
+                var streak = 0;
+                var maxLocalDayStreak = 0;
+                var endIdx = -1;
+                for (var ci = 0; ci < cells.length; ci += 1) {
+                  if (isLegacySlrNoHitRangeCached(cellCaches[ci], sttFrom, sttTo)) {
+                    streak += 1;
+                    if (streak > maxLocalDayStreak) maxLocalDayStreak = streak;
+                    if (streak >= noHitDays) {
+                      endIdx = ci;
+                      break;
+                    }
+                  } else {
+                    streak = 0;
+                  }
+                }
+                if (maxLocalDayStreak > bestDayStreak) bestDayStreak = maxLocalDayStreak;
+                if (endIdx < 0) {
+                  rangeRejectedByDay += 1;
                   continue;
                 }
-                var prevGap = Number(prev.gap || -1);
-                var nextGap = Number(nextRow.gap || -1);
-                var prevFirst = Number(prev.first_hit_idx || -1);
-                var nextFirst = Number(nextRow.first_hit_idx || -1);
-                if (nextGap > prevGap || (nextGap === prevGap && nextFirst > prevFirst)) {
-                  uniqueMap[soKey] = nextRow;
+                var startIdx = endIdx - noHitDays + 1;
+                var matchedWindow = cells.slice(startIdx, endIdx + 1);
+                if (!matchedWindow || !matchedWindow.length) {
+                  rangeRejectedByDay += 1;
+                  continue;
                 }
+
+                var weekNamTotals = {};
+                var weekNoHitStreak = 0;
+                var weekNoHitMax = 0;
+                for (var wri = 0; wri < weekRows.length; wri += 1) {
+                  var namTotalTmp = 0;
+                  for (var wci = 0; wci < cells.length; wci += 1) {
+                    if (Number(cells[wci] && cells[wci].weekIdx || -1) !== wri) continue;
+                    namTotalTmp += getLegacySlrNamHitCountRangeCached(cellCaches[wci], sttFrom, sttTo);
+                  }
+                  weekNamTotals[wri] = namTotalTmp;
+                  if (namTotalTmp === 0) {
+                    weekNoHitStreak += 1;
+                    if (weekNoHitStreak > weekNoHitMax) weekNoHitMax = weekNoHitStreak;
+                  } else {
+                    break;
+                  }
+                }
+                if (weekNoHitMax > bestWeekStreak) bestWeekStreak = weekNoHitMax;
+                if (weekNoHitMax < tongNamWeeks) {
+                  rangeRejectedByWeek += 1;
+                  continue;
+                }
+
+                rangeMatched += 1;
+                var baseRow = buildAutoRowForSttRange({
+                  sttFrom: sttFrom,
+                  sttTo: sttTo,
+                  qv: qv,
+                  queryLabel: queryLabel,
+                  weekRows: weekRows,
+                  cells: cells,
+                  cellCaches: cellCaches,
+                  noHitDays: noHitDays,
+                  tongNamWeeks: tongNamWeeks,
+                  modeNow: modeNow,
+                  rankTo: rankTo,
+                  weekToDate: runtimeCfg.weekCfg && runtimeCfg.weekCfg.toDate,
+                  rowKeyPrefix: "slr_auto"
+                });
+                if (baseRow) queryRows.push(baseRow);
+              }
+              queryRows = appendMergedSlrRows(queryRows, {
+                qv: qv,
+                queryLabel: queryLabel,
+                weekRows: weekRows,
+                cells: cells,
+                cellCaches: cellCaches,
+                noHitDays: noHitDays,
+                tongNamWeeks: tongNamWeeks,
+                modeNow: modeNow,
+                rankTo: rankTo,
+                weekToDate: runtimeCfg.weekCfg && runtimeCfg.weekCfg.toDate
+              });
+              if (queryRows.length) {
+                resultRows = resultRows.concat(queryRows);
+              }
+              var mergedCount = queryRows.filter(function (row) { return !!(row && row.isMergedAuto); }).length;
+              if (rangeMatched === 0) {
+                pushAutoLog("- Rớt theo STT: checked=" + rangeChecked + ", rejectByDay=" + rangeRejectedByDay + " (bestDayStreak=" + bestDayStreak + "/need=" + noHitDays + "), rejectByWeek=" + rangeRejectedByWeek + " (bestWeekStreak=" + bestWeekStreak + "/need=" + tongNamWeeks + ")");
+              } else {
+                pushAutoLog("- Quét STT xong: checked=" + rangeChecked + ", matched=" + rangeMatched + ", merged=" + mergedCount + ", rejectByDay=" + rangeRejectedByDay + ", rejectByWeek=" + rangeRejectedByWeek + ", bestDayStreak=" + bestDayStreak + ", bestWeekStreak=" + bestWeekStreak);
               }
             }
 
-            Object.keys(uniqueMap).forEach(function (k) {
-              mergedRows.push(uniqueMap[k]);
+            resultRows.sort(function (a, b) {
+              var qa = String((a && a.queryLabel) || "");
+              var qb = String((b && b.queryLabel) || "");
+              var dq = qa.localeCompare(qb, "vi", { numeric: true, sensitivity: "base" });
+              if (dq) return dq;
+              var ds = Number((a && a.sttFrom) || 0) - Number((b && b.sttFrom) || 0);
+              if (ds) return ds;
+              return Number((b && b.tongNamZeroWeekStreak) || 0) - Number((a && a.tongNamZeroWeekStreak) || 0);
             });
 
-            mergedRows.sort(function (a, b) {
-              var dg = Number(b.gap || -1) - Number(a.gap || -1);
-              if (dg) return dg;
-              var df = Number(b.first_hit_idx || -1) - Number(a.first_hit_idx || -1);
-              if (df) return df;
-              return String(a.so || "").localeCompare(String(b.so || ""), "vi", { numeric: true, sensitivity: "base" });
-            });
-
-            setLegacySlrAutoRows(mergedRows);
+            setLegacySlrAutoRows(resultRows);
             setLegacySlrAutoSummary(
-              "Auto: " + mergedRows.length + " số từ " + selectedQueryValues.length + " loại tìm"
+              "Auto: " + resultRows.length + " dòng thỏa điều kiện từ " + selectedQueryValues.length + " loại tìm"
             );
+            pushAutoLog("Kết thúc: total kết quả=" + resultRows.length);
+            setLegacySlrAutoDebugLogs(runLogs.slice());
             setActiveAction("legacy_slr");
             setSubTab("legacy_slr");
             setProgress(100);
+            completedOk = true;
           } catch (e) {
             console.error(e);
+            pushAutoLog("Lỗi: " + String((e && e.message) || e || "unknown"));
+            setLegacySlrAutoDebugLogs(runLogs.slice());
             if (!silent) canhbao("Không thể chạy Auto Số Lâu Ra Nam-Bắc");
           } finally {
             setLoading(false);
-            setTimeout(function () { setProgress(0); }, 600);
+            if (!completedOk) {
+              setTimeout(function () { setProgress(0); }, 600);
+            }
           }
         }
     var _av = useState("th"), legacyTool = _av[0], setLegacyTool = _av[1];
@@ -2755,6 +3328,10 @@
     var _at = useState([]), legacySlrRows = _at[0], setLegacySlrRows = _at[1];
     var _atb = useState([]), legacySlrWeekRows = _atb[0], setLegacySlrWeekRows = _atb[1];
     var _au = useState([]), legacyNbRows = _au[0], setLegacyNbRows = _au[1];
+    var _aub1 = useState("bong"), legacyBongVariant = _aub1[0], setLegacyBongVariant = _aub1[1];
+    var _aub2 = useState([]), legacyBongRows = _aub2[0], setLegacyBongRows = _aub2[1];
+    var _aub3 = useState([]), legacyBongStatsRows = _aub3[0], setLegacyBongStatsRows = _aub3[1];
+    var _aub4 = useState(""), legacyBongSummary = _aub4[0], setLegacyBongSummary = _aub4[1];
     var _nbcw = useState({}), legacyNbColWidths = _nbcw[0], setLegacyNbColWidths = _nbcw[1];
     var legacyNbColWidthsRef = useRef({}); legacyNbColWidthsRef.current = legacyNbColWidths;
     var _slrcw = useState({}), legacySlrColWidths = _slrcw[0], setLegacySlrColWidths = _slrcw[1];
@@ -2799,10 +3376,15 @@
     var _ath34 = useState(false), legacyThAutoPinnedFullAuto = _ath34[0], setLegacyThAutoPinnedFullAuto = _ath34[1];
     var _ath35 = useState(""), legacyThSoInput = _ath35[0], setLegacyThSoInput = _ath35[1];
     var _ath35b = useState(false), legacyThTkEnabled = _ath35b[0], setLegacyThTkEnabled = _ath35b[1];
-    var _ath35c = useState(""), legacyThParityStatus = _ath35c[0], setLegacyThParityStatus = _ath35c[1];
+
       var _ath_rs1 = useState([]), legacyThManualSelectedRowKeys = _ath_rs1[0], setLegacyThManualSelectedRowKeys = _ath_rs1[1];
       var _ath_rs2 = useState([]), legacyThAutoSelectedRowKeys = _ath_rs2[0], setLegacyThAutoSelectedRowKeys = _ath_rs2[1];
       var _ath_im = useState(""), legacyThIntersectManual = _ath_im[0], setLegacyThIntersectManual = _ath_im[1];
+    var _sel_kq = useState([]), legacyKetQuaSelectedRowKeys = _sel_kq[0], setLegacyKetQuaSelectedRowKeys = _sel_kq[1];
+    var _sel_bong = useState([]), legacyBongSelectedRowKeys = _sel_bong[0], setLegacyBongSelectedRowKeys = _sel_bong[1];
+    var _sel_slr_week = useState([]), legacySlrWeekSelectedRowKeys = _sel_slr_week[0], setLegacySlrWeekSelectedRowKeys = _sel_slr_week[1];
+    var _sel_slr_auto = useState([]), legacySlrAutoSelectedRowKeys = _sel_slr_auto[0], setLegacySlrAutoSelectedRowKeys = _sel_slr_auto[1];
+    var _sel_nb = useState([]), legacyNbSelectedRowKeys = _sel_nb[0], setLegacyNbSelectedRowKeys = _sel_nb[1];
     var _am = useState({
       so_ky: so_ky,
       lay_so_ky: lay_so_ky,
@@ -3143,6 +3725,169 @@
         fileName: buildLegacyThExportFileName(isAutoGrid, exportRows),
         sheets: [{
           name: isAutoGrid ? "TongHop Auto" : "TongHop",
+          aoa: aoa
+        }]
+      };
+      await exportPayloadToFile(payload);
+    }
+
+    function getRowValueByDataIndex(row, dataIndex) {
+      if (row == null || dataIndex == null) return "";
+      if (Array.isArray(dataIndex)) {
+        var current = row;
+        for (var i = 0; i < dataIndex.length; i += 1) {
+          var key = dataIndex[i];
+          current = current != null ? current[key] : undefined;
+        }
+        return current == null ? "" : current;
+      }
+      return row[dataIndex] == null ? "" : row[dataIndex];
+    }
+
+    function htmlToPlainText(html) {
+      var src = String(html || "");
+      if (!src) return "";
+      if (typeof document !== "undefined" && document && typeof document.createElement === "function") {
+        var temp = document.createElement("div");
+        temp.innerHTML = src;
+        return String(temp.textContent || temp.innerText || "").trim();
+      }
+      return src.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+    }
+
+    function extractExportTextFromNode(node) {
+      if (node == null) return "";
+      if (typeof node === "string") return node;
+      if (typeof node === "number") return Number.isFinite(node) ? String(node) : "";
+      if (typeof node === "boolean") return node ? "TRUE" : "FALSE";
+      if (Array.isArray(node)) {
+        return node.map(function (item) { return extractExportTextFromNode(item); }).filter(Boolean).join("\n");
+      }
+      if (typeof node !== "object") return String(node);
+
+      if (typeof node.__html === "string") {
+        return htmlToPlainText(node.__html);
+      }
+
+      if (node && node.date != null && Array.isArray(node.rows)) {
+        return buildLegacySlrAutoLatestCellText(node);
+      }
+
+      if (Array.isArray(node.weekSummaryRows)) {
+        return buildLegacySlrAutoWeekSummaryText(node.weekSummaryRows);
+      }
+
+      if (node.props && typeof node.props === "object") {
+        if (node.props.dangerouslySetInnerHTML && typeof node.props.dangerouslySetInnerHTML.__html === "string") {
+          var htmlText = htmlToPlainText(node.props.dangerouslySetInnerHTML.__html);
+          if (htmlText) return htmlText;
+        }
+        var childrenText = extractExportTextFromNode(node.props.children);
+        if (childrenText) return childrenText;
+      }
+
+      if (Array.isArray(node.children)) {
+        var childrenListText = extractExportTextFromNode(node.children);
+        if (childrenListText) return childrenListText;
+      }
+
+      if (node.label != null || node.text != null || node.value != null) {
+        return String(node.label != null ? node.label : (node.text != null ? node.text : node.value));
+      }
+
+      try {
+        return JSON.stringify(node);
+      } catch (_err) {
+        return "";
+      }
+    }
+
+    function flattenExportColumns(columns) {
+      var out = [];
+
+      function walk(list) {
+        (Array.isArray(list) ? list : []).forEach(function (col) {
+          if (!col || typeof col !== "object") return;
+          if (Array.isArray(col.children) && col.children.length) {
+            walk(col.children);
+            return;
+          }
+          if (col.dataIndex == null) return;
+          out.push(col);
+        });
+      }
+
+      walk(columns);
+      return out;
+    }
+
+    function resolveExportHeader(col) {
+      if (!col) return "";
+      var titleText = extractExportTextFromNode(col.title);
+      if (titleText) return titleText;
+      if (typeof col.dataIndex === "string") return col.dataIndex;
+      if (Array.isArray(col.dataIndex)) return col.dataIndex.join(".");
+      return String(col.key || "");
+    }
+
+    function resolveExportCellValue(col, row, rowIndex) {
+      var raw = getRowValueByDataIndex(row, col && col.dataIndex);
+      if (col && typeof col.render === "function") {
+        try {
+          var rendered = col.render(raw, row, rowIndex);
+          var renderedText = extractExportTextFromNode(rendered);
+          if (renderedText) return renderedText;
+        } catch (_renderErr) {
+          // Fallback to raw cell value when render depends on runtime-only contexts.
+        }
+      }
+
+      if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+      if (typeof raw === "boolean") return raw ? "TRUE" : "FALSE";
+      return extractExportTextFromNode(raw);
+    }
+
+    function buildGenericExportAoa(columns, rows) {
+      var exportColumns = flattenExportColumns(columns || []);
+      var header = exportColumns.map(function (col) { return resolveExportHeader(col); });
+
+      var aoa = [header];
+      (Array.isArray(rows) ? rows : []).forEach(function (row, rowIndex) {
+        var line = exportColumns.map(function (col) {
+          return resolveExportCellValue(col, row, rowIndex);
+        });
+        aoa.push(line);
+      });
+      return aoa;
+    }
+
+    async function exportSelectedRowsByConfig(config) {
+      var selectedKeys = (config && config.selectedKeys) || [];
+      var sourceRows = (config && config.sourceRows) || [];
+      if (!Array.isArray(selectedKeys) || !selectedKeys.length) {
+        canhbao(tt.lgThSelectRowsToExport || "Vui lòng chọn ít nhất 1 dòng để xuất Excel");
+        return;
+      }
+
+      var keyGetter = (config && config.keyGetter) || function (row) {
+        return row && row.key != null ? row.key : "";
+      };
+      var selectedMap = {};
+      selectedKeys.forEach(function (k) { selectedMap[String(k)] = true; });
+
+      var exportRows = (Array.isArray(sourceRows) ? sourceRows : []).filter(function (row, idx) {
+        return !!selectedMap[String(keyGetter(row, idx))];
+      });
+      if (!exportRows.length) {
+        canhbao(tt.lgThSelectRowsToExport || "Vui lòng chọn ít nhất 1 dòng để xuất Excel");
+        return;
+      }
+
+      var aoa = buildGenericExportAoa((config && config.columns) || [], exportRows);
+      var payload = {
+        fileName: sanitizeLegacyExportFileToken((config && config.fileName) || "export_selected") || "export_selected",
+        sheets: [{
+          name: String((config && config.sheetName) || "Data"),
           aoa: aoa
         }]
       };
@@ -3587,6 +4332,27 @@
       taiDuLieuXemKqPendingRef.current = {};
     }, [mien, loai_tim, den_ngay]);
 
+    useEffect(function () {
+      var validMap = {};
+      (dsDaiThu || []).forEach(function (d) {
+        validMap[String((d && d.stt) || "")] = true;
+      });
+
+      setDsDaiChon(function (prev) {
+        var next = (prev || []).filter(function (stt) {
+          return !!validMap[String(stt || "")];
+        });
+        return next.length === (prev || []).length ? prev : next;
+      });
+
+      setDsDaiChonSoChu(function (prev) {
+        var next = (prev || []).filter(function (stt) {
+          return !!validMap[String(stt || "")];
+        });
+        return next.length === (prev || []).length ? prev : next;
+      });
+    }, [dsDaiThu]);
+
     // Auto-load Loại Tìm / Nhóm Số / Nhóm Triệt from API whenever legacyHeThong changes (also on mount).
     useEffect(function () {
       reloadLegacyThApiSource();
@@ -3621,12 +4387,32 @@
     }, [so_chu_input]);
 
     useEffect(function () {
+      function themesEqual(a, b) {
+        if (!a || !b) return false;
+        return a.isDark === b.isDark
+          && a.primary === b.primary
+          && a.success === b.success
+          && a.warning === b.warning
+          && a.error === b.error
+          && a.pageBg === b.pageBg
+          && a.cardBg === b.cardBg
+          && a.text === b.text
+          && a.textInverse === b.textInverse
+          && a.muted === b.muted
+          && a.border === b.border
+          && a.inputBg === b.inputBg
+          && a.inputText === b.inputText;
+      }
+
       function onLocaleChanged(e) {
         var nextLang = normalizeUILanguage(e && e.detail && e.detail.language ? e.detail.language : detectUILanguage());
         setUiLang(nextLang);
       }
       function onThemeChanged() {
-        setTheme(detectThemeTokens());
+        var nextTheme = detectThemeTokens();
+        setTheme(function (prevTheme) {
+          return themesEqual(prevTheme, nextTheme) ? prevTheme : nextTheme;
+        });
       }
       var mq = null;
       var onMediaThemeChanged = null;
@@ -3650,13 +4436,13 @@
           if (document && document.documentElement) {
             observer.observe(document.documentElement, {
               attributes: true,
-              attributeFilter: ["class", "style", "data-theme", "theme"]
+              attributeFilter: ["class", "data-theme", "theme"]
             });
           }
           if (document && document.body) {
             observer.observe(document.body, {
               attributes: true,
-              attributeFilter: ["class", "style", "data-theme", "theme"]
+              attributeFilter: ["class", "data-theme", "theme"]
             });
           }
         } catch (_e2) {}
@@ -3679,6 +4465,56 @@
         }
       };
     }, []);
+
+    useEffect(function () {
+      var vars = {
+        "--kqxs-page-bg": theme.pageBg,
+        "--kqxs-card-bg": theme.cardBg,
+        "--kqxs-border": theme.border,
+        "--kqxs-text": theme.text,
+        "--kqxs-muted": theme.muted,
+        "--kqxs-primary": theme.primary,
+        "--kqxs-success": theme.success,
+        "--kqxs-warning": theme.warning,
+        "--kqxs-error": theme.error,
+        "--kqxs-input-bg": theme.inputBg,
+        "--kqxs-input-text": theme.inputText,
+        "--kqxs-header-bg": theme.cardBg,
+        "--kqxs-header-text": theme.text,
+        "--kqxs-header-border": theme.border,
+        "--kqxs-header-active-bg": "color-mix(in srgb, " + theme.primary + " 16%, " + theme.cardBg + ")",
+        "--kqxs-header-active-text": theme.text,
+        "--kqxs-btn-bg": theme.cardBg,
+        "--kqxs-btn-text": theme.text,
+        "--kqxs-btn-border": theme.border,
+        "--kqxs-btn-active-bg": "color-mix(in srgb, " + theme.primary + " 16%, " + theme.cardBg + ")",
+        "--kqxs-vach-bg": theme.warning,
+        "--kqxs-color-scheme": theme.isDark ? "dark" : "light",
+        "--kqxs-date-icon-filter": theme.isDark ? "invert(0.9)" : "none"
+      };
+
+      var root = document && document.documentElement ? document.documentElement : null;
+      var body = document && document.body ? document.body : null;
+      function applyVars(el) {
+        if (!el || !el.style) return;
+        Object.keys(vars).forEach(function (k) {
+          el.style.setProperty(k, String(vars[k] || ""));
+        });
+      }
+      applyVars(root);
+      applyVars(body);
+
+      return function () {
+        function clearVars(el) {
+          if (!el || !el.style) return;
+          Object.keys(vars).forEach(function (k) {
+            el.style.removeProperty(k);
+          });
+        }
+        clearVars(root);
+        clearVars(body);
+      };
+    }, [theme]);
 
     useEffect(function () {
       window.__kqxsLegacyCompat = {
@@ -3806,18 +4642,19 @@
     }, [allowUpdateActions]);
 
     function locVaSapXepNgay(rows) {
+      // Vue parity: sort giảm dần theo ngày trước, sau đó dedup để giữ bản ghi đầu tiên của mỗi ngày.
+      var sorted = (Array.isArray(rows) ? rows.slice() : []).sort(function (a, b) {
+        return chuyenNgay(String((b && b.field_ngay) || "").trim(), "yyyymmdd") - chuyenNgay(String((a && a.field_ngay) || "").trim(), "yyyymmdd");
+      });
       var seen = {};
       var out = [];
-      for (var i = 0; i < rows.length; i += 1) {
-        var r = rows[i] || {};
+      for (var i = 0; i < sorted.length; i += 1) {
+        var r = sorted[i] || {};
         var ngay = String(r.field_ngay || "").trim();
         if (!ngay || seen[ngay]) continue;
         seen[ngay] = true;
         out.push(r);
       }
-      out.sort(function (a, b) {
-        return chuyenNgay(String(b.field_ngay || "").trim(), "yyyymmdd") - chuyenNgay(String(a.field_ngay || "").trim(), "yyyymmdd");
-      });
       return out;
     }
 
@@ -3862,13 +4699,29 @@
       return false;
     }
 
+    function isThongKeLoResultFieldName(fieldName) {
+      var name = String(fieldName || "").trim();
+      if (!/^field_/i.test(name)) return false;
+      if (name === "field_ngay") return false;
+      return true;
+    }
+
+    function isThongKeLoMergedResultFieldName(fieldName) {
+      var name = String(fieldName || "").trim();
+      if (!/^d_[^_]+_field_/i.test(name)) return false;
+      if (/_field_ngay$/i.test(name)) return false;
+      return true;
+    }
+
     function getRowTwoDigits(row, opt) {
       var out = [];
       var cfg = opt || {};
+
       if (!cfg.useNorthRules) {
         Object.keys(row || {}).forEach(function (f) {
           if (f === "_id" || f === "id" || f === "thu" || f === "field_ngay") return;
           if (String(f || "").indexOf("_") === 0) return;
+          if (!isThongKeLoResultFieldName(f)) return;
           var val = String((row && row[f]) || "").trim();
           if (!val) return;
           var so = val.slice(-2);
@@ -5322,73 +6175,86 @@
       var opt = options || {};
       var isThongKeMoiMode = !!opt.isThongKeMoi;
       var sapXepMode = Number(opt.sap_xep || 0);
+      // Vue `thong_ke_moi`: duyệt mang_ky theo sap_xep, nên chuỗi tính toán phải đảo khi sap_xep=1.
+      // Vue `chay_thong_ke`: luôn tính theo k_1..k_n, không đổi theo sap_xep.
+      var metricSeq = (isThongKeMoiMode && sapXepMode === 1) ? arr.slice().reverse() : arr.slice();
       var tong = 0;
       var dem = 0;
-      var maxKxh = 0;
 
-      for (var i = 0; i < arr.length; i += 1) {
-        var v = Number(arr[i] || 0);
-        if (v > 0) {
-          tong += v;
-          dem += 1;
-        }
-      }
-
+      // Tính kxh_thong_ke: kỳ không hiện từ đầu đến lần xuất hiện đầu tiên
       var sawHit = false;
-      var run = 0;
       var kxhThongKe = 0;
       for (var j = 0; j < arr.length; j += 1) {
         var vv = Number(arr[j] || 0);
         if (vv > 0) {
           sawHit = true;
-          if (run > maxKxh) maxKxh = run;
-          run = 0;
-        } else {
-          if (!sawHit) kxhThongKe += 1;
-          run += 1;
+          break;
         }
+        if (!sawHit) kxhThongKe += 1;
       }
-      if (run > maxKxh) maxKxh = run;
 
-      // Theo Vue/bk_kqxs: nhánh thong_ke_moi vẫn duyệt theo thứ tự k_1..k_n,
-      // sap_xep chỉ đổi cách thể hiện các bảng KQ.
-      var evalArr = arr.slice();
+      // Vue thong_ke_moi logic: dùng chuỗi mang_ky theo đúng thứ tự hiển thị để tính khoi_dong/so_lan/bieu_dien.
+      var kxh_ht = 0;
+      var kxh_ln = 0;  // Lâu nhất giữa các lần xuất hiện
       var khoi_dong = -1;
       var so_lan = 0;
       var so_lan_trung = 0;
       var xet_tiep = true;
-      var kxh_ht = 0;
       var ra_tiep = 0;
       var bieu_dien = "";
-      for (var k = 0; k < evalArr.length; k += 1) {
-        var rv = Number(evalArr[k] || 0);
-        if (rv > 0) {
-          ra_tiep++;
-          if (kxh_ht === 0 && khoi_dong === -1) xet_tiep = false;
-          if (khoi_dong === -1) khoi_dong = kxh_ht;
-          if (xet_tiep && kxh_ht > 0) {
-            if (kxh_ht <= khoi_dong) {
-              so_lan += 1;
-              if (kxh_ht === khoi_dong) so_lan_trung += 1;
-            } else {
-              xet_tiep = false;
+      var kxh_sc = 0;  // Kỳ chốt (breaking point)
+
+      for (var k = 0; k < metricSeq.length; k += 1) {
+        var kq = Number(metricSeq[k] || 0);
+        if (kq > 0) {
+          tong += kq;
+          dem += 1;
+          // Cập nhật kxh_ln khi gặp lần xuất hiện
+          if (kxh_ht > kxh_ln) kxh_ln = kxh_ht;
+          
+          // Vue thong_ke_moi: chỉ nút này mới tính khoi_dong/so_lan/bieu_dien.
+          if (isThongKeMoiMode) {
+            ra_tiep++;
+            // Xác định khoi_dong và xet_tiep
+            if (kxh_ht === 0 && khoi_dong === -1) xet_tiep = false;
+            if (khoi_dong === -1) khoi_dong = kxh_ht;
+            // Tính so_lan và so_lan_trung
+            if (xet_tiep && kxh_ht > 0) {
+              if (kxh_ht <= khoi_dong) {
+                so_lan += 1;
+                if (kxh_ht === khoi_dong) so_lan_trung += 1;
+              } else {
+                kxh_sc = kxh_ht;  // Lưu điểm chốt
+                xet_tiep = false;
+              }
+              bieu_dien += (bieu_dien ? "," : "") + kxh_ht;
             }
-            bieu_dien += (bieu_dien ? "," : "") + kxh_ht;
           }
           kxh_ht = 0;
         } else {
-          if (xet_tiep) {
+          // Không có kết quả
+          if (isThongKeMoiMode && xet_tiep) {
             for (var rt = 0; rt < ra_tiep - 1; rt++) {
               bieu_dien += (bieu_dien ? ",0" : "0");
             }
           }
-          ra_tiep = 0;
-          kxh_ht += 1;
+          if (isThongKeMoiMode) ra_tiep = 0;
+          kxh_ht++;
         }
+        // Kiểm tra end-of-loop: cập nhật kxh_ln
+        if (k === metricSeq.length - 1 && kxh_ht > kxh_ln) kxh_ln = kxh_ht;
       }
 
-      var thoa_man = (khoi_dong >= Number(kxh_tu || 0) && khoi_dong <= Number(kxh_den || 0) && so_lan > 1);
-      if (kxh_locsau && so_lan_trung <= 1) thoa_man = false;
+      // Vue chỉ dùng thoa_man cho thong_ke_moi.
+      var kxh_tu_param = Number(opt.kxh_tu || 0);
+      var kxh_den_param = Number(opt.kxh_den || 0);
+      var kxh_locsau_param = !!opt.kxh_locsau;
+      var thoa_man = false;
+      if (isThongKeMoiMode) {
+        thoa_man = (khoi_dong >= kxh_tu_param && khoi_dong <= kxh_den_param && so_lan > 1);
+        if (kxh_locsau_param && so_lan_trung <= 1) thoa_man = false;
+      }
+
       var kxhThongKeMoi = khoi_dong > 0 ? khoi_dong : 0;
 
       return {
@@ -5397,12 +6263,13 @@
         kxh: isThongKeMoiMode ? kxhThongKeMoi : kxhThongKe,
         kxh_thong_ke: kxhThongKe,
         kxh_thong_ke_moi: kxhThongKeMoi,
-        max_kxh: maxKxh,
-        khoi_dong: khoi_dong > 0 ? khoi_dong : 0,
-        so_lan: so_lan,
-        so_lan_trung: so_lan_trung,
-        thoa_man: thoa_man,
-        bieu_dien: bieu_dien
+        max_kxh: kxh_ln,
+        khoi_dong: isThongKeMoiMode ? (khoi_dong > 0 ? khoi_dong : 0) : 0,
+        so_lan: isThongKeMoiMode ? so_lan : 0,
+        so_lan_trung: isThongKeMoiMode ? so_lan_trung : 0,
+        thoa_man: isThongKeMoiMode ? thoa_man : false,
+        bieu_dien: isThongKeMoiMode ? bieu_dien : "",
+        kxh_sc: kxh_sc
       };
     }
 
@@ -5457,6 +6324,7 @@
             if (chkIDXRow !== -1) {
               var objNKQ = JSON.parse(JSON.stringify(mangDlLsSoChu[chkIDXRow] || {}));
               Object.keys(dong).forEach(function (tk) {
+                if (String(tk || "").indexOf("_") === 0) return;
                 if (tk !== "_id" && tk !== "id" && tk !== "thu" && tk !== "field_ngay") {
                   objNKQ["d_" + stt + "_" + tk] = String(dong[tk] || "").trim();
                 }
@@ -5465,6 +6333,7 @@
             } else {
               var objNKQN = {};
               Object.keys(dong).forEach(function (tk) {
+                if (String(tk || "").indexOf("_") === 0) return;
                 if (tk !== "_id" && tk !== "id" && tk !== "thu" && tk !== "field_ngay") {
                   objNKQN["d_" + stt + "_" + tk] = String(dong[tk] || "").trim();
                 } else {
@@ -5477,21 +6346,37 @@
         });
       });
 
-      var kqSoChu = mangDlLsSoChu.filter(function (kq) {
+      function hasSoChuMatchOnSelectedStations(kq) {
         var lay = false;
         Object.keys(kq || {}).forEach(function (tk) {
-          if (lay) return;
-          if (tk === "_id" || tk === "id" || tk === "thu" || tk === "field_ngay") return;
-          (ds_dai_chon || []).forEach(function (sttRaw) {
-            if (lay) return;
-            var stt = String(sttRaw || "").trim();
-            if (String(tk).indexOf("d_" + stt + "_") !== 0) return;
-            var val = String(kq[tk] || "").trim();
-            if (!val) return;
-            if ((so_chu || []).find(function (so) { return val.endsWith(String(so || "").trim()); })) lay = true;
-          });
+          if (tk !== "_id" && tk !== "id" && tk !== "thu" && tk !== "field_ngay") {
+            (ds_dai_chon || []).forEach(function (sttRaw) {
+              var stt = String(sttRaw || "").trim();
+              if (String(tk).indexOf("d_" + stt + "_") === 0) {
+                if ((so_chu || []).find(function (so) { return String(kq[tk] || "").trim().endsWith(String(so || "").trim()); })) {
+                  lay = true;
+                }
+              }
+            });
+          }
         });
         return lay;
+      }
+
+      function hasSoChuMatchAnyField(kq) {
+        var lay = false;
+        Object.keys(kq || {}).forEach(function (tk) {
+          if (tk !== "_id" && tk !== "id" && tk !== "thu" && tk !== "field_ngay") {
+            if ((so_chu || []).find(function (so) { return String(kq[tk] || "").trim().endsWith(String(so || "").trim()); })) {
+              lay = true;
+            }
+          }
+        });
+        return lay;
+      }
+
+      var kqSoChu = mangDlLsSoChu.filter(function (kq) {
+        return hasSoChuMatchOnSelectedStations(kq);
       });
 
       var allowedDateSet = new Set(kqSoChu.map(function (obj) {
@@ -5507,14 +6392,7 @@
       mangDlLsSoChu.sort(function (a, b) {
         return chuyenNgay(String((b && b.field_ngay) || "").trim(), "yyyymmdd") - chuyenNgay(String((a && a.field_ngay) || "").trim(), "yyyymmdd");
       }).forEach(function (kq, idx) {
-        var lay = false;
-        Object.keys(kq || {}).forEach(function (tk) {
-          if (lay) return;
-          if (tk === "_id" || tk === "id" || tk === "thu" || tk === "field_ngay") return;
-          var val = String(kq[tk] || "").trim();
-          if (!val) return;
-          if ((so_chu || []).find(function (so) { return val.endsWith(String(so || "").trim()); })) lay = true;
-        });
+        var lay = hasSoChuMatchAnyField(kq);
 
         if (lay) {
           if (ghls >= maxLs) {
@@ -5982,7 +6860,13 @@
           var row = mapSo[k];
           row.to_hop = combo.join(",");
           row.id = comboKey + "_" + row.so;
-          var m = calcThongKeMetrics(row.ky || [], { isThongKeMoi: isThongKeMoi, sap_xep: sap_xep });
+          var m = calcThongKeMetrics(row.ky || [], { 
+            isThongKeMoi: isThongKeMoi, 
+            sap_xep: sap_xep,
+            kxh_tu: kxh_tu,
+            kxh_den: kxh_den,
+            kxh_locsau: kxh_locsau
+          });
           for (var kk = 0; kk < maxSoKy; kk += 1) {
             row["k_" + String(kk + 1)] = Number((row.ky && row.ky[kk]) || 0);
           }
@@ -6032,6 +6916,7 @@
         var thongKeSource = useSoChuSource ? ds_dai_chon_so_chu : ds_dai_chon;
         var includeKqTabs = (Number(lay_so_ky || 0) + Number(dem_be_hon || 0) + Number(kxh_phai_lonhon || 0) + Number(dem_nho_hon || 0) > 0)
           || (Number(dem_lon_hon || 0) > 0 && so_chu.length > 0);
+        // Vue: nút Thống Kê (chay_thong_ke) dùng logic cơ bản
         var thongKeResult = await buildThongKeData(false, soChuCtx.allowedDateSet, thongKeSource, loadedDataMien);
         var rows = (thongKeResult && Array.isArray(thongKeResult.rows)) ? thongKeResult.rows : [];
         var mangDaiTabs = (thongKeResult && Array.isArray(thongKeResult.mang_dai)) ? thongKeResult.mang_dai : thongKeSource;
@@ -6070,6 +6955,7 @@
         var appliedSnapshot = snapshotThongKeInputs();
         var loadedDataMien = await lay_ds_dai(dsDaiCanTai);
         if (!ensureDataFetchComplete()) return;
+        // Vue: nút Thống Kê Mới (thong_ke_moi) dùng logic nâng cao (thoa_man/bieu_dien)
         var thongKeResult = await buildThongKeData(true, null, null, loadedDataMien);
         var rows = (thongKeResult && Array.isArray(thongKeResult.rows)) ? thongKeResult.rows : [];
         var mangDaiTabs = (thongKeResult && Array.isArray(thongKeResult.mang_dai)) ? thongKeResult.mang_dai : ds_dai_chon;
@@ -6909,6 +7795,196 @@
       return out.join(",");
     }
 
+    var LEGACY_BONG_VARIANTS = [
+      { value: "bong", label: "Bóng DV", endpoint: "KiemTraBong.php" },
+      { value: "bong_chuc", label: "Bóng Chục", endpoint: "KiemTraBongChuc.php" },
+      { value: "bong_l", label: "Bóng L", endpoint: "KiemTraBongL.php" },
+      { value: "bong_l_chuc", label: "Bóng L Chục", endpoint: "KiemTraBongLChuc.php" },
+      { value: "bong_do_chuc", label: "Bóng Dò Chức", endpoint: "KiemTraBongDoChuc.php" },
+      { value: "bong_chuc_do_dv", label: "Bóng Chục Dò ĐV", endpoint: "KiemTraBongChucDoDV.php" },
+      { value: "bong_l_do_chuc", label: "Bóng L Dò Chức", endpoint: "KiemTraBongLDoChuc.php" },
+      { value: "bong_l_chuc_do_dv", label: "Bóng L Chục Dò ĐV", endpoint: "KiemTraBongLChucDoDV.php" }
+    ];
+
+    function getLegacyBongVariantMeta(variantValue) {
+      var key = String(variantValue || "bong");
+      for (var i = 0; i < LEGACY_BONG_VARIANTS.length; i += 1) {
+        if (String(LEGACY_BONG_VARIANTS[i].value) === key) return LEGACY_BONG_VARIANTS[i];
+      }
+      return LEGACY_BONG_VARIANTS[0];
+    }
+
+    function formatLegacyBongItemDate(idValue) {
+      var id = String(idValue || "").trim();
+      if (id === "HT") return "HT";
+      if (/^\d{8}$/.test(id)) return id.slice(6, 8) + "/" + id.slice(4, 6) + "/" + id.slice(0, 4);
+      return id;
+    }
+
+    function parseLegacyBongPhpRows(xmlText) {
+      var text = String(xmlText || "").trim();
+      if (!text) return [];
+      var parser = new DOMParser();
+      var doc = parser.parseFromString(text, "text/xml");
+      if (!doc) return [];
+      var items = doc.getElementsByTagName("item");
+      var fieldNames = ["D_dau", "D_duoi", "P_dau", "P_duoi", "B_dau", "B_so2", "B_so3", "B_so4", "B_duoi"];
+      var out = [];
+      for (var i = 0; i < items.length; i += 1) {
+        var item = items[i];
+        var id = String((item && item.getAttribute && item.getAttribute("id")) || "").trim();
+        var row = {
+          key: id || ("bong_" + i),
+          id: id,
+          dateLabel: formatLegacyBongItemDate(id),
+          isHeaderPrediction: id === "HT"
+        };
+        fieldNames.forEach(function (field) {
+          var nodes = item.getElementsByTagName(field);
+          row[field] = nodes && nodes.length ? String((nodes[0] && nodes[0].textContent) || "") : "";
+        });
+        out.push(row);
+      }
+      return out;
+    }
+
+    function parseLegacyBongStatsHtml(htmlText) {
+      var text = String(htmlText || "").trim();
+      if (!text) return [];
+      var doc = new DOMParser().parseFromString("<div>" + text + "</div>", "text/html");
+      if (!doc) return [];
+      var trs = doc.querySelectorAll("tr");
+      var rows = [];
+      for (var i = 0; i < trs.length; i += 1) {
+        var tr = trs[i];
+        var cells = tr.querySelectorAll("th,td");
+        var parsedCells = [];
+        for (var ci = 0; ci < cells.length; ci += 1) {
+          var td = cells[ci];
+          parsedCells.push({
+            key: "c_" + i + "_" + ci,
+            html: String((td && td.innerHTML) || "").trim(),
+            colSpan: Math.max(1, Number((td && td.getAttribute && td.getAttribute("colspan")) || 1)),
+            rowSpan: Math.max(1, Number((td && td.getAttribute && td.getAttribute("rowspan")) || 1)),
+            align: String((td && td.getAttribute && td.getAttribute("align")) || ""),
+            width: String((td && td.getAttribute && td.getAttribute("width")) || "")
+          });
+        }
+        if (parsedCells.length) rows.push({ key: "bong_stats_" + i, cells: parsedCells });
+      }
+      return rows;
+    }
+
+    function legacyBongHtmlNode(htmlValue) {
+      return h("span", {
+        dangerouslySetInnerHTML: { __html: String(htmlValue || "") }
+      });
+    }
+
+    function legacyBongCardNode(row) {
+      var r = row || {};
+      var cellStyle = {
+        border: "1px solid " + theme.border,
+        width: 58,
+        minWidth: 58,
+        height: 36,
+        padding: "2px 4px",
+        textAlign: "center",
+        verticalAlign: "middle",
+        background: theme.cardBg,
+        color: theme.text,
+        fontSize: 12,
+        fontWeight: 600
+      };
+      return h("div", { style: { overflowX: "auto" } }, [
+        h("table", { style: { borderCollapse: "collapse", margin: "0 auto", background: theme.cardBg } }, [
+          h("tbody", null, [
+            h("tr", { key: "r1" }, [
+              h("td", { style: cellStyle }, legacyBongHtmlNode(r.D_dau)),
+              h("td", { style: cellStyle }, legacyBongHtmlNode(r.D_duoi)),
+              h("td", { style: cellStyle }, legacyBongHtmlNode(r.P_dau)),
+              h("td", { style: cellStyle }, legacyBongHtmlNode(r.P_duoi))
+            ]),
+            h("tr", { key: "r2" }, [
+              h("td", { style: Object.assign({}, cellStyle, { height: 38 }), colSpan: 4 }, legacyBongHtmlNode(r.B_duoi))
+            ]),
+            h("tr", { key: "r3" }, [
+              h("td", { style: cellStyle }, legacyBongHtmlNode(r.B_dau)),
+              h("td", { style: cellStyle }, legacyBongHtmlNode(r.B_so2)),
+              h("td", { style: cellStyle }, legacyBongHtmlNode(r.B_so3)),
+              h("td", { style: cellStyle }, legacyBongHtmlNode(r.B_so4))
+            ])
+          ])
+        ])
+      ]);
+    }
+
+    var legacyBongColumns = [
+      {
+        title: "Ngày",
+        dataIndex: "dateLabel",
+        key: "dateLabel",
+        width: 120,
+        fixed: "left",
+        render: function (v, rec) {
+          var text = String(v || rec.id || "");
+          return h("div", { style: { fontWeight: rec && rec.isHeaderPrediction ? 700 : 600, color: theme.text } }, text);
+        }
+      },
+      {
+        title: "Kết quả Bóng",
+        dataIndex: "D_dau",
+        key: "bongCard",
+        width: 320,
+        render: function (_v, rec) { return legacyBongCardNode(rec); }
+      }
+    ];
+
+    async function runLegacyBong() {
+      setLoading(true);
+      setProgress(15);
+      try {
+        var meta = getLegacyBongVariantMeta(legacyBongVariant);
+        var fromYmd = normalizeLegacyDateYmd(tu_ngay);
+        var toYmd = normalizeLegacyDateYmd(den_ngay);
+        if (!fromYmd || !toYmd) {
+          canhbao("Ngày bắt đầu/kết thúc không hợp lệ");
+          return;
+        }
+        var qs = new URLSearchParams();
+        qs.set("Tu", fromYmd);
+        qs.set("Den", toYmd);
+        var resp = await fetch("../Php/" + meta.endpoint + "?" + qs.toString(), {
+          method: "GET",
+          credentials: "same-origin"
+        });
+        var rawText = await resp.text();
+        if (!resp.ok) {
+          throw new Error("PHP HTTP " + resp.status + ": " + rawText.slice(0, 160));
+        }
+        var parts = String(rawText || "").split("~!@18001090*()");
+        var xmlPart = parts[0] || "";
+        var htmlPart = parts[1] || "";
+        var rows = parseLegacyBongPhpRows(xmlPart);
+        var statRows = parseLegacyBongStatsHtml(htmlPart);
+        if (!rows.length) {
+          throw new Error("Không đọc được dữ liệu Bóng từ PHP");
+        }
+        setLegacyBongRows(rows);
+        setLegacyBongStatsRows(statRows);
+        setLegacyBongSummary(meta.label + ": " + rows.length + " dòng");
+        setActiveAction("legacy_bong");
+        setSubTab("legacy_bong");
+        setProgress(100);
+      } catch (e) {
+        console.error(e);
+        canhbao("Không thể chạy Bóng: " + String((e && e.message) || e || ""));
+      } finally {
+        setLoading(false);
+        setTimeout(function () { setProgress(0); }, 600);
+      }
+    }
+
     function normalizeLegacyTongHopCompareKey(value) {
       return String(value || "")
         .replace(/<[^>]*>/g, " ")
@@ -6977,130 +8053,7 @@
       return out;
     }
 
-    async function runLegacyTongHopParityCheck() {
-      var cachList = getLegacyTongHopResolvedCachList(legacyThUseTrietSource);
-      if (!cachList.length) {
-        canhbao("Vui lòng nhập Số hoặc chọn Nhóm/Cách trước khi đối chiếu");
-        return;
-      }
 
-      setLoading(true);
-      setProgress(20);
-      setLegacyThParityStatus("Đang đối chiếu JS với PHP...");
-
-      try {
-        var selectedQueryItems = getLegacyThSelectedQueryTypeItems();
-        var queryType = selectedQueryItems.length
-          ? selectedQueryItems[0]
-          : buildLegacyThDefaultQueryTypeDefs(legacyHeThong)[0];
-
-        var jsRows = await fetchLegacyTongHopRowsFromApi({
-          triet: !!legacyThUseTrietSource,
-          queryValue: queryType.value,
-          queryText: queryType.text,
-          cachItems: cachList
-        });
-
-        var params = new URLSearchParams();
-        params.set("TR", legacyThUseTrietSource ? "1" : "0");
-        params.set("MaDuoi", String(legacyHeThong));
-        params.set("TND", String(toSinhThreshold(legacyThTnd, 7)));
-        params.set("TKY", String(toSinhThreshold(legacyThTky, 52)));
-        params.set("KTN", String(toSinhThreshold(legacyThKtn, 12)));
-        params.set("KTD", String(toSinhThreshold(legacyThKtd, 12)));
-        params.set("L2C", String(toSinhThreshold(legacyThL2c, 12)));
-        params.set("So", cachList.map(function (item) { return String((item && item.searchText) || "").trim(); }).filter(Boolean).join(","));
-        params.set("Nhom", "0");
-        params.set("Tu", normalizeLegacyDateYmd(tu_ngay));
-        params.set("Den", normalizeLegacyDateYmd(den_ngay));
-        params.set("Cach", cachList.map(function (_item, idx) { return String(idx + 1); }).join(","));
-        params.set("TCach", cachList.map(function (item) { return String((item && (item.boSo || item.cachName || item.noiDungDisplay)) || "").replace(/,/g, " ").replace(/\s+/g, " ").trim(); }).join(","));
-        params.set("TKCach", "");
-        params.set("Loai", String(queryType.value || ""));
-        params.set("Ten", String(queryType.text || ""));
-        params.set("TC", "0");
-        params.set("KQ", buildLegacyTongHopResultMaskCsv());
-
-        var resp = await fetch("../Php/TongHop.php", {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" },
-          body: params.toString(),
-          credentials: "same-origin"
-        });
-
-        var rawText = await resp.text();
-        if (!resp.ok) {
-          throw new Error("PHP HTTP " + resp.status + ": " + rawText.slice(0, 120));
-        }
-
-        var phpRows = parseLegacyTongHopPhpRows(rawText);
-        if (!phpRows.length) {
-          throw new Error("PHP không trả về dòng dữ liệu hợp lệ");
-        }
-
-        var metricFields = [
-          "lanL2C", "lanL3C", "lanLB3C", "lanTongNgaySinh", "lauNgay", "lauKy", "ngayCXHT", "kyCXHT",
-          "lauNgayDC", "ngayCXHTDC", "lauNgayDP", "ngayCXHTDP", "lauNgayT", "ngayCXHTT", "lauNgay2D", "ngayCXHT2D",
-          "lauNgay3D", "ngayCXHT3D", "lauNgayNB", "ngayCXHTNB", "lauNgay3NB", "ngayCXHT3NB", "lauNgayMB", "ngayCXHTMB",
-          "lanTuan1C", "lanTuan2C", "lanDai", "lanTuan", "lanTuanD2D", "lanNgayD2C", "lanTuanD3", "lanNgayD3", "lanKTD", "lanTuan21"
-        ];
-
-        var phpMap = {};
-        phpRows.forEach(function (row) {
-          var k = normalizeLegacyTongHopCompareKey(row.boSo);
-          if (!k) return;
-          if (!phpMap[k]) phpMap[k] = [];
-          phpMap[k].push(row);
-        });
-
-        var missingInPhp = [];
-        var mismatches = [];
-        var matchedRows = 0;
-
-        jsRows.forEach(function (jsRow) {
-          var k = normalizeLegacyTongHopCompareKey(jsRow && jsRow.boSo);
-          if (!k || !phpMap[k] || !phpMap[k].length) {
-            missingInPhp.push(String((jsRow && jsRow.boSo) || ""));
-            return;
-          }
-          var phpRow = phpMap[k].shift();
-          matchedRows += 1;
-          metricFields.forEach(function (field) {
-            var jv = Number((jsRow && jsRow[field]) || 0);
-            var pv = Number((phpRow && phpRow[field]) || 0);
-            if (jv !== pv) {
-              mismatches.push(String((jsRow && jsRow.boSo) || "") + " | " + field + " | JS=" + jv + " | PHP=" + pv);
-            }
-          });
-        });
-
-        var extraInPhp = [];
-        Object.keys(phpMap).forEach(function (k) {
-          var bucket = phpMap[k] || [];
-          bucket.forEach(function (row) {
-            extraInPhp.push(String((row && row.boSo) || ""));
-          });
-        });
-
-        var status = "[Parity] JS=" + jsRows.length + " dòng, PHP=" + phpRows.length + " dòng, khớp key=" + matchedRows + ".";
-        if (!mismatches.length && !missingInPhp.length && !extraInPhp.length) {
-          status += " Tất cả cột số đã khớp.";
-        } else {
-          status += " Lệch cột=" + mismatches.length + ", thiếu ở PHP=" + missingInPhp.length + ", dư ở PHP=" + extraInPhp.length + ".";
-          if (mismatches.length) status += "\n- Sai số đầu tiên: " + mismatches.slice(0, 10).join("\n- ");
-          if (missingInPhp.length) status += "\n- Thiếu ở PHP: " + missingInPhp.slice(0, 10).join(", ");
-          if (extraInPhp.length) status += "\n- Dư ở PHP: " + extraInPhp.slice(0, 10).join(", ");
-        }
-        setLegacyThParityStatus(status);
-        setProgress(100);
-      } catch (e) {
-        console.error(e);
-        setLegacyThParityStatus("[Parity] Lỗi đối chiếu: " + String((e && e.message) || e || "unknown"));
-      } finally {
-        setLoading(false);
-        setTimeout(function () { setProgress(0); }, 600);
-      }
-    }
 
     function runLegacyTongHopAutoFilter(options) {
       options = options || {};
@@ -7336,6 +8289,9 @@
       if (nextTool === "th") {
         setActiveAction("legacy_th");
         setSubTab("legacy_th");
+      } else if (nextTool === "bong") {
+        setActiveAction("legacy_bong");
+        setSubTab("legacy_bong");
       } else if (nextTool === "slrnb") {
         setActiveAction("legacy_slr");
         setSubTab("legacy_slr");
@@ -7356,6 +8312,9 @@
       if (nextConfigTab === "th") {
         setActiveAction("legacy_th");
         setSubTab("legacy_th");
+      } else if (nextConfigTab === "bong") {
+        setActiveAction("legacy_bong");
+        setSubTab("legacy_bong");
       } else if (nextConfigTab === "slrnb") {
         setActiveAction("legacy_slr");
         setSubTab("legacy_slr");
@@ -7375,11 +8334,7 @@
       var current = String(legacySlrQueryValue || "");
       var exists = options.some(function (item) { return String(item && item.value || "") === current; });
       if (!exists && options.length) {
-        var slrDefault = getLegacySlrDefaultQueryValue(legacyHeThong);
-        var defaultExists = options.some(function (item) {
-          return String((item && item.value) || "") === slrDefault;
-        });
-        setLegacySlrQueryValue(defaultExists ? slrDefault : String(options[0].value || ""));
+        setLegacySlrQueryValue(getLegacySlrPreferredQueryValue(legacyHeThong, options));
       }
     }, [legacyHeThong, legacyThQueryTypeOptions, legacySlrQueryValue]);
 
@@ -7745,18 +8700,22 @@
       return chromeHeight + (visibleRows * rowHeight);
     }
 
-    function legacySlrWeekCell(data) {
+    function legacySlrWeekCell(data, opts) {
       var d = data || {};
+      var cellOpts = opts || {};
       var mode = String(d.mode || "C_D").toUpperCase();
       var rows = Array.isArray(d.rows) ? d.rows : [];
       var showBoth = mode === "C_D";
       var showDao = mode === "D";
       var showPair = mode === "2C";
       var singleTitle = showPair ? "2C" : (showDao ? "D" : "C");
-      var dateLabel = String(d.date || "").replace(/\//g, "_") + "_";
+      var thuLabel = legacySlrThuLabelFromYmd(normalizeLegacyDateYmd(d.date));
+      var dateLabel = (thuLabel ? (thuLabel + "_") : "") + String(d.date || "").replace(/\//g, "_");
       var headBg = "color-mix(in srgb, " + theme.primary + " 10%, " + theme.cardBg + " 90%)";
-      var uniformHeight = getLegacySlrUniformHeight();
       var innerRowHeight = getLegacySlrInnerRowHeight();
+      var uniformHeight = cellOpts.fitContent
+        ? (3 + rows.length) * innerRowHeight
+        : getLegacySlrUniformHeight();
       var fixedCellBase = {
         border: "1px solid " + theme.border,
         textAlign: "center",
@@ -8005,6 +8964,318 @@
       ];
     }
 
+    // Build weekly summary for Auto rows using precomputed per-STT-range totals from cell cache
+    // weekCNam/weekDNam/weekCBac/weekDBac: maps of weekIdx -> hit count for the specific sttFrom-sttTo range
+    function buildLegacySlrAutoWeekSummaryFromTotals(mode, numWeeks, weekCNam, weekDNam, weekCBac, weekDBac) {
+      var m = String(mode || "C_D").toUpperCase();
+      var limit = Math.min(LEGACY_SLR_WEEK_SUMMARY_LIMIT, Math.max(0, Number(numWeeks || 0)));
+      if (!limit) return [];
+      // wri=0 is the most recent week; display oldest first (reversed, like buildLegacySlrWeekSummaryRows)
+      var wriList = [];
+      for (var i = limit - 1; i >= 0; i -= 1) wriList.push(i);
+      var getV = function (map, wri) { return Number(map[wri] || 0); };
+      if (m === "2C") {
+        return [
+          { key: "pair_bac", label: "Tổng Cặp Bắc", limit: 3, values: wriList.map(function (wri) { return getV(weekCBac, wri); }) },
+          { key: "pair_nam", label: "Tổng Cặp Nam", limit: 2, values: wriList.map(function (wri) { return getV(weekCNam, wri); }) },
+          { key: "pair_all", label: "Tổng Cặp Nam Bắc", limit: 5, values: wriList.map(function (wri) { return getV(weekCNam, wri) + getV(weekCBac, wri); }) }
+        ];
+      }
+      return [
+        { key: "c_bac", label: "Chính Bắc", limit: 3, values: wriList.map(function (wri) { return getV(weekCBac, wri); }) },
+        { key: "c_nam", label: "Chính Nam", limit: 2, values: wriList.map(function (wri) { return getV(weekCNam, wri); }) },
+        { key: "c_all", label: "Chính Nam Bắc", limit: 5, values: wriList.map(function (wri) { return getV(weekCNam, wri) + getV(weekCBac, wri); }) },
+        { key: "d_bac", label: "Đảo Bắc", limit: 3, values: wriList.map(function (wri) { return getV(weekDBac, wri); }) },
+        { key: "d_nam", label: "Đảo Nam", limit: 2, values: wriList.map(function (wri) { return getV(weekDNam, wri); }) },
+        { key: "d_all", label: "Đảo Nam Bắc", limit: 5, values: wriList.map(function (wri) { return getV(weekDNam, wri) + getV(weekDBac, wri); }) },
+        { key: "t_bac", label: "Tổng Bắc", limit: 3, values: wriList.map(function (wri) { return getV(weekCBac, wri) + getV(weekDBac, wri); }) },
+        { key: "t_nam", label: "Tổng Nam", limit: 2, values: wriList.map(function (wri) { return getV(weekCNam, wri) + getV(weekDNam, wri); }) },
+        { key: "t_all", label: "Tổng Nam Bắc", limit: 10, values: wriList.map(function (wri) { return getV(weekCNam, wri) + getV(weekDNam, wri) + getV(weekCBac, wri) + getV(weekDBac, wri); }) }
+      ];
+    }
+
+    async function exportLegacySlrAutoRows() {
+      var rows = Array.isArray(legacySlrAutoRows) ? legacySlrAutoRows : [];
+      if (!rows.length) { canhbao(tt.exportNoData || "Không có dữ liệu để xuất"); return; }
+      var firstMode = String((rows[0] && rows[0].mode) || "C_D").toUpperCase();
+      var is2C = firstMode === "2C";
+      var isC = firstMode === "C";
+      var isD = firstMode === "D";
+      var header = ["Loại Tìm", "Từ STT", "Đến STT", "Chuỗi (ngày)", "Từ ngày", "Đến ngày", "Tổng Nam 0 (tuần)"];
+      // latest result stats headers
+      header.push("KQ gần nhất (ngày)");
+      if (is2C) { header.push("C.Nam"); header.push("C.Bắc"); }
+      else if (isC) { header.push("C.Nam"); header.push("C.Bắc"); }
+      else if (isD) { header.push("Đ.Nam"); header.push("Đ.Bắc"); }
+      else { header.push("C.Nam"); header.push("C.Bắc"); header.push("Đ.Nam"); header.push("Đ.Bắc"); }
+      // week summary: collect all labels from first row that has weekSummaryRows
+      var weekLabels = [];
+      var weekLabelKeys = [];
+      for (var ri = 0; ri < rows.length; ri += 1) {
+        var wsRows = Array.isArray(rows[ri].weekSummaryRows) ? rows[ri].weekSummaryRows : [];
+        if (wsRows.length) {
+          weekLabels = wsRows.map(function (sr) { return String(sr.label || ""); });
+          weekLabelKeys = wsRows.map(function (sr) { return String(sr.key || ""); });
+          break;
+        }
+      }
+      // count max weeks
+      var maxWeekCols = 0;
+      for (var ri2 = 0; ri2 < rows.length; ri2 += 1) {
+        var wsRows2 = Array.isArray(rows[ri2].weekSummaryRows) ? rows[ri2].weekSummaryRows : [];
+        if (wsRows2.length && wsRows2[0].values && wsRows2[0].values.length > maxWeekCols) {
+          maxWeekCols = wsRows2[0].values.length;
+        }
+      }
+      // build week headers
+      for (var li = 0; li < weekLabels.length; li += 1) {
+        for (var wci = 0; wci < maxWeekCols; wci += 1) {
+          header.push(weekLabels[li] + " T" + (wci + 1));
+        }
+      }
+      var aoa = [header];
+      for (var ri3 = 0; ri3 < rows.length; ri3 += 1) {
+        var r = rows[ri3] || {};
+        var s = r.latestCellStats || {};
+        var m2 = String(r.mode || "C_D").toUpperCase();
+        var line = [
+          String(r.queryLabel || ""),
+          Number(r.sttFrom || 0),
+          Number(r.sttTo || 0),
+          Number(r.noHitDays || 0),
+          String(r.fromDate || ""),
+          String(r.toDate || ""),
+          Number(r.tongNamZeroWeekStreak || 0),
+          String(s.date || "")
+        ];
+        if (m2 === "2C" || m2 === "C") { line.push(Number(s.cNam || 0)); line.push(Number(s.cBac || 0)); }
+        else if (m2 === "D") { line.push(Number(s.dNam || 0)); line.push(Number(s.dBac || 0)); }
+        else { line.push(Number(s.cNam || 0)); line.push(Number(s.cBac || 0)); line.push(Number(s.dNam || 0)); line.push(Number(s.dBac || 0)); }
+        var wsRowsR = Array.isArray(r.weekSummaryRows) ? r.weekSummaryRows : [];
+        var wsMap = {};
+        for (var si = 0; si < wsRowsR.length; si += 1) {
+          wsMap[String(wsRowsR[si].key || "")] = Array.isArray(wsRowsR[si].values) ? wsRowsR[si].values : [];
+        }
+        for (var li2 = 0; li2 < weekLabelKeys.length; li2 += 1) {
+          var vals = wsMap[weekLabelKeys[li2]] || [];
+          for (var wci2 = 0; wci2 < maxWeekCols; wci2 += 1) {
+            line.push(wci2 < vals.length ? Number(vals[wci2] || 0) : "");
+          }
+        }
+        aoa.push(line);
+      }
+      await exportPayloadToFile({ fileName: "SLR_Auto", sheets: [{ name: "SLR Auto", aoa: aoa }] });
+    }
+
+    function buildLegacySlrAutoLatestCellText(cellData) {
+      var cell = cellData || {};
+      var rows = Array.isArray(cell.rows) ? cell.rows : [];
+      if (!rows.length) return "-";
+      var lines = [];
+      var dateText = String(cell.date || "").trim();
+      if (dateText) lines.push(dateText);
+      rows.forEach(function (r) {
+        lines.push(String(r.stt || "") + ": C=" + String(r.so || "") + " D=" + String(r.dao || ""));
+      });
+      lines.push("Tong: C=" + String(Number(cell.c || 0)) + " D=" + String(Number(cell.d || 0)));
+      return lines.join("\n");
+    }
+
+    function buildLegacySlrAutoWeekSummaryText(summaryRows) {
+      var rows = Array.isArray(summaryRows) ? summaryRows : [];
+      if (!rows.length) return "-";
+      return rows.map(function (sr) {
+        var label = String(sr && sr.label || "");
+        var vals = Array.isArray(sr && sr.values) ? sr.values : [];
+        return label + ": " + vals.map(function (v) { return String(Number(v || 0)); }).join(" ");
+      }).join("\n");
+    }
+
+    async function exportLegacySlrAutoSelectedRows() {
+      var selectedKeys = legacySlrAutoSelectedRowKeys || [];
+      if (!selectedKeys.length) {
+        canhbao(tt.lgThSelectRowsToExport || "Vui lòng chọn ít nhất 1 dòng để xuất Excel");
+        return;
+      }
+
+      var selectedMap = {};
+      selectedKeys.forEach(function (k) { selectedMap[String(k)] = true; });
+      var rows = (legacySlrAutoFilteredRows || []).filter(function (row, idx) {
+        var key = String((row && row.key) || (String((row && row.queryValue) || "") + "_" + String((row && row.sttFrom) || "") + "_" + String((row && row.sttTo) || "") + "_" + idx));
+        return !!selectedMap[key];
+      });
+
+      if (!rows.length) {
+        canhbao(tt.lgThSelectRowsToExport || "Vui lòng chọn ít nhất 1 dòng để xuất Excel");
+        return;
+      }
+
+      var aoa = [[
+        tt.searchType || "Loại Tìm",
+        "Từ STT",
+        "Đến STT",
+        "Chuỗi không trúng",
+        "Tổng Nam không xổ LT",
+        "KQ gần nhất",
+        "Thống kê tuần"
+      ]];
+
+      rows.forEach(function (r) {
+        aoa.push([
+          String((r && r.queryLabel) || ""),
+          Number((r && r.sttFrom) || 0),
+          Number((r && r.sttTo) || 0),
+          String(Number((r && r.noHitDays) || 0)) + " ngày (" + String((r && r.fromDate) || "") + " -> " + String((r && r.toDate) || "") + ")"
+            + (r && r.noHitHintText ? ("\n" + String(r.noHitHintText)) : ""),
+          String(Number((r && r.tongNamZeroWeekStreak) || 0)) + " tuần (yêu cầu >= " + String(Number((r && r.tongNamWeeks) || 0)) + ")",
+          buildLegacySlrAutoLatestCellText(r && r.latestCellData),
+          buildLegacySlrAutoWeekSummaryText(r && r.weekSummaryRows)
+        ]);
+      });
+
+      await exportPayloadToFile({
+        fileName: "legacy_slr_auto_selected",
+        sheets: [{ name: "SLR_Auto", aoa: aoa }]
+      });
+    }
+
+    function applyLegacySlrAutoRowToManual(rec) {
+      var row = rec || {};
+      var sttFrom = Math.max(1, Number(row.sttFrom || 1));
+      var sttTo = Math.max(sttFrom, Number(row.sttTo || sttFrom));
+      var targetRaw = parseLegacyLoaiTimMeta(row.queryValue, legacyHeThong).rawValue;
+      var matchedOption = (legacySlrQueryTypeOptions || []).find(function (item) {
+        var optionRaw = parseLegacyLoaiTimMeta(item && item.value, legacyHeThong).rawValue;
+        return String(optionRaw || "") === String(targetRaw || "");
+      });
+      var applyQueryValue = String((matchedOption && matchedOption.value) || targetRaw || row.queryValue || "");
+      if (applyQueryValue) setLegacySlrQueryValue(applyQueryValue);
+      setLegacyRankFrom(sttFrom);
+      setLegacyRankTo(sttTo);
+      setLegacySpecialConfigTab("slrnb");
+      setLegacyTool("slrnb");
+      setActiveAction("legacy_slr");
+      setSubTab("legacy_slr");
+      thongbao("Đã áp dụng: " + String(row.queryLabel || applyQueryValue || "Loại Tìm") + " | STT " + sttFrom + "-" + sttTo + " vào Khu vực thủ công");
+    }
+
+    var legacySlrAutoColumns = [
+      {
+        title: tt.searchType || "Loại Tìm",
+        dataIndex: "queryLabel",
+        key: "queryLabel",
+        width: 220,
+        fixed: "left",
+        sorter: function (a, b) {
+          return String((a && a.queryLabel) || "").localeCompare(String((b && b.queryLabel) || ""), "vi", { numeric: true, sensitivity: "base" });
+        }
+      },
+      {
+        title: "Từ STT",
+        dataIndex: "sttFrom",
+        key: "sttFrom",
+        width: 90,
+        sorter: function (a, b) { return Number((a && a.sttFrom) || 0) - Number((b && b.sttFrom) || 0); }
+      },
+      {
+        title: "Đến STT",
+        dataIndex: "sttTo",
+        key: "sttTo",
+        width: 90,
+        sorter: function (a, b) { return Number((a && a.sttTo) || 0) - Number((b && b.sttTo) || 0); }
+      },
+      {
+        title: "Chuỗi không trúng",
+        dataIndex: "noHitDays",
+        key: "noHitDays",
+        width: 180,
+        render: function (v, rec) {
+          var hintText = String((rec && rec.noHitHintText) || "").trim();
+          return h("div", null, [
+            hintText ? h("div", { style: { fontSize: 13, color: theme.error, fontWeight: 800, lineHeight: 1.35 } }, hintText) : null,
+            h("div", null, String(Number(v || 0)) + " ngày (" + String((rec && rec.fromDate) || "") + " -> " + String((rec && rec.toDate) || "") + ")")
+          ]);
+        }
+      },
+      {
+        title: "Tổng Nam không xổ LT",
+        dataIndex: "tongNamZeroWeekStreak",
+        key: "tongNamZeroWeekStreak",
+        width: 180,
+        sorter: function (a, b) { return Number((a && a.tongNamZeroWeekStreak) || 0) - Number((b && b.tongNamZeroWeekStreak) || 0); },
+        render: function (v, rec) {
+          return String(Number(v || 0)) + " tuần (yêu cầu >= " + String(Number((rec && rec.tongNamWeeks) || 0)) + ")";
+        }
+      },
+      {
+        title: "KQ gần nhất",
+        dataIndex: "latestCellData",
+        key: "latestCellData",
+        width: 190,
+        render: function (v) {
+          var cellData = v || {};
+          if (!cellData || !Array.isArray(cellData.rows) || !cellData.rows.length) {
+            return h("span", { style: { color: theme.muted } }, "-");
+          }
+          return h("div", { style: { minWidth: 160 } }, legacySlrWeekCell(cellData, { fitContent: true }));
+        }
+      },
+      {
+        title: "Thống kê tuần (tối đa " + LEGACY_SLR_WEEK_SUMMARY_LIMIT + " cột)",
+        dataIndex: "weekSummaryRows",
+        key: "weekSummaryRows",
+        width: 860,
+        render: function (v) {
+          var rows = Array.isArray(v) ? v : [];
+          if (!rows.length) return h("span", { style: { color: theme.muted } }, "-");
+          return h("div", { style: { overflowX: "auto" } }, [
+            h("table", { style: { borderCollapse: "collapse", minWidth: 680, background: theme.cardBg } }, [
+              h("tbody", null, rows.map(function (sr) {
+                return h("tr", { key: "auto_sum_" + String(sr.key || "") }, [
+                  h("td", {
+                    style: {
+                      border: "1px solid " + theme.border,
+                      padding: "2px 6px",
+                      fontWeight: 600,
+                      whiteSpace: "nowrap",
+                      background: "color-mix(in srgb, " + theme.cardBg + " 86%, " + theme.pageBg + " 14%)"
+                    }
+                  }, String(sr.label || "") + ":"),
+                  (sr.values || []).map(function (n, idx) {
+                    var low = Number(n || 0) <= Number(sr.limit || 0);
+                    return h("td", {
+                      key: "auto_sum_cell_" + String(sr.key || "") + "_" + idx,
+                      style: {
+                        border: "1px solid " + theme.border,
+                        minWidth: 30,
+                        textAlign: "center",
+                        padding: "2px 5px",
+                        color: low ? theme.error : theme.text,
+                        fontWeight: "bold"
+                      }
+                    }, String(Number(n || 0)));
+                  })
+                ]);
+              }))
+            ])
+          ]);
+        }
+      },
+      {
+        title: "Áp dụng",
+        key: "applyManual",
+        width: 128,
+        fixed: "right",
+        render: function (_v, rec) {
+          return h(Button, {
+            size: "small",
+            type: "primary",
+            onClick: function () { applyLegacySlrAutoRowToManual(rec); }
+          }, "Dùng thủ công");
+        }
+      }
+    ];
+
     function makeNbCol(title, di, dw, mp) {
       return { title: title, dataIndex: di, key: di, width: legacyNbColWidths[di] || dw,
         sorter: { compare: function(a, b) { return Number(a[di]||0) - Number(b[di]||0); }, multiple: mp },
@@ -8051,9 +9322,7 @@
       : buildLegacyThDefaultQueryTypeDefs(legacyHeThong);
 
     // --- SLR Multi-select Loại Tìm state ---
-    var _slr_qt = useState([
-      (legacySlrQueryTypeOptions && legacySlrQueryTypeOptions[0] && legacySlrQueryTypeOptions[0].value) || 0
-    ]), legacySlrSelectedQueryTypes = _slr_qt[0], setLegacySlrSelectedQueryTypes = _slr_qt[1];
+    var _slr_qt = useState([]), legacySlrSelectedQueryTypes = _slr_qt[0], setLegacySlrSelectedQueryTypes = _slr_qt[1];
 
     // --- SLR Auto-run state ---
     var _slr_autoRunning = useState(false), legacySlrAutoRunning = _slr_autoRunning[0], setLegacySlrAutoRunning = _slr_autoRunning[1];
@@ -8276,14 +9545,10 @@
         rec["tong" + group] = obj.tong;
         rec["dem" + group] = obj.dem;
         rec["kxh" + group] = obj.kxh;
-        var soKey = String(obj && obj.so != null ? obj.so : "").padStart(2, "0");
-        var matchSoChu = soChuList.length ? !!soChuSet[soKey] : true;
-        if (activeAction === "tk" && Number(appliedThongKe.dem_lon_hon) > 0) {
+        if (activeAction === "tk" && Number(appliedThongKe.dem_lon_hon) > 0 && soChuList.length > 0) {
           var demVal = Number(obj.dem || 0);
-          var tongVal = Number(obj.tong || 0);
-          var kxhVal = Number(obj.kxh || 0);
           var passNguong = demVal >= Number(appliedThongKe.dem_lon_hon || 0);
-          rec["hl" + group] = matchSoChu && passNguong;
+          rec["hl" + group] = passNguong;
         } else if (Number(appliedThongKe.dem_to_nho_hon) > 0) {
           rec["hl" + group] = Number(obj.dem || 0) <= Number(appliedThongKe.dem_to_nho_hon || 0);
         } else {
@@ -8429,7 +9694,7 @@
       { title: tt.colSo, dataIndex: "so", key: "so", width: 80 }
     ].concat(buildKyColumns(appliedThongKe.so_ky, appliedThongKe.sap_xep));
 
-    function buildMatrixColumns(groupCount, middleTitle, rightTitle) {
+    function buildMatrixColumns(_groupCount, middleTitle, rightTitle) {
       function makeSepCol(key) {
         return {
           title: "",
@@ -8462,74 +9727,66 @@
         };
       }
 
-      function makeGroupChildren(groupIndex, sepKey, showTitles) {
-        var out = [];
-        if (sepKey) out.push(makeSepCol(sepKey));
-        var st = showTitles ? "STT" : "";
-        var tg = showTitles ? "Tổng" : "";
-        var dm = showTitles ? "SL" : "";
-        var kx = showTitles ? "KXH" : "";
-        out.push(makeLeaf(groupIndex, "so", st, 55, true));
-        out.push(makeLeaf(groupIndex, "tong", tg, 55, false));
-        out.push(makeLeaf(groupIndex, "dem", dm, 55, false));
-        out.push(makeLeaf(groupIndex, "kxh", kx, 55, false));
-        return out;
-      }
-
-      var total = Math.max(1, Number(groupCount || 5));
-      var cols = [
+      // Vue matrix layout is fixed to 5 blocks (100 numbers / 20 rows):
+      // [1] so1,tong1,dem1,kxh1
+      // [2] vach_a,so2,tong2,dem2,kxh2
+      // [3] vach_b,so3,tong3,dem3,kxh3,vach_c,so4
+      // [4] tong4,dem4,kxh4
+      // [5] vach_d,so5,tong5,dem5,kxh5
+      return [
         makeLeaf(1, "so", "STT", 60, true),
         makeLeaf(1, "tong", "Tổng", 60, false),
         makeLeaf(1, "dem", "SL", 60, false),
-        makeLeaf(1, "kxh", "KXH", 60, false)
-      ];
-
-      if (total === 1) return cols;
-
-      if (total >= 2) {
-        cols.push({ title: "", key: "matrix_block_2", children: makeGroupChildren(2, "vach_a", false) });
-      }
-
-      if (total >= 3) {
-        var middleChildren = [];
-        for (var g = 3; g <= Math.max(3, total - 1); g += 1) {
-          if (g >= total) break;
-          var sepKey = g === 3 ? "vach_b" : ("vach_m_" + g);
-          middleChildren = middleChildren.concat(makeGroupChildren(g, sepKey, false));
-        }
-        if (middleChildren.length) {
-          cols.push({ title: String(middleTitle || ""), key: "matrix_middle_block", children: middleChildren });
-        }
-      }
-
-      if (total >= 3) {
-        cols.push({
+        makeLeaf(1, "kxh", "KXH", 60, false),
+        {
+          title: "",
+          key: "matrix_block_2",
+          children: [
+            makeSepCol("vach_a"),
+            makeLeaf(2, "so", "", 55, true),
+            makeLeaf(2, "tong", "", 55, false),
+            makeLeaf(2, "dem", "", 55, false),
+            makeLeaf(2, "kxh", "", 55, false)
+          ]
+        },
+        {
+          title: String(middleTitle || ""),
+          key: "matrix_middle_block",
+          children: [
+            makeSepCol("vach_b"),
+            makeLeaf(3, "so", "", 55, true),
+            makeLeaf(3, "tong", "", 55, false),
+            makeLeaf(3, "dem", "", 55, false),
+            makeLeaf(3, "kxh", "", 55, false),
+            makeSepCol("vach_c"),
+            makeLeaf(4, "so", "", 55, true)
+          ]
+        },
+        {
+          title: String((appliedThongKe.so_chu || []).join("-") || ""),
+          key: "matrix_so_chu_block",
+          children: [
+            makeLeaf(4, "tong", "", 55, false),
+            makeLeaf(4, "dem", "", 55, false),
+            makeLeaf(4, "kxh", "", 55, false)
+          ]
+        },
+        {
           title: String(rightTitle || ""),
           key: "matrix_right_block",
-          children: makeGroupChildren(total, "vach_d", false)
-        });
-      }
-
-      return cols;
+          children: [
+            makeSepCol("vach_d"),
+            makeLeaf(5, "so", "", 55, true),
+            makeLeaf(5, "tong", "", 55, false),
+            makeLeaf(5, "dem", "", 55, false),
+            makeLeaf(5, "kxh", "", 55, false)
+          ]
+        }
+      ];
     }
 
     function gridAoaFromColumns(columns, rows) {
-      var cols = Array.isArray(columns) ? columns : [];
-      var srcRows = Array.isArray(rows) ? rows : [];
-      var header = cols.map(function (c) {
-        if (!c) return "";
-        if (typeof c.title === "string") return c.title;
-        return "";
-      });
-      var aoa = [header];
-      srcRows.forEach(function (r) {
-        var line = cols.map(function (c) {
-          var key = c && c.dataIndex ? c.dataIndex : "";
-          return key ? (r && r[key] != null ? r[key] : "") : "";
-        });
-        aoa.push(line);
-      });
-      return aoa;
+      return buildGenericExportAoa(columns, rows);
     }
 
     function normalizeKqTitleLabel(comboLabel) {
@@ -8546,30 +9803,27 @@
 
     function buildKxhTitle(comboLabel) {
       var base = normalizeKqTitleLabel(comboLabel);
-      var range = Number(appliedThongKe.sap_xep) === 0
-        ? ("1-" + String(appliedThongKe.so_ky) + "-" + String(appliedThongKe.kxh_phai_lonhon))
-        : (String(appliedThongKe.so_ky) + "-1-" + String(appliedThongKe.kxh_phai_lonhon));
+      var range = "1-" + String(appliedThongKe.so_ky) + "-" + String(appliedThongKe.kxh_phai_lonhon);
       return base + " " + range;
     }
 
     function buildDemNhoHonTitle(comboLabel) {
       var base = normalizeKqTitleLabel(comboLabel);
-      var range = Number(appliedThongKe.sap_xep) === 0
-        ? ("1-" + String(appliedThongKe.so_ky) + "-" + String(appliedThongKe.dem_nho_hon))
-        : (String(appliedThongKe.so_ky) + "-1-" + String(appliedThongKe.dem_nho_hon));
+      var range = "1-" + String(appliedThongKe.so_ky) + "-" + String(appliedThongKe.dem_nho_hon);
       return base + " " + range;
     }
 
     function buildMatrixTitle(comboLabel) {
       var base = normalizeKqTitleLabel(comboLabel);
-      var threshold = Number(appliedThongKe.dem_lon_hon || 0);
+      var hasSoChu = (appliedThongKe.so_chu || []).length > 0;
+      var threshold = hasSoChu
+        ? Number(appliedThongKe.dem_lon_hon || 0)
+        : Number(appliedThongKe.dem_to_nho_hon || 0);
       if (Number(appliedThongKe.so_ky) > 0) {
         if (Number(appliedThongKe.sap_xep) === 0) {
-          var format = base + " 1-" + String(appliedThongKe.so_ky);
-          return threshold > 0 ? format + "-" + String(threshold) : format;
+          return base + " 1-" + String(appliedThongKe.so_ky) + "-" + String(threshold);
         }
-        var format1 = base + " " + String(appliedThongKe.so_ky) + "-1";
-        return threshold > 0 ? format1 + "-" + String(threshold) : format1;
+        return base + " " + String(appliedThongKe.so_ky) + "-1-" + String(threshold);
       }
       return base;
     }
@@ -8652,7 +9906,7 @@
             }, h("div", { className: "kqxs-thongke-main" }, h(Table, {
               rowKey: "id",
               className: "kqxs-history-table",
-              columns: lichSuSoChuColumns,
+              columns: withMultiSortColumns(lichSuSoChuColumns),
               dataSource: lichSuSoChuRows,
               pagination: false,
               size: "small",
@@ -8690,14 +9944,24 @@
             }, h("div", { className: "kqxs-thongke-main" },
               h(Table, {
                 rowKey: "id",
-                columns: thongkeComboColumns,
+                columns: withMultiSortColumns(thongkeComboColumns),
                 dataSource: grp.rows,
                 size: "small",
                 pagination: false,
                 scroll: { x: 1200 },
                 rowClassName: function (rec) {
-                  if (activeAction === "tkm" && rec && rec.thoa_man) return "to_mau";
-                  if (activeAction === "tk" && Number(appliedThongKe.dem_lon_hon) > 0 && (appliedThongKe.so_chu || []).length > 0 && (appliedThongKe.so_chu || []).indexOf(String(rec && rec.so || "")) >= 0) return "to_mau";
+                  if (!rec) return "";
+                  if (activeAction === "tkm") {
+                    // Vue thong_ke_moi: bôi màu theo thoa_man
+                    if (rec.thoa_man) return "to_mau";
+                    return "";
+                  }
+                  // Vue chay_thong_ke: bôi màu khi số nằm trong số chủ và đang bật lọc dem_lon_hon
+                  var soChuList = (appliedThongKe.so_chu || []).map(function (s) { return String(s || "").trim(); }).filter(Boolean);
+                  if (Number(appliedThongKe.dem_lon_hon || 0) > 0 && soChuList.length > 0) {
+                    var soVal = String(rec.so || "").trim();
+                    if (soChuList.indexOf(soVal) >= 0) return "to_mau";
+                  }
                   return "";
                 }
               })
@@ -8707,11 +9971,117 @@
         }
 
         var kqChildren;
-        if (activeAction === "tkm") {
+        // Vue chay_thong_ke logic: KQ tab có các filter nâng cao
+        if (activeAction === "tk") {
+          var hasSoChuForMatrix = (appliedThongKe.so_chu || []).map(function (s) { return String(s || "").trim(); }).filter(Boolean).length > 0;
+          if (Number(appliedThongKe.dem_lon_hon || 0) > 0 && hasSoChuForMatrix) {
+            var matrixTitle = buildMatrixTitle(comboTenDai);
+            // Vue: cột cuối cùng luôn là tiêu đề thứ + ngày, còn block trước đó mới là so_chu.join('-').
+            var rightTitle = String((appliedThongKe.thu_tuan || "") + " " + (appliedThongKe.den_ngay || "")).trim();
+            var matrixCols = buildMatrixColumns(grp.matrixGroupCount || 0, matrixTitle, rightTitle);
+            kqChildren = h("div", { className: "kqxs-kq-pane" },
+              h("div", { key: "mx_" + grp.combo, className: "kqxs-kq-zone" },
+                h(Table, {
+                  rowKey: "id",
+                  columns: withMultiSortColumns(matrixCols),
+                  dataSource: grp.matrixRows || [],
+                  size: "small",
+                  pagination: false,
+                  scroll: { x: "max-content" },
+                  title: function () {
+                    return renderTableTitleWithExport(matrixTitle, function (evt) {
+                      captureTableFromActionEvent(evt, "kqxs_matrix_" + String(grp.combo || ""));
+                    });
+                  }
+                })
+              )
+            );
+          } else {
+            var mainNode = null;
+            var sideNodes = [];
+
+            if (Number(appliedThongKe.lay_so_ky) > 0) {
+              var layCols = buildLaySoKyColumns();
+              var layTitle = buildLaySoKyTitle(comboTenDai);
+              mainNode = h("div", { key: "lsk_" + grp.combo, className: "kqxs-kq-zone" },
+                h(Table, {
+                  rowKey: "id",
+                  columns: withMultiSortColumns(layCols),
+                  dataSource: grp.laySoKyRows || [],
+                  size: "small",
+                  pagination: false,
+                  scroll: { x: "max-content" },
+                  title: function () {
+                    return renderTableTitleWithExport(layTitle, function (evt) {
+                      captureTableFromActionEvent(evt, "kqxs_lay_so_ky_" + String(grp.combo || ""));
+                    });
+                  }
+                })
+              );
+            }
+
+            if (Number(appliedThongKe.kxh_phai_lonhon) > 0) {
+              var kxhTitle = buildKxhTitle(comboTenDai);
+              sideNodes.push(
+                h("div", { key: "kxh_" + grp.combo, className: "kqxs-kq-zone" },
+                  h(Table, {
+                    rowKey: "id",
+                    columns: withMultiSortColumns(pairColumns),
+                    dataSource: grp.kxhPairRows || [],
+                    size: "small",
+                    pagination: false,
+                    scroll: { x: "max-content" },
+                    title: function () {
+                      return renderTableTitleWithExport(kxhTitle, function (evt) {
+                        captureTableFromActionEvent(evt, "kqxs_kxh_" + String(grp.combo || ""));
+                      });
+                    }
+                  })
+                )
+              );
+            }
+
+            if (Number(appliedThongKe.dem_nho_hon) > 0) {
+              var demTitle = buildDemNhoHonTitle(comboTenDai);
+              sideNodes.push(
+                h("div", { key: "dem_" + grp.combo, className: "kqxs-kq-zone" },
+                  h(Table, {
+                    rowKey: "id",
+                    columns: withMultiSortColumns(pairColumns),
+                    dataSource: grp.demNhoPairRows || [],
+                    size: "small",
+                    pagination: false,
+                    scroll: { x: "max-content" },
+                    title: function () {
+                      return renderTableTitleWithExport(demTitle, function (evt) {
+                        captureTableFromActionEvent(evt, "kqxs_dem_" + String(grp.combo || ""));
+                      });
+                    }
+                  })
+                )
+              );
+            }
+
+            var rowNodes = [];
+            if (mainNode) {
+              rowNodes.push(h("div", { key: "main_" + grp.combo, className: "kqxs-kq-col kqxs-kq-col-main" }, [mainNode]));
+            }
+            sideNodes.forEach(function (node, idx) {
+              rowNodes.push(h("div", { key: "side_" + grp.combo + "_" + idx, className: "kqxs-kq-col kqxs-kq-col-side" }, [node]));
+            });
+
+            kqChildren = h("div", { className: "kqxs-kq-pane" },
+              rowNodes.length
+                ? h("div", { className: "kqxs-kq-row" }, rowNodes)
+                : h("div", {}, "Không có dữ liệu")
+            );
+          }
+        } else {
+          // Vue thong_ke_moi: KQ tab chỉ lọc thoa_man=true
           var kqRows = (grp.rows || []).filter(function (r) { return !!(r && r.thoa_man); });
           kqChildren = h("div", { className: "kqxs-kq-pane" }, h(Table, {
             rowKey: "id",
-            columns: thongkeMoiKqCols,
+            columns: withMultiSortColumns(thongkeMoiKqCols),
             dataSource: kqRows,
             size: "small",
             pagination: false,
@@ -8722,79 +10092,6 @@
               });
             }
           }));
-        } else {
-          if (Number(appliedThongKe.dem_lon_hon) > 0 && Number(appliedThongKe.sap_xep) === 0) {
-            var matrixTitle = buildMatrixTitle(comboTenDai);
-            var matrixDateTitle = (String(appliedThongKe.thu_tuan || "") + " " + String(appliedThongKe.den_ngay || "")).trim();
-            kqChildren = h("div", { className: "kqxs-kq-pane" }, h(Table, {
-              rowKey: "id",
-              columns: buildMatrixColumns(grp.matrixGroupCount || 5, matrixTitle, matrixDateTitle),
-              dataSource: grp.matrixRows || [],
-              size: "small",
-              pagination: false,
-              bordered: true,
-              scroll: { x: 1400 },
-              title: function () {
-                return renderTableTitleWithExport(matrixTitle, function (evt) {
-                  captureTableFromActionEvent(evt, "kqxs_kq_matrix_" + String(grp.combo || ""));
-                });
-              }
-            }));
-          } else {
-            kqChildren = h("div", { className: "kqxs-kq-row" }, [
-                  Number(appliedThongKe.lay_so_ky) > 0 && grp.laySoKyRows.length
-                    ? h("div", { key: "lsk_" + grp.combo, className: "kqxs-kq-col kqxs-kq-col-main kqxs-kq-zone" }, h(Table, {
-                        rowKey: "id",
-                        columns: buildLaySoKyColumns(),
-                        dataSource: grp.laySoKyRows,
-                        size: "small",
-                        pagination: false,
-                        bordered: true,
-                        scroll: { x: "max-content" },
-                        title: function () {
-                          var titleText = buildLaySoKyTitle(comboTenDai);
-                          return renderTableTitleWithExport(titleText, function (evt) {
-                            captureTableFromActionEvent(evt, "kqxs_lay_so_ky_" + String(grp.combo || ""));
-                          });
-                        }
-                      }))
-                    : null,
-                  Number(appliedThongKe.kxh_phai_lonhon) > 0
-                    ? h("div", { key: "kxh_" + grp.combo, className: "kqxs-kq-col kqxs-kq-col-side kqxs-kq-zone" }, h(Table, {
-                        rowKey: "id",
-                        columns: pairColumns,
-                        dataSource: grp.kxhPairRows,
-                        size: "small",
-                        pagination: false,
-                        bordered: true,
-                        scroll: { x: "max-content" },
-                        title: function () {
-                          var titleText = buildKxhTitle(comboTenDai);
-                          return renderTableTitleWithExport(titleText, function (evt) {
-                            captureTableFromActionEvent(evt, "kqxs_kq_kxh_" + String(grp.combo || ""));
-                          });
-                        }
-                      }))
-                    : null,
-                  Number(appliedThongKe.dem_nho_hon) > 0
-                    ? h("div", { key: "dnh_" + grp.combo, className: "kqxs-kq-col kqxs-kq-col-side kqxs-kq-zone" }, h(Table, {
-                        rowKey: "id",
-                        columns: pairColumns,
-                        dataSource: grp.demNhoPairRows,
-                        size: "small",
-                        pagination: false,
-                        bordered: true,
-                        scroll: { x: "max-content" },
-                        title: function () {
-                          var titleText = buildDemNhoHonTitle(comboTenDai);
-                          return renderTableTitleWithExport(titleText, function (evt) {
-                            captureTableFromActionEvent(evt, "kqxs_kq_dem_" + String(grp.combo || ""));
-                          });
-                        }
-                      }))
-                    : null
-                ]);
-          }
         }
 
         items.push({
@@ -8841,7 +10138,7 @@
 
     function flattenLaySoKyExportRows(pairRows) {
       var out = [];
-      var maxCot = Math.max(1, Number(lay_so_ky || 1));
+      var maxCot = Math.max(1, Number(appliedThongKe.lay_so_ky || 1));
       (pairRows || []).forEach(function (r) {
         if (r && r.so1) {
           var left = { so: r.so1, ket_qua: r.kq1, to_mau: r.to_mau1 ? 1 : 0 };
@@ -8942,20 +10239,31 @@
           });
           if (aoaTkm.length > 1) payload.sheets.push({ name: "KQ moi", aoa: aoaTkm });
         } else {
-          if (Number(lay_so_ky) > 0 && (grp.laySoKyRows || []).length) {
-            var layCols = buildLaySoKyColumns();
-            var aoaLaySoKy = gridAoaFromColumns(layCols, grp.laySoKyRows || []);
-            if (aoaLaySoKy.length > 1) payload.sheets.push({ name: "Lay so ky", aoa: aoaLaySoKy });
-          }
+          // Parity with runtime Vue behavior: matrix mode only when có số chủ và dem_lon_hon > 0.
+          var hasSoChuForMatrixExport = (appliedThongKe.so_chu || []).map(function (s) { return String(s || "").trim(); }).filter(Boolean).length > 0;
+          if (Number(appliedThongKe.dem_lon_hon || 0) > 0 && hasSoChuForMatrixExport) {
+            var matrixTitleExport = buildMatrixTitle(combo.replace(/,/g, "&"));
+            // Vue export-equivalent title: cột cuối là thứ + ngày.
+            var rightTitleExport = String((appliedThongKe.thu_tuan || "") + " " + (appliedThongKe.den_ngay || "")).trim();
+            var matrixColsExport = buildMatrixColumns(grp.matrixGroupCount || 0, matrixTitleExport, rightTitleExport);
+            var aoaMatrix = gridAoaFromColumns(matrixColsExport, grp.matrixRows || []);
+            if (aoaMatrix.length > 1) payload.sheets.push({ name: "KQ matrix", aoa: aoaMatrix });
+          } else {
+            if (Number(appliedThongKe.lay_so_ky || 0) > 0 && (grp.laySoKyRows || []).length) {
+              var layCols = buildLaySoKyColumns();
+              var aoaLaySoKy = gridAoaFromColumns(layCols, grp.laySoKyRows || []);
+              if (aoaLaySoKy.length > 1) payload.sheets.push({ name: "Lay so ky", aoa: aoaLaySoKy });
+            }
 
-          if (Number(kxh_phai_lonhon) > 0) {
-            var aoaKxh = gridAoaFromColumns(pairColumns, grp.kxhPairRows || []);
-            payload.sheets.push({ name: "KQ KXH", aoa: aoaKxh });
-          }
+            if (Number(appliedThongKe.kxh_phai_lonhon || 0) > 0) {
+              var aoaKxh = gridAoaFromColumns(pairColumns, grp.kxhPairRows || []);
+              payload.sheets.push({ name: "KQ KXH", aoa: aoaKxh });
+            }
 
-          if (Number(dem_nho_hon) > 0) {
-            var aoaDem = gridAoaFromColumns(pairColumns, grp.demNhoPairRows || []);
-            payload.sheets.push({ name: "KQ dem", aoa: aoaDem });
+            if (Number(appliedThongKe.dem_nho_hon || 0) > 0) {
+              var aoaDem = gridAoaFromColumns(pairColumns, grp.demNhoPairRows || []);
+              payload.sheets.push({ name: "KQ dem", aoa: aoaDem });
+            }
           }
         }
 
@@ -8972,9 +10280,25 @@
       }
 
       var baseName = payload.fileName || ("kqxs_" + dateFormat(new Date(), "yyyymmdd"));
+
+      // Prefer shared dynamic-grid export engine to keep behavior consistent across screens.
+      var sharedExporter = window.csmDynamicGridExport;
+      if (typeof sharedExporter === "function") {
+        try {
+          await sharedExporter({
+            fileName: baseName,
+            sheets: payload.sheets
+          });
+          thongbao(tt.exportDone);
+          return;
+        } catch (sharedErr) {
+          // Keep legacy fallback path for resilience in runtime-injected environments.
+        }
+      }
+
       var XLSX = window.XLSX;
 
-      if (!isUsableXlsx(XLSX)) {
+      if (!canWriteXlsx(XLSX)) {
         try {
           XLSX = await ensureXlsxLibrary();
         } catch (err) {
@@ -8983,22 +10307,74 @@
       }
 
       if (isUsableXlsx(XLSX)) {
-        var wb = { SheetNames: [], Sheets: {} };
+        var hasBookApi = !!(XLSX && XLSX.utils
+          && typeof XLSX.utils.book_new === "function"
+          && typeof XLSX.utils.book_append_sheet === "function"
+          && typeof XLSX.utils.aoa_to_sheet === "function");
+        var wb = hasBookApi ? XLSX.utils.book_new() : { SheetNames: [], Sheets: {} };
         payload.sheets.forEach(function (sheet, idx) {
           var sheetName = sanitizeSheetName(sheet && sheet.name ? sheet.name : ("Sheet" + (idx + 1)));
-          var ws = makeWorksheetFromAoa((sheet && sheet.aoa) || [[""]], XLSX);
-          wb.SheetNames.push(sheetName);
-          wb.Sheets[sheetName] = ws;
+          var aoa = (sheet && sheet.aoa) || [[""]];
+          var ws = hasBookApi ? XLSX.utils.aoa_to_sheet(aoa) : makeWorksheetFromAoa(aoa, XLSX);
+          tryApplyWorksheetVisuals(ws, aoa, XLSX);
+          if (hasBookApi) {
+            XLSX.utils.book_append_sheet(wb, ws, sheetName);
+          } else {
+            wb.SheetNames.push(sheetName);
+            wb.Sheets[sheetName] = ws;
+          }
         });
         try {
-          XLSX.writeFile(wb, baseName + ".xlsx");
+          XLSX.writeFile(wb, baseName + ".xlsx", { bookType: "xlsx" });
           thongbao(tt.exportDone);
           return;
         } catch (e) {
+          try {
+            if (typeof XLSX.write === "function") {
+              var xlsxBytes = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+              if (xlsxBytes) {
+                downloadArrayBufferAsFile(baseName + ".xlsx", xlsxBytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+                thongbao(tt.exportDone);
+                return;
+              }
+            }
+          } catch (_xlsxWriteErr) {
+            // keep retry branch
+          }
+
           // Try one forced reload cycle for environments where XLSX bound JSZip too early.
           try {
             XLSX = await ensureXlsxLibrary();
-            XLSX.writeFile(wb, baseName + ".xlsx");
+            var hasBookApiRetry = !!(XLSX && XLSX.utils
+              && typeof XLSX.utils.book_new === "function"
+              && typeof XLSX.utils.book_append_sheet === "function"
+              && typeof XLSX.utils.aoa_to_sheet === "function");
+            var wbRetry = hasBookApiRetry ? XLSX.utils.book_new() : { SheetNames: [], Sheets: {} };
+            payload.sheets.forEach(function (sheet, idx) {
+              var sheetNameRetry = sanitizeSheetName(sheet && sheet.name ? sheet.name : ("Sheet" + (idx + 1)));
+              var aoaRetry = (sheet && sheet.aoa) || [[""]];
+              var wsRetry = hasBookApiRetry ? XLSX.utils.aoa_to_sheet(aoaRetry) : makeWorksheetFromAoa(aoaRetry, XLSX);
+              tryApplyWorksheetVisuals(wsRetry, aoaRetry, XLSX);
+              if (hasBookApiRetry) {
+                XLSX.utils.book_append_sheet(wbRetry, wsRetry, sheetNameRetry);
+              } else {
+                wbRetry.SheetNames.push(sheetNameRetry);
+                wbRetry.Sheets[sheetNameRetry] = wsRetry;
+              }
+            });
+            try {
+              XLSX.writeFile(wbRetry, baseName + ".xlsx", { bookType: "xlsx" });
+            } catch (_xlsxWriteRetryErr) {
+              if (typeof XLSX.write === "function") {
+                var xlsxBytesRetry = XLSX.write(wbRetry, { bookType: "xlsx", type: "array" });
+                if (xlsxBytesRetry) {
+                  downloadArrayBufferAsFile(baseName + ".xlsx", xlsxBytesRetry, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+                  thongbao(tt.exportDone);
+                  return;
+                }
+              }
+              throw _xlsxWriteRetryErr;
+            }
             thongbao(tt.exportDone);
             return;
           } catch (e2) {
@@ -9007,14 +10383,7 @@
         }
       }
 
-      try {
-        downloadExcelXmlFromSheets(baseName + ".xls", payload.sheets);
-        canhbao(tt.exportFallbackXls || tt.exportFallbackCsv);
-        return;
-      } catch (xlsErr) {
-        downloadCsvFromAoa(baseName + ".csv", payload.sheets[0].aoa || [[""]]);
-        canhbao(tt.exportFallbackCsv);
-      }
+      canhbao(tt.exportXlsxOnlyFailed || "Xuất Excel .xlsx thất bại. Vui lòng thử lại hoặc tải lại trang.");
     }
 
     function buildSubtableExportPayload(combo, sheetName, columns, rows) {
@@ -9221,6 +10590,129 @@
       await captureActiveTabContent();
     }
 
+    function themedNumberProps(extra) {
+      var opts = extra || {};
+      var userOnKeyDown = typeof opts.onKeyDown === "function" ? opts.onKeyDown : null;
+      var userParser = typeof opts.parser === "function" ? opts.parser : null;
+
+      function sanitizeDigits(raw) {
+        return String(raw == null ? "" : raw).replace(/[^\d]/g, "");
+      }
+
+      function handleNumericKeyDown(e) {
+        var key = String((e && e.key) || "");
+        var ctrlMeta = !!(e && (e.ctrlKey || e.metaKey));
+        if (ctrlMeta && /^[acvxzy]$/i.test(key)) {
+          if (userOnKeyDown) userOnKeyDown(e);
+          return;
+        }
+
+        var allowNav = {
+          Backspace: true,
+          Delete: true,
+          Tab: true,
+          Enter: true,
+          ArrowLeft: true,
+          ArrowRight: true,
+          ArrowUp: true,
+          ArrowDown: true,
+          Home: true,
+          End: true
+        };
+        if (/^\d$/.test(key) || allowNav[key]) {
+          if (userOnKeyDown) userOnKeyDown(e);
+          return;
+        }
+
+        if (e && typeof e.preventDefault === "function") e.preventDefault();
+        if (userOnKeyDown) userOnKeyDown(e);
+      }
+
+      function parseNumeric(raw) {
+        var cleaned = sanitizeDigits(raw);
+        if (userParser) return userParser(cleaned);
+        return cleaned;
+      }
+
+      var base = {
+        style: { width: "100%" },
+        controls: false,
+        inputMode: "numeric",
+        parser: parseNumeric,
+        onKeyDown: handleNumericKeyDown
+      };
+
+      var merged = Object.assign({}, base, opts);
+      merged.parser = parseNumeric;
+      merged.onKeyDown = handleNumericKeyDown;
+      return merged;
+    }
+
+    function renderDateField(value, onChange, options) {
+      var opts = options || {};
+      var currentText = String(value || "").trim();
+      var minText = String(opts.minDate || "").trim();
+      var maxText = String(opts.maxDate || "").trim();
+
+      function toInputDate(dmy) {
+        var s = String(dmy || "").trim();
+        if (!/^\d{2}\/\d{2}\/\d{4}$/.test(s)) return "";
+        var p = s.split("/");
+        return p[2] + "-" + p[1] + "-" + p[0];
+      }
+
+      function fromInputDate(ymd) {
+        var s = String(ymd || "").trim();
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return "";
+        var p = s.split("-");
+        return p[2] + "/" + p[1] + "/" + p[0];
+      }
+
+      if (DatePicker && dayjsRef) {
+        var valDay = dayjsRef(currentText, "DD/MM/YYYY", true);
+        var minDay = minText ? dayjsRef(minText, "DD/MM/YYYY", true) : null;
+        var maxDay = maxText ? dayjsRef(maxText, "DD/MM/YYYY", true) : null;
+        var pickerValue = (valDay && valDay.isValid && valDay.isValid()) ? valDay : null;
+        var pickerMin = (minDay && minDay.isValid && minDay.isValid()) ? minDay : null;
+        var pickerMax = (maxDay && maxDay.isValid && maxDay.isValid()) ? maxDay : null;
+
+        return h(DatePicker, {
+          value: pickerValue,
+          format: "DD/MM/YYYY",
+          allowClear: false,
+          style: { width: "100%" },
+          popupClassName: "kqxs-react-auto-date-popup",
+          dropdownClassName: "kqxs-react-auto-date-popup",
+          disabledDate: function (current) {
+            if (!current) return false;
+            if (pickerMin && current.isBefore(pickerMin, "day")) return true;
+            if (pickerMax && current.isAfter(pickerMax, "day")) return true;
+            return false;
+          },
+          onChange: function (next) {
+            if (!next || !next.isValid || !next.isValid()) {
+              if (typeof onChange === "function") onChange("");
+              return;
+            }
+            if (typeof onChange === "function") onChange(next.format("DD/MM/YYYY"));
+          }
+        });
+      }
+
+      return h("input", {
+        type: "date",
+        className: "ant-input",
+        style: { width: "100%" },
+        value: toInputDate(currentText),
+        min: toInputDate(minText) || undefined,
+        max: toInputDate(maxText) || undefined,
+        onChange: function (e) {
+          var raw = e && e.target ? e.target.value : "";
+          if (typeof onChange === "function") onChange(fromInputDate(raw));
+        }
+      });
+    }
+
     function themedSelectProps(extra) {
       var base = {
         style: { width: "100%" },
@@ -9231,102 +10723,23 @@
         },
         popupClassName: "kqxs-react-auto-popup",
         dropdownClassName: "kqxs-react-auto-popup",
-        getPopupContainer: function (triggerNode) {
-          return (triggerNode && triggerNode.parentNode) ? triggerNode.parentNode : document.body;
-        }
+        placement: "bottomLeft"
       };
-      return Object.assign({}, base, extra || {}, {
-        style: Object.assign({}, base.style, extra && extra.style ? extra.style : {})
-      });
-    }
-
-    function themedNumberProps(extra) {
-      var base = {
-        style: { width: "100%" },
-        controls: false,
-        parser: function (v) {
-          return String(v == null ? "" : v).replace(/[^\d-]/g, "");
-        },
-        onKeyDown: function (e) {
-          var key = e && e.key ? e.key : "";
-          var allow = /[0-9]|Backspace|Delete|Tab|ArrowLeft|ArrowRight|Home|End|Enter|-/.test(key);
-          if (!allow) e.preventDefault();
-        },
-        inputMode: "numeric"
-      };
-      return Object.assign({}, base, extra || {}, {
-        style: Object.assign({}, base.style, extra && extra.style ? extra.style : {})
-      });
-    }
-
-    function renderDateField(value, onChangeCb, opt) {
-      var cfg = opt || {};
-      var minDate = cfg.minDate ? toDayjsDate(cfg.minDate) : null;
-      var maxDate = cfg.maxDate ? toDayjsDate(cfg.maxDate) : null;
-      if (DatePicker && typeof dayjsRef === "function") {
-        return h(DatePicker, {
-          value: toDayjsDate(value),
-          format: "DD/MM/YYYY",
-          inputReadOnly: true,
-          style: { width: "100%" },
-          popupClassName: "kqxs-react-auto-date-popup",
-          getPopupContainer: function (triggerNode) {
-            return (triggerNode && triggerNode.parentNode) ? triggerNode.parentNode : document.body;
-          },
-          disabledDate: function (current) {
-            if (!current) return false;
-            if (minDate && current.isBefore(minDate, "day")) return true;
-            if (maxDate && current.isAfter(maxDate, "day")) return true;
-            return false;
-          },
-          onChange: function (_date, dateStr) {
-            var next = String(dateStr || "").trim();
-            if (!next) return;
-            onChangeCb(next);
-          }
-        });
-      }
-      return h(Input, {
-        type: "date",
-        readOnly: true,
-        value: ddmmyyyyToIso(value),
-        min: cfg.minDate ? ddmmyyyyToIso(cfg.minDate) : undefined,
-        max: cfg.maxDate ? ddmmyyyyToIso(cfg.maxDate) : undefined,
-        onKeyDown: function (e) { e.preventDefault(); },
-        onChange: function (e) {
-          var next = isoToDdmmyyyy(e && e.target ? e.target.value : "");
-          if (!next) return;
-          onChangeCb(next);
-        }
-      });
+      return Object.assign(base, extra || {});
     }
 
     var runtimeCss = ""
       + ".kqxs-react-auto { background: var(--kqxs-page-bg, #f5f7fb) !important; color: var(--kqxs-text, #1f1f1f) !important; }"
       + ".kqxs-react-auto .ant-card, .kqxs-react-auto .ant-card-head, .kqxs-react-auto .ant-card-body { background: var(--kqxs-card-bg, #fff) !important; color: var(--kqxs-text, #1f1f1f) !important; border-color: var(--kqxs-border, #d9d9d9) !important; }"
-      + ".kqxs-react-auto .ant-card-head { border-bottom-color: var(--kqxs-border, #d9d9d9) !important; }"
-      + ".kqxs-react-auto .ant-card-head-title, .kqxs-react-auto .ant-typography, .kqxs-react-auto .ant-tabs-tab-btn, .kqxs-react-auto .ant-table, .kqxs-react-auto .ant-table-cell { color: var(--kqxs-text, #1f1f1f) !important; }"
-      + ".kqxs-react-auto .ant-tabs, .kqxs-react-auto .ant-tabs-nav, .kqxs-react-auto .ant-tabs-nav-wrap, .kqxs-react-auto .ant-tabs-content-holder, .kqxs-react-auto .ant-tabs-content, .kqxs-react-auto .ant-tabs-tabpane { background: transparent !important; color: var(--kqxs-text, #1f1f1f) !important; }"
-      + ".kqxs-react-auto .ant-tabs-nav::before { border-bottom-color: var(--kqxs-border, #d9d9d9) !important; }"
-      + ".kqxs-react-auto .ant-tabs-tab { color: var(--kqxs-muted, #666) !important; }"
+      + ".kqxs-react-auto .ant-tabs-tab-btn, .kqxs-react-auto .ant-tabs-tab-btn:focus, .kqxs-react-auto .ant-tabs-tab-btn:active { color: var(--kqxs-text, #1f1f1f) !important; }"
+      + ".kqxs-react-auto .ant-tabs-tab:hover .ant-tabs-tab-btn, .kqxs-react-auto .ant-tabs-tab-active .ant-tabs-tab-btn { color: var(--kqxs-primary, #1677ff) !important; }"
       + ".kqxs-react-auto .ant-tabs-ink-bar { background: var(--kqxs-primary, #1677ff) !important; }"
-      + ".kqxs-react-auto .ant-tabs-tab.ant-tabs-tab-active .ant-tabs-tab-btn { color: var(--kqxs-primary, #1677ff) !important; }"
-      + ".kqxs-react-auto .ant-tabs-tab:hover .ant-tabs-tab-btn { color: var(--kqxs-primary, #1677ff) !important; }"
-      + ".kqxs-react-auto .ant-tabs-content-holder, .kqxs-react-auto .ant-tabs-tabpane { border-color: var(--kqxs-border, #d9d9d9) !important; }"
-      + ".kqxs-react-auto .ant-tabs-nav-more, .kqxs-react-auto .ant-tabs-nav-more .anticon { color: var(--kqxs-muted, #666) !important; }"
-      + ".kqxs-react-auto .ant-tabs-nav-more:hover, .kqxs-react-auto .ant-tabs-nav-more:focus { color: var(--kqxs-primary, #1677ff) !important; }"
-      + ".kqxs-react-auto .kqxs-thongke-tabs .ant-tabs-nav { margin-bottom: 8px !important; }"
-      + ".kqxs-react-auto .kqxs-thongke-tabs .ant-tabs-tab { margin-right: 6px !important; padding: 0 !important; }"
-      + ".kqxs-react-auto .kqxs-thongke-tabs .ant-tabs-tab .ant-tabs-tab-btn { font-size: 10pt !important; font-weight: 700 !important; line-height: 1.2 !important; padding: 6px 10px !important; border: 1px solid transparent !important; }"
-      + ".kqxs-react-auto .kqxs-thongke-tabs .ant-tabs-tab.ant-tabs-tab-active .ant-tabs-tab-btn { color: var(--kqxs-header-active-text, var(--kqxs-text, #1f1f1f)) !important; background: var(--kqxs-header-active-bg, color-mix(in srgb, var(--kqxs-primary, #1677ff) 16%, var(--kqxs-card-bg, #fff))) !important; border-color: var(--kqxs-header-border, var(--kqxs-border, #d9d9d9)) !important; border-radius: 2px !important; }"
-      + ".kqxs-react-auto .kqxs-thongke-tabs .ant-tabs-ink-bar { display: none !important; }"
-      + ".kqxs-react-auto .ant-input, .kqxs-react-auto .ant-input-number, .kqxs-react-auto .ant-input-number-input, .kqxs-react-auto .ant-select-selector, .kqxs-react-auto input, .kqxs-react-auto select, .kqxs-react-auto textarea { background: var(--kqxs-input-bg, #fff) !important; color: var(--kqxs-input-text, #1f1f1f) !important; border-color: var(--kqxs-border, #d9d9d9) !important; }"
-      + ".kqxs-react-auto .ant-input, .kqxs-react-auto .ant-input-number, .kqxs-react-auto .ant-picker, .kqxs-react-auto .ant-select-single .ant-select-selector { min-height: 32px !important; height: 32px !important; border-radius: 6px !important; }"
-      + ".kqxs-react-auto .ant-select-single .ant-select-selector .ant-select-selection-item, .kqxs-react-auto .ant-select-single .ant-select-selector .ant-select-selection-placeholder { line-height: 30px !important; }"
-      + ".kqxs-react-auto .ant-input-number { overflow: hidden !important; }"
+      + ".kqxs-react-auto .ant-tabs-nav::before { border-bottom-color: var(--kqxs-border, #d9d9d9) !important; }"
+      + ".kqxs-react-auto .ant-input, .kqxs-react-auto .ant-input-affix-wrapper, .kqxs-react-auto .ant-input-number, .kqxs-react-auto .ant-select-selector { background: var(--kqxs-input-bg, #fff) !important; color: var(--kqxs-input-text, #1f1f1f) !important; border-color: var(--kqxs-border, #d9d9d9) !important; }"
+      + ".kqxs-react-auto .ant-input-number-input, .kqxs-react-auto .ant-select-selection-item, .kqxs-react-auto .ant-select-selection-search-input { color: var(--kqxs-input-text, #1f1f1f) !important; }"
       + ".kqxs-react-auto .ant-input-number .ant-input-number-handler-wrap { display: none !important; }"
-      + ".kqxs-react-auto .ant-input-number-input-wrap { padding-left: 10px !important; padding-right: 10px !important; }"
-      + ".kqxs-react-auto .ant-input-number-input { height: 30px !important; line-height: 30px !important; padding: 0 !important; }"
+      + ".kqxs-react-auto .ant-input-number-input-wrap { padding-left: 0 !important; padding-right: 0 !important; }"
+      + ".kqxs-react-auto .ant-input-number-input { height: auto !important; line-height: normal !important; padding: 0 !important; }"
       + ".kqxs-react-auto .ant-picker { width: 100% !important; background: var(--kqxs-input-bg, #fff) !important; border-color: var(--kqxs-border, #d9d9d9) !important; }"
       + ".kqxs-react-auto .ant-picker-input > input, .kqxs-react-auto .ant-picker .ant-picker-suffix, .kqxs-react-auto .ant-picker .ant-picker-clear { color: var(--kqxs-input-text, #1f1f1f) !important; }"
       + ".kqxs-react-auto .ant-picker:hover, .kqxs-react-auto .ant-picker-focused { border-color: var(--kqxs-primary, #1677ff) !important; box-shadow: 0 0 0 2px color-mix(in srgb, var(--kqxs-primary, #1677ff) 25%, transparent) !important; }"
@@ -9361,15 +10774,18 @@
       + ".kqxs-react-auto .ant-switch.ant-switch-checked { background: var(--kqxs-primary, #1677ff) !important; }"
       + ".kqxs-react-auto input[type='checkbox'] { accent-color: var(--kqxs-primary, #1677ff) !important; }"
       + ".kqxs-react-auto input[type='checkbox'] + span, .kqxs-react-auto label { color: var(--kqxs-text, #1f1f1f) !important; }"
+      + ".kqxs-react-auto .ant-checkbox-wrapper, .kqxs-react-auto .ant-checkbox-wrapper span, .kqxs-react-auto .ant-checkbox + span { color: var(--kqxs-text, #1f1f1f) !important; }"
       + ".kqxs-react-auto .ant-card-head-title { color: var(--kqxs-text, #1f1f1f) !important; }"
       + ".kqxs-react-auto .ant-tag { background: color-mix(in srgb, var(--kqxs-primary, #1677ff) 14%, transparent) !important; color: var(--kqxs-text, #1f1f1f) !important; border-color: color-mix(in srgb, var(--kqxs-primary, #1677ff) 35%, var(--kqxs-border, #d9d9d9)) !important; }"
       + ".kqxs-react-auto .ant-progress-text, .kqxs-react-auto .ant-progress-outer { color: var(--kqxs-text, #1f1f1f) !important; }"
       + ".kqxs-react-auto .ant-empty-description { color: var(--kqxs-muted, #666) !important; }"
+      + ".kqxs-react-auto-popup, .kqxs-react-auto-date-popup, .kqxs-react-auto-popup * , .kqxs-react-auto-date-popup * { color: var(--kqxs-text, #1f1f1f); }"
       + ".kqxs-react-auto-popup.ant-select-dropdown { background: var(--kqxs-card-bg, #fff) !important; border: 1px solid var(--kqxs-border, #d9d9d9) !important; }"
       + ".kqxs-react-auto-popup .ant-select-item { color: var(--kqxs-text, #1f1f1f) !important; }"
       + ".kqxs-react-auto-popup .ant-select-item-option-active:not(.ant-select-item-option-disabled) { background: color-mix(in srgb, var(--kqxs-primary, #1677ff) 10%, transparent) !important; }"
       + ".kqxs-react-auto-popup .ant-select-item-option-selected:not(.ant-select-item-option-disabled) { background: color-mix(in srgb, var(--kqxs-primary, #1677ff) 16%, transparent) !important; color: var(--kqxs-text, #1f1f1f) !important; }"
       + ".kqxs-react-auto-date-popup .ant-picker-panel-container { background: var(--kqxs-card-bg, #fff) !important; border-color: var(--kqxs-border, #d9d9d9) !important; }"
+      + ".kqxs-react-auto-date-popup .ant-picker-header, .kqxs-react-auto-date-popup .ant-picker-header-view button, .kqxs-react-auto-date-popup .ant-picker-header button, .kqxs-react-auto-date-popup .ant-picker-body, .kqxs-react-auto-date-popup .ant-picker-cell, .kqxs-react-auto-date-popup .ant-picker-content { background: var(--kqxs-card-bg, #fff) !important; color: var(--kqxs-text, #1f1f1f) !important; }"
       + ".kqxs-react-auto-date-popup .ant-picker-content th, .kqxs-react-auto-date-popup .ant-picker-content td, .kqxs-react-auto-date-popup .ant-picker-header, .kqxs-react-auto-date-popup .ant-picker-cell-inner, .kqxs-react-auto-date-popup .ant-picker-header button { color: var(--kqxs-text, #1f1f1f) !important; }"
       + ".kqxs-react-auto-date-popup .ant-picker-cell-in-view.ant-picker-cell-selected .ant-picker-cell-inner { background: var(--kqxs-primary, #1677ff) !important; color: #fff !important; }"
       + ".kqxs-react-auto-date-popup .ant-picker-cell-in-view.ant-picker-cell-today .ant-picker-cell-inner::before { border-color: var(--kqxs-primary, #1677ff) !important; }"
@@ -9381,10 +10797,10 @@
       + ".kqxs-react-auto .kqxs-thongke-subcard > .ant-card-head { background: color-mix(in srgb, var(--kqxs-primary, #1677ff) 5%, var(--kqxs-card-bg, #fff)) !important; }"
       + ".kqxs-react-auto .kqxs-vach-col { background: var(--kqxs-vach-bg, color-mix(in srgb, var(--kqxs-warning, #faad14) 60%, var(--kqxs-card-bg, #fff))) !important; padding: 0 !important; }"
       + ".kqxs-react-auto .kqxs-kq-pane { padding-top: 2px; }"
-      + ".kqxs-react-auto .kqxs-kq-row { display: flex; flex-wrap: nowrap; gap: 12px; align-items: flex-start; overflow-x: auto; padding-bottom: 2px; }"
-      + ".kqxs-react-auto .kqxs-kq-col { flex: 0 0 auto; min-width: max-content; }"
-      + ".kqxs-react-auto .kqxs-kq-col-main { flex: 0 0 auto; min-width: 602px; }"
-      + ".kqxs-react-auto .kqxs-kq-col-side { flex: 0 0 auto; min-width: 230px; width: max-content; }"
+      + ".kqxs-react-auto .kqxs-kq-row { display: flex; flex-wrap: nowrap; gap: 12px; align-items: flex-start; overflow-x: auto; width: 100%; padding-bottom: 2px; }"
+      + ".kqxs-react-auto .kqxs-kq-col { min-width: 0; }"
+      + ".kqxs-react-auto .kqxs-kq-col-main { flex: 1 1 602px; min-width: 560px; max-width: 100%; }"
+      + ".kqxs-react-auto .kqxs-kq-col-side { flex: 0 1 230px; min-width: 220px; max-width: 260px; width: 230px; }"
       + ".kqxs-react-auto .kqxs-kq-zone { border: 1px solid var(--kqxs-border, #d9d9d9); border-radius: 0; padding: 0; background: color-mix(in srgb, var(--kqxs-card-bg, #fff) 95%, var(--kqxs-page-bg, #f5f7fb)); }"
       + ".kqxs-react-auto .kqxs-kq-zone + .kqxs-kq-zone { box-shadow: none; }"
       + ".kqxs-react-auto .kqxs-kq-zone .ant-table { border: 1px solid var(--kqxs-border, #d9d9d9) !important; background: transparent !important; }"
@@ -9453,8 +10869,24 @@
       + "@media (max-width: 1200px) {"
       + ".kqxs-react-auto .kqxs-kq-col-main, .kqxs-react-auto .kqxs-kq-col-side { flex: 1 1 100%; max-width: 100%; min-width: 0; }"
       + ".kqxs-react-auto .kqxs-capture-toolbar { position: static; margin-bottom: 6px; display: flex; justify-content: flex-end; }"
-      + "}";
+      + "}"
       + ".kqxs-react-auto .kqxs-sticky-filters { position: sticky; top: 8px; z-index: 25; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }"
+      + ".kqxs-react-auto .kqxs-slr-layout { margin: 0 !important; }"
+      + ".kqxs-react-auto .kqxs-slr-col { border: 1px solid var(--kqxs-border, #d9d9d9); border-radius: 6px; padding: 8px; min-height: 100%; background: var(--kqxs-card-bg, #fff); box-shadow: none; }"
+      + ".kqxs-react-auto .kqxs-slr-field { margin-bottom: 8px; }"
+      + ".kqxs-react-auto .kqxs-slr-label { margin-bottom: 4px; font-size: 12px; font-weight: 600; color: var(--kqxs-text, #1f1f1f); }"
+      + ".kqxs-react-auto .kqxs-slr-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; margin-top: 8px; }"
+      + ".kqxs-react-auto .kqxs-loc-sau-zone { border: 1px solid var(--kqxs-border, #d9d9d9); border-radius: 6px; padding: 8px; margin-top: 2px; background: var(--kqxs-card-bg, #fff); box-shadow: none; }"
+      + ".kqxs-react-auto .kqxs-loc-sau-zone .kqxs-slr-label { color: var(--kqxs-text, #1f1f1f); }"
+      + ".kqxs-react-auto .kqxs-slr-col .ant-input, .kqxs-react-auto .kqxs-slr-col .ant-select-selector, .kqxs-react-auto .kqxs-slr-col .ant-input-number, .kqxs-react-auto .kqxs-slr-col .ant-picker { border-radius: 6px !important; box-shadow: none !important; }"
+      + ".kqxs-react-auto .kqxs-slr-col .ant-input-number, .kqxs-react-auto .kqxs-slr-col .ant-select-selector, .kqxs-react-auto .kqxs-slr-col .ant-picker { border-color: var(--kqxs-border, #d9d9d9) !important; }"
+      + ".kqxs-react-auto .kqxs-slr-col .ant-input-number.ant-input-number-outlined { width: 100% !important; display: block !important; overflow: hidden !important; padding-inline: 0 !important; border: 1px solid var(--kqxs-border, #d9d9d9) !important; border-radius: 6px !important; background: var(--kqxs-input-bg, #fff) !important; min-height: 32px !important; height: 32px !important; box-sizing: border-box !important; }"
+      + ".kqxs-react-auto .kqxs-slr-col .ant-input-number.ant-input-number-outlined .ant-input-number-input-wrap { height: 100% !important; padding-left: 11px !important; padding-right: 11px !important; box-sizing: border-box !important; }"
+      + ".kqxs-react-auto .kqxs-slr-col .ant-input-number.ant-input-number-outlined .ant-input-number-input { height: 100% !important; line-height: 30px !important; padding: 0 !important; }"
+      + ".kqxs-react-auto .kqxs-slr-col .ant-input-number.ant-input-number-outlined:hover { border-color: var(--kqxs-primary, #1677ff) !important; }"
+      + ".kqxs-react-auto .kqxs-slr-col .ant-input-number.ant-input-number-outlined.ant-input-number-focused { border-color: var(--kqxs-primary, #1677ff) !important; box-shadow: none !important; }"
+      + ".kqxs-react-auto .kqxs-slr-col .ant-input:hover, .kqxs-react-auto .kqxs-slr-col .ant-input-number:hover, .kqxs-react-auto .kqxs-slr-col .ant-select:not(.ant-select-disabled):hover .ant-select-selector, .kqxs-react-auto .kqxs-slr-col .ant-picker:hover { box-shadow: none !important; }"
+      + ".kqxs-react-auto .kqxs-slr-col .ant-input:focus, .kqxs-react-auto .kqxs-slr-col .ant-input-focused, .kqxs-react-auto .kqxs-slr-col .ant-input-number-focused, .kqxs-react-auto .kqxs-slr-col .ant-select-focused .ant-select-selector, .kqxs-react-auto .kqxs-slr-col .ant-picker-focused { box-shadow: none !important; border-color: var(--kqxs-primary, #1677ff) !important; }"
       + "@media (max-width: 768px) { .kqxs-react-auto .kqxs-sticky-filters { top: 0; border-radius: 0 !important; } }";
 
     return h("div", {
@@ -9569,7 +11001,7 @@
                                   onChange: function (v) {
                                     var next = String(v || "C_D");
                                     setLegacyCdMode(next);
-                                    setLegacyRankTo(next === "2C" ? 5 : 10);
+                                    setLegacyRankTo(next === "2C" ? 5 : 20);
                                   }
                                 }))
                               ]),
@@ -9579,7 +11011,7 @@
                               ]),
                               h(Col, { xs: 12, md: 5, key: "slrnb_to_rank" }, [
                                 h("div", { style: { marginBottom: 6, fontWeight: 600 } }, tt.lgGhDen),
-                                h(InputNumber, themedNumberProps({ value: legacyRankTo, min: 1, max: 60, onChange: function (v) { setLegacyRankTo(toNumberSafe(v, 10)); } }))
+                                h(InputNumber, themedNumberProps({ value: legacyRankTo, min: 1, max: 60, onChange: function (v) { setLegacyRankTo(toNumberSafe(v, 20)); } }))
                               ]),
                               h(Col, { xs: 12, md: 6, key: "slrnb_ngay" }, [
                                 h("div", { style: { marginBottom: 6, fontWeight: 600 } }, tt.lgNgayChay),
@@ -9619,30 +11051,45 @@
                             title: "Khu vực chạy tự động (Auto)",
                             style: { height: "100%", background: theme.cardBg, color: theme.text, borderColor: theme.border }
                           }, [
-                            h("div", { style: { marginBottom: 6, fontWeight: 600 } }, "Lọc theo đoạn tuần chưa xổ"),
+                            h("div", { style: { marginBottom: 6, fontWeight: 600 } }, "Điều kiện chạy tự động"),
+                            h(Row, { gutter: [8, 8], style: { marginBottom: 10 } }, [
+                              h(Col, { xs: 12, sm: 8 }, [
+                                h("div", { style: { fontSize: 12, color: theme.muted, marginBottom: 4 } }, "STT liên tiếp"),
+                                h(InputNumber, themedNumberProps({
+                                  min: 1,
+                                  max: 30,
+                                  value: legacySlrAutoSttRange,
+                                  style: { width: "100%" },
+                                  onChange: function (v) { setLegacySlrAutoSttRange(Math.max(1, Number(v) || 1)); }
+                                }))
+                              ]),
+                              h(Col, { xs: 12, sm: 8 }, [
+                                h("div", { style: { fontSize: 12, color: theme.muted, marginBottom: 4 } }, "Ngày không trúng LT"),
+                                h(InputNumber, themedNumberProps({
+                                  min: 1,
+                                  max: 120,
+                                  value: legacySlrAutoNoHitDays,
+                                  style: { width: "100%" },
+                                  onChange: function (v) { setLegacySlrAutoNoHitDays(Math.max(1, Number(v) || 1)); }
+                                }))
+                              ]),
+                              h(Col, { xs: 24, sm: 8 }, [
+                                h("div", { style: { fontSize: 12, color: theme.muted, marginBottom: 4 } }, "Nam 0/tuần LT"),
+                                h(InputNumber, themedNumberProps({
+                                  min: 1,
+                                  max: 20,
+                                  value: legacySlrAutoNamWeeks,
+                                  style: { width: "100%" },
+                                  onChange: function (v) { setLegacySlrAutoNamWeeks(Math.max(1, Number(v) || 1)); }
+                                }))
+                              ])
+                            ]),
                             h(Space, { wrap: true, style: { marginBottom: 10 } }, [
-                              h(InputNumber, themedNumberProps({
-                                min: 1,
-                                max: 20,
-                                value: legacySlrWeekFrom,
-                                placeholder: "Từ tuần",
-                                style: { width: 96 },
-                                onChange: function (v) { setLegacySlrWeekFrom(Number(v) || 1); }
-                              })),
-                              h("span", null, "-"),
-                              h(InputNumber, themedNumberProps({
-                                min: 1,
-                                max: 20,
-                                value: legacySlrWeekTo,
-                                placeholder: "Đến tuần",
-                                style: { width: 96 },
-                                onChange: function (v) { setLegacySlrWeekTo(Number(v) || 1); }
-                              })),
                               h(Button, {
                                 type: "primary",
                                 className: "kqxs-action-btn kqxs-action-btn-primary",
                                 onClick: function () { runLegacySlrAutoFilter(); }
-                              }, "Lọc tuần")
+                              }, "Chạy lọc tự động")
                             ]),
                             h("div", { style: { marginBottom: 6, fontWeight: 600 } }, (tt.lgThAutoQueryTypes || "Loại Tìm") + " (" + ((legacySlrSelectedQueryTypes && legacySlrSelectedQueryTypes.length) || 0) + "/" + ((legacySlrQueryTypeOptions && legacySlrQueryTypeOptions.length) || 0) + ")"),
                             h("div", { style: { maxHeight: 180, overflow: "auto", border: "1px solid " + theme.border, borderRadius: 4, background: theme.cardBg, padding: "4px 0", marginBottom: 10 } },
@@ -9664,14 +11111,59 @@
                                 : h("div", { style: { padding: 8, fontSize: 12, color: theme.muted } }, "Chưa có dữ liệu")
                             ),
                             h("div", { style: { padding: "8px 10px", border: "1px dashed " + theme.border, borderRadius: 4, background: "color-mix(in srgb, " + theme.cardBg + " 92%, " + theme.pageBg + " 8%)" } }, [
-                              h("div", { style: { fontWeight: 600, marginBottom: 4 } }, "Kết quả lọc tự động"),
-                              (legacySlrAutoFilteredRows && legacySlrAutoFilteredRows.length)
-                                ? h("div", null, [
-                                    h("span", { style: { color: theme.primary, fontWeight: 700 } }, legacySlrAutoFilteredRows.map(function (r) { return r.so; }).join(", ")),
-                                    h("span", { style: { marginLeft: 10, color: theme.muted } }, "Tổng Nam: ", legacySlrAutoFilteredRows.reduce(function (acc, r) { return acc + (r.tongNam || 0); }, 0))
-                                  ])
-                                : h("span", { style: { color: theme.muted } }, "Chưa có kết quả tự động")
-                            ])
+                              (function () {
+                                var allRows = (legacySlrAutoFilteredRows && legacySlrAutoFilteredRows.length) ? legacySlrAutoFilteredRows : null;
+                                if (!allRows) return h("span", { style: { color: theme.muted } }, "Chưa có kết quả tự động");
+                                var MAX_PER_GROUP = 6;
+                                var groups = [];
+                                var groupMap = {};
+                                allRows.forEach(function (r) {
+                                  var k = String(r.queryLabel || r.queryValue || "?");
+                                  if (!groupMap[k]) { groupMap[k] = []; groups.push(k); }
+                                  if (groupMap[k].length < MAX_PER_GROUP) groupMap[k].push(r);
+                                });
+                                return h("div", null, [
+                                  h("div", { style: { fontWeight: 600, marginBottom: 6, display: "flex", justifyContent: "space-between", alignItems: "center" } }, [
+                                    h("span", { style: { color: theme.primary } }, allRows.length + " dòng thỏa / " + groups.length + " loại tìm"),
+                                    h("span", { style: { fontSize: 11, color: theme.muted } }, "(tối đa " + MAX_PER_GROUP + " dòng/loại)")
+                                  ]),
+                                  h("div", { style: { maxHeight: 280, overflow: "auto" } },
+                                    groups.map(function (gk) {
+                                      var gRows = groupMap[gk];
+                                      return h("div", { key: "slr_ag_" + gk, style: { marginBottom: 8 } }, [
+                                        h("div", { style: { fontSize: 11, fontWeight: 700, color: theme.text, background: "color-mix(in srgb, " + theme.primary + " 12%, " + theme.cardBg + ")", padding: "3px 6px", borderRadius: 3, marginBottom: 3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, gk),
+                                        gRows.map(function (r, ri) {
+                                          return h("div", {
+                                            key: "slr_auto_apply_" + String((r && r.key) || ri),
+                                            style: {
+                                              display: "grid",
+                                              gridTemplateColumns: "1fr auto auto",
+                                              alignItems: "center",
+                                              gap: 6,
+                                              padding: "4px 4px",
+                                              borderBottom: ri < gRows.length - 1 ? ("1px dashed " + theme.border) : "none"
+                                            }
+                                          }, [
+                                            h("span", { style: { fontSize: 12, color: theme.muted } }, [
+                                              String((r && r.noHitHintText) || "").trim()
+                                                ? h("div", { style: { fontSize: 13, color: theme.error, fontWeight: 800, lineHeight: 1.35 } }, String(r.noHitHintText || ""))
+                                                : null,
+                                              h("div", null, "STT " + String(r.sttFrom || "") + "–" + String(r.sttTo || ""))
+                                            ]),
+                                            h("span", { style: { fontSize: 12, color: theme.text, whiteSpace: "nowrap" } }, String(r.noHitDays || 0) + "ng"),
+                                            h(Button, {
+                                              size: "small",
+                                              type: "primary",
+                                              onClick: function () { applyLegacySlrAutoRowToManual(r); }
+                                            }, "Dùng")
+                                          ]);
+                                        })
+                                      ]);
+                                    })
+                                  )
+                                ]);
+                              })()
+                            ]),
                           ])
                         ])
                       ]),
@@ -9816,6 +11308,37 @@
                       ]),
                       h("div", { style: { marginTop: 10 } }, h(Progress, { percent: progress, status: loading ? "active" : "normal" }))
                     ])
+                  },
+                  {
+                    key: "bong",
+                    label: "⑤ Bóng",
+                    children: h("div", { style: { paddingTop: 4 } }, [
+                      h(Row, { gutter: [12, 10], align: "end" }, [
+                        h(Col, { xs: 24, md: 6, key: "bong_from" }, [
+                          h("div", { style: { marginBottom: 6, fontWeight: 600 } }, tt.fromDate),
+                          renderDateField(tu_ngay, function (next) { setTuNgay(next); }, { maxDate: den_ngay })
+                        ]),
+                        h(Col, { xs: 24, md: 6, key: "bong_to" }, [
+                          h("div", { style: { marginBottom: 6, fontWeight: 600 } }, tt.toDate),
+                          renderDateField(den_ngay, function (next) { setDenNgay(next); }, { minDate: tu_ngay })
+                        ]),
+                        h(Col, { xs: 24, md: 8, key: "bong_variant" }, [
+                          h("div", { style: { marginBottom: 6, fontWeight: 600 } }, "Biến thể Bóng"),
+                          h(Select, themedSelectProps({
+                            value: legacyBongVariant,
+                            options: LEGACY_BONG_VARIANTS.map(function (item) {
+                              return { value: item.value, label: item.label };
+                            }),
+                            onChange: function (v) { setLegacyBongVariant(String(v || "bong")); }
+                          }))
+                        ]),
+                        h(Col, { xs: 24, md: 4, key: "bong_run", style: { textAlign: "right" } }, [
+                          h("div", { style: { marginBottom: 6, fontWeight: 600, visibility: "hidden" } }, "_"),
+                          h(Button, { type: "primary", onClick: runLegacyBong, loading: loading }, "Xem")
+                        ])
+                      ]),
+                      h("div", { style: { marginTop: 10 } }, h(Progress, { percent: progress, status: loading ? "active" : "normal" }))
+                    ])
                   }
                 ]
               })
@@ -9827,112 +11350,112 @@
 
       legacyMainTab === "slr" ? h(Card, { key: "cfg", className: "kqxs-sticky-filters", size: "small", title: tt.title, style: { background: theme.cardBg, color: theme.text, borderColor: theme.border } }, [
         h("div", { key: "slr_filters" }, [
-              h(Row, { gutter: 12 }, [
-                h(Col, { xs: 24, md: 6, key: "c1" }, [
-                  h("div", { style: { marginBottom: 6, fontWeight: 600 } }, tt.fromDate),
-                  renderDateField(tu_ngay, function (next) {
-                    setTuNgay(next);
-                  }, { maxDate: den_ngay })
+              h(Row, { gutter: [10, 10], className: "kqxs-slr-layout" }, [
+                h(Col, { xs: 24, lg: 6, key: "slr_left" }, [
+                  h("div", { className: "kqxs-slr-col" }, [
+                    h("div", { className: "kqxs-slr-field" }, [h("div", { className: "kqxs-slr-label" }, tt.fromDate), renderDateField(tu_ngay, function (next) { setTuNgay(next); }, { maxDate: den_ngay })]),
+                    h("div", { className: "kqxs-slr-field" }, [h("div", { className: "kqxs-slr-label" }, tt.toDate), renderDateField(den_ngay, function (next) { setDenNgay(next); }, { minDate: tu_ngay })]),
+                    h("div", { className: "kqxs-slr-field" }, [
+                      h("div", { className: "kqxs-slr-label" }, tt.region),
+                      h(Select, themedSelectProps({
+                        value: mien,
+                        options: [
+                          { value: "MN", label: tt.mienNam },
+                          { value: "MT", label: tt.mienTrung },
+                          { value: "MB", label: tt.mienBac }
+                        ],
+                        onChange: function (v) { setMien(v); }
+                      }))
+                    ]),
+                    h("div", { className: "kqxs-slr-field" }, [
+                      h("div", { className: "kqxs-slr-label" }, tt.color),
+                      h(ColorPicker, {
+                        value: chon_mau,
+                        presets: [{ label: "Gợi ý", colors: ["#f0bb41", "#cc9108", "#ff4d4f", "#1677ff", "#52c41a", "#fa8c16", "#722ed1", "#08979c", "#eb2f96"] }],
+                        onChangeComplete: function (color) { setChonMau("#" + color.toHex()); }
+                      })
+                    ]),
+                    h("div", { className: "kqxs-slr-field" }, [
+                      h("div", { className: "kqxs-slr-label" }, tt.weekday),
+                      h(Select, themedSelectProps({
+                        value: thu_tuan,
+                        disabled: true,
+                        options: ds_thu.map(function (x) { return { value: x.ma, label: x.ten }; })
+                      }))
+                    ]),
+                    allowUpdateActions ? h(Button, { key: "up", block: true, className: "kqxs-action-btn", onClick: chay_cap_nhat, loading: loading }, tt.btnUpdate) : null
+                  ])
                 ]),
-                h(Col, { xs: 24, md: 6, key: "c2" }, [
-                  h("div", { style: { marginBottom: 6, fontWeight: 600 } }, tt.toDate),
-                  renderDateField(den_ngay, function (next) {
-                    setDenNgay(next);
-                  }, { minDate: tu_ngay })
+                h(Col, { xs: 24, lg: 10, key: "slr_mid" }, [
+                  h("div", { className: "kqxs-slr-col" }, [
+                    h(Row, { gutter: [8, 8] }, [
+                      h(Col, { xs: 12, key: "m_tk_type" }, [h("div", { className: "kqxs-slr-label" }, tt.tkType), h(Select, themedSelectProps({ value: loai_tk, options: [{ value: 1, label: tt.tk1 }, { value: 2, label: tt.tk2 }, { value: 3, label: tt.tk3 }], onChange: setLoaiTk }))]),
+                      h(Col, { xs: 12, key: "m_search_type" }, [h("div", { className: "kqxs-slr-label" }, tt.searchType), h(Select, themedSelectProps({ value: loai_tim, options: [{ value: 0, label: tt.theoNgay }, { value: 1, label: tt.theoKy }], onChange: setLoaiTim }))]),
+                      h(Col, { xs: 12, key: "m_so_ky" }, [h("div", { className: "kqxs-slr-label" }, tt.soKy), h(InputNumber, themedNumberProps({ value: so_ky, onChange: function (v) { setSoKy(toNumberSafe(v, 0)); } }))]),
+                      h(Col, { xs: 12, key: "m_lay_so_ky" }, [h("div", { className: "kqxs-slr-label" }, tt.laySoKy), h(InputNumber, themedNumberProps({ value: lay_so_ky, onChange: function (v) { setLaySoKy(toNumberSafe(v, 0)); } }))]),
+                      h(Col, { xs: 12, key: "m_dem_le" }, [h("div", { className: "kqxs-slr-label" }, tt.demLe), h(InputNumber, themedNumberProps({ value: dem_be_hon, onChange: function (v) { setDemBeHon(toNumberSafe(v, 0)); } }))]),
+                      h(Col, { xs: 12, key: "m_kxh_min" }, [h("div", { className: "kqxs-slr-label" }, tt.kxhMin), h(InputNumber, themedNumberProps({ value: kxh_phai_lonhon, onChange: function (v) { setKxhPhaiLonhon(toNumberSafe(v, 0)); } }))]),
+                      h(Col, { xs: 12, key: "m_dem_kq3" }, [h("div", { className: "kqxs-slr-label" }, tt.demKq3Le), h(InputNumber, themedNumberProps({ value: dem_nho_hon, onChange: function (v) { setDemNhoHon(toNumberSafe(v, 0)); } }))]),
+                      h(Col, { xs: 24, key: "m_loc_sau_zone" }, [
+                        h("div", { className: "kqxs-loc-sau-zone" }, [
+                          h(Row, { gutter: [8, 8] }, [
+                            h(Col, { xs: 12, key: "m_kxh_tu" }, [h("div", { className: "kqxs-slr-label" }, tt.kxhTu), h(InputNumber, themedNumberProps({ value: kxh_tu, onChange: function (v) { setKxhTu(toNumberSafe(v, 0)); } }))]),
+                            h(Col, { xs: 12, key: "m_kxh_den" }, [h("div", { className: "kqxs-slr-label" }, tt.kxhDen), h(InputNumber, themedNumberProps({ value: kxh_den, onChange: function (v) { setKxhDen(toNumberSafe(v, 0)); } }))]),
+                            h(Col, { xs: 12, key: "m_loc_sau" }, [h("div", { className: "kqxs-slr-label" }, tt.locSau), h(Switch, { checked: !!kxh_locsau, onChange: setKxhLocSau })])
+                          ])
+                        ])
+                      ])
+                    ])
+                  ])
                 ]),
-                h(Col, { xs: 24, md: 4, key: "c3" }, [
-                  h("div", { style: { marginBottom: 6, fontWeight: 600 } }, tt.region),
-                  h(Select, themedSelectProps({
-                    value: mien,
-                    options: [
-                      { value: "MN", label: tt.mienNam },
-                      { value: "MT", label: tt.mienTrung },
-                      { value: "MB", label: tt.mienBac }
-                    ],
-                    onChange: function (v) { setMien(v); }
-                  }))
-                ]),
-                h(Col, { xs: 24, md: 4, key: "c4" }, [
-                  h("div", { style: { marginBottom: 6, fontWeight: 600 } }, tt.weekday),
-                  h(Select, themedSelectProps({
-                    value: thu_tuan,
-                    disabled: true,
-                    options: ds_thu.map(function (x) { return { value: x.ma, label: x.ten }; })
-                  }))
-                ]),
-                h(Col, { xs: 24, md: 4, key: "c5" }, [
-                  h("div", { style: { marginBottom: 6, fontWeight: 600 } }, tt.color),
-                  h(ColorPicker, {
-                    value: chon_mau,
-                    presets: [{ label: "Gợi ý", colors: ["#f0bb41", "#cc9108", "#ff4d4f", "#1677ff", "#52c41a", "#fa8c16", "#722ed1", "#08979c", "#eb2f96"] }],
-                    onChangeComplete: function (color) {
-                      setChonMau("#" + color.toHex());
-                    }
-                  })
+                h(Col, { xs: 24, lg: 8, key: "slr_right" }, [
+                  h("div", { className: "kqxs-slr-col" }, [
+                    h("div", { className: "kqxs-slr-field" }, [
+                      h("div", { className: "kqxs-slr-label" }, tt.selectStation),
+                      h(Select, themedSelectProps({
+                        mode: "multiple",
+                        value: ds_dai_chon,
+                        options: dsDaiThu.map(function (d) { return { value: String(d.stt), label: d.label || d.ten_dai }; }),
+                        onChange: function (vals) { setDsDaiChon(vals || []); }
+                      }))
+                    ]),
+                    h("div", { className: "kqxs-slr-field" }, [h("div", { className: "kqxs-slr-label" }, tt.sapXep), h(Select, themedSelectProps({ value: sap_xep, options: [{ value: 0, label: tt.sxMoi }, { value: 1, label: tt.sxCu }], onChange: setSapXep }))]),
+                    h("div", { className: "kqxs-slr-field" }, [
+                      h("div", { className: "kqxs-slr-label" }, tt.selectStationSoChu),
+                      h(Select, themedSelectProps({
+                        mode: "multiple",
+                        value: ds_dai_chon_so_chu,
+                        options: dsDaiThu.map(function (d) { return { value: String(d.stt), label: d.label || d.ten_dai }; }),
+                        onChange: function (vals) { setDsDaiChonSoChu(vals || []); }
+                      }))
+                    ]),
+                    h("div", { className: "kqxs-slr-field" }, [
+                      h("div", { className: "kqxs-slr-label" }, tt.soChu),
+                      h(Input, {
+                        value: so_chu_input,
+                        inputMode: "numeric",
+                        onKeyDown: function (e) {
+                          var key = e && e.key ? e.key : "";
+                          var allow = /[0-9]|Backspace|Delete|Tab|ArrowLeft|ArrowRight|Home|End|Enter|-/.test(key);
+                          if (!allow) e.preventDefault();
+                        },
+                        onChange: function (e) {
+                          var raw = e && e.target ? e.target.value : "";
+                          setSoChuInput(formatSoChuInput(raw));
+                        },
+                        placeholder: "- - - - - - - - -"
+                      })
+                    ]),
+                    h(Row, { gutter: [8, 8] }, [
+                      h(Col, { xs: 12, key: "r_dem_ge" }, [h("div", { className: "kqxs-slr-label" }, tt.demGe), h(InputNumber, themedNumberProps({ value: dem_lon_hon, onChange: function (v) { setDemLonHon(toNumberSafe(v, 0)); } }))]),
+                      h(Col, { xs: 12, key: "r_dem_tnh" }, [h("div", { className: "kqxs-slr-label" }, tt.demToNhoHon), h(InputNumber, themedNumberProps({ value: dem_to_nho_hon, onChange: function (v) { setDemToNhoHon(toNumberSafe(v, 0)); } }))]),
+                      h(Col, { xs: 24, key: "r_ls_bat_dau" }, [h("div", { className: "kqxs-slr-label" }, tt.lsBatDau), h(InputNumber, themedNumberProps({ value: ls_bat_dau, onChange: function (v) { setLsBatDau(toNumberSafe(v, 0)); } }))])
+                    ])
+                  ])
                 ])
               ]),
 
-              h(Row, { gutter: 12, style: { marginTop: 10 } }, [
-                h(Col, { xs: 24, md: 12, key: "d1" }, [
-                  h("div", { style: { marginBottom: 6, fontWeight: 600 } }, tt.selectStation),
-                  h(Select, themedSelectProps({
-                    mode: "multiple",
-                    value: ds_dai_chon,
-                    options: dsDaiThu.map(function (d) { return { value: String(d.stt), label: d.label || d.ten_dai }; }),
-                    onChange: function (vals) { setDsDaiChon(vals || []); }
-                  }))
-                ]),
-                h(Col, { xs: 24, md: 12, key: "d2" }, [
-                  h("div", { style: { marginBottom: 6, fontWeight: 600 } }, tt.selectStationSoChu),
-                  h(Select, themedSelectProps({
-                    mode: "multiple",
-                    value: ds_dai_chon_so_chu,
-                    options: dsDaiThu.map(function (d) { return { value: String(d.stt), label: d.label || d.ten_dai }; }),
-                    onChange: function (vals) { setDsDaiChonSoChu(vals || []); }
-                  }))
-                ])
-              ]),
-
-              h(Row, { gutter: 12, style: { marginTop: 10 } }, [
-                h(Col, { xs: 12, md: 3, key: "n1" }, [h("div", { style: { marginBottom: 6 } }, tt.tkType), h(Select, themedSelectProps({ value: loai_tk, options: [{ value: 1, label: tt.tk1 }, { value: 2, label: tt.tk2 }, { value: 3, label: tt.tk3 }], onChange: setLoaiTk }))]),
-                h(Col, { xs: 12, md: 3, key: "n2" }, [h("div", { style: { marginBottom: 6 } }, tt.searchType), h(Select, themedSelectProps({ value: loai_tim, options: [{ value: 0, label: tt.theoNgay }, { value: 1, label: tt.theoKy }], onChange: setLoaiTim }))]),
-                h(Col, { xs: 12, md: 3, key: "n3" }, [h("div", { style: { marginBottom: 6 } }, tt.soKy), h(InputNumber, themedNumberProps({ value: so_ky, onChange: function (v) { setSoKy(toNumberSafe(v, 0)); } }))]),
-                h(Col, { xs: 12, md: 3, key: "n4" }, [h("div", { style: { marginBottom: 6 } }, tt.laySoKy), h(InputNumber, themedNumberProps({ value: lay_so_ky, onChange: function (v) { setLaySoKy(toNumberSafe(v, 0)); } }))]),
-                h(Col, { xs: 12, md: 3, key: "n5" }, [h("div", { style: { marginBottom: 6 } }, tt.demLe), h(InputNumber, themedNumberProps({ value: dem_be_hon, onChange: function (v) { setDemBeHon(toNumberSafe(v, 0)); } }))]),
-                h(Col, { xs: 12, md: 3, key: "n6" }, [h("div", { style: { marginBottom: 6 } }, tt.kxhMin), h(InputNumber, themedNumberProps({ value: kxh_phai_lonhon, onChange: function (v) { setKxhPhaiLonhon(toNumberSafe(v, 0)); } }))]),
-                h(Col, { xs: 12, md: 3, key: "n7" }, [h("div", { style: { marginBottom: 6 } }, tt.demKq3Le), h(InputNumber, themedNumberProps({ value: dem_nho_hon, onChange: function (v) { setDemNhoHon(toNumberSafe(v, 0)); } }))]),
-                h(Col, { xs: 12, md: 3, key: "n8" }, [h("div", { style: { marginBottom: 6 } }, tt.lsBatDau), h(InputNumber, themedNumberProps({ value: ls_bat_dau, onChange: function (v) { setLsBatDau(toNumberSafe(v, 0)); } }))])
-              ]),
-
-              h(Row, { gutter: 12, style: { marginTop: 10 } }, [
-                h(Col, { xs: 12, md: 3, key: "m1" }, [h("div", { style: { marginBottom: 6 } }, tt.demGe), h(InputNumber, themedNumberProps({ value: dem_lon_hon, onChange: function (v) { setDemLonHon(toNumberSafe(v, 0)); } }))]),
-                h(Col, { xs: 12, md: 3, key: "m2" }, [h("div", { style: { marginBottom: 6 } }, tt.demToNhoHon), h(InputNumber, themedNumberProps({ value: dem_to_nho_hon, onChange: function (v) { setDemToNhoHon(toNumberSafe(v, 0)); } }))]),
-                h(Col, { xs: 12, md: 3, key: "m3" }, [h("div", { style: { marginBottom: 6 } }, tt.kxhTu), h(InputNumber, themedNumberProps({ value: kxh_tu, onChange: function (v) { setKxhTu(toNumberSafe(v, 0)); } }))]),
-                h(Col, { xs: 12, md: 3, key: "m4" }, [h("div", { style: { marginBottom: 6 } }, tt.kxhDen), h(InputNumber, themedNumberProps({ value: kxh_den, onChange: function (v) { setKxhDen(toNumberSafe(v, 0)); } }))]),
-                h(Col, { xs: 12, md: 3, key: "m5" }, [h("div", { style: { marginBottom: 6 } }, tt.sapXep), h(Select, themedSelectProps({ value: sap_xep, options: [{ value: 0, label: tt.sxMoi }, { value: 1, label: tt.sxCu }], onChange: setSapXep }))]),
-                h(Col, { xs: 12, md: 3, key: "m6" }, [h("div", { style: { marginBottom: 6 } }, tt.locSau), h(Switch, { checked: !!kxh_locsau, onChange: setKxhLocSau })]),
-                h(Col, { xs: 24, md: 6, key: "m7" }, [
-                  h("div", { style: { marginBottom: 6 } }, tt.soChu),
-                  h(Input, {
-                    value: so_chu_input,
-                    inputMode: "numeric",
-                    // ĐÃ BỎ maxLength để không giới hạn độ dài nhập
-                    onKeyDown: function (e) {
-                      var key = e && e.key ? e.key : "";
-                      var allow = /[0-9]|Backspace|Delete|Tab|ArrowLeft|ArrowRight|Home|End|Enter|-/.test(key);
-                      if (!allow) e.preventDefault();
-                    },
-                    onChange: function (e) {
-                      var raw = e && e.target ? e.target.value : "";
-                      setSoChuInput(formatSoChuInput(raw));
-                    },
-                    placeholder: "99-99-99-99-99-99-99-99-99"
-                  })
-                ])
-              ]),
-
-              h(Space, { wrap: true, style: { marginTop: 12 } }, [
-                allowUpdateActions ? h(Button, { key: "up", className: "kqxs-action-btn", onClick: chay_cap_nhat, loading: loading }, tt.btnUpdate) : null,
+              h("div", { className: "kqxs-slr-actions" }, [
                 h(Button, {
                   key: "kq",
                   className: "kqxs-action-btn" + (activeAction === "kq" ? " kqxs-action-btn-active" : ""),
@@ -9998,10 +11521,130 @@
                   }))
                 : h("div", null, tt.noResult),
               xu_ly_ket_qua.length
-                ? h(Card, { size: "small", style: { marginTop: 12, background: theme.cardBg, color: theme.text, borderColor: theme.border }, title: tt.kqByChuc },
-                    h(Table, { rowKey: "id", columns: ketquaColumns, dataSource: xu_ly_ket_qua, pagination: false, size: "small", scroll: { x: 900 } }))
+                ? h(Card, { size: "small", style: { marginTop: 12, background: theme.cardBg, color: theme.text, borderColor: theme.border }, title: tt.kqByChuc }, [
+                    h("div", { key: "kq_by_chuc_actions", style: { marginBottom: 6, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } }, [
+                      h(Button, {
+                        size: "small",
+                        onClick: function () { setLegacyKetQuaSelectedRowKeys((xu_ly_ket_qua || []).map(function (r) { return r.id; })); }
+                      }, tt.lgThAutoSelectAll || "Chọn hết"),
+                      h(Button, {
+                        size: "small",
+                        onClick: function () { setLegacyKetQuaSelectedRowKeys([]); }
+                      }, tt.lgThAutoClearAll || "Bỏ chọn"),
+                      h(Button, {
+                        size: "small",
+                        type: "default",
+                        onClick: function () {
+                          exportSelectedRowsByConfig({
+                            selectedKeys: legacyKetQuaSelectedRowKeys,
+                            sourceRows: xu_ly_ket_qua,
+                            keyGetter: function (row) { return row && row.id; },
+                            columns: ketquaColumns,
+                            fileName: "kq_by_chuc_selected",
+                            sheetName: "KetQuaByChuc"
+                          });
+                        }
+                      }, "💾 Xuất đã chọn"),
+                      h("span", { style: { fontSize: 11, color: theme.muted } }, "Đã chọn: " + (legacyKetQuaSelectedRowKeys || []).length)
+                    ]),
+                    h(Table, {
+                      rowKey: "id",
+                      rowSelection: {
+                        type: "checkbox",
+                        columnTitle: tt.lgThSelect || "Chọn",
+                        columnWidth: 32,
+                        selectedRowKeys: legacyKetQuaSelectedRowKeys,
+                        onChange: function (keys) { setLegacyKetQuaSelectedRowKeys(keys); }
+                      },
+                      columns: withMultiSortColumns(ketquaColumns),
+                      dataSource: xu_ly_ket_qua,
+                      pagination: false,
+                      size: "small",
+                      scroll: { x: 900 }
+                    })
+                  ])
                 : null
             ])
+          : legacyMainTab === "other" && activeAction === "legacy_bong"
+            ? h(Card, { size: "small", title: "Bóng - " + getLegacyBongVariantMeta(legacyBongVariant).label, style: { background: theme.cardBg, color: theme.text, borderColor: theme.border } }, [
+                legacyBongSummary
+                  ? h("div", { style: { marginBottom: 8, fontSize: 12, color: theme.muted } }, legacyBongSummary)
+                  : null,
+                legacyBongRows.length
+                  ? h("div", { style: { border: "1px solid " + theme.border, borderRadius: 6, marginBottom: 10 } }, [
+                      h("div", { style: { margin: "6px 8px", display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } }, [
+                        h(Button, {
+                          size: "small",
+                          onClick: function () {
+                            setLegacyBongSelectedRowKeys((legacyBongRows || []).map(function (r, idx) {
+                              return String((r && r.key) || (r && r.id) || idx);
+                            }));
+                          }
+                        }, tt.lgThAutoSelectAll || "Chọn hết"),
+                        h(Button, {
+                          size: "small",
+                          onClick: function () { setLegacyBongSelectedRowKeys([]); }
+                        }, tt.lgThAutoClearAll || "Bỏ chọn"),
+                        h(Button, {
+                          size: "small",
+                          type: "default",
+                          onClick: function () {
+                            exportSelectedRowsByConfig({
+                              selectedKeys: legacyBongSelectedRowKeys,
+                              sourceRows: legacyBongRows,
+                              keyGetter: function (row, idx) { return String((row && row.key) || (row && row.id) || idx); },
+                              columns: legacyBongColumns,
+                              fileName: "legacy_bong_selected",
+                              sheetName: "Bong"
+                            });
+                          }
+                        }, "💾 Xuất đã chọn"),
+                        h("span", { style: { fontSize: 11, color: theme.muted } }, "Đã chọn: " + (legacyBongSelectedRowKeys || []).length)
+                      ]),
+                      h(Table, {
+                        rowKey: function (r) { return String((r && r.key) || randomId("bong_row")); },
+                        rowSelection: {
+                          type: "checkbox",
+                          columnTitle: tt.lgThSelect || "Chọn",
+                          columnWidth: 32,
+                          selectedRowKeys: legacyBongSelectedRowKeys,
+                          onChange: function (keys) { setLegacyBongSelectedRowKeys(keys); }
+                        },
+                        columns: withMultiSortColumns(legacyBongColumns),
+                        dataSource: legacyBongRows,
+                        pagination: false,
+                        size: "small",
+                        scroll: { x: 520, y: 560 },
+                        showSorterTooltip: false
+                      })
+                    ])
+                  : h("div", { style: { marginBottom: 10, color: theme.muted } }, "Chưa có dữ liệu Bóng"),
+                legacyBongStatsRows.length
+                  ? h("div", { style: { overflowX: "auto" } }, [
+                      h("div", { style: { fontSize: 12, fontWeight: 700, color: theme.text, marginBottom: 6 } }, "Thống kê tuần"),
+                      h("table", { style: { borderCollapse: "collapse", minWidth: 760, background: theme.cardBg } }, [
+                        h("tbody", null, legacyBongStatsRows.map(function (row) {
+                          return h("tr", { key: row.key }, (row.cells || []).map(function (cell) {
+                            return h("td", {
+                              key: cell.key,
+                              colSpan: cell.colSpan,
+                              rowSpan: cell.rowSpan,
+                              style: {
+                                border: "1px solid " + theme.border,
+                                padding: "4px 8px",
+                                textAlign: cell.align || "left",
+                                whiteSpace: "nowrap",
+                                color: theme.text,
+                                minWidth: cell.width ? Number(cell.width) : undefined
+                              },
+                              dangerouslySetInnerHTML: { __html: String(cell.html || "") }
+                            });
+                          }));
+                        }))
+                      ])
+                    ])
+                  : null
+              ])
           : legacyMainTab === "other" && activeAction === "legacy_ktt"
             ? h(Card, { size: "small", title: tt.lgToolKtt + " – " + tt.lgHeThong + ": " + legacyHeThong, style: { background: theme.cardBg, color: theme.text, borderColor: theme.border } }, [
                 // Legend màu
@@ -10051,10 +11694,42 @@
             ? h(Card, { size: "small", title: tt.lgToolSlr, style: { background: theme.cardBg, color: theme.text, borderColor: theme.border } }, [
               legacySlrWeekRows.length ? h("div", { style: { marginBottom: 10 } }, [
                 h("div", { style: { fontSize: 12, fontWeight: "bold", color: theme.text, marginBottom: 6 } }, "Bảng tuần (CN → T2)"),
+                h("div", { style: { marginBottom: 6, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } }, [
+                  h(Button, {
+                    size: "small",
+                    onClick: function () { setLegacySlrWeekSelectedRowKeys((legacySlrWeekRows || []).map(function (r) { return r.key; })); }
+                  }, tt.lgThAutoSelectAll || "Chọn hết"),
+                  h(Button, {
+                    size: "small",
+                    onClick: function () { setLegacySlrWeekSelectedRowKeys([]); }
+                  }, tt.lgThAutoClearAll || "Bỏ chọn"),
+                  h(Button, {
+                    size: "small",
+                    type: "default",
+                    onClick: function () {
+                      exportSelectedRowsByConfig({
+                        selectedKeys: legacySlrWeekSelectedRowKeys,
+                        sourceRows: legacySlrWeekRows,
+                        keyGetter: function (row) { return row && row.key; },
+                        columns: legacySlrWeekColumns,
+                        fileName: "legacy_slr_week_selected",
+                        sheetName: "SLR_Week"
+                      });
+                    }
+                  }, "💾 Xuất đã chọn"),
+                  h("span", { style: { fontSize: 11, color: theme.muted } }, "Đã chọn: " + (legacySlrWeekSelectedRowKeys || []).length)
+                ]),
                 h("div", { style: { maxHeight: 460, overflow: "hidden", border: "1px solid " + theme.border, borderRadius: 6 } }, [
                   h(Table, {
                     rowKey: "key",
-                    columns: legacySlrWeekColumns,
+                    rowSelection: {
+                      type: "checkbox",
+                      columnTitle: tt.lgThSelect || "Chọn",
+                      columnWidth: 32,
+                      selectedRowKeys: legacySlrWeekSelectedRowKeys,
+                      onChange: function (keys) { setLegacySlrWeekSelectedRowKeys(keys); }
+                    },
+                    columns: withMultiSortColumns(legacySlrWeekColumns),
                     dataSource: legacySlrWeekRows,
                     pagination: false,
                     size: "small",
@@ -10093,24 +11768,60 @@
                 ]);
               })() : null,
               legacySlrAutoRows.length ? h("div", { style: { marginBottom: 10 } }, [
-                h("div", { style: { fontSize: 12, fontWeight: "bold", color: theme.text, marginBottom: 6 } }, "Bảng tự động (tách biệt vùng thủ công)"),
+                h("div", { style: { display: "flex", alignItems: "center", gap: 10, marginBottom: 6 } }, [
+                  h("div", { style: { fontSize: 12, fontWeight: "bold", color: theme.text } }, "Bảng tự động (tách biệt vùng thủ công)"),
+                  h(Button, {
+                    size: "small",
+                    onClick: function () {
+                      setLegacySlrAutoSelectedRowKeys((legacySlrAutoFilteredRows || []).map(function (r, idx) {
+                        return String((r && r.key) || (String((r && r.queryValue) || "") + "_" + String((r && r.sttFrom) || "") + "_" + String((r && r.sttTo) || "") + "_" + idx));
+                      }));
+                    }
+                  }, tt.lgThAutoSelectAll || "Chọn hết"),
+                  h(Button, {
+                    size: "small",
+                    onClick: function () { setLegacySlrAutoSelectedRowKeys([]); }
+                  }, tt.lgThAutoClearAll || "Bỏ chọn"),
+                  h(Button, {
+                    size: "small",
+                    type: "default",
+                    onClick: function () {
+                      exportSelectedRowsByConfig({
+                        selectedKeys: legacySlrAutoSelectedRowKeys,
+                        sourceRows: legacySlrAutoFilteredRows,
+                        keyGetter: function (row, idx) {
+                          return String((row && row.key) || (String((row && row.queryValue) || "") + "_" + String((row && row.sttFrom) || "") + "_" + String((row && row.sttTo) || "") + "_" + idx));
+                        },
+                        columns: legacySlrAutoColumns,
+                        fileName: "legacy_slr_auto_selected",
+                        sheetName: "SLR_Auto"
+                      });
+                    }
+                  }, "💾 Xuất đã chọn"),
+                  h(Button, {
+                    size: "small",
+                    onClick: function () { exportLegacySlrAutoRows(); }
+                  }, tt.btnExportExcel || "Xuất Excel")
+                ]),
+                h("div", { style: { marginBottom: 6, fontSize: 11, color: theme.muted } }, "Đã chọn: " + (legacySlrAutoSelectedRowKeys || []).length),
                 legacySlrAutoSummary ? h("div", { style: { marginBottom: 6, fontSize: 12, color: theme.muted } }, legacySlrAutoSummary) : null,
                 h("div", { style: { border: "1px solid " + theme.border, borderRadius: 6 } }, [
                   h(Table, {
                     rowKey: function (r) {
-                      return String((r && r.so) || "") + "_" + String((r && r.queryValue) || "") + "_" + String((r && r.rank) || "");
+                      return String((r && r.key) || (String((r && r.queryValue) || "") + "_" + String((r && r.sttFrom) || "") + "_" + String((r && r.sttTo) || "")));
                     },
-                    columns: legacySlrColumns.concat([
-                      { title: tt.searchType, dataIndex: "queryLabel", key: "queryLabel", width: 220,
-                        sorter: function (a, b) {
-                          return String((a && a.queryLabel) || "").localeCompare(String((b && b.queryLabel) || ""), "vi", { numeric: true, sensitivity: "base" });
-                        }
-                      }
-                    ]),
+                    rowSelection: {
+                      type: "checkbox",
+                      columnTitle: tt.lgThSelect || "Chọn",
+                      columnWidth: 32,
+                      selectedRowKeys: legacySlrAutoSelectedRowKeys,
+                      onChange: function (keys) { setLegacySlrAutoSelectedRowKeys(keys); }
+                    },
+                    columns: withMultiSortColumns(legacySlrAutoColumns),
                     dataSource: legacySlrAutoFilteredRows,
-                    pagination: { pageSize: 20, showSizeChanger: true },
+                    pagination: false,
                     size: "small",
-                    scroll: { x: 760 },
+                    scroll: { x: 2000 },
                     showSorterTooltip: false,
                     components: legacySlrResizableComponents
                   })
@@ -10118,17 +11829,52 @@
               ]) : null
             ])
           : legacyMainTab === "other" && activeAction === "legacy_nb"
-            ? h(Card, { size: "small", title: tt.lgToolNb, style: { background: theme.cardBg, color: theme.text, borderColor: theme.border } },
+            ? h(Card, { size: "small", title: tt.lgToolNb, style: { background: theme.cardBg, color: theme.text, borderColor: theme.border } }, [
+              h("div", { style: { marginBottom: 6, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } }, [
+                h(Button, {
+                  size: "small",
+                  onClick: function () {
+                    setLegacyNbSelectedRowKeys((legacyNbRows || []).map(function (r, idx) { return String((r && r.so) || idx); }));
+                  }
+                }, tt.lgThAutoSelectAll || "Chọn hết"),
+                h(Button, {
+                  size: "small",
+                  onClick: function () { setLegacyNbSelectedRowKeys([]); }
+                }, tt.lgThAutoClearAll || "Bỏ chọn"),
+                h(Button, {
+                  size: "small",
+                  type: "default",
+                  onClick: function () {
+                    exportSelectedRowsByConfig({
+                      selectedKeys: legacyNbSelectedRowKeys,
+                      sourceRows: legacyNbRows,
+                      keyGetter: function (row, idx) { return String((row && row.so) || idx); },
+                      columns: legacyNbColumns,
+                      fileName: "legacy_nb_selected",
+                      sheetName: "NamBac"
+                    });
+                  }
+                }, "💾 Xuất đã chọn"),
+                h("span", { style: { fontSize: 11, color: theme.muted } }, "Đã chọn: " + (legacyNbSelectedRowKeys || []).length)
+              ]),
               h(Table, {
                 rowKey: function (r) { return String((r && r.so) || randomId("legacy_nb")); },
-                columns: legacyNbColumns,
+                rowSelection: {
+                  type: "checkbox",
+                  columnTitle: tt.lgThSelect || "Chọn",
+                  columnWidth: 32,
+                  selectedRowKeys: legacyNbSelectedRowKeys,
+                  onChange: function (keys) { setLegacyNbSelectedRowKeys(keys); }
+                },
+                columns: withMultiSortColumns(legacyNbColumns),
                 dataSource: legacyNbRows,
                 pagination: { pageSize: 50, showSizeChanger: true },
                 size: "small",
                 scroll: { x: 1200 },
                 showSorterTooltip: false,
                 components: legacyNbResizableComponents
-              }))
+              })
+            ])
           : legacyMainTab === "other" && activeAction === "legacy_th"
             ? h(Card, { size: "small", title: tt.lgToolTh, style: { background: theme.cardBg, color: theme.text, borderColor: theme.border } }, [
                 h("div", { key: "th-manual", style: { marginBottom: 10, padding: "8px 10px", background: theme.cardBg, color: theme.text, border: "1px solid " + theme.border, borderRadius: 4 } }, [
@@ -10195,19 +11941,12 @@
                       disabled: loading || !legacyThManualCanRunTriet,
                       onClick: function () { setLegacyThUseTrietSource(true); runLegacyTongHop(true); }
                     }, tt.lgThManualSearchTriet),
-                    h(Button, {
-                      size: "small",
-                      type: "dashed",
-                      disabled: loading || !legacyThManualHasQueryType || !legacyThManualResolvedCount,
-                      onClick: runLegacyTongHopParityCheck
-                    }, "Đối chiếu PHP"),
+
                     (!legacyThManualCanRunNormal || !legacyThManualCanRunTriet) && legacyThManualSearchHint
                       ? h("span", { style: { fontSize: 11, color: theme.muted } }, legacyThManualSearchHint)
                       : null
                   ]),
-                  legacyThParityStatus
-                    ? h("div", { style: { marginBottom: 6, fontSize: 11, color: theme.muted, whiteSpace: "pre-wrap" } }, legacyThParityStatus)
-                    : null,
+
                   !legacyThUseApiSource ? h("div", { style: { display: "flex", flexWrap: "wrap", gap: 8, alignItems: "flex-start", marginBottom: 8, padding: "8px 10px", background: "color-mix(in srgb, " + theme.cardBg + " 88%, " + theme.pageBg + " 12%)", border: "1px solid " + theme.border, borderRadius: 4 } }, [
                     h("span", { style: { fontSize: 12, color: theme.muted, paddingTop: 6 } }, tt.lgThAutoSourceMode + ":"),
                     h(Select, themedSelectProps({
@@ -10397,7 +12136,7 @@
                     selectedRowKeys: legacyThManualSelectedRowKeys,
                     onChange: function (keys) { setLegacyThManualSelectedRowKeys(keys); }
                   },
-                  columns: legacyThColumns,
+                  columns: withMultiSortColumns(legacyThColumns),
                   dataSource: legacyThRows,
                   pagination: false,
                   size: "small",
@@ -10460,7 +12199,7 @@
                       selectedRowKeys: legacyThAutoSelectedRowKeys,
                       onChange: function (keys) { setLegacyThAutoSelectedRowKeys(keys); }
                     },
-                    columns: legacyThColumns,
+                    columns: withMultiSortColumns(legacyThColumns),
                     dataSource: legacyThAutoRows,
                     pagination: false,
                     size: "small",

@@ -23,6 +23,7 @@ import { useParams, useLocation, useNavigate } from "react-router";
 import * as React from "react";
 import * as ReactDOM from "react-dom/client";
 import { Spin, Empty, Alert, notification, message, Table, Tabs, Button, Input, InputNumber, Select, Card, Space, Popconfirm, ConfigProvider, DatePicker, Row, Col, Switch, Progress, Tag, Tree, Modal, Form, Checkbox, Radio, Tooltip, Popover, Dropdown, Menu, Collapse, Pagination, Breadcrumb, Segmented, Steps, Timeline, Result, Divider, Typography, List, Badge, Rate, Slider, Upload, TimePicker, Cascader, TreeSelect, AutoComplete, Transfer, Statistic } from "antd";
+import { utils as xlsxUtils, writeFile as xlsxWriteFile } from "xlsx";
 import dayjs from "dayjs";
 import i18nInstance from "i18next";
 
@@ -356,7 +357,35 @@ declare global {
       fetchFromDatabase?: (callback?: (success: boolean, data?: any[], error?: string) => void) => Promise<void>;
       set: (newUserAddress: any[], callback?: (success: boolean, error?: string) => void) => Promise<void>;
     };
+    csmDynamicGridExport?: (payload: any) => Promise<void>;
   }
+}
+
+function sanitizeExcelSheetName(input: string): string {
+  const name = String(input || "Data").replace(/[\\/?*\[\]:]/g, "_").trim();
+  return (name || "Data").slice(0, 31);
+}
+
+function sanitizeExcelFileToken(input: string): string {
+  return String(input || "export").replace(/[\\/?*\[\]:]/g, "_").trim() || "export";
+}
+
+async function csmDynamicGridExport(payload: any): Promise<void> {
+  const sheets = Array.isArray(payload?.sheets) ? payload.sheets : [];
+  if (!sheets.length) {
+    throw new Error("No sheets to export");
+  }
+
+  const workbook = xlsxUtils.book_new();
+  sheets.forEach((sheet: any, index: number) => {
+    const aoa = Array.isArray(sheet?.aoa) ? sheet.aoa : [[""]];
+    const ws = xlsxUtils.aoa_to_sheet(aoa);
+    const sheetName = sanitizeExcelSheetName(sheet?.name || `Sheet${index + 1}`);
+    xlsxUtils.book_append_sheet(workbook, ws, sheetName);
+  });
+
+  const fileName = `${sanitizeExcelFileToken(payload?.fileName || "export")}.xlsx`;
+  xlsxWriteFile(workbook, fileName, { bookType: "xlsx" });
 }
 
 function parseUserAddressValue(raw: any): any[] {
@@ -863,6 +892,10 @@ ${resolvedContainerSelector} select {
   // SETUP WINDOW OBJECTS - IMMEDIATELY (NOT IN useEffect)
   // ============================================
   if (typeof window !== "undefined") {
+    if (!(window as any).csmDynamicGridExport) {
+      (window as any).csmDynamicGridExport = csmDynamicGridExport;
+    }
+
     // Expose csmApi immediately
     if (!window.csmApi) {
       Object.defineProperty(window, 'csmApi', {
