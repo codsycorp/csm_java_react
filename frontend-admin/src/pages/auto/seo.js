@@ -2989,6 +2989,133 @@ window.getDataUserOption = function (forceRefresh = false) {
   return [];
 };
 
+window.waitForCsmUserDataReady = function (timeoutMs = 4000) {
+  return new Promise(function (resolve) {
+    const isReady = function () {
+      return !!(window.csmUserData && typeof window.csmUserData.get === 'function');
+    };
+
+    if (window.csmUserDataReady || isReady()) {
+      resolve(true);
+      return;
+    }
+
+    let finished = false;
+    let pollTimer = null;
+    let timeoutTimer = null;
+
+    const cleanup = function () {
+      if (pollTimer) clearInterval(pollTimer);
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      window.removeEventListener('csm:user-data-ready', onReady);
+    };
+
+    const done = function (ready) {
+      if (finished) return;
+      finished = true;
+      cleanup();
+      resolve(ready);
+    };
+
+    const onReady = function () {
+      done(true);
+    };
+
+    window.addEventListener('csm:user-data-ready', onReady);
+    pollTimer = setInterval(function () {
+      if (isReady()) {
+        done(true);
+      }
+    }, 50);
+    timeoutTimer = setTimeout(function () {
+      done(isReady());
+    }, timeoutMs);
+  });
+};
+
+window.initializeSeoDataUserOption = async function () {
+  const seoState = window.__seoDataUserState || {};
+  if (seoState.initializing) {
+    return seoState.promise || Promise.resolve(window.dataUserOption || []);
+  }
+
+  seoState.initializing = true;
+  seoState.initialized = false;
+
+  seoState.promise = (async function () {
+    window.dataUserOption = [];
+    console.log('[INIT] Đang khởi tạo dataUserOption...');
+
+    const ready = await window.waitForCsmUserDataReady(4000);
+    if (!ready) {
+      console.warn('[INIT] csmUserData chưa sẵn sàng sau timeout, dùng runtime state hiện có');
+    }
+
+    if (window.csmUserData && typeof window.csmUserData.fetchFromDatabase === 'function') {
+      await new Promise(function (resolve) {
+        window.csmUserData.fetchFromDatabase(function(success, data, error) {
+          if (success && Array.isArray(data) && data.length > 0) {
+            window.dataUserOption = data;
+            console.log('[INIT] Đã fetch từ database thành công, số lượng:', window.dataUserOption.length);
+            if (typeof window.renderKeywordGrid === 'function') {
+              window.renderKeywordGrid();
+            }
+          } else {
+            console.log('[INIT] Không fetch được từ database, fallback về memory');
+            if (window.csmUserData && typeof window.csmUserData.get === 'function') {
+              try {
+                let raw = window.csmUserData.get();
+                console.log('[INIT] csmUserData.get() trả về:', raw);
+                if (Array.isArray(raw) && raw.length > 0) {
+                  window.dataUserOption = raw;
+                  console.log('[INIT] csmUserData.get() trả về array, số lượng:', window.dataUserOption.length);
+                }
+              } catch (err) {
+                if (!(err instanceof SyntaxError)) {
+                  console.error('[INIT] Lỗi khi lấy user_address từ csmUserData:', err);
+                }
+                window.dataUserOption = [];
+              }
+            }
+            if (error) {
+              console.warn('[INIT] fetchFromDatabase thất bại:', error);
+            }
+          }
+          console.log('[INIT] Khởi tạo hoàn tất. dataUserOption.length =', window.dataUserOption.length);
+          resolve(window.dataUserOption);
+        });
+      });
+    } else {
+      console.log('[INIT] Không có fetchFromDatabase, dùng phương thức cũ');
+      if (window.csmUserData && typeof window.csmUserData.get === 'function') {
+        try {
+          let raw = window.csmUserData.get();
+          console.log('[INIT] csmUserData.get() trả về:', raw);
+          if (Array.isArray(raw) && raw.length > 0) {
+            window.dataUserOption = raw;
+            console.log('[INIT] csmUserData.get() trả về array, số lượng:', window.dataUserOption.length);
+          }
+        } catch (err) {
+          console.error('[INIT] Lỗi:', err);
+        }
+      }
+      console.log('[INIT] Khởi tạo hoàn tất. dataUserOption.length =', window.dataUserOption.length);
+    }
+
+    seoState.initializing = false;
+    seoState.initialized = true;
+    return window.dataUserOption;
+  })().catch(function (err) {
+    seoState.initializing = false;
+    seoState.initialized = true;
+    console.error('[INIT] Lỗi khởi tạo dataUserOption:', err);
+    return window.dataUserOption || [];
+  });
+
+  window.__seoDataUserState = seoState;
+  return seoState.promise;
+};
+
 // ==================== NEW PARALLEL PROCESSING LOGIC ====================
 // Quản lý danh sách link tổng không trùng lặp
 window.UnifiedLinkManager = {
@@ -5154,6 +5281,19 @@ function mainAppCode() {
 
   window.renderSeoApp = function (reason) {
     try {
+      const dataState = window.__seoDataUserState || {};
+      if (!dataState.initialized) {
+        if (!dataState.retryTimer) {
+          dataState.retryTimer = setTimeout(function () {
+            dataState.retryTimer = null;
+            window.__seoDataUserState = dataState;
+            window.renderSeoApp(reason || 'wait-data-ready');
+          }, 100);
+          window.__seoDataUserState = dataState;
+        }
+        return;
+      }
+
       const runtime = window.__seoRenderRuntime || {};
       const React = window.React;
       const ReactDOM = window.ReactDOM;
@@ -5291,87 +5431,37 @@ function mainAppCode() {
     window.__seoRenderRuntime.recoverObserver = recoverObserver;
   }
 
-  setTimeout(function () {
-    window.renderSeoApp('initial');
-  }, 500);
-
-  setTimeout(function () {
-    try {
-      const checkIPFn = window.checkIP || globalThis.checkIP;
-      if (typeof checkIPFn !== 'function') {
-        console.warn('[INIT] checkIP chưa sẵn sàng');
-        return;
-      }
-
-      checkIPFn(function (ip) {
-        if (document.querySelectorAll('#context-auto .ant-tabs-tab')[0]) {
-          document.querySelectorAll('#context-auto .ant-tabs-tab')[0].click();
-          setTimeout(function () {
-            const ipRealEl = document.querySelector('#ipReal');
-            if (ipRealEl) ipRealEl.textContent = ip || 'Không xác định';
-            if (!ip) console.error('Không lấy được IP thật!');
-          }, 500);
-        }
-      });
-    } catch (err) {
-      console.error('Lỗi khi check IP:', err);
-    }
-  }, 500);
   window.openTab = [];
   // console.log(seft.Uinfos);
-  window.dataUserOption = [];
+  window.__seoDataUserState = window.__seoDataUserState || { initializing: false, initialized: false, retryTimer: null, promise: null };
+  window.initializeSeoDataUserOption().finally(function () {
+    setTimeout(function () {
+      window.renderSeoApp('initial');
+    }, 0);
 
-  // Khởi tạo dataUserOption: Fetch từ database trước, fallback về runtime memory
-  console.log("[INIT] Đang khởi tạo dataUserOption...");
-  if (window.csmUserData && typeof window.csmUserData.fetchFromDatabase === 'function') {
-    // Fetch từ database
-    window.csmUserData.fetchFromDatabase(function(success, data, error) {
-      if (success && Array.isArray(data) && data.length > 0) {
-        window.dataUserOption = data;
-        console.log("[INIT] Đã fetch từ database thành công, số lượng:", window.dataUserOption.length);
-        
-        // Render grid nếu hàm có sẵn
-        if (typeof window.renderKeywordGrid === 'function') {
-          window.renderKeywordGrid();
-        }
-      } else {
-        // Fallback về runtime memory
-        console.log("[INIT] Không fetch được từ database, fallback về memory");
-        if (window.csmUserData && typeof window.csmUserData.get === 'function') {
-          try {
-            let raw = window.csmUserData.get();
-            console.log("[INIT] csmUserData.get() trả về:", raw);
-            if (Array.isArray(raw) && raw.length > 0) {
-              window.dataUserOption = raw;
-              console.log("[INIT] csmUserData.get() trả về array, số lượng:", window.dataUserOption.length);
-            }
-          } catch (err) {
-            if (!(err instanceof SyntaxError)) {
-              console.error("[INIT] Lỗi khi lấy user_address từ csmUserData:", err);
-            }
-            window.dataUserOption = [];
-          }
-        }
-      }
-      console.log("[INIT] Khởi tạo hoàn tất. dataUserOption.length =", window.dataUserOption.length);
-    });
-  } else {
-    // Không có hàm fetchFromDatabase, fallback cũ
-    console.log("[INIT] Không có fetchFromDatabase, dùng phương thức cũ");
-    if (window.csmUserData && typeof window.csmUserData.get === 'function') {
+    setTimeout(function () {
       try {
-        let raw = window.csmUserData.get();
-        console.log("[INIT] csmUserData.get() trả về:", raw);
-        if (Array.isArray(raw) && raw.length > 0) {
-          window.dataUserOption = raw;
-          console.log("[INIT] csmUserData.get() trả về array, số lượng:", window.dataUserOption.length);
+        const checkIPFn = window.checkIP || globalThis.checkIP;
+        if (typeof checkIPFn !== 'function') {
+          console.warn('[INIT] checkIP chưa sẵn sàng');
+          return;
         }
+
+        checkIPFn(function (ip) {
+          if (document.querySelectorAll('#context-auto .ant-tabs-tab')[0]) {
+            document.querySelectorAll('#context-auto .ant-tabs-tab')[0].click();
+            setTimeout(function () {
+              const ipRealEl = document.querySelector('#ipReal');
+              if (ipRealEl) ipRealEl.textContent = ip || 'Không xác định';
+              if (!ip) console.error('Không lấy được IP thật!');
+            }, 500);
+          }
+        });
       } catch (err) {
-        console.error("[INIT] Lỗi:", err);
+        console.error('Lỗi khi check IP:', err);
       }
-    }
-    console.log("[INIT] Khởi tạo hoàn tất. dataUserOption.length =", window.dataUserOption.length);
-  }
+    }, 500);
+  });
   window.cCheckIP = 0;
   window.oldIP = '';
   window.guid = function () {

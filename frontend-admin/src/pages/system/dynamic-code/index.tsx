@@ -350,6 +350,7 @@ declare global {
     seft?: any;
     csmTheme?: Record<string, any>;
     csmDynamicCodeContainerId?: string;
+    csmUserDataReady?: boolean;
     csmUserData?: {
       get: () => any[];
       fetchFromDatabase?: (callback?: (success: boolean, data?: any[], error?: string) => void) => Promise<void>;
@@ -396,6 +397,15 @@ function syncRuntimeUserAddress(userAddress: any[]): any[] {
   }
 
   return normalized;
+}
+
+function announceCsmUserDataReady() {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.csmUserDataReady = true;
+  window.dispatchEvent(new CustomEvent("csm:user-data-ready"));
 }
 
 // ============================================================================
@@ -1338,6 +1348,7 @@ ${resolvedContainerSelector} select {
         }
       }
     };
+    announceCsmUserDataReady();
     console.log('✅ [DynamicCode] window.csmUserData initialized (API-first + runtime sync, no localStorage fallback)');
   }
 
@@ -1636,17 +1647,13 @@ ${resolvedContainerSelector} select {
   }, [menuId, location.state, propAutoCodeName, propMenuData, inlineCode, user, effectiveAppId]);
 
   const seft = useMemo(() => {
-    const userAddressRaw = localStorage.getItem("user_address");
-    let userAddress: any = undefined;
-    try { userAddress = userAddressRaw ? JSON.parse(userAddressRaw) : undefined; } catch {}
     const currentUserAny = (window as any).csmCurrentUser || user || {};
-    if (!Array.isArray(userAddress)) {
-      try {
-        const fromCurrent = currentUserAny?.user_address ?? currentUserAny?.user_adress;
-        userAddress = typeof fromCurrent === "string" ? JSON.parse(fromCurrent) : fromCurrent;
-      } catch {
-        userAddress = undefined;
-      }
+    let userAddress: any = undefined;
+    try {
+      const fromCurrent = currentUserAny?.user_address ?? currentUserAny?.user_adress;
+      userAddress = typeof fromCurrent === "string" ? JSON.parse(fromCurrent) : fromCurrent;
+    } catch {
+      userAddress = undefined;
     }
     
     return {
