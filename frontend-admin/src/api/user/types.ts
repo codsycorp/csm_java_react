@@ -1,4 +1,3 @@
-
 // No AuthType needed for cookie-based auth
 
 export interface UserInfoType {
@@ -20,6 +19,9 @@ export interface UserInfoType {
 	app_id: string
 	app_token: string
 	dev?: boolean // Thêm dev flag từ backend
+	account_type?: "main" | "sub-user"
+	is_sub_user?: boolean
+	login_identifier?: string
 }
 
 export interface AuthListProps {

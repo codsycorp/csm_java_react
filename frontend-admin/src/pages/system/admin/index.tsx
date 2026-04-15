@@ -1,50 +1,58 @@
+import { normalizeMenuRuntimeConfig } from "#src/components/csm-crm/crm-config";
+import { createTableStruct, type CreateTableStruct, getTableData } from "#src/components/csm-grid/CsmApi";
 // Patch lại label đa ngữ cho menuData theo i18n hiện tại
-function patchMenuI18n(menu: any, t: (k: string) => string, tEn: (k: string) => string, tZh: (k: string) => string): any {
-	if (!menu || typeof menu !== 'object') return menu;
-	const patched = { ...menu };
-	// Nếu label là key thì dịch, nếu là chuỗi thường thì giữ nguyên
-	const isKey = (v: any) => typeof v === 'string' && v.includes('.');
-	if (isKey(menu.label)) patched.label = t(menu.label);
-	if (isKey(menu.label_vi)) patched.label_vi = t(menu.label_vi);
-	if (isKey(menu.label_en)) patched.label_en = tEn(menu.label_en);
-	if (isKey(menu.label_zh)) patched.label_zh = tZh(menu.label_zh);
-	// Nếu không có label_en/zh/vi thì fallback từ label
-	if (!patched.label_vi) patched.label_vi = patched.label;
-	if (!patched.label_en) patched.label_en = patched.label;
-	if (!patched.label_zh) patched.label_zh = patched.label;
-	return patched;
-}
 import CsmDynamicGrid from "#src/components/csm-grid/CsmDynamicGrid";
 import CsmMasterDetail from "#src/components/csm-grid/CsmMasterDetail";
-import CsmReport from "#src/components/csm-report/CsmReport";
 import { CsmKanbanBoard } from "#src/components/csm-kanban";
-import { normalizeMenuRuntimeConfig } from "#src/components/csm-crm/crm-config";
+import CsmReport from "#src/components/csm-report/CsmReport";
 import DynamicCodeMenu from "#src/pages/system/dynamic-code";
-import { useAppStore, useUserStore, usePermissionStore, useTabsStore } from "#src/store";
+import { useAppStore, usePermissionStore, useTabsStore, useUserStore } from "#src/store";
 import { resolveDevFlag } from "#src/utils/dev-flag";
-import { adaptSystemUserConfigForActor, buildSystemUserMenuConfig, PERMISSION_GROUP_BEFORE_SAVE, PERMISSION_TOKEN_OPTIONS, ACTION_PRESET_OPTIONS_JSON, MENU_PERMISSION_OPTIONS, DATA_SCOPE_OPTIONS_JSON, DEPT_SELECT_QUERY_JSON, DEPT_SELECT_QUERY_BY_BRANCH_JSON, BRANCH_SELECT_QUERY_JSON, ROLE_LEVEL_OPTIONS_JSON, APP_ID_QUERY_JSON, type SystemUserActorType } from "./system-user-menu-config";
-import { Empty, Spin, Alert } from "antd";
-import { useEffect, useState, useCallback, useMemo, useRef } from "react";
-import { useParams } from "react-router";
-import { getTableData, createTableStruct, type CreateTableStruct } from "#src/components/csm-grid/CsmApi";
-import { useTranslation } from "react-i18next";
-import { toPermissionBigInt, resolvePermissionDataScope, isSuperPermissionProfile } from "#src/utils/permission-bitfield";
 // Import hàm hỗ trợ đa ngôn ngữ
-import { getLocalizedField, SupportedLanguage } from "#src/utils/i18nHelper";
+import { isSuperPermissionProfile, resolvePermissionDataScope, toPermissionBigInt } from "#src/utils/permission-bitfield";
+import { Alert, Empty, Spin } from "antd";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { useParams } from "react-router";
+import { ACTION_PRESET_OPTIONS_JSON, adaptSystemUserConfigForActor, APP_ID_QUERY_JSON, BRANCH_SELECT_QUERY_JSON, buildSystemUserMenuConfig, DATA_SCOPE_OPTIONS_JSON, DEPT_SELECT_QUERY_BY_BRANCH_JSON, DEPT_SELECT_QUERY_JSON, MENU_PERMISSION_OPTIONS, PERMISSION_GROUP_BEFORE_SAVE, PERMISSION_TOKEN_OPTIONS, ROLE_LEVEL_OPTIONS_JSON, type SystemUserActorType } from "./system-user-menu-config";
+
+function patchMenuI18n(menu: any, t: (k: string) => string, tEn: (k: string) => string, tZh: (k: string) => string): any {
+	if (!menu || typeof menu !== "object")
+		return menu;
+	const patched = { ...menu };
+	// Nếu label là key thì dịch, nếu là chuỗi thường thì giữ nguyên
+	const isKey = (v: any) => typeof v === "string" && v.includes(".");
+	if (isKey(menu.label))
+		patched.label = t(menu.label);
+	if (isKey(menu.label_vi))
+		patched.label_vi = t(menu.label_vi);
+	if (isKey(menu.label_en))
+		patched.label_en = tEn(menu.label_en);
+	if (isKey(menu.label_zh))
+		patched.label_zh = tZh(menu.label_zh);
+	// Nếu không có label_en/zh/vi thì fallback từ label
+	if (!patched.label_vi)
+		patched.label_vi = patched.label;
+	if (!patched.label_en)
+		patched.label_en = patched.label;
+	if (!patched.label_zh)
+		patched.label_zh = patched.label;
+	return patched;
+}
 
 interface MenuData {
-	id: string;
-	label: string;
-	table_name?: string;
-	report_name?: string;
-	type_form?: "" | 1 | 2 | 3 | 4 | 6;
-	row_type_edit?: 0 | 1;
-	[key: string]: any;
+	id: string
+	label: string
+	table_name?: string
+	report_name?: string
+	type_form?: "" | 1 | 2 | 3 | 4 | 6
+	row_type_edit?: 0 | 1
+	[key: string]: any
 }
 
 interface TableBootstrapDefinition {
-	tableName: string;
-	struct: CreateTableStruct;
+	tableName: string
+	struct: CreateTableStruct
 }
 
 function buildStruct(defaultValue: Record<string, any>, fieldsPK: string[], fieldsSearch: string[]): CreateTableStruct {
@@ -280,68 +288,80 @@ const SYSTEM_MENU_KEY_TO_EXPECTED_TABLES: Record<string, string[]> = {
 
 function normalizeSystemMenuKey(raw: unknown): string {
 	const value = String(raw || "").trim().toLowerCase();
-	if (!value) return "";
+	if (!value)
+		return "";
 	const normalized = value.startsWith("/system/") ? value.replace(/^\/system\//, "") : value;
-	if (normalized === "users") return "user";
-	if (normalized === "department") return "departments";
-	if (normalized === "branch") return "branches";
-	if (normalized === "permission-group") return "dept";
+	if (normalized === "users")
+		return "user";
+	if (normalized === "department")
+		return "departments";
+	if (normalized === "branch")
+		return "branches";
+	if (normalized === "permission-group")
+		return "dept";
 	return normalized;
 }
 
 function normalizeStringList(raw: unknown): string[] {
 	if (Array.isArray(raw)) {
-		return Array.from(new Set(raw.map((item) => String(item || "").trim()).filter(Boolean)));
+		return Array.from(new Set(raw.map(item => String(item || "").trim()).filter(Boolean)));
 	}
 	if (raw && typeof raw === "object") {
-		return Array.from(new Set(Object.values(raw).map((item) => String(item || "").trim()).filter(Boolean)));
+		return Array.from(new Set(Object.values(raw).map(item => String(item || "").trim()).filter(Boolean)));
 	}
 	if (typeof raw === "string") {
 		const text = raw.trim();
-		if (!text) return [];
+		if (!text)
+			return [];
 		if (text.startsWith("[") || text.startsWith("{")) {
 			try {
 				return normalizeStringList(JSON.parse(text));
-			} catch {
+			}
+			catch {
 				return [];
 			}
 		}
-		return Array.from(new Set(text.split(/[;,\n]/g).map((item) => item.trim()).filter(Boolean)));
+		return Array.from(new Set(text.split(/[;,\n]/g).map(item => item.trim()).filter(Boolean)));
 	}
 	return [];
 }
 
 function structMatchesExpected(currentStruct: unknown, expectedStruct: CreateTableStruct): boolean {
-	if (!currentStruct || typeof currentStruct !== "object") return false;
+	if (!currentStruct || typeof currentStruct !== "object")
+		return false;
 	const currentMap = currentStruct as Record<string, unknown>;
-	const currentFields = new Set(normalizeStringList(currentMap.fields).map((item) => item.toLowerCase()));
-	const currentPK = new Set(normalizeStringList(currentMap.fieldsPK).map((item) => item.toLowerCase()));
+	const currentFields = new Set(normalizeStringList(currentMap.fields).map(item => item.toLowerCase()));
+	const currentPK = new Set(normalizeStringList(currentMap.fieldsPK).map(item => item.toLowerCase()));
 
-	const expectedFields = expectedStruct.fields.map((item) => item.toLowerCase());
-	const expectedPK = expectedStruct.fieldsPK.map((item) => item.toLowerCase());
+	const expectedFields = expectedStruct.fields.map(item => item.toLowerCase());
+	const expectedPK = expectedStruct.fieldsPK.map(item => item.toLowerCase());
 
-	const fieldsOk = expectedFields.every((field) => currentFields.has(field));
-	const pkOk = expectedPK.every((field) => currentPK.has(field));
+	const fieldsOk = expectedFields.every(field => currentFields.has(field));
+	const pkOk = expectedPK.every(field => currentPK.has(field));
 	return fieldsOk && pkOk;
 }
 
 function parsePermissionMask(raw: unknown): number | null {
 	const bits = toPermissionBigInt(raw);
-	if (bits === null) return null;
+	if (bits === null)
+		return null;
 	const asNumber = Number(bits);
 	return Number.isSafeInteger(asNumber) ? asNumber : null;
 }
 
 function parseMenusPermissions(raw: unknown): Record<string | number, number> {
-	if (!raw) return {};
+	if (!raw)
+		return {};
 
 	let source: unknown = raw;
 	if (typeof source === "string") {
 		const trimmed = source.trim();
-		if (!trimmed) return {};
+		if (!trimmed)
+			return {};
 		try {
 			source = JSON.parse(trimmed);
-		} catch {
+		}
+		catch {
 			return {};
 		}
 	}
@@ -352,23 +372,29 @@ function parseMenusPermissions(raw: unknown): Record<string | number, number> {
 		source.forEach((item) => {
 			if (typeof item === "string") {
 				const key = item.trim();
-				if (key) output[key] = 14;
+				if (key)
+					output[key] = 14;
 				return;
 			}
-			if (!item || typeof item !== "object") return;
+			if (!item || typeof item !== "object")
+				return;
 			const obj = item as Record<string, unknown>;
 			const key = String(obj.menuId || obj.menu_id || obj.id || obj.key || "").trim();
-			if (!key) return;
+			if (!key)
+				return;
 			const mask = parsePermissionMask(obj.mask ?? obj.permission ?? obj.permissions ?? obj.value);
-			if (mask !== null) output[key] = mask;
+			if (mask !== null)
+				output[key] = mask;
 		});
 		return output;
 	}
 
-	if (typeof source !== "object") return {};
+	if (typeof source !== "object")
+		return {};
 	Object.entries(source as Record<string, unknown>).forEach(([key, value]) => {
 		const parsed = parsePermissionMask(value);
-		if (parsed !== null) output[key] = parsed;
+		if (parsed !== null)
+			output[key] = parsed;
 	});
 
 	return output;
@@ -376,8 +402,9 @@ function parseMenusPermissions(raw: unknown): Record<string | number, number> {
 
 function normalizeTableNames(raw: unknown): string[] {
 	const value = String(raw || "").trim().toLowerCase();
-	if (!value) return [];
-	return Array.from(new Set(value.split(",").map((item) => item.trim()).filter(Boolean)));
+	if (!value)
+		return [];
+	return Array.from(new Set(value.split(",").map(item => item.trim()).filter(Boolean)));
 }
 
 const DEPT_MENU_FIELD_KEYS = [
@@ -417,7 +444,7 @@ const STATUS_OPTIONS_JSON = JSON.stringify({
 	],
 });
 
-const PRESET_RULES: Record<string, { permissions: string[]; menus: string[] }> = {
+const PRESET_RULES: Record<string, { permissions: string[], menus: string[] }> = {
 	viewer: { permissions: ["view"], menus: ["homepage"] },
 	editor: { permissions: ["view", "create", "edit"], menus: ["/dashboard", "homepage", "/crm"] },
 	full_crud: { permissions: ["view", "create", "edit", "delete"], menus: ["/dashboard", "homepage", "/crm"] },
@@ -430,7 +457,8 @@ const PRESET_RULES: Record<string, { permissions: string[]; menus: string[] }> =
 
 function normalizeScopeValue(scope: unknown): "NONE" | "OWNER" | "DEPARTMENT" | "BRANCH" | "ALL" {
 	const value = String(scope || "").trim().toUpperCase();
-	if (value === "OWNER" || value === "DEPARTMENT" || value === "BRANCH" || value === "ALL") return value;
+	if (value === "OWNER" || value === "DEPARTMENT" || value === "BRANCH" || value === "ALL")
+		return value;
 	return "NONE";
 }
 
@@ -444,38 +472,46 @@ function scopeRank(scope: "NONE" | "OWNER" | "DEPARTMENT" | "BRANCH" | "ALL"): n
 	}
 }
 
-function parseOptionsFromQuery(json: string): Array<{ value: string; label: string }> {
+function parseOptionsFromQuery(json: string): Array<{ value: string, label: string }> {
 	try {
 		const parsed = JSON.parse(json);
-		if (Array.isArray(parsed?.options)) return parsed.options;
-	} catch {
+		if (Array.isArray(parsed?.options))
+			return parsed.options;
+	}
+	catch {
 		return [];
 	}
 	return [];
 }
 
 function normalizeMenuTokens(raw: unknown): string[] {
-	if (Array.isArray(raw)) return normalizeStringList(raw);
+	if (Array.isArray(raw))
+		return normalizeStringList(raw);
 	if (raw && typeof raw === "object") {
 		const keys = Object.keys(raw as Record<string, unknown>);
-		if (keys.length > 0) return Array.from(new Set(keys.map((item) => String(item || "").trim()).filter(Boolean)));
+		if (keys.length > 0)
+			return Array.from(new Set(keys.map(item => String(item || "").trim()).filter(Boolean)));
 	}
 	return normalizeStringList(raw);
 }
 
 function tokenMatchesMenu(target: string, allowedSet: Set<string>): boolean {
-	if (allowedSet.has(target)) return true;
-	if (target.startsWith("/") && allowedSet.has(target.slice(1))) return true;
-	if (!target.startsWith("/") && allowedSet.has("/" + target)) return true;
+	if (allowedSet.has(target))
+		return true;
+	if (target.startsWith("/") && allowedSet.has(target.slice(1)))
+		return true;
+	if (!target.startsWith("/") && allowedSet.has(`/${target}`))
+		return true;
 	return false;
 }
 
 function hasLegacyFullAppScope(menus: string[], appId: string): boolean {
 	const app = String(appId || "").trim().toLowerCase();
-	if (!app) return false;
+	if (!app)
+		return false;
 	return menus.some((token) => {
 		const value = String(token || "").trim().toLowerCase();
-		return value === app || value === "app:" + app || value === "/" + app;
+		return value === app || value === `app:${app}` || value === `/${app}`;
 	});
 }
 
@@ -487,13 +523,15 @@ function hasLegacyFullAppScope(menus: string[], appId: string): boolean {
  */
 function enrichRequiredFieldConfigs(
 	fields: any[],
-	knownOverrides: Record<string, Partial<{ f_types: string; f_cbo_query: string; f_options: any[] }>>
+	knownOverrides: Record<string, Partial<{ f_types: string, f_cbo_query: string, f_options: any[] }>>,
 ): any[] {
-	if (!Array.isArray(fields) || fields.length === 0) return fields;
+	if (!Array.isArray(fields) || fields.length === 0)
+		return fields;
 	return fields.map((field) => {
 		const fName = String(field?.f_name || "").trim();
 		const override = knownOverrides[fName];
-		if (!override) return field;
+		if (!override)
+			return field;
 		const currentType = String(field?.f_types || "").trim().toLowerCase();
 		const currentTypeIsGeneric = !currentType || currentType === "string" || currentType === "ed";
 		return {
@@ -508,8 +546,9 @@ function enrichRequiredFieldConfigs(
 	});
 }
 
-function enforceLegacyReadonlySystemUserFields(fields: any[]): any[] {
-	if (!Array.isArray(fields)) return fields;
+function enforceLegacyReadonlySystemUserFields(fields: any[], actorType?: SystemUserActorType): any[] {
+	if (!Array.isArray(fields))
+		return fields;
 	return fields.map((field) => {
 		const fName = String(field?.f_name || "").trim();
 		if (fName === "pass") {
@@ -520,23 +559,32 @@ function enforceLegacyReadonlySystemUserFields(fields: any[]): any[] {
 		}
 		if (fName === "app_id") {
 			const currentType = String(field?.f_types || "").trim().toLowerCase();
-			const hasReadonlyCombo = currentType.includes("ro") && currentType.includes("co");
 			const currentQuery = String(field?.f_cbo_query || "").trim();
+			if (actorType === "dev") {
+				const hasEditableCombo = currentType.includes("co") && !currentType.includes("ro");
+				return {
+					...field,
+					f_types: hasEditableCombo ? field.f_types : "co",
+					f_cbo_query: currentQuery || APP_ID_QUERY_JSON,
+				};
+			}
+			const hasReadonlyCombo = currentType.includes("ro") && currentType.includes("co");
 			return {
 				...field,
-				f_show: 0,
 				f_types: hasReadonlyCombo ? field.f_types : "co_ro",
 				f_cbo_query: currentQuery || APP_ID_QUERY_JSON,
 			};
 		}
 		if (fName === "parent_account_id") {
 			const currentType = String(field?.f_types || "").trim().toLowerCase();
-			if (currentType.includes("ro")) return field;
+			if (currentType.includes("ro"))
+				return field;
 			return { ...field, f_types: "string_ro" };
 		}
 		if (fName === "permissionBitfield") {
 			const currentType = String(field?.f_types || "").trim().toLowerCase();
-			if (currentType.includes("ro")) return field;
+			if (currentType.includes("ro"))
+				return field;
 			return { ...field, f_types: "string_ro" };
 		}
 		return field;
@@ -544,17 +592,20 @@ function enforceLegacyReadonlySystemUserFields(fields: any[]): any[] {
 }
 
 function enforceLegacyReadonlyRoleFields(fields: any[]): any[] {
-	if (!Array.isArray(fields)) return fields;
+	if (!Array.isArray(fields))
+		return fields;
 	return fields.map((field) => {
 		const fName = String(field?.f_name || "").trim();
 		if (fName === "role_code") {
 			const currentType = String(field?.f_types || "").trim().toLowerCase();
-			if (currentType.includes("ro")) return field;
+			if (currentType.includes("ro"))
+				return field;
 			return { ...field, f_types: "string_ro" };
 		}
 		if (fName === "permissionBitfield") {
 			const currentType = String(field?.f_types || "").trim().toLowerCase();
-			if (currentType.includes("ro")) return field;
+			if (currentType.includes("ro"))
+				return field;
 			return { ...field, f_types: "string_ro" };
 		}
 		if (fName === "permissionSchemaVersion") {
@@ -573,29 +624,30 @@ function localizeRoleTableFields(
 	tEn: (key: string) => string,
 	tZh: (key: string) => string,
 ) {
-	if (!Array.isArray(fields)) return fields;
+	if (!Array.isArray(fields))
+		return fields;
 	// Full i18n key map for every field that can appear in a role / permission-group table
 	const headerKeyMap: Record<string, string> = {
-		role_code:             "system.role.id",
-		role_name:             "system.role.name",
-		description:           "common.description",
-		permissionPreset:      "system.userPermission.fields.permissionPreset",
-		permissions:           "system.userPermission.fields.permissions",
-		permissionsAdd:        "system.userPermission.fields.permissionsAdd",
-		permissionsDeny:       "system.userPermission.fields.permissionsDeny",
-		menusPermissions:      "system.userPermission.fields.menusPermissions",
-		menusPermissionsAdd:   "system.userPermission.fields.menusPermissionsAdd",
-		menusPermissionsDeny:  "system.userPermission.fields.menusPermissionsDeny",
-		dataScope:             "system.userPermission.fields.dataScope",
-		role_level:            "system.userPermission.fields.roleLevel",
-		branch_id:             "system.userPermission.fields.branchId",
-		dept_id:               "system.userPermission.fields.deptId",
-		department_id:         "system.userPermission.fields.deptId",
-		permissionBitfield:    "system.userPermission.fields.permissionBitfield",
-		status:                "common.status",
-		is_global:             "system.dept.fields.isGlobal",
-		create_time:           "common.createTime",
-		update_time:           "common.updateTime",
+		role_code: "system.role.id",
+		role_name: "system.role.name",
+		description: "common.description",
+		permissionPreset: "system.userPermission.fields.permissionPreset",
+		permissions: "system.userPermission.fields.permissions",
+		permissionsAdd: "system.userPermission.fields.permissionsAdd",
+		permissionsDeny: "system.userPermission.fields.permissionsDeny",
+		menusPermissions: "system.userPermission.fields.menusPermissions",
+		menusPermissionsAdd: "system.userPermission.fields.menusPermissionsAdd",
+		menusPermissionsDeny: "system.userPermission.fields.menusPermissionsDeny",
+		dataScope: "system.userPermission.fields.dataScope",
+		role_level: "system.userPermission.fields.roleLevel",
+		branch_id: "system.userPermission.fields.branchId",
+		dept_id: "system.userPermission.fields.deptId",
+		department_id: "system.userPermission.fields.deptId",
+		permissionBitfield: "system.userPermission.fields.permissionBitfield",
+		status: "common.status",
+		is_global: "system.dept.fields.isGlobal",
+		create_time: "common.createTime",
+		update_time: "common.updateTime",
 	};
 	// Fields that must always be hidden regardless of DB config
 	const forceHiddenFields = new Set([
@@ -609,10 +661,11 @@ function localizeRoleTableFields(
 			return { ...field, f_show: 0 };
 		}
 		const key = headerKeyMap[fName];
-		if (!key) return field;
+		if (!key)
+			return field;
 		return {
 			...field,
-			f_header:    t(key),
+			f_header: t(key),
 			f_header_vi: t(key),
 			f_header_en: tEn(key),
 			f_header_zh: tZh(key),
@@ -621,7 +674,8 @@ function localizeRoleTableFields(
 }
 
 function buildMenuFieldSignature(field: any) {
-	if (!field || typeof field !== "object") return "";
+	if (!field || typeof field !== "object")
+		return "";
 	return JSON.stringify({
 		f_name: field.f_name ?? "",
 		f_types: field.f_types ?? "",
@@ -636,7 +690,8 @@ function buildMenuFieldSignature(field: any) {
 }
 
 function buildMenuCompareSignature(menu: any): string {
-	if (!menu || typeof menu !== "object") return "";
+	if (!menu || typeof menu !== "object")
+		return "";
 	const normalized = normalizeMenuRuntimeConfig(menu);
 	const tableSignature = Array.isArray(normalized.table)
 		? normalized.table.map(buildMenuFieldSignature)
@@ -667,7 +722,7 @@ function buildDeptMenuFields(
 	tEn: (key: string) => string,
 	tZh: (key: string) => string,
 ) {
-	return DEPT_MENU_FIELD_KEYS.map((field) => ({
+	return DEPT_MENU_FIELD_KEYS.map(field => ({
 		f_name: field.f_name,
 		f_header: t(field.key),
 		f_header_vi: t(field.key),
@@ -686,7 +741,7 @@ function buildBranchMenuFields(
 	tEn: (key: string) => string,
 	tZh: (key: string) => string,
 ) {
-	return BRANCH_MENU_FIELD_KEYS.map((field) => ({
+	return BRANCH_MENU_FIELD_KEYS.map(field => ({
 		f_name: field.f_name,
 		f_header: t(field.key),
 		f_header_vi: t(field.key),
@@ -704,8 +759,8 @@ function buildRoleMenuFields(
 	t: (key: string) => string,
 	tEn: (key: string) => string,
 	tZh: (key: string) => string,
-	permissionOptions: Array<{ value: string; label: string }>,
-	menuOptions: Array<{ value: string; label: string }>,
+	permissionOptions: Array<{ value: string, label: string }>,
+	menuOptions: Array<{ value: string, label: string }>,
 	presetOptionsQuery: string,
 	dataScopeOptionsQuery: string,
 ) {
@@ -741,6 +796,7 @@ const SYSTEM_FRIENDLY_VISIBLE_FIELDS: Record<string, string[]> = {
 	csm_group_members: [
 		"id",
 		"login_identifier",
+		"user_address",
 		"pass",
 		"group_id",
 		"permissionsAdd",
@@ -786,21 +842,24 @@ const SYSTEM_FRIENDLY_VISIBLE_FIELDS: Record<string, string[]> = {
 };
 
 const SYSTEM_USER_VISIBLE_FIELDS_BY_ACTOR: Record<SystemUserActorType, string[]> = {
-	dev: [
+	"dev": [
 		"id",
 		"username",
 		"full_name",
 		"email",
 		"phoneNumber",
+		"user_address",
+		"app_id",
 		"pass",
 		"actived",
 	],
-	admin: [
+	"admin": [
 		"id",
 		"username",
 		"full_name",
 		"email",
 		"phoneNumber",
+		"user_address",
 		"pass",
 		"permissionGroups",
 		"permissionsAdd",
@@ -816,6 +875,7 @@ const SYSTEM_USER_VISIBLE_FIELDS_BY_ACTOR: Record<SystemUserActorType, string[]>
 		"full_name",
 		"email",
 		"phoneNumber",
+		"user_address",
 		"pass",
 		"permissionGroups",
 		"permissionsAdd",
@@ -853,7 +913,8 @@ function applyFriendlyFieldPolicy(tableName: string | undefined, rawFields: any[
 	normalized.sort((a: any, b: any) => {
 		const ia = orderMap.has(a?.f_name) ? (orderMap.get(a?.f_name) as number) : Number.MAX_SAFE_INTEGER;
 		const ib = orderMap.has(b?.f_name) ? (orderMap.get(b?.f_name) as number) : Number.MAX_SAFE_INTEGER;
-		if (ia !== ib) return ia - ib;
+		if (ia !== ib)
+			return ia - ib;
 		return String(a?.f_name || "").localeCompare(String(b?.f_name || ""));
 	});
 
@@ -870,19 +931,21 @@ export default function AdminPage() {
 	const activeTab = useTabsStore(state => state.openTabs?.get?.(state.activeKey) as any);
 	const selectedMenuIdForTab = useUserStore(state => state.selectedMenuIdForTab);
 	const normalizedMenuSource = useMemo(() => {
-		return activeTab?.menuData?.path
-			|| activeTab?.m_configs?.path
-			|| activeTab?.menuData?.id
-			|| activeTab?.m_configs?.id
-			|| activeTab?.menuId
-			|| selectedMenuIdForTab
-			|| menuId
-			|| activeTabKey
-			|| "";
+		const candidates = [
+			activeTab?.menuData?.path,
+			activeTab?.m_configs?.path,
+			activeTab?.menuData?.id,
+			activeTab?.m_configs?.id,
+			activeTab?.menuId,
+			selectedMenuIdForTab,
+			menuId,
+			activeTabKey,
+		];
+		return String(candidates.find(item => Boolean(item)) || "");
 	}, [activeTab?.menuData?.path, activeTab?.m_configs?.path, activeTab?.menuData?.id, activeTab?.m_configs?.id, activeTab?.menuId, selectedMenuIdForTab, menuId, activeTabKey]);
 	const normalizedMenuKey = useMemo(
 		() => normalizeSystemMenuKey(normalizedMenuSource),
-		[normalizedMenuSource]
+		[normalizedMenuSource],
 	);
 	const apiWholeMenus = usePermissionStore(state => state.apiWholeMenus);
 	// Prefer reactive currentAppId from AppStore; fallback to user.app_id
@@ -902,14 +965,11 @@ export default function AdminPage() {
 	const isAdminUser = !isDevUser && isSuperPermissionProfile(toPermissionBigInt(userPermissionBitfieldRaw));
 	const isSystemUserRoute = normalizedMenuKey === "user";
 	// Prefer logged-in user's app_id; fallback to selected app or localStorage default
-	const appId = (userAppId && userAppId.trim())
-		|| (currentAppId && currentAppId.trim())
-		|| useAppStore.getState().getCurrentAppId();
-	const { addTab } = useTabsStore();
+	const appId = (userAppId && userAppId.trim()) || (currentAppId && currentAppId.trim()) || useAppStore.getState().getCurrentAppId();
 	const { t, i18n } = useTranslation();
 	const tEn = useMemo(() => i18n.getFixedT("en-US"), [i18n]);
 	const tZh = useMemo(() => i18n.getFixedT("zh-CN"), [i18n]);
-	
+
 	const [menuData, setMenuData] = useState<MenuData | null>(null);
 	const [loading, setLoading] = useState(true);
 	const [database, setDatabase] = useState<Record<string, any>>({});
@@ -943,8 +1003,8 @@ export default function AdminPage() {
 			};
 		}
 
-		const actorPermissions = normalizeStringList(userPermissionsRaw).map((item) => item.toLowerCase());
-		const actorMenus = normalizeMenuTokens(userMenusPermissionsRaw).map((item) => item.toLowerCase());
+		const actorPermissions = normalizeStringList(userPermissionsRaw).map(item => item.toLowerCase());
+		const actorMenus = normalizeMenuTokens(userMenusPermissionsRaw).map(item => item.toLowerCase());
 		const actorScope = normalizeScopeValue(runtimeDataScope);
 		const permissionSet = new Set(actorPermissions);
 		const menuSet = new Set(actorMenus);
@@ -952,7 +1012,8 @@ export default function AdminPage() {
 
 		const permissionOptions = PERMISSION_TOKEN_OPTIONS.filter((option) => {
 			const value = String(option.value || "").trim().toLowerCase();
-			if (!value || value === "dev" || value === "admin") return false;
+			if (!value || value === "dev" || value === "admin")
+				return false;
 			if (value.startsWith("scope:")) {
 				const scope = normalizeScopeValue(value.replace("scope:", ""));
 				return scopeRank(scope) <= scopeRank(actorScope);
@@ -962,31 +1023,37 @@ export default function AdminPage() {
 
 		const menuOptions = allowAllMenus
 			? MENU_PERMISSION_OPTIONS
-			: MENU_PERMISSION_OPTIONS.filter((option) => tokenMatchesMenu(String(option.value || "").trim().toLowerCase(), menuSet));
+			: MENU_PERMISSION_OPTIONS.filter(option => tokenMatchesMenu(String(option.value || "").trim().toLowerCase(), menuSet));
 
 		const scopeOptions = parseOptionsFromQuery(DATA_SCOPE_OPTIONS_JSON).filter((option) => {
 			const scope = normalizeScopeValue(option?.value);
-			if (scope === "NONE") return true;
+			if (scope === "NONE")
+				return true;
 			return scopeRank(scope) <= scopeRank(actorScope);
 		});
 
 		const presetOptions = parseOptionsFromQuery(ACTION_PRESET_OPTIONS_JSON).filter((option) => {
 			const preset = String(option?.value || "").trim().toLowerCase();
-			if (!preset) return true;
+			if (!preset)
+				return true;
 			const definition = PRESET_RULES[preset];
-			if (!definition) return false;
+			if (!definition)
+				return false;
 			const permissionOk = definition.permissions.every((token) => {
 				const value = token.toLowerCase();
-				if (value === "dev" || value === "admin") return false;
+				if (value === "dev" || value === "admin")
+					return false;
 				if (value.startsWith("scope:")) {
 					const scope = normalizeScopeValue(value.replace("scope:", ""));
 					return scopeRank(scope) <= scopeRank(actorScope);
 				}
 				return permissionSet.has(value);
 			});
-			if (!permissionOk) return false;
-			if (allowAllMenus) return true;
-			return definition.menus.every((menu) => tokenMatchesMenu(menu.toLowerCase(), menuSet));
+			if (!permissionOk)
+				return false;
+			if (allowAllMenus)
+				return true;
+			return definition.menus.every(menu => tokenMatchesMenu(menu.toLowerCase(), menuSet));
 		});
 
 		return {
@@ -1024,24 +1091,24 @@ export default function AdminPage() {
 		// survive even when DB-supplied fields carry only generic f_types.
 		if (Array.isArray(base?.table) && base.table.length > 0) {
 			runtimeConfig.table = enrichRequiredFieldConfigs(base.table, {
-				app_id:               { f_types: "co_ro",      f_cbo_query: APP_ID_QUERY_JSON },
-				pass:                 { f_types: "password" },
-				user_address:         { f_types: "json" },
-				menusPermissions:     { f_types: "menu_tree",  f_options: MENU_PERMISSION_OPTIONS },
-				menusPermissionsAdd:  { f_types: "menu_tree",  f_options: MENU_PERMISSION_OPTIONS },
-				menusPermissionsDeny: { f_types: "menu_tree",  f_options: MENU_PERMISSION_OPTIONS },
-				permissions:          { f_types: "multi_tag",  f_options: PERMISSION_TOKEN_OPTIONS },
-				permissionsAdd:       { f_types: "multi_tag",  f_options: PERMISSION_TOKEN_OPTIONS },
-				permissionsDeny:      { f_types: "multi_tag",  f_options: PERMISSION_TOKEN_OPTIONS },
-				permissionPreset:     { f_types: "co",         f_cbo_query: ACTION_PRESET_OPTIONS_JSON },
-				dataScope:            { f_types: "co",         f_cbo_query: DATA_SCOPE_OPTIONS_JSON },
-				branch_id:            { f_types: "co",         f_cbo_query: BRANCH_SELECT_QUERY_JSON },
-				dept_id:              { f_types: "co",         f_cbo_query: DEPT_SELECT_QUERY_BY_BRANCH_JSON },
-				actived:              { f_types: "checkbox" },
-				dev:                  { f_types: "checkbox" },
+				app_id: { f_types: systemUserActorType === "dev" ? "co" : "co_ro", f_cbo_query: APP_ID_QUERY_JSON },
+				pass: { f_types: "password" },
+				user_address: { f_types: "json" },
+				menusPermissions: { f_types: "menu_tree", f_options: MENU_PERMISSION_OPTIONS },
+				menusPermissionsAdd: { f_types: "menu_tree", f_options: MENU_PERMISSION_OPTIONS },
+				menusPermissionsDeny: { f_types: "menu_tree", f_options: MENU_PERMISSION_OPTIONS },
+				permissions: { f_types: "multi_tag", f_options: PERMISSION_TOKEN_OPTIONS },
+				permissionsAdd: { f_types: "multi_tag", f_options: PERMISSION_TOKEN_OPTIONS },
+				permissionsDeny: { f_types: "multi_tag", f_options: PERMISSION_TOKEN_OPTIONS },
+				permissionPreset: { f_types: "co", f_cbo_query: ACTION_PRESET_OPTIONS_JSON },
+				dataScope: { f_types: "co", f_cbo_query: DATA_SCOPE_OPTIONS_JSON },
+				branch_id: { f_types: "co", f_cbo_query: BRANCH_SELECT_QUERY_JSON },
+				dept_id: { f_types: "co", f_cbo_query: DEPT_SELECT_QUERY_BY_BRANCH_JSON },
+				actived: { f_types: "checkbox" },
+				dev: { f_types: "checkbox" },
 			});
 		}
-		runtimeConfig.table = enforceLegacyReadonlySystemUserFields(runtimeConfig.table);
+		runtimeConfig.table = enforceLegacyReadonlySystemUserFields(runtimeConfig.table, systemUserActorType);
 		runtimeConfig.table = applyFriendlyFieldPolicy(actorTableName, runtimeConfig.table, systemUserActorType);
 		if (base?.trigger && typeof base.trigger === "object") {
 			runtimeConfig.trigger = {
@@ -1067,15 +1134,17 @@ export default function AdminPage() {
 
 	const normalizeKnownSystemMenu = useCallback((menu: any = {}): any => {
 		if (normalizedMenuKey === "role" || normalizedMenuKey === "roles") {
-			const rawRoleTable = Array.isArray(menu?.table) && menu.table.length > 0 ? menu.table : buildRoleMenuFields(
-				t,
-				tEn,
-				tZh,
-				roleFieldConstraints.permissionOptions,
-				roleFieldConstraints.menuOptions,
-				roleFieldConstraints.presetOptionsQuery,
-				roleFieldConstraints.dataScopeOptionsQuery,
-			);
+			const rawRoleTable = Array.isArray(menu?.table) && menu.table.length > 0
+				? menu.table
+				: buildRoleMenuFields(
+					t,
+					tEn,
+					tZh,
+					roleFieldConstraints.permissionOptions,
+					roleFieldConstraints.menuOptions,
+					roleFieldConstraints.presetOptionsQuery,
+					roleFieldConstraints.dataScopeOptionsQuery,
+				);
 			const configuredTable = localizeRoleTableFields(enforceLegacyReadonlyRoleFields(enrichRequiredFieldConfigs(rawRoleTable, {
 				menusPermissions: { f_types: "menu_tree", f_options: roleFieldConstraints.menuOptions },
 				permissions: { f_types: "multi_tag", f_options: roleFieldConstraints.permissionOptions },
@@ -1110,15 +1179,17 @@ export default function AdminPage() {
 		}
 
 		if (normalizedMenuKey === "dept") {
-			const rawDeptRoleTable = Array.isArray(menu?.table) && menu.table.length > 0 ? menu.table : buildRoleMenuFields(
-				t,
-				tEn,
-				tZh,
-				roleFieldConstraints.permissionOptions,
-				roleFieldConstraints.menuOptions,
-				roleFieldConstraints.presetOptionsQuery,
-				roleFieldConstraints.dataScopeOptionsQuery,
-			);
+			const rawDeptRoleTable = Array.isArray(menu?.table) && menu.table.length > 0
+				? menu.table
+				: buildRoleMenuFields(
+					t,
+					tEn,
+					tZh,
+					roleFieldConstraints.permissionOptions,
+					roleFieldConstraints.menuOptions,
+					roleFieldConstraints.presetOptionsQuery,
+					roleFieldConstraints.dataScopeOptionsQuery,
+				);
 			const configuredTable = localizeRoleTableFields(enforceLegacyReadonlyRoleFields(enrichRequiredFieldConfigs(rawDeptRoleTable, {
 				menusPermissions: { f_types: "menu_tree", f_options: roleFieldConstraints.menuOptions },
 				permissions: { f_types: "multi_tag", f_options: roleFieldConstraints.permissionOptions },
@@ -1209,7 +1280,7 @@ export default function AdminPage() {
 		}
 
 		const rawLabel = menu?.label ?? menu?.label_vi ?? menu?.name ?? menu?.title ?? "";
-		const normalizedLabel = typeof rawLabel === "string" ? rawLabel.replace(/^[\d\.\s]+/, "").trim() : rawLabel;
+		const normalizedLabel = typeof rawLabel === "string" ? rawLabel.replace(/^[\d.\s]+/, "").trim() : rawLabel;
 		return normalizeMenuRuntimeConfig({
 			...menu,
 			...(normalizedLabel ? { label: normalizedLabel } : {}),
@@ -1272,20 +1343,19 @@ export default function AdminPage() {
 
 	const resolveDisplayLabel = useCallback((menu: any = {}): any => {
 		const rawLabel = menu?.label ?? menu?.label_vi ?? menu?.name ?? menu?.title ?? "";
-		return typeof rawLabel === "string" ? rawLabel.replace(/^[\d\.\s]+/, "").trim() : rawLabel;
+		return typeof rawLabel === "string" ? rawLabel.replace(/^[\d.\s]+/, "").trim() : rawLabel;
 	}, []);
 
 	const handleDataChange = useCallback(() => {
-		setReloadTrigger((prev) => prev + 1);
+		setReloadTrigger(prev => prev + 1);
 	}, []);
-
 
 	// Refactor: Lấy menuData từ tab state hoặc menuId props, không dùng location.pathname
 	useEffect(() => {
 		// Ưu tiên lấy menuData từ tab state (store) nếu có
 		const tabsStore = useTabsStore.getState();
 		const activeTab = tabsStore.openTabs?.get?.(tabsStore.activeKey) as any;
-		let menuDataFromTab = activeTab?.menuData || activeTab?.m_configs;
+		const menuDataFromTab = activeTab?.menuData || activeTab?.m_configs;
 		if (menuDataFromTab) {
 			const roleAdjustedMenu = normalizedMenuKey === "user" ? buildUserMenuByRole(menuDataFromTab) : menuDataFromTab;
 			const withLabel = normalizeKnownSystemMenu({
@@ -1296,7 +1366,8 @@ export default function AdminPage() {
 			if (!areMenusEquivalent(canonicalMenu, menuData)) {
 				setMenuData(canonicalMenu);
 			}
-			if (loading) setLoading(false);
+			if (loading)
+				setLoading(false);
 			return;
 		}
 		// Nếu không có, fallback lấy từ menuId param (cũ)
@@ -1311,10 +1382,13 @@ export default function AdminPage() {
 					|| menu.key === normalizedTargetId
 					|| menu.path === normalizedTargetId
 					|| menu.path === systemPathVariant
-				) return menu;
+				) {
+					return menu;
+				}
 				if (menu.children?.length) {
 					const found = findMenuInTree(menu.children, targetId);
-					if (found) return found;
+					if (found)
+						return found;
 				}
 			}
 			return null;
@@ -1388,7 +1462,8 @@ export default function AdminPage() {
 					},
 				};
 				const fallback = fallbackMenuById[normalizedMenuKey];
-				if (fallback) found = fallback;
+				if (fallback)
+					found = fallback;
 			}
 			if (found) {
 				const roleAdjustedMenu = normalizedMenuKey === "user" ? buildUserMenuByRole(found) : found;
@@ -1400,7 +1475,8 @@ export default function AdminPage() {
 				if (!areMenusEquivalent(canonicalMenu, menuData)) {
 					setMenuData(canonicalMenu);
 				}
-				if (loading) setLoading(false);
+				if (loading)
+					setLoading(false);
 			}
 		}
 		// Nếu không tìm thấy menuData thì không set lại liên tục
@@ -1409,22 +1485,27 @@ export default function AdminPage() {
 	// Di chuyển hàm loadTableData ra ngoài useEffect để có thể tái sử dụng
 	const loadTableData = async () => {
 		const runtimeMenu = menuData ? normalizeMenuRuntimeConfig(menuData) : null;
-		if (!runtimeMenu) return;
+		if (!runtimeMenu)
+			return;
 
 		const resolvedUserAppId = (appId && String(appId).trim()) || "csm";
 		const resolveTableAppId = (tableName: string): string => {
 			if (isSystemUserRoute) {
-				if (tableName === "csm_accounts") return "csm";
-				if (tableName === "csm_group_members") return "csm";
+				if (tableName === "csm_accounts")
+					return "csm";
+				if (tableName === "csm_group_members")
+					return "csm";
 			}
 			return runtimeMenu.app_id || resolvedUserAppId;
 		};
 
 		const ensureSystemRouteTables = async () => {
 			const schemaPath = SYSTEM_MENU_KEY_TO_SCHEMA_PATH[normalizedMenuKey];
-			if (!schemaPath) return;
+			if (!schemaPath)
+				return;
 			const definitions = SYSTEM_ROUTE_TABLE_SCHEMAS[schemaPath] || [];
-			if (definitions.length === 0) return;
+			if (definitions.length === 0)
+				return;
 
 			for (const definition of definitions) {
 				const tableAppId = resolveTableAppId(definition.tableName);
@@ -1440,7 +1521,8 @@ export default function AdminPage() {
 					if (structMatchesExpected(currentStruct, definition.struct)) {
 						continue;
 					}
-				} catch {
+				}
+				catch {
 					// Continue to create-table fallback.
 				}
 
@@ -1460,7 +1542,8 @@ export default function AdminPage() {
 			.map((item: string) => item.trim())
 			.filter(Boolean)
 			.forEach((item: string) => allMenuTables.add(item));
-		if (allMenuTables.size === 0) return;
+		if (allMenuTables.size === 0)
+			return;
 
 		setDbLoading(true);
 		setDbError(null);
@@ -1470,7 +1553,7 @@ export default function AdminPage() {
 			const primaryTableAppId = resolveTableAppId(primaryTable);
 			const defaultFilter = {
 				operator: "AND" as const,
-				conditions: [{ field: "id", type: "like", value: "" }]
+				conditions: [{ field: "id", type: "like", value: "" }],
 			};
 			// Enforce child-user scope for all non-dev actors on /system/user.
 			// This avoids missing backend guard when admin profile bits are not fully populated.
@@ -1480,8 +1563,8 @@ export default function AdminPage() {
 			);
 			const ownerCandidates = new Set(
 				userSubOwnerCandidates
-					.map((value) => String(value).trim().toLowerCase())
-					.filter(Boolean)
+					.map(value => String(value).trim().toLowerCase())
+					.filter(Boolean),
 			);
 			const applySubuserOwnershipFilter = (tableName: string, inputRows: any[]) => {
 				if (!shouldRequestOnlyMySubusers(tableName) || !Array.isArray(inputRows) || inputRows.length === 0) {
@@ -1492,7 +1575,7 @@ export default function AdminPage() {
 				}
 
 				const ownerFields = ["parent_account_id", "parent_id", "parent_user_id"];
-				const hasOwnerField = inputRows.some((row: any) => ownerFields.some((field) => row?.[field] != null && String(row[field]).trim() !== ""));
+				const hasOwnerField = inputRows.some((row: any) => ownerFields.some(field => row?.[field] != null && String(row[field]).trim() !== ""));
 				if (!hasOwnerField) {
 					return inputRows;
 				}
@@ -1500,7 +1583,8 @@ export default function AdminPage() {
 				return inputRows.filter((row: any) => {
 					for (const field of ownerFields) {
 						const rawValue = row?.[field];
-						if (rawValue == null) continue;
+						if (rawValue == null)
+							continue;
 						const normalizedValue = String(rawValue).trim().toLowerCase();
 						if (normalizedValue && ownerCandidates.has(normalizedValue)) {
 							return true;
@@ -1516,7 +1600,7 @@ export default function AdminPage() {
 				app_id: (primaryTable === "csm_accounts" || primaryTable === "csm_group_members") ? "csm" : primaryTableAppId,
 				obj_name: primaryTable,
 				where: defaultFilter,
-				...(shouldRequestOnlyMySubusers(primaryTable) ? { only_my_subusers: true } : {})
+				...(shouldRequestOnlyMySubusers(primaryTable) ? { only_my_subusers: true } : {}),
 			});
 
 			const rawRows = response.rows || response.data || [];
@@ -1530,12 +1614,12 @@ export default function AdminPage() {
 							.join("|");
 						const fallbackKey = row?.id != null ? `id:${String(row.id)}` : `index:${index}`;
 						return [compositeKey.replace(/[|:]/g, "").trim() ? compositeKey : fallbackKey, row];
-					})
-				).values()
+					}),
+				).values(),
 			);
 
 			const newDatabase: Record<string, any> = {
-				[primaryTable]: { rows: deduped, fieldsPK: fieldsPK }
+				[primaryTable]: { rows: deduped, fieldsPK },
 			};
 
 			// If multiple tables are defined, load companion tables into database (for triggers/cbo_query)
@@ -1548,14 +1632,15 @@ export default function AdminPage() {
 							app_id: (t === "csm_accounts" || t === "csm_group_members") ? "csm" : tableAppId,
 							obj_name: t,
 							where: tableFilter,
-							...(shouldRequestOnlyMySubusers(t) ? { only_my_subusers: true } : {})
+							...(shouldRequestOnlyMySubusers(t) ? { only_my_subusers: true } : {}),
 						});
 						const rawRowsT = (resT as any).rows || (resT as any).data || [];
 						const rowsT = applySubuserOwnershipFilter(t, rawRowsT);
 						const pkT = (resT as any).fieldsPK || ["id"];
 						newDatabase[t] = { rows: rowsT, fieldsPK: pkT };
-						   // ...existing code...
-					} catch (e) {
+						// ...existing code...
+					}
+					catch (e) {
 						console.warn(`⚠️ Failed to load companion table ${t}:`, (e as any)?.message);
 					}
 				}
@@ -1563,7 +1648,7 @@ export default function AdminPage() {
 
 			// Extract dependency tables from trigger config
 			const dependencyTables = new Set<string>();
-			if (runtimeMenu.trigger && typeof runtimeMenu.trigger === 'object') {
+			if (runtimeMenu.trigger && typeof runtimeMenu.trigger === "object") {
 				Object.values(runtimeMenu.trigger).forEach((trigger: any) => {
 					if (trigger?.query && Array.isArray(trigger.query)) {
 						trigger.query.forEach((q: any) => {
@@ -1586,33 +1671,35 @@ export default function AdminPage() {
 						app_id: (depTable === "csm_accounts" || depTable === "csm_group_members") ? "csm" : tableAppId,
 						obj_name: depTable,
 						where: tableFilter,
-						...(shouldRequestOnlyMySubusers(depTable) ? { only_my_subusers: true } : {})
+						...(shouldRequestOnlyMySubusers(depTable) ? { only_my_subusers: true } : {}),
 					});
 					const rawDepRows = (depResponse as any).rows || (depResponse as any).data || [];
 					const depRows = applySubuserOwnershipFilter(depTable, rawDepRows);
 					const depFieldsPK = (depResponse as any).fieldsPK || ["id"];
 					newDatabase[depTable] = { rows: depRows, fieldsPK: depFieldsPK };
-					   // ...existing code...
-				} catch (depErr: any) {
+					// ...existing code...
+				}
+				catch (depErr: any) {
 					console.warn(`⚠️ Failed to load dependency table ${depTable}:`, depErr?.message);
 				}
 			}
-			
+
 			// Update both local state AND global store database
 			setDatabase(newDatabase);
-			
+
 			// Update global store so CsmDynamicGrid can access the data
 			const currentStoreDb = useAppStore.getState().getDatabase();
 			useAppStore.getState().setDatabase({
 				...currentStoreDb,
-				...newDatabase
+				...newDatabase,
 			});
-			
-		} catch (err: any) {
+		}
+		catch (err: any) {
 			const msg = err?.message || "Failed to load table data";
 			setDbError(msg);
 			console.error("❌ Load table data failed:", err);
-		} finally {
+		}
+		finally {
 			setDbLoading(false);
 		}
 	};
@@ -1621,11 +1708,6 @@ export default function AdminPage() {
 	useEffect(() => {
 		loadTableData();
 	}, [menuData?.table_name, appId, reloadTrigger, isSystemUserRoute, isAdminUser, userSubOwnerCandidates.join("|")]);
-
-	// Refresh function for data changes
-	const refreshDatabase = useCallback(() => {
-		setReloadTrigger(prev => prev + 1);
-	}, []);
 
 	// Theo dõi thay đổi ngôn ngữ và cập nhật giao diện
 	useEffect(() => {
@@ -1639,9 +1721,9 @@ export default function AdminPage() {
 			}
 		};
 
-		i18n.on('languageChanged', handleLanguageChange);
+		i18n.on("languageChanged", handleLanguageChange);
 		return () => {
-			i18n.off('languageChanged', handleLanguageChange);
+			i18n.off("languageChanged", handleLanguageChange);
 		};
 	}, [i18n, menuData]);
 
@@ -1649,19 +1731,17 @@ export default function AdminPage() {
 	const runtimeMenuData = menuData ? patchMenuI18n(normalizeMenuRuntimeConfig(menuData), t, tEn, tZh) : null;
 	const runtimeTableNames = String(runtimeMenuData?.table_name || "")
 		.split(",")
-		.map((item) => item.trim().toLowerCase())
+		.map(item => item.trim().toLowerCase())
 		.filter(Boolean);
-	const isSystemUserTableRuntime = runtimeTableNames.some((name) => name === "csm_accounts" || name === "csm_group_members");
+	const isSystemUserTableRuntime = runtimeTableNames.some(name => name === "csm_accounts" || name === "csm_group_members");
 	const effectiveAppId = (isSystemUserRoute || isSystemUserTableRuntime)
 		? "csm"
 		: (runtimeMenuData?.app_id || appId);
 	const typeForm = Number(runtimeMenuData?.type_form || 1);
-	const expectedTableNames = (SYSTEM_MENU_KEY_TO_EXPECTED_TABLES[normalizedMenuKey] || []).map((item) => item.toLowerCase());
+	const expectedTableNames = (SYSTEM_MENU_KEY_TO_EXPECTED_TABLES[normalizedMenuKey] || []).map(item => item.toLowerCase());
 	const currentTableName = String(runtimeMenuData?.table_name || "").trim();
 	const currentTableNames = normalizeTableNames(runtimeMenuData?.table_name);
-	const hasSystemMenuTableMismatch = expectedTableNames.length > 0
-		&& currentTableNames.length > 0
-		&& !currentTableNames.some((name) => expectedTableNames.includes(name));
+	const hasSystemMenuTableMismatch = expectedTableNames.length > 0 && currentTableNames.length > 0 && !currentTableNames.some(name => expectedTableNames.includes(name));
 
 	useEffect(() => {
 		if (!hasSystemMenuTableMismatch) {
@@ -1711,18 +1791,20 @@ export default function AdminPage() {
 		);
 	}
 
-	const mismatchAlertNode = hasSystemMenuTableMismatch ? (
-		<Alert
-			type="warning"
-			showIcon
-			message={t("system.menu.configMismatch.title") || "Menu configuration mismatch"}
-			description={
-				(t("system.menu.configMismatch.desc") || "The current menu and table configuration are inconsistent.")
-				+ ` menuId=${normalizedMenuKey || menuId}, table=${currentTableName}, expected=${expectedTableNames.join(" | ")}`
-			}
-			style={{ marginBottom: 12 }}
-		/>
-	) : null;
+	const mismatchAlertNode = hasSystemMenuTableMismatch
+		? (
+			<Alert
+				type="warning"
+				showIcon
+				message={t("system.menu.configMismatch.title") || "Menu configuration mismatch"}
+				description={
+					`${t("system.menu.configMismatch.desc") || "The current menu and table configuration are inconsistent."
+					} menuId=${normalizedMenuKey || menuId}, table=${currentTableName}, expected=${expectedTableNames.join(" | ")}`
+				}
+				style={{ marginBottom: 12 }}
+			/>
+		)
+		: null;
 
 	// Render standalone Kanban board (type_form = 6 or kanban_config present)
 	if (typeForm === 6 || (runtimeMenuData as any).kanban_config) {
@@ -1758,7 +1840,7 @@ export default function AdminPage() {
 		runtimeMenuData.table_name
 		|| (runtimeMenuData as any)?.trigger?.load_db
 		|| typeForm === 1
-		|| typeForm === 2
+		|| typeForm === 2,
 	);
 	// Report should not override grid-like menus that only use report_name for print templates.
 	const isReportMode = !!runtimeMenuData.report_name && (typeForm === 5 || !hasGridLikePayload);
@@ -1779,32 +1861,31 @@ export default function AdminPage() {
 		// Extract type_form and row_type_edit from backend, with support for override
 		let typeForm: "" | 1 | 2 | 3 | 4 | 5 | 6 = runtimeMenuData.type_form || "";
 		let rowTypeEdit: 0 | 1 = runtimeMenuData.row_type_edit ?? 0;
-		
+
 		// Check localStorage for overrides (for testing purposes)
 		// Can be set via: localStorage.setItem(`${menuStorageScope}:type_form`, "1")
 		// localStorage.setItem(`${menuStorageScope}:row_type_edit`, "1")
 		try {
 			const menuStorageScope = String(
 				runtimeMenuData?.id
-					|| runtimeMenuData?.path
-					|| (normalizedMenuKey ? `/system/${normalizedMenuKey}` : "")
-					|| menuId
-					|| "system-grid"
+				|| runtimeMenuData?.path
+				|| (normalizedMenuKey ? `/system/${normalizedMenuKey}` : "")
+				|| menuId
+				|| "system-grid",
 			).trim();
-			const storedTypeForm = localStorage.getItem(`${menuStorageScope}:type_form`)
-				?? localStorage.getItem(`${menuId}:type_form`);
-			const storedRowTypeEdit = localStorage.getItem(`${menuStorageScope}:row_type_edit`)
-				?? localStorage.getItem(`${menuId}:row_type_edit`);
+			const storedTypeForm = localStorage.getItem(`${menuStorageScope}:type_form`) ?? localStorage.getItem(`${menuId}:type_form`);
+			const storedRowTypeEdit = localStorage.getItem(`${menuStorageScope}:row_type_edit`) ?? localStorage.getItem(`${menuId}:row_type_edit`);
 			if (storedTypeForm === "" || storedTypeForm === "1" || storedTypeForm === "2") {
 				typeForm = storedTypeForm as "" | 1 | 2;
 			}
 			if (storedRowTypeEdit === "0" || storedRowTypeEdit === "1") {
-				rowTypeEdit = parseInt(storedRowTypeEdit, 10) as 0 | 1;
+				rowTypeEdit = Number.parseInt(storedRowTypeEdit, 10) as 0 | 1;
 			}
-		} catch (e) {
+		}
+		catch {
 			// localStorage not available
 		}
-		
+
 		// Fallback: try to find type_form and row_type_edit in the table configuration
 		if (!typeForm && runtimeMenuData.table && Array.isArray(runtimeMenuData.table)) {
 			const typeFormField = runtimeMenuData.table.find((f: any) => f.f_name === "type_form");
@@ -1813,7 +1894,7 @@ export default function AdminPage() {
 				// This is stored as a table field value, not in the menu metadata
 			}
 		}
-		
+
 		// Transform menu data to m_configs format expected by CsmDynamicGrid
 		const configuredTableFromMenu = Array.isArray(runtimeMenuData.table)
 			? runtimeMenuData.table
@@ -1834,8 +1915,8 @@ export default function AdminPage() {
 			row_type_edit: rowTypeEdit,
 			struct: {
 				...(runtimeMenuData.struct || {}),
-				fieldsPK: database[runtimeMenuData.table_name]?.fieldsPK || runtimeMenuData.struct?.fieldsPK || ["id"]
-			}
+				fieldsPK: database[runtimeMenuData.table_name]?.fieldsPK || runtimeMenuData.struct?.fieldsPK || ["id"],
+			},
 		};
 
 		// CHÍNH SÁCH CỐ ĐỊNH: Nếu menu DB đã có cấu hình cột, giữ nguyên tuyệt đối (không áp policy/fallback).
@@ -1905,7 +1986,7 @@ export default function AdminPage() {
 						? ["id", "parent_dept_id", "branch_id", "dept_code", "dept_name", "dept_full_name", "description", "manager_user_id", "is_global", "status", "create_time", "update_time"]
 						: runtimeMenuData.table_name === "csm_branches"
 							? ["id", "parent_branch_id", "branch_code", "branch_name", "branch_full_name", "dept_id", "description", "manager_user_id", "is_global", "status", "create_time", "update_time"]
-						: SYSTEM_USER_VISIBLE_FIELDS_BY_ACTOR[systemUserActorType];
+							: SYSTEM_USER_VISIBLE_FIELDS_BY_ACTOR[systemUserActorType];
 			DEFAULT_HEADERS.parent_account_id = "common.parentAccountId";
 			DEFAULT_HEADERS.login_identifier = "common.loginIdentifier";
 			DEFAULT_HEADERS.group_id = "common.groupId";
@@ -1916,7 +1997,7 @@ export default function AdminPage() {
 			const normalizedKeys = Array.from(new Set(keys.length ? keys : fallbackKeys));
 			const fields = normalizedKeys.map((k) => {
 				const rawHeader = DEFAULT_HEADERS[k] || k;
-				const isKey = typeof rawHeader === 'string' && rawHeader.includes('.');
+				const isKey = typeof rawHeader === "string" && rawHeader.includes(".");
 				return {
 					f_name: k,
 					f_header: isKey ? t(rawHeader) : rawHeader,
@@ -1932,7 +2013,7 @@ export default function AdminPage() {
 		}
 
 		if (runtimeMenuData.table_name === "csm_accounts" || runtimeMenuData.table_name === "csm_group_members") {
-			m_configs.table = enforceLegacyReadonlySystemUserFields(m_configs.table as any[]);
+			m_configs.table = enforceLegacyReadonlySystemUserFields(m_configs.table as any[], systemUserActorType);
 			m_configs.table = applyFriendlyFieldPolicy(runtimeMenuData.table_name, m_configs.table as any[], systemUserActorType);
 		}
 		// Bảng nhóm quyền (csm_roles): luôn ẩn các trường nội bộ và đảm bảo nhãn 3 ngôn ngữ đúng,
@@ -1941,23 +2022,25 @@ export default function AdminPage() {
 			m_configs.table = localizeRoleTableFields(
 				enforceLegacyReadonlyRoleFields(
 					enrichRequiredFieldConfigs(m_configs.table as any[], {
-						menusPermissions:  { f_types: "menu_tree",  f_options: roleFieldConstraints.menuOptions },
-						permissions:       { f_types: "multi_tag",  f_options: roleFieldConstraints.permissionOptions },
-						permissionPreset:  { f_types: "co",         f_cbo_query: roleFieldConstraints.presetOptionsQuery },
-						dataScope:         { f_types: "co",         f_cbo_query: roleFieldConstraints.dataScopeOptionsQuery },
-						role_level:        { f_types: "co",         f_cbo_query: ROLE_LEVEL_OPTIONS_JSON },
-						branch_id:         { f_types: "co",         f_cbo_query: BRANCH_SELECT_QUERY_JSON },
-						dept_id:           { f_types: "co",         f_cbo_query: DEPT_SELECT_QUERY_BY_BRANCH_JSON },
-						status:            { f_types: "co",         f_cbo_query: STATUS_OPTIONS_JSON },
-						is_global:         { f_types: "checkbox" },
+						menusPermissions: { f_types: "menu_tree", f_options: roleFieldConstraints.menuOptions },
+						permissions: { f_types: "multi_tag", f_options: roleFieldConstraints.permissionOptions },
+						permissionPreset: { f_types: "co", f_cbo_query: roleFieldConstraints.presetOptionsQuery },
+						dataScope: { f_types: "co", f_cbo_query: roleFieldConstraints.dataScopeOptionsQuery },
+						role_level: { f_types: "co", f_cbo_query: ROLE_LEVEL_OPTIONS_JSON },
+						branch_id: { f_types: "co", f_cbo_query: BRANCH_SELECT_QUERY_JSON },
+						dept_id: { f_types: "co", f_cbo_query: DEPT_SELECT_QUERY_BY_BRANCH_JSON },
+						status: { f_types: "co", f_cbo_query: STATUS_OPTIONS_JSON },
+						is_global: { f_types: "checkbox" },
 					}),
 				),
-				t, tEn, tZh,
+				t,
+				tEn,
+				tZh,
 			);
 		}
-		
+
 		// Debug log to check if backend returned type_form and row_type_edit
-		   // ...existing code...
+		// ...existing code...
 
 		// If this is a Master-Detail config (type_form=2 and has nodes), render master grid + detail tabs
 		// Define master-detail configurations here
@@ -1967,51 +2050,51 @@ export default function AdminPage() {
 		};
 
 		let nodes = MASTER_DETAIL_CONFIGS[runtimeMenuData.table_name!] || [];
-		
+
 		// Log menuData to check for nodes or children
-		   // ...existing code...
-		
+		// ...existing code...
+
 		// If no hardcoded config, try to get from backend/menuData
 		if (nodes.length === 0 && (runtimeMenuData as any).nodes) {
 			nodes = (runtimeMenuData as any).nodes;
-			   // ...existing code...
+			// ...existing code...
 		}
-		
+
 		// Try children if nodes not found
 		if (nodes.length === 0 && (runtimeMenuData as any).children && Array.isArray((runtimeMenuData as any).children)) {
 			const children = (runtimeMenuData as any).children;
 			// Filter children that might be detail tables (have table_name)
 			nodes = children.filter((c: any) => c.table_name);
-			   // ...existing code...
+			// ...existing code...
 		}
-		
+
 		// AUTO-DETECT: If type_form=2 but no nodes, generate from menu structure
 		if (nodes.length === 0 && Number(m_configs.type_form) === 2 && runtimeMenuData.table_name) {
-			   // ...existing code...
+			// ...existing code...
 			// Try to find detail tables by looking for tables with same prefix
 			const masterTableName = runtimeMenuData.table_name;
 			const allTables = Object.keys(database);
-			
+
 			// Look for tables that might be detail tables
-			const detailTablePatterns = ['_ct', '_detail', '_line', '_row', '_item'];
-			const possibleDetailTables = allTables.filter(t => 
+			const detailTablePatterns = ["_ct", "_detail", "_line", "_row", "_item"];
+			const possibleDetailTables = allTables.filter(t =>
 				detailTablePatterns.some(pattern => t === `${masterTableName}${pattern}` || t.startsWith(`${masterTableName}_`))
-				&& t !== masterTableName
+				&& t !== masterTableName,
 			);
-			
+
 			// If found detail tables, auto-create nodes config
 			if (possibleDetailTables.length > 0) {
 				nodes = possibleDetailTables.map((tableName, idx) => ({
 					id: tableName,
 					table_name: tableName,
-					label: t('common.detail', { index: idx + 1 }),
+					label: t("common.detail", { index: idx + 1 }),
 					table: runtimeMenuData.table || [],
 					trigger: runtimeMenuData.trigger || {},
 					g_readonly: false,
 					type_form: "",
 					row_type_edit: 0,
 				}));
-			   // ...existing code...
+				// ...existing code...
 			}
 			else {
 				// As a final fallback, create a single detail node with a conventional name
@@ -2026,13 +2109,13 @@ export default function AdminPage() {
 						g_readonly: false,
 						type_form: "",
 						row_type_edit: 0,
-					}
+					},
 				];
-			   // ...existing code...
+				// ...existing code...
 			}
 		}
-		
-		   const hasNodes = Array.isArray(nodes) && nodes.length > 0;
+
+		const hasNodes = Array.isArray(nodes) && nodes.length > 0;
 		if (Number(m_configs.type_form) === 2 && hasNodes) {
 			return (
 				<div style={{ padding: 16, height: "100%" }}>

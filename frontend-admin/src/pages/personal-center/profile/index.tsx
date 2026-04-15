@@ -1,16 +1,16 @@
 import { BasicContent, FormAvatarItem } from "#src/components";
+import { updateTableData } from "#src/components/csm-grid/CsmApi";
 import { useUserStore } from "#src/store";
 import { useTabsStore } from "#src/store/tabs";
-import { updateTableData } from "#src/components/csm-grid/CsmApi";
 
 import {
 	ProForm,
 	ProFormText,
 	ProFormTextArea,
 } from "@ant-design/pro-components";
-import { Form, Input, Button, Card, Divider, message } from "antd";
-import { useTranslation } from "react-i18next";
+import { Button, Card, Divider, Form, Input, message } from "antd";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 
 export default function Profile() {
 	const { t } = useTranslation();
@@ -18,32 +18,35 @@ export default function Profile() {
 	const [loading, setLoading] = useState(false);
 	const [passwordForm] = Form.useForm();
 
-	const hasRole = (role: string) =>
-		(currentUser.roles || []).some(r => String(r || "").toLowerCase() === role.toLowerCase());
-
 	const resolvePrimaryIdentity = () => {
 		const username = String(currentUser.username || "").trim();
-		if (username) return { field: "username", value: username };
+		if (username)
+			return { field: "username", value: username };
 		const email = String(currentUser.email || "").trim();
-		if (email) return { field: "email", value: email };
+		if (email)
+			return { field: "email", value: email };
 		const phoneNumber = String(currentUser.phoneNumber || "").trim();
-		if (phoneNumber) return { field: "phoneNumber", value: phoneNumber };
+		if (phoneNumber)
+			return { field: "phoneNumber", value: phoneNumber };
 		return { field: "", value: "" };
 	};
 
 	const resolveProfileTarget = () => {
-		const isDevOrAdminAccount = Boolean(currentUser.dev) || hasRole("admin") || hasRole("dev");
-		const objName = isDevOrAdminAccount ? "csm_accounts" : "csm_group_members";
+		const accountType = String((currentUser as any).account_type || "").trim().toLowerCase();
+		const isSubUserByFlag = Boolean((currentUser as any).is_sub_user) || accountType === "sub-user";
+		// Sub-user can still have admin permission; account table must follow identity type, not role alone.
+		const objName = isSubUserByFlag ? "csm_group_members" : "csm_accounts";
 		const userId = String(currentUser.userId || "").trim();
 		const identity = resolvePrimaryIdentity();
-		const loginIdentifier = identity.value;
+		const loginIdentifier = String((currentUser as any).login_identifier || "").trim() || identity.value;
 
 		const pkFields = objName === "csm_group_members"
 			? (userId ? ["id", "login_identifier"] : ["login_identifier"])
 			: (userId ? ["id"] : (identity.field ? [identity.field] : []));
 
 		const where: Record<string, any> = {};
-		if (userId) where.id = userId;
+		if (userId)
+			where.id = userId;
 		if (objName === "csm_group_members" && loginIdentifier) {
 			where.login_identifier = loginIdentifier;
 		}
@@ -55,14 +58,19 @@ export default function Profile() {
 	};
 
 	const isUpdateSuccess = (response: any) => {
-		if (!response) return false;
-		if (response.success === true) return true;
-		if (Number(response.code) === 200) return true;
-		if (response.data === "success") return true;
-		if (String(response.message || "").toLowerCase() === "ok") return true;
+		if (!response)
+			return false;
+		if (response.success === true)
+			return true;
+		if (Number(response.code) === 200)
+			return true;
+		if (response.data === "success")
+			return true;
+		if (String(response.message || "").toLowerCase() === "ok")
+			return true;
 		return false;
 	};
-	
+
 	const getAvatarURL = () => {
 		if (currentUser) {
 			if (currentUser.avatar) {
@@ -74,13 +82,12 @@ export default function Profile() {
 		return "";
 	};
 
-
 	const handleFinish = async (values: any) => {
 		setLoading(true);
 		try {
 			const { objName, pkFields, where } = resolveProfileTarget();
 			if (!pkFields?.length || Object.keys(where).length === 0) {
-				message.error(t('personal-center.updateFailed'));
+				message.error(t("personal-center.updateFailed"));
 				return;
 			}
 
@@ -101,7 +108,7 @@ export default function Profile() {
 			});
 
 			if (isUpdateSuccess(response)) {
-				message.success(t('personal-center.updateSuccess'));
+				message.success(t("personal-center.updateSuccess"));
 				// Update user store với đúng trường định danh backend trả về
 				const updatedRow = response?.updated_row || {};
 				useUserStore.setState({
@@ -115,32 +122,35 @@ export default function Profile() {
 				});
 				try {
 					await useUserStore.getState().getUserInfo();
-				} catch (syncErr) {
-					console.warn('[Profile] Sync user-info after update failed:', syncErr);
+				}
+				catch (syncErr) {
+					console.warn("[Profile] Sync user-info after update failed:", syncErr);
 				}
 				// Đảm bảo tab profile luôn mở và active sau khi cập nhật
 				const { addTab, setActiveKey } = useTabsStore.getState();
-				addTab('/personal-center/my-profile', {
-					key: '/personal-center/my-profile',
-					label: t('common.menu.profile'),
+				addTab("/personal-center/my-profile", {
+					key: "/personal-center/my-profile",
+					label: t("common.menu.profile"),
 					closable: true,
 					draggable: true,
 				});
-				setActiveKey('/personal-center/my-profile');
-			} else {
-				message.error(response?.message || t('personal-center.updateFailed'));
+				setActiveKey("/personal-center/my-profile");
 			}
-		} catch (error: any) {
-			message.error(error.message || t('personal-center.updateFailed'));
-		} finally {
+			else {
+				message.error(response?.message || t("personal-center.updateFailed"));
+			}
+		}
+		catch (error: any) {
+			message.error(error.message || t("personal-center.updateFailed"));
+		}
+		finally {
 			setLoading(false);
 		}
 	};
 
-
 	const handleChangePassword = async (values: any) => {
 		if (values.newPassword !== values.confirmPassword) {
-			message.error(t('personal-center.passwordNotMatch'));
+			message.error(t("personal-center.passwordNotMatch"));
 			return;
 		}
 
@@ -148,7 +158,7 @@ export default function Profile() {
 		try {
 			const { objName, pkFields, where, loginIdentifier } = resolveProfileTarget();
 			if (!pkFields?.length || Object.keys(where).length === 0) {
-				message.error(t('personal-center.passwordChangeFailed'));
+				message.error(t("personal-center.passwordChangeFailed"));
 				return;
 			}
 
@@ -171,7 +181,7 @@ export default function Profile() {
 			});
 
 			if (isUpdateSuccess(response)) {
-				message.success(t('personal-center.passwordChangeSuccess'));
+				message.success(t("personal-center.passwordChangeSuccess"));
 				// Update user store với đúng trường định danh backend trả về (nếu có)
 				const updatedRow = response?.updated_row || {};
 				useUserStore.setState({
@@ -181,19 +191,22 @@ export default function Profile() {
 					phoneNumber: updatedRow.phoneNumber ?? updatedRow.phone_number ?? currentUser.phoneNumber,
 				});
 				passwordForm.resetFields();
-			} else {
-				message.error(response?.message || t('personal-center.passwordChangeFailed'));
 			}
-		} catch (error: any) {
-			message.error(error.message || t('personal-center.passwordChangeFailed'));
-		} finally {
+			else {
+				message.error(response?.message || t("personal-center.passwordChangeFailed"));
+			}
+		}
+		catch (error: any) {
+			message.error(error.message || t("personal-center.passwordChangeFailed"));
+		}
+		finally {
 			setLoading(false);
 		}
 	};
 
 	return (
 		<BasicContent className="max-w-4xl mx-auto p-6">
-			<Card title={<h2 className="text-2xl font-bold m-0">{t('personal-center.myProfile')}</h2>} bordered={false}>
+			<Card title={<h2 className="text-2xl font-bold m-0">{t("personal-center.myProfile")}</h2>} bordered={false}>
 				<ProForm
 					layout="vertical"
 					onFinish={handleFinish}
@@ -203,8 +216,8 @@ export default function Profile() {
 					}}
 					submitter={{
 						searchConfig: {
-							submitText: t('personal-center.save'),
-							resetText: t('personal-center.cancel'),
+							submitText: t("personal-center.save"),
+							resetText: t("personal-center.cancel"),
 						},
 						submitButtonProps: {
 							loading,
@@ -214,37 +227,37 @@ export default function Profile() {
 				>
 					<ProForm.Item
 						name="avatar"
-						label={t('personal-center.avatar')}
+						label={t("personal-center.avatar")}
 					>
 						<FormAvatarItem />
 					</ProForm.Item>
-					
-				{currentUser.username && (
+
+					{currentUser.username && (
+						<ProFormText
+							name="username"
+							label={t("personal-center.username")}
+							disabled
+							tooltip={`${t("personal-center.username")} không thể thay đổi`}
+						/>
+					)}
+
 					<ProFormText
-						name="username"
-						label={t('personal-center.username')}
-						disabled
-						tooltip={t('personal-center.username') + " không thể thay đổi"}
+						name="full_name"
+						label={t("personal-center.fullName")}
 					/>
-				)}
-				
-				<ProFormText
-					name="full_name"
-					label={t('personal-center.fullName')}
-				/>
-				
-				<ProFormTextArea
-					allowClear
-					name="description"
-					label={t('personal-center.description')}
-					placeholder={t('personal-center.description')}
-				/>
+
+					<ProFormTextArea
+						allowClear
+						name="description"
+						label={t("personal-center.description")}
+						placeholder={t("personal-center.description")}
+					/>
 				</ProForm>
 			</Card>
 
 			<Divider />
 
-			<Card title={<h2 className="text-2xl font-bold m-0">{t('personal-center.changePassword')}</h2>} bordered={false} className="mt-6">
+			<Card title={<h2 className="text-2xl font-bold m-0">{t("personal-center.changePassword")}</h2>} bordered={false} className="mt-6">
 				<Form
 					form={passwordForm}
 					layout="vertical"
@@ -252,62 +265,62 @@ export default function Profile() {
 				>
 					<Form.Item
 						name="oldPassword"
-						label={t('personal-center.oldPassword')}
+						label={t("personal-center.oldPassword")}
 						rules={[
 							{
 								required: true,
-								message: t('personal-center.pleaseEnterOldPassword'),
+								message: t("personal-center.pleaseEnterOldPassword"),
 							},
 						]}
 					>
-						<Input.Password placeholder={t('personal-center.oldPassword')} />
+						<Input.Password placeholder={t("personal-center.oldPassword")} />
 					</Form.Item>
-					
+
 					<Form.Item
 						name="newPassword"
-						label={t('personal-center.newPassword')}
+						label={t("personal-center.newPassword")}
 						rules={[
 							{
 								required: true,
-								message: t('personal-center.pleaseEnterNewPassword'),
+								message: t("personal-center.pleaseEnterNewPassword"),
 							},
 							{
 								min: 6,
-								message: 'Mật khẩu phải có ít nhất 6 ký tự',
+								message: "Mật khẩu phải có ít nhất 6 ký tự",
 							},
 						]}
 					>
-						<Input.Password placeholder={t('personal-center.newPassword')} />
+						<Input.Password placeholder={t("personal-center.newPassword")} />
 					</Form.Item>
-					
+
 					<Form.Item
 						name="confirmPassword"
-						label={t('personal-center.confirmPassword')}
-						dependencies={['newPassword']}
+						label={t("personal-center.confirmPassword")}
+						dependencies={["newPassword"]}
 						rules={[
 							{
 								required: true,
-								message: t('personal-center.pleaseEnterConfirmPassword'),
+								message: t("personal-center.pleaseEnterConfirmPassword"),
 							},
 							({ getFieldValue }) => ({
 								validator(_, value) {
-									if (!value || getFieldValue('newPassword') === value) {
+									if (!value || getFieldValue("newPassword") === value) {
 										return Promise.resolve();
 									}
-									return Promise.reject(new Error(t('personal-center.passwordNotMatch')));
+									return Promise.reject(new Error(t("personal-center.passwordNotMatch")));
 								},
 							}),
 						]}
 					>
-						<Input.Password placeholder={t('personal-center.confirmPassword')} />
+						<Input.Password placeholder={t("personal-center.confirmPassword")} />
 					</Form.Item>
-					
+
 					<Form.Item>
 						<Button type="primary" htmlType="submit" loading={loading}>
-							{t('personal-center.save')}
+							{t("personal-center.save")}
 						</Button>
 						<Button style={{ marginLeft: 8 }} onClick={() => passwordForm.resetFields()}>
-							{t('personal-center.cancel')}
+							{t("personal-center.cancel")}
 						</Button>
 					</Form.Item>
 				</Form>

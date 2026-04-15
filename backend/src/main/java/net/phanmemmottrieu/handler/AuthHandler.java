@@ -139,6 +139,10 @@ public class AuthHandler {
 
     private Map<String, Object> toUserInfoMap(net.phanmemmottrieu.model.User u) {
         Map<String, Object> userInfo = new java.util.HashMap<>();
+        Map<String, String> appTokenMeta = parseAppTokenMeta(u.getAppToken());
+        String tokenRole = appTokenMeta.getOrDefault("role", "");
+        String loginIdentifier = appTokenMeta.getOrDefault("loginIdentifier", "");
+        boolean isSubUser = "user".equalsIgnoreCase(tokenRole);
         userInfo.put("userId", u.getId());
         userInfo.put("username", u.getUsername());
         userInfo.put("email", u.getEmail());
@@ -156,7 +160,32 @@ public class AuthHandler {
         userInfo.put("app_id", u.getAppId());
         userInfo.put("app_token", u.getAppToken());
         userInfo.put("dev", u.getDev());
+        userInfo.put("account_type", isSubUser ? "sub-user" : "main");
+        userInfo.put("is_sub_user", isSubUser);
+        if (!loginIdentifier.isBlank()) {
+            userInfo.put("login_identifier", loginIdentifier);
+        }
         return userInfo;
+    }
+
+    private Map<String, String> parseAppTokenMeta(String appToken) {
+        Map<String, String> result = new HashMap<>();
+        result.put("appId", "");
+        result.put("loginIdentifier", "");
+        result.put("role", "");
+        if (appToken == null || appToken.isBlank()) {
+            return result;
+        }
+        try {
+            String decryptedToken = recordManager.csm_decrypt(appToken);
+            String[] parts = decryptedToken.split("_____");
+            if (parts.length > 0) result.put("appId", String.valueOf(parts[0]));
+            if (parts.length > 1) result.put("loginIdentifier", String.valueOf(parts[1]));
+            if (parts.length > 2) result.put("role", String.valueOf(parts[2]));
+        } catch (Exception e) {
+            logger.debug("[AuthHandler] Cannot parse app_token meta: {}", e.getMessage());
+        }
+        return result;
     }
 
     public void handleLogin(StandardResponse response, Map<String, Object> params) {
@@ -239,6 +268,15 @@ public class AuthHandler {
             result.put("phoneNumber", user.getPhoneNumber());
             result.put("full_name", user.getFullName());
             result.put("avatar", user.getAvatar());
+            Map<String, String> appTokenMeta = parseAppTokenMeta(user.getAppToken());
+            String tokenRole = appTokenMeta.getOrDefault("role", "");
+            String tokenLoginIdentifier = appTokenMeta.getOrDefault("loginIdentifier", "");
+            boolean isSubUser = "user".equalsIgnoreCase(tokenRole);
+            result.put("account_type", isSubUser ? "sub-user" : "main");
+            result.put("is_sub_user", isSubUser);
+            if (tokenLoginIdentifier != null && !tokenLoginIdentifier.isBlank()) {
+                result.put("login_identifier", tokenLoginIdentifier);
+            }
 
             // Tính toán danh sách route động theo quyền/người dùng
             try {
