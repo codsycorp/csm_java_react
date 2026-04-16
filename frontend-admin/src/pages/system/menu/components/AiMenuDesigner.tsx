@@ -1939,13 +1939,34 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
       ...payload,
     };
 
-    await updateTableData<AiRequestRecord>({
-      app_id: "csm",
-      obj_name: AI_REQUEST_TABLE,
-      command: mode,
-      obj_update: objUpdate,
-      pk_fields: ["app_id_target"],
-    });
+    try {
+      await updateTableData<AiRequestRecord>({
+        app_id: "csm",
+        obj_name: AI_REQUEST_TABLE,
+        command: mode,
+        obj_update: objUpdate,
+        pk_fields: ["app_id_target"],
+      });
+    } catch (error: any) {
+      const errorText = String(error?.message || error?.response?.data?.message || "").toLowerCase();
+      const isDuplicateCreate = mode === "create"
+        && (errorText.includes("trùng khóa chính")
+          || errorText.includes("trung khoa chinh")
+          || errorText.includes("duplicate")
+          || errorText.includes("primary key"));
+
+      if (!isDuplicateCreate) {
+        throw error;
+      }
+
+      await updateTableData<AiRequestRecord>({
+        app_id: "csm",
+        obj_name: AI_REQUEST_TABLE,
+        command: "update",
+        obj_update: objUpdate,
+        pk_fields: ["app_id_target"],
+      });
+    }
 
     if (!recordId) setRecordId(objUpdate.id);
   };
