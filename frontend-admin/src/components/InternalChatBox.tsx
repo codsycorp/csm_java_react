@@ -819,8 +819,37 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
                 from { opacity: 0; transform: translateY(6px) scale(0.995); }
                 to { opacity: 1; transform: translateY(0) scale(1); }
               }
+              .csm-chat-modal {
+                max-height: 90vh;
+                padding-bottom: env(safe-area-inset-bottom);
+              }
+              @media (max-height: 800px) {
+                .csm-chat-modal {
+                  max-height: 85vh !important;
+                }
+              }
+              @media (max-height: 600px) {
+                .csm-chat-modal {
+                  max-height: 80vh !important;
+                }
+              }
+              @media (max-width: 360px) {
+                .csm-chat-modal-header {
+                  padding: 12px !important;
+                  font-size: 14px !important;
+                }
+                .csm-chat-modal-toolbar {
+                  padding: 6px 8px !important;
+                  gap: 4px !important;
+                  flex-wrap: wrap;
+                }
+                .csm-chat-modal-toolbar button {
+                  min-width: 32px !important;
+                }
+              }
             `}</style>
             <div
+              className="csm-chat-modal"
               style={{
                 position: 'fixed',
                 left: 0,
@@ -835,23 +864,30 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
                 display: 'flex',
                 flexDirection: 'column',
                 animation: 'slideUp 0.3s ease-out',
+                boxSizing: 'border-box',
+                overflowX: 'hidden',
+                overflowY: 'hidden',
               }}
               onClick={(e) => e.stopPropagation()}
             >
               {/* Header */}
               <div
+                className="csm-chat-modal-header"
                 style={{
                   padding: '16px',
                   borderBottom: `1px solid ${token.colorBorder}`,
                   display: 'flex',
                   justifyContent: 'space-between',
                   alignItems: 'center',
+                  gap: 8,
                   background: `linear-gradient(135deg, ${token.colorPrimaryBg} 0%, ${token.colorBgTextHover} 100%)`,
                   borderRadius: '16px 16px 0 0',
+                  boxSizing: 'border-box',
+                  flexShrink: 0,
                 }}
               >
-                <span style={{ fontWeight: 700, fontSize: 16, color: token.colorPrimary }}>
-                  {username ? t('common:chat.with', { name: username }) : t('common:chat.withAdmin')}
+                <span style={{ fontWeight: 700, fontSize: 16, color: token.colorPrimary, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {username ? t('common.chat.with', { name: username }) : t('common.chat.withAdmin')}
                 </span>
                 <Button
                   type="text"
@@ -863,7 +899,7 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
               </div>
 
               {/* Messages */}
-              <div ref={listRef} style={{ flex: 1, overflowY: "auto", padding: 12 }}>
+              <div ref={listRef} style={{ flex: 1, overflowY: "auto", padding: '8px 12px', boxSizing: 'border-box', minHeight: 0, overscrollBehavior: 'contain' }}>
                 <List
                   dataSource={visibleMessages}
                   renderItem={item => {
@@ -1017,11 +1053,11 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
               )}
 
               {/* Input */}
-              <div style={{ padding: '8px 12px 0 12px', borderTop: `1px solid ${token.colorBorder}`, background: token.colorBgElevated, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                <Button size="small" icon={<PaperClipOutlined />} onClick={handlePickFiles} disabled={uploadingMedia}>
+              <div className="csm-chat-modal-toolbar" style={{ padding: '10px 12px 0 12px', borderTop: `1px solid ${token.colorBorder}`, background: token.colorBgElevated, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', boxSizing: 'border-box', width: '100%', overflowX: 'hidden', overflowY: 'auto', maxHeight: '60px', flexShrink: 0 }}>
+                <Button size="small" icon={<PaperClipOutlined />} onClick={handlePickFiles} disabled={uploadingMedia} style={{ flexShrink: 0 }}>
                   Media
                 </Button>
-                <Button size="small" icon={<CameraOutlined />} onClick={handleCheckinPick} disabled={uploadingMedia || requestingCheckinPermission || checkinCaptureOpen}>
+                <Button size="small" icon={<CameraOutlined />} onClick={handleCheckinPick} disabled={uploadingMedia || requestingCheckinPermission || checkinCaptureOpen} style={{ flexShrink: 0 }}>
                   Check-in
                 </Button>
                 {uploadingMedia && <Tag color="processing">Dang tai len...</Tag>}
@@ -1033,16 +1069,17 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
                 ))}
                 {pendingFiles.length > 3 && <Tag>+{pendingFiles.length - 3}</Tag>}
               </div>
-              <Input.Group compact style={{ padding: 12, borderTop: `1px solid ${token.colorBorder}`, background: token.colorBgElevated }}>
+              <Input.Group compact style={{ padding: '10px 12px 12px 12px', borderTop: `1px solid ${token.colorBorder}`, background: token.colorBgElevated, boxSizing: 'border-box', width: '100%', display: 'flex', gap: 6, alignItems: 'flex-end', flexShrink: 0 }}>
                 <Input
-                  style={{ width: 'calc(100% - 44px)' }}
+                  style={{ flex: 1, minWidth: 0, boxSizing: 'border-box', maxHeight: '100px' }}
                   value={input}
                   onChange={handleInputChange}
                   onPressEnter={sendMessage}
                   placeholder={t('common.chat.messagePlaceholder')}
                   size="large"
+                  allowClear
                 />
-                <Button type="primary" icon={<SendOutlined />} onClick={sendMessage} size="large" loading={uploadingMedia} />
+                <Button type="primary" icon={<SendOutlined />} onClick={sendMessage} size="large" loading={uploadingMedia} style={{ flexShrink: 0, minWidth: '40px' }} />
               </Input.Group>
               <input ref={filePickerRef} type="file" multiple accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.zip,.rar" style={{ display: 'none' }} onChange={handleSelectFiles} />
             </div>
