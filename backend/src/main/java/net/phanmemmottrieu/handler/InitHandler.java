@@ -1,7 +1,6 @@
 package net.phanmemmottrieu.handler;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -9,6 +8,8 @@ import java.util.UUID;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
+
+import jakarta.annotation.PostConstruct;
 
 import net.phanmemmottrieu.data.RecordManager;
 import net.phanmemmottrieu.data.SearchFilter;
@@ -27,32 +28,30 @@ public class InitHandler {
                 this.recordManager = recordManager;
         }
 
-        public void handleCreateDefaultData(StandardResponse response) {
-                try {
-                        // Initialize roleList
-                        List<Map<String, Object>> roleList = new ArrayList<>();
-                        Map<String, Object> role1 = new HashMap<>();
-                        role1.put("createTime", 1729752330782L);
-                        role1.put("updateTime", 1729752330782L);
-                        role1.put("id", UUID.randomUUID().toString());
-                        role1.put("name", "超级管理员");
-                        role1.put("code", "admin");
-                        role1.put("status", 1);
-                        role1.put("remark", "超级管理员拥有最高权限");
-                        roleList.add(role1);
+                // Ensure schema auto-initialization at backend startup
+                @PostConstruct
+                public void autoInitDefaultData() {
+                        try {
+                                // Use a dummy StandardResponse, since no API client is present at startup
+                                handleCreateDefaultData(new net.phanmemmottrieu.model.StandardResponse());
+                        } catch (Exception e) {
+                                // Log error if initialization fails
+                                org.slf4j.LoggerFactory.getLogger(InitHandler.class)
+                                        .error("[InitHandler] Failed to auto-initialize default data at startup: {}", e.getMessage(), e);
+                        }
+                }
 
-                        Map<String, Object> role2 = new HashMap<>();
-                        role2.put("createTime", 1729752330782L);
-                        role2.put("updateTime", 1729752330782L);
-                        role2.put("id", UUID.randomUUID().toString());
-                        role2.put("name", "普通角色");
-                        role2.put("code", "common");
-                        role2.put("status", 1);
-                        role2.put("remark", "普通角色拥有部分权限");
-                        roleList.add(role2);
-                        // RecordManager.deleteRocksDB("csm", "index");
-                        recordManager.createRecord("csm", "index", Map.of("id", "roleList", "data", roleList),
-                                        List.of("id"));
+        public void handleCreateDefaultData(StandardResponse response) {
+
+                try {
+
+                                                // Tự động khởi tạo schema cho bảng csm_ai_menu_requests nếu chưa có
+                                                initializeDataTables(
+                                                        "csm",
+                                                        "csm_ai_menu_requests",
+                                                        List.of("id"),
+                                                        List.of("id", "menu_name", "request_data", "created_at")
+                                                );
 
                         // Initialize systemMenu
                         List<Map<String, Object>> systemMenu = new ArrayList<>();
@@ -324,38 +323,6 @@ public class InitHandler {
                         recordManager.createRecord("csm", "index", Map.of("id", "menu", "data", menuList),
                                         List.of("id"));
 
-                        // Initialize notifications
-                        List<Map<String, Object>> notifications = Arrays.asList(
-                                        new HashMap<>(Map.of(
-                                                        "id", UUID.randomUUID().toString(),
-                                                        "avatar", "https://avatar.vercel.sh/vercel.svg?text=VC",
-                                                        "date", "3 小时前",
-                                                        "isRead", true,
-                                                        "message", "描述信息描述信息描述信息",
-                                                        "title", "收到了 14 份新周报")),
-                                        new HashMap<>(Map.of(
-                                                        "id", UUID.randomUUID().toString(),
-                                                        "avatar", "https://avatar.vercel.sh/1",
-                                                        "date", "刚刚",
-                                                        "isRead", false,
-                                                        "message", "描述信息描述信息描述信息",
-                                                        "title", "Tom 回复了你")),
-                                        new HashMap<>(Map.of(
-                                                        "id", UUID.randomUUID().toString(),
-                                                        "avatar", "https://avatar.vercel.sh/2",
-                                                        "date", "2024-10-10",
-                                                        "isRead", false,
-                                                        "message", "描述信息描述信息描述信息",
-                                                        "title", "Jack 评论了你")),
-                                        new HashMap<>(Map.of(
-                                                        "id", UUID.randomUUID().toString(),
-                                                        "avatar", "https://avatar.vercel.sh/Jack",
-                                                        "date", "1 天前",
-                                                        "isRead", false,
-                                                        "message", "描述信息描述信息描述信息",
-                                                        "title", "代办提醒")));
-                        recordManager.createRecord("csm", "index", Map.of("id", "notifications", "data", notifications),
-                                        List.of("id"));
 
                         // Initialize asyncRoutes
                         List<Map<String, Object>> asyncRoutes = new ArrayList<>();
