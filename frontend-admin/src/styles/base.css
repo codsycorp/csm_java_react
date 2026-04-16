@@ -1,6 +1,24 @@
 /* 不使用 tailwind.css 的 preflight，使用 antd 的 reset 样式，防止和 antd 的样式冲突 */
 @import "antd/dist/reset.css";
 
+html,
+body,
+#root {
+	width: 100%;
+	max-width: 100%;
+	overflow-x: hidden;
+}
+
+body {
+	margin: 0;
+}
+
+*,
+*::before,
+*::after {
+	box-sizing: border-box;
+}
+
 #root {
 	height: 100vh;
 }

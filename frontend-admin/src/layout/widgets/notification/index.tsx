@@ -534,6 +534,27 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 	);
 	const prevTotalUnreadRef = useRef(0);
 
+	const normalizeInternalRoom = useCallback((room: string, username?: string, targetUserId?: string, targetAppId?: string) => {
+		const rawRoom = String(room || '').trim();
+		if (rawRoom.startsWith('private:') || rawRoom.startsWith('user:')) {
+			return rawRoom;
+		}
+
+		const appToken = String(targetAppId || appId || 'csm').trim();
+		const selfUserId = String(user.userId || '').trim();
+		const peerUserId = String(targetUserId || '').trim();
+		if (selfUserId && peerUserId) {
+			return `private:${appToken};${[selfUserId, peerUserId].sort().join(';')}`;
+		}
+
+		const peerName = String(username || '').trim();
+		if (peerName) {
+			return `user:${appToken};${peerName}`;
+		}
+
+		return rawRoom || appToken;
+	}, [appId, user.userId]);
+
 	useEffect(() => {
 		const prev = prevTotalUnreadRef.current;
 		if (totalUnread > prev) {
@@ -546,8 +567,11 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 	}, [totalUnread]);
 
 	// Ensure any chat opened from notification is immediately marked as read
-	const openChatAndMarkRead = useCallback((room: string, username?: string, targetUserId?: string) => {
-		const normalizedRoom = (room || '').trim();
+	const openChatAndMarkRead = useCallback((room: string, username?: string, targetUserId?: string, chatType: 'internal' | 'guest' | 'system' = 'internal', targetAppId?: string) => {
+		let normalizedRoom = (room || '').trim();
+		if (chatType === 'internal') {
+			normalizedRoom = normalizeInternalRoom(normalizedRoom, username, targetUserId, targetAppId);
+		}
 		const normalizedUsername = (username || normalizedRoom).trim();
 		const normalizedTargetUserId = String(targetUserId || '').trim() || undefined;
 		if (!normalizedRoom) return;
@@ -571,7 +595,7 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 		if (room && room !== key) {
 			markAsRead(room);
 		}
-	}, [markAsRead]);
+	}, [markAsRead, normalizeInternalRoom]);
 
 	useEffect(() => {
 		if (!openChats.length) return;
@@ -643,7 +667,7 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 									<div style={{ fontWeight: 600, color: token.colorTextSecondary, marginBottom: 6 }}>{t('common.notification.internalUsers', 'Người dùng nội bộ')}</div>
 									<div className={classes.userList}>
 										{visibleInternalUsers.map(u => (
-											<div key={u.key} className={classes.userItem} onClick={() => openChatAndMarkRead(u.room, u.username, (u as any).targetUserId)}>
+											<div key={u.key} className={classes.userItem} onClick={() => openChatAndMarkRead(u.room, u.username, (u as any).targetUserId, 'internal', (u as any).appId)}>
 												<Badge dot={typeof (u as any).online === 'boolean'} color={(u as any).online ? '#16a34a' : '#ef4444'} offset={[-3, 22]}>
 													<Avatar src={u.avatar} icon={<UserOutlined />} size="small" />
 												</Badge>
@@ -678,7 +702,7 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 									<div style={{ fontWeight: 600, color: token.colorTextSecondary, marginBottom: 6 }}>{t('common.notification.guests', 'Khách vãng lai')}</div>
 									<div className={classes.userList}>
 										{visibleGuestUsers.map(g => (
-											<div key={g.key} className={classes.userItem} onClick={() => openChatAndMarkRead(g.room, g.label)}>
+											<div key={g.key} className={classes.userItem} onClick={() => openChatAndMarkRead(g.room, g.label, undefined, 'guest', (g as any).appId)}>
 												<Badge dot color="#fa8c16" offset={[-3, 22]}>
 													<Avatar icon={<UserOutlined />} size="small" />
 												</Badge>
@@ -707,7 +731,7 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 									<div style={{ fontWeight: 600, color: token.colorTextSecondary, marginBottom: 6 }}>{t('common.notification.systemMessages', 'Tin nhắn hệ thống')}</div>
 									
 									{/* Show system notifications for this appId (broadcast) */}
-									<div className={classes.userItem} onClick={() => openChatAndMarkRead((isDevUser && selectedAppFilter !== 'all') ? selectedAppFilter : appId, 'Thông báo hệ thống')}>
+									<div className={classes.userItem} onClick={() => openChatAndMarkRead((isDevUser && selectedAppFilter !== 'all') ? selectedAppFilter : appId, 'Thông báo hệ thống', undefined, 'system')}>
 										<Avatar icon={<BellOutlined />} size="small" style={{ backgroundColor: '#52c41a' }} />
 										<div style={{ flex: 1 }}>
 											<div className={classes.username}>Thông báo hệ thống</div>

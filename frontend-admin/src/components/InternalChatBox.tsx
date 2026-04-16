@@ -125,6 +125,8 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
   // Get messages for this specific chat
   const messages = allMessages[roomKey] || [];
   const unreadCount = unreadCounts[roomKey] || 0;
+  // frontend-admin always uses the unified internal chat UX, including guest conversations.
+  const useMobileFloatingLauncher = false;
 
   // Filter out deleted messages
   const visibleMessages = messages.filter((msg: ChatMessage) => !deletedMessageIds.has(msg.timestamp?.toString() || ''));
@@ -191,6 +193,12 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
+
+  useEffect(() => {
+    if (isMobile && !useMobileFloatingLauncher && isMinimized) {
+      setIsMinimized(false);
+    }
+  }, [isMobile, useMobileFloatingLauncher, isMinimized]);
 
   // Open chat khi component mount
   useEffect(() => {
@@ -761,6 +769,14 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
 
   // Mobile: show floating button + modal
   if (isMobile) {
+    const handleMobileDismiss = () => {
+      if (useMobileFloatingLauncher) {
+        setIsMinimized(true);
+        return;
+      }
+      onClose();
+    };
+
     return (
       <>
         {/* Floating Chat Button */}
@@ -769,7 +785,7 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
             setIsMinimized(false);
           }}
           label={username ? t('common.chat.with', { name: username }) : t('common.chat.withAdmin')}
-          visible={visible && isMinimized}
+          visible={useMobileFloatingLauncher && visible && isMinimized}
           badge={unreadCount}
         />
 
@@ -788,7 +804,7 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
               flexDirection: 'column',
               animation: 'fadeIn 0.3s ease-out',
             }}
-            onClick={() => setIsMinimized(true)}
+            onClick={handleMobileDismiss}
           >
             <style>{`
               @keyframes fadeIn {
@@ -839,12 +855,10 @@ const InternalChatBox: React.FC<{visible: boolean, onClose: () => void, username
                 </span>
                 <Button
                   type="text"
-                  icon={<MinusOutlined />}
+                  icon={useMobileFloatingLauncher ? <MinusOutlined /> : <CloseOutlined />}
                   size="middle"
-                  onClick={() => {
-                    setIsMinimized(true);
-                  }}
-                  title={t('common.chat.minimize')}
+                  onClick={handleMobileDismiss}
+                  title={useMobileFloatingLauncher ? t('common.chat.minimize') : t('common.chat.close', 'Đóng')}
                 />
               </div>
 

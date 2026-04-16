@@ -35,7 +35,7 @@ export default function LayoutHeader({ className, children }: LayoutHeaderProps)
 
 	return (
 		<header
-			className={cn(className, "h-12 flex-shrink-0 flex gap-5 justify-between items-center transition-all md:px-4", { "h-0 overflow-hidden": isMaximize })}
+			className={cn(className, "h-12 flex-shrink-0 flex gap-2 md:gap-5 justify-between items-center transition-all px-2 md:px-4", { "h-0 overflow-hidden": isMaximize })}
 			style={{ background: colorBgContainer }}
 		>
 			{isMobile ? (
@@ -51,11 +51,11 @@ export default function LayoutHeader({ className, children }: LayoutHeaderProps)
 				{children}
 			</div>
 
-			<div className="flex items-center">
-				<Preferences {...buttonProps} />
-				<ThemeButton {...buttonProps} />
-				<LanguageButton {...buttonProps} />
-				<FullscreenButton {...buttonProps} target={document.documentElement} />
+			<div className="flex items-center flex-shrink-0">
+				{!isMobile && <Preferences {...buttonProps} />}
+				{!isMobile && <ThemeButton {...buttonProps} />}
+				{!isMobile && <LanguageButton {...buttonProps} />}
+				{!isMobile && <FullscreenButton {...buttonProps} target={document.documentElement} />}
 				<NotificationContainer {...buttonProps} />
 				<UserMenu {...buttonProps} />
 			</div>

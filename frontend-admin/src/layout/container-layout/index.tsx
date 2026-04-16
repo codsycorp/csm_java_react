@@ -104,7 +104,7 @@ export default function ContainerLayout() {
 						paddingLeft: computedSidebarWidth,
 					}}
 					className={cn(
-						"transition-all flex flex-col h-screen",
+						"transition-all flex flex-col h-screen w-full max-w-full overflow-x-hidden",
 					)}
 				>
 					<LayoutHeader>
