@@ -23,6 +23,7 @@ interface ChatHistoryContextValue {
   sendMessage: (room: string, message: string, to?: string) => void;
   loadHistory: (room: string, guestPhone?: string) => Promise<void>;
   markAsRead: (room: string) => void;
+  registerGuestPhone: (phone: string) => Promise<void>;
   
   // Unread counts
   unreadCounts: Record<string, number>;
@@ -264,6 +265,41 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
   useEffect(() => {
     loadHistoryRef.current = loadHistory;
   }, [loadHistory]);
+
+  const registerGuestPhone = useCallback(async (phone: string): Promise<void> => {
+    if (!phone || !socket || !connected || !isGuest) return;
+    const currentIdentity = (guestIdentity || ensureGuestSessionId() || '').trim();
+    if (!currentIdentity || currentIdentity === phone) return;
+
+    return new Promise<void>((resolve) => {
+      socket.emit(
+        'register_guest_phone',
+        { appId, guestSessionId: currentIdentity, phone },
+        (ack: any) => {
+          try {
+            const result = typeof ack === 'string' ? JSON.parse(ack) : ack;
+            if (result?.success) {
+              console.log(`📱 [LMKT ChatHistory] Guest phone registered: ${currentIdentity} → ${phone}, rebound=${result.rebound}`);
+              loadHistoryRef.current?.(phone, phone).catch(console.warn);
+            }
+          } catch (e) {
+            console.warn('[LMKT ChatHistory] register_guest_phone ack parse error', e);
+          }
+          resolve();
+        }
+      );
+    });
+  }, [socket, connected, isGuest, guestIdentity, ensureGuestSessionId, appId]);
+
+  useEffect(() => {
+    if (!isGuest) return;
+    const handlePhoneChanged = (e: Event) => {
+      const phone = (e as CustomEvent<string>).detail;
+      if (phone) registerGuestPhone(phone).catch(console.warn);
+    };
+    window.addEventListener('csm-guest-phone-changed', handlePhoneChanged);
+    return () => window.removeEventListener('csm-guest-phone-changed', handlePhoneChanged);
+  }, [isGuest, registerGuestPhone]);
   
   // Send message - LMKT: Guest only
   const sendMessage = useCallback((room: string, message: string, to?: string) => {
@@ -621,6 +657,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
     sendMessage,
     loadHistory,
     markAsRead,
+    registerGuestPhone,
     unreadCounts,
     typingUsers,
     connected,

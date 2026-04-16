@@ -2986,6 +2986,16 @@
               var rankTo = Math.max(sttTo, Number(args && args.rankTo || sttTo));
               var rowKeyPrefix = String(args && args.rowKeyPrefix || "slr_auto");
 
+              // Count current consecutive no-hit days from newest backward for this STT range.
+              var noHitDaysCurrent = 0;
+              for (var cni = 0; cni < cells.length; cni += 1) {
+                if (isLegacySlrNoHitRangeCached(cellCaches[cni], sttFrom, sttTo)) {
+                  noHitDaysCurrent += 1;
+                } else {
+                  break;
+                }
+              }
+
               var streak = 0;
               var endIdx = -1;
               for (var ci = 0; ci < cells.length; ci += 1) {
@@ -3089,6 +3099,7 @@
                 sttFrom: sttFrom,
                 sttTo: sttTo,
                 noHitDays: noHitDays,
+                noHitDaysCurrent: noHitDaysCurrent,
                 fromDate: String(latestCell.date || ""),
                 toDate: String(oldestCell.date || ""),
                 tongNamWeeks: tongNamWeeks,
@@ -3296,12 +3307,26 @@
               return Number((b && b.tongNamZeroWeekStreak) || 0) - Number((a && a.tongNamZeroWeekStreak) || 0);
             });
 
-            setLegacySlrAutoRows(resultRows);
+            var finalAutoRows = resultRows;
+            try {
+              var previewPack = buildLegacySlrAutoPreviewGroups(resultRows, 0);
+              var previewFlatRows = [];
+              (previewPack && previewPack.groups || []).forEach(function (g) {
+                (g && g.rows || []).forEach(function (r) { previewFlatRows.push(r); });
+              });
+              if (previewFlatRows.length || !resultRows.length) {
+                finalAutoRows = previewFlatRows;
+              }
+            } catch (mergePreviewErr) {
+              console.warn("SLR auto merge-align failed, fallback to raw rows", mergePreviewErr);
+            }
+
+            setLegacySlrAutoRows(finalAutoRows);
             legacySortedRowsRef.current["slr_auto"] = null;
             setLegacySlrAutoSummary(
-              "Auto: " + resultRows.length + " dòng thỏa điều kiện từ " + selectedQueryValues.length + " loại tìm"
+              "Auto: " + finalAutoRows.length + " dòng thỏa điều kiện từ " + selectedQueryValues.length + " loại tìm"
             );
-            pushAutoLog("Kết thúc: total kết quả=" + resultRows.length);
+            pushAutoLog("Kết thúc: total raw=" + resultRows.length + ", total sau gộp=" + finalAutoRows.length);
             setLegacySlrAutoDebugLogs(runLogs.slice());
             setActiveAction("legacy_slr");
             setSubTab("legacy_slr");
@@ -9112,8 +9137,8 @@
         var hit = Number(r && r.cAll || 0) > 0;
         return {
           color: hit ? theme.error : theme.text,
-          fontWeight: hit ? "bold" : "normal",
-          fontSize: hit ? 18 : 12,
+          fontWeight: hit ? 800 : 650,
+          fontSize: hit ? 20 : 14,
           lineHeight: (innerRowHeight - 2) + "px",
           fontStyle: (hit && Number(r && r.cBac || 0) > 0) ? "italic" : "normal",
           textDecoration: (hit && Number(r && r.cBac || 0) > 0) ? "underline" : "none"
@@ -9123,8 +9148,8 @@
         var hit = Number(r && r.dAll || 0) > 0;
         return {
           color: hit ? theme.error : theme.primary,
-          fontWeight: "bold",
-          fontSize: hit ? 14 : 10,
+          fontWeight: 750,
+          fontSize: hit ? 16 : 12,
           lineHeight: (innerRowHeight - 2) + "px",
           fontStyle: (hit && Number(r && r.dBac || 0) > 0) ? "italic" : "normal",
           textDecoration: (hit && Number(r && r.dBac || 0) > 0) ? "underline" : "none"
@@ -9141,8 +9166,8 @@
             style: {
               display: "inline-block",
               color: (nHit || bHit) ? theme.error : theme.text,
-              fontWeight: (nHit || bHit) ? "bold" : "normal",
-              fontSize: (nHit || bHit) ? 18 : 12,
+              fontWeight: (nHit || bHit) ? 800 : 650,
+              fontSize: (nHit || bHit) ? 20 : 14,
               lineHeight: (innerRowHeight - 2) + "px",
               fontStyle: bHit ? "italic" : "normal",
               textDecoration: bHit ? "underline" : "none",
@@ -9212,13 +9237,13 @@
             h("tr", { key: "slr_total" }, [
               h("td", { style: Object.assign({ fontSize: 10, fontWeight: 700 }, fixedCellBase) }, "Tổng"),
               showBoth
-                ? h("td", { style: Object.assign({ fontSize: 11, fontWeight: 700 }, fixedCellBase) }, String(Number(d.c || 0)))
+                ? h("td", { style: Object.assign({ fontSize: 13, fontWeight: 800 }, fixedCellBase) }, String(Number(d.c || 0)))
                 : null,
               showBoth
-                ? h("td", { style: Object.assign({ fontSize: 11, fontWeight: 700 }, fixedCellBase) }, String(Number(d.d || 0)))
+                ? h("td", { style: Object.assign({ fontSize: 13, fontWeight: 800 }, fixedCellBase) }, String(Number(d.d || 0)))
                 : null,
               (!showBoth)
-                ? h("td", { style: Object.assign({ fontSize: 11, fontWeight: 700 }, fixedCellBase), colSpan: 2 }, String(Number(showDao ? (d.d || 0) : (d.c || 0))))
+                ? h("td", { style: Object.assign({ fontSize: 13, fontWeight: 800 }, fixedCellBase), colSpan: 2 }, String(Number(showDao ? (d.d || 0) : (d.c || 0))))
                 : null
             ])
           ]))
@@ -9470,6 +9495,114 @@
       }).join("\n");
     }
 
+    function buildLegacySlrAutoPreviewGroups(rows, maxPerGroup) {
+      var src = Array.isArray(rows) ? rows.slice() : [];
+      var cap = Number(maxPerGroup || 0);
+      var hasCap = cap > 0;
+      var grouped = {};
+      var order = [];
+
+      src.forEach(function (r) {
+        var label = String((r && r.queryLabel) || (r && r.queryValue) || "?").trim() || "?";
+        var key = label.toLowerCase();
+        if (!grouped[key]) {
+          grouped[key] = { label: label, rows: [] };
+          order.push(key);
+        }
+        grouped[key].rows.push(r || {});
+      });
+
+      var groups = [];
+      var totalRaw = 0;
+      var totalMerged = 0;
+      var totalShown = 0;
+
+      order.forEach(function (k) {
+        var bucket = grouped[k] || { label: "?", rows: [] };
+        var gRows = Array.isArray(bucket.rows) ? bucket.rows.slice() : [];
+        totalRaw += gRows.length;
+        if (!gRows.length) return;
+
+        gRows.sort(function (a, b) {
+          var df = Number((a && a.sttFrom) || 0) - Number((b && b.sttFrom) || 0);
+          if (df) return df;
+          return Number((a && a.sttTo) || 0) - Number((b && b.sttTo) || 0);
+        });
+
+        var mergedRows = [];
+        var start = gRows[0];
+        var end = gRows[0];
+        var mergedCount = 1;
+        var segmentRows = [gRows[0]];
+
+        function isLegacySlrRowKeepByNamZeroWeek(row) {
+          var streak = Number((row && row.tongNamZeroWeekStreak) || 0);
+          var needed = Math.max(1, Number((row && row.tongNamWeeks) || 0));
+          return streak > needed;
+        }
+
+        function flushMerged() {
+          if (!start) return;
+          var base = Object.assign({}, start, {
+            sttFrom: Number((start && start.sttFrom) || 0),
+            sttTo: Number((end && end.sttTo) || (start && start.sttTo) || 0),
+            key: String((start && start.key) || "") + "_pv_" + String((end && end.key) || ""),
+            isPreviewMerged: mergedCount > 1,
+            previewMergedCount: mergedCount
+          });
+          mergedRows.push(base);
+
+          if (mergedCount > 1) {
+            for (var sri = 0; sri < segmentRows.length; sri += 1) {
+              var childRow = segmentRows[sri] || {};
+              if (!isLegacySlrRowKeepByNamZeroWeek(childRow)) continue;
+              mergedRows.push(Object.assign({}, childRow, {
+                isPreviewMergedChild: true,
+                key: String((childRow && childRow.key) || "") + "_pv_child"
+              }));
+            }
+          }
+        }
+
+        for (var i = 1; i < gRows.length; i += 1) {
+          var cur = gRows[i] || {};
+          var contiguous = Number(cur.sttFrom || 0) === Number((end && end.sttFrom) || 0) + 1
+            && Number(cur.sttTo || 0) === Number((end && end.sttTo) || 0) + 1;
+          if (contiguous) {
+            end = cur;
+            mergedCount += 1;
+            segmentRows.push(cur);
+          } else {
+            flushMerged();
+            start = cur;
+            end = cur;
+            mergedCount = 1;
+            segmentRows = [cur];
+          }
+        }
+        flushMerged();
+
+        totalMerged += mergedRows.length;
+        var shownRows = hasCap ? mergedRows.slice(0, cap) : mergedRows.slice();
+        totalShown += shownRows.length;
+        groups.push({
+          key: k,
+          label: bucket.label,
+          rows: shownRows,
+          rawCount: gRows.length,
+          mergedCount: mergedRows.length,
+          shownCount: shownRows.length
+        });
+      });
+
+      return {
+        groups: groups,
+        totalRaw: totalRaw,
+        totalMerged: totalMerged,
+        totalShown: totalShown
+      };
+    }
+
     async function exportLegacySlrAutoSelectedRows() {
       var selectedKeys = legacySlrAutoSelectedRowKeys || [];
       if (!selectedKeys.length) {
@@ -9500,13 +9633,14 @@
       ]];
 
       rows.forEach(function (r) {
+        var noHitDaysCurrent = Number((r && r.noHitDaysCurrent) || (r && r.noHitDays) || 0);
         aoa.push([
           String((r && r.queryLabel) || ""),
           Number((r && r.sttFrom) || 0),
           Number((r && r.sttTo) || 0),
-          String(Number((r && r.noHitDays) || 0)) + " ngày (" + String((r && r.fromDate) || "") + " -> " + String((r && r.toDate) || "") + ")"
+          String(noHitDaysCurrent) + " ngày (" + String((r && r.fromDate) || "") + " -> " + String((r && r.toDate) || "") + ")"
             + (r && r.noHitHintText ? ("\n" + String(r.noHitHintText)) : ""),
-          String(Number((r && r.tongNamZeroWeekStreak) || 0)) + " tuần (yêu cầu >= " + String(Number((r && r.tongNamWeeks) || 0)) + ")",
+          String(Number((r && r.tongNamZeroWeekStreak) || 0)) + " tuần (yêu cầu > " + String(Number((r && r.tongNamWeeks) || 0)) + ")",
           buildLegacySlrAutoLatestCellText(r && r.latestCellData),
           buildLegacySlrAutoWeekSummaryText(r && r.weekSummaryRows)
         ]);
@@ -9570,9 +9704,10 @@
         width: 180,
         render: function (v, rec) {
           var hintText = String((rec && rec.noHitHintText) || "").trim();
+          var noHitDaysCurrent = Number((rec && rec.noHitDaysCurrent) || v || 0);
           return h("div", null, [
             hintText ? h("div", { style: { fontSize: 13, color: theme.error, fontWeight: 800, lineHeight: 1.35 } }, hintText) : null,
-            h("div", null, String(Number(v || 0)) + " ngày (" + String((rec && rec.fromDate) || "") + " -> " + String((rec && rec.toDate) || "") + ")")
+            h("div", null, String(noHitDaysCurrent) + " ngày (" + String((rec && rec.fromDate) || "") + " -> " + String((rec && rec.toDate) || "") + ")")
           ]);
         }
       },
@@ -9583,7 +9718,7 @@
         width: 180,
         sorter: function (a, b) { return Number((a && a.tongNamZeroWeekStreak) || 0) - Number((b && b.tongNamZeroWeekStreak) || 0); },
         render: function (v, rec) {
-          return String(Number(v || 0)) + " tuần (yêu cầu >= " + String(Number((rec && rec.tongNamWeeks) || 0)) + ")";
+          return String(Number(v || 0)) + " tuần (yêu cầu > " + String(Number((rec && rec.tongNamWeeks) || 0)) + ")";
         }
       },
       {
@@ -9615,7 +9750,8 @@
                     style: {
                       border: "1px solid " + theme.border,
                       padding: "2px 6px",
-                      fontWeight: 600,
+                      fontWeight: 700,
+                      fontSize: 13,
                       whiteSpace: "nowrap",
                       background: "color-mix(in srgb, " + theme.cardBg + " 86%, " + theme.pageBg + " 14%)"
                     }
@@ -9626,11 +9762,13 @@
                       key: "auto_sum_cell_" + String(sr.key || "") + "_" + idx,
                       style: {
                         border: "1px solid " + theme.border,
-                        minWidth: 30,
+                        minWidth: 36,
                         textAlign: "center",
-                        padding: "2px 5px",
+                        padding: "3px 6px",
                         color: low ? theme.error : theme.text,
-                        fontWeight: "bold"
+                        fontWeight: 800,
+                        fontSize: 15,
+                        lineHeight: "18px"
                       }
                     }, String(Number(n || 0)));
                   })
@@ -11501,30 +11639,31 @@
                               (function () {
                                 var allRows = (legacySlrAutoFilteredRows && legacySlrAutoFilteredRows.length) ? legacySlrAutoFilteredRows : null;
                                 if (!allRows) return h("span", { style: { color: theme.muted } }, "Chưa có kết quả tự động");
-                                var MAX_PER_GROUP = 6;
-                                var groups = [];
-                                var groupMap = {};
-                                allRows.forEach(function (r) {
-                                  var k = String(r.queryLabel || r.queryValue || "?");
-                                  if (!groupMap[k]) { groupMap[k] = []; groups.push(k); }
-                                  if (groupMap[k].length < MAX_PER_GROUP) groupMap[k].push(r);
-                                });
+                                var preview = buildLegacySlrAutoPreviewGroups(allRows, 0);
+                                var groups = Array.isArray(preview.groups) ? preview.groups : [];
                                 return h("div", null, [
                                   h("div", { style: { fontWeight: 600, marginBottom: 6, display: "flex", justifyContent: "space-between", alignItems: "center" } }, [
-                                    h("span", { style: { color: theme.primary } }, allRows.length + " dòng thỏa / " + groups.length + " loại tìm"),
-                                    h("span", { style: { fontSize: 11, color: theme.muted } }, "(tối đa " + MAX_PER_GROUP + " dòng/loại)")
+                                    h("span", { style: { color: theme.primary } }, preview.totalShown + " dòng hiển thị sau gộp / " + groups.length + " loại tìm"),
+                                    h("span", { style: { fontSize: 11, color: theme.muted } }, "(không giới hạn số dòng/loại)")
                                   ]),
+                                  (preview.totalRaw !== preview.totalMerged)
+                                    ? h("div", { style: { fontSize: 11, color: theme.muted, marginBottom: 6 } }, "Gốc: " + preview.totalRaw + " dòng, sau gộp: " + preview.totalMerged + " dòng")
+                                    : null,
                                   h("div", { style: { maxHeight: 280, overflow: "auto" } },
-                                    groups.map(function (gk) {
-                                      var gRows = groupMap[gk];
+                                    groups.map(function (g) {
+                                      var gk = String((g && g.label) || "?");
+                                      var gRows = (g && g.rows) || [];
                                       return h("div", { key: "slr_ag_" + gk, style: { marginBottom: 8 } }, [
                                         h("div", { style: { fontSize: 11, fontWeight: 700, color: theme.text, background: "color-mix(in srgb, " + theme.primary + " 12%, " + theme.cardBg + ")", padding: "3px 6px", borderRadius: 3, marginBottom: 3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, gk),
                                         gRows.map(function (r, ri) {
+                                          var namZeroWeeks = Number((r && r.tongNamZeroWeekStreak) || 0);
+                                          var namZeroDays = Math.max(0, namZeroWeeks * 7);
+                                          var noHitDaysCurrent = Number((r && r.noHitDaysCurrent) || (r && r.noHitDays) || 0);
                                           return h("div", {
                                             key: "slr_auto_apply_" + String((r && r.key) || ri),
                                             style: {
                                               display: "grid",
-                                              gridTemplateColumns: "1fr auto auto",
+                                              gridTemplateColumns: "1fr auto auto auto",
                                               alignItems: "center",
                                               gap: 6,
                                               padding: "4px 4px",
@@ -11537,7 +11676,16 @@
                                                 : null,
                                               h("div", null, "STT " + String(r.sttFrom || "") + "–" + String(r.sttTo || ""))
                                             ]),
-                                            h("span", { style: { fontSize: 12, color: theme.text, whiteSpace: "nowrap" } }, String(r.noHitDays || 0) + "ng"),
+                                            h("span", { style: { fontSize: 12, color: theme.text, whiteSpace: "nowrap" } }, String(noHitDaysCurrent) + "ng"),
+                                            h("span", {
+                                              style: {
+                                                fontSize: 12,
+                                                color: theme.primary,
+                                                whiteSpace: "nowrap",
+                                                fontWeight: 700,
+                                                textAlign: "right"
+                                              }
+                                            }, String(namZeroWeeks) + " tuần / " + String(namZeroDays) + "ng"),
                                             h(Button, {
                                               size: "small",
                                               type: "primary",
@@ -12154,11 +12302,13 @@
                             key: sr.key + "_" + idx,
                             style: {
                               border: "1px solid " + theme.border,
-                              minWidth: 34,
+                              minWidth: 40,
                               textAlign: "center",
-                              padding: "3px 6px",
+                              padding: "4px 7px",
                               color: low ? theme.error : theme.text,
-                              fontWeight: "bold"
+                              fontWeight: 800,
+                              fontSize: 15,
+                              lineHeight: "18px"
                             }
                           }, String(Number(v || 0)));
                         })

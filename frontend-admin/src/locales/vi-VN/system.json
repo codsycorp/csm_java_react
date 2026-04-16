@@ -427,7 +427,52 @@
 			"scope": "Phạm vi thiết kế",
 			"existingTables": "Danh sách bảng hiện có (nếu có)",
 			"notes": "Ghi chú thêm",
-			"tip": "Mẹo"
+			"tip": "Mẹo",
+			"context": {
+				"maxFiles": "Chỉ được đính kèm tối đa {{max}} file JSON.",
+				"jsonOnly": "Chỉ nhận file .json để đảm bảo AI đọc đúng cấu trúc.",
+				"fileLoaded": "Đã nạp context JSON: {{name}}",
+				"fileInvalid": "File {{name}} không hợp lệ JSON.",
+				"uploadButton": "Đính kèm JSON hệ thống cũ (tối đa {{max}} file)",
+				"attachedMessage": "Đã đính kèm {{count}} file JSON context cho app_id {{appId}}"
+			},
+			"generateMode": {
+				"label": "Chế độ tạo:",
+				"full": "Tạo lại toàn bộ",
+				"diff": "Cập nhật phần thay đổi",
+				"diffHint": "Chỉ sửa phần thay đổi, giữ continuity app_id",
+				"diffNeedPrevious": "Diff mode cần kết quả AI trước đó. Hệ thống sẽ chuyển sang full mode.",
+				"diffNeedInput": "Hãy nhập nội dung thay đổi trong diff mode."
+			},
+			"progress": {
+				"preparing": "Đang chuẩn bị và gửi yêu cầu AI",
+				"autoRefining": "Kết quả AI lần 1 chưa đạt. Đang tự động sửa và tạo lại...",
+				"autoRefineResult": "KQ lần 1 chưa đạt chất lượng, đang auto-refine.",
+				"completedWithCount": "Đã hoàn tất tạo {{count}} menu/chức năng"
+			},
+			"sampleMenu": {
+				"appSelectedFallback": "app đã chọn",
+				"sectionLabelEmpty": "Menu mẫu tham khảo (tùy chọn) — chọn ứng dụng để AI học theo hoặc chỉnh sửa",
+				"sectionLabelLoadedReference": "Menu mẫu ✓ [Tham khảo] — {{count}} menu từ {{app}}",
+				"sectionLabelLoadedBase": "Menu mẫu ✓ [Dùng làm gốc] — {{count}} menu từ {{app}}",
+				"pickAppTitle": "Chọn ứng dụng để tự động lấy menu mẫu",
+				"pickAppDesc": "Chọn ứng dụng để tải menu mẫu. Chế độ Tham khảo: AI học theo cấu trúc để tự thiết kế mới. Chế độ Dùng làm gốc: AI lấy đúng menu này và adapt theo yêu cầu khách hàng mới.",
+				"reloadButton": "Tải lại menu mẫu",
+				"clearButton": "Bỏ mẫu",
+				"loadedMessage": "Đã nạp {{count}} menu gốc từ {{app}}",
+				"modeBaseOn": "Dùng làm gốc",
+				"modeReferenceOn": "Chỉ tham khảo",
+				"modeBaseTitle": "Chỉnh sửa từ menu mẫu",
+				"modeBaseDesc": "AI lấy menu này làm gốc, adapt theo yêu cầu khách hàng",
+				"modeReferenceTitle": "Chỉ tham khảo cấu trúc",
+				"modeReferenceDesc": "AI tự thiết kế mới, dùng menu mẫu như hướng dẫn",
+				"baseTag": "Gốc",
+				"loadNotFound": "Không tìm thấy menu mẫu trong ứng dụng {{appId}}.",
+				"loadSuccess": "Đã nạp {{count}} menu gốc từ app {{appId}} làm mẫu cho AI.",
+				"loadFailed": "Không thể tải menu mẫu từ app {{appId}}: {{error}}",
+				"refineInfoBase": "Menu mẫu từ {{app}} đang được đưa vào prompt bổ sung (chế độ gốc: AI tiếp tục chỉnh sửa trên menu đó)",
+				"refineInfoReference": "Menu mẫu từ {{app}} đang được đưa vào prompt bổ sung (chế độ tham khảo)"
+			}
 		}
 	},
 	"developer": {

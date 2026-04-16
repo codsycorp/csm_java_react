@@ -430,7 +430,52 @@
 			"scope": "设计范围",
 			"existingTables": "现有数据表（可选）",
 			"notes": "附加说明",
-			"tip": "提示"
+			"tip": "提示",
+			"context": {
+				"maxFiles": "最多可附加 {{max}} 个 JSON 文件。",
+				"jsonOnly": "仅支持 .json 文件，以确保结构解析正确。",
+				"fileLoaded": "已加载 JSON 上下文：{{name}}",
+				"fileInvalid": "文件 {{name}} 不是有效 JSON。",
+				"uploadButton": "附加旧系统 JSON（最多 {{max}} 个）",
+				"attachedMessage": "已为 app_id {{appId}} 附加 {{count}} 个 JSON 上下文文件"
+			},
+			"generateMode": {
+				"label": "生成模式：",
+				"full": "全量重建",
+				"diff": "差量更新",
+				"diffHint": "仅修改变更部分，保持 app_id 连续性",
+				"diffNeedPrevious": "差量模式需要已有 AI 结果，系统将切换为全量模式。",
+				"diffNeedInput": "请在差量模式中输入变更内容。"
+			},
+			"progress": {
+				"preparing": "正在准备并发送 AI 请求",
+				"autoRefining": "首次 AI 结果未达标，正在自动修正并重新生成...",
+				"autoRefineResult": "首轮结果质量不足，正在自动优化。",
+				"completedWithCount": "已完成生成 {{count}} 个菜单/功能"
+			},
+			"sampleMenu": {
+				"appSelectedFallback": "已选应用",
+				"sectionLabelEmpty": "菜单样例参考（可选）— 选择应用让 AI 学习或适配",
+				"sectionLabelLoadedReference": "菜单样例 ✓ [参考] — 来自 {{app}} 的 {{count}} 个菜单",
+				"sectionLabelLoadedBase": "菜单样例 ✓ [作为基线] — 来自 {{app}} 的 {{count}} 个菜单",
+				"pickAppTitle": "选择应用以自动加载样例菜单",
+				"pickAppDesc": "选择应用加载样例菜单。参考模式：AI 学习结构并重新设计。基线模式：AI 以该菜单为基础，按新客户需求进行适配。",
+				"reloadButton": "重新加载样例菜单",
+				"clearButton": "清除样例",
+				"loadedMessage": "已从 {{app}} 加载 {{count}} 个基础菜单",
+				"modeBaseOn": "作为基线",
+				"modeReferenceOn": "仅参考",
+				"modeBaseTitle": "基于样例菜单适配",
+				"modeBaseDesc": "AI 以该菜单为基础并按客户需求适配",
+				"modeReferenceTitle": "仅参考结构",
+				"modeReferenceDesc": "AI 在参考样例结构的同时重新设计新菜单",
+				"baseTag": "基线",
+				"loadNotFound": "在应用 {{appId}} 中未找到样例菜单。",
+				"loadSuccess": "已从应用 {{appId}} 加载 {{count}} 个基础菜单供 AI 参考。",
+				"loadFailed": "无法从应用 {{appId}} 加载样例菜单：{{error}}",
+				"refineInfoBase": "来自 {{app}} 的样例菜单已加入补充提示（基线模式：AI 将在该菜单上继续修改）",
+				"refineInfoReference": "来自 {{app}} 的样例菜单已加入补充提示（参考模式）"
+			}
 		}
 	},
 	"developer": {

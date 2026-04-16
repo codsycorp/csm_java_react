@@ -44,6 +44,8 @@ public class ChatPersistenceService {
     private static final int CACHE_SIZE_LIMIT = 10000; // Giữ 10k messages trong cache
     private static final int PRELOAD_PAGE_SIZE = 1000;
     private final Set<String> loadedApps = ConcurrentHashMap.newKeySet();
+    // Track apps whose FULL DB history has been loaded into cache (separate from loadedApps which is also set by saveMessage).
+    private final Set<String> dbHistoryLoadedApps = ConcurrentHashMap.newKeySet();
     
     @PostConstruct
     public void init() {
@@ -170,6 +172,7 @@ public class ChatPersistenceService {
 
             logger.info("✅ Loaded {} chat messages from RocksDB into cache for appId {} (scanned {})", loaded.size(), dbAppId, scannedRows);
             loadedApps.add(dbAppId);
+            dbHistoryLoadedApps.add(dbAppId);
         } catch (Exception e) {
             logger.error("❌ Error initializing chat persistence for appId {}: {}", dbAppId, e.getMessage(), e);
         }
@@ -199,9 +202,9 @@ public class ChatPersistenceService {
      */
     private void ensureCacheLoadedFromDb(String appId) {
         String dbAppId = normalizeAppId(appId);
-        if (loadedApps.contains(dbAppId)) return;
-        synchronized (loadedApps) {
-            if (loadedApps.contains(dbAppId)) return;
+        if (dbHistoryLoadedApps.contains(dbAppId)) return;
+        synchronized (dbHistoryLoadedApps) {
+            if (dbHistoryLoadedApps.contains(dbAppId)) return;
             loadChatHistoryFromDatabase(dbAppId);
         }
     }
@@ -247,6 +250,13 @@ public class ChatPersistenceService {
             // Persist vào database
             persistMessageToDatabase(dbAppId, message);
             loadedApps.add(dbAppId);
+            // NOTE: Do NOT add to dbHistoryLoadedApps here — that tracks whether the full
+            // historical messages were loaded FROM the DB. Marking it here (before reading DB
+            // history) would prevent ensureCacheLoadedFromDb from loading old messages after restart.
+            // NOTE: Do NOT add to dbHistoryLoadedApps here. That set tracks whether the full
+            // historical chat messages for this appId have been loaded FROM the database into
+            // the in-memory cache. Marking it as loaded here (before actually reading DB history)
+            // would prevent ensureCacheLoadedFromDb from loading old messages after a server restart.
             
         } catch (Exception e) {
             logger.error("❌ Error saving chat message: {}", e.getMessage(), e);
@@ -263,6 +273,7 @@ public class ChatPersistenceService {
             
             // Tạo unique ID cho message
             String messageId = UUID.randomUUID().toString();
+            message.setId(messageId);
             if (message.getTimestamp() == null) {
                 message.setTimestamp(System.currentTimeMillis());
             }
@@ -456,6 +467,86 @@ public class ChatPersistenceService {
         return new ArrayList<>(sessions);
     }
 
+    /**
+     * Rebind tất cả tin nhắn của guest từ identity cũ (UUID session) sang phone mới.
+     * Gọi khi guest để lại số điện thoại để tạo kênh cố định.
+     * @return số lượng tin nhắn được cập nhật
+     */
+    public int rebindGuestPhone(String appId, String oldIdentity, String newPhone) {
+        if (oldIdentity == null || oldIdentity.isBlank() || newPhone == null || newPhone.isBlank()) {
+            return 0;
+        }
+        String dbAppId = normalizeAppId(appId);
+        ensureCacheLoadedFromDb(dbAppId);
+        String newRoom = "guest:" + dbAppId + ";" + newPhone;
+
+        List<Map<String, Object>> toUpdate = new ArrayList<>();
+        synchronized (chatCache) {
+            for (ChatMessage msg : chatCache) {
+                if (!normalizeAppId(msg.getAppId()).equals(dbAppId)) continue;
+                String sid = msg.getGuestSessionId();
+                String existingPhone = msg.getGuestPhone();
+                // Match by session id or existing phone equals oldIdentity
+                if (oldIdentity.equals(sid) || oldIdentity.equals(existingPhone)) {
+                    msg.setGuestPhone(newPhone);
+                    msg.setGuestSessionId(newPhone);
+                    msg.setRoom(newRoom);
+                    // Also update 'to' field if it points to the old identity (admin → guest side)
+                    if (oldIdentity.equals(msg.getTo())) {
+                        msg.setTo(newPhone);
+                    }
+                    toUpdate.add(buildRecordMap(msg));
+                }
+            }
+        }
+
+        if (!toUpdate.isEmpty()) {
+            try {
+                ensureChatTable(dbAppId);
+                recordManager.batchUpdateRecords(dbAppId, CHAT_TABLE, toUpdate, List.of("id"));
+                guestPhonesByApp.computeIfAbsent(dbAppId, k -> ConcurrentHashMap.newKeySet()).add(newPhone);
+                guestSessionsByApp.computeIfAbsent(dbAppId, k -> ConcurrentHashMap.newKeySet()).add(newPhone);
+                // Remove old identity from sessions tracking if it was anonymous
+                Set<String> sessions = guestSessionsByApp.get(dbAppId);
+                if (sessions != null) sessions.remove(oldIdentity);
+                logger.info("✅ rebindGuestPhone: appId={}, oldIdentity={} → newPhone={}, updated {} messages",
+                        dbAppId, oldIdentity, newPhone, toUpdate.size());
+            } catch (Exception e) {
+                logger.error("❌ rebindGuestPhone error: appId={}, error={}", dbAppId, e.getMessage(), e);
+            }
+        }
+        return toUpdate.size();
+    }
+
+    private Map<String, Object> buildRecordMap(ChatMessage message) {
+        Map<String, Object> record = new HashMap<>();
+        record.put("id", message.getId() != null ? message.getId() : UUID.randomUUID().toString());
+        record.put("room", message.getRoom());
+        record.put("username", message.getUsername());
+        record.put("userId", message.getUserId());
+        record.put("message", message.getMessage());
+        record.put("timestamp", message.getTimestamp());
+        record.put("appId", message.getAppId());
+        record.put("to", message.getTo());
+        record.put("guestPhone", message.getGuestPhone());
+        record.put("guestSessionId", message.getGuestSessionId());
+        record.put("avatar", message.getAvatar());
+        record.put("isAdmin", message.getIsAdmin());
+        record.put("eventType", message.getEventType());
+        try {
+            if (message.getAttachments() != null && !message.getAttachments().isEmpty()) {
+                record.put("attachments", objectMapper.writeValueAsString(message.getAttachments()));
+            }
+            if (message.getCheckinMeta() != null && !message.getCheckinMeta().isEmpty()) {
+                record.put("checkinMeta", objectMapper.writeValueAsString(message.getCheckinMeta()));
+            }
+        } catch (Exception ignored) {}
+        if (message.getReadBy() != null) {
+            record.put("readBy", String.join(",", message.getReadBy()));
+        }
+        return record;
+    }
+
     // === Lucene helper methods ===
     private SearchFilter buildEqFilter(String field, String value) {
         SearchFilter f = new SearchFilter();
@@ -587,6 +678,7 @@ public class ChatPersistenceService {
     
     private ChatMessage convertMapToChatMessage(Map<String, Object> row) {
         ChatMessage msg = new ChatMessage();
+        msg.setId((String) row.get("id"));
         msg.setRoom((String) row.get("room"));
         msg.setUsername((String) row.get("username"));
         msg.setUserId((String) row.get("userId"));

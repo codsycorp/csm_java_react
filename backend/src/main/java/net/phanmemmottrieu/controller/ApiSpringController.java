@@ -540,6 +540,16 @@ public class ApiSpringController {
         return "csm".equalsIgnoreCase(context.appId) && (context.dev || isAdminRole);
     }
 
+    private boolean hasDevPrivilege(UserAuthContext context) {
+        if (context == null || !context.authenticated) {
+            return false;
+        }
+        if (context.dev) {
+            return true;
+        }
+        return context.roles != null && context.roles.stream().anyMatch(role -> "dev".equalsIgnoreCase(role));
+    }
+
     private String firstNonBlankString(Object... values) {
         if (values == null) {
             return null;
@@ -553,6 +563,15 @@ public class ApiSpringController {
             }
         }
         return null;
+    }
+
+    private boolean shouldExposeRoutingDebug(Map<String, Object> params) {
+        boolean requested = (params != null && Boolean.TRUE.equals(params.get("includeRoutingDebug")))
+                || "true".equalsIgnoreCase(String.valueOf(params != null ? params.get("includeRoutingDebug") : null));
+        if (!requested) {
+            return false;
+        }
+        return hasDevPrivilege(extractUserAuthContext());
     }
 
     private boolean secureAndNormalizeCrmParams(StandardResponse response, Map<String, Object> params, String path,
@@ -640,7 +659,7 @@ public class ApiSpringController {
                 || "true".equalsIgnoreCase(String.valueOf(params.get("async")));
 
         if (asyncRequested) {
-            handleAiAsyncSubmit(response, prompt);
+            handleAiAsyncSubmit(response, prompt, params);
             return;
         }
 
@@ -663,7 +682,7 @@ public class ApiSpringController {
         }
 
         try {
-            rawContent = fetchAiRawContent(prompt, null);
+            rawContent = fetchAiRawContent(prompt, null, params);
         } catch (RuntimeException e) {
             response.set("code", 200);
             response.set("success", false);
@@ -679,11 +698,64 @@ public class ApiSpringController {
             return;
         }
 
+        if (shouldExposeRoutingDebug(params)) {
+            Object routingDecision = params != null ? params.get("_providerRoutingDecision") : null;
+            if (routingDecision != null) {
+                response.set("providerRoutingDecision", routingDecision);
+            }
+        }
+
         populateAiResponseFromRawContent(response, rawContent);
     }
 
-    private String fetchAiRawContent(String prompt, GitHubModelsService.ProgressListener progressListener) {
+    private String fetchAiRawContent(String prompt, GitHubModelsService.ProgressListener progressListener, Map<String, Object> params) {
+        String taskType = firstNonBlankString(
+                params != null ? params.get("taskType") : null,
+                params != null ? params.get("task") : null
+        ).toLowerCase();
+
+        boolean menuDesignByDev = (params != null && Boolean.TRUE.equals(params.get("menuDesignByDev")))
+            || "true".equalsIgnoreCase(String.valueOf(params != null ? params.get("menuDesignByDev") : null));
+
+        boolean verifiedDevCaller = false;
+        if (menuDesignByDev) {
+            UserAuthContext context = extractUserAuthContext();
+            verifiedDevCaller = hasDevPrivilege(context);
+            if (!verifiedDevCaller) {
+                logger.warn("Ignoring menuDesignByDev hint because caller is not verified as dev user");
+            }
+        }
+
+        // Only route to Copilot/GitHub Models when this is the menu-design flow
+        // and caller is explicitly marked + verified as dev.
+        boolean forceGithub = taskType.contains("menu_design") && menuDesignByDev && verifiedDevCaller;
+
+        boolean disableGeminiFallback = (params != null && Boolean.TRUE.equals(params.get("disableGeminiFallback")))
+                || "true".equalsIgnoreCase(String.valueOf(params != null ? params.get("disableGeminiFallback") : null));
+
+        if (forceGithub) {
+            if (params != null) {
+                params.put("_providerRoutingDecision", "forced_github_menu_design_dev");
+            }
+            if (progressListener != null) {
+                progressListener.onProgress(createAiJobProgress("github_models", "Đang gọi GitHub Models (ưu tiên theo yêu cầu)", 0, 1, null));
+            }
+
+            String githubRaw = this.gitHubModelsService.generateContent(prompt, progressListener);
+            if (shouldFallbackToGemini(githubRaw) && !disableGeminiFallback) {
+                logger.warn("GitHub Models hit quota/rate limit. Auto fallback to Gemini provider flow.");
+                if (progressListener != null) {
+                    progressListener.onProgress(createAiJobProgress("gemini_fallback", "GitHub Models hết quota, đang chuyển sang Gemini", 0, 1, null));
+                }
+                return this.aiProviderFactory.generateContent(prompt);
+            }
+            return githubRaw;
+        }
+
         if (prompt.length() > geminiMaxPromptChars) {
+            if (params != null) {
+                params.put("_providerRoutingDecision", "fallback_github_prompt_size");
+            }
             logger.warn("Prompt size exceeded Gemini limit ({}>{}) chars. Routing to GitHub Models fallback.",
                     prompt.length(), geminiMaxPromptChars);
             if (progressListener != null) {
@@ -701,6 +773,9 @@ public class ApiSpringController {
             return githubRaw;
         }
 
+        if (params != null) {
+            params.put("_providerRoutingDecision", "gemini_first_default");
+        }
         if (progressListener != null) {
             progressListener.onProgress(createAiJobProgress("gemini", "Đang gọi Gemini", 0, 1, null));
         }
@@ -982,7 +1057,7 @@ public class ApiSpringController {
         }
     }
 
-    private void handleAiAsyncSubmit(StandardResponse response, String prompt) {
+    private void handleAiAsyncSubmit(StandardResponse response, String prompt, Map<String, Object> params) {
         if (prompt == null || prompt.isEmpty()) {
             response.set("code", 200);
             response.set("success", false);
@@ -1018,12 +1093,18 @@ public class ApiSpringController {
                 updateAiAsyncJobProgress(job, createAiJobProgress("starting", "Bắt đầu xử lý yêu cầu AI", 0, 1, null));
 
                 StandardResponse syncResponse = new StandardResponse();
-                String rawContent = fetchAiRawContent(prompt, progress -> updateAiAsyncJobProgress(job, progress));
+                String rawContent = fetchAiRawContent(prompt, progress -> updateAiAsyncJobProgress(job, progress), params);
                 if (rawContent == null || rawContent.isBlank()) {
                     syncResponse.set("code", 200);
                     syncResponse.set("success", false);
                     syncResponse.set("message", "Không nhận được nội dung hợp lệ từ dịch vụ AI.");
                 } else {
+                    if (shouldExposeRoutingDebug(params)) {
+                        Object routingDecision = params != null ? params.get("_providerRoutingDecision") : null;
+                        if (routingDecision != null) {
+                            syncResponse.set("providerRoutingDecision", routingDecision);
+                        }
+                    }
                     updateAiAsyncJobProgress(job, createAiJobProgress("parsing", "Đang phân tích kết quả AI", 1, 1, null));
                     populateAiResponseFromRawContent(syncResponse, rawContent);
                 }

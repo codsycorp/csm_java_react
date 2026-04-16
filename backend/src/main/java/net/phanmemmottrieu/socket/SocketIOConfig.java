@@ -1452,6 +1452,42 @@ public class SocketIOConfig implements ApplicationListener<ContextRefreshedEvent
             }
         });
 
+        server.addEventListener("register_guest_phone", Map.class, (client, data, ackSender) -> {
+            try {
+                String appId = data.get("appId") != null ? String.valueOf(data.get("appId")) : null;
+                String oldIdentity = data.get("guestSessionId") != null ? String.valueOf(data.get("guestSessionId")) : null;
+                String phone = data.get("phone") != null ? String.valueOf(data.get("phone")) : null;
+
+                if (appId == null || appId.isBlank() || oldIdentity == null || oldIdentity.isBlank()
+                        || phone == null || phone.isBlank()) {
+                    if (ackSender != null) ackSender.sendAckData("{\"success\":false,\"error\":\"Missing required fields\"}");
+                    return;
+                }
+
+                // Normalize phone: strip whitespace, keep + prefix if present
+                phone = phone.trim();
+
+                int rebound = chatPersistenceService.rebindGuestPhone(appId, oldIdentity, phone);
+                rememberGuestPhoneIdentity(appId, phone, phone);
+                sessionGuestSessionIds.put(client.getSessionId(), phone);
+
+                // Update client's room to the new permanent room
+                String permanentRoom = "guest:" + appId + ";" + phone;
+                client.joinRoom(permanentRoom);
+
+                logger.info("📱 register_guest_phone: appId={}, {}→{}, rebound={} msgs", appId, oldIdentity, phone, rebound);
+
+                if (ackSender != null) {
+                    ackSender.sendAckData("{\"success\":true,\"phone\":\"" + phone
+                            + "\",\"permanentRoom\":\"" + permanentRoom
+                            + "\",\"rebound\":" + rebound + "}");
+                }
+            } catch (Exception e) {
+                logger.error("❌ register_guest_phone error: {}", e.getMessage(), e);
+                if (ackSender != null) ackSender.sendAckData("{\"success\":false,\"error\":\"" + e.getMessage() + "\"}");
+            }
+        });
+
                             server.addEventListener("chat", ChatMessage.class, (client, data, ackSender) -> {
                                 String room = data.getRoom();
                                 String username = data.getUsername();

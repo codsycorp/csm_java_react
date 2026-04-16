@@ -6,6 +6,9 @@ import java.util.List;
 
 
 public class ChatMessage {
+    private String id; // Unique ID assigned on persistence
+    public String getId() { return id; }
+    public void setId(String id) { this.id = id; }
     private String room;
     private String username;
     private String userId;

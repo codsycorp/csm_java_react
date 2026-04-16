@@ -27,6 +27,7 @@ interface ChatHistoryContextValue {
   markAsRead: (room: string) => void;
   broadcastNotification: (targetAppId: string, message: string) => Promise<boolean>; // CSM admin broadcast
   refreshAllMessages: () => Promise<void>; // Force refresh all messages from backend
+  registerGuestPhone: (phone: string) => Promise<void>; // Bind anonymous session to phone
   
   // Unread counts
   unreadCounts: Record<string, number>;
@@ -1128,6 +1129,42 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
     });
   }, [socket, user, appId]);
   
+  const registerGuestPhone = useCallback(async (phone: string): Promise<void> => {
+    if (!phone || !socket || !connected || chatActor !== 'guest') return;
+    const currentIdentity = resolveGuestIdentity();
+    if (!currentIdentity || currentIdentity === phone) return;
+    return new Promise<void>((resolve) => {
+      socket.emit(
+        'register_guest_phone',
+        { appId, guestSessionId: currentIdentity, phone },
+        (ack: any) => {
+          try {
+            const result = typeof ack === 'string' ? JSON.parse(ack) : ack;
+            if (result?.success) {
+              console.log(`📱 [ChatHistory] Guest phone registered: ${currentIdentity} → ${phone}, rebound=${result.rebound}`);
+              // Reload history under the new phone identity
+              loadHistoryRef.current?.(resolveGuestApiRoom(phone), phone).catch(console.warn);
+            }
+          } catch (e) {
+            console.warn('[ChatHistory] register_guest_phone ack parse error', e);
+          }
+          resolve();
+        }
+      );
+    });
+  }, [socket, connected, chatActor, appId, resolveGuestIdentity, resolveGuestApiRoom]);
+
+  // When guest submits a phone number, rebind their anonymous session
+  useEffect(() => {
+    if (chatActor !== 'guest') return;
+    const handlePhoneChanged = (e: Event) => {
+      const phone = (e as CustomEvent<string>).detail;
+      if (phone) registerGuestPhone(phone).catch(console.warn);
+    };
+    window.addEventListener('csm-guest-phone-changed', handlePhoneChanged);
+    return () => window.removeEventListener('csm-guest-phone-changed', handlePhoneChanged);
+  }, [chatActor, registerGuestPhone]);
+
   const value: ChatHistoryContextValue = {
     messages,
     sendMessage,
@@ -1135,6 +1172,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
     markAsRead,
     broadcastNotification,
     refreshAllMessages,
+    registerGuestPhone,
     unreadCounts,
     typingUsers,
     connected,

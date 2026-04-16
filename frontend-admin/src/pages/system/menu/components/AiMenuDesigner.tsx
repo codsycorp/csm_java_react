@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Button, Card, Collapse, Divider, Input, Progress, message, Radio, Select, Space, Switch, Tag } from "antd";
+import { Alert, Button, Card, Collapse, Divider, Input, Progress, Upload, message, Radio, Select, Space, Switch, Tag } from "antd";
 import type { RadioChangeEvent } from "antd";
 import CodeMirror from "@uiw/react-codemirror";
 import { json } from "@codemirror/lang-json";
 import { vscodeDark } from "@uiw/codemirror-theme-vscode";
 import { useTranslation } from "react-i18next";
+import { useUserStore } from "#src/store/user";
 
 import type { MenuItemType } from "#src/api/system/menu";
 import { fetchAppList, fetchMenuList } from "#src/api/system/menu";
@@ -23,6 +24,8 @@ type AiRequestRecord = {
   request_history?: string;
   last_prompt?: string;
   last_result?: string;
+  context_files_json?: string;
+  generate_mode?: "full" | "diff";
   updated_at?: number;
   created_at?: number;
 };
@@ -65,7 +68,20 @@ type AiOutputMeta = {
   unresolvedAssumptions: string[];
 };
 
+type JsonContextFile = {
+  id: string;
+  name: string;
+  size: number;
+  content: string;
+  summary: string;
+};
+
+type GenerateMode = "full" | "diff";
+
 const AI_REQUEST_TABLE = "csm_ai_menu_requests";
+const MAX_CONTEXT_FILES = 8;
+const MAX_CONTEXT_FILE_CHARS = 50000;
+const MAX_CONTEXT_APPENDIX_CHARS = 80000;
 
 function formatDurationMs(value: number | undefined): string {
   const totalMs = Number(value || 0);
@@ -1903,8 +1919,109 @@ function extractAiOutputMeta(payload: any): AiOutputMeta {
   };
 }
 
+function summarizeJsonContent(value: any): string {
+  if (Array.isArray(value)) {
+    return `Array(${value.length})`;
+  }
+  if (value && typeof value === "object") {
+    const keys = Object.keys(value).slice(0, 12);
+    return `Object keys: ${keys.join(", ")}${Object.keys(value).length > keys.length ? ", ..." : ""}`;
+  }
+  return typeof value;
+}
+
+function buildContextFilesAppendix(files: JsonContextFile[]): string {
+  if (!Array.isArray(files) || files.length === 0) return "";
+
+  const sections = files.map((file, index) => {
+    const body = trimToMax(file.content, MAX_CONTEXT_FILE_CHARS);
+    return [
+      `### FILE ${index + 1}: ${file.name}`,
+      `- Summary: ${file.summary}`,
+      `- Size(bytes): ${file.size}`,
+      "```json",
+      body,
+      "```",
+    ].join("\n");
+  });
+
+  return [
+    "## CUSTOMER LEGACY JSON CONTEXT (HIGH PRIORITY)",
+    "Use these JSON files as the source of truth for backward-compatible redesign.",
+    "Do not drop business entities or trigger logic that appears in these files unless explicitly requested.",
+    ...sections,
+  ].join("\n\n");
+}
+
+function buildAppContextAppendix(
+  appId: string | undefined,
+  storedRequest: string,
+  storedLastResult: string,
+  files: JsonContextFile[],
+): string {
+  const lastResultCompact = storedLastResult
+    ? buildPreviousResultContext(storedLastResult, 60)
+    : "(chua co ket qua AI truoc do)";
+
+  const fileAppendix = buildContextFilesAppendix(files);
+
+  const text = [
+    "## APP CONTINUITY MEMORY (MUST USE)",
+    `Current app_id: ${String(appId || "")}`,
+    "When upgrading, keep continuity for this app_id:",
+    "- Preserve existing module intent and menu hierarchy where possible.",
+    "- Keep IDs/menu_id/parent relationships stable unless requirement asks to change.",
+    "- Respect legacy data structure and trigger semantics from attached JSON files.",
+    "",
+    "### Previous requirement history",
+    trimToMax(String(storedRequest || "(khong co)"), 6000),
+    "",
+    "### Previous AI output summary",
+    lastResultCompact,
+    fileAppendix ? `\n${fileAppendix}` : "",
+  ].join("\n");
+
+  return trimToMax(text, MAX_CONTEXT_APPENDIX_CHARS);
+}
+
+function serializeContextFiles(files: JsonContextFile[]): string {
+  try {
+    return JSON.stringify(Array.isArray(files) ? files : []);
+  } catch {
+    return "[]";
+  }
+}
+
+function parseContextFiles(raw: any): JsonContextFile[] {
+  if (!raw) return [];
+  try {
+    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((item) => {
+        if (!item || typeof item !== "object") return null;
+        const name = String(item.name || "").trim();
+        const content = String(item.content || "").trim();
+        if (!name || !content) return null;
+        return {
+          id: String(item.id || `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`),
+          name,
+          size: Number(item.size || content.length),
+          content: trimToMax(content, MAX_CONTEXT_FILE_CHARS),
+          summary: String(item.summary || summarizeJsonContent(content)),
+        } as JsonContextFile;
+      })
+      .filter((item): item is JsonContextFile => !!item)
+      .slice(0, MAX_CONTEXT_FILES);
+  } catch {
+    return [];
+  }
+}
+
 export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerProps) {
   const { t } = useTranslation();
+  const user = useUserStore();
+  const isDevUser = !!user?.dev || !!user?.roles?.includes("dev");
   const [requestText, setRequestText] = useState("");
   const [storedRequest, setStoredRequest] = useState("");
   const [aiResultText, setAiResultText] = useState("");
@@ -1925,6 +2042,9 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     coverageTables: [],
     unresolvedAssumptions: [],
   });
+  const [storedLastResult, setStoredLastResult] = useState("");
+  const [contextFiles, setContextFiles] = useState<JsonContextFile[]>([]);
+  const [generateMode, setGenerateMode] = useState<GenerateMode>("full");
 
   const menuValidationIssues = useMemo(() => {
     return validateMenusForApply(aiMenus || []);
@@ -2036,9 +2156,15 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
         const item = rows[0];
         if (item) {
           setStoredRequest(item.request_text || "");
+          setStoredLastResult(item.last_result || "");
+          setGenerateMode(item.generate_mode === "diff" ? "diff" : "full");
+          setContextFiles(parseContextFiles(item.context_files_json));
           setRecordId(item.id);
         } else {
           setStoredRequest("");
+          setStoredLastResult("");
+          setGenerateMode("full");
+          setContextFiles([]);
           setRecordId(undefined);
         }
       } catch (error) {
@@ -2058,6 +2184,8 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
       app_id_target: appId,
       request_text: storedRequest,
       request_history: payload.request_history || storedRequest,
+      context_files_json: serializeContextFiles(contextFiles),
+      generate_mode: generateMode,
       updated_at: now,
       created_at: payload.created_at || now,
       ...payload,
@@ -2086,16 +2214,16 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
       const rawMenuList = (res as any)?.result?.list || [];
       if (!Array.isArray(rawMenuList) || rawMenuList.length === 0) {
         setSampleMenuParsed(null);
-        setSampleMenuError(`Không tìm thấy menu mẫu trong ứng dụng ${targetAppId}.`);
+        setSampleMenuError(t("system.menu.aiDesigner.sampleMenu.loadNotFound", { appId: targetAppId }) || `Không tìm thấy menu mẫu trong ứng dụng ${targetAppId}.`);
         return;
       }
       const normalized = normalizeMenuList(rawMenuList);
       setSampleMenuParsed(normalized);
       setSampleMenuError(null);
-      message.success(`Đã nạp ${normalized.length} menu gốc từ app ${targetAppId} làm mẫu cho AI.`);
+      message.success(t("system.menu.aiDesigner.sampleMenu.loadSuccess", { count: normalized.length, appId: targetAppId }) || `Đã nạp ${normalized.length} menu gốc từ app ${targetAppId} làm mẫu cho AI.`);
     } catch (e: any) {
       setSampleMenuParsed(null);
-      setSampleMenuError(`Không thể tải menu mẫu từ app ${targetAppId}: ${e?.message || "Unknown error"}`);
+      setSampleMenuError(t("system.menu.aiDesigner.sampleMenu.loadFailed", { appId: targetAppId, error: e?.message || "Unknown error" }) || `Không thể tải menu mẫu từ app ${targetAppId}: ${e?.message || "Unknown error"}`);
     } finally {
       setSampleMenuLoading(false);
     }
@@ -2113,6 +2241,52 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     setSampleUseAsBase(false);
   };
 
+  const handleContextJsonFile = async (file: File) => {
+    if (!file) return false;
+
+    if (contextFiles.length >= MAX_CONTEXT_FILES) {
+      message.warning(t("system.menu.aiDesigner.context.maxFiles", { max: MAX_CONTEXT_FILES }) || `Chi duoc dinh kem toi da ${MAX_CONTEXT_FILES} file JSON.`);
+      return false;
+    }
+
+    const name = String(file.name || "");
+    if (!name.toLowerCase().endsWith(".json")) {
+      message.warning(t("system.menu.aiDesigner.context.jsonOnly") || "Chi nhan file .json de dam bao AI doc dung cau truc.");
+      return false;
+    }
+
+    try {
+      const raw = await file.text();
+      const parsed = JSON.parse(raw);
+      const normalized = JSON.stringify(parsed, null, 2);
+      const next: JsonContextFile = {
+        id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        name,
+        size: Number(file.size || normalized.length),
+        content: trimToMax(normalized, MAX_CONTEXT_FILE_CHARS),
+        summary: summarizeJsonContent(parsed),
+      };
+
+      setContextFiles((prev) => {
+        const exists = prev.some((item) => item.name === next.name);
+        if (exists) {
+          return prev.map((item) => (item.name === next.name ? next : item));
+        }
+        return [...prev, next];
+      });
+      message.success(t("system.menu.aiDesigner.context.fileLoaded", { name }) || `Da nap context JSON: ${name}`);
+    } catch (error) {
+      console.error("Invalid JSON context file:", error);
+      message.error(t("system.menu.aiDesigner.context.fileInvalid", { name }) || `File ${name} khong hop le JSON.`);
+    }
+
+    return false;
+  };
+
+  const removeContextFile = (id: string) => {
+    setContextFiles((prev) => prev.filter((item) => item.id !== id));
+  };
+
   const runGenerate = async (
     inputRequest: string,
     scope: "minimal" | "complete" = "complete",
@@ -2128,14 +2302,16 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
       return;
     }
 
-    const prompt = promptOverride || buildPromptWithRequirement(appId, inputRequest, scope, currentMenus, sampleMenuParsed || undefined);
+    const basePrompt = promptOverride || buildPromptWithRequirement(appId, inputRequest, scope, currentMenus, sampleMenuParsed || undefined);
+    const continuityAppendix = buildAppContextAppendix(appId, storedRequest, storedLastResult, contextFiles);
+    const prompt = trimToMax(`${basePrompt}\n\n${continuityAppendix}`, 120000);
     setLoading(true);
     setAiMenus(null);
     setAiOutputMeta({ coverageModules: [], coverageTables: [], unresolvedAssumptions: [] });
     const preparingProgress: AiProgressState = {
       status: "preparing",
       stage: "preparing",
-      message: "Đang chuẩn bị và gửi yêu cầu AI",
+      message: t("system.menu.aiDesigner.progress.preparing") || "Đang chuẩn bị và gửi yêu cầu AI",
       current: 0,
       total: 1,
       percent: 0,
@@ -2158,6 +2334,10 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
       setStoredRequest(inputRequest);
 
       const res = await generateSeoContentWithPrompt(prompt, {
+        providerPreference: isDevUser ? "github_models" : undefined,
+        disableGeminiFallback: isDevUser,
+        taskType: "menu_design",
+        menuDesignByDev: isDevUser,
         onProgress: (progress) => {
           const nextProgress: AiProgressState = {
             jobId: progress?.jobId,
@@ -2240,7 +2420,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
         setAiProgress({
           status: "running",
           stage: "refining",
-          message: "Ket qua AI lan 1 chua dat. Dang tu dong sua va tao lai...",
+          message: t("system.menu.aiDesigner.progress.autoRefining") || "Ket qua AI lan 1 chua dat. Dang tu dong sua va tao lai...",
           current: 0,
           total: 1,
           percent: 0,
@@ -2248,7 +2428,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
         setAiResultText(JSON.stringify({
           success: false,
           stage: "refining",
-          message: "KQ lan 1 chua dat chat luong, dang auto-refine.",
+          message: t("system.menu.aiDesigner.progress.autoRefineResult") || "KQ lan 1 chua dat chat luong, dang auto-refine.",
           issues: severeIssues,
         }, null, 2));
 
@@ -2264,16 +2444,19 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
         {
           request_text: inputRequest,
           last_result: JSON.stringify(output),
+          context_files_json: serializeContextFiles(contextFiles),
+          generate_mode: generateMode,
           updated_at: Date.now(),
         },
         "update",
       );
+      setStoredLastResult(JSON.stringify(output));
 
       setAiProgress((prev) => ({
         ...(prev || {}),
         status: "completed",
         stage: "completed",
-        message: `Đã hoàn tất tạo ${normalized.length} menu/chức năng`,
+        message: t("system.menu.aiDesigner.progress.completedWithCount", { count: normalized.length }) || `Đã hoàn tất tạo ${normalized.length} menu/chức năng`,
         current: 1,
         total: 1,
         percent: 100,
@@ -2321,6 +2504,37 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
   };
 
   const handleGenerate = async () => {
+    if (generateMode === "diff") {
+      if (!storedLastResult.trim()) {
+        message.warning(t("system.menu.aiDesigner.generateMode.diffNeedPrevious") || "Diff mode can ket qua AI truoc do. He thong se chuyen sang full mode.");
+      } else {
+        const diffRequest = requestText.trim() || mergedRequestText.trim();
+        if (!diffRequest) {
+          message.warning(t("system.menu.aiDesigner.generateMode.diffNeedInput") || "Hay nhap noi dung thay doi trong diff mode.");
+          return;
+        }
+
+        const prompt = buildRefinementPrompt(
+          appId,
+          storedRequest || mergedRequestText,
+          diffRequest,
+          storedLastResult,
+          "complete",
+          currentMenus,
+          sampleMenuParsed || undefined,
+        );
+
+        const combinedRequest = [
+          storedRequest || "",
+          "\n[Diff update]\n",
+          diffRequest,
+        ].join("\n").trim();
+
+        await runGenerate(combinedRequest, "complete", prompt);
+        return;
+      }
+    }
+
     if (sampleUseAsBase && sampleMenuParsed && sampleMenuParsed.length > 0) {
       const baseJson = JSON.stringify({ menu: sampleMenuParsed }, null, 2);
       const prompt = buildRefinementPrompt(
@@ -2400,15 +2614,23 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
           items={[{
             key: "sample_menu",
             label: sampleMenuParsed
-              ? `Menu mẫu ✓ ${sampleUseAsBase ? "[Dùng làm gốc]" : "[Tham khảo]"} — ${sampleMenuParsed.length} menu từ ${sampleAppLabel || sampleAppId || "app đã chọn"}`
-              : "Menu mẫu tham khảo (tùy chọn) — chọn ứng dụng để AI học theo hoặc chỉnh sửa",
+              ? (sampleUseAsBase
+                ? (t("system.menu.aiDesigner.sampleMenu.sectionLabelLoadedBase", {
+                  count: sampleMenuParsed.length,
+                  app: sampleAppLabel || sampleAppId || (t("system.menu.aiDesigner.sampleMenu.appSelectedFallback") || "app đã chọn"),
+                }) || `Menu mẫu ✓ [Dùng làm gốc] — ${sampleMenuParsed.length} menu từ ${sampleAppLabel || sampleAppId || "app đã chọn"}`)
+                : (t("system.menu.aiDesigner.sampleMenu.sectionLabelLoadedReference", {
+                  count: sampleMenuParsed.length,
+                  app: sampleAppLabel || sampleAppId || (t("system.menu.aiDesigner.sampleMenu.appSelectedFallback") || "app đã chọn"),
+                }) || `Menu mẫu ✓ [Tham khảo] — ${sampleMenuParsed.length} menu từ ${sampleAppLabel || sampleAppId || "app đã chọn"}`))
+              : (t("system.menu.aiDesigner.sampleMenu.sectionLabelEmpty") || "Menu mẫu tham khảo (tùy chọn) — chọn ứng dụng để AI học theo hoặc chỉnh sửa"),
             children: (
               <Space direction="vertical" style={{ width: "100%" }}>
                 <Alert
                   type="info"
                   showIcon
-                  message="Chọn ứng dụng để tự động lấy menu mẫu"
-                  description="Chọn ứng dụng để tải menu mẫu. Chế độ Tham khảo: AI học theo cấu trúc để tự thiết kế mới. Chế độ Dùng làm gốc: AI lấy đúng menu này và adapt theo yêu cầu khách hàng mới."
+                  message={t("system.menu.aiDesigner.sampleMenu.pickAppTitle") || "Chọn ứng dụng để tự động lấy menu mẫu"}
+                  description={t("system.menu.aiDesigner.sampleMenu.pickAppDesc") || "Chọn ứng dụng để tải menu mẫu. Chế độ Tham khảo: AI học theo cấu trúc để tự thiết kế mới. Chế độ Dùng làm gốc: AI lấy đúng menu này và adapt theo yêu cầu khách hàng mới."}
                 />
                 <Space>
                   <Select
@@ -2424,12 +2646,12 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                   />
                   {sampleAppId && (
                     <Button onClick={() => sampleAppId && loadSampleMenuFromApp(sampleAppId)} loading={sampleMenuLoading}>
-                      Tải lại menu mẫu
+                      {t("system.menu.aiDesigner.sampleMenu.reloadButton") || "Tải lại menu mẫu"}
                     </Button>
                   )}
                   {(sampleMenuParsed || sampleAppId) && (
                     <Button onClick={handleClearSampleMenu} danger>
-                      Bỏ mẫu
+                      {t("system.menu.aiDesigner.sampleMenu.clearButton") || "Bỏ mẫu"}
                     </Button>
                   )}
                 </Space>
@@ -2438,19 +2660,19 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                     <Alert
                       type="success"
                       showIcon
-                      message={`Đã nạp ${sampleMenuParsed.length} menu gốc từ ${sampleAppLabel || sampleAppId}`}
+                      message={t("system.menu.aiDesigner.sampleMenu.loadedMessage", { count: sampleMenuParsed.length, app: sampleAppLabel || sampleAppId || "" }) || `Đã nạp ${sampleMenuParsed.length} menu gốc từ ${sampleAppLabel || sampleAppId}`}
                     />
                     <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", borderRadius: 6, border: `1px solid ${sampleUseAsBase ? "var(--ant-color-primary-border)" : "var(--ant-color-border)"}`, background: sampleUseAsBase ? "var(--ant-color-primary-bg)" : "var(--ant-color-fill-quaternary)" }}>
                       <Switch
                         checked={sampleUseAsBase}
                         onChange={setSampleUseAsBase}
-                        checkedChildren="Dùng làm gốc"
-                        unCheckedChildren="Chỉ tham khảo"
+                        checkedChildren={t("system.menu.aiDesigner.sampleMenu.modeBaseOn") || "Dùng làm gốc"}
+                        unCheckedChildren={t("system.menu.aiDesigner.sampleMenu.modeReferenceOn") || "Chỉ tham khảo"}
                       />
                       <span style={{ fontSize: 13 }}>
                         {sampleUseAsBase
-                          ? <><strong>Chỉnh sửa từ menu mẫu</strong> — AI lấy menu này làm gốc, adapt theo yêu cầu khách hàng<Tag color="blue" style={{ marginLeft: 6 }}>Gốc</Tag></>
-                          : <><strong>Chỉ tham khảo cấu trúc</strong> — AI tự thiết kế mới, dùng menu mẫu như hướng dẫn</>}
+                          ? <><strong>{t("system.menu.aiDesigner.sampleMenu.modeBaseTitle") || "Chỉnh sửa từ menu mẫu"}</strong> — {t("system.menu.aiDesigner.sampleMenu.modeBaseDesc") || "AI lấy menu này làm gốc, adapt theo yêu cầu khách hàng"}<Tag color="blue" style={{ marginLeft: 6 }}>{t("system.menu.aiDesigner.sampleMenu.baseTag") || "Gốc"}</Tag></>
+                          : <><strong>{t("system.menu.aiDesigner.sampleMenu.modeReferenceTitle") || "Chỉ tham khảo cấu trúc"}</strong> — {t("system.menu.aiDesigner.sampleMenu.modeReferenceDesc") || "AI tự thiết kế mới, dùng menu mẫu như hướng dẫn"}</>}
                       </span>
                     </div>
                   </>
@@ -2475,7 +2697,53 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
           style={{ marginBottom: 16 }}
         />
 
+        <Space direction="vertical" style={{ width: "100%", marginBottom: 12 }}>
+          <Upload
+            accept=".json,application/json"
+            multiple
+            showUploadList={false}
+            beforeUpload={(file) => handleContextJsonFile(file as unknown as File)}
+            disabled={!appId}
+          >
+            <Button disabled={!appId}>{t("system.menu.aiDesigner.context.uploadButton", { max: MAX_CONTEXT_FILES }) || "Dinh kem JSON he thong cu (toi da 8 file)"}</Button>
+          </Upload>
+
+          {contextFiles.length > 0 && (
+            <Alert
+              type="info"
+              showIcon
+              message={t("system.menu.aiDesigner.context.attachedMessage", { count: contextFiles.length, appId: appId || "" }) || `Da dinh kem ${contextFiles.length} file JSON context cho app_id ${appId || ""}`}
+              description={
+                <Space wrap>
+                  {contextFiles.map((file) => (
+                    <Tag key={file.id} closable onClose={(e) => {
+                      e.preventDefault();
+                      removeContextFile(file.id);
+                    }}>
+                      {file.name}
+                    </Tag>
+                  ))}
+                </Space>
+              }
+            />
+          )}
+        </Space>
+
         <Divider />
+
+        <Space style={{ marginBottom: 16 }} align="center" wrap>
+          <span style={{ fontSize: 13 }}>{t("system.menu.aiDesigner.generateMode.label") || "Che do tao:"}</span>
+          <Radio.Group
+            value={generateMode}
+            onChange={(e) => setGenerateMode(e.target.value as GenerateMode)}
+          >
+            <Radio value="full">{t("system.menu.aiDesigner.generateMode.full") || "Full regenerate"}</Radio>
+            <Radio value="diff">{t("system.menu.aiDesigner.generateMode.diff") || "Diff update"}</Radio>
+          </Radio.Group>
+          {generateMode === "diff" && (
+            <Tag color="gold">{t("system.menu.aiDesigner.generateMode.diffHint") || "Chi sua phan thay doi, giu continuity app_id"}</Tag>
+          )}
+        </Space>
 
         <Space wrap style={{ marginBottom: 16 }}>
           <Button type="primary" onClick={handleGenerate} loading={loading} disabled={!appId} size="large">
@@ -2650,7 +2918,9 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                 <Alert
                   type="info"
                   showIcon
-                  message={`Menu mẫu từ ${sampleAppLabel || sampleAppId} đang được đưa vào prompt bổ sung ${sampleUseAsBase ? "(chế độ gốc: AI tiếp tục chỉnh sửa trên menu đó)" : "(chế độ tham khảo)"}`}
+                  message={sampleUseAsBase
+                    ? (t("system.menu.aiDesigner.sampleMenu.refineInfoBase", { app: sampleAppLabel || sampleAppId || "" }) || `Menu mẫu từ ${sampleAppLabel || sampleAppId} đang được đưa vào prompt bổ sung (chế độ gốc: AI tiếp tục chỉnh sửa trên menu đó)`)
+                    : (t("system.menu.aiDesigner.sampleMenu.refineInfoReference", { app: sampleAppLabel || sampleAppId || "" }) || `Menu mẫu từ ${sampleAppLabel || sampleAppId} đang được đưa vào prompt bổ sung (chế độ tham khảo)`)}
                 />
               )}
               <TextArea

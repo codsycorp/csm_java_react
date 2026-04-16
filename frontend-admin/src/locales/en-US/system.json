@@ -430,7 +430,52 @@
 			"scope": "Design scope",
 			"existingTables": "Existing tables (optional)",
 			"notes": "Additional notes",
-			"tip": "Tip"
+			"tip": "Tip",
+			"context": {
+				"maxFiles": "You can attach up to {{max}} JSON files.",
+				"jsonOnly": "Only .json files are accepted to ensure correct structure parsing.",
+				"fileLoaded": "JSON context loaded: {{name}}",
+				"fileInvalid": "File {{name}} is not valid JSON.",
+				"uploadButton": "Attach legacy system JSON (max {{max}} files)",
+				"attachedMessage": "Attached {{count}} JSON context file(s) for app_id {{appId}}"
+			},
+			"generateMode": {
+				"label": "Generation mode:",
+				"full": "Full regenerate",
+				"diff": "Diff update",
+				"diffHint": "Only update changed parts, keep app_id continuity",
+				"diffNeedPrevious": "Diff mode requires previous AI output. The system will switch to full mode.",
+				"diffNeedInput": "Please enter change details in diff mode."
+			},
+			"progress": {
+				"preparing": "Preparing and sending AI request",
+				"autoRefining": "First AI result is not good enough. Auto-refining and regenerating...",
+				"autoRefineResult": "First result quality is insufficient, auto-refine is running.",
+				"completedWithCount": "Completed generating {{count}} menu/feature item(s)"
+			},
+			"sampleMenu": {
+				"appSelectedFallback": "selected app",
+				"sectionLabelEmpty": "Sample menu reference (optional) — choose an app for AI to learn or adapt",
+				"sectionLabelLoadedReference": "Sample menu ✓ [Reference] — {{count}} menu(s) from {{app}}",
+				"sectionLabelLoadedBase": "Sample menu ✓ [Use as base] — {{count}} menu(s) from {{app}}",
+				"pickAppTitle": "Choose an app to auto-load sample menu",
+				"pickAppDesc": "Choose an app to load sample menus. Reference mode: AI learns the structure and designs a new menu. Base mode: AI uses this menu as the base and adapts it to the new customer request.",
+				"reloadButton": "Reload sample menu",
+				"clearButton": "Clear sample",
+				"loadedMessage": "Loaded {{count}} base menu(s) from {{app}}",
+				"modeBaseOn": "Use as base",
+				"modeReferenceOn": "Reference only",
+				"modeBaseTitle": "Adapt from sample menu",
+				"modeBaseDesc": "AI uses this menu as base and adapts to customer requirements",
+				"modeReferenceTitle": "Structure reference only",
+				"modeReferenceDesc": "AI designs a new menu while using this sample as guidance",
+				"baseTag": "Base",
+				"loadNotFound": "No sample menu found in app {{appId}}.",
+				"loadSuccess": "Loaded {{count}} base menu(s) from app {{appId}} for AI reference.",
+				"loadFailed": "Cannot load sample menu from app {{appId}}: {{error}}",
+				"refineInfoBase": "Sample menu from {{app}} is included in refinement prompt (base mode: AI continues editing on that menu)",
+				"refineInfoReference": "Sample menu from {{app}} is included in refinement prompt (reference mode)"
+			}
 		}
 	},
 	"developer": {

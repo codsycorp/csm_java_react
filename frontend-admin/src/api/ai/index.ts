@@ -84,6 +84,10 @@ export type AiProgressPayload = Record<string, any>;
 
 type GenerateSeoContentOptions = {
 	onProgress?: (progress: AiProgressPayload) => void;
+	providerPreference?: "auto" | "github_models" | "gemini";
+	disableGeminiFallback?: boolean;
+	taskType?: string;
+	menuDesignByDev?: boolean;
 };
 
 async function generateSeoContentWithPromptAsync(prompt: string, options?: GenerateSeoContentOptions): Promise<ApiResponse<any>> {
@@ -93,6 +97,10 @@ async function generateSeoContentWithPromptAsync(prompt: string, options?: Gener
 				prompt,
 				mode: "submit",
 				async: true,
+				providerPreference: options?.providerPreference,
+				disableGeminiFallback: options?.disableGeminiFallback,
+				taskType: options?.taskType,
+				menuDesignByDev: options?.menuDesignByDev,
 			},
 			timeout: AI_REQUEST_TIMEOUT,
 		})
@@ -268,7 +276,13 @@ export async function generateSeoContentWithPrompt(prompt: string, options?: Gen
 
 		const response = await request
 			.post("ai-generate-seo-content", {
-				json: requestBody,
+				json: {
+					...requestBody,
+					providerPreference: options?.providerPreference,
+					disableGeminiFallback: options?.disableGeminiFallback,
+					taskType: options?.taskType,
+					menuDesignByDev: options?.menuDesignByDev,
+				},
 				timeout: AI_REQUEST_TIMEOUT,
 			})
 			.json<ApiResponse<any>>(); // any để chấp nhận custom fields
