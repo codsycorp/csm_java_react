@@ -62,11 +62,22 @@ systemctl start --no-block "${SERVICE_NAME}.service"
 
 echo "[INFO] Dang khoi dong service, cho toi da 120 giay..."
 start_deadline=$((SECONDS + 120))
+seen_activating=false
 while (( SECONDS < start_deadline )); do
   state=$(systemctl is-active "${SERVICE_NAME}.service" 2>/dev/null || true)
   substate=$(systemctl show -p SubState --value "${SERVICE_NAME}.service" 2>/dev/null || true)
 
-  if [[ "${state}" == "active" || "${state}" == "inactive" ]]; then
+  if [[ "${state}" == "activating" || "${substate}" == "start" ]]; then
+    seen_activating=true
+  fi
+
+  # active  = oneshot da chay xong thanh cong (RemainAfterExit=yes)
+  # failed  = start.sh thoat voi loi
+  # inactive = chi dung neu da tung thay activating (tuc la da chay xong)
+  if [[ "${state}" == "active" || "${state}" == "failed" ]]; then
+    break
+  fi
+  if [[ "${state}" == "inactive" && "${seen_activating}" == "true" ]]; then
     break
   fi
 
