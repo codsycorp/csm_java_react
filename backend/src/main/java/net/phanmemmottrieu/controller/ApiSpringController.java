@@ -709,10 +709,11 @@ public class ApiSpringController {
     }
 
     private String fetchAiRawContent(String prompt, GitHubModelsService.ProgressListener progressListener, Map<String, Object> params) {
-        String taskType = firstNonBlankString(
+        String taskTypeRaw = firstNonBlankString(
                 params != null ? params.get("taskType") : null,
                 params != null ? params.get("task") : null
-        ).toLowerCase();
+        );
+        String taskType = taskTypeRaw == null ? "" : taskTypeRaw.toLowerCase();
 
         boolean menuDesignByDev = (params != null && Boolean.TRUE.equals(params.get("menuDesignByDev")))
             || "true".equalsIgnoreCase(String.valueOf(params != null ? params.get("menuDesignByDev") : null));
