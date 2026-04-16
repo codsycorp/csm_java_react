@@ -11,7 +11,6 @@ import type { MenuItemType } from "#src/api/system/menu";
 import { fetchAppList, fetchMenuList } from "#src/api/system/menu";
 import { generateSeoContentWithPrompt } from "#src/api/ai";
 import { getTableData, updateTableData } from "#src/components/csm-grid/CsmApi";
-import { AI_PROMPTS } from "../ai-prompts/menu-design-system";
 
 const { TextArea } = Input;
 
@@ -478,166 +477,53 @@ function extractRequirementModules(text: string, limit = 12): string[] {
   return uniqueStrings(modules, limit);
 }
 
-function buildPromptWithRequirement(
+export function buildAiMenuRequestPayload(
   appId: string | undefined,
   requestText: string,
-  scope: "minimal" | "complete" = "minimal",
+  scope: "minimal" | "complete" = "complete",
   currentMenus?: MenuItemType[],
   sampleMenus?: MenuItemType[],
-): string {
-  const referenceMenus = Array.isArray(currentMenus) && currentMenus.length > 0
-    ? currentMenus
-    : [];
-  const enforcerPrompt = trimToMax(AI_PROMPTS.EXTRACTION_AND_VALIDATION || "", 5000);
-  const sysArchContext = trimToMax(AI_PROMPTS.SYSTEM_ARCHITECTURE || "", 8000);
-  const mainPrompt = trimToMax(AI_PROMPTS.MAIN_MENU_DESIGNER || "", 5500);
-  const extractorPrompt = trimToMax(AI_PROMPTS.REQUIREMENT_EXTRACTOR || "", 1200);
-  const selectorGuide = trimToMax(AI_PROMPTS.TYPE_SELECTION_GUIDE || "", 1500);
-  const requestCore = trimToMax(requestText || "", 10000);
-  const detectedModules = extractRequirementModules(requestText || "", 20);
-  const detectedTables = extractRequirementTables(requestText || "", 30);
-  const moduleChecklist = detectedModules.length > 0
-    ? detectedModules.map((item, idx) => `${idx + 1}. ${item}`).join("\n")
-    : "(khong trich xuat duoc module ro rang; AI phai tu phan tich day du theo yeu cau goc)";
-  const tableChecklist = detectedTables.length > 0
-    ? detectedTables.map((item, idx) => `${idx + 1}. ${item}`).join("\n")
-    : "(khong co ten bang ro rang trong yeu cau)";
-  const compactMenuContext = referenceMenus.length > 0
-    ? buildCompactMenuContext(referenceMenus, 150)
-    : "(khong co menu he thong hien tai de tham chieu)";
-  const typeCatalog = buildMenuTypeCatalog();
-  const menuOrgGuide = buildMenuOrganizationGuide();
-  const sampleMenuContext = sampleMenus && sampleMenus.length > 0
+  contextFiles?: JsonContextFile[],
+) {
+  const normalizedRequest = trimToMax(String(requestText || "").trim(), 12000);
+  const currentMenuCompact = Array.isArray(currentMenus) && currentMenus.length > 0
+    ? buildCompactMenuContext(currentMenus, 150)
+    : "(khong co menu hien tai)";
+  const sampleMenuCompact = Array.isArray(sampleMenus) && sampleMenus.length > 0
     ? buildCompactMenuContext(sampleMenus, 100)
-    : null;
+    : undefined;
 
-  const prompt = `${enforcerPrompt}
-
-${sysArchContext}
-
-${mainPrompt}
-
-${extractorPrompt}
-
-${selectorGuide}
-
-## TRACH NHIEM CUA BAN
-1) Phan tich yeu cau khach hang
-2) Chon menu type phu hop (${scope === "minimal" ? "uu tien type 1/2/6, chi dung 3/4 khi yeu cau ro" : "co the dung 1/2/3/4/6"})
-3) Tao JSON hop le theo MenuItemType
-4) Neu can, ghi chu gia dinh vao notes
-5) Neu da co menu cu: chuan hoa theo schema he thong hien tai, giu ID/path/menu_id on dinh toi da
-6) KHONG tu them module/tinh nang khong co trong yeu cau (vd dashboard, KPI, bao cao tong hop, kanban, auto_code)
-7) KHONG duoc bo sot dau muc yeu cau: moi module/chuc nang khach hang neu ra phai co menu tuong ung.
-8) Khong duoc gom tat ca thanh 1-2 menu tong quat neu yeu cau co nhieu module nghiep vu.
-9) So menu chuc nang (node la type_form!=0) phai phan anh day du cac nhom nghiep vu duoc neu trong yeu cau.
-
-## APP_ID DANG THIET KE
-${String(appId || "")}
-
-## BO MENU TYPE HE THONG DANG CO
-${typeCatalog}
-
-## NGUYEN TAC TO CHUC MENU (NGAN GON - BAT BUOC)
-${menuOrgGuide}
-
-## MENU HE THONG HIEN TAI (COMPACT REFERENCE)
-${compactMenuContext}
-${sampleMenuContext ? `\n## MENU MAU THAM KHAO TU CHUONG TRINH KHAC\nDay la menu thuc te da trien khai tu mot chuong trinh khac de ban tham khao cau truc, pattern, va logic nghiep vu:\n${sampleMenuContext}\n` : ""}
-## YEU CAU KHACH HANG
-${requestCore}
-
-## CHECKLIST MODULE BAT BUOC BAO PHU (TRICH TU YEU CAU)
-${moduleChecklist}
-
-## CHECKLIST BANG/ENTITY THAM KHAO (TRICH TU YEU CAU)
-${tableChecklist}
-
-## YEU CAU BAO PHU
-- Bat buoc doi chieu tung module trong checklist va tao menu/chuc nang tuong ung.
-- Neu thieu thong tin chi tiet cho mot module, van phai tao khung menu/table hop ly cho module do, khong duoc bo qua.
-- Trong notes, liet ke module nao da duoc bao phu de de doi chieu.
-
-## SCHEMA GUARDRAIL (BAT BUOC)
-- CHI dung table field theo format f_*: f_name, f_header, f_types, f_pkid, f_show, f_width, f_dec.
-- KHONG dung field generic: field, label, type, primaryKey, required, editable.
-- KHONG dung key "fields" o cap menu. BAT BUOC dung key "table" cho danh sach cot.
-- Trigger phai nam trong object "trigger": { "before_save": "...", "after_save": "..." }
-- KHONG dung key trigger_* o cap menu (vd: trigger_before_save, trigger_after_save).
-- GIA TRI trigger phai la JS code body thuc thi duoc voi dung chu ky:
-  before_save/after_save/update: (seft, data, bang) => return object
-  afterAdd/afterEdit/afterDelete: (allData, seft, data) => return any
-  load_db/report_db: (seft, db) => return Row[]
-- KHONG tra ve comment placeholder trong trigger code nhu "/* Validate */ return data" - thay vao do viet code that hoac ten template.
-  Ten template co san: validate_order_debt_limit, update_order_total, validate_order_item_stock,
-  recalculate_order_total, validate_delivery_item_stock, update_stock_on_delivery,
-  validate_receipt_item_quantity, update_stock_on_receipt.
-- Field select/combo (f_types co/coro/cbo) BAT BUOC co f_cbo_query KHONG RONG.
-  f_cbo_query phai la STRING va chi dung cac dang runtime sau:
-  + DANG 1 (query DB): "{\\"query\\":[{\\"obj_name\\":\\"ten_bang\\",\\"fields\\":[\\"id\\",\\"ten\\"],\\"obj_where\\":\\"\\"}],\\"options\\":[]}"
-  + DANG 2 (options tinh): "{\\"query\\":[],\\"options\\":[{\\"ma\\":\\"v1\\",\\"ten\\":\\"Nhan 1\\"}]}"
-  + DANG 3 (JS tinh toan): "var opts=[];...;return {f_grid:true,f_grid_fields:true,options:opts}"
-  + DANG 4 (JS doc data store): "var rows=data[\\"ten_bang\\"].rows||[];...;return {f_grid:true,f_grid_fields:true,options:opts}"
-  TUYET DOI KHONG de f_cbo_query rong ("") cho combo field.
-- parentId CUA MENU CON PHAI = id cua menu cha. KHONG de tat ca parentId = "" roi de children:[] rong o cha.
-  Dung: {"id":"dm_root","type_form":0,"children":[{"id":"dm_kh","parentId":"dm_root","type_form":1,...}]}
-  SAI:  {"id":"dm_root","type_form":0,"children":[]}, {"id":"dm_kh","parentId":"","type_form":1,...}
-- Rule click menu:
-  + Node nhom (type_form=0) phai co children[] khong rong.
-  + Node la (menu chuc nang) KHONG duoc de type_form=0.
-  + type_form=1/2/6 bat buoc co table_name.
-  + type_form=3 bat buoc co dynamic_link_url.
-  + type_form=4 bat buoc co auto_code_name.
-- Rule report noi bo:
-  + Bao cao noi bo dung report_name + trigger.report_db (route /system/grid/:menuId).
-  + KHONG duoc bien bao cao noi bo thanh type_form=3 + dynamic_link_url '/reports/...'.
-  + Neu co report_name thi uu tien type_form=1 (hoac type_form dang duoc yeu cau), KHONG dung type_form=3.
-- Neu yeu cau nghiep vu co ket noi master-detail, bao cao, combo phu thuoc: phai tao du trigger va f_cbo_query tuong ung.
-- Type 6 (Kanban Board): BAT BUOC theo luong moi:
-  + Co linked_data_menu_id tro toi menu task nguon co table_name/table.
-  + Co kanban_config hop le (JSON object) va tableName phai dong bo voi table_name.
-  + Co stageField/titleField/dueDateField va kpi.progressField hop le.
-  + Neu dung 2 bang thi BAT BUOC co linked_progress_menu_id va progressTracking.mode="separate_table".
-  + progressTracking (2 bang) phai co taskRefField/stageField/progressField/changedAtField.
-  + Uu tien dat appendOnly=true, writeBackMainTable=true cho progressTracking.
-- data_scope_override chi duoc dung 1 trong: NONE | ALL | OWNER | DEPARTMENT | BRANCH.
-- Neu yeu cau la bao cao/dashboard tong hop cua he thong, uu tien su dung report_name + trigger.report_db + cac field loc trong table de runtime CsmReport tu render.
-- Chi dung dynamic_link_url khi thuc su can dieu huong sang mot URL/route ben ngoai co san.
-- Semantic field mapping:
-  + cac field gia/ngan sach/chi phi/doanh thu/tong_tien -> f_types="price"
-  + field trang_thai/loai/nguon/muc_do -> f_types="co" + f_cbo_query
-
-## CHECKLIST TU KIEM TRA TRUOC KHI TRA KET QUA
-- Doi chieu tung dau muc yeu cau khach hang -> da co menu/field/trigger tuong ung chua.
-- So luong menu chuc nang da du theo so nhom nghiep vu khach hang yeu cau (khong tra ve qua it).
-- Khong co menu type_form=0 dang la node la.
-- Khong co menu report noi bo bi doi sang dynamic_link_url.
-- Cac field tien te/ngan sach da dung f_types="price".
-- Menu type 6 co day du linked_data_menu_id va (neu 2 bang) linked_progress_menu_id + progressTracking.
-
-## OUTPUT SHAPE (SCHEMA)
-- Moi menu item uu tien co day du key: id, label, trigger, m_icons, field_root, report_name,
-  orientation, p_width, p_height, m_show, g_readonly, data_scope_override, table_name, type_menu, type_form,
-  row_type_edit, dev, prefix_pk, table_pagesize, menu_id, parentId, children.
-- Rieng menu type_form=6 uu tien co them: linked_data_menu_id, linked_progress_menu_id (neu 2 bang),
-  kanban_progress_tracking_mode, kanban_stage_field, kanban_title_field, kanban_due_date_field,
-  kanban_progress_field, kanban_progress_task_ref_field, kanban_progress_stage_log_field,
-  kanban_progress_percent_log_field, kanban_progress_time_field, kanban_progress_note_field,
-  kanban_progress_actor_field, kanban_done_stage_ids.
-- Moi field trong table uu tien co key: id, f_name, f_pkid, f_sort, f_align, f_stt, f_header,
-  f_filter, f_width, f_sorting, f_types, f_show, f_cbo_query, f_dec, f_showgrid, f_showonreport, f_alert_query.
-
-## DINH DANG DAU RA BAT BUOC
-{ "menu": [...], "notes": [...], "warnings": [...], "coverage_modules": [...], "coverage_tables": [...], "unresolved_assumptions": [...] }
-TUYET DOI KHONG tra ve JSON array don thuan ([ ... ]) hay chuoi text. Chi tra ve JSON object { "menu": [...] } duy nhat.
-
-## LUU Y TOKEN
-Khong lap lai JSON mau dai. Tap trung logic nghiep vu va tra ve JSON menu hoan chinh, dung schema.`;
-
-  return trimToMax(prompt, 26000);
+  return {
+    request_schema: "csm.ai.menu.request.v2",
+    system_core: "backend_master_prompt",
+    app_id_specific_metadata: {
+      app_id: String(appId || ""),
+      menu_type_catalog: buildMenuTypeCatalog(),
+      menu_logic_guide: buildMenuOrganizationGuide(),
+      current_menu_compact: currentMenuCompact,
+      ...(sampleMenuCompact ? { sample_menu_compact: sampleMenuCompact } : {}),
+      detected_modules: extractRequirementModules(normalizedRequest, 20),
+      detected_tables: extractRequirementTables(normalizedRequest, 30),
+      context_files: (contextFiles || []).map((file) => ({
+        name: file.name,
+        summary: file.summary,
+        content: trimToMax(file.content, MAX_CONTEXT_FILE_CHARS),
+      })),
+    },
+    current_task: {
+      task_type: "menu_design_generate",
+      scope,
+      requirement_text: normalizedRequest,
+    },
+    output_contract: {
+      format: "json_object",
+      root_key: "menu",
+      include_meta: ["notes", "warnings", "coverage_modules", "coverage_tables", "unresolved_assumptions"],
+    },
+  };
 }
 
-function buildRefinementPrompt(
+export function buildAiMenuRefinePayload(
   appId: string | undefined,
   baseRequest: string,
   refineRequest: string,
@@ -646,184 +532,46 @@ function buildRefinementPrompt(
   currentMenus?: MenuItemType[],
   sampleMenus?: MenuItemType[],
   isSampleBase?: boolean,
-): string {
-  const referenceMenus = Array.isArray(currentMenus) && currentMenus.length > 0
-    ? currentMenus
-    : [];
+  contextFiles?: JsonContextFile[],
+) {
+  const combinedRequirement = trimToMax(`${baseRequest || ""}\n${refineRequest || ""}`.trim(), 16000);
 
-  const enforcerPrompt = trimToMax(AI_PROMPTS.EXTRACTION_AND_VALIDATION || "", 4500);
-  const sysArchContext = trimToMax(AI_PROMPTS.SYSTEM_ARCHITECTURE || "", 7000);
-  const mainPrompt = trimToMax(AI_PROMPTS.MAIN_MENU_DESIGNER || "", 5000);
-  const extractorPrompt = trimToMax(AI_PROMPTS.REQUIREMENT_EXTRACTOR || "", 1000);
-  const selectorGuide = trimToMax(AI_PROMPTS.TYPE_SELECTION_GUIDE || "", 1400);
-
-  const requestCore = trimToMax(baseRequest || "(khong co)", 9000);
-  const refineCore = trimToMax(refineRequest || "", 4000);
-  const detectedModules = extractRequirementModules(`${baseRequest || ""}\n${refineRequest || ""}`, 25);
-  const detectedTables = extractRequirementTables(`${baseRequest || ""}\n${refineRequest || ""}`, 40);
-  const moduleChecklist = detectedModules.length > 0
-    ? detectedModules.map((item, idx) => `${idx + 1}. ${item}`).join("\n")
-    : "(khong trich xuat duoc module ro rang; AI phai tu phan tich day du theo yeu cau)";
-  const tableChecklist = detectedTables.length > 0
-    ? detectedTables.map((item, idx) => `${idx + 1}. ${item}`).join("\n")
-    : "(khong co ten bang ro rang trong yeu cau)";
-  const currentMenuContext = referenceMenus.length > 0
-    ? buildCompactMenuContext(referenceMenus, 120)
-    : "(khong co menu he thong hien tai de tham chieu)";
-  const previousMenuContext = buildPreviousResultContext(previousResultJson, 80);
-  const previousMenuContextFull = isSampleBase
-    ? buildFullMenuContextFromJson(previousResultJson)
-    : "";
-  const strictScope = scope === "minimal" ? "uu tien type 1/2/6, chi dung 3/4 khi yeu cau ro" : "duoc dung day du type 1/2/3/4/6";
-  const typeCatalog = buildMenuTypeCatalog();
-  const menuOrgGuide = buildMenuOrganizationGuide();
-  const sampleMenuContext = !isSampleBase && sampleMenus && sampleMenus.length > 0
-    ? buildCompactMenuContext(sampleMenus, 100)
-    : null;
-
-  const taskHeader = isSampleBase
-    ? `## NHIEM VU ADAPT MENU MAU THEO YEU CAU MOI
-Day la menu thuc te tu mot ung dung khac. Hay chinh sua, adapt va mo rong de phu hop voi nghiep vu khach hang moi:
-1) GIU NGUYEN nhung phan tot: table_name, f_* fields hop le, trigger logic dung, cau truc cha-con.
-2) CHINH SUA theo yeu cau: doi label, them/bo/doi ten truong, cap nhat logic nghiep vu trigger.
-3) THEM MOI chuc nang ma khach hang can nhung menu mau chua co.
-4) Dam bao schema MenuItemType hop le va ${strictScope}.
-5) Tra ve TOAN BO menu sau khi adapt (khong tra ve delta).`
-    : `## NHIEM VU REFINE (TOI UU TOKEN)
-Ban da co ket qua menu lan truoc. Hay cap nhat theo yeu cau moi voi nguyen tac:
-1) Giu on dinh phan dung, chi sua phan can thay doi.
-2) Van tra ve TOAN BO menu sau khi cap nhat (khong tra ve delta).
-3) Dam bao schema MenuItemType hop le va ${strictScope}.
-4) Neu thong tin chua du, dua ra gia dinh hop ly va ghi vao warnings.
-5) Chuan hoa lai cac menu cu chua dung schema (field generic, trigger sai cho, combo sai format).
-6) KHONG don gian hoa qua muc: giu day du cac module nghiep vu theo yeu cau goc + yeu cau bo sung.
-7) Giu on dinh id/menu_id/path/parentId khi refine, chi sua phan duoc yeu cau.`;
-
-  const previousResultLabel = isSampleBase
-    ? "## MENU MAU DUNG LAM GOC (FULL JSON - UU TIEN CAO NHAT)"
-    : "## TOM TAT KET QUA AI LAN TRUOC (COMPACT)";
-
-  const prompt = `${enforcerPrompt}
-
-${sysArchContext}
-
-${mainPrompt}
-
-${extractorPrompt}
-
-${selectorGuide}
-
-${taskHeader}
-
-## APP_ID DANG THIET KE
-${String(appId || "")}
-
-## BO MENU TYPE HE THONG DANG CO
-${typeCatalog}
-
-## NGUYEN TAC TO CHUC MENU (NGAN GON - BAT BUOC)
-${menuOrgGuide}
-
-## YEU CAU GOC (RUT GON)
-${requestCore}
-
-## YEU CAU BO SUNG MOI (UU TIEN CAO NHAT)
-${refineCore}
-
-## CHECKLIST MODULE BAT BUOC BAO PHU (TRICH TU YEU CAU GOC + BO SUNG)
-${moduleChecklist}
-
-## CHECKLIST BANG/ENTITY THAM KHAO (TRICH TU YEU CAU GOC + BO SUNG)
-${tableChecklist}
-
-## YEU CAU BAO PHU
-- Bat buoc doi chieu tung module trong checklist va tao/giu menu/chuc nang tuong ung.
-- Khong duoc lam mat module da co neu yeu cau bo sung khong yeu cau loai bo.
-- Trong warnings/notes, neu module nao chua du thong tin thi ghi ro gia dinh da dung.
-
-## MENU HE THONG HIEN TAI (COMPACT REFERENCE)
-${currentMenuContext}
-${sampleMenuContext ? `\n## MENU MAU THAM KHAO TU CHUONG TRINH KHAC\nDay la menu thuc te da trien khai tu mot chuong trinh khac de ban tham khao cau truc, pattern, va logic nghiep vu:\n${sampleMenuContext}\n` : ""}
-${previousResultLabel}
-${isSampleBase ? previousMenuContextFull : previousMenuContext}
-
-## SCHEMA GUARDRAIL (BAT BUOC)
-- CHI dung table field theo format f_*: f_name, f_header, f_types, f_pkid, f_show, f_width, f_dec.
-- KHONG dung field generic: field, label, type, primaryKey, required, editable.
-- KHONG dung key "fields" o cap menu. BAT BUOC dung key "table" cho danh sach cot.
-- Trigger phai nam trong object "trigger": { "before_save": "...", "after_save": "..." }
-- KHONG dung key trigger_* o cap menu (vd: trigger_before_save, trigger_after_save).
-- GIA TRI trigger phai la JS code body thuc thi duoc voi dung chu ky:
-  before_save/after_save/update: (seft, data, bang) => return object
-  afterAdd/afterEdit/afterDelete: (allData, seft, data) => return any
-  load_db/report_db: (seft, db) => return Row[]
-- KHONG tra ve comment placeholder nhu "/* Validate */ return data". Viet code that hoac ten template co san:
-  validate_order_debt_limit, update_order_total, validate_order_item_stock, recalculate_order_total,
-  validate_delivery_item_stock, update_stock_on_delivery, validate_receipt_item_quantity, update_stock_on_receipt.
-- Field select/combo (f_types co/coro/cbo) BAT BUOC co f_cbo_query KHONG RONG.
-  f_cbo_query phai la STRING va chi dung cac dang runtime sau:
-  + DANG 1 (query DB): "{\\"query\\":[{\\"obj_name\\":\\"ten_bang\\",\\"fields\\":[\\"id\\",\\"ten\\"],\\"obj_where\\":\\"\\"}],\\"options\\":[]}"
-  + DANG 2 (options tinh): "{\\"query\\":[],\\"options\\":[{\\"ma\\":\\"v1\\",\\"ten\\":\\"Nhan 1\\"}]}"
-  + DANG 3 (JS tinh toan): "var opts=[];...;return {f_grid:true,f_grid_fields:true,options:opts}"
-  + DANG 4 (JS doc data store): "var rows=data[\\"ten_bang\\"].rows||[];...;return {f_grid:true,f_grid_fields:true,options:opts}"
-  TUYET DOI KHONG de f_cbo_query rong ("") cho combo field.
-- parentId CUA MENU CON PHAI = id cua menu cha. KHONG de tat ca parentId = "" roi de children:[] rong o cha.
-  Dung: {"id":"dm_root","type_form":0,"children":[{"id":"dm_kh","parentId":"dm_root","type_form":1,...}]}
-  SAI:  {"id":"dm_root","type_form":0,"children":[]}, {"id":"dm_kh","parentId":"","type_form":1,...}
-- Rule click menu:
-  + Node nhom (type_form=0) phai co children[] khong rong.
-  + Node la (menu chuc nang) KHONG duoc de type_form=0.
-  + type_form=1/2/6 bat buoc co table_name.
-  + type_form=3 bat buoc co dynamic_link_url.
-  + type_form=4 bat buoc co auto_code_name.
-- Rule report noi bo:
-  + Bao cao noi bo dung report_name + trigger.report_db (route /system/grid/:menuId).
-  + KHONG duoc bien bao cao noi bo thanh type_form=3 + dynamic_link_url '/reports/...'.
-  + Neu co report_name thi uu tien type_form=1 (hoac type_form dang duoc yeu cau), KHONG dung type_form=3.
-- Neu refine tu menu cu: giu id/menu_id/path/menu cha-con toi da, chi thay doi phan duoc yeu cau.
-- Type 6 (Kanban Board) BAT BUOC theo luong moi:
-  + Co linked_data_menu_id tro toi menu task nguon co table_name/table.
-  + Co kanban_config hop le (JSON object) va tableName dong bo voi table_name.
-  + Co stageField/titleField/dueDateField va kpi.progressField hop le.
-  + Neu dung 2 bang thi BAT BUOC co linked_progress_menu_id va progressTracking.mode="separate_table".
-  + progressTracking (2 bang) phai co taskRefField/stageField/progressField/changedAtField.
-  + Uu tien dat appendOnly=true, writeBackMainTable=true cho progressTracking.
-- data_scope_override chi duoc dung 1 trong: NONE | ALL | OWNER | DEPARTMENT | BRANCH.
-- Neu menu mang tinh chat bao cao/dashboard tong hop thi uu tien report_name + trigger.report_db thay vi path crm/reports/dashboard.
-- Neu AI xuat menu ten Dashboard/Bao cao tong hop/KPI ma lai khong co report_name hoac auto_code_name thi phai tu sua lai truoc khi tra ket qua.
-- KHONG tu them module/tinh nang khong co trong yeu cau goc + yeu cau bo sung.
-- Semantic field mapping:
-  + cac field gia/ngan sach/chi phi/doanh thu/tong_tien -> f_types="price"
-  + field trang_thai/loai/nguon/muc_do -> f_types="co" + f_cbo_query
-
-## CHECKLIST TU KIEM TRA TRUOC KHI TRA KET QUA
-- Doi chieu tung dau muc yeu cau goc + yeu cau bo sung -> da co menu/field/trigger tuong ung chua.
-- So luong menu chuc nang da du theo so nhom nghiep vu duoc yeu cau (khong tra ve qua it).
-- Khong co menu type_form=0 dang la node la.
-- Khong co menu report noi bo bi doi sang dynamic_link_url.
-- Cac field tien te/ngan sach da dung f_types="price".
-- Menu type 6 co day du linked_data_menu_id va (neu 2 bang) linked_progress_menu_id + progressTracking.
-
-## OUTPUT SHAPE (SCHEMA)
-- Moi menu item uu tien co day du key: id, label, trigger, m_icons, field_root, report_name,
-  orientation, p_width, p_height, m_show, g_readonly, data_scope_override, table_name, type_menu, type_form,
-  row_type_edit, dev, prefix_pk, table_pagesize, menu_id, parentId, children.
-- Rieng menu type_form=6 uu tien co them: linked_data_menu_id, linked_progress_menu_id (neu 2 bang),
-  kanban_progress_tracking_mode, kanban_stage_field, kanban_title_field, kanban_due_date_field,
-  kanban_progress_field, kanban_progress_task_ref_field, kanban_progress_stage_log_field,
-  kanban_progress_percent_log_field, kanban_progress_time_field, kanban_progress_note_field,
-  kanban_progress_actor_field, kanban_done_stage_ids.
-- Moi field trong table uu tien co key: id, f_name, f_pkid, f_sort, f_align, f_stt, f_header,
-  f_filter, f_width, f_sorting, f_types, f_show, f_cbo_query, f_dec, f_showgrid, f_showonreport, f_alert_query.
-
-## DINH DANG DAU RA BAT BUOC
-{ "menu": [...], "notes": [...], "warnings": [...], "coverage_modules": [...], "coverage_tables": [...], "unresolved_assumptions": [...] }
-
-## LUU Y TOKEN
-Khong lap lai JSON mau dai. Chi tap trung logic nghiep vu va tra ve JSON menu hoan chinh, dung schema.
-`;
-
-  return isSampleBase ? prompt : trimToMax(prompt, 30000);
+  return {
+    request_schema: "csm.ai.menu.request.v2",
+    system_core: "backend_master_prompt",
+    app_id_specific_metadata: {
+      app_id: String(appId || ""),
+      menu_type_catalog: buildMenuTypeCatalog(),
+      menu_logic_guide: buildMenuOrganizationGuide(),
+      current_menu_compact: Array.isArray(currentMenus) && currentMenus.length > 0
+        ? buildCompactMenuContext(currentMenus, 120)
+        : "(khong co menu hien tai)",
+      sample_menu_compact: Array.isArray(sampleMenus) && sampleMenus.length > 0
+        ? buildCompactMenuContext(sampleMenus, 100)
+        : undefined,
+      detected_modules: extractRequirementModules(combinedRequirement, 25),
+      detected_tables: extractRequirementTables(combinedRequirement, 40),
+      context_files: (contextFiles || []).map((file) => ({
+        name: file.name,
+        summary: file.summary,
+        content: trimToMax(file.content, MAX_CONTEXT_FILE_CHARS),
+      })),
+    },
+    current_task: {
+      task_type: "menu_design_refine",
+      scope,
+      base_requirement_text: trimToMax(String(baseRequest || ""), 9000),
+      refine_requirement_text: trimToMax(String(refineRequest || ""), 5000),
+      requirement_text: combinedRequirement,
+      previous_result_json: trimToMax(String(previousResultJson || ""), isSampleBase ? 90000 : 30000),
+      use_sample_as_base: !!isSampleBase,
+    },
+    output_contract: {
+      format: "json_object",
+      root_key: "menu",
+      include_meta: ["notes", "warnings", "coverage_modules", "coverage_tables", "unresolved_assumptions"],
+    },
+  };
 }
 
 function trimToMax(text: string, maxChars: number): string {
@@ -2302,9 +2050,15 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
       return;
     }
 
-    const basePrompt = promptOverride || buildPromptWithRequirement(appId, inputRequest, scope, currentMenus, sampleMenuParsed || undefined);
-    const continuityAppendix = buildAppContextAppendix(appId, storedRequest, storedLastResult, contextFiles);
-    const prompt = trimToMax(`${basePrompt}\n\n${continuityAppendix}`, 120000);
+    const prompt = trimToMax(
+      promptOverride
+        || JSON.stringify(
+          buildAiMenuRequestPayload(appId, inputRequest, scope, currentMenus, sampleMenuParsed || undefined, contextFiles),
+          null,
+          2,
+        ),
+      120000,
+    );
     setLoading(true);
     setAiMenus(null);
     setAiOutputMeta({ coverageModules: [], coverageTables: [], unresolvedAssumptions: [] });
@@ -2407,14 +2161,20 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
       const severeIssues = detectSevereAiOutputIssues(normalized, inputRequest);
       if (severeIssues.length > 0 && attempt < 1) {
         const autoRefineText = buildAutoRepairRefineText(severeIssues);
-        const autoRepairPrompt = buildRefinementPrompt(
-          appId,
-          inputRequest,
-          autoRefineText,
-          JSON.stringify(output),
-          "complete",
-          currentMenus,
-          sampleMenuParsed || undefined,
+        const autoRepairPrompt = JSON.stringify(
+          buildAiMenuRefinePayload(
+            appId,
+            inputRequest,
+            autoRefineText,
+            JSON.stringify(output),
+            "complete",
+            currentMenus,
+            sampleMenuParsed || undefined,
+            false,
+            contextFiles,
+          ),
+          null,
+          2,
         );
 
         setAiProgress({
@@ -2483,14 +2243,20 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
       return;
     }
 
-    const prompt = buildRefinementPrompt(
-      appId,
-      storedRequest,
-      refineText,
-      aiResultText,
-      "complete",
-      currentMenus,
-      sampleMenuParsed || undefined,
+    const prompt = JSON.stringify(
+      buildAiMenuRefinePayload(
+        appId,
+        storedRequest,
+        refineText,
+        aiResultText,
+        "complete",
+        currentMenus,
+        sampleMenuParsed || undefined,
+        false,
+        contextFiles,
+      ),
+      null,
+      2,
     );
 
     const combinedRequest = [
@@ -2514,14 +2280,20 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
           return;
         }
 
-        const prompt = buildRefinementPrompt(
-          appId,
-          storedRequest || mergedRequestText,
-          diffRequest,
-          storedLastResult,
-          "complete",
-          currentMenus,
-          sampleMenuParsed || undefined,
+        const prompt = JSON.stringify(
+          buildAiMenuRefinePayload(
+            appId,
+            storedRequest || mergedRequestText,
+            diffRequest,
+            storedLastResult,
+            "complete",
+            currentMenus,
+            sampleMenuParsed || undefined,
+            false,
+            contextFiles,
+          ),
+          null,
+          2,
         );
 
         const combinedRequest = [
@@ -2537,15 +2309,20 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
 
     if (sampleUseAsBase && sampleMenuParsed && sampleMenuParsed.length > 0) {
       const baseJson = JSON.stringify({ menu: sampleMenuParsed }, null, 2);
-      const prompt = buildRefinementPrompt(
-        appId,
-        "",
-        mergedRequestText,
-        baseJson,
-        "complete",
-        currentMenus,
-        sampleMenuParsed || undefined,
-        true,
+      const prompt = JSON.stringify(
+        buildAiMenuRefinePayload(
+          appId,
+          "",
+          mergedRequestText,
+          baseJson,
+          "complete",
+          currentMenus,
+          sampleMenuParsed || undefined,
+          true,
+          contextFiles,
+        ),
+        null,
+        2,
       );
       await runGenerate(mergedRequestText, "complete", prompt);
     } else {

@@ -14,13 +14,21 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.io.Resource;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.core.io.FileSystemResource;
+import org.springframework.stereotype.Service;
+import org.springframework.util.StreamUtils;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.stereotype.Service;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
+import java.nio.charset.StandardCharsets;
+import java.io.InputStream;
+import java.io.IOException;
+
 
 /**
  * Fallback service for oversized prompts routed to GitHub Models API.
@@ -28,6 +36,48 @@ import org.springframework.web.client.RestTemplate;
  */
 @Service
 public class GitHubModelsService {
+
+  // Cached master prompt content
+  private volatile String masterPrompt = null;
+
+  // Path to master prompt file, configurable via application.properties
+  @Value("${github.models.master-prompt-path:classpath:csm_datas/public/ai_menu_master_prompt.md}")
+  private String masterPromptPath;
+
+  /**
+   * Load the master prompt (system core) from resource file, cache for reuse.
+   * Path is configurable via github.models.master-prompt-path property.
+   */
+  public String getMasterPrompt() {
+    if (masterPrompt != null) return masterPrompt;
+    synchronized (this) {
+      if (masterPrompt != null) return masterPrompt;
+      try {
+        Resource resource = resolveResource(masterPromptPath);
+        try (InputStream in = resource.getInputStream()) {
+          masterPrompt = StreamUtils.copyToString(in, StandardCharsets.UTF_8);
+          return masterPrompt;
+        }
+      } catch (IOException e) {
+        throw new RuntimeException("Không đọc được master prompt từ: " + masterPromptPath, e);
+      }
+    }
+  }
+
+  /**
+   * Helper to resolve resource from path (classpath: or file: supported)
+   */
+  private Resource resolveResource(String path) {
+    if (path == null) throw new IllegalArgumentException("masterPromptPath is null");
+    if (path.startsWith("classpath:")) {
+      return new ClassPathResource(path.substring("classpath:".length()));
+    } else if (path.startsWith("file:")) {
+      return new FileSystemResource(path.substring("file:".length()));
+    } else {
+      // Default to classpath
+      return new ClassPathResource(path);
+    }
+  }
 
   public interface ProgressListener {
     void onProgress(Map<String, Object> progress);
@@ -110,6 +160,11 @@ public class GitHubModelsService {
   @Value("${github.models.token:}")
   private String token;
 
+
+  /**
+   * Prepend system core (master prompt) to every prompt sent to AI.
+   * The prompt argument should be the dynamic context (app_id, metadata, task, etc).
+   */
   public String generateContent(String prompt) {
     return generateContent(prompt, null);
   }
@@ -118,6 +173,10 @@ public class GitHubModelsService {
     if (!enabled) {
       return createErrorJson("GitHub Models fallback đang tắt", "GITHUB_MODELS_DISABLED");
     }
+    String systemCore = getMasterPrompt();
+    if (systemCore == null || systemCore.trim().isEmpty()) {
+      return createErrorJson("Không load được System Core (master prompt)", "MASTER_PROMPT_MISSING");
+    }
     if (prompt == null || prompt.trim().isEmpty()) {
       return createErrorJson("Prompt không được để trống", "INVALID_PROMPT");
     }
@@ -125,19 +184,22 @@ public class GitHubModelsService {
       return createErrorJson("Thiếu github.models.token để gọi GitHub Models API", "GITHUB_TOKEN_MISSING");
     }
 
-    if (prompt.length() > maxPromptChars) {
+    // Compose final prompt: [System_Core]\n\n[Dynamic_Context]
+    String finalPrompt = systemCore.trim() + "\n\n" + prompt.trim();
+
+    if (finalPrompt.length() > maxPromptChars) {
       return createErrorJson(
-          "Prompt quá dài cho GitHub fallback (tối đa " + maxPromptChars + " ký tự), hiện tại: " + prompt.length(),
+          "Prompt quá dài cho GitHub fallback (tối đa " + maxPromptChars + " ký tự), hiện tại: " + finalPrompt.length(),
           "GITHUB_PROMPT_TOO_LARGE");
     }
 
     emitProgress(progressListener, progressPayload("preparing", "Đang chuẩn bị yêu cầu AI", 0, 1, null));
 
-    if (prompt.length() > directMaxChars) {
-      return generateLargePromptContent(prompt, progressListener);
+    if (finalPrompt.length() > directMaxChars) {
+      return generateLargePromptContent(finalPrompt, progressListener);
     }
 
-    return generateDirectContent(prompt, progressListener);
+    return generateDirectContent(finalPrompt, progressListener);
   }
 
   private String generateDirectContent(String prompt, ProgressListener progressListener) {

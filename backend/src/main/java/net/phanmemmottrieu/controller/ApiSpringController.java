@@ -565,6 +565,56 @@ public class ApiSpringController {
         return null;
     }
 
+    private String extractPromptAsString(Map<String, Object> params) {
+        if (params == null) {
+            return null;
+        }
+        Object promptValue = params.get("prompt");
+        if (promptValue == null) {
+            return null;
+        }
+        if (promptValue instanceof String) {
+            return (String) promptValue;
+        }
+
+        // Accept structured payloads and serialize them to JSON so AI receives full context.
+        if (promptValue instanceof Map<?, ?> || promptValue instanceof List<?>) {
+            try {
+                return objectMapper.writeValueAsString(promptValue);
+            } catch (Exception e) {
+                logger.warn("Failed to serialize non-string prompt payload, fallback to toString(): {}", e.getMessage());
+                return String.valueOf(promptValue);
+            }
+        }
+
+        return String.valueOf(promptValue);
+    }
+
+    @SuppressWarnings("unchecked")
+    private String extractTaskTypeFromPromptJson(String prompt) {
+        if (prompt == null || prompt.isBlank()) {
+            return null;
+        }
+        try {
+            Map<String, Object> parsed = objectMapper.readValue(prompt, Map.class);
+            Object directTaskType = parsed.get("taskType");
+            if (directTaskType instanceof String && !((String) directTaskType).isBlank()) {
+                return ((String) directTaskType).trim();
+            }
+
+            Object currentTaskObj = parsed.get("current_task");
+            if (currentTaskObj instanceof Map<?, ?> currentTask) {
+                Object taskTypeObj = ((Map<String, Object>) currentTask).get("task_type");
+                if (taskTypeObj instanceof String && !((String) taskTypeObj).isBlank()) {
+                    return ((String) taskTypeObj).trim();
+                }
+            }
+        } catch (Exception ignored) {
+            // Prompt may be plain text; ignore parse errors.
+        }
+        return null;
+    }
+
     private boolean shouldExposeRoutingDebug(Map<String, Object> params) {
         boolean requested = (params != null && Boolean.TRUE.equals(params.get("includeRoutingDebug")))
                 || "true".equalsIgnoreCase(String.valueOf(params != null ? params.get("includeRoutingDebug") : null));
@@ -653,7 +703,7 @@ public class ApiSpringController {
             return;
         }
 
-        String prompt = (String) params.get("prompt");
+        String prompt = extractPromptAsString(params);
         boolean asyncRequested = "submit".equals(mode)
                 || Boolean.TRUE.equals(params.get("async"))
                 || "true".equalsIgnoreCase(String.valueOf(params.get("async")));
@@ -711,7 +761,8 @@ public class ApiSpringController {
     private String fetchAiRawContent(String prompt, GitHubModelsService.ProgressListener progressListener, Map<String, Object> params) {
         String taskTypeRaw = firstNonBlankString(
                 params != null ? params.get("taskType") : null,
-                params != null ? params.get("task") : null
+            params != null ? params.get("task") : null,
+            extractTaskTypeFromPromptJson(prompt)
         );
         String taskType = taskTypeRaw == null ? "" : taskTypeRaw.toLowerCase();
 
