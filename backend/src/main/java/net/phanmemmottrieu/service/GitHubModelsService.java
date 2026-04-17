@@ -184,8 +184,13 @@ public class GitHubModelsService {
       return createErrorJson("Thiếu github.models.token để gọi GitHub Models API", "GITHUB_TOKEN_MISSING");
     }
 
-    // Compose final prompt: [System_Core]\n\n[Dynamic_Context]
-    String finalPrompt = systemCore.trim() + "\n\n" + prompt.trim();
+    // Inject scenario-specific instructions between master prompt and dynamic context
+    String scenarioContext = buildScenarioContext(prompt);
+
+    // Compose final prompt: [System_Core]\n\n[Scenario_Context?]\n\n[Dynamic_Context]
+    String finalPrompt = scenarioContext != null && !scenarioContext.isBlank()
+        ? systemCore.trim() + "\n\n" + scenarioContext.trim() + "\n\n" + prompt.trim()
+        : systemCore.trim() + "\n\n" + prompt.trim();
 
     if (finalPrompt.length() > maxPromptChars) {
       return createErrorJson(
@@ -773,6 +778,90 @@ public class GitHubModelsService {
       merged.put("percent", Math.max(0, Math.min(100, (int) Math.round((Math.min(current, total) * 100.0) / total))));
     }
     return merged;
+  }
+
+  // ── 3-Scenario Context Injection ──────────────────────────────────────────
+
+  /**
+   * Supported operation scenarios matching frontend OperationScenario type.
+   */
+  private enum AiMenuOperationScenario {
+    NEW_BUILD,
+    INCREMENTAL_UPDATE,
+    PROPERTY_EDIT,
+    UNKNOWN
+  }
+
+  /**
+   * Detect the operation_scenario from the prompt JSON payload.
+   * Returns UNKNOWN if not a menu-design prompt or field is absent.
+   */
+  private AiMenuOperationScenario extractOperationScenario(String prompt) {
+    if (prompt == null || prompt.isBlank()) return AiMenuOperationScenario.UNKNOWN;
+    // Fast pre-check: must contain the field to bother parsing
+    if (!prompt.contains("operation_scenario")) return AiMenuOperationScenario.UNKNOWN;
+
+    try {
+      // The prompt may be a large JSON – parse only the top-level to find operation_scenario
+      @SuppressWarnings("unchecked")
+      Map<String, Object> root = objectMapper.readValue(prompt.trim(), Map.class);
+      Object raw = root.get("operation_scenario");
+      if (raw == null) return AiMenuOperationScenario.UNKNOWN;
+      String value = String.valueOf(raw).toLowerCase().trim();
+      return switch (value) {
+        case "new_build" -> AiMenuOperationScenario.NEW_BUILD;
+        case "incremental_update" -> AiMenuOperationScenario.INCREMENTAL_UPDATE;
+        case "property_edit" -> AiMenuOperationScenario.PROPERTY_EDIT;
+        default -> AiMenuOperationScenario.UNKNOWN;
+      };
+    } catch (Exception e) {
+      log.debug("Could not parse operation_scenario from prompt: {}", e.getMessage());
+      return AiMenuOperationScenario.UNKNOWN;
+    }
+  }
+
+  /**
+   * Build a scenario-specific guardrail block to inject between master prompt and dynamic context.
+   * Returns null/empty when no scenario-specific guardrail is needed.
+   */
+  private String buildScenarioContext(String prompt) {
+    AiMenuOperationScenario scenario = extractOperationScenario(prompt);
+    return switch (scenario) {
+      case NEW_BUILD -> """
+          ## ACTIVE SCENARIO: NEW_BUILD
+          You are designing a COMPLETE menu tree from scratch.
+          MANDATORY RULES:
+          - Analyze the business requirement thoroughly and create ALL necessary modules.
+          - Every functional menu node MUST have: type_form, table_name (for type 1/2/6), and table fields.
+          - Group menus logically: top-level nodes are type_form=0 groups; leaf nodes are functional (type 1/2/3/4/6).
+          - Return COMPLETE menu JSON in the envelope: { "menu": [...], "notes": [], "warnings": [], "coverage_modules": [], "coverage_tables": [] }
+          - Do NOT truncate or summarize. Output the full tree.
+          """;
+      case INCREMENTAL_UPDATE -> """
+          ## ACTIVE SCENARIO: INCREMENTAL_UPDATE
+          You are performing a PARTIAL UPDATE on an EXISTING menu tree.
+          MANDATORY RULES (VIOLATION = INVALID RESPONSE):
+          1. Return THE ENTIRE menu tree including ALL existing nodes you did NOT change.
+          2. NEVER omit, truncate, or summarize nodes that are not affected by the change request.
+          3. Only ADD new nodes, EDIT specified nodes, or MARK for deletion nodes explicitly requested.
+          4. Preserve all existing: id, parentId, menu_id, path, type_form, table_name, trigger.
+          5. For any NEW node added: must include complete table fields and type_form.
+          6. Return format: { "menu": [FULL_TREE], "notes": [...], "warnings": [...] }
+          7. If current_menu_full_json is present in the payload, use it as the authoritative base.
+          """;
+      case PROPERTY_EDIT -> """
+          ## ACTIVE SCENARIO: PROPERTY_EDIT
+          You are editing ONLY the specified properties of ONE specific menu node.
+          MANDATORY RULES (VIOLATION = INVALID RESPONSE):
+          1. Return ONLY the modified node object under key "menu_node".
+          2. Keep UNCHANGED: id, parentId, menu_id, and any fields not explicitly mentioned in the request.
+          3. For table fields: preserve all existing fields; only add/modify what is requested.
+          4. For trigger: preserve all existing trigger functions; only add/modify what is requested.
+          5. Return format: { "menu_node": { ...modified_node... }, "notes": [...], "warnings": [...] }
+          6. Do NOT return a menu array. Return only the single node object.
+          """;
+      default -> null;
+    };
   }
 
   private String createSuccessJson(Object result, String mode, Map<String, Object> metadata) {

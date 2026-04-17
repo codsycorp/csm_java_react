@@ -475,6 +475,52 @@
 				"loadFailed": "Cannot load sample menu from app {{appId}}: {{error}}",
 				"refineInfoBase": "Sample menu from {{app}} is included in refinement prompt (base mode: AI continues editing on that menu)",
 				"refineInfoReference": "Sample menu from {{app}} is included in refinement prompt (reference mode)"
+			},
+			"operationScenario": {
+				"label": "Select operation scenario:",
+				"newBuildTitle": "Scenario 1: Build from scratch",
+				"newBuildDesc": "AI analyzes the business description and designs the entire menu tree",
+				"incrementalTitle": "Scenario 2: Incremental update",
+				"incrementalDesc": "Add/edit/delete a few modules — AI returns the FULL updated tree",
+				"propertyTitle": "Scenario 3: Edit one specific menu",
+				"propertyDesc": "Select exactly one menu node, AI changes only the requested fields"
+			},
+			"incremental": {
+				"alertTitle": "Scenario 2: Incremental update — AI returns the FULL menu tree",
+				"requestLabel": "Describe the requested changes:",
+				"requestPlaceholder": "Example: Add an HR module with Employee List, Payroll, Attendance. Convert Revenue Report to Master-Detail. Delete the test module...",
+				"generateButton": "Update menu with AI",
+				"enterRequest": "Please enter the requested change description",
+				"noBaseMenu": "There is no current menu to update. Use the New Build scenario first.",
+				"mergeComputed": "Jackson computed precise add/edit/delete changes"
+			},
+			"property": {
+				"alertTitle": "Scenario 3: Edit properties of one menu node",
+				"alertDesc": "Choose a menu from the list, its JSON appears in the editor below and can be edited manually. Enter a request and AI changes only the specified fields.",
+				"selectNodeLabel": "Select menu node to edit:",
+				"selectNodePlaceholder": "Select a menu node...",
+				"selectNodeRequired": "Please select the menu node to edit",
+				"noMenu": "No menu is available. Create menus first.",
+				"notFound": "Not found",
+				"nodeJsonLabel": "Node JSON (can be edited manually before sending to AI):",
+				"nodeJsonPlaceholder": "The menu node JSON will appear here",
+				"requestLabel": "Edit request:",
+				"requestPlaceholder": "Example: Change the icon to UserOutlined, add the email field to table, update trigger.before_save to validate required...",
+				"generateButton": "Edit node with AI",
+				"applyButton": "Apply node edit",
+				"enterRequest": "Please enter the edit request for this node",
+				"nodeNotFound": "Node data was not found. Please select it again.",
+				"invalidNode": "AI did not return a valid menu node",
+				"fullMenuFallbackSuccess": "Received AI result (full menu, {{count}} nodes)",
+				"mergeComputed": "Jackson merged the node and computed precise field-level diffs",
+				"editSuccess": "AI finished editing the node. Review the result below, then apply.",
+				"applySuccess": "Applied the node edit to the system",
+				"editableResultHint": "The node has been updated — the JSON in the editor can still be adjusted before Apply"
+			},
+			"mergePreview": {
+				"title": "Precise Copilot-style change preview",
+				"summary": "Added {{added}}, edited {{edited}}, deleted {{deleted}}",
+				"computing": "computing merge"
 			}
 		}
 	},

@@ -35,6 +35,7 @@ import net.phanmemmottrieu.service.GoogleIndexQueueService;
 import net.phanmemmottrieu.service.ChatPersistenceService;
 import net.phanmemmottrieu.service.GitHubModelsService;
 import net.phanmemmottrieu.service.XTwitterService;
+import net.phanmemmottrieu.service.AiMenuMergeService;
 import com.corundumstudio.socketio.SocketIOServer;
 import net.phanmemmottrieu.model.UrlSubmissionQueue;
 import net.phanmemmottrieu.model.UrlSubmissionHistory;
@@ -71,6 +72,7 @@ public class ApiSpringController {
     private final SocketIOServer socketIOServer;
     private final XTwitterService xTwitterService;
     private final CRMHandler crmHandler;
+    private final AiMenuMergeService aiMenuMergeService;
 
     @Value("${ai.prompt.max-chars:3000000}")
     private int maxPromptChars;
@@ -105,7 +107,8 @@ public class ApiSpringController {
             GitHubModelsService gitHubModelsService,
             SocketIOServer socketIOServer,
             XTwitterService xTwitterService,
-            CRMHandler crmHandler
+            CRMHandler crmHandler,
+            AiMenuMergeService aiMenuMergeService
         ) {
         this.recordManager = recordManager;
         this.initHandler = initHandler;
@@ -124,6 +127,7 @@ public class ApiSpringController {
         this.socketIOServer = socketIOServer;
         this.xTwitterService = xTwitterService;
         this.crmHandler = crmHandler;
+        this.aiMenuMergeService = aiMenuMergeService;
     }
 
     public ResponseEntity<?> handleApiRequest(
@@ -361,6 +365,9 @@ public class ApiSpringController {
                     break;
                 case "/ai-generate-seo-content":
                     getObjectFromAI(response, params);
+                    break;
+                case "/ai/menu-merge":
+                    handleAiMenuMerge(response, params);
                     break;
                 case "/register":
                     authHandler.handleRegisterUser(response, params);
@@ -696,6 +703,40 @@ public class ApiSpringController {
      *                 báo lỗi.
      * @param params   Map chứa các tham số đầu vào, bao gồm "prompt".
      */
+    /**
+     * POST /ai/menu-merge
+     *
+     * Params:
+     *   scenario   : "incremental_update" | "property_edit"
+     *   old_json   : JSON string of the current (old) menu tree / node
+     *   new_json   : JSON string of AI's proposed menu tree / node
+     *
+     * Returns MergeOutput: { mergedMenu, patchOps, added, edited, deleted }
+     */
+    private void handleAiMenuMerge(StandardResponse response, Map<String, Object> params) {
+        try {
+            String scenario = String.valueOf(params.getOrDefault("scenario", "incremental_update")).trim();
+            String oldJson  = String.valueOf(params.getOrDefault("old_json",  "[]")).trim();
+            String newJson  = String.valueOf(params.getOrDefault("new_json",  "[]")).trim();
+
+            AiMenuMergeService.MergeOutput out;
+            if ("property_edit".equals(scenario)) {
+                out = aiMenuMergeService.mergeMenuNode(oldJson, newJson);
+            } else {
+                out = aiMenuMergeService.diffMergeTrees(oldJson, newJson);
+            }
+
+            response.set("code", 200);
+            response.set("success", true);
+            response.set("result", objectMapper.convertValue(out, Map.class));
+        } catch (Exception e) {
+            logger.error("handleAiMenuMerge error: {}", e.getMessage(), e);
+            response.set("code", 200);
+            response.set("success", false);
+            response.set("message", "Menu merge failed: " + e.getMessage());
+        }
+    }
+
     public void getObjectFromAI(StandardResponse response, Map<String, Object> params) {
         String mode = String.valueOf(params.getOrDefault("mode", "sync")).trim().toLowerCase();
         if ("status".equals(mode)) {
@@ -765,29 +806,41 @@ public class ApiSpringController {
             extractTaskTypeFromPromptJson(prompt)
         );
         String taskType = taskTypeRaw == null ? "" : taskTypeRaw.toLowerCase();
+        boolean isMenuDesignTask = taskType.contains("menu_design");
+
+        String providerPreferenceRaw = firstNonBlankString(
+                params != null ? params.get("providerPreference") : null,
+                params != null ? params.get("provider") : null
+        );
+        String providerPreference = providerPreferenceRaw == null ? "" : providerPreferenceRaw.toLowerCase();
+        boolean preferGithubProvider = providerPreference.contains("github") || providerPreference.contains("copilot");
 
         boolean menuDesignByDev = (params != null && Boolean.TRUE.equals(params.get("menuDesignByDev")))
             || "true".equalsIgnoreCase(String.valueOf(params != null ? params.get("menuDesignByDev") : null));
 
-        boolean verifiedDevCaller = false;
+        // Keep verification for audit visibility, but do not gate menu-design routing on dev role.
         if (menuDesignByDev) {
             UserAuthContext context = extractUserAuthContext();
-            verifiedDevCaller = hasDevPrivilege(context);
-            if (!verifiedDevCaller) {
+            boolean verifiedDevCaller = hasDevPrivilege(context);
+            if (!verifiedDevCaller && !isMenuDesignTask) {
                 logger.warn("Ignoring menuDesignByDev hint because caller is not verified as dev user");
             }
         }
 
-        // Only route to Copilot/GitHub Models when this is the menu-design flow
-        // and caller is explicitly marked + verified as dev.
-        boolean forceGithub = taskType.contains("menu_design") && menuDesignByDev && verifiedDevCaller;
+        // For menu design, always route to Copilot/GitHub Models and never fallback to Gemini.
+        boolean forceGithub = isMenuDesignTask || preferGithubProvider;
 
         boolean disableGeminiFallback = (params != null && Boolean.TRUE.equals(params.get("disableGeminiFallback")))
                 || "true".equalsIgnoreCase(String.valueOf(params != null ? params.get("disableGeminiFallback") : null));
+        if (isMenuDesignTask) {
+            disableGeminiFallback = true;
+        }
 
         if (forceGithub) {
             if (params != null) {
-                params.put("_providerRoutingDecision", "forced_github_menu_design_dev");
+                params.put("_providerRoutingDecision", isMenuDesignTask
+                        ? "forced_github_menu_design_no_gemini_fallback"
+                        : "forced_github_by_preference");
             }
             if (progressListener != null) {
                 progressListener.onProgress(createAiJobProgress("github_models", "Đang gọi GitHub Models (ưu tiên theo yêu cầu)", 0, 1, null));
@@ -800,6 +853,8 @@ public class ApiSpringController {
                     progressListener.onProgress(createAiJobProgress("gemini_fallback", "GitHub Models hết quota, đang chuyển sang Gemini", 0, 1, null));
                 }
                 return this.aiProviderFactory.generateContent(prompt);
+            } else if (shouldFallbackToGemini(githubRaw) && disableGeminiFallback) {
+                logger.warn("GitHub Models hit quota/rate limit but Gemini fallback is disabled for this request.");
             }
             return githubRaw;
         }
@@ -1132,6 +1187,8 @@ public class ApiSpringController {
         long now = System.currentTimeMillis();
         job.put("jobId", jobId);
         job.put("status", "queued");
+        job.put("realtimeAppId", String.valueOf(params.getOrDefault("realtimeAppId", params.getOrDefault("appId", ""))).trim());
+        job.put("realtimeTaskType", String.valueOf(params.getOrDefault("taskType", "ai_async_job")).trim());
         job.put("createdAt", now);
         job.put("updatedAt", now);
         job.put("pollAfterMs", aiAsyncPollMinMs);
@@ -1162,6 +1219,7 @@ public class ApiSpringController {
                 }
 
                 Map<String, Object> resultPayload = new HashMap<>(syncResponse.getPropertiesMap());
+                enrichAiResultWithMergePreview(resultPayload, params);
                 boolean ok = Boolean.TRUE.equals(resultPayload.get("success"));
                 job.put("status", ok ? "completed" : "failed");
                 job.put("result", resultPayload);
@@ -1170,6 +1228,7 @@ public class ApiSpringController {
                 updateAiAsyncJobProgress(job, createAiJobProgress(ok ? "completed" : "failed",
                         ok ? "Đã hoàn tất tạo menu AI" : String.valueOf(resultPayload.getOrDefault("message", "AI xử lý thất bại")),
                         1, 1, null));
+                emitAiAsyncJobSocketEvent(job, "ai_job_result", resultPayload);
             } catch (Exception e) {
                 logger.error("Async AI job failed: {}", jobId, e);
                 job.put("status", "failed");
@@ -1181,6 +1240,7 @@ public class ApiSpringController {
                         "success", false,
                         "message", "Lỗi xử lý async AI: " + e.getMessage(),
                         "errorCode", "ASYNC_AI_JOB_ERROR"));
+                emitAiAsyncJobSocketEvent(job, "ai_job_result", job.get("result"));
             }
         });
 
@@ -1253,6 +1313,121 @@ public class ApiSpringController {
         }
         job.put("progress", new HashMap<>(progress));
         job.put("updatedAt", System.currentTimeMillis());
+        emitAiAsyncJobSocketEvent(job, "ai_job_progress", null);
+    }
+
+    @SuppressWarnings("unchecked")
+    private void enrichAiResultWithMergePreview(Map<String, Object> resultPayload, Map<String, Object> params) {
+        if (resultPayload == null || params == null) {
+            return;
+        }
+        String mergeScenario = String.valueOf(params.getOrDefault("mergeScenario", "")).trim();
+        String mergeOldJson = String.valueOf(params.getOrDefault("mergeOldJson", "")).trim();
+        if (mergeScenario.isEmpty() || mergeOldJson.isEmpty()) {
+            return;
+        }
+        Object dataObj = resultPayload.get("data");
+        if (!(dataObj instanceof Map)) {
+            return;
+        }
+
+        try {
+            Map<String, Object> dataMap = (Map<String, Object>) dataObj;
+            AiMenuMergeService.MergeOutput mergeOut;
+            if ("property_edit".equalsIgnoreCase(mergeScenario)) {
+                Object nodeObj = dataMap.get("menu_node");
+                if (nodeObj == null) {
+                    nodeObj = dataMap;
+                }
+                mergeOut = aiMenuMergeService.mergeMenuNode(
+                        mergeOldJson,
+                        objectMapper.writeValueAsString(nodeObj));
+                if (mergeOut.mergedMenu != null && !mergeOut.mergedMenu.isEmpty()) {
+                    dataMap.put("menu_node", mergeOut.mergedMenu.get(0));
+                }
+            } else if ("incremental_update".equalsIgnoreCase(mergeScenario)) {
+                mergeOut = aiMenuMergeService.diffMergeTrees(
+                        mergeOldJson,
+                        objectMapper.writeValueAsString(dataMap));
+                if (mergeOut.mergedMenu != null) {
+                    dataMap.put("menu", mergeOut.mergedMenu);
+                }
+            } else {
+                return;
+            }
+            dataMap.put("_merge_preview", objectMapper.convertValue(mergeOut, Map.class));
+        } catch (Exception e) {
+            logger.debug("Could not enrich AI result with merge preview: {}", e.getMessage());
+        }
+    }
+
+    private void emitAiAsyncJobSocketEvent(Map<String, Object> job, String eventName, Object result) {
+        if (job == null || eventName == null || eventName.isBlank() || socketIOServer == null) {
+            return;
+        }
+        String room = String.valueOf(job.getOrDefault("realtimeAppId", "")).trim();
+        if (room.isEmpty()) {
+            return;
+        }
+        try {
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("jobId", job.get("jobId"));
+            payload.put("status", job.getOrDefault("status", "unknown"));
+            payload.put("taskType", job.getOrDefault("realtimeTaskType", "ai_async_job"));
+            payload.put("appId", room);
+            payload.put("updatedAt", job.get("updatedAt"));
+            payload.put("createdAt", job.get("createdAt"));
+            if (job.containsKey("progress")) {
+                payload.put("progress", job.get("progress"));
+            }
+            if (result != null) {
+                payload.put("result", result);
+            } else if (job.containsKey("result")) {
+                payload.put("result", job.get("result"));
+            }
+            socketIOServer.getRoomOperations(room).sendEvent(eventName, payload);
+            if (containsAiPatchPayload(payload)) {
+                socketIOServer.getRoomOperations(room).sendEvent("ai_job_patch", payload);
+            }
+        } catch (Exception e) {
+            logger.debug("Failed to emit async AI socket event {}: {}", eventName, e.getMessage());
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private boolean containsAiPatchPayload(Map<String, Object> payload) {
+        if (payload == null) {
+            return false;
+        }
+        Object progressObj = payload.get("progress");
+        if (progressObj instanceof Map) {
+            Map<String, Object> progress = (Map<String, Object>) progressObj;
+            if (progress.get("draftText") != null || progress.get("partialJson") != null || progress.get("previewJson") != null) {
+                return true;
+            }
+            Object textEdits = progress.get("textEdits");
+            Object patchOps = progress.get("patchOps");
+            if ((textEdits instanceof java.util.List && !((java.util.List<?>) textEdits).isEmpty())
+                    || (patchOps instanceof java.util.List && !((java.util.List<?>) patchOps).isEmpty())) {
+                return true;
+            }
+        }
+
+        Object resultObj = payload.get("result");
+        if (resultObj instanceof Map) {
+            Map<String, Object> result = (Map<String, Object>) resultObj;
+            if (result.get("draftText") != null) {
+                return true;
+            }
+            Object nestedData = result.get("data");
+            if (nestedData instanceof Map && ((Map<?, ?>) nestedData).get("_merge_preview") != null) {
+                return true;
+            }
+            if (result.get("_merge_preview") != null) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private Map<String, Object> createAiJobProgress(String stage, String message, int current, int total, Map<String, Object> extra) {

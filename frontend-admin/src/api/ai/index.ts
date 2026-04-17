@@ -298,6 +298,59 @@ export async function generateSeoContentWithPrompt(prompt: string, options?: Gen
 	}
 }
 
+// ─── AI Menu Merge API ───────────────────────────────────────────────────────
+
+/** A single field change: fieldName, old value, new value. */
+export type FieldDelta = {
+	fieldName: string;
+	oldVal: string | null;
+	newVal: string | null;
+};
+
+/** One precise add/edit/delete operation on a menu node. */
+export type PatchOp = {
+	action: "add" | "edit" | "delete";
+	nodeId: string;
+	nodeName: string;
+	nodePath: string;
+	changedFields: FieldDelta[];
+};
+
+/** Result returned by /ai/menu-merge endpoint. */
+export type MenuMergeResult = {
+	mergedMenu: unknown[];
+	patchOps: PatchOp[];
+	added: number;
+	edited: number;
+	deleted: number;
+};
+
+/**
+ * Call backend /ai/menu-merge to compute a Jackson-based diff/merge between
+ * the old menu tree (or node) and the AI's proposed changes.
+ *
+ * - scenario "incremental_update": diffs two full trees, returns patch ops.
+ * - scenario "property_edit": field-level merge of a single node, returns delta.
+ */
+export async function aiMenuMerge(params: {
+	scenario: "incremental_update" | "property_edit";
+	old_json: string;
+	new_json: string;
+}): Promise<MenuMergeResult> {
+	try {
+		const res = await request
+			.post("ai/menu-merge", {
+				json: params,
+				timeout: 30_000,
+			})
+			.json<ApiResponse<MenuMergeResult>>();
+		const result = (res?.result ?? (res as any)?.data) as MenuMergeResult | undefined;
+		return result ?? { mergedMenu: [], patchOps: [], added: 0, edited: 0, deleted: 0 };
+	} catch {
+		return { mergedMenu: [], patchOps: [], added: 0, edited: 0, deleted: 0 };
+	}
+}
+
 /**
  * Shorthand: csm_ai_generate_seo_content
  * Để tương thích với code cũ, cung cấp alias với callback pattern

@@ -475,6 +475,52 @@
 				"loadFailed": "无法从应用 {{appId}} 加载样例菜单：{{error}}",
 				"refineInfoBase": "来自 {{app}} 的样例菜单已加入补充提示（基线模式：AI 将在该菜单上继续修改）",
 				"refineInfoReference": "来自 {{app}} 的样例菜单已加入补充提示（参考模式）"
+			},
+			"operationScenario": {
+				"label": "选择操作场景：",
+				"newBuildTitle": "场景 1：全新设计",
+				"newBuildDesc": "AI 根据业务描述分析并设计完整菜单树",
+				"incrementalTitle": "场景 2：增量修改",
+				"incrementalDesc": "增删改部分模块，AI 返回完整更新后的整棵菜单树",
+				"propertyTitle": "场景 3：编辑单个菜单",
+				"propertyDesc": "只选择一个菜单节点，AI 仅修改你指定的字段"
+			},
+			"incremental": {
+				"alertTitle": "场景 2：增量修改，AI 将返回完整菜单树",
+				"requestLabel": "描述需要执行的变更：",
+				"requestPlaceholder": "例如：新增人事管理模块，包括员工列表、工资、考勤。将营收报表改为主从结构。删除测试模块……",
+				"generateButton": "用 AI 更新菜单",
+				"enterRequest": "请输入变更说明",
+				"noBaseMenu": "当前没有可修改的菜单，请先使用全新设计场景。",
+				"mergeComputed": "Jackson 已精确计算 add/edit/delete 变更"
+			},
+			"property": {
+				"alertTitle": "场景 3：编辑单个菜单节点属性",
+				"alertDesc": "从列表中选择菜单，节点 JSON 将显示在下方编辑器中，也可以手动修改。输入要求后，AI 只会修改指定字段。",
+				"selectNodeLabel": "选择要编辑的菜单节点：",
+				"selectNodePlaceholder": "选择菜单节点...",
+				"selectNodeRequired": "请选择要编辑的菜单节点",
+				"noMenu": "没有菜单，请先创建菜单。",
+				"notFound": "未找到",
+				"nodeJsonLabel": "节点 JSON（发送给 AI 前可手动编辑）：",
+				"nodeJsonPlaceholder": "菜单节点 JSON 将显示在这里",
+				"requestLabel": "编辑要求：",
+				"requestPlaceholder": "例如：将图标改为 UserOutlined，在 table 中添加 email 字段，修改 trigger.before_save 做必填校验……",
+				"generateButton": "用 AI 编辑节点",
+				"applyButton": "应用节点修改",
+				"enterRequest": "请输入该节点的编辑要求",
+				"nodeNotFound": "未找到节点数据，请重新选择。",
+				"invalidNode": "AI 没有返回有效的菜单节点",
+				"fullMenuFallbackSuccess": "已收到 AI 结果（完整菜单，共 {{count}} 个节点）",
+				"mergeComputed": "Jackson 已合并节点并精确计算字段级差异",
+				"editSuccess": "AI 已完成节点编辑，请先查看结果再应用。",
+				"applySuccess": "已将节点修改应用到系统",
+				"editableResultHint": "节点已修改，应用前仍可继续编辑编辑器中的 JSON"
+			},
+			"mergePreview": {
+				"title": "类似 Copilot 的精确变更预览",
+				"summary": "新增 {{added}}，修改 {{edited}}，删除 {{deleted}}",
+				"computing": "正在计算 merge"
 			}
 		}
 	},

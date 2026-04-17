@@ -472,6 +472,52 @@
 				"loadFailed": "Không thể tải menu mẫu từ app {{appId}}: {{error}}",
 				"refineInfoBase": "Menu mẫu từ {{app}} đang được đưa vào prompt bổ sung (chế độ gốc: AI tiếp tục chỉnh sửa trên menu đó)",
 				"refineInfoReference": "Menu mẫu từ {{app}} đang được đưa vào prompt bổ sung (chế độ tham khảo)"
+			},
+			"operationScenario": {
+				"label": "Chọn kịch bản thao tác:",
+				"newBuildTitle": "Kịch bản 1: Thiết kế mới hoàn toàn",
+				"newBuildDesc": "AI tự phân tích nghiệp vụ từ mô tả và thiết kế toàn bộ cây menu",
+				"incrementalTitle": "Kịch bản 2: Chỉnh sửa gia tăng",
+				"incrementalDesc": "Thêm/sửa/xóa một số module — AI trả về TOÀN BỘ cây menu đã cập nhật",
+				"propertyTitle": "Kịch bản 3: Chỉnh sửa 1 menu cụ thể",
+				"propertyDesc": "Chọn đúng 1 node menu, AI chỉ chỉnh sửa các field được yêu cầu"
+			},
+			"incremental": {
+				"alertTitle": "Kịch bản 2: Chỉnh sửa gia tăng — AI sẽ trả về TOÀN BỘ cây menu",
+				"requestLabel": "Mô tả thay đổi cần thực hiện:",
+				"requestPlaceholder": "Ví dụ: Thêm module Quản lý Nhân sự gồm: Danh sách nhân viên, Bảng lương, Chấm công. Sửa menu Báo cáo doanh thu thành Master-Detail. Xóa module test...",
+				"generateButton": "Cập nhật menu bằng AI",
+				"enterRequest": "Hãy nhập mô tả thay đổi yêu cầu",
+				"noBaseMenu": "Không có menu hiện tại để chỉnh sửa. Hãy dùng kịch bản Thiết kế mới.",
+				"mergeComputed": "Đã tính chính xác các thay đổi add/edit/delete bằng Jackson"
+			},
+			"property": {
+				"alertTitle": "Kịch bản 3: Chỉnh sửa thuộc tính 1 menu node",
+				"alertDesc": "Chọn menu từ danh sách, JSON của node sẽ hiện trong editor bên dưới (có thể sửa tay). Nhập yêu cầu và AI chỉ thay đổi các field được chỉ định.",
+				"selectNodeLabel": "Chọn menu node cần chỉnh sửa:",
+				"selectNodePlaceholder": "Chọn menu node...",
+				"selectNodeRequired": "Vui lòng chọn menu node cần chỉnh sửa",
+				"noMenu": "Không có menu. Hãy tạo menu trước.",
+				"notFound": "Không tìm thấy",
+				"nodeJsonLabel": "JSON của node (có thể chỉnh sửa thủ công trước khi gửi AI):",
+				"nodeJsonPlaceholder": "JSON của menu node sẽ hiển thị ở đây",
+				"requestLabel": "Yêu cầu chỉnh sửa:",
+				"requestPlaceholder": "Ví dụ: Đổi icon thành UserOutlined, thêm field email vào table, sửa trigger.before_save để validate required...",
+				"generateButton": "Chỉnh sửa node bằng AI",
+				"applyButton": "Áp dụng chỉnh sửa node",
+				"enterRequest": "Hãy nhập yêu cầu chỉnh sửa cho node này",
+				"nodeNotFound": "Không tìm thấy dữ liệu node. Vui lòng chọn lại.",
+				"invalidNode": "AI không trả về node menu hợp lệ",
+				"fullMenuFallbackSuccess": "Đã nhận kết quả AI (full menu, {{count}} node)",
+				"mergeComputed": "Đã trộn node bằng Jackson và tính diff chính xác theo field",
+				"editSuccess": "AI đã chỉnh sửa xong node. Xem kết quả bên dưới rồi Áp dụng.",
+				"applySuccess": "Đã áp dụng chỉnh sửa node vào hệ thống",
+				"editableResultHint": "Node đã được chỉnh sửa — JSON trong editor có thể chỉnh thêm trước khi Áp dụng"
+			},
+			"mergePreview": {
+				"title": "Xem trước thay đổi chính xác kiểu Copilot",
+				"summary": "Thêm {{added}}, sửa {{edited}}, xóa {{deleted}}",
+				"computing": "đang tính merge"
 			}
 		}
 	},
