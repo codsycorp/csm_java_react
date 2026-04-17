@@ -3030,7 +3030,7 @@
                   weekDBacTotals[wk] = 0;
                 }
                 var cacheWi = cellCaches[wi];
-                weekNamTotals[wk] += getLegacySlrNamHitCountRangeCached(cacheWi, sttFrom, sttTo);
+                weekNamTotals[wk] += getLegacySlrHitCountRangeCached(cacheWi, sttFrom, sttTo);
                 weekCNamTotals[wk] += getLegacySlrRangeCachedCount(cacheWi.cNamPrefix, sttFrom, sttTo);
                 weekDNamTotals[wk] += getLegacySlrRangeCachedCount(cacheWi.dNamPrefix, sttFrom, sttTo);
                 weekCBacTotals[wk] += getLegacySlrRangeCachedCount(cacheWi.cBacPrefix, sttFrom, sttTo);
@@ -3076,6 +3076,7 @@
                 cBac: getLegacySlrRangeCachedCount(newestCellCache.cBacPrefix, sttFrom, sttTo),
                 dBac: getLegacySlrRangeCachedCount(newestCellCache.dBacPrefix, sttFrom, sttTo)
               };
+              var nearestBaseHit = findNearestHitInfoForRange(cells, cellCaches, sttFrom, sttTo);
               if (latestCellData && Array.isArray(latestCellData.rows)) {
                 latestCellData.rows = latestCellData.rows.filter(function (rowItem) {
                   var sttVal = Number(rowItem && rowItem.stt || 0);
@@ -3085,7 +3086,7 @@
 
               var expandedHint = "";
               if (sttTo + 1 <= rankTo) {
-                var nearestBase = findNearestHitInfoForRange(cells, cellCaches, sttFrom, sttTo);
+                var nearestBase = nearestBaseHit;
                 var nearestExpanded = findNearestHitInfoForRange(cells, cellCaches, sttFrom, sttTo + 1);
                 if (nearestExpanded && (!nearestBase || nearestExpanded.idx < nearestBase.idx)) {
                   expandedHint = "STT " + sttFrom + "-" + (sttTo + 1) + " Xổ ngày " + String(nearestExpanded.date || "");
@@ -3101,7 +3102,7 @@
                 noHitDays: noHitDays,
                 noHitDaysCurrent: noHitDaysCurrent,
                 fromDate: String(latestCell.date || ""),
-                toDate: String(oldestCell.date || ""),
+                toDate: String((nearestBaseHit && nearestBaseHit.date) || oldestCell.date || ""),
                 tongNamWeeks: tongNamWeeks,
                 tongNamZeroWeekStreak: weekNoHitMax,
                 weekSummaryRows: rowWeekSummaryRows,
@@ -3138,9 +3139,30 @@
                     mergedRow.isMergedAuto = true;
                     finalRows.push(mergedRow);
                   } else {
-                    for (var fi = start; fi <= end; fi += 1) {
-                      finalRows.push(rows[fi]);
+                    var segRows = rows.slice(start, end + 1);
+                    var head = segRows[0] || {};
+                    var tail = segRows[segRows.length - 1] || {};
+                    var maxWeek = 0;
+                    var maxNoHit = 0;
+                    for (var sri = 0; sri < segRows.length; sri += 1) {
+                      var _wk = Number((segRows[sri] && segRows[sri].tongNamZeroWeekStreak) || 0);
+                      var _nh = Number((segRows[sri] && segRows[sri].noHitDaysCurrent) || (segRows[sri] && segRows[sri].noHitDays) || 0);
+                      if (_wk > maxWeek) maxWeek = _wk;
+                      if (_nh > maxNoHit) maxNoHit = _nh;
                     }
+                    var fallbackMerged = Object.assign({}, head, {
+                      key: "slr_auto_merge_fallback_" + String(head.queryValue || "") + "_" + String(mergedFrom) + "_" + String(mergedTo),
+                      sttFrom: mergedFrom,
+                      sttTo: mergedTo,
+                      noHitDaysCurrent: maxNoHit,
+                      tongNamZeroWeekStreak: maxWeek,
+                      fromDate: String((head && head.fromDate) || ""),
+                      toDate: String((tail && tail.toDate) || (head && head.toDate) || ""),
+                      isMergedAuto: true,
+                      isMergedFallbackAuto: true,
+                      mergedSourceCount: segRows.length
+                    });
+                    finalRows.push(fallbackMerged);
                   }
                 } else {
                   finalRows.push(rows[start]);
@@ -3240,7 +3262,7 @@
                   var namTotalTmp = 0;
                   for (var wci = 0; wci < cells.length; wci += 1) {
                     if (Number(cells[wci] && cells[wci].weekIdx || -1) !== wri) continue;
-                    namTotalTmp += getLegacySlrNamHitCountRangeCached(cellCaches[wci], sttFrom, sttTo);
+                    namTotalTmp += getLegacySlrHitCountRangeCached(cellCaches[wci], sttFrom, sttTo);
                   }
                   weekNamTotals[wri] = namTotalTmp;
                   if (namTotalTmp === 0) {
@@ -9401,46 +9423,10 @@
     async function exportLegacySlrAutoRows() {
       var rows = legacySortedRowsRef.current["slr_auto"] || (Array.isArray(legacySlrAutoRows) ? legacySlrAutoRows : []);
       if (!rows.length) { canhbao(tt.exportNoData || "Không có dữ liệu để xuất"); return; }
-      var firstMode = String((rows[0] && rows[0].mode) || "C_D").toUpperCase();
-      var is2C = firstMode === "2C";
-      var isC = firstMode === "C";
-      var isD = firstMode === "D";
-      var header = ["Loại Tìm", "Từ STT", "Đến STT", "Chuỗi (ngày)", "Từ ngày", "Đến ngày", "Tổng Nam 0 (tuần)"];
-      // latest result stats headers
-      header.push("KQ gần nhất (ngày)");
-      if (is2C) { header.push("C.Nam"); header.push("C.Bắc"); }
-      else if (isC) { header.push("C.Nam"); header.push("C.Bắc"); }
-      else if (isD) { header.push("Đ.Nam"); header.push("Đ.Bắc"); }
-      else { header.push("C.Nam"); header.push("C.Bắc"); header.push("Đ.Nam"); header.push("Đ.Bắc"); }
-      // week summary: collect all labels from first row that has weekSummaryRows
-      var weekLabels = [];
-      var weekLabelKeys = [];
-      for (var ri = 0; ri < rows.length; ri += 1) {
-        var wsRows = Array.isArray(rows[ri].weekSummaryRows) ? rows[ri].weekSummaryRows : [];
-        if (wsRows.length) {
-          weekLabels = wsRows.map(function (sr) { return String(sr.label || ""); });
-          weekLabelKeys = wsRows.map(function (sr) { return String(sr.key || ""); });
-          break;
-        }
-      }
-      // count max weeks
-      var maxWeekCols = 0;
-      for (var ri2 = 0; ri2 < rows.length; ri2 += 1) {
-        var wsRows2 = Array.isArray(rows[ri2].weekSummaryRows) ? rows[ri2].weekSummaryRows : [];
-        if (wsRows2.length && wsRows2[0].values && wsRows2[0].values.length > maxWeekCols) {
-          maxWeekCols = wsRows2[0].values.length;
-        }
-      }
-      // build week headers
-      for (var li = 0; li < weekLabels.length; li += 1) {
-        for (var wci = 0; wci < maxWeekCols; wci += 1) {
-          header.push(weekLabels[li] + " T" + (wci + 1));
-        }
-      }
+      var header = ["Loại Tìm", "Từ STT", "Đến STT", "Chuỗi (ngày)", "Từ ngày", "Đến ngày", "Tổng Nam 0 (tuần)", "Số chính", "Số đảo", "Dãy Tổng Bắc", "Dãy Tổng Nam"];
       var aoa = [header];
       for (var ri3 = 0; ri3 < rows.length; ri3 += 1) {
         var r = rows[ri3] || {};
-        var s = r.latestCellStats || {};
         var m2 = String(r.mode || "C_D").toUpperCase();
         var line = [
           String(r.queryLabel || ""),
@@ -9450,22 +9436,11 @@
           String(r.fromDate || ""),
           String(r.toDate || ""),
           Number(r.tongNamZeroWeekStreak || 0),
-          String(s.date || "")
+          buildLegacySlrAutoNumberText(r && r.latestCellData, "c"),
+          m2 === "2C" ? "-" : buildLegacySlrAutoNumberText(r && r.latestCellData, "d"),
+          buildLegacySlrAutoWeekSeriesText(r && r.weekSummaryRows, m2, "bac"),
+          buildLegacySlrAutoWeekSeriesText(r && r.weekSummaryRows, m2, "nam")
         ];
-        if (m2 === "2C" || m2 === "C") { line.push(Number(s.cNam || 0)); line.push(Number(s.cBac || 0)); }
-        else if (m2 === "D") { line.push(Number(s.dNam || 0)); line.push(Number(s.dBac || 0)); }
-        else { line.push(Number(s.cNam || 0)); line.push(Number(s.cBac || 0)); line.push(Number(s.dNam || 0)); line.push(Number(s.dBac || 0)); }
-        var wsRowsR = Array.isArray(r.weekSummaryRows) ? r.weekSummaryRows : [];
-        var wsMap = {};
-        for (var si = 0; si < wsRowsR.length; si += 1) {
-          wsMap[String(wsRowsR[si].key || "")] = Array.isArray(wsRowsR[si].values) ? wsRowsR[si].values : [];
-        }
-        for (var li2 = 0; li2 < weekLabelKeys.length; li2 += 1) {
-          var vals = wsMap[weekLabelKeys[li2]] || [];
-          for (var wci2 = 0; wci2 < maxWeekCols; wci2 += 1) {
-            line.push(wci2 < vals.length ? Number(vals[wci2] || 0) : "");
-          }
-        }
         aoa.push(line);
       }
       await exportPayloadToFile({ fileName: "SLR_Auto", sheets: [{ name: "SLR Auto", aoa: aoa }] });
@@ -9485,6 +9460,19 @@
       return lines.join("\n");
     }
 
+    function buildLegacySlrAutoNumberText(cellData, kind) {
+      var cell = cellData || {};
+      var rows = Array.isArray(cell.rows) ? cell.rows : [];
+      var target = String(kind || "c").toLowerCase() === "d" ? "dao" : "so";
+      var out = [];
+      for (var i = 0; i < rows.length; i += 1) {
+        var value = String((rows[i] && rows[i][target]) || "").trim();
+        if (!value) continue;
+        out.push(value);
+      }
+      return out.length ? out.join(" ") : "-";
+    }
+
     function buildLegacySlrAutoWeekSummaryText(summaryRows) {
       var rows = Array.isArray(summaryRows) ? summaryRows : [];
       if (!rows.length) return "-";
@@ -9493,6 +9481,20 @@
         var vals = Array.isArray(sr && sr.values) ? sr.values : [];
         return label + ": " + vals.map(function (v) { return String(Number(v || 0)); }).join(" ");
       }).join("\n");
+    }
+
+    function buildLegacySlrAutoWeekSeriesText(summaryRows, mode, region) {
+      var rows = Array.isArray(summaryRows) ? summaryRows : [];
+      var m = String(mode || "C_D").toUpperCase();
+      var r = String(region || "nam").toLowerCase() === "bac" ? "bac" : "nam";
+      var targetKey = m === "2C"
+        ? (r === "bac" ? "pair_bac" : "pair_nam")
+        : (r === "bac" ? "t_bac" : "t_nam");
+      var found = rows.find(function (sr) {
+        return String((sr && sr.key) || "") === targetKey;
+      });
+      if (!found || !Array.isArray(found.values) || !found.values.length) return "-";
+      return found.values.map(function (v) { return String(Number(v || 0)); }).join(" ");
     }
 
     function buildLegacySlrAutoPreviewGroups(rows, maxPerGroup) {
@@ -9628,8 +9630,10 @@
         "Đến STT",
         "Chuỗi không trúng",
         "Tổng Nam không xổ LT",
-        "KQ gần nhất",
-        "Thống kê tuần"
+        "Số chính",
+        "Số đảo",
+        "Dãy Tổng Bắc",
+        "Dãy Tổng Nam"
       ]];
 
       rows.forEach(function (r) {
@@ -9641,8 +9645,10 @@
           String(noHitDaysCurrent) + " ngày (" + String((r && r.fromDate) || "") + " -> " + String((r && r.toDate) || "") + ")"
             + (r && r.noHitHintText ? ("\n" + String(r.noHitHintText)) : ""),
           String(Number((r && r.tongNamZeroWeekStreak) || 0)) + " tuần (yêu cầu > " + String(Number((r && r.tongNamWeeks) || 0)) + ")",
-          buildLegacySlrAutoLatestCellText(r && r.latestCellData),
-          buildLegacySlrAutoWeekSummaryText(r && r.weekSummaryRows)
+          buildLegacySlrAutoNumberText(r && r.latestCellData, "c"),
+          String((r && r.mode) || "").toUpperCase() === "2C" ? "-" : buildLegacySlrAutoNumberText(r && r.latestCellData, "d"),
+          buildLegacySlrAutoWeekSeriesText(r && r.weekSummaryRows, r && r.mode, "bac"),
+          buildLegacySlrAutoWeekSeriesText(r && r.weekSummaryRows, r && r.mode, "nam")
         ]);
       });
 
@@ -9722,60 +9728,72 @@
         }
       },
       {
-        title: "KQ gần nhất",
+        title: "Số chính",
         dataIndex: "latestCellData",
-        key: "latestCellData",
-        width: 190,
+        key: "slrAutoMainNumbers",
+        width: 150,
         render: function (v) {
-          var cellData = v || {};
-          if (!cellData || !Array.isArray(cellData.rows) || !cellData.rows.length) {
-            return h("span", { style: { color: theme.muted } }, "-");
-          }
-          return h("div", { style: { minWidth: 160 } }, legacySlrWeekCell(cellData, { fitContent: true }));
+          var text = buildLegacySlrAutoNumberText(v, "c");
+          return h("span", {
+            style: {
+              color: text === "-" ? theme.muted : theme.text,
+              fontWeight: 700,
+              lineHeight: 1.5,
+              wordBreak: "break-word"
+            }
+          }, text);
         }
       },
       {
-        title: "Thống kê tuần (tối đa " + LEGACY_SLR_WEEK_SUMMARY_LIMIT + " cột)",
+        title: "Số đảo",
+        dataIndex: "latestCellData",
+        key: "slrAutoDaoNumbers",
+        width: 150,
+        render: function (v, rec) {
+          var mode = String((rec && rec.mode) || "C_D").toUpperCase();
+          var text = mode === "2C" ? "-" : buildLegacySlrAutoNumberText(v, "d");
+          return h("span", {
+            style: {
+              color: text === "-" ? theme.muted : theme.primary,
+              fontWeight: 700,
+              lineHeight: 1.5,
+              wordBreak: "break-word"
+            }
+          }, text);
+        }
+      },
+      {
+        title: "Dãy Tổng Bắc",
         dataIndex: "weekSummaryRows",
-        key: "weekSummaryRows",
-        width: 860,
-        render: function (v) {
-          var rows = Array.isArray(v) ? v : [];
-          if (!rows.length) return h("span", { style: { color: theme.muted } }, "-");
-          return h("div", { style: { overflowX: "auto" } }, [
-            h("table", { style: { borderCollapse: "collapse", minWidth: 680, background: theme.cardBg } }, [
-              h("tbody", null, rows.map(function (sr) {
-                return h("tr", { key: "auto_sum_" + String(sr.key || "") }, [
-                  h("td", {
-                    style: {
-                      border: "1px solid " + theme.border,
-                      padding: "2px 6px",
-                      fontWeight: 700,
-                      fontSize: 13,
-                      whiteSpace: "nowrap",
-                      background: "color-mix(in srgb, " + theme.cardBg + " 86%, " + theme.pageBg + " 14%)"
-                    }
-                  }, String(sr.label || "") + ":"),
-                  (sr.values || []).map(function (n, idx) {
-                    var low = Number(n || 0) <= Number(sr.limit || 0);
-                    return h("td", {
-                      key: "auto_sum_cell_" + String(sr.key || "") + "_" + idx,
-                      style: {
-                        border: "1px solid " + theme.border,
-                        minWidth: 36,
-                        textAlign: "center",
-                        padding: "3px 6px",
-                        color: low ? theme.error : theme.text,
-                        fontWeight: 800,
-                        fontSize: 15,
-                        lineHeight: "18px"
-                      }
-                    }, String(Number(n || 0)));
-                  })
-                ]);
-              }))
-            ])
-          ]);
+        key: "slrAutoTongBacSeries",
+        width: 240,
+        render: function (v, rec) {
+          var text = buildLegacySlrAutoWeekSeriesText(v, rec && rec.mode, "bac");
+          return h("span", {
+            style: {
+              color: text === "-" ? theme.muted : theme.text,
+              fontWeight: 700,
+              lineHeight: 1.5,
+              wordBreak: "break-word"
+            }
+          }, text);
+        }
+      },
+      {
+        title: "Dãy Tổng Nam",
+        dataIndex: "weekSummaryRows",
+        key: "slrAutoTongNamSeries",
+        width: 240,
+        render: function (v, rec) {
+          var text = buildLegacySlrAutoWeekSeriesText(v, rec && rec.mode, "nam");
+          return h("span", {
+            style: {
+              color: text === "-" ? theme.muted : theme.text,
+              fontWeight: 700,
+              lineHeight: 1.5,
+              wordBreak: "break-word"
+            }
+          }, text);
         }
       },
       {
