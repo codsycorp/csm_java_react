@@ -70,6 +70,24 @@ type AiOutputMeta = {
   unresolvedAssumptions: string[];
 };
 
+type BusinessGateEvaluation = {
+  mode: "relaxed" | "business" | "hard";
+  minScore: number;
+  score: number;
+  blockers: string[];
+  warnings: string[];
+  expected: {
+    modules: string[];
+    tables: string[];
+    triggers: string[];
+  };
+  covered: {
+    modules: string[];
+    tables: string[];
+    triggers: string[];
+  };
+};
+
 type JsonContextFile = {
   id: string;
   name: string;
@@ -329,6 +347,168 @@ function shouldTriggerMassDeleteGuard(params: {
   return deleted > safeDeleteAbs || (deleted / Math.max(1, baseNodes)) >= safeDeleteRatio;
 }
 
+function requestSuggestsBroadStructuralChange(text: string): boolean {
+  const normalized = String(text || "").toLowerCase();
+  return /(toan bo|toàn bộ|tat ca|tất cả|all menu|all modules|toan he thong|toàn hệ thống|refactor|migrate|chuan hoa|chuẩn hóa)/i.test(normalized);
+}
+
+function requestMentionsTriggerChange(text: string): boolean {
+  const normalized = String(text || "").toLowerCase();
+  return /(trigger|report_db|before_save|after_save|before_delete|after_delete|beforeimport|afterimport)/i.test(normalized);
+}
+
+function normalizeScopeToken(raw: unknown): string {
+  return String(raw || "").trim().toLowerCase();
+}
+
+function collectNodeScopeTokens(node: MenuItemType): string[] {
+  const rawNode = (node || {}) as any;
+  const candidates = [
+    rawNode.id,
+    rawNode.menu_id,
+    rawNode.path,
+    rawNode.table_name,
+    rawNode.name,
+    rawNode.name_vi,
+    rawNode.label,
+    rawNode.label_vi,
+  ];
+  return candidates
+    .map((item) => normalizeScopeToken(item))
+    .filter((item) => item.length >= 3);
+}
+
+function buildMenuRelationMaps(menus: MenuItemType[]): {
+  parentById: Map<string, string | null>;
+  childrenById: Map<string, string[]>;
+} {
+  const parentById = new Map<string, string | null>();
+  const childrenById = new Map<string, string[]>();
+
+  const visit = (nodes: MenuItemType[], parentId: string | null) => {
+    for (const node of Array.isArray(nodes) ? nodes : []) {
+      const id = String((node as any).id || "").trim();
+      if (!id) continue;
+      parentById.set(id, parentId);
+      if (!childrenById.has(id)) childrenById.set(id, []);
+      if (parentId) {
+        const siblings = childrenById.get(parentId) || [];
+        if (!siblings.includes(id)) siblings.push(id);
+        childrenById.set(parentId, siblings);
+      }
+      const children = Array.isArray((node as any).children) ? ((node as any).children as MenuItemType[]) : [];
+      visit(children, id);
+    }
+  };
+
+  visit(Array.isArray(menus) ? menus : [], null);
+  return { parentById, childrenById };
+}
+
+function expandScopeNodeIds(seed: Set<string>, menus: MenuItemType[]): Set<string> {
+  if (seed.size === 0) return seed;
+  const { parentById, childrenById } = buildMenuRelationMaps(menus);
+  const expanded = new Set(seed);
+
+  const addAncestors = (id: string) => {
+    let cursor = parentById.get(id) || null;
+    while (cursor) {
+      if (expanded.has(cursor)) break;
+      expanded.add(cursor);
+      cursor = parentById.get(cursor) || null;
+    }
+  };
+
+  const addDescendants = (id: string) => {
+    const queue = [...(childrenById.get(id) || [])];
+    while (queue.length > 0) {
+      const childId = queue.shift();
+      if (!childId || expanded.has(childId)) continue;
+      expanded.add(childId);
+      queue.push(...(childrenById.get(childId) || []));
+    }
+  };
+
+  for (const id of [...seed]) {
+    addAncestors(id);
+    addDescendants(id);
+  }
+
+  return expanded;
+}
+
+function deriveScopedTargetNodeIds(requestText: string, baseMenus: MenuItemType[]): Set<string> {
+  const request = String(requestText || "").toLowerCase();
+  if (!request.trim()) return new Set();
+
+  const matched = new Set<string>();
+  const allNodes = flattenMenuNodes(Array.isArray(baseMenus) ? baseMenus : [], 5000);
+  for (const node of allNodes) {
+    const id = String((node as any).id || "").trim();
+    if (!id) continue;
+    const tokens = collectNodeScopeTokens(node);
+    if (tokens.some((token) => token && request.includes(token))) {
+      matched.add(id);
+    }
+  }
+
+  return expandScopeNodeIds(matched, baseMenus);
+}
+
+function enforceIncrementalTargetScope(params: {
+  scenario: OperationScenario;
+  baseMenus: MenuItemType[];
+  draftMenus: MenuItemType[];
+  patchOps: PatchOp[];
+  requestText: string;
+}): {
+  draftMenus: MenuItemType[];
+  patchOps: PatchOp[];
+  blockedOps: PatchOp[];
+} {
+  const { scenario, baseMenus, draftMenus, patchOps, requestText } = params;
+  if (scenario !== "incremental_update") {
+    return { draftMenus, patchOps, blockedOps: [] };
+  }
+  if (!Array.isArray(patchOps) || patchOps.length === 0) {
+    return { draftMenus, patchOps: [], blockedOps: [] };
+  }
+  if (requestSuggestsBroadStructuralChange(requestText)) {
+    return { draftMenus, patchOps, blockedOps: [] };
+  }
+
+  const scopedIds = deriveScopedTargetNodeIds(requestText, baseMenus);
+  if (scopedIds.size === 0) {
+    return { draftMenus, patchOps, blockedOps: [] };
+  }
+
+  const allowTriggerWide = requestMentionsTriggerChange(requestText);
+  const keptOps: PatchOp[] = [];
+  const blockedOps: PatchOp[] = [];
+  let nextMenus = cloneMenuTree(Array.isArray(draftMenus) ? draftMenus : []);
+
+  for (const op of patchOps) {
+    const opNodeId = String(op?.nodeId || "").trim();
+    const touchesTrigger = Array.isArray(op?.changedFields)
+      && op.changedFields.some((field) => /trigger|report_db/i.test(String(field?.fieldName || "")));
+    const allowed = (!!opNodeId && scopedIds.has(opNodeId)) || (allowTriggerWide && touchesTrigger);
+
+    if (allowed) {
+      keptOps.push(op);
+      continue;
+    }
+
+    blockedOps.push(op);
+    nextMenus = revertPatchOpOnMenus(nextMenus, baseMenus, op);
+  }
+
+  return {
+    draftMenus: nextMenus,
+    patchOps: keptOps,
+    blockedOps,
+  };
+}
+
 function formatFieldDeltaValue(value: string | null | undefined, maxLength = 80): string {
   if (value == null) return "(null)";
   const text = String(value);
@@ -392,7 +572,7 @@ function describeAiProgress(progress: AiProgressState | null): string {
     case "chunking": return "Đang chia và phân tích từng phần prompt";
     case "reducing": return "Đang gộp tóm tắt các phần";
     case "final_merge": return "Đang tổng hợp kết quả cuối";
-    case "waiting_rate_limit": return "Đang chờ quota GitHub Models";
+    case "waiting_rate_limit": return "Đang giữ bản nháp realtime, chờ quota để tiếp tục";
     case "parsing": return "Đang phân tích kết quả AI";
     case "completed": return "Đã hoàn tất";
     case "failed": return "Xử lý thất bại";
@@ -400,162 +580,9 @@ function describeAiProgress(progress: AiProgressState | null): string {
   }
 }
 
-function buildAiProgressResultText(progress: AiProgressState | null): string {
-  if (!progress) return "";
-
-  return JSON.stringify({
-    success: progress.status === "completed",
-    status: progress.status || "running",
-    stage: progress.stage || progress.status || "running",
-    message: describeAiProgress(progress),
-    progress: {
-      current: Number(progress.current ?? 0),
-      total: Number(progress.total ?? 1),
-      percent: Number(progress.percent ?? 0),
-      elapsedMs: Number(progress.elapsedMs ?? 0),
-      waitingMs: Number(progress.waitingMs ?? 0),
-      ...(progress.level != null ? { level: Number(progress.level) } : {}),
-      ...(progress.jobId ? { jobId: progress.jobId } : {}),
-    },
-    note: "Live status only. Final JSON menu payload will replace this block when AI completes.",
-  }, null, 2);
+function buildEditorMenuJson(menus: MenuItemType[] | null | undefined): string {
+  return JSON.stringify({ menu: Array.isArray(menus) ? menus : [] }, null, 2);
 }
-
-const TRIGGER_CODE_TEMPLATES: Record<string, string> = {
-  validate_order_debt_limit: `const customerId = data.id_khachhang || data.id_kh || data.khachhang_id;
-if (!customerId) return data;
-
-const customers = bang?.dm_doituong?.rows || [];
-const customer = customers.find((r) => String(r.id) === String(customerId));
-if (!customer) return data;
-
-const debtLimit = Number(customer.han_muc_no || 0);
-if (!debtLimit || debtLimit <= 0) return data;
-
-const currentDebt = Number(customer.con_no || customer.tong_no || 0);
-const orderValue = Number(data.tong_tien || data.so_tien_no || 0);
-
-if (currentDebt + orderValue > debtLimit) {
-  throw new Error("Vuot han muc no cua khach hang");
-}
-
-return data;`,
-
-  update_order_total: `const orderId = data.id || data.id_donhang || data.id_don_hang;
-if (!orderId) return {};
-
-const details = bang?.bh_donhang_chitiet?.rows || bang?.bh_donhang_ct?.rows || [];
-const rows = details.filter((r) => {
-  const refId = r.id_donhang || r.id_don_hang || r.order_id;
-  return String(refId) === String(orderId);
-});
-
-const tong_tien = rows.reduce((sum, r) => {
-  const line = Number(r.thanh_tien ?? (Number(r.so_luong || 0) * Number(r.don_gia || 0)));
-  return sum + line;
-}, 0);
-
-const da_thanh_toan = Number(data.da_thanh_toan || 0);
-return {
-  tong_tien,
-  con_no: Math.max(tong_tien - da_thanh_toan, 0),
-};`,
-
-  recalculate_order_total: `const orderId = data.id_donhang || data.id_don_hang || data.order_id;
-if (!orderId) return {};
-
-const details = bang?.bh_donhang_chitiet?.rows || bang?.bh_donhang_ct?.rows || [];
-const rows = details.filter((r) => {
-  const refId = r.id_donhang || r.id_don_hang || r.order_id;
-  return String(refId) === String(orderId);
-});
-
-const tong_tien = rows.reduce((sum, r) => {
-  const line = Number(r.thanh_tien ?? (Number(r.so_luong || 0) * Number(r.don_gia || 0)));
-  return sum + line;
-}, 0);
-
-return { tong_tien };`,
-
-  validate_order_item_stock: `const qty = Number(data.so_luong || 0);
-if (qty <= 0) throw new Error("So luong phai lon hon 0");
-
-const productId = data.id_sanpham || data.id_sp;
-if (!productId) return data;
-
-const products = bang?.dm_sanpham?.rows || [];
-const product = products.find((r) => String(r.id) === String(productId));
-if (!product) return data;
-
-const stock = Number(product.ton_kho_hien_tai ?? product.ton_kho ?? 0);
-if (qty > stock) {
-  throw new Error("Khong du ton kho cho san pham");
-}
-
-return {
-  ...data,
-  thanh_tien: Number(data.don_gia || 0) * qty,
-};`,
-
-  validate_delivery_item_stock: `const qty = Number(data.so_luong || 0);
-if (qty <= 0) throw new Error("So luong xuat phai lon hon 0");
-
-const productId = data.id_sanpham || data.id_sp;
-if (!productId) return data;
-
-const products = bang?.dm_sanpham?.rows || [];
-const product = products.find((r) => String(r.id) === String(productId));
-if (!product) return data;
-
-const stock = Number(product.ton_kho_hien_tai ?? product.ton_kho ?? 0);
-if (qty > stock) {
-  throw new Error("Ton kho khong du de xuat");
-}
-
-return {
-  ...data,
-  thanh_tien: Number(data.don_gia || 0) * qty,
-};`,
-
-  validate_receipt_item_quantity: `const qty = Number(data.so_luong || 0);
-if (qty <= 0) throw new Error("So luong nhap phai lon hon 0");
-
-const don_gia = Number(data.don_gia || 0);
-return {
-  ...data,
-  thanh_tien: don_gia * qty,
-};`,
-
-  update_stock_on_delivery: `const productId = data.id_sanpham || data.id_sp;
-if (!productId) return {};
-
-const qty = Number(data.so_luong || 0);
-if (qty <= 0) return {};
-
-const products = bang?.dm_sanpham?.rows || [];
-const product = products.find((r) => String(r.id) === String(productId));
-if (!product) return {};
-
-const currentStock = Number(product.ton_kho_hien_tai ?? product.ton_kho ?? 0);
-return {
-  ton_kho_hien_tai: Math.max(currentStock - qty, 0),
-};`,
-
-  update_stock_on_receipt: `const productId = data.id_sanpham || data.id_sp;
-if (!productId) return {};
-
-const qty = Number(data.so_luong || 0);
-if (qty <= 0) return {};
-
-const products = bang?.dm_sanpham?.rows || [];
-const product = products.find((r) => String(r.id) === String(productId));
-if (!product) return {};
-
-const currentStock = Number(product.ton_kho_hien_tai ?? product.ton_kho ?? 0);
-return {
-  ton_kho_hien_tai: currentStock + qty,
-};`,
-};
 
 function isLikelyExecutableCode(value: string): boolean {
   const v = String(value || "").trim();
@@ -707,8 +734,17 @@ function normalizeTriggerCodeValue(triggerKey: string, rawValue: any): any {
   if (!value) return value;
   if (isLikelyExecutableCode(value)) return value;
 
-  const template = TRIGGER_CODE_TEMPLATES[value];
-  if (template) return template;
+  const looksLikeSymbolicTriggerName = /^[a-z][a-z0-9_]{2,}$/i.test(value) && !value.includes(" ");
+  if (looksLikeSymbolicTriggerName) {
+    const note = `/* TODO: implement trigger logic: ${value} */`;
+    if (triggerKey === "before_save" || triggerKey === "before_delete") {
+      return `${note}\nreturn data;`;
+    }
+    if (triggerKey === "after_save" || triggerKey === "after_delete") {
+      return `${note}\nreturn {};`;
+    }
+    return `${note}\nreturn data;`;
+  }
 
   // Fallback templates by trigger phase so AI symbolic output still executes safely.
   if (triggerKey === "before_save" || triggerKey === "before_delete") {
@@ -765,6 +801,190 @@ function extractRequirementModules(text: string, limit = 12): string[] {
     }
   }
   return uniqueStrings(modules, limit);
+}
+
+function normalizeSearchText(raw: unknown): string {
+  return String(raw || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, " ")
+    .replace(/[^a-z0-9_\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractRequirementTriggerKeys(text: string, limit = 12): string[] {
+  const normalized = normalizeSearchText(text);
+  if (!normalized) return [];
+
+  const triggerPatterns: Array<{ key: string; patterns: string[] }> = [
+    { key: "before_save", patterns: ["before save", "truoc luu", "truo c luu", "validate truoc luu", "trigger before save"] },
+    { key: "after_save", patterns: ["after save", "sau luu", "dong bo sau luu", "trigger after save"] },
+    { key: "before_delete", patterns: ["before delete", "truoc xoa", "xac nhan truoc xoa"] },
+    { key: "after_delete", patterns: ["after delete", "sau xoa", "trigger sau xoa"] },
+    { key: "report_db", patterns: ["report_db", "report db", "bao cao", "du lieu bao cao"] },
+    { key: "load_db", patterns: ["load_db", "load db", "tai du lieu", "nap du lieu"] },
+    { key: "update_db", patterns: ["update_db", "update db", "cap nhat db", "dong bo db"] },
+    { key: "delete_db", patterns: ["delete_db", "delete db", "xoa db"] },
+    { key: "before_import", patterns: ["before import", "truoc import", "validate import"] },
+    { key: "after_import", patterns: ["after import", "sau import"] },
+  ];
+
+  const matched: string[] = [];
+  for (const item of triggerPatterns) {
+    if (item.patterns.some((pattern) => normalized.includes(normalizeSearchText(pattern)))) {
+      matched.push(item.key);
+    }
+    if (matched.length >= limit) break;
+  }
+
+  return uniqueStrings(matched, limit);
+}
+
+function doesNodeSignalCoverText(node: MenuItemType, target: string): boolean {
+  const rawNode = (node || {}) as any;
+  const signal = normalizeSearchText([
+    rawNode.label,
+    rawNode.label_vi,
+    rawNode.name,
+    rawNode.name_vi,
+    rawNode.path,
+    rawNode.table_name,
+    rawNode.menu_id,
+    rawNode.id,
+  ].join(" "));
+  if (!signal) return false;
+
+  const normalizedTarget = normalizeSearchText(target);
+  if (!normalizedTarget) return false;
+  if (signal.includes(normalizedTarget)) return true;
+
+  const tokens = normalizedTarget.split(/\s+/).filter((token) => token.length >= 3);
+  if (tokens.length === 0) return false;
+  const matched = tokens.filter((token) => signal.includes(token)).length;
+  return matched >= Math.max(1, Math.ceil(tokens.length * 0.5));
+}
+
+function hasTriggerKeyInMenus(menus: MenuItemType[], triggerKey: string): boolean {
+  const normalizedKey = normalizeTriggerKeyName(triggerKey);
+  const allNodes = flattenMenuNodes(Array.isArray(menus) ? menus : [], 5000);
+  for (const node of allNodes) {
+    const normalizedTrigger = normalizeTriggerShape(node);
+    const val = String((normalizedTrigger as any)?.[normalizedKey] ?? "").trim();
+    if (val) return true;
+  }
+  return false;
+}
+
+function detectAdaptiveGateMode(requirementText: string, expected: {
+  modules: string[];
+  tables: string[];
+  triggers: string[];
+}): { mode: "relaxed" | "business" | "hard"; minScore: number } {
+  const normalized = normalizeSearchText(requirementText);
+  const hardSignals = [
+    "tai chinh", "ke toan", "luong", "bao mat", "phan quyen", "phan quyen", "permission", "xac thuc",
+    "audit", "doi soat", "dong bo", "approval", "phe duyet", "workflow", "trigger", "report_db",
+  ];
+  const relaxedSignals = [
+    "doi ten", "rename", "icon", "mau", "color", "sap xep", "reorder", "label", "hien thi", "display",
+  ];
+
+  const hasHardSignal = hardSignals.some((token) => normalized.includes(token));
+  const hasRelaxedSignal = relaxedSignals.some((token) => normalized.includes(token));
+  const complexityScore =
+    (expected.modules.length >= 4 ? 1 : 0)
+    + (expected.tables.length >= 4 ? 1 : 0)
+    + (expected.triggers.length >= 1 ? 1 : 0);
+
+  if (hasHardSignal || complexityScore >= 2) {
+    return { mode: "hard", minScore: 82 };
+  }
+  if (hasRelaxedSignal && expected.modules.length <= 1 && expected.tables.length <= 1 && expected.triggers.length === 0) {
+    return { mode: "relaxed", minScore: 55 };
+  }
+  return { mode: "business", minScore: 70 };
+}
+
+function evaluateBusinessGate(requirementText: string, menus: MenuItemType[], aiOutputMeta: AiOutputMeta): BusinessGateEvaluation {
+  const expectedModules = extractRequirementModules(requirementText, 20);
+  const expectedTables = extractRequirementTables(requirementText, 40);
+  const expectedTriggers = extractRequirementTriggerKeys(requirementText, 12);
+  const policy = detectAdaptiveGateMode(requirementText, {
+    modules: expectedModules,
+    tables: expectedTables,
+    triggers: expectedTriggers,
+  });
+
+  const allNodes = flattenMenuNodes(Array.isArray(menus) ? menus : [], 5000);
+  const coveredModules = expectedModules.filter((item) => allNodes.some((node) => doesNodeSignalCoverText(node, item)));
+  const coveredTables = expectedTables.filter((tableName) => {
+    const target = normalizeSearchText(tableName);
+    if (!target) return false;
+    return allNodes.some((node) => normalizeSearchText((node as any)?.table_name).includes(target));
+  });
+  const coveredTriggers = expectedTriggers.filter((triggerKey) => hasTriggerKeyInMenus(menus, triggerKey));
+
+  const moduleRatio = expectedModules.length > 0 ? (coveredModules.length / expectedModules.length) : 1;
+  const tableRatio = expectedTables.length > 0 ? (coveredTables.length / expectedTables.length) : 1;
+  const triggerRatio = expectedTriggers.length > 0 ? (coveredTriggers.length / expectedTriggers.length) : 1;
+  const unresolvedPenalty = Math.min(0.25, Math.max(0, aiOutputMeta.unresolvedAssumptions.length - 1) * 0.05);
+
+  const weighted = (moduleRatio * 0.45) + (tableRatio * 0.35) + (triggerRatio * 0.2) - unresolvedPenalty;
+  const score = Math.max(0, Math.min(100, Math.round(weighted * 100)));
+
+  const blockers: string[] = [];
+  const warnings: string[] = [];
+  const missingModules = expectedModules.filter((item) => !coveredModules.includes(item));
+  const missingTables = expectedTables.filter((item) => !coveredTables.includes(item));
+  const missingTriggers = expectedTriggers.filter((item) => !coveredTriggers.includes(item));
+
+  const moduleMinRatio = policy.mode === "hard" ? 0.75 : policy.mode === "relaxed" ? 0.4 : 0.6;
+  const tableMinRatio = policy.mode === "hard" ? 0.65 : policy.mode === "relaxed" ? 0.35 : 0.5;
+
+  if (expectedModules.length >= 2 && moduleRatio < moduleMinRatio) {
+    blockers.push(`Bao phu module thap (${coveredModules.length}/${expectedModules.length}). Thieu: ${missingModules.slice(0, 6).join(", ")}`);
+  } else if (missingModules.length > 0) {
+    warnings.push(`Module chua bao phu day du: ${missingModules.slice(0, 6).join(", ")}`);
+  }
+
+  if (expectedTables.length >= 1 && tableRatio < tableMinRatio) {
+    blockers.push(`Bao phu bang/entity thap (${coveredTables.length}/${expectedTables.length}). Thieu: ${missingTables.slice(0, 8).join(", ")}`);
+  } else if (missingTables.length > 0) {
+    warnings.push(`Bang/entity chua bao phu: ${missingTables.slice(0, 8).join(", ")}`);
+  }
+
+  if (expectedTriggers.length > 0 && missingTriggers.length > 0) {
+    blockers.push(`Yeu cau trigger chua dat: thieu ${missingTriggers.join(", ")}.`);
+  }
+
+  if (policy.mode === "hard" && aiOutputMeta.unresolvedAssumptions.length > 1) {
+    blockers.push(`Hard gate: unresolved assumptions con ${aiOutputMeta.unresolvedAssumptions.length} (toi da 1).`);
+  }
+
+  if (score < policy.minScore) {
+    blockers.push(`Business gate score qua thap (${score}/100, nguong: ${policy.minScore}, mode=${policy.mode}).`);
+  } else if (score < Math.min(95, policy.minScore + 10)) {
+    warnings.push(`Business gate score trung binh (${score}/100). Nen review ky truoc khi apply.`);
+  }
+
+  return {
+    mode: policy.mode,
+    minScore: policy.minScore,
+    score,
+    blockers,
+    warnings,
+    expected: {
+      modules: expectedModules,
+      tables: expectedTables,
+      triggers: expectedTriggers,
+    },
+    covered: {
+      modules: coveredModules,
+      tables: coveredTables,
+      triggers: coveredTriggers,
+    },
+  };
 }
 
 export function buildAiMenuRequestPayload(
@@ -1612,6 +1832,17 @@ function extractMenuDraftForEditor(rawDraft: string): string | null {
   return null;
 }
 
+function buildRealtimeMenuDraftFromBase(baseMenusInput: MenuItemType[]): string | null {
+  const baseMenus = Array.isArray(baseMenusInput) ? baseMenusInput : [];
+  if (baseMenus.length === 0) return null;
+
+  try {
+    return buildEditorMenuJson(baseMenus);
+  } catch {
+    return null;
+  }
+}
+
 function isComboType(rawType: any): boolean {
   return /co|coro|cbo/i.test(String(rawType || ""));
 }
@@ -2262,7 +2493,7 @@ export function buildAiIncrementalUpdatePayload(
       app_id: String(appId || ""),
       menu_type_catalog: buildMenuTypeCatalog(),
       menu_logic_guide: buildMenuOrganizationGuide(),
-      current_menu_full_json: trimToMax(currentMenuJson, 60000),
+      current_menu_full_json: currentMenuJson,
       current_menu_node_count: Array.isArray(currentMenusFull) ? currentMenusFull.length : 0,
       context_files: (contextFiles || []).map((file) => ({
         name: file.name,
@@ -2328,6 +2559,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
   const [liveEditLines, setLiveEditLines] = useState<DiffLineInfo[]>([]);
   const [patchKeyword, setPatchKeyword] = useState("");
   const [patchActionFilter, setPatchActionFilter] = useState<"all" | "add" | "edit" | "delete">("all");
+  const [patchReviewFilter, setPatchReviewFilter] = useState<"all" | "pending" | "kept" | "undone">("pending");
   const [mergeLoading, setMergeLoading] = useState(false);
   const [mergeStats, setMergeStats] = useState<{ added: number; edited: number; deleted: number } | null>(null);
   const [aiStopReason, setAiStopReason] = useState<string>("");
@@ -2507,10 +2739,10 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     }
 
     const patchPayload = progress?.patchOps || payload?.patchOps;
-    if (Array.isArray(patchPayload)) {
-      const nextPatchOps = patchPayload as PatchOp[];
-      syncPatchReviewState(nextPatchOps);
+    const hasPatchOps = Array.isArray(patchPayload);
+    let nextPatchOps: PatchOp[] = hasPatchOps ? (patchPayload as PatchOp[]) : [];
 
+    if (hasPatchOps) {
       const deletedCount = nextPatchOps.filter((op) => op.action === "delete").length;
       const baseNodeCount = flattenMenuNodes(decodedCurrentMenus, 5000).length;
       const guardRequestText = [storedRequest, requestText].filter(Boolean).join("\n");
@@ -2531,15 +2763,61 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     if (typeof explicitDraft === "string" && explicitDraft.trim()) {
       const menuDraftText = extractMenuDraftForEditor(explicitDraft);
       if (menuDraftText) {
+        if (hasPatchOps && operationScenario === "incremental_update" && decodedCurrentMenus.length > 0) {
+          try {
+            const parsedDraft = JSON.parse(menuDraftText);
+            const draftMenus = normalizeMenuList(extractMenuListFromPayload(parsedDraft));
+            if (draftMenus.length > 0) {
+              const guardRequestText = [storedRequest, requestText].filter(Boolean).join("\n");
+              const scoped = enforceIncrementalTargetScope({
+                scenario: operationScenario,
+                baseMenus: decodedCurrentMenus,
+                draftMenus,
+                patchOps: nextPatchOps,
+                requestText: guardRequestText,
+              });
+              nextPatchOps = scoped.patchOps;
+              syncPatchReviewState(nextPatchOps);
+              if (scoped.blockedOps.length > 0) {
+                setAiProgress((prev) => ({
+                  ...(prev || {}),
+                  message: `Da bo qua ${scoped.blockedOps.length} thay doi ngoai pham vi yeu cau`,
+                }));
+              }
+              setEditableAiDraftText(JSON.stringify({ menu: scoped.draftMenus }, null, 2));
+              return;
+            }
+          } catch {
+            // Ignore parse errors and fallback to raw menu draft text.
+          }
+        }
+
+        if (hasPatchOps) {
+          syncPatchReviewState(nextPatchOps);
+        }
         setEditableAiDraftText(menuDraftText);
         return;
       }
+    }
+
+    if (hasPatchOps) {
+      syncPatchReviewState(nextPatchOps);
     }
 
     const textEdits = payload?.textEdits || progress?.textEdits;
     if (Array.isArray(textEdits) && textEdits.length > 0) {
       setLiveEditLines(buildLiveEditLineInfos(textEdits));
       setEditableAiDraftText((prev) => applyTextEditsToDraft(prev || aiResultText || "", textEdits));
+      return;
+    }
+
+    const runningLike = status !== "completed" && status !== "failed" && status !== "cancelled";
+    if (runningLike && operationScenario === "incremental_update" && decodedCurrentMenus.length > 0) {
+      const liveMenuDraft = buildRealtimeMenuDraftFromBase(decodedCurrentMenus);
+      if (liveMenuDraft && liveMenuDraft !== editableAiDraftText) {
+        setLiveEditLines([]);
+        setEditableAiDraftText(liveMenuDraft);
+      }
     }
   };
 
@@ -2926,11 +3204,49 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     const q = String(patchKeyword || "").trim().toLowerCase();
     return patchOpsView.filter((op) => {
       if (patchActionFilter !== "all" && op.action !== patchActionFilter) return false;
+      if (patchReviewFilter !== "all") {
+        const status = patchReviewStatus[op.nodeId] || "pending";
+        if (status !== patchReviewFilter) return false;
+      }
       if (!q) return true;
       const haystack = `${op.nodePath || ""} ${op.nodeName || ""} ${op.nodeId || ""} ${(op.changedFields || []).map((f) => f.fieldName).join(" ")}`.toLowerCase();
       return haystack.includes(q);
     });
-  }, [patchOpsView, patchKeyword, patchActionFilter]);
+  }, [patchOpsView, patchKeyword, patchActionFilter, patchReviewFilter, patchReviewStatus]);
+
+  const [activePatchCursor, setActivePatchCursor] = useState(0);
+
+  const activePatchOp = useMemo(() => {
+    if (visiblePatchOps.length <= 0) return null;
+    const idx = Math.max(0, Math.min(activePatchCursor, visiblePatchOps.length - 1));
+    return visiblePatchOps[idx] || null;
+  }, [visiblePatchOps, activePatchCursor]);
+
+  const activePatchStatus: "pending" | PatchReviewStatus = activePatchOp
+    ? (patchReviewStatus[activePatchOp.nodeId] || "pending")
+    : "pending";
+
+  const keptPatchCount = useMemo(
+    () => patchOps.filter((op) => patchReviewStatus[op.nodeId] === "kept").length,
+    [patchOps, patchReviewStatus],
+  );
+
+  const undonePatchCount = useMemo(
+    () => patchOps.filter((op) => patchReviewStatus[op.nodeId] === "undone").length,
+    [patchOps, patchReviewStatus],
+  );
+
+  useEffect(() => {
+    if (visiblePatchOps.length <= 0) {
+      setActivePatchCursor(0);
+      return;
+    }
+    setActivePatchCursor((prev) => {
+      if (prev < 0) return 0;
+      if (prev >= visiblePatchOps.length) return visiblePatchOps.length - 1;
+      return prev;
+    });
+  }, [visiblePatchOps.length]);
 
   const focusPatchOpLine = (nodeId: string) => {
     const view = resultEditorViewRef.current;
@@ -2946,6 +3262,124 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
       effects: EditorView.scrollIntoView(line.from, { y: "center" }),
     });
     view.focus();
+  };
+
+  const focusPatchByIndex = (index: number) => {
+    if (visiblePatchOps.length <= 0) return;
+    const max = visiblePatchOps.length;
+    const normalized = ((index % max) + max) % max;
+    setActivePatchCursor(normalized);
+    const target = visiblePatchOps[normalized];
+    if (target?.nodeId) {
+      focusPatchOpLine(target.nodeId);
+    }
+  };
+
+  const prevPatchCountRef = useRef(0);
+  useEffect(() => {
+    const prevCount = prevPatchCountRef.current;
+    const nextCount = patchOpsView.length;
+    prevPatchCountRef.current = nextCount;
+
+    if (nextCount <= 0) return;
+    if (prevCount <= 0 && nextCount > 0) {
+      const firstLinePatch = patchOpsView.find((op) => !!op.line);
+      if (firstLinePatch?.nodeId) {
+        const firstVisibleIndex = visiblePatchOps.findIndex((item) => item.nodeId === firstLinePatch.nodeId);
+        if (firstVisibleIndex >= 0) {
+          focusPatchByIndex(firstVisibleIndex);
+        } else {
+          focusPatchOpLine(firstLinePatch.nodeId);
+        }
+      }
+    }
+  }, [patchOpsView, visiblePatchOps]);
+
+  useEffect(() => {
+    const handlePatchHotkeys = (event: KeyboardEvent) => {
+      if (!event.altKey || visiblePatchOps.length <= 0) return;
+      if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+
+      const targetTag = (event.target as HTMLElement | null)?.tagName?.toLowerCase();
+      if (targetTag === "input" || targetTag === "textarea") return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.key === "ArrowUp") {
+        focusPatchByIndex(activePatchCursor - 1);
+      } else {
+        focusPatchByIndex(activePatchCursor + 1);
+      }
+    };
+
+    window.addEventListener("keydown", handlePatchHotkeys);
+    return () => window.removeEventListener("keydown", handlePatchHotkeys);
+  }, [activePatchCursor, visiblePatchOps]);
+
+  const applyPatchReviewBulk = (mode: "keep" | "undo", scope: "all" | "visible" = "all") => {
+    const targetOps = (scope === "visible" ? visiblePatchOps : patchOps).filter(Boolean) as PatchOp[];
+    if (targetOps.length === 0) return;
+
+    if (mode === "keep") {
+      setPatchReviewStatus((prev) => {
+        const next = { ...(prev || {}) };
+        targetOps.forEach((op) => {
+          if (!op?.nodeId) return;
+          next[op.nodeId] = "kept";
+        });
+        return next;
+      });
+      return;
+    }
+
+    const rawDraftText = String(editableAiDraftText || aiResultText || "").trim();
+    if (!rawDraftText) return;
+
+    try {
+      const parsedDraft = JSON.parse(rawDraftText);
+      const baseMenus = normalizeMenuList(Array.isArray(currentMenus) ? currentMenus : []);
+      const extractedMenus = extractMenuListFromPayload(parsedDraft);
+      const draftMenus = normalizeMenuList(extractedMenus.length > 0 ? extractedMenus : (Array.isArray(aiMenus) ? aiMenus : []));
+
+      let revertedMenus = cloneMenuTree(draftMenus);
+      for (const op of targetOps) {
+        revertedMenus = revertPatchOpOnMenus(revertedMenus, baseMenus, op);
+      }
+
+      let nextPayload: any;
+      if (Array.isArray(parsedDraft?.menu)) {
+        nextPayload = { ...parsedDraft, menu: revertedMenus };
+      } else if (Array.isArray(parsedDraft?.data?.menu)) {
+        nextPayload = { ...parsedDraft, data: { ...parsedDraft.data, menu: revertedMenus } };
+      } else if (Array.isArray(parsedDraft)) {
+        nextPayload = revertedMenus;
+      } else {
+        nextPayload = { ...(isPlainObject(parsedDraft) ? parsedDraft : {}), menu: revertedMenus };
+      }
+
+      setEditableAiDraftText(JSON.stringify(nextPayload, null, 2));
+      setAiMenus(revertedMenus);
+      setPatchReviewStatus((prev) => {
+        const next = { ...(prev || {}) };
+        targetOps.forEach((op) => {
+          if (!op?.nodeId) return;
+          next[op.nodeId] = "undone";
+        });
+        return next;
+      });
+    } catch {
+      message.warning("Draft hien tai khong phai JSON hop le, khong the khoi phuc hang loat");
+    }
+  };
+
+  const applyCurrentPatchDecision = (mode: "keep" | "undo") => {
+    const nodeId = activePatchOp?.nodeId;
+    if (!nodeId) return;
+    if (mode === "keep") {
+      handleKeepAiPatch(nodeId);
+      return;
+    }
+    handleUndoAiPatch(nodeId);
   };
 
   const effectiveDraftMenus = useMemo(() => {
@@ -2974,8 +3408,18 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     [menuValidationIssues],
   );
 
-  const expectedModules = useMemo(() => extractRequirementModules(storedRequest || requestText || "", 20), [storedRequest, requestText]);
-  const expectedTables = useMemo(() => extractRequirementTables(storedRequest || requestText || "", 30), [storedRequest, requestText]);
+  const mergedRequestText = useMemo(() => {
+    if (!requestText.trim()) return storedRequest;
+    if (!storedRequest.trim()) return requestText;
+    return `${storedRequest}\n---\n${requestText}`;
+  }, [requestText, storedRequest]);
+
+  const expectedModules = useMemo(() => extractRequirementModules(mergedRequestText || "", 20), [mergedRequestText]);
+  const expectedTables = useMemo(() => extractRequirementTables(mergedRequestText || "", 30), [mergedRequestText]);
+  const businessGate = useMemo(
+    () => evaluateBusinessGate(mergedRequestText || "", effectiveDraftMenus || [], aiOutputMeta),
+    [mergedRequestText, effectiveDraftMenus, aiOutputMeta],
+  );
 
   const applyGuardIssues = useMemo(() => {
     const issues: string[] = [];
@@ -3001,8 +3445,19 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
       issues.push("coverage_tables còn trạng thái missing.");
     }
 
+    if (businessGate.blockers.length > 0) {
+      issues.push(...businessGate.blockers);
+    }
+
     return issues;
-  }, [aiOutputMeta.coverageModules, aiOutputMeta.coverageTables, aiOutputMeta.unresolvedAssumptions.length, expectedModules.length, expectedTables.length]);
+  }, [
+    aiOutputMeta.coverageModules,
+    aiOutputMeta.coverageTables,
+    aiOutputMeta.unresolvedAssumptions.length,
+    expectedModules.length,
+    expectedTables.length,
+    businessGate.blockers,
+  ]);
 
   const hasStoredRequest = storedRequest.trim().length > 0;
   const applyMenuCount = effectiveDraftMenus.length;
@@ -3014,12 +3469,6 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     () => transformMenuTriggers(sampleMenuParsed || [], "decode"),
     [sampleMenuParsed],
   );
-
-  const mergedRequestText = useMemo(() => {
-    if (!requestText.trim()) return storedRequest;
-    if (!storedRequest.trim()) return requestText;
-    return `${storedRequest}\n---\n${requestText}`;
-  }, [requestText, storedRequest]);
 
   const sampleAppOptions = useMemo(() => {
     const toLabel = (raw: any, fallback: string): string => {
@@ -3258,7 +3707,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     );
     setLoading(true);
     setAiStopReason("");
-    setValidationProfile("strict");
+    setValidationProfile(operationScenario === "incremental_update" ? "legacy" : "strict");
     setAiMenus(null);
     setAiResultText("");
     setLiveEditLines([]);
@@ -3366,6 +3815,20 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
           }));
           message.error(stopMessage);
           return;
+        }
+
+        const scoped = enforceIncrementalTargetScope({
+          scenario: operationScenario,
+          baseMenus: decodedCurrentMenus,
+          draftMenus: finalMenus,
+          patchOps: Array.isArray(mergeResult?.patchOps) ? mergeResult.patchOps : [],
+          requestText: guardRequestText,
+        });
+        if (scoped.blockedOps.length > 0) {
+          finalMenus = scoped.draftMenus;
+          syncPatchReviewState(scoped.patchOps);
+          setMergeStats(buildMergeStatsFromPatchOps(scoped.patchOps));
+          message.warning(`Da tu dong bo qua ${scoped.blockedOps.length} thay doi ngoai pham vi yeu cau.`);
         }
       } else {
         syncPatchReviewState([]);
@@ -3880,12 +4343,9 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                   status={aiProgress.status === "failed" ? "exception" : aiProgress.status === "completed" ? "success" : "active"}
                 />
                 <div style={{ fontSize: 12 }}>
-                  Stage: {aiProgress.stage || aiProgress.status || "running"}
                   {aiProgress.current != null && aiProgress.total != null ? ` | Step: ${aiProgress.current}/${aiProgress.total}` : ""}
-                  {aiProgress.level != null ? ` | Level: ${aiProgress.level}` : ""}
                   {aiProgress.elapsedMs ? ` | Elapsed: ${formatDurationMs(aiProgress.elapsedMs)}` : ""}
-                  {aiProgress.waitingMs ? ` | Waiting: ${formatDurationMs(aiProgress.waitingMs)}` : ""}
-                  {aiProgress.jobId ? ` | Job: ${aiProgress.jobId}` : ""}
+                  {aiProgress.stage === "waiting_rate_limit" && aiProgress.waitingMs ? ` | Quota wait: ${formatDurationMs(aiProgress.waitingMs)}` : ""}
                 </div>
               </Space>
             }
@@ -3963,13 +4423,23 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                 />
               )}
 
-              {(aiOutputMeta.coverageModules.length > 0 || aiOutputMeta.coverageTables.length > 0 || aiOutputMeta.unresolvedAssumptions.length > 0) && (
+              {(aiOutputMeta.coverageModules.length > 0 || aiOutputMeta.coverageTables.length > 0 || aiOutputMeta.unresolvedAssumptions.length > 0 || businessGate.score > 0) && (
                 <Alert
                   type="info"
                   showIcon
-                  message={`Coverage: modules=${aiOutputMeta.coverageModules.length}, tables=${aiOutputMeta.coverageTables.length}, unresolved=${aiOutputMeta.unresolvedAssumptions.length}`}
+                  message={`Coverage: modules=${aiOutputMeta.coverageModules.length}, tables=${aiOutputMeta.coverageTables.length}, unresolved=${aiOutputMeta.unresolvedAssumptions.length} | gate=${businessGate.mode} | score=${businessGate.score}/${businessGate.minScore}`}
                   description={
                     <div style={{ maxHeight: 220, overflow: "auto", paddingRight: 8 }}>
+                      <div style={{ marginBottom: 8 }}>
+                        <strong>business_gate</strong>
+                        <div>- mode={businessGate.mode}, min_score={businessGate.minScore}</div>
+                        <div>- expected_modules={businessGate.expected.modules.length}, covered={businessGate.covered.modules.length}</div>
+                        <div>- expected_tables={businessGate.expected.tables.length}, covered={businessGate.covered.tables.length}</div>
+                        <div>- expected_triggers={businessGate.expected.triggers.length}, covered={businessGate.covered.triggers.length}</div>
+                        {businessGate.warnings.slice(0, 5).map((item, idx) => (
+                          <div key={`bg_warn_${idx}`}>- warning: {item}</div>
+                        ))}
+                      </div>
                       {aiOutputMeta.coverageModules.length > 0 && (
                         <div style={{ marginBottom: 10 }}>
                           <strong>coverage_modules</strong>
@@ -4007,7 +4477,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                 <Alert
                   type="info"
                   showIcon
-                  message={t("system.menu.aiDesigner.mergePreview.title") || "Xem trước thay đổi chính xác kiểu Copilot"}
+                  message={t("system.menu.aiDesigner.mergePreview.title") || "Điều hướng thay đổi"}
                   description={
                     <div>
                       <div>
@@ -4019,15 +4489,69 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                         {mergeLoading ? ` • ${t("system.menu.aiDesigner.mergePreview.computing") || "đang tính merge"}` : ""}
                       </div>
                       {patchOps.length > 0 && (
-                        <div style={{ marginTop: 4 }}>
-                          <Tag color="processing">Changes: {patchOps.length}</Tag>
-                          <Tag color="green">Kept: {patchOps.filter((op) => patchReviewStatus[op.nodeId] === "kept").length}</Tag>
-                          <Tag color="default">Undone: {patchOps.filter((op) => patchReviewStatus[op.nodeId] === "undone").length}</Tag>
+                        <div
+                          style={{
+                            marginTop: 8,
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "space-between",
+                            flexWrap: "wrap",
+                            gap: 8,
+                            padding: "8px 10px",
+                            border: "1px solid var(--ant-color-border)",
+                            borderRadius: 10,
+                            background: "var(--ant-color-bg-container)",
+                          }}
+                        >
+                          <strong>{`Thêm ${mergeStats.added}, sửa ${mergeStats.edited}, xóa ${mergeStats.deleted}`}</strong>
+                          <span style={{ fontSize: 12, color: "var(--ant-color-text-secondary)" }}>
+                            {`Changes: ${patchOps.length} Kept: ${keptPatchCount} Undone: ${undonePatchCount} | ${visiblePatchOps.length > 0 ? `${activePatchCursor + 1} of ${visiblePatchOps.length}` : "0 of 0"}`}
+                          </span>
                         </div>
                       )}
                       {patchOps.length > 0 && (
-                        <div style={{ marginTop: 6, color: "rgba(0,0,0,0.68)" }}>
-                          Dòng có thay đổi sẽ hiện Keep hoặc Undo ngay trong editor. Các mục xóa hoặc ngoài màn hình có thể review ở danh sách bên dưới.
+                        <div style={{ marginTop: 8 }}>
+                          <div
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 8,
+                              background: "var(--ant-color-bg-elevated)",
+                              color: "var(--ant-color-text)",
+                              borderRadius: 10,
+                              padding: "6px 10px",
+                              border: "1px solid var(--ant-color-border)",
+                              boxShadow: "var(--ant-box-shadow-secondary)",
+                            }}
+                          >
+                            <Button
+                              size="small"
+                              type="primary"
+                              onClick={() => applyCurrentPatchDecision("keep")}
+                              disabled={!activePatchOp || activePatchStatus !== "pending"}
+                            >
+                              Keep
+                            </Button>
+                            <Button
+                              size="small"
+                              onClick={() => applyCurrentPatchDecision("undo")}
+                              danger
+                              disabled={!activePatchOp || activePatchStatus !== "pending"}
+                            >
+                              Undo
+                            </Button>
+                            <span style={{ opacity: 0.75, color: "var(--ant-color-text-secondary)" }}>|</span>
+                            <span style={{ fontSize: 12, minWidth: 58, textAlign: "center" }}>
+                              {visiblePatchOps.length > 0 ? `${activePatchCursor + 1} of ${visiblePatchOps.length}` : "0 of 0"}
+                            </span>
+                            <Button size="small" onClick={() => focusPatchByIndex(activePatchCursor - 1)} disabled={visiblePatchOps.length === 0}>↑</Button>
+                            <Button size="small" onClick={() => focusPatchByIndex(activePatchCursor + 1)} disabled={visiblePatchOps.length === 0}>↓</Button>
+                          </div>
+                        </div>
+                      )}
+                      {patchOps.length > 0 && (
+                        <div style={{ marginTop: 6, color: "var(--ant-color-text-secondary)" }}>
+                          Review theo thanh Keep/Undo ở trên hoặc từng dòng trong danh sách bên dưới.
                         </div>
                       )}
                       {patchOps.length > 0 && (
@@ -4045,6 +4569,18 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                               ]}
                               style={{ width: 110 }}
                             />
+                            <Select
+                              size="small"
+                              value={patchReviewFilter}
+                              onChange={(val) => setPatchReviewFilter(val)}
+                              options={[
+                                { value: "pending", label: "Pending" },
+                                { value: "kept", label: "Kept" },
+                                { value: "undone", label: "Undone" },
+                                { value: "all", label: "Tất cả trạng thái" },
+                              ]}
+                              style={{ width: 150 }}
+                            />
                             <Input
                               size="small"
                               value={patchKeyword}
@@ -4054,9 +4590,20 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                               allowClear
                             />
                             <Tag color="processing">Hiển thị: {visiblePatchOps.length}/{patchOps.length}</Tag>
+                            <Tag color="default">Hotkey: Alt+↑ / Alt+↓</Tag>
+                            {visiblePatchOps.length > 0 && (
+                              <>
+                                <Button size="small" onClick={() => focusPatchByIndex(activePatchCursor - 1)} title="Patch trước">↑</Button>
+                                <Button size="small" onClick={() => focusPatchByIndex(activePatchCursor + 1)} title="Patch sau">↓</Button>
+                                <Button size="small" type="primary" onClick={() => applyPatchReviewBulk("keep", "all")}>Apply all</Button>
+                                <Button size="small" danger onClick={() => applyPatchReviewBulk("undo", "all")}>Restore all</Button>
+                                <Button size="small" onClick={() => applyPatchReviewBulk("keep", "visible")}>Apply visible</Button>
+                                <Button size="small" danger onClick={() => applyPatchReviewBulk("undo", "visible")}>Restore visible</Button>
+                              </>
+                            )}
                           </Space>
 
-                          <div style={{ marginTop: 8, maxHeight: 280, overflow: "auto", paddingRight: 8, borderTop: "1px solid rgba(0,0,0,0.06)", paddingTop: 8 }}>
+                          <div style={{ marginTop: 8, maxHeight: 280, overflow: "auto", paddingRight: 8, borderTop: "1px solid var(--ant-color-border-secondary)", paddingTop: 8 }}>
                             {visiblePatchOps.map((op, idx) => (
                               <div
                                 key={`${op.nodeId}_${idx}`}
@@ -4066,7 +4613,8 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                                   justifyContent: "space-between",
                                   gap: 12,
                                   padding: "8px 0",
-                                  borderBottom: "1px dashed rgba(0,0,0,0.08)",
+                                  borderBottom: "1px dashed var(--ant-color-border-secondary)",
+                                  background: idx === activePatchCursor ? "var(--ant-color-primary-bg)" : undefined,
                                 }}
                               >
                                 <div style={{ flex: 1, minWidth: 0 }}>
@@ -4080,14 +4628,14 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                                     </Tag>
                                   </div>
                                   {Array.isArray(op.changedFields) && op.changedFields.length > 0 && (
-                                    <div style={{ marginTop: 6, fontSize: 12, color: "rgba(0,0,0,0.78)" }}>
+                                    <div style={{ marginTop: 6, fontSize: 12, color: "var(--ant-color-text)" }}>
                                       {op.changedFields.slice(0, 6).map((field, fIdx) => (
                                         <div key={`${op.nodeId}_${field.fieldName}_${fIdx}`}>
                                           • {field.fieldName}: {formatFieldDeltaValue(field.oldVal)} → {formatFieldDeltaValue(field.newVal)}
                                         </div>
                                       ))}
                                       {op.changedFields.length > 6 && (
-                                        <div style={{ color: "rgba(0,0,0,0.55)" }}>...{op.changedFields.length - 6} thay đổi field nữa</div>
+                                        <div style={{ color: "var(--ant-color-text-secondary)" }}>...{op.changedFields.length - 6} thay đổi field nữa</div>
                                       )}
                                     </div>
                                   )}
@@ -4115,7 +4663,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                               </div>
                             ))}
                             {visiblePatchOps.length === 0 && (
-                              <div style={{ color: "rgba(0,0,0,0.55)" }}>Không có mục thay đổi phù hợp bộ lọc hiện tại.</div>
+                              <div style={{ color: "var(--ant-color-text-secondary)" }}>Không có mục thay đổi phù hợp bộ lọc hiện tại.</div>
                             )}
                           </div>
                         </div>
@@ -4125,14 +4673,14 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                 />
               )}
 
-              <div style={{ border: "1px solid #d9d9d9", borderRadius: 6, overflow: "hidden" }}>
+              <div style={{ border: "1px solid var(--ant-color-border)", borderRadius: 6, overflow: "hidden" }}>
                 <CodeMirror
                   value={
                     editableAiDraftText
                       ? editableAiDraftText
-                      : (aiResultText || buildAiProgressResultText(aiProgress))
+                      : (aiResultText || buildEditorMenuJson(decodedCurrentMenus))
                   }
-                  height="360px"
+                  height="clamp(320px, 64vh, 860px)"
                   theme={vscodeDark}
                   extensions={[json(), diffDecorationsField, diffTheme]}
                   onCreateEditor={(view: any) => {
