@@ -248,10 +248,21 @@ public class GitHubModelsService {
       }
 
       List<String> chunkSummaries = new ArrayList<>();
+      String taskHint = buildTaskHint(prompt);
       int idx = 1;
       for (String chunk : chunks) {
         Map<String, Object> extra = new HashMap<>();
         extra.put("phase", "chunk-summary");
+        String preChunkDraft = buildRealtimeDraftText(
+            "chunking",
+            "Dang phan tich tung phan du lieu",
+            taskHint,
+            chunkSummaries,
+            idx - 1,
+            chunks.size());
+        if (preChunkDraft != null && !preChunkDraft.isBlank()) {
+          extra.put("draftText", preChunkDraft);
+        }
         emitProgress(progressListener, progressPayload("chunking", "Đang phân tích từng phần của prompt", idx - 1, chunks.size(), extra));
         String chunkPrompt = buildChunkSummaryPrompt(idx, chunks.size(), chunk);
         String chunkRaw = callChatCompletion(chunkPrompt, chunkSummaryMaxTokens, chunkSummaryTemperature, progressListener,
@@ -264,15 +275,50 @@ public class GitHubModelsService {
           return createErrorJson("Không trích xuất được summary của chunk " + idx, "GITHUB_CHUNK_PARSE_EMPTY");
         }
         chunkSummaries.add(chunkContent.trim());
+        Map<String, Object> postChunkExtra = new HashMap<>();
+        postChunkExtra.put("phase", "chunk-summary");
+        String postChunkDraft = buildRealtimeDraftText(
+            "chunking",
+            "Da hoan tat chunk " + idx + "/" + chunks.size(),
+            taskHint,
+            chunkSummaries,
+            idx,
+            chunks.size());
+        if (postChunkDraft != null && !postChunkDraft.isBlank()) {
+          postChunkExtra.put("draftText", postChunkDraft);
+        }
+        emitProgress(progressListener, progressPayload("chunking", "Đang cập nhật bản nháp tạm thời", idx, chunks.size(), postChunkExtra));
         idx++;
       }
 
-      emitProgress(progressListener, progressPayload("reducing", "Đang gộp tóm tắt các chunk", 0, chunkSummaries.size(), null));
+      Map<String, Object> reducingExtra = new HashMap<>();
+      String reducingDraft = buildRealtimeDraftText(
+          "reducing",
+          "Dang gom cac chunk summary de tong hop",
+          taskHint,
+          chunkSummaries,
+          0,
+          chunkSummaries.size());
+      if (reducingDraft != null && !reducingDraft.isBlank()) {
+        reducingExtra.put("draftText", reducingDraft);
+      }
+      emitProgress(progressListener, progressPayload("reducing", "Đang gộp tóm tắt các chunk", 0, chunkSummaries.size(), reducingExtra));
       List<String> reducedSummaries = reduceSummaries(chunkSummaries, progressListener);
-      emitProgress(progressListener, progressPayload("final_merge", "Đang tổng hợp kết quả cuối", 0, 1, null));
-      String mergedPrompt = buildMergedPrompt(buildTaskHint(prompt), reducedSummaries);
+      Map<String, Object> finalMergeExtra = new HashMap<>();
+      String finalMergeDraft = buildRealtimeDraftText(
+          "final_merge",
+          "Dang tong hop ket qua cuoi cung",
+          taskHint,
+          reducedSummaries,
+          0,
+          1);
+      if (finalMergeDraft != null && !finalMergeDraft.isBlank()) {
+        finalMergeExtra.put("draftText", finalMergeDraft);
+      }
+      emitProgress(progressListener, progressPayload("final_merge", "Đang tổng hợp kết quả cuối", 0, 1, finalMergeExtra));
+      String mergedPrompt = buildMergedPrompt(taskHint, reducedSummaries);
         String mergedRaw = callChatCompletion(mergedPrompt, maxOutputTokens, mergeTemperature, progressListener,
-          progressPayload("final_merge", "Đang chờ phản hồi tổng hợp cuối", 1, 1, null));
+          progressPayload("final_merge", "Đang chờ phản hồi tổng hợp cuối", 1, 1, finalMergeExtra));
       if (mergedRaw == null || mergedRaw.isBlank()) {
         return createErrorJson("Tổng hợp chunk trả về rỗng", "GITHUB_MERGE_EMPTY_RESPONSE");
       }
@@ -293,6 +339,42 @@ public class GitHubModelsService {
     } catch (Exception ex) {
       log.error("GitHub Models chunked request failed", ex);
       return createErrorJson("Lỗi xử lý prompt lớn qua GitHub Models: " + ex.getMessage(), "GITHUB_CHUNKED_ERROR");
+    }
+  }
+
+  private String buildRealtimeDraftText(
+      String stage,
+      String message,
+      String taskHint,
+      List<String> summaries,
+      int current,
+      int total) {
+    try {
+      Map<String, Object> draft = new HashMap<>();
+      draft.put("success", false);
+      draft.put("status", "running");
+      draft.put("stage", stage);
+      draft.put("message", message);
+      draft.put("progress", Map.of(
+          "current", Math.max(0, current),
+          "total", Math.max(1, total)));
+      draft.put("task_hint", trimToMax(taskHint == null ? "" : taskHint, 1200));
+
+      List<String> preview = new ArrayList<>();
+      if (summaries != null && !summaries.isEmpty()) {
+        int start = Math.max(0, summaries.size() - 3);
+        for (int i = start; i < summaries.size(); i++) {
+          String item = summaries.get(i);
+          if (item != null && !item.isBlank()) {
+            preview.add(trimToMax(item, 700));
+          }
+        }
+      }
+      draft.put("working_summaries", preview);
+      return objectMapper.writeValueAsString(draft);
+    } catch (Exception ex) {
+      log.debug("Cannot build realtime draft text: {}", ex.getMessage());
+      return null;
     }
   }
 
@@ -848,6 +930,9 @@ public class GitHubModelsService {
           5. For any NEW node added: must include complete table fields and type_form.
           6. Return format: { "menu": [FULL_TREE], "notes": [...], "warnings": [...] }
           7. If current_menu_full_json is present in the payload, use it as the authoritative base.
+          8. DO NOT collapse the menu tree to a subset. Keep unchanged branches exactly as-is.
+          9. If request does not explicitly ask for bulk deletion, keep nearly all existing nodes and only patch targets.
+          10. Never return a single-module tree when input contains multi-module structure.
           """;
       case PROPERTY_EDIT -> """
           ## ACTIVE SCENARIO: PROPERTY_EDIT

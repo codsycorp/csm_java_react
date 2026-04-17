@@ -1,6 +1,6 @@
 # CSM Multi-tenant AI Menu Master Prompt
 
-Version: 1.0.0
+Version: 1.1.0
 Owner: backend + frontend-admin
 Purpose: Provide stable, app-scoped context so AI can design/update menu configs safely for each app_id.
 
@@ -59,6 +59,12 @@ You MUST NOT:
 - Respect dev/admin/sub-user visibility and menu-level allow/deny.
 - Do not expose hidden admin menus to non-admin users.
 
+### 3.4 Validation profile contract
+- `validation_profile` MUST be one of: `strict`, `legacy`.
+- Use `strict` for new AI-generated structures (`new_build`).
+- Use `legacy` for existing app configs under incremental update/refactor where old runtime behavior must be preserved.
+- Backend and frontend validators MUST evaluate rules by profile and keep non-breaking legacy paths as warnings when safe.
+
 ---
 
 ## 4) TABLE FIELD SCHEMA STANDARD (STRICT)
@@ -87,6 +93,7 @@ Rules:
 - Every table must have stable PK strategy (id or composite fieldsPK).
 - Avoid ambiguous/duplicate f_name.
 - For readonly data, prefer *_ro variants.
+- In `legacy` profile for `type_form` 1/2, `table_name` may be empty if `m_configs.trigger.load_db` is present and valid.
 
 ---
 
@@ -111,6 +118,14 @@ Rules:
 - `fields` should include at least value + label.
 - `obj_where` optional but if present must include field/type/value.
 - For static list, use `options` with [{"value":"...","label":"..."}].
+
+Legacy compatibility (`validation_profile = legacy`):
+- `f_cbo_query` may be one of:
+  - JSON string in strict shape.
+  - JSON string that resolves to object/array with runtime-usable query/options.
+  - object or array value directly (non-string) when existing menu data already stores parsed structure.
+  - function body style string/code block that returns runtime object (legacy `Function(...)` execution path).
+- In legacy mode, treat non-empty and runtime-parseable `f_cbo_query` as acceptable; reserve critical errors for truly empty or unusable values.
 
 ---
 
@@ -244,6 +259,7 @@ RequestContext = {
   system_core: this_master_prompt,
   system_fingerprint: "sha256_of_core_and_schema",
   app_id: "target_tenant",
+  validation_profile: "strict|legacy",
   app_metadata: {
     app_name: "...",
     enabled_modules: [...],
@@ -261,6 +277,7 @@ RequestContext = {
   ],
   task: {
     mode: "create|update|refactor|migrate",
+    operation_scenario: "new_build|incremental_update|property_edit",
     requirement_text: "developer request"
   },
   routing_hints: {
@@ -281,8 +298,14 @@ AI must return this envelope:
 {
   "app_id": "...",
   "mode": "create|update|refactor|migrate",
+  "validation_profile": "strict|legacy",
   "summary": "short",
-  "menus": [ ...full_or_patch_menu_nodes... ],
+  "menus": [
+    {
+      "...": "...",
+      "data_source_mode": "table_name|trigger_load_db|hybrid"
+    }
+  ],
   "table_structs": [ ...optional_table_defs... ],
   "migration_notes": [ ... ],
   "warnings": [ ... ],
@@ -307,10 +330,14 @@ If AI cannot satisfy contract, return:
 Before writing to DB for target app_id:
 - Check payload is valid JSON and matches required envelope.
 - Verify returned app_id == requested app_id.
+- Verify `validation_profile` is present and policy-compliant with task context.
 - Validate all menu nodes have unique id/key/path policy.
 - Validate type_form compatibility with provided configs.
-- Validate each table field schema (f_name, f_types, required keys).
-- Validate every combo query JSON parse success.
+- Validate each table field schema (f_name, f_types, required keys) using profile-aware rules.
+- Validate combo query using profile-aware parser:
+  - strict: enforce canonical JSON shape.
+  - legacy: allow runtime-compatible legacy shapes and downgrade to warning when safe.
+- For `type_form` 1/2 in legacy mode, do not fail on missing `table_name` if `trigger.load_db` is present and valid.
 - Static analyze trigger code for forbidden patterns (cross-tenant writes, unsafe eval sources, destructive ops).
 - Validate permission fields/bitfield assumptions are not weakened.
 - Run dry-run render simulation in frontend-admin schema checker.

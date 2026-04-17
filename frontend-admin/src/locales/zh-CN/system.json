@@ -517,6 +517,19 @@
 				"applySuccess": "已将节点修改应用到系统",
 				"editableResultHint": "节点已修改，应用前仍可继续编辑编辑器中的 JSON"
 			},
+			"editor": {
+				"livePatchOn": "实时补丁：开启",
+				"livePatchOff": "实时补丁：关闭",
+				"livePatchHintOn": "AI 运行时可直接在编辑器中按行或多行修改",
+				"livePatchHintOff": "AI 仅在完成后更新编辑器",
+				"manualWhileRunOn": "运行中手动编辑：开启",
+				"manualWhileRunOff": "运行中手动编辑：关闭",
+				"resetFromProgram": "将程序 JSON 重新载入编辑器"
+			},
+			"editorSeed": {
+				"sample": "已将样例程序 JSON 载入编辑器",
+				"current": "已将当前菜单 JSON 载入编辑器"
+			},
 			"mergePreview": {
 				"title": "类似 Copilot 的精确变更预览",
 				"summary": "新增 {{added}}，修改 {{edited}}，删除 {{deleted}}",

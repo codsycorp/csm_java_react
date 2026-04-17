@@ -517,6 +517,19 @@
 				"applySuccess": "Applied the node edit to the system",
 				"editableResultHint": "The node has been updated — the JSON in the editor can still be adjusted before Apply"
 			},
+			"editor": {
+				"livePatchOn": "Live patch on",
+				"livePatchOff": "Live patch off",
+				"livePatchHintOn": "AI can apply line-by-line or multi-line edits directly in the editor while running",
+				"livePatchHintOff": "AI updates the editor only after completion",
+				"manualWhileRunOn": "Manual edit while running: on",
+				"manualWhileRunOff": "Manual edit while running: off",
+				"resetFromProgram": "Reload program JSON into editor"
+			},
+			"editorSeed": {
+				"sample": "Sample program JSON has been loaded into the editor",
+				"current": "Current menu JSON has been loaded into the editor"
+			},
 			"mergePreview": {
 				"title": "Precise Copilot-style change preview",
 				"summary": "Added {{added}}, edited {{edited}}, deleted {{deleted}}",

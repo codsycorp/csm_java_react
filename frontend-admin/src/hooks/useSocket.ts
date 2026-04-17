@@ -274,12 +274,24 @@ export function useSocket(options: UseSocketOptions = {}) {
 		if (!appId) return;
 		const socket = socketRef.current || sharedSocket;
 		if (!socket) return;
-		if (lastJoinedRoomRef.current === appId) return;
-		socket.emit("join_room", appId);
-		lastJoinedRoomRef.current = appId;
-		if (isAdmin) {
-			socket.emit("join_room", "csm");
+
+		const joinBaseRooms = () => {
+			socket.emit("join_room", appId);
+			lastJoinedRoomRef.current = appId;
+			if (isAdmin) {
+				socket.emit("join_room", "csm");
+			}
+		};
+
+		if (lastJoinedRoomRef.current !== appId) {
+			joinBaseRooms();
 		}
+
+		// Socket.IO rooms are server-side; after reconnect we must join again.
+		socket.on("connect", joinBaseRooms);
+		return () => {
+			socket.off?.("connect", joinBaseRooms);
+		};
 	}, [enabled, appId, isAdmin]);
 
 	return {

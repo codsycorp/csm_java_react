@@ -743,6 +743,10 @@ public class ApiSpringController {
             handleAiAsyncStatus(response, params);
             return;
         }
+        if ("cancel".equals(mode)) {
+            handleAiAsyncCancel(response, params);
+            return;
+        }
 
         String prompt = extractPromptAsString(params);
         boolean asyncRequested = "submit".equals(mode)
@@ -1191,18 +1195,29 @@ public class ApiSpringController {
         job.put("realtimeTaskType", String.valueOf(params.getOrDefault("taskType", "ai_async_job")).trim());
         job.put("createdAt", now);
         job.put("updatedAt", now);
+        job.put("cancelled", false);
         job.put("pollAfterMs", aiAsyncPollMinMs);
         job.put("progress", createAiJobProgress("queued", "Đang xếp hàng xử lý AI", 0, 1, null));
         aiAsyncJobs.put(jobId, job);
 
         aiAsyncExecutor.submit(() -> {
             try {
+                if (isAiJobCancelled(job)) {
+                    return;
+                }
                 job.put("status", "running");
                 job.put("updatedAt", System.currentTimeMillis());
                 updateAiAsyncJobProgress(job, createAiJobProgress("starting", "Bắt đầu xử lý yêu cầu AI", 0, 1, null));
 
                 StandardResponse syncResponse = new StandardResponse();
-                String rawContent = fetchAiRawContent(prompt, progress -> updateAiAsyncJobProgress(job, progress), params);
+                String rawContent = fetchAiRawContent(prompt, progress -> {
+                    if (!isAiJobCancelled(job)) {
+                        updateAiAsyncJobProgress(job, progress);
+                    }
+                }, params);
+                if (isAiJobCancelled(job)) {
+                    return;
+                }
                 if (rawContent == null || rawContent.isBlank()) {
                     syncResponse.set("code", 200);
                     syncResponse.set("success", false);
@@ -1220,6 +1235,9 @@ public class ApiSpringController {
 
                 Map<String, Object> resultPayload = new HashMap<>(syncResponse.getPropertiesMap());
                 enrichAiResultWithMergePreview(resultPayload, params);
+                if (isAiJobCancelled(job)) {
+                    return;
+                }
                 boolean ok = Boolean.TRUE.equals(resultPayload.get("success"));
                 job.put("status", ok ? "completed" : "failed");
                 job.put("result", resultPayload);
@@ -1230,6 +1248,9 @@ public class ApiSpringController {
                         1, 1, null));
                 emitAiAsyncJobSocketEvent(job, "ai_job_result", resultPayload);
             } catch (Exception e) {
+                if (isAiJobCancelled(job)) {
+                    return;
+                }
                 logger.error("Async AI job failed: {}", jobId, e);
                 job.put("status", "failed");
                 job.put("updatedAt", System.currentTimeMillis());
@@ -1295,6 +1316,69 @@ public class ApiSpringController {
         response.set("success", true);
         response.set("message", "OK");
         response.set("data", payload);
+    }
+
+    private void handleAiAsyncCancel(StandardResponse response, Map<String, Object> params) {
+        cleanupExpiredAiJobs();
+        String jobId = String.valueOf(params.getOrDefault("jobId", "")).trim();
+        if (jobId.isEmpty()) {
+            response.set("code", 200);
+            response.set("success", false);
+            response.set("message", "Thiếu tham số jobId");
+            response.set("errorCode", "ASYNC_JOB_ID_REQUIRED");
+            return;
+        }
+
+        Map<String, Object> job = aiAsyncJobs.get(jobId);
+        if (job == null) {
+            response.set("code", 200);
+            response.set("success", false);
+            response.set("message", "Không tìm thấy job hoặc job đã hết hạn");
+            response.set("errorCode", "ASYNC_JOB_NOT_FOUND");
+            return;
+        }
+
+        String status = String.valueOf(job.getOrDefault("status", "unknown")).toLowerCase();
+        if ("completed".equals(status) || "failed".equals(status) || "cancelled".equals(status)) {
+            response.set("code", 200);
+            response.set("success", true);
+            response.set("message", "Job đã ở trạng thái kết thúc");
+            response.set("data", Map.of(
+                    "jobId", jobId,
+                    "status", status));
+            return;
+        }
+
+        job.put("cancelled", true);
+        job.put("status", "cancelled");
+        job.put("updatedAt", System.currentTimeMillis());
+        job.put("completedAt", System.currentTimeMillis());
+        updateAiAsyncJobProgress(job, createAiJobProgress("cancelled", "Đã dừng theo yêu cầu người dùng", 1, 1, null));
+        Map<String, Object> cancelResult = new HashMap<>();
+        cancelResult.put("code", 200);
+        cancelResult.put("success", false);
+        cancelResult.put("message", "AI job đã được dừng theo yêu cầu");
+        cancelResult.put("errorCode", "ASYNC_JOB_CANCELLED");
+        job.put("result", cancelResult);
+        emitAiAsyncJobSocketEvent(job, "ai_job_result", cancelResult);
+
+        response.set("code", 200);
+        response.set("success", true);
+        response.set("message", "Đã gửi yêu cầu dừng AI job");
+        response.set("data", Map.of(
+                "jobId", jobId,
+                "status", "cancelled"));
+    }
+
+    private boolean isAiJobCancelled(Map<String, Object> job) {
+        if (job == null) {
+            return false;
+        }
+        if (Boolean.TRUE.equals(job.get("cancelled"))) {
+            return true;
+        }
+        String status = String.valueOf(job.getOrDefault("status", "")).trim().toLowerCase();
+        return "cancelled".equals(status);
     }
 
     private void cleanupExpiredAiJobs() {

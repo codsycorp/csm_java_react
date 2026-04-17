@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Button, Card, Collapse, Divider, Input, Progress, Upload, message, Radio, Select, Space, Switch, Tag } from "antd";
-import type { RadioChangeEvent } from "antd";
 import CodeMirror from "@uiw/react-codemirror";
 import { json } from "@codemirror/lang-json";
 import { vscodeDark } from "@uiw/codemirror-theme-vscode";
@@ -15,11 +14,10 @@ import type { MenuItemType } from "#src/api/system/menu";
 import { fetchAppList, fetchMenuList } from "#src/api/system/menu";
 import { generateSeoContentWithPrompt } from "#src/api/ai";
 import { getTableData, updateTableData } from "#src/components/csm-grid/CsmApi";
+import { csmDecrypt, csmEncrypt } from "#src/components/csm-grid/CsmCrypto";
 import { request } from "#src/utils";
 
 const { TextArea } = Input;
-
-type MergeMode = "merge" | "replace";
 
 type AiRequestRecord = {
   id?: string;
@@ -80,8 +78,6 @@ type JsonContextFile = {
   summary: string;
 };
 
-type GenerateMode = "full" | "diff";
-
 /**
  * 2 operation scenarios:
  * - new_build: Design from scratch - AI analyzes business requirements and creates full menu tree
@@ -101,6 +97,10 @@ type PatchOp = {
   nodeName: string;
   nodePath: string;
   changedFields: FieldDelta[];
+};
+
+type PatchOpView = PatchOp & {
+  line?: number;
 };
 
 type MenuMergeResult = {
@@ -306,6 +306,35 @@ function buildMergeStatsFromPatchOps(ops: PatchOp[]): { added: number; edited: n
     },
     { added: 0, edited: 0, deleted: 0 },
   );
+}
+
+function requestSuggestsBulkDelete(text: string): boolean {
+  const normalized = String(text || "").toLowerCase();
+  return /(\bxoa\b|\bxóa\b|\bdelete\b|\bremove\b|\bclean\b|\bclear\b|\bdon dep\b|\bdọn dẹp\b|\breset\b)/i.test(normalized);
+}
+
+function shouldTriggerMassDeleteGuard(params: {
+  scenario: OperationScenario;
+  baseNodes: number;
+  deleted: number;
+  requestText: string;
+}): boolean {
+  const { scenario, baseNodes, deleted, requestText } = params;
+  if (scenario !== "incremental_update") return false;
+  if (baseNodes <= 0 || deleted <= 0) return false;
+  if (requestSuggestsBulkDelete(requestText)) return false;
+
+  const safeDeleteAbs = Math.max(12, Math.floor(baseNodes * 0.2));
+  const safeDeleteRatio = 0.35;
+  return deleted > safeDeleteAbs || (deleted / Math.max(1, baseNodes)) >= safeDeleteRatio;
+}
+
+function formatFieldDeltaValue(value: string | null | undefined, maxLength = 80): string {
+  if (value == null) return "(null)";
+  const text = String(value);
+  if (!text.trim()) return '""';
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength)}...`;
 }
 
 async function callAiMenuMerge(params: {
@@ -656,8 +685,11 @@ function normalizeTriggerKeyName(key: string): string {
     beforeDelete: "before_delete",
     afterDelete: "after_delete",
     loadDb: "load_db",
+    loaddb: "load_db",
     loadTableDb: "load_table_db",
+    loadtabledb: "load_table_db",
     reportDb: "report_db",
+    reportdb: "report_db",
     beforeImport: "beforeImport",
     afterImport: "afterImport",
   };
@@ -753,6 +785,7 @@ export function buildAiMenuRequestPayload(
 
   return {
     request_schema: "csm.ai.menu.request.v2",
+    operation_scenario: "new_build",
     system_core: "backend_master_prompt",
     app_id_specific_metadata: {
       app_id: String(appId || ""),
@@ -796,6 +829,7 @@ export function buildAiMenuRefinePayload(
 
   return {
     request_schema: "csm.ai.menu.request.v2",
+    operation_scenario: "incremental_update",
     system_core: "backend_master_prompt",
     app_id_specific_metadata: {
       app_id: String(appId || ""),
@@ -959,6 +993,108 @@ function normalizeTriggerShape(node: any): Record<string, any> {
   });
 
   return trigger;
+}
+
+function isLikelyEncryptedCode(text: string): boolean {
+  const raw = String(text || "").trim();
+  if (!raw || raw.length < 32) return false;
+  // Heuristic: encrypted payloads are typically single-line base64-like and contain no JS keywords.
+  const hasJsSignals = /\b(return|const|let|var|function|if|for|while|=>)\b|[{};]/.test(raw);
+  if (hasJsSignals) return false;
+  return /^[A-Za-z0-9_\-+/=.%]+$/.test(raw) && !raw.includes(" ") && !raw.includes("\n");
+}
+
+function decodeTriggerCodeForEditor(rawValue: any): any {
+  if (typeof rawValue !== "string") return rawValue;
+  const text = String(rawValue || "").trim();
+  if (!text) return "";
+
+  if (text.includes("%")) {
+    try {
+      const decodedUri = decodeURIComponent(text);
+      if (decodedUri && decodedUri !== text) return decodedUri;
+    } catch {
+      // ignore uri decode failure
+    }
+  }
+
+  if (!isLikelyEncryptedCode(text)) return rawValue;
+
+  try {
+    const decrypted = csmDecrypt(text);
+    if (typeof decrypted === "string" && decrypted.trim()) return decrypted;
+  } catch {
+    // keep original on decrypt failure
+  }
+  return rawValue;
+}
+
+function encodeTriggerCodeForSave(rawValue: any): any {
+  if (typeof rawValue !== "string") return rawValue;
+  const text = String(rawValue || "").trim();
+  if (!text) return "";
+  if (isLikelyEncryptedCode(text)) return text;
+  try {
+    return csmEncrypt(text);
+  } catch {
+    return rawValue;
+  }
+}
+
+function transformMenuTriggers(
+  menus: MenuItemType[] | null | undefined,
+  mode: "decode" | "encode",
+): MenuItemType[] {
+  const walk = (items: MenuItemType[] | null | undefined): MenuItemType[] => {
+    return (Array.isArray(items) ? items : []).map((item) => {
+      const next: any = { ...(item as any) };
+      const triggerObj = next?.trigger && typeof next.trigger === "object" ? { ...next.trigger } : {};
+      Object.keys(triggerObj).forEach((key) => {
+        const val = triggerObj[key];
+        triggerObj[key] = mode === "decode"
+          ? decodeTriggerCodeForEditor(val)
+          : encodeTriggerCodeForSave(val);
+      });
+      next.trigger = triggerObj;
+      if (Array.isArray(next.children)) {
+        next.children = walk(next.children as MenuItemType[]);
+      }
+      return next as MenuItemType;
+    });
+  };
+  return walk(menus);
+}
+
+function restoreMissingTriggersFromBase(baseMenus: MenuItemType[], nextMenus: MenuItemType[]): MenuItemType[] {
+  const baseById = new Map<string, any>();
+  const collect = (items: MenuItemType[] | undefined | null) => {
+    (Array.isArray(items) ? items : []).forEach((node) => {
+      const id = String((node as any)?.id || "").trim();
+      if (id) baseById.set(id, node);
+      const children = (node as any)?.children;
+      if (Array.isArray(children)) collect(children);
+    });
+  };
+  collect(baseMenus);
+
+  const fill = (items: MenuItemType[] | undefined | null): MenuItemType[] => {
+    return (Array.isArray(items) ? items : []).map((node) => {
+      const next: any = { ...(node as any) };
+      const id = String(next?.id || "").trim();
+      const baseNode: any = id ? baseById.get(id) : null;
+      const nextTrigger = next?.trigger && typeof next.trigger === "object" ? next.trigger : {};
+      const baseTrigger = baseNode?.trigger && typeof baseNode.trigger === "object" ? baseNode.trigger : {};
+      if (Object.keys(nextTrigger).length === 0 && Object.keys(baseTrigger).length > 0) {
+        next.trigger = { ...baseTrigger };
+      }
+      if (Array.isArray(next.children)) {
+        next.children = fill(next.children as MenuItemType[]);
+      }
+      return next as MenuItemType;
+    });
+  };
+
+  return fill(nextMenus);
 }
 
 function toFiniteNumber(value: any): number | undefined {
@@ -1412,141 +1548,6 @@ function normalizeMenuList(menus: MenuItemType[]) {
   return shaped.map(ensureMenuDefaults);
 }
 
-function hasMeaningfulValue(value: any): boolean {
-  if (value == null) return false;
-  if (typeof value === "string") return value.trim().length > 0;
-  if (Array.isArray(value)) return value.length > 0;
-  if (typeof value === "object") return Object.keys(value).length > 0;
-  return true;
-}
-
-function mergeFieldList(existingFields: any[], incomingFields: any[]): any[] {
-  if (!Array.isArray(existingFields) || existingFields.length === 0) return incomingFields || [];
-  if (!Array.isArray(incomingFields) || incomingFields.length === 0) return existingFields;
-
-  const keyOf = (field: any, index: number) => String(field?.f_name || field?.id || `idx_${index}`);
-  const byKey = new Map<string, any>();
-  existingFields.forEach((f, idx) => byKey.set(keyOf(f, idx), { ...f }));
-
-  incomingFields.forEach((incoming, idx) => {
-    const key = keyOf(incoming, idx);
-    const existing = byKey.get(key);
-    if (!existing) {
-      byKey.set(key, { ...incoming });
-      return;
-    }
-
-    const merged = { ...existing };
-    Object.keys(incoming || {}).forEach((k) => {
-      const nextVal = (incoming as any)[k];
-      const prevVal = (existing as any)[k];
-      if (!hasMeaningfulValue(prevVal) && hasMeaningfulValue(nextVal)) {
-        (merged as any)[k] = nextVal;
-      }
-    });
-    byKey.set(key, merged);
-  });
-
-  return Array.from(byKey.values());
-}
-
-function mergeObjectFillMissing(existingObj: Record<string, any>, incomingObj: Record<string, any>) {
-  const merged: Record<string, any> = { ...(existingObj || {}) };
-  Object.keys(incomingObj || {}).forEach((key) => {
-    const prevVal = merged[key];
-    const nextVal = incomingObj[key];
-
-    if (Array.isArray(prevVal) && Array.isArray(nextVal)) {
-      merged[key] = nextVal.length > 0 ? nextVal : prevVal;
-      return;
-    }
-
-    if (
-      prevVal && typeof prevVal === "object" && !Array.isArray(prevVal)
-      && nextVal && typeof nextVal === "object" && !Array.isArray(nextVal)
-    ) {
-      merged[key] = mergeObjectFillMissing(prevVal, nextVal);
-      return;
-    }
-
-    if (!hasMeaningfulValue(prevVal) && hasMeaningfulValue(nextVal)) {
-      merged[key] = nextVal;
-    }
-  });
-  return merged;
-}
-
-function mergeMenuNodeNonDestructive(existing: MenuItemType, incoming: MenuItemType): MenuItemType {
-  const merged: any = { ...existing };
-  const incomingObj: any = incoming || {};
-
-  Object.keys(incomingObj).forEach((key) => {
-    if (key === "children") return;
-    const prevVal = (merged as any)[key];
-    const nextVal = incomingObj[key];
-
-    if (key === "table") {
-      (merged as any)[key] = mergeFieldList(
-        Array.isArray(prevVal) ? prevVal : [],
-        Array.isArray(nextVal) ? nextVal : [],
-      );
-      return;
-    }
-
-    if (key === "trigger") {
-      const prevObj = prevVal && typeof prevVal === "object" ? prevVal : {};
-      const nextObj = nextVal && typeof nextVal === "object" ? nextVal : {};
-      (merged as any)[key] = mergeObjectFillMissing(prevObj, nextObj);
-      return;
-    }
-
-    if (
-      prevVal && typeof prevVal === "object" && !Array.isArray(prevVal)
-      && nextVal && typeof nextVal === "object" && !Array.isArray(nextVal)
-    ) {
-      (merged as any)[key] = mergeObjectFillMissing(prevVal, nextVal);
-      return;
-    }
-
-    if (!hasMeaningfulValue(prevVal) && hasMeaningfulValue(nextVal)) {
-      (merged as any)[key] = nextVal;
-    }
-  });
-
-  return merged as MenuItemType;
-}
-
-function mergeMenus(baseMenus: MenuItemType[], incomingMenus: MenuItemType[]) {
-  const byId = new Map<string, MenuItemType>();
-  baseMenus.forEach((m) => byId.set(m.id, { ...m }));
-
-  incomingMenus.forEach((incoming) => {
-    const existing = byId.get(incoming.id);
-    if (!existing) {
-      byId.set(incoming.id, { ...incoming });
-      return;
-    }
-
-    const merged: MenuItemType = mergeMenuNodeNonDestructive(existing, incoming);
-    (merged as any).children = undefined;
-
-    const existingChildren = Array.isArray((existing as any).children)
-      ? ((existing as any).children as MenuItemType[])
-      : [];
-    const incomingChildren = Array.isArray((incoming as any).children)
-      ? ((incoming as any).children as MenuItemType[])
-      : [];
-
-    if (existingChildren.length > 0 || incomingChildren.length > 0) {
-      (merged as any).children = mergeMenus(existingChildren, incomingChildren);
-    }
-
-    byId.set(incoming.id, merged);
-  });
-
-  return Array.from(byId.values());
-}
-
 function extractAiPayload(response: any) {
   let payload = response?.result ?? response?.data ?? response;
   if (payload?.result) payload = payload.result;
@@ -1595,6 +1596,14 @@ function isComboType(rawType: any): boolean {
 }
 
 function isValidComboQueryShape(rawQuery: any): boolean {
+  if (Array.isArray(rawQuery)) return true;
+  if (rawQuery && typeof rawQuery === "object") {
+    const obj = rawQuery as any;
+    if (Array.isArray(obj.query) || Array.isArray(obj.options)) return true;
+    // Legacy runtime occasionally stores pre-normalized combo objects.
+    return true;
+  }
+
   const text = String(rawQuery || "").trim();
   if (!text) return false;
   if (/\breturn\b/.test(text)) return true;
@@ -1602,6 +1611,10 @@ function isValidComboQueryShape(rawQuery: any): boolean {
   if (/^static:/i.test(text)) return true;
   // Accept raw SQL SELECT that normalizeComboQueryValue converts at runtime.
   if (/^select\s+.+\s+from\s+/i.test(text)) return true;
+  // Accept legacy compact form like: table_name,value_field,label_field
+  if (/^[^{}\[\]\n,]+\s*,\s*[^,\n]+(\s*,\s*[^,\n]+)+$/.test(text)) return true;
+  // Accept legacy plain table alias/name form.
+  if (/^[A-Za-z0-9_.$-]+$/.test(text)) return true;
 
   try {
     const parsed = JSON.parse(text);
@@ -1629,7 +1642,7 @@ function isValidComboQueryShape(rawQuery: any): boolean {
   return false;
 }
 
-function validateMenusForApply(menus: MenuItemType[]): MenuValidationIssue[] {
+function validateMenusForApply(menus: MenuItemType[], profile: "strict" | "legacy" = "strict"): MenuValidationIssue[] {
   const issues: MenuValidationIssue[] = [];
 
   const walk = (nodes: MenuItemType[], parentPath: string) => {
@@ -1647,16 +1660,41 @@ function validateMenusForApply(menus: MenuItemType[]): MenuValidationIssue[] {
       const fields = Array.isArray((node as any).table) ? (node as any).table : [];
       const children = Array.isArray((node as any).children) ? ((node as any).children as MenuItemType[]) : [];
       const isContainerLike = children.length > 0 && !tableName && fields.length === 0;
-      const normalizedTrigger = trigger && typeof trigger === "object" ? trigger : {};
-      const hasReportDbTrigger = !!String((normalizedTrigger as any).report_db || "").trim();
-      const isReportRuntime = !!reportName || hasReportDbTrigger;
+      const normalizedTrigger = normalizeTriggerShape(node);
+      const hasNormalizedTriggerCode = (targetKey: string): boolean => {
+        const normalizedDirect = String((normalizedTrigger as any)?.[targetKey] ?? "").trim();
+        if (normalizedDirect) return true;
 
-      if ((typeForm === 1 || typeForm === 2) && !tableName && !isContainerLike && !isReportRuntime) {
+        if (trigger && typeof trigger === "object") {
+          for (const key of Object.keys(trigger)) {
+            if (normalizeTriggerKeyName(key) !== targetKey) continue;
+            if (String((trigger as any)[key] ?? "").trim()) return true;
+          }
+        }
+
+        const compactKey = targetKey.replace(/_/g, "");
+        const topLevelCandidates = [
+          (node as any)?.[targetKey],
+          (node as any)?.[`trigger_${targetKey}`],
+          (node as any)?.[compactKey],
+          (node as any)?.[`trigger_${compactKey}`],
+        ];
+        return topLevelCandidates.some((value) => String(value ?? "").trim() !== "");
+      };
+      const hasReportDbTrigger = hasNormalizedTriggerCode("report_db");
+      const hasLoadDbTrigger = hasNormalizedTriggerCode("load_db");
+      const isReportRuntime = !!reportName || hasReportDbTrigger;
+      const isStrict = profile === "strict";
+      const allowLegacyWithoutTable = !isStrict && hasLoadDbTrigger;
+
+      if ((typeForm === 1 || typeForm === 2) && !tableName && !isContainerLike && !isReportRuntime && !allowLegacyWithoutTable) {
         issues.push({
-          severity: "error",
-          rule: "table_name_required",
+          severity: isStrict ? "error" : "warning",
+          rule: isStrict ? "table_name_required" : "table_name_missing_legacy",
           path,
-          message: "Menu type_form=1/2 thiếu table_name.",
+          message: isStrict
+            ? "Menu type_form=1/2 thiếu table_name."
+            : "Menu type_form=1/2 thiếu table_name (legacy app có thể vẫn chạy, nên rà soát khi chỉnh sửa mới).",
         });
       }
 
@@ -1669,8 +1707,8 @@ function validateMenusForApply(menus: MenuItemType[]): MenuValidationIssue[] {
         });
       }
 
-      // Report runtime (CsmReport): must have trigger.report_db to supply data; report_name can be added later by user.
-      if (isReportRuntime && !hasReportDbTrigger) {
+      // Report runtime (CsmReport): enforce only for report form in strict profile to avoid legacy false positives.
+      if (isStrict && typeForm === 5 && isReportRuntime && !hasReportDbTrigger) {
         issues.push({
           severity: "warning",
           rule: "report_db_recommended_for_report_runtime",
@@ -1758,13 +1796,26 @@ function validateMenusForApply(menus: MenuItemType[]): MenuValidationIssue[] {
           }
 
           if (isComboType(fTypes)) {
-            if (!isValidComboQueryShape(field?.f_cbo_query)) {
-              issues.push({
-                severity: "error",
-                rule: "combo_query_invalid",
-                path: fieldPath,
-                message: `Field ${fName || "(unknown)"} có kiểu combo nhưng f_cbo_query chưa hợp lệ.`,
-              });
+            if (isStrict) {
+              if (!isValidComboQueryShape(field?.f_cbo_query)) {
+                issues.push({
+                  severity: "error",
+                  rule: "combo_query_invalid",
+                  path: fieldPath,
+                  message: `Field ${fName || "(unknown)"} có kiểu combo nhưng f_cbo_query chưa hợp lệ.`,
+                });
+              }
+            } else {
+              const rawLegacyCombo = field?.f_cbo_query;
+              const hasLegacyComboValue = rawLegacyCombo != null && String(rawLegacyCombo).trim() !== "";
+              if (!hasLegacyComboValue) {
+                issues.push({
+                  severity: "warning",
+                  rule: "combo_query_missing_legacy",
+                  path: fieldPath,
+                  message: `Field ${fName || "(unknown)"} có kiểu combo nhưng đang thiếu f_cbo_query.`,
+                });
+              }
             }
           }
         });
@@ -2230,16 +2281,16 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
   const [storedRequest, setStoredRequest] = useState("");
   const [aiResultText, setAiResultText] = useState("");
   const [aiMenus, setAiMenus] = useState<MenuItemType[] | null>(null);
-  const [mergeMode, setMergeMode] = useState<MergeMode>("merge");
   const [loading, setLoading] = useState(false);
   const [recordId, setRecordId] = useState<string | undefined>(undefined);
-  const [refineText, setRefineText] = useState("");
   const [sampleAppList, setSampleAppList] = useState<any[]>([]);
   const [sampleAppId, setSampleAppId] = useState<string | undefined>(undefined);
   const [sampleMenuLoading, setSampleMenuLoading] = useState(false);
   const [sampleMenuParsed, setSampleMenuParsed] = useState<MenuItemType[] | null>(null);
   const [sampleMenuError, setSampleMenuError] = useState<string | null>(null);
   const [sampleUseAsBase, setSampleUseAsBase] = useState(false);
+  const [aiLiveEditEnabled, setAiLiveEditEnabled] = useState(true);
+  const [allowManualEditWhileRunning, setAllowManualEditWhileRunning] = useState(false);
   const [aiProgress, setAiProgress] = useState<AiProgressState | null>(null);
   const [aiOutputMeta, setAiOutputMeta] = useState<AiOutputMeta>({
     coverageModules: [],
@@ -2248,19 +2299,67 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
   });
   const [storedLastResult, setStoredLastResult] = useState("");
   const [contextFiles, setContextFiles] = useState<JsonContextFile[]>([]);
-  const [generateMode, setGenerateMode] = useState<GenerateMode>("full");
+  const [validationProfile, setValidationProfile] = useState<"strict" | "legacy">("strict");
 
   // ── Jackson diff/merge state ───────────────────────────────────────────────
   const [patchOps, setPatchOps] = useState<PatchOp[]>([]);
   const [patchReviewStatus, setPatchReviewStatus] = useState<Partial<Record<string, PatchReviewStatus>>>({});
+  const [liveEditLines, setLiveEditLines] = useState<DiffLineInfo[]>([]);
+  const [patchKeyword, setPatchKeyword] = useState("");
+  const [patchActionFilter, setPatchActionFilter] = useState<"all" | "add" | "edit" | "delete">("all");
   const [mergeLoading, setMergeLoading] = useState(false);
   const [mergeStats, setMergeStats] = useState<{ added: number; edited: number; deleted: number } | null>(null);
+  const [aiStopReason, setAiStopReason] = useState<string>("");
   /** Ref to the result CodeMirror view so we can dispatch decoration effects */
   const resultEditorViewRef = useRef<any>(null);
   const activeAiJobIdRef = useRef<string | null>(null);
   const aiJobResolveRef = useRef<((value: any) => void) | null>(null);
   const aiJobRejectRef = useRef<((reason?: unknown) => void) | null>(null);
   const aiJobTimeoutRef = useRef<number | null>(null);
+  const aiJobPollRef = useRef<number | null>(null);
+
+  const cancelActiveAiRun = (reason: string, notify: boolean = true) => {
+    const activeJobId = activeAiJobIdRef.current;
+    if (activeJobId) {
+      request
+        .post("ai-generate-seo-content", {
+          json: { mode: "cancel", jobId: activeJobId },
+          timeout: 8000,
+        })
+        .json<any>()
+        .catch(() => {
+          // UI cancellation is already applied locally; backend cancel is best-effort.
+        });
+    }
+
+    if (aiJobTimeoutRef.current) {
+      window.clearTimeout(aiJobTimeoutRef.current);
+      aiJobTimeoutRef.current = null;
+    }
+    if (aiJobPollRef.current) {
+      window.clearInterval(aiJobPollRef.current);
+      aiJobPollRef.current = null;
+    }
+
+    const reject = aiJobRejectRef.current;
+    activeAiJobIdRef.current = null;
+    aiJobResolveRef.current = null;
+    aiJobRejectRef.current = null;
+
+    setAiStopReason(reason);
+    setAiProgress((prev) => ({
+      ...(prev || {}),
+      status: "failed",
+      stage: "stopped",
+      message: reason,
+    }));
+
+    if (notify) {
+      message.warning(reason);
+    }
+
+    reject?.(new Error(reason));
+  };
 
   const setMergePreviewState = (mergePreview: any) => {
     if (!mergePreview) return;
@@ -2272,29 +2371,139 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     });
   };
 
+  const setEditorFromMenus = (
+    menus: MenuItemType[] | null | undefined,
+    source: "current" | "sample" = "current",
+  ) => {
+    const decodedMenus = transformMenuTriggers(Array.isArray(menus) ? menus : [], "decode");
+    const normalized = normalizeMenuList(decodedMenus);
+    if (normalized.length === 0) return;
+    const payload = { menu: normalized };
+    const text = JSON.stringify(payload, null, 2);
+    setEditableAiDraftText(text);
+    setAiResultText(text);
+    setAiMenus(normalized);
+    setAiProgress({
+      status: "ready",
+      stage: "editor_seeded",
+      message: source === "sample"
+        ? (t("system.menu.aiDesigner.editorSeed.sample") || "Đã nạp JSON từ chương trình mẫu vào editor")
+        : (t("system.menu.aiDesigner.editorSeed.current") || "Đã nạp JSON menu hiện tại vào editor"),
+      current: 0,
+      total: 1,
+      percent: 0,
+    });
+    syncPatchReviewState([]);
+    setLiveEditLines([]);
+    setMergeStats(null);
+    setValidationProfile("legacy");
+  };
+
   const applyTextEditsToDraft = (currentText: string, textEdits: any[]): string => {
     if (!Array.isArray(textEdits) || textEdits.length === 0) return currentText;
     const lines = String(currentText || "").split("\n");
-    const sorted = [...textEdits].sort((a, b) => Number(b?.startLine || 0) - Number(a?.startLine || 0));
+    const normalizeLine = (edit: any, key: "start" | "end"): number => {
+      if (!edit) return key === "start" ? 1 : 1;
+      if (key === "start") {
+        return Number(
+          edit?.startLine
+          ?? edit?.range?.startLine
+          ?? edit?.range?.start?.line
+          ?? edit?.line
+          ?? 1,
+        );
+      }
+      return Number(
+        edit?.endLine
+        ?? edit?.range?.endLine
+        ?? edit?.range?.end?.line
+        ?? edit?.startLine
+        ?? edit?.range?.startLine
+        ?? edit?.range?.start?.line
+        ?? 1,
+      );
+    };
+
+    const getReplacement = (edit: any): string => {
+      return String(
+        edit?.replacement
+        ?? edit?.newText
+        ?? edit?.text
+        ?? "",
+      );
+    };
+
+    const sorted = [...textEdits].sort((a, b) => normalizeLine(b, "start") - normalizeLine(a, "start"));
     for (const edit of sorted) {
-      const startLine = Math.max(1, Number(edit?.startLine || 1));
-      const endLine = Math.max(startLine, Number(edit?.endLine || startLine));
-      const replacementLines = String(edit?.replacement ?? "").split("\n");
+      const startLine = Math.max(1, normalizeLine(edit, "start"));
+      const endLine = Math.max(startLine, normalizeLine(edit, "end"));
+      const replacementLines = getReplacement(edit).split("\n");
       lines.splice(startLine - 1, endLine - startLine + 1, ...replacementLines);
     }
     return lines.join("\n");
   };
 
+  const buildLiveEditLineInfos = (textEdits: any[]): DiffLineInfo[] => {
+    if (!Array.isArray(textEdits) || textEdits.length === 0) return [];
+    const normalizeLine = (edit: any, key: "start" | "end"): number => {
+      if (key === "start") {
+        return Number(edit?.startLine ?? edit?.range?.startLine ?? edit?.range?.start?.line ?? edit?.line ?? 1);
+      }
+      return Number(edit?.endLine ?? edit?.range?.endLine ?? edit?.range?.end?.line ?? edit?.startLine ?? 1);
+    };
+    const unique = new Map<string, DiffLineInfo>();
+    textEdits.forEach((edit, idx) => {
+      const startLine = Math.max(1, normalizeLine(edit, "start"));
+      const endLine = Math.max(startLine, normalizeLine(edit, "end"));
+      for (let line = startLine; line <= endLine; line++) {
+        const key = `live_${line}`;
+        if (!unique.has(key)) {
+          unique.set(key, {
+            line,
+            action: "edit",
+            nodeId: key,
+            nodeName: `Live edit ${idx + 1}`,
+            nodePath: `AI live edit · line ${line}`,
+            reviewStatus: "pending",
+          });
+        }
+      }
+    });
+    return Array.from(unique.values()).sort((a, b) => a.line - b.line);
+  };
+
   const applySocketDraftPayload = (payload: any) => {
+    const status = String(payload?.status || "").toLowerCase();
+    if (!aiLiveEditEnabled && status !== "completed") {
+      return;
+    }
+
     const progress = payload?.progress || payload;
     const mergePreview = payload?._merge_preview || payload?.result?._merge_preview || payload?.result?.data?._merge_preview || progress?._merge_preview;
     if (mergePreview) {
       setMergePreviewState(mergePreview);
+      setLiveEditLines([]);
     }
 
     const patchPayload = progress?.patchOps || payload?.patchOps;
     if (Array.isArray(patchPayload)) {
-      syncPatchReviewState(patchPayload as PatchOp[]);
+      const nextPatchOps = patchPayload as PatchOp[];
+      syncPatchReviewState(nextPatchOps);
+
+      const deletedCount = nextPatchOps.filter((op) => op.action === "delete").length;
+      const baseNodeCount = flattenMenuNodes(decodedCurrentMenus, 5000).length;
+      const guardRequestText = [storedRequest, requestText].filter(Boolean).join("\n");
+      if (shouldTriggerMassDeleteGuard({
+        scenario: operationScenario,
+        baseNodes: baseNodeCount,
+        deleted: deletedCount,
+        requestText: guardRequestText,
+      })) {
+        const reason = `Da phat hien AI xoa bat thuong (${deletedCount}/${baseNodeCount} node). Da dung job de bao ve menu goc.`;
+        setEditableAiDraftText(JSON.stringify({ menu: decodedCurrentMenus }, null, 2));
+        cancelActiveAiRun(reason);
+        return;
+      }
     }
 
     const explicitDraft = payload?.draftText || payload?.result?.draftText || progress?.draftText || progress?.partialJson || progress?.previewJson;
@@ -2305,6 +2514,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
 
     const textEdits = payload?.textEdits || progress?.textEdits;
     if (Array.isArray(textEdits) && textEdits.length > 0) {
+      setLiveEditLines(buildLiveEditLineInfos(textEdits));
       setEditableAiDraftText((prev) => applyTextEditsToDraft(prev || aiResultText || "", textEdits));
     }
   };
@@ -2326,7 +2536,6 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
       level: progress?.level != null ? Number(progress.level) : undefined,
     };
     setAiProgress(nextProgress);
-    setAiResultText((prev) => buildAiProgressResultText(nextProgress) || prev);
   };
 
   useEffect(() => {
@@ -2350,6 +2559,10 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
         window.clearTimeout(aiJobTimeoutRef.current);
         aiJobTimeoutRef.current = null;
       }
+      if (aiJobPollRef.current) {
+        window.clearInterval(aiJobPollRef.current);
+        aiJobPollRef.current = null;
+      }
       const result = payload?.result;
       if (String(payload?.status || "").toLowerCase() === "failed") {
         aiJobRejectRef.current?.(new Error(String(result?.message || payload?.progress?.message || "AI failed")));
@@ -2370,6 +2583,15 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
       socket.off?.("ai_job_result", handleRealtimeResult);
     };
   }, [socket]);
+
+  useEffect(() => {
+    if (loading) return;
+    if (!appId) return;
+    if (editableAiDraftText.trim()) return;
+    if (aiResultText.trim()) return;
+    if (!Array.isArray(currentMenus) || currentMenus.length === 0) return;
+    setEditorFromMenus(currentMenus, "current");
+  }, [appId, currentMenus, loading, editableAiDraftText, aiResultText]);
 
   const generateMenuWithRealtime = async (
     prompt: string,
@@ -2423,15 +2645,106 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     }
 
     return await new Promise<any>((resolve, reject) => {
-      aiJobResolveRef.current = resolve;
-      aiJobRejectRef.current = reject;
-      aiJobTimeoutRef.current = window.setTimeout(() => {
-        if (activeAiJobIdRef.current === jobId) {
-          activeAiJobIdRef.current = null;
-          aiJobResolveRef.current = null;
-          aiJobRejectRef.current = null;
-          reject(new Error("Hết thời gian chờ realtime AI"));
+      let done = false;
+      let pollingInFlight = false;
+      let notFoundCount = 0;
+
+      const finishSuccess = (value: any) => {
+        if (done) return;
+        done = true;
+        if (aiJobTimeoutRef.current) {
+          window.clearTimeout(aiJobTimeoutRef.current);
+          aiJobTimeoutRef.current = null;
         }
+        if (aiJobPollRef.current) {
+          window.clearInterval(aiJobPollRef.current);
+          aiJobPollRef.current = null;
+        }
+        activeAiJobIdRef.current = null;
+        aiJobResolveRef.current = null;
+        aiJobRejectRef.current = null;
+        resolve(value);
+      };
+
+      const finishError = (error: unknown) => {
+        if (done) return;
+        done = true;
+        if (aiJobTimeoutRef.current) {
+          window.clearTimeout(aiJobTimeoutRef.current);
+          aiJobTimeoutRef.current = null;
+        }
+        if (aiJobPollRef.current) {
+          window.clearInterval(aiJobPollRef.current);
+          aiJobPollRef.current = null;
+        }
+        activeAiJobIdRef.current = null;
+        aiJobResolveRef.current = null;
+        aiJobRejectRef.current = null;
+        reject(error instanceof Error ? error : new Error(String(error || "AI failed")));
+      };
+
+      aiJobResolveRef.current = finishSuccess;
+      aiJobRejectRef.current = finishError;
+
+      const pollStatus = async () => {
+        if (done || pollingInFlight || activeAiJobIdRef.current !== jobId) return;
+        pollingInFlight = true;
+        try {
+          const statusResponse = await request
+            .post("ai-generate-seo-content", {
+              json: { mode: "status", jobId },
+              timeout: 20000,
+            })
+            .json<any>();
+
+          const ok = Boolean(statusResponse?.success);
+          const statusPayload = (statusResponse?.result || statusResponse?.data || {}) as Record<string, any>;
+          if (statusPayload?.progress) {
+            applyProgressPayload({
+              jobId,
+              status: statusPayload?.status,
+              progress: statusPayload.progress,
+              elapsedMs: statusPayload?.elapsedMs,
+            });
+          }
+
+          if (!ok) {
+            const errorCode = String(statusResponse?.errorCode || statusResponse?.result?.errorCode || "").trim();
+            if (errorCode === "ASYNC_JOB_NOT_FOUND") {
+              notFoundCount += 1;
+              if (notFoundCount >= 3) {
+                finishError(new Error("Không tìm thấy AI job realtime (job có thể đã hết hạn)."));
+              }
+            }
+            return;
+          }
+
+          notFoundCount = 0;
+          const status = String(statusPayload?.status || "").toLowerCase();
+          if (status === "completed") {
+            finishSuccess(statusPayload?.result || statusPayload);
+            return;
+          }
+          if (status === "failed") {
+            const result = statusPayload?.result;
+            finishError(new Error(String(result?.message || statusPayload?.progress?.message || "AI failed")));
+          }
+        } catch {
+          // Keep polling: transient errors should not break an in-flight job.
+        } finally {
+          pollingInFlight = false;
+        }
+      };
+
+      const pollAfterMs = Math.max(2000, Number(submitPayload?.pollAfterMs || 3000));
+      aiJobPollRef.current = window.setInterval(() => {
+        void pollStatus();
+      }, pollAfterMs);
+      void pollStatus();
+
+      aiJobTimeoutRef.current = window.setTimeout(() => {
+        if (activeAiJobIdRef.current !== jobId) return;
+        finishError(new Error("Hết thời gian chờ realtime AI"));
       }, 45 * 60 * 1000);
     });
   };
@@ -2546,10 +2859,16 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     const view = resultEditorViewRef.current;
     if (!view) return;
     const activeText = editableAiDraftText || aiResultText;
-    if (!activeText || patchOps.length === 0) {
+    if (!activeText) {
       view.dispatch({ effects: setDiffDecorations.of([]) });
       return;
     }
+
+    if (patchOps.length === 0) {
+      view.dispatch({ effects: setDiffDecorations.of(liveEditLines) });
+      return;
+    }
+
     const map = buildNodeLineMap(activeText, patchOps);
     view.dispatch({
       effects: setDiffDecorations.of(
@@ -2564,11 +2883,64 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
         }),
       ),
     });
-  }, [editableAiDraftText, aiResultText, patchOps, patchReviewStatus, handleKeepAiPatch, handleUndoAiPatch]);
+  }, [editableAiDraftText, aiResultText, patchOps, liveEditLines, patchReviewStatus, handleKeepAiPatch, handleUndoAiPatch]);
+
+  const patchLineMap = useMemo(() => {
+    const activeText = editableAiDraftText || aiResultText;
+    if (!activeText || patchOps.length === 0) return new Map<string, DiffLineInfo>();
+    return buildNodeLineMap(activeText, patchOps);
+  }, [editableAiDraftText, aiResultText, patchOps]);
+
+  const patchOpsView = useMemo<PatchOpView[]>(() => {
+    return (Array.isArray(patchOps) ? patchOps : []).map((op) => ({
+      ...op,
+      line: patchLineMap.get(op.nodeId)?.line,
+    }));
+  }, [patchOps, patchLineMap]);
+
+  const visiblePatchOps = useMemo<PatchOpView[]>(() => {
+    const q = String(patchKeyword || "").trim().toLowerCase();
+    return patchOpsView.filter((op) => {
+      if (patchActionFilter !== "all" && op.action !== patchActionFilter) return false;
+      if (!q) return true;
+      const haystack = `${op.nodePath || ""} ${op.nodeName || ""} ${op.nodeId || ""} ${(op.changedFields || []).map((f) => f.fieldName).join(" ")}`.toLowerCase();
+      return haystack.includes(q);
+    });
+  }, [patchOpsView, patchKeyword, patchActionFilter]);
+
+  const focusPatchOpLine = (nodeId: string) => {
+    const view = resultEditorViewRef.current;
+    if (!view) return;
+    const lineNo = patchLineMap.get(nodeId)?.line;
+    if (!lineNo || lineNo < 1 || lineNo > view.state.doc.lines) {
+      message.info("Khong tim thay dong node trong editor hien tai.");
+      return;
+    }
+    const line = view.state.doc.line(lineNo);
+    view.dispatch({
+      selection: { anchor: line.from },
+      effects: EditorView.scrollIntoView(line.from, { y: "center" }),
+    });
+    view.focus();
+  };
+
+  const effectiveDraftMenus = useMemo(() => {
+    const rawDraftText = String(editableAiDraftText || "").trim();
+    if (rawDraftText) {
+      try {
+        const parsedDraft = JSON.parse(rawDraftText);
+        const extracted = extractMenuListFromPayload(parsedDraft);
+        if (extracted.length > 0) return normalizeMenuList(extracted);
+      } catch {
+        return [];
+      }
+    }
+    return normalizeMenuList(aiMenus || []);
+  }, [editableAiDraftText, aiMenus]);
 
   const menuValidationIssues = useMemo(() => {
-    return validateMenusForApply(aiMenus || []);
-  }, [aiMenus]);
+    return validateMenusForApply(effectiveDraftMenus || [], validationProfile);
+  }, [effectiveDraftMenus, validationProfile]);
   const menuValidationErrors = useMemo(
     () => menuValidationIssues.filter((item) => item.severity === "error"),
     [menuValidationIssues],
@@ -2609,6 +2981,15 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
   }, [aiOutputMeta.coverageModules, aiOutputMeta.coverageTables, aiOutputMeta.unresolvedAssumptions.length, expectedModules.length, expectedTables.length]);
 
   const hasStoredRequest = storedRequest.trim().length > 0;
+  const applyMenuCount = effectiveDraftMenus.length;
+  const decodedCurrentMenus = useMemo(
+    () => transformMenuTriggers(Array.isArray(currentMenus) ? currentMenus : [], "decode"),
+    [currentMenus],
+  );
+  const decodedSampleMenus = useMemo(
+    () => transformMenuTriggers(sampleMenuParsed || [], "decode"),
+    [sampleMenuParsed],
+  );
 
   const mergedRequestText = useMemo(() => {
     if (!requestText.trim()) return storedRequest;
@@ -2677,13 +3058,11 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
         if (item) {
           setStoredRequest(item.request_text || "");
           setStoredLastResult(item.last_result || "");
-          setGenerateMode(item.generate_mode === "diff" ? "diff" : "full");
           setContextFiles(parseContextFiles(item.context_files_json));
           setRecordId(item.id);
         } else {
           setStoredRequest("");
           setStoredLastResult("");
-          setGenerateMode("full");
           setContextFiles([]);
           setRecordId(undefined);
         }
@@ -2705,7 +3084,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
       request_text: storedRequest,
       request_history: payload.request_history || storedRequest,
       context_files_json: serializeContextFiles(contextFiles),
-      generate_mode: generateMode,
+      generate_mode: "full",
       updated_at: now,
       created_at: payload.created_at || now,
       ...payload,
@@ -2761,6 +3140,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
       const normalized = normalizeMenuList(rawMenuList);
       setSampleMenuParsed(normalized);
       setSampleMenuError(null);
+      setEditorFromMenus(normalized, "sample");
       message.success(t("system.menu.aiDesigner.sampleMenu.loadSuccess", { count: normalized.length, appId: targetAppId }) || `Đã nạp ${normalized.length} menu gốc từ app ${targetAppId} làm mẫu cho AI.`);
     } catch (e: any) {
       setSampleMenuParsed(null);
@@ -2846,16 +3226,23 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     const prompt = trimToMax(
       promptOverride
         || JSON.stringify(
-          buildAiMenuRequestPayload(appId, inputRequest, scope, currentMenus, sampleMenuParsed || undefined, contextFiles),
+          buildAiMenuRequestPayload(appId, inputRequest, scope, decodedCurrentMenus, decodedSampleMenus || undefined, contextFiles),
           null,
           2,
         ),
       120000,
     );
     setLoading(true);
+    setAiStopReason("");
+    setValidationProfile("strict");
     setAiMenus(null);
-    setEditableAiDraftText("");
+    setAiResultText("");
+    setLiveEditLines([]);
     setAiOutputMeta({ coverageModules: [], coverageTables: [], unresolvedAssumptions: [] });
+
+    if (operationScenario === "incremental_update" && decodedCurrentMenus.length > 0) {
+      setEditableAiDraftText(JSON.stringify({ menu: decodedCurrentMenus }, null, 2));
+    }
     const preparingProgress: AiProgressState = {
       status: "preparing",
       stage: "preparing",
@@ -2866,7 +3253,6 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
       elapsedMs: 0,
     };
     setAiProgress(preparingProgress);
-    setAiResultText(buildAiProgressResultText(preparingProgress));
 
     try {
       const command = recordId ? "update" : "create";
@@ -2886,7 +3272,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
         "menu_design",
         operationScenario === "incremental_update" ? "incremental_update" : undefined,
         operationScenario === "incremental_update" && Array.isArray(currentMenus)
-          ? JSON.stringify(currentMenus, null, 2)
+          ? JSON.stringify(decodedCurrentMenus, null, 2)
           : undefined,
       );
       const payload = extractAiPayload(res);
@@ -2911,10 +3297,10 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
 
       const normalized = normalizeMenuList(menuPayload);
       let finalMenus = normalized;
-      if (operationScenario === "incremental_update" && Array.isArray(currentMenus) && currentMenus.length > 0) {
+      if (operationScenario === "incremental_update" && decodedCurrentMenus.length > 0) {
         const mergeResult = payload?._merge_preview || payload?.data?._merge_preview || await runBackendMenuMerge(
           "incremental_update",
-          JSON.stringify(currentMenus, null, 2),
+          JSON.stringify(decodedCurrentMenus, null, 2),
           JSON.stringify(normalized, null, 2),
         );
         if (mergeResult && Array.isArray(mergeResult.mergedMenu) && mergeResult.mergedMenu.length > 0) {
@@ -2927,6 +3313,35 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
             edited: Number(mergeResult.edited || 0),
             deleted: Number(mergeResult.deleted || 0),
           });
+        }
+        finalMenus = restoreMissingTriggersFromBase(decodedCurrentMenus, finalMenus);
+
+        const deletedCount = Number(mergeResult?.deleted || 0);
+        const baseNodeCount = flattenMenuNodes(decodedCurrentMenus, 5000).length;
+        const guardRequestText = [storedRequest, requestText].filter(Boolean).join("\n");
+        if (shouldTriggerMassDeleteGuard({
+          scenario: operationScenario,
+          baseNodes: baseNodeCount,
+          deleted: deletedCount,
+          requestText: guardRequestText,
+        })) {
+          const stopMessage = `Ket qua AI bi chan an toan: xoa ${deletedCount}/${baseNodeCount} node (vuot nguong incremental update).`;
+          setAiMenus(decodedCurrentMenus);
+          setAiResultText(JSON.stringify({
+            success: false,
+            stage: "guard_blocked",
+            message: stopMessage,
+            action: "giu_nguyen_menu_goc",
+          }, null, 2));
+          setEditableAiDraftText(JSON.stringify({ menu: decodedCurrentMenus }, null, 2));
+          setAiProgress((prev) => ({
+            ...(prev || {}),
+            status: "failed",
+            stage: "guard_blocked",
+            message: stopMessage,
+          }));
+          message.error(stopMessage);
+          return;
         }
       } else {
         syncPatchReviewState([]);
@@ -2969,8 +3384,8 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
             autoRefineText,
             JSON.stringify(output),
             "complete",
-            currentMenus,
-            sampleMenuParsed || undefined,
+            decodedCurrentMenus,
+            decodedSampleMenus || undefined,
             false,
             contextFiles,
           ),
@@ -3013,7 +3428,6 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
           request_text: inputRequest,
           last_result: JSON.stringify(output),
           context_files_json: serializeContextFiles(contextFiles),
-          generate_mode: generateMode,
           updated_at: Date.now(),
         },
         "update",
@@ -3049,38 +3463,6 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     }
   };
 
-  const handleRefineGenerate = async () => {
-    if (!refineText.trim()) {
-      message.warning(t("system.menu.aiDesigner.enterRefine") || "Hãy nhập yêu cầu bổ sung/chỉnh sửa");
-      return;
-    }
-
-    const prompt = JSON.stringify(
-      buildAiMenuRefinePayload(
-        appId,
-        storedRequest,
-        refineText,
-        aiResultText,
-        "complete",
-        currentMenus,
-        sampleMenuParsed || undefined,
-        false,
-        contextFiles,
-      ),
-      null,
-      2,
-    );
-
-    const combinedRequest = [
-      storedRequest || "",
-      "\n[Bo sung/chinh sua]\n",
-      refineText,
-    ].join("\n").trim();
-
-    await runGenerate(combinedRequest, "complete", prompt);
-    setRefineText("");
-  };
-
   const handleGenerate = async () => {
     // ── Kịch bản 2: Chỉnh sửa toàn diện trên menu hiện có ─────────────────
     if (operationScenario === "incremental_update") {
@@ -3088,7 +3470,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
         message.warning(t("system.menu.aiDesigner.incremental.enterRequest") || "Hãy nhập mô tả thay đổi (menu/field/trigger)");
         return;
       }
-      const baseMenus = Array.isArray(currentMenus) ? currentMenus : [];
+      const baseMenus = decodedCurrentMenus;
       if (baseMenus.length === 0) {
         message.warning(t("system.menu.aiDesigner.incremental.noBaseMenu") || "Không có menu hiện tại để chỉnh sửa. Hãy dùng kịch bản Tạo mới.");
         return;
@@ -3111,46 +3493,10 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
       return;
     }
 
-    // ── Kịch bản 1: New Build (existing flow) ─────────────────────────────
-    if (generateMode === "diff") {
-      if (!storedLastResult.trim()) {
-        message.warning(t("system.menu.aiDesigner.generateMode.diffNeedPrevious") || "Diff mode can ket qua AI truoc do. He thong se chuyen sang full mode.");
-      } else {
-        const diffRequest = requestText.trim() || mergedRequestText.trim();
-        if (!diffRequest) {
-          message.warning(t("system.menu.aiDesigner.generateMode.diffNeedInput") || "Hay nhap noi dung thay doi trong diff mode.");
-          return;
-        }
-
-        const prompt = JSON.stringify(
-          buildAiMenuRefinePayload(
-            appId,
-            storedRequest || mergedRequestText,
-            diffRequest,
-            storedLastResult,
-            "complete",
-            currentMenus,
-            sampleMenuParsed || undefined,
-            false,
-            contextFiles,
-          ),
-          null,
-          2,
-        );
-
-        const combinedRequest = [
-          storedRequest || "",
-          "\n[Diff update]\n",
-          diffRequest,
-        ].join("\n").trim();
-
-        await runGenerate(combinedRequest, "complete", prompt);
-        return;
-      }
-    }
+    // ── Kịch bản 1: New Build ─────────────────────────────────────────────
 
     if (sampleUseAsBase && sampleMenuParsed && sampleMenuParsed.length > 0) {
-      const baseJson = JSON.stringify({ menu: sampleMenuParsed }, null, 2);
+      const baseJson = JSON.stringify({ menu: decodedSampleMenus }, null, 2);
       const prompt = JSON.stringify(
         buildAiMenuRefinePayload(
           appId,
@@ -3158,8 +3504,8 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
           mergedRequestText,
           baseJson,
           "complete",
-          currentMenus,
-          sampleMenuParsed || undefined,
+          decodedCurrentMenus,
+          decodedSampleMenus || undefined,
           true,
           contextFiles,
         ),
@@ -3195,6 +3541,8 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
       }
     }
 
+    draftMenus = normalizeMenuList(draftMenus || []);
+
     if (!draftMenus || draftMenus.length === 0) {
       message.warning(t("system.menu.aiDesigner.noMenuToApply") || "Không có menu để áp dụng");
       return;
@@ -3210,20 +3558,20 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
       return;
     }
 
-    const baseMenus = Array.isArray(currentMenus) ? currentMenus : [];
-    const nextMenus = mergeMode === "merge" ? mergeMenus(baseMenus, draftMenus) : draftMenus;
+    const nextMenus = normalizeMenuList(transformMenuTriggers(draftMenus, "decode"));
+    const menusForSave = transformMenuTriggers(nextMenus, "encode");
 
     try {
-      await onApply(normalizeMenuList(nextMenus));
+      await onApply(menusForSave);
+      const canonicalOutput = JSON.stringify({ menu: nextMenus }, null, 2);
+      setAiMenus(nextMenus);
+      setAiResultText(canonicalOutput);
+      setEditableAiDraftText(canonicalOutput);
       message.success(t("system.menu.aiDesigner.applySuccess") || "Đã áp dụng menu vào hệ thống");
     } catch (error) {
       console.error("Apply AI menu failed:", error);
       message.error(t("system.menu.aiDesigner.applyFailed") || "Áp dụng menu thất bại");
     }
-  };
-
-  const handleMergeModeChange = (evt: RadioChangeEvent) => {
-    setMergeMode(evt.target.value as MergeMode);
   };
 
   return (
@@ -3243,6 +3591,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
               setEditableAiDraftText("");
               setAiProgress(null);
                 syncPatchReviewState([]);
+              setLiveEditLines([]);
               setMergeStats(null);
             }}
             style={{ width: "100%" }}
@@ -3438,22 +3787,25 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
 
         <Divider />
 
-        {/* ── Generate Mode (only for new_build) ───────────────────────── */}
-        {operationScenario === "new_build" && (
-          <Space style={{ marginBottom: 16 }} align="center" wrap>
-            <span style={{ fontSize: 13 }}>{t("system.menu.aiDesigner.generateMode.label") || "Che do tao:"}</span>
-            <Radio.Group
-              value={generateMode}
-              onChange={(e) => setGenerateMode(e.target.value as GenerateMode)}
-            >
-              <Radio value="full">{t("system.menu.aiDesigner.generateMode.full") || "Full regenerate"}</Radio>
-              <Radio value="diff">{t("system.menu.aiDesigner.generateMode.diff") || "Diff update"}</Radio>
-            </Radio.Group>
-            {generateMode === "diff" && (
-              <Tag color="gold">{t("system.menu.aiDesigner.generateMode.diffHint") || "Chi sua phan thay doi, giu continuity app_id"}</Tag>
-            )}
-          </Space>
-        )}
+        <Space style={{ marginBottom: 12 }} wrap>
+          <Switch
+            checked={aiLiveEditEnabled}
+            onChange={setAiLiveEditEnabled}
+            checkedChildren={t("system.menu.aiDesigner.editor.livePatchOn") || "Live patch bật"}
+            unCheckedChildren={t("system.menu.aiDesigner.editor.livePatchOff") || "Live patch tắt"}
+          />
+          <Tag color={aiLiveEditEnabled ? "blue" : "default"}>
+            {aiLiveEditEnabled
+              ? (t("system.menu.aiDesigner.editor.livePatchHintOn") || "AI có thể sửa trực tiếp từng dòng / nhiều dòng trong editor khi đang chạy")
+              : (t("system.menu.aiDesigner.editor.livePatchHintOff") || "AI chỉ cập nhật editor khi hoàn tất")}
+          </Tag>
+          <Switch
+            checked={allowManualEditWhileRunning}
+            onChange={setAllowManualEditWhileRunning}
+            checkedChildren={t("system.menu.aiDesigner.editor.manualWhileRunOn") || "Sửa tay khi chạy: bật"}
+            unCheckedChildren={t("system.menu.aiDesigner.editor.manualWhileRunOff") || "Sửa tay khi chạy: tắt"}
+          />
+        </Space>
 
         <Space wrap style={{ marginBottom: 16 }}>
           <Button type="primary" onClick={handleGenerate} loading={loading} disabled={!appId} size="large">
@@ -3466,13 +3818,18 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                   : (t("system.menu.aiDesigner.incremental.generateButton") || "Chỉnh sửa menu bằng AI")}
           </Button>
 
-          {aiMenus && aiMenus.length > 0 && (
-            <>
-              <Radio.Group onChange={handleMergeModeChange} value={mergeMode}>
-                <Radio value="merge">{t("system.menu.aiDesigner.mergeLabel") || "Merge"}</Radio>
-                <Radio value="replace">{t("system.menu.aiDesigner.replaceLabel") || "Replace"}</Radio>
-              </Radio.Group>
+          {loading && activeAiJobIdRef.current && (
+            <Button
+              danger
+              size="large"
+              onClick={() => cancelActiveAiRun("Nguoi dung da dung AI job")}
+            >
+              Dung AI ngay
+            </Button>
+          )}
 
+          {applyMenuCount > 0 && (
+            <>
               <Button
                 type="primary"
                 onClick={handleApply}
@@ -3480,7 +3837,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                 disabled={menuValidationErrors.length > 0 || applyGuardIssues.length > 0}
                 style={{ background: "#52c41a", borderColor: "#52c41a" }}
               >
-                {`${t("system.menu.aiDesigner.applySystem") || "Ap dung vao He thong"} (${aiMenus.length} menu)`}
+                {`${t("system.menu.aiDesigner.applySystem") || "Ap dung vao He thong"} (${applyMenuCount} menu JSON)`}
               </Button>
             </>
           )}
@@ -3508,6 +3865,26 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                 </div>
               </Space>
             }
+          />
+        )}
+
+        {aiStopReason && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message="AI da bi dung de bao ve menu"
+            description={aiStopReason}
+          />
+        )}
+
+        {aiProgress?.status !== "completed" && liveEditLines.length > 0 && patchOps.length === 0 && (
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message={`AI đang cập nhật trực tiếp editor: ${liveEditLines.length} dòng vừa được chỉnh`}
+            description="Các dòng thay đổi được highlight ngay trong editor theo thời gian thực."
           />
         )}
 
@@ -3619,7 +3996,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                       </div>
                       {patchOps.length > 0 && (
                         <div style={{ marginTop: 4 }}>
-                          <Tag color="blue">Pending: {patchOps.filter((op) => !patchReviewStatus[op.nodeId]).length}</Tag>
+                          <Tag color="processing">Changes: {patchOps.length}</Tag>
                           <Tag color="green">Kept: {patchOps.filter((op) => patchReviewStatus[op.nodeId] === "kept").length}</Tag>
                           <Tag color="default">Undone: {patchOps.filter((op) => patchReviewStatus[op.nodeId] === "undone").length}</Tag>
                         </div>
@@ -3630,41 +4007,93 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                         </div>
                       )}
                       {patchOps.length > 0 && (
-                        <div style={{ marginTop: 8, maxHeight: 140, overflow: "auto", paddingRight: 8 }}>
-                          {patchOps.slice(0, 12).map((op, idx) => (
-                            <div
-                              key={`${op.nodeId}_${idx}`}
-                              style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "4px 0" }}
-                            >
-                              <div style={{ flex: 1, minWidth: 0 }}>
-                                [{op.action.toUpperCase()}] {op.nodePath || op.nodeName || op.nodeId}
-                                {op.changedFields?.length ? ` — ${op.changedFields.map((f: any) => f.fieldName).slice(0, 5).join(", ")}` : ""}
-                                <div style={{ marginTop: 2 }}>
-                                  <Tag color={patchReviewStatus[op.nodeId] === "kept" ? "blue" : patchReviewStatus[op.nodeId] === "undone" ? "default" : "gold"}>
-                                    {(patchReviewStatus[op.nodeId] || "pending").toUpperCase()}
-                                  </Tag>
+                        <div style={{ marginTop: 10 }}>
+                          <Space size={8} wrap>
+                            <Select
+                              size="small"
+                              value={patchActionFilter}
+                              onChange={(val) => setPatchActionFilter(val)}
+                              options={[
+                                { value: "all", label: "Tất cả" },
+                                { value: "add", label: "Thêm" },
+                                { value: "edit", label: "Sửa" },
+                                { value: "delete", label: "Xóa" },
+                              ]}
+                              style={{ width: 110 }}
+                            />
+                            <Input
+                              size="small"
+                              value={patchKeyword}
+                              onChange={(e) => setPatchKeyword(e.target.value)}
+                              placeholder="Tìm node/field..."
+                              style={{ width: 240 }}
+                              allowClear
+                            />
+                            <Tag color="processing">Hiển thị: {visiblePatchOps.length}/{patchOps.length}</Tag>
+                          </Space>
+
+                          <div style={{ marginTop: 8, maxHeight: 280, overflow: "auto", paddingRight: 8, borderTop: "1px solid rgba(0,0,0,0.06)", paddingTop: 8 }}>
+                            {visiblePatchOps.map((op, idx) => (
+                              <div
+                                key={`${op.nodeId}_${idx}`}
+                                style={{
+                                  display: "flex",
+                                  alignItems: "flex-start",
+                                  justifyContent: "space-between",
+                                  gap: 12,
+                                  padding: "8px 0",
+                                  borderBottom: "1px dashed rgba(0,0,0,0.08)",
+                                }}
+                              >
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  <div style={{ fontWeight: 600 }}>
+                                    [{op.action.toUpperCase()}] {op.nodePath || op.nodeName || op.nodeId}
+                                    {op.line ? <Tag style={{ marginLeft: 8 }}>Line {op.line}</Tag> : null}
+                                  </div>
+                                  <div style={{ marginTop: 4 }}>
+                                    <Tag color={patchReviewStatus[op.nodeId] === "kept" ? "blue" : patchReviewStatus[op.nodeId] === "undone" ? "default" : "gold"}>
+                                      {(patchReviewStatus[op.nodeId] || "pending").toUpperCase()}
+                                    </Tag>
+                                  </div>
+                                  {Array.isArray(op.changedFields) && op.changedFields.length > 0 && (
+                                    <div style={{ marginTop: 6, fontSize: 12, color: "rgba(0,0,0,0.78)" }}>
+                                      {op.changedFields.slice(0, 6).map((field, fIdx) => (
+                                        <div key={`${op.nodeId}_${field.fieldName}_${fIdx}`}>
+                                          • {field.fieldName}: {formatFieldDeltaValue(field.oldVal)} → {formatFieldDeltaValue(field.newVal)}
+                                        </div>
+                                      ))}
+                                      {op.changedFields.length > 6 && (
+                                        <div style={{ color: "rgba(0,0,0,0.55)" }}>...{op.changedFields.length - 6} thay đổi field nữa</div>
+                                      )}
+                                    </div>
+                                  )}
                                 </div>
+                                <Space size={6} direction="vertical" style={{ alignItems: "flex-end" }}>
+                                  <Button size="small" onClick={() => focusPatchOpLine(op.nodeId)} disabled={!op.line}>
+                                    Đến dòng
+                                  </Button>
+                                  <Button
+                                    size="small"
+                                    onClick={() => handleKeepAiPatch(op.nodeId)}
+                                    disabled={!!patchReviewStatus[op.nodeId]}
+                                  >
+                                    Keep
+                                  </Button>
+                                  <Button
+                                    size="small"
+                                    danger
+                                    onClick={() => handleUndoAiPatch(op.nodeId)}
+                                    disabled={!!patchReviewStatus[op.nodeId]}
+                                  >
+                                    Undo
+                                  </Button>
+                                </Space>
                               </div>
-                              <Space size={6}>
-                                <Button
-                                  size="small"
-                                  onClick={() => handleKeepAiPatch(op.nodeId)}
-                                  disabled={!!patchReviewStatus[op.nodeId]}
-                                >
-                                  Keep
-                                </Button>
-                                <Button
-                                  size="small"
-                                  danger
-                                  onClick={() => handleUndoAiPatch(op.nodeId)}
-                                  disabled={!!patchReviewStatus[op.nodeId]}
-                                >
-                                  Undo
-                                </Button>
-                              </Space>
-                            </div>
-                          ))}
-                          {patchOps.length > 12 && <div>...{patchOps.length - 12} mục nữa</div>}
+                            ))}
+                            {visiblePatchOps.length === 0 && (
+                              <div style={{ color: "rgba(0,0,0,0.55)" }}>Không có mục thay đổi phù hợp bộ lọc hiện tại.</div>
+                            )}
+                          </div>
                         </div>
                       )}
                     </div>
@@ -3685,7 +4114,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                   onCreateEditor={(view: any) => {
                     resultEditorViewRef.current = view;
                   }}
-                  editable={!!editableAiDraftText || aiProgress?.status === "completed"}
+                  editable={allowManualEditWhileRunning ? true : (!!editableAiDraftText || aiProgress?.status === "completed")}
                   onChange={(val) => {
                     setEditableAiDraftText(val);
                   }}
@@ -3710,36 +4139,6 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                   showIcon
                   message={t("system.menu.aiDesigner.property.editableResultHint") || "Node đã được chỉnh sửa — JSON trong editor có thể chỉnh thêm trước khi Áp dụng"}
                 />
-              )}
-
-              {(
-                <>
-                  <Divider orientation="left">{t("system.menu.aiDesigner.refineTitle") || "Yêu cầu bổ sung / chỉnh sửa"}</Divider>
-                  <Alert
-                    type="info"
-                    showIcon
-                    message={t("system.menu.aiDesigner.refineHintTitle") || "Bạn có thể yêu cầu AI chỉnh sửa thêm"}
-                    description={t("system.menu.aiDesigner.refineHintDesc") || "Nhập thay đổi mong muốn, AI sẽ dựa trên kết quả đã tạo và phân tích lại toàn bộ menu theo đúng nghiệp vụ."}
-                  />
-                  {sampleMenuParsed && (
-                    <Alert
-                      type="info"
-                      showIcon
-                      message={sampleUseAsBase
-                        ? (t("system.menu.aiDesigner.sampleMenu.refineInfoBase", { app: sampleAppLabel || sampleAppId || "" }) || `Menu mẫu từ ${sampleAppLabel || sampleAppId} đang được đưa vào prompt bổ sung (chế độ gốc: AI tiếp tục chỉnh sửa trên menu đó)`)
-                        : (t("system.menu.aiDesigner.sampleMenu.refineInfoReference", { app: sampleAppLabel || sampleAppId || "" }) || `Menu mẫu từ ${sampleAppLabel || sampleAppId} đang được đưa vào prompt bổ sung (chế độ tham khảo)`)}
-                    />
-                  )}
-                  <TextArea
-                    value={refineText}
-                    onChange={(e) => setRefineText(e.target.value)}
-                    placeholder={t("system.menu.aiDesigner.refinePlaceholder") || "Ví dụ: Thêm menu báo cáo doanh thu theo tháng, sửa đơn hàng thành Master-Detail có tab lịch sử thanh toán..."}
-                    rows={4}
-                  />
-                  <Button type="primary" onClick={handleRefineGenerate} loading={loading} disabled={!appId}>
-                    {t("system.menu.aiDesigner.refineButton") || "Phân tích lại theo yêu cầu bổ sung"}
-                  </Button>
-                </>
               )}
             </Space>
           </>

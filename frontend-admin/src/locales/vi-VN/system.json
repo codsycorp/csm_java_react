@@ -514,6 +514,19 @@
 				"applySuccess": "Đã áp dụng chỉnh sửa node vào hệ thống",
 				"editableResultHint": "Node đã được chỉnh sửa — JSON trong editor có thể chỉnh thêm trước khi Áp dụng"
 			},
+			"editor": {
+				"livePatchOn": "Live patch bật",
+				"livePatchOff": "Live patch tắt",
+				"livePatchHintOn": "AI có thể sửa trực tiếp từng dòng / nhiều dòng trong editor khi đang chạy",
+				"livePatchHintOff": "AI chỉ cập nhật editor khi hoàn tất",
+				"manualWhileRunOn": "Sửa tay khi chạy: bật",
+				"manualWhileRunOff": "Sửa tay khi chạy: tắt",
+				"resetFromProgram": "Nạp lại JSON chương trình vào editor"
+			},
+			"editorSeed": {
+				"sample": "Đã nạp JSON từ chương trình mẫu vào editor",
+				"current": "Đã nạp JSON menu hiện tại vào editor"
+			},
 			"mergePreview": {
 				"title": "Xem trước thay đổi chính xác kiểu Copilot",
 				"summary": "Thêm {{added}}, sửa {{edited}}, xóa {{deleted}}",
