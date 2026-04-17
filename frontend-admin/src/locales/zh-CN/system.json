@@ -388,6 +388,7 @@
 		"typeMenuHint": "子菜单的排列方式",
 		"crmConfigHint": "填写 JSON，用于定义销售漏斗、房源库存、活动跟进、分析指标和客户数据保护规则。",
 		"aiDesigner": {
+			"processing": "AI 正在处理中...",
 			"requirementForm": {
 				"title": "菜单设计需求"
 			},
@@ -418,6 +419,7 @@
 			"emptyMenu": "AI 未返回菜单列表",
 			"generateSuccess": "AI 菜单生成成功",
 			"generateFailed": "AI 请求失败",
+			"persistWarning": "AI 已生成结果，但保存请求历史失败。",
 			"enterRefine": "请输入补充/修改需求",
 			"noMenuToApply": "没有可应用的菜单",
 			"applySuccess": "菜单已应用到系统",
@@ -452,6 +454,12 @@
 				"autoRefining": "首次 AI 结果未达标，正在自动修正并重新生成...",
 				"autoRefineResult": "首轮结果质量不足，正在自动优化。",
 				"completedWithCount": "已完成生成 {{count}} 个菜单/功能"
+			},
+			"progressStatus": {
+				"running": "AI 正在实时更新菜单",
+				"completed": "AI 已完成",
+				"failed": "AI 处理失败",
+				"cancelled": "AI 已停止"
 			},
 			"sampleMenu": {
 				"appSelectedFallback": "已选应用",
@@ -492,7 +500,10 @@
 				"generateButton": "用 AI 更新菜单",
 				"enterRequest": "请输入变更说明",
 				"noBaseMenu": "当前没有可修改的菜单，请先使用全新设计场景。",
-				"mergeComputed": "Jackson 已精确计算 add/edit/delete 变更"
+				"mergeComputed": "Jackson 已精确计算 add/edit/delete 变更",
+				"abnormalDeleteStopped": "检测到 AI 异常删除（{{deleted}}/{{total}} 个节点），已停止任务以保护原始菜单。",
+				"guardBlocked": "AI 结果被安全策略拦截：删除了 {{deleted}}/{{total}} 个节点（超过增量更新阈值）。",
+				"scopeBlocked": "已自动忽略 {{count}} 项超出需求范围的变更。"
 			},
 			"property": {
 				"alertTitle": "场景 3：编辑单个菜单节点属性",
@@ -522,12 +533,27 @@
 				"livePatchOff": "实时补丁：关闭",
 				"livePatchHintOn": "AI 运行时可直接在编辑器中按行或多行修改",
 				"livePatchHintOff": "AI 仅在完成后更新编辑器",
+				"liveUpdateMessage": "AI 正在直接更新编辑器：已修改 {{count}} 行",
+				"liveUpdateDescription": "变更行会在编辑器中实时高亮显示。",
 				"manualWhileRunOn": "运行中手动编辑：开启",
 				"manualWhileRunOff": "运行中手动编辑：关闭",
+				"editablePlaceholder": "AI 结果将显示在这里。应用前可先手动编辑 JSON。",
 				"resetFromProgram": "将程序 JSON 重新载入编辑器",
 				"stopNow": "立即停止 AI",
 				"stopByUser": "用户已停止 AI 任务",
 				"stoppedTitle": "AI 已停止以保护菜单"
+			},
+			"validation": {
+				"checklistSummary": "规范检查清单：{{errors}} 个错误，{{warnings}} 个警告",
+				"moreItems": "...还有 {{count}} 项"
+			},
+			"applyGuard": {
+				"notReady": "AI 覆盖率门禁：尚未满足应用条件"
+			},
+			"coverage": {
+				"summary": "Coverage: modules={{modules}}, tables={{tables}}, unresolved={{unresolved}} | gate={{mode}} | score={{score}}/{{minScore}}",
+				"toggleShow": "显示 Coverage 诊断",
+				"toggleHide": "隐藏 Coverage 诊断"
 			},
 			"editorSeed": {
 				"sample": "已将样例程序 JSON 载入编辑器",
@@ -536,7 +562,42 @@
 			"mergePreview": {
 				"title": "类似 Copilot 的精确变更预览",
 				"summary": "新增 {{added}}，修改 {{edited}}，删除 {{deleted}}",
-				"computing": "正在计算 merge"
+				"computing": "正在计算 merge",
+				"inlineInEditor": "变更详情会直接显示在 csm-editor 中",
+				"patchSummary": "变更：{{total}} 保留：{{kept}} 撤销：{{undone}} | {{current}} / {{count}}",
+				"keep": "保留",
+				"undo": "撤销",
+				"keptPill": "已保留",
+				"undonePill": "已撤销",
+				"indexOf": "{{current}} / {{count}}",
+				"reviewHint": "可使用上方保留/撤销操作条，或在下方逐行审阅。",
+				"searchPlaceholder": "搜索节点/字段...",
+				"showing": "显示：{{visible}}/{{total}}",
+				"prevPatch": "上一个补丁",
+				"nextPatch": "下一个补丁",
+				"applyAll": "全部应用",
+				"restoreAll": "全部恢复",
+				"applyVisible": "应用当前可见",
+				"restoreVisible": "恢复当前可见",
+				"warnNoDraftUndo": "没有可用于撤销的 AI 草稿",
+				"warnOriginalNodeNotFound": "未找到可撤销的原始节点",
+				"warnInvalidDraftUndo": "当前草稿不是有效 JSON，无法撤销",
+				"infoLineNotFound": "在当前编辑器内容中找不到该节点所在行。",
+				"warnInvalidDraftRestoreBulk": "当前草稿不是有效 JSON，无法批量恢复",
+				"filters": {
+					"action": {
+						"all": "全部",
+						"add": "新增",
+						"edit": "修改",
+						"delete": "删除"
+					},
+					"review": {
+						"pending": "待处理",
+						"kept": "已保留",
+						"undone": "已撤销",
+						"all": "全部状态"
+					}
+				}
 			}
 		}
 	},

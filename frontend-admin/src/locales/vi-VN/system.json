@@ -385,6 +385,7 @@
 		"typeMenuHint": "Cách sắp xếp menu con",
 		"crmConfigHint": "Khai báo JSON cho pipeline Kanban, bảng hàng, activity tracking, KPI và chính sách bảo mật dữ liệu khách hàng.",
 		"aiDesigner": {
+			"processing": "Đang xử lý AI...",
 			"requirementForm": {
 				"title": "Nhập Yêu Cầu Thiết Kế Menu"
 			},
@@ -415,6 +416,7 @@
 			"emptyMenu": "AI chưa trả về danh sách menu",
 			"generateSuccess": "Đã tạo menu bằng AI",
 			"generateFailed": "Lỗi gọi AI",
+			"persistWarning": "AI đã tạo kết quả, nhưng không lưu được lịch sử yêu cầu.",
 			"enterRefine": "Hãy nhập yêu cầu bổ sung/chỉnh sửa",
 			"noMenuToApply": "Không có menu để áp dụng",
 			"applySuccess": "Đã áp dụng menu vào hệ thống",
@@ -449,6 +451,12 @@
 				"autoRefining": "Kết quả AI lần 1 chưa đạt. Đang tự động sửa và tạo lại...",
 				"autoRefineResult": "KQ lần 1 chưa đạt chất lượng, đang auto-refine.",
 				"completedWithCount": "Đã hoàn tất tạo {{count}} menu/chức năng"
+			},
+			"progressStatus": {
+				"running": "AI đang cập nhật menu realtime",
+				"completed": "AI đã hoàn tất",
+				"failed": "AI xử lý thất bại",
+				"cancelled": "AI đã dừng"
 			},
 			"sampleMenu": {
 				"appSelectedFallback": "app đã chọn",
@@ -489,7 +497,10 @@
 				"generateButton": "Cập nhật menu bằng AI",
 				"enterRequest": "Hãy nhập mô tả thay đổi yêu cầu",
 				"noBaseMenu": "Không có menu hiện tại để chỉnh sửa. Hãy dùng kịch bản Thiết kế mới.",
-				"mergeComputed": "Đã tính chính xác các thay đổi add/edit/delete bằng Jackson"
+				"mergeComputed": "Đã tính chính xác các thay đổi add/edit/delete bằng Jackson",
+				"abnormalDeleteStopped": "Đã phát hiện AI xóa bất thường ({{deleted}}/{{total}} node). Đã dừng job để bảo vệ menu gốc.",
+				"guardBlocked": "Kết quả AI bị chặn an toàn: xóa {{deleted}}/{{total}} node (vượt ngưỡng incremental update).",
+				"scopeBlocked": "Đã tự động bỏ qua {{count}} thay đổi ngoài phạm vi yêu cầu."
 			},
 			"property": {
 				"alertTitle": "Kịch bản 3: Chỉnh sửa thuộc tính 1 menu node",
@@ -519,12 +530,27 @@
 				"livePatchOff": "Live patch tắt",
 				"livePatchHintOn": "AI có thể sửa trực tiếp từng dòng / nhiều dòng trong editor khi đang chạy",
 				"livePatchHintOff": "AI chỉ cập nhật editor khi hoàn tất",
+				"liveUpdateMessage": "AI đang cập nhật trực tiếp editor: {{count}} dòng vừa được chỉnh",
+				"liveUpdateDescription": "Các dòng thay đổi được highlight ngay trong editor theo thời gian thực.",
 				"manualWhileRunOn": "Sửa tay khi chạy: bật",
 				"manualWhileRunOff": "Sửa tay khi chạy: tắt",
+				"editablePlaceholder": "Kết quả AI sẽ hiển thị ở đây. Có thể chỉnh sửa JSON trước khi áp dụng.",
 				"resetFromProgram": "Nạp lại JSON chương trình vào editor",
 				"stopNow": "Dừng AI ngay",
 				"stopByUser": "Người dùng đã dừng AI job",
 				"stoppedTitle": "AI đã bị dừng để bảo vệ menu"
+			},
+			"validation": {
+				"checklistSummary": "Checklist chuẩn hóa: {{errors}} lỗi, {{warnings}} cảnh báo",
+				"moreItems": "...còn {{count}} mục nữa"
+			},
+			"applyGuard": {
+				"notReady": "AI coverage gate: chưa đủ điều kiện áp dụng"
+			},
+			"coverage": {
+				"summary": "Coverage: modules={{modules}}, tables={{tables}}, unresolved={{unresolved}} | gate={{mode}} | score={{score}}/{{minScore}}",
+				"toggleShow": "Hiện chẩn đoán coverage",
+				"toggleHide": "Ẩn chẩn đoán coverage"
 			},
 			"editorSeed": {
 				"sample": "Đã nạp JSON từ chương trình mẫu vào editor",
@@ -533,7 +559,42 @@
 			"mergePreview": {
 				"title": "Xem trước thay đổi chính xác kiểu Copilot",
 				"summary": "Thêm {{added}}, sửa {{edited}}, xóa {{deleted}}",
-				"computing": "đang tính merge"
+				"computing": "đang tính merge",
+				"inlineInEditor": "Chi tiết thay đổi hiển thị trực tiếp ngay trong csm-editor",
+				"patchSummary": "Thay đổi: {{total}} Giữ: {{kept}} Hoàn tác: {{undone}} | {{current}} / {{count}}",
+				"keep": "Giữ",
+				"undo": "Hoàn tác",
+				"keptPill": "ĐÃ GIỮ",
+				"undonePill": "ĐÃ HOÀN TÁC",
+				"indexOf": "{{current}} / {{count}}",
+				"reviewHint": "Xem theo thanh Giữ/Hoàn tác ở trên hoặc theo từng dòng trong danh sách bên dưới.",
+				"searchPlaceholder": "Tìm node/field...",
+				"showing": "Hiển thị: {{visible}}/{{total}}",
+				"prevPatch": "Patch trước",
+				"nextPatch": "Patch sau",
+				"applyAll": "Áp dụng tất cả",
+				"restoreAll": "Khôi phục tất cả",
+				"applyVisible": "Áp dụng phần đang hiển thị",
+				"restoreVisible": "Khôi phục phần đang hiển thị",
+				"warnNoDraftUndo": "Không có draft AI để undo",
+				"warnOriginalNodeNotFound": "Không tìm thấy node gốc để undo",
+				"warnInvalidDraftUndo": "Draft hiện tại không phải JSON hợp lệ, không thể undo",
+				"infoLineNotFound": "Không tìm thấy dòng node trong editor hiện tại.",
+				"warnInvalidDraftRestoreBulk": "Draft hiện tại không phải JSON hợp lệ, không thể khôi phục hàng loạt",
+				"filters": {
+					"action": {
+						"all": "Tất cả",
+						"add": "Thêm",
+						"edit": "Sửa",
+						"delete": "Xóa"
+					},
+					"review": {
+						"pending": "Chờ duyệt",
+						"kept": "Đã giữ",
+						"undone": "Đã hoàn tác",
+						"all": "Tất cả trạng thái"
+					}
+				}
 			}
 		}
 	},
