@@ -524,7 +524,10 @@
 				"livePatchHintOff": "AI updates the editor only after completion",
 				"manualWhileRunOn": "Manual edit while running: on",
 				"manualWhileRunOff": "Manual edit while running: off",
-				"resetFromProgram": "Reload program JSON into editor"
+				"resetFromProgram": "Reload program JSON into editor",
+				"stopNow": "Stop AI now",
+				"stopByUser": "User stopped AI job",
+				"stoppedTitle": "AI was stopped to protect menu"
 			},
 			"editorSeed": {
 				"sample": "Sample program JSON has been loaded into the editor",

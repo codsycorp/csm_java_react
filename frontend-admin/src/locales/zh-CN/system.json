@@ -524,7 +524,10 @@
 				"livePatchHintOff": "AI 仅在完成后更新编辑器",
 				"manualWhileRunOn": "运行中手动编辑：开启",
 				"manualWhileRunOff": "运行中手动编辑：关闭",
-				"resetFromProgram": "将程序 JSON 重新载入编辑器"
+				"resetFromProgram": "将程序 JSON 重新载入编辑器",
+				"stopNow": "立即停止 AI",
+				"stopByUser": "用户已停止 AI 任务",
+				"stoppedTitle": "AI 已停止以保护菜单"
 			},
 			"editorSeed": {
 				"sample": "已将样例程序 JSON 载入编辑器",

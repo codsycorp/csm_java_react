@@ -521,7 +521,10 @@
 				"livePatchHintOff": "AI chỉ cập nhật editor khi hoàn tất",
 				"manualWhileRunOn": "Sửa tay khi chạy: bật",
 				"manualWhileRunOff": "Sửa tay khi chạy: tắt",
-				"resetFromProgram": "Nạp lại JSON chương trình vào editor"
+				"resetFromProgram": "Nạp lại JSON chương trình vào editor",
+				"stopNow": "Dừng AI ngay",
+				"stopByUser": "Người dùng đã dừng AI job",
+				"stoppedTitle": "AI đã bị dừng để bảo vệ menu"
 			},
 			"editorSeed": {
 				"sample": "Đã nạp JSON từ chương trình mẫu vào editor",

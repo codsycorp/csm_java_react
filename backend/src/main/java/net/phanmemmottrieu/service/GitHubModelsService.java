@@ -9,6 +9,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.Collections;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.slf4j.Logger;
@@ -151,6 +152,12 @@ public class GitHubModelsService {
   @Value("${github.models.temperature.merge:0.2}")
   private double mergeTemperature;
 
+  @Value("${github.models.realtime-draft.enabled:true}")
+  private boolean realtimeDraftEnabled;
+
+  @Value("${github.models.realtime-draft.every-chunks:1}")
+  private int realtimeDraftEveryChunks;
+
   private final Semaphore requestSemaphore = new Semaphore(1, true);
   private volatile long lastRequestAtMs = 0L;
   private volatile long currentWindowStartMs = 0L;
@@ -185,6 +192,7 @@ public class GitHubModelsService {
     }
 
     // Inject scenario-specific instructions between master prompt and dynamic context
+    AiMenuOperationScenario scenario = extractOperationScenario(prompt);
     String scenarioContext = buildScenarioContext(prompt);
 
     // Compose final prompt: [System_Core]\n\n[Scenario_Context?]\n\n[Dynamic_Context]
@@ -201,7 +209,7 @@ public class GitHubModelsService {
     emitProgress(progressListener, progressPayload("preparing", "Đang chuẩn bị yêu cầu AI", 0, 1, null));
 
     if (finalPrompt.length() > directMaxChars) {
-      return generateLargePromptContent(finalPrompt, progressListener);
+      return generateLargePromptContent(finalPrompt, progressListener, scenario);
     }
 
     return generateDirectContent(finalPrompt, progressListener);
@@ -235,7 +243,7 @@ public class GitHubModelsService {
     }
   }
 
-  private String generateLargePromptContent(String prompt, ProgressListener progressListener) {
+  private String generateLargePromptContent(String prompt, ProgressListener progressListener, AiMenuOperationScenario scenario) {
     try {
       List<String> chunks = splitIntoChunks(prompt, chunkSizeChars, chunkOverlapChars);
       if (chunks.isEmpty()) {
@@ -286,6 +294,17 @@ public class GitHubModelsService {
             chunks.size());
         if (postChunkDraft != null && !postChunkDraft.isBlank()) {
           postChunkExtra.put("draftText", postChunkDraft);
+        }
+
+        int emitEvery = Math.max(1, realtimeDraftEveryChunks);
+        boolean shouldEmitStructuredDraft = realtimeDraftEnabled
+            && scenario == AiMenuOperationScenario.INCREMENTAL_UPDATE
+            && (idx == chunks.size() || (idx % emitEvery == 0));
+        if (shouldEmitStructuredDraft) {
+          String incrementalMenuDraft = tryBuildRealtimeMenuDraft(taskHint, chunkSummaries, idx, chunks.size(), scenario);
+          if (incrementalMenuDraft != null && !incrementalMenuDraft.isBlank()) {
+            postChunkExtra.put("draftText", incrementalMenuDraft);
+          }
         }
         emitProgress(progressListener, progressPayload("chunking", "Đang cập nhật bản nháp tạm thời", idx, chunks.size(), postChunkExtra));
         idx++;
@@ -378,8 +397,101 @@ public class GitHubModelsService {
     }
   }
 
-  private String callChatCompletion(String prompt, int maxTokens, double temperature) {
-    return callChatCompletion(prompt, maxTokens, temperature, null, null);
+  private String tryBuildRealtimeMenuDraft(
+      String taskHint,
+      List<String> summaries,
+      int currentChunk,
+      int totalChunks,
+      AiMenuOperationScenario scenario) {
+    try {
+      if (summaries == null || summaries.isEmpty()) {
+        return null;
+      }
+
+      String prompt = buildRealtimeMenuDraftPrompt(taskHint, summaries, currentChunk, totalChunks, scenario);
+      int draftMaxTokens = Math.max(512, Math.min(1800, chunkSummaryMaxTokens * 2));
+      String raw = callChatCompletion(prompt, draftMaxTokens, 0.1d, null, null);
+      if (raw == null || raw.isBlank()) {
+        return null;
+      }
+
+      String content = extractContentSafely(raw);
+      if (content == null || content.isBlank()) {
+        return null;
+      }
+
+      Object parsed = tryParseJson(content);
+      List<?> menu = extractMenuList(parsed);
+      if (menu == null || menu.isEmpty()) {
+        return null;
+      }
+
+      Map<String, Object> menuEnvelope = new HashMap<>();
+      menuEnvelope.put("menu", menu);
+      menuEnvelope.put("_draft_stage", "chunking");
+      menuEnvelope.put("_draft_progress", Map.of(
+          "current", Math.max(0, currentChunk),
+          "total", Math.max(1, totalChunks)));
+      return objectMapper.writeValueAsString(menuEnvelope);
+    } catch (Exception ex) {
+      log.debug("Realtime menu draft generation skipped: {}", ex.getMessage());
+      return null;
+    }
+  }
+
+  private List<?> extractMenuList(Object parsed) {
+    if (parsed == null) {
+      return null;
+    }
+    if (parsed instanceof List<?>) {
+      return (List<?>) parsed;
+    }
+    if (parsed instanceof Map<?, ?> map) {
+      Object menu = map.get("menu");
+      if (menu instanceof List<?>) {
+        return (List<?>) menu;
+      }
+      Object data = map.get("data");
+      if (data instanceof Map<?, ?> dataMap) {
+        Object nestedMenu = dataMap.get("menu");
+        if (nestedMenu instanceof List<?>) {
+          return (List<?>) nestedMenu;
+        }
+      }
+    }
+    return null;
+  }
+
+  private String buildRealtimeMenuDraftPrompt(
+      String taskHint,
+      List<String> summaries,
+      int currentChunk,
+      int totalChunks,
+      AiMenuOperationScenario scenario) {
+    StringBuilder sb = new StringBuilder();
+    sb.append("Bạn đang tạo BẢN NHÁP MENU TẠM THỜI theo tiến độ chunk.\\n");
+    sb.append("SCENARIO: ").append(scenario == null ? "UNKNOWN" : scenario.name()).append("\\n");
+    sb.append("YÊU CẦU CỨNG:\\n");
+    sb.append("- Chỉ trả JSON hợp lệ, không markdown.\\n");
+    sb.append("- Trả về đúng format: {\"menu\":[...]}\\n");
+    sb.append("- Không được tự ý xóa hàng loạt menu; ưu tiên giữ cấu trúc hiện có nếu chưa chắc chắn.\\n");
+    sb.append("- Nếu chưa đủ thông tin, trả về menu bảo thủ nhất có thể.\\n");
+    sb.append("- Đây là bản nháp tạm để hiển thị realtime, không phải kết quả cuối.\\n\\n");
+    sb.append("TIẾN ĐỘ: chunk ").append(currentChunk).append("/").append(totalChunks).append("\\n\\n");
+    sb.append("TASK_HINT:\\n").append(trimToMax(taskHint == null ? "" : taskHint, 1800)).append("\\n\\n");
+    sb.append("TÓM TẮT CHUNK GẦN NHẤT:\\n");
+
+    List<String> safeSummaries = summaries == null ? Collections.emptyList() : summaries;
+    int start = Math.max(0, safeSummaries.size() - 4);
+    for (int i = start; i < safeSummaries.size(); i++) {
+      String item = safeSummaries.get(i);
+      if (item == null || item.isBlank()) {
+        continue;
+      }
+      sb.append("[S").append(i + 1).append("] ").append(trimToMax(item, 2400)).append("\\n");
+    }
+
+    return trimToMax(sb.toString(), requestMaxChars - 500);
   }
 
   private String callChatCompletion(String prompt, int maxTokens, double temperature, ProgressListener progressListener,

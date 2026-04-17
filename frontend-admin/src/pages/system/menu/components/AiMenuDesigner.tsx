@@ -1591,6 +1591,27 @@ function extractMenuListFromPayload(payload: any): MenuItemType[] {
   return [];
 }
 
+function extractMenuDraftForEditor(rawDraft: string): string | null {
+  const text = String(rawDraft || "").trim();
+  if (!text) return null;
+
+  try {
+    const parsed = JSON.parse(text);
+    if (isLikelyMenuNode((parsed as any)?.menu_node)) {
+      return JSON.stringify({ menu_node: (parsed as any).menu_node }, null, 2);
+    }
+
+    const menus = extractMenuListFromPayload(parsed);
+    if (Array.isArray(menus) && menus.length > 0) {
+      return JSON.stringify({ menu: menus }, null, 2);
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
 function isComboType(rawType: any): boolean {
   return /co|coro|cbo/i.test(String(rawType || ""));
 }
@@ -2508,8 +2529,11 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
 
     const explicitDraft = payload?.draftText || payload?.result?.draftText || progress?.draftText || progress?.partialJson || progress?.previewJson;
     if (typeof explicitDraft === "string" && explicitDraft.trim()) {
-      setEditableAiDraftText(explicitDraft);
-      return;
+      const menuDraftText = extractMenuDraftForEditor(explicitDraft);
+      if (menuDraftText) {
+        setEditableAiDraftText(menuDraftText);
+        return;
+      }
     }
 
     const textEdits = payload?.textEdits || progress?.textEdits;
@@ -3822,9 +3846,9 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
             <Button
               danger
               size="large"
-              onClick={() => cancelActiveAiRun("Nguoi dung da dung AI job")}
+              onClick={() => cancelActiveAiRun(t("system.menu.aiDesigner.editor.stopByUser") || "Nguoi dung da dung AI job")}
             >
-              Dung AI ngay
+              {t("system.menu.aiDesigner.editor.stopNow") || "Dung AI ngay"}
             </Button>
           )}
 
@@ -3873,7 +3897,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
             type="warning"
             showIcon
             style={{ marginBottom: 16 }}
-            message="AI da bi dung de bao ve menu"
+            message={t("system.menu.aiDesigner.editor.stoppedTitle") || "AI da bi dung de bao ve menu"}
             description={aiStopReason}
           />
         )}
