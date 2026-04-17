@@ -3316,12 +3316,12 @@ public class RecordManager {
     
             if (allKeys == null || allKeys.isEmpty()) {
                 logger.debug("Không tìm thấy key nào phù hợp cho appId: {}, tableName: {}, filter: {}", appId, tableName, searchFilter);
-                return Map.of(
-                    "rows", Collections.emptyList(),
-                    "totalCount", totalCount,
-                    "nextCursor", null,
-                    "truncated", false
-                );
+                Map<String, Object> emptyResult = new HashMap<>();
+                emptyResult.put("rows", Collections.emptyList());
+                emptyResult.put("totalCount", totalCount);
+                emptyResult.put("nextCursor", null);
+                emptyResult.put("truncated", false);
+                return emptyResult;
             }
             filteredCount = allKeys.size();
             // --- KẾT THÚC TÌM KIẾM CÁC KEY PHÙ HỢP ---
