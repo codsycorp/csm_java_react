@@ -552,6 +552,19 @@
 				"toggleShow": "Hiện chẩn đoán coverage",
 				"toggleHide": "Ẩn chẩn đoán coverage"
 			},
+			"requestStore": {
+				"hasData": "Đã có dữ liệu request AI lưu cho app_id: {{appId}}",
+				"noData": "Chưa có dữ liệu request AI lưu cho app_id: {{appId}}",
+				"noDataDesc": "Bạn có thể chạy AI mới hoàn toàn mà không bị ảnh hưởng bởi dữ liệu request đã lưu.",
+				"requestLabel": "Request hiện tại",
+				"historyLabel": "Lịch sử request",
+				"updatedAt": "Lần cập nhật cuối",
+				"emptyValue": "(trống)",
+				"deleteButton": "Xóa dữ liệu request đã lưu",
+				"deleteConfirm": "Xóa dữ liệu request AI đã lưu cho app này?",
+				"deleteSuccess": "Đã xóa dữ liệu request AI đã lưu cho app hiện tại.",
+				"deleteFailed": "Xóa dữ liệu request AI thất bại."
+			},
 			"editorSeed": {
 				"sample": "Đã nạp JSON từ chương trình mẫu vào editor",
 				"current": "Đã nạp JSON menu hiện tại vào editor"

@@ -555,6 +555,19 @@
 				"toggleShow": "显示 Coverage 诊断",
 				"toggleHide": "隐藏 Coverage 诊断"
 			},
+			"requestStore": {
+				"hasData": "当前 app_id: {{appId}} 已有 AI request 存储数据",
+				"noData": "当前 app_id: {{appId}} 暂无 AI request 存储数据",
+				"noDataDesc": "你可以直接重新发起 AI 生成，不受旧 request 存储数据影响。",
+				"requestLabel": "当前 request",
+				"historyLabel": "request 历史",
+				"updatedAt": "最后更新时间",
+				"emptyValue": "（空）",
+				"deleteButton": "删除已存储 request 数据",
+				"deleteConfirm": "确认删除该 app 的 AI request 存储数据吗？",
+				"deleteSuccess": "已删除当前 app 的 AI request 存储数据。",
+				"deleteFailed": "删除 AI request 存储数据失败。"
+			},
 			"editorSeed": {
 				"sample": "已将样例程序 JSON 载入编辑器",
 				"current": "已将当前菜单 JSON 载入编辑器"

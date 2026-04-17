@@ -2629,6 +2629,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
   // ── Common state ──────────────────────────────────────────────────────────
   const [requestText, setRequestText] = useState("");
   const [storedRequest, setStoredRequest] = useState("");
+  const [storedRecordMeta, setStoredRecordMeta] = useState<AiRequestRecord | null>(null);
   const [aiResultText, setAiResultText] = useState("");
   const [aiMenus, setAiMenus] = useState<MenuItemType[] | null>(null);
   const [loading, setLoading] = useState(false);
@@ -2662,6 +2663,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
   const [mergeStats, setMergeStats] = useState<{ added: number; edited: number; deleted: number } | null>(null);
   const [aiStopReason, setAiStopReason] = useState<string>("");
   const [showCoverageDetails, setShowCoverageDetails] = useState(false);
+  const [deletingStoredRecord, setDeletingStoredRecord] = useState(false);
   /** Ref to the result CodeMirror view so we can dispatch decoration effects */
   const resultEditorViewRef = useRef<any>(null);
   const activeAiJobIdRef = useRef<string | null>(null);
@@ -3637,11 +3639,13 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
         if (item) {
           setStoredRequest(item.request_text || "");
           setStoredLastResult(item.last_result || "");
+          setStoredRecordMeta(item as AiRequestRecord);
           setContextFiles(parseContextFiles(item.context_files_json));
           setRecordId(item.id);
         } else {
           setStoredRequest("");
           setStoredLastResult("");
+          setStoredRecordMeta(null);
           setContextFiles([]);
           setRecordId(undefined);
         }
@@ -3785,6 +3789,62 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
 
   const removeContextFile = (id: string) => {
     setContextFiles((prev) => prev.filter((item) => item.id !== id));
+  };
+
+  const formatStoredTimestamp = (value?: number) => {
+    const ts = Number(value || 0);
+    if (!Number.isFinite(ts) || ts <= 0) return "-";
+    try {
+      return new Date(ts).toLocaleString();
+    } catch {
+      return "-";
+    }
+  };
+
+  const handleClearStoredRequestData = async () => {
+    if (!appId) return;
+    const confirmText = t("system.menu.aiDesigner.requestStore.deleteConfirm") || "Xóa dữ liệu request AI đã lưu cho app này?";
+    if (!window.confirm(confirmText)) return;
+
+    setDeletingStoredRecord(true);
+    try {
+      await updateTableData<AiRequestRecord>({
+        app_id: "csm",
+        obj_name: AI_REQUEST_TABLE,
+        command: "delete",
+        obj_update: {
+          id: recordId || `ai_menu_${appId}`,
+          app_id_target: appId,
+        },
+        pk_fields: ["app_id_target"],
+        where: {
+          app_id_target: appId,
+        },
+      });
+
+      setStoredRequest("");
+      setStoredLastResult("");
+      setStoredRecordMeta(null);
+      setContextFiles([]);
+      setRecordId(undefined);
+      setRequestText("");
+      setAiMenus(null);
+      setAiResultText("");
+      setEditableAiDraftText("");
+      setAiProgress(null);
+      setAiStopReason("");
+      syncPatchReviewState([]);
+      setLiveEditLines([]);
+      setMergeStats(null);
+      setShowCoverageDetails(false);
+
+      message.success(t("system.menu.aiDesigner.requestStore.deleteSuccess") || "Đã xóa dữ liệu request AI đã lưu cho app hiện tại.");
+    } catch (error) {
+      console.error("Failed to clear stored AI request record:", error);
+      message.error(t("system.menu.aiDesigner.requestStore.deleteFailed") || "Xóa dữ liệu request AI thất bại.");
+    } finally {
+      setDeletingStoredRecord(false);
+    }
   };
 
   const runGenerate = async (
@@ -4182,6 +4242,43 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     <>
       <Card title={t("system.menu.aiDesigner.panelTitle") || "AI Thiet ke Menu Tu dong"} bordered={false}>
         {!appId && <Alert type="warning" showIcon message={t("system.menu.aiDesigner.selectAppFirst") || "Vui long chon App truoc khi su dung AI."} />}
+
+        {appId && (
+          <Alert
+            type={storedRecordMeta ? "info" : "success"}
+            showIcon
+            style={{ marginBottom: 12 }}
+            message={storedRecordMeta
+              ? (t("system.menu.aiDesigner.requestStore.hasData", { appId }) as string)
+              : (t("system.menu.aiDesigner.requestStore.noData", { appId }) as string)}
+            description={storedRecordMeta
+              ? (
+                <Space direction="vertical" style={{ width: "100%" }}>
+                  <div>
+                    <strong>{t("system.menu.aiDesigner.requestStore.requestLabel") as string}</strong>
+                    <div style={{ marginTop: 4, whiteSpace: "pre-wrap" }}>
+                      {storedRequest || (t("system.menu.aiDesigner.requestStore.emptyValue") as string)}
+                    </div>
+                  </div>
+                  <div>
+                    <strong>{t("system.menu.aiDesigner.requestStore.historyLabel") as string}</strong>
+                    <div style={{ marginTop: 4, maxHeight: 120, overflow: "auto", whiteSpace: "pre-wrap" }}>
+                      {storedRecordMeta.request_history || (t("system.menu.aiDesigner.requestStore.emptyValue") as string)}
+                    </div>
+                  </div>
+                  <div>
+                    <strong>{t("system.menu.aiDesigner.requestStore.updatedAt") as string}</strong>: {formatStoredTimestamp(storedRecordMeta.updated_at)}
+                  </div>
+                  <div>
+                    <Button danger size="small" loading={deletingStoredRecord} onClick={handleClearStoredRequestData}>
+                      {t("system.menu.aiDesigner.requestStore.deleteButton") as string}
+                    </Button>
+                  </div>
+                </Space>
+              )
+              : (t("system.menu.aiDesigner.requestStore.noDataDesc") as string)}
+          />
+        )}
 
         {/* ── Scenario Selector ─────────────────────────────────────────── */}
         <div style={{ marginBottom: 16 }}>

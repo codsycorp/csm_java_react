@@ -555,6 +555,19 @@
 				"toggleShow": "Show coverage diagnostics",
 				"toggleHide": "Hide coverage diagnostics"
 			},
+			"requestStore": {
+				"hasData": "Stored AI request data exists for app_id: {{appId}}",
+				"noData": "No stored AI request data for app_id: {{appId}}",
+				"noDataDesc": "You can run a fresh AI generation without being affected by previous stored request data.",
+				"requestLabel": "Current request",
+				"historyLabel": "Request history",
+				"updatedAt": "Last updated",
+				"emptyValue": "(empty)",
+				"deleteButton": "Delete stored request data",
+				"deleteConfirm": "Delete stored AI request data for this app?",
+				"deleteSuccess": "Stored AI request data has been deleted for the current app.",
+				"deleteFailed": "Failed to delete stored AI request data."
+			},
 			"editorSeed": {
 				"sample": "Sample program JSON has been loaded into the editor",
 				"current": "Current menu JSON has been loaded into the editor"

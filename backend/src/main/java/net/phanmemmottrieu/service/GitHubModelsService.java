@@ -101,6 +101,12 @@ public class GitHubModelsService {
   @Value("${github.models.models:}")
   private String models;
 
+  @Value("${github.models.default-fallback-models:gpt-4o-mini,gpt-4.1-mini,gpt-4.1}")
+  private String defaultFallbackModels;
+
+  @Value("${github.models.prioritize-mini:true}")
+  private boolean prioritizeMiniModels;
+
   @Value("${github.models.max-output-tokens:8192}")
   private int maxOutputTokens;
 
@@ -569,7 +575,7 @@ public class GitHubModelsService {
     }
 
     List<String> candidateModels = resolveCandidateModels();
-    String lastFailure = null;
+    List<String> failures = new ArrayList<>();
 
     for (String candidateModel : candidateModels) {
       HttpHeaders headers = new HttpHeaders();
@@ -591,7 +597,7 @@ public class GitHubModelsService {
         if (isUnknownModelError(badRequest)) {
           String msg = "Model '" + candidateModel + "' không khả dụng hoặc sai tên. Đang thử model tiếp theo.";
           log.warn(msg);
-          lastFailure = msg;
+          failures.add(candidateModel + " -> unknown model");
           continue;
         }
         throw badRequest;
@@ -599,16 +605,16 @@ public class GitHubModelsService {
         String msg = rateLimitedEx.getMessage() == null ? "unknown error" : rateLimitedEx.getMessage();
         if (msg.contains("rate limit") || msg.contains("quota")) {
           log.warn("Model '{}' tạm không dùng được ({}). Đang thử model tiếp theo.", candidateModel, msg);
-          lastFailure = msg;
+          failures.add(candidateModel + " -> " + msg);
           continue;
         }
         throw rateLimitedEx;
       }
     }
 
-    throw new IllegalStateException(lastFailure != null
-        ? "Tất cả GitHub models đều thất bại. Lỗi cuối: " + lastFailure
-        : "Tất cả GitHub models đều thất bại");
+    String failureSummary = failures.isEmpty() ? "Không có chi tiết lỗi" : String.join(" | ", failures);
+    throw new IllegalStateException("Tất cả GitHub models đều thất bại. Đã thử: "
+        + String.join(", ", candidateModels) + ". Chi tiết: " + failureSummary);
   }
 
   private String executeWithRetry(HttpEntity<Map<String, Object>> request, String prompt, int maxTokens,
@@ -655,23 +661,16 @@ public class GitHubModelsService {
       ordered.add(primary);
     }
 
-    if (models != null && !models.isBlank()) {
-      String[] parts = models.split(",");
-      for (String part : parts) {
-        String candidate = part == null ? "" : part.trim();
-        if (!candidate.isEmpty()) {
-          ordered.add(candidate);
-        }
-      }
-    }
-
-    if (ordered.isEmpty()) {
-      ordered.add("gpt-4o-mini");
-    }
+    addModelsFromCsv(ordered, models);
+    addModelsFromCsv(ordered, defaultFallbackModels);
 
     List<String> list = new ArrayList<>(ordered);
     if (list.size() <= 1) {
       return list;
+    }
+
+    if (prioritizeMiniModels) {
+      list.sort((a, b) -> Integer.compare(modelPriority(a), modelPriority(b)));
     }
 
     int start = Math.floorMod(modelCursor.getAndIncrement(), list.size());
@@ -680,6 +679,36 @@ public class GitHubModelsService {
       rotated.add(list.get((start + i) % list.size()));
     }
     return rotated;
+  }
+
+  private void addModelsFromCsv(Set<String> collector, String csv) {
+    if (collector == null || csv == null || csv.isBlank()) {
+      return;
+    }
+    String[] parts = csv.split(",");
+    for (String part : parts) {
+      String candidate = part == null ? "" : part.trim();
+      if (!candidate.isEmpty()) {
+        collector.add(candidate);
+      }
+    }
+  }
+
+  private int modelPriority(String modelName) {
+    if (modelName == null || modelName.isBlank()) {
+      return 100;
+    }
+    String normalized = modelName.trim().toLowerCase();
+    if (normalized.contains("mini")) {
+      return 0;
+    }
+    if (normalized.contains("4o")) {
+      return 1;
+    }
+    if (normalized.contains("4.1")) {
+      return 2;
+    }
+    return 10;
   }
 
   private boolean isUnknownModelError(HttpClientErrorException.BadRequest ex) {
