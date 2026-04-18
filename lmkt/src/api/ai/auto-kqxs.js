@@ -3059,25 +3059,26 @@
               var rowWeekSummaryRows = buildLegacySlrAutoWeekSummaryFromTotals(modeNow, weekRows.length, weekCNamTotals, weekDNamTotals, weekCBacTotals, weekDBacTotals);
               var latestCell = matchedWindow[0].cell || {};
               var oldestCell = matchedWindow[matchedWindow.length - 1].cell || {};
-              var refCellInfo = findLegacySlrReferenceCellInfo(weekRows, args && args.weekToDate);
-              var refCellIdx = -1;
-              if (refCellInfo) {
-                for (var rci = 0; rci < cells.length; rci += 1) {
-                  if (Number(cells[rci] && cells[rci].weekIdx || -1) === Number(refCellInfo.weekIdx)
-                    && String(cells[rci] && cells[rci].key || "") === String(refCellInfo.key || "")) {
-                    refCellIdx = rci;
+              var nearestBaseHit = findNearestHitInfoForRange(cells, cellCaches, sttFrom, sttTo);
+              
+              // Tìm index của cell có dữ liệu thực cho range này (nearest hit)
+              var dataCellIdx = -1;
+              if (nearestBaseHit) {
+                for (var dci = 0; dci < cells.length; dci += 1) {
+                  if (Number(cells[dci] && cells[dci].weekIdx || -1) === Number(nearestBaseHit.idx || -1)) {
+                    dataCellIdx = dci;
                     break;
                   }
                 }
               }
-              if (refCellIdx < 0) refCellIdx = 0;
-              var newestCellCache = cellCaches[refCellIdx] || {};
-              var latestCellData = Object.assign({}, ((refCellInfo && refCellInfo.cell) || (cells[refCellIdx] && cells[refCellIdx].cell) || {}), {
+              if (dataCellIdx < 0) dataCellIdx = 0;
+              
+              var newestCellCache = cellCaches[dataCellIdx] || {};
+              var latestCellData = Object.assign({}, (cells[dataCellIdx] && cells[dataCellIdx].cell) || {}, {
                 mode: modeNow
               });
               
-              // Tính latestCellStats từ newestCellCache (cell chứa dữ liệu thực)
-              // Không lấy từ matchedWindow vì matchedWindow là những cells không có data
+              // Tính latestCellStats từ newestCellCache (cell chứa dữ liệu thực cho range)
               var latestCellStats = {
                 date: String((latestCellData && latestCellData.date) || ""),
                 cNam: getLegacySlrRangeCachedCount(newestCellCache.cNamPrefix, sttFrom, sttTo),
@@ -3085,7 +3086,6 @@
                 cBac: getLegacySlrRangeCachedCount(newestCellCache.cBacPrefix, sttFrom, sttTo),
                 dBac: getLegacySlrRangeCachedCount(newestCellCache.dBacPrefix, sttFrom, sttTo)
               };
-              var nearestBaseHit = findNearestHitInfoForRange(cells, cellCaches, sttFrom, sttTo);
               if (latestCellData && Array.isArray(latestCellData.rows)) {
                 latestCellData.rows = latestCellData.rows.filter(function (rowItem) {
                   var sttVal = Number(rowItem && rowItem.stt || 0);
