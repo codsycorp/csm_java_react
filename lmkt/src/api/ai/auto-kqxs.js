@@ -3061,24 +3061,15 @@
               var oldestCell = matchedWindow[matchedWindow.length - 1].cell || {};
               var nearestBaseHit = findNearestHitInfoForRange(cells, cellCaches, sttFrom, sttTo);
               
-              // Tìm index của cell có dữ liệu thực cho range này (nearest hit)
-              var dataCellIdx = -1;
-              if (nearestBaseHit) {
-                for (var dci = 0; dci < cells.length; dci += 1) {
-                  if (Number(cells[dci] && cells[dci].weekIdx || -1) === Number(nearestBaseHit.idx || -1)) {
-                    dataCellIdx = dci;
-                    break;
-                  }
-                }
-              }
-              if (dataCellIdx < 0) dataCellIdx = 0;
+              // nearestBaseHit.idx là index trong cells array, dùng trực tiếp
+              var dataCellIdx = nearestBaseHit ? nearestBaseHit.idx : 0;
               
               var newestCellCache = cellCaches[dataCellIdx] || {};
               var latestCellData = Object.assign({}, (cells[dataCellIdx] && cells[dataCellIdx].cell) || {}, {
                 mode: modeNow
               });
               
-              // Tính latestCellStats từ newestCellCache (cell chứa dữ liệu thực cho range)
+              // Tính latestCellStats từ cell có dữ liệu thực cho range
               var latestCellStats = {
                 date: String((latestCellData && latestCellData.date) || ""),
                 cNam: getLegacySlrRangeCachedCount(newestCellCache.cNamPrefix, sttFrom, sttTo),
@@ -9462,6 +9453,10 @@
       var stat = stats || {};
       var kind2 = String(kind || "c").toLowerCase();
       var cnt = kind2 === "d" ? Number(stat.dNam || 0) : Number(stat.cNam || 0);
+      // DEBUG: Log stats để xem giá trị
+      if (typeof window !== 'undefined' && window.console) {
+        // console.log('[AUTO-KQS DEBUG] buildLegacySlrAutoNumberTextFromStats:', { stat, kind2, cnt });
+      }
       // Nếu rowCount được truyền (số row trong range), hiển thị count riêng
       // Ngược lại nếu count từ stats là 0, trả "-"
       return cnt > 0 ? String(cnt) : "-";
