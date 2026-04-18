@@ -3007,6 +3007,10 @@
               var startIdx = endIdx - noHitDays + 1;
               var matchedWindow = cells.slice(startIdx, endIdx + 1);
               if (!matchedWindow || !matchedWindow.length) return null;
+              
+              // Define latest and oldest cells from matchedWindow
+              var latestCell = matchedWindow[0] && matchedWindow[0].cell || {};
+              var oldestCell = matchedWindow[matchedWindow.length - 1] && matchedWindow[matchedWindow.length - 1].cell || {};
 
               var weekNamTotals = {};
               var weekCNamTotals = {};
