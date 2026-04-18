@@ -2911,6 +2911,10 @@
         async function runLegacySlrAutoFilter(options) {
           options = options || {};
           var silent = !!options.silent;
+          if (legacySlrAutoRunning) {
+            if (!silent) canhbao("Đang chạy lọc tự động, vui lòng chờ hoàn tất");
+            return;
+          }
           var completedOk = false;
           var runLogs = [];
           function pushAutoLog(message) {
@@ -2924,6 +2928,7 @@
           }
 
           pushAutoLog("Bắt đầu chạy tự động SLR");
+          setLegacySlrAutoRunning(true);
           setLoading(true);
           setProgress(15);
           try {
@@ -2977,6 +2982,7 @@
               var sttTo = Number(args && args.sttTo || 0);
               var qv = String(args && args.qv || "");
               var queryLabel = String(args && args.queryLabel || qv);
+              var currentDateText = String(args && args.currentDateText || "").trim();
               var weekRows = Array.isArray(args && args.weekRows) ? args.weekRows : [];
               var cells = Array.isArray(args && args.cells) ? args.cells : [];
               var cellCaches = Array.isArray(args && args.cellCaches) ? args.cellCaches : [];
@@ -3048,7 +3054,7 @@
                   break;
                 }
               }
-              if (weekNoHitMax < tongNamWeeks) return null;
+              if (weekNoHitMax <= tongNamWeeks) return null;
 
               var rowWeekSummaryRows = buildLegacySlrAutoWeekSummaryFromTotals(modeNow, weekRows.length, weekCNamTotals, weekDNamTotals, weekCBacTotals, weekDBacTotals);
               var latestCell = matchedWindow[0].cell || {};
@@ -3069,12 +3075,23 @@
               var latestCellData = Object.assign({}, ((refCellInfo && refCellInfo.cell) || (cells[refCellIdx] && cells[refCellIdx].cell) || {}), {
                 mode: modeNow
               });
+              
+              // Tính latestCellStats bằng cộng dồn từ tất cả cells trong matched window
+              // (không phải từ single refCell, vì refCell có thể không có dữ liệu cho STT range)
+              var statsCNam = 0, statsDNam = 0, statsCBac = 0, statsDBac = 0;
+              for (var mwi = 0; mwi < matchedWindow.length; mwi += 1) {
+                var mwCache = cellCaches[startIdx + mwi] || {};
+                statsCNam += getLegacySlrRangeCachedCount(mwCache.cNamPrefix, sttFrom, sttTo);
+                statsDNam += getLegacySlrRangeCachedCount(mwCache.dNamPrefix, sttFrom, sttTo);
+                statsCBac += getLegacySlrRangeCachedCount(mwCache.cBacPrefix, sttFrom, sttTo);
+                statsDBac += getLegacySlrRangeCachedCount(mwCache.dBacPrefix, sttFrom, sttTo);
+              }
               var latestCellStats = {
                 date: String((latestCellData && latestCellData.date) || ""),
-                cNam: getLegacySlrRangeCachedCount(newestCellCache.cNamPrefix, sttFrom, sttTo),
-                dNam: getLegacySlrRangeCachedCount(newestCellCache.dNamPrefix, sttFrom, sttTo),
-                cBac: getLegacySlrRangeCachedCount(newestCellCache.cBacPrefix, sttFrom, sttTo),
-                dBac: getLegacySlrRangeCachedCount(newestCellCache.dBacPrefix, sttFrom, sttTo)
+                cNam: statsCNam,
+                dNam: statsDNam,
+                cBac: statsCBac,
+                dBac: statsDBac
               };
               var nearestBaseHit = findNearestHitInfoForRange(cells, cellCaches, sttFrom, sttTo);
               if (latestCellData && Array.isArray(latestCellData.rows)) {
@@ -3101,7 +3118,7 @@
                 sttTo: sttTo,
                 noHitDays: noHitDays,
                 noHitDaysCurrent: noHitDaysCurrent,
-                fromDate: String(latestCell.date || ""),
+                fromDate: currentDateText || String(latestCell.date || ""),
                 toDate: String((nearestBaseHit && nearestBaseHit.date) || oldestCell.date || ""),
                 tongNamWeeks: tongNamWeeks,
                 tongNamZeroWeekStreak: weekNoHitMax,
@@ -3139,30 +3156,9 @@
                     mergedRow.isMergedAuto = true;
                     finalRows.push(mergedRow);
                   } else {
-                    var segRows = rows.slice(start, end + 1);
-                    var head = segRows[0] || {};
-                    var tail = segRows[segRows.length - 1] || {};
-                    var maxWeek = 0;
-                    var maxNoHit = 0;
-                    for (var sri = 0; sri < segRows.length; sri += 1) {
-                      var _wk = Number((segRows[sri] && segRows[sri].tongNamZeroWeekStreak) || 0);
-                      var _nh = Number((segRows[sri] && segRows[sri].noHitDaysCurrent) || (segRows[sri] && segRows[sri].noHitDays) || 0);
-                      if (_wk > maxWeek) maxWeek = _wk;
-                      if (_nh > maxNoHit) maxNoHit = _nh;
-                    }
-                    var fallbackMerged = Object.assign({}, head, {
-                      key: "slr_auto_merge_fallback_" + String(head.queryValue || "") + "_" + String(mergedFrom) + "_" + String(mergedTo),
-                      sttFrom: mergedFrom,
-                      sttTo: mergedTo,
-                      noHitDaysCurrent: maxNoHit,
-                      tongNamZeroWeekStreak: maxWeek,
-                      fromDate: String((head && head.fromDate) || ""),
-                      toDate: String((tail && tail.toDate) || (head && head.toDate) || ""),
-                      isMergedAuto: true,
-                      isMergedFallbackAuto: true,
-                      mergedSourceCount: segRows.length
-                    });
-                    finalRows.push(fallbackMerged);
+                    // Không tạo merged fallback giả theo STT rộng vì sẽ làm sai số chính/đảo
+                    // (ví dụ STT 1-20 nhưng chỉ hiện số của segment 1-4). Giữ nguyên segment rows.
+                    finalRows = finalRows.concat(rows.slice(start, end + 1));
                   }
                 } else {
                   finalRows.push(rows[start]);
@@ -3173,6 +3169,10 @@
             }
 
             for (var qi = 0; qi < selectedQueryValues.length; qi += 1) {
+              if (qi > 0 && qi % 2 === 0) {
+                // Nhả event loop định kỳ để tránh UI bị treo (popup Wait/Exit).
+                await sleepMs(0);
+              }
               if (selectedQueryValues.length > 0) {
                 var loopPct = 15 + Math.round((qi / selectedQueryValues.length) * 75);
                 setProgress(Math.max(15, Math.min(95, loopPct)));
@@ -3226,6 +3226,10 @@
               var queryRows = [];
 
               for (var sttFrom = rankFrom; sttFrom <= maxStart; sttFrom += 1) {
+                if ((sttFrom - rankFrom) > 0 && (sttFrom - rankFrom) % 8 === 0) {
+                  // Luồng tính toán STT có thể rất nặng, cần yield để tránh đứng trang.
+                  await sleepMs(0);
+                }
                 rangeChecked += 1;
                 var sttTo = sttFrom + sttWindowSize - 1;
                 var streak = 0;
@@ -3273,7 +3277,7 @@
                   }
                 }
                 if (weekNoHitMax > bestWeekStreak) bestWeekStreak = weekNoHitMax;
-                if (weekNoHitMax < tongNamWeeks) {
+                if (weekNoHitMax <= tongNamWeeks) {
                   rangeRejectedByWeek += 1;
                   continue;
                 }
@@ -3284,6 +3288,7 @@
                   sttTo: sttTo,
                   qv: qv,
                   queryLabel: queryLabel,
+                  currentDateText: den_ngay,
                   weekRows: weekRows,
                   cells: cells,
                   cellCaches: cellCaches,
@@ -3299,6 +3304,7 @@
               queryRows = appendMergedSlrRows(queryRows, {
                 qv: qv,
                 queryLabel: queryLabel,
+                currentDateText: den_ngay,
                 weekRows: weekRows,
                 cells: cells,
                 cellCaches: cellCaches,
@@ -3360,6 +3366,7 @@
             setLegacySlrAutoDebugLogs(runLogs.slice());
             if (!silent) canhbao("Không thể chạy Auto Số Lâu Ra Nam-Bắc");
           } finally {
+            setLegacySlrAutoRunning(false);
             setLoading(false);
             if (!completedOk) {
               setTimeout(function () { setProgress(0); }, 600);
@@ -4603,93 +4610,61 @@
 
       var autoCfg = readJsonObject(window.csmKqxsAutoDailyUpdate || window.kqxsAutoDailyUpdate);
       var autoEnabled = (typeof autoCfg.enabled === "boolean") ? autoCfg.enabled : true;
-      if (!autoEnabled) return;
-
-      function parseHmToMinutes(hmText, fallbackMinutes) {
-        var s = String(hmText || "").trim();
-        var m = s.match(/^(\d{1,2}):(\d{1,2})$/);
-        if (!m) return fallbackMinutes;
-        var hh = Number(m[1]);
-        var mm = Number(m[2]);
-        if (!Number.isFinite(hh) || !Number.isFinite(mm)) return fallbackMinutes;
-        if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return fallbackMinutes;
-        return hh * 60 + mm;
-      }
-
-      function isNowInFreeWindow() {
-        var now = new Date();
-        var nowMins = now.getHours() * 60 + now.getMinutes();
-        var startMins = parseHmToMinutes(autoCfg.freeUpdateStart, 16 * 60 + 30);
-        var endMins = parseHmToMinutes(autoCfg.freeUpdateEnd, 19 * 60);
-        if (endMins >= startMins) {
-          return nowMins >= startMins && nowMins <= endMins;
-        }
-        return nowMins >= startMins || nowMins <= endMins;
-      }
-
-      var nowYmd = dateFormat(new Date(), "yyyymmdd");
-      var lsKey = String(autoCfg.storageKey || "kqxs_auto_daily_last_ymd");
-      var inFreeWindow = isNowInFreeWindow();
-
-      try {
-        if (window.localStorage.getItem(lsKey) === nowYmd) return;
-      } catch (e) {
-        // Ignore localStorage errors and continue with in-memory guard.
-      }
+      if (!autoEnabled || KQXS_VIEW_ONLY) return;
 
       if (autoDailyUpdatingRef.current) return;
       autoDailyUpdatingRef.current = true;
 
       var delayMs = Math.max(0, Number(autoCfg.delayMs || 1800));
       var timer = setTimeout(async function () {
-        // Nếu autoCfg có tmproxyApiKey: tự lấy proxy TMProxy trước khi gọi cap_nhat
-        var autoTmproxyApiKey = String(autoCfg.tmproxyApiKey || autoCfg.api_key || "").trim();
-        var autoTmproxyLocationId = Number(autoCfg.tmproxyLocationId || autoCfg.id_location || 0);
-        if (autoTmproxyApiKey) {
-          try {
-            var tmInfo = await fetchTmproxyInfo(
-              autoTmproxyApiKey,
-              autoTmproxyLocationId
-            );
-            // Ghi vào window.csmKqxsProxyConfig để cap_nhat dùng đúng proxy
-            window.csmKqxsProxyConfig = Object.assign(
-              readJsonObject(window.csmKqxsProxyConfig),
-              { enabled: true, server: tmInfo.server, username: tmInfo.username, password: tmInfo.password }
-            );
-            console.log("[Auto TMProxy] Sử dụng proxy:", tmInfo.server);
-          } catch (tmErr) {
-            console.error("[Auto TMProxy] Lỗi lấy proxy:", tmErr.message);
+        try {
+          // Nếu autoCfg có tmproxyApiKey: tự lấy proxy TMProxy trước khi gọi cap_nhat
+          var autoTmproxyApiKey = String(autoCfg.tmproxyApiKey || autoCfg.api_key || "").trim();
+          var autoTmproxyLocationId = Number(autoCfg.tmproxyLocationId || autoCfg.id_location || 0);
+          if (autoTmproxyApiKey) {
+            try {
+              var tmInfo = await fetchTmproxyInfo(
+                autoTmproxyApiKey,
+                autoTmproxyLocationId
+              );
+              // Ghi vào window.csmKqxsProxyConfig để cap_nhat dùng đúng proxy
+              window.csmKqxsProxyConfig = Object.assign(
+                readJsonObject(window.csmKqxsProxyConfig),
+                { enabled: true, server: tmInfo.server, username: tmInfo.username, password: tmInfo.password }
+              );
+              console.log("[Auto TMProxy] Sử dụng proxy:", tmInfo.server);
+            } catch (tmErr) {
+              console.error("[Auto TMProxy] Lỗi lấy proxy:", tmErr.message);
+            }
           }
-        }
-        var targetDate = new Date();
-        if (!inFreeWindow) {
-          targetDate.setDate(targetDate.getDate() - 1);
-        }
+          var daysToUpdate = Math.max(1, Number(autoCfg.daysToUpdateOnLogin || 3) || 3);
+          var updatedDays = [];
 
-        cap_nhat(targetDate).then(function (ok) {
-          if (!ok) return;
-          try {
-            window.localStorage.setItem(lsKey, dateFormat(new Date(), "yyyymmdd"));
-          } catch (e) {
-            // Ignore localStorage errors.
+          for (var i = 0; i < daysToUpdate; i += 1) {
+            var targetDate = new Date();
+            targetDate.setDate(targetDate.getDate() - i);
+            var ok = await cap_nhat(targetDate);
+            if (ok) updatedDays.push(dateFormat(targetDate, "dd/mm/yyyy"));
+            if (i < daysToUpdate - 1) {
+              await sleepMs(Math.max(0, Number(autoCfg.perDayDelayMs || 1200)));
+            }
           }
-          if (inFreeWindow) {
-            thongbao("Đã tự động cập nhật kết quả ngày " + dateFormat(targetDate, "dd/mm/yyyy") + " (đúng khung giờ)");
-          } else {
-            thongbao("Đã tự động cập nhật bù kết quả ngày " + dateFormat(targetDate, "dd/mm/yyyy") + " (ngoài khung giờ)");
+
+          if (updatedDays.length > 0) {
+            thongbao("Đã tự động cập nhật kết quả cho " + updatedDays.length + " ngày: " + updatedDays.join(", "));
           }
-        }).catch(function (err) {
+        } catch (err) {
           console.error("Auto daily update failed", err);
-        }).finally(function () {
+        } finally {
           autoDailyUpdatingRef.current = false;
-        });
+        }
       }, delayMs);
 
       return function () {
         clearTimeout(timer);
         autoDailyUpdatingRef.current = false;
       };
-    }, [allowUpdateActions]);
+    }, []);
 
     function locVaSapXepNgay(rows) {
       // Vue parity: sort giảm dần theo ngày trước, sau đó dedup để giữ bản ghi đầu tiên của mỗi ngày.
@@ -7197,6 +7172,18 @@
             username: tmInfo.username,
             password: tmInfo.password
           });
+          // Cache runtime proxy so next cap_nhat calls in the same auto run reuse it.
+          window.csmKqxsProxyConfig = Object.assign(
+            readJsonObject(window.csmKqxsProxyConfig),
+            {
+              enabled: true,
+              server: tmInfo.server,
+              username: tmInfo.username,
+              password: tmInfo.password,
+              tmproxyApiKey: proxyCfg.tmproxyApiKey,
+              tmproxyLocationId: proxyCfg.tmproxyLocationId
+            }
+          );
           console.log("[TMProxy] Sử dụng proxy:", proxyCfg.server);
         } catch (tmErr) {
           console.error("[TMProxy] Lỗi lấy proxy:", tmErr.message);
@@ -9423,11 +9410,21 @@
     async function exportLegacySlrAutoRows() {
       var rows = legacySortedRowsRef.current["slr_auto"] || (Array.isArray(legacySlrAutoRows) ? legacySlrAutoRows : []);
       if (!rows.length) { canhbao(tt.exportNoData || "Không có dữ liệu để xuất"); return; }
-      var header = ["Loại Tìm", "Từ STT", "Đến STT", "Chuỗi (ngày)", "Từ ngày", "Đến ngày", "Tổng Nam 0 (tuần)", "Số chính", "Số đảo", "Dãy Tổng Bắc", "Dãy Tổng Nam"];
+      var header = ["Loại Tìm", "Từ STT", "Đến STT", "Chuỗi (ngày)", "Từ ngày (hiện tại)", "Đến ngày (ngày xổ)", "Tổng Nam 0 (tuần)", "Số chính", "Số đảo", "Dãy Tổng Bắc", "Dãy Tổng Nam"];
       var aoa = [header];
       for (var ri3 = 0; ri3 < rows.length; ri3 += 1) {
         var r = rows[ri3] || {};
         var m2 = String(r.mode || "C_D").toUpperCase();
+        // Nếu là merged row, dùng latestCellStats (có count chính xác từ cache)
+        // Nếu không, dùng buildLegacySlrAutoNumberText từ latestCellData.rows
+        var cNamText = r.isMergedAuto 
+          ? buildLegacySlrAutoNumberTextFromStats(r && r.latestCellStats, "c")
+          : buildLegacySlrAutoNumberText(r && r.latestCellData, "c");
+        var dNamText = m2 === "2C" 
+          ? "-" 
+          : (r.isMergedAuto 
+              ? buildLegacySlrAutoNumberTextFromStats(r && r.latestCellStats, "d")
+              : buildLegacySlrAutoNumberText(r && r.latestCellData, "d"));
         var line = [
           String(r.queryLabel || ""),
           Number(r.sttFrom || 0),
@@ -9436,8 +9433,8 @@
           String(r.fromDate || ""),
           String(r.toDate || ""),
           Number(r.tongNamZeroWeekStreak || 0),
-          buildLegacySlrAutoNumberText(r && r.latestCellData, "c"),
-          m2 === "2C" ? "-" : buildLegacySlrAutoNumberText(r && r.latestCellData, "d"),
+          cNamText,
+          dNamText,
           buildLegacySlrAutoWeekSeriesText(r && r.weekSummaryRows, m2, "bac"),
           buildLegacySlrAutoWeekSeriesText(r && r.weekSummaryRows, m2, "nam")
         ];
@@ -9471,6 +9468,16 @@
         out.push(value);
       }
       return out.length ? out.join(" ") : "-";
+    }
+
+    function buildLegacySlrAutoNumberTextFromStats(stats, kind, rowCount) {
+      // Dùng khi là merged row: hiển thị "[count] số" thay vì liệt kê từng số
+      var stat = stats || {};
+      var kind2 = String(kind || "c").toLowerCase();
+      var cnt = kind2 === "d" ? Number(stat.dNam || 0) : Number(stat.cNam || 0);
+      // Nếu rowCount được truyền (số row trong range), hiển thị count riêng
+      // Ngược lại nếu count từ stats là 0, trả "-"
+      return cnt > 0 ? String(cnt) : "-";
     }
 
     function buildLegacySlrAutoWeekSummaryText(summaryRows) {
@@ -9568,7 +9575,12 @@
 
         for (var i = 1; i < gRows.length; i += 1) {
           var cur = gRows[i] || {};
-          var contiguous = Number(cur.sttFrom || 0) === Number((end && end.sttFrom) || 0) + 1
+          // Auto rows were already merged once with full recomputation.
+          // Do not merge them again in preview, otherwise STT range is expanded
+          // but latestCellData stays from the first segment and numbers become too few.
+          var hasPreMerged = !!(cur.isMergedAuto || (end && end.isMergedAuto) || cur.isMergedFallbackAuto || (end && end.isMergedFallbackAuto));
+          var contiguous = !hasPreMerged
+            && Number(cur.sttFrom || 0) === Number((end && end.sttFrom) || 0) + 1
             && Number(cur.sttTo || 0) === Number((end && end.sttTo) || 0) + 1;
           if (contiguous) {
             end = cur;
@@ -9638,6 +9650,14 @@
 
       rows.forEach(function (r) {
         var noHitDaysCurrent = Number((r && r.noHitDaysCurrent) || (r && r.noHitDays) || 0);
+        var cNamText = r.isMergedAuto 
+          ? buildLegacySlrAutoNumberTextFromStats(r && r.latestCellStats, "c")
+          : buildLegacySlrAutoNumberText(r && r.latestCellData, "c");
+        var dNamText = String((r && r.mode) || "").toUpperCase() === "2C" 
+          ? "-" 
+          : (r.isMergedAuto 
+              ? buildLegacySlrAutoNumberTextFromStats(r && r.latestCellStats, "d")
+              : buildLegacySlrAutoNumberText(r && r.latestCellData, "d"));
         aoa.push([
           String((r && r.queryLabel) || ""),
           Number((r && r.sttFrom) || 0),
@@ -9645,8 +9665,8 @@
           String(noHitDaysCurrent) + " ngày (" + String((r && r.fromDate) || "") + " -> " + String((r && r.toDate) || "") + ")"
             + (r && r.noHitHintText ? ("\n" + String(r.noHitHintText)) : ""),
           String(Number((r && r.tongNamZeroWeekStreak) || 0)) + " tuần (yêu cầu > " + String(Number((r && r.tongNamWeeks) || 0)) + ")",
-          buildLegacySlrAutoNumberText(r && r.latestCellData, "c"),
-          String((r && r.mode) || "").toUpperCase() === "2C" ? "-" : buildLegacySlrAutoNumberText(r && r.latestCellData, "d"),
+          cNamText,
+          dNamText,
           buildLegacySlrAutoWeekSeriesText(r && r.weekSummaryRows, r && r.mode, "bac"),
           buildLegacySlrAutoWeekSeriesText(r && r.weekSummaryRows, r && r.mode, "nam")
         ]);
@@ -9732,8 +9752,10 @@
         dataIndex: "latestCellData",
         key: "slrAutoMainNumbers",
         width: 150,
-        render: function (v) {
-          var text = buildLegacySlrAutoNumberText(v, "c");
+        render: function (v, rec) {
+          var text = rec && rec.isMergedAuto 
+            ? buildLegacySlrAutoNumberTextFromStats(rec && rec.latestCellStats, "c")
+            : buildLegacySlrAutoNumberText(v, "c");
           return h("span", {
             style: {
               color: text === "-" ? theme.muted : theme.text,
@@ -9751,7 +9773,11 @@
         width: 150,
         render: function (v, rec) {
           var mode = String((rec && rec.mode) || "C_D").toUpperCase();
-          var text = mode === "2C" ? "-" : buildLegacySlrAutoNumberText(v, "d");
+          var text = mode === "2C" 
+            ? "-" 
+            : (rec && rec.isMergedAuto 
+                ? buildLegacySlrAutoNumberTextFromStats(rec && rec.latestCellStats, "d")
+                : buildLegacySlrAutoNumberText(v, "d"));
           return h("span", {
             style: {
               color: text === "-" ? theme.muted : theme.primary,
@@ -11631,6 +11657,8 @@
                               h(Button, {
                                 type: "primary",
                                 className: "kqxs-action-btn kqxs-action-btn-primary",
+                                loading: !!legacySlrAutoRunning,
+                                disabled: !!legacySlrAutoRunning,
                                 onClick: function () { runLegacySlrAutoFilter(); }
                               }, "Chạy lọc tự động")
                             ]),
