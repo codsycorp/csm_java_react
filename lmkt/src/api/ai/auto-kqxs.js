@@ -3047,6 +3047,15 @@
               }
               if (weekNoHitMax <= tongNamWeeks) return null;
 
+              var rowWeekSummaryRows = buildLegacySlrAutoWeekSummaryFromTotals(
+                modeNow,
+                weekRows.length,
+                weekCNamTotals,
+                weekDNamTotals,
+                weekCBacTotals,
+                weekDBacTotals
+              );
+
               // Instead of finding single nearest cell, aggregate stats from ALL cells with data
               // This ensures we get complete stats for the STT range (like manual filter does)
               var aggregatedCNam = 0, aggregatedDNam = 0, aggregatedCBac = 0, aggregatedDBac = 0;
