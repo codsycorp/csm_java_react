@@ -2963,16 +2963,28 @@
             pushAutoLog("Tham số: LoạiTìm=" + selectedQueryValues.length + ", STTWindow=" + sttWindowSize + ", NoHitDays=" + noHitDays + ", NamNoHitWeeks=" + tongNamWeeks + ", Mode=" + modeNow);
 
             function findNearestHitInfoForRange(cells, cellCaches, sttFrom, sttTo) {
+              if (typeof console !== 'undefined') {
+                console.log('[FIND-NEAREST] sttFrom=' + sttFrom + ', sttTo=' + sttTo + ', cells.length=' + cells.length);
+              }
               for (var idx = 0; idx < cells.length; idx += 1) {
                 var cache = cellCaches[idx] || {};
                 var hitCount = getLegacySlrHitCountRangeCached(cache, sttFrom, sttTo);
+                if (typeof console !== 'undefined') {
+                  console.log('[FIND-NEAREST-CHECK] idx=' + idx + ', hitCount=' + hitCount + ', hasPrefix=' + !!cache.hitPrefix);
+                }
                 if (hitCount > 0) {
                   var cell = cells[idx] && cells[idx].cell || {};
+                  if (typeof console !== 'undefined') {
+                    console.log('[FIND-NEAREST-FOUND] idx=' + idx + ', date=' + (cell && cell.date) + ', hitCount=' + hitCount);
+                  }
                   return {
                     idx: idx,
                     date: String((cell && cell.date) || "")
                   };
                 }
+              }
+              if (typeof console !== 'undefined') {
+                console.log('[FIND-NEAREST-NOTFOUND] returning null');
               }
               return null;
             }
@@ -3069,6 +3081,11 @@
                 mode: modeNow
               });
               
+              // DEBUG LOG
+              if (typeof console !== 'undefined') {
+                console.log('[AUTO-MERGED] STT=' + sttFrom + '-' + sttTo + ', nearestIdx=' + (nearestBaseHit ? nearestBaseHit.idx : 'null') + ', dataCellIdx=' + dataCellIdx + ', cells.length=' + cells.length + ', cache=' + Object.keys(newestCellCache).join(','));
+              }
+              
               // Tính latestCellStats từ cell có dữ liệu thực cho range
               var latestCellStats = {
                 date: String((latestCellData && latestCellData.date) || ""),
@@ -3077,6 +3094,10 @@
                 cBac: getLegacySlrRangeCachedCount(newestCellCache.cBacPrefix, sttFrom, sttTo),
                 dBac: getLegacySlrRangeCachedCount(newestCellCache.dBacPrefix, sttFrom, sttTo)
               };
+              
+              if (typeof console !== 'undefined') {
+                console.log('[AUTO-STATS] cNam=' + latestCellStats.cNam + ', dNam=' + latestCellStats.dNam + ', cBac=' + latestCellStats.cBac + ', dBac=' + latestCellStats.dBac);
+              }
               if (latestCellData && Array.isArray(latestCellData.rows)) {
                 latestCellData.rows = latestCellData.rows.filter(function (rowItem) {
                   var sttVal = Number(rowItem && rowItem.stt || 0);
@@ -9454,8 +9475,8 @@
       var kind2 = String(kind || "c").toLowerCase();
       var cnt = kind2 === "d" ? Number(stat.dNam || 0) : Number(stat.cNam || 0);
       // DEBUG: Log stats để xem giá trị
-      if (typeof window !== 'undefined' && window.console) {
-        // console.log('[AUTO-KQS DEBUG] buildLegacySlrAutoNumberTextFromStats:', { stat, kind2, cnt });
+      if (typeof console !== 'undefined') {
+        console.log('[DISPLAY] kind=' + kind2 + ', cnt=' + cnt + ', stat=' + JSON.stringify({cNam: stat.cNam, dNam: stat.dNam}));
       }
       // Nếu rowCount được truyền (số row trong range), hiển thị count riêng
       // Ngược lại nếu count từ stats là 0, trả "-"
