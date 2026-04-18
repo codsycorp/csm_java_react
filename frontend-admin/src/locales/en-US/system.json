@@ -433,6 +433,13 @@
 			"existingTables": "Existing tables (optional)",
 			"notes": "Additional notes",
 			"tip": "Tip",
+			"section": {
+				"quickActions": "Quick Actions",
+				"config": "1) Request Configuration",
+				"monitor": "2) Realtime Monitor"
+			},
+			"realtimeLogsTitle": "Realtime AI Monitor",
+			"realtimeLogsClear": "Clear Logs",
 			"context": {
 				"maxFiles": "You can attach up to {{max}} JSON files.",
 				"jsonOnly": "Only .json files are accepted to ensure correct structure parsing.",

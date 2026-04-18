@@ -622,6 +622,31 @@ public class ApiSpringController {
         return null;
     }
 
+    /**
+     * Extract the human-readable requirement text from the prompt JSON.
+     * Looks in current_task.requirement_text first, then app_context.requirement_text.
+     * Falls back to a short prefix of the raw prompt if not JSON.
+     */
+    @SuppressWarnings("unchecked")
+    private String extractRequestTextFromPrompt(String prompt) {
+        if (prompt == null || prompt.isBlank()) return "";
+        try {
+            Map<String, Object> parsed = objectMapper.readValue(prompt, Map.class);
+            Object currentTask = parsed.get("current_task");
+            if (currentTask instanceof Map) {
+                Object req = ((Map<String, Object>) currentTask).get("requirement_text");
+                if (req instanceof String s && !s.isBlank()) return s.trim();
+            }
+            Object appCtx = parsed.get("app_context");
+            if (appCtx instanceof Map) {
+                Object req = ((Map<String, Object>) appCtx).get("requirement_text");
+                if (req instanceof String s && !s.isBlank()) return s.trim();
+            }
+        } catch (Exception ignored) {}
+        // Fallback: use first 300 chars of raw prompt
+        return prompt.length() > 300 ? prompt.substring(0, 300) : prompt;
+    }
+
     private boolean shouldExposeRoutingDebug(Map<String, Object> params) {
         boolean requested = (params != null && Boolean.TRUE.equals(params.get("includeRoutingDebug")))
                 || "true".equalsIgnoreCase(String.valueOf(params != null ? params.get("includeRoutingDebug") : null));
@@ -791,6 +816,18 @@ public class ApiSpringController {
             response.set("success", false);
             response.set("message", "Không nhận được nội dung hợp lệ từ dịch vụ AI.");
             return;
+        }
+
+        // After a successful menu-design generation, persist the session context file
+        // so the next call can continue from where this one left off — no need to re-send history.
+        try {
+            String promptAppId = this.gitHubModelsService.extractAppIdFromPrompt(prompt);
+            if (promptAppId != null && !promptAppId.isBlank()) {
+                String requestText = extractRequestTextFromPrompt(prompt);
+                this.gitHubModelsService.updateAppContextFile(promptAppId, requestText, rawContent);
+            }
+        } catch (Exception ctxEx) {
+            logger.warn("Could not update AI context file after generation: {}", ctxEx.getMessage());
         }
 
         if (shouldExposeRoutingDebug(params)) {
@@ -1212,7 +1249,7 @@ public class ApiSpringController {
                 StandardResponse syncResponse = new StandardResponse();
                 String rawContent = fetchAiRawContent(prompt, progress -> {
                     if (!isAiJobCancelled(job)) {
-                        updateAiAsyncJobProgress(job, progress);
+                        updateAiAsyncJobProgress(job, enrichAiProgressWithMergePreview(progress, params));
                     }
                 }, params);
                 if (isAiJobCancelled(job)) {
@@ -1228,6 +1265,16 @@ public class ApiSpringController {
                         if (routingDecision != null) {
                             syncResponse.set("providerRoutingDecision", routingDecision);
                         }
+                    }
+                    // Persist session context file for next AI call continuity
+                    try {
+                        String promptAppId = this.gitHubModelsService.extractAppIdFromPrompt(prompt);
+                        if (promptAppId != null && !promptAppId.isBlank()) {
+                            String requestText = extractRequestTextFromPrompt(prompt);
+                            this.gitHubModelsService.updateAppContextFile(promptAppId, requestText, rawContent);
+                        }
+                    } catch (Exception ctxEx) {
+                        logger.warn("Could not update AI context file (async): {}", ctxEx.getMessage());
                     }
                     updateAiAsyncJobProgress(job, createAiJobProgress("parsing", "Đang phân tích kết quả AI", 1, 1, null));
                     populateAiResponseFromRawContent(syncResponse, rawContent);
@@ -1398,6 +1445,87 @@ public class ApiSpringController {
         job.put("progress", new HashMap<>(progress));
         job.put("updatedAt", System.currentTimeMillis());
         emitAiAsyncJobSocketEvent(job, "ai_job_progress", null);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> enrichAiProgressWithMergePreview(Map<String, Object> progress, Map<String, Object> params) {
+        if (progress == null) {
+            return null;
+        }
+
+        Map<String, Object> enriched = new HashMap<>(progress);
+        if (params == null) {
+            return enriched;
+        }
+
+        String mergeScenario = String.valueOf(params.getOrDefault("mergeScenario", "")).trim();
+        String mergeOldJson = String.valueOf(params.getOrDefault("mergeOldJson", "")).trim();
+        if (mergeScenario.isEmpty() || mergeOldJson.isEmpty()) {
+            return enriched;
+        }
+
+        Object draftObj = enriched.get("draftText");
+        if (!(draftObj instanceof String draftText) || draftText.isBlank()) {
+            return enriched;
+        }
+
+        try {
+            Object parsedDraft = objectMapper.readValue(draftText, Object.class);
+            AiMenuMergeService.MergeOutput mergeOut;
+            if ("property_edit".equalsIgnoreCase(mergeScenario)) {
+                Object nodeObj = parsedDraft;
+                if (parsedDraft instanceof Map<?, ?> draftMap) {
+                    Object directNode = draftMap.get("menu_node");
+                    if (directNode != null) {
+                        nodeObj = directNode;
+                    }
+                }
+                mergeOut = aiMenuMergeService.mergeMenuNode(
+                        mergeOldJson,
+                        objectMapper.writeValueAsString(nodeObj));
+            } else if ("incremental_update".equalsIgnoreCase(mergeScenario)) {
+                mergeOut = aiMenuMergeService.diffMergeTrees(
+                        mergeOldJson,
+                        objectMapper.writeValueAsString(parsedDraft));
+                if (mergeOut.mergedMenu != null && !mergeOut.mergedMenu.isEmpty()) {
+                    Map<String, Object> normalizedDraft = new HashMap<>();
+                    normalizedDraft.put("menu", mergeOut.mergedMenu);
+                    if (parsedDraft instanceof Map<?, ?> draftMap) {
+                        Object draftStage = draftMap.get("_draft_stage");
+                        Object draftProgress = draftMap.get("_draft_progress");
+                        if (draftStage != null) {
+                            normalizedDraft.put("_draft_stage", draftStage);
+                        }
+                        if (draftProgress != null) {
+                            normalizedDraft.put("_draft_progress", draftProgress);
+                        }
+                    }
+                    enriched.put("draftText", objectMapper.writeValueAsString(normalizedDraft));
+                }
+            } else {
+                return enriched;
+            }
+
+            Map<String, Object> mergePreview = objectMapper.convertValue(mergeOut, Map.class);
+            enriched.put("_merge_preview", mergePreview);
+
+            Object patchOps = mergePreview.get("patchOps");
+            if (patchOps instanceof List && !((List<?>) patchOps).isEmpty()) {
+                enriched.put("patchOps", patchOps);
+            }
+
+            logger.info("[REALTIME_MERGE_PREVIEW] stage={} scenario={} patchOps={} added={} edited={} deleted={}",
+                    String.valueOf(enriched.getOrDefault("stage", "")),
+                    mergeScenario,
+                    mergeOut.patchOps == null ? 0 : mergeOut.patchOps.size(),
+                    mergeOut.added,
+                    mergeOut.edited,
+                    mergeOut.deleted);
+        } catch (Exception e) {
+            logger.debug("Could not enrich realtime AI progress with merge preview: {}", e.getMessage());
+        }
+
+        return enriched;
     }
 
     @SuppressWarnings("unchecked")

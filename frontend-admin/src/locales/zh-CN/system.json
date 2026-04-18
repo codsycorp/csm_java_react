@@ -433,6 +433,13 @@
 			"existingTables": "现有数据表（可选）",
 			"notes": "附加说明",
 			"tip": "提示",
+			"section": {
+				"quickActions": "快捷操作",
+				"config": "1) 请求配置",
+				"monitor": "2) 实时监控"
+			},
+			"realtimeLogsTitle": "AI 实时监控",
+			"realtimeLogsClear": "清空日志",
 			"context": {
 				"maxFiles": "最多可附加 {{max}} 个 JSON 文件。",
 				"jsonOnly": "仅支持 .json 文件，以确保结构解析正确。",

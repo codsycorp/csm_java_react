@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Button, Card, Collapse, Divider, Input, Progress, Upload, message, Radio, Select, Space, Switch, Tag } from "antd";
+import { Alert, Button, Card, Collapse, Divider, Grid, Input, Progress, Upload, message, Radio, Select, Space, Switch, Tag } from "antd";
 import CodeMirror from "@uiw/react-codemirror";
 import { json } from "@codemirror/lang-json";
 import { vscodeDark } from "@uiw/codemirror-theme-vscode";
@@ -11,7 +11,6 @@ import { useUserStore } from "#src/store/user";
 import { useSocket } from "#src/hooks/useSocket";
 
 import type { MenuItemType } from "#src/api/system/menu";
-import { fetchAppList, fetchMenuList } from "#src/api/system/menu";
 import { generateSeoContentWithPrompt } from "#src/api/ai";
 import { getTableData, updateTableData } from "#src/components/csm-grid/CsmApi";
 import { csmDecrypt, csmEncrypt } from "#src/components/csm-grid/CsmCrypto";
@@ -56,6 +55,15 @@ type AiProgressState = {
   elapsedMs?: number;
   waitingMs?: number;
   level?: number;
+};
+
+type AiRealtimeLogEntry = {
+  id: string;
+  ts: number;
+  level: "info" | "warning" | "error" | "success";
+  message: string;
+  detail?: string;
+  fingerprint: string;
 };
 
 type CoverageEntry = {
@@ -332,6 +340,26 @@ function buildMergeStatsFromPatchOps(ops: PatchOp[]): { added: number; edited: n
   );
 }
 
+function findNavigablePatchIndexInList(
+  patchList: PatchOpView[],
+  lineMap: Map<string, DiffLineInfo>,
+  startIndex: number,
+  direction: 1 | -1 = 1,
+): number {
+  const total = patchList.length;
+  if (total <= 0) return -1;
+
+  for (let offset = 0; offset < total; offset += 1) {
+    const idx = ((startIndex + (offset * direction)) % total + total) % total;
+    const candidate = patchList[idx];
+    if (candidate?.nodeId && lineMap.get(candidate.nodeId)?.line) {
+      return idx;
+    }
+  }
+
+  return -1;
+}
+
 function requestSuggestsBulkDelete(text: string): boolean {
   const normalized = String(text || "").toLowerCase();
   return /(\bxoa toan bo\b|\bxóa toàn bộ\b|\bxoa tat ca\b|\bxóa tất cả\b|\bdelete all\b|\bremove all\b|\bclear all\b|\bbulk delete\b|\bxoa hang loat\b|\bxóa hàng loạt\b|\breset menu\b|\bwipe\b|\bpurge\b)/i.test(normalized);
@@ -344,12 +372,16 @@ function shouldTriggerMassDeleteGuard(params: {
   requestText: string;
 }): boolean {
   const { scenario, baseNodes, deleted, requestText } = params;
-  if (scenario !== "incremental_update") return false;
+  // For incremental_update scenario, disable mass delete guard
+  // User explicitly chose incremental_update, so trust AI to handle patches correctly
+  if (scenario === "incremental_update") return false;
+  
   if (baseNodes <= 0 || deleted <= 0) return false;
   if (requestSuggestsBulkDelete(requestText)) return false;
 
-  const safeDeleteAbs = Math.max(12, Math.floor(baseNodes * 0.2));
-  const safeDeleteRatio = 0.35;
+  // For other scenarios (e.g., new_build), apply stricter guardrails
+  const safeDeleteAbs = Math.max(12, Math.floor(baseNodes * 0.3));
+  const safeDeleteRatio = 0.5;
   return deleted > safeDeleteAbs || (deleted / Math.max(1, baseNodes)) >= safeDeleteRatio;
 }
 
@@ -664,6 +696,135 @@ function describeAiProgressKey(progress: AiProgressState | null): "completed" | 
   if (status === "failed") return "failed";
   if (status === "cancelled") return "cancelled";
   return "running";
+}
+
+function compactAiRealtimeText(value: unknown, maxLength = 320): string {
+  const text = String(value ?? "").replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength)}...`;
+}
+
+function summarizeAiWorkingSummary(rawSummary: unknown): string {
+  const rawText = typeof rawSummary === "string" ? rawSummary : JSON.stringify(rawSummary ?? "");
+  if (!rawText) return "";
+  try {
+    const parsed = JSON.parse(rawText);
+    const chunkIndex = Number(parsed?.chunkIndex || 0);
+    const totalChunks = Number(parsed?.totalChunks || 0);
+    const firstFact = Array.isArray(parsed?.facts) && parsed.facts.length > 0
+      ? compactAiRealtimeText(parsed.facts[0], 240)
+      : "";
+    if (chunkIndex > 0 && totalChunks > 0 && firstFact) {
+      return `chunk ${chunkIndex}/${totalChunks}: ${firstFact}`;
+    }
+    if (chunkIndex > 0 && totalChunks > 0) {
+      return `chunk ${chunkIndex}/${totalChunks}`;
+    }
+  } catch {
+    // Keep raw compact text if summary is not valid JSON.
+  }
+  return compactAiRealtimeText(rawText, 260);
+}
+
+function buildAiRealtimeFingerprint(parts: unknown[]): string {
+  return parts
+    .map((part) => String(part ?? "").trim())
+    .filter(Boolean)
+    .join("|")
+    .toLowerCase();
+}
+
+function buildAiRealtimeLogsFromPayload(
+  payload: any,
+  locale: string = "vi",
+): Array<Omit<AiRealtimeLogEntry, "id" | "ts">> {
+  const logs: Array<Omit<AiRealtimeLogEntry, "id" | "ts">> = [];
+  const progress = payload?.progress || payload;
+  if (!progress) return logs;
+
+  const tr = (vi: string, en: string, zh: string) => {
+    const lang = String(locale || "vi").toLowerCase();
+    if (lang.startsWith("zh")) return zh;
+    if (lang.startsWith("en")) return en;
+    return vi;
+  };
+
+  const status = String(payload?.status || progress?.status || "").toLowerCase();
+  const stage = String(progress?.stage || "").trim();
+  const phase = String(progress?.phase || "").trim();
+  const messageText = String(progress?.message || payload?.message || "").trim();
+  const current = Number(progress?.current);
+  const total = Number(progress?.total);
+  const percent = Number(progress?.percent);
+  const model = String(progress?.model || payload?.model || "").trim();
+  const stepInfo = Number.isFinite(current) && Number.isFinite(total) && total > 0
+    ? `${Math.max(0, current)}/${Math.max(1, total)}`
+    : "-/-";
+  const progressInfo = Number.isFinite(percent) && percent > 0 ? `${Math.round(percent)}%` : "0%";
+
+  if (stage || phase || messageText || status) {
+    const detailParts = [
+      `step=${stepInfo}`,
+      `progress=${progressInfo}`,
+      stage ? `stage=${stage}` : phase ? `phase=${phase}` : "",
+      model ? `model=${model}` : "",
+    ].filter(Boolean);
+
+    logs.push({
+      level: status === "failed" ? "error" : status === "completed" ? "success" : "info",
+      message: messageText || stage || phase || tr("AI cập nhật tiến độ", "AI progress update", "AI 进度更新"),
+      detail: detailParts.length > 0 ? detailParts.join(" • ") : undefined,
+      fingerprint: buildAiRealtimeFingerprint(["core", status, stage, phase, messageText, current, total, Math.round(percent || 0), model]),
+    });
+  }
+
+  const waitingMs = Number(progress?.waitingMs ?? payload?.waitingMs);
+  if (Number.isFinite(waitingMs) && waitingMs > 0) {
+    logs.push({
+      level: "warning",
+      message: tr("Hệ thống đang throttle để tôn trọng giới hạn TPM", "System is throttling to respect TPM limits", "系统正在限流以遵守 TPM 限制"),
+      detail: tr(
+        `Chờ ${Math.round(waitingMs)} ms trước khi gọi tiếp`,
+        `Wait ${Math.round(waitingMs)} ms before next call`,
+        `等待 ${Math.round(waitingMs)} ms 后再继续调用`,
+      ),
+      fingerprint: buildAiRealtimeFingerprint(["wait", Math.round(waitingMs / 500)]),
+    });
+  }
+
+  const summaries = Array.isArray(progress?.working_summaries) ? progress.working_summaries : [];
+  if (summaries.length > 0) {
+    const lastSummary = summarizeAiWorkingSummary(summaries[summaries.length - 1]);
+    if (lastSummary) {
+      logs.push({
+        level: "info",
+        message: tr("Cập nhật tóm tắt chunk mới", "Updated latest chunk summary", "已更新最新分块摘要"),
+        detail: lastSummary,
+        fingerprint: buildAiRealtimeFingerprint(["chunk", lastSummary]),
+      });
+    }
+  }
+
+  const draftText = String(progress?.draftText || progress?.partialJson || progress?.previewJson || "").trim();
+  if (draftText) {
+    logs.push({
+      level: "info",
+      message: tr("CSM Editor đã cập nhật JSON mới từ AI", "CSM Editor updated new JSON from AI", "CSM Editor 已更新来自 AI 的新 JSON"),
+      detail: `step=${stepInfo} • ${progressInfo}`,
+      fingerprint: buildAiRealtimeFingerprint(["draft", stepInfo, progressInfo, compactAiRealtimeText(draftText, 120)]),
+    });
+  }
+
+  return logs;
+}
+
+function formatAiRealtimeClock(timestamp: number): string {
+  try {
+    return new Date(timestamp).toLocaleTimeString("vi-VN", { hour12: false });
+  } catch {
+    return "--:--:--";
+  }
 }
 
 function buildEditorMenuJson(menus: MenuItemType[] | null | undefined): string {
@@ -1779,8 +1940,11 @@ function buildPreviousResultContext(previousResultJson: string, maxNodes: number
     const notesPreview = Array.isArray((parsed as any)?.notes)
       ? trimToMax(JSON.stringify((parsed as any).notes), 600)
       : "[]";
+    const unresolvedPreview = Array.isArray((parsed as any)?.unresolved_assumptions)
+      ? trimToMax(JSON.stringify((parsed as any).unresolved_assumptions), 500)
+      : "[]";
 
-    return `menu_count=${menuList.length}\n${compact}\nnotes_preview=${notesPreview}`;
+    return `menu_count=${menuList.length}\n${compact}\nnotes_preview=${notesPreview}\nunresolved_assumptions=${unresolvedPreview}`;
   } catch {
     return `khong parse duoc JSON ket qua truoc. raw_preview=${trimToMax(raw, 1200)}`;
   }
@@ -2370,6 +2534,30 @@ function buildAppContextAppendix(
     ? buildPreviousResultContext(storedLastResult, 60)
     : "(chua co ket qua AI truoc do)";
 
+  // Extract pending/incomplete items from last AI result to surface explicitly
+  const pendingSection = (() => {
+    if (!storedLastResult) return "";
+    try {
+      const parsed = JSON.parse(storedLastResult);
+      const unresolved: string[] = Array.isArray(parsed?.unresolved_assumptions)
+        ? parsed.unresolved_assumptions.map((x: any) => String(x || "").trim()).filter(Boolean)
+        : [];
+      const pendingNotes: string[] = Array.isArray(parsed?.notes)
+        ? parsed.notes.map((n: any) => String(n || "").trim()).filter((n: string) => /pending|todo|incomplete|chua|missing|thieu|con lai/i.test(n))
+        : [];
+      const all = [...unresolved, ...pendingNotes].slice(0, 12);
+      if (all.length === 0) return "";
+      return [
+        "### PENDING / INCOMPLETE FROM LAST RUN (MUST ADDRESS FIRST)",
+        "The following items were flagged as incomplete or unresolved in the previous AI run.",
+        "Address these before adding new features:",
+        ...all.map((p) => `- ${p}`),
+      ].join("\n");
+    } catch {
+      return "";
+    }
+  })();
+
   const fileAppendix = buildContextFilesAppendix(files);
 
   const text = [
@@ -2383,6 +2571,7 @@ function buildAppContextAppendix(
     "### Previous requirement history",
     trimToMax(String(storedRequest || "(khong co)"), 6000),
     "",
+    pendingSection ? `${pendingSection}\n` : "",
     "### Previous AI output summary",
     lastResultCompact,
     fileAppendix ? `\n${fileAppendix}` : "",
@@ -2397,6 +2586,22 @@ function serializeContextFiles(files: JsonContextFile[]): string {
   } catch {
     return "[]";
   }
+}
+
+/**
+ * Accumulate user request history entries with timestamps.
+ * Keeps the last ~8000 chars so the history stays within token budget.
+ */
+function buildAccumulatedHistory(existingHistory: string | undefined, newRequest: string): string {
+  const trimmed = String(newRequest || "").trim();
+  if (!trimmed) return String(existingHistory || "");
+  const timestamp = new Date().toISOString().slice(0, 16).replace("T", " ");
+  const entry = `[${timestamp}] ${trimmed}`;
+  const combined = existingHistory?.trim()
+    ? `${existingHistory.trim()}\n---\n${entry}`
+    : entry;
+  const MAX_HISTORY_CHARS = 8000;
+  return combined.length > MAX_HISTORY_CHARS ? combined.slice(-MAX_HISTORY_CHARS) : combined;
 }
 
 function parseContextFiles(raw: any): JsonContextFile[] {
@@ -2616,6 +2821,7 @@ export function buildAiIncrementalUpdatePayload(
 
 export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerProps) {
   const { t, i18n } = useTranslation();
+  const screens = Grid.useBreakpoint();
   const user = useUserStore();
   const isDevUser = !!user?.dev || !!user?.roles?.includes("dev");
   const { socket, connected: socketConnected } = useSocket({ enabled: true });
@@ -2634,15 +2840,11 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
   const [aiMenus, setAiMenus] = useState<MenuItemType[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [recordId, setRecordId] = useState<string | undefined>(undefined);
-  const [sampleAppList, setSampleAppList] = useState<any[]>([]);
-  const [sampleAppId, setSampleAppId] = useState<string | undefined>(undefined);
-  const [sampleMenuLoading, setSampleMenuLoading] = useState(false);
-  const [sampleMenuParsed, setSampleMenuParsed] = useState<MenuItemType[] | null>(null);
-  const [sampleMenuError, setSampleMenuError] = useState<string | null>(null);
-  const [sampleUseAsBase, setSampleUseAsBase] = useState(false);
   const [aiLiveEditEnabled, setAiLiveEditEnabled] = useState(true);
   const [allowManualEditWhileRunning, setAllowManualEditWhileRunning] = useState(false);
   const [aiProgress, setAiProgress] = useState<AiProgressState | null>(null);
+  const [aiRealtimeLogs, setAiRealtimeLogs] = useState<AiRealtimeLogEntry[]>([]);
+  const [aiRuntimeModel, setAiRuntimeModel] = useState<string>("");
   const [aiOutputMeta, setAiOutputMeta] = useState<AiOutputMeta>({
     coverageModules: [],
     coverageTables: [],
@@ -2664,6 +2866,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
   const [aiStopReason, setAiStopReason] = useState<string>("");
   const [showCoverageDetails, setShowCoverageDetails] = useState(false);
   const [deletingStoredRecord, setDeletingStoredRecord] = useState(false);
+  const [showStoredRequestDetails, setShowStoredRequestDetails] = useState(false);
   /** Ref to the result CodeMirror view so we can dispatch decoration effects */
   const resultEditorViewRef = useRef<any>(null);
   const activeAiJobIdRef = useRef<string | null>(null);
@@ -2671,6 +2874,27 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
   const aiJobRejectRef = useRef<((reason?: unknown) => void) | null>(null);
   const aiJobTimeoutRef = useRef<number | null>(null);
   const aiJobPollRef = useRef<number | null>(null);
+  const aiRealtimeLogSeqRef = useRef(0);
+
+  const appendAiRealtimeLogs = (entries: Array<Omit<AiRealtimeLogEntry, "id" | "ts">>) => {
+    if (!Array.isArray(entries) || entries.length === 0) return;
+    setAiRealtimeLogs((prev) => {
+      const next = [...prev];
+      const recentFingerprints = new Set(next.slice(-60).map((item) => item.fingerprint));
+      entries.forEach((entry) => {
+        if (!entry?.message || !entry?.fingerprint) return;
+        if (recentFingerprints.has(entry.fingerprint)) return;
+        aiRealtimeLogSeqRef.current += 1;
+        next.push({
+          ...entry,
+          id: `ai_rt_${Date.now()}_${aiRealtimeLogSeqRef.current}`,
+          ts: Date.now(),
+        });
+        recentFingerprints.add(entry.fingerprint);
+      });
+      return next.slice(-140);
+    });
+  };
 
   const cancelActiveAiRun = (reason: string, notify: boolean = true) => {
     const activeJobId = activeAiJobIdRef.current;
@@ -2707,6 +2931,12 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
       stage: "stopped",
       message: reason,
     }));
+    appendAiRealtimeLogs([{
+      level: "warning",
+      message: uiText("AI job đã được dừng", "AI job has been stopped", "AI 任务已停止"),
+      detail: compactAiRealtimeText(reason, 220),
+      fingerprint: buildAiRealtimeFingerprint(["cancel", reason]),
+    }]);
 
     if (notify) {
       message.warning(reason);
@@ -2739,6 +2969,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     setAiResultText("");
     setAiMenus(normalized);
     setAiProgress(null);
+    setAiRealtimeLogs([]);
     setAiStopReason("");
     syncPatchReviewState([]);
     setLiveEditLines([]);
@@ -2867,11 +3098,13 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     if (typeof explicitDraft === "string" && explicitDraft.trim()) {
       const menuDraftText = extractMenuDraftForEditor(explicitDraft);
       if (menuDraftText) {
+        console.log("[APPLY_SOCKET_DRAFT] menuDraftText found, length=", menuDraftText.length);
         if (hasPatchOps && operationScenario === "incremental_update" && decodedCurrentMenus.length > 0) {
           try {
             const parsedDraft = JSON.parse(menuDraftText);
             const draftMenus = normalizeMenuList(extractMenuListFromPayload(parsedDraft));
             if (draftMenus.length > 0) {
+              console.log("[APPLY_SOCKET_DRAFT] incremental_update: draftMenus=", draftMenus.length);
               const guardRequestText = [storedRequest, requestText].filter(Boolean).join("\n");
               const scoped = enforceIncrementalTargetScope({
                 scenario: operationScenario,
@@ -2899,8 +3132,31 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
         if (hasPatchOps) {
           syncPatchReviewState(nextPatchOps);
         }
+        // ⭐ Apply realtime draft to editor immediately (chunking phase + reducing phase)
+        console.log("[APPLY_SOCKET_DRAFT] setting editableAiDraftText, length=", menuDraftText.length);
         setEditableAiDraftText(menuDraftText);
         return;
+      }
+
+      // ⭐ FALLBACK: If draftText is direct menu JSON (not wrapped), apply it anyway
+      // This handles realtime menu drafts from backend
+      console.log("[APPLY_SOCKET_DRAFT] extractMenuDraftForEditor returned null, trying fallback");
+      try {
+        const directParsed = JSON.parse(explicitDraft);
+        const menus = extractMenuListFromPayload(directParsed);
+        if (Array.isArray(menus) && menus.length > 0) {
+          console.log("[APPLY_SOCKET_DRAFT] fallback: found menus=", menus.length);
+          const wrappedDraft = JSON.stringify({ menu: menus }, null, 2);
+          if (hasPatchOps) {
+            syncPatchReviewState(nextPatchOps);
+          }
+          console.log("[APPLY_SOCKET_DRAFT] setting editableAiDraftText via fallback, length=", wrappedDraft.length);
+          setEditableAiDraftText(wrappedDraft);
+          return;
+        }
+      } catch (e) {
+        // draftText is not JSON or doesn't contain menu, continue to other handlers
+        console.log("[APPLY_SOCKET_DRAFT] fallback parse failed:", String(e).substring(0, 100));
       }
     }
 
@@ -2929,6 +3185,11 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     const progress = payload?.progress || payload;
     if (!progress) return;
     applySocketDraftPayload(payload);
+    appendAiRealtimeLogs(buildAiRealtimeLogsFromPayload(payload, i18n.resolvedLanguage || i18n.language || "vi"));
+    const nextModel = String(progress?.model || payload?.model || "").trim();
+    if (nextModel) {
+      setAiRuntimeModel(nextModel);
+    }
     const nextProgress: AiProgressState = {
       jobId: payload?.jobId || activeAiJobIdRef.current || undefined,
       status: payload?.status || progress?.status,
@@ -3322,13 +3583,34 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     });
   }, [patchOpsView, patchKeyword, patchActionFilter, patchReviewFilter, patchReviewStatus]);
 
-  const [activePatchCursor, setActivePatchCursor] = useState(0);
+  const [activePatchNodeId, setActivePatchNodeId] = useState<string | null>(null);
+  const patchScrollThrottleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const patchScrollThrottlePendingRef = useRef<{ nodeId: string; silent: boolean } | null>(null);
+
+  const navigablePatchOps = useMemo<PatchOpView[]>(() => {
+    return visiblePatchOps
+      .filter((op) => Number.isFinite(op.line) && (op.line || 0) > 0)
+      .sort((a, b) => (a.line || 0) - (b.line || 0));
+  }, [visiblePatchOps]);
+
+  const activePatchCursor = useMemo(() => {
+    if (visiblePatchOps.length <= 0) return -1;
+    if (activePatchNodeId) {
+      const matchedIndex = visiblePatchOps.findIndex((op) => op.nodeId === activePatchNodeId);
+      if (matchedIndex >= 0) return matchedIndex;
+    }
+    return 0;
+  }, [visiblePatchOps, activePatchNodeId]);
 
   const activePatchOp = useMemo(() => {
-    if (visiblePatchOps.length <= 0) return null;
-    const idx = Math.max(0, Math.min(activePatchCursor, visiblePatchOps.length - 1));
-    return visiblePatchOps[idx] || null;
+    if (activePatchCursor < 0 || activePatchCursor >= visiblePatchOps.length) return null;
+    return visiblePatchOps[activePatchCursor] || null;
   }, [visiblePatchOps, activePatchCursor]);
+
+  const activeNavigableCursor = useMemo(() => {
+    if (navigablePatchOps.length <= 0 || !activePatchNodeId) return -1;
+    return navigablePatchOps.findIndex((op) => op.nodeId === activePatchNodeId);
+  }, [navigablePatchOps, activePatchNodeId]);
 
   const activePatchStatus: "pending" | PatchReviewStatus = activePatchOp
     ? (patchReviewStatus[activePatchOp.nodeId] || "pending")
@@ -3346,41 +3628,74 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
 
   useEffect(() => {
     if (visiblePatchOps.length <= 0) {
-      setActivePatchCursor(0);
+      setActivePatchNodeId(null);
       return;
     }
-    setActivePatchCursor((prev) => {
-      if (prev < 0) return 0;
-      if (prev >= visiblePatchOps.length) return visiblePatchOps.length - 1;
-      return prev;
-    });
-  }, [visiblePatchOps.length]);
 
-  const focusPatchOpLine = (nodeId: string) => {
-    const view = resultEditorViewRef.current;
-    if (!view) return;
-    const lineNo = patchLineMap.get(nodeId)?.line;
-    if (!lineNo || lineNo < 1 || lineNo > view.state.doc.lines) {
+    if (activePatchNodeId && visiblePatchOps.some((op) => op.nodeId === activePatchNodeId)) {
+      return;
+    }
+
+    if (navigablePatchOps.length > 0) {
+      setActivePatchNodeId(navigablePatchOps[0]?.nodeId || null);
+      return;
+    }
+
+    setActivePatchNodeId(visiblePatchOps[0]?.nodeId || null);
+  }, [visiblePatchOps, navigablePatchOps, activePatchNodeId]);
+
+  const focusPatchOpLine = (nodeId: string, silent = false) => {
+    patchScrollThrottlePendingRef.current = { nodeId, silent };
+    if (patchScrollThrottleTimerRef.current) return;
+
+    patchScrollThrottleTimerRef.current = setTimeout(() => {
+      patchScrollThrottleTimerRef.current = null;
+      const pending = patchScrollThrottlePendingRef.current;
+      patchScrollThrottlePendingRef.current = null;
+      if (!pending) return;
+
+      const { nodeId: nextNodeId, silent: nextSilent } = pending;
+      const view = resultEditorViewRef.current;
+      if (!view) return;
+      const lineNo = patchLineMap.get(nextNodeId)?.line;
+      if (!lineNo || lineNo < 1 || lineNo > view.state.doc.lines) {
+        if (!nextSilent) {
+          message.info(t("system.menu.aiDesigner.mergePreview.infoLineNotFound") as string);
+        }
+        return;
+      }
+      const line = view.state.doc.line(lineNo);
+      view.dispatch({
+        selection: { anchor: line.from },
+        effects: EditorView.scrollIntoView(line.from, { y: "center" }),
+      });
+      view.focus();
+    }, 100);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (patchScrollThrottleTimerRef.current) {
+        clearTimeout(patchScrollThrottleTimerRef.current);
+        patchScrollThrottleTimerRef.current = null;
+      }
+      patchScrollThrottlePendingRef.current = null;
+    };
+  }, []);
+
+  const focusPatchByStep = (step: 1 | -1) => {
+    if (navigablePatchOps.length <= 0) {
       message.info(t("system.menu.aiDesigner.mergePreview.infoLineNotFound") as string);
       return;
     }
-    const line = view.state.doc.line(lineNo);
-    view.dispatch({
-      selection: { anchor: line.from },
-      effects: EditorView.scrollIntoView(line.from, { y: "center" }),
-    });
-    view.focus();
-  };
 
-  const focusPatchByIndex = (index: number) => {
-    if (visiblePatchOps.length <= 0) return;
-    const max = visiblePatchOps.length;
-    const normalized = ((index % max) + max) % max;
-    setActivePatchCursor(normalized);
-    const target = visiblePatchOps[normalized];
-    if (target?.nodeId) {
-      focusPatchOpLine(target.nodeId);
-    }
+    const current = activeNavigableCursor >= 0 ? activeNavigableCursor : 0;
+    const nextIndex = ((current + step) % navigablePatchOps.length + navigablePatchOps.length) % navigablePatchOps.length;
+    const target = navigablePatchOps[nextIndex];
+    if (!target?.nodeId) return;
+
+    setActivePatchNodeId(target.nodeId);
+    focusPatchOpLine(target.nodeId);
   };
 
   const prevPatchCountRef = useRef(0);
@@ -3389,23 +3704,26 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     const nextCount = patchOpsView.length;
     prevPatchCountRef.current = nextCount;
 
-    if (nextCount <= 0) return;
-    if (prevCount <= 0 && nextCount > 0) {
-      const firstLinePatch = patchOpsView.find((op) => !!op.line);
-      if (firstLinePatch?.nodeId) {
-        const firstVisibleIndex = visiblePatchOps.findIndex((item) => item.nodeId === firstLinePatch.nodeId);
-        if (firstVisibleIndex >= 0) {
-          focusPatchByIndex(firstVisibleIndex);
-        } else {
-          focusPatchOpLine(firstLinePatch.nodeId);
-        }
-      }
+    if (nextCount <= 0 || prevCount > 0) return;
+
+    const target = navigablePatchOps[0] || visiblePatchOps[0];
+    if (!target?.nodeId) return;
+
+    setActivePatchNodeId(target.nodeId);
+    if ((target.line || 0) > 0) {
+      focusPatchOpLine(target.nodeId, true);
     }
-  }, [patchOpsView, visiblePatchOps]);
+  }, [patchOpsView.length, navigablePatchOps, visiblePatchOps]);
+
+  useEffect(() => {
+    if (!activePatchNodeId) return;
+    if (!navigablePatchOps.some((op) => op.nodeId === activePatchNodeId)) return;
+    focusPatchOpLine(activePatchNodeId, true);
+  }, [activePatchNodeId, patchLineMap, navigablePatchOps]);
 
   useEffect(() => {
     const handlePatchHotkeys = (event: KeyboardEvent) => {
-      if (!event.altKey || visiblePatchOps.length <= 0) return;
+      if (!event.altKey || navigablePatchOps.length <= 0) return;
       if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
 
       const targetTag = (event.target as HTMLElement | null)?.tagName?.toLowerCase();
@@ -3414,15 +3732,15 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
       event.preventDefault();
       event.stopPropagation();
       if (event.key === "ArrowUp") {
-        focusPatchByIndex(activePatchCursor - 1);
+        focusPatchByStep(-1);
       } else {
-        focusPatchByIndex(activePatchCursor + 1);
+        focusPatchByStep(1);
       }
     };
 
     window.addEventListener("keydown", handlePatchHotkeys);
     return () => window.removeEventListener("keydown", handlePatchHotkeys);
-  }, [activePatchCursor, visiblePatchOps]);
+  }, [navigablePatchOps, activeNavigableCursor]);
 
   const applyPatchReviewBulk = (mode: "keep" | "undo", scope: "all" | "visible" = "all") => {
     const targetOps = (scope === "visible" ? visiblePatchOps : patchOps).filter(Boolean) as PatchOp[];
@@ -3573,51 +3891,6 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     () => transformMenuTriggers(Array.isArray(currentMenus) ? currentMenus : [], "decode"),
     [currentMenus],
   );
-  const decodedSampleMenus = useMemo(
-    () => transformMenuTriggers(sampleMenuParsed || [], "decode"),
-    [sampleMenuParsed],
-  );
-
-  const sampleAppOptions = useMemo(() => {
-    const toLabel = (raw: any, fallback: string): string => {
-      if (!raw) return fallback;
-      if (typeof raw === "object") return String(raw.vi || raw.en || raw.zh || fallback);
-      return String(raw);
-    };
-    const rows = [
-      { label: "CSM", value: "csm" },
-      ...((sampleAppList || []).map((app) => ({
-        label: toLabel(app?.app_name, app?.app_id || ""),
-        value: app?.app_id,
-      }))),
-    ].filter((opt) => !!opt.value);
-
-    const seen = new Set<string>();
-    return rows.filter((opt) => {
-      if (seen.has(opt.value)) return false;
-      seen.add(opt.value);
-      return true;
-    });
-  }, [sampleAppList]);
-
-  const sampleAppLabel = useMemo(() => {
-    if (!sampleAppId) return "";
-    const hit = sampleAppOptions.find((opt) => opt.value === sampleAppId);
-    return hit?.label || sampleAppId;
-  }, [sampleAppId, sampleAppOptions]);
-
-  useEffect(() => {
-    const loadApps = async () => {
-      try {
-        const res = await fetchAppList();
-        const list = (res as any)?.result?.list || [];
-        setSampleAppList(Array.isArray(list) ? list : []);
-      } catch (error) {
-        console.warn("Failed to load app list for sample menu:", error);
-      }
-    };
-    loadApps();
-  }, []);
 
   useEffect(() => {
     if (!appId) return;
@@ -3703,46 +3976,6 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     }
 
     if (!recordId) setRecordId(objUpdate.id);
-  };
-
-  const loadSampleMenuFromApp = async (targetAppId: string) => {
-    if (!targetAppId) {
-      setSampleMenuParsed(null);
-      setSampleMenuError(null);
-      return;
-    }
-    setSampleMenuLoading(true);
-    try {
-      const res = await fetchMenuList(targetAppId);
-      const rawMenuList = (res as any)?.result?.list || [];
-      if (!Array.isArray(rawMenuList) || rawMenuList.length === 0) {
-        setSampleMenuParsed(null);
-        setSampleMenuError(t("system.menu.aiDesigner.sampleMenu.loadNotFound", { appId: targetAppId }) || `Không tìm thấy menu mẫu trong ứng dụng ${targetAppId}.`);
-        return;
-      }
-      const normalized = normalizeMenuList(rawMenuList);
-      setSampleMenuParsed(normalized);
-      setSampleMenuError(null);
-      setEditorFromMenus(normalized, "sample");
-      message.success(t("system.menu.aiDesigner.sampleMenu.loadSuccess", { count: normalized.length, appId: targetAppId }) || `Đã nạp ${normalized.length} menu gốc từ app ${targetAppId} làm mẫu cho AI.`);
-    } catch (e: any) {
-      setSampleMenuParsed(null);
-      setSampleMenuError(t("system.menu.aiDesigner.sampleMenu.loadFailed", { appId: targetAppId, error: e?.message || "Unknown error" }) || `Không thể tải menu mẫu từ app ${targetAppId}: ${e?.message || "Unknown error"}`);
-    } finally {
-      setSampleMenuLoading(false);
-    }
-  };
-
-  const handleSampleAppChange = async (value: string) => {
-    setSampleAppId(value);
-    await loadSampleMenuFromApp(value);
-  };
-
-  const handleClearSampleMenu = () => {
-    setSampleAppId(undefined);
-    setSampleMenuParsed(null);
-    setSampleMenuError(null);
-    setSampleUseAsBase(false);
   };
 
   const handleContextJsonFile = async (file: File) => {
@@ -3864,14 +4097,22 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
 
     const prompt = trimToMax(
       promptOverride
-        || JSON.stringify(
-          buildAiMenuRequestPayload(appId, inputRequest, scope, decodedCurrentMenus, decodedSampleMenus || undefined, contextFiles),
-          null,
-          2,
-        ),
+        || (() => {
+          const basePayload = buildAiMenuRequestPayload(appId, inputRequest, scope, decodedCurrentMenus, undefined, contextFiles);
+          // Inject session continuity memory so AI remembers previous work for this app_id
+          const sessionMemory = (storedLastResult || storedRecordMeta?.request_history)
+            ? buildAppContextAppendix(appId, storedRecordMeta?.request_history || storedRequest, storedLastResult, contextFiles)
+            : null;
+          const payloadWithMemory = sessionMemory
+            ? { ...basePayload, session_memory: trimToMax(sessionMemory, MAX_CONTEXT_APPENDIX_CHARS) }
+            : basePayload;
+          return JSON.stringify(payloadWithMemory, null, 2);
+        })(),
       120000,
     );
     setLoading(true);
+    setAiRealtimeLogs([]);
+    setAiRuntimeModel("");
     setAiStopReason("");
     setShowCoverageDetails(false);
     setValidationProfile(operationScenario === "incremental_update" ? "legacy" : "strict");
@@ -3893,6 +4134,12 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
       elapsedMs: 0,
     };
     setAiProgress(preparingProgress);
+    appendAiRealtimeLogs([{
+      level: "info",
+      message: uiText("Đã gửi yêu cầu AI và bắt đầu xử lý", "AI request submitted and processing started", "已提交 AI 请求并开始处理"),
+      detail: `scenario=${operationScenario}`,
+      fingerprint: buildAiRealtimeFingerprint(["start", appId, operationScenario, Date.now()]),
+    }]);
 
     try {
       const command = recordId ? "update" : "create";
@@ -3900,6 +4147,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
       await saveRequestRecord(
         {
           request_text: inputRequest,
+          request_history: buildAccumulatedHistory(storedRecordMeta?.request_history, inputRequest),
           last_prompt: prompt,
           updated_at: Date.now(),
         },
@@ -3907,14 +4155,40 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
       );
       setStoredRequest(inputRequest);
 
-      const res = await generateMenuWithRealtime(
-        prompt,
-        "menu_design",
-        operationScenario === "incremental_update" ? "incremental_update" : undefined,
-        operationScenario === "incremental_update" && Array.isArray(currentMenus)
-          ? JSON.stringify(decodedCurrentMenus, null, 2)
-          : undefined,
-      );
+      let res: any;
+      try {
+        res = await generateMenuWithRealtime(
+          prompt,
+          "menu_design",
+          operationScenario === "incremental_update" ? "incremental_update" : undefined,
+          operationScenario === "incremental_update" && Array.isArray(currentMenus)
+            ? JSON.stringify(decodedCurrentMenus, null, 2)
+            : undefined,
+        );
+      } catch (realtimeError) {
+        const fallbackReason = realtimeError instanceof Error ? realtimeError.message : String(realtimeError || "Realtime AI error");
+        appendAiRealtimeLogs([{
+          level: "warning",
+          message: uiText("Realtime lỗi, tự động chuyển sang chế độ gọi AI trực tiếp", "Realtime failed, auto-switched to direct AI call", "实时失败，已自动切换到直接 AI 调用"),
+          detail: compactAiRealtimeText(fallbackReason, 220),
+          fingerprint: buildAiRealtimeFingerprint(["fallback_sync", fallbackReason]),
+        }]);
+
+        setAiProgress((prev) => ({
+          ...(prev || {}),
+          status: "running",
+          stage: "fallback_sync",
+          message: uiText("Realtime gặp lỗi, đang chạy fallback trực tiếp", "Realtime error detected, running direct fallback", "实时出错，正在执行直接回退"),
+        }));
+
+        res = await generateSeoContentWithPrompt(prompt, {
+          providerPreference: isDevUser ? "github_models" : undefined,
+          disableGeminiFallback: isDevUser,
+          taskType: "menu_design",
+          menuDesignByDev: isDevUser,
+          onProgress: applyProgressPayload,
+        });
+      }
       const payload = extractAiPayload(res);
       if (!payload) {
         message.error(t("system.menu.aiDesigner.invalidJson") || "AI trả về không đúng JSON");
@@ -3927,6 +4201,12 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
           message: String(res?.message || "AI error"),
           percent: prev?.percent ?? 0,
         }));
+        appendAiRealtimeLogs([{
+          level: "error",
+          message: uiText("AI trả về payload không hợp lệ", "AI returned an invalid payload", "AI 返回了无效 payload"),
+          detail: compactAiRealtimeText(String(res?.message || "AI error"), 220),
+          fingerprint: buildAiRealtimeFingerprint(["invalid_payload", String(res?.message || "")]),
+        }]);
         return;
       }
 
@@ -4044,7 +4324,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
             JSON.stringify(output),
             "complete",
             decodedCurrentMenus,
-            decodedSampleMenus || undefined,
+            undefined,
             false,
             contextFiles,
           ),
@@ -4060,6 +4340,12 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
           total: 1,
           percent: 0,
         });
+        appendAiRealtimeLogs([{
+          level: "warning",
+          message: uiText("Kích hoạt auto-refine vì output lần đầu chưa đạt", "Auto-refine triggered because first output is insufficient", "首次输出未达标，已触发自动优化"),
+          detail: `issues=${severeIssues.length}`,
+          fingerprint: buildAiRealtimeFingerprint(["auto_refine", severeIssues.length, attempt]),
+        }]);
         setAiResultText(JSON.stringify({
           success: false,
           stage: "refining",
@@ -4083,9 +4369,11 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
           setEditableAiDraftText(JSON.stringify(output, null, 2));
 
         try {
+          const accumulatedHistory = buildAccumulatedHistory(storedRecordMeta?.request_history, inputRequest);
           await saveRequestRecord(
             {
               request_text: inputRequest,
+              request_history: accumulatedHistory,
               last_result: JSON.stringify(output),
               context_files_json: serializeContextFiles(contextFiles),
               updated_at: Date.now(),
@@ -4093,6 +4381,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
             "update",
           );
           setStoredLastResult(JSON.stringify(output));
+          setStoredRecordMeta((prev) => prev ? { ...prev, request_history: accumulatedHistory, last_result: JSON.stringify(output) } : prev);
         } catch (persistError) {
           console.warn("AI output generated but failed to persist request history:", persistError);
           message.warning(t("system.menu.aiDesigner.persistWarning") || "AI đã tạo kết quả, nhưng không lưu được lịch sử yêu cầu.");
@@ -4107,6 +4396,12 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
         total: 1,
         percent: 100,
       }));
+      appendAiRealtimeLogs([{
+        level: "success",
+        message: uiText("AI đã hoàn tất job", "AI job completed", "AI 任务已完成"),
+        detail: `menu_count=${finalMenus.length}`,
+        fingerprint: buildAiRealtimeFingerprint(["completed", finalMenus.length, operationScenario]),
+      }]);
 
       message.success(
         operationScenario === "incremental_update"
@@ -4115,13 +4410,21 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
       );
     } catch (error) {
       console.error("AI menu generation failed:", error);
+      const failMessage = error instanceof Error ? error.message : "Lỗi gọi AI";
       setAiProgress((prev) => ({
         ...(prev || {}),
         status: "failed",
         stage: "failed",
-        message: error instanceof Error ? error.message : "Lỗi gọi AI",
+        message: failMessage,
       }));
-      message.error(t("system.menu.aiDesigner.generateFailed") || "Lỗi gọi AI");
+      setAiStopReason(failMessage);
+      appendAiRealtimeLogs([{
+        level: "error",
+        message: uiText("Lỗi khi gọi AI", "Error while calling AI", "调用 AI 时出错"),
+        detail: compactAiRealtimeText(failMessage, 220),
+        fingerprint: buildAiRealtimeFingerprint(["run_error", failMessage]),
+      }]);
+      message.error(`${t("system.menu.aiDesigner.generateFailed") || "Lỗi gọi AI"}: ${failMessage}`);
     } finally {
       setLoading(false);
     }
@@ -4140,16 +4443,23 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
         return;
       }
       const prompt = trimToMax(
-        JSON.stringify(
-          buildAiIncrementalUpdatePayload(
+        (() => {
+          const basePayload = buildAiIncrementalUpdatePayload(
             appId,
             storedRequest,
             requestText,
             baseMenus,
             contextFiles,
-          ),
-          null, 2,
-        ),
+          );
+          // Inject session continuity memory so AI remembers previous work for this app_id
+          const sessionMemory = (storedLastResult || storedRecordMeta?.request_history)
+            ? buildAppContextAppendix(appId, storedRecordMeta?.request_history || storedRequest, storedLastResult, contextFiles)
+            : null;
+          const payloadWithMemory = sessionMemory
+            ? { ...basePayload, session_memory: trimToMax(sessionMemory, MAX_CONTEXT_APPENDIX_CHARS) }
+            : basePayload;
+          return JSON.stringify(payloadWithMemory, null, 2);
+        })(),
         120000,
       );
       const combinedRequest = [storedRequest || "", "\n[Incremental update]\n", requestText].join("\n").trim();
@@ -4159,27 +4469,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
 
     // ── Kịch bản 1: New Build ─────────────────────────────────────────────
 
-    if (sampleUseAsBase && sampleMenuParsed && sampleMenuParsed.length > 0) {
-      const baseJson = JSON.stringify({ menu: decodedSampleMenus }, null, 2);
-      const prompt = JSON.stringify(
-        buildAiMenuRefinePayload(
-          appId,
-          "",
-          mergedRequestText,
-          baseJson,
-          "complete",
-          decodedCurrentMenus,
-          decodedSampleMenus || undefined,
-          true,
-          contextFiles,
-        ),
-        null,
-        2,
-      );
-      await runGenerate(mergedRequestText, "complete", prompt);
-    } else {
-      await runGenerate(mergedRequestText, "complete");
-    }
+    await runGenerate(mergedRequestText, "complete");
   };
 
   const handleApply = async () => {
@@ -4238,20 +4528,67 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     }
   };
 
+  const sectionCardStyle = {
+    borderRadius: 10,
+    border: "1px solid var(--ant-color-border)",
+    boxShadow: "var(--ant-box-shadow-tertiary)",
+  } as const;
+
+  const sectionTitleStyle = { fontSize: 13, fontWeight: 600, letterSpacing: 0.2 } as const;
+  const uiText = (vi: string, en: string, zh: string) => {
+    const lang = String(i18n.resolvedLanguage || i18n.language || "vi").toLowerCase();
+    if (lang.startsWith("zh")) return zh;
+    if (lang.startsWith("en")) return en;
+    return vi;
+  };
+  const [panelState, setPanelState] = useState({
+    config: true,
+    monitor: true,
+    result: true,
+  });
+  const togglePanel = (key: keyof typeof panelState) => {
+    setPanelState((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
+  const isDesktopLayout = !!screens.lg;
+
   return (
     <>
       <Card title={t("system.menu.aiDesigner.panelTitle") || "AI Thiet ke Menu Tu dong"} bordered={false}>
+        <Space direction="vertical" size={12} style={{ width: "100%" }}>
         {!appId && <Alert type="warning" showIcon message={t("system.menu.aiDesigner.selectAppFirst") || "Vui long chon App truoc khi su dung AI."} />}
 
         {appId && (
           <Alert
             type={storedRecordMeta ? "info" : "success"}
             showIcon
-            style={{ marginBottom: 12 }}
+            style={{ marginBottom: 8 }}
             message={storedRecordMeta
-              ? (t("system.menu.aiDesigner.requestStore.hasData", { appId }) as string)
+              ? (
+                <Space wrap size={8} style={{ width: "100%", justifyContent: "space-between" }}>
+                  <Space wrap size={8}>
+                    <span>{t("system.menu.aiDesigner.requestStore.hasData", { appId }) as string}</span>
+                    <Tag color="default">
+                      {(t("system.menu.aiDesigner.requestStore.updatedAt") as string)}: {formatStoredTimestamp(storedRecordMeta.updated_at)}
+                    </Tag>
+                  </Space>
+                  <Space wrap size={6}>
+                    <Button
+                      size="small"
+                      type="link"
+                      onClick={() => setShowStoredRequestDetails((prev) => !prev)}
+                    >
+                      {showStoredRequestDetails
+                        ? uiText("Ẩn chi tiết", "Hide details", "隐藏详情")
+                        : uiText("Xem chi tiết", "View details", "查看详情")}
+                    </Button>
+                    <Button danger size="small" loading={deletingStoredRecord} onClick={handleClearStoredRequestData}>
+                      {t("system.menu.aiDesigner.requestStore.deleteButton") as string}
+                    </Button>
+                  </Space>
+                </Space>
+              )
               : (t("system.menu.aiDesigner.requestStore.noData", { appId }) as string)}
-            description={storedRecordMeta
+            description={storedRecordMeta && showStoredRequestDetails
               ? (
                 <Space direction="vertical" style={{ width: "100%" }}>
                   <div>
@@ -4266,23 +4603,112 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                       {storedRecordMeta.request_history || (t("system.menu.aiDesigner.requestStore.emptyValue") as string)}
                     </div>
                   </div>
-                  <div>
-                    <strong>{t("system.menu.aiDesigner.requestStore.updatedAt") as string}</strong>: {formatStoredTimestamp(storedRecordMeta.updated_at)}
-                  </div>
-                  <div>
-                    <Button danger size="small" loading={deletingStoredRecord} onClick={handleClearStoredRequestData}>
-                      {t("system.menu.aiDesigner.requestStore.deleteButton") as string}
-                    </Button>
-                  </div>
                 </Space>
               )
-              : (t("system.menu.aiDesigner.requestStore.noDataDesc") as string)}
+              : undefined}
           />
         )}
 
+        <div style={{ position: "sticky", top: 8, zIndex: 8 }}>
+          <Card
+            size="small"
+            style={{ ...sectionCardStyle, background: "var(--ant-color-bg-container)" }}
+            title={<span style={sectionTitleStyle}>{t("system.menu.aiDesigner.section.quickActions") || "Thanh thao tac nhanh"}</span>}
+          >
+            <Space direction="vertical" size={8} style={{ width: "100%" }}>
+              <Space wrap style={{ width: "100%", justifyContent: "space-between" }}>
+                <Space wrap>
+                  <Button type="primary" onClick={handleGenerate} loading={loading} disabled={!appId} size="large">
+                    {loading
+                      ? (t("system.menu.aiDesigner.processing") as string)
+                      : operationScenario === "new_build"
+                        ? (t("system.menu.aiDesigner.generateAll") || "Tạo bằng AI toàn bộ menu")
+                        : (t("system.menu.aiDesigner.incremental.generateButton") || "Chỉnh sửa menu bằng AI")}
+                  </Button>
+
+                  {loading && activeAiJobIdRef.current && (
+                    <Button
+                      danger
+                      size="large"
+                      onClick={() => cancelActiveAiRun(t("system.menu.aiDesigner.editor.stopByUser") || "Nguoi dung da dung AI job")}
+                    >
+                      {t("system.menu.aiDesigner.editor.stopNow") || "Dung AI ngay"}
+                    </Button>
+                  )}
+
+                  {applyMenuCount > 0 && (
+                    <Button
+                      type="primary"
+                      onClick={handleApply}
+                      size="large"
+                      disabled={menuValidationErrors.length > 0 || applyGuardIssues.length > 0}
+                      style={{ background: "#52c41a", borderColor: "#52c41a" }}
+                    >
+                      {`${t("system.menu.aiDesigner.applySystem") || "Ap dung vao He thong"} (${applyMenuCount})`}
+                    </Button>
+                  )}
+                </Space>
+
+                <Space wrap>
+                  <Tag color="geekblue">{`app_id: ${appId || "-"}`}</Tag>
+                  <Tag color="blue">{operationScenario === "new_build" ? uiText("Tạo mới", "New Build", "新建") : uiText("Cập nhật", "Incremental", "增量")}</Tag>
+                  <Tag color="processing">{`${uiText("Bước", "Step", "步骤")} ${Math.max(0, Number(aiProgress?.current ?? 0))}/${Math.max(1, Number(aiProgress?.total ?? 1))}`}</Tag>
+                  <Tag color="cyan">{`${uiText("Mô hình", "Model", "模型")}: ${aiRuntimeModel || uiText("đang xác định", "resolving", "识别中")}`}</Tag>
+                </Space>
+              </Space>
+
+              <Space wrap>
+                <Switch
+                  size="small"
+                  checked={aiLiveEditEnabled}
+                  onChange={setAiLiveEditEnabled}
+                  checkedChildren={uiText("Live", "Live", "实时")}
+                  unCheckedChildren={uiText("Tạm", "Buffered", "暂存")}
+                />
+                <Tag color={aiLiveEditEnabled ? "blue" : "default"}>
+                  {aiLiveEditEnabled
+                    ? (t("system.menu.aiDesigner.editor.livePatchHintOn") || "AI có thể sửa trực tiếp từng dòng / nhiều dòng trong editor khi đang chạy")
+                    : (t("system.menu.aiDesigner.editor.livePatchHintOff") || "AI chỉ cập nhật editor khi hoàn tất")}
+                </Tag>
+                <Switch
+                  size="small"
+                  checked={allowManualEditWhileRunning}
+                  onChange={setAllowManualEditWhileRunning}
+                  checkedChildren={uiText("Sửa tay", "Manual", "手动")}
+                  unCheckedChildren={uiText("Khóa", "Locked", "锁定")}
+                />
+              </Space>
+            </Space>
+          </Card>
+        </div>
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: isDesktopLayout ? "minmax(560px, 1.6fr) minmax(320px, 1fr)" : "1fr",
+            gap: 12,
+            alignItems: "start",
+          }}
+        >
+        <Space direction="vertical" size={12} style={{ width: "100%" }}>
+        <Card
+          size="small"
+          style={sectionCardStyle}
+          title={<span style={sectionTitleStyle}>{t("system.menu.aiDesigner.section.config") || "1) Cấu hình yêu cầu"}</span>}
+          extra={(
+            <Button type="text" size="small" onClick={() => togglePanel("config")}>
+              {panelState.config ? uiText("Thu gọn", "Collapse", "收起") : uiText("Mở rộng", "Expand", "展开")}
+            </Button>
+          )}
+        >
+        {panelState.config && (
+        <>
         {/* ── Scenario Selector ─────────────────────────────────────────── */}
         <div style={{ marginBottom: 16 }}>
-          <div style={{ fontWeight: 600, marginBottom: 8, fontSize: 14 }}>{t("system.menu.aiDesigner.operationScenario.label") || "Chọn kịch bản thao tác:"}</div>
+          <Space wrap align="center" style={{ marginBottom: 8 }}>
+            <span style={{ fontWeight: 600, fontSize: 14 }}>{t("system.menu.aiDesigner.operationScenario.label") || "Chọn kịch bản thao tác:"}</span>
+            <Tag color="blue">{operationScenario === "new_build" ? uiText("Tạo mới", "New Build", "新建") : uiText("Cập nhật", "Incremental", "增量")}</Tag>
+          </Space>
           <Radio.Group
             value={operationScenario}
             onChange={(e) => {
@@ -4295,19 +4721,20 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
               setLiveEditLines([]);
               setMergeStats(null);
             }}
+            optionType="button"
+            buttonStyle="solid"
             style={{ width: "100%" }}
           >
-            <Space direction="vertical" style={{ width: "100%" }}>
-              <Radio value="new_build" style={{ padding: "8px 12px", borderRadius: 6, border: operationScenario === "new_build" ? "1px solid var(--ant-color-primary)" : "1px solid var(--ant-color-border)", width: "100%", background: operationScenario === "new_build" ? "var(--ant-color-primary-bg)" : undefined }}>
-                <span style={{ fontWeight: 600 }}>{t("system.menu.aiDesigner.operationScenario.newBuildTitle") || "Kịch bản 1: Tạo mới hoàn toàn"}</span>
-                <span style={{ fontSize: 12, color: "var(--ant-color-text-secondary)", marginLeft: 8 }}>{t("system.menu.aiDesigner.operationScenario.newBuildDesc") || "AI tự phân tích nghiệp vụ từ mô tả và thiết kế toàn bộ cây menu"}</span>
-              </Radio>
-              <Radio value="incremental_update" style={{ padding: "8px 12px", borderRadius: 6, border: operationScenario === "incremental_update" ? "1px solid var(--ant-color-primary)" : "1px solid var(--ant-color-border)", width: "100%", background: operationScenario === "incremental_update" ? "var(--ant-color-primary-bg)" : undefined }}>
-                <span style={{ fontWeight: 600 }}>{t("system.menu.aiDesigner.operationScenario.incrementalTitle") || "Kịch bản 2: Chỉnh sửa menu hiện có"}</span>
-                <span style={{ fontSize: 12, color: "var(--ant-color-text-secondary)", marginLeft: 8 }}>{t("system.menu.aiDesigner.operationScenario.incrementalDesc") || "Cho phép chỉnh sửa bất kỳ đâu trong menu/field/trigger, AI trả về TOÀN BỘ cây menu"}</span>
-              </Radio>
+            <Space wrap style={{ width: "100%" }}>
+              <Radio.Button value="new_build">{uiText("1) Tạo mới", "1) New Build", "1) 新建")}</Radio.Button>
+              <Radio.Button value="incremental_update">{uiText("2) Chỉnh sửa", "2) Update", "2) 更新")}</Radio.Button>
             </Space>
           </Radio.Group>
+          <div style={{ marginTop: 8, fontSize: 12, color: "var(--ant-color-text-secondary)" }}>
+            {operationScenario === "new_build"
+              ? (t("system.menu.aiDesigner.operationScenario.newBuildDesc") || "AI tự phân tích nghiệp vụ từ mô tả và thiết kế toàn bộ cây menu")
+              : (t("system.menu.aiDesigner.operationScenario.incrementalDesc") || "Thêm/sửa/xóa module và AI trả về toàn bộ cây menu đã cập nhật")}
+          </div>
         </div>
 
         <Divider />
@@ -4321,10 +4748,10 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
               message={t("system.menu.aiDesigner.incremental.alertTitle") || "Kịch bản 2: Chỉnh sửa menu hiện có — AI sẽ trả về TOÀN BỘ cây menu"}
               description={
                 <div>
-                  <div>AI nhận toàn bộ menu hiện tại và cho phép chỉnh bất kỳ đâu: menu, table fields, trigger, validation, query.</div>
-                  <div style={{ marginTop: 4 }}><strong>Menu hiện tại:</strong> {Array.isArray(currentMenus) ? currentMenus.length : 0} node cấp 1</div>
+                  <div>{uiText("AI sẽ áp thay đổi vào menu hiện tại và trả lại toàn bộ cây sau khi cập nhật.", "AI applies your changes to current menu and returns the full updated tree.", "AI 会基于当前菜单应用变更并返回完整更新后的树。")}</div>
+                  <div style={{ marginTop: 4 }}><strong>{uiText("Menu hiện tại", "Current menu", "当前菜单")}: </strong>{Array.isArray(currentMenus) ? currentMenus.length : 0} {uiText("node cấp 1", "root nodes", "一级节点")}</div>
                   {(!currentMenus || currentMenus.length === 0) && (
-                    <div style={{ color: "var(--ant-color-error)", marginTop: 4 }}>⚠ Không có menu hiện tại. Hãy dùng Kịch bản 1 để tạo mới.</div>
+                    <div style={{ color: "var(--ant-color-error)", marginTop: 4 }}>{uiText("Không có menu hiện tại. Hãy dùng kịch bản 1 để tạo mới.", "No current menu found. Use scenario 1 to build first.", "当前没有菜单，请先使用场景 1 新建。")}</div>
                   )}
                 </div>
               }
@@ -4362,86 +4789,6 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                 />
               </div>
             )}
-
-            <Collapse
-              style={{ marginBottom: 12 }}
-              items={[{
-                key: "sample_menu",
-                label: sampleMenuParsed
-                  ? (sampleUseAsBase
-                    ? (t("system.menu.aiDesigner.sampleMenu.sectionLabelLoadedBase", {
-                      count: sampleMenuParsed.length,
-                      app: sampleAppLabel || sampleAppId || (t("system.menu.aiDesigner.sampleMenu.appSelectedFallback") || "app đã chọn"),
-                    }) || `Menu mẫu ✓ [Dùng làm gốc] — ${sampleMenuParsed.length} menu từ ${sampleAppLabel || sampleAppId || "app đã chọn"}`)
-                    : (t("system.menu.aiDesigner.sampleMenu.sectionLabelLoadedReference", {
-                      count: sampleMenuParsed.length,
-                      app: sampleAppLabel || sampleAppId || (t("system.menu.aiDesigner.sampleMenu.appSelectedFallback") || "app đã chọn"),
-                    }) || `Menu mẫu ✓ [Tham khảo] — ${sampleMenuParsed.length} menu từ ${sampleAppLabel || sampleAppId || "app đã chọn"}`))
-                  : (t("system.menu.aiDesigner.sampleMenu.sectionLabelEmpty") || "Menu mẫu tham khảo (tùy chọn) — chọn ứng dụng để AI học theo hoặc chỉnh sửa"),
-                children: (
-                  <Space direction="vertical" style={{ width: "100%" }}>
-                    <Alert
-                      type="info"
-                      showIcon
-                      message={t("system.menu.aiDesigner.sampleMenu.pickAppTitle") || "Chọn ứng dụng để tự động lấy menu mẫu"}
-                      description={t("system.menu.aiDesigner.sampleMenu.pickAppDesc") || "Chọn ứng dụng để tải menu mẫu. Chế độ Tham khảo: AI học theo cấu trúc để tự thiết kế mới. Chế độ Dùng làm gốc: AI lấy đúng menu này và adapt theo yêu cầu khách hàng mới."}
-                    />
-                    <Space>
-                      <Select
-                        showSearch
-                        style={{ minWidth: 300 }}
-                        value={sampleAppId}
-                        placeholder={t("system.menu.pleaseSelectApp") || "Vui lòng chọn ứng dụng"}
-                        options={sampleAppOptions}
-                        optionFilterProp="label"
-                        onChange={handleSampleAppChange}
-                        loading={sampleMenuLoading}
-                        disabled={!appId}
-                      />
-                      {sampleAppId && (
-                        <Button onClick={() => sampleAppId && loadSampleMenuFromApp(sampleAppId)} loading={sampleMenuLoading}>
-                          {t("system.menu.aiDesigner.sampleMenu.reloadButton") || "Tải lại menu mẫu"}
-                        </Button>
-                      )}
-                      {(sampleMenuParsed || sampleAppId) && (
-                        <Button onClick={handleClearSampleMenu} danger>
-                          {t("system.menu.aiDesigner.sampleMenu.clearButton") || "Bỏ mẫu"}
-                        </Button>
-                      )}
-                    </Space>
-                    {sampleMenuParsed && (
-                      <>
-                        <Alert
-                          type="success"
-                          showIcon
-                          message={t("system.menu.aiDesigner.sampleMenu.loadedMessage", { count: sampleMenuParsed.length, app: sampleAppLabel || sampleAppId || "" }) || `Đã nạp ${sampleMenuParsed.length} menu gốc từ ${sampleAppLabel || sampleAppId}`}
-                        />
-                        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", borderRadius: 6, border: `1px solid ${sampleUseAsBase ? "var(--ant-color-primary-border)" : "var(--ant-color-border)"}`, background: sampleUseAsBase ? "var(--ant-color-primary-bg)" : "var(--ant-color-fill-quaternary)" }}>
-                          <Switch
-                            checked={sampleUseAsBase}
-                            onChange={setSampleUseAsBase}
-                            checkedChildren={t("system.menu.aiDesigner.sampleMenu.modeBaseOn") || "Dùng làm gốc"}
-                            unCheckedChildren={t("system.menu.aiDesigner.sampleMenu.modeReferenceOn") || "Chỉ tham khảo"}
-                          />
-                          <span style={{ fontSize: 13 }}>
-                            {sampleUseAsBase
-                              ? <><strong>{t("system.menu.aiDesigner.sampleMenu.modeBaseTitle") || "Chỉnh sửa từ menu mẫu"}</strong> — {t("system.menu.aiDesigner.sampleMenu.modeBaseDesc") || "AI lấy menu này làm gốc, adapt theo yêu cầu khách hàng"}<Tag color="blue" style={{ marginLeft: 6 }}>{t("system.menu.aiDesigner.sampleMenu.baseTag") || "Gốc"}</Tag></>
-                              : <><strong>{t("system.menu.aiDesigner.sampleMenu.modeReferenceTitle") || "Chỉ tham khảo cấu trúc"}</strong> — {t("system.menu.aiDesigner.sampleMenu.modeReferenceDesc") || "AI tự thiết kế mới, dùng menu mẫu như hướng dẫn"}</>}
-                          </span>
-                        </div>
-                      </>
-                    )}
-                    {sampleMenuError && (
-                      <Alert
-                        type="error"
-                        showIcon
-                        message={sampleMenuError}
-                      />
-                    )}
-                  </Space>
-                ),
-              }]}
-            />
 
             <TextArea
               value={requestText}
@@ -4485,65 +4832,25 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
             />
           )}
         </Space>
+        </>
+        )}
+        </Card>
 
-        <Divider />
-
-        <Space style={{ marginBottom: 12 }} wrap>
-          <Switch
-            checked={aiLiveEditEnabled}
-            onChange={setAiLiveEditEnabled}
-            checkedChildren={t("system.menu.aiDesigner.editor.livePatchOn") || "Live patch bật"}
-            unCheckedChildren={t("system.menu.aiDesigner.editor.livePatchOff") || "Live patch tắt"}
-          />
-          <Tag color={aiLiveEditEnabled ? "blue" : "default"}>
-            {aiLiveEditEnabled
-              ? (t("system.menu.aiDesigner.editor.livePatchHintOn") || "AI có thể sửa trực tiếp từng dòng / nhiều dòng trong editor khi đang chạy")
-              : (t("system.menu.aiDesigner.editor.livePatchHintOff") || "AI chỉ cập nhật editor khi hoàn tất")}
-          </Tag>
-          <Switch
-            checked={allowManualEditWhileRunning}
-            onChange={setAllowManualEditWhileRunning}
-            checkedChildren={t("system.menu.aiDesigner.editor.manualWhileRunOn") || "Sửa tay khi chạy: bật"}
-            unCheckedChildren={t("system.menu.aiDesigner.editor.manualWhileRunOff") || "Sửa tay khi chạy: tắt"}
-          />
         </Space>
 
-        <Space wrap style={{ marginBottom: 16 }}>
-          <Button type="primary" onClick={handleGenerate} loading={loading} disabled={!appId} size="large">
-            {loading
-              ? (t("system.menu.aiDesigner.processing") as string)
-              : operationScenario === "new_build"
-                ? (t("system.menu.aiDesigner.generateAll") || "Tạo bằng AI toàn bộ menu")
-                : operationScenario === "incremental_update"
-                  ? (t("system.menu.aiDesigner.incremental.generateButton") || "Chỉnh sửa menu bằng AI")
-                  : (t("system.menu.aiDesigner.incremental.generateButton") || "Chỉnh sửa menu bằng AI")}
-          </Button>
-
-          {loading && activeAiJobIdRef.current && (
-            <Button
-              danger
-              size="large"
-              onClick={() => cancelActiveAiRun(t("system.menu.aiDesigner.editor.stopByUser") || "Nguoi dung da dung AI job")}
-            >
-              {t("system.menu.aiDesigner.editor.stopNow") || "Dung AI ngay"}
+        <div style={{ width: "100%" }}>
+        <Card
+          size="small"
+          style={sectionCardStyle}
+          title={<span style={sectionTitleStyle}>{t("system.menu.aiDesigner.section.monitor") || "2) Theo dõi realtime"}</span>}
+          extra={(
+            <Button type="text" size="small" onClick={() => togglePanel("monitor")}>
+              {panelState.monitor ? uiText("Thu gọn", "Collapse", "收起") : uiText("Mở rộng", "Expand", "展开")}
             </Button>
           )}
-
-          {applyMenuCount > 0 && (
-            <>
-              <Button
-                type="primary"
-                onClick={handleApply}
-                size="large"
-                disabled={menuValidationErrors.length > 0 || applyGuardIssues.length > 0}
-                style={{ background: "#52c41a", borderColor: "#52c41a" }}
-              >
-                {`${t("system.menu.aiDesigner.applySystem") || "Ap dung vao He thong"} (${applyMenuCount} menu JSON)`}
-              </Button>
-            </>
-          )}
-        </Space>
-
+        >
+        {panelState.monitor && (
+        <>
         {aiProgress && (
           <Alert
             type={aiProgress.status === "failed" ? "error" : aiProgress.status === "completed" ? "success" : "info"}
@@ -4554,12 +4861,96 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
               || (t("system.menu.aiDesigner.progressStatus.running") as string)
             }
             description={
-              <Progress
-                percent={Math.max(0, Math.min(100, Number(aiProgress.percent ?? 0)))}
-                status={aiProgress.status === "failed" ? "exception" : aiProgress.status === "completed" ? "success" : "active"}
-              />
+              <>
+                <Progress
+                  percent={Math.max(0, Math.min(100, Number(aiProgress.percent ?? 0)))}
+                  status={aiProgress.status === "failed" ? "exception" : aiProgress.status === "completed" ? "success" : "active"}
+                />
+                <div style={{ marginTop: 8, fontSize: 12, color: "var(--ant-color-text-secondary)" }}>
+                  {`${uiText("Giai đoạn", "Stage", "阶段")}: ${String(aiProgress.stage || "running")} • ${uiText("Bước", "Step", "步骤")}: ${Math.max(0, Number(aiProgress.current ?? 0))}/${Math.max(1, Number(aiProgress.total ?? 1))}${aiRuntimeModel ? ` • ${uiText("Mô hình", "Model", "模型")}: ${aiRuntimeModel}` : ""}`}
+                </div>
+                {aiProgress.message && (
+                  <div style={{ marginTop: 6, fontSize: 13, color: "var(--ant-color-text)" }}>
+                    {aiProgress.message}
+                  </div>
+                )}
+              </>
             }
           />
+        )}
+
+        {aiRealtimeLogs.length > 0 && (
+          <Card
+            size="small"
+            style={{ marginBottom: 16 }}
+            title={t("system.menu.aiDesigner.realtimeLogsTitle") || "AI Realtime Monitor"}
+            extra={(
+              <Space>
+                <Tag color={socketConnected ? "success" : "default"}>
+                  {socketConnected ? uiText("Socket trực tuyến", "Socket online", "Socket 在线") : uiText("Socket ngoại tuyến", "Socket offline", "Socket 离线")}
+                </Tag>
+                <Button size="small" onClick={() => setAiRealtimeLogs([])}>
+                  {t("system.menu.aiDesigner.realtimeLogsClear") || "Xóa log"}
+                </Button>
+              </Space>
+            )}
+          >
+            <Space wrap style={{ marginBottom: 10 }}>
+              <Tag color="processing">
+                {`${uiText("Bước", "Step", "步骤")} ${Math.max(0, Number(aiProgress?.current ?? 0))}/${Math.max(1, Number(aiProgress?.total ?? 1))}`}
+              </Tag>
+              <Tag color="blue">{`${uiText("Giai đoạn", "Stage", "阶段")}: ${String(aiProgress?.stage || "running")}`}</Tag>
+              <Tag color="cyan">{`${uiText("Mô hình", "Model", "模型")}: ${aiRuntimeModel || uiText("đang xác định", "resolving", "识别中")}`}</Tag>
+              <Tag color="gold">{`${uiText("Cập nhật", "Progress", "进度")}: ${Math.max(0, Math.min(100, Number(aiProgress?.percent ?? 0)))}%`}</Tag>
+            </Space>
+
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 10 }}
+              message={String(aiProgress?.message || uiText("AI đang xử lý...", "AI is processing...", "AI 正在处理中..."))}
+              description={
+                aiRealtimeLogs.length > 0
+                  ? `${uiText("Mới nhất", "Latest", "最新")} ${formatAiRealtimeClock(aiRealtimeLogs[aiRealtimeLogs.length - 1].ts)}: ${aiRealtimeLogs[aiRealtimeLogs.length - 1].message}${aiRealtimeLogs[aiRealtimeLogs.length - 1].detail ? ` • ${aiRealtimeLogs[aiRealtimeLogs.length - 1].detail}` : ""}`
+                  : uiText("Đang chờ cập nhật từ backend", "Waiting for backend updates", "等待后端更新")
+              }
+            />
+
+            <div
+              style={{
+                maxHeight: 190,
+                overflowY: "auto",
+                border: "1px solid var(--ant-color-border)",
+                borderRadius: 8,
+                padding: 8,
+                background: "var(--ant-color-fill-quaternary)",
+              }}
+            >
+              {aiRealtimeLogs.slice(-8).reverse().map((entry) => {
+                const tagColor = entry.level === "error"
+                  ? "error"
+                  : entry.level === "warning"
+                    ? "warning"
+                    : entry.level === "success"
+                      ? "success"
+                      : "processing";
+                return (
+                  <div key={entry.id} style={{ marginBottom: 6, paddingBottom: 6, borderBottom: "1px dashed var(--ant-color-border-secondary)" }}>
+                    <Space size={6} wrap>
+                      <Tag color={tagColor}>{entry.level.toUpperCase()}</Tag>
+                      <span style={{ color: "var(--ant-color-text-description)", fontSize: 12 }}>{formatAiRealtimeClock(entry.ts)}</span>
+                      <span style={{ fontWeight: 500, fontSize: 13 }}>{entry.message}</span>
+                    </Space>
+                    {entry.detail && (
+                      <div style={{ marginTop: 3, fontSize: 12, color: "var(--ant-color-text-secondary)", wordBreak: "break-word" }}>
+                        {entry.detail}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </Card>
         )}
 
         {aiStopReason && (
@@ -4581,11 +4972,24 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
             description={t("system.menu.aiDesigner.editor.liveUpdateDescription") as string}
           />
         )}
+        </>
+        )}
+        </Card>
+        </div>
+        </div>
 
         {(aiResultText || aiProgress) && (
-          <>
-            <Divider orientation="left">{t("system.menu.aiDesigner.resultTitle") || "Ket qua tu AI"}</Divider>
-
+          <Card
+            size="small"
+            style={sectionCardStyle}
+            title={<span style={sectionTitleStyle}>{t("system.menu.aiDesigner.resultTitle") || "3) Ket qua AI + JSON Menu"}</span>}
+            extra={(
+              <Button type="text" size="small" onClick={() => togglePanel("result")}>
+                {panelState.result ? uiText("Thu gọn", "Collapse", "收起") : uiText("Mở rộng", "Expand", "展开")}
+              </Button>
+            )}
+          >
+            {panelState.result && (
             <Space direction="vertical" style={{ width: "100%" }}>
               {aiResultText && aiMenus && aiMenus.length > 0 && (
                 <Alert
@@ -4711,143 +5115,164 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                   message={t("system.menu.aiDesigner.mergePreview.title") || "Điều hướng thay đổi"}
                   description={
                     <div>
-                      <div>
-                        {(t("system.menu.aiDesigner.mergePreview.summary", {
-                          added: mergeStats.added,
-                          edited: mergeStats.edited,
-                          deleted: mergeStats.deleted,
-                        }) as string)}
-                        {mergeLoading ? ` • ${t("system.menu.aiDesigner.mergePreview.computing") || "đang tính merge"}` : ""}
-                      </div>
                       {patchOps.length > 0 && (
                         <div
                           style={{
                             marginTop: 8,
                             display: "flex",
-                            alignItems: "center",
-                            justifyContent: "space-between",
-                            flexWrap: "wrap",
-                            gap: 8,
-                            padding: "8px 10px",
-                            border: "1px solid var(--ant-color-border)",
-                            borderRadius: 10,
+                            flexDirection: "column",
+                            gap: 10,
                             background: "var(--ant-color-bg-container)",
+                            borderRadius: 10,
+                            padding: "10px 12px",
+                            border: "1px solid var(--ant-color-border)",
+                            boxShadow: "var(--ant-box-shadow-secondary)",
                           }}
                         >
-                          <strong>
-                            {t("system.menu.aiDesigner.mergePreview.summary", {
-                              added: mergeStats.added,
-                              edited: mergeStats.edited,
-                              deleted: mergeStats.deleted,
-                            }) as string}
-                          </strong>
-                          <span style={{ fontSize: 12, color: "var(--ant-color-text-secondary)" }}>
-                            {t("system.menu.aiDesigner.mergePreview.patchSummary", {
-                              total: patchOps.length,
-                              kept: keptPatchCount,
-                              undone: undonePatchCount,
-                              current: visiblePatchOps.length > 0 ? activePatchCursor + 1 : 0,
-                              count: visiblePatchOps.length,
-                            }) as string}
-                          </span>
-                        </div>
-                      )}
-                      {patchOps.length > 0 && (
-                        <div style={{ marginTop: 8 }}>
-                          <div
-                            style={{
-                              display: "inline-flex",
-                              alignItems: "center",
-                              gap: 8,
-                              background: "var(--ant-color-bg-elevated)",
-                              color: "var(--ant-color-text)",
-                              borderRadius: 10,
-                              padding: "6px 10px",
-                              border: "1px solid var(--ant-color-border)",
-                              boxShadow: "var(--ant-box-shadow-secondary)",
-                            }}
-                          >
-                            <Button
-                              size="small"
-                              type="primary"
-                              onClick={() => applyCurrentPatchDecision("keep")}
-                              disabled={!activePatchOp || activePatchStatus !== "pending"}
-                            >
-                              {t("system.menu.aiDesigner.mergePreview.keep") as string}
-                            </Button>
-                            <Button
-                              size="small"
-                              onClick={() => applyCurrentPatchDecision("undo")}
-                              danger
-                              disabled={!activePatchOp || activePatchStatus !== "pending"}
-                            >
-                              {t("system.menu.aiDesigner.mergePreview.undo") as string}
-                            </Button>
-                            <span style={{ opacity: 0.75, color: "var(--ant-color-text-secondary)" }}>|</span>
-                            <span style={{ fontSize: 12, minWidth: 58, textAlign: "center" }}>
-                              {t("system.menu.aiDesigner.mergePreview.indexOf", {
-                                current: visiblePatchOps.length > 0 ? activePatchCursor + 1 : 0,
-                                count: visiblePatchOps.length,
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                            <Space size={6} wrap>
+                              <Tag color="success">+ {mergeStats.added}</Tag>
+                              <Tag color="warning">~ {mergeStats.edited}</Tag>
+                              <Tag color="error">- {mergeStats.deleted}</Tag>
+                              <Tag color="processing">{patchOps.length}</Tag>
+                              <Tag color="cyan">{`${navigablePatchOps.length}/${patchOps.length}`}</Tag>
+                              <Tag color="default">{`${keptPatchCount}/${undonePatchCount}`}</Tag>
+                              {mergeLoading && (
+                                <Tag color="blue">{t("system.menu.aiDesigner.mergePreview.computing") || "đang tính merge"}</Tag>
+                              )}
+                            </Space>
+                            <span style={{ fontSize: 12, color: "var(--ant-color-text-secondary)" }}>
+                              {t("system.menu.aiDesigner.mergePreview.patchSummary", {
+                                total: patchOps.length,
+                                kept: keptPatchCount,
+                                undone: undonePatchCount,
+                                current: navigablePatchOps.length > 0 ? Math.max(1, activeNavigableCursor + 1) : 0,
+                                count: navigablePatchOps.length,
                               }) as string}
                             </span>
-                            <Button size="small" onClick={() => focusPatchByIndex(activePatchCursor - 1)} disabled={visiblePatchOps.length === 0}>↑</Button>
-                            <Button size="small" onClick={() => focusPatchByIndex(activePatchCursor + 1)} disabled={visiblePatchOps.length === 0}>↓</Button>
+                          </div>
+
+                          {activePatchOp && (
+                            <div
+                              style={{
+                                display: "grid",
+                                gridTemplateColumns: "minmax(0, 1fr) auto",
+                                gap: 10,
+                                alignItems: "center",
+                                padding: "10px 12px",
+                                borderRadius: 10,
+                                background: "var(--ant-color-fill-quaternary)",
+                                border: "1px solid var(--ant-color-border-secondary)",
+                              }}
+                            >
+                              <div style={{ minWidth: 0 }}>
+                                <Space size={6} wrap style={{ marginBottom: 4 }}>
+                                  <Tag color={activePatchOp.action === "add" ? "success" : activePatchOp.action === "delete" ? "error" : "warning"}>
+                                    {activePatchOp.action === "add"
+                                      ? t("system.menu.aiDesigner.mergePreview.filters.action.add")
+                                      : activePatchOp.action === "delete"
+                                        ? t("system.menu.aiDesigner.mergePreview.filters.action.delete")
+                                        : t("system.menu.aiDesigner.mergePreview.filters.action.edit")}
+                                  </Tag>
+                                  <Tag color={activePatchStatus === "kept" ? "blue" : activePatchStatus === "undone" ? "default" : "processing"}>
+                                    {activePatchStatus === "kept"
+                                      ? t("system.menu.aiDesigner.mergePreview.keptPill")
+                                      : activePatchStatus === "undone"
+                                        ? t("system.menu.aiDesigner.mergePreview.undonePill")
+                                        : t("system.menu.aiDesigner.mergePreview.filters.review.pending")}
+                                  </Tag>
+                                </Space>
+                                <div style={{ fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                                  {activePatchOp.nodeName || activePatchOp.nodeId}
+                                </div>
+                                <div style={{ fontSize: 12, color: "var(--ant-color-text-secondary)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                                  {activePatchOp.nodePath || activePatchOp.nodeId}
+                                </div>
+                                {Array.isArray(activePatchOp.changedFields) && activePatchOp.changedFields.length > 0 && (
+                                  <div style={{ marginTop: 4, fontSize: 12, color: "var(--ant-color-text-secondary)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                                    {activePatchOp.changedFields.slice(0, 3).map((field) => field.fieldName).join(", ")}
+                                    {activePatchOp.changedFields.length > 3 ? ` +${activePatchOp.changedFields.length - 3}` : ""}
+                                  </div>
+                                )}
+                              </div>
+                              <Space size={6} wrap align="center">
+                                <Button size="small" onClick={() => focusPatchByStep(-1)} disabled={navigablePatchOps.length === 0}>↑</Button>
+                                <Button size="small" onClick={() => focusPatchByStep(1)} disabled={navigablePatchOps.length === 0}>↓</Button>
+                                <Button
+                                  size="small"
+                                  type="primary"
+                                  onClick={() => applyCurrentPatchDecision("keep")}
+                                  disabled={activePatchStatus !== "pending"}
+                                >
+                                  {t("system.menu.aiDesigner.mergePreview.keep") as string}
+                                </Button>
+                                <Button
+                                  size="small"
+                                  onClick={() => applyCurrentPatchDecision("undo")}
+                                  danger
+                                  disabled={activePatchStatus !== "pending"}
+                                >
+                                  {t("system.menu.aiDesigner.mergePreview.undo") as string}
+                                </Button>
+                              </Space>
+                            </div>
+                          )}
+
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                            <Space size={8} wrap>
+                              <Select
+                                size="small"
+                                value={patchActionFilter}
+                                onChange={(val) => setPatchActionFilter(val)}
+                                options={[
+                                  { value: "all", label: t("system.menu.aiDesigner.mergePreview.filters.action.all") as string },
+                                  { value: "add", label: t("system.menu.aiDesigner.mergePreview.filters.action.add") as string },
+                                  { value: "edit", label: t("system.menu.aiDesigner.mergePreview.filters.action.edit") as string },
+                                  { value: "delete", label: t("system.menu.aiDesigner.mergePreview.filters.action.delete") as string },
+                                ]}
+                                style={{ width: 110 }}
+                              />
+                              <Select
+                                size="small"
+                                value={patchReviewFilter}
+                                onChange={(val) => setPatchReviewFilter(val)}
+                                options={[
+                                  { value: "pending", label: t("system.menu.aiDesigner.mergePreview.filters.review.pending") as string },
+                                  { value: "kept", label: t("system.menu.aiDesigner.mergePreview.filters.review.kept") as string },
+                                  { value: "undone", label: t("system.menu.aiDesigner.mergePreview.filters.review.undone") as string },
+                                  { value: "all", label: t("system.menu.aiDesigner.mergePreview.filters.review.all") as string },
+                                ]}
+                                style={{ width: 150 }}
+                              />
+                              <Input
+                                size="small"
+                                value={patchKeyword}
+                                onChange={(e) => setPatchKeyword(e.target.value)}
+                                placeholder={t("system.menu.aiDesigner.mergePreview.searchPlaceholder") as string}
+                                style={{ width: 220 }}
+                                allowClear
+                              />
+                            </Space>
+                            <Space size={6} wrap>
+                              <Button size="small" type="primary" onClick={() => applyPatchReviewBulk("keep", "visible")}>{t("system.menu.aiDesigner.mergePreview.applyVisible") as string}</Button>
+                              <Button size="small" danger onClick={() => applyPatchReviewBulk("undo", "visible")}>{t("system.menu.aiDesigner.mergePreview.restoreVisible") as string}</Button>
+                              <Button size="small" onClick={() => applyPatchReviewBulk("keep", "all")}>{t("system.menu.aiDesigner.mergePreview.applyAll") as string}</Button>
+                              <Button size="small" danger onClick={() => applyPatchReviewBulk("undo", "all")}>{t("system.menu.aiDesigner.mergePreview.restoreAll") as string}</Button>
+                            </Space>
+                          </div>
+
+                          <div style={{ fontSize: 12, color: "var(--ant-color-text-secondary)" }}>
+                            {t("system.menu.aiDesigner.mergePreview.inlineInEditor") as string}
                           </div>
                         </div>
                       )}
-                      {patchOps.length > 0 && (
-                        <div style={{ marginTop: 6, color: "var(--ant-color-text-secondary)" }}>
-                          {t("system.menu.aiDesigner.mergePreview.reviewHint") as string}
-                        </div>
-                      )}
-                      {patchOps.length > 0 && (
-                        <div style={{ marginTop: 10 }}>
-                          <Space size={8} wrap>
-                            <Select
-                              size="small"
-                              value={patchActionFilter}
-                              onChange={(val) => setPatchActionFilter(val)}
-                              options={[
-                                { value: "all", label: t("system.menu.aiDesigner.mergePreview.filters.action.all") as string },
-                                { value: "add", label: t("system.menu.aiDesigner.mergePreview.filters.action.add") as string },
-                                { value: "edit", label: t("system.menu.aiDesigner.mergePreview.filters.action.edit") as string },
-                                { value: "delete", label: t("system.menu.aiDesigner.mergePreview.filters.action.delete") as string },
-                              ]}
-                              style={{ width: 110 }}
-                            />
-                            <Select
-                              size="small"
-                              value={patchReviewFilter}
-                              onChange={(val) => setPatchReviewFilter(val)}
-                              options={[
-                                { value: "pending", label: t("system.menu.aiDesigner.mergePreview.filters.review.pending") as string },
-                                { value: "kept", label: t("system.menu.aiDesigner.mergePreview.filters.review.kept") as string },
-                                { value: "undone", label: t("system.menu.aiDesigner.mergePreview.filters.review.undone") as string },
-                                { value: "all", label: t("system.menu.aiDesigner.mergePreview.filters.review.all") as string },
-                              ]}
-                              style={{ width: 150 }}
-                            />
-                            <Input
-                              size="small"
-                              value={patchKeyword}
-                              onChange={(e) => setPatchKeyword(e.target.value)}
-                              placeholder={t("system.menu.aiDesigner.mergePreview.searchPlaceholder") as string}
-                              style={{ width: 240 }}
-                              allowClear
-                            />
-                            <Tag color="processing">{t("system.menu.aiDesigner.mergePreview.showing", { visible: visiblePatchOps.length, total: patchOps.length }) as string}</Tag>
-                            <Tag color="default">{t("system.menu.aiDesigner.mergePreview.inlineInEditor") as string}</Tag>
-                            {visiblePatchOps.length > 0 && (
-                              <>
-                                <Button size="small" onClick={() => focusPatchByIndex(activePatchCursor - 1)} title={t("system.menu.aiDesigner.mergePreview.prevPatch") as string}>↑</Button>
-                                <Button size="small" onClick={() => focusPatchByIndex(activePatchCursor + 1)} title={t("system.menu.aiDesigner.mergePreview.nextPatch") as string}>↓</Button>
-                                <Button size="small" type="primary" onClick={() => applyPatchReviewBulk("keep", "all")}>{t("system.menu.aiDesigner.mergePreview.applyAll") as string}</Button>
-                                <Button size="small" danger onClick={() => applyPatchReviewBulk("undo", "all")}>{t("system.menu.aiDesigner.mergePreview.restoreAll") as string}</Button>
-                                <Button size="small" onClick={() => applyPatchReviewBulk("keep", "visible")}>{t("system.menu.aiDesigner.mergePreview.applyVisible") as string}</Button>
-                                <Button size="small" danger onClick={() => applyPatchReviewBulk("undo", "visible")}>{t("system.menu.aiDesigner.mergePreview.restoreVisible") as string}</Button>
-                              </>
-                            )}
-                          </Space>
+                      {patchOps.length === 0 && (
+                        <div style={{ marginTop: 8, color: "var(--ant-color-text-secondary)" }}>
+                          {t("system.menu.aiDesigner.mergePreview.summary", {
+                            added: mergeStats.added,
+                            edited: mergeStats.edited,
+                            deleted: mergeStats.deleted,
+                          }) as string}
                         </div>
                       )}
                     </div>
@@ -4895,8 +5320,10 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                 />
               )}
             </Space>
-          </>
+            )}
+          </Card>
         )}
+        </Space>
       </Card>
     </>
   );

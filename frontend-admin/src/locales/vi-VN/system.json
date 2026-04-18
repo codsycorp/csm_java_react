@@ -430,6 +430,13 @@
 			"existingTables": "Danh sách bảng hiện có (nếu có)",
 			"notes": "Ghi chú thêm",
 			"tip": "Mẹo",
+			"section": {
+				"quickActions": "Thanh thao tác nhanh",
+				"config": "1) Cấu hình yêu cầu",
+				"monitor": "2) Theo dõi realtime"
+			},
+			"realtimeLogsTitle": "Giám sát AI realtime",
+			"realtimeLogsClear": "Xóa log",
 			"context": {
 				"maxFiles": "Chỉ được đính kèm tối đa {{max}} file JSON.",
 				"jsonOnly": "Chỉ nhận file .json để đảm bảo AI đọc đúng cấu trúc.",
