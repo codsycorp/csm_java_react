@@ -1293,39 +1293,30 @@ ${resolvedContainerSelector} select {
       fetchFromDatabase: async function(callback?: (ok: boolean, data?: any[], error?: string) => void): Promise<void> {
         try {
           const currentUser = window.csmCurrentUser || {};
-          const hasRole = (role: any) => (currentUser.roles || []).some((r: any) => String(r || "").toLowerCase() === String(role).toLowerCase());
-          const isDevOrAdminAccount = Boolean(currentUser.dev) || hasRole("admin") || hasRole("dev");
-          const objName = isDevOrAdminAccount ? "csm_accounts" : "csm_group_members";
-          // Lấy danh sách các trường nhận diện giống update
-          const pkFields = [];
-          if (currentUser.userId) pkFields.push({ field: "id", value: currentUser.userId });
-          if (currentUser.email) pkFields.push({ field: "email", value: currentUser.email });
-          if (currentUser.username) pkFields.push({ field: "username", value: currentUser.username });
-          if (currentUser.phoneNumber) pkFields.push({ field: "phoneNumber", value: currentUser.phoneNumber });
-          if (pkFields.length === 0) throw new Error("Missing user identity");
-          const api = window.csmApi && window.csmApi.getTableData;
-          if (!api) throw new Error("API not available");
-          // where là OR các trường nhận diện
-          const where = pkFields.length === 1
-            ? { field: pkFields[0].field, type: "eq", value: pkFields[0].value }
-            : { operator: "OR", conditions: pkFields.map(f => ({ field: f.field, type: "eq", value: f.value })) };
-          const res = await api({
-            app_id: "csm",
-            obj_name: objName,
-            where,
-            take: 1,
-          });
-          const rows = (res && (res.rows || res.data)) || [];
-          const row = Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
-          // Ưu tiên user_address, fallback user_adress
-          let value = [];
-          if (row) {
-            value = parseUserAddressValue(row.user_address);
-            if (value.length === 0) value = parseUserAddressValue(row.user_adress);
+          const runtimeSnapshot = parseUserAddressValue(currentUser.user_address ?? currentUser.user_adress);
+          const lookup = await fetchAccountRow();
+
+          if (!lookup?.row) {
+            if (runtimeSnapshot.length > 0) {
+              if (typeof callback === "function") callback(true, runtimeSnapshot);
+              return;
+            }
+            if (typeof callback === "function") callback(false, [], "User not found");
+            return;
           }
-          // Đồng bộ lại vào runtime để get() trả về đúng
-          syncRuntimeUserAddress(value);
-          if (typeof callback === "function") callback(true, value);
+
+          const serverPrimary = parseUserAddressValue(lookup.row.user_address);
+          const serverLegacy = parseUserAddressValue(lookup.row.user_adress);
+          const serverValue = serverPrimary.length > 0 ? serverPrimary : serverLegacy;
+
+          if (serverValue.length === 0 && runtimeSnapshot.length > 0) {
+            // Keep runtime snapshot to avoid wiping just-updated data when backend is eventually consistent.
+            if (typeof callback === "function") callback(true, runtimeSnapshot);
+            return;
+          }
+
+          syncRuntimeUserAddress(serverValue);
+          if (typeof callback === "function") callback(true, serverValue);
         } catch (e) {
           if (typeof callback === "function") callback(false, [], (e as any)?.message || String(e));
         }
@@ -1338,20 +1329,31 @@ ${resolvedContainerSelector} select {
         // Cập nhật user_address qua API như profile, đồng bộ runtime nếu thành công
         try {
           const arr = Array.isArray(newUserAddress) ? newUserAddress : [];
-          const serialized = JSON.stringify(arr);
           const currentUser = window.csmCurrentUser || {};
-          const hasRole = (role: any) => (currentUser.roles || []).some((r: any) => String(r || "").toLowerCase() === String(role).toLowerCase());
-          const isDevOrAdminAccount = Boolean(currentUser.dev) || hasRole("admin") || hasRole("dev");
-          const objName = isDevOrAdminAccount ? "csm_accounts" : "csm_group_members";
-          const pkField = currentUser.userId
-            ? "id"
-            : (currentUser.email ? "email" : (currentUser.username ? "username" : "phoneNumber"));
-          const pkValue = currentUser.userId || currentUser.email || currentUser.username || currentUser.phoneNumber;
-          if (!pkField || !pkValue) throw new Error("Missing user identity");
+          const runtimeSnapshot = parseUserAddressValue(currentUser.user_address ?? currentUser.user_adress);
+          const allowEmptyOverwrite = Boolean((window as any).__csmAllowEmptyUserAddressSave);
+
+          if (!allowEmptyOverwrite && arr.length === 0 && runtimeSnapshot.length > 0) {
+            if (typeof callback === "function") callback(false, "Blocked destructive save: incoming user_address is empty while runtime still has data");
+            return;
+          }
+
+          const target = resolveProfileTarget(currentUser);
+          const lookup = await fetchAccountRow();
+          const tableName = lookup?.tableName || target.preferredTable;
+          const requestAppId = resolveTableAppId(tableName, effectiveAppId);
+          const pkField = lookup?.pkField || target.preferredPkField;
+          const pkValue = lookup?.pkValue ?? target.preferredPkValue;
+
+          if (!pkField || pkValue === undefined || pkValue === null || String(pkValue).trim() === "") {
+            throw new Error("Missing user identity");
+          }
+
+          const serialized = JSON.stringify(arr);
           const api = window.csmApi && window.csmApi.updateTableData;
           if (!api) throw new Error("API not available");
-          const updateData = {
-            id: currentUser.userId || pkValue,
+
+          const updateData: Record<string, any> = {
             email: currentUser.email,
             username: currentUser.username,
             phoneNumber: currentUser.phoneNumber,
@@ -1359,12 +1361,14 @@ ${resolvedContainerSelector} select {
             user_address: serialized,
             user_adress: serialized
           };
+          if (lookup?.row?.id) updateData.id = lookup.row.id;
+          if (currentUser.userId) updateData.id = currentUser.userId;
           if (currentUser.email) updateData.email = currentUser.email;
           if (currentUser.username) updateData.username = currentUser.username;
           if (currentUser.phoneNumber) updateData.phoneNumber = currentUser.phoneNumber;
           const res = await api({
-            app_id: "csm",
-            obj_name: objName,
+            app_id: requestAppId,
+            obj_name: tableName,
             command: "update",
             obj_update: updateData,
             pk_fields: [pkField],

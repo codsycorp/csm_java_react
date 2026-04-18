@@ -363,6 +363,75 @@ function ti(viText, enText, zhText) {
   return viText;
 }
 
+const CSM_THEME_MODE_STORAGE_KEY = 'csm_theme_mode';
+const CSM_MAIN_FEATURE_TAB_STORAGE_KEY = 'csm_main_feature_active_tab';
+
+function safeLocalStorageGet(key) {
+  try {
+    return localStorage.getItem(key);
+  } catch (e) {
+    return null;
+  }
+}
+
+function safeLocalStorageSet(key, value) {
+  if (typeof window !== 'undefined' && window.__csmDisableStorageWrites) {
+    return false;
+  }
+
+  try {
+    localStorage.setItem(key, value);
+    return true;
+  } catch (e) {
+    const msg = String(e?.message || e || '');
+    const quotaExceeded =
+      e?.name === 'QuotaExceededError' ||
+      e?.name === 'NS_ERROR_DOM_QUOTA_REACHED' ||
+      msg.toLowerCase().includes('exceeded the quota');
+
+    if (quotaExceeded && typeof window !== 'undefined') {
+      window.__csmDisableStorageWrites = true;
+      console.warn('⚠️ localStorage quota exceeded; disabling further storage writes for this session.');
+    }
+    return false;
+  }
+}
+
+function getPreferredThemeMode() {
+  const saved = safeLocalStorageGet(CSM_THEME_MODE_STORAGE_KEY);
+  if (saved === 'light' || saved === 'dark' || saved === 'system') return saved;
+  return 'system';
+}
+
+function resolveSystemTheme() {
+  try {
+    return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
+      ? 'dark'
+      : 'light';
+  } catch (e) {
+    return 'light';
+  }
+}
+
+function applyThemeMode(mode = 'system') {
+  const normalized = (mode === 'light' || mode === 'dark' || mode === 'system') ? mode : 'system';
+  const resolved = normalized === 'system' ? resolveSystemTheme() : normalized;
+
+  safeLocalStorageSet(CSM_THEME_MODE_STORAGE_KEY, normalized);
+
+  const html = document.documentElement;
+  if (!html) return;
+
+  html.setAttribute('data-theme-mode', normalized);
+  html.setAttribute('data-theme', resolved);
+  html.classList.toggle('dark', resolved === 'dark');
+  html.classList.toggle('light', resolved !== 'dark');
+
+  window.dispatchEvent(new CustomEvent('csm:theme-change', {
+    detail: { mode: normalized, theme: resolved }
+  }));
+}
+
 // Unified notification helpers used throughout this file.
 // Keep auto-post flow alive even when UI toast function is unavailable.
 function notifyUser(type, message, duration = 3) {
@@ -3019,130 +3088,119 @@ function normalizeDomain(host) {
   return parts.length >= 3 ? parts.slice(-2).join(".") : noWww;
 }
 
+function isDarkThemeActive() {
+  const htmlElement = document.documentElement;
+  if (!htmlElement) return false;
+
+  const explicitTheme = (htmlElement.getAttribute('data-theme') || '').toLowerCase();
+  if (explicitTheme === 'dark') return true;
+  if (explicitTheme === 'light') return false;
+
+  if (htmlElement.classList.contains('dark')) return true;
+  if (htmlElement.classList.contains('light')) return false;
+
+  try {
+    return window.matchMedia('(prefers-color-scheme: dark)').matches;
+  } catch (e) {
+    return false;
+  }
+}
+
 function getThemeTokens() {
+  const darkDefaults = {
+    bg: "#141414",
+    surface: "#1f1f1f",
+    border: "#434343",
+    text: "rgba(255, 255, 255, 0.85)",
+    textSecondary: "rgba(255, 255, 255, 0.45)",
+    muted: "rgba(255, 255, 255, 0.45)",
+    primary: "#1677ff",
+    inputBg: "#141414",
+    link: "#1677ff",
+    warning: "#2b2111",
+    warningBorder: "#594214",
+    warningText: "#ffc53d",
+    info: "#1668dc",
+    infoBg: "#111d2c",
+    infoText: "#3c9ae8",
+    successBg: "#162312",
+    successBorder: "#274916",
+    successText: "#73d13d"
+  };
+
+  const lightDefaults = {
+    bg: "#ffffff",
+    surface: "#ffffff",
+    border: "#d9d9d9",
+    text: "#000000",
+    textSecondary: "#666",
+    muted: "#666",
+    primary: "#1677ff",
+    inputBg: "#ffffff",
+    link: "#1677ff",
+    warning: "#fff3cd",
+    warningBorder: "#ffc107",
+    warningText: "#856404",
+    info: "#1890ff",
+    infoBg: "#e7f3ff",
+    infoText: "#0c5460",
+    successBg: "#d4edda",
+    successBorder: "#c3e6cb",
+    successText: "#155724"
+  };
+
   try {
     const root = getComputedStyle(document.documentElement);
-    
-    // Detect dark mode
     const htmlElement = document.documentElement;
-    const isDark = htmlElement.getAttribute('data-theme') === 'dark' 
-                || htmlElement.classList.contains('dark')
-                || window.matchMedia('(prefers-color-scheme: dark)').matches;
+    const explicitTheme = (htmlElement?.getAttribute('data-theme') || '').toLowerCase();
+
+    // Detect dark mode (explicit theme wins over system preference)
+    const isDark = isDarkThemeActive();
+
+    // If theme is explicitly set (light/dark), use stable defaults to avoid CSS-var mismatch.
+    if (explicitTheme === 'dark' || explicitTheme === 'light') {
+      return isDark ? darkDefaults : lightDefaults;
+    }
+
+    const base = isDark ? darkDefaults : lightDefaults;
     
     // Get values from CSS variables or use defaults based on theme
     const bg = root.getPropertyValue("--ant-color-bg-container").trim();
+    const surface = root.getPropertyValue("--ant-color-bg-elevated").trim();
     const border = root.getPropertyValue("--ant-color-border").trim();
     const text = root.getPropertyValue("--ant-color-text").trim();
     const textSecondary = root.getPropertyValue("--ant-color-text-secondary").trim();
     const primary = root.getPropertyValue("--ant-color-primary").trim();
-    
-    // If no CSS variables found, use defaults based on theme
+
+    // If CSS variables are not available, fall back to defaults.
     if (!bg && !text) {
-      if (isDark) {
-        return {
-          bg: "#141414",
-          border: "#434343",
-          text: "rgba(255, 255, 255, 0.85)",
-          textSecondary: "rgba(255, 255, 255, 0.45)",
-          primary: "#1677ff",
-          inputBg: "#141414",
-          link: "#1677ff",
-          warning: "#2b2111",
-          warningBorder: "#594214",
-          warningText: "#ffc53d",
-          info: "#1668dc",
-          infoBg: "#111d2c",
-          infoText: "#3c9ae8",
-          successBg: "#162312",
-          successBorder: "#274916",
-          successText: "#73d13d"
-        };
-      } else {
-        return {
-          bg: "#ffffff",
-          border: "#d9d9d9",
-          text: "#000000",
-          textSecondary: "#666",
-          primary: "#1677ff",
-          inputBg: "#ffffff",
-          link: "#1677ff",
-          warning: "#fff3cd",
-          warningBorder: "#ffc107",
-          warningText: "#856404",
-          info: "#1890ff",
-          infoBg: "#e7f3ff",
-          infoText: "#0c5460",
-          successBg: "#d4edda",
-          successBorder: "#c3e6cb",
-          successText: "#155724"
-        };
-      }
+      return base;
     }
-    
-    // CSS variables found, use them
+
+    // CSS variables found, blend with defaults.
     return {
-      bg: bg || (isDark ? "#141414" : "#ffffff"),
-      border: border || (isDark ? "#434343" : "#d9d9d9"),
-      text: text || (isDark ? "rgba(255, 255, 255, 0.85)" : "#000000"),
-      textSecondary: textSecondary || (isDark ? "rgba(255, 255, 255, 0.45)" : "#666"),
-      primary: primary || "#1677ff",
-      inputBg: root.getPropertyValue("--ant-color-bg-container").trim() || (isDark ? "#141414" : "#ffffff"),
-      link: root.getPropertyValue("--ant-color-link").trim() || "#1677ff",
-      warning: root.getPropertyValue("--ant-color-warning-bg").trim() || (isDark ? "#2b2111" : "#fff3cd"),
-      warningBorder: root.getPropertyValue("--ant-color-warning-border").trim() || (isDark ? "#594214" : "#ffc107"),
-      warningText: root.getPropertyValue("--ant-color-warning-text").trim() || (isDark ? "#ffc53d" : "#856404"),
-      info: root.getPropertyValue("--ant-color-info").trim() || (isDark ? "#1668dc" : "#1890ff"),
-      infoBg: root.getPropertyValue("--ant-color-info-bg").trim() || (isDark ? "#111d2c" : "#e7f3ff"),
-      infoText: root.getPropertyValue("--ant-color-info-text").trim() || (isDark ? "#3c9ae8" : "#0c5460"),
-      successBg: root.getPropertyValue("--ant-color-success-bg").trim() || (isDark ? "#162312" : "#d4edda"),
-      successBorder: root.getPropertyValue("--ant-color-success-border").trim() || (isDark ? "#274916" : "#c3e6cb"),
-      successText: root.getPropertyValue("--ant-color-success-text").trim() || (isDark ? "#73d13d" : "#155724")
+      bg: bg || base.bg,
+      surface: surface || bg || base.surface,
+      border: border || base.border,
+      text: text || base.text,
+      textSecondary: textSecondary || base.textSecondary,
+      muted: textSecondary || base.muted,
+      primary: primary || base.primary,
+      inputBg: root.getPropertyValue("--ant-color-bg-container").trim() || base.inputBg,
+      link: root.getPropertyValue("--ant-color-link").trim() || base.link,
+      warning: root.getPropertyValue("--ant-color-warning-bg").trim() || base.warning,
+      warningBorder: root.getPropertyValue("--ant-color-warning-border").trim() || base.warningBorder,
+      warningText: root.getPropertyValue("--ant-color-warning-text").trim() || base.warningText,
+      info: root.getPropertyValue("--ant-color-info").trim() || base.info,
+      infoBg: root.getPropertyValue("--ant-color-info-bg").trim() || base.infoBg,
+      infoText: root.getPropertyValue("--ant-color-info-text").trim() || base.infoText,
+      successBg: root.getPropertyValue("--ant-color-success-bg").trim() || base.successBg,
+      successBorder: root.getPropertyValue("--ant-color-success-border").trim() || base.successBorder,
+      successText: root.getPropertyValue("--ant-color-success-text").trim() || base.successText
     };
   } catch {
-    // Fallback: detect dark mode manually
-    const isDark = document.documentElement.getAttribute('data-theme') === 'dark' 
-                || document.documentElement.classList.contains('dark')
-                || window.matchMedia('(prefers-color-scheme: dark)').matches;
-    
-    if (isDark) {
-      return {
-        bg: "#141414",
-        border: "#434343",
-        text: "rgba(255, 255, 255, 0.85)",
-        textSecondary: "rgba(255, 255, 255, 0.45)",
-        primary: "#1677ff",
-        inputBg: "#141414",
-        link: "#1677ff",
-        warning: "#2b2111",
-        warningBorder: "#594214",
-        warningText: "#ffc53d",
-        info: "#1668dc",
-        infoBg: "#111d2c",
-        infoText: "#3c9ae8",
-        successBg: "#162312",
-        successBorder: "#274916",
-        successText: "#73d13d"
-      };
-    } else {
-      return { 
-        bg: "#ffffff", 
-        border: "#d9d9d9", 
-        text: "#000000", 
-        textSecondary: "#666", 
-        primary: "#1677ff",
-        inputBg: "#ffffff",
-        link: "#1677ff",
-        warning: "#fff3cd",
-        warningBorder: "#ffc107",
-        warningText: "#856404",
-        info: "#1890ff",
-        infoBg: "#e7f3ff",
-        infoText: "#0c5460",
-        successBg: "#d4edda",
-        successBorder: "#c3e6cb",
-        successText: "#155724"
-      };
-    }
+    // Fallback
+    return isDarkThemeActive() ? darkDefaults : lightDefaults;
   }
 }
 
@@ -6424,6 +6482,174 @@ function ensureUnifiedUIContainer() {
   return container;
 }
 
+function ensureMainFeatureTabs() {
+  const container = document.getElementById('csm-ui-container');
+  if (!container) return;
+  const getLiveTheme = () => ({
+    theme: getThemeTokens(),
+    isDark: isDarkThemeActive()
+  });
+
+  const tabDefs = [
+    {
+      id: 'zalo-multi-group-ui',
+      label: ti('💬 Trình quét nhiều nhóm Zalo', '💬 Zalo multi-group scanner', '💬 Zalo 多群扫描')
+    },
+    {
+      id: 'multi-domain-ui',
+      label: ti('🌐 Quản lý nội dung đa miền', '🌐 Multi-domain manager', '🌐 多域内容管理')
+    },
+    {
+      id: 'facebook-post-ui',
+      label: ti('📱 Facebook Token Management', '📱 Facebook Token Management', '📱 Facebook Token 管理')
+    },
+    {
+      id: 'service-content-ui',
+      label: ti('🧩 Tạo nội dung dịch vụ', '🧩 Service content generator', '🧩 服务内容生成')
+    },
+    {
+      id: 'ads-api-test-panel',
+      label: ti('📢 Kiểm thử API quảng cáo', '📢 Ads API test', '📢 广告 API 测试')
+    }
+  ];
+
+  const availablePanels = tabDefs
+    .map(def => ({ ...def, panel: document.getElementById(def.id) }))
+    .filter(item => !!item.panel);
+
+  if (availablePanels.length === 0) return;
+
+  let shell = document.getElementById('csm-main-feature-tabs');
+  let header = document.getElementById('csm-main-feature-tabs-header');
+  let content = document.getElementById('csm-main-feature-tabs-content');
+
+  if (!shell) {
+    shell = document.createElement('div');
+    shell.id = 'csm-main-feature-tabs';
+    shell.style.cssText = 'display:flex;flex-direction:column;gap:10px;position:relative;z-index:2;padding:10px;border-radius:12px;';
+
+    header = document.createElement('div');
+    header.id = 'csm-main-feature-tabs-header';
+    header.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;padding:8px;border-radius:10px;';
+
+    content = document.createElement('div');
+    content.id = 'csm-main-feature-tabs-content';
+    content.style.cssText = 'display:flex;flex-direction:column;gap:12px;';
+
+    shell.append(header, content);
+
+    const globalPanel = document.getElementById('global-settings-panel');
+    if (globalPanel && globalPanel.parentElement === container) {
+      if (globalPanel.nextSibling) {
+        container.insertBefore(shell, globalPanel.nextSibling);
+      } else {
+        container.appendChild(shell);
+      }
+    } else {
+      container.prepend(shell);
+    }
+  }
+
+  const applyShellTheme = () => {
+    const { theme, isDark } = getLiveTheme();
+    shell.style.border = `1px solid ${theme.border}`;
+    shell.style.background = theme.surface || theme.bg;
+    shell.style.boxShadow = isDark ? '0 1px 2px rgba(0,0,0,0.35)' : '0 1px 2px rgba(0,0,0,0.05)';
+
+    header.style.border = `1px solid ${theme.border}`;
+    header.style.background = theme.bg;
+    header.style.color = theme.text;
+  };
+
+  applyShellTheme();
+
+  header.innerHTML = '';
+
+  const paneById = new Map();
+  availablePanels.forEach(({ id, panel }) => {
+    let pane = content.querySelector(`[data-feature-pane="${id}"]`);
+    if (!pane) {
+      pane = document.createElement('div');
+      pane.setAttribute('data-feature-pane', id);
+      pane.style.cssText = 'display:none;';
+      content.appendChild(pane);
+    }
+    if (panel.parentElement !== pane) {
+      pane.appendChild(panel);
+    }
+    paneById.set(id, pane);
+  });
+
+  Array.from(content.querySelectorAll('[data-feature-pane]')).forEach(pane => {
+    const paneId = pane.getAttribute('data-feature-pane');
+    if (!paneById.has(paneId)) {
+      pane.remove();
+    }
+  });
+
+  const activeSaved = safeLocalStorageGet(CSM_MAIN_FEATURE_TAB_STORAGE_KEY);
+  const activeFromRuntime = window.__csmMainFeatureActiveTab || null;
+  let activeTabId = paneById.has(activeFromRuntime)
+    ? activeFromRuntime
+    : (paneById.has(activeSaved) ? activeSaved : availablePanels[0].id);
+
+  const styleTabButton = (btn, isActive) => {
+    const { theme } = getLiveTheme();
+    btn.style.background = isActive ? theme.primary : (theme.surface || theme.bg);
+    btn.style.color = isActive ? '#fff' : theme.text;
+    btn.style.border = `1px solid ${isActive ? theme.primary : theme.border}`;
+    btn.style.borderRadius = '8px';
+    btn.style.padding = '8px 10px';
+    btn.style.cursor = 'pointer';
+    btn.style.fontSize = '12px';
+    btn.style.opacity = isActive ? '1' : '0.95';
+    btn.style.pointerEvents = 'auto';
+    btn.style.transition = 'all 120ms ease';
+    btn.style.outline = 'none';
+    btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+  };
+
+  const setActive = (tabId) => {
+    if (!paneById.has(tabId)) return;
+    activeTabId = tabId;
+    applyShellTheme();
+
+    paneById.forEach((pane, id) => {
+      pane.style.display = id === activeTabId ? 'block' : 'none';
+    });
+
+    Array.from(header.querySelectorAll('button[data-feature-tab]')).forEach(btn => {
+      const isActive = btn.getAttribute('data-feature-tab') === activeTabId;
+      styleTabButton(btn, isActive);
+    });
+
+    window.__csmMainFeatureActiveTab = activeTabId;
+    safeLocalStorageSet(CSM_MAIN_FEATURE_TAB_STORAGE_KEY, activeTabId);
+  };
+
+  availablePanels.forEach(({ id, label }) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.setAttribute('data-feature-tab', id);
+    btn.textContent = label;
+    styleTabButton(btn, false);
+    btn.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setActive(id);
+    });
+    header.appendChild(btn);
+  });
+
+  if (availablePanels.length <= 1) {
+    header.style.display = 'none';
+  } else {
+    header.style.display = 'flex';
+  }
+
+  setActive(activeTabId);
+}
+
 function getFeatureCardStyle(theme) {
   return `padding:16px;border:1px solid ${theme.border};border-radius:12px;background:${theme.bg};color:${theme.text};box-shadow:0 1px 2px rgba(0,0,0,0.04)`;
 }
@@ -6662,6 +6888,36 @@ function ensureGlobalSettingsPanel() {
   };
   domainSelect.onchange(); // Init
 
+  // Theme mode selector
+  const themeModeRow = document.createElement('div');
+  themeModeRow.style.cssText = 'display:flex;flex-direction:column;gap:4px';
+
+  const themeModeLabel = document.createElement('label');
+  themeModeLabel.textContent = ti('Giao diện:', 'Theme mode:', '界面模式：');
+  themeModeLabel.style.cssText = `font-weight:600;font-size:13px;color:${theme.text};margin-bottom:2px`;
+
+  const themeModeSelect = document.createElement('select');
+  themeModeSelect.id = 'global-theme-mode-select';
+  themeModeSelect.style.cssText = `padding:6px 8px;border:1px solid ${theme.border};border-radius:4px;width:100%;background:${theme.inputBg};color:${theme.text};font-size:12px`;
+
+  [
+    { value: 'system', label: ti('🖥️ Theo hệ thống', '🖥️ Follow system', '🖥️ 跟随系统') },
+    { value: 'light', label: ti('☀️ Sáng', '☀️ Light', '☀️ 浅色') },
+    { value: 'dark', label: ti('🌙 Tối', '🌙 Dark', '🌙 深色') }
+  ].forEach(opt => {
+    const option = document.createElement('option');
+    option.value = opt.value;
+    option.textContent = opt.label;
+    themeModeSelect.appendChild(option);
+  });
+
+  themeModeSelect.value = getPreferredThemeMode();
+  themeModeSelect.onchange = () => {
+    applyThemeMode(themeModeSelect.value);
+  };
+
+  themeModeRow.append(themeModeLabel, themeModeSelect);
+
   // Load categories from web_services button
   const loadBtn = document.createElement('button');
   loadBtn.textContent = t('load_categories');
@@ -6680,11 +6936,38 @@ function ensureGlobalSettingsPanel() {
   };
 
   // Append rows to grid container
-  settingsContainer.append(domainRow, industryRow, projectRow);
+  settingsContainer.append(domainRow, industryRow, projectRow, themeModeRow);
   settingsContainer.append(loadBtn);
+
+  const facebookCommonSection = document.createElement('div');
+  facebookCommonSection.id = 'facebook-common-settings';
+  facebookCommonSection.style.cssText = `margin-top:14px;padding:12px;border:1px solid ${theme.border};border-radius:8px;background:${theme.surface || theme.bg};`;
+  facebookCommonSection.innerHTML = `
+    <div style="font-weight:700;margin-bottom:8px;color:${theme.text};font-size:13px;">
+      ${ti('📱 Facebook Token & Fanpage dùng chung', '📱 Shared Facebook Token & Fanpages', '📱 共用 Facebook Token 与 Fanpage')}
+    </div>
+    <div style="font-size:12px;color:${theme.muted || theme.textSecondary};margin-bottom:8px;line-height:1.5;">
+      ${ti(
+        'Dùng chung cho toàn bộ luồng đăng Facebook và cấu hình nhóm Zalo. Chọn fanpage ở đây sẽ được giữ lại khi bạn tạo cấu hình Zalo mới.',
+        'Shared across Facebook posting and Zalo group configurations. Fanpages selected here are kept when creating new Zalo configs.',
+        '该区域供 Facebook 发布与 Zalo 群组配置共用。在此勾选的 fanpage 会在新建 Zalo 配置时保持不变。'
+      )}
+    </div>
+    <div id="fb-manual-token-input" style="margin-top:5px;">
+      <label style="color:${theme.text};font-size:12px;">${ti('Nhập User hoặc Page Access Token (lấy từ <a href="https://developers.facebook.com/tools/explorer/" target="_blank" style="color:' + theme.link + ';">Graph API Explorer</a>):', 'Enter User or Page Access Token (from <a href="https://developers.facebook.com/tools/explorer/" target="_blank" style="color:' + theme.link + ';">Graph API Explorer</a>):', '输入 User 或 Page Access Token（来自 <a href="https://developers.facebook.com/tools/explorer/" target="_blank" style="color:' + theme.link + ';">Graph API Explorer</a>）：')}</label><br>
+      <textarea id="fb-token-input" rows="3" style="width:100%;padding:8px;margin-top:5px;border:1px solid ${theme.border};border-radius:4px;background:${theme.inputBg};color:${theme.text};" placeholder="${ti('Dán User/Page Access Token tại đây...', 'Paste User/Page Access Token here...', '在此粘贴 User/Page Access Token...')}"></textarea>
+      <button id="btn-fb-save-token" style="padding:6px 12px;background:#28a745;color:white;border:none;border-radius:4px;cursor:pointer;margin-top:5px;">
+        ${ti('Lưu Token', 'Save Token', '保存 Token')}
+      </button>
+    </div>
+    <div id="fb-pages-list" style="margin-top:10px;display:none;">
+      <label style="color:${theme.text};font-size:12px;">${ti('Chọn Fanpage (có thể chọn nhiều):', 'Select Fanpages (multiple allowed):', '选择 Fanpage（可多选）：')}</label><br>
+      <div id="fb-pages-checkboxes" style="margin-top:8px;max-height:220px;overflow-y:auto;padding:8px;border:1px solid ${theme.border};border-radius:4px;background:${theme.inputBg};color:${theme.text};"></div>
+    </div>
+  `;
   
   // Append title and container to wrapper
-  wrapper.append(title, settingsContainer);
+  wrapper.append(title, settingsContainer, facebookCommonSection);
 
   // Insert settings UI into container
   const container = ensureUnifiedUIContainer();
@@ -7472,7 +7755,13 @@ function ensureAdsApiTestPanel() {
 
 async function ensureUI() {
   const existing = document.getElementById("multi-domain-ui");
-  if (existing) return existing;
+  if (existing) {
+    const container = ensureUnifiedUIContainer();
+    if (container && !document.getElementById("zalo-multi-group-ui")) {
+      ensureZaloMultiGroupUI(container);
+    }
+    return existing;
+  }
 
   const theme = getThemeTokens();
   const wrapper = document.createElement("div");
@@ -8922,6 +9211,33 @@ function getConfigsWithZaloGroups() {
   }));
 }
 
+function resolveActiveZaloConfigsForScanner(options = {}) {
+  const allConfigs = getConfigsWithZaloGroups();
+  if (!Array.isArray(allConfigs) || allConfigs.length === 0) {
+    return [];
+  }
+
+  const selectedFromOptions = Array.isArray(options.selectedConfigIds)
+    ? options.selectedConfigIds
+    : [];
+  const selectedFromWindow = Array.isArray(window.__zaloSelectedConfigIds)
+    ? window.__zaloSelectedConfigIds
+    : [];
+
+  const selectedIds = Array.from(new Set([
+    ...selectedFromOptions,
+    ...selectedFromWindow,
+  ].map(x => String(x || '').trim()).filter(Boolean)));
+
+  if (selectedIds.length === 0) {
+    return [];
+  }
+
+  const selectedSet = new Set(selectedIds);
+  const filtered = allConfigs.filter(cfg => selectedSet.has(String(cfg.config_id || cfg.id || '').trim()));
+  return filtered;
+}
+
 /**
  * Lấy danh sách tất cả nhóm từ tất cả config (legacy, chủ yếu dùng cho backward compatibility)
  */
@@ -8945,11 +9261,7 @@ function getGroupListFromConfigs() {
 function loadGroupList() {
   try {
     const configGroups = getGroupListFromConfigs();
-    if (configGroups.length > 0) return configGroups;
-    const raw = localStorage.getItem(ZALO_GROUP_LIST_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    return configGroups;
   } catch (e) {
     console.warn('⚠️ Lỗi load group list:', e);
     return [];
@@ -12261,7 +12573,7 @@ async function scanAndPostConfig(config, statusEl, sessionData = {}) {
  * Flow: Quét config → Quét nhóm → Lấy tin → Đăng hết → Nhóm tiếp → ...
  * Không posting worker loop, tất cả tuần tự
  */
-function startZaloScanner(statusEl) {
+function startZaloScanner(statusEl, options = {}) {
   if (isZaloScanning) return;
   isZaloScanning = true;
 
@@ -12275,23 +12587,29 @@ function startZaloScanner(statusEl) {
   // ✅ KHÓA UI KHI SCANNER ĐANG CHẠY
   createScannerLockOverlay();
 
-  // Lấy tất cả config có Zalo groups
-  const configs = getConfigsWithZaloGroups();
+  // Lấy config theo lưới động (nếu có chọn thì ưu tiên cấu hình đã chọn)
+  const initialConfigs = resolveActiveZaloConfigsForScanner(options);
   
-  if (configs.length === 0) {
-    console.warn('⚠️ Không có config nào có nhóm Zalo để quét');
-    if (statusEl) statusEl.textContent = t('no_config_selected');
+  if (initialConfigs.length === 0) {
+    console.warn('⚠️ Grid-only mode: chưa chọn dòng cấu hình hợp lệ để quét');
+    if (statusEl) {
+      statusEl.textContent = ti(
+        '⚠️ Grid-only: chưa chọn dòng cấu hình nào để quét.',
+        '⚠️ Grid-only: no selected config rows to scan.',
+        '⚠️ 仅表格模式：未选择可扫描的配置行。'
+      );
+    }
     isZaloScanning = false;
     stopStorageMonitor();
     removeScannerLockOverlay();
     return;
   }
 
-  console.log(`📊 Khởi động Sequential Loop cho ${configs.length} configs:`);
-  configs.forEach((config, index) => {
+  console.log(`📊 Khởi động Sequential Loop cho ${initialConfigs.length} configs:`);
+  initialConfigs.forEach((config, index) => {
     const configId = config.config_id || config.id;
     const groupCount = config.zalo_groups ? config.zalo_groups.length : 0;
-    console.log(`  → [${index + 1}/${configs.length}] ${configId}: ${groupCount} nhóm`);
+    console.log(`  → [${index + 1}/${initialConfigs.length}] ${configId}: ${groupCount} nhóm`);
   });
   
   // ✅ STATE
@@ -12342,11 +12660,23 @@ function startZaloScanner(statusEl) {
       return;
     }
 
+    // Re-resolve configs mỗi vòng để đồng bộ thay đổi trực tiếp từ lưới động
+    const activeConfigs = resolveActiveZaloConfigsForScanner(options);
+    if (!Array.isArray(activeConfigs) || activeConfigs.length === 0) {
+      console.warn('⚠️ Grid-only mode: không còn dòng được chọn, dừng scanner');
+      stopZaloScanner(statusEl);
+      return;
+    }
+
+    if (currentConfigIndex >= activeConfigs.length) {
+      currentConfigIndex = 0;
+    }
+
     // Bắt đầu quét config
-    const config = configs[currentConfigIndex];
+    const config = activeConfigs[currentConfigIndex];
     const configId = config.config_id || config.id;
 
-    console.log(`\n🎯 [Round ${currentConfigIndex + 1}/${configs.length}] Config: ${configId}`);
+    console.log(`\n🎯 [Round ${currentConfigIndex + 1}/${activeConfigs.length}] Config: ${configId}`);
 
     isCurrentlyScanning = true;
     let sessionData = {}; // Track session data for cleanup
@@ -12368,12 +12698,12 @@ function startZaloScanner(statusEl) {
       }
 
       // Chuyển config tiếp
-      currentConfigIndex = (currentConfigIndex + 1) % configs.length;
+      currentConfigIndex = (currentConfigIndex + 1) % activeConfigs.length;
       lastScanTime = Date.now();
       isCurrentlyScanning = false;
 
       if (statusEl) {
-        statusEl.textContent = `🔄 [${currentConfigIndex + 1}/${configs.length}] Chờ 5 phút...`;
+        statusEl.textContent = `🔄 [${currentConfigIndex + 1}/${activeConfigs.length}] Chờ 5 phút...`;
       }
 
       // ✅ PERIODIC CLEANUP: Mỗi 3 configs, force cleanup
@@ -12389,7 +12719,7 @@ function startZaloScanner(statusEl) {
   scheduleMainLoop(0);
 
   if (statusEl) {
-    statusEl.textContent = `🟢 Sequential Loop chạy (${configs.length} configs)...`;
+    statusEl.textContent = `🟢 Sequential Loop chạy (${initialConfigs.length} configs)...`;
   }
 }
 
@@ -12974,110 +13304,456 @@ function ensureZaloMultiGroupUI(container) {
     console.log('[Zalo Config] Loaded:', fanpageIds.length, 'fanpages,', (row.zalo_groups || []).length, 'groups');
   };
   
-  // Hàm render danh sách Zalo configs (DÙNG CsmDynamicGrid ĐÚNG CÁCH)
+  // ===== Excel helpers cho bảng quản lý cấu hình =====
+  const ensureExcelRuntime = async () => {
+    try {
+      if (typeof window.ensureSpreadsheetLibraries === 'function') {
+        await window.ensureSpreadsheetLibraries();
+      }
+      return !!window.XLSX;
+    } catch (e) {
+      console.warn('[Zalo Config][Excel] ensureSpreadsheetLibraries failed:', e?.message || e);
+      return !!window.XLSX;
+    }
+  };
 
+  const splitByComma = (value) => String(value || '')
+    .split(',')
+    .map(x => x.trim())
+    .filter(Boolean);
 
-  // Hàm render danh sách config (fallback nếu grid không có sẵn)
+  const splitByNewline = (value) => String(value || '')
+    .split(/\r?\n/)
+    .map(x => x.trim())
+    .filter(Boolean);
+
+  const parseImportedConfigRow = (row) => {
+    if (!row || typeof row !== 'object') return null;
+
+    const domain = String(row.domain || row.Domain || '').trim();
+    const fanpageNames = splitByComma(row.fanpage_names || row.fanpages || row.fanpage_name || row.Fanpages || '');
+    const fanpageIds = splitByComma(row.fanpage_ids || row.fanpage_id || row.FanpageIds || '');
+    const fanpageTokens = splitByComma(row.fanpage_tokens || row.fanpage_token || row.FanpageTokens || '');
+    const zaloGroups = splitByNewline(row.zalo_groups || row.groups || row.ZaloGroups || row.group_list || '');
+
+    if (!domain || fanpageNames.length === 0 || zaloGroups.length === 0) {
+      return null;
+    }
+
+    const id = String(row.id || '').trim() || `zalo_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const createdAt = Number(row.created_at || row.createdAt || Date.now()) || Date.now();
+
+    return {
+      id,
+      timestamp: Number(row.timestamp || createdAt) || Date.now(),
+      created_at: createdAt,
+      updated_at: Date.now(),
+      domain,
+      domain_key: String(row.domain_key || row.domainKey || '').trim(),
+      service_type: String(row.service_type || row.service || '').trim(),
+      project: String(row.project || '').trim(),
+      config_for_zalo: true,
+      zalo_groups: zaloGroups,
+      fanpage_ids: fanpageIds,
+      fanpage_id: fanpageIds[0] || null,
+      fanpage_names: fanpageNames,
+      fanpage_name: fanpageNames.join(', '),
+      fanpage_tokens: fanpageTokens,
+      fanpage_token: fanpageTokens[0] || null,
+      zalo_fanpages: fanpageNames.map((name, idx) => ({
+        id: fanpageIds[idx] || '',
+        name,
+        access_token: fanpageTokens[idx] || ''
+      }))
+    };
+  };
+
+  const exportZaloConfigsToExcel = async () => {
+    const allConfigs = loadDataOptionUser().filter(x => x.config_for_zalo);
+    if (allConfigs.length === 0) {
+      canhbao(ti('Không có cấu hình để export.', 'No configuration to export.', '没有可导出的配置。'));
+      return;
+    }
+
+    const aoa = [
+      ['id', 'domain', 'domain_key', 'service_type', 'project', 'fanpage_names', 'fanpage_ids', 'fanpage_tokens', 'zalo_groups', 'created_at']
+    ];
+
+    allConfigs.forEach(cfg => {
+      aoa.push([
+        cfg.id || '',
+        cfg.domain || '',
+        cfg.domain_key || '',
+        cfg.service_type || '',
+        cfg.project || '',
+        Array.isArray(cfg.fanpage_names) ? cfg.fanpage_names.join(', ') : (cfg.fanpage_name || ''),
+        Array.isArray(cfg.fanpage_ids) ? cfg.fanpage_ids.join(',') : (cfg.fanpage_id || ''),
+        Array.isArray(cfg.fanpage_tokens) ? cfg.fanpage_tokens.join(',') : (cfg.fanpage_token || ''),
+        Array.isArray(cfg.zalo_groups) ? cfg.zalo_groups.join('\n') : '',
+        cfg.created_at || Date.now()
+      ]);
+    });
+
+    if (typeof window.csmDynamicGridExport === 'function') {
+      await window.csmDynamicGridExport({
+        fileName: `zalo_configs_${new Date().toISOString().slice(0, 10)}`,
+        sheets: [{ name: 'ZaloConfigs', aoa }]
+      });
+      thongbao(ti(`✅ Export ${allConfigs.length} cấu hình thành công.`, `✅ Exported ${allConfigs.length} configs.`, `✅ 已导出 ${allConfigs.length} 条配置。`));
+      return;
+    }
+
+    const hasXlsx = await ensureExcelRuntime();
+    if (!hasXlsx || !window.XLSX) {
+      canhbao(ti('Thiếu thư viện XLSX để export.', 'Missing XLSX runtime for export.', '缺少 XLSX 库，无法导出。'));
+      return;
+    }
+
+    const workbook = window.XLSX.utils.book_new();
+    const ws = window.XLSX.utils.aoa_to_sheet(aoa);
+    window.XLSX.utils.book_append_sheet(workbook, ws, 'ZaloConfigs');
+    window.XLSX.writeFile(workbook, `zalo_configs_${Date.now()}.xlsx`);
+    thongbao(ti(`✅ Export ${allConfigs.length} cấu hình thành công.`, `✅ Exported ${allConfigs.length} configs.`, `✅ 已导出 ${allConfigs.length} 条配置。`));
+  };
+
+  const importZaloConfigsFromExcel = async (file) => {
+    if (!file) return;
+
+    const hasXlsx = await ensureExcelRuntime();
+    if (!hasXlsx || !window.XLSX) {
+      canhbao(ti('Thiếu thư viện XLSX để import.', 'Missing XLSX runtime for import.', '缺少 XLSX 库，无法导入。'));
+      return;
+    }
+
+    const buffer = await file.arrayBuffer();
+    const wb = window.XLSX.read(buffer, { type: 'array' });
+    const firstSheet = wb.SheetNames?.[0];
+    if (!firstSheet) {
+      canhbao(ti('File Excel không có sheet hợp lệ.', 'Excel file has no valid sheet.', 'Excel 文件没有有效工作表。'));
+      return;
+    }
+
+    const rows = window.XLSX.utils.sheet_to_json(wb.Sheets[firstSheet], { defval: '' });
+    const imported = rows
+      .map(parseImportedConfigRow)
+      .filter(Boolean);
+
+    if (imported.length === 0) {
+      canhbao(ti('Không đọc được cấu hình hợp lệ từ file.', 'No valid configurations found in file.', '未从文件中读取到有效配置。'));
+      return;
+    }
+
+    const nonConfigRows = loadDataOptionUser().filter(x => !x.config_for_zalo);
+    const merged = [...nonConfigRows, ...imported];
+
+    saveDataOptionUser(merged, (success, error) => {
+      if (success) {
+        status.textContent = ti(`✅ Đã import ${imported.length} cấu hình từ Excel.`, `✅ Imported ${imported.length} configs from Excel.`, `✅ 已从 Excel 导入 ${imported.length} 条配置。`);
+        fetchDataOptionUserFromServer(() => {
+          renderZaloConfigList();
+        });
+      } else {
+        status.textContent = ti(`⚠️ Import thất bại: ${error || 'unknown'}`, `⚠️ Import failed: ${error || 'unknown'}`, `⚠️ 导入失败：${error || 'unknown'}`);
+      }
+    });
+  };
+
+  if (!Array.isArray(window.__zaloSelectedConfigIds)) {
+    window.__zaloSelectedConfigIds = [];
+  }
+
+  const getSelectedConfigIds = () => {
+    const ids = Array.isArray(window.__zaloSelectedConfigIds) ? window.__zaloSelectedConfigIds : [];
+    return Array.from(new Set(ids.map(x => String(x || '').trim()).filter(Boolean)));
+  };
+
+  const setSelectedConfigIds = (ids) => {
+    window.__zaloSelectedConfigIds = Array.from(new Set((Array.isArray(ids) ? ids : [])
+      .map(x => String(x || '').trim())
+      .filter(Boolean)));
+  };
+
+  // Hàm render danh sách config dạng bảng (CRUD nhanh + import/export)
   const renderZaloConfigList = () => {
     mgmtList.innerHTML = "";
     const allConfigs = loadDataOptionUser().filter(x => x.config_for_zalo);
     mgmtTitle.innerHTML = `📋 ${ti('Cấu hình đã lưu', 'Saved configurations', '已保存配置')} (${allConfigs.length})`;
-    
+
+    const gridText = {
+      index: ti('STT', '#', '序号'),
+      domain: ti('Tên miền', 'Domain', '域名'),
+      service: ti('Dịch vụ', 'Service', '服务'),
+      project: ti('Dự án', 'Project', '项目'),
+      fanpages: ti('Fanpages', 'Fanpages', 'Fanpages'),
+      groups: ti('Nhóm Zalo', 'Zalo groups', 'Zalo 群组'),
+      token: ti('Token', 'Token', 'Token'),
+      actions: ti('Thao tác', 'Actions', '操作'),
+      tokenOk: ti('Đầy đủ', 'Available', '可用'),
+      tokenMissing: ti('Thiếu', 'Missing', '缺失'),
+      notAvailable: ti('Chưa có', 'N/A', '暂无'),
+      emptyRow: ti('Chưa có cấu hình nào. Hãy điền thông tin và nhấn "💾 Lưu cấu hình" để lưu.', 'No configuration yet. Fill in info and click "💾 Save configuration".', '暂无配置。请填写信息并点击“💾 保存配置”。')
+    };
+
+    const wrap = document.createElement('div');
+    wrap.style.cssText = `overflow:auto;max-height:360px;border:1px solid ${theme.border};border-radius:4px;background:${theme.bg};`;
+
+    const table = document.createElement('table');
+    table.style.cssText = 'width:100%;border-collapse:collapse;font-size:11px;min-width:980px;';
+
+    const selectedSet = new Set(getSelectedConfigIds());
+    const allChecked = allConfigs.length > 0 && allConfigs.every(cfg => selectedSet.has(String(cfg.id || '').trim()));
+
+    table.innerHTML = `
+      <thead>
+        <tr style="background:${theme.inputBg};position:sticky;top:0;z-index:1;">
+          <th style="padding:6px;border-bottom:1px solid ${theme.border};text-align:left;">
+            <input data-role="check-all" type="checkbox" ${allChecked ? 'checked' : ''} />
+          </th>
+          <th style="padding:6px;border-bottom:1px solid ${theme.border};text-align:left;">${gridText.index}</th>
+          <th style="padding:6px;border-bottom:1px solid ${theme.border};text-align:left;">${gridText.domain}</th>
+          <th style="padding:6px;border-bottom:1px solid ${theme.border};text-align:left;">${gridText.service}</th>
+          <th style="padding:6px;border-bottom:1px solid ${theme.border};text-align:left;">${gridText.project}</th>
+          <th style="padding:6px;border-bottom:1px solid ${theme.border};text-align:left;">${gridText.fanpages}</th>
+          <th style="padding:6px;border-bottom:1px solid ${theme.border};text-align:left;">${gridText.groups}</th>
+          <th style="padding:6px;border-bottom:1px solid ${theme.border};text-align:left;">${gridText.token}</th>
+          <th style="padding:6px;border-bottom:1px solid ${theme.border};text-align:left;">${gridText.actions}</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    `;
+
+    const tbody = table.querySelector('tbody');
     if (allConfigs.length === 0) {
-      mgmtList.innerHTML = `<div style="color:${theme.muted};font-size:11px;padding:8px;">${ti('Chưa có cấu hình nào. Hãy điền thông tin và nhấn "💾 Lưu cấu hình" để lưu.', 'No configuration yet. Fill in info and click "💾 Save configuration".', '暂无配置。请填写信息并点击“💾 保存配置”。')}</div>`;
-      return;
+      const emptyRow = document.createElement('tr');
+      emptyRow.innerHTML = `<td colspan="9" style="padding:12px;color:${theme.muted};text-align:center;">${gridText.emptyRow}</td>`;
+      tbody.appendChild(emptyRow);
     }
-    
+
     allConfigs.forEach((cfg, idx) => {
-      const isEditingRow = currentMode === "edit" && editingRowId === cfg.id;
-      const cfgItem = document.createElement("div");
-      cfgItem.style.cssText = `background:${theme.inputBg};border:1px solid ${theme.border};border-radius:3px;padding:6px;margin-bottom:4px;display:flex;justify-content:space-between;align-items:center;font-size:11px;${isEditingRow ? 'box-shadow:0 0 0 2px #1890ff inset;background:#e6f7ff;' : ''}`;
-      
-      const info = document.createElement("div");
-      info.style.cssText = `flex:1;`;
-      const dateStr = new Date(cfg.created_at).toLocaleString('vi-VN', {month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'});
-      const tokenStatus = cfg.fanpage_token ? ti('✅ Token', '✅ Token', '✅ Token') : ti('⚠️ Không có token', '⚠️ Missing token', '⚠️ 缺少 token');
-      
-      // ✅ CHỈ hiển thị project nếu domain là LMKT
-      const isLmktDomain = cfg.domain && (cfg.domain.includes('h-holding') || cfg.domain.includes('lmkt'));
-      const serviceInfo = cfg.service_type || 'N/A';
-      const projectInfo = (isLmktDomain && cfg.project) ? ` | ${ti('Dự án', 'Project', '项目')}: ${cfg.project}` : '';
-      
-      info.innerHTML = `
-        <div><strong>${cfg.fanpage_names?.join(', ') || cfg.fanpage_name}</strong> @ ${cfg.domain} <span style="color:${cfg.fanpage_token ? '#52c41a' : '#ff4d4f'};font-size:10px;">${tokenStatus}</span> ${isEditingRow ? `<span style="margin-left:6px;color:#1890ff;font-weight:600;">(${ti('Đang sửa', 'Editing', '编辑中')})</span>` : ''}</div>
-        <div style="color:${theme.muted};font-size:10px;">${ti('Dịch vụ', 'Service', '服务')}: ${serviceInfo}${projectInfo} | ${cfg.zalo_groups?.length || 0} ${ti('nhóm', 'groups', '个群组')} | ${dateStr}</div>
+      const tr = document.createElement('tr');
+      const isEditingRow = currentMode === 'edit' && editingRowId === cfg.id;
+      tr.style.cssText = `border-bottom:1px solid ${theme.border};${isEditingRow ? 'background:#e6f7ff;' : ''}`;
+
+      const fanpageText = Array.isArray(cfg.fanpage_names)
+        ? cfg.fanpage_names.join(', ')
+        : (cfg.fanpage_name || gridText.notAvailable);
+
+      const projectInput = `<input data-role="project" value="${String(cfg.project || '').replace(/"/g, '&quot;')}" style="width:100%;font-size:11px;padding:2px 4px;border:1px solid ${theme.border};background:${theme.bg};color:${theme.text};" />`;
+      const groupsText = Array.isArray(cfg.zalo_groups) ? cfg.zalo_groups.join('\n') : '';
+      const rowChecked = selectedSet.has(String(cfg.id || '').trim());
+
+      tr.innerHTML = `
+        <td style="padding:6px;vertical-align:top;"><input data-role="row-check" type="checkbox" ${rowChecked ? 'checked' : ''} /></td>
+        <td style="padding:6px;vertical-align:top;">${idx + 1}</td>
+        <td style="padding:6px;vertical-align:top;">${cfg.domain || ''}</td>
+        <td style="padding:6px;vertical-align:top;">${cfg.service_type || ''}</td>
+        <td style="padding:6px;vertical-align:top;min-width:120px;">${projectInput}</td>
+        <td style="padding:6px;vertical-align:top;max-width:180px;word-break:break-word;">${fanpageText}</td>
+        <td style="padding:6px;vertical-align:top;min-width:220px;">
+          <textarea data-role="groups" style="width:100%;min-height:60px;font-size:11px;padding:4px;border:1px solid ${theme.border};background:${theme.bg};color:${theme.text};">${groupsText}</textarea>
+        </td>
+        <td style="padding:6px;vertical-align:top;color:${cfg.fanpage_token ? '#52c41a' : '#ff4d4f'};">${cfg.fanpage_token ? gridText.tokenOk : gridText.tokenMissing}</td>
+        <td style="padding:6px;vertical-align:top;white-space:nowrap;">
+          <button data-action="quick-save" style="padding:3px 6px;background:#52c41a;color:#fff;border:none;border-radius:2px;cursor:pointer;margin-right:4px;">💾</button>
+          <button data-action="load-form" style="padding:3px 6px;background:#1890ff;color:#fff;border:none;border-radius:2px;cursor:pointer;margin-right:4px;">✏️</button>
+          <button data-action="delete" style="padding:3px 6px;background:#ff4d4f;color:#fff;border:none;border-radius:2px;cursor:pointer;">🗑️</button>
+        </td>
       `;
-      
-      if (currentMode === "idle") {
-        const btnContainer = document.createElement("div");
-        btnContainer.style.cssText = `display:flex;gap:4px;`;
-        
-        const editBtn = document.createElement("button");
-        editBtn.textContent = "✏️";
-        editBtn.style.cssText = `padding:3px 6px;background:#1890ff;color:white;border:none;border-radius:2px;cursor:pointer;font-size:10px;`;
-        editBtn.onclick = () => {
-          formSnapshot = captureFormState();
-          selectedRowData = cfg;
-          loadRowToControls(cfg);
-          setMode("edit", cfg);
+
+      const groupsEl = tr.querySelector('textarea[data-role="groups"]');
+      const projectEl = tr.querySelector('input[data-role="project"]');
+      const rowCheck = tr.querySelector('input[data-role="row-check"]');
+      const saveBtn = tr.querySelector('button[data-action="quick-save"]');
+      const editBtn = tr.querySelector('button[data-action="load-form"]');
+      const deleteBtn = tr.querySelector('button[data-action="delete"]');
+
+      rowCheck.onchange = () => {
+        const id = String(cfg.id || '').trim();
+        const current = new Set(getSelectedConfigIds());
+        if (rowCheck.checked) current.add(id);
+        else current.delete(id);
+        setSelectedConfigIds(Array.from(current));
+      };
+
+      saveBtn.onclick = () => {
+        const nextGroups = parseGroupList(groupsEl?.value || '');
+        if (nextGroups.length === 0) {
+          canhbao(ti('Danh sách nhóm không được rỗng.', 'Group list cannot be empty.', '群组列表不能为空。'));
+          return;
+        }
+
+        const allData = loadDataOptionUser();
+        const targetIndex = allData.findIndex(item => item.id === cfg.id);
+        if (targetIndex === -1) return;
+
+        allData[targetIndex] = {
+          ...allData[targetIndex],
+          project: String(projectEl?.value || '').trim(),
+          zalo_groups: nextGroups,
+          updated_at: Date.now(),
         };
-        
-        const deleteBtn = document.createElement("button");
-        deleteBtn.textContent = "🗑️";
-        deleteBtn.style.cssText = `padding:3px 6px;background:#ff4d4f;color:white;border:none;border-radius:2px;cursor:pointer;font-size:10px;`;
-        deleteBtn.onclick = () => {
-          if (confirm(ti(`⚠️ Xóa config: ${cfg.fanpage_names?.join(', ') || cfg.fanpage_name}?`, `⚠️ Delete config: ${cfg.fanpage_names?.join(', ') || cfg.fanpage_name}?`, `⚠️ 删除配置：${cfg.fanpage_names?.join(', ') || cfg.fanpage_name}？`))) {
-            const allData = loadDataOptionUser().filter(item => item.id !== cfg.id);
-            saveDataOptionUser(allData, (success) => {
-              if (success) {
-                if (status) status.textContent = ti('✅ Đã xóa config', '✅ Config deleted', '✅ 配置已删除');
-                if (selectedRowData?.id === cfg.id) selectedRowData = null;
-                renderZaloConfigList();
-              } else {
-                if (status) status.textContent = ti('⚠️ Lỗi xóa config', '⚠️ Failed to delete config', '⚠️ 删除配置失败');
-              }
-            }, { allowEmptyConfigSave: true });
+
+        saveDataOptionUser(allData, (success, error) => {
+          if (success) {
+            status.textContent = ti('✅ Đã lưu chỉnh sửa nhanh.', '✅ Quick update saved.', '✅ 快速修改已保存。');
+            renderZaloConfigList();
+          } else {
+            status.textContent = ti(`⚠️ Lưu thất bại: ${error || 'unknown'}`, `⚠️ Save failed: ${error || 'unknown'}`, `⚠️ 保存失败：${error || 'unknown'}`);
           }
-        };
-        
-        btnContainer.append(editBtn, deleteBtn);
-        cfgItem.append(info, btnContainer);
-      } else {
-        cfgItem.append(info);
-      }
-      mgmtList.appendChild(cfgItem);
+        });
+      };
+
+      editBtn.onclick = () => {
+        formSnapshot = captureFormState();
+        selectedRowData = cfg;
+        loadRowToControls(cfg);
+        setMode('edit', cfg);
+      };
+
+      deleteBtn.onclick = () => {
+        if (!confirm(ti(`⚠️ Xóa config: ${fanpageText}?`, `⚠️ Delete config: ${fanpageText}?`, `⚠️ 删除配置：${fanpageText}？`))) return;
+
+        const allData = loadDataOptionUser().filter(item => item.id !== cfg.id);
+        saveDataOptionUser(allData, (success) => {
+          if (success) {
+            if (status) status.textContent = ti('✅ Đã xóa config', '✅ Config deleted', '✅ 配置已删除');
+            if (selectedRowData?.id === cfg.id) selectedRowData = null;
+            renderZaloConfigList();
+          } else if (status) {
+            status.textContent = ti('⚠️ Lỗi xóa config', '⚠️ Failed to delete config', '⚠️ 删除配置失败');
+          }
+        }, { allowEmptyConfigSave: true });
+      };
+
+      tbody.appendChild(tr);
     });
+
+    const checkAll = table.querySelector('input[data-role="check-all"]');
+    if (checkAll) {
+      checkAll.onchange = () => {
+        if (checkAll.checked) {
+          setSelectedConfigIds(allConfigs.map(cfg => String(cfg.id || '').trim()).filter(Boolean));
+        } else {
+          setSelectedConfigIds([]);
+        }
+        renderZaloConfigList();
+      };
+    }
+
+    wrap.appendChild(table);
+    mgmtList.appendChild(wrap);
   };
   
   const mgmtTitle = document.createElement("div");
   mgmtTitle.style.cssText = `font-weight:bold;margin-bottom:8px;color:${theme.text};font-size:12px;`;
   mgmtTitle.innerHTML = `📋 ${ti('Cấu hình đã lưu', 'Saved configurations', '已保存配置')} (${loadDataOptionUser().filter(x => x.config_for_zalo).length})`;
+
+  const excelFileInput = document.createElement('input');
+  excelFileInput.type = 'file';
+  excelFileInput.accept = '.xlsx,.xls,.csv';
+  excelFileInput.style.display = 'none';
+  excelFileInput.onchange = async (event) => {
+    const file = event?.target?.files?.[0];
+    if (!file) return;
+    await importZaloConfigsFromExcel(file);
+    excelFileInput.value = '';
+  };
+
+  const excelToolbar = document.createElement('div');
+  excelToolbar.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;';
+
+  const exportExcelBtn = createButton(ti('📤 Export Excel', '📤 Export Excel', '📤 导出 Excel'), '#2f54eb');
+  exportExcelBtn.title = ti('Xuất toàn bộ cấu hình Zalo sang Excel.', 'Export all Zalo configs to Excel.', '将全部 Zalo 配置导出为 Excel。');
+  exportExcelBtn.onclick = () => {
+    exportZaloConfigsToExcel().catch((e) => {
+      canhbao(ti(`Export lỗi: ${e?.message || e}`, `Export error: ${e?.message || e}`, `导出错误：${e?.message || e}`));
+    });
+  };
+
+  const importExcelBtn = createButton(ti('📥 Import Excel', '📥 Import Excel', '📥 导入 Excel'), '#13c2c2');
+  importExcelBtn.title = ti('Import cấu hình từ Excel (ghi đè bộ cấu hình Zalo hiện tại).', 'Import configs from Excel (replace current Zalo config set).', '从 Excel 导入配置（覆盖当前 Zalo 配置集合）。');
+  importExcelBtn.onclick = () => excelFileInput.click();
+
+  const clearSelectedBtn = createButton(ti('🧹 Bỏ chọn', '🧹 Clear selection', '🧹 清空选择'), '#8c8c8c');
+  clearSelectedBtn.title = ti('Bỏ chọn toàn bộ dòng trong lưới.', 'Unselect all rows in the grid.', '取消网格中全部选择。');
+  clearSelectedBtn.onclick = () => {
+    setSelectedConfigIds([]);
+    renderZaloConfigList();
+  };
+
+  excelToolbar.append(exportExcelBtn, importExcelBtn, clearSelectedBtn);
   
   // Hướng dẫn thao tác
   const gridGuide = document.createElement("div");
   gridGuide.style.cssText = `margin-bottom:10px;padding:10px;background:${theme.infoBg};border-radius:4px;font-size:11px;color:${theme.info};border-left:3px solid ${theme.info};`;
-  gridGuide.innerHTML = `
-    <strong>${ti('📖 Hướng dẫn thao tác:', '📖 Usage instructions:', '📖 操作指南：')}</strong><br>
+  gridGuide.innerHTML = ti(
+    `
+    <strong>📖 Hướng dẫn thao tác:</strong><br>
     <div style="margin-top:6px;line-height:1.6;">
       <strong>➕ THÊM MỚI:</strong><br>
       &nbsp;&nbsp;1. Nhấn nút <strong>"➕ Thêm mới"</strong> để xóa form<br>
       &nbsp;&nbsp;2. Check fanpage ở mục <strong>"📱 Facebook Token Management"</strong> phía trên<br>
       &nbsp;&nbsp;3. Nhập danh sách nhóm Zalo vào ô bên dưới (mỗi nhóm 1 dòng)<br>
       &nbsp;&nbsp;4. Nhấn <strong>"💾 Lưu cấu hình"</strong> → Thêm vào danh sách<br><br>
-      
+
       <strong>✏️ SỬA:</strong><br>
       &nbsp;&nbsp;1. <strong>Click vào "✏️"</strong> trên dòng muốn sửa → Dữ liệu tự động load vào form<br>
       &nbsp;&nbsp;2. Thay đổi fanpage (check/uncheck) hoặc sửa danh sách nhóm<br>
       &nbsp;&nbsp;3. Nhấn <strong>"💾 Lưu cấu hình"</strong> → Cập nhật dòng đã chọn<br><br>
-      
+
       <strong>🗑️ XÓA:</strong><br>
       &nbsp;&nbsp;• Click vào "🗑️" trên từng dòng để xóa<br>
       &nbsp;&nbsp;• Hoặc dùng nút <strong>"🗑️ Xóa hết"</strong> để xóa toàn bộ<br><br>
-      
+
       <strong>💡 Lưu ý:</strong><br>
       &nbsp;&nbsp;• Domain, Service, Project lấy từ <strong>"Cài Đặt Chung"</strong>
     </div>
-  `;
+  `,
+    `
+    <strong>📖 Usage instructions:</strong><br>
+    <div style="margin-top:6px;line-height:1.6;">
+      <strong>➕ ADD NEW:</strong><br>
+      &nbsp;&nbsp;1. Click <strong>"➕ Add new"</strong> to clear the form<br>
+      &nbsp;&nbsp;2. Check fanpage(s) in <strong>"📱 Facebook Token Management"</strong> above<br>
+      &nbsp;&nbsp;3. Enter Zalo groups below (one group per line)<br>
+      &nbsp;&nbsp;4. Click <strong>"💾 Save configuration"</strong> → Add to list<br><br>
+
+      <strong>✏️ EDIT:</strong><br>
+      &nbsp;&nbsp;1. <strong>Click "✏️"</strong> on the row you want to edit → Data auto-loads into the form<br>
+      &nbsp;&nbsp;2. Change fanpages (check/uncheck) or edit group list<br>
+      &nbsp;&nbsp;3. Click <strong>"💾 Save configuration"</strong> → Update selected row<br><br>
+
+      <strong>🗑️ DELETE:</strong><br>
+      &nbsp;&nbsp;• Click "🗑️" on a row to delete it<br>
+      &nbsp;&nbsp;• Or use <strong>"🗑️ Clear all"</strong> to remove all configs<br><br>
+
+      <strong>💡 Note:</strong><br>
+      &nbsp;&nbsp;• Domain, Service, Project are taken from <strong>"General Settings"</strong>
+    </div>
+  `,
+    `
+    <strong>📖 操作指南：</strong><br>
+    <div style="margin-top:6px;line-height:1.6;">
+      <strong>➕ 新增：</strong><br>
+      &nbsp;&nbsp;1. 点击 <strong>"➕ 新增"</strong> 清空表单<br>
+      &nbsp;&nbsp;2. 在上方 <strong>"📱 Facebook Token Management"</strong> 勾选 fanpage<br>
+      &nbsp;&nbsp;3. 在下方输入 Zalo 群组（每行一个）<br>
+      &nbsp;&nbsp;4. 点击 <strong>"💾 保存配置"</strong> → 添加到列表<br><br>
+
+      <strong>✏️ 编辑：</strong><br>
+      &nbsp;&nbsp;1. 点击目标行的 <strong>"✏️"</strong> → 数据会自动加载到表单<br>
+      &nbsp;&nbsp;2. 修改 fanpage（勾选/取消）或群组列表<br>
+      &nbsp;&nbsp;3. 点击 <strong>"💾 保存配置"</strong> → 更新所选行<br><br>
+
+      <strong>🗑️ 删除：</strong><br>
+      &nbsp;&nbsp;• 点击行内 "🗑️" 删除单条配置<br>
+      &nbsp;&nbsp;• 或使用 <strong>"🗑️ 全部清空"</strong> 删除全部配置<br><br>
+
+      <strong>💡 提示：</strong><br>
+      &nbsp;&nbsp;• Domain、服务、项目来自 <strong>"常规设置"</strong>
+    </div>
+  `
+  );
   
   // Thống kê tin Zalo đã đăng
   const postedStats = document.createElement("div");
@@ -13212,16 +13888,16 @@ function ensureZaloMultiGroupUI(container) {
           // Fetch fresh data trước khi render grid
           fetchDataOptionUserFromServer((fetchSuccess) => {
             if (fetchSuccess) {
-              status.textContent = `✅ Cập nhật thành công ${updated} config`;
+              status.textContent = ti(`✅ Cập nhật thành công ${updated} config`, `✅ Updated ${updated} config(s) successfully`, `✅ 已成功更新 ${updated} 条配置`);
               console.log('[Zalo] Fetched fresh data after token refresh');
             } else {
-              status.textContent = `✅ Cập nhật thành công ${updated} config (dùng cached data)`;
+              status.textContent = ti(`✅ Cập nhật thành công ${updated} config (dùng cached data)`, `✅ Updated ${updated} config(s) successfully (using cached data)`, `✅ 已成功更新 ${updated} 条配置（使用缓存数据）`);
               console.warn('[Zalo] Fetch failed, using cached data');
             }
             renderZaloConfigList();
           });
         } else {
-          status.textContent = `⚠️ Lưu thất bại nhưng cập nhật local thành công. Error: ${error}`;
+          status.textContent = ti(`⚠️ Lưu thất bại nhưng cập nhật local thành công. Lỗi: ${error}`, `⚠️ Server save failed but local update succeeded. Error: ${error}`, `⚠️ 服务器保存失败，但本地更新成功。错误：${error}`);
           console.warn('[Zalo] Token refresh save error:', error);
           renderZaloConfigList();
         }
@@ -13300,7 +13976,7 @@ function ensureZaloMultiGroupUI(container) {
               clearAllBtn.style.cursor = 'pointer';
             });
           } else {
-            status.textContent = `⚠️ Xoá local thành công nhưng lưu server thất bại. Error: ${error}`;
+            status.textContent = ti(`⚠️ Xoá local thành công nhưng lưu server thất bại. Lỗi: ${error}`, `⚠️ Local delete succeeded but server save failed. Error: ${error}`, `⚠️ 本地删除成功，但服务器保存失败。错误：${error}`);
             console.warn('[Zalo] Clear all save error:', error);
             renderZaloConfigList();
             
@@ -13311,7 +13987,7 @@ function ensureZaloMultiGroupUI(container) {
           }
         }, { allowEmptyConfigSave: true });
       } catch (e) {
-        status.textContent = `❌ Lỗi: ${e.message}`;
+        status.textContent = ti(`❌ Lỗi: ${e.message}`, `❌ Error: ${e.message}`, `❌ 错误：${e.message}`);
         // Enable lại nút
         clearAllBtn.disabled = false;
         clearAllBtn.style.opacity = '1';
@@ -13453,15 +14129,12 @@ function ensureZaloMultiGroupUI(container) {
             selectedRowData = null;
             editingFanpageData = null;
             
-            // Clear form fields ngay lập tức
-            Array.from(document.querySelectorAll('input[name="fb-page-checkbox"]')).forEach(cb => {
-              cb.checked = false;
-            });
+            // Giữ lựa chọn fanpage hiện tại để dùng cho cấu hình kế tiếp
             input.value = '';
             
             // Set mode idle TRƯỚC khi render
             setMode("idle", null, { preserveStatus: true });
-            status.textContent = `✅ Đã cập nhật config: ${configData.fanpage_name}`;
+            status.textContent = ti(`✅ Đã cập nhật config: ${configData.fanpage_name}`, `✅ Configuration updated: ${configData.fanpage_name}`, `✅ 配置已更新：${configData.fanpage_name}`);
             console.log('[Zalo Config] Successfully saved to server');
             
             // Render grid SAU khi state/mode đã được reset
@@ -13477,7 +14150,7 @@ function ensureZaloMultiGroupUI(container) {
               }
             });
           } else {
-            status.textContent = `⚠️ Lỗi cập nhật config: ${error || 'Unknown error'}`;
+            status.textContent = ti(`⚠️ Lỗi cập nhật config: ${error || 'Lỗi không xác định'}`, `⚠️ Failed to update configuration: ${error || 'Unknown error'}`, `⚠️ 更新配置失败：${error || '未知错误'}`);
             console.error('[Zalo Config] Save error:', error);
           }
         });
@@ -13495,15 +14168,12 @@ function ensureZaloMultiGroupUI(container) {
           selectedRowData = null;
           editingFanpageData = null;
           
-          // Clear form fields ngay lập tức
-          Array.from(document.querySelectorAll('input[name="fb-page-checkbox"]')).forEach(cb => {
-            cb.checked = false;
-          });
+          // Giữ lựa chọn fanpage hiện tại để dùng cho cấu hình kế tiếp
           input.value = '';
           
           // Set mode idle TRƯỚC khi render
           setMode("idle", null, { preserveStatus: true });
-          status.textContent = `✅ Đã thêm config mới: ${configData.fanpage_name}. Bạn có thể tiếp tục thêm cấu hình khác hoặc nhấn "➕ Thêm mới" để xóa form.`;
+          status.textContent = ti(`✅ Đã thêm config mới: ${configData.fanpage_name}. Bạn có thể tiếp tục thêm cấu hình khác hoặc nhấn "➕ Thêm mới" để xóa form.`, `✅ New configuration added: ${configData.fanpage_name}. You can continue adding more, or click "➕ Add new" to clear the form.`, `✅ 新配置已添加：${configData.fanpage_name}。你可以继续添加，或点击“➕ 新增”清空表单。`);
           console.log('[Zalo Config] Add success, rendering grid...');
           
           // Render grid SAU khi state/mode đã được reset
@@ -13524,7 +14194,7 @@ function ensureZaloMultiGroupUI(container) {
             }
           });
         } else {
-          status.textContent = `⚠️ Lỗi thêm config mới: ${error || 'Unknown error'}`;
+          status.textContent = ti(`⚠️ Lỗi thêm config mới: ${error || 'Lỗi không xác định'}`, `⚠️ Failed to add new configuration: ${error || 'Unknown error'}`, `⚠️ 添加新配置失败：${error || '未知错误'}`);
           console.error('[Zalo Config] Add error:', error);
         }
       });
@@ -13566,14 +14236,10 @@ function ensureZaloMultiGroupUI(container) {
       selectedRowData = null;
       editingFanpageData = null;
       
-      // Clear controls (giữ Global Settings, chỉ clear fanpages từ Facebook Token section và groups)
-      Array.from(document.querySelectorAll('input[name="fb-page-checkbox"]')).forEach(cb => {
-        cb.checked = false;
-      });
-      
+      // Clear controls (giữ Global Settings và fanpages đã chọn, chỉ clear groups)
       input.value = '';
       setMode("create");
-      status.textContent = ti("📝 Form đã được xoá. Check fanpage và điền danh sách nhóm, rồi nhấn '💾 Lưu cấu hình'.", "📝 Form cleared. Check fanpage(s), fill group list, then click '💾 Save configuration'.", "📝 表单已清空。请勾选 fanpage、填写群组列表，然后点击“💾 保存配置”。");
+      status.textContent = ti("📝 Form đã được xoá. Fanpage đã chọn vẫn được giữ nguyên, điền danh sách nhóm rồi nhấn '💾 Lưu cấu hình'.", "📝 Form cleared. Selected fanpages are kept, fill group list then click '💾 Save configuration'.", "📝 表单已清空。已选 fanpage 会保留，请填写群组列表后点击“💾 保存配置”。");
     } finally {
       // Enable lại nút sau 300ms (debounce)
       setTimeout(() => {
@@ -13594,7 +14260,7 @@ function ensureZaloMultiGroupUI(container) {
     
     fetchDataOptionUserFromServer((success, data, error) => {
       if (success) {
-        status.textContent = `✅ Đã tải ${data.filter(x => x.config_for_zalo).length} config từ server`;
+        status.textContent = ti(`✅ Đã tải ${data.filter(x => x.config_for_zalo).length} config từ server`, `✅ Loaded ${data.filter(x => x.config_for_zalo).length} config(s) from server`, `✅ 已从服务器加载 ${data.filter(x => x.config_for_zalo).length} 条配置`);
         console.log('[Zalo] Manual refresh from server success');
         renderZaloConfigList();
       } else {
@@ -13637,8 +14303,12 @@ ${JSON.stringify(zaloConfigs, null, 2)}`;
     thongbao(ti(`✅ Debug info logged to console!\n\n${debugMsg.substring(0, 300)}...\n\n👓 Mở DevTools (F12) -> Console để xem chi tiết`, `✅ Debug info logged to console!\n\n${debugMsg.substring(0, 300)}...\n\n👓 Open DevTools (F12) -> Console for details`, `✅ 调试信息已写入控制台！\n\n${debugMsg.substring(0, 300)}...\n\n👓 打开 DevTools (F12) -> Console 查看详情`));
   };
   
+  const mgmtGroupTitle = document.createElement("div");
+  mgmtGroupTitle.style.cssText = `font-weight:700;margin-bottom:8px;color:${theme.text};font-size:12px;`;
+  mgmtGroupTitle.textContent = ti('2) Quản lý cấu hình', '2) Configuration management', '2) 配置管理');
+
   mgmtBtnRow.append(saveConfigBtn, cancelBtn, newConfigBtn, autoLoadBtn, refreshTokensBtn, showFanpagesBtn, clearAllBtn, debugBtn);
-  managementSection.append(mgmtTitle, gridGuide, postedStats, mgmtList, mgmtBtnRow);
+  managementSection.append(mgmtGroupTitle, mgmtTitle, excelToolbar, excelFileInput, gridGuide, mgmtList, mgmtBtnRow);
   
   // Grid sẽ tự động render sau khi fetch data từ server (xem phần expose helpers phía trên)
   
@@ -13690,6 +14360,21 @@ ${JSON.stringify(zaloConfigs, null, 2)}`;
   // Scanner now handled by startZaloScanner() with sequential scheduler
 
   startBtn.onclick = () => {
+    const selectedConfigIds = Array.isArray(window.__zaloSelectedConfigIds)
+      ? window.__zaloSelectedConfigIds.map(x => String(x || '').trim()).filter(Boolean)
+      : [];
+
+    if (selectedConfigIds.length === 0) {
+      const msg = ti(
+        '⚠️ Chỉ chạy từ lưới động: hãy tick ít nhất 1 dòng cấu hình rồi nhấn chạy.',
+        '⚠️ Grid-only mode: select at least one config row before start.',
+        '⚠️ 仅支持动态表格模式：请先勾选至少一条配置再启动。'
+      );
+      if (status) status.textContent = msg;
+      canhbao(msg);
+      return;
+    }
+
     if (typeof window.ensureZaloWebviewReady === 'function') {
       window.ensureZaloWebviewReady();
     }
@@ -13704,7 +14389,7 @@ ${JSON.stringify(zaloConfigs, null, 2)}`;
       if (loggedIn) {
         isZaloLoggedIn = true;
         console.log('▶️ [Zalo Scanner] Bắt đầu Sequential Scheduler');
-        startZaloScanner(status);
+        startZaloScanner(status, { selectedConfigIds });
         
         setButtonsState(true);
       } else {
@@ -13714,7 +14399,7 @@ ${JSON.stringify(zaloConfigs, null, 2)}`;
         startBtn.style.cursor = 'pointer';
       }
     }).catch(err => {
-      status.textContent = `❌ Lỗi: ${err.message}`;
+      status.textContent = ti(`❌ Lỗi: ${err.message}`, `❌ Error: ${err.message}`, `❌ 错误：${err.message}`);
       startBtn.disabled = false;
       startBtn.style.opacity = '1';
       startBtn.style.cursor = 'pointer';
@@ -13729,6 +14414,23 @@ ${JSON.stringify(zaloConfigs, null, 2)}`;
     // Ẩn/hiện nút theo trạng thái không scanning
     setButtonsState(false);
   };
+
+  window.addEventListener('zalo:grid-start-selected', (event) => {
+    const selectedConfigIds = Array.isArray(event?.detail?.selectedConfigIds)
+      ? event.detail.selectedConfigIds
+      : [];
+    if (selectedConfigIds.length === 0) {
+      canhbao(ti('Chưa chọn cấu hình nào trong lưới.', 'No config selected in grid.', '网格中尚未选择配置。'));
+      return;
+    }
+
+    if (isZaloScanning) {
+      stopZaloScanner(status);
+      setButtonsState(false);
+    }
+
+    startBtn.click();
+  });
 
   btnRow.append(startBtn, stopBtn);
   
@@ -13749,8 +14451,8 @@ ${JSON.stringify(zaloConfigs, null, 2)}`;
     ⚙️ Domain、服务类型、项目来自上方 <strong>"常规设置"</strong>。
   `
   );
-  
-  leftPanel.append(title, note, fanpageNote, managementSection, input, status, btnRow);
+
+  leftPanel.append(title, note, fanpageNote, managementSection, input, status, btnRow, postedStats);
 
   // ===== PHẦN PHẢI: Webview Zalo =====
   const rightPanel = document.createElement("div");
@@ -18389,21 +19091,8 @@ function createFacebookPostUI() {
     </button>
   </div>
   
-  <!-- Bước 1: Nhập Token -->
-  <div style="margin-bottom: 20px; padding: 15px; background: ${theme.bg}; border: 1px solid ${theme.border}; border-radius: 6px;">
-    <h4 style="color: ${theme.text};">${ti('🔑 Bước 1: Nhập User hoặc Page Access Token', '🔑 Step 1: Enter User or Page Access Token', '🔑 第1步：输入 User 或 Page Access Token')}</h4>
-    <div id="fb-manual-token-input" style="margin-top: 5px;">
-      <label style="color: ${theme.text};">${ti('Nhập User hoặc Page Access Token (lấy từ <a href="https://developers.facebook.com/tools/explorer/" target="_blank" style="color: ${theme.link};">Graph API Explorer</a>):', 'Enter User or Page Access Token (from <a href="https://developers.facebook.com/tools/explorer/" target="_blank" style="color: ${theme.link};">Graph API Explorer</a>):', '输入 User 或 Page Access Token（来自 <a href="https://developers.facebook.com/tools/explorer/" target="_blank" style="color: ${theme.link};">Graph API Explorer</a>）：')}</label><br>
-      <textarea id="fb-token-input" rows="3" style="width: 100%; padding: 8px; margin-top: 5px; border: 1px solid ${theme.border}; border-radius: 4px; background: ${theme.inputBg}; color: ${theme.text};" placeholder="${ti('Dán User/Page Access Token tại đây...', 'Paste User/Page Access Token here...', '在此粘贴 User/Page Access Token...')}"></textarea>
-      <button id="btn-fb-save-token" style="padding: 6px 12px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; margin-top: 5px;">
-        ${ti('Lưu Token', 'Save Token', '保存 Token')}
-      </button>
-    </div>
-    
-    <div id="fb-pages-list" style="margin-top: 15px; display: none;">
-      <label style="color: ${theme.text};">${ti('Chọn Fanpage (có thể chọn nhiều):', 'Select Fanpages (multiple allowed):', '选择 Fanpage（可多选）：')}</label><br>
-      <div id="fb-pages-checkboxes" style="margin-top: 8px; max-height: 220px; overflow-y: auto; padding: 8px; border: 1px solid ${theme.border}; border-radius: 4px; background: ${theme.inputBg}; color: ${theme.text};"></div>
-    </div>
+  <div style="margin-bottom: 20px; padding: 12px; background: ${theme.infoBg}; border: 1px solid ${theme.border}; border-radius: 6px; color: ${theme.infoText};">
+    ${ti('🔗 Token và Fanpage được quản lý tại <strong>⚙️ Cài Đặt Chung</strong> (khối <strong>📱 Facebook Token & Fanpage dùng chung</strong>) để dùng cho mọi luồng.', '🔗 Token and Fanpages are managed in <strong>⚙️ General Settings</strong> (the <strong>📱 Shared Facebook Token & Fanpages</strong> block) for all workflows.', '🔗 Token 与 Fanpage 统一在 <strong>⚙️ 常规设置</strong> 的 <strong>📱 共用 Facebook Token 与 Fanpage</strong> 区域管理，供全部流程共用。')}
   </div>
   
   <!-- Bước 2: Auto đăng nhiều bài -->
@@ -19519,6 +20208,15 @@ function fetchDataOptionUserFromServer(callback) {
     console.log('[Zalo] Fetching dataOptionUser from server...');
     window.csmUserData.fetchFromDatabase(function(success, data, error) {
       if (success && Array.isArray(data)) {
+        const runtimeFallback = getRawDataOptionUserFromCurrentUserAddress();
+        if (data.length === 0 && Array.isArray(runtimeFallback) && runtimeFallback.length > 0) {
+          const fallbackRecords = normalizeDataOptionUserRecords(runtimeFallback);
+          window.dataUserOption = CSM_LOW_MEMORY_MODE ? fallbackRecords : runtimeFallback;
+          console.warn('[Zalo] ⚠️ Server returned empty payload, keeping runtime snapshot with', runtimeFallback.length, 'items');
+          callback(true, window.dataUserOption, null);
+          return;
+        }
+
         const usableRecords = normalizeDataOptionUserRecords(data);
         window.dataUserOption = CSM_LOW_MEMORY_MODE ? usableRecords : data;
         console.log('[Zalo] ✅ Fetched', data.length, 'items from server (usable:', usableRecords.length, ')');
@@ -19613,7 +20311,14 @@ function saveDataOptionUser(data, callback, options = {}) {
       });
     }
     
+    if (allowEmptyConfigSave) {
+      window.__csmAllowEmptyUserAddressSave = true;
+    }
+
     window.csmUserData.set(finalData, function (success, error) {
+      if (allowEmptyConfigSave) {
+        window.__csmAllowEmptyUserAddressSave = false;
+      }
       console.log('🔔 CALLBACK từ window.csmUserData.set() được gọi');
       console.log('   ✅ success =', success);
       console.log('   ❌ error =', error);
@@ -19773,7 +20478,7 @@ console.log('   window.ZaloDebug.testScanMessage()');
  * 3. Facebook Auto Post (createFacebookPostUI)
  */
 function initAllUI() {
-  console.log('🚀 Initializing all UI modules (throttled with requestIdleCallback)...');
+  console.log('🚀 Initializing all UI modules (eager first paint)...');
   
   let uiInitAttempts = 0;
   const maxAttempts = 10;
@@ -19786,6 +20491,21 @@ function initAllUI() {
     } else {
       return setTimeout(fn, delayMs);
     }
+  };
+
+  const mountAllUIModulesNow = async () => {
+    await ensureGlobalSettingsPanel();
+    await ensureUI();
+
+    // Facebook Token Management must always be visible on first load.
+    createFacebookPostUI();
+
+    if (CSM_AUTO_INIT_NON_CORE_UI) {
+      ensureAdsApiTestPanel();
+      await ensureServiceContentUI();
+    }
+
+    ensureMainFeatureTabs();
   };
   
   // ✅ FIX: Defer service definitions sync until AFTER UI init
@@ -19837,72 +20557,20 @@ function initAllUI() {
           console.log(`⏳ Waiting for DOM to be ready (attempt ${uiInitAttempts})...`);
           return;
         }
-        
-        // ✅ LAZY LOAD: Initialize UI modules sequentially (not parallel)
-        // This prevents RAM spike from loading 4 large modules at once
+
+        await mountAllUIModulesNow();
+
         const globalSettings = document.getElementById('global-settings-panel');
-        if (!globalSettings) {
-          console.log('⚙️ [1/4] Creating Global Settings Panel...');
-          // ✅ Schedule via requestIdleCallback to throttle
-          scheduleTask(async () => {
-            await ensureGlobalSettingsPanel();
-            await new Promise(r => setTimeout(r, 50));
-          }, 100);
-          return;  // Wait for next poll to continue
-        }
-        
         const multiDomainUI = document.getElementById('multi-domain-ui');
-        if (!multiDomainUI) {
-          console.log('📝 [2/4] Creating Multi-Domain UI...');
-          // ✅ Schedule via requestIdleCallback
-          scheduleTask(async () => {
-            await ensureUI();
-            await new Promise(r => setTimeout(r, 50));
-          }, 150);
-          return;
-        }
-        
         const adsApiTestPanel = document.getElementById('ads-api-test-panel');
         const serviceContentUI = document.getElementById('service-content-ui');
         const facebookUI = document.getElementById('facebook-post-ui');
-
-        if (!CSM_AUTO_INIT_NON_CORE_UI) {
-          // Low-memory profile: chỉ dựng core UI ở startup
-          if (uiInitAttempts === 2) {
-            console.log('🪶 [LowMemory] Skip non-core modules at startup (ads/service/facebook)');
-          }
-        } else {
-          if (!adsApiTestPanel) {
-            console.log('🧪 [3/5] Creating Ads API Test Panel...');
-            scheduleTask(async () => {
-              ensureAdsApiTestPanel();
-              await new Promise(r => setTimeout(r, 50));
-            }, 180);
-            return;
-          }
-
-          if (!serviceContentUI) {
-            console.log('✨ [4/5] Creating Service Content UI...');
-            scheduleTask(async () => {
-              await ensureServiceContentUI();
-              await new Promise(r => setTimeout(r, 50));
-            }, 200);
-            return;
-          }
-          
-          if (!facebookUI) {
-            console.log('📱 [5/5] Creating Facebook Post UI...');
-            scheduleTask(() => {
-              createFacebookPostUI();
-            }, 250);
-            return;
-          }
-        }
         
         // Nếu tất cả UI đã có, dừng interval
+        const allCoreReady = Boolean(globalSettings && multiDomainUI && facebookUI);
         const allUIReady = CSM_AUTO_INIT_NON_CORE_UI
-          ? (globalSettings && multiDomainUI && adsApiTestPanel && serviceContentUI && facebookUI)
-          : (globalSettings && multiDomainUI);
+          ? (allCoreReady && adsApiTestPanel && serviceContentUI)
+          : allCoreReady;
         if (allUIReady || uiInitAttempts >= maxAttempts) {
           timerRegistry.clear('ui-init-polling');
           console.log('✅ All UI modules initialized');
@@ -19918,14 +20586,14 @@ function initAllUI() {
     'ui-init-immediate',
     setTimeout(() => {
       runUIInitCycle();
-    }, 120),
+    }, 20),
     'timeout'
   );
 
   // Retry every 3s until ready/max attempts
   const initInterval = timerRegistry.register(
     'ui-init-polling',
-    setInterval(runUIInitCycle, 3000),
+    setInterval(runUIInitCycle, 1200),
     'interval'
   );
 
@@ -19957,14 +20625,10 @@ function initAllUI() {
         if (missingElements.length === 0) return;
         
         console.log(`🔄 Recreating missing UI: ${missingElements.join(', ')}`);
-        
-        // ✅ Batch recreate using scheduleTask (requestIdleCallback) instead of individual setTimeout
-        // This prevents multiple DOM operations from spiking RAM at once
-        if (!globalSettings) scheduleTask(() => ensureGlobalSettingsPanel(), 50);
-        if (!multiDomainUI) scheduleTask(() => ensureUI(), 100);
-        if (!adsApiTestPanel) scheduleTask(() => ensureAdsApiTestPanel(), 150);
-        if (!serviceContentUI) scheduleTask(() => ensureServiceContentUI(), 200);
-        if (!facebookUI) scheduleTask(() => createFacebookPostUI(), 250);
+
+        scheduleTask(() => {
+          runUIInitCycle();
+        }, 30);
       }, 500);  // Debounce: wait 500ms after last mutation
     };
     
@@ -20045,6 +20709,7 @@ async function refreshDynamicUIModules(reason = 'theme-change') {
     ensureAdsApiTestPanel();
     await ensureServiceContentUI();
     createFacebookPostUI();
+    ensureMainFeatureTabs();
 
     const containerElem = document.getElementById('csm-ui-container') || document.getElementById('context-auto');
     if (uiMutationObserver && containerElem) {
@@ -20077,13 +20742,30 @@ function setupThemeChangeListener() {
     if (refreshTimeout) {
       clearTimeout(refreshTimeout);
     }
+
+    // Fast-path: immediately sync tab shell/buttons and rebuild Zalo scanner panel
+    // so light/dark changes are visible without waiting for full UI refresh.
+    try {
+      ensureMainFeatureTabs();
+      const container = document.getElementById('csm-ui-container') || ensureUnifiedUIContainer();
+      if (container) {
+        const existingZaloPanel = document.getElementById('zalo-multi-group-ui');
+        if (existingZaloPanel) {
+          existingZaloPanel.remove();
+          ensureZaloMultiGroupUI(container);
+          ensureMainFeatureTabs();
+        }
+      }
+    } catch (e) {
+      console.warn('⚠️ Fast theme sync failed:', e?.message || e);
+    }
     
     // Schedule refresh with debounce
     refreshTimeout = timerRegistry.register(
       'theme-refresh-debounce',
       setTimeout(async () => {
         await refreshDynamicUIModules('theme-change');
-      }, 300),  // 300ms debounce
+      }, 120),
       'timeout'
     );
   };
@@ -20110,11 +20792,19 @@ function setupThemeChangeListener() {
   
   // Listen to system prefers-color-scheme changes
   const darkModeMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+  const handleSystemThemeChange = () => {
+    if (getPreferredThemeMode() === 'system') {
+      applyThemeMode('system');
+    } else {
+      refreshAllUI();
+    }
+  };
+
   if (darkModeMediaQuery.addEventListener) {
-    darkModeMediaQuery.addEventListener('change', refreshAllUI);
+    darkModeMediaQuery.addEventListener('change', handleSystemThemeChange);
   } else if (darkModeMediaQuery.addListener) {
     // Fallback for older browsers
-    darkModeMediaQuery.addListener(refreshAllUI);
+    darkModeMediaQuery.addListener(handleSystemThemeChange);
   }
 
   // Listen to explicit host event from DynamicCodeMenu.
@@ -20185,6 +20875,9 @@ function setupLanguageChangeListener() {
 // This brings RAM from 90% → 30-40% on webview load
 
 if (typeof window !== 'undefined') {
+  // Apply saved theme mode ASAP so first paint uses correct mode.
+  applyThemeMode(getPreferredThemeMode());
+
   let initStarted = false;
   
   // Option 1: Defer until DOM is fully ready

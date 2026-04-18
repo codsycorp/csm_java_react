@@ -19647,6 +19647,19 @@ function fetchDataOptionUserFromServer(callback) {
     console.log('[Zalo] Fetching dataOptionUser from server...');
     window.csmUserData.fetchFromDatabase(function(success, data, error) {
       if (success && Array.isArray(data)) {
+        const runtimeFallback = getRawDataOptionUserFromCurrentUserAddress();
+        if (data.length === 0 && Array.isArray(runtimeFallback) && runtimeFallback.length > 0) {
+          const fallbackRecords = normalizeDataOptionUserRecords(runtimeFallback);
+          window.dataUserOption = CSM_LOW_MEMORY_MODE ? fallbackRecords : runtimeFallback;
+          if (CSM_ALLOW_LOCAL_DATAOPTIONUSER_CACHE) {
+            try { localStorage.setItem('user_address', JSON.stringify(window.dataUserOption)); } catch {}
+            try { localStorage.setItem('dataOptionUser', JSON.stringify(window.dataUserOption)); } catch {}
+          }
+          console.warn('[Zalo] ⚠️ Server returned empty payload, keeping runtime snapshot with', runtimeFallback.length, 'items');
+          callback(true, window.dataUserOption, null);
+          return;
+        }
+
         const usableRecords = normalizeDataOptionUserRecords(data);
         window.dataUserOption = CSM_LOW_MEMORY_MODE ? usableRecords : data;
         if (CSM_ALLOW_LOCAL_DATAOPTIONUSER_CACHE) {
@@ -19753,7 +19766,14 @@ function saveDataOptionUser(data, callback, options = {}) {
       });
     }
     
+    if (allowEmptyConfigSave) {
+      window.__csmAllowEmptyUserAddressSave = true;
+    }
+
     window.csmUserData.set(finalData, function (success, error) {
+      if (allowEmptyConfigSave) {
+        window.__csmAllowEmptyUserAddressSave = false;
+      }
       console.log('🔔 CALLBACK từ window.csmUserData.set() được gọi');
       console.log('   ✅ success =', success);
       console.log('   ❌ error =', error);
