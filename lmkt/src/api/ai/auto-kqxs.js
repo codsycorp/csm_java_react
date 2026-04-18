@@ -2962,32 +2962,7 @@
             var modeNow = String(legacyCdMode || "C_D").toUpperCase();
             pushAutoLog("Tham số: LoạiTìm=" + selectedQueryValues.length + ", STTWindow=" + sttWindowSize + ", NoHitDays=" + noHitDays + ", NamNoHitWeeks=" + tongNamWeeks + ", Mode=" + modeNow);
 
-            function findNearestHitInfoForRange(cells, cellCaches, sttFrom, sttTo) {
-              if (typeof console !== 'undefined') {
-                console.log('[FIND-NEAREST] sttFrom=' + sttFrom + ', sttTo=' + sttTo + ', cells.length=' + cells.length);
-              }
-              for (var idx = 0; idx < cells.length; idx += 1) {
-                var cache = cellCaches[idx] || {};
-                var hitCount = getLegacySlrHitCountRangeCached(cache, sttFrom, sttTo);
-                if (typeof console !== 'undefined') {
-                  console.log('[FIND-NEAREST-CHECK] idx=' + idx + ', hitCount=' + hitCount + ', hasPrefix=' + !!cache.hitPrefix);
-                }
-                if (hitCount > 0) {
-                  var cell = cells[idx] && cells[idx].cell || {};
-                  if (typeof console !== 'undefined') {
-                    console.log('[FIND-NEAREST-FOUND] idx=' + idx + ', date=' + (cell && cell.date) + ', hitCount=' + hitCount);
-                  }
-                  return {
-                    idx: idx,
-                    date: String((cell && cell.date) || "")
-                  };
-                }
-              }
-              if (typeof console !== 'undefined') {
-                console.log('[FIND-NEAREST-NOTFOUND] returning null');
-              }
-              return null;
-            }
+            // REMOVED: findNearestHitInfoForRange - now using aggregated stats from all cells
 
             function buildAutoRowForSttRange(args) {
               var sttFrom = Number(args && args.sttFrom || 0);
@@ -3124,13 +3099,7 @@
               }
 
               var expandedHint = "";
-              if (sttTo + 1 <= rankTo) {
-                var nearestBase = nearestBaseHit;
-                var nearestExpanded = findNearestHitInfoForRange(cells, cellCaches, sttFrom, sttTo + 1);
-                if (nearestExpanded && (!nearestBase || nearestExpanded.idx < nearestBase.idx)) {
-                  expandedHint = "STT " + sttFrom + "-" + (sttTo + 1) + " Xổ ngày " + String(nearestExpanded.date || "");
-                }
-              }
+              // Hint tính toán bỏ (vì aggregated stats đã đủ)
 
               return {
                 key: rowKeyPrefix + "_" + qv + "_" + sttFrom + "_" + sttTo,
@@ -3141,7 +3110,7 @@
                 noHitDays: noHitDays,
                 noHitDaysCurrent: noHitDaysCurrent,
                 fromDate: currentDateText || String(latestCell.date || ""),
-                toDate: String((nearestBaseHit && nearestBaseHit.date) || oldestCell.date || ""),
+                toDate: String(oldestCell.date || ""),
                 tongNamWeeks: tongNamWeeks,
                 tongNamZeroWeekStreak: weekNoHitMax,
                 weekSummaryRows: rowWeekSummaryRows,
