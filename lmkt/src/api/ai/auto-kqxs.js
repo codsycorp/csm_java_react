@@ -9415,16 +9415,11 @@
       for (var ri3 = 0; ri3 < rows.length; ri3 += 1) {
         var r = rows[ri3] || {};
         var m2 = String(r.mode || "C_D").toUpperCase();
-        // Nếu là merged row, dùng latestCellStats (có count chính xác từ cache)
-        // Nếu không, dùng buildLegacySlrAutoNumberText từ latestCellData.rows
-        var cNamText = r.isMergedAuto 
-          ? buildLegacySlrAutoNumberTextFromStats(r && r.latestCellStats, "c")
-          : buildLegacySlrAutoNumberText(r && r.latestCellData, "c");
+        // Dùng latestCellStats (từ prefix sum cache) cho tất cả rows, vì nó chính xác
+        var cNamText = buildLegacySlrAutoNumberTextFromStats(r && r.latestCellStats, "c");
         var dNamText = m2 === "2C" 
           ? "-" 
-          : (r.isMergedAuto 
-              ? buildLegacySlrAutoNumberTextFromStats(r && r.latestCellStats, "d")
-              : buildLegacySlrAutoNumberText(r && r.latestCellData, "d"));
+          : buildLegacySlrAutoNumberTextFromStats(r && r.latestCellStats, "d");
         var line = [
           String(r.queryLabel || ""),
           Number(r.sttFrom || 0),
@@ -9650,14 +9645,11 @@
 
       rows.forEach(function (r) {
         var noHitDaysCurrent = Number((r && r.noHitDaysCurrent) || (r && r.noHitDays) || 0);
-        var cNamText = r.isMergedAuto 
-          ? buildLegacySlrAutoNumberTextFromStats(r && r.latestCellStats, "c")
-          : buildLegacySlrAutoNumberText(r && r.latestCellData, "c");
+        // Dùng latestCellStats (từ prefix sum cache) cho tất cả rows
+        var cNamText = buildLegacySlrAutoNumberTextFromStats(r && r.latestCellStats, "c");
         var dNamText = String((r && r.mode) || "").toUpperCase() === "2C" 
           ? "-" 
-          : (r.isMergedAuto 
-              ? buildLegacySlrAutoNumberTextFromStats(r && r.latestCellStats, "d")
-              : buildLegacySlrAutoNumberText(r && r.latestCellData, "d"));
+          : buildLegacySlrAutoNumberTextFromStats(r && r.latestCellStats, "d");
         aoa.push([
           String((r && r.queryLabel) || ""),
           Number((r && r.sttFrom) || 0),
@@ -9753,9 +9745,8 @@
         key: "slrAutoMainNumbers",
         width: 150,
         render: function (v, rec) {
-          var text = rec && rec.isMergedAuto 
-            ? buildLegacySlrAutoNumberTextFromStats(rec && rec.latestCellStats, "c")
-            : buildLegacySlrAutoNumberText(v, "c");
+          // Dùng latestCellStats (từ prefix sum cache) cho tất cả rows
+          var text = buildLegacySlrAutoNumberTextFromStats(rec && rec.latestCellStats, "c");
           return h("span", {
             style: {
               color: text === "-" ? theme.muted : theme.text,
@@ -9773,11 +9764,10 @@
         width: 150,
         render: function (v, rec) {
           var mode = String((rec && rec.mode) || "C_D").toUpperCase();
+          // Dùng latestCellStats (từ prefix sum cache) cho tất cả rows
           var text = mode === "2C" 
             ? "-" 
-            : (rec && rec.isMergedAuto 
-                ? buildLegacySlrAutoNumberTextFromStats(rec && rec.latestCellStats, "d")
-                : buildLegacySlrAutoNumberText(v, "d"));
+            : buildLegacySlrAutoNumberTextFromStats(rec && rec.latestCellStats, "d");
           return h("span", {
             style: {
               color: text === "-" ? theme.muted : theme.primary,
