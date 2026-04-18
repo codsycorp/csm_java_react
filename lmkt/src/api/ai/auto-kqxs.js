@@ -3076,22 +3076,14 @@
                 mode: modeNow
               });
               
-              // Tính latestCellStats bằng cộng dồn từ tất cả cells trong matched window
-              // (không phải từ single refCell, vì refCell có thể không có dữ liệu cho STT range)
-              var statsCNam = 0, statsDNam = 0, statsCBac = 0, statsDBac = 0;
-              for (var mwi = 0; mwi < matchedWindow.length; mwi += 1) {
-                var mwCache = cellCaches[startIdx + mwi] || {};
-                statsCNam += getLegacySlrRangeCachedCount(mwCache.cNamPrefix, sttFrom, sttTo);
-                statsDNam += getLegacySlrRangeCachedCount(mwCache.dNamPrefix, sttFrom, sttTo);
-                statsCBac += getLegacySlrRangeCachedCount(mwCache.cBacPrefix, sttFrom, sttTo);
-                statsDBac += getLegacySlrRangeCachedCount(mwCache.dBacPrefix, sttFrom, sttTo);
-              }
+              // Tính latestCellStats từ newestCellCache (cell chứa dữ liệu thực)
+              // Không lấy từ matchedWindow vì matchedWindow là những cells không có data
               var latestCellStats = {
                 date: String((latestCellData && latestCellData.date) || ""),
-                cNam: statsCNam,
-                dNam: statsDNam,
-                cBac: statsCBac,
-                dBac: statsDBac
+                cNam: getLegacySlrRangeCachedCount(newestCellCache.cNamPrefix, sttFrom, sttTo),
+                dNam: getLegacySlrRangeCachedCount(newestCellCache.dNamPrefix, sttFrom, sttTo),
+                cBac: getLegacySlrRangeCachedCount(newestCellCache.cBacPrefix, sttFrom, sttTo),
+                dBac: getLegacySlrRangeCachedCount(newestCellCache.dBacPrefix, sttFrom, sttTo)
               };
               var nearestBaseHit = findNearestHitInfoForRange(cells, cellCaches, sttFrom, sttTo);
               if (latestCellData && Array.isArray(latestCellData.rows)) {
