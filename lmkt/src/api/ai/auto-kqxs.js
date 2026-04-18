@@ -2962,7 +2962,20 @@
             var modeNow = String(legacyCdMode || "C_D").toUpperCase();
             pushAutoLog("Tham số: LoạiTìm=" + selectedQueryValues.length + ", STTWindow=" + sttWindowSize + ", NoHitDays=" + noHitDays + ", NamNoHitWeeks=" + tongNamWeeks + ", Mode=" + modeNow);
 
-            // REMOVED: findNearestHitInfoForRange - now using aggregated stats from all cells
+            function findNearestHitInfoForRange(cells, cellCaches, sttFrom, sttTo) {
+              for (var idx = 0; idx < cells.length; idx += 1) {
+                var cache = cellCaches[idx] || {};
+                var hitCount = getLegacySlrHitCountRangeCached(cache, sttFrom, sttTo);
+                if (hitCount > 0) {
+                  var cell = cells[idx] && cells[idx].cell || {};
+                  return {
+                    idx: idx,
+                    date: String((cell && cell.date) || "")
+                  };
+                }
+              }
+              return null;
+            }
 
             function buildAutoRowForSttRange(args) {
               var sttFrom = Number(args && args.sttFrom || 0);
@@ -3056,54 +3069,31 @@
                 weekDBacTotals
               );
 
-              // Instead of finding single nearest cell, aggregate stats from ALL cells with data
-              // This ensures we get complete stats for the STT range (like manual filter does)
-              var aggregatedCNam = 0, aggregatedDNam = 0, aggregatedCBac = 0, aggregatedDBac = 0;
-              var cacheWithData = null;
-              
-              if (typeof console !== 'undefined') {
-                console.log('[AUTO-STATS-AGGREGATE] STT=' + sttFrom + '-' + sttTo + ', aggregating from ' + cells.length + ' cells');
-              }
-              
-              for (var aggIdx = 0; aggIdx < cells.length; aggIdx += 1) {
-                var aggCache = cellCaches[aggIdx] || {};
-                if (!aggCache.cNamPrefix) continue;
-                
-                var cellCNam = getLegacySlrRangeCachedCount(aggCache.cNamPrefix, sttFrom, sttTo);
-                var cellDNam = getLegacySlrRangeCachedCount(aggCache.dNamPrefix, sttFrom, sttTo);
-                var cellCBac = getLegacySlrRangeCachedCount(aggCache.cBacPrefix, sttFrom, sttTo);
-                var cellDBac = getLegacySlrRangeCachedCount(aggCache.dBacPrefix, sttFrom, sttTo);
-                
-                if (cellCNam > 0 || cellDNam > 0 || cellCBac > 0 || cellDBac > 0) {
-                  aggregatedCNam += cellCNam;
-                  aggregatedDNam += cellDNam;
-                  aggregatedCBac += cellCBac;
-                  aggregatedDBac += cellDBac;
-                  if (!cacheWithData) cacheWithData = aggCache;
-                  
-                  if (typeof console !== 'undefined') {
-                    console.log('[AUTO-STATS-CELL] idx=' + aggIdx + ', cNam=' + cellCNam + ', dNam=' + cellDNam);
+              var refCellInfo = findLegacySlrReferenceCellInfo(weekRows, args && args.weekToDate);
+              var refCellIdx = -1;
+              if (refCellInfo) {
+                for (var rci = 0; rci < cells.length; rci += 1) {
+                  if (Number(cells[rci] && cells[rci].weekIdx || -1) === Number(refCellInfo.weekIdx)
+                    && String(cells[rci] && cells[rci].key || "") === String(refCellInfo.key || "")) {
+                    refCellIdx = rci;
+                    break;
                   }
                 }
               }
-              
-              if (typeof console !== 'undefined') {
-                console.log('[AUTO-STATS-AGGREGATED] cNam=' + aggregatedCNam + ', dNam=' + aggregatedDNam + ', cBac=' + aggregatedCBac + ', dBac=' + aggregatedDBac);
-              }
-              
-              var newestCellCache = cacheWithData || (cellCaches[0] || {});
-              var latestCellData = Object.assign({}, (cells[0] && cells[0].cell) || {}, {
+              if (refCellIdx < 0) refCellIdx = 0;
+              var newestCellCache = cellCaches[refCellIdx] || {};
+              var latestCellData = Object.assign({}, ((refCellInfo && refCellInfo.cell) || (cells[refCellIdx] && cells[refCellIdx].cell) || {}), {
                 mode: modeNow
               });
-              
-              // Use aggregated stats
+
               var latestCellStats = {
                 date: String((latestCellData && latestCellData.date) || ""),
-                cNam: aggregatedCNam,
-                dNam: aggregatedDNam,
-                cBac: aggregatedCBac,
-                dBac: aggregatedDBac
+                cNam: getLegacySlrRangeCachedCount(newestCellCache.cNamPrefix, sttFrom, sttTo),
+                dNam: getLegacySlrRangeCachedCount(newestCellCache.dNamPrefix, sttFrom, sttTo),
+                cBac: getLegacySlrRangeCachedCount(newestCellCache.cBacPrefix, sttFrom, sttTo),
+                dBac: getLegacySlrRangeCachedCount(newestCellCache.dBacPrefix, sttFrom, sttTo)
               };
+              var nearestBaseHit = findNearestHitInfoForRange(cells, cellCaches, sttFrom, sttTo);
               if (latestCellData && Array.isArray(latestCellData.rows)) {
                 latestCellData.rows = latestCellData.rows.filter(function (rowItem) {
                   var sttVal = Number(rowItem && rowItem.stt || 0);
@@ -3112,7 +3102,13 @@
               }
 
               var expandedHint = "";
-              // Hint tính toán bỏ (vì aggregated stats đã đủ)
+              if (sttTo + 1 <= rankTo) {
+                var nearestBase = nearestBaseHit;
+                var nearestExpanded = findNearestHitInfoForRange(cells, cellCaches, sttFrom, sttTo + 1);
+                if (nearestExpanded && (!nearestBase || nearestExpanded.idx < nearestBase.idx)) {
+                  expandedHint = "STT " + sttFrom + "-" + (sttTo + 1) + " Xổ ngày " + String(nearestExpanded.date || "");
+                }
+              }
 
               return {
                 key: rowKeyPrefix + "_" + qv + "_" + sttFrom + "_" + sttTo,
@@ -3123,7 +3119,7 @@
                 noHitDays: noHitDays,
                 noHitDaysCurrent: noHitDaysCurrent,
                 fromDate: currentDateText || String(latestCell.date || ""),
-                toDate: String(oldestCell.date || ""),
+                toDate: String((nearestBaseHit && nearestBaseHit.date) || oldestCell.date || ""),
                 tongNamWeeks: tongNamWeeks,
                 tongNamZeroWeekStreak: weekNoHitMax,
                 weekSummaryRows: rowWeekSummaryRows,
@@ -9419,11 +9415,10 @@
       for (var ri3 = 0; ri3 < rows.length; ri3 += 1) {
         var r = rows[ri3] || {};
         var m2 = String(r.mode || "C_D").toUpperCase();
-        // Dùng latestCellStats (từ prefix sum cache) cho tất cả rows, vì nó chính xác
-        var cNamText = buildLegacySlrAutoNumberTextFromStats(r && r.latestCellStats, "c");
+        var cNamText = buildLegacySlrAutoNumberText(r && r.latestCellData, "c");
         var dNamText = m2 === "2C" 
           ? "-" 
-          : buildLegacySlrAutoNumberTextFromStats(r && r.latestCellStats, "d");
+          : buildLegacySlrAutoNumberText(r && r.latestCellData, "d");
         var line = [
           String(r.queryLabel || ""),
           Number(r.sttFrom || 0),
@@ -9467,20 +9462,6 @@
         out.push(value);
       }
       return out.length ? out.join(" ") : "-";
-    }
-
-    function buildLegacySlrAutoNumberTextFromStats(stats, kind, rowCount) {
-      // Dùng khi là merged row: hiển thị "[count] số" thay vì liệt kê từng số
-      var stat = stats || {};
-      var kind2 = String(kind || "c").toLowerCase();
-      var cnt = kind2 === "d" ? Number(stat.dNam || 0) : Number(stat.cNam || 0);
-      // DEBUG: Log stats để xem giá trị
-      if (typeof console !== 'undefined') {
-        console.log('[DISPLAY] kind=' + kind2 + ', cnt=' + cnt + ', stat=' + JSON.stringify({cNam: stat.cNam, dNam: stat.dNam}));
-      }
-      // Nếu rowCount được truyền (số row trong range), hiển thị count riêng
-      // Ngược lại nếu count từ stats là 0, trả "-"
-      return cnt > 0 ? String(cnt) : "-";
     }
 
     function buildLegacySlrAutoWeekSummaryText(summaryRows) {
@@ -9653,11 +9634,10 @@
 
       rows.forEach(function (r) {
         var noHitDaysCurrent = Number((r && r.noHitDaysCurrent) || (r && r.noHitDays) || 0);
-        // Dùng latestCellStats (từ prefix sum cache) cho tất cả rows
-        var cNamText = buildLegacySlrAutoNumberTextFromStats(r && r.latestCellStats, "c");
+        var cNamText = buildLegacySlrAutoNumberText(r && r.latestCellData, "c");
         var dNamText = String((r && r.mode) || "").toUpperCase() === "2C" 
           ? "-" 
-          : buildLegacySlrAutoNumberTextFromStats(r && r.latestCellStats, "d");
+          : buildLegacySlrAutoNumberText(r && r.latestCellData, "d");
         aoa.push([
           String((r && r.queryLabel) || ""),
           Number((r && r.sttFrom) || 0),
@@ -9753,8 +9733,7 @@
         key: "slrAutoMainNumbers",
         width: 150,
         render: function (v, rec) {
-          // Dùng latestCellStats (từ prefix sum cache) cho tất cả rows
-          var text = buildLegacySlrAutoNumberTextFromStats(rec && rec.latestCellStats, "c");
+          var text = buildLegacySlrAutoNumberText(rec && rec.latestCellData, "c");
           return h("span", {
             style: {
               color: text === "-" ? theme.muted : theme.text,
@@ -9772,10 +9751,9 @@
         width: 150,
         render: function (v, rec) {
           var mode = String((rec && rec.mode) || "C_D").toUpperCase();
-          // Dùng latestCellStats (từ prefix sum cache) cho tất cả rows
           var text = mode === "2C" 
             ? "-" 
-            : buildLegacySlrAutoNumberTextFromStats(rec && rec.latestCellStats, "d");
+            : buildLegacySlrAutoNumberText(rec && rec.latestCellData, "d");
           return h("span", {
             style: {
               color: text === "-" ? theme.muted : theme.primary,
