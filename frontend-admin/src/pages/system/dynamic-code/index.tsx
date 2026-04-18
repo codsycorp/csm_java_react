@@ -1342,8 +1342,8 @@ ${resolvedContainerSelector} select {
           const lookup = await fetchAccountRow();
           const tableName = lookup?.tableName || target.preferredTable;
           const requestAppId = resolveTableAppId(tableName, effectiveAppId);
-          const pkField = lookup?.pkField || target.preferredPkField;
-          const pkValue = lookup?.pkValue ?? target.preferredPkValue;
+          const pkField = lookup?.row?.id ? "id" : (lookup?.pkField || target.preferredPkField);
+          const pkValue = lookup?.row?.id ?? (lookup?.pkValue ?? target.preferredPkValue);
 
           if (!pkField || pkValue === undefined || pkValue === null || String(pkValue).trim() === "") {
             throw new Error("Missing user identity");
@@ -1362,23 +1362,65 @@ ${resolvedContainerSelector} select {
             user_adress: serialized
           };
           if (lookup?.row?.id) updateData.id = lookup.row.id;
-          if (currentUser.userId) updateData.id = currentUser.userId;
           if (currentUser.email) updateData.email = currentUser.email;
           if (currentUser.username) updateData.username = currentUser.username;
           if (currentUser.phoneNumber) updateData.phoneNumber = currentUser.phoneNumber;
-          const res = await api({
-            app_id: requestAppId,
-            obj_name: tableName,
-            command: "update",
-            obj_update: updateData,
-            pk_fields: [pkField],
-          });
+
+          const updateAttempts: Array<{ pkField: string; pkValue: any }> = [];
+          const attemptedKeys = new Set<string>();
+          const pushAttempt = (field: string, value: any) => {
+            if (!field || value === undefined || value === null || String(value).trim() === "") return;
+            const key = `${field}::${String(value)}`;
+            if (attemptedKeys.has(key)) return;
+            attemptedKeys.add(key);
+            updateAttempts.push({ pkField: field, pkValue: value });
+          };
+
+          // Ưu tiên id của row vừa lookup được (ổn định nhất)
+          pushAttempt("id", lookup?.row?.id);
+          // Sau đó dùng identity chính đã resolve
+          pushAttempt(pkField, pkValue);
+          // Fallback thêm một vài identity phổ biến để tránh mismatch schema
+          pushAttempt("id", currentUser?.userId || currentUser?.id || currentUser?.user_id || currentUser?.account_id);
+          pushAttempt("email", currentUser?.email);
+          pushAttempt("username", currentUser?.username);
+          pushAttempt("phoneNumber", currentUser?.phoneNumber || currentUser?.phone_number);
+
+          let lastError = "Update failed";
+          let saved = false;
+
+          for (const attempt of updateAttempts) {
+            const payload = {
+              ...updateData,
+              [attempt.pkField]: attempt.pkValue,
+            };
+
+            try {
+              const res = await api({
+                app_id: requestAppId,
+                obj_name: tableName,
+                command: "update",
+                obj_update: payload,
+                pk_fields: [attempt.pkField],
+              });
+
+              if (isUpdateSuccessResponse(res)) {
+                saved = true;
+                break;
+              }
+
+              lastError = (res as any)?.message || (res as any)?.error || "Update failed";
+            } catch (updateError: any) {
+              lastError = updateError?.message || String(updateError);
+            }
+          }
+
           // Đồng bộ runtime nếu thành công
-          if (res && (res.success === true || Number(res.code) === 200 || res.data === "success" || String((res as any).message || "").toLowerCase() === "ok")) {
+          if (saved) {
             syncRuntimeUserAddress(arr);
             if (typeof callback === "function") callback(true);
           } else {
-            if (typeof callback === "function") callback(false, (res as any)?.message || "Update failed");
+            if (typeof callback === "function") callback(false, lastError || "Update failed");
           }
         } catch (e) {
           if (typeof callback === "function") callback(false, (e as any)?.message || String(e));

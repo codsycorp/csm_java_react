@@ -2863,6 +2863,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
   const [patchReviewFilter, setPatchReviewFilter] = useState<"all" | "pending" | "kept" | "undone">("pending");
   const [mergeLoading, setMergeLoading] = useState(false);
   const [mergeStats, setMergeStats] = useState<{ added: number; edited: number; deleted: number } | null>(null);
+  const [scopeDropInfo, setScopeDropInfo] = useState<{ count: number; sample: string[] }>({ count: 0, sample: [] });
   const [aiStopReason, setAiStopReason] = useState<string>("");
   const [showCoverageDetails, setShowCoverageDetails] = useState(false);
   const [deletingStoredRecord, setDeletingStoredRecord] = useState(false);
@@ -3116,10 +3117,17 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
               nextPatchOps = scoped.patchOps;
               syncPatchReviewState(nextPatchOps);
               if (scoped.blockedOps.length > 0) {
+                const sample = scoped.blockedOps
+                  .slice(0, 5)
+                  .map((op) => String(op.nodePath || op.nodeName || op.nodeId || ""))
+                  .filter(Boolean);
+                setScopeDropInfo({ count: scoped.blockedOps.length, sample });
                 setAiProgress((prev) => ({
                   ...(prev || {}),
                   message: `Da bo qua ${scoped.blockedOps.length} thay doi ngoai pham vi yeu cau`,
                 }));
+              } else {
+                setScopeDropInfo({ count: 0, sample: [] });
               }
               setEditableAiDraftText(JSON.stringify({ menu: scoped.draftMenus }, null, 2));
               return;
@@ -3130,6 +3138,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
         }
 
         if (hasPatchOps) {
+          setScopeDropInfo({ count: 0, sample: [] });
           syncPatchReviewState(nextPatchOps);
         }
         // ⭐ Apply realtime draft to editor immediately (chunking phase + reducing phase)
@@ -3161,6 +3170,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     }
 
     if (hasPatchOps) {
+      setScopeDropInfo({ count: 0, sample: [] });
       syncPatchReviewState(nextPatchOps);
     }
 
@@ -3586,6 +3596,8 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
   const [activePatchNodeId, setActivePatchNodeId] = useState<string | null>(null);
   const patchScrollThrottleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const patchScrollThrottlePendingRef = useRef<{ nodeId: string; silent: boolean } | null>(null);
+  const userPatchNavigationAtRef = useRef(0);
+  const activePatchMissingSinceRef = useRef<number | null>(null);
 
   const navigablePatchOps = useMemo<PatchOpView[]>(() => {
     return visiblePatchOps
@@ -3607,11 +3619,6 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     return visiblePatchOps[activePatchCursor] || null;
   }, [visiblePatchOps, activePatchCursor]);
 
-  const activeNavigableCursor = useMemo(() => {
-    if (navigablePatchOps.length <= 0 || !activePatchNodeId) return -1;
-    return navigablePatchOps.findIndex((op) => op.nodeId === activePatchNodeId);
-  }, [navigablePatchOps, activePatchNodeId]);
-
   const activePatchStatus: "pending" | PatchReviewStatus = activePatchOp
     ? (patchReviewStatus[activePatchOp.nodeId] || "pending")
     : "pending";
@@ -3628,21 +3635,45 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
 
   useEffect(() => {
     if (visiblePatchOps.length <= 0) {
+      activePatchMissingSinceRef.current = null;
       setActivePatchNodeId(null);
       return;
     }
 
     if (activePatchNodeId && visiblePatchOps.some((op) => op.nodeId === activePatchNodeId)) {
+      activePatchMissingSinceRef.current = null;
       return;
     }
 
-    if (navigablePatchOps.length > 0) {
-      setActivePatchNodeId(navigablePatchOps[0]?.nodeId || null);
-      return;
+    if (activePatchNodeId) {
+      const now = Date.now();
+      if (activePatchMissingSinceRef.current == null) {
+        activePatchMissingSinceRef.current = now;
+      }
+
+      const justNavigated = now - userPatchNavigationAtRef.current < 900;
+      const stillInGrace = now - activePatchMissingSinceRef.current < 1500;
+      if (justNavigated || stillInGrace) {
+        return;
+      }
     }
 
+    activePatchMissingSinceRef.current = null;
     setActivePatchNodeId(visiblePatchOps[0]?.nodeId || null);
   }, [visiblePatchOps, navigablePatchOps, activePatchNodeId]);
+
+  const findNearestMappableNodeId = (startIndex: number, step: 1 | -1): string | null => {
+    if (visiblePatchOps.length <= 0) return null;
+    for (let offset = 0; offset < visiblePatchOps.length; offset += 1) {
+      const idx = ((startIndex + (offset * step)) % visiblePatchOps.length + visiblePatchOps.length) % visiblePatchOps.length;
+      const candidate = visiblePatchOps[idx];
+      const lineNo = candidate?.nodeId ? patchLineMap.get(candidate.nodeId)?.line : null;
+      if (candidate?.nodeId && lineNo && lineNo > 0) {
+        return candidate.nodeId;
+      }
+    }
+    return null;
+  };
 
   const focusPatchOpLine = (nodeId: string, silent = false) => {
     patchScrollThrottlePendingRef.current = { nodeId, silent };
@@ -3669,8 +3700,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
         selection: { anchor: line.from },
         effects: EditorView.scrollIntoView(line.from, { y: "center" }),
       });
-      view.focus();
-    }, 100);
+    }, 48);
   };
 
   useEffect(() => {
@@ -3684,18 +3714,32 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
   }, []);
 
   const focusPatchByStep = (step: 1 | -1) => {
-    if (navigablePatchOps.length <= 0) {
+    if (visiblePatchOps.length <= 0) {
       message.info(t("system.menu.aiDesigner.mergePreview.infoLineNotFound") as string);
       return;
     }
 
-    const current = activeNavigableCursor >= 0 ? activeNavigableCursor : 0;
-    const nextIndex = ((current + step) % navigablePatchOps.length + navigablePatchOps.length) % navigablePatchOps.length;
-    const target = navigablePatchOps[nextIndex];
+    const current = activePatchCursor;
+    const nextIndex = current >= 0
+      ? ((current + step) % visiblePatchOps.length + visiblePatchOps.length) % visiblePatchOps.length
+      : (step > 0 ? 0 : visiblePatchOps.length - 1);
+    const target = visiblePatchOps[nextIndex];
     if (!target?.nodeId) return;
 
+    userPatchNavigationAtRef.current = Date.now();
+    activePatchMissingSinceRef.current = null;
     setActivePatchNodeId(target.nodeId);
-    focusPatchOpLine(target.nodeId);
+
+    const targetLine = patchLineMap.get(target.nodeId)?.line;
+    if (targetLine && targetLine > 0) {
+      focusPatchOpLine(target.nodeId, true);
+      return;
+    }
+
+    const fallbackNodeId = findNearestMappableNodeId(nextIndex, step);
+    if (fallbackNodeId) {
+      focusPatchOpLine(fallbackNodeId, true);
+    }
   };
 
   const prevPatchCountRef = useRef(0);
@@ -3709,21 +3753,19 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     const target = navigablePatchOps[0] || visiblePatchOps[0];
     if (!target?.nodeId) return;
 
+    activePatchMissingSinceRef.current = null;
     setActivePatchNodeId(target.nodeId);
     if ((target.line || 0) > 0) {
       focusPatchOpLine(target.nodeId, true);
     }
   }, [patchOpsView.length, navigablePatchOps, visiblePatchOps]);
 
-  useEffect(() => {
-    if (!activePatchNodeId) return;
-    if (!navigablePatchOps.some((op) => op.nodeId === activePatchNodeId)) return;
-    focusPatchOpLine(activePatchNodeId, true);
-  }, [activePatchNodeId, patchLineMap, navigablePatchOps]);
+  // Avoid aggressive auto-follow on every realtime line remap to prevent UI jitter.
+  // Navigation buttons/hotkeys still scroll to the selected patch on demand.
 
   useEffect(() => {
     const handlePatchHotkeys = (event: KeyboardEvent) => {
-      if (!event.altKey || navigablePatchOps.length <= 0) return;
+      if (!event.altKey || visiblePatchOps.length <= 0) return;
       if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
 
       const targetTag = (event.target as HTMLElement | null)?.tagName?.toLowerCase();
@@ -3740,7 +3782,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
 
     window.addEventListener("keydown", handlePatchHotkeys);
     return () => window.removeEventListener("keydown", handlePatchHotkeys);
-  }, [navigablePatchOps, activeNavigableCursor]);
+  }, [visiblePatchOps, activePatchCursor]);
 
   const applyPatchReviewBulk = (mode: "keep" | "undo", scope: "all" | "visible" = "all") => {
     const targetOps = (scope === "visible" ? visiblePatchOps : patchOps).filter(Boolean) as PatchOp[];
@@ -5146,11 +5188,25 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                                 total: patchOps.length,
                                 kept: keptPatchCount,
                                 undone: undonePatchCount,
-                                current: navigablePatchOps.length > 0 ? Math.max(1, activeNavigableCursor + 1) : 0,
-                                count: navigablePatchOps.length,
+                                current: activePatchCursor >= 0 ? activePatchCursor + 1 : 0,
+                                count: visiblePatchOps.length,
                               }) as string}
                             </span>
                           </div>
+
+                          {scopeDropInfo.count > 0 && (
+                            <Alert
+                              type="warning"
+                              showIcon
+                              message={`Da bo qua ${scopeDropInfo.count} thay doi ngoai pham vi yeu cau incremental`}
+                              description={
+                                scopeDropInfo.sample.length > 0
+                                  ? `Vi du: ${scopeDropInfo.sample.join(" | ")}`
+                                  : undefined
+                              }
+                              style={{ marginTop: 4, marginBottom: 2 }}
+                            />
+                          )}
 
                           {activePatchOp && (
                             <div
