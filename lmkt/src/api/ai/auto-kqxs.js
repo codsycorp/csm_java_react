@@ -3068,36 +3068,54 @@
               }
               if (weekNoHitMax <= tongNamWeeks) return null;
 
-              var rowWeekSummaryRows = buildLegacySlrAutoWeekSummaryFromTotals(modeNow, weekRows.length, weekCNamTotals, weekDNamTotals, weekCBacTotals, weekDBacTotals);
-              var latestCell = matchedWindow[0].cell || {};
-              var oldestCell = matchedWindow[matchedWindow.length - 1].cell || {};
-              var nearestBaseHit = findNearestHitInfoForRange(cells, cellCaches, sttFrom, sttTo);
+              // Instead of finding single nearest cell, aggregate stats from ALL cells with data
+              // This ensures we get complete stats for the STT range (like manual filter does)
+              var aggregatedCNam = 0, aggregatedDNam = 0, aggregatedCBac = 0, aggregatedDBac = 0;
+              var cacheWithData = null;
               
-              // nearestBaseHit.idx là index trong cells array, dùng trực tiếp
-              var dataCellIdx = nearestBaseHit ? nearestBaseHit.idx : 0;
+              if (typeof console !== 'undefined') {
+                console.log('[AUTO-STATS-AGGREGATE] STT=' + sttFrom + '-' + sttTo + ', aggregating from ' + cells.length + ' cells');
+              }
               
-              var newestCellCache = cellCaches[dataCellIdx] || {};
-              var latestCellData = Object.assign({}, (cells[dataCellIdx] && cells[dataCellIdx].cell) || {}, {
+              for (var aggIdx = 0; aggIdx < cells.length; aggIdx += 1) {
+                var aggCache = cellCaches[aggIdx] || {};
+                if (!aggCache.cNamPrefix) continue;
+                
+                var cellCNam = getLegacySlrRangeCachedCount(aggCache.cNamPrefix, sttFrom, sttTo);
+                var cellDNam = getLegacySlrRangeCachedCount(aggCache.dNamPrefix, sttFrom, sttTo);
+                var cellCBac = getLegacySlrRangeCachedCount(aggCache.cBacPrefix, sttFrom, sttTo);
+                var cellDBac = getLegacySlrRangeCachedCount(aggCache.dBacPrefix, sttFrom, sttTo);
+                
+                if (cellCNam > 0 || cellDNam > 0 || cellCBac > 0 || cellDBac > 0) {
+                  aggregatedCNam += cellCNam;
+                  aggregatedDNam += cellDNam;
+                  aggregatedCBac += cellCBac;
+                  aggregatedDBac += cellDBac;
+                  if (!cacheWithData) cacheWithData = aggCache;
+                  
+                  if (typeof console !== 'undefined') {
+                    console.log('[AUTO-STATS-CELL] idx=' + aggIdx + ', cNam=' + cellCNam + ', dNam=' + cellDNam);
+                  }
+                }
+              }
+              
+              if (typeof console !== 'undefined') {
+                console.log('[AUTO-STATS-AGGREGATED] cNam=' + aggregatedCNam + ', dNam=' + aggregatedDNam + ', cBac=' + aggregatedCBac + ', dBac=' + aggregatedDBac);
+              }
+              
+              var newestCellCache = cacheWithData || (cellCaches[0] || {});
+              var latestCellData = Object.assign({}, (cells[0] && cells[0].cell) || {}, {
                 mode: modeNow
               });
               
-              // DEBUG LOG
-              if (typeof console !== 'undefined') {
-                console.log('[AUTO-MERGED] STT=' + sttFrom + '-' + sttTo + ', nearestIdx=' + (nearestBaseHit ? nearestBaseHit.idx : 'null') + ', dataCellIdx=' + dataCellIdx + ', cells.length=' + cells.length + ', cache=' + Object.keys(newestCellCache).join(','));
-              }
-              
-              // Tính latestCellStats từ cell có dữ liệu thực cho range
+              // Use aggregated stats
               var latestCellStats = {
                 date: String((latestCellData && latestCellData.date) || ""),
-                cNam: getLegacySlrRangeCachedCount(newestCellCache.cNamPrefix, sttFrom, sttTo),
-                dNam: getLegacySlrRangeCachedCount(newestCellCache.dNamPrefix, sttFrom, sttTo),
-                cBac: getLegacySlrRangeCachedCount(newestCellCache.cBacPrefix, sttFrom, sttTo),
-                dBac: getLegacySlrRangeCachedCount(newestCellCache.dBacPrefix, sttFrom, sttTo)
+                cNam: aggregatedCNam,
+                dNam: aggregatedDNam,
+                cBac: aggregatedCBac,
+                dBac: aggregatedDBac
               };
-              
-              if (typeof console !== 'undefined') {
-                console.log('[AUTO-STATS] cNam=' + latestCellStats.cNam + ', dNam=' + latestCellStats.dNam + ', cBac=' + latestCellStats.cBac + ', dBac=' + latestCellStats.dBac);
-              }
               if (latestCellData && Array.isArray(latestCellData.rows)) {
                 latestCellData.rows = latestCellData.rows.filter(function (rowItem) {
                   var sttVal = Number(rowItem && rowItem.stt || 0);
