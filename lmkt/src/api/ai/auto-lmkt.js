@@ -13474,11 +13474,49 @@ function ensureZaloMultiGroupUI(container) {
       return;
     }
 
+    const toBinaryString = (ab) => {
+      try {
+        const u8 = new Uint8Array(ab);
+        let out = '';
+        const chunkSize = 0x8000;
+        for (let i = 0; i < u8.length; i += chunkSize) {
+          out += String.fromCharCode.apply(null, u8.subarray(i, i + chunkSize));
+        }
+        return out;
+      } catch {
+        return '';
+      }
+    };
+
+    const u8Buffer = new Uint8Array(buffer);
+    const binaryBuffer = toBinaryString(buffer);
+
     let wb;
-    try {
-      wb = window.XLSX.read(buffer, { type: 'array' });
-    } catch (xlsxErr) {
-      console.error('[Zalo Import] XLSX.read failed:', xlsxErr, { fileName: file?.name, fileType: file?.type, byteLength: buffer?.byteLength });
+    let lastReadError = null;
+    const readCandidates = [
+      { data: u8Buffer, opts: { type: 'array' }, label: 'uint8array+array' },
+      { data: buffer, opts: { type: 'array' }, label: 'arraybuffer+array' },
+      ...(binaryBuffer ? [{ data: binaryBuffer, opts: { type: 'binary' }, label: 'binary-string+binary' }] : []),
+    ];
+
+    for (const candidate of readCandidates) {
+      try {
+        wb = window.XLSX.read(candidate.data, candidate.opts);
+        if (wb && Array.isArray(wb.SheetNames) && wb.SheetNames.length > 0) {
+          break;
+        }
+      } catch (err) {
+        lastReadError = err;
+      }
+    }
+
+    if (!wb) {
+      console.error('[Zalo Import] XLSX.read failed:', lastReadError, {
+        fileName: file?.name,
+        fileType: file?.type,
+        byteLength: buffer?.byteLength,
+        xlsxVersion: window?.XLSX?.version,
+      });
       canhbao(ti('File Excel không hợp lệ hoặc không được hỗ trợ.', 'Invalid or unsupported Excel file.', 'Excel 文件无效或不受支持。'));
       return;
     }

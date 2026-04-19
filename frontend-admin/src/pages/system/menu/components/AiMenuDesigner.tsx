@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Button, Card, Collapse, Divider, Grid, Input, Progress, Upload, message, Radio, Select, Space, Switch, Tag } from "antd";
+import { Alert, Button, Card, Collapse, Divider, Grid, Input, Progress, Upload, message, Radio, Select, Space, Switch, Tag, Tooltip } from "antd";
 import CodeMirror from "@uiw/react-codemirror";
 import { json } from "@codemirror/lang-json";
 import { vscodeDark } from "@uiw/codemirror-theme-vscode";
@@ -2868,6 +2868,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
   const [showCoverageDetails, setShowCoverageDetails] = useState(false);
   const [deletingStoredRecord, setDeletingStoredRecord] = useState(false);
   const [showStoredRequestDetails, setShowStoredRequestDetails] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const [resultCursor, setResultCursor] = useState({ line: 1, column: 1 });
   const [resultStats, setResultStats] = useState({ lines: 1, chars: 0 });
   /** Ref to the result CodeMirror view so we can dispatch decoration effects */
@@ -3572,6 +3573,18 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
 
     if (patchOps.length === 0) {
       view.dispatch({ effects: setDiffDecorations.of(liveEditLines) });
+      // Scroll to and select the first live-edit line so the user sees it in editor
+      if (liveEditLines.length > 0) {
+        const firstLine = liveEditLines[0];
+        const totalLines = view.state.doc.lines;
+        if (firstLine && firstLine.line >= 1 && firstLine.line <= totalLines) {
+          const docLine = view.state.doc.line(firstLine.line);
+          view.dispatch({
+            selection: { anchor: docLine.from, head: docLine.to },
+            effects: EditorView.scrollIntoView(docLine.from, { y: "center" }),
+          });
+        }
+      }
       return;
     }
 
@@ -3726,9 +3739,10 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
       }
       const line = view.state.doc.line(lineNo);
       view.dispatch({
-        selection: { anchor: line.from },
+        selection: { anchor: line.from, head: line.to },
         effects: EditorView.scrollIntoView(line.from, { y: "center" }),
       });
+      view.focus();
     }, 48);
   };
 
@@ -4673,9 +4687,48 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     setPanelState((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
+  // Close fullscreen on Escape key
+  useEffect(() => {
+    if (!isFullscreen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setIsFullscreen(false);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isFullscreen]);
+
   return (
     <>
-      <Card title={t("system.menu.aiDesigner.panelTitle") || "AI Thiet ke Menu Tu dong"} bordered={false}>
+      <div
+        style={isFullscreen
+          ? {
+              position: "fixed",
+              inset: 0,
+              zIndex: 1200,
+              background: "var(--ant-color-bg-container, #fff)",
+              overflow: "auto",
+              padding: 0,
+            }
+          : {}}
+      >
+      <Card
+        title={
+          <Space style={{ width: "100%", justifyContent: "space-between" }}>
+            <span>{t("system.menu.aiDesigner.panelTitle") || "AI Thiet ke Menu Tu dong"}</span>
+            <Tooltip title={isFullscreen ? "Thu nhỏ (Esc)" : "Phóng to toàn màn hình"}>
+              <Button
+                size="small"
+                type="text"
+                onClick={() => setIsFullscreen((prev) => !prev)}
+                style={{ fontSize: 16, lineHeight: 1 }}
+              >
+                {isFullscreen ? "⊡" : "⛶"}
+              </Button>
+            </Tooltip>
+          </Space>
+        }
+        bordered={false}
+        style={isFullscreen ? { minHeight: "100vh", borderRadius: 0 } : {}}>
         <Space direction="vertical" size={12} style={{ width: "100%" }}>
         {!appId && <Alert type="warning" showIcon message={t("system.menu.aiDesigner.selectAppFirst") || "Vui long chon App truoc khi su dung AI."} />}
 
@@ -5495,6 +5548,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
         </div>
         </Space>
       </Card>
+      </div>
     </>
   );
 }
