@@ -682,6 +682,7 @@
 			"unsaved": "(chưa lưu)",
 			"safetyTitle": "An toàn",
 			"safetyDesc": "AI chỉ gợi ý mã. Luồng thêm/sửa/xóa hiện tại chỉ đổi khi bạn bấm Apply.",
+			"saveBoundary": "Lưu hoặc Xóa tại đây sẽ cập nhật trực tiếp mã đang sử dụng trên hệ thống. Vui lòng kiểm tra kỹ trước khi thực hiện.",
 			"promptPlaceholder": "Mô tả chính xác phần bạn muốn AI thêm/sửa trong đoạn mã này...",
 			"ask": "Yêu cầu AI",
 			"continue": "Làm tiếp",

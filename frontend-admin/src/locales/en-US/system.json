@@ -685,6 +685,7 @@
 			"unsaved": "(unsaved)",
 			"safetyTitle": "Safety",
 			"safetyDesc": "AI only suggests code. Your current add/edit/delete flow remains unchanged until you click Apply.",
+			"saveBoundary": "Saving or deleting here updates the live code used by the system immediately. Please review carefully before proceeding.",
 			"promptPlaceholder": "Describe exactly what you want AI to change/add in this code...",
 			"ask": "Ask AI",
 			"continue": "Continue",

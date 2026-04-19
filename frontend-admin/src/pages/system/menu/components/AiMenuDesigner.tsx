@@ -2868,6 +2868,8 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
   const [showCoverageDetails, setShowCoverageDetails] = useState(false);
   const [deletingStoredRecord, setDeletingStoredRecord] = useState(false);
   const [showStoredRequestDetails, setShowStoredRequestDetails] = useState(false);
+  const [resultCursor, setResultCursor] = useState({ line: 1, column: 1 });
+  const [resultStats, setResultStats] = useState({ lines: 1, chars: 0 });
   /** Ref to the result CodeMirror view so we can dispatch decoration effects */
   const resultEditorViewRef = useRef<any>(null);
   const activeAiJobIdRef = useRef<string | null>(null);
@@ -2955,6 +2957,33 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
       deleted: Number(mergePreview.deleted || 0),
     });
   };
+
+  const updateResultEditorIndicators = (view: any) => {
+    if (!view?.state?.doc) return;
+    const head = Number(view.state.selection?.main?.head ?? 0);
+    const lineInfo = view.state.doc.lineAt(head);
+    setResultCursor({
+      line: Number(lineInfo?.number || 1),
+      column: Math.max(1, head - Number(lineInfo?.from || 0) + 1),
+    });
+    setResultStats({
+      lines: Math.max(1, Number(view.state.doc.lines || 1)),
+      chars: Number(view.state.doc.length || 0),
+    });
+  };
+
+  const resultMetricsExtension = useMemo(
+    () => EditorView.updateListener.of((update) => {
+      if (!update.docChanged && !update.selectionSet) return;
+      updateResultEditorIndicators(update.view);
+    }),
+    [],
+  );
+
+  const resultEditorDirty = useMemo(
+    () => Boolean(aiResultText) && String(editableAiDraftText || "") !== String(aiResultText || ""),
+    [editableAiDraftText, aiResultText],
+  );
 
   const setEditorFromMenus = (
     menus: MenuItemType[] | null | undefined,
@@ -4576,7 +4605,60 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     boxShadow: "var(--ant-box-shadow-tertiary)",
   } as const;
 
+  const isDesktopLayout = !!screens.lg;
+
+  const editorShellStyle = {
+    border: "1px solid var(--ant-color-border)",
+    borderRadius: 12,
+    overflow: "hidden",
+    background: "var(--ant-color-bg-container)",
+    boxShadow: "var(--ant-box-shadow-secondary)",
+  } as const;
+
+  const editorToolbarStyle = {
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 10,
+    padding: "12px 14px",
+    borderBottom: "1px solid var(--ant-color-border)",
+    background: [
+      "linear-gradient(180deg, color-mix(in srgb, var(--ant-color-fill-quaternary) 88%, transparent), transparent)",
+      "var(--ant-color-bg-layout)",
+    ].join(", "),
+  };
+
+  const toolbarMetaTextStyle = {
+    fontSize: 12,
+    color: "var(--ant-color-text-secondary)",
+  } as const;
+
+  const activePatchCardStyle = {
+    display: "grid",
+    gridTemplateColumns: isDesktopLayout ? "minmax(0, 1fr) auto" : "minmax(0, 1fr)",
+    gap: 10,
+    alignItems: "center",
+    padding: "10px 12px",
+    borderRadius: 10,
+    background: "color-mix(in srgb, var(--ant-color-bg-container) 82%, var(--ant-color-fill-tertiary))",
+    border: "1px solid var(--ant-color-border-secondary)",
+  } as const;
+
   const sectionTitleStyle = { fontSize: 13, fontWeight: 600, letterSpacing: 0.2 } as const;
+  const [leftPanelHidden, setLeftPanelHidden] = useState(false);
+  const leftPanelStackStyle = {
+    width: "100%",
+    display: "flex",
+    flexDirection: "column" as const,
+    gap: 12,
+  };
+  const rightEditorPanelStyle = {
+    ...sectionCardStyle,
+    gridColumn: isDesktopLayout && !leftPanelHidden ? "2" : "auto",
+    gridRow: isDesktopLayout ? "1 / span 2" : "auto",
+    position: isDesktopLayout && !leftPanelHidden ? "sticky" as const : "static" as const,
+    top: isDesktopLayout && !leftPanelHidden ? 8 : undefined,
+    alignSelf: "start" as const,
+  };
   const uiText = (vi: string, en: string, zh: string) => {
     const lang = String(i18n.resolvedLanguage || i18n.language || "vi").toLowerCase();
     if (lang.startsWith("zh")) return zh;
@@ -4586,12 +4668,10 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
   const [panelState, setPanelState] = useState({
     config: true,
     monitor: true,
-    result: true,
   });
   const togglePanel = (key: keyof typeof panelState) => {
     setPanelState((prev) => ({ ...prev, [key]: !prev[key] }));
   };
-  const isDesktopLayout = !!screens.lg;
 
   return (
     <>
@@ -4696,6 +4776,11 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                   <Tag color="blue">{operationScenario === "new_build" ? uiText("Tạo mới", "New Build", "新建") : uiText("Cập nhật", "Incremental", "增量")}</Tag>
                   <Tag color="processing">{`${uiText("Bước", "Step", "步骤")} ${Math.max(0, Number(aiProgress?.current ?? 0))}/${Math.max(1, Number(aiProgress?.total ?? 1))}`}</Tag>
                   <Tag color="cyan">{`${uiText("Mô hình", "Model", "模型")}: ${aiRuntimeModel || uiText("đang xác định", "resolving", "识别中")}`}</Tag>
+                  <Button size="small" onClick={() => setLeftPanelHidden((prev) => !prev)}>
+                    {leftPanelHidden
+                      ? uiText("Hiện panel trái", "Show left panel", "显示左侧面板")
+                      : uiText("Ẩn panel trái", "Hide left panel", "隐藏左侧面板")}
+                  </Button>
                 </Space>
               </Space>
 
@@ -4727,12 +4812,14 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: isDesktopLayout ? "minmax(560px, 1.6fr) minmax(320px, 1fr)" : "1fr",
+            gridTemplateColumns: isDesktopLayout && !leftPanelHidden ? "minmax(380px, 0.9fr) minmax(560px, 1.35fr)" : "1fr",
             gap: 12,
             alignItems: "start",
+            minHeight: isDesktopLayout ? "calc(100vh - 240px)" : undefined,
           }}
         >
-        <Space direction="vertical" size={12} style={{ width: "100%" }}>
+        {!leftPanelHidden && (
+        <div style={leftPanelStackStyle}>
         <Card
           size="small"
           style={sectionCardStyle}
@@ -4878,9 +4965,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
         )}
         </Card>
 
-        </Space>
-
-        <div style={{ width: "100%" }}>
+        <div style={{ width: "100%", gridColumn: isDesktopLayout ? "1" : "auto" }}>
         <Card
           size="small"
           style={sectionCardStyle}
@@ -5019,20 +5104,23 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
         </Card>
         </div>
         </div>
+        )}
 
-        {(aiResultText || aiProgress) && (
-          <Card
-            size="small"
-            style={sectionCardStyle}
-            title={<span style={sectionTitleStyle}>{t("system.menu.aiDesigner.resultTitle") || "3) Ket qua AI + JSON Menu"}</span>}
-            extra={(
-              <Button type="text" size="small" onClick={() => togglePanel("result")}>
-                {panelState.result ? uiText("Thu gọn", "Collapse", "收起") : uiText("Mở rộng", "Expand", "展开")}
-              </Button>
-            )}
-          >
-            {panelState.result && (
-            <Space direction="vertical" style={{ width: "100%" }}>
+        <Card
+          size="small"
+          title={<span style={sectionTitleStyle}>{uiText("3) Kết quả AI đề xuất (bạn có thể chỉnh sửa)", "3) AI suggested result (you can edit)", "3) AI 建议结果（可编辑）")}</span>}
+          bodyStyle={{ display: "flex", flexDirection: "column", gap: 10 }}
+          style={rightEditorPanelStyle}
+        >
+          <Space direction="vertical" style={{ width: "100%" }}>
+              {leftPanelHidden && (
+                <Alert
+                  type="info"
+                  showIcon
+                  message={uiText("Panel trái đang ẩn để tập trung chỉnh JSON", "Left panel is hidden to focus on JSON editing", "左侧面板已隐藏以专注 JSON 编辑")}
+                  action={<Button size="small" onClick={() => setLeftPanelHidden(false)}>{uiText("Hiện lại", "Show", "显示")}</Button>}
+                />
+              )}
               {aiResultText && aiMenus && aiMenus.length > 0 && (
                 <Alert
                   type="success"
@@ -5150,208 +5238,235 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                 </>
               )}
 
-              {mergeStats && operationScenario === "incremental_update" && (
-                <Alert
-                  type="info"
-                  showIcon
-                  message={t("system.menu.aiDesigner.mergePreview.title") || "Điều hướng thay đổi"}
-                  description={
-                    <div>
-                      {patchOps.length > 0 && (
-                        <div
-                          style={{
-                            marginTop: 8,
-                            display: "flex",
-                            flexDirection: "column",
-                            gap: 10,
-                            background: "var(--ant-color-bg-container)",
-                            borderRadius: 10,
-                            padding: "10px 12px",
-                            border: "1px solid var(--ant-color-border)",
-                            boxShadow: "var(--ant-box-shadow-secondary)",
-                          }}
-                        >
-                          <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                            <Space size={6} wrap>
-                              <Tag color="success">+ {mergeStats.added}</Tag>
-                              <Tag color="warning">~ {mergeStats.edited}</Tag>
-                              <Tag color="error">- {mergeStats.deleted}</Tag>
-                              <Tag color="processing">{patchOps.length}</Tag>
-                              <Tag color="cyan">{`${navigablePatchOps.length}/${patchOps.length}`}</Tag>
-                              <Tag color="default">{`${keptPatchCount}/${undonePatchCount}`}</Tag>
-                              {mergeLoading && (
-                                <Tag color="blue">{t("system.menu.aiDesigner.mergePreview.computing") || "đang tính merge"}</Tag>
-                              )}
-                            </Space>
-                            <span style={{ fontSize: 12, color: "var(--ant-color-text-secondary)" }}>
-                              {t("system.menu.aiDesigner.mergePreview.patchSummary", {
+              <div style={editorShellStyle}>
+                {mergeStats && operationScenario === "incremental_update" && (
+                  <div style={editorToolbarStyle}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "flex-start" }}>
+                      <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 6 }}>
+                        <div style={{ fontSize: 13, fontWeight: 700, letterSpacing: 0.2 }}>
+                          {t("system.menu.aiDesigner.mergePreview.title") || "Điều hướng thay đổi"}
+                        </div>
+                        <div style={toolbarMetaTextStyle}>
+                          {patchOps.length > 0
+                            ? (t("system.menu.aiDesigner.mergePreview.patchSummary", {
                                 total: patchOps.length,
                                 kept: keptPatchCount,
                                 undone: undonePatchCount,
                                 current: activePatchCursor >= 0 ? activePatchCursor + 1 : 0,
                                 count: visiblePatchOps.length,
-                              }) as string}
-                            </span>
-                          </div>
-
-                          {scopeDropInfo.count > 0 && (
-                            <Alert
-                              type="warning"
-                              showIcon
-                              message={`Da bo qua ${scopeDropInfo.count} thay doi ngoai pham vi yeu cau incremental`}
-                              description={
-                                scopeDropInfo.sample.length > 0
-                                  ? `Vi du: ${scopeDropInfo.sample.join(" | ")}`
-                                  : undefined
-                              }
-                              style={{ marginTop: 4, marginBottom: 2 }}
-                            />
-                          )}
-
-                          {activePatchOp && (
-                            <div
-                              style={{
-                                display: "grid",
-                                gridTemplateColumns: "minmax(0, 1fr) auto",
-                                gap: 10,
-                                alignItems: "center",
-                                padding: "10px 12px",
-                                borderRadius: 10,
-                                background: "var(--ant-color-fill-quaternary)",
-                                border: "1px solid var(--ant-color-border-secondary)",
-                              }}
-                            >
-                              <div style={{ minWidth: 0 }}>
-                                <Space size={6} wrap style={{ marginBottom: 4 }}>
-                                  <Tag color={activePatchOp.action === "add" ? "success" : activePatchOp.action === "delete" ? "error" : "warning"}>
-                                    {activePatchOp.action === "add"
-                                      ? t("system.menu.aiDesigner.mergePreview.filters.action.add")
-                                      : activePatchOp.action === "delete"
-                                        ? t("system.menu.aiDesigner.mergePreview.filters.action.delete")
-                                        : t("system.menu.aiDesigner.mergePreview.filters.action.edit")}
-                                  </Tag>
-                                  <Tag color={activePatchStatus === "kept" ? "blue" : activePatchStatus === "undone" ? "default" : "processing"}>
-                                    {activePatchStatus === "kept"
-                                      ? t("system.menu.aiDesigner.mergePreview.keptPill")
-                                      : activePatchStatus === "undone"
-                                        ? t("system.menu.aiDesigner.mergePreview.undonePill")
-                                        : t("system.menu.aiDesigner.mergePreview.filters.review.pending")}
-                                  </Tag>
-                                </Space>
-                                <div style={{ fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                                  {activePatchOp.nodeName || activePatchOp.nodeId}
-                                </div>
-                                <div style={{ fontSize: 12, color: "var(--ant-color-text-secondary)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                                  {activePatchOp.nodePath || activePatchOp.nodeId}
-                                </div>
-                                {Array.isArray(activePatchOp.changedFields) && activePatchOp.changedFields.length > 0 && (
-                                  <div style={{ marginTop: 4, fontSize: 12, color: "var(--ant-color-text-secondary)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                                    {activePatchOp.changedFields.slice(0, 3).map((field) => field.fieldName).join(", ")}
-                                    {activePatchOp.changedFields.length > 3 ? ` +${activePatchOp.changedFields.length - 3}` : ""}
-                                  </div>
-                                )}
-                              </div>
-                              <Space size={6} wrap align="center">
-                                <Button size="small" onClick={() => focusPatchByStep(-1)} disabled={navigablePatchOps.length === 0}>↑</Button>
-                                <Button size="small" onClick={() => focusPatchByStep(1)} disabled={navigablePatchOps.length === 0}>↓</Button>
-                                <Button
-                                  size="small"
-                                  type="primary"
-                                  onClick={() => applyCurrentPatchDecision("keep")}
-                                  disabled={activePatchStatus !== "pending"}
-                                >
-                                  {t("system.menu.aiDesigner.mergePreview.keep") as string}
-                                </Button>
-                                <Button
-                                  size="small"
-                                  onClick={() => applyCurrentPatchDecision("undo")}
-                                  danger
-                                  disabled={activePatchStatus !== "pending"}
-                                >
-                                  {t("system.menu.aiDesigner.mergePreview.undo") as string}
-                                </Button>
-                              </Space>
-                            </div>
-                          )}
-
-                          <div style={{ display: "flex", justifyContent: "space-between", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                            <Space size={8} wrap>
-                              <Select
-                                size="small"
-                                value={patchActionFilter}
-                                onChange={(val) => setPatchActionFilter(val)}
-                                options={[
-                                  { value: "all", label: t("system.menu.aiDesigner.mergePreview.filters.action.all") as string },
-                                  { value: "add", label: t("system.menu.aiDesigner.mergePreview.filters.action.add") as string },
-                                  { value: "edit", label: t("system.menu.aiDesigner.mergePreview.filters.action.edit") as string },
-                                  { value: "delete", label: t("system.menu.aiDesigner.mergePreview.filters.action.delete") as string },
-                                ]}
-                                style={{ width: 110 }}
-                              />
-                              <Select
-                                size="small"
-                                value={patchReviewFilter}
-                                onChange={(val) => setPatchReviewFilter(val)}
-                                options={[
-                                  { value: "pending", label: t("system.menu.aiDesigner.mergePreview.filters.review.pending") as string },
-                                  { value: "kept", label: t("system.menu.aiDesigner.mergePreview.filters.review.kept") as string },
-                                  { value: "undone", label: t("system.menu.aiDesigner.mergePreview.filters.review.undone") as string },
-                                  { value: "all", label: t("system.menu.aiDesigner.mergePreview.filters.review.all") as string },
-                                ]}
-                                style={{ width: 150 }}
-                              />
-                              <Input
-                                size="small"
-                                value={patchKeyword}
-                                onChange={(e) => setPatchKeyword(e.target.value)}
-                                placeholder={t("system.menu.aiDesigner.mergePreview.searchPlaceholder") as string}
-                                style={{ width: 220 }}
-                                allowClear
-                              />
-                            </Space>
-                            <Space size={6} wrap>
-                              <Button size="small" type="primary" onClick={() => applyPatchReviewBulk("keep", "visible")}>{t("system.menu.aiDesigner.mergePreview.applyVisible") as string}</Button>
-                              <Button size="small" danger onClick={() => applyPatchReviewBulk("undo", "visible")}>{t("system.menu.aiDesigner.mergePreview.restoreVisible") as string}</Button>
-                              <Button size="small" onClick={() => applyPatchReviewBulk("keep", "all")}>{t("system.menu.aiDesigner.mergePreview.applyAll") as string}</Button>
-                              <Button size="small" danger onClick={() => applyPatchReviewBulk("undo", "all")}>{t("system.menu.aiDesigner.mergePreview.restoreAll") as string}</Button>
-                            </Space>
-                          </div>
-
-                          <div style={{ fontSize: 12, color: "var(--ant-color-text-secondary)" }}>
-                            {t("system.menu.aiDesigner.mergePreview.inlineInEditor") as string}
-                          </div>
+                              }) as string)
+                            : (t("system.menu.aiDesigner.mergePreview.summary", {
+                                added: mergeStats.added,
+                                edited: mergeStats.edited,
+                                deleted: mergeStats.deleted,
+                              }) as string)}
                         </div>
-                      )}
-                      {patchOps.length === 0 && (
-                        <div style={{ marginTop: 8, color: "var(--ant-color-text-secondary)" }}>
-                          {t("system.menu.aiDesigner.mergePreview.summary", {
-                            added: mergeStats.added,
-                            edited: mergeStats.edited,
-                            deleted: mergeStats.deleted,
-                          }) as string}
-                        </div>
-                      )}
+                      </div>
+                      <Space size={6} wrap>
+                        <Tag color="success">+ {mergeStats.added}</Tag>
+                        <Tag color="warning">~ {mergeStats.edited}</Tag>
+                        <Tag color="error">- {mergeStats.deleted}</Tag>
+                        <Tag color="processing">{patchOps.length}</Tag>
+                        <Tag color="cyan">{`${navigablePatchOps.length}/${patchOps.length}`}</Tag>
+                        <Tag color="default">{`${keptPatchCount}/${undonePatchCount}`}</Tag>
+                        {mergeLoading && (
+                          <Tag color="blue">{t("system.menu.aiDesigner.mergePreview.computing") || "đang tính merge"}</Tag>
+                        )}
+                      </Space>
                     </div>
-                  }
-                />
-              )}
 
-              <div style={{ border: "1px solid var(--ant-color-border)", borderRadius: 6, overflow: "hidden" }}>
+                    {scopeDropInfo.count > 0 && (
+                      <Alert
+                        type="warning"
+                        showIcon
+                        message={`Da bo qua ${scopeDropInfo.count} thay doi ngoai pham vi yeu cau incremental`}
+                        description={
+                          scopeDropInfo.sample.length > 0
+                            ? `Vi du: ${scopeDropInfo.sample.join(" | ")}`
+                            : undefined
+                        }
+                      />
+                    )}
+
+                    {patchOps.length > 0 && (
+                      <>
+                        {activePatchOp && (
+                          <div style={activePatchCardStyle}>
+                            <div style={{ minWidth: 0 }}>
+                              <Space size={6} wrap style={{ marginBottom: 6 }}>
+                                <Tag color={activePatchOp.action === "add" ? "success" : activePatchOp.action === "delete" ? "error" : "warning"}>
+                                  {activePatchOp.action === "add"
+                                    ? t("system.menu.aiDesigner.mergePreview.filters.action.add")
+                                    : activePatchOp.action === "delete"
+                                      ? t("system.menu.aiDesigner.mergePreview.filters.action.delete")
+                                      : t("system.menu.aiDesigner.mergePreview.filters.action.edit")}
+                                </Tag>
+                                <Tag color={activePatchStatus === "kept" ? "blue" : activePatchStatus === "undone" ? "default" : "processing"}>
+                                  {activePatchStatus === "kept"
+                                    ? t("system.menu.aiDesigner.mergePreview.keptPill")
+                                    : activePatchStatus === "undone"
+                                      ? t("system.menu.aiDesigner.mergePreview.undonePill")
+                                      : t("system.menu.aiDesigner.mergePreview.filters.review.pending")}
+                                </Tag>
+                                <Tag color="geekblue">{t("system.menu.aiDesigner.mergePreview.indexOf", {
+                                  current: activePatchCursor >= 0 ? activePatchCursor + 1 : 0,
+                                  count: visiblePatchOps.length,
+                                }) as string}</Tag>
+                              </Space>
+                              <div style={{ fontWeight: 600, fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                                {activePatchOp.nodeName || activePatchOp.nodeId}
+                              </div>
+                              <div style={{ ...toolbarMetaTextStyle, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                                {activePatchOp.nodePath || activePatchOp.nodeId}
+                              </div>
+                              {Array.isArray(activePatchOp.changedFields) && activePatchOp.changedFields.length > 0 && (
+                                <div style={{ marginTop: 4, fontSize: 12, color: "var(--ant-color-text-secondary)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                                  {activePatchOp.changedFields.slice(0, 4).map((field) => field.fieldName).join(", ")}
+                                  {activePatchOp.changedFields.length > 4 ? ` +${activePatchOp.changedFields.length - 4}` : ""}
+                                </div>
+                              )}
+                            </div>
+                            <Space size={6} wrap align="center" style={{ justifyContent: isDesktopLayout ? "flex-end" : "flex-start" }}>
+                              <Button size="small" onClick={() => focusPatchByStep(-1)} disabled={navigablePatchOps.length === 0}>
+                                {t("system.menu.aiDesigner.mergePreview.prevPatch") as string}
+                              </Button>
+                              <Button size="small" onClick={() => focusPatchByStep(1)} disabled={navigablePatchOps.length === 0}>
+                                {t("system.menu.aiDesigner.mergePreview.nextPatch") as string}
+                              </Button>
+                              <Button
+                                size="small"
+                                type="primary"
+                                onClick={() => applyCurrentPatchDecision("keep")}
+                                disabled={activePatchStatus !== "pending"}
+                              >
+                                {t("system.menu.aiDesigner.mergePreview.keep") as string}
+                              </Button>
+                              <Button
+                                size="small"
+                                onClick={() => applyCurrentPatchDecision("undo")}
+                                danger
+                                disabled={activePatchStatus !== "pending"}
+                              >
+                                {t("system.menu.aiDesigner.mergePreview.undo") as string}
+                              </Button>
+                            </Space>
+                          </div>
+                        )}
+
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                          <Space size={8} wrap>
+                            <Select
+                              size="small"
+                              value={patchActionFilter}
+                              onChange={(val) => setPatchActionFilter(val)}
+                              options={[
+                                { value: "all", label: t("system.menu.aiDesigner.mergePreview.filters.action.all") as string },
+                                { value: "add", label: t("system.menu.aiDesigner.mergePreview.filters.action.add") as string },
+                                { value: "edit", label: t("system.menu.aiDesigner.mergePreview.filters.action.edit") as string },
+                                { value: "delete", label: t("system.menu.aiDesigner.mergePreview.filters.action.delete") as string },
+                              ]}
+                              style={{ width: 118 }}
+                            />
+                            <Select
+                              size="small"
+                              value={patchReviewFilter}
+                              onChange={(val) => setPatchReviewFilter(val)}
+                              options={[
+                                { value: "pending", label: t("system.menu.aiDesigner.mergePreview.filters.review.pending") as string },
+                                { value: "kept", label: t("system.menu.aiDesigner.mergePreview.filters.review.kept") as string },
+                                { value: "undone", label: t("system.menu.aiDesigner.mergePreview.filters.review.undone") as string },
+                                { value: "all", label: t("system.menu.aiDesigner.mergePreview.filters.review.all") as string },
+                              ]}
+                              style={{ width: 156 }}
+                            />
+                            <Input
+                              size="small"
+                              value={patchKeyword}
+                              onChange={(e) => setPatchKeyword(e.target.value)}
+                              placeholder={t("system.menu.aiDesigner.mergePreview.searchPlaceholder") as string}
+                              style={{ width: isDesktopLayout ? 260 : "100%" }}
+                              allowClear
+                            />
+                          </Space>
+                          <Space size={6} wrap>
+                            <Button size="small" type="primary" onClick={() => applyPatchReviewBulk("keep", "visible")}>{t("system.menu.aiDesigner.mergePreview.applyVisible") as string}</Button>
+                            <Button size="small" danger onClick={() => applyPatchReviewBulk("undo", "visible")}>{t("system.menu.aiDesigner.mergePreview.restoreVisible") as string}</Button>
+                            <Button size="small" onClick={() => applyPatchReviewBulk("keep", "all")}>{t("system.menu.aiDesigner.mergePreview.applyAll") as string}</Button>
+                            <Button size="small" danger onClick={() => applyPatchReviewBulk("undo", "all")}>{t("system.menu.aiDesigner.mergePreview.restoreAll") as string}</Button>
+                          </Space>
+                        </div>
+
+                        <div style={toolbarMetaTextStyle}>
+                          {t("system.menu.aiDesigner.mergePreview.inlineInEditor") as string}
+                          {" • "}
+                          {t("system.menu.aiDesigner.mergePreview.reviewHint") as string}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+
+                <div
+                  style={{
+                    display: "flex",
+                    gap: 8,
+                    flexWrap: "wrap",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    padding: "8px 10px",
+                    borderTop: mergeStats && operationScenario === "incremental_update" ? "1px solid var(--ant-color-border-secondary)" : "none",
+                    borderBottom: "1px solid var(--ant-color-border-secondary)",
+                    background: "color-mix(in srgb, var(--ant-color-fill-quaternary) 86%, transparent)",
+                    color: "var(--ant-color-text-secondary)",
+                    fontSize: 11,
+                  }}
+                >
+                  <span
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      padding: "2px 8px",
+                      borderRadius: 999,
+                      border: "1px solid",
+                      fontWeight: 700,
+                      letterSpacing: 0.2,
+                      color: resultEditorDirty ? "var(--ant-color-warning-text)" : "var(--ant-color-success-text)",
+                      borderColor: resultEditorDirty ? "var(--ant-color-warning-border)" : "var(--ant-color-success-border)",
+                      background: resultEditorDirty
+                        ? "color-mix(in srgb, var(--ant-color-warning-bg) 76%, transparent)"
+                        : "color-mix(in srgb, var(--ant-color-success-bg) 78%, transparent)",
+                    }}
+                  >
+                    {resultEditorDirty
+                      ? uiText("Edited", "Edited", "已编辑")
+                      : uiText("Synced", "Synced", "已同步")}
+                  </span>
+                  <span>JSON</span>
+                  <span>L{resultCursor.line}:C{resultCursor.column}</span>
+                  <span>{resultStats.lines} lines</span>
+                  <span>{resultStats.chars} chars</span>
+                </div>
+
                 <CodeMirror
                   value={
                     editableAiDraftText
                       ? editableAiDraftText
                       : (aiResultText || buildEditorMenuJson(decodedCurrentMenus))
                   }
-                  height="clamp(320px, 64vh, 860px)"
+                  height={isDesktopLayout ? "clamp(460px, 68vh, 860px)" : "420px"}
                   theme={vscodeDark}
-                  extensions={[json(), diffDecorationsField, diffTheme]}
+                  extensions={[json(), resultMetricsExtension, diffDecorationsField, diffTheme]}
                   onCreateEditor={(view: any) => {
                     resultEditorViewRef.current = view;
+                    updateResultEditorIndicators(view);
                   }}
                   editable={allowManualEditWhileRunning ? true : (!!editableAiDraftText || aiProgress?.status === "completed")}
                   onChange={(val) => {
                     setEditableAiDraftText(val);
+                    const view = resultEditorViewRef.current;
+                    if (view) {
+                      updateResultEditorIndicators(view);
+                    }
                   }}
                   basicSetup={{
                     lineNumbers: true,
@@ -5364,7 +5479,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                   placeholder={
                     editableAiDraftText
                       ? (t("system.menu.aiDesigner.editor.editablePlaceholder") as string)
-                      : (t("system.menu.aiDesigner.resultPlaceholder") || "Kết quả AI sẽ hiển thị ở đây (JSON format)")
+                      : uiText("Kết quả AI sẽ hiển thị tại đây (định dạng JSON menu)", "AI result will appear here (menu JSON format)", "AI 结果将在此显示（菜单 JSON 格式）")
                   }
                 />
               </div>
@@ -5375,10 +5490,9 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                   message={t("system.menu.aiDesigner.property.editableResultHint") || "Node đã được chỉnh sửa — JSON trong editor có thể chỉnh thêm trước khi Áp dụng"}
                 />
               )}
-            </Space>
-            )}
-          </Card>
-        )}
+          </Space>
+        </Card>
+        </div>
         </Space>
       </Card>
     </>

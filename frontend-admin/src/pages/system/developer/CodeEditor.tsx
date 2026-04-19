@@ -7,14 +7,20 @@ import {
 	SearchOutlined,
 	SwapOutlined,
 	SettingOutlined,
-	FormOutlined,
-	CheckOutlined,
-	UndoOutlined,
-	RedoOutlined,
+	ExpandOutlined,
+	HistoryOutlined,
+	PushpinOutlined,
+	PushpinFilled,
+	MenuFoldOutlined,
+	MenuUnfoldOutlined,
 } from "@ant-design/icons";
 import CodeMirror from "@uiw/react-codemirror";
 import { javascript } from "@codemirror/lang-javascript";
 import { html } from "@codemirror/lang-html";
+import { search, openSearchPanel, gotoLine } from "@codemirror/search";
+import { undo, redo } from "@codemirror/commands";
+import { StateEffect, StateField } from "@codemirror/state";
+import { Decoration, type DecorationSet, EditorView } from "@codemirror/view";
 import { vscodeDark } from "@uiw/codemirror-theme-vscode";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "#src/store";
@@ -24,8 +30,6 @@ import {
 	decryptCode,
 	saveCode,
 	deleteCode,
-	searchInCode,
-	replaceInCode,
 	type CodeItem,
 } from "./useCodeEditor";
 import styles from "./CodeEditor.module.css";
@@ -48,11 +52,141 @@ type AiProgress = {
 	elapsedMs?: number;
 };
 
-type HotkeyAction = "save" | "find" | "replaceFocus" | "goto" | "askAi" | "continueAi" | "applyReplace" | "commandPalette";
+type AiRequestHistoryItem = {
+	id: string;
+	request: string;
+	status: "completed" | "failed";
+	summary: string;
+	changes: string[];
+	draftCode: string;
+	createdAt: number;
+	pinned?: boolean;
+};
+
+type AiSessionSnapshot = {
+	messages: AiMessage[];
+	lastCode: string;
+	summary: string;
+	changeItems: string[];
+	history: AiRequestHistoryItem[];
+	updatedAt?: number;
+};
+
+type AiPanelMode = "normal" | "expanded";
+type AiHistoryFilter = "all" | "completed" | "failed" | "pinned";
+
+type DraftChangeAction = "add" | "edit" | "delete";
+
+type DraftLineRange = {
+	fromLine: number;
+	toLine: number;
+	action?: DraftChangeAction;
+};
+
+type PendingDraftChunk = {
+	id: string;
+	before: string;
+	after: string;
+	ranges: DraftLineRange[];
+	createdAt: number;
+};
+
+type HotkeyAction = "save" | "find" | "replaceFocus" | "goto" | "askAi" | "continueAi" | "commandPalette";
 
 type HotkeyConfig = Record<HotkeyAction, string>;
 
 const HOTKEY_STORAGE_KEY = "developer.codeeditor.hotkeys.v1";
+const AI_SESSION_STORAGE_KEY = "developer.codeeditor.aiSessions.v1";
+const AI_SESSION_LOCAL_STORAGE_KEY = "developer.codeeditor.aiSessions.persist.v1";
+const AI_HISTORY_LIMIT = 40;
+const AI_SESSION_MAX = 50;
+
+const setDraftHighlights = StateEffect.define<DraftLineRange[]>();
+
+function normalizeDraftAction(raw: any): DraftChangeAction {
+	const text = String(raw || "").trim().toLowerCase();
+	if (["add", "insert", "create", "new", "+"].includes(text)) return "add";
+	if (["delete", "remove", "del", "-"].includes(text)) return "delete";
+	return "edit";
+}
+
+function parseLineNumber(value: any, fallback: number): number {
+	const n = Number(value);
+	if (Number.isFinite(n) && n > 0) return Math.floor(n);
+	return fallback;
+}
+
+function mergeDraftRanges(ranges: DraftLineRange[]): DraftLineRange[] {
+	if (!Array.isArray(ranges) || ranges.length === 0) return [];
+	const sorted = [...ranges]
+		.map((range) => ({
+			fromLine: Math.max(1, parseLineNumber(range.fromLine, 1)),
+			toLine: Math.max(1, parseLineNumber(range.toLine, parseLineNumber(range.fromLine, 1))),
+			action: normalizeDraftAction(range.action),
+		}))
+		.sort((a, b) => a.fromLine - b.fromLine || a.toLine - b.toLine);
+
+	const merged: DraftLineRange[] = [];
+	for (const range of sorted) {
+		const prev = merged[merged.length - 1];
+		if (prev && prev.action === range.action && range.fromLine <= prev.toLine + 1) {
+			prev.toLine = Math.max(prev.toLine, range.toLine);
+			continue;
+		}
+		merged.push(range);
+	}
+
+	return merged.slice(0, 60);
+}
+
+function buildDraftHighlightDecorations(ranges: DraftLineRange[], doc: any): DecorationSet {
+	if (!Array.isArray(ranges) || ranges.length === 0 || !doc) {
+		return Decoration.none;
+	}
+	const marks = [] as any[];
+	const totalLines = Math.max(1, Number(doc.lines || 1));
+	for (const range of ranges) {
+		const from = Math.max(1, Math.min(totalLines, Number(range.fromLine || 1)));
+		const to = Math.max(from, Math.min(totalLines, Number(range.toLine || from)));
+		const action = normalizeDraftAction(range.action);
+		const className = action === "add"
+			? "cm-ai-live-line-add"
+			: action === "delete"
+				? "cm-ai-live-line-delete"
+				: "cm-ai-live-line-edit";
+		for (let lineNumber = from; lineNumber <= to; lineNumber += 1) {
+			const line = doc.line(lineNumber);
+			marks.push(Decoration.line({ class: className }).range(line.from));
+		}
+	}
+	return Decoration.set(marks, true);
+}
+
+const draftHighlightField = StateField.define<DecorationSet>({
+	create: () => Decoration.none,
+	update(deco, tr) {
+		let next = deco.map(tr.changes);
+		for (const effect of tr.effects) {
+			if (effect.is(setDraftHighlights)) {
+				next = buildDraftHighlightDecorations(effect.value, tr.state.doc);
+			}
+		}
+		return next;
+	},
+	provide: (field) => EditorView.decorations.from(field),
+});
+
+const draftHighlightTheme = EditorView.theme({
+	".cm-ai-live-line-edit": {
+		backgroundColor: "rgba(250, 204, 21, 0.14)",
+	},
+	".cm-ai-live-line-add": {
+		backgroundColor: "rgba(34, 197, 94, 0.16)",
+	},
+	".cm-ai-live-line-delete": {
+		backgroundColor: "rgba(239, 68, 68, 0.18)",
+	},
+});
 
 const DEFAULT_HOTKEYS: HotkeyConfig = {
 	save: "s",
@@ -61,18 +195,19 @@ const DEFAULT_HOTKEYS: HotkeyConfig = {
 	goto: "g",
 	askAi: "enter",
 	continueAi: "enter",
-	applyReplace: "e",
 	commandPalette: "k",
 };
 
 function createAiPrompt(params: {
+	appId: string;
 	language: "javascript" | "html";
 	codeName: string | null;
+	codeType: number;
 	currentCode: string;
 	requestText: string;
 	messages: AiMessage[];
 }) {
-	const { language, codeName, currentCode, requestText, messages } = params;
+	const { appId, language, codeName, codeType, currentCode, requestText, messages } = params;
 	const recentConversation = messages
 		.slice(-6)
 		.map((m) => `${m.role === "user" ? "USER" : "ASSISTANT"}: ${m.content}`)
@@ -84,7 +219,11 @@ function createAiPrompt(params: {
 
 	return [
 		"You are a senior coding assistant inside a low-code developer editor.",
+		"This is the developer code editor workspace, not the menu JSON designer.",
 		"Always preserve existing business logic unless the user explicitly asks to rewrite it.",
+		"Treat p_name and p_type as the stable identity of the selected sys_autos record.",
+		"Do not rename or switch the target record unless the user explicitly requests that.",
+		"Your job is only to return an updated draft code suggestion. Database save/delete is handled separately by the UI.",
 		"Return strict JSON only with this shape:",
 		"{",
 		"  \"summary\": \"short explanation\",",
@@ -92,6 +231,9 @@ function createAiPrompt(params: {
 		"  \"changes\": [\"item 1\", \"item 2\"]",
 		"}",
 		"No markdown, no code fences.",
+		`Current app_id: ${appId}`,
+		`Selected p_name: ${codeName || "(unsaved)"}`,
+		`Selected p_type: ${codeType}`,
 		`Target language: ${language}`,
 		`Code item: ${codeName || "(unsaved)"}`,
 		"Current code:",
@@ -151,12 +293,10 @@ function parseAiCodeResponse(response: any): { summary: string; code: string; ch
 }
 
 export default function CodeEditor() {
-	const { t } = useTranslation();
+	const { t, i18n } = useTranslation();
 	const appId = useAppStore(state => state.currentAppId);
 	const editorRef = useRef<any>(null);
-	const searchInputRef = useRef<InputRef>(null);
-	const replaceInputRef = useRef<InputRef>(null);
-	const gotoInputRef = useRef<InputRef>(null);
+	const currentDraftRef = useRef("");
 	const aiPromptInputRef = useRef<InputRef>(null);
 
 	// State Management
@@ -165,25 +305,123 @@ export default function CodeEditor() {
 	const [selectedCode, setSelectedCode] = useState<string | null>(null);
 	const [codeContent, setCodeContent] = useState<string>("");
 	const [loading, setLoading] = useState(false);
-	const [searchText, setSearchText] = useState("");
-	const [replaceText, setReplaceText] = useState("");
-	const [gotoLine, setGotoLine] = useState<number | null>(null);
 	const [createModalOpen, setCreateModalOpen] = useState(false);
 	const [newCodeName, setNewCodeName] = useState("");
 	const [aiPromptText, setAiPromptText] = useState("");
 	const [aiMessages, setAiMessages] = useState<AiMessage[]>([]);
 	const [aiLastCode, setAiLastCode] = useState("");
+	const [aiChangeItems, setAiChangeItems] = useState<string[]>([]);
+	const [aiRequestHistory, setAiRequestHistory] = useState<AiRequestHistoryItem[]>([]);
 	const [aiLoading, setAiLoading] = useState(false);
 	const [aiProgress, setAiProgress] = useState<AiProgress | null>(null);
 	const [aiSummary, setAiSummary] = useState("");
+	const [aiPanelMode, setAiPanelMode] = useState<AiPanelMode>("normal");
+	const [aiLeftPanelHidden, setAiLeftPanelHidden] = useState(false);
+	const [pendingChunk, setPendingChunk] = useState<PendingDraftChunk | null>(null);
+	const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
+	const [historyFilter, setHistoryFilter] = useState<AiHistoryFilter>("all");
+	const [historyKeyword, setHistoryKeyword] = useState("");
+	const [aiSessionStorageReady, setAiSessionStorageReady] = useState(false);
+	const [sessionHydratedKey, setSessionHydratedKey] = useState("");
+	const [gotoModalOpen, setGotoModalOpen] = useState(false);
+	const [gotoLineInput, setGotoLineInput] = useState("");
 	const [hotkeys, setHotkeys] = useState<HotkeyConfig>(DEFAULT_HOTKEYS);
 	const [hotkeyModalOpen, setHotkeyModalOpen] = useState(false);
 	const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
 	const [commandSearch, setCommandSearch] = useState("");
+	const [draftCursor, setDraftCursor] = useState({ line: 1, column: 1 });
+	const [draftStats, setDraftStats] = useState({ lines: 1, chars: 0 });
+	const [savedCodeSnapshot, setSavedCodeSnapshot] = useState("");
 	const [form] = Form.useForm();
 
 	const isMac = useMemo(() => /Mac|iPhone|iPad|iPod/i.test(navigator.platform || ""), []);
 	const modKeyLabel = isMac ? "Cmd" : "Ctrl";
+	const selectedCodeItem = useMemo(
+		() => codeList.find((item) => item.p_name === selectedCode) || null,
+		[codeList, selectedCode],
+	);
+	const selectedCodeLabel = selectedCode || t("system.developer.ai.unsaved");
+	const aiStatusText = aiProgress?.stage || aiProgress?.status || t("system.developer.ai.running");
+	const resolvedPType = selectedCodeItem?.p_type ?? codeType;
+	const currentLanguage = codeType === 0 ? "javascript" : "html";
+	const currentTypeLabel = codeType === 0 ? "JavaScript" : "HTML";
+	const aiSessionSnapshotsRef = useRef<Record<string, AiSessionSnapshot>>({});
+	const aiSessionKey = useMemo(
+		() => `${appId || "unknown"}::${selectedCode || "__unsaved__"}::${resolvedPType}::${currentLanguage}`,
+		[appId, selectedCode, resolvedPType, currentLanguage],
+	);
+	const draftDirty = useMemo(
+		() => String(codeContent || "") !== String(savedCodeSnapshot || ""),
+		[codeContent, savedCodeSnapshot],
+	);
+	const devUiText = (vi: string, en: string, zh: string) => {
+		const lang = String(i18n.resolvedLanguage || i18n.language || "vi").toLowerCase();
+		if (lang.startsWith("zh")) return zh;
+		if (lang.startsWith("en")) return en;
+		return vi;
+	};
+
+	const updateDraftIndicators = (view: any) => {
+		if (!view?.state?.doc) return;
+		const head = Number(view.state.selection?.main?.head ?? 0);
+		const lineInfo = view.state.doc.lineAt(head);
+		setDraftCursor({
+			line: Number(lineInfo?.number || 1),
+			column: Math.max(1, head - Number(lineInfo?.from || 0) + 1),
+		});
+		setDraftStats({
+			lines: Math.max(1, Number(view.state.doc.lines || 1)),
+			chars: Number(view.state.doc.length || 0),
+		});
+	};
+
+	const draftMetricsExtension = useMemo(
+		() => EditorView.updateListener.of((update) => {
+			if (!update.docChanged && !update.selectionSet) return;
+			updateDraftIndicators(update.view);
+		}),
+		[],
+	);
+
+	const visibleAiRequestHistory = useMemo(() => {
+		const keyword = historyKeyword.trim().toLowerCase();
+		const source = Array.isArray(aiRequestHistory) ? aiRequestHistory : [];
+		return source.filter((item) => {
+			if (historyFilter === "completed" && item.status !== "completed") return false;
+			if (historyFilter === "failed" && item.status !== "failed") return false;
+			if (historyFilter === "pinned" && !item.pinned) return false;
+			if (!keyword) return true;
+			return (
+				String(item.request || "").toLowerCase().includes(keyword)
+				|| String(item.summary || "").toLowerCase().includes(keyword)
+			);
+		});
+	}, [aiRequestHistory, historyFilter, historyKeyword]);
+
+	useEffect(() => {
+		currentDraftRef.current = aiLastCode;
+	}, [aiLastCode]);
+
+	useEffect(() => {
+		const view = editorRef.current;
+		if (!view) return;
+		const ranges = pendingChunk?.ranges || [];
+		const firstRange = ranges[0];
+		if (firstRange && view?.state?.doc) {
+			const totalLines = Math.max(1, Number(view.state.doc.lines || 1));
+			const fromLine = Math.max(1, Math.min(totalLines, Number(firstRange.fromLine || 1)));
+			const toLine = Math.max(fromLine, Math.min(totalLines, Number(firstRange.toLine || fromLine)));
+			const from = view.state.doc.line(fromLine).from;
+			const to = view.state.doc.line(toLine).to;
+			view.dispatch({
+				effects: setDraftHighlights.of(ranges),
+				selection: { anchor: from, head: to },
+				scrollIntoView: true,
+			});
+			return;
+		}
+		view.dispatch({ effects: setDraftHighlights.of(ranges) });
+	}, [pendingChunk]);
 
 	useEffect(() => {
 		try {
@@ -195,6 +433,71 @@ export default function CodeEditor() {
 			setHotkeys(DEFAULT_HOTKEYS);
 		}
 	}, []);
+
+	useEffect(() => {
+		try {
+			const raw = sessionStorage.getItem(AI_SESSION_STORAGE_KEY)
+				|| localStorage.getItem(AI_SESSION_LOCAL_STORAGE_KEY);
+			if (raw) {
+				const parsed = JSON.parse(raw || "{}") as Record<string, AiSessionSnapshot>;
+				if (parsed && typeof parsed === "object") {
+					aiSessionSnapshotsRef.current = parsed;
+				}
+			}
+		} catch {
+			aiSessionSnapshotsRef.current = {};
+		}
+		setAiSessionStorageReady(true);
+	}, []);
+
+	useEffect(() => {
+		if (!aiSessionStorageReady) return;
+		setSessionHydratedKey("");
+		const snapshot = aiSessionSnapshotsRef.current[aiSessionKey];
+		setAiMessages(snapshot?.messages || []);
+		setAiLastCode(snapshot?.lastCode || codeContent || "");
+		setAiSummary(snapshot?.summary || "");
+		setAiChangeItems(snapshot?.changeItems || []);
+		setAiRequestHistory(snapshot?.history || []);
+		setAiProgress(null);
+		setSelectedHistoryId(null);
+		setSessionHydratedKey(aiSessionKey);
+	}, [aiSessionKey, aiSessionStorageReady, codeContent]);
+
+	useEffect(() => {
+		if (!aiSessionStorageReady || sessionHydratedKey !== aiSessionKey) return;
+		const nextSnapshots: Record<string, AiSessionSnapshot> = {
+			...aiSessionSnapshotsRef.current,
+			[aiSessionKey]: {
+			messages: aiMessages,
+			lastCode: aiLastCode,
+			summary: aiSummary,
+			changeItems: aiChangeItems,
+			history: aiRequestHistory.slice(0, AI_HISTORY_LIMIT),
+				updatedAt: Date.now(),
+			},
+		};
+
+		const snapshotEntries = Object.entries(nextSnapshots)
+			.sort((a, b) => Number(b[1]?.updatedAt || 0) - Number(a[1]?.updatedAt || 0))
+			.slice(0, AI_SESSION_MAX);
+		aiSessionSnapshotsRef.current = Object.fromEntries(snapshotEntries);
+		try {
+			sessionStorage.setItem(AI_SESSION_STORAGE_KEY, JSON.stringify(aiSessionSnapshotsRef.current));
+			localStorage.setItem(AI_SESSION_LOCAL_STORAGE_KEY, JSON.stringify(aiSessionSnapshotsRef.current));
+		} catch {
+			// Ignore quota errors in session storage.
+		}
+	}, [
+		aiSessionStorageReady,
+		sessionHydratedKey,
+		aiSessionKey,
+		aiMessages,
+		aiLastCode,
+		aiSummary,
+		aiChangeItems,
+		aiRequestHistory,
+	]);
 
 	const updateHotkey = (action: HotkeyAction, value: string) => {
 		const key = String(value || "").trim().toLowerCase();
@@ -241,9 +544,15 @@ export default function CodeEditor() {
 			try {
 				const decrypted = decryptCode(code.p_code);
 				setCodeContent(decrypted);
+				setAiLastCode(decrypted);
+				setSavedCodeSnapshot(decrypted);
+				setPendingChunk(null);
 			} catch (error) {
 				message.error(t("system.developer.decryptFailed"));
 				setCodeContent(code.p_code);
+				setAiLastCode(code.p_code);
+				setSavedCodeSnapshot(code.p_code);
+				setPendingChunk(null);
 			}
 		}
 	};
@@ -261,6 +570,7 @@ export default function CodeEditor() {
 
 			if (result.success) {
 				message.success(result.message);
+				setSavedCodeSnapshot(codeContent);
 				loadCodeList(codeType);
 			} else {
 				message.error(result.error);
@@ -315,52 +625,141 @@ export default function CodeEditor() {
 		setNewCodeName("");
 		setSelectedCode(newCodeName.trim());
 		setCodeContent("");
+		setAiLastCode("");
+		setSavedCodeSnapshot("");
+		setPendingChunk(null);
 	};
 
-	// Search functionality
-	const handleSearch = () => {
-		if (!searchText) {
-			message.warning(t("system.developer.enterSearchText"));
+	const runEditorCommand = (command: (view: any) => boolean, fallbackMessage?: string) => {
+		const view = editorRef.current;
+		if (!view) return;
+		view.focus();
+		const handled = command(view);
+		if (!handled && fallbackMessage) {
+			message.info(fallbackMessage);
+		}
+	};
+
+	const openEditorSearch = () => {
+		runEditorCommand(openSearchPanel, t("system.developer.ai.searchPanelUnavailable", "Không mở được thanh tìm kiếm của editor."));
+	};
+
+	const openEditorGotoLine = () => {
+		const view = editorRef.current;
+		if (!view) return;
+		view.focus();
+		const handled = gotoLine(view);
+		if (!handled) {
+			setGotoModalOpen(true);
+		}
+	};
+
+	const applyGotoLine = () => {
+		const view = editorRef.current;
+		if (!view) {
+			setGotoModalOpen(false);
 			return;
 		}
 
-		const results = searchInCode(codeContent, searchText);
-		if (results.length > 0) {
-			message.info(t("system.developer.foundMatches", { count: results.length }));
-			// Auto scroll to first result
-			if (editorRef.current) {
-				const firstResult = results[0];
-				editorRef.current.setCursor({ line: firstResult.line, ch: firstResult.column });
-				editorRef.current.focus();
+		const raw = Number(gotoLineInput);
+		if (!Number.isFinite(raw)) {
+			message.warning(t("system.developer.ai.gotoEnterNumber", "Vui lòng nhập số dòng hợp lệ."));
+			return;
+		}
+
+		const totalLines = Math.max(1, Number(view.state.doc?.lines || 1));
+		const lineNumber = Math.max(1, Math.min(totalLines, Math.floor(raw)));
+		const line = view.state.doc.line(lineNumber);
+
+		view.dispatch({
+			selection: { anchor: line.from },
+			scrollIntoView: true,
+		});
+		view.focus();
+		setGotoModalOpen(false);
+		setGotoLineInput(String(lineNumber));
+		message.success(t("system.developer.ai.gotoMoved", "Đã di chuyển tới dòng {{line}}.", { line: lineNumber }));
+	};
+
+	const handleUndo = () => {
+		runEditorCommand(undo);
+	};
+
+	const handleRedo = () => {
+		runEditorCommand(redo);
+	};
+
+	const formatHistoryTime = (timestamp: number) => {
+		try {
+			return new Date(timestamp).toLocaleString();
+		} catch {
+			return "";
+		}
+	};
+
+	const buildChangedLineRanges = (beforeText: string, afterText: string): DraftLineRange[] => {
+		const beforeLines = String(beforeText || "").split("\n");
+		const afterLines = String(afterText || "").split("\n");
+		const max = Math.max(beforeLines.length, afterLines.length);
+		const changedRanges: DraftLineRange[] = [];
+		for (let index = 0; index < max; index += 1) {
+			const beforeLine = beforeLines[index];
+			const afterLine = afterLines[index];
+			if (beforeLine !== afterLine) {
+				const line = Math.max(1, index + 1);
+				const action: DraftChangeAction = beforeLine === undefined
+					? "add"
+					: afterLine === undefined
+						? "delete"
+						: "edit";
+				changedRanges.push({ fromLine: line, toLine: line, action });
 			}
-		} else {
-			message.info(t("system.developer.textNotFound"));
 		}
+		return mergeDraftRanges(changedRanges).slice(0, 24);
 	};
 
-	// Replace functionality
-	const handleReplace = () => {
-		if (!searchText) {
-			message.warning(t("system.developer.enterSearchText"));
-			return;
+	const buildRealtimeRangesFromProgress = (progress: any, beforeText: string, afterText: string): DraftLineRange[] => {
+		const rangeCollections = [
+			progress?.textEdits,
+			progress?.lineRanges,
+			progress?.ranges,
+			progress?.changedRanges,
+			progress?.lineChanges,
+			progress?.changes,
+			progress?.patchOps,
+		].filter((entry) => Array.isArray(entry) && entry.length > 0) as any[];
+
+		for (const collection of rangeCollections) {
+			const parsed: DraftLineRange[] = collection.map((item: any) => {
+				const rawStart = item?.startLine ?? item?.fromLine ?? item?.line ?? item?.range?.startLine ?? item?.range?.start?.line;
+				const startLine = parseLineNumber(rawStart, 1);
+				const rawEnd = item?.endLine ?? item?.toLine ?? item?.range?.endLine ?? item?.range?.end?.line;
+				const endLine = Math.max(startLine, parseLineNumber(rawEnd, startLine));
+				const action = normalizeDraftAction(item?.action ?? item?.type ?? item?.op ?? item?.kind);
+				return { fromLine: startLine, toLine: endLine, action };
+			}).filter((range: DraftLineRange) => Number.isFinite(range.fromLine) && Number.isFinite(range.toLine));
+
+			if (parsed.length > 0) {
+				return mergeDraftRanges(parsed);
+			}
 		}
 
-		const newContent = replaceInCode(codeContent, searchText, replaceText, true);
-		setCodeContent(newContent);
-		message.success(t("system.developer.replacedAll", { text: searchText }));
+		return buildChangedLineRanges(beforeText, afterText);
 	};
 
-	// Go to line
-	const handleGotoLine = () => {
-		if (!gotoLine || !editorRef.current) return;
-
-		const editor = editorRef.current;
-		// Line numbers in editors are typically 1-based
-		editor.setCursor({ line: Math.max(0, gotoLine - 1), ch: 0 });
-		editor.focus();
+	const formatRangesText = (ranges: DraftLineRange[]): string => {
+		if (!Array.isArray(ranges) || ranges.length === 0) {
+			return t("system.developer.ai.noLineChanges", "Không có thay đổi dòng cụ thể.");
+		}
+		return ranges
+			.map((range) => {
+				const marker = range.action === "add" ? "+" : range.action === "delete" ? "-" : "~";
+				return range.fromLine === range.toLine
+					? `${marker}L${range.fromLine}`
+					: `${marker}L${range.fromLine}-L${range.toLine}`;
+			})
+			.join(", ");
 	};
-
-	const currentLanguage = codeType === 0 ? "javascript" : "html";
 
 	const addAiMessage = (role: AiRole, content: string) => {
 		setAiMessages(prev => [
@@ -381,15 +780,26 @@ export default function CodeEditor() {
 			return;
 		}
 
+		const requestCreatedAt = Date.now();
+		const historyId = `${requestCreatedAt}_${Math.random().toString(16).slice(2, 10)}`;
+
 		setAiLoading(true);
 		setAiSummary("");
+		setAiChangeItems([]);
+		setPendingChunk(null);
+		// Keep draft editor active during request so AI can stream/update directly on it.
+		if (!continueMode && !aiLastCode.trim()) {
+			setAiLastCode(codeContent || "");
+		}
 		setAiProgress({ status: "preparing", stage: "preparing", message: t("system.developer.ai.preparing"), percent: 0 });
 		addAiMessage("user", requestText);
 
 		try {
 			const prompt = createAiPrompt({
+				appId,
 				language: currentLanguage,
 				codeName: selectedCode,
+				codeType: resolvedPType,
 				currentCode: continueMode && aiLastCode ? aiLastCode : codeContent,
 				requestText,
 				messages: aiMessages,
@@ -397,6 +807,27 @@ export default function CodeEditor() {
 
 			const response = await generateSeoContentWithPrompt(prompt, {
 				onProgress: (progress) => {
+					const liveDraft = [
+						progress?.draftCode,
+						progress?.code,
+						progress?.partialCode,
+						progress?.previewCode,
+					].find((item) => typeof item === "string" && String(item).trim().length > 0);
+					if (typeof liveDraft === "string") {
+						const before = currentDraftRef.current;
+						if (liveDraft !== before) {
+							const ranges = buildRealtimeRangesFromProgress(progress, before, liveDraft);
+							setPendingChunk({
+								id: `${Date.now()}_${Math.random().toString(16).slice(2, 8)}`,
+								before,
+								after: liveDraft,
+								ranges,
+								createdAt: Date.now(),
+							});
+							setAiLastCode(liveDraft);
+							setCodeContent(liveDraft);
+						}
+					}
 					setAiProgress({
 						status: progress?.status,
 						stage: progress?.stage,
@@ -417,15 +848,48 @@ export default function CodeEditor() {
 				throw new Error(t("system.developer.ai.missingCode"));
 			}
 
+			const completedHistoryItem: AiRequestHistoryItem = {
+				id: historyId,
+				request: requestText,
+				status: "completed",
+				summary: parsed.summary || t("system.developer.ai.generatedReady"),
+				changes: Array.isArray(parsed.changes) ? parsed.changes : [],
+				draftCode: parsed.code,
+				createdAt: requestCreatedAt,
+			};
+
 			setAiLastCode(parsed.code);
+			setCodeContent(parsed.code);
+			setPendingChunk(null);
 			setAiSummary(parsed.summary || "");
+			setAiChangeItems(Array.isArray(parsed.changes) ? parsed.changes : []);
+			setAiRequestHistory((prev) => [
+				completedHistoryItem,
+				...prev,
+			].slice(0, AI_HISTORY_LIMIT));
+			setSelectedHistoryId(historyId);
 			addAiMessage("assistant", parsed.summary || t("system.developer.ai.generatedReady"));
 			setAiProgress({ status: "completed", stage: "completed", message: t("system.developer.ai.generatedReady"), percent: 100 });
 			setAiPromptText("");
 			message.success(t("system.developer.ai.generatedSuccess"));
 		} catch (error) {
 			const msg = error instanceof Error ? error.message : t("system.developer.ai.requestFailed");
+			setPendingChunk(null);
+			const failedHistoryItem: AiRequestHistoryItem = {
+				id: historyId,
+				request: requestText,
+				status: "failed",
+				summary: msg,
+				changes: [],
+				draftCode: "",
+				createdAt: requestCreatedAt,
+			};
 			setAiProgress({ status: "failed", stage: "failed", message: msg, percent: 0 });
+			setAiRequestHistory((prev) => [
+				failedHistoryItem,
+				...prev,
+			].slice(0, AI_HISTORY_LIMIT));
+			setSelectedHistoryId(historyId);
 			addAiMessage("assistant", `${t("system.developer.ai.errorPrefix")}: ${msg}`);
 			message.error(msg);
 		} finally {
@@ -433,37 +897,53 @@ export default function CodeEditor() {
 		}
 	};
 
-	const handleApplyAiCode = (mode: "replace" | "append" | "selection") => {
-		if (!aiLastCode.trim()) {
-			message.warning(t("system.developer.ai.noSuggestion"));
-			return;
+	const handleAcceptChunk = () => {
+		setPendingChunk(null);
+		message.success(t("system.developer.ai.chunkAccepted", "Đã chấp nhận phần AI vừa cập nhật."));
+	};
+
+	const handleRejectChunk = () => {
+		if (!pendingChunk) return;
+		setAiLastCode(pendingChunk.before);
+		setCodeContent(pendingChunk.before);
+		setPendingChunk(null);
+		message.info(t("system.developer.ai.chunkRejected", "Đã hoàn tác phần AI vừa cập nhật."));
+	};
+
+	const handleRestoreHistoryItem = (item: AiRequestHistoryItem) => {
+		setSelectedHistoryId(item.id);
+		setPendingChunk(null);
+		setAiPromptText(item.request || "");
+		setAiSummary(item.summary || "");
+		setAiChangeItems(Array.isArray(item.changes) ? item.changes : []);
+		if (item.draftCode) {
+			setAiLastCode(item.draftCode);
+			setCodeContent(item.draftCode);
 		}
-		if (mode === "replace") {
-			setCodeContent(aiLastCode);
-			message.success(t("system.developer.ai.appliedReplace"));
-			return;
+	};
+
+	const handleTogglePinHistoryItem = (id: string) => {
+		setAiRequestHistory((prev) => prev.map((item) => {
+			if (item.id !== id) return item;
+			return { ...item, pinned: !item.pinned };
+		}));
+	};
+
+	const handleClearCurrentAiSession = () => {
+		setAiMessages([]);
+		setAiSummary("");
+		setAiChangeItems([]);
+		setAiRequestHistory([]);
+		setAiProgress(null);
+		setPendingChunk(null);
+		setSelectedHistoryId(null);
+		delete aiSessionSnapshotsRef.current[aiSessionKey];
+		try {
+			sessionStorage.setItem(AI_SESSION_STORAGE_KEY, JSON.stringify(aiSessionSnapshotsRef.current));
+			localStorage.setItem(AI_SESSION_LOCAL_STORAGE_KEY, JSON.stringify(aiSessionSnapshotsRef.current));
+		} catch {
+			// Ignore storage write errors.
 		}
-		if (mode === "selection") {
-			const view = editorRef.current;
-			const selection = view?.state?.selection?.main;
-			if (!view || !selection || selection.from === selection.to) {
-				message.warning(t("system.developer.ai.selectRangeFirst"));
-				return;
-			}
-			view.dispatch({
-				changes: {
-					from: selection.from,
-					to: selection.to,
-					insert: aiLastCode,
-				},
-			});
-			const nextCode = String(view.state.doc?.toString?.() || "");
-			setCodeContent(nextCode);
-			message.success(t("system.developer.ai.appliedSelection"));
-			return;
-		}
-		setCodeContent(prev => `${prev.trimEnd()}\n\n${aiLastCode}`);
-		message.success(t("system.developer.ai.appliedAppend"));
 	};
 
 	const runCommand = async (commandId: string) => {
@@ -474,26 +954,17 @@ export default function CodeEditor() {
 			case "continueAi":
 				await handleAskAi(true);
 				break;
-			case "applyReplace":
-				handleApplyAiCode("replace");
-				break;
-			case "applyAppend":
-				handleApplyAiCode("append");
-				break;
-			case "applySelection":
-				handleApplyAiCode("selection");
-				break;
 			case "save":
 				await handleSaveCode();
 				break;
 			case "find":
-				searchInputRef.current?.focus();
+				openEditorSearch();
 				break;
 			case "replaceFocus":
-				replaceInputRef.current?.focus();
+				openEditorSearch();
 				break;
 			case "goto":
-				gotoInputRef.current?.focus();
+				openEditorGotoLine();
 				break;
 			default:
 				break;
@@ -505,9 +976,6 @@ export default function CodeEditor() {
 		const rows = [
 			{ id: "askAi", label: t("system.developer.command.askAi") },
 			{ id: "continueAi", label: t("system.developer.command.continueAi") },
-			{ id: "applySelection", label: t("system.developer.command.applySelection") },
-			{ id: "applyReplace", label: t("system.developer.command.applyReplace") },
-			{ id: "applyAppend", label: t("system.developer.command.applyAppend") },
 			{ id: "save", label: t("system.developer.command.save") },
 			{ id: "find", label: t("system.developer.command.find") },
 			{ id: "replaceFocus", label: t("system.developer.command.replace") },
@@ -520,12 +988,6 @@ export default function CodeEditor() {
 	}, [commandSearch, t]);
 
 	useEffect(() => {
-		const isTextInputElement = (target: EventTarget | null) => {
-			if (!(target instanceof HTMLElement)) return false;
-			const tag = target.tagName.toLowerCase();
-			return tag === "input" || tag === "textarea" || target.isContentEditable;
-		};
-
 		const onKeyDown = (event: KeyboardEvent) => {
 			const key = String(event.key || "").toLowerCase();
 			const mod = event.metaKey || event.ctrlKey;
@@ -539,19 +1001,19 @@ export default function CodeEditor() {
 
 			if (key === hotkeys.find && !event.shiftKey) {
 				event.preventDefault();
-				searchInputRef.current?.focus();
+				openEditorSearch();
 				return;
 			}
 
 			if (key === hotkeys.replaceFocus && event.shiftKey) {
 				event.preventDefault();
-				replaceInputRef.current?.focus();
+				openEditorSearch();
 				return;
 			}
 
 			if (key === hotkeys.goto) {
 				event.preventDefault();
-				gotoInputRef.current?.focus();
+				openEditorGotoLine();
 				return;
 			}
 
@@ -573,227 +1035,364 @@ export default function CodeEditor() {
 				return;
 			}
 
-			if (key === hotkeys.applyReplace && event.altKey && !isTextInputElement(event.target)) {
-				event.preventDefault();
-				handleApplyAiCode("replace");
-			}
 		};
 
 		window.addEventListener("keydown", onKeyDown);
 		return () => window.removeEventListener("keydown", onKeyDown);
-	}, [hotkeys, aiLastCode, aiPromptText, codeContent, codeType, searchText, replaceText, gotoLine, selectedCode, t]);
+	}, [hotkeys, aiPromptText, codeContent, codeType, selectedCode, t]);
 
 	return (
 		<div className={styles.container}>
-			<Card>
-				{/* Toolbar */}
-				<Space direction="vertical" style={{ width: "100%" }} size="large">
-					{/* Code Type and Selection */}
-					<Space wrap>
-						<Select
-							style={{ width: 150 }}
-							value={codeType}
-							onChange={setCodeType}
-							options={[
-								{ label: "JavaScript", value: 0 },
-								{ label: "HTML", value: 1 },
-							]}
-							placeholder={t("system.developer.selectCodeType")}
-						/>
-						<Select
-							style={{ width: 250 }}
-							placeholder={t("system.developer.selectOrCreateCode")}
-							value={selectedCode || undefined}
-							onChange={handleSelectCode}
-							optionLabelProp="label"
-							loading={loading}
-							filterOption={(input, option) =>
-								(option?.label as string)
-									?.toLowerCase()
-									.includes(input.toLowerCase())
-							}
-							options={codeList.map(code => ({
-								label: code.p_name,
-								value: code.p_name,
-							}))}
-							allowClear
-							onClear={() => {
-								setSelectedCode(null);
-								setCodeContent("");
-							}}
-						/>
-						<Button
-							type="primary"
-							onClick={() => setCreateModalOpen(true)}
-						>
-							{t("system.developer.createNew")}
-						</Button>
-						<Button icon={<SettingOutlined />} onClick={() => setHotkeyModalOpen(true)}>
-							{t("system.developer.hotkeys")}
-						</Button>
-						<Button onClick={() => setCommandPaletteOpen(true)}>
-							{t("system.developer.commandPalette")}
-						</Button>
-					</Space>
-
-					{/* Editor Controls */}
-					<Space wrap>
-						<Button
-							icon={<SaveOutlined />}
-							onClick={handleSaveCode}
-							type="primary"
-						>
-							{t("system.developer.save")}
-						</Button>
-						<Button
-							icon={<DeleteOutlined />}
-							danger
-							onClick={handleDeleteCode}
-						>
-							{t("system.developer.delete")}
-						</Button>
-						<div className={styles.shortcutHint}>
-							{modKeyLabel}+{String(hotkeys.save || "s").toUpperCase()}
-						</div>
-					</Space>
-
-					{/* Search and Replace */}
-					<Space wrap>
-						<Input
-							ref={searchInputRef}
-							placeholder={t("system.developer.searchPlaceholder")}
-							style={{ width: 200 }}
-							value={searchText}
-							onChange={e => setSearchText(e.target.value)}
-							onPressEnter={handleSearch}
-						/>
-						<Button
-							icon={<SearchOutlined />}
-							onClick={handleSearch}
-						>
-							{t("system.developer.find")}
-						</Button>
-
-						<Input
-							ref={replaceInputRef}
-							placeholder={t("system.developer.replacePlaceholder")}
-							style={{ width: 200 }}
-							value={replaceText}
-							onChange={e => setReplaceText(e.target.value)}
-						/>
-						<Button
-							icon={<SwapOutlined />}
-							onClick={handleReplace}
-						>
-							{t("system.developer.replaceAll")}
-						</Button>
-
-						<Input
-							ref={gotoInputRef}
-							placeholder={t("system.developer.gotoLine")}
-							type="number"
-							style={{ width: 120 }}
-							value={gotoLine || ""}
-							onChange={e =>
-								setGotoLine(e.target.value ? parseInt(e.target.value) : null)
-							}
-							onPressEnter={handleGotoLine}
-						/>
-						<Button onClick={handleGotoLine}>{t("system.developer.go")}</Button>
-						<div className={styles.shortcutHint}>
-							{modKeyLabel}+{String(hotkeys.find || "f").toUpperCase()} | {modKeyLabel}+Shift+{String(hotkeys.replaceFocus || "f").toUpperCase()} | {modKeyLabel}+{String(hotkeys.goto || "g").toUpperCase()}
-						</div>
-					</Space>
-				</Space>
-			</Card>
-
 			{/* Code Editor */}
-			<Card style={{ marginTop: 16 }}>
-				<CodeMirror
-					onCreateEditor={(view) => {
-						editorRef.current = view;
-					}}
-					value={codeContent}
-					onChange={setCodeContent}
-					extensions={[codeType === 0 ? javascript() : html()]}
-					theme={vscodeDark}
-					height="600px"
-					className={styles.editor}
-				/>
+			<Card className={styles.surfaceCard}>
+				<div className={styles.editorShell}>
+					<div className={styles.editorToolbar}>
+						<div className={styles.editorToolbarTitleRow}>
+							<div className={styles.editorMeta}>
+								<div className={styles.editorMetaTitle}>{t("system.developer.command.save")}</div>
+								<div className={styles.editorMetaLine}>{t("system.developer.ai.currentFile")}: {selectedCodeLabel}</div>
+								<div className={styles.editorMetaLine}>p_type={resolvedPType} • {currentTypeLabel} • app_id={appId}</div>
+							</div>
+							<div className={styles.editorToolbarActions}>
+								<Button onClick={() => setCommandPaletteOpen(true)}>
+									{t("system.developer.commandPalette")}
+								</Button>
+								<Button icon={<SettingOutlined />} onClick={() => setHotkeyModalOpen(true)}>
+									{t("system.developer.hotkeys")}
+								</Button>
+								<Button icon={<SaveOutlined />} onClick={handleSaveCode} type="primary">
+									{t("system.developer.command.save")}
+								</Button>
+								<Button icon={<DeleteOutlined />} danger onClick={handleDeleteCode}>
+									{t("system.developer.delete")}
+								</Button>
+							</div>
+						</div>
+
+						<div className={styles.editorControlRow}>
+							<div className={styles.toolbarCluster}>
+								<Select
+									style={{ width: 150 }}
+									value={codeType}
+									onChange={setCodeType}
+									options={[
+										{ label: "JavaScript", value: 0 },
+										{ label: "HTML", value: 1 },
+									]}
+									placeholder={t("system.developer.selectCodeType")}
+								/>
+								<Select
+									style={{ width: 260 }}
+									placeholder={t("system.developer.selectOrCreateCode")}
+									value={selectedCode || undefined}
+									onChange={handleSelectCode}
+									optionLabelProp="label"
+									loading={loading}
+									filterOption={(input, option) => String(option?.value || "").toLowerCase().includes(input.toLowerCase())}
+									options={codeList.map(code => ({
+										label: code.p_name,
+										value: code.p_name,
+									}))}
+									allowClear
+									onClear={() => {
+										setSelectedCode(null);
+										setCodeContent("");
+										setAiLastCode("");
+										setSavedCodeSnapshot("");
+									}}
+								/>
+								<Button type="primary" onClick={() => setCreateModalOpen(true)}>
+									{t("system.developer.createNew")}
+								</Button>
+							</div>
+							<div className={styles.toolbarCluster}>
+								<div className={styles.shortcutHint}>{modKeyLabel}+{String(hotkeys.save || "s").toUpperCase()}</div>
+								<div className={styles.shortcutHint}>{modKeyLabel}+{String(hotkeys.find || "f").toUpperCase()}</div>
+								<div className={styles.shortcutHint}>{modKeyLabel}+Shift+{String(hotkeys.replaceFocus || "f").toUpperCase()}</div>
+								<div className={styles.shortcutHint}>{modKeyLabel}+{String(hotkeys.goto || "g").toUpperCase()}</div>
+							</div>
+						</div>
+
+						<div className={styles.boundaryNote}>
+							{t("system.developer.ai.saveBoundary", "Lưu hoặc Xóa tại đây sẽ cập nhật trực tiếp mã đang sử dụng trên hệ thống. Vui lòng kiểm tra kỹ trước khi thực hiện.")}
+						</div>
+
+					</div>
+
+				</div>
 			</Card>
 
-			<Card style={{ marginTop: 16 }} title={t("system.developer.ai.panelTitle")}>
-				<Space direction="vertical" style={{ width: "100%" }} size="middle">
-					<div className={styles.aiHints}>
-						<div><strong>{t("system.developer.ai.language")}:</strong> {currentLanguage}</div>
-						<div><strong>{t("system.developer.ai.currentFile")}:</strong> {selectedCode || t("system.developer.ai.unsaved")}</div>
-						<div><strong>{t("system.developer.ai.safetyTitle")}:</strong> {t("system.developer.ai.safetyDesc")}</div>
-						<div className={styles.shortcutHint}>
-							{modKeyLabel}+{String(hotkeys.askAi || "enter").toUpperCase()} | {modKeyLabel}+Shift+{String(hotkeys.continueAi || "enter").toUpperCase()} | {modKeyLabel}+Alt+{String(hotkeys.applyReplace || "e").toUpperCase()} | {modKeyLabel}+{String(hotkeys.commandPalette || "k").toUpperCase()}
-						</div>
-					</div>
-
-					<Input.TextArea
-						ref={aiPromptInputRef}
-						value={aiPromptText}
-						onChange={(e) => setAiPromptText(e.target.value)}
-						placeholder={t("system.developer.ai.promptPlaceholder")}
-						autoSize={{ minRows: 3, maxRows: 8 }}
-					/>
-
-					<Space wrap>
-						<Button type="primary" loading={aiLoading} onClick={() => handleAskAi(false)}>
-							{t("system.developer.ai.ask")}
-						</Button>
-						<Button loading={aiLoading} onClick={() => handleAskAi(true)}>
-							{t("system.developer.ai.continue")}
-						</Button>
-						<Button disabled={!aiLastCode} onClick={() => handleApplyAiCode("replace")}>
-							{t("system.developer.ai.applyReplace")}
-						</Button>
-						<Button disabled={!aiLastCode} onClick={() => handleApplyAiCode("append")}>
-							{t("system.developer.ai.applyAppend")}
-						</Button>
-						<Button disabled={!aiLastCode} onClick={() => handleApplyAiCode("selection")}>
-							{t("system.developer.ai.applySelection")}
-						</Button>
-					</Space>
-
-					{aiProgress && (
-						<div className={styles.aiProgress}>
-							{t("system.developer.ai.status")}: {aiProgress.stage || aiProgress.status || t("system.developer.ai.running")}
-							{aiProgress.message ? ` | ${aiProgress.message}` : ""}
-							{aiProgress.percent != null ? ` | ${Math.max(0, Math.min(100, aiProgress.percent))}%` : ""}
-							{aiProgress.jobId ? ` | ${t("system.developer.ai.job")}: ${aiProgress.jobId}` : ""}
-						</div>
-					)}
-
-					{aiSummary && (
-						<div className={styles.aiSummary}>
-							<strong>{t("system.developer.ai.summary")}:</strong> {aiSummary}
-						</div>
-					)}
-
-					<div className={styles.aiChat}>
-						{aiMessages.length === 0 && <div className={styles.aiEmpty}>{t("system.developer.ai.noConversation")}</div>}
-						{aiMessages.map((msg) => (
-							<div key={msg.id} className={msg.role === "user" ? styles.aiMsgUser : styles.aiMsgAssistant}>
-								<div className={styles.aiMsgRole}>{msg.role === "user" ? t("system.developer.ai.you") : "AI"}</div>
-								<div>{msg.content}</div>
+			<Card className={styles.surfaceCard} style={{ marginTop: 16 }}>
+				<div className={`${styles.aiShell} ${aiPanelMode === "expanded" ? styles.aiShellExpanded : ""}`}>
+					<div className={styles.aiToolbar}>
+						<div className={styles.surfaceHeader}>
+							<div className={styles.surfaceMeta}>
+								<div className={styles.surfaceTitle}>{t("system.developer.ai.workspaceTitle", "Copilot Chat cho Code Editor")}</div>
+								<div>{t("system.developer.ai.workspaceDesc", "Chat này chỉ tạo bản nháp sửa code theo p_name và p_type đang chọn. Bạn vẫn phải tự bấm Lưu code ở khung trên khi muốn ghi DB.")}</div>
 							</div>
-						))}
+							<div className={styles.surfaceBadgeRow}>
+								<div className={styles.surfaceBadge}>p_name={selectedCodeLabel}</div>
+								<div className={styles.surfaceBadge}>p_type={resolvedPType}</div>
+								<div className={styles.surfaceBadge}>{currentTypeLabel}</div>
+								<div className={styles.surfaceBadge}>{t("system.developer.ai.sessionCount", "Lịch sử phiên")}: {aiRequestHistory.length}</div>
+								<div className={styles.aiPanelControls}>
+									<Button size="small" icon={<HistoryOutlined />} onClick={handleClearCurrentAiSession}>
+										{t("system.developer.ai.clearSession", "Xóa phiên")}
+									</Button>
+									<Button
+										size="small"
+										icon={aiLeftPanelHidden ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+										onClick={() => setAiLeftPanelHidden((prev) => !prev)}
+									>
+										{aiLeftPanelHidden
+											? t("system.developer.ai.showLeftPanel", "Hiện panel trái")
+											: t("system.developer.ai.hideLeftPanel", "Ẩn panel trái")}
+									</Button>
+									<Button
+										size="small"
+										icon={<ExpandOutlined />}
+										onClick={() => setAiPanelMode((prev) => (prev === "expanded" ? "normal" : "expanded"))}
+									>
+										{aiPanelMode === "expanded"
+											? t("system.developer.ai.exitFullscreen", "Thoát toàn màn")
+											: t("system.developer.ai.fullscreen", "Toàn màn")}
+									</Button>
+								</div>
+								<div className={styles.shortcutHint}>
+									{modKeyLabel}+{String(hotkeys.askAi || "enter").toUpperCase()} | {modKeyLabel}+Shift+{String(hotkeys.continueAi || "enter").toUpperCase()}
+								</div>
+							</div>
+						</div>
+
+						<div className={styles.aiStatusRow}>
+							{aiProgress && (
+								<div className={styles.aiProgress}>
+									{t("system.developer.ai.status")}: {aiStatusText}
+									{aiProgress.message ? ` | ${aiProgress.message}` : ""}
+									{aiProgress.percent != null ? ` | ${Math.max(0, Math.min(100, aiProgress.percent))}%` : ""}
+									{aiProgress.jobId ? ` | ${t("system.developer.ai.job")}: ${aiProgress.jobId}` : ""}
+								</div>
+							)}
+
+							{aiSummary && (
+								<div className={styles.aiSummary}>
+									<strong>{t("system.developer.ai.summary")}:</strong> {aiSummary}
+								</div>
+							)}
+						</div>
 					</div>
 
-					<CodeMirror
-						value={aiLastCode}
-						onChange={() => {}}
-						extensions={[codeType === 0 ? javascript() : html()]}
-						theme={vscodeDark}
-						height="320px"
-						editable={false}
-						className={styles.editor}
-					/>
-				</Space>
+						<div className={`${styles.aiBody} ${aiLeftPanelHidden ? styles.aiBodyLeftHidden : ""}`}>
+						{!aiLeftPanelHidden && (
+						<div className={`${styles.aiColumn} ${styles.aiLeftColumn}`}>
+							<div className={styles.aiSectionTitle}>{t("system.developer.ai.conversationTitle", "Hội thoại chỉnh sửa")}</div>
+							<div className={styles.chatWorkspace}>
+								<div className={styles.aiHistoryCard}>
+									<div className={styles.aiHistoryTitle}>{t("system.developer.ai.currentSessionHistory", "Lịch sử yêu cầu trong phiên hiện tại")}</div>
+									<div className={styles.aiHistoryToolbar}>
+										<Select
+											size="small"
+											value={historyFilter}
+											onChange={(value) => setHistoryFilter(value as AiHistoryFilter)}
+											style={{ width: 140 }}
+											options={[
+												{ value: "all", label: t("system.developer.ai.filterAll", "Tất cả") },
+												{ value: "completed", label: t("system.developer.ai.filterCompleted", "Thành công") },
+												{ value: "failed", label: t("system.developer.ai.filterFailed", "Lỗi") },
+												{ value: "pinned", label: t("system.developer.ai.filterPinned", "Đã ghim") },
+											]}
+										/>
+										<Input
+											size="small"
+											value={historyKeyword}
+											onChange={(e) => setHistoryKeyword(e.target.value)}
+											placeholder={t("system.developer.ai.filterSearch", "Tìm trong lịch sử")}
+											allowClear
+										/>
+									</div>
+									<div className={styles.aiHistoryList}>
+										{visibleAiRequestHistory.length === 0 && (
+											<div className={styles.aiEmpty}>{t("system.developer.ai.noSessionHistory", "Chưa có request nào trong phiên này.")}</div>
+										)}
+										{visibleAiRequestHistory.map((item) => (
+											<button
+												type="button"
+												key={item.id}
+												onClick={() => handleRestoreHistoryItem(item)}
+												className={`${styles.aiHistoryItem} ${selectedHistoryId === item.id ? styles.aiHistoryItemActive : ""}`}
+											>
+												<div className={styles.aiHistoryItemTop}>
+													<div className={styles.aiHistoryItemMeta}>
+														<span className={styles.aiHistoryStatus}>{item.status === "completed" ? t("system.developer.ai.historyCompleted", "Thành công") : t("system.developer.ai.historyFailed", "Lỗi")}</span>
+														{item.pinned && <span className={styles.aiHistoryPinnedTag}>{t("system.developer.ai.pinned", "Đã ghim")}</span>}
+													</div>
+													<span className={styles.aiHistoryTime}>{formatHistoryTime(item.createdAt)}</span>
+												</div>
+												<div className={styles.aiHistoryRequest}>{item.request}</div>
+												<div className={styles.aiHistorySummary}>{item.summary}</div>
+												<div className={styles.aiHistoryItemActions}>
+													<Button
+														size="small"
+														type={item.pinned ? "primary" : "default"}
+														icon={item.pinned ? <PushpinFilled /> : <PushpinOutlined />}
+														onClick={(event) => {
+															event.preventDefault();
+															event.stopPropagation();
+															handleTogglePinHistoryItem(item.id);
+														}}
+													>
+														{item.pinned
+															? t("system.developer.ai.unpin", "Bỏ ghim")
+															: t("system.developer.ai.pin", "Ghim")}
+													</Button>
+												</div>
+											</button>
+										))}
+									</div>
+								</div>
+								<div className={styles.aiChatMetaCard}>
+									<div className={styles.aiChatMetaTitle}>{t("system.developer.ai.contextTitle", "Ngữ cảnh gửi cho Copilot")}</div>
+									<div className={styles.aiChatMetaItem}>app_id: {appId}</div>
+									<div className={styles.aiChatMetaItem}>p_name: {selectedCodeLabel}</div>
+									<div className={styles.aiChatMetaItem}>p_type: {resolvedPType}</div>
+									<div className={styles.aiChatMetaItem}>{t("system.developer.ai.language")}: {currentTypeLabel}</div>
+								</div>
+								<div className={styles.aiChat}>
+									{aiMessages.length === 0 && <div className={styles.aiEmpty}>{t("system.developer.ai.noConversation")}</div>}
+									{aiMessages.map((msg) => (
+										<div key={msg.id} className={msg.role === "user" ? styles.aiMsgUser : styles.aiMsgAssistant}>
+											<div className={styles.aiMsgRole}>{msg.role === "user" ? t("system.developer.ai.you") : "Copilot"}</div>
+											<div>{msg.content}</div>
+										</div>
+									))}
+								</div>
+								<div className={styles.aiComposer}>
+									<Input.TextArea
+										ref={aiPromptInputRef}
+										value={aiPromptText}
+										onChange={(e) => setAiPromptText(e.target.value)}
+										placeholder={t("system.developer.ai.promptPlaceholder")}
+										rows={5}
+										style={{ resize: "vertical", minHeight: 120 }}
+									/>
+									<div className={styles.aiComposerActions}>
+										<div className={styles.aiComposerHint}>{t("system.developer.ai.composerHint", "Hãy mô tả cụ thể logic cần sửa, input/output mong muốn, và ràng buộc nghiệp vụ.")}</div>
+										<div className={styles.aiActionRow}>
+											<Button type="primary" loading={aiLoading} onClick={() => handleAskAi(false)}>
+												{t("system.developer.ai.ask")}
+											</Button>
+											<Button loading={aiLoading} onClick={() => handleAskAi(true)}>
+												{t("system.developer.ai.continue")}
+											</Button>
+										</div>
+									</div>
+								</div>
+							</div>
+						</div>
+						)}
+
+						<div className={`${styles.aiColumn} ${styles.aiRightColumn}`}>
+							<div className={styles.aiSectionTitle}>
+								{devUiText("Gợi ý từ AI (bạn có thể chỉnh sửa)", "AI suggestion (you can edit)", "AI 建议内容（可编辑）")}
+							</div>
+							{aiLeftPanelHidden && (
+								<div className={styles.aiHiddenLeftHint}>
+									{t("system.developer.ai.hiddenLeftHint", "Panel chat bên trái đang ẩn để mở rộng vùng soạn code. Bạn có thể bật lại bất cứ lúc nào.")}
+									<Button size="small" onClick={() => setAiLeftPanelHidden(false)}>
+										{t("system.developer.ai.showLeftPanel", "Hiện panel trái")}
+									</Button>
+								</div>
+							)}
+							{pendingChunk && (
+								<div className={styles.aiChunkCard}>
+									<div className={styles.aiChunkTitle}>{t("system.developer.ai.liveChunkTitle", "AI vừa cập nhật draft")}</div>
+									<div className={styles.aiChunkMeta}>{formatRangesText(pendingChunk.ranges)}</div>
+									<div className={styles.aiChunkActions}>
+										<Button size="small" type="primary" onClick={handleAcceptChunk}>
+											{t("system.developer.ai.acceptChunk", "Accept chunk")}
+										</Button>
+										<Button size="small" danger onClick={handleRejectChunk}>
+											{t("system.developer.ai.rejectChunk", "Reject chunk")}
+										</Button>
+									</div>
+								</div>
+							)}
+							{aiChangeItems.length > 0 && (
+								<div className={styles.aiChangesCard}>
+									<div className={styles.aiPreviewMetaTitle}>{t("system.developer.ai.changesTitle", "Điểm AI dự định chỉnh")}</div>
+									<div className={styles.aiChangesList}>
+										{aiChangeItems.map((item, index) => (
+											<div key={`${index}_${item}`} className={styles.aiChangeItem}>{item}</div>
+										))}
+									</div>
+								</div>
+							)}
+							<div className={styles.aiDraftEditorShell}>
+								<div className={styles.aiDraftStatusBar}>
+									<span className={draftDirty ? styles.aiDraftDirty : styles.aiDraftSaved}>
+										{draftDirty ? t("system.developer.ai.unsaved", "Unsaved") : t("system.developer.ai.saved", "Saved")}
+									</span>
+									<span>{currentTypeLabel}</span>
+									<span>L{draftCursor.line}:C{draftCursor.column}</span>
+									<span>{draftStats.lines} lines</span>
+									<span>{draftStats.chars} chars</span>
+								</div>
+								<div className={styles.aiDraftQuickActions}>
+									<div className={styles.aiEditorToolsTitle}>
+										{devUiText("Công cụ chỉnh sửa trong CodeMirror", "CodeMirror Editing Tools", "CodeMirror 编辑工具")}
+									</div>
+									<Button icon={<SearchOutlined />} onClick={openEditorSearch}>
+										{devUiText("Tìm/Thay thế tất cả", "Find/Replace all", "查找/全部替换")}
+									</Button>
+									<Button icon={<SwapOutlined />} onClick={openEditorGotoLine}>
+										{devUiText("Đi tới dòng", "Go to line", "跳转到行")}
+									</Button>
+									<Button onClick={handleUndo}>
+										{devUiText("Hoàn tác", "Undo", "撤销")}
+									</Button>
+									<Button onClick={handleRedo}>
+										{devUiText("Làm lại", "Redo", "重做")}
+									</Button>
+									<div className={styles.quickActionHint}>
+										{devUiText(
+											"Mobile: mở nhanh Search/Replace và Go to line ngay trong vùng editor này.",
+											"Mobile: quick access to Search/Replace and Go to line inside this editor.",
+											"移动端：可在此编辑区快速打开查找替换和跳转行。",
+										)}
+									</div>
+								</div>
+								<CodeMirror
+									onCreateEditor={(view) => {
+										editorRef.current = view;
+										view.dispatch({ effects: setDraftHighlights.of(pendingChunk?.ranges || []) });
+										updateDraftIndicators(view);
+									}}
+									value={aiLastCode}
+									onChange={(value) => {
+										setAiLastCode(value);
+										setCodeContent(value);
+										setPendingChunk(null);
+										const view = editorRef.current;
+										if (view) {
+											updateDraftIndicators(view);
+										}
+									}}
+									extensions={[
+										search({ top: true }),
+										draftMetricsExtension,
+										draftHighlightField,
+										draftHighlightTheme,
+										codeType === 0 ? javascript() : html(),
+									]}
+									theme={vscodeDark}
+									height="360px"
+									editable
+									className={styles.editor}
+								/>
+							</div>
+						</div>
+						</div>
+				</div>
 			</Card>
 
 			{/* Create Code Modal */}
@@ -814,7 +1413,6 @@ export default function CodeEditor() {
 						["goto", t("system.developer.hotkey.goto")],
 						["askAi", t("system.developer.hotkey.askAi")],
 						["continueAi", t("system.developer.hotkey.continueAi")],
-						["applyReplace", t("system.developer.hotkey.applyReplace")],
 						["commandPalette", t("system.developer.hotkey.commandPalette")],
 					] as Array<[HotkeyAction, string]>).map(([action, label]) => (
 						<div key={action} className={styles.hotkeyRow}>
@@ -872,6 +1470,27 @@ export default function CodeEditor() {
 							value={newCodeName}
 							onChange={e => setNewCodeName(e.target.value)}
 							onPressEnter={handleCreateCode}
+						/>
+					</Form.Item>
+				</Form>
+			</Modal>
+
+			<Modal
+				title={t("system.developer.gotoLine")}
+				open={gotoModalOpen}
+				onOk={applyGotoLine}
+				onCancel={() => setGotoModalOpen(false)}
+				okText={t("system.developer.go", "Đi")}
+				cancelText={t("system.developer.close")}
+			>
+				<Form layout="vertical">
+					<Form.Item label={t("system.developer.gotoLine", "Đi tới dòng")}> 
+						<Input
+							autoFocus
+							value={gotoLineInput}
+							onChange={(e) => setGotoLineInput(e.target.value.replace(/[^0-9]/g, ""))}
+							onPressEnter={applyGotoLine}
+							placeholder={t("system.developer.ai.gotoPlaceholder", "Nhập số dòng (1, 2, 3...)")}
 						/>
 					</Form.Item>
 				</Form>

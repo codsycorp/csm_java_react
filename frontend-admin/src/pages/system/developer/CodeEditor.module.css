@@ -4,10 +4,181 @@
   overflow-y: auto;
 }
 
+.surfaceCard {
+  border-radius: 12px;
+}
+
+.surfaceBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.surfaceHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+.surfaceTitle {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ant-color-text);
+  letter-spacing: 0.2px;
+}
+
+.surfaceMeta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--ant-color-text-secondary);
+}
+
+.surfaceBadgeRow {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.surfaceBadge {
+  font-size: 12px;
+  color: var(--ant-color-text-secondary);
+  padding: 4px 10px;
+  border: 1px solid var(--ant-color-border-secondary);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ant-color-fill-quaternary) 88%, transparent);
+}
+
+.toolbarPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--ant-color-border);
+  border-radius: 12px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--ant-color-fill-quaternary) 92%, transparent), var(--ant-color-bg-container));
+  box-shadow: var(--ant-box-shadow-secondary);
+}
+
+.toolbarRowCompact {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.toolbarCluster {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.toolbarSectionLabel {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--ant-color-text-tertiary);
+  font-weight: 700;
+}
+
+.editorShell {
+  border: 1px solid var(--ant-color-border);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--ant-color-bg-container);
+  box-shadow: var(--ant-box-shadow-secondary);
+}
+
+.editorToolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border-bottom: 1px solid var(--ant-color-border);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--ant-color-fill-quaternary) 92%, transparent), var(--ant-color-bg-layout));
+}
+
+.editorToolbarTitleRow {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+.editorToolbarActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.editorControlRow {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.editorMeta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.editorMetaTitle {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ant-color-text);
+}
+
+.editorMetaLine {
+  font-size: 12px;
+  color: var(--ant-color-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.editorQuickActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.quickActionHint {
+  font-size: 12px;
+  color: var(--ant-color-text-secondary);
+  line-height: 1.5;
+  padding-left: 4px;
+}
+
+.editorFrame {
+  padding: 0;
+}
+
+.boundaryNote {
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--ant-color-warning-border) 80%, var(--ant-color-border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--ant-color-warning-bg) 72%, transparent);
+  color: var(--ant-color-text-secondary);
+  font-size: 12px;
+}
+
 .editor {
-  border: 1px solid #d9d9d9;
-  border-radius: 2px;
-  margin-top: 8px;
+  border: none;
+  border-radius: 0;
+  margin-top: 0;
 }
 
 .toolbar {
@@ -32,10 +203,42 @@
 .shortcutHint {
   font-size: 12px;
   color: var(--ant-color-text-tertiary);
-  padding: 2px 8px;
+  padding: 4px 10px;
   border: 1px dashed var(--ant-color-border-secondary);
-  border-radius: 6px;
-  background: var(--ant-color-fill-quaternary);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ant-color-fill-quaternary) 88%, transparent);
+}
+
+.aiShell {
+  border: 1px solid var(--ant-color-border);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--ant-color-bg-container);
+  box-shadow: var(--ant-box-shadow-secondary);
+}
+
+.aiShellExpanded {
+  position: fixed;
+  inset: 12px;
+  z-index: 1200;
+  border-radius: 14px;
+  box-shadow: 0 20px 70px rgba(0, 0, 0, 0.36);
+}
+
+.aiPanelControls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.aiToolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border-bottom: 1px solid var(--ant-color-border);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--ant-color-primary-bg) 75%, transparent), var(--ant-color-bg-layout));
 }
 
 .aiHints {
@@ -44,6 +247,273 @@
   gap: 4px;
   font-size: 12px;
   color: var(--ant-color-text-secondary);
+}
+
+.aiPromptWrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.aiActionRow {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.aiStatusRow {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.aiBody {
+  padding: 14px;
+  display: grid;
+  grid-template-columns: minmax(320px, 0.42fr) minmax(0, 0.58fr);
+  gap: 14px;
+}
+
+.aiBodyLeftHidden {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.aiColumn {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.aiLeftColumn {
+  padding-right: 8px;
+  border-right: 1px solid var(--ant-color-border-secondary);
+}
+
+.aiRightColumn {
+  min-width: 0;
+  position: sticky;
+  top: 12px;
+  align-self: start;
+}
+
+.aiDraftEditorShell {
+  border: 1px solid var(--ant-color-border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--ant-color-bg-container);
+}
+
+.aiDraftStatusBar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--ant-color-border-secondary);
+  background: color-mix(in srgb, var(--ant-color-fill-quaternary) 86%, transparent);
+  color: var(--ant-color-text-secondary);
+  font-size: 11px;
+}
+
+.aiDraftQuickActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  padding: 10px;
+  border-bottom: 1px solid var(--ant-color-border-secondary);
+  background: color-mix(in srgb, var(--ant-color-bg-container) 88%, var(--ant-color-fill-quaternary));
+}
+
+.aiEditorToolsTitle {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ant-color-text-secondary);
+  padding-right: 2px;
+}
+
+.aiDraftSaved,
+.aiDraftDirty {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+
+.aiDraftSaved {
+  color: var(--ant-color-success-text);
+  background: color-mix(in srgb, var(--ant-color-success-bg) 78%, transparent);
+  border-color: var(--ant-color-success-border);
+}
+
+.aiDraftDirty {
+  color: var(--ant-color-warning-text);
+  background: color-mix(in srgb, var(--ant-color-warning-bg) 76%, transparent);
+  border-color: var(--ant-color-warning-border);
+}
+
+.aiHiddenLeftHint {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px dashed var(--ant-color-border-secondary);
+  border-radius: 10px;
+  font-size: 12px;
+  color: var(--ant-color-text-secondary);
+  background: color-mix(in srgb, var(--ant-color-fill-tertiary) 78%, transparent);
+}
+
+.chatWorkspace {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+
+.aiHistoryCard {
+  border: 1px solid var(--ant-color-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--ant-color-bg-container) 88%, var(--ant-color-fill-quaternary));
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.aiHistoryTitle {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--ant-color-text-tertiary);
+}
+
+.aiHistoryList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.aiHistoryToolbar {
+  display: grid;
+  grid-template-columns: 140px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.aiHistoryItem {
+  border: 1px solid var(--ant-color-border);
+  background: var(--ant-color-bg-container);
+  border-radius: 10px;
+  padding: 10px;
+  cursor: pointer;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.aiHistoryItemActive {
+  border-color: var(--ant-color-primary-border);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ant-color-primary-border) 55%, transparent);
+}
+
+.aiHistoryItemTop {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+}
+
+.aiHistoryItemMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.aiHistoryStatus {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--ant-color-text-secondary);
+  text-transform: uppercase;
+}
+
+.aiHistoryTime {
+  font-size: 11px;
+  color: var(--ant-color-text-tertiary);
+}
+
+.aiHistoryPinnedTag {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--ant-color-primary-text);
+  background: var(--ant-color-primary-bg);
+  border: 1px solid var(--ant-color-primary-border);
+  border-radius: 999px;
+  padding: 2px 6px;
+}
+
+.aiHistoryRequest {
+  font-size: 12px;
+  color: var(--ant-color-text);
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.aiHistorySummary {
+  font-size: 11px;
+  color: var(--ant-color-text-secondary);
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.aiHistoryItemActions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 2px;
+}
+
+.aiChatMetaCard,
+.aiPreviewMetaCard,
+.aiChangesCard {
+  border: 1px solid var(--ant-color-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--ant-color-bg-container) 88%, var(--ant-color-fill-quaternary));
+  padding: 12px;
+}
+
+.aiChatMetaTitle,
+.aiPreviewMetaTitle {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--ant-color-text-tertiary);
+  margin-bottom: 8px;
+}
+
+.aiChatMetaItem,
+.aiPreviewMetaText {
+  font-size: 12px;
+  color: var(--ant-color-text-secondary);
+  line-height: 1.55;
+}
+
+.aiSectionTitle {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--ant-color-text-tertiary);
 }
 
 .aiProgress {
@@ -66,14 +536,15 @@
 
 .aiChat {
   border: 1px solid var(--ant-color-border);
-  border-radius: 6px;
-  padding: 10px;
-  max-height: 260px;
+  border-radius: 10px;
+  padding: 12px;
+  min-height: 280px;
+  max-height: 420px;
   overflow: auto;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  background: var(--ant-color-fill-quaternary);
+  gap: 10px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--ant-color-fill-quaternary) 88%, transparent), var(--ant-color-bg-container));
 }
 
 .aiEmpty {
@@ -83,26 +554,102 @@
 
 .aiMsgUser,
 .aiMsgAssistant {
-  border-radius: 6px;
-  padding: 8px;
+  border-radius: 12px;
+  padding: 10px 12px;
   white-space: pre-wrap;
   word-break: break-word;
   font-size: 12px;
+  line-height: 1.55;
 }
 
 .aiMsgUser {
   border: 1px solid var(--ant-color-info-border);
   background: var(--ant-color-info-bg);
+  align-self: flex-end;
+  max-width: 92%;
 }
 
 .aiMsgAssistant {
   border: 1px solid var(--ant-color-border);
   background: var(--ant-color-bg-container);
+  align-self: flex-start;
+  max-width: 96%;
 }
 
 .aiMsgRole {
   font-weight: 600;
   margin-bottom: 4px;
+}
+
+.aiComposer {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--ant-color-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--ant-color-fill-quaternary) 88%, transparent);
+}
+
+.aiComposerActions {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.aiComposerHint {
+  font-size: 12px;
+  color: var(--ant-color-text-secondary);
+  line-height: 1.5;
+  max-width: 460px;
+}
+
+.aiChangesList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.aiChangeItem {
+  font-size: 12px;
+  color: var(--ant-color-text-secondary);
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--ant-color-border-secondary);
+  background: color-mix(in srgb, var(--ant-color-fill-tertiary) 72%, transparent);
+  line-height: 1.5;
+}
+
+.aiChunkCard {
+  border: 1px solid var(--ant-color-warning-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--ant-color-warning-bg) 72%, transparent);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.aiChunkTitle {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ant-color-warning-text);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+}
+
+.aiChunkMeta {
+  font-size: 12px;
+  color: var(--ant-color-text-secondary);
+  line-height: 1.5;
+}
+
+.aiChunkActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .hotkeyRow {
@@ -123,4 +670,73 @@
   gap: 8px;
   max-height: 320px;
   overflow: auto;
+}
+
+@media (max-width: 992px) {
+  .aiBody {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .aiLeftColumn {
+    border-right: none;
+    padding-right: 0;
+  }
+
+  .aiRightColumn {
+    position: static;
+    top: auto;
+  }
+
+  .aiHiddenLeftHint {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .aiShellExpanded {
+    inset: 8px;
+  }
+}
+
+@media (max-width: 768px) {
+  .container {
+    padding: 12px;
+  }
+
+  .toolbarPanel,
+  .editorToolbar,
+  .aiToolbar,
+  .aiBody {
+    padding: 12px;
+  }
+
+  .toolbarRowCompact,
+  .surfaceHeader,
+  .editorToolbarTitleRow,
+  .editorControlRow,
+  .aiComposerActions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .editorQuickActions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .aiMsgUser,
+  .aiMsgAssistant {
+    max-width: 100%;
+  }
+
+  .aiPanelControls {
+    width: 100%;
+  }
+
+  .aiHistoryToolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .aiPanelControls :global(.ant-btn) {
+    flex: 1;
+  }
 }
