@@ -287,11 +287,12 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 
 	useEffect(() => {
 		if (!isDevUser) {
-			setSelectedAppFilter(appId || "all");
+			const nextFilter = appId || "all";
+			setSelectedAppFilter((prev) => (prev === nextFilter ? prev : nextFilter));
 			return;
 		}
 		if (selectedAppFilter !== "all" && !appFilterOptions.includes(selectedAppFilter)) {
-			setSelectedAppFilter("all");
+			setSelectedAppFilter((prev) => (prev === "all" ? prev : "all"));
 		}
 	}, [isDevUser, appId, selectedAppFilter, appFilterOptions]);
 
@@ -596,19 +597,6 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 			markAsRead(room);
 		}
 	}, [markAsRead, normalizeInternalRoom]);
-
-	useEffect(() => {
-		if (!openChats.length) return;
-		openChats.forEach(chat => {
-			const key = (chat.username || chat.room || "").trim();
-			if (key) {
-				markAsRead(key);
-			}
-			if (chat.room && chat.room !== key) {
-				markAsRead(chat.room);
-			}
-		});
-	}, [openChats, markAsRead]);
 
 	// Force refresh when opening notification popup
 	const handleOpenChange = useCallback((visible: boolean) => {

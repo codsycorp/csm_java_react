@@ -399,7 +399,7 @@ function safeLocalStorageSet(key, value) {
 
 function getPreferredThemeMode() {
   const saved = safeLocalStorageGet(CSM_THEME_MODE_STORAGE_KEY);
-  if (saved === 'light' || saved === 'dark' || saved === 'system') return saved;
+  if (saved === 'system') return 'system';
   return 'system';
 }
 
@@ -414,18 +414,11 @@ function resolveSystemTheme() {
 }
 
 function applyThemeMode(mode = 'system') {
-  const normalized = (mode === 'light' || mode === 'dark' || mode === 'system') ? mode : 'system';
-  const resolved = normalized === 'system' ? resolveSystemTheme() : normalized;
+  // Keep LMKT UI in auto mode only: follow host/runtime theme detection.
+  const normalized = 'system';
+  const resolved = resolveSystemTheme();
 
   safeLocalStorageSet(CSM_THEME_MODE_STORAGE_KEY, normalized);
-
-  const html = document.documentElement;
-  if (!html) return;
-
-  html.setAttribute('data-theme-mode', normalized);
-  html.setAttribute('data-theme', resolved);
-  html.classList.toggle('dark', resolved === 'dark');
-  html.classList.toggle('light', resolved !== 'dark');
 
   window.dispatchEvent(new CustomEvent('csm:theme-change', {
     detail: { mode: normalized, theme: resolved }
@@ -3089,21 +3082,44 @@ function normalizeDomain(host) {
 }
 
 function isDarkThemeActive() {
-  const htmlElement = document.documentElement;
-  if (!htmlElement) return false;
-
-  const explicitTheme = (htmlElement.getAttribute('data-theme') || '').toLowerCase();
-  if (explicitTheme === 'dark') return true;
-  if (explicitTheme === 'light') return false;
-
-  if (htmlElement.classList.contains('dark')) return true;
-  if (htmlElement.classList.contains('light')) return false;
-
   try {
-    return window.matchMedia('(prefers-color-scheme: dark)').matches;
-  } catch (e) {
-    return false;
-  }
+    const runtimeTheme = window.csmTheme || {};
+    if (typeof runtimeTheme.isDark === 'boolean') return runtimeTheme.isDark;
+
+    const htmlElement = document.documentElement;
+    const bodyElement = document.body;
+
+    const hints = [
+      String(runtimeTheme.theme || '').toLowerCase(),
+      String(runtimeTheme.mode || '').toLowerCase(),
+      String(runtimeTheme.colorMode || '').toLowerCase(),
+      String(htmlElement?.getAttribute?.('data-theme') || '').toLowerCase(),
+      String(htmlElement?.getAttribute?.('theme') || '').toLowerCase(),
+      String(bodyElement?.getAttribute?.('data-theme') || '').toLowerCase(),
+    ].filter(Boolean);
+
+    const hasClass = (el, cls) => !!(el && el.classList && el.classList.contains(cls));
+
+    const hasDarkHint = hints.some((item) => item.includes('dark') || item === 'night')
+      || hasClass(htmlElement, 'dark')
+      || hasClass(htmlElement, 'theme-dark')
+      || hasClass(bodyElement, 'dark')
+      || hasClass(bodyElement, 'theme-dark');
+
+    const hasLightHint = hints.some((item) => item.includes('light') || item === 'day')
+      || hasClass(htmlElement, 'light')
+      || hasClass(htmlElement, 'theme-light')
+      || hasClass(bodyElement, 'light')
+      || hasClass(bodyElement, 'theme-light');
+
+    if (hasLightHint && !hasDarkHint) return false;
+    if (hasDarkHint && !hasLightHint) return true;
+
+    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+      return true;
+    }
+  } catch (e) {}
+  return false;
 }
 
 function getThemeTokens() {
@@ -6888,35 +6904,7 @@ function ensureGlobalSettingsPanel() {
   };
   domainSelect.onchange(); // Init
 
-  // Theme mode selector
-  const themeModeRow = document.createElement('div');
-  themeModeRow.style.cssText = 'display:flex;flex-direction:column;gap:4px';
-
-  const themeModeLabel = document.createElement('label');
-  themeModeLabel.textContent = ti('Giao diện:', 'Theme mode:', '界面模式：');
-  themeModeLabel.style.cssText = `font-weight:600;font-size:13px;color:${theme.text};margin-bottom:2px`;
-
-  const themeModeSelect = document.createElement('select');
-  themeModeSelect.id = 'global-theme-mode-select';
-  themeModeSelect.style.cssText = `padding:6px 8px;border:1px solid ${theme.border};border-radius:4px;width:100%;background:${theme.inputBg};color:${theme.text};font-size:12px`;
-
-  [
-    { value: 'system', label: ti('🖥️ Theo hệ thống', '🖥️ Follow system', '🖥️ 跟随系统') },
-    { value: 'light', label: ti('☀️ Sáng', '☀️ Light', '☀️ 浅色') },
-    { value: 'dark', label: ti('🌙 Tối', '🌙 Dark', '🌙 深色') }
-  ].forEach(opt => {
-    const option = document.createElement('option');
-    option.value = opt.value;
-    option.textContent = opt.label;
-    themeModeSelect.appendChild(option);
-  });
-
-  themeModeSelect.value = getPreferredThemeMode();
-  themeModeSelect.onchange = () => {
-    applyThemeMode(themeModeSelect.value);
-  };
-
-  themeModeRow.append(themeModeLabel, themeModeSelect);
+  // Theme mode selector removed: LMKT now follows app/system theme automatically.
 
   // Load categories from web_services button
   const loadBtn = document.createElement('button');
@@ -6936,7 +6924,7 @@ function ensureGlobalSettingsPanel() {
   };
 
   // Append rows to grid container
-  settingsContainer.append(domainRow, industryRow, projectRow, themeModeRow);
+  settingsContainer.append(domainRow, industryRow, projectRow);
   settingsContainer.append(loadBtn);
 
   const facebookCommonSection = document.createElement('div');
@@ -13425,8 +13413,76 @@ function ensureZaloMultiGroupUI(container) {
       return;
     }
 
-    const buffer = await file.arrayBuffer();
-    const wb = window.XLSX.read(buffer, { type: 'array' });
+    const toArrayBuffer = (value) => {
+      if (value instanceof ArrayBuffer) {
+        return value;
+      }
+      if (ArrayBuffer.isView(value) && value.buffer instanceof ArrayBuffer) {
+        const view = value;
+        return view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength);
+      }
+      return null;
+    };
+
+    const readViaFileReader = () => {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const fromReader = toArrayBuffer(reader.result);
+          if (fromReader && fromReader.byteLength > 0) {
+            resolve(fromReader);
+            return;
+          }
+          reject(new Error('FileReader returned empty/invalid buffer'));
+        };
+        reader.onerror = () => reject(reader.error || new Error('FileReader failed'));
+        reader.readAsArrayBuffer(file);
+      });
+    };
+
+    let buffer = null;
+
+    if (file && typeof file.arrayBuffer === 'function') {
+      try {
+        const direct = await file.arrayBuffer();
+        buffer = toArrayBuffer(direct);
+      } catch {
+        buffer = null;
+      }
+    }
+
+    if (!buffer || buffer.byteLength === 0) {
+      try {
+        buffer = await readViaFileReader();
+      } catch {
+        buffer = null;
+      }
+    }
+
+    if ((!buffer || buffer.byteLength === 0) && typeof window !== 'undefined' && window?.process && file?.path) {
+      try {
+        const fs = require('fs');
+        const raw = fs.readFileSync(file.path);
+        buffer = toArrayBuffer(raw);
+      } catch {
+        buffer = null;
+      }
+    }
+
+    if (!(buffer instanceof ArrayBuffer) || buffer.byteLength === 0) {
+      canhbao(ti('Không đọc được dữ liệu file Excel.', 'Cannot read Excel file binary data.', '无法读取 Excel 文件二进制数据。'));
+      return;
+    }
+
+    let wb;
+    try {
+      wb = window.XLSX.read(buffer, { type: 'array' });
+    } catch (xlsxErr) {
+      console.error('[Zalo Import] XLSX.read failed:', xlsxErr, { fileName: file?.name, fileType: file?.type, byteLength: buffer?.byteLength });
+      canhbao(ti('File Excel không hợp lệ hoặc không được hỗ trợ.', 'Invalid or unsupported Excel file.', 'Excel 文件无效或不受支持。'));
+      return;
+    }
+
     const firstSheet = wb.SheetNames?.[0];
     if (!firstSheet) {
       canhbao(ti('File Excel không có sheet hợp lệ.', 'Excel file has no valid sheet.', 'Excel 文件没有有效工作表。'));
@@ -20793,11 +20849,8 @@ function setupThemeChangeListener() {
   // Listen to system prefers-color-scheme changes
   const darkModeMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
   const handleSystemThemeChange = () => {
-    if (getPreferredThemeMode() === 'system') {
-      applyThemeMode('system');
-    } else {
-      refreshAllUI();
-    }
+    applyThemeMode('system');
+    refreshAllUI();
   };
 
   if (darkModeMediaQuery.addEventListener) {

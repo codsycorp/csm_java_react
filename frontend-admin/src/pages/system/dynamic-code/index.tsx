@@ -425,6 +425,18 @@ function syncRuntimeUserAddress(userAddress: any[]): any[] {
     }
   }
 
+  try {
+    const currentUserState = useUserStore.getState() as any;
+    if (currentUserState?.user_address !== serialized || currentUserState?.user_adress !== serialized) {
+      useUserStore.setState({
+        user_address: serialized,
+        user_adress: serialized,
+      } as any);
+    }
+  } catch {
+    // Best-effort runtime/store sync only.
+  }
+
   return normalized;
 }
 
@@ -1021,6 +1033,23 @@ ${resolvedContainerSelector} select {
   // Initialize/refresh window.csmUserData for auto-upload-lmkt.js compatibility.
   // Always refresh to avoid stale closures (old app_id/user after permission/session changes).
   if (typeof window !== "undefined") {
+    const runtimeSignature = [
+      String((user as any)?.userId || ""),
+      String((user as any)?.username || ""),
+      String((user as any)?.email || ""),
+      String((user as any)?.phoneNumber || ""),
+      String((user as any)?.app_id || effectiveAppId || ""),
+      String((user as any)?.login_identifier || ""),
+      String((user as any)?.account_type || ""),
+      String((user as any)?.is_sub_user || false),
+    ].join("|");
+    const shouldReinitializeUserData =
+      (window as any).__csmUserDataRuntimeSignature !== runtimeSignature
+      || !(window as any).csmUserData;
+
+    if (shouldReinitializeUserData) {
+      (window as any).__csmUserDataRuntimeSignature = runtimeSignature;
+
     const stableStringify = (value: any): string => {
       const sortObject = (input: any): any => {
         if (Array.isArray(input)) {
@@ -1044,29 +1073,68 @@ ${resolvedContainerSelector} select {
       }
     };
 
-    const hasRole = (currentUser: any, role: string): boolean => {
-      const roles = Array.isArray(currentUser?.roles) ? currentUser.roles : [];
-      return roles.some((r: any) => String(r || "").toLowerCase() === role.toLowerCase());
+    const resolvePrimaryIdentity = (currentUser: any): { field: string; value: string } => {
+      const username = String(currentUser?.username || "").trim();
+      if (username) {
+        return { field: "username", value: username };
+      }
+
+      const email = String(currentUser?.email || "").trim();
+      if (email) {
+        return { field: "email", value: email };
+      }
+
+      const phoneNumber = String(currentUser?.phoneNumber || currentUser?.phone_number || "").trim();
+      if (phoneNumber) {
+        return { field: "phoneNumber", value: phoneNumber };
+      }
+
+      return { field: "", value: "" };
     };
 
-    const resolveProfileTarget = (currentUser: any): { preferredTable: string; preferredPkField: string; preferredPkValue: any } => {
-      const userId = currentUser?.userId || currentUser?.id || currentUser?.user_id || currentUser?.account_id;
-      const appToken = currentUser?.app_token || currentUser?.appToken;
-      const email = currentUser?.email;
-      const username = currentUser?.username;
-      const phoneNumber = currentUser?.phoneNumber || currentUser?.phone_number;
+    const resolveProfileTarget = (currentUser: any) => {
+      const accountType = String(currentUser?.account_type || "").trim().toLowerCase();
+      const isSubUserByFlag = Boolean(currentUser?.is_sub_user) || accountType === "sub-user";
+      const preferredTable = isSubUserByFlag ? "csm_group_members" : "csm_accounts";
+      const userId = String(currentUser?.userId || currentUser?.id || currentUser?.user_id || currentUser?.account_id || "").trim();
+      const appToken = String(currentUser?.app_token || currentUser?.appToken || "").trim();
+      const identity = resolvePrimaryIdentity(currentUser);
+      const loginIdentifier = String(currentUser?.login_identifier || "").trim() || identity.value;
 
-      const isMainAccount = Boolean(currentUser?.dev) || hasRole(currentUser, "admin") || hasRole(currentUser, "dev");
-      const preferredTable = isMainAccount ? "csm_accounts" : "csm_group_members";
+      const pkFields = preferredTable === "csm_group_members"
+        ? (userId ? ["id", "login_identifier"] : ["login_identifier"])
+        : (userId ? ["id"] : (identity.field ? [identity.field] : []));
 
-      // Keep consistent with Profile page update flow:
-      // prefer id/email/username/phoneNumber for both account types.
+      const where: Record<string, any> = {};
+      if (userId) {
+        where.id = userId;
+      }
+      if (preferredTable === "csm_group_members" && loginIdentifier) {
+        where.login_identifier = loginIdentifier;
+      }
+      if (!userId && preferredTable === "csm_accounts" && identity.field && identity.value) {
+        where[identity.field] = identity.value;
+      }
+
       const preferredPkField = userId
         ? "id"
-        : (email ? "email" : (username ? "username" : (phoneNumber ? "phoneNumber" : "app_token")));
-      const preferredPkValue = userId || email || username || phoneNumber || appToken || currentUser?.login_identifier;
+        : (preferredTable === "csm_group_members"
+            ? "login_identifier"
+            : (identity.field || "app_token"));
+      const preferredPkValue = userId
+        || (preferredTable === "csm_group_members" ? loginIdentifier : (identity.value || appToken || loginIdentifier));
 
-      return { preferredTable, preferredPkField, preferredPkValue };
+      return {
+        preferredTable,
+        preferredPkField,
+        preferredPkValue,
+        pkFields,
+        where,
+        loginIdentifier,
+        userId,
+        identityField: identity.field,
+        identityValue: identity.value,
+      };
     };
 
     const uniqIdentityCandidates = (candidates: Array<{ field: string; value: any }>) => {
@@ -1090,6 +1158,7 @@ ${resolvedContainerSelector} select {
         { field: "email", value: currentUser?.email },
         { field: "username", value: currentUser?.username },
         { field: "phoneNumber", value: currentUser?.phoneNumber || currentUser?.phone_number },
+        { field: "login_identifier", value: target.loginIdentifier },
       ]);
     };
 
@@ -1342,10 +1411,32 @@ ${resolvedContainerSelector} select {
           const lookup = await fetchAccountRow();
           const tableName = lookup?.tableName || target.preferredTable;
           const requestAppId = resolveTableAppId(tableName, effectiveAppId);
-          const pkField = lookup?.row?.id ? "id" : (lookup?.pkField || target.preferredPkField);
-          const pkValue = lookup?.row?.id ?? (lookup?.pkValue ?? target.preferredPkValue);
+          const matchedLoginIdentifier = String(lookup?.row?.login_identifier || target.loginIdentifier || "").trim();
+          const resolvedWhere: Record<string, any> = {};
 
-          if (!pkField || pkValue === undefined || pkValue === null || String(pkValue).trim() === "") {
+          if (lookup?.row?.id || target.userId) {
+            resolvedWhere.id = lookup?.row?.id || target.userId;
+          }
+
+          if (tableName === "csm_group_members") {
+            if (matchedLoginIdentifier) {
+              resolvedWhere.login_identifier = matchedLoginIdentifier;
+            } else if (!resolvedWhere.id && lookup?.pkField === "login_identifier" && lookup?.pkValue) {
+              resolvedWhere.login_identifier = lookup.pkValue;
+            }
+          } else if (!resolvedWhere.id) {
+            const fallbackField = lookup?.pkField || target.identityField || target.preferredPkField;
+            const fallbackValue = lookup?.pkValue ?? target.identityValue ?? target.preferredPkValue;
+            if (fallbackField && fallbackValue !== undefined && fallbackValue !== null && String(fallbackValue).trim() !== "") {
+              resolvedWhere[fallbackField] = fallbackValue;
+            }
+          }
+
+          const pkFields = tableName === "csm_group_members"
+            ? (resolvedWhere.id ? ["id", "login_identifier"] : ["login_identifier"])
+            : (resolvedWhere.id ? ["id"] : Object.keys(resolvedWhere));
+
+          if (!pkFields.length || Object.keys(resolvedWhere).length === 0) {
             throw new Error("Missing user identity");
           }
 
@@ -1354,65 +1445,39 @@ ${resolvedContainerSelector} select {
           if (!api) throw new Error("API not available");
 
           const updateData: Record<string, any> = {
-            email: currentUser.email,
-            username: currentUser.username,
-            phoneNumber: currentUser.phoneNumber,
-            [pkField]: pkValue,
             user_address: serialized,
             user_adress: serialized
           };
-          if (lookup?.row?.id) updateData.id = lookup.row.id;
+          if (resolvedWhere.id) updateData.id = resolvedWhere.id;
+          if (tableName === "csm_group_members" && matchedLoginIdentifier) {
+            updateData.login_identifier = matchedLoginIdentifier;
+          }
           if (currentUser.email) updateData.email = currentUser.email;
           if (currentUser.username) updateData.username = currentUser.username;
-          if (currentUser.phoneNumber) updateData.phoneNumber = currentUser.phoneNumber;
-
-          const updateAttempts: Array<{ pkField: string; pkValue: any }> = [];
-          const attemptedKeys = new Set<string>();
-          const pushAttempt = (field: string, value: any) => {
-            if (!field || value === undefined || value === null || String(value).trim() === "") return;
-            const key = `${field}::${String(value)}`;
-            if (attemptedKeys.has(key)) return;
-            attemptedKeys.add(key);
-            updateAttempts.push({ pkField: field, pkValue: value });
-          };
-
-          // Ưu tiên id của row vừa lookup được (ổn định nhất)
-          pushAttempt("id", lookup?.row?.id);
-          // Sau đó dùng identity chính đã resolve
-          pushAttempt(pkField, pkValue);
-          // Fallback thêm một vài identity phổ biến để tránh mismatch schema
-          pushAttempt("id", currentUser?.userId || currentUser?.id || currentUser?.user_id || currentUser?.account_id);
-          pushAttempt("email", currentUser?.email);
-          pushAttempt("username", currentUser?.username);
-          pushAttempt("phoneNumber", currentUser?.phoneNumber || currentUser?.phone_number);
+          if (currentUser.phoneNumber || currentUser.phone_number) {
+            updateData.phoneNumber = currentUser.phoneNumber || currentUser.phone_number;
+          }
 
           let lastError = "Update failed";
           let saved = false;
 
-          for (const attempt of updateAttempts) {
-            const payload = {
-              ...updateData,
-              [attempt.pkField]: attempt.pkValue,
-            };
+          try {
+            const res = await api({
+              app_id: requestAppId,
+              obj_name: tableName,
+              command: "update",
+              obj_update: updateData,
+              pk_fields: pkFields,
+              where: resolvedWhere,
+            });
 
-            try {
-              const res = await api({
-                app_id: requestAppId,
-                obj_name: tableName,
-                command: "update",
-                obj_update: payload,
-                pk_fields: [attempt.pkField],
-              });
-
-              if (isUpdateSuccessResponse(res)) {
-                saved = true;
-                break;
-              }
-
+            if (isUpdateSuccessResponse(res)) {
+              saved = true;
+            } else {
               lastError = (res as any)?.message || (res as any)?.error || "Update failed";
-            } catch (updateError: any) {
-              lastError = updateError?.message || String(updateError);
             }
+          } catch (updateError: any) {
+            lastError = updateError?.message || String(updateError);
           }
 
           // Đồng bộ runtime nếu thành công
@@ -1429,6 +1494,7 @@ ${resolvedContainerSelector} select {
     };
     announceCsmUserDataReady();
     console.log('✅ [DynamicCode] window.csmUserData initialized (API-first + runtime sync, no localStorage fallback)');
+    }
   }
 
   // Sync current user to window
@@ -1625,6 +1691,15 @@ ${resolvedContainerSelector} select {
     };
   }, [menuId, resolvedContainerId, location.key]);
 
+  const resolvedAutoCodeName = useMemo(() => {
+    return String(
+      propAutoCodeName
+      || propMenuData?.auto_code_name
+      || (location.state as any)?.menuData?.auto_code_name
+      || ""
+    ).trim();
+  }, [propAutoCodeName, propMenuData?.auto_code_name, location.key]);
+
 
   // Load inline code or fetch template code from sys_autos
   useEffect(() => {
@@ -1642,11 +1717,7 @@ ${resolvedContainerSelector} select {
         setLoading(true);
         setError(null);
 
-        const autoCodeName =
-          propAutoCodeName
-          || propMenuData?.auto_code_name
-          || (location.state as any)?.menuData?.auto_code_name
-          || "";
+        const autoCodeName = resolvedAutoCodeName;
 
         if (!autoCodeName) {
           setError("Auto code template name not configured");
@@ -1723,7 +1794,7 @@ ${resolvedContainerSelector} select {
       cancelled = true;
       executedRef.current = false;
     };
-  }, [menuId, location.state, propAutoCodeName, propMenuData, inlineCode, user, effectiveAppId]);
+  }, [menuId, location.key, resolvedAutoCodeName, inlineCode, user.app_id, user.userId, effectiveAppId]);
 
   const seft = useMemo(() => {
     const currentUserAny = (window as any).csmCurrentUser || user || {};

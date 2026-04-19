@@ -6,6 +6,8 @@ export interface UserInfoType {
 	username: string
 	email: string
 	phoneNumber: string
+	user_address?: string
+	user_adress?: string
 	full_name?: string
 	description: string
 	roles: string[]

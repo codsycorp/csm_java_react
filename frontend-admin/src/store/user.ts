@@ -10,6 +10,8 @@ const initialState = {
 	username: "",
 	email: "",
 	phoneNumber: "",
+	user_address: "",
+	user_adress: "",
 	full_name: "",
 	description: "",
 	roles: [] as string[],
@@ -20,6 +22,9 @@ const initialState = {
 	dataScope: "NONE" as "NONE" | "OWNER" | "DEPARTMENT" | "BRANCH" | "ALL",
 	app_id: "",
 	app_token: "",
+	account_type: "main" as "main" | "sub-user",
+	is_sub_user: false,
+	login_identifier: "",
 	dev: false, // Thêm dev flag để track quyền dev/admin
 	wholeMenus: [],
 	selectedMenuIdForTab: "", // Track selected menu for grid/report tab

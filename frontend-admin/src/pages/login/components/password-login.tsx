@@ -121,6 +121,8 @@ export function PasswordLogin() {
 					username: loginRes?.result?.username,
 					email: loginRes?.result?.email,
 					phoneNumber: loginRes?.result?.phoneNumber,
+					user_address: loginRes?.result?.user_address,
+					user_adress: loginRes?.result?.user_adress,
 					full_name: loginRes?.result?.full_name,
 					avatar: loginRes?.result?.avatar,
 					roles: Array.isArray(loginRes?.result?.permissions) ? loginRes.result.permissions : [],
@@ -131,6 +133,9 @@ export function PasswordLogin() {
 					dataScope: loginRes?.result?.dataScope,
 					app_id: loginRes?.result?.app_id,
 					app_token: loginRes?.result?.app_token,
+					account_type: loginRes?.result?.account_type,
+					is_sub_user: loginRes?.result?.is_sub_user,
+					login_identifier: loginRes?.result?.login_identifier,
 					dev: loginRes?.result?.dev,
 				};
 

@@ -88,6 +88,7 @@ type PendingDraftChunk = {
 	before: string;
 	after: string;
 	ranges: DraftLineRange[];
+	applied?: boolean;
 	createdAt: number;
 };
 
@@ -298,6 +299,8 @@ export default function CodeEditor() {
 	const editorRef = useRef<any>(null);
 	const currentDraftRef = useRef("");
 	const aiPromptInputRef = useRef<InputRef>(null);
+	const manualDraftRevisionRef = useRef(0);
+	const aiProgrammaticApplyRef = useRef(false);
 
 	// State Management
 	const [codeType, setCodeType] = useState<number>(0); // 0 = JS, 1 = HTML
@@ -462,7 +465,9 @@ export default function CodeEditor() {
 		setAiProgress(null);
 		setSelectedHistoryId(null);
 		setSessionHydratedKey(aiSessionKey);
-	}, [aiSessionKey, aiSessionStorageReady, codeContent]);
+		// IMPORTANT: do not depend on codeContent here.
+		// If this effect reruns on each keystroke, it rehydrates stale snapshot and overrides user edits.
+	}, [aiSessionKey, aiSessionStorageReady]);
 
 	useEffect(() => {
 		if (!aiSessionStorageReady || sessionHydratedKey !== aiSessionKey) return;
@@ -773,6 +778,15 @@ export default function CodeEditor() {
 		]);
 	};
 
+	const applyDraftFromAi = (nextCode: string) => {
+		aiProgrammaticApplyRef.current = true;
+		setAiLastCode(nextCode);
+		setCodeContent(nextCode);
+		setTimeout(() => {
+			aiProgrammaticApplyRef.current = false;
+		}, 0);
+	};
+
 	const handleAskAi = async (continueMode = false) => {
 		const requestText = aiPromptText.trim();
 		if (!requestText) {
@@ -782,6 +796,8 @@ export default function CodeEditor() {
 
 		const requestCreatedAt = Date.now();
 		const historyId = `${requestCreatedAt}_${Math.random().toString(16).slice(2, 10)}`;
+		const requestBaseRevision = manualDraftRevisionRef.current;
+		const shouldAutoApplyAi = () => manualDraftRevisionRef.current === requestBaseRevision;
 
 		setAiLoading(true);
 		setAiSummary("");
@@ -817,15 +833,26 @@ export default function CodeEditor() {
 						const before = currentDraftRef.current;
 						if (liveDraft !== before) {
 							const ranges = buildRealtimeRangesFromProgress(progress, before, liveDraft);
-							setPendingChunk({
-								id: `${Date.now()}_${Math.random().toString(16).slice(2, 8)}`,
-								before,
-								after: liveDraft,
-								ranges,
-								createdAt: Date.now(),
-							});
-							setAiLastCode(liveDraft);
-							setCodeContent(liveDraft);
+							if (shouldAutoApplyAi()) {
+								setPendingChunk({
+									id: `${Date.now()}_${Math.random().toString(16).slice(2, 8)}`,
+									before,
+									after: liveDraft,
+									ranges,
+									applied: true,
+									createdAt: Date.now(),
+								});
+								applyDraftFromAi(liveDraft);
+							} else {
+								setPendingChunk({
+									id: `${Date.now()}_${Math.random().toString(16).slice(2, 8)}`,
+									before,
+									after: liveDraft,
+									ranges,
+									applied: false,
+									createdAt: Date.now(),
+								});
+							}
 						}
 					}
 					setAiProgress({
@@ -858,9 +885,22 @@ export default function CodeEditor() {
 				createdAt: requestCreatedAt,
 			};
 
-			setAiLastCode(parsed.code);
-			setCodeContent(parsed.code);
-			setPendingChunk(null);
+			if (shouldAutoApplyAi()) {
+				applyDraftFromAi(parsed.code);
+				setPendingChunk(null);
+			} else {
+				const before = currentDraftRef.current;
+				const ranges = buildChangedLineRanges(before, parsed.code);
+				setPendingChunk({
+					id: `${Date.now()}_${Math.random().toString(16).slice(2, 8)}`,
+					before,
+					after: parsed.code,
+					ranges,
+					applied: false,
+					createdAt: Date.now(),
+				});
+				message.info(t("system.developer.ai.pendingApply", "AI đã tạo bản nháp mới. Bạn đang chỉnh tay nên AI không tự ghi đè. Nhấn Accept chunk để áp dụng."));
+			}
 			setAiSummary(parsed.summary || "");
 			setAiChangeItems(Array.isArray(parsed.changes) ? parsed.changes : []);
 			setAiRequestHistory((prev) => [
@@ -898,14 +938,18 @@ export default function CodeEditor() {
 	};
 
 	const handleAcceptChunk = () => {
+		if (pendingChunk && pendingChunk.applied === false) {
+			applyDraftFromAi(pendingChunk.after);
+		}
 		setPendingChunk(null);
 		message.success(t("system.developer.ai.chunkAccepted", "Đã chấp nhận phần AI vừa cập nhật."));
 	};
 
 	const handleRejectChunk = () => {
 		if (!pendingChunk) return;
-		setAiLastCode(pendingChunk.before);
-		setCodeContent(pendingChunk.before);
+		if (pendingChunk.applied !== false) {
+			applyDraftFromAi(pendingChunk.before);
+		}
 		setPendingChunk(null);
 		message.info(t("system.developer.ai.chunkRejected", "Đã hoàn tác phần AI vừa cập nhật."));
 	};
@@ -1369,6 +1413,9 @@ export default function CodeEditor() {
 									}}
 									value={aiLastCode}
 									onChange={(value) => {
+										if (!aiProgrammaticApplyRef.current) {
+											manualDraftRevisionRef.current += 1;
+										}
 										setAiLastCode(value);
 										setCodeContent(value);
 										setPendingChunk(null);

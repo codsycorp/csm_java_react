@@ -17,7 +17,6 @@ import LayoutSidebar from "../layout-sidebar";
 import LayoutTabbar from "../layout-tabbar";
 import { BreadcrumbViews, Logo } from "../widgets";
 import { LayoutContext } from "./layout-context";
-import { ChatHistoryProvider } from "#src/contexts/ChatHistoryContext";
 
 const { useBreakpoint } = Grid;
 const useStyles = createUseStyles({
@@ -97,16 +96,15 @@ export default function ContainerLayout() {
 	]);
 
 	return (
-		<ChatHistoryProvider>
-			<LayoutContext.Provider value={layoutContextValue}>
-				<section
-					style={{
-						paddingLeft: computedSidebarWidth,
-					}}
-					className={cn(
-						"transition-all flex flex-col h-screen w-full max-w-full overflow-x-hidden",
-					)}
-				>
+		<LayoutContext.Provider value={layoutContextValue}>
+			<section
+				style={{
+					paddingLeft: computedSidebarWidth,
+				}}
+				className={cn(
+					"transition-all flex flex-col h-screen w-full max-w-full overflow-x-hidden",
+				)}
+			>
 					<LayoutHeader>
 						{isTopNav || isMixedNav
 							? (
@@ -168,8 +166,7 @@ export default function ContainerLayout() {
 					<LayoutContent />
 
 					<LayoutFooter className="bg-colorBgContainer" />
-				</section>
-			</LayoutContext.Provider>
-		</ChatHistoryProvider>
+			</section>
+		</LayoutContext.Provider>
 	);
 }

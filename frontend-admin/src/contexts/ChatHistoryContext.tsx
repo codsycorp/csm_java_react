@@ -122,6 +122,7 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
   const markAsReadLastAttemptRef = useRef<Record<string, number>>({});
   const readUpdateReloadLastRunRef = useRef<Record<string, number>>({});
   const adminSnapshotLoadedRef = useRef<Record<string, boolean>>({});
+  const lastJoinSignatureRef = useRef<string>("");
 
   const LOAD_HISTORY_ERROR_BACKOFF_MS = 5000;
   const MARK_AS_READ_ERROR_BACKOFF_MS = 5000;
@@ -626,11 +627,14 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
         setMessages(prev => {
           const roomMsgs = prev[target.uiRoom] || [];
           if (!roomMsgs.length) return prev;
+          let changed = false;
           const updated = roomMsgs.map(msg => {
             const readBy = Array.isArray(msg.readBy) ? msg.readBy : [];
             if (readBy.includes(user.userId)) return msg;
+            changed = true;
             return { ...msg, readBy: [...readBy, user.userId] };
           });
+          if (!changed) return prev;
           return { ...prev, [target.uiRoom]: updated };
         });
       }).catch((err: any) => {
@@ -645,6 +649,8 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
     
     // Clear unread count
     setUnreadCounts(prev => {
+      const current = Number(prev[room] || 0);
+      if (current === 0) return prev;
       const updated = { ...prev, [room]: 0 };
       if (isGuest) {
         try {
@@ -727,35 +733,55 @@ export const ChatHistoryProvider: React.FC<ChatHistoryProviderProps> = ({ childr
   
   // Join room on connect
   useEffect(() => {
-    if (socket && connected) {
-      const joinData: ChatMessage = {
-        room: appId, // Will be processed by backend based on isAdmin/guestPhone
-        username: user.username || (chatActor === 'guest' ? guestPhone || guestIdentity : "Admin"),
-        userId: user.userId,
-        avatar: user.avatar,
-        isAdmin: isAdminUser,
-        message: "",
-        eventType: undefined,
-        readBy: [],
-        appId,
-        guestPhone: isGuest ? guestPhone : undefined,
-        guestSessionId: isGuest ? guestIdentity : undefined,
-      };
-      socket.emit("join", joinData);
+    if (!socket || !connected) return;
 
-      if (chatActor === 'admin') {
-        socket.emit('request_chat_history_app_snapshot', appId);
-      }
-      
-      console.log(`🔌 [ChatHistory] Socket join:`, {
-        actor: chatActor,
-        guestPhone,
-        guestSessionId: guestIdentity,
-        appId,
-        room: chatActor === 'admin' ? `app:${appId}` : chatActor === 'guest' ? `guest:${appId};${guestIdentity}` : appId
-      });
+    const joinSignature = [
+      chatActor,
+      appId,
+      String(user.userId || "").trim(),
+      String(user.username || "").trim(),
+      String(guestPhone || "").trim(),
+      String(guestIdentity || "").trim(),
+    ].join("|");
+
+    if (lastJoinSignatureRef.current === joinSignature) {
+      return;
     }
-  }, [socket, connected, appId, user, guestPhone, guestIdentity, isAdminUser, chatActor]);
+    lastJoinSignatureRef.current = joinSignature;
+
+    const joinData: ChatMessage = {
+      room: appId, // Will be processed by backend based on isAdmin/guestPhone
+      username: user.username || (chatActor === 'guest' ? guestPhone || guestIdentity : "Admin"),
+      userId: user.userId,
+      avatar: user.avatar,
+      isAdmin: isAdminUser,
+      message: "",
+      eventType: undefined,
+      readBy: [],
+      appId,
+      guestPhone: isGuest ? guestPhone : undefined,
+      guestSessionId: isGuest ? guestIdentity : undefined,
+    };
+    socket.emit("join", joinData);
+
+    if (chatActor === 'admin') {
+      socket.emit('request_chat_history_app_snapshot', appId);
+    }
+    
+    console.log(`🔌 [ChatHistory] Socket join:`, {
+      actor: chatActor,
+      guestPhone,
+      guestSessionId: guestIdentity,
+      appId,
+      room: chatActor === 'admin' ? `app:${appId}` : chatActor === 'guest' ? `guest:${appId};${guestIdentity}` : appId
+    });
+  }, [socket, connected, appId, user.userId, user.username, user.avatar, guestPhone, guestIdentity, isAdminUser, chatActor, isGuest]);
+
+  useEffect(() => {
+    if (!connected) {
+      lastJoinSignatureRef.current = "";
+    }
+  }, [connected]);
   
   // Listen for messages
   useEffect(() => {
