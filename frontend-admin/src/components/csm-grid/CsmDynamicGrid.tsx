@@ -1091,6 +1091,12 @@ export function CsmDynamicGrid({
 		() => String(gridInstanceKey || `${runtimeAppId || ""}::${menuId || ""}::${m_configs?.id || ""}::${m_configs?.table_name || ""}`),
 		[gridInstanceKey, runtimeAppId, menuId, m_configs?.id, m_configs?.table_name],
 	);
+	const closeEditor = useCallback(() => {
+		submitInFlightRef.current = false;
+		setEditorOpen(false);
+		setCloneData(null);
+		setEditingRecord(null);
+	}, []);
 	const syncMasterTableRows = useCallback((nextRows: Row[]) => {
 		if (!shareTableState || isDetailGrid || !tableName) return;
 		const currentStoreTable = useAppStore.getState().database[tableName];
@@ -1112,14 +1118,12 @@ export function CsmDynamicGrid({
 		setPendingEditableRowId(null);
 		setSelectedRow(null);
 		setSelectedDetailRow(null);
-		setEditingRecord(null);
-		setCloneData(null);
-		setEditorOpen(false);
+		closeEditor();
 		setSearchTerm("");
 		setDatabaseVersion(0);
 		hasFetchedComboTables.current = false;
 		globalTableFetchCache.clear();
-	}, [effectiveGridInstanceKey, globalTableFetchCache]);
+	}, [closeEditor, effectiveGridInstanceKey, globalTableFetchCache]);
 
 	// Enable socket for real-time database updates
 	useSocket({ enabled: true });
@@ -4487,7 +4491,7 @@ export function CsmDynamicGrid({
 			);
 			return items;
 		},
-		options: { reload: true, density: true, setting: true },
+		options: { reload: true, density: true, setting: true, fullscreen: false },
 		cardProps: {
 			bodyStyle: { padding: 0 }
 		},
@@ -4589,7 +4593,13 @@ export function CsmDynamicGrid({
 			React.createElement(CsmEditModal as any, {
 				key: "editor",
 				open: editorOpen,
-				onOpenChange: (o: boolean) => { setEditorOpen(o); if (!o) setCloneData(null); },
+				onOpenChange: (o: boolean) => {
+					if (o) {
+						setEditorOpen(true);
+						return;
+					}
+					closeEditor();
+				},
 				title: editingRecord ? t("common.edit") : (cloneData ? t("common.clone") : t("common.add")),
 				m_configs,
 				fields: m_configs.table,
@@ -4676,7 +4686,7 @@ export function CsmDynamicGrid({
 							return prev;
 						});
 						
-						setEditorOpen(false);
+						closeEditor();
 						message.success(cmd === "create" ? t("common.addSuccess") : t("common.updateSuccess"));
 						runSideEffectTrigger("update_db", values);
 						onAdd?.();
@@ -4784,7 +4794,7 @@ export function CsmDynamicGrid({
 						return prev;
 					});
 					
-					setEditorOpen(false);
+					closeEditor();
 					message.success(cmd === "create" ? t("common.addSuccess") : t("common.updateSuccess"));
 					runSideEffectTrigger("update_db", effectiveUpdatedValues);
 					onAdd?.();
