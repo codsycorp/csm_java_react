@@ -1,4 +1,4 @@
-import { normalizeMenuRuntimeConfig } from "#src/components/csm-crm/crm-config";
+import { hasConfiguredMenuFields, isGridRuntimeMenu, isReportRuntimeMenu, normalizeMenuRuntimeConfig } from "#src/components/csm-crm/crm-config";
 import { createTableStruct, type CreateTableStruct, getTableData } from "#src/components/csm-grid/CsmApi";
 // Patch lại label đa ngữ cho menuData theo i18n hiện tại
 import CsmDynamicGrid from "#src/components/csm-grid/CsmDynamicGrid";
@@ -1866,15 +1866,9 @@ export default function AdminPage() {
 		);
 	}
 
-	// Legacy-compatible grid detection: some menus run as grid via trigger.load_db without table_name.
-	const hasGridLikePayload = Boolean(
-		runtimeMenuData.table_name
-		|| (runtimeMenuData as any)?.trigger?.load_db
-		|| typeForm === 1
-		|| typeForm === 2,
-	);
-	// Report should not override grid-like menus that only use report_name for print templates.
-	const isReportMode = !!runtimeMenuData.report_name && (typeForm === 5 || !hasGridLikePayload);
+	const hasGridLikePayload = isGridRuntimeMenu(runtimeMenuData);
+	const hasReportRuntimePayload = isReportRuntimeMenu(runtimeMenuData);
+	const isReportMode = hasReportRuntimePayload || (!!runtimeMenuData.report_name && !hasGridLikePayload);
 	if (isReportMode) {
 		return (
 			<div style={{ padding: 16, height: "100%" }}>
@@ -1932,7 +1926,7 @@ export default function AdminPage() {
 				.filter((field: any) => field && typeof field === "object")
 				.map((field: any) => ({ ...field }))
 			: [];
-		const hasConfiguredTableFields = configuredTableFromMenu.some((field: any) => String(field?.f_name || "").trim().length > 0);
+		const hasConfiguredTableFields = hasConfiguredMenuFields({ table: configuredTableFromMenu });
 
 		const m_configs = {
 			id: runtimeMenuData.id,

@@ -9,7 +9,7 @@ import { toPermissionBigInt, isSuperPermissionProfile } from "#src/utils/permiss
 
 import { getTableData, updateTableData } from "#src/components/csm-grid/CsmApi";
 import { csmEncrypt, csmDecrypt } from "#src/components/csm-grid/CsmCrypto";
-import { normalizeMenuRuntimeConfig } from "#src/components/csm-crm/crm-config";
+import { isGridRuntimeMenu, isReportRuntimeMenu, normalizeMenuRuntimeConfig } from "#src/components/csm-crm/crm-config";
 import { fetchNavigationMenus } from "#src/api/system/menu";
 
 import { useEffect, useMemo, useState } from "react";
@@ -532,13 +532,11 @@ export function useMenu() {
 			   const normalized = normalizeMenuRuntimeConfig(menu || {});
 			   return !!(
 				   normalized && (
-					   normalized.table_name
-					   || normalized.report_name
+					   isGridRuntimeMenu(normalized)
+					   || isReportRuntimeMenu(normalized)
 					   || normalized.auto_code_name
 					   || normalized.auto_code
 					   || normalized.kanban_config
-					   || normalized?.trigger?.load_db
-					   || normalized?.trigger?.report_db
 					   || Number(normalized.type_form) === 4
 					   || Number(normalized.type_form) === 6
 				   )

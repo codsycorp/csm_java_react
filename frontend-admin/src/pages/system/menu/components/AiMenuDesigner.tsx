@@ -3296,8 +3296,11 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     if (!appId) return;
     if (editableAiDraftText.trim()) return;
     if (aiResultText.trim()) return;
-    if (!Array.isArray(currentMenus) || currentMenus.length === 0) return;
-    setEditorFromMenus(currentMenus, "current");
+    if (Array.isArray(currentMenus) && currentMenus.length > 0) {
+      setEditorFromMenus(currentMenus, "current");
+      return;
+    }
+    setEditableAiDraftText(buildEditorMenuJson([]));
   }, [appId, currentMenus, loading, editableAiDraftText, aiResultText]);
 
   const generateMenuWithRealtime = async (
@@ -4811,17 +4814,15 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                     </Button>
                   )}
 
-                  {applyMenuCount > 0 && (
-                    <Button
-                      type="primary"
-                      onClick={handleApply}
-                      size="large"
-                      disabled={menuValidationErrors.length > 0 || applyGuardIssues.length > 0}
-                      style={{ background: "#52c41a", borderColor: "#52c41a" }}
-                    >
-                      {`${t("system.menu.aiDesigner.applySystem") || "Ap dung vao He thong"} (${applyMenuCount})`}
-                    </Button>
-                  )}
+                  <Button
+                    type="primary"
+                    onClick={handleApply}
+                    size="large"
+                    disabled={applyMenuCount <= 0 || menuValidationErrors.length > 0 || applyGuardIssues.length > 0}
+                    style={{ background: "#52c41a", borderColor: "#52c41a" }}
+                  >
+                    {`${t("system.menu.aiDesigner.applySystem") || "Ap dung vao He thong"} (${applyMenuCount})`}
+                  </Button>
                 </Space>
 
                 <Space wrap>
@@ -5513,7 +5514,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                     resultEditorViewRef.current = view;
                     updateResultEditorIndicators(view);
                   }}
-                  editable={allowManualEditWhileRunning ? true : (!!editableAiDraftText || aiProgress?.status === "completed")}
+                  editable={allowManualEditWhileRunning || !loading || aiProgress?.status === "completed"}
                   onChange={(val) => {
                     setEditableAiDraftText(val);
                     const view = resultEditorViewRef.current;

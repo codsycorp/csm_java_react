@@ -972,8 +972,18 @@ public class RecordManager {
         if ("index".equalsIgnoreCase(tableName)) {
             return List.of("id");
         }
-        // Cache schema per (appId, tableName, fieldType) — table structure rarely changes.
-        String cacheKey = appId + "_" + tableName + "_" + fieldType;
+        // Cache schema per (appId, tableName, fieldType) — normalize key nhất quán với getDatabaseWithBloomFilter.
+        // Tránh cache miss khi cùng table nhưng appId khác case/whitespace.
+        String safeAppId;
+        String safeTableName;
+        try {
+            safeAppId = sanitizePathSegment(appId, "app_id");
+            safeTableName = sanitizePathSegment(tableName, "table_name");
+        } catch (IllegalArgumentException e) {
+            logger.warn("getTableSearchKeys: appId/tableName không hợp lệ — {}", e.getMessage());
+            return List.of();
+        }
+        String cacheKey = safeAppId + "_" + safeTableName + "_" + fieldType;
         List<String> cached = tableSchemaCache.get(cacheKey);
         if (cached != null) return cached;
 
@@ -982,7 +992,7 @@ public class RecordManager {
         filter.setType("eq");
         filter.setValue(tableName);
         try {
-            Map<String, Object> tableStruct = find(appId, "index", filter);
+            Map<String, Object> tableStruct = find(safeAppId, "index", filter);
             if (tableStruct == null) {
                 logger.warn("Không tìm thấy cấu trúc bảng '{}' trong bảng 'index'.", tableName);
                 return List.of();
@@ -1007,7 +1017,10 @@ public class RecordManager {
         
     // Manages a single, shared IndexWriter instance per index
     private IndexWriter getOrCreateSharedIndexWriter(String appId, String tableName) throws IOException {
-        String indexKey = appId + "_" + tableName;
+        // Chuẩn hóa qua sanitizePathSegment — nhất quán với getDatabaseWithBloomFilter
+        String safeAppId = sanitizePathSegment(appId, "app_id");
+        String safeTableName = sanitizePathSegment(tableName, "table_name");
+        String indexKey = safeAppId + "_" + safeTableName;
         luceneIndexLocks.putIfAbsent(indexKey, new Object()); // Ensure a lock object exists for this index
 
         synchronized (luceneIndexLocks.get(indexKey)) { // Synchronize on the specific index lock
@@ -1018,7 +1031,7 @@ public class RecordManager {
             }
 
             // If not open or not in cache, create a new one
-            Path indexPath = Paths.get(DIR_PATH, "lucene_index", appId, tableName);
+            Path indexPath = Paths.get(DIR_PATH, "lucene_index", safeAppId, safeTableName).normalize();
             Files.createDirectories(indexPath); // Ensure directory exists
 
             FSDirectory directory = indexDirectoryCache.computeIfAbsent(indexKey, k -> {
@@ -1033,7 +1046,7 @@ public class RecordManager {
             Analyzer analyzer = indexAnalyzerCache.computeIfAbsent(indexKey, k -> new StandardAnalyzer());
 
             IndexWriterConfig config = new IndexWriterConfig(analyzer);
-            config.setRAMBufferSizeMB(64); // Configure RAM buffer
+            config.setRAMBufferSizeMB(128); // 128MB — tăng từ 64MB, giảm flush frequency của Lucene
             config.setOpenMode(IndexWriterConfig.OpenMode.CREATE_OR_APPEND); // Create if not exists, append if it does
 
             IndexWriter writer = new IndexWriter(directory, config);
@@ -1480,8 +1493,35 @@ public class RecordManager {
         }
     }
 
+    /**
+     * Chuẩn hóa appId / tableName trước khi dùng làm segment đường dẫn filesystem.
+     * <ul>
+     *   <li>Trim whitespace để tránh tạo thư mục trùng ("csm" vs " csm").</li>
+     *   <li>Lowercase để tránh tạo thư mục trùng do khác case ("CSM" vs "csm").</li>
+     *   <li>Từ chối chuỗi rỗng — appId rỗng tạo path "database//table" → file thoát ra ngoài database/.</li>
+     *   <li>Từ chối path traversal (".", "..", hay bất kỳ segment nào chứa "/", "\", null byte).</li>
+     * </ul>
+     */
+    private static String sanitizePathSegment(String segment, String label) {
+        if (segment == null || segment.isBlank()) {
+            throw new IllegalArgumentException(label + " không được rỗng hoặc null — sẽ gây ra đường dẫn sai trong filesystem.");
+        }
+        String s = segment.trim().toLowerCase(Locale.ROOT);
+        // Reject path traversal characters
+        if (s.contains("/") || s.contains("\\") || s.contains("\0") || s.equals(".") || s.equals("..") || s.contains("..")) {
+            throw new IllegalArgumentException(label + " chứa ký tự không hợp lệ (path traversal): '" + segment + "'");
+        }
+        return s;
+    }
+
     public RocksDB getDatabaseWithBloomFilter(String appId, String tableName) {
-        String dbKey = appId + "_" + tableName;
+        // ✅ Chuẩn hóa trước khi dùng làm path — đây là điểm duy nhất mọi path RocksDB đi qua.
+        // Ngăn: (1) appId rỗng → file thoát ra database/ root, (2) case khác nhau → 2 thư mục trùng,
+        // (3) whitespace → 2 thư mục trùng, (4) path traversal → escape khỏi database/.
+        String safeAppId = sanitizePathSegment(appId, "app_id");
+        String safeTableName = sanitizePathSegment(tableName, "table_name");
+
+        String dbKey = safeAppId + "_" + safeTableName;
         dbLocks.putIfAbsent(dbKey, new Object());
     
         synchronized (dbLocks.get(dbKey)) {
@@ -1498,31 +1538,42 @@ public class RecordManager {
                 // Table format: tối ưu cho read-heavy workload (SSR queries)
                 BlockBasedTableConfig tableConfig = new BlockBasedTableConfig()
                     .setFilterPolicy(bloomFilter)
-                    .setBlockSize(4 * 1024)
+                    .setBlockSize(16 * 1024)                    // 16KB blocks — tốt hơn cho JSON records
                     .setBlockRestartInterval(16)
                     .setCacheIndexAndFilterBlocks(true)
-                    .setPinL0FilterAndIndexBlocksInCache(false)
+                    .setPinL0FilterAndIndexBlocksInCache(true)  // giữ filter/index trong cache
                     .setWholeKeyFiltering(true);
     
                 Options options = new Options()
                         .setCreateIfMissing(true)
                     .setMaxOpenFiles(2048)
                         .setIncreaseParallelism(Runtime.getRuntime().availableProcessors())
-                    // Conservative profile for lower memory footprint under many open DBs.
-                    .setWriteBufferSize(8 * 1024 * 1024)
+                    .setCompressionType(CompressionType.LZ4_COMPRESSION) // LZ4: nhanh nhất, giảm 60-70% disk I/O
+                    // 32MB write buffer — ít flush hơn 8MB, giảm write amplification đáng kể
+                    .setWriteBufferSize(32 * 1024 * 1024)
                     .setMaxWriteBufferNumber(2)
-                    .setDbWriteBufferSize(32 * 1024 * 1024)
+                    .setDbWriteBufferSize(64 * 1024 * 1024)     // global cap 64MB (was 32MB)
                         .optimizeLevelStyleCompaction()
                         .setTableFormatConfig(tableConfig);
-    
-                String dbPath = DIR_PATH + "/database/" + appId + "/" + tableName;
-                Files.createDirectories(Paths.get(dbPath));
+
+                // Dùng Paths.get để ghép path an toàn — tránh double slash hay escape ký tự đặc biệt.
+                Path dbPathObj = Paths.get(DIR_PATH, "database", safeAppId, safeTableName).normalize();
+
+                // Xác minh path nằm trong thư mục database/ (defense-in-depth chống path traversal)
+                Path dbRootPath = Paths.get(DIR_PATH, "database").normalize().toAbsolutePath();
+                Path resolvedPath = dbPathObj.toAbsolutePath();
+                if (!resolvedPath.startsWith(dbRootPath)) {
+                    throw new SecurityException("Path RocksDB thoát ra ngoài thư mục database: " + resolvedPath);
+                }
+
+                String dbPath = dbPathObj.toString();
+                Files.createDirectories(dbPathObj);
 
                 RocksDB db;
                 try {
                     db = RocksDB.open(options, dbPath);
                 } catch (RocksDBException openEx) {
-                    if (shouldAutoRecoverRocksDb(tableName) && isRecoverableOpenError(openEx)) {
+                    if (shouldAutoRecoverRocksDb(safeTableName) && isRecoverableOpenError(openEx)) {
                         logger.error("❌ RocksDB bị lỗi/corrupt cho {} tại {}. Thử tự phục hồi...", dbKey, dbPath, openEx);
                         quarantineCorruptedRocksDirectory(dbPath, dbKey);
                         db = RocksDB.open(options, dbPath);

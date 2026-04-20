@@ -748,7 +748,7 @@ public class InitHandler {
                         buildFieldConfig("full_name", "common.fullName", 1, "string", "left"),
                         buildFieldConfig("user_address", "common.address", 1, "string", "left"),
                         buildFieldConfig("app_id", "common.appId", 1, "co", "left",
-                                Map.of("f_cbo_query", "{\"query\":[{\"obj_name\":\"sys_apps\",\"app_id\":\"csm\",\"fields\":[\"id\",\"name\"]}]}")),
+                        Map.of("f_cbo_query", "{\"query\":[{\"obj_name\":\"sys_apps\",\"app_id\":\"csm\",\"fields\":[\"app_id\",\"app_name\"]}]}")),
                         buildFieldConfig("app_token", "common.appToken", 1, "string", "left"),
                         buildFieldConfig("refresh_token", "Refresh Token", 1, "string", "left"),
                         buildFieldConfig("refresh", "Refresh Alias", 1, "string", "left"),

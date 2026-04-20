@@ -69,6 +69,14 @@ public class TableHandler {
     private static final Map<String, List<String>> DEFAULT_TABLE_FIELDS = createDefaultTableFields();
     private static final Set<String> LEGACY_SCOPE_MIGRATED_TABLES = ConcurrentHashMap.newKeySet();
     private static final Set<String> SEARCH_INDEX_SYNCED_TABLES = ConcurrentHashMap.newKeySet();
+    /**
+     * IDs được hệ thống dùng trong bảng "index" để lưu metadata quan trọng.
+     * Các tên này KHÔNG được phép dùng làm tên bảng dữ liệu thông thường vì sẽ ghi đè
+     * lên metadata hệ thống (ví dụ: "menu" lưu toàn bộ cây menu của app_id).
+     */
+    private static final Set<String> RESERVED_INDEX_IDS = Set.of(
+        "menu", "menuList", "menuR", "roleList", "accessRights", "menu_permissions"
+    );
     
     @Autowired
     private SocketIOConfig socketIOConfig; // Inject SocketIOConfig
@@ -180,9 +188,29 @@ public class TableHandler {
         }
     
         String appId = params.get("app_id").toString(); // Lấy giá trị của app_id
-    
+
+        // Kiểm tra quyền ghi cross-app cho create-table
+        UserAccessContext accessCtx = resolveCurrentUserAccessContext();
+        if (accessCtx != null && !accessCtx.isDev) {
+            String userAppId = accessCtx.appId == null ? "" : accessCtx.appId.trim();
+            if (!userAppId.isEmpty() && !userAppId.equalsIgnoreCase(appId)) {
+                logger.warn("[Security] Từ chối create-table cross-app: user.app_id={} request.app_id={}", userAppId, appId);
+                response.set("success", false);
+                response.set("message", "Bạn không có quyền tạo bảng trong ứng dụng '" + appId + "'");
+                return;
+            }
+        }
+
         // Lấy id và struct từ obj_table
         String id = objTable.get("id").toString();
+
+        // Bảo vệ metadata hệ thống: không cho tạo/ghi đè bảng với tên hệ thống reserved.
+        if (RESERVED_INDEX_IDS.contains(id)) {
+            response.set("success", false);
+            response.set("message", "Tên bảng '" + id + "' là tên hệ thống, không thể sử dụng làm tên bảng dữ liệu.");
+            return;
+        }
+
         Map<String, Object> struct = (Map<String, Object>) objTable.get("struct");
         struct = normalizeStructForStorage(id, struct);
     
@@ -513,6 +541,27 @@ public class TableHandler {
             if ("index".equals(tblname)) {
                 return handleIndexTableOperation(appId, msg, filtersObjs, isUpdate, accessContext);
             }
+            // Bảo vệ metadata hệ thống: ngăn truy cập bảng dữ liệu trùng tên với ID hệ thống trong index.
+            // Ví dụ: nếu table_name = "menu", backend sẽ tìm thấy record {id:"menu", struct:"<encrypted_menus>"}
+            // và ensureTableStructReadyForOperation sẽ ghi đè nó bằng schema rỗng → mất toàn bộ menu.
+            if (RESERVED_INDEX_IDS.contains(tblname)) {
+                logger.warn("Từ chối thao tác bảng '{}' vì là tên hệ thống (app_id={})", tblname, appId);
+                return errorResponse("Tên bảng '" + tblname + "' là tên hệ thống, không thể sử dụng làm tên bảng dữ liệu.");
+            }
+
+            // Bảo vệ cross-app ghi: chỉ dev mới được phép ghi vào bảng của app_id khác.
+            // Ngoại lệ: bảng hệ thống (csm_*, sys_*) có access control riêng qua validateSystemUserTableAccess.
+            // READ (isUpdate=false) không bị giới hạn ở đây vì nhiều bảng csm/sys được đọc cross-app hợp lệ.
+            if (isUpdate && !tblname.startsWith("csm_") && !tblname.startsWith("sys_")) {
+                if (accessContext != null && !accessContext.isDev) {
+                    String userAppId = safeStr(accessContext.appId);
+                    if (!userAppId.isEmpty() && !userAppId.equalsIgnoreCase(appId)) {
+                        logger.warn("[Security] Cross-app write denied: user.app_id={}, request.app_id={}, table={}", userAppId, appId, tblname);
+                        return errorResponse("Bạn không có quyền thay đổi dữ liệu của ứng dụng '" + appId + "'");
+                    }
+                }
+            }
+
 //            OSSUtil.log("Lấy Cấu trúc cho bảng "+tblname+"Với điều kiện là "+findKey);
             // logger.info("Bắt đầu tìm cấu trúc chương trình {} với bảng:{}",msg.get("app_id").toString(),msg.get("obj_name").toString());
             SearchFilter filter = new SearchFilter();
@@ -521,6 +570,14 @@ public class TableHandler {
             filter.setValue(tblname);
 
             Map<String, Object> findStruct = recordManager.find(appId, "index", filter);
+
+            // Trường hợp bảng chưa có index: ensureTableStructReadyForOperation sẽ tự tạo cấu trúc chuẩn.
+            // Điều kiện cho phép: dev (mọi app_id) hoặc user thuộc đúng app_id.
+            // Cross-app write đã bị chặn ở trên; đây chỉ ghi nhận lần đầu khởi tạo index.
+            if (findStruct == null) {
+                logger.info("Bảng {}.{} chưa có index – sẽ tự khởi tạo cấu trúc.", appId, tblname);
+            }
+
             Map<String, Object> objUpdate = null;
             if (msg.get("obj_update") instanceof Map<?, ?> rawUpdate) {
                 objUpdate = new HashMap<>();
@@ -534,7 +591,10 @@ public class TableHandler {
 
             Map<String, Object> structMap = ensureTableStructReadyForOperation(appId, tblname, findStruct, objUpdate);
             if (structMap == null) {
-                return errorResponse("Không tìm thấy cấu trúc bảng");
+                // Xảy ra khi tên bảng trùng với reserved ID hệ thống (đã bị chặn ở guard trên).
+                // Đây là safety net – không nên xảy ra trong luồng bình thường.
+                logger.error("ensureTableStructReadyForOperation trả về null cho bảng {}.{} – reserved ID bị lọt qua guard?", appId, tblname);
+                return errorResponse("Không thể truy cập bảng '" + tblname + "': tên bảng trùng với metadata hệ thống.");
             }
             ensureOneTimeSearchIndexSync(appId, tblname);
             ensureAutoPermissionSchemaForTable(appId, tblname, findStruct, structMap);
@@ -1202,6 +1262,12 @@ public class TableHandler {
         structRecord.put("struct", structMap);
 
         if (changed || existingStructRecord == null || existingStructRecord.get("struct") == null) {
+            // Bảo vệ tầng sâu: không bao giờ ghi đè metadata hệ thống (ví dụ: id="menu" lưu cây menu).
+            // handleTableOperation đã chặn sớm hơn, đây là safety net phòng các path gọi trực tiếp.
+            if (RESERVED_INDEX_IDS.contains(tableName)) {
+                logger.error("CRITICAL: Ngăn auto-heal ghi đè ID hệ thống '{}.{}' trong index – tên bảng này là reserved!", appId, tableName);
+                return null;
+            }
             logger.warn("Auto-heal cấu trúc bảng {}.{} vì thiếu/không hợp lệ struct trong index", appId, tableName);
             recordManager.createRecord(appId, "index", structRecord, List.of("id"));
             if (needsSearchHeal) {
@@ -2884,6 +2950,16 @@ public class TableHandler {
         }
     
         String command = msg.getOrDefault("command", "").toString().toLowerCase(Locale.ROOT);
+
+        // Kiểm tra quyền ghi cross-app: chỉ dev mới được phép ghi vào index của app_id khác.
+        // Admin/sub-user chỉ được ghi vào index của chính app_id họ thuộc về.
+        if (accessContext != null && !accessContext.isDev) {
+            String userAppId = accessContext.appId == null ? "" : accessContext.appId.trim();
+            if (!userAppId.isEmpty() && !userAppId.equalsIgnoreCase(appId)) {
+                logger.warn("[Security] Từ chối ghi index cross-app: user.app_id={} request.app_id={}", userAppId, appId);
+                return errorResponse("Bạn không có quyền thay đổi dữ liệu của ứng dụng '" + appId + "'");
+            }
+        }
 
         List<String> pkFields = List.of("id");
         Map<String, Object> primaryKeysAndValues = new HashMap<>();

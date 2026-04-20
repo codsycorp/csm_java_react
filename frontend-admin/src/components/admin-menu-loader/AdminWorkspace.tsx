@@ -14,6 +14,7 @@ import type { MenuProps, TabsProps, DrawerProps } from "antd";
 import { useTranslation } from "react-i18next";
 
 import CsmCrmWorkspace from "../csm-crm/CsmCrmWorkspace";
+import { isGridRuntimeMenu, isReportRuntimeMenu } from "../csm-crm/crm-config";
 import CsmDynamicGrid from "../csm-grid/CsmDynamicGrid";
 import CsmReport from "../csm-report/CsmReport";
 import { useUserStore } from "#src/store";
@@ -65,13 +66,14 @@ function getMenuType(menu: MenuConfig): "system" | "report" | "grid" | "crm" | "
 	// Priority 1: Explicit type field
 	if (menu.type === "system") return "system";
 
-	if (Number(menu.type_form || 0) === 5 || menu.crm_config) return "crm";
+	if (menu.crm_config) return "crm";
 	
 	// Priority 2: Report name
-	if (menu.report_name) return "report";
+	if (isReportRuntimeMenu(menu)) return "report";
+	if (menu.report_name && !menu.table_name) return "report";
 	
 	// Priority 3: Table name (grid)
-	if (menu.table_name) {
+	if (isGridRuntimeMenu(menu)) {
 		// console.log(`✅ Menu "${menu.label}" detected as GRID (table_name: ${menu.table_name})`);
 		return "grid";
 	}

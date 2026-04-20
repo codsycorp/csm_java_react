@@ -1,4 +1,5 @@
 import React, { lazy } from "react";
+import { isGridRuntimeMenu, isReportRuntimeMenu } from "#src/components/csm-crm/crm-config";
 
 // Import dynamic components
 const User = lazy(() => import("#src/pages/system/user"));
@@ -83,7 +84,7 @@ export function patchDynamicRoutesWithComponent(routes: any[]): any[] {
       let autoCodeName = route.auto_code_name || route.autoCodeName || '';
       let autoCode = route.auto_code || route.autoCode || '';
 
-      if (route.type_form === 1) {
+      if (route.type_form === 1 && isGridRuntimeMenu(route)) {
         Component = (props: any) => React.createElement(CsmDynamicGrid, {
           ...props,
           appId,
@@ -93,7 +94,7 @@ export function patchDynamicRoutesWithComponent(routes: any[]): any[] {
           decrypt: props.decrypt,
         });
       }
-      if (route.type_form === 2) {
+      if (route.type_form === 2 && isGridRuntimeMenu(route)) {
         Component = (props: any) => React.createElement(CsmMasterDetail, {
           ...props,
           appId,
@@ -103,8 +104,7 @@ export function patchDynamicRoutesWithComponent(routes: any[]): any[] {
           decrypt: props.decrypt,
         });
       }
-      // Only render CsmReport if type_form === 5 (or your business logic for report menu)
-      if (route.type_form === 5 && route.report_name) {
+        if (isReportRuntimeMenu(route)) {
         Component = (props: any) => React.createElement(CsmReport, {
           ...props,
           appId,

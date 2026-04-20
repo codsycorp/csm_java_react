@@ -239,6 +239,10 @@ function buildStructFromMenu(menu: any): { tableName: string; struct: any } | nu
 	};
 }
 
+// Tên ID được hệ thống dùng trong bảng "index" để lưu metadata quan trọng.
+// Không được dùng làm table_name trong menu vì sẽ ghi đè metadata hệ thống.
+const RESERVED_INDEX_IDS = new Set(["menu", "menuList", "menuR", "roleList", "accessRights", "menu_permissions"]);
+
 function collectMenuStructs(menus: MenuItemType[]): Map<string, any> {
 	const byTable = new Map<string, any>();
 
@@ -246,6 +250,11 @@ function collectMenuStructs(menus: MenuItemType[]): Map<string, any> {
 		items.forEach((item) => {
 			const candidate = buildStructFromMenu(item);
 			if (candidate) {
+				// Bảo vệ: bỏ qua nếu table_name trùng với ID hệ thống trong index
+				if (RESERVED_INDEX_IDS.has(candidate.tableName)) {
+					console.warn(`[collectMenuStructs] Bỏ qua table_name="${candidate.tableName}" vì là tên hệ thống reserved.`);
+					return;
+				}
 				const prev = byTable.get(candidate.tableName);
 				if (!prev || (candidate.struct?.fields?.length || 0) > (prev?.fields?.length || 0)) {
 					byTable.set(candidate.tableName, candidate.struct);

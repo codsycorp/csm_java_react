@@ -359,6 +359,34 @@ export function normalizeMenuRuntimeConfig<T extends Record<string, any>>(menu: 
 	return merged as T;
 }
 
+export function hasConfiguredMenuFields(menu: unknown): boolean {
+	if (!menu || typeof menu !== "object") return false;
+	const rawTable = normalizeLegacyTableFields((menu as Record<string, any>).table);
+	if (!Array.isArray(rawTable)) return false;
+	return rawTable.some((field: any) => String(field?.f_name || "").trim().length > 0);
+}
+
+export function isGridRuntimeMenu(menu: unknown): boolean {
+	if (!menu || typeof menu !== "object") return false;
+	const normalized = normalizeMenuRuntimeConfig(menu as Record<string, any>);
+	if (!hasConfiguredMenuFields(normalized)) return false;
+	const hasTableName = String(normalized.table_name || "").trim().length > 0;
+	const hasLoadDbTrigger = String(normalized?.trigger?.load_db || "").trim().length > 0;
+	return hasTableName || hasLoadDbTrigger;
+}
+
+export function isReportRuntimeMenu(menu: unknown): boolean {
+	if (!menu || typeof menu !== "object") return false;
+	const normalized = normalizeMenuRuntimeConfig(menu as Record<string, any>);
+	return Boolean(
+		String(normalized.report_name || "").trim()
+		&& (
+			Number(normalized.type_form || 0) === 5
+			|| String(normalized?.trigger?.report_db || "").trim()
+		),
+	);
+}
+
 export function collectCrmTableNames(crmConfig: unknown): string[] {
 	const parsed = parseCrmConfig(crmConfig);
 	const tables = new Set<string>();

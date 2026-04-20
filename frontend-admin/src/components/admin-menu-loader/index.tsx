@@ -9,6 +9,7 @@
 import React from "react";
 import { Empty } from "antd";
 import CsmCrmWorkspace from "../csm-crm/CsmCrmWorkspace";
+import { isGridRuntimeMenu, isReportRuntimeMenu } from "../csm-crm/crm-config";
 import CsmDynamicGrid from "../csm-grid/CsmDynamicGrid";
 import CsmReport from "../csm-report/CsmReport";
 
@@ -47,9 +48,10 @@ export interface MenuContentRendererProps {
  */
 export function getMenuType(menu: MenuConfig): "system" | "report" | "grid" | "crm" | "unknown" {
 	if (menu.type) return menu.type as "system" | "report" | "grid";
-	if (Number(menu.type_form || 0) === 5 || menu.crm_config) return "crm";
-	if (menu.report_name) return "report";
-	if (menu.table_name) return "grid";
+	if (menu.crm_config) return "crm";
+	if (isReportRuntimeMenu(menu)) return "report";
+	if (menu.report_name && !menu.table_name) return "report";
+	if (isGridRuntimeMenu(menu)) return "grid";
 	return "unknown";
 }
 
