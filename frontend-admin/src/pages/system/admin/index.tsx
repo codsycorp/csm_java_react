@@ -6,7 +6,6 @@ import CsmMasterDetail from "#src/components/csm-grid/CsmMasterDetail";
 import { CsmKanbanBoard } from "#src/components/csm-kanban";
 import CsmReport from "#src/components/csm-report/CsmReport";
 import DynamicCodeMenu from "#src/pages/system/dynamic-code";
-import { fetchNavigationMenus } from "#src/api/system/menu";
 import { useAppStore, usePermissionStore, useTabsStore, useUserStore } from "#src/store";
 import { resolveDevFlag } from "#src/utils/dev-flag";
 // Import hàm hỗ trợ đa ngôn ngữ
@@ -285,9 +284,6 @@ const SYSTEM_MENU_KEY_TO_EXPECTED_TABLES: Record<string, string[]> = {
 	roles: ["csm_roles"],
 	departments: ["csm_depts"],
 	branches: ["csm_branches"],
-	routers: ["sys_la_routers"],
-	apps: ["sys_apps"],
-	"react-native": ["sys_reactnative"],
 };
 
 function normalizeSystemMenuKey(raw: unknown): string {
@@ -677,6 +673,39 @@ function localizeRoleTableFields(
 	});
 }
 
+function localizeSystemUserTableFields(
+	fields: any[],
+	tVi: (key: string) => string,
+	tEn: (key: string) => string,
+	tZh: (key: string) => string,
+) {
+	if (!Array.isArray(fields)) {
+		return fields;
+	}
+	const headerKeyMap: Record<string, string> = {
+		username: "common.username",
+		full_name: "common.fullName",
+		email: "common.email",
+		phoneNumber: "common.phoneNumber",
+		app_id: "common.menu.apps",
+		actived: "common.active",
+	};
+	return fields.map((field) => {
+		const fName = String(field?.f_name || "").trim();
+		const key = headerKeyMap[fName];
+		if (!key) {
+			return field;
+		}
+		return {
+			...field,
+			f_header: tVi(key),
+			f_header_vi: tVi(key),
+			f_header_en: tEn(key),
+			f_header_zh: tZh(key),
+		};
+	});
+}
+
 function buildMenuFieldSignature(field: any) {
 	if (!field || typeof field !== "object")
 		return "";
@@ -800,6 +829,7 @@ const SYSTEM_FRIENDLY_VISIBLE_FIELDS: Record<string, string[]> = {
 	csm_group_members: [
 		"id",
 		"login_identifier",
+		"user_address",
 		"pass",
 		"group_id",
 		"permissionsAdd",
@@ -887,25 +917,6 @@ const SYSTEM_USER_VISIBLE_FIELDS_BY_ACTOR: Record<SystemUserActorType, string[]>
 	],
 };
 
-const SYSTEM_USER_MIN_FIELD_WIDTHS: Record<string, number> = {
-	id: 90,
-	username: 180,
-	login_identifier: 220,
-	full_name: 200,
-	email: 220,
-	phoneNumber: 160,
-	group_id: 190,
-	permissionGroups: 220,
-	permissionsAdd: 280,
-	permissionsDeny: 280,
-	menusPermissionsAdd: 300,
-	menusPermissionsDeny: 300,
-	dataScope: 170,
-	pass: 140,
-	actived: 110,
-	app_id: 170,
-};
-
 function applyFriendlyFieldPolicy(tableName: string | undefined, rawFields: any[], actorType?: SystemUserActorType) {
 	if (!tableName || !Array.isArray(rawFields) || rawFields.length === 0) {
 		return rawFields;
@@ -922,12 +933,10 @@ function applyFriendlyFieldPolicy(tableName: string | undefined, rawFields: any[
 
 	const normalized = rawFields.map((field: any) => {
 		const fName = String(field?.f_name || "").trim();
-		const isVisible = fName === "user_address" ? false : orderMap.has(fName);
-		const minWidth = SYSTEM_USER_MIN_FIELD_WIDTHS[fName];
+		const isVisible = orderMap.has(fName);
 		return {
 			...field,
 			f_show: isVisible ? 1 : 0,
-			...(minWidth ? { f_width: Math.max(Number(field?.f_width || 0), minWidth) } : {}),
 		};
 	});
 
@@ -942,541 +951,28 @@ function applyFriendlyFieldPolicy(tableName: string | undefined, rawFields: any[
 	return normalized;
 }
 
-const DEFAULT_FIELD_HEADER_KEYS: Record<string, string> = {
-	id: "common.id",
-	name: "common.name",
-	username: "common.username",
-	full_name: "common.fullName",
-	email: "common.email",
-	phoneNumber: "common.phoneNumber",
-	user_address: "common.address",
-	path: "common.path",
-	route: "common.routePath",
-	route_path: "common.routePath",
-	router_path: "common.routePath",
-	domain: "common.domain",
-	domain_name: "common.domainName",
-	app_id: "common.appId",
-	app_name: "common.appName",
-	app_code: "common.appCode",
-	app_secret: "common.appSecret",
-	app_key: "common.appKey",
-	app_domain: "common.appDomain",
-	app_token: "common.appToken",
-	app_url: "common.webUrl",
-	url: "common.webUrl",
-	api_url: "common.apiUrl",
-	web_url: "common.webUrl",
-	ws_url: "common.wsUrl",
-	parent_account_id: "common.parentAccountId",
-	login_identifier: "common.loginIdentifier",
-	group_id: "common.groupId",
-	pass: "common.password",
-	f_logo: "common.appLogo",
-	f_title: "common.appTitle",
-	f_keyword: "common.appKeyword",
-	tbl_services: "common.tableServices",
-	tbl_service_detail: "common.tableServiceDetail",
-	rp_index: "common.priorityIndex",
-	platform: "common.platform",
-	package_name: "common.packageName",
-	bundle_id: "common.bundleId",
-	android_package: "common.androidPackage",
-	ios_bundle_id: "common.iosBundleId",
-	version: "common.version",
-	version_name: "common.versionName",
-	version_code: "common.versionCode",
-	deep_link: "common.deepLink",
-	scheme: "common.scheme",
-	actived: "common.active",
-	roles: "system.userPermission.fields.roles",
-	permissions: "system.userPermission.fields.permissions",
-	menusPermissions: "system.userPermission.fields.menusPermissions",
-	permissionBitfield: "system.userPermission.fields.permissionBitfield",
-	permissionSchemaVersion: "system.userPermission.fields.permissionSchemaVersion",
-	dataScope: "system.userPermission.fields.dataScope",
-	dept_id: "system.userPermission.fields.deptId",
-	branch_id: "system.userPermission.fields.branchId",
-};
-
-function ensureTableFieldI18n(
-	rawFields: any[],
-	t: (key: string) => string,
-	tEn: (key: string) => string,
-	tZh: (key: string) => string,
-) {
-	if (!Array.isArray(rawFields)) {
-		return rawFields;
-	}
-	const normalizeFieldTokens = (name: string) => String(name || "")
-		.trim()
-		.replace(/([a-z])([A-Z])/g, "$1_$2")
-		.split(/[_\-\s]+/)
-		.map(token => token.trim().toLowerCase())
-		.filter(Boolean);
-
-	const TOKEN_LABELS: Record<string, { vi: string, en: string, zh: string }> = {
-		id: { vi: "ID", en: "ID", zh: "ID" },
-		app: { vi: "Ứng dụng", en: "App", zh: "应用" },
-		name: { vi: "Tên", en: "Name", zh: "名称" },
-		description: { vi: "Mô tả", en: "Description", zh: "描述" },
-		domain: { vi: "Tên miền", en: "Domain", zh: "域名" },
-		path: { vi: "Đường dẫn", en: "Path", zh: "路径" },
-		label: { vi: "Nhãn", en: "Label", zh: "标签" },
-		table: { vi: "Bảng", en: "Table", zh: "表" },
-		service: { vi: "Dịch vụ", en: "Service", zh: "服务" },
-		detail: { vi: "Chi tiết", en: "Detail", zh: "明细" },
-		index: { vi: "Chỉ mục", en: "Index", zh: "索引" },
-		logo: { vi: "Logo", en: "Logo", zh: "标识" },
-		title: { vi: "Tiêu đề", en: "Title", zh: "标题" },
-		keyword: { vi: "Từ khóa", en: "Keyword", zh: "关键词" },
-		run: { vi: "Kích hoạt", en: "Enabled", zh: "启用" },
-		active: { vi: "Kích hoạt", en: "Active", zh: "启用" },
-		actived: { vi: "Kích hoạt", en: "Active", zh: "启用" },
-		case: { vi: "Trường hợp", en: "Case", zh: "场景" },
-		type: { vi: "Kiểu", en: "Type", zh: "类型" },
-		action: { vi: "Tác vụ", en: "Action", zh: "动作" },
-		do: { vi: "Tác vụ", en: "Action", zh: "动作" },
-		parent: { vi: "Cha", en: "Parent", zh: "父级" },
-		component: { vi: "Thành phần", en: "Component", zh: "组件" },
-		form: { vi: "Biểu mẫu", en: "Form", zh: "表单" },
-		row: { vi: "Dòng", en: "Row", zh: "行" },
-		page: { vi: "Trang", en: "Page", zh: "页面" },
-		size: { vi: "Kích thước", en: "Size", zh: "大小" },
-		platform: { vi: "Nền tảng", en: "Platform", zh: "平台" },
-		package: { vi: "Gói", en: "Package", zh: "包" },
-		bundle: { vi: "Bundle", en: "Bundle", zh: "Bundle" },
-		version: { vi: "Phiên bản", en: "Version", zh: "版本" },
-		code: { vi: "Mã", en: "Code", zh: "代码" },
-		deep: { vi: "Sâu", en: "Deep", zh: "深度" },
-		link: { vi: "Liên kết", en: "Link", zh: "链接" },
-	};
-
-	const toTitleCase = (value: string) => value
-		.split(/\s+/)
-		.filter(Boolean)
-		.map(token => token.charAt(0).toUpperCase() + token.slice(1))
-		.join(" ");
-
-	const buildAutoLabels = (fName: string) => {
-		const tokens = normalizeFieldTokens(fName);
-		if (!tokens.length) {
-			const fallback = String(fName || "").trim() || "field";
-			return { vi: fallback, en: fallback, zh: fallback };
-		}
-		const vi = tokens.map(token => TOKEN_LABELS[token]?.vi || token).join(" ");
-		const en = toTitleCase(tokens.map(token => TOKEN_LABELS[token]?.en || token).join(" "));
-		const zh = tokens.map(token => TOKEN_LABELS[token]?.zh || token).join("");
-		return { vi: toTitleCase(vi), en, zh };
-	};
-
-	return rawFields.map((field: any) => {
-		const fName = String(field?.f_name || "").trim();
-		const rawHeader = String(field?.f_header || "").trim();
-		const headerKey = rawHeader.includes(".")
-			? rawHeader
-			: (DEFAULT_FIELD_HEADER_KEYS[fName] || "");
-		const mappedLabels = SYSTEM_FIELD_LABELS_3L[fName];
-		const autoLabels = buildAutoLabels(fName);
-		if (!headerKey) {
-			const fallbackHeader = rawHeader || String(field?.f_header_vi || field?.f_header_en || field?.f_header_zh || mappedLabels?.vi || autoLabels.vi || fName);
-			const vi = String(field?.f_header_vi || mappedLabels?.vi || autoLabels.vi || fallbackHeader);
-			const en = String(field?.f_header_en || mappedLabels?.en || autoLabels.en || fallbackHeader);
-			const zh = String(field?.f_header_zh || mappedLabels?.zh || autoLabels.zh || fallbackHeader);
-			return {
-				...field,
-				f_header: fallbackHeader || vi,
-				f_header_vi: vi,
-				f_header_en: en,
-				f_header_zh: zh,
-			};
-		}
-		const vi = t(headerKey);
-		const en = tEn(headerKey);
-		const zh = tZh(headerKey);
-		return {
-			...field,
-			f_header: String(field?.f_header || vi),
-			f_header_vi: String(field?.f_header_vi || mappedLabels?.vi || vi || autoLabels.vi),
-			f_header_en: String(field?.f_header_en || mappedLabels?.en || en || autoLabels.en),
-			f_header_zh: String(field?.f_header_zh || mappedLabels?.zh || zh || autoLabels.zh),
-		};
-	});
-}
-
-function isPlaceholderFieldName(raw: unknown): boolean {
-	const value = String(raw || "").trim().toLowerCase();
-	if (!value)
-		return true;
-	return value === "field_unknown" || value.startsWith("field_unknown_") || value.includes("unknown");
-}
-
-function hasMeaningfulConfiguredFields(rawFields: any[]): boolean {
-	if (!Array.isArray(rawFields) || rawFields.length === 0)
-		return false;
-	return rawFields.some((field: any) => {
-		const fName = String(field?.f_name || "").trim();
-		return fName.length > 0 && !isPlaceholderFieldName(fName);
-	});
-}
-
-const SYSTEM_CANONICAL_TABLE_FIELDS: Record<string, Array<{ f_name: string, f_types: string, f_align: "left" | "right" | "center" }>> = {
-	sys_la_routers: [
-		{ f_name: "id", f_types: "string", f_align: "left" },
-		{ f_name: "parent_id", f_types: "string", f_align: "left" },
-		{ f_name: "label", f_types: "string", f_align: "left" },
-		{ f_name: "path", f_types: "string", f_align: "left" },
-		{ f_name: "component", f_types: "string", f_align: "left" },
-		{ f_name: "table_name", f_types: "string", f_align: "left" },
-		{ f_name: "m_icons", f_types: "string", f_align: "left" },
-		{ f_name: "m_show", f_types: "checkbox", f_align: "center" },
-		{ f_name: "type_form", f_types: "number", f_align: "right" },
-		{ f_name: "row_type_edit", f_types: "number", f_align: "right" },
-		{ f_name: "table_pagesize", f_types: "number", f_align: "right" },
-		{ f_name: "app_id", f_types: "co", f_align: "left" },
-		{ f_name: "dev", f_types: "checkbox", f_align: "center" },
-	],
-	sys_apps: [
-		{ f_name: "id", f_types: "string", f_align: "left" },
-		{ f_name: "app_id", f_types: "string", f_align: "left" },
-		{ f_name: "app_name", f_types: "string", f_align: "left" },
-		{ f_name: "app_code", f_types: "string", f_align: "left" },
-		{ f_name: "app_secret", f_types: "string", f_align: "left" },
-		{ f_name: "app_domain", f_types: "string", f_align: "left" },
-		{ f_name: "f_logo", f_types: "image", f_align: "left" },
-		{ f_name: "f_title", f_types: "string", f_align: "left" },
-		{ f_name: "f_keyword", f_types: "string", f_align: "left" },
-		{ f_name: "tbl_services", f_types: "string", f_align: "left" },
-		{ f_name: "tbl_service_detail", f_types: "string", f_align: "left" },
-		{ f_name: "rp_index", f_types: "number", f_align: "right" },
-		{ f_name: "actived", f_types: "checkbox", f_align: "center" },
-	],
-	sys_reactnative: [
-		{ f_name: "id", f_types: "string", f_align: "left" },
-		{ f_name: "app_id", f_types: "co", f_align: "left" },
-		{ f_name: "name", f_types: "string", f_align: "left" },
-		{ f_name: "platform", f_types: "string", f_align: "left" },
-		{ f_name: "package_name", f_types: "string", f_align: "left" },
-		{ f_name: "bundle_id", f_types: "string", f_align: "left" },
-		{ f_name: "version", f_types: "string", f_align: "left" },
-		{ f_name: "version_name", f_types: "string", f_align: "left" },
-		{ f_name: "version_code", f_types: "string", f_align: "left" },
-		{ f_name: "deep_link", f_types: "string", f_align: "left" },
-		{ f_name: "component_code", f_types: "editor", f_align: "left" },
-		{ f_name: "actived", f_types: "checkbox", f_align: "center" },
-	],
-};
-
-const SYSTEM_FIELD_LABELS_3L: Record<string, { vi: string, en: string, zh: string }> = {
-	id: { vi: "ID", en: "ID", zh: "ID" },
-	name: { vi: "Tên", en: "Name", zh: "名称" },
-	description: { vi: "Mô tả", en: "Description", zh: "描述" },
-	domain_name: { vi: "Tên miền", en: "Domain", zh: "域名" },
-	f_case: { vi: "Trường hợp", en: "Case", zh: "场景" },
-	run: { vi: "Kích hoạt", en: "Enabled", zh: "启用" },
-	app_type: { vi: "Loại ứng dụng", en: "App Type", zh: "应用类型" },
-	f_do: { vi: "Tác vụ", en: "Action", zh: "动作" },
-	p_type: { vi: "Kiểu trang", en: "Page Type", zh: "页面类型" },
-	index: { vi: "Chỉ mục", en: "Index", zh: "索引" },
-	c_name: { vi: "Tên C", en: "C Name", zh: "C名称" },
-	router: { vi: "Router", en: "Router", zh: "路由" },
-	f_pops: { vi: "Popup", en: "Popup", zh: "弹窗" },
-	parent_id: { vi: "Mục cha", en: "Parent", zh: "父级" },
-	label: { vi: "Tên hiển thị", en: "Display Name", zh: "显示名称" },
-	path: { vi: "Đường dẫn", en: "Path", zh: "路径" },
-	component: { vi: "Component", en: "Component", zh: "组件" },
-	table_name: { vi: "Bảng dữ liệu", en: "Table Name", zh: "数据表" },
-	m_icons: { vi: "Icon", en: "Icon", zh: "图标" },
-	m_show: { vi: "Hiển thị", en: "Visible", zh: "显示" },
-	type_form: { vi: "Kiểu form", en: "Form Type", zh: "表单类型" },
-	row_type_edit: { vi: "Kiểu sửa", en: "Edit Mode", zh: "编辑模式" },
-	table_pagesize: { vi: "Kích thước trang", en: "Page Size", zh: "分页大小" },
-	app_id: { vi: "Mã ứng dụng", en: "Application ID", zh: "应用ID" },
-	dev: { vi: "Dev", en: "Dev", zh: "开发" },
-	app_name: { vi: "Tên ứng dụng", en: "Application Name", zh: "应用名称" },
-	app_code: { vi: "Mã ứng dụng", en: "Application Code", zh: "应用编码" },
-	app_secret: { vi: "Khóa bí mật", en: "Application Secret", zh: "应用密钥" },
-	app_domain: { vi: "Domain", en: "Domain", zh: "域名" },
-	f_logo: { vi: "Logo", en: "Logo", zh: "标识" },
-	f_title: { vi: "Tiêu đề", en: "Title", zh: "标题" },
-	f_keyword: { vi: "Từ khóa", en: "Keyword", zh: "关键词" },
-	tbl_services: { vi: "Bảng dịch vụ", en: "Service Table", zh: "服务表" },
-	tbl_service_detail: { vi: "Bảng chi tiết dịch vụ", en: "Service Detail Table", zh: "服务明细表" },
-	rp_index: { vi: "Thứ tự ưu tiên", en: "Priority Index", zh: "优先级" },
-	actived: { vi: "Kích hoạt", en: "Active", zh: "启用" },
-	platform: { vi: "Nền tảng", en: "Platform", zh: "平台" },
-	package_name: { vi: "Package Name", en: "Package Name", zh: "包名" },
-	bundle_id: { vi: "Bundle ID", en: "Bundle ID", zh: "Bundle ID" },
-	version: { vi: "Phiên bản", en: "Version", zh: "版本" },
-	version_name: { vi: "Tên phiên bản", en: "Version Name", zh: "版本名称" },
-	version_code: { vi: "Mã phiên bản", en: "Version Code", zh: "版本号" },
-	deep_link: { vi: "Deep Link", en: "Deep Link", zh: "深度链接" },
-	component_code: { vi: "Mã component", en: "Component Code", zh: "组件代码" },
-};
-
-const SYSTEM_FIELD_WIDTHS: Record<string, number> = {
-	id: 90,
-	name: 220,
-	description: 260,
-	domain_name: 200,
-	f_case: 150,
-	run: 110,
-	app_type: 150,
-	f_do: 160,
-	p_type: 130,
-	index: 120,
-	c_name: 180,
-	router: 120,
-	f_pops: 120,
-	parent_id: 120,
-	label: 220,
-	path: 260,
-	component: 240,
-	table_name: 180,
-	m_icons: 120,
-	m_show: 100,
-	type_form: 110,
-	row_type_edit: 120,
-	table_pagesize: 120,
-	app_id: 140,
-	dev: 90,
-	app_name: 220,
-	app_code: 160,
-	app_secret: 220,
-	app_domain: 220,
-	f_logo: 130,
-	f_title: 220,
-	f_keyword: 220,
-	tbl_services: 180,
-	tbl_service_detail: 200,
-	rp_index: 110,
-	actived: 100,
-	platform: 130,
-	package_name: 220,
-	bundle_id: 220,
-	version: 120,
-	version_name: 160,
-	version_code: 130,
-	deep_link: 240,
-	component_code: 300,
-};
-
-const ROUTER_PARENT_QUERY_JSON = JSON.stringify({
-	query: [
-		{
-			obj_name: "sys_la_routers",
-			app_id: "csm",
-			fields: ["id", "label"],
-			obj_where: { field: "id", type: "like", value: "" },
-		},
-	],
-});
-
-const ROUTER_TYPE_FORM_OPTIONS_JSON = JSON.stringify({
-	options: [
-		{ value: 1, label: "Grid" },
-		{ value: 2, label: "Master Detail" },
-		{ value: 4, label: "Dynamic Code" },
-		{ value: 5, label: "Report" },
-		{ value: 6, label: "Kanban" },
-	],
-});
-
-const ROUTER_ROW_TYPE_EDIT_OPTIONS_JSON = JSON.stringify({
-	options: [
-		{ value: 0, label: "Dialog" },
-		{ value: 1, label: "Inline" },
-	],
-});
-
-const REACT_NATIVE_PLATFORM_OPTIONS_JSON = JSON.stringify({
-	options: [
-		{ value: "android", label: "Android" },
-		{ value: "ios", label: "iOS" },
-		{ value: "both", label: "Both" },
-	],
-});
-
-const SYSTEM_CANONICAL_FIELD_OVERRIDES: Record<string, Record<string, Partial<{ f_types: string, f_cbo_query: string, f_width: number }>>> = {
-	sys_la_routers: {
-		parent_id: { f_types: "co", f_cbo_query: ROUTER_PARENT_QUERY_JSON, f_width: 180 },
-		app_id: { f_types: "co", f_cbo_query: APP_ID_QUERY_JSON, f_width: 170 },
-		type_form: { f_types: "co", f_cbo_query: ROUTER_TYPE_FORM_OPTIONS_JSON, f_width: 180 },
-		row_type_edit: { f_types: "co_ro", f_cbo_query: ROUTER_ROW_TYPE_EDIT_OPTIONS_JSON, f_width: 170 },
-		router: { f_types: "checkbox", f_width: 120 },
-		f_pops: { f_types: "checkbox", f_width: 120 },
-	},
-	sys_apps: {
-		app_id: { f_types: "string", f_width: 170 },
-	},
-	sys_reactnative: {
-		app_id: { f_types: "co", f_cbo_query: APP_ID_QUERY_JSON, f_width: 170 },
-		platform: { f_types: "co", f_cbo_query: REACT_NATIVE_PLATFORM_OPTIONS_JSON, f_width: 150 },
-	},
-};
-
-const SYSTEM_PERMISSION_FIELD_EXACT = new Set([
-	"permissions",
-	"permissionsadd",
-	"permissionsdeny",
-	"menuspermissions",
-	"menuspermissionsadd",
-	"menuspermissionsdeny",
-	"permissionbitfield",
-	"permissionschemaversion",
-	"permissionpreset",
-	"datascope",
-	"group_rights",
-	"grouprights",
-	"role",
-	"roles",
-	"role_id",
-	"role_code",
-	"role_name",
-	"dev",
-]);
-
-function isPermissionLikeSystemField(rawName: string): boolean {
-	const name = String(rawName || "").trim().toLowerCase();
-	if (!name) {
-		return false;
-	}
-	if (SYSTEM_PERMISSION_FIELD_EXACT.has(name)) {
-		return true;
-	}
-	return /(permission|menuspermission|role_|group_right|data_scope|datascope|bitfield|grant|deny|acl)/.test(name);
-}
-
-function isImageLikeSystemField(rawName: string): boolean {
-	const name = String(rawName || "").trim().toLowerCase();
-	if (!name) {
-		return false;
-	}
-	return /(logo|image|img|avatar|photo|picture|thumbnail|thumb|cover|banner)/.test(name);
-}
-
-function isBooleanLikeSystemField(rawName: string): boolean {
-	const name = String(rawName || "").trim().toLowerCase();
-	if (!name) {
-		return false;
-	}
-	if (["router", "f_pops", "m_show", "run", "dev", "actived", "active", "enabled", "is_global", "is_active", "is_show"].includes(name)) {
-		return true;
-	}
-	return /^(is_|has_|enable_|allow_|show_)/.test(name);
-}
-
-function resolveLocalizedFieldHeader(
-	labels: { vi: string, en: string, zh: string } | undefined,
-	fallback: string,
-	language: string,
-) {
-	if (!labels) {
-		return fallback;
-	}
-	const lang = String(language || "").toLowerCase();
-	if (lang.startsWith("en")) {
-		return labels.en || labels.vi || labels.zh || fallback;
-	}
-	if (lang.startsWith("zh")) {
-		return labels.zh || labels.vi || labels.en || fallback;
-	}
-	return labels.vi || labels.en || labels.zh || fallback;
-}
-
-function estimateHeaderWidth(
-	labels: { vi: string, en: string, zh: string } | undefined,
-	fallback: string,
-) {
-	const candidates = [labels?.vi, labels?.en, labels?.zh, fallback]
-		.map(item => String(item || "").trim())
-		.filter(Boolean);
-	const maxLen = candidates.reduce((acc, item) => Math.max(acc, item.length), 0);
-	// ~9px mỗi ký tự + phần đệm; chặn biên để không quá hẹp/rộng
-	return Math.min(420, Math.max(120, maxLen * 9 + 56));
-}
-
-function buildCanonicalSystemTableFields(
-	tableName: string,
-	runtimeFields: string[],
-	t: (key: string) => string,
-	tEn: (key: string) => string,
-	tZh: (key: string) => string,
-	language: string = "vi",
-) {
-	const presets = SYSTEM_CANONICAL_TABLE_FIELDS[tableName] || [];
-	const presetMap = new Map(presets.map(item => [item.f_name, item]));
-	const tableOverrides = SYSTEM_CANONICAL_FIELD_OVERRIDES[tableName] || {};
-	const runtimeNormalized = Array.isArray(runtimeFields)
-		? runtimeFields.map(item => String(item || "").trim()).filter(Boolean)
-		: [];
-	const runtimeFieldNames = Array.from(new Set(runtimeNormalized))
-		.filter((fName) => !isPermissionLikeSystemField(fName));
-	const presetFieldNames = presets.map(item => item.f_name)
-		.filter((fName) => !isPermissionLikeSystemField(fName));
-	// Nếu có schema runtime từ backend thì dùng đúng schema đó (tránh field dư)
-	const mergedFieldNames = runtimeFieldNames.length > 0 ? runtimeFieldNames : presetFieldNames;
-	const fields = mergedFieldNames.map((fName, idx) => {
-		const preset = presetMap.get(fName);
-		const override = tableOverrides[fName] || {};
-		const labels = SYSTEM_FIELD_LABELS_3L[fName];
-		const localizedHeader = resolveLocalizedFieldHeader(labels, fName, language);
-		const inferredType = String(
-			override.f_types
-			|| preset?.f_types
-			|| (isBooleanLikeSystemField(fName) ? "checkbox" : (isImageLikeSystemField(fName) ? "image" : "string")),
-		);
-		const inferredWidthBase = override.f_width ?? SYSTEM_FIELD_WIDTHS[fName] ?? (isImageLikeSystemField(fName) ? 130 : undefined);
-		const inferredWidth = Math.max(Number(inferredWidthBase || 0), estimateHeaderWidth(labels, fName));
-		const isPermissionField = isPermissionLikeSystemField(fName);
-		return {
-			f_name: fName,
-			f_header: localizedHeader,
-			f_header_vi: labels?.vi || fName,
-			f_header_en: labels?.en || fName,
-			f_header_zh: labels?.zh || fName,
-			f_show: isPermissionField ? 0 : 1,
-			f_types: inferredType,
-			...(override.f_cbo_query ? { f_cbo_query: override.f_cbo_query } : {}),
-			f_align: preset?.f_align || (fName === "id" ? "right" : "left"),
-			...(inferredWidth ? { f_width: inferredWidth } : {}),
-			f_stt: idx + 1,
-		};
-	});
-	return ensureTableFieldI18n(fields, t, tEn, tZh);
-}
-
 /**
  * AdminPage - Renders dynamic grid/report based on menuId parameter
  * Integrates with layout tabbar system for tab-based navigation
  */
-export default function AdminPage(props: any = {}) {
-	const { menuId: routeMenuId } = useParams<{ menuId: string }>();
-	const tabScopedMenuData = useMemo(() => {
-		return props?.menuData || props?.m_configs || null;
-	}, [props?.menuData, props?.m_configs]);
-	const selectedMenuIdSnapshot = useMemo(() => String(useUserStore.getState().selectedMenuIdForTab || "").trim(), []);
-	const tabScopedMenuId = useMemo(() => {
-		return String(
-			props?.menuId
-			|| tabScopedMenuData?.menuId
-			|| tabScopedMenuData?.id
-			|| routeMenuId
-			|| selectedMenuIdSnapshot
-			|| "",
-		).trim();
-	}, [props?.menuId, tabScopedMenuData?.menuId, tabScopedMenuData?.id, routeMenuId, selectedMenuIdSnapshot]);
+export default function AdminPage() {
+	const { menuId } = useParams<{ menuId: string }>();
+	const activeTabKey = useTabsStore(state => state.activeKey);
+	const activeTab = useTabsStore(state => state.openTabs?.get?.(state.activeKey) as any);
+	const selectedMenuIdForTab = useUserStore(state => state.selectedMenuIdForTab);
 	const normalizedMenuSource = useMemo(() => {
 		const candidates = [
-			tabScopedMenuData?.path,
-			tabScopedMenuData?.id,
-			tabScopedMenuData?.menuId,
-			tabScopedMenuId,
-			routeMenuId,
-			selectedMenuIdSnapshot,
+			activeTab?.menuData?.path,
+			activeTab?.m_configs?.path,
+			activeTab?.menuData?.id,
+			activeTab?.m_configs?.id,
+			activeTab?.menuId,
+			selectedMenuIdForTab,
+			menuId,
+			activeTabKey,
 		];
 		return String(candidates.find(item => Boolean(item)) || "");
-	}, [tabScopedMenuData?.path, tabScopedMenuData?.id, tabScopedMenuData?.menuId, tabScopedMenuId, routeMenuId, selectedMenuIdSnapshot]);
+	}, [activeTab?.menuData?.path, activeTab?.m_configs?.path, activeTab?.menuData?.id, activeTab?.m_configs?.id, activeTab?.menuId, selectedMenuIdForTab, menuId, activeTabKey]);
 	const normalizedMenuKey = useMemo(
 		() => normalizeSystemMenuKey(normalizedMenuSource),
 		[normalizedMenuSource],
@@ -1501,6 +997,7 @@ export default function AdminPage(props: any = {}) {
 	// Prefer logged-in user's app_id; fallback to selected app or localStorage default
 	const appId = (userAppId && userAppId.trim()) || (currentAppId && currentAppId.trim()) || useAppStore.getState().getCurrentAppId();
 	const { t, i18n } = useTranslation();
+	const tVi = useMemo(() => i18n.getFixedT("vi-VN"), [i18n]);
 	const tEn = useMemo(() => i18n.getFixedT("en-US"), [i18n]);
 	const tZh = useMemo(() => i18n.getFixedT("zh-CN"), [i18n]);
 
@@ -1872,53 +1369,8 @@ export default function AdminPage(props: any = {}) {
 				app_id: normalized.app_id || appId,
 			});
 		}
-		if (normalizedMenuKey === "routers") {
-			const tableName = normalized.table_name || "sys_la_routers";
-			return normalizeMenuRuntimeConfig({
-				...normalized,
-				id: normalized.id || "system-routers",
-				path: normalized.path || "/system/routers",
-				table_name: tableName,
-				app_id: "csm",
-				table: buildCanonicalSystemTableFields(tableName, [], t, tEn, tZh, i18n.language),
-				type_form: normalized.type_form ?? 1,
-				row_type_edit: normalized.row_type_edit ?? 0,
-				g_readonly: normalized.g_readonly ?? false,
-				struct: { ...(normalized.struct || {}), fieldsPK: ["id"] },
-			});
-		}
-		if (normalizedMenuKey === "apps") {
-			const tableName = normalized.table_name || "sys_apps";
-			return normalizeMenuRuntimeConfig({
-				...normalized,
-				id: normalized.id || "system-apps",
-				path: normalized.path || "/system/apps",
-				table_name: tableName,
-				app_id: "csm",
-				table: buildCanonicalSystemTableFields(tableName, [], t, tEn, tZh, i18n.language),
-				type_form: normalized.type_form ?? 1,
-				row_type_edit: normalized.row_type_edit ?? 0,
-				g_readonly: normalized.g_readonly ?? false,
-				struct: { ...(normalized.struct || {}), fieldsPK: ["id"] },
-			});
-		}
-		if (normalizedMenuKey === "react-native") {
-			const tableName = normalized.table_name || "sys_reactnative";
-			return normalizeMenuRuntimeConfig({
-				...normalized,
-				id: normalized.id || "system-react-native",
-				path: normalized.path || "/system/react-native",
-				table_name: tableName,
-				app_id: "csm",
-				table: buildCanonicalSystemTableFields(tableName, [], t, tEn, tZh, i18n.language),
-				type_form: normalized.type_form ?? 1,
-				row_type_edit: normalized.row_type_edit ?? 0,
-				g_readonly: normalized.g_readonly ?? false,
-				struct: { ...(normalized.struct || {}), fieldsPK: ["id"] },
-			});
-		}
 		return normalized;
-	}, [normalizedMenuKey, isDevUser, appId, t, tEn, tZh]);
+	}, [normalizedMenuKey, isDevUser, appId]);
 
 	const resolveDisplayLabel = useCallback((menu: any = {}): any => {
 		const rawLabel = menu?.label ?? menu?.label_vi ?? menu?.name ?? menu?.title ?? "";
@@ -1931,224 +1383,22 @@ export default function AdminPage(props: any = {}) {
 
 	// Refactor: Lấy menuData từ tab state hoặc menuId props, không dùng location.pathname
 	useEffect(() => {
-		let cancelled = false;
-
-		const hasRuntimePayloadMenu = (menu: any): boolean => {
-			const normalized = normalizeMenuRuntimeConfig(menu || {});
-			return !!(
-				normalized && (
-					normalized.table_name
-					|| normalized.report_name
-					|| normalized.auto_code_name
-					|| normalized.auto_code
-					|| normalized.kanban_config
-					|| normalized?.trigger?.load_db
-					|| normalized?.trigger?.report_db
-					|| Number(normalized.type_form) === 4
-					|| Number(normalized.type_form) === 6
-				)
-			);
-		};
-
-		const getParentId = (item: any): string => {
-			return String(item?.parentId || item?.parent_id || "").trim();
-		};
-
-		const flattenMenuTree = (menus: any[]): any[] => {
-			const result: any[] = [];
-			const queue: Array<{ node: any; parentId: string }> = (menus || []).map((node: any) => ({
-				node,
-				parentId: "",
-			}));
-			while (queue.length > 0) {
-				const current = queue.shift();
-				if (!current?.node) continue;
-				const node = current.node;
-				const normalizedNode = {
-					...node,
-					parentId: getParentId(node) || current.parentId,
-				};
-				result.push(normalizedNode);
-				const nodeId = String(normalizedNode?.id || node?.id || "").trim();
-				if (Array.isArray(node.children) && node.children.length > 0) {
-					queue.push(...node.children.map((child: any) => ({ node: child, parentId: nodeId })));
-				}
-			}
-			return result;
-		};
-
-		const findRuntimeDescendantInNode = (rootNode: any): any => {
-			if (!rootNode) return null;
-			const queue = [normalizeMenuRuntimeConfig(rootNode)];
-			while (queue.length > 0) {
-				const node = queue.shift();
-				if (!node) continue;
-				if (hasRuntimePayloadMenu(node)) {
-					return node;
-				}
-				const children = [
-					...(Array.isArray(node?.children) ? node.children : []),
-					...(Array.isArray(node?.nodes) ? node.nodes : []),
-				].map((child: any) => normalizeMenuRuntimeConfig(child));
-				if (children.length > 0) {
-					queue.push(...children);
-				}
-			}
-			return null;
-		};
-
-		const findRuntimeDescendantByParentId = (rows: any[], parentId: string): any => {
-			const normalizedParentId = String(parentId || "").trim();
-			if (!normalizedParentId || !Array.isArray(rows) || rows.length === 0) return null;
-
-			const queue = rows
-				.filter((item: any) => getParentId(item) === normalizedParentId)
-				.map((item: any) => normalizeMenuRuntimeConfig(item));
-
-			while (queue.length > 0) {
-				const node = queue.shift();
-				if (!node) continue;
-				if (hasRuntimePayloadMenu(node)) {
-					return node;
-				}
-				const nodeId = String(node?.id || "").trim();
-				if (!nodeId) continue;
-				const children = rows
-					.filter((item: any) => getParentId(item) === nodeId)
-					.map((item: any) => normalizeMenuRuntimeConfig(item));
-				if (children.length > 0) {
-					queue.push(...children);
-				}
-			}
-
-			return null;
-		};
-
-		const resolveRuntimeMenuCandidate = (candidate: any, rows: any[]): any => {
-			if (!candidate) return null;
-			const normalized = normalizeMenuRuntimeConfig(candidate);
-			if (hasRuntimePayloadMenu(normalized)) {
-				return normalized;
-			}
-			const byTree = findRuntimeDescendantInNode(normalized);
-			if (byTree) {
-				return byTree;
-			}
-			const candidateId = String(normalized?.id || "").trim();
-			if (!candidateId) return null;
-			return findRuntimeDescendantByParentId(rows, candidateId);
-		};
-
-		const fetchMenuRowsWithAppFallback = async (): Promise<any[]> => {
-			const appCandidates = Array.from(new Set([
-				String(appId || "").trim(),
-				"csm",
-			].filter(Boolean)));
-
-			for (const candidateAppId of appCandidates) {
-				for (const menuObjName of ["menu", "csm_menu"]) {
-					try {
-						const menuRowsRes = await getTableData<any>({
-							app_id: candidateAppId,
-							obj_name: menuObjName,
-							take: 5000,
-						});
-						const rows = (menuRowsRes as any)?.rows || [];
-						if (Array.isArray(rows) && rows.length > 0) {
-							return rows;
-						}
-					}
-					catch {
-						// try next source
-					}
-				}
-			}
-
-			return [];
-		};
-
 		// Ưu tiên lấy menuData từ tab state (store) nếu có
 		const tabsStore = useTabsStore.getState();
-		const fallbackActiveTab = tabsStore.openTabs?.get?.(tabsStore.activeKey) as any;
-		const menuDataFromTab = tabScopedMenuData || fallbackActiveTab?.menuData || fallbackActiveTab?.m_configs;
-		if (menuDataFromTab && hasRuntimePayloadMenu(menuDataFromTab)) {
-			(async () => {
-				let hydratedMenu = menuDataFromTab;
-				const runtimeMenuId = String(
-					tabScopedMenuId
-					|| menuDataFromTab?.id
-					|| menuDataFromTab?.menuId
-					|| routeMenuId
-					|| ""
-				).trim();
-
-				if (runtimeMenuId) {
-					try {
-						const menuRes = await getTableData<any>({
-							app_id: appId || "csm",
-							obj_name: "menu",
-							where: { field: "id", type: "eq", value: runtimeMenuId },
-							take: 1,
-						});
-						const directRows = (menuRes as any)?.rows || [];
-						if (Array.isArray(directRows) && directRows.length > 0) {
-							hydratedMenu = {
-								...menuDataFromTab,
-								...directRows[0],
-							};
-						}
-					}
-					catch {
-						// ignore here, fallback to menuDataFromTab/index-menu below
-					}
-
-					if (!hasRuntimePayloadMenu(hydratedMenu)) {
-						try {
-							const menuIndex = await getTableData<any>({
-								app_id: appId || "csm",
-								obj_name: "index",
-								where: { field: "id", type: "eq", value: "menu" },
-								take: 1,
-							});
-							const rows = (menuIndex as any)?.rows || [];
-							let matched = Array.isArray(rows)
-								? rows.find((item: any) => String(item?.id || "") === runtimeMenuId)
-								: null;
-							if (matched && !hasRuntimePayloadMenu(matched) && Array.isArray(rows)) {
-								const children = rows
-									.filter((item: any) => String(item?.parentId || "") === String(matched?.id || ""))
-									.sort((a: any, b: any) => Number(a?.order ?? Number.MAX_SAFE_INTEGER) - Number(b?.order ?? Number.MAX_SAFE_INTEGER));
-								const runtimeChild = children.find((item: any) => hasRuntimePayloadMenu(item));
-								if (runtimeChild) {
-									matched = runtimeChild;
-								}
-							}
-							if (matched) {
-								hydratedMenu = {
-									...menuDataFromTab,
-									...matched,
-								};
-							}
-						}
-						catch {
-							// keep hydratedMenu as is
-						}
-					}
-				}
-
-				if (cancelled) return;
-				const roleAdjustedMenu = normalizedMenuKey === "user" ? buildUserMenuByRole(hydratedMenu) : hydratedMenu;
-				const withLabel = normalizeKnownSystemMenu({
-					...roleAdjustedMenu,
-					label: resolveDisplayLabel(roleAdjustedMenu),
-				});
-				const canonicalMenu = enforceCanonicalSystemRouteMenu(withLabel);
-				if (!areMenusEquivalent(canonicalMenu, menuData)) {
-					setMenuData(canonicalMenu);
-				}
-				if (loading)
-					setLoading(false);
-			})();
+		const activeTab = tabsStore.openTabs?.get?.(tabsStore.activeKey) as any;
+		const menuDataFromTab = activeTab?.menuData || activeTab?.m_configs;
+		if (menuDataFromTab) {
+			const roleAdjustedMenu = normalizedMenuKey === "user" ? buildUserMenuByRole(menuDataFromTab) : menuDataFromTab;
+			const withLabel = normalizeKnownSystemMenu({
+				...roleAdjustedMenu,
+				label: resolveDisplayLabel(roleAdjustedMenu),
+			});
+			const canonicalMenu = enforceCanonicalSystemRouteMenu(withLabel);
+			if (!areMenusEquivalent(canonicalMenu, menuData)) {
+				setMenuData(canonicalMenu);
+			}
+			if (loading)
+				setLoading(false);
 			return;
 		}
 		// Nếu không có, fallback lấy từ menuId param (cũ)
@@ -2174,131 +1424,79 @@ export default function AdminPage(props: any = {}) {
 			}
 			return null;
 		};
-
-		const buildSystemFallbackMenu = (): any => {
-			const actorTableName = isDevUser ? "csm_accounts" : "csm_group_members";
-			const fallbackMenuById: Record<string, any> = {
-				user: {
-					id: "user",
-					path: "/system/user",
-					label: t("common.menu.user"),
-					table_name: actorTableName,
-					app_id: "csm",
-					type_form: 1,
-					row_type_edit: 0,
-					g_readonly: false,
-				},
-				dept: {
-					id: "permission-group",
-					path: "/system/dept",
-					label: t("common.menu.permissionGroup"),
-					table_name: "csm_roles",
-					app_id: appId,
-					type_form: 1,
-					row_type_edit: 0,
-					g_readonly: false,
-				},
-				role: {
-					id: "permission-group",
-					path: "/system/role",
-					label: t("common.menu.permissionGroup"),
-					table_name: "csm_roles",
-					app_id: appId,
-					type_form: 1,
-					row_type_edit: 0,
-					g_readonly: false,
-				},
-				roles: {
-					id: "permission-group",
-					path: "/system/roles",
-					label: t("common.menu.permissionGroup"),
-					table_name: "csm_roles",
-					app_id: appId,
-					type_form: 1,
-					row_type_edit: 0,
-					g_readonly: false,
-				},
-				departments: {
-					id: "departments",
-					path: "/system/departments",
-					label: t("common.menu.dept"),
-					table_name: "csm_depts",
-					app_id: appId,
-					type_form: 1,
-					row_type_edit: 0,
-					g_readonly: false,
-				},
-				branches: {
-					id: "branches",
-					path: "/system/branches",
-					label: t("common.menu.branch"),
-					table_name: "csm_branches",
-					app_id: appId,
-					type_form: 1,
-					row_type_edit: 0,
-					g_readonly: false,
-				},
-				routers: {
-					id: "system-routers",
-					path: "/system/routers",
-					label: t("common.menu.routers"),
-					table_name: "sys_la_routers",
-					app_id: "csm",
-					type_form: 1,
-					row_type_edit: 0,
-					g_readonly: false,
-				},
-				apps: {
-					id: "system-apps",
-					path: "/system/apps",
-					label: t("common.menu.apps"),
-					table_name: "sys_apps",
-					app_id: "csm",
-					type_form: 1,
-					row_type_edit: 0,
-					g_readonly: false,
-				},
-				"react-native": {
-					id: "system-react-native",
-					path: "/system/react-native",
-					label: t("common.menu.reactNative"),
-					table_name: "sys_reactnative",
-					app_id: "csm",
-					type_form: 1,
-					row_type_edit: 0,
-					g_readonly: false,
-				},
-			};
-			return fallbackMenuById[normalizedMenuKey] || null;
-		};
-		const targetId = String(
-			tabScopedMenuId
-			|| routeMenuId
-			|| tabScopedMenuData?.id
-			|| ""
-		).trim();
+		const targetId = menuId;
 		if (targetId) {
-			const allMenus = flattenMenuTree(apiWholeMenus || []);
 			let found = apiWholeMenus.length > 0 ? findMenuInTree(apiWholeMenus, targetId) : null;
-			if (found && !hasRuntimePayloadMenu(found)) {
-				const allMenus = flattenMenuTree(apiWholeMenus || []);
-					const parentId = String(found?.id || "").trim();
-				if (parentId) {
-					const runtimeChild = findRuntimeDescendantByParentId(allMenus, parentId)
-							|| allMenus.find((item: any) => getParentId(item) === parentId && hasRuntimePayloadMenu(item));
-					if (runtimeChild) {
-						found = runtimeChild;
-					}
-				}
-			}
-			found = resolveRuntimeMenuCandidate(found, allMenus);
 			// Fallback cho các menu hệ thống khi không tìm thấy hoặc thiếu table_name
-			if (!found || !hasRuntimePayloadMenu(found)) {
-				const fallback = buildSystemFallbackMenu();
+			if (!found || !found.table_name) {
+				const actorTableName = isDevUser ? "csm_accounts" : "csm_group_members";
+				const fallbackMenuById: Record<string, any> = {
+					user: {
+						id: "user",
+						path: "/system/user",
+						label: t("common.menu.user"),
+						table_name: actorTableName,
+						app_id: "csm",
+						type_form: 1,
+						row_type_edit: 0,
+						g_readonly: false,
+					},
+					dept: {
+						id: "permission-group",
+						path: "/system/dept",
+						label: t("common.menu.permissionGroup"),
+						table_name: "csm_roles",
+						app_id: appId,
+						type_form: 1,
+						row_type_edit: 0,
+						g_readonly: false,
+					},
+					role: {
+						id: "permission-group",
+						path: "/system/role",
+						label: t("common.menu.permissionGroup"),
+						table_name: "csm_roles",
+						app_id: appId,
+						type_form: 1,
+						row_type_edit: 0,
+						g_readonly: false,
+					},
+					roles: {
+						id: "permission-group",
+						path: "/system/roles",
+						label: t("common.menu.permissionGroup"),
+						table_name: "csm_roles",
+						app_id: appId,
+						type_form: 1,
+						row_type_edit: 0,
+						g_readonly: false,
+					},
+					departments: {
+						id: "departments",
+						path: "/system/departments",
+						label: t("common.menu.dept"),
+						table_name: "csm_depts",
+						app_id: appId,
+						type_form: 1,
+						row_type_edit: 0,
+						g_readonly: false,
+					},
+					branches: {
+						id: "branches",
+						path: "/system/branches",
+						label: t("common.menu.branch"),
+						table_name: "csm_branches",
+						app_id: appId,
+						type_form: 1,
+						row_type_edit: 0,
+						g_readonly: false,
+					},
+				};
+				const fallback = fallbackMenuById[normalizedMenuKey];
 				if (fallback)
 					found = fallback;
 			}
-			if (found && hasRuntimePayloadMenu(found)) {
+			if (found) {
 				const roleAdjustedMenu = normalizedMenuKey === "user" ? buildUserMenuByRole(found) : found;
 				const withLabel = normalizeKnownSystemMenu({
 					...roleAdjustedMenu,
@@ -2311,116 +1509,9 @@ export default function AdminPage(props: any = {}) {
 				if (loading)
 					setLoading(false);
 			}
-			else {
-				// Fallback cuối: ưu tiên đọc trực tiếp bảng menu (obj_name=menu),
-				// sau đó mới fallback index/menu cho môi trường cũ.
-				(async () => {
-					try {
-						const menuRows = await fetchMenuRowsWithAppFallback();
-						let matched = Array.isArray(menuRows)
-							? menuRows.find((item: any) => String(item?.id || "") === String(targetId || ""))
-							: null;
-						matched = resolveRuntimeMenuCandidate(matched, menuRows);
-
-						if (!matched && Array.isArray(menuRows) && menuRows.length > 0) {
-							matched = findRuntimeDescendantByParentId(menuRows, String(targetId || ""));
-						}
-
-						if (!matched) {
-							const menuIndex = await getTableData<any>({
-							app_id: appId || "csm",
-							obj_name: "index",
-							where: { field: "id", type: "eq", value: "menu" },
-							take: 1,
-							});
-							const rows = (menuIndex as any)?.rows || [];
-							matched = Array.isArray(rows)
-								? rows.find((item: any) => String(item?.id || "") === String(targetId || ""))
-								: null;
-							matched = resolveRuntimeMenuCandidate(matched, rows);
-							if (!matched && Array.isArray(rows) && rows.length > 0) {
-								matched = findRuntimeDescendantByParentId(rows, String(targetId || ""));
-							}
-						}
-
-						if (!matched) {
-							try {
-								const navByCurrentApp = await fetchNavigationMenus(appId || "csm");
-								const navListCurrent = (navByCurrentApp as any)?.result?.list || [];
-								const navRowsCurrent = flattenMenuTree(navListCurrent);
-								const directCurrent = Array.isArray(navRowsCurrent)
-									? navRowsCurrent.find((item: any) => String(item?.id || "") === String(targetId || ""))
-									: null;
-								matched = resolveRuntimeMenuCandidate(directCurrent, navRowsCurrent)
-									|| findRuntimeDescendantByParentId(navRowsCurrent, String(targetId || ""));
-							}
-							catch {
-								// ignore and try csm app fallback below
-							}
-						}
-
-						if (!matched && String(appId || "").trim().toLowerCase() !== "csm") {
-							try {
-								const navByCsm = await fetchNavigationMenus("csm");
-								const navListCsm = (navByCsm as any)?.result?.list || [];
-								const navRowsCsm = flattenMenuTree(navListCsm);
-								const directCsm = Array.isArray(navRowsCsm)
-									? navRowsCsm.find((item: any) => String(item?.id || "") === String(targetId || ""))
-									: null;
-								matched = resolveRuntimeMenuCandidate(directCsm, navRowsCsm)
-									|| findRuntimeDescendantByParentId(navRowsCsm, String(targetId || ""));
-							}
-							catch {
-								// keep null
-							}
-						}
-						if (cancelled) return;
-						if (matched && hasRuntimePayloadMenu(matched)) {
-							const roleAdjustedMenu = normalizedMenuKey === "user" ? buildUserMenuByRole(matched) : matched;
-							const withLabel = normalizeKnownSystemMenu({
-								...roleAdjustedMenu,
-								label: resolveDisplayLabel(roleAdjustedMenu),
-							});
-							const canonicalMenu = enforceCanonicalSystemRouteMenu(withLabel);
-							if (!areMenusEquivalent(canonicalMenu, menuData)) {
-								setMenuData(canonicalMenu);
-							}
-						}
-					}
-					catch {
-						// ignore and fallback to empty state below
-					}
-					finally {
-						if (!cancelled && loading)
-							setLoading(false);
-					}
-				})();
-			}
-		}
-		else {
-			const fallback = buildSystemFallbackMenu();
-			if (fallback && hasRuntimePayloadMenu(fallback)) {
-				const roleAdjustedMenu = normalizedMenuKey === "user" ? buildUserMenuByRole(fallback) : fallback;
-				const withLabel = normalizeKnownSystemMenu({
-					...roleAdjustedMenu,
-					label: resolveDisplayLabel(roleAdjustedMenu),
-				});
-				const canonicalMenu = enforceCanonicalSystemRouteMenu(withLabel);
-				if (!areMenusEquivalent(canonicalMenu, menuData)) {
-					setMenuData(canonicalMenu);
-				}
-				if (loading)
-					setLoading(false);
-			}
-			else if (loading) {
-				setLoading(false);
-			}
 		}
 		// Nếu không tìm thấy menuData thì không set lại liên tục
-		return () => {
-			cancelled = true;
-		};
-	}, [routeMenuId, tabScopedMenuId, tabScopedMenuData?.id, tabScopedMenuData, normalizedMenuKey, apiWholeMenus, menuData, loading, isDevUser, t, appId, buildUserMenuByRole, normalizeKnownSystemMenu, enforceCanonicalSystemRouteMenu, resolveDisplayLabel]);
+	}, [menuId, normalizedMenuKey, apiWholeMenus, menuData, loading, isDevUser, t, appId, buildUserMenuByRole, normalizeKnownSystemMenu, enforceCanonicalSystemRouteMenu, resolveDisplayLabel]);
 
 	// Di chuyển hàm loadTableData ra ngoài useEffect để có thể tái sử dụng
 	const loadTableData = async () => {
@@ -2430,9 +1521,6 @@ export default function AdminPage(props: any = {}) {
 
 		const resolvedUserAppId = (appId && String(appId).trim()) || "csm";
 		const resolveTableAppId = (tableName: string): string => {
-			if (tableName === "sys_la_routers" || tableName === "sys_apps" || tableName === "sys_reactnative") {
-				return "csm";
-			}
 			if (isSystemUserRoute) {
 				if (tableName === "csm_accounts")
 					return "csm";
@@ -2469,19 +1557,13 @@ export default function AdminPage(props: any = {}) {
 					// Continue to create-table fallback.
 				}
 
-				try {
-					await createTableStruct({
-						app_id: tableAppId,
-						obj_table: {
-							id: definition.tableName,
-							struct: definition.struct,
-						},
-					});
-				}
-				catch (createErr: any) {
-					// Do not block data loading if schema bootstrap fails.
-					console.warn(`[system-admin] createTableStruct failed for ${definition.tableName} in ${tableAppId}:`, createErr?.message || createErr);
-				}
+				await createTableStruct({
+					app_id: tableAppId,
+					obj_table: {
+						id: definition.tableName,
+						struct: definition.struct,
+					},
+				});
 			}
 		};
 
@@ -2545,14 +1627,6 @@ export default function AdminPage(props: any = {}) {
 
 			await ensureSystemRouteTables();
 
-			console.log("[system-admin] loading primary table", {
-				normalizedMenuKey,
-				primaryTable,
-				primaryTableAppId,
-				runtimeMenuAppId: runtimeMenu.app_id,
-				resolvedUserAppId,
-			});
-
 			const response = await getTableData<any>({
 				app_id: (primaryTable === "csm_accounts" || primaryTable === "csm_group_members") ? "csm" : primaryTableAppId,
 				obj_name: primaryTable,
@@ -2561,11 +1635,6 @@ export default function AdminPage(props: any = {}) {
 			});
 
 			const rawRows = response.rows || response.data || [];
-			console.log("[system-admin] primary table loaded", {
-				primaryTable,
-				app_id: (primaryTable === "csm_accounts" || primaryTable === "csm_group_members") ? "csm" : primaryTableAppId,
-				rowCount: Array.isArray(rawRows) ? rawRows.length : 0,
-			});
 			const rows = applySubuserOwnershipFilter(primaryTable, rawRows);
 			const fieldsPK = response.fieldsPK || ["id"];
 			const deduped = Array.from(
@@ -2696,27 +1765,14 @@ export default function AdminPage(props: any = {}) {
 		.map(item => item.trim().toLowerCase())
 		.filter(Boolean);
 	const isSystemUserTableRuntime = runtimeTableNames.some(name => name === "csm_accounts" || name === "csm_group_members");
-	const isSystemCsmRuntime = runtimeTableNames.some(name => name === "sys_la_routers" || name === "sys_apps" || name === "sys_reactnative");
-	const effectiveAppId = (isSystemUserRoute || isSystemUserTableRuntime || isSystemCsmRuntime)
+	const effectiveAppId = (isSystemUserRoute || isSystemUserTableRuntime)
 		? "csm"
 		: (runtimeMenuData?.app_id || appId);
 	const typeForm = Number(runtimeMenuData?.type_form || 1);
 	const expectedTableNames = (SYSTEM_MENU_KEY_TO_EXPECTED_TABLES[normalizedMenuKey] || []).map(item => item.toLowerCase());
 	const currentTableName = String(runtimeMenuData?.table_name || "").trim();
 	const currentTableNames = normalizeTableNames(runtimeMenuData?.table_name);
-	const runtimeMenuKey = normalizeSystemMenuKey(
-		runtimeMenuData?.path
-		|| runtimeMenuData?.id
-		|| (runtimeMenuData as any)?.menuId
-		|| "",
-	);
-	// Khi chuyển tab, normalizedMenuKey có thể đổi trước khi menuData kịp hydrate -> dễ báo lệch giả.
-	// Chỉ kiểm tra mismatch khi key của runtime menu đã khớp key tab hiện tại.
-	const shouldCheckSystemMenuMismatch = !!normalizedMenuKey && runtimeMenuKey === normalizedMenuKey;
-	const hasSystemMenuTableMismatch = shouldCheckSystemMenuMismatch
-		&& expectedTableNames.length > 0
-		&& currentTableNames.length > 0
-		&& !currentTableNames.some(name => expectedTableNames.includes(name));
+	const hasSystemMenuTableMismatch = expectedTableNames.length > 0 && currentTableNames.length > 0 && !currentTableNames.some(name => expectedTableNames.includes(name));
 
 	useEffect(() => {
 		if (!hasSystemMenuTableMismatch) {
@@ -2774,7 +1830,7 @@ export default function AdminPage(props: any = {}) {
 				message={t("system.menu.configMismatch.title") || "Menu configuration mismatch"}
 				description={
 					`${t("system.menu.configMismatch.desc") || "The current menu and table configuration are inconsistent."
-					} menuId=${normalizedMenuKey || tabScopedMenuId || routeMenuId}, table=${currentTableName}, expected=${expectedTableNames.join(" | ")}`
+					} menuId=${normalizedMenuKey || menuId}, table=${currentTableName}, expected=${expectedTableNames.join(" | ")}`
 				}
 				style={{ marginBottom: 12 }}
 			/>
@@ -2793,7 +1849,7 @@ export default function AdminPage(props: any = {}) {
 					onDataChange={handleDataChange}
 					permissions={runtimePermissions}
 					menusPermissions={runtimeMenusPermissions}
-					menuId={runtimeMenuData.id || tabScopedMenuId || routeMenuId}
+					menuId={runtimeMenuData.id || menuId}
 				/>
 			</div>
 		);
@@ -2805,7 +1861,7 @@ export default function AdminPage(props: any = {}) {
 		return (
 			<div style={{ padding: 16, height: "100%" }}>
 				{mismatchAlertNode}
-				<DynamicCodeMenu menuId={tabScopedMenuId || routeMenuId} menuData={runtimeMenuData} />
+				<DynamicCodeMenu menuId={menuId} menuData={runtimeMenuData} />
 			</div>
 		);
 	}
@@ -2845,13 +1901,11 @@ export default function AdminPage(props: any = {}) {
 				runtimeMenuData?.id
 				|| runtimeMenuData?.path
 				|| (normalizedMenuKey ? `/system/${normalizedMenuKey}` : "")
-				|| tabScopedMenuId
-				|| routeMenuId
+				|| menuId
 				|| "system-grid",
 			).trim();
-			const legacyMenuStorageKey = tabScopedMenuId || routeMenuId;
-			const storedTypeForm = localStorage.getItem(`${menuStorageScope}:type_form`) ?? localStorage.getItem(`${legacyMenuStorageKey}:type_form`);
-			const storedRowTypeEdit = localStorage.getItem(`${menuStorageScope}:row_type_edit`) ?? localStorage.getItem(`${legacyMenuStorageKey}:row_type_edit`);
+			const storedTypeForm = localStorage.getItem(`${menuStorageScope}:type_form`) ?? localStorage.getItem(`${menuId}:type_form`);
+			const storedRowTypeEdit = localStorage.getItem(`${menuStorageScope}:row_type_edit`) ?? localStorage.getItem(`${menuId}:row_type_edit`);
 			if (storedTypeForm === "" || storedTypeForm === "1" || storedTypeForm === "2") {
 				typeForm = storedTypeForm as "" | 1 | 2;
 			}
@@ -2878,14 +1932,13 @@ export default function AdminPage(props: any = {}) {
 				.filter((field: any) => field && typeof field === "object")
 				.map((field: any) => ({ ...field }))
 			: [];
-		const localizedConfiguredTable = ensureTableFieldI18n(configuredTableFromMenu, t, tEn, tZh);
-		const hasConfiguredTableFields = hasMeaningfulConfiguredFields(configuredTableFromMenu);
+		const hasConfiguredTableFields = configuredTableFromMenu.some((field: any) => String(field?.f_name || "").trim().length > 0);
 
 		const m_configs = {
 			id: runtimeMenuData.id,
 			label: runtimeMenuData.label,
 			table_name: runtimeMenuData.table_name,
-			table: localizedConfiguredTable,
+			table: configuredTableFromMenu,
 			trigger: runtimeMenuData.trigger || {},
 			g_readonly: runtimeMenuData.g_readonly,
 			table_pagesize: runtimeMenuData.table_pagesize,
@@ -2899,15 +1952,12 @@ export default function AdminPage(props: any = {}) {
 
 		// CHÍNH SÁCH CỐ ĐỊNH: Nếu menu DB đã có cấu hình cột, giữ nguyên tuyệt đối (không áp policy/fallback).
 		if (!hasConfiguredTableFields) {
-			m_configs.table = localizedConfiguredTable;
+			m_configs.table = configuredTableFromMenu;
 		}
 
 		// If columns are missing, auto-generate sensible defaults for known tables
 		if ((!m_configs.table || m_configs.table.length === 0) && runtimeMenuData.table_name) {
 			const rows = database[runtimeMenuData.table_name]?.rows || [];
-			const structFields = Array.isArray(database[runtimeMenuData.table_name]?.fields)
-				? (database[runtimeMenuData.table_name].fields as string[])
-				: [];
 			const firstRow = rows[0] || {};
 			// Default column headers mapping (Vietnamese i18n keys used where applicable)
 			// Cập nhật ánh xạ trong DEFAULT_HEADERS
@@ -2957,7 +2007,7 @@ export default function AdminPage(props: any = {}) {
 				create_time: "common.createTime",
 				update_time: "common.updateTime",
 			};
-			const keys = structFields.length > 0 ? structFields : Object.keys(firstRow);
+			const keys = Object.keys(firstRow);
 			// If no rows yet, choose a sensible schema for csm_accounts
 			const fallbackKeys = runtimeMenuData.table_name === "csm_group_members"
 				? ["id", "parent_account_id", "login_identifier", "pass", "group_id", "permissionsAdd", "permissionsDeny", "menusPermissionsAdd", "menusPermissionsDeny", "permissionBitfield", "dataScope", "actived"]
@@ -2967,13 +2017,7 @@ export default function AdminPage(props: any = {}) {
 						? ["id", "parent_dept_id", "branch_id", "dept_code", "dept_name", "dept_full_name", "description", "manager_user_id", "is_global", "status", "create_time", "update_time"]
 						: runtimeMenuData.table_name === "csm_branches"
 							? ["id", "parent_branch_id", "branch_code", "branch_name", "branch_full_name", "dept_id", "description", "manager_user_id", "is_global", "status", "create_time", "update_time"]
-							: runtimeMenuData.table_name === "sys_la_routers"
-								? SYSTEM_CANONICAL_TABLE_FIELDS.sys_la_routers.map(item => item.f_name)
-								: runtimeMenuData.table_name === "sys_apps"
-									? SYSTEM_CANONICAL_TABLE_FIELDS.sys_apps.map(item => item.f_name)
-									: runtimeMenuData.table_name === "sys_reactnative"
-										? SYSTEM_CANONICAL_TABLE_FIELDS.sys_reactnative.map(item => item.f_name)
-										: SYSTEM_USER_VISIBLE_FIELDS_BY_ACTOR[systemUserActorType];
+							: SYSTEM_USER_VISIBLE_FIELDS_BY_ACTOR[systemUserActorType];
 			DEFAULT_HEADERS.parent_account_id = "common.parentAccountId";
 			DEFAULT_HEADERS.login_identifier = "common.loginIdentifier";
 			DEFAULT_HEADERS.group_id = "common.groupId";
@@ -2982,39 +2026,27 @@ export default function AdminPage(props: any = {}) {
 			DEFAULT_HEADERS.branch_name = "system.branch.fields.name";
 			DEFAULT_HEADERS.branch_full_name = "system.branch.fields.fullName";
 			const normalizedKeys = Array.from(new Set(keys.length ? keys : fallbackKeys));
-			if (runtimeMenuData.table_name === "sys_la_routers" || runtimeMenuData.table_name === "sys_apps" || runtimeMenuData.table_name === "sys_reactnative") {
-				m_configs.table = buildCanonicalSystemTableFields(runtimeMenuData.table_name, normalizedKeys, t, tEn, tZh, i18n.language) as any;
-			} else {
-				const fields = normalizedKeys.map((k) => {
-					const rawHeader = DEFAULT_HEADERS[k] || k;
-					const isKey = typeof rawHeader === "string" && rawHeader.includes(".");
-					return {
-						f_name: k,
-						f_header: isKey ? t(rawHeader) : rawHeader,
-						f_header_vi: isKey ? t(rawHeader) : rawHeader,
-						f_header_en: isKey ? tEn(rawHeader) : rawHeader,
-						f_header_zh: isKey ? tZh(rawHeader) : rawHeader,
-						f_show: 1,
-						f_types: k === "id" ? "number" : "string",
-						f_align: k === "id" ? "right" : "left",
-					};
-				});
-				m_configs.table = fields as any;
-			}
+			const fields = normalizedKeys.map((k) => {
+				const rawHeader = DEFAULT_HEADERS[k] || k;
+				const isKey = typeof rawHeader === "string" && rawHeader.includes(".");
+				return {
+					f_name: k,
+					f_header: isKey ? t(rawHeader) : rawHeader,
+					f_header_vi: isKey ? t(rawHeader) : rawHeader,
+					f_header_en: isKey ? tEn(rawHeader) : rawHeader,
+					f_header_zh: isKey ? tZh(rawHeader) : rawHeader,
+					f_show: 1,
+					f_types: k === "id" ? "number" : "string",
+					f_align: k === "id" ? "right" : "left",
+				};
+			});
+			m_configs.table = fields as any;
 		}
 
-		// Các bảng hệ thống cố định: luôn dùng canonical fields bất kể config DB
-		if (runtimeMenuData.table_name === "sys_la_routers" || runtimeMenuData.table_name === "sys_apps" || runtimeMenuData.table_name === "sys_reactnative") {
-			const runtimeFields = Array.isArray(database[runtimeMenuData.table_name]?.fields)
-				? (database[runtimeMenuData.table_name].fields as string[])
-				: Object.keys((database[runtimeMenuData.table_name]?.rows || [])[0] || {});
-			m_configs.table = buildCanonicalSystemTableFields(runtimeMenuData.table_name, runtimeFields, t, tEn, tZh, i18n.language) as any;
-		}
-
-		if ((runtimeMenuData.table_name === "csm_accounts" || runtimeMenuData.table_name === "csm_group_members") && !hasConfiguredTableFields) {
+		if (runtimeMenuData.table_name === "csm_accounts" || runtimeMenuData.table_name === "csm_group_members") {
+			m_configs.table = localizeSystemUserTableFields(m_configs.table as any[], tVi, tEn, tZh);
 			m_configs.table = enforceLegacyReadonlySystemUserFields(m_configs.table as any[], systemUserActorType);
 			m_configs.table = applyFriendlyFieldPolicy(runtimeMenuData.table_name, m_configs.table as any[], systemUserActorType);
-			m_configs.table = ensureTableFieldI18n(m_configs.table as any[], t, tEn, tZh);
 		}
 		// Bảng nhóm quyền (csm_roles): luôn ẩn các trường nội bộ và đảm bảo nhãn 3 ngôn ngữ đúng,
 		// bất kể bảng đến từ config server hay được tự sinh từ dòng dữ liệu đầu tiên.
@@ -3037,13 +2069,6 @@ export default function AdminPage(props: any = {}) {
 				tEn,
 				tZh,
 			);
-		}
-
-		// sys_reactnative: component_code must be edited with CodeMirror editor.
-		if (runtimeMenuData.table_name === "sys_reactnative") {
-			m_configs.table = enrichRequiredFieldConfigs(m_configs.table as any[], {
-				component_code: { f_types: "editor" },
-			});
 		}
 
 		// Debug log to check if backend returned type_form and row_type_edit
@@ -3146,7 +2171,7 @@ export default function AdminPage(props: any = {}) {
 			<div style={{ padding: 16, height: "100%" }}>
 				{mismatchAlertNode}
 				<CsmDynamicGrid
-					gridInstanceKey={`${tabScopedMenuId || routeMenuId}::${String(runtimeMenuData.id || "")}`}
+					gridInstanceKey={`${menuId}::${String(runtimeMenuData.id || "")}`}
 					m_configs={m_configs}
 					database={database}
 					appId={effectiveAppId}

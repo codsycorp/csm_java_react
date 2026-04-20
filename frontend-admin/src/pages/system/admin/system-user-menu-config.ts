@@ -177,6 +177,8 @@ export const APP_ID_QUERY_JSON = JSON.stringify({
 			obj_name: "sys_apps",
 			app_id: "csm",
 			fields: ["app_id", "app_name"],
+			value_field: "app_id",
+			label_field: "app_name",
 		},
 	],
 });
@@ -282,54 +284,41 @@ function buildTagField(
 }
 
 const SYSTEM_USER_FIELD_WIDTHS: Record<string, number> = {
-	id: 90,
 	username: 180,
-	login_identifier: 220,
 	email: 220,
-	phoneNumber: 150,
+	phoneNumber: 160,
 	full_name: 200,
-	group_id: 190,
-	permissionGroups: 210,
-	permissionsAdd: 260,
-	permissionsDeny: 260,
-	menusPermissionsAdd: 280,
-	menusPermissionsDeny: 280,
-	dataScope: 170,
-	actived: 110,
-	pass: 140,
-	dev: 110,
-};
-
-const SYSTEM_USER_FIELD_LABELS_3L: Record<string, { vi: string; en: string; zh: string }> = {
-	permissionGroups: { vi: "Nhóm quyền", en: "Permission Group", zh: "权限组" },
-	permissionsAdd: { vi: "Quyền thêm", en: "Allow Actions", zh: "附加操作" },
-	permissionsDeny: { vi: "Quyền chặn", en: "Deny Actions", zh: "禁用操作" },
-	menusPermissionsAdd: { vi: "Menu thêm", en: "Allow Menus", zh: "附加菜单" },
-	menusPermissionsDeny: { vi: "Menu chặn", en: "Deny Menus", zh: "禁用菜单" },
-	dataScope: { vi: "Phạm vi", en: "Data Scope", zh: "数据范围" },
-	group_id: { vi: "Nhóm", en: "Group", zh: "分组" },
-	login_identifier: { vi: "Đăng nhập", en: "Login ID", zh: "登录标识" },
-	actived: { vi: "Kích hoạt", en: "Active", zh: "启用" },
+	app_id: 220,
+	permissionGroups: 220,
+	permissionsAdd: 220,
+	permissionsDeny: 220,
+	menusPermissionsAdd: 260,
+	menusPermissionsDeny: 260,
+	dataScope: 180,
+	actived: 120,
+	pass: 160,
+	group_id: 220,
+	login_identifier: 220,
 };
 
 export const SYSTEM_ACCOUNT_DEFAULT_FIELDS: TableField[] = [
 	{ f_name: "id", f_header: "ID", f_show: 1, f_types: "number", f_align: "right" },
 	{ f_name: "parent_account_id", f_header: "common.parentAccountId", f_show: 0, f_types: "string_ro", f_align: "left" },
-	{ f_name: "username", f_header: "common.username", f_show: 1, f_types: "string", f_align: "left" },
-	{ f_name: "email", f_header: "common.email", f_show: 1, f_types: "string", f_align: "left" },
-	{ f_name: "phoneNumber", f_header: "common.phoneNumber", f_show: 1, f_types: "string", f_align: "left" },
-	{ f_name: "full_name", f_header: "common.fullName", f_show: 1, f_types: "string", f_align: "left" },
+	{ f_name: "username", f_header: "common.username", f_show: 1, f_types: "string", f_align: "left", f_width: SYSTEM_USER_FIELD_WIDTHS.username },
+	{ f_name: "email", f_header: "common.email", f_show: 1, f_types: "string", f_align: "left", f_width: SYSTEM_USER_FIELD_WIDTHS.email },
+	{ f_name: "phoneNumber", f_header: "common.phoneNumber", f_show: 1, f_types: "string", f_align: "left", f_width: SYSTEM_USER_FIELD_WIDTHS.phoneNumber },
+	{ f_name: "full_name", f_header: "common.fullName", f_show: 1, f_types: "string", f_align: "left", f_width: SYSTEM_USER_FIELD_WIDTHS.full_name },
 	{ f_name: "user_address", f_header: "common.address", f_show: 0, f_types: "json", f_align: "left" },
-	{ f_name: "app_id", f_header: "common.appId", f_show: 0, f_types: "co_ro", f_align: "left", f_cbo_query: APP_ID_QUERY_JSON } as any,
+	{ f_name: "app_id", f_header: "common.menu.apps", f_show: 0, f_types: "co_ro", f_align: "left", f_cbo_query: APP_ID_QUERY_JSON, f_width: SYSTEM_USER_FIELD_WIDTHS.app_id } as any,
 	{ f_name: "dev", f_header: "system.userPermission.option.dev", f_show: 1, f_types: "checkbox", f_align: "left" },
 	{ f_name: "app_token", f_header: "common.appToken", f_show: 0, f_types: "string", f_align: "left" },
-	{ f_name: "pass", f_header: "common.password", f_show: 1, f_types: "password", f_align: "left" },
+	{ f_name: "pass", f_header: "common.password", f_show: 1, f_types: "password", f_align: "left", f_width: SYSTEM_USER_FIELD_WIDTHS.pass },
 	{ f_name: "roles", f_header: "system.userPermission.fields.roles", f_show: 0, f_types: "co", f_align: "left", f_cbo_query: ROLE_SELECT_QUERY_JSON },
 	{ f_name: "permissionPreset", f_header: "system.userPermission.fields.permissionPreset", f_show: 0, f_types: "co", f_align: "left", f_cbo_query: ACTION_PRESET_OPTIONS_JSON },
-	{ f_name: "permissionGroups", f_header: "system.userPermission.fields.permissionGroups", f_show: 1, f_types: "co", f_align: "left", f_cbo_query: PERMISSION_GROUP_QUERY_JSON },
+	{ f_name: "permissionGroups", f_header: "system.userPermission.fields.permissionGroups", f_show: 1, f_types: "co", f_align: "left", f_cbo_query: PERMISSION_GROUP_QUERY_JSON, f_width: SYSTEM_USER_FIELD_WIDTHS.permissionGroups },
 	{ ...buildTagField("permissions", "system.userPermission.fields.permissions", PERMISSION_TOKEN_OPTIONS), f_show: 0 } as any,
-	buildTagField("permissionsAdd", "system.userPermission.fields.permissionsAdd", PERMISSION_TOKEN_OPTIONS),
-	buildTagField("permissionsDeny", "system.userPermission.fields.permissionsDeny", PERMISSION_TOKEN_OPTIONS),
+	{ ...buildTagField("permissionsAdd", "system.userPermission.fields.permissionsAdd", PERMISSION_TOKEN_OPTIONS), f_width: SYSTEM_USER_FIELD_WIDTHS.permissionsAdd } as any,
+	{ ...buildTagField("permissionsDeny", "system.userPermission.fields.permissionsDeny", PERMISSION_TOKEN_OPTIONS), f_width: SYSTEM_USER_FIELD_WIDTHS.permissionsDeny } as any,
 	{
 		f_name: "menusPermissions",
 		f_header: "system.userPermission.fields.menusPermissions",
@@ -345,6 +334,7 @@ export const SYSTEM_ACCOUNT_DEFAULT_FIELDS: TableField[] = [
 		f_types: "menu_tree",
 		f_align: "left",
 		f_options: MENU_PERMISSION_OPTIONS,
+		f_width: SYSTEM_USER_FIELD_WIDTHS.menusPermissionsAdd,
 	} as any,
 	{
 		f_name: "menusPermissionsDeny",
@@ -353,29 +343,30 @@ export const SYSTEM_ACCOUNT_DEFAULT_FIELDS: TableField[] = [
 		f_types: "menu_tree",
 		f_align: "left",
 		f_options: MENU_PERMISSION_OPTIONS,
+		f_width: SYSTEM_USER_FIELD_WIDTHS.menusPermissionsDeny,
 	} as any,
 	{ f_name: "permissionBitfield", f_header: "system.userPermission.fields.permissionBitfield", f_show: 0, f_types: "string_ro", f_align: "left" },
 	{ f_name: "permissionSchemaVersion", f_header: "system.userPermission.fields.permissionSchemaVersion", f_show: 0, f_types: "string", f_align: "left" },
-	{ f_name: "dataScope", f_header: "system.userPermission.fields.dataScope", f_show: 1, f_types: "co", f_align: "left", f_cbo_query: DATA_SCOPE_OPTIONS_JSON },
+	{ f_name: "dataScope", f_header: "system.userPermission.fields.dataScope", f_show: 1, f_types: "co", f_align: "left", f_cbo_query: DATA_SCOPE_OPTIONS_JSON, f_width: SYSTEM_USER_FIELD_WIDTHS.dataScope },
 	{ f_name: "branch_id", f_header: "system.userPermission.fields.branchId", f_show: 0, f_types: "co", f_align: "left", f_cbo_query: BRANCH_SELECT_QUERY_JSON },
 	{ f_name: "dept_id", f_header: "system.userPermission.fields.deptId", f_show: 0, f_types: "co", f_align: "left", f_cbo_query: DEPT_SELECT_QUERY_BY_BRANCH_JSON },
-	{ f_name: "actived", f_header: "common.active", f_show: 1, f_types: "checkbox", f_align: "left" },
+	{ f_name: "actived", f_header: "common.active", f_show: 1, f_types: "checkbox", f_align: "left", f_width: SYSTEM_USER_FIELD_WIDTHS.actived },
 ];
 
 export const SUB_USER_DEFAULT_FIELDS: TableField[] = [
 	{ f_name: "id", f_header: "ID", f_show: 1, f_types: "number", f_align: "right" },
 	{ f_name: "parent_account_id", f_header: "common.parentAccountId", f_show: 1, f_types: "string_ro", f_align: "left" },
-	{ f_name: "login_identifier", f_header: "common.loginIdentifier", f_show: 1, f_types: "string", f_align: "left" },
+	{ f_name: "login_identifier", f_header: "common.loginIdentifier", f_show: 1, f_types: "string", f_align: "left", f_width: SYSTEM_USER_FIELD_WIDTHS.login_identifier },
 	{ f_name: "user_address", f_header: "common.address", f_show: 0, f_types: "json", f_align: "left" },
-	{ f_name: "app_id", f_header: "common.appId", f_show: 0, f_types: "co_ro", f_align: "left", f_cbo_query: APP_ID_QUERY_JSON } as any,
-	{ f_name: "group_id", f_header: "common.groupId", f_show: 1, f_types: "co", f_align: "left", f_cbo_query: PERMISSION_GROUP_QUERY_JSON },
+	{ f_name: "app_id", f_header: "common.menu.apps", f_show: 0, f_types: "co_ro", f_align: "left", f_cbo_query: APP_ID_QUERY_JSON, f_width: SYSTEM_USER_FIELD_WIDTHS.app_id } as any,
+	{ f_name: "group_id", f_header: "common.groupId", f_show: 1, f_types: "co", f_align: "left", f_cbo_query: PERMISSION_GROUP_QUERY_JSON, f_width: SYSTEM_USER_FIELD_WIDTHS.group_id },
 	{ f_name: "app_token", f_header: "common.appToken", f_show: 1, f_types: "string", f_align: "left" },
-	{ f_name: "pass", f_header: "common.password", f_show: 1, f_types: "password", f_align: "left" },
+	{ f_name: "pass", f_header: "common.password", f_show: 1, f_types: "password", f_align: "left", f_width: SYSTEM_USER_FIELD_WIDTHS.pass },
 	{ f_name: "permissionPreset", f_header: "system.userPermission.fields.permissionPreset", f_show: 0, f_types: "co", f_align: "left", f_cbo_query: ACTION_PRESET_OPTIONS_JSON },
-	{ f_name: "permissionGroups", f_header: "system.userPermission.fields.permissionGroups", f_show: 0, f_types: "co", f_align: "left", f_cbo_query: PERMISSION_GROUP_QUERY_JSON },
+	{ f_name: "permissionGroups", f_header: "system.userPermission.fields.permissionGroups", f_show: 0, f_types: "co", f_align: "left", f_cbo_query: PERMISSION_GROUP_QUERY_JSON, f_width: SYSTEM_USER_FIELD_WIDTHS.permissionGroups },
 	{ ...buildTagField("permissions", "system.userPermission.fields.permissions", PERMISSION_TOKEN_OPTIONS), f_show: 0 } as any,
-	buildTagField("permissionsAdd", "system.userPermission.fields.permissionsAdd", PERMISSION_TOKEN_OPTIONS),
-	buildTagField("permissionsDeny", "system.userPermission.fields.permissionsDeny", PERMISSION_TOKEN_OPTIONS),
+	{ ...buildTagField("permissionsAdd", "system.userPermission.fields.permissionsAdd", PERMISSION_TOKEN_OPTIONS), f_width: SYSTEM_USER_FIELD_WIDTHS.permissionsAdd } as any,
+	{ ...buildTagField("permissionsDeny", "system.userPermission.fields.permissionsDeny", PERMISSION_TOKEN_OPTIONS), f_width: SYSTEM_USER_FIELD_WIDTHS.permissionsDeny } as any,
 	{
 		f_name: "menusPermissions",
 		f_header: "system.userPermission.fields.menusPermissions",
@@ -391,6 +382,7 @@ export const SUB_USER_DEFAULT_FIELDS: TableField[] = [
 		f_types: "menu_tree",
 		f_align: "left",
 		f_options: MENU_PERMISSION_OPTIONS,
+		f_width: SYSTEM_USER_FIELD_WIDTHS.menusPermissionsAdd,
 	} as any,
 	{
 		f_name: "menusPermissionsDeny",
@@ -399,13 +391,14 @@ export const SUB_USER_DEFAULT_FIELDS: TableField[] = [
 		f_types: "menu_tree",
 		f_align: "left",
 		f_options: MENU_PERMISSION_OPTIONS,
+		f_width: SYSTEM_USER_FIELD_WIDTHS.menusPermissionsDeny,
 	} as any,
 	{ f_name: "permissionBitfield", f_header: "system.userPermission.fields.permissionBitfield", f_show: 1, f_types: "string_ro", f_align: "left" },
 	{ f_name: "permissionSchemaVersion", f_header: "system.userPermission.fields.permissionSchemaVersion", f_show: 0, f_types: "string", f_align: "left" },
-	{ f_name: "dataScope", f_header: "system.userPermission.fields.dataScope", f_show: 1, f_types: "co", f_align: "left", f_cbo_query: DATA_SCOPE_OPTIONS_JSON },
+	{ f_name: "dataScope", f_header: "system.userPermission.fields.dataScope", f_show: 1, f_types: "co", f_align: "left", f_cbo_query: DATA_SCOPE_OPTIONS_JSON, f_width: SYSTEM_USER_FIELD_WIDTHS.dataScope },
 	{ f_name: "branch_id", f_header: "system.userPermission.fields.branchId", f_show: 0, f_types: "co", f_align: "left", f_cbo_query: BRANCH_SELECT_QUERY_JSON },
 	{ f_name: "dept_id", f_header: "system.userPermission.fields.deptId", f_show: 0, f_types: "co", f_align: "left", f_cbo_query: DEPT_SELECT_QUERY_BY_BRANCH_JSON },
-	{ f_name: "actived", f_header: "common.active", f_show: 1, f_types: "checkbox", f_align: "left" },
+	{ f_name: "actived", f_header: "common.active", f_show: 1, f_types: "checkbox", f_align: "left", f_width: SYSTEM_USER_FIELD_WIDTHS.actived },
 ];
 
 export const SYSTEM_ACCOUNT_BEFORE_SAVE = `
@@ -661,8 +654,8 @@ function beforeSave(row, seft) {
 			const q = query[i] || {};
 			const tableName = String(q?.obj_name || "").trim();
 			const fields = Array.isArray(q?.fields) ? q.fields : [];
-			const valueField = String(fields[0] || "id").trim() || "id";
-			const labelField = String(fields[1] || "").trim();
+			const valueField = String(q?.value_field || fields[0] || "id").trim() || "id";
+			const labelField = String(q?.label_field || fields[1] || valueField).trim() || valueField;
 			if (!tableName) continue;
 
 			const rows = getRowsFromTable(tableName);
@@ -770,7 +763,8 @@ function beforeSave(row, seft) {
 
 	const actorIsDev = isDevActor();
 	const currentActorAppId = getCurrentAppId();
-	const resolvedAppId = String(row.app_id || currentActorAppId || "csm").trim();
+	const normalizedAppId = resolveComboValueByQuery("app_id", row.app_id);
+	const resolvedAppId = String(normalizedAppId || row.app_id || currentActorAppId || "csm").trim();
 	const primaryIdentifier = String(row.username || row.email || row.phoneNumber || "").trim();
 	if (!primaryIdentifier) {
 		window.$message?.error(tr({
@@ -1165,8 +1159,8 @@ function beforeSave(row, seft) {
 			const q = query[i] || {};
 			const tableName = String(q?.obj_name || "").trim();
 			const fields = Array.isArray(q?.fields) ? q.fields : [];
-			const valueField = String(fields[0] || "id").trim() || "id";
-			const labelField = String(fields[1] || "").trim();
+			const valueField = String(q?.value_field || fields[0] || "id").trim() || "id";
+			const labelField = String(q?.label_field || fields[1] || valueField).trim() || valueField;
 			if (!tableName) continue;
 
 			const rows = getRowsFromTable(tableName);
@@ -1207,6 +1201,10 @@ function beforeSave(row, seft) {
 			zh: "请填写子账号的 login_identifier",
 		}));
 		return false;
+	}
+	const normalizedAppId = resolveComboValueByQuery("app_id", row.app_id);
+	if (normalizedAppId) {
+		row.app_id = normalizedAppId;
 	}
 	if (!String(row.app_id || "").trim()) {
 		row.app_id = sourceAppId;
@@ -1741,15 +1739,9 @@ export function mergeMenuTableFields(
 		...field,
 		f_types: treeFieldNames.has(String(field?.f_name || "")) ? "menu_tree" : field?.f_types,
 		f_header: translateLabel(field?.f_header),
-		f_header_vi: SYSTEM_USER_FIELD_LABELS_3L[String(field?.f_name || "")]?.vi
-			|| String(field?.f_header_vi || "").trim()
-			|| translateLabelByLang(field?.f_header, "vi"),
-		f_header_en: SYSTEM_USER_FIELD_LABELS_3L[String(field?.f_name || "")]?.en
-			|| String(field?.f_header_en || "").trim()
-			|| translateLabelByLang(field?.f_header, "en"),
-		f_header_zh: SYSTEM_USER_FIELD_LABELS_3L[String(field?.f_name || "")]?.zh
-			|| String(field?.f_header_zh || "").trim()
-			|| translateLabelByLang(field?.f_header, "zh"),
+		f_header_vi: String(field?.f_header_vi || "").trim() || translateLabelByLang(field?.f_header, "vi"),
+		f_header_en: String(field?.f_header_en || "").trim() || translateLabelByLang(field?.f_header, "en"),
+		f_header_zh: String(field?.f_header_zh || "").trim() || translateLabelByLang(field?.f_header, "zh"),
 		f_width: Math.max(Number(field?.f_width || 0), Number(SYSTEM_USER_FIELD_WIDTHS[String(field?.f_name || "")] || 0)) || field?.f_width,
 		f_options: Array.isArray(field?.f_options)
 			? field.f_options.map((opt: any) => ({
@@ -1774,20 +1766,31 @@ export function mergeMenuTableFields(
 			return { ...field, f_types: "json", f_show: 0 };
 		}
 		if (fName === "app_id") {
-			return { ...field, f_types: "co_ro", f_show: 0, f_cbo_query: field?.f_cbo_query || APP_ID_QUERY_JSON };
+			return {
+				...field,
+				f_header: translateLabel("common.menu.apps"),
+				f_header_vi: translateLabelByLang("common.menu.apps", "vi"),
+				f_header_en: translateLabelByLang("common.menu.apps", "en"),
+				f_header_zh: translateLabelByLang("common.menu.apps", "zh"),
+				f_types: "co_ro",
+				f_show: 0,
+				f_width: Math.max(Number(field?.f_width || 0), Number(SYSTEM_USER_FIELD_WIDTHS.app_id || 0)) || field?.f_width,
+				f_cbo_query: field?.f_cbo_query || APP_ID_QUERY_JSON,
+			};
 		}
 		return field;
 	});
 	if (!enforced.some((field: any) => String(field?.f_name || "").trim() === "app_id")) {
 		enforced.push({
 			f_name: "app_id",
-			f_header: translateLabel("common.appId"),
-			f_header_vi: translateLabelByLang("common.appId", "vi"),
-			f_header_en: translateLabelByLang("common.appId", "en"),
-			f_header_zh: translateLabelByLang("common.appId", "zh"),
+			f_header: translateLabel("common.menu.apps"),
+			f_header_vi: translateLabelByLang("common.menu.apps", "vi"),
+			f_header_en: translateLabelByLang("common.menu.apps", "en"),
+			f_header_zh: translateLabelByLang("common.menu.apps", "zh"),
 			f_show: 0,
 			f_types: "co_ro",
 			f_align: "left",
+			f_width: SYSTEM_USER_FIELD_WIDTHS.app_id,
 			f_cbo_query: APP_ID_QUERY_JSON,
 		} as any);
 	}

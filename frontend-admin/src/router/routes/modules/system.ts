@@ -38,36 +38,6 @@ const routes: AppRouteRecordRaw[] = [
 				},
 			},
 			{
-				path: "/system/menu",
-				Component: Menu,
-				handle: {
-					icon: "MenuOutlined",
-					title: "common.menu.menu",
-					roles: ["dev"],
-					permissions: [
-						"permission:button:add",
-						"permission:button:update",
-						"permission:button:delete",
-					],
-					// keepAlive: true (default)
-				},
-			},
-			{
-				path: "/system/developer",
-				Component: Developer,
-				handle: {
-					icon: "CodeOutlined",
-					title: "common.menu.developer",
-					roles: ["dev"],
-					permissions: [
-						"permission:button:add",
-						"permission:button:update",
-						"permission:button:delete",
-					],
-					// keepAlive: true (default)
-				},
-			},
-			{
 				path: "/system/dept",
 				Component: AdminPage,
 				handle: {
@@ -141,12 +111,42 @@ const routes: AppRouteRecordRaw[] = [
 				},
 			},
 			{
+				path: "/system/menu",
+				Component: Menu,
+				handle: {
+					icon: "MenuOutlined",
+					title: "common.menu.menu",
+					roles: ["dev"],
+					permissions: [
+						"permission:button:add",
+						"permission:button:update",
+						"permission:button:delete",
+					],
+					// keepAlive: true (default)
+				},
+			},
+			{
+				path: "/system/developer",
+				Component: Developer,
+				handle: {
+					icon: "CodeOutlined",
+					title: "common.menu.developer",
+					roles: ["dev"],
+					permissions: [
+						"permission:button:add",
+						"permission:button:update",
+						"permission:button:delete",
+					],
+					// keepAlive: true (default)
+				},
+			},
+			{
 				path: "/system/routers",
 				Component: AdminPage,
 				handle: {
 					icon: "DeploymentUnitOutlined",
 					title: "common.menu.routers",
-					roles: ["admin", "dev"],
+					roles: ["dev"],
 					permissions: [
 						"permission:button:add",
 						"permission:button:update",
@@ -161,7 +161,7 @@ const routes: AppRouteRecordRaw[] = [
 				handle: {
 					icon: "AppstoreOutlined",
 					title: "common.menu.apps",
-					roles: ["admin", "dev"],
+					roles: ["dev"],
 					permissions: [
 						"permission:button:add",
 						"permission:button:update",
@@ -176,7 +176,7 @@ const routes: AppRouteRecordRaw[] = [
 				handle: {
 					icon: "MobileOutlined",
 					title: "common.menu.reactNative",
-					roles: ["admin", "dev"],
+					roles: ["dev"],
 					permissions: [
 						"permission:button:add",
 						"permission:button:update",

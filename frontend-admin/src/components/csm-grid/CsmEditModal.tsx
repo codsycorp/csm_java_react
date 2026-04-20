@@ -197,6 +197,16 @@ async function ensureTableInDatabase(
 
 // Helper: Build selectEnums từ trigger f_cbo_query (Vue compatible)
 // Giống CsmDynamicGrid.selectEnums nhưng dành cho detail grid
+function resolveDynamicQueryLabel(row: any, valueField: string, labelField: string, fields: unknown): string {
+  const value = String(row?.[valueField] ?? "").trim();
+  const configuredFields = Array.isArray(fields)
+    ? fields.map((item) => String(item || "").trim()).filter(Boolean)
+    : [];
+  const effectiveLabelField = String(labelField || configuredFields[1] || valueField).trim() || valueField;
+  const directLabel = String(row?.[effectiveLabelField] ?? "").trim();
+  return directLabel || value;
+}
+
 // Detail grid không có database table riêng nên phải build từ trigger
 export function buildDetailGridSelectEnums(
   fields: any[],
@@ -369,6 +379,9 @@ export function buildDetailGridSelectEnums(
             const rows = Array.isArray(tableData) ? tableData : (tableData as any)?.rows || [];
             if (!Array.isArray(rows)) return;
 
+            const valueField = String(querySpec?.value_field || fields?.[0] || "id").trim() || "id";
+            const labelField = String(querySpec?.label_field || fields?.[1] || valueField).trim() || valueField;
+
             let filteredData = rows;
             if (whereClause) {
               try {
@@ -403,11 +416,8 @@ export function buildDetailGridSelectEnums(
             }
 
             filteredData.forEach((row: any) => {
-              if (fields.length >= 2) {
-                allOptions.push({ ma: row[fields[0]], ten: row[fields[1]] });
-              } else if (fields.length === 1) {
-                allOptions.push({ ma: row[fields[0]], ten: row[fields[0]] });
-              }
+              const optionLabel = resolveDynamicQueryLabel(row, valueField, labelField, fields);
+              allOptions.push({ ma: row[valueField], ten: optionLabel || String(row?.[valueField] || "").trim() });
             });
           });
 
@@ -930,8 +940,8 @@ function resolveCascadeSelectOptions(
 
   const querySpec = Array.isArray(parsed?.query) ? parsed.query[0] : null;
   const tableName = String(querySpec?.obj_name || "").trim();
-  const valueField = String(querySpec?.fields?.[0] || "id").trim() || "id";
-  const labelField = String(querySpec?.fields?.[1] || valueField).trim() || valueField;
+  const valueField = String(querySpec?.value_field || querySpec?.fields?.[0] || "id").trim() || "id";
+  const labelField = String(querySpec?.label_field || querySpec?.fields?.[1] || valueField).trim() || valueField;
   const cascadeField = String(parsed?.cascadeField || querySpec?.obj_where?.field || "").trim();
   const rowsSource = tableName ? database?.[tableName] : null;
   const rows = Array.isArray(rowsSource) ? rowsSource : (Array.isArray(rowsSource?.rows) ? rowsSource.rows : []);

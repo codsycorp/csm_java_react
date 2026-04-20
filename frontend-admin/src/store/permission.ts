@@ -495,12 +495,13 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 		try {
 			const userMenusPermissions = Array.isArray(userState.menusPermissions) ? userState.menusPermissions : [];
 			const normalizedMenuTokens = userMenusPermissions.map(normalizeAccessKey).filter(Boolean);
+			const hasNoExplicitMenuTokens = normalizedMenuTokens.length === 0;
 			const hasLegacyAppOnly = normalizedMenuTokens.length > 0
 				&& normalizedMenuTokens.every(token => isLegacyAppScopeToken(token, effectiveAppId));
 			const explicitAllowedKeys = new Set(
 				normalizedMenuTokens.filter(token => !isLegacyAppScopeToken(token, effectiveAppId))
 			);
-			const shouldBypassMenuFilter = isDev || isAdmin || hasLegacyAppOnly;
+			const shouldBypassMenuFilter = isDev || isAdmin || hasLegacyAppOnly || hasNoExplicitMenuTokens;
 			const allowedRoutePaths = buildAllowedPathSet(routesForMenu);
 			const apiMenuResponse = await fetchNavigationMenus(effectiveAppId);
 			if (apiMenuResponse?.result?.list && apiMenuResponse.result.list.length > 0) {
@@ -618,13 +619,14 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 			const userState = useUserStore.getState();
 			const userMenusPermissions = Array.isArray(userState.menusPermissions) ? userState.menusPermissions : [];
 			const normalizedMenuTokens = userMenusPermissions.map(normalizeAccessKey).filter(Boolean);
+			const hasNoExplicitMenuTokens = normalizedMenuTokens.length === 0;
 			const hasLegacyAppOnly = normalizedMenuTokens.length > 0
 				&& normalizedMenuTokens.every(token => isLegacyAppScopeToken(token, effectiveAppId));
 			const explicitAllowedKeys = new Set(
 				normalizedMenuTokens.filter(token => !isLegacyAppScopeToken(token, effectiveAppId))
 			);
 			const { isDev, isAdmin } = resolvePrivilegeFlags(userState, devFlag ?? userState.dev);
-			const shouldBypassMenuFilter = isDev || isAdmin || hasLegacyAppOnly;
+			const shouldBypassMenuFilter = isDev || isAdmin || hasLegacyAppOnly || hasNoExplicitMenuTokens;
 			const routesForMenu = (isDev
 				? newRoutes.map(r => r.path === '/system'
 					? {

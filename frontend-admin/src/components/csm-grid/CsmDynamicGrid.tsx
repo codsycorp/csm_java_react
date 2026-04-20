@@ -465,6 +465,16 @@ function parseFieldOptions(raw: unknown): Array<{ value: string; label: string }
 		.filter((item): item is { value: string; label: string } => Boolean(item));
 }
 
+function resolveDynamicQueryLabel(row: any, valueField: string, labelField: string, fields: unknown): string {
+	const value = String(row?.[valueField] ?? "").trim();
+	const configuredFields = Array.isArray(fields)
+		? fields.map((item) => String(item || "").trim()).filter(Boolean)
+		: [];
+	const effectiveLabelField = String(labelField || configuredFields[1] || valueField).trim() || valueField;
+	const directLabel = String(row?.[effectiveLabelField] ?? "").trim();
+	return directLabel || value;
+}
+
 function getLegacyFallbackComboQuery(fieldNameRaw: unknown): string {
 	const fieldName = String(fieldNameRaw || "").trim().toLowerCase();
 	if (!fieldName) return "";
@@ -829,8 +839,8 @@ function resolveComboSingleValue(input: any, querySpecs: any[], database: Databa
 		const tableName = String(querySpec?.obj_name || "").trim();
 		if (!tableName) continue;
 		const fields = Array.isArray(querySpec?.fields) ? querySpec.fields : [];
-		const valueField = String(fields[0] || "id").trim() || "id";
-		const labelField = String(fields[1] || "").trim();
+		const valueField = String(querySpec?.value_field || fields[0] || "id").trim() || "id";
+		const labelField = String(querySpec?.label_field || fields[1] || "").trim();
 		const rows = getComboRows(database, tableName);
 		if (!Array.isArray(rows) || rows.length === 0) continue;
 		hasAnyRows = true;
@@ -1693,6 +1703,8 @@ export function CsmDynamicGrid({
 								
 								const tableName = querySpec.obj_name;
 								const fields = querySpec.fields || [];
+								const valueField = String(querySpec?.value_field || fields?.[0] || "id").trim() || "id";
+								const labelField = String(querySpec?.label_field || fields?.[1] || valueField).trim() || valueField;
 								// Default obj_where if not provided or invalid
 								// Check for: undefined, null, empty string, empty object, or object without required fields
 								let whereClause = querySpec.obj_where;
@@ -1798,27 +1810,19 @@ export function CsmDynamicGrid({
 										console.log(`[selectEnums] Sample row from ${tableName}:`, row);
 										console.log(`[selectEnums] Fields mapping:`, {
 											fields,
-											field0: fields[0],
-											field1: fields[1],
-											value: row[fields[0]],
-											label: row[fields[1]],
+											valueField,
+											labelField,
+											value: row[valueField],
+											label: row[labelField],
 											allKeys: Object.keys(row)
 										});
 									}
-									
-									if (fields.length >= 2) {
-										// First field is value (ma), second is label (ten)
-										allOptions.push({
-											ma: row[fields[0]],
-											ten: row[fields[1]]
-										});
-									} else if (fields.length === 1) {
-										// Single field: use as both value and label
-										allOptions.push({
-											ma: row[fields[0]],
-											ten: row[fields[0]]
-										});
-									}
+									const optionLabel = resolveDynamicQueryLabel(row, valueField, labelField, fields);
+
+									allOptions.push({
+										ma: row[valueField],
+										ten: optionLabel || String(row?.[valueField] || "").trim(),
+									});
 								});
 							});
 							
@@ -3597,8 +3601,8 @@ export function CsmDynamicGrid({
 									const tbl = String(spec?.obj_name || "").trim();
 									if (!tbl) continue;
 									const fields = Array.isArray(spec?.fields) ? spec.fields : [];
-									const valueField = String(fields[0] || "id").trim() || "id";
-									const labelField = String(fields[1] || "").trim();
+									const valueField = String(spec?.value_field || fields[0] || "id").trim() || "id";
+									const labelField = String(spec?.label_field || fields[1] || "").trim();
 									const rows = getComboRows(database, tbl);
 									if (labelField && rows.length > 0) {
 										const found = rows.find((r) => String(r[labelField] || "").trim() === val);
