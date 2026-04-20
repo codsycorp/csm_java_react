@@ -1,4 +1,4 @@
-import { hasConfiguredMenuFields, isGridRuntimeMenu, isReportRuntimeMenu, normalizeMenuRuntimeConfig } from "#src/components/csm-crm/crm-config";
+import { normalizeMenuRuntimeConfig } from "#src/components/csm-crm/crm-config";
 import { createTableStruct, type CreateTableStruct, getTableData } from "#src/components/csm-grid/CsmApi";
 // Patch lại label đa ngữ cho menuData theo i18n hiện tại
 import CsmDynamicGrid from "#src/components/csm-grid/CsmDynamicGrid";
@@ -62,6 +62,58 @@ function buildStruct(defaultValue: Record<string, any>, fieldsPK: string[], fiel
 		fieldsSearch,
 		fields: Array.from(new Set(Object.keys(defaultValue))),
 	};
+}
+
+const ROUTER_APP_TYPE_OPTIONS_JSON = JSON.stringify({
+	options: [
+		{ ma: "web", ten: "Web" },
+		{ ma: "app", ten: "App" },
+	],
+});
+
+function buildStrictThreeMenuSchema(tableName: string): Array<Record<string, any>> | null {
+	if (tableName === "sys_la_routers") {
+		return [
+			{ f_name: "f_case", f_header: "Tình huống", f_header_vi: "Tình huống", f_header_en: "Case", f_header_zh: "场景", f_show: 1, f_types: "string", f_align: "left" },
+			{ f_name: "f_do", f_header: "Hành động", f_header_vi: "Hành động", f_header_en: "Action", f_header_zh: "动作", f_show: 1, f_types: "string", f_align: "left" },
+			{ f_name: "domain_name", f_header: "Tên miền", f_header_vi: "Tên miền", f_header_en: "Domain", f_header_zh: "域名", f_show: 1, f_types: "string", f_align: "left" },
+			{ f_name: "run", f_header: "Kích hoạt", f_header_vi: "Kích hoạt", f_header_en: "Enabled", f_header_zh: "启用", f_show: 1, f_types: "checkbox", f_align: "center" },
+			{ f_name: "app_type", f_header: "Loại ứng dụng", f_header_vi: "Loại ứng dụng", f_header_en: "App Type", f_header_zh: "应用类型", f_show: 1, f_types: "co", f_align: "left", f_cbo_query: ROUTER_APP_TYPE_OPTIONS_JSON },
+			{ f_name: "rp_index", f_header: "Thư mục React build", f_header_vi: "Thư mục React build", f_header_en: "React Build Folder", f_header_zh: "React 构建目录", f_show: 1, f_types: "ed", f_align: "right" },
+			{ f_name: "gtag", f_header: "GTag", f_header_vi: "GTag", f_header_en: "GTag", f_header_zh: "GTag", f_show: 1, f_types: "string", f_align: "left" },
+			{ f_name: "tbl_service_detail", f_header: "Bảng dịch vụ chi tiết", f_header_vi: "Bảng dịch vụ chi tiết", f_header_en: "Service Detail Table", f_header_zh: "服务明细表", f_show: 1, f_types: "string", f_align: "left" },
+			{ f_name: "gsv", f_header: "GSV", f_header_vi: "GSV", f_header_en: "GSV", f_header_zh: "GSV", f_show: 1, f_types: "string", f_align: "left" },
+			{ f_name: "f_title", f_header: "Tiêu đề", f_header_vi: "Tiêu đề", f_header_en: "Title", f_header_zh: "标题", f_show: 1, f_types: "string", f_align: "left" },
+			{ f_name: "f_keyword", f_header: "Từ khóa", f_header_vi: "Từ khóa", f_header_en: "Keyword", f_header_zh: "关键字", f_show: 1, f_types: "string", f_align: "left" },
+			{ f_name: "app_id", f_header: "ID ứng dụng", f_header_vi: "ID ứng dụng", f_header_en: "App ID", f_header_zh: "应用 ID", f_show: 1, f_types: "co", f_align: "left", f_cbo_query: APP_ID_QUERY_JSON },
+			{ f_name: "tbl_services", f_header: "Bảng dịch vụ", f_header_vi: "Bảng dịch vụ", f_header_en: "Services Table", f_header_zh: "服务表", f_show: 1, f_types: "string", f_align: "left" },
+			{ f_name: "id", f_header: "Mã", f_header_vi: "Mã", f_header_en: "Id", f_header_zh: "标识", f_show: 1, f_types: "number", f_align: "right" },
+			{ f_name: "f_logo", f_header: "Logo", f_header_vi: "Logo", f_header_en: "Logo", f_header_zh: "图标", f_show: 1, f_types: "image", f_align: "left" },
+		];
+	}
+
+	if (tableName === "sys_apps") {
+		return [
+			{ f_name: "id", f_header: "Mã", f_header_vi: "Mã", f_header_en: "Id", f_header_zh: "标识", f_show: 1, f_types: "number", f_align: "right" },
+			{ f_name: "app_id", f_header: "ID ứng dụng", f_header_vi: "ID ứng dụng", f_header_en: "App ID", f_header_zh: "应用 ID", f_show: 1, f_types: "string", f_align: "left" },
+			{ f_name: "app_name", f_header: "Tên ứng dụng", f_header_vi: "Tên ứng dụng", f_header_en: "App Name", f_header_zh: "应用名称", f_show: 1, f_types: "string", f_align: "left" },
+			{ f_name: "f_logo", f_header: "Logo", f_header_vi: "Logo", f_header_en: "Logo", f_header_zh: "图标", f_show: 1, f_types: "image", f_align: "left" },
+			{ f_name: "index", f_header: "Thứ tự", f_header_vi: "Thứ tự", f_header_en: "Order", f_header_zh: "排序", f_show: 1, f_types: "number", f_align: "right" },
+		];
+	}
+
+	if (tableName === "sys_reactnative") {
+		return [
+			{ f_name: "id", f_header: "Mã", f_header_vi: "Mã", f_header_en: "Id", f_header_zh: "标识", f_show: 1, f_types: "number", f_align: "right" },
+			{ f_name: "c_name", f_header: "Mã màn hình", f_header_vi: "Mã màn hình", f_header_en: "Screen Code", f_header_zh: "页面编码", f_show: 1, f_types: "string", f_align: "left" },
+			{ f_name: "name", f_header: "Tên màn hình", f_header_vi: "Tên màn hình", f_header_en: "Screen Name", f_header_zh: "页面名称", f_show: 1, f_types: "string", f_align: "left" },
+			{ f_name: "router", f_header: "Đường dẫn", f_header_vi: "Đường dẫn", f_header_en: "Route", f_header_zh: "路由", f_show: 1, f_types: "string", f_align: "left" },
+			{ f_name: "f_pops", f_header: "Tham số", f_header_vi: "Tham số", f_header_en: "Params", f_header_zh: "参数", f_show: 1, f_types: "string", f_align: "left" },
+			{ f_name: "component_code", f_header: "Mã giao diện", f_header_vi: "Mã giao diện", f_header_en: "Component Code", f_header_zh: "组件代码", f_show: 1, f_types: "codejs", f_align: "left" },
+		];
+	}
+
+	return null;
 }
 
 const SYSTEM_ROUTE_TABLE_SCHEMAS: Record<string, TableBootstrapDefinition[]> = {
@@ -290,13 +342,19 @@ function normalizeSystemMenuKey(raw: unknown): string {
 	const value = String(raw || "").trim().toLowerCase();
 	if (!value)
 		return "";
-	const normalized = value.startsWith("/system/") ? value.replace(/^\/system\//, "") : value;
+	const normalized = value
+		.replace(/^\/?system\/grid\//, "")
+		.replace(/^\/?system\//, "")
+		.replace(/^\/?grid\//, "")
+		.replace(/^\//, "");
 	if (normalized === "users")
 		return "user";
 	if (normalized === "department")
 		return "departments";
 	if (normalized === "branch")
 		return "branches";
+	if (normalized === "reactnative")
+		return "react-native";
 	if (normalized === "permission-group")
 		return "dept";
 	return normalized;
@@ -955,24 +1013,22 @@ function applyFriendlyFieldPolicy(tableName: string | undefined, rawFields: any[
  * AdminPage - Renders dynamic grid/report based on menuId parameter
  * Integrates with layout tabbar system for tab-based navigation
  */
-export default function AdminPage() {
-	const { menuId } = useParams<{ menuId: string }>();
-	const activeTabKey = useTabsStore(state => state.activeKey);
-	const activeTab = useTabsStore(state => state.openTabs?.get?.(state.activeKey) as any);
-	const selectedMenuIdForTab = useUserStore(state => state.selectedMenuIdForTab);
+export default function AdminPage(props: any = {}) {
+	const { menuId: routeMenuId } = useParams<{ menuId: string }>();
+	// Prefer props passed from tab (stable per-tab identity), fallback to router param.
+	// Do NOT use global activeTabKey/activeTab — they change on every tab switch and
+	// would contaminate cached (KeepAlive) instances of AdminPage, triggering false mismatch warnings.
+	const menuId = props.menuId || routeMenuId;
+	const propMenuData = props.menuData || props.m_configs || null;
 	const normalizedMenuSource = useMemo(() => {
 		const candidates = [
-			activeTab?.menuData?.path,
-			activeTab?.m_configs?.path,
-			activeTab?.menuData?.id,
-			activeTab?.m_configs?.id,
-			activeTab?.menuId,
-			selectedMenuIdForTab,
+			propMenuData?.path,
+			propMenuData?.id,
+			props.menuId,
 			menuId,
-			activeTabKey,
 		];
 		return String(candidates.find(item => Boolean(item)) || "");
-	}, [activeTab?.menuData?.path, activeTab?.m_configs?.path, activeTab?.menuData?.id, activeTab?.m_configs?.id, activeTab?.menuId, selectedMenuIdForTab, menuId, activeTabKey]);
+	}, [propMenuData?.path, propMenuData?.id, props.menuId, menuId]);
 	const normalizedMenuKey = useMemo(
 		() => normalizeSystemMenuKey(normalizedMenuSource),
 		[normalizedMenuSource],
@@ -1491,6 +1547,46 @@ export default function AdminPage() {
 						row_type_edit: 0,
 						g_readonly: false,
 					},
+					routers: {
+						id: "routers",
+						path: "/system/routers",
+						label: t("common.menu.routers"),
+						table_name: "sys_la_routers",
+						app_id: appId,
+						type_form: 1,
+						row_type_edit: 0,
+						g_readonly: false,
+					},
+					apps: {
+						id: "apps",
+						path: "/system/apps",
+						label: t("common.menu.apps"),
+						table_name: "sys_apps",
+						app_id: appId,
+						type_form: 1,
+						row_type_edit: 0,
+						g_readonly: false,
+					},
+					"react-native": {
+						id: "react-native",
+						path: "/system/react-native",
+						label: t("common.menu.reactNative"),
+						table_name: "sys_reactnative",
+						app_id: appId,
+						type_form: 1,
+						row_type_edit: 0,
+						g_readonly: false,
+					},
+					reactnative: {
+						id: "react-native",
+						path: "/system/react-native",
+						label: t("common.menu.reactNative"),
+						table_name: "sys_reactnative",
+						app_id: appId,
+						type_form: 1,
+						row_type_edit: 0,
+						g_readonly: false,
+					},
 				};
 				const fallback = fallbackMenuById[normalizedMenuKey];
 				if (fallback)
@@ -1520,6 +1616,7 @@ export default function AdminPage() {
 			return;
 
 		const resolvedUserAppId = (appId && String(appId).trim()) || "csm";
+		const TENANT_ORG_TABLES_LOAD = new Set(["csm_branches", "csm_depts", "csm_roles"]);
 		const resolveTableAppId = (tableName: string): string => {
 			if (isSystemUserRoute) {
 				if (tableName === "csm_accounts")
@@ -1527,6 +1624,8 @@ export default function AdminPage() {
 				if (tableName === "csm_group_members")
 					return "csm";
 			}
+			// Org tables always use the logged-in user’s app_id, never the menu’s stored app_id.
+			if (TENANT_ORG_TABLES_LOAD.has(tableName)) return resolvedUserAppId;
 			return runtimeMenu.app_id || resolvedUserAppId;
 		};
 
@@ -1765,9 +1864,14 @@ export default function AdminPage() {
 		.map(item => item.trim().toLowerCase())
 		.filter(Boolean);
 	const isSystemUserTableRuntime = runtimeTableNames.some(name => name === "csm_accounts" || name === "csm_group_members");
+	// These organizational tables belong to each tenant — always use the logged-in user’s app_id.
+	const TENANT_ORG_TABLES = new Set(["csm_branches", "csm_depts", "csm_roles"]);
+	const isOrgTableRuntime = runtimeTableNames.some(name => TENANT_ORG_TABLES.has(name));
 	const effectiveAppId = (isSystemUserRoute || isSystemUserTableRuntime)
 		? "csm"
-		: (runtimeMenuData?.app_id || appId);
+		: isOrgTableRuntime
+			? appId
+			: (runtimeMenuData?.app_id || appId);
 	const typeForm = Number(runtimeMenuData?.type_form || 1);
 	const expectedTableNames = (SYSTEM_MENU_KEY_TO_EXPECTED_TABLES[normalizedMenuKey] || []).map(item => item.toLowerCase());
 	const currentTableName = String(runtimeMenuData?.table_name || "").trim();
@@ -1866,8 +1970,23 @@ export default function AdminPage() {
 		);
 	}
 
-	const hasGridLikePayload = isGridRuntimeMenu(runtimeMenuData);
-	const hasReportRuntimePayload = isReportRuntimeMenu(runtimeMenuData);
+	// Legacy-compatible grid detection: some menus run as grid via trigger.load_db without table_name.
+	const hasGridLikePayload = Boolean(
+		runtimeMenuData.table_name
+		|| (runtimeMenuData as any)?.trigger?.load_db
+		|| typeForm === 1
+		|| typeForm === 2,
+	);
+	// Báo cáo runtime legacy có thể vẫn có table_name để lấy dữ liệu/filter.
+	// Vì vậy report_name + trigger.report_db phải được ưu tiên render báo cáo,
+	// không để table_name kéo nhầm sang grid.
+	const hasReportRuntimePayload = Boolean(
+		String(runtimeMenuData.report_name || "").trim()
+		&& (
+			typeForm === 5
+			|| String((runtimeMenuData as any)?.trigger?.report_db || "").trim()
+		),
+	);
 	const isReportMode = hasReportRuntimePayload || (!!runtimeMenuData.report_name && !hasGridLikePayload);
 	if (isReportMode) {
 		return (
@@ -1926,7 +2045,7 @@ export default function AdminPage() {
 				.filter((field: any) => field && typeof field === "object")
 				.map((field: any) => ({ ...field }))
 			: [];
-		const hasConfiguredTableFields = hasConfiguredMenuFields({ table: configuredTableFromMenu });
+		const hasConfiguredTableFields = configuredTableFromMenu.some((field: any) => String(field?.f_name || "").trim().length > 0);
 
 		const m_configs = {
 			id: runtimeMenuData.id,
@@ -1944,8 +2063,62 @@ export default function AdminPage() {
 			},
 		};
 
+		const runtimePath = String(runtimeMenuData.path || "").trim().toLowerCase();
+		const candidateKeys = Array.from(new Set([
+			normalizeSystemMenuKey(normalizedMenuKey),
+			normalizeSystemMenuKey(menuId),
+			normalizeSystemMenuKey((runtimeMenuData as any)?.id),
+			normalizeSystemMenuKey(runtimePath),
+		]));
+		const runtimeTableNameLower = String(runtimeMenuData.table_name || "").trim().toLowerCase();
+		const isThreeTargetMenus = candidateKeys.includes("routers")
+			|| candidateKeys.includes("apps")
+			|| candidateKeys.includes("react-native")
+			|| runtimeTableNameLower === "sys_la_routers"
+			|| runtimeTableNameLower === "sys_apps"
+			|| runtimeTableNameLower === "sys_reactnative"
+			|| runtimePath === "/routers"
+			|| runtimePath === "/apps"
+			|| runtimePath === "/react-native"
+			|| runtimePath === "/system/routers"
+			|| runtimePath === "/system/apps"
+			|| runtimePath === "/system/react-native"
+			|| runtimePath === "/system/grid/routers"
+			|| runtimePath === "/system/grid/apps"
+			|| runtimePath === "/system/grid/react-native";
+
+		let appliedStrictThreeMenuSchema = false;
+		if (isThreeTargetMenus) {
+			const strictTableName = candidateKeys.includes("routers")
+				? "sys_la_routers"
+				: candidateKeys.includes("apps")
+					? "sys_apps"
+					: candidateKeys.includes("react-native")
+						? "sys_reactnative"
+						: runtimeTableNameLower === "sys_la_routers"
+							? "sys_la_routers"
+							: runtimeTableNameLower === "sys_apps"
+								? "sys_apps"
+								: runtimeTableNameLower === "sys_reactnative"
+									? "sys_reactnative"
+						: runtimePath.includes("routers")
+							? "sys_la_routers"
+							: runtimePath.includes("apps")
+								? "sys_apps"
+								: "sys_reactnative";
+
+			const strictSchema = buildStrictThreeMenuSchema(strictTableName);
+			if (strictSchema) {
+				m_configs.table_name = strictTableName;
+				m_configs.table = strictSchema as any;
+				m_configs.type_form = 1;
+				m_configs.row_type_edit = 0;
+				appliedStrictThreeMenuSchema = true;
+			}
+		}
+
 		// CHÍNH SÁCH CỐ ĐỊNH: Nếu menu DB đã có cấu hình cột, giữ nguyên tuyệt đối (không áp policy/fallback).
-		if (!hasConfiguredTableFields) {
+		if (!hasConfiguredTableFields && !appliedStrictThreeMenuSchema) {
 			m_configs.table = configuredTableFromMenu;
 		}
 

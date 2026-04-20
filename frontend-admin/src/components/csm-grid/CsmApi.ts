@@ -1,6 +1,6 @@
 import { request } from "#src/utils";
 import { AI_TIMEOUT_MS } from "#src/api/ai/index";
-import { useUserStore } from "#src/store";
+import { useTabsStore, useUserStore } from "#src/store";
 
 // Định nghĩa kiểu GoogleIndexResponse cho các API Google Index
 export type GoogleIndexResponse = {
@@ -666,12 +666,43 @@ export async function getTableData<T>(params: {
 	limit?: number
 }) {
 	const TABLE_DATA_TIMEOUT_MS = 120000;
+	const isSystemUserRuntimeContext = (() => {
+		if (typeof window === "undefined") return false;
+		const path = String(window.location?.pathname || "").toLowerCase();
+		if (path.includes("/system/user")) return true;
+
+		try {
+			const tabsState = useTabsStore.getState() as any;
+			const activeKey = String(tabsState?.activeKey || "");
+			const activeTab = tabsState?.openTabs?.get?.(activeKey);
+			const candidates = [
+				activeTab?.menuData?.path,
+				activeTab?.m_configs?.path,
+				activeTab?.menuData?.id,
+				activeTab?.m_configs?.id,
+				activeTab?.menuId,
+				useUserStore.getState()?.selectedMenuIdForTab,
+			]
+				.map((value: any) => String(value || "").trim().toLowerCase())
+				.filter(Boolean);
+
+			if (candidates.some((value: string) => value === "/system/user" || value.endsWith("/system/user"))) {
+				return true;
+			}
+			if (candidates.some((value: string) => value === "user" || value.endsWith("/user"))) {
+				return true;
+			}
+		} catch {
+			// Ignore tab-state lookup failure and fallback to pathname-based detection.
+		}
+
+		return false;
+	})();
+
 	const shouldForceOnlyMySubusers = (() => {
 		if (params.only_my_subusers) return true;
 		if (params.obj_name !== "csm_group_members") return false;
-		if (typeof window === "undefined") return false;
-		const pathname = String(window.location?.pathname || "").toLowerCase();
-		if (!pathname.includes("/system/user")) return false;
+		if (!isSystemUserRuntimeContext) return false;
 		try {
 			const userState = useUserStore.getState() as any;
 			const rolesRaw = userState?.roles;

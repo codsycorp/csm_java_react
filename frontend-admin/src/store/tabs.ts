@@ -122,21 +122,35 @@ export const useTabsStore = create<TabsState & TabsAction>()(
 		addTab: (routePath: string, tabProps: TabStateType) => {
 			set((state) => {
 				const normalizedPath = normalizeHomePath(routePath);
-				if (normalizedPath.length) {
+				if (!normalizedPath.length) return state;
+
+				const isHome = normalizedPath === HOME_TAB_KEY;
+
+				// If tab already exists, only update label (avoid overwriting menuData/m_configs
+				// which would change prop references and re-trigger data-loading effects in the component).
+				if (state.openTabs.has(normalizedPath)) {
+					const existingTab = state.openTabs.get(normalizedPath)!;
+					if (existingTab.label === tabProps.label) {
+						return state; // Nothing changed, skip to avoid spurious re-renders
+					}
 					const newTabs = new Map(state.openTabs);
-					
-					// ALWAYS use new tabProps, but preserve closable/draggable for home
-					const isHome = normalizedPath === HOME_TAB_KEY;
 					newTabs.set(normalizedPath, {
-						...tabProps,
-						key: normalizedPath,
-						// Preserve home's non-closable/draggable properties
-						closable: isHome ? false : tabProps.closable,
-						draggable: isHome ? false : tabProps.draggable,
+						...existingTab,
+						label: tabProps.label,
+						closable: isHome ? false : existingTab.closable,
+						draggable: isHome ? false : existingTab.draggable,
 					});
 					return { openTabs: newTabs };
 				}
-				return state;
+
+				const newTabs = new Map(state.openTabs);
+				newTabs.set(normalizedPath, {
+					...tabProps,
+					key: normalizedPath,
+					closable: isHome ? false : tabProps.closable,
+					draggable: isHome ? false : tabProps.draggable,
+				});
+				return { openTabs: newTabs };
 			});
 		},			/**
 			 * 移除标签页

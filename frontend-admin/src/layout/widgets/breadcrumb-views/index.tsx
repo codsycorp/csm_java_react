@@ -63,6 +63,21 @@ const RAW_SYSTEM_TITLE_KEY_MAP: Record<string, string> = {
 	apps: "common.menu.apps",
 };
 
+const SYSTEM_RUNTIME_MENUID_TITLE_KEY_MAP: Record<string, string> = {
+	user: "common.menu.user",
+	dept: "common.menu.permissionGroup",
+	role: "common.menu.permissionGroup",
+	roles: "common.menu.permissionGroup",
+	departments: "common.menu.dept",
+	branches: "common.menu.branch",
+	routers: "common.menu.routers",
+	apps: "common.menu.apps",
+	developer: "common.menu.developer",
+	"react-native": "common.menu.reactNative",
+	broadcast: "common.menu.broadcast",
+	menu: "common.menu.menu",
+};
+
 function normalizeToken(raw: unknown): string {
 	return String(raw || "").trim().toLowerCase();
 }
@@ -93,17 +108,41 @@ export function BreadcrumbViews() {
 	const apiWholeMenus = usePermissionStore(state => state.apiWholeMenus);
 	const tab = openTabs.get(activeKey);
 	const currentLang = String(i18n.language || "vi").toLowerCase();
+	const runtimeMenuIdFromActiveKey = useMemo(() => {
+		const key = String(activeKey || "").trim();
+		const match = key.match(/^\/system\/grid\/([^/?#]+)/i);
+		return String(match?.[1] || "").trim().toLowerCase();
+	}, [activeKey]);
+
+	const runtimeTitleFromMenuId = useMemo(() => {
+		if (!runtimeMenuIdFromActiveKey) return "";
+		const key = SYSTEM_RUNTIME_MENUID_TITLE_KEY_MAP[runtimeMenuIdFromActiveKey];
+		return key ? String(t(key)) : "";
+	}, [runtimeMenuIdFromActiveKey, t]);
 
 	const tabLabel = useMemo(() => {
-		if (!tab) return "";
+		if (!tab) return runtimeTitleFromMenuId;
+		const systemTitle = String(t("common.menu.system"));
+		const menuDataLabel = String(tab.menuData?.label || tab.menuData?.title || tab.menuData?.name || tab.m_configs?.label || tab.m_configs?.title || "").trim();
+		const normalizedMenuDataLabel = menuDataLabel.includes(".") ? String(t(menuDataLabel)) : menuDataLabel;
 		if (tab.label) {
-			return String(isString(tab.label) ? t(tab.label) : tab.label);
+			const rawTabLabel = String(isString(tab.label) ? t(tab.label) : tab.label).trim();
+			const looksLikePath = rawTabLabel.startsWith("/");
+			const isGenericSystemTitle = normalizeToken(rawTabLabel) === normalizeToken(systemTitle);
+			if (runtimeTitleFromMenuId && (looksLikePath || isGenericSystemTitle || !rawTabLabel)) {
+				return runtimeTitleFromMenuId;
+			}
+			return rawTabLabel;
 		}
-		if (tab.menuData && (tab.menuData.label || tab.menuData.title || tab.menuData.name)) {
-			return String(tab.menuData.label || tab.menuData.title || tab.menuData.name);
+		if (normalizedMenuDataLabel) {
+			const isGenericSystemTitle = normalizeToken(normalizedMenuDataLabel) === normalizeToken(systemTitle);
+			if (runtimeTitleFromMenuId && isGenericSystemTitle) {
+				return runtimeTitleFromMenuId;
+			}
+			return normalizedMenuDataLabel;
 		}
-		return "";
-	}, [tab, t]);
+		return runtimeTitleFromMenuId;
+	}, [runtimeTitleFromMenuId, t, tab]);
 
 	const resolvedAppId = useMemo(() => {
 		const candidates = [
@@ -182,7 +221,7 @@ export function BreadcrumbViews() {
 			tab?.menuId
 			|| tab?.menuData?.id
 			|| tab?.m_configs?.id
-			|| (String(activeKey || "").startsWith("/system/grid/") ? String(activeKey).replace("/system/grid/", "") : "")
+			|| runtimeMenuIdFromActiveKey
 			|| "",
 		).trim();
 
@@ -229,25 +268,20 @@ export function BreadcrumbViews() {
 			}
 		}
 
-		const activePath = String(activePathCandidates[0] || "");
-		const isSystemContext = activePath.startsWith("/system")
-			|| normalizeToken(tab?.menuData?.path).startsWith("/system")
-			|| normalizeToken(tab?.m_configs?.path).startsWith("/system")
-			|| chain.some(item => normalizeToken(item.path).startsWith("/system"));
-
-		if (isSystemContext) {
-			const systemTitle = t("common.menu.system");
-			if (!chain.some(item => normalizeToken(item.title) === normalizeToken(systemTitle))) {
-				chain.unshift({ title: systemTitle, path: "/system" });
-			}
-		} else if (resolvedAppId) {
-			chain.unshift({ title: `${t("common.appId")}: ${resolvedAppId}`, path: `/app/${resolvedAppId}` });
-		}
+		// Trust parent chain from menu tree traversal — do NOT auto-prepend based on path prefix.
+		// All dynamic grid tabs use /system/grid/:id paths but many are not under "Quản lý hệ thống".
 
 		if (tabLabel) {
 			const currentTitle = chain.length > 0 ? chain[chain.length - 1]?.title : "";
 			if (normalizeToken(currentTitle) !== normalizeToken(tabLabel)) {
 				chain.push({ title: tabLabel, path: activeKey || "" });
+			}
+		}
+
+		if (runtimeTitleFromMenuId && normalizeToken(tabLabel) !== normalizeToken(runtimeTitleFromMenuId)) {
+			const currentLastTitle = chain.length > 0 ? String(chain[chain.length - 1]?.title || "") : "";
+			if (normalizeToken(currentLastTitle) !== normalizeToken(runtimeTitleFromMenuId)) {
+				chain.push({ title: runtimeTitleFromMenuId, path: activeKey || "" });
 			}
 		}
 
@@ -260,7 +294,7 @@ export function BreadcrumbViews() {
 		}
 
 		return [] as Array<{ title: string; path: string }>;
-	}, [activeKey, indexedMenus, resolvedAppId, tab?.m_configs?.id, tab?.m_configs?.path, tab?.menuData?.id, tab?.menuData?.path, tab?.menuId, tabLabel, t]);
+	}, [activeKey, indexedMenus, resolvedAppId, runtimeMenuIdFromActiveKey, runtimeTitleFromMenuId, tab?.m_configs?.id, tab?.m_configs?.path, tab?.menuData?.id, tab?.menuData?.path, tab?.menuId, tabLabel, t]);
 
 	if (breadcrumbItems.length > 0) {
 		return (

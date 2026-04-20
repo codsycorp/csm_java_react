@@ -843,17 +843,140 @@ export function useMenu() {
 				   app_id: selectedApiMenu.app_id || "csm",
 				   type_form: selectedApiMenu.type_form || fallback.type_form,
 			   };
-			   addTab(selectedServerPath, {
-				   key: selectedServerPath,
-				   label: String(finalMenuData.label || fallback.label),
-				   closable: true,
-				   draggable: true,
-				   menuData: finalMenuData,
-				   m_configs: finalMenuData,
-				   type_form: finalMenuData.type_form,
-				   table_name: finalMenuData.table_name,
-			   });
-			   setActiveKey(selectedServerPath);
+
+			   const runtimeAliasPathBySystemPath: Record<string, string> = {
+				   "/system/apps": "/apps",
+				   "/system/routers": "/routers",
+				   "/system/react-native": "/react-native",
+			   };
+			   const runtimeAliasPath = runtimeAliasPathBySystemPath[selectedServerPath];
+			   const scoreRuntimeAliasMenu = (menu: any): number => {
+				   const normalized = normalizeMenuRuntimeConfig(menu || {});
+				   let score = 0;
+				   if (String(normalized.table_name || "").trim()) score += 3;
+				   if (Array.isArray(normalized.table) && normalized.table.length > 0) score += 3;
+				   if (String(normalized?.trigger?.load_db || "").trim()) score += 2;
+				   if (Number(normalized.type_form || 0) > 0) score += 1;
+				   return score;
+			   };
+
+			   const pickBestAliasMenu = (menus: any[]): any | null => {
+				   if (!Array.isArray(menus) || menus.length === 0) return null;
+				   const scopedCandidates = menus
+					   .map((item: any) => normalizeMenuRuntimeConfig(item))
+					   .filter((item: any) => String(item?.path || "").trim() === runtimeAliasPath);
+
+				   if (scopedCandidates.length === 0) return null;
+				   const targetAppId = String(appId || "").trim().toLowerCase();
+				   const appMatched = scopedCandidates.filter((item: any) => {
+					   const itemApp = String(item?.app_id || "").trim().toLowerCase();
+					   if (!targetAppId) return true;
+					   return !itemApp || itemApp === targetAppId;
+				   });
+				   const pool = appMatched.length > 0 ? appMatched : scopedCandidates;
+				   pool.sort((a: any, b: any) => scoreRuntimeAliasMenu(b) - scoreRuntimeAliasMenu(a));
+				   return pool[0] || null;
+			   };
+
+			   let runtimeAliasMenu = runtimeAliasPath
+				   ? pickBestAliasMenu(allApiMenus)
+				   : null;
+
+			   if (!runtimeAliasMenu && runtimeAliasPath) {
+				   const appCandidates = Array.from(new Set([
+					   String(appId || "").trim(),
+					   "csm",
+				   ].filter(Boolean)));
+				   for (const candidateAppId of appCandidates) {
+					   try {
+						   const menuRowsRes = await getTableData<any>({
+							   app_id: candidateAppId,
+							   obj_name: "csm_menu",
+							   where: { field: "path", type: "eq", value: runtimeAliasPath },
+							   take: 200,
+						   });
+						   const rows = (menuRowsRes as any)?.rows || [];
+						   const picked = pickBestAliasMenu(rows);
+						   if (picked) {
+							   runtimeAliasMenu = picked;
+							   break;
+						   }
+					   }
+					   catch {
+						   // Continue to next candidate app.
+					   }
+				   }
+			   }
+			   if (runtimeAliasMenu) {
+				   const runtimeMenuId = String(runtimeAliasMenu.id || runtimeAliasMenu.key || "").trim();
+				   if (runtimeMenuId) {
+					   const dynamicPath = `/system/grid/${runtimeMenuId}`;
+					   useUserStore.getState().setSelectedMenuIdForTab(runtimeMenuId);
+					   addTab(dynamicPath, {
+						   key: dynamicPath,
+						   label: String(runtimeAliasMenu.label || runtimeAliasMenu.title || fallback.label || selectedServerPath).trim(),
+						   closable: true,
+						   draggable: true,
+						   menuId: runtimeMenuId,
+						   menuData: runtimeAliasMenu,
+						   m_configs: runtimeAliasMenu,
+						   type_form: runtimeAliasMenu.type_form,
+						   table_name: runtimeAliasMenu.table_name,
+						   report_name: runtimeAliasMenu.report_name,
+						   kanban_config: runtimeAliasMenu.kanban_config,
+						   auto_code_name: runtimeAliasMenu.auto_code_name,
+						   auto_code: runtimeAliasMenu.auto_code,
+					   });
+					   setActiveKey(dynamicPath);
+					   return;
+				   }
+			   }
+
+			   const forceDynamicGridFallbackPaths = new Set([
+				   "/system/routers",
+				   "/system/apps",
+				   "/system/react-native",
+			   ]);
+			   if (forceDynamicGridFallbackPaths.has(selectedServerPath)) {
+				   const runtimeMenuId = String(
+					   finalMenuData.id
+					   || finalMenuData.menuId
+					   || selectedProcessedMenu?.menuId
+					   || selectedProcessedMenu?.id
+					   || selectedServerPath.replace("/system/", "")
+				   ).trim();
+				   const dynamicPath = `/system/grid/${runtimeMenuId}`;
+				   const forcedDynamicLabel = String(finalMenuData.label || fallback.label || selectedServerPath).trim();
+				   const forcedMenuData = {
+					   ...finalMenuData,
+					   label: forcedDynamicLabel,
+				   };
+				   useUserStore.getState().setSelectedMenuIdForTab(runtimeMenuId);
+				   addTab(dynamicPath, {
+					   key: dynamicPath,
+					   label: forcedDynamicLabel,
+					   closable: true,
+					   draggable: true,
+					   menuId: runtimeMenuId,
+					   menuData: forcedMenuData,
+					   m_configs: forcedMenuData,
+					   type_form: forcedMenuData.type_form,
+					   table_name: forcedMenuData.table_name,
+				   });
+				   setActiveKey(dynamicPath);
+			   } else {
+				   addTab(selectedServerPath, {
+					   key: selectedServerPath,
+					   label: String(finalMenuData.label || fallback.label),
+					   closable: true,
+					   draggable: true,
+					   menuData: finalMenuData,
+					   m_configs: finalMenuData,
+					   type_form: finalMenuData.type_form,
+					   table_name: finalMenuData.table_name,
+				   });
+				   setActiveKey(selectedServerPath);
+			   }
 			   return;
 		   }
 

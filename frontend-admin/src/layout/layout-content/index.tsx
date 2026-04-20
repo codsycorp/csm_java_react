@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import React,{ useEffect, useMemo } from "react";
+import React,{ useEffect, useMemo, useRef } from "react";
 import { csmDecrypt } from "#src/components/csm-grid/CsmCrypto";
 import { patchDynamicRoutesWithComponent } from "#src/router/patchDynamicRoutes";
 import { GlobalSpin, Scrollbar } from "#src/components";
@@ -26,6 +26,7 @@ export default function LayoutContent() {
 	const { i18n } = useTranslation();
 	const userId = useUserStore(state => state.userId);
 	const userAppId = useUserStore(state => (state.app_id || "").trim());
+	const tabComponentCacheRef = useRef<Map<string, any>>(new Map());
 	useEffect(() => {
 		// eslint-disable-next-line no-console
 		console.log('[LayoutContent] userId:', userId, 'openTabs:', openTabs, 'pathname:', pathname);
@@ -36,6 +37,8 @@ export default function LayoutContent() {
 		if (rawKey === "/" || rawKey === "/home" || rawKey === "homepage") return "homepage";
 		return rawKey || "homepage";
 	};
+
+	const normalizedActiveTabKey = useMemo(() => normalizeTabKey(activeKey || "homepage"), [activeKey]);
 
 	const resolveTabAppId = (tabLike: any) => {
 		const candidates = [
@@ -89,15 +92,16 @@ export default function LayoutContent() {
 		return undefined;
 	};
 	const resolvedTabView = useMemo(() => {
+		const cachedComponent = tabComponentCacheRef.current.get(normalizedActiveTabKey);
 		let route = resolveRouteByKey(activeKey);
-		let PatchedComponent: any = null;
+		let PatchedComponent: any = cachedComponent || null;
 		let tabProps: any = tab;
 
 		if (!route && (activeKey === "homepage" || activeKey === "/home")) {
 			route = flatRouteList["/"];
 		}
 
-		if (route && standaloneDynamicRouteKeys.has(activeKey)) {
+		if (!PatchedComponent && route && standaloneDynamicRouteKeys.has(activeKey)) {
 			PatchedComponent = route.Component || null;
 		}
 
@@ -117,11 +121,15 @@ export default function LayoutContent() {
 			tabProps = openTabs.get(homeKey) || tab;
 		}
 
+		if (PatchedComponent) {
+			tabComponentCacheRef.current.set(normalizedActiveTabKey, PatchedComponent);
+		}
+
 		return {
 			Component: PatchedComponent,
 			tabProps,
 		};
-	}, [activeKey, tab, flatRouteList, openTabs]);
+	}, [activeKey, tab, flatRouteList, openTabs, normalizedActiveTabKey]);
 
 	// Memo hóa props cho các tab tĩnh để tránh tạo object mới mỗi lần render
 	const staticSystemPaths = useMemo(() => ([
@@ -153,7 +161,7 @@ export default function LayoutContent() {
 	}
 	const tabElement = useMemo(() => {
 		if (!PatchedComponent || !tabProps) return null;
-		return React.createElement(PatchedComponent, { ...tabProps, decrypt: csmDecrypt, key: cacheKey });
+		return React.createElement(PatchedComponent, { ...tabProps, decrypt: csmDecrypt });
 	}, [PatchedComponent, tabProps, cacheKey]);
 
 	// KeepAlive logic giữ nguyên
@@ -162,6 +170,14 @@ export default function LayoutContent() {
 		const scopedOpenTabKeys = new Set(
 			Array.from(openTabs.entries()).map(([tabKey, tabValue]) => buildScopedCacheKey(tabKey, tabValue)),
 		);
+		const normalizedOpenTabKeys = new Set(
+			Array.from(openTabs.keys()).map((tabKey) => normalizeTabKey(tabKey)),
+		);
+		Array.from(tabComponentCacheRef.current.keys()).forEach((cachedTabKey) => {
+			if (!normalizedOpenTabKeys.has(cachedTabKey)) {
+				tabComponentCacheRef.current.delete(cachedTabKey);
+			}
+		});
 		cacheNodes?.forEach((node) => {
 			const cacheKeyValue = String(node.cacheKey || "");
 			const isProtectedHome = cacheKeyValue.endsWith("::homepage");
@@ -210,7 +226,7 @@ export default function LayoutContent() {
 			<Scrollbar>
 				<GlobalSpin>
 					<KeepAlive
-						max={20}
+						max={Math.max(50, openTabs.size + 10)}
 						transition
 						duration={300}
 						cacheNodeClassName={transitionEnable ? `keepalive-${transitionName}` : undefined}

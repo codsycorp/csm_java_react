@@ -369,10 +369,26 @@ export function hasConfiguredMenuFields(menu: unknown): boolean {
 export function isGridRuntimeMenu(menu: unknown): boolean {
 	if (!menu || typeof menu !== "object") return false;
 	const normalized = normalizeMenuRuntimeConfig(menu as Record<string, any>);
-	if (!hasConfiguredMenuFields(normalized)) return false;
+	const hasConfiguredFields = hasConfiguredMenuFields(normalized);
 	const hasTableName = String(normalized.table_name || "").trim().length > 0;
 	const hasLoadDbTrigger = String(normalized?.trigger?.load_db || "").trim().length > 0;
-	return hasTableName || hasLoadDbTrigger;
+	const normalizedPath = String(normalized.path || normalized.component || "").trim().toLowerCase();
+	const legacyFixedSystemGridPaths = new Set([
+		"/system/developer",
+		"/system/routers",
+		"/system/apps",
+		"/system/react-native",
+		"/routers",
+		"/apps",
+		"/react-native",
+	]);
+	const isLegacyFixedSystemGridMenu = hasTableName && legacyFixedSystemGridPaths.has(normalizedPath);
+
+	if (hasConfiguredFields) {
+		return hasTableName || hasLoadDbTrigger;
+	}
+
+	return isLegacyFixedSystemGridMenu;
 }
 
 export function isReportRuntimeMenu(menu: unknown): boolean {
