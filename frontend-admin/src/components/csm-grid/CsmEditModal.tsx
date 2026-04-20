@@ -132,9 +132,14 @@ async function ensureTableInDatabase(
     const existing = database[tableName];
     if (existing && (Array.isArray(existing) || (existing.rows && Array.isArray(existing.rows)))) {
       const rowCount = Array.isArray(existing) ? existing.length : existing.rows?.length || 0;
-      if (rowCount > 0) {
-        console.log(`✓ [AutoFetch] Table ${tableName} already in database (${rowCount} rows)`);
+      const storedAppId = Array.isArray(existing) ? "" : String(existing?.app_id || existing?.appId || "").trim();
+      const isMatchingApp = !storedAppId || storedAppId === appId;
+      if (rowCount > 0 && isMatchingApp) {
+        console.log(`✓ [AutoFetch] Table ${tableName} already in database (${rowCount} rows, app: ${storedAppId || "unknown"})`);
         return false; // Already have data
+      }
+      if (rowCount > 0 && !isMatchingApp) {
+        console.log(`🔄 [AutoFetch] Table ${tableName} exists for app ${storedAppId}, refetching for app ${appId}`);
       }
     }
   } else {
@@ -175,6 +180,7 @@ async function ensureTableInDatabase(
       database[tableName] = {
         rows,
         total: response?.total || rows.length,
+        app_id: appId,
       };
       globalTableFetchCache.delete(cacheKey);
       return rows;
@@ -183,7 +189,7 @@ async function ensureTableInDatabase(
       console.error(`❌ [AutoFetch] Failed to fetch ${tableName}:`, err);
       globalTableFetchCache.delete(cacheKey);
       // Set empty data để avoid repeated failures
-      database[tableName] = { rows: [], total: 0 };
+      database[tableName] = { rows: [], total: 0, app_id: appId };
       throw err;
     });
 
@@ -332,9 +338,11 @@ export function buildDetailGridSelectEnums(
             }
             
             const tableData = database[tableName];
+            const tableAppId = Array.isArray(tableData) ? "" : String((tableData as any)?.app_id || (tableData as any)?.appId || "").trim();
             const tableExists = tableData && (Array.isArray(tableData) || (tableData.rows && Array.isArray(tableData.rows)));
             const rowCount = tableExists ? (Array.isArray(tableData) ? tableData.length : tableData.rows?.length || 0) : 0;
-            const hasData = tableExists && rowCount > 0;
+            const hasMatchingAppData = !tableAppId || tableAppId === appId;
+            const hasData = tableExists && rowCount > 0 && hasMatchingAppData;
             
             // Build cache key to check if already fetching
             const whereSuffix = whereClause ? `::${JSON.stringify(whereClause)}` : '';
@@ -366,7 +374,7 @@ export function buildDetailGridSelectEnums(
                 return; // Skip, will have data on next render
               }
               
-              console.warn(`⚠️ [ComboQuery] Table "${tableName}" ${tableExists ? 'exists but empty' : 'not found'}. Auto-fetching...`);
+              console.warn(`⚠️ [ComboQuery] Table "${tableName}" ${tableExists ? `exists for app ${tableAppId || "unknown"} but is empty/mismatched` : 'not found'}. Auto-fetching...`);
               // Kick off fetch without where clause
               ensureTableInDatabase(tableName, appId, database).catch(err => {
                 console.error(`Failed to auto-fetch table ${tableName}:`, err);
