@@ -513,8 +513,8 @@
       lgCdC: "Chính (Đầu)",
       lgCdD: "Đảo (Đuôi)",
       lgCdPair: "Số Cặp (Đầu-Đuôi)",
-      lgGhTu: "Lấy Từ Vị Trí (1–60)",
-      lgGhDen: "Lấy Đến Vị Trí (1–60)",
+      lgGhTu: "Lấy Từ Vị Trí (1–93)",
+      lgGhDen: "Lấy Đến Vị Trí (1–93)",
       lgNgayChay: "Số Ngày Xét (0 = Tất Cả)",
       lgSlrOptions: "Tùy Chọn Thêm",
       lgTheoKy: "Theo Kỳ (Số ngày × 7)",
@@ -764,8 +764,8 @@
       lgCdC: "Main (Head)",
       lgCdD: "Reverse (Tail)",
       lgCdPair: "Pairs (Head-Tail)",
-      lgGhTu: "Rank From (1–60)",
-      lgGhDen: "Rank To (1–60)",
+      lgGhTu: "Rank From (1–93)",
+      lgGhDen: "Rank To (1–93)",
       lgNgayChay: "History Days (0 = All)",
       lgSlrOptions: "Extra Options",
       lgTheoKy: "By Period (Days × 7)",
@@ -1015,8 +1015,8 @@
       lgCdC: "正号（头）",
       lgCdD: "倒号（尾）",
       lgCdPair: "对子（头-尾）",
-      lgGhTu: "排名起始（1–60）",
-      lgGhDen: "排名截止（1–60）",
+      lgGhTu: "排名起始（1–93）",
+      lgGhDen: "排名截止（1–93）",
       lgNgayChay: "历史天数（0 = 全部）",
       lgSlrOptions: "附加选项",
       lgTheoKy: "按期（天数 × 7）",
@@ -2722,9 +2722,9 @@
     var _slr_autoSummary = useState(""), legacySlrAutoSummary = _slr_autoSummary[0], setLegacySlrAutoSummary = _slr_autoSummary[1];
     var _slr_autoDebugLogs = useState([]), legacySlrAutoDebugLogs = _slr_autoDebugLogs[0], setLegacySlrAutoDebugLogs = _slr_autoDebugLogs[1];
     // --- SLR Auto-run custom conditions ---
-    var _slr_autoSttRange = useState(4), legacySlrAutoSttRange = _slr_autoSttRange[0], setLegacySlrAutoSttRange = _slr_autoSttRange[1];
-    var _slr_autoNoHitDays = useState(14), legacySlrAutoNoHitDays = _slr_autoNoHitDays[0], setLegacySlrAutoNoHitDays = _slr_autoNoHitDays[1];
-    var _slr_autoNamWeeks = useState(2), legacySlrAutoNamWeeks = _slr_autoNamWeeks[0], setLegacySlrAutoNamWeeks = _slr_autoNamWeeks[1];
+    var _slr_autoSttRange = useState(5), legacySlrAutoSttRange = _slr_autoSttRange[0], setLegacySlrAutoSttRange = _slr_autoSttRange[1];
+    var _slr_autoNoHitDays = useState(17), legacySlrAutoNoHitDays = _slr_autoNoHitDays[0], setLegacySlrAutoNoHitDays = _slr_autoNoHitDays[1];
+    var _slr_autoNamWeeks = useState(5), legacySlrAutoNamWeeks = _slr_autoNamWeeks[0], setLegacySlrAutoNamWeeks = _slr_autoNamWeeks[1];
 
     // --- SLR Auto-filtered rows (kept for display binding) ---
     var legacySlrAutoFilteredRows = useMemo(function () {
@@ -2959,9 +2959,9 @@
             var resultRows = [];
             var dataByQuery = {};
 
-            var sttWindowSize = Math.max(1, Number(legacySlrAutoSttRange || 4));
-            var noHitDays = Math.max(1, Number(legacySlrAutoNoHitDays || 14));
-            var tongNamWeeks = Math.max(1, Number(legacySlrAutoNamWeeks || 2));
+            var sttWindowSize = Math.max(1, Number(legacySlrAutoSttRange || 5));
+            var noHitDays = Math.max(1, Number(legacySlrAutoNoHitDays || 17));
+            var tongNamWeeks = Math.max(1, Number(legacySlrAutoNamWeeks || 5));
             var modeNow = String(legacyCdMode || "C_D").toUpperCase();
             pushAutoLog("Tham số: LoạiTìm=" + selectedQueryValues.length + ", STTWindow=" + sttWindowSize + ", NoHitDays=" + noHitDays + ", NamNoHitWeeks=" + tongNamWeeks + ", Mode=" + modeNow);
 
@@ -9943,8 +9943,8 @@
           return h("div", { style: { fontSize: 11, whiteSpace: "pre", lineHeight: "1.4" } }, buildLegacyThResultText(rec));
         }
       },
-      { title: "Tổng 21 tuần", dataIndex: "lanTuan21", key: "lanTuan21", width: 92, sorter: legacyTongHopNumberSorter("lanTuan21") },
-      { title: "Ngày CX", dataIndex: "ngayCXHT", key: "ngayCXHT", width: 60, sorter: legacyTongHopNumberSorter("ngayCXHT"), defaultSortOrder: "descend",
+      { title: "Tổng 21 tuần", dataIndex: "lanTuan21", key: "lanTuan21", width: 92, sorter: legacyTongHopNumberSorter("lanTuan21"), defaultSortOrder: "ascend" },
+      { title: "Ngày CX", dataIndex: "ngayCXHT", key: "ngayCXHT", width: 60, sorter: legacyTongHopNumberSorter("ngayCXHT"),
         render: function (v, rec) {
           var over = rec.lauNgay > 0 && v >= rec.lauNgay;
           return h("span", { style: { color: over ? theme.error : theme.text, fontWeight: over ? "bold" : "normal" } }, v);
@@ -11569,11 +11569,11 @@
                               ]),
                               h(Col, { xs: 12, md: 5, key: "slrnb_from_rank" }, [
                                 h("div", { style: { marginBottom: 6, fontWeight: 600 } }, tt.lgGhTu),
-                                h(InputNumber, themedNumberProps({ value: legacyRankFrom, min: 1, max: 60, onChange: function (v) { setLegacyRankFrom(toNumberSafe(v, 1)); } }))
+                                h(InputNumber, themedNumberProps({ value: legacyRankFrom, min: 1, max: 93, onChange: function (v) { setLegacyRankFrom(toNumberSafe(v, 1)); } }))
                               ]),
                               h(Col, { xs: 12, md: 5, key: "slrnb_to_rank" }, [
                                 h("div", { style: { marginBottom: 6, fontWeight: 600 } }, tt.lgGhDen),
-                                h(InputNumber, themedNumberProps({ value: legacyRankTo, min: 1, max: 60, onChange: function (v) { setLegacyRankTo(toNumberSafe(v, 20)); } }))
+                                h(InputNumber, themedNumberProps({ value: legacyRankTo, min: 1, max: 93, onChange: function (v) { setLegacyRankTo(toNumberSafe(v, 20)); } }))
                               ]),
                               h(Col, { xs: 12, md: 6, key: "slrnb_ngay" }, [
                                 h("div", { style: { marginBottom: 6, fontWeight: 600 } }, tt.lgNgayChay),
