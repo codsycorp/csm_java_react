@@ -9,6 +9,8 @@ import { toPermissionBigInt, isSuperPermissionProfile } from "#src/utils/permiss
 
 import { getTableData, updateTableData } from "#src/components/csm-grid/CsmApi";
 import { csmEncrypt, csmDecrypt } from "#src/components/csm-grid/CsmCrypto";
+import { normalizeMenuRuntimeConfig } from "#src/components/csm-crm/crm-config";
+import { fetchNavigationMenus } from "#src/api/system/menu";
 
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -272,14 +274,43 @@ export function useMenu() {
 		const withPreservedIds = preserveMenuIds(result);
 		const finalResult = processMenuChildrenVisibility(withPreservedIds);
 		const menuDataMap = new Map<string, any>();
+		const usedMenuKeys = new Set<string>();
+		const makeUniqueMenuKey = (item: any): string => {
+			const baseKey = String(item?.key || item?.path || item?.id || "").trim();
+			const menuId = String(item?.menuId || item?.id || "").trim();
+			if (!baseKey) {
+				const fallback = menuId || `menu_${usedMenuKeys.size + 1}`;
+				usedMenuKeys.add(fallback);
+				return fallback;
+			}
+			if (!usedMenuKeys.has(baseKey)) {
+				usedMenuKeys.add(baseKey);
+				return baseKey;
+			}
+			if (menuId) {
+				const byId = `${baseKey}__${menuId}`;
+				if (!usedMenuKeys.has(byId)) {
+					usedMenuKeys.add(byId);
+					return byId;
+				}
+			}
+			let i = 2;
+			let candidate = `${baseKey}__${i}`;
+			while (usedMenuKeys.has(candidate)) {
+				i += 1;
+				candidate = `${baseKey}__${i}`;
+			}
+			usedMenuKeys.add(candidate);
+			return candidate;
+		};
 		const cleanupMenuItems = (items: any[]): any[] => {
 			return items.map(item => {
-				menuDataMap.set(item.key, item);
+				const uniqueKey = makeUniqueMenuKey(item);
+				menuDataMap.set(uniqueKey, item);
 				const cleaned: any = {
-					key: item.key,
+					key: uniqueKey,
 					label: item.label,
 					id: item.id,
-					menuId: item.menuId || item.id,
 					path: item.path,
 					type_form: item.type_form,
 					table_name: item.table_name,
@@ -401,7 +432,7 @@ export function useMenu() {
 	/**
 	 * 菜单点击事件处理
 	 */
-	const handleMenuSelect = (key: string, mode: MenuProps["mode"]) => {
+	const handleMenuSelect = async (key: string, mode: MenuProps["mode"]) => {
 		// Home: luôn dùng 'homepage' làm key
 		// SPA: Nếu là các route tĩnh hệ thống thì luôn mở tab
 		const staticTabRoutes: Record<string, string> = {
@@ -414,10 +445,8 @@ export function useMenu() {
 			"/system/developer": t("common.menu.developer"),
 			"/system/broadcast": t("common.menu.broadcast"),
 			"/about": t("common.menu.about"),
-			"/route-nest/menu1": "Menu 1",
-			"/route-nest/menu1/menu1-1": "Menu 1-1",
-			"/route-nest/menu1/menu1-2": "Menu 1-2",
-			"/route-nest/menu2": "Menu 2",
+			// KHÔNG map cứng route-nest ở đây để tránh chặn các menu động app csm
+			// (ví dụ: Điều Hướng Trang / Chương Trình / React Native) khỏi luồng runtime grid/report
 			"homepage": t("common.menu.home"),
 		};
 		if (staticTabRoutes[key]) {
@@ -499,6 +528,197 @@ export function useMenu() {
 			   return null;
 		   };
 
+		   const hasRuntimePayloadMenu = (menu: any): boolean => {
+			   const normalized = normalizeMenuRuntimeConfig(menu || {});
+			   return !!(
+				   normalized && (
+					   normalized.table_name
+					   || normalized.report_name
+					   || normalized.auto_code_name
+					   || normalized.auto_code
+					   || normalized.kanban_config
+					   || normalized?.trigger?.load_db
+					   || normalized?.trigger?.report_db
+					   || Number(normalized.type_form) === 4
+					   || Number(normalized.type_form) === 6
+				   )
+			   );
+		   };
+
+		   const getParentId = (item: any): string => {
+			   return String(item?.parentId || item?.parent_id || "").trim();
+		   };
+
+		   const findRuntimeDescendantByParentId = (rows: any[], parentId: string): any => {
+			   const normalizedParentId = String(parentId || "").trim();
+			   if (!normalizedParentId || !Array.isArray(rows) || rows.length === 0) return null;
+
+			   const queue = rows
+				   .filter((item: any) => getParentId(item) === normalizedParentId)
+				   .map((item: any) => normalizeMenuRuntimeConfig(item));
+
+			   while (queue.length > 0) {
+				   const node = queue.shift();
+				   if (!node) continue;
+				   if (hasRuntimePayloadMenu(node)) {
+					   return node;
+				   }
+				   const nodeId = String(node?.id || "").trim();
+				   if (!nodeId) continue;
+				   const children = rows
+					   .filter((item: any) => getParentId(item) === nodeId)
+					   .map((item: any) => normalizeMenuRuntimeConfig(item));
+				   if (children.length > 0) {
+					   queue.push(...children);
+				   }
+			   }
+
+			   return null;
+		   };
+
+		   const fetchRuntimeDescendantFromServer = async (parentMenuId: string): Promise<any | null> => {
+			   const normalizedParentId = String(parentMenuId || "").trim();
+			   if (!normalizedParentId) return null;
+
+			   const appCandidates = Array.from(new Set([
+				   String(appId || "").trim(),
+				   "csm",
+			   ].filter(Boolean)));
+
+			   const flattenTreeWithParent = (menus: any[]): any[] => {
+				   const result: any[] = [];
+				   const queue: Array<{ node: any; parentId: string }> = (menus || []).map((node: any) => ({
+					   node,
+					   parentId: "",
+				   }));
+				   while (queue.length > 0) {
+					   const current = queue.shift();
+					   if (!current?.node) continue;
+					   const node = normalizeMenuRuntimeConfig(current.node);
+					   const normalizedNode = {
+						   ...node,
+						   parentId: getParentId(node) || current.parentId,
+					   };
+					   result.push(normalizedNode);
+					   const nodeId = String(normalizedNode?.id || "").trim();
+					   const children = [
+						   ...(Array.isArray(node?.children) ? node.children : []),
+						   ...(Array.isArray(node?.nodes) ? node.nodes : []),
+					   ];
+					   if (children.length > 0) {
+						   queue.push(...children.map((child: any) => ({ node: child, parentId: nodeId })));
+					   }
+				   }
+				   return result;
+			   };
+
+			   const findRuntimeInTreeFromNode = (rootNode: any): any => {
+				   if (!rootNode) return null;
+				   const queue = [normalizeMenuRuntimeConfig(rootNode)];
+				   while (queue.length > 0) {
+					   const node = queue.shift();
+					   if (!node) continue;
+					   if (hasRuntimePayloadMenu(node)) {
+						   return node;
+					   }
+					   const children = [
+						   ...(Array.isArray(node?.children) ? node.children : []),
+						   ...(Array.isArray(node?.nodes) ? node.nodes : []),
+					   ].map((item: any) => normalizeMenuRuntimeConfig(item));
+					   if (children.length > 0) {
+						   queue.push(...children);
+					   }
+				   }
+				   return null;
+			   };
+
+			   for (const candidateAppId of appCandidates) {
+				   try {
+					   const navigationMenus = await fetchNavigationMenus(candidateAppId);
+					   const navList = (navigationMenus as any)?.result?.list || [];
+					   const navRows = flattenTreeWithParent(navList);
+					   if (Array.isArray(navRows) && navRows.length > 0) {
+						   const direct = navRows.find((item: any) => String(item?.id || "") === normalizedParentId) || null;
+						   if (direct && hasRuntimePayloadMenu(direct)) {
+							   return direct;
+						   }
+						   const runtimeFromTree = findRuntimeInTreeFromNode(direct);
+						   if (runtimeFromTree) return runtimeFromTree;
+						   const runtimeFromNav = findRuntimeDescendantByParentId(navRows, normalizedParentId);
+						   if (runtimeFromNav) return runtimeFromNav;
+					   }
+				   }
+				   catch {
+					   // continue to table fallback
+				   }
+
+				   for (const menuObjName of ["menu", "csm_menu"]) {
+					   try {
+						   const menuRowsRes = await getTableData<any>({
+							   app_id: candidateAppId,
+							   obj_name: menuObjName,
+							   take: 5000,
+						   });
+						   const rows = (menuRowsRes as any)?.rows || [];
+						   const runtimeChild = findRuntimeDescendantByParentId(rows, normalizedParentId);
+						   if (runtimeChild) return runtimeChild;
+					   }
+					   catch {
+						   // try next source
+					   }
+				   }
+			   }
+
+			   return null;
+		   };
+
+		   const flattenMenuTree = (menus: any[]): any[] => {
+			   const result: any[] = [];
+			   const queue = [...(menus || [])];
+			   while (queue.length > 0) {
+				   const node = queue.shift();
+				   if (!node) continue;
+				   result.push(node);
+				   if (Array.isArray(node.children) && node.children.length > 0) {
+					   queue.push(...node.children);
+				   }
+				   if (Array.isArray(node.nodes) && node.nodes.length > 0) {
+					   queue.push(...node.nodes);
+				   }
+			   }
+			   return result;
+		   };
+
+		   const findFirstRuntimeDescendant = (menu: any): any => {
+			   const queue = [
+				   ...(Array.isArray(menu?.children) ? menu.children : []),
+				   ...(Array.isArray(menu?.nodes) ? menu.nodes : []),
+			   ];
+			   while (queue.length > 0) {
+				   const node = queue.shift();
+				   if (!node) continue;
+				   if (hasRuntimePayloadMenu(node)) {
+					   return node;
+				   }
+				   if (Array.isArray(node.children) && node.children.length > 0) {
+					   queue.push(...node.children);
+				   }
+				   if (Array.isArray(node.nodes) && node.nodes.length > 0) {
+					   queue.push(...node.nodes);
+				   }
+			   }
+			   return null;
+		   };
+
+		   const allApiMenus = flattenMenuTree(apiWholeMenus || []);
+		   const findFirstRuntimeByParentId = (parentId: string): any => {
+			   const normalizedParentId = String(parentId || "").trim();
+			   if (!normalizedParentId) return null;
+			   return allApiMenus.find((item: any) => {
+				   return getParentId(item) === normalizedParentId && hasRuntimePayloadMenu(item);
+			   }) || null;
+		   };
+
 		   let selectedApiMenu = (
 			   findMenuInTree(apiWholeMenus, String(menuIdToSearch || ""), normalizedKey)
 			   || (legacyMenuIdFromKey ? findMenuInTree(apiWholeMenus, legacyMenuIdFromKey, normalizedKey) : null)
@@ -508,75 +728,59 @@ export function useMenu() {
 			   selectedApiMenu = selectedProcessedMenu;
 		   }
 
-		   // Fallback menu hệ thống: chỉ áp dụng cho nhóm path legacy cần ép m_configs.
-		   // Không apply toàn bộ /system/* để tránh ghi đè các submenu hệ thống có config riêng từ API.
-		   const legacySystemFallbackPaths = new Set([
-			   "/system/user",
-			   "/system/dept",
-			   "/system/departments",
-			   "/system/branches",
-			   "/system/role",
-			   "/system/roles",
-		   ]);
-		   if (legacySystemFallbackPaths.has(normalizedKey)) {
-			   const userState = useUserStore.getState();
-			   const isDev = resolveDevFlag(userState.dev, userState.roles);
-			   const systemMenuFallbacks: Record<string, { label: string; table_name: string; type_form: number }> = {
-				   "/system/user": { label: t("common.menu.user"), table_name: isDev ? "csm_accounts" : "csm_group_members", type_form: 1 },
-				   "/system/dept": { label: t("common.menu.permissionGroup"), table_name: "csm_roles", type_form: 1 },
-				   "/system/role": { label: t("common.menu.permissionGroup"), table_name: "csm_roles", type_form: 1 },
-				   "/system/roles": { label: t("common.menu.permissionGroup"), table_name: "csm_roles", type_form: 1 },
-				   "/system/departments": { label: t("common.menu.dept"), table_name: "csm_depts", type_form: 1 },
-				   "/system/branches": { label: t("common.menu.branch"), table_name: "csm_branches", type_form: 1 }
-			   };
-			   const fallback = systemMenuFallbacks[normalizedKey] || {
-				   label: normalizedKey.replace("/system/", "System: "),
-				   table_name: "",
-				   type_form: 1,
-			   };
-			   let finalMenuData = selectedApiMenu;
-			   if (!finalMenuData) {
-				   finalMenuData = {
-					   key: normalizedKey,
-					   label: fallback.label,
-					   table_name: fallback.table_name,
-					   type_form: fallback.type_form,
-					   id: normalizedKey,
-				   };
-			   } else {
-				   if (!finalMenuData.table_name) finalMenuData.table_name = fallback.table_name;
-				   if (!finalMenuData.type_form) finalMenuData.type_form = fallback.type_form;
-				   if (!finalMenuData.label) finalMenuData.label = fallback.label;
+		   const selectedMenuPath = String(selectedApiMenu?.path || selectedApiMenu?.component || normalizedKey || "").trim();
+		   const isRootExternalMenu = !!(
+			   selectedApiMenu
+			   && !getParentId(selectedApiMenu)
+			   && selectedMenuPath.startsWith("/")
+			   && !selectedMenuPath.startsWith("/system/")
+		   );
+
+		   // Root menu ngoài hệ thống phải resolve đến menu runtime con trước khi mở tab.
+		   // Không được phép mở /system/grid bằng id menu cha.
+		   if (isRootExternalMenu) {
+			   const rootMenuId = String(
+				   selectedApiMenu?.id
+				   || selectedApiMenu?.menuId
+				   || selectedProcessedMenu?.id
+				   || selectedProcessedMenu?.menuId
+				   || menuIdToSearch
+				   || ""
+			   ).trim();
+			   const runtimeFromServer = await fetchRuntimeDescendantFromServer(rootMenuId);
+			   if (runtimeFromServer) {
+				   selectedApiMenu = runtimeFromServer;
 			   }
-			   // addTab với path gốc (normalizedKey) + menuData đầy đủ
-			   // LayoutContent sẽ merge tab + route và patchDynamicRoutesWithComponent trả về đúng component
-			   // AdminPage đọc activeTab?.menuData từ Zustand để lấy table_name, type_form
-			   addTab(normalizedKey, {
-				   key: normalizedKey,
-				   label: finalMenuData.label || fallback.label,
+		   }
+
+		   const fixedSystemComponentPaths = new Set([
+			   "/system/user",
+			   "/system/menu",
+			   "/system/developer",
+			   "/system/broadcast",
+		   ]);
+		   const selectedServerPath = String(
+			   selectedApiMenu?.path
+			   || selectedApiMenu?.component
+			   || normalizedKey
+			   || ""
+		   ).trim();
+
+		   // Với các trang hệ thống có component cố định, luôn mở đúng path tĩnh.
+		   if (selectedApiMenu && fixedSystemComponentPaths.has(selectedServerPath)) {
+			   addTab(selectedServerPath, {
+				   key: selectedServerPath,
+				   label: String(selectedApiMenu.label || selectedApiMenu.title || selectedProcessedMenu?.label || selectedServerPath).replace(/^.*?\.\s+/, '').trim(),
 				   closable: true,
 				   draggable: true,
-				   menuData: finalMenuData,
-				   table_name: finalMenuData.table_name,
-				   type_form: finalMenuData.type_form,
+				   menuData: selectedApiMenu,
+				   m_configs: selectedApiMenu,
 			   });
-			   setActiveKey(normalizedKey);
+			   setActiveKey(selectedServerPath);
 			   return;
 		   }
 
-		   const hasRuntimePayload = !!(
-			   selectedApiMenu && (
-				   selectedApiMenu.table_name
-				   || selectedApiMenu.report_name
-				   || selectedApiMenu.auto_code_name
-				   || selectedApiMenu.auto_code
-				   || selectedApiMenu.kanban_config
-				   || selectedApiMenu?.trigger?.load_db
-				   || selectedApiMenu?.trigger?.report_db
-				   || Number(selectedApiMenu.type_form) === 4
-				   || Number(selectedApiMenu.type_form) === 6
-			   )
-		   );
+		   const hasRuntimePayload = hasRuntimePayloadMenu(selectedApiMenu);
 
 		   if (selectedApiMenu && hasRuntimePayload) {
 			   const runtimeMenuId = String(selectedApiMenu.id || selectedApiMenu.key || selectedProcessedMenu?.menuId || selectedProcessedMenu?.id || menuIdToSearch || menuIdSegmentFromKey || "").trim();
@@ -598,6 +802,151 @@ export function useMenu() {
 					   kanban_config: selectedApiMenu.kanban_config,
 					   auto_code_name: selectedApiMenu.auto_code_name,
 					   auto_code: selectedApiMenu.auto_code,
+				   });
+				   setActiveKey(dynamicPath);
+				   return;
+			   }
+		   }
+
+		   const legacySystemFallbackPaths = new Set([
+			   "/system/user",
+			   "/system/dept",
+			   "/system/departments",
+			   "/system/branches",
+			   "/system/role",
+			   "/system/roles",
+			   "/system/routers",
+			   "/system/apps",
+			   "/system/react-native",
+		   ]);
+		   if (selectedApiMenu && !hasRuntimePayload && legacySystemFallbackPaths.has(selectedServerPath)) {
+			   const userState = useUserStore.getState();
+			   const isDevUser = resolveDevFlag(userState.dev, userState.roles);
+			   const systemMenuFallbacks: Record<string, { label: string; table_name: string; type_form: number }> = {
+				   "/system/user": { label: t("common.menu.user"), table_name: isDevUser ? "csm_accounts" : "csm_group_members", type_form: 1 },
+				   "/system/dept": { label: t("common.menu.permissionGroup"), table_name: "csm_roles", type_form: 1 },
+				   "/system/role": { label: t("common.menu.permissionGroup"), table_name: "csm_roles", type_form: 1 },
+				   "/system/roles": { label: t("common.menu.permissionGroup"), table_name: "csm_roles", type_form: 1 },
+				   "/system/departments": { label: t("common.menu.dept"), table_name: "csm_depts", type_form: 1 },
+				   "/system/branches": { label: t("common.menu.branch"), table_name: "csm_branches", type_form: 1 },
+				   "/system/routers": { label: t("common.menu.routers"), table_name: "sys_la_routers", type_form: 1 },
+				   "/system/apps": { label: t("common.menu.apps"), table_name: "sys_apps", type_form: 1 },
+				   "/system/react-native": { label: t("common.menu.reactNative"), table_name: "sys_reactnative", type_form: 1 },
+			   };
+			   const fallback = systemMenuFallbacks[selectedServerPath] || {
+				   label: selectedServerPath.replace("/system/", "System: "),
+				   table_name: "",
+				   type_form: 1,
+			   };
+			   const finalMenuData = {
+				   ...selectedApiMenu,
+				   label: selectedApiMenu.label || fallback.label,
+				   table_name: selectedApiMenu.table_name || fallback.table_name,
+				   app_id: selectedApiMenu.app_id || "csm",
+				   type_form: selectedApiMenu.type_form || fallback.type_form,
+			   };
+			   addTab(selectedServerPath, {
+				   key: selectedServerPath,
+				   label: String(finalMenuData.label || fallback.label),
+				   closable: true,
+				   draggable: true,
+				   menuData: finalMenuData,
+				   m_configs: finalMenuData,
+				   type_form: finalMenuData.type_form,
+				   table_name: finalMenuData.table_name,
+			   });
+			   setActiveKey(selectedServerPath);
+			   return;
+		   }
+
+		   if (selectedApiMenu && !hasRuntimePayload) {
+			   const selectedMenuId = String(
+				   selectedApiMenu.id
+				   || selectedApiMenu.menuId
+				   || selectedProcessedMenu?.menuId
+				   || selectedProcessedMenu?.id
+				   || menuIdToSearch
+				   || ""
+			   ).trim();
+			   const runtimeDescendant = findFirstRuntimeDescendant(selectedApiMenu)
+				   || findFirstRuntimeByParentId(selectedMenuId)
+				   || await fetchRuntimeDescendantFromServer(selectedMenuId);
+			   if (runtimeDescendant) {
+				   const runtimeMenuId = String(runtimeDescendant.id || runtimeDescendant.key || "").trim();
+				   if (runtimeMenuId) {
+					   const dynamicPath = `/system/grid/${runtimeMenuId}`;
+					   const dynamicLabel = runtimeDescendant.label || runtimeDescendant.title || selectedApiMenu.label || selectedProcessedMenu?.label || "Dynamic Menu";
+					   useUserStore.getState().setSelectedMenuIdForTab(runtimeMenuId);
+					   addTab(dynamicPath, {
+						   key: dynamicPath,
+						   label: String(dynamicLabel).replace(/^.*?\.\s+/, '').trim(),
+						   closable: true,
+						   draggable: true,
+						   menuId: runtimeMenuId,
+						   menuData: runtimeDescendant,
+						   m_configs: runtimeDescendant,
+						   type_form: runtimeDescendant.type_form,
+						   table_name: runtimeDescendant.table_name,
+						   report_name: runtimeDescendant.report_name,
+						   kanban_config: runtimeDescendant.kanban_config,
+						   auto_code_name: runtimeDescendant.auto_code_name,
+						   auto_code: runtimeDescendant.auto_code,
+					   });
+					   setActiveKey(dynamicPath);
+					   return;
+				   }
+			   }
+		   }
+
+		   // Menu không có payload runtime: điều hướng theo path/component trả về từ server
+		   // để đảm bảo chạy đúng component route động, không ép về /system/grid/:menuId.
+		   const isRootExternalContainerMenu = !!(
+			   selectedApiMenu
+			   && !hasRuntimePayload
+			   && Number(selectedApiMenu.type_form) !== 3
+			   && !getParentId(selectedApiMenu)
+			   && selectedServerPath.startsWith("/")
+			   && !selectedServerPath.startsWith("/system/")
+		   );
+
+		   if (selectedApiMenu && !hasRuntimePayload && Number(selectedApiMenu.type_form) !== 3 && !isRootExternalContainerMenu) {
+			   const serverRoutePath = selectedServerPath;
+			   if (serverRoutePath && serverRoutePath.startsWith("/")) {
+				   addTab(serverRoutePath, {
+					   key: serverRoutePath,
+					   label: String(selectedApiMenu.label || selectedApiMenu.title || selectedProcessedMenu?.label || serverRoutePath).replace(/^.*?\.\s+/, '').trim(),
+					   closable: true,
+					   draggable: true,
+					   menuData: selectedApiMenu,
+					   m_configs: selectedApiMenu,
+				   });
+				   setActiveKey(serverRoutePath);
+				   return;
+			   }
+		   }
+
+
+		   // Fallback cuối: menu không payload và không có path/component hợp lệ
+		   // mới ép sang /system/grid/:menuId theo chính id của menu đang chọn.
+		   if (selectedApiMenu) {
+			   const selectedMenuId = String(
+				   selectedApiMenu.id
+				   || selectedApiMenu.menuId
+				   || selectedProcessedMenu?.menuId
+				   || selectedProcessedMenu?.id
+				   || menuIdToSearch
+				   || ""
+			   ).trim();
+			   if (selectedMenuId && !selectedMenuId.startsWith("/")) {
+				   const dynamicPath = `/system/grid/${selectedMenuId}`;
+				   const dynamicLabel = selectedApiMenu.label || selectedApiMenu.title || selectedProcessedMenu?.label || "Dynamic Menu";
+				   useUserStore.getState().setSelectedMenuIdForTab(selectedMenuId);
+				   addTab(dynamicPath, {
+					   key: dynamicPath,
+					   label: String(dynamicLabel).replace(/^.*?\.\s+/, '').trim(),
+					   closable: true,
+					   draggable: true,
+					   menuId: selectedMenuId,
 				   });
 				   setActiveKey(dynamicPath);
 				   return;

@@ -281,6 +281,37 @@ function buildTagField(
 	} as any;
 }
 
+const SYSTEM_USER_FIELD_WIDTHS: Record<string, number> = {
+	id: 90,
+	username: 180,
+	login_identifier: 220,
+	email: 220,
+	phoneNumber: 150,
+	full_name: 200,
+	group_id: 190,
+	permissionGroups: 210,
+	permissionsAdd: 260,
+	permissionsDeny: 260,
+	menusPermissionsAdd: 280,
+	menusPermissionsDeny: 280,
+	dataScope: 170,
+	actived: 110,
+	pass: 140,
+	dev: 110,
+};
+
+const SYSTEM_USER_FIELD_LABELS_3L: Record<string, { vi: string; en: string; zh: string }> = {
+	permissionGroups: { vi: "Nhóm quyền", en: "Permission Group", zh: "权限组" },
+	permissionsAdd: { vi: "Quyền thêm", en: "Allow Actions", zh: "附加操作" },
+	permissionsDeny: { vi: "Quyền chặn", en: "Deny Actions", zh: "禁用操作" },
+	menusPermissionsAdd: { vi: "Menu thêm", en: "Allow Menus", zh: "附加菜单" },
+	menusPermissionsDeny: { vi: "Menu chặn", en: "Deny Menus", zh: "禁用菜单" },
+	dataScope: { vi: "Phạm vi", en: "Data Scope", zh: "数据范围" },
+	group_id: { vi: "Nhóm", en: "Group", zh: "分组" },
+	login_identifier: { vi: "Đăng nhập", en: "Login ID", zh: "登录标识" },
+	actived: { vi: "Kích hoạt", en: "Active", zh: "启用" },
+};
+
 export const SYSTEM_ACCOUNT_DEFAULT_FIELDS: TableField[] = [
 	{ f_name: "id", f_header: "ID", f_show: 1, f_types: "number", f_align: "right" },
 	{ f_name: "parent_account_id", f_header: "common.parentAccountId", f_show: 0, f_types: "string_ro", f_align: "left" },
@@ -1710,9 +1741,16 @@ export function mergeMenuTableFields(
 		...field,
 		f_types: treeFieldNames.has(String(field?.f_name || "")) ? "menu_tree" : field?.f_types,
 		f_header: translateLabel(field?.f_header),
-		f_header_vi: String(field?.f_header_vi || "").trim() || translateLabelByLang(field?.f_header, "vi"),
-		f_header_en: String(field?.f_header_en || "").trim() || translateLabelByLang(field?.f_header, "en"),
-		f_header_zh: String(field?.f_header_zh || "").trim() || translateLabelByLang(field?.f_header, "zh"),
+		f_header_vi: SYSTEM_USER_FIELD_LABELS_3L[String(field?.f_name || "")]?.vi
+			|| String(field?.f_header_vi || "").trim()
+			|| translateLabelByLang(field?.f_header, "vi"),
+		f_header_en: SYSTEM_USER_FIELD_LABELS_3L[String(field?.f_name || "")]?.en
+			|| String(field?.f_header_en || "").trim()
+			|| translateLabelByLang(field?.f_header, "en"),
+		f_header_zh: SYSTEM_USER_FIELD_LABELS_3L[String(field?.f_name || "")]?.zh
+			|| String(field?.f_header_zh || "").trim()
+			|| translateLabelByLang(field?.f_header, "zh"),
+		f_width: Math.max(Number(field?.f_width || 0), Number(SYSTEM_USER_FIELD_WIDTHS[String(field?.f_name || "")] || 0)) || field?.f_width,
 		f_options: Array.isArray(field?.f_options)
 			? field.f_options.map((opt: any) => ({
 				...opt,

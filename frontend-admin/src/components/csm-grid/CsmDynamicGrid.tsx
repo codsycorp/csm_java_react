@@ -265,11 +265,12 @@ function isJsonType(types: string): boolean {
 }
 
 function isCodeLikeType(types: string): boolean {
-	return /(^|[\s,;|_:-])code([\s,;|_:-]|$)|codejs|codejava|codehtml|codesql|codexml|codepython/.test(types);
+	return /(^|[\s,;|_:-])code([\s,;|_:-]|$)|codejs|codejava|codehtml|codesql|codexml|codepython|editor/.test(types);
 }
 
 function resolveEffectiveFieldTypes(field: Partial<TableField> | Record<string, any> | null | undefined): string {
 	const explicit = String(field?.f_types ?? (field as any)?.f_type ?? "").trim().toLowerCase();
+	if (explicit === "editor") return "codejs";
 	if (explicit && explicit !== "string" && explicit !== "ed") return explicit;
 
 	const fieldName = String(field?.f_name ?? "").trim().toLowerCase();
@@ -1027,6 +1028,8 @@ export function CsmDynamicGrid({
 	const [editingRecord, setEditingRecord] = useState<Row | null>(null);
 	const [cloneData, setCloneData] = useState<Row | null>(null);
 	const submitInFlightRef = useRef(false);
+	const actionClickGuardRef = useRef(false);
+	const [rowActionBusy, setRowActionBusy] = useState(false);
 	const [searchTerm, setSearchTerm] = useState("");
 	const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
 	
@@ -1063,6 +1066,11 @@ export function CsmDynamicGrid({
 		if (menuScope === "NONE") return userScope;
 		return minScope(menuScope, userScope);
 	}, [isDev, dataScope, m_configs]);
+	const isRowActionLocked = rowActionBusy
+		|| submitInFlightRef.current
+		|| editorOpen
+		|| editableKeys.length > 0
+		|| Boolean(pendingEditableRowId);
 	// Helpers
 	const tableName = (m_configs.table_name || "").split(",")[0];
 	const hasTableName = Boolean(tableName);
@@ -1217,14 +1225,30 @@ export function CsmDynamicGrid({
 	): Promise<boolean> => {
 		// Default app scope follows logged-in user, except 2 user tables always in csm
 		const effectiveAppId = resolveQueryAppIdByTable(tableName, queryAppId);
+		const hasUsableWhere = Boolean(
+			whereClause
+			&& (
+				(typeof whereClause === "string" && whereClause.trim())
+				|| (typeof whereClause === "object" && (
+					(whereClause.field && whereClause.type)
+					|| (whereClause.operator && Array.isArray(whereClause.conditions))
+				))
+			)
+		);
+		const effectiveWhereClause = hasUsableWhere
+			? whereClause
+			: { field: "id", type: "like", value: "" };
+		if (!hasUsableWhere) {
+			console.log(`🔎 [AutoFetch] Using default where for ${tableName}:`, effectiveWhereClause);
+		}
 		
 		// Include where clause in cache key to handle different filters on same table
-		const whereSuffix = whereClause ? `::${JSON.stringify(whereClause)}` : '';
+		const whereSuffix = effectiveWhereClause ? `::${JSON.stringify(effectiveWhereClause)}` : '';
 		const cacheKey = `${effectiveAppId}::${tableName}${whereSuffix}`;
 		
 		// ✅ IMPORTANT: If whereClause exists, ALWAYS fetch (API requires obj_where to return data)
 		// Don't check existing data because previous fetch might have different/no where clause
-		if (!whereClause) {
+		if (!hasUsableWhere) {
 			// Only check existing data if no where clause
 			const existing = database[tableName];
 			if (existing && (Array.isArray(existing) || (existing.rows && Array.isArray(existing.rows)))) {
@@ -1253,33 +1277,37 @@ export function CsmDynamicGrid({
 		}
 
 		// Start fetching
-		console.log(`🔄 [AutoFetch] Fetching missing table: ${tableName} (app: ${effectiveAppId})`, whereClause ? `with where:` : '', whereClause);
+		console.log(`🔄 [AutoFetch] Fetching missing table: ${tableName} (app: ${effectiveAppId})`, `with where:`, effectiveWhereClause);
 		
 		// Build request params - include where if provided
 		const requestParams: any = {
 			app_id: effectiveAppId,
 			obj_name: tableName,
+			where: effectiveWhereClause,
 		};
-		if (whereClause) {
-			requestParams.where = whereClause;
-		}
 		
 		const fetchPromise = getTableData<any>(requestParams)
 			.then((response) => {
-				const rows = response?.rows || [];
-				console.log(`✅ [AutoFetch] Fetched ${tableName}: ${rows.length} rows`, rows.slice(0, 3));
+				const normalizedRows = (() => {
+					if (Array.isArray(response?.rows)) return response.rows;
+					if (Array.isArray(response?.data)) return response.data;
+					if (Array.isArray((response as any)?.data?.rows)) return (response as any).data.rows;
+					if (Array.isArray((response as any)?.result?.list)) return (response as any).result.list;
+					return [];
+				})();
+				console.log(`✅ [AutoFetch] Fetched ${tableName}: ${normalizedRows.length} rows`, normalizedRows.slice(0, 3));
 				
 				// ✅ CRITICAL: Update global store instead of mutating local database object
 				// This triggers re-render and database useMemo will have new data
 				setTableData(tableName, {
 					id: tableName,
-					rows,
+					rows: normalizedRows,
 					app_id: effectiveAppId,
 				});
 				
 				globalTableFetchCache.delete(cacheKey);
 				console.log(`🎉 [AutoFetch] Successfully populated ${tableName} in global store`);
-				return rows;
+				return normalizedRows;
 			})
 			.catch((err) => {
 				console.error(`❌ [AutoFetch] Failed to fetch ${tableName}:`, err);
@@ -2681,7 +2709,7 @@ export function CsmDynamicGrid({
 				const types = (field.f_types || "ed").toLowerCase();
 				const isReadonly = types.indexOf('ro') !== -1;
 				const isRichText = /richtext|html/.test(types);
-				const isCodeEditor = /code/.test(types);
+				const isCodeEditor = /code|editor/.test(types);
 				const isFile = /^file$/.test(types);
 				const isImageInline = /image_inline|album_inline/.test(types);
 				const isVideoInline = /video_inline|album_video_inline/.test(types);
@@ -2957,6 +2985,16 @@ export function CsmDynamicGrid({
 		const globalTableData = database[tableName];
 		if (!globalTableData) {
 			console.log(`[CsmDynamicGrid] ⚠️ No table data found for '${tableName}'`);
+			void ensureTableInDatabase(tableName, runtimeAppId)
+				.then((started) => {
+					console.log(`[CsmDynamicGrid] 🔎 Auto-fetch primary table '${tableName}'`, {
+						runtimeAppId,
+						started,
+					});
+				})
+				.catch((err) => {
+					console.warn(`[CsmDynamicGrid] Failed to auto-fetch primary table '${tableName}':`, err);
+				});
 			return;
 		}
 		
@@ -3014,7 +3052,7 @@ export function CsmDynamicGrid({
 		// Fallback: load directly from global database
 		setData(globalRows);
 		console.log(`[CsmDynamicGrid] ✅ Data synced from global database (${globalRows.length} rows)`);
-	}, [database, tableName, hasTableName, m_configs, context, decrypt]);
+	}, [database, tableName, hasTableName, m_configs, context, decrypt, ensureTableInDatabase, runtimeAppId]);
 
   // filter trigger (runs on data)
 	const filtered = useMemo(() => {
@@ -3878,6 +3916,15 @@ export function CsmDynamicGrid({
 
 	// Default handlers if not provided
 	function handleAdd() {
+		if (actionClickGuardRef.current || isRowActionLocked) {
+			message.warning("Đang xử lý thao tác trước đó, vui lòng chờ...");
+			return;
+		}
+		actionClickGuardRef.current = true;
+		setTimeout(() => {
+			actionClickGuardRef.current = false;
+		}, 350);
+
 		// If inline editing, add new empty row to table
 		if (enableInlineCellEdit) {
 			// Generate unique ID: appId_timestamp_randomString to avoid collisions
@@ -3932,6 +3979,10 @@ export function CsmDynamicGrid({
 		}
 	}
 	function handleEdit(record: Row) {
+		if (isRowActionLocked) {
+			message.warning("Đang xử lý thao tác trước đó, vui lòng chờ...");
+			return;
+		}
 		// If inline editing is enabled, activate inline edit mode for the row
 		if (enableInlineCellEdit) {
 			const rowKey = getRowKey(record);
@@ -3958,6 +4009,10 @@ export function CsmDynamicGrid({
 		}
 	}
 	const handleClone = (record: Row) => {
+		if (isRowActionLocked) {
+			message.warning("Đang xử lý thao tác trước đó, vui lòng chờ...");
+			return;
+		}
 		const currentPkFields = getPrimaryKeyFields(m_configs);
 		// Clear all PK fields so cloned row must use a new key.
 		const cloned: Row = { ...record };
@@ -3969,6 +4024,11 @@ export function CsmDynamicGrid({
 		setEditorOpen(true);
 	};
 	async function handleDelete(record: Row) {
+		if (isRowActionLocked) {
+			message.warning("Đang xử lý thao tác trước đó, vui lòng chờ...");
+			return;
+		}
+		setRowActionBusy(true);
 		try {
 			// Detail grid hoặc không có table_name: chỉ xóa từ state local, KHÔNG gọi API
 			// Giống Vue: detail grid chỉ update khi master save
@@ -4040,6 +4100,8 @@ export function CsmDynamicGrid({
 		} catch (err) {
 			console.error("Delete error:", err);
 			message.error("Xóa thất bại: " + (err as Error).message);
+		} finally {
+			setRowActionBusy(false);
 		}
 	}
 

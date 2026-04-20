@@ -30,7 +30,7 @@ export default function Menu() {
 	const userRoles = useUserStore(state => state.roles || []);
 	const isDevUser = resolveDevFlag(userDev, userRoles);
 	const [activeTab, setActiveTab] = useState("table");
-	const [selectedApp, setSelectedApp] = useState<string>("csm");
+	const [selectedApp, setSelectedApp] = useState<string>("");
 	const [appList, setAppList] = useState<any[]>([]);
 	const [menuData, setMenuData] = useState<any[]>([]);
 	const [tableLoading, setTableLoading] = useState(false);
@@ -472,8 +472,14 @@ export default function Menu() {
 	const loadAppList = async () => {
 		try {
 			const response = await fetchAppList();
-			const apps = response?.result?.list || [];
+			const apps = (response?.result?.list || []).filter((app: any) => String(app?.app_id || "").trim().toLowerCase() !== "csm");
 			setAppList(apps);
+			setSelectedApp(prev => {
+				if (prev && apps.some((app: any) => String(app?.app_id || "") === prev)) {
+					return prev;
+				}
+				return String(apps[0]?.app_id || "");
+			});
 		} catch (error) {
 
 		}
@@ -710,13 +716,10 @@ export default function Menu() {
 						style={{ width: 200 }}
 						value={selectedApp}
 						onChange={setSelectedApp}
-						options={[
-							{ label: "CSM", value: "csm" },
-							...appList.map(app => ({
-								label: app.app_name || app.app_id,
-								value: app.app_id
-							}))
-						]}
+						options={appList.map(app => ({
+							label: app.app_name || app.app_id,
+							value: app.app_id
+						}))}
 					/>
 				</Col>
 
@@ -972,13 +975,10 @@ export default function Menu() {
 							<Select
 								mode="multiple"
 								showSearch
-								options={[
-									{ label: "CSM", value: "csm" },
-									...appList.map((app) => ({
-										label: app.app_name || app.app_id,
-										value: app.app_id,
-									})),
-								]}
+								options={appList.map((app) => ({
+									label: app.app_name || app.app_id,
+									value: app.app_id,
+								}))}
 								placeholder={t("system.menu.copyTargetAppsPlaceholder") || "Chọn 1 hoặc nhiều chương trình..."}
 							/>
 						</Form.Item>

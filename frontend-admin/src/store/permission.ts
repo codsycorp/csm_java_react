@@ -534,7 +534,9 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 				const filterAutoSetup = (m: any) => !(m.key === "/auto-setup" && !m.auto_code);
 				const filterDuplicatedSystemApiMenus = (m: any) => {
 					const key = normalizeAccessKey(m?.key || m?.path);
-					return !(key === "/system" || key.startsWith("/system/"));
+					if (key === "/system" || key.startsWith("/system/")) return false;
+					if (effectiveAppId === "csm" && (key === "/routers" || key === "/apps" || key === "/react-native")) return false;
+					return true;
 				};
 				const apiMenusFiltered = filteredByLegacyAccess
 					.filter(m => m.key !== "/system" && m.key !== "homepage" && String((m as any).id || "") !== "homepage")
@@ -679,7 +681,9 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 				const filterAutoSetup = (m: any) => !(m.key === '/auto-setup' && !m.auto_code);
 				const filterDuplicatedSystemApiMenus = (m: any) => {
 					const key = normalizeAccessKey(m?.key || m?.path);
-					return !(key === '/system' || key.startsWith('/system/'));
+					if (key === '/system' || key.startsWith('/system/')) return false;
+					if (effectiveAppId === 'csm' && (key === '/routers' || key === '/apps' || key === '/react-native')) return false;
+					return true;
 				};
 				const apiMenusFiltered = filteredByLegacyAccess
 					.filter(m => m.key !== '/system' && m.key !== 'homepage' && String((m as any).id || '') !== 'homepage')

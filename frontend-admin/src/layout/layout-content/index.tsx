@@ -25,24 +25,48 @@ export default function LayoutContent() {
 	const activeKey = useTabsStore(state => state.activeKey);
 	const { i18n } = useTranslation();
 	const userId = useUserStore(state => state.userId);
+	const userAppId = useUserStore(state => (state.app_id || "").trim());
 	useEffect(() => {
 		// eslint-disable-next-line no-console
 		console.log('[LayoutContent] userId:', userId, 'openTabs:', openTabs, 'pathname:', pathname);
 	}, [userId, openTabs, pathname]);
 
 
-	// SPA: Luôn dùng activeKey làm cacheKey cho SPA tab, riêng tab Trang Chủ luôn là 'homepage'
+	const normalizeTabKey = (rawKey: string) => {
+		if (rawKey === "/" || rawKey === "/home" || rawKey === "homepage") return "homepage";
+		return rawKey || "homepage";
+	};
+
+	const resolveTabAppId = (tabLike: any) => {
+		const candidates = [
+			tabLike?.appId,
+			tabLike?.app_id,
+			tabLike?.menuData?.app_id,
+			tabLike?.m_configs?.app_id,
+			userAppId,
+			"csm",
+		];
+		return String(candidates.find(item => typeof item === "string" && item.trim().length > 0) || "csm").trim();
+	};
+
+	const buildScopedCacheKey = (rawKey: string, tabLike: any) => {
+		const baseKey = normalizeTabKey(rawKey);
+		const appId = resolveTabAppId(tabLike);
+		return `${appId}::${baseKey}`;
+	};
+
+	const tab = openTabs.get(activeKey);
+
+	// Cache theo app_id + tab key để giữ trạng thái ổn định cho mọi tab (kể cả Trang chủ)
 	const cacheKey = useMemo(() => {
-		if (activeKey === "/" || activeKey === "/home" || activeKey === "homepage") return "homepage";
-		return activeKey || "homepage";
-	}, [activeKey]);
+		return buildScopedCacheKey(activeKey || "homepage", tab);
+	}, [activeKey, tab, userAppId]);
 
 	// SPA: render component theo tab đang active, không phụ thuộc router path
 
 
 
 
-	const tab = openTabs.get(activeKey);
 	const standaloneDynamicRouteKeys = new Set(["homepage", "/home", "/auto-setup"]);
 	const resolveRouteByKey = (routeKey: string) => {
 		if (!routeKey) return undefined;
@@ -135,13 +159,19 @@ export default function LayoutContent() {
 	// KeepAlive logic giữ nguyên
 	useEffect(() => {
 		const cacheNodes = aliveRef.current?.getCacheNodes?.();
+		const scopedOpenTabKeys = new Set(
+			Array.from(openTabs.entries()).map(([tabKey, tabValue]) => buildScopedCacheKey(tabKey, tabValue)),
+		);
 		cacheNodes?.forEach((node) => {
-			// Không destroy cache của Trang Chủ và AutoSetup
-			if (!openTabs.has(node.cacheKey) && node.cacheKey !== "homepage" && node.cacheKey !== "/auto-setup") {
+			const cacheKeyValue = String(node.cacheKey || "");
+			const isProtectedHome = cacheKeyValue.endsWith("::homepage");
+			const isProtectedAutoSetup = cacheKeyValue.endsWith("::/auto-setup") || cacheKeyValue.endsWith("::auto-setup");
+			// Không destroy cache của tab còn mở và các tab bảo vệ
+			if (!scopedOpenTabKeys.has(cacheKeyValue) && !isProtectedHome && !isProtectedAutoSetup) {
 				aliveRef.current?.destroy(node.cacheKey);
 			}
 		});
-	}, [openTabs, cacheKey]);
+	}, [openTabs, cacheKey, userAppId]);
 
 	useEffect(() => {
 		if (!tabbarEnable) {

@@ -3604,9 +3604,7 @@
       }
 
       var loaded = await lay_ds_dai_xem_kq(sourceStations);
-      if (!ensureDataFetchComplete()) {
-        throw new Error("legacy_data_incomplete");
-      }
+      var dataFetchComplete = ensureDataFetchComplete();
 
       var dataMien = [];
       if (loaded && loaded.MN && Array.isArray(loaded.MN.data)) {
@@ -3615,7 +3613,7 @@
       if (loaded && loaded.MB && Array.isArray(loaded.MB.data)) {
         dataMien = dataMien.concat(loaded.MB.data);
       }
-      return buildTongHopMetrics({
+      var metrics = buildTongHopMetrics({
         dataMien: dataMien,
         fromDate: tu_ngay,
         toDate: den_ngay,
@@ -3631,6 +3629,14 @@
         queryText: cfg.queryText,
         triet: !!cfg.triet
       });
+
+      // Nếu backend có cắt trang nhưng vẫn đủ dữ liệu để tính ra kết quả,
+      // không ném lỗi tổng quát để tránh báo "Không thể chạy Tổng Hợp" sai ngữ cảnh.
+      if (!dataFetchComplete && !metrics.length) {
+        throw new Error("legacy_data_incomplete");
+      }
+
+      return metrics;
     }
 
     function getLegacyThFilterConfig() {
@@ -7990,7 +7996,15 @@
         setProgress(100);
       } catch (e) {
         console.error(e);
-        canhbao(String((e && e.message) || "") === "missing_legacy_station_source" ? "Không tạo được nguồn đài cho Tổng Hợp từ MaQuery đang chọn" : "Không thể chạy Tổng Hợp");
+        var errMsg = String((e && e.message) || "");
+        if (errMsg === "missing_legacy_station_source") {
+          canhbao("Không tạo được nguồn đài cho Tổng Hợp từ MaQuery đang chọn");
+        } else if (errMsg === "legacy_data_incomplete") {
+          // ensureDataFetchComplete đã hiển thị cảnh báo chi tiết trước đó.
+          return;
+        } else {
+          canhbao("Không thể chạy Tổng Hợp");
+        }
       } finally {
         setLoading(false);
         setTimeout(function () { setProgress(0); }, 600);
@@ -9627,7 +9641,8 @@
 
       var selectedMap = {};
       selectedKeys.forEach(function (k) { selectedMap[String(k)] = true; });
-      var rows = (legacySlrAutoFilteredRows || []).filter(function (row, idx) {
+      var sourceRows = legacySortedRowsRef.current["slr_auto"] || legacySlrAutoFilteredRows || [];
+      var rows = sourceRows.filter(function (row, idx) {
         var key = String((row && row.key) || (String((row && row.queryValue) || "") + "_" + String((row && row.sttFrom) || "") + "_" + String((row && row.sttTo) || "") + "_" + idx));
         return !!selectedMap[key];
       });
@@ -10350,6 +10365,51 @@
       return buildGenericExportAoa(columns, rows);
     }
 
+    function buildExportRowStableKey(row, idx) {
+      if (row && row.key != null) return "key:" + String(row.key);
+      if (row && row.id != null) return "id:" + String(row.id);
+      if (row && row.so != null) return "so:" + String(row.so);
+      if (row && row.stt != null) return "stt:" + String(row.stt);
+      return "idx:" + String(idx || 0);
+    }
+
+    function isExportDisplayCacheCompatible(cachedRows, fallbackRows) {
+      var cached = Array.isArray(cachedRows) ? cachedRows : [];
+      var source = Array.isArray(fallbackRows) ? fallbackRows : [];
+      if (cached.length !== source.length) return false;
+
+      var seen = {};
+      for (var i = 0; i < source.length; i += 1) {
+        var sourceKey = buildExportRowStableKey(source[i], i);
+        seen[sourceKey] = (seen[sourceKey] || 0) + 1;
+      }
+
+      for (var j = 0; j < cached.length; j += 1) {
+        var cacheKey = buildExportRowStableKey(cached[j], j);
+        if (!seen[cacheKey]) return false;
+        seen[cacheKey] -= 1;
+      }
+
+      return true;
+    }
+
+    function getGridDisplayRowsForExport(cacheKey, fallbackRows) {
+      var source = Array.isArray(fallbackRows) ? fallbackRows : [];
+      var key = String(cacheKey || "").trim();
+      if (!key) return source;
+
+      var cache = legacySortedRowsRef.current || {};
+      if (!Object.prototype.hasOwnProperty.call(cache, key)) return source;
+
+      var cachedRows = cache[key];
+      if (!Array.isArray(cachedRows)) return source;
+      if (!isExportDisplayCacheCompatible(cachedRows, source)) {
+        delete cache[key];
+        return source;
+      }
+      return cachedRows;
+    }
+
     function normalizeKqTitleLabel(comboLabel) {
       return String(comboLabel || "").replace(/^KQ\s+/i, "").trim();
     }
@@ -10459,6 +10519,7 @@
 
         if (tabId === "lich_su_so_chu") {
           if (activeAction !== "tk" || !lichSuSoChuRows.length) return;
+          var lichSuCacheKey = "tk_tab_lich_su_so_chu";
           var lichSuTitle = buildLichSuSoChuTitle(String((tabDef && tabDef.ten_dai) || tabDef.text || "Lịch Sử Sổ Chủ"));
           items.push({
             key: "lich_su_so_chu",
@@ -10475,6 +10536,11 @@
               pagination: false,
               size: "small",
               scroll: { x: 400 },
+              onChange: function (p, f, s, extra) {
+                if (extra && Array.isArray(extra.currentDataSource)) {
+                  legacySortedRowsRef.current[lichSuCacheKey] = extra.currentDataSource;
+                }
+              },
               title: function () {
                 return renderTableTitleWithExport(lichSuTitle, function (evt) {
                   captureTableFromActionEvent(evt, "kqxs_lich_su_so_chu");
@@ -10495,6 +10561,12 @@
         var comboTenDai = String((tabDef && tabDef.ten_dai) || comboDisplay.ten_dai || comboDisplay.text || "");
         var mainTitle = buildMainThongKeTitle(comboTenDai);
         var kqTitle = buildThongKeMoiKqTitle(comboTenDai);
+        var mainTabCacheKey = "tk_main_" + tabId;
+        var matrixCacheKey = "tk_kq_matrix_" + tabId;
+        var laySoKyCacheKey = "tk_kq_lsk_" + tabId;
+        var kxhCacheKey = "tk_kq_kxh_" + tabId;
+        var demCacheKey = "tk_kq_dem_" + tabId;
+        var kqMoiCacheKey = "tk_kq_moi_" + tabId;
 
         if (!isKqTab) {
           items.push({
@@ -10513,6 +10585,11 @@
                 size: "small",
                 pagination: false,
                 scroll: { x: 1200 },
+                onChange: function (p, f, s, extra) {
+                  if (extra && Array.isArray(extra.currentDataSource)) {
+                    legacySortedRowsRef.current[mainTabCacheKey] = extra.currentDataSource;
+                  }
+                },
                 rowClassName: function (rec) {
                   if (!rec) return "";
                   if (activeAction === "tkm") {
@@ -10551,6 +10628,11 @@
                   size: "small",
                   pagination: false,
                   scroll: { x: "max-content" },
+                  onChange: function (p, f, s, extra) {
+                    if (extra && Array.isArray(extra.currentDataSource)) {
+                      legacySortedRowsRef.current[matrixCacheKey] = extra.currentDataSource;
+                    }
+                  },
                   title: function () {
                     return renderTableTitleWithExport(matrixTitle, function (evt) {
                       captureTableFromActionEvent(evt, "kqxs_matrix_" + String(grp.combo || ""));
@@ -10574,6 +10656,11 @@
                   size: "small",
                   pagination: false,
                   scroll: { x: "max-content" },
+                  onChange: function (p, f, s, extra) {
+                    if (extra && Array.isArray(extra.currentDataSource)) {
+                      legacySortedRowsRef.current[laySoKyCacheKey] = extra.currentDataSource;
+                    }
+                  },
                   title: function () {
                     return renderTableTitleWithExport(layTitle, function (evt) {
                       captureTableFromActionEvent(evt, "kqxs_lay_so_ky_" + String(grp.combo || ""));
@@ -10594,6 +10681,11 @@
                     size: "small",
                     pagination: false,
                     scroll: { x: "max-content" },
+                    onChange: function (p, f, s, extra) {
+                      if (extra && Array.isArray(extra.currentDataSource)) {
+                        legacySortedRowsRef.current[kxhCacheKey] = extra.currentDataSource;
+                      }
+                    },
                     title: function () {
                       return renderTableTitleWithExport(kxhTitle, function (evt) {
                         captureTableFromActionEvent(evt, "kqxs_kxh_" + String(grp.combo || ""));
@@ -10615,6 +10707,11 @@
                     size: "small",
                     pagination: false,
                     scroll: { x: "max-content" },
+                    onChange: function (p, f, s, extra) {
+                      if (extra && Array.isArray(extra.currentDataSource)) {
+                        legacySortedRowsRef.current[demCacheKey] = extra.currentDataSource;
+                      }
+                    },
                     title: function () {
                       return renderTableTitleWithExport(demTitle, function (evt) {
                         captureTableFromActionEvent(evt, "kqxs_dem_" + String(grp.combo || ""));
@@ -10649,6 +10746,11 @@
             size: "small",
             pagination: false,
             scroll: { x: 900 },
+            onChange: function (p, f, s, extra) {
+              if (extra && Array.isArray(extra.currentDataSource)) {
+                legacySortedRowsRef.current[kqMoiCacheKey] = extra.currentDataSource;
+              }
+            },
             title: function () {
               return renderTableTitleWithExport(kqTitle, function (evt) {
                 captureTableFromActionEvent(evt, "kqxs_kq_moi_" + String(grp.combo || ""));
@@ -10763,7 +10865,8 @@
 
       if (activeTabKey === "lich_su_so_chu") {
         var aoaLichSu = [["STT", "Ngày", "Số kỳ"]];
-        (lichSuSoChuRows || []).forEach(function (r) {
+        var lichSuRowsExport = getGridDisplayRowsForExport("tk_tab_lich_su_so_chu", lichSuSoChuRows || []);
+        lichSuRowsExport.forEach(function (r) {
           aoaLichSu.push([r.stt, r.ngay, r.so_ky]);
         });
         if (aoaLichSu.length > 1) payload.sheets.push({ name: "Lich su so chu", aoa: aoaLichSu });
@@ -10781,7 +10884,8 @@
       if (!isKqExportTab) {
         var kyHeaders = getKyHeaders();
         var aoaMain = [[tt.colTong, tt.colDem, tt.colKxh, tt.colMaxKxh, tt.colSo].concat(kyHeaders)];
-        (grp.rows || []).forEach(function (r) {
+        var mainRows = getGridDisplayRowsForExport("tk_main_" + activeTabKey, grp.rows || []);
+        mainRows.forEach(function (r) {
           var line = [r.tong, r.dem, r.kxh, r.lich_su, r.so];
           kyHeaders.forEach(function (kyLabel) {
             var idx = Number(kyLabel) - 1;
@@ -10797,7 +10901,9 @@
       if (isKqExportTab) {
         if (activeAction === "tkm") {
           var aoaTkm = [[tt.colTong, tt.colDem, tt.colKxh, tt.colMaxKxh, tt.colSo, "Kết quả"]];
-          (grp.rows || []).filter(function (r) { return !!(r && r.thoa_man); }).forEach(function (r) {
+          var kqMoiRowsDefault = (grp.rows || []).filter(function (r) { return !!(r && r.thoa_man); });
+          var kqMoiRows = getGridDisplayRowsForExport("tk_kq_moi_" + activeTabKey, kqMoiRowsDefault);
+          kqMoiRows.forEach(function (r) {
             aoaTkm.push([r.tong, r.dem, r.kxh, r.lich_su, r.so, r.bieu_dien || ""]);
           });
           if (aoaTkm.length > 1) payload.sheets.push({ name: "KQ moi", aoa: aoaTkm });
@@ -10808,22 +10914,26 @@
             // Vue export-equivalent title: cột cuối là thứ + ngày.
             var rightTitleExport = String((appliedThongKe.thu_tuan || "") + " " + (appliedThongKe.den_ngay || "")).trim();
             var matrixColsExport = buildMatrixColumns(grp.matrixGroupCount || 0, matrixTitleExport, rightTitleExport);
-            var aoaMatrix = gridAoaFromColumns(matrixColsExport, grp.matrixRows || []);
+            var matrixRows = getGridDisplayRowsForExport("tk_kq_matrix_" + activeTabKey, grp.matrixRows || []);
+            var aoaMatrix = gridAoaFromColumns(matrixColsExport, matrixRows);
             if (aoaMatrix.length > 1) payload.sheets.push({ name: "KQ matrix", aoa: aoaMatrix });
           } else {
             if (Number(appliedThongKe.lay_so_ky || 0) > 0 && (grp.laySoKyRows || []).length) {
               var layCols = buildLaySoKyColumns();
-              var aoaLaySoKy = gridAoaFromColumns(layCols, grp.laySoKyRows || []);
+              var layRows = getGridDisplayRowsForExport("tk_kq_lsk_" + activeTabKey, grp.laySoKyRows || []);
+              var aoaLaySoKy = gridAoaFromColumns(layCols, layRows);
               if (aoaLaySoKy.length > 1) payload.sheets.push({ name: "Lay so ky", aoa: aoaLaySoKy });
             }
 
             if (Number(appliedThongKe.kxh_phai_lonhon || 0) > 0) {
-              var aoaKxh = gridAoaFromColumns(pairColumns, grp.kxhPairRows || []);
+              var kxhRows = getGridDisplayRowsForExport("tk_kq_kxh_" + activeTabKey, grp.kxhPairRows || []);
+              var aoaKxh = gridAoaFromColumns(pairColumns, kxhRows);
               payload.sheets.push({ name: "KQ KXH", aoa: aoaKxh });
             }
 
             if (Number(appliedThongKe.dem_nho_hon || 0) > 0) {
-              var aoaDem = gridAoaFromColumns(pairColumns, grp.demNhoPairRows || []);
+              var demRows = getGridDisplayRowsForExport("tk_kq_dem_" + activeTabKey, grp.demNhoPairRows || []);
+              var aoaDem = gridAoaFromColumns(pairColumns, demRows);
               payload.sheets.push({ name: "KQ dem", aoa: aoaDem });
             }
           }

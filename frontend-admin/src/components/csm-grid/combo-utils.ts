@@ -9,11 +9,17 @@ export type ComboQuerySpec = {
   where?: any;
 };
 
-const SYSTEM_USER_TABLES = new Set(["csm_accounts", "csm_group_members"]);
+const SYSTEM_CSM_TABLES = new Set([
+  "csm_accounts",
+  "csm_group_members",
+  "sys_la_routers",
+  "sys_apps",
+  "sys_reactnative",
+]);
 
 export function resolveComboQueryAppId(tableName: unknown, preferredAppId: unknown, fallbackAppId: unknown): string {
   const normalizedTable = String(tableName || "").trim().toLowerCase();
-  if (SYSTEM_USER_TABLES.has(normalizedTable)) return "csm";
+  if (SYSTEM_CSM_TABLES.has(normalizedTable)) return "csm";
 
   const preferred = String(preferredAppId || "").trim();
   if (preferred) return preferred;

@@ -232,6 +232,46 @@ function isNonEmptyValue(value: unknown) {
 	return true;
 }
 
+function normalizeFieldName(rawName: unknown, index: number): string {
+	const base = String(rawName || "").trim();
+	if (!base) {
+		return `field_${index + 1}`;
+	}
+	return base;
+}
+
+function normalizeLegacyTableFields(rawTable: unknown): unknown {
+	if (!Array.isArray(rawTable)) {
+		return rawTable;
+	}
+
+	const seenNames = new Map<string, number>();
+
+	return rawTable.map((field, index) => {
+		const source = (field && typeof field === "object") ? (field as Record<string, any>) : {};
+		const baseName = normalizeFieldName(source.f_name, index);
+		const lower = baseName.toLowerCase();
+		const duplicateCount = seenNames.get(lower) ?? 0;
+		seenNames.set(lower, duplicateCount + 1);
+		const normalizedName = duplicateCount === 0 ? baseName : `${baseName}_${duplicateCount + 1}`;
+
+		const headerRaw = String(source.f_header || "").trim();
+		const header = headerRaw || normalizedName;
+		const typeRaw = String(source.f_types || source.f_type || "").trim().toLowerCase();
+		const showRaw = source.f_show;
+		const show = (showRaw === false || showRaw === 0 || showRaw === "0") ? 0 : 1;
+
+		return {
+			...source,
+			f_name: normalizedName,
+			f_header: header,
+			f_show: show,
+			f_types: typeRaw || "ed",
+			f_stt: source.f_stt ?? (index + 1),
+		};
+	});
+}
+
 export function parseCrmConfig(raw: unknown): CrmConfig {
 	if (!raw) return {};
 	if (typeof raw === "object") return raw as CrmConfig;
@@ -281,6 +321,39 @@ export function normalizeMenuRuntimeConfig<T extends Record<string, any>>(menu: 
 		if (!isNonEmptyValue(merged[key]) && isNonEmptyValue(parsed[key])) {
 			merged[key] = parsed[key];
 		}
+	}
+
+	const parseJsonIfNeeded = (value: unknown): unknown => {
+		if (typeof value !== "string") return value;
+		const trimmed = value.trim();
+		if (!trimmed) return value;
+		const looksLikeJson = (trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"));
+		if (!looksLikeJson) return value;
+		try {
+			return JSON.parse(trimmed);
+		}
+		catch {
+			return value;
+		}
+	};
+
+	// Backend menu rows can store runtime config fields as JSON strings.
+	// Parse them here so downstream grid/report code always receives structured data.
+	const jsonShapeKeys = ["table", "trigger", "nodes", "children", "struct", "crm_config", "kanban_config", "v_query", "db_filter"];
+	for (const key of jsonShapeKeys) {
+		merged[key] = parseJsonIfNeeded(merged[key]);
+	}
+
+	merged.table = normalizeLegacyTableFields(merged.table);
+
+	if (Array.isArray(merged.nodes)) {
+		merged.nodes = merged.nodes.map((node: any) => {
+			if (!node || typeof node !== "object") return node;
+			return {
+				...node,
+				table: normalizeLegacyTableFields(node.table),
+			};
+		});
 	}
 
 	return merged as T;

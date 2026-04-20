@@ -76,6 +76,7 @@ const globalTableFetchCache = new Map<string, Promise<any>>();
 
 function resolveEffectiveFieldTypes(field: Partial<TableField> | Record<string, any> | null | undefined): string {
   const explicit = String(field?.f_types ?? (field as any)?.f_type ?? "").trim().toLowerCase();
+  if (explicit === "editor") return "codejs";
   if (explicit && explicit !== "string" && explicit !== "ed") return explicit;
 
   const fieldName = String(field?.f_name ?? "").trim().toLowerCase();

@@ -114,7 +114,7 @@ const routes: AppRouteRecordRaw[] = [
 				path: "/system/departments",
 				Component: AdminPage,
 				handle: {
-					icon: "ApartmentOutlined",
+					icon: "TeamOutlined",
 					title: "common.menu.dept",
 					roles: ["admin", "dev"],
 					permissions: [
@@ -131,6 +131,51 @@ const routes: AppRouteRecordRaw[] = [
 				handle: {
 					icon: "ClusterOutlined",
 					title: "common.menu.branch",
+					roles: ["admin", "dev"],
+					permissions: [
+						"permission:button:add",
+						"permission:button:update",
+						"permission:button:delete",
+					],
+					// keepAlive: true (default)
+				},
+			},
+			{
+				path: "/system/routers",
+				Component: AdminPage,
+				handle: {
+					icon: "DeploymentUnitOutlined",
+					title: "common.menu.routers",
+					roles: ["admin", "dev"],
+					permissions: [
+						"permission:button:add",
+						"permission:button:update",
+						"permission:button:delete",
+					],
+					// keepAlive: true (default)
+				},
+			},
+			{
+				path: "/system/apps",
+				Component: AdminPage,
+				handle: {
+					icon: "AppstoreOutlined",
+					title: "common.menu.apps",
+					roles: ["admin", "dev"],
+					permissions: [
+						"permission:button:add",
+						"permission:button:update",
+						"permission:button:delete",
+					],
+					// keepAlive: true (default)
+				},
+			},
+			{
+				path: "/system/react-native",
+				Component: AdminPage,
+				handle: {
+					icon: "MobileOutlined",
+					title: "common.menu.reactNative",
 					roles: ["admin", "dev"],
 					permissions: [
 						"permission:button:add",

@@ -18,7 +18,8 @@ export function patchDynamicRoutesWithComponent(routes: any[]): any[] {
   // Static system paths to always keep static
   const staticSystemPaths = [
     "/system/user", "/system/menu", "/system/developer", "/system/broadcast",
-    "/system/dept", "/system/role", "/system/roles", "/system/departments", "/system/branches", "/system/grid/:menuId"
+    "/system/dept", "/system/role", "/system/roles", "/system/departments", "/system/branches", "/system/grid/:menuId",
+    "/system/routers", "/system/apps", "/system/react-native"
   ];
 
   // Filter out any dynamic route that has the same path as a static system path
@@ -59,6 +60,10 @@ export function patchDynamicRoutesWithComponent(routes: any[]): any[] {
         case "/system/departments":
         case "/system/branches":
         case "/system/grid/:menuId":
+          Component = AdminPage; break;
+        case "/system/routers":
+        case "/system/apps":
+        case "/system/react-native":
           Component = AdminPage; break;
       }
     } else {
