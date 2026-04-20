@@ -1439,6 +1439,21 @@ export default function AdminPage(props: any = {}) {
 
 	// Refactor: Lấy menuData từ tab state hoặc menuId props, không dùng location.pathname
 	useEffect(() => {
+		if (propMenuData) {
+			const roleAdjustedMenu = normalizedMenuKey === "user" ? buildUserMenuByRole(propMenuData) : propMenuData;
+			const withLabel = normalizeKnownSystemMenu({
+				...roleAdjustedMenu,
+				label: resolveDisplayLabel(roleAdjustedMenu),
+			});
+			const canonicalMenu = enforceCanonicalSystemRouteMenu(withLabel);
+			if (!areMenusEquivalent(canonicalMenu, menuData)) {
+				setMenuData(canonicalMenu);
+			}
+			if (loading)
+				setLoading(false);
+			return;
+		}
+
 		// Ưu tiên lấy menuData từ tab state (store) nếu có
 		const tabsStore = useTabsStore.getState();
 		const activeTab = tabsStore.openTabs?.get?.(tabsStore.activeKey) as any;
@@ -1607,7 +1622,7 @@ export default function AdminPage(props: any = {}) {
 			}
 		}
 		// Nếu không tìm thấy menuData thì không set lại liên tục
-	}, [menuId, normalizedMenuKey, apiWholeMenus, menuData, loading, isDevUser, t, appId, buildUserMenuByRole, normalizeKnownSystemMenu, enforceCanonicalSystemRouteMenu, resolveDisplayLabel]);
+	}, [menuId, normalizedMenuKey, apiWholeMenus, menuData, loading, isDevUser, t, appId, buildUserMenuByRole, normalizeKnownSystemMenu, enforceCanonicalSystemRouteMenu, resolveDisplayLabel, propMenuData]);
 
 	// Di chuyển hàm loadTableData ra ngoài useEffect để có thể tái sử dụng
 	const loadTableData = async () => {

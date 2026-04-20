@@ -8,9 +8,8 @@ import AdminPage from "../admin";
  * Also forward menuData/m_configs from the current tab to preserve props stability.
  */
 export default function User() {
-	const activeKey = useTabsStore(state => state.activeKey);
 	const openTabs = useTabsStore(state => state.openTabs);
-	const tabData = (openTabs.get(activeKey) || openTabs.get("/system/user")) as any;
+	const tabData = openTabs.get("/system/user") as any;
 	return (
 		<AdminPage
 			menuId="user"
