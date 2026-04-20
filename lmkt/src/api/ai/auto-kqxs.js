@@ -664,7 +664,7 @@
       lgThManualRunCount: "Đầu vào chạy",
       lgThAutoFlow: "Luồng tự động",
       lgThAutoRunSearch: "⚙ Chạy tự động tìm",
-      lgThAutoRun: "Lọc Tự Động (C1–C6)",
+      lgThAutoRun: "Lọc Tự Động (C1–C7)",
       lgThAutoC1Ngay: "C1 Ngày: Top N lâu nhất",
       lgThAutoC1Ky: "C1 Kỳ: Top N lâu nhất",
       lgThAutoC2NgayCX: "C2 Ngày CX (vd: 5,9,13)",
@@ -672,6 +672,7 @@
       lgThAutoC4NgayGap: "C4: Ngày CX > Lâu Ngày + N",
       lgThAutoC5KyGap: "C5: Kỳ CX > Lâu Kỳ + N",
       lgThAutoC6Both: "C6: Ngày CX ≥ Lâu Ngày VÀ Kỳ CX ≥ Lâu Kỳ",
+      lgThAutoC7Tuan21Min: "C7 Tổng 21 tuần: Top N bé nhất",
       lgThAutoResult: "Kết Quả Lọc Tự Động",
       lgThResultSet: "Chọn Dòng Kết Quả",
       lgThSelect: "Chọn",
@@ -914,7 +915,7 @@
       lgThManualRunCount: "Run input",
       lgThAutoFlow: "Auto Flow",
       lgThAutoRunSearch: "⚙ Run Auto Search",
-      lgThAutoRun: "Auto Filter (C1–C6)",
+      lgThAutoRun: "Auto Filter (C1–C7)",
       lgThAutoC1Ngay: "C1 Day: Top N longest",
       lgThAutoC1Ky: "C1 Period: Top N longest",
       lgThAutoC2NgayCX: "C2: Days No-show (e.g. 5,9,13)",
@@ -922,6 +923,7 @@
       lgThAutoC4NgayGap: "C4: Days No-show > Max Day Gap + N",
       lgThAutoC5KyGap: "C5: Periods No-show > Max Period Gap + N",
       lgThAutoC6Both: "C6: Days No-show ≥ Max Day AND Periods No-show ≥ Max Period",
+      lgThAutoC7Tuan21Min: "C7 Total 21 weeks: Top N smallest",
       lgThAutoResult: "Auto Filter Results",
       lgThResultSet: "Result Lines",
       lgThSelect: "Select",
@@ -1164,7 +1166,7 @@
       lgThManualRunCount: "执行输入",
       lgThAutoFlow: "自动流程",
       lgThAutoRunSearch: "⚙ 运行自动查找",
-      lgThAutoRun: "自动筛选 (C1–C6)",
+      lgThAutoRun: "自动筛选 (C1–C7)",
       lgThAutoC1Ngay: "C1 天：最长N个",
       lgThAutoC1Ky: "C1 期：最长N个",
       lgThAutoC2NgayCX: "C2 未出现天数（例如：5,9,13）",
@@ -1172,6 +1174,7 @@
       lgThAutoC4NgayGap: "C4: 未出现天数 > 最大间隔 + N",
       lgThAutoC5KyGap: "C5: 未出现期数 > 最大间隔 + N",
       lgThAutoC6Both: "C6: 天数 ≥ 最大天间隔 且 期数 ≥ 最大期间隔",
+      lgThAutoC7Tuan21Min: "C7 21周总和：最小N个",
       lgThAutoResult: "自动筛选结果",
       lgThResultSet: "结果行选择",
       lgThSelect: "勾选",
@@ -3405,6 +3408,7 @@
     var _ath12 = useState(""), legacyThAutoC4NgayGap = _ath12[0], setLegacyThAutoC4NgayGap = _ath12[1];
     var _ath13 = useState(""), legacyThAutoC5KyGap = _ath13[0], setLegacyThAutoC5KyGap = _ath13[1];
     var _ath14 = useState(false), legacyThAutoC6Both = _ath14[0], setLegacyThAutoC6Both = _ath14[1];
+    var _ath14b = useState(""), legacyThAutoC7Tuan21Min = _ath14b[0], setLegacyThAutoC7Tuan21Min = _ath14b[1];
     var _ath15 = useState(""), legacyThIntersect = _ath15[0], setLegacyThIntersect = _ath15[1];
     var _ath16 = useState({ KQT: true, KQN: false, KTD: false, KQD: false, N2D: false, B2D: false, T2D: false, N3D: false, N2C: false, B2C: false, T2C: false, N3C: false, B3C: false, L2C: false, L3C: false }), legacyThResultMask = _ath16[0], setLegacyThResultMask = _ath16[1];
     var _ath16b = useState(true), legacyThShowKetQua = _ath16b[0], setLegacyThShowKetQua = _ath16b[1];
@@ -3650,6 +3654,7 @@
       var c3KyCX = parseAutoNumberList(legacyThAutoC2KyCX);
       var c4NgayGap = String(legacyThAutoC4NgayGap || "").trim() === "" ? -1 : (parseInt(legacyThAutoC4NgayGap, 10) || 0);
       var c5KyGap = String(legacyThAutoC5KyGap || "").trim() === "" ? -1 : (parseInt(legacyThAutoC5KyGap, 10) || 0);
+      var c7Tuan21MinTop = parseInt(legacyThAutoC7Tuan21Min, 10) || 0;
       return {
         c1NgayTop: c1NgayTop,
         c1KyTop: c1KyTop,
@@ -3657,13 +3662,14 @@
         c3KyCX: c3KyCX,
         c4NgayGap: c4NgayGap,
         c5KyGap: c5KyGap,
-        c6Both: !!legacyThAutoC6Both
+        c6Both: !!legacyThAutoC6Both,
+        c7Tuan21MinTop: c7Tuan21MinTop
       };
     }
 
     function hasLegacyThAutoFilter(cfg) {
       var filterCfg = cfg || getLegacyThFilterConfig();
-      return filterCfg.c1NgayTop > 0 || filterCfg.c1KyTop > 0 || filterCfg.c2NgayCX.length > 0 || filterCfg.c3KyCX.length > 0 || filterCfg.c4NgayGap >= 0 || filterCfg.c5KyGap >= 0 || filterCfg.c6Both;
+      return filterCfg.c1NgayTop > 0 || filterCfg.c1KyTop > 0 || filterCfg.c2NgayCX.length > 0 || filterCfg.c3KyCX.length > 0 || filterCfg.c4NgayGap >= 0 || filterCfg.c5KyGap >= 0 || filterCfg.c6Both || filterCfg.c7Tuan21MinTop > 0;
     }
 
     function buildLegacyThIntersectText(rows) {
@@ -3958,6 +3964,7 @@
 
       var c1NgayMap = {};
       var c1KyMap = {};
+      var c7Tuan21MinMap = {};
       if (cfg.c1NgayTop > 0) {
         sourceRows.slice().sort(function (a, b) {
           return (Number(b.ngayCXHT) || 0) - (Number(a.ngayCXHT) || 0);
@@ -3972,6 +3979,13 @@
           c1KyMap[row.key] = 1;
         });
       }
+      if (cfg.c7Tuan21MinTop > 0) {
+        sourceRows.slice().sort(function (a, b) {
+          return (Number(a.lanTuan21) || 0) - (Number(b.lanTuan21) || 0);
+        }).slice(0, cfg.c7Tuan21MinTop).forEach(function (row) {
+          c7Tuan21MinMap[row.key] = 1;
+        });
+      }
 
       return sourceRows.filter(function (row) {
         var matchC1 = !!c1NgayMap[row.key] || !!c1KyMap[row.key];
@@ -3980,7 +3994,8 @@
         var matchC4 = cfg.c4NgayGap >= 0 && ((Number(row.ngayCXHT) || 0) > ((Number(row.lauNgay) || 0) + cfg.c4NgayGap));
         var matchC5 = cfg.c5KyGap >= 0 && ((Number(row.kyCXHT) || 0) > ((Number(row.lauKy) || 0) + cfg.c5KyGap));
         var matchC6 = !!cfg.c6Both && ((Number(row.ngayCXHT) || 0) >= (Number(row.lauNgay) || 0)) && ((Number(row.kyCXHT) || 0) >= (Number(row.lauKy) || 0));
-        return matchC1 || matchC2 || matchC3 || matchC4 || matchC5 || matchC6;
+        var matchC7 = !!c7Tuan21MinMap[row.key];
+        return matchC1 || matchC2 || matchC3 || matchC4 || matchC5 || matchC6 || matchC7;
       });
     }
 
@@ -4010,7 +4025,8 @@
         cfg.c3KyCX.length ? ("C3=" + cfg.c3KyCX.join(",")) : "",
         cfg.c4NgayGap >= 0 ? ("C4=" + cfg.c4NgayGap) : "",
         cfg.c5KyGap >= 0 ? ("C5=" + cfg.c5KyGap) : "",
-        cfg.c6Both ? "C6=1" : ""
+        cfg.c6Both ? "C6=1" : "",
+        cfg.c7Tuan21MinTop > 0 ? ("C7=" + cfg.c7Tuan21MinTop) : ""
       ].filter(Boolean).join(" | "));
 
       Object.keys(grouped).sort().forEach(function (queryType) {
@@ -4416,7 +4432,7 @@
     }, [legacyHeThong, legacyThUseApiSource, legacyThGroupSourceMode, legacyThCustomGroupsText]);
 
     useEffect(function () {
-      // Auto-apply C1-C6 only after Tong Hop data exists from explicit user actions.
+      // Auto-apply C1-C7 only after Tong Hop data exists from explicit user actions.
       // Do not auto-run Tong Hop calculations when no source rows are present.
       if (legacyThAutoRunning) return;
       if (legacyThAutoPinnedFullAuto) return;
@@ -4430,6 +4446,7 @@
       legacyThAutoC4NgayGap,
       legacyThAutoC5KyGap,
       legacyThAutoC6Both,
+      legacyThAutoC7Tuan21Min,
       legacyThAutoRunning,
       legacyThAutoPinnedFullAuto
     ]);
@@ -8489,7 +8506,7 @@
       var filterCfg = getLegacyThFilterConfig();
       if (!hasLegacyThAutoFilter(filterCfg)) {
         if (!silent) {
-          canhbao("Vui lòng nhập ít nhất 1 điều kiện lọc (C1–C6)");
+          canhbao("Vui lòng nhập ít nhất 1 điều kiện lọc (C1–C7)");
         }
         if (!silent || !legacyThAutoRows.length) {
           if (legacyThAutoRows.length) {
@@ -8527,7 +8544,7 @@
       }
       var filterCfg = getLegacyThFilterConfig();
       if (!hasLegacyThAutoFilter(filterCfg)) {
-        canhbao("Vui lòng nhập ít nhất 1 điều kiện lọc (C1–C6)");
+        canhbao("Vui lòng nhập ít nhất 1 điều kiện lọc (C1–C7)");
         return;
       }
 
@@ -12675,7 +12692,9 @@
                   h(Input, { size: "small", placeholder: "0", value: legacyThAutoC4NgayGap, onChange: function (e) { setLegacyThAutoC4NgayGap(e.target.value); }, style: { width: 55 } }),
                   h("span", { style: { fontSize: 11, color: theme.muted } }, tt.lgThAutoC5KyGap + ":"),
                   h(Input, { size: "small", placeholder: "0", value: legacyThAutoC5KyGap, onChange: function (e) { setLegacyThAutoC5KyGap(e.target.value); }, style: { width: 55 } }),
-                  h(Checkbox, { checked: legacyThAutoC6Both, onChange: function (e) { setLegacyThAutoC6Both(e.target.checked); }, style: { fontSize: 11, color: theme.text } }, tt.lgThAutoC6Both)
+                  h(Checkbox, { checked: legacyThAutoC6Both, onChange: function (e) { setLegacyThAutoC6Both(e.target.checked); }, style: { fontSize: 11, color: theme.text } }, tt.lgThAutoC6Both),
+                  h("span", { style: { fontSize: 11, color: theme.muted } }, tt.lgThAutoC7Tuan21Min + ":"),
+                  h(Input, { size: "small", placeholder: "N", value: legacyThAutoC7Tuan21Min, onChange: function (e) { setLegacyThAutoC7Tuan21Min(e.target.value); }, style: { width: 55 } })
                 ]),
                 h("div", { key: "th-kq-mask", style: { display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 8, alignItems: "center", padding: "6px 8px", background: "color-mix(in srgb, " + theme.cardBg + " 90%, " + theme.pageBg + " 10%)", borderRadius: 4, border: "1px solid " + theme.border } }, [
                   h("span", { style: { fontSize: 12, fontWeight: "bold", color: theme.text, marginRight: 4 } }, tt.lgThResultSet + ":"),
