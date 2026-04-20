@@ -1226,6 +1226,10 @@ export function CsmDynamicGrid({
 	const resolveQueryAppIdByTable = useCallback((tableName: string, queryAppId?: string): string => {
 		return resolveComboQueryAppId(tableName, queryAppId, userAppId || appId || "csm");
 	}, [userAppId, appId]);
+
+	const getStoredTableAppId = useCallback((tableData: any): string => {
+		return String(tableData?.app_id || tableData?.appId || "").trim();
+	}, []);
 	
 	// 🔧 Helper: Auto-fetch missing table when combo query needs it
 	const ensureTableInDatabase = useCallback(async (
@@ -1263,9 +1267,14 @@ export function CsmDynamicGrid({
 			const existing = database[tableName];
 			if (existing && (Array.isArray(existing) || (existing.rows && Array.isArray(existing.rows)))) {
 				const rowCount = Array.isArray(existing) ? existing.length : existing.rows?.length || 0;
-				if (rowCount > 0) {
-					console.log(`✓ [AutoFetch] Table ${tableName} already in database (${rowCount} rows)`);
+				const storedAppId = Array.isArray(existing) ? "" : getStoredTableAppId(existing);
+				const isMatchingApp = !storedAppId || storedAppId === effectiveAppId;
+				if (rowCount > 0 && isMatchingApp) {
+					console.log(`✓ [AutoFetch] Table ${tableName} already in database (${rowCount} rows, app: ${storedAppId || "unknown"})`);
 					return false; // Already have data
+				}
+				if (rowCount > 0 && !isMatchingApp) {
+					console.log(`🔄 [AutoFetch] Table ${tableName} exists for app ${storedAppId}, refetching for app ${effectiveAppId}`);
 				}
 			}
 		} else {
@@ -1337,7 +1346,7 @@ export function CsmDynamicGrid({
 		fetchPromise.catch(() => {}); // Ignore error (already logged)
 		
 		return true; // Started fetching
-	}, [database, resolveQueryAppIdByTable, globalTableFetchCache, setTableData]);
+	}, [database, resolveQueryAppIdByTable, globalTableFetchCache, setTableData, getStoredTableAppId]);
 
 	// Helper: Create seft context with all utility functions
 	const createSeftContext = useCallback(() => ({
@@ -1716,27 +1725,32 @@ export function CsmDynamicGrid({
 									whereClause = {field: 'id', type: 'like', value: ""};
 									console.log(`[selectEnums] Using default where clause for ${tableName}:`, whereClause);
 								}
-								const queryAppId = querySpec.app_id; // May be undefined
+								const queryAppId = resolveQueryAppIdByTable(tableName, querySpec.app_id);
 								
 								console.log(`[selectEnums] 🔍 Raw querySpec.obj_where:`, querySpec.obj_where);
 								console.log(`[selectEnums] 🔍 whereClause after assignment:`, whereClause);
-								console.log(`[selectEnums] Querying table: ${tableName}, fields:`, fields, 'where:', whereClause);
+								console.log(`[selectEnums] Querying table: ${tableName}, app: ${queryAppId}, fields:`, fields, 'where:', whereClause);
 								
 								const tableData = database[tableName];
+								const tableAppId = Array.isArray(tableData) ? "" : String((tableData as any)?.app_id || (tableData as any)?.appId || "").trim();
 								const tableExists = tableData && (Array.isArray(tableData) || (tableData.rows && Array.isArray(tableData.rows)));
 								const rows = tableExists ? (Array.isArray(tableData) ? tableData : (tableData as any).rows || []) : [];
-								const hasData = tableExists && rows.length > 0;
+								const hasMatchingAppData = !tableAppId || tableAppId === queryAppId;
+								const hasData = tableExists && rows.length > 0 && hasMatchingAppData;
 								
 								console.log(`[selectEnums] Checking table ${tableName} in database:`, {
 									exists: tableExists,
 									rowCount: rows.length,
+									tableAppId,
+									queryAppId,
+									hasMatchingAppData,
 									hasData,
 								});
 								
 								// Already fetched all combo tables in useEffect mount
 								// ONLY build options from database, NO fetch in useMemo
 								if (!hasData) {
-									console.warn(`[selectEnums] Table ${tableName} not available yet (will be fetched on mount)`);
+									console.warn(`[selectEnums] Table ${tableName} not available for app ${queryAppId} yet (will be fetched on mount)`);
 								
 
 									return;
