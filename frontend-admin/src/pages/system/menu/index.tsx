@@ -518,6 +518,7 @@ export default function Menu() {
 
 		const loadMenuData = async () => {
 			setTableLoading(true);
+			setMenuData([]);
 			try {
 				const responseData = await fetchMenuList(selectedApp);
 				const rawMenuList = responseData?.result?.list || [];

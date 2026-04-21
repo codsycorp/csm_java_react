@@ -403,6 +403,29 @@ function parseUserAddressValue(raw: any): any[] {
   return [];
 }
 
+function serializeUserAddressValue(raw: any): string {
+  if (Array.isArray(raw)) {
+    return JSON.stringify(raw);
+  }
+  if (raw && typeof raw === "object") {
+    return JSON.stringify([raw]);
+  }
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (!trimmed) return "[]";
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) return JSON.stringify(parsed);
+      if (parsed && typeof parsed === "object") return JSON.stringify([parsed]);
+      return "[]";
+    } catch {
+      // Legacy scripts can still send plain text. Keep it unchanged for compatibility.
+      return raw;
+    }
+  }
+  return "[]";
+}
+
 function syncRuntimeUserAddress(userAddress: any[]): any[] {
   const normalized = Array.isArray(userAddress) ? userAddress : [];
 
@@ -1493,6 +1516,8 @@ ${resolvedContainerSelector} select {
       }
     };
     announceCsmUserDataReady();
+    // Prime runtime with canonical backend value after each re-init to avoid stale persisted store snapshot.
+    void window.csmUserData.fetchFromDatabase?.(() => {});
     console.log('✅ [DynamicCode] window.csmUserData initialized (API-first + runtime sync, no localStorage fallback)');
     }
   }
@@ -1898,6 +1923,11 @@ ${resolvedContainerSelector} select {
       },
       
       csm_userinfo_update: (app_token: string, userInfoUp: any, fn?: (res: any) => void) => {
+        const currentRuntimeUser = (window as any).csmCurrentUser || user || {};
+        const accountType = String(currentRuntimeUser?.account_type || "").trim().toLowerCase();
+        const isSubUser = Boolean(currentRuntimeUser?.is_sub_user) || accountType === "sub-user";
+        const targetTable = isSubUser ? "csm_group_members" : "csm_accounts";
+
         const self = {
           csm_obj_tables: (params: any, callback: (res: any) => void) => {
             const requestAppId = resolveTableAppId(params?.obj_name, params?.app_id || appId);
@@ -1946,7 +1976,7 @@ ${resolvedContainerSelector} select {
         // Implementation matching AutoSetup.tsx
         self.csm_obj_tables({
           app_id: "csm",
-          obj_name: "csm_accounts",
+          obj_name: targetTable,
           e_where: {
             field: "app_token",
             type: "eq",
@@ -1970,19 +2000,48 @@ ${resolvedContainerSelector} select {
           // Map userInfoUp fields to database fields
           if (userInfoUp.username !== undefined) updateObj.username = userInfoUp.username;
           if (userInfoUp.fullName !== undefined) updateObj.full_name = userInfoUp.fullName;
-          if (userInfoUp.phoneNumber !== undefined) updateObj.phone_number = userInfoUp.phoneNumber;
+          if (userInfoUp.phoneNumber !== undefined) updateObj.phoneNumber = userInfoUp.phoneNumber;
           if (userInfoUp.email !== undefined) updateObj.email = userInfoUp.email;
           if (userInfoUp.avatar !== undefined) updateObj.avatar = userInfoUp.avatar;
-          if (userInfoUp.address !== undefined) updateObj.address = userInfoUp.address;
+          const legacyUserAddress = userInfoUp?.user_address ?? userInfoUp?.user_adress ?? userInfoUp?.userAddress ?? userInfoUp?.address;
+          if (legacyUserAddress !== undefined) {
+            const serializedAddress = serializeUserAddressValue(legacyUserAddress);
+            updateObj.user_address = serializedAddress;
+            updateObj.user_adress = serializedAddress;
+          }
+
+          if (targetTable === "csm_group_members") {
+            const loginIdentifier = String(currentRuntimeUser?.login_identifier || currentUser?.login_identifier || "").trim();
+            if (loginIdentifier) {
+              updateObj.login_identifier = loginIdentifier;
+            }
+          }
+
+          const pkFields = (targetTable === "csm_group_members")
+            ? ["app_token", "login_identifier"]
+            : ["app_token"];
+
+          const where: Record<string, any> = { app_token };
+          if (targetTable === "csm_group_members" && updateObj.login_identifier) {
+            where.login_identifier = updateObj.login_identifier;
+          }
           
           self.csm_obj_updates({
             app_id: "csm",
-            obj_name: "csm_accounts",
+            obj_name: targetTable,
             command: "update",
             obj_update: updateObj,
-            pk_fields: ["app_token"]
+            pk_fields: pkFields,
+            where,
           }, function(updateRes) {
             if (updateRes?.success || updateRes?.data === "success") {
+              if (legacyUserAddress !== undefined) {
+                try {
+                  syncRuntimeUserAddress(parseUserAddressValue(updateObj.user_address));
+                } catch {
+                  // Keep legacy callback flow alive even when runtime sync fails.
+                }
+              }
               fn?.({ status: true, data: updateObj });
             } else {
               fn?.({ status: false, error: updateRes?.error || updateRes?.message || "Update failed" });

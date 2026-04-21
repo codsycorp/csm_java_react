@@ -49,6 +49,17 @@ type CodeBlock = {
 
 type ResponseMode = "analyze" | "edit";
 
+type CopilotStageEvent = {
+	id: string;
+	stage: string;
+	message: string;
+	percent?: number;
+	current?: number;
+	total?: number;
+	rangeLabel?: string;
+	timestamp: number;
+};
+
 type CopilotChatProps = {
 	appId: string;
 	currentCode?: string;
@@ -57,6 +68,8 @@ type CopilotChatProps = {
 	onCodeInsert?: (code: string) => void;
 	onUserMessage?: (payload: CopilotUserMessagePayload) => void;
 	autoApplyCodeBlock?: boolean;
+	autoApplyPreferenceKey?: string;
+	onAutoApplyChange?: (enabled: boolean) => void;
 };
 
 const CHAT_HISTORY_KEY = "codeeditor.copilot.chat.v1";
@@ -67,6 +80,7 @@ const MAX_TEXT_FILE_BYTES = 1024 * 1024;
 const MAX_IMAGE_FILE_BYTES = 5 * 1024 * 1024;
 const STREAM_UI_FLUSH_MS = 48;
 const STREAM_CODEBLOCK_PARSE_MS = 240;
+const AUTO_APPLY_PREF_KEY = "copilot.autoApply";
 const TEXT_FILE_EXTENSIONS = new Set([
 	"txt", "md", "markdown", "json", "js", "ts", "tsx", "jsx", "java", "sql", "css", "scss", "less",
 	"html", "xml", "yml", "yaml", "csv", "py", "properties", "env", "log", "ini",
@@ -122,6 +136,29 @@ function summarizeFileContent(file: File, textContent: string): string {
 
 function createAttachmentId(prefix: string): string {
 	return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function resolveAutoApplyStorageKey(preferenceKey?: string): string {
+	const suffix = String(preferenceKey || "default").trim() || "default";
+	return `${AUTO_APPLY_PREF_KEY}:${suffix}`;
+}
+
+function loadAutoApplyPreference(preferenceKey: string | undefined, fallback: boolean): boolean {
+	try {
+		const raw = localStorage.getItem(resolveAutoApplyStorageKey(preferenceKey));
+		if (raw == null) return fallback;
+		return raw === "1" || raw === "true";
+	} catch {
+		return fallback;
+	}
+}
+
+function saveAutoApplyPreference(preferenceKey: string | undefined, value: boolean) {
+	try {
+		localStorage.setItem(resolveAutoApplyStorageKey(preferenceKey), value ? "1" : "0");
+	} catch {
+		// ignore localStorage write failures
+	}
 }
 
 function extractMenuDraftForEditor(raw: unknown): string {
@@ -252,13 +289,16 @@ export default function CopilotChat({
 	onCodeInsert,
 	onUserMessage,
 	autoApplyCodeBlock = false,
+	autoApplyPreferenceKey,
+	onAutoApplyChange,
 }: CopilotChatProps) {
 	const { i18n } = useTranslation();
 	const [messages, setMessages] = useState<ChatMessage[]>(getChatHistory());
 	const [inputValue, setInputValue] = useState("");
 	const [isLoading, setIsLoading] = useState(false);
-	const [autoApplyEnabled, setAutoApplyEnabled] = useState<boolean>(autoApplyCodeBlock);
+	const [autoApplyEnabled, setAutoApplyEnabled] = useState<boolean>(() => loadAutoApplyPreference(autoApplyPreferenceKey, Boolean(autoApplyCodeBlock)));
 	const [pendingAttachments, setPendingAttachments] = useState<CopilotAttachment[]>([]);
+	const [stageEvents, setStageEvents] = useState<CopilotStageEvent[]>([]);
 	const messageListRef = useRef<HTMLDivElement>(null);
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const imageInputRef = useRef<HTMLInputElement>(null);
@@ -276,12 +316,18 @@ export default function CopilotChat({
 	const scrollFrameRef = useRef<number | null>(null);
 	const lastSmoothScrollAtRef = useRef<number>(0);
 	const turnAllowAutoApplyRef = useRef<boolean>(false);
+	const stageEventSignaturesRef = useRef<Set<string>>(new Set());
 	const isMac = /Mac|iPhone|iPad|iPod/i.test(navigator.platform || "");
 	const sendHintKey = isMac ? "Cmd" : "Ctrl";
 
 	useEffect(() => {
-		setAutoApplyEnabled(Boolean(autoApplyCodeBlock));
-	}, [autoApplyCodeBlock]);
+		setAutoApplyEnabled(loadAutoApplyPreference(autoApplyPreferenceKey, Boolean(autoApplyCodeBlock)));
+	}, [autoApplyCodeBlock, autoApplyPreferenceKey]);
+
+	useEffect(() => {
+		saveAutoApplyPreference(autoApplyPreferenceKey, autoApplyEnabled);
+		onAutoApplyChange?.(autoApplyEnabled);
+	}, [autoApplyEnabled, autoApplyPreferenceKey, onAutoApplyChange]);
 
 	const pickPreferredCodeBlock = useCallback((blocks: CodeBlock[]): CodeBlock | null => {
 		if (!Array.isArray(blocks) || blocks.length === 0) return null;
@@ -313,6 +359,101 @@ export default function CopilotChat({
 		if (lang.startsWith("en")) return en;
 		return vi;
 	}, [i18n.language, i18n.resolvedLanguage]);
+
+	const formatStageLabel = useCallback((stage: string): string => {
+		const normalized = String(stage || "").trim().toLowerCase();
+		switch (normalized) {
+			case "preparing":
+				return uiText("Preparing", "Preparing", "准备中");
+			case "streaming":
+				return uiText("Streaming", "Streaming", "流式输出");
+			case "direct_call":
+				return uiText("Direct Call", "Direct Call", "直接调用");
+			case "chunking":
+				return uiText("Chunking", "Chunking", "分块处理中");
+			case "reducing":
+				return uiText("Reducing", "Reducing", "归并中");
+			case "final_merge":
+				return uiText("Final Merge", "Final Merge", "最终合并");
+			case "completed":
+			case "complete":
+				return uiText("Completed", "Completed", "已完成");
+			case "error":
+				return uiText("Error", "Error", "错误");
+			default:
+				return normalized ? normalized : uiText("Processing", "Processing", "处理中");
+		}
+	}, [uiText]);
+
+	const extractStageRangeLabel = useCallback((data: any): string | undefined => {
+		const candidates: any[] =
+			(Array.isArray(data?.textEdits) && data.textEdits.length > 0 && data.textEdits)
+			|| (Array.isArray(data?.lineRanges) && data.lineRanges.length > 0 && data.lineRanges)
+			|| (Array.isArray(data?.changedRanges) && data.changedRanges.length > 0 && data.changedRanges)
+			|| [];
+		if (candidates.length === 0) return undefined;
+
+		const normalizeLine = (item: any, key: "start" | "end"): number => {
+			const raw = key === "start"
+				? (item?.startLine ?? item?.fromLine ?? item?.range?.startLine ?? item?.range?.start?.line)
+				: (item?.endLine ?? item?.toLine ?? item?.range?.endLine ?? item?.range?.end?.line ?? item?.startLine ?? item?.fromLine);
+			const value = Number(raw);
+			return Number.isFinite(value) ? Math.max(1, value) : 1;
+		};
+
+		const ranges = candidates
+			.slice(0, 3)
+			.map((item) => {
+				const startLine = normalizeLine(item, "start");
+				const endLine = Math.max(startLine, normalizeLine(item, "end"));
+				return startLine === endLine ? `L${startLine}` : `L${startLine}-L${endLine}`;
+			});
+		if (ranges.length === 0) return undefined;
+		if (candidates.length > 3) {
+			ranges.push(`+${candidates.length - 3}`);
+		}
+		return ranges.join(", ");
+	}, []);
+
+	const appendStageEvent = useCallback((data: any) => {
+		const stage = String(data?.stage || data?.status || "").trim();
+		const msg = String(data?.message || "").trim();
+		const rangeLabel = extractStageRangeLabel(data);
+		const hasValue = stage || msg || Number.isFinite(Number(data?.percent)) || Boolean(rangeLabel);
+		if (!hasValue) return;
+
+		const percentNum = Number(data?.percent);
+		const currentNum = Number(data?.current);
+		const totalNum = Number(data?.total);
+		const signature = [
+			stage.toLowerCase(),
+			msg,
+			Number.isFinite(percentNum) ? percentNum : "",
+			Number.isFinite(currentNum) ? currentNum : "",
+			Number.isFinite(totalNum) ? totalNum : "",
+			rangeLabel || "",
+		].join("|");
+
+		if (stageEventSignaturesRef.current.has(signature)) return;
+		stageEventSignaturesRef.current.add(signature);
+
+		setStageEvents((prev) => {
+			const next: CopilotStageEvent[] = [
+				...prev,
+				{
+					id: `stage_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+					stage: stage || "processing",
+					message: msg,
+					percent: Number.isFinite(percentNum) ? percentNum : undefined,
+					current: Number.isFinite(currentNum) ? currentNum : undefined,
+					total: Number.isFinite(totalNum) ? totalNum : undefined,
+					rangeLabel,
+					timestamp: Date.now(),
+				},
+			];
+			return next.slice(-60);
+		});
+	}, [extractStageRangeLabel]);
 
 	const isNearBottom = useCallback((element: HTMLDivElement, threshold = 72): boolean => {
 		const distance = element.scrollHeight - element.scrollTop - element.clientHeight;
@@ -541,6 +682,7 @@ export default function CopilotChat({
 			const chunk = String(data?.chunk || "");
 			const explicitDraft = String(data?.draftText || data?.partialJson || data?.previewJson || "").trim();
 			const textEdits = Array.isArray(data?.textEdits) ? data.textEdits : null;
+			appendStageEvent(data);
 
 			if (chunk) {
 				pendingStreamChunkRef.current += chunk;
@@ -571,6 +713,13 @@ export default function CopilotChat({
 		};
 
 		const handleCopilotComplete = (data: any) => {
+			appendStageEvent({
+				stage: "completed",
+				message: uiText("Hoàn tất", "Completed", "已完成"),
+				percent: 100,
+				current: 1,
+				total: 1,
+			});
 			if (streamFlushTimerRef.current) {
 				clearTimeout(streamFlushTimerRef.current);
 				streamFlushTimerRef.current = null;
@@ -593,6 +742,10 @@ export default function CopilotChat({
 		};
 
 		const handleCopilotError = (data: any) => {
+			appendStageEvent({
+				stage: "error",
+				message: String(data?.error || uiText("Chat thất bại", "Chat failed", "对话失败")),
+			});
 			setIsLoading(false);
 			if (streamFlushTimerRef.current) {
 				clearTimeout(streamFlushTimerRef.current);
@@ -628,7 +781,7 @@ export default function CopilotChat({
 			socket.off?.("copilot_chat_error", handleCopilotError);
 			lastListenerSetupRef.current = false;
 		};
-	}, [socket, appId, applyRealtimeCodeFromText, uiText, onCodeInsert, contextType, currentCode, autoApplyEnabled, scrollToBottom, flushStreamingToUI, scheduleStreamFlush]);
+	}, [socket, appId, applyRealtimeCodeFromText, uiText, onCodeInsert, contextType, currentCode, autoApplyEnabled, scrollToBottom, flushStreamingToUI, scheduleStreamFlush, appendStageEvent]);
 
 	// Auto-scroll to latest message
 	useEffect(() => {
@@ -689,11 +842,18 @@ export default function CopilotChat({
 
 			setMessages([...newMessages, assistantMsg]);
 			setIsLoading(true);
+			setStageEvents([]);
+			stageEventSignaturesRef.current = new Set();
 			followBottomRef.current = true;
 			streamingMessageRef.current = "";
 			pendingStreamChunkRef.current = "";
 			parsedCodeBlocksRef.current = [];
 			lastCodeBlockParseAtRef.current = 0;
+			appendStageEvent({
+				stage: "preparing",
+				message: uiText("Đang chuẩn bị yêu cầu", "Preparing request", "正在准备请求"),
+				percent: 0,
+			});
 			const responseMode: ResponseMode = modeDirective.overrideMode
 				|| (autoApplyEnabled && hasEditIntent(cleanedMessage || normalizedText) ? "edit" : "analyze");
 			turnAllowAutoApplyRef.current = responseMode === "edit";
@@ -722,6 +882,7 @@ export default function CopilotChat({
 							dataUrl: attachment.dataUrl,
 						})),
 					},
+					timeout: 300000,
 					ignoreLoading: true,
 				});
 
@@ -738,7 +899,7 @@ export default function CopilotChat({
 				turnAllowAutoApplyRef.current = false;
 			}
 		},
-		[appId, autoApplyEnabled, contextType, currentCode, isLoading, language, messages, onUserMessage, pendingAttachments, socketConnected, uiText]
+		[appId, autoApplyEnabled, contextType, currentCode, isLoading, language, messages, onUserMessage, pendingAttachments, socketConnected, uiText, appendStageEvent]
 	);
 
 	const handleSend = () => {
@@ -798,7 +959,11 @@ export default function CopilotChat({
 		>
 			<div className={styles.container}>
 				{/* Messages List */}
-				<div className={styles.messageList} ref={messageListRef} onScroll={handleMessageListScroll}>
+				<div
+					className={`${styles.messageList} ${messages.length > 0 ? styles.messageListPinnedBottom : ""}`.trim()}
+					ref={messageListRef}
+					onScroll={handleMessageListScroll}
+				>
 					{messages.length === 0 ? (
 						<Empty
 							description={uiText("Bắt đầu trò chuyện với Trợ lý AI", "Start a conversation with AI Assistant", "开始与 AI 助手对话")}
@@ -886,9 +1051,41 @@ export default function CopilotChat({
 					)}
 
 					{isLoading && (
+						<>
+							{stageEvents.length > 0 && (
+								<div className={`${styles.messageItem} ${styles.assistant}`}>
+									<div className={`${styles.messageContent} ${styles.stageTimelineCard}`}>
+										<div className={styles.stageTimelineTitle}>
+											{uiText("Tiến độ xử lý", "Processing timeline", "处理进度")}
+										</div>
+										<div className={styles.stageTimelineList}>
+											{stageEvents.map((event) => {
+												const stageLabel = formatStageLabel(event.stage);
+												const percentText = Number.isFinite(Number(event.percent)) ? ` (${Math.max(0, Math.min(100, Number(event.percent)))}%)` : "";
+												const progressText = Number.isFinite(Number(event.current)) && Number.isFinite(Number(event.total))
+													? ` [${Math.max(0, Number(event.current))}/${Math.max(1, Number(event.total))}]`
+													: "";
+												return (
+													<div key={event.id} className={styles.stageTimelineItem}>
+														<span className={styles.stageTimelineBullet} />
+														<div className={styles.stageTimelineText}>
+															<div className={styles.stageTimelineHead}>
+																<span>{stageLabel}{percentText}{progressText}</span>
+																{event.rangeLabel && <span className={styles.stageRangeBadge}>{event.rangeLabel}</span>}
+															</div>
+															{event.message && <div className={styles.stageTimelineMessage}>{event.message}</div>}
+														</div>
+													</div>
+												);
+											})}
+										</div>
+									</div>
+								</div>
+							)}
 						<div className={`${styles.messageItem} ${styles.assistant}`}>
 							<Spin size="small" />
 						</div>
+						</>
 					)}
 				</div>
 

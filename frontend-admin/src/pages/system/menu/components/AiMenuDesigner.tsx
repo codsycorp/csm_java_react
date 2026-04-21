@@ -2890,6 +2890,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
   const [resultStats, setResultStats] = useState({ lines: 1, chars: 0 });
   /** Ref to the result CodeMirror view so we can dispatch decoration effects */
   const resultEditorViewRef = useRef<any>(null);
+  const lastPopulatedAppIdRef = useRef<string | undefined>(undefined);
   const activeAiJobIdRef = useRef<string | null>(null);
   const aiJobResolveRef = useRef<((value: any) => void) | null>(null);
   const aiJobRejectRef = useRef<((reason?: unknown) => void) | null>(null);
@@ -3311,13 +3312,25 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
   useEffect(() => {
     if (loading) return;
     if (!appId) return;
-    if (editableAiDraftText.trim()) return;
-    if (aiResultText.trim()) return;
+
+    const alreadyPopulated = lastPopulatedAppIdRef.current === appId;
+
+    // Same app – only skip if the editor has content the user may have edited
+    if (alreadyPopulated && editableAiDraftText.trim()) return;
+    if (alreadyPopulated && aiResultText.trim()) return;
+
     if (Array.isArray(currentMenus) && currentMenus.length > 0) {
+      lastPopulatedAppIdRef.current = appId;
       setEditorFromMenus(currentMenus, "current");
       return;
     }
-    setEditableAiDraftText(buildEditorMenuJson([]));
+
+    if (!alreadyPopulated) {
+      // App just changed and menus haven't loaded yet – clear and wait
+      lastPopulatedAppIdRef.current = appId;
+      setEditableAiDraftText("");
+      setAiResultText("");
+    }
   }, [appId, currentMenus, loading, editableAiDraftText, aiResultText]);
 
   const generateMenuWithRealtime = async (
@@ -4659,6 +4672,9 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
   const editorShellStyle = {
     border: "1px solid var(--ant-color-border)",
     borderRadius: 12,
+    width: "100%",
+    maxWidth: "100%",
+    minWidth: 0,
     overflow: "hidden",
     background: "var(--ant-color-bg-container)",
     boxShadow: "var(--ant-box-shadow-secondary)",
@@ -4695,6 +4711,10 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
   const sectionTitleStyle = { fontSize: 13, fontWeight: 600, letterSpacing: 0.2 } as const;
   const rightEditorPanelStyle = {
     ...sectionCardStyle,
+    minWidth: 0,
+    width: "100%",
+    maxWidth: "100%",
+    overflowX: "hidden" as const,
     gridColumn: "auto",
     gridRow: "auto",
     position: "static" as const,
@@ -4923,7 +4943,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
         )}
         </div>
 
-        <div style={{ ...rightEditorPanelStyle, display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ ...rightEditorPanelStyle, display: "flex", flexDirection: "column", gap: 10, minWidth: 0 }}>
               {aiResultText && aiMenus && aiMenus.length > 0 && (
                 <Tag color="success">{`${t("system.menu.aiDesigner.generatedCount") || "AI đã tạo thành công"} ${aiMenus.length} ${t("system.menu.aiDesigner.menuFeatures") || "menu/chức năng"}`}</Tag>
               )}
@@ -5207,6 +5227,9 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                 <div
                   style={{
                     display: "flex",
+                    width: "100%",
+                    minWidth: 0,
+                    boxSizing: "border-box",
                     gap: 8,
                     flexWrap: "wrap",
                     justifyContent: "space-between",

@@ -43,6 +43,8 @@ import net.phanmemmottrieu.model.UrlSubmissionHistory;
 import java.io.IOException;
 import java.text.Normalizer;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -51,6 +53,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicReference;
 
 @RestController
 public class ApiSpringController {
@@ -810,6 +813,7 @@ public class ApiSpringController {
             
             // Set up streaming via Socket.IO
             StringBuilder fullResponse = new StringBuilder();
+            AtomicReference<String> lastDraftRef = new AtomicReference<>(currentCode == null ? "" : currentCode);
             GitHubModelsService.ProgressListener streamListener = (progress) -> {
                 String stage = String.valueOf(progress.getOrDefault("stage", ""));
                 String chunk = String.valueOf(progress.getOrDefault("chunk", ""));
@@ -829,29 +833,67 @@ public class ApiSpringController {
                 if (current != null) realtimePayload.put("current", current);
                 if (total != null) realtimePayload.put("total", total);
                 if (percent != null) realtimePayload.put("percent", percent);
+                Object status = progress.get("status");
+                if (status != null) realtimePayload.put("status", status);
 
                 // Keep compatibility with legacy realtime editor payloads.
                 Object draftText = progress.get("draftText");
                 Object partialJson = progress.get("partialJson");
                 Object previewJson = progress.get("previewJson");
                 Object textEdits = progress.get("textEdits");
+                Object lineRanges = progress.get("lineRanges");
+                Object changedRanges = progress.get("changedRanges");
                 Object patchOps = progress.get("patchOps");
+
+                String realtimeDraft = extractRealtimeDraftText(progress);
+                List<Map<String, Object>> generatedTextEdits = Collections.emptyList();
+                if (!realtimeDraft.isBlank()) {
+                    String previousDraft = String.valueOf(lastDraftRef.get() == null ? "" : lastDraftRef.get());
+                    if (!realtimeDraft.equals(previousDraft)) {
+                        generatedTextEdits = buildLineTextEdits(previousDraft, realtimeDraft);
+                        lastDraftRef.set(realtimeDraft);
+                    }
+                }
+
                 if (draftText != null) realtimePayload.put("draftText", draftText);
                 if (partialJson != null) realtimePayload.put("partialJson", partialJson);
                 if (previewJson != null) realtimePayload.put("previewJson", previewJson);
-                if (textEdits != null) realtimePayload.put("textEdits", textEdits);
+                if (textEdits != null) {
+                    realtimePayload.put("textEdits", textEdits);
+                } else if (!generatedTextEdits.isEmpty()) {
+                    realtimePayload.put("textEdits", generatedTextEdits);
+                }
+                if (lineRanges != null) {
+                    realtimePayload.put("lineRanges", lineRanges);
+                }
+                if (changedRanges != null) {
+                    realtimePayload.put("changedRanges", changedRanges);
+                }
+                if (textEdits == null && lineRanges == null && changedRanges == null && !generatedTextEdits.isEmpty()) {
+                    List<Map<String, Object>> ranges = convertTextEditsToLineRanges(generatedTextEdits);
+                    if (!ranges.isEmpty()) {
+                        realtimePayload.put("lineRanges", ranges);
+                        realtimePayload.put("changedRanges", ranges);
+                    }
+                }
                 if (patchOps != null) realtimePayload.put("patchOps", patchOps);
 
                 boolean hasChunk = !chunk.isEmpty();
                 boolean hasRealtimeDraft = draftText != null || partialJson != null || previewJson != null;
-                boolean hasRealtimeEdits = textEdits != null || patchOps != null;
-                if (hasChunk || hasRealtimeDraft || hasRealtimeEdits) {
+                boolean hasRealtimeEdits = textEdits != null || lineRanges != null || changedRanges != null || patchOps != null || !generatedTextEdits.isEmpty();
+                boolean hasStatus = !stage.isEmpty()
+                    || !String.valueOf(progress.getOrDefault("message", "")).isEmpty()
+                    || current != null
+                    || total != null
+                    || percent != null
+                    || status != null;
+                if (hasChunk || hasRealtimeDraft || hasRealtimeEdits || hasStatus) {
                     emitCopilotChatChunk(appId, realtimePayload);
                 }
             };
 
             // Call GitHub Models with streaming
-            String result = gitHubModelsService.chatWithStreamingMessages(messages, streamListener);
+            gitHubModelsService.chatWithStreamingMessages(messages, streamListener);
             
             // Emit completion event
             Map<String, Object> completion = new HashMap<>();
@@ -1696,6 +1738,7 @@ public class ApiSpringController {
         job.put("createdAt", now);
         job.put("updatedAt", now);
         job.put("cancelled", false);
+        job.put("_lastDraftText", "");
         job.put("pollAfterMs", aiAsyncPollMinMs);
         job.put("progress", createAiJobProgress("queued", "Đang xếp hàng xử lý AI", 0, 1, null));
         aiAsyncJobs.put(jobId, job);
@@ -1712,7 +1755,8 @@ public class ApiSpringController {
                 StandardResponse syncResponse = new StandardResponse();
                 String rawContent = fetchAiRawContent(prompt, progress -> {
                     if (!isAiJobCancelled(job)) {
-                        updateAiAsyncJobProgress(job, enrichAiProgressWithMergePreview(progress, params));
+                        Map<String, Object> mergedProgress = enrichAiProgressWithMergePreview(progress, params);
+                        updateAiAsyncJobProgress(job, enrichAiProgressWithLineTextEdits(mergedProgress, job));
                     }
                 }, params);
                 if (isAiJobCancelled(job)) {
@@ -2118,6 +2162,155 @@ public class ApiSpringController {
             progress.putAll(extra);
         }
         return progress;
+    }
+
+    private Map<String, Object> enrichAiProgressWithLineTextEdits(Map<String, Object> progress, Map<String, Object> job) {
+        if (progress == null) {
+            return null;
+        }
+        if (job == null) {
+            return progress;
+        }
+
+        String nextDraft = extractRealtimeDraftText(progress);
+        if (nextDraft.isBlank()) {
+            return progress;
+        }
+
+        String previousDraft = String.valueOf(job.getOrDefault("_lastDraftText", ""));
+        if (nextDraft.equals(previousDraft)) {
+            return progress;
+        }
+
+        List<Map<String, Object>> generated = buildLineTextEdits(previousDraft, nextDraft);
+        job.put("_lastDraftText", nextDraft);
+        if (generated.isEmpty()) {
+            return progress;
+        }
+
+        Object existingTextEdits = progress.get("textEdits");
+        Object existingLineRanges = progress.get("lineRanges");
+        Object existingChangedRanges = progress.get("changedRanges");
+        if ((existingTextEdits instanceof List && !((List<?>) existingTextEdits).isEmpty())
+                || (existingLineRanges instanceof List && !((List<?>) existingLineRanges).isEmpty())
+                || (existingChangedRanges instanceof List && !((List<?>) existingChangedRanges).isEmpty())) {
+            return progress;
+        }
+
+        Map<String, Object> enriched = new HashMap<>(progress);
+        enriched.put("textEdits", generated);
+        List<Map<String, Object>> ranges = convertTextEditsToLineRanges(generated);
+        if (!ranges.isEmpty()) {
+            enriched.put("lineRanges", ranges);
+            enriched.put("changedRanges", ranges);
+        }
+        return enriched;
+    }
+
+    private String extractRealtimeDraftText(Map<String, Object> payload) {
+        if (payload == null || payload.isEmpty()) {
+            return "";
+        }
+        String[] keys = new String[] {
+            "draftText", "partialJson", "previewJson", "draftCode", "partialCode", "previewCode", "code"
+        };
+        for (String key : keys) {
+            Object value = payload.get(key);
+            if (value instanceof String) {
+                String text = (String) value;
+                if (!text.isBlank()) {
+                    return text;
+                }
+            }
+        }
+        return "";
+    }
+
+    private List<Map<String, Object>> buildLineTextEdits(String beforeText, String afterText) {
+        String oldText = beforeText == null ? "" : beforeText;
+        String newText = afterText == null ? "" : afterText;
+        if (newText.equals(oldText)) {
+            return Collections.emptyList();
+        }
+
+        String[] oldLines = oldText.split("\\n", -1);
+        String[] newLines = newText.split("\\n", -1);
+
+        int prefix = 0;
+        int minLen = Math.min(oldLines.length, newLines.length);
+        while (prefix < minLen && oldLines[prefix].equals(newLines[prefix])) {
+            prefix++;
+        }
+
+        int oldSuffix = oldLines.length - 1;
+        int newSuffix = newLines.length - 1;
+        while (oldSuffix >= prefix && newSuffix >= prefix && oldLines[oldSuffix].equals(newLines[newSuffix])) {
+            oldSuffix--;
+            newSuffix--;
+        }
+
+        int oldChangedCount = oldSuffix >= prefix ? (oldSuffix - prefix + 1) : 0;
+        int newChangedCount = newSuffix >= prefix ? (newSuffix - prefix + 1) : 0;
+        if (oldChangedCount == 0 && newChangedCount == 0) {
+            return Collections.emptyList();
+        }
+
+        int startLine = prefix + 1;
+        int endLine = oldChangedCount > 0 ? (oldSuffix + 1) : startLine;
+        String replacement = newChangedCount > 0
+            ? String.join("\n", Arrays.copyOfRange(newLines, prefix, newSuffix + 1))
+            : "";
+
+        String action;
+        if (oldChangedCount == 0 && newChangedCount > 0) {
+            action = "add";
+        } else if (newChangedCount == 0 && oldChangedCount > 0) {
+            action = "delete";
+        } else {
+            action = "edit";
+        }
+
+        Map<String, Object> edit = new HashMap<>();
+        edit.put("startLine", startLine);
+        edit.put("endLine", Math.max(startLine, endLine));
+        edit.put("replacement", replacement);
+        edit.put("action", action);
+
+        return List.of(edit);
+    }
+
+    private List<Map<String, Object>> convertTextEditsToLineRanges(List<Map<String, Object>> textEdits) {
+        if (textEdits == null || textEdits.isEmpty()) {
+            return Collections.emptyList();
+        }
+        List<Map<String, Object>> ranges = new ArrayList<>();
+        for (Map<String, Object> edit : textEdits) {
+            if (edit == null) continue;
+            int startLine = parseIntOrDefault(edit.get("startLine"), 1);
+            int endLine = Math.max(startLine, parseIntOrDefault(edit.get("endLine"), startLine));
+            String action = String.valueOf(edit.getOrDefault("action", "edit"));
+
+            Map<String, Object> range = new HashMap<>();
+            range.put("startLine", startLine);
+            range.put("endLine", endLine);
+            range.put("fromLine", startLine);
+            range.put("toLine", endLine);
+            range.put("action", action);
+            range.put("type", action);
+            ranges.add(range);
+        }
+        return ranges;
+    }
+
+    private int parseIntOrDefault(Object raw, int fallback) {
+        if (raw instanceof Number) {
+            return ((Number) raw).intValue();
+        }
+        try {
+            return Integer.parseInt(String.valueOf(raw));
+        } catch (Exception ignored) {
+            return fallback;
+        }
     }
 
     /**
