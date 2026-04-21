@@ -356,6 +356,9 @@ public class GitHubModelsService {
   @Value("${github.models.realtime-draft.every-chunks:1}")
   private int realtimeDraftEveryChunks;
 
+  @Value("${github.models.stability.menu-only-context-injection:true}")
+  private boolean menuOnlyContextInjection;
+
   private final Semaphore requestSemaphore = new Semaphore(1, true);
   private volatile long lastRequestAtMs = 0L;
   private volatile long currentWindowStartMs = 0L;
@@ -378,10 +381,6 @@ public class GitHubModelsService {
     if (!enabled) {
       return createErrorJson("GitHub Models fallback đang tắt", "GITHUB_MODELS_DISABLED");
     }
-    String systemCore = getMasterPrompt();
-    if (systemCore == null || systemCore.trim().isEmpty()) {
-      return createErrorJson("Không load được System Core (master prompt)", "MASTER_PROMPT_MISSING");
-    }
     if (prompt == null || prompt.trim().isEmpty()) {
       return createErrorJson("Prompt không được để trống", "INVALID_PROMPT");
     }
@@ -389,16 +388,29 @@ public class GitHubModelsService {
       return createErrorJson("Thiếu github.models.token để gọi GitHub Models API", "GITHUB_TOKEN_MISSING");
     }
 
+    String trimmedPrompt = prompt.trim();
+
     // Inject scenario-specific instructions between master prompt and dynamic context
     AiMenuOperationScenario scenario = extractOperationScenario(prompt);
-    String scenarioContext = buildScenarioContext(prompt);
+    boolean isMenuScenario = scenario != AiMenuOperationScenario.UNKNOWN;
+    boolean shouldInjectMenuContext = !menuOnlyContextInjection || isMenuScenario;
+
+    String systemCore = "";
+    String scenarioContext = null;
+    if (shouldInjectMenuContext) {
+      systemCore = getMasterPrompt();
+      if (systemCore == null || systemCore.trim().isEmpty()) {
+        return createErrorJson("Không load được System Core (master prompt)", "MASTER_PROMPT_MISSING");
+      }
+      scenarioContext = buildScenarioContext(prompt);
+    }
 
     // Load per-app session context file (if prompt doesn't already embed session_memory)
     // This mirrors how Copilot injects its /memories/session context into each request.
     String appContextBlock = "";
     boolean promptAlreadyHasSessionMemory = prompt.contains("session_memory")
         || prompt.contains("APP CONTINUITY MEMORY");
-    if (!promptAlreadyHasSessionMemory) {
+    if (shouldInjectMenuContext && !promptAlreadyHasSessionMemory) {
       String promptAppId = extractAppIdFromPrompt(prompt);
       if (promptAppId != null) {
         String ctxFile = loadAppContextFile(promptAppId);
@@ -413,14 +425,17 @@ public class GitHubModelsService {
 
     // Compose final prompt: [System_Core]\n\n[App_Context?]\n\n[Scenario_Context?]\n\n[Dynamic_Context]
     String finalPrompt;
-    if (appContextBlock.isBlank() && (scenarioContext == null || scenarioContext.isBlank())) {
-      finalPrompt = systemCore.trim() + "\n\n" + prompt.trim();
+    String scenarioContextText = scenarioContext == null ? "" : scenarioContext.trim();
+    if (!shouldInjectMenuContext) {
+      finalPrompt = trimmedPrompt;
+    } else if (appContextBlock.isBlank() && scenarioContextText.isBlank()) {
+      finalPrompt = systemCore.trim() + "\n\n" + trimmedPrompt;
     } else if (appContextBlock.isBlank()) {
-      finalPrompt = systemCore.trim() + "\n\n" + scenarioContext.trim() + "\n\n" + prompt.trim();
-    } else if (scenarioContext == null || scenarioContext.isBlank()) {
-      finalPrompt = systemCore.trim() + appContextBlock + "\n\n" + prompt.trim();
+      finalPrompt = systemCore.trim() + "\n\n" + scenarioContextText + "\n\n" + trimmedPrompt;
+    } else if (scenarioContextText.isBlank()) {
+      finalPrompt = systemCore.trim() + appContextBlock + "\n\n" + trimmedPrompt;
     } else {
-      finalPrompt = systemCore.trim() + appContextBlock + "\n\n" + scenarioContext.trim() + "\n\n" + prompt.trim();
+      finalPrompt = systemCore.trim() + appContextBlock + "\n\n" + scenarioContextText + "\n\n" + trimmedPrompt;
     }
 
     if (finalPrompt.length() > maxPromptChars) {

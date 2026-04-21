@@ -822,6 +822,7 @@ export default function CodeEditor() {
 			});
 
 			const response = await generateSeoContentWithPrompt(prompt, {
+				taskType: "developer_code_editor",
 				onProgress: (progress) => {
 					const liveDraft = [
 						progress?.draftCode,

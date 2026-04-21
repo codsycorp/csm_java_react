@@ -80,6 +80,12 @@ public class ApiSpringController {
     @Value("${ai.prompt.gemini-max-chars:500000}")
     private int geminiMaxPromptChars;
 
+    @Value("${ai.routing.stability.prefer-github-for-coding:true}")
+    private boolean preferGithubForCoding;
+
+    @Value("${ai.routing.stability.disable-fallback-for-coding:true}")
+    private boolean disableFallbackForCoding;
+
     @Value("${ai.async.job-ttl-ms:3600000}")
     private long aiAsyncJobTtlMs;
 
@@ -848,6 +854,10 @@ public class ApiSpringController {
         );
         String taskType = taskTypeRaw == null ? "" : taskTypeRaw.toLowerCase();
         boolean isMenuDesignTask = taskType.contains("menu_design");
+        boolean isCodingTask = taskType.contains("code")
+            || taskType.contains("coding")
+            || taskType.contains("developer")
+            || taskType.contains("editor");
 
         String providerPreferenceRaw = firstNonBlankString(
                 params != null ? params.get("providerPreference") : null,
@@ -869,19 +879,24 @@ public class ApiSpringController {
         }
 
         // For menu design, always route to Copilot/GitHub Models and never fallback to Gemini.
-        boolean forceGithub = isMenuDesignTask || preferGithubProvider;
+        boolean forceGithub = isMenuDesignTask || preferGithubProvider || (preferGithubForCoding && isCodingTask);
 
         boolean disableGeminiFallback = (params != null && Boolean.TRUE.equals(params.get("disableGeminiFallback")))
                 || "true".equalsIgnoreCase(String.valueOf(params != null ? params.get("disableGeminiFallback") : null));
         if (isMenuDesignTask) {
             disableGeminiFallback = true;
         }
+        if (disableFallbackForCoding && isCodingTask) {
+            disableGeminiFallback = true;
+        }
 
         if (forceGithub) {
             if (params != null) {
                 params.put("_providerRoutingDecision", isMenuDesignTask
-                        ? "forced_github_menu_design_no_gemini_fallback"
-                        : "forced_github_by_preference");
+                    ? "forced_github_menu_design_no_gemini_fallback"
+                    : (isCodingTask && preferGithubForCoding
+                        ? "forced_github_coding_stability"
+                        : "forced_github_by_preference"));
             }
             if (progressListener != null) {
                 progressListener.onProgress(createAiJobProgress("github_models", "Đang gọi GitHub Models (ưu tiên theo yêu cầu)", 0, 1, null));

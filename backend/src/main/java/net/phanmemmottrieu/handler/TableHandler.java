@@ -549,15 +549,22 @@ public class TableHandler {
                 return errorResponse("Tên bảng '" + tblname + "' là tên hệ thống, không thể sử dụng làm tên bảng dữ liệu.");
             }
 
-            // Bảo vệ cross-app ghi: chỉ dev mới được phép ghi vào bảng của app_id khác.
-            // Ngoại lệ: bảng hệ thống (csm_*, sys_*) có access control riêng qua validateSystemUserTableAccess.
-            // READ (isUpdate=false) không bị giới hạn ở đây vì nhiều bảng csm/sys được đọc cross-app hợp lệ.
-            if (isUpdate && !tblname.startsWith("csm_") && !tblname.startsWith("sys_")) {
+            // Bảo vệ cross-app đọc/ghi cho bảng nghiệp vụ:
+            // - Dev: được phép cross-app.
+            // - Tài khoản hệ thống app_id=csm: cho phép giữ quyền vận hành liên ứng dụng.
+            // - User app thường: chỉ được thao tác đúng app_id của chính mình.
+            // Bảng hệ thống (csm_*, sys_*) có access control riêng qua validateSystemUserTableAccess.
+            if (!tblname.startsWith("csm_") && !tblname.startsWith("sys_")) {
                 if (accessContext != null && !accessContext.isDev) {
                     String userAppId = safeStr(accessContext.appId);
-                    if (!userAppId.isEmpty() && !userAppId.equalsIgnoreCase(appId)) {
-                        logger.warn("[Security] Cross-app write denied: user.app_id={}, request.app_id={}, table={}", userAppId, appId, tblname);
-                        return errorResponse("Bạn không có quyền thay đổi dữ liệu của ứng dụng '" + appId + "'");
+                    boolean isSystemAppUser = "csm".equalsIgnoreCase(userAppId);
+                    if (!isSystemAppUser && !userAppId.isEmpty() && !userAppId.equalsIgnoreCase(appId)) {
+                        String action = isUpdate ? "write" : "read";
+                        logger.warn("[Security] Cross-app {} denied: user.app_id={}, request.app_id={}, table={}", action, userAppId, appId, tblname);
+                        if (isUpdate) {
+                            return errorResponse("Bạn không có quyền thay đổi dữ liệu của ứng dụng '" + appId + "'");
+                        }
+                        return errorResponse("Bạn không có quyền xem dữ liệu của ứng dụng '" + appId + "'");
                     }
                 }
             }
