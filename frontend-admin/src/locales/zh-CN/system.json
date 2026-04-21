@@ -580,7 +580,7 @@
 				"current": "已将当前菜单 JSON 载入编辑器"
 			},
 			"mergePreview": {
-				"title": "类似 Copilot 的精确变更预览",
+				"title": "类似 AI 助手的精确变更预览",
 				"summary": "新增 {{added}}，修改 {{edited}}，删除 {{deleted}}",
 				"computing": "正在计算 merge",
 				"inlineInEditor": "变更详情会直接显示在 csm-editor 中",

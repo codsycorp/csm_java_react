@@ -27,8 +27,12 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.io.InputStream;
 import java.io.IOException;
+import java.util.Comparator;
 
 
 /**
@@ -83,6 +87,96 @@ public class GitHubModelsService {
       log.warn("Could not read AI context file for appId={}: {}", appId, e.getMessage());
       return "";
     }
+  }
+
+  /**
+   * Build menu knowledge context block for Copilot chat requests.
+   * Auto-loads ai_menu_*.md files when request is detected as menu design.
+   */
+  public String buildCopilotMenuKnowledgeBlock(String appId, String contextType, String taskType) {
+    if (!isMenuDesignContext(contextType, taskType)) {
+      return "";
+    }
+
+    List<String> sections = new ArrayList<>();
+    List<String> mdFiles = loadMenuKnowledgeFiles();
+    for (String entry : mdFiles) {
+      if (entry == null || entry.isBlank()) {
+        continue;
+      }
+      sections.add(entry);
+    }
+
+    String appContext = loadAppContextFile(appId);
+    if (!appContext.isBlank()) {
+      sections.add("### Session memory (ai_context_" + sanitizeAppName(appId) + ".md)\n" + appContext.trim());
+    }
+
+    if (sections.isEmpty()) {
+      return "";
+    }
+
+    return "## AUTO-LOADED MENU KNOWLEDGE\n"
+        + "Use these markdown references as high-priority context for menu design requests.\n\n"
+        + String.join("\n\n", sections);
+  }
+
+  private boolean isMenuDesignContext(String contextType, String taskType) {
+    String normalizedContext = contextType == null ? "" : contextType.trim().toLowerCase();
+    String normalizedTask = taskType == null ? "" : taskType.trim().toLowerCase();
+    return "menu_json".equals(normalizedContext)
+        || "menu_design".equals(normalizedTask)
+        || "menu".equals(normalizedTask);
+  }
+
+  private String sanitizeAppName(String appId) {
+    if (appId == null || appId.isBlank()) {
+      return "unknown";
+    }
+    return appId.replaceAll("[^a-zA-Z0-9_\\-]", "_");
+  }
+
+  private List<String> loadMenuKnowledgeFiles() {
+    Path dir = Paths.get(contextDir);
+    if (!Files.isDirectory(dir)) {
+      return Collections.emptyList();
+    }
+
+    final int maxCharsPerFile = 60000;
+    final int maxFiles = 12;
+    List<String> sections = new ArrayList<>();
+
+    try (var stream = Files.list(dir)) {
+      List<Path> markdownFiles = stream
+          .filter(Files::isRegularFile)
+          .filter(path -> {
+            String fileName = path.getFileName().toString().toLowerCase();
+            return fileName.startsWith("ai_menu_") && fileName.endsWith(".md");
+          })
+          .sorted(Comparator.comparing(path -> path.getFileName().toString().toLowerCase()))
+          .limit(maxFiles)
+          .toList();
+
+      for (Path path : markdownFiles) {
+        try {
+          String text = Files.readString(path, StandardCharsets.UTF_8);
+          if (text == null || text.isBlank()) {
+            continue;
+          }
+          String trimmed = text.trim();
+          if (trimmed.length() > maxCharsPerFile) {
+            trimmed = trimmed.substring(0, maxCharsPerFile) + "\n...[truncated]";
+          }
+          sections.add("### " + path.getFileName() + "\n" + trimmed);
+        } catch (Exception readEx) {
+          log.warn("Could not read menu knowledge file {}: {}", path, readEx.getMessage());
+        }
+      }
+    } catch (Exception e) {
+      log.warn("Could not scan menu knowledge directory {}: {}", dir, e.getMessage());
+    }
+
+    return sections;
   }
 
   /**
@@ -451,6 +545,137 @@ public class GitHubModelsService {
     }
 
     return generateDirectContent(finalPrompt, progressListener);
+  }
+
+  /**
+   * Stream chat messages for CodeMirror real-time interaction.
+   * Chunks are emitted via ProgressListener for Socket.IO broadcasting.
+   */
+  public String chatWithStreaming(String prompt, ProgressListener progressListener) {
+    List<Map<String, Object>> messages = List.of(
+        Map.of("role", "system", "content", "Bạn là một trợ lý lập trình giỏi. Trả lời ngắn gọn và hữu ích."),
+        Map.of("role", "user", "content", prompt == null ? "" : prompt.trim()));
+    return chatWithStreamingMessages(messages, progressListener);
+  }
+
+  public String chatWithStreamingMessages(List<Map<String, Object>> messages, ProgressListener progressListener) {
+    if (!enabled) {
+      return createErrorJson("GitHub Models không khả dụng", "GITHUB_MODELS_DISABLED");
+    }
+    if (messages == null || messages.isEmpty()) {
+      return createErrorJson("Messages rỗng", "INVALID_PROMPT");
+    }
+    if (token == null || token.trim().isEmpty()) {
+      return createErrorJson("Thiếu GitHub Models token", "GITHUB_TOKEN_MISSING");
+    }
+
+    try {
+      StringBuilder fullResponse = new StringBuilder();
+
+      emitProgress(progressListener, progressPayload("streaming", "Bắt đầu chat với Copilot", 0, 1, null));
+      
+      // Build request
+      Map<String, Object> body = new HashMap<>();
+      body.put("model", model);
+      body.put("messages", messages);
+      body.put("temperature", 0.7);
+      body.put("top_p", 0.95);
+      body.put("max_tokens", maxOutputTokens);
+      body.put("stream", true); // Enable streaming
+
+      HttpHeaders headers = new HttpHeaders();
+      headers.setContentType(MediaType.APPLICATION_JSON);
+      headers.setBearerAuth(token.trim());
+
+      HttpEntity<Map<String, Object>> request = new HttpEntity<>(body, headers);
+      
+      // Make streaming call
+      String rawResponse = callStreamingChatCompletion(request, progressListener);
+      
+      // Parse response into full text
+      String content = extractContent(rawResponse);
+      if (content != null && !content.isEmpty()) {
+        fullResponse.append(content);
+      }
+      
+      emitProgress(progressListener, progressPayload("complete", "Chat hoàn tất", 1, 1, 
+        Map.of("chunk", fullResponse.toString())));
+      
+      return createSuccessJson(fullResponse.toString(), "streaming_chat", null);
+      
+    } catch (Exception ex) {
+      log.error("Chat streaming failed", ex);
+      emitProgress(progressListener, progressPayload("error", "Chat lỗi: " + ex.getMessage(), 0, 1, null));
+      return createErrorJson("Chat streaming lỗi: " + ex.getMessage(), "CHAT_STREAMING_ERROR");
+    }
+  }
+
+  private String callStreamingChatCompletion(HttpEntity<Map<String, Object>> request, ProgressListener progressListener) {
+    StringBuilder accumulated = new StringBuilder();
+    try {
+      List<String> candidateModels = resolveCandidateModels();
+      
+      for (String candidateModel : candidateModels) {
+        try {
+          // Update model in request body
+          @SuppressWarnings("unchecked")
+          Map<String, Object> body = (Map<String, Object>) request.getBody();
+          body.put("model", candidateModel);
+          
+          HttpEntity<Map<String, Object>> updatedRequest = new HttpEntity<>(body, request.getHeaders());
+          
+          emitProgress(progressListener, progressPayload("streaming", "Đang kết nối tới " + candidateModel, 0, 1, null));
+          
+          // Call GitHub Models with streaming
+          ResponseEntity<String> response = restTemplate.postForEntity(apiUrl, updatedRequest, String.class);
+          String rawBody = response.getBody();
+          
+          if (rawBody != null && !rawBody.trim().isEmpty()) {
+            // Parse SSE chunks
+            String[] lines = rawBody.split("\n");
+            for (String line : lines) {
+              if (line.startsWith("data:")) {
+                String jsonData = line.substring(5).trim();
+                if (!jsonData.isEmpty() && !jsonData.equals("[DONE]")) {
+                  try {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> chunk = objectMapper.readValue(jsonData, Map.class);
+                    @SuppressWarnings("unchecked")
+                    List<Map<String, Object>> choices = (List<Map<String, Object>>) chunk.get("choices");
+                    if (choices != null && !choices.isEmpty()) {
+                      @SuppressWarnings("unchecked")
+                      Map<String, Object> delta = (Map<String, Object>) choices.get(0).get("delta");
+                      if (delta != null) {
+                        String content = (String) delta.get("content");
+                        if (content != null && !content.isEmpty()) {
+                          accumulated.append(content);
+                          emitProgress(progressListener, progressPayload("streaming", "Nhận dữ liệu", 0, 1,
+                            Map.of("chunk", content)));
+                        }
+                      }
+                    }
+                  } catch (Exception parseEx) {
+                    log.debug("Failed to parse SSE chunk: {}", parseEx.getMessage());
+                  }
+                }
+              }
+            }
+            
+            return accumulated.toString();
+          }
+          
+        } catch (Exception ex) {
+          log.warn("Model {} failed: {}", candidateModel, ex.getMessage());
+          continue;
+        }
+      }
+      
+      throw new IllegalStateException("Tất cả GitHub models đều thất bại");
+      
+    } catch (Exception ex) {
+      log.error("Streaming chat completion failed", ex);
+      throw new IllegalStateException("Streaming chat lỗi: " + ex.getMessage());
+    }
   }
 
   private String generateDirectContent(String prompt, ProgressListener progressListener) {

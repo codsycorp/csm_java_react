@@ -90,17 +90,38 @@ type GenerateSeoContentOptions = {
 	menuDesignByDev?: boolean;
 };
 
+function isCodingTaskType(taskType?: string): boolean {
+	const normalized = String(taskType || "").toLowerCase();
+	if (!normalized) return false;
+	return normalized.includes("code")
+		|| normalized.includes("coding")
+		|| normalized.includes("developer")
+		|| normalized.includes("editor")
+		|| normalized.includes("refactor")
+		|| normalized.includes("bugfix");
+}
+
+function resolveAiOptions(options?: GenerateSeoContentOptions): GenerateSeoContentOptions {
+	const codingTask = isCodingTaskType(options?.taskType);
+	return {
+		...options,
+		providerPreference: options?.providerPreference ?? (codingTask ? "github_models" : undefined),
+		disableGeminiFallback: options?.disableGeminiFallback ?? (codingTask ? true : undefined),
+	};
+}
+
 async function generateSeoContentWithPromptAsync(prompt: string, options?: GenerateSeoContentOptions): Promise<ApiResponse<any>> {
+	const resolvedOptions = resolveAiOptions(options);
 	const submitResponse = await request
 		.post("ai-generate-seo-content", {
 			json: {
 				prompt,
 				mode: "submit",
 				async: true,
-				providerPreference: options?.providerPreference,
-				disableGeminiFallback: options?.disableGeminiFallback,
-				taskType: options?.taskType,
-				menuDesignByDev: options?.menuDesignByDev,
+				providerPreference: resolvedOptions.providerPreference,
+				disableGeminiFallback: resolvedOptions.disableGeminiFallback,
+				taskType: resolvedOptions.taskType,
+				menuDesignByDev: resolvedOptions.menuDesignByDev,
 			},
 			timeout: AI_REQUEST_TIMEOUT,
 		})
@@ -265,23 +286,24 @@ export async function generateSeoContent(params: SeoContentParams, customPrompt?
  * ```
  */
 export async function generateSeoContentWithPrompt(prompt: string, options?: GenerateSeoContentOptions) {
+	const resolvedOptions = resolveAiOptions(options);
 	const requestBody: GenerateSeoContentRequest = {
 		prompt: prompt
 	};
 	
 	try {
 		if (prompt.length >= AI_ASYNC_THRESHOLD_CHARS) {
-			return await generateSeoContentWithPromptAsync(prompt, options);
+			return await generateSeoContentWithPromptAsync(prompt, resolvedOptions);
 		}
 
 		const response = await request
 			.post("ai-generate-seo-content", {
 				json: {
 					...requestBody,
-					providerPreference: options?.providerPreference,
-					disableGeminiFallback: options?.disableGeminiFallback,
-					taskType: options?.taskType,
-					menuDesignByDev: options?.menuDesignByDev,
+					providerPreference: resolvedOptions.providerPreference,
+					disableGeminiFallback: resolvedOptions.disableGeminiFallback,
+					taskType: resolvedOptions.taskType,
+					menuDesignByDev: resolvedOptions.menuDesignByDev,
 				},
 				timeout: AI_REQUEST_TIMEOUT,
 			})

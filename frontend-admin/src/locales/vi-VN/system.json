@@ -577,7 +577,7 @@
 				"current": "Đã nạp JSON menu hiện tại vào editor"
 			},
 			"mergePreview": {
-				"title": "Xem trước thay đổi chính xác kiểu Copilot",
+				"title": "Xem trước thay đổi chính xác kiểu Trợ lý AI",
 				"summary": "Thêm {{added}}, sửa {{edited}}, xóa {{deleted}}",
 				"computing": "đang tính merge",
 				"inlineInEditor": "Chi tiết thay đổi hiển thị trực tiếp ngay trong csm-editor",

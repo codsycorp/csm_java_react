@@ -83,6 +83,9 @@ public class ApiSpringController {
     @Value("${ai.routing.stability.prefer-github-for-coding:true}")
     private boolean preferGithubForCoding;
 
+    @Value("${ai.routing.stability.force-copilot-for-coding:true}")
+    private boolean forceCopilotForCoding;
+
     @Value("${ai.routing.stability.disable-fallback-for-coding:true}")
     private boolean disableFallbackForCoding;
 
@@ -371,6 +374,9 @@ public class ApiSpringController {
                     break;
                 case "/ai-generate-seo-content":
                     getObjectFromAI(response, params);
+                    break;
+                case "/copilot-chat-stream":
+                    handleCopilotChatStream(response, params);
                     break;
                 case "/ai/menu-merge":
                     handleAiMenuMerge(response, params);
@@ -768,6 +774,314 @@ public class ApiSpringController {
         }
     }
 
+    /**
+     * Handle CodeMirror Copilot chat with streaming via Socket.IO
+     * Sends streaming text chunks to client in real-time
+     */
+    private void handleCopilotChatStream(StandardResponse response, Map<String, Object> params) {
+        try {
+            String appId = String.valueOf(params.getOrDefault("appId", "")).trim();
+            String message = String.valueOf(params.getOrDefault("message", "")).trim();
+            String currentCode = String.valueOf(params.getOrDefault("currentCode", "")).trim();
+            String language = String.valueOf(params.getOrDefault("language", "javascript")).trim();
+            String contextType = String.valueOf(params.getOrDefault("contextType", "code")).trim();
+            String taskType = String.valueOf(params.getOrDefault("taskType", "")).trim();
+            List<Map<String, Object>> attachments = normalizeCopilotAttachments(params.get("attachments"));
+            
+            if (message.isEmpty() && attachments.isEmpty()) {
+                response.set("code", 200);
+                response.set("success", false);
+                response.set("message", "Message or attachment is required");
+                return;
+            }
+
+            if (appId.isEmpty()) {
+                response.set("code", 200);
+                response.set("success", false);
+                response.set("message", "appId is required");
+                return;
+            }
+
+            List<Map<String, Object>> messages = buildCopilotChatMessages(appId, message, currentCode, language, contextType, taskType, attachments);
+            
+            // Set up streaming via Socket.IO
+            StringBuilder fullResponse = new StringBuilder();
+            GitHubModelsService.ProgressListener streamListener = (progress) -> {
+                String stage = String.valueOf(progress.getOrDefault("stage", ""));
+                String chunk = String.valueOf(progress.getOrDefault("chunk", ""));
+                if ("streaming".equals(stage) && !chunk.isEmpty()) {
+                    fullResponse.append(chunk);
+                }
+
+                Map<String, Object> realtimePayload = new HashMap<>();
+                realtimePayload.put("stage", stage);
+                realtimePayload.put("message", String.valueOf(progress.getOrDefault("message", "")));
+                realtimePayload.put("chunk", chunk);
+
+                Object current = progress.get("current");
+                Object total = progress.get("total");
+                Object percent = progress.get("percent");
+                if (current != null) realtimePayload.put("current", current);
+                if (total != null) realtimePayload.put("total", total);
+                if (percent != null) realtimePayload.put("percent", percent);
+
+                // Keep compatibility with legacy realtime editor payloads.
+                Object draftText = progress.get("draftText");
+                Object partialJson = progress.get("partialJson");
+                Object previewJson = progress.get("previewJson");
+                Object textEdits = progress.get("textEdits");
+                Object patchOps = progress.get("patchOps");
+                if (draftText != null) realtimePayload.put("draftText", draftText);
+                if (partialJson != null) realtimePayload.put("partialJson", partialJson);
+                if (previewJson != null) realtimePayload.put("previewJson", previewJson);
+                if (textEdits != null) realtimePayload.put("textEdits", textEdits);
+                if (patchOps != null) realtimePayload.put("patchOps", patchOps);
+
+                boolean hasChunk = !chunk.isEmpty();
+                boolean hasRealtimeDraft = draftText != null || partialJson != null || previewJson != null;
+                boolean hasRealtimeEdits = textEdits != null || patchOps != null;
+                if (hasChunk || hasRealtimeDraft || hasRealtimeEdits) {
+                    emitCopilotChatChunk(appId, realtimePayload);
+                }
+            };
+
+            // Call GitHub Models with streaming
+            String result = gitHubModelsService.chatWithStreamingMessages(messages, streamListener);
+            
+            // Emit completion event
+            Map<String, Object> completion = new HashMap<>();
+            completion.put("stage", "complete");
+            completion.put("fullResponse", fullResponse.toString());
+            completion.put("timestamp", System.currentTimeMillis());
+            emitCopilotChatEvent(appId, "copilot_chat_complete", completion);
+
+            response.set("code", 200);
+            response.set("success", true);
+            response.set("message", "Chat completed");
+            response.set("result", Map.of("fullResponse", fullResponse.toString()));
+
+        } catch (Exception e) {
+            logger.error("handleCopilotChatStream error: {}", e.getMessage(), e);
+            response.set("code", 200);
+            response.set("success", false);
+            response.set("message", "Chat streaming failed: " + e.getMessage());
+            emitCopilotChatEvent(String.valueOf(params.getOrDefault("appId", "")), "copilot_chat_error", 
+                Map.of("error", e.getMessage()));
+        }
+    }
+
+    private List<Map<String, Object>> buildCopilotChatMessages(
+            String appId,
+            String message,
+            String currentCode,
+            String language,
+            String contextType,
+            String taskType,
+            List<Map<String, Object>> attachments) {
+        String normalizedContext = String.valueOf(contextType == null ? "code" : contextType).trim().toLowerCase();
+        String menuKnowledge = this.gitHubModelsService.buildCopilotMenuKnowledgeBlock(appId, normalizedContext, taskType);
+        String systemPrompt;
+        if ("menu_json".equals(normalizedContext)) {
+            systemPrompt = String.join("\n",
+                "You are an AI assistant for menu JSON design inside a CodeMirror editor.",
+                "Focus on JSON schema correctness, parent/child integrity, field consistency and trigger safety.",
+                "Use any attached text files or images as direct context for the user's menu design request.",
+                "Do not output unrelated source code. Keep structure stable unless user requests a structural change.");
+            if (!menuKnowledge.isBlank()) {
+                systemPrompt = systemPrompt + "\n\n" + menuKnowledge;
+            }
+        } else {
+            systemPrompt = String.join("\n",
+                "You are a coding assistant inside a CodeMirror editor.",
+                "Respond concisely with practical code suggestions and explanations.",
+                "Use any attached text files or images as direct context for the user's request.",
+                "Always preserve existing code unless explicitly asked to rewrite.");
+        }
+
+        Object userContent = buildCopilotUserContent(message, currentCode, language, normalizedContext, attachments);
+        List<Map<String, Object>> messages = new ArrayList<>();
+        messages.add(Map.of("role", "system", "content", systemPrompt));
+        messages.add(Map.of("role", "user", "content", userContent));
+        return messages;
+    }
+
+    private Object buildCopilotUserContent(
+            String message,
+            String currentCode,
+            String language,
+            String contextType,
+            List<Map<String, Object>> attachments) {
+        String promptText = buildCopilotChatPromptText(message, currentCode, language, contextType, attachments);
+        List<Map<String, Object>> imageParts = new ArrayList<>();
+        for (Map<String, Object> attachment : attachments) {
+            String kind = String.valueOf(attachment.getOrDefault("kind", "")).trim().toLowerCase();
+            String dataUrl = String.valueOf(attachment.getOrDefault("dataUrl", "")).trim();
+            if (!"image".equals(kind) || dataUrl.isEmpty()) {
+                continue;
+            }
+            imageParts.add(Map.of(
+                "type", "image_url",
+                "image_url", Map.of("url", dataUrl)));
+        }
+
+        if (imageParts.isEmpty()) {
+            return promptText;
+        }
+
+        List<Map<String, Object>> content = new ArrayList<>();
+        content.add(Map.of("type", "text", "text", promptText));
+        content.addAll(imageParts);
+        return content;
+    }
+
+    private String buildCopilotChatPromptText(String message, String currentCode, String language, String contextType,
+            List<Map<String, Object>> attachments) {
+        StringBuilder sb = new StringBuilder();
+        String normalizedContext = String.valueOf(contextType == null ? "code" : contextType).trim().toLowerCase();
+        if ("menu_json".equals(normalizedContext)) {
+            sb.append("You are an AI assistant for menu JSON design inside a CodeMirror editor.\n");
+            sb.append("Focus on JSON schema correctness, parent/child integrity, field consistency and trigger safety.\n");
+            sb.append("Do not output unrelated source code. Keep structure stable unless user requests a structural change.\n");
+            sb.append("Use attached legacy JSON, text notes and UI screenshots as authoritative context when relevant.\n\n");
+        } else {
+            sb.append("You are a coding assistant inside a CodeMirror editor.\n");
+            sb.append("Respond concisely with practical code suggestions and explanations.\n");
+            sb.append("Always preserve existing code unless explicitly asked to rewrite.\n");
+            sb.append("Use attached files and images as direct context for the request.\n\n");
+        }
+        
+        if (!currentCode.trim().isEmpty()) {
+            String truncatedCode = currentCode.length() > 5000 
+                ? currentCode.substring(0, 5000) + "\n/* ... truncated ... */"
+                : currentCode;
+            sb.append("Current code (").append(language).append("):\n");
+            sb.append("```").append(language).append("\n");
+            sb.append(truncatedCode).append("\n");
+            sb.append("```\n\n");
+        }
+        
+        if (!attachments.isEmpty()) {
+            sb.append("Attached context:\n");
+            int idx = 1;
+            for (Map<String, Object> attachment : attachments) {
+                String kind = String.valueOf(attachment.getOrDefault("kind", "file")).trim();
+                String name = String.valueOf(attachment.getOrDefault("name", "attachment")).trim();
+                String mimeType = String.valueOf(attachment.getOrDefault("mimeType", "")).trim();
+                String summary = String.valueOf(attachment.getOrDefault("summary", "")).trim();
+                sb.append("- [").append(idx++).append("] ").append(kind).append(": ").append(name);
+                if (!mimeType.isEmpty()) {
+                    sb.append(" (").append(mimeType).append(")");
+                }
+                if (!summary.isEmpty()) {
+                    sb.append(" -> ").append(summary);
+                }
+                sb.append("\n");
+
+                String textContent = String.valueOf(attachment.getOrDefault("textContent", "")).trim();
+                if (!textContent.isEmpty()) {
+                    String truncated = textContent.length() > 50000
+                        ? textContent.substring(0, 50000) + "\n...[truncated]"
+                        : textContent;
+                    sb.append("Content of ").append(name).append(":\n");
+                    sb.append(truncated).append("\n\n");
+                }
+            }
+        }
+
+        sb.append("Context type: ").append(normalizedContext).append("\n");
+        sb.append("User request: ").append(message == null ? "" : message);
+        return sb.toString();
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> normalizeCopilotAttachments(Object rawAttachments) {
+        List<Map<String, Object>> normalized = new ArrayList<>();
+        if (!(rawAttachments instanceof List<?> rawList)) {
+            return normalized;
+        }
+
+        for (Object item : rawList) {
+            if (!(item instanceof Map<?, ?> rawMap)) {
+                continue;
+            }
+
+            String kind = String.valueOf(rawMap.get("kind") == null ? "" : rawMap.get("kind")).trim().toLowerCase();
+            String name = String.valueOf(rawMap.get("name") == null ? "attachment" : rawMap.get("name")).trim();
+            String mimeType = String.valueOf(rawMap.get("mimeType") == null ? "" : rawMap.get("mimeType")).trim();
+            String summary = String.valueOf(rawMap.get("summary") == null ? "" : rawMap.get("summary")).trim();
+            int size = 0;
+            try {
+                size = Integer.parseInt(String.valueOf(rawMap.get("size") == null ? "0" : rawMap.get("size")));
+            } catch (Exception ignored) {
+                size = 0;
+            }
+
+            Map<String, Object> next = new HashMap<>();
+            next.put("kind", kind);
+            next.put("name", name.isEmpty() ? "attachment" : name);
+            next.put("mimeType", mimeType);
+            next.put("summary", summary);
+            next.put("size", size);
+
+            if ("image".equals(kind)) {
+                String dataUrl = String.valueOf(rawMap.get("dataUrl") == null ? "" : rawMap.get("dataUrl")).trim();
+                boolean validDataUrl = dataUrl.startsWith("data:image/") || dataUrl.startsWith("http://") || dataUrl.startsWith("https://");
+                if (!validDataUrl) {
+                    continue;
+                }
+                next.put("dataUrl", dataUrl);
+                normalized.add(next);
+                if (normalized.size() >= 8) {
+                    break;
+                }
+                continue;
+            }
+
+            if ("text".equals(kind) || "json".equals(kind)) {
+                String textContent = String.valueOf(rawMap.get("textContent") == null ? "" : rawMap.get("textContent")).trim();
+                if (textContent.isEmpty()) {
+                    continue;
+                }
+                next.put("textContent", textContent.length() > 50000
+                    ? textContent.substring(0, 50000) + "\n...[truncated]"
+                    : textContent);
+                normalized.add(next);
+            }
+
+            if (normalized.size() >= 8) {
+                break;
+            }
+        }
+
+        return normalized;
+    }
+
+    private void emitCopilotChatChunk(String appId, Map<String, Object> payload) {
+        if (appId == null || appId.isEmpty() || socketIOServer == null) {
+            return;
+        }
+        try {
+            if (payload == null) {
+                payload = new HashMap<>();
+            }
+            payload.put("timestamp", System.currentTimeMillis());
+            socketIOServer.getRoomOperations(appId).sendEvent("copilot_chat_chunk", payload);
+        } catch (Exception e) {
+            logger.debug("Failed to emit copilot chat chunk: {}", e.getMessage());
+        }
+    }
+
+    private void emitCopilotChatEvent(String appId, String eventName, Object payload) {
+        if (appId == null || appId.isEmpty() || socketIOServer == null) {
+            return;
+        }
+        try {
+            socketIOServer.getRoomOperations(appId).sendEvent(eventName, payload);
+        } catch (Exception e) {
+            logger.debug("Failed to emit copilot chat event {}: {}", eventName, e.getMessage());
+        }
+    }
+
     public void getObjectFromAI(StandardResponse response, Map<String, Object> params) {
         String mode = String.valueOf(params.getOrDefault("mode", "sync")).trim().toLowerCase();
         if ("status".equals(mode)) {
@@ -847,17 +1161,34 @@ public class ApiSpringController {
     }
 
     private String fetchAiRawContent(String prompt, GitHubModelsService.ProgressListener progressListener, Map<String, Object> params) {
+        String safePrompt = prompt == null ? "" : prompt;
         String taskTypeRaw = firstNonBlankString(
                 params != null ? params.get("taskType") : null,
             params != null ? params.get("task") : null,
-            extractTaskTypeFromPromptJson(prompt)
+            extractTaskTypeFromPromptJson(safePrompt)
         );
         String taskType = taskTypeRaw == null ? "" : taskTypeRaw.toLowerCase();
+        String normalizedPrompt = safePrompt.toLowerCase();
+        boolean looksLikeCodingPrompt = normalizedPrompt.contains("```")
+            || normalizedPrompt.contains("function ")
+            || normalizedPrompt.contains("class ")
+            || normalizedPrompt.contains("interface ")
+            || normalizedPrompt.contains("typescript")
+            || normalizedPrompt.contains("javascript")
+            || normalizedPrompt.contains("java")
+            || normalizedPrompt.contains("python")
+            || normalizedPrompt.contains("html")
+            || normalizedPrompt.contains("css")
+            || normalizedPrompt.contains("sql")
+            || normalizedPrompt.contains("bug")
+            || normalizedPrompt.contains("refactor")
+            || normalizedPrompt.contains("fix");
         boolean isMenuDesignTask = taskType.contains("menu_design");
         boolean isCodingTask = taskType.contains("code")
             || taskType.contains("coding")
             || taskType.contains("developer")
-            || taskType.contains("editor");
+            || taskType.contains("editor")
+            || looksLikeCodingPrompt;
 
         String providerPreferenceRaw = firstNonBlankString(
                 params != null ? params.get("providerPreference") : null,
@@ -879,7 +1210,9 @@ public class ApiSpringController {
         }
 
         // For menu design, always route to Copilot/GitHub Models and never fallback to Gemini.
-        boolean forceGithub = isMenuDesignTask || preferGithubProvider || (preferGithubForCoding && isCodingTask);
+        boolean forceGithub = isMenuDesignTask
+            || preferGithubProvider
+            || ((preferGithubForCoding || forceCopilotForCoding) && isCodingTask);
 
         boolean disableGeminiFallback = (params != null && Boolean.TRUE.equals(params.get("disableGeminiFallback")))
                 || "true".equalsIgnoreCase(String.valueOf(params != null ? params.get("disableGeminiFallback") : null));
@@ -889,49 +1222,52 @@ public class ApiSpringController {
         if (disableFallbackForCoding && isCodingTask) {
             disableGeminiFallback = true;
         }
+        if (forceCopilotForCoding && isCodingTask) {
+            disableGeminiFallback = true;
+        }
 
         if (forceGithub) {
             if (params != null) {
                 params.put("_providerRoutingDecision", isMenuDesignTask
                     ? "forced_github_menu_design_no_gemini_fallback"
-                    : (isCodingTask && preferGithubForCoding
-                        ? "forced_github_coding_stability"
+                    : (isCodingTask && (preferGithubForCoding || forceCopilotForCoding)
+                        ? "forced_copilot_for_coding"
                         : "forced_github_by_preference"));
             }
             if (progressListener != null) {
                 progressListener.onProgress(createAiJobProgress("github_models", "Đang gọi GitHub Models (ưu tiên theo yêu cầu)", 0, 1, null));
             }
 
-            String githubRaw = this.gitHubModelsService.generateContent(prompt, progressListener);
+            String githubRaw = this.gitHubModelsService.generateContent(safePrompt, progressListener);
             if (shouldFallbackToGemini(githubRaw) && !disableGeminiFallback) {
                 logger.warn("GitHub Models hit quota/rate limit. Auto fallback to Gemini provider flow.");
                 if (progressListener != null) {
                     progressListener.onProgress(createAiJobProgress("gemini_fallback", "GitHub Models hết quota, đang chuyển sang Gemini", 0, 1, null));
                 }
-                return this.aiProviderFactory.generateContent(prompt);
+                return this.aiProviderFactory.generateContent(safePrompt);
             } else if (shouldFallbackToGemini(githubRaw) && disableGeminiFallback) {
                 logger.warn("GitHub Models hit quota/rate limit but Gemini fallback is disabled for this request.");
             }
             return githubRaw;
         }
 
-        if (prompt.length() > geminiMaxPromptChars) {
+        if (safePrompt.length() > geminiMaxPromptChars) {
             if (params != null) {
                 params.put("_providerRoutingDecision", "fallback_github_prompt_size");
             }
             logger.warn("Prompt size exceeded Gemini limit ({}>{}) chars. Routing to GitHub Models fallback.",
-                    prompt.length(), geminiMaxPromptChars);
+                    safePrompt.length(), geminiMaxPromptChars);
             if (progressListener != null) {
                 progressListener.onProgress(createAiJobProgress("github_models", "Đang gọi GitHub Models", 0, 1, null));
             }
 
-            String githubRaw = this.gitHubModelsService.generateContent(prompt, progressListener);
+            String githubRaw = this.gitHubModelsService.generateContent(safePrompt, progressListener);
             if (shouldFallbackToGemini(githubRaw)) {
                 logger.warn("GitHub Models hit quota/rate limit. Auto fallback to Gemini provider flow.");
                 if (progressListener != null) {
                     progressListener.onProgress(createAiJobProgress("gemini_fallback", "GitHub Models hết quota, đang chuyển sang Gemini", 0, 1, null));
                 }
-                return this.aiProviderFactory.generateContent(prompt);
+                return this.aiProviderFactory.generateContent(safePrompt);
             }
             return githubRaw;
         }
@@ -942,7 +1278,7 @@ public class ApiSpringController {
         if (progressListener != null) {
             progressListener.onProgress(createAiJobProgress("gemini", "Đang gọi Gemini", 0, 1, null));
         }
-        return this.aiProviderFactory.generateContent(prompt);
+        return this.aiProviderFactory.generateContent(safePrompt);
     }
 
     private boolean shouldFallbackToGemini(String rawContent) {

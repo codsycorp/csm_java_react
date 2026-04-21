@@ -4,8 +4,54 @@
   overflow-y: auto;
 }
 
+.vscodeWorkbench {
+  display: grid;
+  grid-template-columns: minmax(300px, var(--copilot-width, 360px)) 8px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.vscodeWorkbenchCollapsed {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.workbenchDivider {
+  width: 8px;
+  cursor: col-resize;
+  border-radius: 999px;
+  align-self: stretch;
+  background: color-mix(in srgb, var(--ant-color-border-secondary) 78%, transparent);
+  transition: background-color 0.2s ease;
+}
+
+.workbenchDivider:hover {
+  background: color-mix(in srgb, var(--ant-color-primary) 58%, transparent);
+}
+
+.workbenchMain {
+  min-width: 0;
+}
+
+.workbenchAssistant {
+  min-width: 0;
+  position: sticky;
+  top: 12px;
+  height: calc(100vh - 140px);
+  max-height: calc(100vh - 140px);
+}
+
 .surfaceCard {
   border-radius: 12px;
+}
+
+.copilotDockCard {
+  height: 100%;
+  overflow: hidden;
+}
+
+.copilotDockCard :global(.ant-card-body) {
+  height: 100%;
+  padding: 0;
 }
 
 .surfaceBlock {
@@ -673,6 +719,21 @@
 }
 
 @media (max-width: 992px) {
+  .vscodeWorkbench {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .workbenchDivider {
+    display: none;
+  }
+
+  .workbenchAssistant {
+    position: static;
+    top: auto;
+    height: 520px;
+    max-height: none;
+  }
+
   .aiBody {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -700,6 +761,10 @@
 @media (max-width: 768px) {
   .container {
     padding: 12px;
+  }
+
+  .workbenchAssistant {
+    height: 460px;
   }
 
   .toolbarPanel,

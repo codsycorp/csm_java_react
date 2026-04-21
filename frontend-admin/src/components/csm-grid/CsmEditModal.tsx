@@ -1,4 +1,4 @@
-import CodeMirror from '@uiw/react-codemirror';
+import CodeMirror from '#src/components/editor/CodeMirrorWithCopilot';
 import { javascript } from '@codemirror/lang-javascript';
 import { html } from '@codemirror/lang-html';
 import { css } from '@codemirror/lang-css';

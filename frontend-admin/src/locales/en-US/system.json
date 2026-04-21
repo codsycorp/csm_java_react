@@ -580,7 +580,7 @@
 				"current": "Current menu JSON has been loaded into the editor"
 			},
 			"mergePreview": {
-				"title": "Precise Copilot-style change preview",
+				"title": "Precise AI Assistant-style change preview",
 				"summary": "Added {{added}}, edited {{edited}}, deleted {{deleted}}",
 				"computing": "computing merge",
 				"inlineInEditor": "Change details are shown directly inside csm-editor",

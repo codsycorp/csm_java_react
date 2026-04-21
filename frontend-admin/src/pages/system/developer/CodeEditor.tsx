@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from "react";
-import { Button, Select, Card, Space, message, Modal, Input, Form } from "antd";
+import { Button, Select, Card, Space, message, Modal, Input, Form, Row, Col } from "antd";
 import type { InputRef } from "antd";
 import {
 	SaveOutlined,
@@ -11,19 +11,21 @@ import {
 	HistoryOutlined,
 	PushpinOutlined,
 	PushpinFilled,
+	MessageOutlined,
 	MenuFoldOutlined,
 	MenuUnfoldOutlined,
 } from "@ant-design/icons";
-import CodeMirror from "@uiw/react-codemirror";
+import CodeMirror from "#src/components/editor/CodeMirrorWithCopilot";
 import { javascript } from "@codemirror/lang-javascript";
 import { html } from "@codemirror/lang-html";
 import { search, openSearchPanel, gotoLine } from "@codemirror/search";
 import { undo, redo } from "@codemirror/commands";
 import { StateEffect, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView } from "@codemirror/view";
-import { vscodeDark } from "@uiw/codemirror-theme-vscode";
+import { vscodeDark, vscodeLight } from "@uiw/codemirror-theme-vscode";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "#src/store";
+import { usePreferences } from "#src/hooks";
 import { generateSeoContentWithPrompt } from "#src/api/ai";
 import {
 	fetchCodeList,
@@ -318,8 +320,7 @@ export default function CodeEditor() {
 	const [aiLoading, setAiLoading] = useState(false);
 	const [aiProgress, setAiProgress] = useState<AiProgress | null>(null);
 	const [aiSummary, setAiSummary] = useState("");
-	const [aiPanelMode, setAiPanelMode] = useState<AiPanelMode>("normal");
-	const [aiLeftPanelHidden, setAiLeftPanelHidden] = useState(false);
+
 	const [pendingChunk, setPendingChunk] = useState<PendingDraftChunk | null>(null);
 	const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
 	const [historyFilter, setHistoryFilter] = useState<AiHistoryFilter>("all");
@@ -335,6 +336,7 @@ export default function CodeEditor() {
 	const [draftCursor, setDraftCursor] = useState({ line: 1, column: 1 });
 	const [draftStats, setDraftStats] = useState({ lines: 1, chars: 0 });
 	const [savedCodeSnapshot, setSavedCodeSnapshot] = useState("");
+	const { isDark: prefersDarkMode } = usePreferences();
 	const [form] = Form.useForm();
 
 	const isMac = useMemo(() => /Mac|iPhone|iPad|iPod/i.test(navigator.platform || ""), []);
@@ -357,6 +359,7 @@ export default function CodeEditor() {
 		() => String(codeContent || "") !== String(savedCodeSnapshot || ""),
 		[codeContent, savedCodeSnapshot],
 	);
+
 	const devUiText = (vi: string, en: string, zh: string) => {
 		const lang = String(i18n.resolvedLanguage || i18n.language || "vi").toLowerCase();
 		if (lang.startsWith("zh")) return zh;
@@ -823,6 +826,8 @@ export default function CodeEditor() {
 
 			const response = await generateSeoContentWithPrompt(prompt, {
 				taskType: "developer_code_editor",
+				providerPreference: "github_models",
+				disableGeminiFallback: true,
 				onProgress: (progress) => {
 					const liveDraft = [
 						progress?.draftCode,
@@ -1088,6 +1093,8 @@ export default function CodeEditor() {
 
 	return (
 		<div className={styles.container}>
+			<div className={`${styles.vscodeWorkbench} ${styles.vscodeWorkbenchCollapsed}`}>
+				<div className={styles.workbenchMain}>
 			{/* Code Editor */}
 			<Card className={styles.surfaceCard}>
 				<div className={styles.editorShell}>
@@ -1104,6 +1111,18 @@ export default function CodeEditor() {
 								</Button>
 								<Button icon={<SettingOutlined />} onClick={() => setHotkeyModalOpen(true)}>
 									{t("system.developer.hotkeys")}
+								</Button>
+								<Button
+									icon={<MessageOutlined />}
+									onClick={() => {
+										message.info(devUiText(
+											"Dùng nút Trợ lý AI ngay trong khung CodeMirror để chat theo đúng ngữ cảnh editor.",
+											"Use the AI Assistant button inside CodeMirror to chat with the current editor context.",
+											"请使用 CodeMirror 内的 AI 助手按钮，根据当前编辑器上下文聊天。",
+										));
+									}}
+								>
+									{devUiText("Trợ lý AI trong editor", "AI Assistant in editor", "编辑器内 AI 助手")}
 								</Button>
 								<Button icon={<SaveOutlined />} onClick={handleSaveCode} type="primary">
 									{t("system.developer.command.save")}
@@ -1168,186 +1187,9 @@ export default function CodeEditor() {
 			</Card>
 
 			<Card className={styles.surfaceCard} style={{ marginTop: 16 }}>
-				<div className={`${styles.aiShell} ${aiPanelMode === "expanded" ? styles.aiShellExpanded : ""}`}>
-					<div className={styles.aiToolbar}>
-						<div className={styles.surfaceHeader}>
-							<div className={styles.surfaceMeta}>
-								<div className={styles.surfaceTitle}>{t("system.developer.ai.workspaceTitle", "Copilot Chat cho Code Editor")}</div>
-								<div>{t("system.developer.ai.workspaceDesc", "Chat này chỉ tạo bản nháp sửa code theo p_name và p_type đang chọn. Bạn vẫn phải tự bấm Lưu code ở khung trên khi muốn ghi DB.")}</div>
-							</div>
-							<div className={styles.surfaceBadgeRow}>
-								<div className={styles.surfaceBadge}>p_name={selectedCodeLabel}</div>
-								<div className={styles.surfaceBadge}>p_type={resolvedPType}</div>
-								<div className={styles.surfaceBadge}>{currentTypeLabel}</div>
-								<div className={styles.surfaceBadge}>{t("system.developer.ai.sessionCount", "Lịch sử phiên")}: {aiRequestHistory.length}</div>
-								<div className={styles.aiPanelControls}>
-									<Button size="small" icon={<HistoryOutlined />} onClick={handleClearCurrentAiSession}>
-										{t("system.developer.ai.clearSession", "Xóa phiên")}
-									</Button>
-									<Button
-										size="small"
-										icon={aiLeftPanelHidden ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
-										onClick={() => setAiLeftPanelHidden((prev) => !prev)}
-									>
-										{aiLeftPanelHidden
-											? t("system.developer.ai.showLeftPanel", "Hiện panel trái")
-											: t("system.developer.ai.hideLeftPanel", "Ẩn panel trái")}
-									</Button>
-									<Button
-										size="small"
-										icon={<ExpandOutlined />}
-										onClick={() => setAiPanelMode((prev) => (prev === "expanded" ? "normal" : "expanded"))}
-									>
-										{aiPanelMode === "expanded"
-											? t("system.developer.ai.exitFullscreen", "Thoát toàn màn")
-											: t("system.developer.ai.fullscreen", "Toàn màn")}
-									</Button>
-								</div>
-								<div className={styles.shortcutHint}>
-									{modKeyLabel}+{String(hotkeys.askAi || "enter").toUpperCase()} | {modKeyLabel}+Shift+{String(hotkeys.continueAi || "enter").toUpperCase()}
-								</div>
-							</div>
-						</div>
-
-						<div className={styles.aiStatusRow}>
-							{aiProgress && (
-								<div className={styles.aiProgress}>
-									{t("system.developer.ai.status")}: {aiStatusText}
-									{aiProgress.message ? ` | ${aiProgress.message}` : ""}
-									{aiProgress.percent != null ? ` | ${Math.max(0, Math.min(100, aiProgress.percent))}%` : ""}
-									{aiProgress.jobId ? ` | ${t("system.developer.ai.job")}: ${aiProgress.jobId}` : ""}
-								</div>
-							)}
-
-							{aiSummary && (
-								<div className={styles.aiSummary}>
-									<strong>{t("system.developer.ai.summary")}:</strong> {aiSummary}
-								</div>
-							)}
-						</div>
-					</div>
-
-						<div className={`${styles.aiBody} ${aiLeftPanelHidden ? styles.aiBodyLeftHidden : ""}`}>
-						{!aiLeftPanelHidden && (
-						<div className={`${styles.aiColumn} ${styles.aiLeftColumn}`}>
-							<div className={styles.aiSectionTitle}>{t("system.developer.ai.conversationTitle", "Hội thoại chỉnh sửa")}</div>
-							<div className={styles.chatWorkspace}>
-								<div className={styles.aiHistoryCard}>
-									<div className={styles.aiHistoryTitle}>{t("system.developer.ai.currentSessionHistory", "Lịch sử yêu cầu trong phiên hiện tại")}</div>
-									<div className={styles.aiHistoryToolbar}>
-										<Select
-											size="small"
-											value={historyFilter}
-											onChange={(value) => setHistoryFilter(value as AiHistoryFilter)}
-											style={{ width: 140 }}
-											options={[
-												{ value: "all", label: t("system.developer.ai.filterAll", "Tất cả") },
-												{ value: "completed", label: t("system.developer.ai.filterCompleted", "Thành công") },
-												{ value: "failed", label: t("system.developer.ai.filterFailed", "Lỗi") },
-												{ value: "pinned", label: t("system.developer.ai.filterPinned", "Đã ghim") },
-											]}
-										/>
-										<Input
-											size="small"
-											value={historyKeyword}
-											onChange={(e) => setHistoryKeyword(e.target.value)}
-											placeholder={t("system.developer.ai.filterSearch", "Tìm trong lịch sử")}
-											allowClear
-										/>
-									</div>
-									<div className={styles.aiHistoryList}>
-										{visibleAiRequestHistory.length === 0 && (
-											<div className={styles.aiEmpty}>{t("system.developer.ai.noSessionHistory", "Chưa có request nào trong phiên này.")}</div>
-										)}
-										{visibleAiRequestHistory.map((item) => (
-											<button
-												type="button"
-												key={item.id}
-												onClick={() => handleRestoreHistoryItem(item)}
-												className={`${styles.aiHistoryItem} ${selectedHistoryId === item.id ? styles.aiHistoryItemActive : ""}`}
-											>
-												<div className={styles.aiHistoryItemTop}>
-													<div className={styles.aiHistoryItemMeta}>
-														<span className={styles.aiHistoryStatus}>{item.status === "completed" ? t("system.developer.ai.historyCompleted", "Thành công") : t("system.developer.ai.historyFailed", "Lỗi")}</span>
-														{item.pinned && <span className={styles.aiHistoryPinnedTag}>{t("system.developer.ai.pinned", "Đã ghim")}</span>}
-													</div>
-													<span className={styles.aiHistoryTime}>{formatHistoryTime(item.createdAt)}</span>
-												</div>
-												<div className={styles.aiHistoryRequest}>{item.request}</div>
-												<div className={styles.aiHistorySummary}>{item.summary}</div>
-												<div className={styles.aiHistoryItemActions}>
-													<Button
-														size="small"
-														type={item.pinned ? "primary" : "default"}
-														icon={item.pinned ? <PushpinFilled /> : <PushpinOutlined />}
-														onClick={(event) => {
-															event.preventDefault();
-															event.stopPropagation();
-															handleTogglePinHistoryItem(item.id);
-														}}
-													>
-														{item.pinned
-															? t("system.developer.ai.unpin", "Bỏ ghim")
-															: t("system.developer.ai.pin", "Ghim")}
-													</Button>
-												</div>
-											</button>
-										))}
-									</div>
-								</div>
-								<div className={styles.aiChatMetaCard}>
-									<div className={styles.aiChatMetaTitle}>{t("system.developer.ai.contextTitle", "Ngữ cảnh gửi cho Copilot")}</div>
-									<div className={styles.aiChatMetaItem}>app_id: {appId}</div>
-									<div className={styles.aiChatMetaItem}>p_name: {selectedCodeLabel}</div>
-									<div className={styles.aiChatMetaItem}>p_type: {resolvedPType}</div>
-									<div className={styles.aiChatMetaItem}>{t("system.developer.ai.language")}: {currentTypeLabel}</div>
-								</div>
-								<div className={styles.aiChat}>
-									{aiMessages.length === 0 && <div className={styles.aiEmpty}>{t("system.developer.ai.noConversation")}</div>}
-									{aiMessages.map((msg) => (
-										<div key={msg.id} className={msg.role === "user" ? styles.aiMsgUser : styles.aiMsgAssistant}>
-											<div className={styles.aiMsgRole}>{msg.role === "user" ? t("system.developer.ai.you") : "Copilot"}</div>
-											<div>{msg.content}</div>
-										</div>
-									))}
-								</div>
-								<div className={styles.aiComposer}>
-									<Input.TextArea
-										ref={aiPromptInputRef}
-										value={aiPromptText}
-										onChange={(e) => setAiPromptText(e.target.value)}
-										placeholder={t("system.developer.ai.promptPlaceholder")}
-										rows={5}
-										style={{ resize: "vertical", minHeight: 120 }}
-									/>
-									<div className={styles.aiComposerActions}>
-										<div className={styles.aiComposerHint}>{t("system.developer.ai.composerHint", "Hãy mô tả cụ thể logic cần sửa, input/output mong muốn, và ràng buộc nghiệp vụ.")}</div>
-										<div className={styles.aiActionRow}>
-											<Button type="primary" loading={aiLoading} onClick={() => handleAskAi(false)}>
-												{t("system.developer.ai.ask")}
-											</Button>
-											<Button loading={aiLoading} onClick={() => handleAskAi(true)}>
-												{t("system.developer.ai.continue")}
-											</Button>
-										</div>
-									</div>
-								</div>
-							</div>
-						</div>
-						)}
-
-						<div className={`${styles.aiColumn} ${styles.aiRightColumn}`}>
-							<div className={styles.aiSectionTitle}>
-								{devUiText("Gợi ý từ AI (bạn có thể chỉnh sửa)", "AI suggestion (you can edit)", "AI 建议内容（可编辑）")}
-							</div>
-							{aiLeftPanelHidden && (
-								<div className={styles.aiHiddenLeftHint}>
-									{t("system.developer.ai.hiddenLeftHint", "Panel chat bên trái đang ẩn để mở rộng vùng soạn code. Bạn có thể bật lại bất cứ lúc nào.")}
-									<Button size="small" onClick={() => setAiLeftPanelHidden(false)}>
-										{t("system.developer.ai.showLeftPanel", "Hiện panel trái")}
-									</Button>
-								</div>
-							)}
+				<div className={styles.aiShell}>
+					<div className={`${styles.aiBody} ${styles.aiBodyLeftHidden}`}>
+					<div className={styles.aiRightColumn}>
 							{pendingChunk && (
 								<div className={styles.aiChunkCard}>
 									<div className={styles.aiChunkTitle}>{t("system.developer.ai.liveChunkTitle", "AI vừa cập nhật draft")}</div>
@@ -1432,16 +1274,18 @@ export default function CodeEditor() {
 										draftHighlightTheme,
 										codeType === 0 ? javascript() : html(),
 									]}
-									theme={vscodeDark}
+									theme={prefersDarkMode ? vscodeDark : vscodeLight}
 									height="360px"
 									editable
 									className={styles.editor}
 								/>
-							</div>
 						</div>
-						</div>
+					</div>
+					</div>
 				</div>
 			</Card>
+				</div>
+			</div>
 
 			{/* Create Code Modal */}
 			<Modal

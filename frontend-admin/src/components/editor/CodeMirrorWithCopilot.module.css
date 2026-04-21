@@ -1,0 +1,70 @@
+.wrapper {
+  position: relative;
+  min-width: 0;
+  width: 100%;
+}
+
+.editorHost {
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.wrapperFullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  background: var(--ant-color-bg-container, #1e1e1e);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.wrapperFullscreen .editorHost {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.wrapper :global(.cm-theme),
+.wrapper :global(.cm-editor) {
+  width: 100%;
+}
+
+.wrapperFullscreen .editorHost :global(.cm-editor),
+.wrapperFullscreen .editorHost :global(.cm-wrap),
+.wrapperFullscreen .editorHost :global(.cm-theme),
+.wrapperFullscreen .editorHost :global(.cm-scroller) {
+  flex: 1 1 0;
+  height: 100% !important;
+  max-height: 100% !important;
+  overflow: auto;
+}
+
+.toggleButton {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 30;
+}
+
+.chatPanel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(420px, 92vw);
+  z-index: 26;
+  border-left: 1px solid var(--ant-color-border);
+  background: var(--ant-color-bg-container);
+  box-shadow: -10px 0 26px rgba(0, 0, 0, 0.12);
+}
+
+.chatPanelInner {
+  height: 100%;
+}
+
+@media (max-width: 992px) {
+  .chatPanel {
+    width: min(100%, 100vw);
+  }
+}

@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Button, Card, Collapse, Divider, Grid, Input, Progress, Upload, message, Radio, Select, Space, Switch, Tag, Tooltip } from "antd";
-import CodeMirror from "@uiw/react-codemirror";
+import { Alert, Button, Card, Grid, Input, Progress, message, Select, Space, Switch, Tag, Tooltip } from "antd";
+import CodeMirror from "#src/components/editor/CodeMirrorWithCopilot";
 import { json } from "@codemirror/lang-json";
-import { vscodeDark } from "@uiw/codemirror-theme-vscode";
+import { vscodeDark, vscodeLight } from "@uiw/codemirror-theme-vscode";
+import { usePreferences } from "#src/hooks";
 import { Decoration, EditorView, WidgetType } from "@codemirror/view";
 import { StateEffect, StateField } from "@codemirror/state";
 import type { DecorationSet } from "@codemirror/view";
 import { useTranslation } from "react-i18next";
 import { useUserStore } from "#src/store/user";
 import { useSocket } from "#src/hooks/useSocket";
+import type { CopilotAttachment, CopilotUserMessagePayload } from "#src/pages/system/developer/CopilotChat";
 
 import type { MenuItemType } from "#src/api/system/menu";
 import { generateSeoContentWithPrompt } from "#src/api/ai";
@@ -16,7 +18,6 @@ import { getTableData, updateTableData } from "#src/components/csm-grid/CsmApi";
 import { csmDecrypt, csmEncrypt } from "#src/components/csm-grid/CsmCrypto";
 import { request } from "#src/utils";
 
-const { TextArea } = Input;
 
 type AiRequestRecord = {
   id?: string;
@@ -109,7 +110,7 @@ type JsonContextFile = {
  * - new_build: Design from scratch - AI analyzes business requirements and creates full menu tree
  * - incremental_update: Edit existing menu deeply (menu/field/trigger) - AI returns FULL tree
  */
-type OperationScenario = "new_build" | "incremental_update";
+type OperationScenario = "incremental_update";
 
 type FieldDelta = {
   fieldName: string;
@@ -2630,6 +2631,19 @@ function parseContextFiles(raw: any): JsonContextFile[] {
   }
 }
 
+function mapCopilotAttachmentsToContextFiles(attachments: CopilotAttachment[]): JsonContextFile[] {
+  return (Array.isArray(attachments) ? attachments : [])
+    .filter((item) => (item.kind === "text" || item.kind === "json") && String(item.textContent || "").trim())
+    .map((item) => ({
+      id: String(item.id || `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`),
+      name: String(item.name || "attachment.txt"),
+      size: Number(item.size || String(item.textContent || "").length),
+      content: trimToMax(String(item.textContent || ""), MAX_CONTEXT_FILE_CHARS),
+      summary: String(item.summary || summarizeJsonContent(item.textContent || "")),
+    }))
+    .slice(0, MAX_CONTEXT_FILES);
+}
+
 /**
  * Find a single menu node by id in the tree.
  */
@@ -2821,19 +2835,22 @@ export function buildAiIncrementalUpdatePayload(
 
 export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerProps) {
   const { t, i18n } = useTranslation();
+  const { isDark } = usePreferences();
   const screens = Grid.useBreakpoint();
   const user = useUserStore();
   const isDevUser = !!user?.dev || !!user?.roles?.includes("dev");
   const { socket, connected: socketConnected } = useSocket({ enabled: true });
 
   // ── Scenario selection ────────────────────────────────────────────────────
-  const [operationScenario, setOperationScenario] = useState<OperationScenario>("new_build");
+  const [operationScenario, setOperationScenario] = useState<OperationScenario>("incremental_update");
 
   // Editable AI draft shown in result editor for all scenarios
   const [editableAiDraftText, setEditableAiDraftText] = useState<string>("");
 
   // ── Common state ──────────────────────────────────────────────────────────
   const [requestText, setRequestText] = useState("");
+  const [latestCopilotPrompt, setLatestCopilotPrompt] = useState("");
+  const [latestCopilotAttachmentCount, setLatestCopilotAttachmentCount] = useState(0);
   const [storedRequest, setStoredRequest] = useState("");
   const [storedRecordMeta, setStoredRecordMeta] = useState<AiRequestRecord | null>(null);
   const [aiResultText, setAiResultText] = useState("");
@@ -3108,7 +3125,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     if (hasPatchOps) {
       const deletedCount = nextPatchOps.filter((op) => op.action === "delete").length;
       const baseNodeCount = flattenMenuNodes(decodedCurrentMenus, 5000).length;
-      const guardRequestText = [storedRequest, requestText].filter(Boolean).join("\n");
+      const guardRequestText = [storedRequest, effectiveRequestText].filter(Boolean).join("\n");
       if (shouldTriggerMassDeleteGuard({
         scenario: operationScenario,
         baseNodes: baseNodeCount,
@@ -3136,7 +3153,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
             const draftMenus = normalizeMenuList(extractMenuListFromPayload(parsedDraft));
             if (draftMenus.length > 0) {
               console.log("[APPLY_SOCKET_DRAFT] incremental_update: draftMenus=", draftMenus.length);
-              const guardRequestText = [storedRequest, requestText].filter(Boolean).join("\n");
+              const guardRequestText = [storedRequest, effectiveRequestText].filter(Boolean).join("\n");
               const scoped = enforceIncrementalTargetScope({
                 scenario: operationScenario,
                 baseMenus: decodedCurrentMenus,
@@ -3922,11 +3939,17 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     [menuValidationIssues],
   );
 
+  const effectiveRequestText = useMemo(() => {
+    const manualRequest = String(requestText || "").trim();
+    if (manualRequest) return manualRequest;
+    return String(latestCopilotPrompt || "").trim();
+  }, [latestCopilotPrompt, requestText]);
+
   const mergedRequestText = useMemo(() => {
-    if (!requestText.trim()) return storedRequest;
-    if (!storedRequest.trim()) return requestText;
-    return `${storedRequest}\n---\n${requestText}`;
-  }, [requestText, storedRequest]);
+    if (!effectiveRequestText) return storedRequest;
+    if (!storedRequest.trim()) return effectiveRequestText;
+    return `${storedRequest}\n---\n${effectiveRequestText}`;
+  }, [effectiveRequestText, storedRequest]);
 
   const expectedModules = useMemo(() => extractRequirementModules(mergedRequestText || "", 20), [mergedRequestText]);
   const expectedTables = useMemo(() => extractRequirementTables(mergedRequestText || "", 30), [mergedRequestText]);
@@ -3979,6 +4002,70 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     () => transformMenuTriggers(Array.isArray(currentMenus) ? currentMenus : [], "decode"),
     [currentMenus],
   );
+  const latestCopilotPromptPreview = useMemo(
+    () => compactAiRealtimeText(latestCopilotPrompt, 220),
+    [latestCopilotPrompt],
+  );
+  const copilotMenuChatContext = useMemo(() => {
+    const editorJson = editableAiDraftText
+      ? editableAiDraftText
+      : (aiResultText || buildEditorMenuJson(decodedCurrentMenus));
+
+    const contextPayload = {
+      app_id: String(appId || ""),
+      operation_scenario: operationScenario,
+      requirement_source: latestCopilotPrompt.trim() ? "copilot_chat" : "manual_input",
+      latest_chat_requirement: trimToMax(String(latestCopilotPrompt || ""), 1600),
+      active_requirement: trimToMax(String(effectiveRequestText || ""), 1600),
+      stored_requirement: trimToMax(String(storedRequest || ""), 1600),
+      current_menu_summary: buildCompactMenuContext(decodedCurrentMenus, 60),
+      context_files: contextFiles.map((file) => ({
+        name: file.name,
+        size: file.size,
+        summary: trimToMax(String(file.summary || ""), 180),
+      })),
+    };
+
+    return [
+      "MENU_DESIGN_WORKSPACE_CONTEXT",
+      JSON.stringify(contextPayload, null, 2),
+      "",
+      "CURRENT_EDITOR_JSON",
+      trimToMax(editorJson, 3200),
+    ].join("\n");
+  }, [
+    aiResultText,
+    appId,
+    contextFiles,
+    decodedCurrentMenus,
+    editableAiDraftText,
+    effectiveRequestText,
+    latestCopilotPrompt,
+    operationScenario,
+    storedRequest,
+  ]);
+
+  const handleCopilotRequirementMessage = (payload: CopilotUserMessagePayload) => {
+    const nextText = String(payload?.message || "").trim();
+    const derivedContextFiles = mapCopilotAttachmentsToContextFiles(payload?.attachments || []);
+    setLatestCopilotAttachmentCount(Array.isArray(payload?.attachments) ? payload.attachments.length : 0);
+    if (nextText) {
+      setLatestCopilotPrompt(nextText);
+      setRequestText(nextText);
+    }
+    if (derivedContextFiles.length > 0) {
+      setContextFiles((prev) => {
+        const merged = [...derivedContextFiles];
+        for (const item of prev) {
+          if (!merged.some((candidate) => candidate.name === item.name)) {
+            merged.push(item);
+          }
+        }
+        return merged.slice(0, MAX_CONTEXT_FILES);
+      });
+    }
+    if (!nextText && derivedContextFiles.length === 0) return;
+  };
 
   useEffect(() => {
     if (!appId) return;
@@ -4064,52 +4151,6 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     }
 
     if (!recordId) setRecordId(objUpdate.id);
-  };
-
-  const handleContextJsonFile = async (file: File) => {
-    if (!file) return false;
-
-    if (contextFiles.length >= MAX_CONTEXT_FILES) {
-      message.warning(t("system.menu.aiDesigner.context.maxFiles", { max: MAX_CONTEXT_FILES }) || `Chi duoc dinh kem toi da ${MAX_CONTEXT_FILES} file JSON.`);
-      return false;
-    }
-
-    const name = String(file.name || "");
-    if (!name.toLowerCase().endsWith(".json")) {
-      message.warning(t("system.menu.aiDesigner.context.jsonOnly") || "Chi nhan file .json de dam bao AI doc dung cau truc.");
-      return false;
-    }
-
-    try {
-      const raw = await file.text();
-      const parsed = JSON.parse(raw);
-      const normalized = JSON.stringify(parsed, null, 2);
-      const next: JsonContextFile = {
-        id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-        name,
-        size: Number(file.size || normalized.length),
-        content: trimToMax(normalized, MAX_CONTEXT_FILE_CHARS),
-        summary: summarizeJsonContent(parsed),
-      };
-
-      setContextFiles((prev) => {
-        const exists = prev.some((item) => item.name === next.name);
-        if (exists) {
-          return prev.map((item) => (item.name === next.name ? next : item));
-        }
-        return [...prev, next];
-      });
-      message.success(t("system.menu.aiDesigner.context.fileLoaded", { name }) || `Da nap context JSON: ${name}`);
-    } catch (error) {
-      console.error("Invalid JSON context file:", error);
-      message.error(t("system.menu.aiDesigner.context.fileInvalid", { name }) || `File ${name} khong hop le JSON.`);
-    }
-
-    return false;
-  };
-
-  const removeContextFile = (id: string) => {
-    setContextFiles((prev) => prev.filter((item) => item.id !== id));
   };
 
   const formatStoredTimestamp = (value?: number) => {
@@ -4326,7 +4367,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
 
         const deletedCount = Number(mergeResult?.deleted || 0);
         const baseNodeCount = flattenMenuNodes(decodedCurrentMenus, 5000).length;
-        const guardRequestText = [storedRequest, requestText].filter(Boolean).join("\n");
+        const guardRequestText = [storedRequest, effectiveRequestText].filter(Boolean).join("\n");
         if (shouldTriggerMassDeleteGuard({
           scenario: operationScenario,
           baseNodes: baseNodeCount,
@@ -4519,45 +4560,36 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
   };
 
   const handleGenerate = async () => {
-    // ── Kịch bản 2: Chỉnh sửa toàn diện trên menu hiện có ─────────────────
-    if (operationScenario === "incremental_update") {
-      if (!requestText.trim()) {
-        message.warning(t("system.menu.aiDesigner.incremental.enterRequest") || "Hãy nhập mô tả thay đổi (menu/field/trigger)");
-        return;
-      }
-      const baseMenus = decodedCurrentMenus;
-      if (baseMenus.length === 0) {
-        message.warning(t("system.menu.aiDesigner.incremental.noBaseMenu") || "Không có menu hiện tại để chỉnh sửa. Hãy dùng kịch bản Tạo mới.");
-        return;
-      }
-      const prompt = trimToMax(
-        (() => {
-          const basePayload = buildAiIncrementalUpdatePayload(
-            appId,
-            storedRequest,
-            requestText,
-            baseMenus,
-            contextFiles,
-          );
-          // Inject session continuity memory so AI remembers previous work for this app_id
-          const sessionMemory = (storedLastResult || storedRecordMeta?.request_history)
-            ? buildAppContextAppendix(appId, storedRecordMeta?.request_history || storedRequest, storedLastResult, contextFiles)
-            : null;
-          const payloadWithMemory = sessionMemory
-            ? { ...basePayload, session_memory: trimToMax(sessionMemory, MAX_CONTEXT_APPENDIX_CHARS) }
-            : basePayload;
-          return JSON.stringify(payloadWithMemory, null, 2);
-        })(),
-        120000,
-      );
-      const combinedRequest = [storedRequest || "", "\n[Incremental update]\n", requestText].join("\n").trim();
-      await runGenerate(combinedRequest, "complete", prompt);
+    if (!effectiveRequestText) {
+      message.warning(t("system.menu.aiDesigner.incremental.enterRequest") || "Hãy nhập mô tả thay đổi (menu/field/trigger)");
       return;
     }
-
-    // ── Kịch bản 1: New Build ─────────────────────────────────────────────
-
-    await runGenerate(mergedRequestText, "complete");
+    const baseMenus = decodedCurrentMenus;
+    if (baseMenus.length === 0) {
+      message.warning(t("system.menu.aiDesigner.incremental.noBaseMenu") || "Không có menu hiện tại để chỉnh sửa. Hãy nhập JSON thủ công vào editor trước hoặc dùng Trợ lý AI để tạo.");
+      return;
+    }
+    const prompt = trimToMax(
+      (() => {
+        const basePayload = buildAiIncrementalUpdatePayload(
+          appId,
+          storedRequest,
+          effectiveRequestText,
+          baseMenus,
+          contextFiles,
+        );
+        const sessionMemory = (storedLastResult || storedRecordMeta?.request_history)
+          ? buildAppContextAppendix(appId, storedRecordMeta?.request_history || storedRequest, storedLastResult, contextFiles)
+          : null;
+        const payloadWithMemory = sessionMemory
+          ? { ...basePayload, session_memory: trimToMax(sessionMemory, MAX_CONTEXT_APPENDIX_CHARS) }
+          : basePayload;
+        return JSON.stringify(payloadWithMemory, null, 2);
+      })(),
+      120000,
+    );
+    const combinedRequest = [storedRequest || "", "\n[Incremental update]\n", effectiveRequestText].join("\n").trim();
+    await runGenerate(combinedRequest, "complete", prompt);
   };
 
   const handleApply = async () => {
@@ -4661,19 +4693,12 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
   } as const;
 
   const sectionTitleStyle = { fontSize: 13, fontWeight: 600, letterSpacing: 0.2 } as const;
-  const [leftPanelHidden, setLeftPanelHidden] = useState(false);
-  const leftPanelStackStyle = {
-    width: "100%",
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: 12,
-  };
   const rightEditorPanelStyle = {
     ...sectionCardStyle,
-    gridColumn: isDesktopLayout && !leftPanelHidden ? "2" : "auto",
-    gridRow: isDesktopLayout ? "1 / span 2" : "auto",
-    position: isDesktopLayout && !leftPanelHidden ? "sticky" as const : "static" as const,
-    top: isDesktopLayout && !leftPanelHidden ? 8 : undefined,
+    gridColumn: "auto",
+    gridRow: "auto",
+    position: "static" as const,
+    top: undefined,
     alignSelf: "start" as const,
   };
   const uiText = (vi: string, en: string, zh: string) => {
@@ -4681,13 +4706,6 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     if (lang.startsWith("zh")) return zh;
     if (lang.startsWith("en")) return en;
     return vi;
-  };
-  const [panelState, setPanelState] = useState({
-    config: true,
-    monitor: true,
-  });
-  const togglePanel = (key: keyof typeof panelState) => {
-    setPanelState((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
   // Close fullscreen on Escape key
@@ -4714,324 +4732,74 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
             }
           : {}}
       >
-      <Card
-        title={
-          <Space style={{ width: "100%", justifyContent: "space-between" }}>
-            <span>{t("system.menu.aiDesigner.panelTitle") || "AI Thiet ke Menu Tu dong"}</span>
-            <Tooltip title={isFullscreen ? "Thu nhỏ (Esc)" : "Phóng to toàn màn hình"}>
-              <Button
-                size="small"
-                type="text"
-                onClick={() => setIsFullscreen((prev) => !prev)}
-                style={{ fontSize: 16, lineHeight: 1 }}
-              >
-                {isFullscreen ? "⊡" : "⛶"}
-              </Button>
-            </Tooltip>
-          </Space>
-        }
-        bordered={false}
-        style={isFullscreen ? { minHeight: "100vh", borderRadius: 0 } : {}}>
-        <Space direction="vertical" size={12} style={{ width: "100%" }}>
+      <div style={{ width: "100%" }}>
         {!appId && <Alert type="warning" showIcon message={t("system.menu.aiDesigner.selectAppFirst") || "Vui long chon App truoc khi su dung AI."} />}
 
-        {appId && (
-          <Alert
-            type={storedRecordMeta ? "info" : "success"}
-            showIcon
-            style={{ marginBottom: 8 }}
-            message={storedRecordMeta
-              ? (
-                <Space wrap size={8} style={{ width: "100%", justifyContent: "space-between" }}>
-                  <Space wrap size={8}>
-                    <span>{t("system.menu.aiDesigner.requestStore.hasData", { appId }) as string}</span>
-                    <Tag color="default">
-                      {(t("system.menu.aiDesigner.requestStore.updatedAt") as string)}: {formatStoredTimestamp(storedRecordMeta.updated_at)}
-                    </Tag>
-                  </Space>
-                  <Space wrap size={6}>
-                    <Button
-                      size="small"
-                      type="link"
-                      onClick={() => setShowStoredRequestDetails((prev) => !prev)}
-                    >
-                      {showStoredRequestDetails
-                        ? uiText("Ẩn chi tiết", "Hide details", "隐藏详情")
-                        : uiText("Xem chi tiết", "View details", "查看详情")}
-                    </Button>
-                    <Button danger size="small" loading={deletingStoredRecord} onClick={handleClearStoredRequestData}>
-                      {t("system.menu.aiDesigner.requestStore.deleteButton") as string}
-                    </Button>
-                  </Space>
-                </Space>
-              )
-              : (t("system.menu.aiDesigner.requestStore.noData", { appId }) as string)}
-            description={storedRecordMeta && showStoredRequestDetails
-              ? (
-                <Space direction="vertical" style={{ width: "100%" }}>
-                  <div>
-                    <strong>{t("system.menu.aiDesigner.requestStore.requestLabel") as string}</strong>
-                    <div style={{ marginTop: 4, whiteSpace: "pre-wrap" }}>
-                      {storedRequest || (t("system.menu.aiDesigner.requestStore.emptyValue") as string)}
-                    </div>
-                  </div>
-                  <div>
-                    <strong>{t("system.menu.aiDesigner.requestStore.historyLabel") as string}</strong>
-                    <div style={{ marginTop: 4, maxHeight: 120, overflow: "auto", whiteSpace: "pre-wrap" }}>
-                      {storedRecordMeta.request_history || (t("system.menu.aiDesigner.requestStore.emptyValue") as string)}
-                    </div>
-                  </div>
-                </Space>
-              )
-              : undefined}
-          />
-        )}
-
         <div style={{ position: "sticky", top: 8, zIndex: 8 }}>
-          <Card
-            size="small"
-            style={{ ...sectionCardStyle, background: "var(--ant-color-bg-container)" }}
-            title={<span style={sectionTitleStyle}>{t("system.menu.aiDesigner.section.quickActions") || "Thanh thao tac nhanh"}</span>}
+          <div
+            style={{
+              ...sectionCardStyle,
+              background: "var(--ant-color-bg-container)",
+              padding: 12,
+            }}
           >
-            <Space direction="vertical" size={8} style={{ width: "100%" }}>
-              <Space wrap style={{ width: "100%", justifyContent: "space-between" }}>
-                <Space wrap>
-                  <Button type="primary" onClick={handleGenerate} loading={loading} disabled={!appId} size="large">
-                    {loading
-                      ? (t("system.menu.aiDesigner.processing") as string)
-                      : operationScenario === "new_build"
-                        ? (t("system.menu.aiDesigner.generateAll") || "Tạo bằng AI toàn bộ menu")
-                        : (t("system.menu.aiDesigner.incremental.generateButton") || "Chỉnh sửa menu bằng AI")}
-                  </Button>
-
-                  {loading && activeAiJobIdRef.current && (
-                    <Button
-                      danger
-                      size="large"
-                      onClick={() => cancelActiveAiRun(t("system.menu.aiDesigner.editor.stopByUser") || "Nguoi dung da dung AI job")}
-                    >
-                      {t("system.menu.aiDesigner.editor.stopNow") || "Dung AI ngay"}
-                    </Button>
-                  )}
-
-                  <Button
-                    type="primary"
-                    onClick={handleApply}
-                    size="large"
-                    disabled={applyMenuCount <= 0 || menuValidationErrors.length > 0 || applyGuardIssues.length > 0}
-                    style={{ background: "#52c41a", borderColor: "#52c41a" }}
-                  >
-                    {`${t("system.menu.aiDesigner.applySystem") || "Ap dung vao He thong"} (${applyMenuCount})`}
-                  </Button>
-                </Space>
-
-                <Space wrap>
-                  <Tag color="geekblue">{`app_id: ${appId || "-"}`}</Tag>
-                  <Tag color="blue">{operationScenario === "new_build" ? uiText("Tạo mới", "New Build", "新建") : uiText("Cập nhật", "Incremental", "增量")}</Tag>
-                  <Tag color="processing">{`${uiText("Bước", "Step", "步骤")} ${Math.max(0, Number(aiProgress?.current ?? 0))}/${Math.max(1, Number(aiProgress?.total ?? 1))}`}</Tag>
-                  <Tag color="cyan">{`${uiText("Mô hình", "Model", "模型")}: ${aiRuntimeModel || uiText("đang xác định", "resolving", "识别中")}`}</Tag>
-                  <Button size="small" onClick={() => setLeftPanelHidden((prev) => !prev)}>
-                    {leftPanelHidden
-                      ? uiText("Hiện panel trái", "Show left panel", "显示左侧面板")
-                      : uiText("Ẩn panel trái", "Hide left panel", "隐藏左侧面板")}
-                  </Button>
-                </Space>
+            <Space wrap style={{ width: "100%", justifyContent: "space-between" }}>
+              <Space wrap size={10}>
+                <Button
+                  type="primary"
+                  onClick={handleApply}
+                  size="large"
+                  disabled={applyMenuCount <= 0 || menuValidationErrors.length > 0 || applyGuardIssues.length > 0}
+                  style={{ background: "#52c41a", borderColor: "#52c41a" }}
+                >
+                  {`${t("system.menu.aiDesigner.applySystem") || "Ap dung vao He thong"} (${applyMenuCount})`}
+                </Button>
               </Space>
 
               <Space wrap>
-                <Switch
-                  size="small"
-                  checked={aiLiveEditEnabled}
-                  onChange={setAiLiveEditEnabled}
-                  checkedChildren={uiText("Live", "Live", "实时")}
-                  unCheckedChildren={uiText("Tạm", "Buffered", "暂存")}
-                />
-                <Tag color={aiLiveEditEnabled ? "blue" : "default"}>
-                  {aiLiveEditEnabled
-                    ? (t("system.menu.aiDesigner.editor.livePatchHintOn") || "AI có thể sửa trực tiếp từng dòng / nhiều dòng trong editor khi đang chạy")
-                    : (t("system.menu.aiDesigner.editor.livePatchHintOff") || "AI chỉ cập nhật editor khi hoàn tất")}
-                </Tag>
-                <Switch
-                  size="small"
-                  checked={allowManualEditWhileRunning}
-                  onChange={setAllowManualEditWhileRunning}
-                  checkedChildren={uiText("Sửa tay", "Manual", "手动")}
-                  unCheckedChildren={uiText("Khóa", "Locked", "锁定")}
-                />
+                <Tag color="geekblue">{`app_id: ${appId || "-"}`}</Tag>
+                {(loading || aiProgress) && (
+                  <Tag color="processing">{`${uiText("Bước", "Step", "步骤")} ${Math.max(0, Number(aiProgress?.current ?? 0))}/${Math.max(1, Number(aiProgress?.total ?? 1))}`}</Tag>
+                )}
+                {(loading || aiProgress) && (
+                  <Tag color="cyan">{`${uiText("Mô hình", "Model", "模型")}: ${aiRuntimeModel || uiText("đang xác định", "resolving", "识别中")}`}</Tag>
+                )}
+                <Tooltip title={aiLiveEditEnabled
+                  ? (t("system.menu.aiDesigner.editor.livePatchHintOn") || "AI có thể sửa trực tiếp từng dòng / nhiều dòng trong editor khi đang chạy")
+                  : (t("system.menu.aiDesigner.editor.livePatchHintOff") || "AI chỉ cập nhật editor khi hoàn tất")}
+                >
+                  <Switch
+                    size="small"
+                    checked={aiLiveEditEnabled}
+                    onChange={setAiLiveEditEnabled}
+                    checkedChildren={uiText("Live", "Live", "实时")}
+                    unCheckedChildren={uiText("Tạm", "Buffered", "暂存")}
+                  />
+                </Tooltip>
+                <Tooltip title={uiText("Cho phép chỉnh tay trong lúc AI đang chạy", "Allow manual editing while AI is running", "允许在 AI 运行时手动编辑")}>
+                  <Switch
+                    size="small"
+                    checked={allowManualEditWhileRunning}
+                    onChange={setAllowManualEditWhileRunning}
+                    checkedChildren={uiText("Sửa tay", "Manual", "手动")}
+                    unCheckedChildren={uiText("Khóa", "Locked", "锁定")}
+                  />
+                </Tooltip>
               </Space>
             </Space>
-          </Card>
+          </div>
         </div>
 
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: isDesktopLayout && !leftPanelHidden ? "minmax(380px, 0.9fr) minmax(560px, 1.35fr)" : "1fr",
+            gridTemplateColumns: "1fr",
             gap: 12,
             alignItems: "start",
             minHeight: isDesktopLayout ? "calc(100vh - 240px)" : undefined,
           }}
         >
-        {!leftPanelHidden && (
-        <div style={leftPanelStackStyle}>
-        <Card
-          size="small"
-          style={sectionCardStyle}
-          title={<span style={sectionTitleStyle}>{t("system.menu.aiDesigner.section.config") || "1) Cấu hình yêu cầu"}</span>}
-          extra={(
-            <Button type="text" size="small" onClick={() => togglePanel("config")}>
-              {panelState.config ? uiText("Thu gọn", "Collapse", "收起") : uiText("Mở rộng", "Expand", "展开")}
-            </Button>
-          )}
-        >
-        {panelState.config && (
-        <>
-        {/* ── Scenario Selector ─────────────────────────────────────────── */}
-        <div style={{ marginBottom: 16 }}>
-          <Space wrap align="center" style={{ marginBottom: 8 }}>
-            <span style={{ fontWeight: 600, fontSize: 14 }}>{t("system.menu.aiDesigner.operationScenario.label") || "Chọn kịch bản thao tác:"}</span>
-            <Tag color="blue">{operationScenario === "new_build" ? uiText("Tạo mới", "New Build", "新建") : uiText("Cập nhật", "Incremental", "增量")}</Tag>
-          </Space>
-          <Radio.Group
-            value={operationScenario}
-            onChange={(e) => {
-              setOperationScenario(e.target.value as OperationScenario);
-              setAiMenus(null);
-              setAiResultText("");
-              setEditableAiDraftText("");
-              setAiProgress(null);
-                syncPatchReviewState([]);
-              setLiveEditLines([]);
-              setMergeStats(null);
-            }}
-            optionType="button"
-            buttonStyle="solid"
-            style={{ width: "100%" }}
-          >
-            <Space wrap style={{ width: "100%" }}>
-              <Radio.Button value="new_build">{uiText("1) Tạo mới", "1) New Build", "1) 新建")}</Radio.Button>
-              <Radio.Button value="incremental_update">{uiText("2) Chỉnh sửa", "2) Update", "2) 更新")}</Radio.Button>
-            </Space>
-          </Radio.Group>
-          <div style={{ marginTop: 8, fontSize: 12, color: "var(--ant-color-text-secondary)" }}>
-            {operationScenario === "new_build"
-              ? (t("system.menu.aiDesigner.operationScenario.newBuildDesc") || "AI tự phân tích nghiệp vụ từ mô tả và thiết kế toàn bộ cây menu")
-              : (t("system.menu.aiDesigner.operationScenario.incrementalDesc") || "Thêm/sửa/xóa module và AI trả về toàn bộ cây menu đã cập nhật")}
-          </div>
-        </div>
-
-        <Divider />
-
-        {/* ── Kịch bản 2: Incremental Update UI ───────────────────────── */}
-        {operationScenario === "incremental_update" && (
-          <Space direction="vertical" style={{ width: "100%", marginBottom: 16 }}>
-            <Alert
-              type="warning"
-              showIcon
-              message={t("system.menu.aiDesigner.incremental.alertTitle") || "Kịch bản 2: Chỉnh sửa menu hiện có — AI sẽ trả về TOÀN BỘ cây menu"}
-              description={
-                <div>
-                  <div>{uiText("AI sẽ áp thay đổi vào menu hiện tại và trả lại toàn bộ cây sau khi cập nhật.", "AI applies your changes to current menu and returns the full updated tree.", "AI 会基于当前菜单应用变更并返回完整更新后的树。")}</div>
-                  <div style={{ marginTop: 4 }}><strong>{uiText("Menu hiện tại", "Current menu", "当前菜单")}: </strong>{Array.isArray(currentMenus) ? currentMenus.length : 0} {uiText("node cấp 1", "root nodes", "一级节点")}</div>
-                  {(!currentMenus || currentMenus.length === 0) && (
-                    <div style={{ color: "var(--ant-color-error)", marginTop: 4 }}>{uiText("Không có menu hiện tại. Hãy dùng kịch bản 1 để tạo mới.", "No current menu found. Use scenario 1 to build first.", "当前没有菜单，请先使用场景 1 新建。")}</div>
-                  )}
-                </div>
-              }
-            />
-            <div>
-              <div style={{ fontWeight: 500, marginBottom: 4 }}>{t("system.menu.aiDesigner.incremental.requestLabel") || "Mô tả thay đổi cần thực hiện:"}</div>
-              <TextArea
-                value={requestText}
-                onChange={(e) => setRequestText(e.target.value)}
-                placeholder={t("system.menu.aiDesigner.incremental.requestPlaceholder") || "Ví dụ: Thêm module Quản lý Nhân sự gồm: Danh sách nhân viên, Bảng lương, Chấm công. Sửa menu Báo cáo doanh thu thành Master-Detail. Xóa module test..."}
-                rows={6}
-              />
-            </div>
-          </Space>
-        )}
-
-        {/* ── Kịch bản 1: New Build UI ──────────────────────────────────── */}
-        {operationScenario === "new_build" && (
-          <>
-            <Alert
-              type="info"
-              showIcon
-              style={{ marginBottom: 16 }}
-              message={t("system.menu.aiDesigner.autoAnalyzeTitle") || "AI tự động thiết kế toàn bộ menu theo nghiệp vụ"}
-              description={t("system.menu.aiDesigner.autoAnalyzeDesc") || "AI sẽ tự phân tích yêu cầu và tự chọn loại menu phù hợp cho từng chức năng trong toàn bộ cây menu."}
-            />
-
-            {hasStoredRequest && (
-              <div style={{ marginBottom: 12 }}>
-                <Alert
-                  type="success"
-                  showIcon
-                  message={t("system.menu.aiDesigner.hasStoredRequestTitle") || "Da co yeu cau truoc do"}
-                  description={t("system.menu.aiDesigner.hasStoredRequestDesc") || "Neu nhap them, he thong se ket hop voi yeu cau cu de AI hieu ro hon."}
-                />
-              </div>
-            )}
-
-            <TextArea
-              value={requestText}
-              onChange={(e) => setRequestText(e.target.value)}
-              placeholder={t("system.menu.aiDesigner.singleInputPlaceholder") || "Nhập yêu cầu đầy đủ nghiệp vụ của khách hàng để AI tự động thiết kế toàn bộ menu app..."}
-              rows={8}
-              style={{ marginBottom: 16 }}
-            />
-          </>
-        )}
-
-        {/* ── Context JSON Files (all scenarios) ───────────────────────── */}
-        <Space direction="vertical" style={{ width: "100%", marginBottom: 12 }}>
-          <Upload
-            accept=".json,application/json"
-            multiple
-            showUploadList={false}
-            beforeUpload={(file) => handleContextJsonFile(file as unknown as File)}
-            disabled={!appId}
-          >
-            <Button disabled={!appId}>{t("system.menu.aiDesigner.context.uploadButton", { max: MAX_CONTEXT_FILES }) || "Dinh kem JSON he thong cu (toi da 8 file)"}</Button>
-          </Upload>
-
-          {contextFiles.length > 0 && (
-            <Alert
-              type="info"
-              showIcon
-              message={t("system.menu.aiDesigner.context.attachedMessage", { count: contextFiles.length, appId: appId || "" }) || `Da dinh kem ${contextFiles.length} file JSON context cho app_id ${appId || ""}`}
-              description={
-                <Space wrap>
-                  {contextFiles.map((file) => (
-                    <Tag key={file.id} closable onClose={(e) => {
-                      e.preventDefault();
-                      removeContextFile(file.id);
-                    }}>
-                      {file.name}
-                    </Tag>
-                  ))}
-                </Space>
-              }
-            />
-          )}
-        </Space>
-        </>
-        )}
-        </Card>
-
-        <div style={{ width: "100%", gridColumn: isDesktopLayout ? "1" : "auto" }}>
-        <Card
-          size="small"
-          style={sectionCardStyle}
-          title={<span style={sectionTitleStyle}>{t("system.menu.aiDesigner.section.monitor") || "2) Theo dõi realtime"}</span>}
-          extra={(
-            <Button type="text" size="small" onClick={() => togglePanel("monitor")}>
-              {panelState.monitor ? uiText("Thu gọn", "Collapse", "收起") : uiText("Mở rộng", "Expand", "展开")}
-            </Button>
-          )}
-        >
-        {panelState.monitor && (
-        <>
+        <div style={{ width: "100%" }}>
         {aiProgress && (
           <Alert
             type={aiProgress.status === "failed" ? "error" : aiProgress.status === "completed" ? "success" : "info"}
@@ -5153,35 +4921,11 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
             description={t("system.menu.aiDesigner.editor.liveUpdateDescription") as string}
           />
         )}
-        </>
-        )}
-        </Card>
         </div>
-        </div>
-        )}
 
-        <Card
-          size="small"
-          title={<span style={sectionTitleStyle}>{uiText("3) Kết quả AI đề xuất (bạn có thể chỉnh sửa)", "3) AI suggested result (you can edit)", "3) AI 建议结果（可编辑）")}</span>}
-          bodyStyle={{ display: "flex", flexDirection: "column", gap: 10 }}
-          style={rightEditorPanelStyle}
-        >
-          <Space direction="vertical" style={{ width: "100%" }}>
-              {leftPanelHidden && (
-                <Alert
-                  type="info"
-                  showIcon
-                  message={uiText("Panel trái đang ẩn để tập trung chỉnh JSON", "Left panel is hidden to focus on JSON editing", "左侧面板已隐藏以专注 JSON 编辑")}
-                  action={<Button size="small" onClick={() => setLeftPanelHidden(false)}>{uiText("Hiện lại", "Show", "显示")}</Button>}
-                />
-              )}
+        <div style={{ ...rightEditorPanelStyle, display: "flex", flexDirection: "column", gap: 10 }}>
               {aiResultText && aiMenus && aiMenus.length > 0 && (
-                <Alert
-                  type="success"
-                  showIcon
-                  message={`${t("system.menu.aiDesigner.generatedCount") || "AI đã tạo thành công"} ${aiMenus.length} ${t("system.menu.aiDesigner.menuFeatures") || "menu/chức năng"}`}
-                  description={t("system.menu.aiDesigner.reviewBeforeApply") || "Xem JSON bên dưới và kiểm tra trước khi áp dụng."}
-                />
+                <Tag color="success">{`${t("system.menu.aiDesigner.generatedCount") || "AI đã tạo thành công"} ${aiMenus.length} ${t("system.menu.aiDesigner.menuFeatures") || "menu/chức năng"}`}</Tag>
               )}
 
               {menuValidationIssues.length > 0 && (
@@ -5502,13 +5246,17 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                 </div>
 
                 <CodeMirror
+                  copilotLanguage="json"
+                  copilotContextType="menu_json"
+                  copilotCurrentCode={copilotMenuChatContext}
+                  copilotOnUserMessage={handleCopilotRequirementMessage}
                   value={
                     editableAiDraftText
                       ? editableAiDraftText
                       : (aiResultText || buildEditorMenuJson(decodedCurrentMenus))
                   }
                   height={isDesktopLayout ? "clamp(460px, 68vh, 860px)" : "420px"}
-                  theme={vscodeDark}
+                  theme={isDark ? vscodeDark : vscodeLight}
                   extensions={[json(), resultMetricsExtension, diffDecorationsField, diffTheme]}
                   onCreateEditor={(view: any) => {
                     resultEditorViewRef.current = view;
@@ -5544,11 +5292,9 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                   message={t("system.menu.aiDesigner.property.editableResultHint") || "Node đã được chỉnh sửa — JSON trong editor có thể chỉnh thêm trước khi Áp dụng"}
                 />
               )}
-          </Space>
-        </Card>
         </div>
-        </Space>
-      </Card>
+        </div>
+        </div>
       </div>
     </>
   );
