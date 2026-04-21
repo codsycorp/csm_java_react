@@ -151,7 +151,11 @@ public class GitHubModelsService {
           .filter(Files::isRegularFile)
           .filter(path -> {
             String fileName = path.getFileName().toString().toLowerCase();
-            return fileName.startsWith("ai_menu_") && fileName.endsWith(".md");
+            return fileName.endsWith(".md")
+                && (fileName.startsWith("ai_menu_")
+                || fileName.startsWith("ai_system_")
+                || fileName.contains("system_structure")
+                || fileName.contains("architecture"));
           })
           .sorted(Comparator.comparing(path -> path.getFileName().toString().toLowerCase()))
           .limit(maxFiles)
@@ -411,16 +415,16 @@ public class GitHubModelsService {
   @Value("${github.models.max-chunks:300}")
   private int maxChunks;
 
-  @Value("${github.models.chunk-summary-max-tokens:512}")
+  @Value("${github.models.chunk-summary-max-tokens:1024}")
   private int chunkSummaryMaxTokens;
 
-  @Value("${github.models.request-max-chars:22000}")
+  @Value("${github.models.request-max-chars:32000}")
   private int requestMaxChars;
 
   @Value("${github.models.merge-batch-size:8}")
   private int mergeBatchSize;
 
-  @Value("${github.models.task-hint-max-chars:4000}")
+  @Value("${github.models.task-hint-max-chars:12000}")
   private int taskHintMaxChars;
 
   @Value("${github.models.retry.max-attempts:5}")
@@ -452,6 +456,12 @@ public class GitHubModelsService {
 
   @Value("${github.models.stability.menu-only-context-injection:true}")
   private boolean menuOnlyContextInjection;
+
+  @Value("${github.models.chat-stream.direct-max-chars:120000}")
+  private int chatStreamDirectMaxChars;
+
+  @Value("${github.models.chat-stream.emit-chunk-chars:2400}")
+  private int chatStreamEmitChunkChars;
 
   private final Semaphore requestSemaphore = new Semaphore(1, true);
   private volatile long lastRequestAtMs = 0L;
@@ -570,6 +580,26 @@ public class GitHubModelsService {
     }
 
     try {
+      String flattenedPrompt = flattenChatMessages(messages);
+      if (!flattenedPrompt.isBlank() && flattenedPrompt.length() > Math.max(20000, chatStreamDirectMaxChars)) {
+        emitProgress(progressListener, progressPayload(
+            "preparing",
+            "Ngữ cảnh quá lớn, chuyển sang chế độ chunk để giữ đầy đủ nội dung",
+            0,
+            1,
+            Map.of("inputChars", flattenedPrompt.length(), "mode", "streaming_chunked_fallback")));
+
+        String chunkedResult = generateContent(flattenedPrompt, progressListener);
+        String finalText = extractResultTextFromWrappedJson(chunkedResult);
+        if (finalText == null || finalText.isBlank()) {
+          finalText = chunkedResult;
+        }
+        emitStreamingChunks(finalText, progressListener);
+        emitProgress(progressListener, progressPayload("complete", "Chat hoàn tất", 1, 1,
+            Map.of("mode", "streaming_chunked_fallback", "inputChars", flattenedPrompt.length())));
+        return createSuccessJson(finalText, "streaming_chunked_fallback", Map.of("inputChars", flattenedPrompt.length()));
+      }
+
       StringBuilder fullResponse = new StringBuilder();
 
       emitProgress(progressListener, progressPayload("streaming", "Bắt đầu chat với Copilot", 0, 1, null));
@@ -610,6 +640,92 @@ public class GitHubModelsService {
     }
   }
 
+  @SuppressWarnings("unchecked")
+  private String extractResultTextFromWrappedJson(String raw) {
+    if (raw == null || raw.isBlank()) {
+      return "";
+    }
+    try {
+      Map<String, Object> wrapper = objectMapper.readValue(raw, Map.class);
+      Object result = wrapper.get("result");
+      if (result == null) {
+        Object message = wrapper.get("message");
+        return message == null ? raw : String.valueOf(message);
+      }
+      if (result instanceof String) {
+        return (String) result;
+      }
+      return objectMapper.writeValueAsString(result);
+    } catch (Exception ex) {
+      return raw;
+    }
+  }
+
+  private String flattenChatMessages(List<Map<String, Object>> messages) {
+    if (messages == null || messages.isEmpty()) {
+      return "";
+    }
+    StringBuilder sb = new StringBuilder();
+    for (Map<String, Object> message : messages) {
+      if (message == null || message.isEmpty()) {
+        continue;
+      }
+      String role = String.valueOf(message.getOrDefault("role", "user"));
+      sb.append("[ROLE=").append(role).append("]\n");
+
+      Object content = message.get("content");
+      if (content instanceof String text) {
+        sb.append(text).append("\n\n");
+        continue;
+      }
+
+      if (content instanceof List<?> parts) {
+        for (Object partObj : parts) {
+          if (!(partObj instanceof Map<?, ?> part)) {
+            sb.append(String.valueOf(partObj)).append("\n");
+            continue;
+          }
+
+          Object typeObj = part.get("type");
+          String type = typeObj == null ? "" : String.valueOf(typeObj);
+          if ("text".equals(type)) {
+            Object textObj = part.get("text");
+            sb.append(textObj == null ? "" : String.valueOf(textObj)).append("\n");
+          } else if ("image_url".equals(type)) {
+            Object imageObj = part.get("image_url");
+            if (imageObj instanceof Map<?, ?> imageMap) {
+              Object urlObj = imageMap.get("url");
+              sb.append("[IMAGE_URL] ").append(urlObj == null ? "" : String.valueOf(urlObj)).append("\n");
+            } else {
+              sb.append("[IMAGE_URL] ").append(String.valueOf(imageObj)).append("\n");
+            }
+          } else {
+            sb.append(String.valueOf(part)).append("\n");
+          }
+        }
+      }
+
+      sb.append("\n");
+    }
+    return sb.toString().trim();
+  }
+
+  private void emitStreamingChunks(String text, ProgressListener progressListener) {
+    if (text == null || text.isBlank() || progressListener == null) {
+      return;
+    }
+
+    int safeChunkChars = Math.max(500, chatStreamEmitChunkChars);
+    int total = text.length();
+    int sent = 0;
+    while (sent < total) {
+      int end = Math.min(total, sent + safeChunkChars);
+      String chunk = text.substring(sent, end);
+      emitProgress(progressListener, progressPayload("streaming", "Nhận dữ liệu", end, total, Map.of("chunk", chunk)));
+      sent = end;
+    }
+  }
+
   private String callStreamingChatCompletion(HttpEntity<Map<String, Object>> request, ProgressListener progressListener) {
     StringBuilder accumulated = new StringBuilder();
     try {
@@ -618,8 +734,7 @@ public class GitHubModelsService {
       for (String candidateModel : candidateModels) {
         try {
           // Update model in request body
-          @SuppressWarnings("unchecked")
-          Map<String, Object> body = (Map<String, Object>) request.getBody();
+          Map<String, Object> body = request.getBody();
           body.put("model", candidateModel);
           
           HttpEntity<Map<String, Object>> updatedRequest = new HttpEntity<>(body, request.getHeaders());

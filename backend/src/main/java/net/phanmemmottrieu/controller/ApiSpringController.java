@@ -59,6 +59,11 @@ import java.util.concurrent.atomic.AtomicReference;
 public class ApiSpringController {
 
     private static final Logger logger = LoggerFactory.getLogger(ApiSpringController.class);
+    private static final int COPILOT_CURRENT_CODE_MAX_CHARS = 500000;
+    private static final int COPILOT_CURRENT_CODE_HEAD_CHARS = 180000;
+    private static final int COPILOT_CURRENT_CODE_TAIL_CHARS = 180000;
+    private static final int COPILOT_CURRENT_CODE_FOCUS_WINDOW_CHARS = 120000;
+    private static final int COPILOT_ATTACHMENT_TEXT_MAX_CHARS = 800000;
     private final ObjectMapper objectMapper = new ObjectMapper(); // Dùng để parse JSON body
     private final RecordManager recordManager;
     private final InitHandler initHandler;
@@ -1021,12 +1026,10 @@ public class ApiSpringController {
         }
         
         if (!currentCode.trim().isEmpty()) {
-            String truncatedCode = currentCode.length() > 5000 
-                ? currentCode.substring(0, 5000) + "\n/* ... truncated ... */"
-                : currentCode;
+            String contextualCode = buildCopilotCurrentCodeContext(currentCode, message);
             sb.append("Current code (").append(language).append("):\n");
             sb.append("```").append(language).append("\n");
-            sb.append(truncatedCode).append("\n");
+            sb.append(contextualCode).append("\n");
             sb.append("```\n\n");
         }
         
@@ -1049,8 +1052,8 @@ public class ApiSpringController {
 
                 String textContent = String.valueOf(attachment.getOrDefault("textContent", "")).trim();
                 if (!textContent.isEmpty()) {
-                    String truncated = textContent.length() > 50000
-                        ? textContent.substring(0, 50000) + "\n...[truncated]"
+                    String truncated = textContent.length() > COPILOT_ATTACHMENT_TEXT_MAX_CHARS
+                        ? textContent.substring(0, COPILOT_ATTACHMENT_TEXT_MAX_CHARS) + "\n...[truncated]"
                         : textContent;
                     sb.append("Content of ").append(name).append(":\n");
                     sb.append(truncated).append("\n\n");
@@ -1061,6 +1064,91 @@ public class ApiSpringController {
         sb.append("Context type: ").append(normalizedContext).append("\n");
         sb.append("User request: ").append(message == null ? "" : message);
         return sb.toString();
+    }
+
+    private String buildCopilotCurrentCodeContext(String currentCode, String message) {
+        String code = currentCode == null ? "" : currentCode;
+        if (code.length() <= COPILOT_CURRENT_CODE_MAX_CHARS) {
+            return code;
+        }
+
+        int safeHead = Math.max(1000, Math.min(COPILOT_CURRENT_CODE_HEAD_CHARS, code.length()));
+        int safeTail = Math.max(1000, Math.min(COPILOT_CURRENT_CODE_TAIL_CHARS, Math.max(0, code.length() - safeHead)));
+        String head = code.substring(0, safeHead);
+        String tail = code.substring(Math.max(0, code.length() - safeTail));
+        String focus = buildCopilotFocusExcerpt(code, message);
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("/* Code too large: ").append(code.length())
+            .append(" chars. Showing HEAD + FOCUS + TAIL excerpts for better understanding. */\n");
+        sb.append("/* ===== HEAD EXCERPT ===== */\n");
+        sb.append(head).append("\n");
+        if (!focus.isEmpty()) {
+            sb.append("/* ===== FOCUS EXCERPT (matched by request keywords) ===== */\n");
+            sb.append(focus).append("\n");
+        }
+        sb.append("/* ===== TAIL EXCERPT ===== */\n");
+        sb.append(tail);
+        return sb.toString();
+    }
+
+    private String buildCopilotFocusExcerpt(String code, String message) {
+        if (message == null || message.isBlank() || code == null || code.isBlank()) {
+            return "";
+        }
+
+        String normalizedMessage = normalizeSearchText(message);
+        if (normalizedMessage.isBlank()) {
+            return "";
+        }
+
+        Set<String> stopWords = Set.of(
+            "code", "file", "line", "help", "please", "bug", "fix", "error",
+            "menu", "json", "java", "javascript", "typescript", "react", "component",
+            "toi", "ban", "giup", "minh", "sua", "code", "dong", "file", "loi"
+        );
+
+        String[] rawTokens = normalizedMessage.split("\\s+");
+        List<String> tokens = new ArrayList<>();
+        for (String raw : rawTokens) {
+            String token = String.valueOf(raw == null ? "" : raw).trim().toLowerCase();
+            if (token.length() < 4 || stopWords.contains(token)) {
+                continue;
+            }
+            if (!tokens.contains(token)) {
+                tokens.add(token);
+            }
+            if (tokens.size() >= 12) {
+                break;
+            }
+        }
+
+        if (tokens.isEmpty()) {
+            return "";
+        }
+
+        String lowerCode = code.toLowerCase();
+        for (String token : tokens) {
+            int idx = lowerCode.indexOf(token);
+            if (idx < 0) {
+                continue;
+            }
+            int half = Math.max(1000, COPILOT_CURRENT_CODE_FOCUS_WINDOW_CHARS / 2);
+            int start = Math.max(0, idx - half);
+            int end = Math.min(code.length(), start + COPILOT_CURRENT_CODE_FOCUS_WINDOW_CHARS);
+            return code.substring(start, end);
+        }
+
+        return "";
+    }
+
+    private String normalizeSearchText(String raw) {
+        return Normalizer.normalize(String.valueOf(raw == null ? "" : raw), Normalizer.Form.NFD)
+                .replaceAll("\\p{M}", "")
+                .toLowerCase()
+                .replaceAll("[^a-z0-9_\\s]", " ")
+                .replaceAll("\\s+", " ")
+                .trim();
     }
 
     private String normalizeCopilotResponseMode(Object rawMode) {
@@ -1196,8 +1284,8 @@ public class ApiSpringController {
                 if (textContent.isEmpty()) {
                     continue;
                 }
-                next.put("textContent", textContent.length() > 50000
-                    ? textContent.substring(0, 50000) + "\n...[truncated]"
+                next.put("textContent", textContent.length() > COPILOT_ATTACHMENT_TEXT_MAX_CHARS
+                    ? textContent.substring(0, COPILOT_ATTACHMENT_TEXT_MAX_CHARS) + "\n...[truncated]"
                     : textContent);
                 normalized.add(next);
             }

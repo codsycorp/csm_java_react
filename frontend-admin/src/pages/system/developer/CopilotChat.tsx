@@ -75,12 +75,13 @@ type CopilotChatProps = {
 const CHAT_HISTORY_KEY = "codeeditor.copilot.chat.v1";
 const CHAT_STORAGE_LIMIT = 20;
 const MAX_ATTACHMENTS = 8;
-const MAX_TEXT_ATTACHMENT_CHARS = 50000;
-const MAX_TEXT_FILE_BYTES = 1024 * 1024;
+const MAX_TEXT_ATTACHMENT_CHARS = 800000;
+const MAX_TEXT_FILE_BYTES = 10 * 1024 * 1024;
 const MAX_IMAGE_FILE_BYTES = 5 * 1024 * 1024;
 const STREAM_UI_FLUSH_MS = 48;
 const STREAM_CODEBLOCK_PARSE_MS = 240;
 const AUTO_APPLY_PREF_KEY = "copilot.autoApply";
+const MAX_CHAT_INPUT_CHARS = 20000;
 const TEXT_FILE_EXTENSIONS = new Set([
 	"txt", "md", "markdown", "json", "js", "ts", "tsx", "jsx", "java", "sql", "css", "scss", "less",
 	"html", "xml", "yml", "yaml", "csv", "py", "properties", "env", "log", "ini",
@@ -616,9 +617,9 @@ export default function CopilotChat({
 				}
 				if (file.size > MAX_TEXT_FILE_BYTES) {
 					message.warning(uiText(
-						`${file.name} vượt quá 1MB`,
-						`${file.name} exceeds 1MB`,
-						`${file.name} 超过 1MB`,
+						`${file.name} vượt quá 10MB`,
+						`${file.name} exceeds 10MB`,
+						`${file.name} 超过 10MB`,
 					));
 					continue;
 				}
@@ -1143,7 +1144,7 @@ export default function CopilotChat({
 							)}
 							rows={3}
 							disabled={isLoading || !socketConnected}
-							maxLength={2000}
+							maxLength={MAX_CHAT_INPUT_CHARS}
 						/>
 					</Space.Compact>
 					<div className={styles.buttonGroup}>
