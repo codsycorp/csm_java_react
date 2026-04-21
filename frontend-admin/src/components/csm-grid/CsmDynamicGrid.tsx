@@ -1021,6 +1021,16 @@ export function CsmDynamicGrid({
 		if (lang.startsWith("vi")) return "Hủy";
 		return "Cancel";
 	}, [i18n.language]);
+	const importActionLabel = useMemo(() => {
+		const lang = String(i18n.language || "").toLowerCase();
+		const fallback = lang.startsWith("zh") ? "导入" : (lang.startsWith("vi") ? "Nhập" : "Import");
+		return t("common.import", { defaultValue: fallback });
+	}, [i18n.language, t]);
+	const exportActionLabel = useMemo(() => {
+		const lang = String(i18n.language || "").toLowerCase();
+		const fallback = lang.startsWith("zh") ? "导出" : (lang.startsWith("vi") ? "Xuất" : "Export");
+		return t("common.export", { defaultValue: fallback });
+	}, [i18n.language, t]);
 	const actionRef = useRef<ActionType>();
 	const hotkeyScopeRef = useRef<HTMLDivElement>(null);
 	const [data, setData] = useState<Row[]>([]);
@@ -1039,6 +1049,7 @@ export function CsmDynamicGrid({
 	const [cloneData, setCloneData] = useState<Row | null>(null);
 	const submitInFlightRef = useRef(false);
 	const actionClickGuardRef = useRef(false);
+	const actionClickGuardTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const [rowActionBusy, setRowActionBusy] = useState(false);
 	const [searchTerm, setSearchTerm] = useState("");
 	const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
@@ -1091,12 +1102,31 @@ export function CsmDynamicGrid({
 		() => String(gridInstanceKey || `${runtimeAppId || ""}::${menuId || ""}::${m_configs?.id || ""}::${m_configs?.table_name || ""}`),
 		[gridInstanceKey, runtimeAppId, menuId, m_configs?.id, m_configs?.table_name],
 	);
+	const clearActionLocks = useCallback(() => {
+		actionClickGuardRef.current = false;
+		if (actionClickGuardTimerRef.current) {
+			clearTimeout(actionClickGuardTimerRef.current);
+			actionClickGuardTimerRef.current = null;
+		}
+	}, []);
 	const closeEditor = useCallback(() => {
+		clearActionLocks();
 		submitInFlightRef.current = false;
+		setRowActionBusy(false);
+		setPendingEditableRowId(null);
 		setEditorOpen(false);
 		setCloneData(null);
 		setEditingRecord(null);
-	}, []);
+	}, [clearActionLocks]);
+
+	useEffect(() => {
+		if (!editorOpen) {
+			clearActionLocks();
+			submitInFlightRef.current = false;
+			setRowActionBusy(false);
+			setPendingEditableRowId(null);
+		}
+	}, [editorOpen, clearActionLocks]);
 	const syncMasterTableRows = useCallback((nextRows: Row[]) => {
 		if (!shareTableState || isDetailGrid || !tableName) return;
 		const currentStoreTable = useAppStore.getState().database[tableName];
@@ -3938,13 +3968,20 @@ export function CsmDynamicGrid({
 
 	// Default handlers if not provided
 	function handleAdd() {
+		if (actionClickGuardRef.current && !rowActionBusy && !submitInFlightRef.current && !editorOpen) {
+			clearActionLocks();
+		}
 		if (actionClickGuardRef.current || isRowActionLocked) {
 			message.warning("Đang xử lý thao tác trước đó, vui lòng chờ...");
 			return;
 		}
 		actionClickGuardRef.current = true;
-		setTimeout(() => {
+		if (actionClickGuardTimerRef.current) {
+			clearTimeout(actionClickGuardTimerRef.current);
+		}
+		actionClickGuardTimerRef.current = setTimeout(() => {
 			actionClickGuardRef.current = false;
+			actionClickGuardTimerRef.current = null;
 		}, 350);
 
 		// If inline editing, add new empty row to table
@@ -4474,7 +4511,7 @@ export function CsmDynamicGrid({
 						key: "import",
 						icon: React.createElement(ImportOutlined),
 						onClick: handleImport 
-					}, "Import")
+					}, importActionLabel)
 				);
 			}
 			if (canShowExport) {
@@ -4483,7 +4520,7 @@ export function CsmDynamicGrid({
 						key: "export",
 						icon: React.createElement(ExportOutlined),
 						onClick: handleExport 
-					}, "Export")
+					}, exportActionLabel)
 				);
 			}
 			items.push(
@@ -4502,6 +4539,27 @@ export function CsmDynamicGrid({
 
 
 	const children: React.ReactNode[] = [];
+	const editingRecordIndex = useMemo(() => {
+		if (!editingRecord) return -1;
+		const currentKey = getRowKey(editingRecord);
+		if (!currentKey) return -1;
+		return searchedData.findIndex((row) => getRowKey(row) === currentKey);
+	}, [editingRecord, searchedData, getRowKey]);
+	const canNavigatePrevRecord = editingRecordIndex > 0;
+	const canNavigateNextRecord = editingRecordIndex >= 0 && editingRecordIndex < searchedData.length - 1;
+	const navigateEditingRecord = useCallback((direction: "prev" | "next") => {
+		if (!editingRecord) return;
+		const nextIndex = direction === "prev" ? editingRecordIndex - 1 : editingRecordIndex + 1;
+		if (nextIndex < 0 || nextIndex >= searchedData.length) return;
+		const target = searchedData[nextIndex];
+		if (!target) return;
+		setCloneData(null);
+		setEditingRecord(target);
+		const targetKey = getRowKey(target);
+		setSelectedKeys(targetKey ? [targetKey] : []);
+		setSelectedRow(target);
+		onSelectRow?.(target);
+	}, [editingRecord, editingRecordIndex, searchedData, getRowKey, onSelectRow]);
 
 	if (multiSortGuideModel) {
 		const activeSorterNodes = sorters
@@ -4593,6 +4651,7 @@ export function CsmDynamicGrid({
 			React.createElement(CsmEditModal as any, {
 				key: "editor",
 				open: editorOpen,
+				mode: "embedded",
 				onOpenChange: (o: boolean) => {
 					if (o) {
 						setEditorOpen(true);
@@ -4604,16 +4663,21 @@ export function CsmDynamicGrid({
 				m_configs,
 				fields: m_configs.table,
 				record: editingRecord ?? cloneData,
+				showRowNavigator: Boolean(editingRecord),
+				canNavigatePrev: canNavigatePrevRecord,
+				canNavigateNext: canNavigateNextRecord,
+				onNavigateRecord: navigateEditingRecord,
 				selectEnums,
 				database,
 				appId: runtimeAppId,
 				permissions,
 				menusPermissions,
 				decrypt,
-				onSubmit: async (values: Row) => {
+				onSubmit: async (values: Row, submitAction: "close" | "stay" | "prev" | "next" = "close") => {
 					if (submitInFlightRef.current) {
 						return;
 					}
+					const shouldCloseEditor = submitAction === "close";
 					submitInFlightRef.current = true;
 					try {
 					const beforeSaveInputSnapshot = JSON.parse(JSON.stringify(values || {}));
@@ -4686,7 +4750,9 @@ export function CsmDynamicGrid({
 							return prev;
 						});
 						
-						closeEditor();
+						if (shouldCloseEditor) {
+							closeEditor();
+						}
 						message.success(cmd === "create" ? t("common.addSuccess") : t("common.updateSuccess"));
 						runSideEffectTrigger("update_db", values);
 						onAdd?.();
@@ -4794,7 +4860,9 @@ export function CsmDynamicGrid({
 						return prev;
 					});
 					
-					closeEditor();
+					if (shouldCloseEditor) {
+						closeEditor();
+					}
 					message.success(cmd === "create" ? t("common.addSuccess") : t("common.updateSuccess"));
 					runSideEffectTrigger("update_db", effectiveUpdatedValues);
 					onAdd?.();
@@ -4806,7 +4874,13 @@ export function CsmDynamicGrid({
 		);
 	}
 
-	return React.createElement("div", { ref: hotkeyScopeRef }, ...children);
+	return React.createElement("div", {
+		ref: hotkeyScopeRef,
+		style: {
+			position: "relative",
+			minHeight: 240,
+		},
+	}, ...children);
 }
 
 export default CsmDynamicGrid;

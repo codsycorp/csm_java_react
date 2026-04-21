@@ -797,6 +797,8 @@ public class ApiSpringController {
             String language = String.valueOf(params.getOrDefault("language", "javascript")).trim();
             String contextType = String.valueOf(params.getOrDefault("contextType", "code")).trim();
             String taskType = String.valueOf(params.getOrDefault("taskType", "")).trim();
+            String pName = String.valueOf(params.getOrDefault("pName", "")).trim();
+            Integer pType = parseNullableInteger(params.get("pType"));
             String responseMode = normalizeCopilotResponseMode(params.get("responseMode"), message);
             message = stripCopilotModeDirective(message);
             List<Map<String, Object>> attachments = normalizeCopilotAttachments(params.get("attachments"));
@@ -815,8 +817,12 @@ public class ApiSpringController {
                 return;
             }
 
-            String continuityMemory = trimCopilotContinuityMemory(gitHubModelsService.loadCopilotConversationMemory(appId));
-            List<Map<String, Object>> messages = buildCopilotChatMessages(appId, message, currentCode, language, contextType, taskType, responseMode, attachments, continuityMemory);
+            String continuityScopeKey = buildCopilotContinuityScopeKey(contextType, language, pName, pType);
+            String continuityMemory = trimCopilotContinuityMemory(
+                gitHubModelsService.loadCopilotConversationMemory(appId, continuityScopeKey));
+            List<String> pendingQuestions = gitHubModelsService.loadCopilotPendingQuestions(appId, continuityScopeKey, 8);
+            List<Map<String, Object>> messages = buildCopilotChatMessages(appId, message, currentCode, language, contextType,
+                taskType, responseMode, attachments, continuityMemory, pName, pType, continuityScopeKey, pendingQuestions);
             
             // Set up streaming via Socket.IO
             StringBuilder fullResponse = new StringBuilder();
@@ -912,6 +918,7 @@ public class ApiSpringController {
 
             gitHubModelsService.appendCopilotConversationTurn(
                 appId,
+                continuityScopeKey,
                 message,
                 fullResponse.toString(),
                 contextType,
@@ -942,7 +949,11 @@ public class ApiSpringController {
             String taskType,
             String responseMode,
             List<Map<String, Object>> attachments,
-            String continuityMemory) {
+            String continuityMemory,
+            String pName,
+            Integer pType,
+            String continuityScopeKey,
+            List<String> pendingQuestions) {
         String normalizedContext = String.valueOf(contextType == null ? "code" : contextType).trim().toLowerCase();
         String normalizedMode = normalizeCopilotResponseMode(responseMode, message);
         String menuKnowledge = this.gitHubModelsService.buildCopilotMenuKnowledgeBlock(appId, normalizedContext, taskType);
@@ -975,7 +986,18 @@ public class ApiSpringController {
                 + "When user asks to modify, return directly applicable code/JSON with minimal commentary.";
         }
 
-        Object userContent = buildCopilotUserContent(message, currentCode, language, normalizedContext, normalizedMode, attachments, continuityMemory);
+        Object userContent = buildCopilotUserContent(
+            message,
+            currentCode,
+            language,
+            normalizedContext,
+            normalizedMode,
+            attachments,
+            continuityMemory,
+            pName,
+            pType,
+            continuityScopeKey,
+            pendingQuestions);
         List<Map<String, Object>> messages = new ArrayList<>();
         messages.add(Map.of("role", "system", "content", systemPrompt));
         messages.add(Map.of("role", "user", "content", userContent));
@@ -989,8 +1011,23 @@ public class ApiSpringController {
             String contextType,
             String responseMode,
             List<Map<String, Object>> attachments,
-            String continuityMemory) {
-        String promptText = buildCopilotChatPromptText(message, currentCode, language, contextType, responseMode, attachments, continuityMemory);
+            String continuityMemory,
+            String pName,
+            Integer pType,
+            String continuityScopeKey,
+            List<String> pendingQuestions) {
+        String promptText = buildCopilotChatPromptText(
+            message,
+            currentCode,
+            language,
+            contextType,
+            responseMode,
+            attachments,
+            continuityMemory,
+            pName,
+            pType,
+            continuityScopeKey,
+            pendingQuestions);
         List<Map<String, Object>> imageParts = new ArrayList<>();
         for (Map<String, Object> attachment : attachments) {
             String kind = String.valueOf(attachment.getOrDefault("kind", "")).trim().toLowerCase();
@@ -1016,7 +1053,11 @@ public class ApiSpringController {
     private String buildCopilotChatPromptText(String message, String currentCode, String language, String contextType,
             String responseMode,
             List<Map<String, Object>> attachments,
-            String continuityMemory) {
+            String continuityMemory,
+            String pName,
+            Integer pType,
+            String continuityScopeKey,
+            List<String> pendingQuestions) {
         StringBuilder sb = new StringBuilder();
         String normalizedContext = String.valueOf(contextType == null ? "code" : contextType).trim().toLowerCase();
         String normalizedMode = normalizeCopilotResponseMode(responseMode, message);
@@ -1036,6 +1077,30 @@ public class ApiSpringController {
             sb.append("Response mode: analyze_only. Return text analysis only, no direct replacement code or JSON output unless explicitly requested.\n\n");
         } else {
             sb.append("Response mode: edit_allowed. If user asks to modify, provide directly applicable code/JSON result.\n\n");
+        }
+
+        if ("code".equals(normalizedContext)) {
+            String normalizedPName = String.valueOf(pName == null ? "" : pName).trim();
+            sb.append("Coding target identity (must stay stable unless user asks to switch):\n");
+            sb.append("- p_name: ").append(normalizedPName.isEmpty() ? "(unsaved or not selected)" : normalizedPName).append("\n");
+            sb.append("- p_type: ").append(pType == null ? "(unknown)" : pType).append("\n");
+            sb.append("- current_language_from_codemirror: ").append(String.valueOf(language == null ? "" : language).trim()).append("\n");
+            if (continuityScopeKey != null && !continuityScopeKey.isBlank()) {
+                sb.append("- continuity_scope_key: ").append(continuityScopeKey).append("\n");
+            }
+            sb.append("When answering, continue from previous unresolved coding thread for this exact identity. Do not restart from scratch.\n\n");
+        }
+
+        if (pendingQuestions != null && !pendingQuestions.isEmpty()) {
+            sb.append("UNRESOLVED QUESTIONS FROM PREVIOUS TURN (answer these first if still relevant):\n");
+            int idx = 1;
+            for (String q : pendingQuestions) {
+                String item = String.valueOf(q == null ? "" : q).trim();
+                if (item.isEmpty()) continue;
+                sb.append(idx++).append(". ").append(item).append("\n");
+                if (idx > 8) break;
+            }
+            sb.append("\n");
         }
 
         if (continuityMemory != null && !continuityMemory.isBlank()) {
@@ -1082,6 +1147,40 @@ public class ApiSpringController {
         sb.append("Context type: ").append(normalizedContext).append("\n");
         sb.append("User request: ").append(message == null ? "" : message);
         return sb.toString();
+    }
+
+    private Integer parseNullableInteger(Object raw) {
+        if (raw == null) return null;
+        try {
+            String text = String.valueOf(raw).trim();
+            if (text.isEmpty() || "null".equalsIgnoreCase(text)) return null;
+            return Integer.valueOf(text);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private String buildCopilotContinuityScopeKey(String contextType, String language, String pName, Integer pType) {
+        String normalizedContext = normalizeScopeToken(contextType, "code");
+        String normalizedLanguage = normalizeScopeToken(language, "javascript");
+        String normalizedPName = normalizeScopeToken(pName, "unsaved");
+        String normalizedPType = pType == null ? "na" : String.valueOf(pType);
+        return String.join("__",
+            "ctx_" + normalizedContext,
+            "lang_" + normalizedLanguage,
+            "pname_" + normalizedPName,
+            "ptype_" + normalizedPType);
+    }
+
+    private String normalizeScopeToken(String raw, String fallback) {
+        String text = String.valueOf(raw == null ? "" : raw).trim().toLowerCase();
+        if (text.isEmpty()) text = fallback;
+        String normalized = Normalizer.normalize(text, Normalizer.Form.NFD)
+            .replaceAll("\\p{M}", "")
+            .replaceAll("[^a-z0-9_-]", "_")
+            .replaceAll("_+", "_")
+            .replaceAll("^-|-$", "");
+        return normalized.isEmpty() ? fallback : normalized;
     }
 
     private String trimCopilotContinuityMemory(String memory) {

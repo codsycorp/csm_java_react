@@ -44,7 +44,8 @@
   position: absolute;
   top: 10px;
   right: 10px;
-  z-index: 30;
+  z-index: 34;
+  touch-action: manipulation;
 }
 
 .chatPanel {
@@ -61,6 +62,7 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  pointer-events: auto;
 }
 
 .chatPanelFloating {
@@ -71,6 +73,21 @@
   border-radius: 12px;
   overflow: hidden;
   box-shadow: 0 18px 36px rgba(0, 0, 0, 0.2);
+}
+
+.chatPanelCompact {
+  top: auto !important;
+  right: max(10px, env(safe-area-inset-right));
+  left: auto !important;
+  bottom: max(10px, env(safe-area-inset-bottom));
+  width: min(460px, calc(100vw - 20px - env(safe-area-inset-left) - env(safe-area-inset-right)));
+  height: min(72vh, 560px);
+  border-radius: 12px;
+  border-left: 1px solid var(--ant-color-border);
+  border: 1px solid color-mix(in srgb, var(--ant-color-border) 88%, transparent);
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.2);
+  position: fixed;
+  z-index: 33;
 }
 
 .chatDragHandle {
@@ -85,6 +102,7 @@
   cursor: grab;
   user-select: none;
   font-size: 12px;
+  touch-action: none;
 }
 
 .chatCloseBtn {
@@ -139,10 +157,10 @@
 @media (max-width: 992px) {
   .chatPanel {
     top: auto !important;
-    right: 10px;
+    right: max(10px, env(safe-area-inset-right));
     left: auto !important;
-    bottom: 10px;
-    width: min(420px, calc(100vw - 20px));
+    bottom: max(10px, env(safe-area-inset-bottom));
+    width: min(420px, calc(100vw - 20px - env(safe-area-inset-left) - env(safe-area-inset-right)));
     height: min(72vh, 560px);
     border-radius: 12px;
     border-left: 1px solid var(--ant-color-border);
@@ -156,5 +174,18 @@
 
   .chatPanelInner {
     height: 100%;
+  }
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .toggleButton {
+    top: 12px;
+    right: 12px;
+  }
+
+  .chatTopBar,
+  .chatDragHandle {
+    min-height: 40px;
+    font-size: 13px;
   }
 }

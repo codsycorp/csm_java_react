@@ -16,6 +16,8 @@ type CodeMirrorWithCopilotProps = ReactCodeMirrorProps & {
   copilotLanguage?: CopilotLanguage;
   copilotContextType?: CopilotContextType;
   copilotCurrentCode?: string;
+  copilotPName?: string;
+  copilotPType?: number;
   copilotAutoApplyCodeBlock?: boolean;
   copilotOnUserMessage?: (payload: CopilotUserMessagePayload) => void;
 };
@@ -31,6 +33,14 @@ type ChatPanelPosition = {
 };
 
 const CHAT_PANEL_MARGIN = 10;
+
+function getViewportWidth(): number {
+  const vv = window.visualViewport;
+  if (vv && Number.isFinite(vv.width) && vv.width > 0) {
+    return vv.width;
+  }
+  return window.innerWidth;
+}
 
 const globalCopilotState: GlobalCopilotState = {
   open: false,
@@ -86,23 +96,37 @@ export default function CodeMirrorWithCopilot(props: CodeMirrorWithCopilotProps)
     copilotLanguage,
     copilotContextType,
     copilotCurrentCode,
+    copilotPName,
+    copilotPType,
     copilotAutoApplyCodeBlock = false,
     copilotOnUserMessage,
     value,
     height,
+    onCreateEditor,
     onChange,
     ...codeMirrorProps
   } = props;
   const { i18n } = useTranslation();
   const instanceIdRef = useRef(`cm_${Math.random().toString(36).slice(2, 10)}`);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
+  const editorViewRef = useRef<any>(null);
   const chatPanelRef = useRef<HTMLDivElement | null>(null);
   const dragOffsetRef = useRef<{ x: number; y: number } | null>(null);
   const [globalState, setGlobalState] = useState<GlobalCopilotState>({ ...globalCopilotState });
   const currentAppId = useAppStore((state) => state.currentAppId);
 
+  const prefersCoarsePointer = useMemo(() => {
+    try {
+      return Boolean(window.matchMedia?.("(pointer: coarse)")?.matches);
+    } catch {
+      return false;
+    }
+  }, []);
+  const compactBreakpoint = prefersCoarsePointer ? 1180 : 992;
+  const [viewportWidth, setViewportWidth] = useState<number>(() => getViewportWidth());
+
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [isCompactView, setIsCompactView] = useState<boolean>(() => window.innerWidth <= 992);
+  const [isCompactView, setIsCompactView] = useState<boolean>(() => getViewportWidth() <= compactBreakpoint);
   const [chatPanelPosition, setChatPanelPosition] = useState<ChatPanelPosition | null>(null);
   const prevFullscreenRef = useRef<boolean>(false);
 
@@ -116,18 +140,22 @@ export default function CodeMirrorWithCopilot(props: CodeMirrorWithCopilotProps)
   }, [isFullscreen]);
 
   useEffect(() => {
+    setIsCompactView(viewportWidth <= compactBreakpoint);
+  }, [viewportWidth, compactBreakpoint]);
+
+  useEffect(() => {
     const handleResize = () => {
-      setIsCompactView(window.innerWidth <= 992);
+      setViewportWidth(getViewportWidth());
     };
     window.addEventListener("resize", handleResize);
+    const vv = window.visualViewport;
+    vv?.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
   useEffect(() => {
     const handleViewportChange = () => {
-      if (window.innerWidth <= 992) {
-        setIsFullscreen(false);
-      }
+      setViewportWidth(getViewportWidth());
     };
 
     window.addEventListener("orientationchange", handleViewportChange);
@@ -141,10 +169,18 @@ export default function CodeMirrorWithCopilot(props: CodeMirrorWithCopilotProps)
   }, []);
 
   useEffect(() => {
-    if (isCompactView && isFullscreen) {
-      setIsFullscreen(false);
-    }
-  }, [isCompactView, isFullscreen]);
+    if (!isFullscreen) return;
+    const html = document.documentElement;
+    const body = document.body;
+    const prevHtmlOverflow = html.style.overflow;
+    const prevBodyOverflow = body.style.overflow;
+    html.style.overflow = "hidden";
+    body.style.overflow = "hidden";
+    return () => {
+      html.style.overflow = prevHtmlOverflow;
+      body.style.overflow = prevBodyOverflow;
+    };
+  }, [isFullscreen]);
 
   const appId = String(copilotAppId || currentAppId || "csm").trim() || "csm";
   const currentCode = typeof copilotCurrentCode === "string"
@@ -229,6 +265,28 @@ export default function CodeMirrorWithCopilot(props: CodeMirrorWithCopilotProps)
     }
   }, [onChange]);
 
+  const handleCreateEditor = useCallback((view: any, state: any) => {
+    editorViewRef.current = view;
+    if (typeof onCreateEditor === "function") {
+      onCreateEditor(view, state);
+    }
+  }, [onCreateEditor]);
+
+  const blurEditorInput = useCallback(() => {
+    const view = editorViewRef.current;
+    if (!view) return;
+    try {
+      const contentDom = (view.contentDOM || null) as HTMLElement | null;
+      contentDom?.blur?.();
+      const active = document.activeElement as HTMLElement | null;
+      if (active && active.closest?.(".cm-editor")) {
+        active.blur();
+      }
+    } catch {
+      // ignore focus handling failures
+    }
+  }, []);
+
   useEffect(() => {
     setAutoApplyEnabled(Boolean(copilotAutoApplyCodeBlock));
   }, [copilotAutoApplyCodeBlock, autoApplyStorageKey]);
@@ -282,6 +340,29 @@ export default function CodeMirrorWithCopilot(props: CodeMirrorWithCopilotProps)
     return () => window.removeEventListener("resize", handleResize);
   }, [chatOpen, isCompactView, ensureInitialPanelPosition]);
 
+  useEffect(() => {
+    const handlePointerDownCapture = (event: PointerEvent) => {
+      const root = wrapperRef.current;
+      const target = event.target as Node | null;
+      if (!root || !target) return;
+
+      if (!root.contains(target)) {
+        blurEditorInput();
+        return;
+      }
+
+      const editorElement = root.querySelector(".cm-editor");
+      if (editorElement && !editorElement.contains(target)) {
+        blurEditorInput();
+      }
+    };
+
+    document.addEventListener("pointerdown", handlePointerDownCapture, true);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDownCapture, true);
+    };
+  }, [blurEditorInput]);
+
   const uiText = useMemo(() => {
     const lang = String(i18n.resolvedLanguage || i18n.language || "vi").toLowerCase();
     if (lang.startsWith("zh")) {
@@ -320,25 +401,36 @@ export default function CodeMirrorWithCopilot(props: CodeMirrorWithCopilotProps)
       top: `${chatPanelPosition.top}px`,
     };
 
+  const chatPanelClassName = [
+    styles.chatPanel,
+    !isCompactView ? styles.chatPanelFloating : "",
+    isCompactView ? styles.chatPanelCompact : "",
+  ].filter(Boolean).join(" ");
+
   return (
     <div className={isFullscreen ? styles.wrapperFullscreen : styles.wrapper} ref={wrapperRef}>
       <div className={styles.editorHost}>
-        <BaseCodeMirror value={value} height={editorHeight} onChange={onChange} {...codeMirrorProps} />
+        <BaseCodeMirror
+          value={value}
+          height={editorHeight}
+          onChange={onChange}
+          onCreateEditor={handleCreateEditor}
+          {...codeMirrorProps}
+        />
       </div>
       {copilotEnabled && (
         <>
-          {(!chatOpen || isCompactView) && (
-            <div className={styles.toggleButton}>
+          <div className={styles.toggleButton}>
             <Tooltip title={isFullscreen ? "Thu nhỏ (Esc)" : "Toàn màn hình"}>
               <Button
-                size="small"
+                size={prefersCoarsePointer ? "middle" : "small"}
                 icon={isFullscreen ? <FullscreenExitOutlined /> : <FullscreenOutlined />}
                 onClick={toggleFullscreen}
                 style={{ marginRight: 6 }}
               />
             </Tooltip>
             <Button
-              size="small"
+              size={prefersCoarsePointer ? "middle" : "small"}
               icon={<MessageOutlined />}
               onClick={() => {
                 if (chatOpen) {
@@ -351,11 +443,10 @@ export default function CodeMirrorWithCopilot(props: CodeMirrorWithCopilotProps)
               {chatOpen ? uiText.close : uiText.open}
             </Button>
             </div>
-          )}
           {chatOpen && (
             <div
               ref={chatPanelRef}
-              className={`${styles.chatPanel} ${!isCompactView ? styles.chatPanelFloating : ""}`}
+              className={chatPanelClassName}
               style={chatPanelStyle}
             >
               {isCompactView && (
@@ -391,6 +482,8 @@ export default function CodeMirrorWithCopilot(props: CodeMirrorWithCopilotProps)
                   currentCode={currentCode}
                   language={language}
                   contextType={contextType}
+                  targetPName={copilotPName}
+                  targetPType={copilotPType}
                   onCodeInsert={handleCopilotCodeInsert}
                   autoApplyCodeBlock={autoApplyEnabled}
                   autoApplyPreferenceKey={autoApplyStorageKey}

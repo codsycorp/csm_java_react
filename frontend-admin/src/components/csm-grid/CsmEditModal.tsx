@@ -7,7 +7,7 @@ import { sql } from '@codemirror/lang-sql';
 import { xml } from '@codemirror/lang-xml';
 import { vscodeDark } from '@uiw/codemirror-theme-vscode';
 import React, { useEffect, useMemo, useState, Suspense, lazy, useCallback, useRef } from "react";
-import { Form, Input, Button, Select, Divider, Typography, InputNumber, DatePicker, TimePicker, Switch, Modal, Tabs, Space, TreeSelect } from "antd";
+import { Form, Input, Button, Select, Divider, Typography, InputNumber, DatePicker, TimePicker, Switch, Modal, Tabs, Space, TreeSelect, theme } from "antd";
 import { DeleteOutlined } from "@ant-design/icons";
 import { csmEncrypt, csmDecrypt } from "./CsmCrypto";
 import { INT, jdFromDate, jdToDate, NewMoon, KinhDoMatTroi, SunLongitude, getSunLongitude, getNewMoonDay, getLunarMonth11, getLeapMonthOffset, duong_qua_am, am_qua_duong, LunarCalendar } from "#src/utils/lunarCalendar";
@@ -877,6 +877,7 @@ const { Title } = Typography;
 const { TextArea } = Input;
 
 export type Row = Record<string, any>;
+export type EditSubmitAction = "close" | "stay" | "prev" | "next";
 
 type SelectOption = {
   label: React.ReactNode;
@@ -1725,6 +1726,11 @@ function getFieldComponent(
 export function CsmEditModal({
   open,
   onOpenChange,
+  mode = "modal",
+  canNavigatePrev = false,
+  canNavigateNext = false,
+  showRowNavigator = false,
+  onNavigateRecord,
   title,
   m_configs,
   fields,
@@ -1740,11 +1746,16 @@ export function CsmEditModal({
 }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
+  mode?: "modal" | "embedded";
+  canNavigatePrev?: boolean;
+  canNavigateNext?: boolean;
+  showRowNavigator?: boolean;
+  onNavigateRecord?: (direction: "prev" | "next") => void;
   title: string;
   m_configs: MConfig;
   fields: TableField[];
   record?: Row | null;
-  onSubmit: (values: Row) => Promise<void> | void;
+  onSubmit: (values: Row, action?: EditSubmitAction) => Promise<void> | void;
   selectEnums?: Record<string, Record<string, { text: string }>>;
   selectOptions?: Record<string, { label: string; value: any }[]>;
   database?: Record<string, { rows: Row[] }>;
@@ -1759,8 +1770,10 @@ export function CsmEditModal({
   const [valuesReady, setValuesReady] = useState(false);
   const modalContentRef = useRef<HTMLDivElement>(null);
   const { t, i18n } = useTranslation();
+  const { token } = theme.useToken();
   const user = useUserStore();
   const currentAppId = appId || user.app_id || "csm";
+  const isEmbedded = mode === "embedded";
   
   // Track if we're currently updating from trigger to prevent recursion
   const isUpdatingFromTrigger = useRef(false);
@@ -1829,7 +1842,7 @@ export function CsmEditModal({
     }
   }, [m_configs, database, decrypt]);
   
-  // Helper: Run UPDATE trigger realtime (debounced)
+  // Helper: Run UPDATE trigger realtime (near-instant)
   const runUpdateTriggerRealtime = useCallback((changedValues: any, allValues: any) => {
     console.log('[CsmEditModal.runUpdateTriggerRealtime] Triggered with changed values:', changedValues);
     
@@ -1844,7 +1857,7 @@ export function CsmEditModal({
       clearTimeout(updateTriggerTimer.current);
     }
     
-    // Debounce 300ms để tránh chạy quá nhiều lần khi user đang nhập
+    // Short debounce to keep trigger responsive while avoiding noisy recursion.
     updateTriggerTimer.current = setTimeout(() => {
       if (!m_configs.trigger?.update && !m_configs.trigger?.barcode) {
         console.log('[CsmEditModal.runUpdateTriggerRealtime] No update or barcode triggers configured');
@@ -1852,7 +1865,9 @@ export function CsmEditModal({
       }
       
       try {
-        const currentValues = form.getFieldsValue();
+        const currentValues = allValues && typeof allValues === "object"
+          ? allValues
+          : form.getFieldsValue();
         console.log('[CsmEditModal.runUpdateTriggerRealtime] Current form values:', currentValues);
         
         let updatedData = currentValues;
@@ -1880,8 +1895,20 @@ export function CsmEditModal({
         
         // Merge updated fields back to form (chỉ update các field có thay đổi)
         const fieldsToUpdate: any = {};
+        const isEqualValue = (left: any, right: any) => {
+          if (Object.is(left, right)) return true;
+          if (dayjs.isDayjs(left) && dayjs.isDayjs(right)) return left.valueOf() === right.valueOf();
+          if (left && right && typeof left === "object" && typeof right === "object") {
+            try {
+              return JSON.stringify(left) === JSON.stringify(right);
+            } catch {
+              return false;
+            }
+          }
+          return false;
+        };
         Object.keys(updatedData || {}).forEach(key => {
-          if (updatedData[key] !== currentValues[key]) {
+          if (!isEqualValue(updatedData[key], currentValues[key])) {
             fieldsToUpdate[key] = updatedData[key];
           }
         });
@@ -1901,8 +1928,8 @@ export function CsmEditModal({
         console.error('[CsmEditModal.runUpdateTriggerRealtime] Error:', err);
         isUpdatingFromTrigger.current = false;
       }
-    }, 300); // Debounce 300ms
-  }, [m_configs, database, decrypt, form, applyRowTrigger]);
+    }, 80);
+  }, [m_configs, form, applyRowTrigger]);
   
   // Cleanup timer on unmount
   useEffect(() => {
@@ -2148,160 +2175,146 @@ export function CsmEditModal({
   );
   const multilangFields = dynamicFields.filter(f => multilangFieldNames.has(f.f_name));
   const commonFields = dynamicFields.filter(f => !multilangFieldNames.has(f.f_name));
-  
-  // ...existing code...
+  const actionText = useMemo(() => ({
+    cancel: getLangText(i18n.language, { vi: "Hủy", en: "Cancel", zh: "取消" }),
+    save: getLangText(i18n.language, { vi: "Lưu", en: "Save", zh: "保存" }),
+    savePrev: getLangText(i18n.language, { vi: "Lưu & Trước", en: "Save & Previous", zh: "保存并上一条" }),
+    saveNext: getLangText(i18n.language, { vi: "Lưu & Tiếp", en: "Save & Next", zh: "保存并下一条" }),
+  }), [i18n.language]);
 
-  return (
-    <Modal
-      open={open}
-      onCancel={() => {
-        if (submitting) return;
-        form.resetFields();
-        onOpenChange(false);
-      }}
-      title={title}
-      width="95%"
-      style={{ maxWidth: 1200 }}
-      centered
-      destroyOnClose={true}
-      footer={[
-        <Button key="cancel" disabled={submitting} onClick={() => {
-          if (submitting) return;
-          form.resetFields();
-          onOpenChange(false);
-        }}>Hủy</Button>,
-        <Button key="submit" type="primary" loading={submitting} disabled={submitting} onClick={() => {
-          if (submitting) return;
-          setSubmitting(true);
-          form.validateFields().then(async (values) => {
-            const missingRequiredField = dynamicFields.find((f) => {
-              if (!isRequiredByConfig(f)) return false;
-              return isEmptyRequiredValue(values?.[f.f_name]);
-            });
+  const handleCancel = useCallback(() => {
+    if (submitting) return;
+    form.resetFields();
+    onOpenChange(false);
+  }, [submitting, form, onOpenChange]);
 
-            if (missingRequiredField) {
-              const missingLabel = resolveFieldLabel(missingRequiredField, i18n.language, t);
-              const warningTitle = getLangText(i18n.language, {
-                vi: "Thiếu dữ liệu bắt buộc",
-                en: "Missing required data",
-                zh: "缺少必填数据",
-              });
-              const warningContent = getLangText(i18n.language, {
-                vi: `Vui lòng nhập trường: ${missingLabel}`,
-                en: `Please fill in field: ${missingLabel}`,
-                zh: `请填写字段：${missingLabel}`,
-              });
-              form.scrollToField(missingRequiredField.f_name, { behavior: "smooth", block: "center" } as any);
-              Modal.warning({
-                title: warningTitle,
-                content: warningContent,
-              });
-              return;
-            }
+  const handleSubmit = useCallback((submitAction: EditSubmitAction = "close") => {
+    if (submitting) return;
+    setSubmitting(true);
+    form.validateFields().then(async (values) => {
+      const missingRequiredField = dynamicFields.find((f) => {
+        if (!isRequiredByConfig(f)) return false;
+        return isEmptyRequiredValue(values?.[f.f_name]);
+      });
 
-            const encodedValues = { ...values };
-            dynamicFields.forEach(f => {
-              const types = resolveEffectiveFieldTypes(f);
-              if (/date|datetime|time/.test(types) && encodedValues[f.f_name]) {
-                const kind = /datetime/.test(types) ? "datetime" : /^time$/.test(types) ? "time" : "date";
-                encodedValues[f.f_name] = formatDateForStorage(encodedValues[f.f_name], kind);
-              }
-              if (/html|richtext/.test(types) && typeof encodedValues[f.f_name] === 'string') {
-                encodedValues[f.f_name] = encodeHtmlValue(encodedValues[f.f_name]);
-              }
-              // Stringify image/album fields
-              if (/img|image|avatar|cover|album|images|gallery/.test(types)) {
-                if (Array.isArray(encodedValues[f.f_name])) {
-                  encodedValues[f.f_name] = JSON.stringify(encodedValues[f.f_name]);
-                }
-              }
-            });
-            
-            // Run UPDATE/BARCODE triggers TRƯỚC KHI stringify và save (Vue compatibility)
-            // Trigger có thể tính toán các field tự động (tổng tiền, thuế, ngày CT, barcode, ...)
-            let finalValues = { ...encodedValues };
-            try {
-              if (m_configs.trigger?.update) {
-                console.log('[CsmEditModal] Applying update trigger on save');
-                const updateResult = applyRowTrigger("update", finalValues);
-                if (updateResult && typeof updateResult === "object") {
-                  finalValues = { ...finalValues, ...updateResult };
-                  console.log('[CsmEditModal] Update trigger applied:', updateResult);
-                }
-              }
-              if (m_configs.trigger?.barcode) {
-                console.log('[CsmEditModal] Applying barcode trigger on save');
-                const barcodeResult = applyRowTrigger("barcode", finalValues);
-                if (barcodeResult && typeof barcodeResult === "object") {
-                  finalValues = { ...finalValues, ...barcodeResult };
-                  console.log('[CsmEditModal] Barcode trigger applied:', barcodeResult);
-                }
-              }
-            } catch (err) {
-              console.error('[CsmEditModal] Trigger error on save:', err);
-            }
-            
-            // Stringify detail grid fields (master-detail nodes) để lưu vào database
-            const isMasterDetail = Number(m_configs.type_form) === 2;
-            const nodes = (m_configs as any).nodes || [];
-            if (isMasterDetail && Array.isArray(nodes)) {
-              console.log('[CsmEditModal] Master-Detail save: processing detail grids');
-              nodes.forEach((node: any) => {
-                const detailFieldName = node.table_name;
-                // CRITICAL: Get current detail data from form field (already synced from database)
-                // Form field is the single source of truth (like Vue's select_row[mn.table_name])
-                const currentFormValue = form.getFieldValue(detailFieldName);
-                const detailValue = currentFormValue || [];
-                
-                console.log(`[CsmEditModal] Saving ${detailFieldName}:`, {
-                  rowCount: Array.isArray(detailValue) ? detailValue.length : 0,
-                  rawValue: detailValue,
-                  detailFieldName: detailFieldName,
-                  type: typeof detailValue,
-                  sampleRow: Array.isArray(detailValue) && detailValue.length > 0 ? detailValue[2] : null
-                });
-                
-                // Stringify array to JSON for storage
-                if (Array.isArray(detailValue)) {
-                  finalValues[detailFieldName] = JSON.stringify(detailValue);
-                  console.log(`[CsmEditModal] Stringified ${detailFieldName}: ${finalValues[detailFieldName].substring(0, 100)}...`);
-                } else if (typeof detailValue === 'string') {
-                  // Already stringified, keep as is
-                  finalValues[detailFieldName] = detailValue;
-                  console.log(`[CsmEditModal] ${detailFieldName} already stringified`);
-                } else {
-                  // Empty or invalid, set to empty array
-                  finalValues[detailFieldName] = '[]';
-                  console.log(`[CsmEditModal] ${detailFieldName} set to empty array`);
-                }
-              });
-            }
-            
-            console.log('[CsmEditModal] Final values to submit:', finalValues);
-            
-            await onSubmit(finalValues as Row);
-            form.resetFields();
-            onOpenChange(false);
-          }).catch(err => console.error('Validation error:', err)).finally(() => {
-            setSubmitting(false);
+      if (missingRequiredField) {
+        const missingLabel = resolveFieldLabel(missingRequiredField, i18n.language, t);
+        const warningTitle = getLangText(i18n.language, {
+          vi: "Thiếu dữ liệu bắt buộc",
+          en: "Missing required data",
+          zh: "缺少必填数据",
+        });
+        const warningContent = getLangText(i18n.language, {
+          vi: `Vui lòng nhập trường: ${missingLabel}`,
+          en: `Please fill in field: ${missingLabel}`,
+          zh: `请填写字段：${missingLabel}`,
+        });
+        form.scrollToField(missingRequiredField.f_name, { behavior: "smooth", block: "center" } as any);
+        Modal.warning({
+          title: warningTitle,
+          content: warningContent,
+        });
+        return;
+      }
+
+      const encodedValues = { ...values };
+      dynamicFields.forEach(f => {
+        const types = resolveEffectiveFieldTypes(f);
+        if (/date|datetime|time/.test(types) && encodedValues[f.f_name]) {
+          const kind = /datetime/.test(types) ? "datetime" : /^time$/.test(types) ? "time" : "date";
+          encodedValues[f.f_name] = formatDateForStorage(encodedValues[f.f_name], kind);
+        }
+        if (/html|richtext/.test(types) && typeof encodedValues[f.f_name] === 'string') {
+          encodedValues[f.f_name] = encodeHtmlValue(encodedValues[f.f_name]);
+        }
+        if (/img|image|avatar|cover|album|images|gallery/.test(types)) {
+          if (Array.isArray(encodedValues[f.f_name])) {
+            encodedValues[f.f_name] = JSON.stringify(encodedValues[f.f_name]);
+          }
+        }
+      });
+
+      let finalValues = { ...encodedValues };
+      try {
+        if (m_configs.trigger?.update) {
+          console.log('[CsmEditModal] Applying update trigger on save');
+          const updateResult = applyRowTrigger("update", finalValues);
+          if (updateResult && typeof updateResult === "object") {
+            finalValues = { ...finalValues, ...updateResult };
+            console.log('[CsmEditModal] Update trigger applied:', updateResult);
+          }
+        }
+        if (m_configs.trigger?.barcode) {
+          console.log('[CsmEditModal] Applying barcode trigger on save');
+          const barcodeResult = applyRowTrigger("barcode", finalValues);
+          if (barcodeResult && typeof barcodeResult === "object") {
+            finalValues = { ...finalValues, ...barcodeResult };
+            console.log('[CsmEditModal] Barcode trigger applied:', barcodeResult);
+          }
+        }
+      } catch (err) {
+        console.error('[CsmEditModal] Trigger error on save:', err);
+      }
+
+      const isMasterDetail = Number(m_configs.type_form) === 2;
+      const nodes = (m_configs as any).nodes || [];
+      if (isMasterDetail && Array.isArray(nodes)) {
+        console.log('[CsmEditModal] Master-Detail save: processing detail grids');
+        nodes.forEach((node: any) => {
+          const detailFieldName = node.table_name;
+          const currentFormValue = form.getFieldValue(detailFieldName);
+          const detailValue = currentFormValue || [];
+
+          console.log(`[CsmEditModal] Saving ${detailFieldName}:`, {
+            rowCount: Array.isArray(detailValue) ? detailValue.length : 0,
+            rawValue: detailValue,
+            detailFieldName: detailFieldName,
+            type: typeof detailValue,
+            sampleRow: Array.isArray(detailValue) && detailValue.length > 0 ? detailValue[2] : null
           });
-        }}>Lưu</Button>,
-      ]}
-      styles={{ body: { maxHeight: "75vh", overflowY: "auto", padding: "8px 12px" } }}
-    >
-      <div ref={modalContentRef}>
-        <Form
-          key={`form-${record?.id || 'new'}`}
-          form={form}
-          layout="vertical"
-          onValuesChange={runUpdateTriggerRealtime}
-        >
+
+          if (Array.isArray(detailValue)) {
+            finalValues[detailFieldName] = JSON.stringify(detailValue);
+            console.log(`[CsmEditModal] Stringified ${detailFieldName}: ${finalValues[detailFieldName].substring(0, 100)}...`);
+          } else if (typeof detailValue === 'string') {
+            finalValues[detailFieldName] = detailValue;
+            console.log(`[CsmEditModal] ${detailFieldName} already stringified`);
+          } else {
+            finalValues[detailFieldName] = '[]';
+            console.log(`[CsmEditModal] ${detailFieldName} set to empty array`);
+          }
+        });
+      }
+
+      console.log('[CsmEditModal] Final values to submit:', finalValues);
+
+      await onSubmit(finalValues as Row, submitAction);
+      form.resetFields();
+      if (submitAction === "close") {
+        onOpenChange(false);
+      }
+      if ((submitAction === "prev" || submitAction === "next") && onNavigateRecord) {
+        onNavigateRecord(submitAction);
+      }
+    }).catch(err => console.error('Validation error:', err)).finally(() => {
+      setSubmitting(false);
+    });
+  }, [submitting, form, dynamicFields, i18n.language, t, m_configs, applyRowTrigger, onSubmit, onOpenChange, onNavigateRecord]);
+
+  const editorContent = (
+    <div ref={modalContentRef}>
+      <Form
+        key={`form-${record?.id || 'new'}`}
+        form={form}
+        layout="vertical"
+        onValuesChange={runUpdateTriggerRealtime}
+      >
       {/* Thêm hidden fields cho các trường chi tiết (detail tabs) để lưu dữ liệu */}
       {(() => {
         const isMasterDetail = Number(m_configs.type_form) === 2;
         const nodes = (m_configs as any).nodes || [];
         if (!isMasterDetail || !Array.isArray(nodes) || nodes.length === 0) return null;
-        
+
         return nodes.map((node: any) => {
           const detailFieldName = node.table_name;
           return (
@@ -2311,19 +2324,16 @@ export function CsmEditModal({
           );
         });
       })()}
-      
+
       {commonFields.length > 0 && (
         <>
-          {/* Show "Thông tin chung" divider only if there are multilingual fields or detail tabs */}
           {(multilangFields.length > 0 || (m_configs as any).nodes?.length > 0) && (
             <Divider orientation="left" style={{ marginTop: 0, marginBottom: 6 }}>
               <Title level={5} style={{ margin: 0, fontSize: 13 }}>Thông tin chung</Title>
             </Divider>
           )}
-          {/* Tối ưu layout: responsive grid với gap nhỏ hơn, fewer margins */}
           {(() => {
             const formValues = form.getFieldsValue();
-            // Phân loại full width và grid fields
             const fullWidthFields = commonFields.filter(f => {
               const types = resolveEffectiveFieldTypes(f);
               return /html|richtext/.test(types) || /code/.test(types) || types === 'edt';
@@ -2334,7 +2344,6 @@ export function CsmEditModal({
             });
             return (
               <>
-                {/* Responsive grid: 3 cột desktop, 2 cột tablet, 1 cột mobile */}
                 {gridFields.length > 0 && (
                   <Form.Item style={{ marginBottom: 4 }}>
                     <div style={{
@@ -2343,7 +2352,7 @@ export function CsmEditModal({
                       gap: 8,
                       width: '100%'
                     }}>
-                      {gridFields.map((f, i) => (
+                      {gridFields.map((f) => (
                         <div key={`${f.f_name}-${formUpdated}`} style={{ minWidth: 0 }}>
                           {getFieldComponent(
                             f,
@@ -2374,8 +2383,7 @@ export function CsmEditModal({
                     </div>
                   </Form.Item>
                 )}
-                {/* Full width fields: HTML editor, rich text, code */}
-                {fullWidthFields.length > 0 && fullWidthFields.map((f, i) => (
+                {fullWidthFields.length > 0 && fullWidthFields.map((f) => (
                   <div key={`${f.f_name}-fullwidth-${formUpdated}`} style={{ marginBottom: 4 }}>
                     {getFieldComponent(
                       f,
@@ -2409,24 +2417,20 @@ export function CsmEditModal({
         </>
       )}
 
-      {/* Hiển thị Detail Tabs nếu Master-Detail (type_form=2) và có nodes */}
       {(() => {
         const isMasterDetail = Number(m_configs.type_form) === 2;
         const nodes = (m_configs as any).nodes || [];
         const hasNodes = Array.isArray(nodes) && nodes.length > 0;
-        // ...existing code...
-        
         if (!isMasterDetail || !hasNodes) return null;
-        
-        // Master-Detail: Render detail grids for each tab
+
         return (
           <div style={{ marginBottom: 4, marginTop: 8 }}>
             <Divider orientation="left" style={{ marginTop: 0, marginBottom: 6 }}>
               <Title level={5} style={{ margin: 0, fontSize: 13 }}>Chi tiết</Title>
             </Divider>
-            <Tabs 
-              defaultActiveKey="0" 
-              type="card" 
+            <Tabs
+              defaultActiveKey="0"
+              type="card"
               size="small"
               destroyInactiveTabPane={false}
               tabBarStyle={{ marginBottom: 6 }}
@@ -2434,7 +2438,7 @@ export function CsmEditModal({
               {nodes.map((node: any, idx: number) => {
                 const nodeLabel = (node.label && node.label.split(".").slice(-1)[0]) || node.label || t('common.detail', { index: idx + 1 });
                 const detailFieldName = node.table_name;
-                
+
                 return (
                   <Tabs.TabPane tab={nodeLabel} key={String(idx)}>
                     <div style={{ maxHeight: 400, overflowY: 'auto' }}>
@@ -2458,274 +2462,329 @@ export function CsmEditModal({
         );
       })()}
 
-      {/* Các block/trường đa ngôn ngữ: hiển thị trong tab, chuyển tab chỉ đổi dữ liệu ngôn ngữ */}
       {multilangFields.length > 0 && (
         <>
           <Divider orientation="left" style={{ marginTop: 12, marginBottom: 6 }}>
-        <Title level={5} style={{ margin: 0, fontSize: 13 }}>Nội dung đa ngôn ngữ</Title>
-      </Divider>
-      {/* Tabs đa ngôn ngữ: gom các trường có hậu tố _vi (hoặc không có hậu tố, tự hiểu là tiếng Việt), _en, _zh... */}
-      {/* Tabs đa ngôn ngữ: chỉ chứa các trường có _en hoặc _zh, và trường gốc nếu có các biến này */}
-      <div key={`multilang-tabs-${formUpdated}`}>
-      {(() => {
-        // Gom các trường theo base name và ngôn ngữ, loại bỏ i18n_content
-        const baseMap: Record<string, Record<string, TableField>> = {};
-        const specialBlocks: TableField[] = dynamicFields.filter(f => ["seo_multi", "content_multi"].includes(f.f_types || ""));
-        dynamicFields.forEach(f => {
-          // Bỏ qua i18n_content
-          if (f.f_name === 'i18n_content') return;
-          const match = f.f_name.match(/^(.*?)(_([a-z]{2}))?$/);
-          let base = f.f_name;
-          let fLang = 'vi';
-          if (match) {
-            base = match[1];
-            if (match[3] && langs.includes(match[3])) {
-              fLang = match[3];
-            }
-          }
-          if (!baseMap[base]) baseMap[base] = {};
-          baseMap[base][fLang] = f;
-        });
-        // Lấy các base nếu có:
-        // 1. Trường gốc tồn tại (vi) + có ít nhất một biến _en hoặc _zh
-        // 2. Hoặc chỉ có _en/_zh mà không có gốc (vi)
-        const multiBases = Object.entries(baseMap)
-          .filter(([base, langObj]) => {
-            if (base === 'i18n_content') return false;
-            // Nếu có cả base (vi) và ít nhất một biến khác (en, zh) thì lấy
-            if (langObj['vi'] && (langObj['en'] || langObj['zh'])) return true;
-            // Hoặc nếu chỉ có en/zh mà không có vi thì cũng lấy
-            if (!langObj['vi'] && (langObj['en'] || langObj['zh'])) return true;
-            return false;
-          })
-          .map(([base]) => base);
-        if (multiBases.length === 0 && specialBlocks.length === 0) return null;
-        return (
-          <Tabs 
-            defaultActiveKey="vi" 
-            style={{ marginBottom: 8 }} 
-            key={`tabs-inner-${formUpdated}`}
-            size="small"
-            destroyInactiveTabPane={false}
-            tabBarStyle={{ marginBottom: 6 }}
-          >
-            {langs.map(lang => (
-              <Tabs.TabPane tab={lang === 'vi' ? '🇻🇳 Tiếng Việt' : lang === 'en' ? '🇬🇧 English' : '🇨🇳 中文'} key={lang}>
-                <div style={{ marginBottom: 0 }}>
-                {/* Render các trường đa ngôn ngữ thông thường */}
-                {multiBases.map(base => {
-                    let field: TableField | undefined;
-                    let actualFieldName: string;
-                    
-                    if (lang === 'vi') {
-                      // Nếu có field vi thì dùng, nếu không thì fallback lấy trường gốc (base) nào đó
-                      field = baseMap[base]['vi'];
-                      // Nếu không có vi, tìm field nào trong base này
-                      if (!field && baseMap[base]) {
-                        field = Object.values(baseMap[base])[0];
-                      }
-                      actualFieldName = field?.f_name || base;
-                    } else {
-                      field = baseMap[base][lang];
-                      // Nếu không có ngôn ngữ yêu cầu, tạo tên field theo pattern base_lang
-                      actualFieldName = field?.f_name || `${base}_${lang}`;
-                      // Nếu không có field cho ngôn ngữ này, dùng cấu hình từ field gốc
-                      if (!field && baseMap[base]['vi']) {
-                        field = baseMap[base]['vi'];
-                      }
-                    }
-                    
-                    if (!field) return null;
-                    
-                    const types = (field.f_types || '').toLowerCase();
-                    const fieldLabel = resolveMultilingualText(field.f_header, actualFieldName, lang);
-                    const formValues = form.getFieldsValue();
-                    const fieldValue = formValues[actualFieldName];
-                    
-                    // HTML/RichText Editor
-                    if (/html|richtext/.test(types)) {
-                      const value = decodeHtmlValue(String(form.getFieldValue(actualFieldName) ?? fieldValue ?? ''));
-                      return (
-                        <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
-                          <HtmlEditor value={value} onChange={(val: string) => form.setFieldsValue({ [actualFieldName]: val })} appId={currentAppId} />
-                        </Form.Item>
-                      );
-                    }
+            <Title level={5} style={{ margin: 0, fontSize: 13 }}>Nội dung đa ngôn ngữ</Title>
+          </Divider>
+          <div key={`multilang-tabs-${formUpdated}`}>
+          {(() => {
+            const baseMap: Record<string, Record<string, TableField>> = {};
+            const specialBlocks: TableField[] = dynamicFields.filter(f => ["seo_multi", "content_multi"].includes(f.f_types || ""));
+            dynamicFields.forEach(f => {
+              if (f.f_name === 'i18n_content') return;
+              const match = f.f_name.match(/^(.*?)(_([a-z]{2}))?$/);
+              let base = f.f_name;
+              let fLang = 'vi';
+              if (match) {
+                base = match[1];
+                if (match[3] && langs.includes(match[3])) {
+                  fLang = match[3];
+                }
+              }
+              if (!baseMap[base]) baseMap[base] = {};
+              baseMap[base][fLang] = f;
+            });
+            const multiBases = Object.entries(baseMap)
+              .filter(([base, langObj]) => {
+                if (base === 'i18n_content') return false;
+                if (langObj['vi'] && (langObj['en'] || langObj['zh'])) return true;
+                if (!langObj['vi'] && (langObj['en'] || langObj['zh'])) return true;
+                return false;
+              })
+              .map(([base]) => base);
+            if (multiBases.length === 0 && specialBlocks.length === 0) return null;
+            return (
+              <Tabs
+                defaultActiveKey="vi"
+                style={{ marginBottom: 8 }}
+                key={`tabs-inner-${formUpdated}`}
+                size="small"
+                destroyInactiveTabPane={false}
+                tabBarStyle={{ marginBottom: 6 }}
+              >
+                {langs.map(lang => (
+                  <Tabs.TabPane tab={lang === 'vi' ? '🇻🇳 Tiếng Việt' : lang === 'en' ? '🇬🇧 English' : '🇨🇳 中文'} key={lang}>
+                    <div style={{ marginBottom: 0 }}>
+                    {multiBases.map(base => {
+                        let field: TableField | undefined;
+                        let actualFieldName: string;
 
-                    if (types === 'edt') {
+                        if (lang === 'vi') {
+                          field = baseMap[base]['vi'];
+                          if (!field && baseMap[base]) {
+                            field = Object.values(baseMap[base])[0];
+                          }
+                          actualFieldName = field?.f_name || base;
+                        } else {
+                          field = baseMap[base][lang];
+                          actualFieldName = field?.f_name || `${base}_${lang}`;
+                          if (!field && baseMap[base]['vi']) {
+                            field = baseMap[base]['vi'];
+                          }
+                        }
+
+                        if (!field) return null;
+
+                        const types = (field.f_types || '').toLowerCase();
+                        const fieldLabel = resolveMultilingualText(field.f_header, actualFieldName, lang);
+                        const formValues = form.getFieldsValue();
+                        const fieldValue = formValues[actualFieldName];
+
+                        if (/html|richtext/.test(types)) {
+                          const value = decodeHtmlValue(String(form.getFieldValue(actualFieldName) ?? fieldValue ?? ''));
+                          return (
+                            <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
+                              <HtmlEditor value={value} onChange={(val: string) => form.setFieldsValue({ [actualFieldName]: val })} appId={currentAppId} />
+                            </Form.Item>
+                          );
+                        }
+
+                        if (types === 'edt') {
+                          return (
+                            <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
+                              <TextArea rows={6} />
+                            </Form.Item>
+                          );
+                        }
+
+                        if (/textarea|memo/.test(types)) {
+                          return (
+                            <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
+                              <TextArea rows={6} />
+                            </Form.Item>
+                          );
+                        }
+
+                        if (/img|image|avatar|cover/.test(types)) {
+                          const MediaUploader = React.lazy(() => import('./MediaUploader').then(mod => ({ default: mod.MediaUploader })));
+                          return (
+                            <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
+                              <Suspense fallback={<span>Đang tải...</span>}>
+                                <MediaUploader appId={currentAppId} />
+                              </Suspense>
+                            </Form.Item>
+                          );
+                        }
+
+                        if (types === 'album' || types === 'images' || types === 'gallery') {
+                          const MediaUploader = React.lazy(() => import('./MediaUploader').then(mod => ({ default: mod.MediaUploader })));
+                          return (
+                            <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
+                              <Suspense fallback={<span>Đang tải...</span>}>
+                                <MediaUploader multiple={true} appId={currentAppId} />
+                              </Suspense>
+                            </Form.Item>
+                          );
+                        }
+
+                        if (/^multi_tag$|^multi_select$|(^|[\s,;|])tag([\s,;|]|$)|(^|[\s,;|])etag([\s,;|]|$)/.test(types)) {
+                          return (
+                            <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
+                              <Select mode="tags" style={{ width: '100%' }} tokenSeparators={[',']} />
+                            </Form.Item>
+                          );
+                        }
+
+                        if (/price|number|int|float|double|money|currency/.test(types)) {
+                          const dec = parseInt(String((field as any).f_dec || 0));
+                          return (
+                            <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
+                              <InputNumber
+                                style={{ width: '100%' }}
+                                precision={dec}
+                                formatter={value => /money|currency|price/.test(types) && value ? `${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',') : `${value}`}
+                                parser={value => value!.replace(/\$\s?|(,*)/g, '')}
+                              />
+                            </Form.Item>
+                          );
+                        }
+
+                        if (/check|bool|switch|checkbox/.test(types)) {
+                          return (
+                            <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel} valuePropName="checked">
+                              <Switch />
+                            </Form.Item>
+                          );
+                        }
+
+                        if (/^date$/.test(types)) {
+                          const fmt = resolveDateLocaleFormat(i18n.language);
+                          return (
+                            <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
+                              <DatePicker style={{ width: '100%' }} format={fmt.date} />
+                            </Form.Item>
+                          );
+                        }
+
+                        if (/datetime/.test(types)) {
+                          const fmt = resolveDateLocaleFormat(i18n.language);
+                          return (
+                            <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
+                              <DatePicker showTime style={{ width: '100%' }} format={fmt.datetime} />
+                            </Form.Item>
+                          );
+                        }
+
+                        if (/^time$/.test(types)) {
+                          const fmt = resolveDateLocaleFormat(i18n.language);
+                          return (
+                            <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
+                              <TimePicker style={{ width: '100%' }} format={fmt.time} />
+                            </Form.Item>
+                          );
+                        }
+
+                        if (isComboLikeType(types)) {
+                          const rawOptions = selectOptions?.[actualFieldName];
+                          const enumObj = selectEnums?.[actualFieldName];
+                          const options = buildSelectOptions(rawOptions, enumObj, (label) => {
+                            const text = String(label == null ? '' : label);
+                            return text.includes('.') ? t(text) : text;
+                          });
+                          const selectValue = normalizeSelectValue(
+                            form.getFieldValue(actualFieldName) ?? fieldValue,
+                            options
+                          );
+                          return (
+                            <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
+                              <Select
+                                showSearch
+                                allowClear
+                                placeholder={t("common.select", { defaultValue: `Select ${fieldLabel}` })}
+                                options={options}
+                                value={selectValue}
+                                onChange={val => form.setFieldsValue({ [actualFieldName]: val })}
+                                filterOption={(input, option) =>
+                                  String(option?.label ?? '').toLowerCase().includes(input.toLowerCase())
+                                }
+                              />
+                            </Form.Item>
+                          );
+                        }
+
+                        return (
+                          <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
+                            <Input id={actualFieldName} />
+                          </Form.Item>
+                        );
+                      })}
+                    {specialBlocks.map(block => {
+                      const fieldName = block.f_name + (lang === 'vi' ? '' : `_${lang}`);
+                      const baseLabel = resolveMultilingualText(block.f_header, block.f_name, lang);
+                      const label = baseLabel + (lang === 'vi' ? '' : ` (${lang.toUpperCase()})`);
+                      const types = (block.f_types || '').toLowerCase();
+                      if (types === 'content_multi' || /html|richtext/.test(types)) {
+                        const value = decodeHtmlValue(String(form.getFieldValue(fieldName) ?? ''));
+                        return (
+                          <Form.Item key={fieldName} name={fieldName} label={label}>
+                            <HtmlEditor value={value} onChange={(val: string) => form.setFieldsValue({ [fieldName]: val })} appId={currentAppId} />
+                          </Form.Item>
+                        );
+                      }
                       return (
-                        <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
+                        <Form.Item key={fieldName} name={fieldName} label={label}>
                           <TextArea rows={6} />
                         </Form.Item>
                       );
-                    }
-                    
-                    // Textarea/Memo
-                    if (/textarea|memo/.test(types)) {
-                      return (
-                        <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
-                          <TextArea rows={6} />
-                        </Form.Item>
-                      );
-                    }
-                    
-                    // Image Upload
-                    if (/img|image|avatar|cover/.test(types)) {
-                      const MediaUploader = React.lazy(() => import('./MediaUploader').then(mod => ({ default: mod.MediaUploader })));
-                      return (
-                        <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
-                          <Suspense fallback={<span>Đang tải...</span>}>
-                            <MediaUploader appId={currentAppId} />
-                          </Suspense>
-                        </Form.Item>
-                      );
-                    }
-                    
-                    // Album/Gallery
-                    if (types === 'album' || types === 'images' || types === 'gallery') {
-                      const MediaUploader = React.lazy(() => import('./MediaUploader').then(mod => ({ default: mod.MediaUploader })));
-                      return (
-                        <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
-                          <Suspense fallback={<span>Đang tải...</span>}>
-                            <MediaUploader multiple={true} appId={currentAppId} />
-                          </Suspense>
-                        </Form.Item>
-                      );
-                    }
-                    
-                    // Multi Tag
-                    if (/^multi_tag$|^multi_select$|(^|[\s,;|])tag([\s,;|]|$)|(^|[\s,;|])etag([\s,;|]|$)/.test(types)) {
-                      return (
-                        <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
-                          <Select mode="tags" style={{ width: '100%' }} tokenSeparators={[',']} />
-                        </Form.Item>
-                      );
-                    }
-                    
-                    // Number fields
-                    if (/price|number|int|float|double|money|currency/.test(types)) {
-                      const dec = parseInt(String((field as any).f_dec || 0));
-                      return (
-                        <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
-                          <InputNumber
-                            style={{ width: '100%' }}
-                            precision={dec}
-                            formatter={value => /money|currency|price/.test(types) && value ? `${value}`.replace(/\B(?=(\d{3})+(?!\d))/g, ',') : `${value}`}
-                            parser={value => value!.replace(/\$\s?|(,*)/g, '')}
-                          />
-                        </Form.Item>
-                      );
-                    }
-                    
-                    // Boolean/Switch
-                    if (/check|bool|switch|checkbox/.test(types)) {
-                      return (
-                        <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel} valuePropName="checked">
-                          <Switch />
-                        </Form.Item>
-                      );
-                    }
-                    
-                    // Date
-                    if (/^date$/.test(types)) {
-                      const fmt = resolveDateLocaleFormat(i18n.language);
-                      return (
-                        <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
-                          <DatePicker style={{ width: '100%' }} format={fmt.date} />
-                        </Form.Item>
-                      );
-                    }
-                    
-                    // DateTime
-                    if (/datetime/.test(types)) {
-                      const fmt = resolveDateLocaleFormat(i18n.language);
-                      return (
-                        <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
-                          <DatePicker showTime style={{ width: '100%' }} format={fmt.datetime} />
-                        </Form.Item>
-                      );
-                    }
-                    
-                    // Time
-                    if (/^time$/.test(types)) {
-                      const fmt = resolveDateLocaleFormat(i18n.language);
-                      return (
-                        <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
-                          <TimePicker style={{ width: '100%' }} format={fmt.time} />
-                        </Form.Item>
-                      );
-                    }
-                    
-                    // Select/Combobox
-                    if (isComboLikeType(types)) {
-                      const rawOptions = selectOptions?.[actualFieldName];
-                      const enumObj = selectEnums?.[actualFieldName];
-                      const options = buildSelectOptions(rawOptions, enumObj, (label) => {
-                        const text = String(label == null ? '' : label);
-                        return text.includes('.') ? t(text) : text;
-                      });
-                      const selectValue = normalizeSelectValue(
-                        form.getFieldValue(actualFieldName) ?? fieldValue,
-                        options
-                      );
-                      return (
-                        <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
-                          <Select
-                            showSearch
-                            allowClear
-                            placeholder={t("common.select", { defaultValue: `Select ${fieldLabel}` })}
-                            options={options}
-                            value={selectValue}
-                            onChange={val => form.setFieldsValue({ [actualFieldName]: val })}
-                            filterOption={(input, option) =>
-                              String(option?.label ?? '').toLowerCase().includes(input.toLowerCase())
-                            }
-                          />
-                        </Form.Item>
-                      );
-                    }
-                    
-                    // Default: text input
-                    return (
-                      <Form.Item key={actualFieldName} name={actualFieldName} label={fieldLabel}>
-                        <Input id={actualFieldName} />
-                      </Form.Item>
-                    );
-                  })}
-                {/* Render các block đặc biệt như seo_multi, content_multi */}
-                {specialBlocks.map(block => {
-                  const fieldName = block.f_name + (lang === 'vi' ? '' : `_${lang}`);
-                  const baseLabel = resolveMultilingualText(block.f_header, block.f_name, lang);
-                  const label = baseLabel + (lang === 'vi' ? '' : ` (${lang.toUpperCase()})`);
-                  const types = (block.f_types || '').toLowerCase();
-                  // content_multi/html/richtext dùng HtmlEditor thuần
-                  if (types === 'content_multi' || /html|richtext/.test(types)) {
-                    const value = decodeHtmlValue(String(form.getFieldValue(fieldName) ?? ''));
-                    return (
-                      <Form.Item key={fieldName} name={fieldName} label={label}>
-                        <HtmlEditor value={value} onChange={(val: string) => form.setFieldsValue({ [fieldName]: val })} appId={currentAppId} />
-                      </Form.Item>
-                    );
-                  }
-                  // edt và mặc định dùng textarea
-                  return (
-                    <Form.Item key={fieldName} name={fieldName} label={label}>
-                      <TextArea rows={6} />
-                    </Form.Item>
-                  );
-                })}
-                {(multiBases.length === 0 && specialBlocks.length === 0) && <div style={{ color: '#aaa', fontStyle: 'italic', padding: '16px 0' }}>Không có dữ liệu cho ngôn ngữ này</div>}
-                </div>
-              </Tabs.TabPane>
-            ))}
-          </Tabs>
-        );
-      })()}
-      </div>
+                    })}
+                    {(multiBases.length === 0 && specialBlocks.length === 0) && <div style={{ color: '#aaa', fontStyle: 'italic', padding: '16px 0' }}>Không có dữ liệu cho ngôn ngữ này</div>}
+                    </div>
+                  </Tabs.TabPane>
+                ))}
+              </Tabs>
+            );
+          })()}
+          </div>
         </>
       )}
       </Form>
+    </div>
+  );
+  
+  if (isEmbedded) {
+    if (!open) return null;
+    return (
+      <div
+        style={{
+          position: "absolute",
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: token.colorBgElevated,
+          backgroundImage: "none",
+          opacity: 1,
+          isolation: "isolate",
+          border: `1px solid ${token.colorBorder}`,
+          zIndex: 120,
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+          boxShadow: token.boxShadow,
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            padding: "10px 12px",
+            backgroundColor: token.colorBgContainer,
+            borderBottom: "1px solid var(--ant-colorBorderSecondary)",
+            flex: "0 0 auto",
+          }}
+        >
+          <div style={{ fontWeight: 600 }}>{title}</div>
+          <Space size="small">
+            {showRowNavigator && (
+              <>
+                <Button disabled={submitting || !canNavigatePrev} onClick={() => handleSubmit("prev")}>{actionText.savePrev}</Button>
+                <Button disabled={submitting || !canNavigateNext} onClick={() => handleSubmit("next")}>{actionText.saveNext}</Button>
+              </>
+            )}
+            <Button disabled={submitting} onClick={handleCancel}>{actionText.cancel}</Button>
+            <Button type="primary" loading={submitting} disabled={submitting} onClick={() => handleSubmit("close")}>{actionText.save}</Button>
+          </Space>
+        </div>
+        <div
+          style={{
+            flex: 1,
+            minHeight: 0,
+            overflowY: "auto",
+            padding: "8px 12px",
+            backgroundColor: token.colorBgContainer,
+            opacity: 1,
+          }}
+        >
+          {editorContent}
+        </div>
       </div>
+    );
+  }
+
+  return (
+    <Modal
+      open={open}
+      mask
+      maskClosable
+      onCancel={handleCancel}
+      title={title}
+      width="95%"
+      style={{ maxWidth: 1200 }}
+      centered
+      destroyOnClose={true}
+      footer={[
+        <Button key="cancel" disabled={submitting} onClick={handleCancel}>{actionText.cancel}</Button>,
+        ...(showRowNavigator ? [
+          <Button key="submit-prev" disabled={submitting || !canNavigatePrev} onClick={() => handleSubmit("prev")}>{actionText.savePrev}</Button>,
+          <Button key="submit-next" disabled={submitting || !canNavigateNext} onClick={() => handleSubmit("next")}>{actionText.saveNext}</Button>,
+        ] : []),
+        <Button key="submit" type="primary" loading={submitting} disabled={submitting} onClick={() => handleSubmit("close")}>{actionText.save}</Button>,
+      ]}
+      styles={{ body: { maxHeight: "75vh", overflowY: "auto", padding: "8px 12px" } }}
+    >
+      {editorContent}
     </Modal>
   );
 }

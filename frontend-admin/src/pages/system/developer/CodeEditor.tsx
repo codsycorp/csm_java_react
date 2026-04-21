@@ -1254,6 +1254,10 @@ export default function CodeEditor() {
 										view.dispatch({ effects: setDraftHighlights.of(pendingChunk?.ranges || []) });
 										updateDraftIndicators(view);
 									}}
+									copilotContextType="code"
+									copilotLanguage={currentLanguage}
+									copilotPName={selectedCode || undefined}
+									copilotPType={resolvedPType}
 									value={aiLastCode}
 									onChange={(value) => {
 										if (!aiProgrammaticApplyRef.current) {

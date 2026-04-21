@@ -65,6 +65,8 @@ type CopilotChatProps = {
 	currentCode?: string;
 	language?: "javascript" | "html" | "python" | "java" | "css" | "sql" | "json";
 	contextType?: "code" | "menu_json";
+	targetPName?: string;
+	targetPType?: number;
 	onCodeInsert?: (code: string) => void;
 	onUserMessage?: (payload: CopilotUserMessagePayload) => void;
 	autoApplyCodeBlock?: boolean;
@@ -287,6 +289,8 @@ export default function CopilotChat({
 	currentCode = "",
 	language = "javascript",
 	contextType = "code",
+	targetPName,
+	targetPType,
 	onCodeInsert,
 	onUserMessage,
 	autoApplyCodeBlock = false,
@@ -871,6 +875,8 @@ export default function CopilotChat({
 						currentCode,
 						language,
 						contextType,
+						pName: String(targetPName || ""),
+						pType: Number.isFinite(Number(targetPType)) ? Number(targetPType) : null,
 						taskType: contextType === "menu_json" ? "menu_design" : "code_assistant",
 						attachments: outgoingAttachments.map((attachment) => ({
 							id: attachment.id,
@@ -900,7 +906,7 @@ export default function CopilotChat({
 				turnAllowAutoApplyRef.current = false;
 			}
 		},
-		[appId, autoApplyEnabled, contextType, currentCode, isLoading, language, messages, onUserMessage, pendingAttachments, socketConnected, uiText, appendStageEvent]
+		[appId, autoApplyEnabled, contextType, currentCode, isLoading, language, messages, onUserMessage, pendingAttachments, socketConnected, targetPName, targetPType, uiText, appendStageEvent]
 	);
 
 	const handleSend = () => {

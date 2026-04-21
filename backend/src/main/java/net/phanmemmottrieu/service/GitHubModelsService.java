@@ -33,6 +33,8 @@ import java.nio.file.Paths;
 import java.io.InputStream;
 import java.io.IOException;
 import java.util.Comparator;
+import java.util.regex.Pattern;
+import java.util.regex.Matcher;
 
 
 /**
@@ -59,6 +61,7 @@ public class GitHubModelsService {
   private static final int CTX_MAX_RESULT_CHARS = 6000;
   // Max chars to keep for Copilot conversation continuity memory
   private static final int COPILOT_MEMORY_MAX_CHARS = 180000;
+  private static final int COPILOT_PENDING_MAX_ITEMS = 12;
 
   // ───────────────────────────────────────────────────────────────────────────
   // Per-app AI session context file  (mirrors Copilot's /memories/session/)
@@ -75,16 +78,61 @@ public class GitHubModelsService {
     return new java.io.File(contextDir, "ai_context_" + safeName + ".md");
   }
 
-  /** Return Copilot continuity memory file path for a given appId. */
-  private java.io.File getCopilotMemoryFile(String appId) {
-    String safeName = appId.replaceAll("[^a-zA-Z0-9_\\-]", "_");
-    return new java.io.File(contextDir, "ai_copilot_context_" + safeName + ".md");
+  /** Return Copilot continuity memory file path for a given appId and optional scope key. */
+  private java.io.File getCopilotMemoryFile(String appId, String scopeKey) {
+    String safeName = sanitizeAppName(appId);
+    String safeScope = scopeKey == null ? "" : scopeKey.replaceAll("[^a-zA-Z0-9_\\-]", "_");
+    if (safeScope.isBlank()) {
+      return new java.io.File(contextDir, "ai_copilot_context_" + safeName + ".md");
+    }
+    return new java.io.File(contextDir, "ai_copilot_context_" + safeName + "__" + safeScope + ".md");
+  }
+
+  /** Return Copilot pending-questions file path for a given appId and optional scope key. */
+  private java.io.File getCopilotPendingFile(String appId, String scopeKey) {
+    String safeName = sanitizeAppName(appId);
+    String safeScope = scopeKey == null ? "" : scopeKey.replaceAll("[^a-zA-Z0-9_\\-]", "_");
+    if (safeScope.isBlank()) {
+      return new java.io.File(contextDir, "ai_copilot_pending_" + safeName + ".md");
+    }
+    return new java.io.File(contextDir, "ai_copilot_pending_" + safeName + "__" + safeScope + ".md");
+  }
+
+  /** Load unresolved pending questions for Copilot continuation. */
+  public List<String> loadCopilotPendingQuestions(String appId, String scopeKey, int maxItems) {
+    if (appId == null || appId.isBlank()) return Collections.emptyList();
+    java.io.File f = getCopilotPendingFile(appId, scopeKey);
+    if (!f.exists()) return Collections.emptyList();
+    int safeMax = Math.max(1, Math.min(50, maxItems));
+    try {
+      List<String> lines = Files.readAllLines(f.toPath(), StandardCharsets.UTF_8);
+      List<String> result = new ArrayList<>();
+      for (String line : lines) {
+        String raw = String.valueOf(line == null ? "" : line).trim();
+        if (raw.startsWith("- ")) {
+          String item = raw.substring(2).trim();
+          if (!item.isEmpty()) {
+            result.add(item);
+          }
+        }
+        if (result.size() >= safeMax) break;
+      }
+      return result;
+    } catch (Exception e) {
+      log.warn("Could not load Copilot pending questions for appId={} scope={}: {}", appId, scopeKey, e.getMessage());
+      return Collections.emptyList();
+    }
   }
 
   /** Load persisted Copilot conversation memory for continuity across turns. */
   public String loadCopilotConversationMemory(String appId) {
+    return loadCopilotConversationMemory(appId, null);
+  }
+
+  /** Load persisted Copilot conversation memory for continuity across turns. */
+  public String loadCopilotConversationMemory(String appId, String scopeKey) {
     if (appId == null || appId.isBlank()) return "";
-    java.io.File f = getCopilotMemoryFile(appId);
+    java.io.File f = getCopilotMemoryFile(appId, scopeKey);
     if (!f.exists()) return "";
     try {
       String text = java.nio.file.Files.readString(f.toPath(), StandardCharsets.UTF_8);
@@ -92,7 +140,7 @@ public class GitHubModelsService {
       if (text.length() <= COPILOT_MEMORY_MAX_CHARS) return text;
       return text.substring(text.length() - COPILOT_MEMORY_MAX_CHARS);
     } catch (Exception e) {
-      log.warn("Could not load Copilot continuity memory for appId={}: {}", appId, e.getMessage());
+      log.warn("Could not load Copilot continuity memory for appId={} scope={}: {}", appId, scopeKey, e.getMessage());
       return "";
     }
   }
@@ -105,9 +153,21 @@ public class GitHubModelsService {
       String contextType,
       String responseMode,
       List<Map<String, Object>> attachments) {
+    appendCopilotConversationTurn(appId, null, userMessage, assistantMessage, contextType, responseMode, attachments);
+  }
+
+  /** Append one Copilot Q&A turn with a scoped continuity key. */
+  public void appendCopilotConversationTurn(
+      String appId,
+      String scopeKey,
+      String userMessage,
+      String assistantMessage,
+      String contextType,
+      String responseMode,
+      List<Map<String, Object>> attachments) {
     if (appId == null || appId.isBlank()) return;
     try {
-      String existing = loadCopilotConversationMemory(appId);
+      String existing = loadCopilotConversationMemory(appId, scopeKey);
       String now = java.time.LocalDateTime.now()
           .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
 
@@ -122,6 +182,7 @@ public class GitHubModelsService {
       String merged;
       if (existing == null || existing.isBlank()) {
         merged = "# Copilot Conversation Continuity: app_id=" + appId + "\n"
+            + (scopeKey == null || scopeKey.isBlank() ? "" : "scope_key=" + scopeKey + "\n")
             + "<!-- AUTO-GENERATED by GitHubModelsService -->\n"
             + turn;
       } else {
@@ -132,12 +193,88 @@ public class GitHubModelsService {
         merged = merged.substring(merged.length() - COPILOT_MEMORY_MAX_CHARS);
       }
 
-      java.io.File f = getCopilotMemoryFile(appId);
+      java.io.File f = getCopilotMemoryFile(appId, scopeKey);
       f.getParentFile().mkdirs();
       java.nio.file.Files.writeString(f.toPath(), merged, StandardCharsets.UTF_8);
+      updateCopilotPendingQuestions(appId, scopeKey, userMessage, assistantMessage);
     } catch (Exception e) {
-      log.warn("Could not append Copilot continuity memory for appId={}: {}", appId, e.getMessage());
+      log.warn("Could not append Copilot continuity memory for appId={} scope={}: {}", appId, scopeKey, e.getMessage());
     }
+  }
+
+  private void updateCopilotPendingQuestions(
+      String appId,
+      String scopeKey,
+      String userMessage,
+      String assistantMessage) {
+    try {
+      List<String> existing = new ArrayList<>(loadCopilotPendingQuestions(appId, scopeKey, COPILOT_PENDING_MAX_ITEMS));
+
+      // If user replies in this scoped thread, assume the oldest pending item has been addressed.
+      if (userMessage != null && !userMessage.trim().isEmpty() && !existing.isEmpty()) {
+        existing.remove(0);
+      }
+
+      List<String> extracted = extractPendingQuestionsFromAssistant(assistantMessage);
+      LinkedHashSet<String> merged = new LinkedHashSet<>();
+      merged.addAll(existing);
+      merged.addAll(extracted);
+
+      List<String> limited = new ArrayList<>(merged);
+      if (limited.size() > COPILOT_PENDING_MAX_ITEMS) {
+        limited = limited.subList(limited.size() - COPILOT_PENDING_MAX_ITEMS, limited.size());
+      }
+
+      StringBuilder out = new StringBuilder();
+      out.append("# Copilot Pending Questions\n");
+      out.append("<!-- AUTO-GENERATED by GitHubModelsService -->\n");
+      for (String item : limited) {
+        out.append("- ").append(item).append("\n");
+      }
+
+      java.io.File f = getCopilotPendingFile(appId, scopeKey);
+      f.getParentFile().mkdirs();
+      java.nio.file.Files.writeString(f.toPath(), out.toString(), StandardCharsets.UTF_8);
+    } catch (Exception e) {
+      log.warn("Could not update Copilot pending questions for appId={} scope={}: {}", appId, scopeKey, e.getMessage());
+    }
+  }
+
+  private List<String> extractPendingQuestionsFromAssistant(String assistantMessage) {
+    if (assistantMessage == null || assistantMessage.isBlank()) {
+      return Collections.emptyList();
+    }
+
+    String raw = assistantMessage.replace("\r", "\n").trim();
+    List<String> candidates = new ArrayList<>();
+
+    Pattern lineQuestion = Pattern.compile("(?m)^(?:[-*\\d.)\\s]*)?(.{8,240}\\?)\\s*$");
+    Matcher matcher = lineQuestion.matcher(raw);
+    while (matcher.find()) {
+      String q = String.valueOf(matcher.group(1)).trim();
+      if (!q.isEmpty()) {
+        candidates.add(trimToMax(q, 240));
+      }
+      if (candidates.size() >= 8) break;
+    }
+
+    if (candidates.isEmpty()) {
+      Pattern askPattern = Pattern.compile("(?i)(please provide|can you share|could you share|vui long|cho biet|xin cho biet|ban co the cung cap)([^\\n.!?]{0,200})");
+      Matcher askMatcher = askPattern.matcher(raw);
+      while (askMatcher.find()) {
+        String sentence = (askMatcher.group(0) == null ? "" : askMatcher.group(0)).trim();
+        if (!sentence.isEmpty()) {
+          if (!sentence.endsWith("?")) sentence = sentence + "?";
+          candidates.add(trimToMax(sentence, 240));
+        }
+        if (candidates.size() >= 8) break;
+      }
+    }
+
+    if (candidates.isEmpty()) {
+      return Collections.emptyList();
+    }
+    return new ArrayList<>(new LinkedHashSet<>(candidates));
   }
 
   /**
