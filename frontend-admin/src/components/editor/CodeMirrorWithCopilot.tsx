@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import BaseCodeMirror, { type ReactCodeMirrorProps } from "@uiw/react-codemirror";
 import { Button, Tooltip } from "antd";
 import { MessageOutlined, FullscreenOutlined, FullscreenExitOutlined, CloseOutlined } from "@ant-design/icons";
@@ -30,6 +31,13 @@ type GlobalCopilotState = {
 type ChatPanelPosition = {
   left: number;
   top: number;
+};
+
+type FullscreenViewportStyle = {
+  top: number;
+  left: number;
+  width: number;
+  height: number;
 };
 
 const CHAT_PANEL_MARGIN = 10;
@@ -89,6 +97,16 @@ function resolveContextType(language: CopilotLanguage, rawContextType?: CopilotC
   return language === "json" ? "menu_json" : "code";
 }
 
+function isLikelyIOSDevice(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const ua = String(navigator.userAgent || "");
+  const platform = String((navigator as any).platform || "");
+  const maxTouchPoints = Number((navigator as any).maxTouchPoints || 0);
+  const iOSByUA = /iPad|iPhone|iPod/i.test(ua);
+  const iPadOSDesktopUA = platform === "MacIntel" && maxTouchPoints > 1;
+  return iOSByUA || iPadOSDesktopUA;
+}
+
 export default function CodeMirrorWithCopilot(props: CodeMirrorWithCopilotProps) {
   const {
     copilotEnabled = true,
@@ -126,11 +144,81 @@ export default function CodeMirrorWithCopilot(props: CodeMirrorWithCopilotProps)
   const [viewportWidth, setViewportWidth] = useState<number>(() => getViewportWidth());
 
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [fullscreenViewportStyle, setFullscreenViewportStyle] = useState<FullscreenViewportStyle | null>(null);
   const [isCompactView, setIsCompactView] = useState<boolean>(() => getViewportWidth() <= compactBreakpoint);
   const [chatPanelPosition, setChatPanelPosition] = useState<ChatPanelPosition | null>(null);
   const prevFullscreenRef = useRef<boolean>(false);
 
   const toggleFullscreen = useCallback(() => setIsFullscreen((prev) => !prev), []);
+  const shouldUseNativeFullscreen = useMemo(() => !isLikelyIOSDevice(), []);
+
+  const syncFullscreenViewport = useCallback(() => {
+    if (typeof window === "undefined") return;
+    const vv = window.visualViewport;
+    if (vv && Number.isFinite(vv.width) && Number.isFinite(vv.height)) {
+      setFullscreenViewportStyle({
+        top: vv.offsetTop || 0,
+        left: vv.offsetLeft || 0,
+        width: vv.width,
+        height: vv.height,
+      });
+      return;
+    }
+    setFullscreenViewportStyle({
+      top: 0,
+      left: 0,
+      width: window.innerWidth,
+      height: window.innerHeight,
+    });
+  }, []);
+
+  const requestNativeFullscreen = useCallback(async () => {
+    if (typeof document === "undefined") return;
+    const el = wrapperRef.current as (HTMLElement & {
+      webkitRequestFullscreen?: () => Promise<void> | void;
+      msRequestFullscreen?: () => Promise<void> | void;
+    }) | null;
+    if (!el) return;
+    try {
+      if (document.fullscreenElement) return;
+      if (el.requestFullscreen) {
+        await el.requestFullscreen();
+        return;
+      }
+      if (el.webkitRequestFullscreen) {
+        await el.webkitRequestFullscreen();
+        return;
+      }
+      if (el.msRequestFullscreen) {
+        await el.msRequestFullscreen();
+      }
+    } catch {
+      // Keep CSS fullscreen fallback when native API is blocked.
+    }
+  }, []);
+
+  const exitNativeFullscreen = useCallback(async () => {
+    if (typeof document === "undefined") return;
+    const doc = document as Document & {
+      webkitExitFullscreen?: () => Promise<void> | void;
+      msExitFullscreen?: () => Promise<void> | void;
+    };
+    try {
+      if (doc.fullscreenElement && doc.exitFullscreen) {
+        await doc.exitFullscreen();
+        return;
+      }
+      if (doc.webkitExitFullscreen) {
+        await doc.webkitExitFullscreen();
+        return;
+      }
+      if (doc.msExitFullscreen) {
+        await doc.msExitFullscreen();
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
 
   useEffect(() => {
     if (!isFullscreen) return;
@@ -167,6 +255,47 @@ export default function CodeMirrorWithCopilot(props: CodeMirrorWithCopilotProps)
       vv?.removeEventListener("resize", handleViewportChange);
     };
   }, []);
+
+  useEffect(() => {
+    if (!isFullscreen) {
+      setFullscreenViewportStyle(null);
+      return;
+    }
+    syncFullscreenViewport();
+    const handleViewportChange = () => syncFullscreenViewport();
+    window.addEventListener("resize", handleViewportChange);
+    window.addEventListener("orientationchange", handleViewportChange);
+    const vv = window.visualViewport;
+    vv?.addEventListener("resize", handleViewportChange);
+    vv?.addEventListener("scroll", handleViewportChange);
+    return () => {
+      window.removeEventListener("resize", handleViewportChange);
+      window.removeEventListener("orientationchange", handleViewportChange);
+      vv?.removeEventListener("resize", handleViewportChange);
+      vv?.removeEventListener("scroll", handleViewportChange);
+    };
+  }, [isFullscreen, syncFullscreenViewport]);
+
+  useEffect(() => {
+    if (!shouldUseNativeFullscreen) return;
+    if (!isFullscreen) {
+      exitNativeFullscreen();
+      return;
+    }
+    requestNativeFullscreen();
+  }, [isFullscreen, requestNativeFullscreen, exitNativeFullscreen, shouldUseNativeFullscreen]);
+
+  useEffect(() => {
+    if (!shouldUseNativeFullscreen) return;
+    const handleNativeFullscreenChange = () => {
+      if (typeof document === "undefined") return;
+      if (!document.fullscreenElement && isFullscreen) {
+        setIsFullscreen(false);
+      }
+    };
+    document.addEventListener("fullscreenchange", handleNativeFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", handleNativeFullscreenChange);
+  }, [isFullscreen, shouldUseNativeFullscreen]);
 
   useEffect(() => {
     if (!isFullscreen) return;
@@ -407,8 +536,19 @@ export default function CodeMirrorWithCopilot(props: CodeMirrorWithCopilotProps)
     isCompactView ? styles.chatPanelCompact : "",
   ].filter(Boolean).join(" ");
 
-  return (
-    <div className={isFullscreen ? styles.wrapperFullscreen : styles.wrapper} ref={wrapperRef}>
+  const rootNode = (
+    <div
+      className={isFullscreen ? styles.wrapperFullscreen : styles.wrapper}
+      ref={wrapperRef}
+      style={isFullscreen && fullscreenViewportStyle
+        ? {
+            top: fullscreenViewportStyle.top,
+            left: fullscreenViewportStyle.left,
+            width: fullscreenViewportStyle.width,
+            height: fullscreenViewportStyle.height,
+          }
+        : undefined}
+    >
       <div className={styles.editorHost}>
         <BaseCodeMirror
           value={value}
@@ -497,4 +637,10 @@ export default function CodeMirrorWithCopilot(props: CodeMirrorWithCopilotProps)
       )}
     </div>
   );
+
+  if (isFullscreen && typeof document !== "undefined") {
+    return createPortal(rootNode, document.body);
+  }
+
+  return rootNode;
 }

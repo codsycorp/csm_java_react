@@ -13,11 +13,18 @@
 .wrapperFullscreen {
   position: fixed;
   inset: 0;
-  z-index: 1200;
+  z-index: 2147483646;
+  width: 100dvw;
+  height: 100dvh;
+  min-width: 100svw;
+  min-height: 100svh;
+  min-height: 100dvh;
   background: var(--ant-color-bg-container, #1e1e1e);
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  overscroll-behavior: none;
+  touch-action: manipulation;
 }
 
 .wrapperFullscreen .editorHost {

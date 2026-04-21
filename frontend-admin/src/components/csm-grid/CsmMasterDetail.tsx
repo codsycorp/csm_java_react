@@ -238,8 +238,7 @@ export default function CsmMasterDetail(props: any) {
 			decrypt,
 			m_configs,
 			onSelectRow: (r: any) => setSelectRow(r),
-			onDataChange,
-		}))),
+			onDataChange,			embeddedPanelContainer: containerRef,		}))),
 		hasNodes
 			? React.createElement("div", {
 				key: "detail-panel",

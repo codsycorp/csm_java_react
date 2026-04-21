@@ -7,6 +7,7 @@ import { sql } from '@codemirror/lang-sql';
 import { xml } from '@codemirror/lang-xml';
 import { vscodeDark } from '@uiw/codemirror-theme-vscode';
 import React, { useEffect, useMemo, useState, Suspense, lazy, useCallback, useRef } from "react";
+import { createPortal } from "react-dom";
 import { Form, Input, Button, Select, Divider, Typography, InputNumber, DatePicker, TimePicker, Switch, Modal, Tabs, Space, TreeSelect, theme } from "antd";
 import { DeleteOutlined } from "@ant-design/icons";
 import { csmEncrypt, csmDecrypt } from "./CsmCrypto";
@@ -877,7 +878,7 @@ const { Title } = Typography;
 const { TextArea } = Input;
 
 export type Row = Record<string, any>;
-export type EditSubmitAction = "close" | "stay" | "prev" | "next";
+export type EditSubmitAction = "close" | "stay" | "prev" | "next" | "addAnother";
 
 type SelectOption = {
   label: React.ReactNode;
@@ -1730,6 +1731,7 @@ export function CsmEditModal({
   canNavigatePrev = false,
   canNavigateNext = false,
   showRowNavigator = false,
+  showAddAnother = false,
   onNavigateRecord,
   title,
   m_configs,
@@ -1743,13 +1745,16 @@ export function CsmEditModal({
   permissions,
   menusPermissions,
   decrypt,
+  embeddedPanelContainer,
 }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
   mode?: "modal" | "embedded";
+  embeddedPanelContainer?: React.RefObject<HTMLElement>;
   canNavigatePrev?: boolean;
   canNavigateNext?: boolean;
   showRowNavigator?: boolean;
+  showAddAnother?: boolean;
   onNavigateRecord?: (direction: "prev" | "next") => void;
   title: string;
   m_configs: MConfig;
@@ -2180,6 +2185,7 @@ export function CsmEditModal({
     save: getLangText(i18n.language, { vi: "Lưu", en: "Save", zh: "保存" }),
     savePrev: getLangText(i18n.language, { vi: "Lưu & Trước", en: "Save & Previous", zh: "保存并上一条" }),
     saveNext: getLangText(i18n.language, { vi: "Lưu & Tiếp", en: "Save & Next", zh: "保存并下一条" }),
+    saveAddAnother: getLangText(i18n.language, { vi: "Lưu & Thêm tiếp", en: "Save & Add Another", zh: "保存并继续添加" }),
   }), [i18n.language]);
 
   const handleCancel = useCallback(() => {
@@ -2290,8 +2296,9 @@ export function CsmEditModal({
 
       await onSubmit(finalValues as Row, submitAction);
       form.resetFields();
-      if (submitAction === "close") {
-        onOpenChange(false);
+      if (submitAction === "close" || submitAction === "addAnother") {
+        if (submitAction === "close") onOpenChange(false);
+        // addAnother: form is already reset, stay open
       }
       if ((submitAction === "prev" || submitAction === "next") && onNavigateRecord) {
         onNavigateRecord(submitAction);
@@ -2704,7 +2711,7 @@ export function CsmEditModal({
   
   if (isEmbedded) {
     if (!open) return null;
-    return (
+    const embeddedNode = (
       <div
         style={{
           position: "absolute",
@@ -2743,6 +2750,9 @@ export function CsmEditModal({
                 <Button disabled={submitting || !canNavigateNext} onClick={() => handleSubmit("next")}>{actionText.saveNext}</Button>
               </>
             )}
+            {showAddAnother && (
+              <Button disabled={submitting} onClick={() => handleSubmit("addAnother")}>{actionText.saveAddAnother}</Button>
+            )}
             <Button disabled={submitting} onClick={handleCancel}>{actionText.cancel}</Button>
             <Button type="primary" loading={submitting} disabled={submitting} onClick={() => handleSubmit("close")}>{actionText.save}</Button>
           </Space>
@@ -2761,6 +2771,11 @@ export function CsmEditModal({
         </div>
       </div>
     );
+    const portalTarget = embeddedPanelContainer?.current;
+    if (portalTarget) {
+      return createPortal(embeddedNode, portalTarget);
+    }
+    return embeddedNode;
   }
 
   return (
@@ -2779,6 +2794,9 @@ export function CsmEditModal({
         ...(showRowNavigator ? [
           <Button key="submit-prev" disabled={submitting || !canNavigatePrev} onClick={() => handleSubmit("prev")}>{actionText.savePrev}</Button>,
           <Button key="submit-next" disabled={submitting || !canNavigateNext} onClick={() => handleSubmit("next")}>{actionText.saveNext}</Button>,
+        ] : []),
+        ...(showAddAnother ? [
+          <Button key="submit-add-another" disabled={submitting} onClick={() => handleSubmit("addAnother")}>{actionText.saveAddAnother}</Button>,
         ] : []),
         <Button key="submit" type="primary" loading={submitting} disabled={submitting} onClick={() => handleSubmit("close")}>{actionText.save}</Button>,
       ]}

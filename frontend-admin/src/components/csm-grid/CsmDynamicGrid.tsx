@@ -983,6 +983,7 @@ export function CsmDynamicGrid({
   isDetailGrid = false,
   disablePagination = false,
   allowReadonlyExport = false,
+  embeddedPanelContainer,
 }: {
 	m_configs: MConfig
 	database?: Database // DEPRECATED: Kept for backward compatibility, not used
@@ -1005,6 +1006,7 @@ export function CsmDynamicGrid({
   isDetailGrid?: boolean
 	disablePagination?: boolean
 	allowReadonlyExport?: boolean
+  embeddedPanelContainer?: React.RefObject<HTMLElement>
 }) {
 	const { t, i18n } = useTranslation();
 	const numberLocale = useMemo(() => resolveNumberLocale(i18n.language), [i18n.language]);
@@ -1087,11 +1089,7 @@ export function CsmDynamicGrid({
 		if (menuScope === "NONE") return userScope;
 		return minScope(menuScope, userScope);
 	}, [isDev, dataScope, m_configs]);
-	const isRowActionLocked = rowActionBusy
-		|| submitInFlightRef.current
-		|| editorOpen
-		|| editableKeys.length > 0
-		|| Boolean(pendingEditableRowId);
+	const isRowActionLocked = rowActionBusy || submitInFlightRef.current;
 	// Helpers
 	const tableName = (m_configs.table_name || "").split(",")[0];
 	const hasTableName = Boolean(tableName);
@@ -3971,8 +3969,17 @@ export function CsmDynamicGrid({
 		if (actionClickGuardRef.current && !rowActionBusy && !submitInFlightRef.current && !editorOpen) {
 			clearActionLocks();
 		}
-		if (actionClickGuardRef.current || isRowActionLocked) {
+		if (isRowActionLocked) {
 			message.warning("Đang xử lý thao tác trước đó, vui lòng chờ...");
+			return;
+		}
+		if (!enableInlineCellEdit && editorOpen) {
+			setEditingRecord(null);
+			setCloneData(null);
+			onAdd?.();
+			return;
+		}
+		if (actionClickGuardRef.current) {
 			return;
 		}
 		actionClickGuardRef.current = true;
@@ -4042,6 +4049,12 @@ export function CsmDynamicGrid({
 			message.warning("Đang xử lý thao tác trước đó, vui lòng chờ...");
 			return;
 		}
+		if (!enableInlineCellEdit && editorOpen) {
+			setCloneData(null);
+			setEditingRecord(record);
+			onEdit?.(record);
+			return;
+		}
 		// If inline editing is enabled, activate inline edit mode for the row
 		if (enableInlineCellEdit) {
 			const rowKey = getRowKey(record);
@@ -4070,6 +4083,16 @@ export function CsmDynamicGrid({
 	const handleClone = (record: Row) => {
 		if (isRowActionLocked) {
 			message.warning("Đang xử lý thao tác trước đó, vui lòng chờ...");
+			return;
+		}
+		if (!enableInlineCellEdit && editorOpen) {
+			const currentPkFields = getPrimaryKeyFields(m_configs);
+			const clonedInline: Row = { ...record };
+			currentPkFields.forEach((pk) => {
+				clonedInline[pk] = "";
+			});
+			setEditingRecord(null);
+			setCloneData(clonedInline);
 			return;
 		}
 		const currentPkFields = getPrimaryKeyFields(m_configs);
@@ -4664,20 +4687,23 @@ export function CsmDynamicGrid({
 				fields: m_configs.table,
 				record: editingRecord ?? cloneData,
 				showRowNavigator: Boolean(editingRecord),
+				showAddAnother: !editingRecord && !cloneData,
 				canNavigatePrev: canNavigatePrevRecord,
 				canNavigateNext: canNavigateNextRecord,
 				onNavigateRecord: navigateEditingRecord,
+				embeddedPanelContainer,
 				selectEnums,
 				database,
 				appId: runtimeAppId,
 				permissions,
 				menusPermissions,
 				decrypt,
-				onSubmit: async (values: Row, submitAction: "close" | "stay" | "prev" | "next" = "close") => {
+				onSubmit: async (values: Row, submitAction: "close" | "stay" | "prev" | "next" | "addAnother" = "close") => {
 					if (submitInFlightRef.current) {
 						return;
 					}
 					const shouldCloseEditor = submitAction === "close";
+					const shouldAddAnother = submitAction === "addAnother";
 					submitInFlightRef.current = true;
 					try {
 					const beforeSaveInputSnapshot = JSON.parse(JSON.stringify(values || {}));
@@ -4752,6 +4778,9 @@ export function CsmDynamicGrid({
 						
 						if (shouldCloseEditor) {
 							closeEditor();
+						} else if (shouldAddAnother) {
+							setEditingRecord(null);
+							setCloneData(null);
 						}
 						message.success(cmd === "create" ? t("common.addSuccess") : t("common.updateSuccess"));
 						runSideEffectTrigger("update_db", values);
@@ -4862,6 +4891,9 @@ export function CsmDynamicGrid({
 					
 					if (shouldCloseEditor) {
 						closeEditor();
+					} else if (shouldAddAnother) {
+						setEditingRecord(null);
+						setCloneData(null);
 					}
 					message.success(cmd === "create" ? t("common.addSuccess") : t("common.updateSuccess"));
 					runSideEffectTrigger("update_db", effectiveUpdatedValues);
