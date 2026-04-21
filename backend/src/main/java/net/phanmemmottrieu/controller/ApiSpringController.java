@@ -64,6 +64,7 @@ public class ApiSpringController {
     private static final int COPILOT_CURRENT_CODE_TAIL_CHARS = 180000;
     private static final int COPILOT_CURRENT_CODE_FOCUS_WINDOW_CHARS = 120000;
     private static final int COPILOT_ATTACHMENT_TEXT_MAX_CHARS = 800000;
+    private static final int COPILOT_CONTINUITY_MEMORY_MAX_CHARS = 120000;
     private final ObjectMapper objectMapper = new ObjectMapper(); // Dùng để parse JSON body
     private final RecordManager recordManager;
     private final InitHandler initHandler;
@@ -814,7 +815,8 @@ public class ApiSpringController {
                 return;
             }
 
-            List<Map<String, Object>> messages = buildCopilotChatMessages(appId, message, currentCode, language, contextType, taskType, responseMode, attachments);
+            String continuityMemory = trimCopilotContinuityMemory(gitHubModelsService.loadCopilotConversationMemory(appId));
+            List<Map<String, Object>> messages = buildCopilotChatMessages(appId, message, currentCode, language, contextType, taskType, responseMode, attachments, continuityMemory);
             
             // Set up streaming via Socket.IO
             StringBuilder fullResponse = new StringBuilder();
@@ -908,6 +910,14 @@ public class ApiSpringController {
             completion.put("timestamp", System.currentTimeMillis());
             emitCopilotChatEvent(appId, "copilot_chat_complete", completion);
 
+            gitHubModelsService.appendCopilotConversationTurn(
+                appId,
+                message,
+                fullResponse.toString(),
+                contextType,
+                responseMode,
+                attachments);
+
             response.set("code", 200);
             response.set("success", true);
             response.set("message", "Chat completed");
@@ -931,7 +941,8 @@ public class ApiSpringController {
             String contextType,
             String taskType,
             String responseMode,
-            List<Map<String, Object>> attachments) {
+            List<Map<String, Object>> attachments,
+            String continuityMemory) {
         String normalizedContext = String.valueOf(contextType == null ? "code" : contextType).trim().toLowerCase();
         String normalizedMode = normalizeCopilotResponseMode(responseMode, message);
         String menuKnowledge = this.gitHubModelsService.buildCopilotMenuKnowledgeBlock(appId, normalizedContext, taskType);
@@ -964,7 +975,7 @@ public class ApiSpringController {
                 + "When user asks to modify, return directly applicable code/JSON with minimal commentary.";
         }
 
-        Object userContent = buildCopilotUserContent(message, currentCode, language, normalizedContext, normalizedMode, attachments);
+        Object userContent = buildCopilotUserContent(message, currentCode, language, normalizedContext, normalizedMode, attachments, continuityMemory);
         List<Map<String, Object>> messages = new ArrayList<>();
         messages.add(Map.of("role", "system", "content", systemPrompt));
         messages.add(Map.of("role", "user", "content", userContent));
@@ -977,8 +988,9 @@ public class ApiSpringController {
             String language,
             String contextType,
             String responseMode,
-            List<Map<String, Object>> attachments) {
-        String promptText = buildCopilotChatPromptText(message, currentCode, language, contextType, responseMode, attachments);
+            List<Map<String, Object>> attachments,
+            String continuityMemory) {
+        String promptText = buildCopilotChatPromptText(message, currentCode, language, contextType, responseMode, attachments, continuityMemory);
         List<Map<String, Object>> imageParts = new ArrayList<>();
         for (Map<String, Object> attachment : attachments) {
             String kind = String.valueOf(attachment.getOrDefault("kind", "")).trim().toLowerCase();
@@ -1003,7 +1015,8 @@ public class ApiSpringController {
 
     private String buildCopilotChatPromptText(String message, String currentCode, String language, String contextType,
             String responseMode,
-            List<Map<String, Object>> attachments) {
+            List<Map<String, Object>> attachments,
+            String continuityMemory) {
         StringBuilder sb = new StringBuilder();
         String normalizedContext = String.valueOf(contextType == null ? "code" : contextType).trim().toLowerCase();
         String normalizedMode = normalizeCopilotResponseMode(responseMode, message);
@@ -1023,6 +1036,11 @@ public class ApiSpringController {
             sb.append("Response mode: analyze_only. Return text analysis only, no direct replacement code or JSON output unless explicitly requested.\n\n");
         } else {
             sb.append("Response mode: edit_allowed. If user asks to modify, provide directly applicable code/JSON result.\n\n");
+        }
+
+        if (continuityMemory != null && !continuityMemory.isBlank()) {
+            sb.append("SESSION CONTINUITY MEMORY (continue from unresolved thread, do not restart from scratch):\n");
+            sb.append(continuityMemory).append("\n\n");
         }
         
         if (!currentCode.trim().isEmpty()) {
@@ -1064,6 +1082,13 @@ public class ApiSpringController {
         sb.append("Context type: ").append(normalizedContext).append("\n");
         sb.append("User request: ").append(message == null ? "" : message);
         return sb.toString();
+    }
+
+    private String trimCopilotContinuityMemory(String memory) {
+        String text = String.valueOf(memory == null ? "" : memory).trim();
+        if (text.isEmpty()) return "";
+        if (text.length() <= COPILOT_CONTINUITY_MEMORY_MAX_CHARS) return text;
+        return text.substring(text.length() - COPILOT_CONTINUITY_MEMORY_MAX_CHARS);
     }
 
     private String buildCopilotCurrentCodeContext(String currentCode, String message) {
