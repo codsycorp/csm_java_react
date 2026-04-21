@@ -47,6 +47,8 @@ type CodeBlock = {
 	index: number;
 };
 
+type ResponseMode = "analyze" | "edit";
+
 type CopilotChatProps = {
 	appId: string;
 	currentCode?: string;
@@ -63,6 +65,8 @@ const MAX_ATTACHMENTS = 8;
 const MAX_TEXT_ATTACHMENT_CHARS = 50000;
 const MAX_TEXT_FILE_BYTES = 1024 * 1024;
 const MAX_IMAGE_FILE_BYTES = 5 * 1024 * 1024;
+const STREAM_UI_FLUSH_MS = 48;
+const STREAM_CODEBLOCK_PARSE_MS = 240;
 const TEXT_FILE_EXTENSIONS = new Set([
 	"txt", "md", "markdown", "json", "js", "ts", "tsx", "jsx", "java", "sql", "css", "scss", "less",
 	"html", "xml", "yml", "yaml", "csv", "py", "properties", "env", "log", "ini",
@@ -175,6 +179,40 @@ function hasEditIntent(input: string): boolean {
 	return patterns.some((pattern) => pattern.test(text));
 }
 
+function normalizeDirectiveToken(raw: string): string {
+	return String(raw || "")
+		.trim()
+		.toLowerCase()
+		.normalize("NFD")
+		.replace(/[\u0300-\u036f]/g, "")
+		.replace(/_/g, "-");
+}
+
+function parseResponseModeDirective(input: string): { cleanedMessage: string; overrideMode?: ResponseMode } {
+	const text = String(input || "").trim();
+	if (!text.startsWith("/")) {
+		return { cleanedMessage: text };
+	}
+
+	const match = text.match(/^\/([^\s:]+)\s*:?[\s\n]*(.*)$/s);
+	if (!match) {
+		return { cleanedMessage: text };
+	}
+
+	const token = normalizeDirectiveToken(match[1]);
+	const rest = String(match[2] || "").trim();
+	const editTokens = new Set(["edit", "apply", "sua", "chinh", "cap-nhat", "update", "modify", "bianji", "xiugai", "编辑", "修改"]);
+	const analyzeTokens = new Set(["analyze", "analysis", "phan-tich", "giai-thich", "explain", "fenxi", "jieshi", "分析", "解释"]);
+
+	if (editTokens.has(token)) {
+		return { cleanedMessage: rest, overrideMode: "edit" };
+	}
+	if (analyzeTokens.has(token)) {
+		return { cleanedMessage: rest, overrideMode: "analyze" };
+	}
+	return { cleanedMessage: text };
+}
+
 async function readFileAsText(file: File): Promise<string> {
 	return file.text();
 }
@@ -227,8 +265,16 @@ export default function CopilotChat({
 	const streamingMessageRef = useRef<string>("");
 	const lastListenerSetupRef = useRef<boolean>(false);
 	const realtimeApplyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const streamFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const pendingStreamChunkRef = useRef<string>("");
+	const parsedCodeBlocksRef = useRef<CodeBlock[]>([]);
+	const lastCodeBlockParseAtRef = useRef<number>(0);
+	const applyRealtimeCodeFromTextRef = useRef<(rawText: string, force?: boolean) => boolean>(() => false);
 	const lastAppliedCodeRef = useRef<string>("");
 	const lastRealtimeApplyAtRef = useRef<number>(0);
+	const followBottomRef = useRef<boolean>(true);
+	const scrollFrameRef = useRef<number | null>(null);
+	const lastSmoothScrollAtRef = useRef<number>(0);
 	const turnAllowAutoApplyRef = useRef<boolean>(false);
 	const isMac = /Mac|iPhone|iPad|iPod/i.test(navigator.platform || "");
 	const sendHintKey = isMac ? "Cmd" : "Ctrl";
@@ -268,6 +314,85 @@ export default function CopilotChat({
 		return vi;
 	}, [i18n.language, i18n.resolvedLanguage]);
 
+	const isNearBottom = useCallback((element: HTMLDivElement, threshold = 72): boolean => {
+		const distance = element.scrollHeight - element.scrollTop - element.clientHeight;
+		return distance <= threshold;
+	}, []);
+
+	const scrollToBottom = useCallback((force = false) => {
+		const container = messageListRef.current;
+		if (!container) return;
+		if (!force && !followBottomRef.current) return;
+
+		if (scrollFrameRef.current != null) {
+			window.cancelAnimationFrame(scrollFrameRef.current);
+		}
+
+		scrollFrameRef.current = window.requestAnimationFrame(() => {
+			scrollFrameRef.current = null;
+			const now = Date.now();
+			const useSmooth = !force && now - lastSmoothScrollAtRef.current > 160;
+			container.scrollTo({
+				top: container.scrollHeight,
+				behavior: useSmooth ? "smooth" : "auto",
+			});
+			if (useSmooth) {
+				lastSmoothScrollAtRef.current = now;
+			}
+		});
+	}, []);
+
+	const handleMessageListScroll = useCallback(() => {
+		const container = messageListRef.current;
+		if (!container) return;
+		followBottomRef.current = isNearBottom(container);
+	}, [isNearBottom]);
+
+	const flushStreamingToUI = useCallback((force = false) => {
+		const pendingChunk = pendingStreamChunkRef.current;
+		if (!pendingChunk && !force) return;
+
+		if (pendingChunk) {
+			streamingMessageRef.current += pendingChunk;
+			pendingStreamChunkRef.current = "";
+		}
+
+		const nextText = String(streamingMessageRef.current || "");
+		if (!nextText && !force) return;
+
+		applyRealtimeCodeFromTextRef.current(nextText, force);
+
+		const now = Date.now();
+		let nextCodeBlocks = parsedCodeBlocksRef.current;
+		if (force || now - lastCodeBlockParseAtRef.current >= STREAM_CODEBLOCK_PARSE_MS) {
+			nextCodeBlocks = extractCodeBlocks(nextText);
+			parsedCodeBlocksRef.current = nextCodeBlocks;
+			lastCodeBlockParseAtRef.current = now;
+		}
+
+		setMessages((prev) => {
+			const updated = [...prev];
+			if (updated.length > 0) {
+				const lastMsg = updated[updated.length - 1];
+				if (lastMsg.role === "assistant") {
+					lastMsg.content = nextText;
+					lastMsg.codeBlocks = nextCodeBlocks;
+				}
+			}
+			return updated;
+		});
+
+		scrollToBottom(false);
+	}, [scrollToBottom]);
+
+	const scheduleStreamFlush = useCallback(() => {
+		if (streamFlushTimerRef.current) return;
+		streamFlushTimerRef.current = setTimeout(() => {
+			streamFlushTimerRef.current = null;
+			flushStreamingToUI(false);
+		}, STREAM_UI_FLUSH_MS);
+	}, [flushStreamingToUI]);
+
 	const applyRealtimeCodeFromText = useCallback((rawText: string, force = false): boolean => {
 		if (!autoApplyEnabled || !turnAllowAutoApplyRef.current || !onCodeInsert) return false;
 		const source = String(rawText || "");
@@ -299,6 +424,10 @@ export default function CopilotChat({
 		lastRealtimeApplyAtRef.current = now;
 		return true;
 	}, [autoApplyEnabled, onCodeInsert, pickPreferredCodeBlock]);
+
+	useEffect(() => {
+		applyRealtimeCodeFromTextRef.current = applyRealtimeCodeFromText;
+	}, [applyRealtimeCodeFromText]);
 
 	const appendFiles = useCallback(async (fileList: FileList | null) => {
 		if (!fileList || fileList.length === 0) return;
@@ -390,6 +519,19 @@ export default function CopilotChat({
 
 	// Setup Socket.IO listeners for copilot events
 	useEffect(() => {
+		return () => {
+			if (scrollFrameRef.current != null) {
+				window.cancelAnimationFrame(scrollFrameRef.current);
+				scrollFrameRef.current = null;
+			}
+			if (streamFlushTimerRef.current) {
+				clearTimeout(streamFlushTimerRef.current);
+				streamFlushTimerRef.current = null;
+			}
+		};
+	}, []);
+
+	useEffect(() => {
 		if (!socket || !appId) return;
 		if (lastListenerSetupRef.current) return; // Prevent duplicate listeners
 
@@ -401,8 +543,8 @@ export default function CopilotChat({
 			const textEdits = Array.isArray(data?.textEdits) ? data.textEdits : null;
 
 			if (chunk) {
-				streamingMessageRef.current += chunk;
-				applyRealtimeCodeFromText(streamingMessageRef.current, false);
+				pendingStreamChunkRef.current += chunk;
+				scheduleStreamFlush();
 			}
 
 			// Legacy realtime payload compatibility: apply JSON draft or line edits directly to editor.
@@ -423,23 +565,17 @@ export default function CopilotChat({
 				}
 			}
 
-			// Update the last message with streaming content
-			setMessages((prev) => {
-				const updated = [...prev];
-				if (updated.length > 0) {
-					const lastMsg = updated[updated.length - 1];
-					if (lastMsg.role === "assistant") {
-						if (chunk) {
-							lastMsg.content = streamingMessageRef.current;
-							lastMsg.codeBlocks = extractCodeBlocks(streamingMessageRef.current);
-						}
-					}
-				}
-				return updated;
-			});
+			if (!chunk) {
+				scrollToBottom(false);
+			}
 		};
 
 		const handleCopilotComplete = (data: any) => {
+			if (streamFlushTimerRef.current) {
+				clearTimeout(streamFlushTimerRef.current);
+				streamFlushTimerRef.current = null;
+			}
+			flushStreamingToUI(true);
 			const finalText = String(streamingMessageRef.current || "");
 			setIsLoading(false);
 			if (realtimeApplyTimerRef.current) {
@@ -447,17 +583,28 @@ export default function CopilotChat({
 				realtimeApplyTimerRef.current = null;
 			}
 			applyRealtimeCodeFromText(finalText, true);
+			pendingStreamChunkRef.current = "";
+			parsedCodeBlocksRef.current = [];
+			lastCodeBlockParseAtRef.current = 0;
 			streamingMessageRef.current = "";
 			turnAllowAutoApplyRef.current = false;
+			scrollToBottom(true);
 			console.log("Chat completed:", data);
 		};
 
 		const handleCopilotError = (data: any) => {
 			setIsLoading(false);
+			if (streamFlushTimerRef.current) {
+				clearTimeout(streamFlushTimerRef.current);
+				streamFlushTimerRef.current = null;
+			}
 			if (realtimeApplyTimerRef.current) {
 				clearTimeout(realtimeApplyTimerRef.current);
 				realtimeApplyTimerRef.current = null;
 			}
+			pendingStreamChunkRef.current = "";
+			parsedCodeBlocksRef.current = [];
+			lastCodeBlockParseAtRef.current = 0;
 			message.error(data.error || uiText("Chat thất bại", "Chat failed", "对话失败"));
 			turnAllowAutoApplyRef.current = false;
 			console.error("Chat error:", data);
@@ -468,6 +615,10 @@ export default function CopilotChat({
 		socket.on("copilot_chat_error", handleCopilotError);
 
 		return () => {
+			if (streamFlushTimerRef.current) {
+				clearTimeout(streamFlushTimerRef.current);
+				streamFlushTimerRef.current = null;
+			}
 			if (realtimeApplyTimerRef.current) {
 				clearTimeout(realtimeApplyTimerRef.current);
 				realtimeApplyTimerRef.current = null;
@@ -477,14 +628,12 @@ export default function CopilotChat({
 			socket.off?.("copilot_chat_error", handleCopilotError);
 			lastListenerSetupRef.current = false;
 		};
-	}, [socket, appId, applyRealtimeCodeFromText, uiText, onCodeInsert, contextType, currentCode, autoApplyEnabled]);
+	}, [socket, appId, applyRealtimeCodeFromText, uiText, onCodeInsert, contextType, currentCode, autoApplyEnabled, scrollToBottom, flushStreamingToUI, scheduleStreamFlush]);
 
 	// Auto-scroll to latest message
 	useEffect(() => {
-		if (messageListRef.current) {
-			messageListRef.current.scrollTop = messageListRef.current.scrollHeight;
-		}
-	}, [messages]);
+		scrollToBottom(false);
+	}, [messages, scrollToBottom]);
 
 	const sendMessage = useCallback(
 		async (text: string) => {
@@ -493,9 +642,19 @@ export default function CopilotChat({
 			}
 
 			const normalizedText = text.trim();
+			const modeDirective = parseResponseModeDirective(normalizedText);
+			const cleanedMessage = modeDirective.cleanedMessage;
+			if (!cleanedMessage && pendingAttachments.length === 0) {
+				message.warning(uiText(
+					"Vui lòng nhập nội dung sau lệnh /analyze hoặc /edit",
+					"Please enter content after /analyze or /edit",
+					"请在 /analyze 或 /edit 后输入内容",
+				));
+				return;
+			}
 			const outgoingAttachments = [...pendingAttachments];
 			onUserMessage?.({
-				message: normalizedText,
+				message: cleanedMessage || normalizedText,
 				attachments: outgoingAttachments,
 			});
 
@@ -503,7 +662,7 @@ export default function CopilotChat({
 			const userMsg: ChatMessage = {
 				id: `user_${Date.now()}`,
 				role: "user",
-				content: text,
+				content: cleanedMessage || text,
 				timestamp: Date.now(),
 				attachments: outgoingAttachments.map((attachment) => ({
 					id: attachment.id,
@@ -530,8 +689,14 @@ export default function CopilotChat({
 
 			setMessages([...newMessages, assistantMsg]);
 			setIsLoading(true);
+			followBottomRef.current = true;
 			streamingMessageRef.current = "";
-			turnAllowAutoApplyRef.current = autoApplyEnabled && hasEditIntent(normalizedText);
+			pendingStreamChunkRef.current = "";
+			parsedCodeBlocksRef.current = [];
+			lastCodeBlockParseAtRef.current = 0;
+			const responseMode: ResponseMode = modeDirective.overrideMode
+				|| (autoApplyEnabled && hasEditIntent(cleanedMessage || normalizedText) ? "edit" : "analyze");
+			turnAllowAutoApplyRef.current = responseMode === "edit";
 			setInputValue("");
 			setPendingAttachments([]);
 
@@ -540,7 +705,8 @@ export default function CopilotChat({
 				await request.post("copilot-chat-stream", {
 					json: {
 						appId,
-						message: normalizedText,
+						message: cleanedMessage || normalizedText,
+						responseMode,
 						currentCode,
 						language,
 						contextType,
@@ -632,7 +798,7 @@ export default function CopilotChat({
 		>
 			<div className={styles.container}>
 				{/* Messages List */}
-				<div className={styles.messageList} ref={messageListRef}>
+				<div className={styles.messageList} ref={messageListRef} onScroll={handleMessageListScroll}>
 					{messages.length === 0 ? (
 						<Empty
 							description={uiText("Bắt đầu trò chuyện với Trợ lý AI", "Start a conversation with AI Assistant", "开始与 AI 助手对话")}
@@ -773,7 +939,11 @@ export default function CopilotChat({
 							value={inputValue}
 							onChange={(e) => setInputValue(e.target.value)}
 							onKeyPress={handleKeyPress}
-							placeholder={uiText(`Hỏi Trợ lý AI (${sendHintKey}+Enter để gửi)...`, `Ask AI Assistant (${sendHintKey}+Enter to send)...`, `向 AI 助手提问（${sendHintKey}+Enter 发送）...`)}
+							placeholder={uiText(
+								`Hỏi Trợ lý AI (${sendHintKey}+Enter để gửi). Lệnh: /phan-tich hoặc /sua`,
+								`Ask AI Assistant (${sendHintKey}+Enter to send). Commands: /analyze or /edit`,
+								`向 AI 助手提问（${sendHintKey}+Enter 发送）。命令：/分析 或 /编辑`,
+							)}
 							rows={3}
 							disabled={isLoading || !socketConnected}
 							maxLength={2000}

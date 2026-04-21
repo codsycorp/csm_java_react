@@ -41,10 +41,12 @@ import net.phanmemmottrieu.model.UrlSubmissionQueue;
 import net.phanmemmottrieu.model.UrlSubmissionHistory;
 
 import java.io.IOException;
+import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -786,6 +788,8 @@ public class ApiSpringController {
             String language = String.valueOf(params.getOrDefault("language", "javascript")).trim();
             String contextType = String.valueOf(params.getOrDefault("contextType", "code")).trim();
             String taskType = String.valueOf(params.getOrDefault("taskType", "")).trim();
+            String responseMode = normalizeCopilotResponseMode(params.get("responseMode"), message);
+            message = stripCopilotModeDirective(message);
             List<Map<String, Object>> attachments = normalizeCopilotAttachments(params.get("attachments"));
             
             if (message.isEmpty() && attachments.isEmpty()) {
@@ -802,7 +806,7 @@ public class ApiSpringController {
                 return;
             }
 
-            List<Map<String, Object>> messages = buildCopilotChatMessages(appId, message, currentCode, language, contextType, taskType, attachments);
+            List<Map<String, Object>> messages = buildCopilotChatMessages(appId, message, currentCode, language, contextType, taskType, responseMode, attachments);
             
             // Set up streaming via Socket.IO
             StringBuilder fullResponse = new StringBuilder();
@@ -817,6 +821,7 @@ public class ApiSpringController {
                 realtimePayload.put("stage", stage);
                 realtimePayload.put("message", String.valueOf(progress.getOrDefault("message", "")));
                 realtimePayload.put("chunk", chunk);
+                realtimePayload.put("responseMode", responseMode);
 
                 Object current = progress.get("current");
                 Object total = progress.get("total");
@@ -852,6 +857,7 @@ public class ApiSpringController {
             Map<String, Object> completion = new HashMap<>();
             completion.put("stage", "complete");
             completion.put("fullResponse", fullResponse.toString());
+            completion.put("responseMode", responseMode);
             completion.put("timestamp", System.currentTimeMillis());
             emitCopilotChatEvent(appId, "copilot_chat_complete", completion);
 
@@ -877,8 +883,10 @@ public class ApiSpringController {
             String language,
             String contextType,
             String taskType,
+            String responseMode,
             List<Map<String, Object>> attachments) {
         String normalizedContext = String.valueOf(contextType == null ? "code" : contextType).trim().toLowerCase();
+        String normalizedMode = normalizeCopilotResponseMode(responseMode, message);
         String menuKnowledge = this.gitHubModelsService.buildCopilotMenuKnowledgeBlock(appId, normalizedContext, taskType);
         String systemPrompt;
         if ("menu_json".equals(normalizedContext)) {
@@ -898,7 +906,18 @@ public class ApiSpringController {
                 "Always preserve existing code unless explicitly asked to rewrite.");
         }
 
-        Object userContent = buildCopilotUserContent(message, currentCode, language, normalizedContext, attachments);
+        if ("analyze".equals(normalizedMode)) {
+            systemPrompt = systemPrompt + "\n\n"
+                + "OUTPUT MODE: ANALYZE_ONLY.\n"
+                + "Return explanation and analysis text only.\n"
+                + "Do NOT generate replacement code blocks, full JSON payloads, or patch instructions unless user explicitly asks to edit/apply changes.";
+        } else {
+            systemPrompt = systemPrompt + "\n\n"
+                + "OUTPUT MODE: EDIT_ALLOWED.\n"
+                + "When user asks to modify, return directly applicable code/JSON with minimal commentary.";
+        }
+
+        Object userContent = buildCopilotUserContent(message, currentCode, language, normalizedContext, normalizedMode, attachments);
         List<Map<String, Object>> messages = new ArrayList<>();
         messages.add(Map.of("role", "system", "content", systemPrompt));
         messages.add(Map.of("role", "user", "content", userContent));
@@ -910,8 +929,9 @@ public class ApiSpringController {
             String currentCode,
             String language,
             String contextType,
+            String responseMode,
             List<Map<String, Object>> attachments) {
-        String promptText = buildCopilotChatPromptText(message, currentCode, language, contextType, attachments);
+        String promptText = buildCopilotChatPromptText(message, currentCode, language, contextType, responseMode, attachments);
         List<Map<String, Object>> imageParts = new ArrayList<>();
         for (Map<String, Object> attachment : attachments) {
             String kind = String.valueOf(attachment.getOrDefault("kind", "")).trim().toLowerCase();
@@ -935,9 +955,11 @@ public class ApiSpringController {
     }
 
     private String buildCopilotChatPromptText(String message, String currentCode, String language, String contextType,
+            String responseMode,
             List<Map<String, Object>> attachments) {
         StringBuilder sb = new StringBuilder();
         String normalizedContext = String.valueOf(contextType == null ? "code" : contextType).trim().toLowerCase();
+        String normalizedMode = normalizeCopilotResponseMode(responseMode, message);
         if ("menu_json".equals(normalizedContext)) {
             sb.append("You are an AI assistant for menu JSON design inside a CodeMirror editor.\n");
             sb.append("Focus on JSON schema correctness, parent/child integrity, field consistency and trigger safety.\n");
@@ -948,6 +970,12 @@ public class ApiSpringController {
             sb.append("Respond concisely with practical code suggestions and explanations.\n");
             sb.append("Always preserve existing code unless explicitly asked to rewrite.\n");
             sb.append("Use attached files and images as direct context for the request.\n\n");
+        }
+
+        if ("analyze".equals(normalizedMode)) {
+            sb.append("Response mode: analyze_only. Return text analysis only, no direct replacement code or JSON output unless explicitly requested.\n\n");
+        } else {
+            sb.append("Response mode: edit_allowed. If user asks to modify, provide directly applicable code/JSON result.\n\n");
         }
         
         if (!currentCode.trim().isEmpty()) {
@@ -991,6 +1019,90 @@ public class ApiSpringController {
         sb.append("Context type: ").append(normalizedContext).append("\n");
         sb.append("User request: ").append(message == null ? "" : message);
         return sb.toString();
+    }
+
+    private String normalizeCopilotResponseMode(Object rawMode) {
+        return normalizeCopilotResponseMode(rawMode, null);
+    }
+
+    private String normalizeCopilotResponseMode(Object rawMode, String message) {
+        String mode = String.valueOf(rawMode == null ? "" : rawMode).trim().toLowerCase();
+        if ("edit".equals(mode)) {
+            return "edit";
+        }
+        if ("analyze".equals(mode)) {
+            return "analyze";
+        }
+        String detected = detectCopilotResponseModeFromMessage(message);
+        if ("edit".equals(detected) || "analyze".equals(detected)) {
+            return detected;
+        }
+        return "analyze";
+    }
+
+    private String detectCopilotResponseModeFromMessage(String message) {
+        if (message == null) {
+            return "";
+        }
+        String trimmed = message.trim();
+        if (!trimmed.startsWith("/")) {
+            return "";
+        }
+
+        int i = 1;
+        while (i < trimmed.length()) {
+            char ch = trimmed.charAt(i);
+            if (Character.isWhitespace(ch) || ch == ':') {
+                break;
+            }
+            i += 1;
+        }
+        if (i <= 1) {
+            return "";
+        }
+
+        String token = normalizeCopilotDirectiveToken(trimmed.substring(1, i));
+        if (Set.of("edit", "apply", "sua", "chinh", "cap-nhat", "update", "modify", "bianji", "xiugai", "编辑", "修改").contains(token)) {
+            return "edit";
+        }
+        if (Set.of("analyze", "analysis", "phan-tich", "giai-thich", "explain", "fenxi", "jieshi", "分析", "解释").contains(token)) {
+            return "analyze";
+        }
+        return "";
+    }
+
+    private String stripCopilotModeDirective(String message) {
+        if (message == null) {
+            return "";
+        }
+        String trimmed = message.trim();
+        String detected = detectCopilotResponseModeFromMessage(trimmed);
+        if (detected.isEmpty()) {
+            return trimmed;
+        }
+
+        int i = 1;
+        while (i < trimmed.length()) {
+            char ch = trimmed.charAt(i);
+            if (Character.isWhitespace(ch) || ch == ':') {
+                break;
+            }
+            i += 1;
+        }
+        int j = i;
+        while (j < trimmed.length() && (Character.isWhitespace(trimmed.charAt(j)) || trimmed.charAt(j) == ':')) {
+            j += 1;
+        }
+        return trimmed.substring(j).trim();
+    }
+
+    private String normalizeCopilotDirectiveToken(String token) {
+        if (token == null) {
+            return "";
+        }
+        return Normalizer.normalize(token.trim().toLowerCase(), Normalizer.Form.NFD)
+                .replaceAll("\\p{M}", "")
+                .replace('_', '-');
     }
 
     @SuppressWarnings("unchecked")

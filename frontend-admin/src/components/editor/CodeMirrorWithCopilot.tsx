@@ -25,6 +25,13 @@ type GlobalCopilotState = {
   ownerId: string | null;
 };
 
+type ChatPanelPosition = {
+  left: number;
+  top: number;
+};
+
+const CHAT_PANEL_MARGIN = 10;
+
 const globalCopilotState: GlobalCopilotState = {
   open: false,
   ownerId: null,
@@ -88,10 +95,15 @@ export default function CodeMirrorWithCopilot(props: CodeMirrorWithCopilotProps)
   } = props;
   const { i18n } = useTranslation();
   const instanceIdRef = useRef(`cm_${Math.random().toString(36).slice(2, 10)}`);
+  const wrapperRef = useRef<HTMLDivElement | null>(null);
+  const chatPanelRef = useRef<HTMLDivElement | null>(null);
+  const dragOffsetRef = useRef<{ x: number; y: number } | null>(null);
   const [globalState, setGlobalState] = useState<GlobalCopilotState>({ ...globalCopilotState });
   const currentAppId = useAppStore((state) => state.currentAppId);
 
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isCompactView, setIsCompactView] = useState<boolean>(() => window.innerWidth <= 992);
+  const [chatPanelPosition, setChatPanelPosition] = useState<ChatPanelPosition | null>(null);
 
   const toggleFullscreen = useCallback(() => setIsFullscreen((prev) => !prev), []);
 
@@ -101,6 +113,14 @@ export default function CodeMirrorWithCopilot(props: CodeMirrorWithCopilotProps)
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [isFullscreen]);
+
+  useEffect(() => {
+    const handleResize = () => {
+      setIsCompactView(window.innerWidth <= 992);
+    };
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
 
   const appId = String(copilotAppId || currentAppId || "csm").trim() || "csm";
   const currentCode = typeof copilotCurrentCode === "string"
@@ -113,6 +133,66 @@ export default function CodeMirrorWithCopilot(props: CodeMirrorWithCopilotProps)
   const isOwner = globalState.ownerId === instanceIdRef.current;
   const chatOpen = globalState.open && isOwner;
   const editorHeight = isFullscreen ? "100%" : height;
+
+  const clampPanelPosition = useCallback((left: number, top: number): ChatPanelPosition => {
+    const wrapper = wrapperRef.current;
+    const panel = chatPanelRef.current;
+    if (!wrapper || !panel) {
+      return { left, top };
+    }
+    const maxLeft = Math.max(CHAT_PANEL_MARGIN, wrapper.clientWidth - panel.offsetWidth - CHAT_PANEL_MARGIN);
+    const maxTop = Math.max(CHAT_PANEL_MARGIN, wrapper.clientHeight - panel.offsetHeight - CHAT_PANEL_MARGIN);
+    return {
+      left: Math.max(CHAT_PANEL_MARGIN, Math.min(left, maxLeft)),
+      top: Math.max(CHAT_PANEL_MARGIN, Math.min(top, maxTop)),
+    };
+  }, []);
+
+  const ensureInitialPanelPosition = useCallback(() => {
+    if (isCompactView) return;
+    const wrapper = wrapperRef.current;
+    const panel = chatPanelRef.current;
+    if (!wrapper || !panel) return;
+    setChatPanelPosition((prev) => {
+      if (prev) {
+        return clampPanelPosition(prev.left, prev.top);
+      }
+      const left = wrapper.clientWidth - panel.offsetWidth - CHAT_PANEL_MARGIN;
+      return clampPanelPosition(left, CHAT_PANEL_MARGIN);
+    });
+  }, [clampPanelPosition, isCompactView]);
+
+  const startDraggingPanel = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (isCompactView) return;
+    const wrapper = wrapperRef.current;
+    const panel = chatPanelRef.current;
+    if (!wrapper || !panel) return;
+
+    const wrapperRect = wrapper.getBoundingClientRect();
+    const panelRect = panel.getBoundingClientRect();
+    dragOffsetRef.current = {
+      x: event.clientX - panelRect.left,
+      y: event.clientY - panelRect.top,
+    };
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      if (!dragOffsetRef.current) return;
+      const rawLeft = moveEvent.clientX - wrapperRect.left - dragOffsetRef.current.x;
+      const rawTop = moveEvent.clientY - wrapperRect.top - dragOffsetRef.current.y;
+      setChatPanelPosition(clampPanelPosition(rawLeft, rawTop));
+    };
+
+    const stopDragging = () => {
+      dragOffsetRef.current = null;
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", stopDragging);
+      window.removeEventListener("pointercancel", stopDragging);
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", stopDragging);
+    window.addEventListener("pointercancel", stopDragging);
+  }, [clampPanelPosition, isCompactView]);
 
   const handleCopilotCodeInsert = useCallback((nextCode: string) => {
     if (typeof onChange === "function") {
@@ -136,6 +216,19 @@ export default function CodeMirrorWithCopilot(props: CodeMirrorWithCopilotProps)
     };
   }, []);
 
+  useEffect(() => {
+    if (!chatOpen || isCompactView) return;
+    const timer = window.setTimeout(() => ensureInitialPanelPosition(), 0);
+    return () => window.clearTimeout(timer);
+  }, [chatOpen, isCompactView, ensureInitialPanelPosition]);
+
+  useEffect(() => {
+    if (!chatOpen || isCompactView) return;
+    const handleResize = () => ensureInitialPanelPosition();
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, [chatOpen, isCompactView, ensureInitialPanelPosition]);
+
   const uiText = useMemo(() => {
     const lang = String(i18n.resolvedLanguage || i18n.language || "vi").toLowerCase();
     if (lang.startsWith("zh")) {
@@ -156,8 +249,26 @@ export default function CodeMirrorWithCopilot(props: CodeMirrorWithCopilotProps)
     };
   }, [i18n.language, i18n.resolvedLanguage]);
 
+  const dragText = useMemo(() => {
+    const lang = String(i18n.resolvedLanguage || i18n.language || "vi").toLowerCase();
+    if (lang.startsWith("zh")) {
+      return "按住拖动";
+    }
+    if (lang.startsWith("en")) {
+      return "Drag to move";
+    }
+    return "Giữ và kéo để di chuyển";
+  }, [i18n.language, i18n.resolvedLanguage]);
+
+  const chatPanelStyle = isCompactView || !chatPanelPosition
+    ? undefined
+    : {
+      left: `${chatPanelPosition.left}px`,
+      top: `${chatPanelPosition.top}px`,
+    };
+
   return (
-    <div className={isFullscreen ? styles.wrapperFullscreen : styles.wrapper}>
+    <div className={isFullscreen ? styles.wrapperFullscreen : styles.wrapper} ref={wrapperRef}>
       <div className={styles.editorHost}>
         <BaseCodeMirror value={value} height={editorHeight} onChange={onChange} {...codeMirrorProps} />
       </div>
@@ -187,7 +298,17 @@ export default function CodeMirrorWithCopilot(props: CodeMirrorWithCopilotProps)
             </Button>
           </div>
           {chatOpen && (
-            <div className={styles.chatPanel}>
+            <div
+              ref={chatPanelRef}
+              className={`${styles.chatPanel} ${!isCompactView ? styles.chatPanelFloating : ""}`}
+              style={chatPanelStyle}
+            >
+              {!isCompactView && (
+                <div className={styles.chatDragHandle} onPointerDown={startDraggingPanel}>
+                  <span className={styles.chatDragDot} />
+                  <span>{dragText}</span>
+                </div>
+              )}
               <div className={styles.chatPanelInner}>
                 <CopilotChat
                   appId={appId}
