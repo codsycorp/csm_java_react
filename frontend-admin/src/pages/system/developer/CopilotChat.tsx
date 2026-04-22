@@ -21,10 +21,14 @@ export type CopilotAttachment = {
 	mimeType: string;
 	size: number;
 	kind: "text" | "json" | "image";
+	contextRole?: "system_requirement" | "legacy_json" | "business_logic" | "reference_code" | "general_text";
+	authoritative?: boolean;
 	summary: string;
 	textContent?: string;
 	dataUrl?: string;
 	previewUrl?: string;
+	/** When true the entire file content is injected instead of snippet-based RAG */
+	fullContext?: boolean;
 };
 
 export type CopilotUserMessagePayload = {
@@ -112,6 +116,63 @@ function getFileExtension(name: string): string {
 	const normalized = String(name || "").trim().toLowerCase();
 	const idx = normalized.lastIndexOf(".");
 	return idx >= 0 ? normalized.slice(idx + 1) : "";
+}
+
+function isMarkdownLikeName(name: string): boolean {
+	const normalized = String(name || "").trim().toLowerCase();
+	return normalized.endsWith(".md")
+		|| normalized.endsWith(".markdown")
+		|| normalized.endsWith(".txt")
+		|| normalized.includes("prompt")
+		|| normalized.includes("requirement")
+		|| normalized.includes("spec")
+		|| normalized.includes("architecture")
+		|| normalized.includes("system");
+}
+
+function isCodeLikeName(name: string): boolean {
+	const ext = getFileExtension(name);
+	return new Set(["js", "jsx", "ts", "tsx", "java", "sql", "html", "css", "scss", "less", "xml", "yml", "yaml", "py", "properties"]).has(ext);
+}
+
+function classifyAttachmentContext(name: string, mimeType: string, kind: CopilotAttachment["kind"], contextType: CopilotChatProps["contextType"]): {
+	contextRole: NonNullable<CopilotAttachment["contextRole"]>;
+	authoritative: boolean;
+	defaultFullContext: boolean;
+} {
+	const normalizedName = String(name || "").trim().toLowerCase();
+	const normalizedMimeType = String(mimeType || "").trim().toLowerCase();
+	const menuFlow = contextType === "menu_json";
+
+	if (kind === "json" || normalizedName.endsWith(".json") || normalizedName.startsWith("untitled-")) {
+		return {
+			contextRole: menuFlow ? "legacy_json" : "reference_code",
+			authoritative: menuFlow,
+			defaultFullContext: true,
+		};
+	}
+
+	if (isMarkdownLikeName(normalizedName) || normalizedMimeType.includes("markdown")) {
+		return {
+			contextRole: "system_requirement",
+			authoritative: true,
+			defaultFullContext: true,
+		};
+	}
+
+	if (isCodeLikeName(normalizedName) || normalizedMimeType.includes("javascript") || normalizedMimeType.includes("typescript") || normalizedMimeType.includes("java") || normalizedMimeType.includes("sql")) {
+		return {
+			contextRole: menuFlow ? "business_logic" : "reference_code",
+			authoritative: menuFlow,
+			defaultFullContext: menuFlow,
+		};
+	}
+
+	return {
+		contextRole: "general_text",
+		authoritative: false,
+		defaultFullContext: false,
+	};
 }
 
 function isTextLikeFile(file: File): boolean {
@@ -487,6 +548,12 @@ export default function CopilotChat({
 				return uiText("Completed", "Completed", "已完成");
 			case "error":
 				return uiText("Error", "Error", "错误");
+			case "thinking":
+				return uiText("AI đang suy nghĩ...", "AI Thinking...", "AI 正在思考...");
+			case "connecting":
+				return uiText("Đang kết nối", "Connecting", "正在连接");
+			case "model_rotate":
+				return uiText("Đổi model", "Switching model", "切换模型");
 			default:
 				return normalized ? normalized : uiText("Processing", "Processing", "处理中");
 		}
@@ -735,14 +802,19 @@ export default function CopilotChat({
 				const textContent = rawText.length <= MAX_TEXT_ATTACHMENT_CHARS
 					? rawText
 					: `${rawText.slice(0, MAX_TEXT_ATTACHMENT_CHARS)}\n...[truncated]`;
+				const kind = getFileExtension(file.name) === "json" ? "json" : "text";
+				const contextMeta = classifyAttachmentContext(file.name, file.type || "text/plain", kind, contextType);
 				nextAttachments.push({
 					id: createAttachmentId("file"),
 					name: file.name,
 					mimeType: file.type || "text/plain",
 					size: file.size,
-					kind: getFileExtension(file.name) === "json" ? "json" : "text",
+					kind,
+					contextRole: contextMeta.contextRole,
+					authoritative: contextMeta.authoritative,
 					summary: summarizeFileContent(file, textContent),
 					textContent,
+					fullContext: contextMeta.defaultFullContext,
 				});
 			} catch (error) {
 				console.error("Failed to process attachment:", error);
@@ -757,7 +829,7 @@ export default function CopilotChat({
 		if (nextAttachments.length > 0) {
 			setPendingAttachments((prev) => [...prev, ...nextAttachments].slice(0, MAX_ATTACHMENTS));
 		}
-	}, [pendingAttachments.length, uiText]);
+	}, [contextType, pendingAttachments.length, uiText]);
 
 	const removePendingAttachment = useCallback((id: string) => {
 		setPendingAttachments((prev) => prev.filter((item) => item.id !== id));
@@ -788,11 +860,18 @@ export default function CopilotChat({
 
 		const handleCopilotChunk = (data: any) => {
 			const chunk = String(data?.chunk || "");
+			const stage = String(data?.stage || "");
 			const explicitDraft = String(data?.draftText || data?.partialJson || data?.previewJson || "").trim();
 			const textEdits = Array.isArray(data?.textEdits) ? data.textEdits : null;
-			appendStageEvent(data);
+			// reasoning_content from o1/o3 models: shown as stage event only, not streamed into the editor
+			const reasoningChunk = String(data?.reasoningChunk || "");
+			appendStageEvent(
+				reasoningChunk
+					? { stage: "thinking", message: uiText("AI đang suy nghĩ...", "AI Thinking...", "AI 正在思考..."), chunk: reasoningChunk }
+					: data
+			);
 
-			if (chunk) {
+			if (chunk && stage !== "thinking") {
 				pendingStreamChunkRef.current += chunk;
 				scheduleStreamFlush();
 			}
@@ -1037,6 +1116,8 @@ export default function CopilotChat({
 					mimeType: attachment.mimeType,
 					size: attachment.size,
 					kind: attachment.kind,
+					contextRole: attachment.contextRole,
+					authoritative: attachment.authoritative,
 					summary: attachment.summary,
 					previewUrl: attachment.previewUrl,
 				})),
@@ -1070,7 +1151,9 @@ export default function CopilotChat({
 				percent: 0,
 			});
 			const responseMode: ResponseMode = modeDirective.overrideMode
-				|| (autoApplyEnabled && hasEditIntent(cleanedMessage || normalizedText) ? "edit" : "analyze");
+				|| (contextType === "menu_json"
+					? "edit"
+					: (hasEditIntent(cleanedMessage || normalizedText) ? "edit" : "analyze"));
 			turnAllowAutoApplyRef.current = responseMode === "edit";
 			setInputValue("");
 			setPendingAttachments([]);
@@ -1085,6 +1168,7 @@ export default function CopilotChat({
 						currentCode,
 						language,
 						contextType,
+						flowType: contextType === "menu_json" ? "menu_manager" : "code_editor",
 						pName: String(targetPName || ""),
 						pType: Number.isFinite(Number(targetPType)) ? Number(targetPType) : null,
 						taskType: contextType === "menu_json" ? "menu_design" : "code_assistant",
@@ -1094,9 +1178,12 @@ export default function CopilotChat({
 							mimeType: attachment.mimeType,
 							size: attachment.size,
 							kind: attachment.kind,
+							contextRole: attachment.contextRole,
+							authoritative: attachment.authoritative,
 							summary: attachment.summary,
 							textContent: attachment.textContent,
 							dataUrl: attachment.dataUrl,
+							fullContext: attachment.fullContext ?? false,
 						})),
 					},
 					timeout: 300000,
@@ -1346,6 +1433,18 @@ export default function CopilotChat({
 										<div>{attachment.name}</div>
 										<div className={styles.attachmentSummary}>{attachment.summary}</div>
 									</div>
+									<Tooltip title={attachment.fullContext
+										? uiText("Toàn bộ nội dung (click để tắt)", "Full content (click to disable)", "完整内容（点击关闭）")
+										: uiText("Chỉ snippet (click để gửi toàn bộ)", "Snippet only (click to send full)", "仅片段（点击发送完整内容）")}>
+										<Button
+											type="text"
+											size="small"
+											style={{ color: attachment.fullContext ? "#52c41a" : undefined, fontSize: 11, padding: "0 4px" }}
+											onClick={() => setPendingAttachments((prev) => prev.map((a) => a.id === attachment.id ? { ...a, fullContext: !a.fullContext } : a))}
+										>
+											{attachment.fullContext ? "FULL" : "RAG"}
+										</Button>
+									</Tooltip>
 									<Button type="text" size="small" icon={<CloseOutlined />} onClick={() => removePendingAttachment(attachment.id)} />
 								</div>
 							))}

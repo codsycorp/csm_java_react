@@ -103,6 +103,8 @@ type JsonContextFile = {
   size: number;
   content: string;
   summary: string;
+  contextRole?: "system_requirement" | "legacy_json" | "business_logic" | "reference_code" | "general_text";
+  authoritative?: boolean;
 };
 
 /**
@@ -1306,6 +1308,8 @@ export function buildAiMenuRequestPayload(
       context_files: (contextFiles || []).map((file) => ({
         name: file.name,
         summary: file.summary,
+        context_role: file.contextRole,
+        authoritative: file.authoritative === true,
         content: trimToMax(file.content, MAX_CONTEXT_FILE_CHARS),
       })),
     },
@@ -1366,6 +1370,8 @@ export function buildAiMenuRefinePayload(
       context_files: (contextFiles || []).map((file) => ({
         name: file.name,
         summary: file.summary,
+        context_role: file.contextRole,
+        authoritative: file.authoritative === true,
         content: trimToMax(file.content, MAX_CONTEXT_FILE_CHARS),
       })),
     },
@@ -2640,6 +2646,8 @@ function buildContextFilesAppendix(files: JsonContextFile[]): string {
       `### FILE ${index + 1}: ${file.name}`,
       `- Summary: ${file.summary}`,
       `- Size(bytes): ${file.size}`,
+      `- ContextRole: ${String(file.contextRole || "general_text")}`,
+      `- Authoritative: ${file.authoritative === true ? "true" : "false"}`,
       "```json",
       body,
       "```",
@@ -2751,6 +2759,8 @@ function parseContextFiles(raw: any): JsonContextFile[] {
           size: Number(item.size || content.length),
           content: trimToMax(content, MAX_CONTEXT_FILE_CHARS),
           summary: String(item.summary || summarizeJsonContent(content)),
+          contextRole: String(item.context_role || item.contextRole || "").trim() as JsonContextFile["contextRole"],
+          authoritative: item.authoritative === true,
         } as JsonContextFile;
       })
       .filter((item): item is JsonContextFile => !!item)
@@ -2769,6 +2779,8 @@ function mapCopilotAttachmentsToContextFiles(attachments: CopilotAttachment[]): 
       size: Number(item.size || String(item.textContent || "").length),
       content: trimToMax(String(item.textContent || ""), MAX_CONTEXT_FILE_CHARS),
       summary: String(item.summary || summarizeJsonContent(item.textContent || "")),
+      contextRole: item.contextRole,
+      authoritative: item.authoritative === true,
     }))
     .slice(0, MAX_CONTEXT_FILES);
 }
@@ -2944,6 +2956,8 @@ export function buildAiIncrementalUpdatePayload(
       context_files: (contextFiles || []).map((file) => ({
         name: file.name,
         summary: file.summary,
+        context_role: file.contextRole,
+        authoritative: file.authoritative === true,
         content: trimToMax(file.content, MAX_CONTEXT_FILE_CHARS),
       })),
     },

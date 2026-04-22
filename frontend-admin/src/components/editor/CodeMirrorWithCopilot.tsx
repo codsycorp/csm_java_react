@@ -94,7 +94,8 @@ function resolveLanguage(raw: string): CopilotLanguage {
 
 function resolveContextType(language: CopilotLanguage, rawContextType?: CopilotContextType): CopilotContextType {
   if (rawContextType) return rawContextType;
-  return language === "json" ? "menu_json" : "code";
+  // Keep coding context as default. Menu designer must opt-in explicitly.
+  return "code";
 }
 
 function isLikelyIOSDevice(): boolean {

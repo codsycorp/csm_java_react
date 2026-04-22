@@ -34,7 +34,6 @@ import net.phanmemmottrieu.service.GoogleIndexService;
 import net.phanmemmottrieu.service.GoogleIndexQueueService;
 import net.phanmemmottrieu.service.ChatPersistenceService;
 import net.phanmemmottrieu.service.GitHubModelsService;
-import net.phanmemmottrieu.service.XTwitterService;
 import net.phanmemmottrieu.service.AiMenuMergeService;
 import com.corundumstudio.socketio.SocketIOServer;
 import net.phanmemmottrieu.model.UrlSubmissionQueue;
@@ -81,6 +80,9 @@ public class ApiSpringController {
     private static final int COPILOT_CODE_GLOBAL_SYMBOL_MAX_ITEMS = 60;
     private static final int COPILOT_CODE_ANCHOR_MAX_ITEMS = 24;
     private static final int COPILOT_CODE_ANCHOR_CHARS_PER_BLOCK = 24000;
+    private static final int COPILOT_CODE_FOCUS_EXCERPT_MAX_ITEMS = 3;
+    private static final int COPILOT_MENU_ATTACHMENT_CONTEXT_MAX_CHARS = 180000;
+    private static final int COPILOT_CODE_ATTACHMENT_CONTEXT_MAX_CHARS = 120000;
     private final ObjectMapper objectMapper = new ObjectMapper(); // Dùng để parse JSON body
     private final RecordManager recordManager;
     private final InitHandler initHandler;
@@ -97,7 +99,6 @@ public class ApiSpringController {
     private final ChatPersistenceService chatPersistenceService;
     private final GitHubModelsService gitHubModelsService;
     private final SocketIOServer socketIOServer;
-    private final XTwitterService xTwitterService;
     private final CRMHandler crmHandler;
     private final AiMenuMergeService aiMenuMergeService;
 
@@ -172,7 +173,6 @@ public class ApiSpringController {
             ChatPersistenceService chatPersistenceService,
             GitHubModelsService gitHubModelsService,
             SocketIOServer socketIOServer,
-            XTwitterService xTwitterService,
             CRMHandler crmHandler,
             AiMenuMergeService aiMenuMergeService
         ) {
@@ -191,7 +191,6 @@ public class ApiSpringController {
         this.chatPersistenceService = chatPersistenceService;
         this.gitHubModelsService = gitHubModelsService;
         this.socketIOServer = socketIOServer;
-        this.xTwitterService = xTwitterService;
         this.crmHandler = crmHandler;
         this.aiMenuMergeService = aiMenuMergeService;
     }
@@ -843,11 +842,37 @@ public class ApiSpringController {
             String language = String.valueOf(params.getOrDefault("language", "javascript")).trim();
             String contextType = String.valueOf(params.getOrDefault("contextType", "code")).trim();
             String taskType = String.valueOf(params.getOrDefault("taskType", "")).trim();
+            String flowType = String.valueOf(params.getOrDefault("flowType", "")).trim();
             String pName = String.valueOf(params.getOrDefault("pName", "")).trim();
             Integer pType = parseNullableInteger(params.get("pType"));
-            String responseMode = normalizeCopilotResponseMode(params.get("responseMode"), message);
+            String rawResponseMode = String.valueOf(params.getOrDefault("responseMode", "")).trim();
+            String detectedModeFromMessage = detectCopilotResponseModeFromMessage(message);
+            String normalizedFlowType = normalizeCopilotFlowType(flowType, contextType, taskType);
+            String effectiveContextType = "menu_manager".equals(normalizedFlowType) ? "menu_json" : "code";
+            String effectiveTaskType = "menu_manager".equals(normalizedFlowType)
+                ? (taskType == null || taskType.isBlank() ? "menu_design" : taskType)
+                : "code_assistant";
+            String responseMode = (isMenuCopilotFlow(effectiveContextType, effectiveTaskType)
+                && rawResponseMode.isEmpty()
+                && !"analyze".equalsIgnoreCase(detectedModeFromMessage))
+                ? "edit"
+                : normalizeCopilotResponseMode(params.get("responseMode"), message);
             message = stripCopilotModeDirective(message);
             List<Map<String, Object>> attachments = normalizeCopilotAttachments(params.get("attachments"));
+            if (attachments == null) {
+                attachments = new ArrayList<>();
+            }
+            logger.info(
+                "Copilot chat request: appId={}, contextTypeRaw={}, taskTypeRaw={}, contextTypeEffective={}, taskTypeEffective={}, flowType={}, responseMode={}, attachmentsCount={}, attachments={} ",
+                appId,
+                contextType,
+                taskType,
+                effectiveContextType,
+                effectiveTaskType,
+                normalizedFlowType,
+                responseMode,
+                attachments == null ? 0 : attachments.size(),
+                buildCopilotAttachmentRequestLogLine(attachments));
             
             if (message.isEmpty() && attachments.isEmpty()) {
                 response.set("code", 200);
@@ -863,19 +888,19 @@ public class ApiSpringController {
                 return;
             }
 
-            String continuityScopeKey = buildCopilotContinuityScopeKey(contextType, language, pName, pType);
+            String continuityScopeKey = buildCopilotContinuityScopeKey(effectiveContextType, language, pName, pType);
             String continuityMemory = trimCopilotContinuityMemory(
                 gitHubModelsService.loadCopilotConversationMemory(appId, continuityScopeKey));
             List<String> pendingQuestions = gitHubModelsService.loadCopilotPendingQuestions(appId, continuityScopeKey, 8);
-            List<Map<String, Object>> messages = buildCopilotChatMessages(appId, message, currentCode, language, contextType,
-                taskType, responseMode, attachments, continuityMemory, pName, pType, continuityScopeKey, pendingQuestions);
+            List<Map<String, Object>> messages = buildCopilotChatMessages(appId, message, currentCode, language, effectiveContextType,
+                effectiveTaskType, responseMode, attachments, continuityMemory, pName, pType, continuityScopeKey, pendingQuestions);
             emitCopilotChatDebug(appId, buildCopilotDebugPayload(
                 appId,
                 message,
                 currentCode,
                 language,
-                contextType,
-                taskType,
+                effectiveContextType,
+                effectiveTaskType,
                 responseMode,
                 attachments,
                 continuityMemory,
@@ -966,7 +991,12 @@ public class ApiSpringController {
                 }
             };
 
-            // Call GitHub Models with streaming
+            emitCopilotChatChunk(appId, Map.of(
+                "stage", "github_models_route",
+                "message", "Dang goi truc tiep GitHub Models",
+                "responseMode", responseMode,
+                "status", "running"
+            ));
             String githubRaw = gitHubModelsService.chatWithStreamingMessages(messages, streamListener);
 
             if (fullResponse.length() == 0) {
@@ -977,11 +1007,12 @@ public class ApiSpringController {
                 }
             }
 
-            if (fullResponse.length() == 0 && shouldFallbackToGemini(githubRaw)) {
-                logger.warn("Copilot stream: GitHub Models quota/rate-limited. Falling back to AIProviderFactory.");
+            boolean shouldGeminiFallback = shouldFallbackToGemini(githubRaw);
+            if (fullResponse.length() == 0 && shouldGeminiFallback) {
+                logger.warn("Copilot stream: GitHub Models capacity/rate limit reached. Falling back to AIProviderFactory.");
                 emitCopilotChatChunk(appId, Map.of(
                     "stage", "gemini_fallback",
-                    "message", "GitHub Models hết quota, đang chuyển sang Gemini",
+                    "message", "GitHub Models quá tải hoặc vượt giới hạn payload, đang chuyển sang Gemini",
                     "responseMode", responseMode,
                     "current", 0,
                     "total", 1,
@@ -991,7 +1022,7 @@ public class ApiSpringController {
                     message,
                     currentCode,
                     language,
-                    contextType,
+                    effectiveContextType,
                     responseMode,
                     attachments,
                     continuityMemory,
@@ -1009,7 +1040,7 @@ public class ApiSpringController {
             }
 
             if (fullResponse.length() == 0) {
-                String errText = shouldFallbackToGemini(githubRaw)
+                String errText = shouldGeminiFallback
                     ? "GitHub Models và provider fallback đều không trả về nội dung"
                     : "AI không trả về nội dung";
                 throw new IllegalStateException(errText);
@@ -1026,7 +1057,7 @@ public class ApiSpringController {
 
             if (completionTextEdits.isEmpty() && editMode) {
                 String baseDraft = String.valueOf(lastDraftRef.get() == null ? "" : lastDraftRef.get());
-                String fallbackDraft = extractMenuDraftForCompletion(fullResponse.toString(), contextType);
+                String fallbackDraft = extractMenuDraftForCompletion(fullResponse.toString(), effectiveContextType);
                 if (!fallbackDraft.isBlank() && !fallbackDraft.equals(baseDraft)) {
                     List<Map<String, Object>> generated = buildLineTextEdits(baseDraft, fallbackDraft);
                     if (!generated.isEmpty()) {
@@ -1097,7 +1128,7 @@ public class ApiSpringController {
                 continuityScopeKey,
                 message,
                 fullResponse.toString(),
-                contextType,
+                effectiveContextType,
                 responseMode,
                 attachments);
 
@@ -1308,6 +1339,9 @@ public class ApiSpringController {
             item.put("name", attachment.get("name"));
             item.put("mimeType", attachment.get("mimeType"));
             item.put("size", attachment.get("size"));
+            item.put("contextRole", attachment.get("contextRole"));
+            item.put("authoritative", Boolean.parseBoolean(String.valueOf(attachment.getOrDefault("authoritative", "false"))));
+            item.put("fullContext", Boolean.parseBoolean(String.valueOf(attachment.getOrDefault("fullContext", "false"))));
             item.put("summary", attachment.get("summary"));
             String textContent = String.valueOf(attachment.getOrDefault("textContent", "")).trim();
             if (!textContent.isEmpty()) {
@@ -1320,6 +1354,30 @@ public class ApiSpringController {
             summary.add(item);
         }
         return summary;
+    }
+
+    private String buildCopilotAttachmentRequestLogLine(List<Map<String, Object>> attachments) {
+        if (attachments == null || attachments.isEmpty()) {
+            return "[]";
+        }
+        List<String> parts = new ArrayList<>();
+        for (Map<String, Object> attachment : attachments) {
+            if (attachment == null) {
+                continue;
+            }
+            String name = String.valueOf(attachment.getOrDefault("name", "")).trim();
+            if (name.length() > 80) {
+                name = name.substring(0, 80) + "...";
+            }
+            String kind = String.valueOf(attachment.getOrDefault("kind", "")).trim();
+            String contextRole = String.valueOf(attachment.getOrDefault("contextRole", "")).trim();
+            boolean authoritative = Boolean.parseBoolean(String.valueOf(attachment.getOrDefault("authoritative", "false")));
+            boolean fullContext = Boolean.parseBoolean(String.valueOf(attachment.getOrDefault("fullContext", "false")));
+            String textContent = String.valueOf(attachment.getOrDefault("textContent", "")).trim();
+            int textChars = textContent.length();
+            parts.add("{name='" + name + "', kind='" + kind + "', contextRole='" + contextRole + "', authoritative=" + authoritative + ", fullContext=" + fullContext + ", textChars=" + textChars + "}");
+        }
+        return "[" + String.join(", ", parts) + "]";
     }
 
     private List<Map<String, Object>> sanitizeCopilotDebugMessages(List<Map<String, Object>> messages) {
@@ -1418,7 +1476,9 @@ public class ApiSpringController {
                 "You are an AI assistant for menu JSON design inside a CodeMirror editor.",
                 "Focus on JSON schema correctness, parent/child integrity, field consistency and trigger safety.",
                 "Use any attached text files or images as direct context for the user's menu design request.",
-                "Do not output unrelated source code. Keep structure stable unless user requests a structural change.");
+                "Do not output unrelated source code. Keep structure stable unless user requests a structural change.",
+                "FLOW_LOCK: MENU_MANAGER_ONLY. You must prioritize current menu draft + system requirement docs + legacy menu JSON + business-logic references.",
+                "When editing, produce directly applicable JSON changes for the currently open menu draft.");
             if (!menuKnowledge.isBlank()) {
                 systemPrompt = systemPrompt + "\n\n" + menuKnowledge;
             }
@@ -1427,7 +1487,9 @@ public class ApiSpringController {
                 "You are a coding assistant inside a CodeMirror editor.",
                 "Respond concisely with practical code suggestions and explanations.",
                 "Use any attached text files or images as direct context for the user's request.",
-                "Always preserve existing code unless explicitly asked to rewrite.");
+                "Always preserve existing code unless explicitly asked to rewrite.",
+                "FLOW_LOCK: CODE_EDITOR_ONLY. Focus strictly on p_name, p_type and the current programming language buffer.",
+                "Do not switch to menu-architecture design unless the request is explicitly in menu flow.");
         }
 
         if ("analyze".equals(normalizedMode)) {
@@ -1590,35 +1652,11 @@ public class ApiSpringController {
         }
         
         if (!currentCode.trim().isEmpty()) {
-            String contextualCode = buildCopilotCurrentCodeContext(currentCode, message, normalizedContext, language);
-            sb.append("Current code (").append(language).append("):\n");
-            sb.append("```").append(language).append("\n");
-            sb.append(contextualCode).append("\n");
-            sb.append("```\n\n");
+            sb.append(buildCopilotActiveEditorContextBlock(currentCode, message, normalizedContext, language, pName));
         }
-        
+
         if (!attachments.isEmpty()) {
-            sb.append("Attached context:\n");
-            int idx = 1;
-            for (Map<String, Object> attachment : attachments) {
-                String kind = String.valueOf(attachment.getOrDefault("kind", "file")).trim();
-                String name = String.valueOf(attachment.getOrDefault("name", "attachment")).trim();
-                String mimeType = String.valueOf(attachment.getOrDefault("mimeType", "")).trim();
-                String summary = String.valueOf(attachment.getOrDefault("summary", "")).trim();
-                sb.append("- [").append(idx++).append("] ").append(kind).append(": ").append(name);
-                if (!mimeType.isEmpty()) {
-                    sb.append(" (").append(mimeType).append(")");
-                }
-                if (!summary.isEmpty()) {
-                    sb.append(" -> ").append(summary);
-                }
-                sb.append("\n");
-            }
-            CopilotAttachmentRetrievalResult retrieval = buildCopilotRelevantAttachmentContextResult(message, attachments);
-            if (!retrieval.context.isBlank()) {
-                sb.append("\nAuto-retrieved relevant excerpts from text attachments:\n");
-                sb.append(retrieval.context).append("\n");
-            }
+            sb.append(buildCopilotAttachmentContextBlock(message, attachments, normalizedContext, language));
         }
 
         sb.append("Context type: ").append(normalizedContext).append("\n");
@@ -1660,6 +1698,25 @@ public class ApiSpringController {
         return normalized.isEmpty() ? fallback : normalized;
     }
 
+    private boolean isMenuCopilotFlow(String contextType, String taskType) {
+        String normalizedContext = String.valueOf(contextType == null ? "" : contextType).trim().toLowerCase();
+        String normalizedTask = String.valueOf(taskType == null ? "" : taskType).trim().toLowerCase();
+        return "menu_json".equals(normalizedContext)
+            || "menu_design".equals(normalizedTask)
+            || "menu_design_refine".equals(normalizedTask)
+            || "menu_design_incremental_update".equals(normalizedTask)
+            || "menu_design_generate".equals(normalizedTask)
+            || "menu".equals(normalizedTask);
+    }
+
+    private String normalizeCopilotFlowType(String flowType, String contextType, String taskType) {
+        String normalized = String.valueOf(flowType == null ? "" : flowType).trim().toLowerCase();
+        if ("menu_manager".equals(normalized) || "code_editor".equals(normalized)) {
+            return normalized;
+        }
+        return isMenuCopilotFlow(contextType, taskType) ? "menu_manager" : "code_editor";
+    }
+
     private String trimCopilotContinuityMemory(String memory) {
         String text = String.valueOf(memory == null ? "" : memory).trim();
         if (text.isEmpty()) return "";
@@ -1685,25 +1742,318 @@ public class ApiSpringController {
         int safeTail = Math.max(1000, Math.min(tailChars, Math.max(0, code.length() - safeHead)));
         String head = code.substring(0, safeHead);
         String tail = code.substring(Math.max(0, code.length() - safeTail));
-        String focus = buildCopilotFocusExcerpt(code, message, focusWindowChars);
+        List<String> focusExcerpts = buildCopilotFocusExcerpts(code, message, focusWindowChars);
         String globalMap = buildCopilotGlobalCodeMap(code, language);
 
         StringBuilder sb = new StringBuilder();
         sb.append("/* Code too large: ").append(code.length())
-            .append(" chars. Showing GLOBAL MAP + HEAD + FOCUS + TAIL excerpts for better understanding. */\n");
+            .append(" chars. Showing GLOBAL MAP + HEAD + MULTI-FOCUS + TAIL excerpts for better understanding. */\n");
         if (!globalMap.isBlank()) {
             sb.append("/* ===== GLOBAL FILE MAP (derived from full file) ===== */\n");
             sb.append(globalMap).append("\n");
         }
         sb.append("/* ===== HEAD EXCERPT ===== */\n");
         sb.append(head).append("\n");
-        if (!focus.isEmpty()) {
-            sb.append("/* ===== FOCUS EXCERPT (matched by request keywords) ===== */\n");
-            sb.append(focus).append("\n");
+        if (!focusExcerpts.isEmpty()) {
+            int excerptIndex = 1;
+            for (String focus : focusExcerpts) {
+                if (focus == null || focus.isBlank()) {
+                    continue;
+                }
+                sb.append("/* ===== FOCUS EXCERPT ").append(excerptIndex++)
+                    .append(" (matched by request keywords) ===== */\n");
+                sb.append(focus).append("\n");
+            }
         }
         sb.append("/* ===== TAIL EXCERPT ===== */\n");
         sb.append(tail);
         return trimCopilotCodeContext(sb.toString(), hardCapChars);
+    }
+
+    private String buildCopilotActiveEditorContextBlock(
+            String currentCode,
+            String message,
+            String contextType,
+            String language,
+            String pName) {
+        String normalizedContext = String.valueOf(contextType == null ? "code" : contextType).trim().toLowerCase();
+        String normalizedPName = String.valueOf(pName == null ? "" : pName).trim();
+        String normalizedLanguage = String.valueOf(language == null ? "" : language).trim();
+        String contextualCode = buildCopilotCurrentCodeContext(currentCode, message, normalizedContext, normalizedLanguage);
+        StringBuilder sb = new StringBuilder();
+
+        if ("menu_json".equals(normalizedContext)) {
+            sb.append("CURRENT MENU DRAFT IN EDITOR (AUTHORITATIVE BASE TREE)\n");
+            sb.append("- file_key: ").append(normalizedPName.isEmpty() ? "(unsaved or not selected)" : normalizedPName).append("\n");
+            sb.append("- format: json menu draft\n");
+            sb.append("- chars: ").append(currentCode.length()).append("\n");
+            sb.append("- lines: ").append(countLines(currentCode)).append("\n");
+            sb.append("Use this as the primary menu tree to patch. Preserve unrelated nodes, triggers, table fields, ids and parent relationships unless the user explicitly requests structural changes.\n");
+            sb.append("Current menu draft context:\n");
+            sb.append("```json\n");
+            sb.append(contextualCode).append("\n");
+            sb.append("```\n\n");
+            return sb.toString();
+        }
+
+        sb.append("ACTIVE FILE IN EDITOR (authoritative working buffer)\n");
+        sb.append("- file_key: ").append(normalizedPName.isEmpty() ? "(unsaved or not selected)" : normalizedPName).append("\n");
+        sb.append("- language: ").append(normalizedLanguage).append("\n");
+        sb.append("- chars: ").append(currentCode.length()).append("\n");
+        sb.append("- lines: ").append(countLines(currentCode)).append("\n");
+        sb.append("Treat this editor buffer as the primary source of truth unless the user explicitly asks to compare with attachments.\n");
+        sb.append("Current code context (").append(normalizedLanguage).append("):\n");
+        sb.append("```").append(normalizedLanguage).append("\n");
+        sb.append(contextualCode).append("\n");
+        sb.append("```\n\n");
+        return sb.toString();
+    }
+
+    private String buildCopilotAttachmentContextBlock(
+            String message,
+            List<Map<String, Object>> attachments,
+            String contextType,
+            String language) {
+        if (attachments == null || attachments.isEmpty()) {
+            return "";
+        }
+
+        String normalizedContext = String.valueOf(contextType == null ? "code" : contextType).trim().toLowerCase();
+        StringBuilder sb = new StringBuilder();
+        sb.append("Attached context inventory:\n");
+        int idx = 1;
+        for (Map<String, Object> attachment : attachments) {
+            if (attachment == null) {
+                continue;
+            }
+            String kind = String.valueOf(attachment.getOrDefault("kind", "file")).trim();
+            String name = String.valueOf(attachment.getOrDefault("name", "attachment")).trim();
+            String mimeType = String.valueOf(attachment.getOrDefault("mimeType", "")).trim();
+            String summary = String.valueOf(attachment.getOrDefault("summary", "")).trim();
+            sb.append("- [").append(idx++).append("] ").append(kind).append(": ").append(name);
+            if (!mimeType.isEmpty()) {
+                sb.append(" (").append(mimeType).append(")");
+            }
+            if (!summary.isEmpty()) {
+                sb.append(" -> ").append(summary);
+            }
+            sb.append("\n");
+        }
+
+        String structuredPack = "menu_json".equals(normalizedContext)
+            ? buildMenuAttachmentContextPack(message, attachments)
+            : buildCodeAttachmentContextPack(message, attachments, language);
+        if (!structuredPack.isBlank()) {
+            sb.append("\n").append(structuredPack).append("\n");
+            return sb.append("\n").toString();
+        }
+
+        CopilotAttachmentRetrievalResult retrieval = buildCopilotRelevantAttachmentContextResult(message, attachments);
+        if (!retrieval.context.isBlank()) {
+            sb.append("\nAuto-retrieved relevant excerpts from text attachments:\n");
+            sb.append(retrieval.context).append("\n\n");
+        } else {
+            sb.append("\n");
+        }
+        return sb.toString();
+    }
+
+    private String buildMenuAttachmentContextPack(String message, List<Map<String, Object>> attachments) {
+        List<String> requirementSections = new ArrayList<>();
+        List<String> legacyJsonSections = new ArrayList<>();
+        List<String> logicSections = new ArrayList<>();
+
+        for (Map<String, Object> attachment : attachments) {
+            String body = extractTextAttachmentBody(attachment, message, "menu_json");
+            if (body.isBlank()) {
+                continue;
+            }
+            String name = String.valueOf(attachment.getOrDefault("name", "attachment")).trim();
+            String mimeType = String.valueOf(attachment.getOrDefault("mimeType", "")).trim();
+            String section = renderAttachmentSection(name, mimeType, attachment, body);
+            String contextRole = resolveAttachmentContextRole(attachment, name, mimeType, "menu_json");
+            if ("system_requirement".equals(contextRole) || isCopilotMarkdownLikeAttachment(name, mimeType)) {
+                requirementSections.add(section);
+            } else if ("legacy_json".equals(contextRole) || isCopilotJsonLikeAttachment(name, mimeType)) {
+                legacyJsonSections.add(section);
+            } else if ("business_logic".equals(contextRole) || isCopilotCodeLikeAttachment(name, mimeType)) {
+                logicSections.add(section);
+            }
+        }
+
+        StringBuilder sb = new StringBuilder();
+        if (!requirementSections.isEmpty()) {
+            sb.append("HIGH PRIORITY SYSTEM / CUSTOMER REQUIREMENT FILES\n");
+            sb.append("Use these documents as business constraints and system contracts when designing or patching menu JSON.\n\n");
+            sb.append(String.join("\n\n", requirementSections)).append("\n\n");
+        }
+        if (!legacyJsonSections.isEmpty()) {
+            sb.append("AUTHORITATIVE LEGACY MENU / JSON REFERENCES\n");
+            sb.append("Preserve entities, trigger behavior, table fields and business structure from these JSON sources unless the user explicitly requests removal or migration.\n\n");
+            sb.append(String.join("\n\n", legacyJsonSections)).append("\n\n");
+        }
+        if (!logicSections.isEmpty()) {
+            sb.append("BUSINESS LOGIC / IMPLEMENTATION REFERENCES\n");
+            sb.append("Use these source files to infer workflow rules, trigger semantics, naming conventions and hidden business requirements behind the menu.\n\n");
+            sb.append(String.join("\n\n", logicSections)).append("\n\n");
+        }
+
+        return trimCopilotCodeContext(sb.toString(), COPILOT_MENU_ATTACHMENT_CONTEXT_MAX_CHARS).trim();
+    }
+
+    private String buildCodeAttachmentContextPack(String message, List<Map<String, Object>> attachments, String language) {
+        List<String> requirementSections = new ArrayList<>();
+        List<String> referenceSections = new ArrayList<>();
+
+        for (Map<String, Object> attachment : attachments) {
+            String body = extractTextAttachmentBody(attachment, message, "code");
+            if (body.isBlank()) {
+                continue;
+            }
+            String name = String.valueOf(attachment.getOrDefault("name", "attachment")).trim();
+            String mimeType = String.valueOf(attachment.getOrDefault("mimeType", "")).trim();
+            String section = renderAttachmentSection(name, mimeType, attachment, body);
+            String contextRole = resolveAttachmentContextRole(attachment, name, mimeType, "code");
+            if ("system_requirement".equals(contextRole) || isCopilotMarkdownLikeAttachment(name, mimeType)) {
+                requirementSections.add(section);
+            } else if ("reference_code".equals(contextRole)
+                || "business_logic".equals(contextRole)
+                || "legacy_json".equals(contextRole)
+                || isCopilotCodeLikeAttachment(name, mimeType)
+                || isCopilotJsonLikeAttachment(name, mimeType)) {
+                referenceSections.add(section);
+            }
+        }
+
+        StringBuilder sb = new StringBuilder();
+        if (!requirementSections.isEmpty()) {
+            sb.append("REQUIREMENT / SYSTEM DOC REFERENCES\n");
+            sb.append("Use these notes as constraints, acceptance criteria and system behavior rules for the coding task.\n\n");
+            sb.append(String.join("\n\n", requirementSections)).append("\n\n");
+        }
+        if (!referenceSections.isEmpty()) {
+            sb.append("REFERENCE FILES RELATED TO CURRENT CODING TASK\n");
+            sb.append("Use these files to understand APIs, data shape, surrounding logic and integration points before proposing edits.\n\n");
+            sb.append(String.join("\n\n", referenceSections)).append("\n\n");
+        }
+
+        String pack = trimCopilotCodeContext(sb.toString(), COPILOT_CODE_ATTACHMENT_CONTEXT_MAX_CHARS).trim();
+        if (pack.isBlank()) {
+            CopilotAttachmentRetrievalResult retrieval = buildCopilotRelevantAttachmentContextResult(message, attachments);
+            if (!retrieval.context.isBlank()) {
+                return "AUTO-RETRIEVED RELEVANT EXCERPTS\n" + retrieval.context.trim();
+            }
+        }
+        return pack;
+    }
+
+    private String extractTextAttachmentBody(Map<String, Object> attachment, String message, String contextType) {
+        if (attachment == null || attachment.isEmpty()) {
+            return "";
+        }
+        String kind = String.valueOf(attachment.getOrDefault("kind", "")).trim().toLowerCase();
+        if (!("text".equals(kind) || "json".equals(kind))) {
+            return "";
+        }
+        String textContent = String.valueOf(attachment.getOrDefault("textContent", "")).trim();
+        if (textContent.isEmpty()) {
+            return "";
+        }
+        String name = String.valueOf(attachment.getOrDefault("name", "attachment")).trim();
+        String mimeType = String.valueOf(attachment.getOrDefault("mimeType", "")).trim();
+        String contextRole = resolveAttachmentContextRole(attachment, name, mimeType, contextType);
+        if ("system_requirement".equals(contextRole)
+            || "legacy_json".equals(contextRole)
+            || isCopilotJsonLikeAttachment(name, mimeType)
+            || isCopilotMarkdownLikeAttachment(name, mimeType)) {
+            return trimCopilotCodeContext(textContent, Math.min(COPILOT_MENU_ATTACHMENT_CONTEXT_MAX_CHARS / 2, 90000));
+        }
+        if ("business_logic".equals(contextRole)
+            || "reference_code".equals(contextRole)
+            || isCopilotCodeLikeAttachment(name, mimeType)) {
+            String inferredLanguage = inferCopilotAttachmentLanguage(name, mimeType, contextType);
+            return buildCopilotCurrentCodeContext(textContent, message, "code", inferredLanguage);
+        }
+        return trimCopilotCodeContext(textContent, 24000);
+    }
+
+    private String renderAttachmentSection(String name, String mimeType, Map<String, Object> attachment, String body) {
+        String summary = String.valueOf(attachment.getOrDefault("summary", "")).trim();
+        String contextRole = String.valueOf(attachment.getOrDefault("contextRole", "")).trim();
+        boolean authoritative = Boolean.parseBoolean(String.valueOf(attachment.getOrDefault("authoritative", "false")));
+        StringBuilder sb = new StringBuilder();
+        sb.append("### ").append(name.isEmpty() ? "attachment" : name).append("\n");
+        if (!mimeType.isEmpty()) {
+            sb.append("- mime_type: ").append(mimeType).append("\n");
+        }
+        if (!contextRole.isEmpty()) {
+            sb.append("- context_role: ").append(contextRole).append("\n");
+        }
+        sb.append("- authoritative: ").append(authoritative).append("\n");
+        if (!summary.isEmpty()) {
+            sb.append("- summary: ").append(summary).append("\n");
+        }
+        sb.append("```\n");
+        sb.append(body).append("\n");
+        sb.append("```");
+        return sb.toString();
+    }
+
+    private boolean isCopilotMarkdownLikeAttachment(String name, String mimeType) {
+        String normalizedName = String.valueOf(name == null ? "" : name).trim().toLowerCase();
+        String normalizedMimeType = String.valueOf(mimeType == null ? "" : mimeType).trim().toLowerCase();
+        return normalizedMimeType.contains("markdown")
+            || normalizedName.endsWith(".md")
+            || normalizedName.endsWith(".markdown")
+            || normalizedName.endsWith(".txt")
+            || normalizedName.contains("prompt")
+            || normalizedName.contains("requirement")
+            || normalizedName.contains("spec")
+            || normalizedName.contains("architecture")
+            || normalizedName.contains("system");
+    }
+
+    private boolean isCopilotJsonLikeAttachment(String name, String mimeType) {
+        String normalizedName = String.valueOf(name == null ? "" : name).trim().toLowerCase();
+        String normalizedMimeType = String.valueOf(mimeType == null ? "" : mimeType).trim().toLowerCase();
+        return normalizedMimeType.contains("json")
+            || normalizedName.endsWith(".json")
+            || normalizedName.startsWith("untitled-");
+    }
+
+    private String resolveAttachmentContextRole(Map<String, Object> attachment, String name, String mimeType, String contextType) {
+        String explicit = String.valueOf(attachment == null ? "" : attachment.getOrDefault("contextRole", "")).trim().toLowerCase();
+        if (!explicit.isEmpty()) {
+            return explicit;
+        }
+        if (isCopilotMarkdownLikeAttachment(name, mimeType)) {
+            return "system_requirement";
+        }
+        if (isCopilotJsonLikeAttachment(name, mimeType)) {
+            return "menu_json".equalsIgnoreCase(String.valueOf(contextType == null ? "" : contextType).trim())
+                ? "legacy_json"
+                : "reference_code";
+        }
+        if (isCopilotCodeLikeAttachment(name, mimeType)) {
+            return "menu_json".equalsIgnoreCase(String.valueOf(contextType == null ? "" : contextType).trim())
+                ? "business_logic"
+                : "reference_code";
+        }
+        return "general_text";
+    }
+
+    private String inferCopilotAttachmentLanguage(String name, String mimeType, String fallbackContext) {
+        String normalizedName = String.valueOf(name == null ? "" : name).trim().toLowerCase();
+        String normalizedMimeType = String.valueOf(mimeType == null ? "" : mimeType).trim().toLowerCase();
+        if (normalizedName.endsWith(".java") || normalizedMimeType.contains("java")) return "java";
+        if (normalizedName.endsWith(".ts") || normalizedName.endsWith(".tsx") || normalizedMimeType.contains("typescript")) return "typescript";
+        if (normalizedName.endsWith(".js") || normalizedName.endsWith(".jsx") || normalizedMimeType.contains("javascript")) return "javascript";
+        if (normalizedName.endsWith(".sql") || normalizedMimeType.contains("sql")) return "sql";
+        if (normalizedName.endsWith(".html") || normalizedMimeType.contains("html")) return "html";
+        if (normalizedName.endsWith(".css") || normalizedName.endsWith(".scss") || normalizedName.endsWith(".less") || normalizedMimeType.contains("css")) return "css";
+        if (normalizedName.endsWith(".json") || normalizedMimeType.contains("json")) return "json";
+        if (normalizedName.endsWith(".py") || normalizedMimeType.contains("python")) return "python";
+        return "menu_json".equalsIgnoreCase(String.valueOf(fallbackContext == null ? "" : fallbackContext).trim()) ? "javascript" : "text";
     }
 
     private String trimCopilotCodeContext(String context, int hardCapChars) {
@@ -1880,14 +2230,15 @@ public class ApiSpringController {
         return anchors;
     }
 
-    private String buildCopilotFocusExcerpt(String code, String message, int focusWindowChars) {
+    private List<String> buildCopilotFocusExcerpts(String code, String message, int focusWindowChars) {
+        List<String> excerpts = new ArrayList<>();
         if (message == null || message.isBlank() || code == null || code.isBlank()) {
-            return "";
+            return excerpts;
         }
 
         String normalizedMessage = normalizeSearchText(message);
         if (normalizedMessage.isBlank()) {
-            return "";
+            return excerpts;
         }
 
         Set<String> stopWords = Set.of(
@@ -1912,23 +2263,34 @@ public class ApiSpringController {
         }
 
         if (tokens.isEmpty()) {
-            return "";
+            return excerpts;
         }
 
         String lowerCode = code.toLowerCase();
+        List<Integer> anchors = new ArrayList<>();
         for (String token : tokens) {
             int idx = lowerCode.indexOf(token);
             if (idx < 0) {
                 continue;
             }
+            if (isNearExistingAnchor(anchors, idx, Math.max(1200, focusWindowChars / 3))) {
+                continue;
+            }
+            anchors.add(idx);
             int safeWindow = Math.max(4000, focusWindowChars);
             int half = Math.max(1000, safeWindow / 2);
             int start = Math.max(0, idx - half);
             int end = Math.min(code.length(), start + safeWindow);
-            return code.substring(start, end);
+            int startLine = estimateLineAt(code, start);
+            int endLine = estimateLineAt(code, Math.max(start, end - 1));
+            String excerpt = code.substring(start, end);
+            excerpts.add("/* lines " + startLine + "-" + endLine + " */\n" + excerpt);
+            if (excerpts.size() >= COPILOT_CODE_FOCUS_EXCERPT_MAX_ITEMS) {
+                break;
+            }
         }
 
-        return "";
+        return excerpts;
     }
 
     private String normalizeSearchText(String raw) {
@@ -1962,14 +2324,19 @@ public class ApiSpringController {
         int snippetWindowChars = Math.max(600, copilotAttachmentRetrievalSnippetWindowChars);
         int maxTotalChars = Math.max(4000, copilotAttachmentRetrievalMaxTotalChars);
 
+        // Full-context mode limits: inject the entire file when fullContext=true or when
+        // the file is a small-enough JSON/MD reference document (< threshold).
+        // Separate budget so full-context files do not crowd out snippet files.
+        final int FULL_CONTEXT_PER_FILE_LIMIT = 200_000;   // chars per full-context file
+        final int FULL_CONTEXT_BUDGET_TOTAL   = 400_000;   // total budget for all full-context files
+        int fullContextBudgetUsed = 0;
+
         List<String> queryTokens = extractCopilotRetrievalTokens(message);
         result.queryTokens = queryTokens;
-        StringBuilder sb = new StringBuilder();
+        StringBuilder sbFull    = new StringBuilder(); // full-context files go first
+        StringBuilder sbSnippet = new StringBuilder(); // snippet files go after
 
         for (Map<String, Object> attachment : attachments) {
-            if (result.filesUsed >= maxAttachments) {
-                break;
-            }
             if (attachment == null || attachment.isEmpty()) {
                 continue;
             }
@@ -1980,13 +2347,47 @@ public class ApiSpringController {
             }
 
             String name = String.valueOf(attachment.getOrDefault("name", "attachment")).trim();
-            if (name.isEmpty()) {
-                name = "attachment";
-            }
+            if (name.isEmpty()) name = "attachment";
+
             String textContent = String.valueOf(attachment.getOrDefault("textContent", "")).trim();
-            if (textContent.isEmpty()) {
+            if (textContent.isEmpty()) continue;
+
+            // ── Full-context mode: attach entire file ──────────────────────────
+            // Triggered by either:
+            //   a) Frontend sets fullContext=true on the attachment
+            //   b) Small JSON/MD reference file (≤ 80K chars)
+            boolean explicitFull = Boolean.TRUE.equals(attachment.get("fullContext"));
+            boolean authoritative = Boolean.TRUE.equals(attachment.get("authoritative"));
+            boolean autoFull = (textContent.length() <= 80_000)
+                && ("json".equals(kind)
+                    || name.toLowerCase().endsWith(".md")
+                    || name.toLowerCase().endsWith(".json")
+                    || isCopilotCodeLikeAttachment(name, String.valueOf(attachment.getOrDefault("mimeType", ""))));
+
+            if ((explicitFull || authoritative || autoFull) && fullContextBudgetUsed < FULL_CONTEXT_BUDGET_TOTAL) {
+                int allowed = Math.min(FULL_CONTEXT_PER_FILE_LIMIT, FULL_CONTEXT_BUDGET_TOTAL - fullContextBudgetUsed);
+                String body = textContent.length() <= allowed
+                    ? textContent
+                    : textContent.substring(0, allowed) + "\n...[FILE TRUNCATED — first " + allowed + " chars shown]";
+                sbFull.append("=== FULL CONTEXT FILE: ").append(name)
+                      .append(" (chars=").append(textContent.length()).append(") ===\n");
+                sbFull.append("```\n").append(body).append("\n```\n\n");
+                fullContextBudgetUsed += body.length();
+
+                Map<String, Object> sourceMeta = new LinkedHashMap<>();
+                sourceMeta.put("name", name);
+                sourceMeta.put("kind", kind);
+                sourceMeta.put("chars", textContent.length());
+                sourceMeta.put("mode", "full");
+                result.sources.add(sourceMeta);
+                result.filesUsed += 1;
+                result.snippetsUsed += 1;
+                result.retrievedChars += body.length();
                 continue;
             }
+
+            // ── Snippet-based RAG for large files ────────────────────────────
+            if (result.filesUsed >= maxAttachments) continue;
 
             List<String> snippets = extractAttachmentSnippetsByTokens(
                 textContent,
@@ -1997,27 +2398,24 @@ public class ApiSpringController {
                 snippets.add(textContent.substring(0, Math.min(1200, textContent.length())));
             }
 
-            sb.append("- Source: ").append(name)
+            sbSnippet.append("- Source: ").append(name)
                 .append(" (chars=").append(textContent.length()).append(")\n");
 
             Map<String, Object> sourceMeta = new LinkedHashMap<>();
             sourceMeta.put("name", name);
             sourceMeta.put("kind", kind);
             sourceMeta.put("chars", textContent.length());
+            sourceMeta.put("mode", "snippet");
             sourceMeta.put("snippets", snippets.size());
             List<Integer> snippetSizes = new ArrayList<>();
 
             int i = 1;
             for (String snippet : snippets) {
-                if (snippet == null || snippet.isBlank()) {
-                    continue;
-                }
+                if (snippet == null || snippet.isBlank()) continue;
                 String cleaned = snippet.trim();
                 snippetSizes.add(cleaned.length());
-                sb.append("  [snippet ").append(i++).append("]\n");
-                sb.append("  ```\n");
-                sb.append(cleaned).append("\n");
-                sb.append("  ```\n");
+                sbSnippet.append("  [snippet ").append(i++).append("]\n");
+                sbSnippet.append("  ```\n").append(cleaned).append("\n  ```\n");
                 result.snippetsUsed += 1;
                 result.retrievedChars += cleaned.length();
             }
@@ -2025,14 +2423,50 @@ public class ApiSpringController {
             result.sources.add(sourceMeta);
             result.filesUsed += 1;
 
-            if (sb.length() >= maxTotalChars) {
-                break;
-            }
+            if (sbSnippet.length() >= maxTotalChars) break;
         }
 
-        result.context = trimCopilotCodeContext(sb.toString(), maxTotalChars);
+        // Combine: full-context files first, then snippet excerpts
+        String combined = sbFull.toString() + sbSnippet.toString();
+        // Apply hard cap only on the snippet portion so full-context files survive
+        result.context = combined.length() <= (FULL_CONTEXT_BUDGET_TOTAL + maxTotalChars)
+            ? combined
+            : combined.substring(0, FULL_CONTEXT_BUDGET_TOTAL + maxTotalChars);
         result.retrievedChars = result.context.length();
         return result;
+    }
+
+    private boolean isCopilotCodeLikeAttachment(String name, String mimeType) {
+        String normalizedName = String.valueOf(name == null ? "" : name).trim().toLowerCase();
+        String normalizedMimeType = String.valueOf(mimeType == null ? "" : mimeType).trim().toLowerCase();
+        if (normalizedMimeType.startsWith("text/")) {
+            return true;
+        }
+        if (normalizedMimeType.contains("json")
+            || normalizedMimeType.contains("javascript")
+            || normalizedMimeType.contains("typescript")
+            || normalizedMimeType.contains("java")
+            || normalizedMimeType.contains("xml")
+            || normalizedMimeType.contains("yaml")
+            || normalizedMimeType.contains("sql")) {
+            return true;
+        }
+        return normalizedName.endsWith(".java")
+            || normalizedName.endsWith(".js")
+            || normalizedName.endsWith(".jsx")
+            || normalizedName.endsWith(".ts")
+            || normalizedName.endsWith(".tsx")
+            || normalizedName.endsWith(".json")
+            || normalizedName.endsWith(".md")
+            || normalizedName.endsWith(".sql")
+            || normalizedName.endsWith(".html")
+            || normalizedName.endsWith(".css")
+            || normalizedName.endsWith(".scss")
+            || normalizedName.endsWith(".less")
+            || normalizedName.endsWith(".xml")
+            || normalizedName.endsWith(".yml")
+            || normalizedName.endsWith(".yaml")
+            || normalizedName.endsWith(".properties");
     }
 
     private List<String> extractCopilotRetrievalTokens(String message) {
@@ -2148,10 +2582,6 @@ public class ApiSpringController {
         return false;
     }
 
-    private String normalizeCopilotResponseMode(Object rawMode) {
-        return normalizeCopilotResponseMode(rawMode, null);
-    }
-
     private String normalizeCopilotResponseMode(Object rawMode, String message) {
         String mode = String.valueOf(rawMode == null ? "" : rawMode).trim().toLowerCase();
         if ("edit".equals(mode)) {
@@ -2259,6 +2689,8 @@ public class ApiSpringController {
             next.put("name", name.isEmpty() ? "attachment" : name);
             next.put("mimeType", mimeType);
             next.put("summary", summary);
+            next.put("contextRole", String.valueOf(rawMap.get("contextRole") == null ? "" : rawMap.get("contextRole")).trim());
+            next.put("authoritative", Boolean.parseBoolean(String.valueOf(rawMap.get("authoritative") == null ? "false" : rawMap.get("authoritative"))));
             next.put("size", size);
 
             if ("image".equals(kind)) {
@@ -2592,6 +3024,11 @@ public class ApiSpringController {
                 || text.contains("userbymodelbyday")
                 || text.contains("per 86400s")
                 || text.contains("429")
+                || text.contains("413")
+                || text.contains("payload too large")
+                || text.contains("tokens_limit_reached")
+                || text.contains("request body too large")
+                || text.contains("max size: 8000 tokens")
                 || text.contains("tat ca github models deu that bai")
                 || text.contains("tất cả github models đều thất bại");
     }

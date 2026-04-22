@@ -26,6 +26,8 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -582,6 +584,18 @@ public class GitHubModelsService {
 
   private final RestTemplate restTemplate = new RestTemplate();
   private final ObjectMapper objectMapper = new ObjectMapper();
+  private volatile WebClient webClient;
+  
+  private WebClient getWebClient() {
+    if (webClient == null) {
+      synchronized (this) {
+        if (webClient == null) {
+          this.webClient = WebClient.builder().build();
+        }
+      }
+    }
+    return webClient;
+  }
 
   @Value("${github.models.enabled:true}")
   private boolean enabled;
@@ -669,6 +683,9 @@ public class GitHubModelsService {
 
   @Value("${github.models.chat-stream.direct-max-chars:120000}")
   private int chatStreamDirectMaxChars;
+
+  @Value("${github.models.chat-stream.input-token-soft-limit:6800}")
+  private int chatStreamInputTokenSoftLimit;
 
   @Value("${github.models.chat-stream.emit-chunk-chars:2400}")
   private int chatStreamEmitChunkChars;
@@ -791,52 +808,63 @@ public class GitHubModelsService {
 
     try {
       String flattenedPrompt = flattenChatMessages(messages);
-      if (!flattenedPrompt.isBlank() && flattenedPrompt.length() > Math.max(20000, chatStreamDirectMaxChars)) {
+      int streamingDirectSafeChars = Math.max(8000, Math.min(chatStreamDirectMaxChars, requestMaxChars - 1000));
+      int estimatedInputTokens = estimateTokens(flattenedPrompt, Math.max(128, Math.min(1024, maxOutputTokens)));
+      boolean shouldChunkFallback = !flattenedPrompt.isBlank()
+          && (flattenedPrompt.length() > streamingDirectSafeChars
+              || estimatedInputTokens > Math.max(3000, chatStreamInputTokenSoftLimit));
+
+      if (shouldChunkFallback) {
         emitProgress(progressListener, progressPayload(
             "preparing",
             "Ngữ cảnh quá lớn, chuyển sang chế độ chunk để giữ đầy đủ nội dung",
             0,
             1,
-            Map.of("inputChars", flattenedPrompt.length(), "mode", "streaming_chunked_fallback")));
+            Map.of(
+                "inputChars", flattenedPrompt.length(),
+                "estimatedInputTokens", estimatedInputTokens,
+                "directCharsLimit", streamingDirectSafeChars,
+                "inputTokenSoftLimit", Math.max(3000, chatStreamInputTokenSoftLimit),
+                "mode", "streaming_chunked_fallback")));
 
         String chunkedResult = generateContent(flattenedPrompt, progressListener);
+        if (isErrorResponseJson(chunkedResult)) {
+          return chunkedResult;
+        }
         String finalText = extractResultTextFromWrappedJson(chunkedResult);
         if (finalText == null || finalText.isBlank()) {
           finalText = chunkedResult;
         }
         emitStreamingChunks(finalText, progressListener);
         emitProgress(progressListener, progressPayload("complete", "Chat hoàn tất", 1, 1,
-            Map.of("mode", "streaming_chunked_fallback", "inputChars", flattenedPrompt.length())));
-        return createSuccessJson(finalText, "streaming_chunked_fallback", Map.of("inputChars", flattenedPrompt.length()));
+            Map.of(
+                "mode", "streaming_chunked_fallback",
+                "inputChars", flattenedPrompt.length(),
+                "estimatedInputTokens", estimatedInputTokens)));
+        return createSuccessJson(finalText, "streaming_chunked_fallback", Map.of(
+            "inputChars", flattenedPrompt.length(),
+            "estimatedInputTokens", estimatedInputTokens,
+            "directCharsLimit", streamingDirectSafeChars,
+            "inputTokenSoftLimit", Math.max(3000, chatStreamInputTokenSoftLimit)));
       }
 
       StringBuilder fullResponse = new StringBuilder();
 
-      emitProgress(progressListener, progressPayload("streaming", "Bắt đầu chat với Copilot", 0, 1, null));
+      emitProgress(progressListener, progressPayload("streaming", "Bắt đầu chat với GitHub Models", 0, 1, null));
       
-      // Build request
+      // Build request payload
       Map<String, Object> body = new HashMap<>();
       body.put("model", model);
       body.put("messages", messages);
       body.put("temperature", 0.7);
       body.put("top_p", 0.95);
       body.put("max_tokens", maxOutputTokens);
-      body.put("stream", true); // Enable streaming
+      body.put("stream", true); // Enable true streaming
 
-      HttpHeaders headers = new HttpHeaders();
-      headers.setContentType(MediaType.APPLICATION_JSON);
-      headers.setBearerAuth(token.trim());
-
-      HttpEntity<Map<String, Object>> request = new HttpEntity<>(body, headers);
+      // Use WebClient for reactive streaming (vs blocking RestTemplate)
+      String streamedResponse = streamChatCompletionWithWebClient(body, progressListener);
       
-      // Make streaming call
-      String rawResponse = callStreamingChatCompletion(request, progressListener);
-      
-      // Parse response into full text
-      String content = extractContent(rawResponse);
-      if (content != null && !content.isEmpty()) {
-        fullResponse.append(content);
-      }
+      fullResponse.append(streamedResponse);
       
       emitProgress(progressListener, progressPayload("complete", "Chat hoàn tất", 1, 1, 
         Map.of("chunk", fullResponse.toString())));
@@ -845,9 +873,35 @@ public class GitHubModelsService {
       
     } catch (Exception ex) {
       log.error("Chat streaming failed", ex);
-      emitProgress(progressListener, progressPayload("error", "Chat lỗi: " + ex.getMessage(), 0, 1, null));
+      if (isFallbackEligibleStreamingFailure(ex)) {
+        emitProgress(progressListener, progressPayload(
+            "github_models_failed",
+            "GitHub Models tạm không xử lý được, đang thử provider fallback",
+            0,
+            1,
+            Map.of("error", String.valueOf(ex.getMessage()))));
+      } else {
+        emitProgress(progressListener, progressPayload("error", "Chat lỗi: " + ex.getMessage(), 0, 1, null));
+      }
       return createErrorJson("Chat streaming lỗi: " + ex.getMessage(), "CHAT_STREAMING_ERROR");
     }
+  }
+
+  private boolean isFallbackEligibleStreamingFailure(Exception ex) {
+    if (ex == null) {
+      return false;
+    }
+    String text = String.valueOf(ex.getMessage() == null ? "" : ex.getMessage()).toLowerCase();
+    return text.contains("payload too large")
+        || text.contains("tokens_limit_reached")
+        || text.contains("request body too large")
+        || text.contains("max size")
+        || text.contains("tất cả github models đều thất bại")
+        || text.contains("tat ca github models deu that bai")
+        || text.contains("rate limit")
+        || text.contains("quota")
+        || text.contains("429")
+        || text.contains("413");
   }
 
   @SuppressWarnings("unchecked")
@@ -868,6 +922,27 @@ public class GitHubModelsService {
       return objectMapper.writeValueAsString(result);
     } catch (Exception ex) {
       return raw;
+    }
+  }
+
+  @SuppressWarnings("unchecked")
+  private boolean isErrorResponseJson(String raw) {
+    if (raw == null || raw.isBlank()) {
+      return false;
+    }
+    try {
+      Map<String, Object> wrapper = objectMapper.readValue(raw, Map.class);
+      Object success = wrapper.get("success");
+      if (success instanceof Boolean) {
+        return !((Boolean) success);
+      }
+      Object error = wrapper.get("error");
+      if (error instanceof Boolean) {
+        return (Boolean) error;
+      }
+      return false;
+    } catch (Exception ex) {
+      return false;
     }
   }
 
@@ -1001,6 +1076,80 @@ public class GitHubModelsService {
       log.error("Streaming chat completion failed", ex);
       throw new IllegalStateException("Streaming chat lỗi: " + ex.getMessage());
     }
+  }
+
+  /**
+   * Stream chat completion using WebClient (reactive, non-blocking).
+   * Endpoint: https://models.inference.ai.azure.com/chat/completions
+   * Supports gpt-4o, gpt-4.1, gpt-4o-mini models with stream=true.
+   */
+  private String streamChatCompletionWithWebClient(Map<String, Object> body, ProgressListener progressListener) {
+    StringBuilder accumulated = new StringBuilder();
+    List<String> candidateModels = resolveCandidateModels();
+    String endpoint = "https://models.inference.ai.azure.com/chat/completions";
+    
+    for (String candidateModel : candidateModels) {
+      try {
+        body.put("model", candidateModel);
+        
+        emitProgress(progressListener, progressPayload("streaming", "Đang kết nối tới " + candidateModel, 0, 1, null));
+        
+        // Blocking collect all streamed chunks (WebClient will handle stream internally)
+        getWebClient().post()
+            .uri(endpoint)
+            .contentType(MediaType.APPLICATION_JSON)
+            .accept(MediaType.TEXT_EVENT_STREAM)
+            .header("Authorization", "Bearer " + token.trim())
+            .header("User-Agent", "java-github-models/1.0")
+            .bodyValue(body)
+            .retrieve()
+            .bodyToFlux(String.class)
+            .doOnNext(chunk -> {
+              // Parse each SSE chunk in real-time
+              String trimmed = chunk.trim();
+              if (trimmed.startsWith("data:")) {
+                String jsonLine = trimmed.substring(5).trim();
+                if (!jsonLine.isEmpty() && !jsonLine.equals("[DONE]")) {
+                  try {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> parsed = objectMapper.readValue(jsonLine, Map.class);
+                    @SuppressWarnings("unchecked")
+                    List<Map<String, Object>> choices = (List<Map<String, Object>>) parsed.get("choices");
+                    if (choices != null && !choices.isEmpty()) {
+                      @SuppressWarnings("unchecked")
+                      Map<String, Object> delta = (Map<String, Object>) choices.get(0).get("delta");
+                      if (delta != null && delta.containsKey("content")) {
+                        String content = (String) delta.get("content");
+                        if (content != null && !content.isEmpty()) {
+                          accumulated.append(content);
+                          // Emit each chunk to progress listener for real-time UI update
+                          emitProgress(progressListener, progressPayload("streaming", "Nhận dữ liệu", 0, 1,
+                            Map.of("chunk", content)));
+                        }
+                      }
+                    }
+                  } catch (Exception parseEx) {
+                    log.debug("Failed to parse SSE chunk: {}", parseEx.getMessage());
+                  }
+                }
+              }
+            })
+            .doOnError(ex -> log.warn("Stream error: {}", ex.getMessage()))
+            .blockLast(); // Block until stream completes, return last element (null for empty stream)
+        
+        if (accumulated.length() > 0) {
+          log.info("Stream completed: {} chars, model={}", accumulated.length(), candidateModel);
+          return accumulated.toString();
+        }
+        
+      } catch (Exception ex) {
+        log.warn("WebClient streaming failed for model {}: {}", candidateModel, ex.getMessage());
+        accumulated.setLength(0); // Reset for next attempt
+        continue;
+      }
+    }
+    
+    throw new IllegalStateException("Tất cả GitHub models đều thất bại (stream mode)");
   }
 
   private String generateDirectContent(String prompt, ProgressListener progressListener) {
