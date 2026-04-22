@@ -60,10 +60,16 @@ import java.util.concurrent.atomic.AtomicReference;
 public class ApiSpringController {
 
     private static final Logger logger = LoggerFactory.getLogger(ApiSpringController.class);
-    private static final int COPILOT_CURRENT_CODE_MAX_CHARS = 500000;
-    private static final int COPILOT_CURRENT_CODE_HEAD_CHARS = 180000;
-    private static final int COPILOT_CURRENT_CODE_TAIL_CHARS = 180000;
-    private static final int COPILOT_CURRENT_CODE_FOCUS_WINDOW_CHARS = 120000;
+    private static final int COPILOT_CURRENT_CODE_MAX_CHARS = 45000;
+    private static final int COPILOT_CURRENT_CODE_HEAD_CHARS = 12000;
+    private static final int COPILOT_CURRENT_CODE_TAIL_CHARS = 12000;
+    private static final int COPILOT_CURRENT_CODE_FOCUS_WINDOW_CHARS = 24000;
+    private static final int COPILOT_CURRENT_CODE_CONTEXT_HARD_CAP_CHARS = 60000;
+    private static final int COPILOT_MENU_CODE_MAX_CHARS = 220000;
+    private static final int COPILOT_MENU_CODE_HEAD_CHARS = 70000;
+    private static final int COPILOT_MENU_CODE_TAIL_CHARS = 70000;
+    private static final int COPILOT_MENU_CODE_FOCUS_WINDOW_CHARS = 90000;
+    private static final int COPILOT_MENU_CODE_CONTEXT_HARD_CAP_CHARS = 240000;
     private static final int COPILOT_ATTACHMENT_TEXT_MAX_CHARS = 800000;
     private static final int COPILOT_CONTINUITY_MEMORY_MAX_CHARS = 120000;
     private static final int COPILOT_DEBUG_MARKDOWN_MAX_CHARS = 24000;
@@ -1351,6 +1357,9 @@ public class ApiSpringController {
             sb.append("Focus on JSON schema correctness, parent/child integrity, field consistency and trigger safety.\n");
             sb.append("Do not output unrelated source code. Keep structure stable unless user requests a structural change.\n");
             sb.append("Use attached legacy JSON, text notes and UI screenshots as authoritative context when relevant.\n\n");
+            sb.append("For menu_json edits, return complete and production-ready JSON result.\n");
+            sb.append("Do not return shortened placeholders like '...' or 'same as above'.\n");
+            sb.append("Preserve unrelated nodes and properties unless the user explicitly asks to remove or refactor them.\n\n");
         } else {
             sb.append("You are a coding assistant inside a CodeMirror editor.\n");
             sb.append("Respond concisely with practical code suggestions and explanations.\n");
@@ -1394,7 +1403,7 @@ public class ApiSpringController {
         }
         
         if (!currentCode.trim().isEmpty()) {
-            String contextualCode = buildCopilotCurrentCodeContext(currentCode, message);
+            String contextualCode = buildCopilotCurrentCodeContext(currentCode, message, normalizedContext);
             sb.append("Current code (").append(language).append("):\n");
             sb.append("```").append(language).append("\n");
             sb.append(contextualCode).append("\n");
@@ -1475,17 +1484,25 @@ public class ApiSpringController {
         return text.substring(text.length() - COPILOT_CONTINUITY_MEMORY_MAX_CHARS);
     }
 
-    private String buildCopilotCurrentCodeContext(String currentCode, String message) {
+    private String buildCopilotCurrentCodeContext(String currentCode, String message, String contextType) {
         String code = currentCode == null ? "" : currentCode;
-        if (code.length() <= COPILOT_CURRENT_CODE_MAX_CHARS) {
-            return code;
+        boolean isMenuContext = "menu_json".equalsIgnoreCase(String.valueOf(contextType == null ? "" : contextType).trim());
+
+        int maxChars = isMenuContext ? COPILOT_MENU_CODE_MAX_CHARS : COPILOT_CURRENT_CODE_MAX_CHARS;
+        int headChars = isMenuContext ? COPILOT_MENU_CODE_HEAD_CHARS : COPILOT_CURRENT_CODE_HEAD_CHARS;
+        int tailChars = isMenuContext ? COPILOT_MENU_CODE_TAIL_CHARS : COPILOT_CURRENT_CODE_TAIL_CHARS;
+        int focusWindowChars = isMenuContext ? COPILOT_MENU_CODE_FOCUS_WINDOW_CHARS : COPILOT_CURRENT_CODE_FOCUS_WINDOW_CHARS;
+        int hardCapChars = isMenuContext ? COPILOT_MENU_CODE_CONTEXT_HARD_CAP_CHARS : COPILOT_CURRENT_CODE_CONTEXT_HARD_CAP_CHARS;
+
+        if (code.length() <= maxChars) {
+            return trimCopilotCodeContext(code, hardCapChars);
         }
 
-        int safeHead = Math.max(1000, Math.min(COPILOT_CURRENT_CODE_HEAD_CHARS, code.length()));
-        int safeTail = Math.max(1000, Math.min(COPILOT_CURRENT_CODE_TAIL_CHARS, Math.max(0, code.length() - safeHead)));
+        int safeHead = Math.max(1000, Math.min(headChars, code.length()));
+        int safeTail = Math.max(1000, Math.min(tailChars, Math.max(0, code.length() - safeHead)));
         String head = code.substring(0, safeHead);
         String tail = code.substring(Math.max(0, code.length() - safeTail));
-        String focus = buildCopilotFocusExcerpt(code, message);
+        String focus = buildCopilotFocusExcerpt(code, message, focusWindowChars);
 
         StringBuilder sb = new StringBuilder();
         sb.append("/* Code too large: ").append(code.length())
@@ -1498,10 +1515,28 @@ public class ApiSpringController {
         }
         sb.append("/* ===== TAIL EXCERPT ===== */\n");
         sb.append(tail);
-        return sb.toString();
+        return trimCopilotCodeContext(sb.toString(), hardCapChars);
     }
 
-    private String buildCopilotFocusExcerpt(String code, String message) {
+    private String trimCopilotCodeContext(String context, int hardCapChars) {
+        String text = String.valueOf(context == null ? "" : context);
+        int safeHardCap = Math.max(12000, hardCapChars);
+        if (text.length() <= safeHardCap) {
+            return text;
+        }
+
+        int keepHead = Math.max(4000, (int) Math.floor(safeHardCap * 0.7));
+        int keepTail = Math.max(2000, safeHardCap - keepHead - 32);
+        if (keepHead + keepTail + 32 > safeHardCap) {
+            keepTail = Math.max(1200, safeHardCap - keepHead - 32);
+        }
+
+        String head = text.substring(0, Math.min(keepHead, text.length()));
+        String tail = text.substring(Math.max(0, text.length() - keepTail));
+        return head + "\n...[TRUNCATED_FOR_COPILOT_CONTEXT]...\n" + tail;
+    }
+
+    private String buildCopilotFocusExcerpt(String code, String message, int focusWindowChars) {
         if (message == null || message.isBlank() || code == null || code.isBlank()) {
             return "";
         }
@@ -1542,9 +1577,10 @@ public class ApiSpringController {
             if (idx < 0) {
                 continue;
             }
-            int half = Math.max(1000, COPILOT_CURRENT_CODE_FOCUS_WINDOW_CHARS / 2);
+            int safeWindow = Math.max(4000, focusWindowChars);
+            int half = Math.max(1000, safeWindow / 2);
             int start = Math.max(0, idx - half);
-            int end = Math.min(code.length(), start + COPILOT_CURRENT_CODE_FOCUS_WINDOW_CHARS);
+            int end = Math.min(code.length(), start + safeWindow);
             return code.substring(start, end);
         }
 
@@ -1867,9 +1903,6 @@ public class ApiSpringController {
 
         boolean disableGeminiFallback = (params != null && Boolean.TRUE.equals(params.get("disableGeminiFallback")))
                 || "true".equalsIgnoreCase(String.valueOf(params != null ? params.get("disableGeminiFallback") : null));
-        if (isMenuDesignTask) {
-            disableGeminiFallback = true;
-        }
         if (disableFallbackForCoding && isCodingTask) {
             disableGeminiFallback = true;
         }
@@ -1880,7 +1913,7 @@ public class ApiSpringController {
         if (forceGithub) {
             if (params != null) {
                 params.put("_providerRoutingDecision", isMenuDesignTask
-                    ? "forced_github_menu_design_no_gemini_fallback"
+                    ? "forced_github_menu_design_with_gemini_fallback"
                     : (isCodingTask && (preferGithubForCoding || forceCopilotForCoding)
                         ? "forced_copilot_for_coding"
                         : "forced_github_by_preference"));

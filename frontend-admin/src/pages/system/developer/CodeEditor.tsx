@@ -11,7 +11,6 @@ import {
 	HistoryOutlined,
 	PushpinOutlined,
 	PushpinFilled,
-	MessageOutlined,
 	MenuFoldOutlined,
 	MenuUnfoldOutlined,
 } from "@ant-design/icons";
@@ -1111,18 +1110,6 @@ export default function CodeEditor() {
 								</Button>
 								<Button icon={<SettingOutlined />} onClick={() => setHotkeyModalOpen(true)}>
 									{t("system.developer.hotkeys")}
-								</Button>
-								<Button
-									icon={<MessageOutlined />}
-									onClick={() => {
-										message.info(devUiText(
-											"Dùng nút Trợ lý AI ngay trong khung CodeMirror để chat theo đúng ngữ cảnh editor.",
-											"Use the AI Assistant button inside CodeMirror to chat with the current editor context.",
-											"请使用 CodeMirror 内的 AI 助手按钮，根据当前编辑器上下文聊天。",
-										));
-									}}
-								>
-									{devUiText("Trợ lý AI trong editor", "AI Assistant in editor", "编辑器内 AI 助手")}
 								</Button>
 								<Button icon={<SaveOutlined />} onClick={handleSaveCode} type="primary">
 									{t("system.developer.command.save")}
