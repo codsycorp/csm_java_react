@@ -924,7 +924,52 @@ public class ApiSpringController {
             };
 
             // Call GitHub Models with streaming
-            gitHubModelsService.chatWithStreamingMessages(messages, streamListener);
+            String githubRaw = gitHubModelsService.chatWithStreamingMessages(messages, streamListener);
+
+            if (fullResponse.length() == 0) {
+                String extractedFromGithub = extractAiResultText(githubRaw);
+                if (!extractedFromGithub.isBlank()) {
+                    fullResponse.append(extractedFromGithub);
+                    emitTextAsCopilotChunks(appId, extractedFromGithub, responseMode);
+                }
+            }
+
+            if (fullResponse.length() == 0 && shouldFallbackToGemini(githubRaw)) {
+                logger.warn("Copilot stream: GitHub Models quota/rate-limited. Falling back to AIProviderFactory.");
+                emitCopilotChatChunk(appId, Map.of(
+                    "stage", "gemini_fallback",
+                    "message", "GitHub Models hết quota, đang chuyển sang Gemini",
+                    "responseMode", responseMode,
+                    "current", 0,
+                    "total", 1,
+                    "percent", 0));
+
+                String fallbackPrompt = buildCopilotChatPromptText(
+                    message,
+                    currentCode,
+                    language,
+                    contextType,
+                    responseMode,
+                    attachments,
+                    continuityMemory,
+                    pName,
+                    pType,
+                    continuityScopeKey,
+                    pendingQuestions);
+                String fallbackRaw = this.aiProviderFactory.generateContent(fallbackPrompt);
+                String fallbackText = extractAiResultText(fallbackRaw);
+                if (!fallbackText.isBlank()) {
+                    fullResponse.append(fallbackText);
+                    emitTextAsCopilotChunks(appId, fallbackText, responseMode);
+                }
+            }
+
+            if (fullResponse.length() == 0) {
+                String errText = shouldFallbackToGemini(githubRaw)
+                    ? "GitHub Models và provider fallback đều không trả về nội dung"
+                    : "AI không trả về nội dung";
+                throw new IllegalStateException(errText);
+            }
             
             // Emit completion event
             Map<String, Object> completion = new HashMap<>();
@@ -1469,7 +1514,7 @@ public class ApiSpringController {
         Set<String> stopWords = Set.of(
             "code", "file", "line", "help", "please", "bug", "fix", "error",
             "menu", "json", "java", "javascript", "typescript", "react", "component",
-            "toi", "ban", "giup", "minh", "sua", "code", "dong", "file", "loi"
+            "toi", "ban", "giup", "minh", "sua", "dong", "loi"
         );
 
         String[] rawTokens = normalizedMessage.split("\\s+");
@@ -1925,6 +1970,79 @@ public class ApiSpringController {
                 || msg.contains("per 86400s")
                 || msg.contains("userbymodelbyday")
                 || msg.contains("rate limit exceeded");
+    }
+
+    private String extractAiResultText(String rawContent) {
+        if (rawContent == null || rawContent.trim().isEmpty()) {
+            return "";
+        }
+
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> parsed = objectMapper.readValue(rawContent, Map.class);
+
+            Object topLevelSuccess = parsed.get("success");
+            if (topLevelSuccess instanceof Boolean && !((Boolean) topLevelSuccess)) {
+                return "";
+            }
+            Object topLevelError = parsed.get("error");
+            if (topLevelError instanceof Boolean && ((Boolean) topLevelError)) {
+                return "";
+            }
+
+            Object result = parsed.get("result");
+            if (result instanceof String) {
+                return String.valueOf(result).trim();
+            }
+            if (result != null) {
+                try {
+                    return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result).trim();
+                } catch (Exception ignored) {
+                    return String.valueOf(result).trim();
+                }
+            }
+
+            Object content = parsed.get("content");
+            if (content instanceof String) {
+                return String.valueOf(content).trim();
+            }
+            if (content != null) {
+                try {
+                    return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(content).trim();
+                } catch (Exception ignored) {
+                    return String.valueOf(content).trim();
+                }
+            }
+        } catch (Exception ignored) {
+            return rawContent.trim();
+        }
+
+        return "";
+    }
+
+    private void emitTextAsCopilotChunks(String appId, String text, String responseMode) {
+        String source = text == null ? "" : text;
+        if (source.isBlank()) {
+            return;
+        }
+
+        int safeChunk = 2400;
+        int total = source.length();
+        int sent = 0;
+        while (sent < total) {
+            int end = Math.min(total, sent + safeChunk);
+            String chunk = source.substring(sent, end);
+            Map<String, Object> payload = new HashMap<>();
+            payload.put("stage", "streaming");
+            payload.put("message", "Nhận dữ liệu");
+            payload.put("chunk", chunk);
+            payload.put("responseMode", responseMode);
+            payload.put("current", end);
+            payload.put("total", total);
+            payload.put("percent", Math.max(0, Math.min(100, (int) Math.round((end * 100.0) / Math.max(1, total)))));
+            emitCopilotChatChunk(appId, payload);
+            sent = end;
+        }
     }
 
     private void populateAiResponseFromRawContent(StandardResponse response, String rawContent) {
