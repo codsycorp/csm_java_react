@@ -85,6 +85,8 @@ const STREAM_UI_FLUSH_MS = 48;
 const STREAM_CODEBLOCK_PARSE_MS = 240;
 const AUTO_APPLY_PREF_KEY = "copilot.autoApply";
 const MAX_CHAT_INPUT_CHARS = 20000;
+const MAX_STRUCTURED_TEXT_EDITS = 160;
+const MAX_STRUCTURED_REPLACEMENT_CHARS = 800000;
 const TEXT_FILE_EXTENSIONS = new Set([
 	"txt", "md", "markdown", "json", "js", "ts", "tsx", "jsx", "java", "sql", "css", "scss", "less",
 	"html", "xml", "yml", "yaml", "csv", "py", "properties", "env", "log", "ini",
@@ -168,20 +170,54 @@ function saveAutoApplyPreference(preferenceKey: string | undefined, value: boole
 function extractMenuDraftForEditor(raw: unknown): string {
 	const text = String(raw || "").trim();
 	if (!text) return "";
+
+ const parseMenuPayload = (candidate: string): string => {
+	const value = String(candidate || "").trim();
+	if (!value) return "";
 	try {
-		const parsed = JSON.parse(text);
-		if (Array.isArray(parsed)) {
-			return JSON.stringify({ menu: parsed }, null, 2);
+	 const parsed = JSON.parse(value);
+	 if (Array.isArray(parsed)) {
+		return JSON.stringify({ menu: parsed }, null, 2);
+	 }
+	 if (parsed && typeof parsed === "object") {
+		const obj = parsed as Record<string, unknown>;
+		if (Array.isArray(obj.menu)) {
+		 return JSON.stringify({ ...obj, menu: obj.menu }, null, 2);
 		}
-		if (parsed && typeof parsed === "object") {
-			const obj = parsed as Record<string, unknown>;
-			if (Array.isArray(obj.menu)) {
-				return JSON.stringify({ ...obj, menu: obj.menu }, null, 2);
-			}
-			if (obj.data && typeof obj.data === "object" && Array.isArray((obj.data as any).menu)) {
-				return JSON.stringify({ menu: (obj.data as any).menu }, null, 2);
-			}
+		if (obj.data && typeof obj.data === "object" && Array.isArray((obj.data as any).menu)) {
+		 return JSON.stringify({ menu: (obj.data as any).menu }, null, 2);
 		}
+	 }
+	} catch {
+	 return "";
+	}
+	return "";
+ };
+
+ const direct = parseMenuPayload(text);
+ if (direct) return direct;
+
+ const strippedFence = text
+	.replace(/^```(?:json)?\s*/i, "")
+	.replace(/\s*```$/i, "")
+	.trim();
+ const stripped = parseMenuPayload(strippedFence);
+ if (stripped) return stripped;
+
+ const fenceRegex = /```(?:json)?\s*([\s\S]*?)```/gi;
+ let match: RegExpExecArray | null;
+ while ((match = fenceRegex.exec(text)) !== null) {
+	const fromFence = parseMenuPayload(match[1]);
+	if (fromFence) return fromFence;
+ }
+
+	try {
+	// Fallback: locate the first JSON object in mixed text and attempt parse.
+	const start = text.indexOf("{");
+	const end = text.lastIndexOf("}");
+	if (start >= 0 && end > start) {
+	 return parseMenuPayload(text.slice(start, end + 1));
+	}
 	} catch {
 		return "";
 	}
@@ -207,6 +243,71 @@ function applyTextEditsToDraft(baseText: string, textEdits: any[]): string {
 		lines.splice(startLine - 1, endLine - startLine + 1, ...replacementLines);
 	}
 	return lines.join("\n");
+}
+
+function validateStructuredTextEdits(baseText: string, textEdits: any[]): { valid: boolean; reason?: string; edits: any[] } {
+	if (!Array.isArray(textEdits) || textEdits.length === 0) {
+		return { valid: false, reason: "missing_edits", edits: [] };
+	}
+	if (textEdits.length > MAX_STRUCTURED_TEXT_EDITS) {
+		return { valid: false, reason: "too_many_edits", edits: [] };
+	}
+
+	const baseLines = String(baseText || "").split("\n");
+	const maxLine = Math.max(1, baseLines.length + 1);
+	const normalized = textEdits.map((edit) => {
+		const startRaw = Number(edit?.startLine ?? edit?.range?.startLine ?? edit?.range?.start?.line ?? edit?.line ?? 1);
+		const endRaw = Number(edit?.endLine ?? edit?.range?.endLine ?? edit?.range?.end?.line ?? startRaw);
+		const startLine = Math.max(1, Number.isFinite(startRaw) ? Math.floor(startRaw) : 1);
+		const endLine = Math.max(startLine, Number.isFinite(endRaw) ? Math.floor(endRaw) : startLine);
+		const replacement = String(edit?.replacement ?? edit?.text ?? edit?.newText ?? "");
+		return {
+			...edit,
+			startLine,
+			endLine,
+			replacement,
+			action: String(edit?.action || "edit").trim().toLowerCase() || "edit",
+		};
+	});
+
+	normalized.sort((a, b) => (a.startLine - b.startLine) || (a.endLine - b.endLine));
+	let previousEnd = 0;
+	let replacementChars = 0;
+	for (const edit of normalized) {
+		if (edit.startLine < 1 || edit.endLine < edit.startLine) {
+			return { valid: false, reason: "invalid_line_range", edits: [] };
+		}
+		if (edit.startLine > maxLine || edit.endLine > maxLine) {
+			return { valid: false, reason: "line_out_of_range", edits: [] };
+		}
+		if (edit.startLine <= previousEnd) {
+			return { valid: false, reason: "overlapping_edits", edits: [] };
+		}
+		replacementChars += String(edit.replacement || "").length;
+		if (replacementChars > MAX_STRUCTURED_REPLACEMENT_CHARS) {
+			return { valid: false, reason: "replacement_too_large", edits: [] };
+		}
+		previousEnd = edit.endLine;
+	}
+
+	return { valid: true, edits: normalized };
+}
+
+function summarizeChecklistForConfirm(rawChecklist: any): string {
+	if (!rawChecklist) return "";
+	if (typeof rawChecklist === "string") return rawChecklist.trim();
+	if (typeof rawChecklist !== "object") return "";
+	const checklist = rawChecklist as Record<string, any>;
+	const goal = String(checklist.goal || checklist.muc_tieu || "").trim();
+	const scope = String(checklist.scope || checklist.pham_vi || "").trim();
+	const assumptions = Array.isArray(checklist.assumptions) ? checklist.assumptions.map((x) => String(x || "").trim()).filter(Boolean) : [];
+	const risks = Array.isArray(checklist.risks) ? checklist.risks.map((x) => String(x || "").trim()).filter(Boolean) : [];
+	const parts: string[] = [];
+	if (goal) parts.push(`Goal: ${goal}`);
+	if (scope) parts.push(`Scope: ${scope}`);
+	if (assumptions.length) parts.push(`Assumptions: ${assumptions.slice(0, 4).join("; ")}`);
+	if (risks.length) parts.push(`Risks: ${risks.slice(0, 4).join("; ")}`);
+	return parts.join("\n").trim();
 }
 
 function hasEditIntent(input: string): boolean {
@@ -720,6 +821,7 @@ export default function CopilotChat({
 		};
 
 		const handleCopilotComplete = (data: any) => {
+			appendStageEvent(data);
 			appendStageEvent({
 				stage: "completed",
 				message: uiText("Hoàn tất", "Completed", "已完成"),
@@ -727,18 +829,92 @@ export default function CopilotChat({
 				current: 1,
 				total: 1,
 			});
+			const completionTextEdits = Array.isArray(data?.textEdits) ? data.textEdits : [];
+			const requiresStructuredEdits = Boolean(data?.requiresStructuredEdits);
+			const structuredEditValid = Boolean(data?.structuredEditValid);
+			const checklistSummary = summarizeChecklistForConfirm(data?.understandingChecklist);
 			if (streamFlushTimerRef.current) {
 				clearTimeout(streamFlushTimerRef.current);
 				streamFlushTimerRef.current = null;
 			}
 			flushStreamingToUI(true);
 			const finalText = String(streamingMessageRef.current || "");
+			const fallbackMenuDraft = contextType === "menu_json"
+			 ? extractMenuDraftForEditor(String(data?.fullResponse || finalText || ""))
+			 : "";
 			setIsLoading(false);
 			if (realtimeApplyTimerRef.current) {
 				clearTimeout(realtimeApplyTimerRef.current);
 				realtimeApplyTimerRef.current = null;
 			}
-			applyRealtimeCodeFromText(finalText, true);
+
+			if (autoApplyEnabled && turnAllowAutoApplyRef.current && onCodeInsert && completionTextEdits.length > 0) {
+				const baseText = String(lastAppliedCodeRef.current || currentCode || "");
+				const validation = validateStructuredTextEdits(baseText, completionTextEdits);
+				if (!validation.valid) {
+					message.warning(uiText(
+						"Bản vá text_edits không hợp lệ nên chưa tự áp dụng.",
+						"Invalid text_edits patch, auto-apply was skipped.",
+						"text_edits 补丁无效，已跳过自动应用。",
+					));
+					if (fallbackMenuDraft) {
+					 onCodeInsert(fallbackMenuDraft);
+					 lastAppliedCodeRef.current = fallbackMenuDraft;
+					}
+				} else {
+					if (requiresStructuredEdits) {
+						if (!checklistSummary) {
+							message.warning(uiText(
+								"Thiếu checklist xác nhận nên chưa tự áp dụng.",
+								"Checklist confirmation is missing, auto-apply was skipped.",
+								"缺少确认清单，已跳过自动应用。",
+							));
+						} else {
+							const shouldApply = window.confirm(uiText(
+								`Xác nhận áp dụng chỉnh sửa theo dòng?\n\n${checklistSummary}`,
+								`Confirm apply line-based edits?\n\n${checklistSummary}`,
+								`确认按行应用修改？\n\n${checklistSummary}`,
+							));
+							if (shouldApply) {
+								const patchedText = applyTextEditsToDraft(baseText, validation.edits);
+								if (patchedText && patchedText !== lastAppliedCodeRef.current) {
+									onCodeInsert(patchedText);
+									lastAppliedCodeRef.current = patchedText;
+								}
+							} else {
+								message.info(uiText(
+									"Bạn đã hủy auto-apply cho turn này.",
+									"You cancelled auto-apply for this turn.",
+									"你已取消本轮自动应用。",
+								));
+							}
+						}
+					} else {
+						const patchedText = applyTextEditsToDraft(baseText, validation.edits);
+						if (patchedText && patchedText !== lastAppliedCodeRef.current) {
+							onCodeInsert(patchedText);
+							lastAppliedCodeRef.current = patchedText;
+						}
+					}
+				}
+			} else if (requiresStructuredEdits && !structuredEditValid) {
+				message.warning(uiText(
+					"AI chưa trả về text_edits hợp lệ nên chưa tự áp dụng vào editor.",
+					"AI did not return valid text_edits, so no auto-apply was performed.",
+					"AI 未返回有效 text_edits，未自动应用到编辑器。",
+				));
+				if (fallbackMenuDraft && onCodeInsert) {
+				 onCodeInsert(fallbackMenuDraft);
+				 lastAppliedCodeRef.current = fallbackMenuDraft;
+				}
+			} else {
+				const appliedFromCodeBlock = applyRealtimeCodeFromText(finalText, true);
+				if (!appliedFromCodeBlock && fallbackMenuDraft && onCodeInsert) {
+				 onCodeInsert(fallbackMenuDraft);
+				 lastAppliedCodeRef.current = fallbackMenuDraft;
+				}
+			}
+
 			pendingStreamChunkRef.current = "";
 			parsedCodeBlocksRef.current = [];
 			lastCodeBlockParseAtRef.current = 0;

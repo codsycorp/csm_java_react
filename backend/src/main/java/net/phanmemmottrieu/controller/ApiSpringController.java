@@ -42,6 +42,8 @@ import net.phanmemmottrieu.model.UrlSubmissionHistory;
 
 import java.io.IOException;
 import java.text.Normalizer;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -74,6 +76,11 @@ public class ApiSpringController {
     private static final int COPILOT_CONTINUITY_MEMORY_MAX_CHARS = 120000;
     private static final int COPILOT_DEBUG_MARKDOWN_MAX_CHARS = 24000;
     private static final int COPILOT_DEBUG_MESSAGES_JSON_MAX_CHARS = 18000;
+    private static final int COPILOT_DEBUG_RETRIEVAL_PREVIEW_MAX_CHARS = 6000;
+    private static final int COPILOT_CODE_GLOBAL_MAP_MAX_CHARS = 18000;
+    private static final int COPILOT_CODE_GLOBAL_SYMBOL_MAX_ITEMS = 60;
+    private static final int COPILOT_CODE_ANCHOR_MAX_ITEMS = 24;
+    private static final int COPILOT_CODE_ANCHOR_CHARS_PER_BLOCK = 24000;
     private final ObjectMapper objectMapper = new ObjectMapper(); // Dùng để parse JSON body
     private final RecordManager recordManager;
     private final InitHandler initHandler;
@@ -114,6 +121,36 @@ public class ApiSpringController {
 
     @Value("${ai.async.poll-min-ms:3000}")
     private long aiAsyncPollMinMs;
+
+    @Value("${copilot.attachment-retrieval.enabled:true}")
+    private boolean copilotAttachmentRetrievalEnabled;
+
+    @Value("${copilot.attachment-retrieval.max-attachments:6}")
+    private int copilotAttachmentRetrievalMaxAttachments;
+
+    @Value("${copilot.attachment-retrieval.max-snippets-per-file:3}")
+    private int copilotAttachmentRetrievalMaxSnippetsPerFile;
+
+    @Value("${copilot.attachment-retrieval.snippet-window-chars:2200}")
+    private int copilotAttachmentRetrievalSnippetWindowChars;
+
+    @Value("${copilot.attachment-retrieval.max-total-chars:36000}")
+    private int copilotAttachmentRetrievalMaxTotalChars;
+
+    @Value("${copilot.ask-before-edit.enabled:true}")
+    private boolean copilotAskBeforeEditEnabled;
+
+    @Value("${copilot.edit-structured.required:true}")
+    private boolean copilotStructuredEditRequired;
+
+    @Value("${copilot.edit-structured.max-text-edits:120}")
+    private int copilotStructuredEditMaxTextEdits;
+
+    @Value("${copilot.edit-structured.require-checklist:true}")
+    private boolean copilotStructuredEditRequireChecklist;
+
+    @Value("${copilot.edit-structured.max-replacement-chars:800000}")
+    private int copilotStructuredEditMaxReplacementChars;
 
     private final ExecutorService aiAsyncExecutor = Executors.newFixedThreadPool(2);
     private final ConcurrentHashMap<String, Map<String, Object>> aiAsyncJobs = new ConcurrentHashMap<>();
@@ -961,7 +998,8 @@ public class ApiSpringController {
                     pName,
                     pType,
                     continuityScopeKey,
-                    pendingQuestions);
+                    pendingQuestions,
+                    true);
                 String fallbackRaw = this.aiProviderFactory.generateContent(fallbackPrompt);
                 String fallbackText = extractAiResultText(fallbackRaw);
                 if (!fallbackText.isBlank()) {
@@ -976,12 +1014,81 @@ public class ApiSpringController {
                     : "AI không trả về nội dung";
                 throw new IllegalStateException(errText);
             }
+
+            StructuredCopilotEditResult structuredEdit = extractStructuredCopilotEdits(
+                fullResponse.toString(),
+                countLines(currentCode));
+            boolean editMode = "edit".equalsIgnoreCase(responseMode);
+            boolean requireStructured = editMode && copilotStructuredEditRequired;
+            boolean structuredValid = !requireStructured || structuredEdit.valid;
+            List<Map<String, Object>> completionTextEdits = new ArrayList<>(structuredEdit.textEdits);
+            String completionDraftText = "";
+
+            if (completionTextEdits.isEmpty() && editMode) {
+                String baseDraft = String.valueOf(lastDraftRef.get() == null ? "" : lastDraftRef.get());
+                String fallbackDraft = extractMenuDraftForCompletion(fullResponse.toString(), contextType);
+                if (!fallbackDraft.isBlank() && !fallbackDraft.equals(baseDraft)) {
+                    List<Map<String, Object>> generated = buildLineTextEdits(baseDraft, fallbackDraft);
+                    if (!generated.isEmpty()) {
+                        completionTextEdits = generated;
+                        completionDraftText = fallbackDraft;
+                        Map<String, Object> fallbackPatchPayload = new HashMap<>();
+                        fallbackPatchPayload.put("stage", "completion_fallback_patch");
+                        fallbackPatchPayload.put("message", "Da tao fallback line-edits tu JSON ket qua cuoi");
+                        fallbackPatchPayload.put("responseMode", responseMode);
+                        fallbackPatchPayload.put("status", "running");
+                        fallbackPatchPayload.put("textEdits", generated);
+                        fallbackPatchPayload.put("draftText", fallbackDraft);
+                        List<Map<String, Object>> fallbackRanges = convertTextEditsToLineRanges(generated);
+                        if (!fallbackRanges.isEmpty()) {
+                            fallbackPatchPayload.put("lineRanges", fallbackRanges);
+                            fallbackPatchPayload.put("changedRanges", fallbackRanges);
+                        }
+                        emitCopilotChatChunk(appId, fallbackPatchPayload);
+
+                        emitCopilotChatChunk(appId, Map.of(
+                            "stage", "completion_fallback_edits_generated",
+                            "message", "Da sinh text_edits fallback tu JSON ket qua cuoi de dong bo editor",
+                            "responseMode", responseMode,
+                            "status", "info"
+                        ));
+                    }
+                }
+            }
+
+            if (requireStructured && !structuredEdit.valid) {
+                emitCopilotChatChunk(appId, Map.of(
+                    "stage", "structured_edit_missing",
+                    "message", "Phản hồi chưa đúng định dạng text_edits để áp dụng chính xác theo dòng",
+                    "responseMode", responseMode,
+                    "status", "warning"
+                ));
+            }
             
             // Emit completion event
             Map<String, Object> completion = new HashMap<>();
             completion.put("stage", "complete");
             completion.put("fullResponse", fullResponse.toString());
             completion.put("responseMode", responseMode);
+            completion.put("requiresStructuredEdits", requireStructured);
+            completion.put("structuredEditValid", structuredValid);
+            if (structuredEdit.understandingChecklist != null) {
+                completion.put("understandingChecklist", structuredEdit.understandingChecklist);
+            }
+            if (structuredEdit.assistantMessage != null && !structuredEdit.assistantMessage.isBlank()) {
+                completion.put("assistantMessage", structuredEdit.assistantMessage);
+            }
+            if (!completionTextEdits.isEmpty()) {
+                completion.put("textEdits", completionTextEdits);
+                if (!completionDraftText.isBlank()) {
+                    completion.put("draftText", completionDraftText);
+                }
+                List<Map<String, Object>> ranges = convertTextEditsToLineRanges(completionTextEdits);
+                if (!ranges.isEmpty()) {
+                    completion.put("lineRanges", ranges);
+                    completion.put("changedRanges", ranges);
+                }
+            }
             completion.put("timestamp", System.currentTimeMillis());
             emitCopilotChatEvent(appId, "copilot_chat_complete", completion);
 
@@ -1067,6 +1174,7 @@ public class ApiSpringController {
             String continuityScopeKey,
             List<String> pendingQuestions,
             List<Map<String, Object>> messages) {
+        CopilotAttachmentRetrievalResult retrieval = buildCopilotRelevantAttachmentContextResult(message, attachments);
         Map<String, Object> debugMeta = new LinkedHashMap<>();
         String normalizedContextType = String.valueOf(contextType == null ? "" : contextType).trim().toLowerCase();
         int contextHardCap = "menu_json".equals(normalizedContextType)
@@ -1089,6 +1197,12 @@ public class ApiSpringController {
         debugMeta.put("imageAttachmentCount", countCopilotAttachmentsByKind(attachments, "image"));
         debugMeta.put("messagesSentToCopilot", messages == null ? 0 : messages.size());
         debugMeta.put("clientAttachmentSummary", buildCopilotAttachmentDebugSummary(attachments));
+        debugMeta.put("attachmentRetrievalEnabled", copilotAttachmentRetrievalEnabled);
+        debugMeta.put("attachmentRetrievalQueryTokens", retrieval.queryTokens);
+        debugMeta.put("attachmentRetrievalFilesUsed", retrieval.filesUsed);
+        debugMeta.put("attachmentRetrievalSnippetsUsed", retrieval.snippetsUsed);
+        debugMeta.put("attachmentRetrievalChars", retrieval.retrievedChars);
+        debugMeta.put("attachmentRetrievalSources", retrieval.sources);
 
         String messagesJson;
         try {
@@ -1108,6 +1222,14 @@ public class ApiSpringController {
         sb.append("```json\n");
         sb.append(trimForCopilotDebugDisplay(toPrettyJson(debugMeta), COPILOT_DEBUG_MARKDOWN_MAX_CHARS / 2));
         sb.append("\n```\n\n");
+
+        if (copilotAttachmentRetrievalEnabled && retrieval != null && !retrieval.context.isBlank()) {
+            sb.append("Attachment Retrieval Preview:\n");
+            sb.append("```text\n");
+            sb.append(trimForCopilotDebugDisplay(retrieval.context, COPILOT_DEBUG_RETRIEVAL_PREVIEW_MAX_CHARS));
+            sb.append("\n```\n\n");
+        }
+
         sb.append("Messages sent to Copilot:\n");
         sb.append("```json\n");
         sb.append(trimForCopilotDebugDisplay(messagesJson, COPILOT_DEBUG_MESSAGES_JSON_MAX_CHARS));
@@ -1360,7 +1482,8 @@ public class ApiSpringController {
             pName,
             pType,
             continuityScopeKey,
-            pendingQuestions);
+            pendingQuestions,
+            false);
         List<Map<String, Object>> imageParts = new ArrayList<>();
         for (Map<String, Object> attachment : attachments) {
             String kind = String.valueOf(attachment.getOrDefault("kind", "")).trim().toLowerCase();
@@ -1390,29 +1513,51 @@ public class ApiSpringController {
             String pName,
             Integer pType,
             String continuityScopeKey,
-            List<String> pendingQuestions) {
+            List<String> pendingQuestions,
+            boolean includeSystemHeader) {
         StringBuilder sb = new StringBuilder();
         String normalizedContext = String.valueOf(contextType == null ? "code" : contextType).trim().toLowerCase();
         String normalizedMode = normalizeCopilotResponseMode(responseMode, message);
-        if ("menu_json".equals(normalizedContext)) {
-            sb.append("You are an AI assistant for menu JSON design inside a CodeMirror editor.\n");
-            sb.append("Focus on JSON schema correctness, parent/child integrity, field consistency and trigger safety.\n");
-            sb.append("Do not output unrelated source code. Keep structure stable unless user requests a structural change.\n");
-            sb.append("Use attached legacy JSON, text notes and UI screenshots as authoritative context when relevant.\n\n");
-            sb.append("For menu_json edits, return complete and production-ready JSON result.\n");
-            sb.append("Do not return shortened placeholders like '...' or 'same as above'.\n");
-            sb.append("Preserve unrelated nodes and properties unless the user explicitly asks to remove or refactor them.\n\n");
-        } else {
-            sb.append("You are a coding assistant inside a CodeMirror editor.\n");
-            sb.append("Respond concisely with practical code suggestions and explanations.\n");
-            sb.append("Always preserve existing code unless explicitly asked to rewrite.\n");
-            sb.append("Use attached files and images as direct context for the request.\n\n");
-        }
+        if (includeSystemHeader) {
+            if ("menu_json".equals(normalizedContext)) {
+                sb.append("You are an AI assistant for menu JSON design inside a CodeMirror editor.\n");
+                sb.append("Focus on JSON schema correctness, parent/child integrity, field consistency and trigger safety.\n");
+                sb.append("Do not output unrelated source code. Keep structure stable unless user requests a structural change.\n");
+                sb.append("Use attached legacy JSON, text notes and UI screenshots as authoritative context when relevant.\n\n");
+                sb.append("For menu_json edits, return complete and production-ready JSON result.\n");
+                sb.append("Do not return shortened placeholders like '...' or 'same as above'.\n");
+                sb.append("Preserve unrelated nodes and properties unless the user explicitly asks to remove or refactor them.\n\n");
+            } else {
+                sb.append("You are a coding assistant inside a CodeMirror editor.\n");
+                sb.append("Respond concisely with practical code suggestions and explanations.\n");
+                sb.append("Always preserve existing code unless explicitly asked to rewrite.\n");
+                sb.append("Use attached files and images as direct context for the request.\n\n");
+            }
 
-        if ("analyze".equals(normalizedMode)) {
-            sb.append("Response mode: analyze_only. Return text analysis only, no direct replacement code or JSON output unless explicitly requested.\n\n");
-        } else {
-            sb.append("Response mode: edit_allowed. If user asks to modify, provide directly applicable code/JSON result.\n\n");
+            if ("analyze".equals(normalizedMode)) {
+                sb.append("Response mode: analyze_only. Return text analysis only, no direct replacement code or JSON output unless explicitly requested.\n\n");
+            } else {
+                sb.append("Response mode: edit_allowed. If user asks to modify, provide directly applicable code/JSON result.\n");
+                if (copilotAskBeforeEditEnabled) {
+                    sb.append("Before any patch/code output, include section 'UNDERSTANDING_CHECKLIST' with:\n");
+                    sb.append("- Goal in 1-2 lines\n");
+                    sb.append("- Exact scope (files/symbols/regions)\n");
+                    sb.append("- Assumptions and potential risks\n");
+                    sb.append("If critical requirements are ambiguous, ask clarifying questions first, then pause editing.\n\n");
+                } else {
+                    sb.append("\n");
+                }
+                if (copilotStructuredEditRequired) {
+                    sb.append("STRUCTURED_EDIT_OUTPUT (required for apply):\n");
+                    sb.append("Return JSON object only (no markdown fences) using this shape:\n");
+                    sb.append("{\n");
+                    sb.append("  \"understanding_checklist\": {\"goal\":\"...\",\"scope\":\"...\",\"assumptions\":[\"...\"],\"risks\":[\"...\"]},\n");
+                    sb.append("  \"text_edits\": [{\"startLine\":1,\"endLine\":1,\"replacement\":\"...\"}],\n");
+                    sb.append("  \"assistant_message\": \"optional short note\"\n");
+                    sb.append("}\n");
+                    sb.append("Rules: text_edits line numbers are 1-based and replacements must be directly applicable to current editor content.\n\n");
+                }
+            }
         }
 
         if ("code".equals(normalizedContext)) {
@@ -1445,7 +1590,7 @@ public class ApiSpringController {
         }
         
         if (!currentCode.trim().isEmpty()) {
-            String contextualCode = buildCopilotCurrentCodeContext(currentCode, message, normalizedContext);
+            String contextualCode = buildCopilotCurrentCodeContext(currentCode, message, normalizedContext, language);
             sb.append("Current code (").append(language).append("):\n");
             sb.append("```").append(language).append("\n");
             sb.append(contextualCode).append("\n");
@@ -1468,15 +1613,11 @@ public class ApiSpringController {
                     sb.append(" -> ").append(summary);
                 }
                 sb.append("\n");
-
-                String textContent = String.valueOf(attachment.getOrDefault("textContent", "")).trim();
-                if (!textContent.isEmpty()) {
-                    String truncated = textContent.length() > COPILOT_ATTACHMENT_TEXT_MAX_CHARS
-                        ? textContent.substring(0, COPILOT_ATTACHMENT_TEXT_MAX_CHARS) + "\n...[truncated]"
-                        : textContent;
-                    sb.append("Content of ").append(name).append(":\n");
-                    sb.append(truncated).append("\n\n");
-                }
+            }
+            CopilotAttachmentRetrievalResult retrieval = buildCopilotRelevantAttachmentContextResult(message, attachments);
+            if (!retrieval.context.isBlank()) {
+                sb.append("\nAuto-retrieved relevant excerpts from text attachments:\n");
+                sb.append(retrieval.context).append("\n");
             }
         }
 
@@ -1526,7 +1667,7 @@ public class ApiSpringController {
         return text.substring(text.length() - COPILOT_CONTINUITY_MEMORY_MAX_CHARS);
     }
 
-    private String buildCopilotCurrentCodeContext(String currentCode, String message, String contextType) {
+    private String buildCopilotCurrentCodeContext(String currentCode, String message, String contextType, String language) {
         String code = currentCode == null ? "" : currentCode;
         boolean isMenuContext = "menu_json".equalsIgnoreCase(String.valueOf(contextType == null ? "" : contextType).trim());
 
@@ -1545,10 +1686,15 @@ public class ApiSpringController {
         String head = code.substring(0, safeHead);
         String tail = code.substring(Math.max(0, code.length() - safeTail));
         String focus = buildCopilotFocusExcerpt(code, message, focusWindowChars);
+        String globalMap = buildCopilotGlobalCodeMap(code, language);
 
         StringBuilder sb = new StringBuilder();
         sb.append("/* Code too large: ").append(code.length())
-            .append(" chars. Showing HEAD + FOCUS + TAIL excerpts for better understanding. */\n");
+            .append(" chars. Showing GLOBAL MAP + HEAD + FOCUS + TAIL excerpts for better understanding. */\n");
+        if (!globalMap.isBlank()) {
+            sb.append("/* ===== GLOBAL FILE MAP (derived from full file) ===== */\n");
+            sb.append(globalMap).append("\n");
+        }
         sb.append("/* ===== HEAD EXCERPT ===== */\n");
         sb.append(head).append("\n");
         if (!focus.isEmpty()) {
@@ -1576,6 +1722,162 @@ public class ApiSpringController {
         String head = text.substring(0, Math.min(keepHead, text.length()));
         String tail = text.substring(Math.max(0, text.length() - keepTail));
         return head + "\n...[TRUNCATED_FOR_COPILOT_CONTEXT]...\n" + tail;
+    }
+
+    private String buildCopilotGlobalCodeMap(String code, String language) {
+        String source = String.valueOf(code == null ? "" : code);
+        if (source.isBlank()) {
+            return "";
+        }
+
+        int totalChars = source.length();
+        int totalLines = source.split("\\r?\\n", -1).length;
+        int nonEmptyLines = countNonEmptyLines(source);
+
+        List<String> symbolLines = extractCodeSymbolLines(source, language, COPILOT_CODE_GLOBAL_SYMBOL_MAX_ITEMS);
+        List<String> anchorLines = buildCodeAnchorLines(source, COPILOT_CODE_ANCHOR_CHARS_PER_BLOCK, COPILOT_CODE_ANCHOR_MAX_ITEMS);
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("language=").append(String.valueOf(language == null ? "" : language).trim())
+            .append(", chars=").append(totalChars)
+            .append(", lines=").append(totalLines)
+            .append(", nonEmptyLines=").append(nonEmptyLines)
+            .append("\n");
+
+        if (!symbolLines.isEmpty()) {
+            sb.append("Top symbols (from full file scan):\n");
+            for (String item : symbolLines) {
+                sb.append("- ").append(item).append("\n");
+            }
+        }
+
+        if (!anchorLines.isEmpty()) {
+            sb.append("Coverage anchors (use these to reference deep regions):\n");
+            for (String item : anchorLines) {
+                sb.append("- ").append(item).append("\n");
+            }
+        }
+
+        return trimCopilotCodeContext(sb.toString(), COPILOT_CODE_GLOBAL_MAP_MAX_CHARS);
+    }
+
+    private int countNonEmptyLines(String text) {
+        if (text == null || text.isBlank()) {
+            return 0;
+        }
+        int count = 0;
+        String[] lines = text.split("\\r?\\n", -1);
+        for (String line : lines) {
+            if (line != null && !line.trim().isEmpty()) {
+                count += 1;
+            }
+        }
+        return count;
+    }
+
+    private List<String> extractCodeSymbolLines(String code, String language, int maxItems) {
+        List<String> out = new ArrayList<>();
+        if (code == null || code.isBlank() || maxItems <= 0) {
+            return out;
+        }
+
+        List<Pattern> patterns = List.of(
+            Pattern.compile("(?m)^\\s*(?:export\\s+)?(?:async\\s+)?function\\s+([A-Za-z_$][\\w$]*)\\s*\\("),
+            Pattern.compile("(?m)^\\s*(?:export\\s+)?class\\s+([A-Za-z_$][\\w$]*)\\b"),
+            Pattern.compile("(?m)^\\s*(?:export\\s+)?(?:const|let|var)\\s+([A-Za-z_$][\\w$]*)\\s*=\\s*(?:async\\s*)?\\("),
+            Pattern.compile("(?m)^\\s*(?:public|private|protected)?\\s*(?:static\\s+)?(?:final\\s+)?[A-Za-z0-9_<>\\[\\], ?]+\\s+([a-zA-Z_$][\\w$]*)\\s*\\([^;{}]*\\)\\s*\\{")
+        );
+
+        for (Pattern pattern : patterns) {
+            Matcher matcher = pattern.matcher(code);
+            while (matcher.find()) {
+                String symbol = String.valueOf(matcher.group(1) == null ? "" : matcher.group(1)).trim();
+                if (symbol.isEmpty()) {
+                    continue;
+                }
+                int line = estimateLineAt(code, matcher.start());
+                String item = symbol + " (line " + line + ")";
+                if (!out.contains(item)) {
+                    out.add(item);
+                }
+                if (out.size() >= maxItems) {
+                    return out;
+                }
+            }
+        }
+
+        // Fallback: include first meaningful declaration-like lines when regex symbols are scarce.
+        if (out.size() < Math.min(12, maxItems)) {
+            String[] lines = code.split("\\r?\\n");
+            for (int i = 0; i < lines.length; i++) {
+                String line = String.valueOf(lines[i] == null ? "" : lines[i]).trim();
+                if (line.isEmpty() || line.length() < 8) {
+                    continue;
+                }
+                if (line.startsWith("//") || line.startsWith("/*") || line.startsWith("*")) {
+                    continue;
+                }
+                if (!(line.contains("function") || line.startsWith("class ") || line.startsWith("export ")
+                    || line.startsWith("const ") || line.startsWith("let ") || line.startsWith("var ")
+                    || line.contains("=>") || line.contains("("))) {
+                    continue;
+                }
+                String compact = line.length() > 140 ? line.substring(0, 140) + "..." : line;
+                String fallbackItem = compact + " (line " + (i + 1) + ")";
+                if (!out.contains(fallbackItem)) {
+                    out.add(fallbackItem);
+                }
+                if (out.size() >= maxItems) {
+                    break;
+                }
+            }
+        }
+
+        return out;
+    }
+
+    private int estimateLineAt(String text, int charIndex) {
+        if (text == null || text.isEmpty()) {
+            return 1;
+        }
+        int safeIndex = Math.max(0, Math.min(charIndex, text.length()));
+        int line = 1;
+        for (int i = 0; i < safeIndex; i++) {
+            if (text.charAt(i) == '\n') {
+                line += 1;
+            }
+        }
+        return line;
+    }
+
+    private List<String> buildCodeAnchorLines(String code, int chunkChars, int maxItems) {
+        List<String> anchors = new ArrayList<>();
+        if (code == null || code.isBlank() || chunkChars <= 0 || maxItems <= 0) {
+            return anchors;
+        }
+
+        int total = code.length();
+        int cursor = 0;
+        int idx = 1;
+        while (cursor < total && anchors.size() < maxItems) {
+            int end = Math.min(total, cursor + chunkChars);
+            int startLine = estimateLineAt(code, cursor);
+            int endLine = estimateLineAt(code, Math.max(cursor, end - 1));
+            String preview = code.substring(cursor, Math.min(end, cursor + 200))
+                .replace("\r", " ")
+                .replace("\n", " ")
+                .replaceAll("\\s+", " ")
+                .trim();
+            if (preview.length() > 120) {
+                preview = preview.substring(0, 120) + "...";
+            }
+            anchors.add("A" + idx + ": chars " + (cursor + 1) + "-" + end
+                + ", lines " + startLine + "-" + endLine
+                + (preview.isEmpty() ? "" : ", starts: " + preview));
+            cursor = end;
+            idx += 1;
+        }
+        return anchors;
     }
 
     private String buildCopilotFocusExcerpt(String code, String message, int focusWindowChars) {
@@ -1636,6 +1938,214 @@ public class ApiSpringController {
                 .replaceAll("[^a-z0-9_\\s]", " ")
                 .replaceAll("\\s+", " ")
                 .trim();
+    }
+
+    private static class CopilotAttachmentRetrievalResult {
+        String context = "";
+        int filesUsed = 0;
+        int snippetsUsed = 0;
+        int retrievedChars = 0;
+        List<String> queryTokens = new ArrayList<>();
+        List<Map<String, Object>> sources = new ArrayList<>();
+    }
+
+    private CopilotAttachmentRetrievalResult buildCopilotRelevantAttachmentContextResult(
+            String message,
+            List<Map<String, Object>> attachments) {
+        CopilotAttachmentRetrievalResult result = new CopilotAttachmentRetrievalResult();
+        if (!copilotAttachmentRetrievalEnabled || attachments == null || attachments.isEmpty()) {
+            return result;
+        }
+
+        int maxAttachments = Math.max(1, copilotAttachmentRetrievalMaxAttachments);
+        int maxSnippetsPerFile = Math.max(1, copilotAttachmentRetrievalMaxSnippetsPerFile);
+        int snippetWindowChars = Math.max(600, copilotAttachmentRetrievalSnippetWindowChars);
+        int maxTotalChars = Math.max(4000, copilotAttachmentRetrievalMaxTotalChars);
+
+        List<String> queryTokens = extractCopilotRetrievalTokens(message);
+        result.queryTokens = queryTokens;
+        StringBuilder sb = new StringBuilder();
+
+        for (Map<String, Object> attachment : attachments) {
+            if (result.filesUsed >= maxAttachments) {
+                break;
+            }
+            if (attachment == null || attachment.isEmpty()) {
+                continue;
+            }
+
+            String kind = String.valueOf(attachment.getOrDefault("kind", "")).trim().toLowerCase();
+            if (!("text".equals(kind) || "json".equals(kind))) {
+                continue;
+            }
+
+            String name = String.valueOf(attachment.getOrDefault("name", "attachment")).trim();
+            if (name.isEmpty()) {
+                name = "attachment";
+            }
+            String textContent = String.valueOf(attachment.getOrDefault("textContent", "")).trim();
+            if (textContent.isEmpty()) {
+                continue;
+            }
+
+            List<String> snippets = extractAttachmentSnippetsByTokens(
+                textContent,
+                queryTokens,
+                maxSnippetsPerFile,
+                snippetWindowChars);
+            if (snippets.isEmpty()) {
+                snippets.add(textContent.substring(0, Math.min(1200, textContent.length())));
+            }
+
+            sb.append("- Source: ").append(name)
+                .append(" (chars=").append(textContent.length()).append(")\n");
+
+            Map<String, Object> sourceMeta = new LinkedHashMap<>();
+            sourceMeta.put("name", name);
+            sourceMeta.put("kind", kind);
+            sourceMeta.put("chars", textContent.length());
+            sourceMeta.put("snippets", snippets.size());
+            List<Integer> snippetSizes = new ArrayList<>();
+
+            int i = 1;
+            for (String snippet : snippets) {
+                if (snippet == null || snippet.isBlank()) {
+                    continue;
+                }
+                String cleaned = snippet.trim();
+                snippetSizes.add(cleaned.length());
+                sb.append("  [snippet ").append(i++).append("]\n");
+                sb.append("  ```\n");
+                sb.append(cleaned).append("\n");
+                sb.append("  ```\n");
+                result.snippetsUsed += 1;
+                result.retrievedChars += cleaned.length();
+            }
+            sourceMeta.put("snippetCharSizes", snippetSizes);
+            result.sources.add(sourceMeta);
+            result.filesUsed += 1;
+
+            if (sb.length() >= maxTotalChars) {
+                break;
+            }
+        }
+
+        result.context = trimCopilotCodeContext(sb.toString(), maxTotalChars);
+        result.retrievedChars = result.context.length();
+        return result;
+    }
+
+    private List<String> extractCopilotRetrievalTokens(String message) {
+        String normalized = normalizeSearchText(message);
+        List<String> tokens = new ArrayList<>();
+        if (normalized.isBlank()) {
+            return tokens;
+        }
+
+        Set<String> stopWords = Set.of(
+            "code", "file", "line", "help", "please", "bug", "fix", "error",
+            "menu", "json", "java", "javascript", "typescript", "react", "component",
+            "toi", "ban", "giup", "minh", "sua", "dong", "loi", "yeu", "cau", "khach",
+            "system", "he", "thong", "api", "copilot"
+        );
+
+        String[] rawTokens = normalized.split("\\s+");
+        for (String raw : rawTokens) {
+            String token = String.valueOf(raw == null ? "" : raw).trim().toLowerCase();
+            if (token.length() < 3 || stopWords.contains(token)) {
+                continue;
+            }
+            if (!tokens.contains(token)) {
+                tokens.add(token);
+            }
+            if (tokens.size() >= 16) {
+                break;
+            }
+        }
+
+        return tokens;
+    }
+
+    private List<String> extractAttachmentSnippetsByTokens(
+            String text,
+            List<String> tokens,
+            int maxSnippets,
+            int windowChars) {
+        List<String> snippets = new ArrayList<>();
+        if (text == null || text.isBlank() || maxSnippets <= 0) {
+            return snippets;
+        }
+
+        String source = text;
+        String lower = source.toLowerCase();
+        int safeWindow = Math.max(600, windowChars);
+        int half = Math.max(300, safeWindow / 2);
+        List<Integer> anchors = new ArrayList<>();
+
+        if (tokens != null && !tokens.isEmpty()) {
+            for (String token : tokens) {
+                if (token == null || token.isBlank()) {
+                    continue;
+                }
+                int from = 0;
+                int hits = 0;
+                String needle = token.toLowerCase();
+                while (from < lower.length() && hits < 2 && anchors.size() < maxSnippets * 3) {
+                    int idx = lower.indexOf(needle, from);
+                    if (idx < 0) {
+                        break;
+                    }
+                    if (!isNearExistingAnchor(anchors, idx, half)) {
+                        anchors.add(idx);
+                    }
+                    from = idx + Math.max(1, needle.length());
+                    hits += 1;
+                }
+                if (anchors.size() >= maxSnippets * 3) {
+                    break;
+                }
+            }
+        }
+
+        if (anchors.isEmpty()) {
+            return snippets;
+        }
+
+        for (int anchor : anchors) {
+            int start = Math.max(0, anchor - half);
+            int end = Math.min(source.length(), start + safeWindow);
+            String snippet = source.substring(start, end).trim();
+            if (snippet.isEmpty()) {
+                continue;
+            }
+            if (snippet.length() > safeWindow) {
+                snippet = snippet.substring(0, safeWindow);
+            }
+            if (!snippets.contains(snippet)) {
+                snippets.add(snippet);
+            }
+            if (snippets.size() >= maxSnippets) {
+                break;
+            }
+        }
+
+        return snippets;
+    }
+
+    private boolean isNearExistingAnchor(List<Integer> anchors, int candidate, int threshold) {
+        if (anchors == null || anchors.isEmpty()) {
+            return false;
+        }
+        int safeThreshold = Math.max(120, threshold);
+        for (Integer anchor : anchors) {
+            if (anchor == null) {
+                continue;
+            }
+            if (Math.abs(anchor - candidate) <= safeThreshold) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private String normalizeCopilotResponseMode(Object rawMode) {
@@ -1722,7 +2232,6 @@ public class ApiSpringController {
                 .replace('_', '-');
     }
 
-    @SuppressWarnings("unchecked")
     private List<Map<String, Object>> normalizeCopilotAttachments(Object rawAttachments) {
         List<Map<String, Object>> normalized = new ArrayList<>();
         if (!(rawAttachments instanceof List<?> rawList)) {
@@ -1938,7 +2447,7 @@ public class ApiSpringController {
             }
         }
 
-        // For menu design, always route to Copilot/GitHub Models and never fallback to Gemini.
+        // For menu design, prefer GitHub Models first. Fallback to Gemini is still allowed on quota/rate failures.
         boolean forceGithub = isMenuDesignTask
             || preferGithubProvider
             || ((preferGithubForCoding || forceCopilotForCoding) && isCodingTask);
@@ -1965,13 +2474,19 @@ public class ApiSpringController {
             }
 
             String githubRaw = this.gitHubModelsService.generateContent(safePrompt, progressListener);
-            if (shouldFallbackToGemini(githubRaw) && !disableGeminiFallback) {
+            boolean rateOrQuotaFailure = shouldFallbackToGemini(githubRaw);
+            boolean hardQuotaFailure = isHardQuotaFailure(githubRaw);
+            boolean allowGeminiFallback = !disableGeminiFallback || hardQuotaFailure;
+            if (rateOrQuotaFailure && allowGeminiFallback) {
                 logger.warn("GitHub Models hit quota/rate limit. Auto fallback to Gemini provider flow.");
                 if (progressListener != null) {
-                    progressListener.onProgress(createAiJobProgress("gemini_fallback", "GitHub Models hết quota, đang chuyển sang Gemini", 0, 1, null));
+                    String fallbackMsg = hardQuotaFailure
+                        ? "GitHub Models hết daily quota, đang chuyển sang Gemini"
+                        : "GitHub Models hết quota, đang chuyển sang Gemini";
+                    progressListener.onProgress(createAiJobProgress("gemini_fallback", fallbackMsg, 0, 1, null));
                 }
                 return this.aiProviderFactory.generateContent(safePrompt);
-            } else if (shouldFallbackToGemini(githubRaw) && disableGeminiFallback) {
+            } else if (rateOrQuotaFailure && disableGeminiFallback) {
                 logger.warn("GitHub Models hit quota/rate limit but Gemini fallback is disabled for this request.");
             }
             return githubRaw;
@@ -2047,6 +2562,34 @@ public class ApiSpringController {
                 || msg.contains("rate limit exceeded");
     }
 
+    private boolean isHardQuotaFailure(String rawContent) {
+        if (rawContent == null || rawContent.trim().isEmpty()) {
+            return false;
+        }
+
+        String normalizedRaw = rawContent.toLowerCase();
+        if (normalizedRaw.contains("daily quota")
+                || normalizedRaw.contains("userbymodelbyday")
+                || normalizedRaw.contains("per 86400s")) {
+            return true;
+        }
+
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> parsed = objectMapper.readValue(rawContent, Map.class);
+            String errorCode = String.valueOf(parsed.getOrDefault("errorCode", "")).toLowerCase();
+            String message = String.valueOf(parsed.getOrDefault("message", "")).toLowerCase();
+            if (errorCode.contains("daily") || errorCode.contains("userbymodelbyday") || errorCode.contains("per_86400")) {
+                return true;
+            }
+            return message.contains("daily quota")
+                    || message.contains("userbymodelbyday")
+                    || message.contains("per 86400s");
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
     private String extractAiResultText(String rawContent) {
         if (rawContent == null || rawContent.trim().isEmpty()) {
             return "";
@@ -2093,6 +2636,122 @@ public class ApiSpringController {
         }
 
         return "";
+    }
+
+    private String extractMenuDraftForCompletion(String rawResponse, String contextType) {
+        String normalizedContext = String.valueOf(contextType == null ? "" : contextType).trim().toLowerCase();
+        if (!"menu_json".equals(normalizedContext)) {
+            return "";
+        }
+
+        String raw = String.valueOf(rawResponse == null ? "" : rawResponse).trim();
+        if (raw.isBlank()) {
+            return "";
+        }
+
+        List<String> candidates = new ArrayList<>();
+        candidates.add(raw);
+        String cleaned = cleanMarkdownFromJson(raw);
+        if (cleaned != null && !cleaned.isBlank() && !cleaned.equals(raw)) {
+            candidates.add(cleaned.trim());
+        }
+
+        for (String candidate : candidates) {
+            String normalized = normalizeMenuDraftJson(candidate);
+            if (!normalized.isBlank()) {
+                return normalized;
+            }
+        }
+
+        return "";
+    }
+
+    private String normalizeMenuDraftJson(String text) {
+        String raw = String.valueOf(text == null ? "" : text).trim();
+        if (raw.isBlank()) {
+            return "";
+        }
+
+        Object parsed;
+        try {
+            parsed = objectMapper.readValue(raw, Object.class);
+        } catch (Exception ignored) {
+            return "";
+        }
+
+        if (parsed instanceof List<?> list) {
+            Map<String, Object> wrapped = new HashMap<>();
+            wrapped.put("menu", list);
+            try {
+                return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(wrapped);
+            } catch (Exception ignored) {
+                return "";
+            }
+        }
+
+        if (!(parsed instanceof Map<?, ?> map)) {
+            return "";
+        }
+
+        Object menu = map.get("menu");
+        if (menu instanceof List<?>) {
+            try {
+                return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(map);
+            } catch (Exception ignored) {
+                return "";
+            }
+        }
+
+        Object menus = map.get("menus");
+        if (menus instanceof List<?> menuList) {
+            Map<String, Object> wrapped = new HashMap<>();
+            wrapped.put("menu", menuList);
+            try {
+                return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(wrapped);
+            } catch (Exception ignored) {
+                return "";
+            }
+        }
+
+        Object nestedData = map.get("data");
+        if (nestedData instanceof Map<?, ?> nestedMap) {
+            Object nestedMenu = nestedMap.get("menu");
+            if (nestedMenu instanceof List<?> menuList) {
+                Map<String, Object> wrapped = new HashMap<>();
+                wrapped.put("menu", menuList);
+                try {
+                    return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(wrapped);
+                } catch (Exception ignored) {
+                    return "";
+                }
+            }
+        }
+
+        if (isLikelyMenuNodeMap(map)) {
+            Map<String, Object> wrapped = new HashMap<>();
+            wrapped.put("menu", List.of(map));
+            try {
+                return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(wrapped);
+            } catch (Exception ignored) {
+                return "";
+            }
+        }
+
+        return "";
+    }
+
+    private boolean isLikelyMenuNodeMap(Map<?, ?> map) {
+        if (map == null || map.isEmpty()) {
+            return false;
+        }
+        Object id = map.get("id");
+        if (!(id instanceof String) || String.valueOf(id).isBlank()) {
+            return false;
+        }
+        return map.containsKey("type_form")
+            || map.containsKey("table_name")
+            || map.containsKey("table")
+            || map.containsKey("children");
     }
 
     private void emitTextAsCopilotChunks(String appId, String text, String responseMode) {
@@ -2956,6 +3615,172 @@ public class ApiSpringController {
         } catch (Exception ignored) {
             return fallback;
         }
+    }
+
+    private static class StructuredCopilotEditResult {
+        boolean valid = false;
+        Object understandingChecklist;
+        String assistantMessage = "";
+        List<Map<String, Object>> textEdits = new ArrayList<>();
+    }
+
+    private StructuredCopilotEditResult extractStructuredCopilotEdits(String rawResponse, int baseLineCount) {
+        StructuredCopilotEditResult result = new StructuredCopilotEditResult();
+        String raw = String.valueOf(rawResponse == null ? "" : rawResponse).trim();
+        if (raw.isEmpty()) {
+            return result;
+        }
+
+        String cleaned = cleanMarkdownFromJson(raw);
+        if (cleaned == null || cleaned.isBlank()) {
+            return result;
+        }
+
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> parsed = objectMapper.readValue(cleaned.trim(), Map.class);
+
+            Object checklist = parsed.get("understanding_checklist");
+            if (checklist == null) {
+                checklist = parsed.get("understandingChecklist");
+            }
+            result.understandingChecklist = checklist;
+
+            Object assistantMsg = parsed.get("assistant_message");
+            if (assistantMsg == null) {
+                assistantMsg = parsed.get("assistantMessage");
+            }
+            if (assistantMsg != null) {
+                result.assistantMessage = String.valueOf(assistantMsg).trim();
+            }
+
+            Object editsRaw = parsed.get("text_edits");
+            if (editsRaw == null) {
+                editsRaw = parsed.get("textEdits");
+            }
+            if (editsRaw == null) {
+                editsRaw = parsed.get("edits");
+            }
+
+            int maxEdits = Math.max(1, copilotStructuredEditMaxTextEdits);
+            if (editsRaw instanceof List<?> list) {
+                for (Object item : list) {
+                    if (!(item instanceof Map<?, ?> map)) {
+                        continue;
+                    }
+                    int startLine = parseIntOrDefault(
+                        map.get("startLine") != null ? map.get("startLine") : map.get("start_line"),
+                        parseIntOrDefault(map.get("line"), 1));
+
+                    Object endSource = map.get("endLine") != null ? map.get("endLine") : map.get("end_line");
+                    int endLine = parseIntOrDefault(endSource, startLine);
+
+                    if (map.get("range") instanceof Map<?, ?> range) {
+                        if (range.get("startLine") != null) {
+                            startLine = parseIntOrDefault(range.get("startLine"), startLine);
+                        }
+                        if (range.get("endLine") != null) {
+                            endLine = parseIntOrDefault(range.get("endLine"), endLine);
+                        }
+                    }
+
+                    if (startLine < 1) {
+                        startLine = 1;
+                    }
+                    if (endLine < startLine) {
+                        endLine = startLine;
+                    }
+                    if (baseLineCount > 0) {
+                        int maxLine = Math.max(1, baseLineCount + 1);
+                        startLine = Math.min(startLine, maxLine);
+                        endLine = Math.min(endLine, maxLine);
+                    }
+
+                    Object replacementObj = map.get("replacement") != null
+                        ? map.get("replacement")
+                        : (map.get("newText") != null ? map.get("newText") : map.get("text"));
+                    String replacement = String.valueOf(replacementObj == null ? "" : replacementObj);
+
+                    Object actionObj = map.get("action");
+                    String action = String.valueOf(actionObj == null ? "edit" : actionObj).trim().toLowerCase();
+                    if (action.isBlank()) {
+                        action = "edit";
+                    }
+
+                    Map<String, Object> normalized = new HashMap<>();
+                    normalized.put("startLine", startLine);
+                    normalized.put("endLine", endLine);
+                    normalized.put("replacement", replacement);
+                    normalized.put("action", action);
+                    result.textEdits.add(normalized);
+
+                    if (result.textEdits.size() >= maxEdits) {
+                        break;
+                    }
+                }
+            }
+
+            result.valid = validateStructuredEditEntries(result, baseLineCount);
+            return result;
+        } catch (Exception ignored) {
+            return result;
+        }
+    }
+
+    private boolean validateStructuredEditEntries(StructuredCopilotEditResult result, int baseLineCount) {
+        if (result == null || result.textEdits == null || result.textEdits.isEmpty()) {
+            return false;
+        }
+        if (copilotStructuredEditRequireChecklist && result.understandingChecklist == null) {
+            return false;
+        }
+
+        List<Map<String, Object>> normalized = new ArrayList<>(result.textEdits);
+        normalized.sort((a, b) -> {
+            int sa = parseIntOrDefault(a.get("startLine"), 1);
+            int sb = parseIntOrDefault(b.get("startLine"), 1);
+            if (sa != sb) return Integer.compare(sa, sb);
+            int ea = parseIntOrDefault(a.get("endLine"), sa);
+            int eb = parseIntOrDefault(b.get("endLine"), sb);
+            return Integer.compare(ea, eb);
+        });
+
+        int maxAllowedLine = Math.max(1, baseLineCount + 1);
+        int previousEnd = 0;
+        int totalReplacementChars = 0;
+
+        for (Map<String, Object> edit : normalized) {
+            int startLine = parseIntOrDefault(edit.get("startLine"), 1);
+            int endLine = parseIntOrDefault(edit.get("endLine"), startLine);
+
+            if (startLine < 1 || endLine < startLine) {
+                return false;
+            }
+            if (startLine > maxAllowedLine || endLine > maxAllowedLine) {
+                return false;
+            }
+            if (startLine <= previousEnd) {
+                return false;
+            }
+
+            String replacement = String.valueOf(edit.getOrDefault("replacement", ""));
+            totalReplacementChars += replacement.length();
+            if (totalReplacementChars > Math.max(20000, copilotStructuredEditMaxReplacementChars)) {
+                return false;
+            }
+
+            previousEnd = endLine;
+        }
+
+        result.textEdits = normalized;
+        return true;
+    }
+
+    private int countLines(String text) {
+        if (text == null || text.isEmpty()) {
+            return 0;
+        }
+        return text.split("\\n", -1).length;
     }
 
     /**

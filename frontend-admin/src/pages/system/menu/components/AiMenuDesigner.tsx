@@ -832,6 +832,46 @@ function buildEditorMenuJson(menus: MenuItemType[] | null | undefined): string {
   return JSON.stringify({ menu: Array.isArray(menus) ? menus : [] }, null, 2);
 }
 
+function buildDefaultMenuSeed(appId?: string): MenuItemType[] {
+  const stamp = Date.now();
+  const safeApp = String(appId || "app").trim().replace(/[^a-zA-Z0-9_-]/g, "_") || "app";
+  const rootId = `menu_root_${safeApp}_${stamp}`;
+  return normalizeMenuList([
+    {
+      id: rootId,
+      label: "Root Menu",
+      field_root: "",
+      report_name: "",
+      orientation: "",
+      p_width: "0",
+      p_height: "0",
+      m_show: true,
+      g_readonly: false,
+      m_icons: "fa fa-sitemap",
+      table_name: "",
+      type_menu: "",
+      type_form: 0,
+      row_type_edit: "",
+      dev: "",
+      prefix_pk: "",
+      table_pagesize: "20",
+      trigger: {},
+      table: [],
+      children: [],
+      parentId: "",
+      menu_id: "1",
+    } as MenuItemType,
+  ]);
+}
+
+function extractMenusFromEditorDraftText(rawDraft: string): MenuItemType[] {
+  const text = String(rawDraft || "").trim();
+  if (!text) return [];
+  const parsed = tryExtractMenuPayloadFromMixedText(text);
+  if (!parsed) return [];
+  return normalizeMenuList(extractMenuListFromPayload(parsed));
+}
+
 function isLikelyExecutableCode(value: string): boolean {
   const v = String(value || "").trim();
   if (!v) return false;
@@ -2074,22 +2114,111 @@ function extractMenuListFromPayload(payload: any): MenuItemType[] {
   return [];
 }
 
+function isMenuPayloadCandidate(payload: any): boolean {
+  if (!payload) return false;
+  if (isLikelyMenuNode((payload as any)?.menu_node)) return true;
+  return extractMenuListFromPayload(payload).length > 0;
+}
+
+function extractBalancedJsonBlock(text: string, startIndex: number): string | null {
+  if (startIndex < 0 || startIndex >= text.length) return null;
+  const opener = text[startIndex];
+  const closer = opener === "{" ? "}" : opener === "[" ? "]" : "";
+  if (!closer) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = startIndex; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (ch === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (ch === "\"") {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (ch === "\"") {
+      inString = true;
+      continue;
+    }
+    if (ch === opener) depth += 1;
+    if (ch === closer) {
+      depth -= 1;
+      if (depth === 0) {
+        return text.slice(startIndex, i + 1);
+      }
+    }
+  }
+
+  return null;
+}
+
+function tryExtractMenuPayloadFromMixedText(raw: string): any | null {
+  const text = String(raw || "").trim();
+  if (!text) return null;
+
+  const parseCandidate = (candidate: string): any | null => {
+    const normalized = String(candidate || "").trim();
+    if (!normalized) return null;
+    try {
+      const parsed = JSON.parse(normalized);
+      return isMenuPayloadCandidate(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const direct = parseCandidate(text);
+  if (direct) return direct;
+
+  const strippedFence = text
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+  const stripped = parseCandidate(strippedFence);
+  if (stripped) return stripped;
+
+  const fenceRegex = /```(?:json)?\s*([\s\S]*?)```/gi;
+  let fenceMatch: RegExpExecArray | null;
+  while ((fenceMatch = fenceRegex.exec(text)) !== null) {
+    const parsedFence = parseCandidate(fenceMatch[1]);
+    if (parsedFence) return parsedFence;
+  }
+
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (ch !== "{" && ch !== "[") continue;
+    const block = extractBalancedJsonBlock(text, i);
+    if (!block) continue;
+    const parsedBlock = parseCandidate(block);
+    if (parsedBlock) return parsedBlock;
+  }
+
+  return null;
+}
+
 function extractMenuDraftForEditor(rawDraft: string): string | null {
   const text = String(rawDraft || "").trim();
   if (!text) return null;
 
-  try {
-    const parsed = JSON.parse(text);
-    if (isLikelyMenuNode((parsed as any)?.menu_node)) {
-      return JSON.stringify({ menu_node: (parsed as any).menu_node }, null, 2);
-    }
+  const parsed = tryExtractMenuPayloadFromMixedText(text);
+  if (!parsed) return null;
+  if (isLikelyMenuNode((parsed as any)?.menu_node)) {
+    return JSON.stringify({ menu_node: (parsed as any).menu_node }, null, 2);
+  }
 
-    const menus = extractMenuListFromPayload(parsed);
-    if (Array.isArray(menus) && menus.length > 0) {
-      return JSON.stringify({ menu: menus }, null, 2);
-    }
-  } catch {
-    return null;
+  const menus = extractMenuListFromPayload(parsed);
+  if (Array.isArray(menus) && menus.length > 0) {
+    return JSON.stringify({ menu: menus }, null, 2);
   }
 
   return null;
@@ -2891,6 +3020,12 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
   /** Ref to the result CodeMirror view so we can dispatch decoration effects */
   const resultEditorViewRef = useRef<any>(null);
   const lastPopulatedAppIdRef = useRef<string | undefined>(undefined);
+  const previousAppIdRef = useRef<string | undefined>(undefined);
+  const pendingSeedAppIdRef = useRef<string | undefined>(undefined);
+  const appSwitchMenuSignatureRef = useRef<string>("");
+  const lastSeedMenuSignatureRef = useRef<string>("");
+  const lastSeedSourceRef = useRef<"current" | "sample" | "default" | "none">("none");
+  const editorSeedSeqRef = useRef(0);
   const activeAiJobIdRef = useRef<string | null>(null);
   const aiJobResolveRef = useRef<((value: any) => void) | null>(null);
   const aiJobRejectRef = useRef<((reason?: unknown) => void) | null>(null);
@@ -3006,13 +3141,17 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
 
   const setEditorFromMenus = (
     menus: MenuItemType[] | null | undefined,
-    source: "current" | "sample" = "current",
+    source: "current" | "sample" | "default" = "current",
   ) => {
     const decodedMenus = transformMenuTriggers(Array.isArray(menus) ? menus : [], "decode");
     const normalized = normalizeMenuList(decodedMenus);
     if (normalized.length === 0) return;
     const payload = { menu: normalized };
     const text = JSON.stringify(payload, null, 2);
+    editorSeedSeqRef.current += 1;
+    const seedSeq = editorSeedSeqRef.current;
+    lastSeedSourceRef.current = source;
+
     setEditableAiDraftText(text);
     // Seed editor content should not be treated as an AI-generated result.
     setAiResultText("");
@@ -3026,12 +3165,62 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     setShowCoverageDetails(false);
     setValidationProfile("legacy");
 
-    message.info(
-      source === "sample"
-        ? (t("system.menu.aiDesigner.editorSeed.sample") || "Đã nạp JSON từ chương trình mẫu vào editor")
-        : (t("system.menu.aiDesigner.editorSeed.current") || "Đã nạp JSON menu hiện tại vào editor"),
-    );
+    // Notify success only after CodeMirror actually reflects the seeded JSON.
+    const successLabel = source === "sample"
+      ? (t("system.menu.aiDesigner.editorSeed.sample") || "Đã nạp JSON từ chương trình mẫu vào editor")
+      : source === "default"
+        ? (t("system.menu.aiDesigner.editorSeed.default") || "App chưa có menu, đã nạp JSON mặc định chuẩn vào editor")
+        : (t("system.menu.aiDesigner.editorSeed.current") || "Đã nạp JSON menu hiện tại vào editor");
+    const pendingLabel = source === "sample"
+      ? (t("system.menu.aiDesigner.editorSeed.samplePending") || "Đang đồng bộ JSON mẫu vào editor")
+      : source === "default"
+        ? (t("system.menu.aiDesigner.editorSeed.defaultPending") || "Đang đồng bộ JSON mặc định vào editor")
+        : (t("system.menu.aiDesigner.editorSeed.currentPending") || "Đang đồng bộ JSON menu vào editor");
+
+    const maxAttempts = 6;
+    const checkSync = (attempt: number) => {
+      if (seedSeq !== editorSeedSeqRef.current) return;
+      const liveEditorText = String(resultEditorViewRef.current?.state?.doc?.toString?.() || "");
+      if (liveEditorText === text) {
+        message.success(successLabel);
+        return;
+      }
+      if (attempt >= maxAttempts) {
+        message.warning(pendingLabel);
+        return;
+      }
+      window.setTimeout(() => checkSync(attempt + 1), 80);
+    };
+
+    window.setTimeout(() => checkSync(1), 80);
   };
+
+  const buildMenusSeedSignature = (menus: MenuItemType[] | null | undefined): string => {
+    const list = Array.isArray(menus) ? menus : [];
+    if (list.length === 0) return "len:0";
+    const nodes = flattenMenuNodes(list, 80);
+    const sample = nodes
+      .slice(0, 18)
+      .map((node) => `${String((node as any)?.id || "")}:${String((node as any)?.label || "")}`)
+      .join("|");
+    return `len:${list.length};nodes:${nodes.length};sample:${sample}`;
+  };
+
+  useEffect(() => {
+    if (!appId) return;
+    if (previousAppIdRef.current === appId) return;
+
+    previousAppIdRef.current = appId;
+    pendingSeedAppIdRef.current = appId;
+    appSwitchMenuSignatureRef.current = buildMenusSeedSignature(currentMenus);
+    lastPopulatedAppIdRef.current = undefined;
+    lastSeedMenuSignatureRef.current = "";
+    lastSeedSourceRef.current = "none";
+
+    // Clear immediately on app switch so stale app JSON is never shown as if current.
+    setEditableAiDraftText("");
+    setAiResultText("");
+  }, [appId]);
 
   const applyTextEditsToDraft = (currentText: string, textEdits: any[]): string => {
     if (!Array.isArray(textEdits) || textEdits.length === 0) return currentText;
@@ -3313,6 +3502,42 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     if (loading) return;
     if (!appId) return;
 
+    const currentSignature = buildMenusSeedSignature(currentMenus);
+
+    if (
+      lastPopulatedAppIdRef.current === appId
+      && lastSeedSourceRef.current === "default"
+      && Array.isArray(currentMenus)
+      && currentMenus.length > 0
+      && currentSignature !== lastSeedMenuSignatureRef.current
+    ) {
+      pendingSeedAppIdRef.current = undefined;
+      lastSeedMenuSignatureRef.current = currentSignature;
+      setEditorFromMenus(currentMenus, "current");
+      return;
+    }
+
+    const waitingForFreshMenus = pendingSeedAppIdRef.current === appId;
+    if (waitingForFreshMenus) {
+      if (!Array.isArray(currentMenus)) return;
+      if (currentMenus.length === 0) {
+        const defaults = buildDefaultMenuSeed(appId);
+        pendingSeedAppIdRef.current = undefined;
+        lastPopulatedAppIdRef.current = appId;
+        lastSeedMenuSignatureRef.current = buildMenusSeedSignature(defaults);
+        setEditorFromMenus(defaults, "default");
+        return;
+      }
+      const switchSignature = appSwitchMenuSignatureRef.current;
+      // Avoid seeding stale carry-over menus immediately after switching app.
+      if (switchSignature && currentSignature === switchSignature) return;
+      pendingSeedAppIdRef.current = undefined;
+      lastPopulatedAppIdRef.current = appId;
+      lastSeedMenuSignatureRef.current = currentSignature;
+      setEditorFromMenus(currentMenus, "current");
+      return;
+    }
+
     const alreadyPopulated = lastPopulatedAppIdRef.current === appId;
 
     // Same app – only skip if the editor has content the user may have edited
@@ -3320,7 +3545,9 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     if (alreadyPopulated && aiResultText.trim()) return;
 
     if (Array.isArray(currentMenus) && currentMenus.length > 0) {
+      if (alreadyPopulated && lastSeedMenuSignatureRef.current === currentSignature) return;
       lastPopulatedAppIdRef.current = appId;
+      lastSeedMenuSignatureRef.current = currentSignature;
       setEditorFromMenus(currentMenus, "current");
       return;
     }
@@ -4019,44 +4246,6 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     () => compactAiRealtimeText(latestCopilotPrompt, 220),
     [latestCopilotPrompt],
   );
-  const copilotMenuChatContext = useMemo(() => {
-    const editorJson = editableAiDraftText
-      ? editableAiDraftText
-      : (aiResultText || buildEditorMenuJson(decodedCurrentMenus));
-
-    const contextPayload = {
-      app_id: String(appId || ""),
-      operation_scenario: operationScenario,
-      requirement_source: latestCopilotPrompt.trim() ? "copilot_chat" : "manual_input",
-      latest_chat_requirement: trimToMax(String(latestCopilotPrompt || ""), 1600),
-      active_requirement: trimToMax(String(effectiveRequestText || ""), 1600),
-      stored_requirement: trimToMax(String(storedRequest || ""), 1600),
-      current_menu_summary: buildCompactMenuContext(decodedCurrentMenus, 60),
-      context_files: contextFiles.map((file) => ({
-        name: file.name,
-        size: file.size,
-        summary: trimToMax(String(file.summary || ""), 180),
-      })),
-    };
-
-    return [
-      "MENU_DESIGN_WORKSPACE_CONTEXT",
-      JSON.stringify(contextPayload, null, 2),
-      "",
-      "CURRENT_EDITOR_JSON",
-      trimToMax(editorJson, 3200),
-    ].join("\n");
-  }, [
-    aiResultText,
-    appId,
-    contextFiles,
-    decodedCurrentMenus,
-    editableAiDraftText,
-    effectiveRequestText,
-    latestCopilotPrompt,
-    operationScenario,
-    storedRequest,
-  ]);
 
   const handleCopilotRequirementMessage = (payload: CopilotUserMessagePayload) => {
     const nextText = String(payload?.message || "").trim();
@@ -4577,10 +4766,18 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
       message.warning(t("system.menu.aiDesigner.incremental.enterRequest") || "Hãy nhập mô tả thay đổi (menu/field/trigger)");
       return;
     }
-    const baseMenus = decodedCurrentMenus;
+    let baseMenus = decodedCurrentMenus;
     if (baseMenus.length === 0) {
-      message.warning(t("system.menu.aiDesigner.incremental.noBaseMenu") || "Không có menu hiện tại để chỉnh sửa. Hãy nhập JSON thủ công vào editor trước hoặc dùng Trợ lý AI để tạo.");
-      return;
+      const fromEditor = extractMenusFromEditorDraftText(editableAiDraftText);
+      if (fromEditor.length > 0) {
+        baseMenus = fromEditor;
+      }
+    }
+    if (baseMenus.length === 0) {
+      const defaults = buildDefaultMenuSeed(appId);
+      baseMenus = defaults;
+      setEditorFromMenus(defaults, "default");
+      message.info(t("system.menu.aiDesigner.incremental.noBaseMenuFallback") || "App chưa có menu. Đã dùng JSON mặc định làm base để AI thiết kế.");
     }
     const prompt = trimToMax(
       (() => {
@@ -4609,7 +4806,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     let draftMenus = aiMenus || [];
     if (editableAiDraftText.trim()) {
       try {
-        const parsedDraft = JSON.parse(editableAiDraftText);
+        const parsedDraft = tryExtractMenuPayloadFromMixedText(editableAiDraftText);
         if (isLikelyMenuNode(parsedDraft?.menu_node)) {
           const baseMenus = Array.isArray(currentMenus) ? currentMenus : [];
           draftMenus = replaceMenuNodeById(
@@ -4631,8 +4828,14 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     draftMenus = normalizeMenuList(draftMenus || []);
 
     if (!draftMenus || draftMenus.length === 0) {
-      message.warning(t("system.menu.aiDesigner.noMenuToApply") || "Không có menu để áp dụng");
-      return;
+      const confirmed = window.confirm(
+        t("system.menu.aiDesigner.applyEmptyConfirm")
+          || "JSON hiện tại không có menu. Bạn có chắc muốn lưu để xóa toàn bộ menu của app này?",
+      );
+      if (!confirmed) {
+        message.warning(t("system.menu.aiDesigner.noMenuToApply") || "Không có menu để áp dụng");
+        return;
+      }
     }
 
     if (menuValidationErrors.length > 0) {
@@ -5271,7 +5474,6 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                 <CodeMirror
                   copilotLanguage="json"
                   copilotContextType="menu_json"
-                  copilotCurrentCode={copilotMenuChatContext}
                   copilotOnUserMessage={handleCopilotRequirementMessage}
                   value={
                     editableAiDraftText

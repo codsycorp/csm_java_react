@@ -637,6 +637,12 @@ public class GitHubModelsService {
   @Value("${github.models.retry.base-wait-ms:65000}")
   private long retryBaseWaitMs;
 
+  @Value("${github.models.retry.max-rate-retries-per-model:1}")
+  private int retryMaxRateRetriesPerModel;
+
+  @Value("${github.models.retry.max-429-wait-ms:8000}")
+  private long retryMax429WaitMs;
+
   @Value("${github.models.throttle.min-interval-ms:2500}")
   private long throttleMinIntervalMs;
 
@@ -1411,6 +1417,25 @@ public class GitHubModelsService {
             throw new IllegalStateException(msg);
           }
           long waitMs = computeRetryWaitMs(attempt, ex);
+          int maxRateRetries = Math.max(0, retryMaxRateRetriesPerModel);
+          long maxWaitAllowed = Math.max(0L, retryMax429WaitMs);
+          boolean shouldFastFailover = attempt > maxRateRetries || (maxWaitAllowed > 0L && waitMs > maxWaitAllowed);
+
+          if (shouldFastFailover) {
+            String reason = waitMs > maxWaitAllowed && maxWaitAllowed > 0L
+                ? ("429 wait too long (" + waitMs + "ms > " + maxWaitAllowed + "ms)")
+                : ("429 retries exceeded per model (attempt " + attempt + "/" + retryMaxAttempts + ")");
+            log.warn("GitHub Models 429 for model '{}' -> fast failover: {}.", modelName, reason);
+            emitProgress(progressListener, mergeProgress(progressMeta, Map.of(
+                "stage", "fast_failover_rate_limit",
+                "message", "Model dang bi rate-limit, chuyen model fallback de giam tre",
+                "attempt", attempt,
+                "model", modelName,
+                "waitingMs", waitMs,
+                "reason", reason)));
+            throw new IllegalStateException("rate limit fast-failover for model '" + modelName + "': " + reason);
+          }
+
           log.warn("GitHub Models 429 rate limit for model '{}' (attempt {}/{}). Waiting {} ms before retry.",
               modelName, attempt, retryMaxAttempts, waitMs);
           emitProgress(progressListener, mergeProgress(progressMeta, Map.of(
