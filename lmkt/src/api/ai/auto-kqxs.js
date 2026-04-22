@@ -1519,7 +1519,7 @@
 
   function isLegacyDd3NbQueryValue(value, heThong) {
     var raw = parseLegacyLoaiTimMeta(value, heThong).rawValue;
-    return /,D_-P_-B_$/.test(String(raw || ""));
+    return /,D_-P_-B_$|,D_-P_-T_-B_$/.test(String(raw || ""));
   }
 
   function getLegacySlrPreferredQueryValue(heThong, optionList) {
@@ -3612,9 +3612,7 @@
       }
 
       var loaded = await lay_ds_dai_xem_kq(sourceStations);
-      if (!ensureDataFetchComplete()) {
-        throw new Error("legacy_data_incomplete");
-      }
+      var dataFetchComplete = ensureDataFetchComplete();
 
       var dataMien = [];
       if (loaded && loaded.MN && Array.isArray(loaded.MN.data)) {
@@ -3623,7 +3621,7 @@
       if (loaded && loaded.MB && Array.isArray(loaded.MB.data)) {
         dataMien = dataMien.concat(loaded.MB.data);
       }
-      return buildTongHopMetrics({
+      var metrics = buildTongHopMetrics({
         dataMien: dataMien,
         fromDate: tu_ngay,
         toDate: den_ngay,
@@ -3639,6 +3637,14 @@
         queryText: cfg.queryText,
         triet: !!cfg.triet
       });
+
+      // Dữ liệu có thể thiếu một phần nhưng vẫn đủ để tính ra kết quả.
+      // Chỉ báo lỗi khi thiếu dữ liệu và hoàn toàn không dựng được metrics.
+      if (!dataFetchComplete && !metrics.length) {
+        throw new Error("legacy_data_incomplete");
+      }
+
+      return metrics;
     }
 
     function getLegacyThFilterConfig() {
@@ -8011,7 +8017,12 @@
         setProgress(100);
       } catch (e) {
         console.error(e);
-        canhbao(String((e && e.message) || "") === "missing_legacy_station_source" ? "Không tạo được nguồn đài cho Tổng Hợp từ MaQuery đang chọn" : "Không thể chạy Tổng Hợp");
+        var errMsg = String((e && e.message) || "");
+        if (errMsg === "missing_legacy_station_source") {
+          canhbao("Không tạo được nguồn đài cho Tổng Hợp từ MaQuery đang chọn");
+        } else if (errMsg !== "legacy_data_incomplete") {
+          canhbao("Không thể chạy Tổng Hợp");
+        }
       } finally {
         setLoading(false);
         setTimeout(function () { setProgress(0); }, 600);
@@ -9744,17 +9755,62 @@
 
     function getLegacyDd3NbQueryTypeOption(heThong) {
       var he = Number(heThong || 2) === 3 ? 3 : 2;
-      var options = (legacyThQueryTypeOptions && legacyThQueryTypeOptions.length)
-        ? legacyThQueryTypeOptions
-        : buildLegacyThDefaultQueryTypeDefs(he);
-      for (var i = 0; i < options.length; i += 1) {
-        var item = options[i] || {};
-        if (isLegacyDd3NbQueryValue(item.value, he)) return item;
-      }
       return {
-        value: getLegacySlrDefaultQueryValue(he),
-        text: "3 NB D+P+B"
+        value: normalizeLegacyTongHopQueryValue("D_-P_-T_-B_", he),
+        text: "Đầu đuôi 3 Đài Nam - Bắc"
       };
+    }
+
+    function getLegacySlrTongHopQueryDisplayText(queryValue, fallbackText) {
+      if (isLegacyDd3NbQueryValue(queryValue, legacyHeThong)) {
+        return "Đầu đuôi 3 Đài Nam - Bắc";
+      }
+      var text = String(fallbackText || "").trim();
+      return text || String(queryValue || "").trim();
+    }
+
+    function buildLegacySlrAutoCachItemsForQuery(searchText, queryValue, rowKey, queryIndex) {
+      var rawSearch = String(searchText || "").trim();
+      var fallback = [{
+        key: String(rowKey || "slr_auto") + "_" + queryIndex,
+        boSo: rawSearch,
+        cachName: rawSearch,
+        searchText: rawSearch,
+        noiDungDisplay: rawSearch,
+        groupId: String(rowKey || "slr_auto"),
+        groupText: String(queryValue || "")
+      }];
+
+      if (!isLegacyDd3NbQueryValue(queryValue, legacyHeThong)) return fallback;
+
+      var defaultGroups = getLegacyTongHopCachListFromSelectedGroups(false);
+      if (!Array.isArray(defaultGroups) || !defaultGroups.length) return fallback;
+
+      var inputTokens = parseSoChuByHeThong(rawSearch, legacyHeThong);
+      var tokenSet = {};
+      inputTokens.forEach(function (tk) { tokenSet[String(tk || "").trim()] = true; });
+
+      var matched = defaultGroups.filter(function (g) {
+        var groupTokens = parseSoChuByHeThong(String((g && g.searchText) || ""), legacyHeThong);
+        if (!groupTokens.length) return false;
+        for (var i = 0; i < groupTokens.length; i += 1) {
+          if (!tokenSet[String(groupTokens[i] || "").trim()]) return false;
+        }
+        return true;
+      });
+
+      var picked = matched.length ? matched[0] : defaultGroups[0];
+      if (!picked) return fallback;
+
+      return [{
+        key: String(rowKey || "slr_auto") + "_" + queryIndex + "_group",
+        boSo: String((picked && picked.boSo) || rawSearch || "").trim() || rawSearch,
+        cachName: String((picked && picked.cachName) || (picked && picked.noiDungDisplay) || rawSearch || "").trim() || rawSearch,
+        searchText: String((picked && picked.searchText) || rawSearch || "").trim() || rawSearch,
+        noiDungDisplay: String((picked && picked.noiDungDisplay) || (picked && picked.searchText) || rawSearch || "").trim() || rawSearch,
+        groupId: String((picked && picked.key) || (rowKey || "slr_auto")),
+        groupText: String((picked && picked.cachName) || (picked && picked.noiDungDisplay) || (picked && picked.boSo) || "Nhóm mặc định")
+      }];
     }
 
     function getLegacySlrAutoSelectedRows(sourceRows) {
@@ -9802,31 +9858,29 @@
 
           var querySpecs = [{
             value: row.queryValue,
-            text: row.queryLabel
+            text: getLegacySlrTongHopQueryDisplayText(row.queryValue, row.queryLabel)
           }];
           if (!isLegacyDd3NbQueryValue(row.queryValue, legacyHeThong)) {
             querySpecs.push({
               value: extraDd3NbOption.value,
-              text: (extraDd3NbOption.text || "3 NB D+P+B") + " [bổ sung]"
+              text: getLegacySlrTongHopQueryDisplayText(extraDd3NbOption.value, extraDd3NbOption.text)
             });
           }
 
           var rowHadMetric = false;
           for (var q = 0; q < querySpecs.length; q += 1) {
             var querySpec = querySpecs[q] || {};
+            var cachItems = buildLegacySlrAutoCachItemsForQuery(
+              tongHopInput.searchText,
+              querySpec.value,
+              row.key,
+              q
+            );
             var metrics = await fetchLegacyTongHopRowsFromApi({
               triet: false,
               queryValue: querySpec.value,
               queryText: querySpec.text,
-              cachItems: [{
-                key: String(row.key || "slr_auto") + "_" + q,
-                boSo: tongHopInput.searchText,
-                cachName: tongHopInput.searchText,
-                searchText: tongHopInput.searchText,
-                noiDungDisplay: tongHopInput.searchText,
-                groupId: String(row.key || "slr_auto"),
-                groupText: String(querySpec.text || querySpec.value || "")
-              }]
+              cachItems: cachItems
             });
 
             var metric = Array.isArray(metrics) && metrics.length ? metrics[0] : null;
