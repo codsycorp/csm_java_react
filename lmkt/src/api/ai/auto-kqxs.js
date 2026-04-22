@@ -9891,6 +9891,9 @@
 
             combinedRows.push({
               key: "slr_auto_th_" + String(row.key || i) + "_" + q,
+              autoPickOrder: Number(i || 0),
+              autoQueryOrder: Number(q || 0),
+              autoQueryType: q === 0 ? "main" : "dd3nb_extra",
               queryLabel: String(querySpec.text || querySpec.value || row.queryLabel || row.queryValue || ""),
               sttFrom: Number(row.sttFrom || 0),
               sttTo: Number(row.sttTo || 0),
@@ -9914,6 +9917,12 @@
         }
 
         combinedRows.sort(function (a, b) {
+          // Keep auto export table grouped by selected SLR rows:
+          // each selected way shows main first, then DD3 Nam-Bac supplement.
+          var dPick = Number((a && a.autoPickOrder) || 0) - Number((b && b.autoPickOrder) || 0);
+          if (dPick) return dPick;
+          var dQuery = Number((a && a.autoQueryOrder) || 0) - Number((b && b.autoQueryOrder) || 0);
+          if (dQuery) return dQuery;
           var aNumbers = [String((a && a.cNumbers) || "").trim(), String((a && a.dNumbers) || "").trim()].join(" | ").trim();
           var bNumbers = [String((b && b.cNumbers) || "").trim(), String((b && b.dNumbers) || "").trim()].join(" | ").trim();
           var ak = String(aNumbers || (a && a.tongHopInput) || "").trim();
