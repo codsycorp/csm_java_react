@@ -2526,6 +2526,11 @@ public class ApiSpringController {
         if (rawContent == null || rawContent.trim().isEmpty()) {
             return false;
         }
+
+        if (isRateOrQuotaFailureFromRawText(rawContent)) {
+            return true;
+        }
+
         try {
             @SuppressWarnings("unchecked")
             Map<String, Object> parsed = objectMapper.readValue(rawContent, Map.class);
@@ -2541,10 +2546,54 @@ public class ApiSpringController {
                 String message = String.valueOf(parsed.getOrDefault("message", ""));
                 return isRateOrQuotaFailure(errorCode, message);
             }
+
+            // Some GitHubModelsService paths may return success wrapper while inner `result`
+            // carries an error JSON/string. Detect and fallback in that case too.
+            Object result = parsed.get("result");
+            if (result != null) {
+                String resultText = String.valueOf(result);
+                if (isRateOrQuotaFailureFromRawText(resultText)) {
+                    return true;
+                }
+                try {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> nested = objectMapper.readValue(resultText, Map.class);
+                    if (Boolean.FALSE.equals(nested.get("success")) || Boolean.TRUE.equals(nested.get("error"))) {
+                        String nestedErrorCode = String.valueOf(nested.getOrDefault("errorCode", ""));
+                        String nestedMessage = String.valueOf(nested.getOrDefault("message", ""));
+                        if (isRateOrQuotaFailure(nestedErrorCode, nestedMessage)) {
+                            return true;
+                        }
+                    }
+                } catch (Exception ignored) {
+                    // Ignore nested parse failures; raw text detection above already checked.
+                }
+            }
+
+            Object content = parsed.get("content");
+            if (content != null && isRateOrQuotaFailureFromRawText(String.valueOf(content))) {
+                return true;
+            }
         } catch (Exception ignored) {
-            return false;
+            return isRateOrQuotaFailureFromRawText(rawContent);
         }
         return false;
+    }
+
+    private boolean isRateOrQuotaFailureFromRawText(String raw) {
+        String text = String.valueOf(raw == null ? "" : raw).toLowerCase();
+        if (text.isBlank()) {
+            return false;
+        }
+        return text.contains("daily quota")
+                || text.contains("quota")
+                || text.contains("rate limit")
+                || text.contains("too many requests")
+                || text.contains("userbymodelbyday")
+                || text.contains("per 86400s")
+                || text.contains("429")
+                || text.contains("tat ca github models deu that bai")
+                || text.contains("tất cả github models đều thất bại");
     }
 
     private boolean isRateOrQuotaFailure(String errorCode, String message) {
