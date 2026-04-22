@@ -14,6 +14,7 @@ import { fetchNavigationMenus } from "#src/api/system/menu";
 
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import * as AntIcons from "@ant-design/icons";
 
 import { useLayout } from "../hooks";
 import { findDeepestFirstItem, findRootMenuByPath, translateMenus, processMenuChildrenVisibility } from "./utils";
@@ -109,6 +110,42 @@ function autoFixMenu(menus: any[], isDev: boolean = false): any[] {
 	return result;
 }
 
+function normalizeIconName(iconName: string): string {
+	const raw = String(iconName || "").trim();
+	if (!raw) return "";
+	if ((AntIcons as any)[raw]) return raw;
+
+	const tokens = raw.split(/\s+/g).filter(Boolean);
+	for (const token of tokens) {
+		if ((AntIcons as any)[token]) return token;
+	}
+
+	if (!/Outlined$|Filled$|TwoTone$/i.test(raw)) {
+		const outlined = `${raw}Outlined`;
+		if ((AntIcons as any)[outlined]) return outlined;
+	}
+
+	return "";
+}
+
+function resolveMenuIcon(icon: unknown, legacyIcon?: unknown): React.ReactNode {
+	if (React.isValidElement(icon)) return icon;
+
+	const iconString = typeof icon === "string" ? icon : "";
+	const legacyString = typeof legacyIcon === "string" ? legacyIcon : "";
+	const source = iconString || legacyString;
+	if (!source) return undefined;
+
+	const antIconName = normalizeIconName(source);
+	if (antIconName && (AntIcons as any)[antIconName]) {
+		const Comp = (AntIcons as any)[antIconName];
+		return React.createElement(Comp);
+	}
+
+	// Support legacy class-based icons (fa/fa-solid/other icon fonts)
+	return React.createElement("i", { className: source });
+}
+
 export function useMenu() {
 	const { addTab, setActiveKey } = useTabsStore();
 	const wholeMenus = usePermissionStore(state => state.wholeMenus);
@@ -155,6 +192,7 @@ export function useMenu() {
 						name_en: menu.name_en,
 						name_zh: menu.name_zh,
 						icon: menu.icon,
+						m_icons: menu.m_icons,
 						disabled: menu.disabled,
 						children: menu.children,
 						// Preserve these for app logic
@@ -319,10 +357,9 @@ export function useMenu() {
 					auto_code: item.auto_code,
 					kanban_config: item.kanban_config,
 					trigger: item.trigger,
+					m_icons: item.m_icons,
 				};
-				if (item.icon && typeof item.icon !== 'string') {
-					cleaned.icon = item.icon;
-				}
+				cleaned.icon = resolveMenuIcon(item.icon, item.m_icons);
 				if (item.disabled === true) {
 					cleaned.disabled = item.disabled;
 				}

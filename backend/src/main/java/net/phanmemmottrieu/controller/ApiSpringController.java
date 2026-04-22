@@ -46,6 +46,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -65,6 +66,8 @@ public class ApiSpringController {
     private static final int COPILOT_CURRENT_CODE_FOCUS_WINDOW_CHARS = 120000;
     private static final int COPILOT_ATTACHMENT_TEXT_MAX_CHARS = 800000;
     private static final int COPILOT_CONTINUITY_MEMORY_MAX_CHARS = 120000;
+    private static final int COPILOT_DEBUG_MARKDOWN_MAX_CHARS = 24000;
+    private static final int COPILOT_DEBUG_MESSAGES_JSON_MAX_CHARS = 18000;
     private final ObjectMapper objectMapper = new ObjectMapper(); // Dùng để parse JSON body
     private final RecordManager recordManager;
     private final InitHandler initHandler;
@@ -823,6 +826,21 @@ public class ApiSpringController {
             List<String> pendingQuestions = gitHubModelsService.loadCopilotPendingQuestions(appId, continuityScopeKey, 8);
             List<Map<String, Object>> messages = buildCopilotChatMessages(appId, message, currentCode, language, contextType,
                 taskType, responseMode, attachments, continuityMemory, pName, pType, continuityScopeKey, pendingQuestions);
+            emitCopilotChatDebug(appId, buildCopilotDebugPayload(
+                appId,
+                message,
+                currentCode,
+                language,
+                contextType,
+                taskType,
+                responseMode,
+                attachments,
+                continuityMemory,
+                pName,
+                pType,
+                continuityScopeKey,
+                pendingQuestions,
+                messages));
             
             // Set up streaming via Socket.IO
             StringBuilder fullResponse = new StringBuilder();
@@ -938,6 +956,228 @@ public class ApiSpringController {
             emitCopilotChatEvent(String.valueOf(params.getOrDefault("appId", "")), "copilot_chat_error", 
                 Map.of("error", e.getMessage()));
         }
+    }
+
+    private void emitCopilotChatDebug(String appId, Map<String, Object> payload) {
+        if (payload == null || payload.isEmpty()) {
+            return;
+        }
+        emitCopilotChatEvent(appId, "copilot_chat_debug", payload);
+    }
+
+    private Map<String, Object> buildCopilotDebugPayload(
+            String appId,
+            String message,
+            String currentCode,
+            String language,
+            String contextType,
+            String taskType,
+            String responseMode,
+            List<Map<String, Object>> attachments,
+            String continuityMemory,
+            String pName,
+            Integer pType,
+            String continuityScopeKey,
+            List<String> pendingQuestions,
+            List<Map<String, Object>> messages) {
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("stage", "debug");
+        payload.put("timestamp", System.currentTimeMillis());
+        payload.put("content", renderCopilotDebugMessage(
+            appId,
+            message,
+            currentCode,
+            language,
+            contextType,
+            taskType,
+            responseMode,
+            attachments,
+            continuityMemory,
+            pName,
+            pType,
+            continuityScopeKey,
+            pendingQuestions,
+            messages));
+        return payload;
+    }
+
+    private String renderCopilotDebugMessage(
+            String appId,
+            String message,
+            String currentCode,
+            String language,
+            String contextType,
+            String taskType,
+            String responseMode,
+            List<Map<String, Object>> attachments,
+            String continuityMemory,
+            String pName,
+            Integer pType,
+            String continuityScopeKey,
+            List<String> pendingQuestions,
+            List<Map<String, Object>> messages) {
+        Map<String, Object> debugMeta = new LinkedHashMap<>();
+        debugMeta.put("appId", String.valueOf(appId == null ? "" : appId).trim());
+        debugMeta.put("contextType", String.valueOf(contextType == null ? "" : contextType).trim());
+        debugMeta.put("taskType", String.valueOf(taskType == null ? "" : taskType).trim());
+        debugMeta.put("responseMode", normalizeCopilotResponseMode(responseMode, message));
+        debugMeta.put("language", String.valueOf(language == null ? "" : language).trim());
+        debugMeta.put("pName", String.valueOf(pName == null ? "" : pName).trim());
+        debugMeta.put("pType", pType);
+        debugMeta.put("continuityScopeKey", String.valueOf(continuityScopeKey == null ? "" : continuityScopeKey).trim());
+        debugMeta.put("messageChars", message == null ? 0 : message.length());
+        debugMeta.put("currentCodeChars", currentCode == null ? 0 : currentCode.length());
+        debugMeta.put("continuityMemoryChars", continuityMemory == null ? 0 : continuityMemory.length());
+        debugMeta.put("pendingQuestionsCount", pendingQuestions == null ? 0 : pendingQuestions.size());
+        debugMeta.put("attachmentCount", attachments == null ? 0 : attachments.size());
+        debugMeta.put("textAttachmentCount", countCopilotAttachmentsByKind(attachments, "text", "json"));
+        debugMeta.put("imageAttachmentCount", countCopilotAttachmentsByKind(attachments, "image"));
+        debugMeta.put("messagesSentToCopilot", messages == null ? 0 : messages.size());
+        debugMeta.put("clientAttachmentSummary", buildCopilotAttachmentDebugSummary(attachments));
+
+        String messagesJson;
+        try {
+            messagesJson = objectMapper.writerWithDefaultPrettyPrinter()
+                .writeValueAsString(sanitizeCopilotDebugMessages(messages));
+        } catch (Exception ex) {
+            messagesJson = String.valueOf(messages);
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("[Copilot Debug] Backend payload prepared before calling model.\n\n");
+        sb.append("Client + backend context summary:\n");
+        sb.append("```json\n");
+        sb.append(trimForCopilotDebugDisplay(toPrettyJson(debugMeta), COPILOT_DEBUG_MARKDOWN_MAX_CHARS / 2));
+        sb.append("\n```\n\n");
+        sb.append("Messages sent to Copilot:\n");
+        sb.append("```json\n");
+        sb.append(trimForCopilotDebugDisplay(messagesJson, COPILOT_DEBUG_MESSAGES_JSON_MAX_CHARS));
+        sb.append("\n```\n");
+        return trimForCopilotDebugDisplay(sb.toString(), COPILOT_DEBUG_MARKDOWN_MAX_CHARS);
+    }
+
+    private String toPrettyJson(Object value) {
+        try {
+            return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(value);
+        } catch (JsonProcessingException ex) {
+            return String.valueOf(value);
+        }
+    }
+
+    private int countCopilotAttachmentsByKind(List<Map<String, Object>> attachments, String... kinds) {
+        if (attachments == null || attachments.isEmpty() || kinds == null || kinds.length == 0) {
+            return 0;
+        }
+        Set<String> acceptedKinds = Set.of(kinds);
+        int count = 0;
+        for (Map<String, Object> attachment : attachments) {
+            String kind = String.valueOf(attachment == null ? "" : attachment.getOrDefault("kind", "")).trim().toLowerCase();
+            if (acceptedKinds.contains(kind)) {
+                count += 1;
+            }
+        }
+        return count;
+    }
+
+    private List<Map<String, Object>> buildCopilotAttachmentDebugSummary(List<Map<String, Object>> attachments) {
+        List<Map<String, Object>> summary = new ArrayList<>();
+        if (attachments == null || attachments.isEmpty()) {
+            return summary;
+        }
+        for (Map<String, Object> attachment : attachments) {
+            if (attachment == null) {
+                continue;
+            }
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("kind", attachment.get("kind"));
+            item.put("name", attachment.get("name"));
+            item.put("mimeType", attachment.get("mimeType"));
+            item.put("size", attachment.get("size"));
+            item.put("summary", attachment.get("summary"));
+            String textContent = String.valueOf(attachment.getOrDefault("textContent", "")).trim();
+            if (!textContent.isEmpty()) {
+                item.put("textChars", textContent.length());
+            }
+            String dataUrl = String.valueOf(attachment.getOrDefault("dataUrl", "")).trim();
+            if (!dataUrl.isEmpty()) {
+                item.put("imageSource", sanitizeCopilotDebugImageUrl(dataUrl));
+            }
+            summary.add(item);
+        }
+        return summary;
+    }
+
+    private List<Map<String, Object>> sanitizeCopilotDebugMessages(List<Map<String, Object>> messages) {
+        List<Map<String, Object>> sanitized = new ArrayList<>();
+        if (messages == null || messages.isEmpty()) {
+            return sanitized;
+        }
+        for (Map<String, Object> message : messages) {
+            if (message == null) {
+                continue;
+            }
+            Map<String, Object> next = new LinkedHashMap<>();
+            for (Map.Entry<String, Object> entry : message.entrySet()) {
+                next.put(entry.getKey(), sanitizeCopilotDebugValue(entry.getValue()));
+            }
+            sanitized.add(next);
+        }
+        return sanitized;
+    }
+
+    private Object sanitizeCopilotDebugValue(Object value) {
+        if (value instanceof Map<?, ?> rawMap) {
+            Map<String, Object> sanitized = new LinkedHashMap<>();
+            for (Map.Entry<?, ?> entry : rawMap.entrySet()) {
+                String key = String.valueOf(entry.getKey());
+                Object nextValue = entry.getValue();
+                if ("url".equals(key) && nextValue instanceof String urlText) {
+                    sanitized.put(key, sanitizeCopilotDebugImageUrl(urlText));
+                } else {
+                    sanitized.put(key, sanitizeCopilotDebugValue(nextValue));
+                }
+            }
+            return sanitized;
+        }
+        if (value instanceof List<?> rawList) {
+            List<Object> sanitized = new ArrayList<>();
+            for (Object item : rawList) {
+                sanitized.add(sanitizeCopilotDebugValue(item));
+            }
+            return sanitized;
+        }
+        if (value instanceof String text) {
+            if (text.startsWith("data:image/")) {
+                return sanitizeCopilotDebugImageUrl(text);
+            }
+            return text;
+        }
+        return value;
+    }
+
+    private String sanitizeCopilotDebugImageUrl(String url) {
+        String value = String.valueOf(url == null ? "" : url).trim();
+        if (value.startsWith("data:image/")) {
+            int commaIndex = value.indexOf(',');
+            String header = commaIndex > 0 ? value.substring(0, commaIndex) : "data:image/*;base64";
+            return header + ",[omitted:" + value.length() + " chars]";
+        }
+        return trimForCopilotDebugDisplay(value, 240);
+    }
+
+    private String trimForCopilotDebugDisplay(String text, int maxChars) {
+        String value = String.valueOf(text == null ? "" : text);
+        if (maxChars <= 0 || value.length() <= maxChars) {
+            return value;
+        }
+        int keepHead = Math.max(200, (int) Math.floor(maxChars * 0.7));
+        int keepTail = Math.max(80, maxChars - keepHead - 32);
+        if (keepHead + keepTail + 32 > maxChars) {
+            keepTail = Math.max(40, maxChars - keepHead - 32);
+        }
+        String head = value.substring(0, Math.min(keepHead, value.length())).trim();
+        String tail = value.substring(Math.max(0, value.length() - keepTail)).trim();
+        return head + "\n...[TRUNCATED_FOR_DEBUG]...\n" + tail;
     }
 
     private List<Map<String, Object>> buildCopilotChatMessages(

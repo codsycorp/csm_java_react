@@ -40,6 +40,14 @@
 		"twoColumnNavigationTip": "垂直双列菜单在侧边位置",
 		"mixedNavigation": "混合导航",
 		"mixedNavigationTip": "一级导航在顶部，二级导航在侧边",
+		"ribbonNavigation": "Ribbon功能区",
+		"ribbonNavigationTip": "仿Office功能区：顶部显示选项卡，卡片下方分组显示功能按鈕",
+		"ribbonRequiresDesktop": "功能区导航仅支持桌面端屏幕（≥ 1200px）",
+		"ribbonShadowLevel": "Ribbon阴影层次",
+		"ribbonShadowLevelTip": "调整功能区分组与按钮的立体阴影强度",
+		"ribbonShadowSoft": "柔和",
+		"ribbonShadowMedium": "中等",
+		"ribbonShadowStrong": "强烈",
 		"sidebarWidth": "侧边栏宽度"
 	},
 	"tabbar": {

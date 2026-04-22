@@ -35,6 +35,7 @@ export type CopilotUserMessagePayload = {
 type ChatMessage = {
 	id: string;
 	role: "user" | "assistant";
+	messageType?: "response" | "debug";
 	content: string;
 	timestamp: number;
 	codeBlocks?: CodeBlock[];
@@ -518,11 +519,12 @@ export default function CopilotChat({
 
 		setMessages((prev) => {
 			const updated = [...prev];
-			if (updated.length > 0) {
-				const lastMsg = updated[updated.length - 1];
-				if (lastMsg.role === "assistant") {
+			for (let i = updated.length - 1; i >= 0; i -= 1) {
+				const lastMsg = updated[i];
+				if (lastMsg.role === "assistant" && lastMsg.messageType !== "debug") {
 					lastMsg.content = nextText;
 					lastMsg.codeBlocks = nextCodeBlocks;
+					break;
 				}
 			}
 			return updated;
@@ -746,6 +748,35 @@ export default function CopilotChat({
 			console.log("Chat completed:", data);
 		};
 
+		const handleCopilotDebug = (data: any) => {
+			const content = String(data?.content || "").trim();
+			if (!content) return;
+
+			const debugMessage: ChatMessage = {
+				id: `debug_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+				role: "assistant",
+				messageType: "debug",
+				content,
+				timestamp: Date.now(),
+				codeBlocks: extractCodeBlocks(content),
+			};
+
+			setMessages((prev) => {
+				const updated = [...prev];
+				let insertIndex = updated.length;
+				for (let i = updated.length - 1; i >= 0; i -= 1) {
+					const candidate = updated[i];
+					if (candidate.role === "assistant" && candidate.messageType !== "debug" && !candidate.content) {
+						insertIndex = i;
+						break;
+					}
+				}
+				updated.splice(insertIndex, 0, debugMessage);
+				return updated;
+			});
+			scrollToBottom(true);
+		};
+
 		const handleCopilotError = (data: any) => {
 			appendStageEvent({
 				stage: "error",
@@ -769,6 +800,7 @@ export default function CopilotChat({
 		};
 
 		socket.on("copilot_chat_chunk", handleCopilotChunk);
+		socket.on("copilot_chat_debug", handleCopilotDebug);
 		socket.on("copilot_chat_complete", handleCopilotComplete);
 		socket.on("copilot_chat_error", handleCopilotError);
 
@@ -782,6 +814,7 @@ export default function CopilotChat({
 				realtimeApplyTimerRef.current = null;
 			}
 			socket.off?.("copilot_chat_chunk", handleCopilotChunk);
+			socket.off?.("copilot_chat_debug", handleCopilotDebug);
 			socket.off?.("copilot_chat_complete", handleCopilotComplete);
 			socket.off?.("copilot_chat_error", handleCopilotError);
 			lastListenerSetupRef.current = false;
@@ -841,6 +874,7 @@ export default function CopilotChat({
 			const assistantMsg: ChatMessage = {
 				id: `assistant_${Date.now()}`,
 				role: "assistant",
+				messageType: "response",
 				content: "",
 				timestamp: Date.now(),
 			};
@@ -1007,6 +1041,9 @@ export default function CopilotChat({
 											</>
 										) : (
 											<div className={styles.assistantText}>
+												{msg.messageType === "debug" && (
+													<Tag color="gold">COPILOT DEBUG PAYLOAD</Tag>
+												)}
 												{/* Render text with code blocks */}
 												{msg.content.split(/```[\s\S]*?```/g).map((part, idx) => (
 													<span key={idx}>{part}</span>
@@ -1028,7 +1065,7 @@ export default function CopilotChat({
 																	onClick={() => handleCopyCode(block.code)}
 																	title={uiText("Sao chép code", "Copy code", "复制代码")}
 																/>
-																{onCodeInsert && (
+																{onCodeInsert && msg.messageType !== "debug" && (
 																	<Button
 																		type="text"
 																		size="small"

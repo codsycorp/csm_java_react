@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
 	Badge,
@@ -44,6 +44,7 @@ import type { DragEndEvent } from "@dnd-kit/core";
 import { CSS } from "@dnd-kit/utilities";
 import dayjs, { type Dayjs } from "dayjs";
 import { buildDetailGridSelectEnums, CsmEditModal } from "#src/components/csm-grid/CsmEditModal";
+import type { EditSubmitAction } from "#src/components/csm-grid/CsmEditModal";
 import type { MConfig, TableField } from "#src/components/csm-grid/CsmDynamicGrid";
 import { getTableData, updateTableData } from "#src/components/csm-grid/CsmApi";
 import { csmDecrypt } from "#src/components/csm-grid/CsmCrypto";
@@ -229,6 +230,23 @@ interface TimeBucket {
 	overdue: number;
 	done: number;
 	open: number;
+}
+
+function safeEval<TArgs extends any[], TReturn>(args: string[], body: string): ((...a: TArgs) => TReturn) | null {
+	try {
+		const trimmed = body.trim();
+		const isIIFE = trimmed.startsWith("(function") || trimmed.startsWith("(() =>") || trimmed.startsWith("(async") || trimmed.startsWith("(async () =>");
+		const isFuncDecl = trimmed.startsWith("function ");
+		const hasReturn = trimmed.includes("return ");
+		const hasSideEffects = /\b(alert|console\.|debugger|throw|window\.)/.test(trimmed);
+		const code = (isIIFE || isFuncDecl || hasReturn || hasSideEffects) ? body : `return (${body})`;
+		return new Function(...args, code) as any;
+	} catch (err) {
+		console.error("[CsmKanbanBoard.safeEval] Error creating function:", err);
+		console.error("[CsmKanbanBoard.safeEval] Args:", args);
+		console.error("[CsmKanbanBoard.safeEval] Body (first 500 chars):", body.substring(0, 500));
+		return null;
+	}
 }
 
 function DraggableCard({ id, children }: { id: string; children: React.ReactNode }) {
@@ -654,6 +672,7 @@ export default function CsmKanbanBoard({
 	const [granularity, setGranularity] = useState<Granularity>(config.timeline?.defaultGranularity || "day");
 	const [range, setRange] = useState<[Dayjs, Dayjs]>(getPresetRange(config.timeline?.defaultRangePreset));
 	const [comboTables, setComboTables] = useState<BoardDatabase>({});
+	const boardContainerRef = useRef<HTMLDivElement | null>(null);
 
 	const sensors = useSensors(
 		useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -797,6 +816,97 @@ export default function CsmKanbanBoard({
 	}, [effectiveAppId, effectiveDecrypt, fields]);
 
 	const databaseForSelect = useMemo(() => ({ ...(database || {}), ...comboTables }), [comboTables, database]);
+	const createSeftContext = useCallback(() => ({
+		m_configs: mConfigs,
+		context: { select_row: editingRecord || undefined },
+		database: databaseForSelect,
+		appId: effectiveAppId,
+		user,
+		csmDecrypt: effectiveDecrypt,
+		updateTableData,
+	}), [databaseForSelect, editingRecord, effectiveAppId, effectiveDecrypt, mConfigs, user]);
+
+	const resolveTriggerCode = useCallback((rawTrigger: unknown): string => {
+		if (typeof rawTrigger !== "string") return "";
+		let code = String(rawTrigger || "");
+		try {
+			code = effectiveDecrypt(code) || code;
+		} catch {
+			// Keep raw code when trigger is not encrypted.
+		}
+		return code;
+	}, [effectiveDecrypt]);
+
+	const runSideEffectTrigger = useCallback((triggerName: string, rowData: RowData) => {
+		const rawTrigger = (mConfigs.trigger as any)?.[triggerName];
+		if (!rawTrigger || typeof rawTrigger !== "string") return;
+
+		const code = resolveTriggerCode(rawTrigger);
+		if (!code) return;
+
+		const fn = safeEval<[any, RowData, BoardDatabase], any>(["seft", "data", "bang"], code);
+		if (!fn) return;
+
+		try {
+			fn(createSeftContext(), JSON.parse(JSON.stringify(rowData || {})), databaseForSelect);
+		} catch (err) {
+			console.error(`[CsmKanbanBoard] ${triggerName} trigger error:`, err);
+		}
+	}, [createSeftContext, databaseForSelect, mConfigs.trigger, resolveTriggerCode]);
+
+	const runAfterStringTrigger = useCallback(async (triggerName: "afterAdd" | "afterEdit" | "afterDelete", allData: RowData[]) => {
+		const rawTrigger = (mConfigs.trigger as any)?.[triggerName];
+		if (!rawTrigger || typeof rawTrigger !== "string") return;
+
+		const code = resolveTriggerCode(rawTrigger);
+		if (!code) return;
+
+		const fn = safeEval<[RowData[], any, BoardDatabase], any>(["allData", "seft", "data"], code);
+		if (!fn) return;
+
+		try {
+			await fn(JSON.parse(JSON.stringify(allData || [])), createSeftContext(), databaseForSelect);
+		} catch (err) {
+			console.error(`[CsmKanbanBoard] ${triggerName} trigger error:`, err);
+		}
+	}, [createSeftContext, databaseForSelect, mConfigs.trigger, resolveTriggerCode]);
+
+	const runBeforeSaveStringTrigger = useCallback(async (rowData: RowData): Promise<RowData | false> => {
+		const rawTrigger = mConfigs.trigger?.beforeSave;
+		if (!rawTrigger || typeof rawTrigger !== "string") return rowData;
+
+		const code = resolveTriggerCode(rawTrigger);
+		if (!code) return rowData;
+
+		const inputRow = JSON.parse(JSON.stringify(rowData || {}));
+		const seftContext = createSeftContext();
+		const compileAttempts: Array<string> = [
+			[
+				"var validateOrgLink = typeof validateOrgLink === 'function' ? validateOrgLink : function () { return true; };",
+				"var findRow = typeof findRow === 'function' ? findRow : function () { return null; };",
+				"var resolveComboValueByQuery = typeof resolveComboValueByQuery === 'function' ? resolveComboValueByQuery : function (_field, value) { return value == null ? '' : String(value); };",
+				`const __beforeSave = (${code}); return __beforeSave(row, seft, data);`,
+			].join("\n"),
+			`const __beforeSave = (${code}); return __beforeSave(row, seft, data);`,
+			code,
+		];
+
+		for (const body of compileAttempts) {
+			const fn = safeEval<[RowData, any, BoardDatabase], any>(["row", "seft", "data"], body);
+			if (!fn) continue;
+
+			try {
+				const result = await fn(inputRow, seftContext, databaseForSelect);
+				if (result === false) return false;
+				if (result && typeof result === "object") return { ...rowData, ...result };
+				return rowData;
+			} catch (err) {
+				console.error("[CsmKanbanBoard] beforeSave trigger attempt failed:", err);
+			}
+		}
+
+		return rowData;
+	}, [createSeftContext, databaseForSelect, mConfigs.trigger, resolveTriggerCode]);
 
 	const selectEnums = useMemo(() => buildDetailGridSelectEnums(fields, databaseForSelect, effectiveDecrypt, {
 		appId: effectiveAppId,
@@ -862,6 +972,12 @@ export default function CsmKanbanBoard({
 		() => mergedRows.find((row) => String(row[pkField]) === selectedCardId) || null,
 		[mergedRows, pkField, selectedCardId],
 	);
+	const editingRecordIndex = useMemo(
+		() => editingRecord ? filteredRows.findIndex((row) => String(row[pkField]) === String(editingRecord[pkField])) : -1,
+		[editingRecord, filteredRows, pkField],
+	);
+	const canNavigatePrevRecord = editingRecordIndex > 0;
+	const canNavigateNextRecord = editingRecordIndex >= 0 && editingRecordIndex < filteredRows.length - 1;
 
 	const stageIdSet = useMemo(() => new Set(stages.map((stage) => String(stage.id))), [stages]);
 	const doneStageIds = useMemo(
@@ -1042,6 +1158,15 @@ export default function CsmKanbanBoard({
 		setEditorOpen(true);
 	}, [selectedCard, t]);
 
+	const navigateEditingRecord = useCallback((direction: "prev" | "next") => {
+		if (!editingRecord) return;
+		const delta = direction === "prev" ? -1 : 1;
+		const nextRecord = filteredRows[editingRecordIndex + delta];
+		if (!nextRecord) return;
+		setEditingRecord(nextRecord);
+		setSelectedCardId(String(nextRecord[pkField] || ""));
+	}, [editingRecord, editingRecordIndex, filteredRows, pkField]);
+
 	const confirmDelete = useCallback((row?: RowData | null) => {
 		const target = row || selectedCard;
 		if (!target || !config.tableName) {
@@ -1077,8 +1202,11 @@ export default function CsmKanbanBoard({
 						pk_fields: pkFields,
 						where: buildWhereFromRow(target, pkFields),
 					});
-					setRows((prev) => prev.filter((item) => String(item[pkField]) !== String(target[pkField])));
+					const nextRows = rows.filter((item) => String(item[pkField]) !== String(target[pkField]));
+					setRows(nextRows);
 					setSelectedCardId("");
+					runSideEffectTrigger("delete_db", target);
+					await runAfterStringTrigger("afterDelete", nextRows);
 					if (typeof boardTriggers.afterDelete === "function") {
 						await boardTriggers.afterDelete(triggerContext);
 					}
@@ -1089,9 +1217,9 @@ export default function CsmKanbanBoard({
 				}
 			},
 		});
-	}, [boardTriggers, config, config.tableName, effectiveAppId, onDataChange, pkField, pkFields, rows, selectedCard, t]);
+	}, [boardTriggers, config, config.tableName, effectiveAppId, onDataChange, pkField, pkFields, rows, runAfterStringTrigger, runSideEffectTrigger, selectedCard, t]);
 
-	const handleSubmit = useCallback(async (values: RowData) => {
+	const handleSubmit = useCallback(async (values: RowData, submitAction: EditSubmitAction = "close") => {
 		if (!config.tableName) return;
 		const isEdit = Boolean(editingRecord);
 		let payload = isEdit ? { ...editingRecord, ...values } : { ...values };
@@ -1132,12 +1260,15 @@ export default function CsmKanbanBoard({
 			isEdit,
 			previousRecord: editingRecord,
 		};
+		const beforeSaveValues = await runBeforeSaveStringTrigger(payload);
+		if (beforeSaveValues === false) return;
+		payload = beforeSaveValues;
 		if (typeof boardTriggers.beforeSave === "function") {
 			const nextPayload = await boardTriggers.beforeSave(payload, triggerContext);
 			if (nextPayload === false) return;
 			if (nextPayload && typeof nextPayload === "object") payload = nextPayload;
 		}
-		await updateTableData<RowData>({
+		const response = await updateTableData<RowData>({
 			app_id: effectiveAppId,
 			obj_name: config.tableName,
 			command: isEdit ? "update" : "create",
@@ -1145,6 +1276,15 @@ export default function CsmKanbanBoard({
 			pk_fields: pkFields,
 			where: isEdit && editingRecord ? buildWhereFromRow(editingRecord, pkFields) : undefined,
 		});
+		const responseAny = response as any;
+		const serverUpdatedRow = (responseAny?.updated_row && typeof responseAny.updated_row === "object")
+			? responseAny.updated_row
+			: (responseAny?.data?.updated_row && typeof responseAny.data.updated_row === "object"
+				? responseAny.data.updated_row
+				: null);
+		if (serverUpdatedRow && typeof serverUpdatedRow === "object") {
+			payload = { ...payload, ...serverUpdatedRow };
+		}
 		if (isEdit && typeof boardTriggers.afterEdit === "function") {
 			await boardTriggers.afterEdit(payload, triggerContext);
 		}
@@ -1162,15 +1302,24 @@ export default function CsmKanbanBoard({
 				message.warning(err?.message || t("kanban.updateError"));
 			}
 		}
-		setRows((prev) => {
-			if (!isEdit) return [...prev, payload];
-			return prev.map((row) => (String(row[pkField]) === String(editingRecord?.[pkField]) ? { ...row, ...payload } : row));
-		});
+		const nextRows = isEdit
+			? rows.map((row) => (String(row[pkField]) === String(editingRecord?.[pkField]) ? { ...row, ...payload } : row))
+			: [...rows, payload];
+		setRows(nextRows);
+		runSideEffectTrigger("update_db", payload);
+		await runAfterStringTrigger(isEdit ? "afterEdit" : "afterAdd", nextRows);
 		setSelectedCardId(String(payload[pkField] || ""));
-		setEditorOpen(false);
+		if (submitAction === "prev" || submitAction === "next") {
+			navigateEditingRecord(submitAction);
+		} else if (submitAction === "addAnother") {
+			setEditingRecord(null);
+		} else {
+			setEditorOpen(false);
+			setEditingRecord(null);
+		}
 		onDataChange?.();
 		message.success(isEdit ? t("kanban.saveSuccess") : t("kanban.createSuccess"));
-	}, [appendProgressLog, applyStageProgressUpdate, boardTriggers, config, config.tableName, editingRecord, effectiveAppId, findMissingRequiredFields, onDataChange, pkField, pkFields, rows, stageField, stageIdSet, stages, t]);
+	}, [appendProgressLog, applyStageProgressUpdate, boardTriggers, config, config.tableName, editingRecord, effectiveAppId, findMissingRequiredFields, navigateEditingRecord, onDataChange, pkField, pkFields, rows, runAfterStringTrigger, runBeforeSaveStringTrigger, runSideEffectTrigger, stageField, stageIdSet, stages, t]);
 
 	const handleDragEnd = useCallback(async (event: DragEndEvent) => {
 		const activeId = String(event.active.id || "");
@@ -1311,7 +1460,7 @@ export default function CsmKanbanBoard({
 	const dropHoverBg = token.colorPrimaryBg;
 
 	return (
-		<div style={{ padding: 16, height: "100%", overflow: "auto" }}>
+		<div ref={boardContainerRef} style={{ padding: 16, height: "100%", overflow: "auto", position: "relative", minHeight: 320 }}>
 			<Spin spinning={loading}>
 				<Space direction="vertical" size={12} style={{ width: "100%" }}>
 					<Card size="small" style={{ borderRadius: 14 }}>
@@ -1568,11 +1717,21 @@ export default function CsmKanbanBoard({
 					{fields.length > 0 && (
 						<CsmEditModal
 							open={editorOpen}
-							onOpenChange={setEditorOpen}
+							mode="embedded"
+							onOpenChange={(open) => {
+								setEditorOpen(open);
+								if (!open) setEditingRecord(null);
+							}}
 							title={editingRecord ? t("kanban.editTitle") : t("kanban.addTitle")}
 							m_configs={mConfigs}
 							fields={fields}
 							record={editingRecord}
+							showRowNavigator={Boolean(editingRecord)}
+							showAddAnother={!editingRecord}
+							canNavigatePrev={canNavigatePrevRecord}
+							canNavigateNext={canNavigateNextRecord}
+							onNavigateRecord={navigateEditingRecord}
+							embeddedPanelContainer={boardContainerRef}
 							onSubmit={handleSubmit}
 							selectEnums={selectEnums}
 							selectOptions={selectOptions}

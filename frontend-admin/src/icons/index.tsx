@@ -11,6 +11,7 @@ import MixedNavigation from "./svg/mixed-navigation.svg?react";
 import Moon from "./svg/moon.svg?react";
 import ProfileCard from "./svg/profile-card.svg?react";
 import ReactLogo from "./svg/react-logo.svg?react";
+import RibbonNavigation from "./svg/ribbon-navigation.svg?react";
 import ServerError from "./svg/server-error.svg?react";
 import SideNavigation from "./svg/side-navigation.svg?react";
 import Sun from "./svg/sun.svg?react";
@@ -37,6 +38,10 @@ export function TopNavigationIcon(props: Partial<CustomIconComponentProps>) {
 
 export function TwoColumnNavigationIcon(props: Partial<CustomIconComponentProps>) {
 	return <Icon component={TwoColumnNavigation} {...props} className={cn("[&>svg]:h-[0.63em]", props.className)} />;
+}
+
+export function RibbonNavigationIcon(props: Partial<CustomIconComponentProps>) {
+	return <Icon component={RibbonNavigation} {...props} className={cn("[&>svg]:h-[0.63em]", props.className)} />;
 }
 
 /* ========================== End ========================== */

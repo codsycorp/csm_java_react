@@ -40,6 +40,14 @@
 		"twoColumnNavigationTip": "Menu hai cột dọc ở vị trí bên",
 		"mixedNavigation": "Điều hướng hỗn hợp",
 		"mixedNavigationTip": "Điều hướng chính ở trên cùng, điều hướng phụ ở bên",
+		"ribbonNavigation": "Ribbon (Dải lệnh)",
+		"ribbonNavigationTip": "Kiểu ribbon như Microsoft Office: các tab ở trên, bên dưới hiển nhóm nút chức năng",
+		"ribbonRequiresDesktop": "Ribbon chỉ khả dụng trên màn hình máy tính (≥ 1200px)",
+		"ribbonShadowLevel": "Độ nổi bóng Ribbon",
+		"ribbonShadowLevelTip": "Chỉnh độ nổi của nhóm và nút trong Ribbon",
+		"ribbonShadowSoft": "Mềm",
+		"ribbonShadowMedium": "Vừa",
+		"ribbonShadowStrong": "Mạnh",
 		"sidebarWidth": "Chiều rộng thanh bên"
 	},
 	"tabbar": {

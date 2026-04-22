@@ -13,6 +13,7 @@ import {
   ProFormText,
   ProFormTextArea,
 } from "@ant-design/pro-components";
+import * as AntdIcons from "@ant-design/icons";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { FormInstance, UploadProps } from "antd";
@@ -40,6 +41,29 @@ interface DetailProps {
   fullMenuList?: MenuItemType[];
   setFullMenuList?: (menus: MenuItemType[]) => void;
 }
+
+const QUICK_ANT_ICON_NAMES = [
+  "AppstoreOutlined",
+  "HomeOutlined",
+  "DashboardOutlined",
+  "UserOutlined",
+  "TeamOutlined",
+  "SettingOutlined",
+  "ToolOutlined",
+  "DatabaseOutlined",
+  "FileTextOutlined",
+  "BarChartOutlined",
+  "PieChartOutlined",
+  "ShoppingCartOutlined",
+  "ShopOutlined",
+  "MailOutlined",
+  "BellOutlined",
+  "SafetyOutlined",
+  "LockOutlined",
+  "CloudOutlined",
+  "ApiOutlined",
+  "CodeOutlined",
+];
 
 function findMenuById(menus: MenuItemType[], id: string): MenuItemType | undefined {
 	for (const menu of menus) {
@@ -595,6 +619,40 @@ export function Detail({
   const user = useUserStore();
   const [autoCodeOptions, setAutoCodeOptions] = useState<Array<{ label: string; value: string }>>([]);
   const [loadingAutoCode, setLoadingAutoCode] = useState(false);
+
+  const antIconOptions = useMemo(() => {
+    const fullOptions = Object.keys(AntdIcons)
+      .filter((name) => /Outlined$|Filled$|TwoTone$/.test(name))
+      .sort((a, b) => a.localeCompare(b))
+      .map((name) => {
+        const IconComp = (AntdIcons as any)[name];
+        return {
+          label: (
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+              <IconComp />
+              <span>{name}</span>
+            </span>
+          ),
+          value: name,
+          searchText: name.toLowerCase(),
+        };
+      });
+
+    const quickSet = new Set(QUICK_ANT_ICON_NAMES.map((name) => name.toLowerCase()));
+    const quickOptions = fullOptions.filter((opt) => quickSet.has(String(opt.value || "").toLowerCase()));
+    const allOptionsWithoutQuick = fullOptions.filter((opt) => !quickSet.has(String(opt.value || "").toLowerCase()));
+
+    return [
+      {
+        label: t("system.menu.iconQuickGroup") || "Gợi ý nhanh",
+        options: quickOptions,
+      },
+      {
+        label: t("system.menu.iconAllGroup") || "Tất cả icon Ant Design",
+        options: allOptionsWithoutQuick,
+      },
+    ];
+  }, [t]);
 
   const relatedDataMenuOptions = useMemo(() => {
     return (flatParentMenus || [])
@@ -2471,17 +2529,25 @@ export function Detail({
             <div style={{ marginBottom: 8, fontWeight: 500, fontSize: 14 }}>
               {t('system.menu.icon') || 'Icon'}
             </div>
-            <ProFormText
+            <ProFormSelect
               name="icon"
               noStyle
               fieldProps={{
-                placeholder: t("system.menu.iconPlaceholder"),
+                placeholder: t("system.menu.iconPlaceholder") || "Ví dụ: AppstoreOutlined",
+                showSearch: true,
+                allowClear: true,
                 size: 'large',
                 style: { width: '100%' },
+                filterOption: (input: string, option: any) => {
+                  const q = String(input || "").toLowerCase();
+                  return String(option?.value || "").toLowerCase().includes(q)
+                    || String(option?.searchText || "").toLowerCase().includes(q);
+                },
               }}
+              options={antIconOptions}
             />
             <div style={{ marginTop: 4, fontSize: 12, color: '#8c8c8c' }}>
-              {t("system.menu.iconHint")}
+              {t("system.menu.iconHint") || "Gõ để tìm icon Ant Design (ví dụ: UserOutlined, SettingOutlined). Nếu để trống sẽ dùng icon mặc định."}
             </div>
           </div>
 

@@ -13,6 +13,7 @@ import LayoutHeader from "../layout-header";
 import LayoutMenu from "../layout-menu";
 import { useMenu } from "../layout-menu/use-menu";
 import LayoutMixedSidebar from "../layout-mixed-sidebar";
+import LayoutRibbonMenu from "../layout-ribbon-menu";
 import LayoutSidebar from "../layout-sidebar";
 import LayoutTabbar from "../layout-tabbar";
 import { BreadcrumbViews, Logo } from "../widgets";
@@ -47,11 +48,15 @@ export default function ContainerLayout() {
 	const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 	const classes = useStyles();
 	const screens = useBreakpoint();
-	const { isTopNav, isTwoColumnNav, isMixedNav, sidebarWidth, sideCollapseWidth } = useLayout();
+	const { isTopNav, isTwoColumnNav, isMixedNav, isRibbonNav: isRibbonNavPref, sidebarWidth, sideCollapseWidth } = useLayout();
 	const isMaximize = useTabsStore(state => state.isMaximize);
 	const tabbarEnable = usePreferencesStore(state => state.tabbarEnable);
-	const { isMobile } = useDeviceType();
+	const { isMobile, isPC } = useDeviceType();
 	const { sideNavItems, topNavItems, handleMenuSelect } = useMenu();
+
+	// Ribbon nav only activates on PC screens (xl ≥ 1200px).
+	// On mobile/tablet, fall back to side navigation behaviour.
+	const isRibbonNav = isRibbonNavPref && isPC;
 
 	useEffect(() => {
 		/* iPad */
@@ -70,9 +75,9 @@ export default function ContainerLayout() {
 
 	const layoutContextValue = useMemo(() => ({ sidebarCollapsed, setSidebarCollapsed }), [sidebarCollapsed, setSidebarCollapsed]);
 
-	const sidebarEnableState = useMemo(() => !isTopNav, [isTopNav]);
+	const sidebarEnableState = useMemo(() => !isTopNav && !isRibbonNav, [isTopNav, isRibbonNav]);
 	const computedSidebarWidth = useMemo(() => {
-		if (isMaximize || isMobile) {
+		if (isMaximize || isMobile || isRibbonNav) {
 			return 0;
 		}
 		const currentSidebarWidth = sidebarCollapsed ? sideCollapseWidth : sidebarWidth;
@@ -113,8 +118,21 @@ export default function ContainerLayout() {
 									<LayoutMenu mode="horizontal" menus={topNavItems} handleMenuSelect={handleMenuSelect} />
 								</>
 							)
-							: <BreadcrumbViews />}
+							: isRibbonNav
+								? <Logo sidebarCollapsed={false} className="mr-4" />
+								: <BreadcrumbViews />}
 					</LayoutHeader>
+
+					{/* Ribbon navigation bar */}
+					{isRibbonNav
+						? (
+							<LayoutRibbonMenu
+								menus={topNavItems}
+								handleMenuSelect={handleMenuSelect}
+							/>
+						)
+						: null}
+
 					{tabbarEnable ? <LayoutTabbar /> : null}
 
 					{/* Mobile */}

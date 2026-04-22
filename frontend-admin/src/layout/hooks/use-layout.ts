@@ -1,6 +1,7 @@
 import { useDeviceType } from "#src/hooks";
 import {
 	MIXED_NAVIGATION,
+	RIBBON_NAVIGATION,
 	SIDE_NAVIGATION,
 	TOP_NAVIGATION,
 	TWO_COLUMN_NAVIGATION,
@@ -66,12 +67,21 @@ export function useLayout() {
 		[currentLayout],
 	);
 
+	/**
+	 * 是否为Ribbon导航
+	 */
+	const isRibbonNav = useMemo(
+		() => currentLayout === RIBBON_NAVIGATION,
+		[currentLayout],
+	);
+
 	return {
 		currentLayout,
 		isSideNav,
 		isTopNav,
 		isMixedNav,
 		isTwoColumnNav,
+		isRibbonNav,
 		sidebarWidth,
 		sideCollapseWidth,
 	};

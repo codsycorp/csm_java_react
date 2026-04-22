@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 100" fill="currentColor">
+  <!-- Outer border of the app window -->
+  <rect x="2" y="2" width="156" height="96" rx="4" fill="none" stroke="currentColor" stroke-width="3"/>
+  <!-- Tab bar background -->
+  <rect x="2" y="2" width="156" height="18" rx="4" fill="currentColor" opacity="0.15"/>
+  <!-- Active tab highlight -->
+  <rect x="8" y="4" width="28" height="16" rx="3" fill="currentColor" opacity="0.55"/>
+  <!-- Inactive tabs -->
+  <rect x="40" y="4" width="24" height="16" rx="3" fill="currentColor" opacity="0.2"/>
+  <rect x="68" y="4" width="24" height="16" rx="3" fill="currentColor" opacity="0.2"/>
+  <rect x="96" y="4" width="24" height="16" rx="3" fill="currentColor" opacity="0.2"/>
+  <!-- Ribbon band background -->
+  <rect x="2" y="20" width="156" height="28" fill="currentColor" opacity="0.08"/>
+  <!-- Divider line below ribbon -->
+  <line x1="2" y1="48" x2="158" y2="48" stroke="currentColor" stroke-width="1.5" opacity="0.3"/>
+  <!-- Ribbon group 1 - 3 big buttons -->
+  <rect x="8" y="24" width="14" height="18" rx="2" fill="currentColor" opacity="0.4"/>
+  <rect x="26" y="24" width="14" height="18" rx="2" fill="currentColor" opacity="0.4"/>
+  <rect x="44" y="24" width="14" height="18" rx="2" fill="currentColor" opacity="0.4"/>
+  <!-- Group separator -->
+  <line x1="64" y1="24" x2="64" y2="42" stroke="currentColor" stroke-width="1.5" opacity="0.3"/>
+  <!-- Ribbon group 2 - 2 big + 3 small stacked -->
+  <rect x="68" y="24" width="14" height="18" rx="2" fill="currentColor" opacity="0.4"/>
+  <rect x="86" y="24" width="14" height="18" rx="2" fill="currentColor" opacity="0.4"/>
+  <!-- Group separator -->
+  <line x1="106" y1="24" x2="106" y2="42" stroke="currentColor" stroke-width="1.5" opacity="0.3"/>
+  <!-- Ribbon group 3 - small stacked items -->
+  <rect x="110" y="24" width="20" height="7" rx="2" fill="currentColor" opacity="0.35"/>
+  <rect x="110" y="33" width="20" height="7" rx="2" fill="currentColor" opacity="0.35"/>
+  <!-- Content area lines -->
+  <line x1="8" y1="58" x2="152" y2="58" stroke="currentColor" stroke-width="2" opacity="0.15"/>
+  <line x1="8" y1="66" x2="120" y2="66" stroke="currentColor" stroke-width="2" opacity="0.15"/>
+  <line x1="8" y1="74" x2="135" y2="74" stroke="currentColor" stroke-width="2" opacity="0.15"/>
+  <line x1="8" y1="82" x2="100" y2="82" stroke="currentColor" stroke-width="2" opacity="0.15"/>
+</svg>

@@ -1,5 +1,6 @@
 import type {
 	MIXED_NAVIGATION,
+	RIBBON_NAVIGATION,
 	TOP_NAVIGATION,
 	TWO_COLUMN_NAVIGATION,
 } from "#src/layout/widgets/preferences/blocks/layout/constants";
@@ -16,6 +17,7 @@ import { persist } from "zustand/middleware";
  * @en Tabbar style
  */
 export type TabsStyleType = "brisk" | "card" | "chrome" | "plain";
+export type RibbonShadowLevel = "soft" | "medium" | "strong";
 
 /**
  * @zh 主题类型
@@ -54,11 +56,12 @@ interface AnimationState {
 	transitionName: string
 }
 
-export type NavigationType = typeof SIDE_NAVIGATION | typeof TOP_NAVIGATION | typeof TWO_COLUMN_NAVIGATION | typeof MIXED_NAVIGATION;
+export type NavigationType = typeof SIDE_NAVIGATION | typeof TOP_NAVIGATION | typeof TWO_COLUMN_NAVIGATION | typeof MIXED_NAVIGATION | typeof RIBBON_NAVIGATION;
 export type BuiltinThemeType = "red" | "volcano" | "orange" | "gold" | "yellow" | "lime" | "green" | "cyan" | "blue" | "geekblue" | "purple" | "magenta" | "gray" | "custom";
 
 interface LayoutState {
 	navigationStyle: NavigationType
+	ribbonShadowLevel: RibbonShadowLevel
 	/**
 	 * 侧边菜单宽度
 	 * @default 210
@@ -188,6 +191,7 @@ export const DEFAULT_PREFERENCES = {
 
 	/* ================== Layout ================== */
 	navigationStyle: SIDE_NAVIGATION,
+	ribbonShadowLevel: "medium",
 	sidebarWidth: 210,
 	sideCollapseWidth: COLLAPSED_WIDTH,
 	/* ================== Layout ================== */

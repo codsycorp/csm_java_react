@@ -664,7 +664,7 @@
       lgThManualRunCount: "Đầu vào chạy",
       lgThAutoFlow: "Luồng tự động",
       lgThAutoRunSearch: "⚙ Chạy tự động tìm",
-      lgThAutoRun: "Lọc Tự Động (C1–C7)",
+      lgThAutoRun: "Lọc Tự Động (C1–C8)",
       lgThAutoC1Ngay: "C1 Ngày: Top N lâu nhất",
       lgThAutoC1Ky: "C1 Kỳ: Top N lâu nhất",
       lgThAutoC2NgayCX: "C2 Ngày CX (vd: 5,9,13)",
@@ -673,6 +673,7 @@
       lgThAutoC5KyGap: "C5: Kỳ CX > Lâu Kỳ + N",
       lgThAutoC6Both: "C6: Ngày CX ≥ Lâu Ngày VÀ Kỳ CX ≥ Lâu Kỳ",
       lgThAutoC7Tuan21Min: "C7 Tổng 21 tuần: Top N bé nhất",
+      lgThAutoC8Tong29Min: "C8 Tổng 29 ngày: Top N bé nhất",
       lgThAutoResult: "Kết Quả Lọc Tự Động",
       lgThResultSet: "Chọn Dòng Kết Quả",
       lgThSelect: "Chọn",
@@ -915,7 +916,7 @@
       lgThManualRunCount: "Run input",
       lgThAutoFlow: "Auto Flow",
       lgThAutoRunSearch: "⚙ Run Auto Search",
-      lgThAutoRun: "Auto Filter (C1–C7)",
+      lgThAutoRun: "Auto Filter (C1–C8)",
       lgThAutoC1Ngay: "C1 Day: Top N longest",
       lgThAutoC1Ky: "C1 Period: Top N longest",
       lgThAutoC2NgayCX: "C2: Days No-show (e.g. 5,9,13)",
@@ -924,6 +925,7 @@
       lgThAutoC5KyGap: "C5: Periods No-show > Max Period Gap + N",
       lgThAutoC6Both: "C6: Days No-show ≥ Max Day AND Periods No-show ≥ Max Period",
       lgThAutoC7Tuan21Min: "C7 Total 21 weeks: Top N smallest",
+      lgThAutoC8Tong29Min: "C8 Total 29 days: Top N smallest",
       lgThAutoResult: "Auto Filter Results",
       lgThResultSet: "Result Lines",
       lgThSelect: "Select",
@@ -1166,7 +1168,7 @@
       lgThManualRunCount: "执行输入",
       lgThAutoFlow: "自动流程",
       lgThAutoRunSearch: "⚙ 运行自动查找",
-      lgThAutoRun: "自动筛选 (C1–C7)",
+      lgThAutoRun: "自动筛选 (C1–C8)",
       lgThAutoC1Ngay: "C1 天：最长N个",
       lgThAutoC1Ky: "C1 期：最长N个",
       lgThAutoC2NgayCX: "C2 未出现天数（例如：5,9,13）",
@@ -1175,6 +1177,7 @@
       lgThAutoC5KyGap: "C5: 未出现期数 > 最大间隔 + N",
       lgThAutoC6Both: "C6: 天数 ≥ 最大天间隔 且 期数 ≥ 最大期间隔",
       lgThAutoC7Tuan21Min: "C7 21周总和：最小N个",
+      lgThAutoC8Tong29Min: "C8 29天总和：最小N个",
       lgThAutoResult: "自动筛选结果",
       lgThResultSet: "结果行选择",
       lgThSelect: "勾选",
@@ -2721,6 +2724,9 @@
     var _slr_autoRows = useState([]), legacySlrAutoRows = _slr_autoRows[0], setLegacySlrAutoRows = _slr_autoRows[1];
     var _slr_autoSummary = useState(""), legacySlrAutoSummary = _slr_autoSummary[0], setLegacySlrAutoSummary = _slr_autoSummary[1];
     var _slr_autoDebugLogs = useState([]), legacySlrAutoDebugLogs = _slr_autoDebugLogs[0], setLegacySlrAutoDebugLogs = _slr_autoDebugLogs[1];
+    var _slr_autoTongHopRows = useState([]), legacySlrAutoTongHopRows = _slr_autoTongHopRows[0], setLegacySlrAutoTongHopRows = _slr_autoTongHopRows[1];
+    var _slr_autoTongHopSummary = useState(""), legacySlrAutoTongHopSummary = _slr_autoTongHopSummary[0], setLegacySlrAutoTongHopSummary = _slr_autoTongHopSummary[1];
+    var _slr_autoTongHopRunning = useState(false), legacySlrAutoTongHopRunning = _slr_autoTongHopRunning[0], setLegacySlrAutoTongHopRunning = _slr_autoTongHopRunning[1];
     // --- SLR Auto-run custom conditions ---
     var _slr_autoSttRange = useState(5), legacySlrAutoSttRange = _slr_autoSttRange[0], setLegacySlrAutoSttRange = _slr_autoSttRange[1];
     var _slr_autoNoHitDays = useState(17), legacySlrAutoNoHitDays = _slr_autoNoHitDays[0], setLegacySlrAutoNoHitDays = _slr_autoNoHitDays[1];
@@ -3409,6 +3415,7 @@
     var _ath13 = useState(""), legacyThAutoC5KyGap = _ath13[0], setLegacyThAutoC5KyGap = _ath13[1];
     var _ath14 = useState(false), legacyThAutoC6Both = _ath14[0], setLegacyThAutoC6Both = _ath14[1];
     var _ath14b = useState(""), legacyThAutoC7Tuan21Min = _ath14b[0], setLegacyThAutoC7Tuan21Min = _ath14b[1];
+    var _ath14c = useState(""), legacyThAutoC8Tong29Min = _ath14c[0], setLegacyThAutoC8Tong29Min = _ath14c[1];
     var _ath15 = useState(""), legacyThIntersect = _ath15[0], setLegacyThIntersect = _ath15[1];
     var _ath16 = useState({ KQT: true, KQN: false, KTD: false, KQD: false, N2D: false, B2D: false, T2D: false, N3D: false, N2C: false, B2C: false, T2C: false, N3C: false, B3C: false, L2C: false, L3C: false }), legacyThResultMask = _ath16[0], setLegacyThResultMask = _ath16[1];
     var _ath16b = useState(true), legacyThShowKetQua = _ath16b[0], setLegacyThShowKetQua = _ath16b[1];
@@ -3442,6 +3449,7 @@
     var _sel_kq = useState([]), legacyKetQuaSelectedRowKeys = _sel_kq[0], setLegacyKetQuaSelectedRowKeys = _sel_kq[1];
     var _sel_slr_week = useState([]), legacySlrWeekSelectedRowKeys = _sel_slr_week[0], setLegacySlrWeekSelectedRowKeys = _sel_slr_week[1];
     var _sel_slr_auto = useState([]), legacySlrAutoSelectedRowKeys = _sel_slr_auto[0], setLegacySlrAutoSelectedRowKeys = _sel_slr_auto[1];
+    var _sel_slr_auto_th = useState([]), legacySlrAutoTongHopSelectedRowKeys = _sel_slr_auto_th[0], setLegacySlrAutoTongHopSelectedRowKeys = _sel_slr_auto_th[1];
     var _sel_nb = useState([]), legacyNbSelectedRowKeys = _sel_nb[0], setLegacyNbSelectedRowKeys = _sel_nb[1];
     var _am = useState({
       so_ky: so_ky,
@@ -3655,6 +3663,7 @@
       var c4NgayGap = String(legacyThAutoC4NgayGap || "").trim() === "" ? -1 : (parseInt(legacyThAutoC4NgayGap, 10) || 0);
       var c5KyGap = String(legacyThAutoC5KyGap || "").trim() === "" ? -1 : (parseInt(legacyThAutoC5KyGap, 10) || 0);
       var c7Tuan21MinTop = parseInt(legacyThAutoC7Tuan21Min, 10) || 0;
+      var c8Tong29MinTop = parseInt(legacyThAutoC8Tong29Min, 10) || 0;
       return {
         c1NgayTop: c1NgayTop,
         c1KyTop: c1KyTop,
@@ -3663,13 +3672,14 @@
         c4NgayGap: c4NgayGap,
         c5KyGap: c5KyGap,
         c6Both: !!legacyThAutoC6Both,
-        c7Tuan21MinTop: c7Tuan21MinTop
+        c7Tuan21MinTop: c7Tuan21MinTop,
+        c8Tong29MinTop: c8Tong29MinTop
       };
     }
 
     function hasLegacyThAutoFilter(cfg) {
       var filterCfg = cfg || getLegacyThFilterConfig();
-      return filterCfg.c1NgayTop > 0 || filterCfg.c1KyTop > 0 || filterCfg.c2NgayCX.length > 0 || filterCfg.c3KyCX.length > 0 || filterCfg.c4NgayGap >= 0 || filterCfg.c5KyGap >= 0 || filterCfg.c6Both || filterCfg.c7Tuan21MinTop > 0;
+      return filterCfg.c1NgayTop > 0 || filterCfg.c1KyTop > 0 || filterCfg.c2NgayCX.length > 0 || filterCfg.c3KyCX.length > 0 || filterCfg.c4NgayGap >= 0 || filterCfg.c5KyGap >= 0 || filterCfg.c6Both || filterCfg.c7Tuan21MinTop > 0 || filterCfg.c8Tong29MinTop > 0;
     }
 
     function buildLegacyThIntersectText(rows) {
@@ -3965,6 +3975,7 @@
       var c1NgayMap = {};
       var c1KyMap = {};
       var c7Tuan21MinMap = {};
+      var c8Tong29MinMap = {};
       if (cfg.c1NgayTop > 0) {
         sourceRows.slice().sort(function (a, b) {
           return (Number(b.ngayCXHT) || 0) - (Number(a.ngayCXHT) || 0);
@@ -3986,6 +3997,13 @@
           c7Tuan21MinMap[row.key] = 1;
         });
       }
+      if (cfg.c8Tong29MinTop > 0) {
+        sourceRows.slice().sort(function (a, b) {
+          return (Number(a.lanTongNgaySinh) || 0) - (Number(b.lanTongNgaySinh) || 0);
+        }).slice(0, cfg.c8Tong29MinTop).forEach(function (row) {
+          c8Tong29MinMap[row.key] = 1;
+        });
+      }
 
       return sourceRows.filter(function (row) {
         var matchC1 = !!c1NgayMap[row.key] || !!c1KyMap[row.key];
@@ -3995,7 +4013,8 @@
         var matchC5 = cfg.c5KyGap >= 0 && ((Number(row.kyCXHT) || 0) > ((Number(row.lauKy) || 0) + cfg.c5KyGap));
         var matchC6 = !!cfg.c6Both && ((Number(row.ngayCXHT) || 0) >= (Number(row.lauNgay) || 0)) && ((Number(row.kyCXHT) || 0) >= (Number(row.lauKy) || 0));
         var matchC7 = !!c7Tuan21MinMap[row.key];
-        return matchC1 || matchC2 || matchC3 || matchC4 || matchC5 || matchC6 || matchC7;
+        var matchC8 = !!c8Tong29MinMap[row.key];
+        return matchC1 || matchC2 || matchC3 || matchC4 || matchC5 || matchC6 || matchC7 || matchC8;
       });
     }
 
@@ -4026,7 +4045,8 @@
         cfg.c4NgayGap >= 0 ? ("C4=" + cfg.c4NgayGap) : "",
         cfg.c5KyGap >= 0 ? ("C5=" + cfg.c5KyGap) : "",
         cfg.c6Both ? "C6=1" : "",
-        cfg.c7Tuan21MinTop > 0 ? ("C7=" + cfg.c7Tuan21MinTop) : ""
+        cfg.c7Tuan21MinTop > 0 ? ("C7=" + cfg.c7Tuan21MinTop) : "",
+        cfg.c8Tong29MinTop > 0 ? ("C8=" + cfg.c8Tong29MinTop) : ""
       ].filter(Boolean).join(" | "));
 
       Object.keys(grouped).sort().forEach(function (queryType) {
@@ -4432,7 +4452,7 @@
     }, [legacyHeThong, legacyThUseApiSource, legacyThGroupSourceMode, legacyThCustomGroupsText]);
 
     useEffect(function () {
-      // Auto-apply C1-C7 only after Tong Hop data exists from explicit user actions.
+      // Auto-apply C1-C8 only after Tong Hop data exists from explicit user actions.
       // Do not auto-run Tong Hop calculations when no source rows are present.
       if (legacyThAutoRunning) return;
       if (legacyThAutoPinnedFullAuto) return;
@@ -4447,6 +4467,7 @@
       legacyThAutoC5KyGap,
       legacyThAutoC6Both,
       legacyThAutoC7Tuan21Min,
+      legacyThAutoC8Tong29Min,
       legacyThAutoRunning,
       legacyThAutoPinnedFullAuto
     ]);
@@ -8506,7 +8527,7 @@
       var filterCfg = getLegacyThFilterConfig();
       if (!hasLegacyThAutoFilter(filterCfg)) {
         if (!silent) {
-          canhbao("Vui lòng nhập ít nhất 1 điều kiện lọc (C1–C7)");
+          canhbao("Vui lòng nhập ít nhất 1 điều kiện lọc (C1–C8)");
         }
         if (!silent || !legacyThAutoRows.length) {
           if (legacyThAutoRows.length) {
@@ -8544,7 +8565,7 @@
       }
       var filterCfg = getLegacyThFilterConfig();
       if (!hasLegacyThAutoFilter(filterCfg)) {
-        canhbao("Vui lòng nhập ít nhất 1 điều kiện lọc (C1–C7)");
+        canhbao("Vui lòng nhập ít nhất 1 điều kiện lọc (C1–C8)");
         return;
       }
 
@@ -9695,6 +9716,179 @@
       thongbao("Đã áp dụng: " + String(row.queryLabel || applyQueryValue || "Loại Tìm") + " | STT " + sttFrom + "-" + sttTo + " vào Khu vực thủ công");
     }
 
+    function buildLegacySlrAutoTongHopSearchText(row) {
+      var cText = String(buildLegacySlrAutoNumberText(row && row.latestCellData, "c") || "").trim();
+      var dText = String(buildLegacySlrAutoNumberText(row && row.latestCellData, "d") || "").trim();
+      var tokens = [];
+      var seen = {};
+
+      function appendTokens(raw) {
+        String(raw || "").split(/[\s,;|]+/).forEach(function (part) {
+          var token = String(part || "").trim();
+          if (!token || token === "-") return;
+          if (seen[token]) return;
+          seen[token] = true;
+          tokens.push(token);
+        });
+      }
+
+      appendTokens(cText);
+      if (String((row && row.mode) || "").toUpperCase() !== "2C") appendTokens(dText);
+
+      return {
+        cText: cText || "-",
+        dText: String((row && row.mode) || "").toUpperCase() === "2C" ? "-" : (dText || "-"),
+        searchText: tokens.join(" ")
+      };
+    }
+
+    function getLegacyDd3NbQueryTypeOption(heThong) {
+      var he = Number(heThong || 2) === 3 ? 3 : 2;
+      var options = (legacyThQueryTypeOptions && legacyThQueryTypeOptions.length)
+        ? legacyThQueryTypeOptions
+        : buildLegacyThDefaultQueryTypeDefs(he);
+      for (var i = 0; i < options.length; i += 1) {
+        var item = options[i] || {};
+        if (isLegacyDd3NbQueryValue(item.value, he)) return item;
+      }
+      return {
+        value: getLegacySlrDefaultQueryValue(he),
+        text: "3 NB D+P+B"
+      };
+    }
+
+    function getLegacySlrAutoSelectedRows(sourceRows) {
+      var selectedKeys = legacySlrAutoSelectedRowKeys || [];
+      var src = Array.isArray(sourceRows) ? sourceRows : [];
+      if (!selectedKeys.length) return [];
+      var selectedMap = {};
+      selectedKeys.forEach(function (k) { selectedMap[String(k)] = true; });
+      return src.filter(function (row, idx) {
+        var key = String((row && row.key) || (String((row && row.queryValue) || "") + "_" + String((row && row.sttFrom) || "") + "_" + String((row && row.sttTo) || "") + "_" + idx));
+        return !!selectedMap[key];
+      });
+    }
+
+    async function runLegacySlrAutoTongHopSelectedRows() {
+      var sourceRows = legacySortedRowsRef.current["slr_auto"] || legacySlrAutoFilteredRows || [];
+      var pickedRows = getLegacySlrAutoSelectedRows(sourceRows);
+      if (!pickedRows.length) {
+        canhbao("Vui lòng chọn ít nhất 1 dòng ở Bảng tự động để xét tổng hợp");
+        return;
+      }
+
+      setLoading(true);
+      setProgress(12);
+      setLegacySlrAutoTongHopRunning(true);
+      setLegacySlrAutoTongHopRows([]);
+      setLegacySlrAutoTongHopSelectedRowKeys([]);
+      setLegacySlrAutoTongHopSummary("Đang xét tổng hợp " + pickedRows.length + " dòng...");
+
+      try {
+        var combinedRows = [];
+        var skippedCount = 0;
+        var extraDd3NbOption = getLegacyDd3NbQueryTypeOption(legacyHeThong);
+        for (var i = 0; i < pickedRows.length; i += 1) {
+          if (i > 0 && i % 2 === 0) await sleepMs(0);
+          var row = pickedRows[i] || {};
+          var pct = 12 + Math.round(((i + 1) / pickedRows.length) * 84);
+          setProgress(Math.max(12, Math.min(96, pct)));
+
+          var tongHopInput = buildLegacySlrAutoTongHopSearchText(row);
+          if (!String(tongHopInput.searchText || "").trim()) {
+            skippedCount += 1;
+            continue;
+          }
+
+          var querySpecs = [{
+            value: row.queryValue,
+            text: row.queryLabel
+          }];
+          if (!isLegacyDd3NbQueryValue(row.queryValue, legacyHeThong)) {
+            querySpecs.push({
+              value: extraDd3NbOption.value,
+              text: (extraDd3NbOption.text || "3 NB D+P+B") + " [bổ sung]"
+            });
+          }
+
+          var rowHadMetric = false;
+          for (var q = 0; q < querySpecs.length; q += 1) {
+            var querySpec = querySpecs[q] || {};
+            var metrics = await fetchLegacyTongHopRowsFromApi({
+              triet: false,
+              queryValue: querySpec.value,
+              queryText: querySpec.text,
+              cachItems: [{
+                key: String(row.key || "slr_auto") + "_" + q,
+                boSo: tongHopInput.searchText,
+                cachName: tongHopInput.searchText,
+                searchText: tongHopInput.searchText,
+                noiDungDisplay: tongHopInput.searchText,
+                groupId: String(row.key || "slr_auto"),
+                groupText: String(querySpec.text || querySpec.value || "")
+              }]
+            });
+
+            var metric = Array.isArray(metrics) && metrics.length ? metrics[0] : null;
+            if (!metric) continue;
+            rowHadMetric = true;
+
+            combinedRows.push({
+              key: "slr_auto_th_" + String(row.key || i) + "_" + q,
+              queryLabel: String(querySpec.text || querySpec.value || row.queryLabel || row.queryValue || ""),
+              sttFrom: Number(row.sttFrom || 0),
+              sttTo: Number(row.sttTo || 0),
+              noHitDaysCurrent: Number((row && row.noHitDaysCurrent) || (row && row.noHitDays) || 0),
+              tongNamZeroWeekStreak: Number((row && row.tongNamZeroWeekStreak) || 0),
+              cNumbers: tongHopInput.cText,
+              dNumbers: tongHopInput.dText,
+              tongHopInput: tongHopInput.searchText,
+              boSo: String(metric.boSo || tongHopInput.searchText || ""),
+              ketQua: buildLegacyThResultText(metric),
+              ngayCXHT: Number(metric.ngayCXHT || 0),
+              kyCXHT: Number(metric.kyCXHT || 0),
+              lauNgay: Number(metric.lauNgay || 0),
+              lauKy: Number(metric.lauKy || 0),
+              sourceSlrKey: String(row.key || i)
+            });
+          }
+          if (!rowHadMetric) {
+            skippedCount += 1;
+          }
+        }
+
+        combinedRows.sort(function (a, b) {
+          var aNumbers = [String((a && a.cNumbers) || "").trim(), String((a && a.dNumbers) || "").trim()].join(" | ").trim();
+          var bNumbers = [String((b && b.cNumbers) || "").trim(), String((b && b.dNumbers) || "").trim()].join(" | ").trim();
+          var ak = String(aNumbers || (a && a.tongHopInput) || "").trim();
+          var bk = String(bNumbers || (b && b.tongHopInput) || "").trim();
+          var dn = ak.localeCompare(bk, "vi", { numeric: true, sensitivity: "base" });
+          if (dn) return dn;
+          var ds = Number((a && a.sttFrom) || 0) - Number((b && b.sttFrom) || 0);
+          if (ds) return ds;
+          var dq = String((a && a.queryLabel) || "").localeCompare(String((b && b.queryLabel) || ""), "vi", { numeric: true, sensitivity: "base" });
+          if (dq) return dq;
+          return Number((b && b.ngayCXHT) || 0) - Number((a && a.ngayCXHT) || 0);
+        });
+
+        setLegacySlrAutoTongHopRows(combinedRows);
+        legacySortedRowsRef.current["slr_auto_th"] = null;
+        setLegacySlrAutoTongHopSummary(
+          "Xuất Kết Hợp tự động: " + combinedRows.length + " dòng từ " + pickedRows.length + " dòng SLR đã chọn"
+          + (skippedCount ? (" | Bỏ qua: " + skippedCount) : "")
+        );
+      } catch (e) {
+        console.error(e);
+        canhbao("Không thể xét tổng hợp từ các dòng SLR đã chọn");
+        setLegacySlrAutoTongHopSummary("Lỗi xét tổng hợp: " + String((e && e.message) || e || "unknown"));
+      } finally {
+        setLegacySlrAutoTongHopRunning(false);
+        setLoading(false);
+        setProgress(100);
+        setTimeout(function () { setProgress(0); }, 600);
+      }
+    }
+
     var legacySlrAutoColumns = [
       {
         title: tt.searchType || "Loại Tìm",
@@ -9830,6 +10024,39 @@
       }
     ];
 
+    var legacySlrAutoTongHopColumns = [
+      {
+        title: tt.searchType || "Loại Tìm",
+        dataIndex: "queryLabel",
+        key: "queryLabel",
+        width: 180,
+        fixed: "left",
+        sorter: function (a, b) {
+          return String((a && a.queryLabel) || "").localeCompare(String((b && b.queryLabel) || ""), "vi", { numeric: true, sensitivity: "base" });
+        }
+      },
+      { title: "Từ STT", dataIndex: "sttFrom", key: "sttFrom", width: 80, sorter: function (a, b) { return Number((a && a.sttFrom) || 0) - Number((b && b.sttFrom) || 0); } },
+      { title: "Đến STT", dataIndex: "sttTo", key: "sttTo", width: 80, sorter: function (a, b) { return Number((a && a.sttTo) || 0) - Number((b && b.sttTo) || 0); } },
+      { title: "Số chính", dataIndex: "cNumbers", key: "cNumbers", width: 180 },
+      { title: "Số đảo", dataIndex: "dNumbers", key: "dNumbers", width: 180 },
+      { title: "Số đưa vào TH", dataIndex: "tongHopInput", key: "tongHopInput", width: 220 },
+      {
+        title: "Kết quả",
+        dataIndex: "ketQua",
+        key: "ketQua",
+        width: 320,
+        render: function (v) {
+          return h("div", { style: { fontSize: 11, whiteSpace: "pre-wrap", lineHeight: 1.4 } }, String(v || ""));
+        }
+      },
+      { title: "Ngày CX", dataIndex: "ngayCXHT", key: "ngayCXHT", width: 70, sorter: function (a, b) { return Number((a && a.ngayCXHT) || 0) - Number((b && b.ngayCXHT) || 0); } },
+      { title: "Kỳ CX", dataIndex: "kyCXHT", key: "kyCXHT", width: 70, sorter: function (a, b) { return Number((a && a.kyCXHT) || 0) - Number((b && b.kyCXHT) || 0); } },
+      { title: "Lâu ngày", dataIndex: "lauNgay", key: "lauNgay", width: 80, sorter: function (a, b) { return Number((a && a.lauNgay) || 0) - Number((b && b.lauNgay) || 0); } },
+      { title: "Lâu kỳ", dataIndex: "lauKy", key: "lauKy", width: 80, sorter: function (a, b) { return Number((a && a.lauKy) || 0) - Number((b && b.lauKy) || 0); } },
+      { title: "Chuỗi LT", dataIndex: "noHitDaysCurrent", key: "noHitDaysCurrent", width: 80, sorter: function (a, b) { return Number((a && a.noHitDaysCurrent) || 0) - Number((b && b.noHitDaysCurrent) || 0); } },
+      { title: "Tuần Nam 0", dataIndex: "tongNamZeroWeekStreak", key: "tongNamZeroWeekStreak", width: 90, sorter: function (a, b) { return Number((a && a.tongNamZeroWeekStreak) || 0) - Number((b && b.tongNamZeroWeekStreak) || 0); } }
+    ];
+
     function makeNbCol(title, di, dw, mp) {
       return { title: title, dataIndex: di, key: di, width: legacyNbColWidths[di] || dw,
         sorter: { compare: function(a, b) { return Number(a[di]||0) - Number(b[di]||0); }, multiple: mp },
@@ -9944,6 +10171,7 @@
         }
       },
       { title: "Tổng 21 tuần", dataIndex: "lanTuan21", key: "lanTuan21", width: 92, sorter: legacyTongHopNumberSorter("lanTuan21"), defaultSortOrder: "ascend" },
+      { title: "Tổng " + sinhTongNgay + " ngày", dataIndex: "lanTongNgaySinh", key: "lanTongNgaySinh", width: 70, sorter: legacyTongHopNumberSorter("lanTongNgaySinh") },
       { title: "Ngày CX", dataIndex: "ngayCXHT", key: "ngayCXHT", width: 60, sorter: legacyTongHopNumberSorter("ngayCXHT"),
         render: function (v, rec) {
           var over = rec.lauNgay > 0 && v >= rec.lauNgay;
@@ -9977,7 +10205,6 @@
       { title: "L2C", dataIndex: "lanL2C", key: "lanL2C", width: 55, sorter: legacyTongHopNumberSorter("lanL2C") },
       { title: "L3C", dataIndex: "lanL3C", key: "lanL3C", width: 55, sorter: legacyTongHopNumberSorter("lanL3C") },
       { title: "LB3C", dataIndex: "lanLB3C", key: "lanLB3C", width: 60, sorter: legacyTongHopNumberSorter("lanLB3C") },
-      { title: "Tổng " + sinhTongNgay + " ngày", dataIndex: "lanTongNgaySinh", key: "lanTongNgaySinh", width: 70, sorter: legacyTongHopNumberSorter("lanTongNgaySinh") },
       { title: "Tuần Gần Nhất", dataIndex: "lanTuan1C", key: "lanTuan1C", width: 70, sorter: legacyTongHopNumberSorter("lanTuan1C") },
       { title: "Lần 2 Tuần cuối", dataIndex: "lanTuan2C", key: "lanTuan2C", width: 80, sorter: legacyTongHopNumberSorter("lanTuan2C") },
       { title: "Tổng " + sinhThTky + " kỳ", dataIndex: "lanDai", key: "lanDai", width: 90, sorter: legacyTongHopNumberSorter("lanDai") },
@@ -12389,6 +12616,13 @@
                   }, "💾 Xuất đã chọn"),
                   h(Button, {
                     size: "small",
+                    type: "primary",
+                    loading: !!legacySlrAutoTongHopRunning,
+                    disabled: !!legacySlrAutoTongHopRunning,
+                    onClick: function () { runLegacySlrAutoTongHopSelectedRows(); }
+                  }, "Xét tổng hợp"),
+                  h(Button, {
+                    size: "small",
                     onClick: function () { exportLegacySlrAutoRows(); }
                   }, tt.btnExportExcel || "Xuất Excel")
                 ]),
@@ -12415,7 +12649,55 @@
                     components: legacySlrResizableComponents,
                     onChange: function (p, f, s, extra) { if (extra && Array.isArray(extra.currentDataSource)) legacySortedRowsRef.current["slr_auto"] = extra.currentDataSource; }
                   })
-                ])
+                ]),
+                legacySlrAutoTongHopRows.length ? h(Card, {
+                  size: "small",
+                  title: "Xuất Kết Hợp tự động - " + legacySlrAutoTongHopRows.length + " dòng",
+                  style: { marginTop: 10, background: theme.cardBg, color: theme.text, borderColor: theme.border }
+                }, [
+                  h("div", { style: { marginBottom: 8, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } }, [
+                    h(Button, {
+                      size: "small",
+                      onClick: function () { setLegacySlrAutoTongHopSelectedRowKeys((legacySlrAutoTongHopRows || []).map(function (r) { return r.key; })); }
+                    }, tt.lgThAutoSelectAll || "Chọn hết"),
+                    h(Button, {
+                      size: "small",
+                      onClick: function () { setLegacySlrAutoTongHopSelectedRowKeys([]); }
+                    }, tt.lgThAutoClearAll || "Bỏ chọn"),
+                    h(Button, {
+                      size: "small",
+                      type: "default",
+                      onClick: function () {
+                        exportSelectedRowsByConfig({
+                          selectedKeys: legacySlrAutoTongHopSelectedRowKeys,
+                          sourceRows: legacySortedRowsRef.current["slr_auto_th"] || legacySlrAutoTongHopRows,
+                          keyGetter: function (row) { return String((row && row.key) || ""); },
+                          columns: legacySlrAutoTongHopColumns,
+                          fileName: "legacy_slr_auto_tonghop_selected",
+                          sheetName: "SLR_TongHop_Auto"
+                        });
+                      }
+                    }, "💾 Xuất đã chọn"),
+                    h("span", { style: { fontSize: 11, color: theme.muted } }, "Đã chọn: " + (legacySlrAutoTongHopSelectedRowKeys || []).length)
+                  ]),
+                  legacySlrAutoTongHopSummary ? h("div", { style: { marginBottom: 8, fontSize: 12, color: theme.muted } }, legacySlrAutoTongHopSummary) : null,
+                  h(Table, {
+                    rowKey: "key",
+                    rowSelection: {
+                      type: "checkbox",
+                      columnTitle: tt.lgThSelect || "Chọn",
+                      columnWidth: 32,
+                      selectedRowKeys: legacySlrAutoTongHopSelectedRowKeys,
+                      onChange: function (keys) { setLegacySlrAutoTongHopSelectedRowKeys(keys); }
+                    },
+                    columns: withMultiSortColumns(legacySlrAutoTongHopColumns),
+                    dataSource: legacySlrAutoTongHopRows,
+                    pagination: false,
+                    size: "small",
+                    scroll: { x: 2200, y: 320 },
+                    onChange: function (p, f, s, extra) { if (extra && Array.isArray(extra.currentDataSource)) legacySortedRowsRef.current["slr_auto_th"] = extra.currentDataSource; }
+                  })
+                ]) : null
               ]) : null
             ])
           : legacyMainTab === "other" && activeAction === "legacy_nb"
@@ -12694,7 +12976,9 @@
                   h(Input, { size: "small", placeholder: "0", value: legacyThAutoC5KyGap, onChange: function (e) { setLegacyThAutoC5KyGap(e.target.value); }, style: { width: 55 } }),
                   h(Checkbox, { checked: legacyThAutoC6Both, onChange: function (e) { setLegacyThAutoC6Both(e.target.checked); }, style: { fontSize: 11, color: theme.text } }, tt.lgThAutoC6Both),
                   h("span", { style: { fontSize: 11, color: theme.muted } }, tt.lgThAutoC7Tuan21Min + ":"),
-                  h(Input, { size: "small", placeholder: "N", value: legacyThAutoC7Tuan21Min, onChange: function (e) { setLegacyThAutoC7Tuan21Min(e.target.value); }, style: { width: 55 } })
+                  h(Input, { size: "small", placeholder: "N", value: legacyThAutoC7Tuan21Min, onChange: function (e) { setLegacyThAutoC7Tuan21Min(e.target.value); }, style: { width: 55 } }),
+                  h("span", { style: { fontSize: 11, color: theme.muted } }, tt.lgThAutoC8Tong29Min + ":"),
+                  h(Input, { size: "small", placeholder: "N", value: legacyThAutoC8Tong29Min, onChange: function (e) { setLegacyThAutoC8Tong29Min(e.target.value); }, style: { width: 55 } })
                 ]),
                 h("div", { key: "th-kq-mask", style: { display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 8, alignItems: "center", padding: "6px 8px", background: "color-mix(in srgb, " + theme.cardBg + " 90%, " + theme.pageBg + " 10%)", borderRadius: 4, border: "1px solid " + theme.border } }, [
                   h("span", { style: { fontSize: 12, fontWeight: "bold", color: theme.text, marginRight: 4 } }, tt.lgThResultSet + ":"),
