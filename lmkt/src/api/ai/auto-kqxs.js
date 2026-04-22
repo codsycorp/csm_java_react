@@ -1513,13 +1513,13 @@
   function getLegacySlrDefaultQueryValue(heThong) {
     var he = Number(heThong || 2) === 3 ? 3 : 2;
     var maQuery = he === 3 ? "sp_Get3_DD3" : "sp_Get2_DD3";
-    // Match legacy HTML SoLauRaNamBac: CboLoai.setComboValue("sp_Get2_DD3,D_-P_-B_")
-    return maQuery + ",D_-P_-B_";
+    // Default Loai Tim for Special tab (manual SLR area): 3 dai Nam-Bac
+    return maQuery + ",D_-P_-T_-B_";
   }
 
   function isLegacyDd3NbQueryValue(value, heThong) {
     var raw = parseLegacyLoaiTimMeta(value, heThong).rawValue;
-    return /,D_-P_-B_$|,D_-P_-T_-B_$/.test(String(raw || ""));
+    return /,D_-P_-T_-B_$/.test(String(raw || ""));
   }
 
   function getLegacySlrPreferredQueryValue(heThong, optionList) {
@@ -1527,10 +1527,12 @@
     var options = Array.isArray(optionList) && optionList.length
       ? optionList
       : buildLegacyThDefaultQueryTypeDefs(he);
+    var defaultRaw = parseLegacyLoaiTimMeta(getLegacySlrDefaultQueryValue(he), he).rawValue;
+
     for (var i = 0; i < options.length; i += 1) {
       var v = String((options[i] && options[i].value) || "").trim();
       if (!v) continue;
-      if (!isLegacyDd3NbQueryValue(v, he)) return v;
+      if (String(parseLegacyLoaiTimMeta(v, he).rawValue || "") === String(defaultRaw || "")) return v;
     }
     return String((options[0] && options[0].value) || getLegacySlrDefaultQueryValue(he));
   }
