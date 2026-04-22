@@ -1068,6 +1068,10 @@ public class ApiSpringController {
             List<String> pendingQuestions,
             List<Map<String, Object>> messages) {
         Map<String, Object> debugMeta = new LinkedHashMap<>();
+        String normalizedContextType = String.valueOf(contextType == null ? "" : contextType).trim().toLowerCase();
+        int contextHardCap = "menu_json".equals(normalizedContextType)
+            ? COPILOT_MENU_CODE_CONTEXT_HARD_CAP_CHARS
+            : COPILOT_CURRENT_CODE_CONTEXT_HARD_CAP_CHARS;
         debugMeta.put("appId", String.valueOf(appId == null ? "" : appId).trim());
         debugMeta.put("contextType", String.valueOf(contextType == null ? "" : contextType).trim());
         debugMeta.put("taskType", String.valueOf(taskType == null ? "" : taskType).trim());
@@ -1093,6 +1097,10 @@ public class ApiSpringController {
         } catch (Exception ex) {
             messagesJson = String.valueOf(messages);
         }
+        debugMeta.put("currentCodeContextHardCapChars", contextHardCap);
+        debugMeta.put("copilotTextPayloadChars", extractCopilotTextPayloadChars(messages));
+        debugMeta.put("payloadIncludesCodeTooLargeMarker", messagesJson.contains("Code too large:"));
+        debugMeta.put("payloadIncludesTruncatedMarker", messagesJson.contains("TRUNCATED_FOR_COPILOT_CONTEXT"));
 
         StringBuilder sb = new StringBuilder();
         sb.append("[Copilot Debug] Backend payload prepared before calling model.\n\n");
@@ -1105,6 +1113,40 @@ public class ApiSpringController {
         sb.append(trimForCopilotDebugDisplay(messagesJson, COPILOT_DEBUG_MESSAGES_JSON_MAX_CHARS));
         sb.append("\n```\n");
         return trimForCopilotDebugDisplay(sb.toString(), COPILOT_DEBUG_MARKDOWN_MAX_CHARS);
+    }
+
+    private int extractCopilotTextPayloadChars(List<Map<String, Object>> messages) {
+        if (messages == null || messages.isEmpty()) {
+            return 0;
+        }
+        int total = 0;
+        for (Map<String, Object> message : messages) {
+            if (message == null || message.isEmpty()) {
+                continue;
+            }
+            Object content = message.get("content");
+            if (content instanceof String text) {
+                total += text.length();
+                continue;
+            }
+            if (content instanceof List<?> parts) {
+                for (Object partObj : parts) {
+                    if (!(partObj instanceof Map<?, ?> part)) {
+                        continue;
+                    }
+                    Object typeObj = part.get("type");
+                    String type = typeObj == null ? "" : String.valueOf(typeObj);
+                    if (!"text".equals(type)) {
+                        continue;
+                    }
+                    Object textObj = part.get("text");
+                    if (textObj != null) {
+                        total += String.valueOf(textObj).length();
+                    }
+                }
+            }
+        }
+        return total;
     }
 
     private String toPrettyJson(Object value) {
