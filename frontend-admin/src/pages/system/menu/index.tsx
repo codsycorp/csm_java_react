@@ -861,6 +861,7 @@ export default function Menu() {
 							label: "AI",
 							children: (
 								<AiMenuDesigner
+									key={`ai-menu-designer-${selectedApp || "none"}`}
 									appId={selectedApp}
 									currentMenus={menuData}
 									onApply={handleApplyAiMenu}
