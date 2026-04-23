@@ -1,4 +1,7 @@
 import { isString } from "#src/utils";
+import { resolveDevFlag } from "#src/utils/dev-flag";
+import { toPermissionBigInt, isSuperPermissionProfile } from "#src/utils/permission-bitfield";
+import { useUserStore } from "#src/store";
 
 import { useMatches } from "react-router";
 
@@ -11,6 +14,27 @@ import { useMatches } from "react-router";
 export function useAuth() {
 	const matches = useMatches();
 	const currentRoute = matches[matches.length - 1];
+	const userRoles = useUserStore(state => state.roles || []);
+	const userDev = useUserStore(state => state.dev);
+	const permissionBitfield = useUserStore(state => (state as any).permissionBitfield);
+
+	const isDevUser = resolveDevFlag(userDev, userRoles);
+	const isTokenAdmin = isSuperPermissionProfile(toPermissionBigInt(permissionBitfield));
+
+	const toTokenSet = (rawPermissions: unknown): Set<string> => {
+		if (!Array.isArray(rawPermissions)) return new Set();
+		const tokens = rawPermissions
+			.map((item: any) => {
+				if (typeof item === "string") return item.trim().toLowerCase();
+				if (item && typeof item === "object") {
+					const code = item.code ?? item.permission ?? item.value;
+					return typeof code === "string" ? code.trim().toLowerCase() : "";
+				}
+				return "";
+			})
+			.filter(Boolean);
+		return new Set(tokens);
+	};
 
 	/**
 	 *
@@ -21,15 +45,45 @@ export function useAuth() {
 		if (!permission)
 			return false;
 		/** 从当前路由的 `handle` 字段里获取按钮级别的所有自定义 `code` 值 */
-		const metaAuth = currentRoute?.handle?.permissions;
-		if (!metaAuth) {
+		const routeRoles = Array.isArray(currentRoute?.handle?.roles)
+			? (currentRoute?.handle?.roles as string[]).map(item => String(item || "").trim().toLowerCase())
+			: [];
+		const metaAuth = toTokenSet(currentRoute?.handle?.permissions);
+
+		const requested = isString(permission) ? [permission] : permission;
+		const normalizedRequested = requested
+			.map(item => String(item || "").trim().toLowerCase())
+			.filter(Boolean);
+		const requestedTokens = new Set<string>();
+		normalizedRequested.forEach((item) => {
+			requestedTokens.add(item);
+			requestedTokens.add(`permission:button:${item}`);
+		});
+
+		// Dev users should never be blocked by missing button tokens on dynamic routes.
+		if (isDevUser) {
+			if (routeRoles.length === 0 || routeRoles.includes("dev")) {
+				return true;
+			}
+		}
+
+		// Super-admin profile can operate on admin routes even if route tokens are incomplete.
+		if (isTokenAdmin) {
+			if (routeRoles.length === 0 || routeRoles.includes("admin")) {
+				return true;
+			}
+		}
+
+		if (metaAuth.size === 0) {
 			return false;
 		}
-		permission = isString(permission) ? [permission] : permission;
-		// 将权限名称转换为按钮级别的权限标识
-		permission = permission.map(item => `permission:button:${item.toLowerCase()}`);
-		const isAuth = metaAuth.some(item => permission.includes(item));
-		return isAuth;
+
+		for (const token of requestedTokens) {
+			if (metaAuth.has(token)) {
+				return true;
+			}
+		}
+		return false;
 	};
 	return hasAuth;
 }

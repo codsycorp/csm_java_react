@@ -3611,7 +3611,18 @@ export function CsmDynamicGrid({
 				} else if (["xls", "xlsx"].includes(fileExt || "")) {
 					// Excel: map columns by position to f_stt-sorted fields (Vue parity)
 					const arrayBuffer = await file.arrayBuffer();
-					const workbook = read(arrayBuffer, { type: "array" });
+					const bytes = new Uint8Array(arrayBuffer);
+					let workbook: any = null;
+					try {
+						workbook = read(bytes, { type: "array" });
+					} catch {
+						try {
+							workbook = read(arrayBuffer, { type: "array" });
+						} catch {
+							const binary = Array.from(bytes, (b) => String.fromCharCode(b)).join("");
+							workbook = read(binary, { type: "binary" });
+						}
+					}
 					const worksheet = workbook.Sheets[workbook.SheetNames[0]];
 					if (!worksheet) {
 						message.error("Sheet trống");

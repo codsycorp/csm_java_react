@@ -1009,6 +1009,24 @@ function applyFriendlyFieldPolicy(tableName: string | undefined, rawFields: any[
 	return normalized;
 }
 
+function normalizeSysAppsFieldConfig(rawFields: any[]): any[] {
+	if (!Array.isArray(rawFields) || rawFields.length === 0) {
+		return rawFields;
+	}
+	return rawFields.map((field) => {
+		const fName = String(field?.f_name || "").trim();
+		if (fName !== "app_id") {
+			return field;
+		}
+		const { f_cbo_query, f_options, ...rest } = field || {};
+		return {
+			...rest,
+			// Use a non-generic text type so grid heuristics do not auto-convert app_id* to combo.
+			f_types: "text",
+		};
+	});
+}
+
 /**
  * AdminPage - Renders dynamic grid/report based on menuId parameter
  * Integrates with layout tabbar system for tab-based navigation
@@ -2251,6 +2269,10 @@ export default function AdminPage(props: any = {}) {
 				tEn,
 				tZh,
 			);
+		}
+
+		if (m_configs.table_name === "sys_apps") {
+			m_configs.table = normalizeSysAppsFieldConfig(m_configs.table as any[]);
 		}
 
 		// Debug log to check if backend returned type_form and row_type_edit

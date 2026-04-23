@@ -1196,6 +1196,9 @@ window.__proxyFailureCount = 0; // Đếm số lần proxy thất bại liên ti
 window.__proxyUsername = ''; // Username của proxy (cần cấu hình khi lấy proxy)
 window.__proxyPassword = ''; // Password của proxy (cần cấu hình khi lấy proxy)
 window.__proxyAuthenticating = false; // Flag để kiểm soát quá trình xác thực proxy
+window.__activeProxyContext = null; // Context proxy hiện tại dùng để gán cho từng webview
+window.__webviewProxyState = {}; // Registry trạng thái proxy theo từng webview
+window.__webviewHealthCursor = 0;
 
 // Cấu hình kết nối proxy
 window.PROXY_CONFIG = {
@@ -1207,6 +1210,225 @@ window.PROXY_CONFIG = {
   KEEP_ALIVE_TIMEOUT: 300000 // 5 phút keep-alive timeout
 };
 
+window.PROXY_GUARD_CONFIG = {
+  monitorIntervalMs: 120000,
+  failureThreshold: 2,
+  checkBatchSize: 4,
+  panelRefreshMs: 8000,
+  maxRows: 12
+};
+
+window.setProxyGuardConfig = function(nextConfig) {
+  const current = window.PROXY_GUARD_CONFIG || {};
+  const merged = Object.assign({}, current, nextConfig || {});
+  merged.monitorIntervalMs = Math.max(30000, Number(merged.monitorIntervalMs) || 120000);
+  merged.failureThreshold = Math.max(1, Number(merged.failureThreshold) || 2);
+  merged.checkBatchSize = Math.max(1, Number(merged.checkBatchSize) || 4);
+  merged.panelRefreshMs = Math.max(3000, Number(merged.panelRefreshMs) || 8000);
+  merged.maxRows = Math.max(5, Number(merged.maxRows) || 12);
+  window.PROXY_GUARD_CONFIG = merged;
+  return merged;
+};
+
+window.ensureProxyGuardPanel = function() {
+  const existing = document.getElementById('proxy-guard-panel');
+  if (existing) return existing;
+
+  const mountRoot = document.querySelector('#context-auto .card-body') || document.querySelector('#context-auto') || document.body;
+  if (!mountRoot) return null;
+
+  const panel = document.createElement('div');
+  panel.id = 'proxy-guard-panel';
+  panel.style.cssText = [
+    'position: sticky',
+    'top: 8px',
+    'z-index: 99',
+    'margin: 8px 0',
+    'padding: 8px',
+    'border: 1px solid #d9d9d9',
+    'background: #ffffff',
+    'border-radius: 6px',
+    'font-size: 12px'
+  ].join(';');
+
+  panel.innerHTML = [
+    '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">',
+    '<strong>Proxy Guard</strong>',
+    '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">',
+    '<label>Interval(ms): <input id="pg-interval" type="number" min="30000" step="1000" style="width:110px;" /></label>',
+    '<label>Fail threshold: <input id="pg-fail-threshold" type="number" min="1" step="1" style="width:70px;" /></label>',
+    '<button id="pg-apply" type="button" style="padding:2px 8px;">Apply</button>',
+    '</div>',
+    '</div>',
+    '<div id="pg-summary" style="margin-top:6px;color:#555;"></div>',
+    '<div id="pg-list" style="margin-top:6px;max-height:180px;overflow:auto;border-top:1px dashed #eee;padding-top:6px;"></div>'
+  ].join('');
+
+  mountRoot.prepend(panel);
+
+  const cfg = window.PROXY_GUARD_CONFIG || {};
+  const intervalInput = panel.querySelector('#pg-interval');
+  const failInput = panel.querySelector('#pg-fail-threshold');
+  if (intervalInput) intervalInput.value = String(cfg.monitorIntervalMs || 120000);
+  if (failInput) failInput.value = String(cfg.failureThreshold || 2);
+
+  const applyButton = panel.querySelector('#pg-apply');
+  if (applyButton) {
+    applyButton.addEventListener('click', function() {
+      const next = window.setProxyGuardConfig({
+        monitorIntervalMs: Number(intervalInput && intervalInput.value),
+        failureThreshold: Number(failInput && failInput.value)
+      });
+      console.log('[Proxy Guard] Apply config:', next);
+      if (window.__healthMonitorInterval) {
+        window.startWebviewHealthMonitor();
+      }
+      window.renderProxyGuardPanel();
+    });
+  }
+
+  return panel;
+};
+
+window.renderProxyGuardPanel = function() {
+  const panel = window.ensureProxyGuardPanel();
+  if (!panel) return;
+  const summaryEl = panel.querySelector('#pg-summary');
+  const listEl = panel.querySelector('#pg-list');
+  if (!summaryEl || !listEl) return;
+
+  const states = Object.values(window.__webviewProxyState || {});
+  const activeWebviews = document.querySelectorAll('webview[id^="U_"]').length;
+  const cfg = window.PROXY_GUARD_CONFIG || {};
+  const now = Date.now();
+  const proxyAgeMin = window.__proxyActivatedTime > 0 ? Math.floor((now - window.__proxyActivatedTime) / 60000) : 0;
+
+  summaryEl.textContent = [
+    `Proxy: ${window.__isProxyActive ? 'ACTIVE' : 'INACTIVE'}`,
+    `Age: ${proxyAgeMin}m`,
+    `NeedsReset: ${window.__proxyNeedsReset ? 'YES' : 'NO'}`,
+    `Webviews: ${activeWebviews}`,
+    `Monitored: ${states.length}`,
+    `Interval: ${cfg.monitorIntervalMs || 120000}ms`,
+    `Fail>=${cfg.failureThreshold || 2}`
+  ].join(' | ');
+
+  const rows = states
+    .sort((a, b) => Number((b && b.lastCheckAt) || 0) - Number((a && a.lastCheckAt) || 0))
+    .slice(0, cfg.maxRows || 12)
+    .map((state) => {
+      const expiresInMin = state.proxyExpiresAt ? Math.floor((state.proxyExpiresAt - now) / 60000) : -1;
+      const expText = expiresInMin >= 0 ? `${expiresInMin}m` : 'expired';
+      const lastReason = state.lastFailureReason || 'ok';
+      return `<div style="display:flex;justify-content:space-between;gap:12px;border-bottom:1px dotted #f0f0f0;padding:2px 0;">` +
+        `<span>${state.webviewId}</span>` +
+        `<span>fail:${state.failureCount || 0}</span>` +
+        `<span>exp:${expText}</span>` +
+        `<span style="color:${lastReason === 'ok' ? '#2f7d32' : '#d4380d'};">${lastReason}</span>` +
+      `</div>`;
+    });
+
+  listEl.innerHTML = rows.length > 0 ? rows.join('') : '<div style="color:#999;">Không có state webview</div>';
+};
+
+window.startProxyGuardPanelRefresh = function() {
+  if (window.__proxyGuardPanelTimer) {
+    clearInterval(window.__proxyGuardPanelTimer);
+    window.__proxyGuardPanelTimer = null;
+  }
+  window.renderProxyGuardPanel();
+  const refreshMs = Math.max(3000, Number(window.PROXY_GUARD_CONFIG?.panelRefreshMs || 8000));
+  window.__proxyGuardPanelTimer = setInterval(() => {
+    window.renderProxyGuardPanel();
+  }, refreshMs);
+};
+
+window.stopProxyGuardPanelRefresh = function() {
+  if (window.__proxyGuardPanelTimer) {
+    clearInterval(window.__proxyGuardPanelTimer);
+    window.__proxyGuardPanelTimer = null;
+  }
+};
+
+window.updateActiveProxyContext = function(proxyInfo) {
+  if (!proxyInfo || typeof proxyInfo !== 'object') {
+    window.__activeProxyContext = null;
+    return null;
+  }
+  const endpoint = String(proxyInfo.https || proxyInfo.proxy || '').trim();
+  const username = String(proxyInfo.username || '').trim();
+  const password = String(proxyInfo.password || '').trim();
+  const activatedAt = Date.now();
+  const expiresAt = activatedAt + (window.PROXY_MAX_LIFETIME || 3600000);
+  const proxyKey = `${username}@${endpoint}`;
+  window.__activeProxyContext = {
+    proxyKey,
+    endpoint,
+    username,
+    password,
+    activatedAt,
+    expiresAt
+  };
+  window.renderProxyGuardPanel();
+  return window.__activeProxyContext;
+};
+
+window.registerWebviewProxyState = function(webviewId) {
+  if (!webviewId) return null;
+  const ctx = window.__activeProxyContext || null;
+  const now = Date.now();
+  const state = {
+    webviewId,
+    proxyKey: ctx?.proxyKey || 'none',
+    assignedAt: now,
+    lastCheckAt: 0,
+    failureCount: 0,
+    lastFailureReason: '',
+    proxyExpiresAt: ctx?.expiresAt || (window.__proxyActivatedTime > 0 ? window.__proxyActivatedTime + window.PROXY_MAX_LIFETIME : 0)
+  };
+  window.__webviewProxyState[webviewId] = state;
+  window.renderProxyGuardPanel();
+  return state;
+};
+
+window.unregisterWebviewProxyState = function(webviewId) {
+  if (!webviewId || !window.__webviewProxyState) return;
+  delete window.__webviewProxyState[webviewId];
+  window.renderProxyGuardPanel();
+};
+
+window.markWebviewProxyFailure = function(webviewId, reason) {
+  if (!webviewId) return;
+  const state = window.__webviewProxyState[webviewId] || window.registerWebviewProxyState(webviewId);
+  if (!state) return;
+  state.failureCount = Number(state.failureCount || 0) + 1;
+  state.lastFailureReason = String(reason || 'unknown');
+  state.lastCheckAt = Date.now();
+  window.renderProxyGuardPanel();
+};
+
+window.closeWebviewDueToProxyIssue = function(webviewId, reason) {
+  if (!webviewId) return;
+  const tabId = String(webviewId).replace(/^U_/, '');
+  console.warn(`[Proxy Guard] Đóng ${webviewId} do ${reason}`);
+  try {
+    if (typeof window.fnRemoveTab === 'function') {
+      window.fnRemoveTab(tabId);
+    }
+  } catch (closeErr) {
+    console.warn(`[Proxy Guard] Không thể đóng ${webviewId}:`, closeErr.message);
+  }
+};
+
+window.isProxyExpiredForWebview = function(webviewId) {
+  const state = window.__webviewProxyState?.[webviewId];
+  const now = Date.now();
+  const expiresAt = Number(state?.proxyExpiresAt || 0);
+  if (expiresAt > 0 && now >= expiresAt) return true;
+  if (window.__proxyActivatedTime > 0 && now - window.__proxyActivatedTime >= window.PROXY_MAX_LIFETIME) return true;
+  return false;
+};
+
 // ============================================
 // WEBVIEW NETWORK HEALTH CHECK - Kiểm tra sức khỏe mạng của webview
 // ============================================
@@ -1215,60 +1437,34 @@ window.checkWebviewNetworkHealth = function(webviewId, callback) {
     const wv = document.getElementById(webviewId);
     if (!wv) {
       console.warn(`[Network Health] Webview ${webviewId} không tồn tại`);
+      window.unregisterWebviewProxyState(webviewId);
       callback({ healthy: false, reason: 'webview_not_found' });
       return;
     }
-    
-    // Thử load một URL test đơn giản để kiểm tra kết nối
-    const testUrl = 'https://www.google.com/favicon.ico'; // Tài nguyên nhỏ để test nhanh
-    const testStartTime = Date.now();
-    
-    const healthCheckListener = (event) => {
-      const loadTime = Date.now() - testStartTime;
-      
-      // Nếu load thành công
-      if (event.type === 'did-finish-load' || event.type === 'did-get-response-details') {
-        wv.removeEventListener('did-finish-load', healthCheckListener);
-        wv.removeEventListener('did-fail-load', healthCheckListener);
-        wv.removeEventListener('did-get-response-details', healthCheckListener);
-        
-        console.log(`✅ [Network Health] Webview ${webviewId} healthy - Load time: ${loadTime}ms`);
-        callback({ healthy: true, loadTime: loadTime });
-      }
-      
-      // Nếu load thất bại
-      if (event.type === 'did-fail-load') {
-        wv.removeEventListener('did-finish-load', healthCheckListener);
-        wv.removeEventListener('did-fail-load', healthCheckListener);
-        wv.removeEventListener('did-get-response-details', healthCheckListener);
-        
-        console.error(`❌ [Network Health] Webview ${webviewId} unhealthy - Error: ${event.errorCode} ${event.errorDescription}`);
-        
-        // Kiểm tra các error code liên quan đến proxy
-        if (event.errorCode === -301 || event.errorCode === -302 || event.errorCode === -324 || event.errorCode === -106) {
-          callback({ healthy: false, reason: 'proxy_auth_required', errorCode: event.errorCode });
-        } else {
-          callback({ healthy: false, reason: 'network_error', errorCode: event.errorCode, errorDescription: event.errorDescription });
-        }
-      }
-    };
-    
-    wv.addEventListener('did-finish-load', healthCheckListener);
-    wv.addEventListener('did-fail-load', healthCheckListener);
-    wv.addEventListener('did-get-response-details', healthCheckListener);
-    
-    // Timeout sau 10 giây nếu không có response
-    setTimeout(() => {
-      wv.removeEventListener('did-finish-load', healthCheckListener);
-      wv.removeEventListener('did-fail-load', healthCheckListener);
-      wv.removeEventListener('did-get-response-details', healthCheckListener);
-      
-      console.warn(`⚠️ [Network Health] Webview ${webviewId} timeout sau 10s`);
-      callback({ healthy: false, reason: 'timeout' });
-    }, 10000);
-    
-    // Bắt đầu test bằng cách load URL test
-    wv.loadURL(testUrl);
+
+    const state = window.__webviewProxyState[webviewId] || window.registerWebviewProxyState(webviewId);
+    state.lastCheckAt = Date.now();
+
+    if (window.isProxyExpiredForWebview(webviewId)) {
+      callback({ healthy: false, reason: 'proxy_expired' });
+      return;
+    }
+
+    // Kiểm tra rất nhẹ: chỉ lấy processId, không reload URL để tránh ảnh hưởng luồng webview đang chạy
+    let processId = null;
+    try {
+      processId = wv.getProcessId && wv.getProcessId();
+    } catch (pidErr) {
+      callback({ healthy: false, reason: 'process_lookup_error', error: pidErr.message });
+      return;
+    }
+
+    if (!processId) {
+      callback({ healthy: false, reason: 'missing_process' });
+      return;
+    }
+
+    callback({ healthy: true, processId });
     
   } catch (err) {
     console.error(`❌ [Network Health] Error checking webview ${webviewId}:`, err);
@@ -1282,37 +1478,47 @@ window.startWebviewHealthMonitor = function() {
     clearInterval(window.__healthMonitorInterval);
   }
   
-  console.log('🏥 Bắt đầu monitoring sức khỏe webview mỗi 2 phút...');
+  const guardCfg = window.setProxyGuardConfig(window.PROXY_GUARD_CONFIG || {});
+  console.log('🏥 Bắt đầu monitoring sức khỏe webview mỗi ' + Math.round(guardCfg.monitorIntervalMs / 1000) + ' giây...');
+  window.startProxyGuardPanelRefresh();
   
   window.__healthMonitorInterval = setInterval(() => {
-    const activeWebviews = document.querySelectorAll('[id^="U_"]:not([id*="tabSetting"])');
+    const activeWebviews = Array.from(document.querySelectorAll('webview[id^="U_"]'));
     
     if (activeWebviews.length === 0) {
       console.log('🏥 [Health Monitor] Không có webview nào đang chạy');
       return;
     }
     
-    console.log(`🏥 [Health Monitor] Kiểm tra ${activeWebviews.length} webview đang hoạt động...`);
+    const batchSize = Math.min(activeWebviews.length, Math.max(1, Number(guardCfg.checkBatchSize || 4)));
+    console.log(`🏥 [Health Monitor] Kiểm tra ${batchSize}/${activeWebviews.length} webview...`);
     
     let unhealthyCount = 0;
-    activeWebviews.forEach((webviewContainer) => {
-      const webviewId = webviewContainer.id;
-      const webview = document.getElementById(webviewId);
-      
-      if (!webview) return;
-      
-      // Đơn giản hóa: chỉ kiểm tra xem webview có bị crash không
-      try {
-        const processId = webview.getProcessId && webview.getProcessId();
-        if (!processId) {
-          console.warn(`⚠️ [Health Monitor] Webview ${webviewId} không có process ID - có thể đã crash`);
-          unhealthyCount++;
-        }
-      } catch (err) {
-        console.warn(`⚠️ [Health Monitor] Webview ${webviewId} error:`, err.message);
+    for (let i = 0; i < batchSize; i++) {
+      const idx = (window.__webviewHealthCursor + i) % activeWebviews.length;
+      const webview = activeWebviews[idx];
+      const webviewId = webview.id;
+      window.checkWebviewNetworkHealth(webviewId, (result) => {
+        if (result.healthy) return;
+
         unhealthyCount++;
-      }
-    });
+        const reason = String(result.reason || 'unknown');
+        window.markWebviewProxyFailure(webviewId, reason);
+
+        if (reason === 'proxy_expired') {
+          window.__proxyNeedsReset = true;
+          window.closeWebviewDueToProxyIssue(webviewId, 'proxy hết hạn');
+          return;
+        }
+
+        const state = window.__webviewProxyState[webviewId];
+        if (state && state.failureCount >= Number(guardCfg.failureThreshold || 2)) {
+          window.__proxyNeedsReset = true;
+          window.closeWebviewDueToProxyIssue(webviewId, `lỗi proxy lặp lại (${reason})`);
+        }
+      });
+    }
+    window.__webviewHealthCursor = (window.__webviewHealthCursor + batchSize) % Math.max(1, activeWebviews.length);
     
     // Nếu quá nhiều webview unhealthy, cân nhắc reset proxy
     if (unhealthyCount > activeWebviews.length / 2) {
@@ -1320,7 +1526,7 @@ window.startWebviewHealthMonitor = function() {
       window.__proxyNeedsReset = true;
     }
     
-  }, 120000); // Check mỗi 2 phút
+  }, Number(guardCfg.monitorIntervalMs || 120000));
 };
 
 // Dừng health monitor
@@ -1330,6 +1536,7 @@ window.stopWebviewHealthMonitor = function() {
     window.__healthMonitorInterval = null;
     console.log('🏥 Đã dừng health monitor');
   }
+  window.stopProxyGuardPanelRefresh();
 };
 
 // Log thông tin proxy để debug
@@ -2495,6 +2702,7 @@ if (!window.__appCleanupRegistered) {
                 // console.log(public_ip,proxyActive);
                 if (proxyActive) {
                   console.log("✅ Proxy đã được kích hoạt thành công!");
+                  window.updateActiveProxyContext(proxyInfo);
                   
                   // QUAN TRỌNG: Đánh dấu proxy đã được kích hoạt và bắt đầu đếm thời gian
                   window.__isProxyActive = true;
@@ -2603,6 +2811,7 @@ if (!window.__appCleanupRegistered) {
                 window.__proxyAuthenticating = false;
                 if (proxyActive) {
                   console.log("✅ Proxy đã được kích hoạt (fallback)!");
+                  window.updateActiveProxyContext(proxyInfo);
                   // Đánh dấu proxy active và set timer
                   window.__isProxyActive = true;
                   window.__proxyActivatedTime = Date.now();
@@ -4186,12 +4395,27 @@ window.fnCreateTab = function (id_tab, url_open, script_code, multi_tab_name, au
     // webview.showDevTools();
     // alert(webview.executeScript)
     webview.addEventListener("did-fail-load", (event) => {
-        if (event.errorCode === -3) {
-            console.log("Tải lại trang...");
-            setTimeout(() => {
-                webview.src = url_open;
-            }, 3000);
+      // -3 = ERR_ABORTED (redirect/navigation race), có thể retry nhẹ
+      if (event.errorCode === -3) {
+        console.log("Tải lại trang...");
+        setTimeout(() => {
+          webview.src = url_open;
+        }, 3000);
+        return;
+      }
+
+      // Các mã lỗi thường gặp khi proxy chết/hết hạn/auth fail
+      const proxyErrorCodes = new Set([-111, -115, -118, -130, -324, -407]);
+      if (proxyErrorCodes.has(Number(event.errorCode))) {
+        const webviewId = 'U_' + id_tab;
+        window.markWebviewProxyFailure(webviewId, `did-fail-load:${event.errorCode}`);
+        const state = window.__webviewProxyState?.[webviewId];
+        console.warn(`[Proxy Guard] ${webviewId} lỗi tải (${event.errorCode}) lần ${state?.failureCount || 1}: ${event.errorDescription || ''}`);
+        if ((state?.failureCount || 0) >= 2) {
+        window.__proxyNeedsReset = true;
+        window.closeWebviewDueToProxyIssue(webviewId, `proxy/network error ${event.errorCode}`);
         }
+      }
     });
     webview.addEventListener("dom-ready", function () {
         webview.executeScript(`
@@ -4499,6 +4723,9 @@ window.fnCreateTab = function (id_tab, url_open, script_code, multi_tab_name, au
       // }
     });
     
+    // Gán proxy context hiện tại cho webview mới
+    window.registerWebviewProxyState('U_' + id_tab);
+
     // Append webview vào content
     content.appendChild(webview);
     
@@ -4903,6 +5130,8 @@ function mainAppCode() {
     try {
         if (!id_tab)
             return false;
+
+      window.unregisterWebviewProxyState('U_' + id_tab);
         
         console.log(`[fnRemoveTab] 🗑️ Bắt đầu đóng tab và xóa toàn bộ dữ liệu: ${id_tab}`);
         
@@ -5437,6 +5666,8 @@ function mainAppCode() {
   window.initializeSeoDataUserOption().finally(function () {
     setTimeout(function () {
       window.renderSeoApp('initial');
+      window.ensureProxyGuardPanel();
+      window.renderProxyGuardPanel();
     }, 0);
 
     setTimeout(function () {
@@ -5985,7 +6216,6 @@ if (window.csmUserData && typeof window.csmUserData.set === 'function') {
   // Expose seft globally for trigger access
   window.seft = seft;
 }
-
 // Đảm bảo các dependency đã được expose lên window
 window.React = window.React || (typeof React !== 'undefined' ? React : undefined);
 window.ReactDOM = window.ReactDOM || (typeof ReactDOM !== 'undefined' ? ReactDOM : undefined);
