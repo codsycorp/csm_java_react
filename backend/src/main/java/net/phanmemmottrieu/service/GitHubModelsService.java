@@ -27,7 +27,6 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.reactive.function.client.WebClient;
-import org.springframework.web.reactive.function.client.WebClientResponseException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -624,6 +623,9 @@ public class GitHubModelsService {
   @Value("${github.models.direct-max-chars:20000}")
   private int directMaxChars;
 
+  @Value("${github.models.chunk-mode-threshold-chars:100000}")
+  private int chunkModeThresholdChars;
+
   @Value("${github.models.chunk-size-chars:16000}")
   private int chunkSizeChars;
 
@@ -775,9 +777,23 @@ public class GitHubModelsService {
           "GITHUB_PROMPT_TOO_LARGE");
     }
 
-    emitProgress(progressListener, progressPayload("preparing", "Đang chuẩn bị yêu cầu AI", 0, 1, null));
+    emitProgress(progressListener, progressPayload(
+      "preparing",
+      "Đang chuẩn bị yêu cầu AI",
+      0,
+      1,
+      withOrchestrationMeta("preparing", 0, 1, mergeProgress(
+        progressI18n(
+          "copilot.progress.message.preparing_request",
+          null,
+          "copilot.progress.detail.deciding_mode",
+          Map.of("inputChars", finalPrompt.length())),
+        Map.of(
+          "detail", "Dang kiem tra kich thuoc ngu canh va quyet dinh direct/chunk mode",
+          "inputChars", finalPrompt.length())))));
 
-    if (finalPrompt.length() > directMaxChars) {
+    int chunkThresholdChars = Math.max(10000, chunkModeThresholdChars);
+    if (finalPrompt.length() > directMaxChars || finalPrompt.length() > chunkThresholdChars) {
       return generateLargePromptContent(finalPrompt, progressListener, scenario);
     }
 
@@ -809,9 +825,11 @@ public class GitHubModelsService {
     try {
       String flattenedPrompt = flattenChatMessages(messages);
       int streamingDirectSafeChars = Math.max(8000, Math.min(chatStreamDirectMaxChars, requestMaxChars - 1000));
+        int chunkThresholdChars = Math.max(10000, chunkModeThresholdChars);
       int estimatedInputTokens = estimateTokens(flattenedPrompt, Math.max(128, Math.min(1024, maxOutputTokens)));
       boolean shouldChunkFallback = !flattenedPrompt.isBlank()
           && (flattenedPrompt.length() > streamingDirectSafeChars
+            || flattenedPrompt.length() > chunkThresholdChars
               || estimatedInputTokens > Math.max(3000, chatStreamInputTokenSoftLimit));
 
       if (shouldChunkFallback) {
@@ -820,12 +838,26 @@ public class GitHubModelsService {
             "Ngữ cảnh quá lớn, chuyển sang chế độ chunk để giữ đầy đủ nội dung",
             0,
             1,
-            Map.of(
+          withOrchestrationMeta("preparing", 0, 1, mergeProgress(
+            progressI18n(
+              "copilot.progress.message.large_context_chunk_mode",
+              null,
+              "copilot.progress.detail.streaming_chunk_fallback",
+              Map.of(
                 "inputChars", flattenedPrompt.length(),
+                "chunkModeThresholdChars", chunkThresholdChars,
                 "estimatedInputTokens", estimatedInputTokens,
                 "directCharsLimit", streamingDirectSafeChars,
                 "inputTokenSoftLimit", Math.max(3000, chatStreamInputTokenSoftLimit),
-                "mode", "streaming_chunked_fallback")));
+                "mode", "streaming_chunked_fallback")),
+            Map.of(
+              "detail", "Ngu canh lon vuot nguong streaming direct, kich hoat chunk mode map-reduce",
+              "inputChars", flattenedPrompt.length(),
+              "chunkModeThresholdChars", chunkThresholdChars,
+              "estimatedInputTokens", estimatedInputTokens,
+              "directCharsLimit", streamingDirectSafeChars,
+              "inputTokenSoftLimit", Math.max(3000, chatStreamInputTokenSoftLimit),
+              "mode", "streaming_chunked_fallback")))));
 
         String chunkedResult = generateContent(flattenedPrompt, progressListener);
         if (isErrorResponseJson(chunkedResult)) {
@@ -837,12 +869,13 @@ public class GitHubModelsService {
         }
         emitStreamingChunks(finalText, progressListener);
         emitProgress(progressListener, progressPayload("complete", "Chat hoàn tất", 1, 1,
-            Map.of(
+          mergeProgress(progressI18n("copilot.progress.message.chat_complete", null, null, null), Map.of(
                 "mode", "streaming_chunked_fallback",
                 "inputChars", flattenedPrompt.length(),
-                "estimatedInputTokens", estimatedInputTokens)));
+              "estimatedInputTokens", estimatedInputTokens))));
         return createSuccessJson(finalText, "streaming_chunked_fallback", Map.of(
             "inputChars", flattenedPrompt.length(),
+            "chunkModeThresholdChars", chunkThresholdChars,
             "estimatedInputTokens", estimatedInputTokens,
             "directCharsLimit", streamingDirectSafeChars,
             "inputTokenSoftLimit", Math.max(3000, chatStreamInputTokenSoftLimit)));
@@ -850,7 +883,8 @@ public class GitHubModelsService {
 
       StringBuilder fullResponse = new StringBuilder();
 
-      emitProgress(progressListener, progressPayload("streaming", "Bắt đầu chat với GitHub Models", 0, 1, null));
+        emitProgress(progressListener, progressPayload("streaming", "Bắt đầu chat với GitHub Models", 0, 1,
+          progressI18n("copilot.progress.message.streaming_start", null, null, null)));
       
       // Build request payload
       Map<String, Object> body = new HashMap<>();
@@ -866,8 +900,9 @@ public class GitHubModelsService {
       
       fullResponse.append(streamedResponse);
       
-      emitProgress(progressListener, progressPayload("complete", "Chat hoàn tất", 1, 1, 
-        Map.of("chunk", fullResponse.toString())));
+      emitProgress(progressListener, progressPayload("complete", "Chat hoàn tất", 1, 1,
+        mergeProgress(progressI18n("copilot.progress.message.chat_complete", null, null, null),
+          Map.of("chunk", fullResponse.toString()))));
       
       return createSuccessJson(fullResponse.toString(), "streaming_chat", null);
       
@@ -879,9 +914,12 @@ public class GitHubModelsService {
             "GitHub Models tạm không xử lý được, đang thử provider fallback",
             0,
             1,
-            Map.of("error", String.valueOf(ex.getMessage()))));
+            mergeProgress(
+                progressI18n("copilot.progress.message.github_fallback", null, "copilot.progress.detail.github_fallback", Map.of("error", String.valueOf(ex.getMessage()))),
+                Map.of("error", String.valueOf(ex.getMessage())))));
       } else {
-        emitProgress(progressListener, progressPayload("error", "Chat lỗi: " + ex.getMessage(), 0, 1, null));
+        emitProgress(progressListener, progressPayload("error", "Chat lỗi: " + ex.getMessage(), 0, 1,
+            progressI18n("copilot.progress.message.chat_error", Map.of("error", String.valueOf(ex.getMessage())), null, null)));
       }
       return createErrorJson("Chat streaming lỗi: " + ex.getMessage(), "CHAT_STREAMING_ERROR");
     }
@@ -1006,11 +1044,13 @@ public class GitHubModelsService {
     while (sent < total) {
       int end = Math.min(total, sent + safeChunkChars);
       String chunk = text.substring(sent, end);
-      emitProgress(progressListener, progressPayload("streaming", "Nhận dữ liệu", end, total, Map.of("chunk", chunk)));
+        emitProgress(progressListener, progressPayload("streaming", "Nhận dữ liệu", end, total,
+          mergeProgress(progressI18n("copilot.progress.message.receiving_data", null, null, null), Map.of("chunk", chunk))));
       sent = end;
     }
   }
 
+  @SuppressWarnings("unused")
   private String callStreamingChatCompletion(HttpEntity<Map<String, Object>> request, ProgressListener progressListener) {
     StringBuilder accumulated = new StringBuilder();
     try {
@@ -1024,7 +1064,8 @@ public class GitHubModelsService {
           
           HttpEntity<Map<String, Object>> updatedRequest = new HttpEntity<>(body, request.getHeaders());
           
-          emitProgress(progressListener, progressPayload("streaming", "Đang kết nối tới " + candidateModel, 0, 1, null));
+            emitProgress(progressListener, progressPayload("streaming", "Đang kết nối tới " + candidateModel, 0, 1,
+              progressI18n("copilot.progress.message.connecting_model", Map.of("model", candidateModel), null, null)));
           
           // Call GitHub Models with streaming
           ResponseEntity<String> response = restTemplate.postForEntity(apiUrl, updatedRequest, String.class);
@@ -1050,7 +1091,7 @@ public class GitHubModelsService {
                         if (content != null && !content.isEmpty()) {
                           accumulated.append(content);
                           emitProgress(progressListener, progressPayload("streaming", "Nhận dữ liệu", 0, 1,
-                            Map.of("chunk", content)));
+                            mergeProgress(progressI18n("copilot.progress.message.receiving_data", null, null, null), Map.of("chunk", content))));
                         }
                       }
                     }
@@ -1092,7 +1133,8 @@ public class GitHubModelsService {
       try {
         body.put("model", candidateModel);
         
-        emitProgress(progressListener, progressPayload("streaming", "Đang kết nối tới " + candidateModel, 0, 1, null));
+        emitProgress(progressListener, progressPayload("streaming", "Đang kết nối tới " + candidateModel, 0, 1,
+          progressI18n("copilot.progress.message.connecting_model", Map.of("model", candidateModel), null, null)));
         
         // Blocking collect all streamed chunks (WebClient will handle stream internally)
         getWebClient().post()
@@ -1123,8 +1165,8 @@ public class GitHubModelsService {
                         if (content != null && !content.isEmpty()) {
                           accumulated.append(content);
                           // Emit each chunk to progress listener for real-time UI update
-                          emitProgress(progressListener, progressPayload("streaming", "Nhận dữ liệu", 0, 1,
-                            Map.of("chunk", content)));
+                            emitProgress(progressListener, progressPayload("streaming", "Nhận dữ liệu", 0, 1,
+                              mergeProgress(progressI18n("copilot.progress.message.receiving_data", null, null, null), Map.of("chunk", content))));
                         }
                       }
                     }
@@ -1159,9 +1201,11 @@ public class GitHubModelsService {
             "Prompt direct vượt ngưỡng an toàn request (" + requestMaxChars + " ký tự)",
             "GITHUB_DIRECT_PROMPT_TOO_LARGE");
       }
-      emitProgress(progressListener, progressPayload("direct_call", "Đang gửi yêu cầu trực tiếp tới GitHub Models", 0, 1, null));
+      emitProgress(progressListener, progressPayload("direct_call", "Đang gửi yêu cầu trực tiếp tới GitHub Models", 0, 1,
+          progressI18n("copilot.progress.message.direct_request", null, null, null)));
         String rawBody = callChatCompletion(prompt, maxOutputTokens, directTemperature, progressListener,
-          progressPayload("direct_call", "Đang chờ phản hồi từ GitHub Models", 1, 1, null));
+          progressPayload("direct_call", "Đang chờ phản hồi từ GitHub Models", 1, 1,
+              progressI18n("copilot.progress.message.direct_waiting", null, null, null)));
       if (rawBody == null || rawBody.trim().isEmpty()) {
         return createErrorJson("GitHub Models trả về response rỗng", "GITHUB_EMPTY_RESPONSE");
       }
@@ -1172,7 +1216,8 @@ public class GitHubModelsService {
       }
 
       Object parsedResult = tryParseJson(content);
-      emitProgress(progressListener, progressPayload("completed", "Đã hoàn tất xử lý AI", 1, 1, null));
+        emitProgress(progressListener, progressPayload("completed", "Đã hoàn tất xử lý AI", 1, 1,
+          progressI18n("copilot.progress.message.completed", null, null, null)));
       return createSuccessJson(parsedResult != null ? parsedResult : content, "direct", null);
     } catch (Exception ex) {
       log.error("GitHub Models request failed", ex);
@@ -1197,10 +1242,36 @@ public class GitHubModelsService {
       List<?> baseMenuForIncremental = scenario == AiMenuOperationScenario.INCREMENTAL_UPDATE
           ? extractCurrentMenuFromPrompt(prompt)
           : null;
+      emitProgress(progressListener, progressPayload(
+          "preparing",
+          "Ngữ cảnh quá lớn, chuyển sang chế độ chunk",
+          0,
+          Math.max(1, chunks.size()),
+          withOrchestrationMeta("preparing", 0, Math.max(1, chunks.size()), mergeProgress(
+            progressI18n(
+              "copilot.progress.message.large_context_chunk_mode",
+              null,
+              "copilot.progress.detail.split_into_chunks",
+              Map.of(
+                "chunkCount", chunks.size(),
+                "chunkSizeChars", chunkSizeChars,
+                "chunkOverlapChars", chunkOverlapChars,
+                "inputChars", prompt.length(),
+                "mode", "chunked_map_reduce")),
+            Map.of(
+              "detail", "Da chia ngu canh thanh " + chunks.size() + " phan de phan tich tuan tu",
+              "chunkCount", chunks.size(),
+              "chunkSizeChars", chunkSizeChars,
+              "chunkOverlapChars", chunkOverlapChars,
+              "inputChars", prompt.length(),
+              "mode", "chunked_map_reduce")))));
       int idx = 1;
       for (String chunk : chunks) {
         Map<String, Object> extra = new HashMap<>();
         extra.put("phase", "chunk-summary");
+        extra.put("detail", "Dang phan tich phan [" + idx + "/" + chunks.size() + "] bang model chunk-summary");
+        extra.put("detailKey", "copilot.progress.detail.analyzing_chunk");
+        extra.put("detailArgs", Map.of("current", idx, "total", chunks.size()));
         String preChunkDraft = buildRealtimeDraftText(
             "chunking",
             "Dang phan tich tung phan du lieu",
@@ -1217,10 +1288,15 @@ public class GitHubModelsService {
             extra.put("draftText", baseDraft);
           }
         }
-        emitProgress(progressListener, progressPayload("chunking", "Đang phân tích từng phần của prompt", idx - 1, chunks.size(), extra));
+        emitProgress(progressListener, progressPayload("chunking", "Đang phân tích từng phần của prompt", idx - 1, chunks.size(),
+          mergeProgress(progressI18n("copilot.progress.message.chunking_prompt_parts", null, null, null),
+            withOrchestrationMeta("chunking", idx - 1, chunks.size(), extra))));
+        
         String chunkPrompt = buildChunkSummaryPrompt(idx, chunks.size(), chunk);
         String chunkRaw = callChatCompletion(chunkPrompt, chunkSummaryMaxTokens, chunkSummaryTemperature, progressListener,
-            progressPayload("chunking", "Đang xử lý chunk " + idx + "/" + chunks.size(), idx, chunks.size(), extra));
+          progressPayload("chunking", "Đang xử lý chunk " + idx + "/" + chunks.size(), idx, chunks.size(),
+            mergeProgress(progressI18n("copilot.progress.message.processing_chunk", Map.of("current", idx, "total", chunks.size()), null, null),
+              withOrchestrationMeta("chunking", idx, chunks.size(), extra))));
         if (chunkRaw == null || chunkRaw.isBlank()) {
           return createErrorJson("Chunk " + idx + " trả về rỗng", "GITHUB_CHUNK_EMPTY_RESPONSE");
         }
@@ -1231,6 +1307,9 @@ public class GitHubModelsService {
         chunkSummaries.add(chunkContent.trim());
         Map<String, Object> postChunkExtra = new HashMap<>();
         postChunkExtra.put("phase", "chunk-summary");
+        postChunkExtra.put("detail", "Da hoan tat phan tich phan [" + idx + "/" + chunks.size() + "]");
+        postChunkExtra.put("detailKey", "copilot.progress.detail.chunk_completed");
+        postChunkExtra.put("detailArgs", Map.of("current", idx, "total", chunks.size()));
         String postChunkDraft = buildRealtimeDraftText(
             "chunking",
             "Da hoan tat chunk " + idx + "/" + chunks.size(),
@@ -1258,7 +1337,9 @@ public class GitHubModelsService {
                 idx, chunks.size(), incrementalMenuDraft.length(), incrementalMenuDraft.contains("\"menu\""));
           }
         }
-        emitProgress(progressListener, progressPayload("chunking", "Đang cập nhật bản nháp tạm thời", idx, chunks.size(), postChunkExtra));
+        emitProgress(progressListener, progressPayload("chunking", "Đang cập nhật bản nháp tạm thời", idx, chunks.size(),
+          mergeProgress(progressI18n("copilot.progress.message.updating_draft", null, null, null),
+            withOrchestrationMeta("chunking", idx, chunks.size(), postChunkExtra))));
         idx++;
       }
 
@@ -1273,7 +1354,12 @@ public class GitHubModelsService {
       if (reducingDraft != null && !reducingDraft.isBlank()) {
         reducingExtra.put("draftText", reducingDraft);
       }
-      emitProgress(progressListener, progressPayload("reducing", "Đang gộp tóm tắt các chunk", 0, chunkSummaries.size(), reducingExtra));
+        reducingExtra.put("detail", "Dang gom " + chunkSummaries.size() + " ban tom tat de tao bo nho tam cho suy luan cuoi");
+        reducingExtra.put("detailKey", "copilot.progress.detail.reducing_summaries");
+        reducingExtra.put("detailArgs", Map.of("chunkCount", chunkSummaries.size()));
+        emitProgress(progressListener, progressPayload("reducing", "Đang gộp tóm tắt các chunk", 0, chunkSummaries.size(),
+          mergeProgress(progressI18n("copilot.progress.message.reducing_chunks", null, null, null),
+            withOrchestrationMeta("reducing", 0, chunkSummaries.size(), reducingExtra))));
       List<String> reducedSummaries = reduceSummaries(chunkSummaries, progressListener);
       Map<String, Object> finalMergeExtra = new HashMap<>();
       String finalMergeDraft = buildRealtimeDraftText(
@@ -1286,10 +1372,17 @@ public class GitHubModelsService {
       if (finalMergeDraft != null && !finalMergeDraft.isBlank()) {
         finalMergeExtra.put("draftText", finalMergeDraft);
       }
-      emitProgress(progressListener, progressPayload("final_merge", "Đang tổng hợp kết quả cuối", 0, 1, finalMergeExtra));
+      finalMergeExtra.put("detail", "Final reasoning: dang tong hop toan bo chunk summaries thanh ket qua cuoi cung");
+        finalMergeExtra.put("detailKey", "copilot.progress.detail.final_reasoning");
+        finalMergeExtra.put("detailArgs", Map.of("summaryCount", reducedSummaries.size()));
+      emitProgress(progressListener, progressPayload("final_merge", "Đang tổng hợp kết quả cuối", 0, 1,
+          mergeProgress(progressI18n("copilot.progress.message.final_merge", null, null, null),
+            withOrchestrationMeta("final_merge", 0, 1, finalMergeExtra))));
       String mergedPrompt = buildMergedPrompt(taskHint, reducedSummaries);
-        String mergedRaw = callChatCompletion(mergedPrompt, maxOutputTokens, mergeTemperature, progressListener,
-          progressPayload("final_merge", "Đang chờ phản hồi tổng hợp cuối", 1, 1, finalMergeExtra));
+      String mergedRaw = callChatCompletion(mergedPrompt, maxOutputTokens, mergeTemperature, progressListener,
+          progressPayload("final_merge", "Đang chờ phản hồi tổng hợp cuối", 1, 1,
+            mergeProgress(progressI18n("copilot.progress.message.final_waiting", null, null, null),
+              withOrchestrationMeta("final_merge", 1, 1, finalMergeExtra))));
       if (mergedRaw == null || mergedRaw.isBlank()) {
         return createErrorJson("Tổng hợp chunk trả về rỗng", "GITHUB_MERGE_EMPTY_RESPONSE");
       }
@@ -1305,7 +1398,12 @@ public class GitHubModelsService {
       meta.put("reducedSummaries", reducedSummaries.size());
       meta.put("chunkSizeChars", chunkSizeChars);
       meta.put("chunkOverlapChars", chunkOverlapChars);
-      emitProgress(progressListener, progressPayload("completed", "Đã hoàn tất xử lý AI", chunks.size(), chunks.size(), meta));
+        meta.put("detail", "Da hoan tat toan bo quy trinh preparing -> chunking -> reducing -> final reasoning");
+        meta.put("detailKey", "copilot.progress.detail.completed_pipeline");
+        meta.put("detailArgs", Map.of("chunkCount", chunks.size(), "summaryCount", reducedSummaries.size()));
+        emitProgress(progressListener, progressPayload("completed", "Đã hoàn tất xử lý AI", chunks.size(), chunks.size(),
+          mergeProgress(progressI18n("copilot.progress.message.completed", null, null, null),
+            withOrchestrationMeta("completed", chunks.size(), chunks.size(), meta))));
       return createSuccessJson(parsedResult != null ? parsedResult : mergedContent, "chunked", meta);
     } catch (Exception ex) {
       log.error("GitHub Models chunked request failed", ex);
@@ -1505,10 +1603,19 @@ public class GitHubModelsService {
           "Prompt request quá lớn cho model (" + prompt.length() + ">" + requestMaxChars + " ký tự)");
     }
 
+    int estimatedInputTokens = estimateTokens(prompt, Math.max(256, maxTokens));
     List<String> candidateModels = resolveCandidateModels();
     List<String> failures = new ArrayList<>();
 
     for (String candidateModel : candidateModels) {
+      if (!supportsPromptSize(candidateModel, estimatedInputTokens, maxTokens)) {
+        String skipReason = "skip context too large for model";
+        log.info("Skip model '{}' for promptSize={} estimatedInputTokens={} maxTokens={} ({})",
+            candidateModel, prompt.length(), estimatedInputTokens, maxTokens, skipReason);
+        failures.add(candidateModel + " -> " + skipReason);
+        continue;
+      }
+
       HttpHeaders headers = new HttpHeaders();
       headers.setContentType(MediaType.APPLICATION_JSON);
       headers.setBearerAuth(token.trim());
@@ -1578,6 +1685,8 @@ public class GitHubModelsService {
             emitProgress(progressListener, mergeProgress(progressMeta, Map.of(
                 "stage", "fast_failover_rate_limit",
                 "message", "Model dang bi rate-limit, chuyen model fallback de giam tre",
+              "messageKey", "copilot.progress.message.fast_failover_rate_limit",
+              "messageArgs", Map.of("model", modelName),
                 "attempt", attempt,
                 "model", modelName,
                 "waitingMs", waitMs,
@@ -1590,6 +1699,8 @@ public class GitHubModelsService {
           emitProgress(progressListener, mergeProgress(progressMeta, Map.of(
               "stage", "waiting_rate_limit",
               "message", "Đang chờ quota GitHub Models",
+              "messageKey", "copilot.progress.message.waiting_rate_limit",
+              "messageArgs", Map.of("model", modelName, "waitingMs", waitMs),
               "attempt", attempt,
               "model", modelName,
               "waitingMs", waitMs)));
@@ -1659,6 +1770,20 @@ public class GitHubModelsService {
       return 2;
     }
     return 10;
+  }
+
+  private boolean supportsPromptSize(String modelName, int estimatedInputTokens, int maxTokens) {
+    if (modelName == null || modelName.isBlank()) {
+      return true;
+    }
+    String normalized = modelName.trim().toLowerCase();
+    int estimatedTotalTokens = Math.max(estimatedInputTokens, 0) + Math.max(maxTokens, 0);
+
+    if (normalized.contains("o1-mini") || normalized.contains("o3-mini")) {
+      return estimatedInputTokens <= 3200 && estimatedTotalTokens <= 3800;
+    }
+
+    return true;
   }
 
   private boolean isUnknownModelError(HttpClientErrorException.BadRequest ex) {
@@ -1867,7 +1992,8 @@ public class GitHubModelsService {
 
         if (!batch.isEmpty() && (wouldOverflowChars || wouldOverflowItems)) {
           completedBatches++;
-          emitProgress(progressListener, progressPayload("reducing", "Đang gộp summary level " + level, completedBatches - 1, estimatedBatchTotal, Map.of("level", level)));
+            emitProgress(progressListener, progressPayload("reducing", "Đang gộp summary level " + level, completedBatches - 1, estimatedBatchTotal,
+              progressI18n("copilot.progress.message.reducing_level", Map.of("level", level), null, null)));
           next.add(mergeSummaryBatch(batch, level, progressListener, completedBatches, estimatedBatchTotal));
           batch.clear();
           batchChars = 0;
@@ -1879,7 +2005,8 @@ public class GitHubModelsService {
 
       if (!batch.isEmpty()) {
         completedBatches++;
-        emitProgress(progressListener, progressPayload("reducing", "Đang gộp summary level " + level, completedBatches - 1, estimatedBatchTotal, Map.of("level", level)));
+        emitProgress(progressListener, progressPayload("reducing", "Đang gộp summary level " + level, completedBatches - 1, estimatedBatchTotal,
+          progressI18n("copilot.progress.message.reducing_level", Map.of("level", level), null, null)));
         next.add(mergeSummaryBatch(batch, level, progressListener, completedBatches, estimatedBatchTotal));
       }
 
@@ -1897,7 +2024,9 @@ public class GitHubModelsService {
     String prompt = buildSummaryMergePrompt(batch, level);
     String raw = callChatCompletion(prompt, chunkSummaryMaxTokens, chunkSummaryTemperature, progressListener,
         progressPayload("reducing", "Đang gộp summary level " + level + " (" + batchIndex + "/" + batchTotal + ")",
-            batchIndex, batchTotal, Map.of("level", level)));
+        batchIndex, batchTotal,
+        progressI18n("copilot.progress.message.reducing_level_batch",
+          Map.of("level", level, "batchIndex", batchIndex, "batchTotal", batchTotal), null, null)));
     if (raw == null || raw.isBlank()) {
       throw new IllegalStateException("Merge batch summary trả về rỗng ở level " + level);
     }
@@ -1997,6 +2126,79 @@ public class GitHubModelsService {
       payload.putAll(extra);
     }
     return payload;
+  }
+
+  private Map<String, Object> withOrchestrationMeta(String stage, int current, int total, Map<String, Object> extra) {
+    Map<String, Object> merged = new HashMap<>();
+    if (extra != null && !extra.isEmpty()) {
+      merged.putAll(extra);
+    }
+    merged.put("orchestrationPhaseKey", resolveOrchestrationPhaseKey(stage));
+    merged.put("orchestrationPhase", resolveOrchestrationPhase(stage));
+    merged.put("overallPercent", computeOverallPercent(stage, current, total));
+    return merged;
+  }
+
+  private Map<String, Object> progressI18n(String messageKey, Map<String, Object> messageArgs,
+      String detailKey, Map<String, Object> detailArgs) {
+    Map<String, Object> meta = new HashMap<>();
+    if (messageKey != null && !messageKey.isBlank()) {
+      meta.put("messageKey", messageKey);
+    }
+    if (messageArgs != null && !messageArgs.isEmpty()) {
+      meta.put("messageArgs", messageArgs);
+    }
+    if (detailKey != null && !detailKey.isBlank()) {
+      meta.put("detailKey", detailKey);
+    }
+    if (detailArgs != null && !detailArgs.isEmpty()) {
+      meta.put("detailArgs", detailArgs);
+    }
+    return meta;
+  }
+
+  private String resolveOrchestrationPhaseKey(String stage) {
+    String normalized = String.valueOf(stage == null ? "" : stage).trim().toLowerCase();
+    return switch (normalized) {
+      case "preparing" -> "copilot.progress.phase.preparing";
+      case "chunking" -> "copilot.progress.phase.chunking";
+      case "reducing" -> "copilot.progress.phase.reducing";
+      case "final_merge" -> "copilot.progress.phase.final_reasoning";
+      case "streaming" -> "copilot.progress.phase.streaming";
+      case "completed", "complete" -> "copilot.progress.phase.completed";
+      case "error" -> "copilot.progress.phase.error";
+      default -> "copilot.progress.phase.running";
+    };
+  }
+
+  private String resolveOrchestrationPhase(String stage) {
+    String normalized = String.valueOf(stage == null ? "" : stage).trim().toLowerCase();
+    return switch (normalized) {
+      case "preparing" -> "Preparing";
+      case "chunking" -> "Chunking";
+      case "reducing" -> "Reducing";
+      case "final_merge" -> "Final Reasoning";
+      case "streaming" -> "Streaming";
+      case "completed", "complete" -> "Completed";
+      case "error" -> "Error";
+      default -> normalized.isEmpty() ? "Running" : normalized;
+    };
+  }
+
+  private int computeOverallPercent(String stage, int current, int total) {
+    int safeTotal = Math.max(1, total);
+    int safeCurrent = Math.max(0, Math.min(current, safeTotal));
+    double ratio = Math.max(0.0d, Math.min(1.0d, safeCurrent / (double) safeTotal));
+    String normalized = String.valueOf(stage == null ? "" : stage).trim().toLowerCase();
+    return switch (normalized) {
+      case "preparing" -> 5;
+      case "chunking" -> Math.max(10, Math.min(74, 10 + (int) Math.round(ratio * 64.0d)));
+      case "reducing" -> Math.max(75, Math.min(89, 75 + (int) Math.round(ratio * 14.0d)));
+      case "final_merge" -> Math.max(90, Math.min(99, 90 + (int) Math.round(ratio * 9.0d)));
+      case "completed", "complete" -> 100;
+      case "error" -> Math.max(0, Math.min(99, 10 + (int) Math.round(ratio * 80.0d)));
+      default -> Math.max(0, Math.min(100, (int) Math.round(ratio * 100.0d)));
+    };
   }
 
   private Map<String, Object> mergeProgress(Map<String, Object> base, Map<String, Object> patch) {

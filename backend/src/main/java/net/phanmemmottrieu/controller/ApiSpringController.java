@@ -932,6 +932,22 @@ public class ApiSpringController {
                 if (current != null) realtimePayload.put("current", current);
                 if (total != null) realtimePayload.put("total", total);
                 if (percent != null) realtimePayload.put("percent", percent);
+                Object detail = progress.get("detail");
+                Object detailKey = progress.get("detailKey");
+                Object detailArgs = progress.get("detailArgs");
+                Object orchestrationPhase = progress.get("orchestrationPhase");
+                Object orchestrationPhaseKey = progress.get("orchestrationPhaseKey");
+                Object overallPercent = progress.get("overallPercent");
+                Object messageKey = progress.get("messageKey");
+                Object messageArgs = progress.get("messageArgs");
+                if (detail != null) realtimePayload.put("detail", detail);
+                if (detailKey != null) realtimePayload.put("detailKey", detailKey);
+                if (detailArgs != null) realtimePayload.put("detailArgs", detailArgs);
+                if (orchestrationPhase != null) realtimePayload.put("orchestrationPhase", orchestrationPhase);
+                if (orchestrationPhaseKey != null) realtimePayload.put("orchestrationPhaseKey", orchestrationPhaseKey);
+                if (overallPercent != null) realtimePayload.put("overallPercent", overallPercent);
+                if (messageKey != null) realtimePayload.put("messageKey", messageKey);
+                if (messageArgs != null) realtimePayload.put("messageArgs", messageArgs);
                 Object status = progress.get("status");
                 if (status != null) realtimePayload.put("status", status);
 

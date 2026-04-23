@@ -58,6 +58,14 @@ type CopilotStageEvent = {
 	id: string;
 	stage: string;
 	message: string;
+	messageKey?: string;
+	messageArgs?: Record<string, any>;
+	detail?: string;
+	detailKey?: string;
+	detailArgs?: Record<string, any>;
+	orchestrationPhase?: string;
+	orchestrationPhaseKey?: string;
+	overallPercent?: number;
 	percent?: number;
 	current?: number;
 	total?: number;
@@ -559,6 +567,160 @@ export default function CopilotChat({
 		}
 	}, [uiText]);
 
+	const renderProgressText = useCallback((key?: string, args?: Record<string, any>, fallback?: string): string => {
+		const normalizedKey = String(key || "").trim();
+		if (!normalizedKey) return String(fallback || "").trim();
+		switch (normalizedKey) {
+			case "copilot.progress.phase.preparing":
+				return uiText("Chuẩn bị", "Preparing", "准备中");
+			case "copilot.progress.phase.chunking":
+				return uiText("Phân khối", "Chunking", "分块处理中");
+			case "copilot.progress.phase.reducing":
+				return uiText("Rút gọn", "Reducing", "归并中");
+			case "copilot.progress.phase.final_reasoning":
+				return uiText("Suy luận cuối", "Final Reasoning", "最终推理");
+			case "copilot.progress.phase.streaming":
+				return uiText("Trả dữ liệu", "Streaming", "流式输出");
+			case "copilot.progress.phase.completed":
+				return uiText("Hoàn tất", "Completed", "已完成");
+			case "copilot.progress.phase.error":
+				return uiText("Lỗi", "Error", "错误");
+			case "copilot.progress.phase.running":
+				return uiText("Đang xử lý", "Running", "处理中");
+			case "copilot.progress.message.preparing_request":
+				return uiText("Đang chuẩn bị yêu cầu AI", "Preparing AI request", "正在准备 AI 请求");
+			case "copilot.progress.message.large_context_chunk_mode":
+				return uiText("Ngữ cảnh quá lớn, chuyển sang chế độ chunk", "Large context detected, switching to chunk mode", "上下文过大，切换到分块模式");
+			case "copilot.progress.message.chunking_prompt_parts":
+				return uiText("Đang phân tích từng phần của prompt", "Analyzing prompt parts", "正在分析提示词各部分");
+			case "copilot.progress.message.processing_chunk":
+				return uiText(
+					`Đang xử lý chunk ${args?.current}/${args?.total}`,
+					`Processing chunk ${args?.current}/${args?.total}`,
+					`正在处理分块 ${args?.current}/${args?.total}`,
+				);
+			case "copilot.progress.message.updating_draft":
+				return uiText("Đang cập nhật bản nháp tạm thời", "Updating live draft", "正在更新临时草稿");
+			case "copilot.progress.message.reducing_chunks":
+				return uiText("Đang gộp tóm tắt các chunk", "Reducing chunk summaries", "正在合并分块摘要");
+			case "copilot.progress.message.reducing_level":
+				return uiText(
+					`Đang gộp summary level ${args?.level}`,
+					`Reducing summary level ${args?.level}`,
+					`正在归并第 ${args?.level} 层摘要`,
+				);
+			case "copilot.progress.message.reducing_level_batch":
+				return uiText(
+					`Đang gộp summary level ${args?.level} (${args?.batchIndex}/${args?.batchTotal})`,
+					`Reducing summary level ${args?.level} (${args?.batchIndex}/${args?.batchTotal})`,
+					`正在归并第 ${args?.level} 层摘要（${args?.batchIndex}/${args?.batchTotal}）`,
+				);
+			case "copilot.progress.message.final_merge":
+				return uiText("Đang tổng hợp kết quả cuối", "Building final answer", "正在汇总最终结果");
+			case "copilot.progress.message.final_waiting":
+				return uiText("Đang chờ phản hồi tổng hợp cuối", "Waiting for final synthesis", "正在等待最终综合结果");
+			case "copilot.progress.message.direct_request":
+				return uiText("Đang gửi yêu cầu trực tiếp tới GitHub Models", "Sending direct request to GitHub Models", "正在向 GitHub Models 发送直接请求");
+			case "copilot.progress.message.direct_waiting":
+				return uiText("Đang chờ phản hồi từ GitHub Models", "Waiting for GitHub Models response", "正在等待 GitHub Models 响应");
+			case "copilot.progress.message.streaming_start":
+				return uiText("Bắt đầu chat với GitHub Models", "Starting chat with GitHub Models", "开始与 GitHub Models 对话");
+			case "copilot.progress.message.receiving_data":
+				return uiText("Đang nhận dữ liệu", "Receiving data", "正在接收数据");
+			case "copilot.progress.message.connecting_model":
+				return uiText(
+					`Đang kết nối tới ${args?.model}`,
+					`Connecting to ${args?.model}`,
+					`正在连接到 ${args?.model}`,
+				);
+			case "copilot.progress.message.chat_complete":
+				return uiText("Chat hoàn tất", "Chat completed", "对话已完成");
+			case "copilot.progress.message.github_fallback":
+				return uiText("GitHub Models tạm không xử lý được, đang thử provider fallback", "GitHub Models is temporarily unavailable, trying fallback provider", "GitHub Models 暂时不可用，正在尝试回退提供方");
+			case "copilot.progress.message.chat_error":
+				return uiText(
+					`Chat lỗi: ${args?.error || "unknown"}`,
+					`Chat error: ${args?.error || "unknown"}`,
+					`对话错误：${args?.error || "unknown"}`,
+				);
+			case "copilot.progress.message.fast_failover_rate_limit":
+				return uiText(
+					`Model ${args?.model} đang bị rate-limit, chuyển fallback để giảm trễ`,
+					`Model ${args?.model} is rate-limited, switching fallback to reduce latency`,
+					`模型 ${args?.model} 已被限流，切换回退以降低延迟`,
+				);
+			case "copilot.progress.message.waiting_rate_limit":
+				return uiText(
+					`Đang chờ quota GitHub Models${args?.waitingMs ? ` (${args.waitingMs}ms)` : ""}`,
+					`Waiting for GitHub Models quota${args?.waitingMs ? ` (${args.waitingMs}ms)` : ""}`,
+					`正在等待 GitHub Models 配额${args?.waitingMs ? `（${args.waitingMs}ms）` : ""}`,
+				);
+			case "copilot.progress.message.completed":
+				return uiText("Đã hoàn tất xử lý AI", "AI processing completed", "AI 处理已完成");
+			case "copilot.progress.detail.deciding_mode":
+				return uiText("Đang kiểm tra kích thước ngữ cảnh và quyết định direct/chunk mode", "Checking context size and deciding direct vs chunk mode", "正在检查上下文大小并决定直连或分块模式");
+			case "copilot.progress.detail.streaming_chunk_fallback":
+				return uiText("Ngữ cảnh lớn vượt ngưỡng streaming direct, kích hoạt chunk mode map-reduce", "Large context exceeded direct streaming threshold, enabling chunked map-reduce", "大上下文超过直连流式阈值，启用分块 map-reduce");
+			case "copilot.progress.detail.split_into_chunks":
+				return uiText(
+					`Đã chia ngữ cảnh thành ${args?.chunkCount} phần để phân tích tuần tự`,
+					`Split context into ${args?.chunkCount} parts for sequential analysis`,
+					`已将上下文拆分为 ${args?.chunkCount} 个部分以顺序分析`,
+				);
+			case "copilot.progress.detail.analyzing_chunk":
+				return uiText(
+					`Đang phân tích phần [${args?.current}/${args?.total}] bằng model chunk-summary`,
+					`Analyzing part [${args?.current}/${args?.total}] with chunk-summary model`,
+					`正在使用 chunk-summary 模型分析第 [${args?.current}/${args?.total}] 部分`,
+				);
+			case "copilot.progress.detail.chunk_completed":
+				return uiText(
+					`Đã hoàn tất phân tích phần [${args?.current}/${args?.total}]`,
+					`Completed analysis for part [${args?.current}/${args?.total}]`,
+					`已完成第 [${args?.current}/${args?.total}] 部分分析`,
+				);
+			case "copilot.progress.detail.reducing_summaries":
+				return uiText(
+					`Đang gom ${args?.chunkCount} bản tóm tắt để tạo bộ nhớ tạm cho suy luận cuối`,
+					`Combining ${args?.chunkCount} summaries for final reasoning memory`,
+					`正在合并 ${args?.chunkCount} 份摘要以构建最终推理上下文`,
+				);
+			case "copilot.progress.detail.final_reasoning":
+				return uiText(
+					"Đang tổng hợp toàn bộ chunk summaries thành kết quả cuối cùng",
+					"Synthesizing all chunk summaries into the final answer",
+					"正在将全部分块摘要综合为最终结果",
+				);
+			case "copilot.progress.detail.completed_pipeline":
+				return uiText(
+					"Đã hoàn tất toàn bộ quy trình preparing -> chunking -> reducing -> final reasoning",
+					"Completed the full pipeline: preparing -> chunking -> reducing -> final reasoning",
+					"已完成完整流程：preparing -> chunking -> reducing -> final reasoning",
+				);
+			case "copilot.progress.detail.github_fallback":
+				return uiText(
+					`Chi tiết: ${args?.error || "không rõ lỗi"}`,
+					`Details: ${args?.error || "unknown error"}`,
+					`详情：${args?.error || "未知错误"}`,
+				);
+			default:
+				return String(fallback || "").trim();
+		}
+	}, [uiText]);
+
+	const getStageTone = useCallback((stage: string, orchestrationPhase?: string): "preparing" | "chunking" | "reducing" | "final" | "completed" | "error" | "default" => {
+		const normalizedPhase = String(orchestrationPhase || "").trim().toLowerCase();
+		const normalizedStage = String(stage || "").trim().toLowerCase();
+		const key = normalizedPhase || normalizedStage;
+		if (key.includes("preparing")) return "preparing";
+		if (key.includes("chunking")) return "chunking";
+		if (key.includes("reducing")) return "reducing";
+		if (key.includes("final")) return "final";
+		if (key.includes("complete")) return "completed";
+		if (key.includes("error")) return "error";
+		return "default";
+	}, []);
+
 	const extractStageRangeLabel = useCallback((data: any): string | undefined => {
 		const candidates: any[] =
 			(Array.isArray(data?.textEdits) && data.textEdits.length > 0 && data.textEdits)
@@ -592,16 +754,32 @@ export default function CopilotChat({
 	const appendStageEvent = useCallback((data: any) => {
 		const stage = String(data?.stage || data?.status || "").trim();
 		const msg = String(data?.message || "").trim();
+		const messageKey = String(data?.messageKey || "").trim();
+		const messageArgs = data?.messageArgs && typeof data.messageArgs === "object" ? data.messageArgs : undefined;
+		const detail = String(data?.detail || "").trim();
+		const detailKey = String(data?.detailKey || "").trim();
+		const detailArgs = data?.detailArgs && typeof data.detailArgs === "object" ? data.detailArgs : undefined;
+		const orchestrationPhase = String(data?.orchestrationPhase || "").trim();
+		const orchestrationPhaseKey = String(data?.orchestrationPhaseKey || "").trim();
 		const rangeLabel = extractStageRangeLabel(data);
-		const hasValue = stage || msg || Number.isFinite(Number(data?.percent)) || Boolean(rangeLabel);
+		const hasValue = stage || msg || messageKey || detail || detailKey || orchestrationPhase || orchestrationPhaseKey || Number.isFinite(Number(data?.percent)) || Number.isFinite(Number(data?.overallPercent)) || Boolean(rangeLabel);
 		if (!hasValue) return;
 
+		const overallPercentNum = Number(data?.overallPercent);
 		const percentNum = Number(data?.percent);
 		const currentNum = Number(data?.current);
 		const totalNum = Number(data?.total);
 		const signature = [
 			stage.toLowerCase(),
+			messageKey,
+			orchestrationPhase,
+			orchestrationPhaseKey,
 			msg,
+			JSON.stringify(messageArgs || {}),
+			detail,
+			detailKey,
+			JSON.stringify(detailArgs || {}),
+			Number.isFinite(overallPercentNum) ? overallPercentNum : "",
 			Number.isFinite(percentNum) ? percentNum : "",
 			Number.isFinite(currentNum) ? currentNum : "",
 			Number.isFinite(totalNum) ? totalNum : "",
@@ -618,6 +796,14 @@ export default function CopilotChat({
 					id: `stage_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
 					stage: stage || "processing",
 					message: msg,
+					messageKey: messageKey || undefined,
+					messageArgs,
+					detail: detail || undefined,
+					detailKey: detailKey || undefined,
+					detailArgs,
+					orchestrationPhase: orchestrationPhase || undefined,
+					orchestrationPhaseKey: orchestrationPhaseKey || undefined,
+					overallPercent: Number.isFinite(overallPercentNum) ? overallPercentNum : undefined,
 					percent: Number.isFinite(percentNum) ? percentNum : undefined,
 					current: Number.isFinite(currentNum) ? currentNum : undefined,
 					total: Number.isFinite(totalNum) ? totalNum : undefined,
@@ -1367,20 +1553,23 @@ export default function CopilotChat({
 										</div>
 										<div className={styles.stageTimelineList}>
 											{stageEvents.map((event) => {
-												const stageLabel = formatStageLabel(event.stage);
-												const percentText = Number.isFinite(Number(event.percent)) ? ` (${Math.max(0, Math.min(100, Number(event.percent)))}%)` : "";
+												const stageLabel = renderProgressText(event.orchestrationPhaseKey, undefined, event.orchestrationPhase || formatStageLabel(event.stage));
+												const stageTone = getStageTone(event.stage, event.orchestrationPhase);
+												const effectivePercent = Number.isFinite(Number(event.overallPercent)) ? Number(event.overallPercent) : Number(event.percent);
+												const percentText = Number.isFinite(effectivePercent) ? ` (${Math.max(0, Math.min(100, effectivePercent))}%)` : "";
 												const progressText = Number.isFinite(Number(event.current)) && Number.isFinite(Number(event.total))
 													? ` [${Math.max(0, Number(event.current))}/${Math.max(1, Number(event.total))}]`
 													: "";
+												const timelineMessage = renderProgressText(event.detailKey, event.detailArgs, event.detail || renderProgressText(event.messageKey, event.messageArgs, event.message));
 												return (
-													<div key={event.id} className={styles.stageTimelineItem}>
-														<span className={styles.stageTimelineBullet} />
+													<div key={event.id} className={`${styles.stageTimelineItem} ${styles[`stageTimelineItem_${stageTone}`] || ""}`.trim()}>
+														<span className={`${styles.stageTimelineBullet} ${styles[`stageTimelineBullet_${stageTone}`] || ""}`.trim()} />
 														<div className={styles.stageTimelineText}>
-															<div className={styles.stageTimelineHead}>
+															<div className={`${styles.stageTimelineHead} ${styles[`stageTimelineHead_${stageTone}`] || ""}`.trim()}>
 																<span>{stageLabel}{percentText}{progressText}</span>
 																{event.rangeLabel && <span className={styles.stageRangeBadge}>{event.rangeLabel}</span>}
 															</div>
-															{event.message && <div className={styles.stageTimelineMessage}>{event.message}</div>}
+															{timelineMessage && <div className={styles.stageTimelineMessage}>{timelineMessage}</div>}
 														</div>
 													</div>
 												);
