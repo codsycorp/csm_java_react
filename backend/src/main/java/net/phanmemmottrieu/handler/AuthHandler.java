@@ -149,6 +149,7 @@ public class AuthHandler {
         userInfo.put("phoneNumber", u.getPhoneNumber());
         userInfo.put("full_name", u.getFullName());
         userInfo.put("avatar", u.getAvatar());
+        userInfo.put("user_address", u.getUserAddress());
         userInfo.put("roles", u.getPermissions()); // dùng permissions như roles
         userInfo.put("permissions", u.getPermissions());
         userInfo.put("menusPermissions", u.getMenusPermissions());
@@ -268,6 +269,8 @@ public class AuthHandler {
             result.put("phoneNumber", user.getPhoneNumber());
             result.put("full_name", user.getFullName());
             result.put("avatar", user.getAvatar());
+            result.put("user_address", user.getUserAddress());
+            result.put("user_adress", user.getUserAddress()); // Legacy alias
             Map<String, String> appTokenMeta = parseAppTokenMeta(user.getAppToken());
             String tokenRole = appTokenMeta.getOrDefault("role", "");
             String tokenLoginIdentifier = appTokenMeta.getOrDefault("loginIdentifier", "");

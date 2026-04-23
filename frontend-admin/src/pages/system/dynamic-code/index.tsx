@@ -403,6 +403,16 @@ function parseUserAddressValue(raw: any): any[] {
   return [];
 }
 
+function resolveUserAddressArray(source: any): any[] {
+  if (!source || typeof source !== "object") {
+    return [];
+  }
+
+  // Chỉ dùng user_address (canonical field) - không dùng fallback sai
+  const canonical = parseUserAddressValue(source.user_address);
+  return canonical;
+}
+
 function serializeUserAddressValue(raw: any): string {
   if (Array.isArray(raw)) {
     return JSON.stringify(raw);
@@ -436,7 +446,6 @@ function syncRuntimeUserAddress(userAddress: any[]): any[] {
   const serialized = JSON.stringify(normalized);
   window.csmCurrentUser = window.csmCurrentUser || {};
   window.csmCurrentUser.user_address = serialized;
-  window.csmCurrentUser.user_adress = serialized;
 
   if ((window as any).seft) {
     (window as any).seft.Uinfos = (window as any).seft.Uinfos || {};
@@ -444,16 +453,14 @@ function syncRuntimeUserAddress(userAddress: any[]): any[] {
 
     if ((window as any).seft.user) {
       (window as any).seft.user.user_address = serialized;
-      (window as any).seft.user.user_adress = serialized;
     }
   }
 
   try {
     const currentUserState = useUserStore.getState() as any;
-    if (currentUserState?.user_address !== serialized || currentUserState?.user_adress !== serialized) {
+    if (currentUserState?.user_address !== serialized) {
       useUserStore.setState({
         user_address: serialized,
-        user_adress: serialized,
       } as any);
     }
   } catch {
@@ -1116,193 +1123,30 @@ ${resolvedContainerSelector} select {
     };
 
     const resolveProfileTarget = (currentUser: any) => {
+      // Match profile approach chính xác
       const accountType = String(currentUser?.account_type || "").trim().toLowerCase();
       const isSubUserByFlag = Boolean(currentUser?.is_sub_user) || accountType === "sub-user";
       const preferredTable = isSubUserByFlag ? "csm_group_members" : "csm_accounts";
-      const userId = String(currentUser?.userId || currentUser?.id || currentUser?.user_id || currentUser?.account_id || "").trim();
-      const appToken = String(currentUser?.app_token || currentUser?.appToken || "").trim();
+      const userId = String(currentUser?.userId || "").trim();
       const identity = resolvePrimaryIdentity(currentUser);
       const loginIdentifier = String(currentUser?.login_identifier || "").trim() || identity.value;
 
-      const pkFields = preferredTable === "csm_group_members"
-        ? (userId ? ["id", "login_identifier"] : ["login_identifier"])
-        : (userId ? ["id"] : (identity.field ? [identity.field] : []));
-
-      const where: Record<string, any> = {};
-      if (userId) {
-        where.id = userId;
-      }
-      if (preferredTable === "csm_group_members" && loginIdentifier) {
-        where.login_identifier = loginIdentifier;
-      }
-      if (!userId && preferredTable === "csm_accounts" && identity.field && identity.value) {
-        where[identity.field] = identity.value;
-      }
-
-      const preferredPkField = userId
-        ? "id"
-        : (preferredTable === "csm_group_members"
-            ? "login_identifier"
-            : (identity.field || "app_token"));
-      const preferredPkValue = userId
-        || (preferredTable === "csm_group_members" ? loginIdentifier : (identity.value || appToken || loginIdentifier));
-
       return {
         preferredTable,
-        preferredPkField,
-        preferredPkValue,
-        pkFields,
-        where,
+        pkFields: preferredTable === "csm_group_members"
+          ? (userId ? ["id", "login_identifier"] : ["login_identifier"])
+          : (userId ? ["id"] : (identity.field ? [identity.field] : [])),
+        where: (() => {
+          const w: Record<string, any> = {};
+          if (userId) w.id = userId;
+          if (preferredTable === "csm_group_members" && loginIdentifier) w.login_identifier = loginIdentifier;
+          if (!userId && preferredTable === "csm_accounts" && identity.field && identity.value) w[identity.field] = identity.value;
+          return w;
+        })(),
         loginIdentifier,
         userId,
         identityField: identity.field,
         identityValue: identity.value,
-      };
-    };
-
-    const uniqIdentityCandidates = (candidates: Array<{ field: string; value: any }>) => {
-      const seen = new Set<string>();
-      return candidates.filter((item) => {
-        if (item?.value === undefined || item?.value === null) return false;
-        const value = String(item.value).trim();
-        if (!value) return false;
-        const key = `${item.field}::${value}`;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
-    };
-
-    const getProfileIdentityCandidates = (currentUser: any) => {
-      const target = resolveProfileTarget(currentUser);
-      return uniqIdentityCandidates([
-        { field: target.preferredPkField, value: target.preferredPkValue },
-        { field: "id", value: currentUser?.userId || currentUser?.id || currentUser?.user_id || currentUser?.account_id },
-        { field: "email", value: currentUser?.email },
-        { field: "username", value: currentUser?.username },
-        { field: "phoneNumber", value: currentUser?.phoneNumber || currentUser?.phone_number },
-        { field: "login_identifier", value: target.loginIdentifier },
-      ]);
-    };
-
-    const getTableIdentityCandidates = (currentUser: any, tableName: string) => {
-      const profileCandidates = getProfileIdentityCandidates(currentUser);
-      if (tableName === "csm_group_members") {
-        return uniqIdentityCandidates([
-          ...profileCandidates,
-          { field: "login_identifier", value: currentUser?.login_identifier || currentUser?.email || currentUser?.username || currentUser?.phoneNumber || currentUser?.phone_number },
-        ]);
-      }
-      return profileCandidates;
-    };
-
-    const buildIdentityLookupWhere = (candidates: Array<{ field: string; value: any }>) => {
-      const conditions = uniqIdentityCandidates(candidates).map((item) => ({
-        field: item.field,
-        type: "eq" as const,
-        value: item.value,
-      }));
-
-      if (conditions.length === 0) return undefined;
-      if (conditions.length === 1) return conditions[0];
-      return { operator: "OR" as const, conditions };
-    };
-
-    const getIdentityCandidates = (currentUser: any) => {
-      return uniqIdentityCandidates([
-        ...getProfileIdentityCandidates(currentUser),
-        { field: "phone_number", value: currentUser?.phone_number || currentUser?.phoneNumber },
-        { field: "app_token", value: currentUser?.app_token || currentUser?.appToken },
-        { field: "login_identifier", value: currentUser?.login_identifier },
-      ]);
-    };
-
-    const normalizeCompare = (value: any): string => String(value ?? "").trim().toLowerCase();
-
-    const scoreUserRow = (row: any, currentUser: any): number => {
-      if (!row || typeof row !== "object") return -1;
-
-      const rowToken = String(row?.app_token || "").trim();
-      const currentToken = String(currentUser?.app_token || currentUser?.appToken || "").trim();
-      if (currentToken && rowToken && rowToken !== currentToken) {
-        return -1;
-      }
-
-      let score = 0;
-
-      const currentIds = [
-        currentUser?.userId,
-        currentUser?.id,
-        currentUser?.user_id,
-        currentUser?.account_id,
-      ].map(normalizeCompare).filter(Boolean);
-      if (currentIds.length > 0 && currentIds.includes(normalizeCompare(row?.id))) score += 1000;
-
-      if (currentToken && rowToken && currentToken === rowToken) score += 700;
-
-      const currentLoginIdentifier = normalizeCompare(currentUser?.login_identifier);
-      if (currentLoginIdentifier && currentLoginIdentifier === normalizeCompare(row?.login_identifier)) score += 500;
-
-      const currentEmail = normalizeCompare(currentUser?.email);
-      if (currentEmail && currentEmail === normalizeCompare(row?.email)) score += 350;
-
-      const currentUsername = normalizeCompare(currentUser?.username);
-      if (currentUsername && currentUsername === normalizeCompare(row?.username)) score += 250;
-
-      const currentPhone = normalizeCompare(currentUser?.phoneNumber || currentUser?.phone_number);
-      const rowPhone = normalizeCompare(row?.phoneNumber || row?.phone_number);
-      if (currentPhone && currentPhone === rowPhone) score += 200;
-
-      const currentParent = normalizeCompare(currentUser?.parent_account_id || currentUser?.app_id);
-      const rowParent = normalizeCompare(row?.parent_account_id);
-      if (currentParent && rowParent && currentParent === rowParent) score += 120;
-
-      return score;
-    };
-
-    const pickBestMatchedRow = (rows: any[], currentUser: any): any | null => {
-      if (!Array.isArray(rows) || rows.length === 0) return null;
-
-      let best: any = null;
-      let bestScore = -1;
-
-      for (const row of rows) {
-        const score = scoreUserRow(row, currentUser);
-        if (score > bestScore) {
-          best = row;
-          bestScore = score;
-        }
-      }
-
-      return bestScore >= 0 ? best : null;
-    };
-
-    const resolveMatchedPk = (
-      row: any,
-      currentUser: any,
-      candidates: Array<{ field: string; value: any }>,
-      fallbackField: string,
-      fallbackValue: any,
-    ) => {
-      const stableId = row?.id;
-      if (stableId) {
-        return { pkField: "id", pkValue: stableId };
-      }
-
-      for (const candidate of candidates) {
-        const candidateField = candidate.field === "phone_number" ? "phoneNumber" : candidate.field;
-        const rowValue = candidateField === "phoneNumber"
-          ? (row?.phoneNumber ?? row?.phone_number)
-          : row?.[candidateField];
-        if (normalizeCompare(rowValue) && normalizeCompare(rowValue) === normalizeCompare(candidate.value)) {
-          return { pkField: candidateField, pkValue: candidate.value };
-        }
-      }
-
-      const target = resolveProfileTarget(currentUser);
-      return {
-        pkField: fallbackField || target.preferredPkField,
-        pkValue: fallbackValue ?? target.preferredPkValue,
       };
     };
 
@@ -1317,56 +1161,67 @@ ${resolvedContainerSelector} select {
 
     const fetchAccountRow = async (): Promise<{ row: any; pkField: string; pkValue: any; tableName: string; requestAppId: string } | null> => {
       const currentUser = (window as any).csmCurrentUser || {};
-      const target = resolveProfileTarget(currentUser);
-      const tableOrder = target.preferredTable === "csm_group_members"
-        ? ["csm_group_members", "csm_accounts"]
-        : ["csm_accounts", "csm_group_members"];
-
-      for (const tableName of tableOrder) {
-        const requestAppId = resolveTableAppId(tableName, effectiveAppId);
-        const tableIdentities = getTableIdentityCandidates(currentUser, tableName);
-        const lookupWhere = buildIdentityLookupWhere(tableIdentities);
-        if (!lookupWhere) {
-          continue;
-        }
-
-        try {
-          const response = await (window as any).csmApi.getTableData({
-            app_id: requestAppId,
-            obj_name: tableName,
-            where: lookupWhere,
-            take: 20,
-          });
-
-          const rows = (response as any)?.rows || (response as any)?.data || [];
-          if (!Array.isArray(rows) || rows.length === 0) {
-            continue;
-          }
-
-          const row = pickBestMatchedRow(rows, currentUser);
-          if (!row) continue;
-
-          const matchedPk = resolveMatchedPk(
-            row,
-            currentUser,
-            tableIdentities,
-            target.preferredPkField,
-            target.preferredPkValue,
-          );
-
-          return {
-            row,
-            pkField: matchedPk.pkField,
-            pkValue: matchedPk.pkValue,
-            tableName,
-            requestAppId,
-          };
-        } catch {
-          // Try next table.
-        }
+      
+      // Use profile approach: xác định chính xác table + WHERE clause
+      const accountType = String(currentUser?.account_type || "").trim().toLowerCase();
+      const isSubUserByFlag = Boolean(currentUser?.is_sub_user) || accountType === "sub-user";
+      const tableName = isSubUserByFlag ? "csm_group_members" : "csm_accounts";
+      const requestAppId = resolveTableAppId(tableName, effectiveAppId);
+      
+      const userId = String(currentUser?.userId || "").trim();
+      const identity = resolvePrimaryIdentity(currentUser);
+      const loginIdentifier = String(currentUser?.login_identifier || "").trim() || identity.value;
+      
+      // Xây dựng WHERE clause giống profile (đơn giản, chính xác)
+      const where: Record<string, any> = {};
+      if (userId) {
+        where.id = userId;
       }
+      if (tableName === "csm_group_members" && loginIdentifier) {
+        where.login_identifier = loginIdentifier;
+      }
+      if (!userId && tableName === "csm_accounts" && identity.field && identity.value) {
+        where[identity.field] = identity.value;
+      }
+      
+      // Nếu không có WHERE clause nào = không thể identify user
+      if (Object.keys(where).length === 0) {
+        return null;
+      }
+      
+      try {
+        const response = await (window as any).csmApi.getTableData({
+          app_id: requestAppId,
+          obj_name: tableName,
+          where,
+          take: 1,
+        });
 
-      return null;
+        const rows = (response as any)?.rows || (response as any)?.data || [];
+        const row = Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
+        
+        if (!row) {
+          return null;
+        }
+
+        // Xác định primary key field để dùng cho UPDATE
+        const pkFields = tableName === "csm_group_members"
+          ? (userId ? ["id", "login_identifier"] : ["login_identifier"])
+          : (userId ? ["id"] : (identity.field ? [identity.field] : []));
+
+        const pkField = userId ? "id" : (tableName === "csm_group_members" ? "login_identifier" : (identity.field || ""));
+        const pkValue = userId || loginIdentifier || identity.value || "";
+
+        return {
+          row,
+          pkField,
+          pkValue,
+          tableName,
+          requestAppId,
+        };
+      } catch (err) {
+        return null;
+      }
     };
 
     window.csmUserData = {
@@ -1374,8 +1229,7 @@ ${resolvedContainerSelector} select {
        * Lấy user_address từ runtime memory (source of truth được sync từ API)
        */
       get: function(): any[] {
-        const raw = (window.csmCurrentUser && (window.csmCurrentUser.user_address || window.csmCurrentUser.user_adress));
-        return parseUserAddressValue(raw);
+        return resolveUserAddressArray(window.csmCurrentUser);
       },
 
       /**
@@ -1385,7 +1239,7 @@ ${resolvedContainerSelector} select {
       fetchFromDatabase: async function(callback?: (ok: boolean, data?: any[], error?: string) => void): Promise<void> {
         try {
           const currentUser = window.csmCurrentUser || {};
-          const runtimeSnapshot = parseUserAddressValue(currentUser.user_address ?? currentUser.user_adress);
+          const runtimeSnapshot = resolveUserAddressArray(currentUser);
           const lookup = await fetchAccountRow();
 
           if (!lookup?.row) {
@@ -1397,9 +1251,8 @@ ${resolvedContainerSelector} select {
             return;
           }
 
-          const serverPrimary = parseUserAddressValue(lookup.row.user_address);
-          const serverLegacy = parseUserAddressValue(lookup.row.user_adress);
-          const serverValue = serverPrimary.length > 0 ? serverPrimary : serverLegacy;
+          // Chỉ dùng user_address (canonical field) - không dùng fallback sai
+          const serverValue = parseUserAddressValue(lookup.row.user_address);
 
           if (serverValue.length === 0 && runtimeSnapshot.length > 0) {
             // Keep runtime snapshot to avoid wiping just-updated data when backend is eventually consistent.
@@ -1422,7 +1275,7 @@ ${resolvedContainerSelector} select {
         try {
           const arr = Array.isArray(newUserAddress) ? newUserAddress : [];
           const currentUser = window.csmCurrentUser || {};
-          const runtimeSnapshot = parseUserAddressValue(currentUser.user_address ?? currentUser.user_adress);
+          const runtimeSnapshot = resolveUserAddressArray(currentUser);
           const allowEmptyOverwrite = Boolean((window as any).__csmAllowEmptyUserAddressSave);
 
           if (!allowEmptyOverwrite && arr.length === 0 && runtimeSnapshot.length > 0) {
@@ -1448,8 +1301,9 @@ ${resolvedContainerSelector} select {
               resolvedWhere.login_identifier = lookup.pkValue;
             }
           } else if (!resolvedWhere.id) {
-            const fallbackField = lookup?.pkField || target.identityField || target.preferredPkField;
-            const fallbackValue = lookup?.pkValue ?? target.identityValue ?? target.preferredPkValue;
+            // Fallback: use lookup's identified pk
+            const fallbackField = lookup?.pkField || target.identityField;
+            const fallbackValue = lookup?.pkValue ?? target.identityValue;
             if (fallbackField && fallbackValue !== undefined && fallbackValue !== null && String(fallbackValue).trim() !== "") {
               resolvedWhere[fallbackField] = fallbackValue;
             }
@@ -1469,7 +1323,6 @@ ${resolvedContainerSelector} select {
 
           const updateData: Record<string, any> = {
             user_address: serialized,
-            user_adress: serialized
           };
           if (resolvedWhere.id) updateData.id = resolvedWhere.id;
           if (tableName === "csm_group_members" && matchedLoginIdentifier) {
@@ -1483,6 +1336,7 @@ ${resolvedContainerSelector} select {
 
           let lastError = "Update failed";
           let saved = false;
+          let savedUserAddress = arr;
 
           try {
             const res = await api({
@@ -1496,6 +1350,11 @@ ${resolvedContainerSelector} select {
 
             if (isUpdateSuccessResponse(res)) {
               saved = true;
+              const updatedRow = (res as any)?.updated_row;
+              const persisted = resolveUserAddressArray(updatedRow);
+              if (persisted.length > 0) {
+                savedUserAddress = persisted;
+              }
             } else {
               lastError = (res as any)?.message || (res as any)?.error || "Update failed";
             }
@@ -1505,7 +1364,14 @@ ${resolvedContainerSelector} select {
 
           // Đồng bộ runtime nếu thành công
           if (saved) {
-            syncRuntimeUserAddress(arr);
+            const syncedAddress = syncRuntimeUserAddress(savedUserAddress);
+            window.dispatchEvent(new CustomEvent("csm:dataOptionUserSynced", {
+              detail: {
+                source: "csmUserData.set",
+                total: syncedAddress.length,
+                usable: syncedAddress.length,
+              },
+            }));
             if (typeof callback === "function") callback(true);
           } else {
             if (typeof callback === "function") callback(false, lastError || "Update failed");
@@ -1526,8 +1392,8 @@ ${resolvedContainerSelector} select {
   useEffect(() => {
     if (typeof window !== "undefined") {
       const nextUser = JSON.parse(JSON.stringify(user));
-      const nextAddress = parseUserAddressValue(nextUser?.user_address ?? nextUser?.user_adress);
-      const existingAddress = parseUserAddressValue((window.csmCurrentUser as any)?.user_address ?? (window.csmCurrentUser as any)?.user_adress);
+      const nextAddress = resolveUserAddressArray(nextUser);
+      const existingAddress = resolveUserAddressArray(window.csmCurrentUser as any);
 
       window.csmCurrentUser = nextUser;
       syncRuntimeUserAddress(nextAddress.length > 0 ? nextAddress : existingAddress);
@@ -1823,13 +1689,7 @@ ${resolvedContainerSelector} select {
 
   const seft = useMemo(() => {
     const currentUserAny = (window as any).csmCurrentUser || user || {};
-    let userAddress: any = undefined;
-    try {
-      const fromCurrent = currentUserAny?.user_address ?? currentUserAny?.user_adress;
-      userAddress = typeof fromCurrent === "string" ? JSON.parse(fromCurrent) : fromCurrent;
-    } catch {
-      userAddress = undefined;
-    }
+    const userAddress = resolveUserAddressArray(currentUserAny);
     
     return {
       // App and user info
@@ -2003,11 +1863,11 @@ ${resolvedContainerSelector} select {
           if (userInfoUp.phoneNumber !== undefined) updateObj.phoneNumber = userInfoUp.phoneNumber;
           if (userInfoUp.email !== undefined) updateObj.email = userInfoUp.email;
           if (userInfoUp.avatar !== undefined) updateObj.avatar = userInfoUp.avatar;
-          const legacyUserAddress = userInfoUp?.user_address ?? userInfoUp?.user_adress ?? userInfoUp?.userAddress ?? userInfoUp?.address;
-          if (legacyUserAddress !== undefined) {
-            const serializedAddress = serializeUserAddressValue(legacyUserAddress);
+          // Chỉ dùng user_address (canonical field) - không dùng fallback sai
+          const userAddressValue = userInfoUp?.user_address;
+          if (userAddressValue !== undefined) {
+            const serializedAddress = serializeUserAddressValue(userAddressValue);
             updateObj.user_address = serializedAddress;
-            updateObj.user_adress = serializedAddress;
           }
 
           if (targetTable === "csm_group_members") {
@@ -2035,7 +1895,7 @@ ${resolvedContainerSelector} select {
             where,
           }, function(updateRes) {
             if (updateRes?.success || updateRes?.data === "success") {
-              if (legacyUserAddress !== undefined) {
+              if (userAddressValue !== undefined) {
                 try {
                   syncRuntimeUserAddress(parseUserAddressValue(updateObj.user_address));
                 } catch {
@@ -2062,7 +1922,7 @@ ${resolvedContainerSelector} select {
 
     try {
       const currentUserAny = (window as any).csmCurrentUser || user || {};
-      const parsedAddress = parseUserAddressValue(currentUserAny?.user_address ?? currentUserAny?.user_adress);
+      const parsedAddress = resolveUserAddressArray(currentUserAny);
       (window as any).seft.Uinfos = (window as any).seft.Uinfos || {};
       (window as any).seft.Uinfos.userAddress = parsedAddress;
 

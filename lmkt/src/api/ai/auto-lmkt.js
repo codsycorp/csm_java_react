@@ -13543,11 +13543,13 @@ function ensureZaloMultiGroupUI(container) {
     saveDataOptionUser(merged, (success, error) => {
       if (success) {
         status.textContent = ti(`✅ Đã import ${imported.length} cấu hình từ Excel.`, `✅ Imported ${imported.length} configs from Excel.`, `✅ 已从 Excel 导入 ${imported.length} 条配置。`);
+        thongbao(status.textContent);
         fetchDataOptionUserFromServer(() => {
           renderZaloConfigList();
         });
       } else {
         status.textContent = ti(`⚠️ Import thất bại: ${error || 'unknown'}`, `⚠️ Import failed: ${error || 'unknown'}`, `⚠️ 导入失败：${error || 'unknown'}`);
+        canhbao(status.textContent);
       }
     });
   };
@@ -13690,9 +13692,11 @@ function ensureZaloMultiGroupUI(container) {
         saveDataOptionUser(allData, (success, error) => {
           if (success) {
             status.textContent = ti('✅ Đã lưu chỉnh sửa nhanh.', '✅ Quick update saved.', '✅ 快速修改已保存。');
+            thongbao(status.textContent);
             renderZaloConfigList();
           } else {
             status.textContent = ti(`⚠️ Lưu thất bại: ${error || 'unknown'}`, `⚠️ Save failed: ${error || 'unknown'}`, `⚠️ 保存失败：${error || 'unknown'}`);
+            canhbao(status.textContent);
           }
         });
       };
@@ -13711,10 +13715,12 @@ function ensureZaloMultiGroupUI(container) {
         saveDataOptionUser(allData, (success) => {
           if (success) {
             if (status) status.textContent = ti('✅ Đã xóa config', '✅ Config deleted', '✅ 配置已删除');
+            thongbao(status.textContent);
             if (selectedRowData?.id === cfg.id) selectedRowData = null;
             renderZaloConfigList();
           } else if (status) {
             status.textContent = ti('⚠️ Lỗi xóa config', '⚠️ Failed to delete config', '⚠️ 删除配置失败');
+            canhbao(status.textContent);
           }
         }, { allowEmptyConfigSave: true });
       };
@@ -14229,6 +14235,7 @@ function ensureZaloMultiGroupUI(container) {
             // Set mode idle TRƯỚC khi render
             setMode("idle", null, { preserveStatus: true });
             status.textContent = ti(`✅ Đã cập nhật config: ${configData.fanpage_name}`, `✅ Configuration updated: ${configData.fanpage_name}`, `✅ 配置已更新：${configData.fanpage_name}`);
+            thongbao(status.textContent);
             console.log('[Zalo Config] Successfully saved to server');
             
             // Render grid SAU khi state/mode đã được reset
@@ -14245,6 +14252,7 @@ function ensureZaloMultiGroupUI(container) {
             });
           } else {
             status.textContent = ti(`⚠️ Lỗi cập nhật config: ${error || 'Lỗi không xác định'}`, `⚠️ Failed to update configuration: ${error || 'Unknown error'}`, `⚠️ 更新配置失败：${error || '未知错误'}`);
+            canhbao(status.textContent);
             console.error('[Zalo Config] Save error:', error);
           }
         });
@@ -14268,6 +14276,7 @@ function ensureZaloMultiGroupUI(container) {
           // Set mode idle TRƯỚC khi render
           setMode("idle", null, { preserveStatus: true });
           status.textContent = ti(`✅ Đã thêm config mới: ${configData.fanpage_name}. Bạn có thể tiếp tục thêm cấu hình khác hoặc nhấn "➕ Thêm mới" để xóa form.`, `✅ New configuration added: ${configData.fanpage_name}. You can continue adding more, or click "➕ Add new" to clear the form.`, `✅ 新配置已添加：${configData.fanpage_name}。你可以继续添加，或点击“➕ 新增”清空表单。`);
+          thongbao(ti(`✅ Đã thêm config mới: ${configData.fanpage_name}`, `✅ New configuration added: ${configData.fanpage_name}`, `✅ 新配置已添加：${configData.fanpage_name}`));
           console.log('[Zalo Config] Add success, rendering grid...');
           
           // Render grid SAU khi state/mode đã được reset
@@ -14289,6 +14298,7 @@ function ensureZaloMultiGroupUI(container) {
           });
         } else {
           status.textContent = ti(`⚠️ Lỗi thêm config mới: ${error || 'Lỗi không xác định'}`, `⚠️ Failed to add new configuration: ${error || 'Unknown error'}`, `⚠️ 添加新配置失败：${error || '未知错误'}`);
+          canhbao(status.textContent);
           console.error('[Zalo Config] Add error:', error);
         }
       });
