@@ -35,6 +35,7 @@ import net.phanmemmottrieu.service.GoogleIndexQueueService;
 import net.phanmemmottrieu.service.ChatPersistenceService;
 import net.phanmemmottrieu.service.GitHubModelsService;
 import net.phanmemmottrieu.service.AiMenuMergeService;
+import net.phanmemmottrieu.service.AiCodeReviewService;
 import com.corundumstudio.socketio.SocketIOServer;
 import net.phanmemmottrieu.model.UrlSubmissionQueue;
 import net.phanmemmottrieu.model.UrlSubmissionHistory;
@@ -101,6 +102,7 @@ public class ApiSpringController {
     private final SocketIOServer socketIOServer;
     private final CRMHandler crmHandler;
     private final AiMenuMergeService aiMenuMergeService;
+    private final AiCodeReviewService aiCodeReviewService;
 
     @Value("${ai.prompt.max-chars:3000000}")
     private int maxPromptChars;
@@ -174,7 +176,8 @@ public class ApiSpringController {
             GitHubModelsService gitHubModelsService,
             SocketIOServer socketIOServer,
             CRMHandler crmHandler,
-            AiMenuMergeService aiMenuMergeService
+            AiMenuMergeService aiMenuMergeService,
+            AiCodeReviewService aiCodeReviewService
         ) {
         this.recordManager = recordManager;
         this.initHandler = initHandler;
@@ -193,6 +196,7 @@ public class ApiSpringController {
         this.socketIOServer = socketIOServer;
         this.crmHandler = crmHandler;
         this.aiMenuMergeService = aiMenuMergeService;
+        this.aiCodeReviewService = aiCodeReviewService;
     }
 
     public ResponseEntity<?> handleApiRequest(
@@ -436,6 +440,9 @@ public class ApiSpringController {
                     break;
                 case "/ai/menu-merge":
                     handleAiMenuMerge(response, params);
+                    break;
+                case "/ai-review-code":
+                    handleAiReviewCode(response, params);
                     break;
                 case "/register":
                     authHandler.handleRegisterUser(response, params);
@@ -831,6 +838,36 @@ public class ApiSpringController {
     }
 
     /**
+     * POST /ai-review-code
+     *
+     * Params:
+     *   paths     : optional list or comma-separated Java file paths relative to backend root
+     *   maxFiles  : optional integer, default from ai.review.max-files
+     *   focus     : optional review focus (security, performance, architecture...)
+     */
+    private void handleAiReviewCode(StandardResponse response, Map<String, Object> params) {
+        try {
+            Object pathsInput = params.get("paths");
+            if (pathsInput == null) {
+                pathsInput = params.get("files");
+            }
+            String focus = String.valueOf(params.getOrDefault("focus", "")).trim();
+            Integer maxFiles = parseNullableInteger(params.get("maxFiles"));
+
+            Map<String, Object> reviewResult = aiCodeReviewService.runReview(pathsInput, focus, maxFiles);
+
+            response.set("code", 200);
+            response.set("success", true);
+            response.set("result", reviewResult);
+        } catch (Exception e) {
+            logger.error("handleAiReviewCode error: {}", e.getMessage(), e);
+            response.set("code", 200);
+            response.set("success", false);
+            response.set("message", "AI review failed: " + e.getMessage());
+        }
+    }
+
+    /**
      * Handle CodeMirror Copilot chat with streaming via Socket.IO
      * Sends streaming text chunks to client in real-time
      */
@@ -1056,9 +1093,17 @@ public class ApiSpringController {
             }
 
             if (fullResponse.length() == 0) {
-                String errText = shouldGeminiFallback
-                    ? "GitHub Models và provider fallback đều không trả về nội dung"
-                    : "AI không trả về nội dung";
+                String upstreamError = extractAiErrorMessage(githubRaw);
+                String errText;
+                if (shouldGeminiFallback) {
+                    if (!upstreamError.isBlank()) {
+                        errText = "GitHub Models lỗi: " + upstreamError;
+                    } else {
+                        errText = "GitHub Models và provider fallback đều không trả về nội dung";
+                    }
+                } else {
+                    errText = upstreamError.isBlank() ? "AI không trả về nội dung" : upstreamError;
+                }
                 throw new IllegalStateException(errText);
             }
 
@@ -2979,6 +3024,10 @@ public class ApiSpringController {
             return true;
         }
 
+        if (isAuthFailureFromRawText(rawContent)) {
+            return true;
+        }
+
         try {
             @SuppressWarnings("unchecked")
             Map<String, Object> parsed = objectMapper.readValue(rawContent, Map.class);
@@ -2986,13 +3035,13 @@ public class ApiSpringController {
             if (Boolean.FALSE.equals(parsed.get("success"))) {
                 String errorCode = String.valueOf(parsed.getOrDefault("errorCode", ""));
                 String message = String.valueOf(parsed.getOrDefault("message", ""));
-                return isRateOrQuotaFailure(errorCode, message);
+                return isRateOrQuotaFailure(errorCode, message) || isAuthFailure(errorCode, message);
             }
 
             if (Boolean.TRUE.equals(parsed.get("error"))) {
                 String errorCode = String.valueOf(parsed.getOrDefault("errorCode", ""));
                 String message = String.valueOf(parsed.getOrDefault("message", ""));
-                return isRateOrQuotaFailure(errorCode, message);
+                return isRateOrQuotaFailure(errorCode, message) || isAuthFailure(errorCode, message);
             }
 
             // Some GitHubModelsService paths may return success wrapper while inner `result`
@@ -3003,13 +3052,17 @@ public class ApiSpringController {
                 if (isRateOrQuotaFailureFromRawText(resultText)) {
                     return true;
                 }
+                if (isAuthFailureFromRawText(resultText)) {
+                    return true;
+                }
                 try {
                     @SuppressWarnings("unchecked")
                     Map<String, Object> nested = objectMapper.readValue(resultText, Map.class);
                     if (Boolean.FALSE.equals(nested.get("success")) || Boolean.TRUE.equals(nested.get("error"))) {
                         String nestedErrorCode = String.valueOf(nested.getOrDefault("errorCode", ""));
                         String nestedMessage = String.valueOf(nested.getOrDefault("message", ""));
-                        if (isRateOrQuotaFailure(nestedErrorCode, nestedMessage)) {
+                        if (isRateOrQuotaFailure(nestedErrorCode, nestedMessage)
+                                || isAuthFailure(nestedErrorCode, nestedMessage)) {
                             return true;
                         }
                     }
@@ -3022,10 +3075,27 @@ public class ApiSpringController {
             if (content != null && isRateOrQuotaFailureFromRawText(String.valueOf(content))) {
                 return true;
             }
+            if (content != null && isAuthFailureFromRawText(String.valueOf(content))) {
+                return true;
+            }
         } catch (Exception ignored) {
-            return isRateOrQuotaFailureFromRawText(rawContent);
+            return isRateOrQuotaFailureFromRawText(rawContent) || isAuthFailureFromRawText(rawContent);
         }
         return false;
+    }
+
+    private boolean isAuthFailureFromRawText(String raw) {
+        String text = String.valueOf(raw == null ? "" : raw).toLowerCase();
+        if (text.isBlank()) {
+            return false;
+        }
+        return text.contains("401")
+                || text.contains("unauthorized")
+                || text.contains("authentication failed")
+                || text.contains("invalid token")
+                || text.contains("bad credentials")
+                || text.contains("github_token_missing")
+                || text.contains("github_copilot_token_invalid");
     }
 
     private boolean isRateOrQuotaFailureFromRawText(String raw) {
@@ -3062,6 +3132,20 @@ public class ApiSpringController {
                 || msg.contains("per 86400s")
                 || msg.contains("userbymodelbyday")
                 || msg.contains("rate limit exceeded");
+    }
+
+    private boolean isAuthFailure(String errorCode, String message) {
+        String code = errorCode == null ? "" : errorCode.toLowerCase();
+        String msg = message == null ? "" : message.toLowerCase();
+
+        return code.contains("401")
+                || code.contains("unauthorized")
+                || code.contains("auth")
+                || msg.contains("401")
+                || msg.contains("unauthorized")
+                || msg.contains("authentication failed")
+                || msg.contains("invalid token")
+            || msg.contains("bad credentials");
     }
 
     private boolean isHardQuotaFailure(String rawContent) {
@@ -3135,6 +3219,56 @@ public class ApiSpringController {
             }
         } catch (Exception ignored) {
             return rawContent.trim();
+        }
+
+        return "";
+    }
+
+    private String extractAiErrorMessage(String rawContent) {
+        if (rawContent == null || rawContent.trim().isEmpty()) {
+            return "";
+        }
+
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> parsed = objectMapper.readValue(rawContent, Map.class);
+
+            Object topLevelSuccess = parsed.get("success");
+            Object topLevelError = parsed.get("error");
+            boolean isError = (topLevelSuccess instanceof Boolean && !((Boolean) topLevelSuccess))
+                || (topLevelError instanceof Boolean && ((Boolean) topLevelError));
+
+            String message = String.valueOf(parsed.getOrDefault("message", "")).trim();
+            String errorCode = String.valueOf(parsed.getOrDefault("errorCode", "")).trim();
+
+            if (isError) {
+                if (!message.isBlank()) {
+                    return message;
+                }
+                if (!errorCode.isBlank()) {
+                    return errorCode;
+                }
+            }
+
+            Object result = parsed.get("result");
+            if (result instanceof Map<?, ?> nested) {
+                Object nestedSuccess = nested.get("success");
+                Object nestedError = nested.get("error");
+                boolean nestedIsError = (nestedSuccess instanceof Boolean && !((Boolean) nestedSuccess))
+                    || (nestedError instanceof Boolean && ((Boolean) nestedError));
+                if (nestedIsError) {
+                    String nestedMessage = String.valueOf(nested.get("message") == null ? "" : nested.get("message")).trim();
+                    String nestedCode = String.valueOf(nested.get("errorCode") == null ? "" : nested.get("errorCode")).trim();
+                    if (!nestedMessage.isBlank()) {
+                        return nestedMessage;
+                    }
+                    if (!nestedCode.isBlank()) {
+                        return nestedCode;
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+            // ignore parse errors
         }
 
         return "";

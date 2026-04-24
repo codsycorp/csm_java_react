@@ -22,6 +22,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StreamUtils;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.client.HttpClientErrorException;
@@ -36,6 +37,7 @@ import java.io.IOException;
 import java.util.Comparator;
 import java.util.regex.Pattern;
 import java.util.regex.Matcher;
+import java.util.Locale;
 
 
 /**
@@ -602,6 +604,45 @@ public class GitHubModelsService {
   @Value("${github.models.url:https://models.inference.ai.azure.com/chat/completions}")
   private String apiUrl;
 
+  @Value("${github.models.auth-scheme:auto}")
+  private String authScheme;
+
+  @Value("${github.models.auth-fallback-on-401:true}")
+  private boolean authFallbackOnUnauthorized;
+
+  @Value("${github.models.chat-fallback-url:}")
+  private String chatFallbackUrl;
+
+  @Value("${github.models.catalog-cache-ms:300000}")
+  private long modelCatalogCacheMs;
+
+  @Value("${github.models.copilot-token:}")
+  private String copilotToken;
+
+  @Value("${github.models.copilot-token-auto-exchange:true}")
+  private boolean copilotTokenAutoExchange;
+
+  @Value("${github.models.copilot-token-refresh-skew-ms:300000}")
+  private long copilotTokenRefreshSkewMs;
+
+  @Value("${github.models.copilot-token-exchange-failure-cooldown-ms:300000}")
+  private long copilotTokenExchangeFailureCooldownMs;
+
+  @Value("${github.models.copilot-token-exchange-notfound-cooldown-ms:21600000}")
+  private long copilotTokenExchangeNotFoundCooldownMs;
+
+  @Value("${github.models.copilot-token-exchange-url:}")
+  private String copilotTokenExchangeUrl;
+
+  @Value("${github.models.copilot-token-exchange.user-agent:GitHubCopilotChat/0.0.1}")
+  private String copilotTokenExchangeUserAgent;
+
+  @Value("${github.models.copilot-token-exchange.editor-version:vscode/1.99.0}")
+  private String copilotTokenExchangeEditorVersion;
+
+  @Value("${github.models.copilot-token-exchange.editor-plugin-version:copilot-chat/0.26.7}")
+  private String copilotTokenExchangeEditorPluginVersion;
+
   @Value("${github.models.model:gpt-4o-mini}")
   private String model;
 
@@ -692,6 +733,66 @@ public class GitHubModelsService {
   @Value("${github.models.chat-stream.emit-chunk-chars:2400}")
   private int chatStreamEmitChunkChars;
 
+  @Value("${google.cloud.project-id:}")
+  private String googleProjectId;
+
+  @Value("${google.cloud.api-key:}")
+  private String googleApiKey;
+
+  @Value("${github.models.gemini-enabled:true}")
+  private boolean geminiEnabled;
+
+  @Value("${github.models.gemini.model:gemini-1.5-pro}")
+  private String geminiModel;
+
+  @Value("${github.models.gemini.endpoint:https://generativelanguage.googleapis.com/v1beta/models}")
+  private String geminiEndpoint;
+
+  @Value("${github.models.gemini.max-tokens:65536}")
+  private int geminiMaxTokens;
+
+  @Value("${github.models.gemini.temperature:0.2}")
+  private double geminiTemperature;
+
+  @Value("${github.models.project-root-path:}")
+  private String projectRootPath;
+
+  @Value("${github.models.java-crawler-enabled:true}")
+  private boolean javaCrawlerEnabled;
+
+  @Value("${github.models.java-crawler.max-files:20}")
+  private int javaCrawlerMaxFiles;
+
+  @Value("${github.models.java-crawler.max-chars-per-file:8000}")
+  private int javaCrawlerMaxCharsPerFile;
+
+  @Value("${github.models.java-crawler.cache-ttl-ms:600000}")
+  private long javaCrawlerCacheTtlMs;
+
+  @Value("${github.models.response-cache-enabled:true}")
+  private boolean responseCacheEnabled;
+
+  @Value("${github.models.response-cache.ttl-ms:3600000}")
+  private long responseCacheTtlMs;
+
+  @Value("${github.models.response-cache.max-entries:1000}")
+  private int responseCacheMaxEntries;
+
+  @Value("${github.models.smart-selection-enabled:true}")
+  private boolean smartSelectionEnabled;
+
+  @Value("${github.models.smart-selection.code-task-threshold-chars:5000}")
+  private int codeTaskThresholdChars;
+
+  @Value("${github.models.smart-selection.large-context-threshold-chars:50000}")
+  private int largeContextThresholdChars;
+
+  @Value("${github.models.smart-selection.menu-gemini-threshold-chars:15000}")
+  private int menuGeminiThresholdChars;
+
+  @Value("${github.models.model-quota-cooldown-ms:21600000}")
+  private long modelQuotaCooldownMs;
+
   private final Semaphore requestSemaphore = new Semaphore(1, true);
   private volatile long lastRequestAtMs = 0L;
   private volatile long currentWindowStartMs = 0L;
@@ -700,6 +801,916 @@ public class GitHubModelsService {
 
   @Value("${github.models.token:}")
   private String token;
+
+  private volatile Map<String, Set<String>> modelEndpointCache = Collections.emptyMap();
+  private volatile long modelEndpointCacheFetchedAtMs = 0L;
+  private final Object copilotTokenExchangeLock = new Object();
+  private volatile String cachedCopilotSessionToken = "";
+  private volatile long cachedCopilotSessionExpiresAtMs = 0L;
+  private volatile long nextCopilotTokenExchangeRetryAtMs = 0L;
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Response Cache & Project Context Cache
+  // ═══════════════════════════════════════════════════════════════════════════
+  private static class CachedResponse {
+    String response;
+    long cachedAtMs;
+    CachedResponse(String response) {
+      this.response = response;
+      this.cachedAtMs = System.currentTimeMillis();
+    }
+  }
+
+  private volatile Map<String, CachedResponse> responseCache = Collections.synchronizedMap(new java.util.LinkedHashMap<String, CachedResponse>(16, 0.75f, true) {
+    @Override
+    protected boolean removeEldestEntry(Map.Entry<String, CachedResponse> eldest) {
+      return size() > Math.max(10, responseCacheMaxEntries);
+    }
+  });
+  private volatile Map<String, Long> modelUnavailableUntilMs = Collections.synchronizedMap(new HashMap<>());
+  private volatile long lastProjectContextScanAtMs = 0L;
+  private volatile String cachedProjectContext = "";
+
+  // Token-aware context budget manager (JTokkit). Optional — null-safe throughout.
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  private ContextBudgetManager contextBudgetManager;
+
+  // GeminiService: used as large-context fallback when own google.cloud.api-key is not set.
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  private GeminiService geminiService;
+
+  private boolean isCopilotIndividualEndpoint(String endpoint) {
+    String normalized = String.valueOf(endpoint == null ? "" : endpoint).toLowerCase(Locale.ROOT);
+    return normalized.contains("api.individual.githubcopilot.com");
+  }
+
+  private boolean looksLikeGitHubPat(String tokenValue) {
+    String t = String.valueOf(tokenValue == null ? "" : tokenValue).trim().toLowerCase(Locale.ROOT);
+    return t.startsWith("ghp_") || t.startsWith("github_pat_");
+  }
+
+  private String getPatToken() {
+    String configured = token == null ? "" : token.trim();
+    if (!configured.isEmpty()) {
+      return configured;
+    }
+    String envToken = System.getenv("GITHUB_TOKEN");
+    return envToken == null ? "" : envToken.trim();
+  }
+
+  private boolean hasValidCachedCopilotSessionToken() {
+    if (cachedCopilotSessionToken == null || cachedCopilotSessionToken.isBlank()) {
+      return false;
+    }
+    long now = System.currentTimeMillis();
+    long skew = Math.max(60000L, copilotTokenRefreshSkewMs);
+    return cachedCopilotSessionExpiresAtMs <= 0L || now + skew < cachedCopilotSessionExpiresAtMs;
+  }
+
+  private boolean isInCopilotTokenExchangeFailureCooldown() {
+    return System.currentTimeMillis() < nextCopilotTokenExchangeRetryAtMs;
+  }
+
+  private List<String> getCopilotTokenExchangeEndpoints() {
+    List<String> endpoints = new ArrayList<>();
+    String configured = copilotTokenExchangeUrl == null ? "" : copilotTokenExchangeUrl.trim();
+    if (!configured.isEmpty()) {
+      endpoints.add(configured);
+    }
+    if (!endpoints.contains("https://api.github.com/copilot_internal/v2/token")) {
+      endpoints.add("https://api.github.com/copilot_internal/v2/token");
+    }
+    if (!endpoints.contains("https://api.github.com/copilot_internal/token")) {
+      endpoints.add("https://api.github.com/copilot_internal/token");
+    }
+    if (!endpoints.contains("https://api.githubcopilot.com/copilot_internal/v2/token")) {
+      endpoints.add("https://api.githubcopilot.com/copilot_internal/v2/token");
+    }
+    if (!endpoints.contains("https://api.githubcopilot.com/copilot_internal/token")) {
+      endpoints.add("https://api.githubcopilot.com/copilot_internal/token");
+    }
+    return endpoints;
+  }
+
+  private String exchangeCopilotSessionTokenFromPat(String patToken) {
+    if (!copilotTokenAutoExchange || !looksLikeGitHubPat(patToken)) {
+      return "";
+    }
+
+    if (hasValidCachedCopilotSessionToken()) {
+      return cachedCopilotSessionToken;
+    }
+
+    if (isInCopilotTokenExchangeFailureCooldown()) {
+      return "";
+    }
+
+    synchronized (copilotTokenExchangeLock) {
+      if (hasValidCachedCopilotSessionToken()) {
+        return cachedCopilotSessionToken;
+      }
+
+      if (isInCopilotTokenExchangeFailureCooldown()) {
+        return "";
+      }
+
+      List<String> endpointCandidates = getCopilotTokenExchangeEndpoints();
+      List<String> authSchemes = List.of("token", "Bearer");
+      String lastFailure = "unknown";
+      boolean onlyNotFoundFailures = true;
+
+      for (String endpointCandidate : endpointCandidates) {
+        for (String authSchemeCandidate : authSchemes) {
+          try {
+            HttpHeaders headers = new HttpHeaders();
+            headers.set("Authorization", authSchemeCandidate + " " + patToken.trim());
+            headers.set("Accept", "application/json");
+            headers.set("X-GitHub-Api-Version", "2022-11-28");
+            headers.set("User-Agent", String.valueOf(copilotTokenExchangeUserAgent == null ? "GitHubCopilotChat/0.0.1" : copilotTokenExchangeUserAgent).trim());
+            headers.set("Editor-Version", String.valueOf(copilotTokenExchangeEditorVersion == null ? "vscode/1.99.0" : copilotTokenExchangeEditorVersion).trim());
+            headers.set("Editor-Plugin-Version", String.valueOf(copilotTokenExchangeEditorPluginVersion == null ? "copilot-chat/0.26.7" : copilotTokenExchangeEditorPluginVersion).trim());
+            ResponseEntity<String> response = restTemplate.exchange(
+                endpointCandidate,
+                HttpMethod.GET,
+                new HttpEntity<>(headers),
+                String.class);
+
+            String body = response.getBody();
+            if (body == null || body.isBlank()) {
+              lastFailure = "Empty body from " + endpointCandidate;
+              continue;
+            }
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> payload = objectMapper.readValue(body, Map.class);
+            String sessionToken = String.valueOf(payload.getOrDefault("token", "")).trim();
+            if (sessionToken.isBlank()) {
+              lastFailure = "Missing token field from " + endpointCandidate;
+              continue;
+            }
+
+            long expiresAtMs = 0L;
+            Object expiresObj = payload.get("expires_at");
+            if (expiresObj != null) {
+              try {
+                expiresAtMs = ZonedDateTime.parse(String.valueOf(expiresObj)).toInstant().toEpochMilli();
+              } catch (Exception ignored) {
+                expiresAtMs = 0L;
+              }
+            }
+
+            cachedCopilotSessionToken = sessionToken;
+            cachedCopilotSessionExpiresAtMs = expiresAtMs;
+            if (expiresAtMs > 0L) {
+              long ttlSec = Math.max(0L, (expiresAtMs - System.currentTimeMillis()) / 1000L);
+              log.info("Exchanged Copilot session token from PAT via {} {} ; expires in {}s",
+                  authSchemeCandidate, endpointCandidate, ttlSec);
+            } else {
+              log.info("Exchanged Copilot session token from PAT via {} {}",
+                  authSchemeCandidate, endpointCandidate);
+            }
+            return sessionToken;
+          } catch (Exception ex) {
+            lastFailure = ex.getMessage();
+            if (!(ex instanceof HttpClientErrorException httpEx) || httpEx.getStatusCode().value() != 404) {
+              onlyNotFoundFailures = false;
+            }
+            log.debug("Copilot token exchange failed via {} {}: {}",
+                authSchemeCandidate, endpointCandidate, ex.getMessage());
+          }
+        }
+      }
+
+      long now = System.currentTimeMillis();
+      long genericCooldownMs = Math.max(30000L, copilotTokenExchangeFailureCooldownMs);
+      long notFoundCooldownMs = Math.max(genericCooldownMs, copilotTokenExchangeNotFoundCooldownMs);
+      long cooldownToUse = onlyNotFoundFailures ? notFoundCooldownMs : genericCooldownMs;
+      nextCopilotTokenExchangeRetryAtMs = now + cooldownToUse;
+      if (onlyNotFoundFailures) {
+        log.warn("Could not exchange Copilot session token from PAT: all candidates returned 404. Backing off for {} ms. Last error: {}",
+            cooldownToUse, lastFailure);
+      } else {
+        log.warn("Could not exchange Copilot session token from PAT after trying {} endpoints (cooldown {} ms): {}",
+            endpointCandidates.size(), cooldownToUse, lastFailure);
+      }
+      return "";
+    }
+  }
+
+  private String getEffectiveToken(String endpoint) {
+    if (isCopilotIndividualEndpoint(endpoint)) {
+      String copilotConfigured = copilotToken == null ? "" : copilotToken.trim();
+      if (!copilotConfigured.isEmpty()) {
+        return copilotConfigured;
+      }
+      String copilotEnv = System.getenv("GITHUB_COPILOT_TOKEN");
+      if (copilotEnv != null && !copilotEnv.trim().isEmpty()) {
+        return copilotEnv.trim();
+      }
+
+      String patForExchange = getPatToken();
+      String exchanged = exchangeCopilotSessionTokenFromPat(patForExchange);
+      if (!exchanged.isBlank()) {
+        return exchanged;
+      }
+    }
+
+    return getPatToken();
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // FEATURE 1: Response Caching
+  // ═══════════════════════════════════════════════════════════════════════════
+  private String getPromptHash(String prompt) {
+    if (prompt == null || prompt.isBlank()) return "";
+    try {
+      java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+      byte[] messageDigest = md.digest(prompt.getBytes(StandardCharsets.UTF_8));
+      StringBuilder sb = new StringBuilder();
+      for (byte b : messageDigest) {
+        sb.append(String.format("%02x", b));
+      }
+      return sb.toString();
+    } catch (Exception ex) {
+      log.debug("Could not compute prompt hash: {}", ex.getMessage());
+      return "";
+    }
+  }
+
+  private String getCachedResponse(String prompt) {
+    if (!responseCacheEnabled || prompt == null) return null;
+    String hash = getPromptHash(prompt);
+    if (hash.isEmpty()) return null;
+    CachedResponse cached = responseCache.get(hash);
+    if (cached == null) return null;
+    long now = System.currentTimeMillis();
+    if (now - cached.cachedAtMs > responseCacheTtlMs) {
+      responseCache.remove(hash);
+      return null;
+    }
+    log.debug("Cache HIT for prompt hash={} (age={}ms)", hash, now - cached.cachedAtMs);
+    return cached.response;
+  }
+
+  private void cacheResponse(String prompt, String response) {
+    if (!responseCacheEnabled || prompt == null || response == null) return;
+    String hash = getPromptHash(prompt);
+    if (hash.isEmpty()) return;
+    responseCache.put(hash, new CachedResponse(response));
+    log.debug("Cached response for prompt hash={} (cache size={})", hash, responseCache.size());
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // FEATURE 2: Java File Crawler for Project Context
+  // ═══════════════════════════════════════════════════════════════════════════
+  private String crawlProjectJavaFiles(String taskType) {
+    if (!javaCrawlerEnabled || projectRootPath == null || projectRootPath.isBlank()) {
+      return "";
+    }
+    long now = System.currentTimeMillis();
+    if (now - lastProjectContextScanAtMs < javaCrawlerCacheTtlMs && !cachedProjectContext.isBlank()) {
+      log.debug("Using cached project context (age={}ms)", now - lastProjectContextScanAtMs);
+      return cachedProjectContext;
+    }
+
+    try {
+      Path projectPath = Paths.get(projectRootPath);
+      if (!Files.isDirectory(projectPath)) {
+        log.warn("Project root path not found: {}", projectRootPath);
+        return "";
+      }
+
+      List<Path> javaFiles = new ArrayList<>();
+      try (var stream = Files.walk(projectPath)) {
+        javaFiles = stream
+            .filter(Files::isRegularFile)
+            .filter(p -> p.getFileName().toString().endsWith(".java"))
+            .filter(p -> !p.toString().contains("/target/") && !p.toString().contains("/.git/"))
+            .limit(javaCrawlerMaxFiles)
+            .toList();
+      }
+
+      StringBuilder context = new StringBuilder("## Project Structure Context\n\n");
+      context.append("Analyzed ").append(javaFiles.size()).append(" Java files:\n\n");
+
+      for (Path javaFile : javaFiles) {
+        try {
+          String className = javaFile.getFileName().toString().replace(".java", "");
+          String content = Files.readString(javaFile, StandardCharsets.UTF_8);
+
+          // Extract class declaration, imports, and public methods
+          StringBuilder extract = new StringBuilder();
+          extract.append("### ").append(className).append(".java\n");
+          String[] lines = content.split("\n");
+          boolean inClass = false;
+          int methodCount = 0;
+
+          for (String line : lines) {
+            String trimmed = line.trim();
+            if (trimmed.startsWith("package ") || trimmed.startsWith("import ")) {
+              if (trimmed.startsWith("import ") && !trimmed.contains("java.util") && !trimmed.contains("java.io")) {
+                extract.append(trimmed).append("\n");
+              }
+            } else if (trimmed.startsWith("public class ") || trimmed.startsWith("public interface ")) {
+              inClass = true;
+              extract.append("\n").append(trimmed).append("\n");
+            } else if (inClass && trimmed.startsWith("public ") && (trimmed.contains("(") || trimmed.contains("{"))) {
+              extract.append("  ").append(trimmed).append("\n");
+              methodCount++;
+              if (methodCount >= 10) break;
+            }
+          }
+
+          String extracted = extract.toString();
+          if (extracted.length() > javaCrawlerMaxCharsPerFile) {
+            extracted = extracted.substring(0, javaCrawlerMaxCharsPerFile) + "\n  ...[truncated]";
+          }
+          context.append(extracted).append("\n");
+        } catch (Exception readEx) {
+          log.debug("Could not read Java file {}: {}", javaFile, readEx.getMessage());
+        }
+      }
+
+      cachedProjectContext = context.toString();
+      lastProjectContextScanAtMs = now;
+      log.info("Scanned {} Java files for project context", javaFiles.size());
+      return cachedProjectContext;
+    } catch (Exception ex) {
+      log.warn("Could not crawl project Java files: {}", ex.getMessage());
+      return "";
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // FEATURE 3: Smart Model Selection
+  // ═══════════════════════════════════════════════════════════════════════════
+  private String selectOptimalModel(String taskType, int promptSize, boolean isCodeTask) {
+    if (!smartSelectionEnabled) {
+      return model; // Use default model
+    }
+
+    String taskLower = taskType == null ? "" : taskType.toLowerCase();
+    boolean isCodeGeneration = taskLower.contains("code") || taskLower.contains("java") || taskLower.contains("function");
+    boolean isMenuDesign = taskLower.contains("menu");
+
+    // For code generation tasks with moderate size, prefer code-optimized models
+    if (isCodeGeneration && promptSize < codeTaskThresholdChars) {
+      List<String> candidates = resolveCandidateModels();
+      if (candidates.contains("codex-mini-latest")) {
+        return "codex-mini-latest"; // Lightweight code model
+      }
+      if (candidates.contains("gpt-4.1-mini")) {
+        return "gpt-4.1-mini";
+      }
+    }
+
+    // For large contexts, use high-capacity models
+    if (promptSize > largeContextThresholdChars || (isMenuDesign && promptSize > menuGeminiThresholdChars)) {
+      boolean ownGeminiConfigured = geminiEnabled && !googleApiKey.isBlank() && !googleProjectId.isBlank();
+      boolean delegatedGeminiAvailable = geminiEnabled && geminiService != null;
+      if (ownGeminiConfigured || delegatedGeminiAvailable) {
+        return "gemini:" + geminiModel; // Mark for Gemini routing
+      }
+      List<String> candidates = resolveCandidateModels();
+      if (candidates.contains("gpt-4.1")) {
+        return "gpt-4.1";
+      }
+      if (candidates.contains("gpt-4o")) {
+        return "gpt-4o";
+      }
+    }
+
+    // Default fallback
+    return model;
+  }
+
+  private boolean looksLikeCodeTask(String text) {
+    String normalized = String.valueOf(text == null ? "" : text).toLowerCase(Locale.ROOT);
+    return normalized.contains("java")
+        || normalized.contains("code")
+        || normalized.contains("class ")
+        || normalized.contains("method")
+        || normalized.contains("service")
+        || normalized.contains("controller")
+        || normalized.contains("repository")
+        || normalized.contains("entity")
+        || normalized.contains("bug")
+        || normalized.contains("refactor")
+        || normalized.contains("stacktrace")
+        || normalized.contains("exception");
+  }
+
+  private boolean looksLikeMenuTask(String text) {
+    String normalized = String.valueOf(text == null ? "" : text).toLowerCase(Locale.ROOT);
+    return normalized.contains("menu_json")
+        || normalized.contains("menu_design")
+        || normalized.contains("\"menu\"")
+        || normalized.contains("flowtype")
+        || normalized.contains("responsemode")
+        || normalized.contains("trigger")
+        || normalized.contains("table_name")
+        || normalized.contains("current_menu_full_json");
+  }
+
+  private String detectTaskTypeHint(String prompt) {
+    if (looksLikeMenuTask(prompt)) {
+      return "menu_design";
+    }
+    return looksLikeCodeTask(prompt) ? "code_generation" : "general";
+  }
+
+  /**
+   * Apply slot-based token budget fitting to the assembled finalPrompt.
+   *
+   * <p>Called when the prompt already exceeds {@code directMaxChars} but we want to
+   * avoid entering chunk-mode by intelligently trimming low-priority context layers:
+   * <ol>
+   *   <li>Project Structure Context (SKELETON, lowest priority)</li>
+   *   <li>BACKEND SESSION CONTEXT / app context block (TAIL_TRIM)</li>
+   *   <li>System core and scenario guardrail (KEEP)</li>
+   *   <li>User payload (KEEP, highest priority)</li>
+   * </ol>
+   * Returns the original finalPrompt unchanged if fitting does not reduce length.
+   */
+  private String applyContextBudgetFitting(
+      String finalPrompt,
+      String systemCore,
+      String appContextBlock,
+      String scenarioContextText,
+      String userPayload,
+      String taskTypeHint) {
+
+    int maxInputTokens = contextBudgetManager.computeInputBudget(model, maxOutputTokens);
+    List<ContextBudgetManager.ContextSlot> slots = new ArrayList<>();
+
+    // Project context is prepended by maybeInjectProjectContext — detect and extract it.
+    String projectBlock = "";
+    if (finalPrompt.contains("## Project Structure")) {
+      int projStart = finalPrompt.indexOf("## Project Structure");
+      // The base prompt (systemCore) starts after the project block
+      String sysCoreTrimmed = systemCore.trim();
+      int baseStart = sysCoreTrimmed.isBlank() ? -1 : finalPrompt.indexOf(sysCoreTrimmed, projStart);
+      if (baseStart > projStart) {
+        projectBlock = finalPrompt.substring(projStart, baseStart).trim();
+      }
+    }
+
+    if (!projectBlock.isBlank()) {
+      slots.add(new ContextBudgetManager.ContextSlot(
+          "project_context", projectBlock, 3, ContextBudgetManager.TrimStrategy.SKELETON,
+          taskTypeHint));
+    }
+    if (!systemCore.isBlank()) {
+      slots.add(new ContextBudgetManager.ContextSlot(
+          "system_core", systemCore.trim(), 9, ContextBudgetManager.TrimStrategy.KEEP));
+    }
+    if (!appContextBlock.isBlank()) {
+      slots.add(new ContextBudgetManager.ContextSlot(
+          "app_context", appContextBlock, 5, ContextBudgetManager.TrimStrategy.TAIL_TRIM));
+    }
+    if (!scenarioContextText.isBlank()) {
+      slots.add(new ContextBudgetManager.ContextSlot(
+          "scenario_guardrail", scenarioContextText, 8, ContextBudgetManager.TrimStrategy.KEEP));
+    }
+    slots.add(new ContextBudgetManager.ContextSlot(
+        "user_payload", userPayload, 9, ContextBudgetManager.TrimStrategy.KEEP));
+
+    String fitted = contextBudgetManager.fitToTokenBudget(slots, maxInputTokens, model);
+    if (!fitted.isBlank() && fitted.length() < finalPrompt.length()) {
+      log.info("applyContextBudgetFitting: reduced prompt {} -> {} chars (budget={} tokens)",
+          finalPrompt.length(), fitted.length(), maxInputTokens);
+      return fitted;
+    }
+    return finalPrompt;
+  }
+
+  private String maybeInjectProjectContext(String prompt, String taskTypeHint) {
+    if (!looksLikeCodeTask(prompt)) {
+      return prompt;
+    }
+    if (prompt != null && prompt.contains("## Project Structure Context")) {
+      return prompt;
+    }
+    String projectContext = crawlProjectJavaFiles(taskTypeHint);
+    if (projectContext.isBlank()) {
+      return prompt;
+    }
+    String promptStr = String.valueOf(prompt == null ? "" : prompt);
+
+    // If including the full project context would push us past directMaxChars, skeletonize it.
+    if (contextBudgetManager != null && contextBudgetManager.isEnabled()
+        && promptStr.length() + projectContext.length() > directMaxChars) {
+      int promptTokens = contextBudgetManager.countTokens(promptStr, model);
+      int inputBudget = contextBudgetManager.computeInputBudget(model, maxOutputTokens);
+      int budgetForProject = inputBudget - promptTokens - 200; // 200-token safety gap
+      if (budgetForProject < 300) {
+        log.debug("maybeInjectProjectContext: no token budget for project context (budget={}), skipping", budgetForProject);
+        return promptStr;
+      }
+      String skelContext = contextBudgetManager.skeletonizeJavaContext(projectContext, budgetForProject);
+      if (skelContext.isBlank()) return promptStr;
+      log.info("maybeInjectProjectContext: skeletonized project context {} -> {} chars (token budget={})",
+          projectContext.length(), skelContext.length(), budgetForProject);
+      return skelContext + "\n\n" + promptStr;
+    }
+
+    return projectContext + "\n\n" + promptStr;
+  }
+
+  private boolean isModelTemporarilyUnavailable(String modelName) {
+    if (modelName == null || modelName.isBlank()) {
+      return false;
+    }
+    Long untilMs = modelUnavailableUntilMs.get(modelName.toLowerCase(Locale.ROOT));
+    if (untilMs == null) {
+      return false;
+    }
+    long now = System.currentTimeMillis();
+    if (now >= untilMs) {
+      modelUnavailableUntilMs.remove(modelName.toLowerCase(Locale.ROOT));
+      return false;
+    }
+    return true;
+  }
+
+  private long getModelUnavailableRemainingMs(String modelName) {
+    if (modelName == null || modelName.isBlank()) {
+      return 0L;
+    }
+    Long untilMs = modelUnavailableUntilMs.get(modelName.toLowerCase(Locale.ROOT));
+    if (untilMs == null) {
+      return 0L;
+    }
+    return Math.max(0L, untilMs - System.currentTimeMillis());
+  }
+
+  private void markModelTemporarilyUnavailable(String modelName, long cooldownMs, String reason) {
+    if (modelName == null || modelName.isBlank()) {
+      return;
+    }
+    long untilMs = System.currentTimeMillis() + Math.max(60000L, cooldownMs);
+    modelUnavailableUntilMs.put(modelName.toLowerCase(Locale.ROOT), untilMs);
+    log.warn("Temporarily disabling model '{}' for {} ms due to {}", modelName, Math.max(60000L, cooldownMs), reason);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // FEATURE 4: Gemini 1.5 Pro Integration
+  // ═══════════════════════════════════════════════════════════════════════════
+  private String callGeminiWithContext(String prompt, int maxTokens, double temperature, ProgressListener progressListener) {
+    // Delegate to GeminiService (uses ApiKeyService pool) when own google.cloud.api-key is not configured.
+    boolean ownKeyMissing = !geminiEnabled || googleApiKey.isBlank() || googleProjectId.isBlank();
+    if (ownKeyMissing) {
+      if (geminiService == null) {
+        return createErrorJson("Gemini không được cấu hình (google.cloud.api-key trống và GeminiService không khả dụng)", "GEMINI_NOT_CONFIGURED");
+      }
+      // Use shared GeminiService (has ApiKey pool, model rotation, quota management)
+      try {
+        String fullPrompt = prompt;
+        if (prompt.toLowerCase().contains("code") || prompt.toLowerCase().contains("java")) {
+          String projectCtx = crawlProjectJavaFiles("code_generation");
+          if (!projectCtx.isBlank()) fullPrompt = projectCtx + "\n\n" + prompt;
+        }
+        if (fullPrompt.length() > 500000) {
+          return createErrorJson("Prompt quá lớn cho Gemini (tối đa 500K ký tự): " + fullPrompt.length(), "GEMINI_PROMPT_TOO_LARGE");
+        }
+        emitProgress(progressListener, progressPayload("gemini_call", "Đang gửi yêu cầu tới Gemini (large context)", 0, 1,
+            progressI18n("copilot.progress.message.gemini_request", null, null, null)));
+        log.info("callGeminiWithContext: delegating to GeminiService, promptChars={}", fullPrompt.length());
+        return geminiService.generateContent(fullPrompt);
+      } catch (Exception ex) {
+        log.error("GeminiService delegation failed", ex);
+        return createErrorJson("Lỗi gọi Gemini qua GeminiService: " + ex.getMessage(), "GEMINI_DELEGATE_ERROR");
+      }
+    }
+
+    try {
+      String fullPrompt = prompt;
+
+      // Inject project context for code tasks
+      if (prompt.toLowerCase().contains("code") || prompt.toLowerCase().contains("java")) {
+        String projectCtx = crawlProjectJavaFiles("code_generation");
+        if (!projectCtx.isBlank()) {
+          fullPrompt = projectCtx + "\n\n" + prompt;
+        }
+      }
+
+      if (fullPrompt.length() > 1000000) {
+        return createErrorJson("Prompt vẫn quá lớn cho Gemini (tối đa 1M ký tự)", "GEMINI_PROMPT_TOO_LARGE");
+      }
+
+      Map<String, Object> body = new HashMap<>();
+      body.put("contents", List.of(Map.of(
+          "role", "user",
+          "parts", List.of(Map.of("text", fullPrompt))
+      )));
+      body.put("generationConfig", Map.of(
+          "temperature", temperature,
+          "maxOutputTokens", Math.min(maxTokens, geminiMaxTokens),
+          "topP", 0.95
+      ));
+
+      String url = geminiEndpoint + "/" + geminiModel + ":generateContent?key=" + googleApiKey;
+      HttpHeaders headers = new HttpHeaders();
+      headers.setContentType(MediaType.APPLICATION_JSON);
+
+      emitProgress(progressListener, progressPayload("gemini_call", "Đang gửi yêu cầu tới Gemini 1.5 Pro", 0, 1,
+          progressI18n("copilot.progress.message.gemini_request", null, null, null)));
+
+      ResponseEntity<String> response = restTemplate.postForEntity(url, new HttpEntity<>(body, headers), String.class);
+
+      if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
+        @SuppressWarnings("unchecked")
+        Map<String, Object> result = objectMapper.readValue(response.getBody(), Map.class);
+        Object candidates = result.get("candidates");
+        if (candidates instanceof List<?> candList && !candList.isEmpty()) {
+          @SuppressWarnings("unchecked")
+          Map<String, Object> candidate = (Map<String, Object>) candList.get(0);
+          Object content = candidate.get("content");
+          if (content instanceof Map<?, ?> contentMap) {
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> parts = (List<Map<String, Object>>) contentMap.get("parts");
+            if (parts != null && !parts.isEmpty()) {
+              String text = String.valueOf(parts.get(0).get("text"));
+              log.info("Gemini 1.5 Pro response received: {} chars", text.length());
+              cacheResponse(prompt, text);
+              return createSuccessJson(text, "gemini_1_5_pro", null);
+            }
+          }
+        }
+      }
+
+      return createErrorJson("Gemini trả về phản hồi không hợp lệ", "GEMINI_INVALID_RESPONSE");
+    } catch (Exception ex) {
+      log.error("Gemini 1.5 Pro call failed", ex);
+      return createErrorJson("Lỗi gọi Gemini: " + ex.getMessage(), "GEMINI_ERROR");
+    }
+  }
+
+  private String normalizeChatCompletionsEndpoint(String configuredUrl) {
+    String configured = configuredUrl == null ? "" : configuredUrl.trim();
+    if (configured.isEmpty()) {
+      return "https://models.inference.ai.azure.com/chat/completions";
+    }
+    String lower = configured.toLowerCase(Locale.ROOT);
+    if (lower.endsWith("/chat/completions")) {
+      return configured;
+    }
+    if (lower.endsWith("/openai/v1")) {
+      return configured + "/chat/completions";
+    }
+    if (lower.endsWith("/inference")) {
+      return configured + "/chat/completions";
+    }
+    if (lower.contains("/api/projects/") && !lower.endsWith("/chat/completions")) {
+      return configured + "/chat/completions";
+    }
+    return configured;
+  }
+
+  private String resolveChatCompletionsEndpoint() {
+    return normalizeChatCompletionsEndpoint(apiUrl);
+  }
+
+  private String resolveResponsesEndpoint() {
+    String chatEndpoint = resolveChatCompletionsEndpoint();
+    if (chatEndpoint.toLowerCase(Locale.ROOT).endsWith("/chat/completions")) {
+      return chatEndpoint.substring(0, chatEndpoint.length() - "/chat/completions".length()) + "/responses";
+    }
+    if (chatEndpoint.toLowerCase(Locale.ROOT).endsWith("/inference")) {
+      return chatEndpoint + "/responses";
+    }
+    return chatEndpoint;
+  }
+
+  private String resolveModelsEndpoint() {
+    String chatEndpoint = resolveChatCompletionsEndpoint();
+    if (chatEndpoint.toLowerCase(Locale.ROOT).endsWith("/chat/completions")) {
+      return chatEndpoint.substring(0, chatEndpoint.length() - "/chat/completions".length()) + "/models";
+    }
+    if (chatEndpoint.toLowerCase(Locale.ROOT).endsWith("/inference")) {
+      return chatEndpoint + "/models";
+    }
+    return chatEndpoint;
+  }
+
+  private String buildAuthorizationHeaderValue(String endpoint, String effectiveToken) {
+    String tokenValue = effectiveToken == null ? "" : effectiveToken.trim();
+    if (tokenValue.isEmpty()) {
+      return "";
+    }
+
+    String scheme = authScheme == null ? "auto" : authScheme.trim().toLowerCase(Locale.ROOT);
+    if (scheme.isEmpty()) {
+      scheme = "auto";
+    }
+
+    if ("github-bearer".equals(scheme) || "github_bearer".equals(scheme)) {
+      return "GitHub-Bearer " + tokenValue;
+    }
+    if ("bearer".equals(scheme)) {
+      return "Bearer " + tokenValue;
+    }
+    if ("api-key".equals(scheme) || "apikey".equals(scheme) || "x-api-key".equals(scheme)) {
+      return "";
+    }
+
+    String endpointLower = String.valueOf(endpoint == null ? "" : endpoint).toLowerCase(Locale.ROOT);
+    if (endpointLower.contains("api.individual.githubcopilot.com")) {
+      return "GitHub-Bearer " + tokenValue;
+    }
+    return "Bearer " + tokenValue;
+  }
+
+  private void applyAuthHeaders(HttpHeaders headers, String endpoint, String effectiveToken) {
+    if (headers == null) {
+      return;
+    }
+    String scheme = authScheme == null ? "auto" : authScheme.trim().toLowerCase(Locale.ROOT);
+    if (scheme.isBlank()) {
+      scheme = "auto";
+    }
+
+    String tokenValue = String.valueOf(effectiveToken == null ? "" : effectiveToken).trim();
+
+    if ("api-key".equals(scheme) || "apikey".equals(scheme) || "x-api-key".equals(scheme)) {
+      return;
+    }
+
+    if ("github-bearer".equals(scheme) || "github_bearer".equals(scheme)) {
+      if (!tokenValue.isBlank()) {
+        headers.set("Authorization", "GitHub-Bearer " + tokenValue);
+      }
+      return;
+    }
+
+    if ("bearer".equals(scheme)) {
+      if (!tokenValue.isBlank()) {
+        headers.set("Authorization", "Bearer " + tokenValue);
+      }
+      return;
+    }
+
+    // auto mode
+    String authHeader = buildAuthorizationHeaderValue(endpoint, tokenValue);
+    if (!authHeader.isBlank()) {
+      headers.set("Authorization", authHeader);
+    }
+  }
+
+  private boolean isResponsesPreferredModel(String modelName) {
+    String normalized = String.valueOf(modelName == null ? "" : modelName).toLowerCase(Locale.ROOT);
+    return normalized.contains("codex") || normalized.contains("gpt-5.4-mini");
+  }
+
+  private void refreshModelEndpointCacheIfNeeded(String effectiveToken) {
+    long now = System.currentTimeMillis();
+    long ttl = Math.max(30000L, modelCatalogCacheMs);
+    if (now - modelEndpointCacheFetchedAtMs < ttl && modelEndpointCache != null && !modelEndpointCache.isEmpty()) {
+      return;
+    }
+
+    synchronized (this) {
+      now = System.currentTimeMillis();
+      if (now - modelEndpointCacheFetchedAtMs < ttl && modelEndpointCache != null && !modelEndpointCache.isEmpty()) {
+        return;
+      }
+
+      try {
+        String endpoint = resolveModelsEndpoint();
+        HttpHeaders headers = new HttpHeaders();
+        applyAuthHeaders(headers, endpoint, effectiveToken);
+        ResponseEntity<String> response = restTemplate.exchange(endpoint, HttpMethod.GET, new HttpEntity<>(headers), String.class);
+
+        if (response.getBody() == null || response.getBody().isBlank()) {
+          return;
+        }
+
+        Object parsed = objectMapper.readValue(response.getBody(), Object.class);
+        List<?> dataList = null;
+        if (parsed instanceof Map<?, ?> rootMap) {
+          Object dataObj = rootMap.get("data");
+          if (dataObj instanceof List<?> list) {
+            dataList = list;
+          }
+        } else if (parsed instanceof List<?> list) {
+          dataList = list;
+        }
+        if (dataList == null) {
+          log.debug("Model catalog endpoint '{}' returned unsupported schema", endpoint);
+          return;
+        }
+
+        Map<String, Set<String>> next = new HashMap<>();
+        for (Object itemObj : dataList) {
+          if (!(itemObj instanceof Map<?, ?> item)) {
+            continue;
+          }
+          Object idObj = item.get("id");
+          if (idObj == null) {
+            continue;
+          }
+          String id = String.valueOf(idObj).trim();
+          if (id.isEmpty()) {
+            continue;
+          }
+
+          Set<String> endpoints = new LinkedHashSet<>();
+          Object supportedObj = item.get("supported_endpoints");
+          if (supportedObj instanceof List<?> supportedList) {
+            for (Object endpointObj : supportedList) {
+              if (endpointObj == null) continue;
+              String path = String.valueOf(endpointObj).trim().toLowerCase(Locale.ROOT);
+              if (!path.isEmpty()) {
+                endpoints.add(path);
+              }
+            }
+          }
+          next.put(id.toLowerCase(Locale.ROOT), endpoints);
+        }
+
+        if (!next.isEmpty()) {
+          modelEndpointCache = next;
+          modelEndpointCacheFetchedAtMs = System.currentTimeMillis();
+          log.info("Loaded Copilot model catalog: {} models", next.size());
+        }
+      } catch (Exception ex) {
+        log.debug("Could not refresh Copilot model catalog: {}", ex.getMessage());
+      }
+    }
+  }
+
+  private Set<String> getSupportedEndpointsForModel(String modelName, String effectiveToken) {
+    refreshModelEndpointCacheIfNeeded(effectiveToken);
+    if (modelName == null || modelName.isBlank()) {
+      return Collections.emptySet();
+    }
+    Map<String, Set<String>> cache = modelEndpointCache == null ? Collections.emptyMap() : modelEndpointCache;
+    Set<String> supported = cache.get(modelName.trim().toLowerCase(Locale.ROOT));
+    return supported == null ? Collections.emptySet() : supported;
+  }
+
+  private List<String> resolveEndpointOrderForModel(String modelName, String effectiveToken) {
+    Set<String> supported = getSupportedEndpointsForModel(modelName, effectiveToken);
+    List<String> order = new ArrayList<>();
+
+    if (!supported.isEmpty()) {
+      if (supported.contains("/chat/completions")) order.add("/chat/completions");
+      if (supported.contains("/responses")) order.add("/responses");
+      if (order.isEmpty()) {
+        order.add(isResponsesPreferredModel(modelName) ? "/responses" : "/chat/completions");
+      }
+      return order;
+    }
+
+    order.add(isResponsesPreferredModel(modelName) ? "/responses" : "/chat/completions");
+    if (!order.contains("/chat/completions")) order.add("/chat/completions");
+    if (!order.contains("/responses")) order.add("/responses");
+    return order;
+  }
+
+  private String resolveEndpointByPath(String endpointPath) {
+    if ("/responses".equals(endpointPath)) {
+      return resolveResponsesEndpoint();
+    }
+    return resolveChatCompletionsEndpoint();
+  }
+
+  private HttpEntity<Map<String, Object>> buildRequestEntity(
+      String endpointPath,
+      String candidateModel,
+      String prompt,
+      int maxTokens,
+      double temperature,
+      String effectiveToken) {
+    Map<String, Object> body = new HashMap<>();
+    String resolvedEndpoint = resolveEndpointByPath(endpointPath);
+    body.put("model", candidateModel);
+
+    if ("/responses".equals(endpointPath)) {
+      body.put("input", prompt);
+      body.put("max_output_tokens", maxTokens);
+      body.put("temperature", temperature);
+      body.put("top_p", 0.95);
+    } else {
+      body.put("messages", List.of(Map.of("role", "user", "content", prompt)));
+      body.put("temperature", temperature);
+      body.put("top_p", 0.95);
+      body.put("max_tokens", maxTokens);
+    }
+
+    HttpHeaders headers = new HttpHeaders();
+    headers.setContentType(MediaType.APPLICATION_JSON);
+    applyAuthHeaders(headers, resolvedEndpoint, effectiveToken);
+    return new HttpEntity<>(body, headers);
+  }
+
+  private boolean isUnsupportedApiForModelError(HttpClientErrorException ex) {
+    String body = ex == null ? "" : String.valueOf(ex.getResponseBodyAsString());
+    String normalized = body.toLowerCase(Locale.ROOT);
+    return normalized.contains("unsupported_api_for_model")
+        || normalized.contains("not accessible via the /chat/completions endpoint")
+        || normalized.contains("not accessible via the /responses endpoint");
+  }
 
 
   /**
@@ -717,11 +1728,32 @@ public class GitHubModelsService {
     if (prompt == null || prompt.trim().isEmpty()) {
       return createErrorJson("Prompt không được để trống", "INVALID_PROMPT");
     }
-    if (token == null || token.trim().isEmpty()) {
-      return createErrorJson("Thiếu github.models.token để gọi GitHub Models API", "GITHUB_TOKEN_MISSING");
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // FEATURE 1: Check response cache FIRST
+    // ═══════════════════════════════════════════════════════════════════════════
+    String cachedResp = getCachedResponse(prompt);
+    if (cachedResp != null) {
+      emitProgress(progressListener, progressPayload("cache_hit", "Cached response (tái sử dụng kết quả)", 1, 1,
+          progressI18n("copilot.progress.message.cache_hit", null, null, null)));
+      return cachedResp;
+    }
+
+    String endpoint = resolveChatCompletionsEndpoint();
+    String effectiveToken = getEffectiveToken(endpoint);
+    if (effectiveToken.isEmpty()) {
+      return createErrorJson("Thiếu token cho endpoint AI (set github.models.token hoặc env GITHUB_TOKEN)", "GITHUB_TOKEN_MISSING");
+    }
+    if (isCopilotIndividualEndpoint(endpoint) && looksLikeGitHubPat(effectiveToken)) {
+      return createErrorJson(
+          "Endpoint api.individual.githubcopilot.com yêu cầu Copilot session token cho GitHub-Bearer (không dùng PAT ghp_). Hãy set github.models.copilot-token hoặc env GITHUB_COPILOT_TOKEN",
+          "GITHUB_COPILOT_TOKEN_INVALID");
     }
 
     String trimmedPrompt = prompt.trim();
+    String taskTypeHint = detectTaskTypeHint(trimmedPrompt);
+    boolean isCodeTask = looksLikeCodeTask(trimmedPrompt);
+    boolean isMenuTask = looksLikeMenuTask(trimmedPrompt);
 
     // Inject scenario-specific instructions between master prompt and dynamic context
     AiMenuOperationScenario scenario = extractOperationScenario(prompt);
@@ -771,11 +1803,52 @@ public class GitHubModelsService {
       finalPrompt = systemCore.trim() + appContextBlock + "\n\n" + scenarioContextText + "\n\n" + trimmedPrompt;
     }
 
+    String preInjectionPrompt = finalPrompt;
+    finalPrompt = maybeInjectProjectContext(finalPrompt, taskTypeHint);
+    boolean injectedProjectContext = finalPrompt.length() > preInjectionPrompt.length();
+
+    // Token-aware budget fitting: if the assembled prompt exceeds direct-mode threshold,
+    // try to compress supplementary layers (session context, project skeleton) before
+    // falling through to chunk-mode or returning an error.
+    if (contextBudgetManager != null && contextBudgetManager.isEnabled()
+        && finalPrompt.length() > directMaxChars
+        && shouldInjectMenuContext) {
+      finalPrompt = applyContextBudgetFitting(
+          finalPrompt, systemCore, appContextBlock, scenarioContextText, trimmedPrompt, taskTypeHint);
+    }
+
     if (finalPrompt.length() > maxPromptChars) {
       return createErrorJson(
           "Prompt quá dài cho GitHub fallback (tối đa " + maxPromptChars + " ký tự), hiện tại: " + finalPrompt.length(),
           "GITHUB_PROMPT_TOO_LARGE");
     }
+
+    String selectedModel = selectOptimalModel(taskTypeHint, finalPrompt.length(), isCodeTask);
+    log.info(
+      "AI routing decision: taskTypeHint={}, isCodeTask={}, isMenuTask={}, injectedProjectContext={}, promptChars={}, directMaxChars={}, largeContextThresholdChars={}, selectedModel={}, geminiConfigured={}",
+        taskTypeHint,
+        isCodeTask,
+        isMenuTask,
+        injectedProjectContext,
+        finalPrompt.length(),
+      directMaxChars,
+      largeContextThresholdChars,
+        selectedModel,
+        geminiEnabled && (!googleApiKey.isBlank() || geminiService != null));
+    if (selectedModel.startsWith("gemini:")) {
+      log.info("Routing request to Gemini because selectedModel={} for taskTypeHint={} promptChars={}",
+          selectedModel, taskTypeHint, finalPrompt.length());
+      return callGeminiWithContext(finalPrompt, maxOutputTokens, directTemperature, progressListener);
+    }
+
+    emitProgress(progressListener, progressPayload(
+      "preparing",
+      "Đang chọn model phù hợp",
+      0,
+      1,
+      mergeProgress(
+        progressI18n("copilot.progress.message.preparing_request", null, null, null),
+        Map.of("selectedModel", selectedModel, "taskTypeHint", taskTypeHint, "isCodeTask", isCodeTask))));
 
     emitProgress(progressListener, progressPayload(
       "preparing",
@@ -818,18 +1891,26 @@ public class GitHubModelsService {
     if (messages == null || messages.isEmpty()) {
       return createErrorJson("Messages rỗng", "INVALID_PROMPT");
     }
-    if (token == null || token.trim().isEmpty()) {
-      return createErrorJson("Thiếu GitHub Models token", "GITHUB_TOKEN_MISSING");
+    String endpoint = resolveChatCompletionsEndpoint();
+    String effectiveToken = getEffectiveToken(endpoint);
+    if (effectiveToken.isEmpty()) {
+      return createErrorJson("Thiếu token cho endpoint AI (set github.models.token hoặc env GITHUB_TOKEN)", "GITHUB_TOKEN_MISSING");
+    }
+    if (isCopilotIndividualEndpoint(endpoint) && looksLikeGitHubPat(effectiveToken)) {
+      return createErrorJson(
+          "Endpoint api.individual.githubcopilot.com yêu cầu Copilot session token cho GitHub-Bearer (không dùng PAT ghp_). Hãy set github.models.copilot-token hoặc env GITHUB_COPILOT_TOKEN",
+          "GITHUB_COPILOT_TOKEN_INVALID");
     }
 
     try {
       String flattenedPrompt = flattenChatMessages(messages);
+      String fittedPrompt = applyStreamingContextBudgetFitting(messages, flattenedPrompt);
       int streamingDirectSafeChars = Math.max(8000, Math.min(chatStreamDirectMaxChars, requestMaxChars - 1000));
         int chunkThresholdChars = Math.max(10000, chunkModeThresholdChars);
-      int estimatedInputTokens = estimateTokens(flattenedPrompt, Math.max(128, Math.min(1024, maxOutputTokens)));
-      boolean shouldChunkFallback = !flattenedPrompt.isBlank()
-          && (flattenedPrompt.length() > streamingDirectSafeChars
-            || flattenedPrompt.length() > chunkThresholdChars
+      int estimatedInputTokens = estimateTokens(fittedPrompt, Math.max(128, Math.min(1024, maxOutputTokens)));
+      boolean shouldChunkFallback = !fittedPrompt.isBlank()
+          && (fittedPrompt.length() > streamingDirectSafeChars
+            || fittedPrompt.length() > chunkThresholdChars
               || estimatedInputTokens > Math.max(3000, chatStreamInputTokenSoftLimit));
 
       if (shouldChunkFallback) {
@@ -845,6 +1926,7 @@ public class GitHubModelsService {
               "copilot.progress.detail.streaming_chunk_fallback",
               Map.of(
                 "inputChars", flattenedPrompt.length(),
+                "fittedInputChars", fittedPrompt.length(),
                 "chunkModeThresholdChars", chunkThresholdChars,
                 "estimatedInputTokens", estimatedInputTokens,
                 "directCharsLimit", streamingDirectSafeChars,
@@ -853,13 +1935,14 @@ public class GitHubModelsService {
             Map.of(
               "detail", "Ngu canh lon vuot nguong streaming direct, kich hoat chunk mode map-reduce",
               "inputChars", flattenedPrompt.length(),
+              "fittedInputChars", fittedPrompt.length(),
               "chunkModeThresholdChars", chunkThresholdChars,
               "estimatedInputTokens", estimatedInputTokens,
               "directCharsLimit", streamingDirectSafeChars,
               "inputTokenSoftLimit", Math.max(3000, chatStreamInputTokenSoftLimit),
               "mode", "streaming_chunked_fallback")))));
 
-        String chunkedResult = generateContent(flattenedPrompt, progressListener);
+        String chunkedResult = generateContent(fittedPrompt, progressListener);
         if (isErrorResponseJson(chunkedResult)) {
           return chunkedResult;
         }
@@ -872,9 +1955,11 @@ public class GitHubModelsService {
           mergeProgress(progressI18n("copilot.progress.message.chat_complete", null, null, null), Map.of(
                 "mode", "streaming_chunked_fallback",
                 "inputChars", flattenedPrompt.length(),
+                "fittedInputChars", fittedPrompt.length(),
               "estimatedInputTokens", estimatedInputTokens))));
         return createSuccessJson(finalText, "streaming_chunked_fallback", Map.of(
             "inputChars", flattenedPrompt.length(),
+              "fittedInputChars", fittedPrompt.length(),
             "chunkModeThresholdChars", chunkThresholdChars,
             "estimatedInputTokens", estimatedInputTokens,
             "directCharsLimit", streamingDirectSafeChars,
@@ -938,8 +2023,76 @@ public class GitHubModelsService {
         || text.contains("tat ca github models deu that bai")
         || text.contains("rate limit")
         || text.contains("quota")
+        || text.contains("unauthorized")
+        || text.contains("authentication failed")
+        || text.contains("invalid token")
         || text.contains("429")
+        || text.contains("401")
         || text.contains("413");
+  }
+
+  private String applyStreamingContextBudgetFitting(List<Map<String, Object>> messages, String flattenedPrompt) {
+    if (flattenedPrompt == null || flattenedPrompt.isBlank()) {
+      return "";
+    }
+    if (contextBudgetManager == null || !contextBudgetManager.isEnabled() || messages == null || messages.isEmpty()) {
+      return flattenedPrompt;
+    }
+
+    int maxInputTokens = contextBudgetManager.computeInputBudget(model, Math.max(256, maxOutputTokens));
+    int latestUserIndex = -1;
+    for (int i = messages.size() - 1; i >= 0; i--) {
+      Map<String, Object> message = messages.get(i);
+      String role = String.valueOf(message == null ? "" : message.getOrDefault("role", "")).toLowerCase(Locale.ROOT);
+      if ("user".equals(role)) {
+        latestUserIndex = i;
+        break;
+      }
+    }
+
+    List<ContextBudgetManager.ContextSlot> slots = new ArrayList<>();
+    for (int i = 0; i < messages.size(); i++) {
+      Map<String, Object> message = messages.get(i);
+      String block = renderMessageBlock(message);
+      if (block.isBlank()) {
+        continue;
+      }
+
+      String role = String.valueOf(message == null ? "" : message.getOrDefault("role", "user")).toLowerCase(Locale.ROOT);
+      ContextBudgetManager.TrimStrategy strategy;
+      int priority;
+
+      if ("system".equals(role) || i == latestUserIndex) {
+        strategy = ContextBudgetManager.TrimStrategy.KEEP;
+        priority = 9;
+      } else if ("user".equals(role)) {
+        strategy = ContextBudgetManager.TrimStrategy.PROPORTIONAL;
+        priority = 7;
+      } else if ("assistant".equals(role)) {
+        strategy = ContextBudgetManager.TrimStrategy.TAIL_TRIM;
+        priority = 5;
+      } else {
+        strategy = ContextBudgetManager.TrimStrategy.HEAD_TRIM;
+        priority = 4;
+      }
+
+      slots.add(new ContextBudgetManager.ContextSlot("msg_" + i, block, priority, strategy));
+    }
+
+    if (slots.isEmpty()) {
+      return flattenedPrompt;
+    }
+
+    String fitted = contextBudgetManager.fitToTokenBudget(slots, maxInputTokens, model);
+    if (fitted == null || fitted.isBlank()) {
+      return flattenedPrompt;
+    }
+
+    if (fitted.length() < flattenedPrompt.length()) {
+      log.info("Streaming context fitting reduced prompt {} -> {} chars (budget={} tokens)",
+          flattenedPrompt.length(), fitted.length(), maxInputTokens);
+    }
+    return fitted;
   }
 
   @SuppressWarnings("unchecked")
@@ -990,45 +2143,53 @@ public class GitHubModelsService {
     }
     StringBuilder sb = new StringBuilder();
     for (Map<String, Object> message : messages) {
-      if (message == null || message.isEmpty()) {
-        continue;
+      String block = renderMessageBlock(message);
+      if (!block.isBlank()) {
+        sb.append(block).append("\n\n");
       }
-      String role = String.valueOf(message.getOrDefault("role", "user"));
-      sb.append("[ROLE=").append(role).append("]\n");
+    }
+    return sb.toString().trim();
+  }
 
-      Object content = message.get("content");
-      if (content instanceof String text) {
-        sb.append(text).append("\n\n");
-        continue;
-      }
+  private String renderMessageBlock(Map<String, Object> message) {
+    if (message == null || message.isEmpty()) {
+      return "";
+    }
 
-      if (content instanceof List<?> parts) {
-        for (Object partObj : parts) {
-          if (!(partObj instanceof Map<?, ?> part)) {
-            sb.append(String.valueOf(partObj)).append("\n");
-            continue;
-          }
+    StringBuilder sb = new StringBuilder();
+    String role = String.valueOf(message.getOrDefault("role", "user"));
+    sb.append("[ROLE=").append(role).append("]\n");
 
-          Object typeObj = part.get("type");
-          String type = typeObj == null ? "" : String.valueOf(typeObj);
-          if ("text".equals(type)) {
-            Object textObj = part.get("text");
-            sb.append(textObj == null ? "" : String.valueOf(textObj)).append("\n");
-          } else if ("image_url".equals(type)) {
-            Object imageObj = part.get("image_url");
-            if (imageObj instanceof Map<?, ?> imageMap) {
-              Object urlObj = imageMap.get("url");
-              sb.append("[IMAGE_URL] ").append(urlObj == null ? "" : String.valueOf(urlObj)).append("\n");
-            } else {
-              sb.append("[IMAGE_URL] ").append(String.valueOf(imageObj)).append("\n");
-            }
+    Object content = message.get("content");
+    if (content instanceof String text) {
+      sb.append(text);
+      return sb.toString().trim();
+    }
+
+    if (content instanceof List<?> parts) {
+      for (Object partObj : parts) {
+        if (!(partObj instanceof Map<?, ?> part)) {
+          sb.append(String.valueOf(partObj)).append("\n");
+          continue;
+        }
+
+        Object typeObj = part.get("type");
+        String type = typeObj == null ? "" : String.valueOf(typeObj);
+        if ("text".equals(type)) {
+          Object textObj = part.get("text");
+          sb.append(textObj == null ? "" : String.valueOf(textObj)).append("\n");
+        } else if ("image_url".equals(type)) {
+          Object imageObj = part.get("image_url");
+          if (imageObj instanceof Map<?, ?> imageMap) {
+            Object urlObj = imageMap.get("url");
+            sb.append("[IMAGE_URL] ").append(urlObj == null ? "" : String.valueOf(urlObj)).append("\n");
           } else {
-            sb.append(String.valueOf(part)).append("\n");
+            sb.append("[IMAGE_URL] ").append(String.valueOf(imageObj)).append("\n");
           }
+        } else {
+          sb.append(String.valueOf(part)).append("\n");
         }
       }
-
-      sb.append("\n");
     }
     return sb.toString().trim();
   }
@@ -1121,16 +2282,23 @@ public class GitHubModelsService {
 
   /**
    * Stream chat completion using WebClient (reactive, non-blocking).
-   * Endpoint: https://models.inference.ai.azure.com/chat/completions
-   * Supports gpt-4o, gpt-4.1, gpt-4o-mini models with stream=true.
+   * Endpoint is resolved from github.models.url.
+   * Supports both:
+   * - https://models.github.ai/inference
+   * - https://models.github.ai/inference/chat/completions
    */
   private String streamChatCompletionWithWebClient(Map<String, Object> body, ProgressListener progressListener) {
     StringBuilder accumulated = new StringBuilder();
     List<String> candidateModels = resolveCandidateModels();
-    String endpoint = "https://models.inference.ai.azure.com/chat/completions";
+    String endpoint = resolveChatCompletionsEndpoint();
+    String effectiveToken = getEffectiveToken(endpoint);
     
     for (String candidateModel : candidateModels) {
       try {
+        if (!resolveEndpointOrderForModel(candidateModel, effectiveToken).contains("/chat/completions")) {
+          log.info("Skip model '{}' in streaming mode because it does not support /chat/completions", candidateModel);
+          continue;
+        }
         body.put("model", candidateModel);
         
         emitProgress(progressListener, progressPayload("streaming", "Đang kết nối tới " + candidateModel, 0, 1,
@@ -1141,7 +2309,7 @@ public class GitHubModelsService {
             .uri(endpoint)
             .contentType(MediaType.APPLICATION_JSON)
             .accept(MediaType.TEXT_EVENT_STREAM)
-            .header("Authorization", "Bearer " + token.trim())
+          .headers(h -> applyAuthHeaders(h, endpoint, effectiveToken))
             .header("User-Agent", "java-github-models/1.0")
             .bodyValue(body)
             .retrieve()
@@ -1216,9 +2384,11 @@ public class GitHubModelsService {
       }
 
       Object parsedResult = tryParseJson(content);
+      String successJson = createSuccessJson(parsedResult != null ? parsedResult : content, "direct", null);
+      cacheResponse(prompt, successJson);
         emitProgress(progressListener, progressPayload("completed", "Đã hoàn tất xử lý AI", 1, 1,
           progressI18n("copilot.progress.message.completed", null, null, null)));
-      return createSuccessJson(parsedResult != null ? parsedResult : content, "direct", null);
+      return successJson;
     } catch (Exception ex) {
       log.error("GitHub Models request failed", ex);
       return createErrorJson("Lỗi gọi GitHub Models API: " + ex.getMessage(), "GITHUB_MODELS_ERROR");
@@ -1404,7 +2574,9 @@ public class GitHubModelsService {
         emitProgress(progressListener, progressPayload("completed", "Đã hoàn tất xử lý AI", chunks.size(), chunks.size(),
           mergeProgress(progressI18n("copilot.progress.message.completed", null, null, null),
             withOrchestrationMeta("completed", chunks.size(), chunks.size(), meta))));
-      return createSuccessJson(parsedResult != null ? parsedResult : mergedContent, "chunked", meta);
+      String successJson = createSuccessJson(parsedResult != null ? parsedResult : mergedContent, "chunked", meta);
+      cacheResponse(prompt, successJson);
+      return successJson;
     } catch (Exception ex) {
       log.error("GitHub Models chunked request failed", ex);
       return createErrorJson("Lỗi xử lý prompt lớn qua GitHub Models: " + ex.getMessage(), "GITHUB_CHUNKED_ERROR");
@@ -1604,10 +2776,23 @@ public class GitHubModelsService {
     }
 
     int estimatedInputTokens = estimateTokens(prompt, Math.max(256, maxTokens));
-    List<String> candidateModels = resolveCandidateModels();
+    String taskTypeHint = detectTaskTypeHint(prompt);
+    boolean isCodeTask = looksLikeCodeTask(prompt);
+    String preferredModel = selectOptimalModel(taskTypeHint, prompt.length(), isCodeTask);
+    List<String> candidateModels = resolveCandidateModels(preferredModel.startsWith("gemini:") ? model : preferredModel);
     List<String> failures = new ArrayList<>();
+    String baseEndpoint = resolveChatCompletionsEndpoint();
+    String effectiveToken = getEffectiveToken(baseEndpoint);
 
     for (String candidateModel : candidateModels) {
+      if (isModelTemporarilyUnavailable(candidateModel)) {
+        long remainingMs = getModelUnavailableRemainingMs(candidateModel);
+        String skipReason = "model temporarily unavailable due to cached quota exhaustion (remaining " + remainingMs + " ms)";
+        log.info("Skip model '{}' because {}", candidateModel, skipReason);
+        failures.add(candidateModel + " -> quota cooldown");
+        continue;
+      }
+
       if (!supportsPromptSize(candidateModel, estimatedInputTokens, maxTokens)) {
         String skipReason = "skip context too large for model";
         log.info("Skip model '{}' for promptSize={} estimatedInputTokens={} maxTokens={} ({})",
@@ -1616,37 +2801,58 @@ public class GitHubModelsService {
         continue;
       }
 
-      HttpHeaders headers = new HttpHeaders();
-      headers.setContentType(MediaType.APPLICATION_JSON);
-      headers.setBearerAuth(token.trim());
+      List<String> endpointOrder = resolveEndpointOrderForModel(candidateModel, effectiveToken);
+      for (String endpointPath : endpointOrder) {
+        String endpoint = resolveEndpointByPath(endpointPath);
+        String endpointToken = getEffectiveToken(endpoint);
+        HttpEntity<Map<String, Object>> request = buildRequestEntity(
+            endpointPath,
+            candidateModel,
+            prompt,
+            maxTokens,
+            temperature,
+            endpointToken);
 
-      Map<String, Object> body = new HashMap<>();
-      body.put("model", candidateModel);
-      body.put("messages", List.of(Map.of("role", "user", "content", prompt)));
-      body.put("temperature", temperature);
-      body.put("top_p", 0.95);
-      body.put("max_tokens", maxTokens);
-
-      HttpEntity<Map<String, Object>> request = new HttpEntity<>(body, headers);
-      try {
-        return executeWithRetry(request, prompt, maxTokens, progressListener,
-            mergeProgress(progressMeta, Map.of("model", candidateModel)), candidateModel);
-      } catch (HttpClientErrorException.BadRequest badRequest) {
-        if (isUnknownModelError(badRequest)) {
-          String msg = "Model '" + candidateModel + "' không khả dụng hoặc sai tên. Đang thử model tiếp theo.";
-          log.warn(msg);
-          failures.add(candidateModel + " -> unknown model");
-          continue;
+        try {
+          return executeWithRetry(request, prompt, maxTokens, progressListener,
+              mergeProgress(progressMeta, Map.of("model", candidateModel, "endpointPath", endpointPath)),
+              candidateModel,
+              endpoint);
+        } catch (HttpClientErrorException ex) {
+          if (isUnknownModelError(ex)) {
+            String msg = "Model '" + candidateModel + "' không khả dụng/sai tên tại endpoint '"
+                + resolveEndpointByPath(endpointPath) + "' (status=" + ex.getStatusCode() + "). Đang thử model tiếp theo.";
+            log.warn(msg);
+            failures.add(candidateModel + " -> unknown model");
+            endpointOrder = Collections.emptyList();
+            break;
+          }
+          if (isPayloadTooLargeError(ex)) {
+            String msg = "Model '" + candidateModel + "' vượt giới hạn payload/token tại endpoint '"
+                + resolveEndpointByPath(endpointPath) + "' (status=" + ex.getStatusCode()
+                + "). Bỏ qua model này và thử model tiếp theo.";
+            log.warn(msg);
+            failures.add(candidateModel + " -> payload too large");
+            endpointOrder = Collections.emptyList();
+            break;
+          }
+          if (isUnsupportedApiForModelError(ex)) {
+            log.info("Model '{}' không hỗ trợ endpoint '{}' (status={}), thử endpoint khác nếu có",
+                candidateModel, endpointPath, ex.getStatusCode());
+            failures.add(candidateModel + " -> unsupported " + endpointPath);
+            continue;
+          }
+          throw ex;
+        } catch (IllegalStateException rateLimitedEx) {
+          String msg = rateLimitedEx.getMessage() == null ? "unknown error" : rateLimitedEx.getMessage();
+          if (msg.contains("rate limit") || msg.contains("quota")) {
+            log.warn("Model '{}' tạm không dùng được ({}). Đang thử model tiếp theo.", candidateModel, msg);
+            failures.add(candidateModel + " -> " + msg);
+            endpointOrder = Collections.emptyList();
+            break;
+          }
+          throw rateLimitedEx;
         }
-        throw badRequest;
-      } catch (IllegalStateException rateLimitedEx) {
-        String msg = rateLimitedEx.getMessage() == null ? "unknown error" : rateLimitedEx.getMessage();
-        if (msg.contains("rate limit") || msg.contains("quota")) {
-          log.warn("Model '{}' tạm không dùng được ({}). Đang thử model tiếp theo.", candidateModel, msg);
-          failures.add(candidateModel + " -> " + msg);
-          continue;
-        }
-        throw rateLimitedEx;
       }
     }
 
@@ -1656,7 +2862,7 @@ public class GitHubModelsService {
   }
 
   private String executeWithRetry(HttpEntity<Map<String, Object>> request, String prompt, int maxTokens,
-      ProgressListener progressListener, Map<String, Object> progressMeta, String modelName) {
+      ProgressListener progressListener, Map<String, Object> progressMeta, String modelName, String endpoint) {
     int estimatedTokens = estimateTokens(prompt, maxTokens);
     acquirePermit();
     try {
@@ -1664,11 +2870,15 @@ public class GitHubModelsService {
         try {
           reserveBudgetBeforeCall(estimatedTokens);
           emitProgress(progressListener, mergeProgress(progressMeta, Map.of("attempt", attempt)));
-          ResponseEntity<String> response = restTemplate.postForEntity(apiUrl, request, String.class);
+          if (attempt == 1) {
+            log.info("GitHub Models request: endpoint='{}', model='{}', promptChars={}", endpoint, modelName, prompt == null ? 0 : prompt.length());
+          }
+          ResponseEntity<String> response = postInferenceRequest(endpoint, request);
           return response.getBody();
         } catch (HttpClientErrorException.TooManyRequests ex) {
           if (isDailyQuotaExceeded(ex)) {
             String msg = "GitHub Models daily quota reached for model '" + modelName + "'";
+            markModelTemporarilyUnavailable(modelName, modelQuotaCooldownMs, "daily quota exhausted");
             log.warn(msg);
             throw new IllegalStateException(msg);
           }
@@ -1706,6 +2916,12 @@ public class GitHubModelsService {
               "waitingMs", waitMs)));
           sleepQuietly(waitMs);
         } catch (HttpClientErrorException ex) {
+          if (ex.getStatusCode().value() == 401) {
+            String authMessage = "GitHub Models authentication failed (401) for model '" + modelName
+                + "' at endpoint '" + endpoint
+                + "'. Check github.models.token, github.models.auth-scheme and token scope.";
+            throw new IllegalStateException(authMessage, ex);
+          }
           throw ex;
         }
       }
@@ -1715,17 +2931,88 @@ public class GitHubModelsService {
     throw new IllegalStateException("GitHub Models rate limit exceeded after retries for model '" + modelName + "'");
   }
 
+  private ResponseEntity<String> postInferenceRequest(String endpoint, HttpEntity<Map<String, Object>> request) {
+    HttpEntity<Map<String, Object>> safeRequest = request == null
+        ? new HttpEntity<>(Collections.emptyMap(), new HttpHeaders())
+        : request;
+
+    ResponseEntity<String> response = executeInferencePost(endpoint, safeRequest);
+
+    if (response == null) {
+      throw new IllegalStateException("GitHub Models request failed: empty response");
+    }
+
+    if (response.getStatusCode().isError()) {
+      if (response.getStatusCode().value() == 401 && authFallbackOnUnauthorized) {
+        ResponseEntity<String> recovered = tryRecoverFromUnauthorized(endpoint, safeRequest, response);
+        if (recovered != null && !recovered.getStatusCode().isError()) {
+          return recovered;
+        }
+      }
+      throw createHttpClientError("GitHub Models request failed", response);
+    }
+
+    return response;
+  }
+
+  private ResponseEntity<String> executeInferencePost(String endpoint, HttpEntity<Map<String, Object>> safeRequest) {
+    return getWebClient()
+        .post()
+        .uri(endpoint)
+        .headers(h -> {
+          HttpHeaders source = safeRequest.getHeaders();
+          if (source != null) {
+            source.forEach((k, v) -> h.put(k, new ArrayList<>(v)));
+          }
+        })
+        .bodyValue(safeRequest.getBody() == null ? Collections.emptyMap() : safeRequest.getBody())
+        .exchangeToMono(clientResponse -> clientResponse.toEntity(String.class))
+        .block();
+  }
+
   private List<String> resolveCandidateModels() {
+    return resolveCandidateModels(model);
+  }
+
+  private List<String> resolveCandidateModels(String preferredModel) {
     Set<String> ordered = new LinkedHashSet<>();
-    String primary = model == null ? "" : model.trim();
+    String primary = normalizeConfiguredModel(preferredModel);
     if (!primary.isEmpty()) {
       ordered.add(primary);
+    }
+
+    String defaultPrimary = normalizeConfiguredModel(model);
+    if (!defaultPrimary.isEmpty()) {
+      ordered.add(defaultPrimary);
     }
 
     addModelsFromCsv(ordered, models);
     addModelsFromCsv(ordered, defaultFallbackModels);
 
     List<String> list = new ArrayList<>(ordered);
+    String endpoint = resolveChatCompletionsEndpoint();
+    String effectiveToken = getEffectiveToken(endpoint);
+    refreshModelEndpointCacheIfNeeded(effectiveToken);
+
+    Map<String, Set<String>> cache = modelEndpointCache == null ? Collections.emptyMap() : modelEndpointCache;
+    if (!cache.isEmpty()) {
+      List<String> filtered = new ArrayList<>();
+      for (String candidate : list) {
+        if (cache.containsKey(candidate.toLowerCase(Locale.ROOT))) {
+          filtered.add(candidate);
+        } else {
+          log.info("Skip model '{}' because it is not listed by endpoint catalog {}", candidate, endpoint);
+        }
+      }
+      if (!filtered.isEmpty()) {
+        list = filtered;
+      }
+
+      addEndpointCatalogFallback(list, cache, "gpt-4o-mini");
+      addEndpointCatalogFallback(list, cache, "gpt-4o");
+      addEndpointCatalogFallback(list, cache, "Meta-Llama-3.1-8B-Instruct");
+    }
+
     if (list.size() <= 1) {
       return list;
     }
@@ -1742,16 +3029,70 @@ public class GitHubModelsService {
     return rotated;
   }
 
+  private void addEndpointCatalogFallback(List<String> collector, Map<String, Set<String>> catalog, String modelId) {
+    if (collector == null || catalog == null || modelId == null || modelId.isBlank()) {
+      return;
+    }
+    if (!catalog.containsKey(modelId.toLowerCase(Locale.ROOT))) {
+      return;
+    }
+    for (String existing : collector) {
+      if (modelId.equalsIgnoreCase(existing)) {
+        return;
+      }
+    }
+    collector.add(modelId);
+  }
+
   private void addModelsFromCsv(Set<String> collector, String csv) {
     if (collector == null || csv == null || csv.isBlank()) {
       return;
     }
     String[] parts = csv.split(",");
     for (String part : parts) {
-      String candidate = part == null ? "" : part.trim();
+      String candidate = normalizeConfiguredModel(part);
       if (!candidate.isEmpty()) {
         collector.add(candidate);
       }
+    }
+  }
+
+  private String normalizeConfiguredModel(String rawModel) {
+    if (rawModel == null) {
+      return "";
+    }
+    String candidate = rawModel.trim();
+    if (candidate.isEmpty()) {
+      return "";
+    }
+
+    String compact = candidate
+        .toLowerCase(Locale.ROOT)
+        .replace("_", " ")
+        .replace("-", " ")
+        .replaceAll("\\s+", " ")
+        .trim();
+
+    switch (compact) {
+      case "gpt 5.4 mini": return "gpt-5.4-mini";
+      case "gpt 5 mini": return "gpt-5-mini";
+      case "grok code fast 1": return "grok-code-fast-1";
+      case "claude haiku 4.5": return "claude-haiku-4.5";
+      case "gemini 3 flash": return "gemini-3-flash";
+      case "claude sonnet 4.6": return "claude-sonnet-4.6";
+      case "claude sonnet 4": return "claude-sonnet-4";
+      case "claude sonnet 4.5": return "claude-sonnet-4.5";
+      case "gpt 5.2": return "gpt-5.2";
+      case "gpt 4.1": return "gpt-4.1";
+      case "gpt 4o": return "gpt-4o";
+      case "claude opus 4.7": return "claude-opus-4.7";
+      case "gemini 3.1 pro": return "gemini-3.1-pro";
+      case "gpt 5.2 codex": return "gpt-5.2-codex";
+      case "gpt 5.3 codex": return "gpt-5.3-codex";
+      case "gpt 5.4": return "gpt-5.4";
+      case "gemini 2.5 pro": return "gemini-2.5-pro";
+      default:
+        return candidate;
     }
   }
 
@@ -1783,10 +3124,37 @@ public class GitHubModelsService {
       return estimatedInputTokens <= 3200 && estimatedTotalTokens <= 3800;
     }
 
+    // gpt-5-mini variants can reject requests above ~4000 tokens (413 tokens_limit_reached).
+    if (normalized.contains("gpt-5-mini") || normalized.contains("gpt-5.4-mini")) {
+      return estimatedInputTokens <= 3000 && estimatedTotalTokens <= 3800;
+    }
+
+    // grok-code-fast-1 can also reject >~4000 tokens with tokens_limit_reached.
+    if (normalized.contains("grok-code-fast-1") || normalized.contains("grok code fast 1")) {
+      return estimatedInputTokens <= 3000 && estimatedTotalTokens <= 3800;
+    }
+
     return true;
   }
 
-  private boolean isUnknownModelError(HttpClientErrorException.BadRequest ex) {
+  private boolean isPayloadTooLargeError(HttpClientErrorException ex) {
+    if (ex == null) {
+      return false;
+    }
+
+    if (ex.getStatusCode().value() == 413) {
+      return true;
+    }
+
+    String body = String.valueOf(ex.getResponseBodyAsString() == null ? "" : ex.getResponseBodyAsString())
+        .toLowerCase(Locale.ROOT);
+    return body.contains("tokens_limit_reached")
+        || body.contains("payload too large")
+        || body.contains("request body too large")
+        || body.contains("max size");
+  }
+
+  private boolean isUnknownModelError(HttpClientErrorException ex) {
     String body = ex.getResponseBodyAsString();
     if (body == null || body.isBlank()) {
       return false;
@@ -1843,7 +3211,12 @@ public class GitHubModelsService {
   }
 
   private int estimateTokens(String prompt, int maxTokens) {
-    int inputTokens = Math.max(1, (prompt == null ? 0 : prompt.length()) / 4);
+    int inputTokens;
+    if (contextBudgetManager != null && contextBudgetManager.isEnabled()) {
+      inputTokens = Math.max(1, contextBudgetManager.countTokens(prompt, model));
+    } else {
+      inputTokens = Math.max(1, (prompt == null ? 0 : prompt.length()) / 4);
+    }
     int outputReserve = Math.max(64, Math.min(1024, maxTokens));
     return inputTokens + outputReserve;
   }
@@ -1932,26 +3305,121 @@ public class GitHubModelsService {
     return chunks;
   }
 
-  private String buildChunkSummaryPrompt(int index, int total, String chunk) {
-    String safeChunk = trimToMax(chunk, Math.max(4000, requestMaxChars - 5000));
-    return "Bạn là bộ nén ngữ cảnh chính xác cho tác vụ AI.\\n"
-        + "Mục tiêu: trích xuất thông tin cốt lõi từ CHUNK để phục vụ trả lời yêu cầu cuối.\\n"
-        + "Yêu cầu output: chỉ trả về JSON hợp lệ, không markdown.\\n"
-        + "Không tự giới hạn độ dài một cách máy móc; ưu tiên đầy đủ nghiệp vụ, schema và ràng buộc quan trọng.\\n"
-        + "Schema JSON: {\\n"
-        + "  \"chunkIndex\": " + index + ",\\n"
-        + "  \"totalChunks\": " + total + ",\\n"
+  private String buildChunkSummaryPrompt(int chunkIndex, int totalChunks, String chunk) {
+    String safeChunk = trimToMax(String.valueOf(chunk == null ? "" : chunk), Math.max(2000, requestMaxChars - 2500));
+    return "Bạn là bộ nén ngữ cảnh cho pipeline map-reduce.\\n"
+        + "Nhiệm vụ: tóm tắt CHUNK hiện tại thành dữ liệu ngắn gọn nhưng KHÔNG làm mất thông tin nghiệp vụ quan trọng.\\n"
+        + "Bắt buộc xuất JSON hợp lệ theo schema sau:\\n"
+        + "{\\n"
         + "  \"facts\": [\"...\"],\\n"
-        + "  \"constraints\": [\"...\"],\\n"
         + "  \"entities\": [\"...\"],\\n"
         + "  \"instructions\": [\"...\"],\\n"
         + "  \"jsonExamples\": [\"...\"],\\n"
         + "  \"notes\": [\"...\"]\\n"
         + "}\\n"
-        + "Không bỏ sót quy tắc quan trọng, tên trường dữ liệu, cấu trúc JSON, hoặc ràng buộc nghiệp vụ.\\n"
+        + "Giữ nguyên field name, schema, rule, ràng buộc nghiệp vụ, điều kiện lọc và giá trị mặc định nếu có.\\n"
+        + "Không trả markdown hoặc văn bản ngoài JSON.\\n"
+        + "CHUNK_INDEX=" + (chunkIndex + 1) + "/" + Math.max(1, totalChunks) + "\\n"
         + "<CHUNK>\\n"
         + safeChunk
         + "\\n</CHUNK>";
+  }
+
+  private ResponseEntity<String> tryRecoverFromUnauthorized(
+      String endpoint,
+      HttpEntity<Map<String, Object>> request,
+      ResponseEntity<String> unauthorizedResponse) {
+    HttpHeaders sourceHeaders = request.getHeaders() == null ? new HttpHeaders() : request.getHeaders();
+    String currentAuth = sourceHeaders.getFirst(HttpHeaders.AUTHORIZATION);
+
+    LinkedHashSet<String> authCandidates = new LinkedHashSet<>();
+    if (currentAuth != null && !currentAuth.isBlank()) {
+      authCandidates.add(currentAuth);
+    }
+    String alternateAuth = buildAlternateAuthorizationHeader(currentAuth);
+    if (alternateAuth != null && !alternateAuth.isBlank()) {
+      authCandidates.add(alternateAuth);
+    }
+
+    LinkedHashSet<String> endpoints = new LinkedHashSet<>();
+    endpoints.add(endpoint);
+    String fallbackEndpoint = resolveUnauthorizedFallbackChatEndpoint(endpoint);
+    if (fallbackEndpoint != null && !fallbackEndpoint.isBlank()) {
+      endpoints.add(fallbackEndpoint);
+    }
+
+    ResponseEntity<String> lastResponse = unauthorizedResponse;
+    for (String targetEndpoint : endpoints) {
+      for (String authHeader : authCandidates) {
+        if ((targetEndpoint.equals(endpoint)) && authHeader.equals(currentAuth)) {
+          continue;
+        }
+
+        HttpHeaders retryHeaders = new HttpHeaders();
+        if (sourceHeaders != null) {
+          sourceHeaders.forEach((k, v) -> {
+            if (!HttpHeaders.AUTHORIZATION.equalsIgnoreCase(k)) {
+              retryHeaders.put(k, new ArrayList<>(v));
+            }
+          });
+        }
+        retryHeaders.set(HttpHeaders.AUTHORIZATION, authHeader);
+
+        HttpEntity<Map<String, Object>> retryRequest = new HttpEntity<>(request.getBody(), retryHeaders);
+        ResponseEntity<String> retryResponse = executeInferencePost(targetEndpoint, retryRequest);
+        if (retryResponse != null && !retryResponse.getStatusCode().isError()) {
+          log.warn("Recovered GitHub Models 401 via fallback auth strategy: endpoint='{}' auth='{}'",
+              targetEndpoint,
+              authHeader.toLowerCase(Locale.ROOT).startsWith("github-bearer ") ? "github-bearer" : "bearer");
+          return retryResponse;
+        }
+        if (retryResponse != null) {
+          lastResponse = retryResponse;
+        }
+      }
+    }
+    return lastResponse;
+  }
+
+  private String buildAlternateAuthorizationHeader(String authHeader) {
+    String value = String.valueOf(authHeader == null ? "" : authHeader).trim();
+    if (value.isBlank()) {
+      return "";
+    }
+    String lower = value.toLowerCase(Locale.ROOT);
+    if (lower.startsWith("bearer ")) {
+      return "GitHub-Bearer " + value.substring(7).trim();
+    }
+    if (lower.startsWith("github-bearer ")) {
+      return "Bearer " + value.substring("github-bearer ".length()).trim();
+    }
+    return "";
+  }
+
+  private String resolveUnauthorizedFallbackChatEndpoint(String endpoint) {
+    String configured = normalizeChatCompletionsEndpoint(chatFallbackUrl);
+    if (!configured.isBlank() && !configured.equalsIgnoreCase(endpoint)) {
+      return configured;
+    }
+
+    String normalized = normalizeChatCompletionsEndpoint(endpoint);
+    String lower = normalized.toLowerCase(Locale.ROOT);
+    if (lower.contains("models.inference.ai.azure.com")) {
+      return normalized.replace("models.inference.ai.azure.com", "models.github.ai/inference");
+    }
+    if (lower.contains("models.github.ai/inference")) {
+      return normalized.replace("models.github.ai/inference", "models.inference.ai.azure.com");
+    }
+    return "";
+  }
+
+  private HttpClientErrorException createHttpClientError(String message, ResponseEntity<String> response) {
+    return HttpClientErrorException.create(
+        response.getStatusCode(),
+        message,
+        response.getHeaders(),
+        String.valueOf(response.getBody() == null ? "" : response.getBody()).getBytes(StandardCharsets.UTF_8),
+        StandardCharsets.UTF_8);
   }
 
   private String buildMergedPrompt(String taskHint, List<String> chunkSummaries) {
@@ -2326,6 +3794,41 @@ public class GitHubModelsService {
   private String extractContent(String rawBody) throws Exception {
     @SuppressWarnings("unchecked")
     Map<String, Object> payload = objectMapper.readValue(rawBody, Map.class);
+
+    // OpenAI/Copilot Responses API format
+    Object outputObj = payload.get("output");
+    if (outputObj instanceof List<?> outputList && !outputList.isEmpty()) {
+      StringBuilder sb = new StringBuilder();
+      for (Object itemObj : outputList) {
+        if (!(itemObj instanceof Map<?, ?> itemMap)) {
+          continue;
+        }
+        Object contentObj = itemMap.get("content");
+        if (!(contentObj instanceof List<?> contentList)) {
+          continue;
+        }
+        for (Object partObj : contentList) {
+          if (!(partObj instanceof Map<?, ?> partMap)) {
+            continue;
+          }
+          Object textObj = partMap.get("text");
+          if (textObj != null) {
+            if (sb.length() > 0) sb.append("\n");
+            sb.append(String.valueOf(textObj));
+          }
+        }
+      }
+      if (sb.length() > 0) {
+        return sb.toString();
+      }
+    }
+
+    Object outputTextObj = payload.get("output_text");
+    if (outputTextObj != null && !String.valueOf(outputTextObj).isBlank()) {
+      return String.valueOf(outputTextObj);
+    }
+
+    // Chat Completions format
     Object choicesObj = payload.get("choices");
     if (!(choicesObj instanceof List<?> choices) || choices.isEmpty()) {
       return null;

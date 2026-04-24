@@ -286,6 +286,13 @@
       <artifactId>micrometer-core</artifactId>
     </dependency>
 
+    <!-- JTokkit: accurate GPT token counting (cl100k_base for GPT-4, o200k_base for GPT-4o-mini/GPT-5) -->
+    <dependency>
+      <groupId>com.knuddels</groupId>
+      <artifactId>jtokkit</artifactId>
+      <version>1.1.0</version>
+    </dependency>
+
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-test</artifactId>

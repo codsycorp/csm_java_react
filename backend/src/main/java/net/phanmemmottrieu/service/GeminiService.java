@@ -31,7 +31,7 @@ import org.slf4j.LoggerFactory;
 import java.util.HashMap;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Map;
+import java.util.Locale;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
@@ -62,12 +62,18 @@ public class GeminiService implements AIProvider {
 
   /** Quota tracking per model */
   private final Map<String, ModelQuota> modelQuotaMap = new HashMap<>();
+
+  /** Temporary cooldown for models that return transient availability errors (e.g., 503 high demand). */
+  private final Map<String, Long> modelUnavailableUntilMs = new HashMap<>();
   
   /** Max requests per minute for each model (free tier) */
   private int quotaPerMinute = 60;
   
   /** Max requests per day for each model (free tier) */
   private int quotaPerDay = 1500;
+
+  /** Cooldown after transient model errors (milliseconds). */
+  private final long modelUnavailableCooldownMs;
 
   /** Tên model AI mặc định sẽ được sử dụng. */
   private final String aiModel;
@@ -100,12 +106,14 @@ public class GeminiService implements AIProvider {
       @Value("${gemini.model}") String aiModel,
       @Value("${gemini.models:gemini-2.0-flash-exp,gemini-1.5-flash,gemini-1.5-pro,gemma-2-27b-it,gemma-3-27b-it}") String geminiModels,
       @Value("${gemini.model.quota.per-minute:60}") int quotaPerMinute,
-      @Value("${gemini.model.quota.per-day:1500}") int quotaPerDay) {
+      @Value("${gemini.model.quota.per-day:1500}") int quotaPerDay,
+      @Value("${gemini.model.unavailable-cooldown-ms:120000}") long modelUnavailableCooldownMs) {
     this.apiKeyService = apiKeyService;
     this.apiUrl = apiUrl;
     this.aiModel = aiModel;
     this.quotaPerMinute = quotaPerMinute;
     this.quotaPerDay = quotaPerDay;
+    this.modelUnavailableCooldownMs = modelUnavailableCooldownMs;
     // Parse comma-separated models list
     this.availableModels = Arrays.asList(geminiModels.split(",\\s*"));
     this.restTemplate = createOptimizedRestTemplate();
@@ -174,8 +182,7 @@ public class GeminiService implements AIProvider {
     }
 
     // Kiểm tra cache trước - nếu prompt giống nhau sẽ trả về kết quả ngay mà không cần gọi API
-    @SuppressWarnings("unchecked")
-    String cachedResult = (String) responseCache.getIfPresent(prompt);
+    String cachedResult = responseCache.getIfPresent(prompt);
     if (cachedResult != null) {
       log.debug("Cache hit for prompt, returning cached result");
       return cachedResult;
@@ -223,6 +230,11 @@ public class GeminiService implements AIProvider {
         log.debug("Model {} quota exhausted: {}", currentModel, quota.getQuotaInfo());
         continue;
       }
+      if (isModelTemporarilyUnavailable(currentModel)) {
+        log.info("Skipping Gemini model {} due to temporary cooldown (remaining {} ms)",
+            currentModel, getModelUnavailableRemainingMs(currentModel));
+        continue;
+      }
 
       try {
         String apiGeminiUrl = String.format(apiUrl, currentModel) + dynamicApiKey;
@@ -241,6 +253,10 @@ public class GeminiService implements AIProvider {
         log.info("[Gemini] 📥 Received response from {}, body length: {} chars", currentModel, body.length());
         
         String result = parseGeminiResponse(body);
+        if (result == null || result.isBlank()) {
+          lastError = "Empty/invalid parsed response for model: " + currentModel;
+          continue;
+        }
         
         // Success - increment quota and cache result
         quota.incrementUsage();
@@ -259,6 +275,13 @@ public class GeminiService implements AIProvider {
           lastError = "Quota exceeded for model: " + currentModel;
           sawQuotaExceeded = true;
           // Try next model
+          continue;
+        }
+
+        if (isTemporaryModelUnavailable(errorMsg)) {
+          markModelTemporarilyUnavailable(currentModel, "temporary high demand / unavailable");
+          log.warn("Model {} is temporarily unavailable (503/UNAVAILABLE). Trying next model...", currentModel);
+          lastError = "Model temporarily unavailable: " + currentModel;
           continue;
         }
         
@@ -464,8 +487,54 @@ public class GeminiService implements AIProvider {
       return mapper.writeValueAsString(errorResponse);
     } catch (Exception e) {
       log.error("Failed to create error JSON: {}", e.getMessage());
-      return "{\"success\":false,\"errorCode\":\"JSON_ERROR\",\"message\":\"Lỗi tạo response\"";
+      return "{\"success\":false,\"errorCode\":\"JSON_ERROR\",\"message\":\"Lỗi tạo response\"}";
     }
+  }
+
+  private boolean isModelTemporarilyUnavailable(String modelName) {
+    if (modelName == null || modelName.isBlank()) {
+      return false;
+    }
+    Long untilMs = modelUnavailableUntilMs.get(modelName.toLowerCase(Locale.ROOT));
+    if (untilMs == null) {
+      return false;
+    }
+    long now = System.currentTimeMillis();
+    if (now >= untilMs) {
+      modelUnavailableUntilMs.remove(modelName.toLowerCase(Locale.ROOT));
+      return false;
+    }
+    return true;
+  }
+
+  private long getModelUnavailableRemainingMs(String modelName) {
+    if (modelName == null || modelName.isBlank()) {
+      return 0L;
+    }
+    Long untilMs = modelUnavailableUntilMs.get(modelName.toLowerCase(Locale.ROOT));
+    if (untilMs == null) {
+      return 0L;
+    }
+    return Math.max(0L, untilMs - System.currentTimeMillis());
+  }
+
+  private void markModelTemporarilyUnavailable(String modelName, String reason) {
+    if (modelName == null || modelName.isBlank()) {
+      return;
+    }
+    long cooldownMs = Math.max(10000L, modelUnavailableCooldownMs);
+    long untilMs = System.currentTimeMillis() + cooldownMs;
+    modelUnavailableUntilMs.put(modelName.toLowerCase(Locale.ROOT), untilMs);
+    log.warn("Temporarily disabling Gemini model '{}' for {} ms due to {}", modelName, cooldownMs, reason);
+  }
+
+  private boolean isTemporaryModelUnavailable(String errorMsg) {
+    String normalized = String.valueOf(errorMsg == null ? "" : errorMsg).toLowerCase(Locale.ROOT);
+    return normalized.contains("503")
+        || normalized.contains("service unavailable")
+        || normalized.contains("currently experiencing high demand")
+        || normalized.contains("status\":\"unavailable")
+        || normalized.contains("status: unavailable");
   }
   
   /**
