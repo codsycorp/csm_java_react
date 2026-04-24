@@ -2,7 +2,6 @@ import { request } from "#src/utils";
 import type { SeoContentParams, SeoContentResult, GenerateSeoContentRequest } from "./types";
 
 export * from "./types";
-export * from "./review";
 
 /**
  * Template prompt để tạo nội dung SEO

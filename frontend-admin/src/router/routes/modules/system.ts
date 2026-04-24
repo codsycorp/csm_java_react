@@ -9,7 +9,6 @@ const Menu = lazy(() => import("#src/pages/system/menu"));
 const AdminPage = lazy(() => import("#src/pages/system/admin"));
 const Developer = lazy(() => import("#src/pages/system/developer"));
 const Broadcast = lazy(() => import("#src/pages/system/broadcast"));
-const AiReviewCode = lazy(() => import("#src/pages/system/ai-review"));
 
 const routes: AppRouteRecordRaw[] = [
 	{
@@ -194,15 +193,6 @@ const routes: AppRouteRecordRaw[] = [
 					title: "common.menu.broadcast",
 					roles: ["dev"],
 					// keepAlive: true (default)
-				},
-			},
-			{
-				path: "/system/ai-review-code",
-				Component: AiReviewCode,
-				handle: {
-					icon: "BugOutlined",
-					title: "common.menu.aiReviewCode",
-					roles: ["dev"],
 				},
 			},
 			{

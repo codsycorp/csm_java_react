@@ -36,6 +36,7 @@ import net.phanmemmottrieu.service.ChatPersistenceService;
 import net.phanmemmottrieu.service.GitHubModelsService;
 import net.phanmemmottrieu.service.AiMenuMergeService;
 import net.phanmemmottrieu.service.AiCodeReviewService;
+import net.phanmemmottrieu.service.CopilotMemoryManagerService;
 import com.corundumstudio.socketio.SocketIOServer;
 import net.phanmemmottrieu.model.UrlSubmissionQueue;
 import net.phanmemmottrieu.model.UrlSubmissionHistory;
@@ -49,6 +50,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -56,6 +58,9 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 
 @RestController
@@ -82,6 +87,8 @@ public class ApiSpringController {
     private static final int COPILOT_CODE_ANCHOR_MAX_ITEMS = 24;
     private static final int COPILOT_CODE_ANCHOR_CHARS_PER_BLOCK = 24000;
     private static final int COPILOT_CODE_FOCUS_EXCERPT_MAX_ITEMS = 3;
+    private static final int COPILOT_CODE_DISTRIBUTED_EXCERPT_MAX_ITEMS = 8;
+    private static final int COPILOT_CODE_DISTRIBUTED_EXCERPT_CHARS = 1600;
     private static final int COPILOT_MENU_ATTACHMENT_CONTEXT_MAX_CHARS = 180000;
     private static final int COPILOT_CODE_ATTACHMENT_CONTEXT_MAX_CHARS = 120000;
     private final ObjectMapper objectMapper = new ObjectMapper(); // Dùng để parse JSON body
@@ -103,6 +110,7 @@ public class ApiSpringController {
     private final CRMHandler crmHandler;
     private final AiMenuMergeService aiMenuMergeService;
     private final AiCodeReviewService aiCodeReviewService;
+    private final CopilotMemoryManagerService copilotMemoryManagerService;
 
     @Value("${ai.prompt.max-chars:3000000}")
     private int maxPromptChars;
@@ -155,8 +163,74 @@ public class ApiSpringController {
     @Value("${copilot.edit-structured.max-replacement-chars:800000}")
     private int copilotStructuredEditMaxReplacementChars;
 
+    @Value("${copilot.menu.direct-provider-fallback-enabled:true}")
+    private boolean copilotMenuDirectProviderFallbackEnabled;
+
+    @Value("${copilot.menu.direct-provider-threshold-chars:160000}")
+    private int copilotMenuDirectProviderThresholdChars;
+
+    @Value("${copilot.menu.github-probe-enabled:true}")
+    private boolean copilotMenuGithubProbeEnabled;
+
+    @Value("${copilot.menu.github-probe-threshold-chars:100000}")
+    private int copilotMenuGithubProbeThresholdChars;
+
+    @Value("${copilot.menu.github-probe-max-prompt-chars:18000}")
+    private int copilotMenuGithubProbeMaxPromptChars;
+
+    @Value("${copilot.menu.direct-provider-github-probe-first:true}")
+    private boolean copilotMenuDirectProviderGithubProbeFirst;
+
+    @Value("${copilot.menu.github-probe-timeout-ms:12000}")
+    private long copilotMenuGithubProbeTimeoutMs;
+
+    @Value("${copilot.menu.disable-gemini-fallback:true}")
+    private boolean copilotMenuDisableGeminiFallback;
+
+    @Value("${copilot.memory-manager.enabled:true}")
+    private boolean copilotMemoryManagerEnabled;
+
+    @Value("${copilot.menu.distill-large-json:true}")
+    private boolean copilotMenuDistillLargeJson;
+
+    @Value("${copilot.menu.distill-threshold-chars:40000}")
+    private int copilotMenuDistillThresholdChars;
+
+    @Value("${copilot.menu.chaining-enabled:true}")
+    private boolean copilotMenuChainingEnabled;
+
+    @Value("${copilot.menu.chaining-threshold-chars:250000}")
+    private int copilotMenuChainingThresholdChars;
+
+    @Value("${copilot.code.large-context-enabled:true}")
+    private boolean copilotCodeLargeContextEnabled;
+
+    @Value("${copilot.code.large-threshold-chars:150000}")
+    private int copilotCodeLargeThresholdChars;
+
+    @Value("${copilot.code.chaining-enabled:true}")
+    private boolean copilotCodeChainingEnabled;
+
+    @Value("${copilot.code.chaining-threshold-chars:220000}")
+    private int copilotCodeChainingThresholdChars;
+
+    @Value("${copilot.code.chaining-cache.enabled:true}")
+    private boolean copilotCodeChainingCacheEnabled;
+
+    @Value("${copilot.code.chaining-cache.max-entries:240}")
+    private int copilotCodeChainingCacheMaxEntries;
+
+    @Value("${copilot.code.chaining-cache-ttl-ms:1800000}")
+    private long copilotCodeChainingCacheTtlMs;
+
+    @Value("${copilot.custom-instructions.path:csm_datas/public/copilot-instructions.md}")
+    private String copilotCustomInstructionsPath;
+
+    private volatile String cachedCopilotCustomInstructions = null;
+
     private final ExecutorService aiAsyncExecutor = Executors.newFixedThreadPool(2);
     private final ConcurrentHashMap<String, Map<String, Object>> aiAsyncJobs = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, CodeChainingCacheEntry> codeChainingStep1Cache = new ConcurrentHashMap<>();
 
     // Tiêm tất cả các Handler thông qua constructor
     @Autowired
@@ -177,7 +251,8 @@ public class ApiSpringController {
             SocketIOServer socketIOServer,
             CRMHandler crmHandler,
             AiMenuMergeService aiMenuMergeService,
-            AiCodeReviewService aiCodeReviewService
+            AiCodeReviewService aiCodeReviewService,
+            CopilotMemoryManagerService copilotMemoryManagerService
         ) {
         this.recordManager = recordManager;
         this.initHandler = initHandler;
@@ -197,6 +272,7 @@ public class ApiSpringController {
         this.crmHandler = crmHandler;
         this.aiMenuMergeService = aiMenuMergeService;
         this.aiCodeReviewService = aiCodeReviewService;
+        this.copilotMemoryManagerService = copilotMemoryManagerService;
     }
 
     public ResponseEntity<?> handleApiRequest(
@@ -814,6 +890,7 @@ public class ApiSpringController {
      * Returns MergeOutput: { mergedMenu, patchOps, added, edited, deleted }
      */
     private void handleAiMenuMerge(StandardResponse response, Map<String, Object> params) {
+        String uiLang = resolveClientUiLanguage(params);
         try {
             String scenario = String.valueOf(params.getOrDefault("scenario", "incremental_update")).trim();
             String oldJson  = String.valueOf(params.getOrDefault("old_json",  "[]")).trim();
@@ -833,7 +910,11 @@ public class ApiSpringController {
             logger.error("handleAiMenuMerge error: {}", e.getMessage(), e);
             response.set("code", 200);
             response.set("success", false);
-            response.set("message", "Menu merge failed: " + e.getMessage());
+            response.set("message", uiTextByLang(
+                uiLang,
+                "Hợp nhất menu thất bại: " + e.getMessage(),
+                "Menu merge failed: " + e.getMessage(),
+                "菜单合并失败：" + e.getMessage()));
         }
     }
 
@@ -846,6 +927,7 @@ public class ApiSpringController {
      *   focus     : optional review focus (security, performance, architecture...)
      */
     private void handleAiReviewCode(StandardResponse response, Map<String, Object> params) {
+        String uiLang = resolveClientUiLanguage(params);
         try {
             Object pathsInput = params.get("paths");
             if (pathsInput == null) {
@@ -863,7 +945,11 @@ public class ApiSpringController {
             logger.error("handleAiReviewCode error: {}", e.getMessage(), e);
             response.set("code", 200);
             response.set("success", false);
-            response.set("message", "AI review failed: " + e.getMessage());
+            response.set("message", uiTextByLang(
+                uiLang,
+                "AI review thất bại: " + e.getMessage(),
+                "AI review failed: " + e.getMessage(),
+                "AI 代码审查失败：" + e.getMessage()));
         }
     }
 
@@ -877,6 +963,7 @@ public class ApiSpringController {
             String message = String.valueOf(params.getOrDefault("message", "")).trim();
             String currentCode = String.valueOf(params.getOrDefault("currentCode", "")).trim();
             String language = String.valueOf(params.getOrDefault("language", "javascript")).trim();
+            String uiLang = resolveClientUiLanguage(params);
             String contextType = String.valueOf(params.getOrDefault("contextType", "code")).trim();
             String taskType = String.valueOf(params.getOrDefault("taskType", "")).trim();
             String flowType = String.valueOf(params.getOrDefault("flowType", "")).trim();
@@ -914,14 +1001,22 @@ public class ApiSpringController {
             if (message.isEmpty() && attachments.isEmpty()) {
                 response.set("code", 200);
                 response.set("success", false);
-                response.set("message", "Message or attachment is required");
+                response.set("message", uiTextByLang(
+                    uiLang,
+                    "Cần nhập tin nhắn hoặc đính kèm tệp",
+                    "Message or attachment is required",
+                    "需要输入消息或上传附件"));
                 return;
             }
 
             if (appId.isEmpty()) {
                 response.set("code", 200);
                 response.set("success", false);
-                response.set("message", "appId is required");
+                response.set("message", uiTextByLang(
+                    uiLang,
+                    "Thiếu appId",
+                    "appId is required",
+                    "缺少 appId"));
                 return;
             }
 
@@ -929,8 +1024,127 @@ public class ApiSpringController {
             String continuityMemory = trimCopilotContinuityMemory(
                 gitHubModelsService.loadCopilotConversationMemory(appId, continuityScopeKey));
             List<String> pendingQuestions = gitHubModelsService.loadCopilotPendingQuestions(appId, continuityScopeKey, 8);
+
+            // CHAINING Step 1: if enabled and total payload is very large, run chained distillation
+            // to compress large config files via an extra GitHub Models call before the final request.
+            String chainedSchemaSummary = "";
+            String chainedCodeSummary = "";
+            int estimatedCharsBeforeChain = estimateTotalCopilotPayloadChars(attachments, message, currentCode);
+            if (copilotMenuChainingEnabled
+                && "menu_json".equals(effectiveContextType)
+                && estimatedCharsBeforeChain > Math.max(150000, copilotMenuChainingThresholdChars)) {
+                try {
+                    emitCopilotChatChunk(appId, Map.of(
+                        "stage", "chaining_step1",
+                        "message", uiTextByLang(
+                            uiLang,
+                            "Tải trọng quá lớn (" + estimatedCharsBeforeChain + " chars), bắt đầu Chaining Step 1: phân tích schema",
+                            "Payload is very large (" + estimatedCharsBeforeChain + " chars), starting Chaining Step 1: schema analysis",
+                            "负载过大（" + estimatedCharsBeforeChain + " chars），开始链式步骤 1：分析 schema"),
+                        "responseMode", responseMode,
+                        "status", "running"
+                    ));
+                    chainedSchemaSummary = runMenuChainingStep1(attachments, appId);
+                    if (!chainedSchemaSummary.isBlank()) {
+                        logger.info("Copilot chaining step1 completed: {} chars schema summary for appId={}", chainedSchemaSummary.length(), appId);
+                        emitCopilotChatChunk(appId, Map.of(
+                            "stage", "chaining_step1_done",
+                            "message", uiTextByLang(
+                                uiLang,
+                                "Chaining Step 1 hoàn thành: " + chainedSchemaSummary.length() + " chars schema summary",
+                                "Chaining Step 1 completed: " + chainedSchemaSummary.length() + " chars schema summary",
+                                "链式步骤 1 已完成：" + chainedSchemaSummary.length() + " chars schema 摘要"),
+                            "responseMode", responseMode,
+                            "status", "running"
+                        ));
+                    }
+                } catch (Exception chainEx) {
+                    logger.warn("Copilot chaining step1 failed: {} — continuing without chained summary", chainEx.getMessage());
+                }
+            }
+
+            if (copilotCodeChainingEnabled
+                && "code".equals(effectiveContextType)
+                && currentCode != null
+                && currentCode.length() > Math.max(120000, copilotCodeChainingThresholdChars)) {
+                try {
+                    emitCopilotChatChunk(appId, Map.of(
+                        "stage", "code_chaining_step1",
+                        "message", uiTextByLang(
+                            uiLang,
+                            "Mã nguồn rất lớn (" + currentCode.length() + " chars), bắt đầu Code Chaining Step 1",
+                            "Source code is very large (" + currentCode.length() + " chars), starting Code Chaining Step 1",
+                            "源码过大（" + currentCode.length() + " chars），开始代码链式步骤 1"),
+                        "responseMode", responseMode,
+                        "status", "running"
+                    ));
+                    CodeChainingResult codeChainResult = runCodeChainingStep1(currentCode, message, language, appId, pName);
+                    chainedCodeSummary = codeChainResult.summary;
+                    if (!chainedCodeSummary.isBlank()) {
+                        emitCopilotChatChunk(appId, Map.of(
+                            "stage", "code_chaining_step1_done",
+                            "message", uiTextByLang(
+                                uiLang,
+                                "Code Chaining Step 1 hoàn thành: "
+                                    + chainedCodeSummary.length()
+                                    + " chars"
+                                    + (codeChainResult.cacheHit ? " (cache hit)" : "")
+                                    + ", "
+                                    + codeChainResult.elapsedMs
+                                    + "ms",
+                                "Code Chaining Step 1 completed: "
+                                    + chainedCodeSummary.length()
+                                    + " chars"
+                                    + (codeChainResult.cacheHit ? " (cache hit)" : "")
+                                    + ", "
+                                    + codeChainResult.elapsedMs
+                                    + "ms",
+                                "代码链式步骤 1 已完成："
+                                    + chainedCodeSummary.length()
+                                    + " chars"
+                                    + (codeChainResult.cacheHit ? "（命中缓存）" : "")
+                                    + "，"
+                                    + codeChainResult.elapsedMs
+                                    + "ms"),
+                            "cacheHit", codeChainResult.cacheHit,
+                            "elapsedMs", codeChainResult.elapsedMs,
+                            "promptChars", codeChainResult.promptChars,
+                            "responseChars", codeChainResult.responseChars,
+                            "fingerprint", codeChainResult.fingerprint,
+                            "responseMode", responseMode,
+                            "status", "running"
+                        ));
+                    }
+                } catch (Exception codeChainEx) {
+                    logger.warn("Copilot code chaining step1 failed: {} — continuing without code summary", codeChainEx.getMessage());
+                }
+            }
+
+            String globalContext = buildMenuGlobalContext(
+                appId,
+                continuityScopeKey,
+                effectiveContextType,
+                effectiveTaskType,
+                message,
+                currentCode,
+                attachments);
+            // Merge chained schema summary into globalContext if available
+            if (!chainedSchemaSummary.isBlank()) {
+                globalContext = (globalContext.isBlank() ? "" : globalContext + "\n\n")
+                    + "## CHAINING STEP 1 — Pre-analyzed Schema Summary\n"
+                    + "The following was extracted from large config attachments in a prior AI call.\n"
+                    + "Use this to understand the data structures without needing the raw full JSON.\n\n"
+                    + chainedSchemaSummary;
+            }
+            if (!chainedCodeSummary.isBlank()) {
+                globalContext = (globalContext.isBlank() ? "" : globalContext + "\n\n")
+                    + "## CODE CHAINING STEP 1 — Large Editor File Summary\n"
+                    + "This summary was generated from the full editor buffer to keep the final request within context budget.\n"
+                    + "When conflict happens: prioritize ACTIVE FILE IN EDITOR content over this summary.\n\n"
+                    + chainedCodeSummary;
+            }
             List<Map<String, Object>> messages = buildCopilotChatMessages(appId, message, currentCode, language, effectiveContextType,
-                effectiveTaskType, responseMode, attachments, continuityMemory, pName, pType, continuityScopeKey, pendingQuestions);
+                effectiveTaskType, responseMode, attachments, continuityMemory, globalContext, pName, pType, continuityScopeKey, pendingQuestions);
             emitCopilotChatDebug(appId, buildCopilotDebugPayload(
                 appId,
                 message,
@@ -941,6 +1155,7 @@ public class ApiSpringController {
                 responseMode,
                 attachments,
                 continuityMemory,
+                globalContext,
                 pName,
                 pType,
                 continuityScopeKey,
@@ -1044,28 +1259,209 @@ public class ApiSpringController {
                 }
             };
 
-            emitCopilotChatChunk(appId, Map.of(
-                "stage", "github_models_route",
-                "message", "Dang goi truc tiep GitHub Models",
-                "responseMode", responseMode,
-                "status", "running"
-            ));
-            String githubRaw = gitHubModelsService.chatWithStreamingMessages(messages, streamListener);
+            String githubRaw = "";
+            int estimatedPayloadChars = estimateTotalCopilotPayloadChars(attachments, message, currentCode);
+            boolean directProviderRoute = shouldDirectProviderRouteForLargeMenu(
+                effectiveContextType,
+                effectiveTaskType,
+                attachments,
+                message,
+                currentCode,
+                estimatedPayloadChars);
+            boolean menuGeminiFallbackDisabled = shouldDisableGeminiFallbackForMenu(effectiveContextType, effectiveTaskType);
+            if (menuGeminiFallbackDisabled) {
+                directProviderRoute = false;
+            }
+            boolean quickGithubProbeRoute = shouldQuickGithubProbeForMediumMenu(
+                effectiveContextType,
+                effectiveTaskType,
+                estimatedPayloadChars);
+            boolean forceGeminiFallback = false;
+
+            if (directProviderRoute) {
+                if (copilotMenuDirectProviderGithubProbeFirst) {
+                    emitCopilotChatChunk(appId, Map.of(
+                        "stage", "large_menu_quick_github_probe",
+                        "message", uiTextByLang(
+                            uiLang,
+                            "Menu payload rất lớn, thử GitHub 1 lượt ngắn trước khi fallback",
+                            "Menu payload is very large, trying a quick GitHub pass before fallback",
+                            "菜单负载很大，先进行一次 GitHub 快速尝试再回退"),
+                        "responseMode", responseMode,
+                        "status", "running"
+                    ));
+                    String probePrompt = buildCopilotQuickProbePromptText(
+                        message,
+                        currentCode,
+                        language,
+                        effectiveContextType,
+                        responseMode,
+                        attachments,
+                        continuityMemory,
+                        globalContext,
+                        pName,
+                        pType,
+                        continuityScopeKey,
+                        pendingQuestions);
+                    githubRaw = runGithubQuickProbeWithTimeout(probePrompt, streamListener, appId, "large_menu_quick_github_probe");
+                    String probeText = extractAiResultText(githubRaw);
+                    boolean probeLooksValid = isLikelyJsonPayload(probeText);
+                    if (!probeText.isBlank() && probeLooksValid) {
+                        fullResponse.append(probeText);
+                        emitTextAsCopilotChunks(appId, probeText, responseMode, uiLang);
+                    } else {
+                        forceGeminiFallback = true;
+                        logger.warn("Copilot stream: large-menu quick GitHub probe did not return valid menu JSON. Triggering immediate fallback.");
+                        emitCopilotChatChunk(appId, Map.of(
+                            "stage", "large_menu_probe_fallback_trigger",
+                            "message", uiTextByLang(
+                                uiLang,
+                                "Quick probe không trả về JSON hợp lệ, chuyển fallback ngay",
+                                "Quick probe did not return valid JSON, switching to fallback immediately",
+                                "快速探测未返回有效 JSON，立即切换回退"),
+                            "responseMode", responseMode,
+                            "status", "running"
+                        ));
+                    }
+                } else {
+                    emitCopilotChatChunk(appId, Map.of(
+                        "stage", "direct_provider_route",
+                        "message", uiTextByLang(
+                            uiLang,
+                            "Menu payload lớn, route trực tiếp sang provider fallback để tránh vòng lặp 429",
+                            "Menu payload is large, routing directly to fallback provider to avoid repeated 429",
+                            "菜单负载较大，直接路由到回退提供方以避免 429 循环"),
+                        "responseMode", responseMode,
+                        "status", "running"
+                    ));
+                    String directPrompt = buildCopilotChatPromptText(
+                        message,
+                        currentCode,
+                        language,
+                        effectiveContextType,
+                        responseMode,
+                        attachments,
+                        continuityMemory,
+                        globalContext,
+                        pName,
+                        pType,
+                        continuityScopeKey,
+                        pendingQuestions,
+                        true);
+                    githubRaw = this.aiProviderFactory.generateContent(directPrompt);
+                    String directText = extractAiResultText(githubRaw);
+                    if (!directText.isBlank()) {
+                        fullResponse.append(directText);
+                        emitTextAsCopilotChunks(appId, directText, responseMode, uiLang);
+                    }
+                }
+            } else if (quickGithubProbeRoute) {
+                emitCopilotChatChunk(appId, Map.of(
+                    "stage", "quick_github_probe",
+                    "message", uiTextByLang(
+                        uiLang,
+                        "Menu payload trung bình-lớn, thử GitHub 1 lượt ngắn trước khi fallback",
+                        "Menu payload is medium-large, trying a quick GitHub pass before fallback",
+                        "菜单负载中到大，先进行一次 GitHub 快速尝试再回退"),
+                    "responseMode", responseMode,
+                    "status", "running"
+                ));
+                String probePrompt = buildCopilotQuickProbePromptText(
+                    message,
+                    currentCode,
+                    language,
+                    effectiveContextType,
+                    responseMode,
+                    attachments,
+                    continuityMemory,
+                    globalContext,
+                    pName,
+                    pType,
+                    continuityScopeKey,
+                    pendingQuestions);
+                githubRaw = runGithubQuickProbeWithTimeout(probePrompt, streamListener, appId, "quick_github_probe");
+                String probeText = extractAiResultText(githubRaw);
+                boolean probeLooksValid = isLikelyJsonPayload(probeText);
+                if (!probeText.isBlank() && probeLooksValid) {
+                    fullResponse.append(probeText);
+                    emitTextAsCopilotChunks(appId, probeText, responseMode, uiLang);
+                } else {
+                    forceGeminiFallback = true;
+                    logger.warn("Copilot stream: quick GitHub probe did not return valid menu JSON. Triggering immediate fallback.");
+                    emitCopilotChatChunk(appId, Map.of(
+                        "stage", "quick_github_probe_fallback_trigger",
+                        "message", uiTextByLang(
+                            uiLang,
+                            "Quick probe không trả về JSON hợp lệ, chuyển fallback ngay",
+                            "Quick probe did not return valid JSON, switching to fallback immediately",
+                            "快速探测未返回有效 JSON，立即切换回退"),
+                        "responseMode", responseMode,
+                        "status", "running"
+                    ));
+                }
+            } else {
+                emitCopilotChatChunk(appId, Map.of(
+                    "stage", "github_models_route",
+                    "message", uiTextByLang(
+                        uiLang,
+                        "Đang gọi trực tiếp GitHub Models",
+                        "Calling GitHub Models directly",
+                        "正在直接调用 GitHub Models"),
+                    "responseMode", responseMode,
+                    "status", "running"
+                ));
+                githubRaw = gitHubModelsService.chatWithStreamingMessages(messages, streamListener);
+            }
 
             if (fullResponse.length() == 0) {
                 String extractedFromGithub = extractAiResultText(githubRaw);
                 if (!extractedFromGithub.isBlank()) {
                     fullResponse.append(extractedFromGithub);
-                    emitTextAsCopilotChunks(appId, extractedFromGithub, responseMode);
+                    emitTextAsCopilotChunks(appId, extractedFromGithub, responseMode, uiLang);
                 }
             }
 
-            boolean shouldGeminiFallback = shouldFallbackToGemini(githubRaw);
+            boolean upstreamFallbackSignal = forceGeminiFallback || shouldFallbackToGemini(githubRaw);
+            boolean forcedMenuFallbackOverride = shouldForceGeminiFallbackForMenuFailure(
+                effectiveContextType,
+                effectiveTaskType,
+                githubRaw,
+                upstreamFallbackSignal);
+            boolean shouldGeminiFallback = upstreamFallbackSignal
+                && (!menuGeminiFallbackDisabled || forcedMenuFallbackOverride);
             if (fullResponse.length() == 0 && shouldGeminiFallback) {
-                logger.warn("Copilot stream: GitHub Models capacity/rate limit reached. Falling back to AIProviderFactory.");
+                boolean authFailure = isAuthFailureFromRawText(githubRaw);
+                if (menuGeminiFallbackDisabled && forcedMenuFallbackOverride) {
+                    logger.warn("Copilot stream: overriding disabled menu Gemini fallback due to upstream failure signals.");
+                    emitCopilotChatChunk(appId, Map.of(
+                        "stage", "menu_gemini_fallback_override",
+                        "message", uiTextByLang(
+                            uiLang,
+                            "GitHub Models đang lỗi hạ tầng/giới hạn, tạm bỏ chặn fallback để chuyển sang Gemini",
+                            "GitHub Models has infrastructure/limit failures, temporarily overriding fallback block to switch to Gemini",
+                            "GitHub Models 出现基础设施或配额故障，临时覆盖回退禁用并切换到 Gemini"),
+                        "responseMode", responseMode,
+                        "status", "running"
+                    ));
+                }
+                if (authFailure) {
+                    logger.warn("Copilot stream: GitHub Models authentication failed. Falling back to AIProviderFactory.");
+                } else {
+                    logger.warn("Copilot stream: GitHub Models capacity/rate limit reached. Falling back to AIProviderFactory.");
+                }
                 emitCopilotChatChunk(appId, Map.of(
                     "stage", "gemini_fallback",
-                    "message", "GitHub Models quá tải hoặc vượt giới hạn payload, đang chuyển sang Gemini",
+                    "message", authFailure
+                        ? uiTextByLang(
+                            uiLang,
+                            "GitHub Models lỗi xác thực token, đang chuyển sang Gemini",
+                            "GitHub Models token authentication failed, switching to Gemini",
+                            "GitHub Models 令牌认证失败，正在切换到 Gemini")
+                        : uiTextByLang(
+                            uiLang,
+                            "GitHub Models quá tải hoặc vượt giới hạn payload, đang chuyển sang Gemini",
+                            "GitHub Models is overloaded or payload is too large, switching to Gemini",
+                            "GitHub Models 过载或 payload 超限，正在切换到 Gemini"),
                     "responseMode", responseMode,
                     "current", 0,
                     "total", 1,
@@ -1079,6 +1475,7 @@ public class ApiSpringController {
                     responseMode,
                     attachments,
                     continuityMemory,
+                    globalContext,
                     pName,
                     pType,
                     continuityScopeKey,
@@ -1088,8 +1485,24 @@ public class ApiSpringController {
                 String fallbackText = extractAiResultText(fallbackRaw);
                 if (!fallbackText.isBlank()) {
                     fullResponse.append(fallbackText);
-                    emitTextAsCopilotChunks(appId, fallbackText, responseMode);
+                    emitTextAsCopilotChunks(appId, fallbackText, responseMode, uiLang);
                 }
+            }
+
+            if (fullResponse.length() == 0 && menuGeminiFallbackDisabled && !forcedMenuFallbackOverride) {
+                String upstreamError = extractAiErrorMessage(githubRaw);
+                String messageNoFallback = upstreamError.isBlank()
+                    ? uiTextByLang(
+                        uiLang,
+                        "GitHub Models không trả về nội dung hợp lệ, menu fallback sang Gemini đang bị tắt",
+                        "GitHub Models did not return valid content, and menu fallback to Gemini is disabled",
+                        "GitHub Models 未返回有效内容，且菜单回退到 Gemini 已禁用")
+                    : uiTextByLang(
+                        uiLang,
+                        "GitHub Models lỗi: " + upstreamError + " (menu fallback Gemini đang bị tắt)",
+                        "GitHub Models error: " + upstreamError + " (menu fallback to Gemini is disabled)",
+                        "GitHub Models 错误：" + upstreamError + "（菜单回退到 Gemini 已禁用）");
+                throw new IllegalStateException(messageNoFallback);
             }
 
             if (fullResponse.length() == 0) {
@@ -1097,14 +1510,117 @@ public class ApiSpringController {
                 String errText;
                 if (shouldGeminiFallback) {
                     if (!upstreamError.isBlank()) {
-                        errText = "GitHub Models lỗi: " + upstreamError;
+                        errText = uiTextByLang(
+                            uiLang,
+                            "GitHub Models lỗi: " + upstreamError,
+                            "GitHub Models error: " + upstreamError,
+                            "GitHub Models 错误：" + upstreamError);
                     } else {
-                        errText = "GitHub Models và provider fallback đều không trả về nội dung";
+                        errText = uiTextByLang(
+                            uiLang,
+                            "GitHub Models và provider fallback đều không trả về nội dung",
+                            "Neither GitHub Models nor fallback provider returned content",
+                            "GitHub Models 与回退提供方均未返回内容");
                     }
                 } else {
-                    errText = upstreamError.isBlank() ? "AI không trả về nội dung" : upstreamError;
+                    errText = upstreamError.isBlank()
+                        ? uiTextByLang(
+                            uiLang,
+                            "AI không trả về nội dung",
+                            "AI did not return content",
+                            "AI 未返回内容")
+                        : upstreamError;
                 }
                 throw new IllegalStateException(errText);
+            }
+
+            if ("menu_json".equalsIgnoreCase(effectiveContextType)) {
+                MenuQualityGateResult gate = evaluateMenuOutputQuality(fullResponse.toString(), attachments);
+                if (!gate.passed) {
+                    logger.warn("Menu quality gate failed: {}", gate.debugSummary());
+                    Map<String, Object> gateFailedPayload = new HashMap<>();
+                    gateFailedPayload.put("stage", "menu_quality_gate_failed");
+                    gateFailedPayload.put("message", uiTextByLang(
+                        uiLang,
+                        "Kết quả chưa bám sát nguồn dữ liệu, đang tự động tạo lại 1 lần",
+                        "Result is not grounded enough in source data, auto-regenerating once",
+                        "结果与源数据匹配度不足，正在自动重生成一次"));
+                    gateFailedPayload.put("reason", gate.reason);
+                    gateFailedPayload.put("tableOverlap", gate.tableOverlap);
+                    gateFailedPayload.put("idOverlap", gate.idOverlap);
+                    gateFailedPayload.put("sourceTableCount", gate.sourceTableCount);
+                    gateFailedPayload.put("sourceIdCount", gate.sourceIdCount);
+                    gateFailedPayload.put("outputTableCount", gate.outputTableCount);
+                    gateFailedPayload.put("outputIdCount", gate.outputIdCount);
+                    gateFailedPayload.put("genericHits", gate.genericHits);
+                    gateFailedPayload.put("responseMode", responseMode);
+                    gateFailedPayload.put("status", "running");
+                    emitCopilotChatChunk(appId, gateFailedPayload);
+
+                    String repairPrompt = buildMenuQualityRepairPrompt(
+                        message,
+                        fullResponse.toString(),
+                        gate,
+                        attachments,
+                        continuityMemory,
+                        globalContext,
+                        currentCode,
+                        language,
+                        pName,
+                        pType,
+                        continuityScopeKey,
+                        pendingQuestions,
+                        responseMode);
+                    String repairRaw = gitHubModelsService.generateContent(repairPrompt);
+                    String repairText = extractAiResultText(repairRaw);
+                    if (!repairText.isBlank()) {
+                        MenuQualityGateResult repairedGate = evaluateMenuOutputQuality(repairText, attachments);
+                        if (repairedGate.passed) {
+                            fullResponse.setLength(0);
+                            fullResponse.append(repairText);
+                            emitTextAsCopilotChunks(appId, repairText, responseMode, uiLang);
+                            emitCopilotChatChunk(appId, Map.of(
+                                "stage", "menu_quality_gate_repaired",
+                                "message", uiTextByLang(
+                                    uiLang,
+                                    "Đã tạo lại kết quả menu theo nguồn dữ liệu",
+                                    "Menu output regenerated and aligned to source data",
+                                    "已按源数据重新生成菜单结果"),
+                                "tableOverlap", repairedGate.tableOverlap,
+                                "idOverlap", repairedGate.idOverlap,
+                                "genericHits", repairedGate.genericHits,
+                                "responseMode", responseMode,
+                                "status", "running"
+                            ));
+                        } else {
+                            logger.warn("Menu quality gate repair still weak: {}", repairedGate.debugSummary());
+                            String failureJson = buildMenuGroundingFailureResponse(uiLang, gate, repairedGate);
+                            fullResponse.setLength(0);
+                            fullResponse.append(failureJson);
+                            emitTextAsCopilotChunks(appId, failureJson, responseMode, uiLang);
+                            emitCopilotChatChunk(appId, Map.of(
+                                "stage", "menu_quality_gate_repair_failed",
+                                "message", uiTextByLang(
+                                    uiLang,
+                                    "Không tạo được menu đủ bám nguồn dữ liệu, đã chặn kết quả suy đoán",
+                                    "Could not produce a menu grounded enough in source data; speculative output was blocked",
+                                    "未能生成与源数据充分匹配的菜单；已拦截推测性结果"),
+                                "initialReason", gate.reason,
+                                "repairReason", repairedGate.reason,
+                                "tableOverlap", repairedGate.tableOverlap,
+                                "idOverlap", repairedGate.idOverlap,
+                                "genericHits", repairedGate.genericHits,
+                                "responseMode", responseMode,
+                                "status", "running"
+                            ));
+                        }
+                    } else {
+                        String failureJson = buildMenuGroundingFailureResponse(uiLang, gate, null);
+                        fullResponse.setLength(0);
+                        fullResponse.append(failureJson);
+                        emitTextAsCopilotChunks(appId, failureJson, responseMode, uiLang);
+                    }
+                }
             }
 
             StructuredCopilotEditResult structuredEdit = extractStructuredCopilotEdits(
@@ -1126,7 +1642,11 @@ public class ApiSpringController {
                         completionDraftText = fallbackDraft;
                         Map<String, Object> fallbackPatchPayload = new HashMap<>();
                         fallbackPatchPayload.put("stage", "completion_fallback_patch");
-                        fallbackPatchPayload.put("message", "Da tao fallback line-edits tu JSON ket qua cuoi");
+                        fallbackPatchPayload.put("message", uiTextByLang(
+                            uiLang,
+                            "Đã tạo fallback line-edits từ JSON kết quả cuối",
+                            "Generated fallback line-edits from final JSON output",
+                            "已从最终 JSON 生成回退 line-edits"));
                         fallbackPatchPayload.put("responseMode", responseMode);
                         fallbackPatchPayload.put("status", "running");
                         fallbackPatchPayload.put("textEdits", generated);
@@ -1140,7 +1660,11 @@ public class ApiSpringController {
 
                         emitCopilotChatChunk(appId, Map.of(
                             "stage", "completion_fallback_edits_generated",
-                            "message", "Da sinh text_edits fallback tu JSON ket qua cuoi de dong bo editor",
+                            "message", uiTextByLang(
+                                uiLang,
+                                "Đã sinh text_edits fallback từ JSON kết quả cuối để đồng bộ editor",
+                                "Generated fallback text_edits from final JSON to sync the editor",
+                                "已从最终 JSON 生成回退 text_edits 以同步编辑器"),
                             "responseMode", responseMode,
                             "status", "info"
                         ));
@@ -1151,7 +1675,11 @@ public class ApiSpringController {
             if (requireStructured && !structuredEdit.valid) {
                 emitCopilotChatChunk(appId, Map.of(
                     "stage", "structured_edit_missing",
-                    "message", "Phản hồi chưa đúng định dạng text_edits để áp dụng chính xác theo dòng",
+                    "message", uiTextByLang(
+                        uiLang,
+                        "Phản hồi chưa đúng định dạng text_edits để áp dụng chính xác theo dòng",
+                        "Response is missing valid text_edits format for precise line-based apply",
+                        "响应缺少有效的 text_edits 格式，无法按行精确应用"),
                     "responseMode", responseMode,
                     "status", "warning"
                 ));
@@ -1195,14 +1723,23 @@ public class ApiSpringController {
 
             response.set("code", 200);
             response.set("success", true);
-            response.set("message", "Chat completed");
+            response.set("message", uiTextByLang(
+                uiLang,
+                "Chat hoàn tất",
+                "Chat completed",
+                "对话已完成"));
             response.set("result", Map.of("fullResponse", fullResponse.toString()));
 
         } catch (Exception e) {
             logger.error("handleCopilotChatStream error: {}", e.getMessage(), e);
             response.set("code", 200);
             response.set("success", false);
-            response.set("message", "Chat streaming failed: " + e.getMessage());
+            String uiLang = resolveClientUiLanguage(params);
+            response.set("message", uiTextByLang(
+                uiLang,
+                "Chat streaming thất bại: " + e.getMessage(),
+                "Chat streaming failed: " + e.getMessage(),
+                "对话流式处理失败：" + e.getMessage()));
             emitCopilotChatEvent(String.valueOf(params.getOrDefault("appId", "")), "copilot_chat_error", 
                 Map.of("error", e.getMessage()));
         }
@@ -1215,6 +1752,455 @@ public class ApiSpringController {
         emitCopilotChatEvent(appId, "copilot_chat_debug", payload);
     }
 
+    private String resolveClientUiLanguage(Map<String, Object> params) {
+        if (params == null) {
+            return "vi";
+        }
+        String raw = String.valueOf(params.getOrDefault("csm-lang", "")).trim();
+        if (raw.isBlank()) {
+            raw = String.valueOf(params.getOrDefault("uiLanguage", "")).trim();
+        }
+        if (raw.isBlank()) {
+            raw = String.valueOf(params.getOrDefault("lang", "")).trim();
+        }
+        String normalized = raw.toLowerCase();
+        if (normalized.startsWith("en")) {
+            return "en";
+        }
+        if (normalized.startsWith("zh")) {
+            return "zh";
+        }
+        return "vi";
+    }
+
+    private String uiTextByLang(String uiLang, String vi, String en, String zh) {
+        String lang = String.valueOf(uiLang == null ? "" : uiLang).trim().toLowerCase();
+        if (lang.startsWith("en")) {
+            return String.valueOf(en == null ? "" : en);
+        }
+        if (lang.startsWith("zh")) {
+            return String.valueOf(zh == null ? "" : zh);
+        }
+        return String.valueOf(vi == null ? "" : vi);
+    }
+
+    private MenuQualityGateResult evaluateMenuOutputQuality(String output, List<Map<String, Object>> attachments) {
+        String text = String.valueOf(output == null ? "" : output).trim();
+        if (text.isBlank()) {
+            return MenuQualityGateResult.fail("empty_output", 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        }
+
+        String lower = text.toLowerCase();
+        int genericHits = 0;
+        List<String> genericTokens = List.of(
+            "menu_product_management",
+            "menu_order_management",
+            "quản lý sản phẩm",
+            "quản lý đơn hàng",
+            "product management",
+            "order management",
+            "product_management",
+            "order_management"
+        );
+        for (String token : genericTokens) {
+            if (lower.contains(token.toLowerCase())) {
+                genericHits++;
+            }
+        }
+
+        Set<String> sourceTables = new LinkedHashSet<>();
+        Set<String> sourceIds = new LinkedHashSet<>();
+        Set<String> sourceLabels = new LinkedHashSet<>();
+        collectMenuSourceSignals(attachments, sourceTables, sourceIds, sourceLabels);
+
+        Set<String> outTables = new LinkedHashSet<>();
+        Set<String> outIds = new LinkedHashSet<>();
+        collectOutputSignals(text, outTables, outIds);
+
+        int tableOverlap = countOverlapNormalized(outTables, sourceTables);
+        int idOverlap = countOverlapNormalized(outIds, sourceIds);
+        int outputBusinessFieldCount = countNonEmptyMatches(text,
+            Pattern.compile("(?i)\\\"(?:table_name|tbl_name|report_name|prefix_pk|field_root)\\\"\\s*:\\s*\\\"([^\\\"]+)\\\""),
+            2000);
+        int placeholderLabelHits = countPlaceholderMenuLabels(text);
+        boolean leafLikeMenu = lower.contains("\"children\"") || lower.contains("\"menu\"") || lower.contains("\"label\"");
+
+        boolean hasRichSource = sourceTables.size() >= 10 || sourceIds.size() >= 30;
+        boolean weakGrounding = hasRichSource && tableOverlap == 0 && idOverlap == 0;
+        boolean genericLikely = genericHits >= 2;
+        boolean placeholderLikely = placeholderLabelHits > 0;
+        boolean missingBusinessAnchors = hasRichSource && leafLikeMenu && outputBusinessFieldCount == 0;
+
+        if (weakGrounding && genericLikely) {
+            return MenuQualityGateResult.fail(
+                "generic_output_and_no_source_overlap",
+                tableOverlap,
+                idOverlap,
+                sourceTables.size(),
+                sourceIds.size(),
+                outTables.size(),
+                outIds.size(),
+                genericHits,
+                outputBusinessFieldCount,
+                placeholderLabelHits);
+        }
+        if (weakGrounding && missingBusinessAnchors) {
+            return MenuQualityGateResult.fail(
+                "no_business_fields_and_no_source_overlap",
+                tableOverlap,
+                idOverlap,
+                sourceTables.size(),
+                sourceIds.size(),
+                outTables.size(),
+                outIds.size(),
+                genericHits,
+                outputBusinessFieldCount,
+                placeholderLabelHits);
+        }
+        if (hasRichSource && placeholderLikely && outputBusinessFieldCount == 0) {
+            return MenuQualityGateResult.fail(
+                "placeholder_menu_labels_without_business_fields",
+                tableOverlap,
+                idOverlap,
+                sourceTables.size(),
+                sourceIds.size(),
+                outTables.size(),
+                outIds.size(),
+                genericHits,
+                outputBusinessFieldCount,
+                placeholderLabelHits);
+        }
+        if (weakGrounding && outTables.size() > 0) {
+            return MenuQualityGateResult.fail(
+                "no_table_or_id_overlap_with_source",
+                tableOverlap,
+                idOverlap,
+                sourceTables.size(),
+                sourceIds.size(),
+                outTables.size(),
+                outIds.size(),
+                genericHits,
+                outputBusinessFieldCount,
+                placeholderLabelHits);
+        }
+        return MenuQualityGateResult.pass(
+            tableOverlap,
+            idOverlap,
+            sourceTables.size(),
+            sourceIds.size(),
+            outTables.size(),
+            outIds.size(),
+            genericHits,
+            outputBusinessFieldCount,
+            placeholderLabelHits);
+    }
+
+    private void collectMenuSourceSignals(
+            List<Map<String, Object>> attachments,
+            Set<String> tableOut,
+            Set<String> idOut,
+            Set<String> labelOut) {
+        if (attachments == null) return;
+        Pattern tableP = Pattern.compile("(?i)\\\"(?:table_name|tbl_name|obj_name|table)\\\"\\s*:\\s*\\\"([^\\\"]+)\\\"");
+        Pattern idP = Pattern.compile("(?i)\\\"(?:id|report_id|ma_bc|code)\\\"\\s*:\\s*\\\"([^\\\"]+)\\\"");
+        Pattern labelP = Pattern.compile("(?i)\\\"(?:label|ten|display_name|ten_baocao)\\\"\\s*:\\s*\\\"([^\\\"]+)\\\"");
+        Pattern sqlTableP = Pattern.compile("(?i)\\b(?:from|join|update|into)\\s+([a-zA-Z0-9_]{3,80})");
+
+        for (Map<String, Object> at : attachments) {
+            if (at == null) continue;
+            String kind = String.valueOf(at.getOrDefault("kind", "")).trim().toLowerCase();
+            if (!"json".equals(kind) && !"text".equals(kind)) continue;
+            String body = String.valueOf(at.getOrDefault("textContent", ""));
+            if (body.isBlank()) continue;
+
+            String slice = body.length() > 250000
+                ? body.substring(0, 140000) + "\n" + body.substring(Math.max(0, body.length() - 110000))
+                : body;
+
+            collectByPattern(slice, tableP, tableOut, 1000);
+            collectByPattern(slice, idP, idOut, 2000);
+            collectByPattern(slice, labelP, labelOut, 1000);
+            collectByPattern(slice, sqlTableP, tableOut, 2000);
+        }
+    }
+
+    private void collectOutputSignals(String text, Set<String> tables, Set<String> ids) {
+        Pattern tableP = Pattern.compile("(?i)\\\"(?:table|table_name|tbl_name)\\\"\\s*:\\s*\\\"([^\\\"]+)\\\"");
+        Pattern idP = Pattern.compile("(?i)\\\"(?:id|report_id|menu_id|prefix_pk)\\\"\\s*:\\s*\\\"([^\\\"]+)\\\"");
+        collectByPattern(text, tableP, tables, 1000);
+        collectByPattern(text, idP, ids, 1500);
+    }
+
+    private int countNonEmptyMatches(String text, Pattern pattern, int limit) {
+        if (text == null || text.isBlank() || pattern == null) return 0;
+        Matcher matcher = pattern.matcher(text);
+        int count = 0;
+        while (matcher.find() && count < Math.max(1, limit)) {
+            String value = String.valueOf(matcher.group(1) == null ? "" : matcher.group(1)).trim();
+            if (!value.isEmpty()) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private int countPlaceholderMenuLabels(String text) {
+        if (text == null || text.isBlank()) return 0;
+        Pattern placeholderLabelPattern = Pattern.compile(
+            "(?i)\\\"label\\\"\\s*:\\s*\\\"((?:sub)?menu\\s*\\d+|submenu\\s*\\d+|item\\s*\\d+|new menu|menu mới)\\\"");
+        return countNonEmptyMatches(text, placeholderLabelPattern, 200);
+    }
+
+    private void collectByPattern(String text, Pattern pattern, Set<String> out, int limit) {
+        if (text == null || text.isBlank() || pattern == null || out == null) return;
+        Matcher m = pattern.matcher(text);
+        while (m.find() && out.size() < limit) {
+            String v = String.valueOf(m.group(1) == null ? "" : m.group(1)).trim();
+            if (v.isEmpty()) continue;
+            if (v.length() > 120) continue;
+            out.add(v);
+        }
+    }
+
+    private int countOverlapNormalized(Set<String> left, Set<String> right) {
+        if (left == null || right == null || left.isEmpty() || right.isEmpty()) return 0;
+        Set<String> normRight = new LinkedHashSet<>();
+        for (String v : right) {
+            String n = normalizeSignal(v);
+            if (!n.isBlank()) normRight.add(n);
+        }
+        int overlap = 0;
+        for (String v : left) {
+            String n = normalizeSignal(v);
+            if (!n.isBlank() && normRight.contains(n)) {
+                overlap++;
+            }
+        }
+        return overlap;
+    }
+
+    private String normalizeSignal(String s) {
+        return String.valueOf(s == null ? "" : s)
+            .trim()
+            .toLowerCase()
+            .replaceAll("[^a-z0-9_]+", "");
+    }
+
+    private String buildMenuQualityRepairPrompt(
+            String userMessage,
+            String currentOutput,
+            MenuQualityGateResult gate,
+            List<Map<String, Object>> attachments,
+            String continuityMemory,
+            String globalContext,
+            String currentCode,
+            String language,
+            String pName,
+            Integer pType,
+            String continuityScopeKey,
+            List<String> pendingQuestions,
+            String responseMode) {
+        Set<String> sourceTables = new LinkedHashSet<>();
+        Set<String> sourceIds = new LinkedHashSet<>();
+        Set<String> sourceLabels = new LinkedHashSet<>();
+        collectMenuSourceSignals(attachments, sourceTables, sourceIds, sourceLabels);
+
+        String basePrompt = buildCopilotChatPromptText(
+            userMessage,
+            currentCode,
+            language,
+            "menu_json",
+            responseMode,
+            attachments,
+            continuityMemory,
+            globalContext,
+            pName,
+            pType,
+            continuityScopeKey,
+            pendingQuestions,
+            true);
+        StringBuilder sb = new StringBuilder(basePrompt);
+        sb.append("\n\n### QUALITY_GATE_FEEDBACK\n");
+        sb.append("Current candidate output failed grounding checks: ").append(gate.reason).append("\n");
+        sb.append("Revise the output to strictly align with provided source attachments and global context.\n");
+        sb.append("Do NOT use generic demo entities (product/order) unless present in source files.\n");
+        sb.append("Any non-empty table_name, tbl_name, report_name, prefix_pk, id, report_id, or menu label must be copied or derived from source signals below, never invented.\n");
+        sb.append("If grounding is insufficient, return an empty menu array with warnings instead of fabricated business data.\n");
+        sb.append("Return full final menu JSON only.\n\n");
+        sb.append("SOURCE_TABLE_SAMPLES:\n").append(formatSignalSamples(sourceTables, 80)).append("\n\n");
+        sb.append("SOURCE_ID_SAMPLES:\n").append(formatSignalSamples(sourceIds, 80)).append("\n\n");
+        sb.append("SOURCE_LABEL_SAMPLES:\n").append(formatSignalSamples(sourceLabels, 60)).append("\n\n");
+        sb.append("CURRENT_FAILED_OUTPUT:\n");
+        String current = String.valueOf(currentOutput == null ? "" : currentOutput);
+        if (current.length() > 18000) {
+            sb.append(current, 0, 18000).append("\n...[truncated]\n");
+        } else {
+            sb.append(current);
+        }
+        return sb.toString();
+    }
+
+    private String formatSignalSamples(Set<String> values, int limit) {
+        if (values == null || values.isEmpty()) {
+            return "(none)";
+        }
+        StringBuilder sb = new StringBuilder();
+        int count = 0;
+        for (String value : values) {
+            String trimmed = String.valueOf(value == null ? "" : value).trim();
+            if (trimmed.isEmpty()) {
+                continue;
+            }
+            if (sb.length() > 0) {
+                sb.append(", ");
+            }
+            sb.append(trimmed);
+            count++;
+            if (count >= Math.max(1, limit)) {
+                break;
+            }
+        }
+        return sb.length() == 0 ? "(none)" : sb.toString();
+    }
+
+    private String buildMenuGroundingFailureResponse(
+            String uiLang,
+            MenuQualityGateResult initialGate,
+            MenuQualityGateResult repairedGate) {
+        String warning = uiTextByLang(
+            uiLang,
+            "Không thể tạo menu đủ bám theo dữ liệu nguồn. Kết quả suy đoán đã bị chặn.",
+            "Could not generate a menu sufficiently grounded in the source data. Speculative output was blocked.",
+            "无法生成与源数据充分匹配的菜单。推测性结果已被拦截。");
+        String nextStep = uiTextByLang(
+            uiLang,
+            "Cần làm sạch hoặc thu hẹp dữ liệu nguồn lỗi trước khi tạo lại menu.",
+            "Clean or narrow the malformed source data before regenerating the menu.",
+            "请先清理或缩小异常源数据后再重新生成菜单。");
+        String initialReason = initialGate == null ? "" : String.valueOf(initialGate.reason == null ? "" : initialGate.reason);
+        String repairReason = repairedGate == null ? "" : String.valueOf(repairedGate.reason == null ? "" : repairedGate.reason);
+        Map<String, Object> root = new LinkedHashMap<>();
+        root.put("menu", new ArrayList<>());
+        root.put("notes", new ArrayList<>());
+        List<String> warnings = new ArrayList<>();
+        warnings.add(warning);
+        warnings.add(nextStep);
+        if (!initialReason.isBlank()) {
+            warnings.add("initial_gate=" + initialReason);
+        }
+        if (!repairReason.isBlank()) {
+            warnings.add("repair_gate=" + repairReason);
+        }
+        root.put("warnings", warnings);
+        try {
+            return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(root);
+        } catch (Exception e) {
+            logger.warn("Failed to serialize menu grounding failure response: {}", e.getMessage());
+            return "{\"menu\":[],\"notes\":[],\"warnings\":[\"menu_grounding_failed\"]}";
+        }
+    }
+
+    private static class MenuQualityGateResult {
+        final boolean passed;
+        final String reason;
+        final int tableOverlap;
+        final int idOverlap;
+        final int sourceTableCount;
+        final int sourceIdCount;
+        final int outputTableCount;
+        final int outputIdCount;
+        final int genericHits;
+        final int outputBusinessFieldCount;
+        final int placeholderLabelHits;
+
+        private MenuQualityGateResult(
+                boolean passed,
+                String reason,
+                int tableOverlap,
+                int idOverlap,
+                int sourceTableCount,
+                int sourceIdCount,
+                int outputTableCount,
+                int outputIdCount,
+                int genericHits,
+                int outputBusinessFieldCount,
+                int placeholderLabelHits) {
+            this.passed = passed;
+            this.reason = String.valueOf(reason == null ? "" : reason);
+            this.tableOverlap = Math.max(0, tableOverlap);
+            this.idOverlap = Math.max(0, idOverlap);
+            this.sourceTableCount = Math.max(0, sourceTableCount);
+            this.sourceIdCount = Math.max(0, sourceIdCount);
+            this.outputTableCount = Math.max(0, outputTableCount);
+            this.outputIdCount = Math.max(0, outputIdCount);
+            this.genericHits = Math.max(0, genericHits);
+            this.outputBusinessFieldCount = Math.max(0, outputBusinessFieldCount);
+            this.placeholderLabelHits = Math.max(0, placeholderLabelHits);
+        }
+
+        static MenuQualityGateResult pass(
+                int tableOverlap,
+                int idOverlap,
+                int sourceTableCount,
+                int sourceIdCount,
+                int outputTableCount,
+                int outputIdCount,
+                int genericHits,
+                int outputBusinessFieldCount,
+                int placeholderLabelHits) {
+            return new MenuQualityGateResult(
+                true,
+                "ok",
+                tableOverlap,
+                idOverlap,
+                sourceTableCount,
+                sourceIdCount,
+                outputTableCount,
+                outputIdCount,
+                genericHits,
+                outputBusinessFieldCount,
+                placeholderLabelHits);
+        }
+
+        static MenuQualityGateResult fail(
+                String reason,
+                int tableOverlap,
+                int idOverlap,
+                int sourceTableCount,
+                int sourceIdCount,
+                int outputTableCount,
+                int outputIdCount,
+                int genericHits,
+                int outputBusinessFieldCount,
+                int placeholderLabelHits) {
+            return new MenuQualityGateResult(
+                false,
+                reason,
+                tableOverlap,
+                idOverlap,
+                sourceTableCount,
+                sourceIdCount,
+                outputTableCount,
+                outputIdCount,
+                genericHits,
+                outputBusinessFieldCount,
+                placeholderLabelHits);
+        }
+
+        String debugSummary() {
+            return "reason=" + reason
+                + ", tableOverlap=" + tableOverlap
+                + ", idOverlap=" + idOverlap
+                + ", sourceTableCount=" + sourceTableCount
+                + ", sourceIdCount=" + sourceIdCount
+                + ", outputTableCount=" + outputTableCount
+                + ", outputIdCount=" + outputIdCount
+                + ", genericHits=" + genericHits
+                + ", outputBusinessFieldCount=" + outputBusinessFieldCount
+                + ", placeholderLabelHits=" + placeholderLabelHits;
+        }
+    }
+
     private Map<String, Object> buildCopilotDebugPayload(
             String appId,
             String message,
@@ -1225,6 +2211,7 @@ public class ApiSpringController {
             String responseMode,
             List<Map<String, Object>> attachments,
             String continuityMemory,
+            String globalContext,
             String pName,
             Integer pType,
             String continuityScopeKey,
@@ -1243,6 +2230,7 @@ public class ApiSpringController {
             responseMode,
             attachments,
             continuityMemory,
+            globalContext,
             pName,
             pType,
             continuityScopeKey,
@@ -1261,6 +2249,7 @@ public class ApiSpringController {
             String responseMode,
             List<Map<String, Object>> attachments,
             String continuityMemory,
+            String globalContext,
             String pName,
             Integer pType,
             String continuityScopeKey,
@@ -1283,6 +2272,7 @@ public class ApiSpringController {
         debugMeta.put("messageChars", message == null ? 0 : message.length());
         debugMeta.put("currentCodeChars", currentCode == null ? 0 : currentCode.length());
         debugMeta.put("continuityMemoryChars", continuityMemory == null ? 0 : continuityMemory.length());
+        debugMeta.put("globalContextChars", globalContext == null ? 0 : globalContext.length());
         debugMeta.put("pendingQuestionsCount", pendingQuestions == null ? 0 : pendingQuestions.size());
         debugMeta.put("attachmentCount", attachments == null ? 0 : attachments.size());
         debugMeta.put("textAttachmentCount", countCopilotAttachmentsByKind(attachments, "text", "json"));
@@ -1524,6 +2514,7 @@ public class ApiSpringController {
             String responseMode,
             List<Map<String, Object>> attachments,
             String continuityMemory,
+            String globalContext,
             String pName,
             Integer pType,
             String continuityScopeKey,
@@ -1572,6 +2563,7 @@ public class ApiSpringController {
             normalizedMode,
             attachments,
             continuityMemory,
+            globalContext,
             pName,
             pType,
             continuityScopeKey,
@@ -1590,6 +2582,7 @@ public class ApiSpringController {
             String responseMode,
             List<Map<String, Object>> attachments,
             String continuityMemory,
+            String globalContext,
             String pName,
             Integer pType,
             String continuityScopeKey,
@@ -1602,6 +2595,7 @@ public class ApiSpringController {
             responseMode,
             attachments,
             continuityMemory,
+            globalContext,
             pName,
             pType,
             continuityScopeKey,
@@ -1633,6 +2627,7 @@ public class ApiSpringController {
             String responseMode,
             List<Map<String, Object>> attachments,
             String continuityMemory,
+            String globalContext,
             String pName,
             Integer pType,
             String continuityScopeKey,
@@ -1643,13 +2638,26 @@ public class ApiSpringController {
         String normalizedMode = normalizeCopilotResponseMode(responseMode, message);
         if (includeSystemHeader) {
             if ("menu_json".equals(normalizedContext)) {
-                sb.append("You are an AI assistant for menu JSON design inside a CodeMirror editor.\n");
-                sb.append("Focus on JSON schema correctness, parent/child integrity, field consistency and trigger safety.\n");
-                sb.append("Do not output unrelated source code. Keep structure stable unless user requests a structural change.\n");
-                sb.append("Use attached legacy JSON, text notes and UI screenshots as authoritative context when relevant.\n\n");
-                sb.append("For menu_json edits, return complete and production-ready JSON result.\n");
-                sb.append("Do not return shortened placeholders like '...' or 'same as above'.\n");
-                sb.append("Preserve unrelated nodes and properties unless the user explicitly asks to remove or refactor them.\n\n");
+                // Try to use the custom instructions file (reduces repeated token cost for static rules)
+                String customInstructions = loadCopilotCustomInstructions();
+                if (!customInstructions.isBlank()) {
+                    sb.append("## CUSTOM INSTRUCTIONS (authoritative system rules — do not repeat in output)\n");
+                    sb.append(customInstructions).append("\n\n");
+                } else {
+                    // Fallback inline rules when custom instructions file is unavailable
+                    sb.append("You are an AI assistant for menu JSON design inside a CodeMirror editor.\n");
+                    sb.append("Focus on JSON schema correctness, parent/child integrity, field consistency and trigger safety.\n");
+                    sb.append("Do not output unrelated source code. Keep structure stable unless user requests a structural change.\n");
+                    sb.append("Use attached legacy JSON, text notes and UI screenshots as authoritative context when relevant.\n\n");
+                    sb.append("For menu_json edits, return complete and production-ready JSON result.\n");
+                    sb.append("Do not return shortened placeholders like '...' or 'same as above'.\n");
+                    sb.append("Preserve unrelated nodes and properties unless the user explicitly asks to remove or refactor them.\n\n");
+                }
+                sb.append("GROUNDING RULES FOR MENU_JSON (critical):\n");
+                sb.append("- Do NOT invent new trigger IDs, table names, report IDs or business entities not present in provided context.\n");
+                sb.append("- Prefer reusing existing ids/keys/paths from legacy configs when possible.\n");
+                sb.append("- If required source mapping is missing, return a clear validation note instead of fabricating generic placeholders.\n");
+                sb.append("- Keep labels/domain terms aligned with source language and data (no generic demo labels like Product/Order unless explicitly requested).\n\n");
             } else {
                 sb.append("You are a coding assistant inside a CodeMirror editor.\n");
                 sb.append("Respond concisely with practical code suggestions and explanations.\n");
@@ -1692,7 +2700,9 @@ public class ApiSpringController {
             if (continuityScopeKey != null && !continuityScopeKey.isBlank()) {
                 sb.append("- continuity_scope_key: ").append(continuityScopeKey).append("\n");
             }
-            sb.append("When answering, continue from previous unresolved coding thread for this exact identity. Do not restart from scratch.\n\n");
+            sb.append("When answering, continue from previous unresolved coding thread for this exact identity. Do not restart from scratch.\n");
+            sb.append("STRICT SOURCE BINDING: ACTIVE FILE IN EDITOR is the primary source of truth.\n");
+            sb.append("If a required region is not visible in active editor context, ask for that region explicitly instead of inventing code.\n\n");
         }
 
         if (pendingQuestions != null && !pendingQuestions.isEmpty()) {
@@ -1711,6 +2721,15 @@ public class ApiSpringController {
             sb.append("SESSION CONTINUITY MEMORY (continue from unresolved thread, do not restart from scratch):\n");
             sb.append(continuityMemory).append("\n\n");
         }
+
+        if ("menu_json".equals(normalizedContext) && globalContext != null && !globalContext.isBlank()) {
+            sb.append("GLOBAL_CONTEXT_MEMORY (compressed summaries from feeding+consolidation stages):\n");
+            sb.append(globalContext).append("\n\n");
+        }
+        if ("code".equals(normalizedContext) && globalContext != null && !globalContext.isBlank()) {
+            sb.append("CODE_CHAINING_CONTEXT (derived from full large editor code, secondary to ACTIVE FILE IN EDITOR):\n");
+            sb.append(globalContext).append("\n\n");
+        }
         
         if (!currentCode.trim().isEmpty()) {
             sb.append(buildCopilotActiveEditorContextBlock(currentCode, message, normalizedContext, language, pName));
@@ -1723,6 +2742,47 @@ public class ApiSpringController {
         sb.append("Context type: ").append(normalizedContext).append("\n");
         sb.append("User request: ").append(message == null ? "" : message);
         return sb.toString();
+    }
+
+    private String buildCopilotQuickProbePromptText(
+            String message,
+            String currentCode,
+            String language,
+            String contextType,
+            String responseMode,
+            List<Map<String, Object>> attachments,
+            String continuityMemory,
+            String globalContext,
+            String pName,
+            Integer pType,
+            String continuityScopeKey,
+            List<String> pendingQuestions) {
+        String fullPrompt = buildCopilotChatPromptText(
+            message,
+            currentCode,
+            language,
+            contextType,
+            responseMode,
+            attachments,
+            continuityMemory,
+            globalContext,
+            pName,
+            pType,
+            continuityScopeKey,
+            pendingQuestions,
+            true);
+        int maxChars = Math.max(8000, copilotMenuGithubProbeMaxPromptChars);
+        if (fullPrompt.length() <= maxChars) {
+            return fullPrompt;
+        }
+        int headChars = (int) Math.floor(maxChars * 0.65);
+        int tailChars = Math.max(1000, maxChars - headChars - 200);
+        String head = fullPrompt.substring(0, Math.min(fullPrompt.length(), headChars));
+        String tail = fullPrompt.substring(Math.max(0, fullPrompt.length() - tailChars));
+        return head
+            + "\n\n[QUICK_PROBE_CONTEXT_TRUNCATED]\n"
+            + "Context was truncated for fast one-shot probe before provider fallback.\n\n"
+            + tail;
     }
 
     private Integer parseNullableInteger(Object raw) {
@@ -1794,6 +2854,65 @@ public class ApiSpringController {
         int tailChars = isMenuContext ? COPILOT_MENU_CODE_TAIL_CHARS : COPILOT_CURRENT_CODE_TAIL_CHARS;
         int focusWindowChars = isMenuContext ? COPILOT_MENU_CODE_FOCUS_WINDOW_CHARS : COPILOT_CURRENT_CODE_FOCUS_WINDOW_CHARS;
         int hardCapChars = isMenuContext ? COPILOT_MENU_CODE_CONTEXT_HARD_CAP_CHARS : COPILOT_CURRENT_CODE_CONTEXT_HARD_CAP_CHARS;
+
+        boolean useLargeCodeMode = !isMenuContext
+            && copilotCodeLargeContextEnabled
+            && code.length() > Math.max(100000, copilotCodeLargeThresholdChars);
+        if (useLargeCodeMode) {
+            List<String> focusExcerpts = buildCopilotFocusExcerpts(code, message, Math.max(12000, focusWindowChars));
+            List<String> distributedExcerpts = buildCodeDistributedCoverageExcerpts(
+                code,
+                COPILOT_CODE_DISTRIBUTED_EXCERPT_MAX_ITEMS,
+                COPILOT_CODE_DISTRIBUTED_EXCERPT_CHARS);
+            String globalMap = buildCopilotGlobalCodeMap(code, language);
+
+            int lineCount = countLines(code);
+            String fingerprint = Integer.toHexString(code.hashCode());
+            StringBuilder sb = new StringBuilder();
+            sb.append("/* LARGE_EDITOR_CODE_CONTEXT mode enabled */\n");
+            sb.append("/* full_chars=").append(code.length())
+                .append(", full_lines=").append(lineCount)
+                .append(", fingerprint=").append(fingerprint).append(" */\n");
+            sb.append("/* Priority: keep edits consistent with this file identity and visible excerpts. */\n\n");
+
+            if (!globalMap.isBlank()) {
+                sb.append("/* ===== GLOBAL FILE MAP (from full scan) ===== */\n");
+                sb.append(globalMap).append("\n");
+            }
+
+            if (!focusExcerpts.isEmpty()) {
+                int idx = 1;
+                for (String focus : focusExcerpts) {
+                    if (focus == null || focus.isBlank()) continue;
+                    sb.append("/* ===== REQUEST-FOCUS EXCERPT ").append(idx++)
+                        .append(" ===== */\n");
+                    sb.append(focus).append("\n");
+                }
+            }
+
+            if (!distributedExcerpts.isEmpty()) {
+                sb.append("/* ===== DISTRIBUTED COVERAGE EXCERPTS (across full file) ===== */\n");
+                for (String excerpt : distributedExcerpts) {
+                    if (excerpt == null || excerpt.isBlank()) continue;
+                    sb.append(excerpt).append("\n");
+                }
+            }
+
+            String head = code.substring(0, Math.min(7000, code.length()));
+            String tail = code.substring(Math.max(0, code.length() - 7000));
+            sb.append("/* ===== HEAD STABILIZER ===== */\n").append(head).append("\n");
+            sb.append("/* ===== TAIL STABILIZER ===== */\n").append(tail);
+            String packaged = sb.toString();
+            String trimmed = trimCopilotCodeContext(packaged, Math.max(hardCapChars, 180000));
+            double ratio = code.isEmpty() ? 1.0 : ((double) trimmed.length() / (double) code.length());
+            logger.info("Copilot large-code context pack: inputChars={} packagedChars={} finalChars={} ratio={} fileHash={}",
+                code.length(),
+                packaged.length(),
+                trimmed.length(),
+                String.format(java.util.Locale.ROOT, "%.4f", ratio),
+                Integer.toHexString(code.hashCode()));
+            return trimmed;
+        }
 
         if (code.length() <= maxChars) {
             return trimCopilotCodeContext(code, hardCapChars);
@@ -2023,6 +3142,23 @@ public class ApiSpringController {
         String name = String.valueOf(attachment.getOrDefault("name", "attachment")).trim();
         String mimeType = String.valueOf(attachment.getOrDefault("mimeType", "")).trim();
         String contextRole = resolveAttachmentContextRole(attachment, name, mimeType, contextType);
+
+        // DATA DISTILLATION: for large JSON attachments in menu_json context, distill instead of truncate
+        boolean isMenuContext = "menu_json".equalsIgnoreCase(String.valueOf(contextType == null ? "" : contextType).trim());
+        boolean isJsonAttachment = isCopilotJsonLikeAttachment(name, mimeType) || "legacy_json".equals(contextRole) || "json".equals(kind);
+        int distillThreshold = Math.max(20000, copilotMenuDistillThresholdChars);
+        if (isMenuContext && isJsonAttachment && copilotMenuDistillLargeJson && textContent.length() > distillThreshold) {
+            try {
+                String distilled = copilotMemoryManagerService.distillJsonForMenu(name, textContent);
+                if (!distilled.isBlank()) {
+                    logger.info("Copilot attachment distillation: {} chars→{} chars for {}", textContent.length(), distilled.length(), name);
+                    return distilled;
+                }
+            } catch (Exception ex) {
+                logger.warn("Copilot attachment distillation error for {}: {} — using truncation", name, ex.getMessage());
+            }
+        }
+
         if ("system_requirement".equals(contextRole)
             || "legacy_json".equals(contextRole)
             || isCopilotJsonLikeAttachment(name, mimeType)
@@ -2289,6 +3425,30 @@ public class ApiSpringController {
             idx += 1;
         }
         return anchors;
+    }
+
+    private List<String> buildCodeDistributedCoverageExcerpts(String code, int maxItems, int excerptChars) {
+        List<String> out = new ArrayList<>();
+        if (code == null || code.isBlank() || maxItems <= 0 || excerptChars <= 0) {
+            return out;
+        }
+        int total = code.length();
+        int items = Math.max(2, maxItems);
+        int safeExcerpt = Math.max(500, excerptChars);
+
+        for (int i = 0; i < items; i++) {
+            long numerator = (long) i * Math.max(1L, (long) total - safeExcerpt);
+            int start = (int) (numerator / Math.max(1, items - 1));
+            int end = Math.min(total, start + safeExcerpt);
+            if (end <= start) {
+                continue;
+            }
+            int startLine = estimateLineAt(code, start);
+            int endLine = estimateLineAt(code, Math.max(start, end - 1));
+            String chunk = code.substring(start, end);
+            out.add("/* lines " + startLine + "-" + endLine + " */\n" + chunk);
+        }
+        return out;
     }
 
     private List<String> buildCopilotFocusExcerpts(String code, String message, int focusWindowChars) {
@@ -2814,6 +3974,7 @@ public class ApiSpringController {
     }
 
     public void getObjectFromAI(StandardResponse response, Map<String, Object> params) {
+        String uiLang = resolveClientUiLanguage(params);
         String mode = String.valueOf(params.getOrDefault("mode", "sync")).trim().toLowerCase();
         if ("status".equals(mode)) {
             handleAiAsyncStatus(response, params);
@@ -2839,7 +4000,11 @@ public class ApiSpringController {
         if (prompt == null || prompt.isEmpty()) {
             response.set("code", 200);
             response.set("success", false);
-            response.set("message", "Thiếu tham số 'prompt' để tạo nội dung AI.");
+            response.set("message", uiTextByLang(
+                uiLang,
+                "Thiếu tham số 'prompt' để tạo nội dung AI.",
+                "Missing 'prompt' parameter to generate AI content.",
+                "缺少用于生成 AI 内容的 'prompt' 参数。"));
             return;
         }
 
@@ -2847,7 +4012,11 @@ public class ApiSpringController {
         if (prompt.length() > maxPromptChars) {
             response.set("code", 200);
             response.set("success", false);
-            response.set("message", "Prompt quá dài (tối đa " + maxPromptChars + " ký tự), hiện tại: " + prompt.length());
+            response.set("message", uiTextByLang(
+                uiLang,
+                "Prompt quá dài (tối đa " + maxPromptChars + " ký tự), hiện tại: " + prompt.length(),
+                "Prompt is too long (max " + maxPromptChars + " chars), current: " + prompt.length(),
+                "Prompt 过长（最大 " + maxPromptChars + " 字符），当前：" + prompt.length()));
             response.set("errorCode", "PROMPT_EXCEEDS_ENDPOINT_LIMIT");
             return;
         }
@@ -2857,7 +4026,11 @@ public class ApiSpringController {
         } catch (RuntimeException e) {
             response.set("code", 200);
             response.set("success", false);
-            response.set("message", "Lỗi khi tương tác với dịch vụ AI: " + e.getMessage());
+            response.set("message", uiTextByLang(
+                uiLang,
+                "Lỗi khi tương tác với dịch vụ AI: " + e.getMessage(),
+                "Error while interacting with AI service: " + e.getMessage(),
+                "与 AI 服务交互时出错：" + e.getMessage()));
             logger.error("Runtime exception in AI provider: {}", e.getMessage(), e);
             return;
         }
@@ -2865,7 +4038,11 @@ public class ApiSpringController {
         if (rawContent == null || rawContent.isEmpty()) {
             response.set("code", 200);
             response.set("success", false);
-            response.set("message", "Không nhận được nội dung hợp lệ từ dịch vụ AI.");
+            response.set("message", uiTextByLang(
+                uiLang,
+                "Không nhận được nội dung hợp lệ từ dịch vụ AI.",
+                "No valid content received from AI service.",
+                "未收到来自 AI 服务的有效内容。"));
             return;
         }
 
@@ -2888,7 +4065,7 @@ public class ApiSpringController {
             }
         }
 
-        populateAiResponseFromRawContent(response, rawContent);
+        populateAiResponseFromRawContent(response, rawContent, uiLang);
     }
 
     private String fetchAiRawContent(String prompt, GitHubModelsService.ProgressListener progressListener, Map<String, Object> params) {
@@ -3035,12 +4212,18 @@ public class ApiSpringController {
             if (Boolean.FALSE.equals(parsed.get("success"))) {
                 String errorCode = String.valueOf(parsed.getOrDefault("errorCode", ""));
                 String message = String.valueOf(parsed.getOrDefault("message", ""));
+                if (isInvalidFinalOutputFailure(errorCode, message)) {
+                    return true;
+                }
                 return isRateOrQuotaFailure(errorCode, message) || isAuthFailure(errorCode, message);
             }
 
             if (Boolean.TRUE.equals(parsed.get("error"))) {
                 String errorCode = String.valueOf(parsed.getOrDefault("errorCode", ""));
                 String message = String.valueOf(parsed.getOrDefault("message", ""));
+                if (isInvalidFinalOutputFailure(errorCode, message)) {
+                    return true;
+                }
                 return isRateOrQuotaFailure(errorCode, message) || isAuthFailure(errorCode, message);
             }
 
@@ -3096,6 +4279,481 @@ public class ApiSpringController {
                 || text.contains("bad credentials")
                 || text.contains("github_token_missing")
                 || text.contains("github_copilot_token_invalid");
+    }
+
+    private boolean isInvalidFinalOutputFailure(String errorCode, String message) {
+        String code = String.valueOf(errorCode == null ? "" : errorCode).toLowerCase();
+        String msg = String.valueOf(message == null ? "" : message).toLowerCase();
+        return code.contains("github_final_output_invalid")
+                || code.contains("github_merge_parse_empty")
+                || code.contains("github_models_exhausted")
+                || msg.contains("ket qua cuoi khong hop le")
+                || msg.contains("khong phai json menu")
+                || msg.contains("models exhausted");
+    }
+
+    private boolean shouldDirectProviderRouteForLargeMenu(
+            String contextType,
+            String taskType,
+            List<Map<String, Object>> attachments,
+            String message,
+            String currentCode,
+            int estimatedChars) {
+        if (!copilotMenuDirectProviderFallbackEnabled) {
+            return false;
+        }
+        if (!isMenuCopilotFlow(contextType, taskType)) {
+            return false;
+        }
+        return estimatedChars >= Math.max(50000, copilotMenuDirectProviderThresholdChars);
+    }
+
+    private String buildMenuGlobalContext(
+            String appId,
+            String continuityScopeKey,
+            String contextType,
+            String taskType,
+            String message,
+            String currentCode,
+            List<Map<String, Object>> attachments) {
+        if (!copilotMemoryManagerEnabled) {
+            return "";
+        }
+        if (!isMenuCopilotFlow(contextType, taskType)) {
+            return "";
+        }
+        try {
+            String globalContext = copilotMemoryManagerService.buildAndPersistMenuGlobalContext(
+                appId,
+                continuityScopeKey,
+                message,
+                currentCode,
+                attachments);
+            return String.valueOf(globalContext == null ? "" : globalContext).trim();
+        } catch (Exception ex) {
+            logger.warn("Copilot memory manager failed, continue without global context: {}", ex.getMessage());
+            return "";
+        }
+    }
+
+    private String loadCopilotCustomInstructions() {
+        if (cachedCopilotCustomInstructions != null) return cachedCopilotCustomInstructions;
+        synchronized (this) {
+            if (cachedCopilotCustomInstructions != null) return cachedCopilotCustomInstructions;
+            try {
+                String path = String.valueOf(copilotCustomInstructionsPath == null ? "" : copilotCustomInstructionsPath).trim();
+                if (path.isEmpty()) { cachedCopilotCustomInstructions = ""; return ""; }
+                java.io.File f = new java.io.File(path);
+                if (f.exists() && f.isFile()) {
+                    cachedCopilotCustomInstructions = java.nio.file.Files.readString(f.toPath(), java.nio.charset.StandardCharsets.UTF_8).trim();
+                } else {
+                    // Try classpath
+                    var resource = new org.springframework.core.io.ClassPathResource(path);
+                    if (resource.exists()) {
+                        try (var in = resource.getInputStream()) {
+                            cachedCopilotCustomInstructions = org.springframework.util.StreamUtils.copyToString(in, java.nio.charset.StandardCharsets.UTF_8).trim();
+                        }
+                    } else {
+                        cachedCopilotCustomInstructions = "";
+                    }
+                }
+            } catch (Exception ex) {
+                logger.warn("Cannot load copilot custom instructions from {}: {}", copilotCustomInstructionsPath, ex.getMessage());
+                cachedCopilotCustomInstructions = "";
+            }
+        }
+        return cachedCopilotCustomInstructions;
+    }
+
+    /**
+     * CHAINING Step 1: For very large menu payloads, call GitHub Models with a lightweight
+     * "extract schema" prompt to produce a compact summary of all large JSON config attachments.
+     * The summary is then injected into the final menu design prompt (Step 2 = main call).
+     * This avoids sending 2.5M+ chars raw JSON in a single call.
+     */
+    private String runMenuChainingStep1(List<Map<String, Object>> attachments, String appId) {
+        if (attachments == null || attachments.isEmpty()) return "";
+        int distillThreshold = Math.max(20000, copilotMenuDistillThresholdChars);
+
+        StringBuilder step1Prompt = new StringBuilder();
+        step1Prompt.append("You are an AI assistant helping to summarize CSM (Content Management System) configuration files.\n");
+        step1Prompt.append("Below are distilled schemas extracted from large JSON config files.\n");
+        step1Prompt.append("Your task: For each config file, produce a compact structured summary that includes:\n");
+        step1Prompt.append("- All table names\n- Key column names per table\n- Important relationships or mappings\n");
+        step1Prompt.append("- For triggers: group by loaitrigger type with affected tables\n");
+        step1Prompt.append("Output as a structured text schema summary, max 8000 chars total.\n");
+        step1Prompt.append("Do NOT write menu JSON — only extract and summarize the schema.\n\n");
+
+        boolean hasAnyLargeAttachment = false;
+        for (Map<String, Object> attachment : attachments) {
+            String kind = String.valueOf(attachment.getOrDefault("kind", "")).trim().toLowerCase();
+            if (!"text".equals(kind) && !"json".equals(kind)) continue;
+            String text = String.valueOf(attachment.getOrDefault("textContent", "")).trim();
+            if (text.length() <= distillThreshold) continue;
+            String name = String.valueOf(attachment.getOrDefault("name", "attachment")).trim();
+            // Use Java-side distillation to compress before sending even the step1 prompt
+            String distilled;
+            try {
+                distilled = copilotMemoryManagerService.distillJsonForMenu(name, text);
+            } catch (Exception ex) {
+                distilled = text.substring(0, Math.min(text.length(), 15000));
+            }
+            if (distilled.isBlank()) continue;
+            step1Prompt.append("### File: ").append(name).append(" (original: ").append(text.length()).append(" chars)\n");
+            int maxPerFile = 15000;
+            if (distilled.length() > maxPerFile) {
+                step1Prompt.append(distilled, 0, maxPerFile).append("\n...[truncated]\n");
+            } else {
+                step1Prompt.append(distilled).append("\n");
+            }
+            step1Prompt.append("\n");
+            hasAnyLargeAttachment = true;
+        }
+        if (!hasAnyLargeAttachment) return "";
+
+        int maxStep1Chars = 60000;
+        String promptText = step1Prompt.length() > maxStep1Chars
+            ? step1Prompt.substring(0, maxStep1Chars)
+            : step1Prompt.toString();
+
+        try {
+            String rawResult = gitHubModelsService.generateContent(promptText);
+            String extracted = extractAiResultText(rawResult);
+            return extracted.isBlank() ? "" : "# Chaining Step 1 Schema Summary\n" + extracted.trim();
+        } catch (Exception ex) {
+            logger.warn("Copilot chaining step1 GitHub Models call failed for appId={}: {}", appId, ex.getMessage());
+            return "";
+        }
+    }
+
+    private CodeChainingResult runCodeChainingStep1(
+            String currentCode,
+            String message,
+            String language,
+            String appId,
+            String pName) {
+        long startedAt = System.currentTimeMillis();
+        String code = String.valueOf(currentCode == null ? "" : currentCode);
+        if (code.isBlank()) {
+            return new CodeChainingResult("", false, 0L, 0, 0, "");
+        }
+
+        String fingerprint = Integer.toHexString(code.hashCode());
+        String cacheKey = buildCodeChainingCacheKey(appId, pName, language, fingerprint);
+        if (copilotCodeChainingCacheEnabled) {
+            CodeChainingCacheEntry cached = getCodeChainingCache(cacheKey);
+            if (cached != null) {
+                long elapsed = Math.max(0L, System.currentTimeMillis() - startedAt);
+                logger.info("Copilot code chaining cache HIT: appId={} fileKey={} fingerprint={} summaryChars={} elapsedMs={}",
+                    appId,
+                    String.valueOf(pName == null ? "" : pName).trim(),
+                    fingerprint,
+                    cached.summary.length(),
+                    elapsed);
+                return new CodeChainingResult(cached.summary, true, elapsed, 0, cached.summary.length(), fingerprint);
+            }
+        }
+
+        String globalMap = buildCopilotGlobalCodeMap(code, language);
+        List<String> focusExcerpts = buildCopilotFocusExcerpts(code, message, 18000);
+        List<String> distributed = buildCodeDistributedCoverageExcerpts(code, 6, 1800);
+
+        StringBuilder step1Prompt = new StringBuilder();
+        step1Prompt.append("You are an expert code summarizer for a large active editor buffer.\n");
+        step1Prompt.append("Goal: summarize the provided code for downstream editing while staying faithful to current implementation.\n");
+        step1Prompt.append("Output format:\n");
+        step1Prompt.append("1) FILE_IDENTITY\n2) KEY_SYMBOLS\n3) CRITICAL_EXECUTION_FLOW\n4) EDIT_RISK_AREAS\n5) SAFE_EDIT_GUIDELINES\n");
+        step1Prompt.append("Keep output under 7000 chars. Do not invent APIs not present in context.\n\n");
+
+        step1Prompt.append("file_key=").append(String.valueOf(pName == null ? "" : pName).trim()).append("\n");
+        step1Prompt.append("language=").append(String.valueOf(language == null ? "" : language).trim()).append("\n");
+        step1Prompt.append("chars=").append(code.length()).append(", lines=").append(countLines(code)).append("\n\n");
+
+        if (!globalMap.isBlank()) {
+            step1Prompt.append("## GLOBAL_MAP\n").append(globalMap).append("\n\n");
+        }
+        if (!focusExcerpts.isEmpty()) {
+            step1Prompt.append("## REQUEST_FOCUS_EXCERPTS\n");
+            int idx = 1;
+            for (String ex : focusExcerpts) {
+                if (ex == null || ex.isBlank()) continue;
+                step1Prompt.append("### focus_").append(idx++).append("\n").append(ex).append("\n\n");
+            }
+        }
+        if (!distributed.isEmpty()) {
+            step1Prompt.append("## DISTRIBUTED_FILE_COVERAGE\n");
+            int idx = 1;
+            for (String ex : distributed) {
+                if (ex == null || ex.isBlank()) continue;
+                step1Prompt.append("### slice_").append(idx++).append("\n").append(ex).append("\n\n");
+            }
+        }
+
+        String stepPrompt = step1Prompt.toString();
+        if (stepPrompt.length() > 65000) {
+            stepPrompt = stepPrompt.substring(0, 65000);
+        }
+
+        try {
+            String raw = gitHubModelsService.generateContent(stepPrompt);
+            String extracted = extractAiResultText(raw);
+            if (extracted.isBlank()) {
+                long elapsed = Math.max(0L, System.currentTimeMillis() - startedAt);
+                logger.info("Copilot code chaining step1 empty result: appId={} fileKey={} fingerprint={} promptChars={} elapsedMs={}",
+                    appId,
+                    String.valueOf(pName == null ? "" : pName).trim(),
+                    fingerprint,
+                    stepPrompt.length(),
+                    elapsed);
+                return new CodeChainingResult("", false, elapsed, stepPrompt.length(), 0, fingerprint);
+            }
+            String summary = "# Code Chaining Step 1 Summary\n" + extracted.trim();
+            if (copilotCodeChainingCacheEnabled) {
+                putCodeChainingCache(cacheKey, summary);
+            }
+            long elapsed = Math.max(0L, System.currentTimeMillis() - startedAt);
+            logger.info("Copilot code chaining step1 done: appId={} fileKey={} fingerprint={} inputChars={} promptChars={} outputChars={} elapsedMs={}",
+                appId,
+                String.valueOf(pName == null ? "" : pName).trim(),
+                fingerprint,
+                code.length(),
+                stepPrompt.length(),
+                summary.length(),
+                elapsed);
+            return new CodeChainingResult(summary, false, elapsed, stepPrompt.length(), summary.length(), fingerprint);
+        } catch (Exception ex) {
+            logger.warn("Copilot code chaining step1 GitHub Models call failed for appId={}: {}", appId, ex.getMessage());
+            long elapsed = Math.max(0L, System.currentTimeMillis() - startedAt);
+            return new CodeChainingResult("", false, elapsed, stepPrompt.length(), 0, fingerprint);
+        }
+    }
+
+    private String buildCodeChainingCacheKey(String appId, String pName, String language, String fingerprint) {
+        return String.valueOf(appId == null ? "" : appId).trim()
+            + "|"
+            + String.valueOf(pName == null ? "" : pName).trim()
+            + "|"
+            + String.valueOf(language == null ? "" : language).trim().toLowerCase(java.util.Locale.ROOT)
+            + "|"
+            + String.valueOf(fingerprint == null ? "" : fingerprint).trim();
+    }
+
+    private CodeChainingCacheEntry getCodeChainingCache(String key) {
+        if (key == null || key.isBlank()) {
+            return null;
+        }
+        CodeChainingCacheEntry entry = codeChainingStep1Cache.get(key);
+        if (entry == null) {
+            return null;
+        }
+        long ttl = Math.max(60_000L, copilotCodeChainingCacheTtlMs);
+        if ((System.currentTimeMillis() - entry.createdAtMs) > ttl) {
+            codeChainingStep1Cache.remove(key);
+            return null;
+        }
+        return entry;
+    }
+
+    private void putCodeChainingCache(String key, String summary) {
+        if (key == null || key.isBlank()) {
+            return;
+        }
+        String value = String.valueOf(summary == null ? "" : summary).trim();
+        if (value.isEmpty()) {
+            return;
+        }
+        codeChainingStep1Cache.put(key, new CodeChainingCacheEntry(value, System.currentTimeMillis()));
+        pruneCodeChainingCacheIfNeeded();
+    }
+
+    private void pruneCodeChainingCacheIfNeeded() {
+        int maxEntries = Math.max(32, copilotCodeChainingCacheMaxEntries);
+        if (codeChainingStep1Cache.size() <= maxEntries) {
+            return;
+        }
+
+        String oldestKey = null;
+        long oldestTs = Long.MAX_VALUE;
+        for (Map.Entry<String, CodeChainingCacheEntry> entry : codeChainingStep1Cache.entrySet()) {
+            long ts = entry.getValue() == null ? Long.MAX_VALUE : entry.getValue().createdAtMs;
+            if (ts < oldestTs) {
+                oldestTs = ts;
+                oldestKey = entry.getKey();
+            }
+        }
+        if (oldestKey != null) {
+            codeChainingStep1Cache.remove(oldestKey);
+        }
+    }
+
+    private static class CodeChainingCacheEntry {
+        final String summary;
+        final long createdAtMs;
+
+        CodeChainingCacheEntry(String summary, long createdAtMs) {
+            this.summary = String.valueOf(summary == null ? "" : summary);
+            this.createdAtMs = createdAtMs;
+        }
+    }
+
+    private static class CodeChainingResult {
+        final String summary;
+        final boolean cacheHit;
+        final long elapsedMs;
+        final int promptChars;
+        final int responseChars;
+        final String fingerprint;
+
+        CodeChainingResult(String summary, boolean cacheHit, long elapsedMs, int promptChars, int responseChars, String fingerprint) {
+            this.summary = String.valueOf(summary == null ? "" : summary);
+            this.cacheHit = cacheHit;
+            this.elapsedMs = elapsedMs;
+            this.promptChars = Math.max(0, promptChars);
+            this.responseChars = Math.max(0, responseChars);
+            this.fingerprint = String.valueOf(fingerprint == null ? "" : fingerprint);
+        }
+    }
+
+    private boolean shouldQuickGithubProbeForMediumMenu(
+            String contextType,
+            String taskType,
+            int estimatedChars) {
+        if (!copilotMenuGithubProbeEnabled) {
+            return false;
+        }
+        if (!isMenuCopilotFlow(contextType, taskType)) {
+            return false;
+        }
+        int lowerBound = Math.max(50000, copilotMenuGithubProbeThresholdChars);
+        int upperBound = copilotMenuDirectProviderFallbackEnabled
+                ? Math.max(lowerBound + 1000, Math.max(50000, copilotMenuDirectProviderThresholdChars))
+                : Integer.MAX_VALUE;
+        return estimatedChars >= lowerBound && estimatedChars < upperBound;
+    }
+
+    private int estimateTotalCopilotPayloadChars(
+            List<Map<String, Object>> attachments,
+            String message,
+            String currentCode) {
+        return Math.max(0, String.valueOf(message == null ? "" : message).length())
+                + Math.max(0, String.valueOf(currentCode == null ? "" : currentCode).length())
+                + estimateAttachmentTextChars(attachments);
+    }
+
+    private int estimateAttachmentTextChars(List<Map<String, Object>> attachments) {
+        if (attachments == null || attachments.isEmpty()) {
+            return 0;
+        }
+        int total = 0;
+        for (Map<String, Object> attachment : attachments) {
+            if (attachment == null) {
+                continue;
+            }
+            String text = String.valueOf(attachment.getOrDefault("textContent", ""));
+            total += Math.max(0, text.length());
+            if (total >= 3_000_000) {
+                return total;
+            }
+        }
+        return total;
+    }
+
+    private boolean isLikelyJsonPayload(String text) {
+        String raw = String.valueOf(text == null ? "" : text).trim();
+        if (raw.isEmpty()) {
+            return false;
+        }
+        String normalized = raw;
+        if (normalized.startsWith("```") && normalized.endsWith("```")) {
+            int firstNl = normalized.indexOf('\n');
+            if (firstNl > 0) {
+                normalized = normalized.substring(firstNl + 1);
+            }
+            normalized = normalized.substring(0, Math.max(0, normalized.length() - 3)).trim();
+        }
+        if (!(normalized.startsWith("{") || normalized.startsWith("["))) {
+            return false;
+        }
+        try {
+            com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(normalized);
+            return node.isObject() || node.isArray();
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private String runGithubQuickProbeWithTimeout(
+            String probePrompt,
+            GitHubModelsService.ProgressListener streamListener,
+            String appId,
+            String stage) {
+        long timeoutMs = Math.max(3000L, copilotMenuGithubProbeTimeoutMs);
+        Future<String> future = aiAsyncExecutor.submit(() -> gitHubModelsService.generateContent(probePrompt, streamListener));
+        try {
+            return future.get(timeoutMs, TimeUnit.MILLISECONDS);
+        } catch (TimeoutException ex) {
+            future.cancel(true);
+            logger.warn("Copilot stream: {} timed out after {}ms, forcing fallback", stage, timeoutMs);
+            emitCopilotChatChunk(appId, Map.of(
+                "stage", stage + "_timeout",
+                "message", "Quick probe timeout, chuyen fallback ngay",
+                "status", "running"
+            ));
+            return "";
+        } catch (Exception ex) {
+            logger.warn("Copilot stream: {} failed: {}", stage, ex.getMessage());
+            return "";
+        }
+    }
+
+    private boolean shouldDisableGeminiFallbackForMenu(String contextType, String taskType) {
+        return copilotMenuDisableGeminiFallback && isMenuCopilotFlow(contextType, taskType);
+    }
+
+    private boolean shouldForceGeminiFallbackForMenuFailure(
+            String contextType,
+            String taskType,
+            String raw,
+            boolean upstreamFallbackSignal) {
+        if (!isMenuCopilotFlow(contextType, taskType)) {
+            return false;
+        }
+        if (!upstreamFallbackSignal) {
+            return false;
+        }
+        String text = String.valueOf(raw == null ? "" : raw);
+        return isTransientUpstreamFailureFromRawText(text)
+            || isRateOrQuotaFailureFromRawText(text)
+            || isAuthFailureFromRawText(text)
+            || containsInvalidFinalMenuSignals(text);
+    }
+
+    private boolean containsInvalidFinalMenuSignals(String raw) {
+        String text = String.valueOf(raw == null ? "" : raw).toLowerCase();
+        return text.contains("github_final_output_invalid")
+            || text.contains("github_merge_parse_empty")
+            || text.contains("khong phai json menu")
+            || text.contains("không phải json menu")
+            || text.contains("models exhausted");
+    }
+
+    private boolean isTransientUpstreamFailureFromRawText(String raw) {
+        String text = String.valueOf(raw == null ? "" : raw).toLowerCase();
+        if (text.isBlank()) {
+            return false;
+        }
+        return text.contains("operation timed out")
+            || text.contains("timed out")
+            || text.contains("webclientrequestexception")
+            || text.contains("connectexception")
+            || text.contains("ioexception")
+            || text.contains("connection observed an error")
+            || text.contains("connection reset")
+            || text.contains("broken pipe")
+            || text.contains("gateway timeout")
+            || text.contains("502 bad gateway")
+            || text.contains("503 service unavailable")
+            || text.contains("504 gateway timeout");
     }
 
     private boolean isRateOrQuotaFailureFromRawText(String raw) {
@@ -3390,7 +5048,7 @@ public class ApiSpringController {
             || map.containsKey("children");
     }
 
-    private void emitTextAsCopilotChunks(String appId, String text, String responseMode) {
+    private void emitTextAsCopilotChunks(String appId, String text, String responseMode, String uiLang) {
         String source = text == null ? "" : text;
         if (source.isBlank()) {
             return;
@@ -3404,7 +5062,11 @@ public class ApiSpringController {
             String chunk = source.substring(sent, end);
             Map<String, Object> payload = new HashMap<>();
             payload.put("stage", "streaming");
-            payload.put("message", "Nhận dữ liệu");
+            payload.put("message", uiTextByLang(
+                uiLang,
+                "Nhận dữ liệu",
+                "Receiving data",
+                "正在接收数据"));
             payload.put("chunk", chunk);
             payload.put("responseMode", responseMode);
             payload.put("current", end);
@@ -3415,7 +5077,7 @@ public class ApiSpringController {
         }
     }
 
-    private void populateAiResponseFromRawContent(StandardResponse response, String rawContent) {
+    private void populateAiResponseFromRawContent(StandardResponse response, String rawContent, String uiLang) {
 
         // Try to parse as JSON first (GeminiService now returns JSON for both success and error)
         ObjectMapper objectMapper = new ObjectMapper();
@@ -3434,7 +5096,11 @@ public class ApiSpringController {
                 response.set("code", 200);
                 response.set("success", false);
                 response.set("data", parsedResult);
-                response.set("message", String.valueOf(parsedResult.getOrDefault("message", "Lỗi từ dịch vụ AI")));
+                response.set("message", String.valueOf(parsedResult.getOrDefault("message", uiTextByLang(
+                    uiLang,
+                    "Lỗi từ dịch vụ AI",
+                    "Error from AI service",
+                    "来自 AI 服务的错误"))));
                 Object topLevelErrorCode = parsedResult.get("errorCode");
                 if (topLevelErrorCode != null) {
                     response.set("errorCode", topLevelErrorCode);
@@ -3451,7 +5117,11 @@ public class ApiSpringController {
             if (parsedResult.containsKey("error") && (Boolean) parsedResult.get("error")) {
                 response.set("code", 200);
                 response.set("success", false);
-                response.set("message", (String) parsedResult.getOrDefault("message", "Lỗi từ dịch vụ AI"));
+                response.set("message", (String) parsedResult.getOrDefault("message", uiTextByLang(
+                    uiLang,
+                    "Lỗi từ dịch vụ AI",
+                    "Error from AI service",
+                    "来自 AI 服务的错误")));
                 response.set("errorCode", parsedResult.getOrDefault("errorCode", "UNKNOWN"));
                 logger.warn("AI service returned error: {} - {}", 
                     parsedResult.get("errorCode"), parsedResult.get("message"));
@@ -3484,7 +5154,11 @@ public class ApiSpringController {
                         response.set("success", false);
                         response.set("data", parsedData);
                         response.set("provider", provider);
-                        response.set("message", String.valueOf(parsedData.getOrDefault("message", "Lỗi từ nhà cung cấp AI")));
+                        response.set("message", String.valueOf(parsedData.getOrDefault("message", uiTextByLang(
+                            uiLang,
+                            "Lỗi từ nhà cung cấp AI",
+                            "Error from AI provider",
+                            "来自 AI 提供方的错误"))));
                         Object nestedErrorCode = parsedData.get("errorCode");
                         if (nestedErrorCode != null) {
                             response.set("errorCode", nestedErrorCode);
@@ -3497,7 +5171,11 @@ public class ApiSpringController {
                     response.set("success", true);
                     response.set("data", parsedData);
                     response.set("provider", provider);
-                    response.set("message", "Thành công");
+                    response.set("message", uiTextByLang(
+                        uiLang,
+                        "Thành công",
+                        "Success",
+                        "成功"));
                     logger.info("✅ Successfully processed JSON object content from provider: {} - returning as data field", provider);
                     return;
                 }
@@ -3513,7 +5191,11 @@ public class ApiSpringController {
                         response.set("success", true);
                         response.set("data", wrappedData);
                         response.set("provider", provider);
-                        response.set("message", "Thành công");
+                        response.set("message", uiTextByLang(
+                            uiLang,
+                            "Thành công",
+                            "Success",
+                            "成功"));
                         logger.info("✅ AI returned JSON array from provider: {} - wrapped as {{menu:[]}} structure", provider);
                         return;
                     } catch (Exception listEx) {
@@ -3543,7 +5225,11 @@ public class ApiSpringController {
                     response.set("success", true);
                     response.set("data", parsedData);
                     response.set("provider", provider);
-                    response.set("message", "Thành công");
+                    response.set("message", uiTextByLang(
+                        uiLang,
+                        "Thành công",
+                        "Success",
+                        "成功"));
                     logger.info("✅ Successfully parsed JSON content from provider: {} - returning as data field", provider);
                     return;
                 }
@@ -3567,7 +5253,11 @@ public class ApiSpringController {
                             response.set("success", true);
                             response.set("data", extractedJson);
                             response.set("provider", provider);
-                            response.set("message", "Thành công");
+                            response.set("message", uiTextByLang(
+                                uiLang,
+                                "Thành công",
+                                "Success",
+                                "成功"));
                             return;
                         }
                     }
@@ -3575,7 +5265,11 @@ public class ApiSpringController {
                 
                 response.set("code", 200);
                 response.set("success", false);
-                response.set("message", "AI trả về dữ liệu không phải JSON hợp lệ");
+                response.set("message", uiTextByLang(
+                    uiLang,
+                    "AI trả về dữ liệu không phải JSON hợp lệ",
+                    "AI returned data that is not valid JSON",
+                    "AI 返回的数据不是有效 JSON"));
                 response.set("provider", provider);
                 response.set("rawContent", messageContent);
                 return;
@@ -3585,7 +5279,11 @@ public class ApiSpringController {
             response.set("code", 200);
             response.set("success", true);
             response.set("data", parsedResult);
-            response.set("message", "Thành công");
+            response.set("message", uiTextByLang(
+                uiLang,
+                "Thành công",
+                "Success",
+                "成功"));
             
         } catch (JsonProcessingException e) {
             // Try cleaning markdown as fallback
@@ -3595,7 +5293,11 @@ public class ApiSpringController {
             if (cleanContent == null || cleanContent.isEmpty()) {
                 response.set("code", 200);
                 response.set("success", false);
-                response.set("message", "Không thể parse response từ AI: " + e.getMessage());
+                response.set("message", uiTextByLang(
+                    uiLang,
+                    "Không thể parse response từ AI: " + e.getMessage(),
+                    "Unable to parse AI response: " + e.getMessage(),
+                    "无法解析 AI 响应：" + e.getMessage()));
                 logger.error("Failed to parse AI response and no valid content found");
                 return;
             }
@@ -3606,7 +5308,11 @@ public class ApiSpringController {
                 response.set("code", 200);
                 response.set("success", true);
                 response.set("data", dynamicResult);
-                response.set("message", "Thành công");
+                response.set("message", uiTextByLang(
+                    uiLang,
+                    "Thành công",
+                    "Success",
+                    "成功"));
             } catch (JsonProcessingException e2) {
                 // Try escaping newlines in JSON as last resort
                 logger.warn("JSON parse failed after markdown cleanup, trying to escape newlines: {}", e2.getMessage());
@@ -3618,7 +5324,11 @@ public class ApiSpringController {
                     response.set("code", 200);
                     response.set("success", true);
                     response.set("data", dynamicResult);
-                    response.set("message", "Thành công");
+                    response.set("message", uiTextByLang(
+                        uiLang,
+                        "Thành công",
+                        "Success",
+                        "成功"));
                     logger.info("✅ Successfully parsed JSON after escaping newlines");
                 } catch (JsonProcessingException e3) {
                     // Final fallback: return raw content as text if JSON parsing fails completely
@@ -3632,7 +5342,11 @@ public class ApiSpringController {
                             response.set("code", 200);
                             response.set("success", true);
                             response.set("data", lastAttemptJson);
-                            response.set("message", "Thành công (extracted from markdown)");
+                            response.set("message", uiTextByLang(
+                                uiLang,
+                                "Thành công (trích xuất từ markdown)",
+                                "Success (extracted from markdown)",
+                                "成功（从 markdown 提取）"));
                             logger.info("✅ Last attempt succeeded - extracted JSON from markdown");
                             return;
                         }
@@ -3641,7 +5355,11 @@ public class ApiSpringController {
                     // Strict JSON: return error if parsing failed after all attempts
                     response.set("code", 200);
                     response.set("success", false);
-                    response.set("message", "AI trả về dữ liệu không phải JSON hợp lệ");
+                    response.set("message", uiTextByLang(
+                        uiLang,
+                        "AI trả về dữ liệu không phải JSON hợp lệ",
+                        "AI returned data that is not valid JSON",
+                        "AI 返回的数据不是有效 JSON"));
                     response.set("rawContent", rawContent);
                     logger.warn("❌ Returning error from AI service - JSON parse failed after all attempts (length: {} chars)", 
                         rawContent.length());
@@ -3651,17 +5369,26 @@ public class ApiSpringController {
     }
 
     private void handleAiAsyncSubmit(StandardResponse response, String prompt, Map<String, Object> params) {
+        String uiLang = resolveClientUiLanguage(params);
         if (prompt == null || prompt.isEmpty()) {
             response.set("code", 200);
             response.set("success", false);
-            response.set("message", "Thiếu tham số 'prompt' để tạo nội dung AI.");
+            response.set("message", uiTextByLang(
+                uiLang,
+                "Thiếu tham số 'prompt' để tạo nội dung AI.",
+                "Missing 'prompt' parameter to generate AI content.",
+                "缺少用于生成 AI 内容的 'prompt' 参数。"));
             return;
         }
 
         if (prompt.length() > maxPromptChars) {
             response.set("code", 200);
             response.set("success", false);
-            response.set("message", "Prompt quá dài (tối đa " + maxPromptChars + " ký tự), hiện tại: " + prompt.length());
+            response.set("message", uiTextByLang(
+                uiLang,
+                "Prompt quá dài (tối đa " + maxPromptChars + " ký tự), hiện tại: " + prompt.length(),
+                "Prompt is too long (max " + maxPromptChars + " chars), current: " + prompt.length(),
+                "Prompt 过长（最大 " + maxPromptChars + " 字符），当前：" + prompt.length()));
             response.set("errorCode", "PROMPT_EXCEEDS_ENDPOINT_LIMIT");
             return;
         }
@@ -3680,7 +5407,11 @@ public class ApiSpringController {
         job.put("cancelled", false);
         job.put("_lastDraftText", "");
         job.put("pollAfterMs", aiAsyncPollMinMs);
-        job.put("progress", createAiJobProgress("queued", "Đang xếp hàng xử lý AI", 0, 1, null));
+        job.put("progress", createAiJobProgress("queued", uiTextByLang(
+            uiLang,
+            "Đang xếp hàng xử lý AI",
+            "Queued for AI processing",
+            "AI 处理排队中"), 0, 1, null));
         aiAsyncJobs.put(jobId, job);
 
         aiAsyncExecutor.submit(() -> {
@@ -3690,7 +5421,11 @@ public class ApiSpringController {
                 }
                 job.put("status", "running");
                 job.put("updatedAt", System.currentTimeMillis());
-                updateAiAsyncJobProgress(job, createAiJobProgress("starting", "Bắt đầu xử lý yêu cầu AI", 0, 1, null));
+                updateAiAsyncJobProgress(job, createAiJobProgress("starting", uiTextByLang(
+                    uiLang,
+                    "Bắt đầu xử lý yêu cầu AI",
+                    "Starting AI request processing",
+                    "开始处理 AI 请求"), 0, 1, null));
 
                 StandardResponse syncResponse = new StandardResponse();
                 String rawContent = fetchAiRawContent(prompt, progress -> {
@@ -3705,7 +5440,11 @@ public class ApiSpringController {
                 if (rawContent == null || rawContent.isBlank()) {
                     syncResponse.set("code", 200);
                     syncResponse.set("success", false);
-                    syncResponse.set("message", "Không nhận được nội dung hợp lệ từ dịch vụ AI.");
+                    syncResponse.set("message", uiTextByLang(
+                        uiLang,
+                        "Không nhận được nội dung hợp lệ từ dịch vụ AI.",
+                        "No valid content received from AI service.",
+                        "未收到来自 AI 服务的有效内容。"));
                 } else {
                     if (shouldExposeRoutingDebug(params)) {
                         Object routingDecision = params != null ? params.get("_providerRoutingDecision") : null;
@@ -3723,8 +5462,12 @@ public class ApiSpringController {
                     } catch (Exception ctxEx) {
                         logger.warn("Could not update AI context file (async): {}", ctxEx.getMessage());
                     }
-                    updateAiAsyncJobProgress(job, createAiJobProgress("parsing", "Đang phân tích kết quả AI", 1, 1, null));
-                    populateAiResponseFromRawContent(syncResponse, rawContent);
+                    updateAiAsyncJobProgress(job, createAiJobProgress("parsing", uiTextByLang(
+                        uiLang,
+                        "Đang phân tích kết quả AI",
+                        "Parsing AI result",
+                        "正在解析 AI 结果"), 1, 1, null));
+                    populateAiResponseFromRawContent(syncResponse, rawContent, uiLang);
                 }
 
                 Map<String, Object> resultPayload = new HashMap<>(syncResponse.getPropertiesMap());
@@ -3738,7 +5481,16 @@ public class ApiSpringController {
                 job.put("updatedAt", System.currentTimeMillis());
                 job.put("completedAt", System.currentTimeMillis());
                 updateAiAsyncJobProgress(job, createAiJobProgress(ok ? "completed" : "failed",
-                        ok ? "Đã hoàn tất tạo menu AI" : String.valueOf(resultPayload.getOrDefault("message", "AI xử lý thất bại")),
+                    ok ? uiTextByLang(
+                        uiLang,
+                        "Đã hoàn tất tạo menu AI",
+                        "AI generation completed",
+                        "AI 生成已完成")
+                       : String.valueOf(resultPayload.getOrDefault("message", uiTextByLang(
+                        uiLang,
+                        "AI xử lý thất bại",
+                        "AI processing failed",
+                        "AI 处理失败"))),
                         1, 1, null));
                 emitAiAsyncJobSocketEvent(job, "ai_job_result", resultPayload);
             } catch (Exception e) {
@@ -3749,11 +5501,19 @@ public class ApiSpringController {
                 job.put("status", "failed");
                 job.put("updatedAt", System.currentTimeMillis());
                 job.put("completedAt", System.currentTimeMillis());
-                updateAiAsyncJobProgress(job, createAiJobProgress("failed", "Lỗi xử lý async AI: " + e.getMessage(), 1, 1, null));
+                updateAiAsyncJobProgress(job, createAiJobProgress("failed", uiTextByLang(
+                    uiLang,
+                    "Lỗi xử lý async AI: " + e.getMessage(),
+                    "Async AI processing error: " + e.getMessage(),
+                    "异步 AI 处理错误：" + e.getMessage()), 1, 1, null));
                 job.put("result", Map.of(
                         "code", 200,
                         "success", false,
-                        "message", "Lỗi xử lý async AI: " + e.getMessage(),
+                        "message", uiTextByLang(
+                            uiLang,
+                            "Lỗi xử lý async AI: " + e.getMessage(),
+                            "Async AI processing error: " + e.getMessage(),
+                            "异步 AI 处理错误：" + e.getMessage()),
                         "errorCode", "ASYNC_AI_JOB_ERROR"));
                 emitAiAsyncJobSocketEvent(job, "ai_job_result", job.get("result"));
             }
@@ -3761,7 +5521,11 @@ public class ApiSpringController {
 
         response.set("code", 200);
         response.set("success", true);
-        response.set("message", "Đã nhận yêu cầu AI, đang xử lý nền");
+        response.set("message", uiTextByLang(
+            uiLang,
+            "Đã nhận yêu cầu AI, đang xử lý nền",
+            "AI request received and processing in background",
+            "已收到 AI 请求，正在后台处理"));
         response.set("data", Map.of(
                 "jobId", jobId,
                 "status", "queued",
@@ -3770,12 +5534,17 @@ public class ApiSpringController {
     }
 
     private void handleAiAsyncStatus(StandardResponse response, Map<String, Object> params) {
+        String uiLang = resolveClientUiLanguage(params);
         cleanupExpiredAiJobs();
         String jobId = String.valueOf(params.getOrDefault("jobId", "")).trim();
         if (jobId.isEmpty()) {
             response.set("code", 200);
             response.set("success", false);
-            response.set("message", "Thiếu tham số jobId");
+            response.set("message", uiTextByLang(
+                uiLang,
+                "Thiếu tham số jobId",
+                "Missing jobId parameter",
+                "缺少 jobId 参数"));
             response.set("errorCode", "ASYNC_JOB_ID_REQUIRED");
             return;
         }
@@ -3784,7 +5553,11 @@ public class ApiSpringController {
         if (job == null) {
             response.set("code", 200);
             response.set("success", false);
-            response.set("message", "Không tìm thấy job hoặc job đã hết hạn");
+            response.set("message", uiTextByLang(
+                uiLang,
+                "Không tìm thấy job hoặc job đã hết hạn",
+                "Job not found or expired",
+                "未找到任务或任务已过期"));
             response.set("errorCode", "ASYNC_JOB_NOT_FOUND");
             return;
         }
@@ -3808,17 +5581,26 @@ public class ApiSpringController {
 
         response.set("code", 200);
         response.set("success", true);
-        response.set("message", "OK");
+        response.set("message", uiTextByLang(
+            uiLang,
+            "OK",
+            "OK",
+            "OK"));
         response.set("data", payload);
     }
 
     private void handleAiAsyncCancel(StandardResponse response, Map<String, Object> params) {
+        String uiLang = resolveClientUiLanguage(params);
         cleanupExpiredAiJobs();
         String jobId = String.valueOf(params.getOrDefault("jobId", "")).trim();
         if (jobId.isEmpty()) {
             response.set("code", 200);
             response.set("success", false);
-            response.set("message", "Thiếu tham số jobId");
+            response.set("message", uiTextByLang(
+                uiLang,
+                "Thiếu tham số jobId",
+                "Missing jobId parameter",
+                "缺少 jobId 参数"));
             response.set("errorCode", "ASYNC_JOB_ID_REQUIRED");
             return;
         }
@@ -3827,7 +5609,11 @@ public class ApiSpringController {
         if (job == null) {
             response.set("code", 200);
             response.set("success", false);
-            response.set("message", "Không tìm thấy job hoặc job đã hết hạn");
+            response.set("message", uiTextByLang(
+                uiLang,
+                "Không tìm thấy job hoặc job đã hết hạn",
+                "Job not found or expired",
+                "未找到任务或任务已过期"));
             response.set("errorCode", "ASYNC_JOB_NOT_FOUND");
             return;
         }
@@ -3836,7 +5622,11 @@ public class ApiSpringController {
         if ("completed".equals(status) || "failed".equals(status) || "cancelled".equals(status)) {
             response.set("code", 200);
             response.set("success", true);
-            response.set("message", "Job đã ở trạng thái kết thúc");
+            response.set("message", uiTextByLang(
+                uiLang,
+                "Job đã ở trạng thái kết thúc",
+                "Job is already in a terminal state",
+                "任务已处于结束状态"));
             response.set("data", Map.of(
                     "jobId", jobId,
                     "status", status));
@@ -3847,18 +5637,30 @@ public class ApiSpringController {
         job.put("status", "cancelled");
         job.put("updatedAt", System.currentTimeMillis());
         job.put("completedAt", System.currentTimeMillis());
-        updateAiAsyncJobProgress(job, createAiJobProgress("cancelled", "Đã dừng theo yêu cầu người dùng", 1, 1, null));
+        updateAiAsyncJobProgress(job, createAiJobProgress("cancelled", uiTextByLang(
+            uiLang,
+            "Đã dừng theo yêu cầu người dùng",
+            "Stopped by user request",
+            "已按用户请求停止"), 1, 1, null));
         Map<String, Object> cancelResult = new HashMap<>();
         cancelResult.put("code", 200);
         cancelResult.put("success", false);
-        cancelResult.put("message", "AI job đã được dừng theo yêu cầu");
+        cancelResult.put("message", uiTextByLang(
+            uiLang,
+            "AI job đã được dừng theo yêu cầu",
+            "AI job was stopped by request",
+            "AI 任务已按请求停止"));
         cancelResult.put("errorCode", "ASYNC_JOB_CANCELLED");
         job.put("result", cancelResult);
         emitAiAsyncJobSocketEvent(job, "ai_job_result", cancelResult);
 
         response.set("code", 200);
         response.set("success", true);
-        response.set("message", "Đã gửi yêu cầu dừng AI job");
+        response.set("message", uiTextByLang(
+            uiLang,
+            "Đã gửi yêu cầu dừng AI job",
+            "Stop request for AI job has been sent",
+            "已发送停止 AI 任务请求"));
         response.set("data", Map.of(
                 "jobId", jobId,
                 "status", "cancelled"));

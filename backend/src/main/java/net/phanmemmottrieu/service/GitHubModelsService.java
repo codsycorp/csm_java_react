@@ -616,33 +616,6 @@ public class GitHubModelsService {
   @Value("${github.models.catalog-cache-ms:300000}")
   private long modelCatalogCacheMs;
 
-  @Value("${github.models.copilot-token:}")
-  private String copilotToken;
-
-  @Value("${github.models.copilot-token-auto-exchange:true}")
-  private boolean copilotTokenAutoExchange;
-
-  @Value("${github.models.copilot-token-refresh-skew-ms:300000}")
-  private long copilotTokenRefreshSkewMs;
-
-  @Value("${github.models.copilot-token-exchange-failure-cooldown-ms:300000}")
-  private long copilotTokenExchangeFailureCooldownMs;
-
-  @Value("${github.models.copilot-token-exchange-notfound-cooldown-ms:21600000}")
-  private long copilotTokenExchangeNotFoundCooldownMs;
-
-  @Value("${github.models.copilot-token-exchange-url:}")
-  private String copilotTokenExchangeUrl;
-
-  @Value("${github.models.copilot-token-exchange.user-agent:GitHubCopilotChat/0.0.1}")
-  private String copilotTokenExchangeUserAgent;
-
-  @Value("${github.models.copilot-token-exchange.editor-version:vscode/1.99.0}")
-  private String copilotTokenExchangeEditorVersion;
-
-  @Value("${github.models.copilot-token-exchange.editor-plugin-version:copilot-chat/0.26.7}")
-  private String copilotTokenExchangeEditorPluginVersion;
-
   @Value("${github.models.model:gpt-4o-mini}")
   private String model;
 
@@ -651,6 +624,9 @@ public class GitHubModelsService {
 
   @Value("${github.models.default-fallback-models:gpt-4o-mini,gpt-4.1-mini,gpt-4.1}")
   private String defaultFallbackModels;
+
+  @Value("${github.models.menu-allowed-models:gpt-4o-mini,gpt-4o}")
+  private String menuAllowedModels;
 
   @Value("${github.models.prioritize-mini:true}")
   private boolean prioritizeMiniModels;
@@ -699,6 +675,15 @@ public class GitHubModelsService {
 
   @Value("${github.models.retry.max-429-wait-ms:8000}")
   private long retryMax429WaitMs;
+
+  @Value("${github.models.model-rate-limit-cooldown-ms:600000}")
+  private long modelRateLimitCooldownMs;
+
+  @Value("${github.models.model-unknown-cooldown-ms:21600000}")
+  private long modelUnknownCooldownMs;
+
+  @Value("${github.models.rotate-candidates:false}")
+  private boolean rotateCandidates;
 
   @Value("${github.models.throttle.min-interval-ms:2500}")
   private long throttleMinIntervalMs;
@@ -790,6 +775,9 @@ public class GitHubModelsService {
   @Value("${github.models.smart-selection.menu-gemini-threshold-chars:15000}")
   private int menuGeminiThresholdChars;
 
+  @Value("${github.models.menu.force-github-models:true}")
+  private boolean menuForceGithubModels;
+
   @Value("${github.models.model-quota-cooldown-ms:21600000}")
   private long modelQuotaCooldownMs;
 
@@ -803,12 +791,9 @@ public class GitHubModelsService {
   private String token;
 
   private volatile Map<String, Set<String>> modelEndpointCache = Collections.emptyMap();
+  private volatile Map<String, String> modelAliasToCatalogId = Collections.emptyMap();
+  private volatile Set<String> modelCatalogRawIds = Collections.emptySet();
   private volatile long modelEndpointCacheFetchedAtMs = 0L;
-  private final Object copilotTokenExchangeLock = new Object();
-  private volatile String cachedCopilotSessionToken = "";
-  private volatile long cachedCopilotSessionExpiresAtMs = 0L;
-  private volatile long nextCopilotTokenExchangeRetryAtMs = 0L;
-
   // ═══════════════════════════════════════════════════════════════════════════
   // Response Cache & Project Context Cache
   // ═══════════════════════════════════════════════════════════════════════════
@@ -839,182 +824,20 @@ public class GitHubModelsService {
   @org.springframework.beans.factory.annotation.Autowired(required = false)
   private GeminiService geminiService;
 
-  private boolean isCopilotIndividualEndpoint(String endpoint) {
-    String normalized = String.valueOf(endpoint == null ? "" : endpoint).toLowerCase(Locale.ROOT);
-    return normalized.contains("api.individual.githubcopilot.com");
-  }
-
-  private boolean looksLikeGitHubPat(String tokenValue) {
-    String t = String.valueOf(tokenValue == null ? "" : tokenValue).trim().toLowerCase(Locale.ROOT);
-    return t.startsWith("ghp_") || t.startsWith("github_pat_");
-  }
-
   private String getPatToken() {
+    String envToken = System.getenv("GITHUB_TOKEN");
+    if (envToken != null && !envToken.trim().isEmpty()) {
+      return envToken.trim();
+    }
     String configured = token == null ? "" : token.trim();
     if (!configured.isEmpty()) {
       return configured;
     }
-    String envToken = System.getenv("GITHUB_TOKEN");
-    return envToken == null ? "" : envToken.trim();
-  }
-
-  private boolean hasValidCachedCopilotSessionToken() {
-    if (cachedCopilotSessionToken == null || cachedCopilotSessionToken.isBlank()) {
-      return false;
-    }
-    long now = System.currentTimeMillis();
-    long skew = Math.max(60000L, copilotTokenRefreshSkewMs);
-    return cachedCopilotSessionExpiresAtMs <= 0L || now + skew < cachedCopilotSessionExpiresAtMs;
-  }
-
-  private boolean isInCopilotTokenExchangeFailureCooldown() {
-    return System.currentTimeMillis() < nextCopilotTokenExchangeRetryAtMs;
-  }
-
-  private List<String> getCopilotTokenExchangeEndpoints() {
-    List<String> endpoints = new ArrayList<>();
-    String configured = copilotTokenExchangeUrl == null ? "" : copilotTokenExchangeUrl.trim();
-    if (!configured.isEmpty()) {
-      endpoints.add(configured);
-    }
-    if (!endpoints.contains("https://api.github.com/copilot_internal/v2/token")) {
-      endpoints.add("https://api.github.com/copilot_internal/v2/token");
-    }
-    if (!endpoints.contains("https://api.github.com/copilot_internal/token")) {
-      endpoints.add("https://api.github.com/copilot_internal/token");
-    }
-    if (!endpoints.contains("https://api.githubcopilot.com/copilot_internal/v2/token")) {
-      endpoints.add("https://api.githubcopilot.com/copilot_internal/v2/token");
-    }
-    if (!endpoints.contains("https://api.githubcopilot.com/copilot_internal/token")) {
-      endpoints.add("https://api.githubcopilot.com/copilot_internal/token");
-    }
-    return endpoints;
-  }
-
-  private String exchangeCopilotSessionTokenFromPat(String patToken) {
-    if (!copilotTokenAutoExchange || !looksLikeGitHubPat(patToken)) {
-      return "";
-    }
-
-    if (hasValidCachedCopilotSessionToken()) {
-      return cachedCopilotSessionToken;
-    }
-
-    if (isInCopilotTokenExchangeFailureCooldown()) {
-      return "";
-    }
-
-    synchronized (copilotTokenExchangeLock) {
-      if (hasValidCachedCopilotSessionToken()) {
-        return cachedCopilotSessionToken;
-      }
-
-      if (isInCopilotTokenExchangeFailureCooldown()) {
-        return "";
-      }
-
-      List<String> endpointCandidates = getCopilotTokenExchangeEndpoints();
-      List<String> authSchemes = List.of("token", "Bearer");
-      String lastFailure = "unknown";
-      boolean onlyNotFoundFailures = true;
-
-      for (String endpointCandidate : endpointCandidates) {
-        for (String authSchemeCandidate : authSchemes) {
-          try {
-            HttpHeaders headers = new HttpHeaders();
-            headers.set("Authorization", authSchemeCandidate + " " + patToken.trim());
-            headers.set("Accept", "application/json");
-            headers.set("X-GitHub-Api-Version", "2022-11-28");
-            headers.set("User-Agent", String.valueOf(copilotTokenExchangeUserAgent == null ? "GitHubCopilotChat/0.0.1" : copilotTokenExchangeUserAgent).trim());
-            headers.set("Editor-Version", String.valueOf(copilotTokenExchangeEditorVersion == null ? "vscode/1.99.0" : copilotTokenExchangeEditorVersion).trim());
-            headers.set("Editor-Plugin-Version", String.valueOf(copilotTokenExchangeEditorPluginVersion == null ? "copilot-chat/0.26.7" : copilotTokenExchangeEditorPluginVersion).trim());
-            ResponseEntity<String> response = restTemplate.exchange(
-                endpointCandidate,
-                HttpMethod.GET,
-                new HttpEntity<>(headers),
-                String.class);
-
-            String body = response.getBody();
-            if (body == null || body.isBlank()) {
-              lastFailure = "Empty body from " + endpointCandidate;
-              continue;
-            }
-
-            @SuppressWarnings("unchecked")
-            Map<String, Object> payload = objectMapper.readValue(body, Map.class);
-            String sessionToken = String.valueOf(payload.getOrDefault("token", "")).trim();
-            if (sessionToken.isBlank()) {
-              lastFailure = "Missing token field from " + endpointCandidate;
-              continue;
-            }
-
-            long expiresAtMs = 0L;
-            Object expiresObj = payload.get("expires_at");
-            if (expiresObj != null) {
-              try {
-                expiresAtMs = ZonedDateTime.parse(String.valueOf(expiresObj)).toInstant().toEpochMilli();
-              } catch (Exception ignored) {
-                expiresAtMs = 0L;
-              }
-            }
-
-            cachedCopilotSessionToken = sessionToken;
-            cachedCopilotSessionExpiresAtMs = expiresAtMs;
-            if (expiresAtMs > 0L) {
-              long ttlSec = Math.max(0L, (expiresAtMs - System.currentTimeMillis()) / 1000L);
-              log.info("Exchanged Copilot session token from PAT via {} {} ; expires in {}s",
-                  authSchemeCandidate, endpointCandidate, ttlSec);
-            } else {
-              log.info("Exchanged Copilot session token from PAT via {} {}",
-                  authSchemeCandidate, endpointCandidate);
-            }
-            return sessionToken;
-          } catch (Exception ex) {
-            lastFailure = ex.getMessage();
-            if (!(ex instanceof HttpClientErrorException httpEx) || httpEx.getStatusCode().value() != 404) {
-              onlyNotFoundFailures = false;
-            }
-            log.debug("Copilot token exchange failed via {} {}: {}",
-                authSchemeCandidate, endpointCandidate, ex.getMessage());
-          }
-        }
-      }
-
-      long now = System.currentTimeMillis();
-      long genericCooldownMs = Math.max(30000L, copilotTokenExchangeFailureCooldownMs);
-      long notFoundCooldownMs = Math.max(genericCooldownMs, copilotTokenExchangeNotFoundCooldownMs);
-      long cooldownToUse = onlyNotFoundFailures ? notFoundCooldownMs : genericCooldownMs;
-      nextCopilotTokenExchangeRetryAtMs = now + cooldownToUse;
-      if (onlyNotFoundFailures) {
-        log.warn("Could not exchange Copilot session token from PAT: all candidates returned 404. Backing off for {} ms. Last error: {}",
-            cooldownToUse, lastFailure);
-      } else {
-        log.warn("Could not exchange Copilot session token from PAT after trying {} endpoints (cooldown {} ms): {}",
-            endpointCandidates.size(), cooldownToUse, lastFailure);
-      }
-      return "";
-    }
+    return "";
   }
 
   private String getEffectiveToken(String endpoint) {
-    if (isCopilotIndividualEndpoint(endpoint)) {
-      String copilotConfigured = copilotToken == null ? "" : copilotToken.trim();
-      if (!copilotConfigured.isEmpty()) {
-        return copilotConfigured;
-      }
-      String copilotEnv = System.getenv("GITHUB_COPILOT_TOKEN");
-      if (copilotEnv != null && !copilotEnv.trim().isEmpty()) {
-        return copilotEnv.trim();
-      }
-
-      String patForExchange = getPatToken();
-      String exchanged = exchangeCopilotSessionTokenFromPat(patForExchange);
-      if (!exchanged.isBlank()) {
-        return exchanged;
-      }
-    }
-
+    // Use PAT directly for every endpoint.
     return getPatToken();
   }
 
@@ -1095,37 +918,17 @@ public class GitHubModelsService {
 
       for (Path javaFile : javaFiles) {
         try {
-          String className = javaFile.getFileName().toString().replace(".java", "");
+          String relative = projectPath.relativize(javaFile).toString();
           String content = Files.readString(javaFile, StandardCharsets.UTF_8);
 
-          // Extract class declaration, imports, and public methods
-          StringBuilder extract = new StringBuilder();
-          extract.append("### ").append(className).append(".java\n");
-          String[] lines = content.split("\n");
-          boolean inClass = false;
-          int methodCount = 0;
-
-          for (String line : lines) {
-            String trimmed = line.trim();
-            if (trimmed.startsWith("package ") || trimmed.startsWith("import ")) {
-              if (trimmed.startsWith("import ") && !trimmed.contains("java.util") && !trimmed.contains("java.io")) {
-                extract.append(trimmed).append("\n");
-              }
-            } else if (trimmed.startsWith("public class ") || trimmed.startsWith("public interface ")) {
-              inClass = true;
-              extract.append("\n").append(trimmed).append("\n");
-            } else if (inClass && trimmed.startsWith("public ") && (trimmed.contains("(") || trimmed.contains("{"))) {
-              extract.append("  ").append(trimmed).append("\n");
-              methodCount++;
-              if (methodCount >= 10) break;
-            }
+          String compact = compactJavaSourceSkeleton(content);
+          if (compact.isBlank()) continue;
+          if (compact.length() > javaCrawlerMaxCharsPerFile) {
+            compact = compact.substring(0, javaCrawlerMaxCharsPerFile) + "\n...[truncated]";
           }
 
-          String extracted = extract.toString();
-          if (extracted.length() > javaCrawlerMaxCharsPerFile) {
-            extracted = extracted.substring(0, javaCrawlerMaxCharsPerFile) + "\n  ...[truncated]";
-          }
-          context.append(extracted).append("\n");
+          context.append("### ").append(relative).append("\n");
+          context.append(compact).append("\n\n");
         } catch (Exception readEx) {
           log.debug("Could not read Java file {}: {}", javaFile, readEx.getMessage());
         }
@@ -1139,6 +942,77 @@ public class GitHubModelsService {
       log.warn("Could not crawl project Java files: {}", ex.getMessage());
       return "";
     }
+  }
+
+  /**
+   * Strip a Java source file down to class/interface signatures and public/protected
+   * method signatures only. Removes: all imports, block comments, line comments,
+   * blank lines, and method bodies. Typical reduction: 70-85%.
+   */
+  private String compactJavaSourceSkeleton(String source) {
+    if (source == null || source.isBlank()) return "";
+    String[] lines = source.split("\\n");
+    StringBuilder out = new StringBuilder();
+    List<String> pendingAnnotations = new ArrayList<>();
+    boolean inBlockComment = false;
+
+    for (String rawLine : lines) {
+      String trimmed = rawLine == null ? "" : rawLine.trim();
+
+      // Block comment handling
+      if (inBlockComment) {
+        if (trimmed.contains("*/")) inBlockComment = false;
+        continue;
+      }
+      if (trimmed.startsWith("/*")) {
+        if (!trimmed.contains("*/")) inBlockComment = true;
+        continue;
+      }
+      // Line comments and Javadoc continuation lines
+      if (trimmed.startsWith("//") || trimmed.startsWith("*")) continue;
+
+      // Strip inline comment
+      int ic = trimmed.indexOf("//");
+      if (ic >= 0) trimmed = trimmed.substring(0, ic).trim();
+
+      // Skip blank and import lines
+      if (trimmed.isBlank() || trimmed.startsWith("import ")) continue;
+
+      // Collect annotations to attach to the next signature
+      if (trimmed.startsWith("@")) {
+        pendingAnnotations.add(trimmed);
+        continue;
+      }
+
+      boolean isClass = trimmed.startsWith("public class ") || trimmed.startsWith("class ")
+          || trimmed.startsWith("public interface ") || trimmed.startsWith("interface ")
+          || trimmed.startsWith("public abstract class ") || trimmed.startsWith("abstract class ")
+          || trimmed.startsWith("public enum ") || trimmed.startsWith("enum ")
+          || trimmed.startsWith("public record ") || trimmed.startsWith("record ")
+          || trimmed.startsWith("public sealed ");
+      boolean isMethod = !isClass && trimmed.contains("(") && trimmed.contains(")")
+          && !trimmed.startsWith("if ") && !trimmed.startsWith("for ")
+          && !trimmed.startsWith("while ") && !trimmed.startsWith("switch ")
+          && !trimmed.startsWith("catch ") && !trimmed.startsWith("return ")
+          && (trimmed.startsWith("public ") || trimmed.startsWith("protected ")
+              || trimmed.startsWith("private ") || trimmed.startsWith("static "));
+      boolean isPackage = trimmed.startsWith("package ");
+
+      if (!isClass && !isMethod && !isPackage) continue;
+
+      // Emit buffered annotations
+      for (String ann : pendingAnnotations) out.append(ann).append("\n");
+      pendingAnnotations.clear();
+
+      if (isMethod && trimmed.contains("{")) {
+        String sig = trimmed.substring(0, trimmed.indexOf('{')).trim();
+        out.append(sig).append(" { ... }\n");
+      } else {
+        out.append(trimmed).append("\n");
+      }
+    }
+
+    return out.toString().trim();
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -1162,6 +1036,18 @@ public class GitHubModelsService {
       if (candidates.contains("gpt-4.1-mini")) {
         return "gpt-4.1-mini";
       }
+    }
+
+    // Menu flow can be forced to stay on GitHub Models even for large prompts.
+    if (isMenuDesign && menuForceGithubModels) {
+      List<String> candidates = resolveCandidateModels();
+      if (candidates.contains("gpt-4o")) {
+        return "gpt-4o";
+      }
+      if (candidates.contains("gpt-4o-mini")) {
+        return "gpt-4o-mini";
+      }
+      return model;
     }
 
     // For large contexts, use high-capacity models
@@ -1285,6 +1171,10 @@ public class GitHubModelsService {
   }
 
   private String maybeInjectProjectContext(String prompt, String taskTypeHint) {
+    if ("menu_design".equalsIgnoreCase(String.valueOf(taskTypeHint == null ? "" : taskTypeHint).trim())
+        || looksLikeMenuTask(prompt)) {
+      return prompt;
+    }
     if (!looksLikeCodeTask(prompt)) {
       return prompt;
     }
@@ -1296,6 +1186,9 @@ public class GitHubModelsService {
       return prompt;
     }
     String promptStr = String.valueOf(prompt == null ? "" : prompt);
+
+    // Append auto code-review directive so AI also surfaces quality findings inline.
+    String reviewDirective = buildAutoCodeReviewDirective();
 
     // If including the full project context would push us past directMaxChars, skeletonize it.
     if (contextBudgetManager != null && contextBudgetManager.isEnabled()
@@ -1311,10 +1204,26 @@ public class GitHubModelsService {
       if (skelContext.isBlank()) return promptStr;
       log.info("maybeInjectProjectContext: skeletonized project context {} -> {} chars (token budget={})",
           projectContext.length(), skelContext.length(), budgetForProject);
-      return skelContext + "\n\n" + promptStr;
+      return skelContext + "\n\n" + reviewDirective + "\n\n" + promptStr;
     }
 
-    return projectContext + "\n\n" + promptStr;
+    return projectContext + "\n\n" + reviewDirective + "\n\n" + promptStr;
+  }
+
+  /**
+   * Builds a code-review directive block that is automatically injected alongside the project
+   * context whenever a code task is detected. This allows the AI to surface quality findings
+   * inline without any extra endpoint or client-side trigger.
+   */
+  private String buildAutoCodeReviewDirective() {
+    return "## AUTO CODE REVIEW (injected by backend)\n"
+        + "You have been given the compact skeletons of the project's Java source files above.\n"
+        + "As part of your response, ALSO perform a brief code review on the provided code:\n"
+        + "- Identify any HIGH or MEDIUM severity issues (bugs, security risks, N+1 queries, missing null-checks, etc.)\n"
+        + "- For each issue, state the file name, a one-line description, and a short recommendation.\n"
+        + "- If no significant issues are found, state \"No critical issues detected.\"\n"
+        + "Keep the review section concise (bullet points). Place it at the END of your response under the heading "
+        + "\"### Code Review Findings\".";
   }
 
   private boolean isModelTemporarilyUnavailable(String modelName) {
@@ -1514,10 +1423,7 @@ public class GitHubModelsService {
       return "";
     }
 
-    String endpointLower = String.valueOf(endpoint == null ? "" : endpoint).toLowerCase(Locale.ROOT);
-    if (endpointLower.contains("api.individual.githubcopilot.com")) {
-      return "GitHub-Bearer " + tokenValue;
-    }
+    // In auto mode, always use standard Bearer PAT.
     return "Bearer " + tokenValue;
   }
 
@@ -1601,6 +1507,8 @@ public class GitHubModelsService {
         }
 
         Map<String, Set<String>> next = new HashMap<>();
+        Map<String, String> aliases = new HashMap<>();
+        Set<String> rawIds = new LinkedHashSet<>();
         for (Object itemObj : dataList) {
           if (!(itemObj instanceof Map<?, ?> item)) {
             continue;
@@ -1625,17 +1533,91 @@ public class GitHubModelsService {
               }
             }
           }
-          next.put(id.toLowerCase(Locale.ROOT), endpoints);
+          String idLower = id.toLowerCase(Locale.ROOT);
+          rawIds.add(idLower);
+          String callableId = deriveCallableModelId(idLower);
+          indexCatalogAlias(next, aliases, idLower, callableId, endpoints);
+
+          // Base alias: strip date suffix so short names match versioned entries.
+          String baseName = stripVersionSuffix(idLower);
+          if (!baseName.equals(idLower)) {
+            indexCatalogAlias(next, aliases, baseName, callableId, endpoints);
+          }
+
+          // Provider-qualified ids (e.g. openai/gpt-4.1) should match by short segment.
+          int slash = idLower.lastIndexOf('/');
+          if (slash >= 0 && slash < idLower.length() - 1) {
+            String shortName = idLower.substring(slash + 1);
+            indexCatalogAlias(next, aliases, shortName, callableId, endpoints);
+            String shortBase = stripVersionSuffix(shortName);
+            if (!shortBase.equals(shortName)) {
+              indexCatalogAlias(next, aliases, shortBase, callableId, endpoints);
+            }
+          }
+
+          if (!callableId.equals(idLower)) {
+            indexCatalogAlias(next, aliases, callableId, callableId, endpoints);
+            String callableBase = stripVersionSuffix(callableId);
+            if (!callableBase.equals(callableId)) {
+              indexCatalogAlias(next, aliases, callableBase, callableId, endpoints);
+            }
+          }
         }
 
         if (!next.isEmpty()) {
           modelEndpointCache = next;
+          modelAliasToCatalogId = aliases;
+          modelCatalogRawIds = rawIds;
           modelEndpointCacheFetchedAtMs = System.currentTimeMillis();
           log.info("Loaded Copilot model catalog: {} models", next.size());
+          logCatalogResolution(next, aliases);
         }
       } catch (Exception ex) {
         log.debug("Could not refresh Copilot model catalog: {}", ex.getMessage());
       }
+    }
+  }
+
+  private void logCatalogResolution(Map<String, Set<String>> endpointCache, Map<String, String> aliasMap) {
+    if (endpointCache == null || endpointCache.isEmpty()) {
+      return;
+    }
+
+    Set<String> requestedAliases = new LinkedHashSet<>();
+    String primary = normalizeConfiguredModel(model);
+    if (!primary.isBlank()) {
+      requestedAliases.add(primary);
+    }
+    addModelsFromCsv(requestedAliases, models);
+    addModelsFromCsv(requestedAliases, defaultFallbackModels);
+
+    List<String> mapped = new ArrayList<>();
+    List<String> missing = new ArrayList<>();
+    for (String alias : requestedAliases) {
+      String resolved = resolveCatalogModelId(alias, endpointCache, aliasMap);
+      if (resolved == null || resolved.isBlank()) {
+        missing.add(alias);
+      } else {
+        Set<String> endpoints = endpointCache.getOrDefault(resolved.toLowerCase(Locale.ROOT), Collections.emptySet());
+        mapped.add(alias + " -> " + resolved + " endpoints=" + endpoints);
+      }
+    }
+
+    if (!mapped.isEmpty()) {
+      log.info("GitHub Models catalog mapping: {}", String.join("; ", mapped));
+    }
+    if (!missing.isEmpty()) {
+      log.warn("GitHub Models catalog missing configured aliases: {}", String.join(", ", missing));
+    }
+
+    Set<String> raw = modelCatalogRawIds == null ? Collections.emptySet() : modelCatalogRawIds;
+    if (!raw.isEmpty()) {
+      log.info("GitHub Models catalog raw IDs: {}", String.join(", ", raw));
+    }
+
+    List<String> chatCapable = collectCatalogModelsForChat(endpointCache);
+    if (!chatCapable.isEmpty()) {
+      log.info("GitHub Models chat-capable catalog IDs: {}", String.join(", ", chatCapable));
     }
   }
 
@@ -1645,7 +1627,8 @@ public class GitHubModelsService {
       return Collections.emptySet();
     }
     Map<String, Set<String>> cache = modelEndpointCache == null ? Collections.emptyMap() : modelEndpointCache;
-    Set<String> supported = cache.get(modelName.trim().toLowerCase(Locale.ROOT));
+    String aliasKey = resolveCatalogAliasKey(modelName, cache);
+    Set<String> supported = aliasKey == null ? null : cache.get(aliasKey);
     return supported == null ? Collections.emptySet() : supported;
   }
 
@@ -1744,16 +1727,10 @@ public class GitHubModelsService {
     if (effectiveToken.isEmpty()) {
       return createErrorJson("Thiếu token cho endpoint AI (set github.models.token hoặc env GITHUB_TOKEN)", "GITHUB_TOKEN_MISSING");
     }
-    if (isCopilotIndividualEndpoint(endpoint) && looksLikeGitHubPat(effectiveToken)) {
-      return createErrorJson(
-          "Endpoint api.individual.githubcopilot.com yêu cầu Copilot session token cho GitHub-Bearer (không dùng PAT ghp_). Hãy set github.models.copilot-token hoặc env GITHUB_COPILOT_TOKEN",
-          "GITHUB_COPILOT_TOKEN_INVALID");
-    }
-
     String trimmedPrompt = prompt.trim();
     String taskTypeHint = detectTaskTypeHint(trimmedPrompt);
-    boolean isCodeTask = looksLikeCodeTask(trimmedPrompt);
     boolean isMenuTask = looksLikeMenuTask(trimmedPrompt);
+    boolean isCodeTask = looksLikeCodeTask(trimmedPrompt) && !isMenuTask;
 
     // Inject scenario-specific instructions between master prompt and dynamic context
     AiMenuOperationScenario scenario = extractOperationScenario(prompt);
@@ -1896,12 +1873,6 @@ public class GitHubModelsService {
     if (effectiveToken.isEmpty()) {
       return createErrorJson("Thiếu token cho endpoint AI (set github.models.token hoặc env GITHUB_TOKEN)", "GITHUB_TOKEN_MISSING");
     }
-    if (isCopilotIndividualEndpoint(endpoint) && looksLikeGitHubPat(effectiveToken)) {
-      return createErrorJson(
-          "Endpoint api.individual.githubcopilot.com yêu cầu Copilot session token cho GitHub-Bearer (không dùng PAT ghp_). Hãy set github.models.copilot-token hoặc env GITHUB_COPILOT_TOKEN",
-          "GITHUB_COPILOT_TOKEN_INVALID");
-    }
-
     try {
       String flattenedPrompt = flattenChatMessages(messages);
       String fittedPrompt = applyStreamingContextBudgetFitting(messages, flattenedPrompt);
@@ -2531,6 +2502,7 @@ public class GitHubModelsService {
           mergeProgress(progressI18n("copilot.progress.message.reducing_chunks", null, null, null),
             withOrchestrationMeta("reducing", 0, chunkSummaries.size(), reducingExtra))));
       List<String> reducedSummaries = reduceSummaries(chunkSummaries, progressListener);
+        String globalAnchors = buildGlobalContextAnchors(prompt, chunks, baseMenuForIncremental, taskHint);
       Map<String, Object> finalMergeExtra = new HashMap<>();
       String finalMergeDraft = buildRealtimeDraftText(
           "final_merge",
@@ -2548,7 +2520,7 @@ public class GitHubModelsService {
       emitProgress(progressListener, progressPayload("final_merge", "Đang tổng hợp kết quả cuối", 0, 1,
           mergeProgress(progressI18n("copilot.progress.message.final_merge", null, null, null),
             withOrchestrationMeta("final_merge", 0, 1, finalMergeExtra))));
-      String mergedPrompt = buildMergedPrompt(taskHint, reducedSummaries);
+      String mergedPrompt = buildMergedPrompt(taskHint, reducedSummaries, globalAnchors);
       String mergedRaw = callChatCompletion(mergedPrompt, maxOutputTokens, mergeTemperature, progressListener,
           progressPayload("final_merge", "Đang chờ phản hồi tổng hợp cuối", 1, 1,
             mergeProgress(progressI18n("copilot.progress.message.final_waiting", null, null, null),
@@ -2563,6 +2535,17 @@ public class GitHubModelsService {
       }
 
       Object parsedResult = tryParseJson(mergedContent);
+      Object normalizedResult = parsedResult != null ? parsedResult : mergedContent;
+      if (looksLikeMenuTask(prompt)) {
+        Object repaired = ensureValidMenuFinalResult(normalizedResult, mergedContent, scenario, progressListener, finalMergeExtra);
+        if (repaired == null) {
+          return createErrorJson(
+              "GitHub Models trả về kết quả cuối không hợp lệ cho menu (không phải JSON menu/menu_node).",
+              "GITHUB_FINAL_OUTPUT_INVALID");
+        }
+        normalizedResult = repaired;
+      }
+
       Map<String, Object> meta = new HashMap<>();
       meta.put("chunks", chunks.size());
       meta.put("reducedSummaries", reducedSummaries.size());
@@ -2574,11 +2557,16 @@ public class GitHubModelsService {
         emitProgress(progressListener, progressPayload("completed", "Đã hoàn tất xử lý AI", chunks.size(), chunks.size(),
           mergeProgress(progressI18n("copilot.progress.message.completed", null, null, null),
             withOrchestrationMeta("completed", chunks.size(), chunks.size(), meta))));
-      String successJson = createSuccessJson(parsedResult != null ? parsedResult : mergedContent, "chunked", meta);
+      String successJson = createSuccessJson(normalizedResult, "chunked", meta);
       cacheResponse(prompt, successJson);
       return successJson;
     } catch (Exception ex) {
       log.error("GitHub Models chunked request failed", ex);
+      String normalizedMessage = String.valueOf(ex.getMessage() == null ? "" : ex.getMessage()).toLowerCase(Locale.ROOT);
+      if (normalizedMessage.contains("tat ca github models deu that bai")
+          || normalizedMessage.contains("no available github models")) {
+        return createErrorJson("GitHub Models exhausted for chunked menu task: " + ex.getMessage(), "GITHUB_MODELS_EXHAUSTED");
+      }
       return createErrorJson("Lỗi xử lý prompt lớn qua GitHub Models: " + ex.getMessage(), "GITHUB_CHUNKED_ERROR");
     }
   }
@@ -2778,8 +2766,15 @@ public class GitHubModelsService {
     int estimatedInputTokens = estimateTokens(prompt, Math.max(256, maxTokens));
     String taskTypeHint = detectTaskTypeHint(prompt);
     boolean isCodeTask = looksLikeCodeTask(prompt);
+    boolean isMenuTask = "menu_design".equalsIgnoreCase(taskTypeHint) || looksLikeMenuTask(prompt);
     String preferredModel = selectOptimalModel(taskTypeHint, prompt.length(), isCodeTask);
     List<String> candidateModels = resolveCandidateModels(preferredModel.startsWith("gemini:") ? model : preferredModel);
+    if (isMenuTask) {
+      candidateModels = filterMenuAllowedModels(candidateModels);
+    }
+    if (candidateModels.isEmpty()) {
+      throw new IllegalStateException("No available GitHub models for this menu task after applying allowlist/cooldown");
+    }
     List<String> failures = new ArrayList<>();
     String baseEndpoint = resolveChatCompletionsEndpoint();
     String effectiveToken = getEffectiveToken(baseEndpoint);
@@ -2823,6 +2818,7 @@ public class GitHubModelsService {
             String msg = "Model '" + candidateModel + "' không khả dụng/sai tên tại endpoint '"
                 + resolveEndpointByPath(endpointPath) + "' (status=" + ex.getStatusCode() + "). Đang thử model tiếp theo.";
             log.warn(msg);
+            markModelTemporarilyUnavailable(candidateModel, modelUnknownCooldownMs, "unknown model for endpoint");
             failures.add(candidateModel + " -> unknown model");
             endpointOrder = Collections.emptyList();
             break;
@@ -2861,6 +2857,34 @@ public class GitHubModelsService {
         + String.join(", ", candidateModels) + ". Chi tiết: " + failureSummary);
   }
 
+  private List<String> filterMenuAllowedModels(List<String> candidates) {
+    if (candidates == null || candidates.isEmpty()) {
+      return Collections.emptyList();
+    }
+    Set<String> allowed = new LinkedHashSet<>();
+    addModelsFromCsv(allowed, menuAllowedModels);
+    if (allowed.isEmpty()) {
+      addModelsFromCsv(allowed, "gpt-4o-mini,gpt-4o");
+    }
+
+    List<String> filtered = new ArrayList<>();
+    for (String candidate : candidates) {
+      String lc = String.valueOf(candidate == null ? "" : candidate).toLowerCase(Locale.ROOT);
+      boolean ok = false;
+      for (String allow : allowed) {
+        String allowLc = allow.toLowerCase(Locale.ROOT);
+        if (!allowLc.isBlank() && lc.contains(allowLc)) {
+          ok = true;
+          break;
+        }
+      }
+      if (ok) {
+        filtered.add(candidate);
+      }
+    }
+    return filtered;
+  }
+
   private String executeWithRetry(HttpEntity<Map<String, Object>> request, String prompt, int maxTokens,
       ProgressListener progressListener, Map<String, Object> progressMeta, String modelName, String endpoint) {
     int estimatedTokens = estimateTokens(prompt, maxTokens);
@@ -2892,6 +2916,7 @@ public class GitHubModelsService {
                 ? ("429 wait too long (" + waitMs + "ms > " + maxWaitAllowed + "ms)")
                 : ("429 retries exceeded per model (attempt " + attempt + "/" + retryMaxAttempts + ")");
             log.warn("GitHub Models 429 for model '{}' -> fast failover: {}.", modelName, reason);
+            markModelTemporarilyUnavailable(modelName, modelRateLimitCooldownMs, reason);
             emitProgress(progressListener, mergeProgress(progressMeta, Map.of(
                 "stage", "fast_failover_rate_limit",
                 "message", "Model dang bi rate-limit, chuyen model fallback de giam tre",
@@ -2998,14 +3023,22 @@ public class GitHubModelsService {
     if (!cache.isEmpty()) {
       List<String> filtered = new ArrayList<>();
       for (String candidate : list) {
-        if (cache.containsKey(candidate.toLowerCase(Locale.ROOT))) {
-          filtered.add(candidate);
+        String resolved = resolveCatalogModelId(candidate, cache);
+        if (resolved != null && !resolved.isBlank()) {
+          filtered.add(resolved);
         } else {
-          log.info("Skip model '{}' because it is not listed by endpoint catalog {}", candidate, endpoint);
+          log.debug("Skip model '{}' because it is not listed by endpoint catalog {}", candidate, endpoint);
         }
       }
       if (!filtered.isEmpty()) {
         list = filtered;
+      } else {
+        List<String> catalogFallback = collectCatalogModelsForChat(cache);
+        if (!catalogFallback.isEmpty()) {
+          list = catalogFallback;
+          log.warn("Configured model aliases are missing in catalog. Falling back to chat-capable catalog models: {}",
+              String.join(", ", catalogFallback));
+        }
       }
 
       addEndpointCatalogFallback(list, cache, "gpt-4o-mini");
@@ -3013,12 +3046,18 @@ public class GitHubModelsService {
       addEndpointCatalogFallback(list, cache, "Meta-Llama-3.1-8B-Instruct");
     }
 
+    list = preferOpenAiModels(list);
+
     if (list.size() <= 1) {
       return list;
     }
 
     if (prioritizeMiniModels) {
       list.sort((a, b) -> Integer.compare(modelPriority(a), modelPriority(b)));
+    }
+
+    if (!rotateCandidates) {
+      return list;
     }
 
     int start = Math.floorMod(modelCursor.getAndIncrement(), list.size());
@@ -3029,19 +3068,212 @@ public class GitHubModelsService {
     return rotated;
   }
 
+  private List<String> preferOpenAiModels(List<String> candidates) {
+    if (candidates == null || candidates.isEmpty()) {
+      return Collections.emptyList();
+    }
+    List<String> openAi = new ArrayList<>();
+    List<String> others = new ArrayList<>();
+    for (String candidate : candidates) {
+      String lower = String.valueOf(candidate == null ? "" : candidate).toLowerCase(Locale.ROOT);
+      if (lower.contains("gpt-")) {
+        openAi.add(candidate);
+      } else {
+        others.add(candidate);
+      }
+    }
+    if (openAi.isEmpty()) {
+      return candidates;
+    }
+    List<String> merged = new ArrayList<>(openAi.size() + others.size());
+    merged.addAll(openAi);
+    merged.addAll(others);
+    return merged;
+  }
+
+  private static String stripVersionSuffix(String modelId) {
+    if (modelId == null) return "";
+    // Strip date-like suffixes: -2024-07-18 or -20240718
+    return modelId.replaceAll("-\\d{4}-\\d{2}-\\d{2}$", "")
+                  .replaceAll("-\\d{8}$", "");
+  }
+
+  private static String normalizeModelAliasKey(String raw) {
+    if (raw == null) {
+      return "";
+    }
+    return raw.trim().toLowerCase(Locale.ROOT);
+  }
+
+  private List<String> collectCatalogModelsForChat(Map<String, Set<String>> cache) {
+    if (cache == null || cache.isEmpty()) {
+      return Collections.emptyList();
+    }
+
+    Set<String> canonical = new LinkedHashSet<>();
+    Map<String, String> aliases = modelAliasToCatalogId == null ? Collections.emptyMap() : modelAliasToCatalogId;
+    canonical.addAll(aliases.values());
+    if (canonical.isEmpty()) {
+      Set<String> raw = modelCatalogRawIds == null ? Collections.emptySet() : modelCatalogRawIds;
+      for (String key : raw) {
+        if (key == null || key.isBlank()) {
+          continue;
+        }
+        canonical.add(deriveCallableModelId(key));
+      }
+    }
+
+    List<String> chatCapable = new ArrayList<>();
+    for (String id : canonical) {
+      if (!isLikelyChatLlmModelId(id)) {
+        continue;
+      }
+      String aliasKey = resolveCatalogAliasKey(id, cache);
+      Set<String> endpoints = aliasKey == null ? Collections.emptySet() : cache.getOrDefault(aliasKey, Collections.emptySet());
+      // Some catalog payloads omit supported_endpoints; treat those as unknown (optimistic allow).
+      if (endpoints.isEmpty() || endpoints.contains("/chat/completions")) {
+        chatCapable.add(id);
+      }
+    }
+
+    if (chatCapable.size() > 1 && prioritizeMiniModels) {
+      chatCapable.sort((a, b) -> Integer.compare(modelPriority(a), modelPriority(b)));
+    }
+
+    if (chatCapable.size() > 12) {
+      return new ArrayList<>(chatCapable.subList(0, 12));
+    }
+    return chatCapable;
+  }
+
+  private boolean isLikelyChatLlmModelId(String modelId) {
+    if (modelId == null || modelId.isBlank()) {
+      return false;
+    }
+    String lower = modelId.toLowerCase(Locale.ROOT);
+    if (lower.contains("embedding") || lower.contains("rerank") || lower.contains("whisper")
+        || lower.contains("tts") || lower.contains("moderation")) {
+      return false;
+    }
+    return lower.contains("gpt")
+        || lower.contains("o1")
+        || lower.contains("o3")
+        || lower.contains("claude")
+        || lower.contains("gemini")
+        || lower.contains("llama")
+        || lower.contains("mistral")
+        || lower.contains("deepseek")
+        || lower.contains("qwen")
+        || lower.contains("grok");
+  }
+
+  private static void indexCatalogAlias(
+      Map<String, Set<String>> endpointCache,
+      Map<String, String> aliasToCatalogId,
+      String alias,
+      String catalogId,
+      Set<String> endpoints) {
+    String key = normalizeModelAliasKey(alias);
+    String value = normalizeModelAliasKey(catalogId);
+    if (key.isBlank() || value.isBlank()) {
+      return;
+    }
+    endpointCache.putIfAbsent(key, endpoints);
+    aliasToCatalogId.putIfAbsent(key, value);
+  }
+
+  private String deriveCallableModelId(String catalogId) {
+    String normalized = normalizeModelAliasKey(catalogId);
+    if (normalized.isBlank()) {
+      return normalized;
+    }
+
+    int modelsPos = normalized.indexOf("/models/");
+    if (modelsPos >= 0) {
+      int nameStart = modelsPos + "/models/".length();
+      int versionPos = normalized.indexOf("/versions/", nameStart);
+      if (versionPos > nameStart) {
+        return normalized.substring(nameStart, versionPos);
+      }
+      return normalized.substring(nameStart);
+    }
+
+    if (normalized.startsWith("openai/") || normalized.startsWith("azure-openai/")) {
+      int slash = normalized.lastIndexOf('/');
+      if (slash >= 0 && slash < normalized.length() - 1) {
+        return normalized.substring(slash + 1);
+      }
+    }
+    return normalized;
+  }
+
+  private String resolveCatalogAliasKey(String requestedModel, Map<String, Set<String>> cache) {
+    if (requestedModel == null || requestedModel.isBlank() || cache == null || cache.isEmpty()) {
+      return null;
+    }
+    String normalized = normalizeModelAliasKey(normalizeConfiguredModel(requestedModel));
+    if (normalized.isBlank()) {
+      return null;
+    }
+    if (cache.containsKey(normalized)) {
+      return normalized;
+    }
+
+    String suffix = "/" + normalized;
+    for (String key : cache.keySet()) {
+      if (key.endsWith(suffix)) {
+        return key;
+      }
+    }
+
+    for (String key : cache.keySet()) {
+      String keyBase = stripVersionSuffix(key);
+      if (normalized.equals(keyBase)) {
+        return key;
+      }
+      int slash = key.lastIndexOf('/');
+      if (slash >= 0 && slash < key.length() - 1) {
+        String shortName = key.substring(slash + 1);
+        if (normalized.equals(stripVersionSuffix(shortName))) {
+          return key;
+        }
+      }
+    }
+    return null;
+  }
+
+  private String resolveCatalogModelId(String requestedModel, Map<String, Set<String>> cache) {
+    String aliasKey = resolveCatalogAliasKey(requestedModel, cache);
+    if (aliasKey == null) {
+      return null;
+    }
+    Map<String, String> aliases = modelAliasToCatalogId == null ? Collections.emptyMap() : modelAliasToCatalogId;
+    return resolveCatalogModelId(requestedModel, cache, aliases);
+  }
+
+  private String resolveCatalogModelId(String requestedModel, Map<String, Set<String>> cache, Map<String, String> aliases) {
+    String aliasKey = resolveCatalogAliasKey(requestedModel, cache);
+    if (aliasKey == null) {
+      return null;
+    }
+    Map<String, String> safeAliases = aliases == null ? Collections.emptyMap() : aliases;
+    return safeAliases.getOrDefault(aliasKey, aliasKey);
+  }
+
   private void addEndpointCatalogFallback(List<String> collector, Map<String, Set<String>> catalog, String modelId) {
     if (collector == null || catalog == null || modelId == null || modelId.isBlank()) {
       return;
     }
-    if (!catalog.containsKey(modelId.toLowerCase(Locale.ROOT))) {
+    String resolved = resolveCatalogModelId(modelId, catalog);
+    if (resolved == null || resolved.isBlank()) {
       return;
     }
     for (String existing : collector) {
-      if (modelId.equalsIgnoreCase(existing)) {
+      if (resolved.equalsIgnoreCase(existing)) {
         return;
       }
     }
-    collector.add(modelId);
+    collector.add(resolved);
   }
 
   private void addModelsFromCsv(Set<String> collector, String csv) {
@@ -3311,13 +3543,18 @@ public class GitHubModelsService {
         + "Nhiệm vụ: tóm tắt CHUNK hiện tại thành dữ liệu ngắn gọn nhưng KHÔNG làm mất thông tin nghiệp vụ quan trọng.\\n"
         + "Bắt buộc xuất JSON hợp lệ theo schema sau:\\n"
         + "{\\n"
+        + "  \"chunk_index\": \"k/n\",\\n"
         + "  \"facts\": [\"...\"],\\n"
         + "  \"entities\": [\"...\"],\\n"
+        + "  \"critical_ids\": [\"...\"],\\n"
+        + "  \"schema_paths\": [\"...\"],\\n"
+        + "  \"hard_constraints\": [\"...\"],\\n"
         + "  \"instructions\": [\"...\"],\\n"
         + "  \"jsonExamples\": [\"...\"],\\n"
         + "  \"notes\": [\"...\"]\\n"
         + "}\\n"
-        + "Giữ nguyên field name, schema, rule, ràng buộc nghiệp vụ, điều kiện lọc và giá trị mặc định nếu có.\\n"
+        + "Giữ nguyên field name, schema, rule, id, điều kiện lọc và giá trị mặc định nếu có.\\n"
+        + "Nếu có thay đổi menu/config, liệt kê rõ node/field nào bị tác động trong critical_ids và schema_paths.\\n"
         + "Không trả markdown hoặc văn bản ngoài JSON.\\n"
         + "CHUNK_INDEX=" + (chunkIndex + 1) + "/" + Math.max(1, totalChunks) + "\\n"
         + "<CHUNK>\\n"
@@ -3332,15 +3569,6 @@ public class GitHubModelsService {
     HttpHeaders sourceHeaders = request.getHeaders() == null ? new HttpHeaders() : request.getHeaders();
     String currentAuth = sourceHeaders.getFirst(HttpHeaders.AUTHORIZATION);
 
-    LinkedHashSet<String> authCandidates = new LinkedHashSet<>();
-    if (currentAuth != null && !currentAuth.isBlank()) {
-      authCandidates.add(currentAuth);
-    }
-    String alternateAuth = buildAlternateAuthorizationHeader(currentAuth);
-    if (alternateAuth != null && !alternateAuth.isBlank()) {
-      authCandidates.add(alternateAuth);
-    }
-
     LinkedHashSet<String> endpoints = new LinkedHashSet<>();
     endpoints.add(endpoint);
     String fallbackEndpoint = resolveUnauthorizedFallbackChatEndpoint(endpoint);
@@ -3350,6 +3578,7 @@ public class GitHubModelsService {
 
     ResponseEntity<String> lastResponse = unauthorizedResponse;
     for (String targetEndpoint : endpoints) {
+      LinkedHashSet<String> authCandidates = buildUnauthorizedAuthCandidates(targetEndpoint, currentAuth);
       for (String authHeader : authCandidates) {
         if ((targetEndpoint.equals(endpoint)) && authHeader.equals(currentAuth)) {
           continue;
@@ -3381,19 +3610,30 @@ public class GitHubModelsService {
     return lastResponse;
   }
 
-  private String buildAlternateAuthorizationHeader(String authHeader) {
-    String value = String.valueOf(authHeader == null ? "" : authHeader).trim();
-    if (value.isBlank()) {
-      return "";
+  private LinkedHashSet<String> buildUnauthorizedAuthCandidates(String endpoint, String currentAuth) {
+    LinkedHashSet<String> authCandidates = new LinkedHashSet<>();
+
+    addAuthCandidate(authCandidates, currentAuth);
+
+    String patToken = getPatToken();
+    addAuthVariantsForToken(authCandidates, patToken);
+    return authCandidates;
+  }
+
+  private void addAuthVariantsForToken(Set<String> collector, String tokenValue) {
+    String token = String.valueOf(tokenValue == null ? "" : tokenValue).trim();
+    if (collector == null || token.isBlank()) {
+      return;
     }
-    String lower = value.toLowerCase(Locale.ROOT);
-    if (lower.startsWith("bearer ")) {
-      return "GitHub-Bearer " + value.substring(7).trim();
+    collector.add("Bearer " + token);
+  }
+
+  private void addAuthCandidate(Set<String> collector, String candidate) {
+    String value = String.valueOf(candidate == null ? "" : candidate).trim();
+    if (collector == null || value.isBlank()) {
+      return;
     }
-    if (lower.startsWith("github-bearer ")) {
-      return "Bearer " + value.substring("github-bearer ".length()).trim();
-    }
-    return "";
+    collector.add(value);
   }
 
   private String resolveUnauthorizedFallbackChatEndpoint(String endpoint) {
@@ -3422,11 +3662,15 @@ public class GitHubModelsService {
         StandardCharsets.UTF_8);
   }
 
-  private String buildMergedPrompt(String taskHint, List<String> chunkSummaries) {
+  private String buildMergedPrompt(String taskHint, List<String> chunkSummaries, String globalAnchors) {
     StringBuilder sb = new StringBuilder();
     sb.append("Bạn sẽ giải bài toán từ mô tả nhiệm vụ và các tóm tắt chunk đã nén.\\n");
     sb.append("Bắt buộc giữ đầy đủ ràng buộc, schema, field name và logic nghiệp vụ.\\n");
     sb.append("Nếu yêu cầu gốc đòi output JSON thì chỉ trả JSON hợp lệ, không markdown.\\n\\n");
+    if (globalAnchors != null && !globalAnchors.isBlank()) {
+      sb.append("=== GLOBAL ANCHORS (khong duoc bo sot) ===\\n");
+      sb.append(globalAnchors).append("\\n\\n");
+    }
     sb.append("=== MO TA NHIEM VU (RUT GON) ===\\n");
     sb.append(taskHint);
     sb.append("\\n\\n=== TOM TAT CAC CHUNK ===\\n");
@@ -3436,6 +3680,42 @@ public class GitHubModelsService {
       sb.append(trimToMax(chunkSummaries.get(i), perChunkSummaryCap)).append("\\n\\n");
     }
     return trimToMax(sb.toString(), requestMaxChars - 500);
+  }
+
+  private String buildGlobalContextAnchors(String prompt, List<String> chunks, List<?> baseMenu, String taskHint) {
+    String source = String.valueOf(prompt == null ? "" : prompt);
+    int sourceCap = Math.min(source.length(), Math.max(120000, requestMaxChars / 2));
+    String scan = source.substring(0, sourceCap);
+
+    Map<String, Integer> keyFreq = new HashMap<>();
+    Matcher keyMatcher = Pattern.compile("\\\"([A-Za-z0-9_\\-]{2,64})\\\"\\s*:").matcher(scan);
+    while (keyMatcher.find()) {
+      String key = String.valueOf(keyMatcher.group(1) == null ? "" : keyMatcher.group(1)).trim();
+      if (key.isEmpty()) {
+        continue;
+      }
+      keyFreq.put(key, keyFreq.getOrDefault(key, 0) + 1);
+    }
+
+    List<Map.Entry<String, Integer>> keyEntries = new ArrayList<>(keyFreq.entrySet());
+    keyEntries.sort((a, b) -> Integer.compare(b.getValue(), a.getValue()));
+
+    StringBuilder sb = new StringBuilder();
+    sb.append("task_hint=").append(trimToMax(String.valueOf(taskHint == null ? "" : taskHint), 1000)).append("\\n");
+    sb.append("chunk_count=").append(chunks == null ? 0 : chunks.size()).append("\\n");
+    if (baseMenu != null && !baseMenu.isEmpty()) {
+      sb.append("base_menu_present=true\\n");
+      sb.append("base_menu_items=").append(baseMenu.size()).append("\\n");
+    } else {
+      sb.append("base_menu_present=false\\n");
+    }
+    sb.append("top_json_keys=\\n");
+    int limit = Math.min(80, keyEntries.size());
+    for (int i = 0; i < limit; i++) {
+      Map.Entry<String, Integer> e = keyEntries.get(i);
+      sb.append("- ").append(e.getKey()).append(" (count=").append(e.getValue()).append(")\\n");
+    }
+    return trimToMax(sb.toString(), Math.max(4000, requestMaxChars / 3));
   }
 
   private List<String> reduceSummaries(List<String> summaries, ProgressListener progressListener) {
@@ -3510,7 +3790,8 @@ public class GitHubModelsService {
     StringBuilder sb = new StringBuilder();
     sb.append("Bạn hãy gộp các summary thành 1 summary ngắn gọn, không mất ràng buộc quan trọng.\\n");
     sb.append("Output chỉ JSON hợp lệ; ưu tiên giữ đủ các facts/constraints/fields quan trọng.\\n");
-    sb.append("Schema: {\"level\":").append(level).append(",\"facts\":[],\"constraints\":[],\"fields\":[]}\\n");
+    sb.append("Schema: {\"level\":").append(level)
+        .append(",\"facts\":[],\"constraints\":[],\"fields\":[],\"critical_ids\":[],\"schema_paths\":[]}\\n");
     sb.append("=== INPUT SUMMARIES ===\\n");
     int perSummaryCap = Math.max(2600, Math.min(8000, Math.max(3000, requestMaxChars / 3)));
     for (int i = 0; i < batch.size(); i++) {
@@ -3862,6 +4143,94 @@ public class GitHubModelsService {
     } catch (Exception ignored) {
       return null;
     }
+  }
+
+  private Object ensureValidMenuFinalResult(
+      Object currentResult,
+      String rawContent,
+      AiMenuOperationScenario scenario,
+      ProgressListener progressListener,
+      Map<String, Object> progressMeta) {
+    if (isValidMenuResultShape(currentResult, scenario) && !isClearlyCodeLikeMenuOutput(currentResult)) {
+      return currentResult;
+    }
+
+    if (rawContent == null || rawContent.isBlank()) {
+      return null;
+    }
+
+    try {
+      Map<String, Object> repairMeta = new HashMap<>();
+      if (progressMeta != null) {
+        repairMeta.putAll(progressMeta);
+      }
+      repairMeta.put("detail", "Dang chuan hoa ket qua cuoi sang JSON menu hop le");
+      repairMeta.put("detailKey", "copilot.progress.detail.normalizing_final_output");
+      emitProgress(progressListener, progressPayload("final_merge", "Đang chuẩn hóa kết quả cuối", 1, 1,
+          mergeProgress(progressI18n("copilot.progress.message.final_waiting", null, null, null),
+              withOrchestrationMeta("final_merge", 1, 1, repairMeta))));
+
+      String repairPrompt = buildMenuFinalRepairPrompt(rawContent, scenario);
+      String repairedRaw = callChatCompletion(repairPrompt, Math.min(4096, maxOutputTokens), 0.0d, progressListener, repairMeta);
+      String repairedContent = extractContent(repairedRaw);
+      Object repairedParsed = tryParseJson(repairedContent);
+      if (isValidMenuResultShape(repairedParsed, scenario) && !isClearlyCodeLikeMenuOutput(repairedParsed)) {
+        return repairedParsed;
+      }
+    } catch (Exception ex) {
+      log.warn("Could not repair invalid final menu output: {}", ex.getMessage());
+    }
+    return null;
+  }
+
+  private String buildMenuFinalRepairPrompt(String rawContent, AiMenuOperationScenario scenario) {
+    String expected = scenario == AiMenuOperationScenario.PROPERTY_EDIT
+        ? "{\"menu_node\":{...},\"notes\":[...],\"warnings\":[...]}"
+        : "{\"menu\":[...],\"notes\":[...],\"warnings\":[...]}";
+    return "Bạn là bộ chuẩn hóa output JSON cho menu.\\n"
+        + "Nhiệm vụ: CHUYỂN nội dung bên dưới thành JSON hợp lệ duy nhất, không markdown, không text giải thích.\\n"
+        + "Schema bắt buộc: " + expected + "\\n"
+        + "Giữ nguyên ý nghĩa nghiệp vụ từ nội dung đầu vào.\\n"
+        + "Nếu thiếu thông tin thì trả object tối thiểu theo schema với mảng rỗng.\\n"
+        + "OUTPUT: chỉ JSON.\\n\\n"
+        + "INPUT_RAW:\\n"
+        + trimToMax(String.valueOf(rawContent == null ? "" : rawContent), Math.max(2000, requestMaxChars - 3000));
+  }
+
+  private boolean isValidMenuResultShape(Object parsed, AiMenuOperationScenario scenario) {
+    if (parsed == null) {
+      return false;
+    }
+    if (scenario != null && scenario == AiMenuOperationScenario.PROPERTY_EDIT) {
+      if (parsed instanceof Map<?, ?> map) {
+        Object menuNode = map.get("menu_node");
+        return menuNode instanceof Map<?, ?>;
+      }
+      return false;
+    }
+
+    if (parsed instanceof List<?> list) {
+      return !list.isEmpty();
+    }
+    if (parsed instanceof Map<?, ?> map) {
+      Object menuObj = map.get("menu");
+      if (menuObj instanceof List<?> menuList) {
+        return !menuList.isEmpty();
+      }
+    }
+    return false;
+  }
+
+  private boolean isClearlyCodeLikeMenuOutput(Object parsed) {
+    String text = String.valueOf(parsed == null ? "" : parsed).toLowerCase(Locale.ROOT);
+    if (text.isBlank()) {
+      return false;
+    }
+    return text.contains("```python")
+        || text.contains("import json")
+        || text.contains("def ")
+        || text.contains("chunk_index")
+        || text.contains("print(");
   }
 
   private String createErrorJson(String message, String errorCode) {
