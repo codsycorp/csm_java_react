@@ -5,6 +5,7 @@ import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
+  import java.util.LinkedHashMap;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -41,33 +42,33 @@ import java.util.Locale;
 
 
 /**
- * Fallback service for oversized prompts routed to ChatGPT API API.
+ * Fallback service for oversized prompts routed to AI Assistant API API.
  * Returns JSON wrapper compatible with existing /ai-generate-seo-content parsing flow.
  */
 @Service
-public class ChatgptGatewayService {
+public class AiAssistantGatewayService {
 
   // Cached master prompt content
   private volatile String masterPrompt = null;
 
   // Path to master prompt file, configurable via application.properties
-  @Value("${github.models.master-prompt-path:classpath:csm_datas/public/ai_menu_master_prompt.md}")
+  @Value("${ai.context.master-prompt-path:classpath:csm_datas/public/ai_menu_master_prompt.md}")
   private String masterPromptPath;
 
   // Directory where per-app AI context files are stored
-  @Value("${github.models.context-dir:csm_datas/public}")
+  @Value("${ai.context.dir:csm_datas/public}")
   private String contextDir;
 
   // Max chars to keep in the request history inside the context file
   private static final int CTX_MAX_HISTORY_CHARS = 8000;
   // Max chars to keep for previous result summary inside the context file
   private static final int CTX_MAX_RESULT_CHARS = 6000;
-  // Max chars to keep for ChatGPT conversation continuity memory
-  private static final int CHATGPT_MEMORY_MAX_CHARS = 180000;
-  private static final int CHATGPT_PENDING_MAX_ITEMS = 12;
+  // Max chars to keep for AI Assistant conversation continuity memory
+  private static final int AI_ASSISTANT_MEMORY_MAX_CHARS = 180000;
+  private static final int AI_ASSISTANT_PENDING_MAX_ITEMS = 12;
 
   // ───────────────────────────────────────────────────────────────────────────
-  // Per-app AI session context file  (mirrors ChatGPT's /memories/session/)
+  // Per-app AI session context file  (mirrors AI Assistant's /memories/session/)
   // File path: {contextDir}/ai_context_{appId}.md
   // Loaded before every AI call and saved after every successful generation.
   // ───────────────────────────────────────────────────────────────────────────
@@ -81,30 +82,30 @@ public class ChatgptGatewayService {
     return new java.io.File(contextDir, "ai_context_" + safeName + ".md");
   }
 
-  /** Return ChatGPT continuity memory file path for a given appId and optional scope key. */
-  private java.io.File getChatgptMemoryFile(String appId, String scopeKey) {
+  /** Return AI Assistant continuity memory file path for a given appId and optional scope key. */
+  private java.io.File getAiAssistantMemoryFile(String appId, String scopeKey) {
     String safeName = sanitizeAppName(appId);
     String safeScope = scopeKey == null ? "" : scopeKey.replaceAll("[^a-zA-Z0-9_\\-]", "_");
     if (safeScope.isBlank()) {
-      return new java.io.File(contextDir, "ai_copilot_context_" + safeName + ".md");
+      return new java.io.File(contextDir, "ai_assistant_context_" + safeName + ".md");
     }
-    return new java.io.File(contextDir, "ai_copilot_context_" + safeName + "__" + safeScope + ".md");
+    return new java.io.File(contextDir, "ai_assistant_context_" + safeName + "__" + safeScope + ".md");
   }
 
-  /** Return ChatGPT pending-questions file path for a given appId and optional scope key. */
-  private java.io.File getChatgptPendingFile(String appId, String scopeKey) {
+  /** Return AI Assistant pending-questions file path for a given appId and optional scope key. */
+  private java.io.File getAiAssistantPendingFile(String appId, String scopeKey) {
     String safeName = sanitizeAppName(appId);
     String safeScope = scopeKey == null ? "" : scopeKey.replaceAll("[^a-zA-Z0-9_\\-]", "_");
     if (safeScope.isBlank()) {
-      return new java.io.File(contextDir, "ai_copilot_pending_" + safeName + ".md");
+      return new java.io.File(contextDir, "ai_assistant_pending_" + safeName + ".md");
     }
-    return new java.io.File(contextDir, "ai_copilot_pending_" + safeName + "__" + safeScope + ".md");
+    return new java.io.File(contextDir, "ai_assistant_pending_" + safeName + "__" + safeScope + ".md");
   }
 
-  /** Load unresolved pending questions for ChatGPT continuation. */
-  public List<String> loadChatgptPendingQuestions(String appId, String scopeKey, int maxItems) {
+  /** Load unresolved pending questions for AI Assistant continuation. */
+  public List<String> loadAiAssistantPendingQuestions(String appId, String scopeKey, int maxItems) {
     if (appId == null || appId.isBlank()) return Collections.emptyList();
-    java.io.File f = getChatgptPendingFile(appId, scopeKey);
+    java.io.File f = getAiAssistantPendingFile(appId, scopeKey);
     if (!f.exists()) return Collections.emptyList();
     int safeMax = Math.max(1, Math.min(50, maxItems));
     try {
@@ -122,45 +123,45 @@ public class ChatgptGatewayService {
       }
       return result;
     } catch (Exception e) {
-      log.warn("Could not load ChatGPT pending questions for appId={} scope={}: {}", appId, scopeKey, e.getMessage());
+      log.warn("Could not load AI Assistant pending questions for appId={} scope={}: {}", appId, scopeKey, e.getMessage());
       return Collections.emptyList();
     }
   }
 
-  /** Load persisted ChatGPT conversation memory for continuity across turns. */
-  public String loadChatgptConversationMemory(String appId) {
-    return loadChatgptConversationMemory(appId, null);
+  /** Load persisted AI Assistant conversation memory for continuity across turns. */
+  public String loadAiAssistantConversationMemory(String appId) {
+    return loadAiAssistantConversationMemory(appId, null);
   }
 
-  /** Load persisted ChatGPT conversation memory for continuity across turns. */
-  public String loadChatgptConversationMemory(String appId, String scopeKey) {
+  /** Load persisted AI Assistant conversation memory for continuity across turns. */
+  public String loadAiAssistantConversationMemory(String appId, String scopeKey) {
     if (appId == null || appId.isBlank()) return "";
-    java.io.File f = getChatgptMemoryFile(appId, scopeKey);
+    java.io.File f = getAiAssistantMemoryFile(appId, scopeKey);
     if (!f.exists()) return "";
     try {
       String text = java.nio.file.Files.readString(f.toPath(), StandardCharsets.UTF_8);
       if (text == null) return "";
-      if (text.length() <= CHATGPT_MEMORY_MAX_CHARS) return text;
-      return text.substring(text.length() - CHATGPT_MEMORY_MAX_CHARS);
+      if (text.length() <= AI_ASSISTANT_MEMORY_MAX_CHARS) return text;
+      return text.substring(text.length() - AI_ASSISTANT_MEMORY_MAX_CHARS);
     } catch (Exception e) {
-      log.warn("Could not load ChatGPT continuity memory for appId={} scope={}: {}", appId, scopeKey, e.getMessage());
+      log.warn("Could not load AI Assistant continuity memory for appId={} scope={}: {}", appId, scopeKey, e.getMessage());
       return "";
     }
   }
 
-  /** Append one ChatGPT Q&A turn so later requests continue instead of restarting. */
-  public void appendChatgptConversationTurn(
+  /** Append one AI Assistant Q&A turn so later requests continue instead of restarting. */
+  public void appendAiAssistantConversationTurn(
       String appId,
       String userMessage,
       String assistantMessage,
       String contextType,
       String responseMode,
       List<Map<String, Object>> attachments) {
-    appendChatgptConversationTurn(appId, null, userMessage, assistantMessage, contextType, responseMode, attachments);
+    appendAiAssistantConversationTurn(appId, null, userMessage, assistantMessage, contextType, responseMode, attachments);
   }
 
-  /** Append one ChatGPT Q&A turn with a scoped continuity key. */
-  public void appendChatgptConversationTurn(
+  /** Append one AI Assistant Q&A turn with a scoped continuity key. */
+  public void appendAiAssistantConversationTurn(
       String appId,
       String scopeKey,
       String userMessage,
@@ -170,7 +171,7 @@ public class ChatgptGatewayService {
       List<Map<String, Object>> attachments) {
     if (appId == null || appId.isBlank()) return;
     try {
-      String existing = loadChatgptConversationMemory(appId, scopeKey);
+      String existing = loadAiAssistantConversationMemory(appId, scopeKey);
       String now = java.time.LocalDateTime.now()
           .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
 
@@ -184,7 +185,7 @@ public class ChatgptGatewayService {
 
       String merged;
       if (existing == null || existing.isBlank()) {
-        merged = "# ChatGPT Conversation Continuity: app_id=" + appId + "\n"
+        merged = "# AI Assistant Conversation Continuity: app_id=" + appId + "\n"
             + (scopeKey == null || scopeKey.isBlank() ? "" : "scope_key=" + scopeKey + "\n")
             + "<!-- AUTO-GENERATED by GitHubModelsService -->\n"
             + turn;
@@ -192,26 +193,26 @@ public class ChatgptGatewayService {
         merged = existing.trim() + turn;
       }
 
-      if (merged.length() > CHATGPT_MEMORY_MAX_CHARS) {
-        merged = merged.substring(merged.length() - CHATGPT_MEMORY_MAX_CHARS);
+      if (merged.length() > AI_ASSISTANT_MEMORY_MAX_CHARS) {
+        merged = merged.substring(merged.length() - AI_ASSISTANT_MEMORY_MAX_CHARS);
       }
 
-      java.io.File f = getChatgptMemoryFile(appId, scopeKey);
+      java.io.File f = getAiAssistantMemoryFile(appId, scopeKey);
       f.getParentFile().mkdirs();
       java.nio.file.Files.writeString(f.toPath(), merged, StandardCharsets.UTF_8);
-      updateChatgptPendingQuestions(appId, scopeKey, userMessage, assistantMessage);
+      updateAiAssistantPendingQuestions(appId, scopeKey, userMessage, assistantMessage);
     } catch (Exception e) {
-      log.warn("Could not append ChatGPT continuity memory for appId={} scope={}: {}", appId, scopeKey, e.getMessage());
+      log.warn("Could not append AI Assistant continuity memory for appId={} scope={}: {}", appId, scopeKey, e.getMessage());
     }
   }
 
-  private void updateChatgptPendingQuestions(
+  private void updateAiAssistantPendingQuestions(
       String appId,
       String scopeKey,
       String userMessage,
       String assistantMessage) {
     try {
-      List<String> existing = new ArrayList<>(loadChatgptPendingQuestions(appId, scopeKey, CHATGPT_PENDING_MAX_ITEMS));
+      List<String> existing = new ArrayList<>(loadAiAssistantPendingQuestions(appId, scopeKey, AI_ASSISTANT_PENDING_MAX_ITEMS));
 
       // If user replies in this scoped thread, assume the oldest pending item has been addressed.
       if (userMessage != null && !userMessage.trim().isEmpty() && !existing.isEmpty()) {
@@ -224,22 +225,22 @@ public class ChatgptGatewayService {
       merged.addAll(extracted);
 
       List<String> limited = new ArrayList<>(merged);
-      if (limited.size() > CHATGPT_PENDING_MAX_ITEMS) {
-        limited = limited.subList(limited.size() - CHATGPT_PENDING_MAX_ITEMS, limited.size());
+      if (limited.size() > AI_ASSISTANT_PENDING_MAX_ITEMS) {
+        limited = limited.subList(limited.size() - AI_ASSISTANT_PENDING_MAX_ITEMS, limited.size());
       }
 
       StringBuilder out = new StringBuilder();
-      out.append("# ChatGPT Pending Questions\n");
+      out.append("# AI Assistant Pending Questions\n");
       out.append("<!-- AUTO-GENERATED by GitHubModelsService -->\n");
       for (String item : limited) {
         out.append("- ").append(item).append("\n");
       }
 
-      java.io.File f = getChatgptPendingFile(appId, scopeKey);
+      java.io.File f = getAiAssistantPendingFile(appId, scopeKey);
       f.getParentFile().mkdirs();
       java.nio.file.Files.writeString(f.toPath(), out.toString(), StandardCharsets.UTF_8);
     } catch (Exception e) {
-      log.warn("Could not update ChatGPT pending questions for appId={} scope={}: {}", appId, scopeKey, e.getMessage());
+      log.warn("Could not update AI Assistant pending questions for appId={} scope={}: {}", appId, scopeKey, e.getMessage());
     }
   }
 
@@ -297,10 +298,10 @@ public class ChatgptGatewayService {
   }
 
   /**
-   * Build menu knowledge context block for ChatGPT chat requests.
+   * Build menu knowledge context block for AI Assistant chat requests.
    * Auto-loads ai_menu_*.md files when request is detected as menu design.
    */
-  public String buildChatgptMenuKnowledgeBlock(String appId, String contextType, String taskType) {
+  public String buildAiAssistantMenuKnowledgeBlock(String appId, String contextType, String taskType) {
     if (!isMenuDesignContext(contextType, taskType)) {
       return "";
     }
@@ -544,7 +545,7 @@ public class ChatgptGatewayService {
 
   /**
    * Load the master prompt (system core) from resource file, cache for reuse.
-   * Path is configurable via github.models.master-prompt-path property.
+   * Path is configurable via ai.context.master-prompt-path property.
    */
   public String getMasterPrompt() {
     if (masterPrompt != null) return masterPrompt;
@@ -581,7 +582,7 @@ public class ChatgptGatewayService {
     void onProgress(Map<String, Object> progress);
   }
 
-  private static final Logger log = LoggerFactory.getLogger(ChatgptGatewayService.class);
+  private static final Logger log = LoggerFactory.getLogger(AiAssistantGatewayService.class);
 
   private final RestTemplate restTemplate = new RestTemplate();
   private final ObjectMapper objectMapper = new ObjectMapper();
@@ -598,124 +599,124 @@ public class ChatgptGatewayService {
     return webClient;
   }
 
-  @Value("${github.models.enabled:true}")
+  @Value("${ai.gateway.enabled:true}")
   private boolean enabled;
 
-  @Value("${chatgpt.api.url:${github.models.url:https://api.openai.com/v1/chat/completions}}")
+  @Value("${ai.gateway.api.url:${ai.gateway.url:https://invalid.local/disabled-chat-completions}}")
   private String apiUrl;
 
-  @Value("${github.models.auth-scheme:auto}")
+  @Value("${ai.gateway.auth-scheme:auto}")
   private String authScheme;
 
-  @Value("${github.models.auth-fallback-on-401:true}")
+  @Value("${ai.gateway.auth-fallback-on-401:true}")
   private boolean authFallbackOnUnauthorized;
 
-  @Value("${github.models.chat-fallback-url:}")
+  @Value("${ai.gateway.chat-fallback-url:}")
   private String chatFallbackUrl;
 
-  @Value("${github.models.catalog-cache-ms:300000}")
+  @Value("${ai.gateway.catalog-cache-ms:300000}")
   private long modelCatalogCacheMs;
 
-  @Value("${github.models.model:gpt-4o-mini}")
+  @Value("${ai.gateway.model:gemini-2.5-pro}")
   private String model;
 
-  @Value("${github.models.models:}")
+  @Value("${ai.gateway.models:}")
   private String models;
 
-  @Value("${github.models.default-fallback-models:gpt-4o-mini,gpt-4o,gpt-4.1-mini,gpt-4.1}")
+  @Value("${ai.gateway.default-fallback-models:gemini-2.5-pro,gemini-2.5-flash,gemini-2.0-flash-001}")
   private String defaultFallbackModels;
 
-  @Value("${github.models.menu-allowed-models:gpt-4o-mini,gpt-4o,gpt-4.1-mini}")
+  @Value("${ai.gateway.menu-allowed-models:gemini-2.5-pro,gemini-2.5-flash,gemini-2.0-flash-001}")
   private String menuAllowedModels;
 
-  @Value("${github.models.prioritize-mini:true}")
+  @Value("${ai.gateway.prioritize-mini:true}")
   private boolean prioritizeMiniModels;
 
-  @Value("${github.models.max-output-tokens:8192}")
+  @Value("${ai.gateway.max-output-tokens:8192}")
   private int maxOutputTokens;
 
-  @Value("${github.models.max-prompt-chars:3000000}")
+  @Value("${ai.gateway.max-prompt-chars:3000000}")
   private int maxPromptChars;
 
-  @Value("${github.models.direct-max-chars:20000}")
+  @Value("${ai.gateway.direct-max-chars:20000}")
   private int directMaxChars;
 
-  @Value("${github.models.chunk-mode-threshold-chars:100000}")
+  @Value("${ai.gateway.chunk-mode-threshold-chars:100000}")
   private int chunkModeThresholdChars;
 
-  @Value("${github.models.chunk-size-chars:16000}")
+  @Value("${ai.gateway.chunk-size-chars:16000}")
   private int chunkSizeChars;
 
-  @Value("${github.models.chunk-overlap-chars:500}")
+  @Value("${ai.gateway.chunk-overlap-chars:500}")
   private int chunkOverlapChars;
 
-  @Value("${github.models.max-chunks:300}")
+  @Value("${ai.gateway.max-chunks:300}")
   private int maxChunks;
 
-  @Value("${github.models.chunk-summary-max-tokens:1024}")
+  @Value("${ai.gateway.chunk-summary-max-tokens:1024}")
   private int chunkSummaryMaxTokens;
 
-  @Value("${github.models.request-max-chars:32000}")
+  @Value("${ai.gateway.request-max-chars:32000}")
   private int requestMaxChars;
 
-  @Value("${github.models.merge-batch-size:8}")
+  @Value("${ai.gateway.merge-batch-size:8}")
   private int mergeBatchSize;
 
-  @Value("${github.models.task-hint-max-chars:12000}")
+  @Value("${ai.gateway.task-hint-max-chars:12000}")
   private int taskHintMaxChars;
 
-  @Value("${github.models.retry.max-attempts:5}")
+  @Value("${ai.gateway.retry.max-attempts:5}")
   private int retryMaxAttempts;
 
-  @Value("${github.models.retry.base-wait-ms:65000}")
+  @Value("${ai.gateway.retry.base-wait-ms:65000}")
   private long retryBaseWaitMs;
 
-  @Value("${github.models.retry.max-rate-retries-per-model:1}")
+  @Value("${ai.gateway.retry.max-rate-retries-per-model:1}")
   private int retryMaxRateRetriesPerModel;
 
-  @Value("${github.models.retry.max-429-wait-ms:8000}")
+  @Value("${ai.gateway.retry.max-429-wait-ms:8000}")
   private long retryMax429WaitMs;
 
-  @Value("${github.models.model-rate-limit-cooldown-ms:600000}")
+  @Value("${ai.gateway.model-rate-limit-cooldown-ms:600000}")
   private long modelRateLimitCooldownMs;
 
-  @Value("${github.models.model-unknown-cooldown-ms:21600000}")
+  @Value("${ai.gateway.model-unknown-cooldown-ms:21600000}")
   private long modelUnknownCooldownMs;
 
-  @Value("${github.models.rotate-candidates:false}")
+  @Value("${ai.gateway.rotate-candidates:false}")
   private boolean rotateCandidates;
 
-  @Value("${github.models.throttle.min-interval-ms:2500}")
+  @Value("${ai.gateway.throttle.min-interval-ms:2500}")
   private long throttleMinIntervalMs;
 
-  @Value("${github.models.tpm-limit:38000}")
+  @Value("${ai.gateway.tpm-limit:38000}")
   private int tpmLimit;
 
-  @Value("${github.models.temperature.direct:0.2}")
+  @Value("${ai.gateway.temperature.direct:0.2}")
   private double directTemperature;
 
-  @Value("${github.models.temperature.chunk-summary:0.1}")
+  @Value("${ai.gateway.temperature.chunk-summary:0.1}")
   private double chunkSummaryTemperature;
 
-  @Value("${github.models.temperature.merge:0.2}")
+  @Value("${ai.gateway.temperature.merge:0.2}")
   private double mergeTemperature;
 
-  @Value("${github.models.realtime-draft.enabled:true}")
+  @Value("${ai.gateway.realtime-draft.enabled:true}")
   private boolean realtimeDraftEnabled;
 
-  @Value("${github.models.realtime-draft.every-chunks:1}")
+  @Value("${ai.gateway.realtime-draft.every-chunks:1}")
   private int realtimeDraftEveryChunks;
 
-  @Value("${github.models.stability.menu-only-context-injection:true}")
+  @Value("${ai.gateway.stability.menu-only-context-injection:true}")
   private boolean menuOnlyContextInjection;
 
-  @Value("${github.models.chat-stream.direct-max-chars:120000}")
+  @Value("${ai.gateway.chat-stream.direct-max-chars:120000}")
   private int chatStreamDirectMaxChars;
 
-  @Value("${github.models.chat-stream.input-token-soft-limit:6800}")
+  @Value("${ai.gateway.chat-stream.input-token-soft-limit:6800}")
   private int chatStreamInputTokenSoftLimit;
 
-  @Value("${github.models.chat-stream.emit-chunk-chars:2400}")
+  @Value("${ai.gateway.chat-stream.emit-chunk-chars:2400}")
   private int chatStreamEmitChunkChars;
 
   @Value("${google.cloud.project-id:}")
@@ -724,61 +725,46 @@ public class ChatgptGatewayService {
   @Value("${google.cloud.api-key:}")
   private String googleApiKey;
 
-  @Value("${github.models.gemini-enabled:true}")
+  @Value("${ai.gateway.gemini-enabled:true}")
   private boolean geminiEnabled;
 
-  @Value("${github.models.gemini.model:gemini-1.5-pro}")
+  @Value("${ai.gateway.gemini.model:gemini-1.5-pro}")
   private String geminiModel;
 
-  @Value("${github.models.gemini.endpoint:https://generativelanguage.googleapis.com/v1beta/models}")
+  @Value("${ai.gateway.gemini.endpoint:https://generativelanguage.googleapis.com/v1beta/models}")
   private String geminiEndpoint;
 
-  @Value("${github.models.gemini.max-tokens:65536}")
+  @Value("${ai.gateway.gemini.max-tokens:65536}")
   private int geminiMaxTokens;
 
-  @Value("${github.models.gemini.temperature:0.2}")
+  @Value("${ai.gateway.gemini.temperature:0.2}")
   private double geminiTemperature;
 
-  @Value("${github.models.project-root-path:}")
-  private String projectRootPath;
-
-  @Value("${github.models.java-crawler-enabled:true}")
-  private boolean javaCrawlerEnabled;
-
-  @Value("${github.models.java-crawler.max-files:20}")
-  private int javaCrawlerMaxFiles;
-
-  @Value("${github.models.java-crawler.max-chars-per-file:8000}")
-  private int javaCrawlerMaxCharsPerFile;
-
-  @Value("${github.models.java-crawler.cache-ttl-ms:600000}")
-  private long javaCrawlerCacheTtlMs;
-
-  @Value("${github.models.response-cache-enabled:true}")
+  @Value("${ai.gateway.response-cache-enabled:true}")
   private boolean responseCacheEnabled;
 
-  @Value("${github.models.response-cache.ttl-ms:3600000}")
+  @Value("${ai.gateway.response-cache.ttl-ms:3600000}")
   private long responseCacheTtlMs;
 
-  @Value("${github.models.response-cache.max-entries:1000}")
+  @Value("${ai.gateway.response-cache.max-entries:1000}")
   private int responseCacheMaxEntries;
 
-  @Value("${github.models.smart-selection-enabled:true}")
+  @Value("${ai.gateway.smart-selection-enabled:true}")
   private boolean smartSelectionEnabled;
 
-  @Value("${github.models.smart-selection.code-task-threshold-chars:5000}")
+  @Value("${ai.gateway.smart-selection.code-task-threshold-chars:5000}")
   private int codeTaskThresholdChars;
 
-  @Value("${github.models.smart-selection.large-context-threshold-chars:50000}")
+  @Value("${ai.gateway.smart-selection.large-context-threshold-chars:50000}")
   private int largeContextThresholdChars;
 
-  @Value("${github.models.smart-selection.menu-gemini-threshold-chars:15000}")
+  @Value("${ai.gateway.smart-selection.menu-gemini-threshold-chars:15000}")
   private int menuGeminiThresholdChars;
 
-  @Value("${github.models.menu.force-github-models:true}")
+  @Value("${ai.gateway.menu.force-direct-provider:true}")
   private boolean menuForceGithubModels;
 
-  @Value("${github.models.model-quota-cooldown-ms:21600000}")
+  @Value("${ai.gateway.model-quota-cooldown-ms:21600000}")
   private long modelQuotaCooldownMs;
 
   private final Semaphore requestSemaphore = new Semaphore(1, true);
@@ -787,11 +773,15 @@ public class ChatgptGatewayService {
   private volatile int currentWindowEstimatedTokens = 0;
   private final AtomicInteger modelCursor = new AtomicInteger(0);
 
-  @Value("${chatgpt.api.key:${github.models.token:}}")
+  @Value("${ai.gateway.token:}")
   private String token;
 
-  @Value("${chatgpt.api.key:${openai.api.key:}}")
+  @Value("${ai.gateway.api-key:}")
   private String openAiApiKey;
+
+  // Hard gate to prevent outbound OpenAI/GitHub Models execution paths.
+  @Value("${ai.provider.force-gemini:true}")
+  private boolean forceGeminiProvider;
 
   private volatile Map<String, Set<String>> modelEndpointCache = Collections.emptyMap();
   private volatile Map<String, String> modelAliasToCatalogId = Collections.emptyMap();
@@ -820,9 +810,6 @@ public class ChatgptGatewayService {
   // Account-level OpenAI key rate-limit: when set, ALL models on this key are unavailable.
   // Unlike per-model cooldown (10min), this uses the actual Retry-After from OpenAI (e.g. 65s).
   private volatile long openAiAccountRateLimitUntilMs = 0L;
-  private volatile long lastProjectContextScanAtMs = 0L;
-  private volatile String cachedProjectContext = "";
-
   // Token-aware context budget manager (JTokkit). Optional — null-safe throughout.
   @org.springframework.beans.factory.annotation.Autowired(required = false)
   private ContextBudgetManager contextBudgetManager;
@@ -830,6 +817,10 @@ public class ChatgptGatewayService {
   // GeminiService: used as large-context fallback when own google.cloud.api-key is not set.
   @org.springframework.beans.factory.annotation.Autowired(required = false)
   private GeminiService geminiService;
+
+  // GeminiStreamingService: used for real-time token streaming via Gemini SSE API.
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  private GeminiStreamingService geminiStreamingService;
 
   private String getApiToken() {
     String openAiEnvToken = System.getenv("OPENAI_API_KEY");
@@ -900,138 +891,6 @@ public class ChatgptGatewayService {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // FEATURE 2: Java File Crawler for Project Context
-  // ═══════════════════════════════════════════════════════════════════════════
-  private String crawlProjectJavaFiles(String taskType) {
-    if (!javaCrawlerEnabled || projectRootPath == null || projectRootPath.isBlank()) {
-      return "";
-    }
-    long now = System.currentTimeMillis();
-    if (now - lastProjectContextScanAtMs < javaCrawlerCacheTtlMs && !cachedProjectContext.isBlank()) {
-      log.debug("Using cached project context (age={}ms)", now - lastProjectContextScanAtMs);
-      return cachedProjectContext;
-    }
-
-    try {
-      Path projectPath = Paths.get(projectRootPath);
-      if (!Files.isDirectory(projectPath)) {
-        log.warn("Project root path not found: {}", projectRootPath);
-        return "";
-      }
-
-      List<Path> javaFiles = new ArrayList<>();
-      try (var stream = Files.walk(projectPath)) {
-        javaFiles = stream
-            .filter(Files::isRegularFile)
-            .filter(p -> p.getFileName().toString().endsWith(".java"))
-            .filter(p -> !p.toString().contains("/target/") && !p.toString().contains("/.git/"))
-            .limit(javaCrawlerMaxFiles)
-            .toList();
-      }
-
-      StringBuilder context = new StringBuilder("## Project Structure Context\n\n");
-      context.append("Analyzed ").append(javaFiles.size()).append(" Java files:\n\n");
-
-      for (Path javaFile : javaFiles) {
-        try {
-          String relative = projectPath.relativize(javaFile).toString();
-          String content = Files.readString(javaFile, StandardCharsets.UTF_8);
-
-          String compact = compactJavaSourceSkeleton(content);
-          if (compact.isBlank()) continue;
-          if (compact.length() > javaCrawlerMaxCharsPerFile) {
-            compact = compact.substring(0, javaCrawlerMaxCharsPerFile) + "\n...[truncated]";
-          }
-
-          context.append("### ").append(relative).append("\n");
-          context.append(compact).append("\n\n");
-        } catch (Exception readEx) {
-          log.debug("Could not read Java file {}: {}", javaFile, readEx.getMessage());
-        }
-      }
-
-      cachedProjectContext = context.toString();
-      lastProjectContextScanAtMs = now;
-      log.info("Scanned {} Java files for project context", javaFiles.size());
-      return cachedProjectContext;
-    } catch (Exception ex) {
-      log.warn("Could not crawl project Java files: {}", ex.getMessage());
-      return "";
-    }
-  }
-
-  /**
-   * Strip a Java source file down to class/interface signatures and public/protected
-   * method signatures only. Removes: all imports, block comments, line comments,
-   * blank lines, and method bodies. Typical reduction: 70-85%.
-   */
-  private String compactJavaSourceSkeleton(String source) {
-    if (source == null || source.isBlank()) return "";
-    String[] lines = source.split("\\n");
-    StringBuilder out = new StringBuilder();
-    List<String> pendingAnnotations = new ArrayList<>();
-    boolean inBlockComment = false;
-
-    for (String rawLine : lines) {
-      String trimmed = rawLine == null ? "" : rawLine.trim();
-
-      // Block comment handling
-      if (inBlockComment) {
-        if (trimmed.contains("*/")) inBlockComment = false;
-        continue;
-      }
-      if (trimmed.startsWith("/*")) {
-        if (!trimmed.contains("*/")) inBlockComment = true;
-        continue;
-      }
-      // Line comments and Javadoc continuation lines
-      if (trimmed.startsWith("//") || trimmed.startsWith("*")) continue;
-
-      // Strip inline comment
-      int ic = trimmed.indexOf("//");
-      if (ic >= 0) trimmed = trimmed.substring(0, ic).trim();
-
-      // Skip blank and import lines
-      if (trimmed.isBlank() || trimmed.startsWith("import ")) continue;
-
-      // Collect annotations to attach to the next signature
-      if (trimmed.startsWith("@")) {
-        pendingAnnotations.add(trimmed);
-        continue;
-      }
-
-      boolean isClass = trimmed.startsWith("public class ") || trimmed.startsWith("class ")
-          || trimmed.startsWith("public interface ") || trimmed.startsWith("interface ")
-          || trimmed.startsWith("public abstract class ") || trimmed.startsWith("abstract class ")
-          || trimmed.startsWith("public enum ") || trimmed.startsWith("enum ")
-          || trimmed.startsWith("public record ") || trimmed.startsWith("record ")
-          || trimmed.startsWith("public sealed ");
-      boolean isMethod = !isClass && trimmed.contains("(") && trimmed.contains(")")
-          && !trimmed.startsWith("if ") && !trimmed.startsWith("for ")
-          && !trimmed.startsWith("while ") && !trimmed.startsWith("switch ")
-          && !trimmed.startsWith("catch ") && !trimmed.startsWith("return ")
-          && (trimmed.startsWith("public ") || trimmed.startsWith("protected ")
-              || trimmed.startsWith("private ") || trimmed.startsWith("static "));
-      boolean isPackage = trimmed.startsWith("package ");
-
-      if (!isClass && !isMethod && !isPackage) continue;
-
-      // Emit buffered annotations
-      for (String ann : pendingAnnotations) out.append(ann).append("\n");
-      pendingAnnotations.clear();
-
-      if (isMethod && trimmed.contains("{")) {
-        String sig = trimmed.substring(0, trimmed.indexOf('{')).trim();
-        out.append(sig).append(" { ... }\n");
-      } else {
-        out.append(trimmed).append("\n");
-      }
-    }
-
-    return out.toString().trim();
-  }
-
-  // ═══════════════════════════════════════════════════════════════════════════
   // FEATURE 3: Smart Model Selection
   // ═══════════════════════════════════════════════════════════════════════════
   private String selectOptimalModel(String taskType, int promptSize, boolean isCodeTask) {
@@ -1054,7 +913,7 @@ public class ChatgptGatewayService {
       }
     }
 
-    // Menu flow can be forced to stay on ChatGPT API even for large prompts.
+    // Menu flow can be forced to stay on AI Assistant API even for large prompts.
     if (isMenuDesign && menuForceGithubModels) {
       List<String> candidates = resolveCandidateModels();
       if (candidates.contains("gpt-4o")) {
@@ -1150,7 +1009,7 @@ public class ChatgptGatewayService {
    * <p>Called when the prompt already exceeds {@code directMaxChars} but we want to
    * avoid entering chunk-mode by intelligently trimming low-priority context layers:
    * <ol>
-   *   <li>Project Structure Context (SKELETON, lowest priority)</li>
+  *   <li>Session context / app context block (TAIL_TRIM, lowest priority)</li>
    *   <li>BACKEND SESSION CONTEXT / app context block (TAIL_TRIM)</li>
    *   <li>System core and scenario guardrail (KEEP)</li>
    *   <li>User payload (KEEP, highest priority)</li>
@@ -1168,23 +1027,6 @@ public class ChatgptGatewayService {
     int maxInputTokens = contextBudgetManager.computeInputBudget(model, maxOutputTokens);
     List<ContextBudgetManager.ContextSlot> slots = new ArrayList<>();
 
-    // Project context is prepended by maybeInjectProjectContext — detect and extract it.
-    String projectBlock = "";
-    if (finalPrompt.contains("## Project Structure")) {
-      int projStart = finalPrompt.indexOf("## Project Structure");
-      // The base prompt (systemCore) starts after the project block
-      String sysCoreTrimmed = systemCore.trim();
-      int baseStart = sysCoreTrimmed.isBlank() ? -1 : finalPrompt.indexOf(sysCoreTrimmed, projStart);
-      if (baseStart > projStart) {
-        projectBlock = finalPrompt.substring(projStart, baseStart).trim();
-      }
-    }
-
-    if (!projectBlock.isBlank()) {
-      slots.add(new ContextBudgetManager.ContextSlot(
-          "project_context", projectBlock, 3, ContextBudgetManager.TrimStrategy.SKELETON,
-          taskTypeHint));
-    }
     if (!systemCore.isBlank()) {
       slots.add(new ContextBudgetManager.ContextSlot(
           "system_core", systemCore.trim(), 9, ContextBudgetManager.TrimStrategy.KEEP));
@@ -1207,62 +1049,6 @@ public class ChatgptGatewayService {
       return fitted;
     }
     return finalPrompt;
-  }
-
-  private String maybeInjectProjectContext(String prompt, String taskTypeHint) {
-    if ("menu_design".equalsIgnoreCase(String.valueOf(taskTypeHint == null ? "" : taskTypeHint).trim())
-        || looksLikeMenuTask(prompt)) {
-      return prompt;
-    }
-    if (!looksLikeCodeTask(prompt)) {
-      return prompt;
-    }
-    if (prompt != null && prompt.contains("## Project Structure Context")) {
-      return prompt;
-    }
-    String projectContext = crawlProjectJavaFiles(taskTypeHint);
-    if (projectContext.isBlank()) {
-      return prompt;
-    }
-    String promptStr = String.valueOf(prompt == null ? "" : prompt);
-
-    // Append auto code-review directive so AI also surfaces quality findings inline.
-    String reviewDirective = buildAutoCodeReviewDirective();
-
-    // If including the full project context would push us past directMaxChars, skeletonize it.
-    if (contextBudgetManager != null && contextBudgetManager.isEnabled()
-        && promptStr.length() + projectContext.length() > directMaxChars) {
-      int promptTokens = contextBudgetManager.countTokens(promptStr, model);
-      int inputBudget = contextBudgetManager.computeInputBudget(model, maxOutputTokens);
-      int budgetForProject = inputBudget - promptTokens - 200; // 200-token safety gap
-      if (budgetForProject < 300) {
-        log.debug("maybeInjectProjectContext: no token budget for project context (budget={}), skipping", budgetForProject);
-        return promptStr;
-      }
-      String skelContext = contextBudgetManager.skeletonizeJavaContext(projectContext, budgetForProject);
-      if (skelContext.isBlank()) return promptStr;
-      log.info("maybeInjectProjectContext: skeletonized project context {} -> {} chars (token budget={})",
-          projectContext.length(), skelContext.length(), budgetForProject);
-      return skelContext + "\n\n" + reviewDirective + "\n\n" + promptStr;
-    }
-
-    return projectContext + "\n\n" + reviewDirective + "\n\n" + promptStr;
-  }
-
-  /**
-   * Builds a code-review directive block that is automatically injected alongside the project
-   * context whenever a code task is detected. This allows the AI to surface quality findings
-   * inline without any extra endpoint or client-side trigger.
-   */
-  private String buildAutoCodeReviewDirective() {
-    return "## AUTO CODE REVIEW (injected by backend)\n"
-        + "You have been given the compact skeletons of the project's Java source files above.\n"
-        + "As part of your response, ALSO perform a brief code review on the provided code:\n"
-        + "- Identify any HIGH or MEDIUM severity issues (bugs, security risks, N+1 queries, missing null-checks, etc.)\n"
-        + "- For each issue, state the file name, a one-line description, and a short recommendation.\n"
-        + "- If no significant issues are found, state \"No critical issues detected.\"\n"
-        + "Keep the review section concise (bullet points). Place it at the END of your response under the heading "
-        + "\"### Code Review Findings\".";
   }
 
   private String buildModelCooldownKey(String modelName, String tokenScope) {
@@ -1338,20 +1124,14 @@ public class ChatgptGatewayService {
   // ═══════════════════════════════════════════════════════════════════════════
   private String callGeminiWithContext(String prompt, int maxTokens, double temperature, ProgressListener progressListener) {
     // Delegate to GeminiService (uses ApiKeyService pool) when own google.cloud.api-key is not configured.
-    boolean ownKeyMissing = !geminiEnabled || googleApiKey.isBlank() || googleProjectId.isBlank();
-    if (ownKeyMissing) {
+    boolean useSharedGeminiService = !geminiEnabled || googleApiKey.isBlank() || googleProjectId.isBlank();
+    if (useSharedGeminiService) {
       if (geminiService == null) {
         return createErrorJson("Gemini không được cấu hình (google.cloud.api-key trống và GeminiService không khả dụng)", "GEMINI_NOT_CONFIGURED");
       }
       // Use shared GeminiService (has ApiKey pool, model rotation, quota management)
       try {
         String fullPrompt = prompt;
-        String promptLower = prompt.toLowerCase();
-        boolean isMenuPrompt = promptLower.contains("menu_json") || promptLower.contains("menu design") || promptLower.contains("menu manager");
-        if (!isMenuPrompt && (promptLower.contains("code") || promptLower.contains("java"))) {
-          String projectCtx = crawlProjectJavaFiles("code_generation");
-          if (!projectCtx.isBlank()) fullPrompt = projectCtx + "\n\n" + prompt;
-        }
         if (fullPrompt.length() > 500000) {
           return createErrorJson("Prompt quá lớn cho Gemini (tối đa 500K ký tự): " + fullPrompt.length(), "GEMINI_PROMPT_TOO_LARGE");
         }
@@ -1367,16 +1147,6 @@ public class ChatgptGatewayService {
 
     try {
       String fullPrompt = prompt;
-
-      // Inject project context for code tasks only (skip for menu design tasks)
-      String promptLowerCtx = prompt.toLowerCase();
-      boolean isMenuPromptCtx = promptLowerCtx.contains("menu_json") || promptLowerCtx.contains("menu design") || promptLowerCtx.contains("menu manager");
-      if (!isMenuPromptCtx && (promptLowerCtx.contains("code") || promptLowerCtx.contains("java"))) {
-        String projectCtx = crawlProjectJavaFiles("code_generation");
-        if (!projectCtx.isBlank()) {
-          fullPrompt = projectCtx + "\n\n" + prompt;
-        }
-      }
 
       if (fullPrompt.length() > 1000000) {
         return createErrorJson("Prompt vẫn quá lớn cho Gemini (tối đa 1M ký tự)", "GEMINI_PROMPT_TOO_LARGE");
@@ -1433,7 +1203,7 @@ public class ChatgptGatewayService {
   private String normalizeChatCompletionsEndpoint(String configuredUrl) {
     String configured = configuredUrl == null ? "" : configuredUrl.trim();
     if (configured.isEmpty()) {
-      return "https://api.openai.com/v1/chat/completions";
+      return "https://invalid.local/disabled-chat-completions";
     }
     String lower = configured.toLowerCase(Locale.ROOT);
     if (lower.endsWith("/chat/completions")) {
@@ -1644,11 +1414,11 @@ public class ChatgptGatewayService {
           modelAliasToCatalogId = aliases;
           modelCatalogRawIds = rawIds;
           modelEndpointCacheFetchedAtMs = System.currentTimeMillis();
-          log.info("Loaded ChatGPT model catalog: {} models", next.size());
+          log.info("Loaded AI Assistant model catalog: {} models", next.size());
           logCatalogResolution(next, aliases);
         }
       } catch (Exception ex) {
-        log.debug("Could not refresh ChatGPT model catalog: {}", ex.getMessage());
+        log.debug("Could not refresh AI Assistant model catalog: {}", ex.getMessage());
       }
     }
   }
@@ -1679,20 +1449,20 @@ public class ChatgptGatewayService {
     }
 
     if (!mapped.isEmpty()) {
-      log.info("ChatGPT API catalog mapping: {}", String.join("; ", mapped));
+      log.info("AI Assistant API catalog mapping: {}", String.join("; ", mapped));
     }
     if (!missing.isEmpty()) {
-      log.warn("ChatGPT API catalog missing configured aliases: {}", String.join(", ", missing));
+      log.warn("AI Assistant API catalog missing configured aliases: {}", String.join(", ", missing));
     }
 
     Set<String> raw = modelCatalogRawIds == null ? Collections.emptySet() : modelCatalogRawIds;
     if (!raw.isEmpty()) {
-      log.info("ChatGPT API catalog raw IDs: {}", String.join(", ", raw));
+      log.info("AI Assistant API catalog raw IDs: {}", String.join(", ", raw));
     }
 
     List<String> chatCapable = collectCatalogModelsForChat(endpointCache);
     if (!chatCapable.isEmpty()) {
-      log.info("ChatGPT API chat-capable catalog IDs: {}", String.join(", ", chatCapable));
+      log.info("AI Assistant API chat-capable catalog IDs: {}", String.join(", ", chatCapable));
     }
   }
 
@@ -1781,7 +1551,7 @@ public class ChatgptGatewayService {
 
   public String generateContent(String prompt, ProgressListener progressListener) {
     if (!enabled) {
-      return createErrorJson("ChatGPT API fallback đang tắt", "GITHUB_MODELS_DISABLED");
+      return createErrorJson("AI Assistant API fallback đang tắt", "GITHUB_MODELS_DISABLED");
     }
     if (prompt == null || prompt.trim().isEmpty()) {
       return createErrorJson("Prompt không được để trống", "INVALID_PROMPT");
@@ -1800,7 +1570,7 @@ public class ChatgptGatewayService {
     String endpoint = resolveChatCompletionsEndpoint();
     String effectiveToken = getEffectiveToken(endpoint);
     if (effectiveToken.isEmpty()) {
-      return createErrorJson("Thiếu token cho endpoint AI (set chatgpt.api.key/openai.api.key hoặc env OPENAI_API_KEY)", "GITHUB_TOKEN_MISSING");
+      return createErrorJson("Thiếu token cho endpoint AI (set aiAssistant.api.key/openai.api.key hoặc env OPENAI_API_KEY)", "GITHUB_TOKEN_MISSING");
     }
     String trimmedPrompt = prompt.trim();
     String taskTypeHint = detectTaskTypeHint(trimmedPrompt);
@@ -1823,7 +1593,7 @@ public class ChatgptGatewayService {
     }
 
     // Load per-app session context file (if prompt doesn't already embed session_memory)
-    // This mirrors how ChatGPT injects its /memories/session context into each request.
+    // This mirrors how AI Assistant injects its /memories/session context into each request.
     String appContextBlock = "";
     boolean promptAlreadyHasSessionMemory = prompt.contains("session_memory")
         || prompt.contains("APP CONTINUITY MEMORY");
@@ -1855,9 +1625,7 @@ public class ChatgptGatewayService {
       finalPrompt = systemCore.trim() + appContextBlock + "\n\n" + scenarioContextText + "\n\n" + trimmedPrompt;
     }
 
-    String preInjectionPrompt = finalPrompt;
-    finalPrompt = maybeInjectProjectContext(finalPrompt, taskTypeHint);
-    boolean injectedProjectContext = finalPrompt.length() > preInjectionPrompt.length();
+    boolean injectedProjectContext = false;
 
     // Token-aware budget fitting: if the assembled prompt exceeds direct-mode threshold,
     // try to compress supplementary layers (session context, project skeleton) before
@@ -1871,14 +1639,14 @@ public class ChatgptGatewayService {
 
     if (finalPrompt.length() > maxPromptChars) {
       return createErrorJson(
-          "Prompt quá dài cho ChatGPT fallback (tối đa " + maxPromptChars + " ký tự), hiện tại: " + finalPrompt.length(),
+          "Prompt quá dài cho AI Assistant fallback (tối đa " + maxPromptChars + " ký tự), hiện tại: " + finalPrompt.length(),
           "GITHUB_PROMPT_TOO_LARGE");
     }
 
     String selectedModel = selectOptimalModel(taskTypeHint, finalPrompt.length(), isCodeTask);
     if (shouldFastFallbackMenuToGemini(selectedModel, finalPrompt.length(), isMenuTask)) {
       log.info(
-          "Routing request to Gemini (fast-fallback) because menu context is large and primary ChatGPT model is in cooldown: selectedModel={}, promptChars={}",
+          "Routing request to Gemini (fast-fallback) because menu context is large and primary AI Assistant model is in cooldown: selectedModel={}, promptChars={}",
           selectedModel,
           finalPrompt.length());
       return callGeminiWithContext(finalPrompt, maxOutputTokens, directTemperature, progressListener);
@@ -1945,7 +1713,7 @@ public class ChatgptGatewayService {
 
   public String chatWithStreamingMessages(List<Map<String, Object>> messages, ProgressListener progressListener) {
     if (!enabled) {
-      return createErrorJson("ChatGPT API không khả dụng", "GITHUB_MODELS_DISABLED");
+      return createErrorJson("AI Assistant API không khả dụng", "GITHUB_MODELS_DISABLED");
     }
     if (messages == null || messages.isEmpty()) {
       return createErrorJson("Messages rỗng", "INVALID_PROMPT");
@@ -1953,7 +1721,7 @@ public class ChatgptGatewayService {
     String endpoint = resolveChatCompletionsEndpoint();
     String effectiveToken = getEffectiveToken(endpoint);
     if (effectiveToken.isEmpty()) {
-      return createErrorJson("Thiếu token cho endpoint AI (set chatgpt.api.key/openai.api.key hoặc env OPENAI_API_KEY)", "GITHUB_TOKEN_MISSING");
+      return createErrorJson("Thiếu token cho endpoint AI (set aiAssistant.api.key/openai.api.key hoặc env OPENAI_API_KEY)", "GITHUB_TOKEN_MISSING");
     }
     try {
       String flattenedPrompt = flattenChatMessages(messages);
@@ -2021,23 +1789,28 @@ public class ChatgptGatewayService {
 
       StringBuilder fullResponse = new StringBuilder();
 
-        emitProgress(progressListener, progressPayload("streaming", "Bắt đầu chat với ChatGPT API", 0, 1,
+        emitProgress(progressListener, progressPayload("streaming", "Bắt đầu streaming với Gemini", 0, 1,
           progressI18n("copilot.progress.message.streaming_start", null, null, null)));
-      
-      // Build request payload
-      Map<String, Object> body = new HashMap<>();
-      body.put("model", model);
-      body.put("messages", messages);
-      body.put("temperature", 0.7);
-      body.put("top_p", 0.95);
-      body.put("max_tokens", maxOutputTokens);
-      body.put("stream", true); // Enable true streaming
 
-      // Use WebClient for reactive streaming (vs blocking RestTemplate)
-      String streamedResponse = streamChatCompletionWithWebClient(body, progressListener);
-      
-      fullResponse.append(streamedResponse);
-      
+      // Use GeminiStreamingService for real-time token streaming (GitHub Models streaming removed).
+      if (geminiStreamingService != null) {
+        geminiStreamingService.streamContent(fittedPrompt, null,
+            chunk -> {
+              fullResponse.append(chunk);
+              emitProgress(progressListener, progressPayload("streaming", "Nhận dữ liệu", 0, 1,
+                  mergeProgress(progressI18n("copilot.progress.message.receiving_data", null, null, null),
+                      Map.of("chunk", chunk))));
+            },
+            null, null);
+      } else {
+        // Fallback: non-streaming Gemini + fake chunk emission
+        String result = callGeminiWithContext(fittedPrompt, maxOutputTokens, 0.7, progressListener);
+        String extracted = extractResultTextFromWrappedJson(result);
+        String textToEmit = (extracted != null && !extracted.isBlank()) ? extracted : result;
+        fullResponse.append(textToEmit);
+        emitStreamingChunks(textToEmit, progressListener);
+      }
+
       emitProgress(progressListener, progressPayload("complete", "Chat hoàn tất", 1, 1,
         mergeProgress(progressI18n("copilot.progress.message.chat_complete", null, null, null),
           Map.of("chunk", fullResponse.toString()))));
@@ -2048,8 +1821,8 @@ public class ChatgptGatewayService {
       log.error("Chat streaming failed", ex);
       if (isFallbackEligibleStreamingFailure(ex)) {
         emitProgress(progressListener, progressPayload(
-            "github_models_failed",
-            "ChatGPT API tạm không xử lý được, đang thử provider fallback",
+            "ai_assistant_failed",
+            "AI Assistant API tạm không xử lý được, đang thử provider fallback",
             0,
             1,
             mergeProgress(
@@ -2072,8 +1845,8 @@ public class ChatgptGatewayService {
         || text.contains("tokens_limit_reached")
         || text.contains("request body too large")
         || text.contains("max size")
-        || text.contains("tất cả chatgpt api đều thất bại")
-        || text.contains("tat ca chatgpt api deu that bai")
+        || text.contains("tất cả aiAssistant api đều thất bại")
+        || text.contains("tat ca aiAssistant api deu that bai")
         || text.contains("rate limit")
         || text.contains("quota")
         || text.contains("unauthorized")
@@ -2281,7 +2054,7 @@ public class ChatgptGatewayService {
             emitProgress(progressListener, progressPayload("streaming", "Đang kết nối tới " + candidateModel, 0, 1,
               progressI18n("copilot.progress.message.connecting_model", Map.of("model", candidateModel), null, null)));
           
-          // Call ChatGPT API with streaming
+          // Call AI Assistant API with streaming
           ResponseEntity<String> response = restTemplate.postForEntity(apiUrl, updatedRequest, String.class);
           String rawBody = response.getBody();
           
@@ -2325,7 +2098,7 @@ public class ChatgptGatewayService {
         }
       }
       
-      throw new IllegalStateException("Tất cả ChatGPT models đều thất bại");
+      throw new IllegalStateException("Tất cả AI Assistant models đều thất bại");
       
     } catch (Exception ex) {
       log.error("Streaming chat completion failed", ex);
@@ -2412,56 +2185,33 @@ public class ChatgptGatewayService {
       }
     }
     
-    throw new IllegalStateException("Tất cả ChatGPT models đều thất bại (stream mode)");
+    throw new IllegalStateException("Tất cả AI Assistant models đều thất bại (stream mode)");
   }
 
   private String generateDirectContent(String prompt, ProgressListener progressListener) {
+    // GitHub Models removed — route directly to Gemini.
     try {
-      if (prompt.length() > requestMaxChars) {
-        return createErrorJson(
-            "Prompt direct vượt ngưỡng an toàn request (" + requestMaxChars + " ký tự)",
-            "GITHUB_DIRECT_PROMPT_TOO_LARGE");
-      }
-      emitProgress(progressListener, progressPayload("direct_call", "Đang gửi yêu cầu trực tiếp tới ChatGPT API", 0, 1,
-          progressI18n("copilot.progress.message.direct_request", null, null, null)));
-        String rawBody = callChatCompletion(prompt, maxOutputTokens, directTemperature, progressListener,
-          progressPayload("direct_call", "Đang chờ phản hồi từ ChatGPT API", 1, 1,
-              progressI18n("copilot.progress.message.direct_waiting", null, null, null)));
-      if (rawBody == null || rawBody.trim().isEmpty()) {
-        return createErrorJson("ChatGPT API trả về response rỗng", "GITHUB_EMPTY_RESPONSE");
-      }
-
-      String content = extractContent(rawBody);
-      if (content == null || content.trim().isEmpty()) {
-        return createErrorJson("Không trích xuất được nội dung từ ChatGPT API", "GITHUB_PARSE_EMPTY");
-      }
-
-      Object parsedResult = tryParseJson(content);
-      String successJson = createSuccessJson(parsedResult != null ? parsedResult : content, "direct", null);
-      cacheResponse(prompt, successJson);
-        emitProgress(progressListener, progressPayload("completed", "Đã hoàn tất xử lý AI", 1, 1,
-          progressI18n("copilot.progress.message.completed", null, null, null)));
-      return successJson;
+      return callGeminiWithContext(prompt, maxOutputTokens, directTemperature, progressListener);
     } catch (Exception ex) {
-      // All ChatGPT models exhausted (e.g. all 429) — fallback to Gemini
-        boolean allRateLimit = ex instanceof IllegalStateException && ex.getMessage() != null
-          && (ex.getMessage().contains("Tất cả ChatGPT models đều thất bại")
-            || ex.getMessage().contains("Tất cả GitHub models đều thất bại"));
-      if (allRateLimit && (geminiService != null || (geminiEnabled && !googleApiKey.isBlank()))) {
-        log.warn("generateDirectContent: all ChatGPT models failed ({}), falling back to Gemini", ex.getMessage());
-        try {
-          return callGeminiWithContext(prompt, maxOutputTokens, directTemperature, progressListener);
-        } catch (Exception geminiEx) {
-          log.error("generateDirectContent: Gemini fallback also failed", geminiEx);
-          return createErrorJson("Lỗi gọi ChatGPT API và Gemini fallback: " + geminiEx.getMessage(), "ALL_PROVIDERS_FAILED");
-        }
-      }
-      log.error("ChatGPT API request failed", ex);
-      return createErrorJson("Lỗi gọi ChatGPT API API: " + ex.getMessage(), "GITHUB_MODELS_ERROR");
+      log.error("generateDirectContent: Gemini call failed", ex);
+      return createErrorJson("Lỗi gọi Gemini: " + ex.getMessage(), "GEMINI_ERROR");
     }
   }
 
   private String generateLargePromptContent(String prompt, ProgressListener progressListener, AiMenuOperationScenario scenario) {
+    // GitHub Models chunk-map-reduce removed. Gemini Pro supports 1-2M context natively.
+    log.info("generateLargePromptContent: routing to Gemini large context, promptChars={}", prompt.length());
+    try {
+      return callGeminiWithContext(prompt, maxOutputTokens, directTemperature, progressListener);
+    } catch (Exception ex) {
+      log.error("generateLargePromptContent: Gemini call failed", ex);
+      return createErrorJson("Lỗi gọi Gemini large context: " + ex.getMessage(), "GEMINI_LARGE_CONTEXT_ERROR");
+    }
+  }
+
+  @SuppressWarnings("unused")
+  private String generateLargePromptContent_chunked(String prompt, ProgressListener progressListener, AiMenuOperationScenario scenario) {
+    // Kept for reference only — no longer called.
     try {
       List<String> chunks = splitIntoChunks(prompt, chunkSizeChars, chunkOverlapChars);
       if (chunks.isEmpty()) {
@@ -2635,7 +2385,7 @@ public class ChatgptGatewayService {
         Object repaired = ensureValidMenuFinalResult(normalizedResult, mergedContent, scenario, progressListener, finalMergeExtra);
         if (repaired == null) {
           return createErrorJson(
-              "ChatGPT API trả về kết quả cuối không hợp lệ cho menu (không phải JSON menu/menu_node).",
+              "AI Assistant API trả về kết quả cuối không hợp lệ cho menu (không phải JSON menu/menu_node).",
               "GITHUB_FINAL_OUTPUT_INVALID");
         }
         normalizedResult = repaired;
@@ -2656,13 +2406,13 @@ public class ChatgptGatewayService {
       cacheResponse(prompt, successJson);
       return successJson;
     } catch (Exception ex) {
-      log.error("ChatGPT API chunked request failed", ex);
+      log.error("AI Assistant API chunked request failed", ex);
       String normalizedMessage = String.valueOf(ex.getMessage() == null ? "" : ex.getMessage()).toLowerCase(Locale.ROOT);
-      if (normalizedMessage.contains("tat ca chatgpt api deu that bai")
-          || normalizedMessage.contains("no available chatgpt api")) {
-        return createErrorJson("ChatGPT API exhausted for chunked menu task: " + ex.getMessage(), "GITHUB_MODELS_EXHAUSTED");
+      if (normalizedMessage.contains("tat ca aiAssistant api deu that bai")
+          || normalizedMessage.contains("no available aiAssistant api")) {
+        return createErrorJson("AI Assistant API exhausted for chunked menu task: " + ex.getMessage(), "GITHUB_MODELS_EXHAUSTED");
       }
-      return createErrorJson("Lỗi xử lý prompt lớn qua ChatGPT API: " + ex.getMessage(), "GITHUB_CHUNKED_ERROR");
+      return createErrorJson("Lỗi xử lý prompt lớn qua AI Assistant API: " + ex.getMessage(), "GITHUB_CHUNKED_ERROR");
     }
   }
 
@@ -2851,7 +2601,14 @@ public class ChatgptGatewayService {
   private String callChatCompletion(String prompt, int maxTokens, double temperature, ProgressListener progressListener,
       Map<String, Object> progressMeta) {
     if (prompt == null || prompt.isBlank()) {
-      throw new IllegalArgumentException("Prompt rỗng khi gọi ChatGPT API");
+      throw new IllegalArgumentException("Prompt rỗng khi gọi AI Assistant API");
+    }
+
+    // Enforce Gemini-only provider while preserving legacy response parsing contract
+    // (many call-sites still expect a chat-completions shaped JSON payload).
+    if (forceGeminiProvider) {
+      String geminiText = callGeminiWithContext(prompt, maxTokens, temperature, progressListener);
+      return wrapTextAsChatCompletionsJson(geminiText);
     }
     if (prompt.length() > requestMaxChars) {
       throw new IllegalArgumentException(
@@ -2868,7 +2625,7 @@ public class ChatgptGatewayService {
       candidateModels = filterMenuAllowedModels(candidateModels);
     }
     if (candidateModels.isEmpty()) {
-      throw new IllegalStateException("No available ChatGPT models for this menu task after applying allowlist/cooldown");
+      throw new IllegalStateException("No available AI Assistant models for this menu task after applying allowlist/cooldown");
     }
     List<String> failures = new ArrayList<>();
     String baseEndpoint = resolveChatCompletionsEndpoint();
@@ -2879,7 +2636,7 @@ public class ChatgptGatewayService {
     if (accountRateLimitUntil > System.currentTimeMillis()) {
       long remainingMs = accountRateLimitUntil - System.currentTimeMillis();
       log.warn("OpenAI account key rate-limited for {}ms more — skipping all models, falling back to Gemini", remainingMs);
-      throw new IllegalStateException("Tất cả ChatGPT models đều thất bại. OpenAI account key rate-limited for "
+      throw new IllegalStateException("Tất cả AI Assistant models đều thất bại. OpenAI account key rate-limited for "
           + remainingMs + "ms more.");
     }
 
@@ -2960,7 +2717,7 @@ public class ChatgptGatewayService {
     }
 
     String failureSummary = failures.isEmpty() ? "Không có chi tiết lỗi" : String.join(" | ", failures);
-    throw new IllegalStateException("Tất cả ChatGPT models đều thất bại. Đã thử: "
+    throw new IllegalStateException("Tất cả AI Assistant models đều thất bại. Đã thử: "
         + String.join(", ", candidateModels) + ". Chi tiết: " + failureSummary);
   }
 
@@ -3003,13 +2760,13 @@ public class ChatgptGatewayService {
           reserveBudgetBeforeCall(estimatedTokens);
           emitProgress(progressListener, mergeProgress(progressMeta, Map.of("attempt", attempt)));
           if (attempt == 1) {
-            log.info("ChatGPT API request: endpoint='{}', model='{}', promptChars={}", endpoint, modelName, prompt == null ? 0 : prompt.length());
+            log.info("AI Assistant API request: endpoint='{}', model='{}', promptChars={}", endpoint, modelName, prompt == null ? 0 : prompt.length());
           }
           ResponseEntity<String> response = postInferenceRequest(endpoint, request);
           return response.getBody();
         } catch (HttpClientErrorException.TooManyRequests ex) {
           if (isDailyQuotaExceeded(ex)) {
-            String msg = "ChatGPT API daily quota reached for model '" + modelName + "'";
+            String msg = "AI Assistant API daily quota reached for model '" + modelName + "'";
             markModelTemporarilyUnavailable(modelName, tokenScope, modelQuotaCooldownMs, "daily quota exhausted");
             log.warn(msg);
             throw new IllegalStateException(msg);
@@ -3023,7 +2780,7 @@ public class ChatgptGatewayService {
             String reason = waitMs > maxWaitAllowed && maxWaitAllowed > 0L
                 ? ("429 wait too long (" + waitMs + "ms > " + maxWaitAllowed + "ms)")
                 : ("429 retries exceeded per model (attempt " + attempt + "/" + retryMaxAttempts + ")");
-            log.warn("ChatGPT API 429 for model '{}' -> fast failover: {}.", modelName, reason);
+            log.warn("AI Assistant API 429 for model '{}' -> fast failover: {}.", modelName, reason);
             // If OpenAI returned a large Retry-After, the entire account key is rate-limited.
             // Record account-level cooldown so other models skip immediately without wasted calls.
             if (waitMs > maxWaitAllowed && maxWaitAllowed > 0L && waitMs > 0L) {
@@ -3045,11 +2802,11 @@ public class ChatgptGatewayService {
             throw new IllegalStateException("rate limit fast-failover for model '" + modelName + "': " + reason);
           }
 
-          log.warn("ChatGPT API 429 rate limit for model '{}' (attempt {}/{}). Waiting {} ms before retry.",
+          log.warn("AI Assistant API 429 rate limit for model '{}' (attempt {}/{}). Waiting {} ms before retry.",
               modelName, attempt, retryMaxAttempts, waitMs);
           emitProgress(progressListener, mergeProgress(progressMeta, Map.of(
               "stage", "waiting_rate_limit",
-              "message", "Đang chờ quota ChatGPT API",
+              "message", "Đang chờ quota AI Assistant API",
               "messageKey", "copilot.progress.message.waiting_rate_limit",
               "messageArgs", Map.of("model", modelName, "waitingMs", waitMs),
               "attempt", attempt,
@@ -3058,7 +2815,7 @@ public class ChatgptGatewayService {
           sleepQuietly(waitMs);
         } catch (HttpClientErrorException ex) {
           if (ex.getStatusCode().value() == 401) {
-            String authMessage = "ChatGPT API authentication failed (401) for model '" + modelName
+            String authMessage = "AI Assistant API authentication failed (401) for model '" + modelName
                 + "' at endpoint '" + endpoint
                 + "'. Check github.models.token, github.models.auth-scheme and token scope.";
             throw new IllegalStateException(authMessage, ex);
@@ -3069,7 +2826,7 @@ public class ChatgptGatewayService {
     } finally {
       requestSemaphore.release();
     }
-    throw new IllegalStateException("ChatGPT API rate limit exceeded after retries for model '" + modelName + "'");
+    throw new IllegalStateException("AI Assistant API rate limit exceeded after retries for model '" + modelName + "'");
   }
 
   private ResponseEntity<String> postInferenceRequest(String endpoint, HttpEntity<Map<String, Object>> request) {
@@ -3080,7 +2837,7 @@ public class ChatgptGatewayService {
     ResponseEntity<String> response = executeInferencePost(endpoint, safeRequest);
 
     if (response == null) {
-      throw new IllegalStateException("ChatGPT API request failed: empty response");
+      throw new IllegalStateException("AI Assistant API request failed: empty response");
     }
 
     if (response.getStatusCode().isError()) {
@@ -3090,7 +2847,7 @@ public class ChatgptGatewayService {
           return recovered;
         }
       }
-      throw createHttpClientError("ChatGPT API request failed", response);
+      throw createHttpClientError("AI Assistant API request failed", response);
     }
 
     return response;
@@ -3547,7 +3304,7 @@ public class ChatgptGatewayService {
     if (currentWindowEstimatedTokens + estimatedTokens > Math.max(1000, tpmLimit)) {
       long waitForNextWindow = 60000L - (now - currentWindowStartMs) + 500L;
       if (waitForNextWindow > 0L) {
-        log.info("Throttling ChatGPT API requests to respect TPM budget. Waiting {} ms.", waitForNextWindow);
+        log.info("Throttling AI Assistant API requests to respect TPM budget. Waiting {} ms.", waitForNextWindow);
         sleepQuietly(waitForNextWindow);
       }
       currentWindowStartMs = System.currentTimeMillis();
@@ -3616,7 +3373,7 @@ public class ChatgptGatewayService {
         return Math.max(0L, waitMs + 1000L);
       }
     } catch (Exception headerParseEx) {
-      log.debug("Unable to parse retry-after headers from ChatGPT API 429: {}", headerParseEx.getMessage());
+      log.debug("Unable to parse retry-after headers from AI Assistant API 429: {}", headerParseEx.getMessage());
     }
     return 0L;
   }
@@ -3630,7 +3387,7 @@ public class ChatgptGatewayService {
       Thread.sleep(wait);
     } catch (InterruptedException ie) {
       Thread.currentThread().interrupt();
-      throw new IllegalStateException("Interrupted while waiting for ChatGPT API retry/throttle", ie);
+      throw new IllegalStateException("Interrupted while waiting for AI Assistant API retry/throttle", ie);
     }
   }
 
@@ -3713,7 +3470,7 @@ public class ChatgptGatewayService {
         HttpEntity<Map<String, Object>> retryRequest = new HttpEntity<>(request.getBody(), retryHeaders);
         ResponseEntity<String> retryResponse = executeInferencePost(targetEndpoint, retryRequest);
         if (retryResponse != null && !retryResponse.getStatusCode().isError()) {
-          log.warn("Recovered ChatGPT API 401 via fallback auth strategy: endpoint='{}' auth='{}'",
+          log.warn("Recovered AI Assistant API 401 via fallback auth strategy: endpoint='{}' auth='{}'",
               targetEndpoint,
               authHeader.toLowerCase(Locale.ROOT).startsWith("github-bearer ") ? "github-bearer" : "bearer");
           return retryResponse;
@@ -4192,7 +3949,7 @@ public class ChatgptGatewayService {
     @SuppressWarnings("unchecked")
     Map<String, Object> payload = objectMapper.readValue(rawBody, Map.class);
 
-    // OpenAI/ChatGPT Responses API format
+    // OpenAI/AI Assistant Responses API format
     Object outputObj = payload.get("output");
     if (outputObj instanceof List<?> outputList && !outputList.isEmpty()) {
       StringBuilder sb = new StringBuilder();
@@ -4240,6 +3997,30 @@ public class ChatgptGatewayService {
     }
     Object contentObj = messageMap.get("content");
     return contentObj == null ? null : String.valueOf(contentObj);
+  }
+
+  private String wrapTextAsChatCompletionsJson(String text) {
+    try {
+      Map<String, Object> message = new LinkedHashMap<>();
+      message.put("role", "assistant");
+      message.put("content", text == null ? "" : text);
+
+      Map<String, Object> choice = new LinkedHashMap<>();
+      choice.put("index", 0);
+      choice.put("message", message);
+      choice.put("finish_reason", "stop");
+
+      Map<String, Object> payload = new LinkedHashMap<>();
+      payload.put("id", "gemini-compat-" + System.currentTimeMillis());
+      payload.put("object", "chat.completion");
+      payload.put("created", System.currentTimeMillis() / 1000L);
+      payload.put("model", "gemini");
+      payload.put("choices", List.of(choice));
+
+      return objectMapper.writeValueAsString(payload);
+    } catch (Exception ex) {
+      return "{\"choices\":[{\"message\":{\"content\":\"\"}}]}";
+    }
   }
 
   private Object tryParseJson(String text) {

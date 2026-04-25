@@ -90,6 +90,9 @@ public class RecordManager {
     private static final java.util.concurrent.atomic.AtomicBoolean shutdownInProgress = new java.util.concurrent.atomic.AtomicBoolean(false);
     // Guard: only one async Lucene rebuild per table at a time
     private static final ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicBoolean> tableRepairScheduled = new ConcurrentHashMap<>();
+    // Timestamp (System.nanoTime) of last completed rebuild per table — prevents re-scheduling during in-flight queries
+    private static final ConcurrentHashMap<String, Long> tableLastRebuildNanos = new ConcurrentHashMap<>();
+    private static final long REBUILD_COOL_DOWN_NANOS = 3_000_000_000L; // 3 seconds
     // Schema cache: avoid hitting Lucene on every write just to look up table field lists
     private static final ConcurrentHashMap<String, List<String>> tableSchemaCache = new ConcurrentHashMap<>();
     private static final java.util.concurrent.ExecutorService repairExecutor =
@@ -2285,6 +2288,15 @@ public class RecordManager {
         }
 
         String tableKey = appId + ":" + tableName;
+
+        // Suppress re-schedule if a rebuild finished within the cool-down window.
+        // Queries that were in-flight when the rebuild committed still see empty results;
+        // they should resolve on the next natural retry without forcing another rebuild.
+        Long lastRebuild = tableLastRebuildNanos.get(tableKey);
+        if (lastRebuild != null && (System.nanoTime() - lastRebuild) < REBUILD_COOL_DOWN_NANOS) {
+            return;
+        }
+
         tableRepairScheduled.putIfAbsent(tableKey, new java.util.concurrent.atomic.AtomicBoolean(false));
         if (tableRepairScheduled.get(tableKey).compareAndSet(false, true)) {
             logger.warn("Lucene miss for {}.{} — scheduling async full index rebuild.", appId, tableName);
@@ -2297,6 +2309,7 @@ public class RecordManager {
                 } catch (Exception ex) {
                     logger.error("Async Lucene rebuild failed for {}.{}: {}", appId, tableName, ex.getMessage(), ex);
                 } finally {
+                    tableLastRebuildNanos.put(tableKey, System.nanoTime());
                     tableRepairScheduled.get(tableKey).set(false);
                 }
             });
@@ -2793,10 +2806,8 @@ public class RecordManager {
             .map(k -> {
                 Object value = extractValueForKey(filters, k);
                 if (value == null) {
-                    // Nếu một trong các trường khóa chính không có giá trị trong filters,
-                    // có thể bạn muốn ném một ngoại lệ hoặc cảnh báo,
-                    // vì điều này có thể dẫn đến một key không đầy đủ.
-                    logger.warn("⚠ Trường khóa chính '{}' không có giá trị trong filters cho bảng {} chương trình {}. Key có thể không đầy đủ.", k, tableName, appId);
+                    // Expected during dedup-key generation: not all PK fields are present in every filter/record.
+                    logger.debug("⚠ Trường khóa chính '{}' không có giá trị trong filters cho bảng {} chương trình {}. Key có thể không đầy đủ.", k, tableName, appId);
                 }
                 return urlEncode(value != null ? value.toString() : "");
             })

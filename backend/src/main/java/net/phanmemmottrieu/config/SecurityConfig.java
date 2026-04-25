@@ -5,6 +5,7 @@ import net.phanmemmottrieu.security.JwtAuthenticationFilter;
 import net.phanmemmottrieu.security.RateLimitingFilter;
 import net.phanmemmottrieu.security.CsrfProtectionFilter;
 // import net.phanmemmottrieu.security.GuestTokenFilter;
+import jakarta.servlet.DispatcherType;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
@@ -46,6 +47,8 @@ public class SecurityConfig {
             org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter.class);
         
         http.authorizeHttpRequests()
+            // Allow async/error redispatch for streaming endpoints (SSE) after response is committed.
+            .dispatcherTypeMatchers(DispatcherType.ASYNC, DispatcherType.ERROR, DispatcherType.FORWARD).permitAll()
             // Allow CORS preflight for all endpoints
             .requestMatchers(org.springframework.http.HttpMethod.OPTIONS, "/**").permitAll()
             // Public lead-capture endpoint for guest website users

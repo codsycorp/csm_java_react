@@ -22,7 +22,7 @@ import java.util.*;
  * </ul>
  *
  * The returned PatchOps are consumed by the frontend to render
- * Copilot-style inline diff decorations in CodeMirror.
+ * AI assistant-style inline diff decorations in CodeMirror.
  */
 @Service
 public class AiMenuMergeService {

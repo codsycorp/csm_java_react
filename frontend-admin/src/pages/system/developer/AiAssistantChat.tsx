@@ -10,12 +10,11 @@ import {
 	CloseOutlined,
 } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
-import { useSocket } from "#src/hooks/useSocket";
+import { useAuthStore } from "#src/store/auth";
 import { extractCodeBlocks, extractLatestOpenCodeBlock } from "#src/pages/system/developer/codeUtils";
-import { request } from "#src/utils/request";
-import styles from "./ChatgptChat.module.css";
+import styles from "./AiAssistantChat.module.css";
 
-export type ChatgptAttachment = {
+export type AiAssistantAttachment = {
 	id: string;
 	name: string;
 	mimeType: string;
@@ -31,9 +30,9 @@ export type ChatgptAttachment = {
 	fullContext?: boolean;
 };
 
-export type ChatgptUserMessagePayload = {
+export type AiAssistantUserMessagePayload = {
 	message: string;
-	attachments: ChatgptAttachment[];
+	attachments: AiAssistantAttachment[];
 };
 
 type ChatMessage = {
@@ -43,7 +42,7 @@ type ChatMessage = {
 	content: string;
 	timestamp: number;
 	codeBlocks?: CodeBlock[];
-	attachments?: Array<Pick<ChatgptAttachment, "id" | "name" | "mimeType" | "size" | "kind" | "summary" | "previewUrl">>;
+	attachments?: Array<Pick<AiAssistantAttachment, "id" | "name" | "mimeType" | "size" | "kind" | "summary" | "previewUrl">>;
 };
 
 type CodeBlock = {
@@ -54,7 +53,7 @@ type CodeBlock = {
 
 type ResponseMode = "analyze" | "edit";
 
-type ChatgptStageEvent = {
+type AiAssistantStageEvent = {
 	id: string;
 	stage: string;
 	message: string;
@@ -73,7 +72,7 @@ type ChatgptStageEvent = {
 	timestamp: number;
 };
 
-type ChatgptChatProps = {
+type AiAssistantChatProps = {
 	appId: string;
 	currentCode?: string;
 	language?: "javascript" | "html" | "python" | "java" | "css" | "sql" | "json";
@@ -81,13 +80,13 @@ type ChatgptChatProps = {
 	targetPName?: string;
 	targetPType?: number;
 	onCodeInsert?: (code: string) => void;
-	onUserMessage?: (payload: ChatgptUserMessagePayload) => void;
+	onUserMessage?: (payload: AiAssistantUserMessagePayload) => void;
 	autoApplyCodeBlock?: boolean;
 	autoApplyPreferenceKey?: string;
 	onAutoApplyChange?: (enabled: boolean) => void;
 };
 
-const CHAT_HISTORY_KEY = "codeeditor.chatgpt.chat.v1";
+const CHAT_HISTORY_KEY = "codeeditor.aiassistant.chat.v1";
 const LEGACY_CHAT_HISTORY_KEY = "codeeditor.copilot.chat.v1";
 const CHAT_STORAGE_LIMIT = 20;
 const MAX_ATTACHMENTS = 8;
@@ -96,7 +95,7 @@ const MAX_TEXT_FILE_BYTES = 10 * 1024 * 1024;
 const MAX_IMAGE_FILE_BYTES = 5 * 1024 * 1024;
 const STREAM_UI_FLUSH_MS = 48;
 const STREAM_CODEBLOCK_PARSE_MS = 240;
-const AUTO_APPLY_PREF_KEY = "chatgpt.autoApply";
+const AUTO_APPLY_PREF_KEY = "aiassistant.autoApply";
 const LEGACY_AUTO_APPLY_PREF_KEY = "copilot.autoApply";
 const MAX_CHAT_INPUT_CHARS = 20000;
 const MAX_STRUCTURED_TEXT_EDITS = 160;
@@ -145,8 +144,8 @@ function isCodeLikeName(name: string): boolean {
 	return new Set(["js", "jsx", "ts", "tsx", "java", "sql", "html", "css", "scss", "less", "xml", "yml", "yaml", "py", "properties"]).has(ext);
 }
 
-function classifyAttachmentContext(name: string, mimeType: string, kind: ChatgptAttachment["kind"], contextType: ChatgptChatProps["contextType"]): {
-	contextRole: NonNullable<ChatgptAttachment["contextRole"]>;
+function classifyAttachmentContext(name: string, mimeType: string, kind: AiAssistantAttachment["kind"], contextType: AiAssistantChatProps["contextType"]): {
+	contextRole: NonNullable<AiAssistantAttachment["contextRole"]>;
 	authoritative: boolean;
 	defaultFullContext: boolean;
 } {
@@ -464,7 +463,7 @@ const saveChatHistory = (messages: ChatMessage[]) => {
 	}
 };
 
-export default function ChatgptChat({
+export default function AiAssistantChat({
 	appId,
 	currentCode = "",
 	language = "javascript",
@@ -476,19 +475,18 @@ export default function ChatgptChat({
 	autoApplyCodeBlock = false,
 	autoApplyPreferenceKey,
 	onAutoApplyChange,
-}: ChatgptChatProps) {
+}: AiAssistantChatProps) {
 	const { i18n } = useTranslation();
 	const [messages, setMessages] = useState<ChatMessage[]>(getChatHistory());
 	const [inputValue, setInputValue] = useState("");
 	const [isLoading, setIsLoading] = useState(false);
 	const [autoApplyEnabled, setAutoApplyEnabled] = useState<boolean>(() => loadAutoApplyPreference(autoApplyPreferenceKey, Boolean(autoApplyCodeBlock)));
-	const [pendingAttachments, setPendingAttachments] = useState<ChatgptAttachment[]>([]);
-	const [stageEvents, setStageEvents] = useState<ChatgptStageEvent[]>([]);
+	const [pendingAttachments, setPendingAttachments] = useState<AiAssistantAttachment[]>([]);
+	const [stageEvents, setStageEvents] = useState<AiAssistantStageEvent[]>([]);
 	const messageListRef = useRef<HTMLDivElement>(null);
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const imageInputRef = useRef<HTMLInputElement>(null);
 	const streamingMessageRef = useRef<string>("");
-	const lastListenerSetupRef = useRef<boolean>(false);
 	const realtimeApplyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const streamFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const pendingStreamChunkRef = useRef<string>("");
@@ -577,7 +575,7 @@ export default function ChatgptChat({
 	}, [uiText]);
 
 	const renderProgressText = useCallback((key?: string, args?: Record<string, any>, fallback?: string): string => {
-		const normalizedKey = String(key || "").trim().replace(/^chatgpt\.progress\./i, "copilot.progress.");
+		const normalizedKey = String(key || "").trim().replace(/^aiassistant\.progress\./i, "copilot.progress.");
 		if (!normalizedKey) return String(fallback || "").trim();
 		switch (normalizedKey) {
 			case "copilot.progress.phase.preparing":
@@ -629,11 +627,11 @@ export default function ChatgptChat({
 			case "copilot.progress.message.final_waiting":
 				return uiText("Đang chờ phản hồi tổng hợp cuối", "Waiting for final synthesis", "正在等待最终综合结果");
 			case "copilot.progress.message.direct_request":
-				return uiText("Đang gửi yêu cầu trực tiếp tới GitHub Models", "Sending direct request to GitHub Models", "正在向 GitHub Models 发送直接请求");
+				return uiText("Đang gửi yêu cầu trực tiếp tới AI", "Sending direct AI request", "正在发送 AI 直接请求");
 			case "copilot.progress.message.direct_waiting":
-				return uiText("Đang chờ phản hồi từ GitHub Models", "Waiting for GitHub Models response", "正在等待 GitHub Models 响应");
+				return uiText("Đang chờ phản hồi từ AI", "Waiting for AI response", "正在等待 AI 响应");
 			case "copilot.progress.message.streaming_start":
-				return uiText("Bắt đầu chat với GitHub Models", "Starting chat with GitHub Models", "开始与 GitHub Models 对话");
+				return uiText("Bắt đầu phiên AI", "Starting AI session", "开始 AI 会话");
 			case "copilot.progress.message.receiving_data":
 				return uiText("Đang nhận dữ liệu", "Receiving data", "正在接收数据");
 			case "copilot.progress.message.connecting_model":
@@ -645,7 +643,7 @@ export default function ChatgptChat({
 			case "copilot.progress.message.chat_complete":
 				return uiText("Chat hoàn tất", "Chat completed", "对话已完成");
 			case "copilot.progress.message.github_fallback":
-				return uiText("GitHub Models tạm không xử lý được, đang thử provider fallback", "GitHub Models is temporarily unavailable, trying fallback provider", "GitHub Models 暂时不可用，正在尝试回退提供方");
+				return uiText("Provider chính tạm không xử lý được, đang thử fallback", "Primary provider is temporarily unavailable, trying fallback", "主提供方暂时不可用，正在尝试回退");
 			case "copilot.progress.message.chat_error":
 				return uiText(
 					`Chat lỗi: ${args?.error || "unknown"}`,
@@ -660,9 +658,9 @@ export default function ChatgptChat({
 				);
 			case "copilot.progress.message.waiting_rate_limit":
 				return uiText(
-					`Đang chờ quota GitHub Models${args?.waitingMs ? ` (${args.waitingMs}ms)` : ""}`,
-					`Waiting for GitHub Models quota${args?.waitingMs ? ` (${args.waitingMs}ms)` : ""}`,
-					`正在等待 GitHub Models 配额${args?.waitingMs ? `（${args.waitingMs}ms）` : ""}`,
+					`Đang chờ quota AI${args?.waitingMs ? ` (${args.waitingMs}ms)` : ""}`,
+					`Waiting for AI quota${args?.waitingMs ? ` (${args.waitingMs}ms)` : ""}`,
+					`正在等待 AI 配额${args?.waitingMs ? `（${args.waitingMs}ms）` : ""}`,
 				);
 			case "copilot.progress.message.completed":
 				return uiText("Đã hoàn tất xử lý AI", "AI processing completed", "AI 处理已完成");
@@ -799,7 +797,7 @@ export default function ChatgptChat({
 		stageEventSignaturesRef.current.add(signature);
 
 		setStageEvents((prev) => {
-			const next: ChatgptStageEvent[] = [
+			const next: AiAssistantStageEvent[] = [
 				...prev,
 				{
 					id: `stage_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
@@ -949,7 +947,7 @@ export default function ChatgptChat({
 		}
 
 		const nextFiles = Array.from(fileList).slice(0, Math.max(0, MAX_ATTACHMENTS - currentCount));
-		const nextAttachments: ChatgptAttachment[] = [];
+		const nextAttachments: AiAssistantAttachment[] = [];
 
 		for (const file of nextFiles) {
 			try {
@@ -1030,10 +1028,10 @@ export default function ChatgptChat({
 		setPendingAttachments((prev) => prev.filter((item) => item.id !== id));
 	}, []);
 
-	// Use existing Socket.IO hook
-	const { socket, connected: socketConnected } = useSocket({ enabled: !!appId });
+	// SSE abort ref for canceling in-flight streaming requests
+	const sseAbortRef = useRef<AbortController | null>(null);
 
-	// Setup Socket.IO listeners for chat events
+	// Cleanup on unmount: cancel animation frame, timers, in-flight SSE fetch
 	useEffect(() => {
 		return () => {
 			if (scrollFrameRef.current != null) {
@@ -1044,233 +1042,13 @@ export default function ChatgptChat({
 				clearTimeout(streamFlushTimerRef.current);
 				streamFlushTimerRef.current = null;
 			}
+			if (realtimeApplyTimerRef.current) {
+				clearTimeout(realtimeApplyTimerRef.current);
+				realtimeApplyTimerRef.current = null;
+			}
+			sseAbortRef.current?.abort();
 		};
 	}, []);
-
-	useEffect(() => {
-		if (!socket || !appId) return;
-		if (lastListenerSetupRef.current) return; // Prevent duplicate listeners
-
-		lastListenerSetupRef.current = true;
-
-		const handleChatgptChunk = (data: any) => {
-			const chunk = String(data?.chunk || "");
-			const stage = String(data?.stage || "");
-			const explicitDraft = String(data?.draftText || data?.partialJson || data?.previewJson || "").trim();
-			const textEdits = Array.isArray(data?.textEdits) ? data.textEdits : null;
-			// reasoning_content from o1/o3 models: shown as stage event only, not streamed into the editor
-			const reasoningChunk = String(data?.reasoningChunk || "");
-			appendStageEvent(
-				reasoningChunk
-					? { stage: "thinking", message: uiText("AI đang suy nghĩ...", "AI Thinking...", "AI 正在思考..."), chunk: reasoningChunk }
-					: data
-			);
-
-			if (chunk && stage !== "thinking") {
-				pendingStreamChunkRef.current += chunk;
-				scheduleStreamFlush();
-			}
-
-			// Legacy realtime payload compatibility: apply JSON draft or line edits directly to editor.
-			if (autoApplyEnabled && turnAllowAutoApplyRef.current && onCodeInsert && contextType === "menu_json") {
-				if (explicitDraft) {
-					const menuDraft = extractMenuDraftForEditor(explicitDraft);
-					if (menuDraft) {
-						onCodeInsert(menuDraft);
-						lastAppliedCodeRef.current = menuDraft;
-					}
-				} else if (textEdits && textEdits.length > 0) {
-					const baseText = String(lastAppliedCodeRef.current || currentCode || "");
-					const patchedText = applyTextEditsToDraft(baseText, textEdits);
-					if (patchedText && patchedText !== lastAppliedCodeRef.current) {
-						onCodeInsert(patchedText);
-						lastAppliedCodeRef.current = patchedText;
-					}
-				}
-			}
-
-			if (!chunk) {
-				scrollToBottom(false);
-			}
-		};
-
-		const handleChatgptComplete = (data: any) => {
-			appendStageEvent(data);
-			appendStageEvent({
-				stage: "completed",
-				message: uiText("Hoàn tất", "Completed", "已完成"),
-				percent: 100,
-				current: 1,
-				total: 1,
-			});
-			const completionTextEdits = Array.isArray(data?.textEdits) ? data.textEdits : [];
-			const requiresStructuredEdits = Boolean(data?.requiresStructuredEdits);
-			const structuredEditValid = Boolean(data?.structuredEditValid);
-			const checklistSummary = summarizeChecklistForConfirm(data?.understandingChecklist);
-			if (streamFlushTimerRef.current) {
-				clearTimeout(streamFlushTimerRef.current);
-				streamFlushTimerRef.current = null;
-			}
-			flushStreamingToUI(true);
-			const finalText = String(streamingMessageRef.current || "");
-			const fallbackMenuDraft = contextType === "menu_json"
-			 ? extractMenuDraftForEditor(String(data?.fullResponse || finalText || ""))
-			 : "";
-			setIsLoading(false);
-			if (realtimeApplyTimerRef.current) {
-				clearTimeout(realtimeApplyTimerRef.current);
-				realtimeApplyTimerRef.current = null;
-			}
-
-			if (autoApplyEnabled && turnAllowAutoApplyRef.current && onCodeInsert && completionTextEdits.length > 0) {
-				const baseText = String(lastAppliedCodeRef.current || currentCode || "");
-				const validation = validateStructuredTextEdits(baseText, completionTextEdits);
-				if (!validation.valid) {
-					message.warning(uiText(
-						"Bản vá text_edits không hợp lệ nên chưa tự áp dụng.",
-						"Invalid text_edits patch, auto-apply was skipped.",
-						"text_edits 补丁无效，已跳过自动应用。",
-					));
-					if (fallbackMenuDraft) {
-					 onCodeInsert(fallbackMenuDraft);
-					 lastAppliedCodeRef.current = fallbackMenuDraft;
-					}
-				} else {
-					if (requiresStructuredEdits) {
-						if (!checklistSummary) {
-							message.warning(uiText(
-								"Thiếu checklist xác nhận nên chưa tự áp dụng.",
-								"Checklist confirmation is missing, auto-apply was skipped.",
-								"缺少确认清单，已跳过自动应用。",
-							));
-						} else {
-							const shouldApply = window.confirm(uiText(
-								`Xác nhận áp dụng chỉnh sửa theo dòng?\n\n${checklistSummary}`,
-								`Confirm apply line-based edits?\n\n${checklistSummary}`,
-								`确认按行应用修改？\n\n${checklistSummary}`,
-							));
-							if (shouldApply) {
-								const patchedText = applyTextEditsToDraft(baseText, validation.edits);
-								if (patchedText && patchedText !== lastAppliedCodeRef.current) {
-									onCodeInsert(patchedText);
-									lastAppliedCodeRef.current = patchedText;
-								}
-							} else {
-								message.info(uiText(
-									"Bạn đã hủy auto-apply cho turn này.",
-									"You cancelled auto-apply for this turn.",
-									"你已取消本轮自动应用。",
-								));
-							}
-						}
-					} else {
-						const patchedText = applyTextEditsToDraft(baseText, validation.edits);
-						if (patchedText && patchedText !== lastAppliedCodeRef.current) {
-							onCodeInsert(patchedText);
-							lastAppliedCodeRef.current = patchedText;
-						}
-					}
-				}
-			} else if (requiresStructuredEdits && !structuredEditValid) {
-				message.warning(uiText(
-					"AI chưa trả về text_edits hợp lệ nên chưa tự áp dụng vào editor.",
-					"AI did not return valid text_edits, so no auto-apply was performed.",
-					"AI 未返回有效 text_edits，未自动应用到编辑器。",
-				));
-				if (fallbackMenuDraft && onCodeInsert) {
-				 onCodeInsert(fallbackMenuDraft);
-				 lastAppliedCodeRef.current = fallbackMenuDraft;
-				}
-			} else {
-				const appliedFromCodeBlock = applyRealtimeCodeFromText(finalText, true);
-				if (!appliedFromCodeBlock && fallbackMenuDraft && onCodeInsert) {
-				 onCodeInsert(fallbackMenuDraft);
-				 lastAppliedCodeRef.current = fallbackMenuDraft;
-				}
-			}
-
-			pendingStreamChunkRef.current = "";
-			parsedCodeBlocksRef.current = [];
-			lastCodeBlockParseAtRef.current = 0;
-			streamingMessageRef.current = "";
-			turnAllowAutoApplyRef.current = false;
-			scrollToBottom(true);
-			console.log("Chat completed:", data);
-		};
-
-		const handleChatgptDebug = (data: any) => {
-			const content = String(data?.content || "").trim();
-			if (!content) return;
-
-			const debugMessage: ChatMessage = {
-				id: `debug_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-				role: "assistant",
-				messageType: "debug",
-				content,
-				timestamp: Date.now(),
-				codeBlocks: extractCodeBlocks(content),
-			};
-
-			setMessages((prev) => {
-				const updated = [...prev];
-				let insertIndex = updated.length;
-				for (let i = updated.length - 1; i >= 0; i -= 1) {
-					const candidate = updated[i];
-					if (candidate.role === "assistant" && candidate.messageType !== "debug" && !candidate.content) {
-						insertIndex = i;
-						break;
-					}
-				}
-				updated.splice(insertIndex, 0, debugMessage);
-				return updated;
-			});
-			scrollToBottom(true);
-		};
-
-		const handleChatgptError = (data: any) => {
-			appendStageEvent({
-				stage: "error",
-				message: String(data?.error || uiText("Chat thất bại", "Chat failed", "对话失败")),
-			});
-			setIsLoading(false);
-			if (streamFlushTimerRef.current) {
-				clearTimeout(streamFlushTimerRef.current);
-				streamFlushTimerRef.current = null;
-			}
-			if (realtimeApplyTimerRef.current) {
-				clearTimeout(realtimeApplyTimerRef.current);
-				realtimeApplyTimerRef.current = null;
-			}
-			pendingStreamChunkRef.current = "";
-			parsedCodeBlocksRef.current = [];
-			lastCodeBlockParseAtRef.current = 0;
-			message.error(data.error || uiText("Chat thất bại", "Chat failed", "对话失败"));
-			turnAllowAutoApplyRef.current = false;
-			console.error("Chat error:", data);
-		};
-
-		socket.on("chatgpt_chat_chunk", handleChatgptChunk);
-		socket.on("chatgpt_chat_debug", handleChatgptDebug);
-		socket.on("chatgpt_chat_complete", handleChatgptComplete);
-		socket.on("chatgpt_chat_error", handleChatgptError);
-
-		return () => {
-			if (streamFlushTimerRef.current) {
-				clearTimeout(streamFlushTimerRef.current);
-				streamFlushTimerRef.current = null;
-			}
-			if (realtimeApplyTimerRef.current) {
-				clearTimeout(realtimeApplyTimerRef.current);
-				realtimeApplyTimerRef.current = null;
-			}
-			socket.off?.("chatgpt_chat_chunk", handleChatgptChunk);
-			socket.off?.("chatgpt_chat_debug", handleChatgptDebug);
-			socket.off?.("chatgpt_chat_complete", handleChatgptComplete);
-			socket.off?.("chatgpt_chat_error", handleChatgptError);
-			lastListenerSetupRef.current = false;
-		};
-	}, [socket, appId, applyRealtimeCodeFromText, uiText, onCodeInsert, contextType, currentCode, autoApplyEnabled, scrollToBottom, flushStreamingToUI, scheduleStreamFlush, appendStageEvent]);
-
 	// Auto-scroll to latest message
 	useEffect(() => {
 		scrollToBottom(false);
@@ -1278,7 +1056,7 @@ export default function ChatgptChat({
 
 	const sendMessage = useCallback(
 		async (text: string) => {
-			if ((!text.trim() && pendingAttachments.length === 0) || !socketConnected || isLoading) {
+			if ((!text.trim() && pendingAttachments.length === 0) || isLoading) {
 				return;
 			}
 
@@ -1354,19 +1132,37 @@ export default function ChatgptChat({
 			setPendingAttachments([]);
 
 			try {
-				// Call backend streaming endpoint via shared request client
-				await request.post("chatgpt-chat-stream", {
-					json: {
+				// SSE streaming via Gemini (replaces legacy Socket.IO stream route)
+				const controller = new AbortController();
+				sseAbortRef.current = controller;
+				const authState = useAuthStore.getState();
+				const token = authState.token ?? "";
+				const refreshToken = authState.refreshToken ?? "";
+				const csrfToken = authState.csrfToken
+					|| (typeof document !== "undefined" ? decodeURIComponent(document.cookie.match(/(?:^|; )CSRF-TOKEN=([^;]*)/)?.[1] || "") : "");
+				const headers: Record<string, string> = {
+					"Content-Type": "application/json",
+				};
+				if (token) {
+					headers["csm-token"] = token;
+				}
+				if (refreshToken) {
+					headers["X-Refresh-Token"] = refreshToken;
+				}
+				if (csrfToken) {
+					headers["X-CSRF-Token"] = csrfToken;
+				}
+				const response = await fetch(`${import.meta.env.VITE_API_BASE_URL}/ai-code-stream`, {
+					method: "POST",
+					headers,
+					credentials: "include",
+					body: JSON.stringify({
 						appId,
 						message: cleanedMessage || normalizedText,
 						responseMode,
 						currentCode,
 						language,
 						contextType,
-						flowType: contextType === "menu_json" ? "menu_manager" : "code_editor",
-						pName: String(targetPName || ""),
-						pType: Number.isFinite(Number(targetPType)) ? Number(targetPType) : null,
-						taskType: contextType === "menu_json" ? "menu_design" : "code_assistant",
 						attachments: outgoingAttachments.map((attachment) => ({
 							id: attachment.id,
 							name: attachment.name,
@@ -1380,15 +1176,63 @@ export default function ChatgptChat({
 							dataUrl: attachment.dataUrl,
 							fullContext: attachment.fullContext ?? false,
 						})),
-					},
-					timeout: 300000,
-					ignoreLoading: true,
+					}),
+					signal: controller.signal,
 				});
 
-				// Backend will emit Socket.IO events for streaming
+				if (!response.ok) {
+					const status = response.status;
+					if (status === 401) {
+						message.error(uiText("Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại", "Session expired, please log in again", "登录会话已过期，请重新登录"));
+					} else {
+						message.error(uiText("Gửi tin nhắn thất bại", "Failed to send message", "发送消息失败"));
+					}
+					setIsLoading(false);
+					turnAllowAutoApplyRef.current = false;
+					return;
+				}
+
+				const reader = response.body!.getReader();
+				const decoder = new TextDecoder();
+				let buffer = "";
+				while (true) {
+					const { done, value } = await reader.read();
+					if (done) break;
+					buffer += decoder.decode(value, { stream: true });
+					const lines = buffer.split("\n");
+					buffer = lines.pop() ?? "";
+					for (const line of lines) {
+						if (!line.startsWith("data:")) continue;
+						const json = line.slice(5).trim();
+						if (!json || json === "[DONE]") continue;
+						try {
+							const evt = JSON.parse(json) as { stage: string; chunk?: string; fullResponse?: string; responseMode?: string; message?: string; percent?: number };
+							if (evt.stage === "preparing" || evt.stage === "analyzing") {
+								appendStageEvent({ stage: evt.stage as any, message: evt.message ?? "", percent: evt.percent ?? 0 });
+							} else if (evt.stage === "streaming" && evt.chunk) {
+								pendingStreamChunkRef.current += evt.chunk;
+								scheduleStreamFlush();
+							} else if (evt.stage === "complete") {
+								flushStreamingToUI();
+								if (evt.fullResponse) {
+									applyRealtimeCodeFromText(evt.fullResponse);
+								}
+								setIsLoading(false);
+								turnAllowAutoApplyRef.current = false;
+							} else if (evt.stage === "error") {
+								message.error(evt.message || uiText("Chat thất bại", "Chat failed", "对话失败"));
+								setIsLoading(false);
+								turnAllowAutoApplyRef.current = false;
+							}
+						} catch (parseErr) {
+							console.debug("Failed to parse SSE line:", json, parseErr);
+						}
+					}
+				}
 			} catch (error) {
+				if ((error as Error)?.name === "AbortError") return;
 				console.error("Failed to send message:", error);
-				const status = Number((error as any)?.response?.status || 0);
+				const status = Number((error as any)?.response?.status ?? 0);
 				if (status === 401) {
 					message.error(uiText("Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại", "Session expired, please log in again", "登录会话已过期，请重新登录"));
 				} else {
@@ -1398,7 +1242,7 @@ export default function ChatgptChat({
 				turnAllowAutoApplyRef.current = false;
 			}
 		},
-		[appId, autoApplyEnabled, contextType, currentCode, isLoading, language, messages, onUserMessage, pendingAttachments, socketConnected, targetPName, targetPType, uiText, appendStageEvent]
+		[appId, autoApplyEnabled, contextType, currentCode, isLoading, language, messages, onUserMessage, onCodeInsert, pendingAttachments, targetPName, targetPType, uiText, appendStageEvent, applyRealtimeCodeFromText, flushStreamingToUI, scheduleStreamFlush, scrollToBottom]
 	);
 
 	const handleSend = () => {
@@ -1431,7 +1275,7 @@ export default function ChatgptChat({
 
 	return (
 		<Card
-			className={styles.chatgptChat}
+			className={styles.aiAssistantChat}
 			title={uiText("Trò chuyện Trợ lý AI", "AI Assistant Chat", "AI 助手对话")}
 			size="small"
 			extra={
@@ -1500,7 +1344,7 @@ export default function ChatgptChat({
 										) : (
 											<div className={styles.assistantText}>
 												{msg.messageType === "debug" && (
-													<Tag color="gold">CHATGPT DEBUG PAYLOAD</Tag>
+													<Tag color="gold">AI ASSISTANT DEBUG PAYLOAD</Tag>
 												)}
 												{/* Render text with code blocks */}
 												{msg.content.split(/```[\s\S]*?```/g).map((part, idx) => (
@@ -1659,7 +1503,7 @@ export default function ChatgptChat({
 								`向 AI 助手提问（${sendHintKey}+Enter 发送）。命令：/分析 或 /编辑`,
 							)}
 							rows={3}
-							disabled={isLoading || !socketConnected}
+							disabled={isLoading}
 							maxLength={MAX_CHAT_INPUT_CHARS}
 						/>
 					</Space.Compact>
@@ -1684,16 +1528,11 @@ export default function ChatgptChat({
 							type="primary"
 							icon={<SendOutlined />}
 							onClick={handleSend}
-							disabled={isLoading || !socketConnected || (!inputValue.trim() && pendingAttachments.length === 0)}
+							disabled={isLoading || (!inputValue.trim() && pendingAttachments.length === 0)}
 							loading={isLoading}
 						>
 							{uiText("Gửi", "Send", "发送")}
 						</Button>
-						{!socketConnected && (
-							<span className={styles.statusText}>
-								{uiText("Đang kết nối Trợ lý AI...", "Connecting to AI Assistant...", "正在连接 AI 助手...")}
-							</span>
-						)}
 					</div>
 				</div>
 			</div>

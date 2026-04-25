@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Button, Card, Grid, Input, Progress, message, Select, Space, Switch, Tag, Tooltip } from "antd";
-import CodeMirror from "#src/components/editor/CodeMirrorWithChatgpt";
+import CodeMirror from "#src/components/editor/CodeMirrorWithAiAssistant";
 import { json } from "@codemirror/lang-json";
 import { vscodeDark, vscodeLight } from "@uiw/codemirror-theme-vscode";
 import { usePreferences } from "#src/hooks";
@@ -10,7 +10,7 @@ import type { DecorationSet } from "@codemirror/view";
 import { useTranslation } from "react-i18next";
 import { useUserStore } from "#src/store/user";
 import { useSocket } from "#src/hooks/useSocket";
-import type { ChatgptAttachment, ChatgptUserMessagePayload } from "#src/pages/system/developer/ChatgptChat";
+import type { AiAssistantAttachment as AiAssistantAttachment, AiAssistantUserMessagePayload as AiAssistantUserMessagePayload } from "#src/pages/system/developer/AiAssistantChat";
 
 import type { MenuItemType } from "#src/api/system/menu";
 import { generateSeoContentWithPrompt } from "#src/api/ai";
@@ -2770,7 +2770,7 @@ function parseContextFiles(raw: any): JsonContextFile[] {
   }
 }
 
-function mapChatgptAttachmentsToContextFiles(attachments: ChatgptAttachment[]): JsonContextFile[] {
+function mapAiAssistantAttachmentsToContextFiles(attachments: AiAssistantAttachment[]): JsonContextFile[] {
   return (Array.isArray(attachments) ? attachments : [])
     .filter((item) => (item.kind === "text" || item.kind === "json") && String(item.textContent || "").trim())
     .map((item) => ({
@@ -2992,8 +2992,8 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
 
   // ── Common state ──────────────────────────────────────────────────────────
   const [requestText, setRequestText] = useState("");
-  const [latestChatgptPrompt, setLatestChatgptPrompt] = useState("");
-  const [latestChatgptAttachmentCount, setLatestChatgptAttachmentCount] = useState(0);
+  const [latestAiAssistantPrompt, setLatestAiAssistantPrompt] = useState("");
+  const [latestAiAssistantAttachmentCount, setLatestAiAssistantAttachmentCount] = useState(0);
   const [storedRequest, setStoredRequest] = useState("");
   const [storedRecordMeta, setStoredRecordMeta] = useState<AiRequestRecord | null>(null);
   const [aiResultText, setAiResultText] = useState("");
@@ -3582,8 +3582,6 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
   ) => {
     if (!socket || !socketConnected || !appId) {
       return generateSeoContentWithPrompt(prompt, {
-        providerPreference: isDevUser ? "github_models" : undefined,
-        disableGeminiFallback: isDevUser,
         taskType,
         menuDesignByDev: isDevUser,
         onProgress: applyProgressPayload,
@@ -3596,8 +3594,6 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
           prompt,
           mode: "submit",
           async: true,
-          providerPreference: isDevUser ? "github_models" : undefined,
-          disableGeminiFallback: isDevUser,
           taskType,
           menuDesignByDev: isDevUser,
           realtimeAppId: appId,
@@ -3612,8 +3608,6 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     const jobId = String(submitPayload?.jobId || "").trim();
     if (!jobId) {
       return generateSeoContentWithPrompt(prompt, {
-        providerPreference: isDevUser ? "github_models" : undefined,
-        disableGeminiFallback: isDevUser,
         taskType,
         menuDesignByDev: isDevUser,
         onProgress: applyProgressPayload,
@@ -4196,8 +4190,8 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
   const effectiveRequestText = useMemo(() => {
     const manualRequest = String(requestText || "").trim();
     if (manualRequest) return manualRequest;
-    return String(latestChatgptPrompt || "").trim();
-  }, [latestChatgptPrompt, requestText]);
+    return String(latestAiAssistantPrompt || "").trim();
+  }, [latestAiAssistantPrompt, requestText]);
 
   const mergedRequestText = useMemo(() => {
     if (!effectiveRequestText) return storedRequest;
@@ -4256,17 +4250,17 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     () => transformMenuTriggers(Array.isArray(currentMenus) ? currentMenus : [], "decode"),
     [currentMenus],
   );
-  const latestChatgptPromptPreview = useMemo(
-    () => compactAiRealtimeText(latestChatgptPrompt, 220),
-    [latestChatgptPrompt],
+  const latestAiAssistantPromptPreview = useMemo(
+    () => compactAiRealtimeText(latestAiAssistantPrompt, 220),
+    [latestAiAssistantPrompt],
   );
 
-  const handleChatgptRequirementMessage = (payload: ChatgptUserMessagePayload) => {
+  const handleAiAssistantRequirementMessage = (payload: AiAssistantUserMessagePayload) => {
     const nextText = String(payload?.message || "").trim();
-    const derivedContextFiles = mapChatgptAttachmentsToContextFiles(payload?.attachments || []);
-    setLatestChatgptAttachmentCount(Array.isArray(payload?.attachments) ? payload.attachments.length : 0);
+    const derivedContextFiles = mapAiAssistantAttachmentsToContextFiles(payload?.attachments || []);
+    setLatestAiAssistantAttachmentCount(Array.isArray(payload?.attachments) ? payload.attachments.length : 0);
     if (nextText) {
-      setLatestChatgptPrompt(nextText);
+      setLatestAiAssistantPrompt(nextText);
       setRequestText(nextText);
     }
     if (derivedContextFiles.length > 0) {
@@ -4527,8 +4521,6 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
         }));
 
         res = await generateSeoContentWithPrompt(prompt, {
-          providerPreference: isDevUser ? "github_models" : undefined,
-          disableGeminiFallback: isDevUser,
           taskType: "menu_design",
           menuDesignByDev: isDevUser,
           onProgress: applyProgressPayload,
@@ -5486,9 +5478,9 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                 </div>
 
                 <CodeMirror
-                  chatgptLanguage="json"
-                  chatgptContextType="menu_json"
-                  chatgptOnUserMessage={handleChatgptRequirementMessage}
+                  aiAssistantLanguage="json"
+                  aiAssistantContextType="menu_json"
+                  aiAssistantOnUserMessage={handleAiAssistantRequirementMessage}
                   value={
                     editableAiDraftText
                       ? editableAiDraftText

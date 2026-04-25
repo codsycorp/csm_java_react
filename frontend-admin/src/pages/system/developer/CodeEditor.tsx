@@ -14,7 +14,7 @@ import {
 	MenuFoldOutlined,
 	MenuUnfoldOutlined,
 } from "@ant-design/icons";
-import CodeMirror from "#src/components/editor/CodeMirrorWithChatgpt";
+import CodeMirror from "#src/components/editor/CodeMirrorWithAiAssistant";
 import { javascript } from "@codemirror/lang-javascript";
 import { html } from "@codemirror/lang-html";
 import { search, openSearchPanel, gotoLine } from "@codemirror/search";
@@ -825,8 +825,6 @@ export default function CodeEditor() {
 
 			const response = await generateSeoContentWithPrompt(prompt, {
 				taskType: "developer_code_editor",
-				providerPreference: "github_models",
-				disableGeminiFallback: true,
 				onProgress: (progress) => {
 					const liveDraft = [
 						progress?.draftCode,
@@ -1241,10 +1239,10 @@ export default function CodeEditor() {
 										view.dispatch({ effects: setDraftHighlights.of(pendingChunk?.ranges || []) });
 										updateDraftIndicators(view);
 									}}
-									chatgptContextType="code"
-									chatgptLanguage={currentLanguage}
-									chatgptPName={selectedCode || undefined}
-									chatgptPType={resolvedPType}
+									aiAssistantContextType="code"
+									aiAssistantLanguage={currentLanguage}
+									aiAssistantPName={selectedCode || undefined}
+									aiAssistantPType={resolvedPType}
 									value={aiLastCode}
 									onChange={(value) => {
 										if (!aiProgrammaticApplyRef.current) {

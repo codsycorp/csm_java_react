@@ -4,26 +4,26 @@ import BaseCodeMirror, { type ReactCodeMirrorProps } from "@uiw/react-codemirror
 import { Button, Tooltip } from "antd";
 import { MessageOutlined, FullscreenOutlined, FullscreenExitOutlined, CloseOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
-import ChatgptChat, { type ChatgptUserMessagePayload } from "#src/pages/system/developer/ChatgptChat";
+import AiAssistantChat, { type AiAssistantUserMessagePayload } from "#src/pages/system/developer/AiAssistantChat";
 import { useAppStore } from "#src/store";
-import styles from "./CodeMirrorWithChatgpt.module.css";
+import styles from "./CodeMirrorWithAiAssistant.module.css";
 
-type ChatgptLanguage = "javascript" | "html" | "python" | "java" | "css" | "sql" | "json";
-type ChatgptContextType = "code" | "menu_json";
+type AiAssistantLanguage = "javascript" | "html" | "python" | "java" | "css" | "sql" | "json";
+type AiAssistantContextType = "code" | "menu_json";
 
-type CodeMirrorWithChatgptProps = ReactCodeMirrorProps & {
-  chatgptEnabled?: boolean;
-  chatgptAppId?: string;
-  chatgptLanguage?: ChatgptLanguage;
-  chatgptContextType?: ChatgptContextType;
-  chatgptCurrentCode?: string;
-  chatgptPName?: string;
-  chatgptPType?: number;
-  chatgptAutoApplyCodeBlock?: boolean;
-  chatgptOnUserMessage?: (payload: ChatgptUserMessagePayload) => void;
+type CodeMirrorWithAiAssistantProps = ReactCodeMirrorProps & {
+  aiAssistantEnabled?: boolean;
+  aiAssistantAppId?: string;
+  aiAssistantLanguage?: AiAssistantLanguage;
+  aiAssistantContextType?: AiAssistantContextType;
+  aiAssistantCurrentCode?: string;
+  aiAssistantPName?: string;
+  aiAssistantPType?: number;
+  aiAssistantAutoApplyCodeBlock?: boolean;
+  aiAssistantOnUserMessage?: (payload: AiAssistantUserMessagePayload) => void;
 };
 
-type GlobalChatgptState = {
+type GlobalAiAssistantState = {
   open: boolean;
   ownerId: string | null;
 };
@@ -50,38 +50,38 @@ function getViewportWidth(): number {
   return window.innerWidth;
 }
 
-const globalChatgptState: GlobalChatgptState = {
+const globalAiAssistantState: GlobalAiAssistantState = {
   open: false,
   ownerId: null,
 };
 
-const chatgptSubscribers = new Set<(state: GlobalChatgptState) => void>();
+const aiAssistantSubscribers = new Set<(state: GlobalAiAssistantState) => void>();
 
-function updateGlobalChatgptState(next: Partial<GlobalChatgptState>) {
+function updateGlobalAiAssistantState(next: Partial<GlobalAiAssistantState>) {
   if (typeof next.open === "boolean") {
-    globalChatgptState.open = next.open;
+    globalAiAssistantState.open = next.open;
   }
   if (Object.prototype.hasOwnProperty.call(next, "ownerId")) {
-    globalChatgptState.ownerId = next.ownerId ?? null;
+    globalAiAssistantState.ownerId = next.ownerId ?? null;
   }
-  chatgptSubscribers.forEach((subscriber) => {
+  aiAssistantSubscribers.forEach((subscriber) => {
     try {
-      subscriber({ ...globalChatgptState });
+      subscriber({ ...globalAiAssistantState });
     } catch {
       // Ignore subscriber errors
     }
   });
 }
 
-function subscribeGlobalChatgpt(listener: (state: GlobalChatgptState) => void) {
-  chatgptSubscribers.add(listener);
-  listener({ ...globalChatgptState });
+function subscribeGlobalAiAssistant(listener: (state: GlobalAiAssistantState) => void) {
+  aiAssistantSubscribers.add(listener);
+  listener({ ...globalAiAssistantState });
   return () => {
-    chatgptSubscribers.delete(listener);
+    aiAssistantSubscribers.delete(listener);
   };
 }
 
-function resolveLanguage(raw: string): ChatgptLanguage {
+function resolveLanguage(raw: string): AiAssistantLanguage {
   const text = String(raw || "").trim().toLowerCase();
   if (["html", "xml"].includes(text)) return "html";
   if (["python", "py"].includes(text)) return "python";
@@ -92,7 +92,7 @@ function resolveLanguage(raw: string): ChatgptLanguage {
   return "javascript";
 }
 
-function resolveContextType(language: ChatgptLanguage, rawContextType?: ChatgptContextType): ChatgptContextType {
+function resolveContextType(language: AiAssistantLanguage, rawContextType?: AiAssistantContextType): AiAssistantContextType {
   if (rawContextType) return rawContextType;
   // Keep coding context as default. Menu designer must opt-in explicitly.
   return "code";
@@ -108,17 +108,17 @@ function isLikelyIOSDevice(): boolean {
   return iOSByUA || iPadOSDesktopUA;
 }
 
-export default function CodeMirrorWithChatgpt(props: CodeMirrorWithChatgptProps) {
+export default function CodeMirrorWithAiAssistant(props: CodeMirrorWithAiAssistantProps) {
   const {
-    chatgptEnabled = true,
-    chatgptAppId,
-    chatgptLanguage,
-    chatgptContextType,
-    chatgptCurrentCode,
-    chatgptPName,
-    chatgptPType,
-    chatgptAutoApplyCodeBlock = false,
-    chatgptOnUserMessage,
+    aiAssistantEnabled = true,
+    aiAssistantAppId,
+    aiAssistantLanguage,
+    aiAssistantContextType,
+    aiAssistantCurrentCode,
+    aiAssistantPName,
+    aiAssistantPType,
+    aiAssistantAutoApplyCodeBlock = false,
+    aiAssistantOnUserMessage,
     value,
     height,
     onCreateEditor,
@@ -131,7 +131,7 @@ export default function CodeMirrorWithChatgpt(props: CodeMirrorWithChatgptProps)
   const editorViewRef = useRef<any>(null);
   const chatPanelRef = useRef<HTMLDivElement | null>(null);
   const dragOffsetRef = useRef<{ x: number; y: number } | null>(null);
-  const [globalState, setGlobalState] = useState<GlobalChatgptState>({ ...globalChatgptState });
+  const [globalState, setGlobalState] = useState<GlobalAiAssistantState>({ ...globalAiAssistantState });
   const currentAppId = useAppStore((state) => state.currentAppId);
 
   const prefersCoarsePointer = useMemo(() => {
@@ -312,19 +312,19 @@ export default function CodeMirrorWithChatgpt(props: CodeMirrorWithChatgptProps)
     };
   }, [isFullscreen]);
 
-  const appId = String(chatgptAppId || currentAppId || "csm").trim() || "csm";
-  const currentCode = typeof chatgptCurrentCode === "string"
-    ? chatgptCurrentCode
+  const appId = String(aiAssistantAppId || currentAppId || "csm").trim() || "csm";
+  const currentCode = typeof aiAssistantCurrentCode === "string"
+    ? aiAssistantCurrentCode
     : typeof value === "string"
       ? value
       : "";
-  const language = useMemo(() => resolveLanguage(chatgptLanguage || "javascript"), [chatgptLanguage]);
-  const contextType = useMemo(() => resolveContextType(language, chatgptContextType), [language, chatgptContextType]);
+  const language = useMemo(() => resolveLanguage(aiAssistantLanguage || "javascript"), [aiAssistantLanguage]);
+  const contextType = useMemo(() => resolveContextType(language, aiAssistantContextType), [language, aiAssistantContextType]);
   const autoApplyStorageKey = useMemo(
     () => `${appId}:${contextType}:${language}`,
     [appId, contextType, language],
   );
-  const [autoApplyEnabled, setAutoApplyEnabled] = useState<boolean>(Boolean(chatgptAutoApplyCodeBlock));
+  const [autoApplyEnabled, setAutoApplyEnabled] = useState<boolean>(Boolean(aiAssistantAutoApplyCodeBlock));
   const isOwner = globalState.ownerId === instanceIdRef.current;
   const chatOpen = globalState.open && isOwner;
   const editorHeight = isFullscreen ? "100%" : height;
@@ -418,29 +418,29 @@ export default function CodeMirrorWithChatgpt(props: CodeMirrorWithChatgptProps)
   }, []);
 
   useEffect(() => {
-    setAutoApplyEnabled(Boolean(chatgptAutoApplyCodeBlock));
-  }, [chatgptAutoApplyCodeBlock, autoApplyStorageKey]);
+    setAutoApplyEnabled(Boolean(aiAssistantAutoApplyCodeBlock));
+  }, [aiAssistantAutoApplyCodeBlock, autoApplyStorageKey]);
 
   const handleAutoApplyChange = useCallback((enabled: boolean) => {
     setAutoApplyEnabled(Boolean(enabled));
   }, []);
 
   const closeChat = useCallback(() => {
-    updateGlobalChatgptState({ open: false, ownerId: null });
+    updateGlobalAiAssistantState({ open: false, ownerId: null });
   }, []);
 
-  useEffect(() => subscribeGlobalChatgpt(setGlobalState), []);
+  useEffect(() => subscribeGlobalAiAssistant(setGlobalState), []);
 
   useEffect(() => {
-    if (!chatgptEnabled && isOwner) {
-      updateGlobalChatgptState({ open: false, ownerId: null });
+    if (!aiAssistantEnabled && isOwner) {
+      updateGlobalAiAssistantState({ open: false, ownerId: null });
     }
-  }, [chatgptEnabled, isOwner]);
+  }, [aiAssistantEnabled, isOwner]);
 
   useEffect(() => {
     return () => {
-      if (globalChatgptState.ownerId === instanceIdRef.current) {
-        updateGlobalChatgptState({ open: false, ownerId: null });
+      if (globalAiAssistantState.ownerId === instanceIdRef.current) {
+        updateGlobalAiAssistantState({ open: false, ownerId: null });
       }
     };
   }, []);
@@ -559,7 +559,7 @@ export default function CodeMirrorWithChatgpt(props: CodeMirrorWithChatgptProps)
           {...codeMirrorProps}
         />
       </div>
-      {chatgptEnabled && (
+      {aiAssistantEnabled && (
         <>
           <div className={styles.toggleButton}>
             <Tooltip title={isFullscreen ? "Thu nhỏ (Esc)" : "Toàn màn hình"}>
@@ -577,7 +577,7 @@ export default function CodeMirrorWithChatgpt(props: CodeMirrorWithChatgptProps)
                 if (chatOpen) {
                   closeChat();
                 } else {
-                  updateGlobalChatgptState({ open: true, ownerId: instanceIdRef.current });
+                  updateGlobalAiAssistantState({ open: true, ownerId: instanceIdRef.current });
                 }
               }}
             >
@@ -618,18 +618,18 @@ export default function CodeMirrorWithChatgpt(props: CodeMirrorWithChatgptProps)
                 </div>
               )}
               <div className={styles.chatPanelInner}>
-                <ChatgptChat
+                <AiAssistantChat
                   appId={appId}
                   currentCode={currentCode}
                   language={language}
                   contextType={contextType}
-                  targetPName={chatgptPName}
-                  targetPType={chatgptPType}
+                  targetPName={aiAssistantPName}
+                  targetPType={aiAssistantPType}
                   onCodeInsert={handleCopilotCodeInsert}
                   autoApplyCodeBlock={autoApplyEnabled}
                   autoApplyPreferenceKey={autoApplyStorageKey}
                   onAutoApplyChange={handleAutoApplyChange}
-                  onUserMessage={chatgptOnUserMessage}
+                  onUserMessage={aiAssistantOnUserMessage}
                 />
               </div>
             </div>

@@ -25,27 +25,27 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 @Service
-public class ChatgptMemoryManagerService {
+public class AiAssistantMemoryManagerService {
 
-  private static final Logger log = LoggerFactory.getLogger(ChatgptMemoryManagerService.class);
+  private static final Logger log = LoggerFactory.getLogger(AiAssistantMemoryManagerService.class);
   private static final DateTimeFormatter TS = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
   private final ObjectMapper objectMapper = new ObjectMapper()
       .configure(JsonReadFeature.ALLOW_UNESCAPED_CONTROL_CHARS.mappedFeature(), true);
 
-  @Value("${chatgpt.memory-manager.enabled:true}")
+  @Value("${ai.assistant.memory-manager.enabled:true}")
   private boolean enabled;
 
-  @Value("${chatgpt.memory-manager.context-dir:csm_datas/public}")
+  @Value("${ai.assistant.memory-manager.context-dir:csm_datas/public}")
   private String contextDir;
 
-  @Value("${chatgpt.memory-manager.max-sources:18}")
+  @Value("${ai.assistant.memory-manager.max-sources:18}")
   private int maxSources;
 
-  @Value("${chatgpt.memory-manager.max-summary-per-source-chars:2400}")
+  @Value("${ai.assistant.memory-manager.max-summary-per-source-chars:2400}")
   private int maxSummaryPerSourceChars;
 
-  @Value("${chatgpt.memory-manager.max-global-context-chars:120000}")
+  @Value("${ai.assistant.memory-manager.max-global-context-chars:120000}")
   private int maxGlobalContextChars;
 
   public String buildAndPersistMenuGlobalContext(
@@ -101,7 +101,7 @@ public class ChatgptMemoryManagerService {
     }
 
     StringBuilder assembled = new StringBuilder();
-    assembled.append("# ChatGPT Global Context\n");
+    assembled.append("# AI Assistant Global Context\n");
     assembled.append("appId=").append(safeApp).append("\n");
     assembled.append("scopeKey=").append(safeScope).append("\n");
     assembled.append("generatedAt=").append(LocalDateTime.now().format(TS)).append("\n\n");
@@ -181,7 +181,7 @@ public class ChatgptMemoryManagerService {
 
   // ─────────────────────────────────────────────────────────────────────────────
   // DATA DISTILLATION — compress large JSON files to compact schema summaries
-  // so they fit within ChatGPT API context window (~128k tokens).
+  // so they fit within AI Assistant API context window (~128k tokens).
   // Threshold: any JSON attachment >40k chars gets distilled instead of raw-sent.
   // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1146,7 +1146,7 @@ public class ChatgptMemoryManagerService {
       }
       Files.writeString(file.toPath(), text == null ? "" : text, StandardCharsets.UTF_8);
     } catch (Exception ex) {
-      log.warn("Cannot persist chatgpt global context appId={} scopeKey={}: {}", appId, scopeKey, ex.getMessage());
+      log.warn("Cannot persist aiAssistant global context appId={} scopeKey={}: {}", appId, scopeKey, ex.getMessage());
     }
   }
 

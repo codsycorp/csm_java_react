@@ -19,7 +19,7 @@ import java.util.stream.Collectors;
  * Token-aware context budget manager.
  *
  * <p>Replaces the crude {@code prompt.length() / 4} heuristic in
- * {@link ChatgptGatewayService} with accurate JTokkit-based token counting
+ * {@link AiAssistantGatewayService} with accurate JTokkit-based token counting
  * (cl100k_base for GPT-4 family, o200k_base for GPT-4o-mini / newer models).
  *
  * <p>Core responsibilities:
@@ -282,8 +282,7 @@ public class ContextBudgetManager {
   // ─── Skeletonize Java context ───────────────────────────────────────────────
 
   /**
-   * Reduce a Java project context block (produced by
-   * {@code crawlProjectJavaFiles()}) to class + public method signatures only.
+    * Reduce a Java project context block to class + public method signatures only.
    * Drops method bodies, field declarations, and imports.
    * Typically reduces tokens by 65–80 %.
    *

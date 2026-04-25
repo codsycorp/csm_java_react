@@ -4,7 +4,8 @@ import { Select, Space, Button, message, Tooltip } from "antd";
 import { CopyOutlined } from "@ant-design/icons";
 import type { TriggerConfig } from "#src/components/csm-grid/CsmDynamicGrid";
 import { csmDecrypt, csmEncrypt } from "#src/components/csm-grid/CsmCrypto";
-import CodeMirror from "#src/components/editor/CodeMirrorWithChatgpt";
+import { useAuthStore } from "#src/store/auth";
+import CodeMirror from "#src/components/editor/CodeMirrorWithAiAssistant";
 import { javascript } from "@codemirror/lang-javascript";
 import { html } from "@codemirror/lang-html";
 import { css } from "@codemirror/lang-css";
@@ -128,33 +129,77 @@ export function TriggerEditor({ value, onChange }: TriggerEditorProps) {
       sql: "SQL",
     };
     const language = langMap[codeMode] || "Plain Text";
-    const openApiKey = "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";
+    const authState = useAuthStore.getState();
+    const token = authState.token ?? "";
+    const refreshToken = authState.refreshToken ?? "";
+    const csrfToken = authState.csrfToken
+      || (typeof document !== "undefined" ? decodeURIComponent(document.cookie.match(/(?:^|; )CSRF-TOKEN=([^;]*)/)?.[1] || "") : "");
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (token) {
+      headers["csm-token"] = token;
+    }
+    if (refreshToken) {
+      headers["X-Refresh-Token"] = refreshToken;
+    }
+    if (csrfToken) {
+      headers["X-CSRF-Token"] = csrfToken;
+    }
 
     try {
-      const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      const response = await fetch(`${import.meta.env.VITE_API_BASE_URL}/ai-code-stream`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": "Bearer " + openApiKey,
-        },
+        headers,
+        credentials: "include",
         body: JSON.stringify({
-          model: "gpt-4o-mini",
-          messages: [
-            {
-              role: "user",
-              content: `Hoàn thành và cải thiện đoạn mã sau bằng ${language} và chỉ trả về code, không giải thích:\n\`\`\`${language.toLowerCase()}\n${code}\n\`\`\``,
-            },
-          ],
+          appId: "trigger_editor",
+          message: `Hoàn thành và cải thiện đoạn mã sau bằng ${language} và chỉ trả về code, không giải thích:\n\`\`\`${language.toLowerCase()}\n${code}\n\`\`\``,
+          currentCode: code,
+          language: codeMode,
+          contextType: "code",
+          responseMode: "edit",
         }),
       });
 
-      const data = await response.json();
-      let aiSuggestion = "Không có gợi ý.";
-      if (data?.choices?.[0]?.message?.content) {
-        aiSuggestion = data.choices[0].message.content;
+      if (!response.ok || !response.body) {
+        message.error("Không gọi được AI nội bộ");
+        return;
       }
 
-      // Lọc code từ markdown blocks
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let fullResponse = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.startsWith("data:")) continue;
+          const json = line.slice(5).trim();
+          if (!json || json === "[DONE]") continue;
+          try {
+            const evt = JSON.parse(json) as { stage?: string; chunk?: string; fullResponse?: string; message?: string };
+            if (evt.stage === "streaming" && evt.chunk) {
+              fullResponse += evt.chunk;
+            } else if (evt.stage === "complete" && evt.fullResponse) {
+              fullResponse = evt.fullResponse;
+            } else if (evt.stage === "error") {
+              message.error(evt.message || "AI trả về lỗi");
+              return;
+            }
+          } catch {
+            // Ignore parse failures for partial SSE lines.
+          }
+        }
+      }
+
+      let aiSuggestion = fullResponse.trim() || "Không có gợi ý.";
       const codeMatch = aiSuggestion.match(/```(?:\w+)?\n([\s\S]+?)\n```/);
       if (codeMatch) {
         aiSuggestion = codeMatch[1];
@@ -163,7 +208,7 @@ export function TriggerEditor({ value, onChange }: TriggerEditorProps) {
       handleCodeChange(aiSuggestion);
       message.success("Đã nhận gợi ý từ AI");
     } catch (err) {
-      message.error("Lỗi gọi OpenAI API: " + String(err));
+      message.error("Lỗi gọi AI nội bộ: " + String(err));
     }
   };
 

@@ -1,4 +1,4 @@
-import CodeMirror from '#src/components/editor/CodeMirrorWithChatgpt';
+import CodeMirror from '#src/components/editor/CodeMirrorWithAiAssistant';
 import { javascript } from '@codemirror/lang-javascript';
 import { html } from '@codemirror/lang-html';
 import { css } from '@codemirror/lang-css';

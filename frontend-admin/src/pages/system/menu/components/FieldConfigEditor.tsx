@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Button, Space, Table, Tag, Modal, Form, Input, InputNumber, Select, Switch, Row, Col, message, Card, Tooltip } from "antd";
 import { PlusOutlined, EditOutlined, CopyOutlined, DeleteOutlined, ImportOutlined, ArrowUpOutlined, ArrowDownOutlined } from "@ant-design/icons";
 import type { TableField } from "#src/components/csm-grid/CsmDynamicGrid";
-import CodeMirror from "#src/components/editor/CodeMirrorWithChatgpt";
+import CodeMirror from "#src/components/editor/CodeMirrorWithAiAssistant";
 import { useTranslation } from "react-i18next";
 import { javascript } from "@codemirror/lang-javascript";
 import { html } from "@codemirror/lang-html";

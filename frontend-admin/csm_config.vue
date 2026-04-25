@@ -503,38 +503,79 @@
             "json": "JSON"
         };
         const language = langMap[mode] || "Plain Text";
-        var openApiKey='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';
         const userCode = cm.getSelection().trim();  // Lấy đoạn code được chọn
         if (!userCode) {
             canhbao("Hãy chọn một đoạn code để gợi ý!");
             return;
         }
-        const response = await fetch("https://api.openai.com/v1/chat/completions", {
+
+        try {
+          const token = (window.__app_auth__ && window.__app_auth__.token) || "";
+          const apiBase = window.__api_base__ || "/api";
+          const response = await fetch(`${apiBase}/ai-code-stream`, {
             method: "POST",
             headers: {
-                "Content-Type": "application/json",
-                "Authorization": "Bearer "+openApiKey
+              "Content-Type": "application/json",
+              "csm-token": token,
             },
             body: JSON.stringify({
-                model: "gpt-4o-mini",
-                messages: [{ role: "user", content: `Hoàn thành đoạn mã sau bằng ${language} và chỉ trả về code, không giải thích:\n\`\`\`${language.toLowerCase()}\n${userCode}\n\`\`\``}]
-            })
-        });
+              appId: "csm_config_editor",
+              message: `Hoàn thành đoạn mã sau bằng ${language} và chỉ trả về code, không giải thích:\n\`\`\`${language.toLowerCase()}\n${userCode}\n\`\`\``,
+              currentCode: userCode,
+              language: mode,
+              contextType: "code",
+              responseMode: "edit",
+            }),
+          });
 
-        const data = await response.json();
-        let aiSuggestion = "Không có gợi ý.";
-        if (data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) {
-            aiSuggestion = data.choices[0].message.content;
+          if (!response.ok) {
+            canhbao("Không gọi được AI nội bộ");
+            return;
+          }
+
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          let fullResponse = "";
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() ?? "";
+
+            for (const line of lines) {
+              if (!line.startsWith("data:")) continue;
+              const json = line.slice(5).trim();
+              if (!json || json === "[DONE]") continue;
+              try {
+                const evt = JSON.parse(json);
+                if (evt.stage === "streaming" && evt.chunk) {
+                  fullResponse += evt.chunk;
+                } else if (evt.stage === "complete" && evt.fullResponse) {
+                  fullResponse = evt.fullResponse;
+                } else if (evt.stage === "error") {
+                  canhbao(evt.message || "AI trả về lỗi");
+                  return;
+                }
+              } catch {
+                // Ignore parse failures
+              }
+            }
+          }
+
+          let aiSuggestion = fullResponse.trim() || "Không có gợi ý.";
+          const codeMatch = aiSuggestion.match(/```(?:\w+)?\n([\s\S]+?)\n```/);
+          if (codeMatch) {
+            aiSuggestion = codeMatch[1];
+          }
+
+          cm.replaceSelection(aiSuggestion);
+          thongbao("Đã nhận gợi ý từ AI");
+        } catch (err) {
+          canhbao("Lỗi gọi AI nội bộ: " + String(err));
         }
-
-        // Lọc bỏ phần không phải code
-        const codeMatch = aiSuggestion.match(/```(?:\w+)?\n([\s\S]+?)\n```/);
-        if (codeMatch) {
-            aiSuggestion = codeMatch[1]; // Chỉ lấy nội dung code bên trong ``` ```
-        }
-
-        // Thay thế đoạn code đã chọn bằng gợi ý từ AI
-        cm.replaceSelection(aiSuggestion);
       },
       getNameMenu(label){
         if(label)

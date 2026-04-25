@@ -84,8 +84,6 @@ export type AiProgressPayload = Record<string, any>;
 
 type GenerateSeoContentOptions = {
 	onProgress?: (progress: AiProgressPayload) => void;
-	providerPreference?: "auto" | "github_models" | "gemini";
-	disableGeminiFallback?: boolean;
 	taskType?: string;
 	menuDesignByDev?: boolean;
 };
@@ -105,8 +103,7 @@ function resolveAiOptions(options?: GenerateSeoContentOptions): GenerateSeoConte
 	const codingTask = isCodingTaskType(options?.taskType);
 	return {
 		...options,
-		providerPreference: options?.providerPreference ?? (codingTask ? "github_models" : undefined),
-		disableGeminiFallback: options?.disableGeminiFallback ?? (codingTask ? true : undefined),
+		taskType: options?.taskType ?? (codingTask ? "code_assistant" : options?.taskType),
 	};
 }
 
@@ -118,8 +115,6 @@ async function generateSeoContentWithPromptAsync(prompt: string, options?: Gener
 				prompt,
 				mode: "submit",
 				async: true,
-				providerPreference: resolvedOptions.providerPreference,
-				disableGeminiFallback: resolvedOptions.disableGeminiFallback,
 				taskType: resolvedOptions.taskType,
 				menuDesignByDev: resolvedOptions.menuDesignByDev,
 			},
@@ -300,8 +295,6 @@ export async function generateSeoContentWithPrompt(prompt: string, options?: Gen
 			.post("ai-generate-seo-content", {
 				json: {
 					...requestBody,
-					providerPreference: resolvedOptions.providerPreference,
-					disableGeminiFallback: resolvedOptions.disableGeminiFallback,
 					taskType: resolvedOptions.taskType,
 					menuDesignByDev: resolvedOptions.menuDesignByDev,
 				},

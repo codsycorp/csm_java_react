@@ -1,4 +1,4 @@
-.chatgptChat {
+.aiAssistantChat {
 	height: 100%;
 	min-height: 0;
 	display: flex;
@@ -20,13 +20,13 @@
 	--chat-code-text: #e5e7eb;
 }
 
-.chatgptChat :global(.ant-card-head) {
+.aiAssistantChat :global(.ant-card-head) {
 	padding: 12px 16px;
 	border-bottom: 1px solid var(--chat-border);
 	background: var(--chat-bg);
 }
 
-.chatgptChat :global(.ant-card-body) {
+.aiAssistantChat :global(.ant-card-body) {
 	padding: 0;
 	flex: 1;
 	min-height: 0;
@@ -462,7 +462,7 @@
 }
 
 @media (prefers-color-scheme: dark) {
-	.chatgptChat {
+	.aiAssistantChat {
 		--chat-bg: color-mix(in srgb, var(--ant-color-bg-container) 92%, #0b1220);
 		--chat-border: color-mix(in srgb, var(--ant-color-border) 68%, #334155);
 		--chat-muted: color-mix(in srgb, var(--ant-color-text-tertiary) 86%, #94a3b8);
