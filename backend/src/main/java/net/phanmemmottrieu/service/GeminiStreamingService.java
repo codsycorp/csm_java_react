@@ -190,10 +190,21 @@ public class GeminiStreamingService {
                 onStatus.accept(status);
             }
 
+            // For flash thinking models (gemini-2.5-flash etc.), disable thinking to avoid 30-60s startup delay
+            Map<String, Object> effectiveBody = requestBody;
+            if (fallbackModel.contains("flash")) {
+                effectiveBody = new HashMap<>(requestBody);
+                @SuppressWarnings("unchecked")
+                Map<String, Object> genCfg = (Map<String, Object>) effectiveBody.get("generationConfig");
+                Map<String, Object> mergedCfg = genCfg != null ? new HashMap<>(genCfg) : new HashMap<>();
+                mergedCfg.put("thinkingConfig", java.util.Collections.singletonMap("thinkingBudget", 0));
+                effectiveBody.put("generationConfig", mergedCfg);
+            }
+
             Throwable fallbackError = executeStreamingRequest(
                     fallbackUrl,
                     fallbackModel,
-                    requestBody,
+                    effectiveBody,
                     fullResponse,
                     onChunk,
                     onComplete,
