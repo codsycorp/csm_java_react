@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { Button, Modal, Table, Input, Select, Switch, Space, Popconfirm, Form, InputNumber, Tooltip } from "antd";
 import { PlusOutlined, EditOutlined, DeleteOutlined, ImportOutlined, ExportOutlined, CodeOutlined } from "@ant-design/icons";
-import CodeMirror from '#src/components/editor/CodeMirrorWithCopilot';
+import CodeMirror from '#src/components/editor/CodeMirrorWithChatgpt';
 import { javascript } from '@codemirror/lang-javascript';
 
 const fTypeOptions = [

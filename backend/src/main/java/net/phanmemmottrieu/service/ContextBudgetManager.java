@@ -19,7 +19,7 @@ import java.util.stream.Collectors;
  * Token-aware context budget manager.
  *
  * <p>Replaces the crude {@code prompt.length() / 4} heuristic in
- * {@link GitHubModelsService} with accurate JTokkit-based token counting
+ * {@link ChatgptGatewayService} with accurate JTokkit-based token counting
  * (cl100k_base for GPT-4 family, o200k_base for GPT-4o-mini / newer models).
  *
  * <p>Core responsibilities:

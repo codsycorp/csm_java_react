@@ -4,7 +4,7 @@ import { Select, Space, Button, message, Tooltip } from "antd";
 import { CopyOutlined } from "@ant-design/icons";
 import type { TriggerConfig } from "#src/components/csm-grid/CsmDynamicGrid";
 import { csmDecrypt, csmEncrypt } from "#src/components/csm-grid/CsmCrypto";
-import CodeMirror from "#src/components/editor/CodeMirrorWithCopilot";
+import CodeMirror from "#src/components/editor/CodeMirrorWithChatgpt";
 import { javascript } from "@codemirror/lang-javascript";
 import { html } from "@codemirror/lang-html";
 import { css } from "@codemirror/lang-css";

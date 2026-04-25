@@ -4,26 +4,26 @@ import BaseCodeMirror, { type ReactCodeMirrorProps } from "@uiw/react-codemirror
 import { Button, Tooltip } from "antd";
 import { MessageOutlined, FullscreenOutlined, FullscreenExitOutlined, CloseOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
-import CopilotChat, { type CopilotUserMessagePayload } from "#src/pages/system/developer/CopilotChat";
+import ChatgptChat, { type ChatgptUserMessagePayload } from "#src/pages/system/developer/ChatgptChat";
 import { useAppStore } from "#src/store";
-import styles from "./CodeMirrorWithCopilot.module.css";
+import styles from "./CodeMirrorWithChatgpt.module.css";
 
-type CopilotLanguage = "javascript" | "html" | "python" | "java" | "css" | "sql" | "json";
-type CopilotContextType = "code" | "menu_json";
+type ChatgptLanguage = "javascript" | "html" | "python" | "java" | "css" | "sql" | "json";
+type ChatgptContextType = "code" | "menu_json";
 
-type CodeMirrorWithCopilotProps = ReactCodeMirrorProps & {
-  copilotEnabled?: boolean;
-  copilotAppId?: string;
-  copilotLanguage?: CopilotLanguage;
-  copilotContextType?: CopilotContextType;
-  copilotCurrentCode?: string;
-  copilotPName?: string;
-  copilotPType?: number;
-  copilotAutoApplyCodeBlock?: boolean;
-  copilotOnUserMessage?: (payload: CopilotUserMessagePayload) => void;
+type CodeMirrorWithChatgptProps = ReactCodeMirrorProps & {
+  chatgptEnabled?: boolean;
+  chatgptAppId?: string;
+  chatgptLanguage?: ChatgptLanguage;
+  chatgptContextType?: ChatgptContextType;
+  chatgptCurrentCode?: string;
+  chatgptPName?: string;
+  chatgptPType?: number;
+  chatgptAutoApplyCodeBlock?: boolean;
+  chatgptOnUserMessage?: (payload: ChatgptUserMessagePayload) => void;
 };
 
-type GlobalCopilotState = {
+type GlobalChatgptState = {
   open: boolean;
   ownerId: string | null;
 };
@@ -50,38 +50,38 @@ function getViewportWidth(): number {
   return window.innerWidth;
 }
 
-const globalCopilotState: GlobalCopilotState = {
+const globalChatgptState: GlobalChatgptState = {
   open: false,
   ownerId: null,
 };
 
-const copilotSubscribers = new Set<(state: GlobalCopilotState) => void>();
+const chatgptSubscribers = new Set<(state: GlobalChatgptState) => void>();
 
-function updateGlobalCopilotState(next: Partial<GlobalCopilotState>) {
+function updateGlobalChatgptState(next: Partial<GlobalChatgptState>) {
   if (typeof next.open === "boolean") {
-    globalCopilotState.open = next.open;
+    globalChatgptState.open = next.open;
   }
   if (Object.prototype.hasOwnProperty.call(next, "ownerId")) {
-    globalCopilotState.ownerId = next.ownerId ?? null;
+    globalChatgptState.ownerId = next.ownerId ?? null;
   }
-  copilotSubscribers.forEach((subscriber) => {
+  chatgptSubscribers.forEach((subscriber) => {
     try {
-      subscriber({ ...globalCopilotState });
+      subscriber({ ...globalChatgptState });
     } catch {
       // Ignore subscriber errors
     }
   });
 }
 
-function subscribeGlobalCopilot(listener: (state: GlobalCopilotState) => void) {
-  copilotSubscribers.add(listener);
-  listener({ ...globalCopilotState });
+function subscribeGlobalChatgpt(listener: (state: GlobalChatgptState) => void) {
+  chatgptSubscribers.add(listener);
+  listener({ ...globalChatgptState });
   return () => {
-    copilotSubscribers.delete(listener);
+    chatgptSubscribers.delete(listener);
   };
 }
 
-function resolveLanguage(raw: string): CopilotLanguage {
+function resolveLanguage(raw: string): ChatgptLanguage {
   const text = String(raw || "").trim().toLowerCase();
   if (["html", "xml"].includes(text)) return "html";
   if (["python", "py"].includes(text)) return "python";
@@ -92,7 +92,7 @@ function resolveLanguage(raw: string): CopilotLanguage {
   return "javascript";
 }
 
-function resolveContextType(language: CopilotLanguage, rawContextType?: CopilotContextType): CopilotContextType {
+function resolveContextType(language: ChatgptLanguage, rawContextType?: ChatgptContextType): ChatgptContextType {
   if (rawContextType) return rawContextType;
   // Keep coding context as default. Menu designer must opt-in explicitly.
   return "code";
@@ -108,17 +108,17 @@ function isLikelyIOSDevice(): boolean {
   return iOSByUA || iPadOSDesktopUA;
 }
 
-export default function CodeMirrorWithCopilot(props: CodeMirrorWithCopilotProps) {
+export default function CodeMirrorWithChatgpt(props: CodeMirrorWithChatgptProps) {
   const {
-    copilotEnabled = true,
-    copilotAppId,
-    copilotLanguage,
-    copilotContextType,
-    copilotCurrentCode,
-    copilotPName,
-    copilotPType,
-    copilotAutoApplyCodeBlock = false,
-    copilotOnUserMessage,
+    chatgptEnabled = true,
+    chatgptAppId,
+    chatgptLanguage,
+    chatgptContextType,
+    chatgptCurrentCode,
+    chatgptPName,
+    chatgptPType,
+    chatgptAutoApplyCodeBlock = false,
+    chatgptOnUserMessage,
     value,
     height,
     onCreateEditor,
@@ -131,7 +131,7 @@ export default function CodeMirrorWithCopilot(props: CodeMirrorWithCopilotProps)
   const editorViewRef = useRef<any>(null);
   const chatPanelRef = useRef<HTMLDivElement | null>(null);
   const dragOffsetRef = useRef<{ x: number; y: number } | null>(null);
-  const [globalState, setGlobalState] = useState<GlobalCopilotState>({ ...globalCopilotState });
+  const [globalState, setGlobalState] = useState<GlobalChatgptState>({ ...globalChatgptState });
   const currentAppId = useAppStore((state) => state.currentAppId);
 
   const prefersCoarsePointer = useMemo(() => {
@@ -312,19 +312,19 @@ export default function CodeMirrorWithCopilot(props: CodeMirrorWithCopilotProps)
     };
   }, [isFullscreen]);
 
-  const appId = String(copilotAppId || currentAppId || "csm").trim() || "csm";
-  const currentCode = typeof copilotCurrentCode === "string"
-    ? copilotCurrentCode
+  const appId = String(chatgptAppId || currentAppId || "csm").trim() || "csm";
+  const currentCode = typeof chatgptCurrentCode === "string"
+    ? chatgptCurrentCode
     : typeof value === "string"
       ? value
       : "";
-  const language = useMemo(() => resolveLanguage(copilotLanguage || "javascript"), [copilotLanguage]);
-  const contextType = useMemo(() => resolveContextType(language, copilotContextType), [language, copilotContextType]);
+  const language = useMemo(() => resolveLanguage(chatgptLanguage || "javascript"), [chatgptLanguage]);
+  const contextType = useMemo(() => resolveContextType(language, chatgptContextType), [language, chatgptContextType]);
   const autoApplyStorageKey = useMemo(
     () => `${appId}:${contextType}:${language}`,
     [appId, contextType, language],
   );
-  const [autoApplyEnabled, setAutoApplyEnabled] = useState<boolean>(Boolean(copilotAutoApplyCodeBlock));
+  const [autoApplyEnabled, setAutoApplyEnabled] = useState<boolean>(Boolean(chatgptAutoApplyCodeBlock));
   const isOwner = globalState.ownerId === instanceIdRef.current;
   const chatOpen = globalState.open && isOwner;
   const editorHeight = isFullscreen ? "100%" : height;
@@ -418,29 +418,29 @@ export default function CodeMirrorWithCopilot(props: CodeMirrorWithCopilotProps)
   }, []);
 
   useEffect(() => {
-    setAutoApplyEnabled(Boolean(copilotAutoApplyCodeBlock));
-  }, [copilotAutoApplyCodeBlock, autoApplyStorageKey]);
+    setAutoApplyEnabled(Boolean(chatgptAutoApplyCodeBlock));
+  }, [chatgptAutoApplyCodeBlock, autoApplyStorageKey]);
 
   const handleAutoApplyChange = useCallback((enabled: boolean) => {
     setAutoApplyEnabled(Boolean(enabled));
   }, []);
 
   const closeChat = useCallback(() => {
-    updateGlobalCopilotState({ open: false, ownerId: null });
+    updateGlobalChatgptState({ open: false, ownerId: null });
   }, []);
 
-  useEffect(() => subscribeGlobalCopilot(setGlobalState), []);
+  useEffect(() => subscribeGlobalChatgpt(setGlobalState), []);
 
   useEffect(() => {
-    if (!copilotEnabled && isOwner) {
-      updateGlobalCopilotState({ open: false, ownerId: null });
+    if (!chatgptEnabled && isOwner) {
+      updateGlobalChatgptState({ open: false, ownerId: null });
     }
-  }, [copilotEnabled, isOwner]);
+  }, [chatgptEnabled, isOwner]);
 
   useEffect(() => {
     return () => {
-      if (globalCopilotState.ownerId === instanceIdRef.current) {
-        updateGlobalCopilotState({ open: false, ownerId: null });
+      if (globalChatgptState.ownerId === instanceIdRef.current) {
+        updateGlobalChatgptState({ open: false, ownerId: null });
       }
     };
   }, []);
@@ -559,7 +559,7 @@ export default function CodeMirrorWithCopilot(props: CodeMirrorWithCopilotProps)
           {...codeMirrorProps}
         />
       </div>
-      {copilotEnabled && (
+      {chatgptEnabled && (
         <>
           <div className={styles.toggleButton}>
             <Tooltip title={isFullscreen ? "Thu nhỏ (Esc)" : "Toàn màn hình"}>
@@ -577,7 +577,7 @@ export default function CodeMirrorWithCopilot(props: CodeMirrorWithCopilotProps)
                 if (chatOpen) {
                   closeChat();
                 } else {
-                  updateGlobalCopilotState({ open: true, ownerId: instanceIdRef.current });
+                  updateGlobalChatgptState({ open: true, ownerId: instanceIdRef.current });
                 }
               }}
             >
@@ -618,18 +618,18 @@ export default function CodeMirrorWithCopilot(props: CodeMirrorWithCopilotProps)
                 </div>
               )}
               <div className={styles.chatPanelInner}>
-                <CopilotChat
+                <ChatgptChat
                   appId={appId}
                   currentCode={currentCode}
                   language={language}
                   contextType={contextType}
-                  targetPName={copilotPName}
-                  targetPType={copilotPType}
+                  targetPName={chatgptPName}
+                  targetPType={chatgptPType}
                   onCodeInsert={handleCopilotCodeInsert}
                   autoApplyCodeBlock={autoApplyEnabled}
                   autoApplyPreferenceKey={autoApplyStorageKey}
                   onAutoApplyChange={handleAutoApplyChange}
-                  onUserMessage={copilotOnUserMessage}
+                  onUserMessage={chatgptOnUserMessage}
                 />
               </div>
             </div>

@@ -24,7 +24,7 @@ public class AiCodeReviewService {
 
   private static final Logger log = LoggerFactory.getLogger(AiCodeReviewService.class);
 
-  private final GitHubModelsService gitHubModelsService;
+  private final ChatgptGatewayService chatgptGatewayService;
   private final ObjectMapper objectMapper = new ObjectMapper();
 
   @Value("${github.models.project-root-path:}")
@@ -39,8 +39,8 @@ public class AiCodeReviewService {
   @Value("${ai.review.max-total-chars:220000}")
   private int maxTotalChars;
 
-  public AiCodeReviewService(GitHubModelsService gitHubModelsService) {
-    this.gitHubModelsService = gitHubModelsService;
+  public AiCodeReviewService(ChatgptGatewayService chatgptGatewayService) {
+    this.chatgptGatewayService = chatgptGatewayService;
   }
 
   public Map<String, Object> runReview(Object pathsInput, String focusInput, Integer maxFilesInput) {
@@ -71,7 +71,7 @@ public class AiCodeReviewService {
 
     String focus = String.valueOf(focusInput == null ? "" : focusInput).trim();
     String prompt = buildReviewPrompt(context.toString(), focus);
-    String raw = gitHubModelsService.generateContent(prompt);
+    String raw = chatgptGatewayService.generateContent(prompt);
     String aiText = unwrapAiText(raw);
     Map<String, Object> parsed = parseJsonObject(aiText);
 

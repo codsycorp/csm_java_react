@@ -324,6 +324,16 @@ fi
 
 log "Starting $jarName on port $APP_PORT with performance optimizations..."
 
+# Load environment variables from config.env (API keys, secrets)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ -f "$SCRIPT_DIR/config.env" ]; then
+    set -a
+    # shellcheck source=/dev/null
+    source "$SCRIPT_DIR/config.env"
+    set +a
+    log "Loaded config.env"
+fi
+
 # Create logs directory for GC and error logs
 mkdir -p "$LOG_DIR"
 

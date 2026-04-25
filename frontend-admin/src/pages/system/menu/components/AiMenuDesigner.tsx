@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Button, Card, Grid, Input, Progress, message, Select, Space, Switch, Tag, Tooltip } from "antd";
-import CodeMirror from "#src/components/editor/CodeMirrorWithCopilot";
+import CodeMirror from "#src/components/editor/CodeMirrorWithChatgpt";
 import { json } from "@codemirror/lang-json";
 import { vscodeDark, vscodeLight } from "@uiw/codemirror-theme-vscode";
 import { usePreferences } from "#src/hooks";
@@ -10,7 +10,7 @@ import type { DecorationSet } from "@codemirror/view";
 import { useTranslation } from "react-i18next";
 import { useUserStore } from "#src/store/user";
 import { useSocket } from "#src/hooks/useSocket";
-import type { CopilotAttachment, CopilotUserMessagePayload } from "#src/pages/system/developer/CopilotChat";
+import type { ChatgptAttachment, ChatgptUserMessagePayload } from "#src/pages/system/developer/ChatgptChat";
 
 import type { MenuItemType } from "#src/api/system/menu";
 import { generateSeoContentWithPrompt } from "#src/api/ai";
@@ -2770,7 +2770,7 @@ function parseContextFiles(raw: any): JsonContextFile[] {
   }
 }
 
-function mapCopilotAttachmentsToContextFiles(attachments: CopilotAttachment[]): JsonContextFile[] {
+function mapChatgptAttachmentsToContextFiles(attachments: ChatgptAttachment[]): JsonContextFile[] {
   return (Array.isArray(attachments) ? attachments : [])
     .filter((item) => (item.kind === "text" || item.kind === "json") && String(item.textContent || "").trim())
     .map((item) => ({
@@ -2992,8 +2992,8 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
 
   // ── Common state ──────────────────────────────────────────────────────────
   const [requestText, setRequestText] = useState("");
-  const [latestCopilotPrompt, setLatestCopilotPrompt] = useState("");
-  const [latestCopilotAttachmentCount, setLatestCopilotAttachmentCount] = useState(0);
+  const [latestChatgptPrompt, setLatestChatgptPrompt] = useState("");
+  const [latestChatgptAttachmentCount, setLatestChatgptAttachmentCount] = useState(0);
   const [storedRequest, setStoredRequest] = useState("");
   const [storedRecordMeta, setStoredRecordMeta] = useState<AiRequestRecord | null>(null);
   const [aiResultText, setAiResultText] = useState("");
@@ -4196,8 +4196,8 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
   const effectiveRequestText = useMemo(() => {
     const manualRequest = String(requestText || "").trim();
     if (manualRequest) return manualRequest;
-    return String(latestCopilotPrompt || "").trim();
-  }, [latestCopilotPrompt, requestText]);
+    return String(latestChatgptPrompt || "").trim();
+  }, [latestChatgptPrompt, requestText]);
 
   const mergedRequestText = useMemo(() => {
     if (!effectiveRequestText) return storedRequest;
@@ -4256,17 +4256,17 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
     () => transformMenuTriggers(Array.isArray(currentMenus) ? currentMenus : [], "decode"),
     [currentMenus],
   );
-  const latestCopilotPromptPreview = useMemo(
-    () => compactAiRealtimeText(latestCopilotPrompt, 220),
-    [latestCopilotPrompt],
+  const latestChatgptPromptPreview = useMemo(
+    () => compactAiRealtimeText(latestChatgptPrompt, 220),
+    [latestChatgptPrompt],
   );
 
-  const handleCopilotRequirementMessage = (payload: CopilotUserMessagePayload) => {
+  const handleChatgptRequirementMessage = (payload: ChatgptUserMessagePayload) => {
     const nextText = String(payload?.message || "").trim();
-    const derivedContextFiles = mapCopilotAttachmentsToContextFiles(payload?.attachments || []);
-    setLatestCopilotAttachmentCount(Array.isArray(payload?.attachments) ? payload.attachments.length : 0);
+    const derivedContextFiles = mapChatgptAttachmentsToContextFiles(payload?.attachments || []);
+    setLatestChatgptAttachmentCount(Array.isArray(payload?.attachments) ? payload.attachments.length : 0);
     if (nextText) {
-      setLatestCopilotPrompt(nextText);
+      setLatestChatgptPrompt(nextText);
       setRequestText(nextText);
     }
     if (derivedContextFiles.length > 0) {
@@ -5486,9 +5486,9 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                 </div>
 
                 <CodeMirror
-                  copilotLanguage="json"
-                  copilotContextType="menu_json"
-                  copilotOnUserMessage={handleCopilotRequirementMessage}
+                  chatgptLanguage="json"
+                  chatgptContextType="menu_json"
+                  chatgptOnUserMessage={handleChatgptRequirementMessage}
                   value={
                     editableAiDraftText
                       ? editableAiDraftText

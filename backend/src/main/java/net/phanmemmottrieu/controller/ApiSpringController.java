@@ -33,10 +33,10 @@ import net.phanmemmottrieu.service.WebScraperService;
 import net.phanmemmottrieu.service.GoogleIndexService;
 import net.phanmemmottrieu.service.GoogleIndexQueueService;
 import net.phanmemmottrieu.service.ChatPersistenceService;
-import net.phanmemmottrieu.service.GitHubModelsService;
+import net.phanmemmottrieu.service.ChatgptGatewayService;
 import net.phanmemmottrieu.service.AiMenuMergeService;
 import net.phanmemmottrieu.service.AiCodeReviewService;
-import net.phanmemmottrieu.service.CopilotMemoryManagerService;
+import net.phanmemmottrieu.service.ChatgptMemoryManagerService;
 import com.corundumstudio.socketio.SocketIOServer;
 import net.phanmemmottrieu.model.UrlSubmissionQueue;
 import net.phanmemmottrieu.model.UrlSubmissionHistory;
@@ -67,30 +67,30 @@ import java.util.concurrent.atomic.AtomicReference;
 public class ApiSpringController {
 
     private static final Logger logger = LoggerFactory.getLogger(ApiSpringController.class);
-    private static final int COPILOT_CURRENT_CODE_MAX_CHARS = 45000;
-    private static final int COPILOT_CURRENT_CODE_HEAD_CHARS = 12000;
-    private static final int COPILOT_CURRENT_CODE_TAIL_CHARS = 12000;
-    private static final int COPILOT_CURRENT_CODE_FOCUS_WINDOW_CHARS = 24000;
-    private static final int COPILOT_CURRENT_CODE_CONTEXT_HARD_CAP_CHARS = 60000;
-    private static final int COPILOT_MENU_CODE_MAX_CHARS = 220000;
-    private static final int COPILOT_MENU_CODE_HEAD_CHARS = 70000;
-    private static final int COPILOT_MENU_CODE_TAIL_CHARS = 70000;
-    private static final int COPILOT_MENU_CODE_FOCUS_WINDOW_CHARS = 90000;
-    private static final int COPILOT_MENU_CODE_CONTEXT_HARD_CAP_CHARS = 240000;
-    private static final int COPILOT_ATTACHMENT_TEXT_MAX_CHARS = 800000;
-    private static final int COPILOT_CONTINUITY_MEMORY_MAX_CHARS = 120000;
-    private static final int COPILOT_DEBUG_MARKDOWN_MAX_CHARS = 24000;
-    private static final int COPILOT_DEBUG_MESSAGES_JSON_MAX_CHARS = 18000;
-    private static final int COPILOT_DEBUG_RETRIEVAL_PREVIEW_MAX_CHARS = 6000;
-    private static final int COPILOT_CODE_GLOBAL_MAP_MAX_CHARS = 18000;
-    private static final int COPILOT_CODE_GLOBAL_SYMBOL_MAX_ITEMS = 60;
-    private static final int COPILOT_CODE_ANCHOR_MAX_ITEMS = 24;
-    private static final int COPILOT_CODE_ANCHOR_CHARS_PER_BLOCK = 24000;
-    private static final int COPILOT_CODE_FOCUS_EXCERPT_MAX_ITEMS = 3;
-    private static final int COPILOT_CODE_DISTRIBUTED_EXCERPT_MAX_ITEMS = 8;
-    private static final int COPILOT_CODE_DISTRIBUTED_EXCERPT_CHARS = 1600;
-    private static final int COPILOT_MENU_ATTACHMENT_CONTEXT_MAX_CHARS = 180000;
-    private static final int COPILOT_CODE_ATTACHMENT_CONTEXT_MAX_CHARS = 120000;
+    private static final int CHATGPT_CURRENT_CODE_MAX_CHARS = 45000;
+    private static final int CHATGPT_CURRENT_CODE_HEAD_CHARS = 12000;
+    private static final int CHATGPT_CURRENT_CODE_TAIL_CHARS = 12000;
+    private static final int CHATGPT_CURRENT_CODE_FOCUS_WINDOW_CHARS = 24000;
+    private static final int CHATGPT_CURRENT_CODE_CONTEXT_HARD_CAP_CHARS = 60000;
+    private static final int CHATGPT_MENU_CODE_MAX_CHARS = 220000;
+    private static final int CHATGPT_MENU_CODE_HEAD_CHARS = 70000;
+    private static final int CHATGPT_MENU_CODE_TAIL_CHARS = 70000;
+    private static final int CHATGPT_MENU_CODE_FOCUS_WINDOW_CHARS = 90000;
+    private static final int CHATGPT_MENU_CODE_CONTEXT_HARD_CAP_CHARS = 240000;
+    private static final int CHATGPT_ATTACHMENT_TEXT_MAX_CHARS = 800000;
+    private static final int CHATGPT_CONTINUITY_MEMORY_MAX_CHARS = 120000;
+    private static final int CHATGPT_DEBUG_MARKDOWN_MAX_CHARS = 24000;
+    private static final int CHATGPT_DEBUG_MESSAGES_JSON_MAX_CHARS = 18000;
+    private static final int CHATGPT_DEBUG_RETRIEVAL_PREVIEW_MAX_CHARS = 6000;
+    private static final int CHATGPT_CODE_GLOBAL_MAP_MAX_CHARS = 18000;
+    private static final int CHATGPT_CODE_GLOBAL_SYMBOL_MAX_ITEMS = 60;
+    private static final int CHATGPT_CODE_ANCHOR_MAX_ITEMS = 24;
+    private static final int CHATGPT_CODE_ANCHOR_CHARS_PER_BLOCK = 24000;
+    private static final int CHATGPT_CODE_FOCUS_EXCERPT_MAX_ITEMS = 3;
+    private static final int CHATGPT_CODE_DISTRIBUTED_EXCERPT_MAX_ITEMS = 8;
+    private static final int CHATGPT_CODE_DISTRIBUTED_EXCERPT_CHARS = 1600;
+    private static final int CHATGPT_MENU_ATTACHMENT_CONTEXT_MAX_CHARS = 180000;
+    private static final int CHATGPT_CODE_ATTACHMENT_CONTEXT_MAX_CHARS = 120000;
     private final ObjectMapper objectMapper = new ObjectMapper(); // Dùng để parse JSON body
     private final RecordManager recordManager;
     private final InitHandler initHandler;
@@ -105,12 +105,12 @@ public class ApiSpringController {
     private final GoogleIndexService googleIndexService;
     private final GoogleIndexQueueService googleIndexQueueService;
     private final ChatPersistenceService chatPersistenceService;
-    private final GitHubModelsService gitHubModelsService;
+    private final ChatgptGatewayService chatgptGatewayService;
     private final SocketIOServer socketIOServer;
     private final CRMHandler crmHandler;
     private final AiMenuMergeService aiMenuMergeService;
     private final AiCodeReviewService aiCodeReviewService;
-    private final CopilotMemoryManagerService copilotMemoryManagerService;
+    private final ChatgptMemoryManagerService chatgptMemoryManagerService;
 
     @Value("${ai.prompt.max-chars:3000000}")
     private int maxPromptChars;
@@ -118,13 +118,13 @@ public class ApiSpringController {
     @Value("${ai.prompt.gemini-max-chars:500000}")
     private int geminiMaxPromptChars;
 
-    @Value("${ai.routing.stability.prefer-github-for-coding:true}")
-    private boolean preferGithubForCoding;
+    @Value("${ai.routing.stability.prefer-chatgpt-for-coding:true}")
+    private boolean preferChatgptForCoding;
 
-    @Value("${ai.routing.stability.force-copilot-for-coding:true}")
-    private boolean forceCopilotForCoding;
+    @Value("${ai.routing.stability.force-chatgpt-for-coding:true}")
+    private boolean forceChatgptForCoding;
 
-    @Value("${ai.routing.stability.disable-fallback-for-coding:true}")
+    @Value("${ai.routing.stability.disable-fallback-for-chatgpt-coding:${ai.routing.stability.disable-fallback-for-coding:true}}")
     private boolean disableFallbackForCoding;
 
     @Value("${ai.async.job-ttl-ms:3600000}")
@@ -133,100 +133,100 @@ public class ApiSpringController {
     @Value("${ai.async.poll-min-ms:3000}")
     private long aiAsyncPollMinMs;
 
-    @Value("${copilot.attachment-retrieval.enabled:true}")
-    private boolean copilotAttachmentRetrievalEnabled;
+    @Value("${chatgpt.attachment-retrieval.enabled:true}")
+    private boolean chatgptAttachmentRetrievalEnabled;
 
-    @Value("${copilot.attachment-retrieval.max-attachments:6}")
-    private int copilotAttachmentRetrievalMaxAttachments;
+    @Value("${chatgpt.attachment-retrieval.max-attachments:6}")
+    private int chatgptAttachmentRetrievalMaxAttachments;
 
-    @Value("${copilot.attachment-retrieval.max-snippets-per-file:3}")
-    private int copilotAttachmentRetrievalMaxSnippetsPerFile;
+    @Value("${chatgpt.attachment-retrieval.max-snippets-per-file:3}")
+    private int chatgptAttachmentRetrievalMaxSnippetsPerFile;
 
-    @Value("${copilot.attachment-retrieval.snippet-window-chars:2200}")
-    private int copilotAttachmentRetrievalSnippetWindowChars;
+    @Value("${chatgpt.attachment-retrieval.snippet-window-chars:2200}")
+    private int chatgptAttachmentRetrievalSnippetWindowChars;
 
-    @Value("${copilot.attachment-retrieval.max-total-chars:36000}")
-    private int copilotAttachmentRetrievalMaxTotalChars;
+    @Value("${chatgpt.attachment-retrieval.max-total-chars:36000}")
+    private int chatgptAttachmentRetrievalMaxTotalChars;
 
-    @Value("${copilot.ask-before-edit.enabled:true}")
-    private boolean copilotAskBeforeEditEnabled;
+    @Value("${chatgpt.ask-before-edit.enabled:true}")
+    private boolean chatgptAskBeforeEditEnabled;
 
-    @Value("${copilot.edit-structured.required:true}")
-    private boolean copilotStructuredEditRequired;
+    @Value("${chatgpt.edit-structured.required:true}")
+    private boolean chatgptStructuredEditRequired;
 
-    @Value("${copilot.edit-structured.max-text-edits:120}")
-    private int copilotStructuredEditMaxTextEdits;
+    @Value("${chatgpt.edit-structured.max-text-edits:120}")
+    private int chatgptStructuredEditMaxTextEdits;
 
-    @Value("${copilot.edit-structured.require-checklist:true}")
-    private boolean copilotStructuredEditRequireChecklist;
+    @Value("${chatgpt.edit-structured.require-checklist:true}")
+    private boolean chatgptStructuredEditRequireChecklist;
 
-    @Value("${copilot.edit-structured.max-replacement-chars:800000}")
-    private int copilotStructuredEditMaxReplacementChars;
+    @Value("${chatgpt.edit-structured.max-replacement-chars:800000}")
+    private int chatgptStructuredEditMaxReplacementChars;
 
-    @Value("${copilot.menu.direct-provider-fallback-enabled:true}")
-    private boolean copilotMenuDirectProviderFallbackEnabled;
+    @Value("${chatgpt.menu.direct-provider-fallback-enabled:true}")
+    private boolean chatgptMenuDirectProviderFallbackEnabled;
 
-    @Value("${copilot.menu.direct-provider-threshold-chars:160000}")
-    private int copilotMenuDirectProviderThresholdChars;
+    @Value("${chatgpt.menu.direct-provider-threshold-chars:160000}")
+    private int chatgptMenuDirectProviderThresholdChars;
 
-    @Value("${copilot.menu.github-probe-enabled:true}")
-    private boolean copilotMenuGithubProbeEnabled;
+    @Value("${chatgpt.menu.primary-probe-enabled:${chatgpt.menu.github-probe-enabled:true}}")
+    private boolean chatgptMenuPrimaryProbeEnabled;
 
-    @Value("${copilot.menu.github-probe-threshold-chars:100000}")
-    private int copilotMenuGithubProbeThresholdChars;
+    @Value("${chatgpt.menu.primary-probe-threshold-chars:${chatgpt.menu.github-probe-threshold-chars:100000}}")
+    private int chatgptMenuPrimaryProbeThresholdChars;
 
-    @Value("${copilot.menu.github-probe-max-prompt-chars:18000}")
-    private int copilotMenuGithubProbeMaxPromptChars;
+    @Value("${chatgpt.menu.primary-probe-max-prompt-chars:${chatgpt.menu.github-probe-max-prompt-chars:18000}}")
+    private int chatgptMenuPrimaryProbeMaxPromptChars;
 
-    @Value("${copilot.menu.direct-provider-github-probe-first:true}")
-    private boolean copilotMenuDirectProviderGithubProbeFirst;
+    @Value("${chatgpt.menu.direct-provider-primary-probe-first:${chatgpt.menu.direct-provider-github-probe-first:true}}")
+    private boolean chatgptMenuDirectProviderPrimaryProbeFirst;
 
-    @Value("${copilot.menu.github-probe-timeout-ms:12000}")
-    private long copilotMenuGithubProbeTimeoutMs;
+    @Value("${chatgpt.menu.primary-probe-timeout-ms:${chatgpt.menu.github-probe-timeout-ms:12000}}")
+    private long chatgptMenuPrimaryProbeTimeoutMs;
 
-    @Value("${copilot.menu.disable-gemini-fallback:true}")
-    private boolean copilotMenuDisableGeminiFallback;
+    @Value("${chatgpt.menu.disable-gemini-fallback:true}")
+    private boolean chatgptMenuDisableGeminiFallback;
 
-    @Value("${copilot.memory-manager.enabled:true}")
-    private boolean copilotMemoryManagerEnabled;
+    @Value("${chatgpt.memory-manager.enabled:true}")
+    private boolean chatgptMemoryManagerEnabled;
 
-    @Value("${copilot.menu.distill-large-json:true}")
-    private boolean copilotMenuDistillLargeJson;
+    @Value("${chatgpt.menu.distill-large-json:true}")
+    private boolean chatgptMenuDistillLargeJson;
 
-    @Value("${copilot.menu.distill-threshold-chars:40000}")
-    private int copilotMenuDistillThresholdChars;
+    @Value("${chatgpt.menu.distill-threshold-chars:40000}")
+    private int chatgptMenuDistillThresholdChars;
 
-    @Value("${copilot.menu.chaining-enabled:true}")
-    private boolean copilotMenuChainingEnabled;
+    @Value("${chatgpt.menu.chaining-enabled:${copilot.menu.chaining-enabled:true}}")
+    private boolean chatgptMenuChainingEnabled;
 
-    @Value("${copilot.menu.chaining-threshold-chars:250000}")
-    private int copilotMenuChainingThresholdChars;
+    @Value("${chatgpt.menu.chaining-threshold-chars:${copilot.menu.chaining-threshold-chars:250000}}")
+    private int chatgptMenuChainingThresholdChars;
 
-    @Value("${copilot.code.large-context-enabled:true}")
-    private boolean copilotCodeLargeContextEnabled;
+    @Value("${chatgpt.code.large-context-enabled:${copilot.code.large-context-enabled:true}}")
+    private boolean chatgptCodeLargeContextEnabled;
 
-    @Value("${copilot.code.large-threshold-chars:150000}")
-    private int copilotCodeLargeThresholdChars;
+    @Value("${chatgpt.code.large-threshold-chars:${copilot.code.large-threshold-chars:150000}}")
+    private int chatgptCodeLargeThresholdChars;
 
-    @Value("${copilot.code.chaining-enabled:true}")
-    private boolean copilotCodeChainingEnabled;
+    @Value("${chatgpt.code.chaining-enabled:${copilot.code.chaining-enabled:true}}")
+    private boolean chatgptCodeChainingEnabled;
 
-    @Value("${copilot.code.chaining-threshold-chars:220000}")
-    private int copilotCodeChainingThresholdChars;
+    @Value("${chatgpt.code.chaining-threshold-chars:${copilot.code.chaining-threshold-chars:220000}}")
+    private int chatgptCodeChainingThresholdChars;
 
-    @Value("${copilot.code.chaining-cache.enabled:true}")
-    private boolean copilotCodeChainingCacheEnabled;
+    @Value("${chatgpt.code.chaining-cache.enabled:${copilot.code.chaining-cache.enabled:true}}")
+    private boolean chatgptCodeChainingCacheEnabled;
 
-    @Value("${copilot.code.chaining-cache.max-entries:240}")
-    private int copilotCodeChainingCacheMaxEntries;
+    @Value("${chatgpt.code.chaining-cache.max-entries:${copilot.code.chaining-cache.max-entries:240}}")
+    private int chatgptCodeChainingCacheMaxEntries;
 
-    @Value("${copilot.code.chaining-cache-ttl-ms:1800000}")
-    private long copilotCodeChainingCacheTtlMs;
+    @Value("${chatgpt.code.chaining-cache-ttl-ms:${copilot.code.chaining-cache-ttl-ms:1800000}}")
+    private long chatgptCodeChainingCacheTtlMs;
 
-    @Value("${copilot.custom-instructions.path:csm_datas/public/copilot-instructions.md}")
-    private String copilotCustomInstructionsPath;
+    @Value("${chatgpt.custom-instructions.path:${copilot.custom-instructions.path:csm_datas/public/copilot-instructions.md}}")
+    private String chatgptCustomInstructionsPath;
 
-    private volatile String cachedCopilotCustomInstructions = null;
+    private volatile String cachedChatgptCustomInstructions = null;
 
     private final ExecutorService aiAsyncExecutor = Executors.newFixedThreadPool(2);
     private final ConcurrentHashMap<String, Map<String, Object>> aiAsyncJobs = new ConcurrentHashMap<>();
@@ -247,12 +247,12 @@ public class ApiSpringController {
             GoogleIndexService googleIndexService,
             GoogleIndexQueueService googleIndexQueueService,
             ChatPersistenceService chatPersistenceService,
-            GitHubModelsService gitHubModelsService,
+            ChatgptGatewayService chatgptGatewayService,
             SocketIOServer socketIOServer,
             CRMHandler crmHandler,
             AiMenuMergeService aiMenuMergeService,
             AiCodeReviewService aiCodeReviewService,
-            CopilotMemoryManagerService copilotMemoryManagerService
+            ChatgptMemoryManagerService chatgptMemoryManagerService
         ) {
         this.recordManager = recordManager;
         this.initHandler = initHandler;
@@ -267,12 +267,12 @@ public class ApiSpringController {
         this.googleIndexService = googleIndexService;
         this.googleIndexQueueService = googleIndexQueueService;
         this.chatPersistenceService = chatPersistenceService;
-        this.gitHubModelsService = gitHubModelsService;
+        this.chatgptGatewayService = chatgptGatewayService;
         this.socketIOServer = socketIOServer;
         this.crmHandler = crmHandler;
         this.aiMenuMergeService = aiMenuMergeService;
         this.aiCodeReviewService = aiCodeReviewService;
-        this.copilotMemoryManagerService = copilotMemoryManagerService;
+        this.chatgptMemoryManagerService = chatgptMemoryManagerService;
     }
 
     public ResponseEntity<?> handleApiRequest(
@@ -512,7 +512,8 @@ public class ApiSpringController {
                     getObjectFromAI(response, params);
                     break;
                 case "/copilot-chat-stream":
-                    handleCopilotChatStream(response, params);
+                case "/chatgpt-chat-stream":
+                    handleChatgptChatStream(response, params);
                     break;
                 case "/ai/menu-merge":
                     handleAiMenuMerge(response, params);
@@ -954,10 +955,10 @@ public class ApiSpringController {
     }
 
     /**
-     * Handle CodeMirror Copilot chat with streaming via Socket.IO
+     * Handle CodeMirror ChatGPT chat with streaming via Socket.IO
      * Sends streaming text chunks to client in real-time
      */
-    private void handleCopilotChatStream(StandardResponse response, Map<String, Object> params) {
+    private void handleChatgptChatStream(StandardResponse response, Map<String, Object> params) {
         try {
             String appId = String.valueOf(params.getOrDefault("appId", "")).trim();
             String message = String.valueOf(params.getOrDefault("message", "")).trim();
@@ -970,24 +971,24 @@ public class ApiSpringController {
             String pName = String.valueOf(params.getOrDefault("pName", "")).trim();
             Integer pType = parseNullableInteger(params.get("pType"));
             String rawResponseMode = String.valueOf(params.getOrDefault("responseMode", "")).trim();
-            String detectedModeFromMessage = detectCopilotResponseModeFromMessage(message);
-            String normalizedFlowType = normalizeCopilotFlowType(flowType, contextType, taskType);
+            String detectedModeFromMessage = detectChatgptResponseModeFromMessage(message);
+            String normalizedFlowType = normalizeChatgptFlowType(flowType, contextType, taskType);
             String effectiveContextType = "menu_manager".equals(normalizedFlowType) ? "menu_json" : "code";
             String effectiveTaskType = "menu_manager".equals(normalizedFlowType)
                 ? (taskType == null || taskType.isBlank() ? "menu_design" : taskType)
                 : "code_assistant";
-            String responseMode = (isMenuCopilotFlow(effectiveContextType, effectiveTaskType)
+            String responseMode = (isMenuChatgptFlow(effectiveContextType, effectiveTaskType)
                 && rawResponseMode.isEmpty()
                 && !"analyze".equalsIgnoreCase(detectedModeFromMessage))
                 ? "edit"
-                : normalizeCopilotResponseMode(params.get("responseMode"), message);
-            message = stripCopilotModeDirective(message);
-            List<Map<String, Object>> attachments = normalizeCopilotAttachments(params.get("attachments"));
+                : normalizeChatgptResponseMode(params.get("responseMode"), message);
+            message = stripChatgptModeDirective(message);
+            List<Map<String, Object>> attachments = normalizeChatgptAttachments(params.get("attachments"));
             if (attachments == null) {
                 attachments = new ArrayList<>();
             }
             logger.info(
-                "Copilot chat request: appId={}, contextTypeRaw={}, taskTypeRaw={}, contextTypeEffective={}, taskTypeEffective={}, flowType={}, responseMode={}, attachmentsCount={}, attachments={} ",
+                "ChatGPT chat request: appId={}, contextTypeRaw={}, taskTypeRaw={}, contextTypeEffective={}, taskTypeEffective={}, flowType={}, responseMode={}, attachmentsCount={}, attachments={} ",
                 appId,
                 contextType,
                 taskType,
@@ -996,7 +997,7 @@ public class ApiSpringController {
                 normalizedFlowType,
                 responseMode,
                 attachments == null ? 0 : attachments.size(),
-                buildCopilotAttachmentRequestLogLine(attachments));
+                buildChatgptAttachmentRequestLogLine(attachments));
             
             if (message.isEmpty() && attachments.isEmpty()) {
                 response.set("code", 200);
@@ -1020,21 +1021,21 @@ public class ApiSpringController {
                 return;
             }
 
-            String continuityScopeKey = buildCopilotContinuityScopeKey(effectiveContextType, language, pName, pType);
-            String continuityMemory = trimCopilotContinuityMemory(
-                gitHubModelsService.loadCopilotConversationMemory(appId, continuityScopeKey));
-            List<String> pendingQuestions = gitHubModelsService.loadCopilotPendingQuestions(appId, continuityScopeKey, 8);
+            String continuityScopeKey = buildChatgptContinuityScopeKey(effectiveContextType, language, pName, pType);
+            String continuityMemory = trimChatgptContinuityMemory(
+                chatgptGatewayService.loadChatgptConversationMemory(appId, continuityScopeKey));
+            List<String> pendingQuestions = chatgptGatewayService.loadChatgptPendingQuestions(appId, continuityScopeKey, 8);
 
             // CHAINING Step 1: if enabled and total payload is very large, run chained distillation
-            // to compress large config files via an extra GitHub Models call before the final request.
+            // to compress large config files via an extra ChatGPT API call before the final request.
             String chainedSchemaSummary = "";
             String chainedCodeSummary = "";
             int estimatedCharsBeforeChain = estimateTotalCopilotPayloadChars(attachments, message, currentCode);
-            if (copilotMenuChainingEnabled
+            if (chatgptMenuChainingEnabled
                 && "menu_json".equals(effectiveContextType)
-                && estimatedCharsBeforeChain > Math.max(150000, copilotMenuChainingThresholdChars)) {
+                && estimatedCharsBeforeChain > Math.max(150000, chatgptMenuChainingThresholdChars)) {
                 try {
-                    emitCopilotChatChunk(appId, Map.of(
+                    emitChatgptChatChunk(appId, Map.of(
                         "stage", "chaining_step1",
                         "message", uiTextByLang(
                             uiLang,
@@ -1046,8 +1047,8 @@ public class ApiSpringController {
                     ));
                     chainedSchemaSummary = runMenuChainingStep1(attachments, appId);
                     if (!chainedSchemaSummary.isBlank()) {
-                        logger.info("Copilot chaining step1 completed: {} chars schema summary for appId={}", chainedSchemaSummary.length(), appId);
-                        emitCopilotChatChunk(appId, Map.of(
+                        logger.info("ChatGPT chaining step1 completed: {} chars schema summary for appId={}", chainedSchemaSummary.length(), appId);
+                        emitChatgptChatChunk(appId, Map.of(
                             "stage", "chaining_step1_done",
                             "message", uiTextByLang(
                                 uiLang,
@@ -1059,16 +1060,16 @@ public class ApiSpringController {
                         ));
                     }
                 } catch (Exception chainEx) {
-                    logger.warn("Copilot chaining step1 failed: {} — continuing without chained summary", chainEx.getMessage());
+                    logger.warn("ChatGPT chaining step1 failed: {} — continuing without chained summary", chainEx.getMessage());
                 }
             }
 
-            if (copilotCodeChainingEnabled
+            if (chatgptCodeChainingEnabled
                 && "code".equals(effectiveContextType)
                 && currentCode != null
-                && currentCode.length() > Math.max(120000, copilotCodeChainingThresholdChars)) {
+                && currentCode.length() > Math.max(120000, chatgptCodeChainingThresholdChars)) {
                 try {
-                    emitCopilotChatChunk(appId, Map.of(
+                    emitChatgptChatChunk(appId, Map.of(
                         "stage", "code_chaining_step1",
                         "message", uiTextByLang(
                             uiLang,
@@ -1081,7 +1082,7 @@ public class ApiSpringController {
                     CodeChainingResult codeChainResult = runCodeChainingStep1(currentCode, message, language, appId, pName);
                     chainedCodeSummary = codeChainResult.summary;
                     if (!chainedCodeSummary.isBlank()) {
-                        emitCopilotChatChunk(appId, Map.of(
+                        emitChatgptChatChunk(appId, Map.of(
                             "stage", "code_chaining_step1_done",
                             "message", uiTextByLang(
                                 uiLang,
@@ -1116,7 +1117,7 @@ public class ApiSpringController {
                         ));
                     }
                 } catch (Exception codeChainEx) {
-                    logger.warn("Copilot code chaining step1 failed: {} — continuing without code summary", codeChainEx.getMessage());
+                    logger.warn("ChatGPT code chaining step1 failed: {} — continuing without code summary", codeChainEx.getMessage());
                 }
             }
 
@@ -1143,9 +1144,9 @@ public class ApiSpringController {
                     + "When conflict happens: prioritize ACTIVE FILE IN EDITOR content over this summary.\n\n"
                     + chainedCodeSummary;
             }
-            List<Map<String, Object>> messages = buildCopilotChatMessages(appId, message, currentCode, language, effectiveContextType,
+            List<Map<String, Object>> messages = buildChatgptChatMessages(appId, message, currentCode, language, effectiveContextType,
                 effectiveTaskType, responseMode, attachments, continuityMemory, globalContext, pName, pType, continuityScopeKey, pendingQuestions);
-            emitCopilotChatDebug(appId, buildCopilotDebugPayload(
+            emitChatgptChatDebug(appId, buildChatgptDebugPayload(
                 appId,
                 message,
                 currentCode,
@@ -1165,7 +1166,7 @@ public class ApiSpringController {
             // Set up streaming via Socket.IO
             StringBuilder fullResponse = new StringBuilder();
             AtomicReference<String> lastDraftRef = new AtomicReference<>(currentCode == null ? "" : currentCode);
-            GitHubModelsService.ProgressListener streamListener = (progress) -> {
+            ChatgptGatewayService.ProgressListener streamListener = (progress) -> {
                 String stage = String.valueOf(progress.getOrDefault("stage", ""));
                 String chunk = String.valueOf(progress.getOrDefault("chunk", ""));
                 if ("streaming".equals(stage) && !chunk.isEmpty()) {
@@ -1255,7 +1256,7 @@ public class ApiSpringController {
                     || percent != null
                     || status != null;
                 if (hasChunk || hasRealtimeDraft || hasRealtimeEdits || hasStatus) {
-                    emitCopilotChatChunk(appId, realtimePayload);
+                    emitChatgptChatChunk(appId, realtimePayload);
                 }
             };
 
@@ -1272,25 +1273,25 @@ public class ApiSpringController {
             if (menuGeminiFallbackDisabled) {
                 directProviderRoute = false;
             }
-            boolean quickGithubProbeRoute = shouldQuickGithubProbeForMediumMenu(
+            boolean quickPrimaryProbeRoute = shouldQuickPrimaryProbeForMediumMenu(
                 effectiveContextType,
                 effectiveTaskType,
                 estimatedPayloadChars);
             boolean forceGeminiFallback = false;
 
             if (directProviderRoute) {
-                if (copilotMenuDirectProviderGithubProbeFirst) {
-                    emitCopilotChatChunk(appId, Map.of(
-                        "stage", "large_menu_quick_github_probe",
+                if (chatgptMenuDirectProviderPrimaryProbeFirst) {
+                    emitChatgptChatChunk(appId, Map.of(
+                        "stage", "large_menu_quick_primary_probe",
                         "message", uiTextByLang(
                             uiLang,
-                            "Menu payload rất lớn, thử GitHub 1 lượt ngắn trước khi fallback",
-                            "Menu payload is very large, trying a quick GitHub pass before fallback",
-                            "菜单负载很大，先进行一次 GitHub 快速尝试再回退"),
+                            "Menu payload rất lớn, thử ChatGPT 1 lượt ngắn trước khi fallback",
+                            "Menu payload is very large, trying a quick ChatGPT pass before fallback",
+                            "菜单负载很大，先进行一次 ChatGPT 快速尝试再回退"),
                         "responseMode", responseMode,
                         "status", "running"
                     ));
-                    String probePrompt = buildCopilotQuickProbePromptText(
+                    String probePrompt = buildChatgptQuickProbePromptText(
                         message,
                         currentCode,
                         language,
@@ -1303,16 +1304,16 @@ public class ApiSpringController {
                         pType,
                         continuityScopeKey,
                         pendingQuestions);
-                    githubRaw = runGithubQuickProbeWithTimeout(probePrompt, streamListener, appId, "large_menu_quick_github_probe");
+                    githubRaw = runPrimaryProbeWithTimeout(probePrompt, streamListener, appId, "large_menu_quick_primary_probe");
                     String probeText = extractAiResultText(githubRaw);
                     boolean probeLooksValid = isLikelyJsonPayload(probeText);
                     if (!probeText.isBlank() && probeLooksValid) {
                         fullResponse.append(probeText);
-                        emitTextAsCopilotChunks(appId, probeText, responseMode, uiLang);
+                        emitTextAsChatgptChunks(appId, probeText, responseMode, uiLang);
                     } else {
                         forceGeminiFallback = true;
-                        logger.warn("Copilot stream: large-menu quick GitHub probe did not return valid menu JSON. Triggering immediate fallback.");
-                        emitCopilotChatChunk(appId, Map.of(
+                        logger.warn("ChatGPT stream: large-menu quick primary probe did not return valid menu JSON. Triggering immediate fallback.");
+                        emitChatgptChatChunk(appId, Map.of(
                             "stage", "large_menu_probe_fallback_trigger",
                             "message", uiTextByLang(
                                 uiLang,
@@ -1324,7 +1325,7 @@ public class ApiSpringController {
                         ));
                     }
                 } else {
-                    emitCopilotChatChunk(appId, Map.of(
+                    emitChatgptChatChunk(appId, Map.of(
                         "stage", "direct_provider_route",
                         "message", uiTextByLang(
                             uiLang,
@@ -1334,7 +1335,7 @@ public class ApiSpringController {
                         "responseMode", responseMode,
                         "status", "running"
                     ));
-                    String directPrompt = buildCopilotChatPromptText(
+                    String directPrompt = buildChatgptChatPromptText(
                         message,
                         currentCode,
                         language,
@@ -1352,21 +1353,21 @@ public class ApiSpringController {
                     String directText = extractAiResultText(githubRaw);
                     if (!directText.isBlank()) {
                         fullResponse.append(directText);
-                        emitTextAsCopilotChunks(appId, directText, responseMode, uiLang);
+                        emitTextAsChatgptChunks(appId, directText, responseMode, uiLang);
                     }
                 }
-            } else if (quickGithubProbeRoute) {
-                emitCopilotChatChunk(appId, Map.of(
-                    "stage", "quick_github_probe",
+            } else if (quickPrimaryProbeRoute) {
+                emitChatgptChatChunk(appId, Map.of(
+                    "stage", "quick_primary_probe",
                     "message", uiTextByLang(
                         uiLang,
-                        "Menu payload trung bình-lớn, thử GitHub 1 lượt ngắn trước khi fallback",
-                        "Menu payload is medium-large, trying a quick GitHub pass before fallback",
-                        "菜单负载中到大，先进行一次 GitHub 快速尝试再回退"),
+                        "Menu payload trung bình-lớn, thử ChatGPT 1 lượt ngắn trước khi fallback",
+                        "Menu payload is medium-large, trying a quick ChatGPT pass before fallback",
+                        "菜单负载中到大，先进行一次 ChatGPT 快速尝试再回退"),
                     "responseMode", responseMode,
                     "status", "running"
                 ));
-                String probePrompt = buildCopilotQuickProbePromptText(
+                String probePrompt = buildChatgptQuickProbePromptText(
                     message,
                     currentCode,
                     language,
@@ -1379,17 +1380,17 @@ public class ApiSpringController {
                     pType,
                     continuityScopeKey,
                     pendingQuestions);
-                githubRaw = runGithubQuickProbeWithTimeout(probePrompt, streamListener, appId, "quick_github_probe");
+                githubRaw = runPrimaryProbeWithTimeout(probePrompt, streamListener, appId, "quick_primary_probe");
                 String probeText = extractAiResultText(githubRaw);
                 boolean probeLooksValid = isLikelyJsonPayload(probeText);
                 if (!probeText.isBlank() && probeLooksValid) {
                     fullResponse.append(probeText);
-                    emitTextAsCopilotChunks(appId, probeText, responseMode, uiLang);
+                    emitTextAsChatgptChunks(appId, probeText, responseMode, uiLang);
                 } else {
                     forceGeminiFallback = true;
-                    logger.warn("Copilot stream: quick GitHub probe did not return valid menu JSON. Triggering immediate fallback.");
-                    emitCopilotChatChunk(appId, Map.of(
-                        "stage", "quick_github_probe_fallback_trigger",
+                    logger.warn("ChatGPT stream: quick primary probe did not return valid menu JSON. Triggering immediate fallback.");
+                    emitChatgptChatChunk(appId, Map.of(
+                        "stage", "quick_primary_probe_fallback_trigger",
                         "message", uiTextByLang(
                             uiLang,
                             "Quick probe không trả về JSON hợp lệ, chuyển fallback ngay",
@@ -1400,24 +1401,24 @@ public class ApiSpringController {
                     ));
                 }
             } else {
-                emitCopilotChatChunk(appId, Map.of(
+                emitChatgptChatChunk(appId, Map.of(
                     "stage", "github_models_route",
                     "message", uiTextByLang(
                         uiLang,
-                        "Đang gọi trực tiếp GitHub Models",
-                        "Calling GitHub Models directly",
-                        "正在直接调用 GitHub Models"),
+                        "Đang gọi trực tiếp ChatGPT API",
+                        "Calling ChatGPT API directly",
+                        "正在直接调用 ChatGPT API"),
                     "responseMode", responseMode,
                     "status", "running"
                 ));
-                githubRaw = gitHubModelsService.chatWithStreamingMessages(messages, streamListener);
+                githubRaw = chatgptGatewayService.chatWithStreamingMessages(messages, streamListener);
             }
 
             if (fullResponse.length() == 0) {
                 String extractedFromGithub = extractAiResultText(githubRaw);
                 if (!extractedFromGithub.isBlank()) {
                     fullResponse.append(extractedFromGithub);
-                    emitTextAsCopilotChunks(appId, extractedFromGithub, responseMode, uiLang);
+                    emitTextAsChatgptChunks(appId, extractedFromGithub, responseMode, uiLang);
                 }
             }
 
@@ -1432,42 +1433,42 @@ public class ApiSpringController {
             if (fullResponse.length() == 0 && shouldGeminiFallback) {
                 boolean authFailure = isAuthFailureFromRawText(githubRaw);
                 if (menuGeminiFallbackDisabled && forcedMenuFallbackOverride) {
-                    logger.warn("Copilot stream: overriding disabled menu Gemini fallback due to upstream failure signals.");
-                    emitCopilotChatChunk(appId, Map.of(
+                    logger.warn("ChatGPT stream: overriding disabled menu Gemini fallback due to upstream failure signals.");
+                    emitChatgptChatChunk(appId, Map.of(
                         "stage", "menu_gemini_fallback_override",
                         "message", uiTextByLang(
                             uiLang,
-                            "GitHub Models đang lỗi hạ tầng/giới hạn, tạm bỏ chặn fallback để chuyển sang Gemini",
-                            "GitHub Models has infrastructure/limit failures, temporarily overriding fallback block to switch to Gemini",
-                            "GitHub Models 出现基础设施或配额故障，临时覆盖回退禁用并切换到 Gemini"),
+                            "ChatGPT API đang lỗi hạ tầng/giới hạn, tạm bỏ chặn fallback để chuyển sang Gemini",
+                            "ChatGPT API has infrastructure/limit failures, temporarily overriding fallback block to switch to Gemini",
+                            "ChatGPT API 出现基础设施或配额故障，临时覆盖回退禁用并切换到 Gemini"),
                         "responseMode", responseMode,
                         "status", "running"
                     ));
                 }
                 if (authFailure) {
-                    logger.warn("Copilot stream: GitHub Models authentication failed. Falling back to AIProviderFactory.");
+                    logger.warn("ChatGPT stream: ChatGPT API authentication failed. Falling back to AIProviderFactory.");
                 } else {
-                    logger.warn("Copilot stream: GitHub Models capacity/rate limit reached. Falling back to AIProviderFactory.");
+                    logger.warn("ChatGPT stream: ChatGPT API capacity/rate limit reached. Falling back to AIProviderFactory.");
                 }
-                emitCopilotChatChunk(appId, Map.of(
+                emitChatgptChatChunk(appId, Map.of(
                     "stage", "gemini_fallback",
                     "message", authFailure
                         ? uiTextByLang(
                             uiLang,
-                            "GitHub Models lỗi xác thực token, đang chuyển sang Gemini",
-                            "GitHub Models token authentication failed, switching to Gemini",
-                            "GitHub Models 令牌认证失败，正在切换到 Gemini")
+                            "ChatGPT API lỗi xác thực token, đang chuyển sang Gemini",
+                            "ChatGPT API token authentication failed, switching to Gemini",
+                            "ChatGPT API 令牌认证失败，正在切换到 Gemini")
                         : uiTextByLang(
                             uiLang,
-                            "GitHub Models quá tải hoặc vượt giới hạn payload, đang chuyển sang Gemini",
-                            "GitHub Models is overloaded or payload is too large, switching to Gemini",
-                            "GitHub Models 过载或 payload 超限，正在切换到 Gemini"),
+                            "ChatGPT API quá tải hoặc vượt giới hạn payload, đang chuyển sang Gemini",
+                            "ChatGPT API is overloaded or payload is too large, switching to Gemini",
+                            "ChatGPT API 过载或 payload 超限，正在切换到 Gemini"),
                     "responseMode", responseMode,
                     "current", 0,
                     "total", 1,
                     "percent", 0));
 
-                String fallbackPrompt = buildCopilotChatPromptText(
+                String fallbackPrompt = buildChatgptChatPromptText(
                     message,
                     currentCode,
                     language,
@@ -1485,7 +1486,7 @@ public class ApiSpringController {
                 String fallbackText = extractAiResultText(fallbackRaw);
                 if (!fallbackText.isBlank()) {
                     fullResponse.append(fallbackText);
-                    emitTextAsCopilotChunks(appId, fallbackText, responseMode, uiLang);
+                    emitTextAsChatgptChunks(appId, fallbackText, responseMode, uiLang);
                 }
             }
 
@@ -1494,14 +1495,14 @@ public class ApiSpringController {
                 String messageNoFallback = upstreamError.isBlank()
                     ? uiTextByLang(
                         uiLang,
-                        "GitHub Models không trả về nội dung hợp lệ, menu fallback sang Gemini đang bị tắt",
-                        "GitHub Models did not return valid content, and menu fallback to Gemini is disabled",
-                        "GitHub Models 未返回有效内容，且菜单回退到 Gemini 已禁用")
+                        "ChatGPT API không trả về nội dung hợp lệ, menu fallback sang Gemini đang bị tắt",
+                        "ChatGPT API did not return valid content, and menu fallback to Gemini is disabled",
+                        "ChatGPT API 未返回有效内容，且菜单回退到 Gemini 已禁用")
                     : uiTextByLang(
                         uiLang,
-                        "GitHub Models lỗi: " + upstreamError + " (menu fallback Gemini đang bị tắt)",
-                        "GitHub Models error: " + upstreamError + " (menu fallback to Gemini is disabled)",
-                        "GitHub Models 错误：" + upstreamError + "（菜单回退到 Gemini 已禁用）");
+                        "ChatGPT API lỗi: " + upstreamError + " (menu fallback Gemini đang bị tắt)",
+                        "ChatGPT API error: " + upstreamError + " (menu fallback to Gemini is disabled)",
+                        "ChatGPT API 错误：" + upstreamError + "（菜单回退到 Gemini 已禁用）");
                 throw new IllegalStateException(messageNoFallback);
             }
 
@@ -1512,15 +1513,15 @@ public class ApiSpringController {
                     if (!upstreamError.isBlank()) {
                         errText = uiTextByLang(
                             uiLang,
-                            "GitHub Models lỗi: " + upstreamError,
-                            "GitHub Models error: " + upstreamError,
-                            "GitHub Models 错误：" + upstreamError);
+                            "ChatGPT API lỗi: " + upstreamError,
+                            "ChatGPT API error: " + upstreamError,
+                            "ChatGPT API 错误：" + upstreamError);
                     } else {
                         errText = uiTextByLang(
                             uiLang,
-                            "GitHub Models và provider fallback đều không trả về nội dung",
-                            "Neither GitHub Models nor fallback provider returned content",
-                            "GitHub Models 与回退提供方均未返回内容");
+                            "ChatGPT API và provider fallback đều không trả về nội dung",
+                            "Neither ChatGPT API nor fallback provider returned content",
+                            "ChatGPT API 与回退提供方均未返回内容");
                     }
                 } else {
                     errText = upstreamError.isBlank()
@@ -1555,7 +1556,7 @@ public class ApiSpringController {
                     gateFailedPayload.put("genericHits", gate.genericHits);
                     gateFailedPayload.put("responseMode", responseMode);
                     gateFailedPayload.put("status", "running");
-                    emitCopilotChatChunk(appId, gateFailedPayload);
+                    emitChatgptChatChunk(appId, gateFailedPayload);
 
                     String repairPrompt = buildMenuQualityRepairPrompt(
                         message,
@@ -1571,15 +1572,42 @@ public class ApiSpringController {
                         continuityScopeKey,
                         pendingQuestions,
                         responseMode);
-                    String repairRaw = gitHubModelsService.generateContent(repairPrompt);
-                    String repairText = extractAiResultText(repairRaw);
+                    boolean severeGroundingFailure = "generic_output_and_no_source_overlap".equalsIgnoreCase(gate.reason)
+                        || "no_table_or_id_overlap_with_source".equalsIgnoreCase(gate.reason)
+                        || "no_business_fields_and_no_source_overlap".equalsIgnoreCase(gate.reason);
+                    boolean canGateFallbackToProvider = !menuGeminiFallbackDisabled
+                        || forcedMenuFallbackOverride
+                        || severeGroundingFailure;
+                    boolean preferProviderFirstForRepair = canGateFallbackToProvider;
+                    String repairText = "";
+                    if (preferProviderFirstForRepair) {
+                        String providerRaw = this.aiProviderFactory.generateContent(repairPrompt);
+                        repairText = extractAiResultText(providerRaw);
+                    } else {
+                        try {
+                            String repairRaw = chatgptGatewayService.generateContent(repairPrompt);
+                            repairText = extractAiResultText(repairRaw);
+                        } catch (Exception repairEx) {
+                            logger.warn("Menu quality gate repair via ChatGPT API failed: {}", repairEx.getMessage());
+                            emitChatgptChatChunk(appId, Map.of(
+                                "stage", "menu_quality_gate_chatgpt_repair_failed",
+                                "message", uiTextByLang(
+                                    uiLang,
+                                    "Lần sửa bằng ChatGPT API thất bại, đang chuyển provider fallback",
+                                    "ChatGPT API repair failed, switching to fallback provider",
+                                    "ChatGPT API 修复失败，正在切换回退提供方"),
+                                "responseMode", responseMode,
+                                "status", "running"
+                            ));
+                        }
+                    }
                     if (!repairText.isBlank()) {
                         MenuQualityGateResult repairedGate = evaluateMenuOutputQuality(repairText, attachments);
                         if (repairedGate.passed) {
                             fullResponse.setLength(0);
                             fullResponse.append(repairText);
-                            emitTextAsCopilotChunks(appId, repairText, responseMode, uiLang);
-                            emitCopilotChatChunk(appId, Map.of(
+                            emitTextAsChatgptChunks(appId, repairText, responseMode, uiLang);
+                            emitChatgptChatChunk(appId, Map.of(
                                 "stage", "menu_quality_gate_repaired",
                                 "message", uiTextByLang(
                                     uiLang,
@@ -1594,40 +1622,148 @@ public class ApiSpringController {
                             ));
                         } else {
                             logger.warn("Menu quality gate repair still weak: {}", repairedGate.debugSummary());
-                            String failureJson = buildMenuGroundingFailureResponse(uiLang, gate, repairedGate);
-                            fullResponse.setLength(0);
-                            fullResponse.append(failureJson);
-                            emitTextAsCopilotChunks(appId, failureJson, responseMode, uiLang);
-                            emitCopilotChatChunk(appId, Map.of(
-                                "stage", "menu_quality_gate_repair_failed",
+                            if (canGateFallbackToProvider) {
+                                emitChatgptChatChunk(appId, Map.of(
+                                    "stage", "menu_quality_gate_provider_fallback",
+                                    "message", uiTextByLang(
+                                        uiLang,
+                                        "Kết quả vẫn chưa bám nguồn sau lần sửa đầu tiên, đang thử provider fallback",
+                                        "Output is still weakly grounded after first repair, trying fallback provider",
+                                        "首轮修复后结果仍与源数据匹配不足，正在尝试回退提供方"),
+                                    "responseMode", responseMode,
+                                    "status", "running"
+                                ));
+
+                                String providerRaw = this.aiProviderFactory.generateContent(repairPrompt);
+                                String providerText = extractAiResultText(providerRaw);
+                                if (!providerText.isBlank()) {
+                                    MenuQualityGateResult providerGate = evaluateMenuOutputQuality(providerText, attachments);
+                                    if (providerGate.passed) {
+                                        fullResponse.setLength(0);
+                                        fullResponse.append(providerText);
+                                        emitTextAsChatgptChunks(appId, providerText, responseMode, uiLang);
+                                        emitChatgptChatChunk(appId, Map.of(
+                                            "stage", "menu_quality_gate_provider_repaired",
+                                            "message", uiTextByLang(
+                                                uiLang,
+                                                "Provider fallback đã tạo lại menu bám nguồn dữ liệu",
+                                                "Fallback provider regenerated a menu aligned to source data",
+                                                "回退提供方已重新生成与源数据匹配的菜单"),
+                                            "tableOverlap", providerGate.tableOverlap,
+                                            "idOverlap", providerGate.idOverlap,
+                                            "genericHits", providerGate.genericHits,
+                                            "responseMode", responseMode,
+                                            "status", "running"
+                                        ));
+                                    } else {
+                                        String failureJson = buildMenuGroundingFailureResponse(uiLang, gate, providerGate);
+                                        fullResponse.setLength(0);
+                                        fullResponse.append(failureJson);
+                                        emitTextAsChatgptChunks(appId, failureJson, responseMode, uiLang);
+                                        emitChatgptChatChunk(appId, Map.of(
+                                            "stage", "menu_quality_gate_repair_failed",
+                                            "message", uiTextByLang(
+                                                uiLang,
+                                                "Đã thử cả provider fallback nhưng vẫn chưa đủ bám nguồn, đã chặn kết quả suy đoán",
+                                                "Tried fallback provider but grounding is still insufficient; speculative output was blocked",
+                                                "已尝试回退提供方但匹配度仍不足；已拦截推测性结果"),
+                                            "initialReason", gate.reason,
+                                            "repairReason", providerGate.reason,
+                                            "tableOverlap", providerGate.tableOverlap,
+                                            "idOverlap", providerGate.idOverlap,
+                                            "genericHits", providerGate.genericHits,
+                                            "responseMode", responseMode,
+                                            "status", "running"
+                                        ));
+                                    }
+                                } else {
+                                    String failureJson = buildMenuGroundingFailureResponse(uiLang, gate, repairedGate);
+                                    fullResponse.setLength(0);
+                                    fullResponse.append(failureJson);
+                                    emitTextAsChatgptChunks(appId, failureJson, responseMode, uiLang);
+                                }
+                            } else {
+                                String failureJson = buildMenuGroundingFailureResponse(uiLang, gate, repairedGate);
+                                fullResponse.setLength(0);
+                                fullResponse.append(failureJson);
+                                emitTextAsChatgptChunks(appId, failureJson, responseMode, uiLang);
+                                emitChatgptChatChunk(appId, Map.of(
+                                    "stage", "menu_quality_gate_repair_failed",
+                                    "message", uiTextByLang(
+                                        uiLang,
+                                        "Không tạo được menu đủ bám nguồn dữ liệu, đã chặn kết quả suy đoán",
+                                        "Could not produce a menu grounded enough in source data; speculative output was blocked",
+                                        "未能生成与源数据充分匹配的菜单；已拦截推测性结果"),
+                                    "initialReason", gate.reason,
+                                    "repairReason", repairedGate.reason,
+                                    "tableOverlap", repairedGate.tableOverlap,
+                                    "idOverlap", repairedGate.idOverlap,
+                                    "genericHits", repairedGate.genericHits,
+                                    "responseMode", responseMode,
+                                    "status", "running"
+                                ));
+                            }
+                        }
+                    } else {
+                        if (canGateFallbackToProvider) {
+                            emitChatgptChatChunk(appId, Map.of(
+                                "stage", "menu_quality_gate_provider_fallback",
                                 "message", uiTextByLang(
                                     uiLang,
-                                    "Không tạo được menu đủ bám nguồn dữ liệu, đã chặn kết quả suy đoán",
-                                    "Could not produce a menu grounded enough in source data; speculative output was blocked",
-                                    "未能生成与源数据充分匹配的菜单；已拦截推测性结果"),
-                                "initialReason", gate.reason,
-                                "repairReason", repairedGate.reason,
-                                "tableOverlap", repairedGate.tableOverlap,
-                                "idOverlap", repairedGate.idOverlap,
-                                "genericHits", repairedGate.genericHits,
+                                    "Lần sửa bằng ChatGPT API không có nội dung, đang thử provider fallback",
+                                    "ChatGPT API repair returned no content, trying fallback provider",
+                                    "ChatGPT API 修复未返回内容，正在尝试回退提供方"),
                                 "responseMode", responseMode,
                                 "status", "running"
                             ));
+                            String providerRaw = this.aiProviderFactory.generateContent(repairPrompt);
+                            String providerText = extractAiResultText(providerRaw);
+                            if (!providerText.isBlank()) {
+                                MenuQualityGateResult providerGate = evaluateMenuOutputQuality(providerText, attachments);
+                                if (providerGate.passed) {
+                                    fullResponse.setLength(0);
+                                    fullResponse.append(providerText);
+                                    emitTextAsChatgptChunks(appId, providerText, responseMode, uiLang);
+                                    emitChatgptChatChunk(appId, Map.of(
+                                        "stage", "menu_quality_gate_provider_repaired",
+                                        "message", uiTextByLang(
+                                            uiLang,
+                                            "Provider fallback đã tạo lại menu bám nguồn dữ liệu",
+                                            "Fallback provider regenerated a menu aligned to source data",
+                                            "回退提供方已重新生成与源数据匹配的菜单"),
+                                        "tableOverlap", providerGate.tableOverlap,
+                                        "idOverlap", providerGate.idOverlap,
+                                        "genericHits", providerGate.genericHits,
+                                        "responseMode", responseMode,
+                                        "status", "running"
+                                    ));
+                                } else {
+                                    String failureJson = buildMenuGroundingFailureResponse(uiLang, gate, providerGate);
+                                    fullResponse.setLength(0);
+                                    fullResponse.append(failureJson);
+                                    emitTextAsChatgptChunks(appId, failureJson, responseMode, uiLang);
+                                }
+                            } else {
+                                String failureJson = buildMenuGroundingFailureResponse(uiLang, gate, null);
+                                fullResponse.setLength(0);
+                                fullResponse.append(failureJson);
+                                emitTextAsChatgptChunks(appId, failureJson, responseMode, uiLang);
+                            }
+                        } else {
+                            String failureJson = buildMenuGroundingFailureResponse(uiLang, gate, null);
+                            fullResponse.setLength(0);
+                            fullResponse.append(failureJson);
+                            emitTextAsChatgptChunks(appId, failureJson, responseMode, uiLang);
                         }
-                    } else {
-                        String failureJson = buildMenuGroundingFailureResponse(uiLang, gate, null);
-                        fullResponse.setLength(0);
-                        fullResponse.append(failureJson);
-                        emitTextAsCopilotChunks(appId, failureJson, responseMode, uiLang);
                     }
                 }
             }
 
-            StructuredCopilotEditResult structuredEdit = extractStructuredCopilotEdits(
+            StructuredChatgptEditResult structuredEdit = extractStructuredChatgptEdits(
                 fullResponse.toString(),
                 countLines(currentCode));
             boolean editMode = "edit".equalsIgnoreCase(responseMode);
-            boolean requireStructured = editMode && copilotStructuredEditRequired;
+            boolean requireStructured = editMode && chatgptStructuredEditRequired;
             boolean structuredValid = !requireStructured || structuredEdit.valid;
             List<Map<String, Object>> completionTextEdits = new ArrayList<>(structuredEdit.textEdits);
             String completionDraftText = "";
@@ -1656,9 +1792,9 @@ public class ApiSpringController {
                             fallbackPatchPayload.put("lineRanges", fallbackRanges);
                             fallbackPatchPayload.put("changedRanges", fallbackRanges);
                         }
-                        emitCopilotChatChunk(appId, fallbackPatchPayload);
+                        emitChatgptChatChunk(appId, fallbackPatchPayload);
 
-                        emitCopilotChatChunk(appId, Map.of(
+                        emitChatgptChatChunk(appId, Map.of(
                             "stage", "completion_fallback_edits_generated",
                             "message", uiTextByLang(
                                 uiLang,
@@ -1673,7 +1809,7 @@ public class ApiSpringController {
             }
 
             if (requireStructured && !structuredEdit.valid) {
-                emitCopilotChatChunk(appId, Map.of(
+                emitChatgptChatChunk(appId, Map.of(
                     "stage", "structured_edit_missing",
                     "message", uiTextByLang(
                         uiLang,
@@ -1710,9 +1846,9 @@ public class ApiSpringController {
                 }
             }
             completion.put("timestamp", System.currentTimeMillis());
-            emitCopilotChatEvent(appId, "copilot_chat_complete", completion);
+            emitChatgptChatEvent(appId, "chatgpt_chat_complete", completion);
 
-            gitHubModelsService.appendCopilotConversationTurn(
+            chatgptGatewayService.appendChatgptConversationTurn(
                 appId,
                 continuityScopeKey,
                 message,
@@ -1731,7 +1867,7 @@ public class ApiSpringController {
             response.set("result", Map.of("fullResponse", fullResponse.toString()));
 
         } catch (Exception e) {
-            logger.error("handleCopilotChatStream error: {}", e.getMessage(), e);
+            logger.error("handleChatgptChatStream error: {}", e.getMessage(), e);
             response.set("code", 200);
             response.set("success", false);
             String uiLang = resolveClientUiLanguage(params);
@@ -1740,16 +1876,16 @@ public class ApiSpringController {
                 "Chat streaming thất bại: " + e.getMessage(),
                 "Chat streaming failed: " + e.getMessage(),
                 "对话流式处理失败：" + e.getMessage()));
-            emitCopilotChatEvent(String.valueOf(params.getOrDefault("appId", "")), "copilot_chat_error", 
+            emitChatgptChatEvent(String.valueOf(params.getOrDefault("appId", "")), "chatgpt_chat_error", 
                 Map.of("error", e.getMessage()));
         }
     }
 
-    private void emitCopilotChatDebug(String appId, Map<String, Object> payload) {
+    private void emitChatgptChatDebug(String appId, Map<String, Object> payload) {
         if (payload == null || payload.isEmpty()) {
             return;
         }
-        emitCopilotChatEvent(appId, "copilot_chat_debug", payload);
+        emitChatgptChatEvent(appId, "chatgpt_chat_debug", payload);
     }
 
     private String resolveClientUiLanguage(Map<String, Object> params) {
@@ -2005,7 +2141,7 @@ public class ApiSpringController {
         Set<String> sourceLabels = new LinkedHashSet<>();
         collectMenuSourceSignals(attachments, sourceTables, sourceIds, sourceLabels);
 
-        String basePrompt = buildCopilotChatPromptText(
+        String basePrompt = buildChatgptChatPromptText(
             userMessage,
             currentCode,
             language,
@@ -2201,7 +2337,7 @@ public class ApiSpringController {
         }
     }
 
-    private Map<String, Object> buildCopilotDebugPayload(
+    private Map<String, Object> buildChatgptDebugPayload(
             String appId,
             String message,
             String currentCode,
@@ -2255,16 +2391,16 @@ public class ApiSpringController {
             String continuityScopeKey,
             List<String> pendingQuestions,
             List<Map<String, Object>> messages) {
-        CopilotAttachmentRetrievalResult retrieval = buildCopilotRelevantAttachmentContextResult(message, attachments);
+        ChatgptAttachmentRetrievalResult retrieval = buildChatgptRelevantAttachmentContextResult(message, attachments);
         Map<String, Object> debugMeta = new LinkedHashMap<>();
         String normalizedContextType = String.valueOf(contextType == null ? "" : contextType).trim().toLowerCase();
         int contextHardCap = "menu_json".equals(normalizedContextType)
-            ? COPILOT_MENU_CODE_CONTEXT_HARD_CAP_CHARS
-            : COPILOT_CURRENT_CODE_CONTEXT_HARD_CAP_CHARS;
+            ? CHATGPT_MENU_CODE_CONTEXT_HARD_CAP_CHARS
+            : CHATGPT_CURRENT_CODE_CONTEXT_HARD_CAP_CHARS;
         debugMeta.put("appId", String.valueOf(appId == null ? "" : appId).trim());
         debugMeta.put("contextType", String.valueOf(contextType == null ? "" : contextType).trim());
         debugMeta.put("taskType", String.valueOf(taskType == null ? "" : taskType).trim());
-        debugMeta.put("responseMode", normalizeCopilotResponseMode(responseMode, message));
+        debugMeta.put("responseMode", normalizeChatgptResponseMode(responseMode, message));
         debugMeta.put("language", String.valueOf(language == null ? "" : language).trim());
         debugMeta.put("pName", String.valueOf(pName == null ? "" : pName).trim());
         debugMeta.put("pType", pType);
@@ -2275,11 +2411,11 @@ public class ApiSpringController {
         debugMeta.put("globalContextChars", globalContext == null ? 0 : globalContext.length());
         debugMeta.put("pendingQuestionsCount", pendingQuestions == null ? 0 : pendingQuestions.size());
         debugMeta.put("attachmentCount", attachments == null ? 0 : attachments.size());
-        debugMeta.put("textAttachmentCount", countCopilotAttachmentsByKind(attachments, "text", "json"));
-        debugMeta.put("imageAttachmentCount", countCopilotAttachmentsByKind(attachments, "image"));
+        debugMeta.put("textAttachmentCount", countChatgptAttachmentsByKind(attachments, "text", "json"));
+        debugMeta.put("imageAttachmentCount", countChatgptAttachmentsByKind(attachments, "image"));
         debugMeta.put("messagesSentToCopilot", messages == null ? 0 : messages.size());
-        debugMeta.put("clientAttachmentSummary", buildCopilotAttachmentDebugSummary(attachments));
-        debugMeta.put("attachmentRetrievalEnabled", copilotAttachmentRetrievalEnabled);
+        debugMeta.put("clientAttachmentSummary", buildChatgptAttachmentDebugSummary(attachments));
+        debugMeta.put("attachmentRetrievalEnabled", chatgptAttachmentRetrievalEnabled);
         debugMeta.put("attachmentRetrievalQueryTokens", retrieval.queryTokens);
         debugMeta.put("attachmentRetrievalFilesUsed", retrieval.filesUsed);
         debugMeta.put("attachmentRetrievalSnippetsUsed", retrieval.snippetsUsed);
@@ -2289,37 +2425,37 @@ public class ApiSpringController {
         String messagesJson;
         try {
             messagesJson = objectMapper.writerWithDefaultPrettyPrinter()
-                .writeValueAsString(sanitizeCopilotDebugMessages(messages));
+                .writeValueAsString(sanitizeChatgptDebugMessages(messages));
         } catch (Exception ex) {
             messagesJson = String.valueOf(messages);
         }
         debugMeta.put("currentCodeContextHardCapChars", contextHardCap);
-        debugMeta.put("copilotTextPayloadChars", extractCopilotTextPayloadChars(messages));
+        debugMeta.put("chatgptTextPayloadChars", extractChatgptTextPayloadChars(messages));
         debugMeta.put("payloadIncludesCodeTooLargeMarker", messagesJson.contains("Code too large:"));
-        debugMeta.put("payloadIncludesTruncatedMarker", messagesJson.contains("TRUNCATED_FOR_COPILOT_CONTEXT"));
+        debugMeta.put("payloadIncludesTruncatedMarker", messagesJson.contains("TRUNCATED_FOR_CHATGPT_CONTEXT"));
 
         StringBuilder sb = new StringBuilder();
-        sb.append("[Copilot Debug] Backend payload prepared before calling model.\n\n");
+        sb.append("[ChatGPT Debug] Backend payload prepared before calling model.\n\n");
         sb.append("Client + backend context summary:\n");
         sb.append("```json\n");
-        sb.append(trimForCopilotDebugDisplay(toPrettyJson(debugMeta), COPILOT_DEBUG_MARKDOWN_MAX_CHARS / 2));
+        sb.append(trimForChatgptDebugDisplay(toPrettyJson(debugMeta), CHATGPT_DEBUG_MARKDOWN_MAX_CHARS / 2));
         sb.append("\n```\n\n");
 
-        if (copilotAttachmentRetrievalEnabled && retrieval != null && !retrieval.context.isBlank()) {
+        if (chatgptAttachmentRetrievalEnabled && retrieval != null && !retrieval.context.isBlank()) {
             sb.append("Attachment Retrieval Preview:\n");
             sb.append("```text\n");
-            sb.append(trimForCopilotDebugDisplay(retrieval.context, COPILOT_DEBUG_RETRIEVAL_PREVIEW_MAX_CHARS));
+            sb.append(trimForChatgptDebugDisplay(retrieval.context, CHATGPT_DEBUG_RETRIEVAL_PREVIEW_MAX_CHARS));
             sb.append("\n```\n\n");
         }
 
-        sb.append("Messages sent to Copilot:\n");
+        sb.append("Messages sent to ChatGPT:\n");
         sb.append("```json\n");
-        sb.append(trimForCopilotDebugDisplay(messagesJson, COPILOT_DEBUG_MESSAGES_JSON_MAX_CHARS));
+        sb.append(trimForChatgptDebugDisplay(messagesJson, CHATGPT_DEBUG_MESSAGES_JSON_MAX_CHARS));
         sb.append("\n```\n");
-        return trimForCopilotDebugDisplay(sb.toString(), COPILOT_DEBUG_MARKDOWN_MAX_CHARS);
+        return trimForChatgptDebugDisplay(sb.toString(), CHATGPT_DEBUG_MARKDOWN_MAX_CHARS);
     }
 
-    private int extractCopilotTextPayloadChars(List<Map<String, Object>> messages) {
+    private int extractChatgptTextPayloadChars(List<Map<String, Object>> messages) {
         if (messages == null || messages.isEmpty()) {
             return 0;
         }
@@ -2361,7 +2497,7 @@ public class ApiSpringController {
         }
     }
 
-    private int countCopilotAttachmentsByKind(List<Map<String, Object>> attachments, String... kinds) {
+    private int countChatgptAttachmentsByKind(List<Map<String, Object>> attachments, String... kinds) {
         if (attachments == null || attachments.isEmpty() || kinds == null || kinds.length == 0) {
             return 0;
         }
@@ -2376,7 +2512,7 @@ public class ApiSpringController {
         return count;
     }
 
-    private List<Map<String, Object>> buildCopilotAttachmentDebugSummary(List<Map<String, Object>> attachments) {
+    private List<Map<String, Object>> buildChatgptAttachmentDebugSummary(List<Map<String, Object>> attachments) {
         List<Map<String, Object>> summary = new ArrayList<>();
         if (attachments == null || attachments.isEmpty()) {
             return summary;
@@ -2400,14 +2536,14 @@ public class ApiSpringController {
             }
             String dataUrl = String.valueOf(attachment.getOrDefault("dataUrl", "")).trim();
             if (!dataUrl.isEmpty()) {
-                item.put("imageSource", sanitizeCopilotDebugImageUrl(dataUrl));
+                item.put("imageSource", sanitizeChatgptDebugImageUrl(dataUrl));
             }
             summary.add(item);
         }
         return summary;
     }
 
-    private String buildCopilotAttachmentRequestLogLine(List<Map<String, Object>> attachments) {
+    private String buildChatgptAttachmentRequestLogLine(List<Map<String, Object>> attachments) {
         if (attachments == null || attachments.isEmpty()) {
             return "[]";
         }
@@ -2431,7 +2567,7 @@ public class ApiSpringController {
         return "[" + String.join(", ", parts) + "]";
     }
 
-    private List<Map<String, Object>> sanitizeCopilotDebugMessages(List<Map<String, Object>> messages) {
+    private List<Map<String, Object>> sanitizeChatgptDebugMessages(List<Map<String, Object>> messages) {
         List<Map<String, Object>> sanitized = new ArrayList<>();
         if (messages == null || messages.isEmpty()) {
             return sanitized;
@@ -2442,23 +2578,23 @@ public class ApiSpringController {
             }
             Map<String, Object> next = new LinkedHashMap<>();
             for (Map.Entry<String, Object> entry : message.entrySet()) {
-                next.put(entry.getKey(), sanitizeCopilotDebugValue(entry.getValue()));
+                next.put(entry.getKey(), sanitizeChatgptDebugValue(entry.getValue()));
             }
             sanitized.add(next);
         }
         return sanitized;
     }
 
-    private Object sanitizeCopilotDebugValue(Object value) {
+    private Object sanitizeChatgptDebugValue(Object value) {
         if (value instanceof Map<?, ?> rawMap) {
             Map<String, Object> sanitized = new LinkedHashMap<>();
             for (Map.Entry<?, ?> entry : rawMap.entrySet()) {
                 String key = String.valueOf(entry.getKey());
                 Object nextValue = entry.getValue();
                 if ("url".equals(key) && nextValue instanceof String urlText) {
-                    sanitized.put(key, sanitizeCopilotDebugImageUrl(urlText));
+                    sanitized.put(key, sanitizeChatgptDebugImageUrl(urlText));
                 } else {
-                    sanitized.put(key, sanitizeCopilotDebugValue(nextValue));
+                    sanitized.put(key, sanitizeChatgptDebugValue(nextValue));
                 }
             }
             return sanitized;
@@ -2466,30 +2602,30 @@ public class ApiSpringController {
         if (value instanceof List<?> rawList) {
             List<Object> sanitized = new ArrayList<>();
             for (Object item : rawList) {
-                sanitized.add(sanitizeCopilotDebugValue(item));
+                sanitized.add(sanitizeChatgptDebugValue(item));
             }
             return sanitized;
         }
         if (value instanceof String text) {
             if (text.startsWith("data:image/")) {
-                return sanitizeCopilotDebugImageUrl(text);
+                return sanitizeChatgptDebugImageUrl(text);
             }
             return text;
         }
         return value;
     }
 
-    private String sanitizeCopilotDebugImageUrl(String url) {
+    private String sanitizeChatgptDebugImageUrl(String url) {
         String value = String.valueOf(url == null ? "" : url).trim();
         if (value.startsWith("data:image/")) {
             int commaIndex = value.indexOf(',');
             String header = commaIndex > 0 ? value.substring(0, commaIndex) : "data:image/*;base64";
             return header + ",[omitted:" + value.length() + " chars]";
         }
-        return trimForCopilotDebugDisplay(value, 240);
+        return trimForChatgptDebugDisplay(value, 240);
     }
 
-    private String trimForCopilotDebugDisplay(String text, int maxChars) {
+    private String trimForChatgptDebugDisplay(String text, int maxChars) {
         String value = String.valueOf(text == null ? "" : text);
         if (maxChars <= 0 || value.length() <= maxChars) {
             return value;
@@ -2504,7 +2640,7 @@ public class ApiSpringController {
         return head + "\n...[TRUNCATED_FOR_DEBUG]...\n" + tail;
     }
 
-    private List<Map<String, Object>> buildCopilotChatMessages(
+    private List<Map<String, Object>> buildChatgptChatMessages(
             String appId,
             String message,
             String currentCode,
@@ -2520,8 +2656,8 @@ public class ApiSpringController {
             String continuityScopeKey,
             List<String> pendingQuestions) {
         String normalizedContext = String.valueOf(contextType == null ? "code" : contextType).trim().toLowerCase();
-        String normalizedMode = normalizeCopilotResponseMode(responseMode, message);
-        String menuKnowledge = this.gitHubModelsService.buildCopilotMenuKnowledgeBlock(appId, normalizedContext, taskType);
+        String normalizedMode = normalizeChatgptResponseMode(responseMode, message);
+        String menuKnowledge = this.chatgptGatewayService.buildChatgptMenuKnowledgeBlock(appId, normalizedContext, taskType);
         String systemPrompt;
         if ("menu_json".equals(normalizedContext)) {
             systemPrompt = String.join("\n",
@@ -2555,7 +2691,7 @@ public class ApiSpringController {
                 + "When user asks to modify, return directly applicable code/JSON with minimal commentary.";
         }
 
-        Object userContent = buildCopilotUserContent(
+        Object userContent = buildChatgptUserContent(
             message,
             currentCode,
             language,
@@ -2574,7 +2710,7 @@ public class ApiSpringController {
         return messages;
     }
 
-    private Object buildCopilotUserContent(
+    private Object buildChatgptUserContent(
             String message,
             String currentCode,
             String language,
@@ -2587,7 +2723,7 @@ public class ApiSpringController {
             Integer pType,
             String continuityScopeKey,
             List<String> pendingQuestions) {
-        String promptText = buildCopilotChatPromptText(
+        String promptText = buildChatgptChatPromptText(
             message,
             currentCode,
             language,
@@ -2623,7 +2759,7 @@ public class ApiSpringController {
         return content;
     }
 
-    private String buildCopilotChatPromptText(String message, String currentCode, String language, String contextType,
+    private String buildChatgptChatPromptText(String message, String currentCode, String language, String contextType,
             String responseMode,
             List<Map<String, Object>> attachments,
             String continuityMemory,
@@ -2635,7 +2771,7 @@ public class ApiSpringController {
             boolean includeSystemHeader) {
         StringBuilder sb = new StringBuilder();
         String normalizedContext = String.valueOf(contextType == null ? "code" : contextType).trim().toLowerCase();
-        String normalizedMode = normalizeCopilotResponseMode(responseMode, message);
+        String normalizedMode = normalizeChatgptResponseMode(responseMode, message);
         if (includeSystemHeader) {
             if ("menu_json".equals(normalizedContext)) {
                 // Try to use the custom instructions file (reduces repeated token cost for static rules)
@@ -2669,7 +2805,7 @@ public class ApiSpringController {
                 sb.append("Response mode: analyze_only. Return text analysis only, no direct replacement code or JSON output unless explicitly requested.\n\n");
             } else {
                 sb.append("Response mode: edit_allowed. If user asks to modify, provide directly applicable code/JSON result.\n");
-                if (copilotAskBeforeEditEnabled) {
+                if (chatgptAskBeforeEditEnabled) {
                     sb.append("Before any patch/code output, include section 'UNDERSTANDING_CHECKLIST' with:\n");
                     sb.append("- Goal in 1-2 lines\n");
                     sb.append("- Exact scope (files/symbols/regions)\n");
@@ -2678,7 +2814,7 @@ public class ApiSpringController {
                 } else {
                     sb.append("\n");
                 }
-                if (copilotStructuredEditRequired) {
+                if (chatgptStructuredEditRequired) {
                     sb.append("STRUCTURED_EDIT_OUTPUT (required for apply):\n");
                     sb.append("Return JSON object only (no markdown fences) using this shape:\n");
                     sb.append("{\n");
@@ -2732,11 +2868,11 @@ public class ApiSpringController {
         }
         
         if (!currentCode.trim().isEmpty()) {
-            sb.append(buildCopilotActiveEditorContextBlock(currentCode, message, normalizedContext, language, pName));
+            sb.append(buildChatgptActiveEditorContextBlock(currentCode, message, normalizedContext, language, pName));
         }
 
         if (!attachments.isEmpty()) {
-            sb.append(buildCopilotAttachmentContextBlock(message, attachments, normalizedContext, language));
+            sb.append(buildChatgptAttachmentContextBlock(message, attachments, normalizedContext, language));
         }
 
         sb.append("Context type: ").append(normalizedContext).append("\n");
@@ -2744,7 +2880,7 @@ public class ApiSpringController {
         return sb.toString();
     }
 
-    private String buildCopilotQuickProbePromptText(
+    private String buildChatgptQuickProbePromptText(
             String message,
             String currentCode,
             String language,
@@ -2757,7 +2893,7 @@ public class ApiSpringController {
             Integer pType,
             String continuityScopeKey,
             List<String> pendingQuestions) {
-        String fullPrompt = buildCopilotChatPromptText(
+        String fullPrompt = buildChatgptChatPromptText(
             message,
             currentCode,
             language,
@@ -2771,7 +2907,7 @@ public class ApiSpringController {
             continuityScopeKey,
             pendingQuestions,
             true);
-        int maxChars = Math.max(8000, copilotMenuGithubProbeMaxPromptChars);
+        int maxChars = Math.max(8000, chatgptMenuPrimaryProbeMaxPromptChars);
         if (fullPrompt.length() <= maxChars) {
             return fullPrompt;
         }
@@ -2796,7 +2932,7 @@ public class ApiSpringController {
         }
     }
 
-    private String buildCopilotContinuityScopeKey(String contextType, String language, String pName, Integer pType) {
+    private String buildChatgptContinuityScopeKey(String contextType, String language, String pName, Integer pType) {
         String normalizedContext = normalizeScopeToken(contextType, "code");
         String normalizedLanguage = normalizeScopeToken(language, "javascript");
         String normalizedPName = normalizeScopeToken(pName, "unsaved");
@@ -2819,7 +2955,7 @@ public class ApiSpringController {
         return normalized.isEmpty() ? fallback : normalized;
     }
 
-    private boolean isMenuCopilotFlow(String contextType, String taskType) {
+    private boolean isMenuChatgptFlow(String contextType, String taskType) {
         String normalizedContext = String.valueOf(contextType == null ? "" : contextType).trim().toLowerCase();
         String normalizedTask = String.valueOf(taskType == null ? "" : taskType).trim().toLowerCase();
         return "menu_json".equals(normalizedContext)
@@ -2830,41 +2966,41 @@ public class ApiSpringController {
             || "menu".equals(normalizedTask);
     }
 
-    private String normalizeCopilotFlowType(String flowType, String contextType, String taskType) {
+    private String normalizeChatgptFlowType(String flowType, String contextType, String taskType) {
         String normalized = String.valueOf(flowType == null ? "" : flowType).trim().toLowerCase();
         if ("menu_manager".equals(normalized) || "code_editor".equals(normalized)) {
             return normalized;
         }
-        return isMenuCopilotFlow(contextType, taskType) ? "menu_manager" : "code_editor";
+        return isMenuChatgptFlow(contextType, taskType) ? "menu_manager" : "code_editor";
     }
 
-    private String trimCopilotContinuityMemory(String memory) {
+    private String trimChatgptContinuityMemory(String memory) {
         String text = String.valueOf(memory == null ? "" : memory).trim();
         if (text.isEmpty()) return "";
-        if (text.length() <= COPILOT_CONTINUITY_MEMORY_MAX_CHARS) return text;
-        return text.substring(text.length() - COPILOT_CONTINUITY_MEMORY_MAX_CHARS);
+        if (text.length() <= CHATGPT_CONTINUITY_MEMORY_MAX_CHARS) return text;
+        return text.substring(text.length() - CHATGPT_CONTINUITY_MEMORY_MAX_CHARS);
     }
 
-    private String buildCopilotCurrentCodeContext(String currentCode, String message, String contextType, String language) {
+    private String buildChatgptCurrentCodeContext(String currentCode, String message, String contextType, String language) {
         String code = currentCode == null ? "" : currentCode;
         boolean isMenuContext = "menu_json".equalsIgnoreCase(String.valueOf(contextType == null ? "" : contextType).trim());
 
-        int maxChars = isMenuContext ? COPILOT_MENU_CODE_MAX_CHARS : COPILOT_CURRENT_CODE_MAX_CHARS;
-        int headChars = isMenuContext ? COPILOT_MENU_CODE_HEAD_CHARS : COPILOT_CURRENT_CODE_HEAD_CHARS;
-        int tailChars = isMenuContext ? COPILOT_MENU_CODE_TAIL_CHARS : COPILOT_CURRENT_CODE_TAIL_CHARS;
-        int focusWindowChars = isMenuContext ? COPILOT_MENU_CODE_FOCUS_WINDOW_CHARS : COPILOT_CURRENT_CODE_FOCUS_WINDOW_CHARS;
-        int hardCapChars = isMenuContext ? COPILOT_MENU_CODE_CONTEXT_HARD_CAP_CHARS : COPILOT_CURRENT_CODE_CONTEXT_HARD_CAP_CHARS;
+        int maxChars = isMenuContext ? CHATGPT_MENU_CODE_MAX_CHARS : CHATGPT_CURRENT_CODE_MAX_CHARS;
+        int headChars = isMenuContext ? CHATGPT_MENU_CODE_HEAD_CHARS : CHATGPT_CURRENT_CODE_HEAD_CHARS;
+        int tailChars = isMenuContext ? CHATGPT_MENU_CODE_TAIL_CHARS : CHATGPT_CURRENT_CODE_TAIL_CHARS;
+        int focusWindowChars = isMenuContext ? CHATGPT_MENU_CODE_FOCUS_WINDOW_CHARS : CHATGPT_CURRENT_CODE_FOCUS_WINDOW_CHARS;
+        int hardCapChars = isMenuContext ? CHATGPT_MENU_CODE_CONTEXT_HARD_CAP_CHARS : CHATGPT_CURRENT_CODE_CONTEXT_HARD_CAP_CHARS;
 
         boolean useLargeCodeMode = !isMenuContext
-            && copilotCodeLargeContextEnabled
-            && code.length() > Math.max(100000, copilotCodeLargeThresholdChars);
+            && chatgptCodeLargeContextEnabled
+            && code.length() > Math.max(100000, chatgptCodeLargeThresholdChars);
         if (useLargeCodeMode) {
-            List<String> focusExcerpts = buildCopilotFocusExcerpts(code, message, Math.max(12000, focusWindowChars));
+            List<String> focusExcerpts = buildChatgptFocusExcerpts(code, message, Math.max(12000, focusWindowChars));
             List<String> distributedExcerpts = buildCodeDistributedCoverageExcerpts(
                 code,
-                COPILOT_CODE_DISTRIBUTED_EXCERPT_MAX_ITEMS,
-                COPILOT_CODE_DISTRIBUTED_EXCERPT_CHARS);
-            String globalMap = buildCopilotGlobalCodeMap(code, language);
+                CHATGPT_CODE_DISTRIBUTED_EXCERPT_MAX_ITEMS,
+                CHATGPT_CODE_DISTRIBUTED_EXCERPT_CHARS);
+            String globalMap = buildChatgptGlobalCodeMap(code, language);
 
             int lineCount = countLines(code);
             String fingerprint = Integer.toHexString(code.hashCode());
@@ -2903,9 +3039,9 @@ public class ApiSpringController {
             sb.append("/* ===== HEAD STABILIZER ===== */\n").append(head).append("\n");
             sb.append("/* ===== TAIL STABILIZER ===== */\n").append(tail);
             String packaged = sb.toString();
-            String trimmed = trimCopilotCodeContext(packaged, Math.max(hardCapChars, 180000));
+            String trimmed = trimChatgptCodeContext(packaged, Math.max(hardCapChars, 180000));
             double ratio = code.isEmpty() ? 1.0 : ((double) trimmed.length() / (double) code.length());
-            logger.info("Copilot large-code context pack: inputChars={} packagedChars={} finalChars={} ratio={} fileHash={}",
+            logger.info("ChatGPT large-code context pack: inputChars={} packagedChars={} finalChars={} ratio={} fileHash={}",
                 code.length(),
                 packaged.length(),
                 trimmed.length(),
@@ -2915,15 +3051,15 @@ public class ApiSpringController {
         }
 
         if (code.length() <= maxChars) {
-            return trimCopilotCodeContext(code, hardCapChars);
+            return trimChatgptCodeContext(code, hardCapChars);
         }
 
         int safeHead = Math.max(1000, Math.min(headChars, code.length()));
         int safeTail = Math.max(1000, Math.min(tailChars, Math.max(0, code.length() - safeHead)));
         String head = code.substring(0, safeHead);
         String tail = code.substring(Math.max(0, code.length() - safeTail));
-        List<String> focusExcerpts = buildCopilotFocusExcerpts(code, message, focusWindowChars);
-        String globalMap = buildCopilotGlobalCodeMap(code, language);
+        List<String> focusExcerpts = buildChatgptFocusExcerpts(code, message, focusWindowChars);
+        String globalMap = buildChatgptGlobalCodeMap(code, language);
 
         StringBuilder sb = new StringBuilder();
         sb.append("/* Code too large: ").append(code.length())
@@ -2947,10 +3083,10 @@ public class ApiSpringController {
         }
         sb.append("/* ===== TAIL EXCERPT ===== */\n");
         sb.append(tail);
-        return trimCopilotCodeContext(sb.toString(), hardCapChars);
+        return trimChatgptCodeContext(sb.toString(), hardCapChars);
     }
 
-    private String buildCopilotActiveEditorContextBlock(
+    private String buildChatgptActiveEditorContextBlock(
             String currentCode,
             String message,
             String contextType,
@@ -2959,7 +3095,7 @@ public class ApiSpringController {
         String normalizedContext = String.valueOf(contextType == null ? "code" : contextType).trim().toLowerCase();
         String normalizedPName = String.valueOf(pName == null ? "" : pName).trim();
         String normalizedLanguage = String.valueOf(language == null ? "" : language).trim();
-        String contextualCode = buildCopilotCurrentCodeContext(currentCode, message, normalizedContext, normalizedLanguage);
+        String contextualCode = buildChatgptCurrentCodeContext(currentCode, message, normalizedContext, normalizedLanguage);
         StringBuilder sb = new StringBuilder();
 
         if ("menu_json".equals(normalizedContext)) {
@@ -2989,7 +3125,7 @@ public class ApiSpringController {
         return sb.toString();
     }
 
-    private String buildCopilotAttachmentContextBlock(
+    private String buildChatgptAttachmentContextBlock(
             String message,
             List<Map<String, Object>> attachments,
             String contextType,
@@ -3028,7 +3164,7 @@ public class ApiSpringController {
             return sb.append("\n").toString();
         }
 
-        CopilotAttachmentRetrievalResult retrieval = buildCopilotRelevantAttachmentContextResult(message, attachments);
+        ChatgptAttachmentRetrievalResult retrieval = buildChatgptRelevantAttachmentContextResult(message, attachments);
         if (!retrieval.context.isBlank()) {
             sb.append("\nAuto-retrieved relevant excerpts from text attachments:\n");
             sb.append(retrieval.context).append("\n\n");
@@ -3052,11 +3188,11 @@ public class ApiSpringController {
             String mimeType = String.valueOf(attachment.getOrDefault("mimeType", "")).trim();
             String section = renderAttachmentSection(name, mimeType, attachment, body);
             String contextRole = resolveAttachmentContextRole(attachment, name, mimeType, "menu_json");
-            if ("system_requirement".equals(contextRole) || isCopilotMarkdownLikeAttachment(name, mimeType)) {
+            if ("system_requirement".equals(contextRole) || isChatgptMarkdownLikeAttachment(name, mimeType)) {
                 requirementSections.add(section);
-            } else if ("legacy_json".equals(contextRole) || isCopilotJsonLikeAttachment(name, mimeType)) {
+            } else if ("legacy_json".equals(contextRole) || isChatgptJsonLikeAttachment(name, mimeType)) {
                 legacyJsonSections.add(section);
-            } else if ("business_logic".equals(contextRole) || isCopilotCodeLikeAttachment(name, mimeType)) {
+            } else if ("business_logic".equals(contextRole) || isChatgptCodeLikeAttachment(name, mimeType)) {
                 logicSections.add(section);
             }
         }
@@ -3078,7 +3214,7 @@ public class ApiSpringController {
             sb.append(String.join("\n\n", logicSections)).append("\n\n");
         }
 
-        return trimCopilotCodeContext(sb.toString(), COPILOT_MENU_ATTACHMENT_CONTEXT_MAX_CHARS).trim();
+        return trimChatgptCodeContext(sb.toString(), CHATGPT_MENU_ATTACHMENT_CONTEXT_MAX_CHARS).trim();
     }
 
     private String buildCodeAttachmentContextPack(String message, List<Map<String, Object>> attachments, String language) {
@@ -3094,13 +3230,13 @@ public class ApiSpringController {
             String mimeType = String.valueOf(attachment.getOrDefault("mimeType", "")).trim();
             String section = renderAttachmentSection(name, mimeType, attachment, body);
             String contextRole = resolveAttachmentContextRole(attachment, name, mimeType, "code");
-            if ("system_requirement".equals(contextRole) || isCopilotMarkdownLikeAttachment(name, mimeType)) {
+            if ("system_requirement".equals(contextRole) || isChatgptMarkdownLikeAttachment(name, mimeType)) {
                 requirementSections.add(section);
             } else if ("reference_code".equals(contextRole)
                 || "business_logic".equals(contextRole)
                 || "legacy_json".equals(contextRole)
-                || isCopilotCodeLikeAttachment(name, mimeType)
-                || isCopilotJsonLikeAttachment(name, mimeType)) {
+                || isChatgptCodeLikeAttachment(name, mimeType)
+                || isChatgptJsonLikeAttachment(name, mimeType)) {
                 referenceSections.add(section);
             }
         }
@@ -3117,9 +3253,9 @@ public class ApiSpringController {
             sb.append(String.join("\n\n", referenceSections)).append("\n\n");
         }
 
-        String pack = trimCopilotCodeContext(sb.toString(), COPILOT_CODE_ATTACHMENT_CONTEXT_MAX_CHARS).trim();
+        String pack = trimChatgptCodeContext(sb.toString(), CHATGPT_CODE_ATTACHMENT_CONTEXT_MAX_CHARS).trim();
         if (pack.isBlank()) {
-            CopilotAttachmentRetrievalResult retrieval = buildCopilotRelevantAttachmentContextResult(message, attachments);
+            ChatgptAttachmentRetrievalResult retrieval = buildChatgptRelevantAttachmentContextResult(message, attachments);
             if (!retrieval.context.isBlank()) {
                 return "AUTO-RETRIEVED RELEVANT EXCERPTS\n" + retrieval.context.trim();
             }
@@ -3145,33 +3281,33 @@ public class ApiSpringController {
 
         // DATA DISTILLATION: for large JSON attachments in menu_json context, distill instead of truncate
         boolean isMenuContext = "menu_json".equalsIgnoreCase(String.valueOf(contextType == null ? "" : contextType).trim());
-        boolean isJsonAttachment = isCopilotJsonLikeAttachment(name, mimeType) || "legacy_json".equals(contextRole) || "json".equals(kind);
-        int distillThreshold = Math.max(20000, copilotMenuDistillThresholdChars);
-        if (isMenuContext && isJsonAttachment && copilotMenuDistillLargeJson && textContent.length() > distillThreshold) {
+        boolean isJsonAttachment = isChatgptJsonLikeAttachment(name, mimeType) || "legacy_json".equals(contextRole) || "json".equals(kind);
+        int distillThreshold = Math.max(20000, chatgptMenuDistillThresholdChars);
+        if (isMenuContext && isJsonAttachment && chatgptMenuDistillLargeJson && textContent.length() > distillThreshold) {
             try {
-                String distilled = copilotMemoryManagerService.distillJsonForMenu(name, textContent);
+                String distilled = chatgptMemoryManagerService.distillJsonForMenu(name, textContent);
                 if (!distilled.isBlank()) {
-                    logger.info("Copilot attachment distillation: {} chars→{} chars for {}", textContent.length(), distilled.length(), name);
+                    logger.info("ChatGPT attachment distillation: {} chars→{} chars for {}", textContent.length(), distilled.length(), name);
                     return distilled;
                 }
             } catch (Exception ex) {
-                logger.warn("Copilot attachment distillation error for {}: {} — using truncation", name, ex.getMessage());
+                logger.warn("ChatGPT attachment distillation error for {}: {} — using truncation", name, ex.getMessage());
             }
         }
 
         if ("system_requirement".equals(contextRole)
             || "legacy_json".equals(contextRole)
-            || isCopilotJsonLikeAttachment(name, mimeType)
-            || isCopilotMarkdownLikeAttachment(name, mimeType)) {
-            return trimCopilotCodeContext(textContent, Math.min(COPILOT_MENU_ATTACHMENT_CONTEXT_MAX_CHARS / 2, 90000));
+            || isChatgptJsonLikeAttachment(name, mimeType)
+            || isChatgptMarkdownLikeAttachment(name, mimeType)) {
+            return trimChatgptCodeContext(textContent, Math.min(CHATGPT_MENU_ATTACHMENT_CONTEXT_MAX_CHARS / 2, 90000));
         }
         if ("business_logic".equals(contextRole)
             || "reference_code".equals(contextRole)
-            || isCopilotCodeLikeAttachment(name, mimeType)) {
-            String inferredLanguage = inferCopilotAttachmentLanguage(name, mimeType, contextType);
-            return buildCopilotCurrentCodeContext(textContent, message, "code", inferredLanguage);
+            || isChatgptCodeLikeAttachment(name, mimeType)) {
+            String inferredLanguage = inferChatgptAttachmentLanguage(name, mimeType, contextType);
+            return buildChatgptCurrentCodeContext(textContent, message, "code", inferredLanguage);
         }
-        return trimCopilotCodeContext(textContent, 24000);
+        return trimChatgptCodeContext(textContent, 24000);
     }
 
     private String renderAttachmentSection(String name, String mimeType, Map<String, Object> attachment, String body) {
@@ -3196,7 +3332,7 @@ public class ApiSpringController {
         return sb.toString();
     }
 
-    private boolean isCopilotMarkdownLikeAttachment(String name, String mimeType) {
+    private boolean isChatgptMarkdownLikeAttachment(String name, String mimeType) {
         String normalizedName = String.valueOf(name == null ? "" : name).trim().toLowerCase();
         String normalizedMimeType = String.valueOf(mimeType == null ? "" : mimeType).trim().toLowerCase();
         return normalizedMimeType.contains("markdown")
@@ -3210,7 +3346,7 @@ public class ApiSpringController {
             || normalizedName.contains("system");
     }
 
-    private boolean isCopilotJsonLikeAttachment(String name, String mimeType) {
+    private boolean isChatgptJsonLikeAttachment(String name, String mimeType) {
         String normalizedName = String.valueOf(name == null ? "" : name).trim().toLowerCase();
         String normalizedMimeType = String.valueOf(mimeType == null ? "" : mimeType).trim().toLowerCase();
         return normalizedMimeType.contains("json")
@@ -3223,15 +3359,15 @@ public class ApiSpringController {
         if (!explicit.isEmpty()) {
             return explicit;
         }
-        if (isCopilotMarkdownLikeAttachment(name, mimeType)) {
+        if (isChatgptMarkdownLikeAttachment(name, mimeType)) {
             return "system_requirement";
         }
-        if (isCopilotJsonLikeAttachment(name, mimeType)) {
+        if (isChatgptJsonLikeAttachment(name, mimeType)) {
             return "menu_json".equalsIgnoreCase(String.valueOf(contextType == null ? "" : contextType).trim())
                 ? "legacy_json"
                 : "reference_code";
         }
-        if (isCopilotCodeLikeAttachment(name, mimeType)) {
+        if (isChatgptCodeLikeAttachment(name, mimeType)) {
             return "menu_json".equalsIgnoreCase(String.valueOf(contextType == null ? "" : contextType).trim())
                 ? "business_logic"
                 : "reference_code";
@@ -3239,7 +3375,7 @@ public class ApiSpringController {
         return "general_text";
     }
 
-    private String inferCopilotAttachmentLanguage(String name, String mimeType, String fallbackContext) {
+    private String inferChatgptAttachmentLanguage(String name, String mimeType, String fallbackContext) {
         String normalizedName = String.valueOf(name == null ? "" : name).trim().toLowerCase();
         String normalizedMimeType = String.valueOf(mimeType == null ? "" : mimeType).trim().toLowerCase();
         if (normalizedName.endsWith(".java") || normalizedMimeType.contains("java")) return "java";
@@ -3253,7 +3389,7 @@ public class ApiSpringController {
         return "menu_json".equalsIgnoreCase(String.valueOf(fallbackContext == null ? "" : fallbackContext).trim()) ? "javascript" : "text";
     }
 
-    private String trimCopilotCodeContext(String context, int hardCapChars) {
+    private String trimChatgptCodeContext(String context, int hardCapChars) {
         String text = String.valueOf(context == null ? "" : context);
         int safeHardCap = Math.max(12000, hardCapChars);
         if (text.length() <= safeHardCap) {
@@ -3268,10 +3404,10 @@ public class ApiSpringController {
 
         String head = text.substring(0, Math.min(keepHead, text.length()));
         String tail = text.substring(Math.max(0, text.length() - keepTail));
-        return head + "\n...[TRUNCATED_FOR_COPILOT_CONTEXT]...\n" + tail;
+        return head + "\n...[TRUNCATED_FOR_CHATGPT_CONTEXT]...\n" + tail;
     }
 
-    private String buildCopilotGlobalCodeMap(String code, String language) {
+    private String buildChatgptGlobalCodeMap(String code, String language) {
         String source = String.valueOf(code == null ? "" : code);
         if (source.isBlank()) {
             return "";
@@ -3281,8 +3417,8 @@ public class ApiSpringController {
         int totalLines = source.split("\\r?\\n", -1).length;
         int nonEmptyLines = countNonEmptyLines(source);
 
-        List<String> symbolLines = extractCodeSymbolLines(source, language, COPILOT_CODE_GLOBAL_SYMBOL_MAX_ITEMS);
-        List<String> anchorLines = buildCodeAnchorLines(source, COPILOT_CODE_ANCHOR_CHARS_PER_BLOCK, COPILOT_CODE_ANCHOR_MAX_ITEMS);
+        List<String> symbolLines = extractCodeSymbolLines(source, language, CHATGPT_CODE_GLOBAL_SYMBOL_MAX_ITEMS);
+        List<String> anchorLines = buildCodeAnchorLines(source, CHATGPT_CODE_ANCHOR_CHARS_PER_BLOCK, CHATGPT_CODE_ANCHOR_MAX_ITEMS);
 
         StringBuilder sb = new StringBuilder();
         sb.append("language=").append(String.valueOf(language == null ? "" : language).trim())
@@ -3305,7 +3441,7 @@ public class ApiSpringController {
             }
         }
 
-        return trimCopilotCodeContext(sb.toString(), COPILOT_CODE_GLOBAL_MAP_MAX_CHARS);
+        return trimChatgptCodeContext(sb.toString(), CHATGPT_CODE_GLOBAL_MAP_MAX_CHARS);
     }
 
     private int countNonEmptyLines(String text) {
@@ -3451,7 +3587,7 @@ public class ApiSpringController {
         return out;
     }
 
-    private List<String> buildCopilotFocusExcerpts(String code, String message, int focusWindowChars) {
+    private List<String> buildChatgptFocusExcerpts(String code, String message, int focusWindowChars) {
         List<String> excerpts = new ArrayList<>();
         if (message == null || message.isBlank() || code == null || code.isBlank()) {
             return excerpts;
@@ -3506,7 +3642,7 @@ public class ApiSpringController {
             int endLine = estimateLineAt(code, Math.max(start, end - 1));
             String excerpt = code.substring(start, end);
             excerpts.add("/* lines " + startLine + "-" + endLine + " */\n" + excerpt);
-            if (excerpts.size() >= COPILOT_CODE_FOCUS_EXCERPT_MAX_ITEMS) {
+            if (excerpts.size() >= CHATGPT_CODE_FOCUS_EXCERPT_MAX_ITEMS) {
                 break;
             }
         }
@@ -3523,7 +3659,7 @@ public class ApiSpringController {
                 .trim();
     }
 
-    private static class CopilotAttachmentRetrievalResult {
+    private static class ChatgptAttachmentRetrievalResult {
         String context = "";
         int filesUsed = 0;
         int snippetsUsed = 0;
@@ -3532,18 +3668,18 @@ public class ApiSpringController {
         List<Map<String, Object>> sources = new ArrayList<>();
     }
 
-    private CopilotAttachmentRetrievalResult buildCopilotRelevantAttachmentContextResult(
+    private ChatgptAttachmentRetrievalResult buildChatgptRelevantAttachmentContextResult(
             String message,
             List<Map<String, Object>> attachments) {
-        CopilotAttachmentRetrievalResult result = new CopilotAttachmentRetrievalResult();
-        if (!copilotAttachmentRetrievalEnabled || attachments == null || attachments.isEmpty()) {
+        ChatgptAttachmentRetrievalResult result = new ChatgptAttachmentRetrievalResult();
+        if (!chatgptAttachmentRetrievalEnabled || attachments == null || attachments.isEmpty()) {
             return result;
         }
 
-        int maxAttachments = Math.max(1, copilotAttachmentRetrievalMaxAttachments);
-        int maxSnippetsPerFile = Math.max(1, copilotAttachmentRetrievalMaxSnippetsPerFile);
-        int snippetWindowChars = Math.max(600, copilotAttachmentRetrievalSnippetWindowChars);
-        int maxTotalChars = Math.max(4000, copilotAttachmentRetrievalMaxTotalChars);
+        int maxAttachments = Math.max(1, chatgptAttachmentRetrievalMaxAttachments);
+        int maxSnippetsPerFile = Math.max(1, chatgptAttachmentRetrievalMaxSnippetsPerFile);
+        int snippetWindowChars = Math.max(600, chatgptAttachmentRetrievalSnippetWindowChars);
+        int maxTotalChars = Math.max(4000, chatgptAttachmentRetrievalMaxTotalChars);
 
         // Full-context mode limits: inject the entire file when fullContext=true or when
         // the file is a small-enough JSON/MD reference document (< threshold).
@@ -3552,7 +3688,7 @@ public class ApiSpringController {
         final int FULL_CONTEXT_BUDGET_TOTAL   = 400_000;   // total budget for all full-context files
         int fullContextBudgetUsed = 0;
 
-        List<String> queryTokens = extractCopilotRetrievalTokens(message);
+        List<String> queryTokens = extractChatgptRetrievalTokens(message);
         result.queryTokens = queryTokens;
         StringBuilder sbFull    = new StringBuilder(); // full-context files go first
         StringBuilder sbSnippet = new StringBuilder(); // snippet files go after
@@ -3583,7 +3719,7 @@ public class ApiSpringController {
                 && ("json".equals(kind)
                     || name.toLowerCase().endsWith(".md")
                     || name.toLowerCase().endsWith(".json")
-                    || isCopilotCodeLikeAttachment(name, String.valueOf(attachment.getOrDefault("mimeType", ""))));
+                    || isChatgptCodeLikeAttachment(name, String.valueOf(attachment.getOrDefault("mimeType", ""))));
 
             if ((explicitFull || authoritative || autoFull) && fullContextBudgetUsed < FULL_CONTEXT_BUDGET_TOTAL) {
                 int allowed = Math.min(FULL_CONTEXT_PER_FILE_LIMIT, FULL_CONTEXT_BUDGET_TOTAL - fullContextBudgetUsed);
@@ -3657,7 +3793,7 @@ public class ApiSpringController {
         return result;
     }
 
-    private boolean isCopilotCodeLikeAttachment(String name, String mimeType) {
+    private boolean isChatgptCodeLikeAttachment(String name, String mimeType) {
         String normalizedName = String.valueOf(name == null ? "" : name).trim().toLowerCase();
         String normalizedMimeType = String.valueOf(mimeType == null ? "" : mimeType).trim().toLowerCase();
         if (normalizedMimeType.startsWith("text/")) {
@@ -3690,7 +3826,7 @@ public class ApiSpringController {
             || normalizedName.endsWith(".properties");
     }
 
-    private List<String> extractCopilotRetrievalTokens(String message) {
+    private List<String> extractChatgptRetrievalTokens(String message) {
         String normalized = normalizeSearchText(message);
         List<String> tokens = new ArrayList<>();
         if (normalized.isBlank()) {
@@ -3803,7 +3939,7 @@ public class ApiSpringController {
         return false;
     }
 
-    private String normalizeCopilotResponseMode(Object rawMode, String message) {
+    private String normalizeChatgptResponseMode(Object rawMode, String message) {
         String mode = String.valueOf(rawMode == null ? "" : rawMode).trim().toLowerCase();
         if ("edit".equals(mode)) {
             return "edit";
@@ -3811,14 +3947,14 @@ public class ApiSpringController {
         if ("analyze".equals(mode)) {
             return "analyze";
         }
-        String detected = detectCopilotResponseModeFromMessage(message);
+        String detected = detectChatgptResponseModeFromMessage(message);
         if ("edit".equals(detected) || "analyze".equals(detected)) {
             return detected;
         }
         return "analyze";
     }
 
-    private String detectCopilotResponseModeFromMessage(String message) {
+    private String detectChatgptResponseModeFromMessage(String message) {
         if (message == null) {
             return "";
         }
@@ -3839,7 +3975,7 @@ public class ApiSpringController {
             return "";
         }
 
-        String token = normalizeCopilotDirectiveToken(trimmed.substring(1, i));
+        String token = normalizeChatgptDirectiveToken(trimmed.substring(1, i));
         if (Set.of("edit", "apply", "sua", "chinh", "cap-nhat", "update", "modify", "bianji", "xiugai", "编辑", "修改").contains(token)) {
             return "edit";
         }
@@ -3849,12 +3985,12 @@ public class ApiSpringController {
         return "";
     }
 
-    private String stripCopilotModeDirective(String message) {
+    private String stripChatgptModeDirective(String message) {
         if (message == null) {
             return "";
         }
         String trimmed = message.trim();
-        String detected = detectCopilotResponseModeFromMessage(trimmed);
+        String detected = detectChatgptResponseModeFromMessage(trimmed);
         if (detected.isEmpty()) {
             return trimmed;
         }
@@ -3874,7 +4010,7 @@ public class ApiSpringController {
         return trimmed.substring(j).trim();
     }
 
-    private String normalizeCopilotDirectiveToken(String token) {
+    private String normalizeChatgptDirectiveToken(String token) {
         if (token == null) {
             return "";
         }
@@ -3883,7 +4019,7 @@ public class ApiSpringController {
                 .replace('_', '-');
     }
 
-    private List<Map<String, Object>> normalizeCopilotAttachments(Object rawAttachments) {
+    private List<Map<String, Object>> normalizeChatgptAttachments(Object rawAttachments) {
         List<Map<String, Object>> normalized = new ArrayList<>();
         if (!(rawAttachments instanceof List<?> rawList)) {
             return normalized;
@@ -3933,8 +4069,8 @@ public class ApiSpringController {
                 if (textContent.isEmpty()) {
                     continue;
                 }
-                next.put("textContent", textContent.length() > COPILOT_ATTACHMENT_TEXT_MAX_CHARS
-                    ? textContent.substring(0, COPILOT_ATTACHMENT_TEXT_MAX_CHARS) + "\n...[truncated]"
+                next.put("textContent", textContent.length() > CHATGPT_ATTACHMENT_TEXT_MAX_CHARS
+                    ? textContent.substring(0, CHATGPT_ATTACHMENT_TEXT_MAX_CHARS) + "\n...[truncated]"
                     : textContent);
                 normalized.add(next);
             }
@@ -3947,7 +4083,7 @@ public class ApiSpringController {
         return normalized;
     }
 
-    private void emitCopilotChatChunk(String appId, Map<String, Object> payload) {
+    private void emitChatgptChatChunk(String appId, Map<String, Object> payload) {
         if (appId == null || appId.isEmpty() || socketIOServer == null) {
             return;
         }
@@ -3956,20 +4092,28 @@ public class ApiSpringController {
                 payload = new HashMap<>();
             }
             payload.put("timestamp", System.currentTimeMillis());
+            socketIOServer.getRoomOperations(appId).sendEvent("chatgpt_chat_chunk", payload);
+            // Keep legacy event for existing clients during migration.
             socketIOServer.getRoomOperations(appId).sendEvent("copilot_chat_chunk", payload);
         } catch (Exception e) {
-            logger.debug("Failed to emit copilot chat chunk: {}", e.getMessage());
+            logger.debug("Failed to emit chatgpt chat chunk: {}", e.getMessage());
         }
     }
 
-    private void emitCopilotChatEvent(String appId, String eventName, Object payload) {
+    private void emitChatgptChatEvent(String appId, String eventName, Object payload) {
         if (appId == null || appId.isEmpty() || socketIOServer == null) {
             return;
         }
         try {
             socketIOServer.getRoomOperations(appId).sendEvent(eventName, payload);
+            // Mirror chatgpt legacy event names to keep old frontend listeners working.
+            if (eventName != null && eventName.startsWith("chatgpt_")) {
+                socketIOServer.getRoomOperations(appId).sendEvent("copilot_" + eventName.substring("chatgpt_".length()), payload);
+            } else if (eventName != null && eventName.startsWith("copilot_")) {
+                socketIOServer.getRoomOperations(appId).sendEvent("chatgpt_" + eventName.substring("copilot_".length()), payload);
+            }
         } catch (Exception e) {
-            logger.debug("Failed to emit copilot chat event {}: {}", eventName, e.getMessage());
+            logger.debug("Failed to emit chatgpt chat event {}: {}", eventName, e.getMessage());
         }
     }
 
@@ -4049,10 +4193,10 @@ public class ApiSpringController {
         // After a successful menu-design generation, persist the session context file
         // so the next call can continue from where this one left off — no need to re-send history.
         try {
-            String promptAppId = this.gitHubModelsService.extractAppIdFromPrompt(prompt);
+            String promptAppId = this.chatgptGatewayService.extractAppIdFromPrompt(prompt);
             if (promptAppId != null && !promptAppId.isBlank()) {
                 String requestText = extractRequestTextFromPrompt(prompt);
-                this.gitHubModelsService.updateAppContextFile(promptAppId, requestText, rawContent);
+                this.chatgptGatewayService.updateAppContextFile(promptAppId, requestText, rawContent);
             }
         } catch (Exception ctxEx) {
             logger.warn("Could not update AI context file after generation: {}", ctxEx.getMessage());
@@ -4068,7 +4212,7 @@ public class ApiSpringController {
         populateAiResponseFromRawContent(response, rawContent, uiLang);
     }
 
-    private String fetchAiRawContent(String prompt, GitHubModelsService.ProgressListener progressListener, Map<String, Object> params) {
+    private String fetchAiRawContent(String prompt, ChatgptGatewayService.ProgressListener progressListener, Map<String, Object> params) {
         String safePrompt = prompt == null ? "" : prompt;
         String taskTypeRaw = firstNonBlankString(
                 params != null ? params.get("taskType") : null,
@@ -4117,66 +4261,66 @@ public class ApiSpringController {
             }
         }
 
-        // For menu design, prefer GitHub Models first. Fallback to Gemini is still allowed on quota/rate failures.
+        // For menu design, prefer ChatGPT API first. Fallback to Gemini is still allowed on quota/rate failures.
         boolean forceGithub = isMenuDesignTask
             || preferGithubProvider
-            || ((preferGithubForCoding || forceCopilotForCoding) && isCodingTask);
+            || ((preferChatgptForCoding || forceChatgptForCoding) && isCodingTask);
 
         boolean disableGeminiFallback = (params != null && Boolean.TRUE.equals(params.get("disableGeminiFallback")))
                 || "true".equalsIgnoreCase(String.valueOf(params != null ? params.get("disableGeminiFallback") : null));
         if (disableFallbackForCoding && isCodingTask) {
             disableGeminiFallback = true;
         }
-        if (forceCopilotForCoding && isCodingTask) {
+        if (forceChatgptForCoding && isCodingTask) {
             disableGeminiFallback = true;
         }
 
         if (forceGithub) {
             if (params != null) {
                 params.put("_providerRoutingDecision", isMenuDesignTask
-                    ? "forced_github_menu_design_with_gemini_fallback"
-                    : (isCodingTask && (preferGithubForCoding || forceCopilotForCoding)
+                    ? "forced_chatgpt_menu_design_with_gemini_fallback"
+                    : (isCodingTask && (preferChatgptForCoding || forceChatgptForCoding)
                         ? "forced_copilot_for_coding"
-                        : "forced_github_by_preference"));
+                        : "forced_chatgpt_by_preference"));
             }
             if (progressListener != null) {
-                progressListener.onProgress(createAiJobProgress("github_models", "Đang gọi GitHub Models (ưu tiên theo yêu cầu)", 0, 1, null));
+                progressListener.onProgress(createAiJobProgress("github_models", "Đang gọi ChatGPT API (ưu tiên theo yêu cầu)", 0, 1, null));
             }
 
-            String githubRaw = this.gitHubModelsService.generateContent(safePrompt, progressListener);
+            String githubRaw = this.chatgptGatewayService.generateContent(safePrompt, progressListener);
             boolean rateOrQuotaFailure = shouldFallbackToGemini(githubRaw);
             boolean hardQuotaFailure = isHardQuotaFailure(githubRaw);
             boolean allowGeminiFallback = !disableGeminiFallback || hardQuotaFailure;
             if (rateOrQuotaFailure && allowGeminiFallback) {
-                logger.warn("GitHub Models hit quota/rate limit. Auto fallback to Gemini provider flow.");
+                logger.warn("ChatGPT API hit quota/rate limit. Auto fallback to Gemini provider flow.");
                 if (progressListener != null) {
                     String fallbackMsg = hardQuotaFailure
-                        ? "GitHub Models hết daily quota, đang chuyển sang Gemini"
-                        : "GitHub Models hết quota, đang chuyển sang Gemini";
+                        ? "ChatGPT API hết daily quota, đang chuyển sang Gemini"
+                        : "ChatGPT API hết quota, đang chuyển sang Gemini";
                     progressListener.onProgress(createAiJobProgress("gemini_fallback", fallbackMsg, 0, 1, null));
                 }
                 return this.aiProviderFactory.generateContent(safePrompt);
             } else if (rateOrQuotaFailure && disableGeminiFallback) {
-                logger.warn("GitHub Models hit quota/rate limit but Gemini fallback is disabled for this request.");
+                logger.warn("ChatGPT API hit quota/rate limit but Gemini fallback is disabled for this request.");
             }
             return githubRaw;
         }
 
         if (safePrompt.length() > geminiMaxPromptChars) {
             if (params != null) {
-                params.put("_providerRoutingDecision", "fallback_github_prompt_size");
+                params.put("_providerRoutingDecision", "fallback_chatgpt_prompt_size");
             }
-            logger.warn("Prompt size exceeded Gemini limit ({}>{}) chars. Routing to GitHub Models fallback.",
+            logger.warn("Prompt size exceeded Gemini limit ({}>{}) chars. Routing to ChatGPT API fallback.",
                     safePrompt.length(), geminiMaxPromptChars);
             if (progressListener != null) {
-                progressListener.onProgress(createAiJobProgress("github_models", "Đang gọi GitHub Models", 0, 1, null));
+                progressListener.onProgress(createAiJobProgress("github_models", "Đang gọi ChatGPT API", 0, 1, null));
             }
 
-            String githubRaw = this.gitHubModelsService.generateContent(safePrompt, progressListener);
+            String githubRaw = this.chatgptGatewayService.generateContent(safePrompt, progressListener);
             if (shouldFallbackToGemini(githubRaw)) {
-                logger.warn("GitHub Models hit quota/rate limit. Auto fallback to Gemini provider flow.");
+                logger.warn("ChatGPT API hit quota/rate limit. Auto fallback to Gemini provider flow.");
                 if (progressListener != null) {
-                    progressListener.onProgress(createAiJobProgress("gemini_fallback", "GitHub Models hết quota, đang chuyển sang Gemini", 0, 1, null));
+                    progressListener.onProgress(createAiJobProgress("gemini_fallback", "ChatGPT API hết quota, đang chuyển sang Gemini", 0, 1, null));
                 }
                 return this.aiProviderFactory.generateContent(safePrompt);
             }
@@ -4227,7 +4371,7 @@ public class ApiSpringController {
                 return isRateOrQuotaFailure(errorCode, message) || isAuthFailure(errorCode, message);
             }
 
-            // Some GitHubModelsService paths may return success wrapper while inner `result`
+            // Some ChatgptGatewayService paths may return success wrapper while inner `result`
             // carries an error JSON/string. Detect and fallback in that case too.
             Object result = parsed.get("result");
             if (result != null) {
@@ -4299,13 +4443,13 @@ public class ApiSpringController {
             String message,
             String currentCode,
             int estimatedChars) {
-        if (!copilotMenuDirectProviderFallbackEnabled) {
+        if (!chatgptMenuDirectProviderFallbackEnabled) {
             return false;
         }
-        if (!isMenuCopilotFlow(contextType, taskType)) {
+        if (!isMenuChatgptFlow(contextType, taskType)) {
             return false;
         }
-        return estimatedChars >= Math.max(50000, copilotMenuDirectProviderThresholdChars);
+        return estimatedChars >= Math.max(50000, chatgptMenuDirectProviderThresholdChars);
     }
 
     private String buildMenuGlobalContext(
@@ -4316,14 +4460,14 @@ public class ApiSpringController {
             String message,
             String currentCode,
             List<Map<String, Object>> attachments) {
-        if (!copilotMemoryManagerEnabled) {
+        if (!chatgptMemoryManagerEnabled) {
             return "";
         }
-        if (!isMenuCopilotFlow(contextType, taskType)) {
+        if (!isMenuChatgptFlow(contextType, taskType)) {
             return "";
         }
         try {
-            String globalContext = copilotMemoryManagerService.buildAndPersistMenuGlobalContext(
+            String globalContext = chatgptMemoryManagerService.buildAndPersistMenuGlobalContext(
                 appId,
                 continuityScopeKey,
                 message,
@@ -4331,49 +4475,49 @@ public class ApiSpringController {
                 attachments);
             return String.valueOf(globalContext == null ? "" : globalContext).trim();
         } catch (Exception ex) {
-            logger.warn("Copilot memory manager failed, continue without global context: {}", ex.getMessage());
+            logger.warn("ChatGPT memory manager failed, continue without global context: {}", ex.getMessage());
             return "";
         }
     }
 
     private String loadCopilotCustomInstructions() {
-        if (cachedCopilotCustomInstructions != null) return cachedCopilotCustomInstructions;
+        if (cachedChatgptCustomInstructions != null) return cachedChatgptCustomInstructions;
         synchronized (this) {
-            if (cachedCopilotCustomInstructions != null) return cachedCopilotCustomInstructions;
+            if (cachedChatgptCustomInstructions != null) return cachedChatgptCustomInstructions;
             try {
-                String path = String.valueOf(copilotCustomInstructionsPath == null ? "" : copilotCustomInstructionsPath).trim();
-                if (path.isEmpty()) { cachedCopilotCustomInstructions = ""; return ""; }
+                String path = String.valueOf(chatgptCustomInstructionsPath == null ? "" : chatgptCustomInstructionsPath).trim();
+                if (path.isEmpty()) { cachedChatgptCustomInstructions = ""; return ""; }
                 java.io.File f = new java.io.File(path);
                 if (f.exists() && f.isFile()) {
-                    cachedCopilotCustomInstructions = java.nio.file.Files.readString(f.toPath(), java.nio.charset.StandardCharsets.UTF_8).trim();
+                    cachedChatgptCustomInstructions = java.nio.file.Files.readString(f.toPath(), java.nio.charset.StandardCharsets.UTF_8).trim();
                 } else {
                     // Try classpath
                     var resource = new org.springframework.core.io.ClassPathResource(path);
                     if (resource.exists()) {
                         try (var in = resource.getInputStream()) {
-                            cachedCopilotCustomInstructions = org.springframework.util.StreamUtils.copyToString(in, java.nio.charset.StandardCharsets.UTF_8).trim();
+                            cachedChatgptCustomInstructions = org.springframework.util.StreamUtils.copyToString(in, java.nio.charset.StandardCharsets.UTF_8).trim();
                         }
                     } else {
-                        cachedCopilotCustomInstructions = "";
+                        cachedChatgptCustomInstructions = "";
                     }
                 }
             } catch (Exception ex) {
-                logger.warn("Cannot load copilot custom instructions from {}: {}", copilotCustomInstructionsPath, ex.getMessage());
-                cachedCopilotCustomInstructions = "";
+                logger.warn("Cannot load ChatGPT custom instructions from {}: {}", chatgptCustomInstructionsPath, ex.getMessage());
+                cachedChatgptCustomInstructions = "";
             }
         }
-        return cachedCopilotCustomInstructions;
+        return cachedChatgptCustomInstructions;
     }
 
     /**
-     * CHAINING Step 1: For very large menu payloads, call GitHub Models with a lightweight
+     * CHAINING Step 1: For very large menu payloads, call ChatGPT API with a lightweight
      * "extract schema" prompt to produce a compact summary of all large JSON config attachments.
      * The summary is then injected into the final menu design prompt (Step 2 = main call).
      * This avoids sending 2.5M+ chars raw JSON in a single call.
      */
     private String runMenuChainingStep1(List<Map<String, Object>> attachments, String appId) {
         if (attachments == null || attachments.isEmpty()) return "";
-        int distillThreshold = Math.max(20000, copilotMenuDistillThresholdChars);
+        int distillThreshold = Math.max(20000, chatgptMenuDistillThresholdChars);
 
         StringBuilder step1Prompt = new StringBuilder();
         step1Prompt.append("You are an AI assistant helping to summarize CSM (Content Management System) configuration files.\n");
@@ -4394,7 +4538,7 @@ public class ApiSpringController {
             // Use Java-side distillation to compress before sending even the step1 prompt
             String distilled;
             try {
-                distilled = copilotMemoryManagerService.distillJsonForMenu(name, text);
+                distilled = chatgptMemoryManagerService.distillJsonForMenu(name, text);
             } catch (Exception ex) {
                 distilled = text.substring(0, Math.min(text.length(), 15000));
             }
@@ -4417,11 +4561,11 @@ public class ApiSpringController {
             : step1Prompt.toString();
 
         try {
-            String rawResult = gitHubModelsService.generateContent(promptText);
+            String rawResult = chatgptGatewayService.generateContent(promptText);
             String extracted = extractAiResultText(rawResult);
             return extracted.isBlank() ? "" : "# Chaining Step 1 Schema Summary\n" + extracted.trim();
         } catch (Exception ex) {
-            logger.warn("Copilot chaining step1 GitHub Models call failed for appId={}: {}", appId, ex.getMessage());
+            logger.warn("ChatGPT chaining step1 call failed for appId={}: {}", appId, ex.getMessage());
             return "";
         }
     }
@@ -4440,11 +4584,11 @@ public class ApiSpringController {
 
         String fingerprint = Integer.toHexString(code.hashCode());
         String cacheKey = buildCodeChainingCacheKey(appId, pName, language, fingerprint);
-        if (copilotCodeChainingCacheEnabled) {
+        if (chatgptCodeChainingCacheEnabled) {
             CodeChainingCacheEntry cached = getCodeChainingCache(cacheKey);
             if (cached != null) {
                 long elapsed = Math.max(0L, System.currentTimeMillis() - startedAt);
-                logger.info("Copilot code chaining cache HIT: appId={} fileKey={} fingerprint={} summaryChars={} elapsedMs={}",
+                logger.info("ChatGPT code chaining cache HIT: appId={} fileKey={} fingerprint={} summaryChars={} elapsedMs={}",
                     appId,
                     String.valueOf(pName == null ? "" : pName).trim(),
                     fingerprint,
@@ -4454,8 +4598,8 @@ public class ApiSpringController {
             }
         }
 
-        String globalMap = buildCopilotGlobalCodeMap(code, language);
-        List<String> focusExcerpts = buildCopilotFocusExcerpts(code, message, 18000);
+        String globalMap = buildChatgptGlobalCodeMap(code, language);
+        List<String> focusExcerpts = buildChatgptFocusExcerpts(code, message, 18000);
         List<String> distributed = buildCodeDistributedCoverageExcerpts(code, 6, 1800);
 
         StringBuilder step1Prompt = new StringBuilder();
@@ -4495,11 +4639,11 @@ public class ApiSpringController {
         }
 
         try {
-            String raw = gitHubModelsService.generateContent(stepPrompt);
+            String raw = chatgptGatewayService.generateContent(stepPrompt);
             String extracted = extractAiResultText(raw);
             if (extracted.isBlank()) {
                 long elapsed = Math.max(0L, System.currentTimeMillis() - startedAt);
-                logger.info("Copilot code chaining step1 empty result: appId={} fileKey={} fingerprint={} promptChars={} elapsedMs={}",
+                logger.info("ChatGPT code chaining step1 empty result: appId={} fileKey={} fingerprint={} promptChars={} elapsedMs={}",
                     appId,
                     String.valueOf(pName == null ? "" : pName).trim(),
                     fingerprint,
@@ -4508,11 +4652,11 @@ public class ApiSpringController {
                 return new CodeChainingResult("", false, elapsed, stepPrompt.length(), 0, fingerprint);
             }
             String summary = "# Code Chaining Step 1 Summary\n" + extracted.trim();
-            if (copilotCodeChainingCacheEnabled) {
+            if (chatgptCodeChainingCacheEnabled) {
                 putCodeChainingCache(cacheKey, summary);
             }
             long elapsed = Math.max(0L, System.currentTimeMillis() - startedAt);
-            logger.info("Copilot code chaining step1 done: appId={} fileKey={} fingerprint={} inputChars={} promptChars={} outputChars={} elapsedMs={}",
+            logger.info("ChatGPT code chaining step1 done: appId={} fileKey={} fingerprint={} inputChars={} promptChars={} outputChars={} elapsedMs={}",
                 appId,
                 String.valueOf(pName == null ? "" : pName).trim(),
                 fingerprint,
@@ -4522,7 +4666,7 @@ public class ApiSpringController {
                 elapsed);
             return new CodeChainingResult(summary, false, elapsed, stepPrompt.length(), summary.length(), fingerprint);
         } catch (Exception ex) {
-            logger.warn("Copilot code chaining step1 GitHub Models call failed for appId={}: {}", appId, ex.getMessage());
+            logger.warn("ChatGPT code chaining step1 call failed for appId={}: {}", appId, ex.getMessage());
             long elapsed = Math.max(0L, System.currentTimeMillis() - startedAt);
             return new CodeChainingResult("", false, elapsed, stepPrompt.length(), 0, fingerprint);
         }
@@ -4546,7 +4690,7 @@ public class ApiSpringController {
         if (entry == null) {
             return null;
         }
-        long ttl = Math.max(60_000L, copilotCodeChainingCacheTtlMs);
+        long ttl = Math.max(60_000L, chatgptCodeChainingCacheTtlMs);
         if ((System.currentTimeMillis() - entry.createdAtMs) > ttl) {
             codeChainingStep1Cache.remove(key);
             return null;
@@ -4567,7 +4711,7 @@ public class ApiSpringController {
     }
 
     private void pruneCodeChainingCacheIfNeeded() {
-        int maxEntries = Math.max(32, copilotCodeChainingCacheMaxEntries);
+        int maxEntries = Math.max(32, chatgptCodeChainingCacheMaxEntries);
         if (codeChainingStep1Cache.size() <= maxEntries) {
             return;
         }
@@ -4614,19 +4758,19 @@ public class ApiSpringController {
         }
     }
 
-    private boolean shouldQuickGithubProbeForMediumMenu(
+    private boolean shouldQuickPrimaryProbeForMediumMenu(
             String contextType,
             String taskType,
             int estimatedChars) {
-        if (!copilotMenuGithubProbeEnabled) {
+        if (!chatgptMenuPrimaryProbeEnabled) {
             return false;
         }
-        if (!isMenuCopilotFlow(contextType, taskType)) {
+        if (!isMenuChatgptFlow(contextType, taskType)) {
             return false;
         }
-        int lowerBound = Math.max(50000, copilotMenuGithubProbeThresholdChars);
-        int upperBound = copilotMenuDirectProviderFallbackEnabled
-                ? Math.max(lowerBound + 1000, Math.max(50000, copilotMenuDirectProviderThresholdChars))
+        int lowerBound = Math.max(50000, chatgptMenuPrimaryProbeThresholdChars);
+        int upperBound = chatgptMenuDirectProviderFallbackEnabled
+                ? Math.max(lowerBound + 1000, Math.max(50000, chatgptMenuDirectProviderThresholdChars))
                 : Integer.MAX_VALUE;
         return estimatedChars >= lowerBound && estimatedChars < upperBound;
     }
@@ -4682,32 +4826,32 @@ public class ApiSpringController {
         }
     }
 
-    private String runGithubQuickProbeWithTimeout(
+    private String runPrimaryProbeWithTimeout(
             String probePrompt,
-            GitHubModelsService.ProgressListener streamListener,
+            ChatgptGatewayService.ProgressListener streamListener,
             String appId,
             String stage) {
-        long timeoutMs = Math.max(3000L, copilotMenuGithubProbeTimeoutMs);
-        Future<String> future = aiAsyncExecutor.submit(() -> gitHubModelsService.generateContent(probePrompt, streamListener));
+        long timeoutMs = Math.max(3000L, chatgptMenuPrimaryProbeTimeoutMs);
+        Future<String> future = aiAsyncExecutor.submit(() -> chatgptGatewayService.generateContent(probePrompt, streamListener));
         try {
             return future.get(timeoutMs, TimeUnit.MILLISECONDS);
         } catch (TimeoutException ex) {
             future.cancel(true);
-            logger.warn("Copilot stream: {} timed out after {}ms, forcing fallback", stage, timeoutMs);
-            emitCopilotChatChunk(appId, Map.of(
+            logger.warn("ChatGPT stream: {} timed out after {}ms, forcing fallback", stage, timeoutMs);
+            emitChatgptChatChunk(appId, Map.of(
                 "stage", stage + "_timeout",
                 "message", "Quick probe timeout, chuyen fallback ngay",
                 "status", "running"
             ));
             return "";
         } catch (Exception ex) {
-            logger.warn("Copilot stream: {} failed: {}", stage, ex.getMessage());
+            logger.warn("ChatGPT stream: {} failed: {}", stage, ex.getMessage());
             return "";
         }
     }
 
     private boolean shouldDisableGeminiFallbackForMenu(String contextType, String taskType) {
-        return copilotMenuDisableGeminiFallback && isMenuCopilotFlow(contextType, taskType);
+        return chatgptMenuDisableGeminiFallback && isMenuChatgptFlow(contextType, taskType);
     }
 
     private boolean shouldForceGeminiFallbackForMenuFailure(
@@ -4715,7 +4859,7 @@ public class ApiSpringController {
             String taskType,
             String raw,
             boolean upstreamFallbackSignal) {
-        if (!isMenuCopilotFlow(contextType, taskType)) {
+        if (!isMenuChatgptFlow(contextType, taskType)) {
             return false;
         }
         if (!upstreamFallbackSignal) {
@@ -4773,8 +4917,8 @@ public class ApiSpringController {
                 || text.contains("tokens_limit_reached")
                 || text.contains("request body too large")
                 || text.contains("max size: 8000 tokens")
-                || text.contains("tat ca github models deu that bai")
-                || text.contains("tất cả github models đều thất bại");
+                || text.contains("tat ca chatgpt models deu that bai")
+                || text.contains("tất cả chatgpt models đều thất bại");
     }
 
     private boolean isRateOrQuotaFailure(String errorCode, String message) {
@@ -5048,7 +5192,7 @@ public class ApiSpringController {
             || map.containsKey("children");
     }
 
-    private void emitTextAsCopilotChunks(String appId, String text, String responseMode, String uiLang) {
+    private void emitTextAsChatgptChunks(String appId, String text, String responseMode, String uiLang) {
         String source = text == null ? "" : text;
         if (source.isBlank()) {
             return;
@@ -5072,7 +5216,7 @@ public class ApiSpringController {
             payload.put("current", end);
             payload.put("total", total);
             payload.put("percent", Math.max(0, Math.min(100, (int) Math.round((end * 100.0) / Math.max(1, total)))));
-            emitCopilotChatChunk(appId, payload);
+            emitChatgptChatChunk(appId, payload);
             sent = end;
         }
     }
@@ -5454,10 +5598,10 @@ public class ApiSpringController {
                     }
                     // Persist session context file for next AI call continuity
                     try {
-                        String promptAppId = this.gitHubModelsService.extractAppIdFromPrompt(prompt);
+                        String promptAppId = this.chatgptGatewayService.extractAppIdFromPrompt(prompt);
                         if (promptAppId != null && !promptAppId.isBlank()) {
                             String requestText = extractRequestTextFromPrompt(prompt);
-                            this.gitHubModelsService.updateAppContextFile(promptAppId, requestText, rawContent);
+                            this.chatgptGatewayService.updateAppContextFile(promptAppId, requestText, rawContent);
                         }
                     } catch (Exception ctxEx) {
                         logger.warn("Could not update AI context file (async): {}", ctxEx.getMessage());
@@ -6055,15 +6199,15 @@ public class ApiSpringController {
         }
     }
 
-    private static class StructuredCopilotEditResult {
+    private static class StructuredChatgptEditResult {
         boolean valid = false;
         Object understandingChecklist;
         String assistantMessage = "";
         List<Map<String, Object>> textEdits = new ArrayList<>();
     }
 
-    private StructuredCopilotEditResult extractStructuredCopilotEdits(String rawResponse, int baseLineCount) {
-        StructuredCopilotEditResult result = new StructuredCopilotEditResult();
+    private StructuredChatgptEditResult extractStructuredChatgptEdits(String rawResponse, int baseLineCount) {
+        StructuredChatgptEditResult result = new StructuredChatgptEditResult();
         String raw = String.valueOf(rawResponse == null ? "" : rawResponse).trim();
         if (raw.isEmpty()) {
             return result;
@@ -6100,7 +6244,7 @@ public class ApiSpringController {
                 editsRaw = parsed.get("edits");
             }
 
-            int maxEdits = Math.max(1, copilotStructuredEditMaxTextEdits);
+            int maxEdits = Math.max(1, chatgptStructuredEditMaxTextEdits);
             if (editsRaw instanceof List<?> list) {
                 for (Object item : list) {
                     if (!(item instanceof Map<?, ?> map)) {
@@ -6165,11 +6309,11 @@ public class ApiSpringController {
         }
     }
 
-    private boolean validateStructuredEditEntries(StructuredCopilotEditResult result, int baseLineCount) {
+    private boolean validateStructuredEditEntries(StructuredChatgptEditResult result, int baseLineCount) {
         if (result == null || result.textEdits == null || result.textEdits.isEmpty()) {
             return false;
         }
-        if (copilotStructuredEditRequireChecklist && result.understandingChecklist == null) {
+        if (chatgptStructuredEditRequireChecklist && result.understandingChecklist == null) {
             return false;
         }
 
@@ -6203,7 +6347,7 @@ public class ApiSpringController {
 
             String replacement = String.valueOf(edit.getOrDefault("replacement", ""));
             totalReplacementChars += replacement.length();
-            if (totalReplacementChars > Math.max(20000, copilotStructuredEditMaxReplacementChars)) {
+            if (totalReplacementChars > Math.max(20000, chatgptStructuredEditMaxReplacementChars)) {
                 return false;
             }
 

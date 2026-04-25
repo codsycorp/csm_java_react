@@ -13,9 +13,9 @@ import { useTranslation } from "react-i18next";
 import { useSocket } from "#src/hooks/useSocket";
 import { extractCodeBlocks, extractLatestOpenCodeBlock } from "#src/pages/system/developer/codeUtils";
 import { request } from "#src/utils/request";
-import styles from "./CopilotChat.module.css";
+import styles from "./ChatgptChat.module.css";
 
-export type CopilotAttachment = {
+export type ChatgptAttachment = {
 	id: string;
 	name: string;
 	mimeType: string;
@@ -31,9 +31,9 @@ export type CopilotAttachment = {
 	fullContext?: boolean;
 };
 
-export type CopilotUserMessagePayload = {
+export type ChatgptUserMessagePayload = {
 	message: string;
-	attachments: CopilotAttachment[];
+	attachments: ChatgptAttachment[];
 };
 
 type ChatMessage = {
@@ -43,7 +43,7 @@ type ChatMessage = {
 	content: string;
 	timestamp: number;
 	codeBlocks?: CodeBlock[];
-	attachments?: Array<Pick<CopilotAttachment, "id" | "name" | "mimeType" | "size" | "kind" | "summary" | "previewUrl">>;
+	attachments?: Array<Pick<ChatgptAttachment, "id" | "name" | "mimeType" | "size" | "kind" | "summary" | "previewUrl">>;
 };
 
 type CodeBlock = {
@@ -54,7 +54,7 @@ type CodeBlock = {
 
 type ResponseMode = "analyze" | "edit";
 
-type CopilotStageEvent = {
+type ChatgptStageEvent = {
 	id: string;
 	stage: string;
 	message: string;
@@ -73,7 +73,7 @@ type CopilotStageEvent = {
 	timestamp: number;
 };
 
-type CopilotChatProps = {
+type ChatgptChatProps = {
 	appId: string;
 	currentCode?: string;
 	language?: "javascript" | "html" | "python" | "java" | "css" | "sql" | "json";
@@ -81,13 +81,14 @@ type CopilotChatProps = {
 	targetPName?: string;
 	targetPType?: number;
 	onCodeInsert?: (code: string) => void;
-	onUserMessage?: (payload: CopilotUserMessagePayload) => void;
+	onUserMessage?: (payload: ChatgptUserMessagePayload) => void;
 	autoApplyCodeBlock?: boolean;
 	autoApplyPreferenceKey?: string;
 	onAutoApplyChange?: (enabled: boolean) => void;
 };
 
-const CHAT_HISTORY_KEY = "codeeditor.copilot.chat.v1";
+const CHAT_HISTORY_KEY = "codeeditor.chatgpt.chat.v1";
+const LEGACY_CHAT_HISTORY_KEY = "codeeditor.copilot.chat.v1";
 const CHAT_STORAGE_LIMIT = 20;
 const MAX_ATTACHMENTS = 8;
 const MAX_TEXT_ATTACHMENT_CHARS = 800000;
@@ -95,7 +96,8 @@ const MAX_TEXT_FILE_BYTES = 10 * 1024 * 1024;
 const MAX_IMAGE_FILE_BYTES = 5 * 1024 * 1024;
 const STREAM_UI_FLUSH_MS = 48;
 const STREAM_CODEBLOCK_PARSE_MS = 240;
-const AUTO_APPLY_PREF_KEY = "copilot.autoApply";
+const AUTO_APPLY_PREF_KEY = "chatgpt.autoApply";
+const LEGACY_AUTO_APPLY_PREF_KEY = "copilot.autoApply";
 const MAX_CHAT_INPUT_CHARS = 20000;
 const MAX_STRUCTURED_TEXT_EDITS = 160;
 const MAX_STRUCTURED_REPLACEMENT_CHARS = 800000;
@@ -143,8 +145,8 @@ function isCodeLikeName(name: string): boolean {
 	return new Set(["js", "jsx", "ts", "tsx", "java", "sql", "html", "css", "scss", "less", "xml", "yml", "yaml", "py", "properties"]).has(ext);
 }
 
-function classifyAttachmentContext(name: string, mimeType: string, kind: CopilotAttachment["kind"], contextType: CopilotChatProps["contextType"]): {
-	contextRole: NonNullable<CopilotAttachment["contextRole"]>;
+function classifyAttachmentContext(name: string, mimeType: string, kind: ChatgptAttachment["kind"], contextType: ChatgptChatProps["contextType"]): {
+	contextRole: NonNullable<ChatgptAttachment["contextRole"]>;
 	authoritative: boolean;
 	defaultFullContext: boolean;
 } {
@@ -218,9 +220,15 @@ function resolveAutoApplyStorageKey(preferenceKey?: string): string {
 	return `${AUTO_APPLY_PREF_KEY}:${suffix}`;
 }
 
+function resolveLegacyAutoApplyStorageKey(preferenceKey?: string): string {
+	const suffix = String(preferenceKey || "default").trim() || "default";
+	return `${LEGACY_AUTO_APPLY_PREF_KEY}:${suffix}`;
+}
+
 function loadAutoApplyPreference(preferenceKey: string | undefined, fallback: boolean): boolean {
 	try {
-		const raw = localStorage.getItem(resolveAutoApplyStorageKey(preferenceKey));
+		const raw = localStorage.getItem(resolveAutoApplyStorageKey(preferenceKey))
+			?? localStorage.getItem(resolveLegacyAutoApplyStorageKey(preferenceKey));
 		if (raw == null) return fallback;
 		return raw === "1" || raw === "true";
 	} catch {
@@ -439,7 +447,8 @@ async function readFileAsDataUrl(file: File): Promise<string> {
 
 const getChatHistory = (): ChatMessage[] => {
 	try {
-		const stored = localStorage.getItem(CHAT_HISTORY_KEY);
+		const stored = localStorage.getItem(CHAT_HISTORY_KEY)
+			?? localStorage.getItem(LEGACY_CHAT_HISTORY_KEY);
 		return stored ? JSON.parse(stored) : [];
 	} catch {
 		return [];
@@ -455,7 +464,7 @@ const saveChatHistory = (messages: ChatMessage[]) => {
 	}
 };
 
-export default function CopilotChat({
+export default function ChatgptChat({
 	appId,
 	currentCode = "",
 	language = "javascript",
@@ -467,14 +476,14 @@ export default function CopilotChat({
 	autoApplyCodeBlock = false,
 	autoApplyPreferenceKey,
 	onAutoApplyChange,
-}: CopilotChatProps) {
+}: ChatgptChatProps) {
 	const { i18n } = useTranslation();
 	const [messages, setMessages] = useState<ChatMessage[]>(getChatHistory());
 	const [inputValue, setInputValue] = useState("");
 	const [isLoading, setIsLoading] = useState(false);
 	const [autoApplyEnabled, setAutoApplyEnabled] = useState<boolean>(() => loadAutoApplyPreference(autoApplyPreferenceKey, Boolean(autoApplyCodeBlock)));
-	const [pendingAttachments, setPendingAttachments] = useState<CopilotAttachment[]>([]);
-	const [stageEvents, setStageEvents] = useState<CopilotStageEvent[]>([]);
+	const [pendingAttachments, setPendingAttachments] = useState<ChatgptAttachment[]>([]);
+	const [stageEvents, setStageEvents] = useState<ChatgptStageEvent[]>([]);
 	const messageListRef = useRef<HTMLDivElement>(null);
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const imageInputRef = useRef<HTMLInputElement>(null);
@@ -568,7 +577,7 @@ export default function CopilotChat({
 	}, [uiText]);
 
 	const renderProgressText = useCallback((key?: string, args?: Record<string, any>, fallback?: string): string => {
-		const normalizedKey = String(key || "").trim();
+		const normalizedKey = String(key || "").trim().replace(/^chatgpt\.progress\./i, "copilot.progress.");
 		if (!normalizedKey) return String(fallback || "").trim();
 		switch (normalizedKey) {
 			case "copilot.progress.phase.preparing":
@@ -790,7 +799,7 @@ export default function CopilotChat({
 		stageEventSignaturesRef.current.add(signature);
 
 		setStageEvents((prev) => {
-			const next: CopilotStageEvent[] = [
+			const next: ChatgptStageEvent[] = [
 				...prev,
 				{
 					id: `stage_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
@@ -940,7 +949,7 @@ export default function CopilotChat({
 		}
 
 		const nextFiles = Array.from(fileList).slice(0, Math.max(0, MAX_ATTACHMENTS - currentCount));
-		const nextAttachments: CopilotAttachment[] = [];
+		const nextAttachments: ChatgptAttachment[] = [];
 
 		for (const file of nextFiles) {
 			try {
@@ -1024,7 +1033,7 @@ export default function CopilotChat({
 	// Use existing Socket.IO hook
 	const { socket, connected: socketConnected } = useSocket({ enabled: !!appId });
 
-	// Setup Socket.IO listeners for copilot events
+	// Setup Socket.IO listeners for chat events
 	useEffect(() => {
 		return () => {
 			if (scrollFrameRef.current != null) {
@@ -1044,7 +1053,7 @@ export default function CopilotChat({
 
 		lastListenerSetupRef.current = true;
 
-		const handleCopilotChunk = (data: any) => {
+		const handleChatgptChunk = (data: any) => {
 			const chunk = String(data?.chunk || "");
 			const stage = String(data?.stage || "");
 			const explicitDraft = String(data?.draftText || data?.partialJson || data?.previewJson || "").trim();
@@ -1085,7 +1094,7 @@ export default function CopilotChat({
 			}
 		};
 
-		const handleCopilotComplete = (data: any) => {
+		const handleChatgptComplete = (data: any) => {
 			appendStageEvent(data);
 			appendStageEvent({
 				stage: "completed",
@@ -1189,7 +1198,7 @@ export default function CopilotChat({
 			console.log("Chat completed:", data);
 		};
 
-		const handleCopilotDebug = (data: any) => {
+		const handleChatgptDebug = (data: any) => {
 			const content = String(data?.content || "").trim();
 			if (!content) return;
 
@@ -1218,7 +1227,7 @@ export default function CopilotChat({
 			scrollToBottom(true);
 		};
 
-		const handleCopilotError = (data: any) => {
+		const handleChatgptError = (data: any) => {
 			appendStageEvent({
 				stage: "error",
 				message: String(data?.error || uiText("Chat thất bại", "Chat failed", "对话失败")),
@@ -1240,10 +1249,10 @@ export default function CopilotChat({
 			console.error("Chat error:", data);
 		};
 
-		socket.on("copilot_chat_chunk", handleCopilotChunk);
-		socket.on("copilot_chat_debug", handleCopilotDebug);
-		socket.on("copilot_chat_complete", handleCopilotComplete);
-		socket.on("copilot_chat_error", handleCopilotError);
+		socket.on("chatgpt_chat_chunk", handleChatgptChunk);
+		socket.on("chatgpt_chat_debug", handleChatgptDebug);
+		socket.on("chatgpt_chat_complete", handleChatgptComplete);
+		socket.on("chatgpt_chat_error", handleChatgptError);
 
 		return () => {
 			if (streamFlushTimerRef.current) {
@@ -1254,10 +1263,10 @@ export default function CopilotChat({
 				clearTimeout(realtimeApplyTimerRef.current);
 				realtimeApplyTimerRef.current = null;
 			}
-			socket.off?.("copilot_chat_chunk", handleCopilotChunk);
-			socket.off?.("copilot_chat_debug", handleCopilotDebug);
-			socket.off?.("copilot_chat_complete", handleCopilotComplete);
-			socket.off?.("copilot_chat_error", handleCopilotError);
+			socket.off?.("chatgpt_chat_chunk", handleChatgptChunk);
+			socket.off?.("chatgpt_chat_debug", handleChatgptDebug);
+			socket.off?.("chatgpt_chat_complete", handleChatgptComplete);
+			socket.off?.("chatgpt_chat_error", handleChatgptError);
 			lastListenerSetupRef.current = false;
 		};
 	}, [socket, appId, applyRealtimeCodeFromText, uiText, onCodeInsert, contextType, currentCode, autoApplyEnabled, scrollToBottom, flushStreamingToUI, scheduleStreamFlush, appendStageEvent]);
@@ -1346,7 +1355,7 @@ export default function CopilotChat({
 
 			try {
 				// Call backend streaming endpoint via shared request client
-				await request.post("copilot-chat-stream", {
+				await request.post("chatgpt-chat-stream", {
 					json: {
 						appId,
 						message: cleanedMessage || normalizedText,
@@ -1422,7 +1431,7 @@ export default function CopilotChat({
 
 	return (
 		<Card
-			className={styles.copilotChat}
+			className={styles.chatgptChat}
 			title={uiText("Trò chuyện Trợ lý AI", "AI Assistant Chat", "AI 助手对话")}
 			size="small"
 			extra={
@@ -1491,7 +1500,7 @@ export default function CopilotChat({
 										) : (
 											<div className={styles.assistantText}>
 												{msg.messageType === "debug" && (
-													<Tag color="gold">COPILOT DEBUG PAYLOAD</Tag>
+													<Tag color="gold">CHATGPT DEBUG PAYLOAD</Tag>
 												)}
 												{/* Render text with code blocks */}
 												{msg.content.split(/```[\s\S]*?```/g).map((part, idx) => (

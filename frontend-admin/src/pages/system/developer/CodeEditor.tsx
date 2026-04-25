@@ -14,7 +14,7 @@ import {
 	MenuFoldOutlined,
 	MenuUnfoldOutlined,
 } from "@ant-design/icons";
-import CodeMirror from "#src/components/editor/CodeMirrorWithCopilot";
+import CodeMirror from "#src/components/editor/CodeMirrorWithChatgpt";
 import { javascript } from "@codemirror/lang-javascript";
 import { html } from "@codemirror/lang-html";
 import { search, openSearchPanel, gotoLine } from "@codemirror/search";
@@ -1241,10 +1241,10 @@ export default function CodeEditor() {
 										view.dispatch({ effects: setDraftHighlights.of(pendingChunk?.ranges || []) });
 										updateDraftIndicators(view);
 									}}
-									copilotContextType="code"
-									copilotLanguage={currentLanguage}
-									copilotPName={selectedCode || undefined}
-									copilotPType={resolvedPType}
+									chatgptContextType="code"
+									chatgptLanguage={currentLanguage}
+									chatgptPName={selectedCode || undefined}
+									chatgptPType={resolvedPType}
 									value={aiLastCode}
 									onChange={(value) => {
 										if (!aiProgrammaticApplyRef.current) {

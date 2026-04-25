@@ -3448,6 +3448,7 @@
       var _ath_rs1 = useState([]), legacyThManualSelectedRowKeys = _ath_rs1[0], setLegacyThManualSelectedRowKeys = _ath_rs1[1];
       var _ath_rs2 = useState([]), legacyThAutoSelectedRowKeys = _ath_rs2[0], setLegacyThAutoSelectedRowKeys = _ath_rs2[1];
       var _ath_im = useState(""), legacyThIntersectManual = _ath_im[0], setLegacyThIntersectManual = _ath_im[1];
+      var _ath_ps = useState(""), legacyThParityStatus = _ath_ps[0], setLegacyThParityStatus = _ath_ps[1];
     var _sel_kq = useState([]), legacyKetQuaSelectedRowKeys = _sel_kq[0], setLegacyKetQuaSelectedRowKeys = _sel_kq[1];
     var _sel_slr_week = useState([]), legacySlrWeekSelectedRowKeys = _sel_slr_week[0], setLegacySlrWeekSelectedRowKeys = _sel_slr_week[1];
     var _sel_slr_auto = useState([]), legacySlrAutoSelectedRowKeys = _sel_slr_auto[0], setLegacySlrAutoSelectedRowKeys = _sel_slr_auto[1];
@@ -8018,12 +8019,12 @@
         setSubTab("legacy_th");
         setProgress(100);
       } catch (e) {
-        console.error(e);
+        console.error("[runLegacyTongHop]", e);
         var errMsg = String((e && e.message) || "");
         if (errMsg === "missing_legacy_station_source") {
           canhbao("Không tạo được nguồn đài cho Tổng Hợp từ MaQuery đang chọn");
         } else if (errMsg !== "legacy_data_incomplete") {
-          canhbao("Không thể chạy Tổng Hợp");
+          canhbao("Không thể chạy Tổng Hợp: " + (errMsg || String(e)));
         }
       } finally {
         setLoading(false);
@@ -11800,9 +11801,7 @@
                   {
                     key: "th",
                     label: tt.lgSubTabTh || "① Tổng Hợp",
-                    children: h("div", null, [
-                      h("div", { style: { marginTop: 8 } }, h(Progress, { percent: progress, status: loading ? "active" : "normal" }))
-                    ])
+                    children: h("div", null)
                   },
                   {
                     key: "slrnb",
@@ -12818,6 +12817,10 @@
                 h("div", { key: "th-manual", style: { marginBottom: 10, padding: "8px 10px", background: theme.cardBg, color: theme.text, border: "1px solid " + theme.border, borderRadius: 4 } }, [
                   h("div", { style: { display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: 6 } }, [
                     h("span", { style: { fontSize: 12, fontWeight: "bold", color: theme.text, whiteSpace: "nowrap" } }, tt.lgThManualSetup + ":"),
+                    h("span", { style: { fontSize: 12, color: theme.muted, whiteSpace: "nowrap" } }, tt.fromDate + ":"),
+                    h("div", { style: { flex: "1 1 120px", minWidth: 110 } }, renderDateField(tu_ngay, function (next) { setTuNgay(next); }, { maxDate: den_ngay })),
+                    h("span", { style: { fontSize: 12, color: theme.muted, whiteSpace: "nowrap" } }, tt.toDate + ":"),
+                    h("div", { style: { flex: "1 1 120px", minWidth: 110 } }, renderDateField(den_ngay, function (next) { setDenNgay(next); }, { minDate: tu_ngay })),
                     h("span", { style: { fontSize: 12, color: theme.muted, whiteSpace: "nowrap" } }, tt.lgHeThong + ":"),
                     h(Select, themedSelectProps({
                       value: legacyHeThong,

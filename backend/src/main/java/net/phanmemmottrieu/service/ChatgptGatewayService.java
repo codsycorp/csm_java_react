@@ -41,11 +41,11 @@ import java.util.Locale;
 
 
 /**
- * Fallback service for oversized prompts routed to GitHub Models API.
+ * Fallback service for oversized prompts routed to ChatGPT API API.
  * Returns JSON wrapper compatible with existing /ai-generate-seo-content parsing flow.
  */
 @Service
-public class GitHubModelsService {
+public class ChatgptGatewayService {
 
   // Cached master prompt content
   private volatile String masterPrompt = null;
@@ -62,12 +62,12 @@ public class GitHubModelsService {
   private static final int CTX_MAX_HISTORY_CHARS = 8000;
   // Max chars to keep for previous result summary inside the context file
   private static final int CTX_MAX_RESULT_CHARS = 6000;
-  // Max chars to keep for Copilot conversation continuity memory
-  private static final int COPILOT_MEMORY_MAX_CHARS = 180000;
-  private static final int COPILOT_PENDING_MAX_ITEMS = 12;
+  // Max chars to keep for ChatGPT conversation continuity memory
+  private static final int CHATGPT_MEMORY_MAX_CHARS = 180000;
+  private static final int CHATGPT_PENDING_MAX_ITEMS = 12;
 
   // ───────────────────────────────────────────────────────────────────────────
-  // Per-app AI session context file  (mirrors Copilot's /memories/session/)
+  // Per-app AI session context file  (mirrors ChatGPT's /memories/session/)
   // File path: {contextDir}/ai_context_{appId}.md
   // Loaded before every AI call and saved after every successful generation.
   // ───────────────────────────────────────────────────────────────────────────
@@ -81,8 +81,8 @@ public class GitHubModelsService {
     return new java.io.File(contextDir, "ai_context_" + safeName + ".md");
   }
 
-  /** Return Copilot continuity memory file path for a given appId and optional scope key. */
-  private java.io.File getCopilotMemoryFile(String appId, String scopeKey) {
+  /** Return ChatGPT continuity memory file path for a given appId and optional scope key. */
+  private java.io.File getChatgptMemoryFile(String appId, String scopeKey) {
     String safeName = sanitizeAppName(appId);
     String safeScope = scopeKey == null ? "" : scopeKey.replaceAll("[^a-zA-Z0-9_\\-]", "_");
     if (safeScope.isBlank()) {
@@ -91,8 +91,8 @@ public class GitHubModelsService {
     return new java.io.File(contextDir, "ai_copilot_context_" + safeName + "__" + safeScope + ".md");
   }
 
-  /** Return Copilot pending-questions file path for a given appId and optional scope key. */
-  private java.io.File getCopilotPendingFile(String appId, String scopeKey) {
+  /** Return ChatGPT pending-questions file path for a given appId and optional scope key. */
+  private java.io.File getChatgptPendingFile(String appId, String scopeKey) {
     String safeName = sanitizeAppName(appId);
     String safeScope = scopeKey == null ? "" : scopeKey.replaceAll("[^a-zA-Z0-9_\\-]", "_");
     if (safeScope.isBlank()) {
@@ -101,10 +101,10 @@ public class GitHubModelsService {
     return new java.io.File(contextDir, "ai_copilot_pending_" + safeName + "__" + safeScope + ".md");
   }
 
-  /** Load unresolved pending questions for Copilot continuation. */
-  public List<String> loadCopilotPendingQuestions(String appId, String scopeKey, int maxItems) {
+  /** Load unresolved pending questions for ChatGPT continuation. */
+  public List<String> loadChatgptPendingQuestions(String appId, String scopeKey, int maxItems) {
     if (appId == null || appId.isBlank()) return Collections.emptyList();
-    java.io.File f = getCopilotPendingFile(appId, scopeKey);
+    java.io.File f = getChatgptPendingFile(appId, scopeKey);
     if (!f.exists()) return Collections.emptyList();
     int safeMax = Math.max(1, Math.min(50, maxItems));
     try {
@@ -122,45 +122,45 @@ public class GitHubModelsService {
       }
       return result;
     } catch (Exception e) {
-      log.warn("Could not load Copilot pending questions for appId={} scope={}: {}", appId, scopeKey, e.getMessage());
+      log.warn("Could not load ChatGPT pending questions for appId={} scope={}: {}", appId, scopeKey, e.getMessage());
       return Collections.emptyList();
     }
   }
 
-  /** Load persisted Copilot conversation memory for continuity across turns. */
-  public String loadCopilotConversationMemory(String appId) {
-    return loadCopilotConversationMemory(appId, null);
+  /** Load persisted ChatGPT conversation memory for continuity across turns. */
+  public String loadChatgptConversationMemory(String appId) {
+    return loadChatgptConversationMemory(appId, null);
   }
 
-  /** Load persisted Copilot conversation memory for continuity across turns. */
-  public String loadCopilotConversationMemory(String appId, String scopeKey) {
+  /** Load persisted ChatGPT conversation memory for continuity across turns. */
+  public String loadChatgptConversationMemory(String appId, String scopeKey) {
     if (appId == null || appId.isBlank()) return "";
-    java.io.File f = getCopilotMemoryFile(appId, scopeKey);
+    java.io.File f = getChatgptMemoryFile(appId, scopeKey);
     if (!f.exists()) return "";
     try {
       String text = java.nio.file.Files.readString(f.toPath(), StandardCharsets.UTF_8);
       if (text == null) return "";
-      if (text.length() <= COPILOT_MEMORY_MAX_CHARS) return text;
-      return text.substring(text.length() - COPILOT_MEMORY_MAX_CHARS);
+      if (text.length() <= CHATGPT_MEMORY_MAX_CHARS) return text;
+      return text.substring(text.length() - CHATGPT_MEMORY_MAX_CHARS);
     } catch (Exception e) {
-      log.warn("Could not load Copilot continuity memory for appId={} scope={}: {}", appId, scopeKey, e.getMessage());
+      log.warn("Could not load ChatGPT continuity memory for appId={} scope={}: {}", appId, scopeKey, e.getMessage());
       return "";
     }
   }
 
-  /** Append one Copilot Q&A turn so later requests continue instead of restarting. */
-  public void appendCopilotConversationTurn(
+  /** Append one ChatGPT Q&A turn so later requests continue instead of restarting. */
+  public void appendChatgptConversationTurn(
       String appId,
       String userMessage,
       String assistantMessage,
       String contextType,
       String responseMode,
       List<Map<String, Object>> attachments) {
-    appendCopilotConversationTurn(appId, null, userMessage, assistantMessage, contextType, responseMode, attachments);
+    appendChatgptConversationTurn(appId, null, userMessage, assistantMessage, contextType, responseMode, attachments);
   }
 
-  /** Append one Copilot Q&A turn with a scoped continuity key. */
-  public void appendCopilotConversationTurn(
+  /** Append one ChatGPT Q&A turn with a scoped continuity key. */
+  public void appendChatgptConversationTurn(
       String appId,
       String scopeKey,
       String userMessage,
@@ -170,7 +170,7 @@ public class GitHubModelsService {
       List<Map<String, Object>> attachments) {
     if (appId == null || appId.isBlank()) return;
     try {
-      String existing = loadCopilotConversationMemory(appId, scopeKey);
+      String existing = loadChatgptConversationMemory(appId, scopeKey);
       String now = java.time.LocalDateTime.now()
           .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
 
@@ -184,7 +184,7 @@ public class GitHubModelsService {
 
       String merged;
       if (existing == null || existing.isBlank()) {
-        merged = "# Copilot Conversation Continuity: app_id=" + appId + "\n"
+        merged = "# ChatGPT Conversation Continuity: app_id=" + appId + "\n"
             + (scopeKey == null || scopeKey.isBlank() ? "" : "scope_key=" + scopeKey + "\n")
             + "<!-- AUTO-GENERATED by GitHubModelsService -->\n"
             + turn;
@@ -192,26 +192,26 @@ public class GitHubModelsService {
         merged = existing.trim() + turn;
       }
 
-      if (merged.length() > COPILOT_MEMORY_MAX_CHARS) {
-        merged = merged.substring(merged.length() - COPILOT_MEMORY_MAX_CHARS);
+      if (merged.length() > CHATGPT_MEMORY_MAX_CHARS) {
+        merged = merged.substring(merged.length() - CHATGPT_MEMORY_MAX_CHARS);
       }
 
-      java.io.File f = getCopilotMemoryFile(appId, scopeKey);
+      java.io.File f = getChatgptMemoryFile(appId, scopeKey);
       f.getParentFile().mkdirs();
       java.nio.file.Files.writeString(f.toPath(), merged, StandardCharsets.UTF_8);
-      updateCopilotPendingQuestions(appId, scopeKey, userMessage, assistantMessage);
+      updateChatgptPendingQuestions(appId, scopeKey, userMessage, assistantMessage);
     } catch (Exception e) {
-      log.warn("Could not append Copilot continuity memory for appId={} scope={}: {}", appId, scopeKey, e.getMessage());
+      log.warn("Could not append ChatGPT continuity memory for appId={} scope={}: {}", appId, scopeKey, e.getMessage());
     }
   }
 
-  private void updateCopilotPendingQuestions(
+  private void updateChatgptPendingQuestions(
       String appId,
       String scopeKey,
       String userMessage,
       String assistantMessage) {
     try {
-      List<String> existing = new ArrayList<>(loadCopilotPendingQuestions(appId, scopeKey, COPILOT_PENDING_MAX_ITEMS));
+      List<String> existing = new ArrayList<>(loadChatgptPendingQuestions(appId, scopeKey, CHATGPT_PENDING_MAX_ITEMS));
 
       // If user replies in this scoped thread, assume the oldest pending item has been addressed.
       if (userMessage != null && !userMessage.trim().isEmpty() && !existing.isEmpty()) {
@@ -224,22 +224,22 @@ public class GitHubModelsService {
       merged.addAll(extracted);
 
       List<String> limited = new ArrayList<>(merged);
-      if (limited.size() > COPILOT_PENDING_MAX_ITEMS) {
-        limited = limited.subList(limited.size() - COPILOT_PENDING_MAX_ITEMS, limited.size());
+      if (limited.size() > CHATGPT_PENDING_MAX_ITEMS) {
+        limited = limited.subList(limited.size() - CHATGPT_PENDING_MAX_ITEMS, limited.size());
       }
 
       StringBuilder out = new StringBuilder();
-      out.append("# Copilot Pending Questions\n");
+      out.append("# ChatGPT Pending Questions\n");
       out.append("<!-- AUTO-GENERATED by GitHubModelsService -->\n");
       for (String item : limited) {
         out.append("- ").append(item).append("\n");
       }
 
-      java.io.File f = getCopilotPendingFile(appId, scopeKey);
+      java.io.File f = getChatgptPendingFile(appId, scopeKey);
       f.getParentFile().mkdirs();
       java.nio.file.Files.writeString(f.toPath(), out.toString(), StandardCharsets.UTF_8);
     } catch (Exception e) {
-      log.warn("Could not update Copilot pending questions for appId={} scope={}: {}", appId, scopeKey, e.getMessage());
+      log.warn("Could not update ChatGPT pending questions for appId={} scope={}: {}", appId, scopeKey, e.getMessage());
     }
   }
 
@@ -297,10 +297,10 @@ public class GitHubModelsService {
   }
 
   /**
-   * Build menu knowledge context block for Copilot chat requests.
+   * Build menu knowledge context block for ChatGPT chat requests.
    * Auto-loads ai_menu_*.md files when request is detected as menu design.
    */
-  public String buildCopilotMenuKnowledgeBlock(String appId, String contextType, String taskType) {
+  public String buildChatgptMenuKnowledgeBlock(String appId, String contextType, String taskType) {
     if (!isMenuDesignContext(contextType, taskType)) {
       return "";
     }
@@ -581,7 +581,7 @@ public class GitHubModelsService {
     void onProgress(Map<String, Object> progress);
   }
 
-  private static final Logger log = LoggerFactory.getLogger(GitHubModelsService.class);
+  private static final Logger log = LoggerFactory.getLogger(ChatgptGatewayService.class);
 
   private final RestTemplate restTemplate = new RestTemplate();
   private final ObjectMapper objectMapper = new ObjectMapper();
@@ -601,7 +601,7 @@ public class GitHubModelsService {
   @Value("${github.models.enabled:true}")
   private boolean enabled;
 
-  @Value("${github.models.url:https://models.inference.ai.azure.com/chat/completions}")
+  @Value("${chatgpt.api.url:${github.models.url:https://api.openai.com/v1/chat/completions}}")
   private String apiUrl;
 
   @Value("${github.models.auth-scheme:auto}")
@@ -622,10 +622,10 @@ public class GitHubModelsService {
   @Value("${github.models.models:}")
   private String models;
 
-  @Value("${github.models.default-fallback-models:gpt-4o-mini,gpt-4.1-mini,gpt-4.1}")
+  @Value("${github.models.default-fallback-models:gpt-4o-mini,gpt-4o,gpt-4.1-mini,gpt-4.1}")
   private String defaultFallbackModels;
 
-  @Value("${github.models.menu-allowed-models:gpt-4o-mini,gpt-4o}")
+  @Value("${github.models.menu-allowed-models:gpt-4o-mini,gpt-4o,gpt-4.1-mini}")
   private String menuAllowedModels;
 
   @Value("${github.models.prioritize-mini:true}")
@@ -787,8 +787,11 @@ public class GitHubModelsService {
   private volatile int currentWindowEstimatedTokens = 0;
   private final AtomicInteger modelCursor = new AtomicInteger(0);
 
-  @Value("${github.models.token:}")
+  @Value("${chatgpt.api.key:${github.models.token:}}")
   private String token;
+
+  @Value("${chatgpt.api.key:${openai.api.key:}}")
+  private String openAiApiKey;
 
   private volatile Map<String, Set<String>> modelEndpointCache = Collections.emptyMap();
   private volatile Map<String, String> modelAliasToCatalogId = Collections.emptyMap();
@@ -813,6 +816,10 @@ public class GitHubModelsService {
     }
   });
   private volatile Map<String, Long> modelUnavailableUntilMs = Collections.synchronizedMap(new HashMap<>());
+  private volatile Map<String, String> modelUnavailableReason = Collections.synchronizedMap(new HashMap<>());
+  // Account-level OpenAI key rate-limit: when set, ALL models on this key are unavailable.
+  // Unlike per-model cooldown (10min), this uses the actual Retry-After from OpenAI (e.g. 65s).
+  private volatile long openAiAccountRateLimitUntilMs = 0L;
   private volatile long lastProjectContextScanAtMs = 0L;
   private volatile String cachedProjectContext = "";
 
@@ -824,7 +831,16 @@ public class GitHubModelsService {
   @org.springframework.beans.factory.annotation.Autowired(required = false)
   private GeminiService geminiService;
 
-  private String getPatToken() {
+  private String getApiToken() {
+    String openAiEnvToken = System.getenv("OPENAI_API_KEY");
+    if (openAiEnvToken != null && !openAiEnvToken.trim().isEmpty()) {
+      return openAiEnvToken.trim();
+    }
+    String openAiConfigured = openAiApiKey == null ? "" : openAiApiKey.trim();
+    if (!openAiConfigured.isEmpty()) {
+      return openAiConfigured;
+    }
+
     String envToken = System.getenv("GITHUB_TOKEN");
     if (envToken != null && !envToken.trim().isEmpty()) {
       return envToken.trim();
@@ -838,7 +854,7 @@ public class GitHubModelsService {
 
   private String getEffectiveToken(String endpoint) {
     // Use PAT directly for every endpoint.
-    return getPatToken();
+    return getApiToken();
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -1038,7 +1054,7 @@ public class GitHubModelsService {
       }
     }
 
-    // Menu flow can be forced to stay on GitHub Models even for large prompts.
+    // Menu flow can be forced to stay on ChatGPT API even for large prompts.
     if (isMenuDesign && menuForceGithubModels) {
       List<String> candidates = resolveCandidateModels();
       if (candidates.contains("gpt-4o")) {
@@ -1068,6 +1084,29 @@ public class GitHubModelsService {
 
     // Default fallback
     return model;
+  }
+
+  private boolean shouldFastFallbackMenuToGemini(String selectedModel, int promptChars, boolean isMenuTask) {
+    if (!isMenuTask) {
+      return false;
+    }
+    boolean geminiAvailable = geminiEnabled && (!googleApiKey.isBlank() || geminiService != null);
+    if (!geminiAvailable) {
+      return false;
+    }
+    String normalizedSelected = String.valueOf(selectedModel == null ? "" : selectedModel)
+        .trim()
+        .toLowerCase(Locale.ROOT);
+    if (normalizedSelected.startsWith("gemini:")) {
+      return false;
+    }
+    String endpoint = resolveChatCompletionsEndpoint();
+    String effectiveToken = getEffectiveToken(endpoint);
+    // Avoid expensive chunk-map-reduce retries on GitHub when the primary menu model is already in cooldown.
+    boolean largeMenuContext = promptChars > Math.max(30000, directMaxChars);
+    boolean primaryMenuModelUnavailable = isModelTemporarilyUnavailable("gpt-4o", effectiveToken);
+    boolean selectedModelUnavailable = isModelTemporarilyUnavailable(selectedModel, effectiveToken);
+    return largeMenuContext && (primaryMenuModelUnavailable || selectedModelUnavailable);
   }
 
   private boolean looksLikeCodeTask(String text) {
@@ -1226,40 +1265,72 @@ public class GitHubModelsService {
         + "\"### Code Review Findings\".";
   }
 
-  private boolean isModelTemporarilyUnavailable(String modelName) {
-    if (modelName == null || modelName.isBlank()) {
+  private String buildModelCooldownKey(String modelName, String tokenScope) {
+    String normalizedModel = String.valueOf(modelName == null ? "" : modelName).trim().toLowerCase(Locale.ROOT);
+    if (normalizedModel.isBlank()) {
+      return "";
+    }
+    String scope = String.valueOf(tokenScope == null ? "" : tokenScope).trim();
+    if (scope.isBlank()) {
+      return normalizedModel + "|scope:default";
+    }
+    String scopeHash = Integer.toHexString(scope.hashCode());
+    return normalizedModel + "|scope:" + scopeHash;
+  }
+
+  private boolean isModelTemporarilyUnavailable(String modelName, String tokenScope) {
+    String cooldownKey = buildModelCooldownKey(modelName, tokenScope);
+    if (cooldownKey.isBlank()) {
       return false;
     }
-    Long untilMs = modelUnavailableUntilMs.get(modelName.toLowerCase(Locale.ROOT));
+    Long untilMs = modelUnavailableUntilMs.get(cooldownKey);
     if (untilMs == null) {
       return false;
     }
     long now = System.currentTimeMillis();
     if (now >= untilMs) {
-      modelUnavailableUntilMs.remove(modelName.toLowerCase(Locale.ROOT));
+      modelUnavailableUntilMs.remove(cooldownKey);
+      modelUnavailableReason.remove(cooldownKey);
       return false;
     }
     return true;
   }
 
-  private long getModelUnavailableRemainingMs(String modelName) {
-    if (modelName == null || modelName.isBlank()) {
+  private long getModelUnavailableRemainingMs(String modelName, String tokenScope) {
+    String cooldownKey = buildModelCooldownKey(modelName, tokenScope);
+    if (cooldownKey.isBlank()) {
       return 0L;
     }
-    Long untilMs = modelUnavailableUntilMs.get(modelName.toLowerCase(Locale.ROOT));
+    Long untilMs = modelUnavailableUntilMs.get(cooldownKey);
     if (untilMs == null) {
       return 0L;
     }
     return Math.max(0L, untilMs - System.currentTimeMillis());
   }
 
-  private void markModelTemporarilyUnavailable(String modelName, long cooldownMs, String reason) {
-    if (modelName == null || modelName.isBlank()) {
+  private String getModelUnavailableReason(String modelName, String tokenScope) {
+    String cooldownKey = buildModelCooldownKey(modelName, tokenScope);
+    if (cooldownKey.isBlank()) {
+      return "temporary cooldown";
+    }
+    String reason = modelUnavailableReason.get(cooldownKey);
+    return (reason == null || reason.isBlank()) ? "temporary cooldown" : reason;
+  }
+
+  private void markModelTemporarilyUnavailable(String modelName, String tokenScope, long cooldownMs, String reason) {
+    String cooldownKey = buildModelCooldownKey(modelName, tokenScope);
+    if (cooldownKey.isBlank()) {
       return;
     }
-    long untilMs = System.currentTimeMillis() + Math.max(60000L, cooldownMs);
-    modelUnavailableUntilMs.put(modelName.toLowerCase(Locale.ROOT), untilMs);
-    log.warn("Temporarily disabling model '{}' for {} ms due to {}", modelName, Math.max(60000L, cooldownMs), reason);
+    long effectiveCooldownMs = Math.max(60000L, cooldownMs);
+    long untilMs = System.currentTimeMillis() + effectiveCooldownMs;
+    modelUnavailableUntilMs.put(cooldownKey, untilMs);
+    modelUnavailableReason.put(cooldownKey, String.valueOf(reason == null ? "temporary cooldown" : reason));
+    log.warn("Temporarily disabling model '{}' for {} ms due to {} (scope={})",
+        modelName,
+        effectiveCooldownMs,
+        reason,
+        cooldownKey.substring(Math.max(0, cooldownKey.indexOf("|scope:"))));
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -1275,7 +1346,9 @@ public class GitHubModelsService {
       // Use shared GeminiService (has ApiKey pool, model rotation, quota management)
       try {
         String fullPrompt = prompt;
-        if (prompt.toLowerCase().contains("code") || prompt.toLowerCase().contains("java")) {
+        String promptLower = prompt.toLowerCase();
+        boolean isMenuPrompt = promptLower.contains("menu_json") || promptLower.contains("menu design") || promptLower.contains("menu manager");
+        if (!isMenuPrompt && (promptLower.contains("code") || promptLower.contains("java"))) {
           String projectCtx = crawlProjectJavaFiles("code_generation");
           if (!projectCtx.isBlank()) fullPrompt = projectCtx + "\n\n" + prompt;
         }
@@ -1295,8 +1368,10 @@ public class GitHubModelsService {
     try {
       String fullPrompt = prompt;
 
-      // Inject project context for code tasks
-      if (prompt.toLowerCase().contains("code") || prompt.toLowerCase().contains("java")) {
+      // Inject project context for code tasks only (skip for menu design tasks)
+      String promptLowerCtx = prompt.toLowerCase();
+      boolean isMenuPromptCtx = promptLowerCtx.contains("menu_json") || promptLowerCtx.contains("menu design") || promptLowerCtx.contains("menu manager");
+      if (!isMenuPromptCtx && (promptLowerCtx.contains("code") || promptLowerCtx.contains("java"))) {
         String projectCtx = crawlProjectJavaFiles("code_generation");
         if (!projectCtx.isBlank()) {
           fullPrompt = projectCtx + "\n\n" + prompt;
@@ -1358,7 +1433,7 @@ public class GitHubModelsService {
   private String normalizeChatCompletionsEndpoint(String configuredUrl) {
     String configured = configuredUrl == null ? "" : configuredUrl.trim();
     if (configured.isEmpty()) {
-      return "https://models.inference.ai.azure.com/chat/completions";
+      return "https://api.openai.com/v1/chat/completions";
     }
     String lower = configured.toLowerCase(Locale.ROOT);
     if (lower.endsWith("/chat/completions")) {
@@ -1569,11 +1644,11 @@ public class GitHubModelsService {
           modelAliasToCatalogId = aliases;
           modelCatalogRawIds = rawIds;
           modelEndpointCacheFetchedAtMs = System.currentTimeMillis();
-          log.info("Loaded Copilot model catalog: {} models", next.size());
+          log.info("Loaded ChatGPT model catalog: {} models", next.size());
           logCatalogResolution(next, aliases);
         }
       } catch (Exception ex) {
-        log.debug("Could not refresh Copilot model catalog: {}", ex.getMessage());
+        log.debug("Could not refresh ChatGPT model catalog: {}", ex.getMessage());
       }
     }
   }
@@ -1604,20 +1679,20 @@ public class GitHubModelsService {
     }
 
     if (!mapped.isEmpty()) {
-      log.info("GitHub Models catalog mapping: {}", String.join("; ", mapped));
+      log.info("ChatGPT API catalog mapping: {}", String.join("; ", mapped));
     }
     if (!missing.isEmpty()) {
-      log.warn("GitHub Models catalog missing configured aliases: {}", String.join(", ", missing));
+      log.warn("ChatGPT API catalog missing configured aliases: {}", String.join(", ", missing));
     }
 
     Set<String> raw = modelCatalogRawIds == null ? Collections.emptySet() : modelCatalogRawIds;
     if (!raw.isEmpty()) {
-      log.info("GitHub Models catalog raw IDs: {}", String.join(", ", raw));
+      log.info("ChatGPT API catalog raw IDs: {}", String.join(", ", raw));
     }
 
     List<String> chatCapable = collectCatalogModelsForChat(endpointCache);
     if (!chatCapable.isEmpty()) {
-      log.info("GitHub Models chat-capable catalog IDs: {}", String.join(", ", chatCapable));
+      log.info("ChatGPT API chat-capable catalog IDs: {}", String.join(", ", chatCapable));
     }
   }
 
@@ -1706,7 +1781,7 @@ public class GitHubModelsService {
 
   public String generateContent(String prompt, ProgressListener progressListener) {
     if (!enabled) {
-      return createErrorJson("GitHub Models fallback đang tắt", "GITHUB_MODELS_DISABLED");
+      return createErrorJson("ChatGPT API fallback đang tắt", "GITHUB_MODELS_DISABLED");
     }
     if (prompt == null || prompt.trim().isEmpty()) {
       return createErrorJson("Prompt không được để trống", "INVALID_PROMPT");
@@ -1725,7 +1800,7 @@ public class GitHubModelsService {
     String endpoint = resolveChatCompletionsEndpoint();
     String effectiveToken = getEffectiveToken(endpoint);
     if (effectiveToken.isEmpty()) {
-      return createErrorJson("Thiếu token cho endpoint AI (set github.models.token hoặc env GITHUB_TOKEN)", "GITHUB_TOKEN_MISSING");
+      return createErrorJson("Thiếu token cho endpoint AI (set chatgpt.api.key/openai.api.key hoặc env OPENAI_API_KEY)", "GITHUB_TOKEN_MISSING");
     }
     String trimmedPrompt = prompt.trim();
     String taskTypeHint = detectTaskTypeHint(trimmedPrompt);
@@ -1748,7 +1823,7 @@ public class GitHubModelsService {
     }
 
     // Load per-app session context file (if prompt doesn't already embed session_memory)
-    // This mirrors how Copilot injects its /memories/session context into each request.
+    // This mirrors how ChatGPT injects its /memories/session context into each request.
     String appContextBlock = "";
     boolean promptAlreadyHasSessionMemory = prompt.contains("session_memory")
         || prompt.contains("APP CONTINUITY MEMORY");
@@ -1796,11 +1871,18 @@ public class GitHubModelsService {
 
     if (finalPrompt.length() > maxPromptChars) {
       return createErrorJson(
-          "Prompt quá dài cho GitHub fallback (tối đa " + maxPromptChars + " ký tự), hiện tại: " + finalPrompt.length(),
+          "Prompt quá dài cho ChatGPT fallback (tối đa " + maxPromptChars + " ký tự), hiện tại: " + finalPrompt.length(),
           "GITHUB_PROMPT_TOO_LARGE");
     }
 
     String selectedModel = selectOptimalModel(taskTypeHint, finalPrompt.length(), isCodeTask);
+    if (shouldFastFallbackMenuToGemini(selectedModel, finalPrompt.length(), isMenuTask)) {
+      log.info(
+          "Routing request to Gemini (fast-fallback) because menu context is large and primary ChatGPT model is in cooldown: selectedModel={}, promptChars={}",
+          selectedModel,
+          finalPrompt.length());
+      return callGeminiWithContext(finalPrompt, maxOutputTokens, directTemperature, progressListener);
+    }
     log.info(
       "AI routing decision: taskTypeHint={}, isCodeTask={}, isMenuTask={}, injectedProjectContext={}, promptChars={}, directMaxChars={}, largeContextThresholdChars={}, selectedModel={}, geminiConfigured={}",
         taskTypeHint,
@@ -1863,7 +1945,7 @@ public class GitHubModelsService {
 
   public String chatWithStreamingMessages(List<Map<String, Object>> messages, ProgressListener progressListener) {
     if (!enabled) {
-      return createErrorJson("GitHub Models không khả dụng", "GITHUB_MODELS_DISABLED");
+      return createErrorJson("ChatGPT API không khả dụng", "GITHUB_MODELS_DISABLED");
     }
     if (messages == null || messages.isEmpty()) {
       return createErrorJson("Messages rỗng", "INVALID_PROMPT");
@@ -1871,7 +1953,7 @@ public class GitHubModelsService {
     String endpoint = resolveChatCompletionsEndpoint();
     String effectiveToken = getEffectiveToken(endpoint);
     if (effectiveToken.isEmpty()) {
-      return createErrorJson("Thiếu token cho endpoint AI (set github.models.token hoặc env GITHUB_TOKEN)", "GITHUB_TOKEN_MISSING");
+      return createErrorJson("Thiếu token cho endpoint AI (set chatgpt.api.key/openai.api.key hoặc env OPENAI_API_KEY)", "GITHUB_TOKEN_MISSING");
     }
     try {
       String flattenedPrompt = flattenChatMessages(messages);
@@ -1939,7 +2021,7 @@ public class GitHubModelsService {
 
       StringBuilder fullResponse = new StringBuilder();
 
-        emitProgress(progressListener, progressPayload("streaming", "Bắt đầu chat với GitHub Models", 0, 1,
+        emitProgress(progressListener, progressPayload("streaming", "Bắt đầu chat với ChatGPT API", 0, 1,
           progressI18n("copilot.progress.message.streaming_start", null, null, null)));
       
       // Build request payload
@@ -1967,7 +2049,7 @@ public class GitHubModelsService {
       if (isFallbackEligibleStreamingFailure(ex)) {
         emitProgress(progressListener, progressPayload(
             "github_models_failed",
-            "GitHub Models tạm không xử lý được, đang thử provider fallback",
+            "ChatGPT API tạm không xử lý được, đang thử provider fallback",
             0,
             1,
             mergeProgress(
@@ -1990,8 +2072,8 @@ public class GitHubModelsService {
         || text.contains("tokens_limit_reached")
         || text.contains("request body too large")
         || text.contains("max size")
-        || text.contains("tất cả github models đều thất bại")
-        || text.contains("tat ca github models deu that bai")
+        || text.contains("tất cả chatgpt api đều thất bại")
+        || text.contains("tat ca chatgpt api deu that bai")
         || text.contains("rate limit")
         || text.contains("quota")
         || text.contains("unauthorized")
@@ -2199,7 +2281,7 @@ public class GitHubModelsService {
             emitProgress(progressListener, progressPayload("streaming", "Đang kết nối tới " + candidateModel, 0, 1,
               progressI18n("copilot.progress.message.connecting_model", Map.of("model", candidateModel), null, null)));
           
-          // Call GitHub Models with streaming
+          // Call ChatGPT API with streaming
           ResponseEntity<String> response = restTemplate.postForEntity(apiUrl, updatedRequest, String.class);
           String rawBody = response.getBody();
           
@@ -2243,7 +2325,7 @@ public class GitHubModelsService {
         }
       }
       
-      throw new IllegalStateException("Tất cả GitHub models đều thất bại");
+      throw new IllegalStateException("Tất cả ChatGPT models đều thất bại");
       
     } catch (Exception ex) {
       log.error("Streaming chat completion failed", ex);
@@ -2330,7 +2412,7 @@ public class GitHubModelsService {
       }
     }
     
-    throw new IllegalStateException("Tất cả GitHub models đều thất bại (stream mode)");
+    throw new IllegalStateException("Tất cả ChatGPT models đều thất bại (stream mode)");
   }
 
   private String generateDirectContent(String prompt, ProgressListener progressListener) {
@@ -2340,18 +2422,18 @@ public class GitHubModelsService {
             "Prompt direct vượt ngưỡng an toàn request (" + requestMaxChars + " ký tự)",
             "GITHUB_DIRECT_PROMPT_TOO_LARGE");
       }
-      emitProgress(progressListener, progressPayload("direct_call", "Đang gửi yêu cầu trực tiếp tới GitHub Models", 0, 1,
+      emitProgress(progressListener, progressPayload("direct_call", "Đang gửi yêu cầu trực tiếp tới ChatGPT API", 0, 1,
           progressI18n("copilot.progress.message.direct_request", null, null, null)));
         String rawBody = callChatCompletion(prompt, maxOutputTokens, directTemperature, progressListener,
-          progressPayload("direct_call", "Đang chờ phản hồi từ GitHub Models", 1, 1,
+          progressPayload("direct_call", "Đang chờ phản hồi từ ChatGPT API", 1, 1,
               progressI18n("copilot.progress.message.direct_waiting", null, null, null)));
       if (rawBody == null || rawBody.trim().isEmpty()) {
-        return createErrorJson("GitHub Models trả về response rỗng", "GITHUB_EMPTY_RESPONSE");
+        return createErrorJson("ChatGPT API trả về response rỗng", "GITHUB_EMPTY_RESPONSE");
       }
 
       String content = extractContent(rawBody);
       if (content == null || content.trim().isEmpty()) {
-        return createErrorJson("Không trích xuất được nội dung từ GitHub Models", "GITHUB_PARSE_EMPTY");
+        return createErrorJson("Không trích xuất được nội dung từ ChatGPT API", "GITHUB_PARSE_EMPTY");
       }
 
       Object parsedResult = tryParseJson(content);
@@ -2361,8 +2443,21 @@ public class GitHubModelsService {
           progressI18n("copilot.progress.message.completed", null, null, null)));
       return successJson;
     } catch (Exception ex) {
-      log.error("GitHub Models request failed", ex);
-      return createErrorJson("Lỗi gọi GitHub Models API: " + ex.getMessage(), "GITHUB_MODELS_ERROR");
+      // All ChatGPT models exhausted (e.g. all 429) — fallback to Gemini
+        boolean allRateLimit = ex instanceof IllegalStateException && ex.getMessage() != null
+          && (ex.getMessage().contains("Tất cả ChatGPT models đều thất bại")
+            || ex.getMessage().contains("Tất cả GitHub models đều thất bại"));
+      if (allRateLimit && (geminiService != null || (geminiEnabled && !googleApiKey.isBlank()))) {
+        log.warn("generateDirectContent: all ChatGPT models failed ({}), falling back to Gemini", ex.getMessage());
+        try {
+          return callGeminiWithContext(prompt, maxOutputTokens, directTemperature, progressListener);
+        } catch (Exception geminiEx) {
+          log.error("generateDirectContent: Gemini fallback also failed", geminiEx);
+          return createErrorJson("Lỗi gọi ChatGPT API và Gemini fallback: " + geminiEx.getMessage(), "ALL_PROVIDERS_FAILED");
+        }
+      }
+      log.error("ChatGPT API request failed", ex);
+      return createErrorJson("Lỗi gọi ChatGPT API API: " + ex.getMessage(), "GITHUB_MODELS_ERROR");
     }
   }
 
@@ -2540,7 +2635,7 @@ public class GitHubModelsService {
         Object repaired = ensureValidMenuFinalResult(normalizedResult, mergedContent, scenario, progressListener, finalMergeExtra);
         if (repaired == null) {
           return createErrorJson(
-              "GitHub Models trả về kết quả cuối không hợp lệ cho menu (không phải JSON menu/menu_node).",
+              "ChatGPT API trả về kết quả cuối không hợp lệ cho menu (không phải JSON menu/menu_node).",
               "GITHUB_FINAL_OUTPUT_INVALID");
         }
         normalizedResult = repaired;
@@ -2561,13 +2656,13 @@ public class GitHubModelsService {
       cacheResponse(prompt, successJson);
       return successJson;
     } catch (Exception ex) {
-      log.error("GitHub Models chunked request failed", ex);
+      log.error("ChatGPT API chunked request failed", ex);
       String normalizedMessage = String.valueOf(ex.getMessage() == null ? "" : ex.getMessage()).toLowerCase(Locale.ROOT);
-      if (normalizedMessage.contains("tat ca github models deu that bai")
-          || normalizedMessage.contains("no available github models")) {
-        return createErrorJson("GitHub Models exhausted for chunked menu task: " + ex.getMessage(), "GITHUB_MODELS_EXHAUSTED");
+      if (normalizedMessage.contains("tat ca chatgpt api deu that bai")
+          || normalizedMessage.contains("no available chatgpt api")) {
+        return createErrorJson("ChatGPT API exhausted for chunked menu task: " + ex.getMessage(), "GITHUB_MODELS_EXHAUSTED");
       }
-      return createErrorJson("Lỗi xử lý prompt lớn qua GitHub Models: " + ex.getMessage(), "GITHUB_CHUNKED_ERROR");
+      return createErrorJson("Lỗi xử lý prompt lớn qua ChatGPT API: " + ex.getMessage(), "GITHUB_CHUNKED_ERROR");
     }
   }
 
@@ -2756,7 +2851,7 @@ public class GitHubModelsService {
   private String callChatCompletion(String prompt, int maxTokens, double temperature, ProgressListener progressListener,
       Map<String, Object> progressMeta) {
     if (prompt == null || prompt.isBlank()) {
-      throw new IllegalArgumentException("Prompt rỗng khi gọi GitHub Models");
+      throw new IllegalArgumentException("Prompt rỗng khi gọi ChatGPT API");
     }
     if (prompt.length() > requestMaxChars) {
       throw new IllegalArgumentException(
@@ -2773,18 +2868,29 @@ public class GitHubModelsService {
       candidateModels = filterMenuAllowedModels(candidateModels);
     }
     if (candidateModels.isEmpty()) {
-      throw new IllegalStateException("No available GitHub models for this menu task after applying allowlist/cooldown");
+      throw new IllegalStateException("No available ChatGPT models for this menu task after applying allowlist/cooldown");
     }
     List<String> failures = new ArrayList<>();
     String baseEndpoint = resolveChatCompletionsEndpoint();
     String effectiveToken = getEffectiveToken(baseEndpoint);
 
+    // Short-circuit: if the entire OpenAI account key is rate-limited, skip all models immediately.
+    long accountRateLimitUntil = openAiAccountRateLimitUntilMs;
+    if (accountRateLimitUntil > System.currentTimeMillis()) {
+      long remainingMs = accountRateLimitUntil - System.currentTimeMillis();
+      log.warn("OpenAI account key rate-limited for {}ms more — skipping all models, falling back to Gemini", remainingMs);
+      throw new IllegalStateException("Tất cả ChatGPT models đều thất bại. OpenAI account key rate-limited for "
+          + remainingMs + "ms more.");
+    }
+
     for (String candidateModel : candidateModels) {
-      if (isModelTemporarilyUnavailable(candidateModel)) {
-        long remainingMs = getModelUnavailableRemainingMs(candidateModel);
-        String skipReason = "model temporarily unavailable due to cached quota exhaustion (remaining " + remainingMs + " ms)";
+      if (isModelTemporarilyUnavailable(candidateModel, effectiveToken)) {
+        long remainingMs = getModelUnavailableRemainingMs(candidateModel, effectiveToken);
+        String cooldownReason = getModelUnavailableReason(candidateModel, effectiveToken);
+        String skipReason = "model temporarily unavailable due to cached cooldown (reason=" + cooldownReason
+            + ", remaining " + remainingMs + " ms)";
         log.info("Skip model '{}' because {}", candidateModel, skipReason);
-        failures.add(candidateModel + " -> quota cooldown");
+        failures.add(candidateModel + " -> cooldown: " + cooldownReason);
         continue;
       }
 
@@ -2812,13 +2918,14 @@ public class GitHubModelsService {
           return executeWithRetry(request, prompt, maxTokens, progressListener,
               mergeProgress(progressMeta, Map.of("model", candidateModel, "endpointPath", endpointPath)),
               candidateModel,
-              endpoint);
+              endpoint,
+              endpointToken);
         } catch (HttpClientErrorException ex) {
           if (isUnknownModelError(ex)) {
             String msg = "Model '" + candidateModel + "' không khả dụng/sai tên tại endpoint '"
                 + resolveEndpointByPath(endpointPath) + "' (status=" + ex.getStatusCode() + "). Đang thử model tiếp theo.";
             log.warn(msg);
-            markModelTemporarilyUnavailable(candidateModel, modelUnknownCooldownMs, "unknown model for endpoint");
+            markModelTemporarilyUnavailable(candidateModel, endpointToken, modelUnknownCooldownMs, "unknown model for endpoint");
             failures.add(candidateModel + " -> unknown model");
             endpointOrder = Collections.emptyList();
             break;
@@ -2853,7 +2960,7 @@ public class GitHubModelsService {
     }
 
     String failureSummary = failures.isEmpty() ? "Không có chi tiết lỗi" : String.join(" | ", failures);
-    throw new IllegalStateException("Tất cả GitHub models đều thất bại. Đã thử: "
+    throw new IllegalStateException("Tất cả ChatGPT models đều thất bại. Đã thử: "
         + String.join(", ", candidateModels) + ". Chi tiết: " + failureSummary);
   }
 
@@ -2886,7 +2993,8 @@ public class GitHubModelsService {
   }
 
   private String executeWithRetry(HttpEntity<Map<String, Object>> request, String prompt, int maxTokens,
-      ProgressListener progressListener, Map<String, Object> progressMeta, String modelName, String endpoint) {
+      ProgressListener progressListener, Map<String, Object> progressMeta, String modelName, String endpoint,
+      String tokenScope) {
     int estimatedTokens = estimateTokens(prompt, maxTokens);
     acquirePermit();
     try {
@@ -2895,14 +3003,14 @@ public class GitHubModelsService {
           reserveBudgetBeforeCall(estimatedTokens);
           emitProgress(progressListener, mergeProgress(progressMeta, Map.of("attempt", attempt)));
           if (attempt == 1) {
-            log.info("GitHub Models request: endpoint='{}', model='{}', promptChars={}", endpoint, modelName, prompt == null ? 0 : prompt.length());
+            log.info("ChatGPT API request: endpoint='{}', model='{}', promptChars={}", endpoint, modelName, prompt == null ? 0 : prompt.length());
           }
           ResponseEntity<String> response = postInferenceRequest(endpoint, request);
           return response.getBody();
         } catch (HttpClientErrorException.TooManyRequests ex) {
           if (isDailyQuotaExceeded(ex)) {
-            String msg = "GitHub Models daily quota reached for model '" + modelName + "'";
-            markModelTemporarilyUnavailable(modelName, modelQuotaCooldownMs, "daily quota exhausted");
+            String msg = "ChatGPT API daily quota reached for model '" + modelName + "'";
+            markModelTemporarilyUnavailable(modelName, tokenScope, modelQuotaCooldownMs, "daily quota exhausted");
             log.warn(msg);
             throw new IllegalStateException(msg);
           }
@@ -2915,8 +3023,16 @@ public class GitHubModelsService {
             String reason = waitMs > maxWaitAllowed && maxWaitAllowed > 0L
                 ? ("429 wait too long (" + waitMs + "ms > " + maxWaitAllowed + "ms)")
                 : ("429 retries exceeded per model (attempt " + attempt + "/" + retryMaxAttempts + ")");
-            log.warn("GitHub Models 429 for model '{}' -> fast failover: {}.", modelName, reason);
-            markModelTemporarilyUnavailable(modelName, modelRateLimitCooldownMs, reason);
+            log.warn("ChatGPT API 429 for model '{}' -> fast failover: {}.", modelName, reason);
+            // If OpenAI returned a large Retry-After, the entire account key is rate-limited.
+            // Record account-level cooldown so other models skip immediately without wasted calls.
+            if (waitMs > maxWaitAllowed && maxWaitAllowed > 0L && waitMs > 0L) {
+              long accountCooldownUntil = System.currentTimeMillis() + waitMs;
+              openAiAccountRateLimitUntilMs = accountCooldownUntil;
+              log.warn("OpenAI account-level rate limit detected: all models unavailable for {}ms (until {})",
+                  waitMs, new java.util.Date(accountCooldownUntil));
+            }
+            markModelTemporarilyUnavailable(modelName, tokenScope, modelRateLimitCooldownMs, reason);
             emitProgress(progressListener, mergeProgress(progressMeta, Map.of(
                 "stage", "fast_failover_rate_limit",
                 "message", "Model dang bi rate-limit, chuyen model fallback de giam tre",
@@ -2929,11 +3045,11 @@ public class GitHubModelsService {
             throw new IllegalStateException("rate limit fast-failover for model '" + modelName + "': " + reason);
           }
 
-          log.warn("GitHub Models 429 rate limit for model '{}' (attempt {}/{}). Waiting {} ms before retry.",
+          log.warn("ChatGPT API 429 rate limit for model '{}' (attempt {}/{}). Waiting {} ms before retry.",
               modelName, attempt, retryMaxAttempts, waitMs);
           emitProgress(progressListener, mergeProgress(progressMeta, Map.of(
               "stage", "waiting_rate_limit",
-              "message", "Đang chờ quota GitHub Models",
+              "message", "Đang chờ quota ChatGPT API",
               "messageKey", "copilot.progress.message.waiting_rate_limit",
               "messageArgs", Map.of("model", modelName, "waitingMs", waitMs),
               "attempt", attempt,
@@ -2942,7 +3058,7 @@ public class GitHubModelsService {
           sleepQuietly(waitMs);
         } catch (HttpClientErrorException ex) {
           if (ex.getStatusCode().value() == 401) {
-            String authMessage = "GitHub Models authentication failed (401) for model '" + modelName
+            String authMessage = "ChatGPT API authentication failed (401) for model '" + modelName
                 + "' at endpoint '" + endpoint
                 + "'. Check github.models.token, github.models.auth-scheme and token scope.";
             throw new IllegalStateException(authMessage, ex);
@@ -2953,7 +3069,7 @@ public class GitHubModelsService {
     } finally {
       requestSemaphore.release();
     }
-    throw new IllegalStateException("GitHub Models rate limit exceeded after retries for model '" + modelName + "'");
+    throw new IllegalStateException("ChatGPT API rate limit exceeded after retries for model '" + modelName + "'");
   }
 
   private ResponseEntity<String> postInferenceRequest(String endpoint, HttpEntity<Map<String, Object>> request) {
@@ -2964,7 +3080,7 @@ public class GitHubModelsService {
     ResponseEntity<String> response = executeInferencePost(endpoint, safeRequest);
 
     if (response == null) {
-      throw new IllegalStateException("GitHub Models request failed: empty response");
+      throw new IllegalStateException("ChatGPT API request failed: empty response");
     }
 
     if (response.getStatusCode().isError()) {
@@ -2974,7 +3090,7 @@ public class GitHubModelsService {
           return recovered;
         }
       }
-      throw createHttpClientError("GitHub Models request failed", response);
+      throw createHttpClientError("ChatGPT API request failed", response);
     }
 
     return response;
@@ -3431,7 +3547,7 @@ public class GitHubModelsService {
     if (currentWindowEstimatedTokens + estimatedTokens > Math.max(1000, tpmLimit)) {
       long waitForNextWindow = 60000L - (now - currentWindowStartMs) + 500L;
       if (waitForNextWindow > 0L) {
-        log.info("Throttling GitHub Models requests to respect TPM budget. Waiting {} ms.", waitForNextWindow);
+        log.info("Throttling ChatGPT API requests to respect TPM budget. Waiting {} ms.", waitForNextWindow);
         sleepQuietly(waitForNextWindow);
       }
       currentWindowStartMs = System.currentTimeMillis();
@@ -3500,7 +3616,7 @@ public class GitHubModelsService {
         return Math.max(0L, waitMs + 1000L);
       }
     } catch (Exception headerParseEx) {
-      log.debug("Unable to parse retry-after headers from GitHub Models 429: {}", headerParseEx.getMessage());
+      log.debug("Unable to parse retry-after headers from ChatGPT API 429: {}", headerParseEx.getMessage());
     }
     return 0L;
   }
@@ -3514,7 +3630,7 @@ public class GitHubModelsService {
       Thread.sleep(wait);
     } catch (InterruptedException ie) {
       Thread.currentThread().interrupt();
-      throw new IllegalStateException("Interrupted while waiting for GitHub Models retry/throttle", ie);
+      throw new IllegalStateException("Interrupted while waiting for ChatGPT API retry/throttle", ie);
     }
   }
 
@@ -3597,7 +3713,7 @@ public class GitHubModelsService {
         HttpEntity<Map<String, Object>> retryRequest = new HttpEntity<>(request.getBody(), retryHeaders);
         ResponseEntity<String> retryResponse = executeInferencePost(targetEndpoint, retryRequest);
         if (retryResponse != null && !retryResponse.getStatusCode().isError()) {
-          log.warn("Recovered GitHub Models 401 via fallback auth strategy: endpoint='{}' auth='{}'",
+          log.warn("Recovered ChatGPT API 401 via fallback auth strategy: endpoint='{}' auth='{}'",
               targetEndpoint,
               authHeader.toLowerCase(Locale.ROOT).startsWith("github-bearer ") ? "github-bearer" : "bearer");
           return retryResponse;
@@ -3615,8 +3731,8 @@ public class GitHubModelsService {
 
     addAuthCandidate(authCandidates, currentAuth);
 
-    String patToken = getPatToken();
-    addAuthVariantsForToken(authCandidates, patToken);
+    String apiToken = getApiToken();
+    addAuthVariantsForToken(authCandidates, apiToken);
     return authCandidates;
   }
 
@@ -4076,7 +4192,7 @@ public class GitHubModelsService {
     @SuppressWarnings("unchecked")
     Map<String, Object> payload = objectMapper.readValue(rawBody, Map.class);
 
-    // OpenAI/Copilot Responses API format
+    // OpenAI/ChatGPT Responses API format
     Object outputObj = payload.get("output");
     if (outputObj instanceof List<?> outputList && !outputList.isEmpty()) {
       StringBuilder sb = new StringBuilder();
