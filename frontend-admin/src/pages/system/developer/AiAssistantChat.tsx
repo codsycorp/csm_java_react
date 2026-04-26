@@ -483,6 +483,17 @@ export default function AiAssistantChat({
 	const [autoApplyEnabled, setAutoApplyEnabled] = useState<boolean>(() => loadAutoApplyPreference(autoApplyPreferenceKey, Boolean(autoApplyCodeBlock)));
 	const [pendingAttachments, setPendingAttachments] = useState<AiAssistantAttachment[]>([]);
 	const [stageEvents, setStageEvents] = useState<AiAssistantStageEvent[]>([]);
+	// Progress state: waiting for Gemini / streaming progress
+	const [geminiProgress, setGeminiProgress] = useState<{
+		phase: "idle" | "waiting" | "streaming";
+		percent: number;
+		message: string;
+		estimatedWaitSecs: number;
+		remainingSecs: number;
+		charsReceived: number;
+		estimatedTotalChars: number;
+		ttftMs?: number;
+	}>({ phase: "idle", percent: 0, message: "", estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
 	const messageListRef = useRef<HTMLDivElement>(null);
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const imageInputRef = useRef<HTMLInputElement>(null);
@@ -1112,6 +1123,7 @@ export default function AiAssistantChat({
 			setMessages([...newMessages, assistantMsg]);
 			setIsLoading(true);
 			setStageEvents([]);
+			setGeminiProgress({ phase: "idle", percent: 0, message: "", estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
 			stageEventSignaturesRef.current = new Set();
 			followBottomRef.current = true;
 			streamingMessageRef.current = "";
@@ -1206,13 +1218,57 @@ export default function AiAssistantChat({
 						const json = line.slice(5).trim();
 						if (!json || json === "[DONE]") continue;
 						try {
-							const evt = JSON.parse(json) as { stage: string; chunk?: string; fullResponse?: string; responseMode?: string; message?: string; percent?: number };
-							if (evt.stage === "preparing" || evt.stage === "analyzing") {
+							const evt = JSON.parse(json) as {
+								stage: string; chunk?: string; fullResponse?: string; responseMode?: string;
+								message?: string; percent?: number; estimatedWaitSecs?: number;
+								remainingEstimateSecs?: number; charsReceived?: number; estimatedTotalChars?: number;
+								ttftMs?: number; elapsedMs?: number; promptTokens?: number; model?: string;
+							};
+							if (evt.stage === "preparing") {
+								setGeminiProgress(prev => ({
+									...prev,
+									phase: "waiting",
+									percent: evt.percent ?? 0,
+									message: evt.message ?? "",
+									estimatedWaitSecs: evt.estimatedWaitSecs ?? 0,
+									remainingSecs: evt.estimatedWaitSecs ?? 0,
+								}));
+							} else if (evt.stage === "waiting_gemini") {
+								setGeminiProgress(prev => ({
+									...prev,
+									phase: "waiting",
+									percent: evt.percent ?? prev.percent,
+									message: evt.message ?? prev.message,
+									remainingSecs: evt.remainingEstimateSecs ?? prev.remainingSecs,
+								}));
+							} else if (evt.stage === "streaming_started") {
+								setGeminiProgress(prev => ({
+									...prev,
+									phase: "streaming",
+									percent: 15,
+									message: "Đang nhận kết quả từ Gemini...",
+									ttftMs: evt.ttftMs,
+									estimatedTotalChars: evt.estimatedTotalChars ?? prev.estimatedTotalChars,
+									remainingSecs: 0,
+								}));
+							} else if (evt.stage === "streaming_progress") {
+								setGeminiProgress(prev => ({
+									...prev,
+									phase: "streaming",
+									percent: evt.percent ?? prev.percent,
+									message: evt.message ?? prev.message,
+									charsReceived: evt.charsReceived ?? prev.charsReceived,
+									remainingSecs: evt.remainingEstimateSecs ?? prev.remainingSecs,
+								}));
+							} else if (evt.stage === "analyzing") {
+								appendStageEvent({ stage: evt.stage as any, message: evt.message ?? "", percent: evt.percent ?? 0 });
+							} else if (evt.stage === "context" || evt.stage === "continuing" || evt.stage === "cached") {
 								appendStageEvent({ stage: evt.stage as any, message: evt.message ?? "", percent: evt.percent ?? 0 });
 							} else if (evt.stage === "streaming" && evt.chunk) {
 								pendingStreamChunkRef.current += evt.chunk;
 								scheduleStreamFlush();
 							} else if (evt.stage === "complete") {
+								setGeminiProgress({ phase: "idle", percent: 100, message: "Hoàn thành", estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
 								flushStreamingToUI();
 								if (evt.fullResponse) {
 									applyRealtimeCodeFromText(evt.fullResponse);
@@ -1220,6 +1276,7 @@ export default function AiAssistantChat({
 								setIsLoading(false);
 								turnAllowAutoApplyRef.current = false;
 							} else if (evt.stage === "error") {
+								setGeminiProgress({ phase: "idle", percent: 0, message: "", estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
 								message.error(evt.message || uiText("Chat thất bại", "Chat failed", "对话失败"));
 								setIsLoading(false);
 								turnAllowAutoApplyRef.current = false;
@@ -1398,6 +1455,47 @@ export default function AiAssistantChat({
 
 					{isLoading && (
 						<>
+							{/* Gemini Progress Bar — waiting / streaming phase */}
+							{geminiProgress.phase !== "idle" && (
+								<div className={`${styles.messageItem} ${styles.assistant}`}>
+									<div className={styles.geminiProgressCard}>
+										<div className={styles.geminiProgressHeader}>
+											<span className={styles.geminiProgressIcon}>
+												{geminiProgress.phase === "waiting" ? "⏳" : "⚡"}
+											</span>
+											<span className={styles.geminiProgressLabel}>
+												{geminiProgress.message || (geminiProgress.phase === "waiting"
+													? "Gemini đang xử lý..."
+													: "Đang nhận kết quả...")}
+											</span>
+											{geminiProgress.remainingSecs > 0 && (
+												<span className={styles.geminiProgressCountdown}>
+													~{geminiProgress.remainingSecs}s
+												</span>
+											)}
+										</div>
+										<div className={styles.geminiProgressBarTrack}>
+											<div
+												className={`${styles.geminiProgressBarFill} ${geminiProgress.phase === "waiting" ? styles.geminiProgressBarWaiting : styles.geminiProgressBarStreaming}`}
+												style={{ width: `${Math.max(2, Math.min(100, geminiProgress.percent))}%` }}
+											/>
+										</div>
+										{geminiProgress.phase === "streaming" && geminiProgress.charsReceived > 0 && (
+											<div className={styles.geminiProgressMeta}>
+												{geminiProgress.charsReceived.toLocaleString()} ký tự nhận được
+												{geminiProgress.ttftMs != null && (
+													<span className={styles.geminiProgressTtft}> · TTFT {geminiProgress.ttftMs}ms</span>
+												)}
+											</div>
+										)}
+										{geminiProgress.phase === "waiting" && geminiProgress.estimatedWaitSecs > 0 && (
+											<div className={styles.geminiProgressMeta}>
+												Ước tính ~{geminiProgress.estimatedWaitSecs}s tổng thời gian
+											</div>
+										)}
+									</div>
+								</div>
+							)}
 							{stageEvents.length > 0 && (
 								<div className={`${styles.messageItem} ${styles.assistant}`}>
 									<div className={`${styles.messageContent} ${styles.stageTimelineCard}`}>

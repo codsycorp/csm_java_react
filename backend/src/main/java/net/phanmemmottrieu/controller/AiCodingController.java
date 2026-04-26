@@ -1,7 +1,7 @@
 package net.phanmemmottrieu.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import net.phanmemmottrieu.service.ClaudeStreamingService;
+import net.phanmemmottrieu.service.GeminiStreamingService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -21,9 +21,10 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 
 /**
- * SSE endpoint for the AI coding assistant (Claude streaming via LangChain4j).
+ * SSE endpoint for the AI coding assistant (Gemini streaming adapter).
  * Replaces the legacy Socket.IO stream route with a clean HTTP SSE stream.
  *
  * POST /api/ai-code-stream
@@ -77,20 +78,37 @@ public class AiCodingController {
     @Value("${ai.code-stream.auto-continue.max-previous-response-chars:120000}")
     private int autoContinueMaxPreviousResponseChars;
 
-    private final ClaudeStreamingService claudeStreamingService;
+    // ── Model Routing ─────────────────────────────────────────────────────────
+    @Value("${ai.code-stream.routing.enabled:true}")
+    private boolean routingEnabled;
+
+    /** Model to use for simple analyze requests (e.g. gemini-2.5-flash). Empty = disable routing. */
+    @Value("${ai.code-stream.routing.simple-model:}")
+    private String routingSimpleModel;
+
+    /** Total chars (message + code) below which we route to simple model for analyze mode */
+    @Value("${ai.code-stream.routing.complex-threshold-chars:20000}")
+    private int routingComplexThresholdChars;
+
+    // ── Prompt Chunking Gate (legacy switch) ─────────────────────────────────
+    /** Minimum base content chars before splitting prompt into system/user parts */
+    @Value("${ai.code-stream.prompt-cache.min-chars:8000}")
+    private int promptCacheMinChars;
+
+    private final GeminiStreamingService geminiStreamingService;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final ExecutorService executor = Executors.newCachedThreadPool();
     private final Map<String, BaseContentEntry> baseContentCache = new ConcurrentHashMap<>();
 
-    @Value("${claude.streaming.model:}")
+    @Value("${gemini.model:}")
     private String defaultStreamingModel;
 
     // Legacy compatibility key (deprecated): gemini.streaming.model
     @Value("${gemini.streaming.model:}")
     private String legacyStreamingModel;
 
-    public AiCodingController(ClaudeStreamingService claudeStreamingService) {
-        this.claudeStreamingService = claudeStreamingService;
+    public AiCodingController(GeminiStreamingService geminiStreamingService) {
+        this.geminiStreamingService = geminiStreamingService;
     }
 
     @PostMapping(value = "/api/ai-code-stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -144,10 +162,25 @@ public class AiCodingController {
                     prompt = truncateMiddle(prompt, Math.max(20000, maxPromptChars));
                 }
 
-                String effectiveModel = modelOverride.isBlank() ? resolveDefaultStreamingModel() : modelOverride;
+                // Decide whether to split prompt parts for compatibility path.
+                // Use prompt.length() (not just effectiveCodeContext) so attachments also qualify.
+                // Subtract message length as a rough estimate of system-only content.
+                int systemContentEstimate = prompt.length() - message.length();
+                boolean usePromptCache = systemContentEstimate >= Math.max(1000, promptCacheMinChars);
+                String[] promptParts = usePromptCache
+                        ? buildCodingPromptParts(message, effectiveCodeContext, language, contextType, responseMode,
+                                attachmentsRaw, largeStructuredEditMode, base.baseRef(), base.baseContentChars())
+                        : new String[]{prompt, ""};
+                // Enforce prompt budget on system part if too large
+                if (promptParts[0].length() > maxPromptChars) {
+                    promptParts[0] = truncateMiddle(promptParts[0], Math.max(20000, maxPromptChars));
+                    usePromptCache = false; // fall back to combined if truncated
+                }
+
+                String effectiveModel = routeModel(message, effectiveCodeContext, responseMode, modelOverride);
                 long startedAtMs = System.currentTimeMillis();
-                log.info("AiCodingController: ai-code-stream start appId={} model={} language={} promptChars={} promptTokens~{} messageChars={}",
-                    appId, effectiveModel, language, prompt.length(), estimateTokens(prompt), message.length());
+                log.info("AiCodingController: ai-code-stream start appId={} model={} language={} promptChars={} promptTokens~{} messageChars={} promptCache={}",
+                    appId, effectiveModel, language, prompt.length(), estimateTokens(prompt), message.length(), usePromptCache);
 
                 if (!base.baseRef().isBlank()) {
                     sendEvent(emitter, jsonOf(
@@ -160,17 +193,28 @@ public class AiCodingController {
                     ));
                 }
 
-                // Send preparing event
-                sendEvent(emitter, jsonOf("stage", "preparing",
-                    "message", "Đang kết nối Claude...", "percent", 0));
+                // Send preparing event with estimated wait time
+                int promptTokens = estimateTokens(prompt);
+                int estimatedWaitSecs = 3 + prompt.length() / 4000 + (8192 * 4 / 400);
+                sendEvent(emitter, jsonOf(
+                    "stage", "preparing",
+                    "message", "Đang kết nối Gemini...",
+                    "model", effectiveModel,
+                    "promptTokens", promptTokens,
+                    "estimatedWaitSecs", estimatedWaitSecs,
+                    "percent", 0
+                ));
 
                 String rawResponse = streamWithAutoContinue(
                     emitter,
                     prompt,
+                    promptParts[0],
+                    promptParts[1],
                     effectiveModel,
                     language,
                     responseMode,
-                    largeStructuredEditMode
+                    largeStructuredEditMode,
+                    usePromptCache
                 );
                 if (rawResponse == null) {
                     return;
@@ -286,6 +330,20 @@ public class AiCodingController {
         String responseMode,
         boolean largeStructuredEditMode
     ) throws Exception {
+        return streamWithAutoContinue(emitter, prompt, "", "", model, language, responseMode, largeStructuredEditMode, false);
+    }
+
+    private String streamWithAutoContinue(
+        SseEmitter emitter,
+        String prompt,
+        String systemContent,
+        String userMessage,
+        String model,
+        String language,
+        String responseMode,
+        boolean largeStructuredEditMode,
+        boolean usePromptCache
+    ) throws Exception {
         boolean editMode = "edit".equalsIgnoreCase(responseMode);
         int maxAttempts = editMode && autoContinueEnabled ? Math.max(1, autoContinueMaxAttempts) : 1;
         String currentPrompt = prompt;
@@ -306,28 +364,61 @@ public class AiCodingController {
             StringBuilder attemptBuffer = new StringBuilder();
             Throwable[] errorHolder = {null};
 
-            claudeStreamingService.streamContent(
-                currentPrompt,
-                model,
-                chunk -> attemptBuffer.append(chunk),
-                null,
-                err -> errorHolder[0] = err,
-                status -> {
-                    try {
-                        Map<String, Object> wrapped = new LinkedHashMap<>(status);
-                        wrapped.put("attempt", attemptNo);
-                        wrapped.put("maxAttempts", maxAttempts);
-                        sendEvent(emitter, objectMapper.writeValueAsString(wrapped));
-                    } catch (Exception ignored) {
-                        // ignore status event serialization failures
+            // First attempt may use prompt caching; auto-continue always uses regular path
+            boolean isFirstAttemptWithCache = (attempt == 1) && usePromptCache
+                    && systemContent != null && !systemContent.isBlank()
+                    && userMessage != null && !userMessage.isBlank();
+
+            Consumer<String> chunkHandler = chunk -> {
+                attemptBuffer.append(chunk);
+                try {
+                    sendEvent(emitter, objectMapper.writeValueAsString(Map.of(
+                        "stage", "streaming",
+                        "chunk", chunk,
+                        "attempt", attemptNo
+                    )));
+                } catch (Exception ignored) { }
+            };
+
+            if (isFirstAttemptWithCache) {
+                geminiStreamingService.streamContentWithCache(
+                    systemContent,
+                    userMessage,
+                    model,
+                    chunkHandler,
+                    null,
+                    err -> errorHolder[0] = err,
+                    status -> {
+                        try {
+                            Map<String, Object> wrapped = new LinkedHashMap<>(status);
+                            wrapped.put("attempt", attemptNo);
+                            wrapped.put("maxAttempts", maxAttempts);
+                            sendEvent(emitter, objectMapper.writeValueAsString(wrapped));
+                        } catch (Exception ignored) { }
                     }
-                }
-            );
+                );
+            } else {
+                geminiStreamingService.streamContent(
+                    currentPrompt,
+                    model,
+                    chunkHandler,
+                    null,
+                    err -> errorHolder[0] = err,
+                    status -> {
+                        try {
+                            Map<String, Object> wrapped = new LinkedHashMap<>(status);
+                            wrapped.put("attempt", attemptNo);
+                            wrapped.put("maxAttempts", maxAttempts);
+                            sendEvent(emitter, objectMapper.writeValueAsString(wrapped));
+                        } catch (Exception ignored) { }
+                    }
+                );
+            }
 
             if (errorHolder[0] != null) {
                 log.warn("AiCodingController: ai-code-stream failed model={} attempt={}/{} error={}",
                     model, attemptNo, maxAttempts, errorHolder[0].getMessage());
-                sendErrorEvent(emitter, "Claude streaming lỗi: " + errorHolder[0].getMessage());
+                sendErrorEvent(emitter, "Gemini streaming lỗi: " + errorHolder[0].getMessage());
                 return null;
             }
 
@@ -490,7 +581,58 @@ public class AiCodingController {
         if (legacyStreamingModel != null && !legacyStreamingModel.isBlank()) {
             return legacyStreamingModel.trim();
         }
-        return "claude-sonnet-4-6";
+        return "gemini-2.5-pro";
+    }
+
+    /**
+    * Route to a cheaper model for simple analyze requests.
+     * Rules:
+     *  - If user specifies a model override → use that
+     *  - If routing disabled or no simple model configured → use default
+    *  - If responseMode == "analyze" AND total chars < complexThreshold → use simple model
+    *  - Otherwise → use default model
+     */
+    private String routeModel(String messageText, String codeContext, String responseMode, String modelOverride) {
+        if (modelOverride != null && !modelOverride.isBlank()) {
+            return modelOverride.trim();
+        }
+        if (!routingEnabled) {
+            return resolveDefaultStreamingModel();
+        }
+        String simpleModel = routingSimpleModel == null ? "" : routingSimpleModel.trim();
+        if (simpleModel.isBlank()) {
+            return resolveDefaultStreamingModel();
+        }
+        boolean isAnalyzeMode = !"edit".equalsIgnoreCase(responseMode);
+        int totalChars = (messageText == null ? 0 : messageText.length())
+                + (codeContext == null ? 0 : codeContext.length());
+        if (isAnalyzeMode && totalChars < Math.max(2000, routingComplexThresholdChars)) {
+            log.debug("AiCodingController: routing to simple model={} totalChars={}", simpleModel, totalChars);
+            return simpleModel;
+        }
+        return resolveDefaultStreamingModel();
+    }
+
+    /**
+     * Build prompt as (systemPart, userPart) tuple for prompt caching.
+     * systemPart contains all context (cacheable).
+     * userPart contains only the user's request.
+     * Returns [systemPart, userPart].
+     */
+    private String[] buildCodingPromptParts(String message, String currentCode, String language,
+                                             String contextType, String responseMode, Object attachmentsRaw,
+                                             boolean largeStructuredEditMode, String baseRef, int baseChars) {
+        // Re-use the full prompt builder and split on the last ## YÊU CẦU marker
+        String full = buildCodingPrompt(message, currentCode, language, contextType, responseMode,
+                attachmentsRaw, largeStructuredEditMode, baseRef, baseChars);
+        int idx = full.lastIndexOf("\n## YÊU CẦU\n");
+        if (idx >= 0) {
+            String systemPart = full.substring(0, idx).trim();
+            String userPart = full.substring(idx + "\n## YÊU CẦU\n".length()).trim();
+            return new String[]{systemPart, userPart};
+        }
+        // Fallback: can't split cleanly
+        return new String[]{full, ""};
     }
 
     private String jsonOf(Object... keyValues) {

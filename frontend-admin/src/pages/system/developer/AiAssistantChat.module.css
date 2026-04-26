@@ -185,6 +185,90 @@
 	gap: 8px;
 }
 
+/* ── Gemini progress card ───────────────────────────────── */
+.geminiProgressCard {
+	min-width: min(400px, 92vw);
+	max-width: 100%;
+	padding: 10px 14px;
+	border-radius: 10px;
+	background: color-mix(in srgb, #eff6ff 72%, var(--ant-color-bg-container));
+	border: 1px solid color-mix(in srgb, #93c5fd 36%, transparent);
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.geminiProgressHeader {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 12px;
+	font-weight: 600;
+	color: #1d4ed8;
+}
+
+.geminiProgressIcon {
+	font-size: 14px;
+	line-height: 1;
+	flex: 0 0 auto;
+}
+
+.geminiProgressLabel {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.geminiProgressCountdown {
+	flex: 0 0 auto;
+	font-size: 11px;
+	font-weight: 700;
+	color: #2563eb;
+	background: color-mix(in srgb, #bfdbfe 54%, transparent);
+	border-radius: 999px;
+	padding: 1px 8px;
+}
+
+.geminiProgressBarTrack {
+	height: 5px;
+	border-radius: 999px;
+	background: color-mix(in srgb, #bfdbfe 48%, transparent);
+	overflow: hidden;
+}
+
+.geminiProgressBarFill {
+	height: 100%;
+	border-radius: 999px;
+	transition: width 0.6s ease;
+}
+
+.geminiProgressBarWaiting {
+	background: linear-gradient(90deg, #3b82f6, #60a5fa, #93c5fd, #60a5fa, #3b82f6);
+	background-size: 200% 100%;
+	animation: geminiProgressSlide 2s linear infinite;
+}
+
+.geminiProgressBarStreaming {
+	background: linear-gradient(90deg, #22c55e, #4ade80);
+}
+
+@keyframes geminiProgressSlide {
+	0%   { background-position: 0% 0%; }
+	100% { background-position: 200% 0%; }
+}
+
+.geminiProgressMeta {
+	font-size: 10px;
+	color: var(--ant-color-text-tertiary);
+}
+
+.geminiProgressTtft {
+	opacity: 0.75;
+}
+/* ── end Gemini progress card ───────────────────────────── */
+
 .stageTimelineCard {
 	min-width: min(440px, 92vw);
 	max-width: 100%;

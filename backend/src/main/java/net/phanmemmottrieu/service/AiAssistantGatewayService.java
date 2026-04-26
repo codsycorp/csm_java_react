@@ -818,9 +818,9 @@ public class AiAssistantGatewayService {
   @org.springframework.beans.factory.annotation.Autowired(required = false)
   private GeminiService geminiService;
 
-  // ClaudeStreamingService: streaming adapter for Claude via LangChain4j.
+  // GeminiStreamingService: streaming adapter for Gemini real-time chunks.
   @org.springframework.beans.factory.annotation.Autowired(required = false)
-  private ClaudeStreamingService claudeStreamingService;
+  private GeminiStreamingService geminiStreamingService;
 
   private String getApiToken() {
     String openAiEnvToken = System.getenv("OPENAI_API_KEY");
@@ -1789,12 +1789,12 @@ public class AiAssistantGatewayService {
 
       StringBuilder fullResponse = new StringBuilder();
 
-        emitProgress(progressListener, progressPayload("streaming", "Bắt đầu streaming với Claude", 0, 1,
+        emitProgress(progressListener, progressPayload("streaming", "Bắt đầu streaming với Gemini", 0, 1,
           progressI18n("copilot.progress.message.streaming_start", null, null, null)));
 
-      // Use ClaudeStreamingService for real-time token streaming.
-      if (claudeStreamingService != null) {
-        claudeStreamingService.streamContent(fittedPrompt, null,
+      // Use GeminiStreamingService for real-time token streaming.
+      if (geminiStreamingService != null) {
+        geminiStreamingService.streamContent(fittedPrompt, null,
             chunk -> {
               fullResponse.append(chunk);
               emitProgress(progressListener, progressPayload("streaming", "Nhận dữ liệu", 0, 1,
@@ -3182,15 +3182,15 @@ public class AiAssistantGatewayService {
       case "gpt 5.4 mini": return "gpt-5.4-mini";
       case "gpt 5 mini": return "gpt-5-mini";
       case "grok code fast 1": return "grok-code-fast-1";
-      case "claude haiku 4.5": return "claude-haiku-4.5";
+      case "claude haiku 4.5": return "gemini-2.5-flash";
       case "gemini 3 flash": return "gemini-3-flash";
-      case "claude sonnet 4.6": return "claude-sonnet-4.6";
-      case "claude sonnet 4": return "claude-sonnet-4";
-      case "claude sonnet 4.5": return "claude-sonnet-4.5";
+      case "claude sonnet 4.6": return "gemini-2.5-pro";
+      case "claude sonnet 4": return "gemini-2.5-pro";
+      case "claude sonnet 4.5": return "gemini-2.5-pro";
       case "gpt 5.2": return "gpt-5.2";
       case "gpt 4.1": return "gpt-4.1";
       case "gpt 4o": return "gpt-4o";
-      case "claude opus 4.7": return "claude-opus-4.7";
+      case "claude opus 4.7": return "gemini-2.5-pro";
       case "gemini 3.1 pro": return "gemini-3.1-pro";
       case "gpt 5.2 codex": return "gpt-5.2-codex";
       case "gpt 5.3 codex": return "gpt-5.3-codex";
