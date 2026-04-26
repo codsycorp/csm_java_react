@@ -448,20 +448,21 @@ public class AiCodingController {
 
     private String buildAutoContinuePrompt(String originalPrompt, String previousRawResponse, String language, boolean largeStructuredEditMode) {
         StringBuilder sb = new StringBuilder();
-        sb.append("KẾT QUẢ VỪA RỒI CHƯA HOÀN CHỈNH. Hãy trả về lại 1 lần DUY NHẤT, đầy đủ và hợp lệ.\n\n");
+        sb.append("KẾT QUẢ VỪA RỒI CHƯA HOÀN CHỈNH (bị cắt giữa chừng). Hãy trả về lại 1 lần DUY NHẤT, đầy đủ và hợp lệ.\n\n");
         if (largeStructuredEditMode) {
             sb.append("BẮT BUỘC format JSON: {\"summary\":\"...\",\"changes\":[...],\"textEdits\":[{\"find\":\"...\",\"replace\":\"...\"}]}\n");
             sb.append("Không markdown, không code fence, không giải thích thêm.\n\n");
+        } else if ("json".equalsIgnoreCase(language)) {
+            sb.append("BẮT BUỘC: Trả về JSON hợp lệ, đầy đủ từ đầu đến cuối trong wrapper: {\"summary\":\"...\",\"code\":\"toàn bộ JSON hoàn chỉnh\",\"changes\":[...]}\n");
+            sb.append("QUAN TRỌNG: Trường 'code' phải chứa toàn bộ JSON hợp lệ (không được bỏ sót bất kỳ phần nào, mở { phải có đóng }).\n");
+            sb.append("Không markdown, không code fence, không cắt bớt.\n\n");
         } else {
             sb.append("BẮT BUỘC format JSON: {\"summary\":\"...\",\"code\":\"toàn bộ code hoàn chỉnh\",\"changes\":[...]}\n");
-            if ("json".equalsIgnoreCase(language)) {
-                sb.append("Trường code phải là JSON hợp lệ đầy đủ từ đầu đến cuối.\n");
-            }
             sb.append("Không markdown, không code fence, không trả về một đoạn rời.\n\n");
         }
         sb.append("--- YÊU CẦU GỐC ---\n");
         sb.append(truncateMiddle(originalPrompt, Math.max(20000, maxPromptChars))).append("\n\n");
-        sb.append("--- KẾT QUẢ TRƯỚC (CHƯA HOÀN CHỈNH) ---\n");
+        sb.append("--- KẾT QUẢ TRƯỚC (CHƯA HOÀN CHỈNH - BỊ CẮT) ---\n");
         sb.append(truncateMiddle(previousRawResponse, Math.max(8000, autoContinueMaxPreviousResponseChars))).append("\n");
         return sb.toString();
     }
@@ -471,6 +472,28 @@ public class AiCodingController {
         if (raw.isBlank()) {
             return false;
         }
+
+        // For JSON language: always verify the JSON is structurally complete regardless of mode
+        if ("json".equalsIgnoreCase(language)) {
+            // Try to parse JSON directly or inside a wrapper {"code":...}
+            String candidate = raw;
+            // If wrapped in code payload, extract the code field
+            ParsedCodePayload parsed = parseCodePayload(raw);
+            if (parsed != null && !parsed.code().isBlank()) {
+                candidate = parsed.code().trim();
+            }
+            // Strip markdown fences if any
+            if (candidate.startsWith("```")) {
+                candidate = candidate.replaceFirst("^```[a-zA-Z]*\\s*", "").replaceAll("\\s*```$", "").trim();
+            }
+            try {
+                objectMapper.readTree(candidate);
+                return true;
+            } catch (Exception ex) {
+                return false; // truncated or invalid JSON → trigger auto-continue
+            }
+        }
+
         if (!"edit".equalsIgnoreCase(responseMode)) {
             return true;
         }
@@ -484,13 +507,16 @@ public class AiCodingController {
             return false;
         }
 
-        if ("json".equalsIgnoreCase(language)) {
-            try {
-                objectMapper.readTree(payload.code());
-                return true;
-            } catch (Exception ex) {
-                return false;
-            }
+        // Check that the code field itself is not truncated.
+        // Heuristic: if the raw response ends with a truncated JSON string (no closing "}"),
+        // it means Gemini hit token limit mid-code. We detect this by checking that
+        // the raw response forms a fully balanced JSON (re-parse + code field round-trip).
+        try {
+            // re-serialize and check balance
+            String reJson = objectMapper.writeValueAsString(objectMapper.readValue(raw.startsWith("```") ? raw.replaceFirst("^```[a-zA-Z]*\\s*", "").replaceAll("\\s*```$", "").trim() : raw, Map.class));
+            if (reJson == null || reJson.isBlank()) return false;
+        } catch (Exception ex) {
+            return false; // raw JSON not closed → truncated
         }
 
         return payload.code().length() >= 20;

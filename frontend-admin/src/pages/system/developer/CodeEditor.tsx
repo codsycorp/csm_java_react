@@ -1113,7 +1113,7 @@ export default function CodeEditor() {
 						setAiProgress({
 							stage: "streaming",
 							status: "streaming",
-							message: "Claude đang streaming...",
+							message: "Gemini đang streaming...",
 							percent: 50,
 						});
 					},
@@ -1122,10 +1122,19 @@ export default function CodeEditor() {
 						if (baseRef) {
 							aiBaseContentRef.current = baseRef;
 						}
+						const stage = String(status.stage || "preparing");
+						// Map Gemini-specific stages to friendly messages
+						const stageMessageMap: Record<string, string> = {
+							waiting_gemini: String(status.message || "Gemini đang xử lý..."),
+							streaming_started: "Bắt đầu nhận kết quả từ Gemini...",
+							streaming_progress: String(status.message || "Đang nhận kết quả..."),
+							cached: "Lấy từ cache...",
+							context: "Đã tải context code...",
+						};
 						setAiProgress({
-							stage: String(status.stage || "preparing"),
-							status: String(status.status || "preparing"),
-							message: String(status.message || ""),
+							stage,
+							status: String(status.status || stage),
+							message: stageMessageMap[stage] ?? String(status.message || ""),
 							percent: Number(status.percent || 0),
 						});
 					},
@@ -1142,7 +1151,7 @@ export default function CodeEditor() {
 			if (streamErr) {
 				throw new Error(streamErr);
 			}
-			if (!gotCompleteEvent) {
+			if (!gotCompleteEvent && !finalResponse) {
 				throw new Error(t("system.developer.ai.requestFailed") + " (stream incomplete)");
 			}
 			if (!finalResponse) {
