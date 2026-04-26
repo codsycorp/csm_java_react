@@ -818,9 +818,9 @@ public class AiAssistantGatewayService {
   @org.springframework.beans.factory.annotation.Autowired(required = false)
   private GeminiService geminiService;
 
-  // GeminiStreamingService: used for real-time token streaming via Gemini SSE API.
+  // ClaudeStreamingService: streaming adapter for Claude via LangChain4j.
   @org.springframework.beans.factory.annotation.Autowired(required = false)
-  private GeminiStreamingService geminiStreamingService;
+  private ClaudeStreamingService claudeStreamingService;
 
   private String getApiToken() {
     String openAiEnvToken = System.getenv("OPENAI_API_KEY");
@@ -1789,12 +1789,12 @@ public class AiAssistantGatewayService {
 
       StringBuilder fullResponse = new StringBuilder();
 
-        emitProgress(progressListener, progressPayload("streaming", "Bắt đầu streaming với Gemini", 0, 1,
+        emitProgress(progressListener, progressPayload("streaming", "Bắt đầu streaming với Claude", 0, 1,
           progressI18n("copilot.progress.message.streaming_start", null, null, null)));
 
-      // Use GeminiStreamingService for real-time token streaming (GitHub Models streaming removed).
-      if (geminiStreamingService != null) {
-        geminiStreamingService.streamContent(fittedPrompt, null,
+      // Use ClaudeStreamingService for real-time token streaming.
+      if (claudeStreamingService != null) {
+        claudeStreamingService.streamContent(fittedPrompt, null,
             chunk -> {
               fullResponse.append(chunk);
               emitProgress(progressListener, progressPayload("streaming", "Nhận dữ liệu", 0, 1,

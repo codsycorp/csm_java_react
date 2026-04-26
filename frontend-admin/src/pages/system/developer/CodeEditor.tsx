@@ -17,15 +17,18 @@ import {
 import CodeMirror from "#src/components/editor/CodeMirrorWithAiAssistant";
 import { javascript } from "@codemirror/lang-javascript";
 import { html } from "@codemirror/lang-html";
+import { python } from "@codemirror/lang-python";
+import { css } from "@codemirror/lang-css";
+import { sql } from "@codemirror/lang-sql";
+import { json } from "@codemirror/lang-json";
 import { search, openSearchPanel, gotoLine } from "@codemirror/search";
 import { undo, redo } from "@codemirror/commands";
 import { StateEffect, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView } from "@codemirror/view";
 import { vscodeDark, vscodeLight } from "@uiw/codemirror-theme-vscode";
 import { useTranslation } from "react-i18next";
-import { useAppStore } from "#src/store";
+import { useAppStore, useAuthStore } from "#src/store";
 import { usePreferences } from "#src/hooks";
-import { generateSeoContentWithPrompt } from "#src/api/ai";
 import {
 	fetchCodeList,
 	decryptCode,
@@ -294,6 +297,239 @@ function parseAiCodeResponse(response: any): { summary: string; code: string; ch
 	return null;
 }
 
+function extractValidJsonCandidate(rawText: string): string | null {
+	const text = String(rawText || "").trim();
+	if (!text) return null;
+	const candidates = [text];
+
+	const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+	if (fenceMatch?.[1]) {
+		candidates.push(String(fenceMatch[1]).trim());
+	}
+
+	const objStart = text.indexOf("{");
+	const objEnd = text.lastIndexOf("}");
+	if (objStart >= 0 && objEnd > objStart) {
+		candidates.push(text.slice(objStart, objEnd + 1).trim());
+	}
+
+	const arrStart = text.indexOf("[");
+	const arrEnd = text.lastIndexOf("]");
+	if (arrStart >= 0 && arrEnd > arrStart) {
+		candidates.push(text.slice(arrStart, arrEnd + 1).trim());
+	}
+
+	for (const candidate of candidates) {
+		try {
+			JSON.parse(candidate);
+			return candidate;
+		} catch {
+			// try next candidate
+		}
+	}
+
+	return null;
+}
+
+function resolveContinueSafeCode(params: {
+	continueMode: boolean;
+	language: string;
+	currentDraft: string;
+	candidateCode: string;
+}): { shouldApply: boolean; code: string; warning?: string } {
+	const continueMode = Boolean(params.continueMode);
+	const language = String(params.language || "").toLowerCase();
+	const currentDraft = String(params.currentDraft || "");
+	const candidateCode = String(params.candidateCode || "").trim();
+
+	if (!candidateCode) {
+		return {
+			shouldApply: false,
+			code: currentDraft,
+			warning: "AI chưa trả về mã hợp lệ.",
+		};
+	}
+
+	if (!continueMode) {
+		return { shouldApply: true, code: candidateCode };
+	}
+
+	if (language === "json") {
+		const validJson = extractValidJsonCandidate(candidateCode);
+		if (!validJson) {
+			return {
+				shouldApply: false,
+				code: currentDraft,
+				warning: "Kết quả Continue chưa phải JSON hoàn chỉnh, giữ nguyên code cũ để tránh mất dữ liệu.",
+			};
+		}
+		return { shouldApply: true, code: validJson };
+	}
+
+	const minExpected = Math.max(200, Math.floor(currentDraft.length * 0.4));
+	if (currentDraft && candidateCode.length < minExpected) {
+		return {
+			shouldApply: false,
+			code: currentDraft,
+			warning: "Kết quả Continue có dấu hiệu chỉ là đoạn rời, giữ nguyên code cũ để tránh ghi đè nhầm.",
+		};
+	}
+
+	return { shouldApply: true, code: candidateCode };
+}
+
+function tryExtractStructuredStreamingCode(rawText: string): string | null {
+	let raw = String(rawText || "").trim();
+	if (!raw) return null;
+	if (raw.startsWith("```json")) raw = raw.slice(7).trim();
+	if (raw.startsWith("```")) raw = raw.slice(3).trim();
+	if (raw.endsWith("```")) raw = raw.slice(0, -3).trim();
+	try {
+		const obj = JSON.parse(raw);
+		const code = typeof obj?.code === "string" ? obj.code : "";
+		return code.trim() ? code : null;
+	} catch {
+		return null;
+	}
+}
+
+// ─── Language map: codeType → language id ────────────────────────────────────
+const CODE_TYPE_LANGUAGE: Record<number, string> = {
+	0: "javascript",
+	1: "html",
+	2: "python",
+	3: "css",
+	4: "sql",
+	5: "json",
+};
+
+const CODE_TYPE_LABEL: Record<number, string> = {
+	0: "JavaScript",
+	1: "HTML",
+	2: "Python",
+	3: "CSS",
+	4: "SQL",
+	5: "JSON",
+};
+
+// ─── SSE streaming helper for /api/ai-code-stream ────────────────────────────
+async function streamAiCode(
+	params: {
+		appId: string;
+		message: string;
+		currentCode: string;
+		baseContentRef?: string;
+		baseContent?: string;
+		preserveBaseContent?: boolean;
+		language: string;
+		responseMode: string;
+		contextType: string;
+	},
+	callbacks: {
+		onChunk?: (chunk: string, accumulated: string) => void;
+		onStatus?: (status: Record<string, unknown>) => void;
+		onComplete?: (fullResponse: string) => void;
+		onError?: (error: string) => void;
+	},
+): Promise<void> {
+	const apiBase = ((import.meta.env.VITE_API_BASE_URL as string) || "").replace(/\/$/, "");
+	const url = `${apiBase}/api/ai-code-stream`;
+
+	let token = "";
+	let csrfToken = "";
+	try {
+		token = useAuthStore.getState().token || "";
+	} catch { /* ignore */ }
+	try {
+		const m = document.cookie.match(/(?:^|; )CSRF-TOKEN=([^;]*)/);
+		csrfToken = m ? decodeURIComponent(m[1]) : "";
+	} catch { /* ignore */ }
+
+	let response: Response;
+	try {
+		response = await fetch(url, {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				...(token ? { "csm-token": token } : {}),
+				...(csrfToken ? { "X-CSRF-Token": csrfToken } : {}),
+			},
+			body: JSON.stringify(params),
+		});
+	} catch (err) {
+		callbacks.onError?.(err instanceof Error ? err.message : "Network error");
+		return;
+	}
+
+	if (!response.ok || !response.body) {
+		callbacks.onError?.(`HTTP ${response.status}: ${response.statusText}`);
+		return;
+	}
+
+	const reader = response.body.getReader();
+	const decoder = new TextDecoder();
+	let accumulated = "";
+	let buffer = "";
+	let completed = false;
+
+	const processSseLine = (line: string) => {
+		const trimmed = line.trim();
+		if (!trimmed.startsWith("data:")) return;
+		const jsonStr = trimmed.slice(5).trim();
+		if (!jsonStr) return;
+		try {
+			const event = JSON.parse(jsonStr) as Record<string, unknown>;
+			const stage = String(event.stage || "");
+			if (stage === "streaming" && typeof event.chunk === "string") {
+				accumulated += event.chunk;
+				callbacks.onChunk?.(event.chunk, accumulated);
+				return;
+			}
+			if (stage === "complete") {
+				const full = String(event.fullResponse || accumulated);
+				completed = true;
+				callbacks.onComplete?.(full);
+				return;
+			}
+			if (stage === "error") {
+				callbacks.onError?.(String(event.message || "Unknown error"));
+				return;
+			}
+			callbacks.onStatus?.(event);
+		} catch {
+			// skip malformed SSE lines
+		}
+	};
+
+	try {
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			buffer += decoder.decode(value, { stream: true });
+			const lines = buffer.split("\n");
+			buffer = lines.pop() ?? "";
+			for (const line of lines) {
+				processSseLine(line);
+			}
+		}
+
+		const tail = buffer.trim();
+		if (tail) {
+			processSseLine(tail);
+		}
+		if (!completed) {
+			callbacks.onStatus?.({
+				stage: "warning",
+				status: "incomplete",
+				message: "Luồng stream kết thúc trước event complete",
+			});
+			callbacks.onError?.("Stream ended before complete event");
+		}
+	} finally {
+		reader.releaseLock();
+	}
+}
+
 export default function CodeEditor() {
 	const { t, i18n } = useTranslation();
 	const appId = useAppStore(state => state.currentAppId);
@@ -304,7 +540,7 @@ export default function CodeEditor() {
 	const aiProgrammaticApplyRef = useRef(false);
 
 	// State Management
-	const [codeType, setCodeType] = useState<number>(0); // 0 = JS, 1 = HTML
+	const [codeType, setCodeType] = useState<number>(0); // 0=JS, 1=HTML, 2=Python, 3=CSS, 4=SQL, 5=JSON
 	const [codeList, setCodeList] = useState<CodeItem[]>([]);
 	const [selectedCode, setSelectedCode] = useState<string | null>(null);
 	const [codeContent, setCodeContent] = useState<string>("");
@@ -347,8 +583,10 @@ export default function CodeEditor() {
 	const selectedCodeLabel = selectedCode || t("system.developer.ai.unsaved");
 	const aiStatusText = aiProgress?.stage || aiProgress?.status || t("system.developer.ai.running");
 	const resolvedPType = selectedCodeItem?.p_type ?? codeType;
-	const currentLanguage = codeType === 0 ? "javascript" : "html";
-	const currentTypeLabel = codeType === 0 ? "JavaScript" : "HTML";
+	const currentLanguage = CODE_TYPE_LANGUAGE[codeType] ?? "javascript";
+	const currentTypeLabel = CODE_TYPE_LABEL[codeType] ?? "JavaScript";
+	const aiBaseContentRef = useRef("");
+	const LARGE_BASE_CONTENT_THRESHOLD = 120000;
 	const aiSessionSnapshotsRef = useRef<Record<string, AiSessionSnapshot>>({});
 	const aiSessionKey = useMemo(
 		() => `${appId || "unknown"}::${selectedCode || "__unsaved__"}::${resolvedPType}::${currentLanguage}`,
@@ -789,6 +1027,10 @@ export default function CodeEditor() {
 		}, 0);
 	};
 
+	useEffect(() => {
+		aiBaseContentRef.current = "";
+	}, [aiSessionKey]);
+
 	const handleAskAi = async (continueMode = false) => {
 		const requestText = aiPromptText.trim();
 		if (!requestText) {
@@ -800,12 +1042,12 @@ export default function CodeEditor() {
 		const historyId = `${requestCreatedAt}_${Math.random().toString(16).slice(2, 10)}`;
 		const requestBaseRevision = manualDraftRevisionRef.current;
 		const shouldAutoApplyAi = () => manualDraftRevisionRef.current === requestBaseRevision;
+		const realtimeApplyEnabled = false;
 
 		setAiLoading(true);
 		setAiSummary("");
 		setAiChangeItems([]);
 		setPendingChunk(null);
-		// Keep draft editor active during request so AI can stream/update directly on it.
 		if (!continueMode && !aiLastCode.trim()) {
 			setAiLastCode(codeContent || "");
 		}
@@ -813,70 +1055,111 @@ export default function CodeEditor() {
 		addAiMessage("user", requestText);
 
 		try {
-			const prompt = createAiPrompt({
-				appId,
-				language: currentLanguage,
-				codeName: selectedCode,
-				codeType: resolvedPType,
-				currentCode: continueMode && aiLastCode ? aiLastCode : codeContent,
-				requestText,
-				messages: aiMessages,
-			});
+			const sourceCode = continueMode && aiLastCode ? aiLastCode : codeContent;
+			const shouldUseBaseRef = sourceCode.length >= LARGE_BASE_CONTENT_THRESHOLD || Boolean(aiBaseContentRef.current);
+			const payloadBaseContent = shouldUseBaseRef && !aiBaseContentRef.current ? sourceCode : "";
+			const payloadCurrentCode = shouldUseBaseRef ? "" : sourceCode;
 
-			const response = await generateSeoContentWithPrompt(prompt, {
-				taskType: "developer_code_editor",
-				onProgress: (progress) => {
-					const liveDraft = [
-						progress?.draftCode,
-						progress?.code,
-						progress?.partialCode,
-						progress?.previewCode,
-					].find((item) => typeof item === "string" && String(item).trim().length > 0);
-					if (typeof liveDraft === "string") {
-						const before = currentDraftRef.current;
-						if (liveDraft !== before) {
-							const ranges = buildRealtimeRangesFromProgress(progress, before, liveDraft);
-							if (shouldAutoApplyAi()) {
-								setPendingChunk({
-									id: `${Date.now()}_${Math.random().toString(16).slice(2, 8)}`,
-									before,
-									after: liveDraft,
-									ranges,
-									applied: true,
-									createdAt: Date.now(),
-								});
-								applyDraftFromAi(liveDraft);
-							} else {
-								setPendingChunk({
-									id: `${Date.now()}_${Math.random().toString(16).slice(2, 8)}`,
-									before,
-									after: liveDraft,
-									ranges,
-									applied: false,
-									createdAt: Date.now(),
-								});
+			// Build message: user request + recent conversation + JSON format instruction
+			const recentConversation = aiMessages
+				.slice(-6)
+				.map((m) => `${m.role === "user" ? "USER" : "ASSISTANT"}: ${m.content}`)
+				.join("\n\n");
+
+			const fullMessage = [
+				requestText,
+				recentConversation ? `Lịch sử hội thoại gần đây:\n${recentConversation}` : "",
+				continueMode
+					? "Bạn đang ở chế độ CONTINUE. BẮT BUỘC trả về FULL tài liệu hoàn chỉnh từ đầu đến cuối, không chỉ phần mới."
+					: "",
+				`Trả về JSON theo đúng format: {"summary":"mô tả ngắn thay đổi","code":"toàn bộ code hoàn chỉnh","changes":["điểm thay đổi 1","điểm thay đổi 2"]}`,
+			].filter(Boolean).join("\n\n");
+
+			let finalResponse = "";
+			let streamErr = "";
+			let gotCompleteEvent = false;
+
+			await streamAiCode(
+				{
+					appId: appId || "",
+					message: fullMessage,
+					currentCode: payloadCurrentCode,
+					baseContent: payloadBaseContent,
+					baseContentRef: aiBaseContentRef.current || undefined,
+					preserveBaseContent: shouldUseBaseRef,
+					language: currentLanguage,
+					responseMode: "edit",
+					contextType: "code",
+				},
+				{
+					onChunk: (_chunk, accumulated) => {
+						finalResponse = accumulated;
+						if (realtimeApplyEnabled && shouldAutoApplyAi()) {
+							const realtimeCode = tryExtractStructuredStreamingCode(accumulated);
+							if (realtimeCode) {
+								const liveRanges = buildChangedLineRanges(currentDraftRef.current, realtimeCode);
+								if (liveRanges.length > 0) {
+									setPendingChunk({
+										id: `${Date.now()}_${Math.random().toString(16).slice(2, 8)}`,
+										before: currentDraftRef.current,
+										after: realtimeCode,
+										ranges: liveRanges,
+										applied: false,
+										createdAt: Date.now(),
+									});
+								}
 							}
 						}
-					}
-					setAiProgress({
-						status: progress?.status,
-						stage: progress?.stage,
-						message: progress?.message,
-						percent: Number(progress?.percent ?? 0),
-						jobId: progress?.jobId,
-						elapsedMs: Number(progress?.elapsedMs ?? 0),
-					});
+						setAiProgress({
+							stage: "streaming",
+							status: "streaming",
+							message: "Claude đang streaming...",
+							percent: 50,
+						});
+					},
+					onStatus: (status) => {
+						const baseRef = String(status.baseContentRef || "").trim();
+						if (baseRef) {
+							aiBaseContentRef.current = baseRef;
+						}
+						setAiProgress({
+							stage: String(status.stage || "preparing"),
+							status: String(status.status || "preparing"),
+							message: String(status.message || ""),
+							percent: Number(status.percent || 0),
+						});
+					},
+					onComplete: (full) => {
+						gotCompleteEvent = true;
+						finalResponse = full;
+					},
+					onError: (err) => {
+						streamErr = err;
+					},
 				},
-			});
+			);
 
-			if (!response?.success) {
-				throw new Error(response?.message || t("system.developer.ai.requestFailed"));
+			if (streamErr) {
+				throw new Error(streamErr);
+			}
+			if (!gotCompleteEvent) {
+				throw new Error(t("system.developer.ai.requestFailed") + " (stream incomplete)");
+			}
+			if (!finalResponse) {
+				throw new Error(t("system.developer.ai.requestFailed"));
 			}
 
-			const parsed = parseAiCodeResponse(response);
+			const parsed = parseAiCodeResponse({ result: finalResponse });
 			if (!parsed?.code) {
 				throw new Error(t("system.developer.ai.missingCode"));
 			}
+
+			const safeResult = resolveContinueSafeCode({
+				continueMode,
+				language: currentLanguage,
+				currentDraft: currentDraftRef.current,
+				candidateCode: parsed.code,
+			});
 
 			const completedHistoryItem: AiRequestHistoryItem = {
 				id: historyId,
@@ -884,20 +1167,34 @@ export default function CodeEditor() {
 				status: "completed",
 				summary: parsed.summary || t("system.developer.ai.generatedReady"),
 				changes: Array.isArray(parsed.changes) ? parsed.changes : [],
-				draftCode: parsed.code,
+				draftCode: safeResult.shouldApply ? safeResult.code : currentDraftRef.current,
 				createdAt: requestCreatedAt,
 			};
 
+			if (!safeResult.shouldApply) {
+				setAiSummary(parsed.summary || "");
+				setAiChangeItems(Array.isArray(parsed.changes) ? parsed.changes : []);
+				setAiRequestHistory((prev) => [
+					completedHistoryItem,
+					...prev,
+				].slice(0, AI_HISTORY_LIMIT));
+				setSelectedHistoryId(historyId);
+				addAiMessage("assistant", parsed.summary || t("system.developer.ai.generatedReady"));
+				setAiProgress({ status: "warning", stage: "warning", message: safeResult.warning || t("system.developer.ai.generatedReady"), percent: 100 });
+				message.warning(safeResult.warning || t("system.developer.ai.generatedReady"));
+				return;
+			}
+
 			if (shouldAutoApplyAi()) {
-				applyDraftFromAi(parsed.code);
+				applyDraftFromAi(safeResult.code);
 				setPendingChunk(null);
 			} else {
 				const before = currentDraftRef.current;
-				const ranges = buildChangedLineRanges(before, parsed.code);
+				const ranges = buildChangedLineRanges(before, safeResult.code);
 				setPendingChunk({
 					id: `${Date.now()}_${Math.random().toString(16).slice(2, 8)}`,
 					before,
-					after: parsed.code,
+					after: safeResult.code,
 					ranges,
 					applied: false,
 					createdAt: Date.now(),
@@ -1127,6 +1424,10 @@ export default function CodeEditor() {
 									options={[
 										{ label: "JavaScript", value: 0 },
 										{ label: "HTML", value: 1 },
+										{ label: "Python", value: 2 },
+										{ label: "CSS", value: 3 },
+										{ label: "SQL", value: 4 },
+										{ label: "JSON", value: 5 },
 									]}
 									placeholder={t("system.developer.selectCodeType")}
 								/>
@@ -1175,6 +1476,36 @@ export default function CodeEditor() {
 				<div className={styles.aiShell}>
 					<div className={`${styles.aiBody} ${styles.aiBodyLeftHidden}`}>
 					<div className={styles.aiRightColumn}>
+							<div className={styles.aiChunkCard}>
+								<div className={styles.aiChunkTitle}>{t("system.developer.ai.askTitle", "Yêu cầu AI chỉnh code")}</div>
+								<Input.TextArea
+									value={aiPromptText}
+									onChange={(e) => setAiPromptText(e.target.value)}
+									rows={3}
+									disabled={aiLoading}
+									placeholder={t("system.developer.ai.askPlaceholder", "Nhập yêu cầu. Nhấn Ask AI để tạo mới hoặc Continue để viết tiếp phần còn thiếu.")}
+									onPressEnter={(e) => {
+										if ((e.ctrlKey || e.metaKey) && !aiLoading) {
+											e.preventDefault();
+											void handleAskAi(false);
+										}
+									}}
+								/>
+								<div className={styles.aiChunkActions} style={{ marginTop: 8 }}>
+									<Button size="small" type="primary" onClick={() => void handleAskAi(false)} disabled={aiLoading || !aiPromptText.trim()}>
+										{t("system.developer.ai.askAi", "Ask AI")}
+									</Button>
+									<Button size="small" onClick={() => void handleAskAi(true)} disabled={aiLoading || !aiPromptText.trim()}>
+										{t("system.developer.ai.continueAi", "Continue")}
+									</Button>
+									<Button size="small" danger onClick={handleClearCurrentAiSession} disabled={aiLoading}>
+										{t("system.developer.ai.clearSession", "Clear session")}
+									</Button>
+								</div>
+								<div className={styles.aiChunkMeta}>
+									{t("system.developer.ai.currentStatus", "Trạng thái")}: {aiStatusText}
+								</div>
+							</div>
 							{pendingChunk && (
 								<div className={styles.aiChunkCard}>
 									<div className={styles.aiChunkTitle}>{t("system.developer.ai.liveChunkTitle", "AI vừa cập nhật draft")}</div>
@@ -1240,7 +1571,7 @@ export default function CodeEditor() {
 										updateDraftIndicators(view);
 									}}
 									aiAssistantContextType="code"
-									aiAssistantLanguage={currentLanguage}
+									aiAssistantLanguage={currentLanguage as "javascript" | "html" | "python" | "java" | "css" | "sql" | "json"}
 									aiAssistantPName={selectedCode || undefined}
 									aiAssistantPType={resolvedPType}
 									value={aiLastCode}
@@ -1261,7 +1592,12 @@ export default function CodeEditor() {
 										draftMetricsExtension,
 										draftHighlightField,
 										draftHighlightTheme,
-										codeType === 0 ? javascript() : html(),
+										codeType === 0 ? javascript()
+											: codeType === 1 ? html()
+											: codeType === 2 ? python()
+											: codeType === 3 ? css()
+											: codeType === 4 ? sql()
+											: json(),
 									]}
 									theme={prefersDarkMode ? vscodeDark : vscodeLight}
 									height="360px"
