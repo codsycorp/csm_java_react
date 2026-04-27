@@ -78,6 +78,16 @@ type AiAssistantStageEvent = {
 	timestamp: number;
 };
 
+type AiUsageSummary = {
+	enabled: boolean;
+	model: string;
+	promptTokens: number;
+	completionTokens: number;
+	totalTokens: number;
+	estimatedCostUsd: number;
+	currency?: string;
+};
+
 type AiAssistantChatProps = {
 	appId: string;
 	currentCode?: string;
@@ -551,6 +561,15 @@ export default function AiAssistantChat({
 	const [autoApplyEnabled, setAutoApplyEnabled] = useState<boolean>(() => loadAutoApplyPreference(autoApplyPreferenceKey, Boolean(autoApplyCodeBlock)));
 	const [pendingAttachments, setPendingAttachments] = useState<AiAssistantAttachment[]>([]);
 	const [stageEvents, setStageEvents] = useState<AiAssistantStageEvent[]>([]);
+	const [aiUsageSummary, setAiUsageSummary] = useState<{
+		turn: AiUsageSummary | null;
+		sessionCostUsd: number;
+		sessionTokens: number;
+	}>({
+		turn: null,
+		sessionCostUsd: 0,
+		sessionTokens: 0,
+	});
 	// Progress state: waiting for Gemini / streaming progress
 	const [geminiProgress, setGeminiProgress] = useState<{
 		phase: "idle" | "waiting" | "streaming";
@@ -579,6 +598,8 @@ export default function AiAssistantChat({
 	const lastSmoothScrollAtRef = useRef<number>(0);
 	const turnAllowAutoApplyRef = useRef<boolean>(false);
 	const stageEventSignaturesRef = useRef<Set<string>>(new Set());
+	// Live exchange rates fetched once per session (USD base). Fallback to hardcoded.
+	const fxRatesRef = useRef<{ vnd: number; cny: number }>({ vnd: 25000, cny: 7.2 });
 	const isMac = /Mac|iPhone|iPad|iPod/i.test(navigator.platform || "");
 	const sendHintKey = isMac ? "Cmd" : "Ctrl";
 	const shouldRenderAssistantCodeBlocks = !onCodeInsert;
@@ -591,6 +612,21 @@ export default function AiAssistantChat({
 	}, [i18n.language, i18n.resolvedLanguage]);
 
 	const assistantBrandLabel = uiText("Chuyên Gia", "Expert", "专家");
+
+	// Currency conversion based on user's selected language (uses live rates from fxRatesRef)
+	const formatCost = useCallback((usdAmount: number): string => {
+		const lang = String(i18n.resolvedLanguage || i18n.language || "vi").toLowerCase();
+		if (lang.startsWith("zh")) {
+			const cny = usdAmount * fxRatesRef.current.cny;
+			return `¥${cny.toFixed(4)}`;
+		}
+		if (lang.startsWith("en")) {
+			return `$${usdAmount.toFixed(6)}`;
+		}
+		// VI → VND
+		const vnd = Math.round(usdAmount * fxRatesRef.current.vnd);
+		return `${vnd.toLocaleString("vi-VN")}₫`;
+	}, [i18n.language, i18n.resolvedLanguage]);
 
 	const normalizeAssistantProgressMessage = useCallback((rawMessage: unknown, fallback = ""): string => {
 		const source = String(rawMessage || "").trim() || String(fallback || "").trim();
@@ -606,6 +642,48 @@ export default function AiAssistantChat({
 			.replace(/```[\s\S]*?```/g, "")
 			.replace(/\n{3,}/g, "\n\n")
 			.trim();
+	}, []);
+
+	const normalizeUsagePayload = useCallback((usage: any): AiUsageSummary | null => {
+		if (!usage || typeof usage !== "object") return null;
+		const promptTokens = Number(usage.promptTokens);
+		const completionTokens = Number(usage.completionTokens);
+		const totalTokensRaw = Number(usage.totalTokens);
+		const estimatedCostUsd = Number(usage.estimatedCostUsd);
+		const totalTokens = Number.isFinite(totalTokensRaw)
+			? Math.max(0, Math.floor(totalTokensRaw))
+			: Math.max(0, Math.floor(promptTokens || 0) + Math.floor(completionTokens || 0));
+		return {
+			enabled: Boolean(usage.enabled ?? true),
+			model: String(usage.model || ""),
+			promptTokens: Number.isFinite(promptTokens) ? Math.max(0, Math.floor(promptTokens)) : 0,
+			completionTokens: Number.isFinite(completionTokens) ? Math.max(0, Math.floor(completionTokens)) : 0,
+			totalTokens,
+			estimatedCostUsd: Number.isFinite(estimatedCostUsd) ? Math.max(0, estimatedCostUsd) : 0,
+			currency: String(usage.currency || "USD"),
+		};
+	}, []);
+
+	useEffect(() => {
+		// Fetch live exchange rates once per session from a free CDN-hosted API (no key needed)
+		const controller = new AbortController();
+		fetch("https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json", {
+			signal: controller.signal,
+		})
+			.then((res) => res.json())
+			.then((data: { usd?: Record<string, number> }) => {
+				const rates = data?.usd;
+				if (!rates) return;
+				const vnd = Number(rates["vnd"]);
+				const cny = Number(rates["cny"]);
+				if (vnd > 0 && cny > 0) {
+					fxRatesRef.current = { vnd, cny };
+				}
+			})
+			.catch(() => {
+				// Silently fall back to hardcoded rates if fetch fails
+			});
+		return () => controller.abort();
 	}, []);
 
 	useEffect(() => {
@@ -1249,6 +1327,7 @@ export default function AiAssistantChat({
 			setMessages([...newMessages, assistantMsg]);
 			setIsLoading(true);
 			setStageEvents([]);
+			setAiUsageSummary((prev) => ({ ...prev, turn: null }));
 			setGeminiProgress({ phase: "idle", percent: 0, message: "", estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
 			stageEventSignaturesRef.current = new Set();
 			followBottomRef.current = true;
@@ -1355,6 +1434,7 @@ export default function AiAssistantChat({
 								message?: string; percent?: number; estimatedWaitSecs?: number;
 								remainingEstimateSecs?: number; charsReceived?: number; estimatedTotalChars?: number;
 								ttftMs?: number; elapsedMs?: number; promptTokens?: number; model?: string;
+								usage?: any; completionTokens?: number; estimatedCostUsd?: number;
 							};
 							if (evt.stage === "preparing") {
 								setGeminiProgress(prev => ({
@@ -1404,6 +1484,21 @@ export default function AiAssistantChat({
 								pendingStreamChunkRef.current += evt.chunk;
 								scheduleStreamFlush();
 							} else if (evt.stage === "complete") {
+								const usage = normalizeUsagePayload(evt.usage || {
+									model: evt.model,
+									promptTokens: evt.promptTokens,
+									completionTokens: evt.completionTokens,
+									totalTokens: Number(evt.promptTokens || 0) + Number(evt.completionTokens || 0),
+									estimatedCostUsd: evt.estimatedCostUsd,
+									currency: "USD",
+								});
+								if (usage) {
+									setAiUsageSummary((prev) => ({
+										turn: usage,
+										sessionCostUsd: prev.sessionCostUsd + (usage.enabled ? usage.estimatedCostUsd : 0),
+										sessionTokens: prev.sessionTokens + usage.totalTokens,
+									}));
+								}
 								setGeminiProgress({ phase: "idle", percent: 100, message: "Hoàn thành", estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
 								if (evt.fullResponse) {
 									streamingMessageRef.current = evt.fullResponse;
@@ -1439,7 +1534,7 @@ export default function AiAssistantChat({
 				turnAllowAutoApplyRef.current = false;
 			}
 		},
-		[appId, autoApplyEnabled, contextType, currentCode, isLoading, language, messages, normalizeAssistantProgressMessage, onUserMessage, onCodeInsert, pendingAttachments, targetPName, targetPType, uiText, appendStageEvent, applyRealtimeCodeFromText, flushStreamingToUI, scheduleStreamFlush, scrollToBottom]
+		[appId, autoApplyEnabled, contextType, currentCode, isLoading, language, messages, normalizeAssistantProgressMessage, normalizeUsagePayload, onUserMessage, onCodeInsert, pendingAttachments, targetPName, targetPType, uiText, appendStageEvent, applyRealtimeCodeFromText, flushStreamingToUI, scheduleStreamFlush, scrollToBottom]
 	);
 
 	const handleSend = () => {
@@ -1454,6 +1549,7 @@ export default function AiAssistantChat({
 
 	const handleClearHistory = () => {
 		setMessages([]);
+		setAiUsageSummary({ turn: null, sessionCostUsd: 0, sessionTokens: 0 });
 		localStorage.removeItem(CHAT_HISTORY_KEY);
 		message.success(uiText("Đã xóa lịch sử chat", "Chat history cleared", "聊天记录已清除"));
 	};
@@ -1686,6 +1782,33 @@ export default function AiAssistantChat({
 						</div>
 					</div>
 				)}
+
+			{(aiUsageSummary.turn || aiUsageSummary.sessionTokens > 0) && (
+				<div className={styles.usageDock}>
+					<div className={styles.usageDockTitle}>
+						{uiText("Theo dõi chi phí AI", "AI Cost Tracking", "AI 成本跟踪")}
+					</div>
+					{aiUsageSummary.turn && (
+						<div className={styles.usageDockRow}>
+							<span>{uiText("Lượt này", "This turn", "本轮")}</span>
+							<span>
+								{aiUsageSummary.turn.enabled
+									? `${formatCost(aiUsageSummary.turn.estimatedCostUsd)} · ${aiUsageSummary.turn.totalTokens.toLocaleString()} tokens`
+									: uiText("Đã tắt", "Disabled", "已关闭")}
+							</span>
+						</div>
+					)}
+					<div className={styles.usageDockRow}>
+						<span>{uiText("Tổng phiên", "Session total", "会话总计")}</span>
+						<span>{formatCost(aiUsageSummary.sessionCostUsd)} · {aiUsageSummary.sessionTokens.toLocaleString()} tokens</span>
+					</div>
+					{aiUsageSummary.turn?.model && (
+						<div className={styles.usageDockModel}>
+							{uiText("Model", "Model", "模型")}: {aiUsageSummary.turn.model}
+						</div>
+					)}
+				</div>
+			)}
 
 				{/* Input Area */}
 				<div className={styles.inputArea}>

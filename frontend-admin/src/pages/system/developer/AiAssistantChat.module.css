@@ -206,6 +206,38 @@
 	min-height: 18px;
 }
 
+.usageDock {
+	flex: 0 0 auto;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	padding: 8px 16px;
+	border-top: 1px solid color-mix(in srgb, var(--chat-border) 65%, transparent);
+	background: color-mix(in srgb, var(--chat-bg) 95%, var(--chat-input-bg));
+}
+
+.usageDockTitle {
+	font-size: 11px;
+	font-weight: 700;
+	letter-spacing: 0.02em;
+	color: var(--ant-color-text-secondary);
+}
+
+.usageDockRow {
+	display: flex;
+	justify-content: space-between;
+	gap: 12px;
+	font-size: 11px;
+	line-height: 1.4;
+	color: var(--ant-color-text-secondary);
+}
+
+.usageDockModel {
+	font-size: 10px;
+	color: var(--chat-muted);
+	word-break: break-word;
+}
+
 /* ── Gemini progress card ───────────────────────────────── */
 .geminiProgressCard {
 	min-width: 0;
@@ -597,6 +629,11 @@
 
 	.stageTimelineCard {
 		min-width: 0;
+	}
+
+	.usageDockRow {
+		flex-direction: column;
+		gap: 2px;
 	}
 
 	.codeContent {

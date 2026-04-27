@@ -287,6 +287,27 @@ public class ApiSpringController {
     @Value("${gemini.streaming.model:}")
     private String aiCodeStreamLegacyStreamingModel;
 
+    @Value("${ai.code-stream.cost.enabled:true}")
+    private boolean aiCodeStreamCostEnabled;
+
+    @Value("${ai.code-stream.cost.pro.input-usd-per-1k:0.00125}")
+    private double aiCodeStreamCostProInputUsdPer1k;
+
+    @Value("${ai.code-stream.cost.pro.output-usd-per-1k:0.005}")
+    private double aiCodeStreamCostProOutputUsdPer1k;
+
+    @Value("${ai.code-stream.cost.flash.input-usd-per-1k:0.0003}")
+    private double aiCodeStreamCostFlashInputUsdPer1k;
+
+    @Value("${ai.code-stream.cost.flash.output-usd-per-1k:0.0012}")
+    private double aiCodeStreamCostFlashOutputUsdPer1k;
+
+    @Value("${ai.code-stream.cost.default.input-usd-per-1k:0.001}")
+    private double aiCodeStreamCostDefaultInputUsdPer1k;
+
+    @Value("${ai.code-stream.cost.default.output-usd-per-1k:0.003}")
+    private double aiCodeStreamCostDefaultOutputUsdPer1k;
+
     private volatile String cachedAiAssistantCustomInstructions = null;
 
     private final ExecutorService aiAsyncExecutor = Executors.newFixedThreadPool(2);
@@ -474,6 +495,12 @@ public class ApiSpringController {
                 }
                 completion.put("fullResponse", completionPayload);
                 completion.put("responseMode", responseMode);
+                int completionTokens = estimateTokens(rawResponse);
+                Map<String, Object> usageInfo = buildUsageInfoForSse(effectiveModel, promptTokens, completionTokens);
+                completion.put("usage", usageInfo);
+                completion.put("promptTokens", promptTokens);
+                completion.put("completionTokens", completionTokens);
+                completion.put("estimatedCostUsd", usageInfo.get("estimatedCostUsd"));
                 if (!base.baseRef().isBlank()) {
                     completion.put("baseContentRef", base.baseRef());
                     completion.put("baseContentChars", base.baseContentChars());
@@ -560,6 +587,7 @@ public class ApiSpringController {
         return sb.toString();
     }
 
+    @SuppressWarnings("unused")
     private String streamWithAutoContinue(
             SseEmitter emitter,
             String prompt,
@@ -812,7 +840,6 @@ public class ApiSpringController {
         }
     }
 
-    @SuppressWarnings("unchecked")
     private List<Map<String, String>> extractImageParts(Object attachmentsRaw) {
         List<Map<String, String>> result = new ArrayList<>();
         if (!(attachmentsRaw instanceof List<?> atts)) return result;
@@ -869,6 +896,50 @@ public class ApiSpringController {
         String value = String.valueOf(text == null ? "" : text);
         if (value.isBlank()) return 0;
         return Math.max(1, (int) Math.ceil(value.length() / 4.0));
+    }
+
+    private record ModelPrice(double inputUsdPer1k, double outputUsdPer1k) {
+    }
+
+    private ModelPrice resolveModelPrice(String modelName) {
+        String model = String.valueOf(modelName == null ? "" : modelName).toLowerCase();
+        if (model.contains("flash")) {
+            return new ModelPrice(
+                    Math.max(0.0, aiCodeStreamCostFlashInputUsdPer1k),
+                    Math.max(0.0, aiCodeStreamCostFlashOutputUsdPer1k));
+        }
+        if (model.contains("pro")) {
+            return new ModelPrice(
+                    Math.max(0.0, aiCodeStreamCostProInputUsdPer1k),
+                    Math.max(0.0, aiCodeStreamCostProOutputUsdPer1k));
+        }
+        return new ModelPrice(
+                Math.max(0.0, aiCodeStreamCostDefaultInputUsdPer1k),
+                Math.max(0.0, aiCodeStreamCostDefaultOutputUsdPer1k));
+    }
+
+    private Map<String, Object> buildUsageInfoForSse(String modelName, int promptTokens, int completionTokens) {
+        int inTokens = Math.max(0, promptTokens);
+        int outTokens = Math.max(0, completionTokens);
+        ModelPrice modelPrice = resolveModelPrice(modelName);
+
+        double estimatedCostUsd = 0.0;
+        if (aiCodeStreamCostEnabled) {
+            estimatedCostUsd = (inTokens / 1000.0) * modelPrice.inputUsdPer1k
+                    + (outTokens / 1000.0) * modelPrice.outputUsdPer1k;
+        }
+
+        Map<String, Object> usage = new LinkedHashMap<>();
+        usage.put("enabled", aiCodeStreamCostEnabled);
+        usage.put("model", String.valueOf(modelName == null ? "" : modelName));
+        usage.put("promptTokens", inTokens);
+        usage.put("completionTokens", outTokens);
+        usage.put("totalTokens", inTokens + outTokens);
+        usage.put("priceInputUsdPer1k", modelPrice.inputUsdPer1k);
+        usage.put("priceOutputUsdPer1k", modelPrice.outputUsdPer1k);
+        usage.put("estimatedCostUsd", Math.round(estimatedCostUsd * 1_000_000d) / 1_000_000d);
+        usage.put("currency", "USD");
+        return usage;
     }
 
     private String resolveDefaultStreamingModel() {
