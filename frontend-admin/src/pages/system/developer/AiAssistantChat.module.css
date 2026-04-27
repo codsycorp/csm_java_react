@@ -41,6 +41,7 @@
 	height: 100%;
 	min-height: 0;
 	overflow: hidden;
+	width: 100%;
 }
 
 .messageList {
@@ -53,7 +54,9 @@
 	flex-direction: column;
 	gap: 8px;
 	scroll-behavior: smooth;
-	overscroll-behavior: contain;
+	overscroll-behavior-y: auto;
+	overscroll-behavior-x: none;
+	touch-action: pan-y;
 	-webkit-overflow-scrolling: touch;
 	scrollbar-gutter: stable;
 }
@@ -185,9 +188,28 @@
 	gap: 8px;
 }
 
+.progressDock {
+	flex: 0 0 auto;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	padding: 8px 16px;
+	padding-bottom: max(8px, env(safe-area-inset-bottom));
+	border-top: 1px solid color-mix(in srgb, var(--chat-border) 70%, transparent);
+	background: color-mix(in srgb, var(--chat-bg) 92%, var(--chat-input-bg));
+}
+
+.progressDockSpinnerRow {
+	display: flex;
+	align-items: center;
+	justify-content: flex-start;
+	min-height: 18px;
+}
+
 /* ── Gemini progress card ───────────────────────────────── */
 .geminiProgressCard {
-	min-width: min(400px, 92vw);
+	min-width: 0;
+	width: 100%;
 	max-width: 100%;
 	padding: 10px 14px;
 	border-radius: 10px;
@@ -262,6 +284,7 @@
 .geminiProgressMeta {
 	font-size: 10px;
 	color: var(--ant-color-text-tertiary);
+	min-height: 14px;
 }
 
 .geminiProgressTtft {
@@ -270,7 +293,8 @@
 /* ── end Gemini progress card ───────────────────────────── */
 
 .stageTimelineCard {
-	min-width: min(440px, 92vw);
+	min-width: 0;
+	width: 100%;
 	max-width: 100%;
 }
 
@@ -479,6 +503,7 @@
 
 .inputArea {
 	padding: 12px 16px;
+	padding-bottom: max(12px, env(safe-area-inset-bottom));
 	border-top: 1px solid var(--chat-border);
 	display: flex;
 	flex-direction: column;
@@ -492,6 +517,9 @@
 	gap: 8px;
 	max-height: 168px;
 	overflow-y: auto;
+	overscroll-behavior-y: contain;
+	touch-action: pan-y;
+	-webkit-overflow-scrolling: touch;
 	padding-right: 4px;
 }
 
@@ -574,5 +602,12 @@
 	.codeContent {
 		font-size: 11px;
 		padding: 8px;
+	}
+}
+
+/* iPad/tablet width: keep desktop-like readability while preserving full interaction */
+@media (min-width: 769px) and (max-width: 1180px) {
+	.messageContent {
+		max-width: 90%;
 	}
 }

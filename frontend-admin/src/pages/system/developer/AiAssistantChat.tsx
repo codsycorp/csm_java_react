@@ -583,6 +583,31 @@ export default function AiAssistantChat({
 	const sendHintKey = isMac ? "Cmd" : "Ctrl";
 	const shouldRenderAssistantCodeBlocks = !onCodeInsert;
 
+	const uiText = useCallback((vi: string, en: string, zh: string) => {
+		const lang = String(i18n.resolvedLanguage || i18n.language || "vi").toLowerCase();
+		if (lang.startsWith("zh")) return zh;
+		if (lang.startsWith("en")) return en;
+		return vi;
+	}, [i18n.language, i18n.resolvedLanguage]);
+
+	const assistantBrandLabel = uiText("Chuyên Gia", "Expert", "专家");
+
+	const normalizeAssistantProgressMessage = useCallback((rawMessage: unknown, fallback = ""): string => {
+		const source = String(rawMessage || "").trim() || String(fallback || "").trim();
+		if (!source) return "";
+		return source
+			.replace(/\bgemini\b/gi, assistantBrandLabel)
+			.replace(/\bgoogle\s+gemini\b/gi, assistantBrandLabel)
+			.replace(/\bmodel\s+gemini\b/gi, assistantBrandLabel);
+	}, [assistantBrandLabel]);
+
+	const stripMarkdownCodeBlocks = useCallback((rawText: unknown): string => {
+		return String(rawText || "")
+			.replace(/```[\s\S]*?```/g, "")
+			.replace(/\n{3,}/g, "\n\n")
+			.trim();
+	}, []);
+
 	useEffect(() => {
 		setAutoApplyEnabled(loadAutoApplyPreference(autoApplyPreferenceKey, Boolean(autoApplyCodeBlock)));
 	}, [autoApplyCodeBlock, autoApplyPreferenceKey]);
@@ -616,13 +641,6 @@ export default function AiAssistantChat({
 		return blocks[blocks.length - 1] || null;
 	}, [language]);
 
-	const uiText = useCallback((vi: string, en: string, zh: string) => {
-		const lang = String(i18n.resolvedLanguage || i18n.language || "vi").toLowerCase();
-		if (lang.startsWith("zh")) return zh;
-		if (lang.startsWith("en")) return en;
-		return vi;
-	}, [i18n.language, i18n.resolvedLanguage]);
-
 	const formatStageLabel = useCallback((stage: string): string => {
 		const normalized = String(stage || "").trim().toLowerCase();
 		switch (normalized) {
@@ -644,7 +662,7 @@ export default function AiAssistantChat({
 			case "error":
 				return uiText("Error", "Error", "错误");
 			case "thinking":
-				return uiText("AI đang suy nghĩ...", "AI Thinking...", "AI 正在思考...");
+				return uiText("Chuyên Gia đang suy nghĩ...", "Expert is thinking...", "专家正在思考...");
 			case "connecting":
 				return uiText("Đang kết nối", "Connecting", "正在连接");
 			case "model_rotate":
@@ -716,9 +734,9 @@ export default function AiAssistantChat({
 				return uiText("Đang nhận dữ liệu", "Receiving data", "正在接收数据");
 			case "copilot.progress.message.connecting_model":
 				return uiText(
-					`Đang kết nối tới ${args?.model}`,
-					`Connecting to ${args?.model}`,
-					`正在连接到 ${args?.model}`,
+					`Đang kết nối ${assistantBrandLabel}`,
+					`Connecting ${assistantBrandLabel}`,
+					`正在连接 ${assistantBrandLabel}`,
 				);
 			case "copilot.progress.message.chat_complete":
 				return uiText("Chat hoàn tất", "Chat completed", "对话已完成");
@@ -793,7 +811,7 @@ export default function AiAssistantChat({
 			default:
 				return String(fallback || "").trim();
 		}
-	}, [uiText]);
+	}, [assistantBrandLabel, uiText]);
 
 	const getStageTone = useCallback((stage: string, orchestrationPhase?: string): "preparing" | "chunking" | "reducing" | "final" | "completed" | "error" | "default" => {
 		const normalizedPhase = String(orchestrationPhase || "").trim().toLowerCase();
@@ -951,6 +969,7 @@ export default function AiAssistantChat({
 		applyRealtimeCodeFromTextRef.current(nextText, force);
 		const structuredPayload = parseStructuredAssistantPayload(nextText);
 		const showStructuredPlaceholder = !structuredPayload && looksLikeStructuredPayload(nextText);
+		const hideCodeInChat = Boolean(onCodeInsert);
 		const displayText = structuredPayload
 			? [
 				structuredPayload.summary,
@@ -964,7 +983,13 @@ export default function AiAssistantChat({
 					"Virtual Assistant is preparing the result for the editor...",
 					"虚拟助手正在为编辑器准备结果...",
 				)
-				: nextText;
+				: hideCodeInChat
+					? (stripMarkdownCodeBlocks(nextText) || uiText(
+						`Đang cập nhật mã vào editor bằng ${assistantBrandLabel}...`,
+						`${assistantBrandLabel} is updating code in the editor...`,
+						`${assistantBrandLabel} 正在将代码更新到编辑器...`,
+					))
+					: nextText;
 
 		const now = Date.now();
 		let nextCodeBlocks = parsedCodeBlocksRef.current;
@@ -984,7 +1009,7 @@ export default function AiAssistantChat({
 				const lastMsg = updated[i];
 				if (lastMsg.role === "assistant" && lastMsg.messageType !== "debug") {
 					lastMsg.content = displayText;
-					lastMsg.codeBlocks = nextCodeBlocks;
+					lastMsg.codeBlocks = hideCodeInChat ? [] : nextCodeBlocks;
 					break;
 				}
 			}
@@ -992,7 +1017,7 @@ export default function AiAssistantChat({
 		});
 
 		scrollToBottom(false);
-	}, [contextType, scrollToBottom, uiText]);
+	}, [assistantBrandLabel, contextType, onCodeInsert, scrollToBottom, stripMarkdownCodeBlocks, uiText]);
 
 	const scheduleStreamFlush = useCallback(() => {
 		if (streamFlushTimerRef.current) return;
@@ -1336,7 +1361,7 @@ export default function AiAssistantChat({
 									...prev,
 									phase: "waiting",
 									percent: evt.percent ?? 0,
-									message: evt.message || uiText("Trợ lý Ảo đang chuẩn bị yêu cầu...", "Virtual Assistant is preparing the request...", "虚拟助手正在准备请求..."),
+									message: normalizeAssistantProgressMessage(evt.message, uiText("Chuyên Gia đang chuẩn bị yêu cầu...", "Expert is preparing the request...", "专家正在准备请求...")),
 									estimatedWaitSecs: evt.estimatedWaitSecs ?? 0,
 									remainingSecs: evt.estimatedWaitSecs ?? 0,
 								}));
@@ -1345,7 +1370,7 @@ export default function AiAssistantChat({
 									...prev,
 									phase: "waiting",
 									percent: evt.percent ?? prev.percent,
-									message: evt.message || uiText("Trợ lý Ảo đang xử lý...", "Virtual Assistant is processing...", "虚拟助手正在处理中..."),
+									message: normalizeAssistantProgressMessage(evt.message, uiText("Chuyên Gia đang xử lý...", "Expert is processing...", "专家正在处理中...")),
 									remainingSecs: evt.remainingEstimateSecs ?? prev.remainingSecs,
 								}));
 							} else if (evt.stage === "streaming_started") {
@@ -1353,7 +1378,7 @@ export default function AiAssistantChat({
 									...prev,
 									phase: "streaming",
 									percent: 15,
-									message: uiText("Đang nhận kết quả từ Trợ lý Ảo...", "Receiving result from Virtual Assistant...", "正在接收虚拟助手结果..."),
+									message: uiText("Đang nhận kết quả từ Chuyên Gia...", "Receiving result from Expert...", "正在接收专家结果..."),
 									ttftMs: evt.ttftMs,
 									estimatedTotalChars: evt.estimatedTotalChars ?? prev.estimatedTotalChars,
 									remainingSecs: 0,
@@ -1363,7 +1388,7 @@ export default function AiAssistantChat({
 									...prev,
 									phase: "streaming",
 									percent: evt.percent ?? prev.percent,
-									message: evt.message ?? prev.message,
+									message: normalizeAssistantProgressMessage(evt.message ?? prev.message),
 									charsReceived: evt.charsReceived ?? prev.charsReceived,
 									remainingSecs: evt.remainingEstimateSecs ?? prev.remainingSecs,
 								}));
@@ -1414,7 +1439,7 @@ export default function AiAssistantChat({
 				turnAllowAutoApplyRef.current = false;
 			}
 		},
-		[appId, autoApplyEnabled, contextType, currentCode, isLoading, language, messages, onUserMessage, onCodeInsert, pendingAttachments, targetPName, targetPType, uiText, appendStageEvent, applyRealtimeCodeFromText, flushStreamingToUI, scheduleStreamFlush, scrollToBottom]
+		[appId, autoApplyEnabled, contextType, currentCode, isLoading, language, messages, normalizeAssistantProgressMessage, onUserMessage, onCodeInsert, pendingAttachments, targetPName, targetPType, uiText, appendStageEvent, applyRealtimeCodeFromText, flushStreamingToUI, scheduleStreamFlush, scrollToBottom]
 	);
 
 	const handleSend = () => {
@@ -1577,92 +1602,90 @@ export default function AiAssistantChat({
 						))
 					)}
 
-					{isLoading && (
-						<>
-							{/* Virtual Assistant Progress Bar — waiting / streaming phase */}
-							{geminiProgress.phase !== "idle" && (
-								<div className={`${styles.messageItem} ${styles.assistant}`}>
-									<div className={styles.geminiProgressCard}>
-										<div className={styles.geminiProgressHeader}>
-											<span className={styles.geminiProgressIcon}>
-												{geminiProgress.phase === "waiting" ? "⏳" : "⚡"}
-											</span>
-											<span className={styles.geminiProgressLabel}>
-												{geminiProgress.message || (geminiProgress.phase === "waiting"
-													? uiText("Trợ lý Ảo đang xử lý...", "Virtual Assistant is processing...", "虚拟助手正在处理中...")
-													: uiText("Đang nhận kết quả từ Trợ lý Ảo...", "Receiving result from Virtual Assistant...", "正在接收虚拟助手结果..."))}
-											</span>
-											{geminiProgress.remainingSecs > 0 && (
-												<span className={styles.geminiProgressCountdown}>
-													~{geminiProgress.remainingSecs}s
-												</span>
-											)}
-										</div>
-										<div className={styles.geminiProgressBarTrack}>
-											<div
-												className={`${styles.geminiProgressBarFill} ${geminiProgress.phase === "waiting" ? styles.geminiProgressBarWaiting : styles.geminiProgressBarStreaming}`}
-												style={{ width: `${Math.max(2, Math.min(100, geminiProgress.percent))}%` }}
-											/>
-										</div>
-										{geminiProgress.phase === "streaming" && geminiProgress.charsReceived > 0 && (
-											<div className={styles.geminiProgressMeta}>
+				</div>
+
+				{isLoading && (
+					<div className={styles.progressDock}>
+						{geminiProgress.phase !== "idle" && (
+							<div className={styles.geminiProgressCard}>
+								<div className={styles.geminiProgressHeader}>
+									<span className={styles.geminiProgressIcon}>
+										{geminiProgress.phase === "waiting" ? "⏳" : "⚡"}
+									</span>
+									<span className={styles.geminiProgressLabel}>
+										{normalizeAssistantProgressMessage(
+											geminiProgress.message,
+											geminiProgress.phase === "waiting"
+												? uiText("Chuyên Gia đang xử lý...", "Expert is processing...", "专家正在处理中...")
+												: uiText("Đang nhận kết quả từ Chuyên Gia...", "Receiving result from Expert...", "正在接收专家结果..."),
+										)}
+									</span>
+									<span className={styles.geminiProgressCountdown}>
+										{geminiProgress.remainingSecs > 0 ? `~${geminiProgress.remainingSecs}s` : " "}
+									</span>
+								</div>
+								<div className={styles.geminiProgressBarTrack}>
+									<div
+										className={`${styles.geminiProgressBarFill} ${geminiProgress.phase === "waiting" ? styles.geminiProgressBarWaiting : styles.geminiProgressBarStreaming}`}
+										style={{ width: `${Math.max(2, Math.min(100, geminiProgress.percent))}%` }}
+									/>
+								</div>
+								<div className={styles.geminiProgressMeta}>
+									{geminiProgress.phase === "streaming" && geminiProgress.charsReceived > 0
+										? (
+											<>
 												{geminiProgress.charsReceived.toLocaleString()} ký tự nhận được
 												{geminiProgress.ttftMs != null && (
 													<span className={styles.geminiProgressTtft}> · TTFT {geminiProgress.ttftMs}ms</span>
 												)}
-											</div>
-										)}
-										{geminiProgress.phase === "waiting" && geminiProgress.estimatedWaitSecs > 0 && (
-											<div className={styles.geminiProgressMeta}>
-												{uiText(
-													`Ước tính ~${geminiProgress.estimatedWaitSecs}s tổng thời gian`,
-													`Estimated total time ~${geminiProgress.estimatedWaitSecs}s`,
-													`预计总耗时约 ${geminiProgress.estimatedWaitSecs}s`,
-												)}
-											</div>
-										)}
-									</div>
+											</>
+										)
+										: geminiProgress.phase === "waiting" && geminiProgress.estimatedWaitSecs > 0
+											? uiText(
+												`Ước tính ~${geminiProgress.estimatedWaitSecs}s tổng thời gian`,
+												`Estimated total time ~${geminiProgress.estimatedWaitSecs}s`,
+												`预计总耗时约 ${geminiProgress.estimatedWaitSecs}s`,
+											)
+											: " "}
 								</div>
-							)}
-							{SHOW_DETAILED_PROGRESS_TIMELINE && stageEvents.length > 0 && (
-								<div className={`${styles.messageItem} ${styles.assistant}`}>
-									<div className={`${styles.messageContent} ${styles.stageTimelineCard}`}>
-										<div className={styles.stageTimelineTitle}>
-											{uiText("Tiến độ xử lý", "Processing timeline", "处理进度")}
-										</div>
-										<div className={styles.stageTimelineList}>
-											{stageEvents.map((event) => {
-												const stageLabel = renderProgressText(event.orchestrationPhaseKey, undefined, event.orchestrationPhase || formatStageLabel(event.stage));
-												const stageTone = getStageTone(event.stage, event.orchestrationPhase);
-												const effectivePercent = Number.isFinite(Number(event.overallPercent)) ? Number(event.overallPercent) : Number(event.percent);
-												const percentText = Number.isFinite(effectivePercent) ? ` (${Math.max(0, Math.min(100, effectivePercent))}%)` : "";
-												const progressText = Number.isFinite(Number(event.current)) && Number.isFinite(Number(event.total))
-													? ` [${Math.max(0, Number(event.current))}/${Math.max(1, Number(event.total))}]`
-													: "";
-												const timelineMessage = renderProgressText(event.detailKey, event.detailArgs, event.detail || renderProgressText(event.messageKey, event.messageArgs, event.message));
-												return (
-													<div key={event.id} className={`${styles.stageTimelineItem} ${styles[`stageTimelineItem_${stageTone}`] || ""}`.trim()}>
-														<span className={`${styles.stageTimelineBullet} ${styles[`stageTimelineBullet_${stageTone}`] || ""}`.trim()} />
-														<div className={styles.stageTimelineText}>
-															<div className={`${styles.stageTimelineHead} ${styles[`stageTimelineHead_${stageTone}`] || ""}`.trim()}>
-																<span>{stageLabel}{percentText}{progressText}</span>
-																{event.rangeLabel && <span className={styles.stageRangeBadge}>{event.rangeLabel}</span>}
-															</div>
-															{timelineMessage && <div className={styles.stageTimelineMessage}>{timelineMessage}</div>}
-														</div>
+							</div>
+						)}
+						{SHOW_DETAILED_PROGRESS_TIMELINE && stageEvents.length > 0 && (
+							<div className={`${styles.messageContent} ${styles.stageTimelineCard}`}>
+								<div className={styles.stageTimelineTitle}>
+									{uiText("Tiến độ xử lý", "Processing timeline", "处理进度")}
+								</div>
+								<div className={styles.stageTimelineList}>
+									{stageEvents.map((event) => {
+										const stageLabel = renderProgressText(event.orchestrationPhaseKey, undefined, event.orchestrationPhase || formatStageLabel(event.stage));
+										const stageTone = getStageTone(event.stage, event.orchestrationPhase);
+										const effectivePercent = Number.isFinite(Number(event.overallPercent)) ? Number(event.overallPercent) : Number(event.percent);
+										const percentText = Number.isFinite(effectivePercent) ? ` (${Math.max(0, Math.min(100, effectivePercent))}%)` : "";
+										const progressText = Number.isFinite(Number(event.current)) && Number.isFinite(Number(event.total))
+											? ` [${Math.max(0, Number(event.current))}/${Math.max(1, Number(event.total))}]`
+											: "";
+										const timelineMessage = renderProgressText(event.detailKey, event.detailArgs, event.detail || renderProgressText(event.messageKey, event.messageArgs, event.message));
+										return (
+											<div key={event.id} className={`${styles.stageTimelineItem} ${styles[`stageTimelineItem_${stageTone}`] || ""}`.trim()}>
+												<span className={`${styles.stageTimelineBullet} ${styles[`stageTimelineBullet_${stageTone}`] || ""}`.trim()} />
+												<div className={styles.stageTimelineText}>
+													<div className={`${styles.stageTimelineHead} ${styles[`stageTimelineHead_${stageTone}`] || ""}`.trim()}>
+														<span>{stageLabel}{percentText}{progressText}</span>
+														{event.rangeLabel && <span className={styles.stageRangeBadge}>{event.rangeLabel}</span>}
 													</div>
-												);
-											})}
-										</div>
-									</div>
+													{timelineMessage && <div className={styles.stageTimelineMessage}>{timelineMessage}</div>}
+												</div>
+											</div>
+										);
+									})}
 								</div>
-							)}
-						<div className={`${styles.messageItem} ${styles.assistant}`}>
+							</div>
+						)}
+						<div className={styles.progressDockSpinnerRow}>
 							<Spin size="small" />
 						</div>
-						</>
-					)}
-				</div>
+					</div>
+				)}
 
 				{/* Input Area */}
 				<div className={styles.inputArea}>
