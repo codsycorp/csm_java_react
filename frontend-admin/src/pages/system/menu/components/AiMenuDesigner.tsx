@@ -4827,7 +4827,8 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
           }
         }
       } catch {
-        // Keep fallback aiMenus when draft text is temporarily invalid JSON.
+        message.error("JSON menu khong hop le. Vui long sua JSON truoc khi ap dung.");
+        return;
       }
     }
 
@@ -4842,16 +4843,6 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
         message.warning(t("system.menu.aiDesigner.noMenuToApply") || "Không có menu để áp dụng");
         return;
       }
-    }
-
-    if (menuValidationErrors.length > 0) {
-      message.error(`Khong the ap dung vi con ${menuValidationErrors.length} loi schema/nghiep vu.`);
-      return;
-    }
-
-    if (applyGuardIssues.length > 0) {
-      message.error(`Khong the ap dung: ${applyGuardIssues[0]}`);
-      return;
     }
 
     const nextMenus = normalizeMenuList(transformMenuTriggers(draftMenus, "decode"));
@@ -4978,7 +4969,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                   type="primary"
                   onClick={handleApply}
                   size="large"
-                  disabled={applyMenuCount <= 0 || menuValidationErrors.length > 0 || applyGuardIssues.length > 0}
+                  disabled={applyMenuCount <= 0}
                   style={{ background: "#52c41a", borderColor: "#52c41a" }}
                 >
                   {`${t("system.menu.aiDesigner.applySystem") || "Ap dung vao He thong"} (${applyMenuCount})`}
@@ -5159,17 +5150,17 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
 
               {menuValidationIssues.length > 0 && (
                 <Alert
-                  type={menuValidationErrors.length > 0 ? "error" : "warning"}
+                  type="warning"
                   showIcon
                   message={t("system.menu.aiDesigner.validation.checklistSummary", {
-                    errors: menuValidationErrors.length,
-                    warnings: menuValidationWarnings.length,
+                    errors: 0,
+                    warnings: menuValidationIssues.length,
                   }) as string}
                   description={
                     <div style={{ maxHeight: 220, overflow: "auto", paddingRight: 8 }}>
                       {(menuValidationIssues || []).slice(0, 50).map((issue, idx) => (
                         <div key={`${issue.rule}_${idx}`} style={{ marginBottom: 6 }}>
-                          [{issue.severity.toUpperCase()}] {issue.path}: {issue.message}
+                          [WARNING] {issue.path}: {issue.message}
                         </div>
                       ))}
                       {menuValidationIssues.length > 50 && (
@@ -5182,7 +5173,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
 
               {applyGuardIssues.length > 0 && (
                 <Alert
-                  type="error"
+                  type="warning"
                   showIcon
                   message={t("system.menu.aiDesigner.applyGuard.notReady") as string}
                   description={

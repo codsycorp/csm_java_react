@@ -555,7 +555,7 @@
 				"moreItems": "...{{count}} more item(s)"
 			},
 			"applyGuard": {
-				"notReady": "AI coverage gate: requirements not met for apply"
+				"notReady": "AI warning: review coverage notes before applying"
 			},
 			"coverage": {
 				"summary": "Coverage: modules={{modules}}, tables={{tables}}, unresolved={{unresolved}} | gate={{mode}} | score={{score}}/{{minScore}}",

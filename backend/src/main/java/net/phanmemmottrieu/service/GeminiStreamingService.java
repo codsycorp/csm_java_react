@@ -1,19 +1,13 @@
 package net.phanmemmottrieu.service;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.langchain4j.model.chat.response.ChatResponse;
+import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
+import dev.langchain4j.model.googleai.GoogleAiGeminiStreamingChatModel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
-import java.io.BufferedReader;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Duration;
@@ -21,6 +15,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -43,8 +38,8 @@ public class GeminiStreamingService {
     @Value("${gemini.api-key:${GEMINI_API_KEY:}}")
     private String geminiApiKey;
 
-    @Value("${gemini.api.url:https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=}")
-    private String geminiApiUrl;
+    @Value("${google.ai.gemini.api-key:${GOOGLE_AI_GEMINI_API_KEY:}}")
+    private String googleAiGeminiApiKey;
 
     @Value("${gemini.model:gemini-2.5-pro}")
     private String geminiDefaultModel;
@@ -69,11 +64,6 @@ public class GeminiStreamingService {
 
     @Value("${gemini.streaming.rate-limit-key-cooldown-ms:90000}")
     private long rateLimitKeyCooldownMs;
-
-    private final ObjectMapper jsonMapper = new ObjectMapper();
-    private final HttpClient httpClient = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(30))
-            .build();
 
     private static class CachedResponse {
         private final String text;
@@ -220,17 +210,10 @@ public class GeminiStreamingService {
         if (geminiApiKey != null && !geminiApiKey.isBlank()) {
             return geminiApiKey.trim();
         }
-        return "";
-    }
-
-    private String buildStreamingUrl(String resolvedModel, String apiKey) {
-        // Derive streaming URL from config: replace :generateContent?key= with :streamGenerateContent?alt=sse&key=
-        String base = geminiApiUrl.replace(":generateContent?key=", ":streamGenerateContent?alt=sse&key=");
-        if (base.equals(geminiApiUrl)) {
-            // Config wasn't in expected format – construct URL directly
-            base = "https://generativelanguage.googleapis.com/v1beta/models/%s:streamGenerateContent?alt=sse&key=";
+        if (googleAiGeminiApiKey != null && !googleAiGeminiApiKey.isBlank()) {
+            return googleAiGeminiApiKey.trim();
         }
-        return String.format(base, resolvedModel) + apiKey;
+        return "";
     }
 
     /**
@@ -247,7 +230,6 @@ public class GeminiStreamingService {
     private String executeGeminiStreamContent(String model, String prompt, String apiKey,
             Consumer<String> onChunk, Consumer<Map<String, Object>> onStatus) throws Exception {
         String resolvedModel = normalizeModelToGemini(model);
-        String url = buildStreamingUrl(resolvedModel, apiKey);
 
         int promptChars = prompt == null ? 0 : prompt.length();
         int estimatedOutputTokens = Math.max(256, maxTokens);
@@ -255,28 +237,6 @@ public class GeminiStreamingService {
         int estimatedOutputChars = estimatedOutputTokens * 4;
         long startMs = System.currentTimeMillis();
 
-        Map<String, Object> textPart = new LinkedHashMap<>();
-        textPart.put("text", String.valueOf(prompt == null ? "" : prompt));
-        Map<String, Object> userContent = new LinkedHashMap<>();
-        userContent.put("role", "user");
-        userContent.put("parts", java.util.List.of(textPart));
-
-        Map<String, Object> generationConfig = new LinkedHashMap<>();
-        generationConfig.put("maxOutputTokens", estimatedOutputTokens);
-        generationConfig.put("temperature", temperature);
-
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("contents", java.util.List.of(userContent));
-        body.put("generationConfig", generationConfig);
-
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(url))
-                .header("content-type", "application/json")
-                .timeout(Duration.ofMillis(resolveRequestTimeoutMs()))
-                .POST(HttpRequest.BodyPublishers.ofString(jsonMapper.writeValueAsString(body), StandardCharsets.UTF_8))
-                .build();
-
-        // Gửi event ước tính thời gian chờ trước khi gọi API
         if (onStatus != null) {
             Map<String, Object> initStatus = new HashMap<>();
             initStatus.put("stage", "waiting_gemini");
@@ -286,12 +246,6 @@ public class GeminiStreamingService {
             initStatus.put("promptChars", promptChars);
             initStatus.put("percent", 2);
             onStatus.accept(initStatus);
-        }
-
-        HttpResponse<InputStream> response = httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
-        if (response.statusCode() < 200 || response.statusCode() >= 300) {
-            String errorBody = new String(response.body().readAllBytes(), StandardCharsets.UTF_8);
-            throw new RuntimeException("Gemini API error " + response.statusCode() + ": " + errorBody);
         }
 
         // Heartbeat: gửi waiting status mỗi 3s cho đến khi có token đầu tiên
@@ -342,54 +296,64 @@ public class GeminiStreamingService {
         }
 
         StringBuilder fullText = new StringBuilder();
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(response.body(), StandardCharsets.UTF_8))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                if (!line.startsWith("data: ")) continue;
-                String jsonStr = line.substring(6).trim();
-                if (jsonStr.isEmpty()) continue;
+        CompletableFuture<String> completion = new CompletableFuture<>();
 
-                try {
-                    JsonNode root = jsonMapper.readTree(jsonStr);
-                    JsonNode candidates = root.path("candidates");
-                    if (!candidates.isArray() || candidates.isEmpty()) continue;
+        GoogleAiGeminiStreamingChatModel streamingModel = GoogleAiGeminiStreamingChatModel.builder()
+                .apiKey(apiKey)
+                .modelName(resolvedModel)
+                .temperature(temperature)
+                .maxOutputTokens(estimatedOutputTokens)
+                .timeout(Duration.ofMillis(resolveRequestTimeoutMs()))
+                .build();
 
-                    JsonNode candidate = candidates.get(0);
-                    JsonNode parts = candidate.path("content").path("parts");
-                    if (parts.isArray()) {
-                        for (JsonNode p : parts) {
-                            String text = p.path("text").asText("");
-                            if (!text.isEmpty()) {
-                                if (firstChunkArrived.compareAndSet(false, true) && onStatus != null) {
-                                    // Token đầu tiên đến!
-                                    long ttft = System.currentTimeMillis() - startMs;
-                                    Map<String, Object> st = new HashMap<>();
-                                    st.put("stage", "streaming_started");
-                                    st.put("status", "first_token");
-                                    st.put("message", "Bắt đầu nhận kết quả từ Gemini");
-                                    st.put("ttftMs", ttft);
-                                    st.put("estimatedTotalChars", estimatedOutputChars);
-                                    st.put("percent", 15);
-                                    onStatus.accept(st);
-                                }
-                                fullText.append(text);
-                                charsReceived.addAndGet(text.length());
-                                if (onChunk != null) {
-                                    onChunk.accept(text);
-                                }
-                            }
-                        }
+        try {
+            streamingModel.chat(String.valueOf(prompt == null ? "" : prompt), new StreamingChatResponseHandler() {
+                @Override
+                public void onPartialResponse(String partialResponse) {
+                    String text = String.valueOf(partialResponse == null ? "" : partialResponse);
+                    if (text.isEmpty()) {
+                        return;
                     }
-                } catch (Exception parseEx) {
-                    log.warn("GeminiStreamingService: failed to parse SSE event: {}", jsonStr, parseEx);
+                    if (firstChunkArrived.compareAndSet(false, true) && onStatus != null) {
+                        long ttft = System.currentTimeMillis() - startMs;
+                        Map<String, Object> st = new HashMap<>();
+                        st.put("stage", "streaming_started");
+                        st.put("status", "first_token");
+                        st.put("message", "Bắt đầu nhận kết quả từ Gemini");
+                        st.put("ttftMs", ttft);
+                        st.put("estimatedTotalChars", estimatedOutputChars);
+                        st.put("percent", 15);
+                        onStatus.accept(st);
+                    }
+                    fullText.append(text);
+                    charsReceived.addAndGet(text.length());
+                    if (onChunk != null) {
+                        onChunk.accept(text);
+                    }
                 }
-            }
+
+                @Override
+                public void onCompleteResponse(ChatResponse completeResponse) {
+                    String completedText = fullText.toString();
+                    if (completedText.isEmpty() && completeResponse != null
+                            && completeResponse.aiMessage() != null
+                            && completeResponse.aiMessage().text() != null) {
+                        completedText = completeResponse.aiMessage().text();
+                    }
+                    completion.complete(completedText);
+                }
+
+                @Override
+                public void onError(Throwable error) {
+                    completion.completeExceptionally(error);
+                }
+            });
+
+            return completion.get(resolveRequestTimeoutMs(), TimeUnit.MILLISECONDS);
         } finally {
             if (heartbeatTask != null) heartbeatTask.cancel(false);
             heartbeat.shutdownNow();
         }
-        return fullText.toString();
     }
 
     /**
@@ -469,7 +433,7 @@ public class GeminiStreamingService {
 
         String key = resolveGeminiApiKey();
         if (key.isBlank()) {
-            IllegalStateException err = new IllegalStateException("Missing Gemini API key. Set GEMINI_PRO_API_KEY or GEMINI_API_KEY");
+            IllegalStateException err = new IllegalStateException("Missing Gemini API key. Set GEMINI_PRO_API_KEY, GEMINI_API_KEY, or GOOGLE_AI_GEMINI_API_KEY");
             log.error("GeminiStreamingService: {}", err.getMessage());
             if (onError != null) {
                 onError.accept(err);

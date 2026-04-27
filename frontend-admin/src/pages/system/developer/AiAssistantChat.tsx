@@ -53,6 +53,12 @@ type CodeBlock = {
 
 type ResponseMode = "analyze" | "edit";
 
+type StructuredAssistantPayload = {
+	summary: string;
+	code: string;
+	changes: string[];
+};
+
 type AiAssistantStageEvent = {
 	id: string;
 	stage: string;
@@ -100,6 +106,7 @@ const LEGACY_AUTO_APPLY_PREF_KEY = "copilot.autoApply";
 const MAX_CHAT_INPUT_CHARS = 20000;
 const MAX_STRUCTURED_TEXT_EDITS = 160;
 const MAX_STRUCTURED_REPLACEMENT_CHARS = 800000;
+const SHOW_DETAILED_PROGRESS_TIMELINE = false;
 const TEXT_FILE_EXTENSIONS = new Set([
 	"txt", "md", "markdown", "json", "js", "ts", "tsx", "jsx", "java", "sql", "css", "scss", "less",
 	"html", "xml", "yml", "yaml", "csv", "py", "properties", "env", "log", "ini",
@@ -257,6 +264,9 @@ function extractMenuDraftForEditor(raw: unknown): string {
 	 }
 	 if (parsed && typeof parsed === "object") {
 		const obj = parsed as Record<string, unknown>;
+		if (typeof obj.code === "string" && obj.code.trim()) {
+			return parseMenuPayload(obj.code);
+		}
 		if (Array.isArray(obj.menu)) {
 		 return JSON.stringify({ ...obj, menu: obj.menu }, null, 2);
 		}
@@ -298,6 +308,64 @@ function extractMenuDraftForEditor(raw: unknown): string {
 		return "";
 	}
 	return "";
+}
+
+function extractValidJsonCandidate(rawText: string): string | null {
+	const text = String(rawText || "").trim();
+	if (!text) return null;
+	const candidates = [text];
+
+	const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+	if (fenceMatch?.[1]) {
+		candidates.push(String(fenceMatch[1]).trim());
+	}
+
+	const objStart = text.indexOf("{");
+	const objEnd = text.lastIndexOf("}");
+	if (objStart >= 0 && objEnd > objStart) {
+		candidates.push(text.slice(objStart, objEnd + 1).trim());
+	}
+
+	for (const candidate of candidates) {
+		try {
+			JSON.parse(candidate);
+			return candidate;
+		} catch {
+			// try next candidate
+		}
+	}
+
+	return null;
+}
+
+function parseStructuredAssistantPayload(raw: unknown): StructuredAssistantPayload | null {
+	const candidate = extractValidJsonCandidate(String(raw || ""));
+	if (!candidate) return null;
+
+	try {
+		const parsed = JSON.parse(candidate);
+		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+			return null;
+		}
+		const payload = parsed as Record<string, unknown>;
+		const code = typeof payload.code === "string" ? payload.code.trim() : "";
+		if (!code) return null;
+		return {
+			summary: typeof payload.summary === "string" ? payload.summary.trim() : "",
+			code,
+			changes: Array.isArray(payload.changes)
+				? payload.changes.map((item) => String(item || "").trim()).filter(Boolean)
+				: [],
+		};
+	} catch {
+		return null;
+	}
+}
+
+function looksLikeStructuredPayload(raw: unknown): boolean {
+	const text = String(raw || "").trim();
+	if (!text) return false;
+	return text.startsWith("{") && (/"summary"\s*:/.test(text) || /"code"\s*:/.test(text));
 }
 
 function applyTextEditsToDraft(baseText: string, textEdits: any[]): string {
@@ -513,6 +581,7 @@ export default function AiAssistantChat({
 	const stageEventSignaturesRef = useRef<Set<string>>(new Set());
 	const isMac = /Mac|iPhone|iPad|iPod/i.test(navigator.platform || "");
 	const sendHintKey = isMac ? "Cmd" : "Ctrl";
+	const shouldRenderAssistantCodeBlocks = !onCodeInsert;
 
 	useEffect(() => {
 		setAutoApplyEnabled(loadAutoApplyPreference(autoApplyPreferenceKey, Boolean(autoApplyCodeBlock)));
@@ -880,10 +949,30 @@ export default function AiAssistantChat({
 		if (!nextText && !force) return;
 
 		applyRealtimeCodeFromTextRef.current(nextText, force);
+		const structuredPayload = parseStructuredAssistantPayload(nextText);
+		const showStructuredPlaceholder = !structuredPayload && looksLikeStructuredPayload(nextText);
+		const displayText = structuredPayload
+			? [
+				structuredPayload.summary,
+				structuredPayload.changes.length
+					? structuredPayload.changes.map((item) => `- ${item}`).join("\n")
+					: "",
+			].filter(Boolean).join("\n\n").trim()
+			: showStructuredPlaceholder
+				? uiText(
+					"Trợ lý Ảo đang chuẩn bị kết quả cho editor...",
+					"Virtual Assistant is preparing the result for the editor...",
+					"虚拟助手正在为编辑器准备结果...",
+				)
+				: nextText;
 
 		const now = Date.now();
 		let nextCodeBlocks = parsedCodeBlocksRef.current;
-		if (force || now - lastCodeBlockParseAtRef.current >= STREAM_CODEBLOCK_PARSE_MS) {
+		if (structuredPayload) {
+			nextCodeBlocks = [];
+			parsedCodeBlocksRef.current = nextCodeBlocks;
+			lastCodeBlockParseAtRef.current = now;
+		} else if (force || now - lastCodeBlockParseAtRef.current >= STREAM_CODEBLOCK_PARSE_MS) {
 			nextCodeBlocks = extractCodeBlocks(nextText);
 			parsedCodeBlocksRef.current = nextCodeBlocks;
 			lastCodeBlockParseAtRef.current = now;
@@ -894,7 +983,7 @@ export default function AiAssistantChat({
 			for (let i = updated.length - 1; i >= 0; i -= 1) {
 				const lastMsg = updated[i];
 				if (lastMsg.role === "assistant" && lastMsg.messageType !== "debug") {
-					lastMsg.content = nextText;
+					lastMsg.content = displayText;
 					lastMsg.codeBlocks = nextCodeBlocks;
 					break;
 				}
@@ -903,7 +992,7 @@ export default function AiAssistantChat({
 		});
 
 		scrollToBottom(false);
-	}, [scrollToBottom]);
+	}, [contextType, scrollToBottom, uiText]);
 
 	const scheduleStreamFlush = useCallback(() => {
 		if (streamFlushTimerRef.current) return;
@@ -916,17 +1005,29 @@ export default function AiAssistantChat({
 	const applyRealtimeCodeFromText = useCallback((rawText: string, force = false): boolean => {
 		if (!autoApplyEnabled || !turnAllowAutoApplyRef.current || !onCodeInsert) return false;
 		const source = String(rawText || "");
-		const blocks = extractCodeBlocks(source);
+		let nextCode = "";
+		if (contextType === "menu_json") {
+			nextCode = extractMenuDraftForEditor(source);
+		} else {
+			const structuredPayload = parseStructuredAssistantPayload(source);
+			if (structuredPayload?.code) {
+				nextCode = structuredPayload.code;
+			}
+		}
+
+		const blocks = !nextCode ? extractCodeBlocks(source) : [];
 		if (!blocks.length) {
 			const openBlock = extractLatestOpenCodeBlock(source);
 			if (openBlock?.code) {
 				blocks.push(openBlock);
 			}
 		}
-		if (!blocks.length) return false;
-		const preferredBlock = pickPreferredCodeBlock(blocks);
-		if (!preferredBlock?.code) return false;
-		const nextCode = preferredBlock.code;
+		if (!nextCode) {
+			if (!blocks.length) return false;
+			const preferredBlock = pickPreferredCodeBlock(blocks);
+			if (!preferredBlock?.code) return false;
+			nextCode = preferredBlock.code;
+		}
 		if (nextCode === lastAppliedCodeRef.current) return false;
 
 		const now = Date.now();
@@ -943,7 +1044,7 @@ export default function AiAssistantChat({
 		lastAppliedCodeRef.current = nextCode;
 		lastRealtimeApplyAtRef.current = now;
 		return true;
-	}, [autoApplyEnabled, onCodeInsert, pickPreferredCodeBlock]);
+	}, [autoApplyEnabled, contextType, onCodeInsert, pickPreferredCodeBlock]);
 
 	useEffect(() => {
 		applyRealtimeCodeFromTextRef.current = applyRealtimeCodeFromText;
@@ -1130,11 +1231,13 @@ export default function AiAssistantChat({
 			pendingStreamChunkRef.current = "";
 			parsedCodeBlocksRef.current = [];
 			lastCodeBlockParseAtRef.current = 0;
-			appendStageEvent({
-				stage: "preparing",
-				message: uiText("Đang chuẩn bị yêu cầu", "Preparing request", "正在准备请求"),
-				percent: 0,
-			});
+			if (SHOW_DETAILED_PROGRESS_TIMELINE) {
+				appendStageEvent({
+					stage: "preparing",
+					message: uiText("Đang chuẩn bị yêu cầu", "Preparing request", "正在准备请求"),
+					percent: 0,
+				});
+			}
 			const responseMode: ResponseMode = modeDirective.overrideMode
 				|| (contextType === "menu_json"
 					? "edit"
@@ -1229,7 +1332,7 @@ export default function AiAssistantChat({
 									...prev,
 									phase: "waiting",
 									percent: evt.percent ?? 0,
-									message: evt.message ?? "",
+									message: evt.message || uiText("Trợ lý Ảo đang chuẩn bị yêu cầu...", "Virtual Assistant is preparing the request...", "虚拟助手正在准备请求..."),
 									estimatedWaitSecs: evt.estimatedWaitSecs ?? 0,
 									remainingSecs: evt.estimatedWaitSecs ?? 0,
 								}));
@@ -1238,7 +1341,7 @@ export default function AiAssistantChat({
 									...prev,
 									phase: "waiting",
 									percent: evt.percent ?? prev.percent,
-									message: evt.message ?? prev.message,
+									message: evt.message || uiText("Trợ lý Ảo đang xử lý...", "Virtual Assistant is processing...", "虚拟助手正在处理中..."),
 									remainingSecs: evt.remainingEstimateSecs ?? prev.remainingSecs,
 								}));
 							} else if (evt.stage === "streaming_started") {
@@ -1246,7 +1349,7 @@ export default function AiAssistantChat({
 									...prev,
 									phase: "streaming",
 									percent: 15,
-									message: "Đang nhận kết quả từ Gemini...",
+									message: uiText("Đang nhận kết quả từ Trợ lý Ảo...", "Receiving result from Virtual Assistant...", "正在接收虚拟助手结果..."),
 									ttftMs: evt.ttftMs,
 									estimatedTotalChars: evt.estimatedTotalChars ?? prev.estimatedTotalChars,
 									remainingSecs: 0,
@@ -1261,15 +1364,23 @@ export default function AiAssistantChat({
 									remainingSecs: evt.remainingEstimateSecs ?? prev.remainingSecs,
 								}));
 							} else if (evt.stage === "analyzing") {
-								appendStageEvent({ stage: evt.stage as any, message: evt.message ?? "", percent: evt.percent ?? 0 });
+								if (SHOW_DETAILED_PROGRESS_TIMELINE) {
+									appendStageEvent({ stage: evt.stage as any, message: evt.message ?? "", percent: evt.percent ?? 0 });
+								}
 							} else if (evt.stage === "context" || evt.stage === "continuing" || evt.stage === "cached") {
-								appendStageEvent({ stage: evt.stage as any, message: evt.message ?? "", percent: evt.percent ?? 0 });
+								if (SHOW_DETAILED_PROGRESS_TIMELINE) {
+									appendStageEvent({ stage: evt.stage as any, message: evt.message ?? "", percent: evt.percent ?? 0 });
+								}
 							} else if (evt.stage === "streaming" && evt.chunk) {
 								pendingStreamChunkRef.current += evt.chunk;
 								scheduleStreamFlush();
 							} else if (evt.stage === "complete") {
 								setGeminiProgress({ phase: "idle", percent: 100, message: "Hoàn thành", estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
-								flushStreamingToUI();
+								if (evt.fullResponse) {
+									streamingMessageRef.current = evt.fullResponse;
+									pendingStreamChunkRef.current = "";
+								}
+								flushStreamingToUI(true);
 								if (evt.fullResponse) {
 									applyRealtimeCodeFromText(evt.fullResponse);
 								}
@@ -1409,7 +1520,16 @@ export default function AiAssistantChat({
 												))}
 												
 												{/* Render code blocks */}
-												{msg.codeBlocks?.map((block) => (
+												{!shouldRenderAssistantCodeBlocks && Array.isArray(msg.codeBlocks) && msg.codeBlocks.length > 0 && (
+													<div className={styles.attachmentSummary}>
+														{uiText(
+															"Mã đã được cập nhật trong editor. Chat chỉ hiển thị tóm tắt thay đổi.",
+															"Code has been updated in the editor. Chat shows only the summary.",
+															"代码已更新到编辑器中，聊天窗口仅显示摘要。",
+														)}
+													</div>
+												)}
+												{shouldRenderAssistantCodeBlocks && msg.codeBlocks?.map((block) => (
 													<div
 														key={`code_${block.index}`}
 														className={styles.codeBlock}
@@ -1455,7 +1575,7 @@ export default function AiAssistantChat({
 
 					{isLoading && (
 						<>
-							{/* Gemini Progress Bar — waiting / streaming phase */}
+							{/* Virtual Assistant Progress Bar — waiting / streaming phase */}
 							{geminiProgress.phase !== "idle" && (
 								<div className={`${styles.messageItem} ${styles.assistant}`}>
 									<div className={styles.geminiProgressCard}>
@@ -1465,8 +1585,8 @@ export default function AiAssistantChat({
 											</span>
 											<span className={styles.geminiProgressLabel}>
 												{geminiProgress.message || (geminiProgress.phase === "waiting"
-													? "Gemini đang xử lý..."
-													: "Đang nhận kết quả...")}
+													? uiText("Trợ lý Ảo đang xử lý...", "Virtual Assistant is processing...", "虚拟助手正在处理中...")
+													: uiText("Đang nhận kết quả từ Trợ lý Ảo...", "Receiving result from Virtual Assistant...", "正在接收虚拟助手结果..."))}
 											</span>
 											{geminiProgress.remainingSecs > 0 && (
 												<span className={styles.geminiProgressCountdown}>
@@ -1490,13 +1610,17 @@ export default function AiAssistantChat({
 										)}
 										{geminiProgress.phase === "waiting" && geminiProgress.estimatedWaitSecs > 0 && (
 											<div className={styles.geminiProgressMeta}>
-												Ước tính ~{geminiProgress.estimatedWaitSecs}s tổng thời gian
+												{uiText(
+													`Ước tính ~${geminiProgress.estimatedWaitSecs}s tổng thời gian`,
+													`Estimated total time ~${geminiProgress.estimatedWaitSecs}s`,
+													`预计总耗时约 ${geminiProgress.estimatedWaitSecs}s`,
+												)}
 											</div>
 										)}
 									</div>
 								</div>
 							)}
-							{stageEvents.length > 0 && (
+							{SHOW_DETAILED_PROGRESS_TIMELINE && stageEvents.length > 0 && (
 								<div className={`${styles.messageItem} ${styles.assistant}`}>
 									<div className={`${styles.messageContent} ${styles.stageTimelineCard}`}>
 										<div className={styles.stageTimelineTitle}>

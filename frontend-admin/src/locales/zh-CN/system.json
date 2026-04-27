@@ -555,7 +555,7 @@
 				"moreItems": "...还有 {{count}} 项"
 			},
 			"applyGuard": {
-				"notReady": "AI 覆盖率门禁：尚未满足应用条件"
+				"notReady": "AI 警告：应用前建议先复核覆盖率提示"
 			},
 			"coverage": {
 				"summary": "Coverage: modules={{modules}}, tables={{tables}}, unresolved={{unresolved}} | gate={{mode}} | score={{score}}/{{minScore}}",

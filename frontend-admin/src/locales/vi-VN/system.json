@@ -552,7 +552,7 @@
 				"moreItems": "...còn {{count}} mục nữa"
 			},
 			"applyGuard": {
-				"notReady": "AI coverage gate: chưa đủ điều kiện áp dụng"
+				"notReady": "Cảnh báo AI: nên rà soát các điểm coverage trước khi áp dụng"
 			},
 			"coverage": {
 				"summary": "Coverage: modules={{modules}}, tables={{tables}}, unresolved={{unresolved}} | gate={{mode}} | score={{score}}/{{minScore}}",
