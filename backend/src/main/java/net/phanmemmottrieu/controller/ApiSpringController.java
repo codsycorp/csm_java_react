@@ -338,7 +338,7 @@ public class ApiSpringController {
         this.geminiStreamingService = geminiStreamingService;
     }
 
-    @PostMapping(value = "/ai-code-stream")
+    @PostMapping(value = {"/ai-code-stream", "/api/ai-code-stream"})
     public SseEmitter streamCodeAssistant(@RequestBody Map<String, Object> body) {
         SseEmitter emitter = new SseEmitter(900_000L); // 15-minute timeout
 
