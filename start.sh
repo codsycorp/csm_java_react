@@ -332,6 +332,11 @@ if [ -f "$SCRIPT_DIR/config.env" ]; then
     source "$SCRIPT_DIR/config.env"
     set +a
     log "Loaded config.env"
+    log "  GEMINI_PRO_API_KEY : ${GEMINI_PRO_API_KEY:+(set, ${#GEMINI_PRO_API_KEY} chars)}"
+    log "  GEMINI_API_KEY     : ${GEMINI_API_KEY:+(set, ${#GEMINI_API_KEY} chars)}"
+    log "  GOOGLE_AI_GEMINI_API_KEY: ${GOOGLE_AI_GEMINI_API_KEY:+(set, ${#GOOGLE_AI_GEMINI_API_KEY} chars)}"
+else
+    log "⚠ WARNING: config.env not found at $SCRIPT_DIR/config.env — Gemini API keys may be missing"
 fi
 
 # Create logs directory for GC and error logs

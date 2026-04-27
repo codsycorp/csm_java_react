@@ -36,11 +36,14 @@ import net.phanmemmottrieu.service.ChatPersistenceService;
 import net.phanmemmottrieu.service.AiAssistantGatewayService;
 import net.phanmemmottrieu.service.AiMenuMergeService;
 import net.phanmemmottrieu.service.AiAssistantMemoryManagerService;
+import net.phanmemmottrieu.service.GeminiStreamingService;
 import com.corundumstudio.socketio.SocketIOServer;
 import net.phanmemmottrieu.model.UrlSubmissionQueue;
 import net.phanmemmottrieu.model.UrlSubmissionHistory;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.text.Normalizer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -61,6 +64,8 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 @RestController
 public class ApiSpringController {
@@ -109,6 +114,10 @@ public class ApiSpringController {
     private final CRMHandler crmHandler;
     private final AiMenuMergeService aiMenuMergeService;
     private final AiAssistantMemoryManagerService aiAssistantMemoryManagerService;
+    private final GeminiStreamingService geminiStreamingService;
+
+    private static final int MAX_CODE_CHARS = 500_000;
+    private static final int MAX_MESSAGE_CHARS = 20_000;
 
     @Value("${ai.prompt.max-chars:3000000}")
     private int maxPromptChars;
@@ -224,11 +233,67 @@ public class ApiSpringController {
     @Value("${ai.assistant.custom-instructions.path:csm_datas/public/ai-assistant-instructions.md}")
     private String aiAssistantCustomInstructionsPath;
 
+    @Value("${ai.code-stream.max-prompt-chars:140000}")
+    private int aiCodeStreamMaxPromptChars;
+
+    @Value("${ai.code-stream.max-current-code-chars:80000}")
+    private int aiCodeStreamMaxCurrentCodeChars;
+
+    @Value("${ai.code-stream.max-attachment-chars-per-file:20000}")
+    private int aiCodeStreamMaxAttachmentCharsPerFile;
+
+    @Value("${ai.code-stream.max-attachments-total-chars:60000}")
+    private int aiCodeStreamMaxAttachmentsTotalChars;
+
+    @Value("${ai.code-stream.base-cache.enabled:true}")
+    private boolean aiCodeStreamBaseCacheEnabled;
+
+    @Value("${ai.code-stream.base-cache.max-content-chars:2200000}")
+    private int aiCodeStreamMaxBaseContentChars;
+
+    @Value("${ai.code-stream.base-cache.max-entries:24}")
+    private int aiCodeStreamMaxBaseCacheEntries;
+
+    @Value("${ai.code-stream.base-cache.ttl-minutes:90}")
+    private int aiCodeStreamBaseCacheTtlMinutes;
+
+    @Value("${ai.code-stream.base-cache.auto-promote-chars:120000}")
+    private int aiCodeStreamBaseCacheAutoPromoteChars;
+
+    @Value("${ai.code-stream.auto-continue.enabled:true}")
+    private boolean aiCodeStreamAutoContinueEnabled;
+
+    @Value("${ai.code-stream.auto-continue.max-attempts:3}")
+    private int aiCodeStreamAutoContinueMaxAttempts;
+
+    @Value("${ai.code-stream.auto-continue.max-previous-response-chars:120000}")
+    private int aiCodeStreamAutoContinueMaxPreviousResponseChars;
+
+    @Value("${ai.code-stream.routing.enabled:true}")
+    private boolean aiCodeStreamRoutingEnabled;
+
+    @Value("${ai.code-stream.routing.simple-model:}")
+    private String aiCodeStreamRoutingSimpleModel;
+
+    @Value("${ai.code-stream.routing.complex-threshold-chars:20000}")
+    private int aiCodeStreamRoutingComplexThresholdChars;
+
+    @Value("${ai.code-stream.prompt-cache.min-chars:8000}")
+    private int aiCodeStreamPromptCacheMinChars;
+
+    @Value("${gemini.model:}")
+    private String aiCodeStreamDefaultStreamingModel;
+
+    @Value("${gemini.streaming.model:}")
+    private String aiCodeStreamLegacyStreamingModel;
+
     private volatile String cachedAiAssistantCustomInstructions = null;
 
     private final ExecutorService aiAsyncExecutor = Executors.newFixedThreadPool(2);
+    private final ExecutorService aiCodeStreamExecutor = Executors.newCachedThreadPool();
     private final ConcurrentHashMap<String, Map<String, Object>> aiAsyncJobs = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, CodeChainingCacheEntry> codeChainingStep1Cache = new ConcurrentHashMap<>();
+    private final Map<String, AiCodeBaseContentEntry> aiCodeBaseContentCache = new ConcurrentHashMap<>();
 
     // Tiêm tất cả các Handler thông qua constructor
     @Autowired
@@ -249,7 +314,8 @@ public class ApiSpringController {
             SocketIOServer socketIOServer,
             CRMHandler crmHandler,
             AiMenuMergeService aiMenuMergeService,
-            AiAssistantMemoryManagerService aiAssistantMemoryManagerService
+            AiAssistantMemoryManagerService aiAssistantMemoryManagerService,
+            GeminiStreamingService geminiStreamingService
         ) {
         this.recordManager = recordManager;
         this.initHandler = initHandler;
@@ -269,6 +335,790 @@ public class ApiSpringController {
         this.crmHandler = crmHandler;
         this.aiMenuMergeService = aiMenuMergeService;
         this.aiAssistantMemoryManagerService = aiAssistantMemoryManagerService;
+        this.geminiStreamingService = geminiStreamingService;
+    }
+
+    @PostMapping(value = "/api/ai-code-stream")
+    public SseEmitter streamCodeAssistant(@RequestBody Map<String, Object> body) {
+        SseEmitter emitter = new SseEmitter(900_000L); // 15-minute timeout
+
+        emitter.onTimeout(() -> {
+            logger.warn("ApiSpringController: ai-code-stream SSE timeout");
+            emitter.complete();
+        });
+        emitter.onError(ex -> logger.debug("ApiSpringController: ai-code-stream SSE error: {}", ex.getMessage()));
+
+        // Keep tenant scoping consistent with ApiSpringController security conventions.
+        UserAuthContext authCtx = extractUserAuthContext();
+        if (!authCtx.authenticated) {
+            sendErrorEvent(emitter, "Authentication required");
+            return emitter;
+        }
+        String requestedAppId = firstNonBlankString(body.get("appId"), body.get("app_id"));
+        String userAppId = firstNonBlankString(authCtx.appId);
+        if (!isCsmAdmin(authCtx)) {
+            String effectiveAppId = firstNonBlankString(userAppId, requestedAppId, "csm");
+            body.put("appId", effectiveAppId);
+            body.put("app_id", effectiveAppId);
+        }
+
+        aiCodeStreamExecutor.execute(() -> {
+            try {
+                String appId = str(body.get("appId"), "");
+                String message = truncate(str(body.get("message"), ""), MAX_MESSAGE_CHARS);
+                String currentCodeRaw = truncate(strKeep(body.get("currentCode"), ""), Math.max(MAX_CODE_CHARS, aiCodeStreamMaxBaseContentChars));
+                String language = str(body.get("language"), "javascript");
+                String contextType = str(body.get("contextType"), "code");
+                String responseMode = str(body.get("responseMode"), "analyze");
+                String modelOverride = str(body.get("model"), "");
+                String baseContentRef = str(body.get("baseContentRef"), "");
+                String baseContent = truncate(strKeep(body.get("baseContent"), ""), Math.max(100000, aiCodeStreamMaxBaseContentChars));
+                boolean preserveBaseContent = bool(body.get("preserveBaseContent"), false);
+                Object attachmentsRaw = body.get("attachments");
+
+                if (message.isBlank()) {
+                    sendErrorEvent(emitter, "Message không được để trống");
+                    return;
+                }
+
+                pruneBaseContentCache();
+                AiCodeBaseContentResolution base = resolveBaseContent(appId, baseContentRef, baseContent, currentCodeRaw);
+                String effectiveCodeContext = currentCodeRaw;
+                if (preserveBaseContent && !base.baseContent().isBlank()) {
+                    effectiveCodeContext = base.baseContent();
+                } else if (effectiveCodeContext.isBlank() && !base.baseContent().isBlank()) {
+                    effectiveCodeContext = base.baseContent();
+                }
+                effectiveCodeContext = truncate(effectiveCodeContext, Math.max(MAX_CODE_CHARS, aiCodeStreamMaxBaseContentChars));
+
+                String prompt = buildCodingPrompt(message, effectiveCodeContext, language, contextType, responseMode, attachmentsRaw);
+                boolean largeStructuredEditMode = preserveBaseContent
+                        && "edit".equalsIgnoreCase(responseMode)
+                        && !base.baseContent().isBlank()
+                        && base.baseContentChars() > Math.max(100000, aiCodeStreamMaxCurrentCodeChars);
+                if (largeStructuredEditMode) {
+                    prompt = buildCodingPrompt(message, effectiveCodeContext, language, contextType, responseMode,
+                            attachmentsRaw, true, base.baseRef(), base.baseContentChars());
+                }
+                if (prompt.length() > aiCodeStreamMaxPromptChars) {
+                    prompt = truncateMiddle(prompt, Math.max(20000, aiCodeStreamMaxPromptChars));
+                }
+
+                int systemContentEstimate = prompt.length() - message.length();
+                boolean usePromptCache = systemContentEstimate >= Math.max(1000, aiCodeStreamPromptCacheMinChars);
+                String[] promptParts = usePromptCache
+                        ? buildCodingPromptParts(message, effectiveCodeContext, language, contextType, responseMode,
+                                attachmentsRaw, largeStructuredEditMode, base.baseRef(), base.baseContentChars())
+                        : new String[] { prompt, "" };
+                if (promptParts[0].length() > aiCodeStreamMaxPromptChars) {
+                    promptParts[0] = truncateMiddle(promptParts[0], Math.max(20000, aiCodeStreamMaxPromptChars));
+                    usePromptCache = false;
+                }
+
+                String effectiveModel = routeModel(message, effectiveCodeContext, responseMode, modelOverride);
+                long startedAtMs = System.currentTimeMillis();
+
+                List<Map<String, String>> imageParts = extractImageParts(attachmentsRaw);
+                boolean hasImages = !imageParts.isEmpty();
+
+                logger.info(
+                        "ApiSpringController: ai-code-stream start appId={} model={} language={} promptChars={} promptTokens~{} messageChars={} promptCache={} images={}",
+                        appId, effectiveModel, language, prompt.length(), estimateTokens(prompt), message.length(), usePromptCache,
+                        imageParts.size());
+
+                if (!base.baseRef().isBlank()) {
+                    sendEvent(emitter, jsonOf(
+                            "stage", "context",
+                            "status", "base_cached",
+                            "baseContentRef", base.baseRef(),
+                            "baseContentChars", base.baseContentChars(),
+                            "effectiveCodeChars", effectiveCodeContext.length(),
+                            "preserveBaseContent", preserveBaseContent));
+                }
+
+                int promptTokens = estimateTokens(prompt);
+                int estimatedWaitSecs = 3 + prompt.length() / 4000 + (8192 * 4 / 400);
+                sendEvent(emitter, jsonOf(
+                        "stage", "preparing",
+                        "message", "Đang kết nối Gemini...",
+                        "model", effectiveModel,
+                        "promptTokens", promptTokens,
+                        "estimatedWaitSecs", estimatedWaitSecs,
+                        "percent", 0));
+
+                String rawResponse;
+                if (hasImages) {
+                    rawResponse = streamWithAutoContinueMultimodal(emitter, prompt, imageParts, effectiveModel, language,
+                            responseMode);
+                } else {
+                    rawResponse = streamWithAutoContinue(
+                            emitter,
+                            prompt,
+                            promptParts[0],
+                            promptParts[1],
+                            effectiveModel,
+                            language,
+                            responseMode,
+                            largeStructuredEditMode,
+                            usePromptCache);
+                }
+                if (rawResponse == null) {
+                    return;
+                }
+
+                Map<String, Object> completion = new LinkedHashMap<>();
+                completion.put("stage", "complete");
+                String completionPayload = rawResponse;
+                if (largeStructuredEditMode) {
+                    completionPayload = materializeLargeEditResponse(completionPayload, base.baseContent());
+                }
+                completion.put("fullResponse", completionPayload);
+                completion.put("responseMode", responseMode);
+                if (!base.baseRef().isBlank()) {
+                    completion.put("baseContentRef", base.baseRef());
+                    completion.put("baseContentChars", base.baseContentChars());
+                }
+                completion.put("timestamp", System.currentTimeMillis());
+                sendEvent(emitter, objectMapper.writeValueAsString(completion));
+                logger.info("ApiSpringController: ai-code-stream complete appId={} model={} elapsedMs={} outputChars={}",
+                        appId, effectiveModel, (System.currentTimeMillis() - startedAtMs), rawResponse.length());
+                emitter.complete();
+
+            } catch (Exception ex) {
+                logger.error("ApiSpringController: ai-code-stream unexpected error: {}", ex.getMessage(), ex);
+                try {
+                    sendErrorEvent(emitter, "Lỗi hệ thống: " + ex.getMessage());
+                } catch (Exception ignored) {
+                    emitter.completeWithError(ex);
+                }
+            }
+        });
+
+        return emitter;
+    }
+
+    private String buildCodingPrompt(String message, String currentCode, String language,
+            String contextType, String responseMode, Object attachmentsRaw) {
+        return buildCodingPrompt(message, currentCode, language, contextType, responseMode, attachmentsRaw,
+                false, "", currentCode == null ? 0 : currentCode.length());
+    }
+
+    private String buildCodingPrompt(String message, String currentCode, String language,
+            String contextType, String responseMode, Object attachmentsRaw,
+            boolean largeStructuredEditMode, String baseRef, int baseChars) {
+        StringBuilder sb = new StringBuilder();
+
+        sb.append("Bạn là AI trợ lý lập trình (như Cursor/Copilot). Hỗ trợ người dùng chính xác và chi tiết.\n\n");
+
+        if (largeStructuredEditMode) {
+            sb.append("CHẾ ĐỘ: Chỉnh sửa dữ liệu rất lớn. KHÔNG trả về full code trực tiếp.\n");
+            sb.append("Bắt buộc trả về JSON thuần đúng format:\n");
+            sb.append("{\"summary\":\"...\",\"changes\":[\"...\"],\"textEdits\":[{\"find\":\"chuỗi cũ chính xác\",\"replace\":\"chuỗi mới\"}]}\n");
+            sb.append("Quy tắc:\n");
+            sb.append("- Mỗi textEdits.find phải là chuỗi cũ chính xác cần thay, đủ unique.\n");
+            sb.append("- Không dùng markdown, không dùng code fence.\n");
+            sb.append("- Không trả về trường code. Backend sẽ tự áp patch để tạo full code.\n\n");
+            if (baseRef != null && !baseRef.isBlank()) {
+                sb.append("BASE_CONTENT_REF: ").append(baseRef).append("\n");
+                sb.append("BASE_CONTENT_CHARS: ").append(baseChars).append("\n\n");
+            }
+        } else if ("edit".equalsIgnoreCase(responseMode)) {
+            sb.append("CHẾ ĐỘ: Chỉnh sửa code. Trả về code đã cập nhật hoàn chỉnh.\n\n");
+        } else {
+            sb.append("CHẾ ĐỘ: Phân tích/Giải thích. Phân tích và giải thích chi tiết.\n\n");
+        }
+
+        if (attachmentsRaw instanceof List<?> attachments && !attachments.isEmpty()) {
+            sb.append("## TÀI LIỆU ĐÍNH KÈM\n");
+            int attachmentBudget = Math.max(10000, aiCodeStreamMaxAttachmentsTotalChars);
+            for (Object att : attachments) {
+                if (attachmentBudget <= 0) {
+                    break;
+                }
+                if (att instanceof Map<?, ?> attMap) {
+                    String name = str(attMap.get("name"), "file");
+                    String content = str(attMap.get("textContent"), "");
+                    if (!content.isBlank()) {
+                        int perFileCap = Math.max(2000, aiCodeStreamMaxAttachmentCharsPerFile);
+                        String safe = truncateMiddle(content, Math.min(perFileCap, attachmentBudget));
+                        attachmentBudget -= safe.length();
+                        sb.append("### ").append(name).append("\n```\n").append(safe).append("\n```\n\n");
+                    }
+                }
+            }
+        }
+
+        if (!currentCode.isBlank()) {
+            String safeCode = truncateMiddle(currentCode, Math.max(4000, aiCodeStreamMaxCurrentCodeChars));
+            sb.append("## CODE HIỆN TẠI (").append(language).append(")\n```").append(language).append("\n");
+            sb.append(safeCode);
+            sb.append("\n```\n\n");
+        }
+
+        sb.append("## YÊU CẦU\n").append(message).append("\n");
+
+        return sb.toString();
+    }
+
+    private String streamWithAutoContinue(
+            SseEmitter emitter,
+            String prompt,
+            String model,
+            String language,
+            String responseMode,
+            boolean largeStructuredEditMode) throws Exception {
+        return streamWithAutoContinue(emitter, prompt, "", "", model, language, responseMode, largeStructuredEditMode, false);
+    }
+
+    private String streamWithAutoContinueMultimodal(
+            SseEmitter emitter,
+            String prompt,
+            List<Map<String, String>> imageParts,
+            String model,
+            String language,
+            String responseMode) throws Exception {
+        StringBuilder responseBuffer = new StringBuilder();
+        final boolean[] errored = { false };
+
+        geminiStreamingService.streamContentMultimodal(
+                prompt,
+                imageParts,
+                model,
+                chunk -> {
+                    try {
+                        String escaped = chunk.replace("\\", "\\\\").replace("\n", "\\n").replace("\"", "\\\"");
+                        sendEvent(emitter, "{\"stage\":\"streaming\",\"chunk\":\"" + escaped + "\"}");
+                        responseBuffer.append(chunk);
+                    } catch (Exception e) {
+                        logger.warn("ApiSpringController multimodal: error sending chunk: {}", e.getMessage());
+                    }
+                },
+                () -> {
+                },
+                ex -> {
+                    errored[0] = true;
+                    logger.error("ApiSpringController multimodal stream error: {}", ex.getMessage(), ex);
+                    try {
+                        sendErrorEvent(emitter, "Lỗi Gemini multimodal: " + ex.getMessage());
+                    } catch (Exception ignored) {
+                    }
+                },
+                status -> {
+                    try {
+                        sendEvent(emitter, objectMapper.writeValueAsString(status));
+                    } catch (Exception ignored) {
+                    }
+                });
+
+        if (errored[0]) return null;
+        return responseBuffer.toString();
+    }
+
+    private String streamWithAutoContinue(
+            SseEmitter emitter,
+            String prompt,
+            String systemContent,
+            String userMessage,
+            String model,
+            String language,
+            String responseMode,
+            boolean largeStructuredEditMode,
+            boolean usePromptCache) throws Exception {
+        boolean editMode = "edit".equalsIgnoreCase(responseMode);
+        int maxAttempts = editMode && aiCodeStreamAutoContinueEnabled ? Math.max(1, aiCodeStreamAutoContinueMaxAttempts) : 1;
+        String currentPrompt = prompt;
+        String lastRawResponse = "";
+
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            final int attemptNo = attempt;
+            if (attempt > 1) {
+                sendEvent(emitter, jsonOf(
+                        "stage", "continuing",
+                        "status", "auto_continue",
+                        "attempt", attemptNo,
+                        "maxAttempts", maxAttempts,
+                        "message", "Đang tự động tiếp tục để hoàn thiện kết quả..."));
+            }
+
+            StringBuilder attemptBuffer = new StringBuilder();
+            Throwable[] errorHolder = { null };
+
+            boolean isFirstAttemptWithCache = (attempt == 1) && usePromptCache
+                    && systemContent != null && !systemContent.isBlank()
+                    && userMessage != null && !userMessage.isBlank();
+
+            Consumer<String> chunkHandler = chunk -> {
+                attemptBuffer.append(chunk);
+                try {
+                    sendEvent(emitter, objectMapper.writeValueAsString(Map.of(
+                            "stage", "streaming",
+                            "chunk", chunk,
+                            "attempt", attemptNo)));
+                } catch (Exception ignored) {
+                }
+            };
+
+            if (isFirstAttemptWithCache) {
+                geminiStreamingService.streamContentWithCache(
+                        systemContent,
+                        userMessage,
+                        model,
+                        chunkHandler,
+                        null,
+                        err -> errorHolder[0] = err,
+                        status -> {
+                            try {
+                                Map<String, Object> wrapped = new LinkedHashMap<>(status);
+                                wrapped.put("attempt", attemptNo);
+                                wrapped.put("maxAttempts", maxAttempts);
+                                sendEvent(emitter, objectMapper.writeValueAsString(wrapped));
+                            } catch (Exception ignored) {
+                            }
+                        });
+            } else {
+                geminiStreamingService.streamContent(
+                        currentPrompt,
+                        model,
+                        chunkHandler,
+                        null,
+                        err -> errorHolder[0] = err,
+                        status -> {
+                            try {
+                                Map<String, Object> wrapped = new LinkedHashMap<>(status);
+                                wrapped.put("attempt", attemptNo);
+                                wrapped.put("maxAttempts", maxAttempts);
+                                sendEvent(emitter, objectMapper.writeValueAsString(wrapped));
+                            } catch (Exception ignored) {
+                            }
+                        });
+            }
+
+            if (errorHolder[0] != null) {
+                logger.warn("ApiSpringController: ai-code-stream failed model={} attempt={}/{} error={}",
+                        model, attemptNo, maxAttempts, errorHolder[0].getMessage());
+                sendErrorEvent(emitter, "Gemini streaming lỗi: " + errorHolder[0].getMessage());
+                return null;
+            }
+
+            String raw = attemptBuffer.toString();
+            lastRawResponse = raw;
+
+            if (isCompleteResponse(raw, language, responseMode, largeStructuredEditMode)) {
+                if (attempt > 1) {
+                    sendEvent(emitter, jsonOf(
+                            "stage", "auto_continue",
+                            "status", "completed",
+                            "attempt", attemptNo,
+                            "maxAttempts", maxAttempts,
+                            "message", "Đã tự động hoàn thiện kết quả trong backend"));
+                }
+                return raw;
+            }
+
+            if (attempt < maxAttempts) {
+                currentPrompt = buildAutoContinuePrompt(prompt, raw, language, largeStructuredEditMode);
+            }
+        }
+
+        return lastRawResponse;
+    }
+
+    private String buildAutoContinuePrompt(String originalPrompt, String previousRawResponse, String language,
+            boolean largeStructuredEditMode) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("KẾT QUẢ VỪA RỒI CHƯA HOÀN CHỈNH (bị cắt giữa chừng). Hãy trả về lại 1 lần DUY NHẤT, đầy đủ và hợp lệ.\n\n");
+        if (largeStructuredEditMode) {
+            sb.append("BẮT BUỘC format JSON: {\"summary\":\"...\",\"changes\":[...],\"textEdits\":[{\"find\":\"...\",\"replace\":\"...\"}]}\n");
+            sb.append("Không markdown, không code fence, không giải thích thêm.\n\n");
+        } else if ("json".equalsIgnoreCase(language)) {
+            sb.append("BẮT BUỘC: Trả về JSON hợp lệ, đầy đủ từ đầu đến cuối trong wrapper: {\"summary\":\"...\",\"code\":\"toàn bộ JSON hoàn chỉnh\",\"changes\":[...]}\n");
+            sb.append("QUAN TRỌNG: Trường 'code' phải chứa toàn bộ JSON hợp lệ (không được bỏ sót bất kỳ phần nào, mở { phải có đóng }).\n");
+            sb.append("Không markdown, không code fence, không cắt bớt.\n\n");
+        } else {
+            sb.append("BẮT BUỘC format JSON: {\"summary\":\"...\",\"code\":\"toàn bộ code hoàn chỉnh\",\"changes\":[...]}\n");
+            sb.append("Không markdown, không code fence, không trả về một đoạn rời.\n\n");
+        }
+        sb.append("--- YÊU CẦU GỐC ---\n");
+        sb.append(truncateMiddle(originalPrompt, Math.max(20000, aiCodeStreamMaxPromptChars))).append("\n\n");
+        sb.append("--- KẾT QUẢ TRƯỚC (CHƯA HOÀN CHỈNH - BỊ CẮT) ---\n");
+        sb.append(truncateMiddle(previousRawResponse, Math.max(8000, aiCodeStreamAutoContinueMaxPreviousResponseChars))).append("\n");
+        return sb.toString();
+    }
+
+    private boolean isCompleteResponse(String rawResponse, String language, String responseMode, boolean largeStructuredEditMode) {
+        String raw = String.valueOf(rawResponse == null ? "" : rawResponse).trim();
+        if (raw.isBlank()) {
+            return false;
+        }
+
+        if ("json".equalsIgnoreCase(language)) {
+            String candidate = raw;
+            ParsedCodePayload parsed = parseCodePayload(raw);
+            if (parsed != null && !parsed.code().isBlank()) {
+                candidate = parsed.code().trim();
+            }
+            if (candidate.startsWith("```")) {
+                candidate = candidate.replaceFirst("^```[a-zA-Z]*\\s*", "").replaceAll("\\s*```$", "").trim();
+            }
+            try {
+                objectMapper.readTree(candidate);
+                return true;
+            } catch (Exception ex) {
+                return false;
+            }
+        }
+
+        if (!"edit".equalsIgnoreCase(responseMode)) {
+            return true;
+        }
+        if (largeStructuredEditMode) {
+            ParsedTextEditPayload payload = parseTextEditPayload(raw);
+            return payload != null && payload.textEdits != null && !payload.textEdits.isEmpty();
+        }
+
+        ParsedCodePayload payload = parseCodePayload(raw);
+        if (payload == null || payload.code().isBlank()) {
+            return false;
+        }
+
+        try {
+            String rawCandidate = raw.startsWith("```")
+                    ? raw.replaceFirst("^```[a-zA-Z]*\\s*", "").replaceAll("\\s*```$", "").trim()
+                    : raw;
+            String reJson = objectMapper.writeValueAsString(objectMapper.readValue(rawCandidate, Map.class));
+            if (reJson == null || reJson.isBlank()) return false;
+        } catch (Exception ex) {
+            return false;
+        }
+
+        return payload.code().length() >= 20;
+    }
+
+    private void sendEvent(SseEmitter emitter, String jsonData) {
+        try {
+            emitter.send(SseEmitter.event().data(jsonData));
+        } catch (Exception ex) {
+            logger.debug("Failed to send SSE event: {}", ex.getMessage());
+        }
+    }
+
+    private void sendErrorEvent(SseEmitter emitter, String error) {
+        try {
+            Map<String, Object> data = Map.of("stage", "error", "message", error);
+            emitter.send(SseEmitter.event().data(objectMapper.writeValueAsString(data)));
+            emitter.complete();
+        } catch (Exception ex) {
+            emitter.completeWithError(ex);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, String>> extractImageParts(Object attachmentsRaw) {
+        List<Map<String, String>> result = new ArrayList<>();
+        if (!(attachmentsRaw instanceof List<?> atts)) return result;
+        for (Object att : atts) {
+            if (!(att instanceof Map<?, ?> m)) continue;
+            String kind = str(m.get("kind"), "");
+            if (!"image".equals(kind)) continue;
+            String base64Data = str(m.get("base64Data"), "");
+            String mimeType = str(m.get("mimeType"), "image/jpeg");
+            if (!base64Data.isBlank()) {
+                result.add(Map.of("base64Data", base64Data, "mimeType", mimeType));
+            }
+        }
+        return result;
+    }
+
+    private String str(Object value, String defaultValue) {
+        if (value == null) return defaultValue;
+        String s = String.valueOf(value).trim();
+        return s.isEmpty() ? defaultValue : s;
+    }
+
+    private String strKeep(Object value, String defaultValue) {
+        if (value == null) return defaultValue;
+        String s = String.valueOf(value);
+        return s.isEmpty() ? defaultValue : s;
+    }
+
+    private boolean bool(Object value, boolean defaultValue) {
+        if (value == null) return defaultValue;
+        if (value instanceof Boolean b) return b;
+        String raw = String.valueOf(value).trim();
+        if (raw.isEmpty()) return defaultValue;
+        return "true".equalsIgnoreCase(raw) || "1".equals(raw) || "yes".equalsIgnoreCase(raw);
+    }
+
+    private String truncate(String text, int maxChars) {
+        if (text == null) return "";
+        return text.length() > maxChars ? text.substring(0, maxChars) : text;
+    }
+
+    private String truncateMiddle(String text, int maxChars) {
+        String value = String.valueOf(text == null ? "" : text);
+        int limit = Math.max(1000, maxChars);
+        if (value.length() <= limit) return value;
+        int head = (int) Math.floor(limit * 0.65);
+        int tail = Math.max(200, limit - head - 28);
+        String left = value.substring(0, Math.min(head, value.length()));
+        String right = value.substring(Math.max(0, value.length() - tail));
+        return left + "\n...[TRIMMED_FOR_CODE_STREAM]...\n" + right;
+    }
+
+    private int estimateTokens(String text) {
+        String value = String.valueOf(text == null ? "" : text);
+        if (value.isBlank()) return 0;
+        return Math.max(1, (int) Math.ceil(value.length() / 4.0));
+    }
+
+    private String resolveDefaultStreamingModel() {
+        if (aiCodeStreamDefaultStreamingModel != null && !aiCodeStreamDefaultStreamingModel.isBlank()) {
+            return aiCodeStreamDefaultStreamingModel.trim();
+        }
+        if (aiCodeStreamLegacyStreamingModel != null && !aiCodeStreamLegacyStreamingModel.isBlank()) {
+            return aiCodeStreamLegacyStreamingModel.trim();
+        }
+        return "gemini-2.5-pro";
+    }
+
+    private String routeModel(String messageText, String codeContext, String responseMode, String modelOverride) {
+        if (modelOverride != null && !modelOverride.isBlank()) return modelOverride.trim();
+        if (!aiCodeStreamRoutingEnabled) return resolveDefaultStreamingModel();
+        String simpleModel = aiCodeStreamRoutingSimpleModel == null ? "" : aiCodeStreamRoutingSimpleModel.trim();
+        if (simpleModel.isBlank()) return resolveDefaultStreamingModel();
+        boolean isAnalyzeMode = !"edit".equalsIgnoreCase(responseMode);
+        int totalChars = (messageText == null ? 0 : messageText.length())
+                + (codeContext == null ? 0 : codeContext.length());
+        if (isAnalyzeMode && totalChars < Math.max(2000, aiCodeStreamRoutingComplexThresholdChars)) {
+            logger.debug("ApiSpringController: ai-code-stream route to simple model={} totalChars={}", simpleModel, totalChars);
+            return simpleModel;
+        }
+        return resolveDefaultStreamingModel();
+    }
+
+    private String[] buildCodingPromptParts(String message, String currentCode, String language,
+            String contextType, String responseMode, Object attachmentsRaw,
+            boolean largeStructuredEditMode, String baseRef, int baseChars) {
+        String full = buildCodingPrompt(message, currentCode, language, contextType, responseMode,
+                attachmentsRaw, largeStructuredEditMode, baseRef, baseChars);
+        int idx = full.lastIndexOf("\n## YÊU CẦU\n");
+        if (idx >= 0) {
+            String systemPart = full.substring(0, idx).trim();
+            String userPart = full.substring(idx + "\n## YÊU CẦU\n".length()).trim();
+            return new String[] { systemPart, userPart };
+        }
+        return new String[] { full, "" };
+    }
+
+    private String jsonOf(Object... keyValues) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        for (int i = 0; i + 1 < keyValues.length; i += 2) {
+            m.put(String.valueOf(keyValues[i]), keyValues[i + 1]);
+        }
+        try {
+            return objectMapper.writeValueAsString(m);
+        } catch (Exception e) {
+            return "{}";
+        }
+    }
+
+    private void pruneBaseContentCache() {
+        if (!aiCodeStreamBaseCacheEnabled || aiCodeBaseContentCache.isEmpty()) return;
+        long now = System.currentTimeMillis();
+        long ttlMs = TimeUnit.MINUTES.toMillis(Math.max(5, aiCodeStreamBaseCacheTtlMinutes));
+        aiCodeBaseContentCache.entrySet().removeIf(entry -> now - entry.getValue().createdAtMs > ttlMs);
+        if (aiCodeBaseContentCache.size() <= Math.max(4, aiCodeStreamMaxBaseCacheEntries)) return;
+        aiCodeBaseContentCache.entrySet().stream()
+                .sorted((a, b) -> Long.compare(a.getValue().createdAtMs, b.getValue().createdAtMs))
+                .limit(aiCodeBaseContentCache.size() - Math.max(4, aiCodeStreamMaxBaseCacheEntries))
+                .map(Map.Entry::getKey)
+                .toList()
+                .forEach(aiCodeBaseContentCache::remove);
+    }
+
+    private AiCodeBaseContentResolution resolveBaseContent(String appId, String requestedRef, String providedBaseContent,
+            String currentCodeRaw) {
+        if (!aiCodeStreamBaseCacheEnabled) {
+            return new AiCodeBaseContentResolution("", "", 0);
+        }
+
+        String requested = requestedRef == null ? "" : requestedRef.trim();
+        if (!providedBaseContent.isBlank()) {
+            String clamped = truncate(providedBaseContent, Math.max(100000, aiCodeStreamMaxBaseContentChars));
+            String ref = buildBaseRef(appId, clamped);
+            aiCodeBaseContentCache.put(ref, new AiCodeBaseContentEntry(appId, clamped, System.currentTimeMillis()));
+            return new AiCodeBaseContentResolution(ref, clamped, clamped.length());
+        }
+
+        if (!requested.isBlank()) {
+            AiCodeBaseContentEntry existing = aiCodeBaseContentCache.get(requested);
+            if (existing != null) {
+                return new AiCodeBaseContentResolution(requested, existing.content, existing.content.length());
+            }
+        }
+
+        int autoPromoteThreshold = Math.max(50000, aiCodeStreamBaseCacheAutoPromoteChars);
+        if (!currentCodeRaw.isBlank() && currentCodeRaw.length() >= autoPromoteThreshold) {
+            String clamped = truncate(currentCodeRaw, Math.max(100000, aiCodeStreamMaxBaseContentChars));
+            String ref = buildBaseRef(appId, clamped);
+            aiCodeBaseContentCache.put(ref, new AiCodeBaseContentEntry(appId, clamped, System.currentTimeMillis()));
+            return new AiCodeBaseContentResolution(ref, clamped, clamped.length());
+        }
+
+        return new AiCodeBaseContentResolution("", "", 0);
+    }
+
+    private String buildBaseRef(String appId, String content) {
+        String app = (appId == null || appId.isBlank()) ? "global" : appId.trim();
+        return "base_" + app + "_" + sha256(content).substring(0, 24);
+    }
+
+    private String sha256(String value) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(String.valueOf(value).getBytes(StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder(hash.length * 2);
+            for (byte b : hash) {
+                sb.append(String.format("%02x", b));
+            }
+            return sb.toString();
+        } catch (Exception ex) {
+            return Integer.toHexString(String.valueOf(value).hashCode());
+        }
+    }
+
+    private record AiCodeBaseContentResolution(String baseRef, String baseContent, int baseContentChars) {
+    }
+
+    private record AiCodeBaseContentEntry(String appId, String content, long createdAtMs) {
+    }
+
+    private String materializeLargeEditResponse(String rawResponse, String baseContent) {
+        ParsedTextEditPayload payload = parseTextEditPayload(rawResponse);
+        if (payload == null || payload.textEdits.isEmpty()) {
+            return rawResponse;
+        }
+
+        String result = baseContent == null ? "" : baseContent;
+        int applied = 0;
+        List<Map<String, Object>> appliedStats = new ArrayList<>();
+        for (TextEditOp op : payload.textEdits) {
+            if (op == null || op.find == null || op.find.isBlank()) {
+                continue;
+            }
+            int idx = result.indexOf(op.find);
+            if (idx < 0) {
+                Map<String, Object> item = new LinkedHashMap<>();
+                item.put("applied", false);
+                item.put("findChars", op.find.length());
+                appliedStats.add(item);
+                continue;
+            }
+            String before = result.substring(0, idx);
+            String after = result.substring(idx + op.find.length());
+            result = before + String.valueOf(op.replace == null ? "" : op.replace) + after;
+            applied += 1;
+
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("applied", true);
+            item.put("offset", idx);
+            item.put("findChars", op.find.length());
+            item.put("replaceChars", op.replace == null ? 0 : op.replace.length());
+            appliedStats.add(item);
+        }
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("summary", payload.summary == null ? "" : payload.summary);
+        out.put("code", result);
+        out.put("changes", payload.changes == null ? List.of() : payload.changes);
+
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("mode", "large-structured-edits");
+        meta.put("requestedEdits", payload.textEdits.size());
+        meta.put("appliedEdits", applied);
+        meta.put("stats", appliedStats);
+        out.put("meta", meta);
+
+        try {
+            return objectMapper.writeValueAsString(out);
+        } catch (Exception ex) {
+            return rawResponse;
+        }
+    }
+
+    private ParsedTextEditPayload parseTextEditPayload(String raw) {
+        String normalized = String.valueOf(raw == null ? "" : raw).trim();
+        if (normalized.isBlank()) return null;
+        if (normalized.startsWith("```json")) normalized = normalized.substring(7).trim();
+        if (normalized.startsWith("```")) normalized = normalized.substring(3).trim();
+        if (normalized.endsWith("```")) normalized = normalized.substring(0, normalized.length() - 3).trim();
+
+        try {
+            Map<?, ?> obj = objectMapper.readValue(normalized, Map.class);
+            Object editsObj = obj.get("textEdits");
+            List<TextEditOp> edits = new ArrayList<>();
+            if (editsObj instanceof List<?> list) {
+                for (Object item : list) {
+                    if (item instanceof Map<?, ?> map) {
+                        String find = String.valueOf(map.get("find") == null ? "" : map.get("find"));
+                        String replace = String.valueOf(map.get("replace") == null ? "" : map.get("replace"));
+                        if (!find.isBlank()) {
+                            edits.add(new TextEditOp(find, replace));
+                        }
+                    }
+                }
+            }
+
+            List<String> changes = new ArrayList<>();
+            Object changesObj = obj.get("changes");
+            if (changesObj instanceof List<?> changeList) {
+                for (Object item : changeList) {
+                    if (item != null) {
+                        changes.add(String.valueOf(item));
+                    }
+                }
+            }
+
+            String summary = String.valueOf(obj.get("summary") == null ? "" : obj.get("summary"));
+            return new ParsedTextEditPayload(summary, changes, edits);
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    private ParsedCodePayload parseCodePayload(String raw) {
+        String normalized = String.valueOf(raw == null ? "" : raw).trim();
+        if (normalized.isBlank()) return null;
+        if (normalized.startsWith("```json")) normalized = normalized.substring(7).trim();
+        if (normalized.startsWith("```")) normalized = normalized.substring(3).trim();
+        if (normalized.endsWith("```")) normalized = normalized.substring(0, normalized.length() - 3).trim();
+
+        try {
+            Map<?, ?> obj = objectMapper.readValue(normalized, Map.class);
+            String summary = String.valueOf(obj.get("summary") == null ? "" : obj.get("summary"));
+            String code = String.valueOf(obj.get("code") == null ? "" : obj.get("code"));
+            List<String> changes = new ArrayList<>();
+            Object changesObj = obj.get("changes");
+            if (changesObj instanceof List<?> changeList) {
+                for (Object item : changeList) {
+                    if (item != null) {
+                        changes.add(String.valueOf(item));
+                    }
+                }
+            }
+            return new ParsedCodePayload(summary, code, changes);
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    private record TextEditOp(String find, String replace) {
+    }
+
+    private record ParsedTextEditPayload(String summary, List<String> changes, List<TextEditOp> textEdits) {
+    }
+
+    private record ParsedCodePayload(String summary, String code, List<String> changes) {
     }
 
     public ResponseEntity<?> handleApiRequest(

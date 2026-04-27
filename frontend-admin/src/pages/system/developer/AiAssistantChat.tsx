@@ -1290,6 +1290,10 @@ export default function AiAssistantChat({
 							textContent: attachment.textContent,
 							dataUrl: attachment.dataUrl,
 							fullContext: attachment.fullContext ?? false,
+							// For image attachments, strip the data URL prefix so backend gets raw base64
+							base64Data: attachment.kind === "image" && attachment.dataUrl
+								? attachment.dataUrl.includes(",") ? attachment.dataUrl.split(",")[1] : attachment.dataUrl
+								: undefined,
 						})),
 					}),
 					signal: controller.signal,

@@ -1,5 +1,9 @@
 package net.phanmemmottrieu.service;
 
+import dev.langchain4j.data.message.Content;
+import dev.langchain4j.data.message.ImageContent;
+import dev.langchain4j.data.message.TextContent;
+import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 import dev.langchain4j.model.googleai.GoogleAiGeminiStreamingChatModel;
@@ -11,9 +15,11 @@ import org.springframework.stereotype.Service;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
@@ -229,6 +235,14 @@ public class GeminiStreamingService {
 
     private String executeGeminiStreamContent(String model, String prompt, String apiKey,
             Consumer<String> onChunk, Consumer<Map<String, Object>> onStatus) throws Exception {
+        return executeGeminiStreamContent(model, prompt, null, apiKey, onChunk, onStatus);
+    }
+
+    /**
+     * @param imageParts Optional list of {base64Data, mimeType} maps for multimodal requests.
+     */
+    private String executeGeminiStreamContent(String model, String prompt, List<Map<String, String>> imageParts,
+            String apiKey, Consumer<String> onChunk, Consumer<Map<String, Object>> onStatus) throws Exception {
         String resolvedModel = normalizeModelToGemini(model);
 
         int promptChars = prompt == null ? 0 : prompt.length();
@@ -307,53 +321,100 @@ public class GeminiStreamingService {
                 .build();
 
         try {
-            streamingModel.chat(String.valueOf(prompt == null ? "" : prompt), new StreamingChatResponseHandler() {
-                @Override
-                public void onPartialResponse(String partialResponse) {
-                    String text = String.valueOf(partialResponse == null ? "" : partialResponse);
-                    if (text.isEmpty()) {
-                        return;
-                    }
-                    if (firstChunkArrived.compareAndSet(false, true) && onStatus != null) {
-                        long ttft = System.currentTimeMillis() - startMs;
-                        Map<String, Object> st = new HashMap<>();
-                        st.put("stage", "streaming_started");
-                        st.put("status", "first_token");
-                        st.put("message", "Bắt đầu nhận kết quả từ Gemini");
-                        st.put("ttftMs", ttft);
-                        st.put("estimatedTotalChars", estimatedOutputChars);
-                        st.put("percent", 15);
-                        onStatus.accept(st);
-                    }
-                    fullText.append(text);
-                    charsReceived.addAndGet(text.length());
-                    if (onChunk != null) {
-                        onChunk.accept(text);
+            if (imageParts != null && !imageParts.isEmpty()) {
+                // Multimodal request: build UserMessage with text + image parts
+                List<Content> contents = new ArrayList<>();
+                String promptText = String.valueOf(prompt == null ? "" : prompt);
+                if (!promptText.isBlank()) {
+                    contents.add(TextContent.from(promptText));
+                }
+                int imageCount = 0;
+                for (Map<String, String> img : imageParts) {
+                    String base64Data = img.get("base64Data");
+                    String mimeType = img.get("mimeType");
+                    if (base64Data != null && !base64Data.isBlank() && mimeType != null && !mimeType.isBlank()) {
+                        contents.add(ImageContent.from(base64Data, mimeType));
+                        imageCount++;
                     }
                 }
-
-                @Override
-                public void onCompleteResponse(ChatResponse completeResponse) {
-                    String completedText = fullText.toString();
-                    if (completedText.isEmpty() && completeResponse != null
-                            && completeResponse.aiMessage() != null
-                            && completeResponse.aiMessage().text() != null) {
-                        completedText = completeResponse.aiMessage().text();
+                log.info("GeminiStreamingService: multimodal request model={} textChars={} images={}",
+                        resolvedModel, promptText.length(), imageCount);
+                UserMessage userMessage = UserMessage.from(contents);
+                streamingModel.chat(List.of(userMessage), new StreamingChatResponseHandler() {
+                    @Override
+                    public void onPartialResponse(String partialResponse) {
+                        handleChunk(partialResponse, firstChunkArrived, charsReceived, startMs,
+                                estimatedWaitSecs, estimatedOutputChars, onStatus, onChunk, fullText);
                     }
-                    completion.complete(completedText);
-                }
-
-                @Override
-                public void onError(Throwable error) {
-                    completion.completeExceptionally(error);
-                }
-            });
+                    @Override
+                    public void onCompleteResponse(ChatResponse completeResponse) {
+                        String completedText = fullText.toString();
+                        if (completedText.isEmpty() && completeResponse != null
+                                && completeResponse.aiMessage() != null
+                                && completeResponse.aiMessage().text() != null) {
+                            completedText = completeResponse.aiMessage().text();
+                        }
+                        completion.complete(completedText);
+                    }
+                    @Override
+                    public void onError(Throwable error) {
+                        completion.completeExceptionally(error);
+                    }
+                });
+            } else {
+                // Text-only request
+                streamingModel.chat(String.valueOf(prompt == null ? "" : prompt), new StreamingChatResponseHandler() {
+                    @Override
+                    public void onPartialResponse(String partialResponse) {
+                        handleChunk(partialResponse, firstChunkArrived, charsReceived, startMs,
+                                estimatedWaitSecs, estimatedOutputChars, onStatus, onChunk, fullText);
+                    }
+                    @Override
+                    public void onCompleteResponse(ChatResponse completeResponse) {
+                        String completedText = fullText.toString();
+                        if (completedText.isEmpty() && completeResponse != null
+                                && completeResponse.aiMessage() != null
+                                && completeResponse.aiMessage().text() != null) {
+                            completedText = completeResponse.aiMessage().text();
+                        }
+                        completion.complete(completedText);
+                    }
+                    @Override
+                    public void onError(Throwable error) {
+                        completion.completeExceptionally(error);
+                    }
+                });
+            }
 
             return completion.get(resolveRequestTimeoutMs(), TimeUnit.MILLISECONDS);
         } finally {
             if (heartbeatTask != null) heartbeatTask.cancel(false);
             heartbeat.shutdownNow();
         }
+    }
+
+    /** Shared chunk handler used by both text-only and multimodal paths. */
+    private void handleChunk(String partialResponse,
+            AtomicBoolean firstChunkArrived, AtomicInteger charsReceived,
+            long startMs, int estimatedWaitSecs, int estimatedOutputChars,
+            Consumer<Map<String, Object>> onStatus, Consumer<String> onChunk,
+            StringBuilder fullText) {
+        String text = String.valueOf(partialResponse == null ? "" : partialResponse);
+        if (text.isEmpty()) return;
+        if (firstChunkArrived.compareAndSet(false, true) && onStatus != null) {
+            long ttft = System.currentTimeMillis() - startMs;
+            Map<String, Object> st = new HashMap<>();
+            st.put("stage", "streaming_started");
+            st.put("status", "first_token");
+            st.put("message", "Bắt đầu nhận kết quả từ Gemini");
+            st.put("ttftMs", ttft);
+            st.put("estimatedTotalChars", estimatedOutputChars);
+            st.put("percent", 15);
+            onStatus.accept(st);
+        }
+        fullText.append(text);
+        charsReceived.addAndGet(text.length());
+        if (onChunk != null) onChunk.accept(text);
     }
 
     /**
@@ -456,6 +517,38 @@ public class GeminiStreamingService {
             if (onError != null) {
                 onError.accept(ex);
             }
+            return "";
+        }
+    }
+
+    /**
+     * Multimodal streaming: text prompt + list of image parts (base64Data + mimeType).
+     * Cache is skipped for multimodal requests (images make cache keys impractical).
+     */
+    public String streamContentMultimodal(
+            String prompt,
+            List<Map<String, String>> imageParts,
+            String modelOverride,
+            Consumer<String> onChunk,
+            Runnable onComplete,
+            Consumer<Throwable> onError,
+            Consumer<Map<String, Object>> onStatus) {
+
+        String model = normalizeModelToGemini(modelOverride);
+        String key = resolveGeminiApiKey();
+        if (key.isBlank()) {
+            IllegalStateException err = new IllegalStateException("Missing Gemini API key. Set GEMINI_PRO_API_KEY, GEMINI_API_KEY, or GOOGLE_AI_GEMINI_API_KEY");
+            log.error("GeminiStreamingService: {}", err.getMessage());
+            if (onError != null) onError.accept(err);
+            return "";
+        }
+
+        try {
+            String text = executeGeminiStreamContent(model, prompt, imageParts, key, onChunk, onStatus);
+            if (onComplete != null) onComplete.run();
+            return text;
+        } catch (Throwable ex) {
+            if (onError != null) onError.accept(ex);
             return "";
         }
     }
