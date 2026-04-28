@@ -2707,7 +2707,7 @@
     var _ao1 = useState(getLegacySlrPreferredQueryValue(2)), legacySlrQueryValue = _ao1[0], setLegacySlrQueryValue = _ao1[1];
     var _ap = useState("C_D"), legacyCdMode = _ap[0], setLegacyCdMode = _ap[1];
     var _aq = useState(1), legacyRankFrom = _aq[0], setLegacyRankFrom = _aq[1];
-    var _ar = useState(20), legacyRankTo = _ar[0], setLegacyRankTo = _ar[1];
+    var _ar = useState(93), legacyRankTo = _ar[0], setLegacyRankTo = _ar[1];
     var _ab1 = useState(500), legacyNgayChay = _ab1[0], setLegacyNgayChay = _ab1[1];
     var _ab2 = useState(false), legacyTheoThu = _ab2[0], setLegacyTheoThu = _ab2[1];
     var _ab2k = useState(false), legacyTheoKy = _ab2k[0], setLegacyTheoKy = _ab2k[1];
@@ -3205,7 +3205,7 @@
 
               var runtimeCfg = buildLegacySoLauRaRuntimeConfig(dataMien, timkiemRows, qv);
               var rankFrom = Math.max(1, Number(legacyRankFrom || 1));
-              var rankTo = Math.max(rankFrom, Number(legacyRankTo || 20));
+              var rankTo = Math.max(rankFrom, Number(legacyRankTo || 93));
               var maxStart = rankTo - sttWindowSize + 1;
               if (maxStart < rankFrom) {
                 pushAutoLog("- Rớt: phạm vi STT không hợp lệ (" + rankFrom + "->" + rankTo + ")");
@@ -3610,6 +3610,9 @@
       var cachItems = Array.isArray(cfg.cachItems) ? cfg.cachItems : [];
       if (!cachItems.length) return [];
       var sourceStations = getLegacyTongHopSourceStations(cfg.queryValue);
+      var resolvedHeThong = Number(cfg.heThong || legacyHeThong || 2) === 3 ? 3 : 2;
+      var resolvedFromDate = String(cfg.fromDate || tu_ngay || "").trim();
+      var resolvedToDate = String(cfg.toDate || den_ngay || "").trim();
       if (!sourceStations.length) {
         throw new Error("missing_legacy_station_source");
       }
@@ -3626,9 +3629,9 @@
       }
       var metrics = buildTongHopMetrics({
         dataMien: dataMien,
-        fromDate: tu_ngay,
-        toDate: den_ngay,
-        heThong: legacyHeThong,
+        fromDate: resolvedFromDate,
+        toDate: resolvedToDate,
+        heThong: resolvedHeThong,
         fieldsLoc: resolveLegacyTongHopFieldLocList(cfg.queryValue),
         cachList: cachItems,
         ktn: legacyThKtn,
@@ -9847,6 +9850,23 @@
         var combinedRows = [];
         var skippedCount = 0;
         var extraDd3NbOption = getLegacyDd3NbQueryTypeOption(legacyHeThong);
+
+        function resolveRowTongHopDateRange() {
+          var globalTo = String(den_ngay || "").trim();
+          var toYmd = normalizeLegacyDateYmd(globalTo);
+
+          if (toYmd) {
+            return {
+              fromDate: CongNgay(globalTo, -4 * 365, "dd/mm/yyyy"),
+              toDate: globalTo
+            };
+          }
+
+          var fallbackFrom = String(tu_ngay || "").trim();
+          var fallbackTo = String(den_ngay || "").trim();
+          return { fromDate: fallbackFrom, toDate: fallbackTo };
+        }
+
         for (var i = 0; i < pickedRows.length; i += 1) {
           if (i > 0 && i % 2 === 0) await sleepMs(0);
           var row = pickedRows[i] || {};
@@ -9859,11 +9879,18 @@
             continue;
           }
 
+          var normalizedMainQueryValue = normalizeLegacyTongHopQueryValue(row.queryValue, legacyHeThong);
+          if (!normalizedMainQueryValue) {
+            skippedCount += 1;
+            continue;
+          }
+          var rowDateRange = resolveRowTongHopDateRange();
+
           var querySpecs = [{
-            value: row.queryValue,
-            text: getLegacySlrTongHopQueryDisplayText(row.queryValue, row.queryLabel)
+            value: normalizedMainQueryValue,
+            text: getLegacySlrTongHopQueryDisplayText(normalizedMainQueryValue, row.queryLabel)
           }];
-          if (!isLegacyDd3NbQueryValue(row.queryValue, legacyHeThong)) {
+          if (!isLegacyDd3NbQueryValue(normalizedMainQueryValue, legacyHeThong)) {
             querySpecs.push({
               value: extraDd3NbOption.value,
               text: getLegacySlrTongHopQueryDisplayText(extraDd3NbOption.value, extraDd3NbOption.text)
@@ -9883,7 +9910,10 @@
               triet: false,
               queryValue: querySpec.value,
               queryText: querySpec.text,
-              cachItems: cachItems
+              cachItems: cachItems,
+              fromDate: rowDateRange.fromDate,
+              toDate: rowDateRange.toDate,
+              heThong: legacyHeThong
             });
 
             var metric = Array.isArray(metrics) && metrics.length ? metrics[0] : null;
@@ -9903,6 +9933,8 @@
               cNumbers: tongHopInput.cText,
               dNumbers: tongHopInput.dText,
               tongHopInput: tongHopInput.searchText,
+              tongHopFromDate: rowDateRange.fromDate,
+              tongHopToDate: rowDateRange.toDate,
               boSo: String(metric.boSo || tongHopInput.searchText || ""),
               ketQua: buildLegacyThResultText(metric),
               ngayCXHT: Number(metric.ngayCXHT || 0),
@@ -10103,6 +10135,24 @@
       },
       { title: "Từ STT", dataIndex: "sttFrom", key: "sttFrom", width: 80, sorter: function (a, b) { return Number((a && a.sttFrom) || 0) - Number((b && b.sttFrom) || 0); } },
       { title: "Đến STT", dataIndex: "sttTo", key: "sttTo", width: 80, sorter: function (a, b) { return Number((a && a.sttTo) || 0) - Number((b && b.sttTo) || 0); } },
+      {
+        title: "Từ ngày TH",
+        dataIndex: "tongHopFromDate",
+        key: "tongHopFromDate",
+        width: 110,
+        sorter: function (a, b) {
+          return String((a && a.tongHopFromDate) || "").localeCompare(String((b && b.tongHopFromDate) || ""), "vi", { numeric: true, sensitivity: "base" });
+        }
+      },
+      {
+        title: "Đến ngày TH",
+        dataIndex: "tongHopToDate",
+        key: "tongHopToDate",
+        width: 110,
+        sorter: function (a, b) {
+          return String((a && a.tongHopToDate) || "").localeCompare(String((b && b.tongHopToDate) || ""), "vi", { numeric: true, sensitivity: "base" });
+        }
+      },
       { title: "Số chính", dataIndex: "cNumbers", key: "cNumbers", width: 180 },
       { title: "Số đảo", dataIndex: "dNumbers", key: "dNumbers", width: 180 },
       { title: "Số đưa vào TH", dataIndex: "tongHopInput", key: "tongHopInput", width: 220 },
@@ -11854,7 +11904,7 @@
                                   onChange: function (v) {
                                     var next = String(v || "C_D");
                                     setLegacyCdMode(next);
-                                    setLegacyRankTo(next === "2C" ? 5 : 20);
+                                    setLegacyRankTo(next === "2C" ? 5 : 93);
                                   }
                                 }))
                               ]),
@@ -11864,7 +11914,7 @@
                               ]),
                               h(Col, { xs: 12, md: 5, key: "slrnb_to_rank" }, [
                                 h("div", { style: { marginBottom: 6, fontWeight: 600 } }, tt.lgGhDen),
-                                h(InputNumber, themedNumberProps({ value: legacyRankTo, min: 1, max: 93, onChange: function (v) { setLegacyRankTo(toNumberSafe(v, 20)); } }))
+                                h(InputNumber, themedNumberProps({ value: legacyRankTo, min: 1, max: 93, onChange: function (v) { setLegacyRankTo(toNumberSafe(v, 93)); } }))
                               ]),
                               h(Col, { xs: 12, md: 6, key: "slrnb_ngay" }, [
                                 h("div", { style: { marginBottom: 6, fontWeight: 600 } }, tt.lgNgayChay),
