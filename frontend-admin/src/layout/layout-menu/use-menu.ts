@@ -484,7 +484,7 @@ export function useMenu() {
 			"/about": t("common.menu.about"),
 			// KHÔNG map cứng route-nest ở đây để tránh chặn các menu động app csm
 			// (ví dụ: Điều Hướng Trang / Chương Trình / React Native) khỏi luồng runtime grid/report
-			"homepage": t("common.menu.home"),
+			homepage: t("common.menu.home"),
 		};
 		if (staticTabRoutes[key]) {
 			addTab(key, {

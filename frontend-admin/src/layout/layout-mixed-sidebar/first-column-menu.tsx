@@ -16,7 +16,7 @@ import { Logo } from "../widgets";
 const useStyles = createUseStyles(({ token }) => {
 	return {
 		menuItem: {
-			"color": token.colorTextBase,
+			"color": token.colorText,
 			"&:active": {
 				backgroundColor: token.colorPrimaryActive,
 			},
@@ -72,7 +72,7 @@ export default function FirstColumnMenu({
 									)}
 								>
 									<span className="text-center text-xl transition duration-300 group-hover:scale-125">{menu.icon}</span>
-									<span className="text-center text-xs">{menu.label}</span>
+									<span className="text-center text-[13px] font-medium leading-tight">{menu.label}</span>
 								</li>
 							);
 						})

@@ -93,6 +93,16 @@ export default function LayoutMenu({
 					? (item.label_zh ?? item.name_zh ?? fallbackLabel)
 					: fallbackLabel;
 
+			const itemPath = String((item as any)?.path || (item as any)?.key || "").trim().toLowerCase();
+			const itemId = String((item as any)?.id || "").trim().toLowerCase();
+			const normalizedRaw = String(localizedLabel ?? "").trim().toLowerCase();
+			if (itemPath === "/system" || itemId === "system" || normalizedRaw === "system") {
+				return t("common.menu.system");
+			}
+			if (itemPath === "homepage" || itemPath === "/" || itemPath === "/home" || itemId === "home" || normalizedRaw === "home") {
+				return t("common.menu.home");
+			}
+
 			if (typeof localizedLabel === "string" && localizedLabel.includes(".")) {
 				const translated = t(localizedLabel);
 				if (translated !== localizedLabel) {
@@ -235,10 +245,10 @@ export default function LayoutMenu({
 
 	return (
 		<Menu
-			 className="!border-none min-w-0 flex-auto"
+			 className="!border-none min-w-0 flex-auto text-[13px] font-medium"
 			 inlineIndent={16}
 			 {...menuInlineCollapsedProp}
-			 style={{ height: isMobile ? "100%" : "initial", borderRight: 0 }}
+			 style={{ height: isMobile ? "100%" : "initial", borderRight: 0, fontSize: 13 }}
 			 mode={mode}
 			 items={localizedMenus}
 			 {...menuOpenProps}

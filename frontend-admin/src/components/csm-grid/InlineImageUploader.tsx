@@ -184,7 +184,7 @@ export function InlineImageUploader({
                 height: size,
                 borderRadius: 4,
                 overflow: "hidden",
-                border: "1px solid #ddd",
+                border: "1px solid var(--ant-colorBorder)",
                 backgroundColor: acceptVideo ? "#000" : undefined,
               }}
             >
@@ -243,7 +243,7 @@ export function InlineImageUploader({
             </div>
           ))}
           {multiple && urls.length > 1 && (
-            <span style={{ fontSize: 12, color: "#999" }}>+{urls.length - 1}</span>
+            <span style={{ fontSize: 12, color: "var(--ant-colorTextTertiary)" }}>+{urls.length - 1}</span>
           )}
         </div>
       )}

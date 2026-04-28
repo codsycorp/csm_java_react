@@ -3,7 +3,7 @@ import type { AppRouteRecordRaw } from "#src/router/types";
 import type { MenuItemType as ApiMenuItemType } from "#src/api/system/menu";
 
 import { fetchAsyncRoutes } from "#src/api/user";
-import { fetchNavigationMenus, loadAutoMenuItem } from "#src/api/system/menu";
+import { fetchNavigationMenus, loadAutoMenuItem, loadBroadcastHomeAutoCode } from "#src/api/system/menu";
 import { router } from "#src/router";
 import { ROOT_ROUTE_ID } from "#src/router/constants";
 import { rootChildRoutes, routes } from "#src/router/routes";
@@ -15,13 +15,11 @@ import { useUserStore } from "./user";
 import { create } from "zustand";
 import { resolveDevFlag } from "#src/utils/dev-flag";
 import { toPermissionBigInt, isSuperPermissionProfile } from "#src/utils/permission-bitfield";
+import { normalizeMenuLabel } from "#src/utils";
 import { getTableData, type Where } from "#src/components/csm-grid/CsmApi";
 
 function stripMenuPrefixFromLabel(label: string): string {
-	if (!label || typeof label !== 'string') {
-		return label;
-	}
-	return label.replace(/^.*?\.\s+/, '').trim();
+	return normalizeMenuLabel(label);
 }
 
 function buildMenuTree(flatMenus: ApiMenuItemType[], parentId: string = ""): ApiMenuItemType[] {
@@ -406,6 +404,7 @@ interface InitialStateType {
 	routeList: AppRouteRecordRaw[]
 	flatRouteList: Record<string, AppRouteRecordRaw>
 	hasFetchedDynamicRoutes: boolean
+	broadcastHomeCode: string
 }
 const initialState: InitialStateType = {
 	constantMenus: [],
@@ -420,6 +419,7 @@ const initialState: InitialStateType = {
 		return flat;
 	})(),
 	hasFetchedDynamicRoutes: false,
+	broadcastHomeCode: "",
 };
 
 type PermissionState = typeof initialState;
@@ -492,6 +492,11 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 		if (autoMenuItem && autoMenuItem.auto_code) {
 			firstAutoCode = autoMenuItem.auto_code;
 		}
+		// Fetch broadcast home code để kiểm tra có hiện Home hay không
+		let broadcastHomeCode = "";
+		try {
+			broadcastHomeCode = (await loadBroadcastHomeAutoCode(effectiveAppId)) || "";
+		} catch {}
 		try {
 			const userMenusPermissions = Array.isArray(userState.menusPermissions) ? userState.menusPermissions : [];
 			const normalizedMenuTokens = userMenusPermissions.map(normalizeAccessKey).filter(Boolean);
@@ -545,35 +550,35 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 					.filter(filterAutoSetup);
 				if (isDev || isAdmin) {
 					wholeMenus = [
-						...(homeMenu ? [homeMenu] : []),
+						...(homeMenu && broadcastHomeCode ? [homeMenu] : []),
 						...systemMenusFromRoute,
 						...apiMenusFiltered,
 					];
 				} else {
 					const shouldShowOnlyHome = hasLegacyAppOnly && apiMenusFiltered.length === 0;
 					wholeMenus = [
-						...(homeMenu ? [homeMenu] : []),
+						...(homeMenu && broadcastHomeCode ? [homeMenu] : []),
 						...(shouldShowOnlyHome ? [] : apiMenusFiltered),
 					];
 				}
 			} else {
 				if (isDev || isAdmin) {
 					wholeMenus = [
-						...(homeMenu ? [homeMenu] : []),
+						...(homeMenu && broadcastHomeCode ? [homeMenu] : []),
 						...systemMenusFromRoute,
 					];
 				} else {
-					wholeMenus = homeMenu ? [homeMenu] : [];
+					wholeMenus = homeMenu && broadcastHomeCode ? [homeMenu] : [];
 				}
 			}
 		} catch (error) {
 			if (isDev || isAdmin) {
 				wholeMenus = [
-					...(homeMenu ? [homeMenu] : []),
+					...(homeMenu && broadcastHomeCode ? [homeMenu] : []),
 					...systemMenusFromRoute,
 				];
 			} else {
-				wholeMenus = homeMenu ? [homeMenu] : [];
+				wholeMenus = homeMenu && broadcastHomeCode ? [homeMenu] : [];
 			}
 		}
 
@@ -585,6 +590,7 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 			routeList: newRoutes,
 			flatRouteList,
 			hasFetchedDynamicRoutes: true,
+			broadcastHomeCode,
 		};
 		set(() => newState);
 		return newState;
@@ -613,6 +619,11 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 		if (autoMenuItem && autoMenuItem.auto_code) {
 			firstAutoCode = autoMenuItem.auto_code;
 		}
+		// Fetch broadcast home code để kiểm tra có hiện Home hay không
+		let broadcastHomeCode = "";
+		try {
+			broadcastHomeCode = (await loadBroadcastHomeAutoCode(effectiveAppId)) || "";
+		} catch {}
 
 		try {
 			const apiMenuResponse = await fetchNavigationMenus(effectiveAppId);
@@ -693,24 +704,24 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 					.filter(filterAutoSetup);
 				if (isDev || isAdmin) {
 					wholeMenus = [
-						...(homeMenu ? [homeMenu] : []),
+						...(homeMenu && broadcastHomeCode ? [homeMenu] : []),
 						...systemMenus,
 						...apiMenusFiltered,
 					];
 				} else {
 					const shouldShowOnlyHome = hasLegacyAppOnly && apiMenusFiltered.length === 0;
 					wholeMenus = [
-						...(homeMenu ? [homeMenu] : []),
+						...(homeMenu && broadcastHomeCode ? [homeMenu] : []),
 						...(shouldShowOnlyHome ? [] : apiMenusFiltered),
 					];
 				}
 			} else if (isDev || isAdmin) {
 				wholeMenus = [
-					...(homeMenu ? [homeMenu] : []),
+					...(homeMenu && broadcastHomeCode ? [homeMenu] : []),
 					...systemMenus,
 				];
 			} else {
-				wholeMenus = homeMenu ? [homeMenu] : [];
+				wholeMenus = homeMenu && broadcastHomeCode ? [homeMenu] : [];
 			}
 		} catch {
 			const userState = useUserStore.getState();
@@ -742,8 +753,8 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 			const homeMenu = routeMenus.find(m => m.key === 'homepage');
 			const systemMenus = routeMenus.filter(m => m.key === '/system');
 			wholeMenus = (isDev || isAdmin)
-				? [...(homeMenu ? [homeMenu] : []), ...systemMenus]
-				: (homeMenu ? [homeMenu] : []);
+				? [...(homeMenu && broadcastHomeCode ? [homeMenu] : []), ...systemMenus]
+				: (homeMenu && broadcastHomeCode ? [homeMenu] : []);
 		}
 
 		const newState = {
@@ -753,6 +764,7 @@ export const usePermissionStore = create<PermissionState & PermissionAction>(set
 			routeList: newRoutes,
 			flatRouteList,
 			hasFetchedDynamicRoutes: true,
+			broadcastHomeCode,
 		};
 		set(() => newState);
 		return newState;

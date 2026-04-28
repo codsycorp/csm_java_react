@@ -254,7 +254,7 @@ export function TriggerEditor({ value, onChange }: TriggerEditorProps) {
       </Space>
 
       {/* CodeMirror container */}
-      <div style={{ border: "1px solid #d9d9d9", borderRadius: 4, overflow: "hidden", width: "100%" }}>
+      <div style={{ border: "1px solid var(--ant-colorBorder)", borderRadius: 4, overflow: "hidden", width: "100%" }}>
         <CodeMirror
           value={currentCode}
           height="400px"

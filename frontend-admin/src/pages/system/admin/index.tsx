@@ -1935,7 +1935,7 @@ export default function AdminPage(props: any = {}) {
 		return (
 			<div style={{ padding: 24, textAlign: "center" }}>
 				<Spin size="large" />
-				<p style={{ marginTop: 16, color: "#666" }}>
+				<p style={{ marginTop: 16, color: 'var(--ant-colorTextSecondary)' }}>
 					{loading ? t("system.admin.loadingMenu") : t("system.admin.loadingData")}
 				</p>
 			</div>

@@ -11,12 +11,7 @@ import { useTranslation } from "react-i18next";
  *        "01.02.03. Test" → "Test"
  */
 function stripMenuPrefix(label: string): string {
-	if (!label || typeof label !== 'string') {
-		return label;
-	}
-	// Remove leading "letter/number.number. " or "letter. " style prefixes
-	// Keep only content after the last dot with space
-	return label.replace(/^.*?\.\s+/, '').trim();
+	return label;
 }
 
 /**

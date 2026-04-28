@@ -11,9 +11,10 @@ import type { RibbonShadowLevel } from "#src/store";
 import { usePreferences } from "#src/hooks";
 import { usePreferencesStore } from "#src/store";
 import { cn } from "#src/utils";
+import { normalizeMenuLabel } from "#src/utils";
 
 import * as AntIcons from "@ant-design/icons";
-import { Dropdown, theme, Tooltip } from "antd";
+import { Dropdown, Tooltip } from "antd";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createUseStyles } from "react-jss";
 import { useLocation } from "react-router";
@@ -66,11 +67,11 @@ const useStyles = createUseStyles((_d: StyleData) => ({
 		gap: 5,
 		padding: "0 13px",
 		height: 27,
-		fontSize: 12.5,
-		fontWeight: 400,
+		fontSize: 13.5,
+		fontWeight: 500,
 		cursor: "pointer",
 		whiteSpace: "nowrap",
-		letterSpacing: 0.1,
+		letterSpacing: 0.15,
 		borderRadius: "4px 4px 0 0",
 		border: "1px solid transparent",
 		borderBottom: "none",
@@ -82,12 +83,16 @@ const useStyles = createUseStyles((_d: StyleData) => ({
 			boxShadow: "inset 0 1px 0 var(--ribbon-tab-hover-inset), 0 1px 0 rgba(255,255,255,0.08)",
 			transform: "translateY(-1px)",
 		},
+		"&:focus-visible": {
+			outline: "2px solid var(--ribbon-focus-ring)",
+			outlineOffset: 1,
+		},
 	},
 
 	tabIcon: {
 		fontSize: 13,
 		flexShrink: 0,
-		color: "var(--ant-color-text-secondary)",
+		color: "var(--ribbon-tab-icon)",
 	},
 
 	tabLabel: {
@@ -117,9 +122,15 @@ const useStyles = createUseStyles((_d: StyleData) => ({
 		cursor: "pointer",
 		opacity: 0.4,
 		fontSize: 11,
-		color: "var(--ant-color-text)",
+		color: "var(--ribbon-pin-text)",
 		transition: "opacity 0.15s",
 		"&:hover": { opacity: 1 },
+		"&:focus-visible": {
+			opacity: 1,
+			outline: "2px solid var(--ribbon-focus-ring)",
+			outlineOffset: 1,
+			borderRadius: 4,
+		},
 	},
 
 	// ── Ribbon band ──────────────────────────────────────────────────────────
@@ -143,7 +154,7 @@ const useStyles = createUseStyles((_d: StyleData) => ({
 		"&::-webkit-scrollbar": { height: 4 },
 		"&::-webkit-scrollbar-thumb": {
 			borderRadius: 2,
-			background: "var(--ant-color-border)",
+			background: "var(--ribbon-scroll-thumb)",
 		},
 	},
 
@@ -201,7 +212,7 @@ const useStyles = createUseStyles((_d: StyleData) => ({
 	groupLabel: {
 		display: "block",
 		width: "100%",
-		fontSize: 10,
+		fontSize: 11,
 		lineHeight: 1.3,
 		textAlign: "center",
 		paddingTop: 2,
@@ -248,6 +259,10 @@ const useStyles = createUseStyles((_d: StyleData) => ({
 			borderColor: "var(--ant-color-border)",
 			boxShadow: "inset 0 2px 6px rgba(0,0,0,0.28), inset 0 -1px 0 rgba(255,255,255,0.08)",
 		},
+		"&:focus-visible": {
+			outline: "2px solid var(--ribbon-focus-ring)",
+			outlineOffset: 1,
+		},
 	},
 
 	btnLargeActive: {
@@ -261,8 +276,7 @@ const useStyles = createUseStyles((_d: StyleData) => ({
 		lineHeight: 1,
 		marginBottom: 3,
 		flexShrink: 0,
-		// colorTextSecondary adapts: dark grey in light, light grey in dark
-		color: "var(--ant-color-text-secondary)",
+		color: "var(--ribbon-item-icon)",
 	},
 
 	btnLargeIconActive: {
@@ -270,7 +284,8 @@ const useStyles = createUseStyles((_d: StyleData) => ({
 	},
 
 	btnLargeLabel: {
-		fontSize: 10.5,
+		fontSize: 11.5,
+		fontWeight: 500,
 		lineHeight: "1.25",
 		textAlign: "center",
 		width: "100%",
@@ -290,7 +305,7 @@ const useStyles = createUseStyles((_d: StyleData) => ({
 		fontSize: 7,
 		marginTop: 1,
 		opacity: 0.5,
-		color: "var(--ant-color-text-secondary)",
+		color: "var(--ribbon-item-icon)",
 	},
 
 	// ── Small button ─────────────────────────────────────────────────────────
@@ -304,7 +319,7 @@ const useStyles = createUseStyles((_d: StyleData) => ({
 		paddingRight: 5,
 		marginRight: 5,
 		"&:not(:last-child)": {
-			borderRight: "1px solid var(--ant-color-border)",
+			borderRight: "1px solid var(--ribbon-col-divider)",
 		},
 	},
 
@@ -319,7 +334,8 @@ const useStyles = createUseStyles((_d: StyleData) => ({
 		maxWidth: 160,
 		cursor: "pointer",
 		borderRadius: 3,
-		fontSize: 11,
+		fontSize: 12,
+		fontWeight: 500,
 		border: "1px solid transparent",
 		background: "transparent",
 		boxShadow: "none",
@@ -338,6 +354,10 @@ const useStyles = createUseStyles((_d: StyleData) => ({
 			borderColor: "var(--ant-color-border)",
 			boxShadow: "inset 0 1px 4px rgba(0,0,0,0.24)",
 		},
+		"&:focus-visible": {
+			outline: "2px solid var(--ribbon-focus-ring)",
+			outlineOffset: 1,
+		},
 	},
 
 	btnSmallActive: {
@@ -349,7 +369,7 @@ const useStyles = createUseStyles((_d: StyleData) => ({
 	btnSmallIcon: {
 		fontSize: 12,
 		flexShrink: 0,
-		color: "var(--ant-color-text-secondary)",
+		color: "var(--ribbon-item-icon)",
 	},
 
 	btnSmallIconActive: {
@@ -415,15 +435,6 @@ function isPathActive(path: string, key: string) {
 	return path === key || path.startsWith(key + "/");
 }
 
-function cleanMenuLabel(raw: unknown): string {
-	const value = String(raw ?? "").trim();
-	if (!value) return "";
-	// Handle prefixes like:
-	// "A. Danh muc", "A.01. Danh muc", "A.01.Danh muc", "01.02.03. Danh muc"
-	const stripped = value.replace(/^(?:(?:[A-Za-z]|\d+)\.)+\s*/u, "").trim();
-	return stripped || value;
-}
-
 // ─── Group builder ────────────────────────────────────────────────────────────
 
 interface GroupDef {
@@ -438,7 +449,7 @@ function buildGroups(children: MenuItemType[]): GroupDef[] {
 	for (const child of children) {
 		const kids = (child as any).children as MenuItemType[] | undefined;
 		if (Array.isArray(kids) && kids.length > 0) {
-			groups.push({ key: String(child.key), label: cleanMenuLabel(child.label), items: kids });
+				groups.push({ key: String(child.key), label: String(child.label ?? ""), items: kids });
 		} else {
 			loose.push(child);
 		}
@@ -458,14 +469,14 @@ interface LargeButtonProps {
 
 function LargeButton({ item, active, onSelect, classes }: LargeButtonProps) {
 	const key    = String(item.key);
-	const label  = cleanMenuLabel(item.label);
+	const label  = String(item.label ?? "");
 	const kids   = (item as any).children as MenuItemType[] | undefined;
 	const hasKids = Array.isArray(kids) && kids.length > 0;
 
 	const dropItems: MenuProps["items"] = hasKids
 		? kids!.map(c => ({
 			key: String(c.key),
-			label: cleanMenuLabel(c.label),
+			label: String(c.label ?? ""),
 			icon: resolveIcon(c.icon, (c as any).m_icons, <AntIcons.AppstoreOutlined style={{ fontSize: 13 }} />, 13),
 		}))
 		: [];
@@ -509,7 +520,7 @@ interface SmallButtonProps {
 
 function SmallButton({ item, active, onSelect, classes }: SmallButtonProps) {
 	const key   = String(item.key);
-	const label = cleanMenuLabel(item.label);
+	const label = String(item.label ?? "");
 	return (
 		<div
 			className={cn(classes.btnSmall, active && classes.btnSmallActive)}
@@ -577,7 +588,7 @@ function RibbonGroup({ group, activePath, onSelect, classes, groupBg }: RibbonGr
 					))}
 			</div>
 			{group.label
-				? <div className={classes.groupLabel} title={cleanMenuLabel(group.label)}>{cleanMenuLabel(group.label)}</div>
+				? <div className={classes.groupLabel} title={group.label}>{group.label}</div>
 				: <div style={{ height: 14 }} />}
 		</div>
 	);
@@ -591,7 +602,6 @@ export interface LayoutRibbonMenuProps {
 }
 
 export default function LayoutRibbonMenu({ menus, handleMenuSelect }: LayoutRibbonMenuProps) {
-	const { token } = theme.useToken();
 	const { isDark } = usePreferences();
 
 	const ribbonShadowLevel = usePreferencesStore(state => state.ribbonShadowLevel);
@@ -672,55 +682,72 @@ export default function LayoutRibbonMenu({ menus, handleMenuSelect }: LayoutRibb
 
 	const ribbonPalette = useMemo(() => {
 		if (isDark) {
+			// Dark palette aligned with system csm-surface variables:
+			// --csm-surface-0: #0f1115  --csm-surface-1: #141a22  --csm-surface-2: #1b2430
+			// --csm-border-soft: #2c3747  --csm-border-strong: #3a4a5f
+			// --csm-text-soft: #a9b6ca  --csm-focus-ring: #6ea8d9
 			return {
-				rootBg: "linear-gradient(180deg, #0f2233 0%, #0b1624 100%)",
-				tabRowBg: "linear-gradient(180deg, #1b3652 0%, #162c43 100%)",
-				tabText: "#d5e5ff",
-				tabHoverText: "#ffffff",
-				tabHoverBg: "rgba(141, 188, 255, 0.16)",
-				tabActiveText: "#eaf3ff",
-				tabActiveBg: "#1a2a3e",
-				tabActiveBorder: "#2f4d70",
-				tabRowBorder: "rgba(162, 195, 233, 0.3)",
-				bandBg: "linear-gradient(180deg, #1b2c40 0%, #162537 100%)",
-				bandBorderTop: "rgba(173, 203, 239, 0.22)",
-				bandBorderBottom: "rgba(130, 167, 211, 0.25)",
-				bandInset: "rgba(255,255,255,0.08)",
-				groupBg: "#1c2f45",
-				groupBorder: "rgba(154, 191, 236, 0.28)",
-				groupInset: "rgba(255,255,255,0.12)",
-				groupInsetBottom: "rgba(0,0,0,0.26)",
-				groupLabelBorder: "rgba(159, 193, 232, 0.3)",
-				groupLabelText: "#adc4df",
-				tabHoverInset: "rgba(255,255,255,0.14)",
-				tabActiveInset: "rgba(255,255,255,0.18)",
-				rootBorder: "rgba(107, 149, 200, 0.35)",
+				rootBg: "linear-gradient(180deg, #17222e 0%, #0f1115 100%)",
+				tabRowBg: "linear-gradient(180deg, #1b2430 0%, #141a22 100%)",
+				tabText: "#a9b6ca",
+				tabHoverText: "#c8d8ea",
+				tabHoverBg: "rgba(110, 168, 217, 0.14)",
+				tabActiveText: "#d4e4f4",
+				tabActiveBg: "rgba(110, 168, 217, 0.18)",
+				tabActiveBorder: "#3a4a5f",
+				tabRowBorder: "#2c3747",
+				tabIcon: "#7f98b0",
+				pinText: "#7f98b0",
+				bandBg: "linear-gradient(180deg, #1b2637 0%, #141a22 100%)",
+				bandBorderTop: "#2c3747",
+				bandBorderBottom: "#0f1115",
+				bandInset: "rgba(255,255,255,0.04)",
+				scrollThumb: "rgba(90, 120, 150, 0.4)",
+				groupBg: "#1b2430",
+				groupBorder: "#2c3747",
+				groupInset: "rgba(255,255,255,0.05)",
+				groupInsetBottom: "rgba(0,0,0,0.4)",
+				groupLabelBorder: "#2c3747",
+				groupLabelText: "#a9b6ca",
+				itemIcon: "#8fa8be",
+				colDivider: "#2c3747",
+				tabHoverInset: "rgba(255,255,255,0.07)",
+				tabActiveInset: "rgba(255,255,255,0.10)",
+				rootBorder: "#2c3747",
+				focusRing: "#6ea8d9",
 			};
 		}
 
 		return {
-			rootBg: "linear-gradient(180deg, #e9f2ff 0%, #dbe9fb 100%)",
-			tabRowBg: "linear-gradient(180deg, #d5e8ff 0%, #bed9fb 100%)",
-			tabText: "#1f3e65",
-			tabHoverText: "#0f2f57",
-			tabHoverBg: "rgba(255,255,255,0.55)",
-			tabActiveText: "#0f2f57",
+			// Light mode derived from the same blue-steel family, brighter and cleaner.
+			rootBg: "linear-gradient(180deg, #9ec0d4 0%, #7ea8bf 100%)",
+			tabRowBg: "linear-gradient(180deg, #f9fbfc 0%, #e8eef3 100%)",
+			tabText: "#184561",
+			tabHoverText: "#11364d",
+			tabHoverBg: "rgba(255,255,255,0.78)",
+			tabActiveText: "#123d56",
 			tabActiveBg: "#ffffff",
-			tabActiveBorder: "#9fc0e9",
-			tabRowBorder: "#9fc0e9",
-			bandBg: "linear-gradient(180deg, #ffffff 0%, #f6f9ff 100%)",
-			bandBorderTop: "#b6cdef",
-			bandBorderBottom: "#c3d7f3",
-			bandInset: "rgba(255,255,255,0.86)",
+			tabActiveBorder: "#a7c0d0",
+			tabRowBorder: "#adc3d2",
+			tabIcon: "#295673",
+			pinText: "#2a5874",
+			bandBg: "linear-gradient(180deg, #c3d9e6 0%, #adcada 100%)",
+			bandBorderTop: "#d7e6ef",
+			bandBorderBottom: "#8db0c4",
+			bandInset: "rgba(255,255,255,0.72)",
+			scrollThumb: "rgba(106, 144, 168, 0.6)",
 			groupBg: "#ffffff",
-			groupBorder: "#d2dff2",
+			groupBorder: "#7fa2b7",
 			groupInset: "rgba(255,255,255,0.86)",
-			groupInsetBottom: "rgba(196, 214, 238, 0.66)",
-			groupLabelBorder: "#deebfb",
-			groupLabelText: "#4f6480",
+			groupInsetBottom: "rgba(157, 184, 201, 0.5)",
+			groupLabelBorder: "#d4e4ef",
+			groupLabelText: "#2f5d77",
+			itemIcon: "#3a6985",
+			colDivider: "#b8cfde",
 			tabHoverInset: "rgba(255,255,255,0.85)",
 			tabActiveInset: "rgba(255,255,255,0.95)",
-			rootBorder: "#abc6ea",
+			rootBorder: "#87adc3",
+			focusRing: "#2c73a1",
 		};
 	}, [isDark]);
 
@@ -732,17 +759,23 @@ export default function LayoutRibbonMenu({ menus, handleMenuSelect }: LayoutRibb
 		"--ribbon-tab-active-text": ribbonPalette.tabActiveText,
 		"--ribbon-tab-active-border": ribbonPalette.tabActiveBorder,
 		"--ribbon-tab-row-border": ribbonPalette.tabRowBorder,
+		"--ribbon-tab-icon": ribbonPalette.tabIcon,
+		"--ribbon-pin-text": ribbonPalette.pinText,
 		"--ribbon-band-border-top": ribbonPalette.bandBorderTop,
 		"--ribbon-band-border-bottom": ribbonPalette.bandBorderBottom,
 		"--ribbon-band-inset": ribbonPalette.bandInset,
+		"--ribbon-scroll-thumb": ribbonPalette.scrollThumb,
 		"--ribbon-group-border": ribbonPalette.groupBorder,
 		"--ribbon-group-inset": ribbonPalette.groupInset,
 		"--ribbon-group-inset-bottom": ribbonPalette.groupInsetBottom,
 		"--ribbon-group-label-border": ribbonPalette.groupLabelBorder,
 		"--ribbon-group-label-text": ribbonPalette.groupLabelText,
+		"--ribbon-item-icon": ribbonPalette.itemIcon,
+		"--ribbon-col-divider": ribbonPalette.colDivider,
 		"--ribbon-tab-hover-inset": ribbonPalette.tabHoverInset,
 		"--ribbon-tab-active-inset": ribbonPalette.tabActiveInset,
 		"--ribbon-root-border": ribbonPalette.rootBorder,
+		"--ribbon-focus-ring": ribbonPalette.focusRing,
 	} as React.CSSProperties;
 
 	return (
@@ -752,7 +785,7 @@ export default function LayoutRibbonMenu({ menus, handleMenuSelect }: LayoutRibb
 			<div className={classes.tabRow} style={{ background: ribbonPalette.tabRowBg }}>
 				{menus.map(tab => {
 					const key      = String(tab.key ?? "");
-					const tabLabel = cleanMenuLabel(tab.label);
+					const tabLabel = String(tab.label ?? "");
 					const isActive = key === activeTabKey;
 					return (
 						<div

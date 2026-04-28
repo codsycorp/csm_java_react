@@ -1,6 +1,7 @@
 import type { BreadcrumbProps } from "antd";
 
 import { isString } from "#src/utils";
+import { normalizeMenuLabel } from "#src/utils";
 
 import { Breadcrumb } from "antd";
 import { useTranslation } from "react-i18next";
@@ -202,14 +203,14 @@ export function BreadcrumbViews() {
 				: (node.label || node.name || node.label_en || node.label_zh);
 		if (!localized) return "";
 		if (localized.includes(".")) {
-			return t(localized);
+			return normalizeMenuLabel(t(localized));
 		}
 		const normalizedLocalized = normalizeToken(localized);
 		const mappedRawKey = RAW_SYSTEM_TITLE_KEY_MAP[normalizedLocalized];
 		if (mappedRawKey) {
-			return t(mappedRawKey);
+			return normalizeMenuLabel(t(mappedRawKey));
 		}
-		return localized;
+		return normalizeMenuLabel(localized);
 	};
 
 	const breadcrumbItems = useMemo(() => {
@@ -299,7 +300,7 @@ export function BreadcrumbViews() {
 	if (breadcrumbItems.length > 0) {
 		return (
 			<Breadcrumb
-				className="hidden md:block"
+				className="hidden md:block text-[13px] font-medium"
 				separator="/"
 				itemRender={itemRender}
 				items={breadcrumbItems}
@@ -310,14 +311,14 @@ export function BreadcrumbViews() {
 	// Fallback: vẫn dùng matches nếu không có tab (trường hợp đặc biệt)
 	return (
 		<Breadcrumb
-			className="hidden md:block"
+			className="hidden md:block text-[13px] font-medium"
 			separator="/"
 			// https://ant.design/components/breadcrumb#use-with-browserhistory
 			itemRender={itemRender}
 			items={matches
 				.filter(match => match.handle && !match.pathname.endsWith("/"))
 				.map((match) => {
-					const defaultTitle = isString(match.handle?.title) ? t(match.handle?.title) : match.handle?.title;
+					const defaultTitle = normalizeMenuLabel(isString(match.handle?.title) ? t(match.handle?.title) : match.handle?.title);
 					return {
 						title: defaultTitle,
 						path: match.pathname,

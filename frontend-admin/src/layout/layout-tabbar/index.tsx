@@ -6,6 +6,7 @@ import { isDynamicRoutingEnabled } from "#src/router/routes/config";
 import { removeTrailingSlash } from "#src/router/utils";
 import { usePermissionStore, usePreferencesStore, useTabsStore, useUserStore } from "#src/store";
 import { isString } from "#src/utils";
+import { normalizeMenuLabel } from "#src/utils";
 
 import { RedoOutlined } from "@ant-design/icons";
 import { Button, Tabs } from "antd";
@@ -22,20 +23,18 @@ import { useStyles } from "./style";
 
 const HOME_TAB_KEY = "homepage";
 
-function stripMenuPrefix(label: string): string {
-	if (!label || typeof label !== "string") return label;
-	return label.replace(/^.*?\.\s+/, "").trim();
-}
-
 function normalizeI18nLabel(label: unknown, t: (key: string) => string): string {
 	if (label == null) return "";
 	const str = String(label).trim();
 	if (!str) return "";
+	const lower = str.toLowerCase();
+	if (lower === "system") return t("common.menu.system");
+	if (lower === "home" || lower === "homepage") return t("common.menu.home");
 	if (str.includes(".")) {
 		const translated = t(str);
-		if (translated && translated !== str) return stripMenuPrefix(translated);
+		if (translated && translated !== str) return normalizeMenuLabel(translated);
 	}
-	return stripMenuPrefix(str);
+	return normalizeMenuLabel(str);
 }
 
 // Helper: ưu tiên chọn tab Home nếu có
@@ -61,7 +60,7 @@ export default function LayoutTabbar() {
 	const currentRoute = useCurrentRoute();
 
 	const { tabbarStyleType, tabbarShowMaximize, tabbarShowMore } = usePreferencesStore();
-	const { flatRouteList, hasFetchedDynamicRoutes, apiWholeMenus } = usePermissionStore();
+	const { flatRouteList, hasFetchedDynamicRoutes, apiWholeMenus, broadcastHomeCode } = usePermissionStore();
 	const selectedMenuIdForTab = useUserStore(state => state.selectedMenuIdForTab);
 	const { activeKey, isRefresh, setActiveKey, setIsRefresh, openTabs, addTab, insertBeforeTab } = useTabsStore();
 	const homePath = HOME_TAB_KEY;
@@ -131,9 +130,30 @@ export default function LayoutTabbar() {
 	}, [openTabs, activeKey, homePath, t]);
 
 
-	// Always ensure Home tab exists after login or restore
+	// Always ensure Home tab exists after login or restore — only when broadcastHomeCode is available
 	useEffect(() => {
+		if (!hasFetchedDynamicRoutes) return;
 		const hasHome = openTabs.has(homePath);
+		if (!broadcastHomeCode) {
+			// No home code: remove Home tab if it exists
+			if (hasHome) {
+				useTabsStore.setState(state => {
+					const newTabs = new Map(state.openTabs);
+					newTabs.delete(homePath);
+					// Filter out any undefined entries left by store operations
+					for (const [k, v] of newTabs) {
+						if (!v) newTabs.delete(k);
+					}
+					const firstKey = newTabs.keys().next().value ?? "";
+					const nextKey = (state.activeKey === homePath || !newTabs.has(state.activeKey))
+						? firstKey
+						: state.activeKey;
+					return { openTabs: newTabs, activeKey: nextKey };
+				});
+			}
+			return;
+		}
+		// Has home code: ensure Home tab is present
 		if (!hasHome) {
 			addTab(homePath, {
 				key: homePath,
@@ -145,7 +165,7 @@ export default function LayoutTabbar() {
 				setActiveKey(homePath);
 			}
 		}
-	}, [openTabs, addTab, setActiveKey, t, homePath, activeKey]);
+	}, [openTabs, addTab, setActiveKey, t, homePath, activeKey, broadcastHomeCode, hasFetchedDynamicRoutes]);
 
 	/**
 	 * 自动重置刷新状态
@@ -180,12 +200,13 @@ export default function LayoutTabbar() {
 	 		const home = homePath;
 	 		const state = useTabsStore.getState();
 
-	 		// Cannot close home
-	 		if (closingKey === home) return;
+	 		// Cannot close home (only when home exists as a pinned tab)
+	 		if (closingKey === home && broadcastHomeCode) return;
 
 	 		const newTabs = new Map(state.openTabs);
 	 		newTabs.delete(closingKey);
-	 		if (!newTabs.has(home) && state.openTabs.has(home)) {
+	 		// Only re-add home if broadcastHomeCode is set and it somehow got removed
+	 		if (broadcastHomeCode && !newTabs.has(home) && state.openTabs.has(home)) {
 	 			newTabs.set(home, state.openTabs.get(home)!);
 	 		}
 
@@ -201,7 +222,7 @@ export default function LayoutTabbar() {
 	 		useTabsStore.setState({ openTabs: newTabs, activeKey: nextKey });
 	 		// KHÔNG gọi navigate, chỉ set state
 	 	}
-	 }, [homePath]);
+	 }, [homePath, broadcastHomeCode]);
 
 	/**
 	 * 生成标签栏额外内容
@@ -322,7 +343,7 @@ export default function LayoutTabbar() {
 			// Translate i18n key
 			if (typeof label === 'string' && label.startsWith('common.')) {
 				const translated = t(label);
-				return stripMenuPrefix(translated);
+				return normalizeMenuLabel(translated);
 			}
 			// Convert to string if not already
 			const labelStr = String(label);
@@ -396,7 +417,9 @@ export default function LayoutTabbar() {
 	useEffect(() => {
 		const activePath = location.pathname;
 		const strippedPath = removeTrailingSlash(activePath);
-		const normalizedPath = (strippedPath === "/" || strippedPath === "/home") ? homePath : strippedPath;
+		const normalizedPath = (strippedPath === "/" || strippedPath === "/home")
+			? homePath
+			: strippedPath;
 
 		if (closingKeyRef.current && closingKeyRef.current === normalizedPath) {
 			closingKeyRef.current = null;

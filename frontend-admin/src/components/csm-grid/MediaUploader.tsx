@@ -241,10 +241,10 @@ export function MediaUploader({
                     position: "relative",
                     width: size,
                     height: size,
-                    border: "1px solid #d9d9d9",
+                    border: "1px solid var(--ant-colorBorder)",
                     borderRadius: 6,
                     overflow: "hidden",
-                    background: "#fafafa",
+                    background: "var(--ant-colorFillAlter)",
                     boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
                   }}
                 >
@@ -293,9 +293,9 @@ export function MediaUploader({
                 flexShrink: 0,
                 width: size * 1.2,
                 height: size * 0.9,
-                border: '1px solid #d9d9d9',
+                border: '1px solid var(--ant-colorBorder)',
                 borderRadius: 8,
-                background: '#fafafa',
+                background: 'var(--ant-colorFillAlter)',
                 overflow: 'hidden',
                 display: 'flex',
                 alignItems: 'center',
@@ -319,7 +319,7 @@ export function MediaUploader({
                 onClick={(e) => { e.stopPropagation(); handleRemove(urls[0]); }}
               />
             </div>
-            <div style={{ fontSize: 12, color: '#666', lineHeight: 1.5 }}>
+            <div style={{ fontSize: 12, color: 'var(--ant-colorTextSecondary)', lineHeight: 1.5 }}>
               <div style={{ fontWeight: 500 }}>Tên: {urls[0].split('/').pop()}</div>
               <div>Đã chọn 1 file</div>
             </div>
@@ -342,7 +342,7 @@ export function MediaUploader({
         )}
       </Modal>
 
-      <div style={{ marginTop: 8, fontSize: 12, color: "#999" }}>
+      <div style={{ marginTop: 8, fontSize: 12, color: "var(--ant-colorTextTertiary)" }}>
         {multiple
           ? `Đã chọn ${urls.length}/${maxCount} file`
           : urls.length > 0

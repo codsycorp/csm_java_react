@@ -7,6 +7,7 @@ export * from "./is-dark-theme";
 export * from "./is-light-theme";
 export * from "./is-mac-os";
 export * from "./is-windows-os";
+export * from "./menu-label";
 export * from "./progress";
 export * from "./remember-route";
 export * from "./request";

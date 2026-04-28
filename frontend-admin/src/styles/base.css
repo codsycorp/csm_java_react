@@ -45,3 +45,241 @@ img {
 .ant-table-body {
 	overflow: auto !important;
 }
+
+html[data-theme="dark"] {
+	--csm-surface-0: #0f1115;
+	--csm-surface-1: #141a22;
+	--csm-surface-2: #1b2430;
+	--csm-border-soft: #2c3747;
+	--csm-border-strong: #3a4a5f;
+	--csm-text-soft: #a9b6ca;
+	--csm-text-muted: #5f7485;
+	--csm-focus-ring: #6ea8d9;
+	--csm-action-edit: #7cb2ff;
+	--csm-action-clone: #7ccd86;
+	--csm-action-delete: #ff8a8a;
+}
+
+html[data-theme="dark"] .csm-dynamic-grid-table .ant-pro-card {
+	background: var(--csm-surface-1);
+	border: 1px solid var(--csm-border-soft);
+}
+
+html[data-theme="dark"] .csm-dynamic-grid-table .ant-pro-table-search,
+html[data-theme="dark"] .csm-dynamic-grid-table .ant-pro-table-list-toolbar {
+	background: var(--csm-surface-1);
+}
+
+html[data-theme="dark"] .csm-grid-toolbar-search .ant-input-affix-wrapper {
+	background: var(--csm-surface-2);
+	border-color: var(--csm-border-soft);
+	color: var(--csm-text-soft);
+}
+
+html[data-theme="dark"] .csm-grid-toolbar-search .ant-input {
+	background: transparent;
+	color: var(--csm-text-soft);
+}
+
+html[data-theme="dark"] .csm-grid-toolbar-search .ant-input::placeholder {
+	color: var(--csm-text-muted);
+}
+
+html[data-theme="dark"] .csm-grid-toolbar-search .ant-input-affix-wrapper:focus,
+html[data-theme="dark"] .csm-grid-toolbar-search .ant-input-affix-wrapper-focused {
+	border-color: var(--csm-focus-ring);
+	box-shadow: 0 0 0 2px rgba(110, 168, 217, 0.2);
+}
+
+html[data-theme="dark"] .csm-dynamic-grid-table .ant-table {
+	background: var(--csm-surface-1);
+	color: var(--csm-text-soft);
+}
+
+html[data-theme="dark"] .csm-dynamic-grid-table .ant-table-thead > tr > th {
+	background: var(--csm-surface-0);
+	border-bottom: 1px solid var(--csm-border-strong);
+	color: #c8d8ea;
+}
+
+html[data-theme="dark"] .csm-dynamic-grid-table .ant-table-tbody > tr > td {
+	border-bottom: 1px solid var(--csm-border-soft);
+	background: var(--csm-surface-1);
+	color: var(--csm-text-soft);
+}
+
+html[data-theme="dark"] .csm-dynamic-grid-table .ant-table-tbody > tr.csm-grid-row-odd > td {
+	background: var(--csm-surface-0);
+}
+
+html[data-theme="dark"] .csm-dynamic-grid-table .ant-table-tbody > tr:hover > td,
+html[data-theme="dark"] .csm-dynamic-grid-table .ant-table-tbody > tr.ant-table-row-selected > td {
+	background: var(--csm-surface-2);
+}
+
+html[data-theme="dark"] .csm-dynamic-grid-table .ant-table-cell .csm-grid-action-link {
+	font-weight: 500;
+	padding-inline: 2px;
+}
+
+html[data-theme="dark"] .csm-dynamic-grid-table .ant-table-cell .csm-grid-action-edit {
+	color: var(--csm-action-edit);
+}
+
+html[data-theme="dark"] .csm-dynamic-grid-table .ant-table-cell .csm-grid-action-clone {
+	color: var(--csm-action-clone);
+}
+
+html[data-theme="dark"] .csm-dynamic-grid-table .ant-table-cell .csm-grid-action-delete {
+	color: var(--csm-action-delete);
+}
+
+html[data-theme="dark"] .csm-dynamic-grid-table .ant-table-cell .csm-grid-action-link:hover {
+	filter: brightness(1.1);
+	text-decoration: underline;
+}
+
+html[data-theme="dark"] .csm-dynamic-grid-table .ant-btn:focus-visible,
+html[data-theme="dark"] .csm-dynamic-grid-table .ant-table-cell .csm-grid-action-link:focus-visible {
+	outline: 2px solid var(--csm-focus-ring);
+	outline-offset: 1px;
+	border-radius: 4px;
+}
+
+/* Toolbar pagination & summary text */
+html[data-theme="dark"] .csm-dynamic-grid-table .ant-pagination .ant-pagination-item a,
+html[data-theme="dark"] .csm-dynamic-grid-table .ant-pagination .ant-pagination-prev button,
+html[data-theme="dark"] .csm-dynamic-grid-table .ant-pagination .ant-pagination-next button {
+	color: var(--csm-text-soft);
+}
+
+html[data-theme="dark"] .csm-dynamic-grid-table .ant-pagination .ant-pagination-item-active {
+	border-color: var(--csm-focus-ring);
+}
+
+/* Pro-table list toolbar title text */
+html[data-theme="dark"] .csm-dynamic-grid-table .ant-pro-table-list-toolbar-title {
+	color: var(--csm-text-soft);
+}
+
+/* ========================================= */
+/* GLOBAL DARK MODE — page & form controls   */
+/* ========================================= */
+
+/* Ant Design Modal & Drawer surfaces */
+html[data-theme="dark"] .ant-modal-content,
+html[data-theme="dark"] .ant-drawer-content {
+	background-color: var(--csm-surface-1);
+}
+
+html[data-theme="dark"] .ant-modal-header,
+html[data-theme="dark"] .ant-drawer-header {
+	background-color: var(--csm-surface-1);
+	border-bottom-color: var(--csm-border-soft);
+}
+
+html[data-theme="dark"] .ant-modal-footer,
+html[data-theme="dark"] .ant-drawer-footer {
+	border-top-color: var(--csm-border-soft);
+}
+
+/* Card surfaces inside dark containers */
+html[data-theme="dark"] .ant-card {
+	background-color: var(--csm-surface-1);
+	border-color: var(--csm-border-soft);
+}
+
+html[data-theme="dark"] .ant-card-head {
+	border-bottom-color: var(--csm-border-soft);
+	color: var(--csm-text-soft);
+}
+
+/* Tabs dark mode */
+html[data-theme="dark"] .ant-tabs-nav {
+	background-color: transparent;
+}
+
+html[data-theme="dark"] .ant-tabs-tab {
+	color: var(--csm-text-muted);
+}
+
+html[data-theme="dark"] .ant-tabs-tab-active .ant-tabs-tab-btn {
+	color: var(--csm-focus-ring);
+}
+
+html[data-theme="dark"] .ant-tabs-ink-bar {
+	background: var(--csm-focus-ring);
+}
+
+/* Form labels and helper text */
+html[data-theme="dark"] .ant-form-item-label > label {
+	color: var(--csm-text-soft);
+}
+
+html[data-theme="dark"] .ant-form-item-extra,
+html[data-theme="dark"] .ant-form-item-explain {
+	color: var(--csm-text-muted);
+}
+
+/* Required asterisk stays red */
+html[data-theme="dark"] .ant-form-item-label > label.ant-form-item-required::before {
+	color: var(--ant-colorError);
+}
+
+/* Helper/description text that uses #8c8c8c in pages */
+html[data-theme="dark"] [style*="color: rgb(140, 140, 140)"],
+html[data-theme="dark"] [style*="color:#8c8c8c"],
+html[data-theme="dark"] [style*='color: "#8c8c8c"'] {
+	color: var(--csm-text-muted) !important;
+}
+
+/* Input/Select/Textarea in dark modals */
+html[data-theme="dark"] .ant-modal-content .ant-input,
+html[data-theme="dark"] .ant-modal-content .ant-input-affix-wrapper,
+html[data-theme="dark"] .ant-modal-content .ant-select-selector,
+html[data-theme="dark"] .ant-modal-content .ant-input-number,
+html[data-theme="dark"] .ant-modal-content textarea {
+	background-color: var(--csm-surface-2);
+	border-color: var(--csm-border-soft);
+	color: var(--csm-text-soft);
+}
+
+/* Dividers */
+html[data-theme="dark"] .ant-divider {
+	border-color: var(--csm-border-soft);
+}
+
+/* Table/Tree in modals and pages */
+html[data-theme="dark"] .ant-tree {
+	background: transparent;
+	color: var(--csm-text-soft);
+}
+
+html[data-theme="dark"] .ant-tree .ant-tree-node-content-wrapper:hover {
+	background: var(--csm-surface-2);
+}
+
+html[data-theme="dark"] .ant-tree .ant-tree-node-selected .ant-tree-node-content-wrapper {
+	background: var(--csm-surface-2);
+}
+
+/* Collapse panels */
+html[data-theme="dark"] .ant-collapse {
+	background: var(--csm-surface-1);
+	border-color: var(--csm-border-soft);
+}
+
+html[data-theme="dark"] .ant-collapse-header {
+	color: var(--csm-text-soft) !important;
+}
+
+html[data-theme="dark"] .ant-collapse-content {
+	background: var(--csm-surface-2);
+	border-top-color: var(--csm-border-soft);
+}
+
+/* Box shadows on cards/panels in dark mode */
+html[data-theme="dark"] [style*="boxShadow"],
+html[data-theme="dark"] [style*="box-shadow"] {
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4) !important;
+}

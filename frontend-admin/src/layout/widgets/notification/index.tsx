@@ -661,7 +661,7 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 												</Badge>
 												<div style={{ flex: 1, minWidth: 0 }}>
 												<div className={classes.username}>{u.username}</div>
-												<div style={{ fontSize: 12, color: '#8c8c8c', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{(() => {
+										<div style={{ fontSize: 12, color: 'var(--ant-colorTextTertiary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{(() => {
 													const userTypeLabel = (u as any).isSubUser ? 'Người dùng con' : t('common.notification.sameApp', 'Nội bộ');
 													const presenceLabel = typeof (u as any).online === 'boolean' ? ((u as any).online ? 'Online' : 'Offline') : '';
 													return isDevUser
@@ -696,7 +696,7 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 												</Badge>
 												<div style={{ flex: 1, minWidth: 0 }}>
 												<div className={classes.username}>{g.label}</div>
-												<div style={{ fontSize: 12, color: '#8c8c8c', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{isDevUser ? `${t('common.notification.guestDesc', 'Khách của web/app')} • Online${g.unread > 0 ? ` • ${g.unread} tin` : ''}${g.pendingForApp > 0 ? ` • chưa ai cùng app xem: ${g.pendingForApp}` : ''} • ${(g.appId || 'n/a')}` : `${t('common.notification.guestDesc', 'Khách của web/app')} • Online${g.unread > 0 ? ` • ${g.unread} tin` : ''}${g.pendingForApp > 0 ? ` • chưa ai cùng app xem: ${g.pendingForApp}` : ''}`}</div>
+												<div style={{ fontSize: 12, color: 'var(--ant-colorTextTertiary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{isDevUser ? `${t('common.notification.guestDesc', 'Khách của web/app')} • Online${g.unread > 0 ? ` • ${g.unread} tin` : ''}${g.pendingForApp > 0 ? ` • chưa ai cùng app xem: ${g.pendingForApp}` : ''} • ${(g.appId || 'n/a')}` : `${t('common.notification.guestDesc', 'Khách của web/app')} • Online${g.unread > 0 ? ` • ${g.unread} tin` : ''}${g.pendingForApp > 0 ? ` • chưa ai cùng app xem: ${g.pendingForApp}` : ''}`}</div>
 												</div>
 												{g.unread > 0 && <span className={classes.unreadBadge}>{g.unread}</span>}
 											</div>
@@ -723,7 +723,7 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 										<Avatar icon={<BellOutlined />} size="small" style={{ backgroundColor: '#52c41a' }} />
 										<div style={{ flex: 1 }}>
 											<div className={classes.username}>Thông báo hệ thống</div>
-											<div style={{ fontSize: 12, color: '#8c8c8c' }}>{isDevUser && selectedAppFilter !== 'all' ? `Thông báo gửi đến ứng dụng: ${selectedAppFilter}` : 'Thông báo gửi đến ứng dụng của bạn'}</div>
+											<div style={{ fontSize: 12, color: 'var(--ant-colorTextTertiary)' }}>{isDevUser && selectedAppFilter !== 'all' ? `Thông báo gửi đến ứng dụng: ${selectedAppFilter}` : 'Thông báo gửi đến ứng dụng của bạn'}</div>
 										</div>
 										{systemMessagesUnread > 0 && <span className={classes.unreadBadge}>{systemMessagesUnread}</span>}
 									</div>

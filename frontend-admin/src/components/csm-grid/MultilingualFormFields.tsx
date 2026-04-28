@@ -111,8 +111,8 @@ export function SeoMetaFormField({ value, onChange, activeLang }: { value?: any;
         />
       </FieldWrapper>
 
-      <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid #f0f0f0' }}>
-        <label style={{ display: 'block', marginBottom: 12, fontWeight: 500, color: '#1890ff' }}>Open Graph (Facebook/Social)</label>
+      <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--ant-colorBorderSecondary)' }}>
+        <label style={{ display: 'block', marginBottom: 12, fontWeight: 500, color: 'var(--ant-colorPrimary)' }}>Open Graph (Facebook/Social)</label>
         <Space direction="vertical" style={{ width: '100%' }} size="small">
           <Input
             value={data[lang]?.og_title || ''}
@@ -227,7 +227,7 @@ export function SeoMetaAutoSync({ name, form, hidden }: { name: string; form: an
       </div>
       {!editing ? (
         <div>
-          <div style={{ color: '#6b7280', marginBottom: 8 }}>Đã tự động lấy tiêu đề và mô tả từ phần Nội dung. Nếu cần, nhấn "Chỉnh sửa" để tùy chỉnh.</div>
+          <div style={{ color: 'var(--ant-colorTextSecondary)', marginBottom: 8 }}>Đã tự động lấy tiêu đề và mô tả từ phần Nội dung. Nếu cần, nhấn "Chỉnh sửa" để tùy chỉnh.</div>
           <pre style={{ whiteSpace: 'pre-wrap', fontSize: 13, margin: 0 }}>{JSON.stringify(current, null, 2)}</pre>
         </div>
       ) : (
@@ -324,7 +324,7 @@ export function ContentMultilangFormField({ value, onChange }: { value?: any; on
       </Row>
 
       <FieldWrapper label="Nội dung HTML">
-        <div style={{ border: '1px solid #d9d9d9', borderRadius: 4, padding: 0, background: 'transparent' }}>
+        <div style={{ border: '1px solid var(--ant-colorBorder)', borderRadius: 4, padding: 0, background: 'transparent' }}>
           <HtmlEditor
             value={data[lang]?.content || ''}
             onChange={(val: string) => updateLang(lang, 'content', val)}

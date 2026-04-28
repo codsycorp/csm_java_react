@@ -410,3 +410,102 @@
   display: block !important;
   margin: 12px 0 !important;
 }
+
+/* ========================================= */
+/* DARK MODE OVERRIDES                       */
+/* ========================================= */
+
+/* Editor background & text */
+[data-theme="dark"] .html-editor-wrapper .ql-editor {
+  background-color: var(--csm-surface-1) !important;
+  color: var(--csm-text-soft) !important;
+}
+
+/* Toolbar background */
+[data-theme="dark"] .html-editor-wrapper .ql-toolbar.ql-snow {
+  background-color: var(--csm-surface-2) !important;
+  border-color: var(--csm-border-soft) !important;
+}
+
+[data-theme="dark"] .html-editor-wrapper .ql-container.ql-snow {
+  border-color: var(--csm-border-soft) !important;
+  background-color: var(--csm-surface-1) !important;
+}
+
+/* Toolbar icon colors */
+[data-theme="dark"] .html-editor-wrapper .ql-snow .ql-stroke {
+  stroke: var(--csm-text-soft) !important;
+}
+
+[data-theme="dark"] .html-editor-wrapper .ql-snow .ql-fill {
+  fill: var(--csm-text-soft) !important;
+}
+
+[data-theme="dark"] .html-editor-wrapper .ql-snow .ql-picker-label {
+  color: var(--csm-text-soft) !important;
+}
+
+[data-theme="dark"] .html-editor-wrapper .ql-snow .ql-picker-options {
+  background-color: var(--csm-surface-2) !important;
+  border-color: var(--csm-border-soft) !important;
+  color: var(--csm-text-soft) !important;
+}
+
+/* Toolbar hover & active */
+[data-theme="dark"] .html-editor-wrapper .ql-toolbar button:hover,
+[data-theme="dark"] .html-editor-wrapper .ql-toolbar button.ql-active {
+  color: var(--csm-focus-ring) !important;
+}
+
+[data-theme="dark"] .html-editor-wrapper .ql-toolbar button:hover .ql-stroke,
+[data-theme="dark"] .html-editor-wrapper .ql-toolbar button.ql-active .ql-stroke {
+  stroke: var(--csm-focus-ring) !important;
+}
+
+[data-theme="dark"] .html-editor-wrapper .ql-toolbar button:hover .ql-fill,
+[data-theme="dark"] .html-editor-wrapper .ql-toolbar button.ql-active .ql-fill {
+  fill: var(--csm-focus-ring) !important;
+}
+
+/* Focus border */
+[data-theme="dark"] .html-editor-wrapper .ql-container.ql-snow:focus-within {
+  border-color: var(--csm-focus-ring) !important;
+  box-shadow: 0 0 0 2px rgba(110, 168, 217, 0.15) !important;
+}
+
+/* Content: blockquote */
+[data-theme="dark"] .html-editor-wrapper .ql-editor blockquote {
+  border-left-color: var(--csm-border-strong) !important;
+}
+
+/* Content: code blocks */
+[data-theme="dark"] .html-editor-wrapper .ql-editor pre,
+[data-theme="dark"] .html-editor-wrapper .ql-editor pre.ql-syntax {
+  background-color: var(--csm-surface-0) !important;
+  color: var(--csm-text-soft) !important;
+  border: 1px solid var(--csm-border-soft) !important;
+}
+
+/* Content: links */
+[data-theme="dark"] .html-editor-wrapper .ql-editor a {
+  color: var(--csm-focus-ring) !important;
+}
+
+[data-theme="dark"] .html-editor-wrapper .ql-editor a:hover {
+  color: #90c8f0 !important;
+}
+
+/* Content: table borders */
+[data-theme="dark"] .html-editor-wrapper .ql-editor table td,
+[data-theme="dark"] .html-editor-wrapper .ql-editor table th {
+  border-color: var(--csm-border-soft) !important;
+}
+
+[data-theme="dark"] .html-editor-wrapper .ql-editor th {
+  background-color: var(--csm-surface-2) !important;
+}
+
+/* Preview mode dark */
+[data-theme="dark"] .html-editor-wrapper .html-preview-content {
+  color: var(--csm-text-soft) !important;
+}

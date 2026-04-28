@@ -95,7 +95,7 @@ function CodeArea({ value, onChange, placeholder, defaultMode = "javascript" }: 
           size="small"
         />
       </div>
-      <div style={{ border: "1px solid #d9d9d9", borderRadius: 4, overflow: "hidden" }}>
+      <div style={{ border: "1px solid var(--ant-colorBorder)", borderRadius: 4, overflow: "hidden" }}>
         <CodeMirror
           value={value || ""}
           height="200px"
@@ -616,7 +616,7 @@ export function FieldConfigEditor({ value, onChange }: FieldConfigEditorProps) {
         cancelText="Hủy"
       >
         <Card style={{ marginBottom: 16 }}>
-          <div style={{ fontSize: 12, color: '#666', marginBottom: 12 }}>
+          <div style={{ fontSize: 12, color: 'var(--ant-colorTextSecondary)', marginBottom: 12 }}>
             Nhập tên các trường ngăn cách nhau bởi dấu phẩy (,). Ví dụ:
             <br />
             <code>id, name, email, phone, created_at</code>

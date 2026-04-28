@@ -762,7 +762,7 @@ export default function Menu() {
 								width: 400,
 								padding: 4,
 								borderRadius: 4,
-								border: '1px solid #d9d9d9',
+						border: '1px solid var(--ant-colorBorder)',
 								background: 'var(--background-color, #f5f5f5)',
 								color: 'var(--text-color, #222)',
 								transition: 'background 0.2s,color 0.2s',

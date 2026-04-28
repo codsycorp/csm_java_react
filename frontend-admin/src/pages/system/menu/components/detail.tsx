@@ -1855,7 +1855,7 @@ export function Detail({
                 { label: t('system.menu.typeForm.kanbanBoard') || 'Kanban Board', value: 6 },
               ]}
             />
-            <div style={{ marginTop: 4, fontSize: 12, color: '#8c8c8c' }}>
+            <div style={{ marginTop: 4, fontSize: 12, color: 'var(--ant-colorTextTertiary)' }}>
               {t("system.menu.typeFormHint")}
             </div>
           </div>
@@ -1880,7 +1880,7 @@ export function Detail({
                 { label: t('system.menu.rowTypeEdit.inline') || 'Chỉnh sửa trên dòng', value: 1 },
               ]}
             />
-            <div style={{ marginTop: 4, fontSize: 12, color: '#8c8c8c' }}>
+            <div style={{ marginTop: 4, fontSize: 12, color: 'var(--ant-colorTextTertiary)' }}>
               {t("system.menu.rowTypeEditHint")}
             </div>
           </div>
@@ -1905,7 +1905,7 @@ export function Detail({
                 { label: t('system.menu.typeMenu.row') || 'Kiểu dòng', value: 1 },
               ]}
             />
-            <div style={{ marginTop: 4, fontSize: 12, color: '#8c8c8c' }}>
+            <div style={{ marginTop: 4, fontSize: 12, color: 'var(--ant-colorTextTertiary)' }}>
               {t("system.menu.typeMenuHint")}
             </div>
           </div>
@@ -2105,7 +2105,7 @@ export function Detail({
               <div style={{ marginTop: 8 }}>
                 <Button type="primary" onClick={linkRelatedDataMenu}>{t('system.menu.kanbanGenerateFromLinkedMenu') || 'Tạo config từ menu liên kết'}</Button>
               </div>
-              <div style={{ marginTop: 4, fontSize: 12, color: '#8c8c8c' }}>
+              <div style={{ marginTop: 4, fontSize: 12, color: 'var(--ant-colorTextTertiary)' }}>
                 {t('system.menu.kanbanGenerateFromLinkedMenuHint') || 'Không dùng template cứng. Cấu hình Kanban sẽ sinh trực tiếp từ bảng của menu liên kết.'}
               </div>
             </div>
@@ -2193,7 +2193,7 @@ export function Detail({
                   { label: t('system.menu.kanbanStrictModeOff') || 'Tắt strict mode', value: false },
                 ]}
               />
-              <div style={{ marginTop: 4, fontSize: 12, color: '#8c8c8c' }}>
+              <div style={{ marginTop: 4, fontSize: 12, color: 'var(--ant-colorTextTertiary)' }}>
                 {t('system.menu.kanbanStrictModeHint') || 'Strict mode sẽ kiểm soát transition trạng thái và trường bắt buộc theo stage.'}
               </div>
             </div>
@@ -2217,7 +2217,7 @@ export function Detail({
                   { label: t('system.menu.kanbanAutoProgressOff') || 'Tắt tự cập nhật', value: false },
                 ]}
               />
-              <div style={{ marginTop: 4, fontSize: 12, color: '#8c8c8c' }}>
+              <div style={{ marginTop: 4, fontSize: 12, color: 'var(--ant-colorTextTertiary)' }}>
                 {t('system.menu.kanbanAutoProgressHint') || 'Khi bật: đổi stage sẽ tự cập nhật field tiến độ (%) và mốc thời gian KPI.'}
               </div>
             </div>
@@ -2303,7 +2303,7 @@ export function Detail({
                   style: { width: '100%' },
                 }}
               />
-              <div style={{ marginTop: 4, fontSize: 12, color: '#8c8c8c' }}>
+              <div style={{ marginTop: 4, fontSize: 12, color: 'var(--ant-colorTextTertiary)' }}>
                 {t('system.menu.kanbanDoneStagesHint') || 'Nhập danh sách stage hoàn thành, phân tách bằng dấu phẩy. Ví dụ: done,completed'}
               </div>
             </div>
@@ -2470,7 +2470,7 @@ export function Detail({
               readOnly: true,
             }}
           />
-          <div style={{ marginTop: 8, fontSize: 12, color: '#8c8c8c', whiteSpace: 'pre-line' }}>
+          <div style={{ marginTop: 8, fontSize: 12, color: 'var(--ant-colorTextTertiary)', whiteSpace: 'pre-line' }}>
             {t('system.menu.kanbanConfigHint') || 'Khai báo JSON cho board độc lập: bảng nguồn, khóa chính, cột trạng thái, các stage hiển thị, chế độ kanban, timeline và báo cáo theo thời gian.'}
           </div>
         </Card>
@@ -2520,7 +2520,7 @@ export function Detail({
                   }))
               ]}
             />
-            <div style={{ marginTop: 4, fontSize: 12, color: '#8c8c8c' }}>
+            <div style={{ marginTop: 4, fontSize: 12, color: 'var(--ant-colorTextTertiary)' }}>
               {t("system.menu.parentMenuHint")}
             </div>
           </div>
@@ -2546,7 +2546,7 @@ export function Detail({
               }}
               options={antIconOptions}
             />
-            <div style={{ marginTop: 4, fontSize: 12, color: '#8c8c8c' }}>
+            <div style={{ marginTop: 4, fontSize: 12, color: 'var(--ant-colorTextTertiary)' }}>
               {t("system.menu.iconHint") || "Gõ để tìm icon Ant Design (ví dụ: UserOutlined, SettingOutlined). Nếu để trống sẽ dùng icon mặc định."}
             </div>
           </div>
@@ -2564,7 +2564,7 @@ export function Detail({
                 style: { width: '100%' },
               }}
             />
-            <div style={{ marginTop: 4, fontSize: 12, color: '#8c8c8c' }}>
+            <div style={{ marginTop: 4, fontSize: 12, color: 'var(--ant-colorTextTertiary)' }}>
               {t("system.menu.tableHint")}
             </div>
           </div>
@@ -2590,7 +2590,7 @@ export function Detail({
                 { label: t("system.menu.dataScope.branch"), value: 'BRANCH' },
               ]}
             />
-            <div style={{ marginTop: 4, fontSize: 12, color: '#8c8c8c' }}>
+            <div style={{ marginTop: 4, fontSize: 12, color: 'var(--ant-colorTextTertiary)' }}>
               {t("system.menu.dataScopeHint")}
             </div>
           </div>
@@ -2628,7 +2628,7 @@ export function Detail({
                 style: { width: '100%' },
               }}
             />
-            <div style={{ marginTop: 4, fontSize: 12, color: '#8c8c8c' }}>
+            <div style={{ marginTop: 4, fontSize: 12, color: 'var(--ant-colorTextTertiary)' }}>
               {t("system.menu.prefixPkHint")}
             </div>
           </div>
@@ -2649,7 +2649,7 @@ export function Detail({
               min={1}
               max={1000}
             />
-            <div style={{ marginTop: 4, fontSize: 12, color: '#8c8c8c' }}>
+            <div style={{ marginTop: 4, fontSize: 12, color: 'var(--ant-colorTextTertiary)' }}>
               {t("system.menu.tablePagesizeHint")}
             </div>
           </div>
@@ -2690,7 +2690,7 @@ export function Detail({
                 ),
               }}
             />
-            <div style={{ marginTop: 4, fontSize: 12, color: '#8c8c8c' }}>
+            <div style={{ marginTop: 4, fontSize: 12, color: 'var(--ant-colorTextTertiary)' }}>
               {t("system.menu.reportNameHint")}
             </div>
           </div>
@@ -2713,7 +2713,7 @@ export function Detail({
                 { label: t("system.menu.orientationLandscape"), value: 'l' },
               ]}
             />
-            <div style={{ marginTop: 4, fontSize: 12, color: '#8c8c8c' }}>
+            <div style={{ marginTop: 4, fontSize: 12, color: 'var(--ant-colorTextTertiary)' }}>
               {t("system.menu.orientationHint")}
             </div>
           </div>
@@ -2733,7 +2733,7 @@ export function Detail({
               }}
               min={0}
             />
-            <div style={{ marginTop: 4, fontSize: 12, color: '#8c8c8c' }}>
+            <div style={{ marginTop: 4, fontSize: 12, color: 'var(--ant-colorTextTertiary)' }}>
               {t("system.menu.mmUnit")}
             </div>
           </div>
@@ -2753,7 +2753,7 @@ export function Detail({
               }}
               min={0}
             />
-            <div style={{ marginTop: 4, fontSize: 12, color: '#8c8c8c' }}>
+            <div style={{ marginTop: 4, fontSize: 12, color: 'var(--ant-colorTextTertiary)' }}>
               {t("system.menu.mmUnit")}
             </div>
           </div>
@@ -2783,7 +2783,7 @@ export function Detail({
                 style: { width: '100%' },
               }}
             />
-            <div style={{ marginTop: 4, fontSize: 12, color: '#8c8c8c' }}>
+            <div style={{ marginTop: 4, fontSize: 12, color: 'var(--ant-colorTextTertiary)' }}>
               {t("system.menu.fieldRootHint")}
             </div>
           </div>
@@ -2806,7 +2806,7 @@ export function Detail({
                 { label: t("system.menu.yes"), value: 1 },
               ]}
             />
-            <div style={{ marginTop: 4, fontSize: 12, color: '#8c8c8c' }}>
+            <div style={{ marginTop: 4, fontSize: 12, color: 'var(--ant-colorTextTertiary)' }}>
               {t("system.menu.mShowHint")}
             </div>
           </div>
@@ -2829,7 +2829,7 @@ export function Detail({
                 { label: t("system.menu.yes"), value: true },
               ]}
             />
-            <div style={{ marginTop: 4, fontSize: 12, color: '#8c8c8c' }}>
+            <div style={{ marginTop: 4, fontSize: 12, color: 'var(--ant-colorTextTertiary)' }}>
               {t("system.menu.gReadonlyHint")}
             </div>
           </div>
@@ -2853,7 +2853,7 @@ export function Detail({
                         style: { width: "100%" },
                       }}
                     />
-                    <div style={{ marginTop: 4, fontSize: 12, color: "#8c8c8c" }}>
+                    <div style={{ marginTop: 4, fontSize: 12, color: "var(--ant-colorTextTertiary)" }}>
                       {t("system.menu.vLinkFallbackHint")}
                     </div>
                   </div>
@@ -2874,7 +2874,7 @@ export function Detail({
                       style: { width: "100%" },
                     }}
                   />
-                  <div style={{ marginTop: 4, fontSize: 12, color: "#8c8c8c" }}>
+                  <div style={{ marginTop: 4, fontSize: 12, color: "var(--ant-colorTextTertiary)" }}>
                     {t("system.menu.vLinkComponentHint")}
                   </div>
                 </div>
@@ -2908,7 +2908,7 @@ export function Detail({
                         }}
                         options={autoCodeOptions}
                       />
-                      <div style={{ marginTop: 4, fontSize: 12, color: '#8c8c8c' }}>
+                      <div style={{ marginTop: 4, fontSize: 12, color: 'var(--ant-colorTextTertiary)' }}>
                         {t("system.menu.autoCodeTemplateHint")}
                       </div>
                     </Spin>
@@ -2931,7 +2931,7 @@ export function Detail({
                         style: { width: '100%' },
                       }}
                     />
-                    <div style={{ marginTop: 4, fontSize: 12, color: '#8c8c8c' }}>
+                    <div style={{ marginTop: 4, fontSize: 12, color: 'var(--ant-colorTextTertiary)' }}>
                       {t("system.menu.dynamicLinkUrlHint")}
                     </div>
                   </div>

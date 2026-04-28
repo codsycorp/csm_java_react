@@ -1119,7 +1119,7 @@ function MultilingualTabs({ fields, form }: { fields: TableField[]; form: any })
                 return <Form.Item key={field.f_name} name={field.f_name} label={fieldLabel}><Input id={field.f_name} /> </Form.Item>;
               });
               if (tabFields.filter(Boolean).length === 0) {
-				return <div style={{ color: '#aaa', fontStyle: 'italic', padding: '16px 0' }}>{getLangText(i18n.language, {
+				return <div style={{ color: 'var(--ant-colorTextDisabled)', fontStyle: 'italic', padding: '16px 0' }}>{getLangText(i18n.language, {
 					vi: 'Không có dữ liệu cho ngôn ngữ này',
 					en: 'No data available for this language',
 					zh: '该语言暂无数据',
@@ -1274,7 +1274,7 @@ function getFieldComponent(
       }, [form, key]);
 
       return (
-        <div style={{ border: '1px solid #d9d9d9', borderRadius: 4, overflow: 'hidden', width: '100%' }}>
+        <div style={{ border: '1px solid var(--ant-colorBorder)', borderRadius: 4, overflow: 'hidden', width: '100%' }}>
           <CodeMirror
             value={value}
             height="400px"
@@ -1450,8 +1450,8 @@ function getFieldComponent(
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
           {videoUrl && (
             <div style={{ position: 'relative' }}>
-              <video src={resolveMediaUrl(videoUrl)} style={{ maxWidth: 120, maxHeight: 100, borderRadius: 8, border: '1px solid #eee' }} />
-              <div style={{ marginTop: 4, fontSize: 12, color: '#999' }}>Preview</div>
+              <video src={resolveMediaUrl(videoUrl)} style={{ maxWidth: 120, maxHeight: 100, borderRadius: 8, border: '1px solid var(--ant-colorBorderSecondary)' }} />
+              <div style={{ marginTop: 4, fontSize: 12, color: 'var(--ant-colorTextTertiary)' }}>Preview</div>
             </div>
           )}
           <Suspense fallback={<span>Đang tải...</span>}>
@@ -1487,7 +1487,7 @@ function getFieldComponent(
       
       return (
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          {imageUrl && <img src={resolveMediaUrl(imageUrl)} alt="Ảnh" style={{ maxWidth: 100, maxHeight: 100, borderRadius: 8, border: '1px solid #eee' }} />}
+          {imageUrl && <img src={resolveMediaUrl(imageUrl)} alt="Ảnh" style={{ maxWidth: 100, maxHeight: 100, borderRadius: 8, border: '1px solid var(--ant-colorBorderSecondary)' }} />}
           <Suspense fallback={<span>Đang tải...</span>}>
             <MediaUploader value={imageUrl} onChange={handleImageChange} appId={appId || "csm"} />
           </Suspense>
@@ -2695,7 +2695,7 @@ export function CsmEditModal({
                         </Form.Item>
                       );
                     })}
-                    {(multiBases.length === 0 && specialBlocks.length === 0) && <div style={{ color: '#aaa', fontStyle: 'italic', padding: '16px 0' }}>Không có dữ liệu cho ngôn ngữ này</div>}
+                    {(multiBases.length === 0 && specialBlocks.length === 0) && <div style={{ color: 'var(--ant-colorTextDisabled)', fontStyle: 'italic', padding: '16px 0' }}>Không có dữ liệu cho ngôn ngữ này</div>}
                     </div>
                   </Tabs.TabPane>
                 ))}

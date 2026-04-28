@@ -721,11 +721,17 @@ export async function fetchNavigationMenus(appIdParam?: string) {
 		});
 	}
 	
-	// 检查菜单中是否已存在Home，避免重复
-	const hasHome = menuData.some(item => item.path === "/" || item.id === "home");
-	
-	if (!hasHome) {
-		menuData.unshift(homeMenu);
+	// Only show home menu if broadcast home auto_code exists for this app
+	const broadcastHomeCode = await loadBroadcastHomeAutoCode(targetAppId);
+	if (broadcastHomeCode) {
+		// Add home if not already present
+		const hasHome = menuData.some(item => item.path === "/" || item.path === "homepage" || item.id === "home");
+		if (!hasHome) {
+			menuData.unshift(homeMenu);
+		}
+	} else {
+		// Remove any home menu item (even if stored in DB)
+		menuData = menuData.filter(item => item.path !== "/" && item.path !== "homepage" && item.id !== "home");
 	}
 	
 	// Convert nodes to children for consistent tree structure

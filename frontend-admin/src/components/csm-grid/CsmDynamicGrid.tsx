@@ -2401,7 +2401,7 @@ export function CsmDynamicGrid({
 						href: String(value),
 						target: "_blank",
 						rel: "noopener noreferrer",
-						style: { color: '#1890ff' }
+						style: { color: 'var(--ant-colorPrimary)' }
 					}, "📎 " + fileName);
 				};
 			} else if (isPassword) {
@@ -2435,7 +2435,7 @@ export function CsmDynamicGrid({
 						style: { position: "relative", display: "inline-block" }
 					},
 						React.createElement("div", {
-							style: { position: "relative", width: 64, height: 64, borderRadius: 4, border: "1px solid #eee", overflow: "hidden", background: "#000" }
+							style: { position: "relative", width: 64, height: 64, borderRadius: 4, border: "1px solid var(--ant-colorBorderSecondary)", overflow: "hidden", background: "#000" }
 						},
 							isFirstVideo
 								? React.createElement("video", {
@@ -2496,7 +2496,7 @@ export function CsmDynamicGrid({
 							React.createElement("img", {
 								src: resolvedUrl,
 								alt: f.f_header,
-								style: { maxWidth: 64, maxHeight: 64, objectFit: "cover", borderRadius: 4, border: "1px solid #eee" }
+								style: { maxWidth: 64, maxHeight: 64, objectFit: "cover", borderRadius: 4, border: "1px solid var(--ant-colorBorderSecondary)" }
 							}),
 							extra && extra > 0 ? React.createElement("span", {
 								style: {
@@ -2550,7 +2550,7 @@ export function CsmDynamicGrid({
 					}
 
 					if (urls.length === 0) {
-						return React.createElement("span", { style: { color: '#999', fontSize: 12 } }, "Chưa có ảnh");
+						return React.createElement("span", { style: { color: 'var(--ant-colorTextTertiary)', fontSize: 12 } }, "Chưa có ảnh");
 					}
 
 					// Show first image with count if album
@@ -2562,14 +2562,14 @@ export function CsmDynamicGrid({
 							React.createElement("img", {
 								src: resolvedUrl,
 								alt: f.f_header,
-								style: { maxWidth: 48, maxHeight: 48, objectFit: "cover", borderRadius: 4, border: "1px solid #ddd" }
+								style: { maxWidth: 48, maxHeight: 48, objectFit: "cover", borderRadius: 4, border: "1px solid var(--ant-colorBorder)" }
 							}),
 							extra && extra > 0 ? React.createElement("span", {
 								style: {
 									position: "absolute",
 									bottom: -4,
 									right: -4,
-									background: "#1890ff",
+									background: "var(--ant-colorPrimary)",
 									color: "white",
 									padding: "1px 4px",
 									borderRadius: 3,
@@ -2614,7 +2614,7 @@ export function CsmDynamicGrid({
 							style: { position: "relative", display: "inline-block" }
 						},
 							React.createElement("div", {
-								style: { position: "relative", width: 64, height: 64, borderRadius: 4, border: "1px solid #eee", overflow: "hidden", backgroundColor: "#000" }
+								style: { position: "relative", width: 64, height: 64, borderRadius: 4, border: "1px solid var(--ant-colorBorderSecondary)", overflow: "hidden", backgroundColor: "#000" }
 							},
 								React.createElement("video", {
 									src: resolvedUrl,
@@ -2676,7 +2676,7 @@ export function CsmDynamicGrid({
 							return (
 						React.createElement("div", { style: { position: "relative", display: "inline-block", width: 48, height: 48 } },
 							React.createElement("div", {
-								style: { position: "relative", width: 48, height: 48, borderRadius: 4, border: "1px solid #ddd", overflow: "hidden", backgroundColor: "#000" }
+								style: { position: "relative", width: 48, height: 48, borderRadius: 4, border: "1px solid var(--ant-colorBorder)", overflow: "hidden", backgroundColor: "#000" }
 							},
 								React.createElement("video", {
 									src: resolvedUrl,
@@ -2691,7 +2691,7 @@ export function CsmDynamicGrid({
 										position: "absolute",
 										bottom: -4,
 										right: -4,
-										background: "#1890ff",
+										background: "var(--ant-colorPrimary)",
 										color: "white",
 										padding: "1px 4px",
 										borderRadius: 3,
@@ -2717,7 +2717,7 @@ export function CsmDynamicGrid({
 					if (!html) return "";
 					const text = String(html).replace(/<[^>]+>/g, "").trim();
 					const preview = text.length > 120 ? text.slice(0, 120) + "…" : text;
-					return React.createElement("span", { title: text, style: { fontSize: 12, color: "#666" } }, preview);
+					return React.createElement("span", { title: text, style: { fontSize: 12, color: "var(--ant-colorTextSecondary)" } }, preview);
 				};
 			}
 
@@ -2865,17 +2865,17 @@ export function CsmDynamicGrid({
 					const children: React.ReactNode[] = [];
 					// Show Edit button for both inline and modal editing
 					if (canEdit) {
-						children.push(React.createElement(Button, { type: "link", style: { padding: 0, marginRight: 8 }, onClick: () => {
+						children.push(React.createElement(Button, { className: "csm-grid-action-link csm-grid-action-edit", type: "link", style: { padding: 0, marginRight: 8 }, onClick: () => {
 							handleEdit(record);
 						}, key: "edit" }, t("common.edit")));
 					}
 					if (canAdd) {
-						children.push(React.createElement(Button, { type: "link", style: { padding: 0, marginRight: 8, color: "#52c41a" }, onClick: () => {
+						children.push(React.createElement(Button, { className: "csm-grid-action-link csm-grid-action-clone", type: "link", style: { padding: 0, marginRight: 8 }, onClick: () => {
 							handleClone(record);
 						}, key: "clone" }, t("common.clone")));
 					}
 					if (canDelete) {
-						children.push(React.createElement(Button, { type: "link", danger: true, style: { padding: 0 }, onClick: () => {
+						children.push(React.createElement(Button, { className: "csm-grid-action-link csm-grid-action-delete", type: "link", danger: true, style: { padding: 0 }, onClick: () => {
 							Modal.confirm({
 								title: t("common.confirmDeleteTitle"),
 								content: t("common.deleteRecordConfirm"),
@@ -4199,6 +4199,7 @@ export function CsmDynamicGrid({
 	}
 
 	const tableProps: any = {
+		className: "csm-dynamic-grid-table",
 		rowKey: (record: Row) => {
 			return getRowKey(record);
 		},
@@ -4378,6 +4379,7 @@ export function CsmDynamicGrid({
 				onSelectRow?.(r);
 			},
 		},
+		rowClassName: (_record: Row, index: number) => index % 2 === 0 ? "csm-grid-row-even" : "csm-grid-row-odd",
 		onRow: (record: Row) => ({
 			onClick: () => {
 				// Always select row on click for master-detail and inline edit
@@ -4438,8 +4440,9 @@ export function CsmDynamicGrid({
 				items.push(
 					React.createElement(Input, {
 						key: "search",
+						className: "csm-grid-toolbar-search",
 						placeholder: t("common.searchInFields", { count: derivedSearchFields.length }),
-						prefix: React.createElement(SearchOutlined, { style: { color: "#bfbfbf" } }),
+						prefix: React.createElement(SearchOutlined, { style: { color: "var(--ant-color-text-quaternary)" } }),
 						value: searchTerm,
 						onChange: (e: any) => setSearchTerm(e.target.value),
 						allowClear: true,

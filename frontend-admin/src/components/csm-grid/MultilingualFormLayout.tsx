@@ -113,7 +113,7 @@ export function MultilingualTabsLayout({
         <div>
           <label style={{ display: 'block', marginBottom: 8, fontWeight: 500, fontSize: 15 }}>Nội dung HTML</label>
           <Form.Item name="content_vi" noStyle>
-            <div style={{ border: '1px solid #d9d9d9', borderRadius: 4, padding: 8, background: '#fafafa' }}>
+            <div style={{ border: '1px solid var(--ant-colorBorder)', borderRadius: 4, padding: 8, background: 'var(--ant-colorFillAlter)' }}>
               <HtmlEditor
                 rows={20}
                 placeholder="Nhập nội dung chi tiết bằng tiếng Việt..."
@@ -201,7 +201,7 @@ export function MultilingualTabsLayout({
         <div>
           <label style={{ display: 'block', marginBottom: 8, fontWeight: 500, fontSize: 15 }}>HTML Content</label>
           <Form.Item name="content_en" noStyle>
-            <div style={{ border: '1px solid #d9d9d9', borderRadius: 4, padding: 8, background: '#fafafa' }}>
+            <div style={{ border: '1px solid var(--ant-colorBorder)', borderRadius: 4, padding: 8, background: 'var(--ant-colorFillAlter)' }}>
               <HtmlEditor
                 rows={20}
                 placeholder="Enter detailed content in English..."
@@ -289,7 +289,7 @@ export function MultilingualTabsLayout({
         <div>
           <label style={{ display: 'block', marginBottom: 8, fontWeight: 500, fontSize: 15 }}>HTML内容</label>
           <Form.Item name="content_zh" noStyle>
-            <div style={{ border: '1px solid #d9d9d9', borderRadius: 4, padding: 8, background: '#fafafa' }}>
+            <div style={{ border: '1px solid var(--ant-colorBorder)', borderRadius: 4, padding: 8, background: 'var(--ant-colorFillAlter)' }}>
               <HtmlEditor
                 rows={20}
                 placeholder="输入中文详细内容..."
@@ -398,7 +398,7 @@ export function MultilingualTabsLayout({
         onChange={setActiveKey}
         items={tabItems}
         size="large"
-        style={{ background: '#fff', padding: '16px', borderRadius: 8, border: '1px solid #f0f0f0' }}
+        style={{ background: 'var(--ant-colorBgContainer)', padding: '16px', borderRadius: 8, border: '1px solid var(--ant-colorBorderSecondary)' }}
       />
     </div>
   );
