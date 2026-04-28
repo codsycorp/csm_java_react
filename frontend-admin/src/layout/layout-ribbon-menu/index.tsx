@@ -8,6 +8,7 @@ import type { MenuProps } from "antd";
 
 import type { RibbonShadowLevel } from "#src/store";
 
+import { usePreferences } from "#src/hooks";
 import { usePreferencesStore } from "#src/store";
 import { cn } from "#src/utils";
 
@@ -36,14 +37,6 @@ interface StyleData {
 // auto-adapt to dark/light mode without any isDark JS detection in JSS.
 // d.isDark is kept in StyleData for future use but not used below.
 const useStyles = createUseStyles((_d: StyleData) => ({
-	"@global": {
-		".ribbon-band-scroll::-webkit-scrollbar": { height: 4 },
-		".ribbon-band-scroll::-webkit-scrollbar-thumb": {
-			borderRadius: 2,
-			background: "var(--ant-color-border)",
-		},
-	},
-
 	// ── Root wrapper ─────────────────────────────────────────────────────────
 	root: {
 		width: "100%",
@@ -51,8 +44,8 @@ const useStyles = createUseStyles((_d: StyleData) => ({
 		flexShrink: 0,
 		position: "relative",
 		zIndex: 10,
-		// Ribbon casts a shadow onto content area below — works in both modes.
-		boxShadow: "0 2px 8px rgba(0,0,0,0.18)",
+		boxShadow: "var(--ribbon-shadow)",
+		borderBottom: "1px solid var(--ribbon-root-border)",
 	},
 
 	// ── Tab row ──────────────────────────────────────────────────────────────
@@ -64,6 +57,7 @@ const useStyles = createUseStyles((_d: StyleData) => ({
 		paddingRight: 4,
 		position: "relative",
 		zIndex: 2,
+		borderBottom: "1px solid var(--ribbon-tab-row-border)",
 	},
 
 	tab: {
@@ -80,12 +74,13 @@ const useStyles = createUseStyles((_d: StyleData) => ({
 		borderRadius: "4px 4px 0 0",
 		border: "1px solid transparent",
 		borderBottom: "none",
-		transition: "color 0.15s, background 0.12s",
-		color: "var(--ant-color-text)",
+		transition: "color 0.15s, background 0.12s, box-shadow 0.14s, transform 0.12s",
+		color: "var(--ribbon-tab-text)",
 		"&:hover": {
-			color: "var(--ant-color-primary)",
-			// colorFillSecondary: ~6% black in light, ~12% white in dark — always visible
-			background: "var(--ant-color-fill-secondary)",
+			color: "var(--ribbon-tab-hover-text)",
+			background: "var(--ribbon-tab-hover-bg)",
+			boxShadow: "inset 0 1px 0 var(--ribbon-tab-hover-inset), 0 1px 0 rgba(255,255,255,0.08)",
+			transform: "translateY(-1px)",
 		},
 	},
 
@@ -101,11 +96,16 @@ const useStyles = createUseStyles((_d: StyleData) => ({
 
 	// Active tab merges visually with the band below (folder-tab effect)
 	tabActive: {
-		color: "var(--ant-color-primary) !important",
+		color: "var(--ribbon-tab-active-text) !important",
 		fontWeight: 600,
-		border: "1px solid var(--ant-color-border-secondary) !important",
+		border: "1px solid var(--ribbon-tab-active-border) !important",
 		borderBottom: "none !important",
-		boxShadow: "0 -1px 3px rgba(0,0,0,0.08)",
+		boxShadow: [
+			"inset 0 1px 0 var(--ribbon-tab-active-inset)",
+			"0 -1px 3px rgba(0,0,0,0.14)",
+			"0 1px 0 rgba(255,255,255,0.08)",
+		].join(", "),
+		transform: "translateY(-1px)",
 	},
 
 	tabRowSpacer: { flex: 1 },
@@ -136,10 +136,15 @@ const useStyles = createUseStyles((_d: StyleData) => ({
 		maxHeight: BAND_HEIGHT,
 		padding: "4px 8px 12px",
 		// CSS vars auto-adapt: border is light grey in light mode, white-tinted in dark
-		borderTop: "1px solid var(--ant-color-border-secondary)",
-		borderBottom: "2px solid var(--ant-color-border)",
-		boxShadow: "inset 0 1px 0 rgba(255,255,255,0.08)",
+		borderTop: "1px solid var(--ribbon-band-border-top)",
+		borderBottom: "1px solid var(--ribbon-band-border-bottom)",
+		boxShadow: "inset 0 1px 0 var(--ribbon-band-inset), inset 0 -1px 0 rgba(0,0,0,0.08)",
 		transition: "min-height 0.18s ease, max-height 0.18s ease",
+		"&::-webkit-scrollbar": { height: 4 },
+		"&::-webkit-scrollbar-thumb": {
+			borderRadius: 2,
+			background: "var(--ant-color-border)",
+		},
 	},
 
 	bandCollapsed: {
@@ -170,12 +175,13 @@ const useStyles = createUseStyles((_d: StyleData) => ({
 		marginBottom: 4,
 		borderRadius: 4,
 		// colorBorderSecondary: visible in both light (~rgba(0,0,0,0.06)) and dark (~rgba(255,255,255,0.12))
-		border: "1px solid var(--ant-color-border-secondary)",
+		border: "1px solid var(--ribbon-group-border)",
 		// Outer shadow for depth + inset top highlight for 3D lift appearance
 		boxShadow: [
-			"inset 0 1px 0 rgba(255,255,255,0.12)",
+			"inset 0 1px 0 var(--ribbon-group-inset)",
+			"inset 0 -1px 0 var(--ribbon-group-inset-bottom)",
 			"0 1px 3px rgba(0,0,0,0.14)",
-			"0 2px 6px rgba(0,0,0,0.08)",
+			"0 4px 10px rgba(0,0,0,0.12)",
 		].join(", "),
 	},
 
@@ -206,8 +212,8 @@ const useStyles = createUseStyles((_d: StyleData) => ({
 		textOverflow: "ellipsis",
 		fontWeight: 500,
 		// colorBorder adapts: dark grey in light, light grey in dark
-		borderTop: "1px solid var(--ant-color-border)",
-		color: "var(--ant-color-text-tertiary)",
+		borderTop: "1px solid var(--ribbon-group-label-border)",
+		color: "var(--ribbon-group-label-text)",
 	},
 
 	// ── Large button ─────────────────────────────────────────────────────────
@@ -233,14 +239,14 @@ const useStyles = createUseStyles((_d: StyleData) => ({
 			// colorFill: ~15% black in light, ~18% white in dark — clearly visible in both
 			background: "var(--ant-color-fill)",
 			borderColor: "var(--ant-color-border)",
-			boxShadow: "0 1px 4px rgba(0,0,0,0.15)",
+			boxShadow: "inset 0 1px 0 rgba(255,255,255,0.26), 0 2px 6px rgba(0,0,0,0.22)",
 			transform: "translateY(-1px)",
 		},
 		"&:active": {
 			transform: "translateY(0)",
 			background: "var(--ant-color-fill-secondary)",
 			borderColor: "var(--ant-color-border)",
-			boxShadow: "inset 0 1px 4px rgba(0,0,0,0.2)",
+			boxShadow: "inset 0 2px 6px rgba(0,0,0,0.28), inset 0 -1px 0 rgba(255,255,255,0.08)",
 		},
 	},
 
@@ -318,17 +324,19 @@ const useStyles = createUseStyles((_d: StyleData) => ({
 		background: "transparent",
 		boxShadow: "none",
 		color: "var(--ant-color-text)",
-		transition: "background 0.1s, border-color 0.1s, box-shadow 0.1s",
+		transition: "background 0.1s, border-color 0.1s, box-shadow 0.1s, transform 0.1s",
 		overflow: "hidden",
 		"&:hover": {
 			background: "var(--ant-color-fill)",
 			borderColor: "var(--ant-color-border)",
-			boxShadow: "0 1px 3px rgba(0,0,0,0.12)",
+			boxShadow: "inset 0 1px 0 rgba(255,255,255,0.2), 0 1px 4px rgba(0,0,0,0.2)",
+			transform: "translateY(-1px)",
 		},
 		"&:active": {
+			transform: "translateY(0)",
 			background: "var(--ant-color-fill-secondary)",
 			borderColor: "var(--ant-color-border)",
-			boxShadow: "inset 0 1px 3px rgba(0,0,0,0.18)",
+			boxShadow: "inset 0 1px 4px rgba(0,0,0,0.24)",
 		},
 	},
 
@@ -407,6 +415,15 @@ function isPathActive(path: string, key: string) {
 	return path === key || path.startsWith(key + "/");
 }
 
+function cleanMenuLabel(raw: unknown): string {
+	const value = String(raw ?? "").trim();
+	if (!value) return "";
+	// Handle prefixes like:
+	// "A. Danh muc", "A.01. Danh muc", "A.01.Danh muc", "01.02.03. Danh muc"
+	const stripped = value.replace(/^(?:(?:[A-Za-z]|\d+)\.)+\s*/u, "").trim();
+	return stripped || value;
+}
+
 // ─── Group builder ────────────────────────────────────────────────────────────
 
 interface GroupDef {
@@ -421,7 +438,7 @@ function buildGroups(children: MenuItemType[]): GroupDef[] {
 	for (const child of children) {
 		const kids = (child as any).children as MenuItemType[] | undefined;
 		if (Array.isArray(kids) && kids.length > 0) {
-			groups.push({ key: String(child.key), label: String(child.label ?? ""), items: kids });
+			groups.push({ key: String(child.key), label: cleanMenuLabel(child.label), items: kids });
 		} else {
 			loose.push(child);
 		}
@@ -441,14 +458,14 @@ interface LargeButtonProps {
 
 function LargeButton({ item, active, onSelect, classes }: LargeButtonProps) {
 	const key    = String(item.key);
-	const label  = String(item.label ?? "");
+	const label  = cleanMenuLabel(item.label);
 	const kids   = (item as any).children as MenuItemType[] | undefined;
 	const hasKids = Array.isArray(kids) && kids.length > 0;
 
 	const dropItems: MenuProps["items"] = hasKids
 		? kids!.map(c => ({
 			key: String(c.key),
-			label: String(c.label ?? ""),
+			label: cleanMenuLabel(c.label),
 			icon: resolveIcon(c.icon, (c as any).m_icons, <AntIcons.AppstoreOutlined style={{ fontSize: 13 }} />, 13),
 		}))
 		: [];
@@ -492,7 +509,7 @@ interface SmallButtonProps {
 
 function SmallButton({ item, active, onSelect, classes }: SmallButtonProps) {
 	const key   = String(item.key);
-	const label = String(item.label ?? "");
+	const label = cleanMenuLabel(item.label);
 	return (
 		<div
 			className={cn(classes.btnSmall, active && classes.btnSmallActive)}
@@ -560,7 +577,7 @@ function RibbonGroup({ group, activePath, onSelect, classes, groupBg }: RibbonGr
 					))}
 			</div>
 			{group.label
-				? <div className={classes.groupLabel} title={group.label}>{group.label}</div>
+				? <div className={classes.groupLabel} title={cleanMenuLabel(group.label)}>{cleanMenuLabel(group.label)}</div>
 				: <div style={{ height: 14 }} />}
 		</div>
 	);
@@ -575,8 +592,8 @@ export interface LayoutRibbonMenuProps {
 
 export default function LayoutRibbonMenu({ menus, handleMenuSelect }: LayoutRibbonMenuProps) {
 	const { token } = theme.useToken();
+	const { isDark } = usePreferences();
 
-	const isDark = token.colorBgBase === "#000000";
 	const ribbonShadowLevel = usePreferencesStore(state => state.ribbonShadowLevel);
 
 	const classes = useStyles({ theme: { isDark, shadowLevel: ribbonShadowLevel } } as any);
@@ -647,29 +664,108 @@ export default function LayoutRibbonMenu({ menus, handleMenuSelect }: LayoutRibb
 
 	const activePath = location.pathname;
 
-	const bandBg  = token.colorBgLayout;
-	const groupBg = isDark ? token.colorBgElevated : token.colorBgContainer;
+	const shadowByLevel: Record<RibbonShadowLevel, string> = {
+		soft: "0 2px 6px rgba(0,0,0,0.12)",
+		medium: "0 3px 10px rgba(0,0,0,0.18)",
+		strong: "0 5px 14px rgba(0,0,0,0.24)",
+	};
+
+	const ribbonPalette = useMemo(() => {
+		if (isDark) {
+			return {
+				rootBg: "linear-gradient(180deg, #0f2233 0%, #0b1624 100%)",
+				tabRowBg: "linear-gradient(180deg, #1b3652 0%, #162c43 100%)",
+				tabText: "#d5e5ff",
+				tabHoverText: "#ffffff",
+				tabHoverBg: "rgba(141, 188, 255, 0.16)",
+				tabActiveText: "#eaf3ff",
+				tabActiveBg: "#1a2a3e",
+				tabActiveBorder: "#2f4d70",
+				tabRowBorder: "rgba(162, 195, 233, 0.3)",
+				bandBg: "linear-gradient(180deg, #1b2c40 0%, #162537 100%)",
+				bandBorderTop: "rgba(173, 203, 239, 0.22)",
+				bandBorderBottom: "rgba(130, 167, 211, 0.25)",
+				bandInset: "rgba(255,255,255,0.08)",
+				groupBg: "#1c2f45",
+				groupBorder: "rgba(154, 191, 236, 0.28)",
+				groupInset: "rgba(255,255,255,0.12)",
+				groupInsetBottom: "rgba(0,0,0,0.26)",
+				groupLabelBorder: "rgba(159, 193, 232, 0.3)",
+				groupLabelText: "#adc4df",
+				tabHoverInset: "rgba(255,255,255,0.14)",
+				tabActiveInset: "rgba(255,255,255,0.18)",
+				rootBorder: "rgba(107, 149, 200, 0.35)",
+			};
+		}
+
+		return {
+			rootBg: "linear-gradient(180deg, #e9f2ff 0%, #dbe9fb 100%)",
+			tabRowBg: "linear-gradient(180deg, #d5e8ff 0%, #bed9fb 100%)",
+			tabText: "#1f3e65",
+			tabHoverText: "#0f2f57",
+			tabHoverBg: "rgba(255,255,255,0.55)",
+			tabActiveText: "#0f2f57",
+			tabActiveBg: "#ffffff",
+			tabActiveBorder: "#9fc0e9",
+			tabRowBorder: "#9fc0e9",
+			bandBg: "linear-gradient(180deg, #ffffff 0%, #f6f9ff 100%)",
+			bandBorderTop: "#b6cdef",
+			bandBorderBottom: "#c3d7f3",
+			bandInset: "rgba(255,255,255,0.86)",
+			groupBg: "#ffffff",
+			groupBorder: "#d2dff2",
+			groupInset: "rgba(255,255,255,0.86)",
+			groupInsetBottom: "rgba(196, 214, 238, 0.66)",
+			groupLabelBorder: "#deebfb",
+			groupLabelText: "#4f6480",
+			tabHoverInset: "rgba(255,255,255,0.85)",
+			tabActiveInset: "rgba(255,255,255,0.95)",
+			rootBorder: "#abc6ea",
+		};
+	}, [isDark]);
+
+	const rootVars = {
+		"--ribbon-shadow": shadowByLevel[ribbonShadowLevel],
+		"--ribbon-tab-text": ribbonPalette.tabText,
+		"--ribbon-tab-hover-text": ribbonPalette.tabHoverText,
+		"--ribbon-tab-hover-bg": ribbonPalette.tabHoverBg,
+		"--ribbon-tab-active-text": ribbonPalette.tabActiveText,
+		"--ribbon-tab-active-border": ribbonPalette.tabActiveBorder,
+		"--ribbon-tab-row-border": ribbonPalette.tabRowBorder,
+		"--ribbon-band-border-top": ribbonPalette.bandBorderTop,
+		"--ribbon-band-border-bottom": ribbonPalette.bandBorderBottom,
+		"--ribbon-band-inset": ribbonPalette.bandInset,
+		"--ribbon-group-border": ribbonPalette.groupBorder,
+		"--ribbon-group-inset": ribbonPalette.groupInset,
+		"--ribbon-group-inset-bottom": ribbonPalette.groupInsetBottom,
+		"--ribbon-group-label-border": ribbonPalette.groupLabelBorder,
+		"--ribbon-group-label-text": ribbonPalette.groupLabelText,
+		"--ribbon-tab-hover-inset": ribbonPalette.tabHoverInset,
+		"--ribbon-tab-active-inset": ribbonPalette.tabActiveInset,
+		"--ribbon-root-border": ribbonPalette.rootBorder,
+	} as React.CSSProperties;
 
 	return (
-		<div className={classes.root} style={{ background: token.colorBgContainer }}>
+		<div className={classes.root} style={{ ...rootVars, background: ribbonPalette.rootBg }}>
 
 			{/* ── Tab row ─────────────────────────────────────────────────── */}
-			<div className={classes.tabRow} style={{ background: token.colorBgContainer }}>
+			<div className={classes.tabRow} style={{ background: ribbonPalette.tabRowBg }}>
 				{menus.map(tab => {
 					const key      = String(tab.key ?? "");
+					const tabLabel = cleanMenuLabel(tab.label);
 					const isActive = key === activeTabKey;
 					return (
 						<div
 							key={key}
 							className={cn(classes.tab, isActive && classes.tabActive)}
-							style={isActive ? { background: bandBg } : undefined}
+							style={isActive ? { background: ribbonPalette.tabActiveBg } : undefined}
 							onClick={() => handleTabClick(key)}
-							title={String(tab.label ?? "")}
+							title={tabLabel}
 						>
 							<span className={classes.tabIcon}>
 								{resolveIcon((tab as any).icon, (tab as any).m_icons, undefined, 13)}
 							</span>
-							<span className={classes.tabLabel}>{String(tab.label ?? "")}</span>
+							<span className={classes.tabLabel}>{tabLabel}</span>
 						</div>
 					);
 				})}
@@ -686,8 +782,8 @@ export default function LayoutRibbonMenu({ menus, handleMenuSelect }: LayoutRibb
 
 			{/* ── Ribbon band ─────────────────────────────────────────────── */}
 			<div
-				className={cn(classes.band, "ribbon-band-scroll", collapsed && classes.bandCollapsed)}
-				style={{ background: bandBg }}
+				className={cn(classes.band, collapsed && classes.bandCollapsed)}
+				style={{ background: ribbonPalette.bandBg }}
 			>
 				{!collapsed && groups.map(group => (
 					<RibbonGroup
@@ -696,12 +792,12 @@ export default function LayoutRibbonMenu({ menus, handleMenuSelect }: LayoutRibb
 						activePath={activePath}
 						onSelect={handleItemSelect}
 						classes={classes}
-						groupBg={groupBg}
+						groupBg={ribbonPalette.groupBg}
 					/>
 				))}
 
 				{!collapsed && groups.length === 0 && activeTab && (
-					<div className={classes.group} style={{ background: groupBg }}>
+					<div className={classes.group} style={{ background: ribbonPalette.groupBg }}>
 						<div className={classes.groupItems}>
 							<LargeButton
 								item={activeTab}

@@ -22,6 +22,22 @@ import { useStyles } from "./style";
 
 const HOME_TAB_KEY = "homepage";
 
+function stripMenuPrefix(label: string): string {
+	if (!label || typeof label !== "string") return label;
+	return label.replace(/^.*?\.\s+/, "").trim();
+}
+
+function normalizeI18nLabel(label: unknown, t: (key: string) => string): string {
+	if (label == null) return "";
+	const str = String(label).trim();
+	if (!str) return "";
+	if (str.includes(".")) {
+		const translated = t(str);
+		if (translated && translated !== str) return stripMenuPrefix(translated);
+	}
+	return stripMenuPrefix(str);
+}
+
 // Helper: ưu tiên chọn tab Home nếu có
 function getDefaultTabKey(openTabs: Map<string, any>) {
 	const homePath = HOME_TAB_KEY;
@@ -55,6 +71,36 @@ export default function LayoutTabbar() {
 	const getTabsStore = useTabsStore.getState;
 	
 	const [items, onClickMenu] = useDropdownMenu();
+
+	const flatApiMenus = useMemo(() => {
+		const result: any[] = [];
+		const walk = (menus: any[]) => {
+			if (!Array.isArray(menus)) return;
+			for (const menu of menus) {
+				if (!menu || typeof menu !== "object") continue;
+				result.push(menu);
+				if (Array.isArray(menu.children) && menu.children.length > 0) walk(menu.children);
+				if (Array.isArray(menu.nodes) && menu.nodes.length > 0) walk(menu.nodes);
+			}
+		};
+		walk(apiWholeMenus || []);
+		return result;
+	}, [apiWholeMenus]);
+
+	const menuLookup = useMemo(() => {
+		const byId = new Map<string, any>();
+		const byPath = new Map<string, any>();
+		const byKey = new Map<string, any>();
+		for (const menu of flatApiMenus) {
+			const id = String(menu?.id || "").trim();
+			const key = String(menu?.key || "").trim();
+			const path = String(menu?.path || menu?.component || "").trim();
+			if (id && !byId.has(id)) byId.set(id, menu);
+			if (key && !byKey.has(key)) byKey.set(key, menu);
+			if (path && !byPath.has(path)) byPath.set(path, menu);
+		}
+		return { byId, byPath, byKey };
+	}, [flatApiMenus]);
 
 	// Migrate legacy Home keys ("/", "/home") in runtime state to canonical homePath
 	useEffect(() => {
@@ -100,20 +146,6 @@ export default function LayoutTabbar() {
 			}
 		}
 	}, [openTabs, addTab, setActiveKey, t, homePath, activeKey]);
-
-	const tabItems: TabItemProps[] = Array.from(openTabs.values()).map(item => {
-		const isHome = item.key === "homepage";
-		return {
-			...item,
-			closable: isHome ? false : (item.closable ?? true),
-			draggable: isHome ? false : (item.draggable ?? true),
-			label: (
-				<div className="relative flex items-center gap-1">
-					{isHome ? t("common.menu.home") : (isString(item.label) ? item.label : item.label)}
-				</div>
-			),
-		};
-	});
 
 	/**
 	 * 自动重置刷新状态
@@ -172,24 +204,6 @@ export default function LayoutTabbar() {
 	 }, [homePath]);
 
 	/**
-	 * 自定义渲染标签栏，添加右键菜单功能
-	 * @param {object} tabBarProps - 标签栏属性
-	 * @param {React.ComponentType} DefaultTabBar - 默认标签栏组件
-	 * @returns {JSX.Element} 渲染的标签栏
-	 */
-	const renderTabBar = useCallback<Required<TabsProps>["renderTabBar"]>((tabBarProps, DefaultTabBar) => {
-		return (
-			<DraggableTabBar
-				DefaultTabBar={DefaultTabBar}
-				tabBarProps={tabBarProps}
-				items={items}
-				tabItems={tabItems}
-				onClickMenu={onClickMenu}
-			/>
-		);
-	}, [tabItems, items, onClickMenu]);
-
-	/**
 	 * 生成标签栏额外内容
 	 */
 	const tabBarExtraContent = useMemo(() => ({
@@ -224,12 +238,20 @@ export default function LayoutTabbar() {
 	 * Helper function to derive tab label from various sources
 	 * Priority: navigation state > menu tree (for dynamic grids) > route definition
 	 */
-	const deriveTabLabel = useCallback((path: string, locationState: any): string => {
+	const deriveTabLabel = useCallback((path: string, locationState: any, tab?: any): string => {
 		const SYSTEM_TAB_LABEL_MAP: Record<string, string> = {
+			"/system": "common.menu.system",
+			"/system/menu": "common.menu.menu",
+			"/system/developer": "common.menu.developer",
 			"/system/dept": "common.menu.permissionGroup",
 			"/system/departments": "common.menu.dept",
 			"/system/branches": "common.menu.branch",
 			"/system/user": "common.menu.user",
+			"/system/role": "common.menu.permissionGroup",
+			"/system/roles": "common.menu.permissionGroup",
+			"/system/routers": "common.menu.routers",
+			"/system/apps": "common.menu.apps",
+			"/system/react-native": "common.menu.reactNative",
 		};
 
 		const canonicalSystemLabelKey = SYSTEM_TAB_LABEL_MAP[path];
@@ -239,35 +261,54 @@ export default function LayoutTabbar() {
 
 		// 1. Check navigation state first (passed from menu click)
 		if (locationState?.menuLabel) {
-			return locationState.menuLabel;
+			const navLabel = normalizeI18nLabel(locationState.menuLabel, t);
+			if (navLabel) return navLabel;
 		}
+
+		const tabCandidates = [
+			tab?.menuData,
+			tab?.m_configs,
+		].filter(Boolean);
+		for (const menuLike of tabCandidates) {
+			const ownLabel = normalizeI18nLabel(menuLike?.label || menuLike?.title || menuLike?.name, t);
+			if (ownLabel) return ownLabel;
+		}
+
+		const findMenuByRuntimePath = (runtimePath: string) => {
+			const byPath = menuLookup.byPath.get(runtimePath);
+			if (byPath) return byPath;
+			const normalizedRuntimePath = removeTrailingSlash(runtimePath);
+			if (normalizedRuntimePath !== runtimePath) {
+				const byNormalizedPath = menuLookup.byPath.get(normalizedRuntimePath);
+				if (byNormalizedPath) return byNormalizedPath;
+			}
+			return null;
+		};
 
 
 		// 2. For dynamic grid/report routes, derive from menu tree
 		const gridMatch = path.match(/\/system\/grid\/(.+)$/);
 		const reportMatch = path.match(/\/system\/report\/(.+)$/);
-		const menuId = gridMatch?.[1] || reportMatch?.[1];
-		if (menuId && apiWholeMenus) {
-			const findMenuInTree = (menus: any[], targetId: string): any => {
-				const targetStr = String(targetId);
-				for (const menu of menus) {
-					const menuIdStr = menu.id != null ? String(menu.id) : undefined;
-					const menuKeyStr = menu.key != null ? String(menu.key) : undefined;
-					if (menuIdStr === targetStr || menuKeyStr === targetStr) return menu;
-					if (menu.children?.length) {
-						const found = findMenuInTree(menu.children, targetId);
-						if (found) return found;
-					}
-				}
-				return null;
-			};
-
-			const menu = findMenuInTree(apiWholeMenus, menuId);
-			if (menu) {
-				const rawLabel = menu.label || menu.title || menu.name || menuId;
-				const cleanLabel = rawLabel.replace(/^[\d\.\s]+/, "").trim();
-				return cleanLabel;
+		const menuId = String(
+			tab?.menuId
+			|| tab?.menuData?.id
+			|| tab?.m_configs?.id
+			|| gridMatch?.[1]
+			|| reportMatch?.[1]
+			|| "",
+		).trim();
+		if (menuId) {
+			const menuById = menuLookup.byId.get(menuId) || menuLookup.byKey.get(menuId);
+			if (menuById) {
+				const resolved = normalizeI18nLabel(menuById.label || menuById.title || menuById.name || menuId, t);
+				if (resolved) return resolved;
 			}
+		}
+
+		const byPathMenu = findMenuByRuntimePath(path);
+		if (byPathMenu) {
+			const resolved = normalizeI18nLabel(byPathMenu.label || byPathMenu.title || byPathMenu.name || path, t);
+			if (resolved) return resolved;
 		}
 
 		// 3. Fallback to route definition from flatRouteList
@@ -281,28 +322,70 @@ export default function LayoutTabbar() {
 			// Translate i18n key
 			if (typeof label === 'string' && label.startsWith('common.')) {
 				const translated = t(label);
-				return translated;
+				return stripMenuPrefix(translated);
 			}
 			// Convert to string if not already
 			const labelStr = String(label);
-			return labelStr;
+			const normalizedLabel = normalizeI18nLabel(labelStr, t);
+			if (normalizedLabel) return normalizedLabel;
 		}
 
-		// 4. Last resort: use path as label
-		return path;
-	}, [apiWholeMenus, flatRouteList, t]);
+		// 4. Do not fall back to path if an existing label is available.
+		const existing = normalizeI18nLabel(tab?.label, t);
+		if (existing) return existing;
+
+		return "";
+	}, [flatRouteList, menuLookup, t]);
+
+	const tabItems: TabItemProps[] = Array.from(openTabs.values()).map(item => {
+		const isHome = item.key === "homepage";
+		const derivedLabel = isHome
+			? t("common.menu.home")
+			: deriveTabLabel(item.key, item.historyState || null, item);
+		const finalLabel = derivedLabel || (isString(item.label) ? item.label : String(item.label || item.key));
+		return {
+			...item,
+			closable: isHome ? false : (item.closable ?? true),
+			draggable: isHome ? false : (item.draggable ?? true),
+			label: (
+				<div className="relative flex items-center gap-1">
+					{finalLabel}
+				</div>
+			),
+		};
+	});
+
+	/**
+	 * 自定义渲染标签栏，添加右键菜单功能
+	 * @param {object} tabBarProps - 标签栏属性
+	 * @param {React.ComponentType} DefaultTabBar - 默认标签栏组件
+	 * @returns {JSX.Element} 渲染的标签栏
+	 */
+	const renderTabBar = useCallback<Required<TabsProps>["renderTabBar"]>((tabBarProps, DefaultTabBar) => {
+		return (
+			<DraggableTabBar
+				DefaultTabBar={DefaultTabBar}
+				tabBarProps={tabBarProps}
+				items={items}
+				tabItems={tabItems}
+				onClickMenu={onClickMenu}
+			/>
+		);
+	}, [tabItems, items, onClickMenu]);
 
 	// Re-derive labels for restored tabs (e.g., from sessionStorage) to fix stale/wrong titles
 	useEffect(() => {
 		// Wait for dynamic routes if enabled, so flatRouteList is ready
 		if (isDynamicRoutingEnabled && !hasFetchedDynamicRoutes) return;
+		const hasMenuIndex = menuLookup.byId.size > 0 || menuLookup.byPath.size > 0 || menuLookup.byKey.size > 0;
+		if (!hasMenuIndex) return;
 		for (const [key, tab] of openTabs.entries()) {
-			const newLabel = deriveTabLabel(key, null);
+			const newLabel = deriveTabLabel(key, tab?.historyState || null, tab);
 			if (newLabel && newLabel !== tab.label) {
 				addTab(key, { ...tab, label: newLabel });
 			}
 		}
-	}, [openTabs, deriveTabLabel, addTab, hasFetchedDynamicRoutes]);
+	}, [openTabs, deriveTabLabel, addTab, hasFetchedDynamicRoutes, menuLookup]);
 
 	/**
 	 * 监听路由变化，添加标签页和激活标签页
