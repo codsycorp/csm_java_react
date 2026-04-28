@@ -1,0 +1,65 @@
+{
+  "mysql": {
+    "host": "127.0.0.1",
+    "port": 3306,
+    "user": "root",
+    "password": "your_password",
+    "database": "old_system_db",
+    "charset": "utf8mb4",
+    "connect_timeout_ms": 15000,
+    "timezone": "local",
+    "decimal_numbers": true,
+    "date_strings": false,
+    "support_big_numbers": true,
+    "big_number_strings": true,
+    "ssl": {
+      "rejectUnauthorized": false,
+      "ca_file": "",
+      "cert_file": "",
+      "key_file": ""
+    }
+  },
+  "api": {
+    "base_url": "http://127.0.0.1:8080/api",
+    "bulk_update_path": "/bulk-update-table-data",
+    "login_path": "/login",
+    "token": "",
+    "csm_token": "",
+    "login": {
+      "username": "",
+      "password": ""
+    }
+  },
+  "global": {
+    "app_id": "vemaybay",
+    "transport": "api",
+    "data_dir": "/path/to/csm_datas",
+    "default_command": "create",
+    "batch_size": 300,
+    "continue_on_error": false,
+    "stop_on_failed_batch": true,
+    "lowercase_keys": false,
+    "strict_pk_validation": true,
+    "resolve_storage_key_by_id": false,
+    "id_scan_max_records": 500000
+  },
+  "tables": [
+    {
+      "source_table": "dsm_hangve",
+      "target_obj_name": "dsm_hangve",
+      "pk_fields": ["id"],
+      "where": "1=1",
+      "order_by": "id",
+      "command": "create",
+      "column_map": {
+        "ID": "id",
+        "TEN_HANG": "ten_hang",
+        "KY_HIEU": "ky_hieu",
+        "GHI_CHU": "ghi_chu"
+      },
+      "static_fields": {
+        "app_id": "vemaybay"
+      }
+    }
+  ]
+}

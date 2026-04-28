@@ -10288,6 +10288,8 @@
       },
       { title: "Tổng 21 tuần", dataIndex: "lanTuan21", key: "lanTuan21", width: 92, sorter: legacyTongHopNumberSorter("lanTuan21"), defaultSortOrder: "ascend" },
       { title: "Tổng " + sinhTongNgay + " ngày", dataIndex: "lanTongNgaySinh", key: "lanTongNgaySinh", width: 70, sorter: legacyTongHopNumberSorter("lanTongNgaySinh") },
+      { title: "Tuần Gần Nhất", dataIndex: "lanTuan1C", key: "lanTuan1C", width: 70, sorter: legacyTongHopNumberSorter("lanTuan1C") },
+      { title: "Lần 2 Tuần cuối", dataIndex: "lanTuan2C", key: "lanTuan2C", width: 80, sorter: legacyTongHopNumberSorter("lanTuan2C") },
       { title: "Ngày CX", dataIndex: "ngayCXHT", key: "ngayCXHT", width: 60, sorter: legacyTongHopNumberSorter("ngayCXHT"),
         render: function (v, rec) {
           var over = rec.lauNgay > 0 && v >= rec.lauNgay;
@@ -10321,8 +10323,6 @@
       { title: "L2C", dataIndex: "lanL2C", key: "lanL2C", width: 55, sorter: legacyTongHopNumberSorter("lanL2C") },
       { title: "L3C", dataIndex: "lanL3C", key: "lanL3C", width: 55, sorter: legacyTongHopNumberSorter("lanL3C") },
       { title: "LB3C", dataIndex: "lanLB3C", key: "lanLB3C", width: 60, sorter: legacyTongHopNumberSorter("lanLB3C") },
-      { title: "Tuần Gần Nhất", dataIndex: "lanTuan1C", key: "lanTuan1C", width: 70, sorter: legacyTongHopNumberSorter("lanTuan1C") },
-      { title: "Lần 2 Tuần cuối", dataIndex: "lanTuan2C", key: "lanTuan2C", width: 80, sorter: legacyTongHopNumberSorter("lanTuan2C") },
       { title: "Tổng " + sinhThTky + " kỳ", dataIndex: "lanDai", key: "lanDai", width: 90, sorter: legacyTongHopNumberSorter("lanDai") },
       { title: "Tổng " + sinhThKtn + " tuần", dataIndex: "lanTuan", key: "lanTuan", width: 90, sorter: legacyTongHopNumberSorter("lanTuan") },
       { title: sinhTuan2Dai + " tuần 2 đài", dataIndex: "lanTuanD2D", key: "lanTuanD2D", width: 80, sorter: legacyTongHopNumberSorter("lanTuanD2D") },

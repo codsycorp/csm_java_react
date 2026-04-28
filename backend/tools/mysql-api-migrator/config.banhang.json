@@ -1,0 +1,308 @@
+{
+  "mysql": {
+    "host": "phanmemmottrieu.net",
+    "port": 3306,
+    "user": "phanmemleanh",
+    "password": "BbAa@7975",
+    "database": "anhld_congtai2",
+    "charset": "utf8mb4",
+    "connect_without_database_first": true,
+    "force_ipv4": true
+  },
+  "api": {
+    "base_url": "https://api.phanmemmottrieu.net",
+    "bulk_update_path": "/bulk-update-table-data",
+    "login_path": "/login",
+    "token": "",
+    "csm_token": "",
+    "login": {
+      "username": "",
+      "password": ""
+    }
+  },
+  "global": {
+    "app_id": "banhang",
+    "transport": "rocksdb",
+    "data_dir": "./csm_datas",
+    "default_command": "create",
+    "batch_size": 300,
+    "continue_on_error": false,
+    "stop_on_failed_batch": true,
+    "lowercase_keys": false,
+    "strict_pk_validation": true,
+    "resolve_storage_key_by_id": false,
+    "id_scan_max_records": 500000
+  },
+  "tables": [
+    {
+      "source_table": "knk_bophan",
+      "target_table": "knk_bophan",
+      "pk_fields": [
+        "id"
+      ],
+      "static_fields": {},
+      "exclude_fields": [],
+      "include_fields": []
+    },
+    {
+      "source_table": "knk_chiphi",
+      "target_table": "knk_chiphi",
+      "pk_fields": [
+        "id"
+      ],
+      "static_fields": {},
+      "exclude_fields": [],
+      "include_fields": []
+    },
+    {
+      "source_table": "knk_congnophaithu",
+      "target_table": "knk_congnophaithu",
+      "pk_fields": [
+        "id"
+      ],
+      "static_fields": {},
+      "exclude_fields": [],
+      "include_fields": []
+    },
+    {
+      "source_table": "knk_congnophaitra",
+      "target_table": "knk_congnophaitra",
+      "pk_fields": [
+        "id"
+      ],
+      "static_fields": {},
+      "exclude_fields": [],
+      "include_fields": []
+    },
+    {
+      "source_table": "knk_congtac",
+      "target_table": "knk_congtac",
+      "pk_fields": [
+        "id"
+      ],
+      "static_fields": {},
+      "exclude_fields": [],
+      "include_fields": []
+    },
+    {
+      "source_table": "knk_daotao",
+      "target_table": "knk_daotao",
+      "pk_fields": [
+        "id"
+      ],
+      "static_fields": {},
+      "exclude_fields": [],
+      "include_fields": []
+    },
+    {
+      "source_table": "knk_dinhluong",
+      "target_table": "knk_dinhluong",
+      "pk_fields": [
+        "id"
+      ],
+      "static_fields": {},
+      "exclude_fields": [],
+      "include_fields": []
+    },
+    {
+      "source_table": "knk_dinhmuctieuhao",
+      "target_table": "knk_dinhmuctieuhao",
+      "pk_fields": [
+        "id"
+      ],
+      "static_fields": {},
+      "exclude_fields": [],
+      "include_fields": []
+    },
+    {
+      "source_table": "knk_dongia",
+      "target_table": "knk_dongia",
+      "pk_fields": [
+        "id"
+      ],
+      "static_fields": {},
+      "exclude_fields": [],
+      "include_fields": []
+    },
+    {
+      "source_table": "knk_dongia_sx",
+      "target_table": "knk_dongia_sx",
+      "pk_fields": [
+        "id"
+      ],
+      "static_fields": {},
+      "exclude_fields": [],
+      "include_fields": []
+    },
+    {
+      "source_table": "knk_donvi",
+      "target_table": "knk_donvi",
+      "pk_fields": [
+        "id"
+      ],
+      "static_fields": {},
+      "exclude_fields": [],
+      "include_fields": []
+    },
+    {
+      "source_table": "knk_khachhang",
+      "target_table": "knk_khachhang",
+      "pk_fields": [
+        "id"
+      ],
+      "static_fields": {},
+      "exclude_fields": [],
+      "include_fields": []
+    },
+    {
+      "source_table": "knk_khenky",
+      "target_table": "knk_khenky",
+      "pk_fields": [
+        "id"
+      ],
+      "static_fields": {},
+      "exclude_fields": [],
+      "include_fields": []
+    },
+    {
+      "source_table": "knk_kho",
+      "target_table": "knk_kho",
+      "pk_fields": [
+        "id"
+      ],
+      "static_fields": {},
+      "exclude_fields": [],
+      "include_fields": []
+    },
+    {
+      "source_table": "knk_loaivattu",
+      "target_table": "knk_loaivattu",
+      "pk_fields": [
+        "id"
+      ],
+      "static_fields": {},
+      "exclude_fields": [],
+      "include_fields": []
+    },
+    {
+      "source_table": "knk_lylich",
+      "target_table": "knk_lylich",
+      "pk_fields": [
+        "id"
+      ],
+      "static_fields": {},
+      "exclude_fields": [],
+      "include_fields": []
+    },
+    {
+      "source_table": "knk_nhacungcap",
+      "target_table": "knk_nhacungcap",
+      "pk_fields": [
+        "id"
+      ],
+      "static_fields": {},
+      "exclude_fields": [],
+      "include_fields": []
+    },
+    {
+      "source_table": "knk_nhanvien",
+      "target_table": "knk_nhanvien",
+      "pk_fields": [
+        "id"
+      ],
+      "static_fields": {},
+      "exclude_fields": [],
+      "include_fields": []
+    },
+    {
+      "source_table": "knk_nhomncc",
+      "target_table": "knk_nhomncc",
+      "pk_fields": [
+        "id"
+      ],
+      "static_fields": {},
+      "exclude_fields": [],
+      "include_fields": []
+    },
+    {
+      "source_table": "knk_nhomvattu",
+      "target_table": "knk_nhomvattu",
+      "pk_fields": [
+        "id"
+      ],
+      "static_fields": {},
+      "exclude_fields": [],
+      "include_fields": []
+    },
+    {
+      "source_table": "knk_phieuchi",
+      "target_table": "knk_phieuchi",
+      "pk_fields": [
+        "id"
+      ],
+      "static_fields": {},
+      "exclude_fields": [],
+      "include_fields": []
+    },
+    {
+      "source_table": "knk_phieuthu",
+      "target_table": "knk_phieuthu",
+      "pk_fields": [
+        "id"
+      ],
+      "static_fields": {},
+      "exclude_fields": [],
+      "include_fields": []
+    },
+    {
+      "source_table": "knk_qhgiadinh",
+      "target_table": "knk_qhgiadinh",
+      "pk_fields": [
+        "id"
+      ],
+      "static_fields": {},
+      "exclude_fields": [],
+      "include_fields": []
+    },
+    {
+      "source_table": "knk_quycach",
+      "target_table": "knk_quycach",
+      "pk_fields": [
+        "id"
+      ],
+      "static_fields": {},
+      "exclude_fields": [],
+      "include_fields": []
+    },
+    {
+      "source_table": "knk_vattu",
+      "target_table": "knk_vattu",
+      "pk_fields": [
+        "id"
+      ],
+      "static_fields": {},
+      "exclude_fields": [],
+      "include_fields": []
+    },
+    {
+      "source_table": "knk_xnt_chitiet",
+      "target_table": "knk_xnt_chitiet",
+      "pk_fields": [
+        "id"
+      ],
+      "static_fields": {},
+      "exclude_fields": [],
+      "include_fields": []
+    },
+    {
+      "source_table": "knk_xnt_tonghop",
+      "target_table": "knk_xnt_tonghop",
+      "pk_fields": [
+        "id"
+      ],
+      "static_fields": {},
+      "exclude_fields": [],
+      "include_fields": []
+    }
+  ]
+}

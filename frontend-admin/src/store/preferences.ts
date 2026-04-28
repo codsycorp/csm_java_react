@@ -6,7 +6,7 @@ import type {
 } from "#src/layout/widgets/preferences/blocks/layout/constants";
 import type { LanguageType } from "#src/locales";
 
-import { SIDE_NAVIGATION } from "#src/layout/widgets/preferences/blocks/layout/constants";
+import { RIBBON_NAVIGATION, SIDE_NAVIGATION } from "#src/layout/widgets/preferences/blocks/layout/constants";
 import { COLLAPSED_WIDTH } from "#src/styles/theme/antd/antd-theme";
 
 import { create } from "zustand";
@@ -190,7 +190,7 @@ export const DEFAULT_PREFERENCES = {
 	/* ================== Animation ================== */
 
 	/* ================== Layout ================== */
-	navigationStyle: SIDE_NAVIGATION,
+	navigationStyle: RIBBON_NAVIGATION,
 	ribbonShadowLevel: "medium",
 	sidebarWidth: 210,
 	sideCollapseWidth: COLLAPSED_WIDTH,

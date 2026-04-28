@@ -1526,11 +1526,26 @@ const flatMenus = srcMenus.map(src => {
 
   const normalizedParentId = String(src.parent_id || '').trim() === APP_ID ? '' : (src.parent_id || '');
   const menu = {
-    // ── Clean runtime schema (§6.1 new system) ──
+    // ── Runtime schema (preserve legacy-compatible keys used by frontend) ──
     id: src.id,
     parentId: normalizedParentId,
     hideInMenu: shouldHideInMainMenu(src) ? 1 : 0,
     label: src.grid_name,
+    name: src.grid_name,
+    m_icon: src.m_icon || '',
+    table_name: src.table_name || '',
+    e_where: src.e_where || '',
+    table_sort: src.table_sort || '',
+    table_pagesize: Number(src.table_pagesize || 0),
+    table_read_only: Number(src.table_read_only || 0),
+    g_readonly: !!src.g_readonly,
+    field_root: src.field_root || '',
+    prefix_pk: src.prefix_pk || '',
+    m_show: src.m_show !== undefined ? !!src.m_show : true,
+    bit_field_right: src.bit_field_right || '',
+    can_see: src.can_see !== undefined ? Number(src.can_see) : 1,
+    custom_footer: src.custom_footer || '',
+    custom_group: src.custom_group || '',
     table: tableFields,
     trigger: nextTrigger,
     report_name: src.report_name,

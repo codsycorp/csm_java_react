@@ -1,0 +1,378 @@
+{
+  "mysql": {
+    "host": "phanmemmottrieu.net",
+    "port": 3306,
+    "user": "phanmemleanh",
+    "password": "BbAa@7975",
+    "database": "anhld_dongsam",
+    "charset": "utf8mb4",
+    "connect_without_database_first": true,
+    "force_ipv4": true
+  },
+  "api": {
+    "base_url": "https://api.phanmemmottrieu.net",
+    "bulk_update_path": "/bulk-update-table-data",
+    "login_path": "/login",
+    "token": "",
+    "csm_token": "",
+    "login": {
+      "username": "",
+      "password": ""
+    }
+  },
+  "global": {
+    "app_id": "vemaybay",
+    "transport": "rocksdb",
+    "data_dir": "./csm_datas",
+    "default_command": "create",
+    "batch_size": 300,
+    "continue_on_error": false,
+    "stop_on_failed_batch": true,
+    "lowercase_keys": false,
+    "strict_pk_validation": true,
+    "resolve_storage_key_by_id": false,
+    "id_scan_max_records": 500000
+  },
+  "tables": [
+    {
+      "source_table": "dsm_biennhan_ve",
+      "target_obj_name": "dsm_biennhan_ve",
+      "pk_fields": [
+        "id"
+      ],
+      "where": "1=1",
+      "order_by": "id",
+      "command": "create"
+    },
+    {
+      "source_table": "dsm_biennhan_ve_ct",
+      "target_obj_name": "dsm_biennhan_ve_ct",
+      "pk_fields": [
+        "id"
+      ],
+      "where": "1=1",
+      "order_by": "id",
+      "command": "create"
+    },
+    {
+      "source_table": "dsm_biennhan_visa",
+      "target_obj_name": "dsm_biennhan_visa",
+      "pk_fields": [
+        "id"
+      ],
+      "where": "1=1",
+      "order_by": "id",
+      "command": "create"
+    },
+    {
+      "source_table": "dsm_biennhan_visa_ct",
+      "target_obj_name": "dsm_biennhan_visa_ct",
+      "pk_fields": [
+        "id"
+      ],
+      "where": "1=1",
+      "order_by": "id",
+      "command": "create"
+    },
+    {
+      "source_table": "dsm_biennhantour",
+      "target_obj_name": "dsm_biennhantour",
+      "pk_fields": [
+        "id"
+      ],
+      "where": "1=1",
+      "order_by": "id",
+      "command": "create"
+    },
+    {
+      "source_table": "dsm_biennhantour_ct",
+      "target_obj_name": "dsm_biennhantour_ct",
+      "pk_fields": [
+        "id"
+      ],
+      "where": "1=1",
+      "order_by": "id",
+      "command": "create"
+    },
+    {
+      "source_table": "dsm_bophan",
+      "target_obj_name": "dsm_bophan",
+      "pk_fields": [
+        "id"
+      ],
+      "where": "1=1",
+      "order_by": "id",
+      "command": "create"
+    },
+    {
+      "source_table": "dsm_chiphi",
+      "target_obj_name": "dsm_chiphi",
+      "pk_fields": [
+        "id"
+      ],
+      "where": "1=1",
+      "order_by": "id",
+      "command": "create"
+    },
+    {
+      "source_table": "dsm_chiphi_tour",
+      "target_obj_name": "dsm_chiphi_tour",
+      "pk_fields": [
+        "id"
+      ],
+      "where": "1=1",
+      "order_by": "id",
+      "command": "create"
+    },
+    {
+      "source_table": "dsm_chucvu",
+      "target_obj_name": "dsm_chucvu",
+      "pk_fields": [
+        "id"
+      ],
+      "where": "1=1",
+      "order_by": "id",
+      "command": "create"
+    },
+    {
+      "source_table": "dsm_dichvu_tour",
+      "target_obj_name": "dsm_dichvu_tour",
+      "pk_fields": [
+        "id"
+      ],
+      "where": "1=1",
+      "order_by": "id",
+      "command": "create"
+    },
+    {
+      "source_table": "dsm_hangve",
+      "target_obj_name": "dsm_hangve",
+      "pk_fields": [
+        "id"
+      ],
+      "where": "1=1",
+      "order_by": "id",
+      "command": "create"
+    },
+    {
+      "source_table": "dsm_khachhang",
+      "target_obj_name": "dsm_khachhang",
+      "pk_fields": [
+        "id"
+      ],
+      "where": "1=1",
+      "order_by": "id",
+      "command": "create"
+    },
+    {
+      "source_table": "dsm_lichsu",
+      "target_obj_name": "dsm_lichsu",
+      "pk_fields": [
+        "id"
+      ],
+      "where": "1=1",
+      "order_by": "id",
+      "command": "create"
+    },
+    {
+      "source_table": "dsm_loaithuchi",
+      "target_obj_name": "dsm_loaithuchi",
+      "pk_fields": [
+        "id"
+      ],
+      "where": "1=1",
+      "order_by": "id",
+      "command": "create"
+    },
+    {
+      "source_table": "dsm_loaithuchi_ct",
+      "target_obj_name": "dsm_loaithuchi_ct",
+      "pk_fields": [
+        "id"
+      ],
+      "where": "1=1",
+      "order_by": "id",
+      "command": "create"
+    },
+    {
+      "source_table": "dsm_nhacungcap",
+      "target_obj_name": "dsm_nhacungcap",
+      "pk_fields": [
+        "id"
+      ],
+      "where": "1=1",
+      "order_by": "id",
+      "command": "create"
+    },
+    {
+      "source_table": "dsm_nhanvien",
+      "target_obj_name": "dsm_nhanvien",
+      "pk_fields": [
+        "id"
+      ],
+      "where": "1=1",
+      "order_by": "id",
+      "command": "create"
+    },
+    {
+      "source_table": "dsm_phieuchi_tour",
+      "target_obj_name": "dsm_phieuchi_tour",
+      "pk_fields": [
+        "id"
+      ],
+      "where": "1=1",
+      "order_by": "id",
+      "command": "create"
+    },
+    {
+      "source_table": "dsm_phieuchi_tour_nd",
+      "target_obj_name": "dsm_phieuchi_tour_nd",
+      "pk_fields": [
+        "id"
+      ],
+      "where": "1=1",
+      "order_by": "id",
+      "command": "create"
+    },
+    {
+      "source_table": "dsm_phieuchi_ve",
+      "target_obj_name": "dsm_phieuchi_ve",
+      "pk_fields": [
+        "id"
+      ],
+      "where": "1=1",
+      "order_by": "id",
+      "command": "create"
+    },
+    {
+      "source_table": "dsm_phieuchi_ve_ct",
+      "target_obj_name": "dsm_phieuchi_ve_ct",
+      "pk_fields": [
+        "id"
+      ],
+      "where": "1=1",
+      "order_by": "id",
+      "command": "create"
+    },
+    {
+      "source_table": "dsm_phieuchi_visa",
+      "target_obj_name": "dsm_phieuchi_visa",
+      "pk_fields": [
+        "id"
+      ],
+      "where": "1=1",
+      "order_by": "id",
+      "command": "create"
+    },
+    {
+      "source_table": "dsm_phieuchi_visa_ct",
+      "target_obj_name": "dsm_phieuchi_visa_ct",
+      "pk_fields": [
+        "id"
+      ],
+      "where": "1=1",
+      "order_by": "id",
+      "command": "create"
+    },
+    {
+      "source_table": "dsm_phieuthu_tour",
+      "target_obj_name": "dsm_phieuthu_tour",
+      "pk_fields": [
+        "id"
+      ],
+      "where": "1=1",
+      "order_by": "id",
+      "command": "create"
+    },
+    {
+      "source_table": "dsm_phieuthu_ve",
+      "target_obj_name": "dsm_phieuthu_ve",
+      "pk_fields": [
+        "id"
+      ],
+      "where": "1=1",
+      "order_by": "id",
+      "command": "create"
+    },
+    {
+      "source_table": "dsm_phieuthu_visa",
+      "target_obj_name": "dsm_phieuthu_visa",
+      "pk_fields": [
+        "id"
+      ],
+      "where": "1=1",
+      "order_by": "id",
+      "command": "create"
+    },
+    {
+      "source_table": "dsm_re",
+      "target_obj_name": "dsm_re",
+      "pk_fields": [
+        "id"
+      ],
+      "where": "1=1",
+      "order_by": "id",
+      "command": "create"
+    },
+    {
+      "source_table": "dsm_tour",
+      "target_obj_name": "dsm_tour",
+      "pk_fields": [
+        "id"
+      ],
+      "where": "1=1",
+      "order_by": "id",
+      "command": "create"
+    },
+    {
+      "source_table": "dsm_tour_banle_ct",
+      "target_obj_name": "dsm_tour_banle_ct",
+      "pk_fields": [
+        "id"
+      ],
+      "where": "1=1",
+      "order_by": "id",
+      "command": "create"
+    },
+    {
+      "source_table": "dsm_tour_dutoan",
+      "target_obj_name": "dsm_tour_dutoan",
+      "pk_fields": [
+        "id"
+      ],
+      "where": "1=1",
+      "order_by": "id",
+      "command": "create"
+    },
+    {
+      "source_table": "dsm_tour_kh",
+      "target_obj_name": "dsm_tour_kh",
+      "pk_fields": [
+        "id"
+      ],
+      "where": "1=1",
+      "order_by": "id",
+      "command": "create"
+    },
+    {
+      "source_table": "dsm_ve",
+      "target_obj_name": "dsm_ve",
+      "pk_fields": [
+        "id"
+      ],
+      "where": "1=1",
+      "order_by": "id",
+      "command": "create"
+    },
+    {
+      "source_table": "dsm_visa",
+      "target_obj_name": "dsm_visa",
+      "pk_fields": [
+        "id"
+      ],
+      "where": "1=1",
+      "order_by": "id",
+      "command": "create"
+    }
+  ]
+}
