@@ -109,6 +109,65 @@ function buildMenuFieldMap(menuDoc) {
   );
 }
 
+function buildMenuMasterDetailRelationMap(menuDoc) {
+  const items = collectMenuItems(menuDoc);
+  const byId = new Map();
+  const childrenByParent = new Map();
+
+  for (const item of items) {
+    if (!item || typeof item !== "object") continue;
+    const id = isNonEmptyString(item.id) ? String(item.id).trim() : "";
+    if (id) byId.set(id, item);
+
+    const parentId = isNonEmptyString(item.parentid) ? String(item.parentid).trim() : "";
+    if (!parentId) continue;
+    if (!childrenByParent.has(parentId)) childrenByParent.set(parentId, []);
+    childrenByParent.get(parentId).push(item);
+  }
+
+  const relationMap = new Map();
+  for (const [parentId, parentItem] of byId.entries()) {
+    if (!parentItem || Number(parentItem.type_form || 0) !== 2) continue;
+    const parentTable = isNonEmptyString(parentItem.table_name) ? String(parentItem.table_name).trim() : "";
+    if (!parentTable) continue;
+
+    const children = childrenByParent.get(parentId) || [];
+    const relations = [];
+    const dedupe = new Set();
+
+    for (const child of children) {
+      const childTable = isNonEmptyString(child && child.table_name) ? String(child.table_name).trim() : "";
+      if (!childTable) continue;
+
+      const linkField = isNonEmptyString(child.field_root) ? String(child.field_root).trim() : "parent_id";
+      const menuFields = Array.isArray(child.table) ? child.table : [];
+      const includeFields = new Set();
+      for (const field of menuFields) {
+        const fieldName = isNonEmptyString(field && field.f_name) ? String(field.f_name).trim() : "";
+        if (fieldName) includeFields.add(fieldName);
+      }
+      if (isNonEmptyString(linkField)) includeFields.add(linkField);
+
+      const dedupeKey = `${childTable}::${linkField}`;
+      if (dedupe.has(dedupeKey)) continue;
+      dedupe.add(dedupeKey);
+
+      relations.push({
+        childTable,
+        fieldName: childTable,
+        linkField,
+        includeFields: Array.from(includeFields)
+      });
+    }
+
+    if (relations.length > 0) {
+      relationMap.set(parentTable, relations);
+    }
+  }
+
+  return relationMap;
+}
+
 function findLatestNewSystemMenuFile(globalCfg) {
   const configuredPath = isNonEmptyString(globalCfg.menu_config_path) ? globalCfg.menu_config_path.trim() : "";
   if (configuredPath) {
@@ -152,6 +211,7 @@ function applyMenuInferredIncludeFields(globalCfg, tableList) {
 
   const menuDoc = JSON.parse(fs.readFileSync(menuFile, "utf8"));
   const fieldMap = buildMenuFieldMap(menuDoc);
+  const masterDetailRelationMap = buildMenuMasterDetailRelationMap(menuDoc);
   let appliedTables = 0;
 
   for (const tableCfg of tableList) {
@@ -163,7 +223,124 @@ function applyMenuInferredIncludeFields(globalCfg, tableList) {
     appliedTables += 1;
   }
 
-  return { menuFile, appliedTables, fieldMapSize: fieldMap.size };
+  let relationCount = 0;
+  for (const rels of masterDetailRelationMap.values()) {
+    relationCount += Array.isArray(rels) ? rels.length : 0;
+  }
+
+  const out = {
+    menuFile,
+    appliedTables,
+    fieldMapSize: fieldMap.size,
+    masterDetailParentTables: masterDetailRelationMap.size,
+    masterDetailRelations: relationCount
+  };
+
+  Object.defineProperty(out, "masterDetailRelationMap", {
+    value: masterDetailRelationMap,
+    enumerable: false,
+    configurable: false,
+    writable: false
+  });
+
+  return out;
+}
+
+async function fetchAllRows(connection, tableCfg, batchSize = 1000) {
+  const out = [];
+  let offset = 0;
+  while (true) {
+    // eslint-disable-next-line no-await-in-loop
+    const rows = await fetchPage(connection, tableCfg, offset, batchSize);
+    if (!rows || rows.length === 0) break;
+    out.push(...rows);
+    offset += rows.length;
+    if (rows.length < batchSize) break;
+  }
+  return out;
+}
+
+function createMasterDetailEmbedResolver(connection, globalCfg, tableList, relationMap) {
+  const cfgBySource = new Map();
+  const cfgByTarget = new Map();
+  for (const cfg of tableList) {
+    const source = isNonEmptyString(cfg && cfg.source_table) ? String(cfg.source_table).trim() : "";
+    if (source && !cfgBySource.has(source)) cfgBySource.set(source, cfg);
+    const target = isNonEmptyString(pickTargetObjectName(cfg)) ? String(pickTargetObjectName(cfg)).trim() : "";
+    if (target && !cfgByTarget.has(target)) cfgByTarget.set(target, cfg);
+  }
+
+  const childCache = new Map();
+
+  async function ensureChildIndex(relation) {
+    const cacheKey = `${relation.childTable}::${relation.linkField}`;
+    if (childCache.has(cacheKey)) return childCache.get(cacheKey);
+
+    const promise = (async () => {
+      const childCfg =
+        cfgBySource.get(relation.childTable) ||
+        cfgByTarget.get(relation.childTable) ||
+        { source_table: relation.childTable, target_table: relation.childTable };
+
+      const grouped = new Map();
+      let rows = [];
+      try {
+        rows = await fetchAllRows(connection, childCfg, Number(globalCfg.detail_batch_size || 1000));
+      } catch (err) {
+        return grouped;
+      }
+
+      for (const rawRow of rows) {
+        const mappedRow = mapRowKeys(rawRow, childCfg, globalCfg);
+        const parentValueRaw = rawRow[relation.linkField] ?? mappedRow[relation.linkField];
+        const parentId = String(parentValueRaw == null ? "" : parentValueRaw).trim();
+        if (!parentId) continue;
+
+        let finalRow = mappedRow;
+        if (Array.isArray(relation.includeFields) && relation.includeFields.length > 0) {
+          const picked = {};
+          for (const key of relation.includeFields) {
+            if (Object.prototype.hasOwnProperty.call(mappedRow, key)) {
+              picked[key] = mappedRow[key];
+            }
+          }
+          finalRow = picked;
+        }
+
+        if (!grouped.has(parentId)) grouped.set(parentId, []);
+        grouped.get(parentId).push(finalRow);
+      }
+
+      return grouped;
+    })();
+
+    childCache.set(cacheKey, promise);
+    return promise;
+  }
+
+  return {
+    async attachForTable(tableCfg, row) {
+      const tableName = String(pickTargetObjectName(tableCfg) || "").trim();
+      const relations = relationMap.get(tableName);
+      if (!Array.isArray(relations) || relations.length === 0) return row;
+
+      const masterId = String(row && row.id != null ? row.id : "").trim();
+      const out = { ...row };
+
+      for (const relation of relations) {
+        if (!masterId) {
+          out[relation.fieldName] = [];
+          continue;
+        }
+        // eslint-disable-next-line no-await-in-loop
+        const index = await ensureChildIndex(relation);
+        const childRows = index.get(masterId) || [];
+        out[relation.fieldName] = childRows.map((x) => ({ ...x }));
+      }
+
+      return out;
+    }
+  };
 }
 
 function normalizePkFieldList(input) {
@@ -251,7 +428,7 @@ function loadRocksDbFactory() {
   }
 }
 
-function createDirectRocksContext(globalCfg) {
+function createDirectRocksContext(globalCfg, runtimeOptions = {}) {
   const dataDirRaw =
     globalCfg.data_dir ||
     globalCfg.rocksdb_data_dir ||
@@ -267,7 +444,9 @@ function createDirectRocksContext(globalCfg) {
   return {
     dataDir,
     rocksdbFactory: loadRocksDbFactory(),
-    dbMap: new Map()
+    dbMap: new Map(),
+    resetBeforeOpen: Boolean(runtimeOptions.resetBeforeOpen),
+    resetIndexDb: Boolean(runtimeOptions.resetIndexDb)
   };
 }
 
@@ -345,6 +524,11 @@ async function getOrOpenDirectDb(context, appId, tableName) {
   if (existing) return existing;
 
   const dbPath = dbPathFor(context.dataDir, safeAppId, safeTableName);
+  // Keep index DB intact by default, because it stores struct/menu metadata.
+  // Reset it only when explicitly requested.
+  if (context.resetBeforeOpen && (safeTableName !== "index" || context.resetIndexDb)) {
+    fs.rmSync(dbPath, { recursive: true, force: true });
+  }
   fs.mkdirSync(dbPath, { recursive: true });
   const db = context.rocksdbFactory(dbPath);
   await rocksdbOpen(db);
@@ -986,7 +1170,11 @@ async function migrateTable(connection, globalCfg, apiCfg, tableCfg, options) {
 
     const operations = [];
     for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
-      const mappedRow = mapRowKeys(rows[rowIndex], tableCfg, globalCfg);
+      let mappedRow = mapRowKeys(rows[rowIndex], tableCfg, globalCfg);
+      if (options.embedMasterDetail && options.masterDetailResolver) {
+        // eslint-disable-next-line no-await-in-loop
+        mappedRow = await options.masterDetailResolver.attachForTable(tableCfg, mappedRow);
+      }
       if (!hasAnyPrimaryKeyValue(mappedRow, pkFields) && !canSkipPkValidationForCreate(command, mappedRow, pkFields)) {
         if (strictPkValidation) {
           throw new Error(
@@ -1085,6 +1273,8 @@ async function main() {
   const dryRun = hasFlag("--dry-run");
   const checkMysql = hasFlag("--check-mysql");
   const syncPkFields = hasFlag("--sync-pk-fields");
+  const resetRocksdb = hasFlag("--reset-rocksdb");
+  const resetIndexRocksdb = hasFlag("--reset-index-rocksdb");
 
   if (!fs.existsSync(cfgPath)) {
     throw new Error(`Config file not found: ${cfgPath}`);
@@ -1101,6 +1291,7 @@ async function main() {
   }
 
   const inferredFieldConfig = applyMenuInferredIncludeFields(globalCfg, tableList);
+  const masterDetailRelationMap = inferredFieldConfig.masterDetailRelationMap || new Map();
 
   const connection = await connectMysqlWithFallback(mysqlCfg);
   let directContext = null;
@@ -1132,11 +1323,21 @@ async function main() {
 
     const transport = String(globalCfg.transport || "api").toLowerCase();
     const isDirectRocks = transport === "rocksdb" || transport === "direct-rocksdb";
+    const embedMasterDetail = Boolean(globalCfg.embed_master_detail_from_menu ?? true);
+    const masterDetailResolver = createMasterDetailEmbedResolver(
+      connection,
+      globalCfg,
+      tableList,
+      masterDetailRelationMap
+    );
 
     let baseUrl = "";
     let auth = { bearerToken: "", csmToken: "" };
     if (isDirectRocks) {
-      directContext = createDirectRocksContext(globalCfg);
+      directContext = createDirectRocksContext(globalCfg, {
+        resetBeforeOpen: Boolean(globalCfg.reset_rocksdb_before_migrate || resetRocksdb),
+        resetIndexDb: Boolean(globalCfg.reset_index_rocksdb_before_migrate || resetIndexRocksdb)
+      });
     } else {
       baseUrl = normalizeBaseUrl(apiCfg.base_url);
       auth = dryRun ? { bearerToken: "", csmToken: "" } : await resolveAuth(apiCfg, baseUrl);
@@ -1207,6 +1408,8 @@ async function main() {
       const item = await migrateTable(connection, globalCfg, apiCfg, planItem.tableCfg, {
         dryRun,
         transport: isDirectRocks ? "rocksdb" : "api",
+        embedMasterDetail: isDirectRocks && embedMasterDetail,
+        masterDetailResolver,
         baseUrl,
         auth,
         directContext,

@@ -1,12 +1,12 @@
-import type {
+import type { LanguageType } from "#src/locales";
+
+import {
 	MIXED_NAVIGATION,
 	RIBBON_NAVIGATION,
+	SIDE_NAVIGATION,
 	TOP_NAVIGATION,
 	TWO_COLUMN_NAVIGATION,
 } from "#src/layout/widgets/preferences/blocks/layout/constants";
-import type { LanguageType } from "#src/locales";
-
-import { RIBBON_NAVIGATION, SIDE_NAVIGATION } from "#src/layout/widgets/preferences/blocks/layout/constants";
 import { COLLAPSED_WIDTH } from "#src/styles/theme/antd/antd-theme";
 
 import { create } from "zustand";
