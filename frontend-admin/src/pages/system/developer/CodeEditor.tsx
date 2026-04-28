@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { Button, Select, Card, Space, message, Modal, Input, Form, Row, Col } from "antd";
-import type { InputRef } from "antd";
 import {
 	SaveOutlined,
 	DeleteOutlined,
@@ -535,7 +534,7 @@ export default function CodeEditor() {
 	const appId = useAppStore(state => state.currentAppId);
 	const editorRef = useRef<any>(null);
 	const currentDraftRef = useRef("");
-	const aiPromptInputRef = useRef<InputRef>(null);
+	const codeOpenJobRef = useRef(0);
 	const manualDraftRevisionRef = useRef(0);
 	const aiProgrammaticApplyRef = useRef(false);
 
@@ -545,6 +544,7 @@ export default function CodeEditor() {
 	const [selectedCode, setSelectedCode] = useState<string | null>(null);
 	const [codeContent, setCodeContent] = useState<string>("");
 	const [loading, setLoading] = useState(false);
+	const [openingCode, setOpeningCode] = useState(false);
 	const [createModalOpen, setCreateModalOpen] = useState(false);
 	const [newCodeName, setNewCodeName] = useState("");
 	const [aiPromptText, setAiPromptText] = useState("");
@@ -581,7 +581,6 @@ export default function CodeEditor() {
 		[codeList, selectedCode],
 	);
 	const selectedCodeLabel = selectedCode || t("system.developer.ai.unsaved");
-	const aiStatusText = aiProgress?.stage || aiProgress?.status || t("system.developer.ai.running");
 	const resolvedPType = selectedCodeItem?.p_type ?? codeType;
 	const currentLanguage = CODE_TYPE_LANGUAGE[codeType] ?? "javascript";
 	const currentTypeLabel = CODE_TYPE_LABEL[codeType] ?? "JavaScript";
@@ -784,22 +783,42 @@ export default function CodeEditor() {
 	// Load selected code
 	const handleSelectCode = (codeName: string) => {
 		setSelectedCode(codeName);
+		setOpeningCode(true);
+		const jobId = Date.now();
+		codeOpenJobRef.current = jobId;
 		const code = codeList.find(c => c.p_name === codeName);
-		if (code) {
+
+		window.requestAnimationFrame(() => {
+			if (codeOpenJobRef.current !== jobId) return;
+			if (!code) {
+				setCodeContent("");
+				setAiLastCode("");
+				setSavedCodeSnapshot("");
+				setPendingChunk(null);
+				setOpeningCode(false);
+				return;
+			}
+
 			try {
 				const decrypted = decryptCode(code.p_code);
+				if (codeOpenJobRef.current !== jobId) return;
 				setCodeContent(decrypted);
 				setAiLastCode(decrypted);
 				setSavedCodeSnapshot(decrypted);
 				setPendingChunk(null);
 			} catch (error) {
 				message.error(t("system.developer.decryptFailed"));
+				if (codeOpenJobRef.current !== jobId) return;
 				setCodeContent(code.p_code);
 				setAiLastCode(code.p_code);
 				setSavedCodeSnapshot(code.p_code);
 				setPendingChunk(null);
+			} finally {
+				if (codeOpenJobRef.current === jobId) {
+					setOpeningCode(false);
+				}
 			}
-		}
+		});
 	};
 
 	// Save code
@@ -868,6 +887,8 @@ export default function CodeEditor() {
 
 		setCreateModalOpen(false);
 		setNewCodeName("");
+		codeOpenJobRef.current += 1;
+		setOpeningCode(false);
 		setSelectedCode(newCodeName.trim());
 		setCodeContent("");
 		setAiLastCode("");
@@ -1246,23 +1267,6 @@ export default function CodeEditor() {
 		}
 	};
 
-	const handleAcceptChunk = () => {
-		if (pendingChunk && pendingChunk.applied === false) {
-			applyDraftFromAi(pendingChunk.after);
-		}
-		setPendingChunk(null);
-		message.success(t("system.developer.ai.chunkAccepted", "Đã chấp nhận phần AI vừa cập nhật."));
-	};
-
-	const handleRejectChunk = () => {
-		if (!pendingChunk) return;
-		if (pendingChunk.applied !== false) {
-			applyDraftFromAi(pendingChunk.before);
-		}
-		setPendingChunk(null);
-		message.info(t("system.developer.ai.chunkRejected", "Đã hoàn tác phần AI vừa cập nhật."));
-	};
-
 	const handleRestoreHistoryItem = (item: AiRequestHistoryItem) => {
 		setSelectedHistoryId(item.id);
 		setPendingChunk(null);
@@ -1280,23 +1284,6 @@ export default function CodeEditor() {
 			if (item.id !== id) return item;
 			return { ...item, pinned: !item.pinned };
 		}));
-	};
-
-	const handleClearCurrentAiSession = () => {
-		setAiMessages([]);
-		setAiSummary("");
-		setAiChangeItems([]);
-		setAiRequestHistory([]);
-		setAiProgress(null);
-		setPendingChunk(null);
-		setSelectedHistoryId(null);
-		delete aiSessionSnapshotsRef.current[aiSessionKey];
-		try {
-			sessionStorage.setItem(AI_SESSION_STORAGE_KEY, JSON.stringify(aiSessionSnapshotsRef.current));
-			localStorage.setItem(AI_SESSION_LOCAL_STORAGE_KEY, JSON.stringify(aiSessionSnapshotsRef.current));
-		} catch {
-			// Ignore storage write errors.
-		}
 	};
 
 	const runCommand = async (commandId: string) => {
@@ -1446,14 +1433,17 @@ export default function CodeEditor() {
 									value={selectedCode || undefined}
 									onChange={handleSelectCode}
 									optionLabelProp="label"
-									loading={loading}
+									loading={loading || openingCode}
 									filterOption={(input, option) => String(option?.value || "").toLowerCase().includes(input.toLowerCase())}
 									options={codeList.map(code => ({
 										label: code.p_name,
 										value: code.p_name,
 									}))}
+									showSearch
 									allowClear
 									onClear={() => {
+										codeOpenJobRef.current += 1;
+										setOpeningCode(false);
 										setSelectedCode(null);
 										setCodeContent("");
 										setAiLastCode("");
@@ -1485,60 +1475,6 @@ export default function CodeEditor() {
 				<div className={styles.aiShell}>
 					<div className={`${styles.aiBody} ${styles.aiBodyLeftHidden}`}>
 					<div className={styles.aiRightColumn}>
-							<div className={styles.aiChunkCard}>
-								<div className={styles.aiChunkTitle}>{t("system.developer.ai.askTitle", "Yêu cầu AI chỉnh code")}</div>
-								<Input.TextArea
-									value={aiPromptText}
-									onChange={(e) => setAiPromptText(e.target.value)}
-									rows={3}
-									disabled={aiLoading}
-									placeholder={t("system.developer.ai.askPlaceholder", "Nhập yêu cầu. Nhấn Ask AI để tạo mới hoặc Continue để viết tiếp phần còn thiếu.")}
-									onPressEnter={(e) => {
-										if ((e.ctrlKey || e.metaKey) && !aiLoading) {
-											e.preventDefault();
-											void handleAskAi(false);
-										}
-									}}
-								/>
-								<div className={styles.aiChunkActions} style={{ marginTop: 8 }}>
-									<Button size="small" type="primary" onClick={() => void handleAskAi(false)} disabled={aiLoading || !aiPromptText.trim()}>
-										{t("system.developer.ai.askAi", "Ask AI")}
-									</Button>
-									<Button size="small" onClick={() => void handleAskAi(true)} disabled={aiLoading || !aiPromptText.trim()}>
-										{t("system.developer.ai.continueAi", "Continue")}
-									</Button>
-									<Button size="small" danger onClick={handleClearCurrentAiSession} disabled={aiLoading}>
-										{t("system.developer.ai.clearSession", "Clear session")}
-									</Button>
-								</div>
-								<div className={styles.aiChunkMeta}>
-									{t("system.developer.ai.currentStatus", "Trạng thái")}: {aiStatusText}
-								</div>
-							</div>
-							{pendingChunk && (
-								<div className={styles.aiChunkCard}>
-									<div className={styles.aiChunkTitle}>{t("system.developer.ai.liveChunkTitle", "AI vừa cập nhật draft")}</div>
-									<div className={styles.aiChunkMeta}>{formatRangesText(pendingChunk.ranges)}</div>
-									<div className={styles.aiChunkActions}>
-										<Button size="small" type="primary" onClick={handleAcceptChunk}>
-											{t("system.developer.ai.acceptChunk", "Accept chunk")}
-										</Button>
-										<Button size="small" danger onClick={handleRejectChunk}>
-											{t("system.developer.ai.rejectChunk", "Reject chunk")}
-										</Button>
-									</div>
-								</div>
-							)}
-							{aiChangeItems.length > 0 && (
-								<div className={styles.aiChangesCard}>
-									<div className={styles.aiPreviewMetaTitle}>{t("system.developer.ai.changesTitle", "Điểm AI dự định chỉnh")}</div>
-									<div className={styles.aiChangesList}>
-										{aiChangeItems.map((item, index) => (
-											<div key={`${index}_${item}`} className={styles.aiChangeItem}>{item}</div>
-										))}
-									</div>
-								</div>
-							)}
 							<div className={styles.aiDraftEditorShell}>
 								<div className={styles.aiDraftStatusBar}>
 									<span className={draftDirty ? styles.aiDraftDirty : styles.aiDraftSaved}>
