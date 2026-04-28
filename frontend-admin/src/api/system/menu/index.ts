@@ -194,9 +194,22 @@ function pickPrimaryKeysFromMenu(menu: any, fields: string[]): string[] {
 	return normalizePrimaryKeys([], fields);
 }
 
-function buildStructFromMenu(menu: any): { tableName: string; struct: any } | null {
-	const tableName = String(menu?.table_name || "").trim();
-	if (!tableName) return null;
+function extractTableNamesFromMenu(menu: any): string[] {
+	const raw = String(menu?.table_name || "").trim();
+	if (!raw) return [];
+	return Array.from(
+		new Set(
+			raw
+				.split(",")
+				.map((item) => String(item || "").trim())
+				.filter(Boolean),
+		),
+	);
+}
+
+function buildStructFromMenu(menu: any): { tableName: string; struct: any }[] {
+	const tableNames = extractTableNamesFromMenu(menu);
+	if (tableNames.length === 0) return [];
 
 	const tableFields = Array.isArray(menu?.table) ? menu.table : [];
 	const fields: string[] = Array.from(new Set(
@@ -228,15 +241,17 @@ function buildStructFromMenu(menu: any): { tableName: string; struct: any } | nu
 		defaultValue[name] = "";
 	});
 
-	return {
-		tableName,
-		struct: {
-			defaultValue,
-			fieldsPK,
-			fieldsSearch: fieldsSearch.length > 0 ? fieldsSearch : fields,
-			fields,
-		},
+	const sharedStruct = {
+		defaultValue,
+		fieldsPK,
+		fieldsSearch: fieldsSearch.length > 0 ? fieldsSearch : fields,
+		fields,
 	};
+
+	return tableNames.map((tableName) => ({
+		tableName,
+		struct: sharedStruct,
+	}));
 }
 
 // Tên ID được hệ thống dùng trong bảng "index" để lưu metadata quan trọng.
@@ -248,8 +263,8 @@ function collectMenuStructs(menus: MenuItemType[]): Map<string, any> {
 
 	const walk = (items: any[]) => {
 		items.forEach((item) => {
-			const candidate = buildStructFromMenu(item);
-			if (candidate) {
+			const candidates = buildStructFromMenu(item);
+			candidates.forEach((candidate) => {
 				// Bảo vệ: bỏ qua nếu table_name trùng với ID hệ thống trong index
 				if (RESERVED_INDEX_IDS.has(candidate.tableName)) {
 					console.warn(`[collectMenuStructs] Bỏ qua table_name="${candidate.tableName}" vì là tên hệ thống reserved.`);
@@ -259,7 +274,7 @@ function collectMenuStructs(menus: MenuItemType[]): Map<string, any> {
 				if (!prev || (candidate.struct?.fields?.length || 0) > (prev?.fields?.length || 0)) {
 					byTable.set(candidate.tableName, candidate.struct);
 				}
-			}
+			});
 
 			if (Array.isArray(item?.children) && item.children.length > 0) walk(item.children);
 			if (Array.isArray(item?.nodes) && item.nodes.length > 0) walk(item.nodes);
@@ -270,22 +285,74 @@ function collectMenuStructs(menus: MenuItemType[]): Map<string, any> {
 	return byTable;
 }
 
+const INDEX_TABLE_STRUCT = {
+	defaultValue: {
+		id: "",
+		struct: "",
+		data: "",
+	},
+	fieldsPK: ["id"],
+	fieldsSearch: ["id"],
+	fields: ["id", "struct", "data"],
+};
+
+async function ensureIndexTableStruct(appIdParam: string) {
+	if (!appIdParam) return;
+	await createTableStruct({
+		app_id: appIdParam,
+		obj_table: {
+			id: "index",
+			struct: INDEX_TABLE_STRUCT,
+		},
+	});
+}
+
 async function ensureMenuTableStructs(appIdParam: string, menus: MenuItemType[]) {
 	if (!appIdParam || !Array.isArray(menus) || menus.length === 0) return;
 
 	const tableStructMap = collectMenuStructs(menus);
-	for (const [tableName, struct] of tableStructMap.entries()) {
-		try {
-			await createTableStruct({
-				app_id: appIdParam,
-				obj_table: {
-					id: tableName,
-					struct,
-				},
-			});
-		} catch (error) {
-			console.warn(`Failed to ensure table struct for ${appIdParam}.${tableName}:`, error);
+	if (tableStructMap.size === 0) return;
+
+	const CONCURRENCY = 6;
+	const MAX_RETRY = 2;
+	const pending = Array.from(tableStructMap.entries());
+	const failedTables: string[] = [];
+
+	const ensureOneTable = async (tableName: string, struct: any) => {
+		let lastError: any = null;
+		for (let attempt = 0; attempt <= MAX_RETRY; attempt += 1) {
+			try {
+				await createTableStruct({
+					app_id: appIdParam,
+					obj_table: {
+						id: tableName,
+						struct,
+					},
+				});
+				return;
+			} catch (error) {
+				lastError = error;
+				if (attempt < MAX_RETRY) {
+					await new Promise((resolve) => setTimeout(resolve, (attempt + 1) * 250));
+				}
+			}
 		}
+
+		console.warn(`Failed to ensure table struct for ${appIdParam}.${tableName} after retries:`, lastError);
+		failedTables.push(tableName);
+	};
+
+	for (let i = 0; i < pending.length; i += CONCURRENCY) {
+		const chunk = pending.slice(i, i + CONCURRENCY);
+		await Promise.all(chunk.map(([tableName, struct]) => ensureOneTable(tableName, struct)));
+	}
+
+	if (failedTables.length > 0) {
+		console.warn(
+			`[MenuStructSync] app=${appIdParam} synced=${pending.length - failedTables.length}/${pending.length}, failed=${failedTables.join(",")}`,
+		);
+	} else {
+		console.info(`[MenuStructSync] app=${appIdParam} synced=${pending.length}/${pending.length}`);
 	}
 }
 
@@ -431,7 +498,6 @@ async function loadMenuStruct(appIdParam: string): Promise<MenuItemType[]> {
 // Persist menu struct back to backend (create or update)
 async function persistMenuStruct(appIdParam: string, menus: MenuItemType[], mode: "update" | "create" = "update") {
 	const { csmEncrypt } = await import("#src/components/csm-grid/CsmCrypto");
-	await ensureMenuTableStructs(appIdParam, menus);
 	const payload = {
 		app_id: appIdParam,
 		obj_name: "index",
@@ -456,9 +522,24 @@ async function persistMenuStruct(appIdParam: string, menus: MenuItemType[], mode
 
 // Save full menu struct (create if missing, update otherwise)
 export async function saveMenuStruct(appIdParam: string, menus: MenuItemType[]) {
-	const currentMenus = await loadMenuStruct(appIdParam);
+	await ensureIndexTableStruct(appIdParam);
+
+	let currentMenus: MenuItemType[] = [];
+	try {
+		currentMenus = await loadMenuStruct(appIdParam);
+	} catch (error) {
+		console.warn(`Failed to load menu struct for ${appIdParam}, fallback to create mode:`, error);
+	}
+
 	const mode: "update" | "create" = currentMenus.length === 0 ? "create" : "update";
-	return persistMenuStruct(appIdParam, menus, mode);
+	const saveResult = await persistMenuStruct(appIdParam, menus, mode);
+
+	// Run create-table for menu-defined tables in background to avoid blocking menu save UX.
+	void ensureMenuTableStructs(appIdParam, menus).catch((error) => {
+		console.warn(`Background ensure menu table structs failed for ${appIdParam}:`, error);
+	});
+
+	return saveResult;
 }
 
 /* 获取导航菜单列表 (用于侧边栏) - 从 index 表中获取 id="menu" 的菜单配置 */
