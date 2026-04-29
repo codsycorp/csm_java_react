@@ -679,7 +679,7 @@ export function BuiltinTheme() {
 							branch: branchLabelMap[hourAdvisory.dayBranchKey],
 						})}
 					</div>
-					<div className={cn("text-xs font-bold px-2 py-1 rounded", hourAdvisory.dayType === "duong" ? "bg-amber-100 text-amber-900 border border-amber-400" : "bg-indigo-100 text-indigo-900 border border-indigo-400")}>
+					<div className={cn("text-xs font-bold px-2 py-1 rounded", hourAdvisory.dayType === "duong" ? "bg-amber-100 text-slate-700 border border-amber-400" : "bg-indigo-100 text-slate-700 border border-indigo-400")}>
 						{hourAdvisory.dayType === "duong" ? "☀️ " : "🌙 "}
 						{hourAdvisory.dayType === "duong" ? t("preferences.theme.builtin.duongTrach") : t("preferences.theme.builtin.amTrach")}
 					</div>
@@ -836,7 +836,7 @@ export function BuiltinTheme() {
 					)}>
 						<p className={cn(
 							"text-[10px] font-bold uppercase tracking-wide mb-1",
-							hourAdvisory.dayType === "duong" ? "text-amber-800 dark:text-amber-300" : "text-indigo-800 dark:text-indigo-300",
+							hourAdvisory.dayType === "duong" ? "text-slate-700 dark:text-amber-300" : "text-slate-700 dark:text-indigo-300",
 						)}>✓ {t("preferences.theme.builtin.duongTrachShouldTitle") || "Nên"}</p>
 						<ul className={cn(
 							"text-xs space-y-0.5",
@@ -929,7 +929,7 @@ export function BuiltinTheme() {
 									<span className={cn(
 										"font-bold w-10 flex-shrink-0",
 										rating === "tot" && "text-slate-700 dark:text-emerald-300",
-										rating === "trung" && "text-amber-800 dark:text-amber-300",
+										rating === "trung" && "text-slate-700 dark:text-amber-300",
 										rating === "xau" && "text-slate-700 dark:text-rose-300",
 									)}
 									>
@@ -998,7 +998,7 @@ export function BuiltinTheme() {
 							<span className={cn(
 								"font-bold text-[10px] uppercase tracking-wide mr-1",
 								duongTrachAdvisory.truct.rating === "tot" && "text-slate-700 dark:text-emerald-300",
-								duongTrachAdvisory.truct.rating === "trung" && "text-amber-800 dark:text-amber-300",
+								duongTrachAdvisory.truct.rating === "trung" && "text-slate-700 dark:text-amber-300",
 								duongTrachAdvisory.truct.rating === "xau" && "text-slate-700 dark:text-rose-300",
 							)}
 							>
@@ -1026,8 +1026,8 @@ export function BuiltinTheme() {
 												hourAdvisory.currentChiIndex === slot.chiIndex
 													? duongTrachAdvisory.truct.rating === "trung" ? "bg-amber-500 text-white font-bold" : "bg-emerald-500 text-white font-bold"
 													: duongTrachAdvisory.truct.rating === "trung"
-														? "bg-amber-100 dark:bg-amber-900 text-amber-800 dark:text-amber-200"
-														: "bg-emerald-100 dark:bg-emerald-900 text-emerald-800 dark:text-emerald-200",
+														? "bg-amber-100 dark:bg-amber-900 text-slate-700 dark:text-amber-200"
+														: "bg-emerald-100 dark:bg-emerald-900 text-slate-700 dark:text-emerald-200",
 											)}
 										>
 											<span className="font-semibold">{branchLabelMap[slot.branchKey]}</span>
@@ -1073,7 +1073,7 @@ export function BuiltinTheme() {
 									<span className={cn(
 										"font-bold w-10 flex-shrink-0",
 										rating === "tot" && "text-slate-700 dark:text-emerald-300",
-										rating === "trung" && "text-amber-800 dark:text-amber-300",
+										rating === "trung" && "text-slate-700 dark:text-amber-300",
 										rating === "xau" && "text-slate-700 dark:text-rose-300",
 									)}
 									>
@@ -1136,7 +1136,7 @@ export function BuiltinTheme() {
 							<span className={cn(
 								"font-bold text-[10px] uppercase tracking-wide mr-1",
 								amTrachAdvisory.truct.rating === "tot" && "text-slate-700 dark:text-emerald-300",
-								amTrachAdvisory.truct.rating === "trung" && "text-amber-800 dark:text-amber-300",
+								amTrachAdvisory.truct.rating === "trung" && "text-slate-700 dark:text-amber-300",
 								amTrachAdvisory.truct.rating === "xau" && "text-slate-700 dark:text-rose-300",
 							)}
 							>
@@ -1164,8 +1164,8 @@ export function BuiltinTheme() {
 												hourAdvisory.currentChiIndex === slot.chiIndex
 													? amTrachAdvisory.truct.rating === "trung" ? "bg-amber-500 text-white font-bold" : "bg-emerald-500 text-white font-bold"
 													: amTrachAdvisory.truct.rating === "trung"
-														? "bg-amber-100 dark:bg-amber-900 text-amber-800 dark:text-amber-200"
-														: "bg-emerald-100 dark:bg-emerald-900 text-emerald-800 dark:text-emerald-200",
+														? "bg-amber-100 dark:bg-amber-900 text-slate-700 dark:text-amber-200"
+														: "bg-emerald-100 dark:bg-emerald-900 text-slate-700 dark:text-emerald-200",
 											)}
 										>
 											<span className="font-semibold">{branchLabelMap[slot.branchKey]}</span>
