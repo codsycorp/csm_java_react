@@ -793,20 +793,25 @@ export function BuiltinTheme() {
 					</div>
 				</div>
 
-				{/* Day-Based Recommendations - always show both, highlight active */}
+				{/* Day-Based Recommendations — single card, show active type */}
 				<div className="space-y-2">
 					{/* Can Duong Day */}
 					<div className={cn("rounded-lg border overflow-hidden", hourAdvisory.dayType === "duong"
-						? "border-amber-400 ring-1 ring-amber-300"
-						: "border-slate-200 opacity-55")}
+						? "border-amber-400"
+						: "border-slate-200 opacity-50")}
 					>
-						<div className={cn("px-3 py-2 flex items-center gap-2", hourAdvisory.dayType === "duong" ? "bg-amber-100" : "bg-slate-100")}>
+						{/* header */}
+						<div className={cn(
+							"px-3 py-2 flex items-center gap-2",
+							hourAdvisory.dayType === "duong" ? "bg-amber-500" : "bg-slate-300",
+						)}
+						>
 							<span className="text-sm font-bold">☀️</span>
-							<span className={cn("text-sm font-bold", hourAdvisory.dayType === "duong" ? "text-amber-900" : "text-slate-500")}>
+							<span className="text-sm font-bold text-white">
 								{t("preferences.theme.builtin.duongTrach")}
 							</span>
 							{hourAdvisory.dayType === "duong" && (
-								<span className="text-[10px] font-medium bg-amber-200 text-amber-900 px-1.5 py-0.5 rounded-full ml-auto">
+								<span className="text-[10px] font-medium bg-white/25 text-white px-1.5 py-0.5 rounded-full ml-auto">
 									{t("preferences.theme.builtin.dayCanChiLabel", {
 										can: t(`preferences.theme.builtin.stem${(["Jia","Yi","Bing","Ding","Wu","Ji","Geng","Xin","Ren","Gui"])[hourAdvisory.dayCanIndex]}`),
 										chi: branchLabelMap[hourAdvisory.dayBranchKey],
@@ -814,39 +819,49 @@ export function BuiltinTheme() {
 								</span>
 							)}
 						</div>
+						{/* description — only when active */}
 						{hourAdvisory.dayType === "duong" && (
-							<div className="px-3 py-2 bg-amber-50 text-[10px] text-amber-700 italic border-b border-amber-200">
+							<div className="px-3 py-2 bg-amber-50 text-xs text-amber-900 italic border-b border-amber-200">
 								{t("preferences.theme.builtin.canDuongDesc")}
 							</div>
 						)}
-						<div className="grid grid-cols-2 divide-x divide-slate-200">
-							<div className={cn("p-2 text-xs space-y-1", hourAdvisory.dayType === "duong" ? "text-amber-900" : "text-slate-400")}>
-								<p className={cn("font-semibold mb-1", hourAdvisory.dayType === "duong" ? "text-emerald-700" : "text-slate-400")}>✓ Nên</p>
-								<p>• {t("preferences.theme.builtin.duongTrachDo1")}</p>
-								<p>• {t("preferences.theme.builtin.duongTrachDo2")}</p>
-								<p>• {t("preferences.theme.builtin.duongTrachDo3")}</p>
-								<p>• {t("preferences.theme.builtin.duongTrachDo4")}</p>
-							</div>
-							<div className={cn("p-2 text-xs space-y-1", hourAdvisory.dayType === "duong" ? "text-amber-900" : "text-slate-400")}>
-								<p className={cn("font-semibold mb-1", hourAdvisory.dayType === "duong" ? "text-rose-700" : "text-slate-400")}>✗ Tránh</p>
-								<p>• {t("preferences.theme.builtin.duongTrachAvoid1")}</p>
-								<p>• {t("preferences.theme.builtin.duongTrachAvoid2")}</p>
-							</div>
+						{/* nên */}
+						<div className="px-3 pt-2 pb-1 bg-white border-b border-slate-100">
+							<p className="text-[10px] font-bold text-emerald-600 uppercase tracking-wide mb-1">✓ {t("preferences.theme.builtin.duongTrachShouldTitle") || "Nên"}</p>
+							<ul className={cn("text-xs space-y-0.5", hourAdvisory.dayType === "duong" ? "text-slate-800" : "text-slate-400")}>
+								<li>• {t("preferences.theme.builtin.duongTrachDo1")}</li>
+								<li>• {t("preferences.theme.builtin.duongTrachDo2")}</li>
+								<li>• {t("preferences.theme.builtin.duongTrachDo3")}</li>
+								<li>• {t("preferences.theme.builtin.duongTrachDo4")}</li>
+							</ul>
+						</div>
+						{/* tránh */}
+						<div className="px-3 pt-2 pb-2 bg-white">
+							<p className="text-[10px] font-bold text-rose-600 uppercase tracking-wide mb-1">✗ {t("preferences.theme.builtin.duongTrachAvoidTitle") || "Tránh"}</p>
+							<ul className={cn("text-xs space-y-0.5", hourAdvisory.dayType === "duong" ? "text-slate-800" : "text-slate-400")}>
+								<li>• {t("preferences.theme.builtin.duongTrachAvoid1")}</li>
+								<li>• {t("preferences.theme.builtin.duongTrachAvoid2")}</li>
+							</ul>
 						</div>
 					</div>
 
 					{/* Can Am Day */}
 					<div className={cn("rounded-lg border overflow-hidden", hourAdvisory.dayType === "am"
-						? "border-indigo-400 ring-1 ring-indigo-300"
-						: "border-slate-200 opacity-55")}
+						? "border-indigo-400"
+						: "border-slate-200 opacity-50")}
 					>
-						<div className={cn("px-3 py-2 flex items-center gap-2", hourAdvisory.dayType === "am" ? "bg-indigo-100" : "bg-slate-100")}>
+						{/* header */}
+						<div className={cn(
+							"px-3 py-2 flex items-center gap-2",
+							hourAdvisory.dayType === "am" ? "bg-indigo-600" : "bg-slate-300",
+						)}
+						>
 							<span className="text-sm font-bold">🌑</span>
-							<span className={cn("text-sm font-bold", hourAdvisory.dayType === "am" ? "text-indigo-900" : "text-slate-500")}>
+							<span className="text-sm font-bold text-white">
 								{t("preferences.theme.builtin.amTrach")}
 							</span>
 							{hourAdvisory.dayType === "am" && (
-								<span className="text-[10px] font-medium bg-indigo-200 text-indigo-900 px-1.5 py-0.5 rounded-full ml-auto">
+								<span className="text-[10px] font-medium bg-white/25 text-white px-1.5 py-0.5 rounded-full ml-auto">
 									{t("preferences.theme.builtin.dayCanChiLabel", {
 										can: t(`preferences.theme.builtin.stem${(["Jia","Yi","Bing","Ding","Wu","Ji","Geng","Xin","Ren","Gui"])[hourAdvisory.dayCanIndex]}`),
 										chi: branchLabelMap[hourAdvisory.dayBranchKey],
@@ -854,26 +869,31 @@ export function BuiltinTheme() {
 								</span>
 							)}
 						</div>
+						{/* description — only when active */}
 						{hourAdvisory.dayType === "am" && (
-							<div className="px-3 py-2 bg-indigo-50 text-[10px] text-indigo-700 italic border-b border-indigo-200">
+							<div className="px-3 py-2 bg-indigo-50 text-xs text-indigo-900 italic border-b border-indigo-200">
 								{t("preferences.theme.builtin.canAmDesc")}
 							</div>
 						)}
-						<div className="grid grid-cols-2 divide-x divide-slate-200">
-							<div className={cn("p-2 text-xs space-y-1", hourAdvisory.dayType === "am" ? "text-indigo-900" : "text-slate-400")}>
-								<p className={cn("font-semibold mb-1", hourAdvisory.dayType === "am" ? "text-emerald-700" : "text-slate-400")}>✓ Nên</p>
-								<p>• {t("preferences.theme.builtin.amTrachDo1")}</p>
-								<p>• {t("preferences.theme.builtin.amTrachDo2")}</p>
-								<p>• {t("preferences.theme.builtin.amTrachDo3")}</p>
-								<p>• {t("preferences.theme.builtin.amTrachDo4")}</p>
-							</div>
-							<div className={cn("p-2 text-xs space-y-1", hourAdvisory.dayType === "am" ? "text-indigo-900" : "text-slate-400")}>
-								<p className={cn("font-semibold mb-1", hourAdvisory.dayType === "am" ? "text-rose-700" : "text-slate-400")}>✗ Tránh</p>
-								<p>• {t("preferences.theme.builtin.amTrachAvoid1")}</p>
-								<p>• {t("preferences.theme.builtin.amTrachAvoid2")}</p>
-								<p>• {t("preferences.theme.builtin.amTrachAvoid3")}</p>
-								<p>• {t("preferences.theme.builtin.amTrachAvoid4")}</p>
-							</div>
+						{/* nên */}
+						<div className="px-3 pt-2 pb-1 bg-white border-b border-slate-100">
+							<p className="text-[10px] font-bold text-emerald-600 uppercase tracking-wide mb-1">✓ {t("preferences.theme.builtin.amTrachShouldTitle") || "Nên"}</p>
+							<ul className={cn("text-xs space-y-0.5", hourAdvisory.dayType === "am" ? "text-slate-800" : "text-slate-400")}>
+								<li>• {t("preferences.theme.builtin.amTrachDo1")}</li>
+								<li>• {t("preferences.theme.builtin.amTrachDo2")}</li>
+								<li>• {t("preferences.theme.builtin.amTrachDo3")}</li>
+								<li>• {t("preferences.theme.builtin.amTrachDo4")}</li>
+							</ul>
+						</div>
+						{/* tránh */}
+						<div className="px-3 pt-2 pb-2 bg-white">
+							<p className="text-[10px] font-bold text-rose-600 uppercase tracking-wide mb-1">✗ {t("preferences.theme.builtin.amTrachAvoidTitle") || "Tránh"}</p>
+							<ul className={cn("text-xs space-y-0.5", hourAdvisory.dayType === "am" ? "text-slate-800" : "text-slate-400")}>
+								<li>• {t("preferences.theme.builtin.amTrachAvoid1")}</li>
+								<li>• {t("preferences.theme.builtin.amTrachAvoid2")}</li>
+								<li>• {t("preferences.theme.builtin.amTrachAvoid3")}</li>
+								<li>• {t("preferences.theme.builtin.amTrachAvoid4")}</li>
+							</ul>
 						</div>
 					</div>
 				</div>
