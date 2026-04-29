@@ -2,7 +2,7 @@ import type { MenuProps } from "antd";
 
 import { useCurrentRoute } from "#src/hooks";
 import { removeTrailingSlash } from "#src/router/utils";
-import { usePermissionStore, useUserStore, useAppStore } from "#src/store";
+import { usePermissionStore, useUserStore, useAppStore, usePreferencesStore } from "#src/store";
 import { resolveDevFlag } from "#src/utils/dev-flag";
 
 import { getTableData, updateTableData } from "#src/components/csm-grid/CsmApi";
@@ -114,21 +114,26 @@ export function useMenu() {
 	const navigate = useNavigate();
 	const { t, i18n } = useTranslation();
 	const appId = useAppStore(state => state.currentAppId);
+	const preferenceLanguage = usePreferencesStore(state => state.language);
 	
-	// Get current language: prefer user preference from backend, fallback to i18n
-	// This ensures menu displays in the language selected by the user in system settings
+	const resolveMenuLanguage = (raw: string | null | undefined): "vi" | "en" | "zh" => {
+		const normalized = String(raw || "").toLowerCase();
+		if (normalized.startsWith("en")) return "en";
+		if (normalized.startsWith("zh")) return "zh";
+		return "vi";
+	};
+
+	// Prefer reactive sources (store/i18n) to avoid one-step lag.
 	const currentLanguage = useMemo(() => {
-		// Try to get user's language preference from localStorage (set by language selector)
-		const savedLanguage = localStorage.getItem('selectedLanguage') as any;
-		if (savedLanguage && ['vi', 'en', 'zh'].includes(savedLanguage)) {
-			return savedLanguage;
+		if (preferenceLanguage) {
+			return resolveMenuLanguage(preferenceLanguage);
 		}
-		
-		// Fallback to i18n language
-		const i18nLang = i18n?.language || 'vi';
-		return i18nLang.toLowerCase().startsWith('en') ? 'en' : 
-		       i18nLang.toLowerCase().startsWith('zh') ? 'zh' : 'vi';
-	}, [i18n?.language]);
+		if (i18n?.language) {
+			return resolveMenuLanguage(i18n.language);
+		}
+
+		return resolveMenuLanguage(localStorage.getItem("selectedLanguage") || "vi");
+	}, [preferenceLanguage, i18n?.language]);
 	
 	// Dùng apiWholeMenus nếu có (chứa toàn bộ data từ API bao gồm table_name)
 	// Cần thêm `key` field để compatible với Ant Design Menu

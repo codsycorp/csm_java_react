@@ -5,6 +5,7 @@ import { useCurrentRoute } from "#src/hooks";
 import { isDynamicRoutingEnabled } from "#src/router/routes/config";
 import { removeTrailingSlash } from "#src/router/utils";
 import { usePermissionStore, usePreferencesStore, useTabsStore, useUserStore } from "#src/store";
+import { getLocalizedField, type SupportedLanguage } from "#src/utils/i18nHelper";
 import { isString } from "#src/utils";
 import { normalizeMenuLabel } from "#src/utils";
 
@@ -59,7 +60,7 @@ export default function LayoutTabbar() {
 	const { t } = useTranslation();
 	const currentRoute = useCurrentRoute();
 
-	const { tabbarStyleType, tabbarShowMaximize, tabbarShowMore } = usePreferencesStore();
+	const { tabbarStyleType, tabbarShowMaximize, tabbarShowMore, language: preferenceLanguage } = usePreferencesStore();
 	const { flatRouteList, hasFetchedDynamicRoutes, apiWholeMenus, broadcastHomeCode } = usePermissionStore();
 	const selectedMenuIdForTab = useUserStore(state => state.selectedMenuIdForTab);
 	const { activeKey, isRefresh, setActiveKey, setIsRefresh, openTabs, addTab, insertBeforeTab } = useTabsStore();
@@ -70,6 +71,37 @@ export default function LayoutTabbar() {
 	const getTabsStore = useTabsStore.getState;
 	
 	const [items, onClickMenu] = useDropdownMenu();
+
+	const currentLanguage = useMemo<SupportedLanguage>(() => {
+		const normalized = String(preferenceLanguage || "").toLowerCase();
+		if (normalized.startsWith("en")) return "en";
+		if (normalized.startsWith("zh")) return "zh";
+		return "vi";
+	}, [preferenceLanguage]);
+
+	const resolveMenuLocalizedLabel = useCallback((menu: any): string => {
+		if (!menu || typeof menu !== "object") return "";
+
+		const byLabel = getLocalizedField(menu, "label", currentLanguage, false);
+		if (byLabel) {
+			const normalized = normalizeI18nLabel(byLabel, t);
+			if (normalized) return normalized;
+		}
+
+		const byName = getLocalizedField(menu, "name", currentLanguage, false);
+		if (byName) {
+			const normalized = normalizeI18nLabel(byName, t);
+			if (normalized) return normalized;
+		}
+
+		const fallback = getLocalizedField(menu, "label", currentLanguage, true) || getLocalizedField(menu, "name", currentLanguage, true);
+		if (fallback) {
+			const normalized = normalizeI18nLabel(fallback, t);
+			if (normalized) return normalized;
+		}
+
+		return "";
+	}, [currentLanguage, t]);
 
 	const flatApiMenus = useMemo(() => {
 		const result: any[] = [];
@@ -280,17 +312,13 @@ export default function LayoutTabbar() {
 			return t(canonicalSystemLabelKey);
 		}
 
-		// 1. Check navigation state first (passed from menu click)
-		if (locationState?.menuLabel) {
-			const navLabel = normalizeI18nLabel(locationState.menuLabel, t);
-			if (navLabel) return navLabel;
-		}
-
 		const tabCandidates = [
 			tab?.menuData,
 			tab?.m_configs,
 		].filter(Boolean);
 		for (const menuLike of tabCandidates) {
+			const ownLocalized = resolveMenuLocalizedLabel(menuLike);
+			if (ownLocalized) return ownLocalized;
 			const ownLabel = normalizeI18nLabel(menuLike?.label || menuLike?.title || menuLike?.name, t);
 			if (ownLabel) return ownLabel;
 		}
@@ -321,6 +349,8 @@ export default function LayoutTabbar() {
 		if (menuId) {
 			const menuById = menuLookup.byId.get(menuId) || menuLookup.byKey.get(menuId);
 			if (menuById) {
+				const localized = resolveMenuLocalizedLabel(menuById);
+				if (localized) return localized;
 				const resolved = normalizeI18nLabel(menuById.label || menuById.title || menuById.name || menuId, t);
 				if (resolved) return resolved;
 			}
@@ -328,8 +358,16 @@ export default function LayoutTabbar() {
 
 		const byPathMenu = findMenuByRuntimePath(path);
 		if (byPathMenu) {
+			const localized = resolveMenuLocalizedLabel(byPathMenu);
+			if (localized) return localized;
 			const resolved = normalizeI18nLabel(byPathMenu.label || byPathMenu.title || byPathMenu.name || path, t);
 			if (resolved) return resolved;
+		}
+
+		// Keep navigation label as lower priority because it can be stale after language switch.
+		if (locationState?.menuLabel) {
+			const navLabel = normalizeI18nLabel(locationState.menuLabel, t);
+			if (navLabel) return navLabel;
 		}
 
 		// 3. Fallback to route definition from flatRouteList
@@ -356,7 +394,7 @@ export default function LayoutTabbar() {
 		if (existing) return existing;
 
 		return "";
-	}, [flatRouteList, menuLookup, t]);
+	}, [flatRouteList, menuLookup, t, resolveMenuLocalizedLabel]);
 
 	const tabItems: TabItemProps[] = Array.from(openTabs.values()).map(item => {
 		const isHome = item.key === "homepage";
@@ -406,7 +444,7 @@ export default function LayoutTabbar() {
 				addTab(key, { ...tab, label: newLabel });
 			}
 		}
-	}, [openTabs, deriveTabLabel, addTab, hasFetchedDynamicRoutes, menuLookup]);
+	}, [openTabs, deriveTabLabel, addTab, hasFetchedDynamicRoutes, menuLookup, currentLanguage]);
 
 	/**
 	 * 监听路由变化，添加标签页和激活标签页

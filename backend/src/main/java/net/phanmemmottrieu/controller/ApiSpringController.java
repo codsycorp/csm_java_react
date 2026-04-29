@@ -3672,6 +3672,10 @@ public class ApiSpringController {
                 sb.append("- Prefer reusing existing ids/keys/paths from legacy configs when possible.\n");
                 sb.append("- If required source mapping is missing, return a clear validation note instead of fabricating generic placeholders.\n");
                 sb.append("- Keep labels/domain terms aligned with source language and data (no generic demo labels like Product/Order unless explicitly requested).\n\n");
+                sb.append("MULTILINGUAL OUTPUT RULES (required for menu_json):\n");
+                sb.append("- Every menu node must include: label (VI), label_en (EN), label_zh (ZH).\n");
+                sb.append("- Every table field must include: f_header (VI), f_header_en (EN), f_header_zh (ZH).\n");
+                sb.append("- If precise EN/ZH wording is uncertain, use best-effort translation and avoid leaving *_en/*_zh empty.\n\n");
             } else {
                 sb.append("You are a coding assistant inside a CodeMirror editor.\n");
                 sb.append("Respond concisely with practical code suggestions and explanations.\n");

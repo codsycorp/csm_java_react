@@ -4,6 +4,7 @@ import type { MenuProps } from "antd";
 import { useCurrentRoute } from "#src/hooks";
 import { removeTrailingSlash } from "#src/router/utils";
 import { usePermissionStore, useUserStore, useAppStore, useTabsStore } from "#src/store";
+import { usePreferencesStore } from "#src/store";
 import { resolveDevFlag } from "#src/utils/dev-flag";
 import { toPermissionBigInt, isSuperPermissionProfile } from "#src/utils/permission-bitfield";
 
@@ -150,25 +151,30 @@ export function useMenu() {
 	const { addTab, setActiveKey } = useTabsStore();
 	const wholeMenus = usePermissionStore(state => state.wholeMenus);
 	const apiWholeMenus = usePermissionStore(state => state.apiWholeMenus);
+	const preferenceLanguage = usePreferencesStore(state => state.language);
 	const { isMixedNav, isTwoColumnNav } = useLayout();
 	const [rootMenuKey, setRootMenuKey] = useState("");
 	const { t, i18n } = useTranslation();
 	const appId = useAppStore(state => state.currentAppId);
+
+	const resolveMenuLanguage = (raw: string | null | undefined): "vi" | "en" | "zh" => {
+		const normalized = String(raw || "").toLowerCase();
+		if (normalized.startsWith("en")) return "en";
+		if (normalized.startsWith("zh")) return "zh";
+		return "vi";
+	};
 	
-	// Get current language: prefer user preference from backend, fallback to i18n
-	// This ensures menu displays in the language selected by the user in system settings
+	// Prefer reactive sources to prevent language lag after a single switch.
 	const currentLanguage = useMemo(() => {
-		// Try to get user's language preference from localStorage (set by language selector)
-		const savedLanguage = localStorage.getItem('selectedLanguage') as any;
-		if (savedLanguage && ['vi', 'en', 'zh'].includes(savedLanguage)) {
-			return savedLanguage;
+		if (preferenceLanguage) {
+			return resolveMenuLanguage(preferenceLanguage);
 		}
-		
-		// Fallback to i18n language
-		const i18nLang = i18n?.language || 'vi';
-		return i18nLang.toLowerCase().startsWith('en') ? 'en' : 
-		       i18nLang.toLowerCase().startsWith('zh') ? 'zh' : 'vi';
-	}, [i18n?.language]);
+		if (i18n?.language) {
+			return resolveMenuLanguage(i18n.language);
+		}
+
+		return resolveMenuLanguage(localStorage.getItem("selectedLanguage") || "vi");
+	}, [preferenceLanguage, i18n?.language]);
 	
 	// IMPORTANT: Luôn render từ wholeMenus (đã được permission store lọc theo menusPermissions).
 	// Không dùng apiWholeMenus để render, vì apiWholeMenus có thể là dữ liệu thô và làm lộ full menu app.

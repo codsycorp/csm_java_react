@@ -1927,6 +1927,8 @@ function buildMenuTypeCatalog(): string {
     "- Type 1/2/6 thuong khong can path (runtime /system/grid/:menuId).",
     "- data_scope_override hop le: NONE | ALL | OWNER | DEPARTMENT | BRANCH.",
     "- Khong tu them module ngoai yeu cau; khong tao lai menu he thong co san.",
+    "- Moi menu phai co du 3 ngon ngu: label (VI), label_en (EN), label_zh (ZH).",
+    "- Moi field trong table phai co du 3 nhan: f_header (VI), f_header_en (EN), f_header_zh (ZH).",
   ].join("\n");
 }
 
@@ -2055,11 +2057,24 @@ function ensureMenuDefaults(menu: MenuItemType): MenuItemType {
     next.name = String(nameObj.vi || nameObj.en || nameObj.zh || nameObj.cn || next.label || next.id || "");
   }
 
+  if (!next.label_en) next.label_en = String(next.label || next.name || next.id || "");
+  if (!next.label_zh) next.label_zh = String(next.label || next.name || next.id || "");
+
   if (Array.isArray((next as any).table)) {
     (next as any).table = (next as any).table.map((field: any) => {
       const f = { ...field };
       if (f.f_header_vi && !f.f_header) f.f_header = f.f_header_vi;
       if (f.f_header_sh && !f.f_header_zh) f.f_header_zh = f.f_header_sh;
+      if (isPlainObject(f.f_header)) {
+        const headerObj = f.f_header as any;
+        if (headerObj.vi && !f.f_header_vi) f.f_header_vi = String(headerObj.vi);
+        if (headerObj.en && !f.f_header_en) f.f_header_en = String(headerObj.en);
+        if ((headerObj.zh || headerObj.cn) && !f.f_header_zh) f.f_header_zh = String(headerObj.zh || headerObj.cn);
+        f.f_header = String(headerObj.vi || headerObj.en || headerObj.zh || headerObj.cn || f.f_name || "");
+      }
+      if (!f.f_header) f.f_header = String(f.f_name || "");
+      if (!f.f_header_en) f.f_header_en = String(f.f_header || f.f_name || "");
+      if (!f.f_header_zh) f.f_header_zh = String(f.f_header || f.f_name || "");
       return f;
     });
   }
@@ -2080,6 +2095,7 @@ function normalizeMenuList(menus: MenuItemType[]) {
 function extractAiPayload(response: any) {
   let payload = response?.result ?? response?.data ?? response;
   if (payload?.result) payload = payload.result;
+  if (payload?.code && typeof payload.code === "object") payload = payload.code;
 
   if (typeof payload === "string") {
     try {
@@ -2106,16 +2122,35 @@ function isLikelyMenuNode(value: any): boolean {
 function extractMenuListFromPayload(payload: any): MenuItemType[] {
   if (!payload) return [];
 
+  if (Array.isArray(payload?.code?.menu)) return payload.code.menu as MenuItemType[];
+  if (isLikelyMenuNode(payload?.code?.menu)) return [payload.code.menu as MenuItemType];
+
   if (Array.isArray(payload?.menu)) return payload.menu as MenuItemType[];
   if (isLikelyMenuNode(payload?.menu)) return [payload.menu as MenuItemType];
   if (Array.isArray(payload)) return payload as MenuItemType[];
   if (isLikelyMenuNode(payload)) return [payload as MenuItemType];
 
   const nestedData = payload?.data;
+  if (Array.isArray(nestedData?.code?.menu)) return nestedData.code.menu as MenuItemType[];
+  if (isLikelyMenuNode(nestedData?.code?.menu)) return [nestedData.code.menu as MenuItemType];
   if (Array.isArray(nestedData?.menu)) return nestedData.menu as MenuItemType[];
   if (isLikelyMenuNode(nestedData?.menu)) return [nestedData.menu as MenuItemType];
   if (Array.isArray(nestedData)) return nestedData as MenuItemType[];
   if (isLikelyMenuNode(nestedData)) return [nestedData as MenuItemType];
+
+  const nestedResult = payload?.result;
+  if (nestedResult) {
+    const fromResult = extractMenuListFromPayload(nestedResult);
+    if (fromResult.length > 0) return fromResult;
+  }
+
+  if (typeof payload === "string") {
+    const fromMixed = tryExtractMenuPayloadFromMixedText(payload);
+    if (fromMixed) {
+      const fromMixedMenus = extractMenuListFromPayload(fromMixed);
+      if (fromMixedMenus.length > 0) return fromMixedMenus;
+    }
+  }
 
   return [];
 }
@@ -2945,6 +2980,8 @@ export function buildAiIncrementalUpdatePayload(
       "2. Chỉ ADD/EDIT/DELETE các menu liên quan đến yêu cầu thay đổi bên dưới.",
       "3. Giữ nguyên id, parentId, menu_id, path của tất cả các node không bị yêu cầu thay đổi.",
       "4. Nếu thêm menu mới: phải có đầy đủ table_name, table fields, type_form đúng chuẩn.",
+      "4.1. Mọi menu phải có đủ label (VI), label_en (EN), label_zh (ZH).",
+      "4.2. Mọi field phải có đủ f_header (VI), f_header_en (EN), f_header_zh (ZH).",
       "5. Output format: JSON object với key 'menu' là mảng toàn bộ cây menu.",
     ].join("\n"),
     app_id_specific_metadata: {

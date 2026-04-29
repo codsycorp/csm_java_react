@@ -5,6 +5,7 @@ import { useCurrentRoute } from "#src/hooks";
 import { isDynamicRoutingEnabled } from "#src/router/routes/config";
 import { removeTrailingSlash } from "#src/router/utils";
 import { usePermissionStore, usePreferencesStore, useTabsStore, useUserStore } from "#src/store";
+import { getLocalizedField, type SupportedLanguage } from "#src/utils/i18nHelper";
 import { isString } from "#src/utils";
 
 import { RedoOutlined } from "@ant-design/icons";
@@ -32,7 +33,7 @@ export default function LayoutTabbar() {
 	const { t } = useTranslation();
 	const currentRoute = useCurrentRoute();
 
-	const { tabbarStyleType, tabbarShowMaximize, tabbarShowMore } = usePreferencesStore();
+	const { tabbarStyleType, tabbarShowMaximize, tabbarShowMore, language: preferenceLanguage } = usePreferencesStore();
 	const { flatRouteList, hasFetchedDynamicRoutes, apiWholeMenus } = usePermissionStore();
 	const selectedMenuIdForTab = useUserStore(state => state.selectedMenuIdForTab);
 	const { activeKey, isRefresh, setActiveKey, setIsRefresh, openTabs, addTab, insertBeforeTab } = useTabsStore();
@@ -43,6 +44,38 @@ export default function LayoutTabbar() {
 	const getTabsStore = useTabsStore.getState;
 	
 	const [items, onClickMenu] = useDropdownMenu();
+
+	const currentLanguage = useMemo<SupportedLanguage>(() => {
+		const normalized = String(preferenceLanguage || "").toLowerCase();
+		if (normalized.startsWith("en")) return "en";
+		if (normalized.startsWith("zh")) return "zh";
+		return "vi";
+	}, [preferenceLanguage]);
+
+	const resolveMenuLabel = useCallback((menu: any): string => {
+		const byLabel = getLocalizedField(menu || {}, "label", currentLanguage, false);
+		if (byLabel) return String(byLabel).replace(/^[\d\.\s]+/, "").trim();
+
+		const byName = getLocalizedField(menu || {}, "name", currentLanguage, false);
+		if (byName) return String(byName).replace(/^[\d\.\s]+/, "").trim();
+
+		const fallback = getLocalizedField(menu || {}, "label", currentLanguage, true) || getLocalizedField(menu || {}, "name", currentLanguage, true);
+		if (fallback) return String(fallback).replace(/^[\d\.\s]+/, "").trim();
+
+		return "";
+	}, [currentLanguage]);
+
+	const findMenuInTree = useCallback((menus: any[], matcher: (menu: any) => boolean): any => {
+		if (!Array.isArray(menus)) return null;
+		for (const menu of menus) {
+			if (matcher(menu)) return menu;
+			if (menu?.children?.length) {
+				const found = findMenuInTree(menu.children, matcher);
+				if (found) return found;
+			}
+		}
+		return null;
+	}, []);
 
 	// Debug: Log openTabs to see what's stored
 	// useEffect(() => {
@@ -209,35 +242,25 @@ export default function LayoutTabbar() {
 	 * Priority: navigation state > menu tree (for dynamic grids) > route definition
 	 */
 	const deriveTabLabel = useCallback((path: string, locationState: any): string => {
-		// 1. Check navigation state first (passed from menu click)
-		if (locationState?.menuLabel) {
-			return locationState.menuLabel;
+		// 1. Always prefer menu tree label resolved by current language.
+		if (apiWholeMenus && apiWholeMenus.length > 0) {
+			const dynamicMatch = path.match(/\/system\/grid\/(.+)$/);
+			const gridMenuId = dynamicMatch ? String(dynamicMatch[1]) : "";
+			const matchedByPath = findMenuInTree(apiWholeMenus, (menu) => String(menu?.path || "") === path || String(menu?.key || "") === path);
+			const matchedByGridId = gridMenuId
+				? findMenuInTree(apiWholeMenus, (menu) => String(menu?.id ?? "") === gridMenuId || String(menu?.key ?? "") === gridMenuId)
+				: null;
+
+			const matchedMenu = matchedByPath || matchedByGridId;
+			if (matchedMenu) {
+				const localized = resolveMenuLabel(matchedMenu);
+				if (localized) return localized;
+			}
 		}
 
-		// 2. For dynamic grid routes, derive from menu tree
-		const dynamicMatch = path.match(/\/system\/grid\/(.+)$/);
-		if (dynamicMatch && apiWholeMenus) {
-			const menuId = dynamicMatch[1];
-			const findMenuInTree = (menus: any[], targetId: string): any => {
-				const targetStr = String(targetId);
-				for (const menu of menus) {
-					const menuIdStr = menu.id != null ? String(menu.id) : undefined;
-					const menuKeyStr = menu.key != null ? String(menu.key) : undefined;
-					if (menuIdStr === targetStr || menuKeyStr === targetStr) return menu;
-					if (menu.children?.length) {
-						const found = findMenuInTree(menu.children, targetId);
-						if (found) return found;
-					}
-				}
-				return null;
-			};
-
-			const menu = findMenuInTree(apiWholeMenus, menuId);
-			if (menu) {
-				const rawLabel = menu.label || menu.title || menu.name || menuId;
-				const cleanLabel = rawLabel.replace(/^[\d\.\s]+/, "").trim();
-				return cleanLabel;
-			}
+		// 2. Fallback to navigation state (can be stale after language switch).
+		if (typeof locationState?.menuLabel === "string" && locationState.menuLabel.trim()) {
+			return locationState.menuLabel.trim();
 		}
 
 		// 3. Fallback to route definition from flatRouteList
@@ -260,7 +283,7 @@ export default function LayoutTabbar() {
 
 		// 4. Last resort: use path as label
 		return path;
-	}, [apiWholeMenus, flatRouteList, t]);
+	}, [apiWholeMenus, flatRouteList, t, resolveMenuLabel, findMenuInTree]);
 
 	// Re-derive labels for restored tabs (e.g., from sessionStorage) to fix stale/wrong titles
 	useEffect(() => {
@@ -272,7 +295,7 @@ export default function LayoutTabbar() {
 				addTab(key, { ...tab, label: newLabel });
 			}
 		}
-	}, [openTabs, deriveTabLabel, addTab, hasFetchedDynamicRoutes]);
+	}, [openTabs, deriveTabLabel, addTab, hasFetchedDynamicRoutes, currentLanguage]);
 
 	/**
 	 * 监听路由变化，添加标签页和激活标签页

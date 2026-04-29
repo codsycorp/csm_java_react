@@ -1,16 +1,18 @@
 import type { MenuItemType } from "#src/api/system";
 import type { ActionType } from "@ant-design/pro-components";
 import { fetchDeleteMenuItem, fetchMenuList, fetchAppList, fetchMenuItemDetail, saveMenuStruct } from "#src/api/system/menu";
+import { generateSeoContentWithPrompt } from "#src/api/ai";
 import { BasicButton, BasicContent } from "#src/components";
 import { useAuth } from "#src/hooks";
 import { useAppStore, useUserStore } from "#src/store";
-import { usePermissionStore } from "#src/store";
+import { usePermissionStore, usePreferencesStore } from "#src/store";
 import { handleTree } from "#src/utils";
 import { resolveDevFlag } from "#src/utils/dev-flag";
+import { getLocalizedField, type SupportedLanguage } from "#src/utils/i18nHelper";
 
 import { PlusCircleOutlined } from "@ant-design/icons";
-import { Button, Tabs, Select, Row, Col } from "antd";
-import { useRef, useState, useEffect } from "react";
+import { Button, Tabs, Select, Row, Col, Space } from "antd";
+import { useRef, useState, useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { Form, Modal, Radio } from "antd";
 
@@ -28,7 +30,50 @@ export default function Menu() {
 	const { handleAsyncRoutes } = usePermissionStore();
 	const userDev = useUserStore(state => state.dev);
 	const userRoles = useUserStore(state => state.roles || []);
+	const preferenceLanguage = usePreferencesStore(state => state.language);
 	const isDevUser = resolveDevFlag(userDev, userRoles);
+
+	const resolveMenuLanguage = (raw: string | null | undefined): "vi" | "en" | "zh" => {
+		const normalized = String(raw || "").toLowerCase();
+		if (normalized.startsWith("en")) return "en";
+		if (normalized.startsWith("zh")) return "zh";
+		return "vi";
+	};
+
+	const getMenuDisplayLabel = (item: any, lang: string) => {
+		const currentLang = resolveMenuLanguage(lang) as SupportedLanguage;
+		const labelByLang = getLocalizedField(item, "label", currentLang, false);
+		if (labelByLang) {
+			const text = String(labelByLang);
+			return text.includes(".") ? t(text) : text;
+		}
+
+		const nameByLang = getLocalizedField(item, "name", currentLang, false);
+		if (nameByLang) {
+			const text = String(nameByLang);
+			return text.includes(".") ? t(text) : text;
+		}
+
+		const fallback = getLocalizedField(item, "label", currentLang, true) || getLocalizedField(item, "name", currentLang, true);
+		if (fallback) {
+			const text = String(fallback);
+			return text.includes(".") ? t(text) : text;
+		}
+
+		return String(item?.id || "");
+	};
+
+	const currentLanguage = useMemo(() => {
+		if (preferenceLanguage) {
+			return resolveMenuLanguage(preferenceLanguage);
+		}
+
+		if (i18n.language) {
+			return resolveMenuLanguage(i18n.language);
+		}
+
+		return resolveMenuLanguage(localStorage.getItem("selectedLanguage") || "vi");
+	}, [preferenceLanguage, i18n.language]);
 	const [activeTab, setActiveTab] = useState("table");
 	const [selectedApp, setSelectedApp] = useState<string>("");
 	const [appList, setAppList] = useState<any[]>([]);
@@ -37,6 +82,9 @@ export default function Menu() {
 	const [referralToken, setReferralToken] = useState<string>("");
 	const [copyOpen, setCopyOpen] = useState(false);
 	const [copySubmitting, setCopySubmitting] = useState(false);
+	const [languageGenerating, setLanguageGenerating] = useState(false);
+	const [pendingLanguageMenus, setPendingLanguageMenus] = useState<any[] | null>(null);
+	const [languageSaving, setLanguageSaving] = useState(false);
 	/* Detail Data */
 	const [isOpen, setIsOpen] = useState(false);
 	const [title, setTitle] = useState("");
@@ -318,6 +366,7 @@ export default function Menu() {
 
 		try {
 			await saveMenuStruct(selectedApp, nextMenu);
+			setPendingLanguageMenus(null);
 			await handleAsyncRoutes(selectedApp);
 			window.$message?.success(t("system.menu.reorderSuccess") || "Đã cập nhật thứ tự menu");
 		} catch (error) {
@@ -486,24 +535,10 @@ export default function Menu() {
 	};
 
 	const buildFlatParentMenus = (menuList: any[]) => {
-		const currentLang = String(i18n.language || "vi").toLowerCase();
 		setFlatParentMenus(
 			flattenMenus(menuList)
 				.map((item: MenuItemType) => {
-					let displayName = "" as string;
-					if (currentLang.startsWith("en") && typeof (item as any).label_en === "string" && (item as any).label_en) {
-						displayName = (item as any).label_en;
-					} else if (currentLang.startsWith("zh") && typeof (item as any).label_zh === "string" && (item as any).label_zh) {
-						displayName = (item as any).label_zh;
-					} else if (typeof (item as any).label === 'string') {
-						const lbl = (item as any).label as string;
-						displayName = lbl.includes('.') ? t(lbl) : lbl;
-					} else if (typeof (item as any).name === 'string') {
-						const nm = (item as any).name as string;
-						displayName = nm.includes('.') ? t(nm) : nm;
-					} else {
-						displayName = (item as any).label || (item as any).name || '';
-					}
+					const displayName = getMenuDisplayLabel(item as any, currentLanguage);
 					return {
 						...item,
 						name: displayName,
@@ -512,9 +547,14 @@ export default function Menu() {
 		);
 	};
 
+	useEffect(() => {
+		buildFlatParentMenus(menuData);
+	}, [menuData, currentLanguage, t]);
+
 	// Reload menu data when selectedApp changes (local only, do NOT affect global sidebar/tabbar)
 	useEffect(() => {
 		if (!selectedApp) return;
+		setPendingLanguageMenus(null);
 
 		const loadMenuData = async () => {
 			setTableLoading(true);
@@ -534,7 +574,7 @@ export default function Menu() {
 		};
 
 		loadMenuData();
-	}, [selectedApp, t]);
+	}, [selectedApp]);
 
 	const handleDeleteRow = async (id: string) => {
 		try {
@@ -563,6 +603,7 @@ export default function Menu() {
 		const normalized = normalizeMenus(rawMenuList);
 		setMenuData(normalized);
 		buildFlatParentMenus(normalized);
+		setPendingLanguageMenus(null);
 	};
 
 	// Khi user muốn áp dụng menu mới cho sidebar/app global, mới gọi setCurrentAppId & handleAsyncRoutes
@@ -571,7 +612,13 @@ export default function Menu() {
 			window.$message?.warning(t("system.menu.pleaseSelectApp"));
 			return;
 		}
-		await saveMenuStruct(selectedApp, menus);
+		const completedMenus = fillMenuLanguageFallbacks(menus as any[]);
+		if (!hasFullThreeLanguageData(completedMenus)) {
+			window.$message?.error(t("system.menu.languageDataIncomplete") || "Thiếu dữ liệu 3 ngôn ngữ cho menu/table. Vui lòng tạo lại.");
+			return;
+		}
+		await saveMenuStruct(selectedApp, completedMenus as any);
+		setPendingLanguageMenus(null);
 		await refreshTable();
 		if (applyToSidebar) {
 			setCurrentAppId(selectedApp);
@@ -689,13 +736,7 @@ export default function Menu() {
 	};
 
 	const menuOptions = flattenMenus(menuData).map((item: any) => {
-		const currentLang = String(i18n.language || "vi").toLowerCase();
-		const baseLabel = currentLang.startsWith("en")
-			? (item.label_en || item.label || item.name || item.id)
-			: currentLang.startsWith("zh")
-				? (item.label_zh || item.label || item.name || item.id)
-				: (item.label || item.name || item.id);
-		const translatedBase = typeof baseLabel === "string" && baseLabel.includes(".") ? t(baseLabel) : baseLabel;
+		const translatedBase = getMenuDisplayLabel(item, currentLanguage);
 		const extras: string[] = [];
 		if (item.label_en) extras.push(`EN: ${item.label_en}`);
 		if (item.label_zh) extras.push(`ZH: ${item.label_zh}`);
@@ -704,6 +745,224 @@ export default function Menu() {
 			value: item.id,
 		};
 	});
+
+	const extractBalancedJsonBlock = (text: string, startIndex: number): string | null => {
+		if (startIndex < 0 || startIndex >= text.length) return null;
+		const opener = text[startIndex];
+		const closer = opener === "{" ? "}" : opener === "[" ? "]" : "";
+		if (!closer) return null;
+
+		let depth = 0;
+		let inString = false;
+		let escaped = false;
+		for (let i = startIndex; i < text.length; i += 1) {
+			const ch = text[i];
+			if (inString) {
+				if (escaped) {
+					escaped = false;
+					continue;
+				}
+				if (ch === "\\") {
+					escaped = true;
+					continue;
+				}
+				if (ch === '"') inString = false;
+				continue;
+			}
+
+			if (ch === '"') {
+				inString = true;
+				continue;
+			}
+			if (ch === opener) depth += 1;
+			if (ch === closer) {
+				depth -= 1;
+				if (depth === 0) return text.slice(startIndex, i + 1);
+			}
+		}
+		return null;
+	};
+
+	const extractMenuListFromAnyPayload = (payload: any): any[] => {
+		if (!payload) return [];
+		if (Array.isArray(payload)) return payload;
+		if (Array.isArray(payload.menu)) return payload.menu;
+		if (Array.isArray(payload.code?.menu)) return payload.code.menu;
+		if (Array.isArray(payload.data?.menu)) return payload.data.menu;
+		if (Array.isArray(payload.result?.menu)) return payload.result.menu;
+		if (Array.isArray(payload.result?.code?.menu)) return payload.result.code.menu;
+		if (Array.isArray(payload.data?.code?.menu)) return payload.data.code.menu;
+
+		if (typeof payload === "string") {
+			const text = payload.trim();
+			if (!text) return [];
+			try {
+				return extractMenuListFromAnyPayload(JSON.parse(text));
+			} catch {
+				// continue with block extraction
+			}
+			const strippedFence = text
+				.replace(/^```(?:json)?\s*/i, "")
+				.replace(/\s*```$/i, "")
+				.trim();
+			if (strippedFence && strippedFence !== text) {
+				try {
+					return extractMenuListFromAnyPayload(JSON.parse(strippedFence));
+				} catch {
+					// continue
+				}
+			}
+
+			for (let i = 0; i < text.length; i += 1) {
+				const ch = text[i];
+				if (ch !== "{" && ch !== "[") continue;
+				const block = extractBalancedJsonBlock(text, i);
+				if (!block) continue;
+				try {
+					return extractMenuListFromAnyPayload(JSON.parse(block));
+				} catch {
+					// try next
+				}
+			}
+		}
+
+		return [];
+	};
+
+	const fillMenuLanguageFallbacks = (menus: any[]): any[] => {
+		return (Array.isArray(menus) ? menus : []).map((menu) => {
+			const next = { ...menu };
+			next.label = String(next.label || next.name || next.id || "");
+			next.label_en = String(next.label_en || next.name_en || next.label || next.name || next.id || "");
+			next.label_zh = String(next.label_zh || next.name_zh || next.label || next.name || next.id || "");
+
+			if (Array.isArray(next.table)) {
+				next.table = next.table.map((field: any) => {
+					const f = { ...field };
+					f.f_header = String(f.f_header || f.f_name || "");
+					f.f_header_en = String(f.f_header_en || f.f_header || f.f_name || "");
+					f.f_header_zh = String(f.f_header_zh || f.f_header || f.f_name || "");
+					return f;
+				});
+			}
+
+			if (Array.isArray(next.children)) {
+				next.children = fillMenuLanguageFallbacks(next.children);
+			}
+
+			return next;
+		});
+	};
+
+	const hasFullThreeLanguageData = (menus: any[]): boolean => {
+		const walkMenus = (items: any[]): boolean => {
+			for (const item of items || []) {
+				if (!String(item?.label || "").trim()) return false;
+				if (!String(item?.label_en || "").trim()) return false;
+				if (!String(item?.label_zh || "").trim()) return false;
+
+				if (Array.isArray(item?.table)) {
+					for (const field of item.table) {
+						if (!String(field?.f_header || "").trim()) return false;
+						if (!String(field?.f_header_en || "").trim()) return false;
+						if (!String(field?.f_header_zh || "").trim()) return false;
+					}
+				}
+
+				if (Array.isArray(item?.children) && !walkMenus(item.children)) return false;
+			}
+			return true;
+		};
+
+		return walkMenus(Array.isArray(menus) ? menus : []);
+	};
+
+	const handleAutoGenerateMenuLanguage = async () => {
+		if (!selectedApp) {
+			window.$message?.warning(t("system.menu.pleaseSelectApp") || "Vui lòng chọn ứng dụng");
+			return;
+		}
+		if (!Array.isArray(menuData) || menuData.length === 0) {
+			window.$message?.warning(t("system.menu.emptyMenu") || "Không có menu để tạo ngôn ngữ");
+			return;
+		}
+
+		setLanguageGenerating(true);
+		try {
+			const currentMenuJson = JSON.stringify({ menu: menuData }, null, 2);
+			const prompt = [
+				"Bạn là chuyên gia chuẩn hóa đa ngôn ngữ cho cấu hình menu JSON.",
+				"NHIỆM VỤ:",
+				"1) Giữ nguyên toàn bộ cấu trúc menu hiện tại, không đổi id/path/parentId/table_name/type_form/trigger.",
+				"2) Bổ sung cho mỗi menu: label (VI), label_en (EN), label_zh (ZH).",
+				"3) Với mỗi field trong table: bắt buộc đủ 3 ngôn ngữ cho f_header:",
+				"   - f_header (VI), f_header_en (EN), f_header_zh (ZH)",
+				"4) Không xóa menu/field nào, không tự ý thêm menu mới.",
+				"5) Trả về JSON duy nhất theo 1 trong 2 dạng:",
+				"   - {\"menu\": [...]}",
+				"   - {\"code\": {\"menu\": [...]}}",
+				"6) Tuyệt đối không kèm giải thích/prose ngoài JSON.",
+				"DỮ LIỆU MENU HIỆN TẠI:",
+				currentMenuJson,
+			].join("\n\n");
+
+			const response = await generateSeoContentWithPrompt(prompt, {
+				taskType: "menu_i18n_generate",
+				menuDesignByDev: isDevUser,
+			});
+
+			const menuFromAi = extractMenuListFromAnyPayload(response?.result ?? (response as any)?.data ?? response);
+			if (!Array.isArray(menuFromAi) || menuFromAi.length === 0) {
+				window.$message?.error(t("system.menu.aiDesigner.invalidJson") || "AI trả về sai định dạng menu");
+				return;
+			}
+
+			const completedMenus = fillMenuLanguageFallbacks(menuFromAi);
+			if (!hasFullThreeLanguageData(completedMenus)) {
+				window.$message?.error(t("system.menu.languageDataIncomplete") || "Thiếu dữ liệu 3 ngôn ngữ cho menu/table. Vui lòng tạo lại.");
+				return;
+			}
+			setMenuData(completedMenus);
+			buildFlatParentMenus(completedMenus);
+			setPendingLanguageMenus(completedMenus);
+			window.$message?.success(t("system.menu.generatedPreviewReady") || "Đã áp dụng tạm ngôn ngữ menu/table. Nhấn 'Lưu 3 ngôn ngữ' để lưu thật vào hệ thống.");
+		} catch (error) {
+			console.error("Failed to auto-generate menu languages:", error);
+			window.$message?.error(t("system.menu.copyFailed") || "Tạo ngôn ngữ menu thất bại");
+		} finally {
+			setLanguageGenerating(false);
+		}
+	};
+
+	const handleSaveGeneratedLanguages = async () => {
+		if (!selectedApp) {
+			window.$message?.warning(t("system.menu.pleaseSelectApp") || "Vui lòng chọn ứng dụng");
+			return;
+		}
+		if (!pendingLanguageMenus || pendingLanguageMenus.length === 0) {
+			window.$message?.warning(t("system.menu.noPendingLanguageData") || "Không có dữ liệu ngôn ngữ tạm để lưu");
+			return;
+		}
+
+		const completedMenus = fillMenuLanguageFallbacks(pendingLanguageMenus);
+		if (!hasFullThreeLanguageData(completedMenus)) {
+			window.$message?.error(t("system.menu.languageDataIncomplete") || "Thiếu dữ liệu 3 ngôn ngữ cho menu/table. Vui lòng tạo lại.");
+			return;
+		}
+
+		setLanguageSaving(true);
+		try {
+			await saveMenuStruct(selectedApp, completedMenus as any);
+			setPendingLanguageMenus(null);
+			await refreshTable();
+			window.$message?.success(t("system.menu.savedSuccess") || "Menu Đã Được Lưu");
+		} catch (error) {
+			console.error("Failed to save generated menu languages:", error);
+			window.$message?.error(t("system.menu.saveFailed") || "Lưu Menu Thất Bại");
+		} finally {
+			setLanguageSaving(false);
+		}
+	};
 
 	return (
 		<BasicContent className="h-full">
@@ -796,25 +1055,36 @@ export default function Menu() {
 							children: (
 								<>
 									<div className="mb-4">
-										<Button
-											key="add-role"
-											icon={<PlusCircleOutlined />}
-											type="primary"
-											disabled={!hasAuth("add")}
-											onClick={() => {
-												setIsOpen(true);
-												setTitle(t("system.menu.addMenu"));
-												setDetailData({});
-											}}
-										>
-											{t("common.add")}
-										</Button>
+										<Space wrap>
+											<Button
+												key="add-role"
+												icon={<PlusCircleOutlined />}
+												type="primary"
+												disabled={!hasAuth("add")}
+												onClick={() => {
+													setIsOpen(true);
+													setTitle(t("system.menu.addMenu"));
+													setDetailData({});
+												}}
+											>
+												{t("common.add")}
+											</Button>
+											<Button onClick={handleAutoGenerateMenuLanguage} loading={languageGenerating} disabled={!selectedApp || tableLoading}>
+												{t("system.menu.autoGenerateMenuLang") || "Tự tạo ngôn ngữ menu/table"}
+											</Button>
+											{Array.isArray(pendingLanguageMenus) && pendingLanguageMenus.length > 0 && (
+												<Button type="primary" onClick={handleSaveGeneratedLanguages} loading={languageSaving}>
+													{t("system.menu.saveThreeLanguages") || "Lưu 3 ngôn ngữ"}
+												</Button>
+											)}
+										</Space>
 									</div>
 									{Array.isArray(menuData) && menuData.length > 0 && (
 										<MenuTreeView
+											key={`menu-tree-${currentLanguage}`}
 											data={menuData}
 											t={t}
-											lang={i18n.language}
+											lang={currentLanguage}
 											onEdit={async (record) => {
 												setIsOpen(true);
 												setTitle(t("system.menu.editMenu"));
@@ -874,25 +1144,36 @@ export default function Menu() {
 			{!isDevUser && (
 				<>
 					<div className="mb-4">
-						<Button
-							key="add-role"
-							icon={<PlusCircleOutlined />}
-							type="primary"
-							disabled={!hasAuth("add")}
-							onClick={() => {
-								setIsOpen(true);
-								setTitle(t("system.menu.addMenu"));
-								setDetailData({});
-							}}
-						>
-							{t("common.add")}
-						</Button>
+						<Space wrap>
+							<Button
+								key="add-role"
+								icon={<PlusCircleOutlined />}
+								type="primary"
+								disabled={!hasAuth("add")}
+								onClick={() => {
+									setIsOpen(true);
+									setTitle(t("system.menu.addMenu"));
+									setDetailData({});
+								}}
+							>
+								{t("common.add")}
+							</Button>
+							<Button onClick={handleAutoGenerateMenuLanguage} loading={languageGenerating} disabled={!selectedApp || tableLoading}>
+								{t("system.menu.autoGenerateMenuLang") || "Tự tạo ngôn ngữ menu/table"}
+							</Button>
+							{Array.isArray(pendingLanguageMenus) && pendingLanguageMenus.length > 0 && (
+								<Button type="primary" onClick={handleSaveGeneratedLanguages} loading={languageSaving}>
+									{t("system.menu.saveThreeLanguages") || "Lưu 3 ngôn ngữ"}
+								</Button>
+							)}
+						</Space>
 					</div>
 					{Array.isArray(menuData) && menuData.length > 0 && (
 						<MenuTreeView
+							key={`menu-tree-${currentLanguage}`}
 							data={menuData}
 							t={t}
-							lang={i18n.language}
+							lang={currentLanguage}
 							onEdit={async (record) => {
 								setIsOpen(true);
 								setTitle(t("system.menu.editMenu"));

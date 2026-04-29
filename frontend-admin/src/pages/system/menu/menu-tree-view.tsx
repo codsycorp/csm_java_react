@@ -1,6 +1,7 @@
 import type { MenuItemType } from "#src/api/system/menu";
 import type { TFunction } from "i18next";
 import { BasicButton } from "#src/components";
+import { getLocalizedField, type SupportedLanguage } from "#src/utils/i18nHelper";
 import { PlusCircleOutlined, MinusCircleOutlined, UpOutlined, DownOutlined, VerticalAlignTopOutlined, VerticalAlignBottomOutlined } from "@ant-design/icons";
 import { Tag, Popconfirm, Space, Tree } from "antd";
 import useToken from "antd/es/theme/useToken";
@@ -22,31 +23,36 @@ const ID_TO_I18N_KEY: Record<string, string> = {
 };
 
 function getMenuLabel(menu: MenuItemType, lang: string = 'vi', t?: TFunction): string {
-	const currentLang = lang.toLowerCase().startsWith('en') ? 'en' : lang.toLowerCase().startsWith('zh') ? 'zh' : 'vi';
-	
-	if (currentLang === 'en' && menu.label_en) return menu.label_en;
-	if (currentLang === 'zh' && menu.label_zh) return menu.label_zh;
-	
-	// Fallback to VI - check if label is i18n key
-	if (menu.label) {
-		// If label looks like an i18n key (e.g., "common.menu.system"), translate it
-		if (t && menu.label.includes('.')) {
-			return t(menu.label);
-		}
-		return menu.label;
+	const currentLang = (lang.toLowerCase().startsWith('en') ? 'en' : lang.toLowerCase().startsWith('zh') ? 'zh' : 'vi') as SupportedLanguage;
+
+	const localizedLabel = getLocalizedField(menu as any, "label", currentLang, false);
+	if (localizedLabel) {
+		if (t && String(localizedLabel).includes('.')) return t(String(localizedLabel));
+		return String(localizedLabel);
 	}
-	if (menu.name) {
-		// Same for name field
-		if (t && menu.name.includes('.')) {
-			return t(menu.name);
-		}
-		return menu.name;
+
+	const localizedName = getLocalizedField(menu as any, "name", currentLang, false);
+	if (localizedName) {
+		if (t && String(localizedName).includes('.')) return t(String(localizedName));
+		return String(localizedName);
 	}
-	// Try ID mapping as final fallback
-	if (menu.id && t && ID_TO_I18N_KEY[menu.id]) {
-		return t(ID_TO_I18N_KEY[menu.id]);
+
+	const fallbackLabel = getLocalizedField(menu as any, "label", currentLang, true);
+	if (fallbackLabel) {
+		if (t && String(fallbackLabel).includes('.')) return t(String(fallbackLabel));
+		return String(fallbackLabel);
 	}
-	return menu.id || '';
+
+	const fallbackName = getLocalizedField(menu as any, "name", currentLang, true);
+	if (fallbackName) {
+		if (t && String(fallbackName).includes('.')) return t(String(fallbackName));
+		return String(fallbackName);
+	}
+
+	const mappedKey = ID_TO_I18N_KEY[String(menu.path || menu.id || "")];
+	if (mappedKey && t) return t(mappedKey);
+
+	return String(menu.id || '');
 }
 
 type MenuTreeItem = MenuItemType & { children?: MenuTreeItem[] };
