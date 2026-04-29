@@ -27,7 +27,7 @@ const buttonProps: ButtonProps = {
 
 export default function LayoutHeader({ className, children }: LayoutHeaderProps) {
 	const {
-		token: { colorBgContainer },
+		token: { colorBgContainer, colorBorderSecondary },
 	} = theme.useToken();
 	const { sidebarCollapsed, setSidebarCollapsed } = useContext(LayoutContext);
 	const { isMobile } = useDeviceType();
@@ -36,7 +36,7 @@ export default function LayoutHeader({ className, children }: LayoutHeaderProps)
 	return (
 		<header
 			className={cn(className, "h-12 flex-shrink-0 flex gap-2 md:gap-5 justify-between items-center transition-all px-2 md:px-4", { "h-0 overflow-hidden": isMaximize })}
-			style={{ background: colorBgContainer }}
+			style={{ background: colorBgContainer, borderBottom: `1px solid ${colorBorderSecondary}` }}
 		>
 			{isMobile ? (
 				<Button

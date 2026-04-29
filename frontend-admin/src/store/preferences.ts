@@ -1,11 +1,7 @@
 import type { LanguageType } from "#src/locales";
 
 import {
-	MIXED_NAVIGATION,
 	RIBBON_NAVIGATION,
-	SIDE_NAVIGATION,
-	TOP_NAVIGATION,
-	TWO_COLUMN_NAVIGATION,
 } from "#src/layout/widgets/preferences/blocks/layout/constants";
 import { COLLAPSED_WIDTH } from "#src/styles/theme/antd/antd-theme";
 
@@ -56,8 +52,8 @@ interface AnimationState {
 	transitionName: string
 }
 
-export type NavigationType = typeof SIDE_NAVIGATION | typeof TOP_NAVIGATION | typeof TWO_COLUMN_NAVIGATION | typeof MIXED_NAVIGATION | typeof RIBBON_NAVIGATION;
-export type BuiltinThemeType = "red" | "volcano" | "orange" | "gold" | "yellow" | "lime" | "green" | "cyan" | "blue" | "geekblue" | "purple" | "magenta" | "gray" | "custom";
+export type NavigationType = "side-navigation" | "top-navigation" | "two-column-navigation" | "mixed-navigation" | "ribbon-navigation";
+export type BuiltinThemeType = "red" | "volcano" | "orange" | "gold" | "yellow" | "lime" | "green" | "cyan" | "blue" | "geekblue" | "purple" | "magenta" | "gray" | "metal-gold" | "metal-ivory" | "metal-silver" | "metal-bronze" | "metal-steel" | "water-indigo" | "water-azure" | "water-navy" | "water-river" | "water-slate" | "fire-crimson" | "fire-coral" | "fire-brick" | "fire-rust" | "fire-terracotta" | "wood-jade" | "wood-olive" | "wood-pine" | "wood-moss" | "wood-sage" | "earth-amber" | "earth-sand" | "earth-clay" | "earth-mocha" | "earth-khaki" | "neutral-graphite" | "neutral-stone" | "neutral-mist" | "neutral-sand" | "neutral-cloud" | "custom";
 
 interface LayoutState {
 	navigationStyle: NavigationType
@@ -118,6 +114,18 @@ interface PreferencesState extends AnimationState, LayoutState {
 	 * @default "blue"
 	 */
 	builtinTheme: BuiltinThemeType
+	/**
+	 * @zh 出生年份（公历）
+	 * @en Birth year (Gregorian)
+	 * @default null
+	 */
+	birthYear: number | null
+	/**
+	 * @zh 是否手动选择过风水主题色
+	 * @en Whether feng-shui color was manually selected
+	 * @default false
+	 */
+	fengShuiManualColorSelected: boolean
 	/* ================== Theme ================== */
 
 	/* ================== Tabbar ================== */
@@ -180,6 +188,8 @@ export const DEFAULT_PREFERENCES = {
 	themeRadius: 8,
 	builtinTheme: "blue",
 	themeColorPrimary: "#1677ff", // Blue color from logo
+	birthYear: null,
+	fengShuiManualColorSelected: false,
 	/* ================== Theme ================== */
 
 	/* ================== Animation ================== */

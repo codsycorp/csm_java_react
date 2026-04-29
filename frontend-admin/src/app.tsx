@@ -1,33 +1,47 @@
 import { AntdApp, JSSThemeProvider } from "#src/components";
+import { deleteChatMessage } from "#src/components/csm-grid/CsmApi";
+import { ChatHistoryProvider } from "#src/contexts/ChatHistoryContext";
 import { usePreferences, useScrollToHash, useThemeEffect } from "#src/hooks";
 import { AppVersionMonitor } from "#src/layout/widgets/version-monitor";
 import { ANT_DESIGN_LOCALE } from "#src/locales";
+import { evaluateLunarCompatibility, getPresetsByGroup, pickAutoPresetByDate } from "#src/utils/feng-shui-theme";
 import { initializePerformanceOptimizations } from "#src/utils/performance-optimization";
-import { deleteChatMessage } from "#src/components/csm-grid/CsmApi";
 
 import { theme as antdTheme, ConfigProvider } from "antd";
 import dayjs from "dayjs";
-import { Suspense, useCallback, useEffect } from "react";
+import { Suspense, useCallback, useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { RouterProvider } from "react-router-dom";
 
-
 import { router } from "./router";
-import { customAntdDarkTheme, customAntdLightTheme } from "./styles/theme/antd/antd-theme";
-import { ChatHistoryProvider } from "#src/contexts/ChatHistoryContext";
+import {
+	applyProfessionalThemeCssVars,
+	createProfessionalThemePalette,
+	customAntdDarkTheme,
+	customAntdLightTheme,
+} from "./styles/theme/antd/antd-theme";
 import "dayjs/locale/zh-cn";
 import "dayjs/locale/vi";
 
-// Thêm import cho tabbar store
-import { useTabsStore } from "#src/store/tabs";
-import { useEffect as useReactEffect } from "react";
-
 export default function App() {
 	const { i18n } = useTranslation();
-	const { language, isDark, theme, themeColorPrimary, colorBlindMode, colorGrayMode, themeRadius, changeSiteTheme } = usePreferences();
+	const {
+		language,
+		isDark,
+		theme,
+		themeColorPrimary,
+		colorBlindMode,
+		colorGrayMode,
+		themeRadius,
+		changeSiteTheme,
+		birthYear,
+		builtinTheme,
+		fengShuiManualColorSelected,
+		setPreferences,
+	} = usePreferences();
 
 	useScrollToHash();
-	
+
 	// Apply theme effect globally
 	useThemeEffect();
 
@@ -138,35 +152,63 @@ export default function App() {
 		updateColorMode();
 	}, [colorBlindMode, colorGrayMode]);
 
+	useEffect(() => {
+		if (!birthYear || fengShuiManualColorSelected) {
+			return;
+		}
+
+		const compatibility = evaluateLunarCompatibility(birthYear, new Date());
+		const presets = getPresetsByGroup(compatibility.recommendedGroup);
+		const autoPreset = pickAutoPresetByDate(presets);
+
+		if (!autoPreset || autoPreset.value === builtinTheme) {
+			return;
+		}
+
+		setPreferences({
+			builtinTheme: autoPreset.value,
+			themeColorPrimary: autoPreset.color,
+		});
+	}, [birthYear, builtinTheme, fengShuiManualColorSelected, setPreferences]);
+
+	const professionalThemePalette = useMemo(() => {
+		return createProfessionalThemePalette(themeColorPrimary, isDark);
+	}, [themeColorPrimary, isDark]);
+
+	useEffect(() => {
+		applyProfessionalThemeCssVars(document.documentElement, themeColorPrimary, isDark);
+	}, [themeColorPrimary, isDark]);
+
 	return (
-		   <ConfigProvider
-			   input={{ autoComplete: "off" }}
-			   locale={getAntdLocale()}
-			   theme={{
-				   cssVar: true,
-				   hashed: false,
-				   algorithm:
-					   isDark
-						   ? antdTheme.darkAlgorithm
-						   : antdTheme.defaultAlgorithm,
-				   ...(isDark ? customAntdDarkTheme : customAntdLightTheme),
-				   token: {
-					   ...(isDark ? customAntdDarkTheme.token : customAntdLightTheme.token),
-					   borderRadius: themeRadius,
-					   colorPrimary: themeColorPrimary,
-				   },
-			   }}
-		   >
-			   <ChatHistoryProvider>
-				   <AntdApp>
-					   <JSSThemeProvider>
-						   <Suspense fallback={null}>
-							   {import.meta.env.VITE_APP_VERSION_MONITOR === "Y" ? <AppVersionMonitor /> : null}
-							   <RouterProvider router={router} />
-						   </Suspense>
-					   </JSSThemeProvider>
-				   </AntdApp>
-			   </ChatHistoryProvider>
-		   </ConfigProvider>
+		<ConfigProvider
+			input={{ autoComplete: "off" }}
+			locale={getAntdLocale()}
+			theme={{
+				cssVar: true,
+				hashed: false,
+				algorithm:
+					isDark
+						? antdTheme.darkAlgorithm
+						: antdTheme.defaultAlgorithm,
+				...(isDark ? customAntdDarkTheme : customAntdLightTheme),
+				token: {
+					...(isDark ? customAntdDarkTheme.token : customAntdLightTheme.token),
+					...professionalThemePalette.tokens,
+					borderRadius: themeRadius,
+					colorPrimary: themeColorPrimary,
+				},
+			}}
+		>
+			<ChatHistoryProvider>
+				<AntdApp>
+					<JSSThemeProvider>
+						<Suspense fallback={null}>
+							{import.meta.env.VITE_APP_VERSION_MONITOR === "Y" ? <AppVersionMonitor /> : null}
+							<RouterProvider router={router} />
+						</Suspense>
+					</JSSThemeProvider>
+				</AntdApp>
+			</ChatHistoryProvider>
+		</ConfigProvider>
 	);
 }

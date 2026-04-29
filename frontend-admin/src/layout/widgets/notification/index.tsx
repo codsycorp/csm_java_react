@@ -54,7 +54,7 @@ const useStyles = createUseStyles(({ token }) => (
 			cursor: 'pointer',
 			'&:hover': {
 				backgroundColor: token.colorBgTextHover,
-				boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+				boxShadow: 'var(--csm-control-elevated-shadow)',
 			},
 			display: 'flex',
 			alignItems: 'center',
@@ -66,7 +66,7 @@ const useStyles = createUseStyles(({ token }) => (
 		},
 		unreadBadge: {
 			backgroundColor: token.colorError,
-			color: 'white',
+			color: token.colorTextLightSolid,
 			borderRadius: '50%',
 			padding: '2px 6px',
 			fontSize: 12,
@@ -108,6 +108,20 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 	const classes = useStyles();
 	const { t } = useTranslation();
 	const { token } = theme.useToken();
+	const statusColors = useMemo(() => ({
+		online: token.colorSuccess,
+		offline: token.colorError,
+		guest: token.colorWarning,
+		system: token.colorSuccess,
+		badgeText: token.colorTextLightSolid,
+		badgeBorder: token.colorBgContainer,
+	}), [
+		token.colorSuccess,
+		token.colorError,
+		token.colorWarning,
+		token.colorTextLightSolid,
+		token.colorBgContainer,
+	]);
 	const user = useUserStore();
 	const isDevUser = !!user.dev;
 	// CRITICAL: Use same pattern as permission.ts and ChatHistoryContext for getting effective appId
@@ -640,7 +654,7 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 									<select
 										value={selectedAppFilter}
 										onChange={(e) => setSelectedAppFilter(e.target.value)}
-										style={{ width: '100%', padding: '6px 8px', borderRadius: 6, border: `1px solid ${token.colorBorder}` }}
+										style={{ width: '100%', padding: '6px 8px', borderRadius: 6, border: `1px solid ${token.colorBorder}`, backgroundColor: token.colorBgContainer, color: token.colorText }}
 									>
 										<option value="all">Tất cả app</option>
 										{appFilterOptions.map((opt) => (
@@ -656,7 +670,7 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 									<div className={classes.userList}>
 										{visibleInternalUsers.map(u => (
 											<div key={u.key} className={classes.userItem} onClick={() => openChatAndMarkRead(u.room, u.username, (u as any).targetUserId, 'internal', (u as any).appId)}>
-												<Badge dot={typeof (u as any).online === 'boolean'} color={(u as any).online ? '#16a34a' : '#ef4444'} offset={[-3, 22]}>
+												<Badge dot={typeof (u as any).online === 'boolean'} color={(u as any).online ? statusColors.online : statusColors.offline} offset={[-3, 22]}>
 													<Avatar src={u.avatar} icon={<UserOutlined />} size="small" />
 												</Badge>
 												<div style={{ flex: 1, minWidth: 0 }}>
@@ -691,7 +705,7 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 									<div className={classes.userList}>
 										{visibleGuestUsers.map(g => (
 											<div key={g.key} className={classes.userItem} onClick={() => openChatAndMarkRead(g.room, g.label, undefined, 'guest', (g as any).appId)}>
-												<Badge dot color="#fa8c16" offset={[-3, 22]}>
+												<Badge dot color={statusColors.guest} offset={[-3, 22]}>
 													<Avatar icon={<UserOutlined />} size="small" />
 												</Badge>
 												<div style={{ flex: 1, minWidth: 0 }}>
@@ -720,7 +734,7 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 									
 									{/* Show system notifications for this appId (broadcast) */}
 									<div className={classes.userItem} onClick={() => openChatAndMarkRead((isDevUser && selectedAppFilter !== 'all') ? selectedAppFilter : appId, 'Thông báo hệ thống', undefined, 'system')}>
-										<Avatar icon={<BellOutlined />} size="small" style={{ backgroundColor: '#52c41a' }} />
+										<Avatar icon={<BellOutlined />} size="small" style={{ backgroundColor: statusColors.system }} />
 										<div style={{ flex: 1 }}>
 											<div className={classes.username}>Thông báo hệ thống</div>
 											<div style={{ fontSize: 12, color: 'var(--ant-colorTextTertiary)' }}>{isDevUser && selectedAppFilter !== 'all' ? `Thông báo gửi đến ứng dụng: ${selectedAppFilter}` : 'Thông báo gửi đến ứng dụng của bạn'}</div>
@@ -753,7 +767,17 @@ export const NotificationPopup: React.FC<Props> = ({ dot: dotProp, notifications
 						{null}
 					</BasicButton>
 				{totalUnread > 0 && (
-					<span className="bg-red-500 absolute -right-2 -top-2 h-4 min-w-4 px-1 rounded-full flex items-center justify-center text-xs text-white font-bold z-10 border-2 border-white" style={{ animation: badgePulse ? 'csmBadgePulseOnce 450ms ease-out' : undefined }}>{totalUnread > 99 ? '99+' : totalUnread}</span>
+						<span
+							className="absolute -right-2 -top-2 h-4 min-w-4 px-1 rounded-full flex items-center justify-center text-xs font-bold z-10 border-2"
+							style={{
+								animation: badgePulse ? 'csmBadgePulseOnce 450ms ease-out' : undefined,
+								backgroundColor: token.colorError,
+								color: statusColors.badgeText,
+								borderColor: statusColors.badgeBorder,
+							}}
+						>
+							{totalUnread > 99 ? '99+' : totalUnread}
+						</span>
 					)}
 				</div>
 			</Popover>

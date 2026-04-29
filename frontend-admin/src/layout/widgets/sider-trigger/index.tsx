@@ -19,7 +19,7 @@ export function SiderTrigger({ className }: SiderTriggerProps) {
 		<BasicButton
 			type="text"
 			style={{
-				boxShadow: "0px -3px 5px 0 rgb(29, 35, 41, 0.05)",
+				boxShadow: "var(--csm-layout-top-shadow)",
 			}}
 			icon={sidebarCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
 			onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
