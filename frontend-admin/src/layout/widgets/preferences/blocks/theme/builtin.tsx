@@ -928,10 +928,10 @@ export function BuiltinTheme() {
 										{t(`preferences.theme.builtin.${labelKey}`)}
 									</div>
 									<div className={cn("w-full text-center text-[10px] font-bold text-white py-1 px-1", star.color)}>
-										{star.name}
+										{t(`preferences.theme.builtin.${star.name}`)}
 									</div>
 									<div className="text-[9px] text-slate-500 dark:text-slate-400 py-0.5">
-										{star.element}
+										{t(`preferences.theme.builtin.${star.element}`)}
 									</div>
 								</div>
 							);
