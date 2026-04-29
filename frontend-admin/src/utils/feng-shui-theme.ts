@@ -264,6 +264,11 @@ export function getLunarHourAdvisory(date = new Date()): LunarHourAdvisory {
 // Month chi: Tháng 1=Dần(2), Tháng 2=Mão(3), ..., Tháng 11=Tý(0), Tháng 12=Sửu(1)
 // → monthChiIndex = (lunarMonth + 1) % 12
 //
+// Dương Trạch (living house feng shui) suitability per Trực:
+//   Tốt:      Kiến(0), Trừ(1), Bình(3), Định(4), Thành(8), Khai(10)
+//   Trung:    Chấp(5), Thu(9)
+//   Xấu:      Mãn(2), Phá(6), Nguy(7), Bế(11)
+//
 // Âm Trạch (tomb/burial feng shui) suitability per Trực:
 //   Tốt:      Bình(3), Định(4), Chấp(5), Thành(8), Khai(10)
 //   Trung:    Trừ(1), Thu(9)
@@ -279,6 +284,22 @@ export interface TructInfo {
 }
 
 const TRUCT_NAMES = ["kien", "tru", "man", "binh", "dinh", "chap", "pha", "nguy", "thanh", "thu", "khai", "be"] as const;
+
+// Dương Trạch suitability by Trực index
+const TRUCT_DUONG_TRACH_RATING: TructRating[] = [
+	"tot",   // 0  Kiến  — khởi công, đặt móng nhà mới, động thổ
+	"tot",   // 1  Trừ  — phá dỡ cũ, dọn dẹp trước xây, bỏ vật xấu
+	"xau",   // 2  Mãn  — quá đầy, kỵ động thổ và sửa chữa
+	"tot",   // 3  Bình — bình hoà, tốt tu sửa nhỏ, trang hoàng nội thất
+	"tot",   // 4  Định — ổn định, lắp đặt cố định, hoàn thiện, lắp cửa
+	"trung", // 5  Chấp — giữ nguyên hiện trạng, tránh thay đổi lớn
+	"xau",   // 6  Phá  — phá vỡ, đại kỵ mọi việc nhà cửa
+	"xau",   // 7  Nguy — nguy hiểm, kỵ khởi công, leo trèo sửa mái
+	"tot",   // 8  Thành — nhập trạch, khánh thành, ổn định gia đình
+	"trung", // 9  Thu  — thu dọn, chuẩn bị chuyển nhà, dọn kho
+	"tot",   // 10 Khai — khai trương, mở cửa nhà mới, nhập trạch
+	"xau",   // 11 Bế  — đóng kín, kỵ nhập trạch, mọi việc bị bế tắc
+];
 
 // Âm Trạch suitability by Trực index
 const TRUCT_AM_TRACH_RATING: TructRating[] = [
@@ -296,6 +317,36 @@ const TRUCT_AM_TRACH_RATING: TructRating[] = [
 	"xau",   // 11 Bế  — đóng kín, kỵ an táng (âm khí bị bế tắc)
 ];
 
+function resolveTruct(date: Date) {
+	const lunarDate = duong_qua_am(date.getDate(), date.getMonth() + 1, date.getFullYear());
+	const dayChiIndex = resolveDayChiIndex(date);
+	const monthChiIndex = (lunarDate.month + 1) % 12;
+	const tructIndex = (dayChiIndex - monthChiIndex + 12) % 12;
+	return { lunarDate, tructIndex };
+}
+
+export interface DuongTrachAdvisory {
+	lunarDay: number
+	lunarMonth: number
+	lunarYear: number
+	lunarLeap: number
+	truct: TructInfo
+	isAuspicious: boolean
+}
+
+export function getDuongTrachAdvisory(date = new Date()): DuongTrachAdvisory {
+	const { lunarDate, tructIndex } = resolveTruct(date);
+	const rating = TRUCT_DUONG_TRACH_RATING[tructIndex];
+	return {
+		lunarDay: lunarDate.day,
+		lunarMonth: lunarDate.month,
+		lunarYear: lunarDate.year,
+		lunarLeap: lunarDate.leap,
+		truct: { index: tructIndex, nameKey: TRUCT_NAMES[tructIndex], rating },
+		isAuspicious: rating === "tot",
+	};
+}
+
 export interface AmTrachAdvisory {
 	lunarDay: number
 	lunarMonth: number
@@ -307,23 +358,14 @@ export interface AmTrachAdvisory {
 }
 
 export function getAmTrachAdvisory(date = new Date()): AmTrachAdvisory {
-	const lunarDate = duong_qua_am(date.getDate(), date.getMonth() + 1, date.getFullYear());
-	const dayChiIndex = resolveDayChiIndex(date);
-	// Month chi: Tháng 1(Dần)=2, ..., Tháng 11(Tý)=0, Tháng 12(Sửu)=1
-	const monthChiIndex = (lunarDate.month + 1) % 12;
-	const tructIndex = (dayChiIndex - monthChiIndex + 12) % 12;
+	const { lunarDate, tructIndex } = resolveTruct(date);
 	const rating = TRUCT_AM_TRACH_RATING[tructIndex];
-
 	return {
 		lunarDay: lunarDate.day,
 		lunarMonth: lunarDate.month,
 		lunarYear: lunarDate.year,
 		lunarLeap: lunarDate.leap,
-		truct: {
-			index: tructIndex,
-			nameKey: TRUCT_NAMES[tructIndex],
-			rating,
-		},
+		truct: { index: tructIndex, nameKey: TRUCT_NAMES[tructIndex], rating },
 		isAuspicious: rating === "tot",
 	};
 }

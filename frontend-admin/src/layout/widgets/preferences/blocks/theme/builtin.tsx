@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 
 import { usePreferencesStore } from "#src/store";
 import { cn } from "#src/utils";
-import { type DetailedWuxingReading, evaluateLunarCompatibility, getAmTrachAdvisory, getDetailedWuxingReading, getHourRangeLabel, getLunarHourAdvisory, getPresetsByGroup, type LunarBranchKey, type WuxingElement } from "#src/utils/feng-shui-theme";
+import { type DetailedWuxingReading, evaluateLunarCompatibility, getAmTrachAdvisory, getDetailedWuxingReading, getDuongTrachAdvisory, getHourRangeLabel, getLunarHourAdvisory, getPresetsByGroup, type LunarBranchKey, type WuxingElement } from "#src/utils/feng-shui-theme";
 
 import { Button, ColorPicker, InputNumber, Tooltip } from "antd";
 import { useMemo, useState } from "react";
@@ -58,6 +58,7 @@ export function BuiltinTheme() {
 	const isConflict = compatibility?.isConflict ?? false;
 	const hourAdvisory = useMemo(() => getLunarHourAdvisory(new Date()), []);
 	const amTrachAdvisory = useMemo(() => getAmTrachAdvisory(new Date()), []);
+	const duongTrachAdvisory = useMemo(() => getDuongTrachAdvisory(new Date()), []);
 
 	const branchLabelMap: Record<LunarBranchKey, string> = {
 		rat: t("preferences.theme.builtin.branchRat"),
@@ -873,6 +874,74 @@ export function BuiltinTheme() {
 								<p>• {t("preferences.theme.builtin.amTrachAvoid3")}</p>
 								<p>• {t("preferences.theme.builtin.amTrachAvoid4")}</p>
 							</div>
+						</div>
+					</div>
+				</div>
+
+				{/* Dương Trạch Phong Thủy — Trực (建除十二神) */}
+				<div className="mt-2">
+					<div className="text-xs font-bold text-slate-600 mb-1.5 flex items-center gap-1.5">
+						🏠
+						{" "}
+						{t("preferences.theme.builtin.duongTrachSectionTitle")}
+						<span className="text-[10px] font-normal text-slate-400 ml-auto">
+							{t("preferences.theme.builtin.amTrachLunarDate", {
+								day: duongTrachAdvisory.lunarDay,
+								month: duongTrachAdvisory.lunarMonth,
+							})}
+						</span>
+					</div>
+					<div className={cn(
+						"rounded-lg border overflow-hidden",
+						duongTrachAdvisory.truct.rating === "tot" && "border-emerald-400",
+						duongTrachAdvisory.truct.rating === "trung" && "border-amber-300",
+						duongTrachAdvisory.truct.rating === "xau" && "border-rose-300",
+					)}
+					>
+						<div className={cn(
+							"px-3 py-2 flex items-center gap-2",
+							duongTrachAdvisory.truct.rating === "tot" && "bg-emerald-100",
+							duongTrachAdvisory.truct.rating === "trung" && "bg-amber-50",
+							duongTrachAdvisory.truct.rating === "xau" && "bg-rose-50",
+						)}
+						>
+							<span className={cn(
+								"text-sm font-bold",
+								duongTrachAdvisory.truct.rating === "tot" && "text-emerald-900",
+								duongTrachAdvisory.truct.rating === "trung" && "text-amber-700",
+								duongTrachAdvisory.truct.rating === "xau" && "text-rose-700",
+							)}
+							>
+								{t(`preferences.theme.builtin.truct${duongTrachAdvisory.truct.nameKey.charAt(0).toUpperCase()}${duongTrachAdvisory.truct.nameKey.slice(1)}`)}
+							</span>
+							<span className={cn(
+								"ml-auto text-[10px] font-semibold px-2 py-0.5 rounded-full",
+								duongTrachAdvisory.truct.rating === "tot" && "bg-emerald-200 text-emerald-900",
+								duongTrachAdvisory.truct.rating === "trung" && "bg-amber-200 text-amber-900",
+								duongTrachAdvisory.truct.rating === "xau" && "bg-rose-200 text-rose-900",
+							)}
+							>
+								{t(`preferences.theme.builtin.duongTrachRating${duongTrachAdvisory.truct.rating.charAt(0).toUpperCase()}${duongTrachAdvisory.truct.rating.slice(1)}`)}
+							</span>
+						</div>
+						<div className={cn(
+							"px-3 py-1.5 text-[10px] italic border-b",
+							duongTrachAdvisory.truct.rating === "tot" && "bg-emerald-50 text-emerald-700 border-emerald-200",
+							duongTrachAdvisory.truct.rating === "trung" && "bg-amber-50 text-amber-700 border-amber-200",
+							duongTrachAdvisory.truct.rating === "xau" && "bg-rose-50 text-rose-700 border-rose-200",
+						)}
+						>
+							{t(`preferences.theme.builtin.duongTrachTruct${duongTrachAdvisory.truct.nameKey.charAt(0).toUpperCase()}${duongTrachAdvisory.truct.nameKey.slice(1)}Desc`)}
+						</div>
+						<div className="px-3 py-2 bg-white text-xs text-slate-700">
+							<span className="font-semibold text-slate-500 text-[10px]">
+								{duongTrachAdvisory.truct.rating === "xau"
+									? t("preferences.theme.builtin.duongTrachAvoidTitle")
+									: t("preferences.theme.builtin.duongTrachShouldTitle")}
+								{":"}
+							</span>
+							{" "}
+							{t(`preferences.theme.builtin.duongTrachDo_${duongTrachAdvisory.truct.nameKey}`)}
 						</div>
 					</div>
 				</div>
