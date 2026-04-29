@@ -686,7 +686,7 @@ export function BuiltinTheme() {
 				</div>
 
 				{/* Current Hour Status */}
-				<div className={cn("text-sm font-semibold rounded-md px-3 py-2 mb-4 border-2", hourAdvisory.isCurrentAuspicious ? "bg-emerald-100 text-emerald-900 border-emerald-500" : "bg-rose-100 text-rose-900 border-rose-500")}>
+				<div className={cn("text-sm font-semibold rounded-md px-3 py-2 mb-4 border-2", hourAdvisory.isCurrentAuspicious ? "bg-emerald-100 text-slate-800 border-emerald-500" : "bg-rose-100 text-slate-800 border-rose-500")}>
 					{hourAdvisory.isCurrentAuspicious
 						? `☀️ ${t("preferences.theme.builtin.auspiciousNow", {
 							branch: branchLabelMap[hourAdvisory.currentBranchKey],
@@ -702,7 +702,7 @@ export function BuiltinTheme() {
 				<div className="grid grid-cols-2 gap-3 mb-4">
 					{/* Auspicious Hours */}
 					<div className="rounded-lg bg-emerald-50 border border-emerald-200 overflow-hidden">
-						<div className="text-sm font-bold text-emerald-900 px-3 py-2 bg-emerald-100 border-b border-emerald-200">
+						<div className="text-sm font-bold text-slate-800 px-3 py-2 bg-emerald-100 border-b border-emerald-200">
 							☀️
 							{" "}
 							{t("preferences.theme.builtin.todayAuspiciousHours")}
@@ -715,7 +715,7 @@ export function BuiltinTheme() {
 										"flex items-center justify-between px-3 py-1.5 text-xs font-medium transition-all",
 										hourAdvisory.currentChiIndex === slot.chiIndex
 											? "bg-emerald-500 text-white font-bold"
-											: "text-emerald-900 hover:bg-emerald-100",
+											: "text-slate-800 hover:bg-emerald-100",
 									)}
 								>
 									<span className="font-semibold">{branchLabelMap[slot.branchKey]}</span>
@@ -727,7 +727,7 @@ export function BuiltinTheme() {
 
 					{/* Inauspicious Hours */}
 					<div className="rounded-lg bg-rose-50 border border-rose-200 overflow-hidden">
-						<div className="text-sm font-bold text-rose-900 px-3 py-2 bg-rose-100 border-b border-rose-200">
+						<div className="text-sm font-bold text-slate-800 px-3 py-2 bg-rose-100 border-b border-rose-200">
 							🌙
 							{" "}
 							{t("preferences.theme.builtin.todayInauspiciousHours")}
@@ -740,7 +740,7 @@ export function BuiltinTheme() {
 										"flex items-center justify-between px-3 py-1.5 text-xs font-medium transition-all",
 										hourAdvisory.currentChiIndex === slot.chiIndex
 											? "bg-rose-500 text-white font-bold"
-											: "text-rose-900 hover:bg-rose-100",
+											: "text-slate-800 hover:bg-rose-100",
 									)}
 								>
 									<span className="font-semibold">{branchLabelMap[slot.branchKey]}</span>
@@ -753,7 +753,7 @@ export function BuiltinTheme() {
 
 				{/* Hourly Recommendations */}
 				<div className="mb-4 pb-3 border-b border-colorBorderSecondary">
-					<div className={cn("text-xs font-semibold mb-3 px-1 py-1 rounded", hourAdvisory.isCurrentAuspicious ? "text-emerald-900" : "text-rose-900")}>
+					<div className={cn("text-xs font-semibold mb-3 px-1 py-1 rounded", hourAdvisory.isCurrentAuspicious ? "text-slate-800" : "text-slate-800")}>
 						{hourAdvisory.isCurrentAuspicious ? "☀️" : "🌙"}
 						{" "}
 						{hourAdvisory.isCurrentAuspicious
@@ -763,13 +763,13 @@ export function BuiltinTheme() {
 					<div className="grid grid-cols-2 gap-3">
 						{/* Should Do */}
 						<div className={cn("p-3 rounded-lg border", hourAdvisory.isCurrentAuspicious ? "bg-emerald-50 border-emerald-300" : "bg-slate-50 border-slate-300")}>
-							<div className={cn("text-sm font-semibold mb-2", hourAdvisory.isCurrentAuspicious ? "text-emerald-900" : "text-slate-700")}>
+							<div className={cn("text-sm font-semibold mb-2", hourAdvisory.isCurrentAuspicious ? "text-slate-800" : "text-slate-700")}>
 								{hourAdvisory.isCurrentAuspicious ? `✅ ${t("preferences.theme.builtin.shouldDoAuspicious")}` : `✅ ${t("preferences.theme.builtin.shouldDoInauspicious")}`}
 							</div>
-							<ul className={cn("text-xs space-y-1", hourAdvisory.isCurrentAuspicious ? "text-emerald-900" : "text-slate-800")}>
+							<ul className={cn("text-xs space-y-1", hourAdvisory.isCurrentAuspicious ? "text-slate-800" : "text-slate-800")}>
 								{recommendedActions.map(action => (
 									<li key={`action-${action.substring(0, 10)}`} className="flex gap-1.5">
-										<span className={cn("font-bold flex-shrink-0", hourAdvisory.isCurrentAuspicious ? "text-emerald-700" : "text-slate-500")}>•</span>
+										<span className={cn("font-bold flex-shrink-0", hourAdvisory.isCurrentAuspicious ? "text-slate-600" : "text-slate-500")}>•</span>
 										<span>{action}</span>
 									</li>
 								))}
@@ -778,13 +778,13 @@ export function BuiltinTheme() {
 
 						{/* Should Avoid */}
 						<div className={cn("p-3 rounded-lg border", hourAdvisory.isCurrentAuspicious ? "bg-slate-50 border-slate-300" : "bg-rose-50 border-rose-300")}>
-							<div className={cn("text-sm font-semibold mb-2", hourAdvisory.isCurrentAuspicious ? "text-slate-700" : "text-rose-900")}>
+							<div className={cn("text-sm font-semibold mb-2", hourAdvisory.isCurrentAuspicious ? "text-slate-700" : "text-slate-800")}>
 								{hourAdvisory.isCurrentAuspicious ? `⛔ ${t("preferences.theme.builtin.shouldAvoidAuspicious")}` : `⛔ ${t("preferences.theme.builtin.shouldAvoidInauspicious")}`}
 							</div>
-							<ul className={cn("text-xs space-y-1", hourAdvisory.isCurrentAuspicious ? "text-slate-800" : "text-rose-900")}>
+							<ul className={cn("text-xs space-y-1", hourAdvisory.isCurrentAuspicious ? "text-slate-800" : "text-slate-800")}>
 								{avoidActions.map(action => (
 									<li key={`avoid-${action.substring(0, 10)}`} className="flex gap-1.5">
-										<span className={cn("font-bold flex-shrink-0", hourAdvisory.isCurrentAuspicious ? "text-slate-500" : "text-rose-700")}>•</span>
+										<span className={cn("font-bold flex-shrink-0", hourAdvisory.isCurrentAuspicious ? "text-slate-500" : "text-slate-600")}>•</span>
 										<span>{action}</span>
 									</li>
 								))}
@@ -820,8 +820,8 @@ export function BuiltinTheme() {
 					<div className={cn(
 						"px-3 py-2 text-xs italic border-b",
 						hourAdvisory.dayType === "duong"
-							? "bg-amber-50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200 border-amber-200 dark:border-amber-800/40"
-							: "bg-indigo-50 dark:bg-indigo-950/40 text-indigo-900 dark:text-indigo-200 border-indigo-200 dark:border-indigo-800/40",
+							? "bg-amber-50 dark:bg-amber-950/40 text-slate-800 dark:text-amber-200 border-amber-200 dark:border-amber-800/40"
+							: "bg-indigo-50 dark:bg-indigo-950/40 text-slate-800 dark:text-indigo-200 border-indigo-200 dark:border-indigo-800/40",
 					)}>
 						{hourAdvisory.dayType === "duong"
 							? t("preferences.theme.builtin.canDuongDesc")
@@ -836,11 +836,11 @@ export function BuiltinTheme() {
 					)}>
 						<p className={cn(
 							"text-[10px] font-bold uppercase tracking-wide mb-1",
-							hourAdvisory.dayType === "duong" ? "text-amber-700 dark:text-amber-300" : "text-indigo-700 dark:text-indigo-300",
+							hourAdvisory.dayType === "duong" ? "text-amber-800 dark:text-amber-300" : "text-indigo-800 dark:text-indigo-300",
 						)}>✓ {t("preferences.theme.builtin.duongTrachShouldTitle") || "Nên"}</p>
 						<ul className={cn(
 							"text-xs space-y-0.5",
-							hourAdvisory.dayType === "duong" ? "text-amber-900 dark:text-amber-100" : "text-indigo-900 dark:text-indigo-100",
+							hourAdvisory.dayType === "duong" ? "text-slate-800 dark:text-amber-100" : "text-slate-800 dark:text-indigo-100",
 						)}>
 							{hourAdvisory.dayType === "duong"
 								? (
@@ -871,7 +871,7 @@ export function BuiltinTheme() {
 						<p className="text-[10px] font-bold text-rose-600 dark:text-rose-400 uppercase tracking-wide mb-1">✗ {t("preferences.theme.builtin.amTrachAvoidTitle") || "Tránh"}</p>
 						<ul className={cn(
 							"text-xs space-y-0.5",
-							hourAdvisory.dayType === "duong" ? "text-amber-900 dark:text-amber-100" : "text-indigo-900 dark:text-indigo-100",
+							hourAdvisory.dayType === "duong" ? "text-slate-800 dark:text-amber-100" : "text-slate-800 dark:text-indigo-100",
 						)}>
 							{hourAdvisory.dayType === "duong"
 								? (
@@ -928,9 +928,9 @@ export function BuiltinTheme() {
 								>
 									<span className={cn(
 										"font-bold w-10 flex-shrink-0",
-										rating === "tot" && "text-emerald-700 dark:text-emerald-300",
-										rating === "trung" && "text-amber-700 dark:text-amber-300",
-										rating === "xau" && "text-rose-700 dark:text-rose-300",
+										rating === "tot" && "text-slate-700 dark:text-emerald-300",
+										rating === "trung" && "text-amber-800 dark:text-amber-300",
+										rating === "xau" && "text-slate-700 dark:text-rose-300",
 									)}
 									>
 										{t(`preferences.theme.builtin.${labelKey}`)}
@@ -982,24 +982,24 @@ export function BuiltinTheme() {
 						{/* description */}
 						<div className={cn(
 							"px-3 py-2 text-xs italic border-b",
-							duongTrachAdvisory.truct.rating === "tot" && "bg-emerald-50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 border-emerald-100 dark:border-emerald-800/40",
-							duongTrachAdvisory.truct.rating === "trung" && "bg-amber-50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200 border-amber-100 dark:border-amber-800/40",
-							duongTrachAdvisory.truct.rating === "xau" && "bg-rose-50 dark:bg-rose-950/40 text-rose-900 dark:text-rose-200 border-rose-100 dark:border-rose-800/40",
+							duongTrachAdvisory.truct.rating === "tot" && "bg-emerald-50 dark:bg-emerald-950/40 text-slate-800 dark:text-emerald-200 border-emerald-100 dark:border-emerald-800/40",
+							duongTrachAdvisory.truct.rating === "trung" && "bg-amber-50 dark:bg-amber-950/40 text-slate-800 dark:text-amber-200 border-amber-100 dark:border-amber-800/40",
+							duongTrachAdvisory.truct.rating === "xau" && "bg-rose-50 dark:bg-rose-950/40 text-slate-800 dark:text-rose-200 border-rose-100 dark:border-rose-800/40",
 						)}>
 							{t(`preferences.theme.builtin.duongTrachTruct${duongTrachAdvisory.truct.nameKey.charAt(0).toUpperCase()}${duongTrachAdvisory.truct.nameKey.slice(1)}Desc`)}
 						</div>
 						{/* activity guidance */}
 						<div className={cn(
 							"px-3 py-2 text-xs border-b",
-							duongTrachAdvisory.truct.rating === "tot" && "bg-emerald-50/50 dark:bg-emerald-950/20 text-emerald-900 dark:text-emerald-100 border-emerald-100 dark:border-emerald-800/30",
-							duongTrachAdvisory.truct.rating === "trung" && "bg-amber-50/50 dark:bg-amber-950/20 text-amber-900 dark:text-amber-100 border-amber-100 dark:border-amber-800/30",
-							duongTrachAdvisory.truct.rating === "xau" && "bg-rose-50/50 dark:bg-rose-950/20 text-rose-900 dark:text-rose-100 border-rose-100 dark:border-rose-800/30",
+							duongTrachAdvisory.truct.rating === "tot" && "bg-emerald-50/50 dark:bg-emerald-950/20 text-slate-800 dark:text-emerald-100 border-emerald-100 dark:border-emerald-800/30",
+							duongTrachAdvisory.truct.rating === "trung" && "bg-amber-50/50 dark:bg-amber-950/20 text-slate-800 dark:text-amber-100 border-amber-100 dark:border-amber-800/30",
+							duongTrachAdvisory.truct.rating === "xau" && "bg-rose-50/50 dark:bg-rose-950/20 text-slate-800 dark:text-rose-100 border-rose-100 dark:border-rose-800/30",
 						)}>
 							<span className={cn(
 								"font-bold text-[10px] uppercase tracking-wide mr-1",
-								duongTrachAdvisory.truct.rating === "tot" && "text-emerald-700 dark:text-emerald-300",
-								duongTrachAdvisory.truct.rating === "trung" && "text-amber-700 dark:text-amber-300",
-								duongTrachAdvisory.truct.rating === "xau" && "text-rose-700 dark:text-rose-300",
+								duongTrachAdvisory.truct.rating === "tot" && "text-slate-700 dark:text-emerald-300",
+								duongTrachAdvisory.truct.rating === "trung" && "text-amber-800 dark:text-amber-300",
+								duongTrachAdvisory.truct.rating === "xau" && "text-slate-700 dark:text-rose-300",
 							)}
 							>
 								{duongTrachAdvisory.truct.rating === "xau"
@@ -1013,8 +1013,8 @@ export function BuiltinTheme() {
 						{duongTrachAdvisory.truct.rating !== "xau" && (
 							<div className={cn(
 								"px-3 py-2 text-[10px]",
-								duongTrachAdvisory.truct.rating === "tot" && "bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300",
-								duongTrachAdvisory.truct.rating === "trung" && "bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300",
+								duongTrachAdvisory.truct.rating === "tot" && "bg-emerald-50 dark:bg-emerald-950/30 text-slate-700 dark:text-emerald-300",
+								duongTrachAdvisory.truct.rating === "trung" && "bg-amber-50 dark:bg-amber-950/30 text-slate-700 dark:text-amber-300",
 							)}>
 								<span className="font-semibold mr-1.5">⏰ {t("preferences.theme.builtin.auspiciousHoursLabel")}:</span>
 								<span className="flex flex-wrap gap-1 mt-1">
@@ -1072,9 +1072,9 @@ export function BuiltinTheme() {
 								>
 									<span className={cn(
 										"font-bold w-10 flex-shrink-0",
-										rating === "tot" && "text-emerald-700 dark:text-emerald-300",
-										rating === "trung" && "text-amber-700 dark:text-amber-300",
-										rating === "xau" && "text-rose-700 dark:text-rose-300",
+										rating === "tot" && "text-slate-700 dark:text-emerald-300",
+										rating === "trung" && "text-amber-800 dark:text-amber-300",
+										rating === "xau" && "text-slate-700 dark:text-rose-300",
 									)}
 									>
 										{t(`preferences.theme.builtin.${labelKey}`)}
@@ -1120,24 +1120,24 @@ export function BuiltinTheme() {
 						{/* description */}
 						<div className={cn(
 							"px-3 py-2 text-xs italic border-b",
-							amTrachAdvisory.truct.rating === "tot" && "bg-emerald-50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 border-emerald-100 dark:border-emerald-800/40",
-							amTrachAdvisory.truct.rating === "trung" && "bg-amber-50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200 border-amber-100 dark:border-amber-800/40",
-							amTrachAdvisory.truct.rating === "xau" && "bg-rose-50 dark:bg-rose-950/40 text-rose-900 dark:text-rose-200 border-rose-100 dark:border-rose-800/40",
+							amTrachAdvisory.truct.rating === "tot" && "bg-emerald-50 dark:bg-emerald-950/40 text-slate-800 dark:text-emerald-200 border-emerald-100 dark:border-emerald-800/40",
+							amTrachAdvisory.truct.rating === "trung" && "bg-amber-50 dark:bg-amber-950/40 text-slate-800 dark:text-amber-200 border-amber-100 dark:border-amber-800/40",
+							amTrachAdvisory.truct.rating === "xau" && "bg-rose-50 dark:bg-rose-950/40 text-slate-800 dark:text-rose-200 border-rose-100 dark:border-rose-800/40",
 						)}>
 							{t(`preferences.theme.builtin.truct${amTrachAdvisory.truct.nameKey.charAt(0).toUpperCase()}${amTrachAdvisory.truct.nameKey.slice(1)}Desc`)}
 						</div>
 						{/* activity guidance */}
 						<div className={cn(
 							"px-3 py-2 text-xs border-b",
-							amTrachAdvisory.truct.rating === "tot" && "bg-emerald-50/50 dark:bg-emerald-950/20 text-emerald-900 dark:text-emerald-100 border-emerald-100 dark:border-emerald-800/30",
-							amTrachAdvisory.truct.rating === "trung" && "bg-amber-50/50 dark:bg-amber-950/20 text-amber-900 dark:text-amber-100 border-amber-100 dark:border-amber-800/30",
-							amTrachAdvisory.truct.rating === "xau" && "bg-rose-50/50 dark:bg-rose-950/20 text-rose-900 dark:text-rose-100 border-rose-100 dark:border-rose-800/30",
+							amTrachAdvisory.truct.rating === "tot" && "bg-emerald-50/50 dark:bg-emerald-950/20 text-slate-800 dark:text-emerald-100 border-emerald-100 dark:border-emerald-800/30",
+							amTrachAdvisory.truct.rating === "trung" && "bg-amber-50/50 dark:bg-amber-950/20 text-slate-800 dark:text-amber-100 border-amber-100 dark:border-amber-800/30",
+							amTrachAdvisory.truct.rating === "xau" && "bg-rose-50/50 dark:bg-rose-950/20 text-slate-800 dark:text-rose-100 border-rose-100 dark:border-rose-800/30",
 						)}>
 							<span className={cn(
 								"font-bold text-[10px] uppercase tracking-wide mr-1",
-								amTrachAdvisory.truct.rating === "tot" && "text-emerald-700 dark:text-emerald-300",
-								amTrachAdvisory.truct.rating === "trung" && "text-amber-700 dark:text-amber-300",
-								amTrachAdvisory.truct.rating === "xau" && "text-rose-700 dark:text-rose-300",
+								amTrachAdvisory.truct.rating === "tot" && "text-slate-700 dark:text-emerald-300",
+								amTrachAdvisory.truct.rating === "trung" && "text-amber-800 dark:text-amber-300",
+								amTrachAdvisory.truct.rating === "xau" && "text-slate-700 dark:text-rose-300",
 							)}
 							>
 								{amTrachAdvisory.truct.rating === "xau"
@@ -1151,8 +1151,8 @@ export function BuiltinTheme() {
 						{amTrachAdvisory.truct.rating !== "xau" && (
 							<div className={cn(
 								"px-3 py-2 text-[10px]",
-								amTrachAdvisory.truct.rating === "tot" && "bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300",
-								amTrachAdvisory.truct.rating === "trung" && "bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300",
+								amTrachAdvisory.truct.rating === "tot" && "bg-emerald-50 dark:bg-emerald-950/30 text-slate-700 dark:text-emerald-300",
+								amTrachAdvisory.truct.rating === "trung" && "bg-amber-50 dark:bg-amber-950/30 text-slate-700 dark:text-amber-300",
 							)}>
 								<span className="font-semibold mr-1.5">⏰ {t("preferences.theme.builtin.auspiciousHoursLabel")}:</span>
 								<span className="flex flex-wrap gap-1 mt-1">
