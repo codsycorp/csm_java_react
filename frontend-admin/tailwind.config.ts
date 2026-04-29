@@ -1,5 +1,6 @@
 import type { Config } from "tailwindcss";
 import plugin from "tailwindcss/plugin";
+import colors from "tailwindcss/colors";
 
 import { getColorPalettes } from "./src/styles/theme/antd/css-variables";
 
@@ -21,6 +22,12 @@ export default {
 			 * @see https://ant.design/docs/spec/colors
 			 */
 			...getColorPalettes,
+			// Standard Tailwind colors used in feng shui panel and other components
+			slate: colors.slate,
+			emerald: colors.emerald,
+			rose: colors.rose,
+			amber: colors.amber,
+			indigo: colors.indigo,
 		},
 		/**
 		 * Use ant design breakpoints
