@@ -898,51 +898,61 @@ export function BuiltinTheme() {
 						duongTrachAdvisory.truct.rating === "xau" && "border-rose-300",
 					)}
 					>
+						{/* header */}
 						<div className={cn(
 							"px-3 py-2 flex items-center gap-2",
-							duongTrachAdvisory.truct.rating === "tot" && "bg-emerald-100",
-							duongTrachAdvisory.truct.rating === "trung" && "bg-amber-50",
-							duongTrachAdvisory.truct.rating === "xau" && "bg-rose-50",
+							duongTrachAdvisory.truct.rating === "tot" && "bg-emerald-500",
+							duongTrachAdvisory.truct.rating === "trung" && "bg-amber-400",
+							duongTrachAdvisory.truct.rating === "xau" && "bg-rose-500",
 						)}
 						>
-							<span className={cn(
-								"text-sm font-bold",
-								duongTrachAdvisory.truct.rating === "tot" && "text-emerald-900",
-								duongTrachAdvisory.truct.rating === "trung" && "text-amber-700",
-								duongTrachAdvisory.truct.rating === "xau" && "text-rose-700",
-							)}
-							>
+							<span className="text-sm font-bold text-white">
 								{t(`preferences.theme.builtin.truct${duongTrachAdvisory.truct.nameKey.charAt(0).toUpperCase()}${duongTrachAdvisory.truct.nameKey.slice(1)}`)}
 							</span>
-							<span className={cn(
-								"ml-auto text-[10px] font-semibold px-2 py-0.5 rounded-full",
-								duongTrachAdvisory.truct.rating === "tot" && "bg-emerald-200 text-emerald-900",
-								duongTrachAdvisory.truct.rating === "trung" && "bg-amber-200 text-amber-900",
-								duongTrachAdvisory.truct.rating === "xau" && "bg-rose-200 text-rose-900",
-							)}
-							>
+							<span className="ml-auto text-[10px] font-semibold bg-white/25 text-white px-2 py-0.5 rounded-full">
 								{t(`preferences.theme.builtin.duongTrachRating${duongTrachAdvisory.truct.rating.charAt(0).toUpperCase()}${duongTrachAdvisory.truct.rating.slice(1)}`)}
 							</span>
 						</div>
-						<div className={cn(
-							"px-3 py-1.5 text-[10px] italic border-b",
-							duongTrachAdvisory.truct.rating === "tot" && "bg-emerald-50 text-emerald-700 border-emerald-200",
-							duongTrachAdvisory.truct.rating === "trung" && "bg-amber-50 text-amber-700 border-amber-200",
-							duongTrachAdvisory.truct.rating === "xau" && "bg-rose-50 text-rose-700 border-rose-200",
-						)}
-						>
+						{/* description */}
+						<div className="px-3 py-2 bg-white text-xs text-slate-700 border-b border-slate-100 italic">
 							{t(`preferences.theme.builtin.duongTrachTruct${duongTrachAdvisory.truct.nameKey.charAt(0).toUpperCase()}${duongTrachAdvisory.truct.nameKey.slice(1)}Desc`)}
 						</div>
-						<div className="px-3 py-2 bg-white text-xs text-slate-700">
-							<span className="font-semibold text-slate-500 text-[10px]">
+						{/* activity guidance */}
+						<div className="px-3 py-2 bg-white text-xs text-slate-800 border-b border-slate-100">
+							<span className={cn(
+								"font-bold text-[10px] uppercase tracking-wide mr-1",
+								duongTrachAdvisory.truct.rating === "xau" ? "text-rose-600" : "text-emerald-600",
+							)}
+							>
 								{duongTrachAdvisory.truct.rating === "xau"
 									? t("preferences.theme.builtin.duongTrachAvoidTitle")
 									: t("preferences.theme.builtin.duongTrachShouldTitle")}
 								{":"}
 							</span>
-							{" "}
 							{t(`preferences.theme.builtin.duongTrachDo_${duongTrachAdvisory.truct.nameKey}`)}
 						</div>
+						{/* auspicious hours */}
+						{duongTrachAdvisory.truct.rating !== "xau" && (
+							<div className="px-3 py-2 bg-slate-50 text-[10px] text-slate-500">
+								<span className="font-semibold text-slate-600 mr-1.5">⏰ Giờ tốt:</span>
+								<span className="flex flex-wrap gap-1 mt-1">
+									{hourAdvisory.auspiciousSlots.map(slot => (
+										<span
+											key={slot.chiIndex}
+											className={cn(
+												"inline-flex flex-col items-center px-1.5 py-0.5 rounded text-[9px] leading-tight",
+												hourAdvisory.currentChiIndex === slot.chiIndex
+													? "bg-emerald-500 text-white font-bold"
+													: "bg-emerald-100 text-emerald-800",
+											)}
+										>
+											<span className="font-semibold">{branchLabelMap[slot.branchKey]}</span>
+											<span className="opacity-80">{getHourRangeLabel(slot.chiIndex)}</span>
+										</span>
+									))}
+								</span>
+							</div>
+						)}
 					</div>
 				</div>
 
@@ -966,54 +976,61 @@ export function BuiltinTheme() {
 						amTrachAdvisory.truct.rating === "xau" && "border-rose-300",
 					)}
 					>
-						{/* Trực header */}
+						{/* header */}
 						<div className={cn(
 							"px-3 py-2 flex items-center gap-2",
-							amTrachAdvisory.truct.rating === "tot" && "bg-emerald-100",
-							amTrachAdvisory.truct.rating === "trung" && "bg-amber-50",
-							amTrachAdvisory.truct.rating === "xau" && "bg-rose-50",
+							amTrachAdvisory.truct.rating === "tot" && "bg-emerald-500",
+							amTrachAdvisory.truct.rating === "trung" && "bg-amber-400",
+							amTrachAdvisory.truct.rating === "xau" && "bg-rose-500",
 						)}
 						>
-							<span className={cn(
-								"text-sm font-bold",
-								amTrachAdvisory.truct.rating === "tot" && "text-emerald-900",
-								amTrachAdvisory.truct.rating === "trung" && "text-amber-700",
-								amTrachAdvisory.truct.rating === "xau" && "text-rose-700",
-							)}
-							>
+							<span className="text-sm font-bold text-white">
 								{t(`preferences.theme.builtin.truct${amTrachAdvisory.truct.nameKey.charAt(0).toUpperCase()}${amTrachAdvisory.truct.nameKey.slice(1)}`)}
 							</span>
-							<span className={cn(
-								"ml-auto text-[10px] font-semibold px-2 py-0.5 rounded-full",
-								amTrachAdvisory.truct.rating === "tot" && "bg-emerald-200 text-emerald-900",
-								amTrachAdvisory.truct.rating === "trung" && "bg-amber-200 text-amber-900",
-								amTrachAdvisory.truct.rating === "xau" && "bg-rose-200 text-rose-900",
-							)}
-							>
+							<span className="ml-auto text-[10px] font-semibold bg-white/25 text-white px-2 py-0.5 rounded-full">
 								{t(`preferences.theme.builtin.amTrachRating${amTrachAdvisory.truct.rating.charAt(0).toUpperCase()}${amTrachAdvisory.truct.rating.slice(1)}`)}
 							</span>
 						</div>
-						{/* Trực description */}
-						<div className={cn(
-							"px-3 py-1.5 text-[10px] italic border-b",
-							amTrachAdvisory.truct.rating === "tot" && "bg-emerald-50 text-emerald-700 border-emerald-200",
-							amTrachAdvisory.truct.rating === "trung" && "bg-amber-50 text-amber-700 border-amber-200",
-							amTrachAdvisory.truct.rating === "xau" && "bg-rose-50 text-rose-700 border-rose-200",
-						)}
-						>
+						{/* description */}
+						<div className="px-3 py-2 bg-white text-xs text-slate-700 border-b border-slate-100 italic">
 							{t(`preferences.theme.builtin.truct${amTrachAdvisory.truct.nameKey.charAt(0).toUpperCase()}${amTrachAdvisory.truct.nameKey.slice(1)}Desc`)}
 						</div>
-						{/* Activity guidance */}
-						<div className="px-3 py-2 bg-white text-xs text-slate-700">
-							<span className="font-semibold text-slate-500 text-[10px]">
+						{/* activity guidance */}
+						<div className="px-3 py-2 bg-white text-xs text-slate-800 border-b border-slate-100">
+							<span className={cn(
+								"font-bold text-[10px] uppercase tracking-wide mr-1",
+								amTrachAdvisory.truct.rating === "xau" ? "text-rose-600" : "text-emerald-600",
+							)}
+							>
 								{amTrachAdvisory.truct.rating === "xau"
 									? t("preferences.theme.builtin.amTrachAvoidTitle")
 									: t("preferences.theme.builtin.amTrachShouldTitle")}
 								{":"}
 							</span>
-							{" "}
 							{t(`preferences.theme.builtin.amTrachDo_${amTrachAdvisory.truct.nameKey}`)}
 						</div>
+						{/* auspicious hours */}
+						{amTrachAdvisory.truct.rating !== "xau" && (
+							<div className="px-3 py-2 bg-slate-50 text-[10px] text-slate-500">
+								<span className="font-semibold text-slate-600 mr-1.5">⏰ Giờ tốt:</span>
+								<span className="flex flex-wrap gap-1 mt-1">
+									{hourAdvisory.auspiciousSlots.map(slot => (
+										<span
+											key={slot.chiIndex}
+											className={cn(
+												"inline-flex flex-col items-center px-1.5 py-0.5 rounded text-[9px] leading-tight",
+												hourAdvisory.currentChiIndex === slot.chiIndex
+													? "bg-emerald-500 text-white font-bold"
+													: "bg-emerald-100 text-emerald-800",
+											)}
+										>
+											<span className="font-semibold">{branchLabelMap[slot.branchKey]}</span>
+											<span className="opacity-80">{getHourRangeLabel(slot.chiIndex)}</span>
+										</span>
+									))}
+								</span>
+							</div>
+						)}
 					</div>
 				</div>
 			</div>
