@@ -584,18 +584,18 @@ export function BuiltinTheme() {
 						</div>
 						<div className="space-y-2">
 							<div className="text-xs">
-							<span className="font-semibold text-slate-700">Mệnh Ngũ Hành:</span>
+							<span className="font-semibold text-slate-700">{t("preferences.theme.builtin.mingElementLabel")}:</span>
 							{" "}
 							<span className="text-slate-800 font-medium">
 								{getElementLabel(detailedWuxingReading.mingElement)}
 								{" "}
 								(
-								{detailedWuxingReading.mingDescription}
+								{t(`preferences.theme.builtin.${detailedWuxingReading.mingDescriptionKey}`)}
 								)
 							</span>
 						</div>
 						<div className="text-xs">
-							<span className="font-semibold text-slate-700">Thiên Can:</span>
+							<span className="font-semibold text-slate-700">{t("preferences.theme.builtin.stemLabel")}:</span>
 								{" "}
 								<span className="text-slate-900 font-medium">
 									{t(`preferences.theme.builtin.stem${detailedWuxingReading.stem.charAt(0).toUpperCase()}${detailedWuxingReading.stem.slice(1)}`)}
@@ -610,7 +610,7 @@ export function BuiltinTheme() {
 								</span>
 							</div>
 							<div className="text-xs">
-								<span className="font-semibold text-slate-700">Địa Chi:</span>
+								<span className="font-semibold text-slate-700">{t("preferences.theme.builtin.branchLabel")}:</span>
 								{" "}
 							<span className="text-slate-900 font-medium">
 									{branchLabelMap[detailedWuxingReading.branch]}
@@ -622,26 +622,26 @@ export function BuiltinTheme() {
 							</div>
 							<div className="text-xs mt-3 pt-2 border-t border-slate-300">
 							<span className="font-semibold text-emerald-700">
-									✓ Tương Sinh (Hỗ trợ):
+									✓ {t("preferences.theme.builtin.tuongSinhLabel")}:
 								</span>
 								{" "}
 								<span className="text-slate-900 font-medium">
 									{getElementLabel(detailedWuxingReading.producingElement)}
 									{" "}
-									sinh
+									{t("preferences.theme.builtin.sinhWord")}
 									{" "}
 									{getElementLabel(detailedWuxingReading.mingElement)}
 								</span>
 							</div>
 							<div className="text-xs">
 							<span className="font-semibold text-rose-700">
-									✗ Tương Khắc (Tương Chế):
+									✗ {t("preferences.theme.builtin.tuongKhacLabel")}:
 								</span>
 								{" "}
 								<span className="text-slate-900 font-medium">
 									{getElementLabel(detailedWuxingReading.controllingElement)}
 									{" "}
-									khắc
+									{t("preferences.theme.builtin.khacWord")}
 									{" "}
 									{getElementLabel(detailedWuxingReading.mingElement)}
 								</span>
@@ -764,7 +764,7 @@ export function BuiltinTheme() {
 						{/* Should Do */}
 						<div className={cn("p-3 rounded-lg border", hourAdvisory.isCurrentAuspicious ? "bg-emerald-50 border-emerald-300" : "bg-slate-50 border-slate-300")}>
 							<div className={cn("text-sm font-semibold mb-2", hourAdvisory.isCurrentAuspicious ? "text-emerald-900" : "text-slate-700")}>
-								{hourAdvisory.isCurrentAuspicious ? "✅ Nên Làm" : "✅ Vẫn nên làm"}
+								{hourAdvisory.isCurrentAuspicious ? `✅ ${t("preferences.theme.builtin.shouldDoAuspicious")}` : `✅ ${t("preferences.theme.builtin.shouldDoInauspicious")}`}
 							</div>
 							<ul className={cn("text-xs space-y-1", hourAdvisory.isCurrentAuspicious ? "text-emerald-900" : "text-slate-800")}>
 								{recommendedActions.map(action => (
@@ -779,7 +779,7 @@ export function BuiltinTheme() {
 						{/* Should Avoid */}
 						<div className={cn("p-3 rounded-lg border", hourAdvisory.isCurrentAuspicious ? "bg-slate-50 border-slate-300" : "bg-rose-50 border-rose-300")}>
 							<div className={cn("text-sm font-semibold mb-2", hourAdvisory.isCurrentAuspicious ? "text-slate-700" : "text-rose-900")}>
-								{hourAdvisory.isCurrentAuspicious ? "⛔ Không Nên" : "⛔ Đặc biệt tránh"}
+								{hourAdvisory.isCurrentAuspicious ? `⛔ ${t("preferences.theme.builtin.shouldAvoidAuspicious")}` : `⛔ ${t("preferences.theme.builtin.shouldAvoidInauspicious")}`}
 							</div>
 							<ul className={cn("text-xs space-y-1", hourAdvisory.isCurrentAuspicious ? "text-slate-800" : "text-rose-900")}>
 								{avoidActions.map(action => (
@@ -828,9 +828,20 @@ export function BuiltinTheme() {
 							: t("preferences.theme.builtin.canAmDesc")}
 					</div>
 					{/* nên */}
-					<div className="px-3 pt-2 pb-1 bg-white dark:bg-slate-800 border-b border-slate-100 dark:border-slate-700">
-						<p className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-wide mb-1">✓ {t("preferences.theme.builtin.duongTrachShouldTitle") || "Nên"}</p>
-						<ul className="text-xs space-y-0.5 text-slate-800 dark:text-slate-200">
+					<div className={cn(
+						"px-3 pt-2 pb-1 border-b",
+						hourAdvisory.dayType === "duong"
+							? "bg-amber-50 dark:bg-amber-950/25 border-amber-100 dark:border-amber-800/30"
+							: "bg-indigo-50 dark:bg-indigo-950/25 border-indigo-100 dark:border-indigo-800/30",
+					)}>
+						<p className={cn(
+							"text-[10px] font-bold uppercase tracking-wide mb-1",
+							hourAdvisory.dayType === "duong" ? "text-amber-700 dark:text-amber-300" : "text-indigo-700 dark:text-indigo-300",
+						)}>✓ {t("preferences.theme.builtin.duongTrachShouldTitle") || "Nên"}</p>
+						<ul className={cn(
+							"text-xs space-y-0.5",
+							hourAdvisory.dayType === "duong" ? "text-amber-900 dark:text-amber-100" : "text-indigo-900 dark:text-indigo-100",
+						)}>
 							{hourAdvisory.dayType === "duong"
 								? (
 									<>
@@ -851,9 +862,17 @@ export function BuiltinTheme() {
 						</ul>
 					</div>
 					{/* tránh */}
-					<div className="px-3 pt-2 pb-2 bg-white dark:bg-slate-800">
+					<div className={cn(
+						"px-3 pt-2 pb-2",
+						hourAdvisory.dayType === "duong"
+							? "bg-amber-50/60 dark:bg-amber-950/15"
+							: "bg-indigo-50/60 dark:bg-indigo-950/15",
+					)}>
 						<p className="text-[10px] font-bold text-rose-600 dark:text-rose-400 uppercase tracking-wide mb-1">✗ {t("preferences.theme.builtin.amTrachAvoidTitle") || "Tránh"}</p>
-						<ul className="text-xs space-y-0.5 text-slate-800 dark:text-slate-200">
+						<ul className={cn(
+							"text-xs space-y-0.5",
+							hourAdvisory.dayType === "duong" ? "text-amber-900 dark:text-amber-100" : "text-indigo-900 dark:text-indigo-100",
+						)}>
 							{hourAdvisory.dayType === "duong"
 								? (
 									<>
@@ -875,7 +894,7 @@ export function BuiltinTheme() {
 
 				{/* Dương Trạch Phong Thủy — Trực (建除十二神) */}
 				<div className="mt-2">
-					<div className="text-xs font-bold text-slate-600 dark:text-slate-300 mb-1.5 flex items-center gap-1.5">
+					<div className="text-xs font-bold text-slate-700 dark:text-slate-200 mb-1.5 flex items-center gap-1.5">
 						🏠
 						{" "}
 						{t("preferences.theme.builtin.duongTrachSectionTitle")}
@@ -885,6 +904,58 @@ export function BuiltinTheme() {
 								month: duongTrachAdvisory.lunarMonth,
 							})}
 						</span>
+					</div>
+					{/* Thiên - Địa - Nhân activity ratings */}
+					<div className="mb-2 space-y-1">
+						<p className="text-[10px] text-slate-500 dark:text-slate-400 italic px-0.5 mb-1.5">
+							{t("preferences.theme.builtin.duongTrachCorePrinciple")}
+						</p>
+						{/* Thiên: lợp mái */}
+						{(["lopMai", "dongTho", "lapCua"] as const).map((actKey) => {
+							const rating = duongTrachAdvisory.activities[actKey];
+							const labelKey = actKey === "lopMai" ? "duongTrachHeavenLabel" : actKey === "dongTho" ? "duongTrachEarthLabel" : "duongTrachHumanLabel";
+							const activityKey = actKey === "lopMai" ? "duongTrachHeavenActivity" : actKey === "dongTho" ? "duongTrachEarthActivity" : "duongTrachHumanActivity";
+							const isSpecial = actKey === "lapCua";
+							return (
+								<div
+									key={actKey}
+									className={cn(
+										"flex items-center gap-2 rounded px-2 py-1.5 border text-[10px]",
+										rating === "tot" && "bg-emerald-50 dark:bg-emerald-950/30 border-emerald-300 dark:border-emerald-700/50",
+										rating === "trung" && "bg-amber-50 dark:bg-amber-950/30 border-amber-300 dark:border-amber-700/50",
+										rating === "xau" && "bg-rose-50 dark:bg-rose-950/30 border-rose-300 dark:border-rose-700/50",
+									)}
+								>
+									<span className={cn(
+										"font-bold w-10 flex-shrink-0",
+										rating === "tot" && "text-emerald-700 dark:text-emerald-300",
+										rating === "trung" && "text-amber-700 dark:text-amber-300",
+										rating === "xau" && "text-rose-700 dark:text-rose-300",
+									)}
+									>
+										{t(`preferences.theme.builtin.${labelKey}`)}
+									</span>
+									<span className="text-slate-700 dark:text-slate-300 flex-1">
+										{t(`preferences.theme.builtin.${activityKey}`)}
+										{isSpecial && (
+											<span className="ml-1 text-[9px] text-amber-600 dark:text-amber-400">★ {t("preferences.theme.builtin.phiTinhNote")}</span>
+										)}
+									</span>
+									<span className={cn(
+										"font-semibold flex-shrink-0 px-1.5 py-0.5 rounded text-[9px]",
+										rating === "tot" && "bg-emerald-500 text-white",
+										rating === "trung" && "bg-amber-400 text-white",
+										rating === "xau" && "bg-rose-500 text-white",
+									)}
+									>
+										{t(`preferences.theme.builtin.duongTrachRating${rating.charAt(0).toUpperCase()}${rating.slice(1)}`)}
+									</span>
+								</div>
+							);
+						})}
+						<p className="text-[9px] text-slate-400 dark:text-slate-500 italic px-0.5 pt-0.5">
+							❝ {t("preferences.theme.builtin.duongTrachQuote")} ❞
+						</p>
 					</div>
 					<div className={cn(
 						"rounded-lg border overflow-hidden",
@@ -909,14 +980,26 @@ export function BuiltinTheme() {
 							</span>
 						</div>
 						{/* description */}
-						<div className="px-3 py-2 bg-white dark:bg-slate-800 text-xs text-slate-700 dark:text-slate-300 border-b border-slate-100 dark:border-slate-700 italic">
+						<div className={cn(
+							"px-3 py-2 text-xs italic border-b",
+							duongTrachAdvisory.truct.rating === "tot" && "bg-emerald-50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 border-emerald-100 dark:border-emerald-800/40",
+							duongTrachAdvisory.truct.rating === "trung" && "bg-amber-50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200 border-amber-100 dark:border-amber-800/40",
+							duongTrachAdvisory.truct.rating === "xau" && "bg-rose-50 dark:bg-rose-950/40 text-rose-900 dark:text-rose-200 border-rose-100 dark:border-rose-800/40",
+						)}>
 							{t(`preferences.theme.builtin.duongTrachTruct${duongTrachAdvisory.truct.nameKey.charAt(0).toUpperCase()}${duongTrachAdvisory.truct.nameKey.slice(1)}Desc`)}
 						</div>
 						{/* activity guidance */}
-						<div className="px-3 py-2 bg-white dark:bg-slate-800 text-xs text-slate-800 dark:text-slate-200 border-b border-slate-100 dark:border-slate-700">
+						<div className={cn(
+							"px-3 py-2 text-xs border-b",
+							duongTrachAdvisory.truct.rating === "tot" && "bg-emerald-50/50 dark:bg-emerald-950/20 text-emerald-900 dark:text-emerald-100 border-emerald-100 dark:border-emerald-800/30",
+							duongTrachAdvisory.truct.rating === "trung" && "bg-amber-50/50 dark:bg-amber-950/20 text-amber-900 dark:text-amber-100 border-amber-100 dark:border-amber-800/30",
+							duongTrachAdvisory.truct.rating === "xau" && "bg-rose-50/50 dark:bg-rose-950/20 text-rose-900 dark:text-rose-100 border-rose-100 dark:border-rose-800/30",
+						)}>
 							<span className={cn(
 								"font-bold text-[10px] uppercase tracking-wide mr-1",
-								duongTrachAdvisory.truct.rating === "xau" ? "text-rose-600 dark:text-rose-400" : "text-emerald-600 dark:text-emerald-400",
+								duongTrachAdvisory.truct.rating === "tot" && "text-emerald-700 dark:text-emerald-300",
+								duongTrachAdvisory.truct.rating === "trung" && "text-amber-700 dark:text-amber-300",
+								duongTrachAdvisory.truct.rating === "xau" && "text-rose-700 dark:text-rose-300",
 							)}
 							>
 								{duongTrachAdvisory.truct.rating === "xau"
@@ -928,8 +1011,12 @@ export function BuiltinTheme() {
 						</div>
 						{/* auspicious hours */}
 						{duongTrachAdvisory.truct.rating !== "xau" && (
-							<div className="px-3 py-2 bg-slate-50 dark:bg-slate-900 text-[10px] text-slate-500 dark:text-slate-400">
-								<span className="font-semibold text-slate-600 dark:text-slate-300 mr-1.5">⏰ Giờ tốt:</span>
+							<div className={cn(
+								"px-3 py-2 text-[10px]",
+								duongTrachAdvisory.truct.rating === "tot" && "bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300",
+								duongTrachAdvisory.truct.rating === "trung" && "bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300",
+							)}>
+								<span className="font-semibold mr-1.5">⏰ {t("preferences.theme.builtin.auspiciousHoursLabel")}:</span>
 								<span className="flex flex-wrap gap-1 mt-1">
 									{hourAdvisory.auspiciousSlots.map(slot => (
 										<span
@@ -937,8 +1024,10 @@ export function BuiltinTheme() {
 											className={cn(
 												"inline-flex flex-col items-center px-1.5 py-0.5 rounded text-[9px] leading-tight",
 												hourAdvisory.currentChiIndex === slot.chiIndex
-													? "bg-emerald-500 text-white font-bold"
-													: "bg-emerald-100 dark:bg-emerald-900 text-emerald-800 dark:text-emerald-200",
+													? duongTrachAdvisory.truct.rating === "trung" ? "bg-amber-500 text-white font-bold" : "bg-emerald-500 text-white font-bold"
+													: duongTrachAdvisory.truct.rating === "trung"
+														? "bg-amber-100 dark:bg-amber-900 text-amber-800 dark:text-amber-200"
+														: "bg-emerald-100 dark:bg-emerald-900 text-emerald-800 dark:text-emerald-200",
 											)}
 										>
 											<span className="font-semibold">{branchLabelMap[slot.branchKey]}</span>
@@ -953,7 +1042,7 @@ export function BuiltinTheme() {
 
 				{/* Âm Trạch Phong Thủy — Trực (建除十二神) */}
 				<div className="mt-2">
-					<div className="text-xs font-bold text-slate-600 dark:text-slate-300 mb-1.5 flex items-center gap-1.5">
+					<div className="text-xs font-bold text-slate-700 dark:text-slate-200 mb-1.5 flex items-center gap-1.5">
 						🪦
 						{" "}
 						{t("preferences.theme.builtin.amTrachSectionTitle")}
@@ -963,6 +1052,48 @@ export function BuiltinTheme() {
 								month: amTrachAdvisory.lunarMonth,
 							})}
 						</span>
+					</div>
+					{/* Địa - Thiên - Nhân activity ratings */}
+					<div className="mb-2 space-y-1">
+						{/* Địa: đào huyệt | Thiên: nhập huyệt | Nhân: lắp bia */}
+						{(["daoHuyet", "nhapHuyet", "lapBia"] as const).map((actKey) => {
+							const rating = amTrachAdvisory.activities[actKey];
+							const labelKey = actKey === "daoHuyet" ? "amTrachEarthLabel" : actKey === "nhapHuyet" ? "amTrachHeavenLabel" : "amTrachHumanLabel";
+							const activityKey = actKey === "daoHuyet" ? "amTrachEarthActivity" : actKey === "nhapHuyet" ? "amTrachHeavenActivity" : "amTrachHumanActivity";
+							return (
+								<div
+									key={actKey}
+									className={cn(
+										"flex items-center gap-2 rounded px-2 py-1.5 border text-[10px]",
+										rating === "tot" && "bg-emerald-50 dark:bg-emerald-950/30 border-emerald-300 dark:border-emerald-700/50",
+										rating === "trung" && "bg-amber-50 dark:bg-amber-950/30 border-amber-300 dark:border-amber-700/50",
+										rating === "xau" && "bg-rose-50 dark:bg-rose-950/30 border-rose-300 dark:border-rose-700/50",
+									)}
+								>
+									<span className={cn(
+										"font-bold w-10 flex-shrink-0",
+										rating === "tot" && "text-emerald-700 dark:text-emerald-300",
+										rating === "trung" && "text-amber-700 dark:text-amber-300",
+										rating === "xau" && "text-rose-700 dark:text-rose-300",
+									)}
+									>
+										{t(`preferences.theme.builtin.${labelKey}`)}
+									</span>
+									<span className="text-slate-700 dark:text-slate-300 flex-1">
+										{t(`preferences.theme.builtin.${activityKey}`)}
+									</span>
+									<span className={cn(
+										"font-semibold flex-shrink-0 px-1.5 py-0.5 rounded text-[9px]",
+										rating === "tot" && "bg-emerald-500 text-white",
+										rating === "trung" && "bg-amber-400 text-white",
+										rating === "xau" && "bg-rose-500 text-white",
+									)}
+									>
+										{t(`preferences.theme.builtin.amTrachRating${rating.charAt(0).toUpperCase()}${rating.slice(1)}`)}
+									</span>
+								</div>
+							);
+						})}
 					</div>
 					<div className={cn(
 						"rounded-lg border overflow-hidden",
@@ -987,14 +1118,26 @@ export function BuiltinTheme() {
 							</span>
 						</div>
 						{/* description */}
-						<div className="px-3 py-2 bg-white dark:bg-slate-800 text-xs text-slate-700 dark:text-slate-300 border-b border-slate-100 dark:border-slate-700 italic">
+						<div className={cn(
+							"px-3 py-2 text-xs italic border-b",
+							amTrachAdvisory.truct.rating === "tot" && "bg-emerald-50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-200 border-emerald-100 dark:border-emerald-800/40",
+							amTrachAdvisory.truct.rating === "trung" && "bg-amber-50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200 border-amber-100 dark:border-amber-800/40",
+							amTrachAdvisory.truct.rating === "xau" && "bg-rose-50 dark:bg-rose-950/40 text-rose-900 dark:text-rose-200 border-rose-100 dark:border-rose-800/40",
+						)}>
 							{t(`preferences.theme.builtin.truct${amTrachAdvisory.truct.nameKey.charAt(0).toUpperCase()}${amTrachAdvisory.truct.nameKey.slice(1)}Desc`)}
 						</div>
 						{/* activity guidance */}
-						<div className="px-3 py-2 bg-white dark:bg-slate-800 text-xs text-slate-800 dark:text-slate-200 border-b border-slate-100 dark:border-slate-700">
+						<div className={cn(
+							"px-3 py-2 text-xs border-b",
+							amTrachAdvisory.truct.rating === "tot" && "bg-emerald-50/50 dark:bg-emerald-950/20 text-emerald-900 dark:text-emerald-100 border-emerald-100 dark:border-emerald-800/30",
+							amTrachAdvisory.truct.rating === "trung" && "bg-amber-50/50 dark:bg-amber-950/20 text-amber-900 dark:text-amber-100 border-amber-100 dark:border-amber-800/30",
+							amTrachAdvisory.truct.rating === "xau" && "bg-rose-50/50 dark:bg-rose-950/20 text-rose-900 dark:text-rose-100 border-rose-100 dark:border-rose-800/30",
+						)}>
 							<span className={cn(
 								"font-bold text-[10px] uppercase tracking-wide mr-1",
-								amTrachAdvisory.truct.rating === "xau" ? "text-rose-600 dark:text-rose-400" : "text-emerald-600 dark:text-emerald-400",
+								amTrachAdvisory.truct.rating === "tot" && "text-emerald-700 dark:text-emerald-300",
+								amTrachAdvisory.truct.rating === "trung" && "text-amber-700 dark:text-amber-300",
+								amTrachAdvisory.truct.rating === "xau" && "text-rose-700 dark:text-rose-300",
 							)}
 							>
 								{amTrachAdvisory.truct.rating === "xau"
@@ -1006,8 +1149,12 @@ export function BuiltinTheme() {
 						</div>
 						{/* auspicious hours */}
 						{amTrachAdvisory.truct.rating !== "xau" && (
-							<div className="px-3 py-2 bg-slate-50 dark:bg-slate-900 text-[10px] text-slate-500 dark:text-slate-400">
-								<span className="font-semibold text-slate-600 dark:text-slate-300 mr-1.5">⏰ Giờ tốt:</span>
+							<div className={cn(
+								"px-3 py-2 text-[10px]",
+								amTrachAdvisory.truct.rating === "tot" && "bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300",
+								amTrachAdvisory.truct.rating === "trung" && "bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300",
+							)}>
+								<span className="font-semibold mr-1.5">⏰ {t("preferences.theme.builtin.auspiciousHoursLabel")}:</span>
 								<span className="flex flex-wrap gap-1 mt-1">
 									{hourAdvisory.auspiciousSlots.map(slot => (
 										<span
@@ -1015,8 +1162,10 @@ export function BuiltinTheme() {
 											className={cn(
 												"inline-flex flex-col items-center px-1.5 py-0.5 rounded text-[9px] leading-tight",
 												hourAdvisory.currentChiIndex === slot.chiIndex
-													? "bg-emerald-500 text-white font-bold"
-													: "bg-emerald-100 dark:bg-emerald-900 text-emerald-800 dark:text-emerald-200",
+													? amTrachAdvisory.truct.rating === "trung" ? "bg-amber-500 text-white font-bold" : "bg-emerald-500 text-white font-bold"
+													: amTrachAdvisory.truct.rating === "trung"
+														? "bg-amber-100 dark:bg-amber-900 text-amber-800 dark:text-amber-200"
+														: "bg-emerald-100 dark:bg-emerald-900 text-emerald-800 dark:text-emerald-200",
 											)}
 										>
 											<span className="font-semibold">{branchLabelMap[slot.branchKey]}</span>

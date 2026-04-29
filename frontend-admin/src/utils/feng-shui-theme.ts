@@ -317,6 +317,100 @@ const TRUCT_AM_TRACH_RATING: TructRating[] = [
 	"xau",   // 11 Bế  — đóng kín, kỵ an táng (âm khí bị bế tắc)
 ];
 
+// ─── Dương Trạch: per-activity ratings (Thiên/Địa/Nhân) ────────────────────
+// Thiên: Ngày lợp mái — kỵ leo cao ngày Nguy; kỵ giữ cứng ngày Chấp
+const TRUCT_LOP_MAI_RATING: TructRating[] = [
+	"trung", // 0  Kiến  — nhà đang khởi dựng, mái chưa đến lúc
+	"tot",   // 1  Trừ  — dọn dẹp bề mặt cũ, thuận lợi lợp mái mới
+	"xau",   // 2  Mãn  — quá đầy nặng nề, kỵ leo cao làm mái
+	"tot",   // 3  Bình — bình hoà, ổn định, tốt hoàn thiện mái
+	"tot",   // 4  Định — cố định vững chắc, tốt nhất lợp mái
+	"xau",   // 5  Chấp — kỵ leo trèo, khí giữ cứng
+	"xau",   // 6  Phá  — mái bị phá vỡ
+	"xau",   // 7  Nguy — nguy hiểm leo cao, đặc biệt kỵ sửa mái
+	"tot",   // 8  Thành — hoàn thành tốt đẹp
+	"trung", // 9  Thu  — thu về, bình thường
+	"tot",   // 10 Khai — khai thông, tốt hoàn thiện mái
+	"xau",   // 11 Bế  — bế tắc, kỵ
+];
+// Địa: Ngày động thổ — ngày Kiến tốt nhất để đặt nền móng
+const TRUCT_DONG_THO_RATING: TructRating[] = [
+	"tot",   // 0  Kiến  — khởi đầu mạnh, đặt nền móng tốt nhất
+	"tot",   // 1  Trừ  — phá đất cũ, dọn mặt bằng xây mới
+	"xau",   // 2  Mãn  — đất quá đầy, không nên động thổ
+	"tot",   // 3  Bình — bình hoà, tốt khởi công động thổ
+	"tot",   // 4  Định — ổn định, tốt đặt móng bền vững
+	"trung", // 5  Chấp — có thể làm động thổ nhỏ, cần cẩn thận
+	"xau",   // 6  Phá  — phá vỡ, đại kỵ động thổ
+	"xau",   // 7  Nguy — nguy hiểm, kỵ khởi công
+	"tot",   // 8  Thành — thành công, rất tốt
+	"trung", // 9  Thu  — trung bình, cẩn trọng
+	"tot",   // 10 Khai — khai đất, rất thuận lợi
+	"xau",   // 11 Bế  — đóng bế, kỵ động thổ
+];
+// Nhân: Ngày lắp cửa — đặc biệt quan trọng trong Phi tinh; ngày Định và Khai tốt nhất
+const TRUCT_LAP_CUA_RATING: TructRating[] = [
+	"tot",   // 0  Kiến  — mở cửa sinh khí mới
+	"trung", // 1  Trừ  — bình thường, không phải ngày lý tưởng
+	"xau",   // 2  Mãn  — khí bị bế, cửa bị chắn
+	"tot",   // 3  Bình — khí thông thoáng, thuận lợi
+	"tot",   // 4  Định — cố định ổn định, đặc biệt tốt nhất lắp cửa (Phi tinh)
+	"xau",   // 5  Chấp — cửa bị giữ cứng, kỵ
+	"xau",   // 6  Phá  — cửa bị phá vỡ, đại kỵ
+	"xau",   // 7  Nguy — kỵ
+	"tot",   // 8  Thành — cửa thành công, khí thông
+	"trung", // 9  Thu  — trung bình
+	"tot",   // 10 Khai — khai mở thông thoáng, tốt nhất lắp cửa mới
+	"xau",   // 11 Bế  — đóng bế, kỵ nhất lắp cửa
+];
+
+// ─── Âm Trạch: per-activity ratings (Địa/Thiên/Nhân) ──────────────────────
+// Địa: Ngày đào huyệt
+const TRUCT_DAO_HUYET_RATING: TructRating[] = [
+	"xau",   // 0  Kiến  — sinh khí mới, kỵ đào đất âm phần
+	"trung", // 1  Trừ  — dọn dẹp, có thể đào chuẩn bị nhỏ
+	"xau",   // 2  Mãn  — đất đã đầy, bất lợi đào huyệt
+	"tot",   // 3  Bình — bình hoà, tốt chọn và đào huyệt
+	"tot",   // 4  Định — ổn định, xác định vị trí huyệt bền vững
+	"tot",   // 5  Chấp — thu giữ, rất tốt đào huyệt âm phần
+	"xau",   // 6  Phá  — đất bị phá vỡ, đại kỵ
+	"xau",   // 7  Nguy — nguy hiểm, đất dễ sụt lở
+	"tot",   // 8  Thành — thành tựu, thuận lợi
+	"trung", // 9  Thu  — có thể chuẩn bị, không lý tưởng
+	"tot",   // 10 Khai — khai đất, tốt nhất đào huyệt
+	"xau",   // 11 Bế  — âm khí bế tắc, kỵ
+];
+// Thiên: Ngày nhập huyệt, đắp mộ — ngày Chấp tốt nhất; ngày Phá, Kiến đại kỵ
+const TRUCT_NHAP_HUYET_RATING: TructRating[] = [
+	"xau",   // 0  Kiến  — sinh khí mới, kỵ nhập quan, kỵ an táng
+	"trung", // 1  Trừ  — có thể chuẩn bị, vệ sinh khu vực
+	"xau",   // 2  Mãn  — bất lợi an táng
+	"tot",   // 3  Bình — bình hoà, tốt nhập huyệt
+	"tot",   // 4  Định — ổn định, tốt nhập quan, đắp mộ
+	"tot",   // 5  Chấp — đặc biệt tốt nhất an táng, hạ huyệt
+	"xau",   // 6  Phá  — đại kỵ, tuyệt đối không an táng
+	"xau",   // 7  Nguy — kỵ hạ huyệt, nguy hiểm
+	"tot",   // 8  Thành — đại cát, thành tựu viên mãn
+	"trung", // 9  Thu  — có thể làm tế lễ nhỏ
+	"tot",   // 10 Khai — khai thông, tốt nhập huyệt
+	"xau",   // 11 Bế  — đóng bế âm khí, kỵ an táng
+];
+// Nhân: Ngày lắp bia mộ — ngày Định đặc biệt tốt (cố định bền vững)
+const TRUCT_LAP_BIA_RATING: TructRating[] = [
+	"xau",   // 0  Kiến  — kỵ lập bia
+	"trung", // 1  Trừ  — trung bình, không lý tưởng
+	"xau",   // 2  Mãn  — bất lợi
+	"tot",   // 3  Bình — bình hoà, thuận lợi
+	"tot",   // 4  Định — cố định bền vững, đặc biệt tốt nhất lập bia
+	"tot",   // 5  Chấp — giữ vững chắc, tốt
+	"xau",   // 6  Phá  — bia bị phá vỡ, đại kỵ
+	"xau",   // 7  Nguy — kỵ lập bia
+	"tot",   // 8  Thành — bia thành tựu bền lâu, đại cát
+	"trung", // 9  Thu  — trung bình
+	"tot",   // 10 Khai — khai mở, thuận lợi
+	"xau",   // 11 Bế  — đóng bế, kỵ
+];
+
 function resolveTruct(date: Date) {
 	const lunarDate = duong_qua_am(date.getDate(), date.getMonth() + 1, date.getFullYear());
 	const dayChiIndex = resolveDayChiIndex(date);
@@ -325,12 +419,25 @@ function resolveTruct(date: Date) {
 	return { lunarDate, tructIndex };
 }
 
+export interface DuongTrachActivities {
+	lopMai: TructRating   // Thiên — lợp mái
+	dongTho: TructRating  // Địa   — động thổ
+	lapCua: TructRating   // Nhân  — lắp cửa (đặc biệt quan trọng trong Phi tinh)
+}
+
+export interface AmTrachActivities {
+	daoHuyet: TructRating  // Địa   — đào huyệt
+	nhapHuyet: TructRating // Thiên — nhập huyệt, đắp mộ
+	lapBia: TructRating    // Nhân  — lắp bia mộ
+}
+
 export interface DuongTrachAdvisory {
 	lunarDay: number
 	lunarMonth: number
 	lunarYear: number
 	lunarLeap: number
 	truct: TructInfo
+	activities: DuongTrachActivities
 	isAuspicious: boolean
 }
 
@@ -343,6 +450,11 @@ export function getDuongTrachAdvisory(date = new Date()): DuongTrachAdvisory {
 		lunarYear: lunarDate.year,
 		lunarLeap: lunarDate.leap,
 		truct: { index: tructIndex, nameKey: TRUCT_NAMES[tructIndex], rating },
+		activities: {
+			lopMai: TRUCT_LOP_MAI_RATING[tructIndex],
+			dongTho: TRUCT_DONG_THO_RATING[tructIndex],
+			lapCua: TRUCT_LAP_CUA_RATING[tructIndex],
+		},
 		isAuspicious: rating === "tot",
 	};
 }
@@ -353,7 +465,7 @@ export interface AmTrachAdvisory {
 	lunarYear: number
 	lunarLeap: number
 	truct: TructInfo
-	// Whether today is overall auspicious for âm trạch work
+	activities: AmTrachActivities
 	isAuspicious: boolean
 }
 
@@ -366,19 +478,24 @@ export function getAmTrachAdvisory(date = new Date()): AmTrachAdvisory {
 		lunarYear: lunarDate.year,
 		lunarLeap: lunarDate.leap,
 		truct: { index: tructIndex, nameKey: TRUCT_NAMES[tructIndex], rating },
+		activities: {
+			daoHuyet: TRUCT_DAO_HUYET_RATING[tructIndex],
+			nhapHuyet: TRUCT_NHAP_HUYET_RATING[tructIndex],
+			lapBia: TRUCT_LAP_BIA_RATING[tructIndex],
+		},
 		isAuspicious: rating === "tot",
 	};
 }
 
 // Ming Wu Xing (Life Element) mapping based on Stem-Branch combinations
-const MING_WU_XING_MAP: Record<number, Record<number, { element: WuxingElement, description: string }>> = {
+const MING_WU_XING_MAP: Record<number, Record<number, { element: WuxingElement, descriptionKey: string }>> = {
 	// Stem 4,5 (Mậu, Kỷ - Earth): Thổ
-	4: { 0: { element: "water", description: "Hải Trung Kim" }, 1: { element: "earth", description: "Xích Trượng Hỏa" }, 2: { element: "fire", description: "Đại Dạo Mộc" }, 3: { element: "wood", description: "Tháp Thượng Hỏa" }, 4: { element: "fire", description: "Bạch Lạp Kim" }, 5: { element: "metal", description: "Dương Lưu Thủy" }, 6: { element: "water", description: "Thiên Hà Thủy" }, 7: { element: "water", description: "Đạo Biên Hỏa" }, 8: { element: "fire", description: "Thính Uyển Hỏa" }, 9: { element: "fire", description: "Nước suối Thủy" }, 10: { element: "water", description: "Tả Trượng Thủy" }, 11: { element: "water", description: "Bìm Biển Nước" } },
-	5: { 0: { element: "wood", description: "Hải Trung Kim" }, 1: { element: "wood", description: "Xích Trượng Hỏa" }, 2: { element: "wood", description: "Đại Dạo Mộc" }, 3: { element: "water", description: "Tháp Thượng Hỏa" }, 4: { element: "metal", description: "Bạch Lạp Kim" }, 5: { element: "metal", description: "Dương Lưu Thủy" }, 6: { element: "water", description: "Thiên Hà Thủy" }, 7: { element: "fire", description: "Đạo Biên Hỏa" }, 8: { element: "fire", description: "Thính Uyển Hỏa" }, 9: { element: "water", description: "Nước suối Thủy" }, 10: { element: "water", description: "Tả Trượng Thủy" }, 11: { element: "wood", description: "Bìm Biển Nước" } },
-	6: { 0: { element: "metal", description: "Hải Trung Kim" }, 1: { element: "fire", description: "Xích Trượng Hỏa" }, 2: { element: "earth", description: "Đại Dạo Mộc" }, 3: { element: "wood", description: "Tháp Thượng Hỏa" }, 4: { element: "water", description: "Bạch Lạp Kim" }, 5: { element: "water", description: "Dương Lưu Thủy" }, 6: { element: "metal", description: "Thiên Hà Thủy" }, 7: { element: "fire", description: "Đạo Biên Hỏa" }, 8: { element: "fire", description: "Thính Uyển Hỏa" }, 9: { element: "wood", description: "Nước suối Thủy" }, 10: { element: "earth", description: "Tả Trượng Thủy" }, 11: { element: "water", description: "Bìm Biển Nước" } },
-	7: { 0: { element: "water", description: "Hải Trung Kim" }, 1: { element: "earth", description: "Xích Trượng Hỏa" }, 2: { element: "fire", description: "Đại Dạo Mộc" }, 3: { element: "fire", description: "Tháp Thượng Hỏa" }, 4: { element: "metal", description: "Bạch Lạp Kim" }, 5: { element: "metal", description: "Dương Lưu Thủy" }, 6: { element: "water", description: "Thiên Hà Thủy" }, 7: { element: "water", description: "Đạo Biên Hỏa" }, 8: { element: "earth", description: "Thính Uyển Hỏa" }, 9: { element: "fire", description: "Nước suối Thủy" }, 10: { element: "water", description: "Tả Trượng Thủy" }, 11: { element: "wood", description: "Bìm Biển Nước" } },
-	8: { 0: { element: "earth", description: "Hải Trung Kim" }, 1: { element: "metal", description: "Xích Trượng Hỏa" }, 2: { element: "wood", description: "Đại Dạo Mộc" }, 3: { element: "earth", description: "Tháp Thượng Hỏa" }, 4: { element: "metal", description: "Bạch Lạp Kim" }, 5: { element: "fire", description: "Dương Lưu Thủy" }, 6: { element: "metal", description: "Thiên Hà Thủy" }, 7: { element: "fire", description: "Đạo Biên Hỏa" }, 8: { element: "earth", description: "Thính Uyển Hỏa" }, 9: { element: "metal", description: "Nước suối Thủy" }, 10: { element: "earth", description: "Tả Trượng Thủy" }, 11: { element: "fire", description: "Bìm Biển Nước" } },
-	9: { 0: { element: "wood", description: "Hải Trung Kim" }, 1: { element: "wood", description: "Xích Trượng Hỏa" }, 2: { element: "earth", description: "Đại Dạo Mộc" }, 3: { element: "water", description: "Tháp Thượng Hỏa" }, 4: { element: "fire", description: "Bạch Lạp Kim" }, 5: { element: "earth", description: "Dương Lưu Thủy" }, 6: { element: "fire", description: "Thiên Hà Thủy" }, 7: { element: "metal", description: "Đạo Biên Hỏa" }, 8: { element: "water", description: "Thính Uyển Hỏa" }, 9: { element: "earth", description: "Nước suối Thủy" }, 10: { element: "metal", description: "Tả Trượng Thủy" }, 11: { element: "earth", description: "Bìm Biển Nước" } },
+	4: { 0: { element: "water", descriptionKey: "nayinHaiTrungKim" }, 1: { element: "earth", descriptionKey: "nayinXichTruongHoa" }, 2: { element: "fire", descriptionKey: "nayinDaiDaoMoc" }, 3: { element: "wood", descriptionKey: "nayinThapThuongHoa" }, 4: { element: "fire", descriptionKey: "nayinBachLapKim" }, 5: { element: "metal", descriptionKey: "nayinDuongLuuThuy" }, 6: { element: "water", descriptionKey: "nayinThienHaThuy" }, 7: { element: "water", descriptionKey: "nayinDaoBienHoa" }, 8: { element: "fire", descriptionKey: "nayinThinhUyenHoa" }, 9: { element: "fire", descriptionKey: "nayinNuocSuoiThuy" }, 10: { element: "water", descriptionKey: "nayinTaTruongThuy" }, 11: { element: "water", descriptionKey: "nayinBimBienNuoc" } },
+	5: { 0: { element: "wood", descriptionKey: "nayinHaiTrungKim" }, 1: { element: "wood", descriptionKey: "nayinXichTruongHoa" }, 2: { element: "wood", descriptionKey: "nayinDaiDaoMoc" }, 3: { element: "water", descriptionKey: "nayinThapThuongHoa" }, 4: { element: "metal", descriptionKey: "nayinBachLapKim" }, 5: { element: "metal", descriptionKey: "nayinDuongLuuThuy" }, 6: { element: "water", descriptionKey: "nayinThienHaThuy" }, 7: { element: "fire", descriptionKey: "nayinDaoBienHoa" }, 8: { element: "fire", descriptionKey: "nayinThinhUyenHoa" }, 9: { element: "water", descriptionKey: "nayinNuocSuoiThuy" }, 10: { element: "water", descriptionKey: "nayinTaTruongThuy" }, 11: { element: "wood", descriptionKey: "nayinBimBienNuoc" } },
+	6: { 0: { element: "metal", descriptionKey: "nayinHaiTrungKim" }, 1: { element: "fire", descriptionKey: "nayinXichTruongHoa" }, 2: { element: "earth", descriptionKey: "nayinDaiDaoMoc" }, 3: { element: "wood", descriptionKey: "nayinThapThuongHoa" }, 4: { element: "water", descriptionKey: "nayinBachLapKim" }, 5: { element: "water", descriptionKey: "nayinDuongLuuThuy" }, 6: { element: "metal", descriptionKey: "nayinThienHaThuy" }, 7: { element: "fire", descriptionKey: "nayinDaoBienHoa" }, 8: { element: "fire", descriptionKey: "nayinThinhUyenHoa" }, 9: { element: "wood", descriptionKey: "nayinNuocSuoiThuy" }, 10: { element: "earth", descriptionKey: "nayinTaTruongThuy" }, 11: { element: "water", descriptionKey: "nayinBimBienNuoc" } },
+	7: { 0: { element: "water", descriptionKey: "nayinHaiTrungKim" }, 1: { element: "earth", descriptionKey: "nayinXichTruongHoa" }, 2: { element: "fire", descriptionKey: "nayinDaiDaoMoc" }, 3: { element: "fire", descriptionKey: "nayinThapThuongHoa" }, 4: { element: "metal", descriptionKey: "nayinBachLapKim" }, 5: { element: "metal", descriptionKey: "nayinDuongLuuThuy" }, 6: { element: "water", descriptionKey: "nayinThienHaThuy" }, 7: { element: "water", descriptionKey: "nayinDaoBienHoa" }, 8: { element: "earth", descriptionKey: "nayinThinhUyenHoa" }, 9: { element: "fire", descriptionKey: "nayinNuocSuoiThuy" }, 10: { element: "water", descriptionKey: "nayinTaTruongThuy" }, 11: { element: "wood", descriptionKey: "nayinBimBienNuoc" } },
+	8: { 0: { element: "earth", descriptionKey: "nayinHaiTrungKim" }, 1: { element: "metal", descriptionKey: "nayinXichTruongHoa" }, 2: { element: "wood", descriptionKey: "nayinDaiDaoMoc" }, 3: { element: "earth", descriptionKey: "nayinThapThuongHoa" }, 4: { element: "metal", descriptionKey: "nayinBachLapKim" }, 5: { element: "fire", descriptionKey: "nayinDuongLuuThuy" }, 6: { element: "metal", descriptionKey: "nayinThienHaThuy" }, 7: { element: "fire", descriptionKey: "nayinDaoBienHoa" }, 8: { element: "earth", descriptionKey: "nayinThinhUyenHoa" }, 9: { element: "metal", descriptionKey: "nayinNuocSuoiThuy" }, 10: { element: "earth", descriptionKey: "nayinTaTruongThuy" }, 11: { element: "fire", descriptionKey: "nayinBimBienNuoc" } },
+	9: { 0: { element: "wood", descriptionKey: "nayinHaiTrungKim" }, 1: { element: "wood", descriptionKey: "nayinXichTruongHoa" }, 2: { element: "earth", descriptionKey: "nayinDaiDaoMoc" }, 3: { element: "water", descriptionKey: "nayinThapThuongHoa" }, 4: { element: "fire", descriptionKey: "nayinBachLapKim" }, 5: { element: "earth", descriptionKey: "nayinDuongLuuThuy" }, 6: { element: "fire", descriptionKey: "nayinThienHaThuy" }, 7: { element: "metal", descriptionKey: "nayinDaoBienHoa" }, 8: { element: "water", descriptionKey: "nayinThinhUyenHoa" }, 9: { element: "earth", descriptionKey: "nayinNuocSuoiThuy" }, 10: { element: "metal", descriptionKey: "nayinTaTruongThuy" }, 11: { element: "earth", descriptionKey: "nayinBimBienNuoc" } },
 };
 
 export function getHeavenlyStemFromYear(year: number): HeavenlySteminese {
@@ -428,7 +545,7 @@ export interface DetailedWuxingReading {
 	branch: LunarBranchKey
 	branchElement: WuxingElement
 	mingElement: WuxingElement
-	mingDescription: string
+	mingDescriptionKey: string
 	producingElement: WuxingElement
 	controllingElement: WuxingElement
 }
@@ -442,7 +559,7 @@ export function getDetailedWuxingReading(year: number): DetailedWuxingReading {
 	const branchElement = getBranchElement(branchKey);
 
 	// Get Ming Wu Xing (life element) from combinations
-	const mingData = MING_WU_XING_MAP[stemIndex]?.[branchIndex] || { element: stemElement, description: "Unknown" };
+	const mingData = MING_WU_XING_MAP[stemIndex]?.[branchIndex] || { element: stemElement, descriptionKey: "nayinUnknown" };
 
 	return {
 		year,
@@ -451,7 +568,7 @@ export function getDetailedWuxingReading(year: number): DetailedWuxingReading {
 		branch: branchKey,
 		branchElement,
 		mingElement: mingData.element as WuxingElement,
-		mingDescription: mingData.description,
+		mingDescriptionKey: mingData.descriptionKey,
 		producingElement: PRODUCER_MAP[mingData.element as WuxingElement],
 		controllingElement: CONTROLLER_MAP[mingData.element as WuxingElement],
 	};
