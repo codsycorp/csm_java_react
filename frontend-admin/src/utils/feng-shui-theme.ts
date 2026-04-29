@@ -209,9 +209,9 @@ function resolveDayCanIndex(date: Date) {
 }
 
 function resolveDayType(canIndex: number): "duong" | "am" {
-	// Dương (Yang): odd Can (1, 3, 5, 7, 9)
-	// Âm (Yin): even Can (0, 2, 4, 6, 8)
-	return canIndex % 2 === 1 ? "duong" : "am";
+	// Ngày Can Dương (Yang Stem): Giáp(0), Bính(2), Mậu(4), Canh(6), Nhâm(8) — even index
+	// Ngày Can Âm  (Yin Stem):   Ất(1), Đinh(3), Kỷ(5), Tân(7), Quý(9)    — odd index
+	return canIndex % 2 === 0 ? "duong" : "am";
 }
 
 export function getHourRangeLabel(chiIndex: number) {
@@ -256,6 +256,75 @@ export function getLunarHourAdvisory(date = new Date()): LunarHourAdvisory {
 		isCurrentAuspicious: currentSlot.isAuspicious,
 		auspiciousSlots: allSlots.filter(slot => slot.isAuspicious),
 		inauspiciousSlots: allSlots.filter(slot => !slot.isAuspicious),
+	};
+}
+
+// ─── Trực (建除十二神) — 12-Officer cycle ───────────────────────────────────
+// Formula: tructIndex = (dayChiIndex − monthChiIndex + 12) % 12
+// Month chi: Tháng 1=Dần(2), Tháng 2=Mão(3), ..., Tháng 11=Tý(0), Tháng 12=Sửu(1)
+// → monthChiIndex = (lunarMonth + 1) % 12
+//
+// Âm Trạch (tomb/burial feng shui) suitability per Trực:
+//   Tốt:      Bình(3), Định(4), Chấp(5), Thành(8), Khai(10)
+//   Trung:    Trừ(1), Thu(9)
+//   Xấu:      Kiến(0), Mãn(2), Phá(6), Nguy(7), Bế(11)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type TructRating = "tot" | "trung" | "xau";
+
+export interface TructInfo {
+	index: number
+	nameKey: string  // i18n key suffix: e.g. "kien", "tru", ...
+	rating: TructRating
+}
+
+const TRUCT_NAMES = ["kien", "tru", "man", "binh", "dinh", "chap", "pha", "nguy", "thanh", "thu", "khai", "be"] as const;
+
+// Âm Trạch suitability by Trực index
+const TRUCT_AM_TRACH_RATING: TructRating[] = [
+	"xau",   // 0  Kiến  — khí sinh mới, kỵ an táng, cải táng
+	"trung", // 1  Trừ  — thanh trừ, có thể làm công việc vệ sinh mộ phần
+	"xau",   // 2  Mãn  — quá đầy, bất lợi âm trạch
+	"tot",   // 3  Bình — bình hoà, thuận lợi chọn huyệt, sửa mộ
+	"tot",   // 4  Định — ổn định, tốt lập bia, hoàn thiện mộ phần
+	"tot",   // 5  Chấp — thu giữ, đặc biệt tốt cho an táng, nhập quan
+	"xau",   // 6  Phá  — phá vỡ, đại kỵ mọi việc âm trạch
+	"xau",   // 7  Nguy — nguy hiểm, kỵ động thổ, cải táng
+	"tot",   // 8  Thành — thành tựu, đại cát an táng, lập bia, cải táng
+	"trung", // 9  Thu  — thu nhận, có thể dùng cho tế lễ, giỗ chạp
+	"tot",   // 10 Khai — khai mở, tốt chọn huyệt, động thổ xây mộ
+	"xau",   // 11 Bế  — đóng kín, kỵ an táng (âm khí bị bế tắc)
+];
+
+export interface AmTrachAdvisory {
+	lunarDay: number
+	lunarMonth: number
+	lunarYear: number
+	lunarLeap: number
+	truct: TructInfo
+	// Whether today is overall auspicious for âm trạch work
+	isAuspicious: boolean
+}
+
+export function getAmTrachAdvisory(date = new Date()): AmTrachAdvisory {
+	const lunarDate = duong_qua_am(date.getDate(), date.getMonth() + 1, date.getFullYear());
+	const dayChiIndex = resolveDayChiIndex(date);
+	// Month chi: Tháng 1(Dần)=2, ..., Tháng 11(Tý)=0, Tháng 12(Sửu)=1
+	const monthChiIndex = (lunarDate.month + 1) % 12;
+	const tructIndex = (dayChiIndex - monthChiIndex + 12) % 12;
+	const rating = TRUCT_AM_TRACH_RATING[tructIndex];
+
+	return {
+		lunarDay: lunarDate.day,
+		lunarMonth: lunarDate.month,
+		lunarYear: lunarDate.year,
+		lunarLeap: lunarDate.leap,
+		truct: {
+			index: tructIndex,
+			nameKey: TRUCT_NAMES[tructIndex],
+			rating,
+		},
+		isAuspicious: rating === "tot",
 	};
 }
 
