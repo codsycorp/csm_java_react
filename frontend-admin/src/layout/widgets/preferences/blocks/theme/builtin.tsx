@@ -60,8 +60,8 @@ export function BuiltinTheme() {
 	const amTrachAdvisory = useMemo(() => getAmTrachAdvisory(new Date()), []);
 	const duongTrachAdvisory = useMemo(() => getDuongTrachAdvisory(new Date()), []);
 
-	const PHI_TINH_NAMES = ["Nhất Bạch", "Nhị Hắc", "Tam Bích", "Tứ Lục", "Ngũ Hoàng", "Lục Bạch", "Thất Xích", "Bát Bạch", "Cửu Tử"] as const;
-	const PHI_TINH_ELEMENTS = ["Thủy", "Thổ", "Mộc", "Mộc", "Thổ", "Kim", "Kim", "Thổ", "Hỏa"] as const;
+	const PHI_TINH_NAMES = ["phiTinhStar1", "phiTinhStar2", "phiTinhStar3", "phiTinhStar4", "phiTinhStar5", "phiTinhStar6", "phiTinhStar7", "phiTinhStar8", "phiTinhStar9"] as const;
+	const PHI_TINH_ELEMENTS = ["phiTinhElemWater", "phiTinhElemEarth", "phiTinhElemWood", "phiTinhElemWood", "phiTinhElemEarth", "phiTinhElemMetal", "phiTinhElemMetal", "phiTinhElemEarth", "phiTinhElemFire"] as const;
 	const PHI_TINH_COLORS = ["bg-blue-600", "bg-stone-600", "bg-green-700", "bg-teal-600", "bg-yellow-700", "bg-slate-500", "bg-red-600", "bg-amber-700", "bg-rose-600"] as const;
 
 	const phiTinh = useMemo(() => {
@@ -985,7 +985,7 @@ export function BuiltinTheme() {
 									<span className="text-slate-700 dark:text-slate-300 flex-1">
 										{t(`preferences.theme.builtin.${activityKey}`)}
 										{isSpecial && (
-											<span className="ml-1 text-[9px] text-amber-600 dark:text-amber-400">★ {phiTinh.ngay.name}</span>
+											<span className="ml-1 text-[9px] text-amber-600 dark:text-amber-400">★ {t(`preferences.theme.builtin.${phiTinh.ngay.name}`)}</span>
 										)}
 									</span>
 									<span className={cn(
