@@ -182,6 +182,7 @@
 		"generatedPreviewReady": "Menu/table languages are applied in preview mode. Click 'Save 3 languages' to persist to the system.",
 		"noPendingLanguageData": "No pending language data to save",
 		"languageDataIncomplete": "Missing 3-language data for menu/table. Please generate again.",
+		"promptTooLarge": "Menu data is too large for one AI request. Please split the menu or reduce payload size.",
 		"referralCodeCopied": "Referral code copied!",
 		"badge.displayType": "Display type",
 		"badge.editType": "Row edit mode",

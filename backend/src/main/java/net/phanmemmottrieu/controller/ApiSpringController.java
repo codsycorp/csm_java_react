@@ -5110,6 +5110,9 @@ public class ApiSpringController {
             || normalizedPrompt.contains("refactor")
             || normalizedPrompt.contains("fix");
         boolean isMenuDesignTask = taskType.contains("menu_design");
+        boolean isMenuLanguageTask = taskType.contains("menu_i18n_generate")
+            || taskType.contains("menu_lang_generate")
+            || taskType.contains("menu_language_generate");
         boolean isCodingTask = taskType.contains("code")
             || taskType.contains("coding")
             || taskType.contains("developer")
@@ -5129,7 +5132,7 @@ public class ApiSpringController {
         }
 
         // For menu design, prefer AI Assistant API first. Fallback to Gemini is still allowed on quota/rate failures.
-        boolean forceAiAssistant = isMenuDesignTask
+        boolean forceAiAssistant = (isMenuDesignTask && !isMenuLanguageTask)
             || ((preferAiAssistantForCoding || forceAiAssistantForCoding) && isCodingTask);
 
         boolean blockGeminiFallback = false;
@@ -5172,6 +5175,15 @@ public class ApiSpringController {
         }
 
         if (safePrompt.length() > geminiMaxPromptChars) {
+            if (isMenuLanguageTask) {
+                if (params != null) {
+                    params.put("_providerRoutingDecision", "menu_i18n_reject_prompt_too_large_no_aiAssistant");
+                }
+                logger.warn("Menu i18n task prompt exceeded Gemini limit ({}>{}) chars. Rejecting without AI Assistant fallback.",
+                        safePrompt.length(), geminiMaxPromptChars);
+                return "{\"success\":false,\"provider\":\"Gemini\",\"errorCode\":\"GEMINI_PROMPT_TOO_LARGE\",\"message\":\"Prompt quá lớn cho Gemini (tối đa "
+                        + geminiMaxPromptChars + " ký tự): " + safePrompt.length() + "\"}";
+            }
             if (params != null) {
                 params.put("_providerRoutingDecision", "fallback_aiAssistant_prompt_size");
             }

@@ -182,6 +182,7 @@
 		"generatedPreviewReady": "菜单/表多语言已临时应用。点击“保存三种语言”后才会真正写入系统。",
 		"noPendingLanguageData": "没有可保存的临时多语言数据",
 		"languageDataIncomplete": "菜单/表缺少三语数据，请重新生成。",
+		"promptTooLarge": "菜单数据过大，AI 无法一次处理。请拆分菜单或减少请求数据。",
 		"referralCodeCopied": "推荐码已复制！",
 		"badge.displayType": "数据展示方式",
 		"badge.editType": "行编辑方式",

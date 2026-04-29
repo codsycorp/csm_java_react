@@ -83,6 +83,7 @@ export default function Menu() {
 	const [copyOpen, setCopyOpen] = useState(false);
 	const [copySubmitting, setCopySubmitting] = useState(false);
 	const [languageGenerating, setLanguageGenerating] = useState(false);
+	const [languageGenerateProgress, setLanguageGenerateProgress] = useState<string>("");
 	const [pendingLanguageMenus, setPendingLanguageMenus] = useState<any[] | null>(null);
 	const [languageSaving, setLanguageSaving] = useState(false);
 	/* Detail Data */
@@ -854,6 +855,155 @@ export default function Menu() {
 		});
 	};
 
+	const compactMenusForLanguagePrompt = (menus: any[]): any[] => {
+		const walk = (items: any[]): any[] => {
+			return (Array.isArray(items) ? items : []).map((menu) => {
+				const next: any = {
+					id: menu?.id,
+					parentId: menu?.parentId,
+					path: menu?.path,
+					name: menu?.name,
+					name_en: menu?.name_en,
+					name_zh: menu?.name_zh,
+					label: menu?.label,
+					label_en: menu?.label_en,
+					label_zh: menu?.label_zh,
+				};
+
+				if (Array.isArray(menu?.table)) {
+					next.table = menu.table.map((field: any) => ({
+						f_name: field?.f_name,
+						f_header: field?.f_header,
+						f_header_en: field?.f_header_en,
+						f_header_zh: field?.f_header_zh,
+					}));
+				}
+
+				if (Array.isArray(menu?.children) && menu.children.length > 0) {
+					next.children = walk(menu.children);
+				}
+
+				return next;
+			});
+		};
+
+		return walk(menus);
+	};
+
+	const collectMenuIds = (menus: any[]): string[] => {
+		const ids: string[] = [];
+		const walk = (items: any[]) => {
+			for (const item of items || []) {
+				const id = String(item?.id || "").trim();
+				if (id) ids.push(id);
+				if (Array.isArray(item?.children) && item.children.length > 0) walk(item.children);
+			}
+		};
+		walk(menus);
+		return ids;
+	};
+
+	const buildMenuChunksBySize = (menus: any[], maxCharsPerChunk: number) => {
+		const chunks: any[][] = [];
+		let current: any[] = [];
+
+		const estimate = (items: any[]) => JSON.stringify({ menu: items }).length;
+
+		for (const menu of menus || []) {
+			const candidate = [...current, menu];
+			if (current.length > 0 && estimate(candidate) > maxCharsPerChunk) {
+				chunks.push(current);
+				current = [menu];
+				continue;
+			}
+			current = candidate;
+		}
+
+		if (current.length > 0) chunks.push(current);
+		return chunks;
+	};
+
+	const mergeGeneratedLanguagesToSourceMenus = (sourceMenus: any[], generatedMenus: any[]) => {
+		const generatedById = new Map<string, any>();
+		const walkGenerated = (items: any[]) => {
+			for (const item of items || []) {
+				const id = String(item?.id || "").trim();
+				if (id) generatedById.set(id, item);
+				if (Array.isArray(item?.children) && item.children.length > 0) walkGenerated(item.children);
+			}
+		};
+		walkGenerated(generatedMenus);
+
+		const walkSource = (items: any[]): any[] => {
+			return (items || []).map((sourceItem) => {
+				const next = { ...sourceItem };
+				const sourceId = String(sourceItem?.id || "").trim();
+				const generated = sourceId ? generatedById.get(sourceId) : undefined;
+
+				if (generated) {
+					next.label = generated?.label ?? next.label;
+					next.label_en = generated?.label_en ?? next.label_en;
+					next.label_zh = generated?.label_zh ?? next.label_zh;
+
+					if (Array.isArray(next.table)) {
+						const generatedFields = Array.isArray(generated?.table) ? generated.table : [];
+						const generatedFieldByName = new Map<string, any>();
+						for (const field of generatedFields) {
+							const fName = String(field?.f_name || "").trim();
+							if (fName) generatedFieldByName.set(fName, field);
+						}
+
+						next.table = next.table.map((sourceField: any) => {
+							const fieldNext = { ...sourceField };
+							const fName = String(sourceField?.f_name || "").trim();
+							const generatedField = fName ? generatedFieldByName.get(fName) : undefined;
+							if (generatedField) {
+								fieldNext.f_header = generatedField?.f_header ?? fieldNext.f_header;
+								fieldNext.f_header_en = generatedField?.f_header_en ?? fieldNext.f_header_en;
+								fieldNext.f_header_zh = generatedField?.f_header_zh ?? fieldNext.f_header_zh;
+							}
+							return fieldNext;
+						});
+					}
+				}
+
+				if (Array.isArray(sourceItem?.children) && sourceItem.children.length > 0) {
+					next.children = walkSource(sourceItem.children);
+				}
+
+				return next;
+			});
+		};
+
+		return walkSource(sourceMenus);
+	};
+
+	const extractAiFailureMessage = (resp: any): string => {
+		const candidates = [
+			resp,
+			resp?.result,
+			resp?.data,
+			resp?.result?.data,
+			resp?.data?.result,
+			resp?.result?.result,
+		].filter(Boolean);
+
+		for (const item of candidates) {
+			const failed = item?.success === false || item?.error === true || item?.status === "failed";
+			if (!failed) continue;
+			const provider = String(item?.provider || item?.data?.provider || "").trim();
+			const code = String(item?.errorCode || item?.data?.errorCode || "").trim();
+			const message = String(item?.message || item?.data?.message || "").trim();
+			const combined = [provider ? `[${provider}]` : "", code ? `(${code})` : "", message]
+				.filter(Boolean)
+				.join(" ")
+				.trim();
+			if (combined) return combined;
+		}
+
+		return "";
+	};
+
 	const hasFullThreeLanguageData = (menus: any[]): boolean => {
 		const walkMenus = (items: any[]): boolean => {
 			for (const item of items || []) {
@@ -888,36 +1038,107 @@ export default function Menu() {
 		}
 
 		setLanguageGenerating(true);
+		setLanguageGenerateProgress("");
+		const progressMsgKey = "menu-language-generate-progress";
 		try {
-			const currentMenuJson = JSON.stringify({ menu: menuData }, null, 2);
-			const prompt = [
-				"Bạn là chuyên gia chuẩn hóa đa ngôn ngữ cho cấu hình menu JSON.",
-				"NHIỆM VỤ:",
-				"1) Giữ nguyên toàn bộ cấu trúc menu hiện tại, không đổi id/path/parentId/table_name/type_form/trigger.",
-				"2) Bổ sung cho mỗi menu: label (VI), label_en (EN), label_zh (ZH).",
-				"3) Với mỗi field trong table: bắt buộc đủ 3 ngôn ngữ cho f_header:",
-				"   - f_header (VI), f_header_en (EN), f_header_zh (ZH)",
-				"4) Không xóa menu/field nào, không tự ý thêm menu mới.",
-				"5) Trả về JSON duy nhất theo 1 trong 2 dạng:",
-				"   - {\"menu\": [...]}",
-				"   - {\"code\": {\"menu\": [...]}}",
-				"6) Tuyệt đối không kèm giải thích/prose ngoài JSON.",
-				"DỮ LIỆU MENU HIỆN TẠI:",
-				currentMenuJson,
-			].join("\n\n");
-
-			const response = await generateSeoContentWithPrompt(prompt, {
-				taskType: "menu_i18n_generate",
-				menuDesignByDev: isDevUser,
-			});
-
-			const menuFromAi = extractMenuListFromAnyPayload(response?.result ?? (response as any)?.data ?? response);
-			if (!Array.isArray(menuFromAi) || menuFromAi.length === 0) {
-				window.$message?.error(t("system.menu.aiDesigner.invalidJson") || "AI trả về sai định dạng menu");
+			const sourceMenus = deepClone(menuData);
+			const compactMenus = compactMenusForLanguagePrompt(sourceMenus);
+			const maxCharsPerChunk = Number(import.meta.env.VITE_AI_MENU_LANG_CHUNK_CHARS) || 120000;
+			const initialChunks = buildMenuChunksBySize(compactMenus, Math.max(30000, maxCharsPerChunk));
+			if (!initialChunks.length) {
+				window.$message?.error(t("system.menu.aiDesigner.invalidJson") || "Không có menu hợp lệ để xử lý");
 				return;
 			}
 
-			const completedMenus = fillMenuLanguageFallbacks(menuFromAi);
+			const maxRetry = 3;
+			let pendingChunks = initialChunks.map((menus, index) => ({
+				menus,
+				chunkIndex: index + 1,
+				expectedIds: new Set(collectMenuIds(menus)),
+			}));
+			const successfulChunkMenus: any[] = [];
+
+			for (let attempt = 1; attempt <= maxRetry && pendingChunks.length > 0; attempt += 1) {
+				const nextPending: typeof pendingChunks = [];
+
+				for (let i = 0; i < pendingChunks.length; i += 1) {
+					const chunk = pendingChunks[i];
+					const chunkJson = JSON.stringify({ menu: chunk.menus }, null, 2);
+					const prompt = [
+						"Bạn là chuyên gia chuẩn hóa đa ngôn ngữ cho cấu hình menu JSON.",
+						"NHIỆM VỤ:",
+						"1) Giữ nguyên toàn bộ cấu trúc menu hiện tại, không đổi id/path/parentId/table_name/type_form/trigger.",
+						"2) Bổ sung cho mỗi menu: label (VI), label_en (EN), label_zh (ZH).",
+						"3) Với mỗi field trong table: bắt buộc đủ 3 ngôn ngữ cho f_header:",
+						"   - f_header (VI), f_header_en (EN), f_header_zh (ZH)",
+						"4) Không xóa menu/field nào, không tự ý thêm menu mới.",
+						"5) Trả về JSON duy nhất theo 1 trong 2 dạng:",
+						"   - {\"menu\": [...]}",
+						"   - {\"code\": {\"menu\": [...]}}",
+						"6) Tuyệt đối không kèm giải thích/prose ngoài JSON.",
+						"7) Không đổi tên kỹ thuật f_name, chỉ dịch các trường label/f_header theo yêu cầu.",
+						`8) Đây là chunk ${chunk.chunkIndex}/${initialChunks.length}, lần thử ${attempt}/${maxRetry}.`,
+						"DỮ LIỆU MENU HIỆN TẠI:",
+						chunkJson,
+					].join("\n\n");
+
+					const response = await generateSeoContentWithPrompt(prompt, {
+						taskType: "menu_i18n_generate",
+						menuDesignByDev: isDevUser,
+						onProgress: (progress) => {
+							const text = `Chunk ${chunk.chunkIndex}/${initialChunks.length}: ${String(progress?.message || progress?.stage || progress?.status || "Đang xử lý AI")}`;
+							setLanguageGenerateProgress(text);
+							window.$message?.loading({ content: text, key: progressMsgKey, duration: 0 });
+						},
+					});
+
+					const failureMessage = extractAiFailureMessage(response);
+					if (failureMessage) {
+						if (attempt < maxRetry) {
+							nextPending.push(chunk);
+							continue;
+						}
+						window.$message?.error(failureMessage);
+						return;
+					}
+
+					const menuFromAi = extractMenuListFromAnyPayload(response?.result ?? (response as any)?.data ?? response);
+					if (!Array.isArray(menuFromAi) || menuFromAi.length === 0) {
+						if (attempt < maxRetry) {
+							nextPending.push(chunk);
+							continue;
+						}
+						window.$message?.error(t("system.menu.aiDesigner.invalidJson") || "AI trả về sai định dạng menu");
+						return;
+					}
+
+					const returnedIds = new Set(collectMenuIds(menuFromAi));
+					let coveredAll = true;
+					for (const expectedId of chunk.expectedIds) {
+						if (!returnedIds.has(expectedId)) {
+							coveredAll = false;
+							break;
+						}
+					}
+
+					if (!coveredAll && attempt < maxRetry) {
+						nextPending.push(chunk);
+						continue;
+					}
+
+					successfulChunkMenus.push(...menuFromAi);
+				}
+
+				pendingChunks = nextPending;
+			}
+
+			if (pendingChunks.length > 0) {
+				window.$message?.error(t("system.menu.aiDesigner.invalidJson") || "AI chưa trả đủ dữ liệu menu. Vui lòng chạy lại.");
+				return;
+			}
+
+			const mergedMenus = mergeGeneratedLanguagesToSourceMenus(sourceMenus, successfulChunkMenus);
+			const completedMenus = fillMenuLanguageFallbacks(mergedMenus);
 			if (!hasFullThreeLanguageData(completedMenus)) {
 				window.$message?.error(t("system.menu.languageDataIncomplete") || "Thiếu dữ liệu 3 ngôn ngữ cho menu/table. Vui lòng tạo lại.");
 				return;
@@ -927,10 +1148,13 @@ export default function Menu() {
 			setPendingLanguageMenus(completedMenus);
 			window.$message?.success(t("system.menu.generatedPreviewReady") || "Đã áp dụng tạm ngôn ngữ menu/table. Nhấn 'Lưu 3 ngôn ngữ' để lưu thật vào hệ thống.");
 		} catch (error) {
+			window.$message?.destroy(progressMsgKey);
 			console.error("Failed to auto-generate menu languages:", error);
 			window.$message?.error(t("system.menu.copyFailed") || "Tạo ngôn ngữ menu thất bại");
 		} finally {
+			window.$message?.destroy(progressMsgKey);
 			setLanguageGenerating(false);
+			setLanguageGenerateProgress("");
 		}
 	};
 

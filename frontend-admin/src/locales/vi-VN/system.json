@@ -178,6 +178,7 @@
 		"generatedPreviewReady": "Đã áp dụng tạm ngôn ngữ menu/table. Nhấn 'Lưu 3 ngôn ngữ' để lưu thật vào hệ thống.",
 		"noPendingLanguageData": "Không có dữ liệu ngôn ngữ tạm để lưu",
 		"languageDataIncomplete": "Thiếu dữ liệu 3 ngôn ngữ cho menu/table. Vui lòng tạo lại.",
+		"promptTooLarge": "Dữ liệu menu quá lớn để AI xử lý trong một lần. Vui lòng chia nhỏ menu hoặc giảm dữ liệu.",
 		"referralCodeCopied": "Đã copy mã giới thiệu!",
 		"badge.displayType": "Cách hiển thị dữ liệu",
 		"badge.editType": "Cách chỉnh sửa dòng",
