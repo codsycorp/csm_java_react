@@ -60,6 +60,25 @@ export function BuiltinTheme() {
 	const amTrachAdvisory = useMemo(() => getAmTrachAdvisory(new Date()), []);
 	const duongTrachAdvisory = useMemo(() => getDuongTrachAdvisory(new Date()), []);
 
+	const PHI_TINH_NAMES = ["Nhất Bạch", "Nhị Hắc", "Tam Bích", "Tứ Lục", "Ngũ Hoàng", "Lục Bạch", "Thất Xích", "Bát Bạch", "Cửu Tử"] as const;
+	const PHI_TINH_ELEMENTS = ["Thủy", "Thổ", "Mộc", "Mộc", "Thổ", "Kim", "Kim", "Thổ", "Hỏa"] as const;
+	const PHI_TINH_COLORS = ["bg-blue-600", "bg-stone-600", "bg-green-700", "bg-teal-600", "bg-yellow-700", "bg-slate-500", "bg-red-600", "bg-amber-700", "bg-rose-600"] as const;
+
+	const phiTinh = useMemo(() => {
+		const { lunarYear, lunarMonth, lunarDay } = duongTrachAdvisory;
+		const currentChiIndex = hourAdvisory.currentChiIndex;
+		const sttNam = (lunarYear + 6) % 9;
+		const sttThang = (sttNam + lunarMonth - 1) % 9;
+		const sttNgay = (sttThang + lunarDay - 1) % 9;
+		const sttGio = (sttNgay + currentChiIndex) % 9;
+		return {
+			nam: { name: PHI_TINH_NAMES[sttNam], element: PHI_TINH_ELEMENTS[sttNam], color: PHI_TINH_COLORS[sttNam] },
+			thang: { name: PHI_TINH_NAMES[sttThang], element: PHI_TINH_ELEMENTS[sttThang], color: PHI_TINH_COLORS[sttThang] },
+			ngay: { name: PHI_TINH_NAMES[sttNgay], element: PHI_TINH_ELEMENTS[sttNgay], color: PHI_TINH_COLORS[sttNgay] },
+			gio: { name: PHI_TINH_NAMES[sttGio], element: PHI_TINH_ELEMENTS[sttGio], color: PHI_TINH_COLORS[sttGio] },
+		};
+	}, [duongTrachAdvisory]);
+
 	const branchLabelMap: Record<LunarBranchKey, string> = {
 		rat: t("preferences.theme.builtin.branchRat"),
 		ox: t("preferences.theme.builtin.branchOx"),
@@ -892,6 +911,34 @@ export function BuiltinTheme() {
 					</div>
 				</div>
 
+				{/* Cửu Tinh Phi Tinh */}
+				<div className="mt-2 mb-3">
+					<div className="text-xs font-bold text-slate-700 dark:text-slate-200 mb-1.5 flex items-center gap-1.5">
+						⭐
+						{" "}
+						{t("preferences.theme.builtin.phiTinhTitle")}
+					</div>
+					<div className="grid grid-cols-4 gap-1.5">
+						{(["nam", "thang", "ngay", "gio"] as const).map((key) => {
+							const labelKey = key === "nam" ? "phiTinhNam" : key === "thang" ? "phiTinhThang" : key === "ngay" ? "phiTinhNgay" : "phiTinhGio";
+							const star = phiTinh[key];
+							return (
+								<div key={key} className="flex flex-col items-center rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden">
+									<div className="w-full text-center text-[9px] font-semibold text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 py-0.5">
+										{t(`preferences.theme.builtin.${labelKey}`)}
+									</div>
+									<div className={cn("w-full text-center text-[10px] font-bold text-white py-1 px-1", star.color)}>
+										{star.name}
+									</div>
+									<div className="text-[9px] text-slate-500 dark:text-slate-400 py-0.5">
+										{star.element}
+									</div>
+								</div>
+							);
+						})}
+					</div>
+				</div>
+
 				{/* Dương Trạch Phong Thủy — Trực (建除十二神) */}
 				<div className="mt-2">
 					<div className="text-xs font-bold text-slate-700 dark:text-slate-200 mb-1.5 flex items-center gap-1.5">
@@ -938,7 +985,7 @@ export function BuiltinTheme() {
 									<span className="text-slate-700 dark:text-slate-300 flex-1">
 										{t(`preferences.theme.builtin.${activityKey}`)}
 										{isSpecial && (
-											<span className="ml-1 text-[9px] text-amber-600 dark:text-amber-400">★ {t("preferences.theme.builtin.phiTinhNote")}</span>
+											<span className="ml-1 text-[9px] text-amber-600 dark:text-amber-400">★ {phiTinh.ngay.name}</span>
 										)}
 									</span>
 									<span className={cn(

@@ -28,6 +28,8 @@ export default {
 			rose: colors.rose,
 			amber: colors.amber,
 			indigo: colors.indigo,
+			stone: colors.stone,
+			teal: colors.teal,
 		},
 		/**
 		 * Use ant design breakpoints
