@@ -2730,8 +2730,7 @@
     var _slr_autoTongHopSummary = useState(""), legacySlrAutoTongHopSummary = _slr_autoTongHopSummary[0], setLegacySlrAutoTongHopSummary = _slr_autoTongHopSummary[1];
     var _slr_autoTongHopRunning = useState(false), legacySlrAutoTongHopRunning = _slr_autoTongHopRunning[0], setLegacySlrAutoTongHopRunning = _slr_autoTongHopRunning[1];
     // --- SLR Auto-run custom conditions ---
-    var _slr_autoSttRange = useState(5), legacySlrAutoSttRange = _slr_autoSttRange[0], setLegacySlrAutoSttRange = _slr_autoSttRange[1];
-    var _slr_autoNoHitDays = useState(17), legacySlrAutoNoHitDays = _slr_autoNoHitDays[0], setLegacySlrAutoNoHitDays = _slr_autoNoHitDays[1];
+
     var _slr_autoNamWeeks = useState(5), legacySlrAutoNamWeeks = _slr_autoNamWeeks[0], setLegacySlrAutoNamWeeks = _slr_autoNamWeeks[1];
 
     // --- SLR Auto-filtered rows (kept for display binding) ---
@@ -2967,11 +2966,10 @@
             var resultRows = [];
             var dataByQuery = {};
 
-            var sttWindowSize = Math.max(1, Number(legacySlrAutoSttRange || 5));
-            var noHitDays = Math.max(1, Number(legacySlrAutoNoHitDays || 17));
+            var sttWindowSize = 5;
             var tongNamWeeks = Math.max(1, Number(legacySlrAutoNamWeeks || 5));
             var modeNow = String(legacyCdMode || "C_D").toUpperCase();
-            pushAutoLog("Tham số: LoạiTìm=" + selectedQueryValues.length + ", STTWindow=" + sttWindowSize + ", NoHitDays=" + noHitDays + ", NamNoHitWeeks=" + tongNamWeeks + ", Mode=" + modeNow);
+            pushAutoLog("Tham số: LoạiTìm=" + selectedQueryValues.length + ", STTWindow=" + sttWindowSize + ", NamNoHitWeeks=" + tongNamWeeks + ", Mode=" + modeNow);
 
             function findNearestHitInfoForRange(cells, cellCaches, sttFrom, sttTo) {
               for (var idx = 0; idx < cells.length; idx += 1) {
@@ -2997,13 +2995,12 @@
               var weekRows = Array.isArray(args && args.weekRows) ? args.weekRows : [];
               var cells = Array.isArray(args && args.cells) ? args.cells : [];
               var cellCaches = Array.isArray(args && args.cellCaches) ? args.cellCaches : [];
-              var noHitDays = Math.max(1, Number(args && args.noHitDays || 1));
               var tongNamWeeks = Math.max(1, Number(args && args.tongNamWeeks || 1));
               var modeNow = String(args && args.modeNow || "C_D").toUpperCase();
               var rankTo = Math.max(sttTo, Number(args && args.rankTo || sttTo));
               var rowKeyPrefix = String(args && args.rowKeyPrefix || "slr_auto");
 
-              // Count current consecutive no-hit days from newest backward for this STT range.
+              // Keep this metric for display only; no longer used as a filter condition.
               var noHitDaysCurrent = 0;
               for (var cni = 0; cni < cells.length; cni += 1) {
                 if (isLegacySlrNoHitRangeCached(cellCaches[cni], sttFrom, sttTo)) {
@@ -3013,28 +3010,8 @@
                 }
               }
 
-              var streak = 0;
-              var endIdx = -1;
-              for (var ci = 0; ci < cells.length; ci += 1) {
-                if (isLegacySlrNoHitRangeCached(cellCaches[ci], sttFrom, sttTo)) {
-                  streak += 1;
-                  if (streak >= noHitDays) {
-                    endIdx = ci;
-                    break;
-                  }
-                } else {
-                  streak = 0;
-                }
-              }
-              if (endIdx < 0) return null;
-
-              var startIdx = endIdx - noHitDays + 1;
-              var matchedWindow = cells.slice(startIdx, endIdx + 1);
-              if (!matchedWindow || !matchedWindow.length) return null;
-              
-              // Define latest and oldest cells from matchedWindow
-              var latestCell = matchedWindow[0] && matchedWindow[0].cell || {};
-              var oldestCell = matchedWindow[matchedWindow.length - 1] && matchedWindow[matchedWindow.length - 1].cell || {};
+              var latestCell = cells[0] && cells[0].cell || {};
+              var oldestCell = cells[cells.length - 1] && cells[cells.length - 1].cell || {};
 
               var weekNamTotals = {};
               var weekCNamTotals = {};
@@ -3069,7 +3046,7 @@
                   break;
                 }
               }
-              if (weekNoHitMax <= tongNamWeeks) return null;
+              if (weekNoHitMax < tongNamWeeks) return null;
 
               var rowWeekSummaryRows = buildLegacySlrAutoWeekSummaryFromTotals(
                 modeNow,
@@ -3127,7 +3104,7 @@
                 queryLabel: queryLabel,
                 sttFrom: sttFrom,
                 sttTo: sttTo,
-                noHitDays: noHitDays,
+                noHitDays: noHitDaysCurrent,
                 noHitDaysCurrent: noHitDaysCurrent,
                 fromDate: currentDateText || String(latestCell.date || ""),
                 toDate: String((nearestBaseHit && nearestBaseHit.date) || oldestCell.date || ""),
@@ -3230,10 +3207,8 @@
               });
               var rangeChecked = 0;
               var rangeMatched = 0;
-              var rangeRejectedByDay = 0;
               var rangeRejectedByWeek = 0;
               var bestWeekStreak = 0;
-              var bestDayStreak = 0;
               var queryRows = [];
 
               for (var sttFrom = rankFrom; sttFrom <= maxStart; sttFrom += 1) {
@@ -3243,32 +3218,6 @@
                 }
                 rangeChecked += 1;
                 var sttTo = sttFrom + sttWindowSize - 1;
-                var streak = 0;
-                var maxLocalDayStreak = 0;
-                var endIdx = -1;
-                for (var ci = 0; ci < cells.length; ci += 1) {
-                  if (isLegacySlrNoHitRangeCached(cellCaches[ci], sttFrom, sttTo)) {
-                    streak += 1;
-                    if (streak > maxLocalDayStreak) maxLocalDayStreak = streak;
-                    if (streak >= noHitDays) {
-                      endIdx = ci;
-                      break;
-                    }
-                  } else {
-                    streak = 0;
-                  }
-                }
-                if (maxLocalDayStreak > bestDayStreak) bestDayStreak = maxLocalDayStreak;
-                if (endIdx < 0) {
-                  rangeRejectedByDay += 1;
-                  continue;
-                }
-                var startIdx = endIdx - noHitDays + 1;
-                var matchedWindow = cells.slice(startIdx, endIdx + 1);
-                if (!matchedWindow || !matchedWindow.length) {
-                  rangeRejectedByDay += 1;
-                  continue;
-                }
 
                 var weekNamTotals = {};
                 var weekNoHitStreak = 0;
@@ -3288,7 +3237,7 @@
                   }
                 }
                 if (weekNoHitMax > bestWeekStreak) bestWeekStreak = weekNoHitMax;
-                if (weekNoHitMax <= tongNamWeeks) {
+                if (weekNoHitMax < tongNamWeeks) {
                   rangeRejectedByWeek += 1;
                   continue;
                 }
@@ -3303,7 +3252,6 @@
                   weekRows: weekRows,
                   cells: cells,
                   cellCaches: cellCaches,
-                  noHitDays: noHitDays,
                   tongNamWeeks: tongNamWeeks,
                   modeNow: modeNow,
                   rankTo: rankTo,
@@ -3319,7 +3267,6 @@
                 weekRows: weekRows,
                 cells: cells,
                 cellCaches: cellCaches,
-                noHitDays: noHitDays,
                 tongNamWeeks: tongNamWeeks,
                 modeNow: modeNow,
                 rankTo: rankTo,
@@ -3330,9 +3277,9 @@
               }
               var mergedCount = queryRows.filter(function (row) { return !!(row && row.isMergedAuto); }).length;
               if (rangeMatched === 0) {
-                pushAutoLog("- Rớt theo STT: checked=" + rangeChecked + ", rejectByDay=" + rangeRejectedByDay + " (bestDayStreak=" + bestDayStreak + "/need=" + noHitDays + "), rejectByWeek=" + rangeRejectedByWeek + " (bestWeekStreak=" + bestWeekStreak + "/need=" + tongNamWeeks + ")");
+                pushAutoLog("- Rớt theo STT: checked=" + rangeChecked + ", rejectByWeek=" + rangeRejectedByWeek + " (bestWeekStreak=" + bestWeekStreak + "/need=" + tongNamWeeks + ")");
               } else {
-                pushAutoLog("- Quét STT xong: checked=" + rangeChecked + ", matched=" + rangeMatched + ", merged=" + mergedCount + ", rejectByDay=" + rangeRejectedByDay + ", rejectByWeek=" + rangeRejectedByWeek + ", bestDayStreak=" + bestDayStreak + ", bestWeekStreak=" + bestWeekStreak);
+                pushAutoLog("- Quét STT xong: checked=" + rangeChecked + ", matched=" + rangeMatched + ", merged=" + mergedCount + ", rejectByWeek=" + rangeRejectedByWeek + ", bestWeekStreak=" + bestWeekStreak);
               }
             }
 
@@ -9478,7 +9425,7 @@
           String(r.queryLabel || ""),
           Number(r.sttFrom || 0),
           Number(r.sttTo || 0),
-          Number(r.noHitDays || 0),
+          Number((r && r.noHitDaysCurrent) || (r && r.noHitDays) || 0),
           String(r.fromDate || ""),
           String(r.toDate || ""),
           Number(r.tongNamZeroWeekStreak || 0),
@@ -11956,27 +11903,7 @@
                           }, [
                             h("div", { style: { marginBottom: 6, fontWeight: 600 } }, "Điều kiện chạy tự động"),
                             h(Row, { gutter: [8, 8], style: { marginBottom: 10 } }, [
-                              h(Col, { xs: 12, sm: 8 }, [
-                                h("div", { style: { fontSize: 12, color: theme.muted, marginBottom: 4 } }, "STT liên tiếp"),
-                                h(InputNumber, themedNumberProps({
-                                  min: 1,
-                                  max: 30,
-                                  value: legacySlrAutoSttRange,
-                                  style: { width: "100%" },
-                                  onChange: function (v) { setLegacySlrAutoSttRange(Math.max(1, Number(v) || 1)); }
-                                }))
-                              ]),
-                              h(Col, { xs: 12, sm: 8 }, [
-                                h("div", { style: { fontSize: 12, color: theme.muted, marginBottom: 4 } }, "Ngày không trúng LT"),
-                                h(InputNumber, themedNumberProps({
-                                  min: 1,
-                                  max: 120,
-                                  value: legacySlrAutoNoHitDays,
-                                  style: { width: "100%" },
-                                  onChange: function (v) { setLegacySlrAutoNoHitDays(Math.max(1, Number(v) || 1)); }
-                                }))
-                              ]),
-                              h(Col, { xs: 24, sm: 8 }, [
+                              h(Col, { xs: 24, sm: 24 }, [
                                 h("div", { style: { fontSize: 12, color: theme.muted, marginBottom: 4 } }, "Nam 0/tuần LT"),
                                 h(InputNumber, themedNumberProps({
                                   min: 1,
