@@ -714,7 +714,7 @@ export function BuiltinTheme() {
 									className={cn(
 										"flex items-center justify-between px-3 py-1.5 text-xs font-medium transition-all",
 										hourAdvisory.currentChiIndex === slot.chiIndex
-											? "bg-emerald-500 text-white font-bold"
+											? "bg-emerald-700 text-white font-bold"
 											: "text-slate-800 hover:bg-emerald-100",
 									)}
 								>
@@ -739,7 +739,7 @@ export function BuiltinTheme() {
 									className={cn(
 										"flex items-center justify-between px-3 py-1.5 text-xs font-medium transition-all",
 										hourAdvisory.currentChiIndex === slot.chiIndex
-											? "bg-rose-500 text-white font-bold"
+											? "bg-rose-700 text-white font-bold"
 											: "text-slate-800 hover:bg-rose-100",
 									)}
 								>
@@ -801,7 +801,7 @@ export function BuiltinTheme() {
 					{/* header */}
 					<div className={cn(
 						"px-3 py-2 flex items-center gap-2",
-						hourAdvisory.dayType === "duong" ? "bg-amber-500" : "bg-indigo-600",
+						hourAdvisory.dayType === "duong" ? "bg-amber-600" : "bg-indigo-700",
 					)}>
 						<span className="text-sm font-bold">🌑</span>
 						<span className="text-sm font-bold text-white">
@@ -943,9 +943,9 @@ export function BuiltinTheme() {
 									</span>
 									<span className={cn(
 										"font-semibold flex-shrink-0 px-1.5 py-0.5 rounded text-[9px]",
-										rating === "tot" && "bg-emerald-500 text-white",
-										rating === "trung" && "bg-amber-400 text-white",
-										rating === "xau" && "bg-rose-500 text-white",
+										rating === "tot" && "bg-emerald-700 text-white",
+										rating === "trung" && "bg-amber-600 text-white",
+										rating === "xau" && "bg-rose-700 text-white",
 									)}
 									>
 										{t(`preferences.theme.builtin.duongTrachRating${rating.charAt(0).toUpperCase()}${rating.slice(1)}`)}
@@ -967,9 +967,9 @@ export function BuiltinTheme() {
 						{/* header */}
 						<div className={cn(
 							"px-3 py-2 flex items-center gap-2",
-							duongTrachAdvisory.truct.rating === "tot" && "bg-emerald-500",
-							duongTrachAdvisory.truct.rating === "trung" && "bg-amber-400",
-							duongTrachAdvisory.truct.rating === "xau" && "bg-rose-500",
+							duongTrachAdvisory.truct.rating === "tot" && "bg-emerald-700",
+							duongTrachAdvisory.truct.rating === "trung" && "bg-amber-600",
+							duongTrachAdvisory.truct.rating === "xau" && "bg-rose-700",
 						)}
 						>
 							<span className="text-sm font-bold text-white">
@@ -1024,7 +1024,7 @@ export function BuiltinTheme() {
 											className={cn(
 												"inline-flex flex-col items-center px-1.5 py-0.5 rounded text-[9px] leading-tight",
 												hourAdvisory.currentChiIndex === slot.chiIndex
-													? duongTrachAdvisory.truct.rating === "trung" ? "bg-amber-500 text-white font-bold" : "bg-emerald-500 text-white font-bold"
+													? duongTrachAdvisory.truct.rating === "trung" ? "bg-amber-600 text-white font-bold" : "bg-emerald-700 text-white font-bold"
 													: duongTrachAdvisory.truct.rating === "trung"
 														? "bg-amber-100 dark:bg-amber-900 text-slate-700 dark:text-amber-200"
 														: "bg-emerald-100 dark:bg-emerald-900 text-slate-700 dark:text-emerald-200",
@@ -1084,9 +1084,9 @@ export function BuiltinTheme() {
 									</span>
 									<span className={cn(
 										"font-semibold flex-shrink-0 px-1.5 py-0.5 rounded text-[9px]",
-										rating === "tot" && "bg-emerald-500 text-white",
-										rating === "trung" && "bg-amber-400 text-white",
-										rating === "xau" && "bg-rose-500 text-white",
+										rating === "tot" && "bg-emerald-700 text-white",
+										rating === "trung" && "bg-amber-600 text-white",
+										rating === "xau" && "bg-rose-700 text-white",
 									)}
 									>
 										{t(`preferences.theme.builtin.amTrachRating${rating.charAt(0).toUpperCase()}${rating.slice(1)}`)}
@@ -1105,9 +1105,9 @@ export function BuiltinTheme() {
 						{/* header */}
 						<div className={cn(
 							"px-3 py-2 flex items-center gap-2",
-							amTrachAdvisory.truct.rating === "tot" && "bg-emerald-500",
-							amTrachAdvisory.truct.rating === "trung" && "bg-amber-400",
-							amTrachAdvisory.truct.rating === "xau" && "bg-rose-500",
+							amTrachAdvisory.truct.rating === "tot" && "bg-emerald-700",
+							amTrachAdvisory.truct.rating === "trung" && "bg-amber-600",
+							amTrachAdvisory.truct.rating === "xau" && "bg-rose-700",
 						)}
 						>
 							<span className="text-sm font-bold text-white">
@@ -1162,7 +1162,7 @@ export function BuiltinTheme() {
 											className={cn(
 												"inline-flex flex-col items-center px-1.5 py-0.5 rounded text-[9px] leading-tight",
 												hourAdvisory.currentChiIndex === slot.chiIndex
-													? amTrachAdvisory.truct.rating === "trung" ? "bg-amber-500 text-white font-bold" : "bg-emerald-500 text-white font-bold"
+													? amTrachAdvisory.truct.rating === "trung" ? "bg-amber-600 text-white font-bold" : "bg-emerald-700 text-white font-bold"
 													: amTrachAdvisory.truct.rating === "trung"
 														? "bg-amber-100 dark:bg-amber-900 text-slate-700 dark:text-amber-200"
 														: "bg-emerald-100 dark:bg-emerald-900 text-slate-700 dark:text-emerald-200",
