@@ -62,6 +62,8 @@ type StructuredAssistantPayload = {
 type AiAssistantStageEvent = {
 	id: string;
 	stage: string;
+	status?: string;
+	model?: string;
 	message: string;
 	messageKey?: string;
 	messageArgs?: Record<string, any>;
@@ -86,6 +88,14 @@ type AiUsageSummary = {
 	totalTokens: number;
 	estimatedCostUsd: number;
 	currency?: string;
+};
+
+type ModelDecisionTrace = {
+	id: string;
+	step: "primary" | "fallback" | "final";
+	model: string;
+	reason?: string;
+	timestamp: number;
 };
 
 type AiAssistantChatProps = {
@@ -116,7 +126,7 @@ const LEGACY_AUTO_APPLY_PREF_KEY = "copilot.autoApply";
 const MAX_CHAT_INPUT_CHARS = 20000;
 const MAX_STRUCTURED_TEXT_EDITS = 160;
 const MAX_STRUCTURED_REPLACEMENT_CHARS = 800000;
-const SHOW_DETAILED_PROGRESS_TIMELINE = false;
+const SHOW_DETAILED_PROGRESS_TIMELINE = true;
 const TEXT_FILE_EXTENSIONS = new Set([
 	"txt", "md", "markdown", "json", "js", "ts", "tsx", "jsx", "java", "sql", "css", "scss", "less",
 	"html", "xml", "yml", "yaml", "csv", "py", "properties", "env", "log", "ini",
@@ -570,6 +580,7 @@ export default function AiAssistantChat({
 		sessionCostUsd: 0,
 		sessionTokens: 0,
 	});
+	const [modelDecisionTrace, setModelDecisionTrace] = useState<ModelDecisionTrace[]>([]);
 	// Progress state: waiting for Gemini / streaming progress
 	const [geminiProgress, setGeminiProgress] = useState<{
 		phase: "idle" | "waiting" | "streaming";
@@ -613,6 +624,59 @@ export default function AiAssistantChat({
 
 	const assistantBrandLabel = uiText("Chuyên Gia", "Expert", "专家");
 
+	const formatModelDecisionReason = useCallback((reasonCode?: string): string => {
+		const code = String(reasonCode || "").trim().toLowerCase();
+		switch (code) {
+			case "routing_simple_model":
+				return uiText("Định tuyến model tiết kiệm", "Routed to cost-saving model", "已路由到节省成本模型");
+			case "routing_default_model":
+				return uiText("Định tuyến model mặc định", "Routed to default model", "已路由到默认模型");
+			case "initial_route":
+				return uiText("Tuyến model ban đầu", "Initial model route", "初始模型路由");
+			case "model_switch":
+				return uiText("Chuyển model", "Model switched", "模型切换");
+			case "rate_limit":
+				return uiText("Bị giới hạn tốc độ", "Rate limited", "触发限流");
+			case "quota_exceeded":
+				return uiText("Vượt quota", "Quota exceeded", "超出配额");
+			case "auth_failed":
+				return uiText("Lỗi xác thực", "Authentication failed", "认证失败");
+			case "payload_too_large":
+				return uiText("Payload quá lớn", "Payload too large", "负载过大");
+			case "auto_continue":
+				return uiText("Tự động tiếp tục", "Auto-continue", "自动续写");
+			case "provider_error":
+				return uiText("Lỗi provider", "Provider error", "提供方错误");
+			case "completed":
+				return uiText("Hoàn tất lượt", "Turn completed", "本轮完成");
+			default:
+				return code || uiText("Đang xử lý", "Processing", "处理中");
+		}
+	}, [uiText]);
+
+	const appendModelDecisionTrace = useCallback((input: {
+		step: ModelDecisionTrace["step"];
+		model?: string;
+		reason?: string;
+	}) => {
+		const model = String(input.model || "").trim();
+		if (!model) return;
+		const reason = String(input.reason || "").trim();
+		setModelDecisionTrace((prev) => {
+			const signature = `${input.step}|${model.toLowerCase()}|${reason.toLowerCase()}`;
+			const exists = prev.some((item) => `${item.step}|${item.model.toLowerCase()}|${String(item.reason || "").toLowerCase()}` === signature);
+			if (exists) return prev;
+			const next: ModelDecisionTrace = {
+				id: `md_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+				step: input.step,
+				model,
+				reason: reason || undefined,
+				timestamp: Date.now(),
+			};
+			return [...prev, next].slice(-8);
+		});
+	}, []);
+
 	// Currency conversion based on user's selected language (uses live rates from fxRatesRef)
 	const formatCost = useCallback((usdAmount: number): string => {
 		const lang = String(i18n.resolvedLanguage || i18n.language || "vi").toLowerCase();
@@ -631,11 +695,34 @@ export default function AiAssistantChat({
 	const normalizeAssistantProgressMessage = useCallback((rawMessage: unknown, fallback = ""): string => {
 		const source = String(rawMessage || "").trim() || String(fallback || "").trim();
 		if (!source) return "";
+
+		const waitingMatch = source.match(/~\s*(\d+)\s*s/i);
+		const waitingSecs = waitingMatch ? Number(waitingMatch[1]) : NaN;
+		if (/dang\s*ket\s*noi\s*gemini|đang\s*kết\s*nối\s*gemini|connecting\s*(to\s*)?gemini|连接\s*gemini/i.test(source)) {
+			return uiText("Đang kết nối Chuyên Gia...", "Connecting to Expert...", "正在连接专家...");
+		}
+		if (/dang\s*gui\s*request\s*den\s*gemini|đang\s*gửi\s*request\s*đến\s*gemini|sending\s*request\s*to\s*gemini|发送\s*请求\s*到\s*gemini/i.test(source)) {
+			return uiText("Đang gửi yêu cầu đến Chuyên Gia...", "Sending request to Expert...", "正在向专家发送请求...");
+		}
+		if (/gemini\s*dang\s*suy\s*nghi|gemini\s*đang\s*suy\s*nghĩ|gemini\s*is\s*thinking|gemini\s*思考/i.test(source)) {
+			if (Number.isFinite(waitingSecs) && waitingSecs > 0) {
+				return uiText(
+					`Chuyên Gia đang suy nghĩ... (~${waitingSecs}s còn lại)`,
+					`Expert is thinking... (~${waitingSecs}s remaining)`,
+					`专家正在思考...（约剩余 ${waitingSecs}s）`,
+				);
+			}
+			return uiText("Chuyên Gia đang suy nghĩ...", "Expert is thinking...", "专家正在思考...");
+		}
+		if (/bat\s*dau\s*nhan\s*ket\s*qua\s*tu\s*gemini|bắt\s*đầu\s*nhận\s*kết\s*quả\s*từ\s*gemini|start\w*\s*receiv\w*\s*result\w*\s*from\s*gemini|开始\s*接收\s*gemini/i.test(source)) {
+			return uiText("Bắt đầu nhận kết quả từ Chuyên Gia", "Starting to receive result from Expert", "开始接收专家结果");
+		}
+
 		return source
 			.replace(/\bgemini\b/gi, assistantBrandLabel)
 			.replace(/\bgoogle\s+gemini\b/gi, assistantBrandLabel)
 			.replace(/\bmodel\s+gemini\b/gi, assistantBrandLabel);
-	}, [assistantBrandLabel]);
+	}, [assistantBrandLabel, uiText]);
 
 	const stripMarkdownCodeBlocks = useCallback((rawText: unknown): string => {
 		return String(rawText || "")
@@ -723,30 +810,45 @@ export default function AiAssistantChat({
 		const normalized = String(stage || "").trim().toLowerCase();
 		switch (normalized) {
 			case "preparing":
-				return uiText("Preparing", "Preparing", "准备中");
+				return uiText("Chuẩn bị", "Preparing", "准备中");
+			case "context":
+				return uiText("Phân tích ngữ cảnh", "Context analysis", "上下文分析");
+			case "waiting_gemini":
+			case "waiting":
+				return uiText("Đang chờ xử lý", "Waiting", "等待处理中");
+			case "streaming_started":
+				return uiText("Bắt đầu nhận kết quả", "Streaming started", "开始接收结果");
+			case "streaming_progress":
+				return uiText("Đang nhận dữ liệu", "Receiving data", "正在接收数据");
+			case "analyzing":
+				return uiText("Đang phân tích", "Analyzing", "分析中");
+			case "continuing":
+				return uiText("Đang tiếp tục", "Continuing", "继续处理中");
+			case "cached":
+				return uiText("Dùng kết quả đệm", "Using cached result", "使用缓存结果");
 			case "streaming":
-				return uiText("Streaming", "Streaming", "流式输出");
+				return uiText("Đang trả kết quả", "Streaming", "流式输出");
 			case "direct_call":
-				return uiText("Direct Call", "Direct Call", "直接调用");
+				return uiText("Gọi trực tiếp", "Direct call", "直接调用");
 			case "chunking":
-				return uiText("Chunking", "Chunking", "分块处理中");
+				return uiText("Phân khối", "Chunking", "分块处理中");
 			case "reducing":
-				return uiText("Reducing", "Reducing", "归并中");
+				return uiText("Rút gọn", "Reducing", "归并中");
 			case "final_merge":
-				return uiText("Final Merge", "Final Merge", "最终合并");
+				return uiText("Tổng hợp cuối", "Final merge", "最终合并");
 			case "completed":
 			case "complete":
-				return uiText("Completed", "Completed", "已完成");
+				return uiText("Hoàn tất", "Completed", "已完成");
 			case "error":
-				return uiText("Error", "Error", "错误");
+				return uiText("Lỗi", "Error", "错误");
 			case "thinking":
-				return uiText("Chuyên Gia đang suy nghĩ...", "Expert is thinking...", "专家正在思考...");
+				return uiText("Đang suy luận", "Thinking", "思考中");
 			case "connecting":
 				return uiText("Đang kết nối", "Connecting", "正在连接");
 			case "model_rotate":
-				return uiText("Đổi model", "Switching model", "切换模型");
+				return uiText("Chuyển model", "Switching model", "切换模型");
 			default:
-				return normalized ? normalized : uiText("Processing", "Processing", "处理中");
+				return uiText("Đang xử lý", "Processing", "处理中");
 		}
 	}, [uiText]);
 
@@ -936,10 +1038,12 @@ export default function AiAssistantChat({
 
 	const appendStageEvent = useCallback((data: any) => {
 		const stage = String(data?.stage || data?.status || "").trim();
-		const msg = String(data?.message || "").trim();
+		const status = String(data?.status || "").trim();
+		const model = String(data?.model || "").trim();
+		const msg = normalizeAssistantProgressMessage(String(data?.message || "").trim());
 		const messageKey = String(data?.messageKey || "").trim();
 		const messageArgs = data?.messageArgs && typeof data.messageArgs === "object" ? data.messageArgs : undefined;
-		const detail = String(data?.detail || "").trim();
+		const detail = normalizeAssistantProgressMessage(String(data?.detail || "").trim());
 		const detailKey = String(data?.detailKey || "").trim();
 		const detailArgs = data?.detailArgs && typeof data.detailArgs === "object" ? data.detailArgs : undefined;
 		const orchestrationPhase = String(data?.orchestrationPhase || "").trim();
@@ -954,6 +1058,8 @@ export default function AiAssistantChat({
 		const totalNum = Number(data?.total);
 		const signature = [
 			stage.toLowerCase(),
+			status.toLowerCase(),
+			model.toLowerCase(),
 			messageKey,
 			orchestrationPhase,
 			orchestrationPhaseKey,
@@ -978,6 +1084,8 @@ export default function AiAssistantChat({
 				{
 					id: `stage_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
 					stage: stage || "processing",
+					status: status || undefined,
+					model: model || undefined,
 					message: msg,
 					messageKey: messageKey || undefined,
 					messageArgs,
@@ -996,7 +1104,7 @@ export default function AiAssistantChat({
 			];
 			return next.slice(-60);
 		});
-	}, [extractStageRangeLabel]);
+	}, [extractStageRangeLabel, normalizeAssistantProgressMessage]);
 
 	const isNearBottom = useCallback((element: HTMLDivElement, threshold = 72): boolean => {
 		const distance = element.scrollHeight - element.scrollTop - element.clientHeight;
@@ -1328,6 +1436,7 @@ export default function AiAssistantChat({
 			setIsLoading(true);
 			setStageEvents([]);
 			setAiUsageSummary((prev) => ({ ...prev, turn: null }));
+			setModelDecisionTrace([]);
 			setGeminiProgress({ phase: "idle", percent: 0, message: "", estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
 			stageEventSignaturesRef.current = new Set();
 			followBottomRef.current = true;
@@ -1434,9 +1543,20 @@ export default function AiAssistantChat({
 								message?: string; percent?: number; estimatedWaitSecs?: number;
 								remainingEstimateSecs?: number; charsReceived?: number; estimatedTotalChars?: number;
 								ttftMs?: number; elapsedMs?: number; promptTokens?: number; model?: string;
+								modelDecisionStep?: "primary" | "fallback" | "final";
+								modelDecisionReason?: string;
+								decision_step?: "primary" | "fallback" | "final";
+								reason_code?: string;
 								usage?: any; completionTokens?: number; estimatedCostUsd?: number;
 							};
+							const decisionStep = evt.modelDecisionStep || evt.decision_step;
+							const decisionReason = evt.modelDecisionReason || evt.reason_code;
 							if (evt.stage === "preparing") {
+								appendModelDecisionTrace({
+									step: decisionStep || "primary",
+									model: evt.model,
+									reason: formatModelDecisionReason(decisionReason) || evt.message,
+								});
 								setGeminiProgress(prev => ({
 									...prev,
 									phase: "waiting",
@@ -1445,6 +1565,7 @@ export default function AiAssistantChat({
 									estimatedWaitSecs: evt.estimatedWaitSecs ?? 0,
 									remainingSecs: evt.estimatedWaitSecs ?? 0,
 								}));
+								if (SHOW_DETAILED_PROGRESS_TIMELINE) appendStageEvent(evt);
 							} else if (evt.stage === "waiting_gemini") {
 								setGeminiProgress(prev => ({
 									...prev,
@@ -1453,6 +1574,7 @@ export default function AiAssistantChat({
 									message: normalizeAssistantProgressMessage(evt.message, uiText("Chuyên Gia đang xử lý...", "Expert is processing...", "专家正在处理中...")),
 									remainingSecs: evt.remainingEstimateSecs ?? prev.remainingSecs,
 								}));
+								if (SHOW_DETAILED_PROGRESS_TIMELINE) appendStageEvent(evt);
 							} else if (evt.stage === "streaming_started") {
 								setGeminiProgress(prev => ({
 									...prev,
@@ -1463,6 +1585,7 @@ export default function AiAssistantChat({
 									estimatedTotalChars: evt.estimatedTotalChars ?? prev.estimatedTotalChars,
 									remainingSecs: 0,
 								}));
+								if (SHOW_DETAILED_PROGRESS_TIMELINE) appendStageEvent(evt);
 							} else if (evt.stage === "streaming_progress") {
 								setGeminiProgress(prev => ({
 									...prev,
@@ -1477,6 +1600,13 @@ export default function AiAssistantChat({
 									appendStageEvent({ stage: evt.stage as any, message: evt.message ?? "", percent: evt.percent ?? 0 });
 								}
 							} else if (evt.stage === "context" || evt.stage === "continuing" || evt.stage === "cached") {
+								if (decisionStep === "fallback" || !!decisionReason || (evt.message || "").toLowerCase().includes("fallback") || (evt.message || "").toLowerCase().includes("switch") || (evt.message || "").toLowerCase().includes("chuy") || (evt.message || "").toLowerCase().includes("rate-limit")) {
+									appendModelDecisionTrace({
+										step: decisionStep || "fallback",
+										model: evt.model,
+										reason: formatModelDecisionReason(decisionReason) || evt.message,
+									});
+								}
 								if (SHOW_DETAILED_PROGRESS_TIMELINE) {
 									appendStageEvent({ stage: evt.stage as any, message: evt.message ?? "", percent: evt.percent ?? 0 });
 								}
@@ -1493,12 +1623,18 @@ export default function AiAssistantChat({
 									currency: "USD",
 								});
 								if (usage) {
+									appendModelDecisionTrace({
+										step: decisionStep || "final",
+										model: usage.model,
+										reason: formatModelDecisionReason(decisionReason) || uiText("Model kết thúc lượt xử lý", "Final model used for this turn", "本轮最终使用模型"),
+									});
 									setAiUsageSummary((prev) => ({
 										turn: usage,
 										sessionCostUsd: prev.sessionCostUsd + (usage.enabled ? usage.estimatedCostUsd : 0),
 										sessionTokens: prev.sessionTokens + usage.totalTokens,
 									}));
 								}
+								if (SHOW_DETAILED_PROGRESS_TIMELINE) appendStageEvent(evt);
 								setGeminiProgress({ phase: "idle", percent: 100, message: "Hoàn thành", estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
 								if (evt.fullResponse) {
 									streamingMessageRef.current = evt.fullResponse;
@@ -1512,6 +1648,7 @@ export default function AiAssistantChat({
 								turnAllowAutoApplyRef.current = false;
 							} else if (evt.stage === "error") {
 								setGeminiProgress({ phase: "idle", percent: 0, message: "", estimatedWaitSecs: 0, remainingSecs: 0, charsReceived: 0, estimatedTotalChars: 0 });
+								if (SHOW_DETAILED_PROGRESS_TIMELINE) appendStageEvent(evt);
 								message.error(evt.message || uiText("Chat thất bại", "Chat failed", "对话失败"));
 								setIsLoading(false);
 								turnAllowAutoApplyRef.current = false;
@@ -1534,7 +1671,7 @@ export default function AiAssistantChat({
 				turnAllowAutoApplyRef.current = false;
 			}
 		},
-		[appId, autoApplyEnabled, contextType, currentCode, isLoading, language, messages, normalizeAssistantProgressMessage, normalizeUsagePayload, onUserMessage, onCodeInsert, pendingAttachments, targetPName, targetPType, uiText, appendStageEvent, applyRealtimeCodeFromText, flushStreamingToUI, scheduleStreamFlush, scrollToBottom]
+		[appId, autoApplyEnabled, contextType, currentCode, isLoading, language, messages, normalizeAssistantProgressMessage, normalizeUsagePayload, onUserMessage, onCodeInsert, pendingAttachments, targetPName, targetPType, uiText, formatModelDecisionReason, appendStageEvent, appendModelDecisionTrace, applyRealtimeCodeFromText, flushStreamingToUI, scheduleStreamFlush, scrollToBottom]
 	);
 
 	const handleSend = () => {
@@ -1769,6 +1906,11 @@ export default function AiAssistantChat({
 														<span>{stageLabel}{percentText}{progressText}</span>
 														{event.rangeLabel && <span className={styles.stageRangeBadge}>{event.rangeLabel}</span>}
 													</div>
+													{event.model && (
+														<div className={styles.stageTimelineMessage}>
+															{`model=${event.model}`}
+														</div>
+													)}
 													{timelineMessage && <div className={styles.stageTimelineMessage}>{timelineMessage}</div>}
 												</div>
 											</div>
@@ -1788,6 +1930,33 @@ export default function AiAssistantChat({
 					<div className={styles.usageDockTitle}>
 						{uiText("Theo dõi chi phí AI", "AI Cost Tracking", "AI 成本跟踪")}
 					</div>
+					{modelDecisionTrace.length > 0 && (
+						<div className={styles.usageDockRow}>
+							<span>{uiText("Luồng model", "Model trace", "模型路径")}</span>
+							<span>
+								<Space size={4} wrap>
+									{modelDecisionTrace.map((trace) => {
+										const color = trace.step === "primary"
+											? "blue"
+											: trace.step === "fallback"
+												? "orange"
+												: "green";
+										const label = trace.step === "primary"
+											? uiText("Primary", "Primary", "主模型")
+											: trace.step === "fallback"
+												? uiText("Fallback", "Fallback", "回退")
+												: uiText("Final", "Final", "最终");
+										const text = `${label}: ${trace.model}`;
+										return (
+											<Tooltip key={trace.id} title={trace.reason || text}>
+												<Tag color={color}>{text}</Tag>
+											</Tooltip>
+										);
+									})}
+								</Space>
+							</span>
+						</div>
+					)}
 					{aiUsageSummary.turn && (
 						<div className={styles.usageDockRow}>
 							<span>{uiText("Lượt này", "This turn", "本轮")}</span>

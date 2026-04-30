@@ -212,13 +212,15 @@ function createAiPrompt(params: {
 	messages: AiMessage[];
 }) {
 	const { appId, language, codeName, codeType, currentCode, requestText, messages } = params;
+	const maxConversationTurns = currentCode.length > 12000 ? 4 : 6;
 	const recentConversation = messages
-		.slice(-6)
+		.slice(-maxConversationTurns)
 		.map((m) => `${m.role === "user" ? "USER" : "ASSISTANT"}: ${m.content}`)
 		.join("\n\n");
 
-	const trimmedCode = currentCode.length > 24000
-		? `${currentCode.slice(0, 24000)}\n/* truncated for token budget */`
+	const maxCodeChars = currentCode.length > 30000 ? 12000 : 18000;
+	const trimmedCode = currentCode.length > maxCodeChars
+		? `${currentCode.slice(0, maxCodeChars)}\n/* truncated for token budget */`
 		: currentCode;
 
 	return [

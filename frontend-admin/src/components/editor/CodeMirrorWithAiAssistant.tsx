@@ -42,6 +42,15 @@ type FullscreenViewportStyle = {
 
 const CHAT_PANEL_MARGIN = 10;
 
+function getFloatingPanelMinTop(): number {
+  if (typeof document === "undefined") return CHAT_PANEL_MARGIN;
+  const ribbonRoot = document.querySelector("[data-csm-ribbon-root='true']") as HTMLElement | null;
+  if (!ribbonRoot) return CHAT_PANEL_MARGIN;
+  const rect = ribbonRoot.getBoundingClientRect();
+  if (!Number.isFinite(rect.bottom)) return CHAT_PANEL_MARGIN;
+  return Math.max(CHAT_PANEL_MARGIN, Math.round(rect.bottom + 8));
+}
+
 function getViewportWidth(): number {
   const vv = window.visualViewport;
   if (vv && Number.isFinite(vv.width) && vv.width > 0) {
@@ -334,11 +343,12 @@ export default function CodeMirrorWithAiAssistant(props: CodeMirrorWithAiAssista
     if (!panel) {
       return { left, top };
     }
+    const minTop = getFloatingPanelMinTop();
     const maxLeft = Math.max(CHAT_PANEL_MARGIN, window.innerWidth - panel.offsetWidth - CHAT_PANEL_MARGIN);
-    const maxTop = Math.max(CHAT_PANEL_MARGIN, window.innerHeight - panel.offsetHeight - CHAT_PANEL_MARGIN);
+    const maxTop = Math.max(minTop, window.innerHeight - panel.offsetHeight - CHAT_PANEL_MARGIN);
     return {
       left: Math.max(CHAT_PANEL_MARGIN, Math.min(left, maxLeft)),
-      top: Math.max(CHAT_PANEL_MARGIN, Math.min(top, maxTop)),
+      top: Math.max(minTop, Math.min(top, maxTop)),
     };
   }, []);
 
@@ -353,7 +363,7 @@ export default function CodeMirrorWithAiAssistant(props: CodeMirrorWithAiAssista
       }
       const rect = wrapper.getBoundingClientRect();
       const left = rect.right - panel.offsetWidth - CHAT_PANEL_MARGIN;
-      const top = rect.top + CHAT_PANEL_MARGIN;
+      const top = getFloatingPanelMinTop();
       return clampPanelPosition(left, top);
     });
   }, [clampPanelPosition, isCompactView]);

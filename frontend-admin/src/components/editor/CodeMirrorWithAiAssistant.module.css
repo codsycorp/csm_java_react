@@ -51,7 +51,7 @@
   position: absolute;
   top: 10px;
   right: 10px;
-  z-index: 34;
+  z-index: 1201;
   touch-action: manipulation;
 }
 
@@ -62,7 +62,7 @@
   bottom: 0;
   width: min(420px, 92vw);
   min-height: 0;
-  z-index: 26;
+  z-index: 1202;
   border-left: 1px solid var(--ant-color-border);
   background: var(--ant-color-bg-container);
   box-shadow: -10px 0 26px rgba(0, 0, 0, 0.12);
@@ -75,6 +75,7 @@
 .chatPanelFloating {
   position: fixed;
   bottom: 10px;
+  z-index: 1203;
   border-left: 0;
   border: 1px solid color-mix(in srgb, var(--ant-color-border) 88%, transparent);
   border-radius: 12px;
@@ -94,7 +95,7 @@
   border: 1px solid color-mix(in srgb, var(--ant-color-border) 88%, transparent);
   box-shadow: 0 14px 30px rgba(0, 0, 0, 0.2);
   position: fixed;
-  z-index: 33;
+  z-index: 1204;
 }
 
 .chatDragHandle {

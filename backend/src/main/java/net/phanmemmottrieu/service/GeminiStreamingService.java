@@ -16,11 +16,13 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -47,13 +49,16 @@ public class GeminiStreamingService {
     @Value("${google.ai.gemini.api-key:${GOOGLE_AI_GEMINI_API_KEY:}}")
     private String googleAiGeminiApiKey;
 
+    @Value("${gemini.api-keys:${GEMINI_API_KEYS:}}")
+    private String geminiApiKeys;
+
     @Value("${gemini.model:gemini-2.5-pro}")
     private String geminiDefaultModel;
 
     @Value("${gemini.streaming.max-tokens:8192}")
     private int maxTokens;
 
-    @Value("${gemini.streaming.temperature:0.7}")
+    @Value("${gemini.streaming.temperature:0.2}")
     private double temperature;
 
     @Value("${gemini.streaming.request-timeout-ms:300000}")
@@ -84,6 +89,7 @@ public class GeminiStreamingService {
     private final Map<String, CachedResponse> responseCache = Collections.synchronizedMap(
             new LinkedHashMap<>(16, 0.75f, true));
     private final Map<String, Long> rateLimitedUntilByKey = Collections.synchronizedMap(new HashMap<>());
+    private final Map<String, Long> rateLimitedUntilByApiKey = Collections.synchronizedMap(new HashMap<>());
 
     private String resolveDefaultModelName() {
         if (geminiDefaultModel != null && !geminiDefaultModel.isBlank()) {
@@ -185,12 +191,53 @@ public class GeminiStreamingService {
         rateLimitedUntilByKey.put(cacheKey, System.currentTimeMillis() + resolveRateLimitKeyCooldownMs());
     }
 
+    private long getRemainingApiKeyCooldownMs(String apiKey) {
+        if (apiKey == null || apiKey.isBlank()) {
+            return 0L;
+        }
+        Long untilMs = rateLimitedUntilByApiKey.get(apiKey);
+        if (untilMs == null) {
+            return 0L;
+        }
+        long remain = untilMs - System.currentTimeMillis();
+        if (remain <= 0L) {
+            rateLimitedUntilByApiKey.remove(apiKey);
+            return 0L;
+        }
+        return remain;
+    }
+
+    private void markApiKeyRateLimitCooldown(String apiKey) {
+        if (apiKey == null || apiKey.isBlank()) {
+            return;
+        }
+        rateLimitedUntilByApiKey.put(apiKey, System.currentTimeMillis() + resolveRateLimitKeyCooldownMs());
+    }
+
     private boolean isRateLimitLikeError(Throwable ex) {
         if (ex == null) {
             return false;
         }
         String msg = String.valueOf(ex.getMessage() == null ? "" : ex.getMessage()).toLowerCase();
         return msg.contains("429") || msg.contains("rate limit") || msg.contains("quota") || msg.contains("too many requests");
+    }
+
+    private boolean shouldTryNextApiKey(Throwable ex) {
+        if (ex == null) {
+            return false;
+        }
+        String msg = String.valueOf(ex.getMessage() == null ? "" : ex.getMessage()).toLowerCase();
+        if (msg.contains("429") || msg.contains("rate limit") || msg.contains("quota") || msg.contains("resource exhausted")) {
+            return true;
+        }
+        if (msg.contains("401") || msg.contains("403") || msg.contains("invalid api key") || msg.contains("permission denied") || msg.contains("unauthorized")) {
+            return true;
+        }
+        return msg.contains("timeout")
+                || msg.contains("deadline exceeded")
+                || msg.contains("temporarily unavailable")
+                || msg.contains("503")
+                || msg.contains("500");
     }
 
     private String normalizeModelToGemini(String model) {
@@ -209,17 +256,40 @@ public class GeminiStreamingService {
         return raw;
     }
 
+    private void addParsedApiKeys(Set<String> target, String raw) {
+        String text = String.valueOf(raw == null ? "" : raw).trim();
+        if (text.isBlank()) {
+            return;
+        }
+        String[] parts = text.split("[,;\\n\\r\\t ]+");
+        for (String part : parts) {
+            String key = String.valueOf(part == null ? "" : part).trim();
+            if (!key.isBlank()) {
+                target.add(key);
+            }
+        }
+    }
+
+    private List<String> resolveGeminiApiKeys() {
+        LinkedHashSet<String> keys = new LinkedHashSet<>();
+        addParsedApiKeys(keys, geminiApiKeys);
+        addParsedApiKeys(keys, geminiProApiKey);
+        addParsedApiKeys(keys, geminiApiKey);
+        addParsedApiKeys(keys, googleAiGeminiApiKey);
+        return new ArrayList<>(keys);
+    }
+
     private String resolveGeminiApiKey() {
-        if (geminiProApiKey != null && !geminiProApiKey.isBlank()) {
-            return geminiProApiKey.trim();
+        List<String> keys = resolveGeminiApiKeys();
+        return keys.isEmpty() ? "" : keys.get(0);
+    }
+
+    private String maskApiKey(String apiKey) {
+        String key = String.valueOf(apiKey == null ? "" : apiKey).trim();
+        if (key.length() <= 8) {
+            return "***";
         }
-        if (geminiApiKey != null && !geminiApiKey.isBlank()) {
-            return geminiApiKey.trim();
-        }
-        if (googleAiGeminiApiKey != null && !googleAiGeminiApiKey.isBlank()) {
-            return googleAiGeminiApiKey.trim();
-        }
-        return "";
+        return key.substring(0, 4) + "..." + key.substring(key.length() - 4);
     }
 
     /**
@@ -231,6 +301,15 @@ public class GeminiStreamingService {
         int ttftSecs = 3 + promptChars / 4000;          // time to first token
         int genSecs  = (outputTokens * 4) / 400;        // generation time (4 chars/token, 400 chars/s)
         return ttftSecs + genSecs;
+    }
+
+    /**
+     * ETA progress should not use full configured maxTokens because deployments can set it very high
+     * (e.g. 65536), leading to unrealistic countdowns in UI while real responses finish much faster.
+     */
+    private int estimateOutputTokensForProgress(int promptChars, int configuredOutputTokens) {
+        int promptBased = Math.max(768, Math.min(4096, (promptChars / 20) + 512));
+        return Math.max(256, Math.min(configuredOutputTokens, promptBased));
     }
 
     private String executeGeminiStreamContent(String model, String prompt, String apiKey,
@@ -246,9 +325,10 @@ public class GeminiStreamingService {
         String resolvedModel = normalizeModelToGemini(model);
 
         int promptChars = prompt == null ? 0 : prompt.length();
-        int estimatedOutputTokens = Math.max(256, maxTokens);
-        int estimatedWaitSecs = estimateWaitSeconds(promptChars, estimatedOutputTokens);
-        int estimatedOutputChars = estimatedOutputTokens * 4;
+        int configuredOutputTokens = Math.max(256, maxTokens);
+        int progressEstimatedTokens = estimateOutputTokensForProgress(promptChars, configuredOutputTokens);
+        int estimatedWaitSecs = estimateWaitSeconds(promptChars, progressEstimatedTokens);
+        int estimatedOutputChars = progressEstimatedTokens * 4;
         long startMs = System.currentTimeMillis();
 
         if (onStatus != null) {
@@ -316,7 +396,7 @@ public class GeminiStreamingService {
                 .apiKey(apiKey)
                 .modelName(resolvedModel)
                 .temperature(temperature)
-                .maxOutputTokens(estimatedOutputTokens)
+            .maxOutputTokens(configuredOutputTokens)
                 .timeout(Duration.ofMillis(resolveRequestTimeoutMs()))
                 .build();
 
@@ -492,8 +572,8 @@ public class GeminiStreamingService {
             return "";
         }
 
-        String key = resolveGeminiApiKey();
-        if (key.isBlank()) {
+        List<String> keys = resolveGeminiApiKeys();
+        if (keys.isEmpty()) {
             IllegalStateException err = new IllegalStateException("Missing Gemini API key. Set GEMINI_PRO_API_KEY, GEMINI_API_KEY, or GOOGLE_AI_GEMINI_API_KEY");
             log.error("GeminiStreamingService: {}", err.getMessage());
             if (onError != null) {
@@ -502,23 +582,89 @@ public class GeminiStreamingService {
             return "";
         }
 
-        try {
-            String text = executeGeminiStreamContent(model, prompt, key, onChunk, onStatus);
-            putCachedResponse(cacheKey, text);
+        int startIndex = Math.floorMod(String.valueOf(cacheKey).hashCode(), keys.size());
+        Throwable lastError = null;
+        long minWaitMs = Long.MAX_VALUE;
+        int skippedByCooldown = 0;
 
-            if (onComplete != null) {
-                onComplete.run();
+        for (int i = 0; i < keys.size(); i++) {
+            String key = keys.get((startIndex + i) % keys.size());
+            long keyCooldown = getRemainingApiKeyCooldownMs(key);
+            if (keyCooldown > 0L) {
+                skippedByCooldown++;
+                minWaitMs = Math.min(minWaitMs, keyCooldown);
+                continue;
             }
-            return text;
-        } catch (Throwable ex) {
-            if (isRateLimitLikeError(ex)) {
-                markRateLimitCooldown(cacheKey);
+
+            AtomicBoolean attemptStreamed = new AtomicBoolean(false);
+            Consumer<String> attemptChunk = (chunk) -> {
+                String text = String.valueOf(chunk == null ? "" : chunk);
+                if (!text.isEmpty()) {
+                    attemptStreamed.set(true);
+                }
+                if (onChunk != null) {
+                    onChunk.accept(text);
+                }
+            };
+
+            if (onStatus != null) {
+                Map<String, Object> status = new HashMap<>();
+                status.put("stage", "key_rotation");
+                status.put("status", "trying_key");
+                status.put("message", "Dang thu Gemini key " + (i + 1) + "/" + keys.size());
+                status.put("attempt", i + 1);
+                status.put("total", keys.size());
+                onStatus.accept(status);
+            }
+
+            try {
+                String text = executeGeminiStreamContent(model, prompt, key, attemptChunk, onStatus);
+                putCachedResponse(cacheKey, text);
+                if (onComplete != null) {
+                    onComplete.run();
+                }
+                return text;
+            } catch (Throwable ex) {
+                lastError = ex;
+                if (isRateLimitLikeError(ex)) {
+                    markRateLimitCooldown(cacheKey);
+                    markApiKeyRateLimitCooldown(key);
+                }
+                log.warn("GeminiStreamingService: key {} failed: {}", maskApiKey(key), ex.getMessage());
+
+                if (attemptStreamed.get()) {
+                    if (onError != null) {
+                        onError.accept(ex);
+                    }
+                    return "";
+                }
+
+                if (!shouldTryNextApiKey(ex)) {
+                    break;
+                }
+            }
+        }
+
+        if (skippedByCooldown >= keys.size() && minWaitMs != Long.MAX_VALUE) {
+            IllegalStateException err = new IllegalStateException("Tat ca Gemini key dang trong cooldown, thu lai sau " + minWaitMs + " ms");
+            if (onStatus != null) {
+                Map<String, Object> status = new HashMap<>();
+                status.put("stage", "waiting");
+                status.put("status", "all_keys_cooldown");
+                status.put("message", "Tat ca API key dang bi rate-limit tam thoi");
+                status.put("waitingMs", minWaitMs);
+                onStatus.accept(status);
             }
             if (onError != null) {
-                onError.accept(ex);
+                onError.accept(err);
             }
             return "";
         }
+
+        if (onError != null) {
+            onError.accept(lastError != null ? lastError : new IllegalStateException("Gemini request failed on all keys"));
+        }
+        return "";
     }
 
     /**
@@ -535,21 +681,75 @@ public class GeminiStreamingService {
             Consumer<Map<String, Object>> onStatus) {
 
         String model = normalizeModelToGemini(modelOverride);
-        String key = resolveGeminiApiKey();
-        if (key.isBlank()) {
+        List<String> keys = resolveGeminiApiKeys();
+        if (keys.isEmpty()) {
             IllegalStateException err = new IllegalStateException("Missing Gemini API key. Set GEMINI_PRO_API_KEY, GEMINI_API_KEY, or GOOGLE_AI_GEMINI_API_KEY");
             log.error("GeminiStreamingService: {}", err.getMessage());
             if (onError != null) onError.accept(err);
             return "";
         }
 
-        try {
-            String text = executeGeminiStreamContent(model, prompt, imageParts, key, onChunk, onStatus);
-            if (onComplete != null) onComplete.run();
-            return text;
-        } catch (Throwable ex) {
-            if (onError != null) onError.accept(ex);
+        int startIndex = Math.floorMod(String.valueOf(prompt == null ? "" : prompt).hashCode(), keys.size());
+        Throwable lastError = null;
+        long minWaitMs = Long.MAX_VALUE;
+        int skippedByCooldown = 0;
+
+        for (int i = 0; i < keys.size(); i++) {
+            String key = keys.get((startIndex + i) % keys.size());
+            long keyCooldown = getRemainingApiKeyCooldownMs(key);
+            if (keyCooldown > 0L) {
+                skippedByCooldown++;
+                minWaitMs = Math.min(minWaitMs, keyCooldown);
+                continue;
+            }
+
+            AtomicBoolean attemptStreamed = new AtomicBoolean(false);
+            Consumer<String> attemptChunk = (chunk) -> {
+                String text = String.valueOf(chunk == null ? "" : chunk);
+                if (!text.isEmpty()) {
+                    attemptStreamed.set(true);
+                }
+                if (onChunk != null) {
+                    onChunk.accept(text);
+                }
+            };
+
+            try {
+                String text = executeGeminiStreamContent(model, prompt, imageParts, key, attemptChunk, onStatus);
+                if (onComplete != null) onComplete.run();
+                return text;
+            } catch (Throwable ex) {
+                lastError = ex;
+                if (isRateLimitLikeError(ex)) {
+                    markApiKeyRateLimitCooldown(key);
+                }
+                log.warn("GeminiStreamingService multimodal: key {} failed: {}", maskApiKey(key), ex.getMessage());
+
+                if (attemptStreamed.get()) {
+                    if (onError != null) onError.accept(ex);
+                    return "";
+                }
+
+                if (!shouldTryNextApiKey(ex)) {
+                    break;
+                }
+            }
+        }
+
+        if (skippedByCooldown >= keys.size() && minWaitMs != Long.MAX_VALUE) {
+            IllegalStateException err = new IllegalStateException("Tat ca Gemini key dang trong cooldown, thu lai sau " + minWaitMs + " ms");
+            if (onError != null) onError.accept(err);
             return "";
         }
+
+        if (onError != null) onError.accept(lastError != null ? lastError : new IllegalStateException("Gemini multimodal request failed on all keys"));
+        return "";
+    }
+
+    // Keep for compatibility with callers/extensions that still use single-key resolution.
+    @SuppressWarnings("unused")
+    private String resolveSingleGeminiApiKeyDeprecated() {
+        String key = resolveGeminiApiKey();
+        return key == null ? "" : key;
     }
 }

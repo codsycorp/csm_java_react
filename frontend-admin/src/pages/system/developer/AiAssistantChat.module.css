@@ -197,6 +197,9 @@
 	padding-bottom: max(8px, env(safe-area-inset-bottom));
 	border-top: 1px solid color-mix(in srgb, var(--chat-border) 70%, transparent);
 	background: color-mix(in srgb, var(--chat-bg) 92%, var(--chat-input-bg));
+	max-height: min(44vh, 340px);
+	overflow-y: auto;
+	overflow-x: hidden;
 }
 
 .progressDockSpinnerRow {
@@ -342,6 +345,10 @@
 	flex-direction: column;
 	gap: 6px;
 	padding-left: 2px;
+	max-height: min(28vh, 220px);
+	overflow-y: auto;
+	overflow-x: hidden;
+	padding-right: 4px;
 }
 
 .stageTimelineItem {

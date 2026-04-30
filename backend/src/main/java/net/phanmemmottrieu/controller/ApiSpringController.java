@@ -37,6 +37,11 @@ import net.phanmemmottrieu.service.AiAssistantGatewayService;
 import net.phanmemmottrieu.service.AiMenuMergeService;
 import net.phanmemmottrieu.service.AiAssistantMemoryManagerService;
 import net.phanmemmottrieu.service.GeminiStreamingService;
+import net.phanmemmottrieu.service.LocalTranslationService;
+import net.phanmemmottrieu.service.ApiCallInstrumentationService;
+import net.phanmemmottrieu.service.AiConversationContextService;
+import net.phanmemmottrieu.service.MenuQualityGateService;
+import net.phanmemmottrieu.service.TokenOptimizationService;
 import com.corundumstudio.socketio.SocketIOServer;
 import net.phanmemmottrieu.model.UrlSubmissionQueue;
 import net.phanmemmottrieu.model.UrlSubmissionHistory;
@@ -51,6 +56,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -115,6 +121,11 @@ public class ApiSpringController {
     private final AiMenuMergeService aiMenuMergeService;
     private final AiAssistantMemoryManagerService aiAssistantMemoryManagerService;
     private final GeminiStreamingService geminiStreamingService;
+    private final LocalTranslationService localTranslationService;
+    private final ApiCallInstrumentationService apiCallInstrumentationService;
+    private final AiConversationContextService aiConversationContextService;
+    private final MenuQualityGateService menuQualityGateService;
+    private final TokenOptimizationService tokenOptimizationService;
 
     private static final int MAX_CODE_CHARS = 500_000;
     private static final int MAX_MESSAGE_CHARS = 20_000;
@@ -269,6 +280,18 @@ public class ApiSpringController {
     @Value("${ai.code-stream.auto-continue.max-previous-response-chars:120000}")
     private int aiCodeStreamAutoContinueMaxPreviousResponseChars;
 
+    @Value("${ai.menu.auto-continue.enabled:true}")
+    private boolean aiMenuAutoContinueEnabled;
+
+    @Value("${ai.menu.auto-continue.max-attempts:2}")
+    private int aiMenuAutoContinueMaxAttempts;
+
+    @Value("${ai.menu.auto-continue.prompt-threshold-chars:90000}")
+    private int aiMenuAutoContinuePromptThresholdChars;
+
+    @Value("${ai.menu.auto-continue.max-previous-output-chars:120000}")
+    private int aiMenuAutoContinueMaxPreviousOutputChars;
+
     @Value("${ai.code-stream.routing.enabled:true}")
     private boolean aiCodeStreamRoutingEnabled;
 
@@ -277,6 +300,15 @@ public class ApiSpringController {
 
     @Value("${ai.code-stream.routing.complex-threshold-chars:20000}")
     private int aiCodeStreamRoutingComplexThresholdChars;
+
+    @Value("${ai.code-stream.routing.prefer-simple-for-edit:true}")
+    private boolean aiCodeStreamRoutingPreferSimpleForEdit;
+
+    @Value("${ai.code-stream.routing.edit-simple-max-chars:120000}")
+    private int aiCodeStreamRoutingEditSimpleMaxChars;
+
+    @Value("${ai.code-stream.routing.force-simple-first:true}")
+    private boolean aiCodeStreamRoutingForceSimpleFirst;
 
     @Value("${ai.code-stream.prompt-cache.min-chars:8000}")
     private int aiCodeStreamPromptCacheMinChars;
@@ -336,7 +368,12 @@ public class ApiSpringController {
             CRMHandler crmHandler,
             AiMenuMergeService aiMenuMergeService,
             AiAssistantMemoryManagerService aiAssistantMemoryManagerService,
-            GeminiStreamingService geminiStreamingService
+            GeminiStreamingService geminiStreamingService,
+            LocalTranslationService localTranslationService,
+            ApiCallInstrumentationService apiCallInstrumentationService,
+            AiConversationContextService aiConversationContextService,
+            MenuQualityGateService menuQualityGateService,
+            TokenOptimizationService tokenOptimizationService
         ) {
         this.recordManager = recordManager;
         this.initHandler = initHandler;
@@ -357,6 +394,11 @@ public class ApiSpringController {
         this.aiMenuMergeService = aiMenuMergeService;
         this.aiAssistantMemoryManagerService = aiAssistantMemoryManagerService;
         this.geminiStreamingService = geminiStreamingService;
+        this.localTranslationService = localTranslationService;
+        this.apiCallInstrumentationService = apiCallInstrumentationService;
+        this.aiConversationContextService = aiConversationContextService;
+        this.menuQualityGateService = menuQualityGateService;
+        this.tokenOptimizationService = tokenOptimizationService;
     }
 
     @PostMapping(value = {"/ai-code-stream", "/api/ai-code-stream"})
@@ -392,6 +434,8 @@ public class ApiSpringController {
                 String contextType = str(body.get("contextType"), "code");
                 String responseMode = str(body.get("responseMode"), "analyze");
                 String modelOverride = str(body.get("model"), "");
+                String pName = str(body.get("pName"), "");
+                Integer pType = parseNullableInteger(body.get("pType"));
                 String baseContentRef = str(body.get("baseContentRef"), "");
                 String baseContent = truncate(strKeep(body.get("baseContent"), ""), Math.max(100000, aiCodeStreamMaxBaseContentChars));
                 boolean preserveBaseContent = bool(body.get("preserveBaseContent"), false);
@@ -412,13 +456,26 @@ public class ApiSpringController {
                 }
                 effectiveCodeContext = truncate(effectiveCodeContext, Math.max(MAX_CODE_CHARS, aiCodeStreamMaxBaseContentChars));
 
-                String prompt = buildCodingPrompt(message, effectiveCodeContext, language, contextType, responseMode, attachmentsRaw);
+                String reusableCodeMemory = trimAiAssistantContinuityMemory(
+                    aiConversationContextService.buildAggregatedContextWindow(
+                        authCtx.principalId,
+                        appId,
+                        contextType,
+                        pName,
+                        pType));
+                String messageWithReuse = message;
+                if (!reusableCodeMemory.isBlank()) {
+                    String compactReuse = truncateMiddle(reusableCodeMemory, 12000);
+                    messageWithReuse = "[REUSED_CONTEXT]\n" + compactReuse + "\n\n[CURRENT_REQUEST]\n" + message;
+                }
+
+                String prompt = buildCodingPrompt(messageWithReuse, effectiveCodeContext, language, contextType, responseMode, attachmentsRaw);
                 boolean largeStructuredEditMode = preserveBaseContent
                         && "edit".equalsIgnoreCase(responseMode)
                         && !base.baseContent().isBlank()
                         && base.baseContentChars() > Math.max(100000, aiCodeStreamMaxCurrentCodeChars);
                 if (largeStructuredEditMode) {
-                    prompt = buildCodingPrompt(message, effectiveCodeContext, language, contextType, responseMode,
+                    prompt = buildCodingPrompt(messageWithReuse, effectiveCodeContext, language, contextType, responseMode,
                             attachmentsRaw, true, base.baseRef(), base.baseContentChars());
                 }
                 if (prompt.length() > aiCodeStreamMaxPromptChars) {
@@ -437,6 +494,11 @@ public class ApiSpringController {
                 }
 
                 String effectiveModel = routeModel(message, effectiveCodeContext, responseMode, modelOverride);
+                String defaultModel = resolveDefaultStreamingModel();
+                String simpleModel = resolveSimpleStreamingModel();
+                boolean shouldFallbackToDefaultOnSimpleFailure = aiCodeStreamRoutingForceSimpleFirst
+                    && effectiveModel.equalsIgnoreCase(simpleModel)
+                    && !defaultModel.equalsIgnoreCase(simpleModel);
                 long startedAtMs = System.currentTimeMillis();
 
                 List<Map<String, String>> imageParts = extractImageParts(attachmentsRaw);
@@ -459,10 +521,17 @@ public class ApiSpringController {
 
                 int promptTokens = estimateTokens(prompt);
                 int estimatedWaitSecs = 3 + prompt.length() / 4000 + (8192 * 4 / 400);
+                String routeReasonCode = effectiveModel.equalsIgnoreCase(defaultModel)
+                    ? "routing_default_model"
+                    : "routing_simple_model";
                 sendEvent(emitter, jsonOf(
                         "stage", "preparing",
                         "message", "Đang kết nối Gemini...",
                         "model", effectiveModel,
+                        "modelDecisionStep", "primary",
+                    "modelDecisionReason", routeReasonCode,
+                        "decision_step", "primary",
+                    "reason_code", routeReasonCode,
                         "promptTokens", promptTokens,
                         "estimatedWaitSecs", estimatedWaitSecs,
                         "percent", 0));
@@ -484,7 +553,37 @@ public class ApiSpringController {
                             usePromptCache);
                 }
                 if (rawResponse == null) {
-                    return;
+                    if (!shouldFallbackToDefaultOnSimpleFailure || hasImages) {
+                        sendErrorEvent(emitter, "Model streaming lỗi và không thể fallback tự động");
+                        return;
+                    }
+
+                    sendEvent(emitter, jsonOf(
+                            "stage", "model_switch",
+                            "status", "fallback",
+                            "model", defaultModel,
+                            "modelDecisionStep", "fallback",
+                            "modelDecisionReason", "provider_error",
+                            "decision_step", "fallback",
+                            "reason_code", "provider_error",
+                            "message", "Simple model lỗi, tự động chuyển sang model mặc định"));
+
+                    rawResponse = streamWithAutoContinue(
+                            emitter,
+                            prompt,
+                            promptParts[0],
+                            promptParts[1],
+                            defaultModel,
+                            language,
+                            responseMode,
+                            largeStructuredEditMode,
+                            usePromptCache);
+                    effectiveModel = defaultModel;
+
+                    if (rawResponse == null) {
+                        sendErrorEvent(emitter, "Cả simple model và default model đều thất bại");
+                        return;
+                    }
                 }
 
                 Map<String, Object> completion = new LinkedHashMap<>();
@@ -501,12 +600,34 @@ public class ApiSpringController {
                 completion.put("promptTokens", promptTokens);
                 completion.put("completionTokens", completionTokens);
                 completion.put("estimatedCostUsd", usageInfo.get("estimatedCostUsd"));
+                completion.put("model", effectiveModel);
+                completion.put("modelDecisionStep", "final");
+                completion.put("modelDecisionReason", "completed");
+                completion.put("decision_step", "final");
+                completion.put("reason_code", "completed");
                 if (!base.baseRef().isBlank()) {
                     completion.put("baseContentRef", base.baseRef());
                     completion.put("baseContentChars", base.baseContentChars());
                 }
                 completion.put("timestamp", System.currentTimeMillis());
                 sendEvent(emitter, objectMapper.writeValueAsString(completion));
+
+                Map<String, Object> codeTurnMeta = new LinkedHashMap<>();
+                codeTurnMeta.put("source", "aiCodeStream");
+                codeTurnMeta.put("model", effectiveModel);
+                codeTurnMeta.put("responseMode", responseMode);
+                codeTurnMeta.put("promptTokens", promptTokens);
+                codeTurnMeta.put("completionTokens", completionTokens);
+                aiConversationContextService.recordTurnWithScopes(
+                    authCtx.principalId,
+                    appId,
+                    contextType,
+                    pName,
+                    pType,
+                    message,
+                    rawResponse,
+                    codeTurnMeta);
+
                 logger.info("ApiSpringController: ai-code-stream complete appId={} model={} elapsedMs={} outputChars={}",
                         appId, effectiveModel, (System.currentTimeMillis() - startedAtMs), rawResponse.length());
                 emitter.complete();
@@ -663,6 +784,11 @@ public class ApiSpringController {
                 sendEvent(emitter, jsonOf(
                         "stage", "continuing",
                         "status", "auto_continue",
+                        "model", model,
+                        "modelDecisionStep", "fallback",
+                        "modelDecisionReason", "auto_continue",
+                    "decision_step", "fallback",
+                    "reason_code", "auto_continue",
                         "attempt", attemptNo,
                         "maxAttempts", maxAttempts,
                         "message", "Đang tự động tiếp tục để hoàn thiện kết quả..."));
@@ -697,6 +823,7 @@ public class ApiSpringController {
                         status -> {
                             try {
                                 Map<String, Object> wrapped = new LinkedHashMap<>(status);
+                                enrichModelDecisionMetadata(wrapped, model);
                                 wrapped.put("attempt", attemptNo);
                                 wrapped.put("maxAttempts", maxAttempts);
                                 sendEvent(emitter, objectMapper.writeValueAsString(wrapped));
@@ -713,6 +840,7 @@ public class ApiSpringController {
                         status -> {
                             try {
                                 Map<String, Object> wrapped = new LinkedHashMap<>(status);
+                                enrichModelDecisionMetadata(wrapped, model);
                                 wrapped.put("attempt", attemptNo);
                                 wrapped.put("maxAttempts", maxAttempts);
                                 sendEvent(emitter, objectMapper.writeValueAsString(wrapped));
@@ -724,7 +852,23 @@ public class ApiSpringController {
             if (errorHolder[0] != null) {
                 logger.warn("ApiSpringController: ai-code-stream failed model={} attempt={}/{} error={}",
                         model, attemptNo, maxAttempts, errorHolder[0].getMessage());
-                sendErrorEvent(emitter, "Gemini streaming lỗi: " + errorHolder[0].getMessage());
+                sendEvent(emitter, jsonOf(
+                    "stage", "model_switch",
+                    "status", "failed",
+                    "model", model,
+                    "modelDecisionStep", "fallback",
+                    "modelDecisionReason", classifyModelDecisionReasonCode(
+                        "error=" + String.valueOf(errorHolder[0].getMessage()),
+                        "model_switch",
+                        "failed"),
+                    "decision_step", "fallback",
+                    "reason_code", classifyModelDecisionReasonCode(
+                        "error=" + String.valueOf(errorHolder[0].getMessage()),
+                        "model_switch",
+                        "failed"),
+                    "attempt", attemptNo,
+                    "maxAttempts", maxAttempts,
+                    "message", "Model stream failed, triggering fallback path"));
                 return null;
             }
 
@@ -952,19 +1096,46 @@ public class ApiSpringController {
         return "gemini-2.5-pro";
     }
 
+    private String resolveSimpleStreamingModel() {
+        if (aiCodeStreamRoutingSimpleModel != null && !aiCodeStreamRoutingSimpleModel.isBlank()) {
+            return aiCodeStreamRoutingSimpleModel.trim();
+        }
+        return "gemini-2.5-flash";
+    }
+
     private String routeModel(String messageText, String codeContext, String responseMode, String modelOverride) {
         if (modelOverride != null && !modelOverride.isBlank()) return modelOverride.trim();
         if (!aiCodeStreamRoutingEnabled) return resolveDefaultStreamingModel();
-        String simpleModel = aiCodeStreamRoutingSimpleModel == null ? "" : aiCodeStreamRoutingSimpleModel.trim();
-        if (simpleModel.isBlank()) return resolveDefaultStreamingModel();
+
+        String defaultModel = resolveDefaultStreamingModel();
+        String simpleModel = resolveSimpleStreamingModel();
+        if (simpleModel.isBlank() || simpleModel.equalsIgnoreCase(defaultModel)) {
+            return defaultModel;
+        }
+
+        if (aiCodeStreamRoutingForceSimpleFirst) {
+            logger.debug("ApiSpringController: ai-code-stream force simple-first model={}", simpleModel);
+            return simpleModel;
+        }
+
         boolean isAnalyzeMode = !"edit".equalsIgnoreCase(responseMode);
+        boolean isEditMode = "edit".equalsIgnoreCase(responseMode);
         int totalChars = (messageText == null ? 0 : messageText.length())
                 + (codeContext == null ? 0 : codeContext.length());
+
+        if (isEditMode && aiCodeStreamRoutingPreferSimpleForEdit
+                && totalChars <= Math.max(4000, aiCodeStreamRoutingEditSimpleMaxChars)) {
+            logger.debug("ApiSpringController: ai-code-stream cost-first route to simple model={} mode=edit totalChars={}",
+                    simpleModel, totalChars);
+            return simpleModel;
+        }
+
         if (isAnalyzeMode && totalChars < Math.max(2000, aiCodeStreamRoutingComplexThresholdChars)) {
             logger.debug("ApiSpringController: ai-code-stream route to simple model={} totalChars={}", simpleModel, totalChars);
             return simpleModel;
         }
-        return resolveDefaultStreamingModel();
+
+        return defaultModel;
     }
 
     private String[] buildCodingPromptParts(String message, String currentCode, String language,
@@ -991,6 +1162,52 @@ public class ApiSpringController {
         } catch (Exception e) {
             return "{}";
         }
+    }
+
+    private void enrichModelDecisionMetadata(Map<String, Object> payload, String fallbackModel) {
+        if (payload == null) return;
+        String model = String.valueOf(payload.getOrDefault("model", fallbackModel == null ? "" : fallbackModel)).trim();
+        if (!model.isBlank()) {
+            payload.putIfAbsent("model", model);
+        }
+
+        String stage = String.valueOf(payload.getOrDefault("stage", "")).trim();
+        String status = String.valueOf(payload.getOrDefault("status", "")).trim();
+        String message = String.valueOf(payload.getOrDefault("message", "")).trim();
+
+        String reasonCode = classifyModelDecisionReasonCode(message, stage, status);
+        payload.putIfAbsent("modelDecisionReason", reasonCode);
+        payload.putIfAbsent("reason_code", String.valueOf(payload.get("modelDecisionReason")));
+
+        if (!payload.containsKey("modelDecisionStep")) {
+            if ("initial_route".equals(reasonCode) || "processing".equals(reasonCode)) {
+                payload.put("modelDecisionStep", "primary");
+            } else if ("completed".equals(reasonCode)) {
+                payload.put("modelDecisionStep", "final");
+            } else {
+                payload.put("modelDecisionStep", "fallback");
+            }
+        }
+        payload.putIfAbsent("decision_step", String.valueOf(payload.get("modelDecisionStep")));
+    }
+
+    private String classifyModelDecisionReasonCode(String message, String stage, String status) {
+        String text = (String.valueOf(message == null ? "" : message)
+                + " "
+                + String.valueOf(stage == null ? "" : stage)
+                + " "
+                + String.valueOf(status == null ? "" : status)).toLowerCase();
+
+        if (text.contains("rate") || text.contains("429") || text.contains("too many request")) return "rate_limit";
+        if (text.contains("quota") || text.contains("limit reached")) return "quota_exceeded";
+        if (text.contains("auth") || text.contains("token") || text.contains("401") || text.contains("403")) return "auth_failed";
+        if (text.contains("payload") || text.contains("too large") || text.contains("context too large") || text.contains("exceed")) return "payload_too_large";
+        if (text.contains("switch") || text.contains("fallback") || text.contains("rotate") || text.contains("chuy") || text.contains("model_switch")) return "model_switch";
+        if (text.contains("error") || text.contains("failed")) return "provider_error";
+        if (text.contains("auto_continue") || text.contains("continuing")) return "auto_continue";
+        if (text.contains("complete") || text.contains("completed")) return "completed";
+        if (text.contains("preparing") || text.contains("connecting")) return "initial_route";
+        return "processing";
     }
 
     private void pruneBaseContentCache() {
@@ -1554,6 +1771,7 @@ public class ApiSpringController {
     }
 
     private static class UserAuthContext {
+        String principalId;
         String appId;
         boolean dev;
         List<String> roles = new ArrayList<>();
@@ -1573,6 +1791,10 @@ public class ApiSpringController {
         }
 
         context.authenticated = true;
+        context.principalId = String.valueOf(authentication.getName() == null ? "" : authentication.getName()).trim();
+        if (context.principalId.isEmpty()) {
+            context.principalId = "unknown";
+        }
         Object principal = authentication.getPrincipal();
 
         if (principal instanceof net.phanmemmottrieu.model.User) {
@@ -1838,6 +2060,7 @@ public class ApiSpringController {
      */
     private void handleAiAssistantChatStream(StandardResponse response, Map<String, Object> params) {
         try {
+            UserAuthContext authCtx = extractUserAuthContext();
             String appId = String.valueOf(params.getOrDefault("appId", "")).trim();
             String message = String.valueOf(params.getOrDefault("message", "")).trim();
             String currentCode = String.valueOf(params.getOrDefault("currentCode", "")).trim();
@@ -1902,6 +2125,18 @@ public class ApiSpringController {
             String continuityScopeKey = buildAiAssistantContinuityScopeKey(effectiveContextType, language, pName, pType);
             String continuityMemory = trimAiAssistantContinuityMemory(
                 aiAssistantGatewayService.loadAiAssistantConversationMemory(appId, continuityScopeKey));
+            String aggregatedReusableMemory = trimAiAssistantContinuityMemory(
+                aiConversationContextService.buildAggregatedContextWindow(
+                    authCtx.principalId,
+                    appId,
+                    effectiveContextType,
+                    pName,
+                    pType));
+            if (!aggregatedReusableMemory.isBlank()) {
+                continuityMemory = continuityMemory.isBlank()
+                    ? aggregatedReusableMemory
+                    : (continuityMemory + "\n\n## SHARED_REUSE_MEMORY\n" + aggregatedReusableMemory);
+            }
             List<String> pendingQuestions = aiAssistantGatewayService.loadAiAssistantPendingQuestions(appId, continuityScopeKey, 8);
 
             // CHAINING Step 1: if enabled and total payload is very large, run chained distillation
@@ -2161,6 +2396,10 @@ public class ApiSpringController {
                 if (aiAssistantMenuDirectProviderPrimaryProbeFirst) {
                     emitAiAssistantChatChunk(appId, Map.of(
                         "stage", "large_menu_quick_primary_probe",
+                        "modelDecisionStep", "primary",
+                        "modelDecisionReason", "routing_simple_model",
+                        "decision_step", "primary",
+                        "reason_code", "routing_simple_model",
                         "message", uiTextByLang(
                             uiLang,
                             "Menu payload rất lớn, thử AI Assistant 1 lượt ngắn trước khi fallback",
@@ -2193,6 +2432,10 @@ public class ApiSpringController {
                         logger.warn("AI Assistant stream: large-menu quick primary probe did not return valid menu JSON. Triggering immediate fallback.");
                         emitAiAssistantChatChunk(appId, Map.of(
                             "stage", "large_menu_probe_fallback_trigger",
+                            "modelDecisionStep", "fallback",
+                            "modelDecisionReason", "payload_too_large",
+                            "decision_step", "fallback",
+                            "reason_code", "payload_too_large",
                             "message", uiTextByLang(
                                 uiLang,
                                 "Quick probe không trả về JSON hợp lệ, chuyển fallback ngay",
@@ -2205,6 +2448,10 @@ public class ApiSpringController {
                 } else {
                     emitAiAssistantChatChunk(appId, Map.of(
                         "stage", "direct_provider_route",
+                        "modelDecisionStep", "fallback",
+                        "modelDecisionReason", "payload_too_large",
+                        "decision_step", "fallback",
+                        "reason_code", "payload_too_large",
                         "message", uiTextByLang(
                             uiLang,
                             "Menu payload lớn, route trực tiếp sang provider fallback để tránh vòng lặp 429",
@@ -2237,6 +2484,10 @@ public class ApiSpringController {
             } else if (quickPrimaryProbeRoute) {
                 emitAiAssistantChatChunk(appId, Map.of(
                     "stage", "quick_primary_probe",
+                    "modelDecisionStep", "primary",
+                    "modelDecisionReason", "routing_simple_model",
+                    "decision_step", "primary",
+                    "reason_code", "routing_simple_model",
                     "message", uiTextByLang(
                         uiLang,
                         "Menu payload trung bình-lớn, thử AI Assistant 1 lượt ngắn trước khi fallback",
@@ -2269,6 +2520,10 @@ public class ApiSpringController {
                     logger.warn("AI Assistant stream: quick primary probe did not return valid menu JSON. Triggering immediate fallback.");
                     emitAiAssistantChatChunk(appId, Map.of(
                         "stage", "quick_primary_probe_fallback_trigger",
+                        "modelDecisionStep", "fallback",
+                        "modelDecisionReason", "payload_too_large",
+                        "decision_step", "fallback",
+                        "reason_code", "payload_too_large",
                         "message", uiTextByLang(
                             uiLang,
                             "Quick probe không trả về JSON hợp lệ, chuyển fallback ngay",
@@ -2281,6 +2536,10 @@ public class ApiSpringController {
             } else {
                 emitAiAssistantChatChunk(appId, Map.of(
                     "stage", "ai_assistant_route",
+                    "modelDecisionStep", "primary",
+                    "modelDecisionReason", "routing_default_model",
+                    "decision_step", "primary",
+                    "reason_code", "routing_default_model",
                     "message", uiTextByLang(
                         uiLang,
                         "Đang gọi trực tiếp AI Assistant API",
@@ -2314,6 +2573,10 @@ public class ApiSpringController {
                     logger.warn("AI Assistant stream: overriding disabled menu Gemini fallback due to upstream failure signals.");
                     emitAiAssistantChatChunk(appId, Map.of(
                         "stage", "menu_gemini_fallback_override",
+                        "modelDecisionStep", "fallback",
+                        "modelDecisionReason", "provider_error",
+                        "decision_step", "fallback",
+                        "reason_code", "provider_error",
                         "message", uiTextByLang(
                             uiLang,
                             "AI Assistant API đang lỗi hạ tầng/giới hạn, tạm bỏ chặn fallback để chuyển sang Gemini",
@@ -2330,6 +2593,10 @@ public class ApiSpringController {
                 }
                 emitAiAssistantChatChunk(appId, Map.of(
                     "stage", "gemini_fallback",
+                    "modelDecisionStep", "fallback",
+                    "modelDecisionReason", authFailure ? "auth_failed" : "payload_too_large",
+                    "decision_step", "fallback",
+                    "reason_code", authFailure ? "auth_failed" : "payload_too_large",
                     "message", authFailure
                         ? uiTextByLang(
                             uiLang,
@@ -2734,6 +3001,21 @@ public class ApiSpringController {
                 effectiveContextType,
                 responseMode,
                 attachments);
+
+            Map<String, Object> sharedTurnMeta = new LinkedHashMap<>();
+            sharedTurnMeta.put("source", "aiAssistantChatStream");
+            sharedTurnMeta.put("responseMode", responseMode);
+            sharedTurnMeta.put("continuityScopeKey", continuityScopeKey);
+            sharedTurnMeta.put("attachments", attachments == null ? 0 : attachments.size());
+            aiConversationContextService.recordTurnWithScopes(
+                authCtx.principalId,
+                appId,
+                effectiveContextType,
+                pName,
+                pType,
+                message,
+                fullResponse.toString(),
+                sharedTurnMeta);
 
             response.set("code", 200);
             response.set("success", true);
@@ -5040,7 +5322,7 @@ public class ApiSpringController {
         }
 
         try {
-            rawContent = fetchAiRawContent(prompt, null, params);
+            rawContent = fetchAiRawContentWithMenuRecovery(prompt, null, params);
         } catch (RuntimeException e) {
             response.set("code", 200);
             response.set("success", false);
@@ -5211,6 +5493,439 @@ public class ApiSpringController {
             progressListener.onProgress(createAiJobProgress("gemini", "Đang gọi Gemini", 0, 1, null));
         }
         return this.aiProviderFactory.generateContent(safePrompt);
+    }
+
+    private String fetchAiRawContentWithMenuRecovery(
+            String prompt,
+            AiAssistantGatewayService.ProgressListener progressListener,
+            Map<String, Object> params) {
+        String safePrompt = String.valueOf(prompt == null ? "" : prompt);
+        boolean runMenuRecovery = shouldRunMenuAutoContinue(safePrompt, params);
+
+        if (runMenuRecovery && progressListener != null) {
+            Map<String, Object> phaseMeta = new HashMap<>();
+            phaseMeta.put("phase", "phase_0_local_enrichment");
+            phaseMeta.put("step", "Xử lý cục bộ không cần API");
+            progressListener.onProgress(createAiJobProgress(
+                "phase_0_local_enrichment",
+                "Pha 0/3: Xử lý cục bộ để giảm chi phí API",
+                0,
+                3,
+                phaseMeta));
+        }
+
+        // PHASE 0: Local Translation Enrichment (No API cost)
+        long phase0Start = System.currentTimeMillis();
+        try {
+            String localEnrichedJson = applyLocalEnrichmentToMenuJson(safePrompt);
+            long phase0Duration = System.currentTimeMillis() - phase0Start;
+            
+            if (progressListener != null) {
+                Map<String, Object> meta = new HashMap<>();
+                meta.put("phase", "phase_0_local_enrichment");
+                meta.put("durationMs", phase0Duration);
+                meta.put("method", "local_heuristic");
+                progressListener.onProgress(createAiJobProgress(
+                    "phase_0_local_enrichment_completed",
+                    "Pha 0/3 hoàn tất: Đã bổ sung translations cục bộ",
+                    1,
+                    3,
+                    meta));
+            }
+
+            apiCallInstrumentationService.recordLocalTranslation("menu_local_enrichment", 1, phase0Duration);
+            
+            // Use locally enriched JSON for further processing
+            safePrompt = localEnrichedJson;
+        } catch (Exception e) {
+            logger.debug("Local enrichment failed, falling back to full AI", e);
+            apiCallInstrumentationService.recordLocalTranslation("menu_local_enrichment_failed", 0, 
+                System.currentTimeMillis() - phase0Start);
+        }
+
+        if (runMenuRecovery && progressListener != null) {
+            Map<String, Object> phaseMeta = new HashMap<>();
+            phaseMeta.put("phase", "phase_1_generate");
+            phaseMeta.put("attempt", 1);
+            phaseMeta.put("maxAttempts", Math.max(1, aiMenuAutoContinueMaxAttempts));
+            progressListener.onProgress(createAiJobProgress(
+                "phase_1_generate",
+                "Pha 1/3: Đang sinh kết quả menu ban đầu",
+                1,
+                3,
+                phaseMeta));
+        }
+
+        String initialRaw = fetchAiRawContent(safePrompt, progressListener, params);
+
+        if (!runMenuRecovery) {
+            return initialRaw;
+        }
+
+        String latestRaw = initialRaw;
+        int maxAttempts = Math.max(1, aiMenuAutoContinueMaxAttempts);
+        if (isValidMenuOutputPayload(latestRaw)) {
+            if (progressListener != null) {
+                Map<String, Object> doneMeta = new HashMap<>();
+                doneMeta.put("phase", "phase_1_generate");
+                doneMeta.put("attempt", 1);
+                doneMeta.put("maxAttempts", maxAttempts);
+                doneMeta.put("result", "valid_menu_json");
+                progressListener.onProgress(createAiJobProgress(
+                    "phase_1_generate_completed",
+                    "Pha 1/3 hoàn tất: kết quả đã đủ và hợp lệ",
+                    2,
+                    3,
+                    doneMeta));
+            }
+            // Phase 3: Check for missing language fields
+            return runPhase3LanguageFill(latestRaw, safePrompt, progressListener);
+        }
+
+        for (int attempt = 1; attempt < maxAttempts; attempt++) {
+            String previousText = extractAiResultText(latestRaw);
+            if (progressListener != null) {
+                Map<String, Object> meta = new HashMap<>();
+                meta.put("phase", "phase_2_finalize");
+                meta.put("attempt", attempt + 1);
+                meta.put("maxAttempts", maxAttempts);
+                meta.put("reason", "menu_output_incomplete_or_invalid_json");
+                progressListener.onProgress(createAiJobProgress(
+                    "phase_2_finalize",
+                    "Pha 2/3: Kết quả chưa hoàn chỉnh, đang tự động hoàn thiện JSON cuối",
+                    1,
+                    3,
+                    meta));
+            }
+
+            String continuationPrompt = buildMenuAutoContinuePrompt(safePrompt, previousText, attempt + 1, maxAttempts);
+            Map<String, Object> nextParams = params == null ? new HashMap<>() : new HashMap<>(params);
+            nextParams.put("_menuAutoContinueAttempt", attempt + 1);
+            String continuedRaw = fetchAiRawContent(continuationPrompt, progressListener, nextParams);
+            if (continuedRaw == null || continuedRaw.isBlank()) {
+                break;
+            }
+            latestRaw = continuedRaw;
+
+            if (isValidMenuOutputPayload(latestRaw)) {
+                if (progressListener != null) {
+                    Map<String, Object> doneMeta = new HashMap<>();
+                    doneMeta.put("phase", "phase_2_finalize");
+                    doneMeta.put("attempt", attempt + 1);
+                    doneMeta.put("maxAttempts", maxAttempts);
+                    doneMeta.put("result", "valid_menu_json");
+                    progressListener.onProgress(createAiJobProgress(
+                        "phase_2_finalize_completed",
+                        "Pha 2/3 hoàn tất: đã tự động khôi phục output đầy đủ",
+                        2,
+                        3,
+                        doneMeta));
+                }
+                // Phase 3: Check for missing language fields
+                return runPhase3LanguageFill(latestRaw, safePrompt, progressListener);
+            }
+        }
+
+        if (progressListener != null) {
+            Map<String, Object> failedMeta = new HashMap<>();
+            failedMeta.put("phase", "phase_2_finalize");
+            failedMeta.put("maxAttempts", maxAttempts);
+            failedMeta.put("result", "still_invalid_or_incomplete");
+            progressListener.onProgress(createAiJobProgress(
+                "phase_2_finalize_failed",
+                "Pha 2/3 chưa khôi phục đủ JSON hợp lệ, trả về kết quả tốt nhất hiện có",
+                2,
+                3,
+                failedMeta));
+        }
+
+        return latestRaw;
+    }
+
+    private String applyLocalEnrichmentToMenuJson(String prompt) {
+        // Extract JSON from prompt
+        String text = extractAiResultText(prompt);
+        if (text == null || text.isBlank()) {
+            return prompt;
+        }
+
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> root = objectMapper.readValue(text, Map.class);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> menus = (List<Map<String, Object>>) root.get("menu");
+            if (menus == null) {
+                return prompt;
+            }
+
+            // Apply local translation to all menu items
+            for (Map<String, Object> menuItem : menus) {
+                localTranslationService.enrichMenuItemWithLocalTranslation(menuItem);
+            }
+
+            // Rebuild JSON
+            String enrichedJson = objectMapper.writeValueAsString(root);
+            // Replace in prompt (try to find where JSON starts)
+            int jsonStartIdx = prompt.indexOf('{');
+            if (jsonStartIdx > 0) {
+                return prompt.substring(0, jsonStartIdx) + enrichedJson;
+            }
+            return enrichedJson;
+        } catch (Exception e) {
+            logger.debug("Failed to apply local enrichment", e);
+            return prompt;
+        }
+    }
+
+    private String runPhase3LanguageFill(
+            String currentOutput,
+            String originalPrompt,
+            AiAssistantGatewayService.ProgressListener progressListener) {
+        Set<String> missingFields = detectMissingLanguageFields(currentOutput);
+        if (missingFields == null || missingFields.isEmpty()) {
+            // No missing languages, return as-is
+            return currentOutput;
+        }
+
+        if (progressListener != null) {
+            Map<String, Object> meta = new HashMap<>();
+            meta.put("phase", "phase_3_fill_missing");
+            meta.put("missingCount", missingFields.size());
+            progressListener.onProgress(createAiJobProgress(
+                "phase_3_fill_missing",
+                "Pha 3/3: Tự động bổ sung bản dịch tiếng Anh và Trung Quốc",
+                1,
+                3,
+                meta));
+        }
+
+        String fillPrompt = buildLanguageFillPrompt(originalPrompt, currentOutput, missingFields);
+        Map<String, Object> params = new HashMap<>();
+        params.put("taskType", "menu_language_fill");
+        params.put("_phase3LanguageFill", true);
+
+        String filledRaw = fetchAiRawContent(fillPrompt, progressListener, params);
+
+        if (isValidMenuOutputPayload(filledRaw)) {
+            Set<String> stillMissing = detectMissingLanguageFields(filledRaw);
+            if (progressListener != null) {
+                Map<String, Object> meta = new HashMap<>();
+                meta.put("phase", "phase_3_fill_missing");
+                meta.put("result", "completed_with_languages");
+                meta.put("missingSolvedCount", missingFields.size() - (stillMissing == null ? 0 : stillMissing.size()));
+                progressListener.onProgress(createAiJobProgress(
+                    "phase_3_fill_missing_completed",
+                    "Pha 3/3 hoàn tất: Đã bổ sung đầy đủ các bản dịch",
+                    3,
+                    3,
+                    meta));
+            }
+            return filledRaw;
+        }
+
+        if (progressListener != null) {
+            Map<String, Object> meta = new HashMap<>();
+            meta.put("phase", "phase_3_fill_missing");
+            meta.put("result", "failed_to_fill_languages");
+            meta.put("fallback", "returning_phase_2_output");
+            progressListener.onProgress(createAiJobProgress(
+                "phase_3_fill_missing_failed",
+                "Pha 3/3 thất bại: Trả về output từ pha 2",
+                3,
+                3,
+                meta));
+        }
+
+        return currentOutput;
+    }
+
+    private boolean shouldRunMenuAutoContinue(String prompt, Map<String, Object> params) {
+        if (!aiMenuAutoContinueEnabled) {
+            return false;
+        }
+        String safePrompt = String.valueOf(prompt == null ? "" : prompt);
+        if (safePrompt.isBlank()) {
+            return false;
+        }
+        String taskTypeRaw = firstNonBlankString(
+            params != null ? params.get("taskType") : null,
+            params != null ? params.get("task") : null,
+            extractTaskTypeFromPromptJson(safePrompt));
+        String taskType = String.valueOf(taskTypeRaw == null ? "" : taskTypeRaw).toLowerCase();
+        boolean isMenuTask = taskType.contains("menu_design")
+            || taskType.contains("menu_i18n")
+            || taskType.contains("menu_lang")
+            || taskType.contains("menu_language");
+        if (!isMenuTask) {
+            return false;
+        }
+        return safePrompt.length() >= Math.max(20000, aiMenuAutoContinuePromptThresholdChars);
+    }
+
+    private boolean isValidMenuOutputPayload(String rawContent) {
+        String text = extractAiResultText(rawContent);
+        if (text.isBlank()) {
+            return false;
+        }
+        if (!isLikelyJsonPayload(text)) {
+            return false;
+        }
+        if (!isJsonStructureBalanced(text)) {
+            return false;
+        }
+        String normalized = text.toLowerCase();
+        return normalized.contains("\"menu\"")
+            || normalized.contains("\"menus\"")
+            || normalized.contains("\"menu_node\"");
+    }
+
+    private boolean isJsonStructureBalanced(String text) {
+        String raw = String.valueOf(text == null ? "" : text).trim();
+        if (raw.isBlank()) {
+            return false;
+        }
+        int brace = 0;
+        int bracket = 0;
+        boolean inString = false;
+        boolean escaped = false;
+        for (int i = 0; i < raw.length(); i++) {
+            char c = raw.charAt(i);
+            if (inString) {
+                if (escaped) {
+                    escaped = false;
+                } else if (c == '\\') {
+                    escaped = true;
+                } else if (c == '"') {
+                    inString = false;
+                }
+                continue;
+            }
+            if (c == '"') {
+                inString = true;
+                continue;
+            }
+            if (c == '{') {
+                brace++;
+            } else if (c == '}') {
+                brace--;
+            } else if (c == '[') {
+                bracket++;
+            } else if (c == ']') {
+                bracket--;
+            }
+            if (brace < 0 || bracket < 0) {
+                return false;
+            }
+        }
+        return !inString && brace == 0 && bracket == 0;
+    }
+
+    private String buildMenuAutoContinuePrompt(String originalPrompt, String previousOutput, int attempt, int maxAttempts) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("MENU TWO-PHASE FINALIZE (attempt ").append(attempt).append("/").append(maxAttempts).append(")\\n");
+        sb.append("Kết quả trước chưa hợp lệ hoặc bị cắt. Hãy trả về JSON cuối cùng hoàn chỉnh, không markdown, không code fence.\\n");
+        sb.append("BẮT BUỘC:\\n");
+        sb.append("1. Trả lại đầy đủ menu tree theo yêu cầu gốc, không rút gọn.\\n");
+        sb.append("2. Giữ đầy đủ 3 ngôn ngữ cho menu/table/field (vi,en,zh) theo contract.\\n");
+        sb.append("3. JSON phải đóng mở ngoặc đầy đủ và parse được ngay.\\n");
+        sb.append("4. Không thêm giải thích ngoài JSON.\\n\\n");
+        sb.append("=== ORIGINAL REQUEST CONTEXT ===\\n");
+        sb.append(truncateMiddle(String.valueOf(originalPrompt == null ? "" : originalPrompt), Math.max(20000, aiCodeStreamMaxPromptChars))).append("\\n\\n");
+        sb.append("=== PREVIOUS INCOMPLETE OUTPUT ===\\n");
+        sb.append(truncateMiddle(String.valueOf(previousOutput == null ? "" : previousOutput), Math.max(12000, aiMenuAutoContinueMaxPreviousOutputChars))).append("\\n");
+        return sb.toString();
+    }
+
+    private Set<String> detectMissingLanguageFields(String jsonStr) {
+        Set<String> missing = new HashSet<>();
+        String text = extractAiResultText(jsonStr);
+        if (text == null || text.isBlank()) {
+            return missing;
+        }
+        
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> root = objectMapper.readValue(text, Map.class);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> menus = (List<Map<String, Object>>) root.get("menu");
+            if (menus == null) {
+                return missing;
+            }
+            
+            for (Map<String, Object> menuItem : menus) {
+                detectMissingInMenuItem(menuItem, missing);
+            }
+        } catch (Exception e) {
+            // Ignore JSON parsing errors
+        }
+        return missing;
+    }
+
+    @SuppressWarnings("unchecked")
+    private void detectMissingInMenuItem(Map<String, Object> item, Set<String> missing) {
+        if (item == null) {
+            return;
+        }
+        
+        String id = String.valueOf(item.getOrDefault("id", "unknown"));
+        String label = String.valueOf(item.getOrDefault("label", ""));
+        
+        // Check label_en and label_zh
+        Object labelEn = item.get("label_en");
+        Object labelZh = item.get("label_zh");
+        
+        if ((labelEn == null || String.valueOf(labelEn).isBlank()) && !label.isBlank()) {
+            missing.add(id + "|label_en");
+        }
+        if ((labelZh == null || String.valueOf(labelZh).isBlank()) && !label.isBlank()) {
+            missing.add(id + "|label_zh");
+        }
+        
+        // Check f_header_en and f_header_zh
+        Object fHeader = item.get("f_header");
+        Object fHeaderEn = item.get("f_header_en");
+        Object fHeaderZh = item.get("f_header_zh");
+        
+        if ((fHeader != null && !String.valueOf(fHeader).isBlank()) || 
+            (fHeaderEn != null && !String.valueOf(fHeaderEn).isBlank())) {
+            if ((fHeaderEn == null || String.valueOf(fHeaderEn).isBlank()) && 
+                (fHeader != null && !String.valueOf(fHeader).isBlank())) {
+                missing.add(id + "|f_header_en");
+            }
+            if ((fHeaderZh == null || String.valueOf(fHeaderZh).isBlank()) && 
+                (fHeader != null && !String.valueOf(fHeader).isBlank())) {
+                missing.add(id + "|f_header_zh");
+            }
+        }
+        
+        // Recursively check children
+        List<Map<String, Object>> children = (List<Map<String, Object>>) item.get("children");
+        if (children != null) {
+            for (Map<String, Object> child : children) {
+                detectMissingInMenuItem(child, missing);
+            }
+        }
+    }
+
+    private String buildLanguageFillPrompt(String originalPrompt, String currentOutput, Set<String> missingFields) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("MENU THREE-PHASE FILL-MISSING-LANGUAGES\\n");
+        sb.append("JSON output đã hợp lệ, nhưng thiếu một số bản dịch tiếng Anh hoặc tiếng Trung.\\n");
+        sb.append("Hãy trả về JSON đầy đủ với các dịch missing được điền vào.\\n\\n");
+        sb.append("BẮT BUỘC:\\n");
+        sb.append("1. Dựa vào Vietnamese label/f_header, tạo English dịch chuyên nghiệp.\\n");
+        sb.append("2. Từ Vietnamese, tạo Chinese (Simplified) dịch chuyên nghiệp.\\n");
+        sb.append("3. Giữ nguyên tất cả fields khác không thay đổi.\\n");
+        sb.append("4. Trả về JSON hoàn chỉnh, không markdown, không code fence.\\n");
+        sb.append("5. JSON phải parse được ngay.\\n\\n");
+        sb.append("=== MISSING FIELDS ("); sb.append(missingFields.size()).append(") ===\\n");
+        missingFields.stream().limit(20).forEach(field -> sb.append("• ").append(field).append("\\n"));
+        if (missingFields.size() > 20) {
+            sb.append("... and ").append(missingFields.size() - 20).append(" more\\n");
+        }
+        sb.append("\\n=== CURRENT VALID OUTPUT ===\\n");
+        sb.append(truncateMiddle(String.valueOf(currentOutput == null ? "" : currentOutput), Math.max(15000, aiMenuAutoContinueMaxPreviousOutputChars))).append("\\n");
+        return sb.toString();
     }
 
     private boolean shouldFallbackToGemini(String rawContent) {
@@ -6449,7 +7164,7 @@ public class ApiSpringController {
                     "开始处理 AI 请求"), 0, 1, null));
 
                 StandardResponse syncResponse = new StandardResponse();
-                String rawContent = fetchAiRawContent(prompt, progress -> {
+                String rawContent = fetchAiRawContentWithMenuRecovery(prompt, progress -> {
                     if (!isAiJobCancelled(job)) {
                         Map<String, Object> mergedProgress = enrichAiProgressWithMergePreview(progress, params);
                         updateAiAsyncJobProgress(job, enrichAiProgressWithLineTextEdits(mergedProgress, job));
@@ -9575,5 +10290,167 @@ public class ApiSpringController {
 
         logger.debug("🔧 Escaped newlines in JSON: {} → {} chars", jsonStr.length(), result.length());
         return result.toString();
+    }
+
+    /**
+     * Endpoint: AI Cost Dashboard - Real-time metrics on API calls and cost
+     */
+    @GetMapping({"/ai-metrics-dashboard", "/api/ai-metrics-dashboard"})
+    public ResponseEntity<Map<String, Object>> getAiMetricsDashboard() {
+        UserAuthContext authCtx = extractUserAuthContext();
+        Map<String, Object> dashboard = new HashMap<>();
+
+        // Aggregated metrics
+        Map<String, Object> metrics = apiCallInstrumentationService.getMetricsBySummary();
+        dashboard.put("metrics", metrics);
+
+        // Cost breakdown by API type
+        Map<String, Object> breakdown = new HashMap<>();
+        breakdown.put("gemini_total_cost_vnd", metrics.getOrDefault("totalGeminiCostVND", 0));
+        breakdown.put("local_processes_saved_cost", metrics.getOrDefault("costSavingsVND", 0));
+        breakdown.put("estimated_monthly_cost_vnd", metrics.getOrDefault("estimatedMonthlyCostVND", 0));
+        dashboard.put("cost_breakdown", breakdown);
+
+        // Recent API calls (last 20)
+        dashboard.put("recent_calls", apiCallInstrumentationService.getMetrics());
+
+        dashboard.put("timestamp", System.currentTimeMillis());
+        dashboard.put("user", authCtx.principalId);
+
+        return ResponseEntity.ok(dashboard);
+    }
+
+    /**
+     * Endpoint: AI Quality Report - Validate menu output against CSM standards
+     */
+    @PostMapping({"/ai-quality-check", "/api/ai-quality-check"})
+    public ResponseEntity<Map<String, Object>> checkMenuQuality(@RequestBody Map<String, Object> body) {
+        UserAuthContext authCtx = extractUserAuthContext();
+        if (!authCtx.authenticated) {
+            return ResponseEntity.status(401).body(Map.of("error", "Authentication required"));
+        }
+
+        Object menuListObj = body.get("menus");
+        String requirement = String.valueOf(body.getOrDefault("requirement", ""));
+
+        if (!(menuListObj instanceof List)) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Invalid menus format"));
+        }
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> menus = (List<Map<String, Object>>) menuListObj;
+
+        MenuQualityGateService.QualityReport report = menuQualityGateService.validateMenuJson(menus, requirement);
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("quality_score", report.qualityScore);
+        response.put("passes_hard_gate", report.passesHardGate);
+        response.put("summary", report.summary);
+        response.put("stats", report.stats);
+        response.put("errors", report.getErrors());
+        response.put("warnings", report.getWarnings());
+
+        // Record this quality check
+        apiCallInstrumentationService.recordQualityCheck(
+            "menu_quality_gate",
+            menus.size(),
+            report.qualityScore,
+            report.passesHardGate
+        );
+
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Endpoint: Token Optimization - Calculate compression savings
+     */
+    @PostMapping({"/ai-token-optimize", "/api/ai-token-optimize"})
+    public ResponseEntity<Map<String, Object>> optimizeTokenUsage(@RequestBody Map<String, Object> body) {
+        UserAuthContext authCtx = extractUserAuthContext();
+        if (!authCtx.authenticated) {
+            return ResponseEntity.status(401).body(Map.of("error", "Authentication required"));
+        }
+
+        String content = String.valueOf(body.getOrDefault("content", ""));
+        String hint = String.valueOf(body.getOrDefault("hint", "menu")); // "menu" or "code"
+
+        if (content.isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Empty content"));
+        }
+
+        TokenOptimizationService.OptimizationResult result = tokenOptimizationService.optimize(content, hint);
+
+        Map<String, Object> costSavings = tokenOptimizationService.calculateCostSavings(
+            result.originalChars,
+            result.optimizedChars,
+            0.00003 // Approximate Gemini input token cost
+        );
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("original_chars", result.originalChars);
+        response.put("optimized_chars", result.optimizedChars);
+        response.put("reduction_percent", String.format("%.1f%%", result.reductionPercent));
+        response.put("optimized_content", result.optimizedContent.substring(0, Math.min(500, result.optimizedContent.length())) + "...");
+        response.put("compression_stats", result.compressionStats);
+        response.put("cost_savings", costSavings);
+
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Endpoint: Conversation Context - Get historical AI interactions for user
+     */
+    @GetMapping({"/ai-conversation-history", "/api/ai-conversation-history"})
+    public ResponseEntity<Map<String, Object>> getConversationHistory(
+            @RequestParam String appId,
+            @RequestParam String contextType,
+            @RequestParam(required = false, defaultValue = "user") String scope,
+            @RequestParam(required = false) String pName,
+            @RequestParam(required = false) Integer pType) {
+        UserAuthContext authCtx = extractUserAuthContext();
+        if (!authCtx.authenticated) {
+            return ResponseEntity.status(401).body(Map.of("error", "Authentication required"));
+        }
+
+        String normalizedScope = String.valueOf(scope == null ? "user" : scope).trim().toLowerCase();
+        AiConversationContextService.ConversationSession session;
+        if ("app_shared".equals(normalizedScope)) {
+            session = aiConversationContextService.getSharedAppSession(appId, contextType);
+        } else if ("code_target_shared".equals(normalizedScope)) {
+            session = aiConversationContextService.getSharedCodeTargetSession(appId, contextType, pName, pType);
+        } else {
+            session = aiConversationContextService.getSession(authCtx.principalId, appId, contextType);
+            normalizedScope = "user";
+        }
+
+        if (session == null) {
+            return ResponseEntity.ok(Map.of("message", "No conversation history", "turns", List.of()));
+        }
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("scope", normalizedScope);
+        response.put("session_id", session.sessionId);
+        response.put("total_turns", session.history.size());
+        response.put("total_input_chars", session.totalInputChars);
+        response.put("total_output_chars", session.totalOutputChars);
+        List<AiConversationContextService.ConversationTurn> recentTurns = session.history.size() <= 5
+            ? new ArrayList<>(session.history)
+            : new ArrayList<>(session.history.subList(session.history.size() - 5, session.history.size()));
+        response.put("summary", String.format(
+            "Session=%s scope=%s turns=%d input=%d output=%d",
+            session.sessionId,
+            normalizedScope,
+            session.history.size(),
+            session.totalInputChars,
+            session.totalOutputChars));
+        response.put("recent_turns", recentTurns);
+        response.put("aggregated_context_preview", aiConversationContextService.buildAggregatedContextWindow(
+            authCtx.principalId,
+            appId,
+            contextType,
+            pName,
+            pType));
+
+        return ResponseEntity.ok(response);
     }
 }

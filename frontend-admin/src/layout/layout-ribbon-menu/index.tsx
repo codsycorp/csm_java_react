@@ -741,7 +741,7 @@ export default function LayoutRibbonMenu({ menus, handleMenuSelect }: LayoutRibb
 	} as React.CSSProperties;
 
 	return (
-		<div className={classes.root} style={{ ...rootVars, background: ribbonPalette.rootBg }}>
+		<div data-csm-ribbon-root="true" className={classes.root} style={{ ...rootVars, background: ribbonPalette.rootBg }}>
 
 			{/* ── Tab row ─────────────────────────────────────────────────── */}
 			<div className={classes.tabRow} style={{ background: ribbonPalette.tabRowBg }}>

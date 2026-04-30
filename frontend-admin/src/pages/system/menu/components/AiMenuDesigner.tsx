@@ -689,8 +689,8 @@ async function callAiMenuMerge(params: {
 
 const AI_REQUEST_TABLE = "csm_ai_menu_requests";
 const MAX_CONTEXT_FILES = 8;
-const MAX_CONTEXT_FILE_CHARS = 50000;
-const MAX_CONTEXT_APPENDIX_CHARS = 80000;
+const MAX_CONTEXT_FILE_CHARS = 18000;
+const MAX_CONTEXT_APPENDIX_CHARS = 36000;
 
 function describeAiProgressKey(progress: AiProgressState | null): "completed" | "failed" | "cancelled" | "running" {
   if (!progress) return "running";
@@ -738,6 +738,65 @@ function buildAiRealtimeFingerprint(parts: unknown[]): string {
     .toLowerCase();
 }
 
+function getMenuPhaseLabel(stage: string, phase: string, locale: string = "vi"): string {
+  const stageLower = String(stage || "").toLowerCase().trim();
+  const phaseLower = String(phase || "").toLowerCase().trim();
+
+  const tr = (vi: string, en: string, zh: string) => {
+    const lang = String(locale || "vi").toLowerCase();
+    if (lang.startsWith("zh")) return zh;
+    if (lang.startsWith("en")) return en;
+    return vi;
+  };
+
+  // Menu 0/3-phase recovery stages (Phase 0 = Local, Phase 1 = Generate, Phase 2 = Finalize, Phase 3 = Fill)
+  if (stageLower === "phase_0_local_enrichment") {
+    return tr("Pha 0/3: Bổ sung dịch cục bộ (không chi phí API)", "Phase 0/3: Local enrichment (no API cost)", "阶段 0/3：本地补充（无 API 费用）");
+  }
+  if (stageLower === "phase_0_local_enrichment_completed") {
+    return tr("Pha 0/3 hoàn tất: Đã tối ưu hóa không cần API", "Phase 0/3 Completed: Optimized without API", "阶段 0/3 完成：已优化无需 API");
+  }
+  if (stageLower === "phase_1_generate") {
+    return tr("Pha 1/3: Sinh kết quả menu ban đầu", "Phase 1/3: Generating initial menu result", "阶段 1/3：生成初始菜单结果");
+  }
+  if (stageLower === "phase_1_generate_completed") {
+    return tr("Pha 1/3 hoàn tất: Kết quả đủ hợp lệ", "Phase 1/3 Completed: Output is valid", "阶段 1/3 完成：结果有效");
+  }
+  if (stageLower === "phase_2_finalize") {
+    return tr("Pha 2/3: Tự động hoàn thiện JSON cuối", "Phase 2/3: Auto-finalizing JSON output", "阶段 2/3：自动完成 JSON 输出");
+  }
+  if (stageLower === "phase_2_finalize_completed") {
+    return tr("Pha 2/3 hoàn tất: Khôi phục output đầy đủ", "Phase 2/3 Completed: Output recovered fully", "阶段 2/3 完成：已完全恢复输出");
+  }
+  if (stageLower === "phase_2_finalize_failed") {
+    return tr("Pha 2/3 thất bại: Sang pha 3", "Phase 2/3 Failed: Moving to phase 3", "阶段 2/3 失败：转到阶段 3");
+  }
+  if (stageLower === "phase_3_fill_missing") {
+    return tr("Pha 3/3: Bổ sung bản dịch tiếng Anh & Trung Quốc", "Phase 3/3: Filling missing translations", "阶段 3/3：填充缺失的翻译");
+  }
+  if (stageLower === "phase_3_fill_missing_completed") {
+    return tr("Pha 3/3 hoàn tất: Đầy đủ 3 ngôn ngữ", "Phase 3/3 Completed: All languages complete", "阶段 3/3 完成：3 种语言完成");
+  }
+  if (stageLower === "phase_3_fill_missing_failed") {
+    return tr("Pha 3/3 thất bại: Trả về bản tốt nhất", "Phase 3/3 Failed: Returning best output", "阶段 3/3 失败：返回最佳输出");
+  }
+
+  if (phaseLower === "phase_0_local_enrichment") {
+    return tr("Pha 0/3: Bổ sung dịch cục bộ (không chi phí API)", "Phase 0/3: Local enrichment (no API cost)", "阶段 0/3：本地补充（无 API 费用）");
+  }
+  if (phaseLower === "phase_1_generate") {
+    return tr("Pha 1/3: Sinh kết quả menu ban đầu", "Phase 1/3: Generating initial menu result", "阶段 1/3：生成初始菜单结果");
+  }
+  if (phaseLower === "phase_2_finalize") {
+    return tr("Pha 2/3: Tự động hoàn thiện JSON cuối", "Phase 2/3: Auto-finalizing JSON output", "阶段 2/3：自动完成 JSON 输出");
+  }
+  if (phaseLower === "phase_3_fill_missing") {
+    return tr("Pha 3/3: Bổ sung bản dịch tiếng Anh & Trung Quốc", "Phase 3/3: Filling missing translations", "阶段 3/3：填充缺失的翻译");
+  }
+
+  return "";
+}
+
 function buildAiRealtimeLogsFromPayload(
   payload: any,
   locale: string = "vi",
@@ -767,6 +826,9 @@ function buildAiRealtimeLogsFromPayload(
   const progressInfo = Number.isFinite(percent) && percent > 0 ? `${Math.round(percent)}%` : "0%";
 
   if (stage || phase || messageText || status) {
+    const stageLower = String(stage || "").toLowerCase().trim();
+    const phaseLabel = getMenuPhaseLabel(stage, phase, locale);
+    const displayMessage = messageText || phaseLabel || stage || phase || tr("AI cập nhật tiến độ", "AI progress update", "AI 进度更新");
     const detailParts = [
       `step=${stepInfo}`,
       `progress=${progressInfo}`,
@@ -774,9 +836,18 @@ function buildAiRealtimeLogsFromPayload(
       model ? `model=${model}` : "",
     ].filter(Boolean);
 
+    const isMiniSuccess = status === "completed" 
+      || stageLower === "phase_0_local_enrichment_completed"
+      || stageLower === "phase_1_generate_completed" 
+      || stageLower === "phase_2_finalize_completed"
+      || stageLower === "phase_3_fill_missing_completed";
+    const isMiniError = status === "failed" 
+      || stageLower === "phase_2_finalize_failed"
+      || stageLower === "phase_3_fill_missing_failed";
+
     logs.push({
-      level: status === "failed" ? "error" : status === "completed" ? "success" : "info",
-      message: messageText || stage || phase || tr("AI cập nhật tiến độ", "AI progress update", "AI 进度更新"),
+      level: isMiniError ? "error" : isMiniSuccess ? "success" : "info",
+      message: displayMessage,
       detail: detailParts.length > 0 ? detailParts.join(" • ") : undefined,
       fingerprint: buildAiRealtimeFingerprint(["core", status, stage, phase, messageText, current, total, Math.round(percent || 0), model]),
     });
@@ -1285,6 +1356,25 @@ export function buildAiMenuRequestPayload(
   sampleMenus?: MenuItemType[],
   contextFiles?: JsonContextFile[],
 ) {
+  const toPromptContextFile = (file: JsonContextFile) => {
+    const role = String(file.contextRole || "general_text");
+    const isAuthoritative = file.authoritative === true;
+    const maxByRole = role === "legacy_json"
+      ? 22000
+      : role === "system_requirement"
+        ? 18000
+        : isAuthoritative
+          ? 14000
+          : 8000;
+    return {
+      name: file.name,
+      summary: trimToMax(String(file.summary || ""), 240),
+      context_role: file.contextRole,
+      authoritative: isAuthoritative,
+      content: trimToMax(file.content, Math.min(MAX_CONTEXT_FILE_CHARS, maxByRole)),
+    };
+  };
+
   const normalizedRequest = trimToMax(String(requestText || "").trim(), 12000);
   const currentMenuCompact = Array.isArray(currentMenus) && currentMenus.length > 0
     ? buildCompactMenuContext(currentMenus, 150)
@@ -1305,13 +1395,7 @@ export function buildAiMenuRequestPayload(
       ...(sampleMenuCompact ? { sample_menu_compact: sampleMenuCompact } : {}),
       detected_modules: extractRequirementModules(normalizedRequest, 20),
       detected_tables: extractRequirementTables(normalizedRequest, 30),
-      context_files: (contextFiles || []).map((file) => ({
-        name: file.name,
-        summary: file.summary,
-        context_role: file.contextRole,
-        authoritative: file.authoritative === true,
-        content: trimToMax(file.content, MAX_CONTEXT_FILE_CHARS),
-      })),
+      context_files: (contextFiles || []).map(toPromptContextFile),
     },
     current_task: {
       task_type: "menu_design_generate",
@@ -1337,6 +1421,25 @@ export function buildAiMenuRefinePayload(
   isSampleBase?: boolean,
   contextFiles?: JsonContextFile[],
 ) {
+  const toPromptContextFile = (file: JsonContextFile) => {
+    const role = String(file.contextRole || "general_text");
+    const isAuthoritative = file.authoritative === true;
+    const maxByRole = role === "legacy_json"
+      ? 24000
+      : role === "system_requirement"
+        ? 16000
+        : isAuthoritative
+          ? 12000
+          : 7000;
+    return {
+      name: file.name,
+      summary: trimToMax(String(file.summary || ""), 240),
+      context_role: file.contextRole,
+      authoritative: isAuthoritative,
+      content: trimToMax(file.content, Math.min(MAX_CONTEXT_FILE_CHARS, maxByRole)),
+    };
+  };
+
   const targetPhrases = extractExplicitTargetPhrases(refineRequest, 20);
   const incrementalSafetyDirective = [
     "INCREMENTAL SAFETY (BAT BUOC):",
@@ -1367,13 +1470,7 @@ export function buildAiMenuRefinePayload(
         : undefined,
       detected_modules: extractRequirementModules(combinedRequirement, 25),
       detected_tables: extractRequirementTables(combinedRequirement, 40),
-      context_files: (contextFiles || []).map((file) => ({
-        name: file.name,
-        summary: file.summary,
-        context_role: file.contextRole,
-        authoritative: file.authoritative === true,
-        content: trimToMax(file.content, MAX_CONTEXT_FILE_CHARS),
-      })),
+      context_files: (contextFiles || []).map(toPromptContextFile),
     },
     current_task: {
       task_type: "menu_design_refine",
@@ -1381,7 +1478,7 @@ export function buildAiMenuRefinePayload(
       base_requirement_text: trimToMax(String(baseRequest || ""), 9000),
       refine_requirement_text: trimToMax(`${String(refineRequest || "")}\n\n${incrementalSafetyDirective}`, 5000),
       requirement_text: combinedRequirement,
-      previous_result_json: trimToMax(String(previousResultJson || ""), isSampleBase ? 90000 : 30000),
+      previous_result_json: trimToMax(String(previousResultJson || ""), isSampleBase ? 45000 : 18000),
       use_sample_as_base: !!isSampleBase,
     },
     output_contract: {
@@ -2963,10 +3060,29 @@ export function buildAiIncrementalUpdatePayload(
   currentMenusFull: MenuItemType[],
   contextFiles?: JsonContextFile[],
 ) {
+  const toPromptContextFile = (file: JsonContextFile) => {
+    const role = String(file.contextRole || "general_text");
+    const isAuthoritative = file.authoritative === true;
+    const maxByRole = role === "legacy_json"
+      ? 20000
+      : role === "system_requirement"
+        ? 15000
+        : isAuthoritative
+          ? 10000
+          : 6000;
+    return {
+      name: file.name,
+      summary: trimToMax(String(file.summary || ""), 240),
+      context_role: file.contextRole,
+      authoritative: isAuthoritative,
+      content: trimToMax(file.content, Math.min(MAX_CONTEXT_FILE_CHARS, maxByRole)),
+    };
+  };
+
   const currentMenuJson = JSON.stringify(
     { menu: currentMenusFull },
     null,
-    2,
+    0,
   );
 
   return {
@@ -2989,14 +3105,11 @@ export function buildAiIncrementalUpdatePayload(
       menu_type_catalog: buildMenuTypeCatalog(),
       menu_logic_guide: buildMenuOrganizationGuide(),
       current_menu_full_json: currentMenuJson,
+      current_menu_compact: Array.isArray(currentMenusFull) && currentMenusFull.length > 0
+        ? buildCompactMenuContext(currentMenusFull, 220)
+        : "(khong co menu hien tai)",
       current_menu_node_count: Array.isArray(currentMenusFull) ? currentMenusFull.length : 0,
-      context_files: (contextFiles || []).map((file) => ({
-        name: file.name,
-        summary: file.summary,
-        context_role: file.contextRole,
-        authoritative: file.authoritative === true,
-        content: trimToMax(file.content, MAX_CONTEXT_FILE_CHARS),
-      })),
+      context_files: (contextFiles || []).map(toPromptContextFile),
     },
     current_task: {
       task_type: "menu_design_incremental_update",
