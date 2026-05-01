@@ -74,13 +74,7 @@ server:
   # HTTP/2 support
   http2:
     enabled: true
-  
-  # Compression at server level (Undertow)
-  compression:
-    enabled: true
 
-# Cache control headers
-server:
   servlet:
     session:
       # Cookie settings for performance
@@ -88,6 +82,10 @@ server:
         secure: true
         http-only: true
         same-site: lax
+  
+  # Compression at server level (Undertow)
+  compression:
+    enabled: true
 
 # Logging optimization (reduce I/O)
 logging:

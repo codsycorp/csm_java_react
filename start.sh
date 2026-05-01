@@ -416,7 +416,12 @@ else
     log "✗ Failed to start"
     if [ -f "$LOG_DIR/console.log" ]; then
         log "Recent errors:"
-        tail -20 "$LOG_DIR/console.log"
+        tail -120 "$LOG_DIR/console.log"
+        local_root_cause=$(grep -n "Caused by:\|InvalidConfigDataPropertyException\|Application run failed" "$LOG_DIR/console.log" | tail -n 1 | cut -d: -f1 || true)
+        if [ -n "$local_root_cause" ]; then
+            log "Root cause excerpt:"
+            sed -n "${local_root_cause},$((local_root_cause + 25))p" "$LOG_DIR/console.log"
+        fi
     fi
     exit 1
 fi
