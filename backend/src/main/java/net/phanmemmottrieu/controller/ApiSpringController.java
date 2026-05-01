@@ -768,6 +768,478 @@ public class ApiSpringController {
         return emitter;
     }
 
+    @PostMapping(value = {"/ai/propose-edits", "/api/ai/propose-edits"})
+    public ResponseEntity<Map<String, Object>> proposeEdits(@RequestBody Map<String, Object> body) {
+        try {
+            long startedAt = System.currentTimeMillis();
+            UserAuthContext authCtx = extractUserAuthContext();
+            if (!authCtx.authenticated) {
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                        .body(Map.of("ok", false, "error", "Authentication required"));
+            }
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> target = body.get("target") instanceof Map<?, ?>
+                    ? new LinkedHashMap<>((Map<String, Object>) body.get("target"))
+                    : new LinkedHashMap<>();
+
+            String kind = str(target.get("kind"), "");
+            String currentContent = strKeep(body.get("currentContent"), "");
+            List<Map<String, Object>> operations = toOperationList(body.get("operations"));
+
+            String baseHash = str(body.get("baseHash"), "");
+            if (baseHash.isBlank() && !currentContent.isBlank()) {
+                baseHash = sha256Hex(currentContent);
+            }
+
+            if (operations.isEmpty()) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> options = body.get("options") instanceof Map<?, ?>
+                        ? (Map<String, Object>) body.get("options")
+                        : Collections.emptyMap();
+                String preferStyle = str(options.get("preferOperationStyle"), "");
+                operations = buildNoopOperations(kind, preferStyle);
+            }
+
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("ok", true);
+            out.put("proposalId", UUID.randomUUID().toString());
+            out.put("target", target);
+            out.put("baseVersion", parseIntSafe(body.get("baseVersion"), 0));
+            out.put("baseHash", baseHash);
+            out.put("operationStyle", inferOperationStyle(kind, operations));
+            out.put("operations", operations);
+            out.put("summary", "Proposed editable operations for " + (kind.isBlank() ? "unknown" : kind));
+            out.put("risk", Map.of(
+                    "touchedPercentEstimate", estimateTouchedPercent(currentContent, operations),
+                    "highRisk", false,
+                    "reasons", Collections.emptyList()));
+            out.put("meta", Map.of(
+                    "model", "local_contract",
+                    "fallbackUsed", false,
+                    "tokenEstimate", Map.of("input", 0, "output", 0)));
+
+                Map<String, Object> telemetry = new LinkedHashMap<>();
+                telemetry.put("timestamp", System.currentTimeMillis());
+                telemetry.put("flow", "ai-propose-edits");
+                telemetry.put("appId", str(target.get("appId"), ""));
+                telemetry.put("contextType", str(target.get("contextType"), ""));
+                telemetry.put("taskType", str(target.get("kind"), "unknown"));
+                telemetry.put("responseMode", "propose");
+                telemetry.put("model", "local_contract");
+                telemetry.put("promptChars", strKeep(body.get("userIntent"), "").length());
+                telemetry.put("promptTokens", 0);
+                telemetry.put("outputChars", objectMapper.writeValueAsString(operations).length());
+                telemetry.put("completionTokens", 0);
+                telemetry.put("estimatedCostUsd", 0);
+                telemetry.put("elapsedMs", Math.max(0L, System.currentTimeMillis() - startedAt));
+                apiCallInstrumentationService.recordAiTelemetry(telemetry);
+            return ResponseEntity.ok(out);
+        } catch (Exception ex) {
+            logger.error("ApiSpringController: propose-edits error: {}", ex.getMessage(), ex);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("ok", false, "error", "propose-edits failed: " + ex.getMessage()));
+        }
+    }
+
+    @PostMapping(value = {"/ai/apply-edits", "/api/ai/apply-edits"})
+    public ResponseEntity<Map<String, Object>> applyEdits(@RequestBody Map<String, Object> body) {
+        try {
+            long startedAt = System.currentTimeMillis();
+            UserAuthContext authCtx = extractUserAuthContext();
+            if (!authCtx.authenticated) {
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                        .body(Map.of("ok", false, "error", "Authentication required"));
+            }
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> target = body.get("target") instanceof Map<?, ?>
+                    ? new LinkedHashMap<>((Map<String, Object>) body.get("target"))
+                    : new LinkedHashMap<>();
+            String kind = str(target.get("kind"), "");
+            String applyMode = str(body.get("applyMode"), "dry_run");
+            String currentContent = strKeep(body.get("currentContent"), "");
+            List<Map<String, Object>> operations = toOperationList(body.get("operations"));
+
+            if (operations.isEmpty()) {
+                return ResponseEntity.badRequest()
+                        .body(Map.of("ok", false, "error", "operations is empty"));
+            }
+
+            ApplyEditsResult result;
+            if ("menu_json".equalsIgnoreCase(kind)) {
+                result = applyMenuJsonOperations(currentContent, operations);
+            } else if ("code_doc".equalsIgnoreCase(kind)) {
+                result = applyCodeDocOperations(currentContent, operations);
+            } else {
+                return ResponseEntity.badRequest()
+                        .body(Map.of("ok", false, "error", "Unsupported target.kind: " + kind));
+            }
+
+            int nextVersion = parseIntSafe(body.get("baseVersion"), 0) + ("apply".equalsIgnoreCase(applyMode) ? 1 : 0);
+            String nextHash = sha256Hex(result.resultContent);
+
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("ok", result.conflicts.isEmpty());
+            out.put("applyMode", applyMode);
+            out.put("nextVersion", nextVersion);
+            out.put("nextHash", nextHash);
+            out.put("resultContent", result.resultContent);
+            out.put("appliedOperations", result.appliedOperationIds);
+            out.put("skippedOperations", result.skippedOperationIds);
+            out.put("conflicts", result.conflicts);
+            out.put("hunks", result.hunks);
+            out.put("validation", Map.of(
+                    "syntaxValid", true,
+                    "schemaValid", true,
+                    "warnings", Collections.emptyList()));
+
+                Map<String, Object> telemetry = new LinkedHashMap<>();
+                telemetry.put("timestamp", System.currentTimeMillis());
+                telemetry.put("flow", "ai-apply-edits");
+                telemetry.put("appId", str(target.get("appId"), ""));
+                telemetry.put("contextType", str(target.get("contextType"), ""));
+                telemetry.put("taskType", kind);
+                telemetry.put("responseMode", "apply");
+                telemetry.put("model", "local_contract");
+                telemetry.put("promptChars", strKeep(currentContent, "").length());
+                telemetry.put("promptTokens", 0);
+                telemetry.put("outputChars", strKeep(result.resultContent, "").length());
+                telemetry.put("completionTokens", 0);
+                telemetry.put("estimatedCostUsd", 0);
+                telemetry.put("attachments", operations.size());
+                telemetry.put("elapsedMs", Math.max(0L, System.currentTimeMillis() - startedAt));
+                apiCallInstrumentationService.recordAiTelemetry(telemetry);
+            return ResponseEntity.ok(out);
+        } catch (Exception ex) {
+            logger.error("ApiSpringController: apply-edits error: {}", ex.getMessage(), ex);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("ok", false, "error", "apply-edits failed: " + ex.getMessage()));
+        }
+    }
+
+    private static final class ApplyEditsResult {
+        private String resultContent;
+        private final List<String> appliedOperationIds = new ArrayList<>();
+        private final List<String> skippedOperationIds = new ArrayList<>();
+        private final List<Map<String, Object>> conflicts = new ArrayList<>();
+        private final List<Map<String, Object>> hunks = new ArrayList<>();
+    }
+
+    private List<Map<String, Object>> toOperationList(Object raw) {
+        if (!(raw instanceof List<?> list)) {
+            return Collections.emptyList();
+        }
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Object item : list) {
+            if (item instanceof Map<?, ?> m) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> casted = new LinkedHashMap<>((Map<String, Object>) m);
+                out.add(casted);
+            }
+        }
+        return out;
+    }
+
+    private String inferOperationStyle(String kind, List<Map<String, Object>> operations) {
+        if (operations.isEmpty()) {
+            return "none";
+        }
+        String firstType = str(operations.get(0).get("type"), "");
+        if ("menu_json".equalsIgnoreCase(kind)) {
+            return firstType.isBlank() ? "id_patch" : firstType;
+        }
+        if ("code_doc".equalsIgnoreCase(kind)) {
+            return firstType.isBlank() ? "search_replace" : firstType;
+        }
+        return firstType.isBlank() ? "mixed" : firstType;
+    }
+
+    private List<Map<String, Object>> buildNoopOperations(String kind, String preferStyle) {
+        Map<String, Object> op = new LinkedHashMap<>();
+        op.put("id", "op_noop_1");
+        if ("menu_json".equalsIgnoreCase(kind) || "id_patch".equalsIgnoreCase(preferStyle)) {
+            op.put("type", "node_patch");
+            op.put("selector", Map.of("nodeId", ""));
+            op.put("patch", Collections.emptyMap());
+        } else {
+            op.put("type", "search_replace");
+            op.put("selector", Map.of("search", "", "expectedOccurrences", 1));
+            op.put("replace", "");
+        }
+        return List.of(op);
+    }
+
+    private double estimateTouchedPercent(String currentContent, List<Map<String, Object>> operations) {
+        int base = Math.max(1, currentContent == null ? 0 : currentContent.length());
+        int touched = 0;
+        for (Map<String, Object> op : operations) {
+            touched += strKeep(op.get("replace"), "").length();
+            Object patchObj = op.get("patch");
+            if (patchObj instanceof Map<?, ?> patch) {
+                touched += objectMapper.valueToTree(patch).toString().length();
+            }
+        }
+        return Math.min(100.0, (touched * 100.0) / base);
+    }
+
+    private ApplyEditsResult applyMenuJsonOperations(String currentContent, List<Map<String, Object>> operations)
+            throws IOException {
+        ApplyEditsResult result = new ApplyEditsResult();
+        if (currentContent == null || currentContent.isBlank()) {
+            result.resultContent = "{\"menu\":[]}";
+        } else {
+            result.resultContent = currentContent;
+        }
+
+        Object parsed = objectMapper.readValue(result.resultContent, Object.class);
+        Object menuContainer = parsed;
+        boolean wrappedByMenu = false;
+        if (parsed instanceof Map<?, ?> map && map.get("menu") != null) {
+            menuContainer = map.get("menu");
+            wrappedByMenu = true;
+        }
+        if (!(menuContainer instanceof List<?>)) {
+            result.conflicts.add(Map.of("operationId", "_all", "reason", "invalid_menu_json", "detail", "menu must be array"));
+            return result;
+        }
+
+        @SuppressWarnings("unchecked")
+        List<Object> menuList = (List<Object>) menuContainer;
+
+        for (Map<String, Object> op : operations) {
+            String opId = str(op.get("id"), UUID.randomUUID().toString());
+            String type = str(op.get("type"), "node_patch");
+            if (!"node_patch".equalsIgnoreCase(type)) {
+                result.skippedOperationIds.add(opId);
+                result.conflicts.add(Map.of("operationId", opId, "reason", "unsupported_operation", "detail", type));
+                continue;
+            }
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> selector = op.get("selector") instanceof Map<?, ?>
+                    ? (Map<String, Object>) op.get("selector")
+                    : Collections.emptyMap();
+            @SuppressWarnings("unchecked")
+            Map<String, Object> patch = op.get("patch") instanceof Map<?, ?>
+                    ? (Map<String, Object>) op.get("patch")
+                    : Collections.emptyMap();
+            String nodeId = str(selector.get("nodeId"), "");
+
+            if (nodeId.isBlank() || patch.isEmpty()) {
+                result.skippedOperationIds.add(opId);
+                result.conflicts.add(Map.of("operationId", opId, "reason", "invalid_operation", "detail", "nodeId/patch missing"));
+                continue;
+            }
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> found = findMenuNodeByIdObject(menuList, nodeId);
+            if (found == null) {
+                result.skippedOperationIds.add(opId);
+                result.conflicts.add(Map.of("operationId", opId, "reason", "node_not_found", "detail", nodeId));
+                continue;
+            }
+
+            Map<String, Object> before = new LinkedHashMap<>(found);
+            for (Map.Entry<String, Object> entry : patch.entrySet()) {
+                found.put(entry.getKey(), entry.getValue());
+            }
+            result.appliedOperationIds.add(opId);
+
+            int[] lines = estimateNodeLineRange(result.resultContent, nodeId);
+            result.hunks.add(Map.of(
+                    "hunkId", "hunk_" + opId,
+                    "action", "edit",
+                    "fromLine", lines[0],
+                    "toLine", lines[1],
+                    "previewOld", truncateMiddle(objectMapper.writeValueAsString(before), 240),
+                    "previewNew", truncateMiddle(objectMapper.writeValueAsString(found), 240)));
+        }
+
+        if (wrappedByMenu && parsed instanceof Map<?, ?> map) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> mutable = new LinkedHashMap<>((Map<String, Object>) map);
+            mutable.put("menu", menuList);
+            result.resultContent = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(mutable);
+        } else {
+            result.resultContent = objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(menuList);
+        }
+        return result;
+    }
+
+    private Map<String, Object> findMenuNodeByIdObject(List<Object> nodes, String nodeId) {
+        for (Object rawNode : nodes) {
+            if (!(rawNode instanceof Map<?, ?> mapNode)) {
+                continue;
+            }
+            @SuppressWarnings("unchecked")
+            Map<String, Object> node = (Map<String, Object>) mapNode;
+            if (nodeId.equals(str(node.get("id"), ""))) {
+                return node;
+            }
+            Object childrenRaw = node.get("children");
+            if (childrenRaw instanceof List<?> children) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> found = findMenuNodeByIdObject((List<Object>) children, nodeId);
+                if (found != null) {
+                    return found;
+                }
+            }
+        }
+        return null;
+    }
+
+    private int[] estimateNodeLineRange(String json, String nodeId) {
+        String needle = "\"id\"";
+        int pos = json.indexOf(needle + " : \"" + nodeId + "\"");
+        if (pos < 0) {
+            pos = json.indexOf("\"id\":\"" + nodeId + "\"");
+        }
+        if (pos < 0) {
+            pos = json.indexOf(nodeId);
+        }
+        if (pos < 0) {
+            return new int[] {1, 1};
+        }
+        int line = 1;
+        for (int i = 0; i < pos && i < json.length(); i++) {
+            if (json.charAt(i) == '\n') {
+                line++;
+            }
+        }
+        return new int[] {line, line};
+    }
+
+    private ApplyEditsResult applyCodeDocOperations(String currentContent, List<Map<String, Object>> operations) {
+        ApplyEditsResult result = new ApplyEditsResult();
+        String working = String.valueOf(currentContent == null ? "" : currentContent);
+
+        for (Map<String, Object> op : operations) {
+            String opId = str(op.get("id"), UUID.randomUUID().toString());
+            String type = str(op.get("type"), "search_replace");
+            if (!"search_replace".equalsIgnoreCase(type)) {
+                result.skippedOperationIds.add(opId);
+                result.conflicts.add(Map.of("operationId", opId, "reason", "unsupported_operation", "detail", type));
+                continue;
+            }
+
+            @SuppressWarnings("unchecked")
+            Map<String, Object> selector = op.get("selector") instanceof Map<?, ?>
+                    ? (Map<String, Object>) op.get("selector")
+                    : Collections.emptyMap();
+            String search = strKeep(selector.get("search"), "");
+            String beforeContext = strKeep(selector.get("beforeContext"), "");
+            String afterContext = strKeep(selector.get("afterContext"), "");
+            int expectedOccurrences = Math.max(1, parseIntSafe(selector.get("expectedOccurrences"), 1));
+            String replace = strKeep(op.get("replace"), "");
+
+            if (search.isBlank()) {
+                result.skippedOperationIds.add(opId);
+                result.conflicts.add(Map.of("operationId", opId, "reason", "invalid_operation", "detail", "search is blank"));
+                continue;
+            }
+
+            String workingSnapshot = working;
+            List<Integer> candidates = findAllIndexes(workingSnapshot, search);
+            if (!beforeContext.isBlank()) {
+                candidates.removeIf(idx -> !containsNearBefore(workingSnapshot, idx, beforeContext));
+            }
+            if (!afterContext.isBlank()) {
+                candidates.removeIf(idx -> !containsNearAfter(workingSnapshot, idx + search.length(), afterContext));
+            }
+
+            if (candidates.isEmpty()) {
+                result.skippedOperationIds.add(opId);
+                result.conflicts.add(Map.of("operationId", opId, "reason", "search_not_found", "detail", truncateMiddle(search, 120)));
+                continue;
+            }
+            if (candidates.size() != expectedOccurrences) {
+                result.skippedOperationIds.add(opId);
+                result.conflicts.add(Map.of("operationId", opId, "reason", "ambiguous_match", "detail", "matches=" + candidates.size()));
+                continue;
+            }
+
+            int idx = candidates.get(0);
+            int fromLine = lineNumberAtOffset(working, idx);
+            int toLine = lineNumberAtOffset(working, idx + search.length());
+            String oldPreview = truncateMiddle(search, 240);
+            String newPreview = truncateMiddle(replace, 240);
+
+            working = working.substring(0, idx) + replace + working.substring(idx + search.length());
+            result.appliedOperationIds.add(opId);
+            result.hunks.add(Map.of(
+                    "hunkId", "hunk_" + opId,
+                    "action", "edit",
+                    "fromLine", fromLine,
+                    "toLine", toLine,
+                    "previewOld", oldPreview,
+                    "previewNew", newPreview));
+        }
+
+        result.resultContent = working;
+        return result;
+    }
+
+    private List<Integer> findAllIndexes(String text, String needle) {
+        List<Integer> out = new ArrayList<>();
+        if (text == null || needle == null || needle.isEmpty()) {
+            return out;
+        }
+        int from = 0;
+        while (from <= text.length() - needle.length()) {
+            int idx = text.indexOf(needle, from);
+            if (idx < 0) break;
+            out.add(idx);
+            from = idx + Math.max(1, needle.length());
+        }
+        return out;
+    }
+
+    private boolean containsNearBefore(String text, int idx, String beforeContext) {
+        int start = Math.max(0, idx - 1500);
+        String window = text.substring(start, Math.max(start, idx));
+        return window.contains(beforeContext);
+    }
+
+    private boolean containsNearAfter(String text, int idx, String afterContext) {
+        int end = Math.min(text.length(), idx + 1500);
+        String window = text.substring(Math.min(idx, end), end);
+        return window.contains(afterContext);
+    }
+
+    private int lineNumberAtOffset(String text, int offset) {
+        String safeText = text == null ? "" : text;
+        int capped = Math.max(0, Math.min(offset, safeText.length()));
+        int line = 1;
+        for (int i = 0; i < capped; i++) {
+            if (safeText.charAt(i) == '\n') line++;
+        }
+        return line;
+    }
+
+    private int parseIntSafe(Object raw, int fallback) {
+        if (raw == null) return fallback;
+        try {
+            return Integer.parseInt(String.valueOf(raw).trim());
+        } catch (Exception ignored) {
+            return fallback;
+        }
+    }
+
+    private String sha256Hex(String raw) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(String.valueOf(raw == null ? "" : raw).getBytes(StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder(hash.length * 2);
+            for (byte b : hash) {
+                sb.append(String.format("%02x", b));
+            }
+            return sb.toString();
+        } catch (Exception ignored) {
+            return String.valueOf(raw == null ? "" : raw).hashCode() + "";
+        }
+    }
+
     private String buildCodingPrompt(String message, String currentCode, String language,
             String contextType, String responseMode, Object attachmentsRaw) {
         return buildCodingPrompt(message, currentCode, language, contextType, responseMode, attachmentsRaw,

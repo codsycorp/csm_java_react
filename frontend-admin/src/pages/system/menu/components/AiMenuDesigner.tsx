@@ -3171,6 +3171,27 @@ function buildPatchOpsFromIdBasedChanges(
   return ops;
 }
 
+function buildMenuNodePatchOperationsFromIdChanges(changes: Array<Record<string, any>>) {
+  return (Array.isArray(changes) ? changes : [])
+    .map((change, idx) => {
+      const nodeId = String(change?.id || "").trim();
+      if (!nodeId) return null;
+      const patch: Record<string, any> = {};
+      Object.entries(change || {}).forEach(([key, value]) => {
+        if (key === "id") return;
+        patch[key] = value;
+      });
+      if (Object.keys(patch).length === 0) return null;
+      return {
+        id: `op_menu_${idx + 1}_${nodeId}`,
+        type: "node_patch",
+        selector: { nodeId },
+        patch,
+      };
+    })
+    .filter(Boolean) as Array<Record<string, any>>;
+}
+
 /**
  * Kịch bản 2: Incremental Update payload.
  * AI nhận toàn bộ cây menu hiện tại + yêu cầu thay đổi.
@@ -3681,9 +3702,9 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
         if (operationScenario === "incremental_update" && decodedCurrentMenus.length > 0) {
           const idChanges = extractIdBasedMenuChanges(directParsed);
           if (idChanges.length > 0) {
-            const patched = applyIdBasedMenuChanges(decodedCurrentMenus, idChanges);
-            if (patched.appliedIds.length > 0) {
-              const idPatchOps = buildPatchOpsFromIdBasedChanges(decodedCurrentMenus, idChanges);
+            const idPatchOps = buildPatchOpsFromIdBasedChanges(decodedCurrentMenus, idChanges);
+            void applyIdChangesViaBackend(decodedCurrentMenus, idChanges).then((patched) => {
+              if (patched.appliedIds.length <= 0) return;
               const wrappedDraft = JSON.stringify({ menu: patched.menus }, null, 2);
               syncPatchReviewState(idPatchOps.length > 0 ? idPatchOps : nextPatchOps);
               setMergeStats(buildMergeStatsFromPatchOps(idPatchOps.length > 0 ? idPatchOps : nextPatchOps));
@@ -3692,8 +3713,8 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
                 ...(prev || {}),
                 message: `Da ap dung ${patched.appliedIds.length}/${idChanges.length} thay doi theo id`,
               }));
-              return;
-            }
+            });
+            return;
           }
         }
 
@@ -4043,6 +4064,57 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
       return null;
     } finally {
       setMergeLoading(false);
+    }
+  };
+
+  const applyIdChangesViaBackend = async (
+    baseMenus: MenuItemType[],
+    idChanges: Array<Record<string, any>>,
+  ): Promise<{ menus: MenuItemType[]; appliedIds: string[]; missingIds: string[] }> => {
+    const fallback = applyIdBasedMenuChanges(baseMenus, idChanges);
+    try {
+      const operations = buildMenuNodePatchOperationsFromIdChanges(idChanges);
+      if (operations.length === 0) return fallback;
+
+      const currentContent = JSON.stringify({ menu: baseMenus }, null, 2);
+      const response = await request.post("ai/apply-edits", {
+        json: {
+          target: {
+            kind: "menu_json",
+            appId: appId || "",
+            contextType: "menu",
+          },
+          baseVersion: 0,
+          currentContent,
+          operations,
+          applyMode: "dry_run",
+        },
+      }).json<any>();
+
+      const resultContent = String(response?.resultContent || "").trim();
+      if (!resultContent) return fallback;
+
+      const parsed = tryExtractMenuPayloadFromMixedText(resultContent);
+      const menus = normalizeMenuList(extractMenuListFromPayload(parsed));
+      if (menus.length <= 0) return fallback;
+
+      const appliedIds = Array.isArray(response?.appliedOperations)
+        ? response.appliedOperations.map((x: any) => String(x || "")).filter(Boolean)
+        : fallback.appliedIds;
+      const missingIds = Array.isArray(response?.conflicts)
+        ? response.conflicts
+          .filter((c: any) => String(c?.reason || "") === "node_not_found")
+          .map((c: any) => String(c?.detail || ""))
+          .filter(Boolean)
+        : [];
+
+      return {
+        menus,
+        appliedIds,
+        missingIds,
+      };
+    } catch {
+      return fallback;
     }
   };
 
@@ -4849,7 +4921,7 @@ export function AiMenuDesigner({ appId, currentMenus, onApply }: AiMenuDesignerP
       if (menuPayload.length === 0 && operationScenario === "incremental_update" && decodedCurrentMenus.length > 0) {
         const idChanges = extractIdBasedMenuChanges(payload);
         if (idChanges.length > 0) {
-          const patched = applyIdBasedMenuChanges(decodedCurrentMenus, idChanges);
+          const patched = await applyIdChangesViaBackend(decodedCurrentMenus, idChanges);
           if (patched.appliedIds.length > 0) {
             finalMenus = normalizeMenuList(patched.menus);
             const idPatchOps = buildPatchOpsFromIdBasedChanges(decodedCurrentMenus, idChanges);

@@ -1181,6 +1181,69 @@ export default function CodeEditor() {
 				throw new Error(t("system.developer.ai.requestFailed"));
 			}
 
+			const parsedEnvelopeCandidate = (() => {
+				const raw = extractValidJsonCandidate(finalResponse);
+				if (!raw) return null;
+				try {
+					const parsed = JSON.parse(raw);
+					return parsed && typeof parsed === "object" ? parsed : null;
+				} catch {
+					return null;
+				}
+			})();
+
+			if (Array.isArray(parsedEnvelopeCandidate?.operations) && parsedEnvelopeCandidate.operations.length > 0) {
+				const apiBase = ((import.meta.env.VITE_API_BASE_URL as string) || "").replace(/\/$/, "");
+				const url = `${apiBase}/api/ai/apply-edits`;
+				let token = "";
+				let csrfToken = "";
+				try {
+					token = useAuthStore.getState().token || "";
+				} catch { /* ignore */ }
+				try {
+					const m = document.cookie.match(/(?:^|; )CSRF-TOKEN=([^;]*)/);
+					csrfToken = m ? decodeURIComponent(m[1]) : "";
+				} catch { /* ignore */ }
+
+				const applyResp = await fetch(url, {
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+						...(token ? { "csm-token": token } : {}),
+						...(csrfToken ? { "X-CSRF-Token": csrfToken } : {}),
+					},
+					body: JSON.stringify({
+						target: {
+							kind: "code_doc",
+							appId: appId || "",
+							pName: selectedCode || "",
+							pType: resolvedPType,
+							language: currentLanguage,
+							contextType: "code",
+						},
+						baseVersion: 0,
+						currentContent: currentDraftRef.current,
+						operations: parsedEnvelopeCandidate.operations,
+						applyMode: "dry_run",
+					}),
+				});
+
+				if (!applyResp.ok) {
+					throw new Error(t("system.developer.ai.requestFailed"));
+				}
+				const applied = await applyResp.json() as any;
+				const appliedCode = String(applied?.resultContent || "");
+				if (appliedCode.trim()) {
+					finalResponse = JSON.stringify({
+						summary: String(parsedEnvelopeCandidate?.summary || t("system.developer.ai.generatedReady")),
+						code: appliedCode,
+						changes: Array.isArray(applied?.appliedOperations)
+							? applied.appliedOperations.map((x: any) => String(x || "")).filter(Boolean)
+							: [],
+					});
+				}
+			}
+
 			const parsed = parseAiCodeResponse({ result: finalResponse });
 			if (!parsed?.code) {
 				throw new Error(t("system.developer.ai.missingCode"));
